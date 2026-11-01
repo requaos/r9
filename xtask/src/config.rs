@@ -75,8 +75,34 @@ pub struct Qemu {
     /// Machine (`-M`) value for qemu: raspi3b, raspi4b, etc.
     pub machine: Option<String>,
 
+    /// Accelerator (`-accel`) value for qemu: tcg, kvm, hvf.
+    /// Overridable per-invocation via --accel / R9_ACCEL (D-06).
+    /// Note: hvf on darwin rejects GICv2 on qemu 11.1.2 (research P2) — it
+    /// exists for a future GICv3 driver; never default to hvf.
+    pub accel: Option<String>,
+
+    /// CPU model (`-cpu`) value for qemu: cortex-a72, host, etc.
+    /// Overridable per-invocation via --cpu / R9_CPU (D-06).
+    pub cpu: Option<String>,
+
+    /// CPU count (`-smp`) for qemu.
+    pub smp: Option<u32>,
+
+    /// Guest RAM size (`-m`) value for qemu: 1024M, etc.
+    pub memory: Option<String>,
+
     /// Filepath of DTB file relative to crate
     pub dtb: Option<String>,
+}
+
+/// Dist section
+/// Selects the boot-image format produced by `cargo xtask dist`:
+/// absent or "flat-gzip" = objcopy + gzip flat image (raspi);
+/// "elf" = the cargo-built ELF is the boot image, dist is a no-op (D-05).
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Dist {
+    /// Boot image format: "flat-gzip" (default when absent) or "elf".
+    pub format: Option<String>,
 }
 
 /// the TOML document
@@ -86,6 +112,7 @@ pub struct Configuration {
     pub config: Option<Config>,
     pub link: Option<HashMap<String, String>>,
     pub qemu: Option<Qemu>,
+    pub dist: Option<Dist>,
 }
 
 impl Configuration {
@@ -255,11 +282,37 @@ fn apply_link(
     }
 }
 
-fn apply_qemu_config(cmd: &mut Command, config: &Configuration) {
+/// Per-invocation qemu overrides (D-06): values that beat the TOML [qemu]
+/// keys at emission time. The full resolution chain (CLI flag > R9_ACCEL /
+/// R9_CPU env > TOML > built-in default) is assembled by the caller in main.
+#[derive(Debug, Default)]
+pub struct QemuOverrides {
+    pub accel: Option<String>,
+    pub cpu: Option<String>,
+}
+
+fn apply_qemu_config(cmd: &mut Command, config: &Configuration, overrides: &QemuOverrides) {
     if let Some(config) = &config.qemu {
         if let Some(machine) = &config.machine {
             cmd.arg("-M");
             cmd.arg(machine);
+        }
+        // D-06: a per-invocation override beats the TOML value.
+        if let Some(accel) = overrides.accel.as_ref().or(config.accel.as_ref()) {
+            cmd.arg("-accel");
+            cmd.arg(accel);
+        }
+        if let Some(cpu) = overrides.cpu.as_ref().or(config.cpu.as_ref()) {
+            cmd.arg("-cpu");
+            cmd.arg(cpu);
+        }
+        if let Some(smp) = &config.smp {
+            cmd.arg("-smp");
+            cmd.arg(smp.to_string());
+        }
+        if let Some(memory) = &config.memory {
+            cmd.arg("-m");
+            cmd.arg(memory);
         }
         if let Some(dtb) = &config.dtb {
             cmd.arg("-dtb");
@@ -299,12 +352,22 @@ pub fn apply_to_build_step(
 }
 
 pub fn apply_to_qemu_step(cmd: &mut Command, config: &Configuration) {
-    apply_qemu_config(cmd, config);
+    apply_to_qemu_step_with_overrides(cmd, config, &QemuOverrides::default());
+}
+
+pub fn apply_to_qemu_step_with_overrides(
+    cmd: &mut Command,
+    config: &Configuration,
+    overrides: &QemuOverrides,
+) {
+    apply_qemu_config(cmd, config, overrides);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Configuration, apply_to_qemu_step};
+    use super::{
+        Configuration, QemuOverrides, apply_to_qemu_step, apply_to_qemu_step_with_overrides,
+    };
 
     /// Parse a TOML document and return the qemu argv it would emit.
     fn qemu_argv(toml_doc: &str) -> Vec<String> {
@@ -348,19 +411,45 @@ mod tests {
         );
     }
 
-    /// D-05: the [dist] section's format key is captured by the schema
-    /// ("elf" selects the ELF-as-boot-image dist path; absent means the
-    /// flat-gzip default, decided by the consumer).
+    /// Backward compatibility: a [qemu] section with only today's machine/dtb
+    /// keys emits exactly -M and -dtb and nothing else — the regression guard
+    /// for every existing config TOML.
     #[test]
-    fn dist_format_is_captured_by_schema() {
+    fn qemu_minimal_keys_emit_only_machine_and_dtb() {
+        let args =
+            qemu_argv("[qemu]\nmachine = \"raspi3b\"\ndtb = \"aarch64/lib/bcm2710-rpi-3-b.dtb\"\n");
+        assert_eq!(args, vec!["-M", "raspi3b", "-dtb", "aarch64/lib/bcm2710-rpi-3-b.dtb"]);
+    }
+
+    /// D-05: the [dist] section's format key parses to Some("elf") ("elf"
+    /// selects the ELF-as-boot-image dist path; the flat-gzip default for an
+    /// absent section is decided by the consumer).
+    #[test]
+    fn dist_format_elf_parses() {
         let config: Configuration =
             toml::from_str("[dist]\nformat = \"elf\"\n").expect("test TOML must parse");
-        // RED probe: the schema must retain the [dist] section instead of
-        // silently dropping it (retention is observable via Debug until the
-        // field itself exists to assert on).
-        assert!(
-            format!("{config:?}").contains("elf"),
-            "the [dist] format value must be captured by the Configuration schema"
-        );
+        assert_eq!(config.dist.as_ref().and_then(|d| d.format.as_deref()), Some("elf"));
+    }
+
+    /// D-05: an absent [dist] section parses to None.
+    #[test]
+    fn dist_absent_parses_to_none() {
+        let config: Configuration =
+            toml::from_str("[qemu]\nmachine = \"raspi3b\"\n").expect("test TOML must parse");
+        assert!(config.dist.is_none());
+    }
+
+    /// D-06 emission-layer precedence: an explicit override beats the TOML
+    /// value; a None override leaves the TOML value in place.
+    #[test]
+    fn qemu_overrides_beat_toml() {
+        let config: Configuration =
+            toml::from_str("[qemu]\naccel = \"tcg\"\ncpu = \"cortex-a72\"\n")
+                .expect("test TOML must parse");
+        let mut cmd = std::process::Command::new("qemu-system-aarch64");
+        let overrides = QemuOverrides { accel: Some("kvm".to_string()), cpu: None };
+        apply_to_qemu_step_with_overrides(&mut cmd, &config, &overrides);
+        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(args, vec!["-accel", "kvm", "-cpu", "cortex-a72"]);
     }
 }
