@@ -351,10 +351,6 @@ pub fn apply_to_build_step(
     apply_rustflags(cmd, &rustflags);
 }
 
-pub fn apply_to_qemu_step(cmd: &mut Command, config: &Configuration) {
-    apply_to_qemu_step_with_overrides(cmd, config, &QemuOverrides::default());
-}
-
 pub fn apply_to_qemu_step_with_overrides(
     cmd: &mut Command,
     config: &Configuration,
@@ -365,15 +361,13 @@ pub fn apply_to_qemu_step_with_overrides(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        Configuration, QemuOverrides, apply_to_qemu_step, apply_to_qemu_step_with_overrides,
-    };
+    use super::{Configuration, QemuOverrides, apply_to_qemu_step_with_overrides};
 
     /// Parse a TOML document and return the qemu argv it would emit.
     fn qemu_argv(toml_doc: &str) -> Vec<String> {
         let config: Configuration = toml::from_str(toml_doc).expect("test TOML must parse");
         let mut cmd = std::process::Command::new("qemu-system-aarch64");
-        apply_to_qemu_step(&mut cmd, &config);
+        apply_to_qemu_step_with_overrides(&mut cmd, &config, &QemuOverrides::default());
         cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect()
     }
 

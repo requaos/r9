@@ -1,5 +1,7 @@
 use crate::config::Configuration;
-use config::{apply_to_build_step, apply_to_clippy_step, apply_to_qemu_step};
+use config::{
+    QemuOverrides, apply_to_build_step, apply_to_clippy_step, apply_to_qemu_step_with_overrides,
+};
 use std::{
     env, fmt,
     path::{Path, PathBuf},
@@ -203,6 +205,10 @@ fn main() {
                 clap::arg!(--verbose "Print commands"),
                 clap::arg!(--dump_dtb <file> "Dump the DTB from QEMU to a file")
                     .value_parser(clap::value_parser!(String)),
+                clap::arg!(--accel <accel> "Accelerator override (tcg/kvm/hvf); beats R9_ACCEL env and [qemu] accel (D-06)")
+                    .value_parser(clap::builder::NonEmptyStringValueParser::new()),
+                clap::arg!(--cpu <cpu> "CPU model override; beats R9_CPU env and [qemu] cpu (D-06)")
+                    .value_parser(clap::builder::NonEmptyStringValueParser::new()),
             ]),
         )
         .subcommand(clap::Command::new("clean").about("Cargo clean"))
@@ -335,6 +341,7 @@ impl BuildStep {
 
 struct DistStep {
     arch: Arch,
+    config: Configuration,
     profile: Profile,
     verbose: bool,
 }
@@ -342,50 +349,64 @@ struct DistStep {
 impl DistStep {
     fn new(matches: &clap::ArgMatches) -> Self {
         let arch = Arch::from(matches);
+        let config = load_config(arch, matches);
         let profile = Profile::from(matches);
         let verbose = verbose(matches);
-        Self { arch, profile, verbose }
+        Self { arch, config, profile, verbose }
     }
 
     fn run(self) -> Result<()> {
         match self.arch {
             Arch::Aarch64 => {
-                // Qemu needs a flat binary in order to handle device tree files correctly
-                let mut cmd = Command::new(objcopy());
-                cmd.arg("-O");
-                cmd.arg("binary");
-                cmd.arg(format!("target/{}/{}/aarch64", self.arch.target(), self.profile.dir()));
-                cmd.arg(format!(
-                    "target/{}/{}/aarch64-qemu",
-                    self.arch.target(),
-                    self.profile.dir()
-                ));
-                cmd.current_dir(workspace());
-                if self.verbose {
-                    println!("Executing {cmd:?}");
-                }
-                let status = annotated_status(&mut cmd)?;
-                if !status.success() {
-                    return Err("objcopy failed".into());
-                }
+                // D-05: [dist] format = "elf" — the cargo-built ELF is the
+                // boot image; skip the objcopy+gzip flat-image pipeline
+                // entirely. Absent section / "flat-gzip" keeps today's shape.
+                if self.config.dist.as_ref().and_then(|d| d.format.as_deref()) == Some("elf") {
+                    println!(
+                        "dist format \"elf\": the kernel ELF is the boot image; skipping objcopy/gzip"
+                    );
+                } else {
+                    // Qemu needs a flat binary in order to handle device tree files correctly
+                    let mut cmd = Command::new(objcopy());
+                    cmd.arg("-O");
+                    cmd.arg("binary");
+                    cmd.arg(format!(
+                        "target/{}/{}/aarch64",
+                        self.arch.target(),
+                        self.profile.dir()
+                    ));
+                    cmd.arg(format!(
+                        "target/{}/{}/aarch64-qemu",
+                        self.arch.target(),
+                        self.profile.dir()
+                    ));
+                    cmd.current_dir(workspace());
+                    if self.verbose {
+                        println!("Executing {cmd:?}");
+                    }
+                    let status = annotated_status(&mut cmd)?;
+                    if !status.success() {
+                        return Err("objcopy failed".into());
+                    }
 
-                // Compress the binary.  We do this because they're much faster when used
-                // for netbooting and qemu also accepts them.
-                let mut cmd = Command::new("gzip");
-                cmd.arg("-k");
-                cmd.arg("-f");
-                cmd.arg(format!(
-                    "target/{}/{}/aarch64-qemu",
-                    self.arch.target(),
-                    self.profile.dir()
-                ));
-                cmd.current_dir(workspace());
-                if self.verbose {
-                    println!("Executing {cmd:?}");
-                }
-                let status = annotated_status(&mut cmd)?;
-                if !status.success() {
-                    return Err("gzip failed".into());
+                    // Compress the binary.  We do this because they're much faster when used
+                    // for netbooting and qemu also accepts them.
+                    let mut cmd = Command::new("gzip");
+                    cmd.arg("-k");
+                    cmd.arg("-f");
+                    cmd.arg(format!(
+                        "target/{}/{}/aarch64-qemu",
+                        self.arch.target(),
+                        self.profile.dir()
+                    ));
+                    cmd.current_dir(workspace());
+                    if self.verbose {
+                        println!("Executing {cmd:?}");
+                    }
+                    let status = annotated_status(&mut cmd)?;
+                    if !status.success() {
+                        return Err("gzip failed".into());
+                    }
                 }
             }
             Arch::X86_64 => {
@@ -436,6 +457,8 @@ struct QemuStep {
     wait_for_gdb: bool,
     kvm: bool,
     dump_dtb: String,
+    accel: Option<String>,
+    cpu: Option<String>,
     verbose: bool,
 }
 
@@ -452,9 +475,24 @@ impl QemuStep {
             .flatten()
             .unwrap_or(&"".to_string())
             .clone();
+        // D-06 override chain, per-invocation layer: the CLI flag beats the
+        // R9_ACCEL / R9_CPU environment value. The TOML value and the built-in
+        // default are layered on at emission time in run().
+        let accel = matches
+            .try_get_one::<String>("accel")
+            .ok()
+            .flatten()
+            .cloned()
+            .or_else(|| env::var("R9_ACCEL").ok());
+        let cpu = matches
+            .try_get_one::<String>("cpu")
+            .ok()
+            .flatten()
+            .cloned()
+            .or_else(|| env::var("R9_CPU").ok());
         let verbose = verbose(matches);
 
-        Self { arch, config, profile, wait_for_gdb, kvm, dump_dtb, verbose }
+        Self { arch, config, profile, wait_for_gdb, kvm, dump_dtb, accel, cpu, verbose }
     }
 
     fn run(self) -> Result<()> {
@@ -470,26 +508,73 @@ impl QemuStep {
             Arch::Aarch64 => {
                 let mut cmd = Command::new(qemu_system);
 
-                apply_to_qemu_step(&mut cmd, &self.config);
+                let platform = self.config.config.as_ref().and_then(|c| c.platform.as_deref());
+                if platform == Some("virt") {
+                    // virt: the D-06 chain completes here — per-invocation
+                    // override (--accel/--cpu flag > R9_ACCEL/R9_CPU env) >
+                    // TOML > built-in default. The default is tcg +
+                    // cortex-a72, NEVER hvf: darwin acceptance runs TCG this
+                    // phase because HVF rejects GICv2 on qemu 11.1.2 (research
+                    // P2); the hvf accel exists only for a future GICv3 driver.
+                    let toml = self.config.qemu.as_ref();
+                    let accel = self
+                        .accel
+                        .clone()
+                        .or_else(|| toml.and_then(|q| q.accel.clone()))
+                        .unwrap_or_else(|| "tcg".to_string());
+                    let cpu = self
+                        .cpu
+                        .clone()
+                        .or_else(|| toml.and_then(|q| q.cpu.clone()))
+                        .unwrap_or_else(|| "cortex-a72".to_string());
+                    let overrides = QemuOverrides { accel: Some(accel), cpu: Some(cpu) };
+                    apply_to_qemu_step_with_overrides(&mut cmd, &self.config, &overrides);
 
-                // TODO Choose UART at cmdline
-                // If using UART0 (PL011), this enables serial
-                cmd.arg("-nographic");
+                    cmd.arg("-nographic");
 
-                // If using UART1 (MiniUART), this enables serial
-                cmd.arg("-serial");
-                cmd.arg("null");
-                cmd.arg("-serial");
-                cmd.arg("mon:stdio");
+                    // On virt the PL011 is serial0 and must carry stdio
+                    // (research P7): a single -serial mon:stdio. The raspi
+                    // null + second-serial pair is wrong here.
+                    cmd.arg("-serial");
+                    cmd.arg("mon:stdio");
 
-                if self.wait_for_gdb {
-                    cmd.arg("-s").arg("-S");
+                    if self.wait_for_gdb {
+                        cmd.arg("-s").arg("-S");
+                    }
+                    // Show exception level change events in stdout
+                    cmd.arg("-d");
+                    cmd.arg("int");
+                    // D-05: the cargo-built ELF is the -kernel directly
+                    // (DistStep skips the objcopy/gzip flat-image step).
+                    cmd.arg("-kernel");
+                    cmd.arg(format!("target/{target}/{dir}/aarch64"));
+                } else {
+                    // raspi: flag/env overrides still beat the TOML value if
+                    // supplied, but with none set nothing new is emitted — the
+                    // existing invocation shape stays byte-identical.
+                    let overrides =
+                        QemuOverrides { accel: self.accel.clone(), cpu: self.cpu.clone() };
+                    apply_to_qemu_step_with_overrides(&mut cmd, &self.config, &overrides);
+
+                    // TODO Choose UART at cmdline
+                    // If using UART0 (PL011), this enables serial
+                    cmd.arg("-nographic");
+
+                    // If using UART1 (MiniUART), this enables serial
+                    cmd.arg("-serial");
+                    cmd.arg("null");
+                    cmd.arg("-serial");
+                    cmd.arg("mon:stdio");
+
+                    if self.wait_for_gdb {
+                        cmd.arg("-s").arg("-S");
+                    }
+                    // Show exception level change events in stdout
+                    cmd.arg("-d");
+                    cmd.arg("int");
+                    cmd.arg("-kernel");
+                    cmd.arg(format!("target/{target}/{dir}/aarch64-qemu.gz"));
                 }
-                // Show exception level change events in stdout
-                cmd.arg("-d");
-                cmd.arg("int");
-                cmd.arg("-kernel");
-                cmd.arg(format!("target/{target}/{dir}/aarch64-qemu.gz"));
                 cmd.current_dir(workspace());
                 if self.verbose {
                     println!("Executing {cmd:?}");
