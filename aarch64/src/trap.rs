@@ -1,5 +1,7 @@
 use core::fmt;
 
+#[cfg(platform = "virt")]
+use crate::platform;
 use crate::registers::EsrEl1;
 use port::println;
 
@@ -118,7 +120,48 @@ pub extern "C" fn trap_unsafe(frame: *mut TrapFrame) {
     unsafe { trap(frame.as_mut().unwrap()) }
 }
 
+// Interrupt-type constants, matching the .equ block in trap.S (lines 17-25).
+#[cfg(platform = "virt")]
+const IRQ_INVALID_EL1T: u64 = 1;
+#[cfg(platform = "virt")]
+const IRQ_INVALID_EL1H: u64 = 5;
+
+/// IRQ dispatch (virt): ack via the GIC, dispatch, EOI, and RETURN -- trap.S's
+/// existing restore + eret path resumes the interrupted context (the wfi
+/// loop).  The spurious INTID 1023 is acked but never EOI'd; any other
+/// unknown INTID is logged once and still EOI'd so a stray interrupt can't
+/// wedge the kernel.  The INTID 33 (PL011 RX) arm lands with its handler.
+#[cfg(platform = "virt")]
+fn dispatch_irq(frame: &TrapFrame) -> bool {
+    if frame.interrupt_type != IRQ_INVALID_EL1T && frame.interrupt_type != IRQ_INVALID_EL1H {
+        return false;
+    }
+
+    let intid = platform::gic::ack();
+    match intid {
+        // ARM generic timer CNTP (PPI 14 -> INTID 16+14)
+        30 => platform::timer::tick(),
+        platform::gic::SPURIOUS_INTID => {} // spurious: acked, no EOI
+        _ => println!("unhandled IRQ {intid}"),
+    }
+    if intid != platform::gic::SPURIOUS_INTID {
+        platform::gic::eoi(intid);
+    }
+    true
+}
+
+/// Raspi arms no interrupt handlers this phase, so every IRQ keeps the
+/// historical dump-and-spin behavior below.
+#[cfg(not(platform = "virt"))]
+fn dispatch_irq(_frame: &TrapFrame) -> bool {
+    false
+}
+
 fn trap(frame: &mut TrapFrame) {
+    if dispatch_irq(frame) {
+        return;
+    }
+
     if frame.esr_el1.ec() == 0x15 {
         // Syscall
         let syscallid = frame.esr_el1.iss();

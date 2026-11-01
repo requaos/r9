@@ -215,8 +215,31 @@ pub extern "C" fn main9(dtb_va: usize) {
 
     println!("looping now");
 
-    #[allow(clippy::empty_loop)]
-    loop {}
+    // Virt interrupt bring-up (P5 ordering): arm the GIC, the generic timer
+    // and (03-05 Task 2) the UART RX path, and only then unmask IRQs.  Any
+    // earlier unmask would hit trap()'s sync-path wedge with no handler armed.
+    #[cfg(platform = "virt")]
+    {
+        platform::gic::init(&dt);
+        // CNTP generic timer: PPI 14 -> INTID 16+14 (SPIs need ITARGETSR,
+        // PPIs don't -- enable() applies that rule itself).
+        platform::gic::enable(30, 0xA0);
+        platform::timer::init(&dt);
+        trap::unmask_irq();
+
+        // Idle loop: wfi wakes on each tick; trap()'s IRQ branch erets back
+        // here.  Prints nothing, which is what makes tick()'s println from
+        // IRQ context safe against the Console lock (see timer.rs).
+        loop {
+            unsafe { core::arch::asm!("wfi") };
+        }
+    }
+
+    #[cfg(not(platform = "virt"))]
+    {
+        #[allow(clippy::empty_loop)]
+        loop {}
+    }
 }
 
 mod runtime;

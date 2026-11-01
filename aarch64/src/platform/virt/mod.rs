@@ -1,7 +1,9 @@
-// qemu `-M virt` platform (gic-version=2).  gic/timer arrive in 03-05.
+// qemu `-M virt` platform (gic-version=2).
 
 pub mod devcons;
+pub mod gic;
 pub mod pl011;
+pub mod timer;
 
 use port::fdt::DeviceTree;
 #[cfg(not(test))]
