@@ -4,9 +4,12 @@ use config::{
 };
 use std::{
     env, fmt,
+    io::{Read, Write},
+    os::unix::net::UnixStream,
     path::{Path, PathBuf},
     process::{self, Command},
     str::FromStr,
+    time::{Duration, Instant},
 };
 use target_lexicon::Triple;
 
@@ -211,6 +214,24 @@ fn main() {
                     .value_parser(clap::builder::NonEmptyStringValueParser::new()),
             ]),
         )
+        .subcommand(
+            clap::Command::new("boot-test")
+                .about("Boot r9 under QEMU on a serial socket and assert the ordered boot markers (D-11)")
+                .args(&[
+                    clap::arg!(--release "Build a release version").conflicts_with("debug"),
+                    clap::arg!(--debug "Build a debug version").conflicts_with("release"),
+                    clap::arg!(--arch <arch> "Target architecture")
+                        .value_parser(clap::builder::EnumValueParser::<Arch>::new()),
+                    clap::arg!(--config <name> "Configuration")
+                        .value_parser(clap::builder::NonEmptyStringValueParser::new())
+                        .default_value("default"),
+                    clap::arg!(--verbose "Print commands"),
+                    clap::arg!(--accel <accel> "Accelerator override (tcg/kvm/hvf); beats R9_ACCEL env and [qemu] accel (D-06)")
+                        .value_parser(clap::builder::NonEmptyStringValueParser::new()),
+                    clap::arg!(--cpu <cpu> "CPU model override; beats R9_CPU env and [qemu] cpu (D-06)")
+                        .value_parser(clap::builder::NonEmptyStringValueParser::new()),
+                ]),
+        )
         .subcommand(clap::Command::new("clean").about("Cargo clean"))
         .get_matches();
 
@@ -231,6 +252,13 @@ fn main() {
             let s2 = DistStep::new(m);
             let s3 = QemuStep::new(m);
             s1.run().and_then(|_| s2.run()).and_then(|_| s3.run())
+        }
+        Some(("boot-test", m)) => {
+            // Evidence freshness: the harness always builds the image it
+            // tests in the same invocation (never certifies a stale tree).
+            let s1 = BuildStep::new(m);
+            let s2 = BootTestStep::new(m);
+            s1.run().and_then(|_| s2.run())
         }
         Some(("clean", _)) => CleanStep::new().run(),
         _ => Err("bad subcommand".into()),
@@ -665,6 +693,295 @@ impl QemuStep {
     }
 }
 
+/// `cargo xtask boot-test` (D-11): build the kernel, boot it under qemu with
+/// the serial console on a unix socket, assert the ordered boot markers
+/// (banner -> >=3 periodic ticks -> typed-char echo), and write the captured
+/// serial log.  `server=on,wait=on` on the socket chardev holds guest start
+/// until we connect, giving capture-before-start for free (the Phase 1
+/// lesson; the socket chardev drops pre-connect data without it).
+///
+/// Zero new crate dependencies: std::os::unix::net::UnixStream + std::process
+/// only (rexpect/expectrl remain the documented D-11 fallback ONLY if this
+/// socket design proves infeasible).  Marker assertions only, never timings
+/// (research P11: TCG speed varies).
+struct BootTestStep {
+    arch: Arch,
+    config: Configuration,
+    config_name: String,
+    profile: Profile,
+    accel: Option<String>,
+    cpu: Option<String>,
+    verbose: bool,
+}
+
+/// Assertion markers, named so 03-06's panic profile and the evidence task
+/// reuse them.
+const BOOT_BANNER_MARKER: &str = "r9 from the Internet";
+const BOOT_TICK_MARKER: &str = "tick";
+const BOOT_TICK_MIN: usize = 3;
+/// The probe string typed into the serial socket.  qemu's socket serial does
+/// not self-echo, so these bytes can only reappear via the kernel's INTID-33
+/// RX echo path (SC#4).
+const BOOT_ECHO_PROBE: &[u8] = b"r9echo7";
+/// Overall wall-clock budget for the whole marker sequence (overridable via
+/// R9_BOOT_TEST_TIMEOUT); one total budget, never per-marker timings (P11).
+const BOOT_TEST_TIMEOUT_SECS: u64 = 300;
+
+/// Count lines whose text starts with `marker`.  Serial lines arrive CRLF
+/// (the console's putb maps \n to \r\n), so splitting on \n leaves the \r
+/// trailing each line, where starts_with never sees it.
+fn count_marker_lines(capture: &[u8], marker: &str) -> usize {
+    capture.split(|b| *b == b'\n').filter(|line| line.starts_with(marker.as_bytes())).count()
+}
+
+fn contains_marker(capture: &[u8], marker: &[u8]) -> bool {
+    capture.windows(marker.len()).any(|w| w == marker)
+}
+
+/// Which ordered marker the harness is currently waiting for.
+#[derive(Debug, PartialEq)]
+enum BootStage {
+    AwaitBanner,
+    AwaitTicks,
+    AwaitEcho,
+}
+
+impl fmt::Display for BootStage {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            BootStage::AwaitBanner => write!(f, "banner marker {BOOT_BANNER_MARKER:?}"),
+            BootStage::AwaitTicks => {
+                write!(f, ">= {BOOT_TICK_MIN} lines beginning {BOOT_TICK_MARKER:?}")
+            }
+            BootStage::AwaitEcho => {
+                write!(f, "echo of probe {:?}", String::from_utf8_lossy(BOOT_ECHO_PROBE))
+            }
+        }
+    }
+}
+
+impl BootTestStep {
+    fn new(matches: &clap::ArgMatches) -> Self {
+        let arch = Arch::from(matches);
+        let config = load_config(arch, matches);
+        let config_name = matches
+            .try_get_one::<String>("config")
+            .ok()
+            .flatten()
+            .cloned()
+            .unwrap_or_else(|| "default".to_string());
+        let profile = Profile::from(matches);
+        // D-06 override chain, per-invocation layer: the CLI flag beats the
+        // R9_ACCEL / R9_CPU environment value (mirrors QemuStep::new); the
+        // TOML value and the built-in default layer on at emission in run().
+        let accel = matches
+            .try_get_one::<String>("accel")
+            .ok()
+            .flatten()
+            .cloned()
+            .or_else(|| env::var("R9_ACCEL").ok());
+        let cpu = matches
+            .try_get_one::<String>("cpu")
+            .ok()
+            .flatten()
+            .cloned()
+            .or_else(|| env::var("R9_CPU").ok());
+        let verbose = verbose(matches);
+
+        Self { arch, config, config_name, profile, accel, cpu, verbose }
+    }
+
+    fn run(self) -> Result<()> {
+        if self.arch != Arch::Aarch64 {
+            return Err("boot-test currently supports aarch64 only".into());
+        }
+
+        let target = self.arch.target();
+        let dir = self.profile.dir();
+        // D-05: on virt the cargo-built ELF is the -kernel directly.
+        let kernel = format!("target/{target}/{dir}/aarch64");
+        let kernel_path = workspace().join(&kernel);
+        if !kernel_path.exists() {
+            return Err(format!("kernel image {kernel} missing (build step ran first?)").into());
+        }
+
+        let sock_rel = format!("target/boot-test-{}.sock", self.config_name);
+        let log_rel = format!("target/boot-test-{}.log", self.config_name);
+        let sock_abs = workspace().join(&sock_rel);
+        let log_abs = workspace().join(&log_rel);
+        // A stale socket file from a crashed run would break qemu's bind.
+        let _ = std::fs::remove_file(&sock_abs);
+
+        // Spawn qemu with the serial console on the socket chardev.  The
+        // machine/cpu/smp/memory/accel/dtb plumbing is the config's, via the
+        // same apply path QemuStep uses; the virt arm's built-in defaults
+        // (tcg + cortex-a72, NEVER hvf -- research P2) complete the chain.
+        let mut cmd = Command::new(self.arch.qemu_system());
+        let platform = self.config.config.as_ref().and_then(|c| c.platform.as_deref());
+        let toml = self.config.qemu.as_ref();
+        let overrides = if platform == Some("virt") {
+            QemuOverrides {
+                accel: Some(
+                    self.accel
+                        .clone()
+                        .or_else(|| toml.and_then(|q| q.accel.clone()))
+                        .unwrap_or_else(|| "tcg".to_string()),
+                ),
+                cpu: Some(
+                    self.cpu
+                        .clone()
+                        .or_else(|| toml.and_then(|q| q.cpu.clone()))
+                        .unwrap_or_else(|| "cortex-a72".to_string()),
+                ),
+            }
+        } else {
+            QemuOverrides { accel: self.accel.clone(), cpu: self.cpu.clone() }
+        };
+        apply_to_qemu_step_with_overrides(&mut cmd, &self.config, &overrides);
+        cmd.arg("-display");
+        cmd.arg("none");
+        cmd.arg("-chardev");
+        cmd.arg(format!("socket,id=cons,path={sock_rel},server=on,wait=on"));
+        cmd.arg("-serial");
+        cmd.arg("chardev:cons");
+        cmd.arg("-kernel");
+        cmd.arg(&kernel);
+        cmd.current_dir(workspace());
+        if self.verbose {
+            println!("Executing {cmd:?}");
+        }
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("{}: {}", cmd.get_program().to_string_lossy(), e))?;
+
+        let result = self.assert_markers(&mut child, &sock_abs, &log_abs);
+
+        // Always reap the guest and drop the socket file.
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_file(&sock_abs);
+
+        result
+    }
+
+    /// Connect, capture, and assert the ordered markers.  Writes every
+    /// captured byte to the evidence log at target/boot-test-<config>.log.
+    fn assert_markers(
+        &self,
+        child: &mut process::Child,
+        sock_abs: &Path,
+        log_abs: &Path,
+    ) -> Result<()> {
+        let timeout_secs: u64 = env::var("R9_BOOT_TEST_TIMEOUT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(BOOT_TEST_TIMEOUT_SECS);
+        let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+
+        // wait=on means qemu holds guest start until this connect, so the
+        // capture covers the entire boot.  Retry while qemu creates the
+        // socket, but bail if qemu itself died (bad args etc.).
+        let mut stream = loop {
+            match UnixStream::connect(sock_abs) {
+                Ok(stream) => break stream,
+                Err(e) => {
+                    if let Some(status) = child.try_wait()? {
+                        return Err(format!("qemu exited before serial connect: {status}").into());
+                    }
+                    if Instant::now() >= deadline {
+                        return Err(format!("serial socket never appeared: {e}").into());
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            }
+        };
+        stream.set_read_timeout(Some(Duration::from_millis(500)))?;
+
+        let mut log_file = std::fs::File::create(log_abs)?;
+        let mut capture: Vec<u8> = Vec::new();
+        let mut stage = BootStage::AwaitBanner;
+        let mut probe_at = 0usize;
+
+        // Assertion profile selection: a [config] dev list containing "panic"
+        // selects the panic profile (03-06 implements its assertions); for
+        // now accept the config and assert banner-only as scaffolding.
+        let panic_profile = self
+            .config
+            .config
+            .as_ref()
+            .and_then(|c| c.dev.as_ref())
+            .is_some_and(|devs| devs.iter().any(|d| d == "panic"));
+
+        while Instant::now() < deadline {
+            match stage {
+                BootStage::AwaitBanner => {
+                    if contains_marker(&capture, BOOT_BANNER_MARKER.as_bytes()) {
+                        if panic_profile {
+                            return self.finish(&log_abs, &capture);
+                        }
+                        stage = BootStage::AwaitTicks;
+                    }
+                }
+                BootStage::AwaitTicks => {
+                    if count_marker_lines(&capture, BOOT_TICK_MARKER) >= BOOT_TICK_MIN {
+                        // Ticks prove IRQs are live; type the probe now.
+                        stream.write_all(BOOT_ECHO_PROBE)?;
+                        probe_at = capture.len();
+                        stage = BootStage::AwaitEcho;
+                    }
+                }
+                BootStage::AwaitEcho => {
+                    if contains_marker(&capture[probe_at..], BOOT_ECHO_PROBE) {
+                        return self.finish(&log_abs, &capture);
+                    }
+                }
+            }
+
+            let mut buf = [0u8; 4096];
+            match stream.read(&mut buf) {
+                Ok(0) => {
+                    return Err(self.fail(stage, &capture, "serial socket closed"));
+                }
+                Ok(n) => {
+                    capture.extend_from_slice(&buf[..n]);
+                    log_file.write_all(&buf[..n])?;
+                }
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut =>
+                {
+                    if let Some(status) = child.try_wait()? {
+                        return Err(self.fail(stage, &capture, &format!("qemu exited: {status}")));
+                    }
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+
+        Err(self.fail(stage, &capture, "overall budget expired"))
+    }
+
+    fn finish(&self, log_abs: &Path, capture: &[u8]) -> Result<()> {
+        println!(
+            "boot-test: PASS -- banner, >= {BOOT_TICK_MIN} ticks and the echo probe observed in order"
+        );
+        println!("boot-test: serial log written to {}", log_abs.display());
+        println!("boot-test: captured {} bytes", capture.len());
+        Ok(())
+    }
+
+    /// Failure report: name the marker we were waiting for and show the tail
+    /// of the captured serial stream for context.
+    fn fail(&self, stage: BootStage, capture: &[u8], why: &str) -> DynError {
+        let tail = &capture[capture.len().saturating_sub(2000)..];
+        eprintln!("boot-test FAILED waiting for {stage} ({why})");
+        eprintln!("--- captured serial tail ---");
+        eprintln!("{}", String::from_utf8_lossy(tail));
+        eprintln!("--- end capture ({} bytes) ---", capture.len());
+        format!("boot-test: {stage} not observed ({why})").into()
+    }
+}
+
 struct ExpandStep {
     arch: Arch,
     profile: Profile,
@@ -976,4 +1293,44 @@ fn exclude_other_arches(arch: Arch, cmd: &mut Command) {
 /// Annotates the error result with the calling binary's name.
 fn annotated_status(cmd: &mut Command) -> Result<process::ExitStatus> {
     Ok(cmd.status().map_err(|e| format!("{}: {}", cmd.get_program().to_string_lossy(), e))?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BOOT_ECHO_PROBE, BOOT_TICK_MARKER, contains_marker, count_marker_lines};
+
+    /// Serial lines arrive CRLF (console putb maps \n to \r\n); the tick
+    /// count must see exactly the line-initial markers.
+    #[test]
+    fn count_marker_lines_counts_line_initial_only() {
+        let capture = b"banner\r\ntick 0\r\ntick 1\r\nuntickled\r\ntick 2\r\n";
+        assert_eq!(count_marker_lines(capture, BOOT_TICK_MARKER), 3);
+    }
+
+    #[test]
+    fn count_marker_lines_ignores_mid_line_and_missing() {
+        assert_eq!(count_marker_lines(b"notick here\r\n", BOOT_TICK_MARKER), 0);
+        assert_eq!(count_marker_lines(b"", BOOT_TICK_MARKER), 0);
+        // A marker directly after \n with no \r still counts (line start).
+        assert_eq!(count_marker_lines(b"tick 0\n", BOOT_TICK_MARKER), 1);
+    }
+
+    #[test]
+    fn contains_marker_searches_substrings() {
+        assert!(contains_marker(b"xxr9echo7yy", BOOT_ECHO_PROBE));
+        assert!(!contains_marker(b"r9echo", BOOT_ECHO_PROBE));
+        assert!(!contains_marker(b"", BOOT_ECHO_PROBE));
+    }
+
+    /// The echo assertion searches only bytes captured AFTER the probe write,
+    /// so a probe string that never came back cannot satisfy it.
+    #[test]
+    fn echo_window_is_post_write_only() {
+        let before = b"tick 0\r\n";
+        let mut capture = before.to_vec();
+        let probe_at = capture.len();
+        assert!(!contains_marker(&capture[probe_at..], BOOT_ECHO_PROBE));
+        capture.extend_from_slice(b"r9echo7");
+        assert!(contains_marker(&capture[probe_at..], BOOT_ECHO_PROBE));
+    }
 }

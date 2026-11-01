@@ -54,7 +54,7 @@
               ${objcopyHook toolchain}
               echo "r9 devshell: $(rustc --version)"
               echo "$(qemu-system-aarch64 --version | head -1)"
-              echo "apps: nix run .#build | nix run .#default"
+              echo "apps: nix run .#build | nix run .#boot-virt | nix run .#default"
             '';
           };
         });
@@ -73,9 +73,21 @@
               exec cargo xtask build --arch aarch64 "$@"
             '';
           };
+          # D-11 acceptance harness: boot virt on a serial socket and assert
+          # banner -> >=3 ticks -> typed-char echo (SC#3/SC#4), writing the
+          # captured log to target/boot-test-virt.log.
+          r9-boot-virt = pkgs.writeShellApplication {
+            name = "r9-boot-virt";
+            runtimeInputs = [ toolchain pkgs.qemu ];
+            text = ''
+              ${objcopyExport toolchain}
+              exec cargo xtask boot-test --arch aarch64 --config virt "$@"
+            '';
+          };
         in
         {
           build = { type = "app"; program = "${r9-build}/bin/r9-build"; };
+          boot-virt = { type = "app"; program = "${r9-boot-virt}/bin/r9-boot-virt"; };
           default = { type = "app"; program = "${r9-build}/bin/r9-build"; };
         });
     };
