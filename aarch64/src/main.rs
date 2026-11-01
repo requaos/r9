@@ -155,6 +155,10 @@ pub extern "C" fn main9(dtb_va: usize) {
 
     #[cfg(not(platform = "virt"))]
     print_board_info();
+    // The virt "what machine am I on" slot (D-03): DTB-derived machine info
+    // instead of the mailbox-driven board info.
+    #[cfg(platform = "virt")]
+    platform::print_machine_info(&dt);
     print_memory_info();
 
     // vmdebug::print_recursive_tables(RootPageTableType::Kernel);
