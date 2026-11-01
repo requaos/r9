@@ -301,3 +301,66 @@ pub fn apply_to_build_step(
 pub fn apply_to_qemu_step(cmd: &mut Command, config: &Configuration) {
     apply_qemu_config(cmd, config);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Configuration, apply_to_qemu_step};
+
+    /// Parse a TOML document and return the qemu argv it would emit.
+    fn qemu_argv(toml_doc: &str) -> Vec<String> {
+        let config: Configuration = toml::from_str(toml_doc).expect("test TOML must parse");
+        let mut cmd = std::process::Command::new("qemu-system-aarch64");
+        apply_to_qemu_step(&mut cmd, &config);
+        cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect()
+    }
+
+    /// D-07: a [qemu] section carrying all six keys (machine/accel/cpu/smp/
+    /// memory/dtb) emits each as its qemu flag, in this order, after -M.
+    #[test]
+    fn qemu_full_keys_emit_all_flags() {
+        let args = qemu_argv(
+            r#"
+                [qemu]
+                machine = "virt,gic-version=2"
+                accel = "tcg"
+                cpu = "cortex-a72"
+                smp = 1
+                memory = "1024M"
+                dtb = "aarch64/lib/virt-gicv2.dtb"
+            "#,
+        );
+        assert_eq!(
+            args,
+            vec![
+                "-M",
+                "virt,gic-version=2",
+                "-accel",
+                "tcg",
+                "-cpu",
+                "cortex-a72",
+                "-smp",
+                "1",
+                "-m",
+                "1024M",
+                "-dtb",
+                "aarch64/lib/virt-gicv2.dtb",
+            ]
+        );
+    }
+
+    /// D-05: the [dist] section's format key is captured by the schema
+    /// ("elf" selects the ELF-as-boot-image dist path; absent means the
+    /// flat-gzip default, decided by the consumer).
+    #[test]
+    fn dist_format_is_captured_by_schema() {
+        let config: Configuration =
+            toml::from_str("[dist]\nformat = \"elf\"\n").expect("test TOML must parse");
+        // RED probe: the schema must retain the [dist] section instead of
+        // silently dropping it (retention is observable via Debug until the
+        // field itself exists to assert on).
+        assert!(
+            format!("{config:?}").contains("elf"),
+            "the [dist] format value must be captured by the Configuration schema"
+        );
+    }
+}
