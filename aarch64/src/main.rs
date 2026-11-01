@@ -116,6 +116,14 @@ pub extern "C" fn main9(dtb_va: usize) {
     #[cfg(not(platform = "virt"))]
     trap::unmask_irq();
 
+    // Virt ELF boot: qemu 11.1.2 passes x0 = 0 and loads no DTB for ELF
+    // kernels (phase-03 research P1).  init_vm (pre-MMU) already substituted
+    // the fixed PA 0x40000000 and mapped the DTB at KZERO + 0x40000000; this
+    // is the VA-side twin of that fallback.  Raspi delivers x0 via the boot
+    // stub, so a null there is a genuine error, not this contract.
+    #[cfg(platform = "virt")]
+    let dtb_va = if dtb_va - KZERO == 0 { KZERO + 0x4000_0000 } else { dtb_va };
+
     // Parse the DTB before we set up memory so we can correctly map it
     let dt = unsafe { DeviceTree::from_usize(dtb_va).unwrap() };
     let dtb_physrange = PhysRange::with_pa_len(PhysAddr::new((dtb_va - KZERO) as u64), dt.size());
@@ -193,6 +201,10 @@ pub extern "C" fn main9(dtb_va: usize) {
     test_sysexit();
 
     vmdebug::print_recursive_tables(RootPageTableType::Kernel);
+    // The user page table exists only on raspi this phase (init_user_page_tables
+    // is gated with the user-page-table experiment above); walking it on virt
+    // dereferences an unmapped recursive root.  Phase 4 revisits.
+    #[cfg(not(platform = "virt"))]
     vmdebug::print_recursive_tables(RootPageTableType::User);
 
     let _b = Box::new("ddododo");

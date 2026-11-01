@@ -25,10 +25,15 @@ const GPIO: u32 = MMIO_BASE + 0x00200000;
 const GPFSEL1: u32 = GPIO + 0x04;
 const GPIO_PUP_PDN_CNTRL_REG0: u32 = GPIO + 0xe4;
 
-// Set up a very early uart - the miniuart.  The full driver is in
-// uartmini.rs.  This code is just enough to help debug the early stage.
+// Set up a very early uart.  The full drivers live under platform/; this
+// code is just enough to help debug the early stage.
+//
+// Raspi: the miniuart (see platform/raspi3b/uartmini.rs).
+// Virt: nothing -- qemu pre-configures the PL011 (DR writes work even with
+// UARTEN clear; phase-03 research Pattern 3).
+#[cfg(not(platform = "virt"))]
 #[unsafe(no_mangle)]
-pub extern "C" fn init_early_uart_rpi4() {
+pub extern "C" fn init_early_uart() {
     // Calculate the baudrate to be inserted into AUX_MU_BAUD
     const UART_CLOCK: u32 = 500000000;
     const UART_BAUDRATE: u32 = 115200;
@@ -78,7 +83,16 @@ pub extern "C" fn init_early_uart_rpi4() {
     }
 }
 
+#[cfg(platform = "virt")]
+#[unsafe(no_mangle)]
+pub extern "C" fn init_early_uart() {}
+
 // Extern no mangle so we can call from asm if necessary
+//
+// Raspi: miniuart -- poll LSR bit5 (THRE), then write the IO data register.
+// Virt: PL011 at the fixed PA 0x09000000 -- poll FR bit5 (TXFF), then write
+// DR (offset 0x00).
+#[cfg(not(platform = "virt"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn init_early_uart_putc(b: u8) {
     unsafe {
@@ -86,6 +100,21 @@ pub extern "C" fn init_early_uart_putc(b: u8) {
             core::hint::spin_loop();
         }
         write_volatile(AUX_MU_IO as *mut u32, b as u32);
+    }
+}
+
+#[cfg(platform = "virt")]
+#[unsafe(no_mangle)]
+pub extern "C" fn init_early_uart_putc(b: u8) {
+    const PL011_BASE: u32 = 0x0900_0000;
+    const PL011_DR: u32 = PL011_BASE; // DR is at offset 0x00
+    const PL011_FR: u32 = PL011_BASE + 0x18;
+
+    unsafe {
+        while read_volatile(PL011_FR as *const u32) & (1 << 5) != 0 {
+            core::hint::spin_loop();
+        }
+        write_volatile(PL011_DR as *mut u32, b as u32);
     }
 }
 

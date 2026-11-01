@@ -20,6 +20,8 @@ use crate::{
 // These map to definitions in kernel.ld.
 // In pre-MMU state, these will all map to physical addresses on aarch64.
 unsafe extern "C" {
+    #[cfg(platform = "virt")]
+    static boottext_pa: [u64; 0];
     static eboottext_pa: [u64; 0];
     static text_pa: [u64; 0];
     static etext_pa: [u64; 0];
@@ -34,7 +36,24 @@ unsafe extern "C" {
 }
 
 fn base_physaddr() -> PhysAddr {
-    PhysAddr::new(0)
+    // On virt the kernel loads at PA 0x40080000 (qemu -kernel); starting
+    // kernel ranges at PA 0 would map >1 GiB as Normal-cacheable kernel text,
+    // covering the GIC (0x08000000) and PL011 (0x09000000) MMIO windows -- a
+    // speculative-fetch hazard (phase-03 research P3).  Raspi deliberately
+    // keeps base 0 (the TODO at init_vm below contemplates an unmapped page 0).
+    #[cfg(platform = "virt")]
+    {
+        boottext_physaddr()
+    }
+    #[cfg(not(platform = "virt"))]
+    {
+        PhysAddr::new(0)
+    }
+}
+
+#[cfg(platform = "virt")]
+fn boottext_physaddr() -> PhysAddr {
+    unsafe { PhysAddr::new(boottext_pa.as_ptr().addr() as u64) }
 }
 
 fn eboottext_physaddr() -> PhysAddr {
@@ -107,6 +126,35 @@ fn earlyvm_pages_physrange() -> PhysRange {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn init_vm(dtb_pa: u64) {
+    // Qemu's ELF -kernel boot enters DIRECTLY at EL1 (phase-03 research),
+    // skipping l.S's el2 path -- which is the only place CPACR_EL1.FPEN is
+    // set.  With FPEN at its reset value, any compiler-emitted SIMD/FP
+    // instruction traps (ESR EC=0x07).  Enable FP/SIMD access at EL1 here,
+    // the earliest Rust point.  Raspi reaches EL1 through the el2 path where
+    // l.S already wrote the same value, so it is gated out (its register
+    // state stays byte-identical).
+    #[cfg(all(not(test), platform = "virt"))]
+    {
+        CPACR_EL1.write(CPACR_EL1::FPEN::TrapNothing);
+        // The write must be visible to subsequent instructions.
+        unsafe { core::arch::asm!("isb") };
+    }
+
+    // Virt ELF boot: qemu 11.1.2 delivers x0 = 0 and loads no DTB for ELF
+    // kernels (phase-03 research P1); the -dtb blob sits at the fixed PA
+    // 0x40000000.  init_vm is the FIRST DTB consumer (pre-MMU, before main9
+    // ever runs), so the fallback must live here -- main9 has its own
+    // VA-side twin.  Raspi keeps the incoming pointer verbatim: flat boot
+    // delivers x0 via the boot stub, so a null there is a genuine error,
+    // not this contract.
+    #[cfg(platform = "virt")]
+    let dtb_pa = if dtb_pa == 0 {
+        putstr("vminit:init_vm: x0==0 on ELF boot, using fixed DTB PA 0x40000000\n");
+        0x4000_0000
+    } else {
+        dtb_pa
+    };
+
     // Parse the DTB before we set up memory so we can correctly map it
     let dt = unsafe { DeviceTree::from_usize(dtb_pa as usize).unwrap() };
     let dtb_physrange = PhysRange::with_pa_len(PhysAddr::new(dtb_pa), dt.size());
@@ -123,9 +171,18 @@ pub extern "C" fn init_vm(dtb_pa: u64) {
         let ro_data_physrange = rodata_physrange();
         let data_physrange = data_physrange().add(&bss_physrange());
 
+        // On virt the kernel text starts at boottext_pa = 0x40080000, which
+        // is not 2 MiB aligned, so the text map cannot use 2 MiB blocks
+        // (map_phys_range requires page-size-aligned range ends).  Raspi's
+        // ranges all start/end on 2 MiB boundaries, so raspi keeps 2 MiB.
+        #[cfg(platform = "virt")]
+        let text_page_size = PageSize::Page4K;
+        #[cfg(not(platform = "virt"))]
+        let text_page_size = PageSize::Page2M;
+
         let mut map = [
             ("DTB", dtb_physrange, Entry::ro_kernel_data(), dtb_page_size),
-            ("Kernel Text", text_physrange, Entry::ro_kernel_text(), PageSize::Page2M),
+            ("Kernel Text", text_physrange, Entry::ro_kernel_text(), text_page_size),
             ("Kernel RO Data", ro_data_physrange, Entry::ro_kernel_data(), PageSize::Page2M),
             ("Kernel Data", data_physrange, Entry::rw_kernel_data(), PageSize::Page2M),
         ];
@@ -203,6 +260,24 @@ pub extern "C" fn init_vm(dtb_pa: u64) {
         .with_shareable(Shareable::Inner)
         .with_uxn(true)
         .with_mair_index(Mair::Normal);
+
+    // On virt the kernel loads at PA 0x40080000, outside entries[0]'s
+    // 0-1 GiB window; without this second block the MMU-on jump faults
+    // (phase-03 research P4).  It also covers the DTB at 0x40000000.  The
+    // GIC (0x08000000) and PL011 (0x09000000) MMIO already sit inside
+    // entries[0]'s window.
+    #[cfg(platform = "virt")]
+    {
+        physicalpt3.entries[1] = Entry::empty()
+            .with_phys_addr(PhysAddr::new(0x4000_0000))
+            .with_valid(true)
+            .with_page_or_table(false)
+            .with_accessed(true)
+            .with_access_permission(AccessPermission::PrivRw)
+            .with_shareable(Shareable::Inner)
+            .with_uxn(true)
+            .with_mair_index(Mair::Normal);
+    }
 
     let (physicalpt4_pa, physicalpt4) = if let Ok(page_pa) = physpage_allocator.alloc_physpage() {
         (page_pa, unsafe { &mut *(page_pa.0 as *mut RootPageTable) })

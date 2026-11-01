@@ -1,0 +1,31 @@
+[build]
+target = "lib/aarch64-unknown-none-elf.json"
+buildflags = ["-Z", "build-std=core,alloc"]
+
+[link]
+# linker script to use
+script = 'aarch64/lib/kernel.ld'
+
+# kernel load address to insert into kernel.ld (KZERO + 0x40080000; AT()
+# emits p_paddr 0x40080000, qemu virt's -kernel load address)
+load-address = '0xffff800040080000'
+
+[config]
+platform = "virt"
+# no dtb key here: virt's DTB is qemu-facing, passed via [qemu].dtb
+
+[qemu]
+machine = "virt,gic-version=2"
+# TCG reference CPU (HVF rejects GICv2 on qemu 11.1.2; HVF would need -cpu
+# host, so hvf only becomes viable with a future GICv3 driver)
+cpu = "cortex-a72"
+smp = 1
+memory = "1024M"
+accel = "tcg"
+# Committed trimmed DTB: qemu loads it at 0x40000000 (the ELF-boot fix —
+# without -dtb, qemu 11.1.2 loads no DTB at all for ELF kernels and x0 is 0)
+dtb = "aarch64/lib/virt-gicv2.dtb"
+
+[dist]
+# ELF is the boot image on virt; skip the objcopy+gzip flat-image pipeline
+format = "elf"

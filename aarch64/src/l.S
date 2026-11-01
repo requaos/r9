@@ -119,7 +119,7 @@ el1:	// In EL1
 	cmp	x0, x1
 	b.ne	1b
 
-	bl	init_early_uart_rpi4
+	bl	init_early_uart
 
 	mov	x0, #'.'
 	bl	init_early_uart_putc

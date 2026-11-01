@@ -3,6 +3,8 @@ use port::mem::{PhysAddr, PhysRange};
 
 // These map to definitions in kernel.ld
 unsafe extern "C" {
+    #[cfg(platform = "virt")]
+    static boottext_pa: [u64; 0];
     static eboottext_pa: [u64; 0];
     static text_pa: [u64; 0];
     static etext_pa: [u64; 0];
@@ -15,7 +17,24 @@ unsafe extern "C" {
 }
 
 fn base_physaddr() -> PhysAddr {
-    PhysAddr::new(0)
+    // On virt the kernel loads at PA 0x40080000 (qemu -kernel); starting
+    // kernel ranges at PA 0 would map >1 GiB as Normal-cacheable kernel text,
+    // covering the GIC (0x08000000) and PL011 (0x09000000) MMIO windows -- a
+    // speculative-fetch hazard (phase-03 research P3).  Raspi deliberately
+    // keeps base 0 (the vminit TODO contemplates an unmapped page 0).
+    #[cfg(platform = "virt")]
+    {
+        boottext_physaddr()
+    }
+    #[cfg(not(platform = "virt"))]
+    {
+        PhysAddr::new(0)
+    }
+}
+
+#[cfg(platform = "virt")]
+fn boottext_physaddr() -> PhysAddr {
+    unsafe { PhysAddr::new(boottext_pa.as_ptr().addr() as u64) }
 }
 
 fn eboottext_physaddr() -> PhysAddr {
