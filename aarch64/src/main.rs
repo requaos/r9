@@ -24,6 +24,7 @@ mod vmdebug;
 extern crate alloc;
 
 use alloc::boxed::Box;
+#[cfg(not(platform = "virt"))]
 use core::ptr::null_mut;
 use param::KZERO;
 use port::fdt::DeviceTree;
@@ -63,6 +64,7 @@ fn print_memory_info() {
 }
 
 // https://github.com/raspberrypi/documentation/blob/develop/documentation/asciidoc/computers/raspberry-pi/revision-codes.adoc
+#[cfg(not(platform = "virt"))]
 fn print_pi_name(board_revision: u32) {
     let name = match board_revision {
         0xa21041 => "Raspberry Pi 2B",
@@ -74,6 +76,7 @@ fn print_pi_name(board_revision: u32) {
     println!("  Board Name:\t{name}");
 }
 
+#[cfg(not(platform = "virt"))]
 fn print_board_info() {
     println!("Board information:");
     let board_revision = platform::mailbox::get_board_revision();
@@ -107,6 +110,11 @@ fn print_stacks() {
 #[unsafe(no_mangle)]
 pub extern "C" fn main9(dtb_va: usize) {
     trap::init();
+    // Raspi has no interrupt handlers to arm, so unmask at the point the
+    // combined trap::init always unmasked.  Virt deliberately does NOT unmask
+    // here — 03-05 calls unmask_irq() after GIC + timer + UART RX are armed.
+    #[cfg(not(platform = "virt"))]
+    trap::unmask_irq();
 
     // Parse the DTB before we set up memory so we can correctly map it
     let dt = unsafe { DeviceTree::from_usize(dtb_va).unwrap() };
@@ -125,6 +133,7 @@ pub extern "C" fn main9(dtb_va: usize) {
     }
 
     platform::devcons::init(&dt);
+    #[cfg(not(platform = "virt"))]
     platform::mailbox::init(&dt);
 
     println!();
@@ -136,6 +145,7 @@ pub extern "C" fn main9(dtb_va: usize) {
 
     print_binary_sections();
 
+    #[cfg(not(platform = "virt"))]
     print_board_info();
     print_memory_info();
 
@@ -166,13 +176,20 @@ pub extern "C" fn main9(dtb_va: usize) {
     // vmdebug::print_recursive_tables(RootPageTableType::Kernel);
     // vmdebug::print_recursive_tables(RootPageTableType::User);
 
-    println!("Set up a user process");
+    // User page table experiment — raspi-only; the virt userspace-exec path is
+    // Phase 4 scope (research OQ-3).
+    #[cfg(not(platform = "virt"))]
+    {
+        println!("Set up a user process");
 
-    unsafe {
-        vm::init_user_page_tables();
-        vm::switch(vm::user_pagetable(), RootPageTableType::User);
+        unsafe {
+            vm::init_user_page_tables();
+            vm::switch(vm::user_pagetable(), RootPageTableType::User);
+        }
     }
 
+    // test_sysexit is raspi-only for the same reason — Phase 4 revisits it.
+    #[cfg(not(platform = "virt"))]
     test_sysexit();
 
     vmdebug::print_recursive_tables(RootPageTableType::Kernel);
@@ -188,6 +205,7 @@ pub extern "C" fn main9(dtb_va: usize) {
 
 mod runtime;
 
+#[cfg(not(platform = "virt"))]
 fn test_sysexit() {
     let page_table = vm::user_pagetable();
 

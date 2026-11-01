@@ -9,13 +9,25 @@ core::arch::global_asm!(include_str!("trap.S"));
 pub fn init() {
     #[cfg(not(test))]
     unsafe {
-        // Set up a vector table for any exception that is taken to EL1, then enable IRQ
+        // Set up a vector table for any exception that is taken to EL1
         core::arch::asm!(
             "adr {tmp}, exception_vectors",
             "msr vbar_el1, {tmp}",
-            "msr DAIFClr, #2",
             tmp = out(reg) _,
         );
+    }
+}
+
+/// Unmask IRQs (DAIFClr #2).  Must only be called once the platform has armed
+/// its interrupt handlers: an IRQ taken before then hits the "Unhandled
+/// interrupt" spin in trap() and wedges the kernel (research P5).  main9 calls
+/// this immediately after init() on raspi — the point where the combined
+/// trap::init always unmasked — while virt defers it until its GIC, timer and
+/// UART RX handlers are armed (plan 03-05).
+pub fn unmask_irq() {
+    #[cfg(not(test))]
+    unsafe {
+        core::arch::asm!("msr DAIFClr, #2");
     }
 }
 
