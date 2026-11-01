@@ -4,7 +4,8 @@ use crate::registers::{
     GPPUD, GPPUDCLK0, UART0_CR, UART0_DR, UART0_FBRD, UART0_FR, UART0_IBRD, UART0_ICR, UART0_IMSC,
     UART0_LCRH,
 };
-use crate::{mailbox, vm};
+use super::mailbox;
+use crate::vm;
 use port::Result;
 use port::devcons::Uart;
 use port::fdt::DeviceTree;

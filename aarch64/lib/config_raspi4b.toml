@@ -9,6 +9,9 @@ script = 'aarch64/lib/kernel.ld'
 # kernel load address to insert into kernel.ld
 load-address = '0xffff800000100000 - 0x80000'
 
+[config]
+platform = "raspi4b"
+
 [qemu]
 machine = "raspi4b"
 dtb = "aarch64/lib/bcm2711-rpi-4-b.dtb"

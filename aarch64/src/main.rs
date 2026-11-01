@@ -8,19 +8,16 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 mod allocator;
-mod devcons;
 mod deviceutil;
 mod io;
 mod kmem;
-mod mailbox;
 mod pagealloc;
 mod param;
+mod platform;
 mod pre_mmu;
 mod registers;
 mod swtch;
 mod trap;
-mod uartmini;
-mod uartpl011;
 mod vm;
 mod vmdebug;
 
@@ -79,16 +76,16 @@ fn print_pi_name(board_revision: u32) {
 
 fn print_board_info() {
     println!("Board information:");
-    let board_revision = mailbox::get_board_revision();
+    let board_revision = platform::mailbox::get_board_revision();
     print_pi_name(board_revision);
     println!("  Board Rev:\t{board_revision:#010x}");
-    let model = mailbox::get_board_model();
+    let model = platform::mailbox::get_board_model();
     println!("  Board Model:\t{model:#010x}");
-    let serial = mailbox::get_board_serial();
+    let serial = platform::mailbox::get_board_serial();
     println!("  Serial Num:\t{serial:#010x}");
-    let mailbox::MacAddress { a, b, c, d, e, f } = mailbox::get_board_macaddr();
+    let platform::mailbox::MacAddress { a, b, c, d, e, f } = platform::mailbox::get_board_macaddr();
     println!("  MAC Address:\t{a:02x}:{b:02x}:{c:02x}:{d:02x}:{e:02x}:{f:02x}");
-    let fw_revision = mailbox::get_firmware_revision();
+    let fw_revision = platform::mailbox::get_firmware_revision();
     println!("  Firmware Rev:\t{fw_revision:#010x}");
 }
 
@@ -127,8 +124,8 @@ pub extern "C" fn main9(dtb_va: usize) {
         panic!("error:Couldn't mark unused pages as free: err: {:?}", err);
     }
 
-    devcons::init(&dt);
-    mailbox::init(&dt);
+    platform::devcons::init(&dt);
+    platform::mailbox::init(&dt);
 
     println!();
     println!("r9 from the Internet");

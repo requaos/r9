@@ -1,6 +1,6 @@
 // Racy to start.
 
-use crate::uartmini::MiniUart;
+use super::uartmini::MiniUart;
 use core::cell::SyncUnsafeCell;
 use core::mem::MaybeUninit;
 use port::devcons::Console;

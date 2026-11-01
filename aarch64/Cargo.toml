@@ -11,3 +11,14 @@ aarch64-cpu = "11.2"
 bitstruct = "0.1"
 port = { path = "../port" }
 num_enum = { version = "0.7", default-features = false }
+
+# check-cfg declarations for every --cfg xtask can emit (xtask/src/config.rs).
+# The dev/ip/link/nodev/nouart families derive cfg names dynamically from TOML
+# content (dev_panic, ip_*, link_*, nodev_*, nouart_*); check-cfg has no name
+# wildcard, so each family member must be declared here when code first uses
+# it.  dev_panic is predeclared for the 03-06 panic config.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(platform, values("virt", "raspi3b", "raspi4b"))',
+    'cfg(dev_panic)',
+] }
