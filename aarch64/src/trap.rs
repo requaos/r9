@@ -141,6 +141,8 @@ fn dispatch_irq(frame: &TrapFrame) -> bool {
     match intid {
         // ARM generic timer CNTP (PPI 14 -> INTID 16+14)
         30 => platform::timer::tick(),
+        // PL011 UART RX (SPI 1 -> INTID 32+1): drain + lock-free echo
+        33 => platform::pl011::rx_irq_echo(),
         platform::gic::SPURIOUS_INTID => {} // spurious: acked, no EOI
         _ => println!("unhandled IRQ {intid}"),
     }

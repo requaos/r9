@@ -216,8 +216,8 @@ pub extern "C" fn main9(dtb_va: usize) {
     println!("looping now");
 
     // Virt interrupt bring-up (P5 ordering): arm the GIC, the generic timer
-    // and (03-05 Task 2) the UART RX path, and only then unmask IRQs.  Any
-    // earlier unmask would hit trap()'s sync-path wedge with no handler armed.
+    // and the UART RX path, and only then unmask IRQs.  Any earlier unmask
+    // would hit trap()'s sync-path wedge with no handler armed.
     #[cfg(platform = "virt")]
     {
         platform::gic::init(&dt);
@@ -225,6 +225,10 @@ pub extern "C" fn main9(dtb_va: usize) {
         // PPIs don't -- enable() applies that rule itself).
         platform::gic::enable(30, 0xA0);
         platform::timer::init(&dt);
+        // PL011 RX: SPI 1 -> INTID 32+1 -- an SPI, so enable() writes its
+        // ITARGETSR cpu0 target (P6).  Arm the UART's RXIM|RTIM path first.
+        platform::pl011::init_rx();
+        platform::gic::enable(33, 0xA0);
         trap::unmask_irq();
 
         // Idle loop: wfi wakes on each tick; trap()'s IRQ branch erets back
