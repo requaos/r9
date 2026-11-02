@@ -15,6 +15,7 @@ use std::{
 use target_lexicon::Triple;
 
 mod config;
+mod uregcheck;
 
 type DynError = Box<dyn std::error::Error>;
 type Result<T> = std::result::Result<T, DynError>;
@@ -239,6 +240,12 @@ fn main() {
                         .value_parser(clap::builder::NonEmptyStringValueParser::new()),
                 ]),
         )
+        .subcommand(
+            clap::Command::new("ureg-check").about(
+                "Verify the sibling Harvey checkout's aarch64/include/ureg.h matches the pinned \
+                 TrapFrame layout (D-06 layer 2; R9_HARVEY_DIR overrides the default ../harvey)",
+            ),
+        )
         .subcommand(clap::Command::new("clean").about("Cargo clean"))
         .get_matches();
 
@@ -267,6 +274,7 @@ fn main() {
             let s2 = BootTestStep::new(m);
             s1.run().and_then(|_| s2.run())
         }
+        Some(("ureg-check", _)) => UregCheckStep::new().run(),
         Some(("clean", _)) => CleanStep::new().run(),
         _ => Err("bad subcommand".into()),
     } {
@@ -858,6 +866,13 @@ impl BootTestStep {
             return Err("boot-test currently supports aarch64 only".into());
         }
 
+        // D-06 layer 2: the cross-repo ureg.h drift gate runs before qemu
+        // spawns — a drifted (or absent) Harvey checkout fails every
+        // boot-test profile (SC#1: an ABI mismatch is a build failure, not a
+        // runtime mystery).  Bare `cargo xtask build` instead tolerates a
+        // missing checkout — the layer-1 const asserts still guard there.
+        uregcheck::check_for_boot_test()?;
+
         let target = self.arch.target();
         let dir = self.profile.dir();
         // D-05: on virt the cargo-built ELF is the -kernel directly.
@@ -1355,6 +1370,20 @@ impl CleanStep {
             return Err("clean failed".into());
         }
         Ok(())
+    }
+}
+
+/// `cargo xtask ureg-check` (D-06 layer 2): standalone form of the
+/// cross-repo ureg.h drift gate (also a BootTestStep precondition).
+struct UregCheckStep {}
+
+impl UregCheckStep {
+    fn new() -> Self {
+        Self {}
+    }
+
+    fn run(self) -> Result<()> {
+        uregcheck::run_check().map(|_| ())
     }
 }
 

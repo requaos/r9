@@ -49,7 +49,13 @@ Device drivers are DTB-discovered, never hardcoded address tables:
 
 **Ordering rule:** `trap::unmask_irq()` is called LAST, after the GIC, timer and UART RX paths are armed — an IRQ taken before its handler exists falls into the generic trap path (dump + halt).  The idle loop is `wfi`; trap.S's `eret` resumes it after each IRQ.
 
-`trap()` dispatches IRQs (ack → timer tick / UART echo → exactly one EOI → return) and dumps the full `TrapFrame` (x0–x30, esr/elr/far) for anything else, then prints `kernel halted` and parks in `wfi` — a deterministic stop rather than a silent wedge.
+`trap()` dispatches IRQs (ack → timer tick / UART echo → exactly one EOI → return) and dumps the full `TrapFrame` (x0–x30, sp/pc/psr/type) for anything else — with esr/far printed from live `trap()` locals, not the frame — then prints `kernel halted` and parks in `wfi` — a deterministic stop rather than a silent wedge.
+
+### Trap frame = Harvey's Ureg (Phase 4, D-05/D-08)
+
+The `handle_interrupt` frame IS Harvey's `Ureg` (`harvey:aarch64/include/ureg.h`) field-for-field — 35 × u64: x0–x28, x29, x30, then `sp`, `pc`, `psr`, `type`; sizeof 280, align(16), so the frame stride stays 288 with the Ureg at the frame base.  One unified frame serves all 16 vectors.  `sp`@248 is sourced per trap origin: EL0-origin vectors read `SP_EL0` after the stack switch; EL1-origin vectors capture the live entry-sp BEFORE the switch (on EL1h, `SP_EL0` holds a stale user SP, not a kernel-context value).  `pc`@256 is `ELR_EL1`, `psr`@264 is `SPSR_EL1`, `type`@272 carries the vector index 0–15 (kernel-side informational).  `ESR_EL1`/`FAR_EL1` are no longer frame fields — `trap()` reads them live at entry and passes them as dispatcher arguments, so a stale-frame syndrome read cannot corrupt fault decode.  The restore writes `ELR_EL1`/`SPSR_EL1` from the frame always, and `SP_EL0` only when `frame.psr & 0xF == 0` (returning to EL0t) — an IRQ that interrupted EL1 kernel code never scribbles a kernel address into the user stack pointer.
+
+The layout is a published cross-repo contract, gated at build time in two layers (D-06): in-crate const asserts in `trap.rs` fail `cargo build` on any drift (always on, no Harvey checkout needed), and `cargo xtask ureg-check` parses the sibling Harvey checkout's `ureg.h` (`$R9_HARVEY_DIR`, default `../harvey`) and fails every boot-test profile on field/order/count drift.  The canonical statement is the "Kernel-side enforcement (Phase 4 appendix)" section of `harvey:aarch64/ABI.md`, which also carries the pinned offset table and the kernel-side argument-read rule (`args at ureg->sp + 8`; `SP+0` reserved).
 
 ### Debug panic config (dev_panic)
 
