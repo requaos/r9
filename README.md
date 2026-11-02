@@ -48,6 +48,10 @@ R9 can be run using qemu for the various supported architectures:
 |aarch64|raspi4b|cargo xtask qemu --arch aarch64 --config raspi4b --verbose|
 |aarch64|virt|cargo xtask qemu --arch aarch64 --config virt|
 |aarch64|virt (boot-test harness)|cargo xtask boot-test --arch aarch64 --config virt|
+|aarch64|virt (kernel-panic profile)|cargo xtask boot-test --arch aarch64 --config virtpanic|
+|aarch64|virt (userspace-exec, SC#2)|cargo xtask boot-test --arch aarch64 --config virtexec|
+|aarch64|virt (preemptive multi-proc smoke)|cargo xtask boot-test --arch aarch64 --config virtmulti|
+|aarch64|virt (notes smoke, SC#4)|cargo xtask boot-test --arch aarch64 --config virtnotes|
 |x86-64|q35|cargo xtask qemu --arch x86-64 --verbose|
 |x86-64 (with kvm)|q35|cargo xtask qemu --arch x86-64 --kvm --verbose|
 |riscv|virt|cargo xtask qemu --arch riscv64 --verbose|
