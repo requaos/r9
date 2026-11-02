@@ -34,7 +34,7 @@ We're now in rust, in `main9`, and at a highlevel we:
 2. Parse the device tree, enabling more informed initialisation.
 3. Set up the mailbox (rpi-specific, but allows us to extract more information from the hardware, and interact directly in certain ways).
 4. Initialise the [console](#devcons), ensuring we can use `port::println` to write to the UART.  On virt this is a `Pl011Uart` discovered from the DTB (`arm,pl011` → translated reg block → MMIO map), polled-TX, no GPIO/mailbox setup.
-5. Write out some useful system information.  On virt the "what machine am I on" slot is DTB-derived (memory range from `/memory`, `found:` lines for `arm,pl011` / `arm,cortex-a15-gic` / `arm,armv8-timer`) instead of the mailbox board dump.
+5. Write out some useful system information.  On virt the "what machine am I on" slot is DTB-derived (memory range from `/memory`, `found:` lines for `arm,pl011` / `arm,cortex-a15-gic` / `arm,armv8-timer`) instead of the mailbox board dump.  Right after the banner, an initrd configured via TOML data gets its probe marker (`initrd: start=… end=… size=…`, parsed from `/chosen` `linux,initrd-start/end`, validated against the `/memory` node, reserved in pagealloc) and a paqfs proof: the image range is mapped into the kernel table at KZERO+PA (the same `VaMapping::Offset(KZERO)` convention vminit uses for the DTB) and `port::paqfs` walks the image root, printing one `paqfs: <name>` line per root entry.  With no initrd configured the line is `initrd: none` and the paqfs path never runs.  qemu's `-initrd` is never used: on qemu 11.1.2 it does not deliver for ELF kernels, so xtask places the image with the generic loader and patches `/chosen` into a target/ DTB copy (fdtput, two BE cells per u64).
 6. Set up [virtual memory](#virtual-memory) in rust.  (After switching we no longer need the pagetables set up in early initialisation.)
 7. Write out the page tables.
 8. On virt: arm interrupts, then idle in `wfi`.  On raspi: loop.
@@ -88,3 +88,7 @@ Future Improvements:
 ### fdt
 
 ### mcslock
+
+### paqfs
+
+`paqfs.rs` is a `no_std` reader for Plan 9 paqfs/bootfs images (Harvey `sys/src/cmd/paqfs/` is the producer + reference reader), over a memory-resident `&[u8]` — the initrd root-fs format.  It parses the 44-byte header (magic `0x529AB12B`, small form only), the 28-byte trailer (magic `0x6B46E688`, root DirBlock offset; the sha1 is not verified), and 12-byte block headers (magic `0x198A1CBF`, type Dir/Data/Pointer, encoding NoEnc/DeflateEnc).  NoEnc payloads are always blocksize bytes on disk; DeflateEnc is raw RFC 1951 inflate (`miniz_oxide`, output hard-capped at blocksize), and every block's adler32 header field is checked against the DECODED payload — note Harvey's libflate `adler32(0, …)` is the seed-0 variant, reproduced via `adler2::Adler32::from_checksum(0)`, not the RFC 1950 seed.  The API is stateless-per-call (`open_image` / `read_block` / `root_dir` / `read_dir` / `walk` / `read_at`): no statics, no locks, all offsets bounds-checked before slicing, every failure a typed `Err` — reentrant by construction so the future demand-fault handler can call it in trap context.  Host tests (`port/tests/paqfs_test.rs`) verify byte-level against the committed mkpaqfs fixture `port/tests/fixtures/probe-tree.paq` plus a synthetic in-test image, including corrupt-input negatives.
