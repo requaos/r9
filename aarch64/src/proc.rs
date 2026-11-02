@@ -516,6 +516,23 @@ pub fn new_user_proc(name: &str) -> Result<&'static mut Proc> {
     let pid = table.next_pid;
     table.next_pid += 1;
     let Some(slot) = table.procs.iter_mut().find(|s| s.is_none()) else {
+        // WR-02: the table-full path must free the already-allocated
+        // root-table page and kstack pages — they are otherwise leaked
+        // (reachable with MAX_PROCS = 8 once real init spawns
+        // grandchildren).  Drop the PROC_TABLE guard BEFORE the frees: the
+        // module locking discipline never holds it across a pagealloc
+        // call.  The kernel-side VA mappings stay, per the
+        // free_root_table_and_kstack convention; the burned pid is
+        // harmless.
+        drop(table);
+        if let Err(err) = pagealloc::deallocate_physpage(root_pa) {
+            println!("proc: table-full deallocate root table {:#x}: {err:?}", root_pa.addr());
+        }
+        for pa in kstack_pas {
+            if let Err(err) = pagealloc::deallocate_physpage(PhysAddr::new(pa)) {
+                println!("proc: table-full deallocate kstack page {pa:#x}: {err:?}");
+            }
+        }
         return Err("proc: table full");
     };
     let mut proc = Proc::new(pid, name, kstack_top, kstack_pas, root_ptr);
@@ -853,13 +870,43 @@ pub fn post_wait_record(parent: *mut Proc, pid: u64, msg: &[u8]) {
 /// queued Ready; its first run erets through the CURFRAME/trap_return
 /// path.  Returns the child pid (the parent's wire result).
 pub fn rfork_clone(parent: &mut Proc, frame: &TrapFrame, nowait: bool) -> Result<u64> {
-    let parent_ptr = ptr::addr_of_mut!(*parent);
     let name = {
         let n = parent.name.iter().position(|&b| b == 0).unwrap_or(KNAMELEN);
         core::str::from_utf8(&parent.name[..n]).unwrap_or("fork")
     };
     let child = new_user_proc(name)?;
 
+    // WR-02: everything from here is fallible, and the child is already
+    // PROC_TABLE-resident (new_user_proc inserts it Ready with a null
+    // frame).  A mid-copy Err that just returned would leave the
+    // half-built child Runnable in the table — the scheduler's pick_next
+    // would eventually pick it and trap_return on CURFRAME = 0 (an EL1h
+    // abort from an ordinary OOM) — and leak its pages.  Unwind instead:
+    // mark Moribund, free the pages already copied, then the root-table
+    // page and kstack by their recorded PAs.
+    if let Err(msg) = rfork_copy(parent, child, frame, nowait) {
+        child.state = ProcState::Moribund;
+        // The copied pages' child-table entries die with the root-table
+        // page below; the kernel-side KZERO+PA aliases stay mapped, per
+        // the free_root_table_and_kstack convention.
+        for rec in core::mem::take(&mut child.mapping_log) {
+            if let Err(err) = pagealloc::deallocate_physpage(PhysAddr::new(rec.phys as u64)) {
+                println!("rfork: unwind deallocate user page {:#x}: {err:?}", rec.phys);
+            }
+        }
+        child.free_root_table_and_kstack();
+        return Err(msg);
+    }
+    parent.children_live += 1;
+    Ok(child.pid)
+}
+
+/// The fallible body of rfork_clone after the child exists (the WR-02
+/// split — rfork_clone unwinds the half-built child on any Err): an EAGER
+/// page-for-page copy of every user mapping, a dup'd fd table, mirrored
+/// segment records + paqfs byte source, and a copy of the parent's live
+/// trap frame on the child's kstack with x0 = 0 (donor forkchild).
+fn rfork_copy(parent: &Proc, child: &mut Proc, frame: &TrapFrame, nowait: bool) -> Result<()> {
     // The eager copy.  Each parent page's bytes go through the pages'
     // KZERO+PA kernel aliases (map_to REPLACES existing entries, so
     // re-mapping the exec/fault-side alias is idempotent); the child's
@@ -931,14 +978,13 @@ pub fn rfork_clone(parent: &mut Proc, frame: &TrapFrame, nowait: bool) -> Result
         (*child_frame).x0 = 0;
     }
     child.frame = child_frame;
-    child.parent = parent_ptr;
+    child.parent = ptr::addr_of!(*parent) as *mut Proc;
     child.nowait = nowait;
     // Donor newproc (9front@350266104f sys/src/9/port/sysproc.c:142-144):
     // the child INHERITS the notify handler; the note queue/last-note/
     // note_ureg start empty (Proc::new's construction).
     child.notify_handler = parent.notify_handler;
-    parent.children_live += 1;
-    Ok(child.pid)
+    Ok(())
 }
 
 /// Map (or idempotently re-map — map_to replaces) a phys page's KZERO+PA
