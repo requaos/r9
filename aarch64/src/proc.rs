@@ -812,7 +812,8 @@ pub fn post_note(pid: u64, msg: &[u8]) -> Result<()> {
 /// set — the parent resumes through the sched loop's swtch).  The record
 /// is kernel memory in the parent's table slot (T-04-15: no cross-process
 /// pointers).  PROC_TABLE-brief.
-pub fn post_wait_record(parent: *mut Proc, pid: u64, msg: &[u8]) {    if parent.is_null() {
+pub fn post_wait_record(parent: *mut Proc, pid: u64, msg: &[u8]) {
+    if parent.is_null() {
         return;
     }
     let node = LockNode::new();
