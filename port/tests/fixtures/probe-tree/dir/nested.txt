@@ -1,0 +1,3 @@
+nested.txt — a second file in a subdirectory, different text
+so 04-02's reader proves walk() into dir/ and read() of distinct bytes
+sha-side evidence: this file's content differs from hello.txt by design
