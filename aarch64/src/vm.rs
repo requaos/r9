@@ -429,39 +429,54 @@ impl RootPageTable {
         let old_recursive_entry =
             vmtrait_impl.replace_recursive_entry(pgtype, temp_recursive_entry);
 
-        let dest_entry = match page_size {
-            PageSize::Page4K => self
-                .next_mut(page_allocator, vmtrait_impl, pgtype, Level::Level0, va)
-                .and_then(|t1| t1.next_mut(page_allocator, vmtrait_impl, pgtype, Level::Level1, va))
-                .and_then(|t2| t2.next_mut(page_allocator, vmtrait_impl, pgtype, Level::Level2, va))
-                .and_then(|t3| t3.entry_mut(Level::Level3, va)),
-            PageSize::Page2M => self
-                .next_mut(page_allocator, vmtrait_impl, pgtype, Level::Level0, va)
-                .and_then(|t1| t1.next_mut(page_allocator, vmtrait_impl, pgtype, Level::Level1, va))
-                .and_then(|t2| t2.entry_mut(Level::Level2, va)),
-            PageSize::Page1G => self
-                .next_mut(page_allocator, vmtrait_impl, pgtype, Level::Level0, va)
-                .and_then(|t1| t1.entry_mut(Level::Level1, va)),
-        };
-        let dest_entry = match dest_entry {
-            Ok(e) => e,
-            Err(err) => {
-                println!(
-                    "error:vm:map_to:couldn't find page table entry. va:{:#x} err:{:?}",
-                    va, err
-                );
-                return Err(err);
-            }
-        };
+        // Walk + write the destination entry.  The recursive slot-511
+        // restore below runs on EVERY exit, success or walk failure (WR-01):
+        // an early Err return that skipped it left the ACTIVE table's slot
+        // pointing at this (other) root table, and each later map_to read
+        // the corrupted slot as its "old" entry and restored the corruption
+        // — the recursive self-map stayed permanently wrong outside the
+        // dance.
+        let result: Result<(), PageTableError> = (|| {
+            let dest_entry = match page_size {
+                PageSize::Page4K => self
+                    .next_mut(page_allocator, vmtrait_impl, pgtype, Level::Level0, va)
+                    .and_then(|t1| {
+                        t1.next_mut(page_allocator, vmtrait_impl, pgtype, Level::Level1, va)
+                    })
+                    .and_then(|t2| {
+                        t2.next_mut(page_allocator, vmtrait_impl, pgtype, Level::Level2, va)
+                    })
+                    .and_then(|t3| t3.entry_mut(Level::Level3, va)),
+                PageSize::Page2M => self
+                    .next_mut(page_allocator, vmtrait_impl, pgtype, Level::Level0, va)
+                    .and_then(|t1| {
+                        t1.next_mut(page_allocator, vmtrait_impl, pgtype, Level::Level1, va)
+                    })
+                    .and_then(|t2| t2.entry_mut(Level::Level2, va)),
+                PageSize::Page1G => self
+                    .next_mut(page_allocator, vmtrait_impl, pgtype, Level::Level0, va)
+                    .and_then(|t1| t1.entry_mut(Level::Level1, va)),
+            };
+            let dest_entry = match dest_entry {
+                Ok(e) => e,
+                Err(err) => {
+                    println!(
+                        "error:vm:map_to:couldn't find page table entry. va:{:#x} err:{:?}",
+                        va, err
+                    );
+                    return Err(err);
+                }
+            };
 
-        // Entries at level 3 should have the page flag set
-        let entry =
-            if page_size == PageSize::Page4K { entry.with_page_or_table(true) } else { entry };
+            // Entries at level 3 should have the page flag set
+            let entry =
+                if page_size == PageSize::Page4K { entry.with_page_or_table(true) } else { entry };
 
-        vmtrait_impl.write_entry(dest_entry, entry);
+            vmtrait_impl.write_entry(dest_entry, entry);
+            Ok(())
+        })();
         vmtrait_impl.write_recursive_entry(pgtype, old_recursive_entry);
-
-        Ok(())
+        result
     }
 
     /// Map the physical range using the requested page size.
