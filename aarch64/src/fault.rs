@@ -20,7 +20,7 @@ use port::mem::PAGE_SIZE_4K;
 use port::println;
 
 use crate::param::KZERO;
-use crate::proc::{self, MappingRecord, Proc, ProcState, SegKind};
+use crate::proc::{self, MappingRecord, Proc, SegKind};
 use crate::registers::{EsrEl1, EsrEl1IssDataAbort, EsrEl1IssInstructionAbort, ExceptionClass};
 use crate::trap::TrapFrame;
 use crate::vm::{self, Entry, PageSize, PhysPageAllocator, RootPageTableType, VmTraitImpl};
@@ -268,17 +268,27 @@ fn unresolvable(frame: &TrapFrame, class: u8, far: u64, access: &str) -> ! {
     kill_current_process();
 }
 
-/// Kill the current process and park the kernel — the single-process-era
-/// "kill" (the faulting process is the only one; 04-06's EXITS path owns
-/// the all-exited clean halt later).  trap()'s other-EL0-origin sync path
-/// (the donor faultnote shape) shares this.
+/// Kill the current process from trap/fault context (WR-06): route through
+/// the 04-07 exit tail — free the user mappings, mark Moribund, print the
+/// exit line, post the wait record and wake an AWAITing parent, free the
+/// root-table page and kstack, then hand off to the scheduler (the
+/// all-exited clean halt remains exit_tail's tail).  Exactly the shape
+/// deliver_notes's no-handler kill already uses (trap.rs): one process's
+/// wild pointer now kills ONE process — never the IRQs-masked wfi wedge of
+/// the single-process era, which took every sibling and the scheduler down
+/// with it and left the parent's AWAIT blocked on children_live > 0.
+/// trap()'s other-EL0-origin sync path (the donor faultnote shape) shares
+/// this.
 pub(crate) fn kill_current_process() -> ! {
     let proc_ptr = proc::current_proc();
-    if !proc_ptr.is_null() {
-        unsafe { (*proc_ptr).state = ProcState::Moribund };
+    if proc_ptr.is_null() {
+        // No current process (pre-userspace trap): nothing to route
+        // through the lifecycle — park.
+        println!("fault kill with no current process — parking");
+        loop {
+            unsafe { core::arch::asm!("wfi") };
+        }
     }
-    println!("proc marked Moribund — parking");
-    loop {
-        unsafe { core::arch::asm!("wfi") };
-    }
+    let proc = unsafe { &mut *proc_ptr };
+    crate::syscall::exit_tail(proc, b"fault");
 }
