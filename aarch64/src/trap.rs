@@ -342,12 +342,24 @@ fn dispatch_irq(_frame: &TrapFrame) -> bool {
 /// process loudly with the note printed — never a partial write, never a
 /// kernel write to a bad user VA.  No handler installed → print the note
 /// + kill via the exits path (the donor donotify pexit shape).
+///
+/// In-handler guard (WR-05, the donor donotify `up->notified` check): a
+/// second note is NOT delivered while a note handler is running —
+/// delivering would overwrite note_ureg/last_note mid-handler and the
+/// FIRST handler's noted(NCONT) would then restore the SECOND note's
+/// saved frame, resuming the wrong context.  The note stays queued;
+/// noted() clears note_ureg and the next return-to-EL0 boundary retries.
 pub(crate) fn deliver_notes(frame: &mut TrapFrame) {
     let proc_ptr = proc::current_proc();
     if proc_ptr.is_null() {
         return;
     }
     let proc = unsafe { &mut *proc_ptr };
+    // WR-05: leave the note queued while a handler is active (note_ureg
+    // doubles as the donor's up->notified flag).
+    if proc.note_ureg != 0 {
+        return;
+    }
     let Some(note) = proc.note_queue.pop_front() else { return };
     proc.last_note = note.buf;
     proc.last_note_len = note.len;
