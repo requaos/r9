@@ -7,7 +7,11 @@
 //! Trap-context invariants (T-04-09, 04-RESEARCH.md Pitfall 3):
 //! - IRQs arrive masked and are NEVER unmasked here.
 //! - The handler touches only pre-mapped kernel memory and the user VA being
-//!   installed; a fault on a kernel-context address panics loudly.
+//!   installed.  trap.rs routes only lower-EL aborts here, so a
+//!   kernel-context FAR is a userland wild pointer: the process dies via
+//!   the unresolvable kill (WR-08).  A handler-SIDE kernel-context touch
+//!   arrives as a current-EL abort (EC 0x21/0x25) and hits trap()'s
+//!   dump-and-halt — the real T-04-09 guard.
 //! - No locks are held on entry and PROC_TABLE is never taken; the Console
 //!   MCS lock (println!) is safe pre-syscall-era — nothing else holds it in
 //!   trap context (04-PATTERNS.md "Locking discipline"; the tick print is
@@ -63,16 +67,17 @@ pub fn user_fault(frame: &mut TrapFrame, esr: EsrEl1, far: u64) {
     }
 
     let va = far as usize;
-    // T-04-09: a kernel-context address here means a kernel bug — panic
-    // loudly rather than recurse into the handler's own machinery.  The
-    // frame's pc/sp/psr name the faulting instruction and origin EL.
+    // WR-08 (T-04-09 corrected): trap.rs routes ONLY lower-EL aborts here
+    // (EC 0x20/0x24), so the FAR is always a USER address — a top-half
+    // value is an ordinary userland wild pointer, not a kernel bug, and
+    // panicking turned any future binary's bad pointer into a kernel halt
+    // (user-reachable DoS).  Fall through to the unresolvable kill, which
+    // since WR-06 routes through exit_tail: one process dies, the kernel
+    // and its siblings live.  A handler-side touch of kernel-context
+    // memory would arrive as a CURRENT-EL abort (EC 0x21/0x25) and hits
+    // trap()'s dump-and-halt — that path is the real T-04-09 guard.
     if va >= KZERO {
-        panic!(
-            "user fault: kernel-context address class={class} addr={va:#x} pc={:#x} sp={:#x} psr={:#x}",
-            frame.pc(),
-            frame.sp(),
-            frame.psr()
-        );
+        unresolvable(frame, class, far, access);
     }
     let proc_ptr = proc::current_proc();
     if proc_ptr.is_null() {
