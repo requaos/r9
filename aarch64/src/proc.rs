@@ -114,6 +114,8 @@ impl Segments {
 /// The demand-page byte source for text/data: the exec'd binary's paqfs
 /// directory entry plus the image it reads from, and the data-segment file
 /// base (40 + textsize — Pitfall 5: data file offsets are NOT page-aligned).
+/// Clone for 04-07's rfork (the child mirrors the parent's source handles).
+#[derive(Clone)]
 pub struct ByteSource {
     pub dir: PaqDir,
     pub image: &'static [u8],
@@ -549,9 +551,7 @@ fn interrupt_stack_top() -> usize {
         static interruptstackbase: u8;
         static interruptstacksz: u8;
     }
-    unsafe {
-        &interruptstackbase as *const u8 as usize + &interruptstacksz as *const u8 as usize
-    }
+    unsafe { &interruptstackbase as *const u8 as usize + &interruptstacksz as *const u8 as usize }
 }
 
 /// Initialise CURKSTACK to the legacy interrupt stack.  main9 calls this
@@ -747,4 +747,153 @@ fn pick_next() -> Option<Resume> {
         });
     }
     None
+}
+
+/// EXITS's tail (04-07): the Moribund current proc never runs again —
+/// switch into the scheduler context with no wake path.  The swtch save
+/// writes only the PROC_TABLE-resident context struct (never the freed
+/// kstack), so EXITS can free the kstack before calling here.  Diverges.
+pub fn sched_from_moribund() -> ! {
+    let cur = current_proc();
+    unsafe {
+        let ctx = sched_context();
+        if !cur.is_null() {
+            swtch::swtch(&mut (*cur).context, &*ctx);
+        }
+    }
+    unreachable!("sched: moribund process resumed");
+}
+
+/// EXITS (04-07): post the child's wait record to the parent and wake it
+/// if it sits Blocked in AWAIT (Blocked → Ready; blocked_in_kernel stays
+/// set — the parent resumes through the sched loop's swtch).  The record
+/// is kernel memory in the parent's table slot (T-04-15: no cross-process
+/// pointers).  PROC_TABLE-brief.
+pub fn post_wait_record(parent: *mut Proc, pid: u64, msg: &[u8]) {
+    if parent.is_null() {
+        return;
+    }
+    let node = LockNode::new();
+    // Held for the posting + wake (the parent pointer is table-resident).
+    let _guard = PROC_TABLE.lock(&node);
+    let parent = unsafe { &mut *parent };
+    let mut rec = WaitRecord { pid, msg: [0; ERRMAX], msg_len: msg.len().min(ERRMAX) };
+    rec.msg[..rec.msg_len].copy_from_slice(&msg[..rec.msg_len]);
+    parent.wait_records.push_back(rec);
+    if parent.state == ProcState::Blocked {
+        parent.state = ProcState::Ready;
+    }
+}
+
+/// RFORK (04-07): clone `parent` — a fresh proc (new kernel stack + root
+/// table via new_user_proc), an EAGER page-for-page copy of every user
+/// mapping (no COW, no shared writable pages — T-04-15), a dup'd fd table
+/// (fresh Chan values naming the same files/devices), mirrored segment
+/// records + paqfs byte source, and a copy of the parent's live trap frame
+/// on the child's kstack with x0 = 0 (donor forkchild).  The child is
+/// queued Ready; its first run erets through the CURFRAME/trap_return
+/// path.  Returns the child pid (the parent's wire result).
+pub fn rfork_clone(parent: &mut Proc, frame: &TrapFrame, nowait: bool) -> Result<u64> {
+    let parent_ptr = ptr::addr_of_mut!(*parent);
+    let name = {
+        let n = parent.name.iter().position(|&b| b == 0).unwrap_or(KNAMELEN);
+        core::str::from_utf8(&parent.name[..n]).unwrap_or("fork")
+    };
+    let child = new_user_proc(name)?;
+
+    // The eager copy.  Each parent page's bytes go through the pages'
+    // KZERO+PA kernel aliases (map_to REPLACES existing entries, so
+    // re-mapping the exec/fault-side alias is idempotent); the child's
+    // fresh page maps into its INACTIVE root table at the same VA with the
+    // same entry kind (map_to's temp-recursive dance edits inactive
+    // tables).  The parent's mapping_log is stable: single CPU, the parent
+    // is current, IRQs are masked in syscall context.
+    let records: Vec<MappingRecord> = parent.mapping_log.clone();
+    for rec in &records {
+        let pa = pagealloc::allocate_physpage().map_err(|_| "rfork: page alloc failed")?;
+        map_kernel_alias(rec.phys as u64)?;
+        map_kernel_alias(pa.addr())?;
+        unsafe {
+            let src = physaddr_as_ptr_mut_offset_from_kzero::<u8>(PhysAddr::new(rec.phys as u64));
+            let dst = physaddr_as_ptr_mut_offset_from_kzero::<u8>(pa);
+            ptr::copy_nonoverlapping(src, dst, PAGE_SIZE_4K);
+        }
+        // Text is UXN-clear/PXN-set; everything else rw_user_data — the
+        // same kind→entry mapping fault.rs's page-in uses.
+        let entry = match rec.kind {
+            SegKind::Text => Entry::rw_user_text(),
+            _ => Entry::rw_user_data(),
+        }
+        .with_phys_addr(pa);
+        unsafe {
+            let mut physalloc = PhysPageAllocator {};
+            let mut vmt = VmTraitImpl {};
+            (*child.root_table)
+                .map_to(
+                    &mut physalloc,
+                    &mut vmt,
+                    entry,
+                    rec.va,
+                    PageSize::Page4K,
+                    RootPageTableType::User,
+                )
+                .map_err(|_| "rfork: child user map failed")?;
+        }
+        child.mapping_log.push(MappingRecord {
+            va: rec.va,
+            phys: pa.addr() as usize,
+            size: rec.size,
+            kind: rec.kind,
+        });
+    }
+    // No icache maintenance on the copy: identical bytes land at identical
+    // VAs (a stale VIPT line would return the same bytes), and any later
+    // exec's text page-in flushes per page (fault.rs).  Documented limit.
+
+    // Mirror the segment map + demand-page byte source so the child's
+    // future faults resolve in the child.
+    child.segments = parent.segments.clone();
+    child.text_source = parent.text_source.clone();
+
+    // Dup the fd table (value copies — the streaming offsets diverge after
+    // the fork, a documented approximation of Plan 9's shared-Chan
+    // semantics; the smoke's fds are the devcons preopens).
+    for (i, slot) in parent.fd_table.iter().enumerate() {
+        if let Some(c) = slot {
+            child.fd_table[i] = Some(c.dup());
+        }
+    }
+
+    // The forkchild frame: a copy of the parent's live frame on the
+    // CHILD's kernel stack, with x0 = 0 (the child's wire result).
+    let child_frame = (child.kstack_top - core::mem::size_of::<TrapFrame>()) as *mut TrapFrame;
+    unsafe {
+        ptr::copy_nonoverlapping(frame, child_frame, 1);
+        (*child_frame).x0 = 0;
+    }
+    child.frame = child_frame;
+    child.parent = parent_ptr;
+    child.nowait = nowait;
+    parent.children_live += 1;
+    Ok(child.pid)
+}
+
+/// Map (or idempotently re-map — map_to replaces) a phys page's KZERO+PA
+/// alias in the kernel table for rfork's copy loop.
+fn map_kernel_alias(pa: u64) -> Result<()> {
+    let mut physalloc = PhysPageAllocator {};
+    let mut vmt = VmTraitImpl {};
+    vm::kernel_pagetable()
+        .map_phys_range(
+            &mut physalloc,
+            &mut vmt,
+            "forkcopy",
+            &PhysRange::with_pa_len(PhysAddr::new(pa), PAGE_SIZE_4K),
+            vm::VaMapping::Offset(KZERO),
+            Entry::rw_kernel_data(),
+            PageSize::Page4K,
+            RootPageTableType::Kernel,
+        )
+        .map_err(|_| "rfork: kernel alias map failed")
+        .map(|_| ())
 }

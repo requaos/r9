@@ -787,6 +787,19 @@ const BOOT_INIT_MARKER: &str = "init: r9 EL0 alive";
 const BOOT_HELLO_MARKER: &str = "hello aarch64 harvey";
 const BOOT_ALL_EXITED_MARKER: &str = "all user processes exited";
 
+/// Multi-profile markers (04-07, SC#4's rfork/fd-ops half + D-13
+/// preemption evidence): the virtmulti config boots the SAME kernel+initrd
+/// as virtexec, but the staged init rforks two children (hello +
+/// smokefork) and awaits both, so the smoke markers arrive in
+/// nondeterministic order — asserted for PRESENCE, never interleaving
+/// (D-13).  `sched: switch` is the tick-preemption marker: at least one
+/// switch proves IRQ-from-EL0 returned to a DIFFERENT process.
+const BOOT_SMOKE_FD_MARKER: &str = "smokefork: fd ok";
+const BOOT_SMOKE_CHILD_MARKER: &str = "smokefork: child running";
+const BOOT_SMOKE_AWAIT_MARKER: &str = "smokefork: await:";
+const BOOT_SMOKE_DONE_MARKER: &str = "init: smoke complete";
+const BOOT_SCHED_SWITCH_MARKER: &str = "sched: switch";
+
 /// Always-on negative scan (04-06): any panic/Unhandled-interrupt line in
 /// the capture fails the run — every profile EXCEPT the deliberate-panic
 /// one (whose expected flow prints exactly that dump).  Case-insensitive,
@@ -853,6 +866,9 @@ enum BootStage {
     ExecEntry,
     InitPrint,
     HelloPrint,
+    /// 04-07 multi profile: collect the (unordered) smoke markers +
+    /// >= 1 sched-switch preemption line before awaiting all-exited.
+    MultiMarkers,
     AllExited,
 }
 
@@ -880,6 +896,12 @@ impl fmt::Display for BootStage {
             }
             BootStage::InitPrint => write!(f, "init print marker {BOOT_INIT_MARKER:?}"),
             BootStage::HelloPrint => write!(f, "hello print marker {BOOT_HELLO_MARKER:?}"),
+            BootStage::MultiMarkers => write!(
+                f,
+                "smoke markers {{{BOOT_SMOKE_FD_MARKER:?}, {BOOT_SMOKE_CHILD_MARKER:?}, \
+                 {BOOT_SMOKE_AWAIT_MARKER:?}, {BOOT_HELLO_MARKER:?}, {BOOT_SMOKE_DONE_MARKER:?}}} \
+                 + >= 1 {BOOT_SCHED_SWITCH_MARKER:?} line"
+            ),
             BootStage::AllExited => {
                 write!(f, "all-exited marker {BOOT_ALL_EXITED_MARKER:?}")
             }
@@ -888,12 +910,13 @@ impl fmt::Display for BootStage {
 }
 
 /// The boot-test assertion profile being run (04-06: the exec profile
-/// joined the ticks/echo and panic pair).
+/// joined the ticks/echo and panic pair; 04-07 adds multi).
 #[derive(Clone, Copy, PartialEq)]
 enum BootProfile {
     Ticks,
     Panic,
     Exec,
+    Multi,
 }
 
 impl BootTestStep {
@@ -1075,6 +1098,14 @@ impl BootTestStep {
             .as_ref()
             .and_then(|c| c.dev.as_ref())
             .is_some_and(|devs| devs.iter().any(|d| d == "exec"));
+        // 04-07 (SC#4 rfork/fd-ops + D-13 preemption evidence): the MULTI
+        // profile is selected by CONFIG NAME ("virtmulti") — the kernel
+        // config is byte-identical to virtexec's (same dev = ["exec"] cfg,
+        // same initrd); only the assertion set differs.  Selection by name
+        // (rather than a dev-list addition) keeps the kernel cfg surface
+        // unchanged: there is no second kernel behavior to gate, only a
+        // second set of boot-test expectations over the same boot.
+        let multi_profile = self.config_name == "virtmulti";
 
         while Instant::now() < deadline {
             // Always-on negative scan: a panic/Unhandled-interrupt line
@@ -1087,7 +1118,7 @@ impl BootTestStep {
                     if contains_marker(&capture, BOOT_BANNER_MARKER.as_bytes()) {
                         stage = if panic_profile {
                             BootStage::PanicStart
-                        } else if exec_profile {
+                        } else if exec_profile || multi_profile {
                             BootStage::ExecEntry
                         } else {
                             BootStage::Ticks
@@ -1129,7 +1160,11 @@ impl BootTestStep {
                 }
                 BootStage::InitPrint => {
                     if contains_marker(&capture, BOOT_INIT_MARKER.as_bytes()) {
-                        stage = BootStage::HelloPrint;
+                        stage = if multi_profile {
+                            BootStage::MultiMarkers
+                        } else {
+                            BootStage::HelloPrint
+                        };
                     }
                 }
                 BootStage::HelloPrint => {
@@ -1137,9 +1172,29 @@ impl BootTestStep {
                         stage = BootStage::AllExited;
                     }
                 }
+                BootStage::MultiMarkers => {
+                    // Presence, never order (D-13): every smoke marker at
+                    // least once, plus >= 1 sched-switch line (an
+                    // IRQ-from-EL0 preempted to a different process).
+                    let smoke_seen = [
+                        BOOT_SMOKE_FD_MARKER,
+                        BOOT_SMOKE_CHILD_MARKER,
+                        BOOT_SMOKE_AWAIT_MARKER,
+                        BOOT_HELLO_MARKER,
+                        BOOT_SMOKE_DONE_MARKER,
+                    ]
+                    .iter()
+                    .all(|m| contains_marker(&capture, m.as_bytes()));
+                    let preempted = count_marker_lines(&capture, BOOT_SCHED_SWITCH_MARKER) >= 1;
+                    if smoke_seen && preempted {
+                        stage = BootStage::AllExited;
+                    }
+                }
                 BootStage::AllExited => {
                     if contains_marker(&capture, BOOT_ALL_EXITED_MARKER.as_bytes()) {
-                        return self.finish(log_abs, &capture, BootProfile::Exec);
+                        let profile =
+                            if multi_profile { BootProfile::Multi } else { BootProfile::Exec };
+                        return self.finish(log_abs, &capture, profile);
                     }
                 }
             }
@@ -1189,6 +1244,11 @@ impl BootTestStep {
             BootProfile::Exec => {
                 println!(
                     "boot-test: PASS -- banner, exec entry, init print, hello print and all-exited markers observed in order (SC#2)"
+                );
+            }
+            BootProfile::Multi => {
+                println!(
+                    "boot-test: PASS -- banner, exec entry, init print, all smoke markers (hello + smokefork fd/child/await + init done), >= 1 sched-switch preemption line, and the all-exited marker observed (SC#4 rfork/fd-ops + D-13)"
                 );
             }
         }
@@ -1525,9 +1585,9 @@ struct InitrdStep {
 /// The initrd staging tree + output image, relative to the workspace.
 const INITRD_TREE: &str = "target/initrd-tree";
 const BOOTFS_PAQ: &str = "target/bootfs.paq";
-/// The staged binaries the initrd carries (D-03's SC-scoped set this plan:
-/// the staged init + the hello ABI-bisect binary).
-const INITRD_FILES: [&str; 2] = ["init", "hello"];
+/// The staged binaries the initrd carries (D-03's SC-scoped set: the staged
+/// init + the hello ABI-bisect binary + 04-07's rfork/fd-ops smoke).
+const INITRD_FILES: [&str; 3] = ["init", "hello", "smokefork"];
 
 impl InitrdStep {
     fn new(matches: &clap::ArgMatches) -> Self {

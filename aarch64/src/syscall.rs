@@ -38,7 +38,7 @@ use port::println;
 
 use crate::exec;
 use crate::platform;
-use crate::proc::{self, Proc, ProcState, ERRMAX};
+use crate::proc::{self, ERRMAX, Proc, ProcState};
 use crate::trap::TrapFrame;
 
 // The frozen syscall numbers (Harvey sys/src/libc/9syscall/sys.h).
@@ -46,8 +46,23 @@ const CLOSE: u64 = 4;
 const EXEC: u64 = 7;
 const EXITS: u64 = 8;
 const OPEN: u64 = 14;
+const RFORK: u64 = 19;
+const ERRSTR: u64 = 41;
+const AWAIT: u64 = 47;
 const PREAD: u64 = 50;
 const PWRITE: u64 = 51;
+
+// rfork flags (Harvey sys/include/libc.h — frozen values; 04-07).
+const RFNAMEG: u64 = 1 << 0;
+const RFENVG: u64 = 1 << 1;
+const RFFDG: u64 = 1 << 2;
+const RFPROC: u64 = 1 << 4;
+const RFMEM: u64 = 1 << 5;
+const RFNOWAIT: u64 = 1 << 6;
+const RFCNAMEG: u64 = 1 << 10;
+const RFCENVG: u64 = 1 << 11;
+const RFCFDG: u64 = 1 << 12;
+const RFREND: u64 = 1 << 13;
 
 /// Handler shape (04-RESEARCH.md Pattern 2 / Code Examples): the live trap
 /// frame (arg source + result sink) and the calling proc.
@@ -55,15 +70,19 @@ type Handler = fn(&mut TrapFrame, &mut Proc) -> u64;
 
 /// The dispatch table — Harvey sys.h 0–54 verbatim as Option<fn> entries.
 /// None → loud unimplemented at dispatch time (D-14).  The implemented set
-/// is exactly the 04-01 measured trace {pwrite(51), open(14), pread(50),
-/// close(4), exits(8)} plus D-14's named core member EXEC(7) — nothing
-/// else; the trace carries no brk_(24)/segbrk(12), so they stay None.
+/// is the 04-01 measured trace {pwrite(51), open(14), pread(50), close(4),
+/// exits(8)} plus D-14's named core members EXEC(7) and the 04-07 process
+/// pair RFORK(19)/AWAIT(47) — nothing else; the trace carries no
+/// brk_(24)/segbrk(12), so they stay None.
 static DISPATCH: [Option<Handler>; 55] = {
     let mut t: [Option<Handler>; 55] = [None; 55];
     t[CLOSE as usize] = Some(sys_close);
     t[EXEC as usize] = Some(sys_exec);
     t[EXITS as usize] = Some(sys_exits);
     t[OPEN as usize] = Some(sys_open);
+    t[RFORK as usize] = Some(sys_rfork);
+    t[ERRSTR as usize] = Some(sys_errstr);
+    t[AWAIT as usize] = Some(sys_await);
     t[PREAD as usize] = Some(sys_pread);
     t[PWRITE as usize] = Some(sys_pwrite);
     t
@@ -97,6 +116,15 @@ pub fn dispatch(frame: &mut TrapFrame) {
 /// Read the argument slots from user memory at SP+8 (the D-07 published
 /// formula: `(Sargs*)(frame.sp + 8)`; SP+0 is the reserved LR slot).  The
 /// arg block is user memory too, so it is validated first (T-04-11).
+///
+/// Width discipline (04-07, donor-faithful): every slot is 8 bytes, but
+/// int/uint-width arguments are stored by 7c with a 32-bit store that
+/// leaves the slot's upper half as stack garbage — the donor's
+/// `va_arg(list, int/uint)` truncates to the prototype's width, so handlers
+/// must likewise mask int-width args to 32 bits (await's buflen, errstr's
+/// n, rfork's flag, the fd args, open's mode).  Pointer/long/vlong args
+/// occupy the full slot.  (Arg0 is always clean: the stub materializes it
+/// from R0, whose upper half the caller's 32-bit op already zeroed.)
 fn sargs(frame: &mut TrapFrame, proc: &mut Proc, arity: usize) -> Option<[u64; 4]> {
     let base = frame.sp + 8;
     if proc.validate_user_range(base, 8 * arity as u64, false).is_err() {
@@ -157,7 +185,7 @@ fn sys_pwrite(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 4) else {
         return err(proc, "pwrite: bad argument block");
     };
-    let (fd, buf, n, _off) = (args[0], args[1], args[2], args[3]);
+    let (fd, buf, n, _off) = (args[0] & 0xffff_ffff, args[1], args[2], args[3]); // fd is an int
     if proc.validate_user_range(buf, n, false).is_err() {
         return err(proc, "pwrite: bad user buffer");
     }
@@ -180,7 +208,7 @@ fn sys_pread(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 4) else {
         return err(proc, "pread: bad argument block");
     };
-    let (fd, buf, n, off) = (args[0], args[1], args[2], args[3]);
+    let (fd, buf, n, off) = (args[0] & 0xffff_ffff, args[1], args[2], args[3]); // fd is an int
     if proc.validate_user_range(buf, n, true).is_err() {
         return err(proc, "pread: bad user buffer");
     }
@@ -347,10 +375,11 @@ fn sys_exec(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 }
 
 /// CLOSE(4): drop the fd slot.
-fn sys_close(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {    let Some(args) = sargs(frame, proc, 1) else {
+fn sys_close(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
+    let Some(args) = sargs(frame, proc, 1) else {
         return err(proc, "close: bad argument block");
     };
-    let fd = args[0] as usize;
+    let fd = (args[0] & 0xffff_ffff) as usize; // fd is an int (width discipline)
     match proc.fd_table.get_mut(fd) {
         Some(slot) if slot.is_some() => {
             *slot = None;
@@ -360,12 +389,117 @@ fn sys_close(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {    let Some(args) 
     }
 }
 
+/// RFORK(19): flag.  Donor sysrfork flag validation (9front@350266104f
+/// sys/src/9/port/sysproc.c): (RFFDG|RFCFDG), (RFNAMEG|RFCNAMEG) and
+/// (RFENVG|RFCENVG) are each mutually exclusive; RFMEM/RFNOWAIT require
+/// RFPROC.  Supported this era: RFPROC required; the address space is
+/// ALWAYS eagerly copied page-for-page (no COW, no shared writable pages —
+/// T-04-15; the donor's RFMEM share-semantics is not honored, which the
+/// smoke does not depend on); the fd table is always dup'd (the RFFDG
+/// shape); RFNOWAIT is honored (EXITS posts no wait record); RFREND is a
+/// no-op (no rendezvous this era).  Every other bit combination is a loud
+/// -1 errstr — never silent partial semantics.
+fn sys_rfork(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
+    let Some(args) = sargs(frame, proc, 1) else {
+        return err(proc, "rfork: bad argument block");
+    };
+    let flag = args[0] & 0xffff_ffff; // rfork's flag is an int (width discipline)
+    if flag & (RFFDG | RFCFDG) == (RFFDG | RFCFDG)
+        || flag & (RFNAMEG | RFCNAMEG) == (RFNAMEG | RFCNAMEG)
+        || flag & (RFENVG | RFCENVG) == (RFENVG | RFCENVG)
+    {
+        return err(proc, "rfork: bad flags");
+    }
+    if flag & RFPROC == 0 {
+        if flag & (RFMEM | RFNOWAIT) != 0 {
+            return err(proc, "rfork: bad flags");
+        }
+        return err(proc, "rfork: non-RFPROC unsupported");
+    }
+    const SUPPORTED: u64 = RFPROC | RFMEM | RFFDG | RFNOWAIT | RFREND;
+    if flag & !SUPPORTED != 0 {
+        return err(proc, "rfork: unsupported flags");
+    }
+    match proc::rfork_clone(proc, frame, flag & RFNOWAIT != 0) {
+        // The parent's wire result is the child pid; the child's copied
+        // frame carries x0 = 0 (donor forkchild).
+        Ok(pid) => pid,
+        Err(msg) => err(proc, msg),
+    }
+}
+
+/// ERRSTR(41): buf, n — copy the proc's errstr (NUL-terminated) into the
+/// user buffer, return 0.  libc's `%r` verb reads the errstr this way
+/// (rerrstr calls it twice) — the smoke's failure prints are its measured
+/// caller (04-07: observed in the first virtmulti run; D-14's
+/// measured-caller rule is satisfied by the smoke, not guessed).
+fn sys_errstr(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
+    let Some(args) = sargs(frame, proc, 2) else {
+        return err(proc, "errstr: bad argument block");
+    };
+    let (buf, n) = (args[0], args[1] & 0xffff_ffff); // n is a uint (width discipline)
+    if proc.validate_user_range(buf, n, true).is_err() {
+        return err(proc, "errstr: bad user buffer");
+    }
+    let cap = (n as usize).min(ERRMAX);
+    if cap == 0 {
+        return 0;
+    }
+    let src = proc.errstr;
+    let len = src.iter().position(|&b| b == 0).unwrap_or(ERRMAX).min(cap - 1);
+    let dst = unsafe { user_slice_mut(buf, n) };
+    dst[..len].copy_from_slice(&src[..len]);
+    dst[len] = 0;
+    0
+}
+
+/// AWAIT(47): buf, buflen.  Donor sysawait shape: block (the 04-07
+/// swtch-based sched path) until a child's exit record exists, then write
+/// the Plan-9-shaped wait message `{pid} 0 0 0 "{msg}"` (utime/stime/
+/// realtime zeros this era — CONTEXT.md discretion) NUL-terminated into
+/// the validated user buffer and return the record length.  No children
+/// ever → loud -1 errstr (donor pwait's "no children").
+fn sys_await(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
+    let Some(args) = sargs(frame, proc, 2) else {
+        return err(proc, "await: bad argument block");
+    };
+    let (buf, buflen) = (args[0], args[1] & 0xffff_ffff); // buflen is a uint (width discipline)
+    if proc.validate_user_range(buf, buflen, true).is_err() {
+        return err(proc, "await: bad user buffer");
+    }
+    let cap = buflen as usize;
+    if cap == 0 {
+        return err(proc, "await: zero-length buffer");
+    }
+    loop {
+        if let Some(rec) = proc.wait_records.pop_front() {
+            proc.children_live = proc.children_live.saturating_sub(1);
+            let msg = core::str::from_utf8(&rec.msg[..rec.msg_len]).unwrap_or("?");
+            let text = alloc::format!("{} 0 0 0 \"{}\"", rec.pid, msg);
+            let bytes = text.as_bytes();
+            let n = bytes.len().min(cap - 1);
+            let dst = unsafe { user_slice_mut(buf, buflen) };
+            dst[..n].copy_from_slice(&bytes[..n]);
+            dst[n] = 0;
+            return n as u64;
+        }
+        if proc.children_live == 0 {
+            return err(proc, "await: no children");
+        }
+        // Block mid-syscall (04-07): mark Blocked + swtch to the scheduler
+        // context; resumes here when a child's EXITS posts a record and
+        // wakes us.  The trap frame on this proc's own kstack survives
+        // other processes' traps meanwhile (T-04-14's whole point).
+        proc::sched();
+    }
+}
+
 /// EXITS(8): copy the optional message (nil = empty), free the proc's user
 /// pages + root-table page + kstack via the mapping_log / recorded PAs,
-/// mark Moribund, print the exit line; when no non-Moribund proc remains,
-/// print the all-exited marker and park in the clean wfi halt
-/// (single-process era — 04-07 turns this into a reschedule).  Diverges:
-/// never returns to the exited image.
+/// mark Moribund, print the exit line, post the wait record to the parent
+/// and wake an AWAITing parent (04-07), then hand off to the scheduler;
+/// when no non-Moribund proc remains, print the all-exited marker and park
+/// in the clean wfi halt.  Diverges: never returns to the exited image.
 fn sys_exits(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let msg_va = match sargs(frame, proc, 1) {
         Some(args) => args[0],
@@ -383,22 +517,29 @@ fn sys_exits(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     proc.free_user_mappings();
     proc.state = ProcState::Moribund;
     let pid = proc.pid;
-    println!(
-        "process {pid} exited: \"{}\"",
-        core::str::from_utf8(&msg).unwrap_or("<bad utf8>")
-    );
+    println!("process {pid} exited: \"{}\"", core::str::from_utf8(&msg).unwrap_or("<bad utf8>"));
+    // 04-07: post the wait record to the parent and wake it BEFORE the
+    // final frees (the record is kernel memory in the parent's table slot;
+    // RFNOWAIT children post nothing, donor-style).
+    if !proc.nowait {
+        proc::post_wait_record(proc.parent, pid, &msg);
+    }
     // Last frees: the root-table page and the kstack pages.  The handler is
     // STILL running on the kstack and TTBR0 still names the root table —
-    // safe this era because nothing allocates afterwards (the all-exited
-    // halt follows immediately); documented on free_root_table_and_kstack.
+    // safe because nothing allocates until the hand-off below (single CPU,
+    // IRQ-masked syscall context) and the swtch save writes only the
+    // PROC_TABLE-resident context struct, never the freed stack.
     proc.free_root_table_and_kstack();
 
     if !proc::any_active_procs() {
         println!("all user processes exited");
+        // Clean halt (SC#5 shape): park in wfi.  IRQs stay masked (trap
+        // context never unmasks them), so this is a wedge-free stop.
+        loop {
+            unsafe { core::arch::asm!("wfi") };
+        }
     }
-    // Clean halt (SC#5 shape): park in wfi.  IRQs stay masked (trap context
-    // never unmasks them), so this is a wedge-free stop.
-    loop {
-        unsafe { core::arch::asm!("wfi") };
-    }
+    // 04-07's reschedule: the sched loop picks the next Ready proc (the
+    // woken parent, or a sibling).  Diverges.
+    proc::sched_from_moribund();
 }

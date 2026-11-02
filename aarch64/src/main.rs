@@ -357,8 +357,6 @@ pub extern "C" fn main9(dtb_va: usize) {
             unsafe { core::arch::asm!("brk #0") };
         }
 
-        trap::unmask_irq();
-
         // 04-05 (R9-03 runtime gate): under dev_exec the boot continues into
         // the first-process exec orchestration and never returns — EL0 is
         // entered through trap_return with the seeded forkret-shaped frame
@@ -366,6 +364,13 @@ pub extern "C" fn main9(dtb_va: usize) {
         // stands: wfi wakes on each tick; trap()'s IRQ branch erets back
         // here.  It prints nothing, which is what makes tick()'s println
         // from IRQ context safe against the Console lock (see timer.rs).
+        //
+        // 04-07: under dev_exec the unmask moves to just before the first
+        // EL0 entry (exec_bootstrap) — the exec orchestration is a
+        // non-preemptible boot critical section (nothing in it needs
+        // interrupts), and the D-13 tick's domain is EL0 userland.
+        #[cfg(not(dev_exec))]
+        trap::unmask_irq();
         #[cfg(dev_exec)]
         exec_bootstrap(initrd_img);
         #[cfg(not(dev_exec))]
@@ -438,7 +443,11 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
 
     let frame_ptr = proc.frame;
     // 04-07: publish current + Running + CURKSTACK (the trap_return tail
-    // loads SP_EL1 from CURKSTACK on the EL0t-bound return below).
+    // loads SP_EL1 from CURKSTACK on the EL0t-bound return below), then
+    // unmask IRQs at the last moment — the whole exec orchestration above
+    // is a non-preemptible boot critical section (nothing in it needs
+    // interrupts; the D-13 tick's domain is EL0 userland, entered next).
     proc::activate_first(proc);
+    trap::unmask_irq();
     unsafe { trap::trap_return(frame_ptr) }
 }

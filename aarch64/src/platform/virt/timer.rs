@@ -20,11 +20,17 @@ use port::println;
 /// if it ever disagrees; this constant is the documented fallback.
 pub const CNTP_INTID: u32 = 30;
 
-/// Tick rate.  04-07 (D-13): 100 Hz = a 10 ms round-robin time slice (the
-/// CONTEXT.md agent's-discretion knob) — fast enough that the short-lived
-/// smoke procs of the virtmulti profile take real IRQ-from-EL0 preemptions,
-/// and the Phase-3 virt profile's >= 3 tick prints still arrive in ~30 ms.
-const TICKS_PER_SEC: u64 = 100;
+/// Tick rate.  04-07 (D-13): 1000 Hz = a 1 ms round-robin time slice (the
+/// CONTEXT.md agent's-discretion knob).  The userland era runs only a few
+/// ms of wall time under TCG, and kernel trap/syscall context is
+/// IRQ-masked — a slower slice can expire only while masked and fire at
+/// most once per eret-to-EL0; measured runs showed a 10 ms slice never
+/// expiring mid-userland at all (zero preemptions).
+const TICKS_PER_SEC: u64 = 1000;
+/// Print divider for the not(dev_exec) profile: one console line per
+/// second of ticks (the Phase-3 virt profile's readable 1 Hz print-per-
+/// tick pacing is unchanged by the faster slice).
+const PRINT_EVERY: u64 = TICKS_PER_SEC;
 
 static TICKS: AtomicU64 = AtomicU64::new(0);
 
@@ -96,7 +102,9 @@ pub fn tick() {
     arm();
     let n = TICKS.fetch_add(1, Ordering::Relaxed);
     #[cfg(not(dev_exec))]
-    println!("tick {n}");
+    if n % PRINT_EVERY == 0 {
+        println!("tick {}", n / PRINT_EVERY);
+    }
     #[cfg(dev_exec)]
     let _ = n;
     crate::proc::preempt();

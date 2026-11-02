@@ -1,6 +1,15 @@
 // Aarch64 entry (Raspberry Pi 4 focused)
 
-STACKSZ = 4096*4
+// 04-07: 16 KiB -> 64 KiB.  The 04-07 tick (1 kHz, the D-13 preemption
+// source) lands its 288-byte trap frame + handler frames on THIS stack
+// whenever the timer fires in the unmasked boot window (IRQ-masked trap
+// context otherwise) — and exec_bootstrap's deep chains (paqfs inflate,
+// fmt printing) left < 1 KiB of headroom, so a tick mid-inflate spilled
+// into adjacent BSS and corrupted the heap (observed: intermittent
+// "paqfs: inflate failed" panics).  The stack serves only the boot path
+// (main9 never returns; exec_bootstrap diverges into EL0), so the BSS
+// cost is boot-time-only.
+STACKSZ = 4096*16
 
 CURRENTEL_EL			= (1<<3) | (1<<2)
 

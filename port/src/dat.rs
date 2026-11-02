@@ -58,6 +58,22 @@ impl Chan {
     pub fn new(dev: usize, qid: Qid, mode: u32) -> Chan {
         Chan { qid, mode, offset: 0, dev, path: Vec::new(), paqdir: None }
     }
+
+    /// Value-dup for 04-07's rfork fd-table copy: a fresh Chan naming the
+    /// same file/device (same dev/qid/mode; the paqfs entry handle is
+    /// cloned).  Plan 9's shared-Chan semantics (one offset, refcounted)
+    /// are approximated by a value copy — the streaming offset diverges
+    /// after the fork, which the measured smoke does not depend on.
+    pub fn dup(&self) -> Chan {
+        Chan {
+            qid: self.qid,
+            mode: self.mode,
+            offset: self.offset,
+            dev: self.dev,
+            path: self.path.clone(),
+            paqdir: self.paqdir.clone(),
+        }
+    }
 }
 
 #[allow(dead_code)]
