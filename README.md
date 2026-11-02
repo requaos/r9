@@ -13,7 +13,7 @@ To build r9 for x86_64, we assume you have cloned the git repository
 somewhere convenient.  Then simply change into the top-level
 directory and, `cargo xtask build --arch x86-64`.
 
-To build for aarch64, run `cargo xtask build --arch aarch64` (Currently only Raspberry Pi 3 is supported).
+To build for aarch64, run `cargo xtask build --arch aarch64` (supported platforms: Raspberry Pi 3B, Raspberry Pi 4B via `--config raspi4b`, and qemu's `virt` machine via `--config virt`).
 
 There are other useful `xtask` subcommands; run
 `cargo xtask help` to see what is available.
@@ -46,6 +46,8 @@ R9 can be run using qemu for the various supported architectures:
 |----|--------|-----------|
 |aarch64|raspi3b|cargo xtask qemu --arch aarch64 --verbose|
 |aarch64|raspi4b|cargo xtask qemu --arch aarch64 --config raspi4b --verbose|
+|aarch64|virt|cargo xtask qemu --arch aarch64 --config virt|
+|aarch64|virt (boot-test harness)|cargo xtask boot-test --arch aarch64 --config virt|
 |x86-64|q35|cargo xtask qemu --arch x86-64 --verbose|
 |x86-64 (with kvm)|q35|cargo xtask qemu --arch x86-64 --kvm --verbose|
 |riscv|virt|cargo xtask qemu --arch riscv64 --verbose|
