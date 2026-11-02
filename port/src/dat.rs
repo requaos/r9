@@ -1,40 +1,42 @@
 extern crate alloc;
 
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use bitflags::bitflags;
-use core::ptr::NonNull;
 use core::result::Result;
 
-pub struct Error {}
+use crate::paqfs::PaqDir;
 
+/// A device/kernel error carrying a static message — the port crate's
+/// `Result<T, &'static str>` convention applied at the Dev-trait boundary
+/// (dat.rs's own `Error` type for the trait signatures below).
+pub struct Error(pub &'static str);
+
+/// A kernel channel — an open-file handle bound to a device.  Grown from
+/// the placeholder skeleton for the Phase-4 device set (D-15): devroot
+/// chans carry their paqfs directory entry in the crate-private slot.
 pub struct Chan {
-    _offset: u64,
-    _devoffset: u64,
-    _typ: u16,
-    _dev: u32,
-    _mode: u16,
-    _flag: u16,
-    _qid: Qid,
-    _fid: u32,
-    _iounit: u32,
-    // umh: Option<&Mutex<Mhead>>,
-    // umqlock: Obviated by Mutex in umh?
-    _umc: Option<NonNull<Chan>>,
-    _uri: usize,
-    _dri: usize,
-    // dirrock: Option<&Mutex<*const ()>>,
-    // rockqlock: Obviated by Mutex in dirrock?
-    _nrock: usize,
-    _mrock: usize,
-    _ismtpt: bool,
-    // mcp: *mut Mntcache,
-    // mux: *mut Mnt,
-    _aux: *mut (),
-    _pgrpid: Qid,
-    _mid: u32,
-    // mchan: Arc<Chan>,
-    _mqid: Qid,
-    // path: *const Path,
+    /// This chan's current qid (file identity: path+vers+type).
+    pub qid: Qid,
+    /// Open mode (Mode bits; OEXEC marks exec-opens per donor convention).
+    pub mode: u32,
+    /// Channel offset — the streaming read/write position (pread/pwrite
+    /// with offset -1 use and advance this).
+    pub offset: u64,
+    /// Device-table index of the serving device.
+    pub dev: usize,
+    /// Walked-path bookkeeping (device-maintained; for diagnostics/walks).
+    pub path: Vec<u8>,
+    /// Private devroot slot: the paqfs entry this chan currently names.
+    /// (Written/read by 04-05's devroot; nothing consumes Chan yet.)
+    #[allow(dead_code)]
+    pub(crate) paqdir: Option<PaqDir>,
+}
+
+impl Chan {
+    pub fn new(dev: usize, qid: Qid, mode: u32) -> Chan {
+        Chan { qid, mode, offset: 0, dev, path: Vec::new(), paqdir: None }
+    }
 }
 
 #[allow(dead_code)]
@@ -87,10 +89,12 @@ pub struct Block {
     _magic: u32,
 }
 
+/// Unique file identity (9P/Plan 9 Qid: path+vers+type).
+#[derive(Clone, Copy, Debug)]
 pub struct Qid {
-    _path: u64,
-    _vers: u32,
-    _typ: u8,
+    pub path: u64,
+    pub vers: u32,
+    pub typ: u8,
 }
 
 pub struct Walkqid {

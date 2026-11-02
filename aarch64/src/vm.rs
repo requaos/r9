@@ -408,7 +408,10 @@ impl RootPageTable {
     /// page tables that don't already exist.  If a mapping already exists,
     /// replace it.
     /// root_page_table should be a direct va - not a recursive va.
-    fn map_to<A: PageAllocator, B: VmTrait>(
+    /// (pub for the 04-04 exec/fault machinery: exec maps the two seed pages
+    /// into a not-yet-active proc table via the temp-recursive dance, and
+    /// the fault handler maps demand pages into the ACTIVE user table.)
+    pub fn map_to<A: PageAllocator, B: VmTrait>(
         &mut self,
         page_allocator: &mut A,
         vmtrait_impl: &mut B,
@@ -538,8 +541,11 @@ pub unsafe fn init_user_page_tables() {
 
 /// Given an empty, statically allocated page table.  We need to write a
 /// recursive entry in the last entry.  To do this, we need to know the physical
-/// address, but all we have is the virtual address
-unsafe fn init_empty_root_page_table(root_page_table: &mut RootPageTable) {
+/// address, but all we have is the virtual address.  (pub for 04-04's
+/// proc.rs: per-process root tables are pagealloc'd pages written through
+/// their KZERO-offset physical alias, which is exactly the pointer shape
+/// this function's `from_ptr_to_physaddr_offset_from_kzero` expects.)
+pub unsafe fn init_empty_root_page_table(root_page_table: &mut RootPageTable) {
     unsafe {
         let entry = Entry::rw_kernel_data()
             .with_phys_addr(from_ptr_to_physaddr_offset_from_kzero(root_page_table))

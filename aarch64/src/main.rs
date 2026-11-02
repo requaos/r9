@@ -15,6 +15,13 @@ mod pagealloc;
 mod param;
 mod platform;
 mod pre_mmu;
+// 04-04 machinery: compiled into every build config now (the plan's
+// four-config + clippy gate) so 04-05's runtime wiring starts from
+// known-good code.  The call path (boot_init → exec_into, the first eret
+// into EL0) lands in 04-05 — hence the module-level dead-code allowance
+// until then.
+#[allow(dead_code)]
+mod proc;
 mod registers;
 mod swtch;
 mod trap;
