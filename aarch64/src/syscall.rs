@@ -36,6 +36,7 @@ use alloc::vec::Vec;
 use port::dat::{Chan, DEV_CONS, DEV_ROOT, OEXEC, OMASK, OREAD, OTRUNC};
 use port::println;
 
+use crate::exec;
 use crate::platform;
 use crate::proc::{self, Proc, ProcState, ERRMAX};
 use crate::trap::TrapFrame;
@@ -53,16 +54,18 @@ const PWRITE: u64 = 51;
 type Handler = fn(&mut TrapFrame, &mut Proc) -> u64;
 
 /// The dispatch table — Harvey sys.h 0–54 verbatim as Option<fn> entries.
-/// None → loud unimplemented at dispatch time (D-14).  EXEC stays None
-/// until Task 2 wires the exec handler.
+/// None → loud unimplemented at dispatch time (D-14).  The implemented set
+/// is exactly the 04-01 measured trace {pwrite(51), open(14), pread(50),
+/// close(4), exits(8)} plus D-14's named core member EXEC(7) — nothing
+/// else; the trace carries no brk_(24)/segbrk(12), so they stay None.
 static DISPATCH: [Option<Handler>; 55] = {
     let mut t: [Option<Handler>; 55] = [None; 55];
     t[CLOSE as usize] = Some(sys_close);
+    t[EXEC as usize] = Some(sys_exec);
     t[EXITS as usize] = Some(sys_exits);
     t[OPEN as usize] = Some(sys_open);
     t[PREAD as usize] = Some(sys_pread);
     t[PWRITE as usize] = Some(sys_pwrite);
-    let _ = EXEC; // Task 2: t[EXEC as usize] = Some(sys_exec);
     t
 };
 
@@ -264,9 +267,87 @@ fn sys_open(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     slot as u64
 }
 
+/// EXEC(7): path, argv — 2 syscall args (libc `exec(char *name,
+/// char *argv[])`).  Donor semantics: returns ONLY on failure (-1/errstr,
+/// old image intact); on success exec::exec_replace rewrites the live trap
+/// frame (R0 = tos, SP → new seed stack, PC = new entry, PSR = 0) and the
+/// dispatch return erets into the new image.
+///
+/// Both args are user memory crossing the trust boundary (T-04-11): the
+/// path string and the argv block + every pointed-to string are validated
+/// against the proc's segment map before copying, with argc bounded at 32
+/// and each arg at 128 bytes.  Everything is COPIED to kernel memory before
+/// exec_replace runs — the replacement frees the old image's pages, which
+/// is where the arguments lived.
+fn sys_exec(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
+    const MAX_EXEC_ARGS: usize = 32;
+    const MAX_EXEC_ARG_LEN: usize = 128;
+
+    let Some(args) = sargs(frame, proc, 2) else {
+        return err(proc, "exec: bad argument block");
+    };
+    let (path_va, argv_va) = (args[0], args[1]);
+    let path = match copy_user_str(proc, path_va, ERRMAX) {
+        Ok(path) => path,
+        Err(msg) => return err(proc, msg),
+    };
+    let mut argv: Vec<Vec<u8>> = Vec::new();
+    if argv_va != 0 {
+        loop {
+            if argv.len() >= MAX_EXEC_ARGS {
+                return err(proc, "exec: too many args");
+            }
+            let slot_va = argv_va + 8 * argv.len() as u64;
+            if proc.validate_user_range(slot_va, 8, false).is_err() {
+                return err(proc, "exec: bad argv block");
+            }
+            let ptr = unsafe { (slot_va as *const u64).read() };
+            if ptr == 0 {
+                break;
+            }
+            match copy_user_str(proc, ptr, MAX_EXEC_ARG_LEN) {
+                Ok(s) => argv.push(s),
+                Err(msg) => return err(proc, msg),
+            }
+        }
+    }
+
+    // Resolve the target through devroot (the one exec byte-source
+    // mechanism, D-15): absolute or bare path, component-wise walk, OEXEC.
+    let Some(root) = port::devroot::root() else {
+        return err(proc, "devroot: not mounted");
+    };
+    let mut c = match root.attach_root() {
+        Ok(c) => c,
+        Err(msg) => return err(proc, msg),
+    };
+    let mut last = &path[..];
+    for comp in path.split(|&b| b == b'/').filter(|c| !c.is_empty()) {
+        last = comp;
+        c = match root.walk(&c, comp) {
+            Ok(c) => c,
+            Err(_) => return err(proc, "exec: path does not exist"),
+        };
+    }
+    let Ok(c) = root.open(&c, OEXEC) else {
+        return err(proc, "exec: cannot exec-open");
+    };
+    let Ok(bin) = root.entry(&c) else {
+        return err(proc, "exec: chan carries no paqfs entry");
+    };
+    let name = core::str::from_utf8(last).unwrap_or("?");
+    let arg_slices: Vec<&[u8]> = argv.iter().map(|a| a.as_slice()).collect();
+    match exec::exec_replace(proc, root.image(), &bin, name, &arg_slices, frame) {
+        // dispatch writes frame.x0 = tos_va — the same value exec_replace
+        // seeded into the frame's x0, so the writeback agrees by
+        // construction and the eret enters the new image with R0 = tos.
+        Ok(tos_va) => tos_va,
+        Err(msg) => err(proc, msg),
+    }
+}
+
 /// CLOSE(4): drop the fd slot.
-fn sys_close(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
-    let Some(args) = sargs(frame, proc, 1) else {
+fn sys_close(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {    let Some(args) = sargs(frame, proc, 1) else {
         return err(proc, "close: bad argument block");
     };
     let fd = args[0] as usize;

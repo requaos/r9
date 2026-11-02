@@ -1,13 +1,14 @@
-//! Plan 9 a.out loader + first-exec seeding (R9-03, D-09/D-11): parse and
-//! validate the big-endian header, record the segment map, seed exactly TWO
-//! eager user pages (the top-of-stack seed page and the zeroed Tos page),
-//! and seed the forkret-shaped TrapFrame on the proc's kernel stack.
+//! Plan 9 a.out loader + exec image management (R9-03, D-09/D-11): parse
+//! and validate the big-endian header, record the segment map, seed exactly
+//! TWO eager user pages (the top-of-stack seed page and the zeroed Tos
+//! page), and seed the forkret-shaped TrapFrame on the proc's kernel stack.
 //! Everything else faults in (D-09): text/data pages arrive via fault.rs
 //! from the paqfs byte source; bss/stack/tos faults map zero pages.
 //!
-//! Runtime wiring (the boot_init call path, the devroot byte source, the
-//! D-10 TTBR0 switch, and the first eret into EL0) lands in 04-05 — this
-//! module is compile-verified machinery.
+//! 04-05 wired the first-exec runtime path (main9's exec_bootstrap →
+//! exec_into).  04-06 adds exec_replace — the EXEC syscall's
+//! replace-the-running-image path (parse first, free second, seed third,
+//! then rewrite the live trap frame in place; T-04-13).
 
 use core::ptr;
 
@@ -110,30 +111,32 @@ pub fn parse_aout(bytes: &[u8]) -> Result<AoutHeader> {
     Ok(AoutHeader { text, data, bss, syms, entry, text_va, data_va })
 }
 
-/// First exec (the boot_init path; 04-05 wires the call): parse the binary's
-/// header through the paqfs window, record segments + the byte source, seed
-/// the two eager pages + the forkret frame, and leave the proc Ready.
-///
-/// `image` is the mapped paqfs initrd; `bin` is the binary's PaqDir inside
-/// it.  D-09/D-11: NOTHING but the seed stack page and the Tos page is
-/// mapped here — text/data/bss arrive via the demand-fault handler.
-pub fn exec_into(
-    proc: &mut Proc,
-    image: &'static [u8],
-    bin: &PaqDir,
-    name: &str,
-    args: &[&[u8]],
-) -> Result<()> {
-    // Read the 40-byte header through the paqfs window — byte-granular,
-    // Pitfall-5 discipline (no page-alignment assumptions on file offsets).
+/// Read + parse + validate the 40-byte a.out header through the paqfs
+/// window — byte-granular, Pitfall-5 discipline (no page-alignment
+/// assumptions on file offsets).  T-04-13: this runs BEFORE any mapping or
+/// freeing in both exec paths — an invalid image is a loud Err with
+/// everything intact.
+fn read_aout(image: &'static [u8], bin: &PaqDir) -> Result<AoutHeader> {
     let fs = Paqfs::open_image(image)?;
     let mut hdr = [0u8; HDR_SIZE];
     let n = fs.read_at(bin, 0, &mut hdr)?;
     if n < HDR_SIZE {
         return Err("exec: short read of a.out header");
     }
-    let aout = parse_aout(&hdr)?;
+    parse_aout(&hdr)
+}
 
+/// Record the segment map + the demand-page byte source + the proc name,
+/// then seed the two eager pages.  Shared by first-exec (exec_into) and
+/// image replacement (exec_replace); returns (user_sp, tos_va).
+fn install_image(
+    proc: &mut Proc,
+    image: &'static [u8],
+    bin: &PaqDir,
+    name: &str,
+    args: &[&[u8]],
+    aout: &AoutHeader,
+) -> Result<(usize, usize)> {
     // Record the segment map (page-rounded for the fault classifier) and the
     // demand-page byte source.
     let text_end = (aout.text_va + aout.text as usize).next_multiple_of(PAGE_SIZE_4K);
@@ -155,7 +158,25 @@ pub fn exec_into(
 
     // SEED: exactly two eager pages (D-09/D-11) — the top-of-stack seed page
     // and the zeroed Tos page just below it.
-    let (user_sp, tos_va) = seed_user_pages(proc, args)?;
+    seed_user_pages(proc, args)
+}
+
+/// First exec (the boot_init path; 04-05 wires the call): parse the binary's
+/// header through the paqfs window, record segments + the byte source, seed
+/// the two eager pages + the forkret frame, and leave the proc Ready.
+///
+/// `image` is the mapped paqfs initrd; `bin` is the binary's PaqDir inside
+/// it.  D-09/D-11: NOTHING but the seed stack page and the Tos page is
+/// mapped here — text/data/bss arrive via the demand-fault handler.
+pub fn exec_into(
+    proc: &mut Proc,
+    image: &'static [u8],
+    bin: &PaqDir,
+    name: &str,
+    args: &[&[u8]],
+) -> Result<()> {
+    let aout = read_aout(image, bin)?;
+    let (user_sp, tos_va) = install_image(proc, image, bin, name, args, &aout)?;
 
     // The forkret-shaped frame at kstack_top - 288 (the published TrapFrame
     // stride): R0 = tos, SP = seeded user stack, PC = entry, PSR = 0 (EL0t),
@@ -164,6 +185,68 @@ pub fn exec_into(
     let frame = seed_exec_frame(proc.kstack_top, aout.entry, user_sp as u64, tos_va as u64);
     proc.frame = frame;
     proc.state = ProcState::Ready;
+    Ok(())
+}
+
+/// EXEC behind a running process (04-06's syscall path; Plan 9 sysexec
+/// semantics): REPLACE the caller's image with the binary at `bin`.
+///
+/// Ordering is the T-04-13 mitigation, verbatim from the plan: PARSE the new
+/// image's a.out first (plus every other fallible pre-check), FREE the old
+/// mappings second, SEED third — so a validation failure returns -1/errstr
+/// with the old image intact, and the live-frame rewrite happens only after
+/// a fully seeded new image.  On success the caller's trap frame is
+/// rewritten in place (R0 = tos, SP → the new seed stack, PC = the new
+/// entry, PSR = 0 / EL0t, LR = 0) and dispatch's return erets into the new
+/// image — success never returns to the old image (donor exec semantics).
+/// The proc keeps its pid, kstack, root table, and fd table (fds survive
+/// exec, Plan 9 convention).
+///
+/// Returns the new tos_va: the handler passes it up so dispatch's
+/// `frame.x0 = result` writeback AGREES with the seeded x0 by construction.
+pub fn exec_replace(
+    proc: &mut Proc,
+    image: &'static [u8],
+    bin: &PaqDir,
+    name: &str,
+    args: &[&[u8]],
+    frame: &mut TrapFrame,
+) -> Result<u64> {
+    // PARSE first.
+    let aout = read_aout(image, bin)?;
+    // Every remaining fallible check runs BEFORE the free: the seed-fit
+    // arithmetic (seed_user_pages can no longer fail once this passes).
+    check_seed_fit(args)?;
+
+    // FREE second: unmap every current user mapping from the (active) root
+    // table and deallocate the phys pages; drop the old segment records and
+    // byte source.  (proc.free_user_mappings clears each leaf BEFORE
+    // freeing its page — no stale translation can point at recycled pages.)
+    proc.free_user_mappings();
+
+    // SEED third: fresh seed-stack + Tos pages, new segment records, new
+    // paqfs byte source.
+    let (user_sp, tos_va) = install_image(proc, image, bin, name, args, &aout)?;
+
+    // REWRITE THE LIVE TRAP FRAME in place — the dispatch return path's
+    // restore + eret enters the new image.
+    frame.seed_el0_entry(tos_va as u64, user_sp as u64, aout.entry);
+    Ok(tos_va as u64)
+}
+
+/// The pre-free seed-fit check (T-04-13): mirrors seed_user_pages's
+/// arithmetic so exec_replace never fails after the old image is freed.
+/// argc <= MAX_ARGS and the strings + pointer array + alignment slack must
+/// fit the one seed page.
+fn check_seed_fit(args: &[&[u8]]) -> Result<()> {
+    if args.len() > MAX_ARGS {
+        return Err("exec: too many args");
+    }
+    let strings: usize = args.iter().map(|a| a.len() + 1).sum();
+    let slots = 8 * (args.len() + 2) + 16; // argc slot + argv + nil + align slack
+    if strings + slots > PAGE_SIZE_4K {
+        return Err("exec: arg strings overflow the seed page");
+    }
     Ok(())
 }
 

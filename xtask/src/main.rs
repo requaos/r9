@@ -776,6 +776,32 @@ const BOOT_PANIC_HALT_MARKER: &str = "kernel halted";
 /// The TrapFrame {:#?} Debug prints one `    x<N>:` row per register x0..x30.
 const BOOT_PANIC_REGISTER_MIN: usize = 30;
 
+/// Exec-profile markers (04-06, SC#2 gate): a config with dev = ["exec"]
+/// boots virt into main9's exec orchestration — devroot mounts the initrd
+/// bootfs.paq, /init is exec'd, enters EL0, prints via the real pwrite
+/// syscall path, execs /hello (the committed Phase-2 ABI bisect binary),
+/// hello prints and exits, and the kernel prints the all-exited marker and
+/// parks.  The markers arrive in exactly this order.
+const BOOT_EXEC_ENTRY_MARKER: &str = "exec: entering EL0 pc=0x";
+const BOOT_INIT_MARKER: &str = "init: r9 EL0 alive";
+const BOOT_HELLO_MARKER: &str = "hello aarch64 harvey";
+const BOOT_ALL_EXITED_MARKER: &str = "all user processes exited";
+
+/// Always-on negative scan (04-06): any panic/Unhandled-interrupt line in
+/// the capture fails the run — every profile EXCEPT the deliberate-panic
+/// one (whose expected flow prints exactly that dump).  Case-insensitive,
+/// matching the plan's `grep -ciE 'panic|Unhandled interrupt'` leg.
+fn negative_scan_hit(capture: &[u8]) -> Option<&'static str> {
+    let lower: Vec<u8> = capture.iter().map(|b| b.to_ascii_lowercase()).collect();
+    if contains_marker(&lower, b"panic") {
+        Some("panic")
+    } else if contains_marker(&lower, b"unhandled interrupt") {
+        Some("Unhandled interrupt")
+    } else {
+        None
+    }
+}
+
 /// Count lines whose text starts with `marker`.  Serial lines arrive CRLF
 /// (the console's putb maps \n to \r\n), so splitting on \n leaves the \r
 /// trailing each line, where starts_with never sees it.
@@ -824,6 +850,10 @@ enum BootStage {
     PanicStart,
     PanicDump,
     PanicHalt,
+    ExecEntry,
+    InitPrint,
+    HelloPrint,
+    AllExited,
 }
 
 impl fmt::Display for BootStage {
@@ -845,8 +875,25 @@ impl fmt::Display for BootStage {
             BootStage::PanicHalt => {
                 write!(f, "clean-halt marker {BOOT_PANIC_HALT_MARKER:?}")
             }
+            BootStage::ExecEntry => {
+                write!(f, "exec-entry marker {BOOT_EXEC_ENTRY_MARKER:?}")
+            }
+            BootStage::InitPrint => write!(f, "init print marker {BOOT_INIT_MARKER:?}"),
+            BootStage::HelloPrint => write!(f, "hello print marker {BOOT_HELLO_MARKER:?}"),
+            BootStage::AllExited => {
+                write!(f, "all-exited marker {BOOT_ALL_EXITED_MARKER:?}")
+            }
         }
     }
+}
+
+/// The boot-test assertion profile being run (04-06: the exec profile
+/// joined the ticks/echo and panic pair).
+#[derive(Clone, Copy, PartialEq)]
+enum BootProfile {
+    Ticks,
+    Panic,
+    Exec,
 }
 
 impl BootTestStep {
@@ -1016,13 +1063,32 @@ impl BootTestStep {
             .as_ref()
             .and_then(|c| c.dev.as_ref())
             .is_some_and(|devs| devs.iter().any(|d| d == "panic"));
+        // 04-06 (SC#2): a dev list containing "exec" selects the exec
+        // profile -- banner, exec entry, the staged init's print, hello's
+        // print (the committed Phase-2 bisect binary via the real EL0 svc
+        // path), and the all-exited marker, in that order.  No probe is
+        // typed: under dev_exec the PL011 RX bytes feed the devcons read
+        // buffer instead of echoing.
+        let exec_profile = self
+            .config
+            .config
+            .as_ref()
+            .and_then(|c| c.dev.as_ref())
+            .is_some_and(|devs| devs.iter().any(|d| d == "exec"));
 
         while Instant::now() < deadline {
+            // Always-on negative scan: a panic/Unhandled-interrupt line
+            // fails any profile except the deliberate-panic one.
+            if !panic_profile && let Some(hit) = negative_scan_hit(&capture) {
+                return Err(self.fail(stage, &capture, &format!("negative scan hit {hit:?}")));
+            }
             match stage {
                 BootStage::Banner => {
                     if contains_marker(&capture, BOOT_BANNER_MARKER.as_bytes()) {
                         stage = if panic_profile {
                             BootStage::PanicStart
+                        } else if exec_profile {
+                            BootStage::ExecEntry
                         } else {
                             BootStage::Ticks
                         };
@@ -1038,7 +1104,7 @@ impl BootTestStep {
                 }
                 BootStage::Echo => {
                     if contains_marker(&capture[probe_at..], BOOT_ECHO_PROBE) {
-                        return self.finish(log_abs, &capture, false);
+                        return self.finish(log_abs, &capture, BootProfile::Ticks);
                     }
                 }
                 BootStage::PanicStart => {
@@ -1053,7 +1119,27 @@ impl BootTestStep {
                 }
                 BootStage::PanicHalt => {
                     if contains_marker(&capture, BOOT_PANIC_HALT_MARKER.as_bytes()) {
-                        return self.finish(log_abs, &capture, true);
+                        return self.finish(log_abs, &capture, BootProfile::Panic);
+                    }
+                }
+                BootStage::ExecEntry => {
+                    if contains_marker(&capture, BOOT_EXEC_ENTRY_MARKER.as_bytes()) {
+                        stage = BootStage::InitPrint;
+                    }
+                }
+                BootStage::InitPrint => {
+                    if contains_marker(&capture, BOOT_INIT_MARKER.as_bytes()) {
+                        stage = BootStage::HelloPrint;
+                    }
+                }
+                BootStage::HelloPrint => {
+                    if contains_marker(&capture, BOOT_HELLO_MARKER.as_bytes()) {
+                        stage = BootStage::AllExited;
+                    }
+                }
+                BootStage::AllExited => {
+                    if contains_marker(&capture, BOOT_ALL_EXITED_MARKER.as_bytes()) {
+                        return self.finish(log_abs, &capture, BootProfile::Exec);
                     }
                 }
             }
@@ -1082,15 +1168,29 @@ impl BootTestStep {
         Err(self.fail(stage, &capture, "overall budget expired"))
     }
 
-    fn finish(&self, log_abs: &Path, capture: &[u8], panic_profile: bool) -> Result<()> {
-        if panic_profile {
-            println!(
-                "boot-test: PASS -- banner, virtpanic start marker, >= {BOOT_PANIC_REGISTER_MIN} register rows and the clean-halt marker observed in order"
-            );
-        } else {
-            println!(
-                "boot-test: PASS -- banner, >= {BOOT_TICK_MIN} ticks and the echo probe observed in order"
-            );
+    fn finish(&self, log_abs: &Path, capture: &[u8], profile: BootProfile) -> Result<()> {
+        // Final negative-scan sweep over the whole capture (the exec gate
+        // demands a clean boot end to end; the deliberate-panic profile is
+        // the sole exception).
+        if profile != BootProfile::Panic && let Some(hit) = negative_scan_hit(capture) {
+            return Err(self.fail_pretty(capture, &format!("negative scan hit {hit:?}")));
+        }
+        match profile {
+            BootProfile::Panic => {
+                println!(
+                    "boot-test: PASS -- banner, virtpanic start marker, >= {BOOT_PANIC_REGISTER_MIN} register rows and the clean-halt marker observed in order"
+                );
+            }
+            BootProfile::Ticks => {
+                println!(
+                    "boot-test: PASS -- banner, >= {BOOT_TICK_MIN} ticks and the echo probe observed in order"
+                );
+            }
+            BootProfile::Exec => {
+                println!(
+                    "boot-test: PASS -- banner, exec entry, init print, hello print and all-exited markers observed in order (SC#2)"
+                );
+            }
         }
         println!("boot-test: serial log written to {}", log_abs.display());
         println!("boot-test: captured {} bytes", capture.len());
@@ -1106,6 +1206,18 @@ impl BootTestStep {
         eprintln!("{}", String::from_utf8_lossy(tail));
         eprintln!("--- end capture ({} bytes) ---", capture.len());
         format!("boot-test: {stage} not observed ({why})").into()
+    }
+
+    /// The stage-less variant for the finish()-time final negative scan:
+    /// the marker sequence completed but the capture carries a forbidden
+    /// line — same 2000-byte serial tail for context.
+    fn fail_pretty(&self, capture: &[u8], why: &str) -> DynError {
+        let tail = &capture[capture.len().saturating_sub(2000)..];
+        eprintln!("boot-test FAILED post-check ({why})");
+        eprintln!("--- captured serial tail ---");
+        eprintln!("{}", String::from_utf8_lossy(tail));
+        eprintln!("--- end capture ({} bytes) ---", capture.len());
+        format!("boot-test: post-check failed ({why})").into()
     }
 }
 
@@ -1566,8 +1678,25 @@ fn annotated_status(cmd: &mut Command) -> Result<process::ExitStatus> {
 mod tests {
     use super::{
         BOOT_ECHO_PROBE, BOOT_TICK_MARKER, contains_marker, count_marker_lines,
-        count_register_lines,
+        count_register_lines, negative_scan_hit,
     };
+
+    /// The always-on negative scan: panic/Unhandled-interrupt lines fail
+    /// non-panic profiles, case-insensitively (04-06).
+    #[test]
+    fn negative_scan_hits_panic_and_unhandled() {
+        assert_eq!(negative_scan_hit(b"ok\r\nkernel panic: bad\r\n"), Some("panic"));
+        assert_eq!(negative_scan_hit(b"PANIC\r\n"), Some("panic"));
+        assert_eq!(negative_scan_hit(b"blah\r\nUnhandled interrupt\r\n"), Some("Unhandled interrupt"));
+        assert_eq!(negative_scan_hit(b"unhandled interrupt\r\n"), Some("Unhandled interrupt"));
+    }
+
+    #[test]
+    fn negative_scan_passes_clean_captures() {
+        assert_eq!(negative_scan_hit(b"r9 from the Internet\r\n"), None);
+        assert_eq!(negative_scan_hit(b"hello aarch64 harvey\r\n"), None);
+        assert_eq!(negative_scan_hit(b""), None);
+    }
 
     /// Serial lines arrive CRLF (console putb maps \n to \r\n); the tick
     /// count must see exactly the line-initial markers.

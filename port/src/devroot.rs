@@ -176,6 +176,12 @@ impl DevRoot {
     pub fn entry(&self, c: &Chan) -> Result<PaqDir> {
         c.paqdir.clone().ok_or("devroot: chan carries no paqfs entry")
     }
+
+    /// The mounted image slice — the EXEC handler's byte-source input
+    /// (04-06; exec sources binaries through devroot, one mechanism).
+    pub fn image(&self) -> &'static [u8] {
+        self.img
+    }
 }
 
 /// The chan's Qid from its PaqDir: path = the paqfs qid, vers = mtime (Plan
