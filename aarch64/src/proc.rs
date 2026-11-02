@@ -91,13 +91,29 @@ pub struct Segments {
 }
 
 impl Segments {
-    /// Classify a faulting user VA.  Ranges are page-rounded at exec time;
-    /// empty segments (zero-size data/bss) classify nothing.  The stack
-    /// range IS the 16 MiB growth bound, so a Stack hit is always in-bounds.
+    /// Classify a faulting user VA.  Only the text range is page-rounded at
+    /// exec time; the data/bss ranges are byte-exact, so when
+    /// `data % 4096 != 0 && bss > 0` the last data page and the head of bss
+    /// share one 4K page.  That shared page must classify as Data (CR-01):
+    /// classify by PAGE at the data/bss boundary, not by address — a
+    /// bss-first fault would otherwise map the page zeroed and the data
+    /// file bytes at [page_va, data_end) would never load (the page is then
+    /// mapped, so no later fault can repair it — silent userland data
+    /// corruption).  The Data page-in's zero-fill + byte-exact content_end
+    /// clamp (04-06 Rule 1) yields exactly the right bytes either order:
+    /// file bytes below data_end, zeros above.  Empty segments (zero-size
+    /// data/bss) classify nothing; the byte-exact ranges stay authoritative
+    /// for validate_user_range.  The stack range IS the 16 MiB growth
+    /// bound, so a Stack hit is always in-bounds.
     pub fn classify(&self, va: usize) -> Option<SegKind> {
+        // Data's classification end, page-rounded into the bss head (CR-01)
+        // — but never past bss_end (an empty/tiny bss extends nothing), and
+        // never below data's own end.
+        let data_classify_end =
+            self.data.0.end.next_multiple_of(PAGE_SIZE_4K).min(self.bss.0.end.max(self.data.0.end));
         if self.text.0.contains(&va) {
             Some(SegKind::Text)
-        } else if self.data.0.contains(&va) {
+        } else if self.data.0.start <= va && va < data_classify_end {
             Some(SegKind::Data)
         } else if self.bss.0.contains(&va) {
             Some(SegKind::Bss)
