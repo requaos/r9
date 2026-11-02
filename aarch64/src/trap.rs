@@ -105,8 +105,11 @@ impl fmt::Debug for TrapFrame {
             .field("x26", &format_args!("{:#018x}", self.x26))
             .field("x27", &format_args!("{:#018x}", self.x27))
             .field("x28", &format_args!("{:#018x}", self.x28))
-            .field("x29 (frame_pointer)", &format_args!("{:#018x}", self.frame_pointer))
-            .field("x30 (link_register)", &format_args!("{:#018x}", self.link_register))
+            // Bare register names, not "x29 (frame_pointer)": the boot-test
+            // panic profile counts dump rows by the `x<N>:` shape and must
+            // see all of x0..x30 (the roles live on the struct fields).
+            .field("x29", &format_args!("{:#018x}", self.frame_pointer))
+            .field("x30", &format_args!("{:#018x}", self.link_register))
             .field("esr_el1", &format_args!("{:#?}", self.esr_el1))
             .field("elr_el1", &format_args!("{:#018?}", self.elr_el1))
             .field("far_el1", &format_args!("{:#018?}", self.far_el1))
@@ -171,9 +174,14 @@ fn trap(frame: &mut TrapFrame) {
     } else {
         println!("{:#?}", frame);
         println!("Unhandled interrupt");
+        // Deterministic clean halt (SC#5/D-12): the full register state is on
+        // the console, then the marker, then park in wfi -- a wedge-free stop
+        // that doesn't burn the host on a spin.  Applies to every platform;
+        // raspi's dump path gains the same marker (an improvement).
+        println!("kernel halted");
     }
 
     loop {
-        core::hint::spin_loop();
+        unsafe { core::arch::asm!("wfi") };
     }
 }

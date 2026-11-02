@@ -229,6 +229,19 @@ pub extern "C" fn main9(dtb_va: usize) {
         // ITARGETSR cpu0 target (P6).  Arm the UART's RXIM|RTIM path first.
         platform::pl011::init_rx();
         platform::gic::enable(33, 0xA0);
+
+        // D-12 deliberate panic (dev_panic configs, e.g. --config virtpanic;
+        // the hook itself is platform-agnostic): raise a sync exception
+        // through the REAL trap path BEFORE IRQs unmask, so the panic log is
+        // deterministic -- zero IRQ interleaving.  trap()'s sync branch dumps
+        // the full TrapFrame, prints the "kernel halted" clean-halt marker,
+        // and parks in wfi (SC#5 -- the Phase 4 debug path).
+        #[cfg(dev_panic)]
+        {
+            println!("virtpanic: deliberate sync exception via brk #0 (D-12 debug config)");
+            unsafe { core::arch::asm!("brk #0") };
+        }
+
         trap::unmask_irq();
 
         // Idle loop: wfi wakes on each tick; trap()'s IRQ branch erets back

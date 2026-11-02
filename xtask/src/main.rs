@@ -85,10 +85,16 @@ struct RustupState {
 impl RustupState {
     /// Runs rustup command to get a list of all installed toolchains.
     /// Also caches the current toolchain.
+    ///
+    /// Tolerates rustup being entirely absent (e.g. the nix devshell, which
+    /// supplies rustc directly via the overlay with no rustup shims): the
+    /// state is then empty, `std_supported_target` returns None, and
+    /// CheckStep/TestStep skip their OS-toolchain legs through their existing
+    /// Option/let-else handling while the bins/lib checks still run.
     fn new() -> Self {
         Self {
-            installed_targets: Self::installed_rustup_targets().unwrap(),
-            curr_toolchain: env::var("RUSTUP_TOOLCHAIN").unwrap(),
+            installed_targets: Self::installed_rustup_targets().unwrap_or_default(),
+            curr_toolchain: env::var("RUSTUP_TOOLCHAIN").unwrap_or_default(),
         }
     }
 
@@ -727,6 +733,16 @@ const BOOT_ECHO_PROBE: &[u8] = b"r9echo7";
 /// R9_BOOT_TEST_TIMEOUT); one total budget, never per-marker timings (P11).
 const BOOT_TEST_TIMEOUT_SECS: u64 = 300;
 
+/// Panic-profile markers (03-06, D-12): a config with dev = ["panic"] boots
+/// virt to a deliberate brk #0 sync exception BEFORE trap::unmask_irq(), so
+/// the log is deterministic (zero IRQ interleaving) -- banner, start marker,
+/// full TrapFrame register dump, clean-halt marker.  No ticks, no echo:
+/// IRQs never unmask in this profile.
+const BOOT_PANIC_START_MARKER: &str = "virtpanic: deliberate sync exception";
+const BOOT_PANIC_HALT_MARKER: &str = "kernel halted";
+/// The TrapFrame {:#?} Debug prints one `    x<N>:` row per register x0..x30.
+const BOOT_PANIC_REGISTER_MIN: usize = 30;
+
 /// Count lines whose text starts with `marker`.  Serial lines arrive CRLF
 /// (the console's putb maps \n to \r\n), so splitting on \n leaves the \r
 /// trailing each line, where starts_with never sees it.
@@ -738,23 +754,63 @@ fn contains_marker(capture: &[u8], marker: &[u8]) -> bool {
     capture.windows(marker.len()).any(|w| w == marker)
 }
 
+/// Count TrapFrame register-dump rows: lines shaped `<spaces>x<N>:` (the
+/// {:#?} Debug prints x0..x30 one per line, space-indented, bare register
+/// names).  Serial lines arrive CRLF; the digit/colon scan never reaches
+/// the trailing \r.
+fn count_register_lines(capture: &[u8]) -> usize {
+    capture
+        .split(|b| *b == b'\n')
+        .filter(|line| {
+            let mut i = 0;
+            while i < line.len() && line[i] == b' ' {
+                i += 1;
+            }
+            // Require the Debug indent (>= 1 space), then `x`, then >= 1
+            // digit, then `:` immediately -- the annotated name shape
+            // ("x29 (frame_pointer):") deliberately does not match.
+            if i == 0 || i >= line.len() || line[i] != b'x' {
+                return false;
+            }
+            i += 1;
+            let digits = i;
+            while i < line.len() && line[i].is_ascii_digit() {
+                i += 1;
+            }
+            i > digits && i < line.len() && line[i] == b':'
+        })
+        .count()
+}
+
 /// Which ordered marker the harness is currently waiting for.
 #[derive(Debug, PartialEq)]
 enum BootStage {
-    AwaitBanner,
-    AwaitTicks,
-    AwaitEcho,
+    Banner,
+    Ticks,
+    Echo,
+    PanicStart,
+    PanicDump,
+    PanicHalt,
 }
 
 impl fmt::Display for BootStage {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            BootStage::AwaitBanner => write!(f, "banner marker {BOOT_BANNER_MARKER:?}"),
-            BootStage::AwaitTicks => {
+            BootStage::Banner => write!(f, "banner marker {BOOT_BANNER_MARKER:?}"),
+            BootStage::Ticks => {
                 write!(f, ">= {BOOT_TICK_MIN} lines beginning {BOOT_TICK_MARKER:?}")
             }
-            BootStage::AwaitEcho => {
+            BootStage::Echo => {
                 write!(f, "echo of probe {:?}", String::from_utf8_lossy(BOOT_ECHO_PROBE))
+            }
+            BootStage::PanicStart => {
+                write!(f, "panic start marker {BOOT_PANIC_START_MARKER:?}")
+            }
+            BootStage::PanicDump => {
+                write!(f, ">= {BOOT_PANIC_REGISTER_MIN} TrapFrame register rows")
+            }
+            BootStage::PanicHalt => {
+                write!(f, "clean-halt marker {BOOT_PANIC_HALT_MARKER:?}")
             }
         }
     }
@@ -899,12 +955,14 @@ impl BootTestStep {
 
         let mut log_file = std::fs::File::create(log_abs)?;
         let mut capture: Vec<u8> = Vec::new();
-        let mut stage = BootStage::AwaitBanner;
+        let mut stage = BootStage::Banner;
         let mut probe_at = 0usize;
 
-        // Assertion profile selection: a [config] dev list containing "panic"
-        // selects the panic profile (03-06 implements its assertions); for
-        // now accept the config and assert banner-only as scaffolding.
+        // Assertion profile selection (D-12): a [config] dev list containing
+        // "panic" selects the panic profile -- banner, the virtpanic start
+        // marker, a full TrapFrame register dump and the clean-halt marker,
+        // in that order.  IRQs never unmask in that profile, so the
+        // ticks/echo stages are never entered.
         let panic_profile = self
             .config
             .config
@@ -914,25 +972,41 @@ impl BootTestStep {
 
         while Instant::now() < deadline {
             match stage {
-                BootStage::AwaitBanner => {
+                BootStage::Banner => {
                     if contains_marker(&capture, BOOT_BANNER_MARKER.as_bytes()) {
-                        if panic_profile {
-                            return self.finish(&log_abs, &capture);
-                        }
-                        stage = BootStage::AwaitTicks;
+                        stage = if panic_profile {
+                            BootStage::PanicStart
+                        } else {
+                            BootStage::Ticks
+                        };
                     }
                 }
-                BootStage::AwaitTicks => {
+                BootStage::Ticks => {
                     if count_marker_lines(&capture, BOOT_TICK_MARKER) >= BOOT_TICK_MIN {
                         // Ticks prove IRQs are live; type the probe now.
                         stream.write_all(BOOT_ECHO_PROBE)?;
                         probe_at = capture.len();
-                        stage = BootStage::AwaitEcho;
+                        stage = BootStage::Echo;
                     }
                 }
-                BootStage::AwaitEcho => {
+                BootStage::Echo => {
                     if contains_marker(&capture[probe_at..], BOOT_ECHO_PROBE) {
-                        return self.finish(&log_abs, &capture);
+                        return self.finish(log_abs, &capture, false);
+                    }
+                }
+                BootStage::PanicStart => {
+                    if contains_marker(&capture, BOOT_PANIC_START_MARKER.as_bytes()) {
+                        stage = BootStage::PanicDump;
+                    }
+                }
+                BootStage::PanicDump => {
+                    if count_register_lines(&capture) >= BOOT_PANIC_REGISTER_MIN {
+                        stage = BootStage::PanicHalt;
+                    }
+                }
+                BootStage::PanicHalt => {
+                    if contains_marker(&capture, BOOT_PANIC_HALT_MARKER.as_bytes()) {
+                        return self.finish(log_abs, &capture, true);
                     }
                 }
             }
@@ -961,10 +1035,16 @@ impl BootTestStep {
         Err(self.fail(stage, &capture, "overall budget expired"))
     }
 
-    fn finish(&self, log_abs: &Path, capture: &[u8]) -> Result<()> {
-        println!(
-            "boot-test: PASS -- banner, >= {BOOT_TICK_MIN} ticks and the echo probe observed in order"
-        );
+    fn finish(&self, log_abs: &Path, capture: &[u8], panic_profile: bool) -> Result<()> {
+        if panic_profile {
+            println!(
+                "boot-test: PASS -- banner, virtpanic start marker, >= {BOOT_PANIC_REGISTER_MIN} register rows and the clean-halt marker observed in order"
+            );
+        } else {
+            println!(
+                "boot-test: PASS -- banner, >= {BOOT_TICK_MIN} ticks and the echo probe observed in order"
+            );
+        }
         println!("boot-test: serial log written to {}", log_abs.display());
         println!("boot-test: captured {} bytes", capture.len());
         Ok(())
@@ -1297,7 +1377,10 @@ fn annotated_status(cmd: &mut Command) -> Result<process::ExitStatus> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BOOT_ECHO_PROBE, BOOT_TICK_MARKER, contains_marker, count_marker_lines};
+    use super::{
+        BOOT_ECHO_PROBE, BOOT_TICK_MARKER, contains_marker, count_marker_lines,
+        count_register_lines,
+    };
 
     /// Serial lines arrive CRLF (console putb maps \n to \r\n); the tick
     /// count must see exactly the line-initial markers.
@@ -1332,5 +1415,26 @@ mod tests {
         assert!(!contains_marker(&capture[probe_at..], BOOT_ECHO_PROBE));
         capture.extend_from_slice(b"r9echo7");
         assert!(contains_marker(&capture[probe_at..], BOOT_ECHO_PROBE));
+    }
+
+    /// The panic profile counts TrapFrame {:#?} dump rows: space-indented
+    /// `x<N>:` lines, CRLF-terminated on the serial wire.  Bare register
+    /// names are the contract (trap.rs prints x0..x30 without annotations).
+    #[test]
+    fn count_register_lines_counts_trapframe_rows() {
+        let capture = b"TrapFrame {\r\n    x0: 0x0000000000000000,\r\n    x30: 0xffff8000400123f0,\r\n    esr_el1: EsrEl1 {\r\n        iss: 0x00000000,\r\n    },\r\n";
+        assert_eq!(count_register_lines(capture), 2);
+    }
+
+    #[test]
+    fn count_register_lines_rejects_annotated_unindented_and_xless() {
+        // The retired annotated names ("x29 (frame_pointer):") must NOT match
+        // -- the >= 30 row gate sees x0..x30 only with bare names, which is
+        // why trap.rs carries them.
+        assert_eq!(count_register_lines(b"    x29 (frame_pointer): 0x0,\r\n"), 0);
+        assert_eq!(count_register_lines(b"x0: 0x0\r\n"), 0);
+        assert_eq!(count_register_lines(b"    x: 0x0\r\n"), 0);
+        assert_eq!(count_register_lines(b"    esr_el1: 0x0\r\n"), 0);
+        assert_eq!(count_register_lines(b""), 0);
     }
 }

@@ -1,0 +1,45 @@
+# DEBUG ARTIFACT (D-12) -- never a default or production configuration.
+# Selecting `--config virtpanic` boots virt to a deliberate `brk #0` sync
+# exception at the end of main9, BEFORE trap::unmask_irq(): the real trap
+# path dumps the full TrapFrame register state and halts cleanly
+# ("kernel halted").  It exists to prove the Phase 4 debug path
+# (ROADMAP Phase 3 SC#5) -- deterministic, zero IRQ interleaving.
+# (D-12's literal "--config panic" name is delivered as "virtpanic" because
+# this config is virt-specific; mechanism, trigger and dump contract are
+# exactly as decided.)
+
+[build]
+target = "lib/aarch64-unknown-none-elf.json"
+buildflags = ["-Z", "build-std=core,alloc"]
+
+[link]
+# linker script to use
+script = 'aarch64/lib/kernel.ld'
+
+# kernel load address to insert into kernel.ld (KZERO + 0x40080000; AT()
+# emits p_paddr 0x40080000, qemu virt's -kernel load address)
+load-address = '0xffff800040080000'
+
+[config]
+platform = "virt"
+# The only difference from config_virt.toml: the existing generic dev
+# mechanism (xtask/src/config.rs) maps this to `--cfg dev_panic`, which
+# enables the deliberate-panic hook in aarch64/src/main.rs.  Zero xtask
+# schema change; check-cfg predeclared dev_panic in aarch64/Cargo.toml.
+dev = ["panic"]
+
+[qemu]
+machine = "virt,gic-version=2"
+# TCG reference CPU (HVF rejects GICv2 on qemu 11.1.2; HVF would need -cpu
+# host, so hvf only becomes viable with a future GICv3 driver)
+cpu = "cortex-a72"
+smp = 1
+memory = "1024M"
+accel = "tcg"
+# Committed trimmed DTB: qemu loads it at 0x40000000 (the ELF-boot fix --
+# without -dtb, qemu 11.1.2 loads no DTB at all for ELF kernels and x0 is 0)
+dtb = "aarch64/lib/virt-gicv2.dtb"
+
+[dist]
+# ELF is the boot image on virt; skip the objcopy+gzip flat-image pipeline
+format = "elf"
