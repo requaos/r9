@@ -200,6 +200,19 @@ impl TrapFrame {
     pub fn psr(&self) -> u64 {
         self.psr
     }
+
+    /// Force the frame's saved psr to EL0t (clear the M field, bits [3:0]).
+    /// WR-04: NOTED's NCONT/NRSTR copies the saved Ureg over the live frame
+    /// from USER-WRITABLE memory — a note handler may legally edit it (the
+    /// documented notejmp contract) — and trap.S's restore writes the psr
+    /// straight to SPSR_EL1 before eret.  The privilege bits are kernel
+    /// state crossing the trust boundary: without this mask a handler that
+    /// set M = EL1h (0x5) would eret to EL1 at a (PXN-protected) user pc —
+    /// a user-triggerable kernel panic.  The donor's noted() validates
+    /// pc/sp; this closes the restore boundary.
+    pub(crate) fn force_psr_el0t(&mut self) {
+        self.psr &= !0xf;
+    }
 }
 
 impl fmt::Debug for TrapFrame {

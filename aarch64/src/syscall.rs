@@ -342,6 +342,13 @@ fn sys_noted(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
                     trap::UREG_SIZE,
                 );
             }
+            // WR-04: the copied psr came from user-writable memory (the
+            // notejmp contract lets the handler edit the saved Ureg) —
+            // force the privilege bits to EL0t so a handler-edited M field
+            // can never steer trap.S's eret to EL1 (a user-triggerable
+            // kernel panic).  The saved `type` field stays
+            // informational-only (aarch64/ABI.md documents it as such).
+            frame.force_psr_el0t();
             // Allow the next note (the donor's up->notified = 0).
             proc.note_ureg = 0;
             0
