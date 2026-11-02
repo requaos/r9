@@ -1,0 +1,7 @@
+r9 04-01 initrd delivery probe (D-01).
+These bytes are not a filesystem image — they exist so the kernel can prove
+that host-placed initrd bytes are visible via DTB /chosen
+(linux,initrd-start and linux,initrd-end) on the ELF + -dtb boot path.
+Delivery is qemu's generic loader plus a host-patched DTB (qemu's -initrd
+never delivers for ELF kernels).  The paqfs fixture replaces this probe in
+04-02.

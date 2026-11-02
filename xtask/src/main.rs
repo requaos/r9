@@ -1,6 +1,7 @@
 use crate::config::Configuration;
 use config::{
     QemuOverrides, apply_to_build_step, apply_to_clippy_step, apply_to_qemu_step_with_overrides,
+    prepare_initrd_dtb,
 };
 use std::{
     env, fmt,
@@ -540,6 +541,11 @@ impl QemuStep {
 
         match self.arch {
             Arch::Aarch64 => {
+                // D-01: if the config carries an initrd, patch a target/ copy
+                // of the DTB with /chosen linux,initrd-start/end BEFORE qemu's
+                // argv is assembled (the apply path emits the patched path).
+                prepare_initrd_dtb(&self.config, workspace().to_str().unwrap())?;
+
                 let mut cmd = Command::new(qemu_system);
 
                 let platform = self.config.config.as_ref().and_then(|c| c.platform.as_deref());
@@ -860,6 +866,10 @@ impl BootTestStep {
         if !kernel_path.exists() {
             return Err(format!("kernel image {kernel} missing (build step ran first?)").into());
         }
+
+        // D-01: if the config carries an initrd, patch a target/ copy of the
+        // DTB with /chosen linux,initrd-start/end (same apply path as QemuStep).
+        prepare_initrd_dtb(&self.config, workspace().to_str().unwrap())?;
 
         let sock_rel = format!("target/boot-test-{}.sock", self.config_name);
         let log_rel = format!("target/boot-test-{}.log", self.config_name);

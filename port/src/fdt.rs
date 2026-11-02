@@ -167,6 +167,13 @@ impl<'a> DeviceTree<'a> {
         self.structs().get(prop.value_start..value_end).and_then(bytes_to_u32)
     }
 
+    /// Extract the property value as a u64 — e.g. /chosen's
+    /// linux,initrd-start/end, carried as 8-byte big-endian cells in the
+    /// host-patched DTB (D-01).
+    pub fn property_value_as_u64(&self, prop: &Property) -> Option<u64> {
+        self.property_value_bytes(prop).and_then(bytes_to_u64)
+    }
+
     pub fn property_value_as_u32_iter(&self, prop: &Property) -> impl Iterator<Item = u32> + '_ {
         let mut value_i = prop.value_start;
         let value_end = prop.value_start + prop.value_len;

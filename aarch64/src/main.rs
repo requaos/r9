@@ -128,21 +128,85 @@ pub extern "C" fn main9(dtb_va: usize) {
     let dt = unsafe { DeviceTree::from_usize(dtb_va).unwrap() };
     let dtb_physrange = PhysRange::with_pa_len(PhysAddr::new((dtb_va - KZERO) as u64), dt.size());
 
+    // D-01 initrd discovery (amended 04-01): the host places the image in
+    // guest RAM via qemu's generic loader at a fixed PA — qemu's -initrd
+    // never delivers for ELF kernels (hw/arm/boot.c) — and xtask's patched
+    // DTB carries linux,initrd-start/end (u64 BE cells) in /chosen.  Absent
+    // /chosen or absent props is fine (config_virt.toml carries no initrd);
+    // present-but-malformed is a host harness bug, so fail loudly (T-04-02).
+    // The console UART is not registered until devcons::init below, so the
+    // marker print is deferred to after that; the invalid-range panic path
+    // uses the early-uart putstr so it can never be swallowed.
+    let initrd = match dt.find_by_path("/chosen") {
+        Some(chosen) => {
+            let start = dt
+                .property(&chosen, "linux,initrd-start")
+                .and_then(|p| dt.property_value_as_u64(&p));
+            let end = dt
+                .property(&chosen, "linux,initrd-end")
+                .and_then(|p| dt.property_value_as_u64(&p));
+            match (start, end) {
+                (Some(start), Some(end)) => {
+                    // Validate against the DTB memory node before any use —
+                    // the same first-memory-node parse pagealloc consumes
+                    // below.  The initrd must sit inside RAM.
+                    let ram_top = dt
+                        .find_device_type("memory")
+                        .flat_map(|m| {
+                            dt.property_translated_reg_iter(m).flat_map(|r| r.regblock())
+                        })
+                        .map(|r| PhysRange::from(&r))
+                        .next()
+                        .map(|r| r.end().addr())
+                        .unwrap_or(0);
+                    if start < 0x4000_0000 || start >= end || end > ram_top {
+                        pre_mmu::util::putstr("initrd: invalid range start=");
+                        pre_mmu::util::putu64h(start);
+                        pre_mmu::util::putstr(" end=");
+                        pre_mmu::util::putu64h(end);
+                        pre_mmu::util::putstr("\n");
+                        panic!("initrd: invalid range start={start:#x} end={end:#x}");
+                    }
+                    let size = end - start;
+                    // Pitfall 9 (T-04-01): reserve the initrd pages alongside
+                    // dtb_physrange so pagealloc never hands the image bytes
+                    // out later.
+                    let physrange =
+                        PhysRange::with_pa_len(PhysAddr::new(start), size as usize)
+                            .round(PageSize::Page4K.size());
+                    Some((start, end, size, physrange))
+                }
+                _ => None,
+            }
+        }
+        None => None,
+    };
+    let initrd_physrange = initrd.as_ref().map(|(_, _, _, r)| r.clone());
+
     // Set up page allocator
     let mut physranges = [
-        dtb_physrange.round(PageSize::Page4K.size()),
-        boottext_physrange().add(&text_physrange()),
-        rodata_physrange(),
-        data_physrange().add(&bss_physrange()),
+        Some(dtb_physrange.round(PageSize::Page4K.size())),
+        Some(boottext_physrange().add(&text_physrange())),
+        Some(rodata_physrange()),
+        Some(data_physrange().add(&bss_physrange())),
+        initrd_physrange,
     ];
-    physranges.sort_by_key(|a| a.start());
-    if let Err(err) = pagealloc::init_page_allocator(&dt, physranges.into_iter()) {
+    physranges.sort_by_key(|a| a.as_ref().map(|r| r.start()));
+    if let Err(err) = pagealloc::init_page_allocator(&dt, physranges.into_iter().flatten()) {
         panic!("error:Couldn't mark unused pages as free: err: {:?}", err);
     }
 
     platform::devcons::init(&dt);
     #[cfg(not(platform = "virt"))]
     platform::mailbox::init(&dt);
+
+    // The console is live now: emit the D-01 probe marker.
+    match initrd {
+        Some((start, end, size, _)) => {
+            println!("initrd: start={start:#x} end={end:#x} size={size}");
+        }
+        None => println!("initrd: none"),
+    }
 
     println!();
     println!("r9 from the Internet");

@@ -1,6 +1,6 @@
 /// Test
 ///
-use crate::{Command, Profile};
+use crate::{Command, DynError, Profile};
 
 use serde::{Deserialize, Serialize};
 use std::{
@@ -93,6 +93,47 @@ pub struct Qemu {
 
     /// Filepath of DTB file relative to crate
     pub dtb: Option<String>,
+
+    /// Initrd image delivery (D-01, amended 04-01): qemu's `-initrd` flag
+    /// never delivers for ELF kernels (hw/arm/boot.c: an ELF `-kernel` is
+    /// not-linux, so the image is never loaded into guest RAM and /chosen is
+    /// never patched), so the image is placed by qemu's generic loader at a
+    /// fixed physical address and xtask writes linux,initrd-start/end into a
+    /// patched copy of the DTB (see prepare_initrd_dtb).
+    pub initrd: Option<Initrd>,
+}
+
+/// The [qemu] initrd table: the image file plus the guest physical address
+/// the generic loader places it at (initrd PA is TOML data, per the Phase-3
+/// config-as-data convention).
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Initrd {
+    /// Filepath of initrd image relative to crate
+    pub file: String,
+
+    /// Guest physical address the image loads at (emitted as the generic
+    /// loader's `addr=`).  Must sit inside guest RAM, clear of the kernel
+    /// (0x40080000) and DTB (0x40000000) placements.
+    pub addr: u64,
+}
+
+impl Initrd {
+    /// The `-device` argument placing the image in guest RAM: qemu's generic
+    /// loader is machine-agnostic and works for ELF kernels, unlike `-initrd`.
+    pub fn loader_device_arg(&self) -> String {
+        format!("loader,file={},addr={:#x}", self.file, self.addr)
+    }
+
+    /// Path (relative to the workspace) of the DTB copy prepare_initrd_dtb
+    /// patches with /chosen linux,initrd-start/end — a target/ build
+    /// artifact, never committed; the base DTB blob stays untouched.
+    pub fn patched_dtb_path(dtb: &str) -> String {
+        let stem = std::path::Path::new(dtb)
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "dtb".to_string());
+        format!("target/initrd-{stem}.dtb")
+    }
 }
 
 /// Dist section
@@ -316,7 +357,17 @@ fn apply_qemu_config(cmd: &mut Command, config: &Configuration, overrides: &Qemu
         }
         if let Some(dtb) = &config.dtb {
             cmd.arg("-dtb");
-            cmd.arg(dtb);
+            // D-01: with an initrd configured the kernel needs the /chosen
+            // linux,initrd-start/end properties, so qemu gets the patched
+            // copy prepare_initrd_dtb produced, never the bare base blob.
+            match &config.initrd {
+                Some(_) => cmd.arg(Initrd::patched_dtb_path(dtb)),
+                None => cmd.arg(dtb),
+            };
+        }
+        if let Some(initrd) = &config.initrd {
+            cmd.arg("-device");
+            cmd.arg(initrd.loader_device_arg());
         }
     }
 }
@@ -329,6 +380,57 @@ fn apply_rustflags(cmd: &mut Command, rustflags: &[String]) {
         cmd.arg("--config");
         cmd.arg(format!("build.rustflags='{flat}'"));
     }
+}
+
+/// D-01 (amended): host-side initrd DTB patch.  When [qemu] carries an
+/// initrd, copy the profile's DTB into target/ and set /chosen
+/// linux,initrd-start/end with fdtput (from dtc, supplied by the nix
+/// devshell).  The kernel's property_value_as_u64 reads each property as one
+/// 8-byte big-endian cell; dtc has no 8-byte property type (its `l` is a
+/// 4-byte size modifier and silently truncates u64s), so each u64 is written
+/// as two 32-bit cells, high word first — byte-identical to one BE u64.
+/// Returns the patched DTB path relative to the workspace, or None when no
+/// initrd is configured.  The qemu steps call this BEFORE assembling argv so
+/// a patch failure never reaches a qemu launch.
+pub fn prepare_initrd_dtb(
+    config: &Configuration,
+    workspace_path: &str,
+) -> Result<Option<String>, DynError> {
+    let Some(qemu) = &config.qemu else { return Ok(None) };
+    let Some(initrd) = &qemu.initrd else { return Ok(None) };
+    let Some(dtb) = &qemu.dtb else {
+        return Err("[qemu] initrd requires a [qemu] dtb to patch the /chosen properties into"
+            .into());
+    };
+
+    let image = format!("{workspace_path}/{}", initrd.file);
+    let size = fs::metadata(&image).map_err(|e| format!("initrd image {}: {e}", initrd.file))?.len();
+    let patched = Initrd::patched_dtb_path(dtb);
+    if let Some(parent) = std::path::Path::new(&patched).parent() {
+        create_dir_all(format!("{workspace_path}/{}", parent.display()))?;
+    }
+    fs::copy(format!("{workspace_path}/{dtb}"), format!("{workspace_path}/{patched}"))
+        .map_err(|e| format!("copy {dtb} -> {patched}: {e}"))?;
+
+    let end = initrd.addr + size;
+    for (prop, value) in [("linux,initrd-start", initrd.addr), ("linux,initrd-end", end)] {
+        let hi = (value >> 32) as u32;
+        let lo = value as u32;
+        let status = Command::new("fdtput")
+            .arg("-t")
+            .arg("x")
+            .arg(format!("{workspace_path}/{patched}"))
+            .arg("/chosen")
+            .arg(prop)
+            .arg(format!("{hi:#x}"))
+            .arg(format!("{lo:#x}"))
+            .status()
+            .map_err(|e| format!("spawn fdtput (the nix devshell provides dtc): {e}"))?;
+        if !status.success() {
+            return Err(format!("fdtput {prop} on {patched} failed: {status}").into());
+        }
+    }
+    Ok(Some(patched))
 }
 
 pub fn apply_to_clippy_step(cmd: &mut Command, config: &Configuration) {
@@ -401,6 +503,45 @@ mod tests {
                 "1024M",
                 "-dtb",
                 "aarch64/lib/virt-gicv2.dtb",
+            ]
+        );
+    }
+
+    /// D-01 (amended, 04-01): a [qemu] initrd table emits the generic-loader
+    /// `-device` (qemu's `-initrd` never delivers for ELF kernels) and hands
+    /// qemu the patched DTB copy in target/ in place of the base blob — one
+    /// edit covers QemuStep and BootTestStep (both share the apply path).
+    #[test]
+    fn qemu_initrd_emits_loader_and_patched_dtb() {
+        let args = qemu_argv(
+            r#"
+                [qemu]
+                machine = "virt,gic-version=2"
+                accel = "tcg"
+                cpu = "cortex-a72"
+                smp = 1
+                memory = "1024M"
+                dtb = "aarch64/lib/virt-gicv2.dtb"
+                initrd = { file = "aarch64/lib/probe-initrd.txt", addr = 0x48000000 }
+            "#,
+        );
+        assert_eq!(
+            args,
+            vec![
+                "-M",
+                "virt,gic-version=2",
+                "-accel",
+                "tcg",
+                "-cpu",
+                "cortex-a72",
+                "-smp",
+                "1",
+                "-m",
+                "1024M",
+                "-dtb",
+                "target/initrd-virt-gicv2.dtb",
+                "-device",
+                "loader,file=aarch64/lib/probe-initrd.txt,addr=0x48000000",
             ]
         );
     }
