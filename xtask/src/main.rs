@@ -246,6 +246,19 @@ fn main() {
                  TrapFrame layout (D-06 layer 2; R9_HARVEY_DIR overrides the default ../harvey)",
             ),
         )
+        .subcommand(
+            clap::Command::new("initrd")
+                .about("Assemble target/bootfs.paq from the staged Harvey aarch64 binaries \
+                        (04-05, D-01/D-02/D-03; R9_HARVEY_DIR overrides the default ../harvey)")
+                .args(&[
+                    clap::arg!(--arch <arch> "Target architecture")
+                        .value_parser(clap::builder::EnumValueParser::<Arch>::new()),
+                    clap::arg!(--config <name> "Configuration")
+                        .value_parser(clap::builder::NonEmptyStringValueParser::new())
+                        .default_value("default"),
+                    clap::arg!(--verbose "Print commands"),
+                ]),
+        )
         .subcommand(clap::Command::new("clean").about("Cargo clean"))
         .get_matches();
 
@@ -275,6 +288,7 @@ fn main() {
             s1.run().and_then(|_| s2.run())
         }
         Some(("ureg-check", _)) => UregCheckStep::new().run(),
+        Some(("initrd", m)) => InitrdStep::new(m).run(),
         Some(("clean", _)) => CleanStep::new().run(),
         _ => Err("bad subcommand".into()),
     } {
@@ -549,6 +563,11 @@ impl QemuStep {
 
         match self.arch {
             Arch::Aarch64 => {
+                // 04-05: a config whose initrd image lives under target/
+                // (the assembled bootfs.paq) builds it when missing or stale
+                // — a missing producer is a loud error, never a silent boot
+                // without userland (D-03).
+                ensure_initrd_image(&self.config, self.verbose)?;
                 // D-01: if the config carries an initrd, patch a target/ copy
                 // of the DTB with /chosen linux,initrd-start/end BEFORE qemu's
                 // argv is assembled (the apply path emits the patched path).
@@ -882,6 +901,9 @@ impl BootTestStep {
             return Err(format!("kernel image {kernel} missing (build step ran first?)").into());
         }
 
+        // 04-05: build-if-missing/stale for target/-resident initrd images
+        // (same hook as QemuStep).
+        ensure_initrd_image(&self.config, self.verbose)?;
         // D-01: if the config carries an initrd, patch a target/ copy of the
         // DTB with /chosen linux,initrd-start/end (same apply path as QemuStep).
         prepare_initrd_dtb(&self.config, workspace().to_str().unwrap())?;
@@ -1375,6 +1397,132 @@ impl CleanStep {
 
 /// `cargo xtask ureg-check` (D-06 layer 2): standalone form of the
 /// cross-repo ureg.h drift gate (also a BootTestStep precondition).
+/// `cargo xtask initrd` (04-05, D-01/D-02/D-03): assemble
+/// `target/bootfs.paq` from the staged Harvey aarch64 binaries
+/// (`build/aarch64/out/{init,hello}`, produced by
+/// `build/aarch64/stage-build.sh`) with the Harvey checkout's host-built
+/// `mkpaqfs` (04-01 recipe), and print the image's sha256 for the phase
+/// evidence log.  The image and the staging tree are target/ build
+/// artifacts — never committed.  `--arch`/`--config` are accepted for the
+/// Step idiom (and the plan's invocation shape); the assembly is
+/// config-independent — one image serves every profile that names it.
+struct InitrdStep {
+    verbose: bool,
+}
+
+/// The initrd staging tree + output image, relative to the workspace.
+const INITRD_TREE: &str = "target/initrd-tree";
+const BOOTFS_PAQ: &str = "target/bootfs.paq";
+/// The staged binaries the initrd carries (D-03's SC-scoped set this plan:
+/// the staged init + the hello ABI-bisect binary).
+const INITRD_FILES: [&str; 2] = ["init", "hello"];
+
+impl InitrdStep {
+    fn new(matches: &clap::ArgMatches) -> Self {
+        Self { verbose: verbose(matches) }
+    }
+
+    fn run(self) -> Result<()> {
+        assemble_initrd(self.verbose)
+    }
+}
+
+/// Assemble target/bootfs.paq from the Harvey staging dir.  Both producers
+/// are named in the error text when absent — a missing mkpaqfs or a missing
+/// staged binary is a loud build error, never a silent boot (D-03).
+fn assemble_initrd(verbose: bool) -> Result<()> {
+    let harvey = uregcheck::harvey_dir();
+    let mkpaqfs = harvey.join(".build/bin/mkpaqfs");
+    if !mkpaqfs.is_file() {
+        return Err(format!(
+            "mkpaqfs host binary missing at {} — build it in the Harvey checkout with \
+             `nix develop -c sh build/aarch64/mkpaqfs-host.sh` (the 04-01 recipe)",
+            mkpaqfs.display()
+        )
+        .into());
+    }
+    let ws = workspace();
+    let tree = ws.join(INITRD_TREE);
+    if tree.exists() {
+        std::fs::remove_dir_all(&tree)?;
+    }
+    std::fs::create_dir_all(&tree)?;
+    for name in INITRD_FILES {
+        let src = harvey.join(format!("build/aarch64/out/{name}"));
+        if !src.is_file() {
+            return Err(format!(
+                "staged binary {} missing — run `sh build/aarch64/stage-build.sh` in the Harvey \
+                 checkout (04-05) to compile the aarch64 userland stage into build/aarch64/out/",
+                src.display()
+            )
+            .into());
+        }
+        std::fs::copy(&src, tree.join(name))?;
+    }
+    let paq = ws.join(BOOTFS_PAQ);
+    let mut cmd = Command::new(&mkpaqfs);
+    cmd.arg("-o").arg(&paq).arg(&tree);
+    cmd.current_dir(&ws);
+    if verbose {
+        println!("Executing {cmd:?}");
+    }
+    let status = annotated_status(&mut cmd)?;
+    if !status.success() {
+        return Err("mkpaqfs failed".into());
+    }
+    // Evidence: print the image's sha256 (mkpaqfs embeds a time field, so the
+    // digest is per-bake — the phase log records each evidence run's value).
+    let sha = sha256_of(&paq)?;
+    println!("initrd: {} sha256 {sha}", paq.display());
+    Ok(())
+}
+
+/// sha256 of a file via a host tool — no new crates (T-04-SC).  coreutils
+/// `sha256sum` (nix devshell, linux) first, macOS `shasum` as fallback.
+fn sha256_of(path: &Path) -> Result<String> {
+    let out = Command::new("sha256sum")
+        .arg(path)
+        .output()
+        .or_else(|_| Command::new("shasum").arg("-a").arg("256").arg(path).output())
+        .map_err(|e| format!("no sha256 tool on PATH (tried sha256sum, shasum): {e}"))?;
+    if !out.status.success() {
+        return Err(format!("sha256 of {} failed: {}", path.display(), out.status).into());
+    }
+    let text = String::from_utf8(out.stdout)?;
+    Ok(text.split_whitespace().next().unwrap_or("").to_string())
+}
+
+/// Build-if-missing/stale hook (04-05): `qemu`/`boot-test` invocations whose
+/// config carries an initrd image under target/ (the assembled bootfs.paq)
+/// reassemble it when absent or older than the staged inputs.  Configs with
+/// no initrd, or with a target/-external image (the committed probe fixture —
+/// pinned bytes), pass through untouched.
+fn ensure_initrd_image(config: &Configuration, verbose: bool) -> Result<()> {
+    let Some(qemu) = &config.qemu else { return Ok(()) };
+    let Some(initrd) = &qemu.initrd else { return Ok(()) };
+    if !initrd.file.starts_with("target/") {
+        return Ok(());
+    }
+    let paq = workspace().join(&initrd.file);
+    let harvey = uregcheck::harvey_dir();
+    let paq_mtime = std::fs::metadata(&paq).and_then(|m| m.modified()).ok();
+    let stale = paq_mtime.is_some_and(|paq_mtime| {
+        INITRD_FILES.iter().any(|name| {
+            std::fs::metadata(harvey.join(format!("build/aarch64/out/{name}")))
+                .and_then(|m| m.modified())
+                .ok()
+                .is_some_and(|input_mtime| input_mtime > paq_mtime)
+        })
+    });
+    if paq_mtime.is_none() || stale {
+        // assemble_initrd fails loudly with the producing command named when
+        // mkpaqfs or the staged inputs are absent.
+        println!("xtask: initrd {} missing or stale — assembling", initrd.file);
+        assemble_initrd(verbose)?;
+    }
+    Ok(())
+}
+
 struct UregCheckStep {}
 
 impl UregCheckStep {

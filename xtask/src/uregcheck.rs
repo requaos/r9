@@ -41,8 +41,9 @@ pub enum CheckStatus {
 
 /// The Harvey checkout to check against: $R9_HARVEY_DIR when set, else
 /// `../harvey` relative to the r9 workspace root (D-03/D-06 cross-repo glue;
-/// INT-04 replaces it with a flake input in Phase 5).
-fn harvey_dir() -> PathBuf {
+/// INT-04 replaces it with a flake input in Phase 5).  pub(crate) for the
+/// 04-05 initrd step, which resolves the same checkout.
+pub(crate) fn harvey_dir() -> PathBuf {
     match env::var("R9_HARVEY_DIR") {
         Ok(dir) => PathBuf::from(dir),
         Err(_) => workspace().join("../harvey"),
