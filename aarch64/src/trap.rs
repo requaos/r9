@@ -3,6 +3,8 @@ use core::fmt;
 #[cfg(platform = "virt")]
 use crate::platform;
 use crate::registers::EsrEl1;
+use aarch64_cpu::registers::FAR_EL1;
+use aarch64_cpu::registers::Readable;
 use port::println;
 
 #[cfg(not(test))]
@@ -33,7 +35,15 @@ pub fn unmask_irq() {
     }
 }
 
-/// Register frame at time interrupt was taken
+/// Register frame at the time the trap was taken.  This struct IS Harvey's
+/// `Ureg` (`aarch64/include/ureg.h`) field-for-field — the layout is the
+/// published Harvey↔r9 trap-frame ABI (aarch64/ABI.md, "Kernel-side
+/// enforcement (Phase 4 appendix)"), pinned by the const asserts below
+/// (always-on) and the xtask `ureg-check` cross-repo gate (D-06).
+///
+/// ESR_EL1/FAR_EL1 are deliberately NOT frame fields: trap() reads them live
+/// at entry and passes them to dispatchers as arguments (D-05) — a
+/// stale-frame syndrome read cannot silently corrupt fault decode.
 #[repr(C, align(16))]
 pub struct TrapFrame {
     x0: u64,
@@ -67,11 +77,23 @@ pub struct TrapFrame {
     x28: u64,
     frame_pointer: u64, // x29
     link_register: u64, // x30
-    esr_el1: EsrEl1,
-    elr_el1: u64,
-    far_el1: u64,
-    interrupt_type: u64,
+    sp: u64,  // interrupted context's stack pointer (SP_EL0 on EL0 traps, entry-sp on EL1 traps)
+    pc: u64,  // ELR_EL1 — interrupted address
+    psr: u64, // SPSR_EL1
+    interrupt_type: u64, // Harvey ureg->type: r9 stores the vector index 0-15 (kernel-side informational)
 }
+
+// D-06 layer 1: pinned byte offsets from aarch64/ABI.md's Phase-4 appendix.
+// Always on — any layout drift fails `cargo build`, no Harvey checkout
+// needed (layer 2 is the xtask ureg-check against the header itself).
+const _: () = assert!(core::mem::offset_of!(TrapFrame, x0) == 0);
+const _: () = assert!(core::mem::offset_of!(TrapFrame, x28) == 224);
+const _: () = assert!(core::mem::offset_of!(TrapFrame, link_register) == 240);
+const _: () = assert!(core::mem::offset_of!(TrapFrame, sp) == 248);
+const _: () = assert!(core::mem::offset_of!(TrapFrame, pc) == 256);
+const _: () = assert!(core::mem::offset_of!(TrapFrame, psr) == 264);
+const _: () = assert!(core::mem::offset_of!(TrapFrame, interrupt_type) == 272);
+const _: () = assert!(core::mem::size_of::<TrapFrame>() == 288);
 
 impl fmt::Debug for TrapFrame {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -110,9 +132,9 @@ impl fmt::Debug for TrapFrame {
             // see all of x0..x30 (the roles live on the struct fields).
             .field("x29", &format_args!("{:#018x}", self.frame_pointer))
             .field("x30", &format_args!("{:#018x}", self.link_register))
-            .field("esr_el1", &format_args!("{:#?}", self.esr_el1))
-            .field("elr_el1", &format_args!("{:#018?}", self.elr_el1))
-            .field("far_el1", &format_args!("{:#018?}", self.far_el1))
+            .field("sp", &format_args!("{:#018x}", self.sp))
+            .field("pc", &format_args!("{:#018x}", self.pc))
+            .field("psr", &format_args!("{:#018x}", self.psr))
             .field("interrupt_type", &format_args!("{}", self.interrupt_type))
             .finish()
     }
@@ -163,16 +185,27 @@ fn dispatch_irq(_frame: &TrapFrame) -> bool {
 }
 
 fn trap(frame: &mut TrapFrame) {
+    // D-05: ESR_EL1/FAR_EL1 are read LIVE at trap entry and flow as
+    // arguments to the dispatchers — never frame fields.  04-04's fault
+    // handler receives them as fault::user_fault(frame, esr, far); the IRQ
+    // path never needs them.
+    let esr = EsrEl1::read();
+    let far = FAR_EL1.get();
+
     if dispatch_irq(frame) {
         return;
     }
 
-    if frame.esr_el1.ec() == 0x15 {
+    if esr.ec() == 0x15 {
         // Syscall
-        let syscallid = frame.esr_el1.iss();
+        let syscallid = esr.iss();
         println!("Syscall {syscallid}");
     } else {
         println!("{:#?}", frame);
+        // ESR/FAR print from the live trap() locals (D-08) — outside the
+        // frame — so the panic profile's x0..x30 row-count gate is untouched.
+        println!("esr_el1: {esr:#?}");
+        println!("far_el1: {far:#018x}");
         println!("Unhandled interrupt");
         // Deterministic clean halt (SC#5/D-12): the full register state is on
         // the console, then the marker, then park in wfi -- a wedge-free stop

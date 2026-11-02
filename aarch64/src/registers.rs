@@ -1,5 +1,6 @@
 #![allow(non_upper_case_globals)]
 
+use aarch64_cpu::registers::ESR_EL1;
 use aarch64_cpu::registers::MIDR_EL1;
 use aarch64_cpu::registers::Readable;
 use bitstruct::bitstruct;
@@ -92,6 +93,13 @@ bitstruct! {
 }
 
 impl EsrEl1 {
+    /// Read ESR_EL1 live — the trap() entry path (D-05: syndrome registers
+    /// are never TrapFrame fields, so a stale in-frame syndrome read cannot
+    /// silently corrupt fault decode).
+    pub fn read() -> Self {
+        Self(if cfg!(test) { 0 } else { ESR_EL1.get() })
+    }
+
     /// Try to convert the error into an ExceptionClass enum, or return the original number
     /// as the error.
     pub fn exception_class_enum(&self) -> Result<ExceptionClass, u8> {
