@@ -29,6 +29,7 @@ mod fault;
 mod proc;
 mod registers;
 mod swtch;
+mod syscall;
 mod trap;
 mod vm;
 mod vmdebug;

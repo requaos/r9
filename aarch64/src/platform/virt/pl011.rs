@@ -84,12 +84,89 @@ pub fn init_rx() {
     write_reg(range, UART0_CR, 0x301); // UARTEN | TXE | RXE
 }
 
+/// INTID 33 handler entry (trap.rs's dispatch): the RX byte path differs by
+/// profile.  cfg(not(dev_exec)): the Phase-3 echo profile — bytes are echoed
+/// verbatim over raw DR writes (the r9echo7 boot-test assertion).  Under
+/// cfg(dev_exec) bytes instead feed the per-console read buffer that the
+/// devcons device's read path drains (04-06, D-15) — echoing userland's
+/// console input back would corrupt the exec profile's serial evidence.
+pub fn rx_irq() {
+    #[cfg(not(dev_exec))]
+    rx_irq_echo();
+    #[cfg(dev_exec)]
+    rx_irq_cons_buffer();
+}
+
+/// The dev_exec INTID 33 handler: drain the RX FIFO into the per-console
+/// read buffer.  LOCK-FREE by construction (research P8): no println!, no
+/// Console access — the Console mcslock may be held by the interrupted
+/// context, and taking it here would self-deadlock.
+///
+/// Buffer discipline: single writer (this IRQ handler) / single reader (the
+/// devcons read path, which runs in IRQ-masked syscall/trap context — the
+/// writer can never preempt the reader this era).  Overflow drops bytes
+/// (counted in OVERRUNS for diagnostics); nothing types fast enough to fill
+/// 256 bytes during the exec gate, and a dropped byte is loud-in-effect
+/// (missing input), never memory corruption.
+#[cfg(dev_exec)]
+pub fn rx_irq_cons_buffer() {
+    let range = unsafe { &*PL011_RANGE.get() };
+    let Some(range) = range.as_ref() else { return };
+
+    while read_reg(range, UART0_FR) & 0x10 == 0 {
+        let b = read_reg(range, UART0_DR) as u8;
+        let buf = unsafe { &mut *CONS_RX.get() };
+        let next = (buf.head + 1) % CONS_RX_CAP;
+        if next != buf.tail {
+            buf.bytes[buf.head] = b;
+            buf.head = next;
+        } else {
+            buf.overruns += 1;
+        }
+    }
+    write_reg(range, UART0_ICR, 0x50); // clear RX/RT
+}
+
+/// The console RX ring (dev_exec only).  Head = IRQ writer, tail = syscall
+/// reader; empty when head == tail.
+#[cfg(dev_exec)]
+struct ConsRx {
+    bytes: [u8; CONS_RX_CAP],
+    head: usize,
+    tail: usize,
+    overruns: u32,
+}
+
+#[cfg(dev_exec)]
+const CONS_RX_CAP: usize = 256;
+
+#[cfg(dev_exec)]
+static CONS_RX: SyncUnsafeCell<ConsRx> =
+    SyncUnsafeCell::new(ConsRx { bytes: [0; CONS_RX_CAP], head: 0, tail: 0, overruns: 0 });
+
+/// devcons read side (dev_exec): drain up to `buf.len()` bytes from the RX
+/// ring; return the count — 0 when empty (no blocking console-read this
+/// phase, per plan).  Called only from IRQ-masked syscall context, so the
+/// IRQ writer cannot interleave.
+#[cfg(dev_exec)]
+pub fn cons_rx_drain(buf: &mut [u8]) -> usize {
+    let rx = unsafe { &mut *CONS_RX.get() };
+    let mut n = 0;
+    while n < buf.len() && rx.tail != rx.head {
+        buf[n] = rx.bytes[rx.tail];
+        rx.tail = (rx.tail + 1) % CONS_RX_CAP;
+        n += 1;
+    }
+    n
+}
+
 /// INTID 33 handler: drain the RX FIFO and echo every byte verbatim via raw
 /// DR writes.  LOCK-FREE by construction (research P8): no println!, no
 /// Console access -- the Console mcslock may be held by the interrupted
 /// context, and taking it here would self-deadlock.  Bytes are echoed, never
 /// interpreted: no control-byte actions (Ctrl-P and friends stay deferred per
 /// CONTEXT.md).
+#[cfg(not(dev_exec))]
 pub fn rx_irq_echo() {
     let range = unsafe { &*PL011_RANGE.get() };
     let Some(range) = range.as_ref() else { return };

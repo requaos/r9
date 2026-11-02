@@ -77,6 +77,18 @@ pub fn allocate_physpage() -> Result<PhysAddr, PageAllocError> {
     }
 }
 
+/// Return a physical page to the allocator (04-06: the EXEC/EXITS paths free
+/// a proc's user mappings, root-table page and kstack pages via the proc's
+/// mapping_log / recorded PAs).  Deallocating a live-aliased page is a
+/// caller-side bug — the kernel VA aliases (KZERO+PA, kstack bump VAs) are
+/// NOT torn down here, so freed pages must be treated as never-again-read
+/// through their old mappings until reuse overwrites them.
+pub fn deallocate_physpage(pa: PhysAddr) -> Result<(), PageAllocError> {
+    let node = LockNode::new();
+    let mut lock = PAGE_ALLOC.lock(&node);
+    lock.deallocate(pa)
+}
+
 /// Try to allocate a physical page and map it into virtual memory at va.
 pub fn allocate_virtpage(
     page_table: &mut RootPageTable,

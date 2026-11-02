@@ -52,3 +52,19 @@ pub fn init(dt: &DeviceTree) {
         }
     });
 }
+
+/// devcons DEVICE write entry point (04-06 syscall-era shape).  The EL0
+/// userspace path is virt-only this phase — no SVC can ever arrive on raspi
+/// (no dev_exec configs exist for it), so these are unreachable stubs that
+/// keep the platform-shared syscall.rs compiling on every platform.  The
+/// write side still works if ever called: bytes go out through the Console
+/// MCS lock like the virt variant.
+pub fn cons_write(buf: &[u8]) -> u64 {
+    port::devcons::write_bytes(buf) as u64
+}
+
+/// devcons device read — raspi has no console-RX ring this phase (the
+/// virt dev_exec profile owns it).  Unreachable; returns 0 (empty).
+pub fn cons_read(_buf: &mut [u8]) -> u64 {
+    0
+}

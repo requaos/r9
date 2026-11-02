@@ -57,7 +57,10 @@ pub fn unmask_irq() {
 /// stale-frame syndrome read cannot silently corrupt fault decode.
 #[repr(C, align(16))]
 pub struct TrapFrame {
-    x0: u64,
+    /// Syscall-era access (04-06): syscall.rs reads the wire number and
+    /// writes the result here (`frame.x0`), per the published ABI (result
+    /// in R0).  pub(crate) — the const asserts still pin the layout.
+    pub(crate) x0: u64,
     x1: u64,
     x2: u64,
     x3: u64,
@@ -88,8 +91,11 @@ pub struct TrapFrame {
     x28: u64,
     frame_pointer: u64, // x29
     link_register: u64, // x30
-    sp: u64,  // interrupted context's stack pointer (SP_EL0 on EL0 traps, entry-sp on EL1 traps)
-    pc: u64,  // ELR_EL1 — interrupted address
+    /// Interrupted context's stack pointer (SP_EL0 on EL0 traps, entry-sp on
+    /// EL1 traps).  pub(crate) for the 04-06 syscall arg-read formula
+    /// (`frame.sp + 8` — aarch64/ABI.md Phase-4 appendix).
+    pub(crate) sp: u64,
+    pc: u64, // ELR_EL1 — interrupted address
     psr: u64, // SPSR_EL1
     interrupt_type: u64, // Harvey ureg->type: r9 stores the vector index 0-15 (kernel-side informational)
 }
@@ -263,8 +269,9 @@ fn dispatch_irq(frame: &TrapFrame) -> bool {
     match intid {
         // ARM generic timer CNTP (PPI 14 -> INTID 16+14)
         30 => platform::timer::tick(),
-        // PL011 UART RX (SPI 1 -> INTID 32+1): drain + lock-free echo
-        33 => platform::pl011::rx_irq_echo(),
+        // PL011 UART RX (SPI 1 -> INTID 32+1): echo in the Phase-3 profile,
+        // devcons read-buffer feed under dev_exec (04-06)
+        33 => platform::pl011::rx_irq(),
         platform::gic::SPURIOUS_INTID => {} // spurious: acked, no EOI
         _ => println!("unhandled IRQ {intid}"),
     }
@@ -294,10 +301,15 @@ fn trap(frame: &mut TrapFrame) {
     }
 
     if esr.ec() == 0x15 {
-        // Syscall — the WIRE syscall number is R0 (frame.x0), NOT the ISS
-        // (aarch64/ABI.md: number in R0, args at SP+8, result in R0).
-        // Real dispatch lands in 04-06; stay loud until then (D-14).
-        println!("syscall {} unimplemented", frame.x0);
+        // SVC (04-06): the real dispatch.  The WIRE syscall number is R0
+        // (frame.x0), args sit at user SP+8 in 8-byte slots, and the result
+        // is written back to frame.x0 (aarch64/ABI.md).  Dispatch itself
+        // prints `syscall N unimplemented` + returns -1 for numbers outside
+        // the D-14 measured set + named core — loud, never wedged.  EXITS
+        // diverges (parks); every other path returns here and the shared
+        // trap_return tail erets back into EL0.
+        crate::syscall::dispatch(frame);
+        return;
     } else if matches!(
         esr.exception_class_enum(),
         Ok(ExceptionClass::InstructionAbortLowerEl) | Ok(ExceptionClass::DataAbortLowerEl)

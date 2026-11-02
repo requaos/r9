@@ -2,7 +2,6 @@ extern crate alloc;
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use bitflags::bitflags;
 use core::result::Result;
 
 use crate::paqfs::PaqDir;
@@ -12,24 +11,46 @@ use crate::paqfs::PaqDir;
 /// (dat.rs's own `Error` type for the trait signatures below).
 pub struct Error(pub &'static str);
 
+/// Device-table index of the serving device.  A generated devtab arrives
+/// with the multi-device era (04-07+); until then the D-15 Phase-4 device
+/// set carries these two index values as a convention: devroot = 0,
+/// devcons = 1.
+pub const DEV_ROOT: usize = 0;
+pub const DEV_CONS: usize = 1;
+
+/// Plan 9 open-mode values (frozen: Harvey sys/include/libc.h).  The low
+/// two bits are an access-MODE field (not a bit set); the upper bits are
+/// flags.  These replace the pre-Phase-4 `Mode` bitflags skeleton, whose
+/// values were wrong for this encoding (phase-04 deferred-items.md #1).
+pub const OREAD: u32 = 0;
+pub const OWRITE: u32 = 1;
+pub const ORDWR: u32 = 2;
+pub const OEXEC: u32 = 3;
+pub const OTRUNC: u32 = 16;
+pub const OCEXEC: u32 = 32;
+pub const ORCLOSE: u32 = 64;
+pub const OEXCL: u32 = 4096;
+/// Mask for the access-mode field (the low two bits).
+pub const OMASK: u32 = 3;
+
 /// A kernel channel — an open-file handle bound to a device.  Grown from
 /// the placeholder skeleton for the Phase-4 device set (D-15): devroot
 /// chans carry their paqfs directory entry in the crate-private slot.
 pub struct Chan {
     /// This chan's current qid (file identity: path+vers+type).
     pub qid: Qid,
-    /// Open mode (Mode bits; OEXEC marks exec-opens per donor convention).
+    /// Open mode (the O* constants above; OEXEC marks exec-opens per donor
+    /// convention).
     pub mode: u32,
     /// Channel offset — the streaming read/write position (pread/pwrite
     /// with offset -1 use and advance this).
     pub offset: u64,
-    /// Device-table index of the serving device.
+    /// Device-table index of the serving device (DEV_ROOT / DEV_CONS).
     pub dev: usize,
     /// Walked-path bookkeeping (device-maintained; for diagnostics/walks).
     pub path: Vec<u8>,
     /// Private devroot slot: the paqfs entry this chan currently names.
-    /// (Written/read by 04-05's devroot; nothing consumes Chan yet.)
-    #[allow(dead_code)]
+    /// (Written/read by 04-05's devroot; 04-06's syscall PREAD consumes it.)
     pub(crate) paqdir: Option<PaqDir>,
 }
 
@@ -46,18 +67,6 @@ pub struct Device {
     _attached: bool,
 }
 
-bitflags! {
-    pub struct Mode: u16 {
-        const READ = 0;
-        const WRITE = 1;
-        const OEXEC = 2;
-        const OTRUNC = 4;
-        const OCEXEC = 5;
-        const ORCLOSE = 6;
-        const OEXCL = 12;
-    }
-}
-
 pub trait Dev {
     fn reset();
     fn init();
@@ -66,7 +75,7 @@ pub trait Dev {
     fn walk(&self, c: &Chan, nc: &mut Chan, name: &[&[u8]]) -> Walkqid;
     fn stat(&self, c: &Chan, sb: &mut [u8]) -> Result<(), Error>;
     fn open(&mut self, c: &Chan, mode: u32) -> Chan;
-    fn create(&mut self, c: &mut Chan, name: &[u8], mode: Mode, perms: u32);
+    fn create(&mut self, c: &mut Chan, name: &[u8], mode: u32, perms: u32);
     fn close(&mut self, c: Chan);
     fn read(&mut self, c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64, Error>;
     fn bread(&mut self, c: &mut Chan, bnum: u64, offset: u64) -> Result<Block, Error>;

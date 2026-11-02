@@ -64,6 +64,31 @@ pub fn print(args: fmt::Arguments) {
     cons.write_fmt(args).unwrap();
 }
 
+/// Write bytes VERBATIM to the console uart under the CONS MCS lock — the
+/// devcons DEVICE write path, called from syscall context (04-06, D-15).
+/// Unlike the kernel print path there is no `\n`→`\r\n` cooking: device
+/// writes are byte-exact (the 9front devcons conswrite shape), which is
+/// what lets user-visible marker strings originate from the EL0 binary's
+/// own pwrite path rather than from a kernel print on its behalf.
+///
+/// Locking (04-RESEARCH.md Pitfall 3): this shares the kernel print path's
+/// lock, so no IRQ-context code may ever take it once syscalls can write —
+/// the timer tick's println is cfg(not(dev_exec))-gated off for exactly
+/// that reason.  Returns the number of bytes written.
+pub fn write_bytes(buf: &[u8]) -> usize {
+    let node = LockNode::new();
+    let mut uart_guard = CONS.lock(&node);
+    let Some(uart) = uart_guard.as_deref_mut() else {
+        // Console never initialised (pre-devcons::init) — the write goes
+        // nowhere, but a syscall-era caller always has a registered uart.
+        return 0;
+    };
+    for &b in buf {
+        uart.putb(b);
+    }
+    buf.len()
+}
+
 #[macro_export]
 macro_rules! println {
     () => ($crate::print!("\n"));

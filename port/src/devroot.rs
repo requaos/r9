@@ -17,16 +17,16 @@
 //! constructible shape.
 
 use crate::dat::{Chan, Qid};
+use crate::mcslock::{Lock, LockNode};
 use crate::paqfs::{PaqDir, Paqfs};
 use crate::Result;
 
 /// Plan 9 open modes (sys/include/libc.h): the low two bits are the access
 /// mode, NOT a bit set.  devroot is read-only; exec opens its binary OEXEC
-/// per the donor convention.  (dat.rs's `Mode` bitflags are a pre-existing
-/// skeleton with wrong values for this encoding — nothing consumes them;
-/// these constants carry the frozen values.)
-pub const OREAD: u32 = 0;
-pub const OEXEC: u32 = 3;
+/// per the donor convention.  The frozen values live in dat.rs (04-06 fixed
+/// the `Mode` bitflag skeleton — phase-04 deferred-items.md #1); re-exported
+/// here so existing `devroot::OEXEC` call sites keep working.
+pub use crate::dat::{OEXEC, OREAD};
 
 /// paqfs dir-mode bit (Plan 9 DMDIR): marks directory PaqDir entries.
 const DMDIR: u32 = 0x8000_0000;
@@ -39,12 +39,32 @@ pub struct DevRoot {
     img: &'static [u8],
 }
 
+/// The mounted root image, published once by mount_initrd (single writer,
+/// pre-EL0; read thereafter from boot/syscall context).  04-06's syscall
+/// handlers reach the root tree through `root()` — DevRoot is
+/// stateless-per-call over the memory-resident image, so a fresh handle
+/// per call is the reentrant shape.  The mcslock idiom (CONS/PAGE_ALLOC
+/// pattern) guards the one-time publish; readers take it briefly.
+static ROOT_IMG: Lock<Option<&'static [u8]>> = Lock::new("devroot", None);
+
 /// Mount the initrd paqfs image as the root tree.  The image is validated
 /// (header + trailer) up front — a corrupt image is a loud Err at mount,
 /// never a mid-boot surprise.
 pub fn mount_initrd(img: &'static [u8]) -> Result<DevRoot> {
     Paqfs::open_image(img)?;
+    // Publish for the syscall-era consumers (OPEN/PREAD on devroot chans,
+    // the EXEC handler's binary source).  Exactly one mount exists this era.
+    let node = LockNode::new();
+    *ROOT_IMG.lock(&node) = Some(img);
     Ok(DevRoot { img })
+}
+
+/// A fresh handle to the mounted root tree, or None before main9's devroot
+/// mount.  Construction is cheap (the Paqfs revalidation happens per
+/// operation, not here).
+pub fn root() -> Option<DevRoot> {
+    let node = LockNode::new();
+    (*ROOT_IMG.lock(&node)).map(|img| DevRoot { img })
 }
 
 impl DevRoot {
@@ -56,7 +76,7 @@ impl DevRoot {
     /// exactly one — the initrd — so the spec is empty).
     pub fn attach_root(&self) -> Result<Chan> {
         let root = self.fs()?.root_dir()?;
-        let mut c = Chan::new(0, qid_of(&root), 0);
+        let mut c = Chan::new(crate::dat::DEV_ROOT, qid_of(&root), 0);
         c.paqdir = Some(root);
         Ok(c)
     }

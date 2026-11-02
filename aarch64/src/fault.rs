@@ -121,8 +121,17 @@ fn page_in_from_image(proc: &mut Proc, page_va: usize, kind: SegKind) {
     // Zero first (fresh phys pages are garbage and the file window may be
     // short at a segment tail), then read the file window in at byte
     // granularity (Pitfall 5: data file offsets are not page-aligned).
-    let dst = unsafe { core::slice::from_raw_parts_mut(page_va as *mut u8, PAGE_SIZE_4K) };
-    dst.fill(0);
+    //
+    // CLAMP the read to the segment's exact content end (04-06 Rule-1 fix,
+    // exposed by the exec-era runtime): the paqfs entry's length covers the
+    // WHOLE file (syms included), so an unclamped full-page read bleeds
+    // trailing file bytes (the syms section) into the page tail — bytes that
+    // must stay ZERO (the bss window sharing the last data page; the
+    // padding past text end).  Poisoned bss globals are read as
+    // file-string garbage (observed: exits()'s onex[i].f became "tas.s" and
+    // the loop made an indirect call into ASCII).
+    let full = unsafe { core::slice::from_raw_parts_mut(page_va as *mut u8, PAGE_SIZE_4K) };
+    full.fill(0);
     let Some(source) = proc.text_source.as_ref() else {
         panic!("fault: {kind:?} page-in with no byte source");
     };
@@ -135,6 +144,15 @@ fn page_in_from_image(proc: &mut Proc, page_va: usize, kind: SegKind) {
             (page_va - proc.segments.as_ref().unwrap().data.start()) as u64 + source.data_file_base
         }
     };
+    // Exact content end (VA): text content ends where the data FILE base
+    // begins (data_file_base = 40 + textsize, i.e. TEXT_MAP_BASE + that is
+    // the text-content end VA); data ends at the exact data_end.
+    let content_end = match kind {
+        SegKind::Text => exec::TEXT_MAP_BASE + source.data_file_base as usize,
+        _ => proc.segments.as_ref().unwrap().data.end(),
+    };
+    let clamp = content_end.saturating_sub(page_va).min(PAGE_SIZE_4K);
+    let dst = &mut full[..clamp];
     let fs = port::paqfs::Paqfs::open_image(source.image)
         .unwrap_or_else(|err| panic!("fault: paqfs reopen failed: {err}"));
     if let Err(err) = fs.read_at(&source.dir, file_off, dst) {
