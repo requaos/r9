@@ -15,6 +15,7 @@ use core::ptr;
 use port::Result;
 use port::mem::{PAGE_SIZE_4K, PhysAddr, PhysRange, VirtRange};
 use port::paqfs::{PaqDir, Paqfs};
+use port::println;
 
 use crate::kmem::physaddr_as_ptr_mut_offset_from_kzero;
 use crate::pagealloc;
@@ -202,6 +203,13 @@ pub fn exec_into(
 /// The proc keeps its pid, kstack, root table, and fd table (fds survive
 /// exec, Plan 9 convention).
 ///
+/// WR-07: seed_user_pages's pagealloc/map_to calls remain fallible AFTER
+/// the free (the earlier "seed can no longer fail" invariant was false).
+/// A post-free failure cannot return -1 — the trap frame's pc/sp name
+/// freed text pages — so it kills the process loudly via the exit tail
+/// (the fault-kill shape), not a limping return into a half-installed
+/// segment map.
+///
 /// Returns the new tos_va: the handler passes it up so dispatch's
 /// `frame.x0 = result` writeback AGREES with the seeded x0 by construction.
 pub fn exec_replace(
@@ -214,8 +222,12 @@ pub fn exec_replace(
 ) -> Result<u64> {
     // PARSE first.
     let aout = read_aout(image, bin)?;
-    // Every remaining fallible check runs BEFORE the free: the seed-fit
-    // arithmetic (seed_user_pages can no longer fail once this passes).
+    // Every remaining VALIDATION check runs BEFORE the free: the seed-fit
+    // arithmetic.  (WR-07: seed_user_pages's pagealloc/map_to allocations
+    // remain fallible AFTER the free — the "can no longer fail" invariant
+    // this comment previously claimed was false — so a post-free failure
+    // kills via the exit tail below rather than returning -1 to a trap
+    // frame whose pc/sp name freed text pages.)
     check_seed_fit(args)?;
 
     // FREE second: unmap every current user mapping from the (active) root
@@ -233,8 +245,17 @@ pub fn exec_replace(
     proc.last_note_len = 0;
 
     // SEED third: fresh seed-stack + Tos pages, new segment records, new
-    // paqfs byte source.
-    let (user_sp, tos_va) = install_image(proc, image, bin, name, args, &aout)?;
+    // paqfs byte source.  A failure HERE is post-free (WR-07): returning
+    // -1 would eret into a trap frame whose pc/sp name freed text pages,
+    // so the process dies loudly via the exit tail (the WR-06 fault-kill
+    // shape — the parent reaps the wait record like any other death).
+    let (user_sp, tos_va) = match install_image(proc, image, bin, name, args, &aout) {
+        Ok(v) => v,
+        Err(msg) => {
+            println!("exec: post-free seed failed ({msg}) — killing pid {}", proc.pid);
+            crate::syscall::exit_tail(proc, msg.as_bytes());
+        }
+    };
 
     // REWRITE THE LIVE TRAP FRAME in place — the dispatch return path's
     // restore + eret enters the new image.
@@ -243,7 +264,9 @@ pub fn exec_replace(
 }
 
 /// The pre-free seed-fit check (T-04-13): mirrors seed_user_pages's
-/// arithmetic so exec_replace never fails after the old image is freed.
+/// arithmetic so exec_replace never fails for ARG-SHAPE reasons after the
+/// old image is freed (post-free ALLOCATION failures kill via the exit
+/// tail — WR-07).
 /// argc <= MAX_ARGS and the strings + pointer array + alignment slack must
 /// fit the one seed page.
 fn check_seed_fit(args: &[&[u8]]) -> Result<()> {
