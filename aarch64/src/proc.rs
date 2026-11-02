@@ -1,20 +1,26 @@
-//! Process scaffolding (R9-02/R9-03 groundwork; D-13's derived requirement):
-//! per-process kernel stacks and root page tables, a small fixed proc table
-//! behind the MCS-lock idiom, and the current-proc pointer trap-context code
-//! reads.
+//! Process scaffolding (R9-02/R9-03; D-13): per-process kernel stacks and
+//! root page tables, a small fixed proc table behind the MCS-lock idiom,
+//! the current-proc pointer trap-context code reads, and the 04-07
+//! scheduler — tick-driven preemptive round-robin (preempt/reschedule)
+//! plus the swtch-based blocking path (sched/sched_loop) that AWAIT rides.
 //!
-//! Nothing here *runs* a process yet — 04-04's exec.rs seeds the forkret
-//! frame onto this scaffolding, fault.rs pages into its root table, 04-05
-//! wires the boot_init call path, and 04-07 lands the scheduler (Blocked and
-//! await arrive there).
+//! 04-04's exec.rs seeds the forkret frame onto this scaffolding, fault.rs
+//! pages into its root table, 04-05 wired the boot_init call path, and
+//! 04-06's syscall dispatch lands RFORK/AWAIT/EXITS-wait-records here in
+//! 04-07.
 //!
 //! Locking discipline (04-PATTERNS.md "Locking discipline"):
-//! - PROC_TABLE is taken only briefly in process/boot context — NEVER across
-//!   the fault handler or a pagealloc call that could recurse.
-//! - Trap-context code reads the current proc through `current_proc()`'s raw
-//!   pointer, set at exec/switch time.  Invariant: single CPU, and trap
-//!   handlers run IRQ-masked, so the pointer is stable for the handler's
-//!   lifetime.
+//! - PROC_TABLE is taken only briefly in process/boot/trap context —
+//!   NEVER across the fault handler or a pagealloc call that could
+//!   recurse, and never across a swtch (the resumed proc may lock it).
+//! - Trap-context code reads the current proc through `current_proc()`'s
+//!   raw pointer, set at exec/switch time.  Invariant: single CPU, and
+//!   trap handlers run IRQ-masked, so the pointer is stable for the
+//!   handler's lifetime.
+//! - CURKSTACK/CURFRAME (the trap.S entry-stack/live-frame symbols) are
+//!   written only under the PROC_TABLE lock or in IRQ-masked trap
+//!   context, and read by trap.S at entry/return — same single-CPU
+//!   invariant.
 
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
@@ -131,8 +137,10 @@ pub struct WaitRecord {
 pub enum ProcState {
     Ready,
     Running,
+    /// Blocked mid-syscall (04-07's AWAIT) — holds a saved kernel context
+    /// (blocked_in_kernel) and resumes via the sched loop's swtch.
+    Blocked,
     Moribund,
-    // Blocked arrives with 04-07's await.
 }
 
 /// A user process.  Raw-pointer fields (`root_table`, `frame`) name memory
@@ -163,13 +171,32 @@ pub struct Proc {
     /// paqfs byte source for demand page-in; None until exec.
     pub text_source: Option<ByteSource>,
     /// The stashed trap frame on this proc's kernel stack (the forkret seed
-    /// at exec; trap save/restore rides it from then on).
+    /// at exec; trap save/restore rides it from then on).  Read by the
+    /// CURFRAME reload at trap return — written by the scheduler's locked
+    /// swap and by reschedule's stash.
     pub frame: *mut TrapFrame,
-    /// Kernel-context switch state (04-07's scheduler uses it).
+    /// Kernel-context switch state — valid only while blocked_in_kernel
+    /// (04-07's sched() saved it mid-syscall); the sched loop swtch'es it
+    /// back in.  Preempted-at-EL0 procs carry no kernel context — they
+    /// resume through the CURFRAME/trap_return path only.
     pub context: swtch::Context,
+    /// True while `context` holds a live saved kernel context (the proc
+    /// blocked mid-syscall).  The sched loop resumes such procs via swtch;
+    /// every other Ready proc resumes via trap_return on `frame`.
+    pub blocked_in_kernel: bool,
+    /// The rfork parent (04-07) — EXITS posts the wait record here.  Null
+    /// for the staged init (its exits posts nothing).
+    pub parent: *mut Proc,
+    /// rfork'd children not yet reaped by AWAIT (live or with a pending
+    /// wait record) — AWAIT's block-vs-"no children" pivot.
+    pub children_live: usize,
+    /// rfork(RFNOWAIT) child: EXITS posts no wait record and wakes nobody.
+    pub nowait: bool,
     pub note_queue: VecDeque<Note>,
     pub notify_handler: Option<u64>,
-    pub wait_record: Option<WaitRecord>,
+    /// Posted child-exit records (04-07; one per exited child, consumed by
+    /// AWAIT in post order).
+    pub wait_records: VecDeque<WaitRecord>,
     pub errstr: [u8; ERRMAX],
 }
 
@@ -211,7 +238,11 @@ impl Proc {
             },
             note_queue: VecDeque::with_capacity(NOTE_QUEUE_CAP),
             notify_handler: None,
-            wait_record: None,
+            blocked_in_kernel: false,
+            parent: ptr::null_mut(),
+            children_live: 0,
+            nowait: false,
+            wait_records: VecDeque::new(),
             errstr: [0; ERRMAX],
         };
         proc.set_name(name);
@@ -465,4 +496,255 @@ pub fn new_user_proc(name: &str) -> Result<&'static mut Proc> {
     // reference stays valid after the guard drops (single CPU — see the
     // module header's locking discipline).
     Ok(unsafe { &mut *(slot.as_mut().unwrap() as *mut Proc) })
+}
+
+// ---------------------------------------------------------------------------
+// 04-07 scheduler (D-13): tick-driven preemptive round-robin over PROC_TABLE
+// plus the swtch-based kernel-context path for procs blocked mid-syscall.
+//
+// Two resume paths, never mixed (the experiment's documented limit):
+// - Ready procs with NO kernel context (fresh from rfork, or preempted at
+//   EL0) resume through trap_return on their `frame` — the ONLY way EL0 is
+//   entered.  The trap.S tail reloads the frame base from CURFRAME and, on
+//   EL0t-bound returns, loads SP_EL1 from CURKSTACK, so both are switched
+//   under the PROC_TABLE lock BEFORE the resume (the checker ordering
+//   assignment: one locked step covering current-proc, CURKSTACK, CURFRAME
+//   and TTBR0).
+// - Procs blocked mid-syscall (AWAIT) hold a saved kernel `context` and
+//   resume via swtch from the sched loop; their syscall handler then
+//   returns through the normal trap-return tail (which reads the same
+//   CURFRAME the locked swap installed).
+//
+// Time slice: the generic-timer tick is the preemption source (timer.rs's
+// TICKS_PER_SEC — 100 Hz = 10 ms this era; CONTEXT.md agent's discretion).
+// ---------------------------------------------------------------------------
+
+/// The trap-entry stack top / live frame pointer, read by trap.S at every
+/// entry (CURFRAME record) and return (CURFRAME reload; CURKSTACK load on
+/// EL0t-bound returns).  CURKSTACK initialises to the legacy interrupt
+/// stack so pre-process traps (early boot, virtpanic) behave exactly as
+/// pre-04-07.  Write discipline per the module header.
+#[unsafe(no_mangle)]
+pub static mut CURKSTACK: u64 = 0;
+#[unsafe(no_mangle)]
+pub static mut CURFRAME: u64 = 0;
+
+fn read_curframe() -> *mut TrapFrame {
+    unsafe { ptr::addr_of!(CURFRAME).read() as *mut TrapFrame }
+}
+
+fn write_curframe(frame: *mut TrapFrame) {
+    unsafe { ptr::addr_of_mut!(CURFRAME).write(frame as u64) }
+}
+
+fn write_curkstack(top: usize) {
+    unsafe { ptr::addr_of_mut!(CURKSTACK).write(top as u64) }
+}
+
+/// The legacy interrupt stack's top (trap.S's reservation): the pre-process
+/// CURKSTACK default AND the scheduler context's stack.  `interruptstacksz`
+/// is an absolute (.equ) symbol — its "address" IS the size value.
+fn interrupt_stack_top() -> usize {
+    unsafe extern "C" {
+        static interruptstackbase: u8;
+        static interruptstacksz: u8;
+    }
+    unsafe {
+        &interruptstackbase as *const u8 as usize + &interruptstacksz as *const u8 as usize
+    }
+}
+
+/// Initialise CURKSTACK to the legacy interrupt stack.  main9 calls this
+/// right after trap::init — before IRQs can unmask, so the first tick can
+/// never read a null stack target.
+pub fn init_trap_stacks() {
+    write_curkstack(interrupt_stack_top());
+}
+
+/// First activation (exec_bootstrap's only call): publish the proc as
+/// current + Running and point the trap-entry stack at its kstack — the
+/// EL0t-bound trap_return tail loads SP_EL1 from CURKSTACK.
+pub fn activate_first(p: &mut Proc) {
+    p.state = ProcState::Running;
+    set_current_proc(p);
+    write_curkstack(p.kstack_top);
+}
+
+/// The timer-tick preemption entry (D-13).  Acts only when the current
+/// proc is Running — i.e. the IRQ interrupted EL0 (kernel syscall/trap
+/// context runs IRQ-masked; the sched loop's idle wfi finds current
+/// Blocked/Moribund and its own post-wfi re-scan dispatches instead).
+pub fn preempt() {
+    let cur = current_proc();
+    if cur.is_null() {
+        return;
+    }
+    if unsafe { (*cur).state } != ProcState::Running {
+        return;
+    }
+    reschedule();
+}
+
+/// Round-robin reschedule from the tick (IRQ-from-EL0: the live frame sits
+/// on the current proc's kstack, recorded in CURFRAME by the trap entry).
+/// On a switch: stash the live frame into the current proc, mark it Ready,
+/// install the next (current + CURKSTACK + CURFRAME + TTBR0, one locked
+/// step), and print the marker `sched: switch old->new` — marker-not-order
+/// evidence per D-13.  The trap tail's CURFRAME reload then returns to the
+/// NEW process.  Ready procs holding a saved kernel context
+/// (blocked_in_kernel) are skipped here — only the sched loop can swtch
+/// them back in.
+pub fn reschedule() {
+    let cur = current_proc();
+    let cur_pid = unsafe { (*cur).pid };
+    let node = LockNode::new();
+    let next_pid;
+    {
+        let mut table = PROC_TABLE.lock(&node);
+        let Some(cur_idx) =
+            table.procs.iter().position(|s| s.as_ref().is_some_and(|p| p.pid == cur_pid))
+        else {
+            return;
+        };
+        let mut pick = None;
+        for off in 1..MAX_PROCS {
+            let i = (cur_idx + off) % MAX_PROCS;
+            let Some(p) = table.procs[i].as_ref() else { continue };
+            if p.state == ProcState::Ready && !p.blocked_in_kernel {
+                pick = Some(i);
+                break;
+            }
+        }
+        let Some(ni) = pick else { return };
+        let curp = table.procs[cur_idx].as_mut().unwrap();
+        curp.frame = read_curframe();
+        curp.state = ProcState::Ready;
+        let next = table.procs[ni].as_mut().unwrap();
+        next.state = ProcState::Running;
+        next_pid = next.pid;
+        set_current_proc(next);
+        write_curkstack(next.kstack_top);
+        write_curframe(next.frame);
+        unsafe { vm::switch(&*next.root_table, RootPageTableType::User) };
+    }
+    // Outside the lock (PROC_TABLE → Console is the only nesting order);
+    // still IRQ-masked trap context, so the line precedes the return eret.
+    println!("sched: switch {cur_pid}->{next_pid}");
+}
+
+/// How the sched loop resumes the picked proc: swtch into its saved kernel
+/// context (blocked mid-syscall) or trap_return into its frame (everything
+/// else).  Raw pointers escape the PROC_TABLE guard by design — the lock is
+/// never held across a swtch (the resumed proc's syscall handler may lock
+/// it) and the single-CPU/IRQ-masked invariant keeps them valid.
+enum Resume {
+    Switch(*mut swtch::Context),
+    Return(*mut TrapFrame),
+}
+
+/// The scheduler context — a kernel-context switch target running
+/// sched_loop on the legacy interrupt stack (free this era: 04-05's
+/// no-switch entry left it reserved for reporting only).  Seeded on first
+/// use; accessed only from IRQ-masked single-CPU context.
+static mut SCHED_CONTEXT: swtch::Context = swtch::Context {
+    x19: 0,
+    x20: 0,
+    x21: 0,
+    x22: 0,
+    x23: 0,
+    x24: 0,
+    x25: 0,
+    x26: 0,
+    x27: 0,
+    x28: 0,
+    x29: 0,
+    x30: 0,
+    sp: 0,
+    spsr: 0,
+};
+static mut SCHED_SEEDED: bool = false;
+
+fn sched_context() -> *mut swtch::Context {
+    unsafe {
+        if !ptr::addr_of!(SCHED_SEEDED).read() {
+            let ctx = ptr::addr_of_mut!(SCHED_CONTEXT);
+            (*ctx).set_return(sched_loop as *const () as u64);
+            (*ctx).set_stack_pointer(interrupt_stack_top() as u64);
+            ptr::addr_of_mut!(SCHED_SEEDED).write(true);
+        }
+        ptr::addr_of_mut!(SCHED_CONTEXT)
+    }
+}
+
+/// Block the CURRENT proc mid-syscall and switch to the scheduler context
+/// (04-07; the AWAIT path).  Returns when the sched loop swtch'es back —
+/// i.e. after the proc was woken (Blocked → Ready by an EXITS posting a
+/// wait record) and picked.  EL0 entry/exit never rides this path.
+pub fn sched() {
+    let cur = current_proc();
+    assert!(!cur.is_null(), "sched with no current process");
+    unsafe {
+        (*cur).state = ProcState::Blocked;
+        (*cur).blocked_in_kernel = true;
+        swtch::swtch(&mut (*cur).context, &*sched_context());
+    }
+    // Resumed inside the syscall handler; the caller re-checks its wait
+    // records and returns up the trap-return tail.
+}
+
+/// The scheduler loop (entered via swtch on the legacy interrupt stack):
+/// pick the next Ready proc — pick_next applies the CURKSTACK + CURFRAME +
+/// TTBR0 + current-proc swap under the PROC_TABLE lock BEFORE the resume —
+/// then resume it per its kind.  Nothing Ready → wfi with IRQs briefly
+/// unmasked: the tick fires, re-arms, and (current not Running) skips
+/// preemption; the loop then re-scans.  Stateless between scans — re-entry
+/// from the seed (after a Resume::Return abandoned the loop mid-iteration)
+/// is as correct as resumption after a swtch-out.
+fn sched_loop() -> ! {
+    loop {
+        match pick_next() {
+            Some(Resume::Switch(ctx)) => unsafe { swtch::swtch(&mut *sched_context(), &*ctx) },
+            Some(Resume::Return(frame)) => unsafe { crate::trap::trap_return(frame) },
+            None => unsafe {
+                core::arch::asm!("msr DAIFClr, #2", "wfi", "msr DAIFSet, #2");
+            },
+        }
+    }
+}
+
+/// Round-robin pick of the next Ready proc after the current one, applying
+/// the full switch as one PROC_TABLE-locked step (the plan's ordering
+/// assignment: state, current-proc pointer, CURKSTACK, CURFRAME, TTBR0) so
+/// the resumed proc's trap-return tail reloads its OWN frame, never the
+/// previous proc's.  None when no other Ready proc exists.
+fn pick_next() -> Option<Resume> {
+    let cur = current_proc();
+    let cur_pid = unsafe { cur.as_ref().map(|p| p.pid) };
+    let node = LockNode::new();
+    let mut table = PROC_TABLE.lock(&node);
+    let cur_idx = cur_pid
+        .and_then(|pid| table.procs.iter().position(|s| s.as_ref().is_some_and(|p| p.pid == pid)));
+    let start = cur_idx.map(|i| i + 1).unwrap_or(0);
+    for off in 0..MAX_PROCS {
+        let i = (start + off) % MAX_PROCS;
+        if Some(i) == cur_idx {
+            continue;
+        }
+        let Some(p) = table.procs[i].as_mut() else { continue };
+        if p.state != ProcState::Ready {
+            continue;
+        }
+        p.state = ProcState::Running;
+        set_current_proc(p);
+        write_curkstack(p.kstack_top);
+        write_curframe(p.frame);
+        unsafe { vm::switch(&*p.root_table, RootPageTableType::User) };
+        return Some(if p.blocked_in_kernel {
+            p.blocked_in_kernel = false;
+            Resume::Switch(&mut p.context as *mut swtch::Context)
+        } else {
+            Resume::Return(p.frame)
+        });
+    }
+    None
 }

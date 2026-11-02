@@ -64,6 +64,21 @@ interruptstackbase:	.space INTERRUPTSTACKSZ
 // the wfi idle loop was the sole EL1 resident).  With no switch, no scratch
 // register is needed before the first store and every slot stays truthful.
 //
+// 04-07 (D-13, T-04-14): the "current kernel stack" for an EL0-origin
+// entry is the CURRENT PROCESS's kernel stack.  SP_EL1 is kept equal to
+// the current proc's kstack top by the trap_return tail, which loads it
+// from CURKSTACK on every EL0t-bound return (see below) — an explicit
+// entry-side stack switch is impossible on aarch64 without clobbering a
+// user GPR before its store (the 04-05 bug above): there is no GPR-free
+// SP move, so the return-side load is the single enforcement point.  The
+// entry RECORDS the frame it built into CURFRAME and the tail RELOADS the
+// frame base from CURFRAME, because preemption (proc::preempt from the
+// timer tick) swaps CURFRAME/CURKSTACK/TTBR0 mid-trap and the tail must
+// pop the NEW current proc's frame.  Both symbols are Rust statics in
+// proc.rs, written only under the PROC_TABLE lock or in IRQ-masked trap
+// context (single CPU); CURKSTACK initialises to the legacy interrupt
+// stack so pre-process traps (early boot, virtpanic) behave as before.
+//
 // The second macro parameter selects the per-origin sp capture: 1 for
 // EL1-origin vectors (el1t/el1h), 0 for EL0-origin vectors (el0_64/el0_32).
 .macro handle_interrupt type, from_el1
@@ -106,6 +121,13 @@ interruptstackbase:	.space INTERRUPTSTACKSZ
 	ldr	x30, =\type
 	str	x30, [sp, #16 * 17]
 
+	// 04-07: record the live frame for trap_return's CURFRAME reload
+	// (preemption may swap it mid-trap).  x9/x10's frame slots were
+	// stored above, so they are safe scratch here.
+	mov	x9, sp
+	ldr	x10, =CURFRAME
+	str	x9, [x10]
+
 	// Pass pointer to TrapFrame (on stack) as the first arg
 	mov	x0, sp
 	bl	trap_unsafe
@@ -115,11 +137,21 @@ interruptstackbase:	.space INTERRUPTSTACKSZ
 	b	trap_return
 .endm
 
-// 04-05: the shared trap-return tail — restore the frame at sp and eret.
+// 04-05: the shared trap-return tail — restore the frame and eret.
 // The handle_interrupt macro branches here after trap_unsafe, and exec's
 // first EL0 entry arrives via the trap_return_exec wrapper at the bottom;
 // this eret path is the ONLY way EL0 is ever entered (swtch never enters
 // EL0 — D-12 era rule).
+//
+// 04-07 (D-13): the tail RELOADS the frame base from CURFRAME as its
+// first instruction — a timer tick may have preempted the interrupted
+// process mid-trap, swapping CURFRAME/CURKSTACK/TTBR0 to the next
+// process, so the frame to restore is not necessarily the one the entry
+// built.  The final stack-pointer step is per-origin: an EL1h-bound
+// return reproduces the interrupted kernel sp exactly (frame+288); an
+// EL0t-bound return loads SP_EL1 from CURKSTACK — the CURRENT process's
+// kernel stack top — the single enforcement point of the per-process
+// entry-stack invariant (see the file-header comment).
 //
 // Rust-callable contract (declared in trap.rs):
 //	pub extern "C" fn trap_return(frame: *mut TrapFrame) -> !
@@ -131,6 +163,12 @@ interruptstackbase:	.space INTERRUPTSTACKSZ
 // frame slots restore in the pop below.
 .globl	trap_return
 trap_return:
+	// Reload the current frame — preemption may have swapped it.
+	// (SP cannot be an ldr destination on aarch64 — go via x9.)
+	ldr	x9, =CURFRAME
+	ldr	x9, [x9]
+	mov	sp, x9
+
 	// Restore system registers from the frame.
 	ldr	x10, [sp, #16 * 16 + 8]	// psr
 	tst	x10, #0xf
@@ -160,17 +198,29 @@ trap_return:
 	ldp	x28, x29, [sp, #16 * 14]
 	ldr	x30, [sp, #16 * 15]
 
-	// Remaining stack frame slots are system registers, restored above
-	add	sp, sp, #288
-
+	// Remaining frame slots are system registers, restored above.  The
+	// final sp is per-origin (the pops used offset addressing, so sp
+	// still names the frame base here).
+	ldr	x9, [sp, #16 * 16 + 8]	// psr
+	tst	x9, #0xf
+	b.ne	2f
+	ldr	x9, =CURKSTACK		// EL0t-bound: SP_EL1 := the CURRENT proc's
+	ldr	x9, [x9]		// kernel stack top (explicit, not frame+288
+	mov	sp, x9			// arithmetic) — the entry-stack invariant
+	b	3f
+2:
+	add	sp, sp, #288		// EL1h-bound: the interrupted kernel sp
+3:
 	eret
 
 // exec's first EL0 entry (04-05): x0 = the seeded forkret-shaped frame on
-// the proc's kernel stack (exec.rs seed_exec_frame); move it into sp and
-// ride the shared tail above.  Bound in Rust as trap_return (trap.rs).
+// the proc's kernel stack; publish it as the current frame (04-07 — the
+// tail reloads from CURFRAME) and ride the shared tail above.  Bound in
+// Rust as trap_return (trap.rs).
 .globl	trap_return_exec
 trap_return_exec:
-	mov	sp, x0
+	ldr	x9, =CURFRAME
+	str	x0, [x9]
 	b	trap_return
 
 

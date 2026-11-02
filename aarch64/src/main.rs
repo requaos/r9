@@ -121,6 +121,10 @@ fn print_stacks() {
 #[unsafe(no_mangle)]
 pub extern "C" fn main9(dtb_va: usize) {
     trap::init();
+    // 04-07: CURKSTACK (the trap.S entry-stack symbol) starts at the legacy
+    // interrupt stack so pre-process traps behave exactly as before; the
+    // first proc's activation repoints it.  Before any IRQ can unmask.
+    proc::init_trap_stacks();
     // Raspi has no interrupt handlers to arm, so unmask at the point the
     // combined trap::init always unmasked.  Virt deliberately does NOT unmask
     // here — 03-05 calls unmask_irq() after GIC + timer + UART RX are armed.
@@ -433,6 +437,8 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
     println!("exec: ttbr0 switched, console alive");
 
     let frame_ptr = proc.frame;
-    proc::set_current_proc(proc);
+    // 04-07: publish current + Running + CURKSTACK (the trap_return tail
+    // loads SP_EL1 from CURKSTACK on the EL0t-bound return below).
+    proc::activate_first(proc);
     unsafe { trap::trap_return(frame_ptr) }
 }

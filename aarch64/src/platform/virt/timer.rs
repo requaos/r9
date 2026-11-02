@@ -20,9 +20,11 @@ use port::println;
 /// if it ever disagrees; this constant is the documented fallback.
 pub const CNTP_INTID: u32 = 30;
 
-/// Tick rate.  1 Hz print-per-tick is readable at TCG speed and satisfies
-/// SC#3's visible periodic ticks (CONTEXT.md agent's discretion).
-const TICKS_PER_SEC: u64 = 1;
+/// Tick rate.  04-07 (D-13): 100 Hz = a 10 ms round-robin time slice (the
+/// CONTEXT.md agent's-discretion knob) — fast enough that the short-lived
+/// smoke procs of the virtmulti profile take real IRQ-from-EL0 preemptions,
+/// and the Phase-3 virt profile's >= 3 tick prints still arrive in ~30 ms.
+const TICKS_PER_SEC: u64 = 100;
 
 static TICKS: AtomicU64 = AtomicU64::new(0);
 
@@ -80,9 +82,16 @@ fn arm() {
 /// prints after unmask_irq, and userland-era syscalls print from trap
 /// context — so the tick print is gated off there (04-RESEARCH.md Pitfall 3;
 /// the OQ-4 resolution's gating mechanism, pulled forward to the first config
-/// that needs it).  The tick itself keeps re-arming in every config: the
-/// D-13 preemption machinery stays live, and the Phase-3 virt profile (no
-/// dev list) keeps its tick markers.
+/// that needs it).  The tick itself keeps re-arming in every config.
+///
+/// 04-07 (D-13): the tick is the preemption source.  proc::preempt() acts
+/// only when a process is Running (i.e. the IRQ interrupted EL0 — kernel
+/// context runs IRQ-masked), so the call is a cheap no-op in the pre-exec
+/// and no-exec configs; when it does act, the trap tail's CURFRAME reload
+/// returns to the NEW current process.  preempt() never prints to the
+/// console from IRQ context in a config where syscalls can print... its
+/// `sched: switch` marker is the deliberate exception: syscalls run
+/// IRQ-masked, so no Console-lock holder can be interrupted (single CPU).
 pub fn tick() {
     arm();
     let n = TICKS.fetch_add(1, Ordering::Relaxed);
@@ -90,4 +99,5 @@ pub fn tick() {
     println!("tick {n}");
     #[cfg(dev_exec)]
     let _ = n;
+    crate::proc::preempt();
 }
