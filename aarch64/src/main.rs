@@ -200,18 +200,67 @@ pub extern "C" fn main9(dtb_va: usize) {
     #[cfg(not(platform = "virt"))]
     platform::mailbox::init(&dt);
 
-    // The console is live now: emit the D-01 probe marker.
-    match initrd {
-        Some((start, end, size, _)) => {
-            println!("initrd: start={start:#x} end={end:#x} size={size}");
-        }
-        None => println!("initrd: none"),
-    }
-
     println!();
     println!("r9 from the Internet");
     println!("DTB found at: {:#x}", dtb_va);
     println!("midr_el1: {:?}", registers::MidrEl1::read());
+
+    // The console is live now: emit the D-01 probe marker + the 04-02 paqfs
+    // proof, AFTER the banner (04-02 acceptance pins banner-first emission
+    // order on the serial evidence).
+    match initrd {
+        Some((start, end, size, physrange)) => {
+            println!("initrd: start={start:#x} end={end:#x} size={size}");
+
+            // 04-02: prove the D-02 delivery chain end-to-end with real
+            // bytes.  Map the (page-rounded) initrd PA range into the kernel
+            // table at KZERO+PA — the same VaMapping::Offset(KZERO)
+            // convention vminit uses for the DTB — then parse the bytes as
+            // paqfs and print one `paqfs: <name>` line per root entry.
+            // pagealloc reserved the range above (04-01), so the image bytes
+            // are intact; map_phys_range allocates only table pages.
+            let mut physpage_allocator = vm::PhysPageAllocator {};
+            let mut vmtrait_impl = vm::VmTraitImpl {};
+            if let Err(err) = vm::kernel_pagetable().map_phys_range(
+                &mut physpage_allocator,
+                &mut vmtrait_impl,
+                "initrd",
+                &physrange,
+                vm::VaMapping::Offset(KZERO),
+                vm::Entry::rw_kernel_data(),
+                vm::PageSize::Page4K,
+                vm::RootPageTableType::Kernel,
+            ) {
+                panic!("initrd: map failed: {err:?}");
+            }
+            let img = unsafe {
+                core::slice::from_raw_parts((KZERO + start as usize) as *const u8, size as usize)
+            };
+            // With an initrd configured, an unreadable image is a
+            // build/harness bug — fail loudly per the phase pattern.
+            match port::paqfs::Paqfs::open_image(img) {
+                Ok(fs) => match fs.root_dir().and_then(|root| fs.read_dir(&root)) {
+                    Ok(entries) => {
+                        for entry in &entries {
+                            println!(
+                                "paqfs: {}",
+                                core::str::from_utf8(&entry.name).unwrap_or("<bad-utf8>")
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        println!("paqfs: open failed: {err}");
+                        panic!("paqfs: root walk failed: {err}");
+                    }
+                },
+                Err(err) => {
+                    println!("paqfs: open failed: {err}");
+                    panic!("paqfs: {err}");
+                }
+            }
+        }
+        None => println!("initrd: none"),
+    }
 
     print_stacks();
 

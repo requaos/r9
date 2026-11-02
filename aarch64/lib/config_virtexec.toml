@@ -32,8 +32,9 @@ dtb = "aarch64/lib/virt-gicv2.dtb"
 # /chosen linux,initrd-start/end into a patched DTB copy; the kernel
 # validates, prints, and reserves the range (04-01 tracer).  0x48000000 sits
 # 128 MiB into the 1 GiB guest, clear of the kernel (0x40080000) and the DTB
-# (0x40000000).
-initrd = { file = "aarch64/lib/probe-initrd.txt", addr = 0x48000000 }
+# (0x40000000).  04-02: the initrd is the committed paqfs fixture — the kernel
+# parses it and prints one `paqfs: <name>` line per root entry on serial.
+initrd = { file = "port/tests/fixtures/probe-tree.paq", addr = 0x48000000 }
 
 [dist]
 # ELF is the boot image on virt; skip the objcopy+gzip flat-image pipeline
