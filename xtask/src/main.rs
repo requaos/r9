@@ -6,7 +6,7 @@ use config::{
 use std::{
     env, fmt,
     io::{Read, Write},
-    os::unix::net::UnixStream,
+    os::unix::{net::UnixStream, process::CommandExt},
     path::{Path, PathBuf},
     process::{self, Command},
     str::FromStr,
@@ -939,6 +939,28 @@ enum BootProfile {
     Notes,
 }
 
+/// D-16 teardown: SIGKILL the spawned qemu's process GROUP (qemu spawned
+/// group-leader via `process_group(0)`, so pgid == pid), then reap the
+/// leader.  std has no killpg, so the group signal rides kill(1) — POSIX
+/// base, not a new host dependency; `-KILL -- -<pgid>` with the `--`
+/// guard parses on BSD (darwin) and GNU (linux) alike.  A group-kill
+/// failure falls back to the plain child kill so the leader never
+/// survives; `wait` reaps the zombie either way.
+fn kill_process_group(child: &mut process::Child) {
+    let pgid = child.id();
+    let group_killed = Command::new("kill")
+        .arg("-KILL")
+        .arg("--")
+        .arg(format!("-{pgid}"))
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !group_killed {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+}
+
 impl BootTestStep {
     fn new(matches: &clap::ArgMatches) -> Self {
         let arch = Arch::from(matches);
@@ -1004,6 +1026,13 @@ impl BootTestStep {
         let log_abs = workspace().join(&log_rel);
         // A stale socket file from a crashed run would break qemu's bind.
         let _ = std::fs::remove_file(&sock_abs);
+        // D-16 (phase-04 deferred-items #2 — the stale-log poison): destroy
+        // any PRIOR run's serial log BEFORE qemu spawns, so this run's
+        // marker waits can only ever match fresh output.  (The 04-05 verify
+        // rerun matched a pre-seeded log and killed the fresh qemu.)  The
+        // capture re-creates the log at File::create below; a spawn/connect
+        // failure now leaves NO log rather than a stale one.
+        let _ = std::fs::remove_file(&log_abs);
 
         // Spawn qemu with the serial console on the socket chardev.  The
         // machine/cpu/smp/memory/accel/dtb plumbing is the config's, via the
@@ -1043,15 +1072,23 @@ impl BootTestStep {
         if self.verbose {
             println!("Executing {cmd:?}");
         }
+        // D-16: qemu spawns as its own process-group leader (pgid == its
+        // pid) so teardown kills the whole GROUP — no orphaned qemu (or a
+        // helper it spawned) survives the pass/fail/timeout exit paths.
+        // std's process_group(0) is the setpgid(0,0) pre-exec (darwin has
+        // no setsid(1) CLI, but this is the libc call via std) — zero new
+        // dependencies, per the Phase-3 D-11 harness contract.
         let mut child = cmd
+            .process_group(0)
             .spawn()
             .map_err(|e| format!("{}: {}", cmd.get_program().to_string_lossy(), e))?;
 
         let result = self.assert_markers(&mut child, &sock_abs, &log_abs);
 
-        // Always reap the guest and drop the socket file.
-        let _ = child.kill();
-        let _ = child.wait();
+        // Always reap the guest (by process group — D-16) and drop the
+        // socket file.  One teardown site covers the pass, fail, and
+        // timeout paths: assert_markers always returns here.
+        kill_process_group(&mut child);
         let _ = std::fs::remove_file(&sock_abs);
 
         result
@@ -1090,6 +1127,9 @@ impl BootTestStep {
         };
         stream.set_read_timeout(Some(Duration::from_millis(500)))?;
 
+        // The FRESH evidence log — the prior run's log was destroyed
+        // pre-spawn (D-16, phase-04 deferred-#2), so every byte written
+        // here is this run's.
         let mut log_file = std::fs::File::create(log_abs)?;
         let mut capture: Vec<u8> = Vec::new();
         let mut stage = BootStage::Banner;
