@@ -165,10 +165,16 @@ bitstruct! {
 
 #[allow(dead_code)]
 impl EsrEl1IssInstructionAbort {
+    /// Decode the instruction-abort ISS.  Accepts both SameEl (the
+    /// historical kernel-debug use) and LowerEl (04-04's fault handler:
+    /// the first user instruction fetch arrives as EC 0x20).
     pub fn from_esr_el1(r: EsrEl1) -> Option<EsrEl1IssInstructionAbort> {
         r.exception_class_enum()
             .ok()
-            .filter(|ec| *ec == ExceptionClass::InstructionAbortSameEl)
+            .filter(|ec| {
+                *ec == ExceptionClass::InstructionAbortSameEl
+                    || *ec == ExceptionClass::InstructionAbortLowerEl
+            })
             .map(|_| EsrEl1IssInstructionAbort(r.iss()))
     }
 
@@ -180,6 +186,84 @@ impl EsrEl1IssInstructionAbort {
 #[derive(Debug, Eq, PartialEq, TryFromPrimitive)]
 #[repr(u8)]
 pub enum InstructionFaultStatusCode {
+    AddressSizeFaultLevel0 = 0,
+    AddressSizeFaultLevel1 = 1,
+    AddressSizeFaultLevel2 = 2,
+    AddressSizeFaultLevel3 = 3,
+    TranslationFaultLevel0 = 4,
+    TranslationFaultLevel1 = 5,
+    TranslationFaultLevel2 = 6,
+    TranslationFaultLevel3 = 7,
+    AccessFlagFaultLevel0 = 8,
+    AccessFlagFaultLevel1 = 9,
+    AccessFlagFaultLevel2 = 10,
+    AccessFlagFaultLevel3 = 11,
+    PermissionFaultLevel0 = 12,
+    PermissionFaultLevel1 = 13,
+    PermissionFaultLevel2 = 14,
+    PermissionFaultLevel3 = 15,
+    SyncExtAbortNotOnWalkOrUpdate = 16,
+    SyncExtAbortOnWalkOrUpdateLevelNeg1 = 19,
+    SyncExtAbortOnWalkOrUpdateLevel0 = 20,
+    SyncExtAbortOnWalkOrUpdateLevel1 = 21,
+    SyncExtAbortOnWalkOrUpdateLevel2 = 22,
+    SyncExtAbortOnWalkOrUpdateLevel3 = 23,
+    SyncParityOrEccErrOnMemAccessNotOnWalk = 24,
+    SyncParityOrEccErrOnMemAccessOnWalkOrUpdateLevelNeg1 = 27,
+    SyncParityOrEccErrOnMemAccessOnWalkOrUpdateLevel0 = 28,
+    SyncParityOrEccErrOnMemAccessOnWalkOrUpdateLevel1 = 29,
+    SyncParityOrEccErrOnMemAccessOnWalkOrUpdateLevel2 = 30,
+    SyncParityOrEccErrOnMemAccessOnWalkOrUpdateLevel3 = 31,
+    GranuleProtectFaultOnWalkOrUpdateLevelNeg1 = 35,
+    GranuleProtectFaultOnWalkOrUpdateLevel0 = 36,
+    GranuleProtectFaultOnWalkOrUpdateLevel1 = 37,
+    GranuleProtectFaultOnWalkOrUpdateLevel2 = 38,
+    GranuleProtectFaultOnWalkOrUpdateLevel3 = 39,
+    GranuleProtectFaultNotOnWalkOrUpdateLevel = 40,
+    AddressSizeFaultLevelNeg1 = 41,
+    TranslationFaultLevelNeg1 = 43,
+    TlbConflictAbort = 48,
+    UnsupportedAtomicHardwareUpdateFault = 49,
+}
+
+bitstruct! {
+    /// Data-abort ISS decode (EC 0x24/0x25) — mirrors the instruction-abort
+    /// shape above, plus WnR (bit 6, write-not-read) per the donor
+    /// faultarm64's `read = (type & (1<<6)) == 0`.
+    #[derive(Copy, Clone)]
+    pub struct EsrEl1IssDataAbort(pub u32) {
+        dfsc: u8 = 0..6;
+        /// Write-not-read: set when the faulting access is a write.
+        pub wnr: bool = 6;
+        s1ptw: bool = 7;
+        ea: bool = 9;
+        fnv: bool = 10;
+        set: u8 = 11..13;
+    }
+}
+
+#[allow(dead_code)] // the constructor family is exercised by cfg(test) tests; fault.rs constructs directly after its EC match
+impl EsrEl1IssDataAbort {
+    /// Decode the data-abort ISS for a lower-EL (user) data abort — 04-04's
+    /// fault handler owns EC 0x24; same-EL (kernel) data aborts stay on the
+    /// panic path.
+    pub fn from_esr_el1(r: EsrEl1) -> Option<EsrEl1IssDataAbort> {
+        r.exception_class_enum()
+            .ok()
+            .filter(|ec| *ec == ExceptionClass::DataAbortLowerEl)
+            .map(|_| EsrEl1IssDataAbort(r.iss()))
+    }
+
+    pub fn data_fault(&self) -> Result<DataFaultStatusCode, u8> {
+        DataFaultStatusCode::try_from(self.dfsc()).map_err(|e| e.number)
+    }
+}
+
+/// Data-abort fault-status codes (DFSC) — the shared DFSC/IFSC encodings,
+/// same table as InstructionFaultStatusCode above.
+#[derive(Debug, Eq, PartialEq, TryFromPrimitive)]
+#[repr(u8)]
+pub enum DataFaultStatusCode {
     AddressSizeFaultLevel0 = 0,
     AddressSizeFaultLevel1 = 1,
     AddressSizeFaultLevel2 = 2,
@@ -243,5 +327,33 @@ mod tests {
             EsrEl1IssInstructionAbort::from_esr_el1(r).unwrap().instruction_fault().unwrap(),
             InstructionFaultStatusCode::TranslationFaultLevel0
         );
+    }
+
+    #[test]
+    fn test_parse_esr_el1_instruction_abort_lower_el() {
+        // EC 0x20 (32) + IFSC 7 — the shape of a user text demand fault.
+        let r = EsrEl1((32 << 26) | 7);
+        assert_eq!(r.exception_class_enum().unwrap(), ExceptionClass::InstructionAbortLowerEl);
+        assert_eq!(
+            EsrEl1IssInstructionAbort::from_esr_el1(r).unwrap().instruction_fault().unwrap(),
+            InstructionFaultStatusCode::TranslationFaultLevel3
+        );
+    }
+
+    #[test]
+    fn test_parse_esr_el1_data_abort_lower_el() {
+        // EC 0x24 (36) + DFSC 6 + WnR — a user data-write demand fault.
+        let r = EsrEl1((36 << 26) | 0x40 | 6);
+        assert_eq!(r.exception_class_enum().unwrap(), ExceptionClass::DataAbortLowerEl);
+        let iss = EsrEl1IssDataAbort::from_esr_el1(r).unwrap();
+        assert_eq!(iss.data_fault().unwrap(), DataFaultStatusCode::TranslationFaultLevel2);
+        assert!(iss.wnr());
+        // A read fault clears WnR.
+        let r = EsrEl1((36 << 26) | 6);
+        let iss = EsrEl1IssDataAbort::from_esr_el1(r).unwrap();
+        assert!(!iss.wnr());
+        // Same-EL data aborts are kernel faults — the user decoder rejects them.
+        let same_el = EsrEl1((37 << 26) | 6);
+        assert!(EsrEl1IssDataAbort::from_esr_el1(same_el).is_none());
     }
 }

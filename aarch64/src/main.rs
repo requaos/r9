@@ -19,7 +19,11 @@ mod pre_mmu;
 // four-config + clippy gate) so 04-05's runtime wiring starts from
 // known-good code.  The call path (boot_init → exec_into, the first eret
 // into EL0) lands in 04-05 — hence the module-level dead-code allowance
-// until then.
+// until then.  fault.rs carries no allowance: trap()'s EC split routes to
+// it today.
+#[allow(dead_code)]
+mod exec;
+mod fault;
 #[allow(dead_code)]
 mod proc;
 mod registers;

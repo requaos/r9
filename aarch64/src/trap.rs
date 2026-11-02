@@ -2,7 +2,8 @@ use core::fmt;
 
 #[cfg(platform = "virt")]
 use crate::platform;
-use crate::registers::EsrEl1;
+use crate::fault;
+use crate::registers::{EsrEl1, ExceptionClass};
 use aarch64_cpu::registers::FAR_EL1;
 use aarch64_cpu::registers::Readable;
 use port::println;
@@ -94,6 +95,69 @@ const _: () = assert!(core::mem::offset_of!(TrapFrame, pc) == 256);
 const _: () = assert!(core::mem::offset_of!(TrapFrame, psr) == 264);
 const _: () = assert!(core::mem::offset_of!(TrapFrame, interrupt_type) == 272);
 const _: () = assert!(core::mem::size_of::<TrapFrame>() == 288);
+
+impl TrapFrame {
+    /// A zeroed frame — the exec seed base (04-04's exec.rs fills x0/sp/pc
+    /// via seed_el0_entry; everything else stays zero).
+    pub const fn zeroed() -> TrapFrame {
+        TrapFrame {
+            x0: 0,
+            x1: 0,
+            x2: 0,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
+            x8: 0,
+            x9: 0,
+            x10: 0,
+            x11: 0,
+            x12: 0,
+            x13: 0,
+            x14: 0,
+            x15: 0,
+            x16: 0,
+            x17: 0,
+            x18: 0,
+            x19: 0,
+            x20: 0,
+            x21: 0,
+            x22: 0,
+            x23: 0,
+            x24: 0,
+            x25: 0,
+            x26: 0,
+            x27: 0,
+            x28: 0,
+            frame_pointer: 0,
+            link_register: 0,
+            sp: 0,
+            pc: 0,
+            psr: 0,
+            interrupt_type: 0,
+        }
+    }
+
+    /// Seed the EL0-entry shape (9front execregs + touser: R0 = tos pointer,
+    /// SP → the seeded user stack [argc][argv0]…[nil], PC = entry, PSR = 0
+    /// (EL0t), LR = 0).  trap.S's restore path writes SP_EL0/ELR/SPSR from
+    /// exactly these slots on the EL0-bound return (psr & 0xF == 0), so the
+    /// seeded frame erets into EL0 with no special-case asm.
+    pub fn seed_el0_entry(&mut self, tos_va: u64, user_sp: u64, entry: u64) {
+        self.x0 = tos_va;
+        self.sp = user_sp;
+        self.pc = entry;
+        self.psr = 0;
+        self.link_register = 0;
+    }
+
+    /// The interrupted/interrupted-to-be PC — the fault handler prints it in
+    /// its unresolvable marker.
+    pub fn pc(&self) -> u64 {
+        self.pc
+    }
+}
 
 impl fmt::Debug for TrapFrame {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -197,9 +261,30 @@ fn trap(frame: &mut TrapFrame) {
     }
 
     if esr.ec() == 0x15 {
-        // Syscall
-        let syscallid = esr.iss();
-        println!("Syscall {syscallid}");
+        // Syscall — the WIRE syscall number is R0 (frame.x0), NOT the ISS
+        // (aarch64/ABI.md: number in R0, args at SP+8, result in R0).
+        // Real dispatch lands in 04-06; stay loud until then (D-14).
+        println!("syscall {} unimplemented", frame.x0);
+    } else if matches!(
+        esr.exception_class_enum(),
+        Ok(ExceptionClass::InstructionAbortLowerEl) | Ok(ExceptionClass::DataAbortLowerEl)
+    ) {
+        // EC 0x20/0x24: lower-EL instruction/data abort — the demand-paging
+        // path (D-09).  Returns with the fault resolved and the restore path
+        // erets back into EL0; an unresolvable fault kills the process and
+        // parks inside the handler (single-process era).
+        fault::user_fault(frame, esr, far);
+        return;
+    } else if frame.psr & 0xF == 0 {
+        // Other EL0-origin sync (EL0t psr) — the donor faultnote shape: name
+        // it, then kill the process loudly (a handlerless process dies,
+        // never hangs).
+        println!(
+            "user trap: unhandled ec={:#04x} addr={far:#018x} pc={:#018x}",
+            esr.ec(),
+            frame.pc
+        );
+        fault::kill_current_process();
     } else {
         println!("{:#?}", frame);
         // ESR/FAR print from the live trap() locals (D-08) — outside the
