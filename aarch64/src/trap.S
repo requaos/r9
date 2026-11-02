@@ -1,8 +1,8 @@
-// Space reserved for interrupt stack:
+// Space reserved for the interrupt stack:
 //    interruptstackbase to interruptstackbase+INTERRUPTSTACKSZ.
-// Stack base address (bottom):
-//    interruptstackbase+INTERRUPTSTACKSZ
-// Stack pointer will reduce in value as data is pushed to the stack.
+// (04-05: traps no longer switch stacks — the frame goes on the current
+// kernel stack, see handle_interrupt below.  The reservation stays for
+// print_stacks()'s reporting and any future dedicated-irq-stack need.)
 INTERRUPTSTACKSZ = 4096*16
 
 .bss
@@ -45,53 +45,36 @@ interruptstackbase:	.space INTERRUPTSTACKSZ
 // psr, type (aarch64/ABI.md, "Kernel-side enforcement (Phase 4 appendix)").
 // We save all general purpose registers, and these system registers:
 // - sp  @248: the interrupted context's stack pointer.  EL0-origin traps:
-//   SP_EL0, valid at any point after the stack switch.  EL1-origin traps:
-//   the live entry-sp BEFORE the switch — on EL1h, MRS SP_EL0 would yield a
-//   stale user SP, not a kernel-context value (Pitfall 1).
+//   SP_EL0, valid at any point after entry.  EL1h-origin traps: the entry
+//   sp (recomputed as sp+288 after the frame alloc — Pitfall 1).
 // - pc  @256: ELR_EL1 (exception link register — interrupted address)
 // - psr @264: SPSR_EL1 (saved program status)
 // - type @272: the vector index 0-15 (kernel-side informational)
 // ESR_EL1/FAR_EL1 are NOT saved in the frame: trap() reads them live at
 // entry and passes them to dispatchers as arguments (D-05).
 //
+// The frame goes on the CURRENT kernel stack — no stack switch (the 9front
+// arm64 shape): EL1h-origin traps land on the interrupted kernel stack, and
+// EL0-origin traps land on SP_EL1, which trap_return leaves at the trapping
+// process's kernel stack top (main9's stack before the first exec).  04-05
+// replaced the old switch-to-interruptstackbase entry: it clobbered x0 with
+// the stack address BEFORE the first store (every frame's x0 slot held the
+// interrupt stack top — fatal to the SVC number and to EL0 returns), and
+// the switched sp was never restored on EL1h returns (harmless only because
+// the wfi idle loop was the sole EL1 resident).  With no switch, no scratch
+// register is needed before the first store and every slot stays truthful.
+//
 // The second macro parameter selects the per-origin sp capture: 1 for
 // EL1-origin vectors (el1t/el1h), 0 for EL0-origin vectors (el0_64/el0_32).
 .macro handle_interrupt type, from_el1
-.if \from_el1
-	// Capture the live entry-sp BEFORE the stack switch destroys it.  x9
-	// is the carrier, so park the interrupted x9 on the interrupted
-	// kernel stack first and recover it into its frame slot below — the
-	// published Ureg keeps every slot truthful (and the restore pop
-	// doesn't resurrect the carrier value into the resumed context).
-	sub	sp, sp, #16
-	str	x9, [sp]
-	mov	x9, sp
-	add	x9, x9, #16
-.endif
+	sub	sp, sp, #288
 
-	// Switch to the interrupt stack
-	ldr	x0, =interruptstackbase
-	add	x0, x0, #INTERRUPTSTACKSZ
-	mov	sp, x0
-
-	sub 	sp, sp, #288
-
-	// Caller-saved registers, FP
+	// Caller-saved registers, FP — nothing is clobbered before the saves.
 	stp 	x0, x1, [sp, #16 * 0]
 	stp 	x2, x3, [sp, #16 * 1]
 	stp	x4, x5, [sp, #16 * 2]
 	stp	x6, x7, [sp, #16 * 3]
-.if \from_el1
-	str	x8, [sp, #16 * 4]
-	// Recover the interrupted x9 into its frame slot (x3 is free — its
-	// slot was stored above).  This must precede the type store: when the
-	// trap re-enters on the interrupt stack itself, the parked bytes ARE
-	// this frame's type slot (entry-sp == interruptstackbase+SZ there).
-	ldr	x3, [x9, #-16]
-	str	x3, [sp, #16 * 4 + 8]
-.else
 	stp	x8, x9, [sp, #16 * 4]
-.endif
 	stp	x10, x11, [sp, #16 * 5]
 	stp	x12, x13, [sp, #16 * 6]
 	stp	x14, x15, [sp, #16 * 7]
@@ -103,32 +86,52 @@ interruptstackbase:	.space INTERRUPTSTACKSZ
 	stp	x26, x27, [sp, #16 * 13]
 	stp	x28, x29, [sp, #16 * 14]
 
-	// LR @240, sp @248
+	// LR @240, then the per-origin sp @248
+	str	x30, [sp, #16 * 15]
 .if \from_el1
-	stp	x30, x9, [sp, #16 * 15]
+	add	x30, sp, #288		// EL1h: the entry sp
 .else
-	mrs	x9, sp_el0
-	stp	x30, x9, [sp, #16 * 15]
+	mrs	x30, sp_el0		// EL0: the user sp
 .endif
+	str	x30, [sp, #16 * 15 + 8]
 
-	// pc @256 (ELR_EL1), psr @264 (SPSR_EL1)
-	mrs	x1, elr_el1
-	mrs	x10, spsr_el1
-	stp	x1, x10, [sp, #16 * 16]
+	// pc @256 (ELR_EL1), psr @264 (SPSR_EL1) — x30 is the scratch now
+	// (its slot was stored above)
+	mrs	x30, elr_el1
+	str	x30, [sp, #16 * 16]
+	mrs	x30, spsr_el1
+	str	x30, [sp, #16 * 16 + 8]
 
 	// Interrupt type @272
-	ldr	x3, =\type
-	str	x3, [sp, #16 * 17]
+	ldr	x30, =\type
+	str	x30, [sp, #16 * 17]
 
 	// Pass pointer to TrapFrame (on stack) as the first arg
 	mov	x0, sp
 	bl	trap_unsafe
 
-	// Restore system registers from the frame (Pitfall 2): pc/psr always;
-	// sp only when the frame returns to EL0t (psr & 0xF == 0) — an IRQ
-	// that interrupted EL1 kernel code must never scribble a kernel
-	// address into SP_EL0 (9front vtrap1/noteret restore asymmetry).
-	// x9/x10 are scratch here; their frame slots restore in the pop below.
+	// The restore tail is factored out of line (04-05): shared with exec's
+	// first EL0 entry below.  sp still names the frame here.
+	b	trap_return
+.endm
+
+// 04-05: the shared trap-return tail — restore the frame at sp and eret.
+// The handle_interrupt macro branches here after trap_unsafe, and exec's
+// first EL0 entry arrives via the trap_return_exec wrapper at the bottom;
+// this eret path is the ONLY way EL0 is ever entered (swtch never enters
+// EL0 — D-12 era rule).
+//
+// Rust-callable contract (declared in trap.rs):
+//	pub extern "C" fn trap_return(frame: *mut TrapFrame) -> !
+//
+// Restore asymmetry (04-RESEARCH.md Pitfall 2): pc/psr always; SP_EL0 only
+// when the frame is EL0t-bound (psr & 0xF == 0) — an IRQ that interrupted
+// EL1 kernel code must never scribble a kernel address into SP_EL0 (the
+// 9front vtrap1/noteret restore asymmetry).  x9/x10 are scratch here; their
+// frame slots restore in the pop below.
+.globl	trap_return
+trap_return:
+	// Restore system registers from the frame.
 	ldr	x10, [sp, #16 * 16 + 8]	// psr
 	tst	x10, #0xf
 	b.ne	1f			// not EL0t — skip the SP_EL0 write
@@ -161,7 +164,15 @@ interruptstackbase:	.space INTERRUPTSTACKSZ
 	add	sp, sp, #288
 
 	eret
-.endm
+
+// exec's first EL0 entry (04-05): x0 = the seeded forkret-shaped frame on
+// the proc's kernel stack (exec.rs seed_exec_frame); move it into sp and
+// ride the shared tail above.  Bound in Rust as trap_return (trap.rs).
+.globl	trap_return_exec
+trap_return_exec:
+	mov	sp, x0
+	b	trap_return
+
 
 /// The exception vector table for exceptions taken to EL1.
 /// Each entry is 16 instructions/128 bytes.

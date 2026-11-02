@@ -64,9 +64,15 @@ pub fn user_fault(frame: &mut TrapFrame, esr: EsrEl1, far: u64) {
 
     let va = far as usize;
     // T-04-09: a kernel-context address here means a kernel bug — panic
-    // loudly rather than recurse into the handler's own machinery.
+    // loudly rather than recurse into the handler's own machinery.  The
+    // frame's pc/sp/psr name the faulting instruction and origin EL.
     if va >= KZERO {
-        panic!("user fault: kernel-context address class={class} addr={va:#x}");
+        panic!(
+            "user fault: kernel-context address class={class} addr={va:#x} pc={:#x} sp={:#x} psr={:#x}",
+            frame.pc(),
+            frame.sp(),
+            frame.psr()
+        );
     }
     let proc_ptr = proc::current_proc();
     if proc_ptr.is_null() {

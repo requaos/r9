@@ -15,12 +15,13 @@ mod pagealloc;
 mod param;
 mod platform;
 mod pre_mmu;
-// 04-04 machinery: compiled into every build config now (the plan's
-// four-config + clippy gate) so 04-05's runtime wiring starts from
-// known-good code.  The call path (boot_init → exec_into, the first eret
-// into EL0) lands in 04-05 — hence the module-level dead-code allowance
-// until then.  fault.rs carries no allowance: trap()'s EC split routes to
-// it today.
+// 04-04 machinery: compiled into every build config (the plan's four-config
+// + clippy gate).  04-05 wired the runtime call path under dev_exec
+// (exec_bootstrap below); the module-level dead-code allowance stays because
+// the non-exec configs compile the machinery without calling it, and some
+// Proc fields (note_queue, notify_handler, wait_record, context) are carried
+// for 04-07/04-08.  fault.rs carries no allowance: trap()'s EC split routes
+// to it today.
 #[allow(dead_code)]
 mod exec;
 mod fault;
@@ -35,8 +36,6 @@ mod vmdebug;
 extern crate alloc;
 
 use alloc::boxed::Box;
-#[cfg(not(platform = "virt"))]
-use core::ptr::null_mut;
 use param::KZERO;
 use port::fdt::DeviceTree;
 use port::mem::{PhysAddr, PhysRange, VirtRange};
@@ -218,8 +217,9 @@ pub extern "C" fn main9(dtb_va: usize) {
 
     // The console is live now: emit the D-01 probe marker + the 04-02 paqfs
     // proof, AFTER the banner (04-02 acceptance pins banner-first emission
-    // order on the serial evidence).
-    match initrd {
+    // order on the serial evidence).  The mapped image slice is kept for
+    // 04-05's dev_exec orchestration (devroot's mount source).
+    let initrd_img: Option<&'static [u8]> = match initrd {
         Some((start, end, size, physrange)) => {
             println!("initrd: start={start:#x} end={end:#x} size={size}");
 
@@ -269,9 +269,16 @@ pub extern "C" fn main9(dtb_va: usize) {
                     panic!("paqfs: {err}");
                 }
             }
+            Some(img)
         }
-        None => println!("initrd: none"),
-    }
+        None => {
+            println!("initrd: none");
+            None
+        }
+    };
+    // Consumed only by the dev_exec exec orchestration below.
+    #[cfg(not(dev_exec))]
+    let _ = initrd_img;
 
     print_stacks();
 
@@ -312,28 +319,7 @@ pub extern "C" fn main9(dtb_va: usize) {
     // vmdebug::print_recursive_tables(RootPageTableType::Kernel);
     // vmdebug::print_recursive_tables(RootPageTableType::User);
 
-    // User page table experiment — raspi-only; the virt userspace-exec path is
-    // Phase 4 scope (research OQ-3).
-    #[cfg(not(platform = "virt"))]
-    {
-        println!("Set up a user process");
-
-        unsafe {
-            vm::init_user_page_tables();
-            vm::switch(vm::user_pagetable(), RootPageTableType::User);
-        }
-    }
-
-    // test_sysexit is raspi-only for the same reason — Phase 4 revisits it.
-    #[cfg(not(platform = "virt"))]
-    test_sysexit();
-
     vmdebug::print_recursive_tables(RootPageTableType::Kernel);
-    // The user page table exists only on raspi this phase (init_user_page_tables
-    // is gated with the user-page-table experiment above); walking it on virt
-    // dereferences an unmapped recursive root.  Phase 4 revisits.
-    #[cfg(not(platform = "virt"))]
-    vmdebug::print_recursive_tables(RootPageTableType::User);
 
     let _b = Box::new("ddododo");
 
@@ -368,9 +354,16 @@ pub extern "C" fn main9(dtb_va: usize) {
 
         trap::unmask_irq();
 
-        // Idle loop: wfi wakes on each tick; trap()'s IRQ branch erets back
-        // here.  Prints nothing, which is what makes tick()'s println from
-        // IRQ context safe against the Console lock (see timer.rs).
+        // 04-05 (R9-03 runtime gate): under dev_exec the boot continues into
+        // the first-process exec orchestration and never returns — EL0 is
+        // entered through trap_return with the seeded forkret-shaped frame
+        // (swtch never enters EL0).  Without dev_exec the virt idle loop
+        // stands: wfi wakes on each tick; trap()'s IRQ branch erets back
+        // here.  It prints nothing, which is what makes tick()'s println
+        // from IRQ context safe against the Console lock (see timer.rs).
+        #[cfg(dev_exec)]
+        exec_bootstrap(initrd_img);
+        #[cfg(not(dev_exec))]
         loop {
             unsafe { core::arch::asm!("wfi") };
         }
@@ -385,62 +378,60 @@ pub extern "C" fn main9(dtb_va: usize) {
 
 mod runtime;
 
-#[cfg(not(platform = "virt"))]
-fn test_sysexit() {
-    let page_table = vm::user_pagetable();
+/// 04-05 (R9-03 runtime gate; D-04/D-09/D-10/D-15): the first-process exec
+/// orchestration, entered after the virt IRQ arming + unmask block (the
+/// GIC → timer → PL011 RX → unmask order is preserved above).  Requires the
+/// D-01 initrd discovery to have mapped an image — dev_exec without an
+/// initrd is a config bug and panics with a named message.  Mounts the
+/// image as devroot, sources /init through it (walk → open OEXEC — one
+/// mechanism), builds the first proc, execs, tears down the TTBR0 identity
+/// map (WR-01 closure; Pitfall-11 order), then erets into EL0 via
+/// trap_return with the seeded forkret frame.  Never returns.
+#[cfg(dev_exec)]
+fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
+    let img = initrd_img.unwrap_or_else(|| {
+        panic!("dev_exec: config carries no initrd image (set [qemu] initrd to target/bootfs.paq)")
+    });
 
-    // Allocate pages for a user process
-    let user_text = {
-        let user_text = pagealloc::allocate_virtpage(
-            page_table,
-            "usertext",
-            Entry::rw_user_text(),
-            VaMapping::Addr(0x1000),
-            RootPageTableType::User,
-        )
-        .expect("couldn't allocate user_text");
+    // The D-09/Phase-2-D-03 evidence line: the probed cache geometry the
+    // fault handler's icache maintenance derives from (never hardcoded).
+    let ctr: u64;
+    unsafe { core::arch::asm!("mrs {}, ctr_el0", out(reg) ctr) };
+    println!("ctr_el0: {ctr:#x}");
 
-        // Machine code and assembly to call syscall exit
-        //   00 00 80 D2    ; mov x0, #0
-        //   21 00 80 D2    ; mov x1, #1
-        //   61 00 00 D4    ; svc #3
-        let proc_text_bytes: [u8; 12] =
-            [0x00, 0x00, 0x80, 0xd2, 0x21, 0x00, 0x80, 0xd2, 0x61, 0x00, 0x00, 0xd4];
-        user_text.0[..proc_text_bytes.len()].copy_from_slice(&proc_text_bytes);
-        user_text
-    };
-    let user_text_va = user_text as *const _ as u64;
+    // D-15: the initrd paqfs is the root tree; exec sources /init through
+    // the devroot walk/open path (one mechanism).
+    let root =
+        port::devroot::mount_initrd(img).unwrap_or_else(|err| panic!("devroot: mount: {err}"));
+    let root_chan =
+        root.attach_root().unwrap_or_else(|err| panic!("devroot: attach: {err}"));
+    let init_chan =
+        root.walk(&root_chan, b"init").unwrap_or_else(|err| panic!("devroot: walk /init: {err}"));
+    let init_open = root
+        .open(&init_chan, port::devroot::OEXEC)
+        .unwrap_or_else(|err| panic!("devroot: open /init: {err}"));
+    let bin = root.entry(&init_open).unwrap_or_else(|err| panic!("devroot: /init entry: {err}"));
+    println!("devroot: /init open ({} bytes)", bin.length);
 
-    let user_stack = pagealloc::allocate_virtpage(
-        page_table,
-        "userstack",
-        Entry::rw_user_data(),
-        VaMapping::Addr(KZERO - 0x1000),
-        RootPageTableType::User,
-    )
-    .expect("couldn't allocate user_stack");
+    // Build the first process and exec /init: a.out parse + segment record +
+    // exactly two eager pages (the seed stack and the zeroed Tos page) + the
+    // forkret frame (04-04 machinery).  Everything else faults in (D-09).
+    let proc = proc::new_user_proc("init").unwrap_or_else(|err| panic!("proc: {err}"));
+    exec::exec_into(proc, img, &bin, "init", &[b"init"])
+        .unwrap_or_else(|err| panic!("exec: /init: {err}"));
+    let frame = unsafe { &*proc.frame };
+    println!("exec: entering EL0 pc={:#x} sp={:#x}", frame.pc(), frame.sp());
 
-    // Executing user process!
-    println!("Executing user process");
-    let proc_stack = unsafe { core::slice::from_raw_parts_mut(user_stack, 4096) };
+    // D-10 (closes Phase-3 WR-01): the proc's fully-built root table REPLACES
+    // the TTBR0 identity map.  Pitfall-11 order: the table is complete (its
+    // recursive slot-511 self-entry was written at construction and the seed
+    // pages are mapped) BEFORE the switch; the console print immediately
+    // after proves all runtime MMIO is TTBR1-side — a dead console here is
+    // an instant visible failure (T-04-10).
+    unsafe { vm::switch(&*proc.root_table, RootPageTableType::User) };
+    println!("exec: ttbr0 switched, console alive");
 
-    // Initialise a Context struct on the process stack, at the end of the proc_stack_buffer.
-    let ps_addr = &proc_stack as *const _ as u64;
-    let proc_stack_initial_ctx = ps_addr + (4096 - size_of::<swtch::Context>()) as u64;
-    let proc_context_ptr: *mut swtch::Context = proc_stack_initial_ctx as *mut swtch::Context;
-
-    // Need to push a context object onto the stack, with x30 populated at the
-    // address of proc_textbuf
-    let proc_context_ref: &mut swtch::Context = unsafe { &mut *proc_context_ptr };
-    proc_context_ref.set_stack_pointer(&proc_context_ptr as *const _ as u64);
-    proc_context_ref.set_return(user_text_va);
-
-    let mut kernel_context: *mut swtch::Context = null_mut();
-    let kernel_context_ptr: *mut *mut swtch::Context = &mut kernel_context;
-
-    //println!("proc ctx: {:#?}", proc_context_ref);
-
-    unsafe { swtch::swtch(kernel_context_ptr, &*proc_context_ptr) };
-
-    //println!("x30: {:#016x}", proc_context_ref.x30);
+    let frame_ptr = proc.frame;
+    proc::set_current_proc(proc);
+    unsafe { trap::trap_return(frame_ptr) }
 }

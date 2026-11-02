@@ -11,6 +11,7 @@ pub mod allocator;
 pub mod bitmapalloc;
 pub mod dat;
 pub mod devcons;
+pub mod devroot;
 pub mod fdt;
 pub mod maths;
 pub mod mcslock;

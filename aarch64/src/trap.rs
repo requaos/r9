@@ -11,6 +11,16 @@ use port::println;
 #[cfg(not(test))]
 core::arch::global_asm!(include_str!("trap.S"));
 
+unsafe extern "C" {
+    /// 04-05: exec's first EL0 entry — eret into EL0 with the seeded
+    /// forkret-shaped frame (the ONLY way EL0 is ever entered; swtch never
+    /// enters EL0).  Defined in trap.S (symbol trap_return_exec): moves the
+    /// frame pointer into sp and rides the shared restore tail, so the
+    /// seeded frame's psr=0 (EL0t) selects the SP_EL0 write.
+    #[link_name = "trap_return_exec"]
+    pub fn trap_return(frame: *mut TrapFrame) -> !;
+}
+
 pub fn init() {
     #[cfg(not(test))]
     unsafe {
@@ -157,6 +167,19 @@ impl TrapFrame {
     pub fn pc(&self) -> u64 {
         self.pc
     }
+
+    /// The interrupted context's stack pointer (SP_EL0 on EL0 traps) — the
+    /// exec entry-evidence print mirrors pc() (04-04's precedent for adding
+    /// minimal getters as consumers need them).
+    pub fn sp(&self) -> u64 {
+        self.sp
+    }
+
+    /// The saved program status (SPSR_EL1) — the origin EL lives in the low
+    /// nibble (0 = EL0t), which the kernel-context-fault panic prints.
+    pub fn psr(&self) -> u64 {
+        self.psr
+    }
 }
 
 impl fmt::Debug for TrapFrame {
@@ -209,20 +232,30 @@ pub extern "C" fn trap_unsafe(frame: *mut TrapFrame) {
     unsafe { trap(frame.as_mut().unwrap()) }
 }
 
-// Interrupt-type constants, matching the .equ block in trap.S (lines 17-25).
+// Interrupt-type constants, matching the .equ block in trap.S (lines 17-35).
 #[cfg(platform = "virt")]
 const IRQ_INVALID_EL1T: u64 = 1;
 #[cfg(platform = "virt")]
 const IRQ_INVALID_EL1H: u64 = 5;
+/// IRQ while at EL0 (64-bit) — arrives once a process runs under dev_exec
+/// (the timer tick preempts userland).  Inert elsewhere: with no EL0 in
+/// existence the vector never fires.
+#[cfg(platform = "virt")]
+const IRQ_INVALID_EL0_64: u64 = 9;
 
 /// IRQ dispatch (virt): ack via the GIC, dispatch, EOI, and RETURN -- trap.S's
-/// existing restore + eret path resumes the interrupted context (the wfi
-/// loop).  The spurious INTID 1023 is acked but never EOI'd; any other
-/// unknown INTID is logged once and still EOI'd so a stray interrupt can't
-/// wedge the kernel.  The INTID 33 (PL011 RX) arm lands with its handler.
+/// shared trap_return tail erets back to the interrupted context (the wfi
+/// idle loop at EL1, or userland at EL0 under dev_exec — the unified frame
+/// save/restore makes both correct).  The spurious INTID 1023 is acked but
+/// never EOI'd; any other unknown INTID is logged once and still EOI'd so a
+/// stray interrupt can't wedge the kernel.  The INTID 33 (PL011 RX) arm
+/// lands with its handler.
 #[cfg(platform = "virt")]
 fn dispatch_irq(frame: &TrapFrame) -> bool {
-    if frame.interrupt_type != IRQ_INVALID_EL1T && frame.interrupt_type != IRQ_INVALID_EL1H {
+    if frame.interrupt_type != IRQ_INVALID_EL1T
+        && frame.interrupt_type != IRQ_INVALID_EL1H
+        && frame.interrupt_type != IRQ_INVALID_EL0_64
+    {
         return false;
     }
 

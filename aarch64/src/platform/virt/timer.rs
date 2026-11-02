@@ -76,10 +76,18 @@ fn arm() {
 ///
 /// Forward note: printing from IRQ context is safe ONLY because post-boot
 /// nothing else holds the Console lock (main9's idle loop is wfi and prints
-/// nothing).  If a future phase adds main-loop printing, this print must move
-/// to a lock-free path (research P8) -- as rx_irq_echo already is.
+/// nothing).  Under dev_exec that invariant ends — main9's exec orchestration
+/// prints after unmask_irq, and userland-era syscalls print from trap
+/// context — so the tick print is gated off there (04-RESEARCH.md Pitfall 3;
+/// the OQ-4 resolution's gating mechanism, pulled forward to the first config
+/// that needs it).  The tick itself keeps re-arming in every config: the
+/// D-13 preemption machinery stays live, and the Phase-3 virt profile (no
+/// dev list) keeps its tick markers.
 pub fn tick() {
     arm();
     let n = TICKS.fetch_add(1, Ordering::Relaxed);
+    #[cfg(not(dev_exec))]
     println!("tick {n}");
+    #[cfg(dev_exec)]
+    let _ = n;
 }
