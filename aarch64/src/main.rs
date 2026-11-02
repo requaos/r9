@@ -409,11 +409,16 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
     unsafe { core::arch::asm!("mrs {}, ctr_el0", out(reg) ctr) };
     println!("ctr_el0: {ctr:#x}");
 
+    // 04-08: devproc-lite's note-post hook — the arch-side half of the
+    // /proc device (port can't see PROC_TABLE; the same dependency
+    // inversion as devcons's Console::set_uart).  Before the first exec so
+    // a /proc/N/note write from the very first process resolves.
+    port::devproc::set_post_hook(proc::post_note);
+
     // D-15: the initrd paqfs is the root tree; exec sources /init through
     // the devroot walk/open path (one mechanism).
     let root =
-        port::devroot::mount_initrd(img).unwrap_or_else(|err| panic!("devroot: mount: {err}"));
-    let root_chan =
+        port::devroot::mount_initrd(img).unwrap_or_else(|err| panic!("devroot: mount: {err}"));    let root_chan =
         root.attach_root().unwrap_or_else(|err| panic!("devroot: attach: {err}"));
     let init_chan =
         root.walk(&root_chan, b"init").unwrap_or_else(|err| panic!("devroot: walk /init: {err}"));

@@ -9,11 +9,11 @@
 //!
 //! The implemented set is EXACTLY the 04-01 donor trace
 //! (04-01-d14-trace.txt: 51 pwrite, 14 open, 50 pread, 4 close, 8 exits)
-//! plus D-14's named core member EXEC(7, Task 2 wires it) — zero guessed
-//! syscalls.  The trace lists NO brk_(24)/segbrk(12) (the D-14 fmt/pool
-//! watch item settled by evidence), so they stay None.  Every other number
-//! prints `syscall N unimplemented` and returns -1 — loud, never wedged
-//! (D-14).
+//! plus D-14's named SC#4 core members EXEC(7), RFORK(19), AWAIT(47) and
+//! the 04-08 notes pair NOTIFY(28)/NOTED(29) — zero guessed syscalls.  The
+//! trace lists NO brk_(24)/segbrk(12) (the D-14 fmt/pool watch item settled
+//! by evidence), so they stay None.  Every other number prints
+//! `syscall N unimplemented` and returns -1 — loud, never wedged (D-14).
 //!
 //! T-04-11: EVERY user-VA argument (the Sargs block itself, buffers, path
 //! strings, argv arrays) is validated against the calling proc's segment
@@ -33,12 +33,13 @@
 
 use alloc::vec::Vec;
 
-use port::dat::{Chan, DEV_CONS, DEV_ROOT, OEXEC, OMASK, OREAD, OTRUNC};
+use port::dat::{Chan, DEV_CONS, DEV_PROC, DEV_ROOT, OEXEC, OMASK, OREAD, OTRUNC};
 use port::println;
 
 use crate::exec;
 use crate::platform;
 use crate::proc::{self, ERRMAX, Proc, ProcState};
+use crate::trap;
 use crate::trap::TrapFrame;
 
 // The frozen syscall numbers (Harvey sys/src/libc/9syscall/sys.h).
@@ -47,6 +48,8 @@ const EXEC: u64 = 7;
 const EXITS: u64 = 8;
 const OPEN: u64 = 14;
 const RFORK: u64 = 19;
+const NOTIFY: u64 = 28;
+const NOTED: u64 = 29;
 const ERRSTR: u64 = 41;
 const AWAIT: u64 = 47;
 const PREAD: u64 = 50;
@@ -71,9 +74,10 @@ type Handler = fn(&mut TrapFrame, &mut Proc) -> u64;
 /// The dispatch table — Harvey sys.h 0–54 verbatim as Option<fn> entries.
 /// None → loud unimplemented at dispatch time (D-14).  The implemented set
 /// is the 04-01 measured trace {pwrite(51), open(14), pread(50), close(4),
-/// exits(8)} plus D-14's named core members EXEC(7) and the 04-07 process
-/// pair RFORK(19)/AWAIT(47) — nothing else; the trace carries no
-/// brk_(24)/segbrk(12), so they stay None.
+/// exits(8)} plus D-14's named SC#4 core members EXEC(7), the 04-07 process
+/// pair RFORK(19)/AWAIT(47), and 04-08's notes pair NOTIFY(28)/NOTED(29) —
+/// nothing else; the trace carries no brk_(24)/segbrk(12), so they stay
+/// None.
 static DISPATCH: [Option<Handler>; 55] = {
     let mut t: [Option<Handler>; 55] = [None; 55];
     t[CLOSE as usize] = Some(sys_close);
@@ -81,6 +85,8 @@ static DISPATCH: [Option<Handler>; 55] = {
     t[EXITS as usize] = Some(sys_exits);
     t[OPEN as usize] = Some(sys_open);
     t[RFORK as usize] = Some(sys_rfork);
+    t[NOTIFY as usize] = Some(sys_notify);
+    t[NOTED as usize] = Some(sys_noted);
     t[ERRSTR as usize] = Some(sys_errstr);
     t[AWAIT as usize] = Some(sys_await);
     t[PREAD as usize] = Some(sys_pread);
@@ -108,6 +114,14 @@ pub fn dispatch(frame: &mut TrapFrame) {
             -1i64 as u64
         }
     };
+    // NOTED's success path rewrote the live frame (the restored Ureg IS
+    // the result) — the donor dosyscall special case (9front sysproc.c
+    // `if(scallnr == NOTED) ... return 1`): dispatch returns WITHOUT the
+    // frame.x0 writeback.  NOTED's ERROR returns (-1) left the frame
+    // untouched and DO write back; NDFLT diverged inside the handler.
+    if n == NOTED && result != -1i64 as u64 {
+        return;
+    }
     // EXITS never reaches here (it parks divergent); every other handler's
     // result rides frame.x0 back to user R0.
     frame.x0 = result;
@@ -196,6 +210,17 @@ fn sys_pwrite(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     match dev {
         DEV_CONS => platform::devcons::cons_write(unsafe { user_slice(buf, n) }),
         DEV_ROOT => err(proc, "devroot: read-only filesystem"),
+        DEV_PROC => {
+            // devproc-lite (04-08): the note append is the whole write —
+            // the chan's qid names the target pid; offsets don't apply.
+            let Some(chan) = proc.fd(fd) else {
+                return err(proc, "pwrite: bad fd");
+            };
+            match port::devproc::write(chan, unsafe { user_slice(buf, n) }) {
+                Ok(wrote) => wrote,
+                Err(msg) => err(proc, msg),
+            }
+        }
         _ => err(proc, "pwrite: unknown device"),
     }
 }
@@ -236,7 +261,103 @@ fn sys_pread(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
                 Err(msg) => err(proc, msg),
             }
         }
+        DEV_PROC => err(proc, "devproc: note files are write-only"),
         _ => err(proc, "pread: unknown device"),
+    }
+}
+
+/// NOTIFY(28): handler VA (a full-width pointer arg).  nil clears the
+/// handler (libc atnotify's notify(0)); otherwise the VA must be 4-aligned
+/// and land inside the proc's OWN text segment (T-04-17: a process can
+/// never install a handler pointing outside its image — the EL0 handler
+/// redirect trusts only validated segment-internal VAs).  Stored on the
+/// proc; trap.rs's deliver_notes redirects into it at the return-to-EL0
+/// boundary.
+fn sys_notify(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
+    let Some(args) = sargs(frame, proc, 1) else {
+        return err(proc, "notify: bad argument block");
+    };
+    let handler = args[0];
+    if handler == 0 {
+        proc.notify_handler = None;
+        return 0;
+    }
+    if handler & 3 != 0 {
+        return err(proc, "notify: misaligned handler");
+    }
+    let in_text = proc
+        .segments
+        .as_ref()
+        .is_some_and(|s| s.text.0.contains(&(handler as usize)));
+    if !in_text {
+        return err(proc, "notify: handler outside text segment");
+    }
+    proc.notify_handler = Some(handler);
+    0
+}
+
+/// NOTED(29): action (int-width arg — width discipline).  NCONT(0)/NRSTR(3)
+/// restore the saved Ureg (the 280 bytes deliver_notes pushed — the frozen
+/// sizeof, NOT r9's 288 stride) over the live frame in place; the success
+/// return takes dispatch's no-writeback special path (the donor dosyscall
+/// NOTED case).  NDFLT(1) exits with the delivered note message.  NSAVE(2)
+/// is loud-unimplemented (the smoke's notejmp path uses NCONT).
+fn sys_noted(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
+    let Some(args) = sargs(frame, proc, 1) else {
+        return err(proc, "noted: bad argument block");
+    };
+    let action = args[0] & 0xffff_ffff; // noted's action is an int
+    match action {
+        trap::NCONT | trap::NRSTR => {
+            // The saved ureg is kernel-tracked (the donor's up->noteureg):
+            // libc's noted(action) passes NO pointer.
+            let nureg = proc.note_ureg;
+            if nureg == 0 {
+                return err(proc, "noted: not notified");
+            }
+            if proc.validate_user_range(nureg, trap::UREG_SIZE as u64, false).is_err() {
+                return err(proc, "noted: bad saved ureg");
+            }
+            // Validate the resume target BEFORE committing the restore
+            // (the donor noted()'s okaddr(pc)+okaddr(sp)+alignment checks,
+            // pre-copy so a bad saved frame leaves the live frame
+            // untouched and the -1 writeback is truthful).
+            let saved_sp = unsafe { ((nureg + 248) as *const u64).read() }; // ureg->sp
+            let saved_pc = unsafe { ((nureg + 256) as *const u64).read() }; // ureg->pc
+            let in_text = proc
+                .segments
+                .as_ref()
+                .is_some_and(|s| s.text.0.contains(&(saved_pc as usize)));
+            if saved_pc & 3 != 0 || saved_sp & 7 != 0 || !in_text {
+                return err(proc, "noted: bad resume frame");
+            }
+            if proc.validate_user_range(saved_sp, 8, true).is_err() {
+                return err(proc, "noted: bad resume stack");
+            }
+            // Restore: the saved 280 bytes over the live frame's 35 fields.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    nureg as *const u8,
+                    frame as *mut TrapFrame as *mut u8,
+                    trap::UREG_SIZE,
+                );
+            }
+            // Allow the next note (the donor's up->notified = 0).
+            proc.note_ureg = 0;
+            0
+        }
+        trap::NDFLT => {
+            // Exit with the delivered note's message (the donor pexit
+            // shape).  Diverges.
+            let msg = proc.last_note;
+            let len = proc.last_note_len;
+            exit_tail(proc, &msg[..len]);
+        }
+        trap::NSAVE => {
+            println!("noted: NSAVE unimplemented");
+            err(proc, "noted: NSAVE unimplemented")
+        }
+        _ => err(proc, "noted: bad action"),
     }
 }
 
@@ -260,6 +381,21 @@ fn sys_open(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         }
         // Qid path 1 = the cons file (the preopen convention, proc.rs).
         Chan::new(DEV_CONS, port::dat::Qid { path: 1, vers: 0, typ: 0 }, access)
+    } else if path == b"/proc" || path.starts_with(b"/proc/") {
+        // devproc-lite (04-08, D-16): the per-process note channel.  attach
+        // lands at the /proc root; the remaining components walk it; the
+        // device enforces its write-only note-file scope at open.
+        let mut c = port::devproc::attach();
+        for comp in path[4..].split(|&b| b == b'/').filter(|c| !c.is_empty()) {
+            c = match port::devproc::walk(&c, comp) {
+                Ok(c) => c,
+                Err(msg) => return err(proc, msg),
+            };
+        }
+        match port::devproc::open(&c, access) {
+            Ok(c) => c,
+            Err(msg) => return err(proc, msg),
+        }
     } else {
         // devroot: the initrd root tree is read-only — any write-side
         // intent (OWRITE/ORDWR access, OTRUNC) fails.
@@ -513,16 +649,26 @@ fn sys_exits(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     } else {
         copy_user_str(proc, msg_va, ERRMAX).unwrap_or_default()
     };
+    exit_tail(proc, &msg);
+}
 
+/// The shared exit tail (04-08): sys_exits's user-message path and the
+/// note machinery's kernel-message kills (deliver_notes's no-handler kill,
+/// NOTED's NDFLT) converge here.  Frees the user mappings, marks Moribund,
+/// prints the exit line, posts + wakes the parent, frees the root-table
+/// page and the kstack LAST (the handler is still running on it — safe
+/// because the swtch save writes only the PROC_TABLE-resident context),
+/// then the all-exited halt or the sched-loop hand-off.  Diverges.
+pub(crate) fn exit_tail(proc: &mut Proc, msg: &[u8]) -> ! {
     proc.free_user_mappings();
     proc.state = ProcState::Moribund;
     let pid = proc.pid;
-    println!("process {pid} exited: \"{}\"", core::str::from_utf8(&msg).unwrap_or("<bad utf8>"));
+    println!("process {pid} exited: \"{}\"", core::str::from_utf8(msg).unwrap_or("<bad utf8>"));
     // 04-07: post the wait record to the parent and wake it BEFORE the
     // final frees (the record is kernel memory in the parent's table slot;
     // RFNOWAIT children post nothing, donor-style).
     if !proc.nowait {
-        proc::post_wait_record(proc.parent, pid, &msg);
+        proc::post_wait_record(proc.parent, pid, msg);
     }
     // Last frees: the root-table page and the kstack pages.  The handler is
     // STILL running on the kstack and TTBR0 still names the root table —

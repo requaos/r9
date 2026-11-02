@@ -13,10 +13,11 @@ pub struct Error(pub &'static str);
 
 /// Device-table index of the serving device.  A generated devtab arrives
 /// with the multi-device era (04-07+); until then the D-15 Phase-4 device
-/// set carries these two index values as a convention: devroot = 0,
-/// devcons = 1.
+/// set carries these index values as a convention: devroot = 0, devcons =
+/// 1, devproc-lite = 2 (04-08's per-process note channel, D-16).
 pub const DEV_ROOT: usize = 0;
 pub const DEV_CONS: usize = 1;
+pub const DEV_PROC: usize = 2;
 
 /// Plan 9 open-mode values (frozen: Harvey sys/include/libc.h).  The low
 /// two bits are an access-MODE field (not a bit set); the upper bits are

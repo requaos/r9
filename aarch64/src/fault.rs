@@ -174,10 +174,26 @@ fn page_in_from_image(proc: &mut Proc, page_va: usize, kind: SegKind) {
     });
 }
 
+/// 04-08 (T-04-16's residency half): page-in any unmapped pages of
+/// [start, end) as zeroed Stack pages.  The note-delivery path's stack
+/// window must be RESIDENT before the kernel writes it — membership was
+/// already proven by validate_user_range, but an in-segment page that was
+/// never demand-faulted would take an EL1h abort mid-delivery (a kernel
+/// panic, never acceptable on a user-triggerable path).  Same machinery
+/// and context as a user stack fault (IRQ-masked, the proc's TTBR0 live).
+pub(crate) fn ensure_stack_resident(proc: &mut Proc, start: usize, end: usize) {
+    let mut page = start & !(PAGE_SIZE_4K - 1);
+    while page < end {
+        if !proc.mapping_log.iter().any(|m| m.va == page) {
+            page_in_zeroed(proc, page, SegKind::Stack);
+        }
+        page += PAGE_SIZE_4K;
+    }
+}
+
 /// Map a zeroed page (bss/stack/tos).  Stack faults arrive only inside the
 /// 16 MiB growth bound — the segment classifier bounds them.
-fn page_in_zeroed(proc: &mut Proc, page_va: usize, kind: SegKind) {
-    let pa = pagealloc::allocate_physpage()
+fn page_in_zeroed(proc: &mut Proc, page_va: usize, kind: SegKind) {    let pa = pagealloc::allocate_physpage()
         .unwrap_or_else(|_| panic!("fault: phys page alloc failed"));
     map_active_user(page_va, Entry::rw_user_data().with_phys_addr(pa));
     let dst = unsafe { core::slice::from_raw_parts_mut(page_va as *mut u8, PAGE_SIZE_4K) };

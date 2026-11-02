@@ -196,6 +196,14 @@ pub struct Proc {
     pub nowait: bool,
     pub note_queue: VecDeque<Note>,
     pub notify_handler: Option<u64>,
+    /// The saved-Ureg user VA of the most recently delivered note (04-08;
+    /// donor `up->noteureg`): set by trap.rs's deliver_notes, read and
+    /// cleared by NOTED.  0 = not inside a note handler.
+    pub note_ureg: u64,
+    /// The last delivered note's bytes (04-08; donor `up->lastnote`) —
+    /// NOTED's NDFLT arm exits with this message.
+    pub last_note: [u8; ERRMAX],
+    pub last_note_len: usize,
     /// Posted child-exit records (04-07; one per exited child, consumed by
     /// AWAIT in post order).
     pub wait_records: VecDeque<WaitRecord>,
@@ -240,6 +248,9 @@ impl Proc {
             },
             note_queue: VecDeque::with_capacity(NOTE_QUEUE_CAP),
             notify_handler: None,
+            note_ureg: 0,
+            last_note: [0; ERRMAX],
+            last_note_len: 0,
             blocked_in_kernel: false,
             parent: ptr::null_mut(),
             children_live: 0,
@@ -535,6 +546,14 @@ fn read_curframe() -> *mut TrapFrame {
     unsafe { ptr::addr_of!(CURFRAME).read() as *mut TrapFrame }
 }
 
+/// The live trap frame the trap_return tail will restore (04-08's
+/// note-delivery boundary reads it): after a mid-trap preemption swap this
+/// is the NEW current proc's frame, not the one the entry built — the
+/// return-to-EL0 boundary must operate on the frame actually restored.
+pub(crate) fn current_frame() -> *mut TrapFrame {
+    read_curframe()
+}
+
 fn write_curframe(frame: *mut TrapFrame) {
     unsafe { ptr::addr_of_mut!(CURFRAME).write(frame as u64) }
 }
@@ -764,13 +783,36 @@ pub fn sched_from_moribund() -> ! {
     unreachable!("sched: moribund process resumed");
 }
 
+/// devproc-lite's write hook (04-08, D-16/T-04-17): append the note to the
+/// ADDRESSED pid's queue — no broadcast, no group semantics.  The write is
+/// the whole posting path (libc postnote(PNPROC) lands here via
+/// /proc/N/note); delivery happens at the target's next return-to-EL0
+/// boundary (trap.rs's deliver_notes).  PROC_TABLE-brief.  Registered with
+/// port::devproc at boot (main.rs under dev_exec).
+pub fn post_note(pid: u64, msg: &[u8]) -> Result<()> {
+    let node = LockNode::new();
+    let mut table = PROC_TABLE.lock(&node);
+    let Some(p) = table.procs.iter_mut().flatten().find(|p| p.pid == pid) else {
+        return Err("devproc: no such process");
+    };
+    if p.state == ProcState::Moribund {
+        return Err("devproc: no such process");
+    }
+    if p.note_queue.len() >= NOTE_QUEUE_CAP {
+        return Err("devproc: note queue full");
+    }
+    let mut note = Note { buf: [0; ERRMAX], len: msg.len().min(ERRMAX - 1) };
+    note.buf[..note.len].copy_from_slice(&msg[..note.len]);
+    p.note_queue.push_back(note);
+    Ok(())
+}
+
 /// EXITS (04-07): post the child's wait record to the parent and wake it
 /// if it sits Blocked in AWAIT (Blocked → Ready; blocked_in_kernel stays
 /// set — the parent resumes through the sched loop's swtch).  The record
 /// is kernel memory in the parent's table slot (T-04-15: no cross-process
 /// pointers).  PROC_TABLE-brief.
-pub fn post_wait_record(parent: *mut Proc, pid: u64, msg: &[u8]) {
-    if parent.is_null() {
+pub fn post_wait_record(parent: *mut Proc, pid: u64, msg: &[u8]) {    if parent.is_null() {
         return;
     }
     let node = LockNode::new();
@@ -874,6 +916,10 @@ pub fn rfork_clone(parent: &mut Proc, frame: &TrapFrame, nowait: bool) -> Result
     child.frame = child_frame;
     child.parent = parent_ptr;
     child.nowait = nowait;
+    // Donor newproc (9front@350266104f sys/src/9/port/sysproc.c:142-144):
+    // the child INHERITS the notify handler; the note queue/last-note/
+    // note_ureg start empty (Proc::new's construction).
+    child.notify_handler = parent.notify_handler;
     parent.children_live += 1;
     Ok(child.pid)
 }

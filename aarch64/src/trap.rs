@@ -3,7 +3,9 @@ use core::fmt;
 #[cfg(platform = "virt")]
 use crate::platform;
 use crate::fault;
+use crate::proc;
 use crate::registers::{EsrEl1, ExceptionClass};
+use crate::syscall;
 use aarch64_cpu::registers::FAR_EL1;
 use aarch64_cpu::registers::Readable;
 use port::println;
@@ -111,6 +113,18 @@ const _: () = assert!(core::mem::offset_of!(TrapFrame, pc) == 256);
 const _: () = assert!(core::mem::offset_of!(TrapFrame, psr) == 264);
 const _: () = assert!(core::mem::offset_of!(TrapFrame, interrupt_type) == 272);
 const _: () = assert!(core::mem::size_of::<TrapFrame>() == 288);
+
+/// The frozen `sizeof(Ureg)` (Harvey aarch64/ABI.md, field-for-field with
+/// ureg.h): 35 × u64 = 280 bytes — NOT r9's 288 frame stride (04-RESEARCH.md
+/// Pitfall 6: only FIELD OFFSETS cross the ABI).  The note-delivery path
+/// pushes/copies exactly this many bytes (04-08).
+pub(crate) const UREG_SIZE: usize = 280;
+
+/// Plan 9 note actions (Harvey sys/include/libc.h — frozen values).
+pub(crate) const NCONT: u64 = 0;
+pub(crate) const NDFLT: u64 = 1;
+pub(crate) const NSAVE: u64 = 2;
+pub(crate) const NRSTR: u64 = 3;
 
 impl TrapFrame {
     /// A zeroed frame — the exec seed base (04-04's exec.rs fills x0/sp/pc
@@ -288,6 +302,92 @@ fn dispatch_irq(_frame: &TrapFrame) -> bool {
     false
 }
 
+/// 04-08 (D-16): note delivery at the return-to-EL0 boundary.  Called on
+/// every return to EL0 — after syscall dispatch AND after a handled IRQ —
+/// with the frame the shared trap_return tail is about to restore (the
+/// caller resolved CURFRAME and checked the frame is EL0t-bound).  Pops
+/// the current proc's pending note and redirects the frame into the
+/// notify()-installed handler, donor notify() verbatim (9front@350266104f
+/// sys/src/9/arm64/trap.c:209-238):
+///
+///   sp = ureg->sp - 256 (debug preserve) - sizeof(Ureg), aligned ~7
+///   nureg = (Ureg*)sp; memmove(nureg, ureg, sizeof(Ureg));
+///   sp -= BY2WD+ERRMAX; memmove((char*)sp, msg, ERRMAX);
+///   sp -= 3*BY2WD;
+///   [sp+16] = &msg (arg1 home); [sp+8] = nureg (arg0 home);
+///   ureg->r0 = nureg; ureg->sp = sp; ureg->pc = handler; ureg->link = 0;
+///
+/// The pushed Ureg copy is the frozen sizeof(Ureg)=280 bytes — NOT r9's
+/// 288 frame stride (Pitfall 6's field-offsets-only crossing rule).
+/// libc's handler signature void f(void *ureg, char *msg) is satisfied
+/// exactly: R0 + the two stack arg homes per the arm64 convention.
+///
+/// T-04-16 (the donor okaddr port): the WHOLE write window
+/// [final_sp, nureg+280) is validated user-writable BEFORE any write and
+/// its pages are forced resident (an in-segment-but-unmapped page would
+/// EL1h-abort mid-delivery); an unwritable/misaligned target kills the
+/// process loudly with the note printed — never a partial write, never a
+/// kernel write to a bad user VA.  No handler installed → print the note
+/// + kill via the exits path (the donor donotify pexit shape).
+pub(crate) fn deliver_notes(frame: &mut TrapFrame) {
+    let proc_ptr = proc::current_proc();
+    if proc_ptr.is_null() {
+        return;
+    }
+    let proc = unsafe { &mut *proc_ptr };
+    let Some(note) = proc.note_queue.pop_front() else { return };
+    proc.last_note = note.buf;
+    proc.last_note_len = note.len;
+    let buf = note.buf; // owned NUL-padded copy (the kill paths borrow proc)
+    let msg = &buf[..note.len];
+
+    let Some(handler) = proc.notify_handler else {
+        println!("note: pid {} has no notify handler", proc.pid);
+        syscall::exit_tail(proc, msg);
+    };
+    if handler & 3 != 0 {
+        println!("note: pid {} misaligned notify handler", proc.pid);
+        syscall::exit_tail(proc, msg);
+    }
+
+    // The donor stack construction (verbatim arithmetic; wrapping_sub so a
+    // pathological frame.sp can't panic before the validation).
+    let nureg = frame.sp.wrapping_sub(256 + UREG_SIZE as u64) & !7u64;
+    let msg_va = nureg.wrapping_sub(8 + proc::ERRMAX as u64);
+    let final_sp = msg_va.wrapping_sub(3 * 8);
+    let window_end = nureg + UREG_SIZE as u64;
+
+    // T-04-16: validate the whole write window user-WRITABLE before any
+    // write (never a partial write), then force its stack pages resident
+    // (membership is a segment check — the pages may be unmapped).
+    if proc.validate_user_range(final_sp, window_end - final_sp, true).is_err() {
+        println!("note: pid {} undeliverable (bad user stack window)", proc.pid);
+        syscall::exit_tail(proc, msg);
+    }
+    fault::ensure_stack_resident(proc, final_sp as usize, window_end as usize);
+
+    unsafe {
+        // The live frame's 35 fields into the user nureg (280 bytes).
+        core::ptr::copy_nonoverlapping(
+            frame as *const TrapFrame as *const u8,
+            nureg as *mut u8,
+            UREG_SIZE,
+        );
+        // The note bytes at nureg - (8+128): the full ERRMAX buffer
+        // (NUL-padded — the handler prints the string).
+        core::ptr::copy_nonoverlapping(buf.as_ptr(), msg_va as *mut u8, proc::ERRMAX);
+        // The arg homes: [sp+8] = nureg (arg0), [sp+16] = &msg (arg1).
+        ((final_sp + 8) as *mut u64).write(nureg);
+        ((final_sp + 16) as *mut u64).write(msg_va);
+    }
+    frame.x0 = nureg;
+    frame.sp = final_sp;
+    frame.pc = handler;
+    frame.link_register = 0;
+    // The donor's up->noteureg: NOTED's NCONT/NRSTR restore source.
+    proc.note_ureg = nureg;
+}
+
 fn trap(frame: &mut TrapFrame) {
     // D-05: ESR_EL1/FAR_EL1 are read LIVE at trap entry and flow as
     // arguments to the dispatchers — never frame fields.  04-04's fault
@@ -297,6 +397,18 @@ fn trap(frame: &mut TrapFrame) {
     let far = FAR_EL1.get();
 
     if dispatch_irq(frame) {
+        // 04-08 note-delivery boundary (IRQ return path): the tick may
+        // have preempted mid-trap — the proc about to return to EL0 is the
+        // CURRENT one and its frame is CURFRAME's, not necessarily the
+        // frame this entry built.  Deliver ITS pending notes into the
+        // frame the tail actually restores (guarded: EL0t-bound only).
+        let cf = proc::current_frame();
+        if !cf.is_null() {
+            let cf = unsafe { &mut *cf };
+            if cf.psr & 0xF == 0 {
+                deliver_notes(cf);
+            }
+        }
         return;
     }
 
@@ -309,6 +421,12 @@ fn trap(frame: &mut TrapFrame) {
         // diverges (parks); every other path returns here and the shared
         // trap_return tail erets back into EL0.
         crate::syscall::dispatch(frame);
+        // 04-08 note-delivery boundary (syscall return path): dispatch
+        // runs IRQ-masked so no preemption happened — `frame` IS the
+        // returning proc's live frame (== CURFRAME).
+        if frame.psr & 0xF == 0 {
+            deliver_notes(frame);
+        }
         return;
     } else if matches!(
         esr.exception_class_enum(),

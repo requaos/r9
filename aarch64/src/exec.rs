@@ -223,6 +223,14 @@ pub fn exec_replace(
     // byte source.  (proc.free_user_mappings clears each leaf BEFORE
     // freeing its page — no stale translation can point at recycled pages.)
     proc.free_user_mappings();
+    // Donor sysexec clears the note machinery (9front sysproc.c:
+    // freenotes + notify=nil + noteureg=nil): a stale handler VA would
+    // redirect note delivery into the NEW image (T-04-17), and queued
+    // notes named the old image's context.
+    proc.notify_handler = None;
+    proc.note_queue.clear();
+    proc.note_ureg = 0;
+    proc.last_note_len = 0;
 
     // SEED third: fresh seed-stack + Tos pages, new segment records, new
     // paqfs byte source.
