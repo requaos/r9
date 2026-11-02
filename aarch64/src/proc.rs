@@ -206,7 +206,9 @@ pub struct Proc {
     /// for the staged init (its exits posts nothing).
     pub parent: *mut Proc,
     /// rfork'd children not yet reaped by AWAIT (live or with a pending
-    /// wait record) — AWAIT's block-vs-"no children" pivot.
+    /// wait record) — AWAIT's block-vs-"no children" pivot.  RFNOWAIT
+    /// children are excluded (WR-03): they post no record and are
+    /// invisible to AWAIT, donor-style.
     pub children_live: usize,
     /// rfork(RFNOWAIT) child: EXITS posts no wait record and wakes nobody.
     pub nowait: bool,
@@ -897,7 +899,15 @@ pub fn rfork_clone(parent: &mut Proc, frame: &TrapFrame, nowait: bool) -> Result
         child.free_root_table_and_kstack();
         return Err(msg);
     }
-    parent.children_live += 1;
+    // WR-03: an RFNOWAIT child posts no wait record at EXITS and is never
+    // reaped by AWAIT, so it must not count toward the parent's AWAIT
+    // block-vs-"no children" pivot (Plan 9: an RFNOWAIT child is invisible
+    // to pwait).  Counting it left children_live elevated for the rest of
+    // the parent's life; the parent's next AWAIT with no queued records
+    // then blocked in sched() with nothing left to ever wake it.
+    if !nowait {
+        parent.children_live += 1;
+    }
     Ok(child.pid)
 }
 
