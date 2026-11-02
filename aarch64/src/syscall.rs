@@ -386,7 +386,8 @@ fn sys_open(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         // lands at the /proc root; the remaining components walk it; the
         // device enforces its write-only note-file scope at open.
         let mut c = port::devproc::attach();
-        for comp in path[4..].split(|&b| b == b'/').filter(|c| !c.is_empty()) {
+        let rest = &path[b"/proc".len()..]; // after "/proc" (5 bytes)
+        for comp in rest.split(|&b| b == b'/').filter(|c| !c.is_empty()) {
             c = match port::devproc::walk(&c, comp) {
                 Ok(c) => c,
                 Err(msg) => return err(proc, msg),

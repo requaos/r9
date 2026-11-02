@@ -800,16 +800,34 @@ const BOOT_SMOKE_AWAIT_MARKER: &str = "smokefork: await:";
 const BOOT_SMOKE_DONE_MARKER: &str = "init: smoke complete";
 const BOOT_SCHED_SWITCH_MARKER: &str = "sched: switch";
 
+/// Notes-profile additions (04-08, SC#4's notes half): the virtnotes
+/// config boots the SAME kernel+initrd as virtexec/virtmulti, but the
+/// staged init also rforks a third child (smokenote), posts it a note via
+/// unmodified libc postnote (a /proc/N/note write on devproc-lite), and
+/// the kernel delivers at the child's return-to-EL0 boundary — the
+/// handler prints the note and resumes via noted(NCONT).  Presence, never
+/// interleaving order (D-13).
+const BOOT_NOTE_GOT_MARKER: &str = "smokenote: got note";
+const BOOT_NOTE_RESUMED_MARKER: &str = "smokenote: resumed";
+
 /// Always-on negative scan (04-06): any panic/Unhandled-interrupt line in
 /// the capture fails the run — every profile EXCEPT the deliberate-panic
 /// one (whose expected flow prints exactly that dump).  Case-insensitive,
-/// matching the plan's `grep -ciE 'panic|Unhandled interrupt'` leg.
+/// matching the plan's `grep -ciE 'panic|Unhandled interrupt'` leg.  04-08
+/// adds the notes-era failures: `note-timeout` (a note was never
+/// delivered) and `unimplemented` (a syscall outside the implemented set
+/// was called — D-14's discipline: a traced-set miss surfaces here; trace
+/// and implement the gap, never silence it).
 fn negative_scan_hit(capture: &[u8]) -> Option<&'static str> {
     let lower: Vec<u8> = capture.iter().map(|b| b.to_ascii_lowercase()).collect();
     if contains_marker(&lower, b"panic") {
         Some("panic")
     } else if contains_marker(&lower, b"unhandled interrupt") {
         Some("Unhandled interrupt")
+    } else if contains_marker(&lower, b"note-timeout") {
+        Some("note-timeout")
+    } else if contains_marker(&lower, b"unimplemented") {
+        Some("unimplemented syscall")
     } else {
         None
     }
@@ -900,7 +918,8 @@ impl fmt::Display for BootStage {
                 f,
                 "smoke markers {{{BOOT_SMOKE_FD_MARKER:?}, {BOOT_SMOKE_CHILD_MARKER:?}, \
                  {BOOT_SMOKE_AWAIT_MARKER:?}, {BOOT_HELLO_MARKER:?}, {BOOT_SMOKE_DONE_MARKER:?}}} \
-                 + >= 1 {BOOT_SCHED_SWITCH_MARKER:?} line"
+                 (+ {{{BOOT_NOTE_GOT_MARKER:?}, {BOOT_NOTE_RESUMED_MARKER:?}}} on the notes \
+                 profile) + >= 1 {BOOT_SCHED_SWITCH_MARKER:?} line"
             ),
             BootStage::AllExited => {
                 write!(f, "all-exited marker {BOOT_ALL_EXITED_MARKER:?}")
@@ -910,13 +929,14 @@ impl fmt::Display for BootStage {
 }
 
 /// The boot-test assertion profile being run (04-06: the exec profile
-/// joined the ticks/echo and panic pair; 04-07 adds multi).
+/// joined the ticks/echo and panic pair; 04-07 adds multi; 04-08 notes).
 #[derive(Clone, Copy, PartialEq)]
 enum BootProfile {
     Ticks,
     Panic,
     Exec,
     Multi,
+    Notes,
 }
 
 impl BootTestStep {
@@ -1105,7 +1125,11 @@ impl BootTestStep {
         // (rather than a dev-list addition) keeps the kernel cfg surface
         // unchanged: there is no second kernel behavior to gate, only a
         // second set of boot-test expectations over the same boot.
+        // 04-08 (SC#4's notes half): the NOTES profile ("virtnotes") is
+        // the same shape — same kernel config, the marker set gains the
+        // smokenote pair.
         let multi_profile = self.config_name == "virtmulti";
+        let notes_profile = self.config_name == "virtnotes";
 
         while Instant::now() < deadline {
             // Always-on negative scan: a panic/Unhandled-interrupt line
@@ -1118,7 +1142,7 @@ impl BootTestStep {
                     if contains_marker(&capture, BOOT_BANNER_MARKER.as_bytes()) {
                         stage = if panic_profile {
                             BootStage::PanicStart
-                        } else if exec_profile || multi_profile {
+                        } else if exec_profile || multi_profile || notes_profile {
                             BootStage::ExecEntry
                         } else {
                             BootStage::Ticks
@@ -1160,7 +1184,7 @@ impl BootTestStep {
                 }
                 BootStage::InitPrint => {
                     if contains_marker(&capture, BOOT_INIT_MARKER.as_bytes()) {
-                        stage = if multi_profile {
+                        stage = if multi_profile || notes_profile {
                             BootStage::MultiMarkers
                         } else {
                             BootStage::HelloPrint
@@ -1175,16 +1199,23 @@ impl BootTestStep {
                 BootStage::MultiMarkers => {
                     // Presence, never order (D-13): every smoke marker at
                     // least once, plus >= 1 sched-switch line (an
-                    // IRQ-from-EL0 preempted to a different process).
-                    let smoke_seen = [
+                    // IRQ-from-EL0 preempted to a different process).  The
+                    // notes profile adds the smokenote pair (the note was
+                    // delivered at the child's return-to-EL0 boundary and
+                    // noted(NCONT) resumed it).
+                    let mut required = vec![
                         BOOT_SMOKE_FD_MARKER,
                         BOOT_SMOKE_CHILD_MARKER,
                         BOOT_SMOKE_AWAIT_MARKER,
                         BOOT_HELLO_MARKER,
                         BOOT_SMOKE_DONE_MARKER,
-                    ]
-                    .iter()
-                    .all(|m| contains_marker(&capture, m.as_bytes()));
+                    ];
+                    if notes_profile {
+                        required.push(BOOT_NOTE_GOT_MARKER);
+                        required.push(BOOT_NOTE_RESUMED_MARKER);
+                    }
+                    let smoke_seen =
+                        required.iter().all(|m| contains_marker(&capture, m.as_bytes()));
                     let preempted = count_marker_lines(&capture, BOOT_SCHED_SWITCH_MARKER) >= 1;
                     if smoke_seen && preempted {
                         stage = BootStage::AllExited;
@@ -1192,8 +1223,13 @@ impl BootTestStep {
                 }
                 BootStage::AllExited => {
                     if contains_marker(&capture, BOOT_ALL_EXITED_MARKER.as_bytes()) {
-                        let profile =
-                            if multi_profile { BootProfile::Multi } else { BootProfile::Exec };
+                        let profile = if notes_profile {
+                            BootProfile::Notes
+                        } else if multi_profile {
+                            BootProfile::Multi
+                        } else {
+                            BootProfile::Exec
+                        };
                         return self.finish(log_abs, &capture, profile);
                     }
                 }
@@ -1249,6 +1285,11 @@ impl BootTestStep {
             BootProfile::Multi => {
                 println!(
                     "boot-test: PASS -- banner, exec entry, init print, all smoke markers (hello + smokefork fd/child/await + init done), >= 1 sched-switch preemption line, and the all-exited marker observed (SC#4 rfork/fd-ops + D-13)"
+                );
+            }
+            BootProfile::Notes => {
+                println!(
+                    "boot-test: PASS -- banner, exec entry, init print, all smoke markers (hello + smokefork fd/child/await + smokenote got-note/resumed + init done), >= 1 sched-switch preemption line, and the all-exited marker observed (SC#4: rfork + notes + fd ops from EL0, panic-free)"
                 );
             }
         }
@@ -1586,8 +1627,9 @@ struct InitrdStep {
 const INITRD_TREE: &str = "target/initrd-tree";
 const BOOTFS_PAQ: &str = "target/bootfs.paq";
 /// The staged binaries the initrd carries (D-03's SC-scoped set: the staged
-/// init + the hello ABI-bisect binary + 04-07's rfork/fd-ops smoke).
-const INITRD_FILES: [&str; 3] = ["init", "hello", "smokefork"];
+/// init + the hello ABI-bisect binary + 04-07's rfork/fd-ops smoke +
+/// 04-08's notes smoke).
+const INITRD_FILES: [&str; 4] = ["init", "hello", "smokefork", "smokenote"];
 
 impl InitrdStep {
     fn new(matches: &clap::ArgMatches) -> Self {
