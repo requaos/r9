@@ -134,10 +134,18 @@ pub fn dispatch(frame: &mut TrapFrame) {
 /// Width discipline (04-07, donor-faithful): every slot is 8 bytes, but
 /// int/uint-width arguments are stored by 7c with a 32-bit store that
 /// leaves the slot's upper half as stack garbage — the donor's
-/// `va_arg(list, int/uint)` truncates to the prototype's width, so handlers
-/// must likewise mask int-width args to 32 bits (await's buflen, errstr's
-/// n, rfork's flag, the fd args, open's mode).  Pointer/long/vlong args
-/// occupy the full slot.  (Arg0 is always clean: the stub materializes it
+/// `va_arg(list, int/uint)` reads only the slot's low half
+/// (9front@350266104f arm64/include/u.h: `va_arg(list, mode)` with
+/// sizeof(mode) == 4 reads `((mode*)list)[-2]`), so handlers must
+/// likewise mask int-width args to 32 bits (await's buflen, errstr's
+/// n, rfork's flag, the fd args, open's mode).  Pointer/vlong args
+/// occupy the full slot.  **`long` is 32-bit in Plan 9 C on every arch
+/// (7c SZ_LONG=4; only `vlong` is 64-bit) — pread/pwrite's `long n` is
+/// a 32-bit arg on the wire and must be masked too** (05-01: the
+/// stacksmoke deep recursion left pointer garbage in the reused stack
+/// pages, so an unmasked n read as a huge value and the write failed
+/// silently — shallow stacks never saw it because fresh demand-paged
+/// pages are zeroed).  (Arg0 is always clean: the stub materializes it
 /// from R0, whose upper half the caller's 32-bit op already zeroed.)
 fn sargs(frame: &mut TrapFrame, proc: &mut Proc, arity: usize) -> Option<[u64; 4]> {
     let base = frame.sp + 8;
@@ -195,11 +203,13 @@ unsafe fn user_slice_mut(va: u64, n: u64) -> &'static mut [u8] {
 /// PWRITE(51): fd, buf, n, offset.  Offset -1 (u64::MAX) is the streaming
 /// channel offset (Harvey libc write() = pwrite(fd, buf, n, -1LL) — Pitfall
 /// 7); the console ignores offsets (writes append), devroot is read-only.
+/// n is a `long` — 32-bit in Plan 9 C (SZ_LONG=4), so the wire slot's upper
+/// half is 7c garbage and must be masked (the width discipline above).
 fn sys_pwrite(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 4) else {
         return err(proc, "pwrite: bad argument block");
     };
-    let (fd, buf, n, _off) = (args[0] & 0xffff_ffff, args[1], args[2], args[3]); // fd is an int
+    let (fd, buf, n, _off) = (args[0] & 0xffff_ffff, args[1], args[2] & 0xffff_ffff, args[3]); // fd is an int
     if proc.validate_user_range(buf, n, false).is_err() {
         return err(proc, "pwrite: bad user buffer");
     }
@@ -228,12 +238,14 @@ fn sys_pwrite(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 /// PREAD(50): fd, buf, n, offset.  devroot chans read via the paqfs
 /// reader's byte-granular read_at (offset -1 uses + advances the chan's
 /// streaming offset); devcons chans drain the console RX ring and return 0
-/// on empty (no blocking console-read this phase).
+/// on empty (no blocking console-read this phase).  n is a `long` — 32-bit
+/// in Plan 9 C, so the wire slot's upper half is masked (same discipline as
+/// sys_pwrite).
 fn sys_pread(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 4) else {
         return err(proc, "pread: bad argument block");
     };
-    let (fd, buf, n, off) = (args[0] & 0xffff_ffff, args[1], args[2], args[3]); // fd is an int
+    let (fd, buf, n, off) = (args[0] & 0xffff_ffff, args[1], args[2] & 0xffff_ffff, args[3]); // fd is an int
     if proc.validate_user_range(buf, n, true).is_err() {
         return err(proc, "pread: bad user buffer");
     }
