@@ -49,6 +49,7 @@ use alloc::vec::Vec;
 
 use crate::dat::{Chan, Qid, DEV_PIPE, OREAD};
 use crate::mcslock::{Lock, LockNode};
+use crate::println;
 use crate::Result;
 
 /// Plan 9 Qid type bytes (sys/include/libc.h).
@@ -140,7 +141,7 @@ pub fn attach() -> Chan {
         "pipe",
         Pipe { q: [PipeQueue::new(), PipeQueue::new()], qref: [0, 0], id },
     ));
-    let mut c = Chan::new(DEV_PIPE, Qid { path: id << 5, vers: 0, typ: QTDIR }, 0);
+    let mut c = Chan::new(DEV_PIPE, Qid { path: (id << 5) | QDIR, vers: 0, typ: QTDIR }, 0);
     c.pipe = Some(pipe);
     c.path = b"#|".to_vec();
     c
@@ -195,8 +196,6 @@ pub fn walk(c: &Chan, name: &[u8]) -> Result<Chan> {
 
 /// Open a pipe chan.  The root dir opens OREAD only.  An end opens in any
 /// access mode and bumps the open-end count (the donor's pipeopen qref).
-/// RED SKELETON (05-06 Task 1 RED): the qref bump + tracking land in
-/// GREEN — the tests pin the semantics first.
 pub fn open(c: &Chan, mode: u32) -> Result<Chan> {
     let access = mode & crate::dat::OMASK;
     if c.qid.typ == QTDIR {
@@ -230,8 +229,8 @@ pub fn open(c: &Chan, mode: u32) -> Result<Chan> {
 /// streaming, there are no offsets) and NEVER advances c.offset:
 /// queue-empty + write-side-open blocks via the injected hooks (the
 /// 04-07 machinery); queue-empty + hungup is EOF (0, never an error).
-///
-/// RED SKELETON: reads error until GREEN lands the queue.
+/// The block loop re-checks after every wake (a spurious wake re-blocks;
+/// the waiter set is per-queue and cleared on each wake).
 pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
     if c.qid.typ == QTDIR {
         // The directory listing (devdirread shape): "data" and "data1"
@@ -260,19 +259,85 @@ pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
         }
         return Ok(n as u64);
     }
-    let _ = (buf, offset);
-    Err("devpipe: end reads unimplemented (05-06 RED skeleton)")
+    let Some(side) = end_of(c) else {
+        return Err("devpipe: read of unknown pipe file");
+    };
+    let Some(pipe) = &c.pipe else {
+        return Err("devpipe: read of unattached pipe chan");
+    };
+    // The blocking loop (donor qread): drain if bytes; EOF if hungup;
+    // otherwise register as a waiter and block — the lock is DROPPED
+    // before block() (a writer must take it to wake us), and the
+    // register-under-lock + syscall-serialization invariant (see the
+    // module header) makes the wakeup un-losable.  The hooks are fetched
+    // lazily: a read that never blocks never requires registration.
+    let mut h: Option<PipeHooks> = None;
+    loop {
+        let node = LockNode::new();
+        {
+            let mut g = pipe.lock(&node);
+            let q = &mut g.q[side];
+            if !q.buf.is_empty() {
+                let n = q.buf.len().min(buf.len());
+                for (i, b) in q.buf.drain(..n).enumerate() {
+                    buf[i] = b;
+                }
+                return Ok(n as u64);
+            }
+            if q.hungup {
+                return Ok(0); // EOF — the write side is fully closed
+            }
+            if q.closed {
+                // Unreachable while we hold an open end (closed sets only
+                // at qref[side] == 0); loud rather than a silent EOF.
+                return Err("devpipe: read on closed queue");
+            }
+            if h.is_none() {
+                h = Some(hooks()?);
+            }
+            let pid = (h.unwrap().current)();
+            if !q.waiters.contains(&pid) {
+                q.waiters.push(pid);
+            }
+        }
+        (h.unwrap().block)(); // park mid-syscall; a write/close wakes us
+    }
 }
 
 /// Write to a pipe end (donor pipewrite: end i writes q[1-i]).  Errors
 /// when the read side is fully closed ("write on closed pipe") or the
 /// write would exceed the queue bound ("pipe full" — atomic, never
 /// partial, never silent).  Wakes blocked readers after the bytes land.
-///
-/// RED SKELETON: writes error until GREEN lands the queue.
 pub fn write(c: &mut Chan, buf: &[u8], _offset: u64) -> Result<u64> {
-    let _ = (c, buf);
-    Err("devpipe: writes unimplemented (05-06 RED skeleton)")
+    if c.qid.typ == QTDIR {
+        return Err("devpipe: write of a directory");
+    }
+    let Some(side) = end_of(c) else {
+        return Err("devpipe: write of unknown pipe file");
+    };
+    let Some(pipe) = &c.pipe else {
+        return Err("devpipe: write of unattached pipe chan");
+    };
+    let n = buf.len();
+    let node = LockNode::new();
+    let waiters = {
+        let mut g = pipe.lock(&node);
+        let q = &mut g.q[1 - side];
+        if q.closed {
+            return Err("devpipe: write on closed pipe");
+        }
+        if n > PIPE_Q_CAP - q.buf.len() {
+            return Err("devpipe: pipe full");
+        }
+        q.buf.extend(buf.iter().copied());
+        core::mem::take(&mut q.waiters)
+    };
+    // Hooks are needed only to WAKE (a write with no blocked readers is
+    // hook-free — the dir/listing/queue paths never require registration).
+    if !waiters.is_empty() {
+        (hooks()?.wake)(&waiters);
+    }
+    Ok(n as u64)
 }
 
 /// Close an open pipe end (namec::close_chan's DEV_PIPE leg — donor
@@ -280,10 +345,42 @@ pub fn write(c: &mut Chan, buf: &[u8], _offset: u64) -> Result<u64> {
 /// hangs up q[1-i] (readers at end 1-i drain then see EOF) and closes
 /// q[i] (writers error); both ends at zero reopen the queues (donor
 /// qreopen).  Wakes the affected waiters after the lock drops.
-///
-/// RED SKELETON: a no-op until GREEN lands the qref tracking.
 pub fn close(c: &Chan) {
-    let _ = c;
+    let Some(pipe) = &c.pipe else { return };
+    let Some(side) = end_of(c) else { return };
+    let node = LockNode::new();
+    let wake: Vec<u64> = {
+        let mut g = pipe.lock(&node);
+        if g.qref[side] > 0 {
+            g.qref[side] -= 1;
+        } else {
+            // A close with no recorded open end is a bookkeeping bug —
+            // loud in debug builds, harmless in the flow.
+            println!("devpipe: close of an unopened end (pipe {} side {})", g.id, side);
+        }
+        let mut wake = Vec::new();
+        if g.qref[side] == 0 {
+            // qhangup(q[1-side]): the peer's readers drain then EOF.
+            let peer = &mut g.q[1 - side];
+            peer.hungup = true;
+            wake.append(&mut peer.waiters);
+            // qclose(q[side]): writers into it error from now on.
+            g.q[side].closed = true;
+        }
+        if g.qref == [0, 0] {
+            // qreopen: both ends closed — the queues reset.
+            for q in g.q.iter_mut() {
+                q.buf.clear();
+                q.hungup = false;
+                q.closed = false;
+                q.waiters.clear();
+            }
+        }
+        wake
+    };
+    if !wake.is_empty() && let Ok(h) = hooks() {
+        (h.wake)(&wake);
+    }
 }
 
 /// stat of a pipe chan (sys_stat/sys_fstat's dispatch leg): the root

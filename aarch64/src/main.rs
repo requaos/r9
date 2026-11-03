@@ -424,6 +424,17 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
     // a /proc/N/note write from the very first process resolves.
     port::devproc::set_post_hook(proc::post_note);
 
+    // 05-06 (D-04): devpipe's block/wake hooks — a read on an empty pipe
+    // parks the caller via the 04-07 sched machinery; a write or close
+    // wakes the queue's waiters.  Registered before the first exec so
+    // boot's connectembed (pipe → fork → exec paqfs, which blocks reading
+    // its end) can block the very first pipe's readers.
+    port::devpipe::set_hooks(port::devpipe::PipeHooks {
+        current: proc::pipe_current_pid,
+        block: proc::pipe_block_current,
+        wake: proc::pipe_wake,
+    });
+
     // 05-05 (D-07, RESEARCH Pattern 3 / Pitfall 1): the kernel-seeded
     // ROOT env group — the ONE mechanism replacing both 9k's #ec config
     // env and the 05-04 transitional argv hint.  cputype feeds boot's

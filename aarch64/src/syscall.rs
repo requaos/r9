@@ -33,7 +33,7 @@
 
 use alloc::vec::Vec;
 
-use port::dat::{DEV_CONS, DEV_ENV, DEV_PROC, DEV_ROOT, OEXEC};
+use port::dat::{DEV_CONS, DEV_ENV, DEV_PIPE, DEV_PROC, DEV_ROOT, OEXEC};
 use port::mcslock::LockNode;
 use port::namec::{self, NamecMode};
 use port::pgrp::{MAFTER, MBEFORE, MMASK, MORDER};
@@ -48,10 +48,12 @@ use crate::trap::TrapFrame;
 const BIND: u64 = 2;
 const CHDIR: u64 = 3;
 const CLOSE: u64 = 4;
+const DUP: u64 = 5;
 const EXEC: u64 = 7;
 const EXITS: u64 = 8;
 const OPEN: u64 = 14;
 const RFORK: u64 = 19;
+const PIPE: u64 = 21;
 const BRK_: u64 = 24;
 const NOTIFY: u64 = 28;
 const NOTED: u64 = 29;
@@ -66,16 +68,18 @@ const PWRITE: u64 = 51;
 // rfork flags (Harvey sys/include/libc.h — frozen values; 04-07).
 // pub(crate) since 05-04: proc.rs's rfork_clone reads RFNAMEG/RFCNAMEG
 // (the D-03 namespace group semantics) — one mirror, one provenance.
-// RFENVG/RFCENVG joined the pub(crate) set in 05-05 (D-07 env groups).
+// RFENVG/RFCENVG joined the pub(crate) set in 05-05 (D-07 env groups);
+// RFFDG/RFCFDG in 05-06 (the fd-group arms).
 pub(crate) const RFNAMEG: u64 = 1 << 0;
 pub(crate) const RFENVG: u64 = 1 << 1;
-const RFFDG: u64 = 1 << 2;
+pub(crate) const RFFDG: u64 = 1 << 2;
+const RFNOTEG: u64 = 1 << 3;
 const RFPROC: u64 = 1 << 4;
 const RFMEM: u64 = 1 << 5;
 pub(crate) const RFNOWAIT: u64 = 1 << 6;
 pub(crate) const RFCNAMEG: u64 = 1 << 10;
 pub(crate) const RFCENVG: u64 = 1 << 11;
-const RFCFDG: u64 = 1 << 12;
+pub(crate) const RFCFDG: u64 = 1 << 12;
 const RFREND: u64 = 1 << 13;
 
 /// Handler shape (04-RESEARCH.md Pattern 2 / Code Examples): the live trap
@@ -91,18 +95,21 @@ type Handler = fn(&mut TrapFrame, &mut Proc) -> u64;
 /// BIND(2), CHDIR(3), UNMOUNT(35) (unmount ×1 — boot's settime /tmp
 /// handling) and its Task-3 additions: the measured stat family STAT(42)/
 /// FSTAT(43) and BRK_(24) (×28 — malloc pool growth; boot's dirstat
-/// mallocs make it gate-load-bearing per the plan dispatch note).  The
-/// 04-01 trace carries no brk_/segbrk(12) on the hello path; segbrk stays
-/// None.
+/// mallocs make it gate-load-bearing per the plan dispatch note); and by
+/// 05-06 with the connectembed family DUP(5)/PIPE(21) (boot's
+/// pipe+fork+dup+exec of the paqfs server).  The 04-01 trace carries no
+/// brk_/segbrk(12) on the hello path; segbrk stays None.
 static DISPATCH: [Option<Handler>; 55] = {
     let mut t: [Option<Handler>; 55] = [None; 55];
     t[BIND as usize] = Some(sys_bind);
     t[CHDIR as usize] = Some(sys_chdir);
     t[CLOSE as usize] = Some(sys_close);
+    t[DUP as usize] = Some(sys_dup);
     t[EXEC as usize] = Some(sys_exec);
     t[EXITS as usize] = Some(sys_exits);
     t[OPEN as usize] = Some(sys_open);
     t[RFORK as usize] = Some(sys_rfork);
+    t[PIPE as usize] = Some(sys_pipe);
     t[NOTIFY as usize] = Some(sys_notify);
     t[NOTED as usize] = Some(sys_noted);
     t[BRK_ as usize] = Some(sys_brk_);
@@ -226,9 +233,14 @@ unsafe fn user_slice_mut(va: u64, n: u64) -> &'static mut [u8] {
 /// channel offset (Harvey libc write() = pwrite(fd, buf, n, -1LL) — Pitfall
 /// 7); the console ignores offsets (writes append), devroot is read-only,
 /// devenv honors them (05-05: donor envwrite's grow-at-offset + streaming
-/// advance).  n is a `long` — 32-bit in Plan 9 C (SZ_LONG=4), so the wire
-/// slot's upper half is 7c garbage and must be masked (the width
-/// discipline above).
+/// advance), devpipe ignores them (05-06: donor qwrite — pipes are
+/// streaming, there are no offsets).  n is a `long` — 32-bit in Plan 9 C
+/// (SZ_LONG=4), so the wire slot's upper half is 7c garbage and must be
+/// masked (the width discipline above).
+///
+/// 05-06: the fd is CHECKED OUT (fd_take) for the op and put back after
+/// (fd_store) — a blocking pipe write never holds the fd-group lock
+/// (fdgrp.rs's checked-out-chan pattern).
 fn sys_pwrite(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 4) else {
         return err(proc, "pwrite: bad argument block");
@@ -237,58 +249,54 @@ fn sys_pwrite(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     if proc.validate_user_range(buf, n, false).is_err() {
         return err(proc, "pwrite: bad user buffer");
     }
-    let dev = match proc.fd(fd) {
-        Some(chan) => chan.dev,
-        None => return err(proc, "pwrite: bad fd"),
+    let Some(mut chan) = proc.fd_take(fd) else {
+        return err(proc, "pwrite: bad fd");
     };
-    match dev {
+    let result = match chan.dev {
         DEV_CONS => {
             // 05-04 Task 3: the device routes by qid — cons writes
             // byte-exact, null discards, hostowner stores (D-02), user is
             // read-only (the whole per-file contract lives in the device).
-            let Some(chan) = proc.fd(fd) else {
-                return err(proc, "pwrite: bad fd");
-            };
-            match port::devcons::write(chan, unsafe { user_slice(buf, n) }) {
-                Ok(wrote) => wrote,
-                Err(msg) => err(proc, msg),
-            }
+            port::devcons::write(&mut chan, unsafe { user_slice(buf, n) })
         }
-        DEV_ROOT => err(proc, "devroot: read-only filesystem"),
+        DEV_ROOT => Err("devroot: read-only filesystem"),
         DEV_PROC => {
             // devproc-lite (04-08): the note append is the whole write —
             // the chan's qid names the target pid; offsets don't apply.
-            let Some(chan) = proc.fd(fd) else {
-                return err(proc, "pwrite: bad fd");
-            };
-            match port::devproc::write(chan, unsafe { user_slice(buf, n) }) {
-                Ok(wrote) => wrote,
-                Err(msg) => err(proc, msg),
-            }
+            port::devproc::write(&mut chan, unsafe { user_slice(buf, n) })
         }
         DEV_ENV => {
             // devenv (05-05, D-07): the write lands in the OPERATING
             // proc's env group (the device resolves it via the
             // registered hook — donor envgrp(c)); offsets per envwrite
             // (streaming offset honored, grow-at-offset).
-            let Some(chan) = proc.fd(fd) else {
-                return err(proc, "pwrite: bad fd");
-            };
-            match port::devenv::write(chan, unsafe { user_slice(buf, n) }, off) {
-                Ok(wrote) => wrote,
-                Err(msg) => err(proc, msg),
-            }
+            port::devenv::write(&mut chan, unsafe { user_slice(buf, n) }, off)
         }
-        _ => err(proc, "pwrite: unknown device"),
+        DEV_PIPE => {
+            // devpipe (05-06): end i writes q[1-i]; a full queue is a
+            // named error (never partial, never silent); blocked readers
+            // wake after the bytes land.
+            port::devpipe::write(&mut chan, unsafe { user_slice(buf, n) }, off)
+        }
+        _ => Err("pwrite: unknown device"),
+    };
+    proc.fd_store(fd, chan);
+    match result {
+        Ok(wrote) => wrote,
+        Err(msg) => err(proc, msg),
     }
 }
 
 /// PREAD(50): fd, buf, n, offset.  devroot chans read via the paqfs
 /// reader's byte-granular read_at (offset -1 uses + advances the chan's
-/// streaming offset); devcons chans drain the console RX ring and return 0
-/// on empty (no blocking console-read this phase).  n is a `long` — 32-bit
-/// in Plan 9 C, so the wire slot's upper half is masked (same discipline as
-/// sys_pwrite).
+/// streaming offset); devcons chans route by qid (cons reads are the loud
+/// 05-08 -1); devenv honors offsets; devpipe reads the end's queue —
+/// blocking on empty (05-06, the 04-07 block/wake machinery via the
+/// injected hooks).  n is a `long` — 32-bit in Plan 9 C, so the wire
+/// slot's upper half is masked (same discipline as sys_pwrite).
+///
+/// 05-06: the fd is CHECKED OUT (fd_take) for the op and put back after
+/// (fd_store) — a blocking pipe read never holds the fd-group lock.
 fn sys_pread(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 4) else {
         return err(proc, "pread: bad argument block");
@@ -297,52 +305,45 @@ fn sys_pread(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     if proc.validate_user_range(buf, n, true).is_err() {
         return err(proc, "pread: bad user buffer");
     }
-    let dev = match proc.fd(fd) {
-        Some(chan) => chan.dev,
-        None => return err(proc, "pread: bad fd"),
+    let Some(mut chan) = proc.fd_take(fd) else {
+        return err(proc, "pread: bad fd");
     };
-    match dev {
+    let result = match chan.dev {
         DEV_CONS => {
             // 05-04 Task 3: the device routes by qid — the root dir serves
             // the stat-wire listing, null reads EOF, user reads glenda,
             // hostowner reads the stored value, and cons reads get the
             // loud "05-08" -1 (never a wedge).  The streaming offset
             // advances inside the device (the pread convention).
-            let Some(chan) = proc.fd(fd) else {
-                return err(proc, "pread: bad fd");
-            };
-            match port::devcons::read(chan, unsafe { user_slice_mut(buf, n) }, off) {
-                Ok(read) => read,
-                Err(msg) => err(proc, msg),
-            }
+            port::devcons::read(&mut chan, unsafe { user_slice_mut(buf, n) }, off)
         }
         DEV_ROOT => {
             let Some(root) = port::devroot::root() else {
+                proc.fd_store(fd, chan);
                 return err(proc, "devroot: not mounted");
             };
-            let Some(chan) = proc.fd(fd) else {
-                return err(proc, "pread: bad fd");
-            };
-            match root.read(chan, unsafe { user_slice_mut(buf, n) }, off) {
-                Ok(read) => read,
-                Err(msg) => err(proc, msg),
-            }
+            root.read(&mut chan, unsafe { user_slice_mut(buf, n) }, off)
         }
-        DEV_PROC => err(proc, "devproc: note files are write-only"),
+        DEV_PROC => Err("devproc: note files are write-only"),
         DEV_ENV => {
             // devenv (05-05, D-07): the read comes from the OPERATING
             // proc's env group (hook-resolved — donor envgrp(c)); the
             // root dir serves the group's stat-wire listing, a key serves
             // its value (clamped, EOF = 0); streaming offset honored.
-            let Some(chan) = proc.fd(fd) else {
-                return err(proc, "pread: bad fd");
-            };
-            match port::devenv::read(chan, unsafe { user_slice_mut(buf, n) }, off) {
-                Ok(read) => read,
-                Err(msg) => err(proc, msg),
-            }
+            port::devenv::read(&mut chan, unsafe { user_slice_mut(buf, n) }, off)
         }
-        _ => err(proc, "pread: unknown device"),
+        DEV_PIPE => {
+            // devpipe (05-06): read the end's queue — drains available
+            // bytes, blocks on empty (wake on write/close), EOF on
+            // hangup.  Never touches the chan offset (streaming).
+            port::devpipe::read(&mut chan, unsafe { user_slice_mut(buf, n) }, off)
+        }
+        _ => Err("pread: unknown device"),
+    };
+    proc.fd_store(fd, chan);
+    match result {
+        Ok(read) => read,
+        Err(msg) => err(proc, msg),
     }
 }
 
@@ -481,11 +482,10 @@ fn sys_open(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     };
     drop(guard);
 
-    let Some(slot) = proc.fd_table.iter().position(|s| s.is_none()) else {
-        return err(proc, "open: no free fd");
-    };
-    proc.fd_table[slot] = Some(opened);
-    slot as u64
+    match proc.fd_install_lowest(opened) {
+        Some(slot) => slot,
+        None => err(proc, "open: no free fd"),
+    }
 }
 
 /// BIND(2): name, old, flag — 05-04 (D-03; measured ×22 in the 05-03
@@ -660,11 +660,13 @@ fn sys_fstat(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     if proc.validate_user_range(buf_va, n, true).is_err() {
         return err(proc, "fstat: bad user buffer");
     }
-    let Some(chan) = proc.fd(fd) else {
+    let Some(chan) = proc.fd_take(fd) else {
         return err(proc, "fstat: bad fd");
     };
     let sb = unsafe { user_slice_mut(buf_va, n) };
-    match namec::stat_chan(chan, sb) {
+    let result = namec::stat_chan(&chan, sb);
+    proc.fd_store(fd, chan);
+    match result {
         Ok(count) => count,
         Err(msg) => err(proc, msg),
     }
@@ -785,13 +787,103 @@ fn sys_close(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 1) else {
         return err(proc, "close: bad argument block");
     };
-    let fd = (args[0] & 0xffff_ffff) as usize; // fd is an int (width discipline)
-    match proc.fd_table.get_mut(fd) {
-        Some(slot) if slot.is_some() => {
-            *slot = None;
+    let fd = args[0] & 0xffff_ffff; // fd is an int (width discipline)
+    match proc.fd_take(fd) {
+        Some(c) => {
+            // 05-06: the close dispatch (the donor's devclose) — a pipe
+            // end's close decrements the open count and the last one
+            // hangs the peer's read queue up (the EOF path).
+            port::namec::close_chan(&c);
             0
         }
-        _ => err(proc, "close: bad fd"),
+        None => err(proc, "close: bad fd"),
+    }
+}
+
+/// PIPE(21): fd-array-ptr — 05-06 (D-04's connectembed substrate;
+/// measured ×1 in the 05-03 trace — the ONE connectembed pipe).  Donor
+/// syspipe (9k sysfile.c): attach a FRESH pipe ("#|" — one Pipe per
+/// attach, never shared across attaches), walk data/data1, open both
+/// ORDWR, install the pair at the two lowest free slots (found BEFORE
+/// anything installs — a one-slot table fails with a named errstr and
+/// consumes nothing), and write the two fds back through the validated
+/// user array (two 32-bit ints — the width discipline).
+///
+/// The ends reference the ONE Arc-shared Pipe (Pitfall 4): writes on end
+/// i land in the queue end 1-i reads; fork/dup clone the Arc, never the
+/// bytes.
+fn sys_pipe(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
+    let Some(args) = sargs(frame, proc, 1) else {
+        return err(proc, "pipe: bad argument block");
+    };
+    let arr_va = args[0];
+    if proc.validate_user_range(arr_va, 8, true).is_err() {
+        return err(proc, "pipe: bad fd array");
+    }
+    // The pipe pair (the registry '|' twin — a fresh attach per call).
+    let dir = port::devpipe::attach();
+    let c0 = match port::devpipe::walk(&dir, b"data") {
+        Ok(c) => c,
+        Err(msg) => return err(proc, msg),
+    };
+    let c1 = match port::devpipe::walk(&dir, b"data1") {
+        Ok(c) => c,
+        Err(msg) => return err(proc, msg),
+    };
+    let Some(pair) = proc.fd_free_pair() else {
+        return err(proc, "pipe: no free fd pair");
+    };
+    let e0 = match namec::open_chan(&c0, port::dat::ORDWR) {
+        Ok(c) => c,
+        Err(msg) => return err(proc, msg),
+    };
+    let e1 = match namec::open_chan(&c1, port::dat::ORDWR) {
+        Ok(c) => c,
+        Err(msg) => {
+            // Balance e0's open before failing (the close dispatch).
+            port::namec::close_chan(&e0);
+            return err(proc, msg);
+        }
+    };
+    proc.fd_install_pair(pair, e0, e1);
+    let out = unsafe { user_slice_mut(arr_va, 8) };
+    out[0..4].copy_from_slice(&(pair.0 as u32).to_le_bytes());
+    out[4..8].copy_from_slice(&(pair.1 as u32).to_le_bytes());
+    0
+}
+
+/// DUP(5): oldfd, newfd — 05-06 (measured ×9 in the 05-03 trace;
+/// connectembed's child dups the pipe ends onto 0/1).  Donor sysdup
+/// (9k sysfile.c): the old fd's chan is ref-cloned (an open pipe end's
+/// count bumps — the Arc is shared, never the bytes); newfd == -1
+/// installs at the lowest free slot; an occupied newfd is EVICTED and
+/// close-dispatched AFTER the install ("close after dup'ing, so
+/// date > #d/1 works").  Returns newfd.
+fn sys_dup(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
+    let Some(args) = sargs(frame, proc, 2) else {
+        return err(proc, "dup: bad argument block");
+    };
+    let (old, new) = (args[0] & 0xffff_ffff, (args[1] & 0xffff_ffff) as u32 as i32); // both ints
+    let Some(c) = proc.fd_ref_clone(old) else {
+        return err(proc, "dup: bad old fd");
+    };
+    if new == -1 {
+        return match proc.fd_install_lowest(c) {
+            Some(slot) => slot,
+            None => err(proc, "dup: no free fd"),
+        };
+    }
+    if new < 0 {
+        return err(proc, "dup: bad new fd");
+    }
+    match proc.fd_install_at(new as u64, c) {
+        Some(evicted) => {
+            if let Some(old_chan) = evicted {
+                port::namec::close_chan(&old_chan);
+            }
+            new as u64
+        }
+        None => err(proc, "dup: bad new fd"),
     }
 }
 
@@ -801,22 +893,33 @@ fn sys_close(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 /// RFPROC.  Supported this era: the address space is ALWAYS eagerly copied
 /// page-for-page (no COW, no shared writable pages — T-04-15; the donor's
 /// RFMEM share-semantics is not honored, which the smoke does not depend
-/// on); the fd table is always dup'd (the RFFDG shape); RFNOWAIT is
-/// honored (EXITS posts no wait record); RFREND is a no-op (no rendezvous
-/// this era).  05-04 (D-03) adds the namespace group semantics per
-/// fork(2): RFPROC+neither shares the parent's pgrp, RFNAMEG deep-copies,
-/// RFCNAMEG starts clean — and the non-RFPROC split (boot(8)'s
-/// `rfork(RFNAMEG)`): the CALLER's group becomes a fresh copy (RFNAMEG) or
-/// fresh empty (RFCNAMEG).  05-05 (D-07) adds the ENV group semantics,
-/// the same donor shape (fork(2): "RFENVG: the environment variables are
-/// COPIED; otherwise the two processes SHARE"; "RFCENVG: the new process
-/// starts with an EMPTY environment"): RFPROC+neither shares the
-/// parent's env group, RFENVG deep-copies (envcpy), RFCENVG empties; the
-/// non-RFPROC env split (newns's `rfork(RFENVG|RFCNAMEG)`) re-groups the
-/// CALLER (copy on RFENVG, empty on RFCENVG).  The non-RFPROC fd-group
-/// split (RFFDG/RFCFDG) has no measured caller and stays a loud -1 —
-/// never silent partial semantics.  Every other bit combination is a
-/// loud -1 errstr.
+/// on); RFNOWAIT is honored (EXITS posts no wait record); RFREND is a
+/// no-op (no rendezvous this era); RFNOTEG is accepted as a no-op (05-06:
+/// note delivery is PER-PID — devproc's post_note has no group channel,
+/// so there is no note group to split; paqfs's
+/// rfork(RFFDG|RFPROC|RFNAMEG|RFNOTEG) requires it).  05-04 (D-03) adds
+/// the namespace group semantics per fork(2): RFPROC+neither shares the
+/// parent's pgrp, RFNAMEG deep-copies, RFCNAMEG starts clean — and the
+/// non-RFPROC split (boot(8)'s `rfork(RFNAMEG)`): the CALLER's group
+/// becomes a fresh copy (RFNAMEG) or fresh empty (RFCNAMEG).  05-05
+/// (D-07) adds the ENV group semantics, the same donor shape (fork(2):
+/// "RFENVG: the environment variables are COPIED; otherwise the two
+/// processes SHARE"; "RFCENVG: the new process starts with an EMPTY
+/// environment"): RFPROC+neither shares the parent's env group, RFENVG
+/// deep-copies (envcpy), RFCENVG empties; the non-RFPROC env split
+/// (newns's `rfork(RFENVG|RFCNAMEG)`) re-groups the CALLER (copy on
+/// RFENVG, empty on RFCENVG).  05-06 (D-03's fd half) adds the FD group
+/// semantics, again per fork(2)/sysrfork ("RFFDG: the invoker's file
+/// descriptor table is COPIED; otherwise the two processes SHARE a
+/// single table"): RFPROC+neither SHARES the Arc<Lock<FdGroup>> handle,
+/// RFFDG deep-COPIES slot-by-slot (dupfgrp — pipe chans clone their
+/// Arc), RFCFDG empties (dupfgrp(nil)).  libc fork() =
+/// rfork(RFPROC|RFFDG|RFREND) = COPY — connectembed's child dup/close
+/// choreography depends on it.  (The 05-06 plan's bullet inverts RFFDG
+/// vs default — the phase's third flag inversion; the donor governs.)
+/// The non-RFPROC fd-group split (RFFDG/RFCFDG) has no measured caller
+/// and stays a loud -1 — never silent partial semantics.  Every other
+/// bit combination is a loud -1 errstr.
 fn sys_rfork(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 1) else {
         return err(proc, "rfork: bad argument block");
@@ -828,8 +931,17 @@ fn sys_rfork(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     {
         return err(proc, "rfork: bad flags");
     }
-    const SUPPORTED: u64 =
-        RFPROC | RFMEM | RFFDG | RFNOWAIT | RFREND | RFNAMEG | RFCNAMEG | RFENVG | RFCENVG;
+    const SUPPORTED: u64 = RFPROC
+        | RFMEM
+        | RFFDG
+        | RFNOWAIT
+        | RFREND
+        | RFNOTEG
+        | RFNAMEG
+        | RFCNAMEG
+        | RFENVG
+        | RFCENVG
+        | RFCFDG;
     if flag & !SUPPORTED != 0 {
         return err(proc, "rfork: unsupported flags");
     }

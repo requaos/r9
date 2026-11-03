@@ -27,9 +27,6 @@
 //! deadlock behind it.  `ref_clone` is the reference-creating dup (the
 //! pipe end's open count bumps — dat.rs's dup rule); `take`/`store` are
 //! move semantics and never touch open counts.
-//!
-//! RED SKELETON (05-06 Task 1 RED): the copy/ref operations are stubbed
-//! (deep_copy returns EMPTY) — the tests pin the donor semantics first.
 
 extern crate alloc;
 
@@ -37,15 +34,24 @@ use alloc::vec::Vec;
 
 use crate::dat::Chan;
 
-/// The fd group: a fixed array of chan slots (None = free).
+/// The fd group: N chan slots (None = free), HEAP-BACKED by a Vec — an
+/// inline `[Option<Chan>; 32]` materialized ~5.7 KB on the kernel stack
+/// inside Proc::new (the 05-06 debug: the rfork → new_user_proc →
+/// Proc::new chain on a 16 KiB kstack overflowed into the proc's
+/// root-table page below it — the live stack then read as UART-register
+/// garbage mid-print; a Vec's buffer is heap from the start).
 pub struct FdGroup<const N: usize> {
-    pub fds: [Option<Chan>; N],
+    pub fds: Vec<Option<Chan>>,
 }
 
 impl<const N: usize> FdGroup<N> {
-    /// A fresh, empty table (the RFCFDG arm; Proc construction).
+    /// A fresh, empty table (the RFCFDG arm; Proc construction).  The
+    /// slot array is heap-allocated and filled in place (never a giant
+    /// stack temporary — see the type's doc comment).
     pub fn new() -> FdGroup<N> {
-        FdGroup { fds: core::array::from_fn(|_| None) }
+        let mut fds = Vec::with_capacity(N);
+        fds.resize_with(N, || None);
+        FdGroup { fds }
     }
 
     /// The chan at `fd` (borrowed; None for out-of-range/closed).
@@ -72,11 +78,8 @@ impl<const N: usize> FdGroup<N> {
     /// A REFERENCE clone of the chan at `fd` (Chan::dup — bumps an open
     /// pipe end's count; the donor's fdtochan incref).  sys_dup,
     /// rfork's fd copy and devsrv's store ride this.
-    ///
-    /// RED SKELETON: stubbed to None (the real clone lands in GREEN).
     pub fn ref_clone(&self, fd: u64) -> Option<Chan> {
-        let _ = fd;
-        None
+        self.get(fd).map(|c| c.dup())
     }
 
     /// Install `c` at the lowest free slot; None when the table is full
@@ -100,11 +103,14 @@ impl<const N: usize> FdGroup<N> {
     /// The RFFDG arm (donor dupfgrp): a fresh table, each occupied slot
     /// dup'd (pipe chans clone their Arc — BOTH tables' pipe fds
     /// reference the SAME shared queue; slot identity is distinct).
-    ///
-    /// RED SKELETON: returns an EMPTY table (wrong — GREEN lands the
-    /// slot-by-slot dup); the fd-group matrix test pins the semantics.
     pub fn deep_copy(&self) -> FdGroup<N> {
-        FdGroup::new()
+        let mut to = FdGroup::new();
+        for (i, slot) in self.fds.iter().enumerate() {
+            if let Some(c) = slot {
+                to.fds[i] = Some(c.dup());
+            }
+        }
+        to
     }
 
     /// The open slots as (fd, mode) pairs (devdup's directory listing).

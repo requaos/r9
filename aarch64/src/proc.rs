@@ -34,6 +34,7 @@ use core::ptr;
 use port::Result;
 use port::dat::Chan;
 use port::devenv::EnvGroup;
+use port::fdgrp::FdGroup;
 use port::mcslock::{Lock, LockNode};
 use port::mem::{PAGE_SIZE_4K, PhysAddr, PhysRange, VirtRange};
 use port::paqfs::PaqDir;
@@ -54,11 +55,15 @@ use crate::vm::{
 pub const KNAMELEN: usize = 28;
 /// Plan 9 ERRMAX (sys/include/libc.h) — errstr and note-message buffers.
 pub const ERRMAX: usize = 128;
-/// Proc table size (D-13 groundwork: a small fixed array; the 04-07
-/// scheduler iterates it round-robin).
-pub const MAX_PROCS: usize = 8;
-/// Open fd slots per proc.
-pub const MAX_FDS: usize = 16;
+/// Proc table size (05-06, Pitfall 3 + the 05-03 trace: the steady-state
+/// set is boot→init + the persistent paqfs server + rc + a transient
+/// command child, and rc pipelines multiply both procs and fds — sized
+/// for the traced chain with headroom; exhaustion is LOUD, never silent).
+pub const MAX_PROCS: usize = 16;
+/// Open fd slots per proc (05-06, Pitfall 3: init's closefds closes
+/// 3..29 — the table must hold fds through 29 without making that fatal;
+/// pipe+dup flows hold several at once).
+pub const MAX_FDS: usize = 32;
 /// Per-process kernel stack: 16 KiB (4 pages) — the INTERRUPTSTACKSZ
 /// discipline (a dedicated fixed-size kernel stack per trap-taking context).
 const KSTACK_PAGES: usize = 4;
@@ -186,9 +191,21 @@ pub struct Proc {
     /// static singleton — one shared table would give every process the same
     /// address space (04-RESEARCH.md anti-patterns).
     pub root_table: *mut RootPageTable,
-    /// fd slots.  fd 0/1/2 are devcons chans, preopened at construction
-    /// (D-15, Plan 9 convention) — 04-06 fills the seam 04-04 left.
-    pub fd_table: [Option<Chan>; MAX_FDS],
+    /// fd group — 05-06 (D-03's fd half): the slots live in a SHAREABLE
+    /// group object (the donor's Fgrp; fdgrp.rs) behind the mcslock
+    /// idiom, so rfork's fd semantics are real per fork(2)/sysproc.c:
+    /// RFPROC with NEITHER RFFDG nor RFCFDG SHARES this handle (Arc
+    /// clone); RFFDG gives the child a fresh table COPIED slot-by-slot
+    /// (pipe chans clone their Arc — the same queue); RFCFDG a fresh
+    /// EMPTY table.  (The 05-06 plan's bullet inverts RFFDG vs default;
+    /// the donor governs — the 05-04/05-05 inversion precedent.  libc
+    /// fork() = rfork(RFPROC|RFFDG|RFREND) = COPY, which connectembed's
+    /// dup/close choreography requires.)  fd 0/1/2 are devcons chans,
+    /// preopened at construction (D-15, Plan 9 convention).  The group
+    /// Lock is a LEAF (syscall context only, briefly; never from IRQ
+    /// context, never held across a blocking pipe op — the checked-out
+    /// chan pattern, fdgrp.rs).
+    pub fd_group: Arc<Lock<FdGroup<MAX_FDS>>>,
     /// User mappings, exec/fault-appended — rfork-copy/exit-free walk this.
     pub mapping_log: Vec<MappingRecord>,
     /// The a.out-derived VA map; None until exec.
@@ -272,7 +289,7 @@ impl Proc {
             kstack_top,
             kstack_pas,
             root_table,
-            fd_table: core::array::from_fn(|_| None),
+            fd_group: Arc::new(Lock::new("fdgrp", FdGroup::new())),
             mapping_log: Vec::new(),
             segments: None,
             text_source: None,
@@ -326,20 +343,114 @@ impl Proc {
 
     /// D-15 preopen: fd 0/1/2 are devcons chans (Plan 9 convention — 0
     /// OREAD, 1/2 OWRITE).  Called at the end of construction; the cons
-    /// device itself needs no per-chan state (one console).
+    /// device itself needs no per-chan state (one console).  The chans
+    /// are marked copen (they ARE open fds) — the flag's only consumer
+    /// this era is devpipe's open-end counting, which cons never touches.
     fn preopen_cons_fds(&mut self) {
         use port::dat::{DEV_CONS, OREAD, OWRITE};
         // Qid path 1 = the cons file (one file this era; QTFILE).
         let cons_qid = port::dat::Qid { path: 1, vers: 0, typ: 0 };
-        self.fd_table[0] = Some(Chan::new(DEV_CONS, cons_qid, OREAD));
-        self.fd_table[1] = Some(Chan::new(DEV_CONS, cons_qid, OWRITE));
-        self.fd_table[2] = Some(Chan::new(DEV_CONS, cons_qid, OWRITE));
+        let node = LockNode::new();
+        let mut g = self.fd_group.lock(&node);
+        for (slot, mode) in [(0, OREAD), (1, OWRITE), (2, OWRITE)] {
+            let mut c = Chan::new(DEV_CONS, cons_qid, mode);
+            c.mark_open();
+            g.fds[slot] = Some(c);
+        }
     }
 
-    /// The chan behind `fd`, or None for an out-of-range/closed slot (the
-    /// syscall handlers map that to errstr + -1).
-    pub fn fd(&mut self, fd: u64) -> Option<&mut Chan> {
-        self.fd_table.get_mut(fd as usize)?.as_mut()
+    // -------------------------------------------------------------------
+    // fd ops (05-06) — the checked-out-chan pattern (fdgrp.rs's header):
+    // read/write/stat TAKE the chan out of its slot and put it back, so a
+    // blocking pipe op never holds the group lock.  Take/store are move
+    // semantics (no open-count effects); ref_clone is the
+    // reference-creating dup (Chan::dup's pipe rule); close dispatch
+    // (namec::close_chan) fires when an open chan leaves a slot.
+    // -------------------------------------------------------------------
+
+    /// Take the chan OUT of fd's slot (the checkout's removal half).
+    /// None for out-of-range/closed (callers map that to errstr + -1).
+    pub fn fd_take(&mut self, fd: u64) -> Option<Chan> {
+        let node = LockNode::new();
+        self.fd_group.lock(&node).take(fd)
+    }
+
+    /// Put a checked-out chan BACK after its op.  An occupied slot means
+    /// a shared-group sibling interleaved during a blocking op (no caller
+    /// this era: the only blocking op — a pipe read — has no
+    /// shared-table user); the evictee is close-dispatched defensively
+    /// and the anomaly is logged, loudly.
+    pub fn fd_store(&mut self, fd: u64, c: Chan) {
+        let node = LockNode::new();
+        if let Some(evicted) = self.fd_group.lock(&node).store(fd, c) {
+            println!("proc: fd {fd} occupied at write-back — closing the evicted chan");
+            port::namec::close_chan(&evicted);
+        }
+    }
+
+    /// A REFERENCE clone of the chan at fd (Chan::dup — an open pipe
+    /// end's count bumps).  sys_dup / devsrv's store / devdup's resolve
+    /// ride this.
+    pub fn fd_ref_clone(&mut self, fd: u64) -> Option<Chan> {
+        let node = LockNode::new();
+        self.fd_group.lock(&node).ref_clone(fd)
+    }
+
+    /// The chan's walked path at fd (sys_fd2path's source) — a read, not
+    /// a checkout.
+    pub fn fd_path(&mut self, fd: u64) -> Option<Vec<u8>> {
+        let node = LockNode::new();
+        self.fd_group.lock(&node).get(fd).map(|c| c.path.clone())
+    }
+
+    /// Install `c` at the lowest free slot.  On a full table the chan is
+    /// close-dispatched HERE (an opened-but-never-installed pipe end's
+    /// count must not leak) and None returns — the caller names the
+    /// error ("open: no free fd" etc.).
+    pub fn fd_install_lowest(&mut self, c: Chan) -> Option<u64> {
+        let node = LockNode::new();
+        let mut g = self.fd_group.lock(&node);
+        match g.fds.iter().position(|s| s.is_none()) {
+            Some(slot) => {
+                g.fds[slot] = Some(c);
+                Some(slot as u64)
+            }
+            None => {
+                drop(g);
+                port::namec::close_chan(&c);
+                None
+            }
+        }
+    }
+
+    /// sys_dup's onto-arm: install `c` at `fd`, returning the EVICTED
+    /// chan for the caller to close (the donor's "close after dup'ing,
+    /// so date > #d/1 works" — the swap happens first).  An out-of-range
+    /// target close-dispatches `c` HERE (same leak rule) and returns
+    /// None (the caller names the error).
+    pub fn fd_install_at(&mut self, fd: u64, c: Chan) -> Option<Option<Chan>> {
+        if fd as usize >= MAX_FDS {
+            port::namec::close_chan(&c);
+            return None;
+        }
+        let node = LockNode::new();
+        Some(self.fd_group.lock(&node).store(fd, c))
+    }
+
+    /// sys_pipe's pair allocation (donor newfd2): two free slots found
+    /// BEFORE anything installs (a one-slot table fails the pipe without
+    /// consuming an fd).
+    pub fn fd_free_pair(&mut self) -> Option<(usize, usize)> {
+        let node = LockNode::new();
+        self.fd_group.lock(&node).free_pair()
+    }
+
+    /// Install a pair at the slots fd_free_pair found.
+    pub fn fd_install_pair(&mut self, pair: (usize, usize), c0: Chan, c1: Chan) {
+        let node = LockNode::new();
+        let mut g = self.fd_group.lock(&node);
+        g.fds[pair.0] = Some(c0);
+        g.fds[pair.1] = Some(c1);
     }
 
     /// Set the errstr string (Plan 9 ERRMAX-bounded, NUL-terminated) — the
@@ -907,6 +1018,39 @@ pub fn current_env_group() -> Option<Arc<Lock<EnvGroup>>> {
     Some(unsafe { &*cur }.env_group.clone())
 }
 
+/// devpipe's block/wake hooks (05-06, D-04's connectembed substrate —
+/// the port crate cannot see PROC_TABLE, so these are injected at boot:
+/// the devproc.rs set_post_hook idiom).
+///
+/// The calling proc's pid (waiter registration).  Syscall context only —
+/// a pipe op always has a current proc.
+pub fn pipe_current_pid() -> u64 {
+    let cur = current_proc();
+    assert!(!cur.is_null(), "devpipe op with no current process");
+    unsafe { (*cur).pid }
+}
+
+/// Park the calling proc mid-syscall until a pipe write/close wakes it —
+/// the 04-07 AWAIT shape (mark Blocked + swtch to the scheduler context;
+/// resumes when pipe_wake readies us).
+pub fn pipe_block_current() {
+    sched();
+}
+
+/// Wake the procs blocked on a pipe queue (devpipe's write/close calls
+/// with the queue's waiter list): Blocked → Ready (blocked_in_kernel
+/// stays set — the sched loop resumes them via swtch, the post_wait_record
+/// pattern).  PROC_TABLE-brief.
+pub fn pipe_wake(pids: &[u64]) {
+    let node = LockNode::new();
+    let mut table = PROC_TABLE.lock(&node);
+    for p in table.procs.iter_mut().flatten() {
+        if p.state == ProcState::Blocked && pids.contains(&p.pid) {
+            p.state = ProcState::Ready;
+        }
+    }
+}
+
 /// devproc-lite's write hook (04-08, D-16/T-04-17): append the note to the
 /// ADDRESSED pid's queue — no broadcast, no group semantics.  The write is
 /// the whole posting path (libc postnote(PNPROC) lands here via
@@ -1067,14 +1211,24 @@ fn rfork_copy(parent: &Proc, child: &mut Proc, frame: &TrapFrame, flag: u64) -> 
     child.segments = parent.segments.clone();
     child.text_source = parent.text_source.clone();
 
-    // Dup the fd table (value copies — the streaming offsets diverge after
-    // the fork, a documented approximation of Plan 9's shared-Chan
-    // semantics; the smoke's fds are the devcons preopens).
-    for (i, slot) in parent.fd_table.iter().enumerate() {
-        if let Some(c) = slot {
-            child.fd_table[i] = Some(c.dup());
-        }
-    }
+    // 05-06 (D-03's fd half): the fd GROUP semantics per fork(2) +
+    // 9k sysproc.c sysrfork — RFCFDG = fresh EMPTY table (dupfgrp(nil));
+    // RFFDG = a fresh table COPIED slot-by-slot (dupfgrp — pipe chans
+    // clone their Arc, so both tables' pipe fds reference the SAME
+    // queue); NEITHER = SHARE the parent's handle (Arc clone).  (The
+    // 05-06 plan's bullet inverts RFFDG vs default; fork(2) + sysrfork +
+    // libc fork() = rfork(RFPROC|RFFDG|RFREND) = COPY govern — the
+    // phase's third inversion, the 05-04/05-05 precedent.  The pre-05-06
+    // code always dup'd — the RFFDG arm by another name; SHARE is the
+    // new default.)
+    child.fd_group = if flag & crate::syscall::RFCFDG != 0 {
+        Arc::new(Lock::new("fdgrp", FdGroup::new()))
+    } else if flag & crate::syscall::RFFDG != 0 {
+        let node = LockNode::new();
+        Arc::new(Lock::new("fdgrp", parent.fd_group.lock(&node).deep_copy()))
+    } else {
+        parent.fd_group.clone()
+    };
 
     // 05-04 (D-03): the namespace group + slash/dot, fork(2)/9k sysrfork
     // semantics.  RFNAMEG = fresh COPY of the parent's group (pgrpcpy);

@@ -111,6 +111,13 @@ impl Chan {
         Chan { qid, mode, offset: 0, dev, path: Vec::new(), paqdir: None, pipe: None, copen: false }
     }
 
+    /// Mark the chan open (COPEN) OUTSIDE the funnel — the one
+    /// legitimate caller is proc.rs's fd 0/1/2 preopen (those fds are
+    /// open by construction, D-15; never opened through open_chan).
+    pub fn mark_open(&mut self) {
+        self.copen = true;
+    }
+
     /// Value-dup for 04-07's rfork fd-table copy: a fresh Chan naming the
     /// same file/device (same dev/qid/mode; the paqfs entry handle is
     /// cloned).  Plan 9's shared-Chan semantics (one offset, refcounted)
@@ -124,10 +131,8 @@ impl Chan {
     /// pipe's ends would diverge into per-chan copies and connectembed's
     /// 9P exchange would deadlock silently.
     pub fn dup(&self) -> Chan {
-        if self.copen {
-            if let Some(pipe) = &self.pipe {
-                crate::devpipe::ref_open_end(pipe, self.qid.path);
-            }
+        if self.copen && let Some(pipe) = &self.pipe {
+            crate::devpipe::ref_open_end(pipe, self.qid.path);
         }
         Chan {
             qid: self.qid,

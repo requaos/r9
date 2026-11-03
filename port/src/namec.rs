@@ -222,11 +222,7 @@ pub fn stat_chan(c: &Chan, sb: &mut [u8]) -> Result<u64> {
 /// teardown rides).  Non-open chans (walk intermediates — copen clear)
 /// and close-less devices are no-ops.
 pub fn close_chan(c: &Chan) {
-    if !c.copen {
-        return;
-    }
-    match c.dev {
-        DEV_PIPE => crate::devpipe::close(c),
-        _ => {}
+    if c.copen && c.dev == DEV_PIPE {
+        crate::devpipe::close(c);
     }
 }
