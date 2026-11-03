@@ -718,6 +718,23 @@ pub fn any_active_procs() -> bool {
     table.procs.iter().flatten().any(|p| p.state != ProcState::Moribund)
 }
 
+/// WR-05: the shared mid-construction unwind for new_user_proc — free the
+/// root-table page and the already-allocated kstack pages (the caller
+/// passes exactly the live prefix, kstack_pas[..n]).  The kernel-side VA
+/// mappings stay, per the free_root_table_and_kstack convention.  Never
+/// called with a lock held (the module discipline: the table lock is never
+/// held across a pagealloc call).
+fn unwind_new_proc(root_pa: PhysAddr, live_kstack_pas: &[u64], context: &'static str) {
+    if let Err(err) = pagealloc::deallocate_physpage(root_pa) {
+        println!("proc: {context} deallocate root table {:#x}: {err:?}", root_pa.addr());
+    }
+    for &pa in live_kstack_pas {
+        if let Err(err) = pagealloc::deallocate_physpage(PhysAddr::new(pa)) {
+            println!("proc: {context} deallocate kstack page {pa:#x}: {err:?}");
+        }
+    }
+}
+
 /// Allocate and register a fresh user process: pid, 16 KiB kernel stack, and
 /// a per-process root page table with the recursive slot-511 self-entry.
 /// The proc starts with no segments, no byte source, and an empty mapping
@@ -759,22 +776,33 @@ pub fn new_user_proc(name: &str) -> Result<&'static mut Proc> {
     // interleaves between the bump calls in the single-threaded boot/exec
     // context; a gap would silently break the stack, so assert contiguity.
     // The PAs are recorded (kstack_pas) — the bump-allocator VAs say nothing
-    // about backing pages, and 04-06's EXITS path frees by PA.
+    // about backing pages, and 04-06's EXITS path frees by PA.  WR-05:
+    // every mid-construction failure funnels through unwind_new_proc
+    // (root-table page + the kstack pages allocated so far) — no kernel
+    // pages leak per failed rfork/exec attempt.
     let mut kstack_base = 0usize;
     let mut kstack_pas = [0u64; KSTACK_PAGES];
-    for (i, pa_slot) in kstack_pas.iter_mut().enumerate() {
+    for i in 0..KSTACK_PAGES {
         let va_mapping = vm::next_free_device_page4k();
         let va = va_mapping.map(PhysAddr::new(0));
         if i == 0 {
             kstack_base = va;
         } else if va != kstack_base + i * PAGE_SIZE_4K {
+            unwind_new_proc(root_pa, &kstack_pas[..i], "kstack-contiguity");
             return Err("proc: kernel stack VAs not contiguous");
         }
-        let pa = pagealloc::allocate_physpage()
-            .map_err(|_| "proc: kernel stack page alloc failed")?;
+        let pa = match pagealloc::allocate_physpage() {
+            Ok(pa) => pa,
+            Err(_) => {
+                unwind_new_proc(root_pa, &kstack_pas[..i], "kstack-alloc");
+                return Err("proc: kernel stack page alloc failed");
+            }
+        };
+        // Record BEFORE the map so the map-failure unwind covers this page.
+        kstack_pas[i] = pa.addr();
         let mut physalloc = PhysPageAllocator {};
         let mut vmt = VmTraitImpl {};
-        vm::kernel_pagetable()
+        if vm::kernel_pagetable()
             .map_phys_range(
                 &mut physalloc,
                 &mut vmt,
@@ -785,8 +813,11 @@ pub fn new_user_proc(name: &str) -> Result<&'static mut Proc> {
                 PageSize::Page4K,
                 RootPageTableType::Kernel,
             )
-            .map_err(|_| "proc: kernel stack map failed")?;
-        *pa_slot = pa.addr();
+            .is_err()
+        {
+            unwind_new_proc(root_pa, &kstack_pas[..=i], "kstack-map");
+            return Err("proc: kernel stack map failed");
+        }
     }
     let kstack_top = kstack_base + KSTACK_PAGES * PAGE_SIZE_4K;
 
@@ -804,14 +835,7 @@ pub fn new_user_proc(name: &str) -> Result<&'static mut Proc> {
         // free_root_table_and_kstack convention; the burned pid is
         // harmless.
         drop(table);
-        if let Err(err) = pagealloc::deallocate_physpage(root_pa) {
-            println!("proc: table-full deallocate root table {:#x}: {err:?}", root_pa.addr());
-        }
-        for pa in kstack_pas {
-            if let Err(err) = pagealloc::deallocate_physpage(PhysAddr::new(pa)) {
-                println!("proc: table-full deallocate kstack page {pa:#x}: {err:?}");
-            }
-        }
+        unwind_new_proc(root_pa, &kstack_pas, "table-full");
         return Err("proc: table full");
     };
     let mut proc = Proc::new(pid, name, kstack_top, kstack_pas, root_ptr);
