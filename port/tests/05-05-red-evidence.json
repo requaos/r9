@@ -1,0 +1,9 @@
+{
+  "command": "cargo test -p port --test devenv_test",
+  "exitCode": 101,
+  "targetTest": "seeded_keys_read_back_and_unset_is_absent",
+  "targetFile": "port/tests/devenv_test.rs",
+  "output": "TAP version 13\n1..6\nnot ok 1 - devenv_device_flow_over_dynamic_groups\nnot ok 2 - env_bounds_and_name_validation\nnot ok 3 - rfork_env_semantics_share_copy_empty\nnot ok 4 - seeded_keys_read_back_and_unset_is_absent\nnot ok 5 - two_groups_hold_same_key_independently\nnot ok 6 - write_replace_and_create_round_trip\n# tests 6\n# pass 0\n# fail 6\n",
+  "expected": "a seeded key (cputype=aarch64) reads back its seeded value from the env group (05-05 behavior bullet 1 — the kernel-seeded root group contract, RESEARCH Pattern 3 / Pitfall 1)",
+  "actual": "EnvGroup::get(b\"cputype\") returns None on the RED skeleton — assertion `left == right` failed, left: None, right: Some(\"aarch64\") — 6 of 6 devenv tests fail on .expect/assert (the device's RED skeleton errors/absences on the planned-behavior paths)"
+}
