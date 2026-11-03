@@ -33,7 +33,10 @@
 
 use alloc::vec::Vec;
 
-use port::dat::{Chan, DEV_CONS, DEV_PROC, DEV_ROOT, OEXEC, OMASK, OREAD, OTRUNC};
+use port::dat::{DEV_CONS, DEV_PROC, DEV_ROOT, OEXEC};
+use port::mcslock::LockNode;
+use port::namec::{self, NamecMode};
+use port::pgrp::{MAFTER, MBEFORE, MMASK, MORDER};
 use port::println;
 
 use crate::exec;
@@ -43,6 +46,8 @@ use crate::trap;
 use crate::trap::TrapFrame;
 
 // The frozen syscall numbers (Harvey sys/src/libc/9syscall/sys.h).
+const BIND: u64 = 2;
+const CHDIR: u64 = 3;
 const CLOSE: u64 = 4;
 const EXEC: u64 = 7;
 const EXITS: u64 = 8;
@@ -50,19 +55,22 @@ const OPEN: u64 = 14;
 const RFORK: u64 = 19;
 const NOTIFY: u64 = 28;
 const NOTED: u64 = 29;
+const UNMOUNT: u64 = 35;
 const ERRSTR: u64 = 41;
 const AWAIT: u64 = 47;
 const PREAD: u64 = 50;
 const PWRITE: u64 = 51;
 
 // rfork flags (Harvey sys/include/libc.h — frozen values; 04-07).
-const RFNAMEG: u64 = 1 << 0;
+// pub(crate) since 05-04: proc.rs's rfork_clone reads RFNAMEG/RFCNAMEG
+// (the D-03 namespace group semantics) — one mirror, one provenance.
+pub(crate) const RFNAMEG: u64 = 1 << 0;
 const RFENVG: u64 = 1 << 1;
 const RFFDG: u64 = 1 << 2;
 const RFPROC: u64 = 1 << 4;
 const RFMEM: u64 = 1 << 5;
-const RFNOWAIT: u64 = 1 << 6;
-const RFCNAMEG: u64 = 1 << 10;
+pub(crate) const RFNOWAIT: u64 = 1 << 6;
+pub(crate) const RFCNAMEG: u64 = 1 << 10;
 const RFCENVG: u64 = 1 << 11;
 const RFCFDG: u64 = 1 << 12;
 const RFREND: u64 = 1 << 13;
@@ -75,11 +83,15 @@ type Handler = fn(&mut TrapFrame, &mut Proc) -> u64;
 /// None → loud unimplemented at dispatch time (D-14).  The implemented set
 /// is the 04-01 measured trace {pwrite(51), open(14), pread(50), close(4),
 /// exits(8)} plus D-14's named SC#4 core members EXEC(7), the 04-07 process
-/// pair RFORK(19)/AWAIT(47), and 04-08's notes pair NOTIFY(28)/NOTED(29) —
-/// nothing else; the trace carries no brk_(24)/segbrk(12), so they stay
-/// None.
+/// pair RFORK(19)/AWAIT(47), and 04-08's notes pair NOTIFY(28)/NOTED(29),
+/// grown by 05-04 with the 05-03 real-chain trace's namespace members
+/// BIND(2), CHDIR(3) and UNMOUNT(35) (the trace measured unmount ×1 —
+/// boot's settime /tmp handling).  The trace carries no brk_(24)/segbrk(12)
+/// on the hello path, so they stay None.
 static DISPATCH: [Option<Handler>; 55] = {
     let mut t: [Option<Handler>; 55] = [None; 55];
+    t[BIND as usize] = Some(sys_bind);
+    t[CHDIR as usize] = Some(sys_chdir);
     t[CLOSE as usize] = Some(sys_close);
     t[EXEC as usize] = Some(sys_exec);
     t[EXITS as usize] = Some(sys_exits);
@@ -87,6 +99,7 @@ static DISPATCH: [Option<Handler>; 55] = {
     t[RFORK as usize] = Some(sys_rfork);
     t[NOTIFY as usize] = Some(sys_notify);
     t[NOTED as usize] = Some(sys_noted);
+    t[UNMOUNT as usize] = Some(sys_unmount);
     t[ERRSTR as usize] = Some(sys_errstr);
     t[AWAIT as usize] = Some(sys_await);
     t[PREAD as usize] = Some(sys_pread);
@@ -380,75 +393,165 @@ fn sys_noted(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     }
 }
 
-/// OPEN(14): path, mode.  The literal names "cons" and "#c/cons" yield a
-/// devcons chan; absolute or bare names walk devroot component-wise from
-/// the root (D-15's one mechanism).  Installed in the lowest free fd slot.
+/// OPEN(14): path, mode.  05-04 (D-03, the one-way door): EVERY path
+/// resolves through the namespace core — namec + the proc's mount table —
+/// and the resolved chan opens via the per-device dispatch
+/// (namec::open_chan).  The Phase-4 scaffolding that routed paths by
+/// literal name matching is RETIRED (the plan's prohibition: it must not
+/// be extended for new devices nor kept as a fallback).
+/// Installed in the lowest free fd slot.
 fn sys_open(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 2) else {
         return err(proc, "open: bad argument block");
     };
-    let (path_va, mode) = (args[0], args[1] as u32);
+    let (path_va, mode) = (args[0], (args[1] & 0xffff_ffff) as u32); // mode is an int (width discipline)
     let path = match copy_user_str(proc, path_va, ERRMAX) {
         Ok(path) => path,
         Err(msg) => return err(proc, msg),
     };
-    let access = mode & OMASK;
 
-    let chan = if path == b"cons" || path == b"#c/cons" {
-        if access == OEXEC {
-            return err(proc, "cons: cannot exec-open the console");
-        }
-        // Qid path 1 = the cons file (the preopen convention, proc.rs).
-        Chan::new(DEV_CONS, port::dat::Qid { path: 1, vers: 0, typ: 0 }, access)
-    } else if path == b"/proc" || path.starts_with(b"/proc/") {
-        // devproc-lite (04-08, D-16): the per-process note channel.  attach
-        // lands at the /proc root; the remaining components walk it; the
-        // device enforces its write-only note-file scope at open.
-        let mut c = port::devproc::attach();
-        let rest = &path[b"/proc".len()..]; // after "/proc" (5 bytes)
-        for comp in rest.split(|&b| b == b'/').filter(|c| !c.is_empty()) {
-            c = match port::devproc::walk(&c, comp) {
-                Ok(c) => c,
-                Err(msg) => return err(proc, msg),
-            };
-        }
-        match port::devproc::open(&c, access) {
-            Ok(c) => c,
-            Err(msg) => return err(proc, msg),
-        }
-    } else {
-        // devroot: the initrd root tree is read-only — any write-side
-        // intent (OWRITE/ORDWR access, OTRUNC) fails.
-        if access != OREAD && access != OEXEC {
-            return err(proc, "devroot: read-only filesystem");
-        }
-        if mode & OTRUNC != 0 {
-            return err(proc, "devroot: read-only filesystem");
-        }
-        let Some(root) = port::devroot::root() else {
-            return err(proc, "devroot: not mounted");
-        };
-        let mut c = match root.attach_root() {
-            Ok(c) => c,
-            Err(msg) => return err(proc, msg),
-        };
-        for comp in path.split(|&b| b == b'/').filter(|c| !c.is_empty()) {
-            c = match root.walk(&c, comp) {
-                Ok(c) => c,
-                Err(_) => return err(proc, "open: path does not exist"),
-            };
-        }
-        match root.open(&c, access) {
-            Ok(c) => c,
-            Err(msg) => return err(proc, msg),
-        }
+    let pg = proc.pgrp.clone();
+    let node = LockNode::new();
+    let guard = pg.lock(&node);
+    let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
+        return err(proc, "open: no namespace (pre-exec)");
     };
+    let c = match namec::namec(&path, slash, dot, &guard, NamecMode::Open) {
+        Ok(c) => c,
+        Err(msg) => return err(proc, msg),
+    };
+    let opened = match namec::open_chan(&c, mode) {
+        Ok(c) => c,
+        Err(msg) => return err(proc, msg),
+    };
+    drop(guard);
 
     let Some(slot) = proc.fd_table.iter().position(|s| s.is_none()) else {
         return err(proc, "open: no free fd");
     };
-    proc.fd_table[slot] = Some(chan);
+    proc.fd_table[slot] = Some(opened);
     slot as u64
+}
+
+/// BIND(2): name, old, flag — 05-04 (D-03; measured ×22 in the 05-03
+/// trace).  Both path strings cross the trust boundary: sargs +
+/// validate_user_range BEFORE any kernel deref (T-04-11 discipline,
+/// verbatim).  The source resolves with the union-head redirect (donor
+/// namec's Abind domount); the target NEVER redirects (Amount — stacked
+/// binds attach to the original directory) and must EXIST (Pitfall-8:
+/// MCREATE permits later creation IN the mounted dir; it never conjures
+/// the mount target).  The dir/file agreement + order-bit semantics are
+/// cmount's, ported in pgrp::bind.
+fn sys_bind(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
+    let Some(args) = sargs(frame, proc, 3) else {
+        return err(proc, "bind: bad argument block");
+    };
+    let (name_va, old_va, flag) = (args[0], args[1], (args[2] & 0xffff_ffff) as u32); // flag is an int
+    // 9k bindmount: unknown bits and BEFORE|AFTER together are Ebadarg.
+    if flag & !MMASK != 0 || (flag & MORDER) == (MBEFORE | MAFTER) {
+        return err(proc, "bind: bad flags");
+    }
+    let name = match copy_user_str(proc, name_va, ERRMAX) {
+        Ok(s) => s,
+        Err(msg) => return err(proc, msg),
+    };
+    let old = match copy_user_str(proc, old_va, ERRMAX) {
+        Ok(s) => s,
+        Err(msg) => return err(proc, msg),
+    };
+
+    let pg = proc.pgrp.clone();
+    let node = LockNode::new();
+    let mut guard = pg.lock(&node);
+    let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
+        return err(proc, "bind: no namespace (pre-exec)");
+    };
+    let src = match namec::namec(&name, slash, dot, &guard, NamecMode::BindSource) {
+        Ok(c) => c,
+        Err(msg) => return err(proc, msg),
+    };
+    let tgt = match namec::namec(&old, slash, dot, &guard, NamecMode::MountTarget) {
+        Ok(c) => c,
+        Err(msg) => return err(proc, msg),
+    };
+    match guard.bind(src, &tgt, flag) {
+        Ok(_) => 0,
+        Err(msg) => err(proc, msg),
+    }
+}
+
+/// CHDIR(3): path — 05-04 (measured ×2: ps's /proc chdir, newns's cd).
+/// 9k syschdir: namec with Atodir semantics (NO mount-point redirect —
+/// "directories are left before the mount point, so one may mount on /
+/// or . and see the effect"), the target must be a directory, then
+/// up->dot = c.
+fn sys_chdir(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
+    let Some(args) = sargs(frame, proc, 1) else {
+        return err(proc, "chdir: bad argument block");
+    };
+    let path = match copy_user_str(proc, args[0], ERRMAX) {
+        Ok(s) => s,
+        Err(msg) => return err(proc, msg),
+    };
+    let pg = proc.pgrp.clone();
+    let node = LockNode::new();
+    let guard = pg.lock(&node);
+    let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
+        return err(proc, "chdir: no namespace (pre-exec)");
+    };
+    let c = match namec::namec(&path, slash, dot, &guard, NamecMode::ToDir) {
+        Ok(c) => c,
+        Err(msg) => return err(proc, msg),
+    };
+    if c.qid.typ & port::dat::QTDIR == 0 {
+        return err(proc, "chdir: not a directory");
+    }
+    drop(guard);
+    proc.dot = Some(c);
+    0
+}
+
+/// UNMOUNT(35): name, old — 05-04 (measured ×1: boot's settime /tmp
+/// handling).  9k sysunmount + cunmount: the mount point resolves WITHOUT
+/// the redirect (Amount semantics); old == nil removes the whole mount
+/// point, otherwise only the chain entry whose mounted chan matches old's
+/// identity.  "Not a mount point" / "not in the union" are loud errors.
+fn sys_unmount(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
+    let Some(args) = sargs(frame, proc, 2) else {
+        return err(proc, "unmount: bad argument block");
+    };
+    let (name_va, old_va) = (args[0], args[1]);
+    let name = match copy_user_str(proc, name_va, ERRMAX) {
+        Ok(s) => s,
+        Err(msg) => return err(proc, msg),
+    };
+
+    let pg = proc.pgrp.clone();
+    let node = LockNode::new();
+    let mut guard = pg.lock(&node);
+    let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
+        return err(proc, "unmount: no namespace (pre-exec)");
+    };
+    let tgt = match namec::namec(&name, slash, dot, &guard, NamecMode::MountTarget) {
+        Ok(c) => c,
+        Err(msg) => return err(proc, msg),
+    };
+    let from = if old_va == 0 {
+        None
+    } else {
+        let old = match copy_user_str(proc, old_va, ERRMAX) {
+            Ok(s) => s,
+            Err(msg) => return err(proc, msg),
+        };
+        match namec::namec(&old, slash, dot, &guard, NamecMode::BindSource) {
+            Ok(c) => Some(c),
+            Err(msg) => return err(proc, msg),
+        }
+    };
+    match guard.unmount(&tgt.path, from.as_ref()) {
+        Ok(()) => 0,
+        Err(msg) => err(proc, msg),
+    }
 }
 
 /// EXEC(7): path, argv — 2 syscall args (libc `exec(char *name,
@@ -548,13 +651,18 @@ fn sys_close(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 /// RFORK(19): flag.  Donor sysrfork flag validation (9front@350266104f
 /// sys/src/9/port/sysproc.c): (RFFDG|RFCFDG), (RFNAMEG|RFCNAMEG) and
 /// (RFENVG|RFCENVG) are each mutually exclusive; RFMEM/RFNOWAIT require
-/// RFPROC.  Supported this era: RFPROC required; the address space is
-/// ALWAYS eagerly copied page-for-page (no COW, no shared writable pages —
-/// T-04-15; the donor's RFMEM share-semantics is not honored, which the
-/// smoke does not depend on); the fd table is always dup'd (the RFFDG
-/// shape); RFNOWAIT is honored (EXITS posts no wait record); RFREND is a
-/// no-op (no rendezvous this era).  Every other bit combination is a loud
-/// -1 errstr — never silent partial semantics.
+/// RFPROC.  Supported this era: the address space is ALWAYS eagerly copied
+/// page-for-page (no COW, no shared writable pages — T-04-15; the donor's
+/// RFMEM share-semantics is not honored, which the smoke does not depend
+/// on); the fd table is always dup'd (the RFFDG shape); RFNOWAIT is
+/// honored (EXITS posts no wait record); RFREND is a no-op (no rendezvous
+/// this era).  05-04 (D-03) adds the namespace group semantics per
+/// fork(2): RFPROC+neither shares the parent's pgrp, RFNAMEG deep-copies,
+/// RFCNAMEG starts clean — and the non-RFPROC split (boot(8)'s
+/// `rfork(RFNAMEG)`): the CALLER's group becomes a fresh copy (RFNAMEG) or
+/// fresh empty (RFCNAMEG).  The non-RFPROC fd-group split (RFFDG/RFCFDG)
+/// has no measured caller and stays a loud -1 — never silent partial
+/// semantics.  Every other bit combination is a loud -1 errstr.
 fn sys_rfork(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 1) else {
         return err(proc, "rfork: bad argument block");
@@ -566,17 +674,23 @@ fn sys_rfork(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     {
         return err(proc, "rfork: bad flags");
     }
-    if flag & RFPROC == 0 {
-        if flag & (RFMEM | RFNOWAIT) != 0 {
-            return err(proc, "rfork: bad flags");
-        }
-        return err(proc, "rfork: non-RFPROC unsupported");
-    }
-    const SUPPORTED: u64 = RFPROC | RFMEM | RFFDG | RFNOWAIT | RFREND;
+    const SUPPORTED: u64 = RFPROC | RFMEM | RFFDG | RFNOWAIT | RFREND | RFNAMEG | RFCNAMEG;
     if flag & !SUPPORTED != 0 {
         return err(proc, "rfork: unsupported flags");
     }
-    match proc::rfork_clone(proc, frame, flag & RFNOWAIT != 0) {
+    if flag & RFPROC == 0 {
+        // Donor non-RFPROC branch: RFMEM/RFNOWAIT are Ebadarg; the fd-group
+        // split is unsupported this era (loud); the namespace group split
+        // (RFNAMEG copy / RFCNAMEG wipe) re-groups the CALLER.
+        if flag & (RFMEM | RFNOWAIT | RFFDG | RFCFDG) != 0 {
+            return err(proc, "rfork: bad flags for non-RFPROC");
+        }
+        if flag & (RFNAMEG | RFCNAMEG) != 0 {
+            proc::rfork_namespace_split(proc, flag & RFNAMEG != 0);
+        }
+        return 0;
+    }
+    match proc::rfork_clone(proc, frame, flag) {
         // The parent's wire result is the child pid; the child's copied
         // frame carries x0 = 0 (donor forkchild).
         Ok(pid) => pid,

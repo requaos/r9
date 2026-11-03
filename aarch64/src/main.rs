@@ -432,8 +432,9 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
         port::devroot::mount_initrd(img).unwrap_or_else(|err| panic!("devroot: mount: {err}"));
     let entry_path = BOOT_ENTRY;
     let entry_str = core::str::from_utf8(entry_path).unwrap_or("?");
-    let mut entry_chan =
+    let slash_chan =
         root.attach_root().unwrap_or_else(|err| panic!("devroot: attach: {err}"));
+    let mut entry_chan = slash_chan.dup();
     let mut leaf: &[u8] = entry_path;
     for comp in entry_path.split(|&b| b == b'/').filter(|c| !c.is_empty()) {
         leaf = comp;
@@ -453,13 +454,20 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
     println!("devroot: {entry_str} open ({} bytes)", bin.length);
 
     // Build the first process and exec the entry: a.out parse + segment
-    // record + exactly two eager pages (the seed stack and the zeroed Tos
-    // page) + the forkret frame (04-04 machinery).  Everything else faults
-    // in (D-09).  argv[0] is the leaf name (05-04 tracer; the transitional
-    // method hint is a later task in this plan).
+    // record + the eager data/bss pages (05-04's cold-arg fix) + exactly
+    // two eager stack-side pages (the seed stack and the zeroed Tos page) +
+    // the forkret frame (04-04 machinery).  Text/stack/tos fault in (D-09).
+    // argv[0] is the leaf name (05-04 tracer; the transitional method hint
+    // is a later task in this plan).
     let name = core::str::from_utf8(leaf).unwrap_or("?");
     let argv: &[&[u8]] = &[leaf];
     let proc = proc::new_user_proc(name).unwrap_or_else(|err| panic!("proc: {err}"));
+    // 05-04 (D-03): the first process's namespace root — slash and dot both
+    // start at the devroot attach (the donor's slash/dot; rfork inherits
+    // them, exec preserves them).  Every later proc gets its own Chan value
+    // naming the same tree.
+    proc.slash = Some(slash_chan.dup());
+    proc.dot = Some(slash_chan);
     exec::exec_into(proc, img, &bin, name, argv)
         .unwrap_or_else(|err| panic!("exec: {entry_str}: {err}"));
     let frame = unsafe { &*proc.frame };

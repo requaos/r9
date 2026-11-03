@@ -34,6 +34,12 @@ pub const OEXCL: u32 = 4096;
 /// Mask for the access-mode field (the low two bits).
 pub const OMASK: u32 = 3;
 
+/// Plan 9 Qid type bytes (frozen: sys/include/libc.h) — shared by the
+/// syscall layer's dir checks (chdir) since 05-04.  (The devices keep
+/// their local copies; consolidating them is cleanup, not this plan.)
+pub const QTDIR: u8 = 0x80;
+pub const QTFILE: u8 = 0x00;
+
 /// Mount/bind flag bits (frozen: Harvey sys/include/libc.h:558-564).  The
 /// low two bits are the ORDER field (MREPL replaces; MBEFORE/MAFTER union
 /// before/after); MCREATE permits creation in a mounted directory; MMASK

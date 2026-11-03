@@ -27,6 +27,7 @@
 //!   so nothing reads it.
 
 use alloc::collections::VecDeque;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ptr;
 
@@ -35,6 +36,7 @@ use port::dat::Chan;
 use port::mcslock::{Lock, LockNode};
 use port::mem::{PAGE_SIZE_4K, PhysAddr, PhysRange, VirtRange};
 use port::paqfs::PaqDir;
+use port::pgrp::Pgrp;
 use port::println;
 
 use crate::kmem::{from_ptr_to_physaddr_offset_from_kzero, physaddr_as_ptr_mut_offset_from_kzero};
@@ -230,6 +232,19 @@ pub struct Proc {
     /// AWAIT in post order).
     pub wait_records: VecDeque<WaitRecord>,
     pub errstr: [u8; ERRMAX],
+    /// 05-04 (D-03): the namespace group handle (the mount table; pgrp.rs).
+    /// rfork flag semantics per fork(2): RFPROC with NEITHER RFNAMEG nor
+    /// RFCNAMEG shares this handle (Arc clone); RFNAMEG deep-copies
+    /// (pgrpcpy); RFCNAMEG starts clean (the 05-03 finding's newns wipe).
+    /// The Lock serializes bind/unmount against namec walks; taken only
+    /// from syscall context, briefly, never from IRQ context.
+    pub pgrp: Arc<Lock<Pgrp>>,
+    /// The process root and current-directory chans (donor up->slash /
+    /// up->dot).  exec_bootstrap sets both to the devroot attach before the
+    /// first EL0 entry; rfork inherits (value-dup); exec preserves them
+    /// (Plan 9 convention).  None only pre-exec.
+    pub slash: Option<Chan>,
+    pub dot: Option<Chan>,
 }
 
 impl Proc {
@@ -279,6 +294,9 @@ impl Proc {
             nowait: false,
             wait_records: VecDeque::new(),
             errstr: [0; ERRMAX],
+            pgrp: Arc::new(Lock::new("pgrp", Pgrp::new())),
+            slash: None,
+            dot: None,
         };
         proc.set_name(name);
         proc
@@ -829,14 +847,28 @@ pub fn sched_from_moribund() -> ! {
     unreachable!("sched: moribund process resumed");
 }
 
+/// Non-RFPROC rfork's namespace-group half (05-04, D-03; 9k sysproc.c's
+/// non-RFPROC branch): the CALLER's group becomes a fresh deep COPY when
+/// `copy` is set (RFNAMEG — pgrpcpy; boot(8)'s `rfork(RFNAMEG)` "leave
+/// existing subprocs in own namespace") or a fresh EMPTY group otherwise
+/// (RFCNAMEG — the newns wipe).  Flag validation stays in sys_rfork.
+pub fn rfork_namespace_split(proc: &mut Proc, copy: bool) {
+    let next = if copy {
+        let node = LockNode::new();
+        proc.pgrp.lock(&node).deep_copy()
+    } else {
+        Pgrp::new()
+    };
+    proc.pgrp = Arc::new(Lock::new("pgrp", next));
+}
+
 /// devproc-lite's write hook (04-08, D-16/T-04-17): append the note to the
 /// ADDRESSED pid's queue — no broadcast, no group semantics.  The write is
 /// the whole posting path (libc postnote(PNPROC) lands here via
 /// /proc/N/note); delivery happens at the target's next return-to-EL0
 /// boundary (trap.rs's deliver_notes).  PROC_TABLE-brief.  Registered with
 /// port::devproc at boot (main.rs under dev_exec).
-pub fn post_note(pid: u64, msg: &[u8]) -> Result<()> {
-    let node = LockNode::new();
+pub fn post_note(pid: u64, msg: &[u8]) -> Result<()> {    let node = LockNode::new();
     let mut table = PROC_TABLE.lock(&node);
     let Some(p) = table.procs.iter_mut().flatten().find(|p| p.pid == pid) else {
         return Err("devproc: no such process");
@@ -882,7 +914,14 @@ pub fn post_wait_record(parent: *mut Proc, pid: u64, msg: &[u8]) {
 /// on the child's kstack with x0 = 0 (donor forkchild).  The child is
 /// queued Ready; its first run erets through the CURFRAME/trap_return
 /// path.  Returns the child pid (the parent's wire result).
-pub fn rfork_clone(parent: &mut Proc, frame: &TrapFrame, nowait: bool) -> Result<u64> {
+///
+/// 05-04 (D-03): the namespace group + slash/dot inheritance per fork(2)
+/// and 9k sysproc.c sysrfork — RFPROC with NEITHER RFNAMEG nor RFCNAMEG
+/// SHARES the parent's pgrp (Arc clone); RFNAMEG gives the child a fresh
+/// COPY (pgrpcpy); RFCNAMEG gives the child a fresh EMPTY group (the
+/// newns wipe).  slash/dot are value-dup'd (donor incref shape).
+pub fn rfork_clone(parent: &mut Proc, frame: &TrapFrame, flag: u64) -> Result<u64> {
+    let nowait = flag & crate::syscall::RFNOWAIT != 0;
     let name = {
         let n = parent.name.iter().position(|&b| b == 0).unwrap_or(KNAMELEN);
         core::str::from_utf8(&parent.name[..n]).unwrap_or("fork")
@@ -897,7 +936,7 @@ pub fn rfork_clone(parent: &mut Proc, frame: &TrapFrame, nowait: bool) -> Result
     // abort from an ordinary OOM) — and leak its pages.  Unwind instead:
     // mark Moribund, free the pages already copied, then the root-table
     // page and kstack by their recorded PAs.
-    if let Err(msg) = rfork_copy(parent, child, frame, nowait) {
+    if let Err(msg) = rfork_copy(parent, child, frame, flag) {
         child.state = ProcState::Moribund;
         // The copied pages' child-table entries die with the root-table
         // page below; the kernel-side KZERO+PA aliases stay mapped, per
@@ -927,7 +966,8 @@ pub fn rfork_clone(parent: &mut Proc, frame: &TrapFrame, nowait: bool) -> Result
 /// page-for-page copy of every user mapping, a dup'd fd table, mirrored
 /// segment records + paqfs byte source, and a copy of the parent's live
 /// trap frame on the child's kstack with x0 = 0 (donor forkchild).
-fn rfork_copy(parent: &Proc, child: &mut Proc, frame: &TrapFrame, nowait: bool) -> Result<()> {
+fn rfork_copy(parent: &Proc, child: &mut Proc, frame: &TrapFrame, flag: u64) -> Result<()> {
+    let nowait = flag & crate::syscall::RFNOWAIT != 0;
     // The eager copy.  Each parent page's bytes go through the pages'
     // KZERO+PA kernel aliases (map_to REPLACES existing entries, so
     // re-mapping the exec/fault-side alias is idempotent); the child's
@@ -990,6 +1030,23 @@ fn rfork_copy(parent: &Proc, child: &mut Proc, frame: &TrapFrame, nowait: bool) 
             child.fd_table[i] = Some(c.dup());
         }
     }
+
+    // 05-04 (D-03): the namespace group + slash/dot, fork(2)/9k sysrfork
+    // semantics.  RFNAMEG = fresh COPY of the parent's group (pgrpcpy);
+    // RFCNAMEG = fresh EMPTY group (the newns wipe); NEITHER = share the
+    // parent's handle (Arc clone).  (The plan's behavior bullet inverted
+    // the two flags; fork(2) + sysrfork + the 05-03 trace's RFCNAMEG-wipe
+    // finding govern — recorded as a 05-04 deviation.)
+    child.pgrp = if flag & crate::syscall::RFCNAMEG != 0 {
+        Arc::new(Lock::new("pgrp", Pgrp::new()))
+    } else if flag & crate::syscall::RFNAMEG != 0 {
+        let node = LockNode::new();
+        Arc::new(Lock::new("pgrp", parent.pgrp.lock(&node).deep_copy()))
+    } else {
+        parent.pgrp.clone()
+    };
+    child.slash = parent.slash.as_ref().map(|c| c.dup());
+    child.dot = parent.dot.as_ref().map(|c| c.dup());
 
     // The forkchild frame: a copy of the parent's live frame on the
     // CHILD's kernel stack, with x0 = 0 (the child's wire result).

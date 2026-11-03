@@ -111,3 +111,70 @@ fn putb(uart: &mut dyn Uart, b: u8) {
     }
     uart.putb(b);
 }
+
+// ---------------------------------------------------------------------------
+// The registry-facing device surface (05-04, D-03) — attach/walk/open as
+// free functions, the established port idiom (devroot.rs's header explains
+// why the dat.rs Dev trait is not implemented).  Task 2 lands the minimal
+// surface the namespace core's registry + union tests resolve through
+// (cons); the full file set (null/user/hostowner) is this plan's Task 3.
+//
+// Qid encoding (collision-free): root = 0 (QTDIR), cons = 1 (QTFILE — the
+// fd 0/1/2 preopen convention, proc.rs), null = 2, user = 3, hostowner = 4.
+// ---------------------------------------------------------------------------
+
+/// Plan 9 Qid type bytes (sys/include/libc.h).
+const QTDIR: u8 = 0x80;
+const QTFILE: u8 = 0x00;
+
+/// Qid path values for the devcons files.
+pub(crate) const QID_ROOT: u64 = 0;
+pub(crate) const QID_CONS: u64 = 1;
+
+/// attach: the devcons root chan (one console tree this era — the attach
+/// spec is empty, the devroot attach precedent).
+pub fn attach() -> crate::dat::Chan {
+    crate::dat::Chan::new(
+        crate::dat::DEV_CONS,
+        crate::dat::Qid { path: QID_ROOT, vers: 0, typ: QTDIR },
+        0,
+    )
+}
+
+/// Walk a single name component from the devcons root (05-04 Task 2's
+/// surface: "cons" only; Task 3 grows the file set).
+pub fn walk(c: &crate::dat::Chan, name: &[u8]) -> crate::Result<crate::dat::Chan> {
+    if c.qid.typ != QTDIR || c.qid.path != QID_ROOT {
+        return Err("devcons: walk of a non-directory");
+    }
+    if name.is_empty() || name.contains(&b'/') {
+        return Err("devcons: walk takes a single name component");
+    }
+    match name {
+        b"cons" => {
+            let mut nc = crate::dat::Chan::new(
+                crate::dat::DEV_CONS,
+                crate::dat::Qid { path: QID_CONS, vers: 0, typ: QTFILE },
+                0,
+            );
+            nc.path = c.path.clone();
+            nc.path.push(b'/');
+            nc.path.extend_from_slice(name);
+            Ok(nc)
+        }
+        _ => Err("devcons: name not found"),
+    }
+}
+
+/// Open a walked devcons chan.  The root dir opens OREAD only; cons opens
+/// any access mode (Plan 9's cons is read/write; the read path itself is
+/// 05-08's — an open for read succeeds and reads get the cons arm's
+/// answer).
+pub fn open(c: &crate::dat::Chan, mode: u32) -> crate::Result<crate::dat::Chan> {
+    if c.qid.typ == QTDIR && mode != crate::dat::OREAD {
+        return Err("devcons: directory opens OREAD only");
+    }
+    let mut nc = crate::dat::Chan::new(c.dev, c.qid, mode);
+    nc.path = c.path.clone();
+    Ok(nc)
+}

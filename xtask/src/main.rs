@@ -1724,6 +1724,10 @@ fn assemble_initrd(verbose: bool) -> Result<()> {
         std::fs::remove_dir_all(&tree)?;
     }
     std::fs::create_dir_all(&tree)?;
+    // 05-04 (D-03): the staged init binds #p at /proc itself in the
+    // namespace era (the real chain's connectembed shape) — the mount
+    // target must exist (Pitfall-8), so the tree ships the empty dir.
+    std::fs::create_dir_all(tree.join("proc"))?;
     for name in INITRD_FILES {
         let src = harvey.join(format!("build/aarch64/out/{name}"));
         if !src.is_file() {
