@@ -122,9 +122,12 @@ fn putb(uart: &mut dyn Uart, b: u8) {
 // 05-07 Task 2: the time file (settime's OWRITE target).  05-08 (D-06):
 // the cons READ path — the bounded input queue, the cooked line
 // discipline, consctl raw switching, and the DEL→interrupt note post.
+// 05-09 (D-09): the pid file (libc getpid's read — the deferred item's
+// fix, so init's #p/N/ctl pri write names the real pid).
 //
 // Qid encoding (collision-free): root = 0 (QTDIR), cons = 1 (QTFILE — the
-// fd 0/1/2 preopen convention, proc.rs), null = 2, user = 3, hostowner = 4.
+// fd 0/1/2 preopen convention, proc.rs), null = 2, user = 3, hostowner = 4,
+// time = 5 (05-07), consctl = 6 (05-08), pid = 7 (05-09).
 // ---------------------------------------------------------------------------
 
 /// Plan 9 Qid type bytes (sys/include/libc.h).
@@ -144,6 +147,13 @@ pub(crate) const QID_TIME: u64 = 5;
 /// consctl is write-only 0220; the plan extends it: "reads report the
 /// current mode word").
 pub(crate) const QID_CONSCTL: u64 = 6;
+/// 05-09 (D-09's wiring gap — the phase deferred item): the pid file
+/// (the donor devcons.c's Qpid) — a read returns the OPERATING proc's
+/// pid as decimal ASCII via the injected current-pid hook (the
+/// devproc-style dependency inversion; proc.rs's current_pid).  libc's
+/// getpid() reads it (`open("#c/pid")` + atol), which is what lets
+/// init's `#p/%d/ctl` "pri 10" write name the REAL pid instead of 0.
+pub(crate) const QID_PID: u64 = 7;
 
 /// attach: the devcons root chan (one console tree this era — the attach
 /// spec is empty, the devroot attach precedent).
@@ -179,14 +189,60 @@ const TIME_DEFAULT: &[u8] = b"1700000000\n";
 /// The per-file static metadata (name, qid, mode) — the walk table and the
 /// directory listing share it.  lengths are computed at read/stat time
 /// (hostowner's and time's vary).
-const FILES: [(&[u8], u64, u32); 6] = [
+const FILES: [(&[u8], u64, u32); 7] = [
     (b"cons", QID_CONS, 0o666),
     (b"null", QID_NULL, 0o666),
     (b"user", QID_USER, 0o444),
     (b"hostowner", QID_HOSTOWNER, 0o664),
     (b"time", QID_TIME, 0o664),
     (b"consctl", QID_CONSCTL, 0o664),
+    (b"pid", QID_PID, 0o444),
 ];
+
+/// 05-09: the arch-side current-pid hook for the pid file (the devproc
+/// set_post_hook idiom — port cannot see PROC_TABLE).  Registered once
+/// at boot before the first exec (main.rs, dev_exec — NOT virt-gated, so
+/// #c/pid answers on every dev_exec platform); a read before
+/// registration errors loudly (a pre-exec getpid() is a boot bug).
+static PID_HOOK: Lock<Option<fn() -> u64>> = Lock::new("conspid", None);
+
+/// Register the arch-side current-pid hook.  A second registration is a
+/// boot bug.
+pub fn set_pid_hook(hook: fn() -> u64) {
+    let node = LockNode::new();
+    let mut guard = PID_HOOK.lock(&node);
+    assert!(guard.is_none(), "devcons: pid hook registered twice");
+    *guard = Some(hook);
+}
+
+/// The pid file's content: the operating proc's pid as decimal ASCII
+/// (getpid's atol parses it; the donor's fixed-width readnum padding is
+/// cosmetic and omitted).
+fn pid_content() -> crate::Result<alloc::vec::Vec<u8>> {
+    let hook = {
+        let node = LockNode::new();
+        *PID_HOOK.lock(&node)
+    };
+    let Some(hook) = hook else {
+        return Err("devcons: pid hook not registered");
+    };
+    let mut pid = hook();
+    let mut out = alloc::vec::Vec::new();
+    if pid == 0 {
+        out.push(b'0');
+    }
+    while pid > 0 {
+        out.insert(0, b'0' + (pid % 10) as u8);
+        pid /= 10;
+    }
+    Ok(out)
+}
+
+/// The pid file's current length (for stat/dir listings) — 0 before the
+/// hook registers (pre-exec; no #c listing happens then).
+fn pid_len() -> u64 {
+    pid_content().map(|c| c.len() as u64).unwrap_or(0)
+}
 
 /// Walk a single name component from the devcons root.
 pub fn walk(c: &crate::dat::Chan, name: &[u8]) -> crate::Result<crate::dat::Chan> {
@@ -207,14 +263,14 @@ pub fn walk(c: &crate::dat::Chan, name: &[u8]) -> crate::Result<crate::dat::Chan
     Ok(nc)
 }
 
-/// Open a walked devcons chan.  The root dir opens OREAD only; user is
-/// read-only (0444); cons/null/hostowner open for read or write.
+/// Open a walked devcons chan.  The root dir opens OREAD only; user and
+/// pid are read-only (0444); cons/null/hostowner open for read or write.
 pub fn open(c: &crate::dat::Chan, mode: u32) -> crate::Result<crate::dat::Chan> {
     if c.qid.typ == QTDIR && mode != crate::dat::OREAD {
         return Err("devcons: directory opens OREAD only");
     }
-    if c.qid.path == QID_USER && mode != crate::dat::OREAD {
-        return Err("devcons: user is read-only");
+    if (c.qid.path == QID_USER || c.qid.path == QID_PID) && mode != crate::dat::OREAD {
+        return Err("devcons: user/pid are read-only");
     }
     let mut nc = crate::dat::Chan::new(c.dev, c.qid, mode);
     nc.path = c.path.clone();
@@ -287,6 +343,8 @@ pub fn stat(c: &crate::dat::Chan, sb: &mut [u8]) -> crate::Result<u64> {
         time_len()
     } else if *qid == QID_CONSCTL {
         consctl_len()
+    } else if *qid == QID_PID {
+        pid_len()
     } else {
         0
     };
@@ -316,6 +374,8 @@ pub fn read(c: &mut crate::dat::Chan, buf: &mut [u8], offset: u64) -> crate::Res
                     time_len()
                 } else if qid == QID_CONSCTL {
                     consctl_len()
+                } else if qid == QID_PID {
+                    pid_len()
                 } else {
                     0
                 };
@@ -371,6 +431,16 @@ pub fn read(c: &mut crate::dat::Chan, buf: &mut [u8], offset: u64) -> crate::Res
             let word: &[u8] = if inq.raw { b"raw\n" } else { b"cooked\n" };
             let start = (off as usize).min(word.len());
             let avail = &word[start..];
+            let n = avail.len().min(buf.len());
+            buf[..n].copy_from_slice(&avail[..n]);
+            n as u64
+        }
+        QID_PID => {
+            // 05-09: the operating proc's pid as decimal ASCII (libc
+            // getpid's read — init's #p/N/ctl write names the real pid).
+            let content = pid_content()?;
+            let start = (off as usize).min(content.len());
+            let avail = &content[start..];
             let n = avail.len().min(buf.len());
             buf[..n].copy_from_slice(&avail[..n]);
             n as u64

@@ -70,6 +70,9 @@ pub const MAX_FDS: usize = 32;
 const KSTACK_PAGES: usize = 4;
 /// Queued-notes capacity (04-08 fills the delivery path).
 pub const NOTE_QUEUE_CAP: usize = 8;
+/// 05-09 (D-09): the exec-recorded argv's byte bound (the /proc/N/args
+/// content — ps reads 256 bytes max, ps.c:63).  NUL-joined per arg.
+pub const ARGV_CAP: usize = 256;
 
 /// 05-08 (D-06): the note-group id allocator (the donor's
 /// `Ref noteidalloc` — 9k proc.c:13; fresh id per newproc, inherited or
@@ -350,6 +353,22 @@ pub struct Proc {
     /// expiry tick_timeouts posts the "alarm" note (donor alarmkproc's
     /// postnote arm) and disarms.
     pub alarm_at: u64,
+    /// 05-09 (D-09): the exec-recorded argv — NUL-joined, bounded at
+    /// ARGV_CAP (the donor's `p->args`; the truncation rule is
+    /// documented on record_argv).  exec.rs's install_image fills it at
+    /// EVERY exec (the bootstrap exec_into and exec_replace paths share
+    /// install_image), replacing the prior image's record; a proc that
+    /// never exec'd has an EMPTY record, so devproc's /proc/N/args reads
+    /// EOF, never garbage (ps.c's Noargs arm).  rfork does NOT inherit
+    /// it (a fork child's args are empty until its own exec — donor
+    /// newproc shape).
+    pub argv: Vec<u8>,
+    /// 05-09 (D-09): the recorded scheduling priority (devproc ctl's
+    /// "pri N" — accepting + storing is the honest degradation the plan
+    /// names: no scheduler priority exists this era, so nothing READS
+    /// it but the /proc/N/status report).  rfork INHERITS it (donor
+    /// forkchild); exec preserves it (Plan 9 convention).  0 until set.
+    pub pri: u32,
 }
 
 impl Proc {
@@ -413,6 +432,8 @@ impl Proc {
             cons_waiting: false,
             sleep_until: 0,
             alarm_at: 0,
+            argv: Vec::new(),
+            pri: 0,
         };
         proc.set_name(name);
         proc
@@ -423,6 +444,30 @@ impl Proc {
         let n = bytes.len().min(KNAMELEN - 1);
         self.name[..n].copy_from_slice(&bytes[..n]);
         self.name[n] = 0;
+    }
+
+    /// 05-09 (D-09): record the exec argv (NUL-joined, the donor's
+    /// `p->args` shape) for devproc's /proc/N/args.  Called by exec.rs's
+    /// install_image at EVERY exec (both paths share it), replacing the
+    /// prior image's record.  Truncation rule (documented per the plan):
+    /// args append NUL-terminated while the result stays ≤ ARGV_CAP; the
+    /// first arg that would overflow ends the record (the argv tail is
+    /// dropped, never half-written — except a FIRST arg longer than
+    /// ARGV_CAP-1, which is byte-truncated to fit with its terminator).
+    pub fn record_argv(&mut self, args: &[&[u8]]) {
+        self.argv.clear();
+        for (i, a) in args.iter().enumerate() {
+            if self.argv.len() + a.len() + 1 > ARGV_CAP {
+                if i == 0 {
+                    // A single oversize first arg: keep ARGV_CAP-1 bytes.
+                    self.argv.extend_from_slice(&a[..ARGV_CAP - 1]);
+                    self.argv.push(0);
+                }
+                break;
+            }
+            self.argv.extend_from_slice(a);
+            self.argv.push(0);
+        }
     }
 
     /// D-15 preopen: fd 0/1/2 are devcons chans (Plan 9 convention — 0
@@ -1158,6 +1203,78 @@ pub fn post_note(pid: u64, msg: &[u8]) -> Result<()> {
     push_note(p, msg)
 }
 
+// ---------------------------------------------------------------------------
+// 05-09 (D-09): devproc's proc-table hooks — the ps(1) data source
+// (list/info) and init's ctl priority record (set_pri).  The note-post
+// hook's siblings; registered with port::devproc at boot (main.rs under
+// dev_exec).  All PROC_TABLE-brief.
+// ---------------------------------------------------------------------------
+
+/// The donor statename string for a ProcState (9k devproc.c's statename[]
+/// subset — r9's ProcState has exactly these four variants).
+fn state_name(s: ProcState) -> &'static str {
+    match s {
+        ProcState::Ready => "Ready",
+        ProcState::Running => "Running",
+        ProcState::Blocked => "Blocked",
+        ProcState::Moribund => "Moribund",
+    }
+}
+
+/// devproc's root-listing hook (05-09): the LIVE (non-Moribund) pids,
+/// ascending by table slot (ps's dirreadall content).  Moribund slots
+/// stay pinned this era (the 05-06 exit-sweep deferral) but are dead —
+/// the donor's dir listing skips Dead procs the same way.
+pub fn proc_list_live() -> Vec<u64> {
+    let node = LockNode::new();
+    let table = PROC_TABLE.lock(&node);
+    table
+        .procs
+        .iter()
+        .flatten()
+        .filter(|p| p.state != ProcState::Moribund)
+        .map(|p| p.pid)
+        .collect()
+}
+
+/// devproc's per-pid info hook (05-09): the status/args data — name,
+/// donor-statename state, the exec-recorded argv (NUL-joined; empty for
+/// a never-exec'd proc), the recorded ctl priority.  None for a missing
+/// or Moribund pid (the donor's Eprocdied shape — devproc maps it to
+/// "no such process").
+pub fn proc_info(pid: u64) -> Option<port::devproc::ProcInfo> {
+    let node = LockNode::new();
+    let table = PROC_TABLE.lock(&node);
+    let p = table.procs.iter().flatten().find(|p| p.pid == pid)?;
+    if p.state == ProcState::Moribund {
+        return None;
+    }
+    let name_len = p.name.iter().position(|&b| b == 0).unwrap_or(KNAMELEN);
+    Some(port::devproc::ProcInfo {
+        name: p.name[..name_len].to_vec(),
+        state: state_name(p.state),
+        args: p.argv.clone(),
+        pri: p.pri,
+    })
+}
+
+/// devproc's ctl hook (05-09): record the "pri N" write on the ADDRESSED
+/// pid (the write-side per-pid resolution, T-05-17 — no broadcast).
+/// Accepting + storing is the plan's honest degradation: no scheduler
+/// priority exists this era.  Missing/Moribund → the loud error.
+pub fn proc_set_pri(pid: u64, pri: u32) -> Result<()> {
+    let node = LockNode::new();
+    let mut table = PROC_TABLE.lock(&node);
+    let Some(p) = table.procs.iter_mut().flatten().find(|p| p.pid == pid) else {
+        return Err("devproc: no such process");
+    };
+    if p.state == ProcState::Moribund {
+        return Err("devproc: no such process");
+    }
+    p.pri = pri;
+    Ok(())
+}
+
 /// The note-queue append shared by post_note (per-pid) and the 05-08
 /// note-group post: Moribund targets and full queues are skipped per the
 /// donor's postnote failure shape (the caller's group post ignores
@@ -1513,6 +1630,12 @@ fn rfork_copy(parent: &Proc, child: &mut Proc, frame: &TrapFrame, flag: u64) -> 
     if flag & crate::syscall::RFNOTEG == 0 {
         child.noteid = parent.noteid;
     }
+    // 05-09 (D-09): the recorded ctl priority is inherited (donor
+    // forkchild); the argv record is NOT — a fork child's args are empty
+    // until its own exec (Proc::new's construction), so /proc/N/args for
+    // a pre-exec child reads EMPTY rather than the parent's (the plan's
+    // truthful-args contract).
+    child.pri = parent.pri;
     Ok(())
 }
 

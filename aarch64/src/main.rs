@@ -423,6 +423,18 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
     // inversion as devcons's Console::set_uart).  Before the first exec so
     // a /proc/N/note write from the very first process resolves.
     port::devproc::set_post_hook(proc::post_note);
+    // 05-09 (D-09): devproc's proc-table hooks — the ps(1) data source
+    // (the /proc root's live-pid listing + the per-pid status/args) and
+    // init's #p/N/ctl "pri 10" record — and devcons's #c/pid hook (libc
+    // getpid's read, so the pri write names the REAL pid).  Same
+    // dependency inversion; NOT virt-gated (the /proc + #c surface is
+    // platform-independent — the boot chain runs on every dev_exec).
+    port::devproc::set_proc_hooks(port::devproc::ProcHooks {
+        list: proc::proc_list_live,
+        info: proc::proc_info,
+        set_pri: proc::proc_set_pri,
+    });
+    port::devcons::set_pid_hook(proc::current_pid);
 
     // 05-06 (D-04): devpipe's block/wake hooks — a read on an empty pipe
     // parks the caller via the 04-07 sched machinery; a write or close

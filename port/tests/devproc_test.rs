@@ -1,14 +1,15 @@
-//! devproc tests (05-09, D-09's ps(1) data source + init's ctl write):
-//! the /proc root's directory read (one stat(5) wire entry per live
-//! pid, named by the decimal pid — ps's `chdir("/proc")` + `open(".")`
-//! + dirreadall shape, sys/src/cmd/ps.c:33-45), the per-pid directory
-//! listing (args/ctl/note/status), the status read (≥12
-//! whitespace-separated fields in devproc.c's order — ps.c:75-87's
-//! tokenizer contract), the args read (the exact argv recorded at exec;
-//! EMPTY for a never-exec'd pid, never garbage), the ctl write ("pri N"
-//! parsed + recorded; an unknown verb errors loudly), and the 04-08
-//! note path unregressed (Pitfall 5 — postnote(PNPROC) must keep
-//! working byte-identically).
+//! devproc tests (05-09, D-09's ps(1) data source + init's ctl write).
+//!
+//! The /proc root's directory read carries one stat(5) wire entry per
+//! live pid, named by the decimal pid — ps's `chdir("/proc")` +
+//! `open(".")` + dirreadall shape (sys/src/cmd/ps.c:33-45).  The per-pid
+//! directory listing carries args/ctl/note/status.  The status read
+//! emits ≥12 whitespace-separated fields in devproc.c's order
+//! (ps.c:75-87's tokenizer contract).  The args read serves the exact
+//! argv recorded at exec (EMPTY for a never-exec'd pid, never garbage).
+//! The ctl write parses + records "pri N" (an unknown verb errors
+//! loudly).  And the 04-08 note path is pinned unregressed (Pitfall 5 —
+//! postnote(PNPROC) must keep working byte-identically).
 //!
 //! The scripted-hooks idiom follows devcons_test.rs/devpipe_test.rs:
 //! the set-once hooks are installed by ONE test; the fake proc table is

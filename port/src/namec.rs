@@ -142,6 +142,23 @@ pub fn namec(path: &[u8], slash: &Chan, dot: &Chan, pg: &Pgrp, mode: NamecMode) 
         if c.qid.typ & QTDIR == 0 {
             return Err("namec: walk of a non-directory");
         }
+        // 05-09: "." is the devwalk Accept arm (9k dev.c devwalk:
+        // `strcmp(n, ".") == 0` keeps the current qid) — AFTER the mount
+        // consultation, so "x/." (and ps's chdir("/proc") + open("."))
+        // resolves to the UNION HEAD (the devproc attach), not the
+        // underlying dir.  ".." stays unhandled (no measured caller this
+        // era — the device walk errors loudly).
+        if comp == b"." {
+            if !nomount && let Some(chain) = pg.chain_at(&c.path) {
+                let Some(head) = chain.first() else {
+                    return Err("namec: empty union chain");
+                };
+                let mut nc = head.to.dup();
+                nc.path = c.path.clone();
+                c = nc;
+            }
+            continue;
+        }
         if !nomount && let Some(chain) = pg.chain_at(&c.path) {
             let mut walked = None;
             for entry in chain {

@@ -153,6 +153,11 @@ fn install_image(
         tos: VirtRange::with_end(USTACKTOP - 2 * PAGE_SIZE_4K, USTACKTOP - PAGE_SIZE_4K),
     });
     proc.set_name(name);
+    // 05-09 (D-09): record the argv for devproc's /proc/N/args (the
+    // donor's p->args) — install_image is shared by exec_into (the
+    // bootstrap path) and exec_replace (the EXEC syscall), so EVERY exec
+    // records; the record replaces the prior image's.
+    proc.record_argv(args);
 
     // 05-04 (the 05-04 tracer surfaced phase-04 deferred-items #3): map the
     // data+bss pages EAGERLY.  7c places string literals and statics in

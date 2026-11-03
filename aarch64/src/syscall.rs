@@ -125,6 +125,16 @@ type Handler = fn(&mut TrapFrame, &mut Proc) -> u64;
 /// generic timer (timer.rs ticks; expiry via the tick's tick_timeouts).
 /// The 04-01 trace carries no
 /// brk_/segbrk(12) on the hello path; segbrk stays None.
+///
+/// 05-09 CLOSURE (the trace-settled leftovers): the dispatch table IS the
+/// 05-03 measured set (∪ the D-14 named core) — verified against
+/// 05-03-trace.txt: every measured number has a handler; FAUTH(10) stays
+/// None (D-02's designed fall-through — nsinit/newns mount
+/// unauthenticated on its -1); REMOVE(25), WSTAT(44), FWSTAT(45) and
+/// OSEEK(16) were NEVER measured by the 05-03 artifact (execinit's chmod
+/// is unchecked on the donor too — the chain does not need it), so they
+/// stay loud-None.  The kernel's syscall attack surface is exactly the
+/// measured set (T-05-18).
 static DISPATCH: [Option<Handler>; 55] = {
     let mut t: [Option<Handler>; 55] = [None; 55];
     t[BIND as usize] = Some(sys_bind);
@@ -379,7 +389,12 @@ fn sys_pread(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             };
             root.read(&mut chan, unsafe { user_slice_mut(buf, n) }, off)
         }
-        DEV_PROC => Err("devproc: note files are write-only"),
+        DEV_PROC => {
+            // devproc (04-08 + 05-09): the root/pid-dir listings, the
+            // per-pid status/args reads (D-09's ps data source); note
+            // reads stay write-only-loud.
+            port::devproc::read(&mut chan, unsafe { user_slice_mut(buf, n) }, off)
+        }
         DEV_ENV => {
             // devenv (05-05, D-07): the read comes from the OPERATING
             // proc's env group (hook-resolved — donor envgrp(c)); the

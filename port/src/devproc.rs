@@ -38,9 +38,7 @@
 //! crosses via injected hooks — the same dependency inversion as the
 //! 04-08 note-post hook (and devcons's `Console::set_uart`): the arch
 //! side registers a ProcHooks set once at boot, and the reads/writes
-//! call it.  (RED skeleton note: 05-09's RED commit carries the API
-//! surface with the read/ctl bodies stubbed — the GREEN commit
-//! implements them.)
+//! call it.
 //!
 //! Like devroot, the dat.rs `Dev` trait is NOT implemented here (its
 //! skeleton is non-constructible as written — see devroot.rs's header);
@@ -340,8 +338,6 @@ fn args_text(pid: u64) -> Result<alloc::vec::Vec<u8>> {
 
 /// Serve `content` at `off` into `buf` (the pread convention; EOF = 0 at
 /// or past the end) — the dir listings and file contents share it.
-/// (RED-dead until the GREEN read lands.)
-#[allow(dead_code)]
 fn serve_at(content: &[u8], buf: &mut [u8], off: u64) -> u64 {
     let start = (off as usize).min(content.len());
     let avail = &content[start..];
@@ -357,12 +353,53 @@ fn serve_at(content: &[u8], buf: &mut [u8], off: u64) -> u64 {
 /// is write-only (04-08) and ctl is write-only — reads of either error
 /// loudly.  `offset` u64::MAX uses + advances the chan's streaming
 /// offset (the pread convention).
-///
-/// RED SKELETON (05-09's TDD): the body lands with the GREEN commit;
-/// every read errors for now.
 pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
-    let _ = (c, buf, offset);
-    Err("devproc: RED skeleton (05-09)")
+    let off = if offset == u64::MAX { c.offset } else { offset };
+    let n = if c.qid.path == 0 {
+        // The root listing: one entry per live pid (the list hook),
+        // rebuilt per call (the table may change between reads).
+        let hooks = proc_hooks()?;
+        let mut listing = alloc::vec::Vec::new();
+        for pid in (hooks.list)() {
+            let start = listing.len();
+            listing.resize(start + 41 + (2 + dec(pid).len()) + 2 * (2 + 6), 0);
+            write_stat_record(
+                &mut listing[start..],
+                &dec(pid),
+                dir_qid(pid),
+                0x8000_0000 | 0o555,
+                0,
+            )?;
+        }
+        serve_at(&listing, buf, off)
+    } else if c.qid.typ == QTDIR {
+        // The pid dir's file listing (args/ctl/note/status).
+        let pid = c.qid.path / 8;
+        let mut listing = alloc::vec::Vec::new();
+        for (name, slot, mode) in PID_FILES {
+            let length = match slot {
+                SLOT_STATUS => status_line(pid)?.len() as u64,
+                SLOT_ARGS => args_text(pid)?.len() as u64,
+                _ => 0,
+            };
+            let start = listing.len();
+            listing.resize(start + 41 + (2 + name.len()) + 2 * (2 + 6), 0);
+            write_stat_record(&mut listing[start..], name, file_qid(pid, slot), mode, length)?;
+        }
+        serve_at(&listing, buf, off)
+    } else {
+        match c.qid.path % 8 {
+            SLOT_STATUS => serve_at(&status_line(c.qid.path / 8)?, buf, off),
+            SLOT_ARGS => serve_at(&args_text(c.qid.path / 8)?, buf, off),
+            SLOT_NOTE => return Err("devproc: note files are write-only"),
+            SLOT_CTL => return Err("devproc: ctl files are write-only"),
+            _ => return Err("devproc: read of unknown file"),
+        }
+    };
+    if offset == u64::MAX {
+        c.offset += n;
+    }
+    Ok(n)
 }
 
 /// Write `buf` to the chan `c` names (04-08's note path + 05-09's ctl):
@@ -374,6 +411,7 @@ pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
 ///     hooks (accepting + storing is the plan's honest degradation — no
 ///     scheduler priority exists this era); an unknown verb errors
 ///     loudly.
+///
 /// Returns the byte count taken.
 pub fn write(c: &mut Chan, buf: &[u8]) -> Result<u64> {
     if c.qid.typ == QTDIR {
@@ -396,9 +434,28 @@ pub fn write(c: &mut Chan, buf: &[u8]) -> Result<u64> {
             Ok(buf.len() as u64)
         }
         SLOT_CTL => {
-            let _ = pid;
-            let _ = buf;
-            Err("devproc: RED skeleton ctl (05-09)")
+            // 05-09: the "pri N" control (init.c:52's write of "pri 10"
+            // to #p/<getpid>/ctl).  Parse + RECORD via the arch hooks —
+            // accepting and storing is the plan's honest degradation (no
+            // scheduler priority exists this era).  An unknown verb (or
+            // a malformed write) errors LOUDLY (the donor procctl's
+            // Ebadarg shape).
+            let text = core::str::from_utf8(buf).map_err(|_| "devproc: ctl write is not utf8")?;
+            let mut it = text.split_whitespace();
+            let (verb, arg, extra) = (it.next(), it.next(), it.next());
+            if verb != Some("pri") {
+                return Err("devproc: unknown ctl verb");
+            }
+            if extra.is_some() {
+                return Err("devproc: malformed ctl write");
+            }
+            let Some(arg) = arg else {
+                return Err("devproc: ctl pri needs a decimal number");
+            };
+            let v: u32 = arg.parse().map_err(|_| "devproc: ctl pri needs a decimal number")?;
+            let hooks = proc_hooks()?;
+            (hooks.set_pri)(pid, v)?;
+            Ok(buf.len() as u64)
         }
         _ => Err("devproc: write of a read-only file"),
     }
