@@ -1,0 +1,9 @@
+{
+  "command": "cargo test -p port --test devmnt_test",
+  "exitCode": 101,
+  "targetTest": "devmnt_version_attach_walk_open_read_stat_clunk_round_trip",
+  "targetFile": "port/tests/devmnt_test.rs",
+  "output": "TAP version 13\n1..8\nnot ok 1 - devmnt_mount_crossing_walk_matrix\nnot ok 2 - devmnt_rejects_oversized_reply\nnot ok 3 - devmnt_rejects_server_msize_increase\nnot ok 4 - devmnt_rejects_tag_mismatch\nnot ok 5 - devmnt_version_accepts_servers_lower_answer\nnot ok 6 - devmnt_version_attach_walk_open_read_stat_clunk_round_trip\nnot ok 7 - devmnt_walk_not_found_is_a_loud_error\nnot ok 8 - devmnt_walk_of_a_non_directory_errors\n# tests 8\n# pass 0\n# fail 8\n",
+  "expected": "the version handshake negotiates msize over the in-memory pipe pair, then attach/walk(chained)/open/read/stat round-trip and clunk releases the server-side fid (05-07 Task 1 behavior bullets 1+4: the codec round-trip over a scripted fake server, Twalk chaining, Tclunk release)",
+  "actual": "devmnt::Mnt::negotiate on the RED skeleton returns Err(\"devmnt: RED skeleton (05-07)\") — the target test fails at session()'s .expect on the planned negotiation behavior (port/tests/devmnt_test.rs:383:49: the version handshake negotiates); all 8 tests in the new file fail on planned-behavior paths (the malformation tests' err-message assertions — the skeleton message names neither \"msize\" nor \"tag\"); the other 8 port test binaries stay green (05-06's RED precedent: plumbing green, behavior red)"
+}

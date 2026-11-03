@@ -13,6 +13,7 @@ pub mod dat;
 pub mod devcons;
 pub mod devenv;
 pub mod devdup;
+pub mod devmnt;
 pub mod devpipe;
 pub mod devproc;
 pub mod devsrv;

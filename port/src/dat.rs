@@ -27,6 +27,10 @@ pub const DEV_ENV: usize = 3;
 pub const DEV_PIPE: usize = 4;
 pub const DEV_DUP: usize = 5;
 pub const DEV_SRV: usize = 6;
+/// 05-07: devmnt — the kernel 9P client (D-03's mount half).  Chans in a
+/// mounted tree carry this index plus the session Arc and their
+/// server-side fid (the Chan `mnt`/`mnt_fid` slots land with the device).
+pub const DEV_MNT: usize = 7;
 
 /// Plan 9 open-mode values (frozen: Harvey sys/include/libc.h).  The low
 /// two bits are an access-MODE field (not a bit set); the upper bits are
