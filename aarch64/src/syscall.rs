@@ -1483,7 +1483,12 @@ fn sys_sleep(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let ms = args[0] & 0xffff_ffff; // long is 32-bit (the width discipline)
     #[cfg(dev_exec)]
     {
-        if ms == 0 {
+        // WR-02: sleep(long) is SIGNED — the donor syssleep yields when
+        // n <= 0 (9k sysproc.c).  Read as i32 so sleep(-1) (a computed
+        // negative duration, arriving as 0xffffffff) yields instead of
+        // sleeping 4294967295 ticks (~49.7 days at 1 kHz, no wake path
+        // other than expiry).
+        if (ms as i32) <= 0 {
             proc::preempt(); // the donor's yield()
             return 0;
         }
