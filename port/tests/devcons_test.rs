@@ -156,6 +156,17 @@ fn cons_read_path_cooked_raw_del_and_consctl() {
     let n = read_cons(&mut buf).expect("cooked again");
     assert_eq!(&buf[..n as usize], b"q\n");
 
+    // -- WR-01: the natural `echo rawon >#c/consctl` form — the word
+    //    arrives NEWLINE-TERMINATED and must still switch (the donor's
+    //    strncmp prefix compare); the whole-word compare silently
+    //    discarded it.
+    devcons::write(&mut cc, b"rawon\n").expect("echo rawon write");
+    let n = devcons::read(&mut consctl_chan(OREAD), &mut wbuf, u64::MAX).expect("consctl reads raw");
+    assert_eq!(&wbuf[..n as usize], b"raw\n", "newline-terminated rawon switches the mode");
+    devcons::write(&mut cc, b"rawoff\n").expect("echo rawoff write");
+    let n = devcons::read(&mut consctl_chan(OREAD), &mut wbuf, u64::MAX).expect("consctl reads cooked");
+    assert_eq!(&wbuf[..n as usize], b"cooked\n", "newline-terminated rawoff switches back");
+
     // -- Overrun (T-05-15): the input queue is bounded at 4096 with
     //    drop-oldest; the reader still gets a (capped) completed line.
     let flood: Vec<u8> = core::iter::repeat(b'a').take(5000).chain([b'\n']).collect();

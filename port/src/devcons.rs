@@ -485,22 +485,26 @@ pub fn write(c: &mut crate::dat::Chan, buf: &[u8]) -> crate::Result<u64> {
         }
         QID_CONSCTL => {
             // 05-08 (D-06): the donor conswrite Qconsctl scan —
-            // space-separated words; "rawon" switches to raw mode (no
+            // space-separated words, each PREFIX-compared (the donor's
+            // strncmp(a, "rawon", 5)): "rawon" switches to raw mode (no
             // editing, no DEL interception) and completes a pending
             // partial cooked line (the donor's ch=0 flush marker);
-            // "rawoff" switches back.  Unknown words are ignored (the
-            // donor's scan shape; ctlpon/ctlpoff stay deferred with
+            // "rawoff" switches back.  The prefix compare is what makes
+            // the natural `echo rawon >#c/consctl` work — the word is
+            // "rawon\n", which strncmp matches (the r9 whole-word compare
+            // silently discarded it, WR-01).  Unknown words are ignored
+            // (the donor's scan shape; ctlpon/ctlpoff stay deferred with
             // Ctrl-P per CONTEXT.md).
             let node = LockNode::new();
             let mut inq = INPUT.lock(&node);
             for w in buf.split(|&b| b == b' ') {
-                if w == b"rawon" {
+                if w.starts_with(b"rawon") {
                     inq.raw = true;
                     if !inq.line.is_empty() {
                         let line = core::mem::take(&mut inq.line);
                         inq.lines.extend(line);
                     }
-                } else if w == b"rawoff" {
+                } else if w.starts_with(b"rawoff") {
                     inq.raw = false;
                 }
             }
