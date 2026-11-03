@@ -119,6 +119,9 @@ fn putb(uart: &mut dyn Uart, b: u8) {
 // implemented).  Task 2 landed the minimal cons surface; Task 3 grows the
 // file set the boot chain touches: cons (opencons's three opens), null,
 // user (init's readenv("#c/user")), hostowner (glenda's guarded write).
+// 05-07 Task 2: the time file (settime's OWRITE target).  05-08 (D-06):
+// the cons READ path — the bounded input queue, the cooked line
+// discipline, consctl raw switching, and the DEL→interrupt note post.
 //
 // Qid encoding (collision-free): root = 0 (QTDIR), cons = 1 (QTFILE — the
 // fd 0/1/2 preopen convention, proc.rs), null = 2, user = 3, hostowner = 4.
@@ -136,6 +139,11 @@ pub(crate) const QID_USER: u64 = 3;
 pub(crate) const QID_HOSTOWNER: u64 = 4;
 /// 05-07 Task 2: the time file (settime's OWRITE target).
 pub(crate) const QID_TIME: u64 = 5;
+/// 05-08 (D-06): the consctl file — "rawon"/"rawoff" writes flip the
+/// cooked/raw input mode; reads report the current mode word (the donor's
+/// consctl is write-only 0220; the plan extends it: "reads report the
+/// current mode word").
+pub(crate) const QID_CONSCTL: u64 = 6;
 
 /// attach: the devcons root chan (one console tree this era — the attach
 /// spec is empty, the devroot attach precedent).
@@ -171,12 +179,13 @@ const TIME_DEFAULT: &[u8] = b"1700000000\n";
 /// The per-file static metadata (name, qid, mode) — the walk table and the
 /// directory listing share it.  lengths are computed at read/stat time
 /// (hostowner's and time's vary).
-const FILES: [(&[u8], u64, u32); 5] = [
+const FILES: [(&[u8], u64, u32); 6] = [
     (b"cons", QID_CONS, 0o666),
     (b"null", QID_NULL, 0o666),
     (b"user", QID_USER, 0o444),
     (b"hostowner", QID_HOSTOWNER, 0o664),
     (b"time", QID_TIME, 0o664),
+    (b"consctl", QID_CONSCTL, 0o664),
 ];
 
 /// Walk a single name component from the devcons root.
@@ -226,6 +235,13 @@ fn time_len() -> u64 {
     if stored.is_empty() { TIME_DEFAULT.len() as u64 } else { stored.len() as u64 }
 }
 
+/// The consctl mode word's current length (05-08): "raw\n" or "cooked\n".
+fn consctl_len() -> u64 {
+    let node = LockNode::new();
+    let inq = INPUT.lock(&node);
+    if inq.raw { 4 } else { 7 }
+}
+
 /// The "user" file's content (D-02's sane default: glenda — the auth stub
 /// never runs a real handshake this phase).  NO trailing newline (the
 /// donor's Quser read is `readstr(up->user)` — the bare name): init's
@@ -269,6 +285,8 @@ pub fn stat(c: &crate::dat::Chan, sb: &mut [u8]) -> crate::Result<u64> {
         hostowner_len()
     } else if *qid == QID_TIME {
         time_len()
+    } else if *qid == QID_CONSCTL {
+        consctl_len()
     } else {
         0
     };
@@ -276,11 +294,12 @@ pub fn stat(c: &crate::dat::Chan, sb: &mut [u8]) -> crate::Result<u64> {
 }
 
 /// Read from a devcons chan.  `offset` u64::MAX uses + advances the chan's
-/// streaming offset (the pread convention).  cons reads are 05-08's — an
-/// open for read succeeds but reads get a loud -1 rather than wedging
-/// (the plan's explicit contract); null reads EOF; user reads "glenda\n";
-/// hostowner reads the stored bytes; the root dir serves the stat-wire
-/// listing (partinit's readparts consumes it — no sd* entries exist).
+/// streaming offset (the pread convention).  cons reads are the 05-08 read
+/// path (cons_read: cooked line discipline / raw, blocking until bytes are
+/// available); null reads EOF; user reads "glenda"; hostowner reads the
+/// stored bytes; consctl reads the mode word; the root dir serves the
+/// stat-wire listing (partinit's readparts consumes it — no sd* entries
+/// exist).
 pub fn read(c: &mut crate::dat::Chan, buf: &mut [u8], offset: u64) -> crate::Result<u64> {
     let off = if offset == u64::MAX { c.offset } else { offset };
     let n = match c.qid.path {
@@ -295,6 +314,8 @@ pub fn read(c: &mut crate::dat::Chan, buf: &mut [u8], offset: u64) -> crate::Res
                     hostowner_len()
                 } else if qid == QID_TIME {
                     time_len()
+                } else if qid == QID_CONSCTL {
+                    consctl_len()
                 } else {
                     0
                 };
@@ -307,7 +328,11 @@ pub fn read(c: &mut crate::dat::Chan, buf: &mut [u8], offset: u64) -> crate::Res
             buf[..n].copy_from_slice(&avail[..n]);
             n as u64
         }
-        QID_CONS => return Err("devcons: cons reads arrive with 05-08"),
+        // 05-08 (D-06): the real console read — cooked/raw, blocks until
+        // bytes are available (see the input engine below).  Cons is a
+        // streaming device: the offset is ignored (the pread -1
+        // convention's advance is meaningless here, like devpipe).
+        QID_CONS => return cons_read(buf),
         QID_NULL => 0, // null reads EOF
         QID_USER => {
             let start = (off as usize).min(USER_CONTENT.len());
@@ -338,6 +363,18 @@ pub fn read(c: &mut crate::dat::Chan, buf: &mut [u8], offset: u64) -> crate::Res
             buf[..n].copy_from_slice(&avail[..n]);
             n as u64
         }
+        QID_CONSCTL => {
+            // 05-08: report the current mode word (the plan's extension —
+            // the donor's consctl is write-only).
+            let node = LockNode::new();
+            let inq = INPUT.lock(&node);
+            let word: &[u8] = if inq.raw { b"raw\n" } else { b"cooked\n" };
+            let start = (off as usize).min(word.len());
+            let avail = &word[start..];
+            let n = avail.len().min(buf.len());
+            buf[..n].copy_from_slice(&avail[..n]);
+            n as u64
+        }
         _ => return Err("devcons: read of unknown file"),
     };
     if offset == u64::MAX {
@@ -349,7 +386,8 @@ pub fn read(c: &mut crate::dat::Chan, buf: &mut [u8], offset: u64) -> crate::Res
 /// Write to a devcons chan: cons writes byte-exact through the Console MCS
 /// lock (the 04-06 device-write path, untouched); null discards; user is
 /// read-only; hostowner STORES the bytes (replace semantics — the glenda
-/// no-op writes once); the root dir refuses.
+/// no-op writes once); consctl flips the input mode (05-08); the root dir
+/// refuses.
 pub fn write(c: &mut crate::dat::Chan, buf: &[u8]) -> crate::Result<u64> {
     match c.qid.path {
         QID_CONS => Ok(write_bytes(buf) as u64),
@@ -372,6 +410,298 @@ pub fn write(c: &mut crate::dat::Chan, buf: &[u8]) -> crate::Result<u64> {
             stored.extend_from_slice(buf);
             Ok(buf.len() as u64)
         }
+        QID_CONSCTL => {
+            // 05-08 (D-06): the donor conswrite Qconsctl scan —
+            // space-separated words; "rawon" switches to raw mode (no
+            // editing, no DEL interception) and completes a pending
+            // partial cooked line (the donor's ch=0 flush marker);
+            // "rawoff" switches back.  Unknown words are ignored (the
+            // donor's scan shape; ctlpon/ctlpoff stay deferred with
+            // Ctrl-P per CONTEXT.md).
+            let node = LockNode::new();
+            let mut inq = INPUT.lock(&node);
+            for w in buf.split(|&b| b == b' ') {
+                if w == b"rawon" {
+                    inq.raw = true;
+                    if !inq.line.is_empty() {
+                        let line = core::mem::take(&mut inq.line);
+                        inq.lines.extend(line);
+                    }
+                } else if w == b"rawoff" {
+                    inq.raw = false;
+                }
+            }
+            Ok(buf.len() as u64)
+        }
         _ => Err("devcons: write of a directory"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 05-08 (D-06): the console INPUT path — the userland-read half of
+// devcons (Phase-4 binaries only wrote; this is the plan's "interactive
+// half").  Semantics ported from 9k's devcons.c consread Qcons arm +
+// conswrite Qconsctl arm (the RESEARCH Don't-Hand-Roll mandate — "port
+// the semantics, not the letter"):
+//
+//   * Cooked mode (the default): bytes accumulate into a line; 0x08
+//     erases the last byte, 0x15 (^U) kills the line, '\r' is accepted as
+//     Enter (the wire's CRLF cooking means either arrives — the donor's
+//     kbdcr2nl converts at IRQ time; the conversion rides the assembly
+//     here instead, same effect), and a completed line INCLUDES its
+//     trailing '\n' (Plan 9 cooked reads return whole lines).  0x04 (^D)
+//     ends the line WITHOUT being buffered (the donor's send-without-append
+//     arm).  PREAD on /dev/cons blocks until a complete line is available.
+//   * DEL (0x7f) is NEVER buffered: it discards the in-assembly partial
+//     line and posts the "interrupt" note to the console's FOREGROUND
+//     GROUP (below), then the reading syscall fails -1/"interrupted"
+//     (the donor's qread-under-a-note behavior — rc's Eintr path
+//     discards its parse state and re-prompts).
+//   * Raw mode (consctl "rawon"): bytes return unprocessed — no editing,
+//     no DEL interception; a read returns what is queued, blocking only
+//     while empty.  "rawoff" switches back.  "rawon" completes a pending
+//     partial cooked line first (the donor's ch=0 flush marker).
+//
+// The foreground-group SCOPING (the plan's sanctioned delta): the
+// donor's DEL post targets a note group via /proc/notepg machinery r9
+// does not grow this era.  Scoped per the plan: the note posts to the
+// note GROUPS of the proc(s) reading the console — the blocked waiters
+// plus the current reader (the procs conversing with the console right
+// now).  r9 grows real per-proc note-group ids for this (05-08: Proc
+// noteid + RFNOTEG's real semantics), so init's rfork(RFNOTEG)'d shell
+// children are interrupted WITHOUT init itself getting the note — the
+// donor's pgrpnote shape over the readers' groups.
+//
+// Documented deltas from the letter of devcons.c: (a) no input ECHO —
+// the typed bytes are never written back to the wire (echo belongs to
+// the window/kbdfs era; nothing in D-06 or the plan names it, and its
+// absence keeps the interactive gate's output markers unambiguous);
+// (b) Ctrl-P/debugger entry stays deferred (pl011.rs, CONTEXT.md);
+// (c) the donor's multi-queue kbdqs merge is single-console here.
+//
+// LOCKING (the syscall.rs header rule, extended): the INPUT queue lock
+// is taken ONLY from syscall/trap context — IRQ context NEVER takes it.
+// The PL011 RX IRQ handler pushes bytes into its lock-free ring
+// (pl011.rs rx_irq_cons_buffer, unchanged); the ring→queue DRAIN happens
+// here, in the reader's own syscall context.  A blocked reader is readied
+// by the TICK (timer.rs's cons_rx_pending check → proc::cons_input_wake)
+// — the tick's PROC_TABLE take from trap context is the reschedule()
+// precedent; the reader then resumes, drains, and processes in ITS OWN
+// syscall context.  register-waiter → drop-lock → block cannot lose a
+// wake: syscalls are serialized (single CPU, IRQ-masked), so the tick can
+// only fire after block() swtch'es (devpipe's documented invariant).
+//
+// T-05-15 (DoS): the input queue is bounded at 4 KiB; on overrun the
+// OLDEST bytes are dropped with a one-line console warning — the IRQ
+// handler never blocks and never grows unbounded (its ring is the fixed
+// 256-byte PL011-side one; this queue is the syscall-side aggregate).
+// ---------------------------------------------------------------------------
+
+/// The console input queue bound (T-05-15).
+const INPUT_CAP: usize = 4096;
+/// The cooked line-assembly bound (the donor's `char line[1024]`).
+const LINE_CAP: usize = 1024;
+
+/// The console input state (syscall/trap context only — the locking rule
+/// above).  `input` is the unprocessed byte queue (the donor's kbdq),
+/// `line` the in-assembly partial (the donor's kbd.line), `lines` the
+/// completed-lines queue (the donor's lineq); `waiters` are the pids
+/// blocked in a cons read (the DEL target set's base).
+struct ConsInput {
+    input: alloc::collections::VecDeque<u8>,
+    line: alloc::vec::Vec<u8>,
+    lines: alloc::collections::VecDeque<u8>,
+    raw: bool,
+    waiters: alloc::vec::Vec<u64>,
+    overruns: usize,
+}
+
+impl ConsInput {
+    const fn new() -> ConsInput {
+        ConsInput {
+            input: alloc::collections::VecDeque::new(),
+            line: alloc::vec::Vec::new(),
+            lines: alloc::collections::VecDeque::new(),
+            raw: false,
+            waiters: alloc::vec::Vec::new(),
+            overruns: 0,
+        }
+    }
+}
+
+static INPUT: Lock<ConsInput> = Lock::new("consin", ConsInput::new());
+
+/// The arch-side hooks the read path rides (the devproc.rs
+/// set_post_hook idiom — port cannot see the proc table or the PL011
+/// ring): registered once before the first exec (main.rs, dev_exec).
+/// `current` names the calling proc (the reader/waiter identity);
+/// `drain_rx` drains the PL011 RX ring into the buffer (the lock-free
+/// ring read, invoked only from this module's syscall-context sections);
+/// `block` parks the caller mid-syscall until the tick wakes it
+/// (arch: proc::cons_block_current); `post_group` posts a note to the
+/// note GROUPS of the given reader pids (arch: the pgrpnote port).
+#[derive(Clone, Copy)]
+pub struct ConsHooks {
+    pub current: fn() -> u64,
+    pub drain_rx: fn(&mut [u8]) -> usize,
+    pub block: fn(),
+    pub post_group: fn(&[u64], &[u8]),
+}
+
+static CONS_HOOKS: Lock<Option<ConsHooks>> = Lock::new("conshooks", None);
+
+/// Register the arch-side read-path hooks.  Called once during boot
+/// before any user process exists; a second registration is a boot bug.
+pub fn set_cons_hooks(hooks: ConsHooks) {
+    let node = LockNode::new();
+    let mut guard = CONS_HOOKS.lock(&node);
+    assert!(guard.is_none(), "devcons: cons hooks registered twice");
+    *guard = Some(hooks);
+}
+
+fn cons_hooks() -> crate::Result<ConsHooks> {
+    let node = LockNode::new();
+    CONS_HOOKS
+        .lock(&node)
+        .ok_or("devcons: cons read path not initialized (no hooks)")
+}
+
+/// The cooked-mode special bytes (the donor's switch; BACKSPACE/DELETE/
+/// CTLU/CTLD constants live at the top of this file).
+const CR: u8 = b'\r';
+const LF: u8 = b'\n';
+
+/// The /dev/cons read (05-08): cooked line discipline + raw mode +
+/// blocking.  The waiters registration is held from the first block until
+/// the read returns, so a DEL processed after a wake still targets this
+/// reader's group (the waiters ∪ {current} set is computed at DEL time).
+fn cons_read(buf: &mut [u8]) -> crate::Result<u64> {
+    let hooks = cons_hooks()?;
+    let pid = (hooks.current)();
+    let node = LockNode::new();
+    let mut registered = false;
+    loop {
+        let mut dropped = 0usize;
+        let mut interrupted = false;
+        let mut readers: alloc::vec::Vec<u64> = alloc::vec::Vec::new();
+        let ready: Option<u64> = {
+            let mut inq = INPUT.lock(&node);
+            // 1. Drain the RX ring into the bounded input queue
+            //    (drop-oldest on overrun, counted + warned once below).
+            let mut tmp = [0u8; 256];
+            loop {
+                let n = (hooks.drain_rx)(&mut tmp);
+                if n == 0 {
+                    break;
+                }
+                let room = INPUT_CAP.saturating_sub(inq.input.len());
+                if n > room {
+                    let d = n - room;
+                    inq.input.drain(..d);
+                    inq.overruns += d;
+                    dropped += d;
+                }
+                inq.input.extend(&tmp[..n]);
+                if n < tmp.len() {
+                    break; // the ring is drained
+                }
+            }
+            // 2. Process per mode.  Raw: bytes return unprocessed (no
+            //    editing, no DEL interception) — return what is queued.
+            //    Cooked: assemble lines with erase/kill editing; DEL is
+            //    never buffered — it discards the partial line and posts
+            //    the interrupt note.
+            if inq.raw {
+                if !inq.input.is_empty() {
+                    let n = inq.input.len().min(buf.len());
+                    for slot in buf[..n].iter_mut() {
+                        *slot = inq.input.pop_front().unwrap_or(0);
+                    }
+                    Some(n as u64)
+                } else {
+                    None
+                }
+            } else {
+                while let Some(b) = inq.input.pop_front() {
+                    match b {
+                        DELETE => {
+                            inq.line.clear();
+                            interrupted = true;
+                        }
+                        BACKSPACE => {
+                            inq.line.pop();
+                        }
+                        CTLU => {
+                            inq.line.clear();
+                        }
+                        CR | LF | CTLD => {
+                            // CR→LF (the donor kbdcr2nl's !raw arm); the
+                            // completed line INCLUDES the newline; ^D
+                            // ends the line without being buffered.
+                            if b != CTLD {
+                                inq.line.push(LF);
+                            }
+                            let line = core::mem::take(&mut inq.line);
+                            inq.lines.extend(line);
+                        }
+                        _ => {
+                            if inq.line.len() < LINE_CAP {
+                                inq.line.push(b);
+                            }
+                        }
+                    }
+                }
+                if interrupted {
+                    // The DEL target set: the blocked cons readers plus
+                    // this reader (the console's foreground group this
+                    // era), dedup'd — the arch side posts to their note
+                    // GROUPS.
+                    for p in inq.waiters.iter().chain(core::iter::once(&pid)) {
+                        if !readers.contains(p) {
+                            readers.push(*p);
+                        }
+                    }
+                    None
+                } else if !inq.lines.is_empty() {
+                    let n = inq.lines.len().min(buf.len());
+                    for slot in buf[..n].iter_mut() {
+                        *slot = inq.lines.pop_front().unwrap_or(0);
+                    }
+                    Some(n as u64)
+                } else {
+                    None
+                }
+            }
+        };
+        if dropped > 0 {
+            // T-05-15's one-line warning (post-lock: Console is a
+            // separate MCS lock; nothing nests Console → INPUT).
+            crate::println!("devcons: console input overrun — dropped {dropped} oldest bytes");
+        }
+        if interrupted {
+            (hooks.post_group)(&readers, b"interrupt");
+            if registered {
+                let mut inq = INPUT.lock(&node);
+                inq.waiters.retain(|p| *p != pid);
+            }
+            return Err("interrupted");
+        }
+        if let Some(n) = ready {
+            if registered {
+                let mut inq = INPUT.lock(&node);
+                inq.waiters.retain(|p| *p != pid);
+            }
+            return Ok(n);
+        }
+        // 3. Nothing to return — register as a waiter and block until
+        //    the tick readies us (input pending).
+        {
+            let mut inq = INPUT.lock(&node);
+            if !inq.waiters.contains(&pid) {
+                inq.waiters.push(pid);
+            }
+            registered = true;
+        }
+        (hooks.block)();
     }
 }

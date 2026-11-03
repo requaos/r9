@@ -106,6 +106,17 @@ pub fn tick() {
         println!("tick {}", n / PRINT_EVERY);
     }
     #[cfg(dev_exec)]
-    let _ = n;
+    {
+        let _ = n;
+        // 05-08 (D-06): the cons-read waker — a blocked console reader
+        // readies when the PL011 RX ring holds bytes.  The peek is
+        // lock-free (pl011.rs); the wake takes PROC_TABLE from trap
+        // context exactly as preempt()/reschedule() do (the proc.rs
+        // module-header discipline: the lock is only ever held in
+        // IRQ-masked context).
+        if crate::platform::pl011::cons_rx_pending() {
+            crate::proc::cons_input_wake();
+        }
+    }
     crate::proc::preempt();
 }

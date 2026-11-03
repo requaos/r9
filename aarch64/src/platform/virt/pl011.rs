@@ -145,8 +145,8 @@ static CONS_RX: SyncUnsafeCell<ConsRx> =
     SyncUnsafeCell::new(ConsRx { bytes: [0; CONS_RX_CAP], head: 0, tail: 0, overruns: 0 });
 
 /// devcons read side (dev_exec): drain up to `buf.len()` bytes from the RX
-/// ring; return the count — 0 when empty (no blocking console-read this
-/// phase, per plan).  Called only from IRQ-masked syscall context, so the
+/// ring; return the count — 0 when empty.  Called only from IRQ-masked
+/// syscall context (the devcons input engine's drain hook, 05-08), so the
 /// IRQ writer cannot interleave.
 #[cfg(dev_exec)]
 pub fn cons_rx_drain(buf: &mut [u8]) -> usize {
@@ -158,6 +158,17 @@ pub fn cons_rx_drain(buf: &mut [u8]) -> usize {
         n += 1;
     }
     n
+}
+
+/// 05-08 (D-06): lock-free "RX ring non-empty" peek for the tick's
+/// cons-wake hook (timer.rs → proc::cons_input_wake).  A torn read of
+/// head/tail is benign: a missed wake retries at the next tick (1 ms),
+/// and a spurious wake just re-blocks after the reader's drain finds
+/// nothing.
+#[cfg(dev_exec)]
+pub fn cons_rx_pending() -> bool {
+    let rx = unsafe { &*CONS_RX.get() };
+    rx.head != rx.tail
 }
 
 /// INTID 33 handler: drain the RX FIFO and echo every byte verbatim via raw

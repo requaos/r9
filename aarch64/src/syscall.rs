@@ -29,7 +29,13 @@
 //! tick's println is cfg(not(dev_exec))-gated — no IRQ-context code ever
 //! contends for the lock once syscalls can print.  Syscall/trap context
 //! runs IRQ-masked, so the PL011 RX ring's IRQ writer cannot interleave
-//! with the console-read drainer either.
+//! with the console-read drainer either.  05-08 extends the rule: the
+//! devcons INPUT queue lock (the read path's cooked/raw state) is
+//! syscall/trap context ONLY — IRQ context never takes it; the PL011 RX
+//! IRQ handler only pushes its lock-free ring, and the ring→queue drain
+//! runs in the reader's own syscall context (a blocked reader is readied
+//! by the tick, timer.rs → proc::cons_input_wake — the reschedule()
+//! PROC_TABLE-from-trap-context precedent).
 
 use alloc::vec::Vec;
 
@@ -79,7 +85,9 @@ const PWRITE: u64 = 51;
 pub(crate) const RFNAMEG: u64 = 1 << 0;
 pub(crate) const RFENVG: u64 = 1 << 1;
 pub(crate) const RFFDG: u64 = 1 << 2;
-const RFNOTEG: u64 = 1 << 3;
+/// pub(crate) since 05-08: proc.rs's rfork_clone/rfork_noteg_split read it
+/// (D-06's note groups — the console DEL target scoping).
+pub(crate) const RFNOTEG: u64 = 1 << 3;
 const RFPROC: u64 = 1 << 4;
 const RFMEM: u64 = 1 << 5;
 pub(crate) const RFNOWAIT: u64 = 1 << 6;
@@ -1239,10 +1247,10 @@ fn sys_fd2path(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 /// page-for-page (no COW, no shared writable pages — T-04-15; the donor's
 /// RFMEM share-semantics is not honored, which the smoke does not depend
 /// on); RFNOWAIT is honored (EXITS posts no wait record); RFREND is a
-/// no-op (no rendezvous this era); RFNOTEG is accepted as a no-op (05-06:
-/// note delivery is PER-PID — devproc's post_note has no group channel,
-/// so there is no note group to split; paqfs's
-/// rfork(RFFDG|RFPROC|RFNAMEG|RFNOTEG) requires it).  05-04 (D-03) adds
+/// no-op (no rendezvous this era); RFNOTEG has REAL note-group semantics
+/// since 05-08 (D-06: Proc.noteid — a fresh group per construction,
+/// inherited without RFNOTEG, fresh with it; the console DEL posts
+/// "interrupt" to the readers' groups).  05-04 (D-03) adds
 /// the namespace group semantics per fork(2): RFPROC+neither shares the
 /// parent's pgrp, RFNAMEG deep-copies, RFCNAMEG starts clean — and the
 /// non-RFPROC split (boot(8)'s `rfork(RFNAMEG)`): the CALLER's group
@@ -1304,6 +1312,13 @@ fn sys_rfork(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         }
         if flag & (RFENVG | RFCENVG) != 0 {
             proc::rfork_env_split(proc, flag & RFENVG != 0);
+        }
+        // 05-08 (D-06): non-RFPROC rfork(RFNOTEG) re-groups the CALLER
+        // into a fresh note group (9k sysproc.c:82) — init's fexec child
+        // does this before exec'ing rc, so console DELs target the
+        // shell's group and never init.
+        if flag & RFNOTEG != 0 {
+            proc::rfork_noteg_split(proc);
         }
         return 0;
     }

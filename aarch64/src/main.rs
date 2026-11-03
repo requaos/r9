@@ -443,6 +443,19 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
     });
     port::devsrv::set_resolve_hook(proc::current_fd_resolve);
 
+    // 05-08 (D-06): devcons's read-path hooks — the console's input
+    // engine rides the arch's lock-free PL011 RX ring (drain_rx), the
+    // 04-07 sched machinery (block), and the note-group post (the DEL
+    // path's foreground-group target).  virt-only this era (the PL011 RX
+    // ring is a virt driver; dev_exec configs are all virt).
+    #[cfg(platform = "virt")]
+    port::devcons::set_cons_hooks(port::devcons::ConsHooks {
+        current: proc::current_pid,
+        drain_rx: platform::pl011::cons_rx_drain,
+        block: proc::cons_block_current,
+        post_group: proc::post_note_group_of_members,
+    });
+
     // 05-05 (D-07, RESEARCH Pattern 3 / Pitfall 1): the kernel-seeded
     // ROOT env group — the ONE mechanism replacing both 9k's #ec config
     // env and the 05-04 transitional argv hint.  cputype feeds boot's

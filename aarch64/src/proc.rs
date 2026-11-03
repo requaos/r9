@@ -30,6 +30,7 @@ use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ptr;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use port::Result;
 use port::dat::Chan;
@@ -69,6 +70,11 @@ pub const MAX_FDS: usize = 32;
 const KSTACK_PAGES: usize = 4;
 /// Queued-notes capacity (04-08 fills the delivery path).
 pub const NOTE_QUEUE_CAP: usize = 8;
+
+/// 05-08 (D-06): the note-group id allocator (the donor's
+/// `Ref noteidalloc` — 9k proc.c:13; fresh id per newproc, inherited or
+/// split per the rfork RFNOTEG rules).
+static NEXT_NOTEID: AtomicU64 = AtomicU64::new(1);
 
 /// User segment kinds — the fault handler's classification and the mapping
 /// log's tag (04-07's rfork-copy/exit-free walk the log by kind).
@@ -316,6 +322,23 @@ pub struct Proc {
     /// (Plan 9 convention).  None only pre-exec.
     pub slash: Option<Chan>,
     pub dot: Option<Chan>,
+    /// 05-08 (D-06): the note-group id — the donor's `noteid` (9k
+    /// portdat.h: "equivalent of note group").  A FRESH group id is
+    /// assigned at construction (donor newproc's incref(&noteidalloc));
+    /// rfork(RFPROC) WITHOUT RFNOTEG has the child INHERIT the parent's
+    /// group (9k sysproc.c:183 `if((flag&RFNOTEG) == 0) p->noteid =
+    /// up->noteid`), and non-RFPROC rfork(RFNOTEG) re-groups the CALLER
+    /// (init's fexec child does this before exec'ing rc — the shell's
+    /// console-DEL interrupts never reach init).  The console DEL posts
+    /// "interrupt" to the console readers' groups via
+    /// post_note_group_of_members (devcons.rs's foreground-group scoping).
+    pub noteid: u64,
+    /// 05-08 (D-06): true while the proc is parked in a devcons read
+    /// (set/cleared by the cons_block_current hook around sched()).  The
+    /// tick's cons_input_wake readies cons-waiting Blocked procs when the
+    /// PL011 RX ring holds bytes; the reader's post-wake drain re-checks
+    /// (a spurious wake re-blocks).
+    pub cons_waiting: bool,
 }
 
 impl Proc {
@@ -373,6 +396,10 @@ impl Proc {
             env_group: Arc::new(Lock::new("env", EnvGroup::new())),
             slash: None,
             dot: None,
+            // 05-08: a fresh note group per proc (donor newproc's
+            // incref(&noteidalloc)); rfork may overwrite with the parent's.
+            noteid: NEXT_NOTEID.fetch_add(1, Ordering::Relaxed),
+            cons_waiting: false,
         };
         proc.set_name(name);
         proc
@@ -1101,11 +1128,20 @@ pub fn pipe_wake(pids: &[u64]) {
 /// /proc/N/note); delivery happens at the target's next return-to-EL0
 /// boundary (trap.rs's deliver_notes).  PROC_TABLE-brief.  Registered with
 /// port::devproc at boot (main.rs under dev_exec).
-pub fn post_note(pid: u64, msg: &[u8]) -> Result<()> {    let node = LockNode::new();
+pub fn post_note(pid: u64, msg: &[u8]) -> Result<()> {
+    let node = LockNode::new();
     let mut table = PROC_TABLE.lock(&node);
     let Some(p) = table.procs.iter_mut().flatten().find(|p| p.pid == pid) else {
         return Err("devproc: no such process");
     };
+    push_note(p, msg)
+}
+
+/// The note-queue append shared by post_note (per-pid) and the 05-08
+/// note-group post: Moribund targets and full queues are skipped per the
+/// donor's postnote failure shape (the caller's group post ignores
+/// individual failures — pgrpnote's waserror skip).
+fn push_note(p: &mut Proc, msg: &[u8]) -> Result<()> {
     if p.state == ProcState::Moribund {
         return Err("devproc: no such process");
     }
@@ -1116,6 +1152,89 @@ pub fn post_note(pid: u64, msg: &[u8]) -> Result<()> {    let node = LockNode::n
     note.buf[..note.len].copy_from_slice(&msg[..note.len]);
     p.note_queue.push_back(note);
     Ok(())
+}
+
+/// 05-08 (D-06): devcons's DEL path — post a note to the note GROUPS of
+/// the given reader pids (the console's foreground group this era — the
+/// plan's sanctioned scoping for the donor's notepg machinery: "the note
+/// group of the proc(s) holding cons open").  Reader pids resolve to
+/// their noteids; every live proc sharing one gets the note (the donor's
+/// pgrpnote loop, 9k pgrp.c:16).  No caller exclusion: the poster is the
+/// console, not a proc.  PROC_TABLE-brief; registered with port::devcons
+/// at boot (main.rs under dev_exec).
+pub fn post_note_group_of_members(readers: &[u64], msg: &[u8]) {
+    let node = LockNode::new();
+    let mut groups: Vec<u64> = Vec::new();
+    {
+        let table = PROC_TABLE.lock(&node);
+        for p in table.procs.iter().flatten() {
+            if readers.contains(&p.pid)
+                && p.state != ProcState::Moribund
+                && !groups.contains(&p.noteid)
+            {
+                groups.push(p.noteid);
+            }
+        }
+    }
+    let mut table = PROC_TABLE.lock(&node);
+    for p in table.procs.iter_mut().flatten() {
+        if groups.contains(&p.noteid) {
+            let _ = push_note(p, msg);
+        }
+    }
+}
+
+/// The calling proc's pid (devcons's `current` hook, 05-08 — the generic
+/// twin of pipe_current_pid, which stays named for devpipe's registration
+/// site).  Syscall context only — a device op always has a current proc.
+pub fn current_pid() -> u64 {
+    let cur = current_proc();
+    assert!(!cur.is_null(), "device op with no current process");
+    unsafe { (*cur).pid }
+}
+
+/// devcons's block hook (05-08, D-06): park the calling proc in its cons
+/// read until the tick's cons_input_wake readies it (input pending).  The
+/// register-then-block order cannot lose a wake: syscalls are serialized
+/// (single CPU, IRQ-masked), so the tick fires only after sched() swtch'es
+/// (devpipe's documented invariant).  The flag clears on resume — the
+/// reader's post-wake drain re-checks the ring regardless (a spurious
+/// wake re-blocks).
+pub fn cons_block_current() {
+    let cur = current_proc();
+    assert!(!cur.is_null(), "cons read with no current process");
+    unsafe {
+        (*cur).cons_waiting = true;
+    }
+    sched();
+    // Resumed inside the syscall handler by the sched loop's swtch; this
+    // proc is current again (the blocked_in_kernel resume path).
+    unsafe {
+        (*cur).cons_waiting = false;
+    }
+}
+
+/// The tick's cons wake (05-08): ready every cons-waiting Blocked proc —
+/// the caller (timer.rs) has already seen the PL011 RX ring non-empty via
+/// the lock-free peek.  PROC_TABLE from tick (trap) context is the
+/// reschedule() precedent: the lock is only ever held in IRQ-masked
+/// context (the module header's discipline).
+pub fn cons_input_wake() {
+    let node = LockNode::new();
+    let mut table = PROC_TABLE.lock(&node);
+    for p in table.procs.iter_mut().flatten() {
+        if p.state == ProcState::Blocked && p.cons_waiting {
+            p.state = ProcState::Ready;
+        }
+    }
+}
+
+/// Non-RFPROC rfork(RFNOTEG)'s note-group half (05-08; 9k sysproc.c:82 —
+/// `if(flag & RFNOTEG) up->noteid = incref(&noteidalloc)`): the CALLER
+/// joins a fresh note group.  init's fexec child does this before exec'ing
+/// rc, so a console DEL interrupts the shell's group and never init.
+pub fn rfork_noteg_split(proc: &mut Proc) {
+    proc.noteid = NEXT_NOTEID.fetch_add(1, Ordering::Relaxed);
 }
 
 /// devdup/devsrv's fd resolver hook (05-06): the CALLING proc's fd N as
@@ -1344,6 +1463,12 @@ fn rfork_copy(parent: &Proc, child: &mut Proc, frame: &TrapFrame, flag: u64) -> 
     // the child INHERITS the notify handler; the note queue/last-note/
     // note_ureg start empty (Proc::new's construction).
     child.notify_handler = parent.notify_handler;
+    // 05-08 (D-06): the note group — 9k sysproc.c:183: WITHOUT RFNOTEG the
+    // child INHERITS the parent's noteid; WITH it the child keeps the fresh
+    // group id its construction assigned (the donor's newproc incref).
+    if flag & crate::syscall::RFNOTEG == 0 {
+        child.noteid = parent.noteid;
+    }
     Ok(())
 }
 
