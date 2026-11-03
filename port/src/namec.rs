@@ -21,7 +21,7 @@
 //! devroot.rs's header); the registry is a plain match over attach fns,
 //! the established free-function device idiom.
 
-use crate::dat::{Chan, DEV_CONS, DEV_DUP, DEV_ENV, DEV_PIPE, DEV_PROC, DEV_ROOT, DEV_SRV};
+use crate::dat::{Chan, DEV_CONS, DEV_DUP, DEV_ENV, DEV_MNT, DEV_PIPE, DEV_PROC, DEV_ROOT, DEV_SRV};
 use crate::pgrp::Pgrp;
 use crate::Result;
 
@@ -106,6 +106,9 @@ fn dev_walk(c: &Chan, comp: &[u8]) -> Result<Chan> {
         DEV_PIPE => crate::devpipe::walk(c, comp),
         DEV_DUP => crate::devdup::walk(c, comp),
         DEV_SRV => crate::devsrv::walk(c, comp),
+        // 05-07: a walk into a mounted tree is a Twalk RPC (devmnt — the
+        // mount entry's `to` chan carries the session + the attach fid).
+        DEV_MNT => crate::devmnt::walk(c, comp),
         _ => Err("namec: chan with unknown device index"),
     }
 }
@@ -208,6 +211,10 @@ pub fn open_chan(c: &Chan, mode: u32) -> Result<Chan> {
         DEV_PIPE => crate::devpipe::open(c, access)?,
         DEV_DUP => crate::devdup::open(c, access)?,
         DEV_SRV => crate::devsrv::open(c, mode)?,
+        // 05-07: Topen over the session (devmnt gets the FULL mode — it
+        // masks the wire byte itself, OTRUNC included for the server to
+        // refuse).
+        DEV_MNT => crate::devmnt::open(c, mode)?,
         _ => return Err("namec: chan with unknown device index"),
     };
     // 05-06: the donor's COPEN — every funnel-opened chan is marked;
@@ -228,6 +235,8 @@ pub fn stat_chan(c: &Chan, sb: &mut [u8]) -> Result<u64> {
         DEV_PIPE => crate::devpipe::stat(c, sb),
         DEV_DUP => crate::devdup::stat(c, sb),
         DEV_SRV => crate::devsrv::stat(c, sb),
+        // 05-07: Tstat over the session (settime's stat of the /tmp mount).
+        DEV_MNT => crate::devmnt::stat(c, sb),
         _ => Err("namec: chan with unknown device index"),
     }
 }
@@ -241,6 +250,9 @@ pub fn create_chan(c: &Chan, name: &[u8], mode: u32, perm: u32) -> Result<Chan> 
     let mut created = match c.dev {
         DEV_ENV => crate::devenv::create(c, name, mode, perm)?,
         DEV_SRV => crate::devsrv::create(c, name, mode, perm)?,
+        // 05-07: the mounted tree is a read-only server this era (paqfs's
+        // rcreate would refuse regardless) — loud, never a silent no-op.
+        DEV_MNT => return Err("devmnt: create unsupported (read-only server this era)"),
         _ => return Err("namec: device has no create"),
     };
     created.copen = true;
@@ -252,10 +264,16 @@ pub fn create_chan(c: &Chan, name: &[u8], mode: u32, perm: u32) -> Result<Chan> 
 /// eviction, sys_pipe/sys_open's error paths).  Only devices with close
 /// semantics act: devpipe decrements the end's open count (the last
 /// close hangs the peer's read queue up — the EOF path the connectembed
-/// teardown rides).  Non-open chans (walk intermediates — copen clear)
-/// and close-less devices are no-ops.
+/// teardown rides); devmnt Tclunks the fid (05-07 — best-effort, never
+/// fails).  Non-open chans (walk intermediates — copen clear) and
+/// close-less devices are no-ops.
 pub fn close_chan(c: &Chan) {
-    if c.copen && c.dev == DEV_PIPE {
-        crate::devpipe::close(c);
+    if !c.copen {
+        return;
+    }
+    match c.dev {
+        DEV_PIPE => crate::devpipe::close(c),
+        DEV_MNT => crate::devmnt::clunk(c),
+        _ => {}
     }
 }

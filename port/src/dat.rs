@@ -108,11 +108,21 @@ pub struct Chan {
     /// open funnel; namec::create_chan sets it for creates).  Read by
     /// dup's pipe-reference rule and namec::close_chan's dispatch.
     pub(crate) copen: bool,
+    /// 05-07 (D-03's mount half): the devmnt 9P session — set by
+    /// devmnt::fversion on the PIPE chan (the donor's `c->mux`; sys_mount
+    /// finds it there) and carried by every DEV_MNT chan in the mounted
+    /// tree.  dup CLONES the Arc: devsrv's posted clone of the boot pipe
+    /// carries the session to settime/newns's mounts.
+    pub(crate) mnt: Option<Arc<crate::devmnt::Mnt>>,
+    /// The server-side fid this chan names (DEV_MNT chans only; 0 = none).
+    /// dup shares it (the value-copy convention — see devmnt.rs's fid
+    /// lifecycle note for the double-clunk implication).
+    pub(crate) mnt_fid: u32,
 }
 
 impl Chan {
     pub fn new(dev: usize, qid: Qid, mode: u32) -> Chan {
-        Chan { qid, mode, offset: 0, dev, path: Vec::new(), paqdir: None, pipe: None, copen: false }
+        Chan { qid, mode, offset: 0, dev, path: Vec::new(), paqdir: None, pipe: None, copen: false, mnt: None, mnt_fid: 0 }
     }
 
     /// Mark the chan open (COPEN) OUTSIDE the funnel — the one
@@ -120,6 +130,12 @@ impl Chan {
     /// open by construction, D-15; never opened through open_chan).
     pub fn mark_open(&mut self) {
         self.copen = true;
+    }
+
+    /// 05-07: the devmnt 9P session on this chan (sys_mount's lookup).
+    /// Set only by devmnt::fversion (in-crate); read cross-crate here.
+    pub fn mnt_session(&self) -> Option<Arc<crate::devmnt::Mnt>> {
+        self.mnt.clone()
     }
 
     /// Value-dup for 04-07's rfork fd-table copy: a fresh Chan naming the
@@ -147,6 +163,8 @@ impl Chan {
             paqdir: self.paqdir.clone(),
             pipe: self.pipe.clone(),
             copen: self.copen,
+            mnt: self.mnt.clone(),
+            mnt_fid: self.mnt_fid,
         }
     }
 }

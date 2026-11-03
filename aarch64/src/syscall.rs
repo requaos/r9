@@ -33,7 +33,7 @@
 
 use alloc::vec::Vec;
 
-use port::dat::{Chan, DEV_CONS, DEV_DUP, DEV_ENV, DEV_PIPE, DEV_PROC, DEV_ROOT, DEV_SRV, OEXEC, OTRUNC};
+use port::dat::{Chan, DEV_CONS, DEV_DUP, DEV_ENV, DEV_MNT, DEV_PIPE, DEV_PROC, DEV_ROOT, DEV_SRV, OEXEC, OTRUNC};
 use port::mcslock::LockNode;
 use port::namec::{self, NamecMode};
 use port::pgrp::{MAFTER, MBEFORE, MMASK, MORDER};
@@ -62,9 +62,11 @@ const NOTIFY: u64 = 28;
 const NOTED: u64 = 29;
 const UNMOUNT: u64 = 35;
 const SEEK: u64 = 39;
+const FVERSION: u64 = 40;
 const ERRSTR: u64 = 41;
 const STAT: u64 = 42;
 const FSTAT: u64 = 43;
+const MOUNT: u64 = 46;
 const AWAIT: u64 = 47;
 const PREAD: u64 = 50;
 const PWRITE: u64 = 51;
@@ -103,7 +105,11 @@ type Handler = fn(&mut TrapFrame, &mut Proc) -> u64;
 /// 05-06 with the connectembed family DUP(5)/PIPE(21)/CREATE(22)/
 /// FD2PATH(23) (boot's pipe+fork+dup+exec of the paqfs server +
 /// srvcreate) and SEEK(39) (measured ×72 — paqfs's bio Bseek; surfaced
-/// by the 05-06 gate as the trace-settled gap the loud wall named).  The 04-01 trace carries no
+/// by the 05-06 gate as the trace-settled gap the loud wall named); and by
+/// 05-07 with D-03's mount half FVERSION(40)/MOUNT(46) — the devmnt
+/// session negotiation + the mount-table insertion (FAUTH(10) stays None:
+/// nsinit's fall-through to an unauthenticated mount is the designed D-02
+/// path).  The 04-01 trace carries no
 /// brk_/segbrk(12) on the hello path; segbrk stays None.
 static DISPATCH: [Option<Handler>; 55] = {
     let mut t: [Option<Handler>; 55] = [None; 55];
@@ -123,9 +129,11 @@ static DISPATCH: [Option<Handler>; 55] = {
     t[BRK_ as usize] = Some(sys_brk_);
     t[UNMOUNT as usize] = Some(sys_unmount);
     t[SEEK as usize] = Some(sys_seek);
+    t[FVERSION as usize] = Some(sys_fversion);
     t[ERRSTR as usize] = Some(sys_errstr);
     t[STAT as usize] = Some(sys_stat);
     t[FSTAT as usize] = Some(sys_fstat);
+    t[MOUNT as usize] = Some(sys_mount);
     t[AWAIT as usize] = Some(sys_await);
     t[PREAD as usize] = Some(sys_pread);
     t[PWRITE as usize] = Some(sys_pwrite);
@@ -185,13 +193,13 @@ pub fn dispatch(frame: &mut TrapFrame) {
 /// silently — shallow stacks never saw it because fresh demand-paged
 /// pages are zeroed).  (Arg0 is always clean: the stub materializes it
 /// from R0, whose upper half the caller's 32-bit op already zeroed.)
-fn sargs(frame: &mut TrapFrame, proc: &mut Proc, arity: usize) -> Option<[u64; 4]> {
+fn sargs(frame: &mut TrapFrame, proc: &mut Proc, arity: usize) -> Option<[u64; 5]> {
     let base = frame.sp + 8;
     if proc.validate_user_range(base, 8 * arity as u64, false).is_err() {
         return None;
     }
     let sargs = base as *const u64;
-    let mut out = [0u64; 4];
+    let mut out = [0u64; 5];
     for (i, slot) in out.iter_mut().enumerate().take(arity) {
         *slot = unsafe { sargs.add(i).read() };
     }
@@ -300,6 +308,11 @@ fn sys_pwrite(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             // this must actually work).
             port::devsrv::write(&mut chan, unsafe { user_slice(buf, n) }, off)
         }
+        DEV_MNT => {
+            // devmnt (05-07): paqfs is a read-only server; the early
+            // client-side error is clearer than the server's Erdonly.
+            Err("devmnt: the mounted tree is read-only this era")
+        }
         _ => Err("pwrite: unknown device"),
     };
     proc.fd_store(fd, chan);
@@ -375,6 +388,12 @@ fn sys_pread(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             // services (a service file's reads flow through its posted
             // chan — open returns it, the donor srvopen).
             port::devsrv::read(&mut chan, unsafe { user_slice_mut(buf, n) }, off)
+        }
+        DEV_MNT => {
+            // devmnt (05-07): chunked Tread RPCs over the mounted tree's
+            // session (blocks mid-syscall — the pipe read schedules the
+            // server proc; the fd is checked out, never the group lock).
+            port::devmnt::read(&mut chan, unsafe { user_slice_mut(buf, n) }, off)
         }
         _ => Err("pread: unknown device"),
     };
@@ -643,6 +662,142 @@ fn sys_unmount(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     };
     match guard.unmount(&tgt.path, from.as_ref()) {
         Ok(()) => 0,
+        Err(msg) => err(proc, msg),
+    }
+}
+
+/// FVERSION(40): fd, msize, version, nversion — 05-07 (D-03's mount half;
+/// the 05-06 gate's FVERSION wall).  Donor sysfversion (9k sysauth.c):
+/// `int fversion(int fd, u32int msize, char *version, int nversion)` —
+/// negotiate the 9P session over the fd's chan (devmnt::fversion, the
+/// mntversion port) and write back the negotiated version string,
+/// returning its length.  The fd must be a 9P-capable connection open
+/// ORDWR (the connectembed pipe end).  T-04-11: the version buffer is
+/// validated + forced resident BEFORE the kernel reads/writes it (the
+/// 05-06 cold-buffer class); the donor's Ebadarg NUL check is ported
+/// (the buffer carries the REQUESTED version string — "" means the
+/// "9P2000" default; anything else is rejected, the donor's
+/// "bad 9P version specification").
+fn sys_fversion(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
+    let Some(args) = sargs(frame, proc, 4) else {
+        return err(proc, "fversion: bad argument block");
+    };
+    // fd, msize, nversion are int-width (the width discipline); version is
+    // a full pointer.
+    let (fd, msize, ver_va, nver) =
+        (args[0] & 0xffff_ffff, (args[1] & 0xffff_ffff) as u32, args[2], args[3] & 0xffff_ffff);
+    if proc.validate_user_range(ver_va, nver, true).is_err() {
+        return err(proc, "fversion: bad version buffer");
+    }
+    fault::ensure_user_resident(proc, ver_va as usize, (ver_va + nver) as usize);
+    if nver == 0 {
+        return err(proc, "fversion: zero-length version buffer");
+    }
+    let buf = unsafe { user_slice(ver_va, nver) };
+    let Some(nul) = buf.iter().position(|&b| b == 0) else {
+        return err(proc, "fversion: bad version specification");
+    };
+    let requested = &buf[..nul];
+    if !requested.is_empty() && requested != port::devmnt::VERSION9P {
+        return err(proc, "fversion: bad 9P version specification");
+    }
+    let Some(mut chan) = proc.fd_take(fd) else {
+        return err(proc, "fversion: bad fd");
+    };
+    let result = {
+        let out = unsafe { user_slice_mut(ver_va, nver) };
+        port::devmnt::fversion(&mut chan, msize, out)
+    };
+    proc.fd_store(fd, chan);
+    match result {
+        Ok(len) => len,
+        Err(msg) => err(proc, msg),
+    }
+}
+
+/// MOUNT(46): fd, afd, old, flag, aname — 05-07 (D-03's mount half;
+/// nsinit's `mount(fd, -1, "/root", MREPL|MCREATE, rp)` and settime's
+/// second mount onto /tmp via #s/boot).  Donor sysmount + bindmount's
+/// ismount arm (9k sysfile.c): validate the flags (bindmount's Ebadarg
+/// shape), the fd must be a 9P connection (auto-version when fversion
+/// never ran — the donor mntattach's Enoversion fallback), Tattach over
+/// the session with afid = NOFID (afd ≠ -1 is loud-unsupported — D-02's
+/// no-auth era), then the mount-table insertion at the resolved target
+/// with the frozen flag semantics (pgrp::bind — MountTarget resolution,
+/// dir/file agreement, MREPL/MBEFORE/MAFTER order, MCREATE recorded).
+fn sys_mount(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
+    let Some(args) = sargs(frame, proc, 5) else {
+        return err(proc, "mount: bad argument block");
+    };
+    // fd, afd, flag are int-width (the width discipline); old/aname are
+    // full pointers.
+    let (fd, afd, old_va, flag, aname_va) = (
+        args[0] & 0xffff_ffff,
+        (args[1] & 0xffff_ffff) as u32 as i32,
+        args[2],
+        (args[3] & 0xffff_ffff) as u32,
+        args[4],
+    );
+    // 9k bindmount: unknown bits and BEFORE|AFTER together are Ebadarg.
+    if flag & !MMASK != 0 || (flag & MORDER) == (MBEFORE | MAFTER) {
+        return err(proc, "mount: bad flags");
+    }
+    if afd != -1 {
+        return err(proc, "mount: auth fd unsupported this era (D-02)");
+    }
+    let old = match copy_user_str(proc, old_va, ERRMAX) {
+        Ok(s) => s,
+        Err(msg) => return err(proc, msg),
+    };
+    let aname = match copy_user_str(proc, aname_va, ERRMAX) {
+        Ok(s) => s,
+        Err(msg) => return err(proc, msg),
+    };
+
+    // The fd's session — checked out only for the lookup (the RPC IO rides
+    // the session's own chan reference; a minimal checkout window).
+    let Some(mut chan) = proc.fd_take(fd) else {
+        return err(proc, "mount: bad fd");
+    };
+    if chan.dev != DEV_PIPE || chan.mode & port::dat::OMASK != port::dat::ORDWR {
+        proc.fd_store(fd, chan);
+        return err(proc, "mount: fd is not a 9P connection");
+    }
+    if chan.mnt_session().is_none() {
+        // The donor's mntattach auto-versions when fversion never ran.
+        if let Err(msg) = port::devmnt::fversion(&mut chan, 0, &mut []) {
+            proc.fd_store(fd, chan);
+            return err(proc, msg);
+        }
+    }
+    let Some(mnt) = chan.mnt_session() else {
+        proc.fd_store(fd, chan);
+        return err(proc, "mount: no 9P session after version");
+    };
+    proc.fd_store(fd, chan);
+
+    // Tattach (blocks mid-syscall — the pipe read schedules the server
+    // proc; NO pgrp lock is held across the RPC).
+    let mut mnt_chan = match port::devmnt::attach(&mnt, &aname) {
+        Ok(c) => c,
+        Err(msg) => return err(proc, msg),
+    };
+
+    // Resolve the target (MountTarget — never redirect; stacked mounts
+    // attach to the original directory) and insert the entry.
+    let pg = proc.pgrp.clone();
+    let node = LockNode::new();
+    let mut guard = pg.lock(&node);
+    let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
+        return err(proc, "mount: no namespace (pre-exec)");
+    };
+    let tgt = match namec::namec(&old, slash, dot, &guard, NamecMode::MountTarget) {
+        Ok(c) => c,
+        Err(msg) => return err(proc, msg),
+    };
+    mnt_chan.path = tgt.path.clone();
+    match guard.bind(mnt_chan, &tgt, flag) {
+        Ok(_) => 0,
         Err(msg) => err(proc, msg),
     }
 }

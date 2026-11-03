@@ -21,10 +21,12 @@
 //! bounds-checks the message size against the negotiated msize BEFORE
 //! reading the body, tag-matches the reply against the outstanding
 //! T-message, requires the reply type to be request+1 (Rerror maps to a
-//! loud errstr), and parses every field through a checked cursor —
-//! protocol failures are "devmnt: …" errstrs, never panics, never partial
-//! reads, never trusted bytes.  Host tests prove rejection of oversized
-//! and mis-tagged replies (port/tests/devmnt_test.rs).
+//! loud errstr with the server's ename on the serial log), and parses
+//! every field through a checked cursor that must consume the message
+//! EXACTLY (the donor convM2S's `l != n` check).  Protocol failures are
+//! "devmnt: …" errstrs, never panics, never partial reads, never trusted
+//! bytes.  Host tests prove rejection of oversized and mis-tagged replies
+//! (port/tests/devmnt_test.rs).
 //!
 //! Concurrency this era (documented era limit): exactly ONE RPC is
 //! outstanding per session — syscalls are serialized and the boot chain's
@@ -53,14 +55,14 @@
 //! Fid lifecycle this era: fids are allocated at walk/attach from a
 //! per-session counter (never reused — paqfs's Fid is ~50 bytes and the
 //! boot chain walks dozens, not millions); Tclunk fires on the close
-//! dispatch (opened chans) and on exec's explicit close.  Walk
-//! intermediates that never reach an fd leak their fid — bounded and
-//! documented (the donor clunks on cclose; r9's value-chan drops are
-//! invisible to devices).
-
-// The RED skeleton leaves most of the codec/constants unconstructed —
-// silence the dead-code noise until GREEN fills the bodies.
-#![allow(dead_code)]
+//! dispatch (opened chans) and on exec's explicit close.  Two r9
+//! divergences from the donor, both bounded and deliberate: (1) walk
+//! intermediates that never reach an fd leak their fid (the donor clunks
+//! on cclose; r9's value-chan drops are invisible to devices); (2) a
+//! dup'd open mnt chan SHARES the fid (the value-copy convention), so a
+//! double close can Tclunk twice — benign against paqfs (its rclunk of
+//! an idle fid is a no-op), wrong against a stricter server, revisited
+//! with the fid-refcount era.
 
 extern crate alloc;
 
@@ -68,10 +70,11 @@ use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
-use core::sync::atomic::AtomicBool;
+use core::sync::atomic::{AtomicBool, Ordering};
 
-use crate::dat::{Chan, Qid, DEV_PIPE};
+use crate::dat::{Chan, Qid, DEV_MNT, DEV_PIPE, OMASK, ORDWR, OREAD, QTDIR};
 use crate::devpipe;
+use crate::println;
 use crate::Result;
 
 // ---------------------------------------------------------------------------
@@ -79,21 +82,21 @@ use crate::Result;
 // ---------------------------------------------------------------------------
 
 /// 9P2000 message types (fcall.h — frozen values).
-pub(crate) const TVERSION: u8 = 100;
-pub(crate) const RVERSION: u8 = 101;
-pub(crate) const TATTACH: u8 = 104;
-pub(crate) const RATTACH: u8 = 105;
-pub(crate) const RERROR: u8 = 107;
-pub(crate) const TWALK: u8 = 110;
-pub(crate) const RWALK: u8 = 111;
-pub(crate) const TOPEN: u8 = 112;
-pub(crate) const ROPEN: u8 = 113;
-pub(crate) const TREAD: u8 = 116;
-pub(crate) const RREAD: u8 = 117;
-pub(crate) const TCLUNK: u8 = 120;
-pub(crate) const RCLUNK: u8 = 121;
-pub(crate) const TSTAT: u8 = 124;
-pub(crate) const RSTAT: u8 = 125;
+const TVERSION: u8 = 100;
+const RVERSION: u8 = 101;
+const TATTACH: u8 = 104;
+const RATTACH: u8 = 105;
+const RERROR: u8 = 107;
+const TWALK: u8 = 110;
+const RWALK: u8 = 111;
+const TOPEN: u8 = 112;
+const ROPEN: u8 = 113;
+const TREAD: u8 = 116;
+const RREAD: u8 = 117;
+const TCLUNK: u8 = 120;
+const RCLUNK: u8 = 121;
+const TSTAT: u8 = 124;
+const RSTAT: u8 = 125;
 
 /// The version tag (fcall.h NOTAG) and the no-auth fid (NOFID).
 pub const NOTAG: u16 = 0xFFFF;
@@ -113,6 +116,105 @@ pub const DEFAULT_MSIZE: u32 = 8192;
 /// The transport's whole-message ceiling: devpipe's queue cap (a pipe
 /// write is whole-message-or-fail, so no 9P message may exceed it).
 pub const TRANSPORT_MSG_MAX: u32 = devpipe::PIPE_Q_CAP as u32;
+
+/// The donor's msize sanity bounds (devmnt.c mntversion's
+/// "nonsense value of msize" check) — applied to the OFFER too (a user
+/// syscall arg sizes the kernel's receive scratch; unbounded allocation
+/// from an unchecked arg is a memory-exhaustion hole).
+const MSIZE_MIN: u32 = 256;
+const MSIZE_MAX: u32 = 1024 * 1024;
+
+// Little-endian wire writers (fcall.h's PBIT*).
+fn pw16(v: &mut Vec<u8>, x: u16) {
+    v.extend_from_slice(&x.to_le_bytes());
+}
+fn pw32(v: &mut Vec<u8>, x: u32) {
+    v.extend_from_slice(&x.to_le_bytes());
+}
+fn pw64(v: &mut Vec<u8>, x: u64) {
+    v.extend_from_slice(&x.to_le_bytes());
+}
+/// convS2M's pstring: u16 length prefix + the bytes.
+fn pwstr(v: &mut Vec<u8>, s: &[u8]) {
+    pw16(v, s.len() as u16);
+    v.extend_from_slice(s);
+}
+/// Wrap a body in the 9P header: size[4] type[1] tag[2] + body.
+fn tmsg(typ: u8, tag: u16, body: &[u8]) -> Vec<u8> {
+    let mut v = Vec::with_capacity(7 + body.len());
+    pw32(&mut v, (7 + body.len()) as u32);
+    v.push(typ);
+    pw16(&mut v, tag);
+    v.extend_from_slice(body);
+    v
+}
+
+/// A checked little-endian cursor for parsing R-messages (the mini
+/// convM2S): every field read is bounds-checked, and `done` requires the
+/// message to be consumed EXACTLY (the donor's `l != n` check) — trailing
+/// garbage is a protocol error.
+struct RepCur<'a> {
+    b: &'a [u8],
+    p: usize,
+}
+impl<'a> RepCur<'a> {
+    fn new(b: &'a [u8]) -> RepCur<'a> {
+        RepCur { b, p: 0 }
+    }
+    fn u8(&mut self) -> Result<u8> {
+        let Some(&v) = self.b.get(self.p) else { return Err("devmnt: malformed reply (truncated)"); };
+        self.p += 1;
+        Ok(v)
+    }
+    fn u16(&mut self) -> Result<u16> {
+        let Some(s) = self.b.get(self.p..self.p + 2) else {
+            return Err("devmnt: malformed reply (truncated)");
+        };
+        self.p += 2;
+        Ok(u16::from_le_bytes(s.try_into().unwrap()))
+    }
+    fn u32(&mut self) -> Result<u32> {
+        let Some(s) = self.b.get(self.p..self.p + 4) else {
+            return Err("devmnt: malformed reply (truncated)");
+        };
+        self.p += 4;
+        Ok(u32::from_le_bytes(s.try_into().unwrap()))
+    }
+    fn u64(&mut self) -> Result<u64> {
+        let Some(s) = self.b.get(self.p..self.p + 8) else {
+            return Err("devmnt: malformed reply (truncated)");
+        };
+        self.p += 8;
+        Ok(u64::from_le_bytes(s.try_into().unwrap()))
+    }
+    /// convM2S's gqid: type[1] vers[4] path[8].
+    fn qid(&mut self) -> Result<Qid> {
+        let typ = self.u8()?;
+        let vers = self.u32()?;
+        let path = self.u64()?;
+        Ok(Qid { path, vers, typ })
+    }
+    /// convM2S's gstring: u16 length prefix + the bytes (bounds-checked —
+    /// a count that overruns the message is malformed, never a panic).
+    fn string(&mut self) -> Result<Vec<u8>> {
+        let n = self.u16()? as usize;
+        Ok(self.bytes(n)?.to_vec())
+    }
+    fn bytes(&mut self, n: usize) -> Result<&'a [u8]> {
+        let Some(s) = self.b.get(self.p..self.p + n) else {
+            return Err("devmnt: malformed reply (count overruns the message)");
+        };
+        self.p += n;
+        Ok(s)
+    }
+    /// The whole message must be consumed (convM2S's exact-size check).
+    fn done(self) -> Result<()> {
+        if self.p != self.b.len() {
+            return Err("devmnt: malformed reply (trailing garbage)");
+        }
+        Ok(())
+    }
+}
 
 // ---------------------------------------------------------------------------
 // The transport (the pipe fd's chan in the kernel; a scripted fake server
@@ -198,28 +300,182 @@ impl core::fmt::Debug for Mnt {
     }
 }
 
+/// The busy-flag RAII guard: clears ownership on ANY exit path.
+struct Busy<'a> {
+    mnt: &'a Mnt,
+}
+impl Drop for Busy<'_> {
+    fn drop(&mut self) {
+        self.mnt.busy.store(false, Ordering::Release);
+    }
+}
+
 impl Mnt {
+    /// Take RPC ownership (the era's serialization): one outstanding RPC
+    /// per session; a concurrent attempt is a LOUD error, never a wedge.
+    fn enter(&self) -> Result<Busy<'_>> {
+        if self.busy.swap(true, Ordering::AcqRel) {
+            return Err("devmnt: concurrent rpc this era");
+        }
+        Ok(Busy { mnt: self })
+    }
+
+    /// The whole RPC round-trip (donor mountrpc + the receive half of
+    /// mountio/mntrpcread): send the T-message whole, then frame the
+    /// reply — read the 4-byte size prefix, mntchk it against the
+    /// negotiated msize BEFORE reading the body (T-05-13), read exactly
+    /// `size` bytes, then require the expected type (Rerror maps to a
+    /// loud errstr with the server's ename on the serial log) and the
+    /// outstanding tag.  Returns the reply's total size (the body sits in
+    /// the session's rx scratch).
+    fn transact(&self, _busy: &Busy<'_>, msg: &[u8], expect_type: u8, expect_tag: u16) -> Result<usize> {
+        let core = unsafe { &mut *self.core.get() };
+        let w = core.io.write_msg(msg)?;
+        if w as usize != msg.len() {
+            return Err("devmnt: short write on the 9P connection");
+        }
+        // Frame the reply: the 4-byte size prefix first.
+        let mut got = 0usize;
+        while got < 4 {
+            let n = core.io.read_some(&mut core.rx[got..4])? as usize;
+            if n == 0 {
+                return Err("devmnt: eof waiting for a reply");
+            }
+            got += n;
+        }
+        let size = u32::from_le_bytes(core.rx[0..4].try_into().unwrap()) as usize;
+        // T-05-13 (mntchk): the claimed size is untrusted until it passes
+        // BOTH bounds — never read (or trust) a body the claim doesn't
+        // cover, never read more than the negotiated msize.
+        if size < 7 {
+            println!("devmnt: runt reply message ({size} bytes)");
+            return Err("devmnt: runt reply message");
+        }
+        if size > core.msize as usize {
+            println!("devmnt: reply claims {size} bytes over msize {}", core.msize);
+            return Err("devmnt: reply exceeds negotiated msize");
+        }
+        while got < size {
+            let n = core.io.read_some(&mut core.rx[got..size])? as usize;
+            if n == 0 {
+                return Err("devmnt: eof mid-message");
+            }
+            got += n;
+        }
+        let rtype = core.rx[4];
+        let rtag = u16::from_le_bytes(core.rx[5..7].try_into().unwrap());
+        if rtype == RERROR {
+            let mut cur = RepCur::new(&core.rx[7..size]);
+            let ename = cur.string().unwrap_or_else(|_| b"<malformed Rerror>".to_vec());
+            println!("devmnt: server error: {}", alloc::string::String::from_utf8_lossy(&ename));
+            return Err("devmnt: server error");
+        }
+        if rtag != expect_tag {
+            println!("devmnt: reply tag {rtag} is not the outstanding tag {expect_tag}");
+            return Err("devmnt: reply tag mismatch");
+        }
+        if rtype != expect_type {
+            println!("devmnt: reply type {rtype} is not the expected {expect_type}");
+            return Err("devmnt: unexpected reply type");
+        }
+        Ok(size)
+    }
+
+    fn alloc_fid(core: &mut MntCore) -> Result<u32> {
+        let fid = core.next_fid;
+        if fid == NOFID {
+            return Err("devmnt: fid space exhausted");
+        }
+        core.next_fid += 1;
+        Ok(fid)
+    }
+
+    fn alloc_tag(core: &mut MntCore) -> u16 {
+        let tag = core.next_tag;
+        // NOTAG stays reserved; 0 is never issued (devmnt.c's mntreset).
+        core.next_tag = if tag == NOTAG - 1 { 1 } else { tag + 1 };
+        tag
+    }
+
     /// The Tversion exchange (donor mntversion): offer `offer` (0 →
     /// DEFAULT_MSIZE), send Tversion(NOTAG, msize, "9P2000"), validate the
     /// Rversion (the server never increases the msize — devmnt.c's "server
     /// tries to increase msize"; nonsense bounds 256..=1MiB; the version
     /// string answers "9P2000"), and park the negotiated session.
     pub fn negotiate(io: Box<dyn MntIo>, offer: u32) -> Result<Mnt> {
-        let _ = (io, offer);
-        Err("devmnt: RED skeleton (05-07)")
+        let offer = if offer == 0 { DEFAULT_MSIZE } else { offer };
+        if !(MSIZE_MIN..=MSIZE_MAX).contains(&offer) {
+            return Err("devmnt: nonsense msize in fversion");
+        }
+        let mnt = Mnt {
+            busy: AtomicBool::new(false),
+            core: UnsafeCell::new(MntCore {
+                io,
+                msize: offer, // the handshake's bound is the offer itself
+                version: Vec::new(),
+                next_fid: 1,
+                next_tag: 1,
+                rx: alloc::vec![0u8; offer as usize],
+            }),
+        };
+        let mut body = Vec::new();
+        pw32(&mut body, offer);
+        pwstr(&mut body, VERSION9P);
+        let msg = tmsg(TVERSION, NOTAG, &body);
+        let size = {
+            let busy = mnt.enter()?;
+            mnt.transact(&busy, &msg, RVERSION, NOTAG)?
+        };
+        let core = unsafe { &mut *mnt.core.get() };
+        let mut cur = RepCur::new(&core.rx[7..size]);
+        let msize = cur.u32()?;
+        let version = cur.string()?;
+        cur.done()?;
+        if msize > offer {
+            return Err("devmnt: server tried to increase msize in fversion");
+        }
+        if !(MSIZE_MIN..=MSIZE_MAX).contains(&msize) {
+            return Err("devmnt: nonsense msize in fversion");
+        }
+        if version != VERSION9P {
+            return Err("devmnt: bad 9P version returned from server");
+        }
+        core.msize = msize;
+        core.version = version;
+        Ok(mnt)
     }
 
     /// The negotiated msize.
     pub fn msize(&self) -> u32 {
-        0
+        let core = unsafe { &*self.core.get() };
+        core.msize
+    }
+
+    /// The negotiated version string (the re-version replay's answer).
+    fn version(&self) -> Vec<u8> {
+        let core = unsafe { &*self.core.get() };
+        core.version.clone()
     }
 
     /// Tattach (donor mntattach): a fresh fid attached to the tree root
     /// with afid = NOFID (D-02 — no auth this phase; nsinit's fall-through
     /// is the designed path).  Returns (fid, the root qid).
     pub fn attach(&self, uname: &[u8], aname: &[u8]) -> Result<(u32, Qid)> {
-        let _ = (uname, aname);
-        Err("devmnt: RED skeleton (05-07)")
+        let busy = self.enter()?;
+        let core = unsafe { &mut *self.core.get() };
+        let fid = Self::alloc_fid(core)?;
+        let tag = Self::alloc_tag(core);
+        let mut body = Vec::new();
+        pw32(&mut body, fid);
+        pw32(&mut body, NOFID);
+        pwstr(&mut body, uname);
+        pwstr(&mut body, aname);
+        let msg = tmsg(TATTACH, tag, &body);
+        let size = self.transact(&busy, &msg, RATTACH, tag)?;
+        let mut cur = RepCur::new(&core.rx[7..size]);
+        let qid = cur.qid()?;
+        cur.done()?;
+        Ok((fid, qid))
     }
 
     /// Twalk one component from `fid` to a fresh fid (donor mntwalk,
@@ -227,40 +483,122 @@ impl Mnt {
     /// (newfid, the walked qid); a zero-qid Rwalk or the server's Rerror
     /// is the loud not-found.
     pub fn walk(&self, fid: u32, name: &[u8]) -> Result<(u32, Qid)> {
-        let _ = (fid, name);
-        Err("devmnt: RED skeleton (05-07)")
+        if name.is_empty() || name.contains(&b'/') {
+            return Err("devmnt: walk takes a single name component");
+        }
+        let busy = self.enter()?;
+        let core = unsafe { &mut *self.core.get() };
+        let newfid = Self::alloc_fid(core)?;
+        let tag = Self::alloc_tag(core);
+        let mut body = Vec::new();
+        pw32(&mut body, fid);
+        pw32(&mut body, newfid);
+        pw16(&mut body, 1); // nwname
+        pwstr(&mut body, name);
+        let msg = tmsg(TWALK, tag, &body);
+        let size = self.transact(&busy, &msg, RWALK, tag)?;
+        let mut cur = RepCur::new(&core.rx[7..size]);
+        let nwqid = cur.u16()? as usize;
+        // The donor's bounds: nwqid never exceeds MAXWELEM nor nwname (1).
+        if nwqid > MAXWELEM || nwqid > 1 {
+            return Err("devmnt: too many qids returned by walk");
+        }
+        if nwqid == 0 {
+            return Err("devmnt: name not found");
+        }
+        let qid = cur.qid()?;
+        cur.done()?;
+        Ok((newfid, qid))
     }
 
     /// Topen (donor mntopen): the mode byte is Plan 9's open-mode byte
     /// (the low 8 bits — OEXCL doesn't fit and is create-only, which this
-    /// era never sends).  Returns (the opened qid, iounit).
+    /// era never sends).  Returns (the opened qid, the iounit after the
+    /// donor's clamp).
     pub fn open(&self, fid: u32, mode: u8) -> Result<(Qid, u32)> {
-        let _ = (fid, mode);
-        Err("devmnt: RED skeleton (05-07)")
+        let busy = self.enter()?;
+        let core = unsafe { &mut *self.core.get() };
+        let tag = Self::alloc_tag(core);
+        let mut body = Vec::new();
+        pw32(&mut body, fid);
+        body.push(mode);
+        let msg = tmsg(TOPEN, tag, &body);
+        let size = self.transact(&busy, &msg, ROPEN, tag)?;
+        let mut cur = RepCur::new(&core.rx[7..size]);
+        let qid = cur.qid()?;
+        let iounit = cur.u32()?;
+        cur.done()?;
+        // The donor's clamp (mntopencreate): 0 or oversized → msize-IOHDRSZ.
+        let cap = core.msize - IOHDRSZ;
+        let iounit = if iounit == 0 || iounit > cap { cap } else { iounit };
+        Ok((qid, iounit))
     }
 
-    /// One Tread RPC (donor mntrdwr's inner loop): count is clamped to
-    /// the era's per-RPC bound by the CHAN-level read (min(msize-IOHDRSZ,
-    /// TRANSPORT_MSG_MAX-IOHDRSZ)); the reply's count never exceeds the
-    /// request (the donor's silent clamp) nor the message's actual body
-    /// (a short body is malformed — T-05-13).
+    /// One Tread RPC (donor mntrdwr's inner loop): the CHAN-level read
+    /// clamps count to the era's per-RPC bound; the reply's count must
+    /// exactly cover the message body (convM2S's exact-size check) and is
+    /// clamped to the request (the donor's silent clamp).
     pub fn read(&self, fid: u32, off: u64, count: u32) -> Result<Vec<u8>> {
-        let _ = (fid, off, count);
-        Err("devmnt: RED skeleton (05-07)")
+        let busy = self.enter()?;
+        let core = unsafe { &mut *self.core.get() };
+        let tag = Self::alloc_tag(core);
+        let mut body = Vec::new();
+        pw32(&mut body, fid);
+        pw64(&mut body, off);
+        pw32(&mut body, count);
+        let msg = tmsg(TREAD, tag, &body);
+        let size = self.transact(&busy, &msg, RREAD, tag)?;
+        let mut cur = RepCur::new(&core.rx[7..size]);
+        let rcount = cur.u32()? as usize;
+        let remaining = cur.b.len() - cur.p;
+        if rcount != remaining {
+            return Err("devmnt: malformed read reply (count/body mismatch)");
+        }
+        let keep = rcount.min(count as usize);
+        let data = cur.bytes(rcount)?.to_vec();
+        cur.done()?;
+        Ok(data[..keep].to_vec())
     }
 
     /// Tstat (donor mntstat): the reply's stat payload (nstat bytes — the
     /// stat(5) image WITH its own 2-byte prefix, whose value must be
     /// nstat-2 — the malformation check).
     pub fn stat(&self, fid: u32) -> Result<Vec<u8>> {
-        let _ = fid;
-        Err("devmnt: RED skeleton (05-07)")
+        let busy = self.enter()?;
+        let core = unsafe { &mut *self.core.get() };
+        let tag = Self::alloc_tag(core);
+        let mut body = Vec::new();
+        pw32(&mut body, fid);
+        let msg = tmsg(TSTAT, tag, &body);
+        let size = self.transact(&busy, &msg, RSTAT, tag)?;
+        let mut cur = RepCur::new(&core.rx[7..size]);
+        let nstat = cur.u16()? as usize;
+        if nstat < 2 {
+            return Err("devmnt: malformed stat reply");
+        }
+        let payload = cur.bytes(nstat)?;
+        // The payload's own prefix must count its remainder (stat(5)
+        // self-consistency — a lying server never gets trusted bytes).
+        let inner = u16::from_le_bytes(payload[0..2].try_into().unwrap()) as usize;
+        if inner != nstat - 2 {
+            return Err("devmnt: malformed stat reply (bad inner prefix)");
+        }
+        let out = payload.to_vec();
+        cur.done()?;
+        Ok(out)
     }
 
     /// Tclunk (donor mntclunk): release the fid server-side.
     pub fn clunk(&self, fid: u32) -> Result<()> {
-        let _ = fid;
-        Err("devmnt: RED skeleton (05-07)")
+        let busy = self.enter()?;
+        let core = unsafe { &mut *self.core.get() };
+        let tag = Self::alloc_tag(core);
+        let mut body = Vec::new();
+        pw32(&mut body, fid);
+        let msg = tmsg(TCLUNK, tag, &body);
+        let size = self.transact(&busy, &msg, RCLUNK, tag)?;
+        RepCur::new(&core.rx[7..size]).done()?;
+        Ok(())
     }
 }
 
@@ -268,14 +606,53 @@ impl Mnt {
 // The Chan-wrapping device ops (namec.rs's DEV_MNT legs + the syscalls)
 // ---------------------------------------------------------------------------
 
+/// The era's per-RPC read bound: min(msize, the transport's whole-message
+/// ceiling) minus the header margin.
+fn rpc_data_cap(msize: u32) -> usize {
+    (msize.min(TRANSPORT_MSG_MAX) - IOHDRSZ) as usize
+}
+
 /// sys_fversion's helper (donor sysfversion): negotiate over the fd's chan
 /// and park the session on it.  Idempotent on an established session (the
 /// donor's c->mux replay: answers from the stored negotiation).  `out` is
 /// the caller's version buffer (EMPTY = no write-back, the donor's
 /// returnlen==0); returns the version string's length.
 pub fn fversion(chan: &mut Chan, offer: u32, out: &mut [u8]) -> Result<u64> {
-    let _ = (chan, offer, out);
-    Err("devmnt: RED skeleton (05-07)")
+    if let Some(mnt) = &chan.mnt {
+        // The donor's c->mux replay: an established session answers from
+        // the stored negotiation (and refuses a version CHANGE — the
+        // donor's "incompatible 9P versions" — which the era's sole
+        // version makes unreachable).
+        let version = mnt.version();
+        if !out.is_empty() {
+            if out.len() < version.len() {
+                return Err("fversion: version buffer too small");
+            }
+            out[..version.len()].copy_from_slice(&version);
+        }
+        return Ok(version.len() as u64);
+    }
+    if chan.dev != DEV_PIPE {
+        return Err("fversion: fd is not a 9P-capable connection");
+    }
+    if chan.mode & OMASK != ORDWR {
+        return Err("fversion: fd is not open for read+write");
+    }
+    // The session's io chan: a dup (an open pipe end's count bumps — the
+    // session holds a live reference even after the fd closes; the mount
+    // must outlive it — boot's fd closes at init's closefds).
+    let io = ChanIo { chan: chan.dup() };
+    let mnt = Mnt::negotiate(Box::new(io), offer)?;
+    let version = mnt.version();
+    if !out.is_empty() {
+        if out.len() < version.len() {
+            return Err("fversion: version buffer too small");
+        }
+        out[..version.len()].copy_from_slice(&version);
+    }
+    let len = version.len() as u64;
+    chan.mnt = Some(Arc::new(mnt));
+    Ok(len)
 }
 
 /// sys_mount's attach (donor mntattach via bindmount): attach the session's
@@ -283,43 +660,111 @@ pub fn fversion(chan: &mut Chan, offer: u32, out: &mut [u8]) -> Result<u64> {
 /// server's root qid).  The caller sets the path (the mount target's) and
 /// inserts it into the pgrp mount table.
 pub fn attach(mnt: &Arc<Mnt>, aname: &[u8]) -> Result<Chan> {
-    let _ = (mnt, aname);
-    Err("devmnt: RED skeleton (05-07)")
+    let (fid, qid) = mnt.attach(b"glenda", aname)?;
+    let mut c = Chan::new(DEV_MNT, qid, 0);
+    c.mnt = Some(mnt.clone());
+    c.mnt_fid = fid;
+    Ok(c)
 }
 
 /// The DEV_MNT walk leg (namec's dev_walk): Twalk to a fresh fid.
 pub fn walk(c: &Chan, name: &[u8]) -> Result<Chan> {
-    let _ = (c, name);
-    Err("devmnt: RED skeleton (05-07)")
+    let Some(mnt) = &c.mnt else { return Err("devmnt: walk of a non-mount chan") };
+    if c.mnt_fid == 0 {
+        return Err("devmnt: walk of an fid-less chan");
+    }
+    if c.qid.typ & QTDIR == 0 {
+        return Err("devmnt: walk of a non-directory");
+    }
+    let (newfid, qid) = mnt.walk(c.mnt_fid, name)?;
+    let mut nc = Chan::new(DEV_MNT, qid, 0);
+    nc.mnt = Some(mnt.clone());
+    nc.mnt_fid = newfid;
+    nc.path = c.path.clone();
+    nc.path.push(b'/');
+    nc.path.extend_from_slice(name);
+    Ok(nc)
 }
 
 /// The DEV_MNT open leg (namec's open_chan): Topen; directory opens are
 /// OREAD-only (the donor namec discipline); OTRUNC/ORCLOSE ride the wire
 /// byte for the server to answer (paqfs refuses both — Erdonly).
 pub fn open(c: &Chan, mode: u32) -> Result<Chan> {
-    let _ = (c, mode);
-    Err("devmnt: RED skeleton (05-07)")
+    let Some(mnt) = &c.mnt else { return Err("devmnt: open of a non-mount chan") };
+    if c.mnt_fid == 0 {
+        return Err("devmnt: open of an fid-less chan");
+    }
+    let access = mode & OMASK;
+    if c.qid.typ & QTDIR != 0 && access != OREAD {
+        return Err("devmnt: directory opens OREAD only");
+    }
+    let (qid, _iounit) = mnt.open(c.mnt_fid, (mode & 0xff) as u8)?;
+    let mut nc = Chan::new(DEV_MNT, qid, access);
+    nc.mnt = Some(mnt.clone());
+    nc.mnt_fid = c.mnt_fid;
+    nc.path = c.path.clone();
+    Ok(nc)
 }
 
 /// The DEV_MNT read leg (sys_pread): chunked Treads (donor mntrdwr — stop
 /// on a short reply or a full buffer); u64::MAX offset uses + advances the
 /// chan's streaming offset (the pread convention).
 pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
-    let _ = (c, buf, offset);
-    Err("devmnt: RED skeleton (05-07)")
+    let Some(mnt) = &c.mnt else { return Err("devmnt: read of a non-mount chan") };
+    if c.mnt_fid == 0 {
+        return Err("devmnt: read of an fid-less chan");
+    }
+    let cap = rpc_data_cap(mnt.msize());
+    let mut off = if offset == u64::MAX { c.offset } else { offset };
+    let mut done = 0usize;
+    while done < buf.len() {
+        let want = (buf.len() - done).min(cap);
+        let data = mnt.read(c.mnt_fid, off, want as u32)?;
+        let n = data.len();
+        buf[done..done + n].copy_from_slice(&data);
+        off += n as u64;
+        done += n;
+        if n < want {
+            break; // a short reply = EOF (the donor mntrdwr break)
+        }
+    }
+    if offset == u64::MAX {
+        c.offset += done as u64;
+    }
+    Ok(done as u64)
 }
 
 /// The DEV_MNT stat leg (sys_stat/sys_fstat): Tstat, the donor mntstat's
 /// truncation shape (a tight buffer gets just the count prefix).
 pub fn stat(c: &Chan, sb: &mut [u8]) -> Result<u64> {
-    let _ = (c, sb);
-    Err("devmnt: RED skeleton (05-07)")
+    let Some(mnt) = &c.mnt else { return Err("devmnt: stat of a non-mount chan") };
+    if c.mnt_fid == 0 {
+        return Err("devmnt: stat of an fid-less chan");
+    }
+    let payload = mnt.stat(c.mnt_fid)?;
+    if payload.len() > sb.len() {
+        // The donor mntstat truncation: the count prefix alone.
+        if sb.len() < 2 {
+            return Err("devmnt: stat buffer too small");
+        }
+        let n = (payload.len() - 2) as u16;
+        sb[0..2].copy_from_slice(&n.to_le_bytes());
+        return Ok(2);
+    }
+    sb[..payload.len()].copy_from_slice(&payload);
+    Ok(payload.len() as u64)
 }
 
 /// The DEV_MNT close dispatch (namec::close_chan): Tclunk, best-effort —
 /// a failure logs and swallows (the donor's cclose never fails).
 pub fn clunk(c: &Chan) {
-    let _ = c;
+    let Some(mnt) = &c.mnt else { return };
+    if c.mnt_fid == 0 {
+        return;
+    }
+    if let Err(msg) = mnt.clunk(c.mnt_fid) {
+        println!("devmnt: clunk of fid {} failed: {msg}", c.mnt_fid);
+    }
 }
 
 /// sys_exec's byte source for a mounted binary (05-07 Task 2's wiring):
@@ -327,6 +772,25 @@ pub fn clunk(c: &Chan) {
 /// the trap-context pager must never RPC).  Bounded by `cap` (loud error,
 /// never an unbounded read off an untrusted server).
 pub fn read_all(c: &Chan, cap: usize) -> Result<Vec<u8>> {
-    let _ = (c, cap);
-    Err("devmnt: RED skeleton (05-07)")
+    let Some(mnt) = &c.mnt else { return Err("devmnt: read of a non-mount chan") };
+    if c.mnt_fid == 0 {
+        return Err("devmnt: read of an fid-less chan");
+    }
+    let rpc_cap = rpc_data_cap(mnt.msize());
+    let mut out = Vec::new();
+    loop {
+        if out.len() >= cap {
+            return Err("devmnt: file too large to stage for exec");
+        }
+        let want = rpc_cap.min(cap - out.len());
+        let data = mnt.read(c.mnt_fid, out.len() as u64, want as u32)?;
+        if data.is_empty() {
+            break; // EOF
+        }
+        out.extend_from_slice(&data);
+        if data.len() < want {
+            break; // a short reply = EOF
+        }
+    }
+    Ok(out)
 }
