@@ -1072,14 +1072,78 @@ pub fn sched() {
 /// from the seed (after a Resume::Return abandoned the loop mid-iteration)
 /// is as correct as resumption after a swtch-out.
 fn sched_loop() -> ! {
+    // gatedbg (05-REVIEW-FIX wedge hunt): consecutive idle iterations with
+    // a blocked cons reader while RX bytes pend, and with ALL live procs
+    // blocked.  The idle arm runs between proc contexts (no syscall holds
+    // Console across a sched boundary), so dumping from here follows the
+    // PROC_TABLE → Console nesting order.
+    let mut cons_wedge = 0u32;
+    let mut all_blocked = 0u32;
     loop {
         match pick_next() {
             Some(Resume::Switch(ctx)) => unsafe { swtch::swtch(&mut *sched_context(), &*ctx) },
             Some(Resume::Return(frame)) => unsafe { crate::trap::trap_return(frame) },
             None => unsafe {
+                let reader_blocked = cons_reader_blocked();
+                let rx_pending = crate::platform::pl011::cons_rx_pending()
+                    || crate::platform::pl011::cons_rx_fifo_pending() == Some(true);
+                if reader_blocked && rx_pending {
+                    cons_wedge += 1;
+                    if cons_wedge == 2000 {
+                        println!("wedgedbg: idle with a blocked cons reader + pending RX — dumping");
+                        dump_proc_states();
+                        port::devcons::debug_dump_input();
+                        let (h, t) = crate::platform::pl011::cons_rx_ring_pos();
+                        println!("wedgedbg: cons ring head={} tail={} fifo_pending={:?}", h, t, crate::platform::pl011::cons_rx_fifo_pending());
+                    }
+                } else {
+                    cons_wedge = 0;
+                }
+                all_blocked = all_blocked + 1;
+                if all_blocked == 200_000 {
+                    println!("wedgedbg: ~100s fully idle — dumping (pipe-RPC wedge shape)");
+                    dump_proc_states();
+                    port::devcons::debug_dump_input();
+                }
                 core::arch::asm!("msr DAIFClr, #2", "wfi", "msr DAIFSet, #2");
             },
         }
+    }
+}
+
+/// gatedbg: any live proc Blocked in a cons read (cons_waiting).
+fn cons_reader_blocked() -> bool {
+    let node = LockNode::new();
+    let table = PROC_TABLE.lock(&node);
+    table
+        .procs
+        .iter()
+        .flatten()
+        .any(|p| p.state == ProcState::Blocked && p.cons_waiting && p.state != ProcState::Moribund)
+}
+
+/// gatedbg: one wire line per live proc (pid, state, cons_waiting,
+/// blocked_in_kernel, sleep_until, name) — the wedge autopsy.  Holds
+/// PROC_TABLE while printing: PROC_TABLE → Console is the documented
+/// nesting order (reschedule's switch print is the precedent).
+fn dump_proc_states() {
+    let node = LockNode::new();
+    let table = PROC_TABLE.lock(&node);
+    for p in table.procs.iter().flatten() {
+        if p.state == ProcState::Moribund {
+            continue;
+        }
+        let n = p.name.iter().position(|&b| b == 0).unwrap_or(KNAMELEN);
+        let name = core::str::from_utf8(&p.name[..n]).unwrap_or("?");
+        println!(
+            "wedgedbg: pid={} state={} cons_wait={} blocked_in_kernel={} sleep_until={} name={}",
+            p.pid,
+            state_name(p.state),
+            p.cons_waiting,
+            p.blocked_in_kernel,
+            p.sleep_until,
+            name
+        );
     }
 }
 

@@ -171,6 +171,24 @@ pub fn cons_rx_pending() -> bool {
     rx.head != rx.tail
 }
 
+/// gatedbg (the 05-REVIEW-FIX wedge hunt): the UART FIFO's non-empty flag
+/// (FR.RXFE bit clear) — the autopsy discriminator for a lost RX/RT edge:
+/// bytes in the FIFO but never IRQ'd into the ring while a cons reader
+/// stays blocked.
+#[cfg(dev_exec)]
+pub fn cons_rx_fifo_pending() -> Option<bool> {
+    let range = unsafe { &*PL011_RANGE.get() };
+    let range = range.as_ref()?;
+    Some(read_reg(range, UART0_FR) & 0x10 == 0)
+}
+
+/// gatedbg: the RX ring's head/tail (for the wedge dump).
+#[cfg(dev_exec)]
+pub fn cons_rx_ring_pos() -> (usize, usize) {
+    let rx = unsafe { &*CONS_RX.get() };
+    (rx.head, rx.tail)
+}
+
 /// INTID 33 handler: drain the RX FIFO and echo every byte verbatim via raw
 /// DR writes.  LOCK-FREE by construction (research P8): no println!, no
 /// Console access -- the Console mcslock may be held by the interrupted

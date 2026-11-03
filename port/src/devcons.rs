@@ -619,6 +619,34 @@ impl ConsInput {
 
 static INPUT: Lock<ConsInput> = Lock::new("consin", ConsInput::new());
 
+/// gatedbg (the 05-REVIEW-FIX wedge hunt): dump the cons input state to
+/// the wire (the wedge autopsy — called from the scheduler's idle-arm
+/// tripwire).  INPUT-brief; println takes Console afterwards (INPUT →
+/// Console is not a nested hold: the lock drops before the print).
+pub fn debug_dump_input() {
+    let node = LockNode::new();
+    let (waiters, input_len, line_len, lines_len, pending_eof, raw) = {
+        let inq = INPUT.lock(&node);
+        (
+            inq.waiters.clone(),
+            inq.input.len(),
+            inq.line.len(),
+            inq.lines.len(),
+            inq.pending_eof,
+            inq.raw,
+        )
+    };
+    crate::println!(
+        "wedgedbg: cons input waiters={:?} input={} line={} lines={} pending_eof={} raw={}",
+        waiters,
+        input_len,
+        line_len,
+        lines_len,
+        pending_eof,
+        raw
+    );
+}
+
 /// The arch-side hooks the read path rides (the devproc.rs
 /// set_post_hook idiom — port cannot see the proc table or the PL011
 /// ring): registered once before the first exec (main.rs, dev_exec).
