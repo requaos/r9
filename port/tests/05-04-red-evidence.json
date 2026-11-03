@@ -1,0 +1,9 @@
+{
+  "command": "cargo test -p port --test namespace_test",
+  "exitCode": 101,
+  "targetTest": "namec_resolves_device_path_through_registry",
+  "targetFile": "port/tests/namespace_test.rs",
+  "output": "TAP version 13\n1..9\nok 1 - bind_to_nonexistent_target_errors\nnot ok 2 - bind_mafter_appends_after_underlying\nnot ok 3 - namec_devroot_multi_component_walk\nnot ok 4 - namec_resolves_device_path_through_registry\nnot ok 5 - rfork_group_semantics_share_copy_wipe\nnot ok 6 - union_walk_order_mbefore_underlying_mafter\nnot ok 7 - bind_mrepl_replaces_union\nnot ok 8 - bind_mbefore_then_resolution_prefers_mounted\nnot ok 9 - unmount_removes_and_errors_on_never_mounted\n# tests 9\n# pass 1\n# fail 8\n",
+  "expected": "namec resolves #c/cons through the device registry to a devcons chan (05-04 behavior bullet 1)",
+  "actual": "namec returns Err(\"namec: unimplemented (RED skeleton)\") \u2014 8 of 9 namespace tests fail on .expect/assert (bind_to_nonexistent_target_errors passes vacuously on the skeleton and must stay meaningful at GREEN)"
+}

@@ -17,7 +17,9 @@ pub mod fdt;
 pub mod maths;
 pub mod mcslock;
 pub mod mem;
+pub mod namec;
 pub mod pagealloc;
 pub mod paqfs;
+pub mod pgrp;
 
 pub type Result<T> = core::result::Result<T, &'static str>;

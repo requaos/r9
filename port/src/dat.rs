@@ -34,6 +34,32 @@ pub const OEXCL: u32 = 4096;
 /// Mask for the access-mode field (the low two bits).
 pub const OMASK: u32 = 3;
 
+/// Mount/bind flag bits (frozen: Harvey sys/include/libc.h:558-564).  The
+/// low two bits are the ORDER field (MREPL replaces; MBEFORE/MAFTER union
+/// before/after); MCREATE permits creation in a mounted directory; MMASK
+/// bounds the valid set (sysfile.c bindmount's (flag&~MMASK) check).
+pub const MREPL: u32 = 0x0000;
+pub const MBEFORE: u32 = 0x0001;
+pub const MAFTER: u32 = 0x0002;
+pub const MCREATE: u32 = 0x0004;
+pub const MCACHE: u32 = 0x0010;
+pub const MORDER: u32 = 0x0003;
+pub const MMASK: u32 = 0x0017;
+
+/// One mounted entry in a pgrp union chain (05-04, D-03 — the donor's
+/// `Mount`, chan.c): the chan that appears at the mount point, the frozen
+/// flag bits carried on the entry (cmount records MCREATE here), and the
+/// mount id (diagnostics + pgrpcpy order bookkeeping).  The mount TABLE
+/// machinery lives in pgrp.rs; this is the shared vocabulary type.
+pub struct MountEntry {
+    /// The mounted chan (what resolution sees at the target).
+    pub to: Chan,
+    /// Frozen flag bits (MCREATE; the order bits live in chain position).
+    pub mflag: u32,
+    /// Monotonic mount id.
+    pub mountid: u64,
+}
+
 /// A kernel channel — an open-file handle bound to a device.  Grown from
 /// the placeholder skeleton for the Phase-4 device set (D-15): devroot
 /// chans carry their paqfs directory entry in the crate-private slot.
