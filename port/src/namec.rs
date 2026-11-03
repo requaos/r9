@@ -22,6 +22,7 @@
 //! the established free-function device idiom.
 
 use crate::dat::{Chan, DEV_CONS, DEV_DUP, DEV_ENV, DEV_MNT, DEV_PIPE, DEV_PROC, DEV_ROOT, DEV_SRV};
+use crate::mcslock::{Lock, LockNode};
 use crate::pgrp::Pgrp;
 use crate::Result;
 
@@ -114,7 +115,17 @@ fn dev_walk(c: &Chan, comp: &[u8]) -> Result<Chan> {
 }
 
 /// Resolve `path` to a Chan.
-pub fn namec(path: &[u8], slash: &Chan, dot: &Chan, pg: &Pgrp, mode: NamecMode) -> Result<Chan> {
+///
+/// LOCKING (WR-04): the mount-table consults take the pgrp lock PER
+/// CONSULT (snapshot the union chain via chain_snapshot, drop the lock,
+/// then walk) — the lock is NEVER held across a device walk.  A walk into
+/// a mounted tree is a devmnt Twalk RPC that BLOCKS mid-syscall (the pipe
+/// read schedules the server proc); holding the pgrp lock across it
+/// deadlocks the moment any 9P server proc sharing this pgrp (a fork()
+/// child without RFNAMEG) takes the lock while serving.  This is
+/// sys_mount's documented discipline ("NO pgrp lock is held across the
+/// RPC") applied to resolution itself.
+pub fn namec(path: &[u8], slash: &Chan, dot: &Chan, pg: &Lock<Pgrp>, mode: NamecMode) -> Result<Chan> {
     if path.is_empty() {
         return Err("namec: empty file name");
     }
@@ -137,11 +148,20 @@ pub fn namec(path: &[u8], slash: &Chan, dot: &Chan, pg: &Pgrp, mode: NamecMode) 
     // Walk the components (9k walk's loop): before each device walk,
     // cross a mount point if the current chan sits on one — then try the
     // component in the union chain's order (the crossing's head first, the
-    // underlying dir in chain position, MAFTER tails last).
+    // underlying dir in chain position, MAFTER tails last).  WR-04: the
+    // chain is SNAPSHOTED under a per-consult lock; the walks below run
+    // lock-free.
     for comp in rest.split(|&b| b == b'/').filter(|c| !c.is_empty()) {
         if c.qid.typ & QTDIR == 0 {
             return Err("namec: walk of a non-directory");
         }
+        let chain = if nomount {
+            None
+        } else {
+            let node = LockNode::new();
+            let guard = pg.lock(&node);
+            guard.chain_snapshot(&c.path)
+        };
         // 05-09: "." is the devwalk Accept arm (9k dev.c devwalk:
         // `strcmp(n, ".") == 0` keeps the current qid) — AFTER the mount
         // consultation, so "x/." (and ps's chdir("/proc") + open("."))
@@ -149,7 +169,7 @@ pub fn namec(path: &[u8], slash: &Chan, dot: &Chan, pg: &Pgrp, mode: NamecMode) 
         // underlying dir.  ".." stays unhandled (no measured caller this
         // era — the device walk errors loudly).
         if comp == b"." {
-            if !nomount && let Some(chain) = pg.chain_at(&c.path) {
+            if let Some(chain) = chain {
                 let Some(head) = chain.first() else {
                     return Err("namec: empty union chain");
                 };
@@ -162,9 +182,9 @@ pub fn namec(path: &[u8], slash: &Chan, dot: &Chan, pg: &Pgrp, mode: NamecMode) 
             }
             continue;
         }
-        if !nomount && let Some(chain) = pg.chain_at(&c.path) {
+        if let Some(chain) = chain {
             let mut walked = None;
-            for entry in chain {
+            for entry in &chain {
                 // Re-root the chain entry's path at the mount point so the
                 // walked chan carries the caller-visible path (fd2path's
                 // future input; deeper mount points match on it).
@@ -190,18 +210,25 @@ pub fn namec(path: &[u8], slash: &Chan, dot: &Chan, pg: &Pgrp, mode: NamecMode) 
     // fid-CLONED (never bare-dup'd) — the redirect's open/close lifecycle
     // must not touch the mount table's server-side fid (the gate-surfaced
     // aliasing fix: ls /bin's open+close Tclunked the table's fid under a
-    // bare dup, and every later walk from it Rerror'd).
+    // bare dup, and every later walk from it Rerror'd).  WR-04: the
+    // consult snapshots under a per-consult lock, then drops it.
     if !nomount
         && mode != NamecMode::MountTarget
         && mode != NamecMode::ToDir
-        && let Some(chain) = pg.chain_at(&c.path)
     {
-        let Some(head) = chain.first() else {
-            return Err("namec: empty union chain");
+        let chain = {
+            let node = LockNode::new();
+            let guard = pg.lock(&node);
+            guard.chain_snapshot(&c.path)
         };
-        let mut nc = redirect_clone(&head.to)?;
-        nc.path = c.path.clone();
-        c = nc;
+        if let Some(chain) = chain {
+            let Some(head) = chain.first() else {
+                return Err("namec: empty union chain");
+            };
+            let mut nc = redirect_clone(&head.to)?;
+            nc.path = c.path.clone();
+            c = nc;
+        }
     }
     Ok(c)
 }

@@ -233,7 +233,7 @@ fn devenv_device_flow_over_dynamic_groups() {
     // must_have's "resolves through the device registry" pinned.  The
     // '#'-path arm never consults slash/dot, so dummy chans serve.
     let dummy = Chan::new(port::dat::DEV_ROOT, Qid { path: 0, vers: 0, typ: 0x80 }, 0);
-    let pg = Pgrp::new();
+    let pg = port::mcslock::Lock::new("pgrp-test", Pgrp::new());
     let via_namec = namec::namec(b"#e", &dummy, &dummy, &pg, NamecMode::Open)
         .expect("#e must resolve through the registry");
     assert_eq!(via_namec.dev, DEV_ENV, "#e must land on the devenv device");

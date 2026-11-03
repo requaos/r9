@@ -27,6 +27,7 @@ use std::sync::Arc;
 use port::dat::{Chan, DEV_MNT, DEV_ROOT};
 use port::devmnt::{self, Mnt, MntIo};
 use port::devroot;
+use port::mcslock::{Lock, LockNode};
 use port::namec::{self, NamecMode};
 use port::pgrp::{self, Pgrp};
 use port::Result;
@@ -525,24 +526,26 @@ fn fixture_slash() -> Chan {
 }
 
 /// Bind the fake's tree at `target` in a fresh pgrp (the sys_mount table
-/// half, host-side).
-fn mount_fake(pg: &mut Pgrp, slash: &Chan, target: &str, flag: u32) -> Chan {
+/// half, host-side).  WR-04: resolution runs unlocked (namec's per-consult
+/// snapshots); the lock covers the mount-table insert only.
+fn mount_fake(pg: &Lock<Pgrp>, slash: &Chan, target: &str, flag: u32) -> Chan {
     let (mnt, _fids) = session();
     let root = devmnt::attach(&Arc::new(mnt), b"").expect("attach the fake tree");
     let tgt = namec::namec(target.as_bytes(), slash, slash, pg, NamecMode::MountTarget)
         .expect("the mount target resolves");
-    pg.bind(root.dup(), &tgt, flag).expect("the mount inserts");
+    let node = LockNode::new();
+    pg.lock(&node).bind(root.dup(), &tgt, flag).expect("the mount inserts");
     root
 }
 
 #[test]
 fn devmnt_mount_crossing_walk_matrix() {
-    let mut pg = Pgrp::new();
+    let pg = Lock::new("pgrp-test", Pgrp::new());
     let slash = fixture_slash();
 
     // MAFTER: the underlying fixture dir wins ties; misses fall THROUGH to
     // the mounted tree (the union fallback).
-    mount_fake(&mut pg, &slash, "/dir", pgrp::MAFTER);
+    mount_fake(&pg, &slash, "/dir", pgrp::MAFTER);
 
     let under = namec::namec(b"/dir/nested.txt", &slash, &slash, &pg, NamecMode::Open)
         .expect("the underlying fixture file resolves");
@@ -565,8 +568,8 @@ fn devmnt_mount_crossing_walk_matrix() {
     let _ = &mut cross;
 
     // MREPL: the mounted tree REPLACES the underlying (a fresh pgrp).
-    let mut pg2 = Pgrp::new();
-    mount_fake(&mut pg2, &slash, "/dir", pgrp::MREPL);
+    let pg2 = Lock::new("pgrp-test", Pgrp::new());
+    mount_fake(&pg2, &slash, "/dir", pgrp::MREPL);
     assert!(
         namec::namec(b"/dir/nested.txt", &slash, &slash, &pg2, NamecMode::Open).is_err(),
         "MREPL shadows the underlying fixture file"
@@ -595,10 +598,11 @@ fn devmnt_mount_redirect_clones_the_table_fid() {
     let (mnt, fids) = session();
     let mnt = Arc::new(mnt);
     let root = devmnt::attach(&mnt, b"").expect("attach the fake tree");
-    let mut pg = Pgrp::new();
+    let pg = Lock::new("pgrp-test", Pgrp::new());
     let tgt = namec::namec(b"/dir", &slash, &slash, &pg, NamecMode::MountTarget)
         .expect("the mount target resolves");
-    pg.bind(root, &tgt, pgrp::MREPL).expect("the mount inserts");
+    let node = LockNode::new();
+    pg.lock(&node).bind(root, &tgt, pgrp::MREPL).expect("the mount inserts");
     let attach_fids: Vec<u32> = fids.borrow().keys().copied().collect();
     assert_eq!(attach_fids.len(), 1, "one attach fid server-side");
 

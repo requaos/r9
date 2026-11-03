@@ -554,13 +554,14 @@ fn sys_open(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         Err(msg) => return err(proc, msg),
     };
 
-    let pg = proc.pgrp.clone();
-    let node = LockNode::new();
-    let guard = pg.lock(&node);
     let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
         return err(proc, "open: no namespace (pre-exec)");
     };
-    let c = match namec::namec(&path, slash, dot, &guard, NamecMode::Open) {
+    // WR-04: NO pgrp lock is held across resolution or the open — namec
+    // consults the mount table under per-consult snapshots, and
+    // open_chan's Topen RPC blocks mid-syscall (sys_mount's documented
+    // discipline, applied uniformly).
+    let c = match namec::namec(&path, slash, dot, &proc.pgrp, NamecMode::Open) {
         Ok(c) => c,
         Err(msg) => return err(proc, msg),
     };
@@ -568,7 +569,6 @@ fn sys_open(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         Ok(c) => c,
         Err(msg) => return err(proc, msg),
     };
-    drop(guard);
 
     match proc.fd_install_lowest(opened) {
         Some(slot) => slot,
@@ -603,20 +603,24 @@ fn sys_bind(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         Err(msg) => return err(proc, msg),
     };
 
-    let pg = proc.pgrp.clone();
-    let node = LockNode::new();
-    let mut guard = pg.lock(&node);
     let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
         return err(proc, "bind: no namespace (pre-exec)");
     };
-    let src = match namec::namec(&name, slash, dot, &guard, NamecMode::BindSource) {
+    // WR-04: both resolves run WITHOUT the pgrp lock held (namec's
+    // per-consult snapshots; a mount-crossing walk is a devmnt Twalk RPC
+    // that blocks mid-syscall); the lock covers the mount-table INSERT
+    // only.
+    let src = match namec::namec(&name, slash, dot, &proc.pgrp, NamecMode::BindSource) {
         Ok(c) => c,
         Err(msg) => return err(proc, msg),
     };
-    let tgt = match namec::namec(&old, slash, dot, &guard, NamecMode::MountTarget) {
+    let tgt = match namec::namec(&old, slash, dot, &proc.pgrp, NamecMode::MountTarget) {
         Ok(c) => c,
         Err(msg) => return err(proc, msg),
     };
+    let pg = proc.pgrp.clone();
+    let node = LockNode::new();
+    let mut guard = pg.lock(&node);
     match guard.bind(src, &tgt, flag) {
         Ok(_) => 0,
         Err(msg) => err(proc, msg),
@@ -636,20 +640,18 @@ fn sys_chdir(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         Ok(s) => s,
         Err(msg) => return err(proc, msg),
     };
-    let pg = proc.pgrp.clone();
-    let node = LockNode::new();
-    let guard = pg.lock(&node);
     let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
         return err(proc, "chdir: no namespace (pre-exec)");
     };
-    let c = match namec::namec(&path, slash, dot, &guard, NamecMode::ToDir) {
+    // WR-04: resolution runs WITHOUT the pgrp lock held (namec's
+    // per-consult snapshots).
+    let c = match namec::namec(&path, slash, dot, &proc.pgrp, NamecMode::ToDir) {
         Ok(c) => c,
         Err(msg) => return err(proc, msg),
     };
     if c.qid.typ & port::dat::QTDIR == 0 {
         return err(proc, "chdir: not a directory");
     }
-    drop(guard);
     proc.dot = Some(c);
     0
 }
@@ -669,13 +671,13 @@ fn sys_unmount(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         Err(msg) => return err(proc, msg),
     };
 
-    let pg = proc.pgrp.clone();
-    let node = LockNode::new();
-    let mut guard = pg.lock(&node);
     let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
         return err(proc, "unmount: no namespace (pre-exec)");
     };
-    let tgt = match namec::namec(&name, slash, dot, &guard, NamecMode::MountTarget) {
+    // WR-04: both resolves run WITHOUT the pgrp lock held (namec's
+    // per-consult snapshots); the lock covers the mount-table REMOVAL
+    // only.
+    let tgt = match namec::namec(&name, slash, dot, &proc.pgrp, NamecMode::MountTarget) {
         Ok(c) => c,
         Err(msg) => return err(proc, msg),
     };
@@ -686,11 +688,14 @@ fn sys_unmount(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             Ok(s) => s,
             Err(msg) => return err(proc, msg),
         };
-        match namec::namec(&old, slash, dot, &guard, NamecMode::BindSource) {
+        match namec::namec(&old, slash, dot, &proc.pgrp, NamecMode::BindSource) {
             Ok(c) => Some(c),
             Err(msg) => return err(proc, msg),
         }
     };
+    let pg = proc.pgrp.clone();
+    let node = LockNode::new();
+    let mut guard = pg.lock(&node);
     match guard.unmount(&tgt.path, from.as_ref()) {
         Ok(()) => 0,
         Err(msg) => err(proc, msg),
@@ -815,18 +820,21 @@ fn sys_mount(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     };
 
     // Resolve the target (MountTarget — never redirect; stacked mounts
-    // attach to the original directory) and insert the entry.
-    let pg = proc.pgrp.clone();
-    let node = LockNode::new();
-    let mut guard = pg.lock(&node);
+    // attach to the original directory) and insert the entry.  WR-04: the
+    // resolve runs WITHOUT the pgrp lock held (namec's per-consult
+    // snapshots — a mount-crossing walk RPCs); the lock covers the
+    // mount-table INSERT only.
     let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
         return err(proc, "mount: no namespace (pre-exec)");
     };
-    let tgt = match namec::namec(&old, slash, dot, &guard, NamecMode::MountTarget) {
+    let tgt = match namec::namec(&old, slash, dot, &proc.pgrp, NamecMode::MountTarget) {
         Ok(c) => c,
         Err(msg) => return err(proc, msg),
     };
     mnt_chan.path = tgt.path.clone();
+    let pg = proc.pgrp.clone();
+    let node = LockNode::new();
+    let mut guard = pg.lock(&node);
     match guard.bind(mnt_chan, &tgt, flag) {
         Ok(_) => 0,
         Err(msg) => err(proc, msg),
@@ -858,17 +866,15 @@ fn sys_stat(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     // heap page takes an EL1h data abort mid-write — a kernel halt, never
     // acceptable on a user-triggerable path; sys_pread's discipline).
     fault::ensure_user_resident(proc, buf_va as usize, (buf_va + n) as usize);
-    let pg = proc.pgrp.clone();
-    let node = LockNode::new();
-    let guard = pg.lock(&node);
     let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
         return err(proc, "stat: no namespace (pre-exec)");
     };
-    let c = match namec::namec(&path, slash, dot, &guard, NamecMode::Open) {
+    // WR-04: resolution runs WITHOUT the pgrp lock held (namec's
+    // per-consult snapshots; a mount-crossing walk RPCs mid-syscall).
+    let c = match namec::namec(&path, slash, dot, &proc.pgrp, NamecMode::Open) {
         Ok(c) => c,
         Err(msg) => return err(proc, msg),
     };
-    drop(guard);
     let sb = unsafe { user_slice_mut(buf_va, n) };
     match namec::stat_chan(&c, sb) {
         Ok(count) => count,
@@ -990,20 +996,16 @@ fn sys_exec(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     // /bin/rc through the post-newns /bin union into the mounted tree).
     // The Phase-4 devroot-only prefix walk is retired (D-03's one-way
     // door: resolution lives in the namespace core).
-    let pg = proc.pgrp.clone();
-    let c = {
-        let node = LockNode::new();
-        let guard = pg.lock(&node);
-        let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
-            return err(proc, "exec: no namespace (pre-exec)");
-        };
-        match namec::namec(&path, slash, dot, &guard, NamecMode::Open) {
-            Ok(c) => c,
-            Err(msg) => return err(proc, msg),
-        }
+    // WR-04: NO pgrp lock is held across resolution, open, or stage —
+    // namec consults under per-consult snapshots; a devmnt open/read RPCs
+    // and BLOCKS mid-syscall (the pipe read schedules the server proc).
+    let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
+        return err(proc, "exec: no namespace (pre-exec)");
     };
-    // open + stage OUTSIDE the pgrp lock: a devmnt open/read RPCs and
-    // BLOCKS mid-syscall (the pipe read schedules the server proc).
+    let c = match namec::namec(&path, slash, dot, &proc.pgrp, NamecMode::Open) {
+        Ok(c) => c,
+        Err(msg) => return err(proc, msg),
+    };
     let opened = match namec::open_chan(&c, OEXEC) {
         Ok(c) => c,
         Err(msg) => return err(proc, msg),
@@ -1186,15 +1188,17 @@ fn sys_create(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         return err(proc, "create: empty final component");
     }
 
-    let pg = proc.pgrp.clone();
-    let node = LockNode::new();
-    let guard = pg.lock(&node);
     let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
         return err(proc, "create: no namespace (pre-exec)");
     };
+    // WR-04: resolution runs WITHOUT the pgrp lock held — namec consults
+    // under per-consult snapshots, and the dot-redirect consult below
+    // snapshots under a scoped lock, dropping it BEFORE the fid-clone (a
+    // devmnt zero-name Twalk RPC).  walk_one/open_chan/create_chan run
+    // lock-free (a DEV_MNT parent's walk/create RPCs mid-syscall).
     let parent = match split {
-        Some(0) => namec::namec(b"/", slash, dot, &guard, NamecMode::Open),
-        Some(i) => namec::namec(&path[..i], slash, dot, &guard, NamecMode::Open),
+        Some(0) => namec::namec(b"/", slash, dot, &proc.pgrp, NamecMode::Open),
+        Some(i) => namec::namec(&path[..i], slash, dot, &proc.pgrp, NamecMode::Open),
         None => {
             // The dot itself, with the open-mode final redirect (a dot
             // covered by a mount point creates in the union head).
@@ -1202,7 +1206,12 @@ fn sys_create(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             // mount-table aliasing fix — the redirect's open/close must
             // not touch the table's server-side fid).
             let mut d = dot.dup();
-            if let Some(chain) = guard.chain_at(&d.path) {
+            let chain = {
+                let node = LockNode::new();
+                let guard = proc.pgrp.lock(&node);
+                guard.chain_snapshot(&d.path)
+            };
+            if let Some(chain) = chain {
                 let Some(head) = chain.first() else {
                     return err(proc, "create: empty union chain");
                 };
@@ -1242,7 +1251,6 @@ fn sys_create(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             }
         }
     };
-    drop(guard);
     match proc.fd_install_lowest(opened) {
         Some(slot) => slot,
         None => err(proc, "create: no free fd"),

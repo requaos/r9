@@ -110,7 +110,7 @@ fn devdup_devsrv_device_flow() {
     // --- devdup: #d resolves through the registry (namec, the 05-04
     // shape; dummy slash/dot serve the '#'-path arm). ---
     let dummy = Chan::new(DEV_CONS, Qid { path: 0, vers: 0, typ: 0x80 }, 0);
-    let pg = port::pgrp::Pgrp::new();
+    let pg = port::mcslock::Lock::new("pgrp-test", port::pgrp::Pgrp::new());
     let dup_root = namec::namec(b"#d", &dummy, &dummy, &pg, namec::NamecMode::Open)
         .expect("#d must resolve through the registry");
     assert_eq!(dup_root.dev, port::dat::DEV_DUP);

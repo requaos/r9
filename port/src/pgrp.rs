@@ -191,6 +191,22 @@ impl Pgrp {
         let key = normalize(path);
         self.mounts.iter().find(|m| m.target == key).map(|m| m.chain.as_slice())
     }
+
+    /// A COPY of the union chain at `path` (WR-04's snapshot discipline):
+    /// namec consults the mount table under the pgrp lock, drops the lock,
+    /// then walks — the lock is never held across a device walk that can
+    /// RPC (a devmnt Twalk blocks mid-syscall; a 9P server proc sharing
+    /// this pgrp that takes the lock while serving would deadlock the
+    /// system).  Chan copies ride dup() (the pipe open-end reference
+    /// rule), deep_copy's shape.
+    pub fn chain_snapshot(&self, path: &[u8]) -> Option<Vec<MountEntry>> {
+        self.chain_at(path).map(|chain| {
+            chain
+                .iter()
+                .map(|e| MountEntry { to: e.to.dup(), mflag: e.mflag, mountid: e.mountid })
+                .collect()
+        })
+    }
 }
 
 impl Default for Pgrp {

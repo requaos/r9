@@ -235,7 +235,7 @@ fn slash() -> Chan {
     devroot::root().expect("root mounted").attach_root().expect("attach root")
 }
 
-fn resolve(pg: &Pgrp, slash: &Chan, path: &str) -> port::Result<Chan> {
+fn resolve(pg: &Lock<Pgrp>, slash: &Chan, path: &str) -> port::Result<Chan> {
     namec::namec(path.as_bytes(), slash, slash, pg, NamecMode::Open)
 }
 
@@ -245,7 +245,7 @@ fn resolve(pg: &Pgrp, slash: &Chan, path: &str) -> port::Result<Chan> {
 
 #[test]
 fn namec_resolves_device_path_through_registry() {
-    let pg = Pgrp::new();
+    let pg = Lock::new("pgrp-test", Pgrp::new());
     let slash = slash();
 
     let c = resolve(&pg, &slash, "#c/cons").expect("#c/cons must resolve through the registry");
@@ -260,7 +260,7 @@ fn namec_resolves_device_path_through_registry() {
 
 #[test]
 fn namec_devroot_multi_component_walk() {
-    let pg = Pgrp::new();
+    let pg = Lock::new("pgrp-test", Pgrp::new());
     let slash = slash();
 
     let c = resolve(&pg, &slash, "/boot/boot").expect("/boot/boot must resolve");
@@ -285,23 +285,26 @@ fn namec_devroot_multi_component_walk() {
 
 #[allow(clippy::too_many_arguments)]
 fn bind_locked(
-    pg: &mut Pgrp,
+    pg: &Lock<Pgrp>,
     slash: &Chan,
     src: &str,
     target: &str,
     flag: u32,
 ) -> port::Result<u64> {
+    // WR-04: resolution runs unlocked (namec snapshots per consult); the
+    // lock covers the mount-table insert only (the syscall layer's shape).
     let s = namec::namec(src.as_bytes(), slash, slash, pg, NamecMode::BindSource)?;
     let t = namec::namec(target.as_bytes(), slash, slash, pg, NamecMode::MountTarget)?;
-    pg.bind(s, &t, flag)
+    let node = LockNode::new();
+    pg.lock(&node).bind(s, &t, flag)
 }
 
 #[test]
 fn bind_mbefore_then_resolution_prefers_mounted() {
-    let mut pg = Pgrp::new();
+    let pg = Lock::new("pgrp-test", Pgrp::new());
     let slash = slash();
 
-    bind_locked(&mut pg, &slash, "#c", "/dev", pgrp::MBEFORE).expect("bind #c /dev MBEFORE");
+    bind_locked(&pg, &slash, "#c", "/dev", pgrp::MBEFORE).expect("bind #c /dev MBEFORE");
 
     // The mounted tree wins over the underlying /dev's own cons file.
     let c = resolve(&pg, &slash, "/dev/cons").expect("/dev/cons through the union");
@@ -315,10 +318,10 @@ fn bind_mbefore_then_resolution_prefers_mounted() {
 
 #[test]
 fn bind_mrepl_replaces_union() {
-    let mut pg = Pgrp::new();
+    let pg = Lock::new("pgrp-test", Pgrp::new());
     let slash = slash();
 
-    bind_locked(&mut pg, &slash, "#p", "/dev", pgrp::MREPL).expect("bind #p /dev MREPL");
+    bind_locked(&pg, &slash, "#p", "/dev", pgrp::MREPL).expect("bind #p /dev MREPL");
 
     // MREPL removes the underlying directory from the union: devroot's
     // /dev/cons and /dev/kmsg are both unreachable now.
@@ -331,10 +334,10 @@ fn bind_mrepl_replaces_union() {
 
 #[test]
 fn bind_mafter_appends_after_underlying() {
-    let mut pg = Pgrp::new();
+    let pg = Lock::new("pgrp-test", Pgrp::new());
     let slash = slash();
 
-    bind_locked(&mut pg, &slash, "#p", "/dev", pgrp::MAFTER).expect("bind #p /dev MAFTER");
+    bind_locked(&pg, &slash, "#p", "/dev", pgrp::MAFTER).expect("bind #p /dev MAFTER");
 
     // Underlying first: /dev/cons resolves through devroot, not the union tail.
     let c = resolve(&pg, &slash, "/dev/cons").expect("/dev/cons resolves");
@@ -347,11 +350,11 @@ fn bind_mafter_appends_after_underlying() {
 
 #[test]
 fn union_walk_order_mbefore_underlying_mafter() {
-    let mut pg = Pgrp::new();
+    let pg = Lock::new("pgrp-test", Pgrp::new());
     let slash = slash();
 
-    bind_locked(&mut pg, &slash, "#c", "/dev", pgrp::MBEFORE).expect("bind #c MBEFORE");
-    bind_locked(&mut pg, &slash, "#p", "/dev", pgrp::MAFTER).expect("bind #p MAFTER");
+    bind_locked(&pg, &slash, "#c", "/dev", pgrp::MBEFORE).expect("bind #c MBEFORE");
+    bind_locked(&pg, &slash, "#p", "/dev", pgrp::MAFTER).expect("bind #p MAFTER");
 
     // 9k order: MBEFORE entries first, then the underlying dir, then MAFTER.
     assert_eq!(resolve(&pg, &slash, "/dev/cons").unwrap().dev, DEV_CONS, "MBEFORE head first");
@@ -361,14 +364,14 @@ fn union_walk_order_mbefore_underlying_mafter() {
 
 #[test]
 fn bind_to_nonexistent_target_errors() {
-    let mut pg = Pgrp::new();
+    let pg = Lock::new("pgrp-test", Pgrp::new());
     let slash = slash();
 
     // Pitfall-8 contract: MCREATE permits later creation IN the mounted
     // directory; it does not conjure the mount target itself.
-    assert!(bind_locked(&mut pg, &slash, "#c", "/nosuchdir", pgrp::MBEFORE).is_err());
-    assert!(bind_locked(&mut pg, &slash, "#c", "/nosuchdir", pgrp::MBEFORE | pgrp::MCREATE).is_err());
-    assert!(bind_locked(&mut pg, &slash, "#c", "/dev/kmsg", pgrp::MAFTER).is_err(),
+    assert!(bind_locked(&pg, &slash, "#c", "/nosuchdir", pgrp::MBEFORE).is_err());
+    assert!(bind_locked(&pg, &slash, "#c", "/nosuchdir", pgrp::MBEFORE | pgrp::MCREATE).is_err());
+    assert!(bind_locked(&pg, &slash, "#c", "/dev/kmsg", pgrp::MAFTER).is_err(),
         "a union bind (non-MREPL) onto a non-directory must error (9k cmount)");
 }
 
@@ -386,43 +389,27 @@ fn rfork_group_semantics_share_copy_wipe() {
     // handle is visible through the parent's.
     let parent = Arc::new(Lock::new("pgrp-test", Pgrp::new()));
     let child = parent.clone(); // the Arc-share (proc.rs wires the flags)
-    {
-        let node = LockNode::new();
-        let mut guard = child.lock(&node);
-        bind_locked(&mut guard, &slash, "#c", "/dev", pgrp::MBEFORE).expect("child bind");
-    }
-    {
-        let node = LockNode::new();
-        let guard = parent.lock(&node);
-        assert_eq!(
-            resolve(&guard, &slash, "/dev/cons").unwrap().dev,
-            DEV_CONS,
-            "shared group: the child's bind is visible to the parent"
-        );
-    }
+    bind_locked(&child, &slash, "#c", "/dev", pgrp::MBEFORE).expect("child bind");
+    assert_eq!(
+        resolve(&parent, &slash, "/dev/cons").unwrap().dev,
+        DEV_CONS,
+        "shared group: the child's bind is visible to the parent"
+    );
 
     // RFNAMEG: the child inherits a COPY of the parent's group — the
     // child's later binds are invisible to the parent (9k pgrpcpy).
     let node = LockNode::new();
     let copied = Arc::new(Lock::new("pgrp-test", parent.lock(&node).deep_copy()));
-    {
-        let node = LockNode::new();
-        let mut guard = copied.lock(&node);
-        // the copy carries the parent's mounts...
-        assert_eq!(resolve(&guard, &slash, "/dev/cons").unwrap().dev, DEV_CONS,
-            "the copied group starts with the parent's mounts");
-        bind_locked(&mut guard, &slash, "#p", "/proc", pgrp::MREPL).expect("copy bind");
-    }
-    {
-        let node = LockNode::new();
-        let guard = parent.lock(&node);
-        assert!(resolve(&guard, &slash, "/proc/1/note").is_err(),
-            "RFCOPY (RFNAMEG): the child's bind is invisible to the parent");
-    }
+    // the copy carries the parent's mounts...
+    assert_eq!(resolve(&copied, &slash, "/dev/cons").unwrap().dev, DEV_CONS,
+        "the copied group starts with the parent's mounts");
+    bind_locked(&copied, &slash, "#p", "/proc", pgrp::MREPL).expect("copy bind");
+    assert!(resolve(&parent, &slash, "/proc/1/note").is_err(),
+        "RFCOPY (RFNAMEG): the child's bind is invisible to the parent");
 
     // RFCNAMEG: the child starts with a CLEAN (empty) group — the wipe
     // (9k sysrfork: newpgrp, no pgrpcpy; the 05-03 finding's mechanism).
-    let wiped = Pgrp::new();
+    let wiped = Lock::new("pgrp-test", Pgrp::new());
     assert!(resolve(&wiped, &slash, "/dev/cons").unwrap().dev == DEV_ROOT,
         "a fresh group has no mounts: /dev/cons resolves to the underlying dir");
 }
@@ -433,26 +420,27 @@ fn rfork_group_semantics_share_copy_wipe() {
 
 #[test]
 fn unmount_removes_and_errors_on_never_mounted() {
-    let mut pg = Pgrp::new();
+    let pg = Lock::new("pgrp-test", Pgrp::new());
     let slash = slash();
 
-    assert!(pg.unmount(b"/dev", None).is_err(), "unmount of a never-mounted point must error");
+    let node = LockNode::new();
+    assert!(pg.lock(&node).unmount(b"/dev", None).is_err(), "unmount of a never-mounted point must error");
 
-    bind_locked(&mut pg, &slash, "#c", "/dev", pgrp::MBEFORE).expect("bind");
+    bind_locked(&pg, &slash, "#c", "/dev", pgrp::MBEFORE).expect("bind");
     assert_eq!(resolve(&pg, &slash, "/dev/cons").unwrap().dev, DEV_CONS);
 
     // Remove the named entry: the #c mount leaves the union; the
     // underlying /dev is all that remains.
     let cons_root = namec::namec(b"#c", &slash, &slash, &pg, NamecMode::BindSource).unwrap();
-    pg.unmount(b"/dev", Some(&cons_root)).expect("unmount the #c entry");
+    pg.lock(&node).unmount(b"/dev", Some(&cons_root)).expect("unmount the #c entry");
     assert_eq!(resolve(&pg, &slash, "/dev/cons").unwrap().dev, DEV_ROOT,
         "after unmount the underlying directory serves /dev again");
 
     // The same unmount a second time errors (the entry is gone).
-    assert!(pg.unmount(b"/dev", Some(&cons_root)).is_err(), "a removed entry errors on re-unmount");
+    assert!(pg.lock(&node).unmount(b"/dev", Some(&cons_root)).is_err(), "a removed entry errors on re-unmount");
 
     // Whole-point unmount (nil old): everything at /dev goes.
-    bind_locked(&mut pg, &slash, "#c", "/dev", pgrp::MBEFORE).expect("rebind");
-    pg.unmount(b"/dev", None).expect("whole-point unmount");
+    bind_locked(&pg, &slash, "#c", "/dev", pgrp::MBEFORE).expect("rebind");
+    pg.lock(&node).unmount(b"/dev", None).expect("whole-point unmount");
     assert_eq!(resolve(&pg, &slash, "/dev/cons").unwrap().dev, DEV_ROOT);
 }
