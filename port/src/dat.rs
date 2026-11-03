@@ -4,6 +4,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::result::Result;
 
+use crate::mcslock::Lock;
 use crate::paqfs::PaqDir;
 
 /// A device/kernel error carrying a static message — the port crate's
@@ -20,6 +21,12 @@ pub const DEV_ROOT: usize = 0;
 pub const DEV_CONS: usize = 1;
 pub const DEV_PROC: usize = 2;
 pub const DEV_ENV: usize = 3;
+/// 05-06: devpipe (the Arc-shared blocking queue; registry rune '|'),
+/// devdup (per-fd files '#d/N'; rune 'd'), devsrv (the '#s' service
+/// registry; rune 's').
+pub const DEV_PIPE: usize = 4;
+pub const DEV_DUP: usize = 5;
+pub const DEV_SRV: usize = 6;
 
 /// Plan 9 open-mode values (frozen: Harvey sys/include/libc.h).  The low
 /// two bits are an access-MODE field (not a bit set); the upper bits are
@@ -87,11 +94,21 @@ pub struct Chan {
     /// Private devroot slot: the paqfs entry this chan currently names.
     /// (Written/read by 04-05's devroot; 04-06's syscall PREAD consumes it.)
     pub(crate) paqdir: Option<PaqDir>,
+    /// 05-06 (Pitfall 4): the pipe this chan references (devpipe chans
+    /// ONLY — the dir chan from attach and the two end chans).  The Arc
+    /// is the shared-queue handle BOTH pipe ends reference: a write on
+    /// one end is readable on the other after a fork/dup.  None for every
+    /// non-pipe chan.
+    pub(crate) pipe: Option<Arc<Lock<crate::devpipe::Pipe>>>,
+    /// 05-06: the donor's COPEN — set by namec::open_chan (the single
+    /// open funnel; namec::create_chan sets it for creates).  Read by
+    /// dup's pipe-reference rule and namec::close_chan's dispatch.
+    pub(crate) copen: bool,
 }
 
 impl Chan {
     pub fn new(dev: usize, qid: Qid, mode: u32) -> Chan {
-        Chan { qid, mode, offset: 0, dev, path: Vec::new(), paqdir: None }
+        Chan { qid, mode, offset: 0, dev, path: Vec::new(), paqdir: None, pipe: None, copen: false }
     }
 
     /// Value-dup for 04-07's rfork fd-table copy: a fresh Chan naming the
@@ -99,7 +116,19 @@ impl Chan {
     /// cloned).  Plan 9's shared-Chan semantics (one offset, refcounted)
     /// are approximated by a value copy — the streaming offset diverges
     /// after the fork, which the measured smoke does not depend on.
+    ///
+    /// 05-06 (Pitfall 4) — THE PIPE EXCEPTION: an OPEN PIPE END chan's
+    /// value copy is a NEW OPEN REFERENCE to the shared queue (the donor's
+    /// cclone+incref shape): the Arc is cloned (the bytes stay shared) and
+    /// the pipe's open-end count bumps.  Without this rule a fork/dup'd
+    /// pipe's ends would diverge into per-chan copies and connectembed's
+    /// 9P exchange would deadlock silently.
     pub fn dup(&self) -> Chan {
+        if self.copen {
+            if let Some(pipe) = &self.pipe {
+                crate::devpipe::ref_open_end(pipe, self.qid.path);
+            }
+        }
         Chan {
             qid: self.qid,
             mode: self.mode,
@@ -107,6 +136,8 @@ impl Chan {
             dev: self.dev,
             path: self.path.clone(),
             paqdir: self.paqdir.clone(),
+            pipe: self.pipe.clone(),
+            copen: self.copen,
         }
     }
 }

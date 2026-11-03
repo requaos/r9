@@ -1,0 +1,9 @@
+{
+  "command": "cargo test -p port --test devpipe_test --test fdgroup_test",
+  "exitCode": 101,
+  "targetTest": "pipe_pair_write_read_round_trip",
+  "targetFile": "port/tests/devpipe_test.rs",
+  "output": "TAP version 13\n1..9\nnot ok 1 - pipe_blocks_on_empty_and_write_wakes_with_bytes\nnot ok 2 - pipe_full_is_a_named_atomic_error\nnot ok 3 - pipe_pair_write_read_round_trip\nnot ok 4 - pipe_reader_eof_after_drain_on_write_close\nnot ok 5 - pipe_reopen_after_full_close\nnot ok 6 - pipe_write_on_closed_reader_end_errors\nok 7 - fd_group_slot_mechanics\nnot ok 8 - fd_group_copy_shares_the_pipe_queue\nnot ok 9 - fd_group_matrix_share_copy_empty\n# tests 9\n# pass 1\n# fail 8\n",
+  "expected": "a write on one pipe end is readable on the other (and bytes are consumed exactly once) — the Arc-shared cross-connected queue (05-06 behavior bullet 1; 9k devpipe.c + qio.c semantics; Pitfall 4's anti-deadlock property)",
+  "actual": "devpipe::write on the RED skeleton returns Err(\"devpipe: writes unimplemented (05-06 RED skeleton)\") — the target test fails at the .expect on the planned write-read round-trip assertion (port/tests/devpipe_test.rs:44:57: write end0); 8 of 9 tests across both files fail on the planned-behavior paths (deep_copy's RED stub returns an empty table, failing the share/copy/empty matrix's COPY arm); fd_group_slot_mechanics passes on the real plumbing (the 05-04 RED precedent: plumbing green, behavior red)"
+}

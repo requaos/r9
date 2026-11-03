@@ -21,7 +21,7 @@
 //! devroot.rs's header); the registry is a plain match over attach fns,
 //! the established free-function device idiom.
 
-use crate::dat::{Chan, DEV_CONS, DEV_ENV, DEV_PROC, DEV_ROOT};
+use crate::dat::{Chan, DEV_CONS, DEV_ENV, DEV_PIPE, DEV_PROC, DEV_ROOT};
 use crate::pgrp::Pgrp;
 use crate::Result;
 
@@ -60,6 +60,9 @@ fn registry_attach(rune: char, spec: &[u8]) -> Result<Chan> {
         'c' => Ok(crate::devcons::attach()),
         'e' => crate::devenv::attach(spec),
         'p' => Ok(crate::devproc::attach()),
+        // 05-06: a FRESH pipe pair per attach (9k's pipeattach) — the
+        // sys_pipe handler's entry point.
+        '|' => Ok(crate::devpipe::attach()),
         _ => Err("namec: unknown # device"),
     }
 }
@@ -96,6 +99,7 @@ fn dev_walk(c: &Chan, comp: &[u8]) -> Result<Chan> {
         DEV_CONS => crate::devcons::walk(c, comp),
         DEV_PROC => crate::devproc::walk(c, comp),
         DEV_ENV => crate::devenv::walk(c, comp),
+        DEV_PIPE => crate::devpipe::walk(c, comp),
         _ => Err("namec: chan with unknown device index"),
     }
 }
@@ -177,18 +181,23 @@ pub fn namec(path: &[u8], slash: &Chan, dot: &Chan, pg: &Pgrp, mode: NamecMode) 
 /// create-on-existing → OTRUNC-open fallback per 9k chan.c Acreate).
 pub fn open_chan(c: &Chan, mode: u32) -> Result<Chan> {
     let access = mode & crate::dat::OMASK;
-    match c.dev {
+    let mut opened = match c.dev {
         DEV_ROOT => {
             if mode & crate::dat::OTRUNC != 0 {
                 return Err("devroot: read-only filesystem");
             }
-            crate::devroot::root().ok_or("namec: devroot not mounted")?.open(c, access)
+            crate::devroot::root().ok_or("namec: devroot not mounted")?.open(c, access)?
         }
-        DEV_CONS => crate::devcons::open(c, access),
-        DEV_PROC => crate::devproc::open(c, access),
-        DEV_ENV => crate::devenv::open(c, mode),
-        _ => Err("namec: chan with unknown device index"),
-    }
+        DEV_CONS => crate::devcons::open(c, access)?,
+        DEV_PROC => crate::devproc::open(c, access)?,
+        DEV_ENV => crate::devenv::open(c, mode)?,
+        DEV_PIPE => crate::devpipe::open(c, access)?,
+        _ => return Err("namec: chan with unknown device index"),
+    };
+    // 05-06: the donor's COPEN — every funnel-opened chan is marked;
+    // Chan::dup's pipe-reference rule and close_chan's dispatch read it.
+    opened.copen = true;
+    Ok(opened)
 }
 
 /// The stat dispatch for a resolved chan (05-04 Task 3's sys_stat/sys_fstat
@@ -200,6 +209,24 @@ pub fn stat_chan(c: &Chan, sb: &mut [u8]) -> Result<u64> {
         DEV_CONS => crate::devcons::stat(c, sb),
         DEV_PROC => crate::devproc::stat(c, sb),
         DEV_ENV => crate::devenv::stat(c, sb),
+        DEV_PIPE => crate::devpipe::stat(c, sb),
         _ => Err("namec: chan with unknown device index"),
+    }
+}
+
+/// The close dispatch (05-06 — the donor's devclose): called when an
+/// open chan LEAVES an fd slot (sys_close's pop, sys_dup's overwrite
+/// eviction, sys_pipe/sys_open's error paths).  Only devices with close
+/// semantics act: devpipe decrements the end's open count (the last
+/// close hangs the peer's read queue up — the EOF path the connectembed
+/// teardown rides).  Non-open chans (walk intermediates — copen clear)
+/// and close-less devices are no-ops.
+pub fn close_chan(c: &Chan) {
+    if !c.copen {
+        return;
+    }
+    match c.dev {
+        DEV_PIPE => crate::devpipe::close(c),
+        _ => {}
     }
 }
