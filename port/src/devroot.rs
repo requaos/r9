@@ -3,6 +3,13 @@
 //! a single name component, open OREAD/OEXEC, read via the paqfs reader's
 //! byte-granular read_at, stat minimal (name/qid/length from the PaqDir).
 //!
+//! 05-05 Task 2: the tree additionally exposes `/rootfs.img` — the D-04
+//! RAW view of the same image the tree walks (the two-views note): the
+//! kernel execs from the walked tree while the userspace paqfs server
+//! serves the raw bytes.  A baked image shipping its own rootfs.img root
+//! entry is REJECTED at mount_initrd with a named error (one view must
+//! never shadow the other silently).  See the RAWIMG_NAME block.
+//!
 //! Like the paqfs reader it wraps, the device is stateless-per-call over the
 //! memory-resident image: no statics, no locks, no mutation — safe to call
 //! from process/boot context this era (the trap-context fault handler reads
@@ -34,15 +41,24 @@ const DMDIR: u32 = 0x8000_0000;
 const QTDIR: u8 = 0x80;
 const QTFILE: u8 = 0x00;
 
-/// 05-04 Task 3 (the gate's connectembed dirstat(paqfile) needs it; the
-/// full hardening is 05-05 Task 2's): the raw initrd image served as the
-/// root-tree file `/rootfs.img` — the D-04 two-views counterpart (the
+/// 05-05 Task 2 (D-04's two-views counterpart, hardened): the raw initrd
+/// image served as the root-tree file `/rootfs.img` — the exact literal
+/// bootr9.c's embed method arg names (the cross-plan contract).  The
 /// kernel walks the paqfs TREE for exec; the userspace paqfs server reads
-/// the raw BYTES).  Synthesized at the root only when the image ships no
-/// real entry of that name (a real entry always wins — no shadowing).
-/// Reads proxy the image slice with bounds checks; write is refused
-/// loudly.  The reserved qid never collides with mkpaqfs qids (sequential
-/// from 1).
+/// the raw BYTES through this node — two views of the one image.
+/// Synthesized at the root only (a deeper or re-rooted chan never
+/// synthesizes).  Reads proxy the image slice with the paqfs reader's own
+/// clamp convention (read_at: off ≥ length is EOF = 0, never an error);
+/// every write-side mode and OEXEC are refused with NAMED errors.  The
+/// reserved qid never collides with mkpaqfs qids (sequential from 1).
+///
+/// Name-collision discipline (05-05's hardening — the 05-04 provisional
+/// let a real image entry silently win): if the baked image ever ships
+/// its OWN rootfs.img entry at the root, mount_initrd FAILS with a named
+/// error rather than letting one view shadow the other — a real entry
+/// would masquerade as the raw image to the paqfs server (its bytes
+/// would be the tree's file, not the image), an impossible-to-debug
+/// divergence served loudly at mount instead.
 const RAWIMG_QID: u32 = u32::MAX;
 const RAWIMG_NAME: &[u8] = b"rootfs.img";
 
@@ -61,9 +77,19 @@ static ROOT_IMG: Lock<Option<&'static [u8]>> = Lock::new("devroot", None);
 
 /// Mount the initrd paqfs image as the root tree.  The image is validated
 /// (header + trailer) up front — a corrupt image is a loud Err at mount,
-/// never a mid-boot surprise.
+/// never a mid-boot surprise.  05-05 Task 2: the collision refusal joins
+/// the validation — an image shipping its own rootfs.img entry at the
+/// root is rejected BEFORE anything is published (the raw-image node
+/// would silently shadow / be shadowed by it; see RAWIMG_NAME).
 pub fn mount_initrd(img: &'static [u8]) -> Result<DevRoot> {
-    Paqfs::open_image(img)?;
+    let fs = Paqfs::open_image(img)?;
+    let root = fs.root_dir()?;
+    let entries = fs.read_dir(&root)?;
+    if entries.iter().any(|e| e.name == RAWIMG_NAME) {
+        return Err(
+            "devroot: image ships its own /rootfs.img entry — refusing to mount (would shadow the raw-image node)",
+        );
+    }
     // Publish for the syscall-era consumers (OPEN/PREAD on devroot chans,
     // the EXEC handler's binary source).  Exactly one mount exists this era.
     let node = LockNode::new();
@@ -97,7 +123,9 @@ impl DevRoot {
     /// the returned Chan carries the matched PaqDir.  `..` and multi-element
     /// walks are out of scope for the root tree this era.  At the ROOT only,
     /// a failed lookup of the raw-image name synthesizes the /rootfs.img
-    /// node (05-04 — see RAWIMG_NAME); a real image entry always wins.
+    /// node (05-05 — see RAWIMG_NAME); the mount-time collision refusal
+    /// means a real entry of that name cannot exist post-mount (the real-
+    /// entry branch below stays as belt-and-braces).
     pub fn walk(&self, c: &Chan, name: &[u8]) -> Result<Chan> {
         let dir = c.paqdir.as_ref().ok_or("devroot: walk of unattached chan")?;
         if dir.mode & DMDIR == 0 {
@@ -143,7 +171,10 @@ impl DevRoot {
 
     /// Open `c` OREAD or OEXEC.  Everything else (write-side modes, trunc)
     /// is a read-only-fs error; a directory opens OREAD only.  The raw-image
-    /// node opens OREAD only (it is not a binary).
+    /// node opens OREAD only (it is not a binary) — its write-side and
+    /// exec refusals carry NAMED errors (05-05's hardening: the node's
+    /// read-only contract is a load-bearing part of the two-views story,
+    /// never a generic fs error).
     pub fn open(&self, c: &Chan, mode: u32) -> Result<Chan> {
         let dir = c.paqdir.as_ref().ok_or("devroot: open of unattached chan")?;
         let is_dir = dir.mode & DMDIR != 0;
@@ -151,7 +182,9 @@ impl DevRoot {
         match mode {
             OREAD => {}
             OEXEC if !is_dir && !is_rawimg => {}
+            OEXEC if is_rawimg => return Err("devroot: cannot exec the raw image /rootfs.img"),
             OEXEC => return Err("devroot: cannot exec-open a directory"),
+            _ if is_rawimg => return Err("devroot: /rootfs.img is read-only"),
             _ => return Err("devroot: read-only filesystem"),
         }
         let mut nc = Chan::new(c.dev, c.qid, mode);
