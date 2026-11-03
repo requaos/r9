@@ -1,0 +1,9 @@
+{
+  "command": "cargo test -p port --test devproc_test",
+  "exitCode": 101,
+  "targetTest": "devproc_root_status_args_ctl_and_note_surface",
+  "targetFile": "port/tests/devproc_test.rs",
+  "output": "TAP version 13\n1..1\nnot ok 1 - devproc_root_status_args_ctl_and_note_surface\n# tests 1\n# pass 0\n# fail 1\n",
+  "expected": "the /proc root's directory read emits one stat(5) wire entry per live pid (decimal-pid-named) — ps's chdir(/proc) + open(\".\") + dirreadall shape; then per-pid status (≥12 whitespace fields in devproc.c's order), args (the exec-recorded argv; empty when never exec'd), ctl (\"pri N\" parsed + recorded), and the 04-08 note path unregressed (05-09 Task 1 behavior bullets 1-4)",
+  "actual": "devproc::read on the RED skeleton returns Err(\"devproc: RED skeleton (05-09)\") — the target test fails at the root-listing read's .expect on the planned directory-read behavior (port/tests/devproc_test.rs:120:61: 'the root listing reads'); the suite compiles (the RED skeleton carries the 05-09 API surface — ProcHooks/ProcInfo/set_proc_hooks + the re-encoded pid*8+slot qid scheme's walk/open/stat — with the read/ctl bodies stubbed); the other port test binaries stay green (the 05-06/05-07 RED precedent: plumbing green, behavior red). libtest has no --format=tap on this toolchain; the output field transcribes the real run into TAP shape (the 05-06/05-07 records' established shape), verbatim-true to the run."
+}
