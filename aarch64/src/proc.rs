@@ -19,8 +19,12 @@
 //!   handler's lifetime.
 //! - CURKSTACK/CURFRAME (the trap.S entry-stack/live-frame symbols) are
 //!   written only under the PROC_TABLE lock or in IRQ-masked trap
-//!   context, and read by trap.S at entry/return — same single-CPU
-//!   invariant.
+//!   context; CURFRAME is read by trap.S at entry/return — same
+//!   single-CPU invariant.  CURKSTACK is proc.rs's record of the
+//!   per-process entry-stack invariant (the value SP_EL1 holds at every
+//!   EL0 trap entry); the trap_return tail has reconstructed it as
+//!   frame+288 since 05-01 (every frame sits at entry-stack top - 288),
+//!   so nothing reads it.
 
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
@@ -567,11 +571,16 @@ pub fn new_user_proc(name: &str) -> Result<&'static mut Proc> {
 // TICKS_PER_SEC — 100 Hz = 10 ms this era; CONTEXT.md agent's discretion).
 // ---------------------------------------------------------------------------
 
-/// The trap-entry stack top / live frame pointer, read by trap.S at every
-/// entry (CURFRAME record) and return (CURFRAME reload; CURKSTACK load on
-/// EL0t-bound returns).  CURKSTACK initialises to the legacy interrupt
-/// stack so pre-process traps (early boot, virtpanic) behave exactly as
-/// pre-04-07.  Write discipline per the module header.
+/// The trap-entry stack top / live frame pointer.  CURFRAME is written by
+/// trap.S at every entry and read at every return (the reload guard
+/// against a mid-trap preemption swap).  CURKSTACK records the invariant
+/// SP_EL1 must hold at the next EL0 trap entry (the current proc's
+/// kernel-stack top); the return tail reproduces it as frame+288 (05-01 —
+/// the old explicit CURKSTACK load in trap.S needed a post-pops scratch
+/// and clobbered the restored userland x9 on every EL0t return: the D-14
+/// note-timeout/wild-write flake).  CURKSTACK initialises to the legacy
+/// interrupt stack so pre-process traps (early boot, virtpanic) behave
+/// exactly as pre-04-07.  Write discipline per the module header.
 #[unsafe(no_mangle)]
 pub static mut CURKSTACK: u64 = 0;
 #[unsafe(no_mangle)]
@@ -608,16 +617,18 @@ fn interrupt_stack_top() -> usize {
     unsafe { &interruptstackbase as *const u8 as usize + &interruptstacksz as *const u8 as usize }
 }
 
-/// Initialise CURKSTACK to the legacy interrupt stack.  main9 calls this
-/// right after trap::init — before IRQs can unmask, so the first tick can
-/// never read a null stack target.
+/// Initialise CURKSTACK to the legacy interrupt stack (the pre-process
+/// entry-stack record; 05-01: proc.rs's invariant bookkeeping — the
+/// trap_return tail no longer reads it).  main9 calls this right after
+/// trap::init, before IRQs can unmask.
 pub fn init_trap_stacks() {
     write_curkstack(interrupt_stack_top());
 }
 
 /// First activation (exec_bootstrap's only call): publish the proc as
-/// current + Running and point the trap-entry stack at its kstack — the
-/// EL0t-bound trap_return tail loads SP_EL1 from CURKSTACK.
+/// current + Running and record its kstack as the trap-entry stack — the
+/// trap_return tail leaves SP_EL1 at frame+288 (= this kstack top) on the
+/// EL0t-bound return into the seeded frame.
 pub fn activate_first(p: &mut Proc) {
     p.state = ProcState::Running;
     set_current_proc(p);
