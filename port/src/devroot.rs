@@ -2,6 +2,9 @@
 //! The one mechanism exec sources binaries through: attach → root Chan, walk
 //! a single name component, open OREAD/OEXEC, read via the paqfs reader's
 //! byte-granular read_at, stat minimal (name/qid/length from the PaqDir).
+//! Directories read as the stat(5)-wire listing of their children (WR-08 —
+//! the donor devroot's devdirread; the root listing appends the synthesized
+//! /rootfs.img node so a listing names every walkable entry).
 //!
 //! 05-05 Task 2: the tree additionally exposes `/rootfs.img` — the D-04
 //! RAW view of the same image the tree walks (the two-views note): the
@@ -22,6 +25,8 @@
 //! names (attach/walk/open/read/stat) as inherent methods; trait conformance
 //! lands when the devtab dispatch era (04-06+) grows the skeleton into a
 //! constructible shape.
+
+use alloc::vec::Vec;
 
 use crate::dat::{Chan, Qid, StatWriter};
 use crate::mcslock::{Lock, LockNode};
@@ -151,7 +156,19 @@ impl DevRoot {
 
     /// The synthesized /rootfs.img chan (the raw initrd image node).
     fn rawimg_chan(&self, root: &Chan) -> Chan {
-        let raw = PaqDir {
+        let raw = self.rawimg_paqdir();
+        let mut nc = Chan::new(root.dev, qid_of(&raw), 0);
+        nc.paqdir = Some(raw);
+        nc.path = root.path.clone();
+        nc.path.push(b'/');
+        nc.path.extend_from_slice(RAWIMG_NAME);
+        nc
+    }
+
+    /// The synthesized node's PaqDir (walk's chan synthesis and the WR-08
+    /// root listing share the shape).
+    fn rawimg_paqdir(&self) -> PaqDir {
+        PaqDir {
             qid: RAWIMG_QID,
             mode: 0o444,
             mtime: 0,
@@ -160,13 +177,7 @@ impl DevRoot {
             name: RAWIMG_NAME.to_vec(),
             uid: b"glenda".to_vec(),
             gid: b"glenda".to_vec(),
-        };
-        let mut nc = Chan::new(root.dev, qid_of(&raw), 0);
-        nc.paqdir = Some(raw);
-        nc.path = root.path.clone();
-        nc.path.push(b'/');
-        nc.path.extend_from_slice(RAWIMG_NAME);
-        nc
+        }
     }
 
     /// Open `c` OREAD or OEXEC.  Everything else (write-side modes, trunc)
@@ -198,13 +209,31 @@ impl DevRoot {
     /// advance the chan's streaming offset" (04-RESEARCH.md fd convention).
     /// The raw-image node reads the image slice directly (its PaqDir's
     /// block offset names nothing — paqfs blocks are the TREE's encoding).
+    /// WR-08: a DIRECTORY read serves the stat(5)-wire listing of the
+    /// PaqDir's children (the donor devroot's devdirread over the root
+    /// tree — any dirreadall of a devroot dir, e.g. reading `/` before
+    /// newns binds the mounted union over it); the records are the fixed
+    /// 4-string CR-01 shape via write_entry.  At the ROOT the synthesized
+    /// /rootfs.img node appends (walk synthesizes it there; a listing
+    /// names every walkable entry).
     pub fn read(&self, c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
         let dir = c.paqdir.as_ref().ok_or("devroot: read of unattached chan")?;
-        if dir.mode & DMDIR != 0 {
-            return Err("devroot: read of a directory");
-        }
         let off = if offset == u64::MAX { c.offset } else { offset };
-        let n: u64 = if dir.qid == RAWIMG_QID {
+        let n: u64 = if dir.mode & DMDIR != 0 {
+            let mut listing = Vec::new();
+            for e in self.fs()?.read_dir(dir)? {
+                Self::push_entry(&mut listing, c.dev, qid_of(&e), &e)?;
+            }
+            if c.path.is_empty() {
+                let raw = self.rawimg_paqdir();
+                Self::push_entry(&mut listing, c.dev, qid_of(&raw), &raw)?;
+            }
+            let start = (off as usize).min(listing.len());
+            let avail = &listing[start..];
+            let n = avail.len().min(buf.len());
+            buf[..n].copy_from_slice(&avail[..n]);
+            n as u64
+        } else if dir.qid == RAWIMG_QID {
             // Bounds-checked slice read (clamp at the image end; a read at
             // or past the end is EOF = 0).
             let start = (off as usize).min(self.img.len());
@@ -221,17 +250,28 @@ impl DevRoot {
         Ok(n)
     }
 
-    /// Minimal stat: the Plan 9 stat(5) wire shape — fixed fields plus the
-    /// name/uid/gid/muid strings from the PaqDir (qid path+vers+type, mode,
-    /// mtime, length).  `sb` must be large enough; the size prefix is
-    /// written last.  Returns the byte count (prefix included — the
-    /// convD2M/sysstat contract; 05-04 Task 3).  FOUR strings — libc's
-    /// statcheck walks four and rejects a record that ends early
-    /// (convM2D.c); muid = uid per the donor's devdir (db->muid = user).
-    pub fn stat(&self, c: &Chan, sb: &mut [u8]) -> Result<u64> {
-        let dir = c.paqdir.as_ref().ok_or("devroot: stat of unattached chan")?;
-        // Fixed part: size[2] type[2] dev[4] qid[13] mode[4] atime[4]
-        // mtime[4] length[8] = 41 bytes, then four length-prefixed strings.
+    /// Append one entry's stat(5) wire record to a directory listing
+    /// (WR-08; the record shape is stat's — see write_entry).
+    fn push_entry(listing: &mut Vec<u8>, dev: usize, qid: Qid, dir: &PaqDir) -> Result<()> {
+        let start = listing.len();
+        let need = 41
+            + (2 + dir.name.len())
+            + (2 + dir.uid.len())
+            + (2 + dir.gid.len())
+            + (2 + dir.uid.len()); // muid = uid
+        listing.resize(start + need, 0);
+        let n = Self::write_entry(&mut listing[start..], dev, qid, dir)?;
+        debug_assert_eq!(n as usize, need);
+        Ok(())
+    }
+
+    /// One stat(5) wire record for a PaqDir (stat + the WR-08 listing
+    /// share the shape): the 41-byte fixed part + FOUR length-prefixed
+    /// strings — name/uid/gid/muid (libc's statcheck walks four and
+    /// rejects a record that ends early, convM2D.c); muid = uid per the
+    /// donor's devdir (db->muid = user).  Returns the byte count (the
+    /// convD2M/sysstat contract).
+    fn write_entry(sb: &mut [u8], dev: usize, qid: Qid, dir: &PaqDir) -> Result<u64> {
         let fixed = 41;
         let need = fixed
             + (2 + dir.name.len())
@@ -243,10 +283,10 @@ impl DevRoot {
         }
         let mut w = StatWriter::new(sb);
         w.u16(0); // type: unused this era
-        w.u32(c.dev as u32);
-        w.u8(c.qid.typ);
-        w.u32(c.qid.vers);
-        w.u64(c.qid.path);
+        w.u32(dev as u32);
+        w.u8(qid.typ);
+        w.u32(qid.vers);
+        w.u64(qid.path);
         w.u32(dir.mode);
         w.u32(dir.mtime); // atime
         w.u32(dir.mtime);
@@ -256,6 +296,17 @@ impl DevRoot {
         w.string(&dir.gid);
         w.string(&dir.uid); // muid — the fourth string statcheck walks
         Ok(w.finish())
+    }
+
+    /// Minimal stat: the Plan 9 stat(5) wire shape — fixed fields plus the
+    /// name/uid/gid/muid strings from the PaqDir (qid path+vers+type, mode,
+    /// mtime, length).  `sb` must be large enough; the size prefix is
+    /// written last.  Returns the byte count (prefix included — the
+    /// convD2M/sysstat contract; 05-04 Task 3).  The record shape is
+    /// write_entry's (shared with the WR-08 directory listing).
+    pub fn stat(&self, c: &Chan, sb: &mut [u8]) -> Result<u64> {
+        let dir = c.paqdir.as_ref().ok_or("devroot: stat of unattached chan")?;
+        Self::write_entry(sb, c.dev, c.qid, dir)
     }
 
     /// The PaqDir an opened chan names — exec's byte-source handle for the

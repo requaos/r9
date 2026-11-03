@@ -315,6 +315,62 @@ fn rawimg_node_refuses_write_and_exec_loudly() {
     assert_eq!(&buf, &good_image()[0..4]);
 }
 
+/// WR-08: devroot directories serve the stat(5)-wire listing of their
+/// children (the donor's devdirread over the root tree) — the root
+/// listing names the real entries AND the synthesized /rootfs.img node
+/// (walk synthesizes it there; a listing names every walkable entry);
+/// every record is the 4-string CR-01 shape and the listing parses to
+/// the last byte (libc dirread's statcheck per record).  Explicit-offset
+/// reads slice the listing (dirread's pread shape); a subdirectory lists
+/// its own children with no raw node below the root.
+#[test]
+fn dir_reads_serve_the_four_string_listing() {
+    let root = mount_good();
+    let attach = root.attach_root().expect("attach");
+
+    let mut rd = root.open(&attach, OREAD).expect("open root dir");
+    let mut listing = [0u8; 1024];
+    let n = root.read(&mut rd, &mut listing, u64::MAX).expect("dir read") as usize;
+    let mut names: Vec<String> = Vec::new();
+    let mut i = 0usize;
+    while i + 2 <= n {
+        let sz = u16::from_le_bytes([listing[i], listing[i + 1]]) as usize;
+        if sz == 0 {
+            break;
+        }
+        let rec = &listing[i..i + 2 + sz];
+        let mut p = 41usize;
+        let mut strs: Vec<String> = Vec::new();
+        for _ in 0..4 {
+            let slen = u16::from_le_bytes([rec[p], rec[p + 1]]) as usize;
+            p += 2;
+            strs.push(String::from_utf8(rec[p..p + slen].to_vec()).unwrap());
+            p += slen;
+        }
+        assert_eq!(p, 2 + sz, "the record ends exactly after FOUR strings (statcheck)");
+        assert_eq!(strs[3], strs[1], "muid = uid (the donor devdir's db->muid = user)");
+        names.push(strs[0].clone());
+        i += 2 + sz;
+    }
+    assert_eq!(i, n, "the listing parses to the last byte");
+    assert_eq!(names, ["boot", "rootfs.img"], "the real child + the synthesized raw node");
+
+    // The streaming offset advanced; an explicit-offset window re-reads a
+    // slice of the SAME listing bytes.
+    let mut tail = [0u8; 64];
+    let m = root.read(&mut rd, &mut tail, 2).expect("offset window") as usize;
+    assert_eq!(m, 64);
+    assert_eq!(&tail[..], &listing[2..66], "the explicit-offset window slices the listing");
+
+    // A subdirectory lists its own children (no raw node below the root).
+    let bootdir = root.walk(&attach, b"boot").expect("walk boot dir");
+    let mut bd = root.open(&bootdir, OREAD).expect("open boot dir");
+    let n = root.read(&mut bd, &mut listing, u64::MAX).expect("subdir read") as usize;
+    let body = &listing[..n];
+    assert!(body.windows(4).any(|w| w == b"boot"), "the subdir names its file");
+    assert!(!body.windows(10).any(|w| w == b"rootfs.img"), "no raw node below the root");
+}
+
 /// The mount-time collision refusal (05-05's hardening): an image whose
 /// ROOT ships its own rootfs.img entry fails mount_initrd with a named
 /// error — one view must never shadow the other silently.  A NESTED
