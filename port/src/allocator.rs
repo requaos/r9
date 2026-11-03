@@ -216,6 +216,11 @@ impl QuickFit {
     /// the block cannot be allocated.
     pub fn malloc(&mut self, layout: Layout) -> *mut u8 {
         let (size, align) = Self::adjust(layout);
+        if size >= 4096 {
+            // allocdbg: WR-04 wedge investigation — trace the big allocs
+            // (the per-RPC reply buffers + the exec staging growth).
+            crate::println!("allocdbg: malloc size={} align={}", size, align);
+        }
         let p = self.alloc_quick(size, align);
         p.or_else(|| self.alloc_tail(size, align)).map(|p| p.as_ptr()).unwrap_or(ptr::null_mut())
     }
@@ -460,7 +465,16 @@ impl QuickFit {
         F: Fn(&Header) -> bool,
     {
         let mut prev: Option<NonNull<Header>> = None;
+        let mut spins = 0usize; // allocdbg: cycle guard
         while let Some(mut node) = list {
+            spins += 1; // allocdbg
+            if spins > 100_000 {
+                // allocdbg: a cycled free list spins here forever (the
+                // WR-04 wedge investigation) — print + panic so the gate
+                // captures it instead of hanging silently.
+                crate::println!("allocdbg: unlink spin — list head cycle (node addr {:?} size {} align {})", unsafe { node.as_ref() }.addr, unsafe { node.as_ref() }.size, unsafe { node.as_ref() }.align);
+                panic!("allocator: free-list cycle detected");
+            }
             let node = unsafe { node.as_mut() };
             if predicate(node) {
                 let next = node.next.take();
