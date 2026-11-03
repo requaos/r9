@@ -196,6 +196,40 @@ pub(crate) fn ensure_stack_resident(proc: &mut Proc, start: usize, end: usize) {
     }
 }
 
+/// 05-06 (the cold-syscall-buffer class — surfaced by the 05-06 gate's
+/// paqfs, which emalloc's a heap buffer and lets the KERNEL's pread make
+/// its first touch): generalize ensure_stack_resident to ANY writable
+/// user range — an unmapped page is classified (Bss for brk_-grown heap,
+/// Stack for growth pages) and paged in zeroed.  The syscall layer calls
+/// this after validate_user_range and BEFORE any deref of a user buffer
+/// (pread's read target, pwrite's read source, errstr/await/fd2path's
+/// outputs, pipe's fd array): membership proves the segment, but a
+/// demand-paged page that no EL0 code has touched yet aborts at EL1h on
+/// a kernel access (the documented T-04-11 caveat — phase-04 deferred
+/// #3's class, closed at exec for data+bss in 05-04 and now closed for
+/// post-exec growth pages here).  This is EXPLICIT page-in at a
+/// controlled point with no locks held — never a nested fault from
+/// syscall context, so T-05-06's rule holds.
+pub(crate) fn ensure_user_resident(proc: &mut Proc, start: usize, end: usize) {
+    if start >= end {
+        return;
+    }
+    let mut page = start & !(PAGE_SIZE_4K - 1);
+    while page < end {
+        if !proc.mapping_log.iter().any(|m| m.va == page) {
+            // An unmapped in-segment page is bss-growth or stack-growth
+            // by construction (text/data/tos are exec-mapped); classify
+            // for the mapping log's record (rfork-copy/exit-free walk it).
+            let kind = match proc.segments.as_ref().and_then(|s| s.classify(page)) {
+                Some(SegKind::Stack) => SegKind::Stack,
+                _ => SegKind::Bss,
+            };
+            page_in_zeroed(proc, page, kind);
+        }
+        page += PAGE_SIZE_4K;
+    }
+}
+
 /// Map a zeroed page (bss/stack/tos).  Stack faults arrive only inside the
 /// 16 MiB growth bound — the segment classifier bounds them.
 fn page_in_zeroed(proc: &mut Proc, page_va: usize, kind: SegKind) {    let pa = pagealloc::allocate_physpage()

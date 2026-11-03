@@ -33,13 +33,14 @@
 
 use alloc::vec::Vec;
 
-use port::dat::{DEV_CONS, DEV_DUP, DEV_ENV, DEV_PIPE, DEV_PROC, DEV_ROOT, DEV_SRV, OEXEC, OTRUNC};
+use port::dat::{Chan, DEV_CONS, DEV_DUP, DEV_ENV, DEV_PIPE, DEV_PROC, DEV_ROOT, DEV_SRV, OEXEC, OTRUNC};
 use port::mcslock::LockNode;
 use port::namec::{self, NamecMode};
 use port::pgrp::{MAFTER, MBEFORE, MMASK, MORDER};
 use port::println;
 
 use crate::exec;
+use crate::fault;
 use crate::proc::{self, ERRMAX, Proc, ProcState};
 use crate::trap;
 use crate::trap::TrapFrame;
@@ -60,6 +61,7 @@ const BRK_: u64 = 24;
 const NOTIFY: u64 = 28;
 const NOTED: u64 = 29;
 const UNMOUNT: u64 = 35;
+const SEEK: u64 = 39;
 const ERRSTR: u64 = 41;
 const STAT: u64 = 42;
 const FSTAT: u64 = 43;
@@ -98,8 +100,10 @@ type Handler = fn(&mut TrapFrame, &mut Proc) -> u64;
 /// handling) and its Task-3 additions: the measured stat family STAT(42)/
 /// FSTAT(43) and BRK_(24) (×28 — malloc pool growth; boot's dirstat
 /// mallocs make it gate-load-bearing per the plan dispatch note); and by
-/// 05-06 with the connectembed family DUP(5)/PIPE(21) (boot's
-/// pipe+fork+dup+exec of the paqfs server).  The 04-01 trace carries no
+/// 05-06 with the connectembed family DUP(5)/PIPE(21)/CREATE(22)/
+/// FD2PATH(23) (boot's pipe+fork+dup+exec of the paqfs server +
+/// srvcreate) and SEEK(39) (measured ×72 — paqfs's bio Bseek; surfaced
+/// by the 05-06 gate as the trace-settled gap the loud wall named).  The 04-01 trace carries no
 /// brk_/segbrk(12) on the hello path; segbrk stays None.
 static DISPATCH: [Option<Handler>; 55] = {
     let mut t: [Option<Handler>; 55] = [None; 55];
@@ -118,6 +122,7 @@ static DISPATCH: [Option<Handler>; 55] = {
     t[NOTED as usize] = Some(sys_noted);
     t[BRK_ as usize] = Some(sys_brk_);
     t[UNMOUNT as usize] = Some(sys_unmount);
+    t[SEEK as usize] = Some(sys_seek);
     t[ERRSTR as usize] = Some(sys_errstr);
     t[STAT as usize] = Some(sys_stat);
     t[FSTAT as usize] = Some(sys_fstat);
@@ -253,6 +258,12 @@ fn sys_pwrite(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     if proc.validate_user_range(buf, n, false).is_err() {
         return err(proc, "pwrite: bad user buffer");
     }
+    // 05-06 (the cold-buffer class): force the read source resident
+    // BEFORE the device reads it — a brk_-grown/stack-growth page that
+    // no EL0 code has touched aborts at EL1h on a kernel read (04-08's
+    // explicit-residency pattern generalized; T-05-06: never a nested
+    // fault).
+    fault::ensure_user_resident(proc, buf as usize, (buf + n) as usize);
     let Some(mut chan) = proc.fd_take(fd) else {
         return err(proc, "pwrite: bad fd");
     };
@@ -316,6 +327,10 @@ fn sys_pread(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     if proc.validate_user_range(buf, n, true).is_err() {
         return err(proc, "pread: bad user buffer");
     }
+    // 05-06: force the write target resident BEFORE the device fills it
+    // (the cold-buffer class — paqfs's emalloc'd heap buffers are
+    // demand-paged and first-touched by this kernel write).
+    fault::ensure_user_resident(proc, buf as usize, (buf + n) as usize);
     let Some(mut chan) = proc.fd_take(fd) else {
         return err(proc, "pread: bad fd");
     };
@@ -843,6 +858,7 @@ fn sys_pipe(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     if proc.validate_user_range(arr_va, 8, true).is_err() {
         return err(proc, "pipe: bad fd array");
     }
+    fault::ensure_user_resident(proc, arr_va as usize, (arr_va + 8) as usize); // 05-06 cold-buffer class
     // The pipe pair (the registry '|' twin — a fresh attach per call).
     let dir = port::devpipe::attach();
     let c0 = match port::devpipe::walk(&dir, b"data") {
@@ -1016,6 +1032,7 @@ fn sys_fd2path(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     if proc.validate_user_range(buf_va, n, true).is_err() {
         return err(proc, "fd2path: bad user buffer");
     }
+    fault::ensure_user_resident(proc, buf_va as usize, (buf_va + n) as usize); // 05-06 cold-buffer class
     let Some(path) = proc.fd_path(fd) else {
         return err(proc, "fd2path: bad fd");
     };
@@ -1112,6 +1129,48 @@ fn sys_rfork(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     }
 }
 
+/// SEEK(39): fd, offset (vlong — Plan 9's one full-width 64-bit int
+/// type, no masking), base (int) — 05-06 Task 3 (the gate's
+/// trace-settled gap: paqfs's libbio Bseek — measured ×72 in the 05-03
+/// trace; the loud wall named it).  Donor sysseek (9k sysfile.c): set the
+/// chan's offset — base 0 absolute, base 1 relative (negative deltas
+/// allowed, the result never below 0) — directories error (donor
+/// Eisdir).  base 2 (SEEK_END) needs the file length and has no measured
+/// pre-wall caller — a loud error, never silent.  Returns the new offset
+/// (vlong on the wire — bio's Bseek checks it).
+fn sys_seek(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
+    let Some(args) = sargs(frame, proc, 3) else {
+        return err(proc, "seek: bad argument block");
+    };
+    let (fd, off, base) = (args[0] & 0xffff_ffff, args[1] as i64, (args[2] & 0xffff_ffff) as u32 as i32); // fd/base are ints; offset is a vlong
+    let Some(mut chan) = proc.fd_take(fd) else {
+        return err(proc, "seek: bad fd");
+    };
+    let result = (|chan: &mut Chan| {
+        if chan.qid.typ & port::dat::QTDIR != 0 {
+            return Err("seek: is a directory");
+        }
+        let new = match base {
+            0 => off,
+            1 => match (chan.offset as i64).checked_add(off) {
+                Some(v) => v,
+                None => return Err("seek: offset overflow"),
+            },
+            _ => return Err("seek: SEEK_END unsupported this era"),
+        };
+        if new < 0 {
+            return Err("seek: negative offset");
+        }
+        chan.offset = new as u64;
+        Ok(new as u64)
+    })(&mut chan);
+    proc.fd_store(fd, chan);
+    match result {
+        Ok(v) => v,
+        Err(msg) => err(proc, msg),
+    }
+}
+
 /// ERRSTR(41): buf, n — copy the proc's errstr (NUL-terminated) into the
 /// user buffer, return 0.  libc's `%r` verb reads the errstr this way
 /// (rerrstr calls it twice) — the smoke's failure prints are its measured
@@ -1125,6 +1184,7 @@ fn sys_errstr(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     if proc.validate_user_range(buf, n, true).is_err() {
         return err(proc, "errstr: bad user buffer");
     }
+    fault::ensure_user_resident(proc, buf as usize, (buf + n) as usize); // 05-06 cold-buffer class
     let cap = (n as usize).min(ERRMAX);
     if cap == 0 {
         return 0;
@@ -1151,6 +1211,7 @@ fn sys_await(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     if proc.validate_user_range(buf, buflen, true).is_err() {
         return err(proc, "await: bad user buffer");
     }
+    fault::ensure_user_resident(proc, buf as usize, (buf + buflen) as usize); // 05-06 cold-buffer class
     let cap = buflen as usize;
     if cap == 0 {
         return err(proc, "await: zero-length buffer");
