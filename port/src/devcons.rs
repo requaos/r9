@@ -306,9 +306,11 @@ fn consctl_len() -> u64 {
 const USER_CONTENT: &[u8] = b"glenda";
 
 /// One stat(5) wire record for a file (the shared StatWriter shape; the
-/// 41-byte fixed part + three length-prefixed strings).
+/// 41-byte fixed part + FOUR length-prefixed strings — name, uid, gid,
+/// muid: libc's statcheck walks FOUR and rejects a record that ends early,
+/// convM2D.c; uid/gid/muid glenda per D-02).
 fn write_stat_record(sb: &mut [u8], name: &[u8], qid: u64, mode: u32, length: u64) -> crate::Result<u64> {
-    let need = 41 + (2 + name.len()) + (2 + 6) + (2 + 6); // uid/gid = "glenda"
+    let need = 41 + (2 + name.len()) + 3 * (2 + 6); // uid/gid/muid = "glenda"
     if sb.len() < need {
         return Err("devcons: stat buffer too small");
     }
@@ -325,6 +327,7 @@ fn write_stat_record(sb: &mut [u8], name: &[u8], qid: u64, mode: u32, length: u6
     w.string(name);
     w.string(b"glenda");
     w.string(b"glenda");
+    w.string(b"glenda"); // muid — the fourth string statcheck walks
     Ok(w.finish())
 }
 
@@ -379,7 +382,7 @@ pub fn read(c: &mut crate::dat::Chan, buf: &mut [u8], offset: u64) -> crate::Res
                 } else {
                     0
                 };
-                listing.resize(start + 41 + (2 + name.len()) + 2 * (2 + 6), 0);
+                listing.resize(start + 41 + (2 + name.len()) + 3 * (2 + 6), 0);
                 write_stat_record(&mut listing[start..], name, qid, mode, length)?;
             }
             let start = (off as usize).min(listing.len());

@@ -362,7 +362,7 @@ pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
         let mut listing = Vec::new();
         for e in guard.entries() {
             let start = listing.len();
-            listing.resize(start + 41 + (2 + e.name.len()) + 2 * (2 + 6), 0);
+            listing.resize(start + 41 + (2 + e.name.len()) + 3 * (2 + 6), 0);
             write_stat_record(
                 &mut listing[start..],
                 &e.name,
@@ -450,8 +450,10 @@ pub fn stat(c: &Chan, sb: &mut [u8]) -> Result<u64> {
     write_stat_record(sb, &e.name, e.qid_path, e.vers, QTFILE, 0o666, e.value.len() as u64)
 }
 
-/// One stat(5) wire record (the devcons/devproc shape; uid/gid glenda
-/// per D-02).  Returns the byte count (the convD2M contract).
+/// One stat(5) wire record (the devcons/devproc shape; uid/gid/muid glenda
+/// per D-02).  Returns the byte count (the convD2M contract).  FOUR
+/// strings — libc's statcheck walks four and rejects a record that ends
+/// early (convM2D.c).
 fn write_stat_record(
     sb: &mut [u8],
     name: &[u8],
@@ -461,7 +463,7 @@ fn write_stat_record(
     mode: u32,
     length: u64,
 ) -> Result<u64> {
-    let need = 41 + (2 + name.len()) + (2 + 6) + (2 + 6);
+    let need = 41 + (2 + name.len()) + 3 * (2 + 6);
     if sb.len() < need {
         return Err("devenv: stat buffer too small");
     }
@@ -478,5 +480,6 @@ fn write_stat_record(
     w.string(name);
     w.string(b"glenda");
     w.string(b"glenda");
+    w.string(b"glenda"); // muid — the fourth string statcheck walks
     Ok(w.finish())
 }

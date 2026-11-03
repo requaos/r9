@@ -236,7 +236,25 @@ fn rawimg_node_walk_stat_read_and_bounds() {
         img.len() as u64,
         "stat length is the image size"
     );
-    assert_eq!(n, 41 + (2 + name_len) + 2 * (2 + 6), "wire byte count (convD2M)");
+    // CR-01: the record is FOUR length-prefixed strings (name, uid, gid,
+    // muid — statcheck walks four and rejects a record that ends early,
+    // convM2D.c); this assertion previously pinned the 3-string count and
+    // mislabeled it "convD2M".  Walk all four and require the record to
+    // END exactly after them (statcheck's `buf != ebuf` rejection).
+    let mut p = 41usize;
+    let mut strs: Vec<String> = Vec::new();
+    for _ in 0..4 {
+        let slen = u16::from_le_bytes([sb[p], sb[p + 1]]) as usize;
+        p += 2;
+        strs.push(String::from_utf8(sb[p..p + slen].to_vec()).unwrap());
+        p += slen;
+    }
+    assert_eq!(p, n, "the record ends exactly after FOUR strings (statcheck)");
+    assert_eq!(strs[0], "rootfs.img");
+    assert_eq!(strs[1], "glenda");
+    assert_eq!(strs[2], "glenda");
+    assert_eq!(strs[3], strs[1], "muid = uid (the donor devdir's db->muid = user)");
+    assert_eq!(n, 41 + (2 + name_len) + 3 * (2 + 6), "wire byte count (FOUR strings, statcheck shape)");
 
     // Reads proxy the image bytes: the paqfs header magic (BE) heads the
     // slice, and the streaming offset advances.

@@ -165,3 +165,55 @@ fn cons_read_path_cooked_raw_del_and_consctl() {
     assert_eq!(n, 1025, "the assembled line is LINE_CAP content + newline");
     assert_eq!(big[n as usize - 1], b'\n');
 }
+
+/// CR-01: the stat(5) wire record is FOUR length-prefixed strings (name,
+/// uid, gid, muid — libc's statcheck walks four and rejects a record that
+/// ends early, convM2D.c).  Pin the shape devproc_test's parse_dir way:
+/// walk all four strings and require the record to END exactly after them
+/// (statcheck's `buf != ebuf` rejection).  Runs hook-free (stat/listing
+/// never touch the RX path), so it is safe beside the scripted suite.
+#[test]
+fn stat_records_carry_four_strings() {
+    /// Walk one record's four strings; return them.
+    fn strings_of(rec: &[u8]) -> Vec<String> {
+        let mut p = 41usize;
+        let mut out = Vec::new();
+        for _ in 0..4 {
+            let slen = u16::from_le_bytes([rec[p], rec[p + 1]]) as usize;
+            p += 2;
+            out.push(String::from_utf8(rec[p..p + slen].to_vec()).unwrap());
+            p += slen;
+        }
+        assert_eq!(p, rec.len(), "the record ends exactly after FOUR strings (statcheck)");
+        out
+    }
+
+    let root = devcons::attach();
+    let mut sb = [0u8; 128];
+
+    let n = devcons::stat(&root, &mut sb).expect("stat root") as usize;
+    assert_eq!(strings_of(&sb[..n]), ["#c", "glenda", "glenda", "glenda"], "root stat strings");
+
+    let c = devcons::walk(&root, b"cons").expect("walk cons");
+    let n = devcons::stat(&c, &mut sb).expect("stat cons") as usize;
+    assert_eq!(strings_of(&sb[..n]), ["cons", "glenda", "glenda", "glenda"], "file stat strings");
+
+    // The root directory listing's records are the same 4-string shape
+    // (libc dirread's statcheck runs per record).
+    let mut rd = devcons::open(&root, OREAD).expect("open root dir");
+    let mut listing = [0u8; 1024];
+    let n = devcons::read(&mut rd, &mut listing, u64::MAX).expect("dir read") as usize;
+    let mut i = 0usize;
+    let mut recs = 0;
+    while i + 2 <= n {
+        let sz = u16::from_le_bytes([listing[i], listing[i + 1]]) as usize;
+        if sz == 0 {
+            break;
+        }
+        strings_of(&listing[i..i + 2 + sz]);
+        recs += 1;
+        i += 2 + sz;
+    }
+    assert_eq!(i, n, "the listing parses to the last byte");
+    assert!(recs >= 4, "the listing holds the files' records");
+}

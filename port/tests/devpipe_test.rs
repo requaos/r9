@@ -18,7 +18,7 @@
 use std::sync::Mutex;
 use std::collections::VecDeque;
 
-use port::dat::{Chan, ORDWR};
+use port::dat::{Chan, ORDWR, OREAD};
 use port::devpipe::{self, PipeHooks, PIPE_Q_CAP};
 use port::namec;
 
@@ -126,6 +126,57 @@ fn pipe_reopen_after_full_close() {
     let mut buf = [0u8; 8];
     let n = devpipe::read(&mut e1b, &mut buf, u64::MAX).expect("the reopened pipe reads");
     assert_eq!(&buf[..n as usize], b"fresh", "qreopen: the stale bytes are gone");
+}
+
+/// CR-01: the stat(5) wire record is FOUR length-prefixed strings (name,
+/// uid, gid, muid — libc's statcheck walks four and rejects a record that
+/// ends early, convM2D.c).  Pin the shape devproc_test's parse_dir way:
+/// walk all four strings and require the record to END exactly after them
+/// (statcheck's `buf != ebuf` rejection).  Hook-free (stat/listing never
+/// block), so it is safe beside the scripted blocking suite.
+#[test]
+fn pipe_stat_records_carry_four_strings() {
+    /// Walk one record's four strings; return them.
+    fn strings_of(rec: &[u8]) -> Vec<String> {
+        let mut p = 41usize;
+        let mut out = Vec::new();
+        for _ in 0..4 {
+            let slen = u16::from_le_bytes([rec[p], rec[p + 1]]) as usize;
+            p += 2;
+            out.push(String::from_utf8(rec[p..p + slen].to_vec()).unwrap());
+            p += slen;
+        }
+        assert_eq!(p, rec.len(), "the record ends exactly after FOUR strings (statcheck)");
+        out
+    }
+
+    let dir = devpipe::attach();
+    let mut sb = [0u8; 128];
+    let n = devpipe::stat(&dir, &mut sb).expect("stat root") as usize;
+    assert_eq!(strings_of(&sb[..n]), ["#|", "glenda", "glenda", "glenda"], "root stat strings");
+
+    let c0 = devpipe::walk(&dir, b"data").expect("walk data");
+    let n = devpipe::stat(&c0, &mut sb).expect("stat data") as usize;
+    assert_eq!(strings_of(&sb[..n]), ["data", "glenda", "glenda", "glenda"], "end stat strings");
+
+    // The directory listing parses to the last byte in 4-string records
+    // (libc dirread's statcheck runs per record).
+    let mut rd = namec::open_chan(&dir, OREAD).expect("open root dir");
+    let mut listing = [0u8; 512];
+    let n = devpipe::read(&mut rd, &mut listing, u64::MAX).expect("dir read") as usize;
+    let mut i = 0usize;
+    let mut recs = 0;
+    while i + 2 <= n {
+        let sz = u16::from_le_bytes([listing[i], listing[i + 1]]) as usize;
+        if sz == 0 {
+            break;
+        }
+        strings_of(&listing[i..i + 2 + sz]);
+        recs += 1;
+        i += 2 + sz;
+    }
+    assert_eq!(i, n, "the listing parses to the last byte");
+    assert_eq!(recs, 2, "the listing holds data and data1");
 }
 
 // ---------------------------------------------------------------------------

@@ -291,7 +291,22 @@ fn devenv_device_flow_over_dynamic_groups() {
     assert_eq!(&sb[43..43 + name_len], b"cputype");
     let length = u64::from_le_bytes(sb[33..41].try_into().unwrap());
     assert_eq!(length, 10, "stat length is the value's length");
-    assert_eq!(n, 41 + (2 + name_len) + 2 * (2 + 6), "wire byte count (convD2M)");
+    // CR-01: the record is FOUR length-prefixed strings (name, uid, gid,
+    // muid — statcheck walks four and rejects a record that ends early,
+    // convM2D.c); this assertion previously pinned the 3-string count and
+    // mislabeled it "convD2M".  Walk all four and require the record to
+    // END exactly after them (statcheck's `buf != ebuf` rejection).
+    let mut p = 41usize;
+    let mut strs: Vec<String> = Vec::new();
+    for _ in 0..4 {
+        let slen = u16::from_le_bytes([sb[p], sb[p + 1]]) as usize;
+        p += 2;
+        strs.push(String::from_utf8(sb[p..p + slen].to_vec()).unwrap());
+        p += slen;
+    }
+    assert_eq!(p, n, "the record ends exactly after FOUR strings (statcheck)");
+    assert_eq!(strs, ["cputype", "glenda", "glenda", "glenda"], "name, uid, gid, muid");
+    assert_eq!(n, 41 + (2 + name_len) + 3 * (2 + 6), "wire byte count (FOUR strings, statcheck shape)");
     let n = devenv::stat(&root, &mut sb).expect("stat root") as usize;
     let name_len = u16::from_le_bytes([sb[41], sb[42]]) as usize;
     assert_eq!(&sb[43..43 + name_len], b"#e");

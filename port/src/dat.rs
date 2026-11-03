@@ -172,8 +172,9 @@ impl Chan {
 /// Little-endian field writer for the stat(5) wire buffer (stat(5) is LE).
 /// 05-04 Task 3: lifted from devroot.rs so every device serves the same
 /// wire shape (sys_stat/sys_fstat's dispatch consumes the byte count from
-/// the size prefix).  The caller sizes `buf` (fixed part + the three
-/// length-prefixed strings); `finish` writes the size prefix last and
+/// the size prefix).  The caller sizes `buf` (fixed part + the FOUR
+/// length-prefixed strings — name/uid/gid/muid; libc's statcheck walks
+/// four, convM2D.c); `finish` writes the size prefix last and
 /// returns the total byte count (convD2M's contract).
 pub(crate) struct StatWriter<'a> {
     pub buf: &'a mut [u8],

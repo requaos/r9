@@ -68,6 +68,23 @@ fn devdup_walk_validation() {
     assert!(devdup::walk(&c, b"0").is_err(), "walk under a file errors");
 }
 
+/// CR-01: walk one stat(5) record's FOUR length-prefixed strings (name,
+/// uid, gid, muid — libc's statcheck walks four and rejects a record that
+/// ends early, convM2D.c), requiring the record to END exactly after them
+/// (statcheck's `buf != ebuf` rejection; devproc_test's parse_dir shape).
+fn stat_strings(rec: &[u8]) -> Vec<String> {
+    let mut p = 41usize;
+    let mut out = Vec::new();
+    for _ in 0..4 {
+        let slen = u16::from_le_bytes([rec[p], rec[p + 1]]) as usize;
+        p += 2;
+        out.push(String::from_utf8(rec[p..p + slen].to_vec()).unwrap());
+        p += slen;
+    }
+    assert_eq!(p, rec.len(), "the record ends exactly after FOUR strings (statcheck)");
+    out
+}
+
 /// The combined device flow (one test installs both set-once hook sets —
 /// the 05-05 devenv pattern):
 ///
@@ -132,6 +149,20 @@ fn devdup_devsrv_device_flow() {
     assert!(body.windows(3).any(|w| w == &[0x00, 0x00, b'0']) || body.windows(1).any(|w| w == b"0"), "fd 0 listed");
     assert!(body.windows(1).any(|w| w == b"1"), "fd 1 listed");
 
+    // CR-01: every listing record is the 4-string stat(5) shape and the
+    // listing parses to the last byte (libc dirread's statcheck per
+    // record).
+    let mut i = 0usize;
+    while i + 2 <= n {
+        let sz = u16::from_le_bytes([body[i], body[i + 1]]) as usize;
+        if sz == 0 {
+            break;
+        }
+        stat_strings(&body[i..i + 2 + sz]);
+        i += 2 + sz;
+    }
+    assert_eq!(i, n, "the devdup listing parses to the last byte (4-string records)");
+
     // --- devsrv: the #s registry (boot's srvcreate contract). ---
     let srv_root = namec::namec(b"#s", &dummy, &dummy, &pg, namec::NamecMode::Open)
         .expect("#s must resolve through the registry");
@@ -184,12 +215,25 @@ fn devdup_devsrv_device_flow() {
     let n = devsrv::read(&mut srv_rd, &mut listing, u64::MAX).expect("dir read") as usize;
     assert!(listing[..n].windows(4).any(|w| w == b"boot"), "the listing names boot");
 
-    // stat: the service reports its name/perm.
+    // CR-01: the listing's records are the 4-string stat(5) shape, parsing
+    // to the last byte.
+    let mut i = 0usize;
+    while i + 2 <= n {
+        let sz = u16::from_le_bytes([listing[i], listing[i + 1]]) as usize;
+        if sz == 0 {
+            break;
+        }
+        stat_strings(&listing[i..i + 2 + sz]);
+        i += 2 + sz;
+    }
+    assert_eq!(i, n, "the devsrv listing parses to the last byte (4-string records)");
+
+    // stat: the service reports its name/perm — as a FOUR-string record
+    // (name, uid, gid, muid; CR-01's statcheck shape).
     let mut sb = [0u8; 256];
     let n = devsrv::stat(&walked, &mut sb).expect("stat service") as usize;
-    let name_len = u16::from_le_bytes([sb[41], sb[42]]) as usize;
-    assert_eq!(&sb[43..43 + name_len], b"boot");
-    assert!(n > 41);
+    let strs = stat_strings(&sb[..n]);
+    assert_eq!(strs, ["boot", "glenda", "glenda", "glenda"], "name, uid, gid, muid");
 
     namec::close_chan(&posted);
     let _ = e0; // the pair's end 0 (fd-table copy) is covered above

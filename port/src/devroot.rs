@@ -222,19 +222,22 @@ impl DevRoot {
     }
 
     /// Minimal stat: the Plan 9 stat(5) wire shape — fixed fields plus the
-    /// name/uid/gid strings from the PaqDir (qid path+vers+type, mode,
+    /// name/uid/gid/muid strings from the PaqDir (qid path+vers+type, mode,
     /// mtime, length).  `sb` must be large enough; the size prefix is
     /// written last.  Returns the byte count (prefix included — the
-    /// convD2M/sysstat contract; 05-04 Task 3).
+    /// convD2M/sysstat contract; 05-04 Task 3).  FOUR strings — libc's
+    /// statcheck walks four and rejects a record that ends early
+    /// (convM2D.c); muid = uid per the donor's devdir (db->muid = user).
     pub fn stat(&self, c: &Chan, sb: &mut [u8]) -> Result<u64> {
         let dir = c.paqdir.as_ref().ok_or("devroot: stat of unattached chan")?;
         // Fixed part: size[2] type[2] dev[4] qid[13] mode[4] atime[4]
-        // mtime[4] length[8] = 41 bytes, then three length-prefixed strings.
+        // mtime[4] length[8] = 41 bytes, then four length-prefixed strings.
         let fixed = 41;
         let need = fixed
             + (2 + dir.name.len())
             + (2 + dir.uid.len())
-            + (2 + dir.gid.len());
+            + (2 + dir.gid.len())
+            + (2 + dir.uid.len()); // muid = uid (read-only tree; devdir's db->muid = user)
         if sb.len() < need {
             return Err("devroot: stat buffer too small");
         }
@@ -251,6 +254,7 @@ impl DevRoot {
         w.string(&dir.name);
         w.string(&dir.uid);
         w.string(&dir.gid);
+        w.string(&dir.uid); // muid — the fourth string statcheck walks
         Ok(w.finish())
     }
 
