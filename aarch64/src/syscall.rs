@@ -1002,14 +1002,17 @@ fn sys_exec(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
         return err(proc, "exec: no namespace (pre-exec)");
     };
+    println!("execdbg: namec start pid={} path={}", proc.pid, core::str::from_utf8(&path).unwrap_or("?"));
     let c = match namec::namec(&path, slash, dot, &proc.pgrp, NamecMode::Open) {
         Ok(c) => c,
         Err(msg) => return err(proc, msg),
     };
+    println!("execdbg: namec ok pid={} dev={} qidpath={:#x}", proc.pid, c.dev, c.qid.path);
     let opened = match namec::open_chan(&c, OEXEC) {
         Ok(c) => c,
         Err(msg) => return err(proc, msg),
     };
+    println!("execdbg: open ok pid={}", proc.pid);
     let backing = match opened.dev {
         DEV_ROOT => {
             let Some(root) = port::devroot::root() else {
@@ -1032,12 +1035,15 @@ fn sys_exec(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         }
         _ => return err(proc, "exec: path is not an executable source"),
     };
+    println!("execdbg: backing ok pid={}", proc.pid);
     // The exec chan is a transient (never fd-installed): close-dispatch it
     // (devmnt Tclunks the fid — the staged bytes now own the content).
     port::namec::close_chan(&opened);
+    println!("execdbg: clunked pid={}", proc.pid);
     let leaf = path.split(|&b| b == b'/').filter(|c| !c.is_empty()).last().unwrap_or(&path[..]);
     let name = core::str::from_utf8(leaf).unwrap_or("?");
     let arg_slices: Vec<&[u8]> = argv.iter().map(|a| a.as_slice()).collect();
+    println!("execdbg: pre-replace pid={}", proc.pid);
     match exec::exec_replace(proc, backing, name, &arg_slices, frame) {
         // dispatch writes frame.x0 = tos_va — the same value exec_replace
         // seeded into the frame's x0, so the writeback agrees by
