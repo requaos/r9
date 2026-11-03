@@ -301,6 +301,7 @@ pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
             }
         }
         (h.unwrap().block)(); // park mid-syscall; a write/close wakes us
+        crate::println!("pipedbg: read woke pid={}", (h.unwrap().current)()); // gatedbg
     }
 }
 

@@ -794,6 +794,7 @@ fn cons_read(buf: &mut [u8]) -> crate::Result<u64> {
                 let mut inq = INPUT.lock(&node);
                 inq.waiters.retain(|p| *p != pid);
             }
+            crate::println!("constrc: return pid={} n={}", pid, n); // gatedbg
             return Ok(n);
         }
         // 3. Nothing to return — register as a waiter and block until
@@ -805,6 +806,8 @@ fn cons_read(buf: &mut [u8]) -> crate::Result<u64> {
             }
             registered = true;
         }
+        crate::println!("constrc: block pid={}", pid); // gatedbg
         (hooks.block)();
+        crate::println!("constrc: woke pid={}", pid); // gatedbg
     }
 }
