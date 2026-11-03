@@ -33,7 +33,7 @@
 
 use alloc::vec::Vec;
 
-use port::dat::{DEV_CONS, DEV_ENV, DEV_PIPE, DEV_PROC, DEV_ROOT, OEXEC};
+use port::dat::{DEV_CONS, DEV_DUP, DEV_ENV, DEV_PIPE, DEV_PROC, DEV_ROOT, DEV_SRV, OEXEC, OTRUNC};
 use port::mcslock::LockNode;
 use port::namec::{self, NamecMode};
 use port::pgrp::{MAFTER, MBEFORE, MMASK, MORDER};
@@ -54,6 +54,8 @@ const EXITS: u64 = 8;
 const OPEN: u64 = 14;
 const RFORK: u64 = 19;
 const PIPE: u64 = 21;
+const CREATE: u64 = 22;
+const FD2PATH: u64 = 23;
 const BRK_: u64 = 24;
 const NOTIFY: u64 = 28;
 const NOTED: u64 = 29;
@@ -110,6 +112,8 @@ static DISPATCH: [Option<Handler>; 55] = {
     t[OPEN as usize] = Some(sys_open);
     t[RFORK as usize] = Some(sys_rfork);
     t[PIPE as usize] = Some(sys_pipe);
+    t[CREATE as usize] = Some(sys_create);
+    t[FD2PATH as usize] = Some(sys_fd2path);
     t[NOTIFY as usize] = Some(sys_notify);
     t[NOTED as usize] = Some(sys_noted);
     t[BRK_ as usize] = Some(sys_brk_);
@@ -278,6 +282,13 @@ fn sys_pwrite(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             // wake after the bytes land.
             port::devpipe::write(&mut chan, unsafe { user_slice(buf, n) }, off)
         }
+        DEV_DUP => Err("devdup: not writable (open #d/N to reach the fd)"),
+        DEV_SRV => {
+            // devsrv (05-06): writing a decimal fd number to a service
+            // file registers it (boot's srvcreate — FATAL on failure, so
+            // this must actually work).
+            port::devsrv::write(&mut chan, unsafe { user_slice(buf, n) }, off)
+        }
         _ => Err("pwrite: unknown device"),
     };
     proc.fd_store(fd, chan);
@@ -337,6 +348,18 @@ fn sys_pread(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             // bytes, blocks on empty (wake on write/close), EOF on
             // hangup.  Never touches the chan offset (streaming).
             port::devpipe::read(&mut chan, unsafe { user_slice_mut(buf, n) }, off)
+        }
+        DEV_DUP => {
+            // devdup (05-06): the root dir listing of the CALLING proc's
+            // open fds (rcmain's `. -i '#d/0'` opens the fd file — its
+            // reads dispatch to the REFERENCED chan's device, not here).
+            port::devdup::read(&mut chan, unsafe { user_slice_mut(buf, n) }, off)
+        }
+        DEV_SRV => {
+            // devsrv (05-06): the root dir listing of registered
+            // services (a service file's reads flow through its posted
+            // chan — open returns it, the donor srvopen).
+            port::devsrv::read(&mut chan, unsafe { user_slice_mut(buf, n) }, off)
         }
         _ => Err("pread: unknown device"),
     };
@@ -885,6 +908,125 @@ fn sys_dup(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         }
         None => err(proc, "dup: bad new fd"),
     }
+}
+
+/// CREATE(22): path, mode, perm — 05-06 Task 2 (measured ×67 in the
+/// 05-03 trace: every env-var set + boot's srvcreate).  Donor syscreate +
+/// chan.c's Acreate: resolve the PARENT (open-style union redirect), then
+/// if the final component EXISTS open it OTRUNC (unless OEXCL → Eexist),
+/// else dispatch the device's create op (devenv/devsrv are this phase's
+/// creators; a device without a create op errors loudly).  The donor's
+/// create-then-fail retry (the create/create race) is unreachable this
+/// era: syscalls are serialized.  Directory creates (perm&DMDIR) have no
+/// measured caller — loud error, never a silent fake.
+fn sys_create(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
+    let Some(args) = sargs(frame, proc, 3) else {
+        return err(proc, "create: bad argument block");
+    };
+    let (path_va, mode, perm) = (args[0], (args[1] & 0xffff_ffff) as u32, (args[2] & 0xffff_ffff) as u32); // mode/perm are ints
+    if perm & 0x8000_0000 != 0 {
+        // DMDIR
+        return err(proc, "create: directories unsupported this era");
+    }
+    let path = match copy_user_str(proc, path_va, ERRMAX) {
+        Ok(path) => path,
+        Err(msg) => return err(proc, msg),
+    };
+    // Split parent/final at the last '/': "#s/boot" → ("#s", "boot");
+    // "/env/x" → ("/env", "x"); "/x" → ("/", "x"); bare "x" → the dot
+    // (no measured bare caller this era; the dot redirect below keeps it
+    // correct).
+    let split = path.iter().rposition(|&b| b == b'/');
+    let final_name: &[u8] = match split {
+        Some(i) => &path[i + 1..],
+        None => &path[..],
+    };
+    if final_name.is_empty() {
+        return err(proc, "create: empty final component");
+    }
+
+    let pg = proc.pgrp.clone();
+    let node = LockNode::new();
+    let guard = pg.lock(&node);
+    let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
+        return err(proc, "create: no namespace (pre-exec)");
+    };
+    let parent = match split {
+        Some(0) => namec::namec(b"/", slash, dot, &guard, NamecMode::Open),
+        Some(i) => namec::namec(&path[..i], slash, dot, &guard, NamecMode::Open),
+        None => {
+            // The dot itself, with the open-mode final redirect (a dot
+            // covered by a mount point creates in the union head).
+            let mut d = dot.dup();
+            if let Some(chain) = guard.chain_at(&d.path) {
+                let Some(head) = chain.first() else {
+                    return err(proc, "create: empty union chain");
+                };
+                let mut nc = head.to.dup();
+                nc.path = d.path.clone();
+                d = nc;
+            }
+            Ok(d)
+        }
+    };
+    let parent = match parent {
+        Ok(c) => c,
+        Err(msg) => return err(proc, msg),
+    };
+    if parent.qid.typ & port::dat::QTDIR == 0 {
+        return err(proc, "create: parent not a directory");
+    }
+    let opened = match namec::walk_one(&parent, final_name) {
+        Ok(existing) => {
+            // The donor's Acreate existing-file arm: OEXCL → Eexist;
+            // otherwise open OTRUNC (the create-on-existing fallback).
+            if mode & port::dat::OEXCL != 0 {
+                return err(proc, "create: file exists");
+            }
+            match namec::open_chan(&existing, mode | OTRUNC) {
+                Ok(c) => c,
+                Err(msg) => return err(proc, msg),
+            }
+        }
+        Err(_) => {
+            match namec::create_chan(&parent, final_name, mode & !(port::dat::OEXCL | port::dat::OCEXEC), perm) {
+                Ok(c) => c,
+                Err(msg) => return err(proc, msg),
+            }
+        }
+    };
+    drop(guard);
+    match proc.fd_install_lowest(opened) {
+        Some(slot) => slot,
+        None => err(proc, "create: no free fd"),
+    }
+}
+
+/// FD2PATH(23): fd, buf, n — 05-06 Task 2 (measured ×3 in the 05-03
+/// trace).  Donor sysfd2path: the fd's chan's walked path (chanpath)
+/// into the validated user buffer, NUL-terminated and truncated to n
+/// (Harvey libc: fd2path(int, char*, int) — n is int-width, masked).
+/// Returns 0.  The path bookkeeping is the walk-maintained one
+/// (fd2path's raison d'être) — never the errstr side channel.
+fn sys_fd2path(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
+    let Some(args) = sargs(frame, proc, 3) else {
+        return err(proc, "fd2path: bad argument block");
+    };
+    let (fd, buf_va, n) = (args[0] & 0xffff_ffff, args[1], args[2] & 0xffff_ffff); // fd, n are ints
+    if proc.validate_user_range(buf_va, n, true).is_err() {
+        return err(proc, "fd2path: bad user buffer");
+    }
+    let Some(path) = proc.fd_path(fd) else {
+        return err(proc, "fd2path: bad fd");
+    };
+    let dst = unsafe { user_slice_mut(buf_va, n) };
+    if dst.is_empty() {
+        return 0;
+    }
+    let copy = path.len().min(dst.len() - 1);
+    dst[..copy].copy_from_slice(&path[..copy]);
+    dst[copy] = 0;
+    0
 }
 
 /// RFORK(19): flag.  Donor sysrfork flag validation (9front@350266104f

@@ -1074,6 +1074,30 @@ pub fn post_note(pid: u64, msg: &[u8]) -> Result<()> {    let node = LockNode::n
     Ok(())
 }
 
+/// devdup/devsrv's fd resolver hook (05-06): the CALLING proc's fd N as
+/// a reference clone (the donor fdtochan incref shape — a pipe end's
+/// open count bumps, so the resolved chan is a real second reference the
+/// close dispatch balances).  None before the first proc exists.
+pub fn current_fd_resolve(fd: u64) -> Option<Chan> {
+    let cur = current_proc();
+    if cur.is_null() {
+        return None;
+    }
+    unsafe { (*cur).fd_ref_clone(fd) }
+}
+
+/// devdup's listing hook (05-06): the CALLING proc's open fds as
+/// (fd, mode) pairs (the `#d` root directory read).
+pub fn current_fd_list() -> Vec<(u64, u32)> {
+    let cur = current_proc();
+    if cur.is_null() {
+        return Vec::new();
+    }
+    let p = unsafe { &*cur };
+    let node = LockNode::new();
+    p.fd_group.lock(&node).list_open()
+}
+
 /// EXITS (04-07): post the child's wait record to the parent and wake it
 /// if it sits Blocked in AWAIT (Blocked → Ready; blocked_in_kernel stays
 /// set — the parent resumes through the sched loop's swtch).  The record

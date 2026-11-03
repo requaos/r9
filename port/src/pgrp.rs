@@ -187,7 +187,7 @@ impl Pgrp {
 
     /// namec's mount consult: the ordered union chain at a walked path,
     /// if the path is a mount point.
-    pub(crate) fn chain_at(&self, path: &[u8]) -> Option<&[MountEntry]> {
+    pub fn chain_at(&self, path: &[u8]) -> Option<&[MountEntry]> {
         let key = normalize(path);
         self.mounts.iter().find(|m| m.target == key).map(|m| m.chain.as_slice())
     }

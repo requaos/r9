@@ -434,6 +434,14 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
         block: proc::pipe_block_current,
         wake: proc::pipe_wake,
     });
+    // 05-06: devdup's resolver/listing hooks and devsrv's fd resolver —
+    // the `#d`/`#s` devices resolve the OPERATING proc's fd table through
+    // these (port can't see PROC_TABLE — the devproc set_post_hook idiom).
+    port::devdup::set_hooks(port::devdup::DupHooks {
+        resolve: proc::current_fd_resolve,
+        list: proc::current_fd_list,
+    });
+    port::devsrv::set_resolve_hook(proc::current_fd_resolve);
 
     // 05-05 (D-07, RESEARCH Pattern 3 / Pitfall 1): the kernel-seeded
     // ROOT env group — the ONE mechanism replacing both 9k's #ec config

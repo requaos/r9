@@ -21,7 +21,7 @@
 //! devroot.rs's header); the registry is a plain match over attach fns,
 //! the established free-function device idiom.
 
-use crate::dat::{Chan, DEV_CONS, DEV_ENV, DEV_PIPE, DEV_PROC, DEV_ROOT};
+use crate::dat::{Chan, DEV_CONS, DEV_DUP, DEV_ENV, DEV_PIPE, DEV_PROC, DEV_ROOT, DEV_SRV};
 use crate::pgrp::Pgrp;
 use crate::Result;
 
@@ -63,6 +63,10 @@ fn registry_attach(rune: char, spec: &[u8]) -> Result<Chan> {
         // 05-06: a FRESH pipe pair per attach (9k's pipeattach) — the
         // sys_pipe handler's entry point.
         '|' => Ok(crate::devpipe::attach()),
+        // 05-06: '#d' per-fd files (rcmain's interactive `. -i '#d/0'`)
+        // and the '#s' service registry (boot's srvcreate).
+        'd' => Ok(crate::devdup::attach()),
+        's' => Ok(crate::devsrv::attach()),
         _ => Err("namec: unknown # device"),
     }
 }
@@ -100,6 +104,8 @@ fn dev_walk(c: &Chan, comp: &[u8]) -> Result<Chan> {
         DEV_PROC => crate::devproc::walk(c, comp),
         DEV_ENV => crate::devenv::walk(c, comp),
         DEV_PIPE => crate::devpipe::walk(c, comp),
+        DEV_DUP => crate::devdup::walk(c, comp),
+        DEV_SRV => crate::devsrv::walk(c, comp),
         _ => Err("namec: chan with unknown device index"),
     }
 }
@@ -173,6 +179,14 @@ pub fn namec(path: &[u8], slash: &Chan, dot: &Chan, pg: &Pgrp, mode: NamecMode) 
     Ok(c)
 }
 
+/// A single-component walk from an already-resolved chan through the
+/// device dispatch (05-06: sys_create's final-component probe).  No
+/// mount-point consultation — the caller's parent already resolved with
+/// the union semantics it needed.
+pub fn walk_one(c: &Chan, name: &[u8]) -> Result<Chan> {
+    dev_walk(c, name)
+}
+
 /// The open dispatch for a resolved chan (per-device open by dev index —
 /// the registry's twin).  Each device's open enforces its own mode
 /// discipline (devroot rejects write-side modes and OTRUNC; the flag bits
@@ -192,6 +206,8 @@ pub fn open_chan(c: &Chan, mode: u32) -> Result<Chan> {
         DEV_PROC => crate::devproc::open(c, access)?,
         DEV_ENV => crate::devenv::open(c, mode)?,
         DEV_PIPE => crate::devpipe::open(c, access)?,
+        DEV_DUP => crate::devdup::open(c, access)?,
+        DEV_SRV => crate::devsrv::open(c, mode)?,
         _ => return Err("namec: chan with unknown device index"),
     };
     // 05-06: the donor's COPEN — every funnel-opened chan is marked;
@@ -210,8 +226,25 @@ pub fn stat_chan(c: &Chan, sb: &mut [u8]) -> Result<u64> {
         DEV_PROC => crate::devproc::stat(c, sb),
         DEV_ENV => crate::devenv::stat(c, sb),
         DEV_PIPE => crate::devpipe::stat(c, sb),
+        DEV_DUP => crate::devdup::stat(c, sb),
+        DEV_SRV => crate::devsrv::stat(c, sb),
         _ => Err("namec: chan with unknown device index"),
     }
+}
+
+/// The create dispatch (05-06's sys_create — the donor chan.c Acreate's
+/// device half): per-device create by dev index, returning the new chan
+/// OPEN (copen marked here — the open funnel's twin).  Devices without a
+/// create op error loudly (never a silent no-op); devenv (env keys) and
+/// devsrv (service names) are this phase's two creators.
+pub fn create_chan(c: &Chan, name: &[u8], mode: u32, perm: u32) -> Result<Chan> {
+    let mut created = match c.dev {
+        DEV_ENV => crate::devenv::create(c, name, mode, perm)?,
+        DEV_SRV => crate::devsrv::create(c, name, mode, perm)?,
+        _ => return Err("namec: device has no create"),
+    };
+    created.copen = true;
+    Ok(created)
 }
 
 /// The close dispatch (05-06 — the donor's devclose): called when an
