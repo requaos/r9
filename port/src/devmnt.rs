@@ -330,12 +330,10 @@ impl Mnt {
     /// the session's rx scratch).
     fn transact(&self, _busy: &Busy<'_>, msg: &[u8], expect_type: u8, expect_tag: u16) -> Result<usize> {
         let core = unsafe { &mut *self.core.get() };
-        println!("devmntdbg: T type={} tag={} len={}", msg[4], expect_tag, msg.len());
         let w = core.io.write_msg(msg)?;
         if w as usize != msg.len() {
             return Err("devmnt: short write on the 9P connection");
         }
-        println!("devmntdbg: T sent tag={}", expect_tag);
         // Frame the reply: the 4-byte size prefix first.
         let mut got = 0usize;
         while got < 4 {
@@ -366,7 +364,6 @@ impl Mnt {
         }
         let rtype = core.rx[4];
         let rtag = u16::from_le_bytes(core.rx[5..7].try_into().unwrap());
-        println!("devmntdbg: R type={} tag={} size={}", rtype, rtag, size);
         if rtype == RERROR {
             let mut cur = RepCur::new(&core.rx[7..size]);
             let ename = cur.string().unwrap_or_else(|_| b"<malformed Rerror>".to_vec());
