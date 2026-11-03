@@ -965,7 +965,6 @@ fn sys_exec(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         return err(proc, "exec: bad argument block");
     };
     let (path_va, argv_va) = (args[0], args[1]);
-    println!("gatedbg: exec enter pid={}", proc.pid);
     let path = match copy_user_str(proc, path_va, ERRMAX) {
         Ok(path) => path,
         Err(msg) => return err(proc, msg),
@@ -1007,7 +1006,6 @@ fn sys_exec(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         Ok(c) => c,
         Err(msg) => return err(proc, msg),
     };
-    println!("gatedbg: exec namec ok pid={} dev={}", proc.pid, c.dev);
     let opened = match namec::open_chan(&c, OEXEC) {
         Ok(c) => c,
         Err(msg) => return err(proc, msg),
@@ -1369,14 +1367,10 @@ fn sys_rfork(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         }
         return 0;
     }
-    println!("gatedbg: rfork pid={} flag={:#x}", proc.pid, flag);
     match proc::rfork_clone(proc, frame, flag) {
         // The parent's wire result is the child pid; the child's copied
         // frame carries x0 = 0 (donor forkchild).
-        Ok(pid) => {
-            println!("gatedbg: rfork ok pid={} child={}", proc.pid, pid);
-            pid
-        }
+        Ok(pid) => pid,
         Err(msg) => err(proc, msg),
     }
 }
@@ -1605,7 +1599,6 @@ fn sys_exits(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     } else {
         copy_user_str(proc, msg_va, ERRMAX).unwrap_or_default()
     };
-    println!("gatedbg: exits pid={}", proc.pid);
     exit_tail(proc, &msg);
 }
 

@@ -122,6 +122,11 @@ pub fn tick() {
         // exactly as preempt()/reschedule() do (the proc.rs module-header
         // discipline: the lock is only ever held in IRQ-masked context).
         crate::proc::tick_timeouts(n + 1);
+        // 05-REVIEW-FIX: poll the UART FIFO directly before the wake check
+        // — a byte that misses its RX/RT interrupt is collected here
+        // within one tick (the gate's lost-byte wedge signature),
+        // never lost until the next byte arrives.
+        crate::platform::pl011::cons_rx_poll();
         if crate::platform::pl011::cons_rx_pending() {
             crate::proc::cons_input_wake();
         }

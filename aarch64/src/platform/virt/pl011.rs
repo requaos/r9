@@ -189,6 +189,24 @@ pub fn cons_rx_ring_pos() -> (usize, usize) {
     (rx.head, rx.tail)
 }
 
+/// 05-REVIEW-FIX (the gate's lost-byte wedge): the tick's direct FIFO
+/// poll — drain any FIFO bytes the RX/RT interrupt path missed into the
+/// ring (the IRQ handler's own discipline, reused).  The observed wedge
+/// signature (a traced gate failure): rc's cons read woke on a typed
+/// command's byte PREFIX, the final byte never interrupted, and the
+/// reader re-blocked forever.  qemu's PL011 model raises INT_RX per
+/// received char, but a byte landing in the drain→clear window can miss
+/// its interrupt; polling here bounds the delivery delay at one tick
+/// (1 ms) instead of losing the byte until the next one arrives.
+/// Tick context is IRQ-masked and same-priority IRQs never nest, so the
+/// ring's single-writer discipline is preserved.
+#[cfg(dev_exec)]
+pub fn cons_rx_poll() {
+    if cons_rx_fifo_pending() == Some(true) {
+        rx_irq_cons_buffer();
+    }
+}
+
 /// INTID 33 handler: drain the RX FIFO and echo every byte verbatim via raw
 /// DR writes.  LOCK-FREE by construction (research P8): no println!, no
 /// Console access -- the Console mcslock may be held by the interrupted
