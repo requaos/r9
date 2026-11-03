@@ -1010,6 +1010,17 @@ fn sched_loop() -> ! {
 /// assignment: state, current-proc pointer, CURKSTACK, CURFRAME, TTBR0) so
 /// the resumed proc's trap-return tail reloads its OWN frame, never the
 /// previous proc's.  None when no other Ready proc exists.
+///
+/// 05-08: the current proc is NOT skipped — only its scan PRIORITY wraps
+/// (the round-robin start is cur+1, so cur is picked last).  The old
+/// skip-current rule deadlocked the cons read path: a proc that blocks
+/// via sched() REMAINS the current proc while the sched loop runs, so
+/// when the tick's cons_input_wake readied it (Blocked → Ready) the scan
+/// skipped right past it and it never resumed.  (The pipe/await wakes
+/// never tripped this because their waker runs in a DIFFERENT proc's
+/// context — the wakee is not current then.)  At pick_next entry the
+/// current proc is normally Blocked/Moribund (excluded by the state
+/// check); a readied current is exactly the proc that must be resumable.
 fn pick_next() -> Option<Resume> {
     let cur = current_proc();
     let cur_pid = unsafe { cur.as_ref().map(|p| p.pid) };
@@ -1020,9 +1031,6 @@ fn pick_next() -> Option<Resume> {
     let start = cur_idx.map(|i| i + 1).unwrap_or(0);
     for off in 0..MAX_PROCS {
         let i = (start + off) % MAX_PROCS;
-        if Some(i) == cur_idx {
-            continue;
-        }
         let Some(p) = table.procs[i].as_mut() else { continue };
         if p.state != ProcState::Ready {
             continue;
