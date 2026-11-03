@@ -1315,20 +1315,36 @@ fn sys_rfork(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     }
 }
 
-/// SEEK(39): fd, offset (vlong — Plan 9's one full-width 64-bit int
-/// type, no masking), base (int) — 05-06 Task 3 (the gate's
+/// SEEK(39): rv, fd, offset, base — 05-06 Task 3 (the gate's
 /// trace-settled gap: paqfs's libbio Bseek — measured ×72 in the 05-03
-/// trace; the loud wall named it).  Donor sysseek (9k sysfile.c): set the
-/// chan's offset — base 0 absolute, base 1 relative (negative deltas
-/// allowed, the result never below 0) — directories error (donor
-/// Eisdir).  base 2 (SEEK_END) needs the file length and has no measured
-/// pre-wall caller — a loud error, never silent.  Returns the new offset
-/// (vlong on the wire — bio's Bseek checks it).
+/// trace; the loud wall named it), CORRECTED 05-07 (the hinge gate's
+/// iterate-discipline): **the aarch64 syscall ABI is FOUR arguments —
+/// `_seek(vlong *rv, int fd, vlong offset, int base)`** (the generated
+/// stub's shape, sys/src/libc/9syscall/mkfile's `j=_seek` arm + the
+/// aarch64 `_seek.c` wrapper; the donor sysfile.c sysseek's own comment:
+/// "The system call actually has 4 arguments... the first argument is
+/// where the offset is returned").  The result offset is WRITTEN through
+/// the validated rv pointer; the wire result is 0 (error: -1 + errstr,
+/// rv untouched — the wrapper then yields -1LL).  Donor sseek semantics:
+/// base 0 absolute, base 1 relative (negative deltas allowed, never below
+/// 0), directories error (Eisdir), SEEK_END loud-unsupported.
+///
+/// (The 05-06 version read fd/offset/base from slots 0/1/2 and returned
+/// the offset on the wire — wrong for this ABI; its gate never caught it
+/// because every exercised caller's seek was bio's in-buffer fast path.
+/// The hinge gate's paqfs blockRead seeks for real and checks.)
 fn sys_seek(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
-    let Some(args) = sargs(frame, proc, 3) else {
+    let Some(args) = sargs(frame, proc, 4) else {
         return err(proc, "seek: bad argument block");
     };
-    let (fd, off, base) = (args[0] & 0xffff_ffff, args[1] as i64, (args[2] & 0xffff_ffff) as u32 as i32); // fd/base are ints; offset is a vlong
+    // rv is a full pointer; fd/base are ints (the width discipline);
+    // offset is a vlong.
+    let (rv, fd, off, base) =
+        (args[0], args[1] & 0xffff_ffff, args[2] as i64, (args[3] & 0xffff_ffff) as u32 as i32);
+    if proc.validate_user_range(rv, 8, true).is_err() {
+        return err(proc, "seek: bad result pointer");
+    }
+    fault::ensure_user_resident(proc, rv as usize, (rv + 8) as usize); // 05-06 cold-buffer class
     let Some(mut chan) = proc.fd_take(fd) else {
         return err(proc, "seek: bad fd");
     };
@@ -1352,7 +1368,11 @@ fn sys_seek(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     })(&mut chan);
     proc.fd_store(fd, chan);
     match result {
-        Ok(v) => v,
+        Ok(v) => {
+            // The donor's *rv write-back (the wrapper's real return).
+            unsafe { (rv as *mut u64).write(v) };
+            0
+        }
         Err(msg) => err(proc, msg),
     }
 }
