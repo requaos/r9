@@ -1500,8 +1500,10 @@ fn sys_sleep(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             proc::preempt(); // the donor's yield()
             return 0;
         }
+        println!("gatedbg: sleep pid={} ms={}", proc.pid, ms);
         proc.sleep_until = crate::platform::timer::ticks() + ms;
         proc::sched();
+        println!("gatedbg: sleep woke pid={}", proc.pid);
         0
     }
     #[cfg(not(dev_exec))]
@@ -1576,7 +1578,9 @@ fn sys_await(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         // context; resumes here when a child's EXITS posts a record and
         // wakes us.  The trap frame on this proc's own kstack survives
         // other processes' traps meanwhile (T-04-14's whole point).
+        println!("gatedbg: await blocks pid={}", proc.pid);
         proc::sched();
+        println!("gatedbg: await woke pid={}", proc.pid);
     }
 }
 
@@ -1599,6 +1603,7 @@ fn sys_exits(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     } else {
         copy_user_str(proc, msg_va, ERRMAX).unwrap_or_default()
     };
+    println!("gatedbg: exits pid={}", proc.pid);
     exit_tail(proc, &msg);
 }
 

@@ -482,8 +482,18 @@ impl QuickFit {
         // list — a permanent leak).  Both are fixed by preserving the
         // head: a head removal returns the next node, a mid-list removal
         // returns the original head, and a no-match walk returns the list
-        // untouched.
+        // untouched.  The spin guard stays as a permanent tripwire while
+        // the gate's latent-wedge hunt continues: a cycled list panics
+        // loudly instead of hanging the kernel silently (the gate's
+        // panic marker catches it).
+        let mut spins = 0usize;
         while let Some(mut node_ptr) = cur {
+            spins += 1;
+            if spins > 100_000 {
+                let n = unsafe { node_ptr.as_ref() };
+                crate::println!("allocator: unlink spin — free-list cycle (node addr {:?} size {} align {})", n.addr, n.size, n.align);
+                panic!("allocator: free-list cycle detected");
+            }
             let node = unsafe { node_ptr.as_mut() };
             if predicate(node) {
                 let next = node.next.take();
