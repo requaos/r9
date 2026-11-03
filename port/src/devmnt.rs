@@ -511,6 +511,36 @@ impl Mnt {
         Ok((newfid, qid))
     }
 
+    /// A fid CLONE (05-09 — the gate-surfaced mount-table aliasing fix):
+    /// Twalk with ZERO names (the 9P fid-clone idiom — donor mntwalk's
+    /// nwname==0 arm) clones the fid's position onto a fresh fid.  The
+    /// mount table's entry chans are SHARED with namec's redirects; a
+    /// bare dup shares the server-side fid, so an open+close of the
+    /// redirect (ls /bin's listing) Tclunked the TABLE's fid and every
+    /// later walk from it Rerror'd (paqfs: a clunked fid's busy==0 →
+    /// Enotexist).  The redirects now clone the fid, so the open/clunk
+    /// lifecycle rides the clone and the table's fid stays pristine.
+    pub fn clone_fid(&self, fid: u32) -> Result<u32> {
+        let busy = self.enter()?;
+        let core = unsafe { &mut *self.core.get() };
+        let newfid = Self::alloc_fid(core)?;
+        let tag = Self::alloc_tag(core);
+        let mut body = Vec::new();
+        pw32(&mut body, fid);
+        pw32(&mut body, newfid);
+        pw16(&mut body, 0); // nwname = 0 — the fid-clone idiom
+        let msg = tmsg(TWALK, tag, &body);
+        let size = self.transact(&busy, &msg, RWALK, tag)?;
+        let mut cur = RepCur::new(&core.rx[7..size]);
+        let nwqid = cur.u16()? as usize;
+        // A zero-name walk answers nwqid = 0; the clone carries the
+        // source's qid (the position is unchanged by construction).
+        if nwqid != 0 {
+            return Err("devmnt: fid clone returned qids");
+        }
+        Ok(newfid)
+    }
+
     /// Topen (donor mntopen): the mode byte is Plan 9's open-mode byte
     /// (the low 8 bits — OEXCL doesn't fit and is create-only, which this
     /// era never sends).  Returns (the opened qid, the iounit after the
@@ -683,6 +713,25 @@ pub fn walk(c: &Chan, name: &[u8]) -> Result<Chan> {
     nc.path = c.path.clone();
     nc.path.push(b'/');
     nc.path.extend_from_slice(name);
+    Ok(nc)
+}
+
+/// The DEV_MNT fid-clone leg (05-09): namec's mount-point redirects clone
+/// the mount TABLE's chan onto a fresh fid (Mnt::clone_fid — the zero-name
+/// Twalk) instead of bare-dup'ing it, so a redirect's open+close lifecycle
+/// never touches the table's server-side fid (the ls /bin → ps exec gate
+/// failure: the bare dup let ls's close Tclunk the table's fid, and every
+/// later walk from it Rerror'd).
+pub fn clone_chan(c: &Chan) -> Result<Chan> {
+    let Some(mnt) = &c.mnt else { return Err("devmnt: clone of a non-mount chan") };
+    if c.mnt_fid == 0 {
+        return Err("devmnt: clone of an fid-less chan");
+    }
+    let newfid = mnt.clone_fid(c.mnt_fid)?;
+    let mut nc = Chan::new(DEV_MNT, c.qid, c.mode);
+    nc.mnt = Some(mnt.clone());
+    nc.mnt_fid = newfid;
+    nc.path = c.path.clone();
     Ok(nc)
 }
 

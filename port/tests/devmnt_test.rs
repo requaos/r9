@@ -582,3 +582,47 @@ fn devmnt_mount_crossing_walk_matrix() {
         .expect("the mount point resolves");
     assert_eq!(rootdir.dev, DEV_MNT, "MREPL: the point resolves to the mounted root");
 }
+
+/// 05-09: the mount-table fid-aliasing regression pin (the 05-09 gate's
+/// surfacing: ls /bin's open+close of the redirect Tclunked the mount
+/// TABLE's server-side fid under the bare dup, and every later walk from
+/// it — ps's exec — Rerror'd).  The redirect must fid-CLONE (the
+/// zero-name Twalk idiom), so the redirect's open/close lifecycle never
+/// touches the table's fid.
+#[test]
+fn devmnt_mount_redirect_clones_the_table_fid() {
+    let slash = fixture_slash();
+    let (mnt, fids) = session();
+    let mnt = Arc::new(mnt);
+    let root = devmnt::attach(&mnt, b"").expect("attach the fake tree");
+    let mut pg = Pgrp::new();
+    let tgt = namec::namec(b"/dir", &slash, &slash, &pg, NamecMode::MountTarget)
+        .expect("the mount target resolves");
+    pg.bind(root, &tgt, pgrp::MREPL).expect("the mount inserts");
+    let attach_fids: Vec<u32> = fids.borrow().keys().copied().collect();
+    assert_eq!(attach_fids.len(), 1, "one attach fid server-side");
+
+    // The redirect's lifecycle: resolve the mount point via Open (the
+    // final-component redirect), open the union head, close it.
+    let c = namec::namec(b"/dir", &slash, &slash, &pg, NamecMode::Open)
+        .expect("the redirect resolves");
+    assert_eq!(c.dev, DEV_MNT);
+    let opened = namec::open_chan(&c, 0).expect("open the union head OREAD");
+    namec::close_chan(&opened); // Tclunk — the CLONE's fid, not the table's
+
+    // The table's attach fid survives server-side (the redirect rode a
+    // clone): the fid→QID_ROOT entry is still present.
+    assert!(
+        fids.borrow().values().any(|q| *q == QID_ROOT),
+        "the mount table's fid was never clunked (the redirect cloned it)"
+    );
+
+    // And a later walk from the mount entry still works — the gate's
+    // failure shape (ps's exec after ls /bin's listing).
+    let c2 = namec::namec(b"/dir/top.txt", &slash, &slash, &pg, NamecMode::Open)
+        .expect("a walk from the table's fid works after the redirect's open+close");
+    let mut o2 = namec::open_chan(&c2, 0).expect("open top.txt");
+    let mut buf = [0u8; 64];
+    let n = devmnt::read(&mut o2, &mut buf, 0).expect("read top.txt");
+    assert_eq!(&buf[..n as usize], TOP_CONTENT);
+}

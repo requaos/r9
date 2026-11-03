@@ -1190,12 +1190,18 @@ fn sys_create(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         None => {
             // The dot itself, with the open-mode final redirect (a dot
             // covered by a mount point creates in the union head).
+            // 05-09: a DEV_MNT head is fid-CLONED, never bare-dup'd (the
+            // mount-table aliasing fix — the redirect's open/close must
+            // not touch the table's server-side fid).
             let mut d = dot.dup();
             if let Some(chain) = guard.chain_at(&d.path) {
                 let Some(head) = chain.first() else {
                     return err(proc, "create: empty union chain");
                 };
-                let mut nc = head.to.dup();
+                let mut nc = match port::namec::redirect_clone(&head.to) {
+                    Ok(c) => c,
+                    Err(msg) => return err(proc, msg),
+                };
                 nc.path = d.path.clone();
                 d = nc;
             }

@@ -266,7 +266,12 @@ pub fn stat(c: &Chan, sb: &mut [u8]) -> Result<u64> {
     write_stat_record(sb, name, c.qid, *mode, length)
 }
 
-/// One stat(5) wire record (devcons's shape; uid/gid glenda per D-02).
+/// One stat(5) wire record (devcons's shape; uid/gid/muid glenda per
+/// D-02).  FOUR strings — name, uid, gid, muid: libc's dirreadall
+/// (ps's directory read) runs statcheck on every record, which walks
+/// FOUR length-prefixed strings and rejects a record that ends early
+/// (convM2D.c) — a three-string record fails the whole directory read
+/// with "empty directory" (the 05-09 gate's catch).
 fn write_stat_record(
     sb: &mut [u8],
     name: &[u8],
@@ -274,7 +279,7 @@ fn write_stat_record(
     mode: u32,
     length: u64,
 ) -> Result<u64> {
-    let need = 41 + (2 + name.len()) + (2 + 6) + (2 + 6);
+    let need = 41 + (2 + name.len()) + 3 * (2 + 6);
     if sb.len() < need {
         return Err("devproc: stat buffer too small");
     }
@@ -291,6 +296,7 @@ fn write_stat_record(
     w.string(name);
     w.string(b"glenda");
     w.string(b"glenda");
+    w.string(b"glenda"); // muid — the fourth string statcheck walks
     Ok(w.finish())
 }
 
@@ -362,7 +368,7 @@ pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
         let mut listing = alloc::vec::Vec::new();
         for pid in (hooks.list)() {
             let start = listing.len();
-            listing.resize(start + 41 + (2 + dec(pid).len()) + 2 * (2 + 6), 0);
+            listing.resize(start + 41 + (2 + dec(pid).len()) + 3 * (2 + 6), 0);
             write_stat_record(
                 &mut listing[start..],
                 &dec(pid),
@@ -383,7 +389,7 @@ pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
                 _ => 0,
             };
             let start = listing.len();
-            listing.resize(start + 41 + (2 + name.len()) + 2 * (2 + 6), 0);
+            listing.resize(start + 41 + (2 + name.len()) + 3 * (2 + 6), 0);
             write_stat_record(&mut listing[start..], name, file_qid(pid, slot), mode, length)?;
         }
         serve_at(&listing, buf, off)

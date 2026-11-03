@@ -68,7 +68,9 @@ fn hook_post(pid: u64, msg: &[u8]) -> port::Result<()> {
 /// self-delimiting via the size prefix — m = 2 + GBIT16(buf)).
 /// Wire layout (dat.rs StatWriter): size[2] type[2] dev[4]
 /// qid.typ[1] qid.vers[4] qid.path[8] mode[4] atime[4] mtime[4]
-/// length[8] name{len[2]+bytes} uid gid.
+/// length[8] then FOUR length-prefixed strings (name, uid, gid, muid —
+/// statcheck walks FOUR; a three-string record fails dirreadall with
+/// "empty directory" — the 05-09 gate's catch, pinned here).
 fn parse_dir(buf: &[u8]) -> Vec<(String, u64, u32)> {
     let mut out = Vec::new();
     let mut i = 0usize;
@@ -80,9 +82,18 @@ fn parse_dir(buf: &[u8]) -> Vec<(String, u64, u32)> {
         let rec = &buf[i..i + 2 + sz];
         let qid_path = u64::from_le_bytes(rec[13..21].try_into().unwrap());
         let mode = u32::from_le_bytes(rec[21..25].try_into().unwrap());
-        let nlen = u16::from_le_bytes([rec[41], rec[42]]) as usize;
-        let name = String::from_utf8(rec[43..43 + nlen].to_vec()).unwrap();
-        out.push((name, qid_path, mode));
+        // Walk the four strings; the record must END exactly after them
+        // (statcheck's `buf != ebuf` rejection).
+        let mut p = 41usize;
+        let mut names = Vec::new();
+        for _ in 0..4 {
+            let nlen = u16::from_le_bytes([rec[p], rec[p + 1]]) as usize;
+            p += 2;
+            names.push(String::from_utf8(rec[p..p + nlen].to_vec()).unwrap());
+            p += nlen;
+        }
+        assert_eq!(p, 2 + sz, "the record ends exactly after FOUR strings (statcheck)");
+        out.push((names[0].clone(), qid_path, mode));
         i += 2 + sz;
     }
     out

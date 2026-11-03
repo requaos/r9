@@ -153,7 +153,10 @@ pub fn namec(path: &[u8], slash: &Chan, dot: &Chan, pg: &Pgrp, mode: NamecMode) 
                 let Some(head) = chain.first() else {
                     return Err("namec: empty union chain");
                 };
-                let mut nc = head.to.dup();
+                // 05-09: DEV_MNT heads are fid-CLONED, never bare-dup'd —
+                // the redirect's open/close lifecycle must not touch the
+                // mount table's server-side fid (devmnt::clone_chan).
+                let mut nc = redirect_clone(&head.to)?;
                 nc.path = c.path.clone();
                 c = nc;
             }
@@ -183,7 +186,11 @@ pub fn namec(path: &[u8], slash: &Chan, dot: &Chan, pg: &Pgrp, mode: NamecMode) 
 
     // The final component's mount crossing (chan.c's namec tail):
     // open/stat-style resolution lands on the union head; bind targets and
-    // chdir stay before the mount point.
+    // chdir stay before the mount point.  05-09: a DEV_MNT head is
+    // fid-CLONED (never bare-dup'd) — the redirect's open/close lifecycle
+    // must not touch the mount table's server-side fid (the gate-surfaced
+    // aliasing fix: ls /bin's open+close Tclunked the table's fid under a
+    // bare dup, and every later walk from it Rerror'd).
     if !nomount
         && mode != NamecMode::MountTarget
         && mode != NamecMode::ToDir
@@ -192,11 +199,22 @@ pub fn namec(path: &[u8], slash: &Chan, dot: &Chan, pg: &Pgrp, mode: NamecMode) 
         let Some(head) = chain.first() else {
             return Err("namec: empty union chain");
         };
-        let mut nc = head.to.dup();
+        let mut nc = redirect_clone(&head.to)?;
         nc.path = c.path.clone();
         c = nc;
     }
     Ok(c)
+}
+
+/// The mount-redirect chan (05-09): a DEV_MNT head is fid-cloned (its own
+/// server-side fid — devmnt::clone_chan, the zero-name Twalk idiom); every
+/// other device value-dups as before.  pub for sys_create's dot redirect.
+pub fn redirect_clone(c: &Chan) -> Result<Chan> {
+    if c.dev == DEV_MNT {
+        crate::devmnt::clone_chan(c)
+    } else {
+        Ok(c.dup())
+    }
 }
 
 /// A single-component walk from an already-resolved chan through the
