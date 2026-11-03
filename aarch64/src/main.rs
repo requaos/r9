@@ -388,6 +388,15 @@ pub extern "C" fn main9(dtb_va: usize) {
 
 mod runtime;
 
+/// 05-04 (D-03): the pid-1 entry path.  dev_bootchain configs (e.g. the
+/// virtshell profile) exec the real Harvey boot(8) at /boot/boot — a
+/// two-component devroot walk; every pre-existing profile keeps /init
+/// (D-12: the staged regression gates are untouched).
+#[cfg(all(dev_exec, dev_bootchain))]
+const BOOT_ENTRY: &[u8] = b"/boot/boot";
+#[cfg(all(dev_exec, not(dev_bootchain)))]
+const BOOT_ENTRY: &[u8] = b"/init";
+
 /// 04-05 (R9-03 runtime gate; D-04/D-09/D-10/D-15): the first-process exec
 /// orchestration, entered after the virt IRQ arming + unmask block (the
 /// GIC → timer → PL011 RX → unmask order is preserved above).  Requires the
@@ -415,27 +424,52 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
     // a /proc/N/note write from the very first process resolves.
     port::devproc::set_post_hook(proc::post_note);
 
-    // D-15: the initrd paqfs is the root tree; exec sources /init through
-    // the devroot walk/open path (one mechanism).
+    // D-15: the initrd paqfs is the root tree; exec sources the entry binary
+    // through the devroot walk/open path (one mechanism).  05-04: the walk
+    // generalizes to a PATH — devroot's walk is single-component, so loop it
+    // over the entry path's components ("/boot/boot" walks boot→boot).
     let root =
-        port::devroot::mount_initrd(img).unwrap_or_else(|err| panic!("devroot: mount: {err}"));    let root_chan =
+        port::devroot::mount_initrd(img).unwrap_or_else(|err| panic!("devroot: mount: {err}"));
+    let entry_path = BOOT_ENTRY;
+    let entry_str = core::str::from_utf8(entry_path).unwrap_or("?");
+    let mut entry_chan =
         root.attach_root().unwrap_or_else(|err| panic!("devroot: attach: {err}"));
-    let init_chan =
-        root.walk(&root_chan, b"init").unwrap_or_else(|err| panic!("devroot: walk /init: {err}"));
-    let init_open = root
-        .open(&init_chan, port::devroot::OEXEC)
-        .unwrap_or_else(|err| panic!("devroot: open /init: {err}"));
-    let bin = root.entry(&init_open).unwrap_or_else(|err| panic!("devroot: /init entry: {err}"));
-    println!("devroot: /init open ({} bytes)", bin.length);
+    let mut leaf: &[u8] = entry_path;
+    for comp in entry_path.split(|&b| b == b'/').filter(|c| !c.is_empty()) {
+        leaf = comp;
+        entry_chan = match root.walk(&entry_chan, comp) {
+            Ok(c) => c,
+            Err(err) => panic!("devroot: walk {entry_str}: {err}"),
+        };
+    }
+    let entry_open = match root.open(&entry_chan, port::devroot::OEXEC) {
+        Ok(c) => c,
+        Err(err) => panic!("devroot: open {entry_str}: {err}"),
+    };
+    let bin = match root.entry(&entry_open) {
+        Ok(bin) => bin,
+        Err(err) => panic!("devroot: {entry_str} entry: {err}"),
+    };
+    println!("devroot: {entry_str} open ({} bytes)", bin.length);
 
-    // Build the first process and exec /init: a.out parse + segment record +
-    // exactly two eager pages (the seed stack and the zeroed Tos page) + the
-    // forkret frame (04-04 machinery).  Everything else faults in (D-09).
-    let proc = proc::new_user_proc("init").unwrap_or_else(|err| panic!("proc: {err}"));
-    exec::exec_into(proc, img, &bin, "init", &[b"init"])
-        .unwrap_or_else(|err| panic!("exec: /init: {err}"));
+    // Build the first process and exec the entry: a.out parse + segment
+    // record + exactly two eager pages (the seed stack and the zeroed Tos
+    // page) + the forkret frame (04-04 machinery).  Everything else faults
+    // in (D-09).  argv[0] is the leaf name (05-04 tracer; the transitional
+    // method hint is a later task in this plan).
+    let name = core::str::from_utf8(leaf).unwrap_or("?");
+    let argv: &[&[u8]] = &[leaf];
+    let proc = proc::new_user_proc(name).unwrap_or_else(|err| panic!("proc: {err}"));
+    exec::exec_into(proc, img, &bin, name, argv)
+        .unwrap_or_else(|err| panic!("exec: {entry_str}: {err}"));
     let frame = unsafe { &*proc.frame };
-    println!("exec: entering EL0 pc={:#x} sp={:#x}", frame.pc(), frame.sp());
+    let argv_print: alloc::vec::Vec<&str> =
+        argv.iter().map(|a| core::str::from_utf8(a).unwrap_or("?")).collect();
+    println!(
+        "exec: entering EL0 pc={:#x} sp={:#x} path={entry_str} argv={argv_print:?}",
+        frame.pc(),
+        frame.sp()
+    );
 
     // D-10 (closes Phase-3 WR-01): the proc's fully-built root table REPLACES
     // the TTBR0 identity map.  Pitfall-11 order: the table is complete (its

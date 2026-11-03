@@ -18,9 +18,12 @@ num_enum = { version = "0.7", default-features = false }
 # wildcard, so each family member must be declared here when code first uses
 # it.  dev_panic is predeclared for the 03-06 panic config; dev_exec is
 # predeclared for the 04-05 exec config (dev = ["exec"] in config_virtexec.toml).
+# dev_bootchain is predeclared for the 05-04 shell-chain config
+# (dev = ["exec", "bootchain"] in config_virtshell.toml).
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [
     'cfg(platform, values("virt", "raspi3b", "raspi4b"))',
     'cfg(dev_panic)',
     'cfg(dev_exec)',
+    'cfg(dev_bootchain)',
 ] }
