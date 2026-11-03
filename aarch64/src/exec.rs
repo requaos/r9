@@ -1,9 +1,10 @@
 //! Plan 9 a.out loader + exec image management (R9-03, D-09/D-11): parse
-//! and validate the big-endian header, record the segment map, seed exactly
-//! TWO eager user pages (the top-of-stack seed page and the zeroed Tos
-//! page), and seed the forkret-shaped TrapFrame on the proc's kernel stack.
-//! Everything else faults in (D-09): text/data pages arrive via fault.rs
-//! from the paqfs byte source; bss/stack/tos faults map zero pages.
+//! and validate the big-endian header, record the segment map, map the
+//! data+bss pages EAGERLY (05-04 — see install_image), and seed exactly
+//! TWO eager stack-side pages (the top-of-stack seed page and the zeroed
+//! Tos page) + the forkret-shaped TrapFrame on the proc's kernel stack.
+//! Text/stack/tos fault in on demand (D-09): text pages arrive via
+//! fault.rs from the paqfs byte source; stack/tos faults map zero pages.
 //!
 //! 04-05 wired the first-exec runtime path (main9's exec_bootstrap →
 //! exec_into).  04-06 adds exec_replace — the EXEC syscall's
@@ -128,8 +129,9 @@ fn read_aout(image: &'static [u8], bin: &PaqDir) -> Result<AoutHeader> {
 }
 
 /// Record the segment map + the demand-page byte source + the proc name,
-/// then seed the two eager pages.  Shared by first-exec (exec_into) and
-/// image replacement (exec_replace); returns (user_sp, tos_va).
+/// eagerly map data+bss, then seed the two eager stack-side pages.
+/// Shared by first-exec (exec_into) and image replacement (exec_replace);
+/// returns (user_sp, tos_va).
 fn install_image(
     proc: &mut Proc,
     image: &'static [u8],
@@ -157,9 +159,63 @@ fn install_image(
     });
     proc.set_name(name);
 
-    // SEED: exactly two eager pages (D-09/D-11) — the top-of-stack seed page
-    // and the zeroed Tos page just below it.
+    // 05-04 (the 05-04 tracer surfaced phase-04 deferred-items #3): map the
+    // data+bss pages EAGERLY.  7c places string literals and statics in
+    // data, and a real binary (boot(8)) passes them to syscalls without any
+    // prior EL0 touch — Phase-4's measured binaries never showed this
+    // because libc fmt read their buffers to format them ("always resident
+    // by call time").  validate_user_range is a membership check and
+    // T-05-06 forbids nested demand-paging from syscall context, so an
+    // unread literal page aborted at EL1h (the kernel panic the 05-04
+    // tracer's zero-panic gate forbids).  Eager data+bss residency is the
+    // resolution that keeps BOTH rules: no nested paging anywhere, and
+    // D-09's pinned wording ("faulting in user text and growing the user
+    // stack") is untouched — text, stack and Tos stay demand-paged.
+    map_data_bss_eager(proc, image, bin, aout)?;
+
+    // SEED: the two eager stack-side pages (D-09/D-11) — the top-of-stack
+    // seed page and the zeroed Tos page just below it.
     seed_user_pages(proc, args)
+}
+
+/// Eager data+bss mapping (05-04): zero-fill each page through its KZERO+PA
+/// kernel alias (the proc's table is INACTIVE at exec — the alias is the
+/// correct edit path, 04-02's convention, mirroring map_one_user_page),
+/// then clamp-write the data segment's file content (byte-exact end — the
+/// 04-06 Rule-1 clamp: the file's trailing syms bytes must never bleed
+/// into the bss-sharing tail).  The pages are logged (SegKind::Data/Bss)
+/// so rfork's copy and exit's free cover them like any other mapping.
+fn map_data_bss_eager(
+    proc: &mut Proc,
+    image: &'static [u8],
+    bin: &PaqDir,
+    aout: &AoutHeader,
+) -> Result<()> {
+    let data_end = aout.data_va + aout.data as usize;
+    let bss_end = data_end + aout.bss as usize;
+    let data_file_base = HDR_SIZE as u64 + aout.text;
+    let fs = Paqfs::open_image(image)?;
+    let mut page_va = aout.data_va;
+    let data_pages_end = data_end.next_multiple_of(PAGE_SIZE_4K);
+    while page_va < data_pages_end {
+        let pa = map_one_user_page(proc, page_va, Entry::rw_user_data(), SegKind::Data)?;
+        let clamp = data_end.saturating_sub(page_va).min(PAGE_SIZE_4K);
+        if clamp > 0 {
+            let file_off = data_file_base + (page_va - aout.data_va) as u64;
+            let dst = unsafe {
+                core::slice::from_raw_parts_mut(physaddr_as_ptr_mut_offset_from_kzero::<u8>(pa), clamp)
+            };
+            fs.read_at(bin, file_off, dst).map_err(|_| "exec: data page-in read failed")?;
+        }
+        page_va += PAGE_SIZE_4K;
+    }
+    let bss_pages_end = bss_end.next_multiple_of(PAGE_SIZE_4K);
+    let mut page_va = data_pages_end;
+    while page_va < bss_pages_end {
+        map_one_user_page(proc, page_va, Entry::rw_user_data(), SegKind::Bss)?;
+        page_va += PAGE_SIZE_4K;
+    }
+    Ok(())
 }
 
 /// First exec (the boot_init path; 04-05 wires the call): parse the binary's
@@ -167,8 +223,8 @@ fn install_image(
 /// the two eager pages + the forkret frame, and leave the proc Ready.
 ///
 /// `image` is the mapped paqfs initrd; `bin` is the binary's PaqDir inside
-/// it.  D-09/D-11: NOTHING but the seed stack page and the Tos page is
-/// mapped here — text/data/bss arrive via the demand-fault handler.
+/// it.  D-09/D-11: text, stack and Tos pages fault in on demand; data+bss
+/// are mapped eagerly (05-04 — the cold-syscall-argument fix).
 pub fn exec_into(
     proc: &mut Proc,
     image: &'static [u8],
