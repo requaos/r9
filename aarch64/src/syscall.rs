@@ -853,6 +853,11 @@ fn sys_stat(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     if proc.validate_user_range(buf_va, n, true).is_err() {
         return err(proc, "stat: bad user buffer");
     }
+    // Force the write target resident BEFORE the kernel fills it (the
+    // cold-buffer class, T-05-06: an in-segment but never-demand-faulted
+    // heap page takes an EL1h data abort mid-write — a kernel halt, never
+    // acceptable on a user-triggerable path; sys_pread's discipline).
+    fault::ensure_user_resident(proc, buf_va as usize, (buf_va + n) as usize);
     let pg = proc.pgrp.clone();
     let node = LockNode::new();
     let guard = pg.lock(&node);
@@ -884,6 +889,9 @@ fn sys_fstat(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     if proc.validate_user_range(buf_va, n, true).is_err() {
         return err(proc, "fstat: bad user buffer");
     }
+    // Force the write target resident BEFORE the kernel fills it (the
+    // cold-buffer class, T-05-06 — sys_stat/sys_pread's discipline).
+    fault::ensure_user_resident(proc, buf_va as usize, (buf_va + n) as usize);
     let Some(chan) = proc.fd_take(fd) else {
         return err(proc, "fstat: bad fd");
     };
