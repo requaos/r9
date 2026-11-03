@@ -242,14 +242,16 @@ fn main() {
         )
         .subcommand(
             clap::Command::new("ureg-check").about(
-                "Verify the sibling Harvey checkout's aarch64/include/ureg.h matches the pinned \
-                 TrapFrame layout (D-06 layer 2; R9_HARVEY_DIR overrides the default ../harvey)",
+                "Verify the Harvey checkout's aarch64/include/ureg.h matches the pinned \
+                 TrapFrame layout (D-06 layer 2; R9_HARVEY_DIR names the checkout — required \
+                 since 05-10, 05-CONTEXT D-10)",
             ),
         )
         .subcommand(
             clap::Command::new("initrd")
                 .about("Assemble target/bootfs.paq from the staged Harvey aarch64 binaries \
-                        (04-05, D-01/D-02/D-03; R9_HARVEY_DIR overrides the default ../harvey)")
+                        (04-05, D-01/D-02/D-03; R9_HARVEY_DIR names the checkout — required \
+                        since 05-10, 05-CONTEXT D-10)")
                 .args(&[
                     clap::arg!(--arch <arch> "Target architecture")
                         .value_parser(clap::builder::EnumValueParser::<Arch>::new()),
@@ -1708,7 +1710,8 @@ impl InitrdStep {
 /// are named in the error text when absent — a missing mkpaqfs or a missing
 /// staged binary is a loud build error, never a silent boot (D-03).
 fn assemble_initrd(verbose: bool) -> Result<()> {
-    let harvey = uregcheck::harvey_dir();
+    // 05-10 (D-10): R9_HARVEY_DIR required — the ../harvey default is gone.
+    let harvey = uregcheck::harvey_dir()?;
     let mkpaqfs = harvey.join(".build/bin/mkpaqfs");
     if !mkpaqfs.is_file() {
         return Err(format!(
@@ -1785,7 +1788,8 @@ fn ensure_initrd_image(config: &Configuration, verbose: bool) -> Result<()> {
         return Ok(());
     }
     let paq = workspace().join(&initrd.file);
-    let harvey = uregcheck::harvey_dir();
+    // 05-10 (D-10): R9_HARVEY_DIR required — the ../harvey default is gone.
+    let harvey = uregcheck::harvey_dir()?;
     let paq_mtime = std::fs::metadata(&paq).and_then(|m| m.modified()).ok();
     let stale = paq_mtime.is_some_and(|paq_mtime| {
         INITRD_FILES.iter().any(|name| {

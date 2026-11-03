@@ -1,11 +1,16 @@
 //! D-06 layer 2: the cross-repo trap-frame drift gate.  Parses the frozen
-//! `aarch64/include/ureg.h` in the sibling Harvey checkout and asserts the
-//! Ureg field names/order/count match the pinned table r9's TrapFrame is
-//! built against (aarch64/ABI.md, "Kernel-side enforcement (Phase 4
-//! appendix)").  Layer 1 (the in-crate const asserts in
-//! aarch64/src/trap.rs) is always on and guards bare builds; this layer
-//! fails every boot-test profile on drift — SC#1: an ABI mismatch is a
-//! build failure, not a runtime mystery.
+//! `aarch64/include/ureg.h` in the Harvey checkout named by R9_HARVEY_DIR
+//! and asserts the Ureg field names/order/count match the pinned table r9's
+//! TrapFrame is built against (aarch64/ABI.md, "Kernel-side enforcement
+//! (Phase 4 appendix)").  Layer 1 (the in-crate const asserts in
+//! aarch64/src/trap.rs) is always on; this layer fails every boot-test
+//! profile on drift — SC#1: an ABI mismatch is a build failure, not a
+//! runtime mystery.
+//!
+//! 05-10 (05-CONTEXT D-10's inversion): the implicit `../harvey`
+//! sibling-checkout default is REMOVED — every xtask path that touches the
+//! Harvey checkout requires R9_HARVEY_DIR explicitly, and an unset variable
+//! is a named error, never a silent relative-path guess.
 //!
 //! Plain text parsing — no crate.  The header is a frozen, hand-maintained
 //! file, so the parser is deliberately narrow: it extracts `u64int <name>;`
@@ -15,7 +20,7 @@
 use std::path::PathBuf;
 use std::{env, fs};
 
-use crate::{DynError, Result, workspace};
+use crate::{DynError, Result};
 
 /// The pinned Ureg field order r9's TrapFrame matches: 35 slots, the
 /// r30/link union occupying one (aarch64/ABI.md Phase-4 appendix).
@@ -39,23 +44,29 @@ pub enum CheckStatus {
     SkippedNoHarvey,
 }
 
-/// The Harvey checkout to check against: $R9_HARVEY_DIR when set, else
-/// `../harvey` relative to the r9 workspace root (D-03/D-06 cross-repo glue;
-/// INT-04 replaces it with a flake input in Phase 5).  pub(crate) for the
-/// 04-05 initrd step, which resolves the same checkout.
-pub(crate) fn harvey_dir() -> PathBuf {
+/// The Harvey checkout to check against: $R9_HARVEY_DIR — REQUIRED.
+/// 05-10 (05-CONTEXT D-10): the implicit `../harvey` default was removed
+/// here; an unset (or empty) variable is a named error, never a silent
+/// relative-path guess.  pub(crate) for the 04-05 initrd step, which
+/// resolves the same checkout.
+pub(crate) fn harvey_dir() -> Result<PathBuf> {
     match env::var("R9_HARVEY_DIR") {
-        Ok(dir) => PathBuf::from(dir),
-        Err(_) => workspace().join("../harvey"),
+        Ok(dir) if !dir.is_empty() => Ok(PathBuf::from(dir)),
+        _ => Err("R9_HARVEY_DIR is not set — point it at the Harvey checkout (it must contain \
+             aarch64/include/ureg.h, and for the initrd bake build/aarch64/out/ plus \
+             .build/bin/mkpaqfs); r9's xtask no longer defaults to a sibling ../harvey \
+             checkout (05-CONTEXT D-10)"
+            .into()),
     }
 }
 
 /// Run the check against the resolved Harvey checkout.  Standalone
-/// (`cargo xtask ureg-check`) tolerates a missing checkout with a skip line
+/// (`cargo xtask ureg-check`) fails when R9_HARVEY_DIR is unset (05-10,
+/// D-10) and tolerates a named-but-headerless checkout with a skip line
 /// (layer 1 still guards); drift is always a hard error with a named-field
 /// diff.
 pub fn run_check() -> Result<CheckStatus> {
-    let header = harvey_dir().join("aarch64/include/ureg.h");
+    let header = harvey_dir()?.join("aarch64/include/ureg.h");
     if !header.exists() {
         println!(
             "ureg-check: SKIP — {} not found (no Harvey checkout; the layer-1 const asserts still guard the layout)",
@@ -72,14 +83,15 @@ pub fn run_check() -> Result<CheckStatus> {
     Ok(CheckStatus::Match)
 }
 
-/// The boot-test precondition (SC#1): drift fails the run, and so does a
-/// missing Harvey checkout — the cross-repo gate is the point of the harness.
+/// The boot-test precondition (SC#1): drift fails the run, and so does an
+/// unset or headerless Harvey checkout — the cross-repo gate is the point
+/// of the harness.
 pub fn check_for_boot_test() -> Result<()> {
     match run_check()? {
         CheckStatus::Match => Ok(()),
         CheckStatus::SkippedNoHarvey => Err("ureg-check: boot-test requires the Harvey checkout \
-             (set R9_HARVEY_DIR; default ../harvey) — the cross-repo gate is the point of the \
-             harness"
+             (R9_HARVEY_DIR must name it — 05-CONTEXT D-10 removed the ../harvey default) — \
+             the cross-repo gate is the point of the harness"
             .into()),
     }
 }
