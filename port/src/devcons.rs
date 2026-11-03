@@ -528,7 +528,10 @@ pub fn write(c: &mut crate::dat::Chan, buf: &[u8]) -> crate::Result<u64> {
 //     here instead, same effect), and a completed line INCLUDES its
 //     trailing '\n' (Plan 9 cooked reads return whole lines).  0x04 (^D)
 //     ends the line WITHOUT being buffered (the donor's send-without-append
-//     arm).  PREAD on /dev/cons blocks until a complete line is available.
+//     arm); on an EMPTY line it completes a zero-length line, which reads
+//     as a 0-length read — the EOF that lets rc exit on ^D at a fresh
+//     prompt (WR-03; the donor's qwrite(lineq, kbd.line, 0)).
+//     PREAD on /dev/cons blocks until a complete line is available.
 //   * DEL (0x7f) is NEVER buffered: it discards the in-assembly partial
 //     line and posts the "interrupt" note to the console's FOREGROUND
 //     GROUP (below), then the reading syscall fails -1/"interrupted"
@@ -583,11 +586,18 @@ const LINE_CAP: usize = 1024;
 /// above).  `input` is the unprocessed byte queue (the donor's kbdq),
 /// `line` the in-assembly partial (the donor's kbd.line), `lines` the
 /// completed-lines queue (the donor's lineq); `waiters` are the pids
-/// blocked in a cons read (the DEL target set's base).
+/// blocked in a cons read (the DEL target set's base).  `pending_eof`
+/// counts zero-length completed lines — ^D on an EMPTY in-assembly line
+/// (WR-03): the donor's qwrite(lineq, kbd.line, 0) queues a zero-length
+/// block whose qread returns 0 (the EOF that lets rc exit on ^D at a
+/// fresh prompt); a flat byte queue cannot represent it.  Consumed only
+/// when `lines` is empty, preserving the donor's block order (bytes
+/// queued before the ^D read first).
 struct ConsInput {
     input: alloc::collections::VecDeque<u8>,
     line: alloc::vec::Vec<u8>,
     lines: alloc::collections::VecDeque<u8>,
+    pending_eof: usize,
     raw: bool,
     waiters: alloc::vec::Vec<u64>,
     overruns: usize,
@@ -599,6 +609,7 @@ impl ConsInput {
             input: alloc::collections::VecDeque::new(),
             line: alloc::vec::Vec::new(),
             lines: alloc::collections::VecDeque::new(),
+            pending_eof: 0,
             raw: false,
             waiters: alloc::vec::Vec::new(),
             overruns: 0,
@@ -719,7 +730,16 @@ fn cons_read(buf: &mut [u8]) -> crate::Result<u64> {
                                 inq.line.push(LF);
                             }
                             let line = core::mem::take(&mut inq.line);
-                            inq.lines.extend(line);
+                            if line.is_empty() && b == CTLD {
+                                // WR-03: ^D on an EMPTY line still
+                                // completes a (zero-length) line — the
+                                // donor's qwrite(lineq, kbd.line, 0) —
+                                // whose read returns 0: the EOF that lets
+                                // rc exit on ^D at a fresh prompt.
+                                inq.pending_eof += 1;
+                            } else {
+                                inq.lines.extend(line);
+                            }
                         }
                         _ => {
                             if inq.line.len() < LINE_CAP {
@@ -745,6 +765,12 @@ fn cons_read(buf: &mut [u8]) -> crate::Result<u64> {
                         *slot = inq.lines.pop_front().unwrap_or(0);
                     }
                     Some(n as u64)
+                } else if inq.pending_eof > 0 {
+                    // WR-03: a queued zero-length line (^D on empty)
+                    // reads as EOF once — only once `lines` has drained
+                    // (the donor's block order).
+                    inq.pending_eof -= 1;
+                    Some(0)
                 } else {
                     None
                 }

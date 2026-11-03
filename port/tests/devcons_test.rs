@@ -116,6 +116,23 @@ fn cons_read_path_cooked_raw_del_and_consctl() {
     let n = read_cons(&mut buf).expect("caret-D-terminated line");
     assert_eq!(&buf[..n as usize], b"hi", "^D sent the line without a newline");
 
+    // -- WR-03: ^D on an EMPTY line completes a zero-length line — the
+    //    read returns 0 (EOF — rc's exit-on-^D at a fresh prompt; the
+    //    donor's qwrite(lineq, kbd.line, 0)); the NEXT line still reads.
+    RX.lock().unwrap().extend(b"\x04");
+    let n = read_cons(&mut buf).expect("empty ^D completes a line");
+    assert_eq!(n, 0, "an empty ^D line reads as EOF");
+    RX.lock().unwrap().extend(b"after\n");
+    let n = read_cons(&mut buf).expect("the line after the EOF");
+    assert_eq!(&buf[..n as usize], b"after\n", "the EOF did not wedge the reader");
+    // Bytes queued BEFORE the ^D read first; the EOF follows (the donor's
+    // block order).
+    RX.lock().unwrap().extend(b"first\n\x04");
+    let n = read_cons(&mut buf).expect("the queued line reads first");
+    assert_eq!(&buf[..n as usize], b"first\n");
+    let n = read_cons(&mut buf).expect("then the EOF");
+    assert_eq!(n, 0, "the queued ^D completes after the queued bytes");
+
     // -- DEL: never buffered; flushes the partial; posts "interrupt" to
     //    the reader's group; the read fails "interrupted"; the shell
     //    survives to answer the next line (the gate's shape).
