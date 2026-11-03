@@ -33,6 +33,7 @@ use core::ptr;
 
 use port::Result;
 use port::dat::Chan;
+use port::devenv::EnvGroup;
 use port::mcslock::{Lock, LockNode};
 use port::mem::{PAGE_SIZE_4K, PhysAddr, PhysRange, VirtRange};
 use port::paqfs::PaqDir;
@@ -239,6 +240,15 @@ pub struct Proc {
     /// The Lock serializes bind/unmount against namec walks; taken only
     /// from syscall context, briefly, never from IRQ context.
     pub pgrp: Arc<Lock<Pgrp>>,
+    /// 05-05 (D-07): the environment group handle (devenv.rs).  rfork
+    /// flag semantics per fork(2) + 9k sysproc.c: RFPROC with NEITHER
+    /// RFENVG nor RFCENVG SHARES this handle (Arc clone); RFENVG
+    /// deep-copies (envcpy); RFCENVG starts EMPTY.  (The plan's truth
+    /// bullet inverted the two flags; fork(2)/sysproc.c govern — the
+    /// 05-04 RFNAMEG/RFCNAMEG precedent; recorded as a 05-05 deviation.)
+    /// The Lock serializes setenv/create against reads; a LEAF lock
+    /// (syscall context only, never IRQ context).
+    pub env_group: Arc<Lock<EnvGroup>>,
     /// The process root and current-directory chans (donor up->slash /
     /// up->dot).  exec_bootstrap sets both to the devroot attach before the
     /// first EL0 entry; rfork inherits (value-dup); exec preserves them
@@ -295,6 +305,11 @@ impl Proc {
             wait_records: VecDeque::new(),
             errstr: [0; ERRMAX],
             pgrp: Arc::new(Lock::new("pgrp", Pgrp::new())),
+            // Fresh EMPTY env group at construction (05-05); the first
+            // proc's SEEDED root group is assigned by exec_bootstrap
+            // (the slash/dot seeding's twin), and rfork derives every
+            // later group from its parent.
+            env_group: Arc::new(Lock::new("env", EnvGroup::new())),
             slash: None,
             dot: None,
         };
@@ -862,6 +877,36 @@ pub fn rfork_namespace_split(proc: &mut Proc, copy: bool) {
     proc.pgrp = Arc::new(Lock::new("pgrp", next));
 }
 
+/// Non-RFPROC rfork's env-group half (05-05, D-07; 9k sysproc.c's
+/// non-RFPROC branch — the newns rfork(RFENVG|RFCNAMEG) shape): the
+/// CALLER's group becomes a fresh deep COPY when `copy` is set (RFENVG —
+/// envcpy; per-login user=/home= overrides never leak back into init's
+/// group) or a fresh EMPTY group otherwise (RFCENVG).  Flag validation
+/// stays in sys_rfork.
+pub fn rfork_env_split(proc: &mut Proc, copy: bool) {
+    let next = if copy {
+        let node = LockNode::new();
+        proc.env_group.lock(&node).deep_copy()
+    } else {
+        EnvGroup::new()
+    };
+    proc.env_group = Arc::new(Lock::new("env", next));
+}
+
+/// devenv's current-group hook (05-05, D-07): the CURRENT proc's
+/// env-group handle — the donor devenv.c envgrp()'s `up->egrp` shape
+/// (every #e op resolves against the OPERATING process's group, never a
+/// group captured at attach).  None before the first proc exists (no #e
+/// op can happen then).  Reads the current-proc raw pointer under the
+/// module header's single-CPU/IRQ-masked invariant (syscall context).
+pub fn current_env_group() -> Option<Arc<Lock<EnvGroup>>> {
+    let cur = current_proc();
+    if cur.is_null() {
+        return None;
+    }
+    Some(unsafe { &*cur }.env_group.clone())
+}
+
 /// devproc-lite's write hook (04-08, D-16/T-04-17): append the note to the
 /// ADDRESSED pid's queue — no broadcast, no group semantics.  The write is
 /// the whole posting path (libc postnote(PNPROC) lands here via
@@ -1044,6 +1089,21 @@ fn rfork_copy(parent: &Proc, child: &mut Proc, frame: &TrapFrame, flag: u64) -> 
         Arc::new(Lock::new("pgrp", parent.pgrp.lock(&node).deep_copy()))
     } else {
         parent.pgrp.clone()
+    };
+    // 05-05 (D-07): the env group, fork(2)/9k sysrfork semantics — the
+    // SAME shape as the namespace group above: RFENVG = fresh deep COPY
+    // of the parent's group (envcpy); RFCENVG = fresh EMPTY group;
+    // NEITHER = share the parent's handle (Arc clone).  (The plan's
+    // truth bullet inverted RFENVG/RFCENVG; fork(2) + sysproc.c +
+    // newns's rfork(RFENVG|RFCNAMEG) govern — the 05-04 RFNAMEG
+    // precedent, recorded as a 05-05 deviation.)
+    child.env_group = if flag & crate::syscall::RFCENVG != 0 {
+        Arc::new(Lock::new("env", EnvGroup::new()))
+    } else if flag & crate::syscall::RFENVG != 0 {
+        let node = LockNode::new();
+        Arc::new(Lock::new("env", parent.env_group.lock(&node).deep_copy()))
+    } else {
+        parent.env_group.clone()
     };
     child.slash = parent.slash.as_ref().map(|c| c.dup());
     child.dot = parent.dot.as_ref().map(|c| c.dup());

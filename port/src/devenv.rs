@@ -140,10 +140,13 @@ impl EnvGroup {
     /// A group pre-populated with `pairs` (create + write per pair — the
     /// seeded-root constructor; 05-05's kernel seed and the host tests).
     pub fn seeded(pairs: &[(&[u8], &[u8])]) -> Result<EnvGroup> {
-        // RED skeleton: an empty group — the seeded read-back test fails
-        // on its assertion (the planned behavior), not a fixture error.
-        let _ = pairs;
-        Ok(EnvGroup::new())
+        let mut g = EnvGroup::new();
+        for (name, value) in pairs {
+            let qid = g.create(name)?;
+            let wrote = g.write(qid, value, 0)?;
+            assert_eq!(wrote as usize, value.len(), "devenv: short seed write");
+        }
+        Ok(g)
     }
 
     /// The donor envlookup by NAME.
@@ -171,26 +174,88 @@ impl EnvGroup {
     /// contract, 05-06's sys_create — not here).  Names are a single
     /// component: non-empty, no '/', under the donor's genbuf ceiling.
     /// Returns the new entry's qid path.
-    pub fn create(&mut self, _name: &[u8]) -> Result<u64> {
-        Err("devenv: unimplemented (RED skeleton)")
+    pub fn create(&mut self, name: &[u8]) -> Result<u64> {
+        if name.is_empty() || name.contains(&b'/') {
+            return Err("devenv: bad name (single component)");
+        }
+        if name.len() > MAX_ENV_NAME {
+            return Err("devenv: name too long");
+        }
+        if self.get(name).is_some() {
+            return Err("devenv: name exists");
+        }
+        self.next_qid += 1;
+        let qid = self.next_qid;
+        self.vers += 1;
+        self.entries
+            .push(EnvEntry { name: name.to_vec(), value: Vec::new(), qid_path: qid, vers: 0 });
+        Ok(qid)
     }
 
     /// envwrite: overwrite `buf` at `offset`, growing the value (zero-gap)
     /// when the extent passes the current length; bounded by MAXENVSIZE
     /// (Etoobig).  A zero-length write is a 0 no-op.
-    pub fn write(&mut self, _qid_path: u64, _buf: &[u8], _offset: u64) -> Result<u64> {
-        Err("devenv: unimplemented (RED skeleton)")
+    pub fn write(&mut self, qid_path: u64, buf: &[u8], offset: u64) -> Result<u64> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        if offset > MAXENVSIZE || buf.len() as u64 > MAXENVSIZE - offset {
+            return Err("devenv: value too big");
+        }
+        let Some(e) = self.entries.iter_mut().find(|e| e.qid_path == qid_path) else {
+            return Err("devenv: nonexistent entry");
+        };
+        let end = offset as usize + buf.len();
+        if end > e.value.len() {
+            // Donor smalloc zero-fills the gap between the old end and
+            // the write offset.
+            e.value.resize(end, 0);
+        }
+        e.value[offset as usize..end].copy_from_slice(buf);
+        e.vers += 1;
+        self.vers += 1;
+        Ok(buf.len() as u64)
     }
 
-    /// envopen's OTRUNC arm: empty the value (vers bump).
-    pub fn trunc(&mut self, _qid_path: u64) -> Result<()> {
-        Err("devenv: unimplemented (RED skeleton)")
+    /// envread's byte half: clamp at the value length; a read at or past
+    /// the end is EOF = 0 (never an error).
+    pub fn read(&self, qid_path: u64, buf: &mut [u8], offset: u64) -> Result<u64> {
+        let Some(e) = self.get_qid(qid_path) else {
+            return Err("devenv: nonexistent entry");
+        };
+        let start = (offset as usize).min(e.value.len());
+        let avail = &e.value[start..];
+        let n = avail.len().min(buf.len());
+        buf[..n].copy_from_slice(&avail[..n]);
+        Ok(n as u64)
+    }
+
+    /// envopen's OTRUNC arm: empty the value (the entry vers bump is the
+    /// donor's; the group vers is untouched — envopen's trunc arm bumps
+    /// only e->qid.vers).
+    pub fn trunc(&mut self, qid_path: u64) -> Result<()> {
+        let Some(e) = self.entries.iter_mut().find(|e| e.qid_path == qid_path) else {
+            return Err("devenv: nonexistent entry");
+        };
+        e.value = Vec::new();
+        e.vers += 1;
+        Ok(())
     }
 
     /// envcpy: a deep copy — same names/values, FRESH qid paths (the
     /// donor renumbers: `ne->qid.path = ++to->path`), entry vers 0.
     pub fn deep_copy(&self) -> EnvGroup {
-        EnvGroup::new()
+        let mut to = EnvGroup::new();
+        for e in &self.entries {
+            to.next_qid += 1;
+            to.entries.push(EnvEntry {
+                name: e.name.clone(),
+                value: e.value.clone(),
+                qid_path: to.next_qid,
+                vers: 0,
+            });
+        }
+        to
     }
 }
 
@@ -249,19 +314,28 @@ pub fn walk(c: &Chan, name: &[u8]) -> Result<Chan> {
 }
 
 /// Open an env chan (donor envopen): the root dir opens OREAD only; a
-/// key opens in any access mode; OTRUNC empties the value first (the
-/// setenv flow — create-on-existing rides namec's Acreate → OTRUNC open
-/// fallback, 05-06).
+/// key opens in any access mode after an existence check (the donor's
+/// Enonexist arm — a walked chan whose key vanished errors here); OTRUNC
+/// empties the value first (the setenv flow — create-on-existing rides
+/// namec's Acreate → OTRUNC open fallback, 05-06).  r9 has no eve
+/// privilege split this era: every group is writable (the donor's
+/// envwriteable `iseve() || c->aux == nil` — aux is always nil here).
 pub fn open(c: &Chan, mode: u32) -> Result<Chan> {
     let access = mode & crate::dat::OMASK;
-    if c.qid.typ == QTDIR && access != OREAD {
-        return Err("devenv: directory opens OREAD only");
-    }
-    if mode & OTRUNC != 0 && c.qid.typ != QTDIR {
+    if c.qid.typ == QTDIR {
+        if access != OREAD {
+            return Err("devenv: directory opens OREAD only");
+        }
+    } else {
         let group = current_group()?;
         let node = LockNode::new();
         let mut guard = group.lock(&node);
-        guard.trunc(c.qid.path)?;
+        if guard.get_qid(c.qid.path).is_none() {
+            return Err("devenv: nonexistent entry");
+        }
+        if mode & OTRUNC != 0 {
+            guard.trunc(c.qid.path)?;
+        }
     }
     let mut nc = Chan::new(c.dev, c.qid, access);
     nc.path = c.path.clone();
@@ -274,11 +348,44 @@ pub fn open(c: &Chan, mode: u32) -> Result<Chan> {
 /// value length, EOF = 0).  `offset` u64::MAX uses + advances the chan's
 /// streaming offset (the pread convention).
 pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
-    if c.qid.typ == QTDIR {
-        return Err("devenv: unimplemented (RED skeleton)");
+    if c.mode == crate::dat::OWRITE {
+        return Err("devenv: file not open for reading");
     }
-    let _ = (buf, offset);
-    Err("devenv: unimplemented (RED skeleton)")
+    let group = current_group()?;
+    let node = LockNode::new();
+    let guard = group.lock(&node);
+    let off = if offset == u64::MAX { c.offset } else { offset };
+    let n = if c.qid.typ == QTDIR {
+        // The directory listing (devdirread via envgen): one stat-wire
+        // record per entry, insertion order, rebuilt per call (values'
+        // lengths may shift after writes — devcons's hostowner note).
+        let mut listing = Vec::new();
+        for e in guard.entries() {
+            let start = listing.len();
+            listing.resize(start + 41 + (2 + e.name.len()) + 2 * (2 + 6), 0);
+            write_stat_record(
+                &mut listing[start..],
+                &e.name,
+                e.qid_path,
+                e.vers,
+                QTFILE,
+                0o666,
+                e.value.len() as u64,
+            )?;
+        }
+        let start = (off as usize).min(listing.len());
+        let avail = &listing[start..];
+        let n = avail.len().min(buf.len());
+        buf[..n].copy_from_slice(&avail[..n]);
+        n as u64
+    } else {
+        guard.read(c.qid.path, buf, off)?
+    };
+    drop(guard);
+    if offset == u64::MAX {
+        c.offset += n;
+    }
+    Ok(n)
 }
 
 /// Write an env chan (donor envwrite over the current group): the chan
@@ -286,8 +393,22 @@ pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
 /// growing the value (zero-gap), bounded by MAXENVSIZE.  `offset`
 /// u64::MAX uses + advances the streaming offset.
 pub fn write(c: &mut Chan, buf: &[u8], offset: u64) -> Result<u64> {
-    let _ = (c, buf, offset);
-    Err("devenv: unimplemented (RED skeleton)")
+    if c.qid.typ == QTDIR {
+        return Err("devenv: write of a directory");
+    }
+    if c.mode == OREAD {
+        return Err("devenv: file not open for writing");
+    }
+    let group = current_group()?;
+    let node = LockNode::new();
+    let mut guard = group.lock(&node);
+    let off = if offset == u64::MAX { c.offset } else { offset };
+    let n = guard.write(c.qid.path, buf, off)?;
+    drop(guard);
+    if offset == u64::MAX {
+        c.offset += n;
+    }
+    Ok(n)
 }
 
 /// Create a new key under the env root (donor envcreate) and return it
@@ -296,14 +417,66 @@ pub fn write(c: &mut Chan, buf: &[u8], offset: u64) -> Result<u64> {
 /// syscall side's business).  `perms` is accepted and ignored this era
 /// (every env file serves 0666 per the donor's envgen).
 pub fn create(c: &Chan, name: &[u8], mode: u32, perms: u32) -> Result<Chan> {
-    let _ = (c, name, mode, perms);
-    Err("devenv: unimplemented (RED skeleton)")
+    let _ = perms;
+    if c.qid.typ != QTDIR || c.qid.path != 0 {
+        return Err("devenv: create under a non-directory");
+    }
+    let group = current_group()?;
+    let qid_path = {
+        let node = LockNode::new();
+        let mut guard = group.lock(&node);
+        guard.create(name)?
+    };
+    let mut nc = Chan::new(DEV_ENV, Qid { path: qid_path, vers: 0, typ: QTFILE }, mode & crate::dat::OMASK);
+    nc.path = c.path.clone();
+    nc.path.push(b'/');
+    nc.path.extend_from_slice(name);
+    Ok(nc)
 }
 
 /// stat of an env chan (sys_stat/sys_fstat's dispatch leg): the root
 /// serves name "#e", DMDIR|0775, the group's vers (donor envgen/envstat);
 /// a key serves name, 0666, the value's length, the entry's qid.
 pub fn stat(c: &Chan, sb: &mut [u8]) -> Result<u64> {
-    let _ = (c, sb);
-    Err("devenv: unimplemented (RED skeleton)")
+    let group = current_group()?;
+    let node = LockNode::new();
+    let guard = group.lock(&node);
+    if c.qid.typ == QTDIR {
+        return write_stat_record(sb, b"#e", 0, guard.vers(), QTDIR, 0x8000_0000 | 0o775, 0);
+    }
+    let Some(e) = guard.get_qid(c.qid.path) else {
+        return Err("devenv: nonexistent entry");
+    };
+    write_stat_record(sb, &e.name, e.qid_path, e.vers, QTFILE, 0o666, e.value.len() as u64)
+}
+
+/// One stat(5) wire record (the devcons/devproc shape; uid/gid glenda
+/// per D-02).  Returns the byte count (the convD2M contract).
+fn write_stat_record(
+    sb: &mut [u8],
+    name: &[u8],
+    qid_path: u64,
+    vers: u32,
+    typ: u8,
+    mode: u32,
+    length: u64,
+) -> Result<u64> {
+    let need = 41 + (2 + name.len()) + (2 + 6) + (2 + 6);
+    if sb.len() < need {
+        return Err("devenv: stat buffer too small");
+    }
+    let mut w = crate::dat::StatWriter::new(sb);
+    w.u16(0); // type: unused this era
+    w.u32(DEV_ENV as u32);
+    w.u8(typ);
+    w.u32(vers);
+    w.u64(qid_path);
+    w.u32(mode);
+    w.u32(0); // atime
+    w.u32(0); // mtime
+    w.u64(length);
+    w.string(name);
+    w.string(b"glenda");
+    w.string(b"glenda");
+    Ok(w.finish())
 }

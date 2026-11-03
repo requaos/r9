@@ -424,6 +424,25 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
     // a /proc/N/note write from the very first process resolves.
     port::devproc::set_post_hook(proc::post_note);
 
+    // 05-05 (D-07, RESEARCH Pattern 3 / Pitfall 1): the kernel-seeded
+    // ROOT env group — the ONE mechanism replacing both 9k's #ec config
+    // env and the 05-04 transitional argv hint.  cputype feeds boot's
+    // execinit path build ("/aarch64/init -t"; without it boot builds
+    // "//init" and dies); nobootprompt=embed selects the root-server
+    // method WITHOUT the outin() prompt (rootserver reads #e/nobootprompt
+    // first — a devenv failure here hangs at outin and the boot gate
+    // TIMES OUT LOUDLY); readparts=0 skips the sd* partition scan
+    // (boot.c partinit's getenv).  The hook + seed land BEFORE the first
+    // proc exists; pid 1 gets the root group below, and rfork derives
+    // every later proc's group from its parent.
+    port::devenv::set_group_hook(proc::current_env_group);
+    let root_env = port::devenv::seed_root_group(&[
+        (b"cputype", b"aarch64"),
+        (b"nobootprompt", b"embed"),
+        (b"readparts", b"0"),
+    ]);
+    println!("devenv: seeded cputype=aarch64 nobootprompt=embed readparts=0");
+
     // D-15: the initrd paqfs is the root tree; exec sources the entry binary
     // through the devroot walk/open path (one mechanism).  05-04: the walk
     // generalizes to a PATH — devroot's walk is single-component, so loop it
@@ -457,13 +476,12 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
     // record + the eager data/bss pages (05-04's cold-arg fix) + exactly
     // two eager stack-side pages (the seed stack and the zeroed Tos page) +
     // the forkret frame (04-04 machinery).  Text/stack/tos fault in (D-09).
-    // 05-04 Task 3: the transitional argv hint — [boot, "embed"] selects
-    // boot(8)'s embed method via rootserver's argv fallback (post-ARGBEGIN
-    // argv[0]).  05-05 REPLACES this with the kernel-seeded devenv root
-    // group (cputype/nobootprompt) and reduces argv to [boot] — the
-    // comment's removal point is here.
+    // 05-05 (Pattern 3): argv is back to [boot] — the 05-04 transitional
+    // "embed" argv hint is RETIRED; the kernel-seeded env group above is
+    // THE method-selection mechanism (boot's rootserver reads
+    // #e/nobootprompt before any argv fallback).
     let name = core::str::from_utf8(leaf).unwrap_or("?");
-    let argv: &[&[u8]] = if cfg!(dev_bootchain) { &[leaf, b"embed"] } else { &[leaf] };
+    let argv: &[&[u8]] = &[leaf];
     let proc = proc::new_user_proc(name).unwrap_or_else(|err| panic!("proc: {err}"));
     // 05-04 (D-03): the first process's namespace root — slash and dot both
     // start at the devroot attach (the donor's slash/dot; rfork inherits
@@ -471,6 +489,10 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
     // naming the same tree.
     proc.slash = Some(slash_chan.dup());
     proc.dot = Some(slash_chan);
+    // 05-05 (D-07): pid 1 runs in the seeded ROOT env group (assigned
+    // explicitly — the slash/dot seeding's twin; Proc::new's fresh empty
+    // group is the never-seeded default).
+    proc.env_group = root_env;
     exec::exec_into(proc, img, &bin, name, argv)
         .unwrap_or_else(|err| panic!("exec: {entry_str}: {err}"));
     let frame = unsafe { &*proc.frame };

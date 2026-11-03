@@ -33,7 +33,7 @@
 
 use alloc::vec::Vec;
 
-use port::dat::{DEV_CONS, DEV_PROC, DEV_ROOT, OEXEC};
+use port::dat::{DEV_CONS, DEV_ENV, DEV_PROC, DEV_ROOT, OEXEC};
 use port::mcslock::LockNode;
 use port::namec::{self, NamecMode};
 use port::pgrp::{MAFTER, MBEFORE, MMASK, MORDER};
@@ -66,14 +66,15 @@ const PWRITE: u64 = 51;
 // rfork flags (Harvey sys/include/libc.h — frozen values; 04-07).
 // pub(crate) since 05-04: proc.rs's rfork_clone reads RFNAMEG/RFCNAMEG
 // (the D-03 namespace group semantics) — one mirror, one provenance.
+// RFENVG/RFCENVG joined the pub(crate) set in 05-05 (D-07 env groups).
 pub(crate) const RFNAMEG: u64 = 1 << 0;
-const RFENVG: u64 = 1 << 1;
+pub(crate) const RFENVG: u64 = 1 << 1;
 const RFFDG: u64 = 1 << 2;
 const RFPROC: u64 = 1 << 4;
 const RFMEM: u64 = 1 << 5;
 pub(crate) const RFNOWAIT: u64 = 1 << 6;
 pub(crate) const RFCNAMEG: u64 = 1 << 10;
-const RFCENVG: u64 = 1 << 11;
+pub(crate) const RFCENVG: u64 = 1 << 11;
 const RFCFDG: u64 = 1 << 12;
 const RFREND: u64 = 1 << 13;
 
@@ -223,14 +224,16 @@ unsafe fn user_slice_mut(va: u64, n: u64) -> &'static mut [u8] {
 
 /// PWRITE(51): fd, buf, n, offset.  Offset -1 (u64::MAX) is the streaming
 /// channel offset (Harvey libc write() = pwrite(fd, buf, n, -1LL) — Pitfall
-/// 7); the console ignores offsets (writes append), devroot is read-only.
-/// n is a `long` — 32-bit in Plan 9 C (SZ_LONG=4), so the wire slot's upper
-/// half is 7c garbage and must be masked (the width discipline above).
+/// 7); the console ignores offsets (writes append), devroot is read-only,
+/// devenv honors them (05-05: donor envwrite's grow-at-offset + streaming
+/// advance).  n is a `long` — 32-bit in Plan 9 C (SZ_LONG=4), so the wire
+/// slot's upper half is 7c garbage and must be masked (the width
+/// discipline above).
 fn sys_pwrite(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 4) else {
         return err(proc, "pwrite: bad argument block");
     };
-    let (fd, buf, n, _off) = (args[0] & 0xffff_ffff, args[1], args[2] & 0xffff_ffff, args[3]); // fd is an int
+    let (fd, buf, n, off) = (args[0] & 0xffff_ffff, args[1], args[2] & 0xffff_ffff, args[3]); // fd is an int
     if proc.validate_user_range(buf, n, false).is_err() {
         return err(proc, "pwrite: bad user buffer");
     }
@@ -259,6 +262,19 @@ fn sys_pwrite(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
                 return err(proc, "pwrite: bad fd");
             };
             match port::devproc::write(chan, unsafe { user_slice(buf, n) }) {
+                Ok(wrote) => wrote,
+                Err(msg) => err(proc, msg),
+            }
+        }
+        DEV_ENV => {
+            // devenv (05-05, D-07): the write lands in the OPERATING
+            // proc's env group (the device resolves it via the
+            // registered hook — donor envgrp(c)); offsets per envwrite
+            // (streaming offset honored, grow-at-offset).
+            let Some(chan) = proc.fd(fd) else {
+                return err(proc, "pwrite: bad fd");
+            };
+            match port::devenv::write(chan, unsafe { user_slice(buf, n) }, off) {
                 Ok(wrote) => wrote,
                 Err(msg) => err(proc, msg),
             }
@@ -313,6 +329,19 @@ fn sys_pread(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             }
         }
         DEV_PROC => err(proc, "devproc: note files are write-only"),
+        DEV_ENV => {
+            // devenv (05-05, D-07): the read comes from the OPERATING
+            // proc's env group (hook-resolved — donor envgrp(c)); the
+            // root dir serves the group's stat-wire listing, a key serves
+            // its value (clamped, EOF = 0); streaming offset honored.
+            let Some(chan) = proc.fd(fd) else {
+                return err(proc, "pread: bad fd");
+            };
+            match port::devenv::read(chan, unsafe { user_slice_mut(buf, n) }, off) {
+                Ok(read) => read,
+                Err(msg) => err(proc, msg),
+            }
+        }
         _ => err(proc, "pread: unknown device"),
     }
 }
@@ -778,9 +807,16 @@ fn sys_close(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 /// fork(2): RFPROC+neither shares the parent's pgrp, RFNAMEG deep-copies,
 /// RFCNAMEG starts clean — and the non-RFPROC split (boot(8)'s
 /// `rfork(RFNAMEG)`): the CALLER's group becomes a fresh copy (RFNAMEG) or
-/// fresh empty (RFCNAMEG).  The non-RFPROC fd-group split (RFFDG/RFCFDG)
-/// has no measured caller and stays a loud -1 — never silent partial
-/// semantics.  Every other bit combination is a loud -1 errstr.
+/// fresh empty (RFCNAMEG).  05-05 (D-07) adds the ENV group semantics,
+/// the same donor shape (fork(2): "RFENVG: the environment variables are
+/// COPIED; otherwise the two processes SHARE"; "RFCENVG: the new process
+/// starts with an EMPTY environment"): RFPROC+neither shares the
+/// parent's env group, RFENVG deep-copies (envcpy), RFCENVG empties; the
+/// non-RFPROC env split (newns's `rfork(RFENVG|RFCNAMEG)`) re-groups the
+/// CALLER (copy on RFENVG, empty on RFCENVG).  The non-RFPROC fd-group
+/// split (RFFDG/RFCFDG) has no measured caller and stays a loud -1 —
+/// never silent partial semantics.  Every other bit combination is a
+/// loud -1 errstr.
 fn sys_rfork(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 1) else {
         return err(proc, "rfork: bad argument block");
@@ -792,19 +828,25 @@ fn sys_rfork(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     {
         return err(proc, "rfork: bad flags");
     }
-    const SUPPORTED: u64 = RFPROC | RFMEM | RFFDG | RFNOWAIT | RFREND | RFNAMEG | RFCNAMEG;
+    const SUPPORTED: u64 =
+        RFPROC | RFMEM | RFFDG | RFNOWAIT | RFREND | RFNAMEG | RFCNAMEG | RFENVG | RFCENVG;
     if flag & !SUPPORTED != 0 {
         return err(proc, "rfork: unsupported flags");
     }
     if flag & RFPROC == 0 {
         // Donor non-RFPROC branch: RFMEM/RFNOWAIT are Ebadarg; the fd-group
         // split is unsupported this era (loud); the namespace group split
-        // (RFNAMEG copy / RFCNAMEG wipe) re-groups the CALLER.
+        // (RFNAMEG copy / RFCNAMEG wipe) re-groups the CALLER, as does
+        // the env group split (05-05: RFENVG copy / RFCENVG empty —
+        // newns's rfork(RFENVG|RFCNAMEG)).
         if flag & (RFMEM | RFNOWAIT | RFFDG | RFCFDG) != 0 {
             return err(proc, "rfork: bad flags for non-RFPROC");
         }
         if flag & (RFNAMEG | RFCNAMEG) != 0 {
             proc::rfork_namespace_split(proc, flag & RFNAMEG != 0);
+        }
+        if flag & (RFENVG | RFCENVG) != 0 {
+            proc::rfork_env_split(proc, flag & RFENVG != 0);
         }
         return 0;
     }

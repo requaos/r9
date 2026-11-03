@@ -21,7 +21,7 @@
 //! devroot.rs's header); the registry is a plain match over attach fns,
 //! the established free-function device idiom.
 
-use crate::dat::{Chan, DEV_CONS, DEV_PROC, DEV_ROOT};
+use crate::dat::{Chan, DEV_CONS, DEV_ENV, DEV_PROC, DEV_ROOT};
 use crate::pgrp::Pgrp;
 use crate::Result;
 
@@ -49,12 +49,16 @@ pub enum NamecMode {
 /// The device registry (05-04, D-03; RESEARCH OQ-3's hand-built shape):
 /// '#' + rune → the device's attach fn.  The spec (the bytes between the
 /// rune and the next '/') is accepted and ignored by this era's devices
-/// (devcons/devproc serve one tree each — devroot's attach precedent).
+/// (devcons/devproc serve one tree each — devroot's attach precedent);
+/// devenv (05-05) is the exception: it VALIDATES the spec (empty only —
+/// a "#ec" attach names the donor's config group, which the seeded root
+/// group replaces; the loud error is boot's designed fail-soft path).
 /// devroot is NOT a registry member: absolute paths reach it through the
 /// proc's slash chan (the donor's slash is the boot root attach).
-fn registry_attach(rune: char, _spec: &[u8]) -> Result<Chan> {
+fn registry_attach(rune: char, spec: &[u8]) -> Result<Chan> {
     match rune {
         'c' => Ok(crate::devcons::attach()),
+        'e' => crate::devenv::attach(spec),
         'p' => Ok(crate::devproc::attach()),
         _ => Err("namec: unknown # device"),
     }
@@ -91,6 +95,7 @@ fn dev_walk(c: &Chan, comp: &[u8]) -> Result<Chan> {
         DEV_ROOT => crate::devroot::root().ok_or("namec: devroot not mounted")?.walk(c, comp),
         DEV_CONS => crate::devcons::walk(c, comp),
         DEV_PROC => crate::devproc::walk(c, comp),
+        DEV_ENV => crate::devenv::walk(c, comp),
         _ => Err("namec: chan with unknown device index"),
     }
 }
@@ -168,6 +173,8 @@ pub fn namec(path: &[u8], slash: &Chan, dot: &Chan, pg: &Pgrp, mode: NamecMode) 
 /// the registry's twin).  Each device's open enforces its own mode
 /// discipline (devroot rejects write-side modes and OTRUNC; the flag bits
 /// beyond the access mode are the device's business per 9k convention).
+/// devenv gets the FULL mode (its open honors OTRUNC — the setenv flow's
+/// create-on-existing → OTRUNC-open fallback per 9k chan.c Acreate).
 pub fn open_chan(c: &Chan, mode: u32) -> Result<Chan> {
     let access = mode & crate::dat::OMASK;
     match c.dev {
@@ -179,6 +186,7 @@ pub fn open_chan(c: &Chan, mode: u32) -> Result<Chan> {
         }
         DEV_CONS => crate::devcons::open(c, access),
         DEV_PROC => crate::devproc::open(c, access),
+        DEV_ENV => crate::devenv::open(c, mode),
         _ => Err("namec: chan with unknown device index"),
     }
 }
@@ -191,6 +199,7 @@ pub fn stat_chan(c: &Chan, sb: &mut [u8]) -> Result<u64> {
         DEV_ROOT => crate::devroot::root().ok_or("namec: devroot not mounted")?.stat(c, sb),
         DEV_CONS => crate::devcons::stat(c, sb),
         DEV_PROC => crate::devproc::stat(c, sb),
+        DEV_ENV => crate::devenv::stat(c, sb),
         _ => Err("namec: chan with unknown device index"),
     }
 }
