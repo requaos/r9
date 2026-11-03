@@ -38,6 +38,14 @@ If `No such file or directory (os error 2)` messages persist,
 check to ensure `qemu` or `qemu-kvm` is installed and the 
 `qemu-system-x86_64` binary is in your path (or `qemu-system-aarch64` in the case of aarch64).
 
+## Boot-test / ureg-check environment contract
+
+`cargo xtask boot-test` (any profile), `cargo xtask ureg-check`, and `cargo xtask initrd` require the `R9_HARVEY_DIR` environment variable naming a Harvey checkout (it must contain `aarch64/include/ureg.h`; the initrd bake additionally needs `build/aarch64/out/` + `.build/bin/mkpaqfs`). Unset or empty is a hard error naming the variable — there is no `../harvey` default (Phase 5, D-10: r9 knows nothing about sibling checkouts by default).
+
+## Nix packages
+
+With flakes enabled, `nix build .#kernel-virt` builds the shell-capable aarch64 kernel in a sandbox (the virtshell profile, debug, toolchain pinned by `rust-toolchain.toml`) and installs `kernel-virt.elf` plus `aarch64/lib/virt-gicv2.dtb` — the artifact Harvey's flake consumes as `inputs.r9.packages.<system>.kernel-virt` (Phase 5, D-11).
+
 ## Running on Qemu
 
 R9 can be run using qemu for the various supported architectures:
@@ -52,6 +60,7 @@ R9 can be run using qemu for the various supported architectures:
 |aarch64|virt (userspace-exec, SC#2)|cargo xtask boot-test --arch aarch64 --config virtexec|
 |aarch64|virt (preemptive multi-proc smoke)|cargo xtask boot-test --arch aarch64 --config virtmulti|
 |aarch64|virt (notes smoke, SC#4)|cargo xtask boot-test --arch aarch64 --config virtnotes|
+|aarch64|virtshell (Harvey boot chain: pid 1 = `/boot/boot`)|built by `cargo xtask build --arch aarch64 --config virtshell` — not a boot-test profile: its paqfs image is baked and delivered Harvey-side (see `packages.kernel-virt` below; Harvey's `nix run .#boot-r9` boots it to an interactive `/bin/rc`)|
 |x86-64|q35|cargo xtask qemu --arch x86-64 --verbose|
 |x86-64 (with kvm)|q35|cargo xtask qemu --arch x86-64 --kvm --verbose|
 |riscv|virt|cargo xtask qemu --arch riscv64 --verbose|
