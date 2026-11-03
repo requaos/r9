@@ -810,6 +810,15 @@ const BOOT_SCHED_SWITCH_MARKER: &str = "sched: switch";
 const BOOT_NOTE_GOT_MARKER: &str = "smokenote: got note";
 const BOOT_NOTE_RESUMED_MARKER: &str = "smokenote: resumed";
 
+/// Stack-smoke marker (05-01, D-15's staged half): the staged init's
+/// fourth child (stacksmoke) recurses depth 64 with ~256-byte frames,
+/// forcing multiple demand-paged stack page-ins beyond the two eager seed
+/// pages, and prints this on unwind through the real pwrite path.  The
+/// virtexec profile's marker set gains it — presence, never order (D-13);
+/// the multi/notes assertion sets are unchanged (the marker rides their
+/// initrd too, but they don't assert it).
+const BOOT_STACKSMOKE_MARKER: &str = "stacksmoke: depth 64 ok";
+
 /// Always-on negative scan (04-06): any panic/Unhandled-interrupt line in
 /// the capture fails the run — every profile EXCEPT the deliberate-panic
 /// one (whose expected flow prints exactly that dump).  Case-insensitive,
@@ -1270,6 +1279,20 @@ impl BootTestStep {
                         } else {
                             BootProfile::Exec
                         };
+                        // 05-01 (D-15): the exec profile's marker set gains
+                        // the stacksmoke depth-64 marker — presence, never
+                        // order (D-13).  All-exited arrives only after the
+                        // staged init reaped every child, so absence here is
+                        // definitive.  The multi/notes sets are unchanged.
+                        if profile == BootProfile::Exec
+                            && !contains_marker(&capture, BOOT_STACKSMOKE_MARKER.as_bytes())
+                        {
+                            return Err(self.fail(
+                                stage,
+                                &capture,
+                                "stacksmoke marker absent at all-exited",
+                            ));
+                        }
                         return self.finish(log_abs, &capture, profile);
                     }
                 }
@@ -1319,7 +1342,7 @@ impl BootTestStep {
             }
             BootProfile::Exec => {
                 println!(
-                    "boot-test: PASS -- banner, exec entry, init print, hello print and all-exited markers observed in order (SC#2)"
+                    "boot-test: PASS -- banner, exec entry, init print, hello print and all-exited markers observed in order, stacksmoke depth-64 marker present (SC#2 + 05-01 D-15)"
                 );
             }
             BootProfile::Multi => {
@@ -1668,8 +1691,8 @@ const INITRD_TREE: &str = "target/initrd-tree";
 const BOOTFS_PAQ: &str = "target/bootfs.paq";
 /// The staged binaries the initrd carries (D-03's SC-scoped set: the staged
 /// init + the hello ABI-bisect binary + 04-07's rfork/fd-ops smoke +
-/// 04-08's notes smoke).
-const INITRD_FILES: [&str; 4] = ["init", "hello", "smokefork", "smokenote"];
+/// 04-08's notes smoke + 05-01's D-15 stack-growth smoke).
+const INITRD_FILES: [&str; 5] = ["init", "hello", "smokefork", "smokenote", "stacksmoke"];
 
 impl InitrdStep {
     fn new(matches: &clap::ArgMatches) -> Self {
