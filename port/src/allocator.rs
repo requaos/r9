@@ -83,7 +83,15 @@ impl BumpAlloc {
     /// satisfied, otherwise returns `Some` of a pair of blocks:
     /// the first contains the prefix before the (aligned) block
     /// and the second is the requested block itself.
-    pub fn try_alloc(&self, align: usize, size: usize) -> Option<(Block, Block)> {
+    ///
+    /// (05-07: the parameter ORDER was `(align, size)` while BOTH call
+    /// sites pass `(size, align)` — `align_offset` then ran on the SIZE
+    /// and panicked ("align is not a power-of-two") on the first big
+    /// non-power-of-two tail allocation (devmnt's ~250 KB exec staging
+    /// buffer).  The names now match the call sites; the alignment
+    /// (always a power of two, from the Layout) is what align_offset
+    /// consumes.)
+    pub fn try_alloc(&self, size: usize, align: usize) -> Option<(Block, Block)> {
         let base = self.arena.as_ptr();
         let mut first = ptr::null_mut();
         let mut adjust = 0;
@@ -390,19 +398,31 @@ impl QuickFit {
         let mut header = self
             .unlink_allocated_misc(block)
             .or_else(|| {
+                // The usual way: malloc a fresh header.  (05-07: this arm
+                // was INVERTED — `is_null().then(carve)` produced the
+                // carved header only when malloc FAILED, and
+                // `.expect("allocated header block")` panicked whenever
+                // malloc SUCCEEDED — the first free of a tail-allocated
+                // block (devmnt's ~250 KB exec staging buffer) died here.
+                // Never exercised before: the kernel heap's allocation
+                // pattern was alloc-never-free for every > MAX_QUICK_SIZE
+                // block until exec staging.)
                 let hblock = self.malloc(Layout::new::<Header>()).cast::<Header>();
-                let hblock = hblock
-                    .is_null()
-                    .then(|| {
-                        let offset = block.align_offset(MIN_ALLOC_SIZE);
-                        let hblock = block.as_ptr().wrapping_add(offset);
-                        let next = hblock.wrapping_add(MIN_ALLOC_SIZE);
-                        block = unsafe { NonNull::new_unchecked(next) };
-                        size -= offset + MIN_ALLOC_SIZE;
-                        align = MIN_ALLOC_SIZE;
-                        hblock.cast()
-                    })
-                    .expect("allocated header block");
+                let hblock = if hblock.is_null() {
+                    // The heap is too full for a fresh header: carve it
+                    // from the block being freed (guaranteed big enough —
+                    // anything smaller would have been allocated from a
+                    // quick list and freed through that path).
+                    let offset = block.align_offset(MIN_ALLOC_SIZE);
+                    let hblock = block.as_ptr().wrapping_add(offset);
+                    let next = hblock.wrapping_add(MIN_ALLOC_SIZE);
+                    block = unsafe { NonNull::new_unchecked(next) };
+                    size -= offset + MIN_ALLOC_SIZE;
+                    align = MIN_ALLOC_SIZE;
+                    hblock.cast::<Header>()
+                } else {
+                    hblock
+                };
                 let header = Header::new(block, size, align, None);
                 unsafe {
                     ptr::write(hblock, header);
@@ -528,5 +548,44 @@ pub mod global {
         unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
             self.with_allocator(|quick| unsafe { quick.realloc(ptr, layout, new_size) })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::alloc::Layout;
+
+    /// 05-07 regression: the > MAX_QUICK_SIZE, non-power-of-two TAIL path
+    /// (devmnt's ~250 KB exec staging buffer tripped it).  Pre-fix the
+    /// BumpAlloc arg order ran `align_offset` on the SIZE ("align is not
+    /// a power-of-two" panic), and free_misc's fresh-header arm panicked
+    /// whenever the header malloc SUCCEEDED ("allocated header block").
+    #[test]
+    fn tail_alloc_big_nonpow2_free_and_realloc() {
+        let mut arena = alloc::vec![0u8; 1024 * 1024];
+        let start = arena.as_mut_ptr();
+        let len = arena.len();
+        let tail = BumpAlloc::new(unsafe { Block::new_from_raw_parts(start, len) });
+        let mut qf = QuickFit::new(tail);
+        let layout = Layout::from_size_align(200_000, 1).unwrap();
+        let p = qf.malloc(layout);
+        assert!(!p.is_null(), "a 200 KB non-pow2 tail allocation succeeds");
+        unsafe { p.write_bytes(0xA5, 200_000) };
+        qf.free(p, layout);
+        let p2 = qf.malloc(layout);
+        assert!(!p2.is_null(), "the freed tail block is reallocatable");
+        unsafe { p2.write_bytes(0x5A, 200_000) };
+        qf.free(p2, layout);
+        // And a same-size triple cycle (the Vec-growth realloc pattern:
+        // alloc bigger, free smaller, repeat).
+        let small = Layout::from_size_align(100_000, 1).unwrap();
+        let big = Layout::from_size_align(300_000, 1).unwrap();
+        let a = qf.malloc(small);
+        assert!(!a.is_null());
+        let b = qf.malloc(big);
+        assert!(!b.is_null());
+        qf.free(a, small);
+        qf.free(b, big);
     }
 }
