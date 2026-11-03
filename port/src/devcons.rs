@@ -134,6 +134,8 @@ pub(crate) const QID_CONS: u64 = 1;
 pub(crate) const QID_NULL: u64 = 2;
 pub(crate) const QID_USER: u64 = 3;
 pub(crate) const QID_HOSTOWNER: u64 = 4;
+/// 05-07 Task 2: the time file (settime's OWRITE target).
+pub(crate) const QID_TIME: u64 = 5;
 
 /// attach: the devcons root chan (one console tree this era — the attach
 /// spec is empty, the devroot attach precedent).
@@ -151,14 +153,30 @@ pub fn attach() -> crate::dat::Chan {
 /// syscall context only.
 static HOSTOWNER: Lock<alloc::vec::Vec<u8>> = Lock::new("hostowner", alloc::vec::Vec::new());
 
+/// 05-07 Task 2: the `#c/time` file joins the attach surface (the donor
+/// devcons.c Qtime).  settime's boot flow opens it OWRITE and writes the
+/// root's atime as decimal seconds — r9 has NO RTC this phase, so the
+/// semantics are accept-and-record-the-attempt: the write STORES the
+/// bytes (comment-documented, never a failure — a failure would only warn
+/// in settime, but silence here keeps the boot log clean for marker
+/// assertions) and a later read returns the recorded value (or a
+/// plausible fixed epoch before any write — the donor's time file always
+/// has an answer).
+static TIME: Lock<alloc::vec::Vec<u8>> = Lock::new("time", alloc::vec::Vec::new());
+
+/// The pre-write answer for a `#c/time` read (a plausible fixed epoch —
+/// 2023-11-14; the value is informational only until settime's write).
+const TIME_DEFAULT: &[u8] = b"1700000000\n";
+
 /// The per-file static metadata (name, qid, mode) — the walk table and the
 /// directory listing share it.  lengths are computed at read/stat time
-/// (hostowner's varies).
-const FILES: [(&[u8], u64, u32); 4] = [
+/// (hostowner's and time's vary).
+const FILES: [(&[u8], u64, u32); 5] = [
     (b"cons", QID_CONS, 0o666),
     (b"null", QID_NULL, 0o666),
     (b"user", QID_USER, 0o444),
     (b"hostowner", QID_HOSTOWNER, 0o664),
+    (b"time", QID_TIME, 0o664),
 ];
 
 /// Walk a single name component from the devcons root.
@@ -200,9 +218,20 @@ fn hostowner_len() -> u64 {
     HOSTOWNER.lock(&node).len() as u64
 }
 
+/// The time file's current length (05-07): the recorded write's length,
+/// or the fixed default's before any write.
+fn time_len() -> u64 {
+    let node = LockNode::new();
+    let stored = TIME.lock(&node);
+    if stored.is_empty() { TIME_DEFAULT.len() as u64 } else { stored.len() as u64 }
+}
+
 /// The "user" file's content (D-02's sane default: glenda — the auth stub
-/// never runs a real handshake this phase).
-const USER_CONTENT: &[u8] = b"glenda\n";
+/// never runs a real handshake this phase).  NO trailing newline (the
+/// donor's Quser read is `readstr(up->user)` — the bare name): init's
+/// readenv("#c/user") feeds newns's `$user` → `/usr/$user` verbatim, so a
+/// newline would poison the home path.
+const USER_CONTENT: &[u8] = b"glenda";
 
 /// One stat(5) wire record for a file (the shared StatWriter shape; the
 /// 41-byte fixed part + three length-prefixed strings).
@@ -236,7 +265,13 @@ pub fn stat(c: &crate::dat::Chan, sb: &mut [u8]) -> crate::Result<u64> {
     let Some((name, qid, mode)) = FILES.iter().find(|(_, q, _)| *q == c.qid.path) else {
         return Err("devcons: stat of unknown file");
     };
-    let length = if *qid == QID_HOSTOWNER { hostowner_len() } else { 0 };
+    let length = if *qid == QID_HOSTOWNER {
+        hostowner_len()
+    } else if *qid == QID_TIME {
+        time_len()
+    } else {
+        0
+    };
     write_stat_record(sb, name, *qid, *mode, length)
 }
 
@@ -256,7 +291,13 @@ pub fn read(c: &mut crate::dat::Chan, buf: &mut [u8], offset: u64) -> crate::Res
             let mut listing = alloc::vec::Vec::new();
             for (name, qid, mode) in FILES {
                 let start = listing.len();
-                let length = if qid == QID_HOSTOWNER { hostowner_len() } else { 0 };
+                let length = if qid == QID_HOSTOWNER {
+                    hostowner_len()
+                } else if qid == QID_TIME {
+                    time_len()
+                } else {
+                    0
+                };
                 listing.resize(start + 41 + (2 + name.len()) + 2 * (2 + 6), 0);
                 write_stat_record(&mut listing[start..], name, qid, mode, length)?;
             }
@@ -284,6 +325,19 @@ pub fn read(c: &mut crate::dat::Chan, buf: &mut [u8], offset: u64) -> crate::Res
             buf[..n].copy_from_slice(&avail[..n]);
             n as u64
         }
+        QID_TIME => {
+            // 05-07 Task 2: the recorded settime write, or the fixed
+            // default before any write (the donor's time file always has
+            // an answer).
+            let node = LockNode::new();
+            let stored = TIME.lock(&node);
+            let content: &[u8] = if stored.is_empty() { TIME_DEFAULT } else { &stored };
+            let start = (off as usize).min(content.len());
+            let avail = &content[start..];
+            let n = avail.len().min(buf.len());
+            buf[..n].copy_from_slice(&avail[..n]);
+            n as u64
+        }
         _ => return Err("devcons: read of unknown file"),
     };
     if offset == u64::MAX {
@@ -304,6 +358,16 @@ pub fn write(c: &mut crate::dat::Chan, buf: &[u8]) -> crate::Result<u64> {
         QID_HOSTOWNER => {
             let node = LockNode::new();
             let mut stored = HOSTOWNER.lock(&node);
+            stored.clear();
+            stored.extend_from_slice(buf);
+            Ok(buf.len() as u64)
+        }
+        QID_TIME => {
+            // 05-07 Task 2: accept-and-record-the-attempt (no RTC this
+            // phase — the write SUCCEEDS and stores the bytes; settime's
+            // contract is only that the write never fails).
+            let node = LockNode::new();
+            let mut stored = TIME.lock(&node);
             stored.clear();
             stored.extend_from_slice(buf);
             Ok(buf.len() as u64)

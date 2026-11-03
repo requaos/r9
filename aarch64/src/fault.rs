@@ -158,10 +158,11 @@ fn page_in_from_image(proc: &mut Proc, page_va: usize, kind: SegKind) {
     };
     let clamp = content_end.saturating_sub(page_va).min(PAGE_SIZE_4K);
     let dst = &mut full[..clamp];
-    let fs = port::paqfs::Paqfs::open_image(source.image)
-        .unwrap_or_else(|err| panic!("fault: paqfs reopen failed: {err}"));
-    if let Err(err) = fs.read_at(&source.dir, file_off, dst) {
-        panic!("fault: paqfs read_at failed: {err}");
+    // 05-07: the byte source abstracts the backing (devroot's paqfs image
+    // window, or a devmnt binary's staged whole-file buffer — the pager
+    // NEVER RPCs; trap context can't block on the server).
+    if let Err(err) = source.read_at(file_off, dst) {
+        panic!("fault: byte-source read_at failed: {err}");
     }
     if kind == SegKind::Text {
         flush_icache_user_range(page_va, page_va + PAGE_SIZE_4K);

@@ -139,15 +139,59 @@ impl Segments {
     }
 }
 
-/// The demand-page byte source for text/data: the exec'd binary's paqfs
-/// directory entry plus the image it reads from, and the data-segment file
-/// base (40 + textsize — Pitfall 5: data file offsets are NOT page-aligned).
-/// Clone for 04-07's rfork (the child mirrors the parent's source handles).
+/// The demand-page byte source's backing (05-07 adds the devmnt variant).
+#[derive(Clone)]
+pub enum ByteBacking {
+    /// devroot binaries: the initrd image + the file's paqfs entry
+    /// (demand-paged reads index the image by file offset — 04-04).
+    Paq { dir: PaqDir, image: &'static [u8] },
+    /// devmnt binaries (05-07, the /bin union crossing): the WHOLE file,
+    /// read eagerly at exec through the 9P client — syscall context can
+    /// block on RPCs; the trap-context pager NEVER can (a fault can't
+    /// block on the server), so the bytes are kernel-owned from exec on.
+    /// Arc-shared across rfork (04-07's source-handle clone).
+    Mnt { file: Arc<Vec<u8>> },
+}
+
+impl ByteBacking {
+    /// Read the file's bytes at `file_off` into `dst` (exec + the pager's
+    /// shared byte window), clamped to the file's length; returns the byte
+    /// count (0 at/past EOF).
+    pub fn read_at(&self, file_off: u64, dst: &mut [u8]) -> Result<usize> {
+        match self {
+            ByteBacking::Paq { dir, image } => {
+                let fs = port::paqfs::Paqfs::open_image(image)?;
+                fs.read_at(dir, file_off, dst)
+            }
+            ByteBacking::Mnt { file } => {
+                if file_off >= file.len() as u64 {
+                    return Ok(0);
+                }
+                let start = file_off as usize;
+                let n = (file.len() - start).min(dst.len());
+                dst[..n].copy_from_slice(&file[start..start + n]);
+                Ok(n)
+            }
+        }
+    }
+}
+
+/// The demand-page byte source for text/data: the backing (the paqfs image
+/// entry for devroot binaries; the staged whole file for devmnt ones) plus
+/// the data-segment file base (40 + textsize — Pitfall 5: data file offsets are NOT page-aligned).
+/// Clone for 04-07's rfork (the child mirrors the parent's source handles;
+/// the Mnt variant Arc-shares the staged bytes).
 #[derive(Clone)]
 pub struct ByteSource {
-    pub dir: PaqDir,
-    pub image: &'static [u8],
+    pub backing: ByteBacking,
     pub data_file_base: u64,
+}
+
+impl ByteSource {
+    /// The pager's read path (fault.rs) — delegates to the backing.
+    pub fn read_at(&self, file_off: u64, dst: &mut [u8]) -> Result<usize> {
+        self.backing.read_at(file_off, dst)
+    }
 }
 
 /// A queued note message (04-08 delivers at the return-to-EL0 boundary).

@@ -15,13 +15,13 @@ use core::ptr;
 
 use port::Result;
 use port::mem::{PAGE_SIZE_4K, PhysAddr, PhysRange, VirtRange};
-use port::paqfs::{PaqDir, Paqfs};
+use port::paqfs::PaqDir;
 use port::println;
 
 use crate::kmem::physaddr_as_ptr_mut_offset_from_kzero;
 use crate::pagealloc;
 use crate::param::KZERO;
-use crate::proc::{ByteSource, MappingRecord, Proc, ProcState, SegKind, Segments};
+use crate::proc::{ByteBacking, ByteSource, MappingRecord, Proc, ProcState, SegKind, Segments};
 use crate::trap::TrapFrame;
 use crate::vm::{self, Entry, PageSize, PhysPageAllocator, RootPageTableType, VmTraitImpl};
 
@@ -113,15 +113,16 @@ pub fn parse_aout(bytes: &[u8]) -> Result<AoutHeader> {
     Ok(AoutHeader { text, data, bss, syms, entry, text_va, data_va })
 }
 
-/// Read + parse + validate the 40-byte a.out header through the paqfs
-/// window — byte-granular, Pitfall-5 discipline (no page-alignment
-/// assumptions on file offsets).  T-04-13: this runs BEFORE any mapping or
-/// freeing in both exec paths — an invalid image is a loud Err with
-/// everything intact.
-fn read_aout(image: &'static [u8], bin: &PaqDir) -> Result<AoutHeader> {
-    let fs = Paqfs::open_image(image)?;
+/// Read + parse + validate the 40-byte a.out header through the byte
+/// backing's window — byte-granular, Pitfall-5 discipline (no
+/// page-alignment assumptions on file offsets).  T-04-13: this runs BEFORE
+/// any mapping or freeing in both exec paths — an invalid image is a loud
+/// Err with everything intact.  05-07: the backing abstracts the byte
+/// source (devroot's paqfs image window, or a devmnt binary's staged
+/// whole-file buffer).
+fn read_aout(backing: &ByteBacking) -> Result<AoutHeader> {
     let mut hdr = [0u8; HDR_SIZE];
-    let n = fs.read_at(bin, 0, &mut hdr)?;
+    let n = backing.read_at(0, &mut hdr)?;
     if n < HDR_SIZE {
         return Err("exec: short read of a.out header");
     }
@@ -134,8 +135,7 @@ fn read_aout(image: &'static [u8], bin: &PaqDir) -> Result<AoutHeader> {
 /// returns (user_sp, tos_va).
 fn install_image(
     proc: &mut Proc,
-    image: &'static [u8],
-    bin: &PaqDir,
+    source: ByteSource,
     name: &str,
     args: &[&[u8]],
     aout: &AoutHeader,
@@ -152,11 +152,6 @@ fn install_image(
         stack: VirtRange::with_end(USTACKTOP - USTKSIZE, USTACKTOP),
         tos: VirtRange::with_end(USTACKTOP - 2 * PAGE_SIZE_4K, USTACKTOP - PAGE_SIZE_4K),
     });
-    proc.text_source = Some(ByteSource {
-        dir: bin.clone(),
-        image,
-        data_file_base: HDR_SIZE as u64 + aout.text,
-    });
     proc.set_name(name);
 
     // 05-04 (the 05-04 tracer surfaced phase-04 deferred-items #3): map the
@@ -171,7 +166,8 @@ fn install_image(
     // resolution that keeps BOTH rules: no nested paging anywhere, and
     // D-09's pinned wording ("faulting in user text and growing the user
     // stack") is untouched — text, stack and Tos stay demand-paged.
-    map_data_bss_eager(proc, image, bin, aout)?;
+    map_data_bss_eager(proc, &source, aout)?;
+    proc.text_source = Some(source);
 
     // SEED: the two eager stack-side pages (D-09/D-11) — the top-of-stack
     // seed page and the zeroed Tos page just below it.
@@ -185,16 +181,12 @@ fn install_image(
 /// 04-06 Rule-1 clamp: the file's trailing syms bytes must never bleed
 /// into the bss-sharing tail).  The pages are logged (SegKind::Data/Bss)
 /// so rfork's copy and exit's free cover them like any other mapping.
-fn map_data_bss_eager(
-    proc: &mut Proc,
-    image: &'static [u8],
-    bin: &PaqDir,
-    aout: &AoutHeader,
-) -> Result<()> {
+/// 05-07: reads ride the proc's byte source (the backing abstraction —
+/// paqfs image window or the staged devmnt buffer).
+fn map_data_bss_eager(proc: &mut Proc, source: &ByteSource, aout: &AoutHeader) -> Result<()> {
     let data_end = aout.data_va + aout.data as usize;
     let bss_end = data_end + aout.bss as usize;
     let data_file_base = HDR_SIZE as u64 + aout.text;
-    let fs = Paqfs::open_image(image)?;
     let mut page_va = aout.data_va;
     let data_pages_end = data_end.next_multiple_of(PAGE_SIZE_4K);
     while page_va < data_pages_end {
@@ -205,7 +197,7 @@ fn map_data_bss_eager(
             let dst = unsafe {
                 core::slice::from_raw_parts_mut(physaddr_as_ptr_mut_offset_from_kzero::<u8>(pa), clamp)
             };
-            fs.read_at(bin, file_off, dst).map_err(|_| "exec: data page-in read failed")?;
+            source.read_at(file_off, dst).map_err(|_| "exec: data page-in read failed")?;
         }
         page_va += PAGE_SIZE_4K;
     }
@@ -232,8 +224,10 @@ pub fn exec_into(
     name: &str,
     args: &[&[u8]],
 ) -> Result<()> {
-    let aout = read_aout(image, bin)?;
-    let (user_sp, tos_va) = install_image(proc, image, bin, name, args, &aout)?;
+    let backing = ByteBacking::Paq { dir: bin.clone(), image };
+    let aout = read_aout(&backing)?;
+    let source = ByteSource { backing, data_file_base: HDR_SIZE as u64 + aout.text };
+    let (user_sp, tos_va) = install_image(proc, source, name, args, &aout)?;
 
     // The forkret-shaped frame at kstack_top - 288 (the published TrapFrame
     // stride): R0 = tos, SP = seeded user stack, PC = entry, PSR = 0 (EL0t),
@@ -246,7 +240,9 @@ pub fn exec_into(
 }
 
 /// EXEC behind a running process (04-06's syscall path; Plan 9 sysexec
-/// semantics): REPLACE the caller's image with the binary at `bin`.
+/// semantics): REPLACE the caller's image with the binary carried by
+/// `backing` (05-07: the byte-source abstraction — devroot's paqfs image
+/// entry, or a devmnt binary's staged whole-file buffer).
 ///
 /// Ordering is the T-04-13 mitigation, verbatim from the plan: PARSE the new
 /// image's a.out first (plus every other fallible pre-check), FREE the old
@@ -270,14 +266,13 @@ pub fn exec_into(
 /// `frame.x0 = result` writeback AGREES with the seeded x0 by construction.
 pub fn exec_replace(
     proc: &mut Proc,
-    image: &'static [u8],
-    bin: &PaqDir,
+    backing: ByteBacking,
     name: &str,
     args: &[&[u8]],
     frame: &mut TrapFrame,
 ) -> Result<u64> {
     // PARSE first.
-    let aout = read_aout(image, bin)?;
+    let aout = read_aout(&backing)?;
     // Every remaining VALIDATION check runs BEFORE the free: the seed-fit
     // arithmetic.  (WR-07: seed_user_pages's pagealloc/map_to allocations
     // remain fallible AFTER the free — the "can no longer fail" invariant
@@ -301,11 +296,12 @@ pub fn exec_replace(
     proc.last_note_len = 0;
 
     // SEED third: fresh seed-stack + Tos pages, new segment records, new
-    // paqfs byte source.  A failure HERE is post-free (WR-07): returning
+    // byte source.  A failure HERE is post-free (WR-07): returning
     // -1 would eret into a trap frame whose pc/sp name freed text pages,
     // so the process dies loudly via the exit tail (the WR-06 fault-kill
     // shape — the parent reaps the wait record like any other death).
-    let (user_sp, tos_va) = match install_image(proc, image, bin, name, args, &aout) {
+    let source = ByteSource { backing, data_file_base: HDR_SIZE as u64 + aout.text };
+    let (user_sp, tos_va) = match install_image(proc, source, name, args, &aout) {
         Ok(v) => v,
         Err(msg) => {
             println!("exec: post-free seed failed ({msg}) — killing pid {}", proc.pid);

@@ -41,7 +41,7 @@ use port::println;
 
 use crate::exec;
 use crate::fault;
-use crate::proc::{self, ERRMAX, Proc, ProcState};
+use crate::proc::{self, ByteBacking, ERRMAX, Proc, ProcState};
 use crate::trap;
 use crate::trap::TrapFrame;
 
@@ -911,7 +911,11 @@ fn sys_brk_(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 fn sys_exec(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     const MAX_EXEC_ARGS: usize = 32;
     const MAX_EXEC_ARG_LEN: usize = 128;
-
+    /// The whole-file staging ceiling for a MOUNTED binary (05-07: read
+    /// eagerly at exec because the trap-context pager never RPCs) — far
+    /// past every subset binary (rc is ~250 KB), bounded so an untrusted
+    /// server can never stream the kernel into an unbounded allocation.
+    const EXEC_STAGE_CAP: usize = 16 * 1024 * 1024;
     let Some(args) = sargs(frame, proc, 2) else {
         return err(proc, "exec: bad argument block");
     };
@@ -941,32 +945,59 @@ fn sys_exec(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         }
     }
 
-    // Resolve the target through devroot (the one exec byte-source
-    // mechanism, D-15): absolute or bare path, component-wise walk, OEXEC.
-    let Some(root) = port::devroot::root() else {
-        return err(proc, "devroot: not mounted");
+    // 05-07 Task 2 (the wiring walk): resolve through the NAMESPACE —
+    // namec + the proc's mount table — so an exec path crosses mounts
+    // (execinit's /aarch64/init through the union-mounted /; init's
+    // /bin/rc through the post-newns /bin union into the mounted tree).
+    // The Phase-4 devroot-only prefix walk is retired (D-03's one-way
+    // door: resolution lives in the namespace core).
+    let pg = proc.pgrp.clone();
+    let c = {
+        let node = LockNode::new();
+        let guard = pg.lock(&node);
+        let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
+            return err(proc, "exec: no namespace (pre-exec)");
+        };
+        match namec::namec(&path, slash, dot, &guard, NamecMode::Open) {
+            Ok(c) => c,
+            Err(msg) => return err(proc, msg),
+        }
     };
-    let mut c = match root.attach_root() {
+    // open + stage OUTSIDE the pgrp lock: a devmnt open/read RPCs and
+    // BLOCKS mid-syscall (the pipe read schedules the server proc).
+    let opened = match namec::open_chan(&c, OEXEC) {
         Ok(c) => c,
         Err(msg) => return err(proc, msg),
     };
-    let mut last = &path[..];
-    for comp in path.split(|&b| b == b'/').filter(|c| !c.is_empty()) {
-        last = comp;
-        c = match root.walk(&c, comp) {
-            Ok(c) => c,
-            Err(_) => return err(proc, "exec: path does not exist"),
-        };
-    }
-    let Ok(c) = root.open(&c, OEXEC) else {
-        return err(proc, "exec: cannot exec-open");
+    let backing = match opened.dev {
+        DEV_ROOT => {
+            let Some(root) = port::devroot::root() else {
+                return err(proc, "devroot: not mounted");
+            };
+            match root.entry(&opened) {
+                Ok(bin) => ByteBacking::Paq { dir: bin, image: root.image() },
+                Err(msg) => return err(proc, msg),
+            }
+        }
+        DEV_MNT => {
+            // A mounted binary is read WHOLE here (devmnt::read_all) —
+            // syscall context, where the 9P client's blocking is by
+            // design; the trap-context pager must never RPC, so the
+            // staged bytes become the demand-page byte source.
+            match port::devmnt::read_all(&opened, EXEC_STAGE_CAP) {
+                Ok(bytes) => ByteBacking::Mnt { file: alloc::sync::Arc::new(bytes) },
+                Err(msg) => return err(proc, msg),
+            }
+        }
+        _ => return err(proc, "exec: path is not an executable source"),
     };
-    let Ok(bin) = root.entry(&c) else {
-        return err(proc, "exec: chan carries no paqfs entry");
-    };
-    let name = core::str::from_utf8(last).unwrap_or("?");
+    // The exec chan is a transient (never fd-installed): close-dispatch it
+    // (devmnt Tclunks the fid — the staged bytes now own the content).
+    port::namec::close_chan(&opened);
+    let leaf = path.split(|&b| b == b'/').filter(|c| !c.is_empty()).last().unwrap_or(&path[..]);
+    let name = core::str::from_utf8(leaf).unwrap_or("?");
     let arg_slices: Vec<&[u8]> = argv.iter().map(|a| a.as_slice()).collect();
-    match exec::exec_replace(proc, root.image(), &bin, name, &arg_slices, frame) {
+    match exec::exec_replace(proc, backing, name, &arg_slices, frame) {
         // dispatch writes frame.x0 = tos_va — the same value exec_replace
         // seeded into the frame's x0, so the writeback agrees by
         // construction and the eret enters the new image with R0 = tos.
