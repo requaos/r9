@@ -42,6 +42,67 @@
       '';
     in
     {
+      # D-11 (05-10): the ONLY artifact Harvey's flake input consumes — a
+      # derivation that builds the shell-capable aarch64 kernel ELF
+      # (`cargo xtask build --arch aarch64 --config virtshell`, debug profile:
+      # the gate default the apps and boot-test harness use) and installs it
+      # plus the committed aarch64/lib/virt-gicv2.dtb.  The toolchain comes
+      # from rust-toolchain.toml via toolchainFor (D-09's single-source rule —
+      # never a restated pin); cargo deps are vendored from the committed
+      # Cargo.lock via importCargoLock so the sandboxed build never touches
+      # the network (T-05-19).  Harvey bakes its own initrd and launches qemu
+      # itself — it consumes these as store paths, never by running xtask.
+      packages = forAllSystems (system:
+        let
+          pkgs = pkgsFor system;
+          toolchain = toolchainFor system;
+          # `-Z build-std=core,alloc` resolves the rust sysroot graph from
+          # the toolchain's rust-src component; that graph has its own
+          # crates.io members (rustc-literal-escaper et al., pinned by
+          # rust-src's library Cargo.lock), so the vendored set must cover
+          # BOTH lockfiles or the sandboxed sysroot build dies offline
+          # (the two sets are disjoint crate-name dirs — symlinkJoin merges).
+          # The name is load-bearing: importCargoLock's outputs ship a
+          # .cargo/config.toml whose vendored-sources directory is the
+          # RELATIVE "cargo-vendor-dir", and cargoSetupHook prefers that
+          # shipped config — the joined output must keep the name so the
+          # hook's copy lands where the config points.
+          cargoDeps = pkgs.symlinkJoin {
+            name = "cargo-vendor-dir";
+            paths = [
+              (pkgs.rustPlatform.importCargoLock { lockFile = ./Cargo.lock; })
+              (pkgs.rustPlatform.importCargoLock {
+                lockFile = "${toolchain}/lib/rustlib/src/rust/library/Cargo.lock";
+              })
+            ];
+          };
+        in
+        {
+          kernel-virt = pkgs.stdenv.mkDerivation {
+            pname = "r9-kernel-virt";
+            version = self.shortRev or "wip";
+            src = ./.;
+            nativeBuildInputs = [ toolchain pkgs.rustPlatform.cargoSetupHook ];
+            inherit cargoDeps;
+            buildPhase = ''
+              runHook preBuild
+              ${objcopyExport toolchain}
+              cargo xtask build --arch aarch64 --config virtshell
+              runHook postBuild
+            '';
+            installPhase = ''
+              runHook preInstall
+              mkdir -p "$out/aarch64/lib"
+              # The store-path contract Harvey's compose app (05-11) reads:
+              # the built kernel ELF, and the committed DTB at its
+              # repo-relative path (config TOML's `dtb` key names it).
+              cp target/aarch64-unknown-none-elf/debug/aarch64 "$out/kernel-virt.elf"
+              cp aarch64/lib/virt-gicv2.dtb "$out/aarch64/lib/virt-gicv2.dtb"
+              runHook postInstall
+            '';
+          };
+        });
+
       devShells = forAllSystems (system:
         let
           pkgs = pkgsFor system;
