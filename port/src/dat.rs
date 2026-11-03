@@ -109,6 +109,55 @@ impl Chan {
     }
 }
 
+/// Little-endian field writer for the stat(5) wire buffer (stat(5) is LE).
+/// 05-04 Task 3: lifted from devroot.rs so every device serves the same
+/// wire shape (sys_stat/sys_fstat's dispatch consumes the byte count from
+/// the size prefix).  The caller sizes `buf` (fixed part + the three
+/// length-prefixed strings); `finish` writes the size prefix last and
+/// returns the total byte count (convD2M's contract).
+pub(crate) struct StatWriter<'a> {
+    pub buf: &'a mut [u8],
+    pub p: usize,
+}
+
+impl<'a> StatWriter<'a> {
+    /// The fixed part is 41 bytes (size[2] type[2] dev[4] qid[13] mode[4]
+    /// atime[4] mtime[4] length[8]); the cursor starts past the size
+    /// prefix (written by finish).
+    pub(crate) fn new(buf: &'a mut [u8]) -> StatWriter<'a> {
+        StatWriter { buf, p: 2 }
+    }
+    pub(crate) fn u8(&mut self, v: u8) {
+        self.buf[self.p] = v;
+        self.p += 1;
+    }
+    pub(crate) fn u16(&mut self, v: u16) {
+        self.buf[self.p..self.p + 2].copy_from_slice(&v.to_le_bytes());
+        self.p += 2;
+    }
+    pub(crate) fn u32(&mut self, v: u32) {
+        self.buf[self.p..self.p + 4].copy_from_slice(&v.to_le_bytes());
+        self.p += 4;
+    }
+    pub(crate) fn u64(&mut self, v: u64) {
+        self.buf[self.p..self.p + 8].copy_from_slice(&v.to_le_bytes());
+        self.p += 8;
+    }
+    pub(crate) fn string(&mut self, s: &[u8]) {
+        self.u16(s.len() as u16);
+        self.buf[self.p..self.p + s.len()].copy_from_slice(s);
+        self.p += s.len();
+    }
+    /// Write the size prefix (bytes used minus the prefix itself) and
+    /// return the TOTAL byte count (prefix included) — the convD2M/sysstat
+    /// return contract.
+    pub(crate) fn finish(self) -> u64 {
+        let n = (self.p - 2) as u16;
+        self.buf[0..2].copy_from_slice(&n.to_le_bytes());
+        self.p as u64
+    }
+}
+
 #[allow(dead_code)]
 pub struct Device {
     _dc: u32,

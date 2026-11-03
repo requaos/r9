@@ -40,7 +40,6 @@ use port::pgrp::{MAFTER, MBEFORE, MMASK, MORDER};
 use port::println;
 
 use crate::exec;
-use crate::platform;
 use crate::proc::{self, ERRMAX, Proc, ProcState};
 use crate::trap;
 use crate::trap::TrapFrame;
@@ -53,10 +52,13 @@ const EXEC: u64 = 7;
 const EXITS: u64 = 8;
 const OPEN: u64 = 14;
 const RFORK: u64 = 19;
+const BRK_: u64 = 24;
 const NOTIFY: u64 = 28;
 const NOTED: u64 = 29;
 const UNMOUNT: u64 = 35;
 const ERRSTR: u64 = 41;
+const STAT: u64 = 42;
+const FSTAT: u64 = 43;
 const AWAIT: u64 = 47;
 const PREAD: u64 = 50;
 const PWRITE: u64 = 51;
@@ -85,9 +87,12 @@ type Handler = fn(&mut TrapFrame, &mut Proc) -> u64;
 /// exits(8)} plus D-14's named SC#4 core members EXEC(7), the 04-07 process
 /// pair RFORK(19)/AWAIT(47), and 04-08's notes pair NOTIFY(28)/NOTED(29),
 /// grown by 05-04 with the 05-03 real-chain trace's namespace members
-/// BIND(2), CHDIR(3) and UNMOUNT(35) (the trace measured unmount ×1 —
-/// boot's settime /tmp handling).  The trace carries no brk_(24)/segbrk(12)
-/// on the hello path, so they stay None.
+/// BIND(2), CHDIR(3), UNMOUNT(35) (unmount ×1 — boot's settime /tmp
+/// handling) and its Task-3 additions: the measured stat family STAT(42)/
+/// FSTAT(43) and BRK_(24) (×28 — malloc pool growth; boot's dirstat
+/// mallocs make it gate-load-bearing per the plan dispatch note).  The
+/// 04-01 trace carries no brk_/segbrk(12) on the hello path; segbrk stays
+/// None.
 static DISPATCH: [Option<Handler>; 55] = {
     let mut t: [Option<Handler>; 55] = [None; 55];
     t[BIND as usize] = Some(sys_bind);
@@ -99,8 +104,11 @@ static DISPATCH: [Option<Handler>; 55] = {
     t[RFORK as usize] = Some(sys_rfork);
     t[NOTIFY as usize] = Some(sys_notify);
     t[NOTED as usize] = Some(sys_noted);
+    t[BRK_ as usize] = Some(sys_brk_);
     t[UNMOUNT as usize] = Some(sys_unmount);
     t[ERRSTR as usize] = Some(sys_errstr);
+    t[STAT as usize] = Some(sys_stat);
+    t[FSTAT as usize] = Some(sys_fstat);
     t[AWAIT as usize] = Some(sys_await);
     t[PREAD as usize] = Some(sys_pread);
     t[PWRITE as usize] = Some(sys_pwrite);
@@ -231,7 +239,18 @@ fn sys_pwrite(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         None => return err(proc, "pwrite: bad fd"),
     };
     match dev {
-        DEV_CONS => platform::devcons::cons_write(unsafe { user_slice(buf, n) }),
+        DEV_CONS => {
+            // 05-04 Task 3: the device routes by qid — cons writes
+            // byte-exact, null discards, hostowner stores (D-02), user is
+            // read-only (the whole per-file contract lives in the device).
+            let Some(chan) = proc.fd(fd) else {
+                return err(proc, "pwrite: bad fd");
+            };
+            match port::devcons::write(chan, unsafe { user_slice(buf, n) }) {
+                Ok(wrote) => wrote,
+                Err(msg) => err(proc, msg),
+            }
+        }
         DEV_ROOT => err(proc, "devroot: read-only filesystem"),
         DEV_PROC => {
             // devproc-lite (04-08): the note append is the whole write —
@@ -268,11 +287,18 @@ fn sys_pread(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     };
     match dev {
         DEV_CONS => {
-            let read = platform::devcons::cons_read(unsafe { user_slice_mut(buf, n) });
-            if let Some(chan) = proc.fd(fd) {
-                chan.offset += read;
+            // 05-04 Task 3: the device routes by qid — the root dir serves
+            // the stat-wire listing, null reads EOF, user reads glenda,
+            // hostowner reads the stored value, and cons reads get the
+            // loud "05-08" -1 (never a wedge).  The streaming offset
+            // advances inside the device (the pread convention).
+            let Some(chan) = proc.fd(fd) else {
+                return err(proc, "pread: bad fd");
+            };
+            match port::devcons::read(chan, unsafe { user_slice_mut(buf, n) }, off) {
+                Ok(read) => read,
+                Err(msg) => err(proc, msg),
             }
-            read
         }
         DEV_ROOT => {
             let Some(root) = port::devroot::root() else {
@@ -552,6 +578,98 @@ fn sys_unmount(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         Ok(()) => 0,
         Err(msg) => err(proc, msg),
     }
+}
+
+/// STAT(42): path, buf, n — 05-04 Task 3 (measured ×51 in the 05-03
+/// trace).  namec with Aaccess semantics (the final component DOES cross
+/// to the union head), then the device's stat op writes the stat(5) wire
+/// bytes; the return is the byte count (the donor sysstat contract).
+/// T-04-11: the path string AND the output buffer (writable) validate
+/// before any kernel deref.  The donor's dirsetname fix-up is a no-op for
+/// every device this era (each serves the canonical name already) and is
+/// deliberately omitted.
+fn sys_stat(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
+    let Some(args) = sargs(frame, proc, 3) else {
+        return err(proc, "stat: bad argument block");
+    };
+    let (path_va, buf_va, n) = (args[0], args[1], args[2] & 0xffff_ffff); // n is an int (width discipline)
+    let path = match copy_user_str(proc, path_va, ERRMAX) {
+        Ok(s) => s,
+        Err(msg) => return err(proc, msg),
+    };
+    if proc.validate_user_range(buf_va, n, true).is_err() {
+        return err(proc, "stat: bad user buffer");
+    }
+    let pg = proc.pgrp.clone();
+    let node = LockNode::new();
+    let guard = pg.lock(&node);
+    let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
+        return err(proc, "stat: no namespace (pre-exec)");
+    };
+    let c = match namec::namec(&path, slash, dot, &guard, NamecMode::Open) {
+        Ok(c) => c,
+        Err(msg) => return err(proc, msg),
+    };
+    drop(guard);
+    let sb = unsafe { user_slice_mut(buf_va, n) };
+    match namec::stat_chan(&c, sb) {
+        Ok(count) => count,
+        Err(msg) => err(proc, msg),
+    }
+}
+
+/// FSTAT(43): fd, buf, n — 05-04 Task 3 (measured ×3).  The open fd's
+/// chan stats through the same device dispatch (the donor sysfstat shape
+/// — no namec, no mount crossing: the chan already resolved at open).
+/// devroot's stat reads the chan's paqfs entry, so DEV_ROOT stats go
+/// through the LIVE fd slot; the other devices' stats read qid/dev only.
+fn sys_fstat(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
+    let Some(args) = sargs(frame, proc, 3) else {
+        return err(proc, "fstat: bad argument block");
+    };
+    let (fd, buf_va, n) = (args[0] & 0xffff_ffff, args[1], args[2] & 0xffff_ffff); // fd, n are ints
+    if proc.validate_user_range(buf_va, n, true).is_err() {
+        return err(proc, "fstat: bad user buffer");
+    }
+    let Some(chan) = proc.fd(fd) else {
+        return err(proc, "fstat: bad fd");
+    };
+    let sb = unsafe { user_slice_mut(buf_va, n) };
+    match namec::stat_chan(chan, sb) {
+        Ok(count) => count,
+        Err(msg) => err(proc, msg),
+    }
+}
+
+/// BRK_(24): addr — 05-04 Task 3 (measured ×28 in the 05-03 trace; the
+/// plan's dispatch note binds it: malloc's pool growth rides it —
+/// sbrkalloc's sbrk→brk_ — and boot's dirstat mallocs make it
+/// gate-load-bearing).  Donor sysbrk_ (9k sysseg.c): ibrk(addr, BSEG) —
+/// set the bss segment's top; libc's sbrk needs 0/-1.  Growth pages
+/// demand-fault as zero pages (the Bss class covers the extended range);
+/// a shrink only lowers the recorded break (mapped pages stay mapped —
+/// the donor mfreeseg's them; malloc never shrinks this era).  The break
+/// never crosses USTOP (the stack-growth bound — the donor's Esoverlap
+/// check's segment).
+fn sys_brk_(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
+    let Some(args) = sargs(frame, proc, 1) else {
+        return err(proc, "brk: bad argument block");
+    };
+    let addr = args[0] as usize; // a full-width pointer arg (no masking)
+    let Some(segs) = &mut proc.segments else {
+        return err(proc, "brk: no segments (pre-exec)");
+    };
+    if addr == 0 {
+        return 0; // no-op (libc never passes 0; defensive)
+    }
+    if addr < segs.bss.0.start {
+        return err(proc, "brk: address below the heap base");
+    }
+    if addr > exec::USTOP {
+        return err(proc, "brk: out of memory");
+    }
+    segs.bss.0.end = addr;
+    0
 }
 
 /// EXEC(7): path, argv — 2 syscall args (libc `exec(char *name,

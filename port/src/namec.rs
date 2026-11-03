@@ -182,3 +182,15 @@ pub fn open_chan(c: &Chan, mode: u32) -> Result<Chan> {
         _ => Err("namec: chan with unknown device index"),
     }
 }
+
+/// The stat dispatch for a resolved chan (05-04 Task 3's sys_stat/sys_fstat
+/// ride this): per-device stat by dev index.  Returns the stat(5) wire
+/// byte count (the size prefix included — convD2M's contract).
+pub fn stat_chan(c: &Chan, sb: &mut [u8]) -> Result<u64> {
+    match c.dev {
+        DEV_ROOT => crate::devroot::root().ok_or("namec: devroot not mounted")?.stat(c, sb),
+        DEV_CONS => crate::devcons::stat(c, sb),
+        DEV_PROC => crate::devproc::stat(c, sb),
+        _ => Err("namec: chan with unknown device index"),
+    }
+}

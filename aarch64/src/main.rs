@@ -457,10 +457,13 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
     // record + the eager data/bss pages (05-04's cold-arg fix) + exactly
     // two eager stack-side pages (the seed stack and the zeroed Tos page) +
     // the forkret frame (04-04 machinery).  Text/stack/tos fault in (D-09).
-    // argv[0] is the leaf name (05-04 tracer; the transitional method hint
-    // is a later task in this plan).
+    // 05-04 Task 3: the transitional argv hint — [boot, "embed"] selects
+    // boot(8)'s embed method via rootserver's argv fallback (post-ARGBEGIN
+    // argv[0]).  05-05 REPLACES this with the kernel-seeded devenv root
+    // group (cputype/nobootprompt) and reduces argv to [boot] — the
+    // comment's removal point is here.
     let name = core::str::from_utf8(leaf).unwrap_or("?");
-    let argv: &[&[u8]] = &[leaf];
+    let argv: &[&[u8]] = if cfg!(dev_bootchain) { &[leaf, b"embed"] } else { &[leaf] };
     let proc = proc::new_user_proc(name).unwrap_or_else(|err| panic!("proc: {err}"));
     // 05-04 (D-03): the first process's namespace root — slash and dot both
     // start at the devroot attach (the donor's slash/dot; rfork inherits

@@ -120,6 +120,53 @@ pub fn open(c: &Chan, mode: u32) -> Result<Chan> {
     Ok(nc)
 }
 
+/// stat of a devproc chan (05-04 Task 3 — the namec stat dispatch's
+/// devproc leg; the wire shape is the shared StatWriter).  The gate never
+/// stats #p; this is the dispatch's total coverage, not a new surface.
+pub fn stat(c: &Chan, sb: &mut [u8]) -> Result<u64> {
+    let (name, mode): (&[u8], u32) = if c.qid.path == 0 {
+        (b"proc", 0x8000_0000 | 0o555) // DMDIR
+    } else if c.qid.typ == QTDIR {
+        // The per-pid directory's name is the pid (decimal).
+        let pid = c.qid.path / 2;
+        let mut nbuf = alloc::vec::Vec::new();
+        let mut v = pid;
+        if v == 0 {
+            nbuf.push(b'0');
+        }
+        while v > 0 {
+            nbuf.insert(0, b'0' + (v % 10) as u8);
+            v /= 10;
+        }
+        return write_stat_record(sb, &nbuf, c.qid, 0x8000_0000 | 0o555);
+    } else {
+        (b"note", 0o666)
+    };
+    write_stat_record(sb, name, c.qid, mode)
+}
+
+/// One stat(5) wire record (devcons's shape; uid/gid glenda per D-02).
+fn write_stat_record(sb: &mut [u8], name: &[u8], qid: crate::dat::Qid, mode: u32) -> Result<u64> {
+    let need = 41 + (2 + name.len()) + (2 + 6) + (2 + 6);
+    if sb.len() < need {
+        return Err("devproc: stat buffer too small");
+    }
+    let mut w = crate::dat::StatWriter::new(sb);
+    w.u16(0); // type: unused this era
+    w.u32(crate::dat::DEV_PROC as u32);
+    w.u8(qid.typ);
+    w.u32(qid.vers);
+    w.u64(qid.path);
+    w.u32(mode);
+    w.u32(0); // atime
+    w.u32(0); // mtime
+    w.u64(0); // length
+    w.string(name);
+    w.string(b"glenda");
+    w.string(b"glenda");
+    Ok(w.finish())
+}
+
 /// Write `buf` to the note chan `c` names: decode the pid from the chan's
 /// qid, bound the message to ERRMAX (the note buffer's size, NUL-padded),
 /// and hand it to the arch-side post hook.  Returns the byte count taken.

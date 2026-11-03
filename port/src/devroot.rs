@@ -16,7 +16,7 @@
 //! lands when the devtab dispatch era (04-06+) grows the skeleton into a
 //! constructible shape.
 
-use crate::dat::{Chan, Qid};
+use crate::dat::{Chan, Qid, StatWriter};
 use crate::mcslock::{Lock, LockNode};
 use crate::paqfs::{PaqDir, Paqfs};
 use crate::Result;
@@ -33,6 +33,18 @@ const DMDIR: u32 = 0x8000_0000;
 /// Plan 9 Qid type bytes.
 const QTDIR: u8 = 0x80;
 const QTFILE: u8 = 0x00;
+
+/// 05-04 Task 3 (the gate's connectembed dirstat(paqfile) needs it; the
+/// full hardening is 05-05 Task 2's): the raw initrd image served as the
+/// root-tree file `/rootfs.img` — the D-04 two-views counterpart (the
+/// kernel walks the paqfs TREE for exec; the userspace paqfs server reads
+/// the raw BYTES).  Synthesized at the root only when the image ships no
+/// real entry of that name (a real entry always wins — no shadowing).
+/// Reads proxy the image slice with bounds checks; write is refused
+/// loudly.  The reserved qid never collides with mkpaqfs qids (sequential
+/// from 1).
+const RAWIMG_QID: u32 = u32::MAX;
+const RAWIMG_NAME: &[u8] = b"rootfs.img";
 
 /// The mounted initrd root file tree.
 pub struct DevRoot {
@@ -83,7 +95,9 @@ impl DevRoot {
 
     /// Walk a single name component from `c` (which must name a directory);
     /// the returned Chan carries the matched PaqDir.  `..` and multi-element
-    /// walks are out of scope for the root tree this era.
+    /// walks are out of scope for the root tree this era.  At the ROOT only,
+    /// a failed lookup of the raw-image name synthesizes the /rootfs.img
+    /// node (05-04 — see RAWIMG_NAME); a real image entry always wins.
     pub fn walk(&self, c: &Chan, name: &[u8]) -> Result<Chan> {
         let dir = c.paqdir.as_ref().ok_or("devroot: walk of unattached chan")?;
         if dir.mode & DMDIR == 0 {
@@ -94,6 +108,9 @@ impl DevRoot {
         }
         let entries = self.fs()?.read_dir(dir)?;
         let Some(entry) = entries.into_iter().find(|e| e.name == name) else {
+            if c.path.is_empty() && name == RAWIMG_NAME {
+                return Ok(self.rawimg_chan(c));
+            }
             return Err("devroot: name not found");
         };
         let mut nc = Chan::new(c.dev, qid_of(&entry), 0);
@@ -104,14 +121,36 @@ impl DevRoot {
         Ok(nc)
     }
 
+    /// The synthesized /rootfs.img chan (the raw initrd image node).
+    fn rawimg_chan(&self, root: &Chan) -> Chan {
+        let raw = PaqDir {
+            qid: RAWIMG_QID,
+            mode: 0o444,
+            mtime: 0,
+            length: self.img.len() as u32,
+            offset: 0,
+            name: RAWIMG_NAME.to_vec(),
+            uid: b"glenda".to_vec(),
+            gid: b"glenda".to_vec(),
+        };
+        let mut nc = Chan::new(root.dev, qid_of(&raw), 0);
+        nc.paqdir = Some(raw);
+        nc.path = root.path.clone();
+        nc.path.push(b'/');
+        nc.path.extend_from_slice(RAWIMG_NAME);
+        nc
+    }
+
     /// Open `c` OREAD or OEXEC.  Everything else (write-side modes, trunc)
-    /// is a read-only-fs error; a directory opens OREAD only.
+    /// is a read-only-fs error; a directory opens OREAD only.  The raw-image
+    /// node opens OREAD only (it is not a binary).
     pub fn open(&self, c: &Chan, mode: u32) -> Result<Chan> {
         let dir = c.paqdir.as_ref().ok_or("devroot: open of unattached chan")?;
         let is_dir = dir.mode & DMDIR != 0;
+        let is_rawimg = dir.qid == RAWIMG_QID;
         match mode {
             OREAD => {}
-            OEXEC if !is_dir => {}
+            OEXEC if !is_dir && !is_rawimg => {}
             OEXEC => return Err("devroot: cannot exec-open a directory"),
             _ => return Err("devroot: read-only filesystem"),
         }
@@ -124,13 +163,25 @@ impl DevRoot {
     /// Read via the paqfs reader's byte-granular read_at.  `offset` is the
     /// explicit file offset; `u64::MAX` (pread/pwrite's -1) means "use and
     /// advance the chan's streaming offset" (04-RESEARCH.md fd convention).
+    /// The raw-image node reads the image slice directly (its PaqDir's
+    /// block offset names nothing — paqfs blocks are the TREE's encoding).
     pub fn read(&self, c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
         let dir = c.paqdir.as_ref().ok_or("devroot: read of unattached chan")?;
         if dir.mode & DMDIR != 0 {
             return Err("devroot: read of a directory");
         }
         let off = if offset == u64::MAX { c.offset } else { offset };
-        let n = self.fs()?.read_at(dir, off, buf)? as u64;
+        let n: u64 = if dir.qid == RAWIMG_QID {
+            // Bounds-checked slice read (clamp at the image end; a read at
+            // or past the end is EOF = 0).
+            let start = (off as usize).min(self.img.len());
+            let avail = &self.img[start..];
+            let n = avail.len().min(buf.len());
+            buf[..n].copy_from_slice(&avail[..n]);
+            n as u64
+        } else {
+            self.fs()?.read_at(dir, off, buf)? as u64
+        };
         if offset == u64::MAX {
             c.offset += n;
         }
@@ -140,8 +191,9 @@ impl DevRoot {
     /// Minimal stat: the Plan 9 stat(5) wire shape — fixed fields plus the
     /// name/uid/gid strings from the PaqDir (qid path+vers+type, mode,
     /// mtime, length).  `sb` must be large enough; the size prefix is
-    /// written last.
-    pub fn stat(&self, c: &Chan, sb: &mut [u8]) -> Result<()> {
+    /// written last.  Returns the byte count (prefix included — the
+    /// convD2M/sysstat contract; 05-04 Task 3).
+    pub fn stat(&self, c: &Chan, sb: &mut [u8]) -> Result<u64> {
         let dir = c.paqdir.as_ref().ok_or("devroot: stat of unattached chan")?;
         // Fixed part: size[2] type[2] dev[4] qid[13] mode[4] atime[4]
         // mtime[4] length[8] = 41 bytes, then three length-prefixed strings.
@@ -153,7 +205,7 @@ impl DevRoot {
         if sb.len() < need {
             return Err("devroot: stat buffer too small");
         }
-        let mut w = StatWriter { buf: sb, p: 2 }; // size prefix filled in last
+        let mut w = StatWriter::new(sb);
         w.u16(0); // type: unused this era
         w.u32(c.dev as u32);
         w.u8(c.qid.typ);
@@ -166,9 +218,7 @@ impl DevRoot {
         w.string(&dir.name);
         w.string(&dir.uid);
         w.string(&dir.gid);
-        let n = (w.p - 2) as u16;
-        sb[0..2].copy_from_slice(&n.to_le_bytes());
-        Ok(())
+        Ok(w.finish())
     }
 
     /// The PaqDir an opened chan names — exec's byte-source handle for the
@@ -191,35 +241,5 @@ fn qid_of(dir: &PaqDir) -> Qid {
         path: u64::from(dir.qid),
         vers: dir.mtime,
         typ: if dir.mode & DMDIR != 0 { QTDIR } else { QTFILE },
-    }
-}
-
-/// Little-endian field writer for the stat wire buffer (stat(5) is LE).
-struct StatWriter<'a> {
-    buf: &'a mut [u8],
-    p: usize,
-}
-
-impl StatWriter<'_> {
-    fn u8(&mut self, v: u8) {
-        self.buf[self.p] = v;
-        self.p += 1;
-    }
-    fn u16(&mut self, v: u16) {
-        self.buf[self.p..self.p + 2].copy_from_slice(&v.to_le_bytes());
-        self.p += 2;
-    }
-    fn u32(&mut self, v: u32) {
-        self.buf[self.p..self.p + 4].copy_from_slice(&v.to_le_bytes());
-        self.p += 4;
-    }
-    fn u64(&mut self, v: u64) {
-        self.buf[self.p..self.p + 8].copy_from_slice(&v.to_le_bytes());
-        self.p += 8;
-    }
-    fn string(&mut self, s: &[u8]) {
-        self.u16(s.len() as u16);
-        self.buf[self.p..self.p + s.len()].copy_from_slice(s);
-        self.p += s.len();
     }
 }
