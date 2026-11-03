@@ -126,7 +126,21 @@ fn read_aout(backing: &ByteBacking) -> Result<AoutHeader> {
     if n < HDR_SIZE {
         return Err("exec: short read of a.out header");
     }
-    parse_aout(&hdr)
+    let h = parse_aout(&hdr)?;
+    // WR-06: the header's declared segment sizes must FIT the backing's
+    // length — a truncated binary otherwise execs "successfully": the
+    // pager's read_at clamps at EOF and page_in_from_image zero-fills
+    // first, so the missing tail executes as zeros and the process dies
+    // in a misleading place.  The donor fails the exec on a short
+    // segment read; r9 fails it up front.  syms ride the image's length
+    // semantics (a file claiming a symbol table it does not contain IS
+    // truncated) even though exec never pages syms in.  (The sum cannot
+    // overflow: four u32-derived u64s + 40.)
+    let declared = HDR_SIZE as u64 + h.text + h.data + h.syms;
+    if declared > backing.file_len() {
+        return Err("exec: truncated binary");
+    }
+    Ok(h)
 }
 
 /// Record the segment map + the demand-page byte source + the proc name,

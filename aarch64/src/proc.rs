@@ -183,6 +183,15 @@ impl ByteBacking {
             }
         }
     }
+
+    /// The backing file's total length (WR-06's truncated-binary check):
+    /// the paqfs entry's recorded length / the staged buffer's length.
+    pub fn file_len(&self) -> u64 {
+        match self {
+            ByteBacking::Paq { dir, .. } => u64::from(dir.length),
+            ByteBacking::Mnt { file } => file.len() as u64,
+        }
+    }
 }
 
 /// The demand-page byte source for text/data: the backing (the paqfs image

@@ -819,7 +819,11 @@ pub fn clunk(c: &Chan) {
 /// sys_exec's byte source for a mounted binary (05-07 Task 2's wiring):
 /// read the WHOLE file eagerly (syscall context — RPCs block by design;
 /// the trap-context pager must never RPC).  Bounded by `cap` (loud error,
-/// never an unbounded read off an untrusted server).
+/// never an unbounded read off an untrusted server).  WR-06(b): reads may
+/// reach cap+1 bytes so an EXACTLY-cap file terminates via the empty-read
+/// EOF arm (the old top-of-loop `out.len() >= cap` check errored it
+/// without ever attempting the final read); only a byte past the cap is
+/// "too large".
 pub fn read_all(c: &Chan, cap: usize) -> Result<Vec<u8>> {
     let Some(mnt) = &c.mnt else { return Err("devmnt: read of a non-mount chan") };
     if c.mnt_fid == 0 {
@@ -828,15 +832,17 @@ pub fn read_all(c: &Chan, cap: usize) -> Result<Vec<u8>> {
     let rpc_cap = rpc_data_cap(mnt.msize());
     let mut out = Vec::new();
     loop {
-        if out.len() >= cap {
-            return Err("devmnt: file too large to stage for exec");
-        }
-        let want = rpc_cap.min(cap - out.len());
+        // want is always ≥ 1 here: out.len() ≤ cap (a larger length
+        // errored below), so cap + 1 - out.len() ≥ 1.
+        let want = rpc_cap.min(cap + 1 - out.len());
         let data = mnt.read(c.mnt_fid, out.len() as u64, want as u32)?;
         if data.is_empty() {
-            break; // EOF
+            break; // EOF — the file fits within the cap
         }
         out.extend_from_slice(&data);
+        if out.len() > cap {
+            return Err("devmnt: file too large to stage for exec");
+        }
         if data.len() < want {
             break; // a short reply = EOF
         }

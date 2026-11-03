@@ -630,3 +630,26 @@ fn devmnt_mount_redirect_clones_the_table_fid() {
     let n = devmnt::read(&mut o2, &mut buf, 0).expect("read top.txt");
     assert_eq!(&buf[..n as usize], TOP_CONTENT);
 }
+
+/// WR-06(b): read_all's cap discipline — a file of EXACTLY cap bytes
+/// stages cleanly (the final zero-length EOF read terminates the loop;
+/// the old top-of-loop check errored it without ever attempting that
+/// read), one byte under cap is the loud "too large", and a wide cap
+/// stages the same bytes.
+#[test]
+fn devmnt_read_all_exact_cap_and_over_cap() {
+    let (mnt, _fids) = session();
+    let root = devmnt::attach(&Arc::new(mnt), b"").expect("attach the fake tree");
+    let adir = devmnt::walk(&root, b"adir").expect("walk adir");
+    let leaf = devmnt::walk(&adir, b"leaf.txt").expect("walk leaf.txt");
+    let opened = namec::open_chan(&leaf, 0).expect("open leaf.txt OREAD");
+
+    let staged = devmnt::read_all(&opened, LEAF_CONTENT.len()).expect("exact-cap stage succeeds");
+    assert_eq!(staged, LEAF_CONTENT, "the exact-cap file stages whole");
+
+    let err = devmnt::read_all(&opened, LEAF_CONTENT.len() - 1).expect_err("one byte over cap errors");
+    assert!(err.contains("too large"), "the named errstr, got: {err}");
+
+    let staged = devmnt::read_all(&opened, 4096).expect("wide-cap stage succeeds");
+    assert_eq!(staged, LEAF_CONTENT);
+}
