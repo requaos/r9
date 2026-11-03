@@ -34,6 +34,13 @@ const PRINT_EVERY: u64 = TICKS_PER_SEC;
 
 static TICKS: AtomicU64 = AtomicU64::new(0);
 
+/// The current tick count (05-08's sys_sleep/sys_alarm deadlines).  1 tick
+/// = 1 ms this era (TICKS_PER_SEC = 1000), so millisecond args are tick
+/// counts verbatim.
+pub fn ticks() -> u64 {
+    TICKS.load(Ordering::Relaxed)
+}
+
 /// Re-discover CNTP's INTID from the DTB timer node: interrupts is a list of
 /// <type, num, flags> triples; CNTP is the PPI triple (type 0x01) with num
 /// 0x0e.  PPIs map to INTID 16+num.  Fall back to CNTP_INTID if parsing finds
@@ -107,13 +114,14 @@ pub fn tick() {
     }
     #[cfg(dev_exec)]
     {
-        let _ = n;
-        // 05-08 (D-06): the cons-read waker — a blocked console reader
-        // readies when the PL011 RX ring holds bytes.  The peek is
-        // lock-free (pl011.rs); the wake takes PROC_TABLE from trap
-        // context exactly as preempt()/reschedule() do (the proc.rs
-        // module-header discipline: the lock is only ever held in
-        // IRQ-masked context).
+        // 05-08: the sleep/alarm sweep (the donor's tsleep wakeup +
+        // alarmkproc expiry — init's restart-loop sleep(1000) rides it)
+        // and the cons-read waker — a blocked console reader readies when
+        // the PL011 RX ring holds bytes.  The peek is lock-free
+        // (pl011.rs); both sweeps take PROC_TABLE from trap context
+        // exactly as preempt()/reschedule() do (the proc.rs module-header
+        // discipline: the lock is only ever held in IRQ-masked context).
+        crate::proc::tick_timeouts(n + 1);
         if crate::platform::pl011::cons_rx_pending() {
             crate::proc::cons_input_wake();
         }

@@ -56,9 +56,11 @@ const BIND: u64 = 2;
 const CHDIR: u64 = 3;
 const CLOSE: u64 = 4;
 const DUP: u64 = 5;
+const ALARM: u64 = 6;
 const EXEC: u64 = 7;
 const EXITS: u64 = 8;
 const OPEN: u64 = 14;
+const SLEEP: u64 = 17;
 const RFORK: u64 = 19;
 const PIPE: u64 = 21;
 const CREATE: u64 = 22;
@@ -117,7 +119,11 @@ type Handler = fn(&mut TrapFrame, &mut Proc) -> u64;
 /// 05-07 with D-03's mount half FVERSION(40)/MOUNT(46) — the devmnt
 /// session negotiation + the mount-table insertion (FAUTH(10) stays None:
 /// nsinit's fall-through to an unauthenticated mount is the designed D-02
-/// path).  The 04-01 trace carries no
+/// path); and by 05-08 with the trace-measured timer pair ALARM(6)
+/// (init's alarm(0) disarm) + SLEEP(17) (×42 in the 05-03 trace — init's
+/// for(;;) restart loop sleeps 1s between rc generations) riding the
+/// generic timer (timer.rs ticks; expiry via the tick's tick_timeouts).
+/// The 04-01 trace carries no
 /// brk_/segbrk(12) on the hello path; segbrk stays None.
 static DISPATCH: [Option<Handler>; 55] = {
     let mut t: [Option<Handler>; 55] = [None; 55];
@@ -125,9 +131,11 @@ static DISPATCH: [Option<Handler>; 55] = {
     t[CHDIR as usize] = Some(sys_chdir);
     t[CLOSE as usize] = Some(sys_close);
     t[DUP as usize] = Some(sys_dup);
+    t[ALARM as usize] = Some(sys_alarm);
     t[EXEC as usize] = Some(sys_exec);
     t[EXITS as usize] = Some(sys_exits);
     t[OPEN as usize] = Some(sys_open);
+    t[SLEEP as usize] = Some(sys_sleep);
     t[RFORK as usize] = Some(sys_rfork);
     t[PIPE as usize] = Some(sys_pipe);
     t[CREATE as usize] = Some(sys_create);
@@ -1416,6 +1424,76 @@ fn sys_errstr(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     dst[..len].copy_from_slice(&src[..len]);
     dst[len] = 0;
     0
+}
+
+/// SLEEP(17): millisecs — 05-08 (trace-gated: sleep ×42 in the 05-03
+/// real-chain trace — init's for(;;) restart loop sleeps 1s between rc
+/// generations).  Donor syssleep (9k sysproc.c): ms<=0 yields (give up
+/// the CPU if another process is waiting); ms>0 tsleeps until the tick
+/// count passes now+ms (1 tick = 1 ms this era — timer.rs
+/// TICKS_PER_SEC=1000, so ms IS the tick delta).  The block rides the
+/// 04-07 sched machinery; the tick's tick_timeouts readies expired
+/// sleepers.  Register-deadline-then-block cannot lose the wake: syscall
+/// context is IRQ-masked, so the tick can only fire after sched()
+/// swtch'es (devpipe's documented invariant).  The ms arg is a `long` —
+/// 32-bit in Plan 9 C (the width discipline).  Era limit (documented):
+/// the donor's tsleep is interruptible by notes; this sleeper wakes only
+/// on expiry (a posted note queues and delivers at the syscall return —
+/// no measured caller interrupts a sleep this era).
+///
+/// Yield note: sleep(0)'s preempt() runs the tick's own entry from
+/// syscall context — safe here because dispatch completes on the OLD
+/// proc's kstack before the trap tail restores the NEW proc's frame, and
+/// the post-dispatch note boundary still targets the frame that owns the
+/// note (the OLD proc's — delivery before its next EL0 entry is the
+/// correct ordering).
+fn sys_sleep(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
+    let Some(args) = sargs(frame, proc, 1) else {
+        return err(proc, "sleep: bad argument block");
+    };
+    let ms = args[0] & 0xffff_ffff; // long is 32-bit (the width discipline)
+    #[cfg(dev_exec)]
+    {
+        if ms == 0 {
+            proc::preempt(); // the donor's yield()
+            return 0;
+        }
+        proc.sleep_until = crate::platform::timer::ticks() + ms;
+        proc::sched();
+        0
+    }
+    #[cfg(not(dev_exec))]
+    {
+        let _ = ms;
+        err(proc, "sleep: no timer in this profile")
+    }
+}
+
+/// ALARM(6): millisecs — 05-08 (trace-gated: alarm ×1 — init's alarm(0)
+/// disarm at main start).  Donor sysalarm (9k sysproc.c) + procalarm
+/// (9k alarm.c): arm a per-proc alarm whose expiry posts the "alarm" note
+/// to the proc (tick_timeouts's expiry arm; delivery rides the 04-08
+/// return-to-EL0 boundary); successive calls reset the clock; a zero arg
+/// clears it.  The return is the previously-REMAINING ms (0 = none
+/// armed).  The ms arg is an `unsigned long` — 32-bit (the width
+/// discipline).
+fn sys_alarm(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
+    let Some(args) = sargs(frame, proc, 1) else {
+        return err(proc, "alarm: bad argument block");
+    };
+    let ms = args[0] & 0xffff_ffff; // unsigned long is 32-bit (the width discipline)
+    #[cfg(dev_exec)]
+    {
+        let now = crate::platform::timer::ticks();
+        let old = if proc.alarm_at != 0 { proc.alarm_at.saturating_sub(now) } else { 0 };
+        proc.alarm_at = if ms == 0 { 0 } else { now + ms };
+        old
+    }
+    #[cfg(not(dev_exec))]
+    {
+        let _ = ms;
+        err(proc, "alarm: no timer in this profile")
+    }
 }
 
 /// AWAIT(47): buf, buflen.  Donor sysawait shape: block (the 04-07

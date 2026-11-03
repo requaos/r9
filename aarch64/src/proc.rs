@@ -339,6 +339,17 @@ pub struct Proc {
     /// PL011 RX ring holds bytes; the reader's post-wake drain re-checks
     /// (a spurious wake re-blocks).
     pub cons_waiting: bool,
+    /// 05-08 (trace-gated: sleep ×42, alarm ×1 in the 05-03 real-chain
+    /// trace): sys_sleep's wake deadline in TICKS (0 = not sleeping) —
+    /// the donor tsleep's up->twhen shape; the tick's tick_timeouts
+    /// readies expired sleepers.  1 tick = 1 ms this era (timer.rs
+    /// TICKS_PER_SEC = 1000).
+    pub sleep_until: u64,
+    /// 05-08: sys_alarm's expiry deadline in TICKS (0 = disarmed — the
+    /// donor's up->alarm; alarm(0) clears, a fresh arm replaces).  On
+    /// expiry tick_timeouts posts the "alarm" note (donor alarmkproc's
+    /// postnote arm) and disarms.
+    pub alarm_at: u64,
 }
 
 impl Proc {
@@ -400,6 +411,8 @@ impl Proc {
             // incref(&noteidalloc)); rfork may overwrite with the parent's.
             noteid: NEXT_NOTEID.fetch_add(1, Ordering::Relaxed),
             cons_waiting: false,
+            sleep_until: 0,
+            alarm_at: 0,
         };
         proc.set_name(name);
         proc
@@ -1235,6 +1248,29 @@ pub fn cons_input_wake() {
 /// rc, so a console DEL interrupts the shell's group and never init.
 pub fn rfork_noteg_split(proc: &mut Proc) {
     proc.noteid = NEXT_NOTEID.fetch_add(1, Ordering::Relaxed);
+}
+
+/// The tick's timeout sweep (05-08; the donor's tsleep wakeup + alarm.c's
+/// alarmkproc expiry arm): ready every Blocked proc whose sys_sleep
+/// deadline passed, and post the "alarm" note to each proc whose armed
+/// alarm expired (disarming it — the donor's `rp->alarm = 0`).  Notes
+/// append via push_note (Moribund/full-queue skips are the donor
+/// pgrpnote's waserror shape); delivery rides the 04-08 return-to-EL0
+/// boundary unchanged.  PROC_TABLE from tick (trap) context — the
+/// reschedule() precedent (the module header's locking discipline).
+pub fn tick_timeouts(now: u64) {
+    let node = LockNode::new();
+    let mut table = PROC_TABLE.lock(&node);
+    for p in table.procs.iter_mut().flatten() {
+        if p.state == ProcState::Blocked && p.sleep_until != 0 && now >= p.sleep_until {
+            p.sleep_until = 0;
+            p.state = ProcState::Ready;
+        }
+        if p.alarm_at != 0 && now >= p.alarm_at {
+            p.alarm_at = 0;
+            let _ = push_note(p, b"alarm");
+        }
+    }
 }
 
 /// devdup/devsrv's fd resolver hook (05-06): the CALLING proc's fd N as
