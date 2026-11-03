@@ -34,42 +34,72 @@ fn base_physaddr() -> PhysAddr {
 
 #[cfg(platform = "virt")]
 fn boottext_physaddr() -> PhysAddr {
+    // SAFETY: kernel.ld defines this zero-sized marker at exactly the
+    // boundary it names; only the symbol's ADDRESS is read (never
+    // its contents) — the kmem link-sym class.
     unsafe { PhysAddr::new(boottext_pa.as_ptr().addr() as u64) }
 }
 
 fn eboottext_physaddr() -> PhysAddr {
+    // SAFETY: kernel.ld defines this zero-sized marker at exactly the
+    // boundary it names; only the symbol's ADDRESS is read (never
+    // its contents) — the kmem link-sym class.
     unsafe { PhysAddr::new(eboottext_pa.as_ptr().addr() as u64) }
 }
 
 fn text_physaddr() -> PhysAddr {
+    // SAFETY: kernel.ld defines this zero-sized marker at exactly the
+    // boundary it names; only the symbol's ADDRESS is read (never
+    // its contents) — the kmem link-sym class.
     unsafe { PhysAddr::new(text_pa.as_ptr().addr() as u64) }
 }
 
 fn etext_physaddr() -> PhysAddr {
+    // SAFETY: kernel.ld defines this zero-sized marker at exactly the
+    // boundary it names; only the symbol's ADDRESS is read (never
+    // its contents) — the kmem link-sym class.
     unsafe { PhysAddr::new(etext_pa.as_ptr().addr() as u64) }
 }
 
 fn rodata_physaddr() -> PhysAddr {
+    // SAFETY: kernel.ld defines this zero-sized marker at exactly the
+    // boundary it names; only the symbol's ADDRESS is read (never
+    // its contents) — the kmem link-sym class.
     unsafe { PhysAddr::new(rodata_pa.as_ptr().addr() as u64) }
 }
 
 fn erodata_physaddr() -> PhysAddr {
+    // SAFETY: kernel.ld defines this zero-sized marker at exactly the
+    // boundary it names; only the symbol's ADDRESS is read (never
+    // its contents) — the kmem link-sym class.
     unsafe { PhysAddr::new(erodata_pa.as_ptr().addr() as u64) }
 }
 
 fn data_physaddr() -> PhysAddr {
+    // SAFETY: kernel.ld defines this zero-sized marker at exactly the
+    // boundary it names; only the symbol's ADDRESS is read (never
+    // its contents) — the kmem link-sym class.
     unsafe { PhysAddr::new(data_pa.as_ptr().addr() as u64) }
 }
 
 fn edata_physaddr() -> PhysAddr {
+    // SAFETY: kernel.ld defines this zero-sized marker at exactly the
+    // boundary it names; only the symbol's ADDRESS is read (never
+    // its contents) — the kmem link-sym class.
     unsafe { PhysAddr::new(edata_pa.as_ptr().addr() as u64) }
 }
 
 fn bss_physaddr() -> PhysAddr {
+    // SAFETY: kernel.ld defines this zero-sized marker at exactly the
+    // boundary it names; only the symbol's ADDRESS is read (never
+    // its contents) — the kmem link-sym class.
     unsafe { PhysAddr::new(bss_pa.as_ptr().addr() as u64) }
 }
 
 fn ebss_physaddr() -> PhysAddr {
+    // SAFETY: kernel.ld defines this zero-sized marker at exactly the
+    // boundary it names; only the symbol's ADDRESS is read (never
+    // its contents) — the kmem link-sym class.
     unsafe { PhysAddr::new(ebss_pa.as_ptr().addr() as u64) }
 }
 

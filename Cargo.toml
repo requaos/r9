@@ -2,6 +2,34 @@
 resolver = "2"
 members = ["aarch64", "x86_64", "port", "riscv64", "xtask"]
 
+# 261103-p64 (the maximal unsafe-elimination contract): every remaining
+# unsafe block/fn/impl/extern in a lint-opted-in crate must carry a SAFETY
+# comment — lint-enforced, never the honor system.  Only the gated crates
+# (aarch64 + port) opt in via `[lints] workspace = true` in their own
+# Cargo.toml; x86_64/riscv64 are never compiled by the gates and stay opted
+# out (UNSAFE-AUDIT.md's scope line).
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny"
+
+# check-cfg declarations for every --cfg xtask can emit (xtask/src/config.rs).
+# The dev/ip/link/nodev/nouart families derive cfg names dynamically from TOML
+# content (dev_panic, ip_*, link_*, nodev_*, nouart_*); check-cfg has no name
+# wildcard, so each family member must be declared here when code first uses
+# it.  dev_panic is predeclared for the 03-06 panic config; dev_exec is
+# predeclared for the 04-05 exec config (dev = ["exec"] in config_virtexec.toml).
+# dev_bootchain is predeclared for the 05-04 shell-chain config
+# (dev = ["exec", "bootchain"] in config_virtshell.toml).
+# (261103-p64: moved from aarch64/Cargo.toml — cargo forbids a crate-level
+# [lints.rust] override alongside `[lints] workspace = true`; only the gated
+# crates opt in.)
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(platform, values("virt", "raspi3b", "raspi4b"))',
+    'cfg(dev_panic)',
+    'cfg(dev_exec)',
+    'cfg(dev_bootchain)',
+] }
+
 [profile.dev]
 panic = "abort"
 opt-level = 1

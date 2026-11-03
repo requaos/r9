@@ -89,6 +89,30 @@ pub fn deallocate_physpage(pa: PhysAddr) -> Result<(), PageAllocError> {
     lock.deallocate(pa)
 }
 
+/// A guard handle to a freshly allocated+mapped 4 KiB virtual page
+/// (261103-p64: allocate_virtpage no longer hands out a `&'static mut`).
+/// Deref/DerefMut reach the page for the guard's lifetime; the mapping is
+/// permanent this era (no unmap path), so the handle's target stays valid.
+pub struct VirtPage4KGuard(*mut VirtPage4K);
+
+impl core::ops::Deref for VirtPage4KGuard {
+    type Target = VirtPage4K;
+
+    fn deref(&self) -> &VirtPage4K {
+        // SAFETY: the pointer names a page allocate_virtpage just mapped
+        // r/w in the named root table; the mapping is never torn down this
+        // era, and the caller treats the guard as the page's unique handle.
+        unsafe { &*self.0 }
+    }
+}
+
+impl core::ops::DerefMut for VirtPage4KGuard {
+    fn deref_mut(&mut self) -> &mut VirtPage4K {
+        // SAFETY: Deref's invariant.
+        unsafe { &mut *self.0 }
+    }
+}
+
 /// Try to allocate a physical page and map it into virtual memory at va.
 pub fn allocate_virtpage(
     page_table: &mut RootPageTable,
@@ -96,7 +120,7 @@ pub fn allocate_virtpage(
     entry: Entry,
     va: VaMapping,
     pgtype: RootPageTableType,
-) -> Result<&'static mut VirtPage4K, PageAllocError> {
+) -> Result<VirtPage4KGuard, PageAllocError> {
     let page_pa = allocate_physpage()?;
     let range = PhysRange::with_pa_len(page_pa, PAGE_SIZE_4K);
 
@@ -114,8 +138,7 @@ pub fn allocate_virtpage(
         pgtype,
     ) {
         // println!("pagealloc:allocate_virtpage:va:{:#x} -> physpage:{:?}", page_va.start(), page_pa);
-        let virtpage = page_va.start() as *mut VirtPage4K;
-        Ok(unsafe { &mut *virtpage })
+        Ok(VirtPage4KGuard(page_va.start() as *mut VirtPage4K))
     } else {
         println!("error:pagealloc:allocate_virtpage:unable to map");
         Err(PageAllocError::UnableToMap)

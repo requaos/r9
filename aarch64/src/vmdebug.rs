@@ -82,9 +82,14 @@ fn recursive_root_page_table_va(pgtype: RootPageTableType) -> usize {
 
 /// Return the current kernel or user page table.
 /// This depends on the recursive entry of root page tables to have been set up correctly.
-fn recursive_root_page_table(pgtype: RootPageTableType) -> &'static mut RootPageTable {
-    let ptr = recursive_root_page_table_va(pgtype) as *mut RootPageTable;
-    unsafe { &mut *ptr }
+/// 261103-p64: a SHARED reference (read-only printing) — no `&'static mut`.
+fn recursive_root_page_table(pgtype: RootPageTableType) -> &'static RootPageTable {
+    let ptr = recursive_root_page_table_va(pgtype) as *const RootPageTable;
+    // SAFETY: the recursive slot-511 self-entry makes this VA resolve to the
+    // live root table (the function's own doc invariant); the walk only
+    // reads, and runs in boot/IRQ-masked context (nothing mutates the
+    // tables mid-print this era).
+    unsafe { &*ptr }
 }
 
 /// Recursively write out all the tables and all its children
@@ -129,6 +134,9 @@ fn print_table_at_level(
 
             if let Some(next_level_pte_indices) = pte_indices.with_next_index(i) {
                 let next_nevel = level.next().unwrap();
+                // SAFETY: the recursive-mapping address math names the
+                // child table of a valid table entry (the walk above);
+                // read-only print in boot/IRQ-masked context.
                 let child_table = unsafe { &*(child_table_va as *const RootPageTable) };
                 print_table_at_level(
                     child_table,

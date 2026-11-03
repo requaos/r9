@@ -46,10 +46,10 @@ use port::pgrp::{MAFTER, MBEFORE, MMASK, MORDER};
 use port::println;
 
 use crate::exec;
-use crate::fault;
 use crate::proc::{self, ByteBacking, ERRMAX, Proc, ProcState};
 use crate::trap;
 use crate::trap::TrapFrame;
+use crate::usermem::{UserPtr, UserSlice, UserSliceMut, UserString};
 
 // The frozen syscall numbers (Harvey sys/src/libc/9syscall/sys.h).
 const BIND: u64 = 2;
@@ -170,16 +170,14 @@ static DISPATCH: [Option<Handler>; 55] = {
 /// result to frame.x0 (the restore tail's `ldp x0` pop propagates it to
 /// user R0 — the mechanism exists since Phase 3).
 pub fn dispatch(frame: &mut TrapFrame) {
-    let proc_ptr = proc::current_proc();
-    if proc_ptr.is_null() {
+    let Some(mut proc) = proc::current() else {
         // An SVC with no current process is a kernel-orchestration bug
         // (dev_exec execs /init before any EL0 exists), never a user error.
         panic!("syscall dispatch with no current process (n={})", frame.x0);
-    }
-    let proc = unsafe { &mut *proc_ptr };
+    };
     let n = frame.x0;
     let result = match DISPATCH.get(n as usize) {
-        Some(Some(handler)) => handler(frame, proc),
+        Some(Some(handler)) => handler(frame, &mut proc),
         _ => {
             println!("syscall {n} unimplemented");
             proc.set_errstr("syscall not implemented");
@@ -221,13 +219,15 @@ pub fn dispatch(frame: &mut TrapFrame) {
 /// from R0, whose upper half the caller's 32-bit op already zeroed.)
 fn sargs(frame: &mut TrapFrame, proc: &mut Proc, arity: usize) -> Option<[u64; 5]> {
     let base = frame.sp + 8;
-    if proc.validate_user_range(base, 8 * arity as u64, false).is_err() {
-        return None;
-    }
-    let sargs = base as *const u64;
+    // 261103-p64 (zero-behavior-change): the arg block rides the usermem
+    // validated-only variant — it lives on the live user stack, which the
+    // stub wrote through to make the call (resident by construction; the
+    // pre-usermem code validated without forcing residency, and that exact
+    // shape is preserved — UNSAFE-AUDIT.md flags the class).
+    let block = UserSlice::validated_only(proc, base, 8 * arity as u64).ok()?;
     let mut out = [0u64; 5];
     for (i, slot) in out.iter_mut().enumerate().take(arity) {
-        *slot = unsafe { sargs.add(i).read() };
+        *slot = block.read_u64(8 * i)?;
     }
     Some(out)
 }
@@ -235,41 +235,16 @@ fn sargs(frame: &mut TrapFrame, proc: &mut Proc, arity: usize) -> Option<[u64; 5
 /// Copy a NUL-terminated user string into a kernel Vec, validating each
 /// byte's page membership BEFORE reading it (T-04-11) and bounding the
 /// length at `max` (ERRMAX-ish — Plan 9's string ceiling).  The returned
-/// bytes EXCLUDE the terminator.
+/// bytes EXCLUDE the terminator.  261103-p64: the loop is homed in
+/// usermem::UserString; this wrapper keeps the call sites' shape.
 fn copy_user_str(proc: &Proc, va: u64, max: usize) -> Result<Vec<u8>, &'static str> {
-    let mut out = Vec::new();
-    if va == 0 {
-        return Err("null string pointer");
-    }
-    loop {
-        if out.len() >= max {
-            return Err("string too long");
-        }
-        proc.validate_user_range(va + out.len() as u64, 1, false)?;
-        let b = unsafe { ((va + out.len() as u64) as *const u8).read() };
-        if b == 0 {
-            return Ok(out);
-        }
-        out.push(b);
-    }
+    UserString::copy_from(proc, va, max)
 }
 
 /// Error return: set the proc's errstr, return -1 on the wire.
 fn err(proc: &mut Proc, msg: &'static str) -> u64 {
     proc.set_errstr(msg);
     -1i64 as u64
-}
-
-/// A validated user buffer as a kernel-readable slice.  The calling proc's
-/// TTBR0 is live (we are in its syscall), so user VAs are directly
-/// dereferenceable; `validate_user_range` has already run.
-unsafe fn user_slice(va: u64, n: u64) -> &'static [u8] {
-    unsafe { core::slice::from_raw_parts(va as *const u8, n as usize) }
-}
-
-/// The writable twin of user_slice.
-unsafe fn user_slice_mut(va: u64, n: u64) -> &'static mut [u8] {
-    unsafe { core::slice::from_raw_parts_mut(va as *mut u8, n as usize) }
 }
 
 /// PWRITE(51): fd, buf, n, offset.  Offset -1 (u64::MAX) is the streaming
@@ -289,15 +264,13 @@ fn sys_pwrite(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         return err(proc, "pwrite: bad argument block");
     };
     let (fd, buf, n, off) = (args[0] & 0xffff_ffff, args[1], args[2] & 0xffff_ffff, args[3]); // fd is an int
-    if proc.validate_user_range(buf, n, false).is_err() {
-        return err(proc, "pwrite: bad user buffer");
-    }
-    // 05-06 (the cold-buffer class): force the read source resident
-    // BEFORE the device reads it — a brk_-grown/stack-growth page that
-    // no EL0 code has touched aborts at EL1h on a kernel read (04-08's
-    // explicit-residency pattern generalized; T-05-06: never a nested
-    // fault).
-    fault::ensure_user_resident(proc, buf as usize, (buf + n) as usize);
+    // 261103-p64 (T-p64-01): validation + cold-buffer residency are FUSED
+    // in the usermem constructor — the 05-06 discipline can no longer be
+    // forgotten at a call site.
+    let src = match UserSlice::new(proc, buf, n) {
+        Ok(s) => s,
+        Err(_) => return err(proc, "pwrite: bad user buffer"),
+    };
     let Some(mut chan) = proc.fd_take(fd) else {
         return err(proc, "pwrite: bad fd");
     };
@@ -306,33 +279,33 @@ fn sys_pwrite(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             // 05-04 Task 3: the device routes by qid — cons writes
             // byte-exact, null discards, hostowner stores (D-02), user is
             // read-only (the whole per-file contract lives in the device).
-            port::devcons::write(&mut chan, unsafe { user_slice(buf, n) })
+            port::devcons::write(&mut chan, src.as_slice())
         }
         DEV_ROOT => Err("devroot: read-only filesystem"),
         DEV_PROC => {
             // devproc-lite (04-08): the note append is the whole write —
             // the chan's qid names the target pid; offsets don't apply.
-            port::devproc::write(&mut chan, unsafe { user_slice(buf, n) })
+            port::devproc::write(&mut chan, src.as_slice())
         }
         DEV_ENV => {
             // devenv (05-05, D-07): the write lands in the OPERATING
             // proc's env group (the device resolves it via the
             // registered hook — donor envgrp(c)); offsets per envwrite
             // (streaming offset honored, grow-at-offset).
-            port::devenv::write(&mut chan, unsafe { user_slice(buf, n) }, off)
+            port::devenv::write(&mut chan, src.as_slice(), off)
         }
         DEV_PIPE => {
             // devpipe (05-06): end i writes q[1-i]; a full queue is a
             // named error (never partial, never silent); blocked readers
             // wake after the bytes land.
-            port::devpipe::write(&mut chan, unsafe { user_slice(buf, n) }, off)
+            port::devpipe::write(&mut chan, src.as_slice(), off)
         }
         DEV_DUP => Err("devdup: not writable (open #d/N to reach the fd)"),
         DEV_SRV => {
             // devsrv (05-06): writing a decimal fd number to a service
             // file registers it (boot's srvcreate — FATAL on failure, so
             // this must actually work).
-            port::devsrv::write(&mut chan, unsafe { user_slice(buf, n) }, off)
+            port::devsrv::write(&mut chan, src.as_slice(), off)
         }
         DEV_MNT => {
             // devmnt (05-07): paqfs is a read-only server; the early
@@ -363,13 +336,12 @@ fn sys_pread(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         return err(proc, "pread: bad argument block");
     };
     let (fd, buf, n, off) = (args[0] & 0xffff_ffff, args[1], args[2] & 0xffff_ffff, args[3]); // fd is an int
-    if proc.validate_user_range(buf, n, true).is_err() {
-        return err(proc, "pread: bad user buffer");
-    }
-    // 05-06: force the write target resident BEFORE the device fills it
-    // (the cold-buffer class — paqfs's emalloc'd heap buffers are
-    // demand-paged and first-touched by this kernel write).
-    fault::ensure_user_resident(proc, buf as usize, (buf + n) as usize);
+    // 261103-p64 (T-p64-01): the writable target's validation + cold-buffer
+    // residency are fused in the usermem constructor.
+    let mut dst = match UserSliceMut::new(proc, buf, n) {
+        Ok(s) => s,
+        Err(_) => return err(proc, "pread: bad user buffer"),
+    };
     let Some(mut chan) = proc.fd_take(fd) else {
         return err(proc, "pread: bad fd");
     };
@@ -380,51 +352,51 @@ fn sys_pread(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             // hostowner reads the stored value, and cons reads get the
             // loud "05-08" -1 (never a wedge).  The streaming offset
             // advances inside the device (the pread convention).
-            port::devcons::read(&mut chan, unsafe { user_slice_mut(buf, n) }, off)
+            port::devcons::read(&mut chan, dst.as_slice_mut(), off)
         }
         DEV_ROOT => {
             let Some(root) = port::devroot::root() else {
                 proc.fd_store(fd, chan);
                 return err(proc, "devroot: not mounted");
             };
-            root.read(&mut chan, unsafe { user_slice_mut(buf, n) }, off)
+            root.read(&mut chan, dst.as_slice_mut(), off)
         }
         DEV_PROC => {
             // devproc (04-08 + 05-09): the root/pid-dir listings, the
             // per-pid status/args reads (D-09's ps data source); note
             // reads stay write-only-loud.
-            port::devproc::read(&mut chan, unsafe { user_slice_mut(buf, n) }, off)
+            port::devproc::read(&mut chan, dst.as_slice_mut(), off)
         }
         DEV_ENV => {
             // devenv (05-05, D-07): the read comes from the OPERATING
             // proc's env group (hook-resolved — donor envgrp(c)); the
             // root dir serves the group's stat-wire listing, a key serves
             // its value (clamped, EOF = 0); streaming offset honored.
-            port::devenv::read(&mut chan, unsafe { user_slice_mut(buf, n) }, off)
+            port::devenv::read(&mut chan, dst.as_slice_mut(), off)
         }
         DEV_PIPE => {
             // devpipe (05-06): read the end's queue — drains available
             // bytes, blocks on empty (wake on write/close), EOF on
             // hangup.  Never touches the chan offset (streaming).
-            port::devpipe::read(&mut chan, unsafe { user_slice_mut(buf, n) }, off)
+            port::devpipe::read(&mut chan, dst.as_slice_mut(), off)
         }
         DEV_DUP => {
             // devdup (05-06): the root dir listing of the CALLING proc's
             // open fds (rcmain's `. -i '#d/0'` opens the fd file — its
             // reads dispatch to the REFERENCED chan's device, not here).
-            port::devdup::read(&mut chan, unsafe { user_slice_mut(buf, n) }, off)
+            port::devdup::read(&mut chan, dst.as_slice_mut(), off)
         }
         DEV_SRV => {
             // devsrv (05-06): the root dir listing of registered
             // services (a service file's reads flow through its posted
             // chan — open returns it, the donor srvopen).
-            port::devsrv::read(&mut chan, unsafe { user_slice_mut(buf, n) }, off)
+            port::devsrv::read(&mut chan, dst.as_slice_mut(), off)
         }
         DEV_MNT => {
             // devmnt (05-07): chunked Tread RPCs over the mounted tree's
             // session (blocks mid-syscall — the pipe read schedules the
             // server proc; the fd is checked out, never the group lock).
-            port::devmnt::read(&mut chan, unsafe { user_slice_mut(buf, n) }, off)
+            port::devmnt::read(&mut chan, dst.as_slice_mut(), off)
         }
         _ => Err("pread: unknown device"),
     };
@@ -484,15 +456,22 @@ fn sys_noted(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             if nureg == 0 {
                 return err(proc, "noted: not notified");
             }
-            if proc.validate_user_range(nureg, trap::UREG_SIZE as u64, false).is_err() {
-                return err(proc, "noted: bad saved ureg");
-            }
+            // 261103-p64 (zero-behavior-change): the saved-ureg window
+            // rides the usermem validated-only variant — deliver_notes
+            // forced its pages resident at delivery time and nothing
+            // unmaps them while the handler runs (the pre-usermem code
+            // validated without re-forcing residency; that exact shape is
+            // preserved — UNSAFE-AUDIT.md flags the class).
+            let saved = match UserSlice::validated_only(proc, nureg, trap::UREG_SIZE as u64) {
+                Ok(s) => s,
+                Err(_) => return err(proc, "noted: bad saved ureg"),
+            };
             // Validate the resume target BEFORE committing the restore
             // (the donor noted()'s okaddr(pc)+okaddr(sp)+alignment checks,
             // pre-copy so a bad saved frame leaves the live frame
             // untouched and the -1 writeback is truthful).
-            let saved_sp = unsafe { ((nureg + 248) as *const u64).read() }; // ureg->sp
-            let saved_pc = unsafe { ((nureg + 256) as *const u64).read() }; // ureg->pc
+            let saved_sp = saved.read_u64(248).expect("ureg->sp in range"); // ureg->sp
+            let saved_pc = saved.read_u64(256).expect("ureg->pc in range"); // ureg->pc
             let in_text = proc
                 .segments
                 .as_ref()
@@ -503,14 +482,10 @@ fn sys_noted(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             if proc.validate_user_range(saved_sp, 8, true).is_err() {
                 return err(proc, "noted: bad resume stack");
             }
-            // Restore: the saved 280 bytes over the live frame's 35 fields.
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    nureg as *const u8,
-                    frame as *mut TrapFrame as *mut u8,
-                    trap::UREG_SIZE,
-                );
-            }
+            // Restore: the saved 280 bytes over the live frame's 35 fields
+            // (the usermem slice is the source; the frame-side byte copy
+            // lives in TrapFrame::restore_from_saved).
+            frame.restore_from_saved(saved.as_slice());
             // WR-04: the copied psr came from user-writable memory (the
             // notejmp contract lets the handler edit the saved Ureg) —
             // force the privilege bits to EL0t so a handler-edited M field
@@ -722,28 +697,30 @@ fn sys_fversion(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     // a full pointer.
     let (fd, msize, ver_va, nver) =
         (args[0] & 0xffff_ffff, (args[1] & 0xffff_ffff) as u32, args[2], args[3] & 0xffff_ffff);
-    if proc.validate_user_range(ver_va, nver, true).is_err() {
-        return err(proc, "fversion: bad version buffer");
-    }
-    fault::ensure_user_resident(proc, ver_va as usize, (ver_va + nver) as usize);
     if nver == 0 {
         return err(proc, "fversion: zero-length version buffer");
     }
-    let buf = unsafe { user_slice(ver_va, nver) };
-    let Some(nul) = buf.iter().position(|&b| b == 0) else {
-        return err(proc, "fversion: bad version specification");
+    // 261103-p64 (T-p64-01): one fused constructor covers the read of the
+    // requested version string AND the negotiated write-back (the buffer
+    // is read+written, so the writable variant covers both).
+    let mut verbuf = match UserSliceMut::new(proc, ver_va, nver) {
+        Ok(b) => b,
+        Err(_) => return err(proc, "fversion: bad version buffer"),
     };
-    let requested = &buf[..nul];
+    let requested = {
+        let buf = verbuf.as_slice();
+        let Some(nul) = buf.iter().position(|&b| b == 0) else {
+            return err(proc, "fversion: bad version specification");
+        };
+        &buf[..nul]
+    };
     if !requested.is_empty() && requested != port::devmnt::VERSION9P {
         return err(proc, "fversion: bad 9P version specification");
     }
     let Some(mut chan) = proc.fd_take(fd) else {
         return err(proc, "fversion: bad fd");
     };
-    let result = {
-        let out = unsafe { user_slice_mut(ver_va, nver) };
-        port::devmnt::fversion(&mut chan, msize, out)
-    };
+    let result = port::devmnt::fversion(&mut chan, msize, verbuf.as_slice_mut());
     proc.fd_store(fd, chan);
     match result {
         Ok(len) => len,
@@ -858,14 +835,12 @@ fn sys_stat(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         Ok(s) => s,
         Err(msg) => return err(proc, msg),
     };
-    if proc.validate_user_range(buf_va, n, true).is_err() {
-        return err(proc, "stat: bad user buffer");
-    }
-    // Force the write target resident BEFORE the kernel fills it (the
-    // cold-buffer class, T-05-06: an in-segment but never-demand-faulted
-    // heap page takes an EL1h data abort mid-write — a kernel halt, never
-    // acceptable on a user-triggerable path; sys_pread's discipline).
-    fault::ensure_user_resident(proc, buf_va as usize, (buf_va + n) as usize);
+    // 261103-p64 (T-p64-01): the output buffer's validation + residency
+    // (the cold-buffer class, T-05-06) are fused in the constructor.
+    let mut sb = match UserSliceMut::new(proc, buf_va, n) {
+        Ok(b) => b,
+        Err(_) => return err(proc, "stat: bad user buffer"),
+    };
     let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
         return err(proc, "stat: no namespace (pre-exec)");
     };
@@ -875,8 +850,7 @@ fn sys_stat(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         Ok(c) => c,
         Err(msg) => return err(proc, msg),
     };
-    let sb = unsafe { user_slice_mut(buf_va, n) };
-    match namec::stat_chan(&c, sb) {
+    match namec::stat_chan(&c, sb.as_slice_mut()) {
         Ok(count) => count,
         Err(msg) => err(proc, msg),
     }
@@ -892,17 +866,16 @@ fn sys_fstat(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         return err(proc, "fstat: bad argument block");
     };
     let (fd, buf_va, n) = (args[0] & 0xffff_ffff, args[1], args[2] & 0xffff_ffff); // fd, n are ints
-    if proc.validate_user_range(buf_va, n, true).is_err() {
-        return err(proc, "fstat: bad user buffer");
-    }
-    // Force the write target resident BEFORE the kernel fills it (the
-    // cold-buffer class, T-05-06 — sys_stat/sys_pread's discipline).
-    fault::ensure_user_resident(proc, buf_va as usize, (buf_va + n) as usize);
+    // 261103-p64 (T-p64-01): the output buffer's validation + residency
+    // (the cold-buffer class, T-05-06) are fused in the constructor.
+    let mut sb = match UserSliceMut::new(proc, buf_va, n) {
+        Ok(b) => b,
+        Err(_) => return err(proc, "fstat: bad user buffer"),
+    };
     let Some(chan) = proc.fd_take(fd) else {
         return err(proc, "fstat: bad fd");
     };
-    let sb = unsafe { user_slice_mut(buf_va, n) };
-    let result = namec::stat_chan(&chan, sb);
+    let result = namec::stat_chan(&chan, sb.as_slice_mut());
     proc.fd_store(fd, chan);
     match result {
         Ok(count) => count,
@@ -976,10 +949,16 @@ fn sys_exec(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
                 return err(proc, "exec: too many args");
             }
             let slot_va = argv_va + 8 * argv.len() as u64;
-            if proc.validate_user_range(slot_va, 8, false).is_err() {
-                return err(proc, "exec: bad argv block");
-            }
-            let ptr = unsafe { (slot_va as *const u64).read() };
+            // 261103-p64 (zero-behavior-change): the argv slot block rides
+            // usermem's validated-only pointer — the slots are user
+            // stack/data the process itself wrote to set up the call
+            // (resident by construction; the pre-usermem shape preserved —
+            // UNSAFE-AUDIT.md flags the class).
+            let slot = match UserPtr::validated_only(proc, slot_va) {
+                Ok(p) => p,
+                Err(_) => return err(proc, "exec: bad argv block"),
+            };
+            let ptr = slot.read_u64();
             if ptr == 0 {
                 break;
             }
@@ -1082,10 +1061,12 @@ fn sys_pipe(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         return err(proc, "pipe: bad argument block");
     };
     let arr_va = args[0];
-    if proc.validate_user_range(arr_va, 8, true).is_err() {
-        return err(proc, "pipe: bad fd array");
-    }
-    fault::ensure_user_resident(proc, arr_va as usize, (arr_va + 8) as usize); // 05-06 cold-buffer class
+    // 261103-p64 (T-p64-01): the fd array's validation + residency are
+    // fused in the constructor (the 05-06 cold-buffer class).
+    let mut arr = match UserSliceMut::new(proc, arr_va, 8) {
+        Ok(a) => a,
+        Err(_) => return err(proc, "pipe: bad fd array"),
+    };
     // The pipe pair (the registry '|' twin — a fresh attach per call).
     let dir = port::devpipe::attach();
     let c0 = match port::devpipe::walk(&dir, b"data") {
@@ -1112,7 +1093,7 @@ fn sys_pipe(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         }
     };
     proc.fd_install_pair(pair, e0, e1);
-    let out = unsafe { user_slice_mut(arr_va, 8) };
+    let out = arr.as_slice_mut();
     out[0..4].copy_from_slice(&(pair.0 as u32).to_le_bytes());
     out[4..8].copy_from_slice(&(pair.1 as u32).to_le_bytes());
     0
@@ -1268,14 +1249,16 @@ fn sys_fd2path(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         return err(proc, "fd2path: bad argument block");
     };
     let (fd, buf_va, n) = (args[0] & 0xffff_ffff, args[1], args[2] & 0xffff_ffff); // fd, n are ints
-    if proc.validate_user_range(buf_va, n, true).is_err() {
-        return err(proc, "fd2path: bad user buffer");
-    }
-    fault::ensure_user_resident(proc, buf_va as usize, (buf_va + n) as usize); // 05-06 cold-buffer class
+    // 261103-p64 (T-p64-01): the fd2path buffer's validation + residency
+    // (the 05-06 cold-buffer class) are fused in the constructor.
+    let mut dst = match UserSliceMut::new(proc, buf_va, n) {
+        Ok(b) => b,
+        Err(_) => return err(proc, "fd2path: bad user buffer"),
+    };
     let Some(path) = proc.fd_path(fd) else {
         return err(proc, "fd2path: bad fd");
     };
-    let dst = unsafe { user_slice_mut(buf_va, n) };
+    let dst = dst.as_slice_mut();
     if dst.is_empty() {
         return 0;
     }
@@ -1401,10 +1384,12 @@ fn sys_seek(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     // offset is a vlong.
     let (rv, fd, off, base) =
         (args[0], args[1] & 0xffff_ffff, args[2] as i64, (args[3] & 0xffff_ffff) as u32 as i32);
-    if proc.validate_user_range(rv, 8, true).is_err() {
-        return err(proc, "seek: bad result pointer");
-    }
-    fault::ensure_user_resident(proc, rv as usize, (rv + 8) as usize); // 05-06 cold-buffer class
+    // 261103-p64 (T-p64-01): the result pointer's validation + residency
+    // (the 05-06 cold-buffer class) are fused in the constructor.
+    let mut rv_slot = match UserSliceMut::new(proc, rv, 8) {
+        Ok(s) => s,
+        Err(_) => return err(proc, "seek: bad result pointer"),
+    };
     let Some(mut chan) = proc.fd_take(fd) else {
         return err(proc, "seek: bad fd");
     };
@@ -1430,7 +1415,7 @@ fn sys_seek(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     match result {
         Ok(v) => {
             // The donor's *rv write-back (the wrapper's real return).
-            unsafe { (rv as *mut u64).write(v) };
+            rv_slot.write_u64(0, v);
             0
         }
         Err(msg) => err(proc, msg),
@@ -1447,17 +1432,19 @@ fn sys_errstr(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         return err(proc, "errstr: bad argument block");
     };
     let (buf, n) = (args[0], args[1] & 0xffff_ffff); // n is a uint (width discipline)
-    if proc.validate_user_range(buf, n, true).is_err() {
-        return err(proc, "errstr: bad user buffer");
-    }
-    fault::ensure_user_resident(proc, buf as usize, (buf + n) as usize); // 05-06 cold-buffer class
+    // 261103-p64 (T-p64-01): the errstr buffer's validation + residency
+    // (the 05-06 cold-buffer class) are fused in the constructor.
+    let mut dst = match UserSliceMut::new(proc, buf, n) {
+        Ok(b) => b,
+        Err(_) => return err(proc, "errstr: bad user buffer"),
+    };
     let cap = (n as usize).min(ERRMAX);
     if cap == 0 {
         return 0;
     }
     let src = proc.errstr;
     let len = src.iter().position(|&b| b == 0).unwrap_or(ERRMAX).min(cap - 1);
-    let dst = unsafe { user_slice_mut(buf, n) };
+    let dst = dst.as_slice_mut();
     dst[..len].copy_from_slice(&src[..len]);
     dst[len] = 0;
     0
@@ -1549,10 +1536,12 @@ fn sys_await(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         return err(proc, "await: bad argument block");
     };
     let (buf, buflen) = (args[0], args[1] & 0xffff_ffff); // buflen is a uint (width discipline)
-    if proc.validate_user_range(buf, buflen, true).is_err() {
-        return err(proc, "await: bad user buffer");
-    }
-    fault::ensure_user_resident(proc, buf as usize, (buf + buflen) as usize); // 05-06 cold-buffer class
+    // 261103-p64 (T-p64-01): the await buffer's validation + residency
+    // (the 05-06 cold-buffer class) are fused in the constructor.
+    let mut dst = match UserSliceMut::new(proc, buf, buflen) {
+        Ok(b) => b,
+        Err(_) => return err(proc, "await: bad user buffer"),
+    };
     let cap = buflen as usize;
     if cap == 0 {
         return err(proc, "await: zero-length buffer");
@@ -1564,7 +1553,7 @@ fn sys_await(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             let text = alloc::format!("{} 0 0 0 \"{}\"", rec.pid, msg);
             let bytes = text.as_bytes();
             let n = bytes.len().min(cap - 1);
-            let dst = unsafe { user_slice_mut(buf, buflen) };
+            let dst = dst.as_slice_mut();
             dst[..n].copy_from_slice(&bytes[..n]);
             dst[n] = 0;
             return n as u64;
@@ -1632,6 +1621,8 @@ pub(crate) fn exit_tail(proc: &mut Proc, msg: &[u8]) -> ! {
         // Clean halt (SC#5 shape): park in wfi.  IRQs stay masked (trap
         // context never unmasks them), so this is a wedge-free stop.
         loop {
+            // SAFETY: wfi parks the CPU with IRQs masked — the wedge-free
+            // all-exited stop (the asm-halt floor).
             unsafe { core::arch::asm!("wfi") };
         }
     }

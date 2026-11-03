@@ -21,7 +21,9 @@ pub trait Uart {
     fn putb(&self, b: u8);
 }
 
-static CONS: Lock<Option<&'static mut dyn Uart>> = Lock::new("cons", None);
+/// 261103-p64: the registered uart is a SHARED &'static dyn Uart (putb is
+/// a &self method) — no `&'static mut` ever enters the console.
+static CONS: Lock<Option<&'static dyn Uart>> = Lock::new("cons", None);
 
 /// Console is what should be used in almost all cases, as it ensures threadsafe
 /// use of the console.
@@ -30,7 +32,7 @@ pub struct Console;
 impl Console {
     pub fn set_uart<F>(uart_fn: F)
     where
-        F: FnOnce() -> Result<&'static mut dyn Uart>,
+        F: FnOnce() -> Result<&'static dyn Uart>,
     {
         let node = LockNode::new();
         let mut cons = CONS.lock(&node);
@@ -41,8 +43,8 @@ impl Console {
         // XXX: Just for testing.
 
         let node = LockNode::new();
-        let mut uart_guard = CONS.lock(&node);
-        if let Some(uart) = uart_guard.as_deref_mut() {
+        let uart_guard = CONS.lock(&node);
+        if let Some(uart) = uart_guard.as_deref() {
             for b in s.bytes() {
                 putb(uart, b);
             }
@@ -77,8 +79,8 @@ pub fn print(args: fmt::Arguments) {
 /// that reason.  Returns the number of bytes written.
 pub fn write_bytes(buf: &[u8]) -> usize {
     let node = LockNode::new();
-    let mut uart_guard = CONS.lock(&node);
-    let Some(uart) = uart_guard.as_deref_mut() else {
+    let uart_guard = CONS.lock(&node);
+    let Some(uart) = uart_guard.as_deref() else {
         // Console never initialised (pre-devcons::init) — the write goes
         // nowhere, but a syscall-era caller always has a registered uart.
         return 0;
@@ -102,7 +104,7 @@ macro_rules! print {
     }};
 }
 
-fn putb(uart: &mut dyn Uart, b: u8) {
+fn putb(uart: &dyn Uart, b: u8) {
     if b == b'\n' {
         uart.putb(b'\r');
     } else if b == BACKSPACE {

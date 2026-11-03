@@ -20,10 +20,15 @@ pub fn init(dt: &DeviceTree) {
             Ok(uart) => {
                 static UART: SyncUnsafeCell<MaybeUninit<Pl011Uart>> =
                     SyncUnsafeCell::new(MaybeUninit::uninit());
+                // SAFETY: set_uart runs once at platform init (single CPU,
+                // pre-IRQ-unmask); the cell is written before its address
+                // escapes, and the published &'static dyn Uart only ever
+                // reads it.
                 unsafe {
                     let cons = &mut *UART.get();
                     cons.write(uart);
-                    Ok(cons.assume_init_mut())
+                    let cons: &'static Pl011Uart = cons.assume_init_mut();
+                    Ok(cons)
                 }
             }
             Err(msg) => {

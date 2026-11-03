@@ -51,6 +51,10 @@ impl MCSLock {
         let p = node as *const _ as *mut _;
         let predecessor = self.queue.swap(p, Ordering::AcqRel);
         if !predecessor.is_null() {
+            // SAFETY: predecessor names a live LockNode whose owner is
+            // mid-lock on THIS queue (the MCS protocol: the queue swap
+            // published our node; the predecessor waits on its own locked
+            // flag until we link it).  The link outlives the handshake.
             let predecessor = unsafe { &*predecessor };
             node.locked.store(true, Ordering::Release);
             predecessor.next.store(p, Ordering::Release);
@@ -76,6 +80,9 @@ impl MCSLock {
             }
         }
         let next = node.next.load(Ordering::Acquire);
+        // SAFETY: next names the live successor LockNode the lock()
+        // handshake linked (the spin above guarantees the link landed);
+        // its owner spins on locked until this store releases it.
         let next = unsafe { &*next };
         next.locked.store(false, Ordering::Release);
     }
@@ -86,7 +93,12 @@ pub struct Lock<T: ?Sized> {
     data: UnsafeCell<T>,
 }
 
+// SAFETY: the MCS protocol (lock/unlock above) serializes all access to
+// the protected data — a Lock can cross threads because the queue
+// discipline is the synchronization (261103-p64: the named floor module).
 unsafe impl<T: ?Sized> Send for Lock<T> {}
+// SAFETY: as above — &Lock sharing is safe because data access only ever
+// happens under the queue's mutual exclusion.
 unsafe impl<T: ?Sized> Sync for Lock<T> {}
 
 impl<T> Lock<T> {
@@ -95,7 +107,12 @@ impl<T> Lock<T> {
     }
 
     pub fn lock<'a>(&'a self, node: &'a LockNode) -> LockGuard<'a, T> {
+        // SAFETY: UnsafeCell::get on the lock is the protocol entry (the
+        // MCS queue is internally synchronized); the guard's &mut data is
+        // unique because the lock was just acquired.
         let node = unsafe { &mut *self.lock.get() }.lock(node);
+        // SAFETY: the lock is held (above), so the data borrow is
+        // exclusive for the guard's lifetime; the guard's Drop releases.
         LockGuard { lock: &self.lock, node, data: unsafe { &mut *self.data.get() } }
     }
 }
@@ -121,6 +138,9 @@ impl<T> DerefMut for LockGuard<'_, T> {
 
 impl<T: ?Sized> Drop for LockGuard<'_, T> {
     fn drop(&mut self) {
+        // SAFETY: the guard's existence proves the lock is held by this
+        // context; unlock publishes our node's release through the MCS
+        // queue.
         unsafe { &mut *self.lock.get() }.unlock(self.node);
     }
 }

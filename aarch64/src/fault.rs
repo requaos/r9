@@ -79,11 +79,9 @@ pub fn user_fault(frame: &mut TrapFrame, esr: EsrEl1, far: u64) {
     if va >= KZERO {
         unresolvable(frame, class, far, access);
     }
-    let proc_ptr = proc::current_proc();
-    if proc_ptr.is_null() {
+    let Some(mut proc) = proc::current() else {
         panic!("user fault with no current process class={class} addr={va:#x}");
-    }
-    let proc = unsafe { &mut *proc_ptr };
+    };
     let page_va = va & !(PAGE_SIZE_4K - 1);
 
     let Some(segments) = proc.segments.clone() else {
@@ -96,14 +94,24 @@ pub fn user_fault(frame: &mut TrapFrame, esr: EsrEl1, far: u64) {
     let already_mapped = proc.mapping_log.iter().any(|m| m.va == page_va);
 
     match segments.classify(va) {
-        Some(SegKind::Text) if !already_mapped => page_in_from_image(proc, page_va, SegKind::Text),
-        Some(SegKind::Data) if !already_mapped => page_in_from_image(proc, page_va, SegKind::Data),
-        Some(SegKind::Bss) if !already_mapped => page_in_zeroed(proc, page_va, SegKind::Bss),
-        Some(SegKind::Tos) if !already_mapped => page_in_zeroed(proc, page_va, SegKind::Tos),
+        Some(SegKind::Text) if !already_mapped => {
+            page_in_from_image(&mut proc, page_va, SegKind::Text)
+        }
+        Some(SegKind::Data) if !already_mapped => {
+            page_in_from_image(&mut proc, page_va, SegKind::Data)
+        }
+        Some(SegKind::Bss) if !already_mapped => {
+            page_in_zeroed(&mut proc, page_va, SegKind::Bss)
+        }
+        Some(SegKind::Tos) if !already_mapped => {
+            page_in_zeroed(&mut proc, page_va, SegKind::Tos)
+        }
         // The stack segment range IS the 16 MiB growth bound — a Stack
         // classification is always in-bounds; faults below the bound
         // classify None and fall through to unresolvable.
-        Some(SegKind::Stack) if !already_mapped => page_in_zeroed(proc, page_va, SegKind::Stack),
+        Some(SegKind::Stack) if !already_mapped => {
+            page_in_zeroed(&mut proc, page_va, SegKind::Stack)
+        }
         _ => unresolvable(frame, class, far, access),
     }
 }
@@ -135,6 +143,9 @@ fn page_in_from_image(proc: &mut Proc, page_va: usize, kind: SegKind) {
     // padding past text end).  Poisoned bss globals are read as
     // file-string garbage (observed: exits()'s onex[i].f became "tas.s" and
     // the loop made an indirect call into ASCII).
+    // SAFETY: page_va was just mapped r/w in the ACTIVE user table by
+    // map_active_user above (the faulting proc's TTBR0 is live in its
+    // trap context); the whole page is the fill target.
     let full = unsafe { core::slice::from_raw_parts_mut(page_va as *mut u8, PAGE_SIZE_4K) };
     full.fill(0);
     let Some(source) = proc.text_source.as_ref() else {
@@ -236,6 +247,8 @@ pub(crate) fn ensure_user_resident(proc: &mut Proc, start: usize, end: usize) {
 fn page_in_zeroed(proc: &mut Proc, page_va: usize, kind: SegKind) {    let pa = pagealloc::allocate_physpage()
         .unwrap_or_else(|_| panic!("fault: phys page alloc failed"));
     map_active_user(page_va, Entry::rw_user_data().with_phys_addr(pa));
+    // SAFETY: page_va was just mapped r/w in the ACTIVE user table above
+    // (the faulting proc's TTBR0 is live); the whole page is zeroed.
     let dst = unsafe { core::slice::from_raw_parts_mut(page_va as *mut u8, PAGE_SIZE_4K) };
     dst.fill(0);
     match kind {
@@ -272,6 +285,10 @@ fn map_active_user(va: usize, entry: Entry) {
 /// pattern as vm.rs's ttbr reads).
 fn flush_icache_user_range(start: usize, end: usize) {
     #[cfg(not(test))]
+    // SAFETY: the D-09 icache/dcache maintenance sequence on the USER VA
+    // range just written (mapped r/w by the page-in above); dc cvau /
+    // ic ivau / dsb / isb are pure maintenance ops — the cache-maintenance
+    // floor.  Geometry is CTR_EL0-discovered, never hardcoded.
     unsafe {
         let ctr: u64;
         core::arch::asm!("mrs {}, ctr_el0", out(reg) ctr);
@@ -320,15 +337,16 @@ fn unresolvable(frame: &TrapFrame, class: u8, far: u64, access: &str) -> ! {
 /// trap()'s other-EL0-origin sync path (the donor faultnote shape) shares
 /// this.
 pub(crate) fn kill_current_process() -> ! {
-    let proc_ptr = proc::current_proc();
-    if proc_ptr.is_null() {
+    let Some(mut proc) = proc::current() else {
         // No current process (pre-userspace trap): nothing to route
         // through the lifecycle — park.
         println!("fault kill with no current process — parking");
         loop {
+            // SAFETY: wfi parks the CPU until an interrupt; IRQs are
+            // masked here, so this is a wedge-free stop (the trap-context
+            // halt shape).
             unsafe { core::arch::asm!("wfi") };
         }
-    }
-    let proc = unsafe { &mut *proc_ptr };
-    crate::syscall::exit_tail(proc, b"fault");
+    };
+    crate::syscall::exit_tail(&mut proc, b"fault");
 }

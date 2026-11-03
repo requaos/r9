@@ -47,6 +47,9 @@ impl Pl011Uart {
         let uart = Pl011Uart { pl011_virtrange };
         // Publish the mapped range for the IRQ echo path: single writer,
         // pre-unmask; read lock-free thereafter.
+        // SAFETY: the publish-once discipline — this write runs at driver
+        // construction (boot context, before trap::unmask_irq), so no IRQ
+        // reader can observe a torn write; the cell is never written again.
         unsafe { *PL011_RANGE.get() = Some(uart.pl011_virtrange.clone()) };
         Ok(uart)
     }
@@ -73,6 +76,8 @@ impl Uart for Pl011Uart {
 /// the GIC is up).  The register sequence is the research Pattern 3 probe,
 /// verified live on qemu 11.1.2.
 pub fn init_rx() {
+    // SAFETY: PL011_RANGE was published at construction (before unmask);
+    // this read runs in boot context — no writer is active.
     let range = unsafe { &*PL011_RANGE.get() };
     let Some(range) = range.as_ref() else {
         println!("pl011 rx init: no mapped uart");
@@ -110,11 +115,16 @@ pub fn rx_irq() {
 /// (missing input), never memory corruption.
 #[cfg(dev_exec)]
 pub fn rx_irq_cons_buffer() {
+    // SAFETY: PL011_RANGE was published before IRQ unmask (the cell is
+    /// write-once); IRQ context reads it lock-free by construction.
     let range = unsafe { &*PL011_RANGE.get() };
     let Some(range) = range.as_ref() else { return };
 
     while read_reg(range, UART0_FR) & 0x10 == 0 {
         let b = read_reg(range, UART0_DR) as u8;
+        // SAFETY: the ring's single-writer discipline — this IRQ handler
+        // is the only writer, and the syscall-context reader runs
+        // IRQ-masked (it can never interleave mid-drain).
         let buf = unsafe { &mut *CONS_RX.get() };
         let next = (buf.head + 1) % CONS_RX_CAP;
         if next != buf.tail {
@@ -150,6 +160,9 @@ static CONS_RX: SyncUnsafeCell<ConsRx> =
 /// IRQ writer cannot interleave.
 #[cfg(dev_exec)]
 pub fn cons_rx_drain(buf: &mut [u8]) -> usize {
+    // SAFETY: the reader side of the ring discipline — called only from
+    // IRQ-masked syscall context (the devcons drain hook), so the IRQ
+        // writer cannot interleave.
     let rx = unsafe { &mut *CONS_RX.get() };
     let mut n = 0;
     while n < buf.len() && rx.tail != rx.head {
@@ -167,6 +180,8 @@ pub fn cons_rx_drain(buf: &mut [u8]) -> usize {
 /// nothing.
 #[cfg(dev_exec)]
 pub fn cons_rx_pending() -> bool {
+    // SAFETY: the lock-free peek (a torn head/tail read is benign — a
+    // missed wake retries at the next tick; a spurious wake re-blocks).
     let rx = unsafe { &*CONS_RX.get() };
     rx.head != rx.tail
 }
@@ -177,6 +192,7 @@ pub fn cons_rx_pending() -> bool {
 /// stays blocked.
 #[cfg(dev_exec)]
 pub fn cons_rx_fifo_pending() -> Option<bool> {
+    // SAFETY: PL011_RANGE's write-once discipline (IRQ-masked context).
     let range = unsafe { &*PL011_RANGE.get() };
     let range = range.as_ref()?;
     Some(read_reg(range, UART0_FR) & 0x10 == 0)
@@ -185,6 +201,8 @@ pub fn cons_rx_fifo_pending() -> Option<bool> {
 /// gatedbg: the RX ring's head/tail (for the wedge dump).
 #[cfg(dev_exec)]
 pub fn cons_rx_ring_pos() -> (usize, usize) {
+    // SAFETY: cons_rx_pending's lock-free-peek discipline (the wedgedbg
+    // dump's diagnostic read).
     let rx = unsafe { &*CONS_RX.get() };
     (rx.head, rx.tail)
 }
@@ -215,6 +233,8 @@ pub fn cons_rx_poll() {
 /// CONTEXT.md).
 #[cfg(not(dev_exec))]
 pub fn rx_irq_echo() {
+    // SAFETY: PL011_RANGE was published before IRQ unmask (write-once);
+    // IRQ context reads it lock-free by construction.
     let range = unsafe { &*PL011_RANGE.get() };
     let Some(range) = range.as_ref() else { return };
 

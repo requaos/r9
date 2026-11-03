@@ -11,3 +11,8 @@ bitflags = "2.5"
 # decompressor.  Package Legitimacy Audit: 04-RESEARCH.md (OK-seam).
 miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
 adler2 = { version = "2", default-features = false }
+
+# 261103-p64: opt into the workspace clippy lints (undocumented_unsafe_blocks
+# = deny) — every remaining unsafe site in port carries a SAFETY comment.
+[lints]
+workspace = true

@@ -9,7 +9,7 @@ use crate::{
     param::KZERO,
 };
 use bitstruct::bitstruct;
-use core::{fmt, ptr, sync::atomic::Ordering};
+use core::{fmt, sync::atomic::Ordering};
 use core::{ptr::write_volatile, sync::atomic::AtomicUsize};
 use num_enum::{FromPrimitive, IntoPrimitive};
 use port::{
@@ -20,17 +20,14 @@ use port::{
 #[cfg(not(test))]
 use port::println;
 
-//static mut KERNEL_PAGETABLE: RootPageTable = RootPageTable::empty();
-static mut USER_PAGETABLE: RootPageTable = RootPageTable::empty();
-
-pub fn kernel_pagetable() -> &'static mut RootPageTable {
-    //unsafe { &mut *ptr::addr_of_mut!(KERNEL_PAGETABLE) }
-    root_page_table(RootPageTableType::Kernel)
-}
-
-pub fn user_pagetable() -> &'static mut RootPageTable {
-    unsafe { &mut *ptr::addr_of_mut!(USER_PAGETABLE) }
-}
+// 261103-p64: the KERNEL_PAGETABLE/USER_PAGETABLE statics are GONE (the
+// static-mut elimination).  The kernel root table is never a r9 static —
+// vminit's earlyvm page tables own it and ttbr1 names it, so
+// kernel_pagetable() resolves through root_page_table()'s TTBR read (the
+// guard newtype below, next to it).  The per-process era (04-05) made
+// USER_PAGETABLE dead: user root tables are pagealloc'd per proc;
+// user_pagetable()/init_user_page_tables() had zero callers and are
+// deleted with the static.
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -55,6 +52,10 @@ pub struct PhysPage4K([u8; PAGE_SIZE_4K]);
 
 impl PhysPage4K {
     pub fn clear(&mut self) {
+        // SAFETY: self is a live, aligned 4 KiB page (the type's own
+        // repr(C, align(4096)) contract); volatile zeroing is the page-
+        // table semantics (the write must not be elided even if the page
+        // is never read before handoff).
         unsafe {
             core::intrinsics::volatile_set_memory(&mut self.0, 0u8, 1);
         }
@@ -350,6 +351,9 @@ impl Table {
         if entry.valid() {
             // Return the address of the next table
             let next_level = level.next().unwrap();
+            // SAFETY: the entry is a valid table entry (checked above);
+            // resolve_entry_mut's recursive-address math names the child
+            // table, which is live and mapped (this walk created it).
             return Ok(unsafe {
                 &mut *vmtrait_impl.resolve_entry_mut::<Table>(entry, pgtype, va, next_level)
             });
@@ -370,6 +374,9 @@ impl Table {
         // Clear out the new page and return it as the next table
         let next_level = level.next().unwrap();
         let page = vmtrait_impl.resolve_entry_mut::<PhysPage4K>(entry, pgtype, va, next_level);
+        // SAFETY: page names the page just allocated + linked above (live,
+        // owned by this table, 4 KiB); zeroing it and viewing it as a Table
+        // (same size/alignment) is the construction.
         return Ok(unsafe {
             (*page).clear();
             &mut *(page as *mut Table)
@@ -541,17 +548,51 @@ pub fn next_free_device_page4k() -> VaMapping {
         .expect("next_free_device_page4k: unable to return new va")
 }
 
-/// Return the root user or kernel level page table
-pub fn root_page_table(pgtype: RootPageTableType) -> &'static mut RootPageTable {
+/// Return the root user or kernel level page table.
+///
+/// 261103-p64: returns a guard newtype, never a `&'static mut` — the
+/// Deref/DerefMut impls hold the raw-alias deref behind the documented
+/// invariant (single CPU; the TTBR-named table is live and KZERO-aliased;
+/// no second handle into the same table is live across a caller's use).
+pub fn root_page_table(pgtype: RootPageTableType) -> RootTableGuard {
     let page_table_pa = match pgtype {
         RootPageTableType::User => ttbr0_el1(),
         RootPageTableType::Kernel => ttbr1_el1(),
     };
-    unsafe { &mut *physaddr_as_ptr_mut_offset_from_kzero::<RootPageTable>(page_table_pa) }
+    RootTableGuard(physaddr_as_ptr_mut_offset_from_kzero::<RootPageTable>(page_table_pa))
 }
 
-pub unsafe fn init_user_page_tables() {
-    unsafe { init_empty_root_page_table(user_pagetable()) };
+/// The kernel root table's guard (the TTBR1-resolution shorthand).
+pub fn kernel_pagetable() -> RootTableGuard {
+    root_page_table(RootPageTableType::Kernel)
+}
+
+/// A guard handle to a live root page table (261103-p64).  Obtained only
+/// from root_page_table()/kernel_pagetable(); Deref/DerefMut reach the
+/// table so existing method-call sites (`guard.map_phys_range(...)`,
+/// `guard.entries[i]`) compile unchanged.
+pub struct RootTableGuard(*mut RootPageTable);
+
+impl core::ops::Deref for RootTableGuard {
+    type Target = RootPageTable;
+
+    fn deref(&self) -> &RootPageTable {
+        // SAFETY: the pointer comes from root_page_table()'s TTBR read —
+        // the named root table is live (kernel: vminit's earlyvm tables;
+        // user: the current proc's pagealloc'd root) and its KZERO+PA
+        // alias is mapped in the kernel table.  Single CPU; the caller
+        // context (boot / IRQ-masked trap/syscall) cannot be preempted
+        // into a conflicting access.
+        unsafe { &*self.0 }
+    }
+}
+
+impl core::ops::DerefMut for RootTableGuard {
+    fn deref_mut(&mut self) -> &mut RootPageTable {
+        // SAFETY: Deref's invariant; the guard is short-lived at each call
+        // site (no two guards into the same table are live at once).
+        unsafe { &mut *self.0 }
+    }
 }
 
 /// Given an empty, statically allocated page table.  We need to write a
@@ -561,6 +602,9 @@ pub unsafe fn init_user_page_tables() {
 /// their KZERO-offset physical alias, which is exactly the pointer shape
 /// this function's `from_ptr_to_physaddr_offset_from_kzero` expects.)
 pub unsafe fn init_empty_root_page_table(root_page_table: &mut RootPageTable) {
+    // SAFETY: the caller contract (a live, writable, KZERO-aliased root
+    // table page); the volatile write is the page-table semantics (no
+    // elision) — the recursive slot-511 self-entry.
     unsafe {
         let entry = Entry::rw_kernel_data()
             .with_phys_addr(from_ptr_to_physaddr_offset_from_kzero(root_page_table))
@@ -580,6 +624,8 @@ fn ttbr0_el1() -> PhysAddr {
     #[cfg(not(test))]
     {
         let mut addr: u64;
+        // SAFETY: reading TTBR0_EL1 is a pure register read at EL1 — no
+        // memory, no side effects (the MMU-register floor).
         unsafe {
             core::arch::asm!("mrs {value}, ttbr0_el1", value = out(reg) addr);
         }
@@ -594,6 +640,8 @@ fn ttbr1_el1() -> PhysAddr {
     #[cfg(not(test))]
     {
         let mut addr: u64;
+        // SAFETY: reading TTBR1_EL1 is a pure register read at EL1 (the
+        // MMU-register floor).
         unsafe {
             core::arch::asm!("mrs {value}, ttbr1_el1", value = out(reg) addr);
         }
@@ -607,6 +655,10 @@ fn ttbr1_el1() -> PhysAddr {
 #[allow(unused_variables)]
 pub unsafe fn switch(page_table: &RootPageTable, pgtype: RootPageTableType) {
     #[cfg(not(test))]
+    // SAFETY: the caller contract (page_table names a fully-built root
+    // table whose recursive self-entry was written at construction — the
+    // switch is the TTBR write + the architected TLB/barrier sequence,
+    // no memory accesses beyond the register).
     unsafe {
         let pt_phys = from_ptr_to_physaddr_offset_from_kzero(page_table).addr();
         // https://forum.osdev.org/viewtopic.php?t=36412&p=303237
@@ -636,6 +688,9 @@ pub unsafe fn switch(page_table: &RootPageTable, pgtype: RootPageTableType) {
 #[allow(unused_variables)]
 pub unsafe fn invalidate_all_tlb_entries() {
     #[cfg(not(test))]
+    // SAFETY: tlbi vmalle1is + dsb ish + isb is the architected full-TLB
+    // maintenance sequence — pure maintenance ops, no memory operands (the
+    // TLB/barrier floor; safe at any EL1 point).
     unsafe {
         // https://forum.osdev.org/viewtopic.php?t=36412&p=303237
         core::arch::asm!(
@@ -688,6 +743,9 @@ pub struct VmTraitImpl {}
 
 impl VmTrait for VmTraitImpl {
     fn write_entry(&self, dest_entry: &mut Entry, entry: Entry) {
+        // SAFETY: dest_entry is a live entry in a mapped table (the walk's
+        // invariant); volatile so the hardware-visible write is never
+        // elided, then the TLB maintenance (its own SAFETY comment).
         unsafe {
             write_volatile(dest_entry, entry);
             invalidate_all_tlb_entries();
@@ -702,7 +760,10 @@ impl VmTrait for VmTraitImpl {
     }
 
     fn write_recursive_entry(&mut self, pgtype: RootPageTableType, entry: Entry) {
-        let page_table = root_page_table(pgtype);
+        let mut page_table = root_page_table(pgtype);
+        // SAFETY: the recursive slot write goes through the guard's
+        // DerefMut (root_page_table's invariant); invalidate_all_tlb_entries
+        // is the TLB/barrier floor (its own SAFETY comment).
         unsafe {
             // Return the recursive entry to its original state
             write_volatile(&mut page_table.entries[511], entry);

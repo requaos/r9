@@ -1677,7 +1677,7 @@ impl CleanStep {
 /// cross-repo ureg.h drift gate (also a BootTestStep precondition).
 /// `cargo xtask initrd` (04-05, D-01/D-02/D-03): assemble
 /// `target/bootfs.paq` from the staged Harvey aarch64 binaries
-/// (`build/aarch64/out/{init,hello}`, produced by
+/// (`build/aarch64/smoke-out/{init,hello}`, produced by
 /// `build/aarch64/stage-build.sh`) with the Harvey checkout's host-built
 /// `mkpaqfs` (04-01 recipe), and print the image's sha256 for the phase
 /// evidence log.  The image and the staging tree are target/ build
@@ -1706,7 +1706,12 @@ impl InitrdStep {
     }
 }
 
-/// Assemble target/bootfs.paq from the Harvey staging dir.  Both producers
+/// Assemble target/bootfs.paq from the Harvey SMOKE staging dir
+/// (`build/aarch64/smoke-out/` — 261103-p64's split: the exec-family
+/// profiles need the smoke init's markers, and the boot chain's REAL init
+/// shares the old `out/` path under "last writer wins"; the smoke stage
+/// now owns smoke-out/ exclusively, so the two gates can never clobber
+/// each other).  Both producers
 /// are named in the error text when absent — a missing mkpaqfs or a missing
 /// staged binary is a loud build error, never a silent boot (D-03).
 fn assemble_initrd(verbose: bool) -> Result<()> {
@@ -1732,11 +1737,12 @@ fn assemble_initrd(verbose: bool) -> Result<()> {
     // target must exist (Pitfall-8), so the tree ships the empty dir.
     std::fs::create_dir_all(tree.join("proc"))?;
     for name in INITRD_FILES {
-        let src = harvey.join(format!("build/aarch64/out/{name}"));
+        let src = harvey.join(format!("build/aarch64/smoke-out/{name}"));
         if !src.is_file() {
             return Err(format!(
                 "staged binary {} missing — run `sh build/aarch64/stage-build.sh` in the Harvey \
-                 checkout (04-05) to compile the aarch64 userland stage into build/aarch64/out/",
+                 checkout (04-05) to compile the aarch64 userland smoke stage into \
+                 build/aarch64/smoke-out/",
                 src.display()
             )
             .into());
@@ -1793,7 +1799,7 @@ fn ensure_initrd_image(config: &Configuration, verbose: bool) -> Result<()> {
     let paq_mtime = std::fs::metadata(&paq).and_then(|m| m.modified()).ok();
     let stale = paq_mtime.is_some_and(|paq_mtime| {
         INITRD_FILES.iter().any(|name| {
-            std::fs::metadata(harvey.join(format!("build/aarch64/out/{name}")))
+            std::fs::metadata(harvey.join(format!("build/aarch64/smoke-out/{name}")))
                 .and_then(|m| m.modified())
                 .ok()
                 .is_some_and(|input_mtime| input_mtime > paq_mtime)

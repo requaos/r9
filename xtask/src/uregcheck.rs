@@ -53,7 +53,7 @@ pub(crate) fn harvey_dir() -> Result<PathBuf> {
     match env::var("R9_HARVEY_DIR") {
         Ok(dir) if !dir.is_empty() => Ok(PathBuf::from(dir)),
         _ => Err("R9_HARVEY_DIR is not set — point it at the Harvey checkout (it must contain \
-             aarch64/include/ureg.h, and for the initrd bake build/aarch64/out/ plus \
+             aarch64/include/ureg.h, and for the initrd bake build/aarch64/smoke-out/ plus \
              .build/bin/mkpaqfs); r9's xtask no longer defaults to a sibling ../harvey \
              checkout (05-CONTEXT D-10)"
             .into()),

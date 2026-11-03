@@ -40,6 +40,8 @@ pub extern "C" fn init_early_uart() {
     const UART_BAUDRATE_REG: u32 = (UART_CLOCK / (UART_BAUDRATE * 8)) - 1;
 
     // Initialise the miniuart
+    // SAFETY: raspi MMIO at the fixed BCM283x addresses, identity-mapped
+    // pre-MMU (the early-console floor; volatile register semantics).
     unsafe {
         write_or_volatile(AUX_ENABLES as *mut u32, 1);
         write_volatile(AUX_MU_CNTL as *mut u32, 0);
@@ -51,6 +53,8 @@ pub extern "C" fn init_early_uart() {
     }
 
     // Initialise GPIO pins for minuart
+    // SAFETY: as above — GPIO/MMIO registers at fixed raspi addresses,
+    // identity-mapped pre-MMU.
     unsafe {
         // Set up GPIO pin 14 pull up/down state
         // Mask all but bits 28:29
@@ -78,6 +82,7 @@ pub extern "C" fn init_early_uart() {
     }
 
     // Enable miniuart
+    // SAFETY: as above.
     unsafe {
         write_volatile(AUX_MU_CNTL as *mut u32, 3);
     }
@@ -95,6 +100,8 @@ pub extern "C" fn init_early_uart() {}
 #[cfg(not(platform = "virt"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn init_early_uart_putc(b: u8) {
+    // SAFETY: the raspi miniuart's fixed MMIO addresses, identity-mapped
+    // pre-MMU (the early-console floor).
     unsafe {
         while read_volatile(AUX_MU_LSR as *const u32) & (1 << 5) == 0 {
             core::hint::spin_loop();
@@ -110,6 +117,9 @@ pub extern "C" fn init_early_uart_putc(b: u8) {
     const PL011_DR: u32 = PL011_BASE; // DR is at offset 0x00
     const PL011_FR: u32 = PL011_BASE + 0x18;
 
+    // SAFETY: qemu's virt machine maps the PL011 at the fixed PA
+    // 0x0900_0000, identity-mapped pre-MMU (and vminit keeps the alias);
+    // volatile MMIO — the early-console floor (pre-driver, pre-lock).
     unsafe {
         while read_volatile(PL011_FR as *const u32) & (1 << 5) != 0 {
             core::hint::spin_loop();
@@ -153,7 +163,12 @@ pub fn puttable(table: &Table) {
     }
 }
 
+/// MMIO read-modify-write (the named MMIO-volatility floor): the caller's
+/// dst names a live mapped device register.
 unsafe fn write_or_volatile<T: BitOrAssign>(dst: *mut T, val: T) {
+    // SAFETY: the caller (init_early_uart) passes the fixed raspi MMIO
+    /// register addresses, mapped identity pre-MMU; volatile because the
+    // hardware, not the compiler, owns the semantics.
     unsafe {
         let mut new_val = read_volatile(dst);
         new_val |= val;
@@ -161,7 +176,10 @@ unsafe fn write_or_volatile<T: BitOrAssign>(dst: *mut T, val: T) {
     }
 }
 
+/// MMIO read-modify-write (the named MMIO-volatility floor): the caller's
+/// dst names a live mapped device register.
 unsafe fn write_and_volatile<T: BitAndAssign>(dst: *mut T, val: T) {
+    // SAFETY: write_or_volatile's contract.
     unsafe {
         let mut new_val = read_volatile(dst);
         new_val &= val;

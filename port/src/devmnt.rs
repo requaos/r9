@@ -292,6 +292,8 @@ pub struct Mnt {
 // the core at a time; every other caller gets a loud error).  Syscall
 // context is IRQ-masked and single-CPU, so the swap is the whole protocol.
 unsafe impl Send for Mnt {}
+// SAFETY: as above — a shared &Mnt can cross threads only while the busy
+// discipline serializes all core access (single CPU this era).
 unsafe impl Sync for Mnt {}
 
 impl core::fmt::Debug for Mnt {
@@ -320,6 +322,31 @@ impl Mnt {
         Ok(Busy { mnt: self })
     }
 
+    /// The session core, mutably, for the duration of an OWNED RPC — the
+    /// `_busy` token proves the caller holds the busy flag (the era's
+    /// one-outstanding-RPC discipline).  261103-p64: the ONLY mutable
+    /// accessor; every former ad-hoc `&mut *self.core.get()` site routes
+    /// through here.  (The Busy-token interior-mutability shape is the
+    /// UnsafeCell's documented use — hence the mut_from_ref allowance.)
+    #[allow(clippy::mut_from_ref)]
+    fn core_mut(&self, _busy: &Busy<'_>) -> &mut MntCore {
+        // SAFETY: the Busy token proves this context owns the one
+        // outstanding RPC on this session (enter() took the AtomicBool);
+        // no other core borrow can be live.  Single CPU, IRQ-masked
+        // syscall context.
+        unsafe { &mut *self.core.get() }
+    }
+
+    /// The session core, shared, outside any RPC (msize/version reads) —
+    /// between RPCs the busy flag is clear, so no mutable borrow can be
+    /// live by the same discipline.
+    fn core_ref(&self) -> &MntCore {
+        // SAFETY: core_mut's discipline — with no RPC outstanding, no
+        // &mut can exist; the read cannot race a writer (single CPU,
+        // IRQ-masked syscall context).
+        unsafe { &*self.core.get() }
+    }
+
     /// The whole RPC round-trip (donor mountrpc + the receive half of
     /// mountio/mntrpcread): send the T-message whole, then frame the
     /// reply — read the 4-byte size prefix, mntchk it against the
@@ -329,7 +356,7 @@ impl Mnt {
     /// outstanding tag.  Returns the reply's total size (the body sits in
     /// the session's rx scratch).
     fn transact(&self, _busy: &Busy<'_>, msg: &[u8], expect_type: u8, expect_tag: u16) -> Result<usize> {
-        let core = unsafe { &mut *self.core.get() };
+        let core = self.core_mut(_busy);
         let w = core.io.write_msg(msg)?;
         if w as usize != msg.len() {
             return Err("devmnt: short write on the 9P connection");
@@ -422,11 +449,12 @@ impl Mnt {
         pw32(&mut body, offer);
         pwstr(&mut body, VERSION9P);
         let msg = tmsg(TVERSION, NOTAG, &body);
-        let size = {
-            let busy = mnt.enter()?;
-            mnt.transact(&busy, &msg, RVERSION, NOTAG)?
-        };
-        let core = unsafe { &mut *mnt.core.get() };
+        // The busy token is held across the reply parse + core update
+        // (261103-p64: core_mut's token — the RPC's ownership ends when
+        // the parsed values are committed, not when transact returns).
+        let busy = mnt.enter()?;
+        let size = mnt.transact(&busy, &msg, RVERSION, NOTAG)?;
+        let core = mnt.core_mut(&busy);
         let mut cur = RepCur::new(&core.rx[7..size]);
         let msize = cur.u32()?;
         let version = cur.string()?;
@@ -442,19 +470,20 @@ impl Mnt {
         }
         core.msize = msize;
         core.version = version;
+        // Release RPC ownership before the move out of mnt (the Busy
+        // guard borrows it).
+        drop(busy);
         Ok(mnt)
     }
 
     /// The negotiated msize.
     pub fn msize(&self) -> u32 {
-        let core = unsafe { &*self.core.get() };
-        core.msize
+        self.core_ref().msize
     }
 
     /// The negotiated version string (the re-version replay's answer).
     fn version(&self) -> Vec<u8> {
-        let core = unsafe { &*self.core.get() };
-        core.version.clone()
+        self.core_ref().version.clone()
     }
 
     /// Tattach (donor mntattach): a fresh fid attached to the tree root
@@ -462,7 +491,7 @@ impl Mnt {
     /// is the designed path).  Returns (fid, the root qid).
     pub fn attach(&self, uname: &[u8], aname: &[u8]) -> Result<(u32, Qid)> {
         let busy = self.enter()?;
-        let core = unsafe { &mut *self.core.get() };
+        let core = self.core_mut(&busy);
         let fid = Self::alloc_fid(core)?;
         let tag = Self::alloc_tag(core);
         let mut body = Vec::new();
@@ -487,7 +516,7 @@ impl Mnt {
             return Err("devmnt: walk takes a single name component");
         }
         let busy = self.enter()?;
-        let core = unsafe { &mut *self.core.get() };
+        let core = self.core_mut(&busy);
         let newfid = Self::alloc_fid(core)?;
         let tag = Self::alloc_tag(core);
         let mut body = Vec::new();
@@ -522,7 +551,7 @@ impl Mnt {
     /// lifecycle rides the clone and the table's fid stays pristine.
     pub fn clone_fid(&self, fid: u32) -> Result<u32> {
         let busy = self.enter()?;
-        let core = unsafe { &mut *self.core.get() };
+        let core = self.core_mut(&busy);
         let newfid = Self::alloc_fid(core)?;
         let tag = Self::alloc_tag(core);
         let mut body = Vec::new();
@@ -547,7 +576,7 @@ impl Mnt {
     /// donor's clamp).
     pub fn open(&self, fid: u32, mode: u8) -> Result<(Qid, u32)> {
         let busy = self.enter()?;
-        let core = unsafe { &mut *self.core.get() };
+        let core = self.core_mut(&busy);
         let tag = Self::alloc_tag(core);
         let mut body = Vec::new();
         pw32(&mut body, fid);
@@ -570,7 +599,7 @@ impl Mnt {
     /// clamped to the request (the donor's silent clamp).
     pub fn read(&self, fid: u32, off: u64, count: u32) -> Result<Vec<u8>> {
         let busy = self.enter()?;
-        let core = unsafe { &mut *self.core.get() };
+        let core = self.core_mut(&busy);
         let tag = Self::alloc_tag(core);
         let mut body = Vec::new();
         pw32(&mut body, fid);
@@ -595,7 +624,7 @@ impl Mnt {
     /// nstat-2 — the malformation check).
     pub fn stat(&self, fid: u32) -> Result<Vec<u8>> {
         let busy = self.enter()?;
-        let core = unsafe { &mut *self.core.get() };
+        let core = self.core_mut(&busy);
         let tag = Self::alloc_tag(core);
         let mut body = Vec::new();
         pw32(&mut body, fid);
@@ -621,7 +650,7 @@ impl Mnt {
     /// Tclunk (donor mntclunk): release the fid server-side.
     pub fn clunk(&self, fid: u32) -> Result<()> {
         let busy = self.enter()?;
-        let core = unsafe { &mut *self.core.get() };
+        let core = self.core_mut(&busy);
         let tag = Self::alloc_tag(core);
         let mut body = Vec::new();
         pw32(&mut body, fid);

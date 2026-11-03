@@ -53,50 +53,86 @@ fn base_physaddr() -> PhysAddr {
 
 #[cfg(platform = "virt")]
 fn boottext_physaddr() -> PhysAddr {
+    // SAFETY: kernel.ld defines this zero-sized marker at exactly the
+    // boundary it names; only the symbol's ADDRESS is read (never
+    // its contents) — the vminit link-sym class (kmem's twin).
     unsafe { PhysAddr::new(boottext_pa.as_ptr().addr() as u64) }
 }
 
 fn eboottext_physaddr() -> PhysAddr {
+    // SAFETY: kernel.ld defines this zero-sized marker at exactly the
+    // boundary it names; only the symbol's ADDRESS is read (never
+    // its contents) — the vminit link-sym class (kmem's twin).
     unsafe { PhysAddr::new(eboottext_pa.as_ptr().addr() as u64) }
 }
 
 fn text_physaddr() -> PhysAddr {
+    // SAFETY: kernel.ld defines this zero-sized marker at exactly the
+    // boundary it names; only the symbol's ADDRESS is read (never
+    // its contents) — the vminit link-sym class (kmem's twin).
     unsafe { PhysAddr::new(text_pa.as_ptr().addr() as u64) }
 }
 
 fn etext_physaddr() -> PhysAddr {
+    // SAFETY: kernel.ld defines this zero-sized marker at exactly the
+    // boundary it names; only the symbol's ADDRESS is read (never
+    // its contents) — the vminit link-sym class (kmem's twin).
     unsafe { PhysAddr::new(etext_pa.as_ptr().addr() as u64) }
 }
 
 fn rodata_physaddr() -> PhysAddr {
+    // SAFETY: kernel.ld defines this zero-sized marker at exactly the
+    // boundary it names; only the symbol's ADDRESS is read (never
+    // its contents) — the vminit link-sym class (kmem's twin).
     unsafe { PhysAddr::new(rodata_pa.as_ptr().addr() as u64) }
 }
 
 fn erodata_physaddr() -> PhysAddr {
+    // SAFETY: kernel.ld defines this zero-sized marker at exactly the
+    // boundary it names; only the symbol's ADDRESS is read (never
+    // its contents) — the vminit link-sym class (kmem's twin).
     unsafe { PhysAddr::new(erodata_pa.as_ptr().addr() as u64) }
 }
 
 fn data_physaddr() -> PhysAddr {
+    // SAFETY: kernel.ld defines this zero-sized marker at exactly the
+    // boundary it names; only the symbol's ADDRESS is read (never
+    // its contents) — the vminit link-sym class (kmem's twin).
     unsafe { PhysAddr::new(data_pa.as_ptr().addr() as u64) }
 }
 
 fn edata_physaddr() -> PhysAddr {
+    // SAFETY: kernel.ld defines this zero-sized marker at exactly the
+    // boundary it names; only the symbol's ADDRESS is read (never
+    // its contents) — the vminit link-sym class (kmem's twin).
     unsafe { PhysAddr::new(edata_pa.as_ptr().addr() as u64) }
 }
 
 fn bss_physaddr() -> PhysAddr {
+    // SAFETY: kernel.ld defines this zero-sized marker at exactly the
+    // boundary it names; only the symbol's ADDRESS is read (never
+    // its contents) — the vminit link-sym class (kmem's twin).
     unsafe { PhysAddr::new(bss_pa.as_ptr().addr() as u64) }
 }
 
 fn ebss_physaddr() -> PhysAddr {
+    // SAFETY: kernel.ld defines this zero-sized marker at exactly the
+    // boundary it names; only the symbol's ADDRESS is read (never
+    // its contents) — the vminit link-sym class (kmem's twin).
     unsafe { PhysAddr::new(ebss_pa.as_ptr().addr() as u64) }
 }
 
 fn earlyvm_pagetables_physaddr() -> PhysAddr {
+    // SAFETY: kernel.ld defines this zero-sized marker at exactly the
+    // boundary it names; only the symbol's ADDRESS is read (never
+    // its contents) — the vminit link-sym class (kmem's twin).
     unsafe { PhysAddr::new(earlyvm_pagetables_pa.as_ptr().addr() as u64) }
 }
 
 fn eearlyvm_pagetables_physaddr() -> PhysAddr {
+    // SAFETY: kernel.ld defines this zero-sized marker at exactly the
+    // boundary it names; only the symbol's ADDRESS is read (never
+    // its contents) — the vminit link-sym class (kmem's twin).
     unsafe { PhysAddr::new(eearlyvm_pagetables_pa.as_ptr().addr() as u64) }
 }
 
@@ -137,6 +173,9 @@ pub extern "C" fn init_vm(dtb_pa: u64) {
     {
         CPACR_EL1.write(CPACR_EL1::FPEN::TrapNothing);
         // The write must be visible to subsequent instructions.
+        // SAFETY: isb is a pure context-synchronization barrier (no memory
+        // operands, no state beyond the pipeline) — always safe to execute
+        // at EL1.
         unsafe { core::arch::asm!("isb") };
     }
 
@@ -156,6 +195,9 @@ pub extern "C" fn init_vm(dtb_pa: u64) {
     };
 
     // Parse the DTB before we set up memory so we can correctly map it
+    // SAFETY: pre-MMU the DTB PA is identity-mapped by the boot stub /
+    // qemu's loader (and on virt the fixed-PA fallback above names the
+    // committed blob); the address is valid and readable for the parse.
     let dt = unsafe { DeviceTree::from_usize(dtb_pa as usize).unwrap() };
     let dtb_physrange = PhysRange::with_pa_len(PhysAddr::new(dtb_pa), dt.size());
 
@@ -194,6 +236,8 @@ pub extern "C" fn init_vm(dtb_pa: u64) {
 
     let (root_page_table_pa, root_page_table) =
         if let Ok(page_pa) = physpage_allocator.alloc_physpage() {
+            // SAFETY: pre-MMU identity map — the PA is the VA; the page was
+            // just allocated from the earlyvm pool (zeroed, owned, aligned).
             (page_pa, unsafe { &mut *(page_pa.0 as *mut RootPageTable) })
         } else {
             putstr("error:vminit:init_vm: failed to alloc root_kernelpt4\n");
@@ -244,6 +288,8 @@ pub extern "C" fn init_vm(dtb_pa: u64) {
     // Once we've jumped to the higher half, this will no longer be used.
 
     let (physicalpt3_pa, physicalpt3) = if let Ok(page_pa) = physpage_allocator.alloc_physpage() {
+        // SAFETY: pre-MMU identity map — the freshly allocated earlyvm
+        // page's PA is its VA (zeroed, owned, aligned).
         (page_pa, unsafe { &mut *(page_pa.0 as *mut Table) })
     } else {
         putstr("error:vminit:init_vm: failed to alloc physicalpt3\n");
@@ -280,6 +326,8 @@ pub extern "C" fn init_vm(dtb_pa: u64) {
     }
 
     let (physicalpt4_pa, physicalpt4) = if let Ok(page_pa) = physpage_allocator.alloc_physpage() {
+        // SAFETY: pre-MMU identity map — the freshly allocated earlyvm
+        // page's PA is its VA (zeroed, owned, aligned).
         (page_pa, unsafe { &mut *(page_pa.0 as *mut RootPageTable) })
     } else {
         putstr("error:vminit:init_vm: failed to alloc physicalpt4\n");
@@ -387,6 +435,9 @@ pub extern "C" fn init_vm(dtb_pa: u64) {
 
     // https://forum.osdev.org/viewtopic.php?t=36412&p=303237
     #[cfg(not(test))]
+    // SAFETY: tlbi vmalle1is invalidates every EL1 TLB entry before the
+    // MMU-enable — a pure maintenance op with no memory operands (the
+    // MMU-transition floor).
     unsafe {
         // invalidate all TLB entries
         core::arch::asm!("tlbi vmalle1is")
@@ -507,6 +558,8 @@ fn next_mut<'a, A: PageAllocator>(
         };
 
         // Clear out the new page
+        // SAFETY: pre-MMU identity map — the freshly allocated earlyvm
+        // page's PA is its VA (owned, aligned, one page).
         let page = unsafe { &mut *(page_pa.addr() as *mut PhysPage4K) };
         page.clear();
 
@@ -522,6 +575,9 @@ fn next_mut<'a, A: PageAllocator>(
 
         table.entries[index] = entry;
 
+        // SAFETY: pre-MMU identity map — the page just allocated + zeroed
+        // above, owned by this walk; its recursive slot-511 entry is
+        // initialized before the handle escapes.
         let new_table = unsafe { &mut *(page_pa.addr() as *mut Table) };
         new_table.entries[511] = entry;
         return Ok(new_table);
@@ -530,6 +586,8 @@ fn next_mut<'a, A: PageAllocator>(
         return Err(PageTableError::EntryIsNotTable);
     } else {
         // Return the address of the next table as a recursive address
+        // SAFETY: the entry is a valid table entry (checked above) whose
+        // PA names a table this walk created (identity-mapped pre-MMU).
         let next_table = unsafe { &mut *(entry.phys_addr().addr() as *mut Table) };
         return Ok(next_table);
     }
@@ -556,6 +614,9 @@ impl EarlyPageAllocator {
         let pages_pa = pages_start as *mut PhysPage4K;
         let num_pages = earlyvm_pages_physrange.size() / core::mem::size_of::<PhysPage4K>();
         for i in 0..num_pages {
+            // SAFETY: pages_pa..+num_pages is the earlyvm link-sym range
+            // (i < num_pages by the loop bound); each page is owned,
+            // aligned, and identity-mapped pre-MMU.
             unsafe { (*pages_pa.add(i)).clear() };
         }
 
@@ -566,9 +627,13 @@ impl EarlyPageAllocator {
 impl PageAllocator for EarlyPageAllocator {
     fn alloc_physpage(&mut self) -> Result<PhysAddr, PageAllocError> {
         if self.next_page_idx < self.num_pages {
+            // SAFETY: next_page_idx < num_pages (checked) keeps the
+            // pointer inside the earlyvm link-sym range.
             let next_page = unsafe { self.pages_pa.add(self.next_page_idx) };
             self.next_page_idx += 1;
             let pa = PhysAddr::new(next_page as u64);
+            // SAFETY: the page is owned by this allocator (handed out at
+            // most once), aligned, and identity-mapped pre-MMU.
             unsafe { &mut *(pa.0 as *mut PhysPage4K) }.clear();
             Ok(pa)
         } else {

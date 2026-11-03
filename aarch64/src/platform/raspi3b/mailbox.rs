@@ -145,6 +145,11 @@ where
         .lock(&node)
         .as_mut()
         .map(|mb| {
+            // SAFETY: req_buffer_va names the mailbox's own mapped,
+            // cache-aligned request page (allocated at mailbox init);
+            // the lock is held (above), so the message construction is
+            // exclusive.  Volatile zeroing + writes are the MMIO mailbox
+            // discipline (the named MMIO-volatility floor).
             let msg = unsafe {
                 let page_va_ptr = mb.req_buffer_va.start() as u64 as *mut MessageWithTags<T, U>;
                 core::intrinsics::volatile_set_memory(page_va_ptr, 0, 1);
@@ -156,6 +161,9 @@ where
             };
 
             mb.request();
+            // SAFETY: mb.request() round-tripped the mailbox (the response
+            // landed in the same page); the tags body is read from the
+            // valid response.  T/U are Copy PODs by the signature.
             unsafe { msg.response.tags.body }
         })
         .expect("mailbox not initialised")

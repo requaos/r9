@@ -145,6 +145,9 @@ impl Gic {
 /// the spurious INTID, so the IRQ path degrades instead of panicking).
 pub fn init(dt: &DeviceTree) {
     match Gic::new(dt) {
+        // SAFETY: the publish-once discipline — this write runs at boot
+        // before trap::unmask_irq, so no IRQ reader can observe a torn
+        // write; the cell is never written again.
         Ok(gic) => unsafe { *GIC.get() = Some(gic) },
         Err(msg) => {
             println!("can't initialise gic: {msg:?}");
@@ -153,6 +156,8 @@ pub fn init(dt: &DeviceTree) {
 }
 
 pub fn enable(intid: u32, prio: u8) {
+    // SAFETY: GIC's write-once discipline — published at init before
+    // unmask; enable() runs in boot context, lock-free thereafter.
     if let Some(gic) = unsafe { &*GIC.get() }.as_ref() {
         gic.enable(intid, prio);
     }
@@ -161,11 +166,14 @@ pub fn enable(intid: u32, prio: u8) {
 /// Acknowledge from IRQ context.  If the GIC was never initialised, report
 /// the spurious INTID so the dispatcher acks-without-EOI and returns.
 pub fn ack() -> u32 {
+    // SAFETY: GIC's write-once discipline (IRQ context reads lock-free —
+    // the research-P8 no-lock rule).
     unsafe { &*GIC.get() }.as_ref().map_or(SPURIOUS_INTID, |gic| gic.ack())
 }
 
 pub fn eoi(intid: u32) {
     debug_assert!(intid != SPURIOUS_INTID);
+    // SAFETY: GIC's write-once discipline (IRQ context, lock-free).
     if let Some(gic) = unsafe { &*GIC.get() }.as_ref() {
         gic.eoi(intid);
     }

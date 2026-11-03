@@ -34,6 +34,9 @@ impl Block {
     /// The caller must ensure that the pointer and length given
     /// are appropriate for the construction of a new block.
     pub const unsafe fn new_from_raw_parts(ptr: *mut u8, len: usize) -> Block {
+        // SAFETY: the caller contract (above) — ptr is non-null and names
+        // len bytes of the owned region (every call site is an arena or a
+        // sub-block carve of one).
         let ptr = unsafe { NonNull::new_unchecked(ptr) };
         Block { ptr, len }
     }
@@ -45,7 +48,10 @@ impl Block {
             return None;
         }
         let ptr = self.as_ptr();
+        // SAFETY: offset <= len (checked above), so both sub-blocks lie
+        // inside this block's owned region.
         let a = unsafe { Block::new_from_raw_parts(ptr, offset) };
+        // SAFETY: as above — the [offset, len) tail of the same region.
         let b = unsafe { Block::new_from_raw_parts(ptr.wrapping_add(offset), len - offset) };
         Some((a, b))
     }
@@ -104,8 +110,12 @@ impl BumpAlloc {
                 (next <= self.arena.len()).then_some(next)
             })
             .ok()?;
+        // SAFETY: the fetch_update above proved next <= arena.len(), so
+        // [first, first+adjust) and [first+adjust, +size) lie inside the
+        // arena (the cursor never passes the end).
         let prefix = unsafe { Block::new_from_raw_parts(first, adjust) };
         let ptr = first.wrapping_add(adjust);
+        // SAFETY: as above — the requested block's tail of the arena.
         let block = unsafe { Block::new_from_raw_parts(ptr, size) };
         Some((prefix, block))
     }
@@ -114,6 +124,10 @@ impl BumpAlloc {
 /// BumpAlloc<T> implements the allocator interface, and is
 /// suitable for e.g. page allocators and so forth.  Dealloc is
 /// unimplemented and will panic.
+// SAFETY: allocate returns arena memory owned by the BumpAlloc, never
+// aliased while the cursor discipline holds (each fetch_update carves a
+// fresh, non-overlapping region); deallocate's panic is the documented
+// contract.
 unsafe impl Allocator for BumpAlloc {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         let (_, block) = self.try_alloc(layout.size(), layout.align()).ok_or(AllocError)?;
@@ -121,6 +135,8 @@ unsafe impl Allocator for BumpAlloc {
     }
 
     unsafe fn deallocate(&self, _ptr: NonNull<u8>, _layout: Layout) {
+        // SAFETY: unreachable by the documented contract (bump allocators
+        // never free); the panic is the implementation.
         unimplemented!();
     }
 }
@@ -202,6 +218,15 @@ pub struct QuickFit {
     allocated_misc: [Option<NonNull<Header>>; NUM_HASH_BUCKETS],
 }
 
+// SAFETY: QuickFit's raw-pointer fields (NonNull headers) are only ever
+// accessed through a live &mut QuickFit; the sole sharing path is
+// GlobalQuickAlloc's AtomicPtr swap discipline (one borrower at a time,
+// single CPU this era), which provides the synchronization this impl
+// asserts.  261103-p64: required for the SyncUnsafeCell<QuickFit> static
+// (the aarch64 global allocator's home; this nightly's SyncUnsafeCell
+// requires T: Sync for its own Sync impl).
+unsafe impl Sync for QuickFit {}
+
 impl QuickFit {
     /// Constructs a QuickFit from the given `tail`.
     pub const fn new(tail: BumpAlloc) -> QuickFit {
@@ -244,6 +269,9 @@ impl QuickFit {
             let k: usize = size.ilog2() as usize - ALLOC_UNIT_SHIFT;
             let (node, list) = Self::head(self.qlists[k].take());
             self.qlists[k] = list;
+            // SAFETY: a header popped from a quick list names a live free
+            // block of that list's size class (unlink's invariant); the
+            // caller takes ownership of its addr.
             node.map(|header| unsafe { header.as_ref() }.addr)
         } else {
             self.alloc_misc(size, align)
@@ -257,6 +285,9 @@ impl QuickFit {
             Self::unlink(self.misc.take(), |node| size <= node.size && align <= node.align);
         self.misc = list;
         node.map(|mut header| {
+            // SAFETY: the header came from the misc free list (unlink's
+            // invariant — a live, owned free block); moving it onto the
+            // allocated hash chain is the ownership transfer.
             let header = unsafe { header.as_mut() };
             let k = Self::hash(header.addr.as_ptr());
             header.next = self.allocated_misc[k].take();
@@ -300,6 +331,8 @@ impl QuickFit {
         let ptr = prefix.as_ptr();
         let len = prefix.len();
         let offset = ptr.align_offset(MIN_ALLOC_SIZE).min(len);
+        // SAFETY: offset is clamped to len (the 05-REVIEW-FIX clamp), so
+        // the shifted block lies inside the prefix's owned region.
         unsafe { Block::new_from_raw_parts(ptr.wrapping_add(offset), len - offset) }
     }
 
@@ -358,6 +391,9 @@ impl QuickFit {
         }
         let np = self.malloc(new_layout);
         if !np.is_null() {
+            // SAFETY: block names layout.size() owned bytes and np names
+            // new_size owned bytes (both live allocations, non-overlapping
+            // — np was just allocated); the copy covers the shared prefix.
             unsafe {
                 ptr::copy(block, np, usize::min(layout.size(), new_size));
             }
@@ -380,6 +416,10 @@ impl QuickFit {
             let header = Header::new(block, size, align, self.qlists[k].take());
             assert_eq!(block.align_offset(mem::align_of::<Header>()), 0);
             let p = block.cast::<Header>();
+            // SAFETY: a quick-list block is at least size == align >=
+            // size_of::<Header>() bytes (64-byte min class) and
+            // Header-aligned (asserted); the block is dead (being freed),
+            // so overwriting its head with the header owns it.
             unsafe {
                 ptr::write(p.as_ptr(), header);
             }
@@ -425,6 +465,9 @@ impl QuickFit {
                     let offset = block.align_offset(MIN_ALLOC_SIZE);
                     let hblock = block.as_ptr().wrapping_add(offset);
                     let next = hblock.wrapping_add(MIN_ALLOC_SIZE);
+                    // SAFETY: the freed block is at least MIN_ALLOC_SIZE
+                    // past its alignment offset (misc blocks are larger
+                    // than any quick class), so next stays in-region.
                     block = unsafe { NonNull::new_unchecked(next) };
                     size -= offset + MIN_ALLOC_SIZE;
                     align = MIN_ALLOC_SIZE;
@@ -433,12 +476,18 @@ impl QuickFit {
                     hblock
                 };
                 let header = Header::new(block, size, align, None);
+                // SAFETY: hblock names a fresh Header-sized region (the
+                // malloc'd header block or the carved-from-freed-block
+                // fallback), owned here and dead to its prior tenant.
                 unsafe {
                     ptr::write(hblock, header);
                 }
                 NonNull::new(hblock)
             })
             .expect("header");
+        // SAFETY: the header came from unlink_allocated_misc (a live
+        // owned hash entry) or the fresh-write above — either way it is
+        // this allocator's to link onto the misc list.
         let header = unsafe { header.as_mut() };
         header.next = self.misc.take();
         self.misc = NonNull::new(header);
@@ -490,16 +539,24 @@ impl QuickFit {
         while let Some(mut node_ptr) = cur {
             spins += 1;
             if spins > 100_000 {
+                // SAFETY: the cursor walks live header nodes (the list
+                // invariant); a cycled list is caught by the count, never
+                // by an invalid deref.
                 let n = unsafe { node_ptr.as_ref() };
                 crate::println!("allocator: unlink spin — free-list cycle (node addr {:?} size {} align {})", n.addr, n.size, n.align);
                 panic!("allocator: free-list cycle detected");
             }
+            // SAFETY: node_ptr names a live header on the walked list
+            // (the free/misc/hash list invariant — headers on these lists
+            // are owned by the allocator and stay put while linked).
             let node = unsafe { node_ptr.as_mut() };
             if predicate(node) {
                 let next = node.next.take();
                 match prev {
                     // Mid-list removal: splice prev→next; head unchanged.
                     Some(mut p) => {
+                        // SAFETY: p is the live predecessor node on the
+                        // same list (the walk just visited it).
                         unsafe { p.as_mut() }.next = next;
                         return (Some(node_ptr), head);
                     }
@@ -568,12 +625,19 @@ pub mod global {
         {
             let a = self.0.swap(ptr::null_mut(), Ordering::Relaxed);
             assert!(!a.is_null(), "global allocator is nil");
+            // SAFETY: the swap gives this context EXCLUSIVE ownership of
+            // the allocator for the thunk's duration (any concurrent
+            // caller sees nil and panics); single CPU this era.
             let r = thunk(unsafe { &mut *a });
             self.0.swap(a, Ordering::Relaxed);
             r
         }
     }
 
+    // SAFETY: every trait method runs under with_allocator's exclusive
+    // borrow; malloc/free/realloc's own contracts are their SAFETY
+    // comments.  The trait's caller contract (valid layouts, owned blocks)
+    // is the Rust allocation protocol.
     unsafe impl GlobalAlloc for GlobalQuickAlloc {
         unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
             self.with_allocator(|quick| quick.malloc(layout))
@@ -582,6 +646,8 @@ pub mod global {
             self.with_allocator(|quick| quick.free(ptr, layout));
         }
         unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            // SAFETY: QuickFit::realloc's caller contract is met (ptr is a
+            // live allocation of layout, per the trait protocol).
             self.with_allocator(|quick| unsafe { quick.realloc(ptr, layout, new_size) })
         }
     }

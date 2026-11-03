@@ -31,6 +31,7 @@ mod registers;
 mod swtch;
 mod syscall;
 mod trap;
+mod usermem;
 mod vm;
 mod vmdebug;
 
@@ -109,7 +110,12 @@ fn print_stacks() {
         static interruptstacksz: [u64; 0];
     }
 
+    // SAFETY: trap.S reserves the interrupt stack and defines
+    // interruptstacksz as an absolute (.equ) symbol — its "address" IS the
+    // size value; only the zero-sized markers' addresses are read (the
+    // link-sym class), never their contents.
     let interrupt_stack_base = unsafe { interruptstackbase.as_ptr().addr() };
+    // SAFETY: as above — interruptstacksz's address IS the size value.
     let interrupt_stack_max = interrupt_stack_base + unsafe { interruptstacksz.as_ptr().addr() };
     let range = VirtRange(interrupt_stack_base..interrupt_stack_max);
     let range_size = range.size();
@@ -140,6 +146,9 @@ pub extern "C" fn main9(dtb_va: usize) {
     let dtb_va = if dtb_va - KZERO == 0 { KZERO + 0x4000_0000 } else { dtb_va };
 
     // Parse the DTB before we set up memory so we can correctly map it
+    // SAFETY: dtb_va names the DTB mapped at KZERO+PA by vminit (the
+    // pre-MMU mapping is still live — main9 runs before any teardown);
+    // valid and readable for the parse.
     let dt = unsafe { DeviceTree::from_usize(dtb_va).unwrap() };
     let dtb_physrange = PhysRange::with_pa_len(PhysAddr::new((dtb_va - KZERO) as u64), dt.size());
 
@@ -249,6 +258,10 @@ pub extern "C" fn main9(dtb_va: usize) {
             ) {
                 panic!("initrd: map failed: {err:?}");
             }
+            // SAFETY: the initrd's KZERO+PA range was just mapped r/o in
+            // the kernel table above and reserved in pagealloc at boot
+            // (04-01) — the bytes are the live image for the kernel's
+            // lifetime (devroot's mount source).
             let img = unsafe {
                 core::slice::from_raw_parts((KZERO + start as usize) as *const u8, size as usize)
             };
@@ -301,11 +314,11 @@ pub extern "C" fn main9(dtb_va: usize) {
     // vmdebug::print_recursive_tables(RootPageTableType::User);
 
     {
-        let page_table = vm::kernel_pagetable();
+        let mut page_table = vm::kernel_pagetable();
         let entry = Entry::rw_kernel_data();
         for i in 0..3 {
             let alloc_result = pagealloc::allocate_virtpage(
-                page_table,
+                &mut page_table,
                 "testkernel",
                 entry,
                 VaMapping::Offset(KZERO),
@@ -354,6 +367,9 @@ pub extern "C" fn main9(dtb_va: usize) {
         #[cfg(dev_panic)]
         {
             println!("virtpanic: deliberate sync exception via brk #0 (D-12 debug config)");
+            // SAFETY: brk #0 raises a synchronous exception routed through
+            // the REAL trap path — the deliberate D-12 debug trigger (the
+            // dev_panic config's whole purpose; never a memory hazard).
             unsafe { core::arch::asm!("brk #0") };
         }
 
@@ -375,6 +391,9 @@ pub extern "C" fn main9(dtb_va: usize) {
         exec_bootstrap(initrd_img);
         #[cfg(not(dev_exec))]
         loop {
+            // SAFETY: the virt idle loop — wfi wakes on each tick and
+            // trap()'s IRQ branch erets back here (the pre-exec profile's
+            // steady state).
             unsafe { core::arch::asm!("wfi") };
         }
     }
@@ -415,6 +434,8 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
     // The D-09/Phase-2-D-03 evidence line: the probed cache geometry the
     // fault handler's icache maintenance derives from (never hardcoded).
     let ctr: u64;
+    // SAFETY: reading CTR_EL0 is a pure register read at EL1 (the
+    // MMU/cache-register floor).
     unsafe { core::arch::asm!("mrs {}, ctr_el0", out(reg) ctr) };
     println!("ctr_el0: {ctr:#x}");
 
@@ -526,7 +547,7 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
     // #e/nobootprompt before any argv fallback).
     let name = core::str::from_utf8(leaf).unwrap_or("?");
     let argv: &[&[u8]] = &[leaf];
-    let proc = proc::new_user_proc(name).unwrap_or_else(|err| panic!("proc: {err}"));
+    let mut proc = proc::new_user_proc(name).unwrap_or_else(|err| panic!("proc: {err}"));
     // 05-04 (D-03): the first process's namespace root — slash and dot both
     // start at the devroot attach (the donor's slash/dot; rfork inherits
     // them, exec preserves them).  Every later proc gets its own Chan value
@@ -537,8 +558,10 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
     // explicitly — the slash/dot seeding's twin; Proc::new's fresh empty
     // group is the never-seeded default).
     proc.env_group = root_env;
-    exec::exec_into(proc, img, &bin, name, argv)
+    exec::exec_into(&mut proc, img, &bin, name, argv)
         .unwrap_or_else(|err| panic!("exec: {entry_str}: {err}"));
+    // SAFETY: proc.frame names the seeded forkret frame on the proc's
+    // freshly-mapped kstack (exec_into's construction); read-only here.
     let frame = unsafe { &*proc.frame };
     let argv_print: alloc::vec::Vec<&str> =
         argv.iter().map(|a| core::str::from_utf8(a).unwrap_or("?")).collect();
@@ -554,6 +577,9 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
     // pages are mapped) BEFORE the switch; the console print immediately
     // after proves all runtime MMIO is TTBR1-side — a dead console here is
     // an instant visible failure (T-04-10).
+    // SAFETY: the proc's root table is fully built (the recursive
+    // self-entry + the seed pages — the D-10 Pitfall-11 order) and owned
+    // by the proc; this is the one-way TTBR0 switch into it.
     unsafe { vm::switch(&*proc.root_table, RootPageTableType::User) };
     println!("exec: ttbr0 switched, console alive");
 
@@ -563,7 +589,10 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
     // unmask IRQs at the last moment — the whole exec orchestration above
     // is a non-preemptible boot critical section (nothing in it needs
     // interrupts; the D-13 tick's domain is EL0 userland, entered next).
-    proc::activate_first(proc);
+    proc::activate_first(&mut proc);
     trap::unmask_irq();
+    // SAFETY: frame_ptr names the seeded forkret frame on the proc's
+    // kstack (exec_into's construction); CURKSTACK/CURFRAME were just
+    // published by activate_first — the single first EL0 entry.
     unsafe { trap::trap_return(frame_ptr) }
 }

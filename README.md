@@ -40,7 +40,7 @@ check to ensure `qemu` or `qemu-kvm` is installed and the
 
 ## Boot-test / ureg-check environment contract
 
-`cargo xtask boot-test` (any profile), `cargo xtask ureg-check`, and `cargo xtask initrd` require the `R9_HARVEY_DIR` environment variable naming a Harvey checkout (it must contain `aarch64/include/ureg.h`; the initrd bake additionally needs `build/aarch64/out/` + `.build/bin/mkpaqfs`). Unset or empty is a hard error naming the variable — there is no `../harvey` default (Phase 5, D-10: r9 knows nothing about sibling checkouts by default).
+`cargo xtask boot-test` (any profile), `cargo xtask ureg-check`, and `cargo xtask initrd` require the `R9_HARVEY_DIR` environment variable naming a Harvey checkout (it must contain `aarch64/include/ureg.h`; the initrd bake additionally needs `build/aarch64/smoke-out/` (261103-p64's split — the smoke stage's dedicated dir) + `.build/bin/mkpaqfs`). Unset or empty is a hard error naming the variable — there is no `../harvey` default (Phase 5, D-10: r9 knows nothing about sibling checkouts by default).
 
 ## Nix packages
 

@@ -29,8 +29,10 @@
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::cell::SyncUnsafeCell;
+use core::ops::{Deref, DerefMut};
 use core::ptr;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 
 use port::Result;
 use port::dat::Chan;
@@ -644,6 +646,9 @@ impl Proc {
     pub fn free_user_mappings(&mut self) {
         let records = core::mem::take(&mut self.mapping_log);
         for rec in records {
+            // SAFETY: self.root_table names this proc's pagealloc'd root
+            // table (the construction invariant) — written through its
+            // KZERO+PA alias; single CPU, IRQ-masked syscall context.
             unsafe {
                 let mut physalloc = PhysPageAllocator {};
                 let mut vmt = VmTraitImpl {};
@@ -703,19 +708,35 @@ pub struct ProcTable {
 pub static PROC_TABLE: Lock<ProcTable> =
     Lock::new("proc", ProcTable { procs: [const { None }; MAX_PROCS], next_pid: 1 });
 
-static mut CURRENT_PROC: *mut Proc = ptr::null_mut();
+/// 261103-p64: the current-proc pointer is an AtomicPtr — the
+/// single-CPU/IRQ-masked invariant below keeps the loaded pointer stable
+/// for a handler's lifetime, and the atomic makes every access data-race
+/// free by construction (no `static mut`).
+static CURRENT_PROC: AtomicPtr<Proc> = AtomicPtr::new(ptr::null_mut());
 
 /// The current process's raw pointer — set at exec/switch time, read in trap
 /// context.  INVARIANT: single CPU; the pointer is written only in
 /// process/boot context and read with IRQs masked, so it cannot change under
 /// a reader.  Returns null before the first exec.
 pub fn current_proc() -> *mut Proc {
-    unsafe { ptr::addr_of!(CURRENT_PROC).read() }
+    CURRENT_PROC.load(Ordering::Relaxed)
 }
 
 /// Install the current-process pointer (the exec/switch path only).
 pub(crate) fn set_current_proc(p: *mut Proc) {
-    unsafe { ptr::addr_of_mut!(CURRENT_PROC).write(p) }
+    CURRENT_PROC.store(p, Ordering::Relaxed)
+}
+
+/// 261103-p64 (the current-proc accessor): the ONE guarded entry point for
+/// dereferencing the current process — every former `&mut *current_proc()`
+/// site in proc.rs/trap.rs/fault.rs/syscall.rs/main.rs goes through here.
+/// The raw-pointer deref lives ONLY in ProcGuard's Deref/DerefMut impls,
+/// behind the module-header invariant (single CPU; the pointer is written
+/// in process/boot context and read with IRQs masked, so it cannot change
+/// under a reader).  None before the first exec.
+pub fn current() -> Option<ProcGuard> {
+    let p = CURRENT_PROC.load(Ordering::Relaxed);
+    if p.is_null() { None } else { Some(ProcGuard(p)) }
 }
 
 /// True while any non-Moribund proc exists (04-06's EXITS path: when none
@@ -748,7 +769,9 @@ fn unwind_new_proc(root_pa: PhysAddr, live_kstack_pas: &[u64], context: &'static
 /// a per-process root page table with the recursive slot-511 self-entry.
 /// The proc starts with no segments, no byte source, and an empty mapping
 /// log; fd 0/1/2 are the D-15 devcons preopen (filled at construction).
-pub fn new_user_proc(name: &str) -> Result<&'static mut Proc> {
+///
+/// 261103-p64: returns a ProcGuard, never a `&'static mut Proc`.
+pub fn new_user_proc(name: &str) -> Result<ProcGuard> {
     // Allocate the per-process root page table first (BEFORE taking the
     // table lock — the lock is never held across a pagealloc call): one
     // pagealloc'd page, mapped at KZERO+PA in the kernel table (the 04-02
@@ -775,6 +798,9 @@ pub fn new_user_proc(name: &str) -> Result<&'static mut Proc> {
             .map_err(|_| "proc: root table map failed")?;
     }
     let root_ptr = physaddr_as_ptr_mut_offset_from_kzero::<RootPageTable>(root_pa);
+    // SAFETY: root_pa's KZERO+PA alias was just mapped r/w in the kernel
+    // table above; the page is owned (fresh pagealloc) and gets its
+    // recursive slot-511 entry before any use.
     unsafe {
         ptr::write_bytes(root_ptr, 0, 1);
         vm::init_empty_root_page_table(&mut *root_ptr);
@@ -851,9 +877,34 @@ pub fn new_user_proc(name: &str) -> Result<&'static mut Proc> {
     proc.preopen_cons_fds();
     *slot = Some(proc);
     // The table is a fixed static and slots are never freed this era, so the
-    // reference stays valid after the guard drops (single CPU — see the
+    // handle stays valid after the guard drops (single CPU — see the
     // module header's locking discipline).
-    Ok(unsafe { &mut *(slot.as_mut().unwrap() as *mut Proc) })
+    Ok(ProcGuard(ptr::from_mut(slot.as_mut().unwrap())))
+}
+
+/// A guard handle to a PROC_TABLE-resident Proc (261103-p64 —
+/// new_user_proc no longer hands out a `&'static mut`).  Deref/DerefMut
+/// reach the proc; the table slots are never freed this era and handles
+/// live only in boot/syscall context (single CPU, IRQ-masked), so the
+/// target is stable for the guard's lifetime.
+pub struct ProcGuard(*mut Proc);
+
+impl Deref for ProcGuard {
+    type Target = Proc;
+
+    fn deref(&self) -> &Proc {
+        // SAFETY: new_user_proc's invariant — the Proc lives in a static
+        // PROC_TABLE slot that is never freed/moved this era.
+        unsafe { &*self.0 }
+    }
+}
+
+impl DerefMut for ProcGuard {
+    fn deref_mut(&mut self) -> &mut Proc {
+        // SAFETY: Deref's invariant; the caller holds no other live handle
+        // to this proc (construction/rfork/exec orchestration context).
+        unsafe { &mut *self.0 }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -887,13 +938,21 @@ pub fn new_user_proc(name: &str) -> Result<&'static mut Proc> {
 /// note-timeout/wild-write flake).  CURKSTACK initialises to the legacy
 /// interrupt stack so pre-process traps (early boot, virtpanic) behave
 /// exactly as pre-04-07.  Write discipline per the module header.
+///
+/// 261103-p64 (T-p64-05): SyncUnsafeCell<u64> is repr(transparent) over
+/// u64 — the no_mangle symbol names AND the memory layout trap.S's
+/// absolute `ldr xN, =CURKSTACK` / str-into-CURFRAME accesses link and
+/// operate on are unchanged; trap.S itself is byte-untouched.
 #[unsafe(no_mangle)]
-pub static mut CURKSTACK: u64 = 0;
+pub static CURKSTACK: SyncUnsafeCell<u64> = SyncUnsafeCell::new(0);
 #[unsafe(no_mangle)]
-pub static mut CURFRAME: u64 = 0;
+pub static CURFRAME: SyncUnsafeCell<u64> = SyncUnsafeCell::new(0);
 
 fn read_curframe() -> *mut TrapFrame {
-    unsafe { ptr::addr_of!(CURFRAME).read() as *mut TrapFrame }
+    // SAFETY: single CPU; CURFRAME is written only under the PROC_TABLE
+    // lock or by trap.S in IRQ-masked trap context, and read under the
+    // same discipline (the module header) — no concurrent access.
+    unsafe { CURFRAME.get().read() as *mut TrapFrame }
 }
 
 /// The live trap frame the trap_return tail will restore (04-08's
@@ -905,11 +964,14 @@ pub(crate) fn current_frame() -> *mut TrapFrame {
 }
 
 fn write_curframe(frame: *mut TrapFrame) {
-    unsafe { ptr::addr_of_mut!(CURFRAME).write(frame as u64) }
+    // SAFETY: read_curframe's discipline (PROC_TABLE-held or IRQ-masked
+    // single-CPU context; trap.S is the only other writer, at entry).
+    unsafe { CURFRAME.get().write(frame as u64) }
 }
 
 fn write_curkstack(top: usize) {
-    unsafe { ptr::addr_of_mut!(CURKSTACK).write(top as u64) }
+    // SAFETY: write_curframe's discipline.
+    unsafe { CURKSTACK.get().write(top as u64) }
 }
 
 /// The legacy interrupt stack's top (trap.S's reservation): the pre-process
@@ -920,6 +982,10 @@ fn interrupt_stack_top() -> usize {
         static interruptstackbase: u8;
         static interruptstacksz: u8;
     }
+    // SAFETY: trap.S reserves the interrupt stack and defines
+    // interruptstacksz as an absolute (.equ) symbol — its "address" IS the
+    // size value; only the symbols' addresses are read (the link-sym
+    // class), never their contents.
     unsafe { &interruptstackbase as *const u8 as usize + &interruptstacksz as *const u8 as usize }
 }
 
@@ -946,11 +1012,10 @@ pub fn activate_first(p: &mut Proc) {
 /// context runs IRQ-masked; the sched loop's idle wfi finds current
 /// Blocked/Moribund and its own post-wfi re-scan dispatches instead).
 pub fn preempt() {
-    let cur = current_proc();
-    if cur.is_null() {
+    let Some(cur) = current() else {
         return;
-    }
-    if unsafe { (*cur).state } != ProcState::Running {
+    };
+    if cur.state != ProcState::Running {
         return;
     }
     reschedule();
@@ -966,8 +1031,11 @@ pub fn preempt() {
 /// (blocked_in_kernel) are skipped here — only the sched loop can swtch
 /// them back in.
 pub fn reschedule() {
-    let cur = current_proc();
-    let cur_pid = unsafe { (*cur).pid };
+    // 261103-p64: the guard's None arm replaces a bare deref (a null
+    // current here was previously silent UB; unreachable in practice —
+    // preempt() gates on Running).
+    let Some(cur) = current() else { return };
+    let cur_pid = cur.pid;
     let node = LockNode::new();
     let next_pid;
     {
@@ -996,6 +1064,10 @@ pub fn reschedule() {
         set_current_proc(next);
         write_curkstack(next.kstack_top);
         write_curframe(next.frame);
+        // SAFETY: next's root table is fully built (the construction
+        // invariant — recursive self-entry + its mappings) and named by
+        // the pointer the PROC_TABLE slot owns; the switch runs with the
+        // table lock held in IRQ-masked trap context.
         unsafe { vm::switch(&*next.root_table, RootPageTableType::User) };
     }
     // Outside the lock (PROC_TABLE → Console is the only nesting order);
@@ -1016,8 +1088,9 @@ enum Resume {
 /// The scheduler context — a kernel-context switch target running
 /// sched_loop on the legacy interrupt stack (free this era: 04-05's
 /// no-switch entry left it reserved for reporting only).  Seeded on first
-/// use; accessed only from IRQ-masked single-CPU context.
-static mut SCHED_CONTEXT: swtch::Context = swtch::Context {
+/// use; accessed only from IRQ-masked single-CPU context.  261103-p64:
+/// SyncUnsafeCell, never `static mut`.
+static SCHED_CONTEXT: SyncUnsafeCell<swtch::Context> = SyncUnsafeCell::new(swtch::Context {
     x19: 0,
     x20: 0,
     x21: 0,
@@ -1032,18 +1105,22 @@ static mut SCHED_CONTEXT: swtch::Context = swtch::Context {
     x30: 0,
     sp: 0,
     spsr: 0,
-};
-static mut SCHED_SEEDED: bool = false;
+});
+static SCHED_SEEDED: SyncUnsafeCell<bool> = SyncUnsafeCell::new(false);
 
 fn sched_context() -> *mut swtch::Context {
+    // SAFETY: single CPU, IRQ-masked contexts only (the module header's
+    // discipline): the seed-once write and every later swtch access are
+    // serialized by the caller contexts (sched/sched_from_moribund/
+    // sched_loop itself) — no concurrent access is possible.
     unsafe {
-        if !ptr::addr_of!(SCHED_SEEDED).read() {
-            let ctx = ptr::addr_of_mut!(SCHED_CONTEXT);
+        if !SCHED_SEEDED.get().read() {
+            let ctx = SCHED_CONTEXT.get();
             (*ctx).set_return(sched_loop as *const () as u64);
             (*ctx).set_stack_pointer(interrupt_stack_top() as u64);
-            ptr::addr_of_mut!(SCHED_SEEDED).write(true);
+            SCHED_SEEDED.get().write(true);
         }
-        ptr::addr_of_mut!(SCHED_CONTEXT)
+        SCHED_CONTEXT.get()
     }
 }
 
@@ -1052,12 +1129,14 @@ fn sched_context() -> *mut swtch::Context {
 /// i.e. after the proc was woken (Blocked → Ready by an EXITS posting a
 /// wait record) and picked.  EL0 entry/exit never rides this path.
 pub fn sched() {
-    let cur = current_proc();
-    assert!(!cur.is_null(), "sched with no current process");
+    let mut cur = current().expect("sched with no current process");
+    cur.state = ProcState::Blocked;
+    cur.blocked_in_kernel = true;
+    // SAFETY: sched_context()'s seed-once discipline (single CPU,
+    // IRQ-masked syscall context); cur's context field is
+    // PROC_TABLE-resident (a stable address across the switch).
     unsafe {
-        (*cur).state = ProcState::Blocked;
-        (*cur).blocked_in_kernel = true;
-        swtch::swtch(&mut (*cur).context, &*sched_context());
+        swtch::swtch(&mut cur.context, &*sched_context());
     }
     // Resumed inside the syscall handler; the caller re-checks its wait
     // records and returns up the trap-return tail.
@@ -1077,27 +1156,44 @@ fn sched_loop() -> ! {
     // blocked.  The idle arm runs between proc contexts (no syscall holds
     // Console across a sched boundary), so dumping from here follows the
     // PROC_TABLE → Console nesting order.
+    // 261103-p64 (Rule 1 — pre-existing break): the cons-rx dump arms are
+    // cfg(dev_exec) like the pl011 cons_rx_* fns they call (d8496d3 left
+    // them unconditional, breaking every non-dev_exec profile build).
+    #[cfg(dev_exec)]
     let mut cons_wedge = 0u32;
     let mut all_blocked = 0u32;
     loop {
         match pick_next() {
+            // SAFETY: sched_context() is seeded (its own discipline); ctx
+            // names the picked proc's PROC_TABLE-resident saved context —
+            // the pointer escaped the lock under the single-CPU/IRQ-masked
+            // invariant (pick_next's doc).
             Some(Resume::Switch(ctx)) => unsafe { swtch::swtch(&mut *sched_context(), &*ctx) },
+            // SAFETY: frame names the picked proc's kstack-resident trap
+            // frame (pick_next installed CURFRAME/CURKSTACK under the lock
+            // just above); trap_return erets into it and diverges.
             Some(Resume::Return(frame)) => unsafe { crate::trap::trap_return(frame) },
+            // SAFETY: the idle arm — the DAIFClr/wfi/DAIFSet sequence
+            // briefly unmasks IRQs so the tick fires and re-arms (the
+            // sched loop's sleep shape); nothing else runs between.
             None => unsafe {
-                let reader_blocked = cons_reader_blocked();
-                let rx_pending = crate::platform::pl011::cons_rx_pending()
-                    || crate::platform::pl011::cons_rx_fifo_pending() == Some(true);
-                if reader_blocked && rx_pending {
-                    cons_wedge += 1;
-                    if cons_wedge == 2000 {
-                        println!("wedgedbg: idle with a blocked cons reader + pending RX — dumping");
-                        dump_proc_states();
-                        port::devcons::debug_dump_input();
-                        let (h, t) = crate::platform::pl011::cons_rx_ring_pos();
-                        println!("wedgedbg: cons ring head={} tail={} fifo_pending={:?}", h, t, crate::platform::pl011::cons_rx_fifo_pending());
+                #[cfg(dev_exec)]
+                {
+                    let reader_blocked = cons_reader_blocked();
+                    let rx_pending = crate::platform::pl011::cons_rx_pending()
+                        || crate::platform::pl011::cons_rx_fifo_pending() == Some(true);
+                    if reader_blocked && rx_pending {
+                        cons_wedge += 1;
+                        if cons_wedge == 2000 {
+                            println!("wedgedbg: idle with a blocked cons reader + pending RX — dumping");
+                            dump_proc_states();
+                            port::devcons::debug_dump_input();
+                            let (h, t) = crate::platform::pl011::cons_rx_ring_pos();
+                            println!("wedgedbg: cons ring head={} tail={} fifo_pending={:?}", h, t, crate::platform::pl011::cons_rx_fifo_pending());
+                        }
+                    } else {
+                        cons_wedge = 0;
                     }
-                } else {
-                    cons_wedge = 0;
                 }
                 all_blocked = all_blocked + 1;
                 if all_blocked == 200_000 {
@@ -1112,6 +1208,7 @@ fn sched_loop() -> ! {
 }
 
 /// gatedbg: any live proc Blocked in a cons read (cons_waiting).
+#[cfg(dev_exec)]
 fn cons_reader_blocked() -> bool {
     let node = LockNode::new();
     let table = PROC_TABLE.lock(&node);
@@ -1164,8 +1261,7 @@ fn dump_proc_states() {
 /// current proc is normally Blocked/Moribund (excluded by the state
 /// check); a readied current is exactly the proc that must be resumable.
 fn pick_next() -> Option<Resume> {
-    let cur = current_proc();
-    let cur_pid = unsafe { cur.as_ref().map(|p| p.pid) };
+    let cur_pid = current().map(|p| p.pid);
     let node = LockNode::new();
     let mut table = PROC_TABLE.lock(&node);
     let cur_idx = cur_pid
@@ -1181,6 +1277,9 @@ fn pick_next() -> Option<Resume> {
         set_current_proc(p);
         write_curkstack(p.kstack_top);
         write_curframe(p.frame);
+        // SAFETY: p's root table is fully built (construction invariant)
+        // and owned by the table slot; the switch runs under the
+        // PROC_TABLE lock in IRQ-masked context.
         unsafe { vm::switch(&*p.root_table, RootPageTableType::User) };
         return Some(if p.blocked_in_kernel {
             p.blocked_in_kernel = false;
@@ -1197,11 +1296,15 @@ fn pick_next() -> Option<Resume> {
 /// writes only the PROC_TABLE-resident context struct (never the freed
 /// kstack), so EXITS can free the kstack before calling here.  Diverges.
 pub fn sched_from_moribund() -> ! {
-    let cur = current_proc();
+    let cur = current();
+    // SAFETY: sched_context()'s seed-once discipline (single CPU,
+    // IRQ-masked context); the moribund proc's context is
+    // PROC_TABLE-resident and its kstack is already freed (the swtch save
+    // writes only the context struct — the exit_tail contract).
     unsafe {
         let ctx = sched_context();
-        if !cur.is_null() {
-            swtch::swtch(&mut (*cur).context, &*ctx);
+        if let Some(mut cur) = cur {
+            swtch::swtch(&mut cur.context, &*ctx);
         }
     }
     unreachable!("sched: moribund process resumed");
@@ -1245,11 +1348,7 @@ pub fn rfork_env_split(proc: &mut Proc, copy: bool) {
 /// op can happen then).  Reads the current-proc raw pointer under the
 /// module header's single-CPU/IRQ-masked invariant (syscall context).
 pub fn current_env_group() -> Option<Arc<Lock<EnvGroup>>> {
-    let cur = current_proc();
-    if cur.is_null() {
-        return None;
-    }
-    Some(unsafe { &*cur }.env_group.clone())
+    Some(current()?.env_group.clone())
 }
 
 /// devpipe's block/wake hooks (05-06, D-04's connectembed substrate —
@@ -1259,9 +1358,7 @@ pub fn current_env_group() -> Option<Arc<Lock<EnvGroup>>> {
 /// The calling proc's pid (waiter registration).  Syscall context only —
 /// a pipe op always has a current proc.
 pub fn pipe_current_pid() -> u64 {
-    let cur = current_proc();
-    assert!(!cur.is_null(), "devpipe op with no current process");
-    unsafe { (*cur).pid }
+    current().expect("devpipe op with no current process").pid
 }
 
 /// Park the calling proc mid-syscall until a pipe write/close wakes it —
@@ -1423,9 +1520,7 @@ pub fn post_note_group_of_members(readers: &[u64], msg: &[u8]) {
 /// twin of pipe_current_pid, which stays named for devpipe's registration
 /// site).  Syscall context only — a device op always has a current proc.
 pub fn current_pid() -> u64 {
-    let cur = current_proc();
-    assert!(!cur.is_null(), "device op with no current process");
-    unsafe { (*cur).pid }
+    current().expect("device op with no current process").pid
 }
 
 /// devcons's block hook (05-08, D-06): park the calling proc in its cons
@@ -1436,17 +1531,12 @@ pub fn current_pid() -> u64 {
 /// reader's post-wake drain re-checks the ring regardless (a spurious
 /// wake re-blocks).
 pub fn cons_block_current() {
-    let cur = current_proc();
-    assert!(!cur.is_null(), "cons read with no current process");
-    unsafe {
-        (*cur).cons_waiting = true;
-    }
+    let mut cur = current().expect("cons read with no current process");
+    cur.cons_waiting = true;
     sched();
     // Resumed inside the syscall handler by the sched loop's swtch; this
     // proc is current again (the blocked_in_kernel resume path).
-    unsafe {
-        (*cur).cons_waiting = false;
-    }
+    cur.cons_waiting = false;
 }
 
 /// The tick's cons wake (05-08): ready every cons-waiting Blocked proc —
@@ -1500,21 +1590,15 @@ pub fn tick_timeouts(now: u64) {
 /// open count bumps, so the resolved chan is a real second reference the
 /// close dispatch balances).  None before the first proc exists.
 pub fn current_fd_resolve(fd: u64) -> Option<Chan> {
-    let cur = current_proc();
-    if cur.is_null() {
-        return None;
-    }
-    unsafe { (*cur).fd_ref_clone(fd) }
+    current()?.fd_ref_clone(fd)
 }
 
 /// devdup's listing hook (05-06): the CALLING proc's open fds as
 /// (fd, mode) pairs (the `#d` root directory read).
 pub fn current_fd_list() -> Vec<(u64, u32)> {
-    let cur = current_proc();
-    if cur.is_null() {
+    let Some(p) = current() else {
         return Vec::new();
-    }
-    let p = unsafe { &*cur };
+    };
     let node = LockNode::new();
     p.fd_group.lock(&node).list_open()
 }
@@ -1531,6 +1615,9 @@ pub fn post_wait_record(parent: *mut Proc, pid: u64, msg: &[u8]) {
     let node = LockNode::new();
     // Held for the posting + wake (the parent pointer is table-resident).
     let _guard = PROC_TABLE.lock(&node);
+    // SAFETY: parent names a PROC_TABLE-resident Proc (recorded at rfork;
+    // slots are never freed this era) and the table lock is held — the
+    // deref cannot race (single CPU, IRQ-masked syscall context).
     let parent = unsafe { &mut *parent };
     let mut rec = WaitRecord { pid, msg: [0; ERRMAX], msg_len: msg.len().min(ERRMAX) };
     rec.msg[..rec.msg_len].copy_from_slice(&msg[..rec.msg_len]);
@@ -1560,7 +1647,7 @@ pub fn rfork_clone(parent: &mut Proc, frame: &TrapFrame, flag: u64) -> Result<u6
         let n = parent.name.iter().position(|&b| b == 0).unwrap_or(KNAMELEN);
         core::str::from_utf8(&parent.name[..n]).unwrap_or("fork")
     };
-    let child = new_user_proc(name)?;
+    let mut child = new_user_proc(name)?;
 
     // WR-02: everything from here is fallible, and the child is already
     // PROC_TABLE-resident (new_user_proc inserts it Ready with a null
@@ -1570,7 +1657,7 @@ pub fn rfork_clone(parent: &mut Proc, frame: &TrapFrame, flag: u64) -> Result<u6
     // abort from an ordinary OOM) — and leak its pages.  Unwind instead:
     // mark Moribund, free the pages already copied, then the root-table
     // page and kstack by their recorded PAs.
-    if let Err(msg) = rfork_copy(parent, child, frame, flag) {
+    if let Err(msg) = rfork_copy(parent, &mut child, frame, flag) {
         child.state = ProcState::Moribund;
         // The copied pages' child-table entries die with the root-table
         // page below; the kernel-side KZERO+PA aliases stay mapped, per
@@ -1614,6 +1701,9 @@ fn rfork_copy(parent: &Proc, child: &mut Proc, frame: &TrapFrame, flag: u64) -> 
         let pa = pagealloc::allocate_physpage().map_err(|_| "rfork: page alloc failed")?;
         map_kernel_alias(rec.phys as u64)?;
         map_kernel_alias(pa.addr())?;
+        // SAFETY: both pages' KZERO+PA aliases were just (re)mapped r/w in
+        // the kernel table above; src names the parent's live page, dst
+        // the child's fresh page — one full page copied, non-overlapping.
         unsafe {
             let src = physaddr_as_ptr_mut_offset_from_kzero::<u8>(PhysAddr::new(rec.phys as u64));
             let dst = physaddr_as_ptr_mut_offset_from_kzero::<u8>(pa);
@@ -1626,6 +1716,10 @@ fn rfork_copy(parent: &Proc, child: &mut Proc, frame: &TrapFrame, flag: u64) -> 
             _ => Entry::rw_user_data(),
         }
         .with_phys_addr(pa);
+        // SAFETY: child.root_table names the child's pagealloc'd root
+        // table (the construction invariant) — an INACTIVE table edited
+        // through its KZERO+PA alias via map_to's temp-recursive dance;
+        // single CPU, IRQ-masked syscall context.
         unsafe {
             let mut physalloc = PhysPageAllocator {};
             let mut vmt = VmTraitImpl {};
@@ -1710,6 +1804,9 @@ fn rfork_copy(parent: &Proc, child: &mut Proc, frame: &TrapFrame, flag: u64) -> 
     // The forkchild frame: a copy of the parent's live frame on the
     // CHILD's kernel stack, with x0 = 0 (the child's wire result).
     let child_frame = (child.kstack_top - core::mem::size_of::<TrapFrame>()) as *mut TrapFrame;
+    // SAFETY: the child's kstack is freshly mapped (4 pages, construction)
+    // and the frame sits at its top (288 bytes below kstack_top); the
+    // parent's live frame is the source — disjoint kernel memory.
     unsafe {
         ptr::copy_nonoverlapping(frame, child_frame, 1);
         (*child_frame).x0 = 0;

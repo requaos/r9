@@ -25,6 +25,9 @@ unsafe extern "C" {
 
 pub fn init() {
     #[cfg(not(test))]
+    // SAFETY: installing VBAR_EL1 with the address of trap.S's
+    // exception_vectors (a valid, aligned vector table in kernel text) is
+    // the trap-interface floor — a pure register write at EL1.
     unsafe {
         // Set up a vector table for any exception that is taken to EL1
         core::arch::asm!(
@@ -43,6 +46,9 @@ pub fn init() {
 /// UART RX handlers are armed (plan 03-05).
 pub fn unmask_irq() {
     #[cfg(not(test))]
+    // SAFETY: clearing DAIF.I is a PSTATE write — the caller contract
+    // (handlers armed first, the doc comment) is the ordering discipline;
+    // the instruction itself is always executable at EL1.
     unsafe {
         core::arch::asm!("msr DAIFClr, #2");
     }
@@ -119,6 +125,49 @@ const _: () = assert!(core::mem::size_of::<TrapFrame>() == 288);
 /// Pitfall 6: only FIELD OFFSETS cross the ABI).  The note-delivery path
 /// pushes/copies exactly this many bytes (04-08).
 pub(crate) const UREG_SIZE: usize = 280;
+
+impl TrapFrame {
+    /// deliver_notes's frame push (04-08, T-04-16): the live frame's 35
+    /// fields (280 bytes, the frozen sizeof(Ureg)) into the validated,
+    /// resident user window.  261103-p64: homed here with
+    /// restore_from_saved so trap.rs carries no frame-reinterpretation
+    /// unsafe at its call sites.
+    pub(crate) fn copy_to_saved(&self, dst: &mut [u8]) {
+        assert_eq!(dst.len(), UREG_SIZE, "saved ureg size");
+        // SAFETY: self is a live 288-byte TrapFrame (288 > 280 — exactly
+        // 280 bytes are read, never overrunning); dst is validated +
+        // resident (usermem's constructor invariant).  Overlap is
+        // impossible (src is kernel, dst is user).
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                self as *const TrapFrame as *const u8,
+                dst.as_mut_ptr(),
+                UREG_SIZE,
+            );
+        }
+    }
+
+    /// NOTED's NCONT/NRSTR restore (04-08): overwrite the live frame with
+    /// the saved Ureg's 280 bytes (the frozen sizeof(Ureg), NOT r9's 288
+    /// stride — the frame's own stride is untouched).  261103-p64: homed
+    /// here so syscall.rs carries no frame-reinterpretation unsafe; the
+    /// source is a usermem-validated resident slice.
+    pub(crate) fn restore_from_saved(&mut self, src: &[u8]) {
+        assert_eq!(src.len(), UREG_SIZE, "saved ureg size");
+        // SAFETY: self is a live 288-byte TrapFrame (288 > 280 — the copy
+        // writes exactly 280 bytes, never overflowing the frame); src is
+        // validated + resident (usermem's constructor invariant) and read
+        // for exactly its length.  Overlap is impossible (src is user
+        // memory, dst is kernel).
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                src.as_ptr(),
+                self as *mut TrapFrame as *mut u8,
+                UREG_SIZE,
+            );
+        }
+    }
+}
 
 /// Plan 9 note actions (Harvey sys/include/libc.h — frozen values).
 pub(crate) const NCONT: u64 = 0;
@@ -262,6 +311,9 @@ impl fmt::Debug for TrapFrame {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trap_unsafe(frame: *mut TrapFrame) {
+    // SAFETY: trap.S (the only caller) passes the saved frame on the
+    // current kstack — a live, 288-byte TrapFrame by the entry
+    // construction; the unwrap is the ABI proof.
     unsafe { trap(frame.as_mut().unwrap()) }
 }
 
@@ -350,11 +402,9 @@ fn dispatch_irq(_frame: &TrapFrame) -> bool {
 /// saved frame, resuming the wrong context.  The note stays queued;
 /// noted() clears note_ureg and the next return-to-EL0 boundary retries.
 pub(crate) fn deliver_notes(frame: &mut TrapFrame) {
-    let proc_ptr = proc::current_proc();
-    if proc_ptr.is_null() {
+    let Some(mut proc) = proc::current() else {
         return;
-    }
-    let proc = unsafe { &mut *proc_ptr };
+    };
     // WR-05: leave the note queued while a handler is active (note_ureg
     // doubles as the donor's up->notified flag).
     if proc.note_ureg != 0 {
@@ -368,11 +418,11 @@ pub(crate) fn deliver_notes(frame: &mut TrapFrame) {
 
     let Some(handler) = proc.notify_handler else {
         println!("note: pid {} has no notify handler", proc.pid);
-        syscall::exit_tail(proc, msg);
+        syscall::exit_tail(&mut proc, msg);
     };
     if handler & 3 != 0 {
         println!("note: pid {} misaligned notify handler", proc.pid);
-        syscall::exit_tail(proc, msg);
+        syscall::exit_tail(&mut proc, msg);
     }
 
     // The donor stack construction (verbatim arithmetic; wrapping_sub so a
@@ -387,24 +437,27 @@ pub(crate) fn deliver_notes(frame: &mut TrapFrame) {
     // (membership is a segment check — the pages may be unmapped).
     if proc.validate_user_range(final_sp, window_end - final_sp, true).is_err() {
         println!("note: pid {} undeliverable (bad user stack window)", proc.pid);
-        syscall::exit_tail(proc, msg);
+        syscall::exit_tail(&mut proc, msg);
     }
-    fault::ensure_stack_resident(proc, final_sp as usize, window_end as usize);
+    fault::ensure_stack_resident(&mut proc, final_sp as usize, window_end as usize);
 
-    unsafe {
-        // The live frame's 35 fields into the user nureg (280 bytes).
-        core::ptr::copy_nonoverlapping(
-            frame as *const TrapFrame as *const u8,
-            nureg as *mut u8,
-            UREG_SIZE,
-        );
-        // The note bytes at nureg - (8+128): the full ERRMAX buffer
-        // (NUL-padded — the handler prints the string).
-        core::ptr::copy_nonoverlapping(buf.as_ptr(), msg_va as *mut u8, proc::ERRMAX);
-        // The arg homes: [sp+8] = nureg (arg0), [sp+16] = &msg (arg1).
-        ((final_sp + 8) as *mut u64).write(nureg);
-        ((final_sp + 16) as *mut u64).write(msg_va);
-    }
+    // 261103-p64: the three user-memory writes ride a single usermem
+    // window over [final_sp, window_end) — the constructor re-runs the
+    // fused validate+resident discipline (a no-op second walk here, the
+    // explicit checks above carry the kill paths' messages).
+    let mut window = crate::usermem::UserSliceMut::new(&mut proc, final_sp, window_end - final_sp)
+        .expect("note window validated + resident above");
+    let w = window.as_slice_mut();
+    // The live frame's 35 fields into the user nureg (280 bytes).
+    let nureg_off = (nureg - final_sp) as usize;
+    frame.copy_to_saved(&mut w[nureg_off..nureg_off + UREG_SIZE]);
+    // The note bytes at nureg - (8+128): the full ERRMAX buffer
+    // (NUL-padded — the handler prints the string).
+    let msg_off = (msg_va - final_sp) as usize;
+    w[msg_off..msg_off + proc::ERRMAX].copy_from_slice(&buf);
+    // The arg homes: [sp+8] = nureg (arg0), [sp+16] = &msg (arg1).
+    window.write_u64(8, nureg);
+    window.write_u64(16, msg_va);
     frame.x0 = nureg;
     frame.sp = final_sp;
     frame.pc = handler;
@@ -429,6 +482,10 @@ fn trap(frame: &mut TrapFrame) {
         // frame the tail actually restores (guarded: EL0t-bound only).
         let cf = proc::current_frame();
         if !cf.is_null() {
+            // SAFETY: CURFRAME names the live frame on the returning
+            // proc's kstack (written by trap.S at entry / by the locked
+            // scheduler swap); IRQ-masked trap context — no concurrent
+            // access.
             let cf = unsafe { &mut *cf };
             if cf.psr & 0xF == 0 {
                 deliver_notes(cf);
@@ -488,6 +545,8 @@ fn trap(frame: &mut TrapFrame) {
     }
 
     loop {
+        // SAFETY: wfi parks the CPU until an interrupt; with IRQs masked
+        // (trap context) this is the wedge-free clean-halt stop.
         unsafe { core::arch::asm!("wfi") };
     }
 }

@@ -213,6 +213,9 @@ fn map_data_bss_eager(proc: &mut Proc, source: &ByteSource, aout: &AoutHeader) -
         let clamp = data_end.saturating_sub(page_va).min(PAGE_SIZE_4K);
         if clamp > 0 {
             let file_off = data_file_base + (page_va - aout.data_va) as u64;
+            // SAFETY: pa was just allocated + mapped at KZERO+PA in the
+            // kernel table by map_one_user_page above; clamp bytes lie
+            // inside the page.
             let dst = unsafe {
                 core::slice::from_raw_parts_mut(physaddr_as_ptr_mut_offset_from_kzero::<u8>(pa), clamp)
             };
@@ -384,6 +387,9 @@ fn seed_user_pages(proc: &mut Proc, args: &[&[u8]]) -> Result<(usize, usize)> {
         }
         cursor -= arg.len() + 1;
         let off = cursor - stack_va;
+        // SAFETY: kbase+off..+arg.len()+1 lies inside the seed page (the
+        // room check above); kbase is the page's kernel alias (mapped r/w
+        // by the caller); the arg source is an owned kernel Vec slice.
         unsafe {
             ptr::copy_nonoverlapping(arg.as_ptr(), (kbase + off) as *mut u8, arg.len());
             *((kbase + off + arg.len()) as *mut u8) = 0;
@@ -398,6 +404,8 @@ fn seed_user_pages(proc: &mut Proc, args: &[&[u8]]) -> Result<(usize, usize)> {
     }
     cursor -= 8 * slots;
     let off = cursor - stack_va;
+    // SAFETY: the slots check above proves 8*(argc+2) bytes fit below the
+    // arg strings inside the seed page; base walks exactly that window.
     unsafe {
         let base = (kbase + off) as *mut u64;
         *base = argc as u64;
@@ -420,6 +428,9 @@ fn map_one_user_page(
     kind: SegKind,
 ) -> Result<PhysAddr> {
     let pa = pagealloc::allocate_physpage().map_err(|_| "exec: page alloc failed")?;
+    // SAFETY: proc.root_table names the proc's pagealloc'd root table
+    // (construction invariant), written through its KZERO+PA kernel alias;
+    // single CPU, boot/syscall context — no concurrent access.
     unsafe {
         let mut physalloc = PhysPageAllocator {};
         let mut vmt = VmTraitImpl {};
@@ -450,6 +461,8 @@ fn map_one_user_page(
             )
             .map_err(|_| "exec: kernel alias map failed")?;
     }
+    // SAFETY: pa's KZERO+PA alias was just mapped r/w in the kernel
+    // table above; one full page is zeroed.
     unsafe { ptr::write_bytes(physaddr_as_ptr_mut_offset_from_kzero::<u8>(pa), 0, PAGE_SIZE_4K) };
     proc.mapping_log.push(MappingRecord {
         va,
@@ -471,6 +484,9 @@ pub fn seed_exec_frame(
     tos_va: u64,
 ) -> *mut TrapFrame {
     let frame_ptr = (kstack_top - core::mem::size_of::<TrapFrame>()) as *mut TrapFrame;
+    // SAFETY: the frame sits at the top of the proc's freshly-mapped
+    // kstack (288 bytes below kstack_top — mapped by construction);
+    // nothing else aliases it until the first eret.
     let frame = unsafe { &mut *frame_ptr };
     *frame = TrapFrame::zeroed();
     frame.seed_el0_entry(tos_va, user_sp, entry);
