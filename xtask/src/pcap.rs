@@ -36,26 +36,117 @@ pub struct ArpFrame {
 /// frame_count and skipped here).  Errs loudly on a bad magic, a
 /// non-Ethernet linktype, or a truncated record.
 pub fn parse_pcap(bytes: &[u8]) -> Result<Vec<ArpFrame>, String> {
-    let _ = bytes;
-    Ok(Vec::new()) // RED stub — the GREEN commit implements the real parse
+    let mut frames = Vec::new();
+    for_each_record(bytes, &mut |frame| {
+        if let Some(arp) = classify_arp(frame) {
+            frames.push(arp);
+        }
+    })?;
+    Ok(frames)
 }
 
 /// Count ALL records in the capture, regardless of ethertype.
 pub fn frame_count(bytes: &[u8]) -> Result<usize, String> {
-    let _ = bytes;
-    Ok(0) // RED stub
+    let mut n = 0usize;
+    for_each_record(bytes, &mut |_| n += 1)?;
+    Ok(n)
 }
 
 /// ARP requests (oper 1) among parsed frames.
 pub fn request_count(frames: &[ArpFrame]) -> usize {
-    let _ = frames;
-    0 // RED stub
+    frames.iter().filter(|f| f.oper == 1).count()
 }
 
 /// ARP replies (oper 2) among parsed frames.
 pub fn reply_count(frames: &[ArpFrame]) -> usize {
-    let _ = frames;
-    0 // RED stub
+    frames.iter().filter(|f| f.oper == 2).count()
+}
+
+/// Validate the 24-byte global header, returning the capture's byte order
+/// (true = little-endian).  The magic's byte sequence names the order (the
+/// classic-pcap reader convention): qemu's filter-dump writes host-endian,
+/// so the gate hosts' captures are the d4 c3 b2 a1 shape, but a
+/// big-endian a1 b2 c3 d4 capture is equally valid and parses identically.
+fn global_header(bytes: &[u8]) -> Result<bool, String> {
+    if bytes.len() < 24 {
+        return Err(format!(
+            "pcap: buffer is {} bytes, shorter than the 24-byte global header",
+            bytes.len()
+        ));
+    }
+    let little_endian = match &bytes[0..4] {
+        [0xa1, 0xb2, 0xc3, 0xd4] => false,
+        [0xd4, 0xc3, 0xb2, 0xa1] => true,
+        magic => {
+            return Err(format!(
+                "pcap: bad magic {:02x}{:02x}{:02x}{:02x} — not a classic-pcap capture \
+                 (0xa1b2c3d4 in either byte order)",
+                magic[0], magic[1], magic[2], magic[3]
+            ));
+        }
+    };
+    let linktype = read_u32(bytes, 20, little_endian);
+    if linktype != 1 {
+        return Err(format!("pcap: linktype {linktype} is not Ethernet (1)"));
+    }
+    Ok(little_endian)
+}
+
+/// A capture-endianness u32.  Callers bounds-check the four-byte window
+/// before calling, so the fixed-size conversion is infallible.
+fn read_u32(bytes: &[u8], off: usize, le: bool) -> u32 {
+    let b: [u8; 4] = bytes[off..off + 4].try_into().expect("caller bounds-checks");
+    if le { u32::from_le_bytes(b) } else { u32::from_be_bytes(b) }
+}
+
+/// Walk every record's captured frame bytes.  Shared by parse_pcap and
+/// frame_count so the magic/truncation strictness lives in exactly one
+/// place.
+fn for_each_record(bytes: &[u8], f: &mut dyn FnMut(&[u8])) -> Result<(), String> {
+    let le = global_header(bytes)?;
+    let mut off = 24usize;
+    while off < bytes.len() {
+        let remaining = bytes.len() - off;
+        if remaining < 16 {
+            return Err(format!(
+                "pcap: truncated record header at offset {off}: {remaining} of 16 bytes"
+            ));
+        }
+        let caplen = read_u32(bytes, off + 8, le) as usize;
+        let frame_start = off + 16;
+        let available = bytes.len() - frame_start;
+        if caplen > available {
+            return Err(format!(
+                "pcap: truncated record at offset {off}: caplen {caplen} exceeds the \
+                 {available} remaining bytes"
+            ));
+        }
+        f(&bytes[frame_start..frame_start + caplen]);
+        off = frame_start + caplen;
+    }
+    Ok(())
+}
+
+/// Classify one Ethernet frame as ARP (ethertype 0x0806), extracting the
+/// fields the gates assert on; None for any other ethertype or a runt
+/// frame (shorter than the 14-byte Ethernet header + 28-byte ARP body —
+/// counted as a frame, never parsed).
+fn classify_arp(frame: &[u8]) -> Option<ArpFrame> {
+    if frame.len() < 42 || u16::from_be_bytes([frame[12], frame[13]]) != 0x0806 {
+        return None;
+    }
+    // The length check above makes every fixed-size conversion below
+    // infallible; wire fields are big-endian (network order) regardless of
+    // the capture's byte order.
+    Some(ArpFrame {
+        src_mac: frame[6..12].try_into().expect("len >= 42"),
+        oper: u16::from_be_bytes([frame[20], frame[21]]),
+        sha: frame[22..28].try_into().expect("len >= 42"),
+        spa: frame[28..32].try_into().expect("len >= 42"),
+        tha: frame[32..38].try_into().expect("len >= 42"),
+        tpa: frame[38..42].try_into().expect("len >= 42"),
+        frame_len: frame.len(),
+    })
 }
 
 #[cfg(test)]
