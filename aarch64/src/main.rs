@@ -599,12 +599,13 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
 
     let frame_ptr = proc.frame;
     // Publish current + Running + CURKSTACK (the trap_return tail
-    // loads SP_EL1 from CURKSTACK on the EL0t-bound return below), then
-    // unmask IRQs at the last moment — the whole exec orchestration above
-    // is a non-preemptible boot critical section (nothing in it needs
-    // interrupts; the tick's domain is EL0 userland, entered next).
+    // loads SP_EL1 from CURKSTACK on the EL0t-bound return below).  IRQs
+    // stay MASKED at EL1 through the tail: the seed frame's psr=0 unmasks
+    // them at EL0 via the eret's SPSR restore, so the pending tick's first
+    // delivery is a clean EL0-origin IRQ on the proc's kstack — never an
+    // EL1h IRQ mid-tail, whose preempt() would see "Running" and stash a
+    // transient boot-stack frame over proc.frame.
     proc::activate_first(&mut proc);
-    trap::unmask_irq();
     // SAFETY: frame_ptr names the seeded forkret frame on the proc's
     // kstack (exec_into's construction); CURKSTACK/CURFRAME were just
     // published by activate_first — the single first EL0 entry.
