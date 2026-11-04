@@ -1,4 +1,4 @@
-// Context switch (04-07 rewrite)
+// Context switch
 //
 //   pub unsafe extern "C" fn swtch(from: &mut Context, to: &Context)
 //
@@ -7,14 +7,14 @@
 // to.x30.  Symmetric: a Context saved here resumes correctly as a later
 // `to`.
 //
-// The pre-04-07 sequence below was never called on aarch64 and could not
+// The retired sequence below was never called on aarch64 and could not
 // round-trip: it pushed x19..x30 in the SAME order it popped them (a
 // descending stack then maps every register to a different slot on
 // resume), stored a mid-sequence sp (not the Context base) into *from,
 // discarded the saved sp on resume, and sourced SPSR_EL1/ELR_EL1 from
 // stack garbage via a trailing eret.  Only kernel-context (blocked
 // mid-syscall) switches ride this path — EL0 entry/exit NEVER does
-// (trap_return's tail is the only EL0 entry, the D-12 era rule).
+// (trap_return's tail is the only EL0 entry).
 
 .section .text
 

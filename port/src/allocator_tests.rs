@@ -1,14 +1,14 @@
-//! The allocator's test module (261103-p64): homed at the CRATE root so
+//! The allocator's test module: homed at the CRATE root so
 //! `port::allocator` can carry #[forbid(unsafe_code)] — the pin tests'
-//! arena constructions keep their unsafe blocks.  The two 05-series pin
+//! arena constructions keep their unsafe blocks.  The pin
 //! tests' BODIES are byte-verbatim from the pre-redesign module (the
-//! zero-behavior-change proof); the wave-3 additions pin the index/arena
+//! zero-behavior-change proof); the later additions pin the index/arena
 //! model's tripwire / exhaustion / realloc-stress behavior.
 
 use crate::allocator::{Block, BumpAlloc, QuickFit};
 use core::alloc::Layout;
 
-/// 05-07 regression: the > MAX_QUICK_SIZE, non-power-of-two TAIL path
+/// Regression: the > MAX_QUICK_SIZE, non-power-of-two TAIL path
 /// (devmnt's ~250 KB exec staging buffer tripped it).  Pre-fix the
 /// BumpAlloc arg order ran `align_offset` on the SIZE ("align is not
 /// a power-of-two" panic), and free_misc's fresh-header arm panicked
@@ -41,14 +41,14 @@ fn tail_alloc_big_nonpow2_free_and_realloc() {
     qf.free(b, big);
 }
 
-/// 05-REVIEW-FIX regression (the WR-04 gate wedge's root cause):
+/// Regression (the gate wedge's root cause):
 /// unlink's mid-list removal returned the removed node as the list
 /// head — the misc list then held a still-allocated header (a later
 /// insert cycled it, and the next first-fit walk spun forever — the
 /// restart-exec wedge at the ~130 KB staging growth), and a no-match
 /// walk wiped the whole list (a permanent leak).  Pin both arms by
 /// POINTER identity: blocks must be recycled from the free list,
-/// never tail-bumped past a wipe.  (261103-p64: pointer identity is
+/// never tail-bumped past a wipe.  (Pointer identity is
 /// preserved in the index model — the materialized pointer is the
 /// arena base + the recycled block's offset.)
 #[test]
@@ -116,8 +116,8 @@ fn misc_midlist_removal_preserves_the_list() {
     assert_eq!(t, r, "the skipped middle node survived the removal");
 }
 
-/// 261103-p64 (T-p64-02's tripwire, the safe-model equivalent): a cycled
-/// index chain must panic LOUDLY (never the WR-04 infinite-spin wedge).
+/// The tripwire (the safe-model equivalent): a cycled
+/// index chain must panic LOUDLY (never the infinite-spin wedge).
 /// The cfg(test) hook splices the cycle with pure index writes; a no-fit
 /// first-fit request walks the cycle into the tripwire.
 #[test]
@@ -144,7 +144,7 @@ fn free_list_cycle_tripwire_panics_loudly() {
     let _ = qf.malloc(huge);
 }
 
-/// 261103-p64 (T-p64-03): header-table exhaustion fails LOUDLY (the named
+/// Header-table exhaustion fails LOUDLY (the named
 /// panic), never wraps, never corrupts.  More frees than slots (main +
 /// reserve) trip it — each free of a fresh tail block consumes a slot.
 #[test]
@@ -170,8 +170,8 @@ fn header_table_exhaustion_panics_loudly() {
     }
 }
 
-/// 261103-p64 (the side-table model's stress proof): the Vec-doubling
-/// growth pattern from the 05-07 staging-buffer regression — repeated
+/// The side-table model's stress proof: the Vec-doubling
+/// growth pattern from the staging-buffer regression — repeated
 /// grow-by-realloc with content preservation (the copy-then-free order)
 /// plus interleaved free/realloc churn across the quick/misc boundary.
 #[test]
@@ -210,7 +210,7 @@ fn realloc_growth_stress_preserves_contents() {
     }
     qf.free(p, layout);
 
-    // Interleaved churn across the quick/misc boundary (the 05-07
+    // Interleaved churn across the quick/misc boundary (the
     // staging-buffer sizes): alloc bigger, free smaller, repeat.
     let small = Layout::from_size_align(100_000, 1).unwrap();
     let big = Layout::from_size_align(300_000, 1).unwrap();

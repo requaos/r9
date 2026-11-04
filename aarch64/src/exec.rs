@@ -1,15 +1,15 @@
-//! Plan 9 a.out loader + exec image management (R9-03, D-09/D-11): parse
+//! Plan 9 a.out loader + exec image management: parse
 //! and validate the big-endian header, record the segment map, map the
-//! data+bss pages EAGERLY (05-04 — see install_image), and seed exactly
+//! data+bss pages EAGERLY (see install_image), and seed exactly
 //! TWO eager stack-side pages (the top-of-stack seed page and the zeroed
 //! Tos page) + the forkret-shaped TrapFrame on the proc's kernel stack.
-//! Text/stack/tos fault in on demand (D-09): text pages arrive via
+//! Text/stack/tos fault in on demand: text pages arrive via
 //! fault.rs from the paqfs byte source; stack/tos faults map zero pages.
 //!
-//! 04-05 wired the first-exec runtime path (main9's exec_bootstrap →
-//! exec_into).  04-06 adds exec_replace — the EXEC syscall's
-//! replace-the-running-image path (parse first, free second, seed third,
-//! then rewrite the live trap frame in place; T-04-13).
+//! exec_into is the first-exec path (main9's exec_bootstrap);
+//! exec_replace is the EXEC syscall's replace-the-running-image path
+//! (parse first, free second, seed third, then rewrite the live trap
+//! frame in place).
 
 use core::ptr;
 
@@ -25,7 +25,7 @@ use crate::proc::{ByteBacking, ByteSource, MappingRecord, Proc, ProcState, SegKi
 use crate::trap::TrapFrame;
 use crate::vm::{self, Entry, PageSize, PhysPageAllocator, RootPageTableType, VmTraitImpl};
 
-// --- r9 user address-space policy (D-11: r9 owns stack-top placement,
+// --- r9 user address-space policy (r9 owns stack-top placement,
 // segment/growth policy, and the initial stack frame; text/data VAs are
 // fixed by 7l in the a.out header) ---
 /// Top of the user stack.
@@ -36,7 +36,7 @@ pub const USTKSIZE: usize = 16 * 1024 * 1024;
 pub const USTOP: usize = USTACKTOP - USTKSIZE;
 
 // --- a.out format (Harvey sys/include/a.out.h; verified against
-// build/aarch64/hello.7.out's bytes in 04-RESEARCH.md) ---
+// a real 7l binary's bytes) ---
 /// R_MAGIC arm64: _MAGIC(HDR_MAGIC, 28).
 const R_MAGIC_AARCH64: u32 = 0x8C47;
 /// HDR_MAGIC header size: 8×BE u32 + the BE u64 entry at bytes 32..39;
@@ -78,7 +78,7 @@ fn be64(b: &[u8], off: usize) -> Option<u64> {
     Some(u64::from_be_bytes(b.get(off..off + 8)?.try_into().ok()?))
 }
 
-/// Parse and validate an a.out header (T-04-08: the donor sysexec check set,
+/// Parse and validate an a.out header (the donor sysexec check set,
 /// ported — every violation is a loud Err before any mapping exists).
 pub fn parse_aout(bytes: &[u8]) -> Result<AoutHeader> {
     if bytes.len() < HDR_SIZE {
@@ -105,7 +105,7 @@ pub fn parse_aout(bytes: &[u8]) -> Result<AoutHeader> {
         return Err("exec: entry point outside text segment");
     }
     // Data VA: the 64K-aligned VA above text (donor align=0xffff for
-    // R_MAGIC).  File offset is 40+textsize — NOT page-aligned (Pitfall 5).
+    // R_MAGIC).  File offset is 40+textsize — NOT page-aligned.
     let data_va = (text_va + text as usize).next_multiple_of(0x10000);
     if data_va as u64 + data + bss >= USTOP as u64 {
         return Err("exec: text+data+bss exceeds USTOP");
@@ -114,10 +114,10 @@ pub fn parse_aout(bytes: &[u8]) -> Result<AoutHeader> {
 }
 
 /// Read + parse + validate the 40-byte a.out header through the byte
-/// backing's window — byte-granular, Pitfall-5 discipline (no
-/// page-alignment assumptions on file offsets).  T-04-13: this runs BEFORE
+/// backing's window — byte-granular (no
+/// page-alignment assumptions on file offsets).  This runs BEFORE
 /// any mapping or freeing in both exec paths — an invalid image is a loud
-/// Err with everything intact.  05-07: the backing abstracts the byte
+/// Err with everything intact.  The backing abstracts the byte
 /// source (devroot's paqfs image window, or a devmnt binary's staged
 /// whole-file buffer).
 fn read_aout(backing: &ByteBacking) -> Result<AoutHeader> {
@@ -127,7 +127,7 @@ fn read_aout(backing: &ByteBacking) -> Result<AoutHeader> {
         return Err("exec: short read of a.out header");
     }
     let h = parse_aout(&hdr)?;
-    // WR-06: the header's declared segment sizes must FIT the backing's
+    // The header's declared segment sizes must FIT the backing's
     // length — a truncated binary otherwise execs "successfully": the
     // pager's read_at clamps at EOF and page_in_from_image zero-fills
     // first, so the missing tail executes as zeros and the process dies
@@ -167,40 +167,39 @@ fn install_image(
         tos: VirtRange::with_end(USTACKTOP - 2 * PAGE_SIZE_4K, USTACKTOP - PAGE_SIZE_4K),
     });
     proc.set_name(name);
-    // 05-09 (D-09): record the argv for devproc's /proc/N/args (the
+    // Record the argv for devproc's /proc/N/args (the
     // donor's p->args) — install_image is shared by exec_into (the
     // bootstrap path) and exec_replace (the EXEC syscall), so EVERY exec
     // records; the record replaces the prior image's.
     proc.record_argv(args);
 
-    // 05-04 (the 05-04 tracer surfaced phase-04 deferred-items #3): map the
+    // Map the
     // data+bss pages EAGERLY.  7c places string literals and statics in
     // data, and a real binary (boot(8)) passes them to syscalls without any
-    // prior EL0 touch — Phase-4's measured binaries never showed this
+    // prior EL0 touch — early measured binaries never showed this
     // because libc fmt read their buffers to format them ("always resident
     // by call time").  validate_user_range is a membership check and
-    // T-05-06 forbids nested demand-paging from syscall context, so an
-    // unread literal page aborted at EL1h (the kernel panic the 05-04
-    // tracer's zero-panic gate forbids).  Eager data+bss residency is the
+    // nested demand-paging from syscall context is forbidden, so an
+    // unread literal page aborted at EL1h.  Eager data+bss residency is the
     // resolution that keeps BOTH rules: no nested paging anywhere, and
-    // D-09's pinned wording ("faulting in user text and growing the user
-    // stack") is untouched — text, stack and Tos stay demand-paged.
+    // the demand-paged set is unchanged — text, stack and Tos stay
+    // demand-paged.
     map_data_bss_eager(proc, &source, aout)?;
     proc.text_source = Some(source);
 
-    // SEED: the two eager stack-side pages (D-09/D-11) — the top-of-stack
+    // SEED: the two eager stack-side pages — the top-of-stack
     // seed page and the zeroed Tos page just below it.
     seed_user_pages(proc, args)
 }
 
-/// Eager data+bss mapping (05-04): zero-fill each page through its KZERO+PA
+/// Eager data+bss mapping: zero-fill each page through its KZERO+PA
 /// kernel alias (the proc's table is INACTIVE at exec — the alias is the
-/// correct edit path, 04-02's convention, mirroring map_one_user_page),
-/// then clamp-write the data segment's file content (byte-exact end — the
-/// 04-06 Rule-1 clamp: the file's trailing syms bytes must never bleed
+/// correct edit path, mirroring map_one_user_page),
+/// then clamp-write the data segment's file content (byte-exact end —
+/// the file's trailing syms bytes must never bleed
 /// into the bss-sharing tail).  The pages are logged (SegKind::Data/Bss)
 /// so rfork's copy and exit's free cover them like any other mapping.
-/// 05-07: reads ride the proc's byte source (the backing abstraction —
+/// Reads ride the proc's byte source (the backing abstraction —
 /// paqfs image window or the staged devmnt buffer).
 fn map_data_bss_eager(proc: &mut Proc, source: &ByteSource, aout: &AoutHeader) -> Result<()> {
     let data_end = aout.data_va + aout.data as usize;
@@ -232,13 +231,13 @@ fn map_data_bss_eager(proc: &mut Proc, source: &ByteSource, aout: &AoutHeader) -
     Ok(())
 }
 
-/// First exec (the boot_init path; 04-05 wires the call): parse the binary's
+/// First exec (the boot_init path): parse the binary's
 /// header through the paqfs window, record segments + the byte source, seed
 /// the two eager pages + the forkret frame, and leave the proc Ready.
 ///
 /// `image` is the mapped paqfs initrd; `bin` is the binary's PaqDir inside
-/// it.  D-09/D-11: text, stack and Tos pages fault in on demand; data+bss
-/// are mapped eagerly (05-04 — the cold-syscall-argument fix).
+/// it.  Text, stack and Tos pages fault in on demand; data+bss
+/// are mapped eagerly (the cold-syscall-argument fix).
 pub fn exec_into(
     proc: &mut Proc,
     image: &'static [u8],
@@ -253,7 +252,7 @@ pub fn exec_into(
 
     // The forkret-shaped frame at kstack_top - 288 (the published TrapFrame
     // stride): R0 = tos, SP = seeded user stack, PC = entry, PSR = 0 (EL0t),
-    // LR = 0 — 04-05's boot path erets into EL0 from exactly this frame, and
+    // LR = 0 — the boot path erets into EL0 from exactly this frame, and
     // the first instruction fetch faults into fault.rs's text page-in.
     let frame = seed_exec_frame(proc.kstack_top, aout.entry, user_sp as u64, tos_va as u64);
     proc.frame = frame;
@@ -261,12 +260,12 @@ pub fn exec_into(
     Ok(())
 }
 
-/// EXEC behind a running process (04-06's syscall path; Plan 9 sysexec
+/// EXEC behind a running process (Plan 9 sysexec
 /// semantics): REPLACE the caller's image with the binary carried by
-/// `backing` (05-07: the byte-source abstraction — devroot's paqfs image
+/// `backing` (the byte-source abstraction — devroot's paqfs image
 /// entry, or a devmnt binary's staged whole-file buffer).
 ///
-/// Ordering is the T-04-13 mitigation, verbatim from the plan: PARSE the new
+/// Ordering: PARSE the new
 /// image's a.out first (plus every other fallible pre-check), FREE the old
 /// mappings second, SEED third — so a validation failure returns -1/errstr
 /// with the old image intact, and the live-frame rewrite happens only after
@@ -277,7 +276,7 @@ pub fn exec_into(
 /// The proc keeps its pid, kstack, root table, and fd table (fds survive
 /// exec, Plan 9 convention).
 ///
-/// WR-07: seed_user_pages's pagealloc/map_to calls remain fallible AFTER
+/// seed_user_pages's pagealloc/map_to calls remain fallible AFTER
 /// the free (the earlier "seed can no longer fail" invariant was false).
 /// A post-free failure cannot return -1 — the trap frame's pc/sp name
 /// freed text pages — so it kills the process loudly via the exit tail
@@ -296,7 +295,7 @@ pub fn exec_replace(
     // PARSE first.
     let aout = read_aout(&backing)?;
     // Every remaining VALIDATION check runs BEFORE the free: the seed-fit
-    // arithmetic.  (WR-07: seed_user_pages's pagealloc/map_to allocations
+    // arithmetic.  (seed_user_pages's pagealloc/map_to allocations
     // remain fallible AFTER the free — the "can no longer fail" invariant
     // this comment previously claimed was false — so a post-free failure
     // kills via the exit tail below rather than returning -1 to a trap
@@ -310,7 +309,7 @@ pub fn exec_replace(
     proc.free_user_mappings();
     // Donor sysexec clears the note machinery (9front sysproc.c:
     // freenotes + notify=nil + noteureg=nil): a stale handler VA would
-    // redirect note delivery into the NEW image (T-04-17), and queued
+    // redirect note delivery into the NEW image, and queued
     // notes named the old image's context.
     proc.notify_handler = None;
     proc.note_queue.clear();
@@ -318,9 +317,9 @@ pub fn exec_replace(
     proc.last_note_len = 0;
 
     // SEED third: fresh seed-stack + Tos pages, new segment records, new
-    // byte source.  A failure HERE is post-free (WR-07): returning
+    // byte source.  A failure HERE is post-free: returning
     // -1 would eret into a trap frame whose pc/sp name freed text pages,
-    // so the process dies loudly via the exit tail (the WR-06 fault-kill
+    // so the process dies loudly via the exit tail (the fault-kill
     // shape — the parent reaps the wait record like any other death).
     let source = ByteSource { backing, data_file_base: HDR_SIZE as u64 + aout.text };
     let (user_sp, tos_va) = match install_image(proc, source, name, args, &aout) {
@@ -337,10 +336,10 @@ pub fn exec_replace(
     Ok(tos_va as u64)
 }
 
-/// The pre-free seed-fit check (T-04-13): mirrors seed_user_pages's
+/// The pre-free seed-fit check: mirrors seed_user_pages's
 /// arithmetic so exec_replace never fails for ARG-SHAPE reasons after the
 /// old image is freed (post-free ALLOCATION failures kill via the exit
-/// tail — WR-07).
+/// tail).
 /// argc <= MAX_ARGS and the strings + pointer array + alignment slack must
 /// fit the one seed page.
 fn check_seed_fit(args: &[&[u8]]) -> Result<()> {
@@ -358,7 +357,7 @@ fn check_seed_fit(args: &[&[u8]]) -> Result<()> {
 /// Map the two eager exec pages into the proc's (not-yet-active) root table
 /// and write the initial stack frame ([argc][argv0]…[nil] + arg strings) via
 /// the seed page's KZERO-offset physical alias — direct physical writes are
-/// the correct edit path for an inactive table (04-PATTERNS.md vm.rs note).
+/// the correct edit path for an inactive table.
 /// Returns (user_sp, tos_va).
 fn seed_user_pages(proc: &mut Proc, args: &[&[u8]]) -> Result<(usize, usize)> {
     if args.len() > MAX_ARGS {
@@ -419,7 +418,7 @@ fn seed_user_pages(proc: &mut Proc, args: &[&[u8]]) -> Result<(usize, usize)> {
 
 /// Allocate one phys page, map it into the proc's (inactive) root table at
 /// `va` — map_to's temp-recursive dance edits inactive tables — and map the
-/// same page at KZERO+PA in the kernel table for content writes (04-02's
+/// same page at KZERO+PA in the kernel table for content writes (the
 /// KZERO+PA convention).  Zero the page and append to the mapping log.
 fn map_one_user_page(
     proc: &mut Proc,
@@ -474,8 +473,8 @@ fn map_one_user_page(
 }
 
 /// Seed the forkret-shaped TrapFrame at the top of the proc's kernel stack
-/// (9front execregs + touser shape; 04-RESEARCH.md "Code Examples").  The
-/// frame IS Harvey's Ureg (04-03's published layout — the const asserts and
+/// (9front execregs + touser shape).  The
+/// frame IS Harvey's Ureg (the published layout — the const asserts and
 /// xtask ureg-check pin it); kstack_top - 288 keeps it 16-aligned.
 pub fn seed_exec_frame(
     kstack_top: usize,

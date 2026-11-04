@@ -1,41 +1,23 @@
-//! SVC dispatch + the measured syscall handler set (04-06 — R9-02's
-//! dispatch half; D-14 measure-first).
+//! SVC dispatch + the syscall handler set.  The wire ABI is frozen
+//! (Harvey `aarch64/ABI.md`): the syscall number arrives in R0
+//! (`frame.x0`), arguments sit at user `SP+8` in 8-byte slots (`SP+0` is
+//! the reserved LR slot the stub's `MOV R0, 0(FP)` materializes), the
+//! result is written back to R0 before the shared trap-return tail erets
+//! into EL0.
 //!
-//! The wire ABI is frozen (Harvey `aarch64/ABI.md`): the syscall number
-//! arrives in R0 (`frame.x0`), arguments sit at user `SP+8` in 8-byte
-//! slots (`SP+0` is the reserved LR slot the stub's `MOV R0, 0(FP)`
-//! materializes), the result is written back to R0 before the shared
-//! trap-return tail erets into EL0.
-//!
-//! The implemented set is EXACTLY the 04-01 donor trace
-//! (04-01-d14-trace.txt: 51 pwrite, 14 open, 50 pread, 4 close, 8 exits)
-//! plus D-14's named SC#4 core members EXEC(7), RFORK(19), AWAIT(47) and
-//! the 04-08 notes pair NOTIFY(28)/NOTED(29) — zero guessed syscalls.  The
-//! trace lists NO brk_(24)/segbrk(12) (the D-14 fmt/pool watch item settled
-//! by evidence), so they stay None.  Every other number prints
-//! `syscall N unimplemented` and returns -1 — loud, never wedged (D-14).
-//!
-//! T-04-11: EVERY user-VA argument (the Sargs block itself, buffers, path
-//! strings, argv arrays) is validated against the calling proc's segment
-//! map via `Proc::validate_user_range` BEFORE the kernel reads or writes
-//! it; invalid → proc.errstr + -1, never a kernel dereference of an
-//! unchecked pointer.  (The segment-level caveat — an in-segment but
-//! not-yet-faulted VA would abort at EL1h loudly — is documented on
-//! validate_user_range; the measured binaries' buffers are always resident
-//! by call time.)
-//!
-//! Locking (04-RESEARCH.md Pitfall 3): the devcons write path takes the
-//! Console MCS lock from syscall context.  That is safe because the timer
-//! tick's println is cfg(not(dev_exec))-gated — no IRQ-context code ever
-//! contends for the lock once syscalls can print.  Syscall/trap context
-//! runs IRQ-masked, so the PL011 RX ring's IRQ writer cannot interleave
-//! with the console-read drainer either.  05-08 extends the rule: the
-//! devcons INPUT queue lock (the read path's cooked/raw state) is
-//! syscall/trap context ONLY — IRQ context never takes it; the PL011 RX
-//! IRQ handler only pushes its lock-free ring, and the ring→queue drain
-//! runs in the reader's own syscall context (a blocked reader is readied
-//! by the tick, timer.rs → proc::cons_input_wake — the reschedule()
-//! PROC_TABLE-from-trap-context precedent).
+//! Invariants: the implemented set is exactly the measured boot-chain
+//! set — every other number is loud-unimplemented, never wedged.  EVERY
+//! user-VA argument (the Sargs block itself, buffers, path strings, argv
+//! arrays) validates against the calling proc's segment map via
+//! `Proc::validate_user_range` BEFORE the kernel reads or writes it;
+//! invalid → proc.errstr + -1, never a kernel dereference of an
+//! unchecked pointer.  Locking: the devcons write path takes the Console
+//! MCS lock from syscall context — safe because IRQ-context code never
+//! contends (the timer tick's println is cfg(not(dev_exec))-gated) and
+//! syscall/trap context runs IRQ-masked; the devcons INPUT queue lock is
+//! syscall/trap context ONLY (the PL011 RX IRQ handler pushes its
+//! lock-free ring; the ring→queue drain runs in the reader's own syscall
+//! context via timer.rs → proc::cons_input_wake).
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -81,16 +63,16 @@ const AWAIT: u64 = 47;
 const PREAD: u64 = 50;
 const PWRITE: u64 = 51;
 
-// rfork flags (Harvey sys/include/libc.h — frozen values; 04-07).
-// pub(crate) since 05-04: proc.rs's rfork_clone reads RFNAMEG/RFCNAMEG
-// (the D-03 namespace group semantics) — one mirror, one provenance.
-// RFENVG/RFCENVG joined the pub(crate) set in 05-05 (D-07 env groups);
-// RFFDG/RFCFDG in 05-06 (the fd-group arms).
+// rfork flags (Harvey sys/include/libc.h — frozen values).
+// pub(crate): proc.rs's rfork_clone reads RFNAMEG/RFCNAMEG
+// (the namespace group semantics) — one mirror, one provenance.
+// RFENVG/RFCENVG are likewise pub(crate) (the env groups);
+// RFFDG/RFCFDG (the fd-group arms).
 pub(crate) const RFNAMEG: u64 = 1 << 0;
 pub(crate) const RFENVG: u64 = 1 << 1;
 pub(crate) const RFFDG: u64 = 1 << 2;
-/// pub(crate) since 05-08: proc.rs's rfork_clone/rfork_noteg_split read it
-/// (D-06's note groups — the console DEL target scoping).
+/// pub(crate): proc.rs's rfork_clone/rfork_noteg_split read it
+/// (the note groups — the console DEL target scoping).
 pub(crate) const RFNOTEG: u64 = 1 << 3;
 const RFPROC: u64 = 1 << 4;
 const RFMEM: u64 = 1 << 5;
@@ -100,43 +82,26 @@ pub(crate) const RFCENVG: u64 = 1 << 11;
 pub(crate) const RFCFDG: u64 = 1 << 12;
 const RFREND: u64 = 1 << 13;
 
-/// Handler shape (04-RESEARCH.md Pattern 2 / Code Examples): the live trap
+/// Handler shape: the live trap
 /// frame (arg source + result sink) and the calling proc.
 type Handler = fn(&mut TrapFrame, &mut Proc) -> u64;
 
 /// The dispatch table — Harvey sys.h 0–54 verbatim as Option<fn> entries.
-/// None → loud unimplemented at dispatch time (D-14).  The implemented set
-/// is the 04-01 measured trace {pwrite(51), open(14), pread(50), close(4),
-/// exits(8)} plus D-14's named SC#4 core members EXEC(7), the 04-07 process
-/// pair RFORK(19)/AWAIT(47), and 04-08's notes pair NOTIFY(28)/NOTED(29),
-/// grown by 05-04 with the 05-03 real-chain trace's namespace members
-/// BIND(2), CHDIR(3), UNMOUNT(35) (unmount ×1 — boot's settime /tmp
-/// handling) and its Task-3 additions: the measured stat family STAT(42)/
-/// FSTAT(43) and BRK_(24) (×28 — malloc pool growth; boot's dirstat
-/// mallocs make it gate-load-bearing per the plan dispatch note); and by
-/// 05-06 with the connectembed family DUP(5)/PIPE(21)/CREATE(22)/
-/// FD2PATH(23) (boot's pipe+fork+dup+exec of the paqfs server +
-/// srvcreate) and SEEK(39) (measured ×72 — paqfs's bio Bseek; surfaced
-/// by the 05-06 gate as the trace-settled gap the loud wall named); and by
-/// 05-07 with D-03's mount half FVERSION(40)/MOUNT(46) — the devmnt
-/// session negotiation + the mount-table insertion (FAUTH(10) stays None:
-/// nsinit's fall-through to an unauthenticated mount is the designed D-02
-/// path); and by 05-08 with the trace-measured timer pair ALARM(6)
-/// (init's alarm(0) disarm) + SLEEP(17) (×42 in the 05-03 trace — init's
-/// for(;;) restart loop sleeps 1s between rc generations) riding the
-/// generic timer (timer.rs ticks; expiry via the tick's tick_timeouts).
-/// The 04-01 trace carries no
-/// brk_/segbrk(12) on the hello path; segbrk stays None.
-///
-/// 05-09 CLOSURE (the trace-settled leftovers): the dispatch table IS the
-/// 05-03 measured set (∪ the D-14 named core) — verified against
-/// 05-03-trace.txt: every measured number has a handler; FAUTH(10) stays
-/// None (D-02's designed fall-through — nsinit/newns mount
-/// unauthenticated on its -1); REMOVE(25), WSTAT(44), FWSTAT(45) and
-/// OSEEK(16) were NEVER measured by the 05-03 artifact (execinit's chmod
-/// is unchecked on the donor too — the chain does not need it), so they
-/// stay loud-None.  The kernel's syscall attack surface is exactly the
-/// measured set (T-05-18).
+/// None → loud unimplemented at dispatch time.  The implemented set is
+/// the measured boot-chain donor trace {pwrite, open, pread, close,
+/// exits} plus the named core members EXEC(7), RFORK(19), AWAIT(47),
+/// NOTIFY(28)/NOTED(29) and the trace-measured namespace members
+/// BIND(2), CHDIR(3), UNMOUNT(35), STAT(42)/FSTAT(43), BRK_(24), the
+/// connectembed family DUP(5)/PIPE(21)/CREATE(22)/FD2PATH(23), SEEK(39),
+/// the mount half FVERSION(40)/MOUNT(46), and the timer pair ALARM(6) +
+/// SLEEP(17) riding the generic timer (timer.rs ticks; expiry via the
+/// tick's tick_timeouts).  The trace carries no brk_/segbrk(12) on the
+/// hello path; segbrk stays None.  FAUTH(10) stays None (the designed
+/// no-auth fall-through — nsinit/newns mount unauthenticated on its -1);
+/// REMOVE(25), WSTAT(44), FWSTAT(45) and OSEEK(16) were never measured
+/// (execinit's chmod is unchecked on the donor too — the chain does not
+/// need it), so they stay loud-None.  The kernel's syscall attack
+/// surface is exactly the measured set.
 static DISPATCH: [Option<Handler>; 55] = {
     let mut t: [Option<Handler>; 55] = [None; 55];
     t[BIND as usize] = Some(sys_bind);
@@ -170,7 +135,7 @@ static DISPATCH: [Option<Handler>; 55] = {
 
 /// The EC 0x15 entry (trap.rs routes here): number from frame.x0, dispatch,
 /// result to frame.x0 (the restore tail's `ldp x0` pop propagates it to
-/// user R0 — the mechanism exists since Phase 3).
+/// user R0).
 pub fn dispatch(frame: &mut TrapFrame) {
     let Some(mut proc) = proc::current() else {
         // An SVC with no current process is a kernel-orchestration bug
@@ -199,11 +164,11 @@ pub fn dispatch(frame: &mut TrapFrame) {
     frame.x0 = result;
 }
 
-/// Read the argument slots from user memory at SP+8 (the D-07 published
+/// Read the argument slots from user memory at SP+8 (the frozen ABI
 /// formula: `(Sargs*)(frame.sp + 8)`; SP+0 is the reserved LR slot).  The
-/// arg block is user memory too, so it is validated first (T-04-11).
+/// arg block is user memory too, so it is validated first.
 ///
-/// Width discipline (04-07, donor-faithful): every slot is 8 bytes, but
+/// Width discipline (donor-faithful): every slot is 8 bytes, but
 /// int/uint-width arguments are stored by 7c with a 32-bit store that
 /// leaves the slot's upper half as stack garbage — the donor's
 /// `va_arg(list, int/uint)` reads only the slot's low half
@@ -213,19 +178,18 @@ pub fn dispatch(frame: &mut TrapFrame) {
 /// n, rfork's flag, the fd args, open's mode).  Pointer/vlong args
 /// occupy the full slot.  **`long` is 32-bit in Plan 9 C on every arch
 /// (7c SZ_LONG=4; only `vlong` is 64-bit) — pread/pwrite's `long n` is
-/// a 32-bit arg on the wire and must be masked too** (05-01: the
-/// stacksmoke deep recursion left pointer garbage in the reused stack
-/// pages, so an unmasked n read as a huge value and the write failed
-/// silently — shallow stacks never saw it because fresh demand-paged
-/// pages are zeroed).  (Arg0 is always clean: the stub materializes it
-/// from R0, whose upper half the caller's 32-bit op already zeroed.)
+/// a 32-bit arg on the wire and must be masked too** (a deep-recursion
+/// smoke left pointer garbage in the reused stack pages, so an unmasked
+/// n read as a huge value and the write failed silently — shallow stacks
+/// never saw it because fresh demand-paged pages are zeroed).  (Arg0 is
+/// always clean: the stub materializes it from R0, whose upper half the
+/// caller's 32-bit op already zeroed.)
 fn sargs(frame: &mut TrapFrame, proc: &mut Proc, arity: usize) -> Option<[u64; 5]> {
     let base = frame.sp + 8;
-    // 261103-p64 (zero-behavior-change): the arg block rides the usermem
-    // validated-only variant — it lives on the live user stack, which the
-    // stub wrote through to make the call (resident by construction; the
-    // pre-usermem code validated without forcing residency, and that exact
-    // shape is preserved — UNSAFE-AUDIT.md flags the class).
+    // The arg block rides the usermem validated-only variant — it lives
+    // on the live user stack, which the stub wrote through to make the
+    // call (resident by construction; validated without forcing
+    // residency).
     let block = UserSlice::validated_only(proc, base, 8 * arity as u64).ok()?;
     let mut out = [0u64; 5];
     for (i, slot) in out.iter_mut().enumerate().take(arity) {
@@ -235,9 +199,9 @@ fn sargs(frame: &mut TrapFrame, proc: &mut Proc, arity: usize) -> Option<[u64; 5
 }
 
 /// Copy a NUL-terminated user string into a kernel Vec, validating each
-/// byte's page membership BEFORE reading it (T-04-11) and bounding the
+/// byte's page membership BEFORE reading it and bounding the
 /// length at `max` (ERRMAX-ish — Plan 9's string ceiling).  The returned
-/// bytes EXCLUDE the terminator.  261103-p64: the loop is homed in
+/// bytes EXCLUDE the terminator.  The loop is homed in
 /// usermem::UserString; this wrapper keeps the call sites' shape.
 fn copy_user_str(proc: &Proc, va: u64, max: usize) -> Result<Vec<u8>, &'static str> {
     UserString::copy_from(proc, va, max)
@@ -250,15 +214,15 @@ fn err(proc: &mut Proc, msg: &'static str) -> u64 {
 }
 
 /// PWRITE(51): fd, buf, n, offset.  Offset -1 (u64::MAX) is the streaming
-/// channel offset (Harvey libc write() = pwrite(fd, buf, n, -1LL) — Pitfall
-/// 7); the console ignores offsets (writes append), devroot is read-only,
-/// devenv honors them (05-05: donor envwrite's grow-at-offset + streaming
-/// advance), devpipe ignores them (05-06: donor qwrite — pipes are
+/// channel offset (Harvey libc write() = pwrite(fd, buf, n, -1LL));
+/// the console ignores offsets (writes append), devroot is read-only,
+/// devenv honors them (donor envwrite's grow-at-offset + streaming
+/// advance), devpipe ignores them (donor qwrite — pipes are
 /// streaming, there are no offsets).  n is a `long` — 32-bit in Plan 9 C
 /// (SZ_LONG=4), so the wire slot's upper half is 7c garbage and must be
 /// masked (the width discipline above).
 ///
-/// 05-06: the fd is CHECKED OUT (fd_take) for the op and put back after
+/// The fd is CHECKED OUT (fd_take) for the op and put back after
 /// (fd_store) — a blocking pipe write never holds the fd-group lock
 /// (fdgrp.rs's checked-out-chan pattern).
 fn sys_pwrite(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
@@ -266,8 +230,8 @@ fn sys_pwrite(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         return err(proc, "pwrite: bad argument block");
     };
     let (fd, buf, n, off) = (args[0] & 0xffff_ffff, args[1], args[2] & 0xffff_ffff, args[3]); // fd is an int
-    // 261103-p64 (T-p64-01): validation + cold-buffer residency are FUSED
-    // in the usermem constructor — the 05-06 discipline can no longer be
+    // Validation + cold-buffer residency are FUSED
+    // in the usermem constructor — the discipline can no longer be
     // forgotten at a call site.
     let src = match UserSlice::new(proc, buf, n) {
         Ok(s) => s,
@@ -278,39 +242,39 @@ fn sys_pwrite(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     };
     let result = match chan.dev {
         DEV_CONS => {
-            // 05-04 Task 3: the device routes by qid — cons writes
-            // byte-exact, null discards, hostowner stores (D-02), user is
+            // The device routes by qid — cons writes
+            // byte-exact, null discards, hostowner stores, user is
             // read-only (the whole per-file contract lives in the device).
             port::devcons::write(&mut chan, src.as_slice())
         }
         DEV_ROOT => Err("devroot: read-only filesystem"),
         DEV_PROC => {
-            // devproc-lite (04-08): the note append is the whole write —
+            // devproc-lite: the note append is the whole write —
             // the chan's qid names the target pid; offsets don't apply.
             port::devproc::write(&mut chan, src.as_slice())
         }
         DEV_ENV => {
-            // devenv (05-05, D-07): the write lands in the OPERATING
+            // devenv: the write lands in the OPERATING
             // proc's env group (the device resolves it via the
             // registered hook — donor envgrp(c)); offsets per envwrite
             // (streaming offset honored, grow-at-offset).
             port::devenv::write(&mut chan, src.as_slice(), off)
         }
         DEV_PIPE => {
-            // devpipe (05-06): end i writes q[1-i]; a full queue is a
+            // devpipe: end i writes q[1-i]; a full queue is a
             // named error (never partial, never silent); blocked readers
             // wake after the bytes land.
             port::devpipe::write(&mut chan, src.as_slice(), off)
         }
         DEV_DUP => Err("devdup: not writable (open #d/N to reach the fd)"),
         DEV_SRV => {
-            // devsrv (05-06): writing a decimal fd number to a service
+            // devsrv: writing a decimal fd number to a service
             // file registers it (boot's srvcreate — FATAL on failure, so
             // this must actually work).
             port::devsrv::write(&mut chan, src.as_slice(), off)
         }
         DEV_MNT => {
-            // devmnt (05-07): paqfs is a read-only server; the early
+            // devmnt: paqfs is a read-only server; the early
             // client-side error is clearer than the server's Erdonly.
             Err("devmnt: the mounted tree is read-only this era")
         }
@@ -326,19 +290,19 @@ fn sys_pwrite(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 /// PREAD(50): fd, buf, n, offset.  devroot chans read via the paqfs
 /// reader's byte-granular read_at (offset -1 uses + advances the chan's
 /// streaming offset); devcons chans route by qid (cons reads are the loud
-/// 05-08 -1); devenv honors offsets; devpipe reads the end's queue —
-/// blocking on empty (05-06, the 04-07 block/wake machinery via the
+/// -1); devenv honors offsets; devpipe reads the end's queue —
+/// blocking on empty (the block/wake machinery via the
 /// injected hooks).  n is a `long` — 32-bit in Plan 9 C, so the wire
 /// slot's upper half is masked (same discipline as sys_pwrite).
 ///
-/// 05-06: the fd is CHECKED OUT (fd_take) for the op and put back after
+/// The fd is CHECKED OUT (fd_take) for the op and put back after
 /// (fd_store) — a blocking pipe read never holds the fd-group lock.
 fn sys_pread(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 4) else {
         return err(proc, "pread: bad argument block");
     };
     let (fd, buf, n, off) = (args[0] & 0xffff_ffff, args[1], args[2] & 0xffff_ffff, args[3]); // fd is an int
-    // 261103-p64 (T-p64-01): the writable target's validation + cold-buffer
+    // The writable target's validation + cold-buffer
     // residency are fused in the usermem constructor.
     let mut dst = match UserSliceMut::new(proc, buf, n) {
         Ok(s) => s,
@@ -349,10 +313,10 @@ fn sys_pread(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     };
     let result = match chan.dev {
         DEV_CONS => {
-            // 05-04 Task 3: the device routes by qid — the root dir serves
+            // The device routes by qid — the root dir serves
             // the stat-wire listing, null reads EOF, user reads glenda,
             // hostowner reads the stored value, and cons reads get the
-            // loud "05-08" -1 (never a wedge).  The streaming offset
+            // loud -1 (never a wedge).  The streaming offset
             // advances inside the device (the pread convention).
             port::devcons::read(&mut chan, dst.as_slice_mut(), off)
         }
@@ -364,38 +328,38 @@ fn sys_pread(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             root.read(&mut chan, dst.as_slice_mut(), off)
         }
         DEV_PROC => {
-            // devproc (04-08 + 05-09): the root/pid-dir listings, the
-            // per-pid status/args reads (D-09's ps data source); note
+            // devproc: the root/pid-dir listings, the
+            // per-pid status/args reads (the ps data source); note
             // reads stay write-only-loud.
             port::devproc::read(&mut chan, dst.as_slice_mut(), off)
         }
         DEV_ENV => {
-            // devenv (05-05, D-07): the read comes from the OPERATING
+            // devenv: the read comes from the OPERATING
             // proc's env group (hook-resolved — donor envgrp(c)); the
             // root dir serves the group's stat-wire listing, a key serves
             // its value (clamped, EOF = 0); streaming offset honored.
             port::devenv::read(&mut chan, dst.as_slice_mut(), off)
         }
         DEV_PIPE => {
-            // devpipe (05-06): read the end's queue — drains available
+            // devpipe: read the end's queue — drains available
             // bytes, blocks on empty (wake on write/close), EOF on
             // hangup.  Never touches the chan offset (streaming).
             port::devpipe::read(&mut chan, dst.as_slice_mut(), off)
         }
         DEV_DUP => {
-            // devdup (05-06): the root dir listing of the CALLING proc's
+            // devdup: the root dir listing of the CALLING proc's
             // open fds (rcmain's `. -i '#d/0'` opens the fd file — its
             // reads dispatch to the REFERENCED chan's device, not here).
             port::devdup::read(&mut chan, dst.as_slice_mut(), off)
         }
         DEV_SRV => {
-            // devsrv (05-06): the root dir listing of registered
+            // devsrv: the root dir listing of registered
             // services (a service file's reads flow through its posted
             // chan — open returns it, the donor srvopen).
             port::devsrv::read(&mut chan, dst.as_slice_mut(), off)
         }
         DEV_MNT => {
-            // devmnt (05-07): chunked Tread RPCs over the mounted tree's
+            // devmnt: chunked Tread RPCs over the mounted tree's
             // session (blocks mid-syscall — the pipe read schedules the
             // server proc; the fd is checked out, never the group lock).
             port::devmnt::read(&mut chan, dst.as_slice_mut(), off)
@@ -411,7 +375,7 @@ fn sys_pread(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 
 /// NOTIFY(28): handler VA (a full-width pointer arg).  nil clears the
 /// handler (libc atnotify's notify(0)); otherwise the VA must be 4-aligned
-/// and land inside the proc's OWN text segment (T-04-17: a process can
+/// and land inside the proc's OWN text segment (a process can
 /// never install a handler pointing outside its image — the EL0 handler
 /// redirect trusts only validated segment-internal VAs).  Stored on the
 /// proc; trap.rs's deliver_notes redirects into it at the return-to-EL0
@@ -458,12 +422,10 @@ fn sys_noted(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             if nureg == 0 {
                 return err(proc, "noted: not notified");
             }
-            // 261103-p64 (zero-behavior-change): the saved-ureg window
-            // rides the usermem validated-only variant — deliver_notes
-            // forced its pages resident at delivery time and nothing
-            // unmaps them while the handler runs (the pre-usermem code
-            // validated without re-forcing residency; that exact shape is
-            // preserved — UNSAFE-AUDIT.md flags the class).
+            // The saved-ureg window rides the usermem validated-only
+            // variant — deliver_notes forced its pages resident at
+            // delivery time and nothing unmaps them while the handler
+            // runs (validated without re-forcing residency).
             let saved = match UserSlice::validated_only(proc, nureg, trap::UREG_SIZE as u64) {
                 Ok(s) => s,
                 Err(_) => return err(proc, "noted: bad saved ureg"),
@@ -488,7 +450,7 @@ fn sys_noted(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             // (the usermem slice is the source; the frame-side byte copy
             // lives in TrapFrame::restore_from_saved).
             frame.restore_from_saved(saved.as_slice());
-            // WR-04: the copied psr came from user-writable memory (the
+            // The copied psr came from user-writable memory (the
             // notejmp contract lets the handler edit the saved Ureg) —
             // force the privilege bits to EL0t so a handler-edited M field
             // can never steer trap.S's eret to EL1 (a user-triggerable
@@ -514,12 +476,12 @@ fn sys_noted(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     }
 }
 
-/// OPEN(14): path, mode.  05-04 (D-03, the one-way door): EVERY path
+/// OPEN(14): path, mode.  EVERY path
 /// resolves through the namespace core — namec + the proc's mount table —
 /// and the resolved chan opens via the per-device dispatch
-/// (namec::open_chan).  The Phase-4 scaffolding that routed paths by
-/// literal name matching is RETIRED (the plan's prohibition: it must not
-/// be extended for new devices nor kept as a fallback).
+/// (namec::open_chan).  The retired scaffolding routed paths by literal
+/// name matching; the namespace core is the only resolver (no
+/// name-matching fallback, never extended for new devices).
 /// Installed in the lowest free fd slot.
 fn sys_open(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 2) else {
@@ -534,7 +496,7 @@ fn sys_open(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
         return err(proc, "open: no namespace (pre-exec)");
     };
-    // WR-04: NO pgrp lock is held across resolution or the open — namec
+    // NO pgrp lock is held across resolution or the open — namec
     // consults the mount table under per-consult snapshots, and
     // open_chan's Topen RPC blocks mid-syscall (sys_mount's documented
     // discipline, applied uniformly).
@@ -545,7 +507,7 @@ fn sys_open(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let opened = match namec::open_chan(&c, mode) {
         Ok(c) => c,
         Err(msg) => {
-            // 261104-b4p (item 5): the resolved chan never reaches an fd
+            // The resolved chan never reaches an fd
             // on the error exit — close-dispatch it (a walked DEV_MNT
             // chan holds a server-side fid; clunk_if_last's count check
             // makes other devices no-ops).
@@ -560,13 +522,12 @@ fn sys_open(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     }
 }
 
-/// BIND(2): name, old, flag — 05-04 (D-03; measured ×22 in the 05-03
-/// trace).  Both path strings cross the trust boundary: sargs +
-/// validate_user_range BEFORE any kernel deref (T-04-11 discipline,
-/// verbatim).  The source resolves with the union-head redirect (donor
+/// BIND(2): name, old, flag.  Both path strings cross the trust boundary:
+/// sargs + validate_user_range BEFORE any kernel deref.  The source
+/// resolves with the union-head redirect (donor
 /// namec's Abind domount); the target NEVER redirects (Amount — stacked
-/// binds attach to the original directory) and must EXIST (Pitfall-8:
-/// MCREATE permits later creation IN the mounted dir; it never conjures
+/// binds attach to the original directory) and must EXIST
+/// (MCREATE permits later creation IN the mounted dir; it never conjures
 /// the mount target).  The dir/file agreement + order-bit semantics are
 /// cmount's, ported in pgrp::bind.
 fn sys_bind(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
@@ -590,7 +551,7 @@ fn sys_bind(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
         return err(proc, "bind: no namespace (pre-exec)");
     };
-    // WR-04: both resolves run WITHOUT the pgrp lock held (namec's
+    // Both resolves run WITHOUT the pgrp lock held (namec's
     // per-consult snapshots; a mount-crossing walk is a devmnt Twalk RPC
     // that blocks mid-syscall); the lock covers the mount-table INSERT
     // only.
@@ -607,7 +568,7 @@ fn sys_bind(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let mut guard = pg.lock(&node);
     let result = guard.bind(src, &tgt, flag);
     drop(guard);
-    // 261104-b4p (item 5): the resolved TARGET chan is never installed
+    // The resolved TARGET chan is never installed
     // anywhere — close-dispatch it (a mount-crossing resolution can leave
     // a last-ref DEV_MNT fid on it; the SOURCE is table-pinned on success
     // by design).
@@ -618,7 +579,7 @@ fn sys_bind(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     }
 }
 
-/// CHDIR(3): path — 05-04 (measured ×2: ps's /proc chdir, newns's cd).
+/// CHDIR(3): path (callers: ps's /proc chdir, newns's cd).
 /// 9k syschdir: namec with Atodir semantics (NO mount-point redirect —
 /// "directories are left before the mount point, so one may mount on /
 /// or . and see the effect"), the target must be a directory, then
@@ -634,20 +595,20 @@ fn sys_chdir(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
         return err(proc, "chdir: no namespace (pre-exec)");
     };
-    // WR-04: resolution runs WITHOUT the pgrp lock held (namec's
+    // Resolution runs WITHOUT the pgrp lock held (namec's
     // per-consult snapshots).
     let c = match namec::namec(&path, slash, dot, &proc.pgrp, NamecMode::ToDir) {
         Ok(c) => c,
         Err(msg) => return err(proc, msg),
     };
     if c.qid.typ & port::dat::QTDIR == 0 {
-        // 261104-b4p (item 5): the resolved chan is dropped on the error
+        // The resolved chan is dropped on the error
         // exit — close-dispatch it first (a walked DEV_MNT fid's only
         // ref is this local).
         port::namec::close_chan(&c);
         return err(proc, "chdir: not a directory");
     }
-    // 261104-b4p (item 5): the REPLACED dot's fid ref leaves with it —
+    // The REPLACED dot's fid ref leaves with it —
     // close-dispatch the old dot (clunk_if_last's count check protects a
     // shared/rfork-dup'd dot).
     if let Some(old) = proc.dot.replace(c) {
@@ -656,7 +617,7 @@ fn sys_chdir(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     0
 }
 
-/// UNMOUNT(35): name, old — 05-04 (measured ×1: boot's settime /tmp
+/// UNMOUNT(35): name, old (boot's settime /tmp
 /// handling).  9k sysunmount + cunmount: the mount point resolves WITHOUT
 /// the redirect (Amount semantics); old == nil removes the whole mount
 /// point, otherwise only the chain entry whose mounted chan matches old's
@@ -674,7 +635,7 @@ fn sys_unmount(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
         return err(proc, "unmount: no namespace (pre-exec)");
     };
-    // WR-04: both resolves run WITHOUT the pgrp lock held (namec's
+    // Both resolves run WITHOUT the pgrp lock held (namec's
     // per-consult snapshots); the lock covers the mount-table REMOVAL
     // only.
     let tgt = match namec::namec(&name, slash, dot, &proc.pgrp, NamecMode::MountTarget) {
@@ -698,7 +659,7 @@ fn sys_unmount(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let mut guard = pg.lock(&node);
     let result = guard.unmount(&tgt.path, from.as_ref());
     drop(guard);
-    // 261104-b4p (item 5): the resolved chans are never installed —
+    // The resolved chans are never installed —
     // close-dispatch them (clunk_if_last's count check protects any
     // shared fid; the table's REMOVED entries stay table-lifetime-pinned,
     // the documented bounded-by-mount-count deferral).
@@ -712,15 +673,15 @@ fn sys_unmount(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     }
 }
 
-/// FVERSION(40): fd, msize, version, nversion — 05-07 (D-03's mount half;
-/// the 05-06 gate's FVERSION wall).  Donor sysfversion (9k sysauth.c):
+/// FVERSION(40): fd, msize, version, nversion.  Donor sysfversion
+/// (9k sysauth.c):
 /// `int fversion(int fd, u32int msize, char *version, int nversion)` —
 /// negotiate the 9P session over the fd's chan (devmnt::fversion, the
 /// mntversion port) and write back the negotiated version string,
 /// returning its length.  The fd must be a 9P-capable connection open
-/// ORDWR (the connectembed pipe end).  T-04-11: the version buffer is
+/// ORDWR (the connectembed pipe end).  The version buffer is
 /// validated + forced resident BEFORE the kernel reads/writes it (the
-/// 05-06 cold-buffer class); the donor's Ebadarg NUL check is ported
+/// cold-buffer class); the donor's Ebadarg NUL check is ported
 /// (the buffer carries the REQUESTED version string — "" means the
 /// "9P2000" default; anything else is rejected, the donor's
 /// "bad 9P version specification").
@@ -735,7 +696,7 @@ fn sys_fversion(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     if nver == 0 {
         return err(proc, "fversion: zero-length version buffer");
     }
-    // 261103-p64 (T-p64-01): one fused constructor covers the read of the
+    // One fused constructor covers the read of the
     // requested version string AND the negotiated write-back (the buffer
     // is read+written, so the writable variant covers both).
     let mut verbuf = match UserSliceMut::new(proc, ver_va, nver) {
@@ -763,13 +724,13 @@ fn sys_fversion(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     }
 }
 
-/// MOUNT(46): fd, afd, old, flag, aname — 05-07 (D-03's mount half;
-/// nsinit's `mount(fd, -1, "/root", MREPL|MCREATE, rp)` and settime's
+/// MOUNT(46): fd, afd, old, flag, aname
+/// (nsinit's `mount(fd, -1, "/root", MREPL|MCREATE, rp)` and settime's
 /// second mount onto /tmp via #s/boot).  Donor sysmount + bindmount's
 /// ismount arm (9k sysfile.c): validate the flags (bindmount's Ebadarg
 /// shape), the fd must be a 9P connection (auto-version when fversion
 /// never ran — the donor mntattach's Enoversion fallback), Tattach over
-/// the session with afid = NOFID (afd ≠ -1 is loud-unsupported — D-02's
+/// the session with afid = NOFID (afd ≠ -1 is loud-unsupported — the
 /// no-auth era), then the mount-table insertion at the resolved target
 /// with the frozen flag semantics (pgrp::bind — MountTarget resolution,
 /// dir/file agreement, MREPL/MBEFORE/MAFTER order, MCREATE recorded).
@@ -832,7 +793,7 @@ fn sys_mount(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     };
 
     // Resolve the target (MountTarget — never redirect; stacked mounts
-    // attach to the original directory) and insert the entry.  WR-04: the
+    // attach to the original directory) and insert the entry.  The
     // resolve runs WITHOUT the pgrp lock held (namec's per-consult
     // snapshots — a mount-crossing walk RPCs); the lock covers the
     // mount-table INSERT only.
@@ -849,7 +810,7 @@ fn sys_mount(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let mut guard = pg.lock(&node);
     let result = guard.bind(mnt_chan, &tgt, flag);
     drop(guard);
-    // 261104-b4p (item 5): the resolved TARGET chan is never installed —
+    // The resolved TARGET chan is never installed —
     // close-dispatch it (the mount-root chan itself is table-pinned on
     // success by design; on failure it dies inside bind).
     port::namec::close_chan(&tgt);
@@ -859,11 +820,11 @@ fn sys_mount(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     }
 }
 
-/// STAT(42): path, buf, n — 05-04 Task 3 (measured ×51 in the 05-03
-/// trace).  namec with Aaccess semantics (the final component DOES cross
+/// STAT(42): path, buf, n.  namec with Aaccess semantics (the final
+/// component DOES cross
 /// to the union head), then the device's stat op writes the stat(5) wire
 /// bytes; the return is the byte count (the donor sysstat contract).
-/// T-04-11: the path string AND the output buffer (writable) validate
+/// The path string AND the output buffer (writable) validate
 /// before any kernel deref.  The donor's dirsetname fix-up is a no-op for
 /// every device this era (each serves the canonical name already) and is
 /// deliberately omitted.
@@ -876,8 +837,8 @@ fn sys_stat(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         Ok(s) => s,
         Err(msg) => return err(proc, msg),
     };
-    // 261103-p64 (T-p64-01): the output buffer's validation + residency
-    // (the cold-buffer class, T-05-06) are fused in the constructor.
+    // The output buffer's validation + residency
+    // (the cold-buffer class) are fused in the constructor.
     let mut sb = match UserSliceMut::new(proc, buf_va, n) {
         Ok(b) => b,
         Err(_) => return err(proc, "stat: bad user buffer"),
@@ -885,13 +846,13 @@ fn sys_stat(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
         return err(proc, "stat: no namespace (pre-exec)");
     };
-    // WR-04: resolution runs WITHOUT the pgrp lock held (namec's
+    // Resolution runs WITHOUT the pgrp lock held (namec's
     // per-consult snapshots; a mount-crossing walk RPCs mid-syscall).
     let c = match namec::namec(&path, slash, dot, &proc.pgrp, NamecMode::Open) {
         Ok(c) => c,
         Err(msg) => return err(proc, msg),
     };
-    // 261104-b4p (item 5): the resolved chan is never fd-installed here —
+    // The resolved chan is never fd-installed here —
     // close-dispatch it after the stat (a walked DEV_MNT chan holds a
     // server-side fid; its only ref is this local).
     let result = namec::stat_chan(&c, sb.as_slice_mut());
@@ -902,7 +863,7 @@ fn sys_stat(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     }
 }
 
-/// FSTAT(43): fd, buf, n — 05-04 Task 3 (measured ×3).  The open fd's
+/// FSTAT(43): fd, buf, n.  The open fd's
 /// chan stats through the same device dispatch (the donor sysfstat shape
 /// — no namec, no mount crossing: the chan already resolved at open).
 /// devroot's stat reads the chan's paqfs entry, so DEV_ROOT stats go
@@ -912,8 +873,8 @@ fn sys_fstat(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         return err(proc, "fstat: bad argument block");
     };
     let (fd, buf_va, n) = (args[0] & 0xffff_ffff, args[1], args[2] & 0xffff_ffff); // fd, n are ints
-    // 261103-p64 (T-p64-01): the output buffer's validation + residency
-    // (the cold-buffer class, T-05-06) are fused in the constructor.
+    // The output buffer's validation + residency
+    // (the cold-buffer class) are fused in the constructor.
     let mut sb = match UserSliceMut::new(proc, buf_va, n) {
         Ok(b) => b,
         Err(_) => return err(proc, "fstat: bad user buffer"),
@@ -929,10 +890,9 @@ fn sys_fstat(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     }
 }
 
-/// BRK_(24): addr — 05-04 Task 3 (measured ×28 in the 05-03 trace; the
-/// plan's dispatch note binds it: malloc's pool growth rides it —
-/// sbrkalloc's sbrk→brk_ — and boot's dirstat mallocs make it
-/// gate-load-bearing).  Donor sysbrk_ (9k sysseg.c): ibrk(addr, BSEG) —
+/// BRK_(24): addr (malloc's pool growth rides it —
+/// sbrkalloc's sbrk→brk_ — and boot's dirstat mallocs depend on it).
+/// Donor sysbrk_ (9k sysseg.c): ibrk(addr, BSEG) —
 /// set the bss segment's top; libc's sbrk needs 0/-1.  Growth pages
 /// demand-fault as zero pages (the Bss class covers the extended range);
 /// a shrink only lowers the recorded break (mapped pages stay mapped —
@@ -966,7 +926,7 @@ fn sys_brk_(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 /// frame (R0 = tos, SP → new seed stack, PC = new entry, PSR = 0) and the
 /// dispatch return erets into the new image.
 ///
-/// Both args are user memory crossing the trust boundary (T-04-11): the
+/// Both args are user memory crossing the trust boundary: the
 /// path string and the argv block + every pointed-to string are validated
 /// against the proc's segment map before copying, with argc bounded at 32
 /// and each arg at 128 bytes.  Everything is COPIED to kernel memory before
@@ -975,7 +935,7 @@ fn sys_brk_(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 fn sys_exec(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     const MAX_EXEC_ARGS: usize = 32;
     const MAX_EXEC_ARG_LEN: usize = 128;
-    /// The whole-file staging ceiling for a MOUNTED binary (05-07: read
+    /// The whole-file staging ceiling for a MOUNTED binary (read
     /// eagerly at exec because the trap-context pager never RPCs) — far
     /// past every subset binary (rc is ~250 KB), bounded so an untrusted
     /// server can never stream the kernel into an unbounded allocation.
@@ -995,11 +955,10 @@ fn sys_exec(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
                 return err(proc, "exec: too many args");
             }
             let slot_va = argv_va + 8 * argv.len() as u64;
-            // 261103-p64 (zero-behavior-change): the argv slot block rides
+            // The argv slot block rides
             // usermem's validated-only pointer — the slots are user
             // stack/data the process itself wrote to set up the call
-            // (resident by construction; the pre-usermem shape preserved —
-            // UNSAFE-AUDIT.md flags the class).
+            // (resident by construction).
             let slot = match UserPtr::validated_only(proc, slot_va) {
                 Ok(p) => p,
                 Err(_) => return err(proc, "exec: bad argv block"),
@@ -1015,13 +974,13 @@ fn sys_exec(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         }
     }
 
-    // 05-07 Task 2 (the wiring walk): resolve through the NAMESPACE —
+    // Resolve through the NAMESPACE —
     // namec + the proc's mount table — so an exec path crosses mounts
     // (execinit's /aarch64/init through the union-mounted /; init's
     // /bin/rc through the post-newns /bin union into the mounted tree).
-    // The Phase-4 devroot-only prefix walk is retired (D-03's one-way
-    // door: resolution lives in the namespace core).
-    // WR-04: NO pgrp lock is held across resolution, open, or stage —
+    // The old devroot-only prefix walk is retired (resolution lives in
+    // the namespace core).
+    // NO pgrp lock is held across resolution, open, or stage —
     // namec consults under per-consult snapshots; a devmnt open/read RPCs
     // and BLOCKS mid-syscall (the pipe read schedules the server proc).
     let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
@@ -1034,18 +993,17 @@ fn sys_exec(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let opened = match namec::open_chan(&c, OEXEC) {
         Ok(c) => c,
         Err(msg) => {
-            // 261104-b4p (item 5): the walked chan is walked-past on the
+            // The walked chan is walked-past on the
             // error exit too — close-dispatch it (clunk_if_last's count
             // check protects non-DEV_MNT chans).
             port::namec::close_chan(&c);
             return err(proc, msg);
         }
     };
-    // 261104-b4p (item 5): the walked chan is walked-past once the open
+    // The walked chan is walked-past once the open
     // SHARES its fid's Arc — close-dispatch it now so the fid's last ref
     // (the opened chan's, below) Tclunks exactly once.  Without this the
-    // shared count strands the fid at close time (a per-command leak —
-    // the divergence-1 class retired by item 5).
+    // shared count strands the fid at close time (a per-command leak).
     port::namec::close_chan(&c);
     let backing = match opened.dev {
         DEV_ROOT => {
@@ -1102,7 +1060,7 @@ fn sys_close(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let fd = args[0] & 0xffff_ffff; // fd is an int (width discipline)
     match proc.fd_take(fd) {
         Some(c) => {
-            // 05-06: the close dispatch (the donor's devclose) — a pipe
+            // The close dispatch (the donor's devclose) — a pipe
             // end's close decrements the open count and the last one
             // hangs the peer's read queue up (the EOF path).
             port::namec::close_chan(&c);
@@ -1112,8 +1070,8 @@ fn sys_close(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     }
 }
 
-/// PIPE(21): fd-array-ptr — 05-06 (D-04's connectembed substrate;
-/// measured ×1 in the 05-03 trace — the ONE connectembed pipe).  Donor
+/// PIPE(21): fd-array-ptr (the connectembed substrate — the ONE
+/// connectembed pipe).  Donor
 /// syspipe (9k sysfile.c): attach a FRESH pipe ("#|" — one Pipe per
 /// attach, never shared across attaches), walk data/data1, open both
 /// ORDWR, install the pair at the two lowest free slots (found BEFORE
@@ -1121,7 +1079,7 @@ fn sys_close(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 /// consumes nothing), and write the two fds back through the validated
 /// user array (two 32-bit ints — the width discipline).
 ///
-/// The ends reference the ONE Arc-shared Pipe (Pitfall 4): writes on end
+/// The ends reference the ONE Arc-shared Pipe: writes on end
 /// i land in the queue end 1-i reads; fork/dup clone the Arc, never the
 /// bytes.
 fn sys_pipe(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
@@ -1129,8 +1087,8 @@ fn sys_pipe(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         return err(proc, "pipe: bad argument block");
     };
     let arr_va = args[0];
-    // 261103-p64 (T-p64-01): the fd array's validation + residency are
-    // fused in the constructor (the 05-06 cold-buffer class).
+    // The fd array's validation + residency are
+    // fused in the constructor (the cold-buffer class).
     let mut arr = match UserSliceMut::new(proc, arr_va, 8) {
         Ok(a) => a,
         Err(_) => return err(proc, "pipe: bad fd array"),
@@ -1167,8 +1125,8 @@ fn sys_pipe(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     0
 }
 
-/// DUP(5): oldfd, newfd — 05-06 (measured ×9 in the 05-03 trace;
-/// connectembed's child dups the pipe ends onto 0/1).  Donor sysdup
+/// DUP(5): oldfd, newfd (connectembed's child dups the pipe ends onto
+/// 0/1).  Donor sysdup
 /// (9k sysfile.c): the old fd's chan is ref-cloned (an open pipe end's
 /// count bumps — the Arc is shared, never the bytes); newfd == -1
 /// installs at the lowest free slot; an occupied newfd is EVICTED and
@@ -1202,11 +1160,11 @@ fn sys_dup(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     }
 }
 
-/// CREATE(22): path, mode, perm — 05-06 Task 2 (measured ×67 in the
-/// 05-03 trace: every env-var set + boot's srvcreate).  Donor syscreate +
+/// CREATE(22): path, mode, perm (callers: every env-var set + boot's
+/// srvcreate).  Donor syscreate +
 /// chan.c's Acreate: resolve the PARENT (open-style union redirect), then
 /// if the final component EXISTS open it OTRUNC (unless OEXCL → Eexist),
-/// else dispatch the device's create op (devenv/devsrv are this phase's
+/// else dispatch the device's create op (devenv/devsrv are this era's
 /// creators; a device without a create op errors loudly).  The donor's
 /// create-then-fail retry (the create/create race) is unreachable this
 /// era: syscalls are serialized.  Directory creates (perm&DMDIR) have no
@@ -1240,7 +1198,7 @@ fn sys_create(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
         return err(proc, "create: no namespace (pre-exec)");
     };
-    // WR-04: resolution runs WITHOUT the pgrp lock held — namec consults
+    // Resolution runs WITHOUT the pgrp lock held — namec consults
     // under per-consult snapshots, and the dot-redirect consult below
     // snapshots under a scoped lock, dropping it BEFORE the fid-clone (a
     // devmnt zero-name Twalk RPC).  walk_one/open_chan/create_chan run
@@ -1251,7 +1209,7 @@ fn sys_create(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         None => {
             // The dot itself, with the open-mode final redirect (a dot
             // covered by a mount point creates in the union head).
-            // 05-09: a DEV_MNT head is fid-CLONED, never bare-dup'd (the
+            // A DEV_MNT head is fid-CLONED, never bare-dup'd (the
             // mount-table aliasing fix — the redirect's open/close must
             // not touch the table's server-side fid).
             let mut d = dot.dup();
@@ -1279,7 +1237,7 @@ fn sys_create(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         Err(msg) => return err(proc, msg),
     };
     if parent.qid.typ & port::dat::QTDIR == 0 {
-        // 261104-b4p (item 5): the resolved parent (or the manual
+        // The resolved parent (or the manual
         // dot-redirect clone) holds a server-side fid on EVERY exit —
         // sweep it (clunk_if_last's count check protects the shared dot
         // dup case).
@@ -1314,7 +1272,7 @@ fn sys_create(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             }
         }
     };
-    // 261104-b4p (item 5): the parent's fid (the dot-redirect clone's, on
+    // The parent's fid (the dot-redirect clone's, on
     // the bare-name arm) is walked-past on success too — sweep it.  (The
     // walk-probe `existing` needs no sweep on success: the open SHARES
     // its fid's Arc and `opened` is now the owning ref.)
@@ -1325,8 +1283,8 @@ fn sys_create(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     }
 }
 
-/// FD2PATH(23): fd, buf, n — 05-06 Task 2 (measured ×3 in the 05-03
-/// trace).  Donor sysfd2path: the fd's chan's walked path (chanpath)
+/// FD2PATH(23): fd, buf, n.  Donor sysfd2path: the fd's chan's walked
+/// path (chanpath)
 /// into the validated user buffer, NUL-terminated and truncated to n
 /// (Harvey libc: fd2path(int, char*, int) — n is int-width, masked).
 /// Returns 0.  The path bookkeeping is the walk-maintained one
@@ -1336,8 +1294,8 @@ fn sys_fd2path(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         return err(proc, "fd2path: bad argument block");
     };
     let (fd, buf_va, n) = (args[0] & 0xffff_ffff, args[1], args[2] & 0xffff_ffff); // fd, n are ints
-    // 261103-p64 (T-p64-01): the fd2path buffer's validation + residency
-    // (the 05-06 cold-buffer class) are fused in the constructor.
+    // The fd2path buffer's validation + residency
+    // (the cold-buffer class) are fused in the constructor.
     let mut dst = match UserSliceMut::new(proc, buf_va, n) {
         Ok(b) => b,
         Err(_) => return err(proc, "fd2path: bad user buffer"),
@@ -1359,32 +1317,32 @@ fn sys_fd2path(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 /// sys/src/9/port/sysproc.c): (RFFDG|RFCFDG), (RFNAMEG|RFCNAMEG) and
 /// (RFENVG|RFCENVG) are each mutually exclusive; RFMEM/RFNOWAIT require
 /// RFPROC.  Supported this era: the address space is ALWAYS eagerly copied
-/// page-for-page (no COW, no shared writable pages — T-04-15; the donor's
+/// page-for-page (no COW, no shared writable pages; the donor's
 /// RFMEM share-semantics is not honored, which the smoke does not depend
 /// on); RFNOWAIT is honored (EXITS posts no wait record); RFREND is a
 /// no-op (no rendezvous this era); RFNOTEG has REAL note-group semantics
-/// since 05-08 (D-06: Proc.noteid — a fresh group per construction,
+/// (Proc.noteid — a fresh group per construction,
 /// inherited without RFNOTEG, fresh with it; the console DEL posts
-/// "interrupt" to the readers' groups).  05-04 (D-03) adds
-/// the namespace group semantics per fork(2): RFPROC+neither shares the
+/// "interrupt" to the readers' groups).
+/// The namespace group semantics per fork(2): RFPROC+neither shares the
 /// parent's pgrp, RFNAMEG deep-copies, RFCNAMEG starts clean — and the
 /// non-RFPROC split (boot(8)'s `rfork(RFNAMEG)`): the CALLER's group
-/// becomes a fresh copy (RFNAMEG) or fresh empty (RFCNAMEG).  05-05
-/// (D-07) adds the ENV group semantics, the same donor shape (fork(2):
+/// becomes a fresh copy (RFNAMEG) or fresh empty (RFCNAMEG).
+/// The ENV group semantics, the same donor shape (fork(2):
 /// "RFENVG: the environment variables are COPIED; otherwise the two
 /// processes SHARE"; "RFCENVG: the new process starts with an EMPTY
 /// environment"): RFPROC+neither shares the parent's env group, RFENVG
 /// deep-copies (envcpy), RFCENVG empties; the non-RFPROC env split
 /// (newns's `rfork(RFENVG|RFCNAMEG)`) re-groups the CALLER (copy on
-/// RFENVG, empty on RFCENVG).  05-06 (D-03's fd half) adds the FD group
-/// semantics, again per fork(2)/sysrfork ("RFFDG: the invoker's file
+/// RFENVG, empty on RFCENVG).
+/// The FD group semantics, again per fork(2)/sysrfork ("RFFDG: the
+/// invoker's file
 /// descriptor table is COPIED; otherwise the two processes SHARE a
 /// single table"): RFPROC+neither SHARES the Arc<Lock<FdGroup>> handle,
 /// RFFDG deep-COPIES slot-by-slot (dupfgrp — pipe chans clone their
 /// Arc), RFCFDG empties (dupfgrp(nil)).  libc fork() =
 /// rfork(RFPROC|RFFDG|RFREND) = COPY — connectembed's child dup/close
-/// choreography depends on it.  (The 05-06 plan's bullet inverts RFFDG
-/// vs default — the phase's third flag inversion; the donor governs.)
+/// choreography depends on it.
 /// The non-RFPROC fd-group split (RFFDG/RFCFDG) has no measured caller
 /// and stays a loud -1 — never silent partial semantics.  Every other
 /// bit combination is a loud -1 errstr.
@@ -1417,7 +1375,7 @@ fn sys_rfork(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         // Donor non-RFPROC branch: RFMEM/RFNOWAIT are Ebadarg; the fd-group
         // split is unsupported this era (loud); the namespace group split
         // (RFNAMEG copy / RFCNAMEG wipe) re-groups the CALLER, as does
-        // the env group split (05-05: RFENVG copy / RFCENVG empty —
+        // the env group split (RFENVG copy / RFCENVG empty —
         // newns's rfork(RFENVG|RFCNAMEG)).
         if flag & (RFMEM | RFNOWAIT | RFFDG | RFCFDG) != 0 {
             return err(proc, "rfork: bad flags for non-RFPROC");
@@ -1428,7 +1386,7 @@ fn sys_rfork(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         if flag & (RFENVG | RFCENVG) != 0 {
             proc::rfork_env_split(proc, flag & RFENVG != 0);
         }
-        // 05-08 (D-06): non-RFPROC rfork(RFNOTEG) re-groups the CALLER
+        // Non-RFPROC rfork(RFNOTEG) re-groups the CALLER
         // into a fresh note group (9k sysproc.c:82) — init's fexec child
         // does this before exec'ing rc, so console DELs target the
         // shell's group and never init.
@@ -1445,10 +1403,8 @@ fn sys_rfork(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     }
 }
 
-/// SEEK(39): rv, fd, offset, base — 05-06 Task 3 (the gate's
-/// trace-settled gap: paqfs's libbio Bseek — measured ×72 in the 05-03
-/// trace; the loud wall named it), CORRECTED 05-07 (the hinge gate's
-/// iterate-discipline): **the aarch64 syscall ABI is FOUR arguments —
+/// SEEK(39): rv, fd, offset, base (paqfs's libbio Bseek):
+/// **the aarch64 syscall ABI is FOUR arguments —
 /// `_seek(vlong *rv, int fd, vlong offset, int base)`** (the generated
 /// stub's shape, sys/src/libc/9syscall/mkfile's `j=_seek` arm + the
 /// aarch64 `_seek.c` wrapper; the donor sysfile.c sysseek's own comment:
@@ -1459,10 +1415,10 @@ fn sys_rfork(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 /// base 0 absolute, base 1 relative (negative deltas allowed, never below
 /// 0), directories error (Eisdir), SEEK_END loud-unsupported.
 ///
-/// (The 05-06 version read fd/offset/base from slots 0/1/2 and returned
-/// the offset on the wire — wrong for this ABI; its gate never caught it
-/// because every exercised caller's seek was bio's in-buffer fast path.
-/// The hinge gate's paqfs blockRead seeks for real and checks.)
+/// (An earlier version read fd/offset/base from slots 0/1/2 and returned
+/// the offset on the wire — wrong for this ABI; every early caller's
+/// seek was bio's in-buffer fast path, so nothing exercised it.  paqfs's
+/// blockRead seeks for real.)
 fn sys_seek(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 4) else {
         return err(proc, "seek: bad argument block");
@@ -1471,8 +1427,8 @@ fn sys_seek(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     // offset is a vlong.
     let (rv, fd, off, base) =
         (args[0], args[1] & 0xffff_ffff, args[2] as i64, (args[3] & 0xffff_ffff) as u32 as i32);
-    // 261103-p64 (T-p64-01): the result pointer's validation + residency
-    // (the 05-06 cold-buffer class) are fused in the constructor.
+    // The result pointer's validation + residency
+    // (the cold-buffer class) are fused in the constructor.
     let mut rv_slot = match UserSliceMut::new(proc, rv, 8) {
         Ok(s) => s,
         Err(_) => return err(proc, "seek: bad result pointer"),
@@ -1512,15 +1468,14 @@ fn sys_seek(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 /// ERRSTR(41): buf, n — copy the proc's errstr (NUL-terminated) into the
 /// user buffer, return 0.  libc's `%r` verb reads the errstr this way
 /// (rerrstr calls it twice) — the smoke's failure prints are its measured
-/// caller (04-07: observed in the first virtmulti run; D-14's
-/// measured-caller rule is satisfied by the smoke, not guessed).
+/// caller.
 fn sys_errstr(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 2) else {
         return err(proc, "errstr: bad argument block");
     };
     let (buf, n) = (args[0], args[1] & 0xffff_ffff); // n is a uint (width discipline)
-    // 261103-p64 (T-p64-01): the errstr buffer's validation + residency
-    // (the 05-06 cold-buffer class) are fused in the constructor.
+    // The errstr buffer's validation + residency
+    // (the cold-buffer class) are fused in the constructor.
     let mut dst = match UserSliceMut::new(proc, buf, n) {
         Ok(b) => b,
         Err(_) => return err(proc, "errstr: bad user buffer"),
@@ -1537,20 +1492,18 @@ fn sys_errstr(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     0
 }
 
-/// SLEEP(17): millisecs — 05-08 (trace-gated: sleep ×42 in the 05-03
-/// real-chain trace — init's for(;;) restart loop sleeps 1s between rc
-/// generations).  Donor syssleep (9k sysproc.c): ms<=0 yields (give up
+/// SLEEP(17): millisecs (init's for(;;) restart loop sleeps 1s between
+/// rc generations).  Donor syssleep (9k sysproc.c): ms<=0 yields (give up
 /// the CPU if another process is waiting); ms>0 tsleeps until the tick
 /// count passes now+ms (1 tick = 1 ms this era — timer.rs
 /// TICKS_PER_SEC=1000, so ms IS the tick delta).  The block rides the
-/// 04-07 sched machinery; the tick's tick_timeouts readies expired
+/// sched machinery; the tick's tick_timeouts readies expired
 /// sleepers.  Register-deadline-then-block cannot lose the wake: syscall
 /// context is IRQ-masked, so the tick can only fire after sched()
 /// swtch'es (devpipe's documented invariant).  The ms arg is a `long` —
 /// 32-bit in Plan 9 C (the width discipline).
 ///
-/// 261104-b4p (item 6 — the donor's note-interruptible tsleep; the 05-08
-/// wake-only-on-expiry era limit RETIRED): a pending-note PRE-CHECK fails
+/// The donor's note-interruptible tsleep: a pending-note PRE-CHECK fails
 /// the sleep immediately (the donor tsleep's notepending shape — never
 /// arm-then-lose), and tick_timeouts readies a sleeper whose note_queue
 /// is non-empty.  On resume, a LOCAL deadline copy discriminates: an
@@ -1561,7 +1514,7 @@ fn sys_errstr(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 /// errstr "interrupted"; expiry (ticks() >= deadline) returns 0.  A note
 /// that arrives AT the expiry tick still takes the 0 exit (the expiry
 /// arm ran first) and delivers at the return boundary — the donor's
-/// shape.  The note itself delivers at the 04-08 return-to-EL0 boundary,
+/// shape.  The note itself delivers at the return-to-EL0 boundary,
 /// untouched.
 ///
 /// Yield note: sleep(0)'s preempt() runs the tick's own entry from
@@ -1577,7 +1530,7 @@ fn sys_sleep(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let ms = args[0] & 0xffff_ffff; // long is 32-bit (the width discipline)
     #[cfg(dev_exec)]
     {
-        // WR-02: sleep(long) is SIGNED — the donor syssleep yields when
+        // sleep(long) is SIGNED — the donor syssleep yields when
         // n <= 0 (9k sysproc.c).  Read as i32 so sleep(-1) (a computed
         // negative duration, arriving as 0xffffffff) yields instead of
         // sleeping 4294967295 ticks (~49.7 days at 1 kHz, no wake path
@@ -1586,7 +1539,7 @@ fn sys_sleep(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             proc::preempt(); // the donor's yield()
             return 0;
         }
-        // 261104-b4p (item 6): the donor tsleep's notepending pre-check —
+        // The donor tsleep's notepending pre-check —
         // a note queued BEFORE the arm fails the sleep immediately.
         if !proc.note_queue.is_empty() {
             return err(proc, "interrupted");
@@ -1608,10 +1561,10 @@ fn sys_sleep(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     }
 }
 
-/// ALARM(6): millisecs — 05-08 (trace-gated: alarm ×1 — init's alarm(0)
+/// ALARM(6): millisecs (init's alarm(0)
 /// disarm at main start).  Donor sysalarm (9k sysproc.c) + procalarm
 /// (9k alarm.c): arm a per-proc alarm whose expiry posts the "alarm" note
-/// to the proc (tick_timeouts's expiry arm; delivery rides the 04-08
+/// to the proc (tick_timeouts's expiry arm; delivery rides the
 /// return-to-EL0 boundary); successive calls reset the clock; a zero arg
 /// clears it.  The return is the previously-REMAINING ms (0 = none
 /// armed).  The ms arg is an `unsigned long` — 32-bit (the width
@@ -1635,10 +1588,10 @@ fn sys_alarm(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     }
 }
 
-/// AWAIT(47): buf, buflen.  Donor sysawait shape: block (the 04-07
+/// AWAIT(47): buf, buflen.  Donor sysawait shape: block (the
 /// swtch-based sched path) until a child's exit record exists, then write
 /// the Plan-9-shaped wait message `{pid} 0 0 0 "{msg}"` (utime/stime/
-/// realtime zeros this era — CONTEXT.md discretion) NUL-terminated into
+/// realtime zeros this era) NUL-terminated into
 /// the validated user buffer and return the record length.  No children
 /// ever → loud -1 errstr (donor pwait's "no children").
 fn sys_await(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
@@ -1646,8 +1599,8 @@ fn sys_await(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         return err(proc, "await: bad argument block");
     };
     let (buf, buflen) = (args[0], args[1] & 0xffff_ffff); // buflen is a uint (width discipline)
-    // 261103-p64 (T-p64-01): the await buffer's validation + residency
-    // (the 05-06 cold-buffer class) are fused in the constructor.
+    // The await buffer's validation + residency
+    // (the cold-buffer class) are fused in the constructor.
     let mut dst = match UserSliceMut::new(proc, buf, buflen) {
         Ok(b) => b,
         Err(_) => return err(proc, "await: bad user buffer"),
@@ -1671,10 +1624,10 @@ fn sys_await(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         if proc.children_live == 0 {
             return err(proc, "await: no children");
         }
-        // Block mid-syscall (04-07): mark Blocked + swtch to the scheduler
+        // Block mid-syscall: mark Blocked + swtch to the scheduler
         // context; resumes here when a child's EXITS posts a record and
         // wakes us.  The trap frame on this proc's own kstack survives
-        // other processes' traps meanwhile (T-04-14's whole point).
+        // other processes' traps meanwhile.
         proc::sched();
     }
 }
@@ -1682,7 +1635,7 @@ fn sys_await(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 /// EXITS(8): copy the optional message (nil = empty), free the proc's user
 /// pages + root-table page + kstack via the mapping_log / recorded PAs,
 /// mark Moribund, print the exit line, post the wait record to the parent
-/// and wake an AWAITing parent (04-07), then hand off to the scheduler;
+/// and wake an AWAITing parent, then hand off to the scheduler;
 /// when no non-Moribund proc remains, print the all-exited marker and park
 /// in the clean wfi halt.  Diverges: never returns to the exited image.
 fn sys_exits(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
@@ -1701,7 +1654,7 @@ fn sys_exits(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     exit_tail(proc, &msg);
 }
 
-/// The shared exit tail (04-08): sys_exits's user-message path and the
+/// The shared exit tail: sys_exits's user-message path and the
 /// note machinery's kernel-message kills (deliver_notes's no-handler kill,
 /// NOTED's NDFLT) converge here.  Frees the user mappings, marks Moribund,
 /// prints the exit line, posts + wakes the parent, frees the root-table
@@ -1709,8 +1662,8 @@ fn sys_exits(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 /// because the swtch save writes only the PROC_TABLE-resident context),
 /// then the all-exited halt or the sched-loop hand-off.  Diverges.
 ///
-/// 261104-b4p (item 4 — the donor pexit's closefgrp): the FIRST step is
-/// the fd-group sweep.  The proc's group is DETACHED (replaced by a fresh
+/// The FIRST step is the fd-group sweep (the donor pexit's closefgrp).
+/// The proc's group is DETACHED (replaced by a fresh
 /// empty Arc — the Moribund proc holds the empty one), and only when the
 /// detached Arc's count is 1 (this proc was the group's LAST sharer) are
 /// its occupied slots drained and close-dispatched (namec::close_chan —
@@ -1731,7 +1684,7 @@ fn sys_exits(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 /// paqfs io child never exits (a server self-Tclunking during its own
 /// exit would deadlock its own RPC — impossible this era).
 pub(crate) fn exit_tail(proc: &mut Proc, msg: &[u8]) -> ! {
-    // 261104-b4p (item 4): detach + last-sharer sweep (see the doc comment).
+    // Detach + last-sharer sweep (see the doc comment).
     let detached =
         core::mem::replace(&mut proc.fd_group, Arc::new(Lock::new("fdgrp", FdGroup::<MAX_FDS>::new())));
     if Arc::strong_count(&detached) == 1 {
@@ -1748,7 +1701,7 @@ pub(crate) fn exit_tail(proc: &mut Proc, msg: &[u8]) -> ! {
     proc.state = ProcState::Moribund;
     let pid = proc.pid;
     println!("process {pid} exited: \"{}\"", core::str::from_utf8(msg).unwrap_or("<bad utf8>"));
-    // 04-07: post the wait record to the parent and wake it BEFORE the
+    // Post the wait record to the parent and wake it BEFORE the
     // final frees (the record is kernel memory in the parent's table slot;
     // RFNOWAIT children post nothing, donor-style).
     if !proc.nowait {
@@ -1763,12 +1716,11 @@ pub(crate) fn exit_tail(proc: &mut Proc, msg: &[u8]) -> ! {
 
     if !proc::any_active_procs() {
         println!("all user processes exited");
-        // Clean halt (SC#5 shape): park in wfi.  IRQs stay masked (trap
+        // Clean halt: park in wfi.  IRQs stay masked (trap
         // context never unmasks them), so this is a wedge-free stop.
-        // (261103-p64: the consolidated halt primitive.)
         trap::park_forever();
     }
-    // 04-07's reschedule: the sched loop picks the next Ready proc (the
+    // The sched loop picks the next Ready proc (the
     // woken parent, or a sibling).  Diverges.
     proc::sched_from_moribund();
 }

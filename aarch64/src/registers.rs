@@ -93,7 +93,7 @@ bitstruct! {
 }
 
 impl EsrEl1 {
-    /// Read ESR_EL1 live — the trap() entry path (D-05: syndrome registers
+    /// Read ESR_EL1 live — the trap() entry path (syndrome registers
     /// are never TrapFrame fields, so a stale in-frame syndrome read cannot
     /// silently corrupt fault decode).
     pub fn read() -> Self {
@@ -166,7 +166,7 @@ bitstruct! {
 #[allow(dead_code)]
 impl EsrEl1IssInstructionAbort {
     /// Decode the instruction-abort ISS.  Accepts both SameEl (the
-    /// historical kernel-debug use) and LowerEl (04-04's fault handler:
+    /// historical kernel-debug use) and LowerEl (the fault handler:
     /// the first user instruction fetch arrives as EC 0x20).
     pub fn from_esr_el1(r: EsrEl1) -> Option<EsrEl1IssInstructionAbort> {
         r.exception_class_enum()
@@ -244,7 +244,7 @@ bitstruct! {
 
 #[allow(dead_code)] // the constructor family is exercised by cfg(test) tests; fault.rs constructs directly after its EC match
 impl EsrEl1IssDataAbort {
-    /// Decode the data-abort ISS for a lower-EL (user) data abort — 04-04's
+    /// Decode the data-abort ISS for a lower-EL (user) data abort — the
     /// fault handler owns EC 0x24; same-EL (kernel) data aborts stay on the
     /// panic path.
     pub fn from_esr_el1(r: EsrEl1) -> Option<EsrEl1IssDataAbort> {

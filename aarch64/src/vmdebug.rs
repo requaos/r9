@@ -82,7 +82,7 @@ fn recursive_root_page_table_va(pgtype: RootPageTableType) -> usize {
 
 /// Return the current kernel or user page table.
 /// This depends on the recursive entry of root page tables to have been set up correctly.
-/// 261103-p64: a SHARED reference (read-only printing) — no `&'static mut`.
+/// A SHARED reference (read-only printing) — no `&'static mut`.
 fn recursive_root_page_table(pgtype: RootPageTableType) -> &'static RootPageTable {
     let ptr = recursive_root_page_table_va(pgtype) as *const RootPageTable;
     // SAFETY: the recursive slot-511 self-entry makes this VA resolve to the

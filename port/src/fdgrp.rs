@@ -1,10 +1,10 @@
-//! fdgrp — the per-process-group fd table (05-06, D-03's RFFDG/RFCFDG
+//! fdgrp — the per-process-group fd table (the RFFDG/RFCFDG
 //! semantics; the donor's Fgrp, 9k pgrp.c dupfgrp/closefgrp).
 //!
 //! The fd table is a fixed array of chan slots behind the mcslock idiom
 //! (`Arc<Lock<FdGroup>>` on the Proc — the pgrp/env_group field shape).
-//! rfork's fd-group semantics follow fork(2) + 9k sysproc.c (the 05-04
-//! RFNAMEG / 05-05 RFENVG precedent — the donor governs):
+//! rfork's fd-group semantics follow fork(2) + 9k sysproc.c (the donor
+//! governs):
 //!
 //!   - NEITHER RFFDG nor RFCFDG: the child SHARES the parent's table
 //!     (the Arc clone — a child's close is visible to the parent).
@@ -13,10 +13,9 @@
 //!     reference the SAME shared queue; slot identity is distinct).
 //!   - RFCFDG: the child gets a fresh EMPTY table (dupfgrp(nil)).
 //!
-//! (The 05-06 plan's bullets invert RFFDG vs default — fork(2):
+//! (fork(2):
 //! "RFFDG: the invoker's file descriptor table is COPIED; otherwise the
-//! two processes share a single table."  This is the phase's third
-//! plan-text flag inversion; the donor governs.  libc fork() =
+//! two processes share a single table."  libc fork() =
 //! rfork(RFPROC|RFFDG|RFREND) = COPY, which is exactly what
 //! connectembed's dup/close choreography requires.)
 //!
@@ -36,7 +35,7 @@ use crate::dat::Chan;
 
 /// The fd group: N chan slots (None = free), HEAP-BACKED by a Vec — an
 /// inline `[Option<Chan>; 32]` materialized ~5.7 KB on the kernel stack
-/// inside Proc::new (the 05-06 debug: the rfork → new_user_proc →
+/// inside Proc::new (the rfork → new_user_proc →
 /// Proc::new chain on a 16 KiB kstack overflowed into the proc's
 /// root-table page below it — the live stack then read as UART-register
 /// garbage mid-print; a Vec's buffer is heap from the start).
@@ -124,7 +123,7 @@ impl<const N: usize> FdGroup<N> {
         out
     }
 
-    /// 261104-b4p (item 4 — the donor pexit closefgrp's table half): take
+    /// The donor pexit closefgrp's table half: take
     /// EVERY occupied slot (leaving Nones) and return the chans in slot
     /// order; the group is left empty and reusable.  exit_tail drains the
     /// dying proc's group this way and close-dispatches each chan AFTER

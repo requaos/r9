@@ -1,12 +1,12 @@
-//! devroot — the root file tree over the initrd paqfs image (04-05, D-15).
+//! devroot — the root file tree over the initrd paqfs image.
 //! The one mechanism exec sources binaries through: attach → root Chan, walk
 //! a single name component, open OREAD/OEXEC, read via the paqfs reader's
 //! byte-granular read_at, stat minimal (name/qid/length from the PaqDir).
-//! Directories read as the stat(5)-wire listing of their children (WR-08 —
-//! the donor devroot's devdirread; the root listing appends the synthesized
+//! Directories read as the stat(5)-wire listing of their children
+//! (the donor devroot's devdirread; the root listing appends the synthesized
 //! /rootfs.img node so a listing names every walkable entry).
 //!
-//! 05-05 Task 2: the tree additionally exposes `/rootfs.img` — the D-04
+//! The tree additionally exposes `/rootfs.img` — the
 //! RAW view of the same image the tree walks (the two-views note): the
 //! kernel execs from the walked tree while the userspace paqfs server
 //! serves the raw bytes.  A baked image shipping its own rootfs.img root
@@ -21,9 +21,9 @@
 //! The dat.rs `Dev` trait is NOT implemented here: its skeleton is
 //! undispatched and partially non-constructible as written (`Walkqid` has an
 //! unsized `_qids: [Qid]` field, and `attach` is a static that could not see
-//! a mounted image).  This module implements the device OPERATIONS the plan
-//! names (attach/walk/open/read/stat) as inherent methods; trait conformance
-//! lands when the devtab dispatch era (04-06+) grows the skeleton into a
+//! a mounted image).  This module implements the device OPERATIONS
+//! (attach/walk/open/read/stat) as inherent methods; trait conformance
+//! lands when the devtab dispatch era grows the skeleton into a
 //! constructible shape.
 
 use alloc::vec::Vec;
@@ -35,8 +35,8 @@ use crate::Result;
 
 /// Plan 9 open modes (sys/include/libc.h): the low two bits are the access
 /// mode, NOT a bit set.  devroot is read-only; exec opens its binary OEXEC
-/// per the donor convention.  The frozen values live in dat.rs (04-06 fixed
-/// the `Mode` bitflag skeleton — phase-04 deferred-items.md #1); re-exported
+/// per the donor convention.  The frozen values live in dat.rs;
+/// re-exported
 /// here so existing `devroot::OEXEC` call sites keep working.
 pub use crate::dat::{OEXEC, OREAD};
 
@@ -46,9 +46,9 @@ const DMDIR: u32 = 0x8000_0000;
 const QTDIR: u8 = 0x80;
 const QTFILE: u8 = 0x00;
 
-/// 05-05 Task 2 (D-04's two-views counterpart, hardened): the raw initrd
+/// The raw initrd
 /// image served as the root-tree file `/rootfs.img` — the exact literal
-/// bootr9.c's embed method arg names (the cross-plan contract).  The
+/// bootr9.c's embed method arg names (the cross-repo contract).  The
 /// kernel walks the paqfs TREE for exec; the userspace paqfs server reads
 /// the raw BYTES through this node — two views of the one image.
 /// Synthesized at the root only (a deeper or re-rooted chan never
@@ -57,8 +57,7 @@ const QTFILE: u8 = 0x00;
 /// every write-side mode and OEXEC are refused with NAMED errors.  The
 /// reserved qid never collides with mkpaqfs qids (sequential from 1).
 ///
-/// Name-collision discipline (05-05's hardening — the 05-04 provisional
-/// let a real image entry silently win): if the baked image ever ships
+/// Name-collision discipline: if the baked image ever ships
 /// its OWN rootfs.img entry at the root, mount_initrd FAILS with a named
 /// error rather than letting one view shadow the other — a real entry
 /// would masquerade as the raw image to the paqfs server (its bytes
@@ -73,7 +72,7 @@ pub struct DevRoot {
 }
 
 /// The mounted root image, published once by mount_initrd (single writer,
-/// pre-EL0; read thereafter from boot/syscall context).  04-06's syscall
+/// pre-EL0; read thereafter from boot/syscall context).  The syscall
 /// handlers reach the root tree through `root()` — DevRoot is
 /// stateless-per-call over the memory-resident image, so a fresh handle
 /// per call is the reentrant shape.  The mcslock idiom (CONS/PAGE_ALLOC
@@ -82,8 +81,8 @@ static ROOT_IMG: Lock<Option<&'static [u8]>> = Lock::new("devroot", None);
 
 /// Mount the initrd paqfs image as the root tree.  The image is validated
 /// (header + trailer) up front — a corrupt image is a loud Err at mount,
-/// never a mid-boot surprise.  05-05 Task 2: the collision refusal joins
-/// the validation — an image shipping its own rootfs.img entry at the
+/// never a mid-boot surprise.  The collision refusal joins
+/// the validation: an image shipping its own rootfs.img entry at the
 /// root is rejected BEFORE anything is published (the raw-image node
 /// would silently shadow / be shadowed by it; see RAWIMG_NAME).
 pub fn mount_initrd(img: &'static [u8]) -> Result<DevRoot> {
@@ -128,7 +127,7 @@ impl DevRoot {
     /// the returned Chan carries the matched PaqDir.  `..` and multi-element
     /// walks are out of scope for the root tree this era.  At the ROOT only,
     /// a failed lookup of the raw-image name synthesizes the /rootfs.img
-    /// node (05-05 — see RAWIMG_NAME); the mount-time collision refusal
+    /// node (see RAWIMG_NAME); the mount-time collision refusal
     /// means a real entry of that name cannot exist post-mount (the real-
     /// entry branch below stays as belt-and-braces).
     pub fn walk(&self, c: &Chan, name: &[u8]) -> Result<Chan> {
@@ -165,7 +164,7 @@ impl DevRoot {
         nc
     }
 
-    /// The synthesized node's PaqDir (walk's chan synthesis and the WR-08
+    /// The synthesized node's PaqDir (walk's chan synthesis and the
     /// root listing share the shape).
     fn rawimg_paqdir(&self) -> PaqDir {
         PaqDir {
@@ -183,7 +182,7 @@ impl DevRoot {
     /// Open `c` OREAD or OEXEC.  Everything else (write-side modes, trunc)
     /// is a read-only-fs error; a directory opens OREAD only.  The raw-image
     /// node opens OREAD only (it is not a binary) — its write-side and
-    /// exec refusals carry NAMED errors (05-05's hardening: the node's
+    /// exec refusals carry NAMED errors (the node's
     /// read-only contract is a load-bearing part of the two-views story,
     /// never a generic fs error).
     pub fn open(&self, c: &Chan, mode: u32) -> Result<Chan> {
@@ -206,14 +205,14 @@ impl DevRoot {
 
     /// Read via the paqfs reader's byte-granular read_at.  `offset` is the
     /// explicit file offset; `u64::MAX` (pread/pwrite's -1) means "use and
-    /// advance the chan's streaming offset" (04-RESEARCH.md fd convention).
+    /// advance the chan's streaming offset".
     /// The raw-image node reads the image slice directly (its PaqDir's
     /// block offset names nothing — paqfs blocks are the TREE's encoding).
-    /// WR-08: a DIRECTORY read serves the stat(5)-wire listing of the
+    /// A DIRECTORY read serves the stat(5)-wire listing of the
     /// PaqDir's children (the donor devroot's devdirread over the root
     /// tree — any dirreadall of a devroot dir, e.g. reading `/` before
     /// newns binds the mounted union over it); the records are the fixed
-    /// 4-string CR-01 shape via write_entry.  At the ROOT the synthesized
+    /// 4-string shape via write_entry.  At the ROOT the synthesized
     /// /rootfs.img node appends (walk synthesizes it there; a listing
     /// names every walkable entry).
     pub fn read(&self, c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
@@ -251,7 +250,7 @@ impl DevRoot {
     }
 
     /// Append one entry's stat(5) wire record to a directory listing
-    /// (WR-08; the record shape is stat's — see write_entry).
+    /// (the record shape is stat's — see write_entry).
     fn push_entry(listing: &mut Vec<u8>, dev: usize, qid: Qid, dir: &PaqDir) -> Result<()> {
         let start = listing.len();
         let need = 41
@@ -265,7 +264,7 @@ impl DevRoot {
         Ok(())
     }
 
-    /// One stat(5) wire record for a PaqDir (stat + the WR-08 listing
+    /// One stat(5) wire record for a PaqDir (stat + the directory listing
     /// share the shape): the 41-byte fixed part + FOUR length-prefixed
     /// strings — name/uid/gid/muid (libc's statcheck walks four and
     /// rejects a record that ends early, convM2D.c); muid = uid per the
@@ -302,8 +301,8 @@ impl DevRoot {
     /// name/uid/gid/muid strings from the PaqDir (qid path+vers+type, mode,
     /// mtime, length).  `sb` must be large enough; the size prefix is
     /// written last.  Returns the byte count (prefix included — the
-    /// convD2M/sysstat contract; 05-04 Task 3).  The record shape is
-    /// write_entry's (shared with the WR-08 directory listing).
+    /// convD2M/sysstat contract).  The record shape is
+    /// write_entry's (shared with the directory listing).
     pub fn stat(&self, c: &Chan, sb: &mut [u8]) -> Result<u64> {
         let dir = c.paqdir.as_ref().ok_or("devroot: stat of unattached chan")?;
         Self::write_entry(sb, c.dev, c.qid, dir)
@@ -316,7 +315,7 @@ impl DevRoot {
     }
 
     /// The mounted image slice — the EXEC handler's byte-source input
-    /// (04-06; exec sources binaries through devroot, one mechanism).
+    /// (exec sources binaries through devroot, one mechanism).
     pub fn image(&self) -> &'static [u8] {
         self.img
     }

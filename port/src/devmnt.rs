@@ -1,38 +1,34 @@
-//! devmnt — the kernel 9P client `#M` (05-07, D-03's mount half; the
-//! virtio-9p prerequisite for v1.x).  Semantics ported from 9k's
-//! devmnt.c (the RESEARCH Don't-Hand-Roll mandate — mntversion/mntattach/
-//! mntwalk/mntopen/mntread/mntstat/mntclunk over the pipe fd, sized to
-//! the paqfs message set) with the wire codec from fcall.h + convS2M.c /
-//! convM2S.c.
+//! devmnt — the kernel 9P client `#M`.  Semantics ported from 9k's
+//! devmnt.c (mntversion/mntattach/mntwalk/mntopen/mntread/mntstat/
+//! mntclunk over the pipe fd, sized to the paqfs message set) with the
+//! wire codec from fcall.h + convS2M.c / convM2S.c.
 //!
 //! A mounted tree is a SESSION: sys_fversion negotiates the msize over
 //! the fd's chan (Tversion/Rversion — "9P2000", offer 8192, accept the
 //! server's lower answer) and parks the resulting `Arc<Mnt>` ON the chan
 //! (dat.rs's `mnt` slot — the donor's `c->mux`); sys_mount attaches the
-//! tree (Tattach, afid = NOFID — the D-02 no-auth path, nsinit's
+//! tree (Tattach, afid = NOFID — the no-auth path, nsinit's
 //! fall-through) and inserts the mount-table entry at the resolved
 //! target.  Chans in the mounted tree carry the session Arc plus their
 //! server-side fid; namec's DEV_MNT legs dispatch walk/open/read/stat to
 //! Twalk/Topen/Tread/Tstat RPCs, and namec::close_chan's DEV_MNT leg
 //! sends Tclunk when an OPENED mnt chan leaves an fd slot.
 //!
-//! T-05-13 (the mntchk discipline, ported): EVERY R-message off the pipe
-//! is untrusted input from a userspace server.  The receive path
-//! bounds-checks the message size against the negotiated msize BEFORE
-//! reading the body, tag-matches the reply against the outstanding
-//! T-message, requires the reply type to be request+1 (Rerror maps to a
-//! loud errstr with the server's ename on the serial log), and parses
-//! every field through a checked cursor that must consume the message
-//! EXACTLY (the donor convM2S's `l != n` check).  Protocol failures are
-//! "devmnt: …" errstrs, never panics, never partial reads, never trusted
-//! bytes.  Host tests prove rejection of oversized and mis-tagged replies
+//! EVERY R-message off the pipe is untrusted input from a userspace
+//! server (the mntchk discipline, ported): the receive path bounds-checks
+//! the message size against the negotiated msize BEFORE reading the body,
+//! tag-matches the reply against the outstanding T-message, requires the
+//! reply type to be request+1 (Rerror maps to a loud errstr with the
+//! server's ename on the serial log), and parses every field through a
+//! checked cursor that must consume the message EXACTLY (the donor
+//! convM2S's `l != n` check).  Protocol failures are "devmnt: …" errstrs,
+//! never panics, never partial reads, never trusted bytes.  Host tests
+//! prove rejection of oversized and mis-tagged replies
 //! (port/tests/devmnt_test.rs).
 //!
 //! Concurrency this era (documented era limit): exactly ONE RPC is
 //! outstanding per session — syscalls are serialized and the boot chain's
-//! client side is strictly sequential (init parks in await while rc runs;
-//! fork() copies the fd table, and no measured flow shares a session
-//! across concurrently-running procs).  A second concurrent RPC gets a
+//! client side is strictly sequential.  A second concurrent RPC gets a
 //! LOUD error ("devmnt: concurrent rpc this era"), never a wedge — the
 //! tag-multiplexing reader (the donor's mountio/mountmux) arrives with
 //! the virtio-9p/SMP era.  The busy flag is a plain AtomicBool because
@@ -52,7 +48,7 @@
 //! the Chan-wrapping device ops are free functions/methods, dispatched by
 //! chan.dev via namec.rs's legs (DEV_MNT).
 //!
-//! Fid lifecycle (261104-b4p — item 5 RESOLVED): fids are allocated at
+//! Fid lifecycle: fids are allocated at
 //! walk/attach from a per-session counter (never reused — paqfs's Fid is
 //! ~50 bytes and the boot chain walks dozens, not millions) and carried
 //! on the chan as `Option<Arc<u32>>`: dup CLONES the Arc, open SHARES the
@@ -61,8 +57,7 @@
 //! leaves — exactly-once by construction, against any server.  namec's
 //! walk sweeps the DEV_MNT chans IT mints (walk-step results + redirect
 //! clones once walked past) on every exit, Ok and Err alike, so walk
-//! intermediates never leak server-side.  The two former divergences
-//! (intermediate leaks, dup double-Tclunk) are RETIRED.  One deliberate
+//! intermediates never leak server-side.  One deliberate
 //! bound remains: mount-TABLE entries stay table-lifetime-pinned — an
 //! unmount/MREPL-replaced entry's fid is never Tclunk'd (deferred;
 //! bounded by the mount count, ~one fid per mount per boot).
@@ -226,8 +221,8 @@ impl<'a> RepCur<'a> {
 /// The 9P byte transport: one whole message per write; reads return up to
 /// the buffer's length and BLOCK until at least one byte is available
 /// (the kernel transport's devpipe read schedules the server proc).
-/// 261103-p64: the Send supertrait attempt is documented in UNSAFE-AUDIT.md
-/// — it breaks the unmodified host tests (FakeServer's Rc fid table), so
+/// A Send supertrait attempt breaks the unmodified host tests
+/// (FakeServer's Rc fid table), so
 /// the session's shareability proof is the BusyCell discipline and the
 /// `unsafe impl Send for MntCore` lives beside the primitive (mcslock.rs).
 pub trait MntIo {
@@ -267,7 +262,7 @@ impl MntIo for ChanIo {
 
 /// The RPC-critical-section state: only the busy-flag OWNER touches it
 /// (the flag IS the mutex — see the module header's concurrency note).
-/// 261103-p64: pub(crate) so the Send proof can live beside BusyCell
+/// pub(crate) so the Send proof can live beside BusyCell
 /// (mcslock.rs) — devmnt.rs itself carries zero unsafe for the
 /// #[forbid(unsafe_code)] regression lock.
 pub(crate) struct MntCore {
@@ -278,7 +273,7 @@ pub(crate) struct MntCore {
     next_fid: u32,
     next_tag: u16,
     /// The msize-sized receive scratch (HEAP — an 8 KiB stack buffer is
-    /// the 05-06 kstack-overflow lesson).
+    /// the kstack-overflow lesson).
     rx: Vec<u8>,
 }
 
@@ -307,7 +302,7 @@ impl core::fmt::Debug for Mnt {
 impl Mnt {
     /// Take RPC ownership (the era's serialization): one outstanding RPC
     /// per session; a concurrent attempt is a LOUD error, never a wedge.
-    /// 261103-p64: the BusyCell guard IS the token — its Drop releases
+    /// The BusyCell guard IS the token — its Drop releases
     /// the session on any exit path.
     fn enter(&self) -> Result<crate::mcslock::BusyGuard<'_, MntCore>> {
         self.core.enter().ok_or("devmnt: concurrent rpc this era")
@@ -316,7 +311,7 @@ impl Mnt {
     /// The whole RPC round-trip (donor mountrpc + the receive half of
     /// mountio/mntrpcread): send the T-message whole, then frame the
     /// reply — read the 4-byte size prefix, mntchk it against the
-    /// negotiated msize BEFORE reading the body (T-05-13), read exactly
+    /// negotiated msize BEFORE reading the body, read exactly
     /// `size` bytes, then require the expected type (Rerror maps to a
     /// loud errstr with the server's ename on the serial log) and the
     /// outstanding tag.  Returns the reply's total size (the body sits in
@@ -338,7 +333,7 @@ impl Mnt {
             got += n;
         }
         let size = u32::from_le_bytes(core.rx[0..4].try_into().unwrap()) as usize;
-        // T-05-13 (mntchk): the claimed size is untrusted until it passes
+        // mntchk: the claimed size is untrusted until it passes
         // BOTH bounds — never read (or trust) a body the claim doesn't
         // cover, never read more than the negotiated msize.
         if size < 7 {
@@ -454,7 +449,7 @@ impl Mnt {
     }
 
     /// Tattach (donor mntattach): a fresh fid attached to the tree root
-    /// with afid = NOFID (D-02 — no auth this phase; nsinit's fall-through
+    /// with afid = NOFID (no auth this era; nsinit's fall-through
     /// is the designed path).  Returns (fid, the root qid).
     pub fn attach(&self, uname: &[u8], aname: &[u8]) -> Result<(u32, Qid)> {
         let mut core = self.enter()?;
@@ -505,7 +500,7 @@ impl Mnt {
         Ok((newfid, qid))
     }
 
-    /// A fid CLONE (05-09 — the gate-surfaced mount-table aliasing fix):
+    /// A fid CLONE (the mount-table aliasing fix):
     /// Twalk with ZERO names (the 9P fid-clone idiom — donor mntwalk's
     /// nwname==0 arm) clones the fid's position onto a fresh fid.  The
     /// mount table's entry chans are SHARED with namec's redirects; a
@@ -677,7 +672,7 @@ pub fn fversion(chan: &mut Chan, offer: u32, out: &mut [u8]) -> Result<u64> {
 /// sys_mount's attach (donor mntattach via bindmount): attach the session's
 /// tree root and return the mount-root chan (DEV_MNT, fresh fid, the
 /// server's root qid).  The caller sets the path (the mount target's) and
-/// inserts it into the pgrp mount table.  261104-b4p: the fid is Arc'd.
+/// inserts it into the pgrp mount table.  The fid is Arc'd.
 pub fn attach(mnt: &Arc<Mnt>, aname: &[u8]) -> Result<Chan> {
     let (fid, qid) = mnt.attach(b"glenda", aname)?;
     let mut c = Chan::new(DEV_MNT, qid, 0);
@@ -705,11 +700,11 @@ pub fn walk(c: &Chan, name: &[u8]) -> Result<Chan> {
     Ok(nc)
 }
 
-/// The DEV_MNT fid-clone leg (05-09): namec's mount-point redirects clone
+/// The DEV_MNT fid-clone leg: namec's mount-point redirects clone
 /// the mount TABLE's chan onto a fresh fid (Mnt::clone_fid — the zero-name
 /// Twalk) instead of bare-dup'ing it, so a redirect's open+close lifecycle
-/// never touches the table's server-side fid (the ls /bin → ps exec gate
-/// failure: the bare dup let ls's close Tclunk the table's fid, and every
+/// never touches the table's server-side fid (a bare dup let ls's close
+/// Tclunk the table's fid, and every
 /// later walk from it Rerror'd).
 pub fn clone_chan(c: &Chan) -> Result<Chan> {
     let Some(mnt) = &c.mnt else { return Err("devmnt: clone of a non-mount chan") };
@@ -727,7 +722,7 @@ pub fn clone_chan(c: &Chan) -> Result<Chan> {
 /// The DEV_MNT open leg (namec's open_chan): Topen; directory opens are
 /// OREAD-only (the donor namec discipline); OTRUNC/ORCLOSE ride the wire
 /// byte for the server to answer (paqfs refuses both — Erdonly).
-/// 261104-b4p: the open SHARES the walked fid's Arc (the donor's
+/// The open SHARES the walked fid's Arc (the donor's
 /// open-doesn't-realloc shape) — the walked chan and the opened chan are
 /// two refs on ONE server-side fid, and the last ref's close dispatches
 /// the Tclunk.
@@ -807,11 +802,11 @@ pub fn clunk(c: &Chan) {
     }
 }
 
-/// 261104-b4p (item 5 — the Arc'd fid's close rule): Tclunk ONLY when
+/// Tclunk ONLY when
 /// this chan is the fid's LAST live reference (Arc::strong_count == 1).
 /// Open shares the walked fid's Arc and dup clones it, so every close
-/// dispatch that is not the last ref skips — the value-copy era's
-/// double-Tclunk divergence is retired by construction (paqfs's rclunk
+/// dispatch that is not the last ref skips — a value copy's
+/// double-Tclunk divergence is impossible by construction (paqfs's rclunk
 /// no-op semantics stop being load-bearing).  Walked-but-never-opened
 /// chans hold fids too: namec's close arm and walk sweep call this
 /// REGARDLESS of copen.  Best-effort like clunk: a failure logs and
@@ -824,12 +819,12 @@ pub fn clunk_if_last(c: &Chan) {
     clunk(c);
 }
 
-/// sys_exec's byte source for a mounted binary (05-07 Task 2's wiring):
+/// sys_exec's byte source for a mounted binary:
 /// read the WHOLE file eagerly (syscall context — RPCs block by design;
 /// the trap-context pager must never RPC).  Bounded by `cap` (loud error,
-/// never an unbounded read off an untrusted server).  WR-06(b): reads may
+/// never an unbounded read off an untrusted server).  Reads may
 /// reach cap+1 bytes so an EXACTLY-cap file terminates via the empty-read
-/// EOF arm (the old top-of-loop `out.len() >= cap` check errored it
+/// EOF arm (a top-of-loop `out.len() >= cap` check would error it
 /// without ever attempting the final read); only a byte past the cap is
 /// "too large".
 pub fn read_all(c: &Chan, cap: usize) -> Result<Vec<u8>> {

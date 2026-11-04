@@ -17,7 +17,7 @@ use port::println;
 /// ITARGETSR cpu0 write, which gic::enable applies (research P6).
 pub const UART_INTID: u32 = 33;
 
-/// Handler-side access to the mapped PL011 registers (261103-p64: the
+/// Handler-side access to the mapped PL011 registers (the
 /// typed RegBlock — register access by offset, never ad-hoc pointers).
 /// Published once when the console uart is created (before
 /// trap::unmask_irq), read lock-free in IRQ context -- the echo path must
@@ -27,9 +27,9 @@ static PL011_RANGE: SyncUnsafeCell<Option<RegBlock>> = SyncUnsafeCell::new(None)
 
 /// PL011 on qemu's virt machine.  Unlike the raspi variant
 /// (platform/raspi3b/uartpl011.rs) there is no GPIO/mailbox init -- qemu
-/// pre-configures the UART (phase-03 research Pattern 3), so this driver is
+/// pre-configures the UART, so this driver is
 /// DTB-discovered, map_device_register-mapped, polled-TX plus an IRQ-driven
-/// RX echo path (SC#4).
+/// RX echo path.
 pub struct Pl011Uart {
     regs: RegBlock,
 }
@@ -92,10 +92,10 @@ pub fn init_rx() {
 }
 
 /// INTID 33 handler entry (trap.rs's dispatch): the RX byte path differs by
-/// profile.  cfg(not(dev_exec)): the Phase-3 echo profile — bytes are echoed
+/// profile.  cfg(not(dev_exec)): the echo profile — bytes are echoed
 /// verbatim over raw DR writes (the r9echo7 boot-test assertion).  Under
 /// cfg(dev_exec) bytes instead feed the per-console read buffer that the
-/// devcons device's read path drains (04-06, D-15) — echoing userland's
+/// devcons device's read path drains — echoing userland's
 /// console input back would corrupt the exec profile's serial evidence.
 pub fn rx_irq() {
     #[cfg(not(dev_exec))]
@@ -158,7 +158,7 @@ static CONS_RX: SyncUnsafeCell<ConsRx> =
 
 /// devcons read side (dev_exec): drain up to `buf.len()` bytes from the RX
 /// ring; return the count — 0 when empty.  Called only from IRQ-masked
-/// syscall context (the devcons input engine's drain hook, 05-08), so the
+/// syscall context (the devcons input engine's drain hook), so the
 /// IRQ writer cannot interleave.
 #[cfg(dev_exec)]
 pub fn cons_rx_drain(buf: &mut [u8]) -> usize {
@@ -175,7 +175,7 @@ pub fn cons_rx_drain(buf: &mut [u8]) -> usize {
     n
 }
 
-/// 05-08 (D-06): lock-free "RX ring non-empty" peek for the tick's
+/// Lock-free "RX ring non-empty" peek for the tick's
 /// cons-wake hook (timer.rs → proc::cons_input_wake).  A torn read of
 /// head/tail is benign: a missed wake retries at the next tick (1 ms),
 /// and a spurious wake just re-blocks after the reader's drain finds
@@ -188,7 +188,7 @@ pub fn cons_rx_pending() -> bool {
     rx.head != rx.tail
 }
 
-/// gatedbg (the 05-REVIEW-FIX wedge hunt): the UART FIFO's non-empty flag
+/// gatedbg: the UART FIFO's non-empty flag
 /// (FR.RXFE bit clear) — the autopsy discriminator for a lost RX/RT edge:
 /// bytes in the FIFO but never IRQ'd into the ring while a cons reader
 /// stays blocked.
@@ -209,10 +209,10 @@ pub fn cons_rx_ring_pos() -> (usize, usize) {
     (rx.head, rx.tail)
 }
 
-/// 05-REVIEW-FIX (the gate's lost-byte wedge): the tick's direct FIFO
+/// The tick's direct FIFO
 /// poll — drain any FIFO bytes the RX/RT interrupt path missed into the
 /// ring (the IRQ handler's own discipline, reused).  The observed wedge
-/// signature (a traced gate failure): rc's cons read woke on a typed
+/// signature: rc's cons read woke on a typed
 /// command's byte PREFIX, the final byte never interrupted, and the
 /// reader re-blocked forever.  qemu's PL011 model raises INT_RX per
 /// received char, but a byte landing in the drain→clear window can miss
@@ -231,8 +231,8 @@ pub fn cons_rx_poll() {
 /// DR writes.  LOCK-FREE by construction (research P8): no println!, no
 /// Console access -- the Console mcslock may be held by the interrupted
 /// context, and taking it here would self-deadlock.  Bytes are echoed, never
-/// interpreted: no control-byte actions (Ctrl-P and friends stay deferred per
-/// CONTEXT.md).
+/// interpreted: no control-byte actions (Ctrl-P and friends stay
+/// deferred).
 #[cfg(not(dev_exec))]
 pub fn rx_irq_echo() {
     // SAFETY: PL011_RANGE was published before IRQ unmask (write-once);

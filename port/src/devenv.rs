@@ -1,16 +1,16 @@
-//! devenv — the per-pgrp environment device `#e` (05-05, D-07; semantics
-//! ported from 9k's devenv.c — the RESEARCH Don't-Hand-Roll mandate).
+//! devenv — the per-pgrp environment device `#e` (semantics
+//! ported from 9k's devenv.c).
 //!
 //! The environment is a per-process-GROUP key/value store: every `#e`
 //! operation resolves against the OPERATING process's env group (the
 //! donor's `envgrp(c)` → `up->egrp` shape — dynamic, never captured at
 //! attach, so a chan walked by one proc resolves in the group of the
 //! proc using it).  rfork semantics follow fork(2) and 9k's sysproc.c
-//! (the 05-04 RFNAMEG/RFCNAMEG precedent — the donor governs): RFPROC
+//! (the donor governs): RFPROC
 //! with NEITHER RFENVG nor RFCENVG SHARES the group (Arc clone);
 //! RFENVG gives the child a fresh deep COPY (envcpy); RFCENVG a fresh
 //! EMPTY group.  The kernel seeds the ROOT group before the first exec
-//! (cputype/nobootprompt/readparts — RESEARCH Pattern 3 / Pitfall 1);
+//! (cputype/nobootprompt/readparts);
 //! main.rs assigns it to pid 1 and prints the `devenv: seeded …` gate
 //! line.
 //!
@@ -20,8 +20,8 @@
 //! taking another kernel lock.  The port crate cannot see the arch
 //! side's proc table, so the current group arrives through a
 //! dependency-injected hook (`set_group_hook` — the devproc.rs
-//! `set_post_hook` idiom; PATTERNS names the same one-time-publish
-//! shape for the seeded root group).
+//! `set_post_hook` idiom; the same one-time-publish
+//! shape publishes the seeded root group).
 //!
 //! The dat.rs `Dev` trait is NOT implemented here (its skeleton is
 //! non-constructible — see devroot.rs's header); the device operations
@@ -39,12 +39,11 @@
 //!
 //! Attach spec: empty only.  A non-empty spec (e.g. "c" — the donor's
 //! `#ec` config group) errors loudly: r9's seeded ROOT group replaces
-//! the config-env mechanism this era (Pattern 3), and boot's
-//! `bind("#ec", …)` is the designed fail-soft path (05-04 proved it).
+//! the config-env mechanism this era, and boot's
+//! `bind("#ec", …)` is the designed fail-soft path.
 //!
 //! The `#e` tree is FLAT: root dir + key files.  create rides the
-//! sys_create handler (05-06 wires the syscall; this plan's gate needs
-//! only seeded keys + write/replace — the ops are structured so create
+//! sys_create handler (the ops are structured so create
 //! slots in without rework: the strict Eexist-on-dup device op here is
 //! the donor's envcreate, and namec's Acreate existing-file → OTRUNC
 //! open fallback (9k chan.c) is the syscall side's business, not this
@@ -138,7 +137,7 @@ impl EnvGroup {
     }
 
     /// A group pre-populated with `pairs` (create + write per pair — the
-    /// seeded-root constructor; 05-05's kernel seed and the host tests).
+    /// seeded-root constructor used by the kernel seed and the host tests).
     pub fn seeded(pairs: &[(&[u8], &[u8])]) -> Result<EnvGroup> {
         let mut g = EnvGroup::new();
         for (name, value) in pairs {
@@ -171,7 +170,7 @@ impl EnvGroup {
 
     /// envcreate: a new EMPTY key.  Eexist on a duplicate name (the
     /// create-on-existing → OTRUNC-open fallback is namec's Acreate
-    /// contract, 05-06's sys_create — not here).  Names are a single
+    /// contract — not here).  Names are a single
     /// component: non-empty, no '/', under the donor's genbuf ceiling.
     /// Returns the new entry's qid path.
     pub fn create(&mut self, name: &[u8]) -> Result<u64> {
@@ -317,7 +316,7 @@ pub fn walk(c: &Chan, name: &[u8]) -> Result<Chan> {
 /// key opens in any access mode after an existence check (the donor's
 /// Enonexist arm — a walked chan whose key vanished errors here); OTRUNC
 /// empties the value first (the setenv flow — create-on-existing rides
-/// namec's Acreate → OTRUNC open fallback, 05-06).  r9 has no eve
+/// namec's Acreate → OTRUNC open fallback).  r9 has no eve
 /// privilege split this era: every group is writable (the donor's
 /// envwriteable `iseve() || c->aux == nil` — aux is always nil here).
 pub fn open(c: &Chan, mode: u32) -> Result<Chan> {
@@ -412,7 +411,7 @@ pub fn write(c: &mut Chan, buf: &[u8], offset: u64) -> Result<u64> {
 }
 
 /// Create a new key under the env root (donor envcreate) and return it
-/// OPEN in `mode` — the op 05-06's sys_create dispatches to.  Eexist on
+/// OPEN in `mode` — the op sys_create dispatches to.  Eexist on
 /// a duplicate (create-on-existing is namec's OTRUNC-open fallback, the
 /// syscall side's business).  `perms` is accepted and ignored this era
 /// (every env file serves 0666 per the donor's envgen).
@@ -450,8 +449,8 @@ pub fn stat(c: &Chan, sb: &mut [u8]) -> Result<u64> {
     write_stat_record(sb, &e.name, e.qid_path, e.vers, QTFILE, 0o666, e.value.len() as u64)
 }
 
-/// One stat(5) wire record (the devcons/devproc shape; uid/gid/muid glenda
-/// per D-02).  Returns the byte count (the convD2M contract).  FOUR
+/// One stat(5) wire record (the devcons/devproc shape; uid/gid/muid glenda).
+/// Returns the byte count (the convD2M contract).  FOUR
 /// strings — libc's statcheck walks four and rejects a record that ends
 /// early (convM2D.c).
 fn write_stat_record(

@@ -1,13 +1,13 @@
-//! D-06 layer 2: the cross-repo trap-frame drift gate.  Parses the frozen
+//! The cross-repo trap-frame drift gate.  Parses the frozen
 //! `aarch64/include/ureg.h` in the Harvey checkout named by R9_HARVEY_DIR
 //! and asserts the Ureg field names/order/count match the pinned table r9's
-//! TrapFrame is built against (aarch64/ABI.md, "Kernel-side enforcement
-//! (Phase 4 appendix)").  Layer 1 (the in-crate const asserts in
-//! aarch64/src/trap.rs) is always on; this layer fails every boot-test
-//! profile on drift — SC#1: an ABI mismatch is a build failure, not a
+//! TrapFrame is built against (aarch64/ABI.md's kernel-side enforcement
+//! appendix).  The in-crate const asserts in
+//! aarch64/src/trap.rs are always on; this gate fails every boot-test
+//! profile on drift — an ABI mismatch is a build failure, not a
 //! runtime mystery.
 //!
-//! 05-10 (05-CONTEXT D-10's inversion): the implicit `../harvey`
+//! The implicit `../harvey`
 //! sibling-checkout default is REMOVED — every xtask path that touches the
 //! Harvey checkout requires R9_HARVEY_DIR explicitly, and an unset variable
 //! is a named error, never a silent relative-path guess.
@@ -23,7 +23,8 @@ use std::{env, fs};
 use crate::{DynError, Result};
 
 /// The pinned Ureg field order r9's TrapFrame matches: 35 slots, the
-/// r30/link union occupying one (aarch64/ABI.md Phase-4 appendix).
+/// r30/link union occupying one (aarch64/ABI.md's kernel-side enforcement
+/// appendix).
 const PINNED_FIELDS: [&str; 35] = [
     "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12", "r13",
     "r14", "r15", "r16", "r17", "r18", "r19", "r20", "r21", "r22", "r23", "r24", "r25", "r26",
@@ -45,9 +46,9 @@ pub enum CheckStatus {
 }
 
 /// The Harvey checkout to check against: $R9_HARVEY_DIR — REQUIRED.
-/// 05-10 (05-CONTEXT D-10): the implicit `../harvey` default was removed
+/// The implicit `../harvey` default was removed
 /// here; an unset (or empty) variable is a named error, never a silent
-/// relative-path guess.  pub(crate) for the 04-05 initrd step, which
+/// relative-path guess.  pub(crate) for the initrd step, which
 /// resolves the same checkout.
 pub(crate) fn harvey_dir() -> Result<PathBuf> {
     match env::var("R9_HARVEY_DIR") {
@@ -61,10 +62,10 @@ pub(crate) fn harvey_dir() -> Result<PathBuf> {
 }
 
 /// Run the check against the resolved Harvey checkout.  Standalone
-/// (`cargo xtask ureg-check`) fails when R9_HARVEY_DIR is unset (05-10,
-/// D-10) and tolerates a named-but-headerless checkout with a skip line
-/// (layer 1 still guards); drift is always a hard error with a named-field
-/// diff.
+/// (`cargo xtask ureg-check`) fails when R9_HARVEY_DIR is unset
+/// and tolerates a named-but-headerless checkout with a skip line
+/// (the const asserts still guard); drift is always a hard error with a
+/// named-field diff.
 pub fn run_check() -> Result<CheckStatus> {
     let header = harvey_dir()?.join("aarch64/include/ureg.h");
     if !header.exists() {
@@ -83,7 +84,7 @@ pub fn run_check() -> Result<CheckStatus> {
     Ok(CheckStatus::Match)
 }
 
-/// The boot-test precondition (SC#1): drift fails the run, and so does an
+/// The boot-test precondition: drift fails the run, and so does an
 /// unset or headerless Harvey checkout — the cross-repo gate is the point
 /// of the harness.
 pub fn check_for_boot_test() -> Result<()> {

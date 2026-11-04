@@ -56,8 +56,8 @@ impl fmt::Debug for Context {
 unsafe extern "C" {
     /// Kernel-context switch (swtch.S): save callee-saved + sp + lr into
     /// `from`, load them from `to`, `ret` to to.x30.  Symmetric — a
-    /// Context saved by a prior swtch resumes after its own call.  04-07
-    /// uses this ONLY for kernel-context (blocked mid-syscall) switches;
+    /// Context saved by a prior swtch resumes after its own call.  Used
+    /// ONLY for kernel-context (blocked mid-syscall) switches;
     /// EL0 entry/exit rides trap_return, never swtch.
     pub(crate) fn swtch(from: &mut Context, to: &Context);
 }

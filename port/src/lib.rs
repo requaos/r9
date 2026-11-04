@@ -7,7 +7,7 @@
 
 extern crate alloc;
 
-// 261103-p64 (the regression-lock rollout): every port module carries
+// Every port module carries
 // #[forbid(unsafe_code)] EXCEPT the two named floor modules —
 // `globalalloc` (the GlobalAlloc shim: the trait's unsafe fn surface, the
 // arena-edge Block constructor, realloc, the QuickFit Sync proof) and
@@ -56,7 +56,7 @@ pub mod paqfs;
 #[forbid(unsafe_code)]
 pub mod pgrp;
 
-// 261103-p64: the allocator's tests live at the crate root (NOT under the
+// The allocator's tests live at the crate root (NOT under the
 // forbidden allocator module) so the pin tests' arena constructions keep
 // their unsafe blocks — the test bodies are byte-verbatim from the
 // pre-redesign module; the wave-3 additions pin the tripwire/exhaustion/

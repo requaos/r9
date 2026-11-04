@@ -1,6 +1,6 @@
 // ARM generic timer (EL1 physical timer, CNTP) for qemu's virt machine.
 //
-// The sequence is the phase-03 research Pattern 2 probe, verified live on
+// The sequence was verified live on
 // qemu 11.1.2: CNTFRQ_EL0 is read at RUNTIME (62.5 MHz under TCG, 24 MHz
 // under HVF -- both measured; never hardcoded), CNTP_TVAL_EL0 arms the
 // countdown, CNTP_CTL_EL0 ENABLE=1 with IMASK clear raises the PPI.  CNTP is
@@ -20,21 +20,21 @@ use port::println;
 /// if it ever disagrees; this constant is the documented fallback.
 pub const CNTP_INTID: u32 = 30;
 
-/// Tick rate.  04-07 (D-13): 1000 Hz = a 1 ms round-robin time slice (the
-/// CONTEXT.md agent's-discretion knob).  The userland era runs only a few
+/// Tick rate: 1000 Hz = a 1 ms round-robin time slice.
+/// The userland era runs only a few
 /// ms of wall time under TCG, and kernel trap/syscall context is
 /// IRQ-masked — a slower slice can expire only while masked and fire at
 /// most once per eret-to-EL0; measured runs showed a 10 ms slice never
 /// expiring mid-userland at all (zero preemptions).
 const TICKS_PER_SEC: u64 = 1000;
 /// Print divider for the not(dev_exec) profile: one console line per
-/// second of ticks (the Phase-3 virt profile's readable 1 Hz print-per-
+/// second of ticks (the readable 1 Hz print-per-
 /// tick pacing is unchanged by the faster slice).
 const PRINT_EVERY: u64 = TICKS_PER_SEC;
 
 static TICKS: AtomicU64 = AtomicU64::new(0);
 
-/// The current tick count (05-08's sys_sleep/sys_alarm deadlines).  1 tick
+/// The current tick count (sys_sleep/sys_alarm's deadlines).  1 tick
 /// = 1 ms this era (TICKS_PER_SEC = 1000), so millisecond args are tick
 /// counts verbatim.
 pub fn ticks() -> u64 {
@@ -93,11 +93,10 @@ fn arm() {
 /// nothing else holds the Console lock (main9's idle loop is wfi and prints
 /// nothing).  Under dev_exec that invariant ends — main9's exec orchestration
 /// prints after unmask_irq, and userland-era syscalls print from trap
-/// context — so the tick print is gated off there (04-RESEARCH.md Pitfall 3;
-/// the OQ-4 resolution's gating mechanism, pulled forward to the first config
-/// that needs it).  The tick itself keeps re-arming in every config.
+/// context — so the tick print is gated off there.
+/// The tick itself keeps re-arming in every config.
 ///
-/// 04-07 (D-13): the tick is the preemption source.  proc::preempt() acts
+/// The tick is the preemption source.  proc::preempt() acts
 /// only when a process is Running (i.e. the IRQ interrupted EL0 — kernel
 /// context runs IRQ-masked), so the call is a cheap no-op in the pre-exec
 /// and no-exec configs; when it does act, the trap tail's CURFRAME reload
@@ -114,7 +113,7 @@ pub fn tick() {
     }
     #[cfg(dev_exec)]
     {
-        // 05-08: the sleep/alarm sweep (the donor's tsleep wakeup +
+        // The sleep/alarm sweep (the donor's tsleep wakeup +
         // alarmkproc expiry — init's restart-loop sleep(1000) rides it)
         // and the cons-read waker — a blocked console reader readies when
         // the PL011 RX ring holds bytes.  The peek is lock-free
@@ -122,10 +121,9 @@ pub fn tick() {
         // exactly as preempt()/reschedule() do (the proc.rs module-header
         // discipline: the lock is only ever held in IRQ-masked context).
         crate::proc::tick_timeouts(n + 1);
-        // 05-REVIEW-FIX: poll the UART FIFO directly before the wake check
+        // Poll the UART FIFO directly before the wake check
         // — a byte that misses its RX/RT interrupt is collected here
-        // within one tick (the gate's lost-byte wedge signature),
-        // never lost until the next byte arrives.
+        // within one tick, never lost until the next byte arrives.
         crate::platform::pl011::cons_rx_poll();
         if crate::platform::pl011::cons_rx_pending() {
             crate::proc::cons_input_wake();

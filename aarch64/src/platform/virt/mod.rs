@@ -9,7 +9,7 @@ use port::fdt::DeviceTree;
 #[cfg(not(test))]
 use port::println;
 
-/// Print DTB-derived machine information (D-03/D-04): the "what machine am I
+/// Print DTB-derived machine information: the "what machine am I
 /// on" slot virt occupies instead of raspi's mailbox-driven print_board_info.
 /// Discovery flows through port::fdt -- no hardcoded virt address tables.
 pub fn print_machine_info(dt: &DeviceTree) {
@@ -23,7 +23,7 @@ pub fn print_machine_info(dt: &DeviceTree) {
     }
     // qemu 11.1.2's gicv2 machine reports the GIC as "arm,cortex-a15-gic"
     // (the "arm,gic-400" entry legitimately finds nothing there -- both are
-    // probed per the research correction to D-04).
+    // probed).
     for compat in ["arm,pl011", "arm,cortex-a15-gic", "arm,gic-400", "arm,armv8-timer"] {
         if dt.find_compatible(compat).next().is_some() {
             println!("  found: {compat}");

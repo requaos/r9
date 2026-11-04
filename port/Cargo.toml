@@ -6,13 +6,13 @@ edition = "2024"
 [dependencies]
 bitflags = "2.5"
 # Raw RFC 1951 inflate for paqfs DeflateEnc blocks (never the zlib/gzip
-# paths) and the adler32 payload checksum (D-02, T-04-03/T-04-04).
+# paths) and the adler32 payload checksum.
 # default-features = false keeps both no_std; with-alloc enables the Vec
-# decompressor.  Package Legitimacy Audit: 04-RESEARCH.md (OK-seam).
+# decompressor.
 miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
 adler2 = { version = "2", default-features = false }
 
-# 261103-p64: opt into the workspace clippy lints (undocumented_unsafe_blocks
+# Opt into the workspace clippy lints (undocumented_unsafe_blocks
 # = deny) — every remaining unsafe site in port carries a SAFETY comment.
 [lints]
 workspace = true

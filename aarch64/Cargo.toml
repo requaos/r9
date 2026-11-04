@@ -12,7 +12,7 @@ bitstruct = "0.1"
 port = { path = "../port" }
 num_enum = { version = "0.7", default-features = false }
 
-# 261103-p64: opt into the workspace lints (clippy undocumented_unsafe_blocks
+# Opt into the workspace lints (clippy undocumented_unsafe_blocks
 # = deny + the check-cfg declarations above).  Only the gated crates
 # (aarch64 + port) carry this; x86_64/riscv64 stay opted out (the scope line).
 [lints]

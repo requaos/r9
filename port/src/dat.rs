@@ -13,29 +13,29 @@ use crate::paqfs::PaqDir;
 pub struct Error(pub &'static str);
 
 /// Device-table index of the serving device.  A generated devtab arrives
-/// with the multi-device era (04-07+); until then the D-15 Phase-4 device
+/// with the multi-device era; until then the device
 /// set carries these index values as a convention: devroot = 0, devcons =
-/// 1, devproc-lite = 2 (04-08's per-process note channel, D-16), devenv =
-/// 3 (05-05's per-pgrp environment device, D-07).
+/// 1, devproc-lite = 2 (the per-process note channel), devenv =
+/// 3 (the per-pgrp environment device).
 pub const DEV_ROOT: usize = 0;
 pub const DEV_CONS: usize = 1;
 pub const DEV_PROC: usize = 2;
 pub const DEV_ENV: usize = 3;
-/// 05-06: devpipe (the Arc-shared blocking queue; registry rune '|'),
+/// devpipe (the Arc-shared blocking queue; registry rune '|'),
 /// devdup (per-fd files '#d/N'; rune 'd'), devsrv (the '#s' service
 /// registry; rune 's').
 pub const DEV_PIPE: usize = 4;
 pub const DEV_DUP: usize = 5;
 pub const DEV_SRV: usize = 6;
-/// 05-07: devmnt — the kernel 9P client (D-03's mount half).  Chans in a
+/// devmnt — the kernel 9P client (the mount half).  Chans in a
 /// mounted tree carry this index plus the session Arc and their
 /// server-side fid (the Chan `mnt`/`mnt_fid` slots land with the device).
 pub const DEV_MNT: usize = 7;
 
 /// Plan 9 open-mode values (frozen: Harvey sys/include/libc.h).  The low
 /// two bits are an access-MODE field (not a bit set); the upper bits are
-/// flags.  These replace the pre-Phase-4 `Mode` bitflags skeleton, whose
-/// values were wrong for this encoding (phase-04 deferred-items.md #1).
+/// flags.  These replace the retired `Mode` bitflags skeleton, whose
+/// values were wrong for this encoding.
 pub const OREAD: u32 = 0;
 pub const OWRITE: u32 = 1;
 pub const ORDWR: u32 = 2;
@@ -48,7 +48,7 @@ pub const OEXCL: u32 = 4096;
 pub const OMASK: u32 = 3;
 
 /// Plan 9 Qid type bytes (frozen: sys/include/libc.h) — shared by the
-/// syscall layer's dir checks (chdir) since 05-04.  (The devices keep
+/// syscall layer's dir checks (chdir).  (The devices keep
 /// their local copies; consolidating them is cleanup, not this plan.)
 pub const QTDIR: u8 = 0x80;
 pub const QTFILE: u8 = 0x00;
@@ -65,7 +65,7 @@ pub const MCACHE: u32 = 0x0010;
 pub const MORDER: u32 = 0x0003;
 pub const MMASK: u32 = 0x0017;
 
-/// One mounted entry in a pgrp union chain (05-04, D-03 — the donor's
+/// One mounted entry in a pgrp union chain (the donor's
 /// `Mount`, chan.c): the chan that appears at the mount point, the frozen
 /// flag bits carried on the entry (cmount records MCREATE here), and the
 /// mount id (diagnostics + pgrpcpy order bookkeeping).  The mount TABLE
@@ -80,7 +80,7 @@ pub struct MountEntry {
 }
 
 /// A kernel channel — an open-file handle bound to a device.  Grown from
-/// the placeholder skeleton for the Phase-4 device set (D-15): devroot
+/// the placeholder skeleton for the device set: devroot
 /// chans carry their paqfs directory entry in the crate-private slot.
 pub struct Chan {
     /// This chan's current qid (file identity: path+vers+type).
@@ -96,26 +96,26 @@ pub struct Chan {
     /// Walked-path bookkeeping (device-maintained; for diagnostics/walks).
     pub path: Vec<u8>,
     /// Private devroot slot: the paqfs entry this chan currently names.
-    /// (Written/read by 04-05's devroot; 04-06's syscall PREAD consumes it.)
+    /// (Written/read by devroot; the syscall PREAD consumes it.)
     pub(crate) paqdir: Option<PaqDir>,
-    /// 05-06 (Pitfall 4): the pipe this chan references (devpipe chans
+    /// The pipe this chan references (devpipe chans
     /// ONLY — the dir chan from attach and the two end chans).  The Arc
     /// is the shared-queue handle BOTH pipe ends reference: a write on
     /// one end is readable on the other after a fork/dup.  None for every
     /// non-pipe chan.
     pub(crate) pipe: Option<Arc<Lock<crate::devpipe::Pipe>>>,
-    /// 05-06: the donor's COPEN — set by namec::open_chan (the single
+    /// The donor's COPEN — set by namec::open_chan (the single
     /// open funnel; namec::create_chan sets it for creates).  Read by
     /// dup's pipe-reference rule and namec::close_chan's dispatch.
     pub(crate) copen: bool,
-    /// 05-07 (D-03's mount half): the devmnt 9P session — set by
+    /// The devmnt 9P session — set by
     /// devmnt::fversion on the PIPE chan (the donor's `c->mux`; sys_mount
     /// finds it there) and carried by every DEV_MNT chan in the mounted
     /// tree.  dup CLONES the Arc: devsrv's posted clone of the boot pipe
     /// carries the session to settime/newns's mounts.
     pub(crate) mnt: Option<Arc<crate::devmnt::Mnt>>,
     /// The server-side fid this chan names (DEV_MNT chans only; None =
-    /// fid-less).  261104-b4p (item 5): the fid is Arc'd — dup() CLONES
+    /// fid-less).  The fid is Arc'd — dup() CLONES
     /// the Arc (the fid's reference count is real, shared across every
     /// dup/open of the same walked chan), and the close dispatch
     /// (devmnt::clunk_if_last) Tclunks only when the LAST ref leaves
@@ -130,24 +130,24 @@ impl Chan {
 
     /// Mark the chan open (COPEN) OUTSIDE the funnel — the one
     /// legitimate caller is proc.rs's fd 0/1/2 preopen (those fds are
-    /// open by construction, D-15; never opened through open_chan).
+    /// open by construction; never opened through open_chan).
     pub fn mark_open(&mut self) {
         self.copen = true;
     }
 
-    /// 05-07: the devmnt 9P session on this chan (sys_mount's lookup).
+    /// The devmnt 9P session on this chan (sys_mount's lookup).
     /// Set only by devmnt::fversion (in-crate); read cross-crate here.
     pub fn mnt_session(&self) -> Option<Arc<crate::devmnt::Mnt>> {
         self.mnt.clone()
     }
 
-    /// Value-dup for 04-07's rfork fd-table copy: a fresh Chan naming the
+    /// Value-dup for rfork's fd-table copy: a fresh Chan naming the
     /// same file/device (same dev/qid/mode; the paqfs entry handle is
     /// cloned).  Plan 9's shared-Chan semantics (one offset, refcounted)
     /// are approximated by a value copy — the streaming offset diverges
     /// after the fork, which the measured smoke does not depend on.
     ///
-    /// 05-06 (Pitfall 4) — THE PIPE EXCEPTION: an OPEN PIPE END chan's
+    /// THE PIPE EXCEPTION: an OPEN PIPE END chan's
     /// value copy is a NEW OPEN REFERENCE to the shared queue (the donor's
     /// cclone+incref shape): the Arc is cloned (the bytes stay shared) and
     /// the pipe's open-end count bumps.  Without this rule a fork/dup'd
@@ -173,7 +173,7 @@ impl Chan {
 }
 
 /// Little-endian field writer for the stat(5) wire buffer (stat(5) is LE).
-/// 05-04 Task 3: lifted from devroot.rs so every device serves the same
+/// Lifted from devroot.rs so every device serves the same
 /// wire shape (sys_stat/sys_fstat's dispatch consumes the byte count from
 /// the size prefix).  The caller sizes `buf` (fixed part + the FOUR
 /// length-prefixed strings — name/uid/gid/muid; libc's statcheck walks

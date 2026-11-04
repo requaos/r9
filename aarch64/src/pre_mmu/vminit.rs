@@ -38,7 +38,7 @@ fn base_physaddr() -> PhysAddr {
     // On virt the kernel loads at PA 0x40080000 (qemu -kernel); starting
     // kernel ranges at PA 0 would map >1 GiB as Normal-cacheable kernel text,
     // covering the GIC (0x08000000) and PL011 (0x09000000) MMIO windows -- a
-    // speculative-fetch hazard (phase-03 research P3).  Raspi deliberately
+    // speculative-fetch hazard.  Raspi deliberately
     // keeps base 0 (the TODO at init_vm below contemplates an unmapped page 0).
     #[cfg(platform = "virt")]
     {
@@ -161,7 +161,7 @@ fn earlyvm_pages_physrange() -> PhysRange {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn init_vm(dtb_pa: u64) {
-    // Qemu's ELF -kernel boot enters DIRECTLY at EL1 (phase-03 research),
+    // Qemu's ELF -kernel boot enters DIRECTLY at EL1,
     // skipping l.S's el2 path -- which is the only place CPACR_EL1.FPEN is
     // set.  With FPEN at its reset value, any compiler-emitted SIMD/FP
     // instruction traps (ESR EC=0x07).  Enable FP/SIMD access at EL1 here,
@@ -179,7 +179,7 @@ pub extern "C" fn init_vm(dtb_pa: u64) {
     }
 
     // Virt ELF boot: qemu 11.1.2 delivers x0 = 0 and loads no DTB for ELF
-    // kernels (phase-03 research P1); the -dtb blob sits at the fixed PA
+    // kernels; the -dtb blob sits at the fixed PA
     // 0x40000000.  init_vm is the FIRST DTB consumer (pre-MMU, before main9
     // ever runs), so the fallback must live here -- main9 has its own
     // VA-side twin.  Raspi keeps the incoming pointer verbatim: flat boot
@@ -194,8 +194,8 @@ pub extern "C" fn init_vm(dtb_pa: u64) {
     };
 
     // Parse the DTB before we set up memory so we can correctly map it.
-    // 261103-p64 (fdt internalization): the two-pass construction is here
-    // now — header prefix learns totalsize, then the full slice.
+    // The two-pass construction: header prefix learns totalsize, then the
+    // full slice.
     // SAFETY: pre-MMU the DTB PA is identity-mapped by the boot stub /
     // qemu's loader (and on virt the fixed-PA fallback above names the
     // committed blob); the address is valid and readable for the parse.
@@ -314,8 +314,8 @@ pub extern "C" fn init_vm(dtb_pa: u64) {
         .with_mair_index(Mair::Normal);
 
     // On virt the kernel loads at PA 0x40080000, outside entries[0]'s
-    // 0-1 GiB window; without this second block the MMU-on jump faults
-    // (phase-03 research P4).  It also covers the DTB at 0x40000000.  The
+    // 0-1 GiB window; without this second block the MMU-on jump faults.
+    // It also covers the DTB at 0x40000000.  The
     // GIC (0x08000000) and PL011 (0x09000000) MMIO already sit inside
     // entries[0]'s window.
     #[cfg(platform = "virt")]

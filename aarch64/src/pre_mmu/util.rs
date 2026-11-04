@@ -30,7 +30,7 @@ const GPIO_PUP_PDN_CNTRL_REG0: u32 = GPIO + 0xe4;
 //
 // Raspi: the miniuart (see platform/raspi3b/uartmini.rs).
 // Virt: nothing -- qemu pre-configures the PL011 (DR writes work even with
-// UARTEN clear; phase-03 research Pattern 3).
+// UARTEN clear; qemu pre-configures the PL011).
 #[cfg(not(platform = "virt"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn init_early_uart() {

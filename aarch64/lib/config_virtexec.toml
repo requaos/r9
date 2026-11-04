@@ -13,9 +13,9 @@ load-address = '0xffff800040080000'
 [config]
 platform = "virt"
 # no dtb key here: virt's DTB is qemu-facing, passed via [qemu].dtb
-# 04-05: the exec profile — main9's exec orchestration replaces the idle
-# loop (devroot + /init exec + the D-10 TTBR0 teardown + trap_return EL0
-# entry); the tick print is cfg-gated off under dev_exec (Pitfall 3).
+# The exec profile — main9's exec orchestration replaces the idle
+# loop (devroot + /init exec + the TTBR0 teardown + trap_return EL0
+# entry); the tick print is cfg-gated off under dev_exec.
 dev = ["exec"]
 
 [qemu]
@@ -29,14 +29,14 @@ accel = "tcg"
 # Committed trimmed DTB: qemu loads it at 0x40000000 (the ELF-boot fix —
 # without -dtb, qemu 11.1.2 loads no DTB at all for ELF kernels and x0 is 0)
 dtb = "aarch64/lib/virt-gicv2.dtb"
-# D-01 initrd (amended 04-01, user decision A): qemu's -initrd never delivers
+# The initrd: qemu's -initrd never delivers
 # for ELF kernels (hw/arm/boot.c: ELF => not-linux => the image is never
 # loaded and /chosen is never patched), so xtask places the image via qemu's
 # generic loader at the fixed PA below and writes /chosen
 # linux,initrd-start/end into a patched DTB copy; the kernel validates,
-# prints, reserves, and maps the range (04-01/04-02).  0x48000000 sits
+# prints, reserves, and maps the range.  0x48000000 sits
 # 128 MiB into the 1 GiB guest, clear of the kernel (0x40080000) and the DTB
-# (0x40000000).  04-05: the image is the assembled bootfs.paq (staged
+# (0x40000000).  The image is the assembled bootfs.paq (staged
 # init + hello via `cargo xtask initrd`; workspace-relative target/ path,
 # the same emission base as the dtb key) — xtask rebuilds it when missing
 # or stale.

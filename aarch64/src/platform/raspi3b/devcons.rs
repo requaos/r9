@@ -58,7 +58,7 @@ pub fn init(dt: &DeviceTree) {
     });
 }
 
-/// devcons DEVICE write entry point (04-06 syscall-era shape).  The EL0
+/// devcons DEVICE write entry point (the syscall-era shape).  The EL0
 /// userspace path is virt-only this phase — no SVC can ever arrive on raspi
 /// (no dev_exec configs exist for it), so these are unreachable stubs that
 /// keep the platform-shared syscall.rs compiling on every platform.  The

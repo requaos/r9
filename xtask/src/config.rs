@@ -76,13 +76,13 @@ pub struct Qemu {
     pub machine: Option<String>,
 
     /// Accelerator (`-accel`) value for qemu: tcg, kvm, hvf.
-    /// Overridable per-invocation via --accel / R9_ACCEL (D-06).
-    /// Note: hvf on darwin rejects GICv2 on qemu 11.1.2 (research P2) — it
+    /// Overridable per-invocation via --accel / R9_ACCEL.
+    /// Note: hvf on darwin rejects GICv2 on qemu 11.1.2 — it
     /// exists for a future GICv3 driver; never default to hvf.
     pub accel: Option<String>,
 
     /// CPU model (`-cpu`) value for qemu: cortex-a72, host, etc.
-    /// Overridable per-invocation via --cpu / R9_CPU (D-06).
+    /// Overridable per-invocation via --cpu / R9_CPU.
     pub cpu: Option<String>,
 
     /// CPU count (`-smp`) for qemu.
@@ -94,7 +94,7 @@ pub struct Qemu {
     /// Filepath of DTB file relative to crate
     pub dtb: Option<String>,
 
-    /// Initrd image delivery (D-01, amended 04-01): qemu's `-initrd` flag
+    /// Initrd image delivery: qemu's `-initrd` flag
     /// never delivers for ELF kernels (hw/arm/boot.c: an ELF `-kernel` is
     /// not-linux, so the image is never loaded into guest RAM and /chosen is
     /// never patched), so the image is placed by qemu's generic loader at a
@@ -139,7 +139,7 @@ impl Initrd {
 /// Dist section
 /// Selects the boot-image format produced by `cargo xtask dist`:
 /// absent or "flat-gzip" = objcopy + gzip flat image (raspi);
-/// "elf" = the cargo-built ELF is the boot image, dist is a no-op (D-05).
+/// "elf" = the cargo-built ELF is the boot image, dist is a no-op.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Dist {
     /// Boot image format: "flat-gzip" (default when absent) or "elf".
@@ -323,7 +323,7 @@ fn apply_link(
     }
 }
 
-/// Per-invocation qemu overrides (D-06): values that beat the TOML [qemu]
+/// Per-invocation qemu overrides: values that beat the TOML [qemu]
 /// keys at emission time. The full resolution chain (CLI flag > R9_ACCEL /
 /// R9_CPU env > TOML > built-in default) is assembled by the caller in main.
 #[derive(Debug, Default)]
@@ -338,7 +338,7 @@ fn apply_qemu_config(cmd: &mut Command, config: &Configuration, overrides: &Qemu
             cmd.arg("-M");
             cmd.arg(machine);
         }
-        // D-06: a per-invocation override beats the TOML value.
+        // A per-invocation override beats the TOML value.
         if let Some(accel) = overrides.accel.as_ref().or(config.accel.as_ref()) {
             cmd.arg("-accel");
             cmd.arg(accel);
@@ -357,7 +357,7 @@ fn apply_qemu_config(cmd: &mut Command, config: &Configuration, overrides: &Qemu
         }
         if let Some(dtb) = &config.dtb {
             cmd.arg("-dtb");
-            // D-01: with an initrd configured the kernel needs the /chosen
+            // With an initrd configured the kernel needs the /chosen
             // linux,initrd-start/end properties, so qemu gets the patched
             // copy prepare_initrd_dtb produced, never the bare base blob.
             match &config.initrd {
@@ -382,7 +382,7 @@ fn apply_rustflags(cmd: &mut Command, rustflags: &[String]) {
     }
 }
 
-/// D-01 (amended): host-side initrd DTB patch.  When [qemu] carries an
+/// Host-side initrd DTB patch.  When [qemu] carries an
 /// initrd, copy the profile's DTB into target/ and set /chosen
 /// linux,initrd-start/end with fdtput (from dtc, supplied by the nix
 /// devshell).  The kernel's property_value_as_u64 reads each property as one
@@ -473,7 +473,7 @@ mod tests {
         cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect()
     }
 
-    /// D-07: a [qemu] section carrying all six keys (machine/accel/cpu/smp/
+    /// A [qemu] section carrying all six keys (machine/accel/cpu/smp/
     /// memory/dtb) emits each as its qemu flag, in this order, after -M.
     #[test]
     fn qemu_full_keys_emit_all_flags() {
@@ -507,7 +507,7 @@ mod tests {
         );
     }
 
-    /// D-01 (amended, 04-01): a [qemu] initrd table emits the generic-loader
+    /// A [qemu] initrd table emits the generic-loader
     /// `-device` (qemu's `-initrd` never delivers for ELF kernels) and hands
     /// qemu the patched DTB copy in target/ in place of the base blob — one
     /// edit covers QemuStep and BootTestStep (both share the apply path).
@@ -556,7 +556,7 @@ mod tests {
         assert_eq!(args, vec!["-M", "raspi3b", "-dtb", "aarch64/lib/bcm2710-rpi-3-b.dtb"]);
     }
 
-    /// D-05: the [dist] section's format key parses to Some("elf") ("elf"
+    /// The [dist] section's format key parses to Some("elf") ("elf"
     /// selects the ELF-as-boot-image dist path; the flat-gzip default for an
     /// absent section is decided by the consumer).
     #[test]
@@ -566,7 +566,7 @@ mod tests {
         assert_eq!(config.dist.as_ref().and_then(|d| d.format.as_deref()), Some("elf"));
     }
 
-    /// D-05: an absent [dist] section parses to None.
+    /// An absent [dist] section parses to None.
     #[test]
     fn dist_absent_parses_to_none() {
         let config: Configuration =
@@ -574,7 +574,7 @@ mod tests {
         assert!(config.dist.is_none());
     }
 
-    /// D-06 emission-layer precedence: an explicit override beats the TOML
+    /// Emission-layer precedence: an explicit override beats the TOML
     /// value; a None override leaves the TOML value in place.
     #[test]
     fn qemu_overrides_beat_toml() {

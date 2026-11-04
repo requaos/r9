@@ -1,6 +1,6 @@
 // Aarch64 entry (Raspberry Pi 4 focused)
 
-// 04-07: 16 KiB -> 64 KiB.  The 04-07 tick (1 kHz, the D-13 preemption
+// 16 KiB -> 64 KiB.  The tick (1 kHz, the preemption
 // source) lands its 288-byte trap frame + handler frames on THIS stack
 // whenever the timer fires in the unmasked boot window (IRQ-masked trap
 // context otherwise) — and exec_bootstrap's deep chains (paqfs inflate,

@@ -20,7 +20,7 @@ fn base_physaddr() -> PhysAddr {
     // On virt the kernel loads at PA 0x40080000 (qemu -kernel); starting
     // kernel ranges at PA 0 would map >1 GiB as Normal-cacheable kernel text,
     // covering the GIC (0x08000000) and PL011 (0x09000000) MMIO windows -- a
-    // speculative-fetch hazard (phase-03 research P3).  Raspi deliberately
+    // speculative-fetch hazard.  Raspi deliberately
     // keeps base 0 (the vminit TODO contemplates an unmapped page 0).
     #[cfg(platform = "virt")]
     {

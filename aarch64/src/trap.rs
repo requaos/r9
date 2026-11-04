@@ -14,7 +14,7 @@ use port::println;
 core::arch::global_asm!(include_str!("trap.S"));
 
 unsafe extern "C" {
-    /// 04-05: exec's first EL0 entry — eret into EL0 with the seeded
+    /// exec's first EL0 entry — eret into EL0 with the seeded
     /// forkret-shaped frame (the ONLY way EL0 is ever entered; swtch never
     /// enters EL0).  Defined in trap.S (symbol trap_return_exec): moves the
     /// frame pointer into sp and rides the shared restore tail, so the
@@ -40,10 +40,10 @@ pub fn init() {
 
 /// Unmask IRQs (DAIFClr #2).  Must only be called once the platform has armed
 /// its interrupt handlers: an IRQ taken before then hits the "Unhandled
-/// interrupt" spin in trap() and wedges the kernel (research P5).  main9 calls
+/// interrupt" spin in trap() and wedges the kernel.  main9 calls
 /// this immediately after init() on raspi — the point where the combined
 /// trap::init always unmasked — while virt defers it until its GIC, timer and
-/// UART RX handlers are armed (plan 03-05).
+/// UART RX handlers are armed.
 pub fn unmask_irq() {
     #[cfg(not(test))]
     // SAFETY: clearing DAIF.I is a PSTATE write — the caller contract
@@ -54,10 +54,10 @@ pub fn unmask_irq() {
     }
 }
 
-/// Park the CPU forever (the clean-halt stop — 261103-p64's asm
-/// consolidation: the ONE wfi-halt home; fault.rs's no-current-process
-/// park, syscall.rs's all-exited halt, main.rs's pre-exec idle loop and
-/// trap()'s dump-and-halt all converge here).
+/// Park the CPU forever (the clean-halt stop — the ONE wfi-halt home;
+/// fault.rs's no-current-process park, syscall.rs's all-exited halt,
+/// main.rs's pre-exec idle loop and trap()'s dump-and-halt all converge
+/// here).
 pub fn park_forever() -> ! {
     loop {
         // SAFETY: wfi parks the CPU until an interrupt; with IRQs masked
@@ -66,7 +66,7 @@ pub fn park_forever() -> ! {
     }
 }
 
-/// The scheduler's idle wait (261103-p64's consolidation — proc.rs's
+/// The scheduler's idle wait (proc.rs's
 /// sched_loop idle arm): briefly UNMASK IRQs, wfi (the tick fires and
 /// re-arms), re-mask.  The sequence is atomic in intent: nothing else runs
 /// between the unmask and the wfi on this CPU.
@@ -77,29 +77,28 @@ pub fn idle_wait() {
     unsafe { core::arch::asm!("msr DAIFClr, #2", "wfi", "msr DAIFSet, #2") };
 }
 
-/// The D-12 deliberate sync exception (the dev_panic config's hook) —
-/// raises a brk #0 through the REAL trap path.  261103-p64's
-/// consolidation homes it with the trap interface.
+/// The deliberate sync exception (the dev_panic config's hook) —
+/// raises a brk #0 through the REAL trap path.
 #[cfg(dev_panic)]
 pub fn debug_sync_trap() {
     // SAFETY: brk #0 raises a synchronous exception routed through the
-    // real trap path — the deliberate D-12 debug trigger (never a memory
+    // real trap path — the deliberate debug trigger (never a memory
     // hazard).
     unsafe { core::arch::asm!("brk #0") };
 }
 
 /// Register frame at the time the trap was taken.  This struct IS Harvey's
 /// `Ureg` (`aarch64/include/ureg.h`) field-for-field — the layout is the
-/// published Harvey↔r9 trap-frame ABI (aarch64/ABI.md, "Kernel-side
-/// enforcement (Phase 4 appendix)"), pinned by the const asserts below
-/// (always-on) and the xtask `ureg-check` cross-repo gate (D-06).
+/// published Harvey↔r9 trap-frame ABI (aarch64/ABI.md's kernel-side
+/// enforcement appendix), pinned by the const asserts below
+/// (always-on) and the xtask `ureg-check` cross-repo gate.
 ///
 /// ESR_EL1/FAR_EL1 are deliberately NOT frame fields: trap() reads them live
-/// at entry and passes them to dispatchers as arguments (D-05) — a
+/// at entry and passes them to dispatchers as arguments — a
 /// stale-frame syndrome read cannot silently corrupt fault decode.
 #[repr(C, align(16))]
 pub struct TrapFrame {
-    /// Syscall-era access (04-06): syscall.rs reads the wire number and
+    /// Syscall access: syscall.rs reads the wire number and
     /// writes the result here (`frame.x0`), per the published ABI (result
     /// in R0).  pub(crate) — the const asserts still pin the layout.
     pub(crate) x0: u64,
@@ -134,17 +133,18 @@ pub struct TrapFrame {
     frame_pointer: u64, // x29
     link_register: u64, // x30
     /// Interrupted context's stack pointer (SP_EL0 on EL0 traps, entry-sp on
-    /// EL1 traps).  pub(crate) for the 04-06 syscall arg-read formula
-    /// (`frame.sp + 8` — aarch64/ABI.md Phase-4 appendix).
+    /// EL1 traps).  pub(crate) for the syscall arg-read formula
+    /// (`frame.sp + 8` — aarch64/ABI.md).
     pub(crate) sp: u64,
     pc: u64, // ELR_EL1 — interrupted address
     psr: u64, // SPSR_EL1
     interrupt_type: u64, // Harvey ureg->type: r9 stores the vector index 0-15 (kernel-side informational)
 }
 
-// D-06 layer 1: pinned byte offsets from aarch64/ABI.md's Phase-4 appendix.
+// Pinned byte offsets from aarch64/ABI.md's kernel-side enforcement
+// appendix.
 // Always on — any layout drift fails `cargo build`, no Harvey checkout
-// needed (layer 2 is the xtask ureg-check against the header itself).
+// needed (the xtask ureg-check covers the header itself).
 const _: () = assert!(core::mem::offset_of!(TrapFrame, x0) == 0);
 const _: () = assert!(core::mem::offset_of!(TrapFrame, x28) == 224);
 const _: () = assert!(core::mem::offset_of!(TrapFrame, link_register) == 240);
@@ -155,15 +155,15 @@ const _: () = assert!(core::mem::offset_of!(TrapFrame, interrupt_type) == 272);
 const _: () = assert!(core::mem::size_of::<TrapFrame>() == 288);
 
 /// The frozen `sizeof(Ureg)` (Harvey aarch64/ABI.md, field-for-field with
-/// ureg.h): 35 × u64 = 280 bytes — NOT r9's 288 frame stride (04-RESEARCH.md
-/// Pitfall 6: only FIELD OFFSETS cross the ABI).  The note-delivery path
-/// pushes/copies exactly this many bytes (04-08).
+/// ureg.h): 35 × u64 = 280 bytes — NOT r9's 288 frame stride (only FIELD
+/// OFFSETS cross the ABI).  The note-delivery path pushes/copies exactly
+/// this many bytes.
 pub(crate) const UREG_SIZE: usize = 280;
 
 impl TrapFrame {
-    /// deliver_notes's frame push (04-08, T-04-16): the live frame's 35
+    /// deliver_notes's frame push: the live frame's 35
     /// fields (280 bytes, the frozen sizeof(Ureg)) into the validated,
-    /// resident user window.  261103-p64: homed here with
+    /// resident user window.  Homed here with
     /// restore_from_saved so trap.rs carries no frame-reinterpretation
     /// unsafe at its call sites.
     pub(crate) fn copy_to_saved(&self, dst: &mut [u8]) {
@@ -181,9 +181,9 @@ impl TrapFrame {
         }
     }
 
-    /// NOTED's NCONT/NRSTR restore (04-08): overwrite the live frame with
+    /// NOTED's NCONT/NRSTR restore: overwrite the live frame with
     /// the saved Ureg's 280 bytes (the frozen sizeof(Ureg), NOT r9's 288
-    /// stride — the frame's own stride is untouched).  261103-p64: homed
+    /// stride — the frame's own stride is untouched).  Homed
     /// here so syscall.rs carries no frame-reinterpretation unsafe; the
     /// source is a usermem-validated resident slice.
     pub(crate) fn restore_from_saved(&mut self, src: &[u8]) {
@@ -210,7 +210,7 @@ pub(crate) const NSAVE: u64 = 2;
 pub(crate) const NRSTR: u64 = 3;
 
 impl TrapFrame {
-    /// A zeroed frame — the exec seed base (04-04's exec.rs fills x0/sp/pc
+    /// A zeroed frame — the exec seed base (exec.rs fills x0/sp/pc
     /// via seed_el0_entry; everything else stays zero).
     pub const fn zeroed() -> TrapFrame {
         TrapFrame {
@@ -272,8 +272,7 @@ impl TrapFrame {
     }
 
     /// The interrupted context's stack pointer (SP_EL0 on EL0 traps) — the
-    /// exec entry-evidence print mirrors pc() (04-04's precedent for adding
-    /// minimal getters as consumers need them).
+    /// exec entry-evidence print mirrors pc().
     pub fn sp(&self) -> u64 {
         self.sp
     }
@@ -285,7 +284,7 @@ impl TrapFrame {
     }
 
     /// Force the frame's saved psr to EL0t (clear the M field, bits [3:0]).
-    /// WR-04: NOTED's NCONT/NRSTR copies the saved Ureg over the live frame
+    /// NOTED's NCONT/NRSTR copies the saved Ureg over the live frame
     /// from USER-WRITABLE memory — a note handler may legally edit it (the
     /// documented notejmp contract) — and trap.S's restore writes the psr
     /// straight to SPSR_EL1 before eret.  The privilege bits are kernel
@@ -382,8 +381,8 @@ fn dispatch_irq(frame: &TrapFrame) -> bool {
     match intid {
         // ARM generic timer CNTP (PPI 14 -> INTID 16+14)
         30 => platform::timer::tick(),
-        // PL011 UART RX (SPI 1 -> INTID 32+1): echo in the Phase-3 profile,
-        // devcons read-buffer feed under dev_exec (04-06)
+        // PL011 UART RX (SPI 1 -> INTID 32+1): the devcons read-buffer
+        // feed under dev_exec
         33 => platform::pl011::rx_irq(),
         platform::gic::SPURIOUS_INTID => {} // spurious: acked, no EOI
         _ => println!("unhandled IRQ {intid}"),
@@ -401,7 +400,7 @@ fn dispatch_irq(_frame: &TrapFrame) -> bool {
     false
 }
 
-/// 04-08 (D-16): note delivery at the return-to-EL0 boundary.  Called on
+/// Note delivery at the return-to-EL0 boundary.  Called on
 /// every return to EL0 — after syscall dispatch AND after a handled IRQ —
 /// with the frame the shared trap_return tail is about to restore (the
 /// caller resolved CURFRAME and checked the frame is EL0t-bound).  Pops
@@ -417,11 +416,11 @@ fn dispatch_irq(_frame: &TrapFrame) -> bool {
 ///   ureg->r0 = nureg; ureg->sp = sp; ureg->pc = handler; ureg->link = 0;
 ///
 /// The pushed Ureg copy is the frozen sizeof(Ureg)=280 bytes — NOT r9's
-/// 288 frame stride (Pitfall 6's field-offsets-only crossing rule).
+/// 288 frame stride (only field offsets cross the ABI).
 /// libc's handler signature void f(void *ureg, char *msg) is satisfied
 /// exactly: R0 + the two stack arg homes per the arm64 convention.
 ///
-/// T-04-16 (the donor okaddr port): the WHOLE write window
+/// The donor okaddr port: the WHOLE write window
 /// [final_sp, nureg+280) is validated user-writable BEFORE any write and
 /// its pages are forced resident (an in-segment-but-unmapped page would
 /// EL1h-abort mid-delivery); an unwritable/misaligned target kills the
@@ -429,7 +428,7 @@ fn dispatch_irq(_frame: &TrapFrame) -> bool {
 /// kernel write to a bad user VA.  No handler installed → print the note
 /// + kill via the exits path (the donor donotify pexit shape).
 ///
-/// In-handler guard (WR-05, the donor donotify `up->notified` check): a
+/// In-handler guard (the donor donotify `up->notified` check): a
 /// second note is NOT delivered while a note handler is running —
 /// delivering would overwrite note_ureg/last_note mid-handler and the
 /// FIRST handler's noted(NCONT) would then restore the SECOND note's
@@ -439,7 +438,7 @@ pub(crate) fn deliver_notes(frame: &mut TrapFrame) {
     let Some(mut proc) = proc::current() else {
         return;
     };
-    // WR-05: leave the note queued while a handler is active (note_ureg
+    // Leave the note queued while a handler is active (note_ureg
     // doubles as the donor's up->notified flag).
     if proc.note_ureg != 0 {
         return;
@@ -466,7 +465,7 @@ pub(crate) fn deliver_notes(frame: &mut TrapFrame) {
     let final_sp = msg_va.wrapping_sub(3 * 8);
     let window_end = nureg + UREG_SIZE as u64;
 
-    // T-04-16: validate the whole write window user-WRITABLE before any
+    // Validate the whole write window user-WRITABLE before any
     // write (never a partial write), then force its stack pages resident
     // (membership is a segment check — the pages may be unmapped).
     if proc.validate_user_range(final_sp, window_end - final_sp, true).is_err() {
@@ -475,7 +474,7 @@ pub(crate) fn deliver_notes(frame: &mut TrapFrame) {
     }
     fault::ensure_stack_resident(&mut proc, final_sp as usize, window_end as usize);
 
-    // 261103-p64: the three user-memory writes ride a single usermem
+    // The three user-memory writes ride a single usermem
     // window over [final_sp, window_end) — the constructor re-runs the
     // fused validate+resident discipline (a no-op second walk here, the
     // explicit checks above carry the kill paths' messages).
@@ -501,15 +500,15 @@ pub(crate) fn deliver_notes(frame: &mut TrapFrame) {
 }
 
 fn trap(frame: &mut TrapFrame) {
-    // D-05: ESR_EL1/FAR_EL1 are read LIVE at trap entry and flow as
-    // arguments to the dispatchers — never frame fields.  04-04's fault
+    // ESR_EL1/FAR_EL1 are read LIVE at trap entry and flow as
+    // arguments to the dispatchers — never frame fields.  The fault
     // handler receives them as fault::user_fault(frame, esr, far); the IRQ
     // path never needs them.
     let esr = EsrEl1::read();
     let far = FAR_EL1.get();
 
     if dispatch_irq(frame) {
-        // 04-08 note-delivery boundary (IRQ return path): the tick may
+        // Note-delivery boundary (IRQ return path): the tick may
         // have preempted mid-trap — the proc about to return to EL0 is the
         // CURRENT one and its frame is CURFRAME's, not necessarily the
         // frame this entry built.  Deliver ITS pending notes into the
@@ -529,15 +528,15 @@ fn trap(frame: &mut TrapFrame) {
     }
 
     if esr.ec() == 0x15 {
-        // SVC (04-06): the real dispatch.  The WIRE syscall number is R0
+        // SVC: the real dispatch.  The WIRE syscall number is R0
         // (frame.x0), args sit at user SP+8 in 8-byte slots, and the result
         // is written back to frame.x0 (aarch64/ABI.md).  Dispatch itself
         // prints `syscall N unimplemented` + returns -1 for numbers outside
-        // the D-14 measured set + named core — loud, never wedged.  EXITS
+        // the measured set + named core — loud, never wedged.  EXITS
         // diverges (parks); every other path returns here and the shared
         // trap_return tail erets back into EL0.
         crate::syscall::dispatch(frame);
-        // 04-08 note-delivery boundary (syscall return path): dispatch
+        // Note-delivery boundary (syscall return path): dispatch
         // runs IRQ-masked so no preemption happened — `frame` IS the
         // returning proc's live frame (== CURFRAME).
         if frame.psr & 0xF == 0 {
@@ -549,7 +548,7 @@ fn trap(frame: &mut TrapFrame) {
         Ok(ExceptionClass::InstructionAbortLowerEl) | Ok(ExceptionClass::DataAbortLowerEl)
     ) {
         // EC 0x20/0x24: lower-EL instruction/data abort — the demand-paging
-        // path (D-09).  Returns with the fault resolved and the restore path
+        // path.  Returns with the fault resolved and the restore path
         // erets back into EL0; an unresolvable fault kills the process and
         // parks inside the handler (single-process era).
         fault::user_fault(frame, esr, far);
@@ -566,18 +565,18 @@ fn trap(frame: &mut TrapFrame) {
         fault::kill_current_process();
     } else {
         println!("{:#?}", frame);
-        // ESR/FAR print from the live trap() locals (D-08) — outside the
+        // ESR/FAR print from the live trap() locals — outside the
         // frame — so the panic profile's x0..x30 row-count gate is untouched.
         println!("esr_el1: {esr:#?}");
         println!("far_el1: {far:#018x}");
         println!("Unhandled interrupt");
-        // Deterministic clean halt (SC#5/D-12): the full register state is on
+        // Deterministic clean halt: the full register state is on
         // the console, then the marker, then park in wfi -- a wedge-free stop
         // that doesn't burn the host on a spin.  Applies to every platform;
-        // raspi's dump path gains the same marker (an improvement).
+        // raspi's dump path gains the same marker.
         println!("kernel halted");
     }
 
-    // The dump-and-halt parks via the consolidated primitive (261103-p64).
+    // The dump-and-halt parks via the consolidated primitive.
     park_forever()
 }

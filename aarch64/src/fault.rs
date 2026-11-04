@@ -1,22 +1,22 @@
-//! User demand-fault handler (D-09 — the phase's core VM deliverable):
+//! User demand-fault handler:
 //! instruction/data aborts from EL0 (EC 0x20/0x24) decode their fault class,
 //! classify the faulting VA against the current proc's segment map, and
 //! either page in (text/data from the paqfs byte source, zero pages for
 //! bss/stack/tos) or kill the process loudly.
 //!
-//! Trap-context invariants (T-04-09, 04-RESEARCH.md Pitfall 3):
+//! Trap-context invariants:
 //! - IRQs arrive masked and are NEVER unmasked here.
 //! - The handler touches only pre-mapped kernel memory and the user VA being
 //!   installed.  trap.rs routes only lower-EL aborts here, so a
 //!   kernel-context FAR is a userland wild pointer: the process dies via
-//!   the unresolvable kill (WR-08).  A handler-SIDE kernel-context touch
+//!   the unresolvable kill.  A handler-SIDE kernel-context touch
 //!   arrives as a current-EL abort (EC 0x21/0x25) and hits trap()'s
-//!   dump-and-halt — the real T-04-09 guard.
+//!   dump-and-halt — the real kernel-side guard.
 //! - No locks are held on entry and PROC_TABLE is never taken; the Console
 //!   MCS lock (println!) is safe pre-syscall-era — nothing else holds it in
-//!   trap context (04-PATTERNS.md "Locking discipline"; the tick print is
+//!   trap context (the tick print is
 //!   gone before EL0 exists).
-//! - The paqfs reader is stateless-per-call (04-02) — reentrant here.
+//! - The paqfs reader is stateless-per-call — reentrant here.
 //! - pagealloc's MCS lock is taken only briefly (single page allocations)
 //!   and never while holding another lock.
 
@@ -67,15 +67,15 @@ pub fn user_fault(frame: &mut TrapFrame, esr: EsrEl1, far: u64) {
     }
 
     let va = far as usize;
-    // WR-08 (T-04-09 corrected): trap.rs routes ONLY lower-EL aborts here
+    // trap.rs routes ONLY lower-EL aborts here
     // (EC 0x20/0x24), so the FAR is always a USER address — a top-half
     // value is an ordinary userland wild pointer, not a kernel bug, and
     // panicking turned any future binary's bad pointer into a kernel halt
     // (user-reachable DoS).  Fall through to the unresolvable kill, which
-    // since WR-06 routes through exit_tail: one process dies, the kernel
+    // routes through exit_tail: one process dies, the kernel
     // and its siblings live.  A handler-side touch of kernel-context
     // memory would arrive as a CURRENT-EL abort (EC 0x21/0x25) and hits
-    // trap()'s dump-and-halt — that path is the real T-04-09 guard.
+    // trap()'s dump-and-halt — that path is the real kernel-side guard.
     if va >= KZERO {
         unresolvable(frame, class, far, access);
     }
@@ -118,8 +118,8 @@ pub fn user_fault(frame: &mut TrapFrame, esr: EsrEl1, far: u64) {
 
 /// Demand-page text/data from the proc's paqfs byte source into the ACTIVE
 /// user table, writing the bytes THROUGH THE USER VA (the faulting process's
-/// TTBR0 is live — no aliasing, no PAN on cortex-a72; 04-RESEARCH.md
-/// Pitfall 4).  Text pages get the D-09 icache sequence after the write.
+/// TTBR0 is live — no aliasing, no PAN on cortex-a72).
+/// Text pages get the icache sequence after the write.
 fn page_in_from_image(proc: &mut Proc, page_va: usize, kind: SegKind) {
     let pa = pagealloc::allocate_physpage()
         .unwrap_or_else(|_| panic!("fault: phys page alloc failed"));
@@ -133,10 +133,10 @@ fn page_in_from_image(proc: &mut Proc, page_va: usize, kind: SegKind) {
 
     // Zero first (fresh phys pages are garbage and the file window may be
     // short at a segment tail), then read the file window in at byte
-    // granularity (Pitfall 5: data file offsets are not page-aligned).
+    // granularity (data file offsets are not page-aligned).
     //
-    // CLAMP the read to the segment's exact content end (04-06 Rule-1 fix,
-    // exposed by the exec-era runtime): the paqfs entry's length covers the
+    // CLAMP the read to the segment's exact content end:
+    // the paqfs entry's length covers the
     // WHOLE file (syms included), so an unclamped full-page read bleeds
     // trailing file bytes (the syms section) into the page tail — bytes that
     // must stay ZERO (the bss window sharing the last data page; the
@@ -169,7 +169,7 @@ fn page_in_from_image(proc: &mut Proc, page_va: usize, kind: SegKind) {
     };
     let clamp = content_end.saturating_sub(page_va).min(PAGE_SIZE_4K);
     let dst = &mut full[..clamp];
-    // 05-07: the byte source abstracts the backing (devroot's paqfs image
+    // The byte source abstracts the backing (devroot's paqfs image
     // window, or a devmnt binary's staged whole-file buffer — the pager
     // NEVER RPCs; trap context can't block on the server).
     if let Err(err) = source.read_at(file_off, dst) {
@@ -191,7 +191,7 @@ fn page_in_from_image(proc: &mut Proc, page_va: usize, kind: SegKind) {
     });
 }
 
-/// 04-08 (T-04-16's residency half): page-in any unmapped pages of
+/// Page-in any unmapped pages of
 /// [start, end) as zeroed Stack pages.  The note-delivery path's stack
 /// window must be RESIDENT before the kernel writes it — membership was
 /// already proven by validate_user_range, but an in-segment page that was
@@ -208,8 +208,8 @@ pub(crate) fn ensure_stack_resident(proc: &mut Proc, start: usize, end: usize) {
     }
 }
 
-/// 05-06 (the cold-syscall-buffer class — surfaced by the 05-06 gate's
-/// paqfs, which emalloc's a heap buffer and lets the KERNEL's pread make
+/// The cold-syscall-buffer class (a
+/// paqfs server emalloc's a heap buffer and lets the KERNEL's pread make
 /// its first touch): generalize ensure_stack_resident to ANY writable
 /// user range — an unmapped page is classified (Bss for brk_-grown heap,
 /// Stack for growth pages) and paged in zeroed.  The syscall layer calls
@@ -217,11 +217,10 @@ pub(crate) fn ensure_stack_resident(proc: &mut Proc, start: usize, end: usize) {
 /// (pread's read target, pwrite's read source, errstr/await/fd2path's
 /// outputs, pipe's fd array): membership proves the segment, but a
 /// demand-paged page that no EL0 code has touched yet aborts at EL1h on
-/// a kernel access (the documented T-04-11 caveat — phase-04 deferred
-/// #3's class, closed at exec for data+bss in 05-04 and now closed for
+/// a kernel access (closed at exec for data+bss, and closed for
 /// post-exec growth pages here).  This is EXPLICIT page-in at a
 /// controlled point with no locks held — never a nested fault from
-/// syscall context, so T-05-06's rule holds.
+/// syscall context.
 pub(crate) fn ensure_user_resident(proc: &mut Proc, start: usize, end: usize) {
     if start >= end {
         return;
@@ -267,7 +266,7 @@ fn page_in_zeroed(proc: &mut Proc, page_va: usize, kind: SegKind) {    let pa = 
 /// Map `entry` at `va` in the ACTIVE user root table — the faulting
 /// process's TTBR0 is live, and map_to's temp-recursive dance edits it
 /// directly (its per-write full TLB invalidate is heavy but correct;
-/// optimization is Phase 5+).
+/// optimization is future work).
 fn map_active_user(va: usize, entry: Entry) {
     let mut physalloc = PhysPageAllocator {};
     let mut vmt = VmTraitImpl {};
@@ -276,14 +275,14 @@ fn map_active_user(va: usize, entry: Entry) {
         .unwrap_or_else(|err| panic!("fault: user map failed at {va:#x}: {err:?}"));
 }
 
-/// D-09 icache/dcache maintenance after a text page-in, on the USER VA
-/// (04-RESEARCH.md "D-09 Deliverable" verbatim): clean D to the Point of
+/// Icache/dcache maintenance after a text page-in, on the USER VA:
+/// clean D to the Point of
 /// Unification per CTR_EL0.DminLine, DSB ISH, invalidate I to PoU per
 /// IminLine, DSB ISH, ISB.  Geometry is ALWAYS discovered from CTR_EL0 —
-/// never hardcode 64 (Phase-2 D-03's architectural-discovery rule).
+/// never hardcode 64 (the architectural-discovery rule).
 /// aarch64-cpu 11.2 has no CTR_EL0 wrapper, hence the inline asm (the same
 /// pattern as vm.rs's ttbr reads).
-/// 261103-p64 (asm consolidation): the D-09 sequence lives in vm.rs (the
+/// The sequence lives in vm.rs (the
 /// TLB/barrier/cache floor) — this wrapper keeps the fault.rs call sites.
 fn flush_icache_user_range(start: usize, end: usize) {
     vm::flush_icache_user_range(start, end);
@@ -298,8 +297,8 @@ fn unresolvable(frame: &TrapFrame, class: u8, far: u64, access: &str) -> ! {
     kill_current_process();
 }
 
-/// Kill the current process from trap/fault context (WR-06): route through
-/// the 04-07 exit tail — free the user mappings, mark Moribund, print the
+/// Kill the current process from trap/fault context: route through
+/// the exit tail — free the user mappings, mark Moribund, print the
 /// exit line, post the wait record and wake an AWAITing parent, free the
 /// root-table page and kstack, then hand off to the scheduler (the
 /// all-exited clean halt remains exit_tail's tail).  Exactly the shape
@@ -312,7 +311,7 @@ fn unresolvable(frame: &TrapFrame, class: u8, far: u64, access: &str) -> ! {
 pub(crate) fn kill_current_process() -> ! {
     let Some(mut proc) = proc::current() else {
         // No current process (pre-userspace trap): nothing to route
-        // through the lifecycle — park (261103-p64: the consolidated
+        // through the lifecycle — park (the consolidated
         // halt primitive).
         println!("fault kill with no current process — parking");
         crate::trap::park_forever();

@@ -1,10 +1,9 @@
 //! User-memory access — the SINGLE validated entry point for every kernel
-//! read or write of the calling proc's user address space (261103-p64,
-//! T-p64-01).
+//! read or write of the calling proc's user address space.
 //!
-//! Every constructor FUSES the two checks the 05-06 cold-buffer class made
+//! Every constructor FUSES the two checks the cold-buffer class made
 //! per-site (and therefore forgettable): `Proc::validate_user_range` (the
-//! T-04-11 segment-membership proof) and `fault::ensure_user_resident`
+//! segment-membership proof) and `fault::ensure_user_resident`
 //! (explicit zero-page-in so an in-segment but never-touched demand page
 //! can never abort the kernel at EL1h mid-access).  After this module, a
 //! call site cannot forget residency — the constructor will not hand out
@@ -16,13 +15,12 @@
 //! syscall), so its user VAs are directly dereferenceable by the kernel —
 //! the justification the old `user_slice` comment carried, generalized.
 //!
-//! ZERO-behavior-change contract (the plan's migration rule): two sites in
+//! Zero-behavior-change migration rule: two sites in
 //! the measured set historically validated WITHOUT forcing residency — the
 //! syscall argument block at SP+8 (always resident by construction: the
 //! stub wrote through it to make the call) and NOTED's saved-ureg window
 //! (forced resident at delivery time by deliver_notes).  Those use the
-//! documented `validated_only` constructors so their exact shape survives;
-//! UNSAFE-AUDIT.md flags them.
+//! documented `validated_only` constructors so their exact shape survives.
 
 use alloc::vec::Vec;
 
@@ -38,7 +36,7 @@ pub struct UserSlice {
 }
 
 impl UserSlice {
-    /// The T-p64-01 fused constructor: validate the range against the
+    /// The fused constructor: validate the range against the
     /// proc's segment map, then force its pages resident, before anything
     /// dereferenceable exists.
     pub fn new(proc: &mut Proc, va: u64, len: u64) -> Result<UserSlice, &'static str> {
@@ -92,7 +90,7 @@ pub struct UserSliceMut {
 }
 
 impl UserSliceMut {
-    /// The T-p64-01 fused constructor (writable variant): validate with the
+    /// The fused constructor (writable variant): validate with the
     /// writable flag, then force resident.
     pub fn new(proc: &mut Proc, va: u64, len: u64) -> Result<UserSliceMut, &'static str> {
         proc.validate_user_range(va, len, true)?;
@@ -152,12 +150,12 @@ impl UserPtr {
     }
 }
 
-/// Bounded NUL-terminated string copy out of user memory (the 04-06
+/// Bounded NUL-terminated string copy out of user memory (the
 /// `copy_user_str` loop, homed here): each byte's page membership is
-/// validated BEFORE the byte is read (T-04-11), the length is bounded at
+/// validated BEFORE the byte is read, the length is bounded at
 /// `max`, and the returned bytes EXCLUDE the terminator.  Validate-only
 /// per byte — the historical shape (path/arg strings live on pages the
-/// process itself wrote; UNSAFE-AUDIT.md flags the class).
+/// process itself wrote).
 pub struct UserString;
 
 impl UserString {

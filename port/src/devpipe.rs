@@ -1,19 +1,18 @@
-//! devpipe — the pipe device `#|` (05-06, D-04's connectembed substrate;
-//! semantics ported from 9k's devpipe.c + qio.c — the RESEARCH
-//! Don't-Hand-Roll mandate).
+//! devpipe — the pipe device `#|` (the connectembed substrate;
+//! semantics ported from 9k's devpipe.c + qio.c).
 //!
 //! A pipe is ONE shared Pipe object both ends reference
-//! (`Arc<Lock<Pipe>>` on the chan — Pitfall 4: dat.rs's value-copy dup
+//! (`Arc<Lock<Pipe>>` on the chan — dat.rs's value-copy dup
 //! would give each end its own bytes and the connectembed 9P exchange
 //! would deadlock silently).  The Pipe holds TWO bounded queues,
 //! cross-connected per the donor: end 0 (`data`) reads q[0] / writes
-//! q[1]; end 1 (`data1`) reads q[1] / writes q[0].  (The plan's "single
-//! shared queue" prose names the shared PIPE STATE both ends reference;
+//! q[1]; end 1 (`data1`) reads q[1] / writes q[0].  (The shared PIPE
+//! STATE both ends reference is the point;
 //! the paqfs stdio flow — io(1) reads AND writes fd 1 — is only coherent
 //! with the donor's direction pair: a single FIFO would let a server
 //! consume its own replies.)
 //!
-//! Read on an empty open queue BLOCKS the calling proc (the 04-07
+//! Read on an empty open queue BLOCKS the calling proc (the
 //! block/wakeup machinery: the arch-side hook marks Blocked + swtch'es;
 //! a write or close wakes the registered waiters).  The block/wake is
 //! dependency-injected (the devproc set_post_hook idiom) because port
@@ -61,7 +60,7 @@ const QDIR: u64 = 0;
 const QDATA0: u64 = 1;
 const QDATA1: u64 = 2;
 
-/// The per-direction queue bound (05-06 plan: "bounded — e.g. 4 KiB";
+/// The per-direction queue bound (bounded — e.g. 4 KiB;
 /// the 9P exchanges here are small).
 pub const PIPE_Q_CAP: usize = 4096;
 
@@ -73,7 +72,7 @@ pub struct PipeQueue {
     /// drain the remaining bytes then see EOF (a 0 read), never a hang.
     hungup: bool,
     /// The READ side is fully closed — writes error (donor's
-    /// "write on closed pipe"; the note-posting half is 05-08's era).
+    /// "write on closed pipe"; the note-posting half is future work).
     closed: bool,
     /// Pids blocked reading this queue (woken by write/close).
     waiters: Vec<u64>,
@@ -157,7 +156,7 @@ fn end_of(c: &Chan) -> Option<usize> {
     }
 }
 
-/// dat.rs Chan::dup's bump (05-06): every value copy of an OPEN pipe end
+/// dat.rs Chan::dup's bump: every value copy of an OPEN pipe end
 /// is a new open reference (the donor's cclone+incref shape) — sys_dup's
 /// install, rfork's fd-table copy, devsrv's stored clone all ride it.
 /// `qid_path` carries the end tag.  Internal to the port crate.
@@ -228,7 +227,7 @@ pub fn open(c: &Chan, mode: u32) -> Result<Chan> {
 /// end read ignores the offset argument (donor qread — pipes are
 /// streaming, there are no offsets) and NEVER advances c.offset:
 /// queue-empty + write-side-open blocks via the injected hooks (the
-/// 04-07 machinery); queue-empty + hungup is EOF (0, never an error).
+/// block/wake machinery); queue-empty + hungup is EOF (0, never an error).
 /// The block loop re-checks after every wake (a spurious wake re-blocks;
 /// the waiter set is per-queue and cleared on each wake).
 pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
@@ -405,7 +404,7 @@ pub fn stat(c: &Chan, sb: &mut [u8]) -> Result<u64> {
 }
 
 /// One stat(5) wire record (the devcons/devproc/devenv shape; uid/gid/muid
-/// glenda per D-02).  Returns the byte count (the convD2M contract).
+/// glenda).  Returns the byte count (the convD2M contract).
 /// FOUR strings — libc's statcheck walks four and rejects a record that
 /// ends early (convM2D.c).
 fn write_stat_record(

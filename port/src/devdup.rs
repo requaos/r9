@@ -1,6 +1,6 @@
-//! devdup — the per-fd files device `#d` (05-06; semantics ported from
-//! 9k's devdup.c — the RESEARCH Don't-Hand-Roll mandate).  rcmain's
-//! interactive path `. -i '#d/0'` depends on it (05-RESEARCH Pitfall 9):
+//! devdup — the per-fd files device `#d` (semantics ported from
+//! 9k's devdup.c).  rcmain's
+//! interactive path `. -i '#d/0'` depends on it:
 //! rc opens the device path `#d/0` — the calling process's fd 0 as a
 //! FILE — and sources it interactively.
 //!
@@ -217,7 +217,7 @@ pub fn stat(c: &Chan, sb: &mut [u8]) -> Result<u64> {
 }
 
 /// One stat(5) wire record (the devcons/devproc/devenv shape; uid/gid/muid
-/// glenda per D-02).  Returns the byte count (the convD2M contract).
+/// glenda).  Returns the byte count (the convD2M contract).
 /// FOUR strings — libc's statcheck walks four and rejects a record that
 /// ends early (convM2D.c).
 fn write_stat_record(

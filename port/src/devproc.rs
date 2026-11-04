@@ -1,17 +1,16 @@
-//! devproc — the per-process device (04-08's note slice, extended by
-//! 05-09: D-09's ps(1) data source + init's ctl write).  The tree:
+//! devproc — the per-process device.  The tree:
 //! /proc (the root, a directory) → /proc/<pid>/ (a directory per live
-//! pid) → the per-pid files note (04-08), status, args, and ctl.
+//! pid) → the per-pid files note, status, args, and ctl.
 //!
-//! 04-08 scope (UNCHANGED — Pitfall 5): /proc/<pid>/note writes append
+//! The note path: /proc/<pid>/note writes append
 //! the message bytes (bounded to ERRMAX with a NUL-terminated copy) to
 //! the addressed process's note queue via the injected post hook — the
-//! write resolves the addressed pid and no other target (T-04-17: no
+//! write resolves the addressed pid and no other target (no
 //! broadcast, no group semantics).  libc's `postnote(PNPROC, pid, msg)`
 //! works unmodified (there is no postnote syscall — the note arrives by
-//! a device write); delivery rides the 04-08 return-to-EL0 boundary.
+//! a device write); delivery rides the return-to-EL0 boundary.
 //!
-//! 05-09 scope (D-09, RESEARCH Pitfall 5 — the ps(1) contract): ps does
+//! The ps(1) contract: ps does
 //! `chdir("/proc")`, `open(".")`, and dirreadall — a DIRECTORY read of
 //! the root carrying one stat(5) wire entry per live pid, each named by
 //! its decimal pid (sys/src/cmd/ps.c:33-45) — then reads
@@ -21,39 +20,38 @@
 //!     state, [3..=8] six time fields, [9] memory, [10] basepri,
 //!     [11] pri).  The field COUNT and order are the contract ps
 //!     parses; r9 has no analog for the time/memory fields this era,
-//!     so they are zero-filled (the plan's sanction), while name/state
+//!     so they are zero-filled, while name/state
 //!     are real and basepri/pri report the recorded ctl value.
 //!   * args serves the argv the kernel recorded AT EXEC (proc.rs's
 //!     Proc.argv — truthful, never reconstructed from user memory at
-//!     read time, T-05-17), space-joined per the donor's procargs
+//!     read time), space-joined per the donor's procargs
 //!     (the %q quoting is a no-measured-caller era limit).  A pid that
 //!     never exec'd reads EMPTY (ps prints just the name — ps.c:135's
 //!     Noargs arm), never garbage.
 //!   * ctl accepts `pri N` writes (init.c:52's `#p/N/ctl` write of
 //!     "pri 10") — parsed and RECORDED (accepting + storing is the
-//!     honest degradation the plan names: no scheduler priority exists
+//!     honest degradation: no scheduler priority exists
 //!     this era).  An unknown ctl verb errors LOUDLY.
 //!
 //! The proc-table bookkeeping lives in the arch crate, so the data
 //! crosses via injected hooks — the same dependency inversion as the
-//! 04-08 note-post hook (and devcons's `Console::set_uart`): the arch
+//! note-post hook (and devcons's `Console::set_uart`): the arch
 //! side registers a ProcHooks set once at boot, and the reads/writes
 //! call it.
 //!
 //! Like devroot, the dat.rs `Dev` trait is NOT implemented here (its
 //! skeleton is non-constructible as written — see devroot.rs's header);
-//! the device operations the plan names (attach/walk/open/read/write/
+//! the device operations (attach/walk/open/read/write/
 //! stat) are free functions, and trait conformance lands with the
 //! devtab dispatch era.
 //!
-//! Qid encoding (05-09 RE-ENCODED — the never-collide rule holds): the
+//! Qid encoding: the
 //! root is path 0; a pid's directory is `pid*8`; its files are
 //! `pid*8 + slot` with note = 1, status = 2, args = 3, ctl = 4.  Pids
 //! start at 1 and slots are < 8, so the kinds never collide (path/8 is
-//! the pid, path%8 the kind).  The 04-08 `pid*2` / `pid*2+1` encoding
-//! is superseded: qids are transient kernel internals (vers pinned 0),
-//! so the re-encoding changes no observable behavior — the note path's
-//! walk+write semantics are byte-identical (Pitfall 5).
+//! the pid, path%8 the kind).  Qids are transient kernel internals
+//! (vers pinned 0), so encoding choices alter no observable behavior —
+//! the note path's walk+write semantics are byte-identical.
 
 use crate::dat::{Chan, Qid, DEV_PROC, OREAD, OWRITE};
 use crate::mcslock::{Lock, LockNode};
@@ -70,8 +68,8 @@ const SLOT_ARGS: u64 = 3;
 const SLOT_CTL: u64 = 4;
 
 /// The pid-dir listing's file table (name, slot, mode) — alphabetical,
-/// the donor devproc.c dirtab's ordering style.  note is 04-08's
-/// write-only file; ctl is 05-09's write-only control; status/args are
+/// the donor devproc.c dirtab's ordering style.  note/ctl are
+/// write-only; status/args are
 /// read-only (ps's data).
 const PID_FILES: [(&[u8], u64, u32); 4] = [
     (b"args", SLOT_ARGS, 0o444),
@@ -80,7 +78,7 @@ const PID_FILES: [(&[u8], u64, u32); 4] = [
     (b"status", SLOT_STATUS, 0o444),
 ];
 
-/// The arch-side note-post hook signature (04-08): validate the pid,
+/// The arch-side note-post hook signature: validate the pid,
 /// append to that process's note queue.
 type PostHook = fn(u64, &[u8]) -> Result<()>;
 
@@ -98,7 +96,7 @@ pub fn set_post_hook(hook: PostHook) {
     *guard = Some(hook);
 }
 
-/// The per-pid status/args data the arch side serves (05-09): the proc
+/// The per-pid status/args data the arch side serves: the proc
 /// name (KNAMELEN-bounded bytes), the donor-statename state string, the
 /// exec-recorded argv (NUL-joined; empty for a never-exec'd proc), and
 /// the recorded ctl priority.
@@ -109,7 +107,7 @@ pub struct ProcInfo {
     pub pri: u32,
 }
 
-/// The arch-side proc-table hooks (05-09 — the note-post hook's
+/// The arch-side proc-table hooks (the note-post hook's
 /// siblings): `list` returns the LIVE (non-Moribund) pids (the root
 /// listing's content); `info` returns a pid's status/args data (None =
 /// no such live process); `set_pri` records a ctl priority write.
@@ -215,7 +213,7 @@ pub fn walk(c: &Chan, name: &[u8]) -> Result<Chan> {
 }
 
 /// Open `c`: the directories open OREAD (ps's `open(".")` + a pid dir's
-/// listing); status/args open OREAD; note/ctl open OWRITE (the 04-08
+/// listing); status/args open OREAD; note/ctl open OWRITE (the
 /// note discipline, extended to ctl).  Every other mode errors loudly —
 /// the scope guard is the open path.
 pub fn open(c: &Chan, mode: u32) -> Result<Chan> {
@@ -239,7 +237,7 @@ pub fn open(c: &Chan, mode: u32) -> Result<Chan> {
     Ok(nc)
 }
 
-/// stat of a devproc chan (05-04 Task 3 — the namec stat dispatch's
+/// stat of a devproc chan (the namec stat dispatch's
 /// devproc leg; the wire shape is the shared StatWriter).  Directories
 /// stat with DMDIR|0555; the per-pid files stat by slot (note/ctl 0666,
 /// status/args 0444) with the status/args lengths computed from the
@@ -266,12 +264,12 @@ pub fn stat(c: &Chan, sb: &mut [u8]) -> Result<u64> {
     write_stat_record(sb, name, c.qid, *mode, length)
 }
 
-/// One stat(5) wire record (devcons's shape; uid/gid/muid glenda per
-/// D-02).  FOUR strings — name, uid, gid, muid: libc's dirreadall
+/// One stat(5) wire record (devcons's shape; uid/gid/muid glenda).
+/// FOUR strings — name, uid, gid, muid: libc's dirreadall
 /// (ps's directory read) runs statcheck on every record, which walks
 /// FOUR length-prefixed strings and rejects a record that ends early
 /// (convM2D.c) — a three-string record fails the whole directory read
-/// with "empty directory" (the 05-09 gate's catch).
+/// with "empty directory".
 fn write_stat_record(
     sb: &mut [u8],
     name: &[u8],
@@ -300,11 +298,11 @@ fn write_stat_record(
     Ok(w.finish())
 }
 
-/// The status line's bytes (05-09; shared by the status read and stat):
+/// The status line's bytes (shared by the status read and stat):
 /// ≥12 whitespace-separated fields in devproc.c's order — name, user,
 /// state, six zero-filled time fields, zero-filled memory (KB), basepri,
 /// pri (ps.c's tokenizer contract; the zero-filled fields are the
-/// plan-sanctioned no-analog arms).  The line ends with a newline
+/// no-analog arms).  The line ends with a newline
 /// (whitespace to the tokenizer).
 fn status_line(pid: u64) -> Result<alloc::vec::Vec<u8>> {
     let hooks = proc_hooks()?;
@@ -323,7 +321,7 @@ fn status_line(pid: u64) -> Result<alloc::vec::Vec<u8>> {
     Ok(line)
 }
 
-/// The args file's bytes (05-09): the exec-recorded argv (NUL-joined on
+/// The args file's bytes: the exec-recorded argv (NUL-joined on
 /// the proc) space-joined at the read — the donor procargs's shape (the
 /// %q quoting is a no-measured-caller era limit).  Empty for a
 /// never-exec'd pid (ps.c's Noargs arm prints just the name).
@@ -352,11 +350,11 @@ fn serve_at(content: &[u8], buf: &mut [u8], off: u64) -> u64 {
     n as u64
 }
 
-/// Read from a devproc chan (05-09).  The root dir serves one stat(5)
+/// Read from a devproc chan.  The root dir serves one stat(5)
 /// wire entry per LIVE pid (named by the decimal pid — ps's dirreadall
 /// of `open(".")`); a pid dir serves its PID_FILES listing; status
 /// serves the ≥12-field line; args serves the exec-recorded argv.  note
-/// is write-only (04-08) and ctl is write-only — reads of either error
+/// is write-only and ctl is write-only — reads of either error
 /// loudly.  `offset` u64::MAX uses + advances the chan's streaming
 /// offset (the pread convention).
 pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
@@ -408,13 +406,12 @@ pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
     Ok(n)
 }
 
-/// Write `buf` to the chan `c` names (04-08's note path + 05-09's ctl):
+/// Write `buf` to the chan `c` names (the note path + ctl):
 /// decode the pid and file kind from the chan's qid.
 ///   * note (kind 1): bound the message to ERRMAX (the note buffer's
-///     size, NUL-padded) and hand it to the arch-side post hook —
-///     unchanged from 04-08 (Pitfall 5).
+///     size, NUL-padded) and hand it to the arch-side post hook.
 ///   * ctl (kind 4): parse `pri N` and record it via the arch-side
-///     hooks (accepting + storing is the plan's honest degradation — no
+///     hooks (accepting + storing is the honest degradation — no
 ///     scheduler priority exists this era); an unknown verb errors
 ///     loudly.
 ///
@@ -440,9 +437,9 @@ pub fn write(c: &mut Chan, buf: &[u8]) -> Result<u64> {
             Ok(buf.len() as u64)
         }
         SLOT_CTL => {
-            // 05-09: the "pri N" control (init.c:52's write of "pri 10"
+            // The "pri N" control (init.c:52's write of "pri 10"
             // to #p/<getpid>/ctl).  Parse + RECORD via the arch hooks —
-            // accepting and storing is the plan's honest degradation (no
+            // accepting and storing is the honest degradation (no
             // scheduler priority exists this era).  An unknown verb (or
             // a malformed write) errors LOUDLY (the donor procctl's
             // Ebadarg shape).

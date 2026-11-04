@@ -1,14 +1,14 @@
-//! no_std paqfs reader (phase 04-02, D-02) over a memory-resident image.
+//! no_std paqfs reader over a memory-resident image.
 //!
-//! Format truth: Harvey `sys/src/cmd/paqfs/{paqfs.h,mkpaqfs.c,paqfs.c}` and
-//! the pinned D-02 spec in 04-RESEARCH.md.  All on-disk integers are
+//! Format truth: Harvey `sys/src/cmd/paqfs/{paqfs.h,mkpaqfs.c,paqfs.c}.
+//! All on-disk integers are
 //! big-endian.  Reference reader semantics: paqfs.c `blockRead` (:942-987),
 //! `paqWalk` (:730-779), `checkDirSize`/`getDir` (:1112-1194).
 //!
 //! The reader is stateless-per-call over the image slice: no statics, no
 //! locks, no mutation of the image — reentrant by construction, safe for the
-//! 04-04 fault handler's trap context.  Every offset is bounds-checked
-//! against the image slice BEFORE slicing (T-04-03); every failure is a typed
+//! fault handler's trap context.  Every offset is bounds-checked
+//! against the image slice BEFORE slicing; every failure is a typed
 //! `Err` with a distinct static message — nothing here panics on hostile
 //! input.
 
@@ -165,7 +165,7 @@ impl<'img> Paqfs<'img> {
     /// Decode the block at byte offset `off` and return its `blocksize`-byte
     /// decoded payload.  NoEnc blocks are ALWAYS blocksize bytes on disk
     /// (mkpaqfs.c:365); DeflateEnc blocks are raw RFC 1951 inflate with the
-    /// output hard-capped at blocksize (decompression-bomb bound, T-04-04).
+    /// output hard-capped at blocksize (the decompression-bomb bound).
     /// The adler32 header field covers the DECODED payload for both.
     pub fn read_block(&self, off: u32, expect_type: BlockType) -> Result<Vec<u8>> {
         let off = off as usize;
@@ -272,7 +272,7 @@ impl<'img> Paqfs<'img> {
     /// Read up to `buf.len()` bytes of `dir`'s file content starting at byte
     /// offset `off`, clamped to `dir.length`; returns the byte count.
     /// DataBlock[i] holds decoded bytes [i*blocksize, (i+1)*blocksize) of the
-    /// file (Pitfall 5: data file offset is 40+textsize, not page-aligned —
+    /// file (data file offset is 40+textsize, not page-aligned —
     /// byte-granular windows are the contract).
     pub fn read_at(&self, dir: &PaqDir, off: u64, buf: &mut [u8]) -> Result<usize> {
         let length = u64::from(dir.length);

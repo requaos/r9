@@ -17,7 +17,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 /// in terms of a non-nil pointer and a length.  A Block is an
 /// analogue of a mutable slice.
 ///
-/// 261103-p64 (the index/arena redesign): Block's fields are constructed
+/// Block's fields are constructed
 /// directly (never through raw-pointer reinterpretation) — the ONLY
 /// raw-to-Block constructor is `new_from_raw_parts`, homed in the
 /// GlobalAlloc shim module (`globalalloc.rs`) so this module is
@@ -92,7 +92,7 @@ impl BumpAlloc {
     /// the first contains the prefix before the (aligned) block
     /// and the second is the requested block itself.
     ///
-    /// (05-07: the parameter ORDER was `(align, size)` while BOTH call
+    /// The parameter ORDER was `(align, size)` while BOTH call
     /// sites pass `(size, align)` — `align_offset` then ran on the SIZE
     /// and panicked ("align is not a power-of-two") on the first big
     /// non-power-of-two tail allocation (devmnt's ~250 KB exec staging
@@ -143,7 +143,7 @@ const MAX_QUICK_SIZE: usize = 1 << MAX_QUICK_SHIFT;
 const NUM_QLISTS: usize = 14 - ALLOC_UNIT_SHIFT + 1;
 const NUM_HASH_BUCKETS: usize = 31; // Prime.
 
-// 261103-p64 (T-p64-03): the header side table's fixed capacity.  The// main region serves every taker; the RESERVE region serves only frees
+// The header side table's fixed capacity.  The// main region serves every taker; the RESERVE region serves only frees
 // (the index-model equivalent of free_misc's carve-from-the-freed-block
 // emergency header) so a full main table never wedges a free.  Both
 // empty -> the loud named panic (never a wrap, never a corruption).
@@ -154,7 +154,7 @@ const HEADER_TOTAL: usize = HEADER_CAP + RESERVE_CAP;
 /// A header slot index into the side table (u16: HEADER_TOTAL << 65536).
 type Idx = u16;
 
-/// A block's metadata — a SIDE-TABLE entry (261103-p64: headers never
+/// A block's metadata — a SIDE-TABLE entry (headers never
 /// live inside blocks anymore; the intrusive-pointer era's `repr(C,
 /// align(64))` Header is gone).  `next` links the slot's current chain —
 /// a quick/misc/hash chain when used, a free-slot chain when free.
@@ -176,7 +176,7 @@ struct Slot {
 
 const EMPTY_SLOT: Slot = Slot { next: None, addr: 0, size: 0, align: 0, used: false };
 
-/// The QuickFit allocator itself — the index/arena model (261103-p64):
+/// The QuickFit allocator itself — the index/arena model:
 /// the bump tail plus the free lists and hash chains as Option<Idx>
 /// chains over the fixed side table.  Blocks are referenced by arena
 /// OFFSET (u32 from the arena base); the only pointer materialization is
@@ -251,8 +251,8 @@ impl QuickFit {
     }
 
     /// The block's arena offset.  A bogus free (below the base / past the
-    /// end) is a LOUD panic, never silent corruption — 261103-p64's
-    /// hardening on an invalid input (valid inputs are unchanged).
+    /// end) is a LOUD panic, never silent corruption — hardening on an
+    /// invalid input (valid inputs are unchanged).
     fn offset_of(&self, block: *mut u8) -> Option<u32> {
         if block.is_null() {
             return None;
@@ -267,9 +267,9 @@ impl QuickFit {
     }
 
     /// Take a header slot: the main free chain, then the main watermark,
-    /// then (frees only — the 05 emergency-header fallback's index
+    /// then (frees only — the emergency-header fallback's index
     /// equivalent) the reserve.  Both exhausted -> the loud named panic
-    /// (T-p64-03: never a wrap, never a corruption).
+    /// (never a wrap, never a corruption).
     fn take_slot(&mut self, for_free: bool) -> Idx {
         if let Some(i) = self.free_main {
             self.free_main = self.slots[i as usize].next;
@@ -368,7 +368,7 @@ impl QuickFit {
 
     /// Aligns the prefix to the minimum allocation size.
     ///
-    /// 05-REVIEW-FIX: the `offset <= len` assert fired on a ZERO-LENGTH
+    /// The `offset <= len` assert fired on a ZERO-LENGTH
     /// prefix when the tail cursor was not 64-aligned (a small-align
     /// request after a non-64-multiple-sized tail block — e.g. the
     /// Vec-doubling 65 328-byte staging step — leaves the cursor
@@ -415,7 +415,7 @@ impl QuickFit {
         let (size, align) = Self::adjust(layout);
         if size <= MAX_QUICK_SIZE && align == size {
             let k: usize = size.ilog2() as usize - ALLOC_UNIT_SHIFT;
-            // 261103-p64: the header lives in the side table, never in
+            // The header lives in the side table, never in
             // the freed block — the pointer model's Header-alignment
             // assert on the block is moot here (no header is written
             // into block memory at all).
@@ -435,13 +435,13 @@ impl QuickFit {
     /// If the block header is not found in the hash table, the block
     /// was allocated from the tail and this is its first free: take a
     /// fresh side-table slot for it (the reserve when the main table is
-    /// empty — the 05 emergency carve's index equivalent; T-p64-03's
+    /// empty — the emergency carve's index equivalent; the
     /// loud panic when both are empty).
     ///
     /// The carve-from-the-freed-block variant is GONE: headers are
     /// table-resident, so a freed misc block is always freed WHOLE
     /// (the carve shrank it by a header's width — a semantic cleanup
-    /// the pin tests never depended on, noted in UNSAFE-AUDIT.md).
+    /// the pin tests never depended on).
     fn free_misc(&mut self, addr: u32, size: usize, align: usize) {
         let i = match self.unlink_allocated_misc(addr) {
             // Reuse the block's registered header — its size/align are
@@ -492,8 +492,7 @@ impl QuickFit {
         let mut prev: Option<Idx> = None;
         let head = list;
         let mut cur = list;
-        // 05-REVIEW-FIX (the WR-04 regression's root cause) — preserved
-        // in the index model: head-preserving mid-list removal (splice
+        // Head-preserving mid-list removal (splice
         // prev→next, return the ORIGINAL head), head removal returns the
         // next node, and a no-match walk returns the list UNCHANGED
         // (never wiped).  The tripwire stays as a permanent guard while
@@ -545,11 +544,11 @@ impl QuickFit {
         (k >> 33) % NUM_HASH_BUCKETS
     }
 
-    /// The 261103-p64 test hook (cfg(test) only, port's crate-root test
+    /// The test hook (cfg(test) only, port's crate-root test
     /// module): splice a CYCLE into the misc list (its last node's next
     /// back to the head) — pure index writes, safe by construction.  The
     /// tripwire's no-fit walk then spins and panics loudly (never the
-    /// WR-04 wedge).
+    /// wedge).
     #[cfg(test)]
     pub(crate) fn test_hook_cycle_misc(&mut self) {
         let Some(head) = self.misc else {
@@ -563,7 +562,7 @@ impl QuickFit {
     }
 }
 
-/// The GlobalAlloc shim's re-export (261103-p64: the shim's unsafe lives
+/// The GlobalAlloc shim's re-export (the shim's unsafe lives
 /// in the sibling `globalalloc` module so THIS module is unsafe-free;
 /// the `port::allocator::global::...` path is preserved for the
 /// aarch64/allocator.rs static init).

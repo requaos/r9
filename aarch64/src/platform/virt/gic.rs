@@ -1,6 +1,6 @@
 // GICv2 (GIC-400) driver for qemu's virt machine (gic-version=2).
 //
-// The register sequence is the phase-03 research Pattern 1 probe, verified
+// The register sequence was verified
 // live on qemu 11.1.2 (-M virt,gic-version=2 -cpu cortex-a72): distributor
 // enable, accept-all priority mask, CPU-interface enable; per-interrupt
 // ISENABLER/IPRIORITYR (+ ITARGETSR for SPIs only -- research P6: PPIs are
@@ -47,8 +47,8 @@ static GIC: SyncUnsafeCell<Option<Gic>> = SyncUnsafeCell::new(None);
 
 impl Gic {
     fn new(dt: &DeviceTree) -> Result<Gic> {
-        // qemu 11.1.2's gicv2 machine reports the GIC as "arm,cortex-a15-gic"
-        // (the research correction to D-04); "arm,gic-400" is the fallback.
+        // qemu 11.1.2's gicv2 machine reports the GIC as "arm,cortex-a15-gic";
+        // "arm,gic-400" is the fallback.
         let node = dt
             .find_compatible("arm,cortex-a15-gic")
             .next()

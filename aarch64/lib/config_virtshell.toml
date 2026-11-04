@@ -13,11 +13,11 @@ load-address = '0xffff800040080000'
 [config]
 platform = "virt"
 # no dtb key here: virt's DTB is qemu-facing, passed via [qemu].dtb
-# 05-04 (D-03): the shell-chain profile — dev_exec orchestration plus the
+# The shell-chain profile — dev_exec orchestration plus the
 # dev_bootchain entry selection (pid 1 = the real Harvey boot(8) at
 # /boot/boot instead of the staged /init).  The image is delivered by
 # Harvey's launcher (build/aarch64/run-r9.sh), NOT xtask's [qemu] initrd
-# key — the D-10/D-11 shape emerges here.
+# key.
 dev = ["exec", "bootchain"]
 
 [qemu]
@@ -32,7 +32,7 @@ accel = "tcg"
 # without -dtb, qemu 11.1.2 loads no DTB at all for ELF kernels and x0 is 0)
 dtb = "aarch64/lib/virt-gicv2.dtb"
 # NO initrd key: the shell image is baked and delivered Harvey-side
-# (bootfs.paq via run-r9.sh's loader+fdtput argv), not by xtask (D-10/D-11).
+# (bootfs.paq via run-r9.sh's loader+fdtput argv), not by xtask.
 
 [dist]
 # ELF is the boot image on virt; skip the objcopy+gzip flat-image pipeline

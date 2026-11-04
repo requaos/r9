@@ -77,7 +77,7 @@ pub fn allocate_physpage() -> Result<PhysAddr, PageAllocError> {
     }
 }
 
-/// Return a physical page to the allocator (04-06: the EXEC/EXITS paths free
+/// Return a physical page to the allocator (the EXEC/EXITS paths free
 /// a proc's user mappings, root-table page and kstack pages via the proc's
 /// mapping_log / recorded PAs).  Deallocating a live-aliased page is a
 /// caller-side bug — the kernel VA aliases (KZERO+PA, kstack bump VAs) are
@@ -90,7 +90,7 @@ pub fn deallocate_physpage(pa: PhysAddr) -> Result<(), PageAllocError> {
 }
 
 /// A guard handle to a freshly allocated+mapped 4 KiB virtual page
-/// (261103-p64: allocate_virtpage no longer hands out a `&'static mut`).
+/// (allocate_virtpage never hands out a `&'static mut`).
 /// Deref/DerefMut reach the page for the guard's lifetime; the mapping is
 /// permanent this era (no unmap path), so the handle's target stays valid.
 pub struct VirtPage4KGuard(*mut VirtPage4K);

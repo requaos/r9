@@ -20,11 +20,11 @@ use port::{
 #[cfg(not(test))]
 use port::println;
 
-// 261103-p64: the KERNEL_PAGETABLE/USER_PAGETABLE statics are GONE (the
+// The KERNEL_PAGETABLE/USER_PAGETABLE statics are GONE (the
 // static-mut elimination).  The kernel root table is never a r9 static —
 // vminit's earlyvm page tables own it and ttbr1 names it, so
 // kernel_pagetable() resolves through root_page_table()'s TTBR read (the
-// guard newtype below, next to it).  The per-process era (04-05) made
+// guard newtype below, next to it).  The per-process era made
 // USER_PAGETABLE dead: user root tables are pagealloc'd per proc;
 // user_pagetable()/init_user_page_tables() had zero callers and are
 // deleted with the static.
@@ -415,7 +415,7 @@ impl RootPageTable {
     /// page tables that don't already exist.  If a mapping already exists,
     /// replace it.
     /// root_page_table should be a direct va - not a recursive va.
-    /// (pub for the 04-04 exec/fault machinery: exec maps the two seed pages
+    /// (pub for the exec/fault machinery: exec maps the two seed pages
     /// into a not-yet-active proc table via the temp-recursive dance, and
     /// the fault handler maps demand pages into the ACTIVE user table.)
     pub fn map_to<A: PageAllocator, B: VmTrait>(
@@ -437,7 +437,7 @@ impl RootPageTable {
             vmtrait_impl.replace_recursive_entry(pgtype, temp_recursive_entry);
 
         // Walk + write the destination entry.  The recursive slot-511
-        // restore below runs on EVERY exit, success or walk failure (WR-01):
+        // restore below runs on EVERY exit, success or walk failure:
         // an early Err return that skipped it left the ACTIVE table's slot
         // pointing at this (other) root table, and each later map_to read
         // the corrupted slot as its "old" entry and restored the corruption
@@ -550,7 +550,7 @@ pub fn next_free_device_page4k() -> VaMapping {
 
 /// Return the root user or kernel level page table.
 ///
-/// 261103-p64: returns a guard newtype, never a `&'static mut` — the
+/// Returns a guard newtype, never a `&'static mut` — the
 /// Deref/DerefMut impls hold the raw-alias deref behind the documented
 /// invariant (single CPU; the TTBR-named table is live and KZERO-aliased;
 /// no second handle into the same table is live across a caller's use).
@@ -567,7 +567,7 @@ pub fn kernel_pagetable() -> RootTableGuard {
     root_page_table(RootPageTableType::Kernel)
 }
 
-/// A guard handle to a live root page table (261103-p64).  Obtained only
+/// A guard handle to a live root page table.  Obtained only
 /// from root_page_table()/kernel_pagetable(); Deref/DerefMut reach the
 /// table so existing method-call sites (`guard.map_phys_range(...)`,
 /// `guard.entries[i]`) compile unchanged.
@@ -597,7 +597,7 @@ impl core::ops::DerefMut for RootTableGuard {
 
 /// Given an empty, statically allocated page table.  We need to write a
 /// recursive entry in the last entry.  To do this, we need to know the physical
-/// address, but all we have is the virtual address.  (pub for 04-04's
+/// address, but all we have is the virtual address.  (pub for
 /// proc.rs: per-process root tables are pagealloc'd pages written through
 /// their KZERO-offset physical alias, which is exactly the pointer shape
 /// this function's `from_ptr_to_physaddr_offset_from_kzero` expects.)
@@ -702,8 +702,8 @@ pub unsafe fn invalidate_all_tlb_entries() {
     }
 }
 
-/// Read CTR_EL0 (the cache-type register) — 261103-p64's asm
-/// consolidation: the ONE home for this system-register read (the
+/// Read CTR_EL0 (the cache-type register) — the ONE home for this
+/// system-register read (the
 /// register-access floor), previously inline at main.rs + fault.rs.
 pub fn ctr_el0() -> u64 {
     #[cfg(not(test))]
@@ -718,17 +718,17 @@ pub fn ctr_el0() -> u64 {
     0
 }
 
-/// D-09 icache/dcache maintenance after a text page-in, on the USER VA
-/// (04-RESEARCH.md "D-09 Deliverable" verbatim): clean D to the Point of
+/// Icache/dcache maintenance after a text page-in, on the USER VA:
+/// clean D to the Point of
 /// Unification per CTR_EL0.DminLine, DSB ISH, invalidate I to PoU per
 /// IminLine, DSB ISH, ISB.  Geometry is ALWAYS discovered from CTR_EL0 —
-/// never hardcode 64 (Phase-2 D-03's architectural-discovery rule).
-/// 261103-p64's asm consolidation: homed here (the TLB/barrier/cache
+/// never hardcode 64 (the architectural-discovery rule).
+/// Homed here (the TLB/barrier/cache
 /// floor) — fault.rs's page-in calls it.
 #[allow(unused_variables)]
 pub fn flush_icache_user_range(start: usize, end: usize) {
     #[cfg(not(test))]
-    // SAFETY: the D-09 maintenance sequence on the USER VA range the
+    // SAFETY: the maintenance sequence on the USER VA range the
     // caller just wrote (mapped r/w); dc cvau / ic ivau / dsb / isb are
     // pure maintenance ops — no memory operands beyond the named range.
     unsafe {

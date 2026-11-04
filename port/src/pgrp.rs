@@ -1,4 +1,4 @@
-//! pgrp — the per-process namespace group: the mount table (05-04, D-03).
+//! pgrp — the per-process namespace group: the mount table.
 //!
 //! Semantics ported literally from 9k's pgrp.c/chan.c (cmount's list
 //! insertion, cunmount, pgrpcpy's deep copy): a mount point carries an
@@ -10,7 +10,7 @@
 //! The group is shared state: Proc holds it as `Arc<Lock<Pgrp>>` (the arch
 //! side's wiring), and the rfork flag semantics follow fork(2) — neither
 //! RFNAMEG nor RFCNAMEG (with RFPROC) shares the handle, RFNAMEG
-//! deep-copies (pgrpcpy), RFCNAMEG starts clean (the 05-03 finding's
+//! deep-copies (pgrpcpy), RFCNAMEG starts clean (the
 //! newns wipe).
 //!
 //! The dat.rs `Dev` trait is not involved here (the established idiom —
@@ -192,7 +192,7 @@ impl Pgrp {
         self.mounts.iter().find(|m| m.target == key).map(|m| m.chain.as_slice())
     }
 
-    /// A COPY of the union chain at `path` (WR-04's snapshot discipline):
+    /// A COPY of the union chain at `path` (the snapshot discipline):
     /// namec consults the mount table under the pgrp lock, drops the lock,
     /// then walks — the lock is never held across a device walk that can
     /// RPC (a devmnt Twalk blocks mid-syscall; a 9P server proc sharing

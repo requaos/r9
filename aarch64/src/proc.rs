@@ -1,15 +1,13 @@
-//! Process scaffolding (R9-02/R9-03; D-13): per-process kernel stacks and
+//! Process scaffolding: per-process kernel stacks and
 //! root page tables, a small fixed proc table behind the MCS-lock idiom,
-//! the current-proc pointer trap-context code reads, and the 04-07
+//! the current-proc pointer trap-context code reads, and the
 //! scheduler — tick-driven preemptive round-robin (preempt/reschedule)
 //! plus the swtch-based blocking path (sched/sched_loop) that AWAIT rides.
+//! exec.rs seeds the forkret frame onto this scaffolding, fault.rs
+//! pages into its root table, and the syscall dispatch lands
+//! RFORK/AWAIT/EXITS-wait-records here.
 //!
-//! 04-04's exec.rs seeds the forkret frame onto this scaffolding, fault.rs
-//! pages into its root table, 04-05 wired the boot_init call path, and
-//! 04-06's syscall dispatch lands RFORK/AWAIT/EXITS-wait-records here in
-//! 04-07.
-//!
-//! Locking discipline (04-PATTERNS.md "Locking discipline"):
+//! Locking discipline:
 //! - PROC_TABLE is taken only briefly in process/boot/trap context —
 //!   NEVER across the fault handler or a pagealloc call that could
 //!   recurse, and never across a swtch (the resumed proc may lock it).
@@ -22,8 +20,8 @@
 //!   context; CURFRAME is read by trap.S at entry/return — same
 //!   single-CPU invariant.  CURKSTACK is proc.rs's record of the
 //!   per-process entry-stack invariant (the value SP_EL1 holds at every
-//!   EL0 trap entry); the trap_return tail has reconstructed it as
-//!   frame+288 since 05-01 (every frame sits at entry-stack top - 288),
+//!   EL0 trap entry); the trap_return tail reconstructs it as
+//!   frame+288 (every frame sits at entry-stack top - 288),
 //!   so nothing reads it.
 
 use alloc::collections::VecDeque;
@@ -58,31 +56,31 @@ use crate::vm::{
 pub const KNAMELEN: usize = 28;
 /// Plan 9 ERRMAX (sys/include/libc.h) — errstr and note-message buffers.
 pub const ERRMAX: usize = 128;
-/// Proc table size (05-06, Pitfall 3 + the 05-03 trace: the steady-state
+/// Proc table size (the steady-state
 /// set is boot→init + the persistent paqfs server + rc + a transient
 /// command child, and rc pipelines multiply both procs and fds — sized
-/// for the traced chain with headroom; exhaustion is LOUD, never silent).
+/// for the boot chain with headroom; exhaustion is LOUD, never silent).
 pub const MAX_PROCS: usize = 16;
-/// Open fd slots per proc (05-06, Pitfall 3: init's closefds closes
+/// Open fd slots per proc (init's closefds closes
 /// 3..29 — the table must hold fds through 29 without making that fatal;
 /// pipe+dup flows hold several at once).
 pub const MAX_FDS: usize = 32;
 /// Per-process kernel stack: 16 KiB (4 pages) — the INTERRUPTSTACKSZ
 /// discipline (a dedicated fixed-size kernel stack per trap-taking context).
 const KSTACK_PAGES: usize = 4;
-/// Queued-notes capacity (04-08 fills the delivery path).
+/// Queued-notes capacity (the note delivery path fills it).
 pub const NOTE_QUEUE_CAP: usize = 8;
-/// 05-09 (D-09): the exec-recorded argv's byte bound (the /proc/N/args
+/// The exec-recorded argv's byte bound (the /proc/N/args
 /// content — ps reads 256 bytes max, ps.c:63).  NUL-joined per arg.
 pub const ARGV_CAP: usize = 256;
 
-/// 05-08 (D-06): the note-group id allocator (the donor's
+/// The note-group id allocator (the donor's
 /// `Ref noteidalloc` — 9k proc.c:13; fresh id per newproc, inherited or
 /// split per the rfork RFNOTEG rules).
 static NEXT_NOTEID: AtomicU64 = AtomicU64::new(1);
 
 /// User segment kinds — the fault handler's classification and the mapping
-/// log's tag (04-07's rfork-copy/exit-free walk the log by kind).
+/// log's tag (rfork-copy/exit-free walk the log by kind).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SegKind {
     Text,
@@ -102,7 +100,7 @@ pub struct MappingRecord {
     pub kind: SegKind,
 }
 
-/// A proc's user VA map (D-11: r9 owns stack-top/growth policy; text/data
+/// A proc's user VA map (r9 owns stack-top/growth policy; text/data
 /// VAs come from the a.out header — exec.rs records them here).
 #[derive(Clone, Debug)]
 pub struct Segments {
@@ -117,19 +115,19 @@ impl Segments {
     /// Classify a faulting user VA.  Only the text range is page-rounded at
     /// exec time; the data/bss ranges are byte-exact, so when
     /// `data % 4096 != 0 && bss > 0` the last data page and the head of bss
-    /// share one 4K page.  That shared page must classify as Data (CR-01):
+    /// share one 4K page.  That shared page must classify as Data:
     /// classify by PAGE at the data/bss boundary, not by address — a
     /// bss-first fault would otherwise map the page zeroed and the data
     /// file bytes at [page_va, data_end) would never load (the page is then
     /// mapped, so no later fault can repair it — silent userland data
     /// corruption).  The Data page-in's zero-fill + byte-exact content_end
-    /// clamp (04-06 Rule 1) yields exactly the right bytes either order:
+    /// clamp yields exactly the right bytes either order:
     /// file bytes below data_end, zeros above.  Empty segments (zero-size
     /// data/bss) classify nothing; the byte-exact ranges stay authoritative
     /// for validate_user_range.  The stack range IS the 16 MiB growth
     /// bound, so a Stack hit is always in-bounds.
     pub fn classify(&self, va: usize) -> Option<SegKind> {
-        // Data's classification end, page-rounded into the bss head (CR-01)
+        // Data's classification end, page-rounded into the bss head
         // — but never past bss_end (an empty/tiny bss extends nothing), and
         // never below data's own end.
         let data_classify_end =
@@ -150,17 +148,17 @@ impl Segments {
     }
 }
 
-/// The demand-page byte source's backing (05-07 adds the devmnt variant).
+/// The demand-page byte source's backing.
 #[derive(Clone)]
 pub enum ByteBacking {
     /// devroot binaries: the initrd image + the file's paqfs entry
-    /// (demand-paged reads index the image by file offset — 04-04).
+    /// (demand-paged reads index the image by file offset).
     Paq { dir: PaqDir, image: &'static [u8] },
-    /// devmnt binaries (05-07, the /bin union crossing): the WHOLE file,
+    /// devmnt binaries (the /bin union crossing): the WHOLE file,
     /// read eagerly at exec through the 9P client — syscall context can
     /// block on RPCs; the trap-context pager NEVER can (a fault can't
     /// block on the server), so the bytes are kernel-owned from exec on.
-    /// Arc-shared across rfork (04-07's source-handle clone).
+    /// Arc-shared across rfork (the source-handle clone).
     Mnt { file: Arc<Vec<u8>> },
 }
 
@@ -186,7 +184,7 @@ impl ByteBacking {
         }
     }
 
-    /// The backing file's total length (WR-06's truncated-binary check):
+    /// The backing file's total length (the truncated-binary check):
     /// the paqfs entry's recorded length / the staged buffer's length.
     pub fn file_len(&self) -> u64 {
         match self {
@@ -198,8 +196,8 @@ impl ByteBacking {
 
 /// The demand-page byte source for text/data: the backing (the paqfs image
 /// entry for devroot binaries; the staged whole file for devmnt ones) plus
-/// the data-segment file base (40 + textsize — Pitfall 5: data file offsets are NOT page-aligned).
-/// Clone for 04-07's rfork (the child mirrors the parent's source handles;
+/// the data-segment file base (40 + textsize — data file offsets are NOT page-aligned).
+/// Clone for rfork (the child mirrors the parent's source handles;
 /// the Mnt variant Arc-shares the staged bytes).
 #[derive(Clone)]
 pub struct ByteSource {
@@ -214,13 +212,13 @@ impl ByteSource {
     }
 }
 
-/// A queued note message (04-08 delivers at the return-to-EL0 boundary).
+/// A queued note message (delivered at the return-to-EL0 boundary).
 pub struct Note {
     pub buf: [u8; ERRMAX],
     pub len: usize,
 }
 
-/// Exit/wait record slot (04-07's exits/await path fills and consumes).
+/// Exit/wait record slot (the exits/await path fills and consumes).
 pub struct WaitRecord {
     pub pid: u64,
     pub msg: [u8; ERRMAX],
@@ -231,7 +229,7 @@ pub struct WaitRecord {
 pub enum ProcState {
     Ready,
     Running,
-    /// Blocked mid-syscall (04-07's AWAIT) — holds a saved kernel context
+    /// Blocked mid-syscall (AWAIT) — holds a saved kernel context
     /// (blocked_in_kernel) and resumes via the sched loop's swtch.
     Blocked,
     Moribund,
@@ -246,30 +244,29 @@ pub struct Proc {
     pub state: ProcState,
     /// Top of this proc's 16 KiB kernel stack (pagealloc'd at construction).
     pub kstack_top: usize,
-    /// Physical pages backing the kernel stack (04-06's EXITS path frees
+    /// Physical pages backing the kernel stack (the EXITS path frees
     /// them — the VAs come from the kernel-VA bump allocator and say nothing
     /// about their PAs, so construction records them here).
     pub kstack_pas: [u64; KSTACK_PAGES],
     /// Per-process root page table (one pagealloc'd page, recursive slot-511
     /// self-entry written at construction).  NEVER the vm.rs user-table
     /// static singleton — one shared table would give every process the same
-    /// address space (04-RESEARCH.md anti-patterns).
+    /// address space.
     pub root_table: *mut RootPageTable,
-    /// fd group — 05-06 (D-03's fd half): the slots live in a SHAREABLE
+    /// fd group: the slots live in a SHAREABLE
     /// group object (the donor's Fgrp; fdgrp.rs) behind the mcslock
     /// idiom, so rfork's fd semantics are real per fork(2)/sysproc.c:
     /// RFPROC with NEITHER RFFDG nor RFCFDG SHARES this handle (Arc
     /// clone); RFFDG gives the child a fresh table COPIED slot-by-slot
     /// (pipe chans clone their Arc — the same queue); RFCFDG a fresh
-    /// EMPTY table.  (The 05-06 plan's bullet inverts RFFDG vs default;
-    /// the donor governs — the 05-04/05-05 inversion precedent.  libc
+    /// EMPTY table.  (libc
     /// fork() = rfork(RFPROC|RFFDG|RFREND) = COPY, which connectembed's
     /// dup/close choreography requires.)  fd 0/1/2 are devcons chans,
-    /// preopened at construction (D-15, Plan 9 convention).  The group
+    /// preopened at construction (Plan 9 convention).  The group
     /// Lock is a LEAF (syscall context only, briefly; never from IRQ
     /// context, never held across a blocking pipe op — the checked-out
-    /// chan pattern, fdgrp.rs).  261104-b4p (item 4 — the 05-06 exit-sweep
-    /// deferral RESOLVED): exit_tail detaches the dying proc's group and,
+    /// chan pattern, fdgrp.rs).  At exit, exit_tail detaches the dying
+    /// proc's group and,
     /// when it was the LAST sharer (Arc::strong_count == 1), drains every
     /// occupied slot and close-dispatches each chan AFTER the lock drops
     /// (the donor pexit closefgrp; syscall.rs's exit_tail comment names
@@ -288,7 +285,7 @@ pub struct Proc {
     /// swap and by reschedule's stash.
     pub frame: *mut TrapFrame,
     /// Kernel-context switch state — valid only while blocked_in_kernel
-    /// (04-07's sched() saved it mid-syscall); the sched loop swtch'es it
+    /// (sched() saved it mid-syscall); the sched loop swtch'es it
     /// back in.  Preempted-at-EL0 procs carry no kernel context — they
     /// resume through the CURFRAME/trap_return path only.
     pub context: swtch::Context,
@@ -296,43 +293,42 @@ pub struct Proc {
     /// blocked mid-syscall).  The sched loop resumes such procs via swtch;
     /// every other Ready proc resumes via trap_return on `frame`.
     pub blocked_in_kernel: bool,
-    /// The rfork parent (04-07) — EXITS posts the wait record here.  Null
+    /// The rfork parent — EXITS posts the wait record here.  Null
     /// for the staged init (its exits posts nothing).
     pub parent: *mut Proc,
     /// rfork'd children not yet reaped by AWAIT (live or with a pending
     /// wait record) — AWAIT's block-vs-"no children" pivot.  RFNOWAIT
-    /// children are excluded (WR-03): they post no record and are
+    /// children are excluded: they post no record and are
     /// invisible to AWAIT, donor-style.
     pub children_live: usize,
     /// rfork(RFNOWAIT) child: EXITS posts no wait record and wakes nobody.
     pub nowait: bool,
     pub note_queue: VecDeque<Note>,
     pub notify_handler: Option<u64>,
-    /// The saved-Ureg user VA of the most recently delivered note (04-08;
+    /// The saved-Ureg user VA of the most recently delivered note (
     /// donor `up->noteureg`): set by trap.rs's deliver_notes, read and
     /// cleared by NOTED.  0 = not inside a note handler.
     pub note_ureg: u64,
-    /// The last delivered note's bytes (04-08; donor `up->lastnote`) —
+    /// The last delivered note's bytes (donor `up->lastnote`) —
     /// NOTED's NDFLT arm exits with this message.
     pub last_note: [u8; ERRMAX],
     pub last_note_len: usize,
-    /// Posted child-exit records (04-07; one per exited child, consumed by
+    /// Posted child-exit records (one per exited child, consumed by
     /// AWAIT in post order).
     pub wait_records: VecDeque<WaitRecord>,
     pub errstr: [u8; ERRMAX],
-    /// 05-04 (D-03): the namespace group handle (the mount table; pgrp.rs).
+    /// The namespace group handle (the mount table; pgrp.rs).
     /// rfork flag semantics per fork(2): RFPROC with NEITHER RFNAMEG nor
     /// RFCNAMEG shares this handle (Arc clone); RFNAMEG deep-copies
-    /// (pgrpcpy); RFCNAMEG starts clean (the 05-03 finding's newns wipe).
+    /// (pgrpcpy); RFCNAMEG starts clean (the newns wipe).
     /// The Lock serializes bind/unmount against namec walks; taken only
     /// from syscall context, briefly, never from IRQ context.
     pub pgrp: Arc<Lock<Pgrp>>,
-    /// 05-05 (D-07): the environment group handle (devenv.rs).  rfork
+    /// The environment group handle (devenv.rs).  rfork
     /// flag semantics per fork(2) + 9k sysproc.c: RFPROC with NEITHER
     /// RFENVG nor RFCENVG SHARES this handle (Arc clone); RFENVG
-    /// deep-copies (envcpy); RFCENVG starts EMPTY.  (The plan's truth
-    /// bullet inverted the two flags; fork(2)/sysproc.c govern — the
-    /// 05-04 RFNAMEG/RFCNAMEG precedent; recorded as a 05-05 deviation.)
+    /// deep-copies (envcpy); RFCENVG starts EMPTY.  (fork(2)/sysproc.c
+    /// govern the two flags.)
     /// The Lock serializes setenv/create against reads; a LEAF lock
     /// (syscall context only, never IRQ context).
     pub env_group: Arc<Lock<EnvGroup>>,
@@ -342,7 +338,7 @@ pub struct Proc {
     /// (Plan 9 convention).  None only pre-exec.
     pub slash: Option<Chan>,
     pub dot: Option<Chan>,
-    /// 05-08 (D-06): the note-group id — the donor's `noteid` (9k
+    /// The note-group id — the donor's `noteid` (9k
     /// portdat.h: "equivalent of note group").  A FRESH group id is
     /// assigned at construction (donor newproc's incref(&noteidalloc));
     /// rfork(RFPROC) WITHOUT RFNOTEG has the child INHERIT the parent's
@@ -353,24 +349,23 @@ pub struct Proc {
     /// "interrupt" to the console readers' groups via
     /// post_note_group_of_members (devcons.rs's foreground-group scoping).
     pub noteid: u64,
-    /// 05-08 (D-06): true while the proc is parked in a devcons read
+    /// True while the proc is parked in a devcons read
     /// (set/cleared by the cons_block_current hook around sched()).  The
     /// tick's cons_input_wake readies cons-waiting Blocked procs when the
     /// PL011 RX ring holds bytes; the reader's post-wake drain re-checks
     /// (a spurious wake re-blocks).
     pub cons_waiting: bool,
-    /// 05-08 (trace-gated: sleep ×42, alarm ×1 in the 05-03 real-chain
-    /// trace): sys_sleep's wake deadline in TICKS (0 = not sleeping) —
+    /// sys_sleep's wake deadline in TICKS (0 = not sleeping) —
     /// the donor tsleep's up->twhen shape; the tick's tick_timeouts
     /// readies expired sleepers.  1 tick = 1 ms this era (timer.rs
     /// TICKS_PER_SEC = 1000).
     pub sleep_until: u64,
-    /// 05-08: sys_alarm's expiry deadline in TICKS (0 = disarmed — the
+    /// sys_alarm's expiry deadline in TICKS (0 = disarmed — the
     /// donor's up->alarm; alarm(0) clears, a fresh arm replaces).  On
     /// expiry tick_timeouts posts the "alarm" note (donor alarmkproc's
     /// postnote arm) and disarms.
     pub alarm_at: u64,
-    /// 05-09 (D-09): the exec-recorded argv — NUL-joined, bounded at
+    /// The exec-recorded argv — NUL-joined, bounded at
     /// ARGV_CAP (the donor's `p->args`; the truncation rule is
     /// documented on record_argv).  exec.rs's install_image fills it at
     /// EVERY exec (the bootstrap exec_into and exec_replace paths share
@@ -380,9 +375,9 @@ pub struct Proc {
     /// it (a fork child's args are empty until its own exec — donor
     /// newproc shape).
     pub argv: Vec<u8>,
-    /// 05-09 (D-09): the recorded scheduling priority (devproc ctl's
-    /// "pri N" — accepting + storing is the honest degradation the plan
-    /// names: no scheduler priority exists this era, so nothing READS
+    /// The recorded scheduling priority (devproc ctl's
+    /// "pri N" — accepting + storing is the honest degradation:
+    /// no scheduler priority exists this era, so nothing READS
     /// it but the /proc/N/status report).  rfork INHERITS it (donor
     /// forkchild); exec preserves it (Plan 9 convention).  0 until set.
     pub pri: u32,
@@ -436,14 +431,14 @@ impl Proc {
             wait_records: VecDeque::new(),
             errstr: [0; ERRMAX],
             pgrp: Arc::new(Lock::new("pgrp", Pgrp::new())),
-            // Fresh EMPTY env group at construction (05-05); the first
+            // Fresh EMPTY env group at construction; the first
             // proc's SEEDED root group is assigned by exec_bootstrap
             // (the slash/dot seeding's twin), and rfork derives every
             // later group from its parent.
             env_group: Arc::new(Lock::new("env", EnvGroup::new())),
             slash: None,
             dot: None,
-            // 05-08: a fresh note group per proc (donor newproc's
+            // A fresh note group per proc (donor newproc's
             // incref(&noteidalloc)); rfork may overwrite with the parent's.
             noteid: NEXT_NOTEID.fetch_add(1, Ordering::Relaxed),
             cons_waiting: false,
@@ -463,10 +458,10 @@ impl Proc {
         self.name[n] = 0;
     }
 
-    /// 05-09 (D-09): record the exec argv (NUL-joined, the donor's
+    /// Record the exec argv (NUL-joined, the donor's
     /// `p->args` shape) for devproc's /proc/N/args.  Called by exec.rs's
     /// install_image at EVERY exec (both paths share it), replacing the
-    /// prior image's record.  Truncation rule (documented per the plan):
+    /// prior image's record.  Truncation rule:
     /// args append NUL-terminated while the result stays ≤ ARGV_CAP; the
     /// first arg that would overflow ends the record (the argv tail is
     /// dropped, never half-written — except a FIRST arg longer than
@@ -487,7 +482,7 @@ impl Proc {
         }
     }
 
-    /// D-15 preopen: fd 0/1/2 are devcons chans (Plan 9 convention — 0
+    /// Preopen: fd 0/1/2 are devcons chans (Plan 9 convention — 0
     /// OREAD, 1/2 OWRITE).  Called at the end of construction; the cons
     /// device itself needs no per-chan state (one console).  The chans
     /// are marked copen (they ARE open fds) — the flag's only consumer
@@ -506,7 +501,7 @@ impl Proc {
     }
 
     // -------------------------------------------------------------------
-    // fd ops (05-06) — the checked-out-chan pattern (fdgrp.rs's header):
+    // fd ops — the checked-out-chan pattern (fdgrp.rs's header):
     // read/write/stat TAKE the chan out of its slot and put it back, so a
     // blocking pipe op never holds the group lock.  Take/store are move
     // semantics (no open-count effects); ref_clone is the
@@ -609,11 +604,11 @@ impl Proc {
         self.errstr[..n].copy_from_slice(&bytes[..n]);
     }
 
-    /// T-04-11: validate a user-VA range against the proc's segment map
+    /// Validate a user-VA range against the proc's segment map
     /// BEFORE the kernel reads or writes it.  The range must lie wholly
     /// inside ONE of the proc's segments (text/data/bss/stack/tos).  A
     /// zero-length range is trivially valid (a null buffer with n=0 is not
-    /// an error).  `writable` is accepted for the plan's signature and the
+    /// an error).  `writable` is accepted for the signature and the
     /// future read-only-text enforcement — r9's user entries are currently
     /// AllRW for both text and data, so membership is the enforceable check
     /// this era.
@@ -641,7 +636,7 @@ impl Proc {
         if contained { Ok(()) } else { Err("bad user address") }
     }
 
-    /// 04-06 EXEC/EXITS: unmap and free every user mapping (the
+    /// EXEC/EXITS: unmap and free every user mapping (the
     /// mapping_log walk), then drop the segment map and the demand-page
     /// byte source.  Each leaf entry is cleared BEFORE its phys page goes
     /// back to the allocator — a stale translation pointing at a recycled
@@ -681,7 +676,7 @@ impl Proc {
         self.text_source = None;
     }
 
-    /// EXITS (04-06): free the root-table page and the kernel-stack pages
+    /// EXITS: free the root-table page and the kernel-stack pages
     /// (the PAs recorded at construction — the kstack's bump-allocator VAs
     /// say nothing about their backing pages).  Runs LAST in the exit
     /// path: the handler is still executing ON the kstack and TTBR0 still
@@ -704,8 +699,7 @@ impl Proc {
     }
 }
 
-/// The process table — a small fixed array behind the mcslock idiom
-/// (D-13 groundwork; the scheduler lands in 04-07).
+/// The process table — a small fixed array behind the mcslock idiom.
 pub struct ProcTable {
     procs: [Option<Proc>; MAX_PROCS],
     next_pid: u64,
@@ -714,7 +708,7 @@ pub struct ProcTable {
 pub static PROC_TABLE: Lock<ProcTable> =
     Lock::new("proc", ProcTable { procs: [const { None }; MAX_PROCS], next_pid: 1 });
 
-/// 261103-p64: the current-proc pointer is an AtomicPtr — the
+/// The current-proc pointer is an AtomicPtr — the
 /// single-CPU/IRQ-masked invariant below keeps the loaded pointer stable
 /// for a handler's lifetime, and the atomic makes every access data-race
 /// free by construction (no `static mut`).
@@ -733,7 +727,7 @@ pub(crate) fn set_current_proc(p: *mut Proc) {
     CURRENT_PROC.store(p, Ordering::Relaxed)
 }
 
-/// 261103-p64 (the current-proc accessor): the ONE guarded entry point for
+/// The ONE guarded entry point for
 /// dereferencing the current process — every former `&mut *current_proc()`
 /// site in proc.rs/trap.rs/fault.rs/syscall.rs/main.rs goes through here.
 /// The raw-pointer deref lives ONLY in ProcGuard's Deref/DerefMut impls,
@@ -745,16 +739,16 @@ pub fn current() -> Option<ProcGuard> {
     if p.is_null() { None } else { Some(ProcGuard(p)) }
 }
 
-/// True while any non-Moribund proc exists (04-06's EXITS path: when none
+/// True while any non-Moribund proc exists (the EXITS path: when none
 /// remain, the `all user processes exited` marker and the clean halt
-/// follow — the single-process era's end-of-userspace).
+/// follow — the end-of-userspace).
 pub fn any_active_procs() -> bool {
     let node = LockNode::new();
     let table = PROC_TABLE.lock(&node);
     table.procs.iter().flatten().any(|p| p.state != ProcState::Moribund)
 }
 
-/// WR-05: the shared mid-construction unwind for new_user_proc — free the
+/// The shared mid-construction unwind for new_user_proc — free the
 /// root-table page and the already-allocated kstack pages (the caller
 /// passes exactly the live prefix, kstack_pas[..n]).  The kernel-side VA
 /// mappings stay, per the free_root_table_and_kstack convention.  Never
@@ -774,13 +768,13 @@ fn unwind_new_proc(root_pa: PhysAddr, live_kstack_pas: &[u64], context: &'static
 /// Allocate and register a fresh user process: pid, 16 KiB kernel stack, and
 /// a per-process root page table with the recursive slot-511 self-entry.
 /// The proc starts with no segments, no byte source, and an empty mapping
-/// log; fd 0/1/2 are the D-15 devcons preopen (filled at construction).
+/// log; fd 0/1/2 are the devcons preopen (filled at construction).
 ///
-/// 261103-p64: returns a ProcGuard, never a `&'static mut Proc`.
+/// Returns a ProcGuard, never a `&'static mut Proc`.
 pub fn new_user_proc(name: &str) -> Result<ProcGuard> {
     // Allocate the per-process root page table first (BEFORE taking the
     // table lock — the lock is never held across a pagealloc call): one
-    // pagealloc'd page, mapped at KZERO+PA in the kernel table (the 04-02
+    // pagealloc'd page, mapped at KZERO+PA in the kernel table (the
     // initrd convention).  Construction writes go through that direct
     // physical alias — the table is not active yet, and
     // init_empty_root_page_table computes the self-entry's PA from exactly
@@ -817,8 +811,8 @@ pub fn new_user_proc(name: &str) -> Result<ProcGuard> {
     // interleaves between the bump calls in the single-threaded boot/exec
     // context; a gap would silently break the stack, so assert contiguity.
     // The PAs are recorded (kstack_pas) — the bump-allocator VAs say nothing
-    // about backing pages, and 04-06's EXITS path frees by PA.  WR-05:
-    // every mid-construction failure funnels through unwind_new_proc
+    // about backing pages, and the EXITS path frees by PA.
+    // Every mid-construction failure funnels through unwind_new_proc
     // (root-table page + the kstack pages allocated so far) — no kernel
     // pages leak per failed rfork/exec attempt.
     let mut kstack_base = 0usize;
@@ -867,9 +861,9 @@ pub fn new_user_proc(name: &str) -> Result<ProcGuard> {
     let pid = table.next_pid;
     table.next_pid += 1;
     let Some(slot) = table.procs.iter_mut().find(|s| s.is_none()) else {
-        // WR-02: the table-full path must free the already-allocated
+        // The table-full path must free the already-allocated
         // root-table page and kstack pages — they are otherwise leaked
-        // (reachable with MAX_PROCS = 8 once real init spawns
+        // (reachable once real init spawns
         // grandchildren).  Drop the PROC_TABLE guard BEFORE the frees: the
         // module locking discipline never holds it across a pagealloc
         // call.  The kernel-side VA mappings stay, per the
@@ -888,8 +882,8 @@ pub fn new_user_proc(name: &str) -> Result<ProcGuard> {
     Ok(ProcGuard(ptr::from_mut(slot.as_mut().unwrap())))
 }
 
-/// A guard handle to a PROC_TABLE-resident Proc (261103-p64 —
-/// new_user_proc no longer hands out a `&'static mut`).  Deref/DerefMut
+/// A guard handle to a PROC_TABLE-resident Proc
+/// (new_user_proc never hands out a `&'static mut`).  Deref/DerefMut
 /// reach the proc; the table slots are never freed this era and handles
 /// live only in boot/syscall context (single CPU, IRQ-masked), so the
 /// target is stable for the guard's lifetime.
@@ -914,7 +908,7 @@ impl DerefMut for ProcGuard {
 }
 
 // ---------------------------------------------------------------------------
-// 04-07 scheduler (D-13): tick-driven preemptive round-robin over PROC_TABLE
+// The scheduler: tick-driven preemptive round-robin over PROC_TABLE
 // plus the swtch-based kernel-context path for procs blocked mid-syscall.
 //
 // Two resume paths, never mixed (the experiment's documented limit):
@@ -931,21 +925,22 @@ impl DerefMut for ProcGuard {
 //   CURFRAME the locked swap installed).
 //
 // Time slice: the generic-timer tick is the preemption source (timer.rs's
-// TICKS_PER_SEC — 100 Hz = 10 ms this era; CONTEXT.md agent's discretion).
+// TICKS_PER_SEC — 100 Hz = 10 ms this era).
 // ---------------------------------------------------------------------------
 
 /// The trap-entry stack top / live frame pointer.  CURFRAME is written by
 /// trap.S at every entry and read at every return (the reload guard
 /// against a mid-trap preemption swap).  CURKSTACK records the invariant
 /// SP_EL1 must hold at the next EL0 trap entry (the current proc's
-/// kernel-stack top); the return tail reproduces it as frame+288 (05-01 —
-/// the old explicit CURKSTACK load in trap.S needed a post-pops scratch
-/// and clobbered the restored userland x9 on every EL0t return: the D-14
+/// kernel-stack top); the return tail reproduces it as frame+288
+/// (the old explicit CURKSTACK load in trap.S needed a post-pops scratch
+/// and clobbered the restored userland x9 on every EL0t return — the
 /// note-timeout/wild-write flake).  CURKSTACK initialises to the legacy
 /// interrupt stack so pre-process traps (early boot, virtpanic) behave
-/// exactly as pre-04-07.  Write discipline per the module header.
+/// exactly as before processes existed.  Write discipline per the module
+/// header.
 ///
-/// 261103-p64 (T-p64-05): SyncUnsafeCell<u64> is repr(transparent) over
+/// SyncUnsafeCell<u64> is repr(transparent) over
 /// u64 — the no_mangle symbol names AND the memory layout trap.S's
 /// absolute `ldr xN, =CURKSTACK` / str-into-CURFRAME accesses link and
 /// operate on are unchanged; trap.S itself is byte-untouched.
@@ -961,7 +956,7 @@ fn read_curframe() -> *mut TrapFrame {
     unsafe { CURFRAME.get().read() as *mut TrapFrame }
 }
 
-/// The live trap frame the trap_return tail will restore (04-08's
+/// The live trap frame the trap_return tail will restore (the
 /// note-delivery boundary reads it): after a mid-trap preemption swap this
 /// is the NEW current proc's frame, not the one the entry built — the
 /// return-to-EL0 boundary must operate on the frame actually restored.
@@ -996,7 +991,7 @@ fn interrupt_stack_top() -> usize {
 }
 
 /// Initialise CURKSTACK to the legacy interrupt stack (the pre-process
-/// entry-stack record; 05-01: proc.rs's invariant bookkeeping — the
+/// entry-stack record; proc.rs's invariant bookkeeping — the
 /// trap_return tail no longer reads it).  main9 calls this right after
 /// trap::init, before IRQs can unmask.
 pub fn init_trap_stacks() {
@@ -1013,7 +1008,7 @@ pub fn activate_first(p: &mut Proc) {
     write_curkstack(p.kstack_top);
 }
 
-/// The timer-tick preemption entry (D-13).  Acts only when the current
+/// The timer-tick preemption entry.  Acts only when the current
 /// proc is Running — i.e. the IRQ interrupted EL0 (kernel syscall/trap
 /// context runs IRQ-masked; the sched loop's idle wfi finds current
 /// Blocked/Moribund and its own post-wfi re-scan dispatches instead).
@@ -1032,12 +1027,12 @@ pub fn preempt() {
 /// On a switch: stash the live frame into the current proc, mark it Ready,
 /// install the next (current + CURKSTACK + CURFRAME + TTBR0, one locked
 /// step), and print the marker `sched: switch old->new` — marker-not-order
-/// evidence per D-13.  The trap tail's CURFRAME reload then returns to the
+/// evidence.  The trap tail's CURFRAME reload then returns to the
 /// NEW process.  Ready procs holding a saved kernel context
 /// (blocked_in_kernel) are skipped here — only the sched loop can swtch
 /// them back in.
 pub fn reschedule() {
-    // 261103-p64: the guard's None arm replaces a bare deref (a null
+    // The guard's None arm replaces a bare deref (a null
     // current here was previously silent UB; unreachable in practice —
     // preempt() gates on Running).
     let Some(cur) = current() else { return };
@@ -1092,9 +1087,9 @@ enum Resume {
 }
 
 /// The scheduler context — a kernel-context switch target running
-/// sched_loop on the legacy interrupt stack (free this era: 04-05's
+/// sched_loop on the legacy interrupt stack (free this era — the
 /// no-switch entry left it reserved for reporting only).  Seeded on first
-/// use; accessed only from IRQ-masked single-CPU context.  261103-p64:
+/// use; accessed only from IRQ-masked single-CPU context.
 /// SyncUnsafeCell, never `static mut`.
 static SCHED_CONTEXT: SyncUnsafeCell<swtch::Context> = SyncUnsafeCell::new(swtch::Context {
     x19: 0,
@@ -1131,7 +1126,7 @@ fn sched_context() -> *mut swtch::Context {
 }
 
 /// Block the CURRENT proc mid-syscall and switch to the scheduler context
-/// (04-07; the AWAIT path).  Returns when the sched loop swtch'es back —
+/// (the AWAIT path).  Returns when the sched loop swtch'es back —
 /// i.e. after the proc was woken (Blocked → Ready by an EXITS posting a
 /// wait record) and picked.  EL0 entry/exit never rides this path.
 pub fn sched() {
@@ -1157,14 +1152,14 @@ pub fn sched() {
 /// from the seed (after a Resume::Return abandoned the loop mid-iteration)
 /// is as correct as resumption after a swtch-out.
 fn sched_loop() -> ! {
-    // gatedbg (05-REVIEW-FIX wedge hunt): consecutive idle iterations with
+    // gatedbg: consecutive idle iterations with
     // a blocked cons reader while RX bytes pend, and with ALL live procs
     // blocked.  The idle arm runs between proc contexts (no syscall holds
     // Console across a sched boundary), so dumping from here follows the
     // PROC_TABLE → Console nesting order.
-    // 261103-p64 (Rule 1 — pre-existing break): the cons-rx dump arms are
-    // cfg(dev_exec) like the pl011 cons_rx_* fns they call (d8496d3 left
-    // them unconditional, breaking every non-dev_exec profile build).
+    // The cons-rx dump arms are cfg(dev_exec) like the pl011 cons_rx_*
+    // fns they call — an unconditional arm breaks every non-dev_exec
+    // profile build.
     #[cfg(dev_exec)]
     let mut cons_wedge = 0u32;
     let mut all_blocked = 0u32;
@@ -1204,7 +1199,7 @@ fn sched_loop() -> ! {
                     dump_proc_states();
                     port::devcons::debug_dump_input();
                 }
-                // 261103-p64: the consolidated idle-wait primitive
+                // The consolidated idle-wait primitive
                 // (briefly unmasked wfi — the tick fires and re-arms).
                 crate::trap::idle_wait();
             }
@@ -1250,12 +1245,12 @@ fn dump_proc_states() {
 }
 
 /// Round-robin pick of the next Ready proc after the current one, applying
-/// the full switch as one PROC_TABLE-locked step (the plan's ordering
+/// the full switch as one PROC_TABLE-locked step (the ordering
 /// assignment: state, current-proc pointer, CURKSTACK, CURFRAME, TTBR0) so
 /// the resumed proc's trap-return tail reloads its OWN frame, never the
 /// previous proc's.  None when no other Ready proc exists.
 ///
-/// 05-08: the current proc is NOT skipped — only its scan PRIORITY wraps
+/// The current proc is NOT skipped — only its scan PRIORITY wraps
 /// (the round-robin start is cur+1, so cur is picked last).  The old
 /// skip-current rule deadlocked the cons read path: a proc that blocks
 /// via sched() REMAINS the current proc while the sched loop runs, so
@@ -1296,7 +1291,7 @@ fn pick_next() -> Option<Resume> {
     None
 }
 
-/// EXITS's tail (04-07): the Moribund current proc never runs again —
+/// EXITS's tail: the Moribund current proc never runs again —
 /// switch into the scheduler context with no wake path.  The swtch save
 /// writes only the PROC_TABLE-resident context struct (never the freed
 /// kstack), so EXITS can free the kstack before calling here.  Diverges.
@@ -1315,7 +1310,7 @@ pub fn sched_from_moribund() -> ! {
     unreachable!("sched: moribund process resumed");
 }
 
-/// Non-RFPROC rfork's namespace-group half (05-04, D-03; 9k sysproc.c's
+/// Non-RFPROC rfork's namespace-group half (9k sysproc.c's
 /// non-RFPROC branch): the CALLER's group becomes a fresh deep COPY when
 /// `copy` is set (RFNAMEG — pgrpcpy; boot(8)'s `rfork(RFNAMEG)` "leave
 /// existing subprocs in own namespace") or a fresh EMPTY group otherwise
@@ -1330,7 +1325,7 @@ pub fn rfork_namespace_split(proc: &mut Proc, copy: bool) {
     proc.pgrp = Arc::new(Lock::new("pgrp", next));
 }
 
-/// Non-RFPROC rfork's env-group half (05-05, D-07; 9k sysproc.c's
+/// Non-RFPROC rfork's env-group half (9k sysproc.c's
 /// non-RFPROC branch — the newns rfork(RFENVG|RFCNAMEG) shape): the
 /// CALLER's group becomes a fresh deep COPY when `copy` is set (RFENVG —
 /// envcpy; per-login user=/home= overrides never leak back into init's
@@ -1346,7 +1341,7 @@ pub fn rfork_env_split(proc: &mut Proc, copy: bool) {
     proc.env_group = Arc::new(Lock::new("env", next));
 }
 
-/// devenv's current-group hook (05-05, D-07): the CURRENT proc's
+/// devenv's current-group hook: the CURRENT proc's
 /// env-group handle — the donor devenv.c envgrp()'s `up->egrp` shape
 /// (every #e op resolves against the OPERATING process's group, never a
 /// group captured at attach).  None before the first proc exists (no #e
@@ -1356,7 +1351,7 @@ pub fn current_env_group() -> Option<Arc<Lock<EnvGroup>>> {
     Some(current()?.env_group.clone())
 }
 
-/// devpipe's block/wake hooks (05-06, D-04's connectembed substrate —
+/// devpipe's block/wake hooks (the connectembed substrate —
 /// the port crate cannot see PROC_TABLE, so these are injected at boot:
 /// the devproc.rs set_post_hook idiom).
 ///
@@ -1367,7 +1362,7 @@ pub fn pipe_current_pid() -> u64 {
 }
 
 /// Park the calling proc mid-syscall until a pipe write/close wakes it —
-/// the 04-07 AWAIT shape (mark Blocked + swtch to the scheduler context;
+/// the AWAIT shape (mark Blocked + swtch to the scheduler context;
 /// resumes when pipe_wake readies us).
 pub fn pipe_block_current() {
     sched();
@@ -1387,7 +1382,7 @@ pub fn pipe_wake(pids: &[u64]) {
     }
 }
 
-/// devproc-lite's write hook (04-08, D-16/T-04-17): append the note to the
+/// devproc-lite's write hook: append the note to the
 /// ADDRESSED pid's queue — no broadcast, no group semantics.  The write is
 /// the whole posting path (libc postnote(PNPROC) lands here via
 /// /proc/N/note); delivery happens at the target's next return-to-EL0
@@ -1403,7 +1398,7 @@ pub fn post_note(pid: u64, msg: &[u8]) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// 05-09 (D-09): devproc's proc-table hooks — the ps(1) data source
+// devproc's proc-table hooks — the ps(1) data source
 // (list/info) and init's ctl priority record (set_pri).  The note-post
 // hook's siblings; registered with port::devproc at boot (main.rs under
 // dev_exec).  All PROC_TABLE-brief.
@@ -1420,9 +1415,9 @@ fn state_name(s: ProcState) -> &'static str {
     }
 }
 
-/// devproc's root-listing hook (05-09): the LIVE (non-Moribund) pids,
+/// devproc's root-listing hook: the LIVE (non-Moribund) pids,
 /// ascending by table slot (ps's dirreadall content).  Moribund slots
-/// stay pinned this era (the 05-06 exit-sweep deferral) but are dead —
+/// stay pinned this era (the exit-sweep deferral) but are dead —
 /// the donor's dir listing skips Dead procs the same way.
 pub fn proc_list_live() -> Vec<u64> {
     let node = LockNode::new();
@@ -1436,7 +1431,7 @@ pub fn proc_list_live() -> Vec<u64> {
         .collect()
 }
 
-/// devproc's per-pid info hook (05-09): the status/args data — name,
+/// devproc's per-pid info hook: the status/args data — name,
 /// donor-statename state, the exec-recorded argv (NUL-joined; empty for
 /// a never-exec'd proc), the recorded ctl priority.  None for a missing
 /// or Moribund pid (the donor's Eprocdied shape — devproc maps it to
@@ -1457,9 +1452,9 @@ pub fn proc_info(pid: u64) -> Option<port::devproc::ProcInfo> {
     })
 }
 
-/// devproc's ctl hook (05-09): record the "pri N" write on the ADDRESSED
-/// pid (the write-side per-pid resolution, T-05-17 — no broadcast).
-/// Accepting + storing is the plan's honest degradation: no scheduler
+/// devproc's ctl hook: record the "pri N" write on the ADDRESSED
+/// pid (write-side per-pid resolution — no broadcast).
+/// Accepting + storing is the honest degradation: no scheduler
 /// priority exists this era.  Missing/Moribund → the loud error.
 pub fn proc_set_pri(pid: u64, pri: u32) -> Result<()> {
     let node = LockNode::new();
@@ -1474,7 +1469,7 @@ pub fn proc_set_pri(pid: u64, pri: u32) -> Result<()> {
     Ok(())
 }
 
-/// The note-queue append shared by post_note (per-pid) and the 05-08
+/// The note-queue append shared by post_note (per-pid) and the
 /// note-group post: Moribund targets and full queues are skipped per the
 /// donor's postnote failure shape (the caller's group post ignores
 /// individual failures — pgrpnote's waserror skip).
@@ -1491,9 +1486,9 @@ fn push_note(p: &mut Proc, msg: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// 05-08 (D-06): devcons's DEL path — post a note to the note GROUPS of
+/// devcons's DEL path — post a note to the note GROUPS of
 /// the given reader pids (the console's foreground group this era — the
-/// plan's sanctioned scoping for the donor's notepg machinery: "the note
+/// sanctioned scoping for the donor's notepg machinery: "the note
 /// group of the proc(s) holding cons open").  Reader pids resolve to
 /// their noteids; every live proc sharing one gets the note (the donor's
 /// pgrpnote loop, 9k pgrp.c:16).  No caller exclusion: the poster is the
@@ -1521,14 +1516,14 @@ pub fn post_note_group_of_members(readers: &[u64], msg: &[u8]) {
     }
 }
 
-/// The calling proc's pid (devcons's `current` hook, 05-08 — the generic
+/// The calling proc's pid (devcons's `current` hook — the generic
 /// twin of pipe_current_pid, which stays named for devpipe's registration
 /// site).  Syscall context only — a device op always has a current proc.
 pub fn current_pid() -> u64 {
     current().expect("device op with no current process").pid
 }
 
-/// devcons's block hook (05-08, D-06): park the calling proc in its cons
+/// devcons's block hook: park the calling proc in its cons
 /// read until the tick's cons_input_wake readies it (input pending).  The
 /// register-then-block order cannot lose a wake: syscalls are serialized
 /// (single CPU, IRQ-masked), so the tick fires only after sched() swtch'es
@@ -1544,7 +1539,7 @@ pub fn cons_block_current() {
     cur.cons_waiting = false;
 }
 
-/// The tick's cons wake (05-08): ready every cons-waiting Blocked proc —
+/// The tick's cons wake: ready every cons-waiting Blocked proc —
 /// the caller (timer.rs) has already seen the PL011 RX ring non-empty via
 /// the lock-free peek.  PROC_TABLE from tick (trap) context is the
 /// reschedule() precedent: the lock is only ever held in IRQ-masked
@@ -1559,7 +1554,7 @@ pub fn cons_input_wake() {
     }
 }
 
-/// Non-RFPROC rfork(RFNOTEG)'s note-group half (05-08; 9k sysproc.c:82 —
+/// Non-RFPROC rfork(RFNOTEG)'s note-group half (9k sysproc.c:82 —
 /// `if(flag & RFNOTEG) up->noteid = incref(&noteidalloc)`): the CALLER
 /// joins a fresh note group.  init's fexec child does this before exec'ing
 /// rc, so a console DEL interrupts the shell's group and never init.
@@ -1567,8 +1562,8 @@ pub fn rfork_noteg_split(proc: &mut Proc) {
     proc.noteid = NEXT_NOTEID.fetch_add(1, Ordering::Relaxed);
 }
 
-/// The tick's timeout sweep (05-08; the donor's tsleep wakeup + alarm.c's
-/// alarmkproc expiry arm; 261104-b4p item 6's note-interruptible sleep):
+/// The tick's timeout sweep (the donor's tsleep wakeup + alarm.c's
+/// alarmkproc expiry arm, plus the note-interruptible sleep):
 /// per proc, the ALARM expiry arm runs FIRST (posting the "alarm" note
 /// and disarming — the donor's `rp->alarm = 0`), THEN the sleep wake arm
 /// readies a Blocked sleeper whose deadline passed OR whose note_queue is
@@ -1578,7 +1573,7 @@ pub fn rfork_noteg_split(proc: &mut Proc) {
 /// makes an alarm fired at the same tick interrupt a sleep that would
 /// otherwise expire).  sleep_until clears either way.  Notes append via
 /// push_note (Moribund/full-queue skips are the donor pgrpnote's
-/// waserror shape); delivery rides the 04-08 return-to-EL0 boundary
+/// waserror shape); delivery rides the return-to-EL0 boundary
 /// unchanged.  PROC_TABLE from tick (trap) context — the reschedule()
 /// precedent (the module header's locking discipline).
 pub fn tick_timeouts(now: u64) {
@@ -1599,7 +1594,7 @@ pub fn tick_timeouts(now: u64) {
     }
 }
 
-/// devdup/devsrv's fd resolver hook (05-06): the CALLING proc's fd N as
+/// devdup/devsrv's fd resolver hook: the CALLING proc's fd N as
 /// a reference clone (the donor fdtochan incref shape — a pipe end's
 /// open count bumps, so the resolved chan is a real second reference the
 /// close dispatch balances).  None before the first proc exists.
@@ -1607,7 +1602,7 @@ pub fn current_fd_resolve(fd: u64) -> Option<Chan> {
     current()?.fd_ref_clone(fd)
 }
 
-/// devdup's listing hook (05-06): the CALLING proc's open fds as
+/// devdup's listing hook: the CALLING proc's open fds as
 /// (fd, mode) pairs (the `#d` root directory read).
 pub fn current_fd_list() -> Vec<(u64, u32)> {
     let Some(p) = current() else {
@@ -1617,10 +1612,10 @@ pub fn current_fd_list() -> Vec<(u64, u32)> {
     p.fd_group.lock(&node).list_open()
 }
 
-/// EXITS (04-07): post the child's wait record to the parent and wake it
+/// EXITS: post the child's wait record to the parent and wake it
 /// if it sits Blocked in AWAIT (Blocked → Ready; blocked_in_kernel stays
 /// set — the parent resumes through the sched loop's swtch).  The record
-/// is kernel memory in the parent's table slot (T-04-15: no cross-process
+/// is kernel memory in the parent's table slot (no cross-process
 /// pointers).  PROC_TABLE-brief.
 pub fn post_wait_record(parent: *mut Proc, pid: u64, msg: &[u8]) {
     if parent.is_null() {
@@ -1641,16 +1636,16 @@ pub fn post_wait_record(parent: *mut Proc, pid: u64, msg: &[u8]) {
     }
 }
 
-/// RFORK (04-07): clone `parent` — a fresh proc (new kernel stack + root
+/// RFORK: clone `parent` — a fresh proc (new kernel stack + root
 /// table via new_user_proc), an EAGER page-for-page copy of every user
-/// mapping (no COW, no shared writable pages — T-04-15), a dup'd fd table
+/// mapping (no COW, no shared writable pages), a dup'd fd table
 /// (fresh Chan values naming the same files/devices), mirrored segment
 /// records + paqfs byte source, and a copy of the parent's live trap frame
 /// on the child's kstack with x0 = 0 (donor forkchild).  The child is
 /// queued Ready; its first run erets through the CURFRAME/trap_return
 /// path.  Returns the child pid (the parent's wire result).
 ///
-/// 05-04 (D-03): the namespace group + slash/dot inheritance per fork(2)
+/// The namespace group + slash/dot inheritance per fork(2)
 /// and 9k sysproc.c sysrfork — RFPROC with NEITHER RFNAMEG nor RFCNAMEG
 /// SHARES the parent's pgrp (Arc clone); RFNAMEG gives the child a fresh
 /// COPY (pgrpcpy); RFCNAMEG gives the child a fresh EMPTY group (the
@@ -1663,7 +1658,7 @@ pub fn rfork_clone(parent: &mut Proc, frame: &TrapFrame, flag: u64) -> Result<u6
     };
     let mut child = new_user_proc(name)?;
 
-    // WR-02: everything from here is fallible, and the child is already
+    // Everything from here is fallible, and the child is already
     // PROC_TABLE-resident (new_user_proc inserts it Ready with a null
     // frame).  A mid-copy Err that just returned would leave the
     // half-built child Runnable in the table — the scheduler's pick_next
@@ -1684,7 +1679,7 @@ pub fn rfork_clone(parent: &mut Proc, frame: &TrapFrame, flag: u64) -> Result<u6
         child.free_root_table_and_kstack();
         return Err(msg);
     }
-    // WR-03: an RFNOWAIT child posts no wait record at EXITS and is never
+    // An RFNOWAIT child posts no wait record at EXITS and is never
     // reaped by AWAIT, so it must not count toward the parent's AWAIT
     // block-vs-"no children" pivot (Plan 9: an RFNOWAIT child is invisible
     // to pwait).  Counting it left children_live elevated for the rest of
@@ -1696,8 +1691,8 @@ pub fn rfork_clone(parent: &mut Proc, frame: &TrapFrame, flag: u64) -> Result<u6
     Ok(child.pid)
 }
 
-/// The fallible body of rfork_clone after the child exists (the WR-02
-/// split — rfork_clone unwinds the half-built child on any Err): an EAGER
+/// The fallible body of rfork_clone after the child exists
+/// (rfork_clone unwinds the half-built child on any Err): an EAGER
 /// page-for-page copy of every user mapping, a dup'd fd table, mirrored
 /// segment records + paqfs byte source, and a copy of the parent's live
 /// trap frame on the child's kstack with x0 = 0 (donor forkchild).
@@ -1764,16 +1759,13 @@ fn rfork_copy(parent: &Proc, child: &mut Proc, frame: &TrapFrame, flag: u64) -> 
     child.segments = parent.segments.clone();
     child.text_source = parent.text_source.clone();
 
-    // 05-06 (D-03's fd half): the fd GROUP semantics per fork(2) +
+    // The fd GROUP semantics per fork(2) +
     // 9k sysproc.c sysrfork — RFCFDG = fresh EMPTY table (dupfgrp(nil));
     // RFFDG = a fresh table COPIED slot-by-slot (dupfgrp — pipe chans
     // clone their Arc, so both tables' pipe fds reference the SAME
-    // queue); NEITHER = SHARE the parent's handle (Arc clone).  (The
-    // 05-06 plan's bullet inverts RFFDG vs default; fork(2) + sysrfork +
-    // libc fork() = rfork(RFPROC|RFFDG|RFREND) = COPY govern — the
-    // phase's third inversion, the 05-04/05-05 precedent.  The pre-05-06
-    // code always dup'd — the RFFDG arm by another name; SHARE is the
-    // new default.)
+    // queue); NEITHER = SHARE the parent's handle (Arc clone).  (fork(2)
+    // + sysrfork + libc fork() = rfork(RFPROC|RFFDG|RFREND) = COPY
+    // govern.)
     child.fd_group = if flag & crate::syscall::RFCFDG != 0 {
         Arc::new(Lock::new("fdgrp", FdGroup::new()))
     } else if flag & crate::syscall::RFFDG != 0 {
@@ -1783,12 +1775,10 @@ fn rfork_copy(parent: &Proc, child: &mut Proc, frame: &TrapFrame, flag: u64) -> 
         parent.fd_group.clone()
     };
 
-    // 05-04 (D-03): the namespace group + slash/dot, fork(2)/9k sysrfork
+    // The namespace group + slash/dot, fork(2)/9k sysrfork
     // semantics.  RFNAMEG = fresh COPY of the parent's group (pgrpcpy);
     // RFCNAMEG = fresh EMPTY group (the newns wipe); NEITHER = share the
-    // parent's handle (Arc clone).  (The plan's behavior bullet inverted
-    // the two flags; fork(2) + sysrfork + the 05-03 trace's RFCNAMEG-wipe
-    // finding govern — recorded as a 05-04 deviation.)
+    // parent's handle (Arc clone).
     child.pgrp = if flag & crate::syscall::RFCNAMEG != 0 {
         Arc::new(Lock::new("pgrp", Pgrp::new()))
     } else if flag & crate::syscall::RFNAMEG != 0 {
@@ -1797,13 +1787,11 @@ fn rfork_copy(parent: &Proc, child: &mut Proc, frame: &TrapFrame, flag: u64) -> 
     } else {
         parent.pgrp.clone()
     };
-    // 05-05 (D-07): the env group, fork(2)/9k sysrfork semantics — the
+    // The env group, fork(2)/9k sysrfork semantics — the
     // SAME shape as the namespace group above: RFENVG = fresh deep COPY
     // of the parent's group (envcpy); RFCENVG = fresh EMPTY group;
-    // NEITHER = share the parent's handle (Arc clone).  (The plan's
-    // truth bullet inverted RFENVG/RFCENVG; fork(2) + sysproc.c +
-    // newns's rfork(RFENVG|RFCNAMEG) govern — the 05-04 RFNAMEG
-    // precedent, recorded as a 05-05 deviation.)
+    // NEITHER = share the parent's handle (Arc clone).  (fork(2) +
+    // sysproc.c + newns's rfork(RFENVG|RFCNAMEG) govern.)
     child.env_group = if flag & crate::syscall::RFCENVG != 0 {
         Arc::new(Lock::new("env", EnvGroup::new()))
     } else if flag & crate::syscall::RFENVG != 0 {
@@ -1832,17 +1820,16 @@ fn rfork_copy(parent: &Proc, child: &mut Proc, frame: &TrapFrame, flag: u64) -> 
     // the child INHERITS the notify handler; the note queue/last-note/
     // note_ureg start empty (Proc::new's construction).
     child.notify_handler = parent.notify_handler;
-    // 05-08 (D-06): the note group — 9k sysproc.c:183: WITHOUT RFNOTEG the
+    // The note group — 9k sysproc.c:183: WITHOUT RFNOTEG the
     // child INHERITS the parent's noteid; WITH it the child keeps the fresh
     // group id its construction assigned (the donor's newproc incref).
     if flag & crate::syscall::RFNOTEG == 0 {
         child.noteid = parent.noteid;
     }
-    // 05-09 (D-09): the recorded ctl priority is inherited (donor
+    // The recorded ctl priority is inherited (donor
     // forkchild); the argv record is NOT — a fork child's args are empty
     // until its own exec (Proc::new's construction), so /proc/N/args for
-    // a pre-exec child reads EMPTY rather than the parent's (the plan's
-    // truthful-args contract).
+    // a pre-exec child reads EMPTY rather than the parent's.
     child.pri = parent.pri;
     Ok(())
 }

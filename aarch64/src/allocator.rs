@@ -7,7 +7,7 @@ mod global {
         Block, BumpAlloc, QuickFit, global::GlobalHeap, global::GlobalQuickAlloc,
     };
 
-    // 261103-p64: the heap arena and the QuickFit state live in
+    // The heap arena and the QuickFit state live in
     // SyncUnsafeCell statics (never `static mut`).  GlobalQuickAlloc's
     // AtomicPtr swap trick (port::allocator::global) is the sole
     // synchronized access path; the cells' pointers are published into it

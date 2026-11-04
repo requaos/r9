@@ -13,7 +13,7 @@ load-address = '0xffff800040080000'
 [config]
 platform = "virt"
 # no dtb key here: virt's DTB is qemu-facing, passed via [qemu].dtb
-# 04-07: the MULTI profile — byte-identical KERNEL config to virtexec
+# The MULTI profile — byte-identical KERNEL config to virtexec
 # (dev = ["exec"] sets the same cfg; the staged init rforks two
 # children and awaits both under tick preemption).  Only the xtask
 # boot-test assertion set differs, and it is selected by config NAME
@@ -31,7 +31,7 @@ accel = "tcg"
 # Committed trimmed DTB: qemu loads it at 0x40000000 (the ELF-boot fix —
 # without -dtb, qemu 11.1.2 loads no DTB at all for ELF kernels and x0 is 0)
 dtb = "aarch64/lib/virt-gicv2.dtb"
-# D-01 initrd (same mechanism as virtexec): the assembled bootfs.paq —
+# The initrd (same mechanism as virtexec): the assembled bootfs.paq —
 # staged init + hello + smokefork via `cargo xtask initrd` — placed by
 # qemu's generic loader at the fixed PA below with /chosen
 # linux,initrd-start/end patched into a DTB copy.

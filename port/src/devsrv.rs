@@ -1,14 +1,14 @@
-//! devsrv — the `#s` service registry (05-06; semantics ported from 9k's
-//! devsrv.c — the RESEARCH Don't-Hand-Roll mandate).  boot's
+//! devsrv — the `#s` service registry (semantics ported from 9k's
+//! devsrv.c).  boot's
 //! `srvcreate("boot", fd)` (sys/src/9k/boot/aux.c — FATAL on failure)
 //! creates `#s/boot` and writes the root pipe's fd number into it;
-//! settime's later `open("#s/boot")` (05-07, via devmnt) resolves the
+//! settime's later `open("#s/boot")` (via devmnt) resolves the
 //! SAME fd.
 //!
 //! The registry maps a NAME to a posted chan: create makes the entry
 //! (Eexist on a duplicate, OWRITE only — the donor's srvcreate), a write
 //! of a decimal fd number binds the entry to a REFERENCE CLONE of the
-//! calling proc's fd's chan (T-05-11: the Arc-shared pipe state keeps
+//! calling proc's fd's chan (the Arc-shared pipe state keeps
 //! the queue alive after the registrant closes/exits — the srv-held
 //! clone is exactly the donor's fdtochan incref), and the dir listing
 //! shows the registered names.  Opening a posted file returns the posted
@@ -154,7 +154,7 @@ pub fn create(c: &Chan, name: &[u8], mode: u32, perms: u32) -> Result<Chan> {
 /// requested access must match the posted chan's mode (or it is ORDWR).
 /// The open returns the POSTED CHAN's reference clone — the opener
 /// reads/writes the real object (the pipe end), exactly the donor's
-/// srvopen.  (05-07's settime path rides this: open("#s/boot") → the
+/// srvopen.  (settime's path rides this: open("#s/boot") → the
 /// boot pipe's chan.)
 pub fn open(c: &Chan, mode: u32) -> Result<Chan> {
     let access = mode & crate::dat::OMASK;
@@ -189,7 +189,7 @@ pub fn open(c: &Chan, mode: u32) -> Result<Chan> {
 
 /// Write an fd number to a service file (donor srvwrite): a decimal fd
 /// under 32 bytes; the fd resolves through the injected hook (the CALLING
-/// proc's table) and is REFERENCE-CLONED into the entry (T-05-11 — the
+/// proc's table) and is REFERENCE-CLONED into the entry (the
 /// clone's Arc keeps a pipe's queue alive after the registrant exits).
 /// An already-posted service errors (donor Ebadusefd).
 pub fn write(c: &mut Chan, buf: &[u8], _offset: u64) -> Result<u64> {
@@ -267,7 +267,7 @@ pub fn stat(c: &Chan, sb: &mut [u8]) -> Result<u64> {
 }
 
 /// One stat(5) wire record (the devcons/devproc/devenv shape; uid/gid/muid
-/// glenda per D-02).  Returns the byte count (the convD2M contract).
+/// glenda).  Returns the byte count (the convD2M contract).
 /// FOUR strings — libc's statcheck walks four and rejects a record that
 /// ends early (convM2D.c).
 fn write_stat_record(

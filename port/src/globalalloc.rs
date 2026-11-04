@@ -1,5 +1,5 @@
-//! The allocator's GlobalAlloc shim (261103-p64, wave 3) — the named
-//! unsafe floor of the allocator pair (the audit's "shim" module).
+//! The allocator's GlobalAlloc shim — the named
+//! unsafe floor of the allocator pair.
 //!
 //! Everything raw-pointer lives here and ONLY here:
 //! - `Block::new_from_raw_parts` — the arena-edge raw→Block constructor
@@ -108,7 +108,7 @@ impl QuickFit {
 
 /// BumpAlloc implements the allocator interface, and is
 /// suitable for e.g. page allocators and so forth.  Dealloc is
-/// unimplemented and will panic.  (261103-p64: homed here — the
+/// unimplemented and will panic.  (Homed here — the
 /// trait impl's unsafe fn surface is the floor's.)
 ///
 /// SAFETY: allocate returns arena memory owned by the BumpAlloc, never

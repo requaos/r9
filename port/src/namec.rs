@@ -1,10 +1,9 @@
-//! namec — path resolution for r9 (05-04, D-03): the namespace core the
-//! syscall layer routes through (the sys_open prefix routing is RETIRED
-//! this plan — resolution lives here, once).
+//! namec — path resolution for r9: the namespace core the
+//! syscall layer routes through (resolution lives here, once).
 //!
-//! Semantics ported from 9k's chan.c namec/walk (the RESEARCH
-//! Don't-Hand-Roll mandate): a leading "#x" selects the device-registry
-//! entry (a hand-built rune → attach-fn table — RESEARCH OQ-3, no
+//! Semantics ported from 9k's chan.c namec/walk:
+//! a leading "#x" selects the device-registry
+//! entry (a hand-built rune → attach-fn table, no
 //! generated devtab this era) with mount crossing suppressed (nomount);
 //! absolute paths walk from the proc's slash; the rest from its dot.  At
 //! each directory the proc's mount table is consulted: a mount-point
@@ -47,11 +46,11 @@ pub enum NamecMode {
     ToDir,
 }
 
-/// The device registry (05-04, D-03; RESEARCH OQ-3's hand-built shape):
+/// The device registry (a hand-built shape):
 /// '#' + rune → the device's attach fn.  The spec (the bytes between the
 /// rune and the next '/') is accepted and ignored by this era's devices
 /// (devcons/devproc serve one tree each — devroot's attach precedent);
-/// devenv (05-05) is the exception: it VALIDATES the spec (empty only —
+/// devenv is the exception: it VALIDATES the spec (empty only —
 /// a "#ec" attach names the donor's config group, which the seeded root
 /// group replaces; the loud error is boot's designed fail-soft path).
 /// devroot is NOT a registry member: absolute paths reach it through the
@@ -61,10 +60,10 @@ fn registry_attach(rune: char, spec: &[u8]) -> Result<Chan> {
         'c' => Ok(crate::devcons::attach()),
         'e' => crate::devenv::attach(spec),
         'p' => Ok(crate::devproc::attach()),
-        // 05-06: a FRESH pipe pair per attach (9k's pipeattach) — the
+        // A FRESH pipe pair per attach (9k's pipeattach) — the
         // sys_pipe handler's entry point.
         '|' => Ok(crate::devpipe::attach()),
-        // 05-06: '#d' per-fd files (rcmain's interactive `. -i '#d/0'`)
+        // '#d' per-fd files (rcmain's interactive `. -i '#d/0'`)
         // and the '#s' service registry (boot's srvcreate).
         'd' => Ok(crate::devdup::attach()),
         's' => Ok(crate::devsrv::attach()),
@@ -107,7 +106,7 @@ fn dev_walk(c: &Chan, comp: &[u8]) -> Result<Chan> {
         DEV_PIPE => crate::devpipe::walk(c, comp),
         DEV_DUP => crate::devdup::walk(c, comp),
         DEV_SRV => crate::devsrv::walk(c, comp),
-        // 05-07: a walk into a mounted tree is a Twalk RPC (devmnt — the
+        // A walk into a mounted tree is a Twalk RPC (devmnt — the
         // mount entry's `to` chan carries the session + the attach fid).
         DEV_MNT => crate::devmnt::walk(c, comp),
         _ => Err("namec: chan with unknown device index"),
@@ -116,7 +115,7 @@ fn dev_walk(c: &Chan, comp: &[u8]) -> Result<Chan> {
 
 /// Resolve `path` to a Chan.
 ///
-/// LOCKING (WR-04): the mount-table consults take the pgrp lock PER
+/// LOCKING: the mount-table consults take the pgrp lock PER
 /// CONSULT (snapshot the union chain via chain_snapshot, drop the lock,
 /// then walk) — the lock is NEVER held across a device walk.  A walk into
 /// a mounted tree is a devmnt Twalk RPC that BLOCKS mid-syscall (the pipe
@@ -126,7 +125,7 @@ fn dev_walk(c: &Chan, comp: &[u8]) -> Result<Chan> {
 /// sys_mount's documented discipline ("NO pgrp lock is held across the
 /// RPC") applied to resolution itself.
 ///
-/// FID SWEEP (261104-b4p, item 5): every DEV_MNT chan this walk MINTS and
+/// FID SWEEP: every DEV_MNT chan this walk MINTS and
 /// walks PAST (walk-step results + redirect clones) collects in `swept`
 /// and is devmnt::clunk_if_last'd on EVERY exit — Ok and Err alike.  The
 /// Arc count is the second line of the discipline: the entry dup
@@ -185,7 +184,7 @@ fn namec_walk(
     // Walk the components (9k walk's loop): before each device walk,
     // cross a mount point if the current chan sits on one — then try the
     // component in the union chain's order (the crossing's head first, the
-    // underlying dir in chain position, MAFTER tails last).  WR-04: the
+    // underlying dir in chain position, MAFTER tails last).  The
     // chain is SNAPSHOTED under a per-consult lock; the walks below run
     // lock-free.
     for comp in rest.split(|&b| b == b'/').filter(|c| !c.is_empty()) {
@@ -199,7 +198,7 @@ fn namec_walk(
             let guard = pg.lock(&node);
             guard.chain_snapshot(&c.path)
         };
-        // 05-09: "." is the devwalk Accept arm (9k dev.c devwalk:
+        // "." is the devwalk Accept arm (9k dev.c devwalk:
         // `strcmp(n, ".") == 0` keeps the current qid) — AFTER the mount
         // consultation, so "x/." (and ps's chdir("/proc") + open("."))
         // resolves to the UNION HEAD (the devproc attach), not the
@@ -210,7 +209,7 @@ fn namec_walk(
                 let Some(head) = chain.first() else {
                     return Err("namec: empty union chain");
                 };
-                // 05-09: DEV_MNT heads are fid-CLONED, never bare-dup'd —
+                // DEV_MNT heads are fid-CLONED, never bare-dup'd —
                 // the redirect's open/close lifecycle must not touch the
                 // mount table's server-side fid (devmnt::clone_chan).
                 let mut nc = redirect_clone(&head.to)?;
@@ -257,11 +256,11 @@ fn namec_walk(
 
     // The final component's mount crossing (chan.c's namec tail):
     // open/stat-style resolution lands on the union head; bind targets and
-    // chdir stay before the mount point.  05-09: a DEV_MNT head is
+    // chdir stay before the mount point.  A DEV_MNT head is
     // fid-CLONED (never bare-dup'd) — the redirect's open/close lifecycle
-    // must not touch the mount table's server-side fid (the gate-surfaced
-    // aliasing fix: ls /bin's open+close Tclunked the table's fid under a
-    // bare dup, and every later walk from it Rerror'd).  WR-04: the
+    // must not touch the mount table's server-side fid (a bare dup let an
+    // open+close Tclunk the table's fid, and every later walk from it
+    // Rerror'd).  The
     // consult snapshots under a per-consult lock, then drops it.
     if !nomount
         && mode != NamecMode::MountTarget
@@ -287,7 +286,7 @@ fn namec_walk(
     Ok(())
 }
 
-/// The mount-redirect chan (05-09): a DEV_MNT head is fid-cloned (its own
+/// The mount-redirect chan: a DEV_MNT head is fid-cloned (its own
 /// server-side fid — devmnt::clone_chan, the zero-name Twalk idiom); every
 /// other device value-dups as before.  pub for sys_create's dot redirect.
 pub fn redirect_clone(c: &Chan) -> Result<Chan> {
@@ -299,7 +298,7 @@ pub fn redirect_clone(c: &Chan) -> Result<Chan> {
 }
 
 /// A single-component walk from an already-resolved chan through the
-/// device dispatch (05-06: sys_create's final-component probe).  No
+/// device dispatch (sys_create's final-component probe).  No
 /// mount-point consultation — the caller's parent already resolved with
 /// the union semantics it needed.
 pub fn walk_one(c: &Chan, name: &[u8]) -> Result<Chan> {
@@ -327,19 +326,19 @@ pub fn open_chan(c: &Chan, mode: u32) -> Result<Chan> {
         DEV_PIPE => crate::devpipe::open(c, access)?,
         DEV_DUP => crate::devdup::open(c, access)?,
         DEV_SRV => crate::devsrv::open(c, mode)?,
-        // 05-07: Topen over the session (devmnt gets the FULL mode — it
+        // Topen over the session (devmnt gets the FULL mode — it
         // masks the wire byte itself, OTRUNC included for the server to
         // refuse).
         DEV_MNT => crate::devmnt::open(c, mode)?,
         _ => return Err("namec: chan with unknown device index"),
     };
-    // 05-06: the donor's COPEN — every funnel-opened chan is marked;
+    // The donor's COPEN — every funnel-opened chan is marked;
     // Chan::dup's pipe-reference rule and close_chan's dispatch read it.
     opened.copen = true;
     Ok(opened)
 }
 
-/// The stat dispatch for a resolved chan (05-04 Task 3's sys_stat/sys_fstat
+/// The stat dispatch for a resolved chan (sys_stat/sys_fstat
 /// ride this): per-device stat by dev index.  Returns the stat(5) wire
 /// byte count (the size prefix included — convD2M's contract).
 pub fn stat_chan(c: &Chan, sb: &mut [u8]) -> Result<u64> {
@@ -351,22 +350,22 @@ pub fn stat_chan(c: &Chan, sb: &mut [u8]) -> Result<u64> {
         DEV_PIPE => crate::devpipe::stat(c, sb),
         DEV_DUP => crate::devdup::stat(c, sb),
         DEV_SRV => crate::devsrv::stat(c, sb),
-        // 05-07: Tstat over the session (settime's stat of the /tmp mount).
+        // Tstat over the session (settime's stat of the /tmp mount).
         DEV_MNT => crate::devmnt::stat(c, sb),
         _ => Err("namec: chan with unknown device index"),
     }
 }
 
-/// The create dispatch (05-06's sys_create — the donor chan.c Acreate's
+/// The create dispatch (sys_create — the donor chan.c Acreate's
 /// device half): per-device create by dev index, returning the new chan
 /// OPEN (copen marked here — the open funnel's twin).  Devices without a
 /// create op error loudly (never a silent no-op); devenv (env keys) and
-/// devsrv (service names) are this phase's two creators.
+/// devsrv (service names) are this era's two creators.
 pub fn create_chan(c: &Chan, name: &[u8], mode: u32, perm: u32) -> Result<Chan> {
     let mut created = match c.dev {
         DEV_ENV => crate::devenv::create(c, name, mode, perm)?,
         DEV_SRV => crate::devsrv::create(c, name, mode, perm)?,
-        // 05-07: the mounted tree is a read-only server this era (paqfs's
+        // The mounted tree is a read-only server this era (paqfs's
         // rcreate would refuse regardless) — loud, never a silent no-op.
         DEV_MNT => return Err("devmnt: create unsupported (read-only server this era)"),
         _ => return Err("namec: device has no create"),
@@ -375,15 +374,15 @@ pub fn create_chan(c: &Chan, name: &[u8], mode: u32, perm: u32) -> Result<Chan> 
     Ok(created)
 }
 
-/// The close dispatch (05-06 — the donor's devclose): called when an
+/// The close dispatch (the donor's devclose): called when an
 /// open chan LEAVES an fd slot (sys_close's pop, sys_dup's overwrite
-/// eviction, sys_pipe/sys_open's error paths) — and, 261104-b4p (item
-/// 5), whenever a WALKED-but-never-installed DEV_MNT chan leaves scope
+/// eviction, sys_pipe/sys_open's error paths) — and whenever a
+/// WALKED-but-never-installed DEV_MNT chan leaves scope
 /// (namec's walk sweep, the syscall callers' walked-past chans).  Only
 /// devices with close semantics act: devpipe decrements the end's open
 /// count — COPEN-gated (the last close hangs the peer's read queue up —
 /// the EOF path the connectembed teardown rides); devmnt Tclunks the fid
-/// via clunk_if_last REGARDLESS of copen (05-07 — best-effort, never
+/// via clunk_if_last REGARDLESS of copen (best-effort, never
 /// fails; walked-unopened chans hold fids too, and the Arc count makes
 /// non-last refs a no-op).  Non-open chans of close-less devices are
 /// no-ops.

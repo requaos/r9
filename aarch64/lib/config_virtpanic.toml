@@ -1,12 +1,12 @@
-# DEBUG ARTIFACT (D-12) -- never a default or production configuration.
+# DEBUG ARTIFACT -- never a default or production configuration.
 # Selecting `--config virtpanic` boots virt to a deliberate `brk #0` sync
 # exception at the end of main9, BEFORE trap::unmask_irq(): the real trap
 # path dumps the full TrapFrame register state and halts cleanly
-# ("kernel halted").  It exists to prove the Phase 4 debug path
-# (ROADMAP Phase 3 SC#5) -- deterministic, zero IRQ interleaving.
-# (D-12's literal "--config panic" name is delivered as "virtpanic" because
+# ("kernel halted").  It exists to prove the debug path —
+# deterministic, zero IRQ interleaving.
+# (The literal "--config panic" name is delivered as "virtpanic" because
 # this config is virt-specific; mechanism, trigger and dump contract are
-# exactly as decided.)
+# unchanged.)
 
 [build]
 target = "lib/aarch64-unknown-none-elf.json"

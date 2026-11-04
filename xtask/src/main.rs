@@ -417,7 +417,7 @@ impl DistStep {
     fn run(self) -> Result<()> {
         match self.arch {
             Arch::Aarch64 => {
-                // D-05: [dist] format = "elf" — the cargo-built ELF is the
+                // [dist] format = "elf" — the cargo-built ELF is the
                 // boot image; skip the objcopy+gzip flat-image pipeline
                 // entirely. Absent section / "flat-gzip" keeps today's shape.
                 if self.config.dist.as_ref().and_then(|d| d.format.as_deref()) == Some("elf") {
@@ -534,7 +534,7 @@ impl QemuStep {
             .flatten()
             .unwrap_or(&"".to_string())
             .clone();
-        // D-06 override chain, per-invocation layer: the CLI flag beats the
+        // The override chain, per-invocation layer: the CLI flag beats the
         // R9_ACCEL / R9_CPU environment value. The TOML value and the built-in
         // default are layered on at emission time in run().
         let accel = matches
@@ -565,12 +565,12 @@ impl QemuStep {
 
         match self.arch {
             Arch::Aarch64 => {
-                // 04-05: a config whose initrd image lives under target/
+                // A config whose initrd image lives under target/
                 // (the assembled bootfs.paq) builds it when missing or stale
                 // — a missing producer is a loud error, never a silent boot
-                // without userland (D-03).
+                // without userland.
                 ensure_initrd_image(&self.config, self.verbose)?;
-                // D-01: if the config carries an initrd, patch a target/ copy
+                // If the config carries an initrd, patch a target/ copy
                 // of the DTB with /chosen linux,initrd-start/end BEFORE qemu's
                 // argv is assembled (the apply path emits the patched path).
                 prepare_initrd_dtb(&self.config, workspace().to_str().unwrap())?;
@@ -579,12 +579,12 @@ impl QemuStep {
 
                 let platform = self.config.config.as_ref().and_then(|c| c.platform.as_deref());
                 if platform == Some("virt") {
-                    // virt: the D-06 chain completes here — per-invocation
+                    // virt: the override chain completes here — per-invocation
                     // override (--accel/--cpu flag > R9_ACCEL/R9_CPU env) >
                     // TOML > built-in default. The default is tcg +
-                    // cortex-a72, NEVER hvf: darwin acceptance runs TCG this
-                    // phase because HVF rejects GICv2 on qemu 11.1.2 (research
-                    // P2); the hvf accel exists only for a future GICv3 driver.
+                    // cortex-a72, NEVER hvf: darwin acceptance runs TCG
+                    // because HVF rejects GICv2 on qemu 11.1.2; the hvf
+                    // accel exists only for a future GICv3 driver.
                     let toml = self.config.qemu.as_ref();
                     let accel = self
                         .accel
@@ -613,7 +613,7 @@ impl QemuStep {
                     // Show exception level change events in stdout
                     cmd.arg("-d");
                     cmd.arg("int");
-                    // D-05: the cargo-built ELF is the -kernel directly
+                    // The cargo-built ELF is the -kernel directly
                     // (DistStep skips the objcopy/gzip flat-image step).
                     cmd.arg("-kernel");
                     cmd.arg(format!("target/{target}/{dir}/aarch64"));
@@ -734,17 +734,17 @@ impl QemuStep {
     }
 }
 
-/// `cargo xtask boot-test` (D-11): build the kernel, boot it under qemu with
+/// `cargo xtask boot-test`: build the kernel, boot it under qemu with
 /// the serial console on a unix socket, assert the ordered boot markers
 /// (banner -> >=3 periodic ticks -> typed-char echo), and write the captured
 /// serial log.  `server=on,wait=on` on the socket chardev holds guest start
-/// until we connect, giving capture-before-start for free (the Phase 1
-/// lesson; the socket chardev drops pre-connect data without it).
+/// until we connect, giving capture-before-start for free (the socket
+/// chardev drops pre-connect data without it).
 ///
 /// Zero new crate dependencies: std::os::unix::net::UnixStream + std::process
-/// only (rexpect/expectrl remain the documented D-11 fallback ONLY if this
+/// only (rexpect/expectrl remain the fallback ONLY if this
 /// socket design proves infeasible).  Marker assertions only, never timings
-/// (research P11: TCG speed varies).
+/// (TCG speed varies).
 struct BootTestStep {
     arch: Arch,
     config: Configuration,
@@ -755,20 +755,19 @@ struct BootTestStep {
     verbose: bool,
 }
 
-/// Assertion markers, named so 03-06's panic profile and the evidence task
-/// reuse them.
+/// Assertion markers, named so every profile reuses them.
 const BOOT_BANNER_MARKER: &str = "r9 from the Internet";
 const BOOT_TICK_MARKER: &str = "tick";
 const BOOT_TICK_MIN: usize = 3;
 /// The probe string typed into the serial socket.  qemu's socket serial does
 /// not self-echo, so these bytes can only reappear via the kernel's INTID-33
-/// RX echo path (SC#4).
+/// RX echo path.
 const BOOT_ECHO_PROBE: &[u8] = b"r9echo7";
 /// Overall wall-clock budget for the whole marker sequence (overridable via
-/// R9_BOOT_TEST_TIMEOUT); one total budget, never per-marker timings (P11).
+/// R9_BOOT_TEST_TIMEOUT); one total budget, never per-marker timings.
 const BOOT_TEST_TIMEOUT_SECS: u64 = 300;
 
-/// Panic-profile markers (03-06, D-12): a config with dev = ["panic"] boots
+/// Panic-profile markers: a config with dev = ["panic"] boots
 /// virt to a deliberate brk #0 sync exception BEFORE trap::unmask_irq(), so
 /// the log is deterministic (zero IRQ interleaving) -- banner, start marker,
 /// full TrapFrame register dump, clean-halt marker.  No ticks, no echo:
@@ -778,10 +777,10 @@ const BOOT_PANIC_HALT_MARKER: &str = "kernel halted";
 /// The TrapFrame {:#?} Debug prints one `    x<N>:` row per register x0..x30.
 const BOOT_PANIC_REGISTER_MIN: usize = 30;
 
-/// Exec-profile markers (04-06, SC#2 gate): a config with dev = ["exec"]
+/// Exec-profile markers: a config with dev = ["exec"]
 /// boots virt into main9's exec orchestration — devroot mounts the initrd
 /// bootfs.paq, /init is exec'd, enters EL0, prints via the real pwrite
-/// syscall path, execs /hello (the committed Phase-2 ABI bisect binary),
+/// syscall path, execs /hello (the committed ABI-bisect binary),
 /// hello prints and exits, and the kernel prints the all-exited marker and
 /// parks.  The markers arrive in exactly this order.
 const BOOT_EXEC_ENTRY_MARKER: &str = "exec: entering EL0 pc=0x";
@@ -789,12 +788,11 @@ const BOOT_INIT_MARKER: &str = "init: r9 EL0 alive";
 const BOOT_HELLO_MARKER: &str = "hello aarch64 harvey";
 const BOOT_ALL_EXITED_MARKER: &str = "all user processes exited";
 
-/// Multi-profile markers (04-07, SC#4's rfork/fd-ops half + D-13
-/// preemption evidence): the virtmulti config boots the SAME kernel+initrd
+/// Multi-profile markers: the virtmulti config boots the SAME kernel+initrd
 /// as virtexec, but the staged init rforks two children (hello +
 /// smokefork) and awaits both, so the smoke markers arrive in
-/// nondeterministic order — asserted for PRESENCE, never interleaving
-/// (D-13).  `sched: switch` is the tick-preemption marker: at least one
+/// nondeterministic order — asserted for PRESENCE, never interleaving.
+/// `sched: switch` is the tick-preemption marker: at least one
 /// switch proves IRQ-from-EL0 returned to a DIFFERENT process.
 const BOOT_SMOKE_FD_MARKER: &str = "smokefork: fd ok";
 const BOOT_SMOKE_CHILD_MARKER: &str = "smokefork: child running";
@@ -802,26 +800,26 @@ const BOOT_SMOKE_AWAIT_MARKER: &str = "smokefork: await:";
 const BOOT_SMOKE_DONE_MARKER: &str = "init: smoke complete";
 const BOOT_SCHED_SWITCH_MARKER: &str = "sched: switch";
 
-/// Notes-profile additions (04-08, SC#4's notes half): the virtnotes
+/// Notes-profile additions: the virtnotes
 /// config boots the SAME kernel+initrd as virtexec/virtmulti, but the
 /// staged init also rforks a third child (smokenote), posts it a note via
 /// unmodified libc postnote (a /proc/N/note write on devproc-lite), and
 /// the kernel delivers at the child's return-to-EL0 boundary — the
 /// handler prints the note and resumes via noted(NCONT).  Presence, never
-/// interleaving order (D-13).
+/// interleaving order.
 const BOOT_NOTE_GOT_MARKER: &str = "smokenote: got note";
 const BOOT_NOTE_RESUMED_MARKER: &str = "smokenote: resumed";
 
-/// Stack-smoke marker (05-01, D-15's staged half): the staged init's
+/// Stack-smoke marker: the staged init's
 /// fourth child (stacksmoke) recurses depth 64 with ~256-byte frames,
 /// forcing multiple demand-paged stack page-ins beyond the two eager seed
 /// pages, and prints this on unwind through the real pwrite path.  The
-/// virtexec profile's marker set gains it — presence, never order (D-13);
+/// virtexec profile's marker set gains it — presence, never order;
 /// the multi/notes assertion sets are unchanged (the marker rides their
 /// initrd too, but they don't assert it).
 const BOOT_STACKSMOKE_MARKER: &str = "stacksmoke: depth 64 ok";
 
-/// Sleep-smoke marker (261104-b4p, item 6's staged proof): the staged
+/// Sleep-smoke marker: the staged
 /// init's fifth child (smokesleep) arms alarm(300), sleeps 30 s, and the
 /// alarm note interrupts the sleep — sys_sleep wakes early, fails -1
 /// "interrupted" (the donor tsleep shape), the handler runs at the
@@ -829,16 +827,16 @@ const BOOT_STACKSMOKE_MARKER: &str = "stacksmoke: depth 64 ok";
 /// AllExited stage for ALL THREE exec-family profiles (Exec/Multi/Notes
 /// share the initrd; all-exited arrives only after init reaped every
 /// child, so absence is definitive — the stacksmoke check's placement
-/// shape, presence-only per D-13).
+/// shape, presence-only).
 const BOOT_SMOKESLEEP_MARKER: &str = "smokesleep: interrupted";
 
-/// Always-on negative scan (04-06): any panic/Unhandled-interrupt line in
+/// Always-on negative scan: any panic/Unhandled-interrupt line in
 /// the capture fails the run — every profile EXCEPT the deliberate-panic
 /// one (whose expected flow prints exactly that dump).  Case-insensitive,
-/// matching the plan's `grep -ciE 'panic|Unhandled interrupt'` leg.  04-08
-/// adds the notes-era failures: `note-timeout` (a note was never
+/// matching `grep -ciE 'panic|Unhandled interrupt'`.  The
+/// notes-era failures join: `note-timeout` (a note was never
 /// delivered) and `unimplemented` (a syscall outside the implemented set
-/// was called — D-14's discipline: a traced-set miss surfaces here; trace
+/// was called — a traced-set miss surfaces here; trace
 /// and implement the gap, never silence it).
 fn negative_scan_hit(capture: &[u8]) -> Option<&'static str> {
     let lower: Vec<u8> = capture.iter().map(|b| b.to_ascii_lowercase()).collect();
@@ -906,7 +904,7 @@ enum BootStage {
     ExecEntry,
     InitPrint,
     HelloPrint,
-    /// 04-07 multi profile: collect the (unordered) smoke markers +
+    /// The multi profile: collect the (unordered) smoke markers +
     /// >= 1 sched-switch preemption line before awaiting all-exited.
     MultiMarkers,
     AllExited,
@@ -950,8 +948,7 @@ impl fmt::Display for BootStage {
     }
 }
 
-/// The boot-test assertion profile being run (04-06: the exec profile
-/// joined the ticks/echo and panic pair; 04-07 adds multi; 04-08 notes).
+/// The boot-test assertion profile being run.
 #[derive(Clone, Copy, PartialEq)]
 enum BootProfile {
     Ticks,
@@ -961,7 +958,7 @@ enum BootProfile {
     Notes,
 }
 
-/// D-16 teardown: SIGKILL the spawned qemu's process GROUP (qemu spawned
+/// Teardown: SIGKILL the spawned qemu's process GROUP (qemu spawned
 /// group-leader via `process_group(0)`, so pgid == pid), then reap the
 /// leader.  std has no killpg, so the group signal rides kill(1) — POSIX
 /// base, not a new host dependency; `-KILL -- -<pgid>` with the `--`
@@ -994,7 +991,7 @@ impl BootTestStep {
             .cloned()
             .unwrap_or_else(|| "default".to_string());
         let profile = Profile::from(matches);
-        // D-06 override chain, per-invocation layer: the CLI flag beats the
+        // The override chain, per-invocation layer: the CLI flag beats the
         // R9_ACCEL / R9_CPU environment value (mirrors QemuStep::new); the
         // TOML value and the built-in default layer on at emission in run().
         let accel = matches
@@ -1019,26 +1016,26 @@ impl BootTestStep {
             return Err("boot-test currently supports aarch64 only".into());
         }
 
-        // D-06 layer 2: the cross-repo ureg.h drift gate runs before qemu
+        // The cross-repo ureg.h drift gate runs before qemu
         // spawns — a drifted (or absent) Harvey checkout fails every
-        // boot-test profile (SC#1: an ABI mismatch is a build failure, not a
+        // boot-test profile (an ABI mismatch is a build failure, not a
         // runtime mystery).  Bare `cargo xtask build` instead tolerates a
-        // missing checkout — the layer-1 const asserts still guard there.
+        // missing checkout — the const asserts still guard there.
         uregcheck::check_for_boot_test()?;
 
         let target = self.arch.target();
         let dir = self.profile.dir();
-        // D-05: on virt the cargo-built ELF is the -kernel directly.
+        // On virt the cargo-built ELF is the -kernel directly.
         let kernel = format!("target/{target}/{dir}/aarch64");
         let kernel_path = workspace().join(&kernel);
         if !kernel_path.exists() {
             return Err(format!("kernel image {kernel} missing (build step ran first?)").into());
         }
 
-        // 04-05: build-if-missing/stale for target/-resident initrd images
+        // Build-if-missing/stale for target/-resident initrd images
         // (same hook as QemuStep).
         ensure_initrd_image(&self.config, self.verbose)?;
-        // D-01: if the config carries an initrd, patch a target/ copy of the
+        // If the config carries an initrd, patch a target/ copy of the
         // DTB with /chosen linux,initrd-start/end (same apply path as QemuStep).
         prepare_initrd_dtb(&self.config, workspace().to_str().unwrap())?;
 
@@ -1048,10 +1045,10 @@ impl BootTestStep {
         let log_abs = workspace().join(&log_rel);
         // A stale socket file from a crashed run would break qemu's bind.
         let _ = std::fs::remove_file(&sock_abs);
-        // D-16 (phase-04 deferred-items #2 — the stale-log poison): destroy
+        // Destroy
         // any PRIOR run's serial log BEFORE qemu spawns, so this run's
-        // marker waits can only ever match fresh output.  (The 04-05 verify
-        // rerun matched a pre-seeded log and killed the fresh qemu.)  The
+        // marker waits can only ever match fresh output (a rerun that
+        // matched a pre-seeded log once killed the fresh qemu).  The
         // capture re-creates the log at File::create below; a spawn/connect
         // failure now leaves NO log rather than a stale one.
         let _ = std::fs::remove_file(&log_abs);
@@ -1059,7 +1056,7 @@ impl BootTestStep {
         // Spawn qemu with the serial console on the socket chardev.  The
         // machine/cpu/smp/memory/accel/dtb plumbing is the config's, via the
         // same apply path QemuStep uses; the virt arm's built-in defaults
-        // (tcg + cortex-a72, NEVER hvf -- research P2) complete the chain.
+        // (tcg + cortex-a72, NEVER hvf) complete the chain.
         let mut cmd = Command::new(self.arch.qemu_system());
         let platform = self.config.config.as_ref().and_then(|c| c.platform.as_deref());
         let toml = self.config.qemu.as_ref();
@@ -1094,12 +1091,12 @@ impl BootTestStep {
         if self.verbose {
             println!("Executing {cmd:?}");
         }
-        // D-16: qemu spawns as its own process-group leader (pgid == its
+        // Qemu spawns as its own process-group leader (pgid == its
         // pid) so teardown kills the whole GROUP — no orphaned qemu (or a
         // helper it spawned) survives the pass/fail/timeout exit paths.
         // std's process_group(0) is the setpgid(0,0) pre-exec (darwin has
         // no setsid(1) CLI, but this is the libc call via std) — zero new
-        // dependencies, per the Phase-3 D-11 harness contract.
+        // dependencies.
         let mut child = cmd
             .process_group(0)
             .spawn()
@@ -1107,7 +1104,7 @@ impl BootTestStep {
 
         let result = self.assert_markers(&mut child, &sock_abs, &log_abs);
 
-        // Always reap the guest (by process group — D-16) and drop the
+        // Always reap the guest (by process group) and drop the
         // socket file.  One teardown site covers the pass, fail, and
         // timeout paths: assert_markers always returns here.
         kill_process_group(&mut child);
@@ -1150,14 +1147,14 @@ impl BootTestStep {
         stream.set_read_timeout(Some(Duration::from_millis(500)))?;
 
         // The FRESH evidence log — the prior run's log was destroyed
-        // pre-spawn (D-16, phase-04 deferred-#2), so every byte written
+        // pre-spawn, so every byte written
         // here is this run's.
         let mut log_file = std::fs::File::create(log_abs)?;
         let mut capture: Vec<u8> = Vec::new();
         let mut stage = BootStage::Banner;
         let mut probe_at = 0usize;
 
-        // Assertion profile selection (D-12): a [config] dev list containing
+        // Assertion profile selection: a [config] dev list containing
         // "panic" selects the panic profile -- banner, the virtpanic start
         // marker, a full TrapFrame register dump and the clean-halt marker,
         // in that order.  IRQs never unmask in that profile, so the
@@ -1168,9 +1165,9 @@ impl BootTestStep {
             .as_ref()
             .and_then(|c| c.dev.as_ref())
             .is_some_and(|devs| devs.iter().any(|d| d == "panic"));
-        // 04-06 (SC#2): a dev list containing "exec" selects the exec
+        // A dev list containing "exec" selects the exec
         // profile -- banner, exec entry, the staged init's print, hello's
-        // print (the committed Phase-2 bisect binary via the real EL0 svc
+        // print (the committed bisect binary via the real EL0 svc
         // path), and the all-exited marker, in that order.  No probe is
         // typed: under dev_exec the PL011 RX bytes feed the devcons read
         // buffer instead of echoing.
@@ -1180,14 +1177,14 @@ impl BootTestStep {
             .as_ref()
             .and_then(|c| c.dev.as_ref())
             .is_some_and(|devs| devs.iter().any(|d| d == "exec"));
-        // 04-07 (SC#4 rfork/fd-ops + D-13 preemption evidence): the MULTI
+        // The MULTI
         // profile is selected by CONFIG NAME ("virtmulti") — the kernel
         // config is byte-identical to virtexec's (same dev = ["exec"] cfg,
         // same initrd); only the assertion set differs.  Selection by name
         // (rather than a dev-list addition) keeps the kernel cfg surface
         // unchanged: there is no second kernel behavior to gate, only a
         // second set of boot-test expectations over the same boot.
-        // 04-08 (SC#4's notes half): the NOTES profile ("virtnotes") is
+        // The NOTES profile ("virtnotes") is
         // the same shape — same kernel config, the marker set gains the
         // smokenote pair.
         let multi_profile = self.config_name == "virtmulti";
@@ -1259,7 +1256,7 @@ impl BootTestStep {
                     }
                 }
                 BootStage::MultiMarkers => {
-                    // Presence, never order (D-13): every smoke marker at
+                    // Presence, never order: every smoke marker at
                     // least once, plus >= 1 sched-switch line (an
                     // IRQ-from-EL0 preempted to a different process).  The
                     // notes profile adds the smokenote pair (the note was
@@ -1292,9 +1289,9 @@ impl BootTestStep {
                         } else {
                             BootProfile::Exec
                         };
-                        // 05-01 (D-15): the exec profile's marker set gains
+                        // The exec profile's marker set gains
                         // the stacksmoke depth-64 marker — presence, never
-                        // order (D-13).  All-exited arrives only after the
+                        // order.  All-exited arrives only after the
                         // staged init reaped every child, so absence here is
                         // definitive.  The multi/notes sets are unchanged.
                         if profile == BootProfile::Exec
@@ -1306,7 +1303,7 @@ impl BootTestStep {
                                 "stacksmoke marker absent at all-exited",
                             ));
                         }
-                        // 261104-b4p (item 6): the smokesleep interrupted
+                        // The smokesleep interrupted
                         // marker rides ALL THREE exec-family profiles (the
                         // shared initrd's child E) — presence at all-exited
                         // is definitive proof the alarm note interrupted the
@@ -1696,16 +1693,16 @@ impl CleanStep {
     }
 }
 
-/// `cargo xtask ureg-check` (D-06 layer 2): standalone form of the
+/// `cargo xtask ureg-check`: standalone form of the
 /// cross-repo ureg.h drift gate (also a BootTestStep precondition).
-/// `cargo xtask initrd` (04-05, D-01/D-02/D-03): assemble
+/// `cargo xtask initrd`: assemble
 /// `target/bootfs.paq` from the staged Harvey aarch64 binaries
 /// (`build/aarch64/smoke-out/{init,hello}`, produced by
 /// `build/aarch64/stage-build.sh`) with the Harvey checkout's host-built
-/// `mkpaqfs` (04-01 recipe), and print the image's sha256 for the phase
+/// `mkpaqfs`, and print the image's sha256 for the
 /// evidence log.  The image and the staging tree are target/ build
 /// artifacts — never committed.  `--arch`/`--config` are accepted for the
-/// Step idiom (and the plan's invocation shape); the assembly is
+/// Step idiom; the assembly is
 /// config-independent — one image serves every profile that names it.
 struct InitrdStep {
     verbose: bool,
@@ -1714,9 +1711,9 @@ struct InitrdStep {
 /// The initrd staging tree + output image, relative to the workspace.
 const INITRD_TREE: &str = "target/initrd-tree";
 const BOOTFS_PAQ: &str = "target/bootfs.paq";
-/// The staged binaries the initrd carries (D-03's SC-scoped set: the staged
-/// init + the hello ABI-bisect binary + 04-07's rfork/fd-ops smoke +
-/// 04-08's notes smoke + 05-01's D-15 stack-growth smoke + 261104-b4p's
+/// The staged binaries the initrd carries (the staged
+/// init + the hello ABI-bisect binary + the rfork/fd-ops smoke +
+/// the notes smoke + the stack-growth smoke + the
 /// interruptible-sleep smoke).
 const INITRD_FILES: [&str; 6] = ["init", "hello", "smokefork", "smokenote", "stacksmoke", "smokesleep"];
 
@@ -1731,15 +1728,15 @@ impl InitrdStep {
 }
 
 /// Assemble target/bootfs.paq from the Harvey SMOKE staging dir
-/// (`build/aarch64/smoke-out/` — 261103-p64's split: the exec-family
+/// (`build/aarch64/smoke-out/` — the exec-family
 /// profiles need the smoke init's markers, and the boot chain's REAL init
 /// shares the old `out/` path under "last writer wins"; the smoke stage
-/// now owns smoke-out/ exclusively, so the two gates can never clobber
+/// owns smoke-out/ exclusively, so the two gates can never clobber
 /// each other).  Both producers
 /// are named in the error text when absent — a missing mkpaqfs or a missing
-/// staged binary is a loud build error, never a silent boot (D-03).
+/// staged binary is a loud build error, never a silent boot.
 fn assemble_initrd(verbose: bool) -> Result<()> {
-    // 05-10 (D-10): R9_HARVEY_DIR required — the ../harvey default is gone.
+    // R9_HARVEY_DIR required — there is no default checkout path.
     let harvey = uregcheck::harvey_dir()?;
     let mkpaqfs = harvey.join(".build/bin/mkpaqfs");
     if !mkpaqfs.is_file() {
@@ -1756,9 +1753,9 @@ fn assemble_initrd(verbose: bool) -> Result<()> {
         std::fs::remove_dir_all(&tree)?;
     }
     std::fs::create_dir_all(&tree)?;
-    // 05-04 (D-03): the staged init binds #p at /proc itself in the
+    // The staged init binds #p at /proc itself in the
     // namespace era (the real chain's connectembed shape) — the mount
-    // target must exist (Pitfall-8), so the tree ships the empty dir.
+    // target must exist, so the tree ships the empty dir.
     std::fs::create_dir_all(tree.join("proc"))?;
     for name in INITRD_FILES {
         let src = harvey.join(format!("build/aarch64/smoke-out/{name}"));
@@ -1791,7 +1788,7 @@ fn assemble_initrd(verbose: bool) -> Result<()> {
     Ok(())
 }
 
-/// sha256 of a file via a host tool — no new crates (T-04-SC).  coreutils
+/// sha256 of a file via a host tool — no new crates.  coreutils
 /// `sha256sum` (nix devshell, linux) first, macOS `shasum` as fallback.
 fn sha256_of(path: &Path) -> Result<String> {
     let out = Command::new("sha256sum")
@@ -1806,7 +1803,7 @@ fn sha256_of(path: &Path) -> Result<String> {
     Ok(text.split_whitespace().next().unwrap_or("").to_string())
 }
 
-/// Build-if-missing/stale hook (04-05): `qemu`/`boot-test` invocations whose
+/// Build-if-missing/stale hook: `qemu`/`boot-test` invocations whose
 /// config carries an initrd image under target/ (the assembled bootfs.paq)
 /// reassemble it when absent or older than the staged inputs.  Configs with
 /// no initrd, or with a target/-external image (the committed probe fixture —
@@ -1818,7 +1815,7 @@ fn ensure_initrd_image(config: &Configuration, verbose: bool) -> Result<()> {
         return Ok(());
     }
     let paq = workspace().join(&initrd.file);
-    // 05-10 (D-10): R9_HARVEY_DIR required — the ../harvey default is gone.
+    // R9_HARVEY_DIR required — there is no default checkout path.
     let harvey = uregcheck::harvey_dir()?;
     let paq_mtime = std::fs::metadata(&paq).and_then(|m| m.modified()).ok();
     let stale = paq_mtime.is_some_and(|paq_mtime| {
@@ -1885,7 +1882,7 @@ mod tests {
     };
 
     /// The always-on negative scan: panic/Unhandled-interrupt lines fail
-    /// non-panic profiles, case-insensitively (04-06).
+    /// non-panic profiles, case-insensitively.
     #[test]
     fn negative_scan_hits_panic_and_unhandled() {
         assert_eq!(negative_scan_hit(b"ok\r\nkernel panic: bad\r\n"), Some("panic"));

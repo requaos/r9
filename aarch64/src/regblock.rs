@@ -1,4 +1,4 @@
-//! Typed MMIO register blocks (261103-p64, wave 2).
+//! Typed MMIO register blocks.
 //!
 //! A `RegBlock` is a mapped device register block: a VirtRange naming MMIO
 //! pages mapped r/w in the kernel table by `deviceutil::map_device_register`.

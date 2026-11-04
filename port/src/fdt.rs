@@ -13,7 +13,7 @@ pub enum ParseError {
 type Result<T> = core::result::Result<T, ParseError>;
 
 /// Extract u32 from bytes
-/// (261103-p64: the DTB is always initialized memory — the MaybeUninit
+/// (The DTB is always initialized memory — the MaybeUninit
 /// dance and its assume_init_ref unsafe are gone tree-wide here.)
 fn bytes_to_u32(bytes: &[u8]) -> Option<u32> {
     let init_bytes = bytes.get(..4)?;
@@ -53,7 +53,7 @@ pub struct DeviceTree<'a> {
 }
 
 /// The FDT header's fixed size (the two-pass raw-DTB construction's
-/// pass-1 prefix — 261103-p64).
+/// pass-1 prefix).
 pub const FDT_HEADER_SIZE: usize = size_of::<FdtHeader>();
 
 impl<'a> DeviceTree<'a> {
@@ -68,7 +68,7 @@ impl<'a> DeviceTree<'a> {
     }
 
     /// Given a pointer to the dtb as a usize, return a DeviceTree struct.
-    /// 261103-p64: from_usize is REMOVED (fdt is now unsafe-free — the
+    /// from_usize is REMOVED (fdt is now unsafe-free — the
     /// #[forbid(unsafe_code)] regression lock); the two-pass raw-pointer
     /// dance lives at the boot callers (aarch64 main9/vminit, riscv64's
     /// main) as header_totalsize + new over caller-formed slices.
@@ -163,7 +163,7 @@ impl<'a> DeviceTree<'a> {
 
     /// Extract the property value as a u64 — e.g. /chosen's
     /// linux,initrd-start/end, carried as 8-byte big-endian cells in the
-    /// host-patched DTB (D-01).
+    /// host-patched DTB.
     pub fn property_value_as_u64(&self, prop: &Property) -> Option<u64> {
         self.property_value_bytes(prop).and_then(bytes_to_u64)
     }

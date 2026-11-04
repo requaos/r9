@@ -1,6 +1,6 @@
 // Space reserved for the interrupt stack:
 //    interruptstackbase to interruptstackbase+INTERRUPTSTACKSZ.
-// (04-05: traps no longer switch stacks — the frame goes on the current
+// (Traps no longer switch stacks — the frame goes on the current
 // kernel stack, see handle_interrupt below.  The reservation stays for
 // print_stacks()'s reporting and any future dedicated-irq-stack need.)
 INTERRUPTSTACKSZ = 4096*16
@@ -40,31 +40,31 @@ interruptstackbase:	.space INTERRUPTSTACKSZ
 	b	\label
 .endm
 
-// One unified frame serves all 16 vectors (D-08): the TrapFrame IS Harvey's
+// One unified frame serves all 16 vectors: the TrapFrame IS Harvey's
 // Ureg (aarch64/include/ureg.h) field-for-field — x0..x28, x29, x30, sp, pc,
-// psr, type (aarch64/ABI.md, "Kernel-side enforcement (Phase 4 appendix)").
+// psr, type (aarch64/ABI.md's kernel-side enforcement appendix).
 // We save all general purpose registers, and these system registers:
 // - sp  @248: the interrupted context's stack pointer.  EL0-origin traps:
 //   SP_EL0, valid at any point after entry.  EL1h-origin traps: the entry
-//   sp (recomputed as sp+288 after the frame alloc — Pitfall 1).
+//   sp (recomputed as sp+288 after the frame alloc).
 // - pc  @256: ELR_EL1 (exception link register — interrupted address)
 // - psr @264: SPSR_EL1 (saved program status)
 // - type @272: the vector index 0-15 (kernel-side informational)
 // ESR_EL1/FAR_EL1 are NOT saved in the frame: trap() reads them live at
-// entry and passes them to dispatchers as arguments (D-05).
+// entry and passes them to dispatchers as arguments.
 //
 // The frame goes on the CURRENT kernel stack — no stack switch (the 9front
 // arm64 shape): EL1h-origin traps land on the interrupted kernel stack, and
 // EL0-origin traps land on SP_EL1, which trap_return leaves at the trapping
-// process's kernel stack top (main9's stack before the first exec).  04-05
-// replaced the old switch-to-interruptstackbase entry: it clobbered x0 with
+// process's kernel stack top (main9's stack before the first exec).  The
+// old switch-to-interruptstackbase entry was replaced: it clobbered x0 with
 // the stack address BEFORE the first store (every frame's x0 slot held the
 // interrupt stack top — fatal to the SVC number and to EL0 returns), and
 // the switched sp was never restored on EL1h returns (harmless only because
 // the wfi idle loop was the sole EL1 resident).  With no switch, no scratch
 // register is needed before the first store and every slot stays truthful.
 //
-// 04-07 (D-13, T-04-14): the "current kernel stack" for an EL0-origin
+// The "current kernel stack" for an EL0-origin
 // entry is the CURRENT PROCESS's kernel stack.  SP_EL1 is kept equal to
 // the current proc's kernel stack top by the trap_return tail, whose final
 // sp step (frame + 288) reproduces it exactly on every return: every frame
@@ -73,7 +73,8 @@ interruptstackbase:	.space INTERRUPTSTACKSZ
 // EL1h entries by the entry's own sub, and fork/exec seeds by placement
 // (rfork_copy / seed_exec_frame).  An explicit entry-side stack switch is
 // impossible on aarch64 without clobbering a user GPR before its store
-// (the 04-05 bug): there is no GPR-free SP move, so the return-side step
+// (the old entry-side bug): there is no GPR-free SP move, so the return-side
+// step
 // is the single enforcement point.  The entry RECORDS the frame it built
 // into CURFRAME and the tail RELOADS the frame base from CURFRAME, because
 // preemption (proc::preempt from the timer tick) swaps CURFRAME/CURKSTACK/
@@ -81,7 +82,7 @@ interruptstackbase:	.space INTERRUPTSTACKSZ
 // Both symbols are Rust statics in proc.rs, written only under the
 // PROC_TABLE lock or in IRQ-masked trap context (single CPU); CURKSTACK
 // initialises to the legacy interrupt stack so pre-process traps (early
-// boot, virtpanic) behave as before.  (05-01: the tail no longer LOADS
+// boot, virtpanic) behave as before.  (The tail no longer LOADS
 // CURKSTACK — frame+288 reconstructs it — because the load needed a
 // scratch register after the pops and clobbered the restored userland x9
 // on every EL0t return; CURKSTACK remains as proc.rs's record of the
@@ -129,7 +130,7 @@ interruptstackbase:	.space INTERRUPTSTACKSZ
 	ldr	x30, =\type
 	str	x30, [sp, #16 * 17]
 
-	// 04-07: record the live frame for trap_return's CURFRAME reload
+	// Record the live frame for trap_return's CURFRAME reload
 	// (preemption may swap it mid-trap).  x9/x10's frame slots were
 	// stored above, so they are safe scratch here.
 	mov	x9, sp
@@ -140,24 +141,24 @@ interruptstackbase:	.space INTERRUPTSTACKSZ
 	mov	x0, sp
 	bl	trap_unsafe
 
-	// The restore tail is factored out of line (04-05): shared with exec's
+	// The restore tail is factored out of line: shared with exec's
 	// first EL0 entry below.  sp still names the frame here.
 	b	trap_return
 .endm
 
-// 04-05: the shared trap-return tail — restore the frame and eret.
+// The shared trap-return tail — restore the frame and eret.
 // The handle_interrupt macro branches here after trap_unsafe, and exec's
 // first EL0 entry arrives via the trap_return_exec wrapper at the bottom;
 // this eret path is the ONLY way EL0 is ever entered (swtch never enters
-// EL0 — D-12 era rule).
+// EL0).
 //
-// 04-07 (D-13): the tail RELOADS the frame base from CURFRAME as its
+// The tail RELOADS the frame base from CURFRAME as its
 // first instruction — a timer tick may have preempted the interrupted
 // process mid-trap, swapping CURFRAME/CURKSTACK/TTBR0 to the next
 // process, so the frame to restore is not necessarily the one the entry
 // built.
 //
-// 05-01 (D-14 root-cause fix): the final sp step is `frame + 288` for
+// The final sp step is `frame + 288` for
 // BOTH origins, and no register may be touched after the pops.  The old
 // tail re-read psr and loaded CURKSTACK through x9 AFTER `ldp x8, x9`
 // had restored the interrupted context's x9 — every EL0t-bound eret
@@ -168,14 +169,14 @@ interruptstackbase:	.space INTERRUPTSTACKSZ
 // virtnotes wild-write kills, e.g. addr 0xffff90000000f008 = pid 3's
 // kstack top + 8), and the smokenote spin's loop counter in x9 became
 // huge, ending the loop at the ceiling (the note-timeout exits).  Both
-// pre-05-01 flake symptoms are this one clobber.  The CURKSTACK load was
+// old flake symptoms are this one clobber.  The CURKSTACK load was
 // also redundant: every frame the tail can restore sits at (entry-stack
 // top - 288) by construction (EL0 entries via the SP_EL1 == current
 // kstack-top invariant, EL1h entries via the entry's own sub, fork/exec
 // seeds via rfork_copy/seed_exec_frame placement), so frame + 288 IS the
 // interrupted kernel stack top — the post-swap CURKSTACK value included.
 //
-// Restore asymmetry (04-RESEARCH.md Pitfall 2): pc/psr always; SP_EL0 only
+// Restore asymmetry: pc/psr always; SP_EL0 only
 // when the frame is EL0t-bound (psr & 0xF == 0) — an IRQ that interrupted
 // EL1 kernel code must never scribble a kernel address into SP_EL0 (the
 // 9front vtrap1/noteret restore asymmetry).  x9/x10 are scratch ONLY
@@ -227,8 +228,8 @@ trap_return:
 	add	sp, sp, #288
 	eret
 
-// exec's first EL0 entry (04-05): x0 = the seeded forkret-shaped frame on
-// the proc's kernel stack; publish it as the current frame (04-07 — the
+// exec's first EL0 entry: x0 = the seeded forkret-shaped frame on
+// the proc's kernel stack; publish it as the current frame (the
 // tail reloads from CURFRAME) and ride the shared tail above.  Bound in
 // Rust as trap_return (trap.rs).
 .globl	trap_return_exec

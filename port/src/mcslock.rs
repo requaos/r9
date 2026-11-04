@@ -95,7 +95,7 @@ pub struct Lock<T: ?Sized> {
 
 // SAFETY: the MCS protocol (lock/unlock above) serializes all access to
 // the protected data — a Lock can cross threads because the queue
-// discipline is the synchronization (261103-p64: the named floor module).
+// discipline is the synchronization (the named floor module).
 unsafe impl<T: ?Sized> Send for Lock<T> {}
 // SAFETY: as above — &Lock sharing is safe because data access only ever
 // happens under the queue's mutual exclusion.
@@ -146,9 +146,9 @@ impl<T: ?Sized> Drop for LockGuard<'_, T> {
 }
 
 // ---------------------------------------------------------------------------
-// BusyCell (261103-p64): the try-enter exclusivity cell.
+// BusyCell: the try-enter exclusivity cell.
 //
-// The devmnt session core's discipline (05-07): exactly one outstanding RPC
+// The devmnt session core's discipline: exactly one outstanding RPC
 // owns the state; a concurrent attempt is a LOUD error, never a wedge.  An
 // MCS Lock is WRONG here — a lock held across the blocking 9P receive would
 // spin-deadlock an IRQ-masked contender (the holder is sched-blocked on the
@@ -223,6 +223,6 @@ impl<T> Drop for BusyGuard<'_, T> {
 // guard ever touches an MntCore, and the guard is the cell's single owner
 // (enter()'s swap excludes every other contender for its lifetime).  The
 // BusyCell Send/Sync impls above extend the discipline to the session.
-// (261103-p64: homed with the primitive because devmnt.rs is
-// #[forbid(unsafe_code)] — the plan's regression-lock rollout.)
+// (Homed with the primitive because devmnt.rs is
+// #[forbid(unsafe_code)].)
 unsafe impl Send for crate::devmnt::MntCore {}
