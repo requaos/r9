@@ -67,7 +67,7 @@ pub mod virtio;
 mod allocator_tests;
 // The virtio transport's tests live at the crate root for the same
 // reason: the Vec-backed mock arenas and the op-order log need alloc/std
-// while port::virtio itself carries #[forbid(unsafe_code)].
+// while port::virtio itself keeps its unsafe-free forbid attribute.
 #[cfg(test)]
 mod virtio_tests;
 
