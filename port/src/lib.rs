@@ -55,6 +55,8 @@ pub mod pagealloc;
 pub mod paqfs;
 #[forbid(unsafe_code)]
 pub mod pgrp;
+#[forbid(unsafe_code)]
+pub mod virtio;
 
 // The allocator's tests live at the crate root (NOT under the
 // forbidden allocator module) so the pin tests' arena constructions keep
@@ -63,5 +65,10 @@ pub mod pgrp;
 // realloc-stress behavior of the index/arena model.
 #[cfg(test)]
 mod allocator_tests;
+// The virtio transport's tests live at the crate root for the same
+// reason: the Vec-backed mock arenas and the op-order log need alloc/std
+// while port::virtio itself carries #[forbid(unsafe_code)].
+#[cfg(test)]
+mod virtio_tests;
 
 pub type Result<T> = core::result::Result<T, &'static str>;
