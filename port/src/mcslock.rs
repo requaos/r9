@@ -68,14 +68,23 @@ impl MCSLock {
     pub fn unlock(&self, node: &LockNode) {
         if node.next.load(Ordering::Acquire).is_null() {
             let p = node as *const _ as *mut _;
-            if self
-                .queue
-                .compare_exchange_weak(p, ptr::null_mut(), Ordering::AcqRel, Ordering::Relaxed)
-                .is_ok()
-            {
-                return;
-            }
-            while node.next.load(Ordering::Acquire).is_null() {
+            loop {
+                if self
+                    .queue
+                    .compare_exchange_weak(p, ptr::null_mut(), Ordering::AcqRel, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    return;
+                }
+                // A weak CAS may fail SPURIOUSLY (aarch64 stlxr: the
+                // exclusive monitor clears on any interference — under hvf
+                // every vcpu exit does it, so this fires constantly where
+                // TCG never sees it).  If no successor has linked, the queue
+                // tail is still us: retry the CAS — waiting on node.next
+                // here would wedge on a successor that doesn't exist.
+                if !node.next.load(Ordering::Acquire).is_null() {
+                    break;
+                }
                 hint::spin_loop();
             }
         }
