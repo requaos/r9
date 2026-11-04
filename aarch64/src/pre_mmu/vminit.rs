@@ -3,7 +3,6 @@ use aarch64_cpu::{
     registers::*,
 };
 use port::{
-    fdt::DeviceTree,
     mem::{PhysAddr, PhysRange, VirtRange},
     pagealloc::PageAllocError,
 };
@@ -194,11 +193,18 @@ pub extern "C" fn init_vm(dtb_pa: u64) {
         dtb_pa
     };
 
-    // Parse the DTB before we set up memory so we can correctly map it
+    // Parse the DTB before we set up memory so we can correctly map it.
+    // 261103-p64 (fdt internalization): the two-pass construction is here
+    // now — header prefix learns totalsize, then the full slice.
     // SAFETY: pre-MMU the DTB PA is identity-mapped by the boot stub /
     // qemu's loader (and on virt the fixed-PA fallback above names the
     // committed blob); the address is valid and readable for the parse.
-    let dt = unsafe { DeviceTree::from_usize(dtb_pa as usize).unwrap() };
+    let dt = unsafe {
+        let prefix = core::slice::from_raw_parts(dtb_pa as usize as *const u8, port::fdt::FDT_HEADER_SIZE);
+        let total = port::fdt::DeviceTree::header_totalsize(prefix).unwrap();
+        port::fdt::DeviceTree::new(core::slice::from_raw_parts(dtb_pa as usize as *const u8, total))
+            .unwrap()
+    };
     let dtb_physrange = PhysRange::with_pa_len(PhysAddr::new(dtb_pa), dt.size());
 
     putstr("\nvminit:init_vm: calling init_kernel_page_tables\n");

@@ -1,13 +1,13 @@
 use core::cell::SyncUnsafeCell;
 
 use crate::deviceutil::map_device_register;
-use crate::io::{read_reg, write_reg};
+use crate::regblock::RegBlock;
 use crate::registers::{UART0_CR, UART0_DR, UART0_FR, UART0_ICR, UART0_IMSC, UART0_LCRH};
 use crate::vm;
 use port::Result;
 use port::devcons::Uart;
 use port::fdt::DeviceTree;
-use port::mem::{PhysRange, VirtRange};
+use port::mem::PhysRange;
 
 #[cfg(not(test))]
 use port::println;
@@ -17,11 +17,13 @@ use port::println;
 /// ITARGETSR cpu0 write, which gic::enable applies (research P6).
 pub const UART_INTID: u32 = 33;
 
-/// Handler-side access to the mapped PL011 registers.  Published once when
-/// the console uart is created (before trap::unmask_irq), read lock-free in
-/// IRQ context -- the echo path must never take the Console mcslock
-/// (research P8).
-static PL011_RANGE: SyncUnsafeCell<Option<VirtRange>> = SyncUnsafeCell::new(None);
+/// Handler-side access to the mapped PL011 registers (261103-p64: the
+/// typed RegBlock — register access by offset, never ad-hoc pointers).
+/// Published once when the console uart is created (before
+/// trap::unmask_irq), read lock-free in IRQ context -- the echo path must
+/// never take the Console mcslock (research P8).  RegBlock is plain data,
+/// so the publish-once discipline is unchanged.
+static PL011_RANGE: SyncUnsafeCell<Option<RegBlock>> = SyncUnsafeCell::new(None);
 
 /// PL011 on qemu's virt machine.  Unlike the raspi variant
 /// (platform/raspi3b/uartpl011.rs) there is no GPIO/mailbox init -- qemu
@@ -29,7 +31,7 @@ static PL011_RANGE: SyncUnsafeCell<Option<VirtRange>> = SyncUnsafeCell::new(None
 /// DTB-discovered, map_device_register-mapped, polled-TX plus an IRQ-driven
 /// RX echo path (SC#4).
 pub struct Pl011Uart {
-    pl011_virtrange: VirtRange,
+    regs: RegBlock,
 }
 
 impl Pl011Uart {
@@ -44,13 +46,13 @@ impl Pl011Uart {
                 }
             };
 
-        let uart = Pl011Uart { pl011_virtrange };
+        let uart = Pl011Uart { regs: RegBlock::new(pl011_virtrange) };
         // Publish the mapped range for the IRQ echo path: single writer,
         // pre-unmask; read lock-free thereafter.
         // SAFETY: the publish-once discipline — this write runs at driver
         // construction (boot context, before trap::unmask_irq), so no IRQ
         // reader can observe a torn write; the cell is never written again.
-        unsafe { *PL011_RANGE.get() = Some(uart.pl011_virtrange.clone()) };
+        unsafe { *PL011_RANGE.get() = Some(uart.regs.clone()) };
         Ok(uart)
     }
 
@@ -67,8 +69,8 @@ impl Pl011Uart {
 impl Uart for Pl011Uart {
     fn putb(&self, b: u8) {
         // Wait for UART to become ready to transmit.
-        while read_reg(&self.pl011_virtrange, UART0_FR) & (1 << 5) != 0 {}
-        write_reg(&self.pl011_virtrange, UART0_DR, b as u32);
+        while self.regs.read(UART0_FR) & (1 << 5) != 0 {}
+        self.regs.write(UART0_DR, b as u32);
     }
 }
 
@@ -83,10 +85,10 @@ pub fn init_rx() {
         println!("pl011 rx init: no mapped uart");
         return;
     };
-    write_reg(range, UART0_ICR, 0x7ff); // clear all interrupt status
-    write_reg(range, UART0_LCRH, 0x70); // 8-bit words + FIFO enable (16-deep RX FIFO)
-    write_reg(range, UART0_IMSC, 0x50); // RXIM | RTIM: RX and RX-timeout interrupts
-    write_reg(range, UART0_CR, 0x301); // UARTEN | TXE | RXE
+    range.write(UART0_ICR, 0x7ff); // clear all interrupt status
+    range.write(UART0_LCRH, 0x70); // 8-bit words + FIFO enable (16-deep RX FIFO)
+    range.write(UART0_IMSC, 0x50); // RXIM | RTIM: RX and RX-timeout interrupts
+    range.write(UART0_CR, 0x301); // UARTEN | TXE | RXE
 }
 
 /// INTID 33 handler entry (trap.rs's dispatch): the RX byte path differs by
@@ -116,12 +118,12 @@ pub fn rx_irq() {
 #[cfg(dev_exec)]
 pub fn rx_irq_cons_buffer() {
     // SAFETY: PL011_RANGE was published before IRQ unmask (the cell is
-    /// write-once); IRQ context reads it lock-free by construction.
+    // write-once); IRQ context reads it lock-free by construction.
     let range = unsafe { &*PL011_RANGE.get() };
     let Some(range) = range.as_ref() else { return };
 
-    while read_reg(range, UART0_FR) & 0x10 == 0 {
-        let b = read_reg(range, UART0_DR) as u8;
+    while range.read(UART0_FR) & 0x10 == 0 {
+        let b = range.read(UART0_DR) as u8;
         // SAFETY: the ring's single-writer discipline — this IRQ handler
         // is the only writer, and the syscall-context reader runs
         // IRQ-masked (it can never interleave mid-drain).
@@ -134,7 +136,7 @@ pub fn rx_irq_cons_buffer() {
             buf.overruns += 1;
         }
     }
-    write_reg(range, UART0_ICR, 0x50); // clear RX/RT
+    range.write(UART0_ICR, 0x50); // clear RX/RT
 }
 
 /// The console RX ring (dev_exec only).  Head = IRQ writer, tail = syscall
@@ -195,7 +197,7 @@ pub fn cons_rx_fifo_pending() -> Option<bool> {
     // SAFETY: PL011_RANGE's write-once discipline (IRQ-masked context).
     let range = unsafe { &*PL011_RANGE.get() };
     let range = range.as_ref()?;
-    Some(read_reg(range, UART0_FR) & 0x10 == 0)
+    Some(range.read(UART0_FR) & 0x10 == 0)
 }
 
 /// gatedbg: the RX ring's head/tail (for the wedge dump).
@@ -241,11 +243,11 @@ pub fn rx_irq_echo() {
     // FR bit4 (RXFE) clear => data available.  qemu raises INT_RX on every
     // received char (read_trigger=1), so this drains one byte per IRQ in
     // practice but loops for safety.
-    while read_reg(range, UART0_FR) & 0x10 == 0 {
-        let b = read_reg(range, UART0_DR) as u8;
+    while range.read(UART0_FR) & 0x10 == 0 {
+        let b = range.read(UART0_DR) as u8;
         // Echo verbatim, polling FR bit5 (TXFF) exactly like putb.
-        while read_reg(range, UART0_FR) & (1 << 5) != 0 {}
-        write_reg(range, UART0_DR, b as u32);
+        while range.read(UART0_FR) & (1 << 5) != 0 {}
+        range.write(UART0_DR, b as u32);
     }
-    write_reg(range, UART0_ICR, 0x50); // clear RX/RT
+    range.write(UART0_ICR, 0x50); // clear RX/RT
 }

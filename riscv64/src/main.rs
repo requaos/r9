@@ -21,7 +21,16 @@ core::arch::global_asm!(include_str!("l.S"));
 
 #[unsafe(no_mangle)]
 pub extern "C" fn main9(hartid: usize, dtb_ptr: usize) -> ! {
-    let dt = unsafe { DeviceTree::from_usize(dtb_ptr).unwrap() };
+    // 261103-p64 (fdt internalization — fdt::from_usize is gone): the
+    // two-pass construction inlines here (header prefix → totalsize →
+    // full slice).
+    // SAFETY: dtb_ptr names the live, mapped DTB (the boot contract).
+    let dt = unsafe {
+        let prefix = core::slice::from_raw_parts(dtb_ptr as *const u8, port::fdt::FDT_HEADER_SIZE);
+        let total = port::fdt::DeviceTree::header_totalsize(prefix).unwrap();
+        port::fdt::DeviceTree::new(core::slice::from_raw_parts(dtb_ptr as *const u8, total))
+            .unwrap()
+    };
     crate::devcons::init(&dt);
     platform_init();
 

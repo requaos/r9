@@ -167,7 +167,7 @@ pub fn puttable(table: &Table) {
 /// dst names a live mapped device register.
 unsafe fn write_or_volatile<T: BitOrAssign>(dst: *mut T, val: T) {
     // SAFETY: the caller (init_early_uart) passes the fixed raspi MMIO
-    /// register addresses, mapped identity pre-MMU; volatile because the
+    // register addresses, mapped identity pre-MMU; volatile because the
     // hardware, not the compiler, owns the semantics.
     unsafe {
         let mut new_val = read_volatile(dst);

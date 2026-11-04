@@ -1,7 +1,7 @@
 use core::ptr::NonNull;
 
 use crate::deviceutil::{self, map_device_register};
-use crate::io::{read_reg, write_reg};
+use crate::regblock::RegBlock;
 use crate::vm;
 use port::Result;
 use port::fdt::DeviceTree;
@@ -38,7 +38,7 @@ pub fn init(dt: &DeviceTree) {
 /// https://developer.arm.com/documentation/ddi0306/b/CHDGHAIG
 /// https://github.com/raspberrypi/firmware/wiki/Mailbox-property-interface
 struct Mailbox {
-    pub mbox_virtrange: VirtRange,
+    pub mbox: RegBlock,
     req_buffer_va: VirtRange,
     req_buffer_pa: PhysRange,
 }
@@ -52,7 +52,7 @@ impl Mailbox {
 
         let mbox_physrange = Self::find_mbox_physrange(dt)?;
         let mbox = match map_device_register("mailbox", mbox_physrange, vm::PageSize::Page4K) {
-            Ok(mbox_virtrange) => Ok(Mailbox { mbox_virtrange, req_buffer_va, req_buffer_pa }),
+            Ok(mbox_virtrange) => Ok(Mailbox { mbox: RegBlock::new(mbox_virtrange), req_buffer_va, req_buffer_pa }),
             Err(msg) => {
                 println!("can't map mailbox {:?}", msg);
                 Err("can't create mailbox")
@@ -74,19 +74,19 @@ impl Mailbox {
 
     fn request(&self) {
         // Read status register until full flag not set
-        while (read_reg(&self.mbox_virtrange, MBOX_STATUS) & MBOX_FULL) != 0 {}
+        while (self.mbox.read(MBOX_STATUS) & MBOX_FULL) != 0 {}
 
         // Write the request address combined with the channel to the write register
         let channel = ChannelId::ArmToVc as u32;
         let uart_mbox_u32 = self.req_buffer_pa.start().addr() as u32;
         let r = (uart_mbox_u32 & !0xF) | channel;
-        write_reg(&self.mbox_virtrange, MBOX_WRITE, r);
+        self.mbox.write(MBOX_WRITE, r);
 
         // Wait for response
         // FIXME: two infinite loops - could go awry
         loop {
-            while (read_reg(&self.mbox_virtrange, MBOX_STATUS) & MBOX_EMPTY) != 0 {}
-            let response = read_reg(&self.mbox_virtrange, MBOX_READ);
+            while (self.mbox.read(MBOX_STATUS) & MBOX_EMPTY) != 0 {}
+            let response = self.mbox.read(MBOX_READ);
             if response == r {
                 break;
             }

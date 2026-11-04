@@ -27,6 +27,7 @@ mod exec;
 mod fault;
 #[allow(dead_code)]
 mod proc;
+mod regblock;
 mod registers;
 mod swtch;
 mod syscall;
@@ -39,7 +40,6 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 use param::KZERO;
-use port::fdt::DeviceTree;
 use port::mem::{PhysAddr, PhysRange, VirtRange};
 use port::println;
 use vm::{Entry, RootPageTableType, VaMapping};
@@ -145,11 +145,19 @@ pub extern "C" fn main9(dtb_va: usize) {
     #[cfg(platform = "virt")]
     let dtb_va = if dtb_va - KZERO == 0 { KZERO + 0x4000_0000 } else { dtb_va };
 
-    // Parse the DTB before we set up memory so we can correctly map it
+    // Parse the DTB before we set up memory so we can correctly map it.
+    // 261103-p64 (fdt internalization): the two-pass construction is here
+    // now — header prefix learns totalsize, then the full slice.
     // SAFETY: dtb_va names the DTB mapped at KZERO+PA by vminit (the
     // pre-MMU mapping is still live — main9 runs before any teardown);
-    // valid and readable for the parse.
-    let dt = unsafe { DeviceTree::from_usize(dtb_va).unwrap() };
+    // valid and readable for the parse.  The header prefix sits inside the
+    // first mapped page; the full totalsize range is inside the mapping.
+    let dt = unsafe {
+        let prefix = core::slice::from_raw_parts(dtb_va as *const u8, port::fdt::FDT_HEADER_SIZE);
+        let total = port::fdt::DeviceTree::header_totalsize(prefix).unwrap();
+        port::fdt::DeviceTree::new(core::slice::from_raw_parts(dtb_va as *const u8, total))
+            .unwrap()
+    };
     let dtb_physrange = PhysRange::with_pa_len(PhysAddr::new((dtb_va - KZERO) as u64), dt.size());
 
     // D-01 initrd discovery (amended 04-01): the host places the image in

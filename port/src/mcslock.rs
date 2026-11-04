@@ -144,3 +144,85 @@ impl<T: ?Sized> Drop for LockGuard<'_, T> {
         unsafe { &mut *self.lock.get() }.unlock(self.node);
     }
 }
+
+// ---------------------------------------------------------------------------
+// BusyCell (261103-p64): the try-enter exclusivity cell.
+//
+// The devmnt session core's discipline (05-07): exactly one outstanding RPC
+// owns the state; a concurrent attempt is a LOUD error, never a wedge.  An
+// MCS Lock is WRONG here — a lock held across the blocking 9P receive would
+// spin-deadlock an IRQ-masked contender (the holder is sched-blocked on the
+// pipe; the spinner never yields the CPU).  BusyCell is the non-spinning
+// sibling: `enter()` claims the cell or fails immediately.
+// ---------------------------------------------------------------------------
+
+/// A cell with try-enter exclusivity (see the module note above): at most
+/// one live guard owns the data; contention fails fast instead of spinning.
+pub struct BusyCell<T> {
+    busy: AtomicBool,
+    data: UnsafeCell<T>,
+}
+
+// SAFETY: the busy flag is the ownership discipline (exactly one guard owns
+// the data at a time; every other enter() gets None) — the same protocol
+// shape as Lock, with failure instead of the spin.
+unsafe impl<T: Send> Send for BusyCell<T> {}
+// SAFETY: as above — &BusyCell sharing is safe because data access only
+// ever happens through the one live guard the flag admits.
+unsafe impl<T: Send> Sync for BusyCell<T> {}
+
+impl<T> BusyCell<T> {
+    pub const fn new(data: T) -> BusyCell<T> {
+        BusyCell { busy: AtomicBool::new(false), data: UnsafeCell::new(data) }
+    }
+
+    /// Try to take exclusive ownership: Some(guard) when the cell is free,
+    /// None when another context holds it (the caller's discipline decides —
+    /// devmnt errors loudly).  The guard's Drop releases the cell on ANY
+    /// exit path.
+    pub fn enter(&self) -> Option<BusyGuard<'_, T>> {
+        if self.busy.swap(true, Ordering::AcqRel) {
+            return None;
+        }
+        Some(BusyGuard { cell: self })
+    }
+}
+
+/// The BusyCell ownership guard (the LockGuard analogue).
+pub struct BusyGuard<'a, T> {
+    cell: &'a BusyCell<T>,
+}
+
+impl<T> Deref for BusyGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        // SAFETY: this guard's construction is the only live ownership of
+        // the cell (enter()'s swap excludes every other contender for its
+        // lifetime) — the borrow is exclusive in practice.
+        unsafe { &*self.cell.data.get() }
+    }
+}
+
+impl<T> DerefMut for BusyGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        // SAFETY: Deref's invariant — the guard is the cell's single owner.
+        unsafe { &mut *self.cell.data.get() }
+    }
+}
+
+impl<T> Drop for BusyGuard<'_, T> {
+    fn drop(&mut self) {
+        self.cell.busy.store(false, Ordering::Release);
+    }
+}
+
+// SAFETY: MntCore's io transport is a !Send trait object (the MntIo trait
+// can't carry the bound — the unmodified host tests' FakeServer shares its
+// fid table by Rc), so the proof lands here: only a BusyCell<MntCore>
+// guard ever touches an MntCore, and the guard is the cell's single owner
+// (enter()'s swap excludes every other contender for its lifetime).  The
+// BusyCell Send/Sync impls above extend the discipline to the session.
+// (261103-p64: homed with the primitive because devmnt.rs is
+// #[forbid(unsafe_code)] — the plan's regression-lock rollout.)
+unsafe impl Send for crate::devmnt::MntCore {}

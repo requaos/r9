@@ -52,6 +52,10 @@ pub struct DeviceTree<'a> {
     header: FdtHeader, // Parsed structure of the header
 }
 
+/// The FDT header's fixed size (the two-pass raw-DTB construction's
+/// pass-1 prefix — 261103-p64).
+pub const FDT_HEADER_SIZE: usize = size_of::<FdtHeader>();
+
 impl<'a> DeviceTree<'a> {
     /// Create new DeviceTree based on memory pointed to by data.
     /// Result is error if the header can't be parsed correctly.
@@ -64,26 +68,16 @@ impl<'a> DeviceTree<'a> {
     }
 
     /// Given a pointer to the dtb as a usize, return a DeviceTree struct.
-    ///
-    /// # Safety
-    /// The caller must ensure that `ptr` is a valid virtual address.
-    pub unsafe fn from_usize(ptr: usize) -> Result<Self> {
-        let u8ptr = ptr as *const u8;
-
-        // Extract the real length from the header
-        // SAFETY: the caller guarantees ptr names a live, readable DTB in
-        // mapped memory (the FDT two-pass convention: read the header to
-        // learn totalsize, then re-slice); the region outlives the parse.
-        let dtb_buf_for_header: &[u8] =
-            unsafe { core::slice::from_raw_parts(u8ptr, size_of::<FdtHeader>()) };
-        let dtb_for_header = FdtHeader::new(dtb_buf_for_header, true)
-            .map(|header| Self { data: dtb_buf_for_header, header })?;
-        let len = dtb_for_header.header.totalsize as usize;
-
-        // Extract the buffer for real
-        // SAFETY: as above, over the header-reported totalsize.
-        let dtb_buf: &[u8] = unsafe { core::slice::from_raw_parts(u8ptr, len) };
-        FdtHeader::new(dtb_buf, false).map(|header| Self { data: dtb_buf, header })
+    /// 261103-p64: from_usize is REMOVED (fdt is now unsafe-free — the
+    /// #[forbid(unsafe_code)] regression lock); the two-pass raw-pointer
+    /// dance lives at the boot callers (aarch64 main9/vminit, riscv64's
+    /// main) as header_totalsize + new over caller-formed slices.
+    /// Pass 1 of that two-pass construction: parse just the header prefix
+    /// to learn the DTB's totalsize.  `prefix` must hold at least
+    /// FDT_HEADER_SIZE bytes.
+    pub fn header_totalsize(prefix: &[u8]) -> Result<usize> {
+        let h = FdtHeader::new(prefix, true)?;
+        Ok(h.totalsize as usize)
     }
 
     /// Return slice containing `structs` area in FDT

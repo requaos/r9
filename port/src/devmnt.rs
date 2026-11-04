@@ -69,11 +69,10 @@ extern crate alloc;
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::cell::UnsafeCell;
-use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::dat::{Chan, Qid, DEV_MNT, DEV_PIPE, OMASK, ORDWR, OREAD, QTDIR};
 use crate::devpipe;
+use crate::mcslock::BusyCell;
 use crate::println;
 use crate::Result;
 
@@ -224,6 +223,10 @@ impl<'a> RepCur<'a> {
 /// The 9P byte transport: one whole message per write; reads return up to
 /// the buffer's length and BLOCK until at least one byte is available
 /// (the kernel transport's devpipe read schedules the server proc).
+/// 261103-p64: the Send supertrait attempt is documented in UNSAFE-AUDIT.md
+/// — it breaks the unmodified host tests (FakeServer's Rc fid table), so
+/// the session's shareability proof is the BusyCell discipline and the
+/// `unsafe impl Send for MntCore` lives beside the primitive (mcslock.rs).
 pub trait MntIo {
     /// Write one whole message, atomically (devpipe's contract: the full
     /// buffer lands or the write fails — never a partial message).
@@ -261,13 +264,11 @@ impl MntIo for ChanIo {
 
 /// The RPC-critical-section state: only the busy-flag OWNER touches it
 /// (the flag IS the mutex — see the module header's concurrency note).
-struct MntCore {
+/// 261103-p64: pub(crate) so the Send proof can live beside BusyCell
+/// (mcslock.rs) — devmnt.rs itself carries zero unsafe for the
+/// #[forbid(unsafe_code)] regression lock.
+pub(crate) struct MntCore {
     io: Box<dyn MntIo>,
-    /// The negotiated msize (the reply's answer, ≤ the offer).
-    msize: u32,
-    /// The negotiated version string (answered on re-version, the donor's
-    /// c->mux replay in mntversion).
-    version: Vec<u8>,
     /// Fid/tag sequences (donor mntchan/alloctag): fids from 1 up (never
     /// NOFID, never reused this era); tags from 1 up (never 0, never
     /// NOTAG — devmnt.c's mntreset exclusions).
@@ -284,17 +285,15 @@ struct MntCore {
 /// `Arc<Mnt>`; the busy flag serializes RPCs (one outstanding — the era's
 /// documented limit).
 pub struct Mnt {
-    busy: AtomicBool,
-    core: UnsafeCell<MntCore>,
+    /// The RPC-mutable session state (io, fid/tag sequences, rx scratch).
+    core: BusyCell<MntCore>,
+    /// The negotiated msize (the reply's answer, ≤ the offer) — set once
+    /// at negotiation, frozen after (plain shared reads, no guard).
+    msize: u32,
+    /// The negotiated version string (answered on re-version, the donor's
+    /// c->mux replay in mntversion) — set-once, frozen.
+    version: Vec<u8>,
 }
-
-// SAFETY: the busy flag is the ownership discipline (exactly one RPC owns
-// the core at a time; every other caller gets a loud error).  Syscall
-// context is IRQ-masked and single-CPU, so the swap is the whole protocol.
-unsafe impl Send for Mnt {}
-// SAFETY: as above — a shared &Mnt can cross threads only while the busy
-// discipline serializes all core access (single CPU this era).
-unsafe impl Sync for Mnt {}
 
 impl core::fmt::Debug for Mnt {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -302,49 +301,13 @@ impl core::fmt::Debug for Mnt {
     }
 }
 
-/// The busy-flag RAII guard: clears ownership on ANY exit path.
-struct Busy<'a> {
-    mnt: &'a Mnt,
-}
-impl Drop for Busy<'_> {
-    fn drop(&mut self) {
-        self.mnt.busy.store(false, Ordering::Release);
-    }
-}
-
 impl Mnt {
     /// Take RPC ownership (the era's serialization): one outstanding RPC
     /// per session; a concurrent attempt is a LOUD error, never a wedge.
-    fn enter(&self) -> Result<Busy<'_>> {
-        if self.busy.swap(true, Ordering::AcqRel) {
-            return Err("devmnt: concurrent rpc this era");
-        }
-        Ok(Busy { mnt: self })
-    }
-
-    /// The session core, mutably, for the duration of an OWNED RPC — the
-    /// `_busy` token proves the caller holds the busy flag (the era's
-    /// one-outstanding-RPC discipline).  261103-p64: the ONLY mutable
-    /// accessor; every former ad-hoc `&mut *self.core.get()` site routes
-    /// through here.  (The Busy-token interior-mutability shape is the
-    /// UnsafeCell's documented use — hence the mut_from_ref allowance.)
-    #[allow(clippy::mut_from_ref)]
-    fn core_mut(&self, _busy: &Busy<'_>) -> &mut MntCore {
-        // SAFETY: the Busy token proves this context owns the one
-        // outstanding RPC on this session (enter() took the AtomicBool);
-        // no other core borrow can be live.  Single CPU, IRQ-masked
-        // syscall context.
-        unsafe { &mut *self.core.get() }
-    }
-
-    /// The session core, shared, outside any RPC (msize/version reads) —
-    /// between RPCs the busy flag is clear, so no mutable borrow can be
-    /// live by the same discipline.
-    fn core_ref(&self) -> &MntCore {
-        // SAFETY: core_mut's discipline — with no RPC outstanding, no
-        // &mut can exist; the read cannot race a writer (single CPU,
-        // IRQ-masked syscall context).
-        unsafe { &*self.core.get() }
+    /// 261103-p64: the BusyCell guard IS the token — its Drop releases
+    /// the session on any exit path.
+    fn enter(&self) -> Result<crate::mcslock::BusyGuard<'_, MntCore>> {
+        self.core.enter().ok_or("devmnt: concurrent rpc this era")
     }
 
     /// The whole RPC round-trip (donor mountrpc + the receive half of
@@ -355,8 +318,9 @@ impl Mnt {
     /// loud errstr with the server's ename on the serial log) and the
     /// outstanding tag.  Returns the reply's total size (the body sits in
     /// the session's rx scratch).
-    fn transact(&self, _busy: &Busy<'_>, msg: &[u8], expect_type: u8, expect_tag: u16) -> Result<usize> {
-        let core = self.core_mut(_busy);
+    /// The RPC round-trip.  `core` rides the live BusyCell guard — holding
+    /// it IS the ownership proof (only enter() hands it out).
+    fn transact(&self, core: &mut MntCore, msg: &[u8], expect_type: u8, expect_tag: u16) -> Result<usize> {
         let w = core.io.write_msg(msg)?;
         if w as usize != msg.len() {
             return Err("devmnt: short write on the 9P connection");
@@ -378,8 +342,8 @@ impl Mnt {
             println!("devmnt: runt reply message ({size} bytes)");
             return Err("devmnt: runt reply message");
         }
-        if size > core.msize as usize {
-            println!("devmnt: reply claims {size} bytes over msize {}", core.msize);
+        if size > self.msize as usize {
+            println!("devmnt: reply claims {size} bytes over msize {}", self.msize);
             return Err("devmnt: reply exceeds negotiated msize");
         }
         while got < size {
@@ -434,31 +398,33 @@ impl Mnt {
         if !(MSIZE_MIN..=MSIZE_MAX).contains(&offer) {
             return Err("devmnt: nonsense msize in fversion");
         }
-        let mnt = Mnt {
-            busy: AtomicBool::new(false),
-            core: UnsafeCell::new(MntCore {
+        let mut mnt = Mnt {
+            core: BusyCell::new(MntCore {
                 io,
-                msize: offer, // the handshake's bound is the offer itself
-                version: Vec::new(),
                 next_fid: 1,
                 next_tag: 1,
                 rx: alloc::vec![0u8; offer as usize],
             }),
+            msize: offer, // the handshake's bound is the offer itself
+            version: Vec::new(),
         };
         let mut body = Vec::new();
         pw32(&mut body, offer);
         pwstr(&mut body, VERSION9P);
         let msg = tmsg(TVERSION, NOTAG, &body);
-        // The busy token is held across the reply parse + core update
-        // (261103-p64: core_mut's token — the RPC's ownership ends when
-        // the parsed values are committed, not when transact returns).
-        let busy = mnt.enter()?;
-        let size = mnt.transact(&busy, &msg, RVERSION, NOTAG)?;
-        let core = mnt.core_mut(&busy);
-        let mut cur = RepCur::new(&core.rx[7..size]);
-        let msize = cur.u32()?;
-        let version = cur.string()?;
-        cur.done()?;
+        // The guard is held across the reply parse (the RPC's ownership
+        // ends when the parsed values are committed, not when transact
+        // returns).  The Mnt is a not-yet-shared local, so enter() can
+        // never contend.
+        let (msize, version) = {
+            let mut core = mnt.enter()?;
+            let size = mnt.transact(&mut core, &msg, RVERSION, NOTAG)?;
+            let mut cur = RepCur::new(&core.rx[7..size]);
+            let msize = cur.u32()?;
+            let version = cur.string()?;
+            cur.done()?;
+            (msize, version)
+        };
         if msize > offer {
             return Err("devmnt: server tried to increase msize in fversion");
         }
@@ -468,39 +434,36 @@ impl Mnt {
         if version != VERSION9P {
             return Err("devmnt: bad 9P version returned from server");
         }
-        core.msize = msize;
-        core.version = version;
-        // Release RPC ownership before the move out of mnt (the Busy
-        // guard borrows it).
-        drop(busy);
+        mnt.msize = msize;
+        mnt.version = version;
         Ok(mnt)
     }
 
-    /// The negotiated msize.
+    /// The negotiated msize (a frozen set-once field — no guard).
     pub fn msize(&self) -> u32 {
-        self.core_ref().msize
+        self.msize
     }
 
-    /// The negotiated version string (the re-version replay's answer).
+    /// The negotiated version string (the re-version replay's answer) —
+    /// a frozen set-once field (no guard).
     fn version(&self) -> Vec<u8> {
-        self.core_ref().version.clone()
+        self.version.clone()
     }
 
     /// Tattach (donor mntattach): a fresh fid attached to the tree root
     /// with afid = NOFID (D-02 — no auth this phase; nsinit's fall-through
     /// is the designed path).  Returns (fid, the root qid).
     pub fn attach(&self, uname: &[u8], aname: &[u8]) -> Result<(u32, Qid)> {
-        let busy = self.enter()?;
-        let core = self.core_mut(&busy);
-        let fid = Self::alloc_fid(core)?;
-        let tag = Self::alloc_tag(core);
+        let mut core = self.enter()?;
+        let fid = Self::alloc_fid(&mut core)?;
+        let tag = Self::alloc_tag(&mut core);
         let mut body = Vec::new();
         pw32(&mut body, fid);
         pw32(&mut body, NOFID);
         pwstr(&mut body, uname);
         pwstr(&mut body, aname);
         let msg = tmsg(TATTACH, tag, &body);
-        let size = self.transact(&busy, &msg, RATTACH, tag)?;
+        let size = self.transact(&mut core, &msg, RATTACH, tag)?;
         let mut cur = RepCur::new(&core.rx[7..size]);
         let qid = cur.qid()?;
         cur.done()?;
@@ -515,17 +478,16 @@ impl Mnt {
         if name.is_empty() || name.contains(&b'/') {
             return Err("devmnt: walk takes a single name component");
         }
-        let busy = self.enter()?;
-        let core = self.core_mut(&busy);
-        let newfid = Self::alloc_fid(core)?;
-        let tag = Self::alloc_tag(core);
+        let mut core = self.enter()?;
+        let newfid = Self::alloc_fid(&mut core)?;
+        let tag = Self::alloc_tag(&mut core);
         let mut body = Vec::new();
         pw32(&mut body, fid);
         pw32(&mut body, newfid);
         pw16(&mut body, 1); // nwname
         pwstr(&mut body, name);
         let msg = tmsg(TWALK, tag, &body);
-        let size = self.transact(&busy, &msg, RWALK, tag)?;
+        let size = self.transact(&mut core, &msg, RWALK, tag)?;
         let mut cur = RepCur::new(&core.rx[7..size]);
         let nwqid = cur.u16()? as usize;
         // The donor's bounds: nwqid never exceeds MAXWELEM nor nwname (1).
@@ -550,16 +512,15 @@ impl Mnt {
     /// Enotexist).  The redirects now clone the fid, so the open/clunk
     /// lifecycle rides the clone and the table's fid stays pristine.
     pub fn clone_fid(&self, fid: u32) -> Result<u32> {
-        let busy = self.enter()?;
-        let core = self.core_mut(&busy);
-        let newfid = Self::alloc_fid(core)?;
-        let tag = Self::alloc_tag(core);
+        let mut core = self.enter()?;
+        let newfid = Self::alloc_fid(&mut core)?;
+        let tag = Self::alloc_tag(&mut core);
         let mut body = Vec::new();
         pw32(&mut body, fid);
         pw32(&mut body, newfid);
         pw16(&mut body, 0); // nwname = 0 — the fid-clone idiom
         let msg = tmsg(TWALK, tag, &body);
-        let size = self.transact(&busy, &msg, RWALK, tag)?;
+        let size = self.transact(&mut core, &msg, RWALK, tag)?;
         let mut cur = RepCur::new(&core.rx[7..size]);
         let nwqid = cur.u16()? as usize;
         // A zero-name walk answers nwqid = 0; the clone carries the
@@ -575,20 +536,19 @@ impl Mnt {
     /// era never sends).  Returns (the opened qid, the iounit after the
     /// donor's clamp).
     pub fn open(&self, fid: u32, mode: u8) -> Result<(Qid, u32)> {
-        let busy = self.enter()?;
-        let core = self.core_mut(&busy);
-        let tag = Self::alloc_tag(core);
+        let mut core = self.enter()?;
+        let tag = Self::alloc_tag(&mut core);
         let mut body = Vec::new();
         pw32(&mut body, fid);
         body.push(mode);
         let msg = tmsg(TOPEN, tag, &body);
-        let size = self.transact(&busy, &msg, ROPEN, tag)?;
+        let size = self.transact(&mut core, &msg, ROPEN, tag)?;
         let mut cur = RepCur::new(&core.rx[7..size]);
         let qid = cur.qid()?;
         let iounit = cur.u32()?;
         cur.done()?;
         // The donor's clamp (mntopencreate): 0 or oversized → msize-IOHDRSZ.
-        let cap = core.msize - IOHDRSZ;
+        let cap = self.msize - IOHDRSZ;
         let iounit = if iounit == 0 || iounit > cap { cap } else { iounit };
         Ok((qid, iounit))
     }
@@ -598,15 +558,14 @@ impl Mnt {
     /// exactly cover the message body (convM2S's exact-size check) and is
     /// clamped to the request (the donor's silent clamp).
     pub fn read(&self, fid: u32, off: u64, count: u32) -> Result<Vec<u8>> {
-        let busy = self.enter()?;
-        let core = self.core_mut(&busy);
-        let tag = Self::alloc_tag(core);
+        let mut core = self.enter()?;
+        let tag = Self::alloc_tag(&mut core);
         let mut body = Vec::new();
         pw32(&mut body, fid);
         pw64(&mut body, off);
         pw32(&mut body, count);
         let msg = tmsg(TREAD, tag, &body);
-        let size = self.transact(&busy, &msg, RREAD, tag)?;
+        let size = self.transact(&mut core, &msg, RREAD, tag)?;
         let mut cur = RepCur::new(&core.rx[7..size]);
         let rcount = cur.u32()? as usize;
         let remaining = cur.b.len() - cur.p;
@@ -623,13 +582,12 @@ impl Mnt {
     /// stat(5) image WITH its own 2-byte prefix, whose value must be
     /// nstat-2 — the malformation check).
     pub fn stat(&self, fid: u32) -> Result<Vec<u8>> {
-        let busy = self.enter()?;
-        let core = self.core_mut(&busy);
-        let tag = Self::alloc_tag(core);
+        let mut core = self.enter()?;
+        let tag = Self::alloc_tag(&mut core);
         let mut body = Vec::new();
         pw32(&mut body, fid);
         let msg = tmsg(TSTAT, tag, &body);
-        let size = self.transact(&busy, &msg, RSTAT, tag)?;
+        let size = self.transact(&mut core, &msg, RSTAT, tag)?;
         let mut cur = RepCur::new(&core.rx[7..size]);
         let nstat = cur.u16()? as usize;
         if nstat < 2 {
@@ -649,13 +607,12 @@ impl Mnt {
 
     /// Tclunk (donor mntclunk): release the fid server-side.
     pub fn clunk(&self, fid: u32) -> Result<()> {
-        let busy = self.enter()?;
-        let core = self.core_mut(&busy);
-        let tag = Self::alloc_tag(core);
+        let mut core = self.enter()?;
+        let tag = Self::alloc_tag(&mut core);
         let mut body = Vec::new();
         pw32(&mut body, fid);
         let msg = tmsg(TCLUNK, tag, &body);
-        let size = self.transact(&busy, &msg, RCLUNK, tag)?;
+        let size = self.transact(&mut core, &msg, RCLUNK, tag)?;
         RepCur::new(&core.rx[7..size]).done()?;
         Ok(())
     }

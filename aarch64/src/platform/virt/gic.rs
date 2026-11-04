@@ -11,11 +11,11 @@
 use core::cell::SyncUnsafeCell;
 
 use crate::deviceutil::map_device_register;
-use crate::io::{read_reg, write_reg};
+use crate::regblock::RegBlock;
 use crate::vm;
 use port::Result;
 use port::fdt::DeviceTree;
-use port::mem::{PhysRange, VirtRange};
+use port::mem::PhysRange;
 
 #[cfg(not(test))]
 use port::println;
@@ -36,8 +36,8 @@ pub const GICC_EOIR: usize = 0x010; // End of interrupt register
 pub const SPURIOUS_INTID: u32 = 1023;
 
 pub struct Gic {
-    gicd: VirtRange,
-    gicc: VirtRange,
+    gicd: RegBlock,
+    gicc: RegBlock,
 }
 
 /// Interrupt-context access to the GIC.  Written once at init (before
@@ -84,12 +84,12 @@ impl Gic {
             }
         };
 
-        let gic = Gic { gicd, gicc };
+        let gic = Gic { gicd: RegBlock::new(gicd), gicc: RegBlock::new(gicc) };
 
         // Verified probe sequence (research Pattern 1).
-        write_reg(&gic.gicd, GICD_CTLR, 1); // enable distributor
-        write_reg(&gic.gicc, GICC_PMR, 0xff); // accept all priorities
-        write_reg(&gic.gicc, GICC_CTLR, 1); // enable cpu interface
+        gic.gicd.write(GICD_CTLR, 1); // enable distributor
+        gic.gicc.write(GICC_PMR, 0xff); // accept all priorities
+        gic.gicc.write(GICC_CTLR, 1); // enable cpu interface
 
         Ok(gic)
     }
@@ -102,41 +102,35 @@ impl Gic {
 
         // ISENABLERn: one bit per interrupt, 32 per word (read-modify-write).
         let isenabler_off = GICD_ISENABLER0 + 4 * (intid / 32);
-        let isenabler = read_reg(&self.gicd, isenabler_off);
-        write_reg(&self.gicd, isenabler_off, isenabler | (1 << (intid % 32)));
+        let isenabler = self.gicd.read(isenabler_off);
+        self.gicd.write(isenabler_off, isenabler | (1 << (intid % 32)));
 
         // IPRIORITYRn: one byte per interrupt, 4 per word (probe used 0xA0).
         let byte_shift = (intid % 4) * 8;
         let ipriorityr_off = GICD_IPRIORITYR0 + 4 * (intid / 4);
-        let ipriorityr = read_reg(&self.gicd, ipriorityr_off);
-        write_reg(
-            &self.gicd,
-            ipriorityr_off,
-            (ipriorityr & !(0xff << byte_shift)) | ((prio as u32) << byte_shift),
-        );
+        let ipriorityr = self.gicd.read(ipriorityr_off);
+        self.gicd
+            .write(ipriorityr_off, (ipriorityr & !(0xff << byte_shift)) | ((prio as u32) << byte_shift));
 
         // ITARGETSRn: SPIs need an explicit cpu target or they are never
         // delivered; PPIs (intid < 32) are hardwired and skipped (P6).
         if intid >= 32 {
             let itargetsr_off = GICD_ITARGETSR0 + 4 * (intid / 4);
-            let itargetsr = read_reg(&self.gicd, itargetsr_off);
-            write_reg(
-                &self.gicd,
-                itargetsr_off,
-                (itargetsr & !(0xff << byte_shift)) | (0x01 << byte_shift), // cpu0
-            );
+            let itargetsr = self.gicd.read(itargetsr_off);
+            self.gicd
+                .write(itargetsr_off, (itargetsr & !(0xff << byte_shift)) | (0x01 << byte_shift)); // cpu0
         }
     }
 
     /// Acknowledge the pending interrupt; the GICC_IAR read yields the INTID.
     fn ack(&self) -> u32 {
-        read_reg(&self.gicc, GICC_IAR)
+        self.gicc.read(GICC_IAR)
     }
 
     /// Complete the interrupt with a GICC_EOIR write.  Never call this for
     /// the spurious INTID 1023.
     fn eoi(&self, intid: u32) {
-        write_reg(&self.gicc, GICC_EOIR, intid);
+        self.gicc.write(GICC_EOIR, intid);
     }
 }
 
