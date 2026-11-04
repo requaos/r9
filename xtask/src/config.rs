@@ -7,6 +7,7 @@ use std::{
     collections::HashMap,
     fs::{self, File, create_dir_all},
     io::Write,
+    path::PathBuf,
     process::exit,
 };
 
@@ -118,10 +119,45 @@ pub struct Initrd {
 }
 
 impl Initrd {
+    /// Resolve the initrd image path.  Ordinary values pass through
+    /// unchanged (workspace-relative, as today — the qemu steps run with
+    /// the workspace as cwd); a `harvey:`-prefixed value resolves the
+    /// remainder under the Harvey checkout named by R9_HARVEY_DIR via
+    /// uregcheck::harvey_dir — the established cross-repo channel (the
+    /// 05-10 D-10 inversion: r9 never hardcodes a sibling layout).  This
+    /// is the channel 07-05's virtnet profile uses to boot the
+    /// Harvey-baked image.
+    pub fn resolved_file(&self) -> Result<PathBuf, String> {
+        match self.file.strip_prefix("harvey:") {
+            Some(rest) if !rest.is_empty() => {
+                let dir = crate::uregcheck::harvey_dir().map_err(|e| e.to_string())?;
+                Ok(dir.join(rest))
+            }
+            Some(_) => {
+                Err("qemu initrd: bare `harvey:` prefix names no file within the Harvey checkout"
+                    .to_string())
+            }
+            None => Ok(PathBuf::from(&self.file)),
+        }
+    }
+
     /// The `-device` argument placing the image in guest RAM: qemu's generic
     /// loader is machine-agnostic and works for ELF kernels, unlike `-initrd`.
+    /// A `harvey:`-prefixed file emits its resolved path; ordinary values
+    /// emit byte-identically to the pre-resolution form.
     pub fn loader_device_arg(&self) -> String {
-        format!("loader,file={},addr={:#x}", self.file, self.addr)
+        let file = match self.resolved_file() {
+            Ok(path) => path.display().to_string(),
+            Err(e) => {
+                // Both qemu steps run prepare_initrd_dtb (a Result path)
+                // before argv assembly, so a resolution failure surfaces
+                // there first; a config fatal here follows the file's
+                // eprintln+exit idiom (Configuration::load).
+                eprintln!("qemu initrd: {e}");
+                exit(1);
+            }
+        };
+        format!("loader,file={},addr={:#x}", file, self.addr)
     }
 
     /// Path (relative to the workspace) of the DTB copy prepare_initrd_dtb
@@ -452,7 +488,15 @@ pub fn prepare_initrd_dtb(
             .into());
     };
 
-    let image = format!("{workspace_path}/{}", initrd.file);
+    let resolved = initrd.resolved_file()?;
+    // Ordinary values are workspace-relative (as today); a harvey:-resolved
+    // path is used as-is, matching uregcheck's own R9_HARVEY_DIR semantics
+    // (the variable's value resolves against the xtask process cwd).
+    let image = if initrd.file.starts_with("harvey:") {
+        resolved
+    } else {
+        std::path::Path::new(workspace_path).join(resolved)
+    };
     let size = fs::metadata(&image).map_err(|e| format!("initrd image {}: {e}", initrd.file))?.len();
     let patched = Initrd::patched_dtb_path(dtb);
     if let Some(parent) = std::path::Path::new(&patched).parent() {

@@ -1831,6 +1831,23 @@ fn sha256_of(path: &Path) -> Result<String> {
 fn ensure_initrd_image(config: &Configuration, verbose: bool) -> Result<()> {
     let Some(qemu) = &config.qemu else { return Ok(()) };
     let Some(initrd) = &qemu.initrd else { return Ok(()) };
+    // A harvey:-prefixed image is produced by the Harvey checkout's own
+    // pipeline and consumed as-is: it passes through the target/-resident
+    // auto-bake untouched, but absence is a loud error naming the producers
+    // (07-05's virtnet profile boots the Harvey-baked bootfs.paq).
+    if initrd.file.starts_with("harvey:") {
+        let path = initrd.resolved_file()?;
+        if !path.is_file() {
+            return Err(format!(
+                "initrd image {} not found at {} — produce it in the Harvey checkout with \
+                 `sh build/aarch64/subset-build.sh` then `sh build/aarch64/mkimage.sh`",
+                initrd.file,
+                path.display()
+            )
+            .into());
+        }
+        return Ok(());
+    }
     if !initrd.file.starts_with("target/") {
         return Ok(());
     }
