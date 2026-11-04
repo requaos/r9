@@ -283,37 +283,10 @@ fn map_active_user(va: usize, entry: Entry) {
 /// never hardcode 64 (Phase-2 D-03's architectural-discovery rule).
 /// aarch64-cpu 11.2 has no CTR_EL0 wrapper, hence the inline asm (the same
 /// pattern as vm.rs's ttbr reads).
+/// 261103-p64 (asm consolidation): the D-09 sequence lives in vm.rs (the
+/// TLB/barrier/cache floor) — this wrapper keeps the fault.rs call sites.
 fn flush_icache_user_range(start: usize, end: usize) {
-    #[cfg(not(test))]
-    // SAFETY: the D-09 icache/dcache maintenance sequence on the USER VA
-    // range just written (mapped r/w by the page-in above); dc cvau /
-    // ic ivau / dsb / isb are pure maintenance ops — the cache-maintenance
-    // floor.  Geometry is CTR_EL0-discovered, never hardcoded.
-    unsafe {
-        let ctr: u64;
-        core::arch::asm!("mrs {}, ctr_el0", out(reg) ctr);
-        let dline = 4usize << ((ctr >> 16) & 0xf); // DminLine
-        let iline = 4usize << (ctr & 0xf); // IminLine
-        let mut p = start & !(dline - 1);
-        while p < end {
-            // clean dcache to Point of Unification
-            core::arch::asm!("dc cvau, {}", in(reg) p);
-            p += dline;
-        }
-        core::arch::asm!("dsb ish"); // drains the cleans (Inner-Shareable)
-        let mut p = start & !(iline - 1);
-        while p < end {
-            // invalidate icache to Point of Unification
-            core::arch::asm!("ic ivau, {}", in(reg) p);
-            p += iline;
-        }
-        core::arch::asm!("dsb ish");
-        core::arch::asm!("isb"); // discard any stale prefetched instructions
-    }
-    #[cfg(test)]
-    {
-        let _ = (start, end);
-    }
+    vm::flush_icache_user_range(start, end);
 }
 
 /// Unresolvable fault: print the marker and kill the process loudly.
@@ -339,14 +312,10 @@ fn unresolvable(frame: &TrapFrame, class: u8, far: u64, access: &str) -> ! {
 pub(crate) fn kill_current_process() -> ! {
     let Some(mut proc) = proc::current() else {
         // No current process (pre-userspace trap): nothing to route
-        // through the lifecycle — park.
+        // through the lifecycle — park (261103-p64: the consolidated
+        // halt primitive).
         println!("fault kill with no current process — parking");
-        loop {
-            // SAFETY: wfi parks the CPU until an interrupt; IRQs are
-            // masked here, so this is a wedge-free stop (the trap-context
-            // halt shape).
-            unsafe { core::arch::asm!("wfi") };
-        }
+        crate::trap::park_forever();
     };
     crate::syscall::exit_tail(&mut proc, b"fault");
 }

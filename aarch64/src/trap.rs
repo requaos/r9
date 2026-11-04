@@ -54,6 +54,40 @@ pub fn unmask_irq() {
     }
 }
 
+/// Park the CPU forever (the clean-halt stop — 261103-p64's asm
+/// consolidation: the ONE wfi-halt home; fault.rs's no-current-process
+/// park, syscall.rs's all-exited halt, main.rs's pre-exec idle loop and
+/// trap()'s dump-and-halt all converge here).
+pub fn park_forever() -> ! {
+    loop {
+        // SAFETY: wfi parks the CPU until an interrupt; with IRQs masked
+        // (trap/syscall context) this is a wedge-free stop.
+        unsafe { core::arch::asm!("wfi") };
+    }
+}
+
+/// The scheduler's idle wait (261103-p64's consolidation — proc.rs's
+/// sched_loop idle arm): briefly UNMASK IRQs, wfi (the tick fires and
+/// re-arms), re-mask.  The sequence is atomic in intent: nothing else runs
+/// between the unmask and the wfi on this CPU.
+pub fn idle_wait() {
+    // SAFETY: the DAIFClr/wfi/DAIFSet sequence is the sched idle arm's
+    // sleep shape — a pure PSTATE + halt-until-interrupt sequence, no
+    // memory operands.
+    unsafe { core::arch::asm!("msr DAIFClr, #2", "wfi", "msr DAIFSet, #2") };
+}
+
+/// The D-12 deliberate sync exception (the dev_panic config's hook) —
+/// raises a brk #0 through the REAL trap path.  261103-p64's
+/// consolidation homes it with the trap interface.
+#[cfg(dev_panic)]
+pub fn debug_sync_trap() {
+    // SAFETY: brk #0 raises a synchronous exception routed through the
+    // real trap path — the deliberate D-12 debug trigger (never a memory
+    // hazard).
+    unsafe { core::arch::asm!("brk #0") };
+}
+
 /// Register frame at the time the trap was taken.  This struct IS Harvey's
 /// `Ureg` (`aarch64/include/ureg.h`) field-for-field — the layout is the
 /// published Harvey↔r9 trap-frame ABI (aarch64/ABI.md, "Kernel-side
@@ -544,9 +578,6 @@ fn trap(frame: &mut TrapFrame) {
         println!("kernel halted");
     }
 
-    loop {
-        // SAFETY: wfi parks the CPU until an interrupt; with IRQs masked
-        // (trap context) this is the wedge-free clean-halt stop.
-        unsafe { core::arch::asm!("wfi") };
-    }
+    // The dump-and-halt parks via the consolidated primitive (261103-p64).
+    park_forever()
 }

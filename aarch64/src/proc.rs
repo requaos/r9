@@ -1173,10 +1173,7 @@ fn sched_loop() -> ! {
             // frame (pick_next installed CURFRAME/CURKSTACK under the lock
             // just above); trap_return erets into it and diverges.
             Some(Resume::Return(frame)) => unsafe { crate::trap::trap_return(frame) },
-            // SAFETY: the idle arm — the DAIFClr/wfi/DAIFSet sequence
-            // briefly unmasks IRQs so the tick fires and re-arms (the
-            // sched loop's sleep shape); nothing else runs between.
-            None => unsafe {
+            None => {
                 #[cfg(dev_exec)]
                 {
                     let reader_blocked = cons_reader_blocked();
@@ -1201,8 +1198,10 @@ fn sched_loop() -> ! {
                     dump_proc_states();
                     port::devcons::debug_dump_input();
                 }
-                core::arch::asm!("msr DAIFClr, #2", "wfi", "msr DAIFSet, #2");
-            },
+                // 261103-p64: the consolidated idle-wait primitive
+                // (briefly unmasked wfi — the tick fires and re-arms).
+                crate::trap::idle_wait();
+            }
         }
     }
 }

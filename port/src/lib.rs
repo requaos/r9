@@ -9,12 +9,13 @@ extern crate alloc;
 
 // 261103-p64 (the regression-lock rollout): every port module carries
 // #[forbid(unsafe_code)] EXCEPT the two named floor modules —
-// `allocator` (the GlobalAlloc shim; its QuickFit internals are the
-// wave-3 redesign target) and `mcslock` (the lock/cell primitives: the
-// MCS queue's raw node pointers + BusyCell + the MntCore Send proof).
-// The forbid is a compile-time regression lock, not a promise: no new
-// unsafe can enter any other port module without deleting its forbid
-// attribute first.
+// `globalalloc` (the GlobalAlloc shim: the trait's unsafe fn surface, the
+// arena-edge Block constructor, realloc, the QuickFit Sync proof) and
+// `mcslock` (the lock/cell primitives: the MCS queue's raw node pointers +
+// BusyCell + the MntCore Send proof).  The forbid is a compile-time
+// regression lock, not a promise: no new unsafe can enter any other port
+// module without deleting its forbid attribute first.
+#[forbid(unsafe_code)]
 pub mod allocator;
 #[forbid(unsafe_code)]
 pub mod bitmapalloc;
@@ -40,6 +41,7 @@ pub mod devroot;
 pub mod fdgrp;
 #[forbid(unsafe_code)]
 pub mod fdt;
+pub mod globalalloc;
 #[forbid(unsafe_code)]
 pub mod maths;
 pub mod mcslock;
@@ -53,5 +55,13 @@ pub mod pagealloc;
 pub mod paqfs;
 #[forbid(unsafe_code)]
 pub mod pgrp;
+
+// 261103-p64: the allocator's tests live at the crate root (NOT under the
+// forbidden allocator module) so the pin tests' arena constructions keep
+// their unsafe blocks — the test bodies are byte-verbatim from the
+// pre-redesign module; the wave-3 additions pin the tripwire/exhaustion/
+// realloc-stress behavior of the index/arena model.
+#[cfg(test)]
+mod allocator_tests;
 
 pub type Result<T> = core::result::Result<T, &'static str>;

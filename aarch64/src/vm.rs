@@ -702,6 +702,57 @@ pub unsafe fn invalidate_all_tlb_entries() {
     }
 }
 
+/// Read CTR_EL0 (the cache-type register) — 261103-p64's asm
+/// consolidation: the ONE home for this system-register read (the
+/// register-access floor), previously inline at main.rs + fault.rs.
+pub fn ctr_el0() -> u64 {
+    #[cfg(not(test))]
+    {
+        let ctr: u64;
+        // SAFETY: reading CTR_EL0 is a pure register read at EL1 — no
+        // memory, no side effects.
+        unsafe { core::arch::asm!("mrs {}, ctr_el0", out(reg) ctr) };
+        ctr
+    }
+    #[cfg(test)]
+    0
+}
+
+/// D-09 icache/dcache maintenance after a text page-in, on the USER VA
+/// (04-RESEARCH.md "D-09 Deliverable" verbatim): clean D to the Point of
+/// Unification per CTR_EL0.DminLine, DSB ISH, invalidate I to PoU per
+/// IminLine, DSB ISH, ISB.  Geometry is ALWAYS discovered from CTR_EL0 —
+/// never hardcode 64 (Phase-2 D-03's architectural-discovery rule).
+/// 261103-p64's asm consolidation: homed here (the TLB/barrier/cache
+/// floor) — fault.rs's page-in calls it.
+#[allow(unused_variables)]
+pub fn flush_icache_user_range(start: usize, end: usize) {
+    #[cfg(not(test))]
+    // SAFETY: the D-09 maintenance sequence on the USER VA range the
+    // caller just wrote (mapped r/w); dc cvau / ic ivau / dsb / isb are
+    // pure maintenance ops — no memory operands beyond the named range.
+    unsafe {
+        let ctr = ctr_el0();
+        let dline = 4usize << ((ctr >> 16) & 0xf); // DminLine
+        let iline = 4usize << (ctr & 0xf); // IminLine
+        let mut p = start & !(dline - 1);
+        while p < end {
+            // clean dcache to Point of Unification
+            core::arch::asm!("dc cvau, {}", in(reg) p);
+            p += dline;
+        }
+        core::arch::asm!("dsb ish"); // drains the cleans (Inner-Shareable)
+        let mut p = start & !(iline - 1);
+        while p < end {
+            // invalidate icache to Point of Unification
+            core::arch::asm!("ic ivau, {}", in(reg) p);
+            p += iline;
+        }
+        core::arch::asm!("dsb ish");
+        core::arch::asm!("isb"); // discard any stale prefetched instructions
+    }
+}
+
 pub trait PageAllocator {
     fn alloc_physpage(&mut self) -> Result<PhysAddr, PageAllocError>;
 }

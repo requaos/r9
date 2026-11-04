@@ -1620,11 +1620,8 @@ pub(crate) fn exit_tail(proc: &mut Proc, msg: &[u8]) -> ! {
         println!("all user processes exited");
         // Clean halt (SC#5 shape): park in wfi.  IRQs stay masked (trap
         // context never unmasks them), so this is a wedge-free stop.
-        loop {
-            // SAFETY: wfi parks the CPU with IRQs masked — the wedge-free
-            // all-exited stop (the asm-halt floor).
-            unsafe { core::arch::asm!("wfi") };
-        }
+        // (261103-p64: the consolidated halt primitive.)
+        trap::park_forever();
     }
     // 04-07's reschedule: the sched loop picks the next Ready proc (the
     // woken parent, or a sibling).  Diverges.

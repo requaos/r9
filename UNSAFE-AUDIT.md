@@ -29,43 +29,74 @@ classified by per-file count only, get NO elimination and NO lint opt-in.
 
 | Set | Sites |
 |-----|-------|
-| aarch64 unsafe blocks+impls (lint-visible) | 134 |
-| port unsafe blocks+impls, non-test (lint-visible) | 36 |
-| **SAFETY annotations (comment immediately preceding a site)** | **170** |
-| port test-only blocks (cfg(test), not lint-gated, documented here) | 4 |
-| unsafe fns (documented by `# Safety` / fn-level docs, not lint-checked) | 11 |
+| aarch64 unsafe blocks+impls (lint-visible) | 129 |
+| port unsafe blocks+impls, non-test, production (lint-visible) | 21 |
+| **SAFETY annotations (comment immediately preceding a site)** | **150** |
+| port test-only blocks (cfg(test) crate-root test module — the pin/stress arena scaffolding; not lint-gated, never shipped) | 10 |
+| unsafe fns (documented by `# Safety` / fn-level docs, not lint-checked) | 12 |
 | unsafe extern blocks (not lint-checked; items doc'd individually) | 6 |
 
-134 + 36 = 170: the site count reconciles with the SAFETY-annotation count
+129 + 21 = 150: the site count reconciles with the SAFETY-annotation count
 exactly (measured by script: each unsafe block/impl immediately preceded by
-a SAFETY comment).  The 4 test-only blocks are the allocator pin tests'
-arena constructions (`Block::new_from_raw_parts` over a Vec's buffer) —
-host-test scaffolding, never shipped code.
+a SAFETY comment).  The 10 test-only blocks are the moved pin/stress tests'
+arena setups + raw write/read backs (`port/src/allocator_tests.rs`).
 
-**Wave-2 deltas:** devmnt's 4 sites (2 accessor blocks + 2 impls) are GONE —
-the session core rides mcslock's new `BusyCell` primitive (the try-enter,
-never-spin sibling of Lock: an MCS lock held across the blocking 9P receive
-would spin-deadlock an IRQ-masked contender) with msize/version as frozen
-set-once plain fields; mcslock gained BusyCell's 4 blocks/impls + the
-MntCore Send proof (the floor module holds the primitive AND its proof —
-the `MntIo: Send` supertrait would have worked but breaks the unmodified
-host tests' Rc fid-table sharing).  fdt's 3 sites are GONE — `from_usize`'s
-two-pass raw-pointer dance moved to the boot callers (aarch64 main9/vminit,
-riscv64 main) as safe `header_totalsize` + `new`; fdt is unsafe-free.  port's
-lib.rs now carries `#[forbid(unsafe_code)]` on EVERY module except the two
-named floors (allocator, mcslock) — the regression lock is compile-time.
+**Wave-3 deltas:** `port/allocator.rs` is UNSAFE-FREE (forbidden) — the
+QuickFit internals are the index/arena model (side-table headers as
+Option<Idx> chains, arena-offset blocks, no raw-pointer free-list surgery);
+the GlobalAlloc shim (`port/globalalloc.rs`) holds the remaining unsafe
+(the trait surface, the arena-edge Block constructor, realloc + its copy,
+the QuickFit Sync proof).  The 05 review-fix semantics are preserved as
+index-model equivalents: unlink's head-preserving mid-list removal +
+no-match-returns-unchanged (index-chain splices), the cycle tripwire (loud
+panic — the new test splices a cycle via a safe cfg(test) hook),
+align_prefix's clamp-not-assert, free_misc's emergency-header fallback
+(reserve header slots), BumpAlloc's (size, align) order + overflow checks,
+realloc's same-size fast path + copy-then-free order.  The carve-from-the-
+freed-block fallback variant is gone (a freed misc block now frees WHOLE —
+the audit's sanctioned index-model equivalent).  asm! consolidation: asm!
+exists ONLY in the named floor modules — trap.rs (trap vector interface +
+halt/idle/debug-brk primitives), swtch.rs (context switch), vm.rs
+(MMU-register access, TLB/barrier, the D-09 cache maintenance + the ctr_el0
+read), pre_mmu/{vminit,util}.rs (the pre-MMU sequences), main.rs (the boot
+entry global_asm! only).  fault.rs/proc.rs/syscall.rs/exec.rs carry no asm!.
+
+### port module states (the regression locks)
+
+| Module | State |
+|---|---|
+| `allocator` | **UNSAFE-FREE, `#[forbid(unsafe_code)]`** (the index/arena model) |
+| `globalalloc` | the named floor (the GlobalAlloc shim) — 8 blocks + 7 fns, all SAFETY/doc'd |
+| `mcslock` | the named floor (Lock + BusyCell primitives + the MntCore proof) — 12 blocks |
+| every other port module | unsafe-free, `#[forbid(unsafe_code)]` |
+
+The `#[forbid(unsafe_code)]` attributes are the regression locks: a new
+unsafe site in a forbidden module fails the build — the honesty rule is
+mechanical (T-p64-04).
+
+### Wave-2 deltas (kept for the wave history)
+
+devmnt's 4 sites (2 accessor blocks + 2 impls) are GONE — the session core
+rides mcslock's `BusyCell` primitive (the try-enter, never-spin sibling of
+Lock: an MCS lock held across the blocking 9P receive would spin-deadlock an
+IRQ-masked contender) with msize/version as frozen set-once plain fields;
+mcslock gained BusyCell's blocks/impls + the MntCore Send proof (the floor
+module holds the primitive AND its proof — the `MntIo: Send` supertrait
+would have worked but breaks the unmodified host tests' Rc fid-table
+sharing).  fdt's 3 sites are GONE — `from_usize`'s two-pass raw-pointer
+dance moved to the boot callers (aarch64 main9/vminit, riscv64 main) as
+safe `header_totalsize` + `new`; fdt is unsafe-free.
 
 ### Typed MMIO (wave-2a)
 
 `aarch64/src/regblock.rs` is the typed register-block wrapper over a mapped
 VirtRange: drivers access registers by offset through `read`/`write`/
 `write_or`; the volatile ops live only in `io.rs`'s primitives.  Migrated:
-virt pl011 (9 cell sites unchanged — PL011_RANGE now publishes the RegBlock;
-the lock-free IRQ echo path is byte-identical in behavior), gic (4),
-raspi3b mailbox (the MMIO register half — the DMA request buffer's volatile
-ops stay floor), raspi3b uartmini + uartpl011 (tree-wide: no driver touches
-io.rs directly anymore).  The `virtnotes` DEL-echo profile is the IRQ-path
-behavior proof.
+virt pl011 (PL011_RANGE now publishes the RegBlock; the lock-free IRQ echo
+path is byte-identical in behavior), gic, raspi3b mailbox (the MMIO register
+half — the DMA request buffer's volatile ops stay floor), raspi3b uartmini +
+uartpl011 (tree-wide: no driver touches io.rs directly anymore).  The
+`virtnotes` DEL-echo profile is the IRQ-path behavior proof.
 
 ## Eliminated (wave 1 — these sites no longer exist)
 
@@ -121,7 +152,8 @@ behavior proof.
 | aarch64/exec.rs 6 blocks (data/staging writes, seed-stack/argv construction, map_one_user_page, frame seed) | block ×6 | exec's KZERO+PA-alias page writes + the seed-frame ABI |
 | aarch64/syscall.rs `exit_tail`'s wfi | block ×1 | the all-exited clean halt |
 | aarch64/allocator.rs the arena Block construction in the SyncUnsafeCell init | block ×1 | the global allocator's arena — one-time static construction |
-| port/allocator.rs — QuickFit's internals (25 block/impl sites + 6 unsafe fns; 4 of the blocks are test-only) | fn ×6, impl ×2, block ×25 | **wave-3 target** (the index/arena redesign): the intrusive free-list surgery is the allocator floor today; the `global` module's GlobalAlloc impl is THE named floor that survives the redesign |
+| port/allocator.rs — NONE (wave 3: `#[forbid(unsafe_code)]`) | — | the index/arena model — internals carry no raw-pointer free-list surgery; the pin tests pass with byte-verbatim bodies (pointer identity holds: base+offset materialization) |
+| port/globalalloc.rs — the GlobalAlloc shim (wave-3 split) | fn ×7, block ×8 | THE named allocator floor: the trait's unsafe fn surface, `Block::new_from_raw_parts` (the arena edge), `QuickFit::realloc` + `copy_live_bytes`, `unsafe impl Sync for QuickFit`, the `unsafe impl Allocator for BumpAlloc`, with_allocator's swap trick |
 | port/mcslock.rs — the sync-primitives floor: `lock`/`unlock`/`Lock::lock` ×2/`drop` + Send/Sync impls (7 sites), plus wave-2's BusyCell (`enter` guard's Deref/DerefMut blocks, its Send/Sync impls) + the `unsafe impl Send for devmnt::MntCore` proof (5 sites) | impl ×5, block ×7 | the MCS queue's raw node pointers + the try-enter cell are the synchronization protocol; the MntCore proof is the BusyCell discipline's other half |
 | port/fdt.rs — NONE (wave 2) | — | `from_usize` removed; `header_totalsize` + `new` are fully safe (the raw-pointer two-pass lives at the aarch64/riscv64 boot callers) |
 
@@ -136,15 +168,18 @@ Rationale: the gates (five aarch64 boot profiles + `cargo test -p port` +
 virtshell build/clippy) never compile these crates; elimination work there
 would be unverifiable — recorded, not touched.
 
-## asm! consolidation note (wave-3's map)
+## asm! consolidation note (wave 3 — landed)
 
-asm! sites at wave-1 end (aarch64): trap.rs 8 (vector init, DAIFClr, 2 wfi
-halt parks + macro-expanded arms), vm.rs 10 (TTBR reads/writes, TLB/barrier),
-fault.rs 7 (the D-09 cache sequence + the park), proc.rs 2 (the idle-arm
-DAIFClr/wfi/DAIFSet), main.rs 4 (brk, wfi, ctr_el0 + the global_asm!), swtch.rs
-2 (global_asm), vminit.rs 2 (isb, tlbi), syscall.rs 1 (exit halt wfi).  Wave 3
-consolidates everything outside the named floor modules (trap interface,
-swtch, TLB/barrier, MMU-register access, cache maintenance) behind safe fns.
+asm! exists ONLY in the named floor modules (aarch64): trap.rs (the vector
+interface: vbar install, DAIFClr, + the consolidated halt/idle/debug-brk
+primitives `park_forever`/`idle_wait`/`debug_sync_trap`), swtch.rs (the
+context-switch global_asm!), vm.rs (MMU-register reads ttbr0/ttbr1/ctr_el0,
+the switch + TLB/barrier sequences, the D-09 cache maintenance),
+pre_mmu/vminit.rs (isb + tlbi in the MMU-enable), main.rs (the boot entry's
+global_asm!(l.S) only).  Everything formerly ad-hoc — fault.rs's cache
+sequence + park, proc.rs's sched idle arm, syscall.rs's all-exited halt,
+main.rs's brk/wfi/ctr — now calls those primitives.  trap.S/swtch.S/l.S
+remain byte-untouched (the gate's diff check).
 
 ## Descopes
 

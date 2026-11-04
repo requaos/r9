@@ -375,10 +375,8 @@ pub extern "C" fn main9(dtb_va: usize) {
         #[cfg(dev_panic)]
         {
             println!("virtpanic: deliberate sync exception via brk #0 (D-12 debug config)");
-            // SAFETY: brk #0 raises a synchronous exception routed through
-            // the REAL trap path — the deliberate D-12 debug trigger (the
-            // dev_panic config's whole purpose; never a memory hazard).
-            unsafe { core::arch::asm!("brk #0") };
+            // 261103-p64: the consolidated trap-interface primitive.
+            trap::debug_sync_trap();
         }
 
         // 04-05 (R9-03 runtime gate): under dev_exec the boot continues into
@@ -398,12 +396,9 @@ pub extern "C" fn main9(dtb_va: usize) {
         #[cfg(dev_exec)]
         exec_bootstrap(initrd_img);
         #[cfg(not(dev_exec))]
-        loop {
-            // SAFETY: the virt idle loop — wfi wakes on each tick and
-            // trap()'s IRQ branch erets back here (the pre-exec profile's
-            // steady state).
-            unsafe { core::arch::asm!("wfi") };
-        }
+        // 261103-p64: the consolidated halt primitive (wfi wakes on each
+        // tick; trap()'s IRQ branch erets back here).
+        trap::park_forever()
     }
 
     #[cfg(not(platform = "virt"))]
@@ -441,10 +436,8 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
 
     // The D-09/Phase-2-D-03 evidence line: the probed cache geometry the
     // fault handler's icache maintenance derives from (never hardcoded).
-    let ctr: u64;
-    // SAFETY: reading CTR_EL0 is a pure register read at EL1 (the
-    // MMU/cache-register floor).
-    unsafe { core::arch::asm!("mrs {}, ctr_el0", out(reg) ctr) };
+    // 261103-p64: the consolidated register read (vm.rs's floor).
+    let ctr = vm::ctr_el0();
     println!("ctr_el0: {ctr:#x}");
 
     // 04-08: devproc-lite's note-post hook — the arch-side half of the
