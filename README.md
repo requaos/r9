@@ -44,7 +44,7 @@ check to ensure `qemu` or `qemu-kvm` is installed and the
 
 ## Nix packages
 
-With flakes enabled, `nix build .#kernel-virt` builds the shell-capable aarch64 kernel in a sandbox (the virtshell profile, debug, toolchain pinned by `rust-toolchain.toml`) and installs `kernel-virt.elf` plus `aarch64/lib/virt-gicv2.dtb` — the artifact Harvey's flake consumes as `inputs.r9.packages.<system>.kernel-virt` (Phase 5, D-11).
+With flakes enabled, `nix build .#kernel-virt` builds the shell-capable aarch64 kernel in a sandbox (the virtshell profile, debug, toolchain pinned by `rust-toolchain.toml`) and installs `kernel-virt.elf` plus `aarch64/lib/virt-gicv2.dtb` and `aarch64/lib/virt-gicv3.dtb` — the artifact Harvey's flake consumes as `inputs.r9.packages.<system>.kernel-virt` (Phase 5, D-11).  The kernel dispatches its GIC driver on the DTB's compatible string, so one ELF serves both machine shapes; Harvey's boot apps pick gicv3 + `-accel hvf -cpu host` on darwin-aarch64 (gicv3 + TCG elsewhere).
 
 ## Running on Qemu
 

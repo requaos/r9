@@ -94,10 +94,14 @@
               runHook preInstall
               mkdir -p "$out/aarch64/lib"
               # The store-path contract Harvey's compose app (05-11) reads:
-              # the built kernel ELF, and the committed DTB at its
-              # repo-relative path (config TOML's `dtb` key names it).
+              # the built kernel ELF, and the committed DTBs at their
+              # repo-relative paths (gicv2 = the TCG reference shape;
+              # gicv3 = the hvf/TCG gic-version=3 shape — the kernel
+              # dispatches on the DTB's compatible string, so one ELF
+              # serves both).
               cp target/aarch64-unknown-none-elf/debug/aarch64 "$out/kernel-virt.elf"
               cp aarch64/lib/virt-gicv2.dtb "$out/aarch64/lib/virt-gicv2.dtb"
+              cp aarch64/lib/virt-gicv3.dtb "$out/aarch64/lib/virt-gicv3.dtb"
               runHook postInstall
             '';
           };
