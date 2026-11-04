@@ -27,6 +27,29 @@
 //! `fence(Release)` lowers to `dmb ish` and `fence(Acquire)` to `dmb ishld`
 //! on the pinned aarch64 toolchain (RESEARCH-verified codegen) — fences are
 //! safe core intrinsics, so the module keeps zero unsafe and zero asm!.
+//!
+//! ## The seam 07-06 implements (boot-time contract)
+//!
+//! The arch side supplies three volatile implementations over the io.rs
+//! floor:
+//! - [`PciCfg`] over the mapped ECAM window (for [`Caps::parse`]);
+//! - [`CommonCfg`] over the mapped BAR4 common-config region (the RegBlock
+//!   idiom) — the same seam shape serves the device-config region and the
+//!   ISR-byte reader (an 8-bit read at the ISR cap's (bar, offset);
+//!   read-to-ack per §4.1.4.5 — the read deasserts the level line);
+//! - [`RingMem`] over each queue's descriptor/avail/used areas and the
+//!   notify register — pagealloc pages mapped NORMAL at KZERO+PA (never
+//!   device mappings); the default `fence` method stands (core's fences —
+//!   `dmb ish` / `dmb ishld` on aarch64).
+//!
+//! Boot call order (§4.1.4.3.2 / §3.1.1 — pinned by the host tests):
+//! `Caps::parse` → `negotiate` → per queue (rx 0, tx 1): allocate + map
+//! the ring pages → `Ring::new` over the VA side → `queue_size` (accepted
+//! as-offered, never downsized) → `set_queue_addresses` with the physical
+//! addresses → `queue_notify_off` → `enable_queue` LAST → `set_driver_ok`
+//! → `rx_replenish` pre-posts the RX buffers (the first notify write —
+//! never before DRIVER_OK).  The negotiated `FeatureMask` print at bind is
+//! the D-03 audit line.
 
 #![forbid(unsafe_code)]
 
