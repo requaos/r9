@@ -1,4 +1,6 @@
-// qemu `-M virt` platform (gic-version=2).
+// qemu `-M virt` platform (gic-version=2 or =3; the gic module dispatches on
+// the DTB's compatible string, so one kernel boots both TCG gicv2 and
+// TCG/hvf gicv3).
 
 pub mod devcons;
 pub mod gic;
@@ -21,10 +23,11 @@ pub fn print_machine_info(dt: &DeviceTree) {
     {
         println!("  Memory:\t{:#x} .. +{:#x}", mem.addr, mem.len.unwrap_or(0));
     }
-    // qemu 11.1.2's gicv2 machine reports the GIC as "arm,cortex-a15-gic"
-    // (the "arm,gic-400" entry legitimately finds nothing there -- both are
-    // probed).
-    for compat in ["arm,pl011", "arm,cortex-a15-gic", "arm,gic-400", "arm,armv8-timer"] {
+    // qemu 11.1.2's gicv2 machine reports the GIC as "arm,cortex-a15-gic",
+    // the gicv3 machine as "arm,gic-v3" (the "arm,gic-400" entry legitimately
+    // finds nothing on either -- all three are probed).
+    for compat in ["arm,pl011", "arm,cortex-a15-gic", "arm,gic-v3", "arm,gic-400", "arm,armv8-timer"]
+    {
         if dt.find_compatible(compat).next().is_some() {
             println!("  found: {compat}");
         }

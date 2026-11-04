@@ -8,8 +8,6 @@
 // ack via GICC_IAR and finish with exactly one GICC_EOIR write per interrupt
 // (never for the spurious INTID 1023).
 
-use core::cell::SyncUnsafeCell;
-
 use crate::deviceutil::map_device_register;
 use crate::regblock::RegBlock;
 use crate::vm;
@@ -32,21 +30,13 @@ pub const GICC_PMR: usize = 0x004; // Interrupt priority mask register
 pub const GICC_IAR: usize = 0x00c; // Interrupt acknowledge register
 pub const GICC_EOIR: usize = 0x010; // End of interrupt register
 
-/// Spurious interrupt ID: acked but NEVER given an EOI write.
-pub const SPURIOUS_INTID: u32 = 1023;
-
-pub struct Gic {
+pub struct Gicv2 {
     gicd: RegBlock,
     gicc: RegBlock,
 }
 
-/// Interrupt-context access to the GIC.  Written once at init (before
-/// trap::unmask_irq), read lock-free thereafter -- taking an mcslock in IRQ
-/// context could deadlock against an interrupted holder (research P8).
-static GIC: SyncUnsafeCell<Option<Gic>> = SyncUnsafeCell::new(None);
-
-impl Gic {
-    fn new(dt: &DeviceTree) -> Result<Gic> {
+impl Gicv2 {
+    pub fn new(dt: &DeviceTree) -> Result<Gicv2> {
         // qemu 11.1.2's gicv2 machine reports the GIC as "arm,cortex-a15-gic";
         // "arm,gic-400" is the fallback.
         let node = dt
@@ -84,7 +74,7 @@ impl Gic {
             }
         };
 
-        let gic = Gic { gicd: RegBlock::new(gicd), gicc: RegBlock::new(gicc) };
+        let gic = Gicv2 { gicd: RegBlock::new(gicd), gicc: RegBlock::new(gicc) };
 
         // Verified probe sequence (research Pattern 1).
         gic.gicd.write(GICD_CTLR, 1); // enable distributor
@@ -97,7 +87,7 @@ impl Gic {
     /// Enable interrupt intid at the given priority.  SPIs (intid >= 32)
     /// additionally get an ITARGETSR write targeting cpu0 (research P6);
     /// PPIs are hardwired per-CPU and must not be written.
-    fn enable(&self, intid: u32, prio: u8) {
+    pub fn enable(&self, intid: u32, prio: u8) {
         let intid = intid as usize;
 
         // ISENABLERn: one bit per interrupt, 32 per word (read-modify-write).
@@ -123,52 +113,13 @@ impl Gic {
     }
 
     /// Acknowledge the pending interrupt; the GICC_IAR read yields the INTID.
-    fn ack(&self) -> u32 {
+    pub fn ack(&self) -> u32 {
         self.gicc.read(GICC_IAR)
     }
 
     /// Complete the interrupt with a GICC_EOIR write.  Never call this for
     /// the spurious INTID 1023.
-    fn eoi(&self, intid: u32) {
+    pub fn eoi(&self, intid: u32) {
         self.gicc.write(GICC_EOIR, intid);
-    }
-}
-
-/// Discover, map and enable the GIC.  Follows r9's tolerant device-init idiom:
-/// a discovery failure prints and leaves the static empty (ack() then reports
-/// the spurious INTID, so the IRQ path degrades instead of panicking).
-pub fn init(dt: &DeviceTree) {
-    match Gic::new(dt) {
-        // SAFETY: the publish-once discipline — this write runs at boot
-        // before trap::unmask_irq, so no IRQ reader can observe a torn
-        // write; the cell is never written again.
-        Ok(gic) => unsafe { *GIC.get() = Some(gic) },
-        Err(msg) => {
-            println!("can't initialise gic: {msg:?}");
-        }
-    }
-}
-
-pub fn enable(intid: u32, prio: u8) {
-    // SAFETY: GIC's write-once discipline — published at init before
-    // unmask; enable() runs in boot context, lock-free thereafter.
-    if let Some(gic) = unsafe { &*GIC.get() }.as_ref() {
-        gic.enable(intid, prio);
-    }
-}
-
-/// Acknowledge from IRQ context.  If the GIC was never initialised, report
-/// the spurious INTID so the dispatcher acks-without-EOI and returns.
-pub fn ack() -> u32 {
-    // SAFETY: GIC's write-once discipline (IRQ context reads lock-free —
-    // the research-P8 no-lock rule).
-    unsafe { &*GIC.get() }.as_ref().map_or(SPURIOUS_INTID, |gic| gic.ack())
-}
-
-pub fn eoi(intid: u32) {
-    debug_assert!(intid != SPURIOUS_INTID);
-    // SAFETY: GIC's write-once discipline (IRQ context, lock-free).
-    if let Some(gic) = unsafe { &*GIC.get() }.as_ref() {
-        gic.eoi(intid);
     }
 }

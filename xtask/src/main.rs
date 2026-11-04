@@ -1,7 +1,7 @@
 use crate::config::Configuration;
 use config::{
     QemuOverrides, apply_to_build_step, apply_to_clippy_step, apply_to_qemu_step_with_overrides,
-    prepare_initrd_dtb,
+    prepare_initrd_dtb, virt_resolved,
 };
 use std::{
     env, fmt,
@@ -565,39 +565,38 @@ impl QemuStep {
 
         match self.arch {
             Arch::Aarch64 => {
+                let platform = self.config.config.as_ref().and_then(|c| c.platform.as_deref());
+                // virt resolves the accel/cpu override chain and the hvf
+                // effective config up front (the gicv3 machine/dtb/host-cpu
+                // swap) so the initrd DTB patching below sees the swapped
+                // blob; raspi keeps the historical emit-only-when-set shape.
+                let (config, overrides) = if platform == Some("virt") {
+                    virt_resolved(&self.config, &self.accel, &self.cpu)
+                } else {
+                    (
+                        self.config.clone(),
+                        QemuOverrides { accel: self.accel.clone(), cpu: self.cpu.clone() },
+                    )
+                };
+
                 // A config whose initrd image lives under target/
                 // (the assembled bootfs.paq) builds it when missing or stale
                 // — a missing producer is a loud error, never a silent boot
                 // without userland.
-                ensure_initrd_image(&self.config, self.verbose)?;
+                ensure_initrd_image(&config, self.verbose)?;
                 // If the config carries an initrd, patch a target/ copy
                 // of the DTB with /chosen linux,initrd-start/end BEFORE qemu's
                 // argv is assembled (the apply path emits the patched path).
-                prepare_initrd_dtb(&self.config, workspace().to_str().unwrap())?;
+                prepare_initrd_dtb(&config, workspace().to_str().unwrap())?;
 
                 let mut cmd = Command::new(qemu_system);
 
-                let platform = self.config.config.as_ref().and_then(|c| c.platform.as_deref());
                 if platform == Some("virt") {
-                    // virt: the override chain completes here — per-invocation
-                    // override (--accel/--cpu flag > R9_ACCEL/R9_CPU env) >
-                    // TOML > built-in default. The default is tcg +
-                    // cortex-a72, NEVER hvf: darwin acceptance runs TCG
-                    // because HVF rejects GICv2 on qemu 11.1.2; the hvf
-                    // accel exists only for a future GICv3 driver.
-                    let toml = self.config.qemu.as_ref();
-                    let accel = self
-                        .accel
-                        .clone()
-                        .or_else(|| toml.and_then(|q| q.accel.clone()))
-                        .unwrap_or_else(|| "tcg".to_string());
-                    let cpu = self
-                        .cpu
-                        .clone()
-                        .or_else(|| toml.and_then(|q| q.cpu.clone()))
-                        .unwrap_or_else(|| "cortex-a72".to_string());
-                    let overrides = QemuOverrides { accel: Some(accel), cpu: Some(cpu) };
-                    apply_to_qemu_step_with_overrides(&mut cmd, &self.config, &overrides);
+                    // virt: --accel/--cpu flag > R9_ACCEL/R9_CPU env > TOML
+                    // > built-in default (tcg + cortex-a72); --accel hvf
+                    // selects the gicv3 machine/DTB and -cpu host (see
+                    // virt_resolved).
+                    apply_to_qemu_step_with_overrides(&mut cmd, &config, &overrides);
 
                     cmd.arg("-nographic");
 
@@ -621,9 +620,7 @@ impl QemuStep {
                     // raspi: flag/env overrides still beat the TOML value if
                     // supplied, but with none set nothing new is emitted — the
                     // existing invocation shape stays byte-identical.
-                    let overrides =
-                        QemuOverrides { accel: self.accel.clone(), cpu: self.cpu.clone() };
-                    apply_to_qemu_step_with_overrides(&mut cmd, &self.config, &overrides);
+                    apply_to_qemu_step_with_overrides(&mut cmd, &config, &overrides);
 
                     // TODO Choose UART at cmdline
                     // If using UART0 (PL011), this enables serial
@@ -1032,12 +1029,23 @@ impl BootTestStep {
             return Err(format!("kernel image {kernel} missing (build step ran first?)").into());
         }
 
+        // Resolve accel/cpu + the effective config up front: virt's chain is
+        // --accel/--cpu flag > R9_ACCEL/R9_CPU env > TOML > tcg/cortex-a72,
+        // with hvf swapping in the gicv3 machine/DTB and -cpu host
+        // (virt_resolved); raspi keeps the emit-only-when-set shape.
+        let platform = self.config.config.as_ref().and_then(|c| c.platform.as_deref());
+        let (config, overrides) = if platform == Some("virt") {
+            virt_resolved(&self.config, &self.accel, &self.cpu)
+        } else {
+            (self.config.clone(), QemuOverrides { accel: self.accel.clone(), cpu: self.cpu.clone() })
+        };
+
         // Build-if-missing/stale for target/-resident initrd images
         // (same hook as QemuStep).
-        ensure_initrd_image(&self.config, self.verbose)?;
+        ensure_initrd_image(&config, self.verbose)?;
         // If the config carries an initrd, patch a target/ copy of the
         // DTB with /chosen linux,initrd-start/end (same apply path as QemuStep).
-        prepare_initrd_dtb(&self.config, workspace().to_str().unwrap())?;
+        prepare_initrd_dtb(&config, workspace().to_str().unwrap())?;
 
         let sock_rel = format!("target/boot-test-{}.sock", self.config_name);
         let log_rel = format!("target/boot-test-{}.log", self.config_name);
@@ -1054,31 +1062,10 @@ impl BootTestStep {
         let _ = std::fs::remove_file(&log_abs);
 
         // Spawn qemu with the serial console on the socket chardev.  The
-        // machine/cpu/smp/memory/accel/dtb plumbing is the config's, via the
-        // same apply path QemuStep uses; the virt arm's built-in defaults
-        // (tcg + cortex-a72, NEVER hvf) complete the chain.
+        // machine/cpu/smp/memory/accel/dtb plumbing is the resolved config's,
+        // via the same apply path QemuStep uses.
         let mut cmd = Command::new(self.arch.qemu_system());
-        let platform = self.config.config.as_ref().and_then(|c| c.platform.as_deref());
-        let toml = self.config.qemu.as_ref();
-        let overrides = if platform == Some("virt") {
-            QemuOverrides {
-                accel: Some(
-                    self.accel
-                        .clone()
-                        .or_else(|| toml.and_then(|q| q.accel.clone()))
-                        .unwrap_or_else(|| "tcg".to_string()),
-                ),
-                cpu: Some(
-                    self.cpu
-                        .clone()
-                        .or_else(|| toml.and_then(|q| q.cpu.clone()))
-                        .unwrap_or_else(|| "cortex-a72".to_string()),
-                ),
-            }
-        } else {
-            QemuOverrides { accel: self.accel.clone(), cpu: self.cpu.clone() }
-        };
-        apply_to_qemu_step_with_overrides(&mut cmd, &self.config, &overrides);
+        apply_to_qemu_step_with_overrides(&mut cmd, &config, &overrides);
         cmd.arg("-display");
         cmd.arg("none");
         cmd.arg("-chardev");

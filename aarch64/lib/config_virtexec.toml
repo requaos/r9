@@ -20,8 +20,8 @@ dev = ["exec"]
 
 [qemu]
 machine = "virt,gic-version=2"
-# TCG reference CPU (HVF rejects GICv2 on qemu 11.1.2; HVF would need -cpu
-# host, so hvf only becomes viable with a future GICv3 driver)
+# TCG reference CPU.  For hvf on darwin pass --accel hvf (or R9_ACCEL=hvf):
+# xtask swaps in the gicv3 machine/DTB and -cpu host itself.
 cpu = "cortex-a72"
 smp = 1
 memory = "1024M"

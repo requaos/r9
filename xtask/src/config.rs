@@ -11,7 +11,7 @@ use std::{
 };
 
 /// build section
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Build {
     /// The buildflags controls build-time operations and compiler settings.
     pub buildflags: Option<Vec<String>>,
@@ -46,7 +46,7 @@ pub struct Build {
 /// #[cfg(dev_foo = "baz")]
 /// pub mod foobaz;
 /// ```
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub dev: Option<Vec<String>>,
     pub features: Option<Vec<String>>,
@@ -70,15 +70,15 @@ pub struct Config {
 
 /// Qemu section
 /// Affects arguments to be passed to qemu - doesn't affect build artefacts.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Qemu {
     /// Machine (`-M`) value for qemu: raspi3b, raspi4b, etc.
     pub machine: Option<String>,
 
     /// Accelerator (`-accel`) value for qemu: tcg, kvm, hvf.
     /// Overridable per-invocation via --accel / R9_ACCEL.
-    /// Note: hvf on darwin rejects GICv2 on qemu 11.1.2 — it
-    /// exists for a future GICv3 driver; never default to hvf.
+    /// hvf (darwin) requires GICv3 + -cpu host: the virt legs derive that
+    /// shape from this TOML via virt_resolved — TOML stays the TCG reference.
     pub accel: Option<String>,
 
     /// CPU model (`-cpu`) value for qemu: cortex-a72, host, etc.
@@ -106,7 +106,7 @@ pub struct Qemu {
 /// The [qemu] initrd table: the image file plus the guest physical address
 /// the generic loader places it at (initrd PA is TOML data, per the Phase-3
 /// config-as-data convention).
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Initrd {
     /// Filepath of initrd image relative to crate
     pub file: String,
@@ -140,14 +140,14 @@ impl Initrd {
 /// Selects the boot-image format produced by `cargo xtask dist`:
 /// absent or "flat-gzip" = objcopy + gzip flat image (raspi);
 /// "elf" = the cargo-built ELF is the boot image, dist is a no-op.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Dist {
     /// Boot image format: "flat-gzip" (default when absent) or "elf".
     pub format: Option<String>,
 }
 
 /// the TOML document
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Configuration {
     pub build: Option<Build>,
     pub config: Option<Config>,
@@ -372,6 +372,55 @@ fn apply_qemu_config(cmd: &mut Command, config: &Configuration, overrides: &Qemu
     }
 }
 
+/// virt qemu resolution shared by QemuStep and BootTestStep: the accel
+/// override chain completes here (CLI flag / R9_ACCEL > TOML > tcg), and
+/// under hvf the effective config swaps the GICv2 machine/dtb pair for the
+/// committed gicv3 shapes — qemu 11.1.2's hvf accel rejects GICv2 and
+/// accepts only -cpu host, and the kernel's GICv3 driver now covers it.
+/// The returned Configuration is the one prepare_initrd_dtb and the apply
+/// path must see (the patched-DTB copy derives from the swapped blob).
+pub fn virt_resolved(
+    config: &Configuration,
+    accel_override: &Option<String>,
+    cpu_override: &Option<String>,
+) -> (Configuration, QemuOverrides) {
+    let toml = config.qemu.as_ref();
+    let accel = accel_override
+        .clone()
+        .or_else(|| toml.and_then(|q| q.accel.clone()))
+        .unwrap_or_else(|| "tcg".to_string());
+    let config = hvf_effective_config(config, &accel);
+    // -cpu: the per-invocation override wins; under hvf the only model qemu
+    // accepts is host (the TOML's cortex-a72 is the TCG reference, so it
+    // must NOT win here); otherwise TOML > built-in cortex-a72.
+    let cpu = cpu_override
+        .clone()
+        .or_else(|| {
+            if accel == "hvf" { None } else { config.qemu.as_ref().and_then(|q| q.cpu.clone()) }
+        })
+        .unwrap_or_else(|| if accel == "hvf" { "host".to_string() } else { "cortex-a72".to_string() });
+    (config, QemuOverrides { accel: Some(accel), cpu: Some(cpu) })
+}
+
+/// The hvf effective config: swap the GICv2 machine/dtb pair for the gicv3
+/// shapes.  Non-default TOML values pass through untouched (a gicv3 profile
+/// is already hvf-shaped), and non-hvf accels pass through wholesale.
+fn hvf_effective_config(config: &Configuration, accel: &str) -> Configuration {
+    let mut config = config.clone();
+    if accel != "hvf" {
+        return config;
+    }
+    if let Some(q) = config.qemu.as_mut() {
+        if q.machine.as_deref() == Some("virt,gic-version=2") {
+            q.machine = Some("virt,gic-version=3".to_string());
+        }
+        if q.dtb.as_deref() == Some("aarch64/lib/virt-gicv2.dtb") {
+            q.dtb = Some("aarch64/lib/virt-gicv3.dtb".to_string());
+        }
+    }
+    config
+}
+
 fn apply_rustflags(cmd: &mut Command, rustflags: &[String]) {
     // pass the collected rustflags
     // !! this overrides the build.rustflags from the target Cargo.toml !!
@@ -586,5 +635,76 @@ mod tests {
         apply_to_qemu_step_with_overrides(&mut cmd, &config, &overrides);
         let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
         assert_eq!(args, vec!["-accel", "kvm", "-cpu", "cortex-a72"]);
+    }
+
+    const VIRT_TOML: &str = r#"
+        [qemu]
+        machine = "virt,gic-version=2"
+        accel = "tcg"
+        cpu = "cortex-a72"
+        smp = 1
+        memory = "1024M"
+        dtb = "aarch64/lib/virt-gicv2.dtb"
+    "#;
+
+    /// hvf resolution swaps the GICv2 machine/dtb pair for the gicv3 shapes
+    /// and forces -cpu host over the TOML's TCG reference (qemu's hvf accel
+    /// rejects both GICv2 and non-host CPU models).
+    #[test]
+    fn virt_resolved_hvf_swaps_machine_dtb_and_cpu() {
+        let config: Configuration = toml::from_str(VIRT_TOML).expect("test TOML must parse");
+        let (effective, overrides) =
+            super::virt_resolved(&config, &Some("hvf".to_string()), &None);
+        let qemu = effective.qemu.expect("qemu section survives");
+        assert_eq!(qemu.machine.as_deref(), Some("virt,gic-version=3"));
+        assert_eq!(qemu.dtb.as_deref(), Some("aarch64/lib/virt-gicv3.dtb"));
+        assert_eq!(overrides.accel.as_deref(), Some("hvf"));
+        assert_eq!(overrides.cpu.as_deref(), Some("host"));
+        // The TOML source of truth is untouched (the clone is the swap).
+        assert_eq!(
+            config.qemu.as_ref().and_then(|q| q.machine.as_deref()),
+            Some("virt,gic-version=2")
+        );
+    }
+
+    /// tcg resolution is the identity: TOML machine/dtb/cpu pass through and
+    /// the defaults only fill gaps.
+    #[test]
+    fn virt_resolved_tcg_passes_through() {
+        let config: Configuration = toml::from_str(VIRT_TOML).expect("test TOML must parse");
+        let (effective, overrides) = super::virt_resolved(&config, &None, &None);
+        let qemu = effective.qemu.expect("qemu section survives");
+        assert_eq!(qemu.machine.as_deref(), Some("virt,gic-version=2"));
+        assert_eq!(qemu.dtb.as_deref(), Some("aarch64/lib/virt-gicv2.dtb"));
+        assert_eq!(overrides.accel.as_deref(), Some("tcg"));
+        assert_eq!(overrides.cpu.as_deref(), Some("cortex-a72"));
+    }
+
+    /// A per-invocation --cpu beats even the hvf host default (qemu itself
+    /// then reports an invalid model — the override is the user's intent).
+    #[test]
+    fn virt_resolved_cpu_override_beats_hvf_default() {
+        let config: Configuration = toml::from_str(VIRT_TOML).expect("test TOML must parse");
+        let (_effective, overrides) = super::virt_resolved(
+            &config,
+            &Some("hvf".to_string()),
+            &Some("cortex-a72".to_string()),
+        );
+        assert_eq!(overrides.cpu.as_deref(), Some("cortex-a72"));
+    }
+
+    /// An already-gicv3 TOML is hvf-shaped: no swap, only -cpu host applies.
+    #[test]
+    fn virt_resolved_hvf_leaves_gicv3_toml_untouched() {
+        let config: Configuration = toml::from_str(
+            "[qemu]\nmachine = \"virt,gic-version=3\"\ndtb = \"aarch64/lib/virt-gicv3.dtb\"\n",
+        )
+        .expect("test TOML must parse");
+        let (effective, overrides) =
+            super::virt_resolved(&config, &Some("hvf".to_string()), &None);
+        let qemu = effective.qemu.expect("qemu section survives");
+        assert_eq!(qemu.machine.as_deref(), Some("virt,gic-version=3"));
+        assert_eq!(qemu.dtb.as_deref(), Some("aarch64/lib/virt-gicv3.dtb"));
+        assert_eq!(overrides.cpu.as_deref(), Some("host"));
     }
 }
