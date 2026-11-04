@@ -554,12 +554,20 @@ pub fn write(c: &mut crate::dat::Chan, buf: &[u8]) -> crate::Result<u64> {
 // children are interrupted WITHOUT init itself getting the note — the
 // donor's pgrpnote shape over the readers' groups.
 //
-// Documented deltas from the letter of devcons.c: (a) no input ECHO —
-// the typed bytes are never written back to the wire (echo belongs to
-// the window/kbdfs era; nothing in D-06 or the plan names it, and its
-// absence keeps the interactive gate's output markers unambiguous);
-// (b) Ctrl-P/debugger entry stays deferred (pl011.rs, CONTEXT.md);
-// (c) the donor's multi-queue kbdqs merge is single-console here.
+// Documented deltas from the letter of devcons.c: (a) input ECHO fires
+// at DRAIN time in the reader's syscall context (261104-b4p, item 1 —
+// the 05-08 no-echo delta RETIRED): the cooked processing loop collects
+// echo bytes into a bounded Vec (ECHO_CAP, drop-excess — T-b4p-02) and
+// calls the arch's echo hook AFTER the INPUT lock drops (the
+// INPUT→Console non-nesting rule; debug_dump_input's precedent).  A
+// blocked reader's keystrokes echo ≤ one tick later (the tick's
+// cons_input_wake readies it); with no blocked reader, typed-ahead bytes
+// sit in the PL011 ring un-echoed until the next read — the terminal-era
+// IRQ echo stays out of scope.  Raw mode never echoes; DEL/^U/^D stay
+// silent; BACKSPACE echoes the BS-SP-BS triple only when it actually
+// pops; CR/LF line completers echo CRLF.  (b) Ctrl-P/debugger entry
+// stays deferred (pl011.rs, CONTEXT.md); (c) the donor's multi-queue
+// kbdqs merge is single-console here.
 //
 // LOCKING (the syscall.rs header rule, extended): the INPUT queue lock
 // is taken ONLY from syscall/trap context — IRQ context NEVER takes it.
@@ -583,6 +591,20 @@ pub fn write(c: &mut crate::dat::Chan, buf: &[u8]) -> crate::Result<u64> {
 const INPUT_CAP: usize = 4096;
 /// The cooked line-assembly bound (the donor's `char line[1024]`).
 const LINE_CAP: usize = 1024;
+/// 261104-b4p (T-b4p-02): the per-drain echo buffer's bound — at most
+/// INPUT_CAP drained bytes, each echoed verbatim (≤ INPUT_CAP), plus a
+/// BS-SP-BS triple per erase (≤ 3*LINE_CAP pops) plus a CRLF pair per
+/// completer (≤ the drained count, under the 2*INPUT_CAP arm).  Excess
+/// is DROPPED, never grown unbounded — the T-05-15 overrun discipline's
+/// twin.
+const ECHO_CAP: usize = 2 * INPUT_CAP + 3 * LINE_CAP;
+
+/// Append to the bounded echo buffer (drop-excess — ECHO_CAP).
+fn echo_push(echo: &mut alloc::vec::Vec<u8>, bytes: &[u8]) {
+    let room = ECHO_CAP.saturating_sub(echo.len());
+    let n = bytes.len().min(room);
+    echo.extend_from_slice(&bytes[..n]);
+}
 
 /// The console input state (syscall/trap context only — the locking rule
 /// above).  `input` is the unprocessed byte queue (the donor's kbdq),
@@ -707,6 +729,11 @@ fn cons_read(buf: &mut [u8]) -> crate::Result<u64> {
         let mut dropped = 0usize;
         let mut interrupted = false;
         let mut readers: alloc::vec::Vec<u64> = alloc::vec::Vec::new();
+        // 261104-b4p (item 1): the cooked-mode echo bytes for THIS drain
+        // (bounded, ECHO_CAP) — assembled under the INPUT lock, emitted
+        // AFTER it drops (the INPUT→Console non-nesting rule;
+        // debug_dump_input's drop-then-print precedent).
+        let mut echo: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
         let ready: Option<u64> = {
             let mut inq = INPUT.lock(&node);
             // 1. Drain the RX ring into the bounded input queue
@@ -735,6 +762,8 @@ fn cons_read(buf: &mut [u8]) -> crate::Result<u64> {
             //    never buffered — it discards the partial line and posts
             //    the interrupt note.
             if inq.raw {
+                // Raw mode echoes NOTHING (the window-system era owns the
+                // display; a typed byte is never re-written here).
                 if !inq.input.is_empty() {
                     let n = inq.input.len().min(buf.len());
                     for slot in buf[..n].iter_mut() {
@@ -748,21 +777,35 @@ fn cons_read(buf: &mut [u8]) -> crate::Result<u64> {
                 while let Some(b) = inq.input.pop_front() {
                     match b {
                         DELETE => {
+                            // The interrupt path stays SILENT on the wire
+                            // (no retro-erasure of the discarded partial).
                             inq.line.clear();
                             interrupted = true;
                         }
                         BACKSPACE => {
-                            inq.line.pop();
+                            // Echo the erasure ONLY when it actually pops
+                            // a byte (the BS-SP-BS triple — putb's shape);
+                            // a stray BS on an empty line is silent.
+                            if inq.line.pop().is_some() {
+                                echo_push(&mut echo, &[BACKSPACE, b' ', BACKSPACE]);
+                            }
                         }
                         CTLU => {
+                            // Kill-line stays silent (the donor echoes
+                            // nothing for ^U).
                             inq.line.clear();
                         }
                         CR | LF | CTLD => {
                             // CR→LF (the donor kbdcr2nl's !raw arm); the
                             // completed line INCLUDES the newline; ^D
-                            // ends the line without being buffered.
+                            // ends the line without being buffered.  The
+                            // line completers echo CRLF (the terminal
+                            // must advance — write_bytes is byte-exact,
+                            // so both bytes ride); ^D (the silent EOF)
+                            // echoes NOTHING.
                             if b != CTLD {
                                 inq.line.push(LF);
+                                echo_push(&mut echo, &[CR, LF]);
                             }
                             let line = core::mem::take(&mut inq.line);
                             if line.is_empty() && b == CTLD {
@@ -777,8 +820,12 @@ fn cons_read(buf: &mut [u8]) -> crate::Result<u64> {
                             }
                         }
                         _ => {
+                            // A regular byte echoes VERBATIM — but only
+                            // when it actually lands on the line (a
+                            // byte dropped at LINE_CAP never echoes).
                             if inq.line.len() < LINE_CAP {
                                 inq.line.push(b);
+                                echo_push(&mut echo, &[b]);
                             }
                         }
                     }
@@ -811,6 +858,17 @@ fn cons_read(buf: &mut [u8]) -> crate::Result<u64> {
                 }
             }
         };
+        // 261104-b4p (item 1): emit the drain's echo AFTER the INPUT lock
+        // dropped (NEVER under it — INPUT→Console non-nesting; the
+        // write_bytes path takes the Console lock).  Echo fires at drain
+        // time in the reader's syscall context — ≤ one tick after the
+        // keystroke when a reader is blocked (the tick's cons_input_wake
+        // readies it); with NO blocked reader, typed-ahead bytes sit in
+        // the PL011 ring un-echoed until the next read (the terminal-era
+        // IRQ echo stays out of scope).
+        if !echo.is_empty() {
+            (hooks.echo)(&echo);
+        }
         if dropped > 0 {
             // T-05-15's one-line warning (post-lock: Console is a
             // separate MCS lock; nothing nests Console → INPUT).
