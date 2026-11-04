@@ -103,17 +103,59 @@ impl Caps {
     /// accepted).  A truncated or non-terminating list errors loudly, as
     /// does a missing common/notify/ISR triple.
     pub fn parse(cfg: &impl PciCfg) -> Result<Caps> {
-        let _ = cfg;
-        // RED stub — GREEN walks the list.  The zeroed Ok shape keeps every
-        // behavior test failing on its assertions (a stub Err would satisfy
-        // the error-path tests trivially).
-        Ok(Caps {
-            common: CapTriple { bar: 0, offset: 0, length: 0 },
-            notify: CapTriple { bar: 0, offset: 0, length: 0 },
-            isr: CapTriple { bar: 0, offset: 0, length: 0 },
-            device: None,
-            notify_off_multiplier: 0,
-        })
+        if cfg.read_u8(PCI_OFF_STATUS) & PCI_STATUS_CAP_LIST == 0 {
+            return Err("virtio: device presents no capability list");
+        }
+        let mut common = None;
+        let mut notify = None;
+        let mut isr = None;
+        let mut device = None;
+        let mut notify_off_multiplier = 0u32;
+        let mut p = cfg.read_u8(PCI_OFF_CAP_LIST) as usize;
+        let mut walked = 0usize;
+        while p != 0 {
+            walked += 1;
+            if walked > MAX_CAPS {
+                return Err("virtio: capability list does not terminate");
+            }
+            if p + CAP_BASE_LEN > cfg.len() {
+                return Err("virtio: truncated capability list");
+            }
+            let next = cfg.read_u8(p + CAP_OFF_NEXT) as usize;
+            if cfg.read_u8(p) == PCI_CAP_ID_VNDR {
+                let cap_len = cfg.read_u8(p + CAP_OFF_LEN) as usize;
+                if cap_len < CAP_BASE_LEN {
+                    return Err("virtio: vendor capability shorter than the base struct");
+                }
+                let triple = CapTriple {
+                    bar: cfg.read_u8(p + CAP_OFF_BAR),
+                    offset: cfg.read_u32(p + CAP_OFF_OFFSET),
+                    length: cfg.read_u32(p + CAP_OFF_LENGTH),
+                };
+                match cfg.read_u8(p + CAP_OFF_CFG_TYPE) {
+                    CFG_TYPE_COMMON => common = Some(triple),
+                    CFG_TYPE_NOTIFY => {
+                        if p + CAP_NOTIFY_LEN > cfg.len() {
+                            return Err("virtio: truncated notify capability");
+                        }
+                        notify_off_multiplier = cfg.read_u32(p + CAP_OFF_NOTIFY_MULT);
+                        notify = Some(triple);
+                    }
+                    CFG_TYPE_ISR => isr = Some(triple),
+                    CFG_TYPE_DEVICE => device = Some(triple),
+                    // PCI_CFG / SHARED_MEMORY / VENDOR / reserved: walked
+                    // past per §4.1.4.1 (unknown cfg_type/bar are ignored).
+                    _ => {}
+                }
+            }
+            p = next;
+        }
+        match (common, notify, isr) {
+            (Some(common), Some(notify), Some(isr)) => {
+                Ok(Caps { common, notify, isr, device, notify_off_multiplier })
+            }
+            _ => Err("virtio: common/notify/ISR capabilities incomplete"),
+        }
     }
 }
 
@@ -200,41 +242,91 @@ impl FeatureMask {
 /// caller's later steps (queue_enable LAST; DRIVER_OK before any notify).
 /// A device without VERSION_1 is rejected loudly and left FAILED (D-03).
 pub fn negotiate(cfg: &impl CommonCfg) -> Result<FeatureMask> {
-    let _ = cfg;
-    Ok(FeatureMask { lo: 0, hi: 0 }) // RED stub — GREEN runs the machine
+    // Step 1: reset — write 0, then wait for the read-back 0 (§4.1.4.3.2:
+    // the driver MUST NOT stop reading until the status reads 0).
+    cfg.write8(CFG_DEVICE_STATUS, 0);
+    let mut spins = 0u32;
+    while cfg.read8(CFG_DEVICE_STATUS) != 0 {
+        spins += 1;
+        if spins >= RESET_SPINS {
+            return Err("virtio: device status never read back 0 after reset");
+        }
+    }
+    // Steps 2-3: ACKNOWLEDGE, then DRIVER (the status set is cumulative).
+    cfg.write8(CFG_DEVICE_STATUS, STATUS_ACKNOWLEDGE);
+    cfg.write8(CFG_DEVICE_STATUS, STATUS_ACKNOWLEDGE | STATUS_DRIVER);
+    // Step 4: two-window feature read; write the accepted subset.
+    cfg.write32(CFG_DEVICE_FEATURE_SELECT, 0);
+    let offered_lo = cfg.read32(CFG_DEVICE_FEATURE);
+    cfg.write32(CFG_DEVICE_FEATURE_SELECT, 1);
+    let offered_hi = cfg.read32(CFG_DEVICE_FEATURE);
+    if offered_hi & ACCEPT_HI == 0 {
+        // §6: "A driver MAY fail to operate further if VIRTIO_F_VERSION_1
+        // is not offered" — D-03 takes that branch, loudly.
+        cfg.write8(CFG_DEVICE_STATUS, STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FAILED);
+        return Err("virtio: VIRTIO_F_VERSION_1 not offered — legacy/transitional rejected");
+    }
+    let accepted = FeatureMask { lo: offered_lo & ACCEPT_LO, hi: offered_hi & ACCEPT_HI };
+    cfg.write32(CFG_DRIVER_FEATURE_SELECT, 0);
+    cfg.write32(CFG_DRIVER_FEATURE, accepted.lo);
+    cfg.write32(CFG_DRIVER_FEATURE_SELECT, 1);
+    cfg.write32(CFG_DRIVER_FEATURE, accepted.hi);
+    // Steps 5-6: FEATURES_OK, then the re-read check.
+    cfg.write8(CFG_DEVICE_STATUS, STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK);
+    if cfg.read8(CFG_DEVICE_STATUS) & STATUS_FEATURES_OK == 0 {
+        cfg.write8(CFG_DEVICE_STATUS, STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FAILED);
+        return Err("virtio: device rejected the feature subset (FEATURES_OK not reflected)");
+    }
+    Ok(accepted)
 }
 
 /// Read a queue's size (0 = unavailable).  qemu's virtio-net queues are
 /// 256; accepted as-offered, never downsized (the plan's flagged
 /// assumption — a size beyond MAX_QSIZE fails Ring::new loudly).
 pub fn queue_size(cfg: &impl CommonCfg, queue: u16) -> u16 {
-    let _ = (cfg, queue);
-    0 // RED stub
+    cfg.write16(CFG_QUEUE_SELECT, queue);
+    cfg.read16(CFG_QUEUE_SIZE)
 }
 
 /// Read a queue's notify offset (multiplied by notify_off_multiplier for
 /// the notify address — §4.1.4.4).
 pub fn queue_notify_off(cfg: &impl CommonCfg, queue: u16) -> u16 {
-    let _ = (cfg, queue);
-    0 // RED stub
+    cfg.write16(CFG_QUEUE_SELECT, queue);
+    cfg.read16(CFG_QUEUE_NOTIFY_OFF)
 }
 
 /// Program the three queue area physical addresses (descriptor / avail /
 /// used) as two 32-bit halves each (§4.1.3.1).  queue_enable stays
 /// untouched here — the caller writes it LAST (§4.1.4.3.2).
-pub fn set_queue_addresses(cfg: &impl CommonCfg, queue: u16, desc_pa: u64, avail_pa: u64, used_pa: u64) {
-    let _ = (cfg, queue, desc_pa, avail_pa, used_pa); // RED stub
+pub fn set_queue_addresses(
+    cfg: &impl CommonCfg,
+    queue: u16,
+    desc_pa: u64,
+    avail_pa: u64,
+    used_pa: u64,
+) {
+    cfg.write16(CFG_QUEUE_SELECT, queue);
+    cfg.write32(CFG_QUEUE_DESC, desc_pa as u32);
+    cfg.write32(CFG_QUEUE_DESC + 4, (desc_pa >> 32) as u32);
+    cfg.write32(CFG_QUEUE_DRIVER, avail_pa as u32);
+    cfg.write32(CFG_QUEUE_DRIVER + 4, (avail_pa >> 32) as u32);
+    cfg.write32(CFG_QUEUE_DEVICE, used_pa as u32);
+    cfg.write32(CFG_QUEUE_DEVICE + 4, (used_pa >> 32) as u32);
 }
 
 /// Enable a queue.  §4.1.4.3.2: every other virtqueue field MUST be
 /// configured before this write; never write 0.
 pub fn enable_queue(cfg: &impl CommonCfg, queue: u16) {
-    let _ = (cfg, queue); // RED stub
+    cfg.write16(CFG_QUEUE_SELECT, queue);
+    cfg.write16(CFG_QUEUE_ENABLE, 1);
 }
 
 /// DRIVER_OK — the device is live; notifications may follow (never before).
 pub fn set_driver_ok(cfg: &impl CommonCfg) {
-    let _ = cfg; // RED stub
+    cfg.write8(
+        CFG_DEVICE_STATUS,
+        STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK | STATUS_DRIVER_OK,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -324,19 +416,30 @@ pub(crate) struct DescPool {
 
 impl DescPool {
     pub(crate) fn new(qsize: u16) -> DescPool {
-        let _ = qsize;
-        DescPool { free: [0; MAX_QSIZE as usize], len: 0 } // RED stub
+        let mut free = [0u16; MAX_QSIZE as usize];
+        // Pop order runs ascending: free[0] = qsize-1 … free[qsize-1] = 0.
+        let mut i = 0u16;
+        while i < qsize {
+            free[(qsize - 1 - i) as usize] = i;
+            i += 1;
+        }
+        DescPool { free, len: qsize }
     }
 
     pub(crate) fn alloc(&mut self) -> Option<u16> {
-        Some(0) // RED stub — GREEN pops the stack
+        if self.len == 0 {
+            return None;
+        }
+        self.len -= 1;
+        Some(self.free[self.len as usize])
     }
 
     /// Recycle an index.  No teardown path exists this era — the free half
     /// is exercised by the host tests and by future queue-reset work.
     #[allow(dead_code)]
     pub(crate) fn free(&mut self, idx: u16) {
-        let _ = idx; // RED stub
+        self.free[self.len as usize] = idx;
+        self.len += 1;
     }
 }
 
@@ -386,13 +489,14 @@ impl<M: RingMem> Ring<M> {
         hdr_pa: u64,
         rx_buf_cap: u32,
     ) -> Result<Ring<M>> {
-        // RED stub — GREEN validates qsize and assembles the chains.
-        let _ = hdr_pa;
+        if qsize < 2 || qsize > MAX_QSIZE || !qsize.is_power_of_two() {
+            return Err("virtio: bad queue size (want a power of two in 2..=256)");
+        }
         let (used_len_min, used_len_max) = match dir {
             Dir::Rx => (VIRTIO_NET_HDR_LEN as u32, rx_buf_cap),
             Dir::Tx => (0, u32::MAX),
         };
-        Ok(Ring {
+        let mut ring = Ring {
             desc,
             avail,
             used,
@@ -405,7 +509,44 @@ impl<M: RingMem> Ring<M> {
             last_used: 0,
             used_len_min,
             used_len_max,
-        })
+        };
+        // The driver wants interrupts: leave Rnointerrupt clear in
+        // avail.flags (ethervirtio.c's `q->avail->flags &= ~Rnointerrupt`).
+        ring.avail.write_u16(AVAIL_OFF_FLAGS, 0);
+        ring.setup_chains(hdr_pa);
+        Ok(ring)
+    }
+
+    /// Assemble the two-descriptor chains and pre-link the avail ring.  A
+    /// fresh pool pops ascending, so slot i gets chain head 2i —
+    /// ethervirtio.c's static layout, reproduced organically.
+    fn setup_chains(&mut self, hdr_pa: u64) {
+        let nslots = self.nslots();
+        let dir_flag = match self.dir {
+            Dir::Rx => DESC_F_WRITE,
+            Dir::Tx => 0,
+        };
+        for slot in 0..nslots {
+            let head = self.pool.alloc().expect("virtio: fresh pool covers 2 descriptors per slot");
+            let payload =
+                self.pool.alloc().expect("virtio: fresh pool covers 2 descriptors per slot");
+            let hb = head as usize * DESC_STRIDE;
+            self.desc.write_u64(hb + DESC_OFF_ADDR, hdr_pa);
+            self.desc.write_u32(hb + DESC_OFF_LEN, VIRTIO_NET_HDR_LEN as u32);
+            self.desc.write_u16(hb + DESC_OFF_FLAGS, DESC_F_NEXT | dir_flag);
+            self.desc.write_u16(hb + DESC_OFF_NEXT, payload);
+            let pb = payload as usize * DESC_STRIDE;
+            self.desc.write_u16(pb + DESC_OFF_FLAGS, dir_flag);
+            self.desc.write_u16(pb + DESC_OFF_NEXT, 0);
+            self.slot_head[slot] = head;
+        }
+        // Avail pre-linking: every avail position permanently names its
+        // slot's chain head, so posting is the fixed-value entry write
+        // plus the idx advance.
+        for p in 0..self.qsize {
+            let slot = (p as usize) & (nslots - 1);
+            self.avail.write_u16(AVAIL_OFF_RING + 2 * p as usize, self.slot_head[slot]);
+        }
     }
 
     fn nslots(&self) -> usize {
@@ -448,8 +589,34 @@ impl<M: RingMem> Ring<M> {
         notify_off: usize,
         queue_index: u16,
     ) -> Result<u16> {
-        let _ = (payload_pa, payload_len, notify, notify_off, queue_index);
-        Ok(0) // RED stub — GREEN runs the barrier sandwich
+        if self.dir != Dir::Tx {
+            return Err("virtio: tx_post on an RX ring");
+        }
+        let slot = (self.avail_idx & self.slot_mask()) as usize;
+        if self.posted[slot] {
+            return Err("virtio: TX ring full — retire used entries first");
+        }
+        let payload = self.slot_head[slot] + 1;
+        let pb = payload as usize * DESC_STRIDE;
+        self.desc.write_u64(pb + DESC_OFF_ADDR, payload_pa);
+        self.desc.write_u32(pb + DESC_OFF_LEN, payload_len);
+        // The avail entry permanently names the slot's chain head (the
+        // pre-linked value); the write is part of the §2.7.13 publication.
+        let p = (self.avail_idx & self.qmask()) as usize;
+        self.avail.write_u16(AVAIL_OFF_RING + 2 * p, self.slot_head[slot]);
+        // §2.7.13 step 4: the device must see the descriptor table and the
+        // avail ring entry before the idx update.
+        self.avail.fence(Ordering::Release);
+        self.avail_idx = self.avail_idx.wrapping_add(1);
+        self.avail.write_u16(AVAIL_OFF_IDX, self.avail_idx);
+        // §2.7.13.4.1: the idx must be visible before the suppression check.
+        self.used.fence(Ordering::Release);
+        let flags = self.used.read_u16(USED_OFF_FLAGS);
+        if flags & USED_F_NO_NOTIFY == 0 {
+            notify.write_u16(notify_off, queue_index);
+        }
+        self.posted[slot] = true;
+        Ok(slot as u16)
     }
 
     /// RX replenish-until-caught-up, then ONE notify (ethervirtio.c's
@@ -460,13 +627,48 @@ impl<M: RingMem> Ring<M> {
     /// of buffers offered.
     pub fn rx_replenish(
         &mut self,
-        alloc: impl FnMut() -> Option<(u64, u32)>,
+        mut alloc: impl FnMut() -> Option<(u64, u32)>,
         notify: &M,
         notify_off: usize,
         queue_index: u16,
     ) -> Result<u32> {
-        let _ = (alloc, notify, notify_off, queue_index);
-        Ok(0) // RED stub
+        if self.dir != Dir::Rx {
+            return Err("virtio: rx_replenish on a TX ring");
+        }
+        let mut offered = 0u32;
+        loop {
+            let slot = (self.avail_idx & self.slot_mask()) as usize;
+            if self.posted[slot] {
+                break;
+            }
+            let Some((pa, cap)) = alloc() else {
+                break;
+            };
+            let payload = self.slot_head[slot] + 1;
+            let pb = payload as usize * DESC_STRIDE;
+            self.desc.write_u64(pb + DESC_OFF_ADDR, pa);
+            self.desc.write_u32(pb + DESC_OFF_LEN, cap);
+            let p = (self.avail_idx & self.qmask()) as usize;
+            self.avail.write_u16(AVAIL_OFF_RING + 2 * p, self.slot_head[slot]);
+            self.avail.fence(Ordering::Release);
+            self.avail_idx = self.avail_idx.wrapping_add(1);
+            self.avail.write_u16(AVAIL_OFF_IDX, self.avail_idx);
+            self.posted[slot] = true;
+            offered += 1;
+            // ethervirtio.c's replenish loop: post until caught up with the
+            // device's used position, then ONE notify for the whole burst.
+            if self.avail_idx == self.used.read_u16(USED_OFF_IDX) {
+                break;
+            }
+        }
+        if offered > 0 {
+            self.used.fence(Ordering::Release);
+            let flags = self.used.read_u16(USED_OFF_FLAGS);
+            if flags & USED_F_NO_NOTIFY == 0 {
+                notify.write_u16(notify_off, queue_index);
+            }
+        }
+        Ok(offered)
     }
 
     /// Drain one used-ring entry: None when caught up
@@ -477,8 +679,32 @@ impl<M: RingMem> Ring<M> {
     /// consumed and the slot left posted (the caller retires the device,
     /// not the ring).
     pub fn next_used(&mut self) -> Option<Result<UsedBuf>> {
-        let _ = self;
-        None // RED stub
+        let used_idx = self.used.read_u16(USED_OFF_IDX);
+        if self.last_used == used_idx {
+            return None;
+        }
+        // §2.7.14: the entry contents are trusted only after an acquire
+        // barrier observing the idx advance.
+        self.used.fence(Ordering::Acquire);
+        let eoff = USED_OFF_RING + (self.last_used & self.qmask()) as usize * USED_ELEM_STRIDE;
+        let id = self.used.read_u32(eoff);
+        let len = self.used.read_u32(eoff + 4);
+        self.last_used = self.last_used.wrapping_add(1);
+        // V5: the device wrote id/len — validate before either indexes or
+        // sizes anything (a device fault is a loud error, never an alias).
+        if id >= u32::from(self.qsize) || id & 1 != 0 {
+            return Some(Err("virtio: used-ring id out of range (device fault)"));
+        }
+        if len < self.used_len_min {
+            return Some(Err("virtio: used-ring len below the minimum (device fault)"));
+        }
+        if len > self.used_len_max {
+            return Some(Err("virtio: used-ring len beyond the buffer capacity (device fault)"));
+        }
+        // Slot recovery (ethervirtio.c): the used id is the chain head.
+        let slot = ((id & u32::from(self.qmask())) >> 1) as usize;
+        self.posted[slot] = false;
+        Some(Ok(UsedBuf { slot: slot as u16, len }))
     }
 }
 
@@ -516,7 +742,14 @@ impl VirtioNetHdr {
     /// The little-endian wire bytes (the arch side volatile-writes them
     /// into the queue's header page).
     pub fn to_le_bytes(&self) -> [u8; VIRTIO_NET_HDR_LEN] {
-        let _ = self;
-        [0u8; VIRTIO_NET_HDR_LEN] // RED stub — GREEN serializes the fields
+        let mut b = [0u8; VIRTIO_NET_HDR_LEN];
+        b[0] = self.flags;
+        b[1] = self.gso_type;
+        b[2..4].copy_from_slice(&self.hdr_len.to_le_bytes());
+        b[4..6].copy_from_slice(&self.gso_size.to_le_bytes());
+        b[6..8].copy_from_slice(&self.csum_start.to_le_bytes());
+        b[8..10].copy_from_slice(&self.csum_offset.to_le_bytes());
+        b[10..12].copy_from_slice(&self.num_buffers.to_le_bytes());
+        b
     }
 }

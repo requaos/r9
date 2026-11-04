@@ -60,7 +60,11 @@ impl MockMem {
     /// A quiet arena for the long-running wrap test (its own log, never
     /// inspected — 66000 posts would grow the shared log to ~500k entries).
     fn quiet(name: &'static str, size: usize) -> MockMem {
-        MockMem { name, buf: Rc::new(RefCell::new(vec![0u8; size])), log: Rc::new(RefCell::new(Vec::new())) }
+        MockMem {
+            name,
+            buf: Rc::new(RefCell::new(vec![0u8; size])),
+            log: Rc::new(RefCell::new(Vec::new())),
+        }
     }
 
     // Device-side pokes and driver-side peeks: direct buffer access, NOT
@@ -294,9 +298,8 @@ fn rig_with(qsize: u16, dir: Dir, quiet: bool) -> Rig {
             MockMem::named("notify", 8, &log),
         )
     };
-    let ring =
-        Ring::new(desc.clone(), avail.clone(), used.clone(), qsize, dir, HDR_PA, RX_BUF_CAP)
-            .expect("ring setup");
+    let ring = Ring::new(desc.clone(), avail.clone(), used.clone(), qsize, dir, HDR_PA, RX_BUF_CAP)
+        .expect("ring setup");
     Rig { ring, desc, avail, used, notify, log }
 }
 
@@ -304,15 +307,16 @@ fn rig(qsize: u16, dir: Dir) -> Rig {
     rig_with(qsize, dir, false)
 }
 
-/// The device side of the used ring: write the entry at the driver's
-/// last_used position and advance used.idx (direct buffer pokes — the
-/// device does not log through the driver's op log).
+/// The device side of the used ring: write the entry at the DEVICE's own
+/// used position (read back from the buffer — the device's cursor is
+/// independent of the driver's last_used) and advance used.idx.  Direct
+/// buffer pokes — the device does not log through the driver's op log.
 fn device_complete(rig: &Rig, id: u32, len: u32) {
-    let pos = rig.ring.last_used();
-    let eoff = 4 + (pos & (rig.ring.qsize() - 1)) as usize * 8;
+    let dev_pos = rig.used.peek_u16(2);
+    let eoff = 4 + (dev_pos & (rig.ring.qsize() - 1)) as usize * 8;
     rig.used.device_write_u32(eoff, id);
     rig.used.device_write_u32(eoff + 4, len);
-    rig.used.device_write_u16(2, pos.wrapping_add(1));
+    rig.used.device_write_u16(2, dev_pos.wrapping_add(1));
 }
 
 /// Drain one entry, asserting an entry is pending (the RED phase fails on
@@ -512,7 +516,11 @@ fn avail_ring_prelinked_slots_permanently_name_chain_heads() {
     let r = rig(8, Dir::Tx); // 4 slots: heads 0, 2, 4, 6
     for p in 0..8usize {
         let want = (2 * (p % 4)) as u16;
-        assert_eq!(r.avail.peek_u16(4 + 2 * p), want, "avail entry {p} names its slot's chain head");
+        assert_eq!(
+            r.avail.peek_u16(4 + 2 * p),
+            want,
+            "avail entry {p} names its slot's chain head"
+        );
     }
 }
 
@@ -567,8 +575,17 @@ fn used_drain_is_acquire_ordered_and_recovers_the_slot() {
     let used = drain_one(&mut r).expect("the entry validates");
     assert_eq!(used, UsedBuf { slot: 0, len: 72 });
     assert!(r.ring.next_used().is_none(), "drained");
-    // Slot recovery: the freed slot is postable again without a full ring.
-    assert_eq!(r.ring.tx_post(0x2000_8000, 60, &r.notify, 0, 1), Ok(0));
+    // Slot recovery: the slot is chosen by the avail POSITION, so the
+    // retired slot 0 is postable again when the position comes back around
+    // (posts 1..3 take the fresh slots first).
+    assert_eq!(r.ring.tx_post(0x2000_1000, 60, &r.notify, 0, 1), Ok(1));
+    assert_eq!(r.ring.tx_post(0x2000_2000, 60, &r.notify, 0, 1), Ok(2));
+    assert_eq!(r.ring.tx_post(0x2000_3000, 60, &r.notify, 0, 1), Ok(3));
+    assert_eq!(
+        r.ring.tx_post(0x2000_8000, 60, &r.notify, 0, 1),
+        Ok(0),
+        "the retired slot is postable again (no RingFull on a recovered slot)"
+    );
     // §2.7.14: used-idx read → fence(Acquire) → entry content reads.
     assert_subsequence(
         &r.log.borrow(),
@@ -641,8 +658,7 @@ fn rx_replenish_posts_until_caught_up_then_one_notify() {
         assert_eq!(r.desc.peek_u64(payload * 16), 0x3000_0000 + (s as u64 + 1) * 4096);
         assert_eq!(r.desc.peek_u32(payload * 16 + 8), RX_BUF_CAP);
     }
-    let notifies =
-        r.log.borrow().iter().filter(|op| matches!(op, Op::Write("notify", ..))).count();
+    let notifies = r.log.borrow().iter().filter(|op| matches!(op, Op::Write("notify", ..))).count();
     assert_eq!(notifies, 1, "ONE notify for the whole burst");
 
     // The device consumes two; replenish offers exactly two more (+1 notify).
@@ -652,8 +668,7 @@ fn rx_replenish_posts_until_caught_up_then_one_notify() {
     assert!(drain_one(&mut r).is_ok());
     let offered = r.ring.rx_replenish(|| Some((0x3000_8000, RX_BUF_CAP)), &r.notify, 0, 0).unwrap();
     assert_eq!(offered, 2, "replenish refills only the freed slots");
-    let notifies =
-        r.log.borrow().iter().filter(|op| matches!(op, Op::Write("notify", ..))).count();
+    let notifies = r.log.borrow().iter().filter(|op| matches!(op, Op::Write("notify", ..))).count();
     assert_eq!(notifies, 2);
 }
 
