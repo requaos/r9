@@ -15,6 +15,10 @@ use std::{
 use target_lexicon::Triple;
 
 mod config;
+// D-06 gate machinery: consumed by the Net profile's pcap assertion in
+// 07-05 — until then the module's API is exercised only by its unit tests.
+#[allow(dead_code)]
+mod pcap;
 mod uregcheck;
 
 type DynError = Box<dyn std::error::Error>;
