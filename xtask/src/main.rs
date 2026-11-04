@@ -821,6 +821,17 @@ const BOOT_NOTE_RESUMED_MARKER: &str = "smokenote: resumed";
 /// initrd too, but they don't assert it).
 const BOOT_STACKSMOKE_MARKER: &str = "stacksmoke: depth 64 ok";
 
+/// Sleep-smoke marker (261104-b4p, item 6's staged proof): the staged
+/// init's fifth child (smokesleep) arms alarm(300), sleeps 30 s, and the
+/// alarm note interrupts the sleep — sys_sleep wakes early, fails -1
+/// "interrupted" (the donor tsleep shape), the handler runs at the
+/// return-to-EL0 boundary, and main prints this.  Asserted at the
+/// AllExited stage for ALL THREE exec-family profiles (Exec/Multi/Notes
+/// share the initrd; all-exited arrives only after init reaped every
+/// child, so absence is definitive — the stacksmoke check's placement
+/// shape, presence-only per D-13).
+const BOOT_SMOKESLEEP_MARKER: &str = "smokesleep: interrupted";
+
 /// Always-on negative scan (04-06): any panic/Unhandled-interrupt line in
 /// the capture fails the run — every profile EXCEPT the deliberate-panic
 /// one (whose expected flow prints exactly that dump).  Case-insensitive,
@@ -1295,6 +1306,18 @@ impl BootTestStep {
                                 "stacksmoke marker absent at all-exited",
                             ));
                         }
+                        // 261104-b4p (item 6): the smokesleep interrupted
+                        // marker rides ALL THREE exec-family profiles (the
+                        // shared initrd's child E) — presence at all-exited
+                        // is definitive proof the alarm note interrupted the
+                        // sleep (sys_sleep's donor-tsleep shape).
+                        if !contains_marker(&capture, BOOT_SMOKESLEEP_MARKER.as_bytes()) {
+                            return Err(self.fail(
+                                stage,
+                                &capture,
+                                "smokesleep marker absent at all-exited",
+                            ));
+                        }
                         return self.finish(log_abs, &capture, profile);
                     }
                 }
@@ -1693,8 +1716,9 @@ const INITRD_TREE: &str = "target/initrd-tree";
 const BOOTFS_PAQ: &str = "target/bootfs.paq";
 /// The staged binaries the initrd carries (D-03's SC-scoped set: the staged
 /// init + the hello ABI-bisect binary + 04-07's rfork/fd-ops smoke +
-/// 04-08's notes smoke + 05-01's D-15 stack-growth smoke).
-const INITRD_FILES: [&str; 5] = ["init", "hello", "smokefork", "smokenote", "stacksmoke"];
+/// 04-08's notes smoke + 05-01's D-15 stack-growth smoke + 261104-b4p's
+/// interruptible-sleep smoke).
+const INITRD_FILES: [&str; 6] = ["init", "hello", "smokefork", "smokenote", "stacksmoke", "smokesleep"];
 
 impl InitrdStep {
     fn new(matches: &clap::ArgMatches) -> Self {
