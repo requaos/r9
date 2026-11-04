@@ -410,6 +410,14 @@ pub extern "C" fn main9(dtb_va: usize) {
 
 mod runtime;
 
+/// 261104-b4p (item 1): the cons echo sink — the cooked-mode input echo
+/// writes byte-exact through the device-write path (write_bytes's
+/// Console-lock precedent; devcons never calls it under the INPUT lock).
+#[cfg(all(dev_exec, platform = "virt"))]
+fn cons_echo(bytes: &[u8]) {
+    port::devcons::write_bytes(bytes);
+}
+
 /// 05-04 (D-03): the pid-1 entry path.  dev_bootchain configs (e.g. the
 /// virtshell profile) exec the real Harvey boot(8) at /boot/boot — a
 /// two-component devroot walk; every pre-existing profile keeps /init
@@ -482,12 +490,17 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
     // 04-07 sched machinery (block), and the note-group post (the DEL
     // path's foreground-group target).  virt-only this era (the PL011 RX
     // ring is a virt driver; dev_exec configs are all virt).
+    // 261104-b4p (item 1): the echo hook — cooked-mode input echo rides
+    // the device-write path (write_bytes, the syscall-context
+    // Console-lock precedent); devcons calls it only AFTER the INPUT
+    // lock drops.
     #[cfg(platform = "virt")]
     port::devcons::set_cons_hooks(port::devcons::ConsHooks {
         current: proc::current_pid,
         drain_rx: platform::pl011::cons_rx_drain,
         block: proc::cons_block_current,
         post_group: proc::post_note_group_of_members,
+        echo: cons_echo,
     });
 
     // 05-05 (D-07, RESEARCH Pattern 3 / Pitfall 1): the kernel-seeded

@@ -657,13 +657,18 @@ pub fn debug_dump_input() {
 /// ring read, invoked only from this module's syscall-context sections);
 /// `block` parks the caller mid-syscall until the tick wakes it
 /// (arch: proc::cons_block_current); `post_group` posts a note to the
-/// note GROUPS of the given reader pids (arch: the pgrpnote port).
+/// note GROUPS of the given reader pids (arch: the pgrpnote port);
+/// `echo` writes the cooked-mode echo bytes to the wire (arch: the
+/// device-write path — devcons::write_bytes, the syscall-context
+/// Console-lock precedent).  261104-b4p (item 1): the echo hook — the
+/// port stays arch-blind (the post_group idiom).
 #[derive(Clone, Copy)]
 pub struct ConsHooks {
     pub current: fn() -> u64,
     pub drain_rx: fn(&mut [u8]) -> usize,
     pub block: fn(),
     pub post_group: fn(&[u64], &[u8]),
+    pub echo: fn(&[u8]),
 }
 
 static CONS_HOOKS: Lock<Option<ConsHooks>> = Lock::new("conshooks", None);
