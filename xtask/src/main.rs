@@ -1,7 +1,7 @@
 use crate::config::Configuration;
 use config::{
     QemuOverrides, apply_to_build_step, apply_to_clippy_step, apply_to_qemu_step_with_overrides,
-    prepare_initrd_dtb, virt_resolved,
+    apply_virt_netdev, prepare_initrd_dtb, virt_resolved,
 };
 use std::{
     env, fmt,
@@ -512,6 +512,7 @@ impl DistStep {
 struct QemuStep {
     arch: Arch,
     config: Configuration,
+    config_name: String,
     profile: Profile,
     wait_for_gdb: bool,
     kvm: bool,
@@ -525,6 +526,12 @@ impl QemuStep {
     fn new(matches: &clap::ArgMatches) -> Self {
         let arch = Arch::from(matches);
         let config = load_config(arch, matches);
+        let config_name = matches
+            .try_get_one::<String>("config")
+            .ok()
+            .flatten()
+            .cloned()
+            .unwrap_or_else(|| "default".to_string());
         let profile = Profile::from(matches);
         let wait_for_gdb = matches.get_flag("gdb");
         let kvm = matches.get_flag("kvm");
@@ -551,7 +558,7 @@ impl QemuStep {
             .or_else(|| env::var("R9_CPU").ok());
         let verbose = verbose(matches);
 
-        Self { arch, config, profile, wait_for_gdb, kvm, dump_dtb, accel, cpu, verbose }
+        Self { arch, config, config_name, profile, wait_for_gdb, kvm, dump_dtb, accel, cpu, verbose }
     }
 
     fn run(self) -> Result<()> {
@@ -597,6 +604,16 @@ impl QemuStep {
                     // selects the gicv3 machine/DTB and -cpu host (see
                     // virt_resolved).
                     apply_to_qemu_step_with_overrides(&mut cmd, &config, &overrides);
+
+                    // D-09/D-10: the idle virtio-net NIC + fresh per-run
+                    // pcap capture ride every aarch64 virt boot (the same
+                    // emission BootTestStep carries, with the interactive
+                    // step's own pcap name).
+                    apply_virt_netdev(
+                        &mut cmd,
+                        &config,
+                        &format!("target/qemu-{}.pcap", self.config_name),
+                    );
 
                     cmd.arg("-nographic");
 
@@ -1049,8 +1066,10 @@ impl BootTestStep {
 
         let sock_rel = format!("target/boot-test-{}.sock", self.config_name);
         let log_rel = format!("target/boot-test-{}.log", self.config_name);
+        let pcap_rel = format!("target/boot-test-{}.pcap", self.config_name);
         let sock_abs = workspace().join(&sock_rel);
         let log_abs = workspace().join(&log_rel);
+        let pcap_abs = workspace().join(&pcap_rel);
         // A stale socket file from a crashed run would break qemu's bind.
         let _ = std::fs::remove_file(&sock_abs);
         // Destroy
@@ -1060,12 +1079,22 @@ impl BootTestStep {
         // capture re-creates the log at File::create below; a spawn/connect
         // failure now leaves NO log rather than a stale one.
         let _ = std::fs::remove_file(&log_abs);
+        // The same stale-evidence discipline for the pcap capture: a later
+        // gate asserts against THIS run's frames, never a previous run's
+        // (the NETDRV-03 transparency prohibition — qemu's filter-dump
+        // truncates at open, but the removal keeps the no-dead-evidence
+        // invariant independent of qemu internals).
+        let _ = std::fs::remove_file(&pcap_abs);
 
         // Spawn qemu with the serial console on the socket chardev.  The
         // machine/cpu/smp/memory/accel/dtb plumbing is the resolved config's,
         // via the same apply path QemuStep uses.
         let mut cmd = Command::new(self.arch.qemu_system());
         apply_to_qemu_step_with_overrides(&mut cmd, &config, &overrides);
+        // D-09/D-10: every aarch64 virt boot carries the idle virtio-net NIC
+        // + a fresh per-run pcap capture of its netdev (the gate evidence
+        // channel; no kernel code probes the device this plan).
+        apply_virt_netdev(&mut cmd, &config, &pcap_rel);
         cmd.arg("-display");
         cmd.arg("none");
         cmd.arg("-chardev");

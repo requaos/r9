@@ -510,6 +510,35 @@ pub fn apply_to_qemu_step_with_overrides(
     apply_qemu_config(cmd, config, overrides);
 }
 
+/// D-09/D-10: the aarch64-virt netdev stanza.  Every aarch64 virt qemu
+/// invocation (the interactive QemuStep AND BootTestStep — one shared
+/// emission) carries an idle, unbound virtio-net PCI device plus a per-run
+/// pcap capture of its netdev: the NIC is present from the first boot of
+/// every profile (D-10 always-on) while no kernel code probes it yet, and
+/// an untouched virtio device never asserts an interrupt, so existing
+/// profiles run byte-identically — the staging proof that the later driver
+/// layers (07-02+) land perturbation-free.  The pcap path is per-step and
+/// per-config (target/boot-test-<config>.pcap / target/qemu-<config>.pcap)
+/// so a gate never asserts against a previous run's capture.  Phase 9 lifts
+/// this flag shape into platform TOML (HNET-02); hardcoded here per D-09's
+/// no-speculative-machinery rule.
+///
+/// Gated on the resolved config's platform == "virt": the riscv64 leg's
+/// `-netdev type=user,id=net0` + virtio-net-device MMIO stanza is a
+/// separate emission site (NOT a device-model precedent), and raspi/x86_64
+/// configs gain nothing.  Both call sites are aarch64-only by construction
+/// (the QemuStep Aarch64 arm / BootTestStep's arch check), so the composed
+/// gate is arch == aarch64 AND platform == "virt".
+pub fn apply_virt_netdev(cmd: &mut Command, config: &Configuration, pcap_path: &str) {
+    let virt = config.config.as_ref().and_then(|c| c.platform.as_deref()) == Some("virt");
+    if !virt {
+        return;
+    }
+    cmd.arg("-netdev").arg("user,id=n0");
+    cmd.arg("-device").arg("virtio-net-pci-non-transitional,netdev=n0");
+    cmd.arg("-object").arg(format!("filter-dump,id=f0,netdev=n0,file={pcap_path}"));
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Configuration, QemuOverrides, apply_to_qemu_step_with_overrides};
@@ -603,6 +632,40 @@ mod tests {
         let args =
             qemu_argv("[qemu]\nmachine = \"raspi3b\"\ndtb = \"aarch64/lib/bcm2710-rpi-3-b.dtb\"\n");
         assert_eq!(args, vec!["-M", "raspi3b", "-dtb", "aarch64/lib/bcm2710-rpi-3-b.dtb"]);
+    }
+
+    /// D-09/D-10: the aarch64-virt netdev stanza — an idle, unbound
+    /// virtio-net-pci-non-transitional plus a per-run filter-dump pcap —
+    /// appends to virt configs only.  A non-virt platform (raspi shown; the
+    /// riscv64 leg emits its own MMIO stanza elsewhere) gains nothing, so
+    /// every non-virt argv shape stays byte-untouched.
+    #[test]
+    fn virt_netdev_stanza_is_virt_only() {
+        let virt: Configuration = toml::from_str(
+            "[config]\nplatform = \"virt\"\n[qemu]\nmachine = \"virt,gic-version=2\"\n",
+        )
+        .expect("test TOML must parse");
+        let mut cmd = std::process::Command::new("qemu-system-aarch64");
+        super::apply_virt_netdev(&mut cmd, &virt, "target/boot-test-virt.pcap");
+        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(
+            args,
+            vec![
+                "-netdev",
+                "user,id=n0",
+                "-device",
+                "virtio-net-pci-non-transitional,netdev=n0",
+                "-object",
+                "filter-dump,id=f0,netdev=n0,file=target/boot-test-virt.pcap",
+            ]
+        );
+
+        let raspi: Configuration =
+            toml::from_str("[config]\nplatform = \"raspi3b\"\n[qemu]\nmachine = \"raspi3b\"\n")
+                .expect("test TOML must parse");
+        let mut cmd = std::process::Command::new("qemu-system-aarch64");
+        super::apply_virt_netdev(&mut cmd, &raspi, "target/qemu-default.pcap");
+        assert_eq!(cmd.get_args().count(), 0);
     }
 
     /// The [dist] section's format key parses to Some("elf") ("elf"
