@@ -130,7 +130,13 @@ impl<const N: usize> FdGroup<N> {
     /// dying proc's group this way and close-dispatches each chan AFTER
     /// the group lock drops (never under it — the fdgrp leaf-lock rule).
     pub fn drain_all(&mut self) -> Vec<Chan> {
-        Vec::new()
+        let mut out = Vec::new();
+        for slot in self.fds.iter_mut() {
+            if let Some(c) = slot.take() {
+                out.push(c);
+            }
+        }
+        out
     }
 }
 

@@ -37,16 +37,18 @@
 //! by the tick, timer.rs → proc::cons_input_wake — the reschedule()
 //! PROC_TABLE-from-trap-context precedent).
 
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use port::dat::{Chan, DEV_CONS, DEV_DUP, DEV_ENV, DEV_MNT, DEV_PIPE, DEV_PROC, DEV_ROOT, DEV_SRV, OEXEC, OTRUNC};
-use port::mcslock::LockNode;
+use port::fdgrp::FdGroup;
+use port::mcslock::{Lock, LockNode};
 use port::namec::{self, NamecMode};
 use port::pgrp::{MAFTER, MBEFORE, MMASK, MORDER};
 use port::println;
 
 use crate::exec;
-use crate::proc::{self, ByteBacking, ERRMAX, Proc, ProcState};
+use crate::proc::{self, ByteBacking, ERRMAX, Proc, ProcState, MAX_FDS};
 use crate::trap;
 use crate::trap::TrapFrame;
 use crate::usermem::{UserPtr, UserSlice, UserSliceMut, UserString};
@@ -542,7 +544,14 @@ fn sys_open(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     };
     let opened = match namec::open_chan(&c, mode) {
         Ok(c) => c,
-        Err(msg) => return err(proc, msg),
+        Err(msg) => {
+            // 261104-b4p (item 5): the resolved chan never reaches an fd
+            // on the error exit — close-dispatch it (a walked DEV_MNT
+            // chan holds a server-side fid; clunk_if_last's count check
+            // makes other devices no-ops).
+            port::namec::close_chan(&c);
+            return err(proc, msg);
+        }
     };
 
     match proc.fd_install_lowest(opened) {
@@ -596,7 +605,14 @@ fn sys_bind(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let pg = proc.pgrp.clone();
     let node = LockNode::new();
     let mut guard = pg.lock(&node);
-    match guard.bind(src, &tgt, flag) {
+    let result = guard.bind(src, &tgt, flag);
+    drop(guard);
+    // 261104-b4p (item 5): the resolved TARGET chan is never installed
+    // anywhere — close-dispatch it (a mount-crossing resolution can leave
+    // a last-ref DEV_MNT fid on it; the SOURCE is table-pinned on success
+    // by design).
+    port::namec::close_chan(&tgt);
+    match result {
         Ok(_) => 0,
         Err(msg) => err(proc, msg),
     }
@@ -625,9 +641,18 @@ fn sys_chdir(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         Err(msg) => return err(proc, msg),
     };
     if c.qid.typ & port::dat::QTDIR == 0 {
+        // 261104-b4p (item 5): the resolved chan is dropped on the error
+        // exit — close-dispatch it first (a walked DEV_MNT fid's only
+        // ref is this local).
+        port::namec::close_chan(&c);
         return err(proc, "chdir: not a directory");
     }
-    proc.dot = Some(c);
+    // 261104-b4p (item 5): the REPLACED dot's fid ref leaves with it —
+    // close-dispatch the old dot (clunk_if_last's count check protects a
+    // shared/rfork-dup'd dot).
+    if let Some(old) = proc.dot.replace(c) {
+        port::namec::close_chan(&old);
+    }
     0
 }
 
@@ -671,7 +696,17 @@ fn sys_unmount(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let pg = proc.pgrp.clone();
     let node = LockNode::new();
     let mut guard = pg.lock(&node);
-    match guard.unmount(&tgt.path, from.as_ref()) {
+    let result = guard.unmount(&tgt.path, from.as_ref());
+    drop(guard);
+    // 261104-b4p (item 5): the resolved chans are never installed —
+    // close-dispatch them (clunk_if_last's count check protects any
+    // shared fid; the table's REMOVED entries stay table-lifetime-pinned,
+    // the documented bounded-by-mount-count deferral).
+    port::namec::close_chan(&tgt);
+    if let Some(f) = &from {
+        port::namec::close_chan(f);
+    }
+    match result {
         Ok(()) => 0,
         Err(msg) => err(proc, msg),
     }
@@ -812,7 +847,13 @@ fn sys_mount(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let pg = proc.pgrp.clone();
     let node = LockNode::new();
     let mut guard = pg.lock(&node);
-    match guard.bind(mnt_chan, &tgt, flag) {
+    let result = guard.bind(mnt_chan, &tgt, flag);
+    drop(guard);
+    // 261104-b4p (item 5): the resolved TARGET chan is never installed —
+    // close-dispatch it (the mount-root chan itself is table-pinned on
+    // success by design; on failure it dies inside bind).
+    port::namec::close_chan(&tgt);
+    match result {
         Ok(_) => 0,
         Err(msg) => err(proc, msg),
     }
@@ -850,7 +891,12 @@ fn sys_stat(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         Ok(c) => c,
         Err(msg) => return err(proc, msg),
     };
-    match namec::stat_chan(&c, sb.as_slice_mut()) {
+    // 261104-b4p (item 5): the resolved chan is never fd-installed here —
+    // close-dispatch it after the stat (a walked DEV_MNT chan holds a
+    // server-side fid; its only ref is this local).
+    let result = namec::stat_chan(&c, sb.as_slice_mut());
+    port::namec::close_chan(&c);
+    match result {
         Ok(count) => count,
         Err(msg) => err(proc, msg),
     }
@@ -987,16 +1033,32 @@ fn sys_exec(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     };
     let opened = match namec::open_chan(&c, OEXEC) {
         Ok(c) => c,
-        Err(msg) => return err(proc, msg),
+        Err(msg) => {
+            // 261104-b4p (item 5): the walked chan is walked-past on the
+            // error exit too — close-dispatch it (clunk_if_last's count
+            // check protects non-DEV_MNT chans).
+            port::namec::close_chan(&c);
+            return err(proc, msg);
+        }
     };
+    // 261104-b4p (item 5): the walked chan is walked-past once the open
+    // SHARES its fid's Arc — close-dispatch it now so the fid's last ref
+    // (the opened chan's, below) Tclunks exactly once.  Without this the
+    // shared count strands the fid at close time (a per-command leak —
+    // the divergence-1 class retired by item 5).
+    port::namec::close_chan(&c);
     let backing = match opened.dev {
         DEV_ROOT => {
             let Some(root) = port::devroot::root() else {
+                port::namec::close_chan(&opened);
                 return err(proc, "devroot: not mounted");
             };
             match root.entry(&opened) {
                 Ok(bin) => ByteBacking::Paq { dir: bin, image: root.image() },
-                Err(msg) => return err(proc, msg),
+                Err(msg) => {
+                    port::namec::close_chan(&opened);
+                    return err(proc, msg);
+                }
             }
         }
         DEV_MNT => {
@@ -1006,10 +1068,16 @@ fn sys_exec(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             // staged bytes become the demand-page byte source.
             match port::devmnt::read_all(&opened, EXEC_STAGE_CAP) {
                 Ok(bytes) => ByteBacking::Mnt { file: alloc::sync::Arc::new(bytes) },
-                Err(msg) => return err(proc, msg),
+                Err(msg) => {
+                    port::namec::close_chan(&opened);
+                    return err(proc, msg);
+                }
             }
         }
-        _ => return err(proc, "exec: path is not an executable source"),
+        _ => {
+            port::namec::close_chan(&opened);
+            return err(proc, "exec: path is not an executable source");
+        }
     };
     // The exec chan is a transient (never fd-installed): close-dispatch it
     // (devmnt Tclunks the fid — the staged bytes now own the content).
@@ -1211,6 +1279,11 @@ fn sys_create(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         Err(msg) => return err(proc, msg),
     };
     if parent.qid.typ & port::dat::QTDIR == 0 {
+        // 261104-b4p (item 5): the resolved parent (or the manual
+        // dot-redirect clone) holds a server-side fid on EVERY exit —
+        // sweep it (clunk_if_last's count check protects the shared dot
+        // dup case).
+        port::namec::close_chan(&parent);
         return err(proc, "create: parent not a directory");
     }
     let opened = match namec::walk_one(&parent, final_name) {
@@ -1218,20 +1291,34 @@ fn sys_create(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             // The donor's Acreate existing-file arm: OEXCL → Eexist;
             // otherwise open OTRUNC (the create-on-existing fallback).
             if mode & port::dat::OEXCL != 0 {
+                port::namec::close_chan(&existing);
+                port::namec::close_chan(&parent);
                 return err(proc, "create: file exists");
             }
             match namec::open_chan(&existing, mode | OTRUNC) {
                 Ok(c) => c,
-                Err(msg) => return err(proc, msg),
+                Err(msg) => {
+                    port::namec::close_chan(&existing);
+                    port::namec::close_chan(&parent);
+                    return err(proc, msg);
+                }
             }
         }
         Err(_) => {
             match namec::create_chan(&parent, final_name, mode & !(port::dat::OEXCL | port::dat::OCEXEC), perm) {
                 Ok(c) => c,
-                Err(msg) => return err(proc, msg),
+                Err(msg) => {
+                    port::namec::close_chan(&parent);
+                    return err(proc, msg);
+                }
             }
         }
     };
+    // 261104-b4p (item 5): the parent's fid (the dot-redirect clone's, on
+    // the bare-name arm) is walked-past on success too — sweep it.  (The
+    // walk-probe `existing` needs no sweep on success: the open SHARES
+    // its fid's Arc and `opened` is now the owning ref.)
+    port::namec::close_chan(&parent);
     match proc.fd_install_lowest(opened) {
         Some(slot) => slot,
         None => err(proc, "create: no free fd"),
@@ -1460,10 +1547,22 @@ fn sys_errstr(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 /// sleepers.  Register-deadline-then-block cannot lose the wake: syscall
 /// context is IRQ-masked, so the tick can only fire after sched()
 /// swtch'es (devpipe's documented invariant).  The ms arg is a `long` —
-/// 32-bit in Plan 9 C (the width discipline).  Era limit (documented):
-/// the donor's tsleep is interruptible by notes; this sleeper wakes only
-/// on expiry (a posted note queues and delivers at the syscall return —
-/// no measured caller interrupts a sleep this era).
+/// 32-bit in Plan 9 C (the width discipline).
+///
+/// 261104-b4p (item 6 — the donor's note-interruptible tsleep; the 05-08
+/// wake-only-on-expiry era limit RETIRED): a pending-note PRE-CHECK fails
+/// the sleep immediately (the donor tsleep's notepending shape — never
+/// arm-then-lose), and tick_timeouts readies a sleeper whose note_queue
+/// is non-empty.  On resume, a LOCAL deadline copy discriminates: an
+/// early wake (ticks() < deadline) is always a posted note this era (the
+/// waker inventory is enumerable — tick_timeouts's expiry+note arms;
+/// cons_input_wake keys on cons_waiting; pipe_wake keys on waiter pids —
+/// neither can ready a sleeping proc), so the syscall fails -1 with
+/// errstr "interrupted"; expiry (ticks() >= deadline) returns 0.  A note
+/// that arrives AT the expiry tick still takes the 0 exit (the expiry
+/// arm ran first) and delivers at the return boundary — the donor's
+/// shape.  The note itself delivers at the 04-08 return-to-EL0 boundary,
+/// untouched.
 ///
 /// Yield note: sleep(0)'s preempt() runs the tick's own entry from
 /// syscall context — safe here because dispatch completes on the OLD
@@ -1487,8 +1586,19 @@ fn sys_sleep(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             proc::preempt(); // the donor's yield()
             return 0;
         }
-        proc.sleep_until = crate::platform::timer::ticks() + ms;
+        // 261104-b4p (item 6): the donor tsleep's notepending pre-check —
+        // a note queued BEFORE the arm fails the sleep immediately.
+        if !proc.note_queue.is_empty() {
+            return err(proc, "interrupted");
+        }
+        let deadline = crate::platform::timer::ticks() + ms;
+        proc.sleep_until = deadline;
         proc::sched();
+        // An early wake is always a posted note this era (see the doc
+        // comment's waker inventory); expiry returns 0.
+        if crate::platform::timer::ticks() < deadline {
+            return err(proc, "interrupted");
+        }
         0
     }
     #[cfg(not(dev_exec))]
@@ -1598,7 +1708,42 @@ fn sys_exits(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 /// page and the kstack LAST (the handler is still running on it — safe
 /// because the swtch save writes only the PROC_TABLE-resident context),
 /// then the all-exited halt or the sched-loop hand-off.  Diverges.
+///
+/// 261104-b4p (item 4 — the donor pexit's closefgrp): the FIRST step is
+/// the fd-group sweep.  The proc's group is DETACHED (replaced by a fresh
+/// empty Arc — the Moribund proc holds the empty one), and only when the
+/// detached Arc's count is 1 (this proc was the group's LAST sharer) are
+/// its occupied slots drained and close-dispatched (namec::close_chan —
+/// devpipe's open-count decrement, devmnt's clunk_if_last).  A fork child
+/// SHARING its parent's group (RFPROC without RFFDG/RFCFDG) never
+/// triggers the sweep (count > 1 — the sharers keep the group).
+///
+/// Ordering: the sweep runs BEFORE free_user_mappings because close_chan
+/// may RPC-block for DEV_MNT (the Tclunk's pipe read schedules the server
+/// proc — the sys_mount blocking precedent) and an RPC needs the address
+/// space live.  The drain runs under the group lock; the close dispatch
+/// runs AFTER the lock drops (never under it — the fdgrp leaf-lock rule;
+/// a close can block).
+///
+/// Structural exclusions (BY DESIGN, never swept): devsrv's registered
+/// clone is registry-held (an Arc ref outside any fd slot — it survives
+/// exits so later boots mounts of #s/boot keep working), and the parked
+/// paqfs io child never exits (a server self-Tclunking during its own
+/// exit would deadlock its own RPC — impossible this era).
 pub(crate) fn exit_tail(proc: &mut Proc, msg: &[u8]) -> ! {
+    // 261104-b4p (item 4): detach + last-sharer sweep (see the doc comment).
+    let detached =
+        core::mem::replace(&mut proc.fd_group, Arc::new(Lock::new("fdgrp", FdGroup::<MAX_FDS>::new())));
+    if Arc::strong_count(&detached) == 1 {
+        let drained = {
+            let node = LockNode::new();
+            detached.lock(&node).drain_all()
+        };
+        for c in &drained {
+            port::namec::close_chan(c);
+        }
+    }
+    // count > 1: sharers keep the group; the detached Arc just drops.
     proc.free_user_mappings();
     proc.state = ProcState::Moribund;
     let pid = proc.pid;

@@ -125,6 +125,15 @@ fn dev_walk(c: &Chan, comp: &[u8]) -> Result<Chan> {
 /// child without RFNAMEG) takes the lock while serving.  This is
 /// sys_mount's documented discipline ("NO pgrp lock is held across the
 /// RPC") applied to resolution itself.
+///
+/// FID SWEEP (261104-b4p, item 5): every DEV_MNT chan this walk MINTS and
+/// walks PAST (walk-step results + redirect clones) collects in `swept`
+/// and is devmnt::clunk_if_last'd on EVERY exit — Ok and Err alike.  The
+/// Arc count is the second line of the discipline: the entry dup
+/// (Arc-shares the caller's slash/dot fid), chain-snapshot clones (the
+/// mount table's fid), and the RETURNED chan are structurally never
+/// clunked here (the count is never 1 for the shared cases; the returned
+/// chan is not in the sweep).
 pub fn namec(path: &[u8], slash: &Chan, dot: &Chan, pg: &Lock<Pgrp>, mode: NamecMode) -> Result<Chan> {
     if path.is_empty() {
         return Err("namec: empty file name");
@@ -145,6 +154,34 @@ pub fn namec(path: &[u8], slash: &Chan, dot: &Chan, pg: &Lock<Pgrp>, mode: Namec
         _ => (dot.dup(), path),
     };
 
+    let mut swept: alloc::vec::Vec<Chan> = alloc::vec::Vec::new();
+    let result = namec_walk(&mut c, rest, nomount, pg, mode, &mut swept);
+    for s in swept.drain(..) {
+        crate::devmnt::clunk_if_last(&s);
+    }
+    match result {
+        Ok(()) => Ok(c),
+        Err(msg) => {
+            // The in-flight chan never reaches the caller — sweep it too
+            // (clunk_if_last's count check protects the entry dup).
+            crate::devmnt::clunk_if_last(&c);
+            Err(msg)
+        }
+    }
+}
+
+/// The walk loop + final-component redirect (namec's body, factored so
+/// the fid sweep has ONE exit tail).  `c` is mutated in place; every
+/// walked-past DEV_MNT chan is pushed to `swept` (clunked by the caller
+/// on any exit).
+fn namec_walk(
+    c: &mut Chan,
+    rest: &[u8],
+    nomount: bool,
+    pg: &Lock<Pgrp>,
+    mode: NamecMode,
+    swept: &mut alloc::vec::Vec<Chan>,
+) -> Result<()> {
     // Walk the components (9k walk's loop): before each device walk,
     // cross a mount point if the current chan sits on one — then try the
     // component in the union chain's order (the crossing's head first, the
@@ -178,7 +215,10 @@ pub fn namec(path: &[u8], slash: &Chan, dot: &Chan, pg: &Lock<Pgrp>, mode: Namec
                 // mount table's server-side fid (devmnt::clone_chan).
                 let mut nc = redirect_clone(&head.to)?;
                 nc.path = c.path.clone();
-                c = nc;
+                let old = core::mem::replace(c, nc);
+                if old.dev == DEV_MNT {
+                    swept.push(old);
+                }
             }
             continue;
         }
@@ -198,10 +238,21 @@ pub fn namec(path: &[u8], slash: &Chan, dot: &Chan, pg: &Lock<Pgrp>, mode: Namec
             let Some(nc) = walked else {
                 return Err("namec: does not exist");
             };
-            c = nc;
+            let old = core::mem::replace(c, nc);
+            if old.dev == DEV_MNT {
+                swept.push(old);
+            }
             continue;
         }
-        c = dev_walk(&c, comp).map_err(|_| "namec: does not exist")?;
+        match dev_walk(c, comp) {
+            Ok(nc) => {
+                let old = core::mem::replace(c, nc);
+                if old.dev == DEV_MNT {
+                    swept.push(old);
+                }
+            }
+            Err(_) => return Err("namec: does not exist"),
+        }
     }
 
     // The final component's mount crossing (chan.c's namec tail):
@@ -227,10 +278,13 @@ pub fn namec(path: &[u8], slash: &Chan, dot: &Chan, pg: &Lock<Pgrp>, mode: Namec
             };
             let mut nc = redirect_clone(&head.to)?;
             nc.path = c.path.clone();
-            c = nc;
+            let old = core::mem::replace(c, nc);
+            if old.dev == DEV_MNT {
+                swept.push(old);
+            }
         }
     }
-    Ok(c)
+    Ok(())
 }
 
 /// The mount-redirect chan (05-09): a DEV_MNT head is fid-cloned (its own
@@ -323,19 +377,24 @@ pub fn create_chan(c: &Chan, name: &[u8], mode: u32, perm: u32) -> Result<Chan> 
 
 /// The close dispatch (05-06 — the donor's devclose): called when an
 /// open chan LEAVES an fd slot (sys_close's pop, sys_dup's overwrite
-/// eviction, sys_pipe/sys_open's error paths).  Only devices with close
-/// semantics act: devpipe decrements the end's open count (the last
-/// close hangs the peer's read queue up — the EOF path the connectembed
-/// teardown rides); devmnt Tclunks the fid (05-07 — best-effort, never
-/// fails).  Non-open chans (walk intermediates — copen clear) and
-/// close-less devices are no-ops.
+/// eviction, sys_pipe/sys_open's error paths) — and, 261104-b4p (item
+/// 5), whenever a WALKED-but-never-installed DEV_MNT chan leaves scope
+/// (namec's walk sweep, the syscall callers' walked-past chans).  Only
+/// devices with close semantics act: devpipe decrements the end's open
+/// count — COPEN-gated (the last close hangs the peer's read queue up —
+/// the EOF path the connectembed teardown rides); devmnt Tclunks the fid
+/// via clunk_if_last REGARDLESS of copen (05-07 — best-effort, never
+/// fails; walked-unopened chans hold fids too, and the Arc count makes
+/// non-last refs a no-op).  Non-open chans of close-less devices are
+/// no-ops.
 pub fn close_chan(c: &Chan) {
-    if !c.copen {
-        return;
-    }
     match c.dev {
-        DEV_PIPE => crate::devpipe::close(c),
-        DEV_MNT => crate::devmnt::clunk(c),
+        DEV_PIPE => {
+            if c.copen {
+                crate::devpipe::close(c);
+            }
+        }
+        DEV_MNT => crate::devmnt::clunk_if_last(c),
         _ => {}
     }
 }

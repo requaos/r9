@@ -706,12 +706,16 @@ fn devmnt_dup_close_clunks_exactly_once() {
 
     // The fd-table dup (sys_dup/rfork's ref_clone) is a SECOND reference
     // on the same fid, never a new fid: the first close must not Tclunk.
+    // (The kernel pops the chan out of its fd slot and the VALUE drops
+    // right after the dispatch — mirror that: drop each closed chan so
+    // the next close sees the true remaining count.)
     let dup = opened.dup();
     namec::close_chan(&opened);
     assert!(
         fids.borrow().contains_key(&adir_fid),
         "the first of two closes is not the last ref — no Tclunk"
     );
+    drop(opened);
     namec::close_chan(&dup);
     assert!(!fids.borrow().contains_key(&adir_fid), "the LAST ref's close Tclunks");
     assert_eq!(

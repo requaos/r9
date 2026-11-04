@@ -52,17 +52,20 @@
 //! the Chan-wrapping device ops are free functions/methods, dispatched by
 //! chan.dev via namec.rs's legs (DEV_MNT).
 //!
-//! Fid lifecycle this era: fids are allocated at walk/attach from a
-//! per-session counter (never reused — paqfs's Fid is ~50 bytes and the
-//! boot chain walks dozens, not millions); Tclunk fires on the close
-//! dispatch (opened chans) and on exec's explicit close.  Two r9
-//! divergences from the donor, both bounded and deliberate: (1) walk
-//! intermediates that never reach an fd leak their fid (the donor clunks
-//! on cclose; r9's value-chan drops are invisible to devices); (2) a
-//! dup'd open mnt chan SHARES the fid (the value-copy convention), so a
-//! double close can Tclunk twice — benign against paqfs (its rclunk of
-//! an idle fid is a no-op), wrong against a stricter server, revisited
-//! with the fid-refcount era.
+//! Fid lifecycle (261104-b4p — item 5 RESOLVED): fids are allocated at
+//! walk/attach from a per-session counter (never reused — paqfs's Fid is
+//! ~50 bytes and the boot chain walks dozens, not millions) and carried
+//! on the chan as `Option<Arc<u32>>`: dup CLONES the Arc, open SHARES the
+//! walked fid's Arc (the donor's open-doesn't-realloc shape), and the
+//! close dispatch (`clunk_if_last`) Tclunks only when the LAST ref
+//! leaves — exactly-once by construction, against any server.  namec's
+//! walk sweeps the DEV_MNT chans IT mints (walk-step results + redirect
+//! clones once walked past) on every exit, Ok and Err alike, so walk
+//! intermediates never leak server-side.  The two former divergences
+//! (intermediate leaks, dup double-Tclunk) are RETIRED.  One deliberate
+//! bound remains: mount-TABLE entries stay table-lifetime-pinned — an
+//! unmount/MREPL-replaced entry's fid is never Tclunk'd (deferred;
+//! bounded by the mount count, ~one fid per mount per boot).
 
 extern crate alloc;
 
@@ -802,6 +805,23 @@ pub fn clunk(c: &Chan) {
     if let Err(msg) = mnt.clunk(**fid) {
         println!("devmnt: clunk of fid {} failed: {msg}", fid);
     }
+}
+
+/// 261104-b4p (item 5 — the Arc'd fid's close rule): Tclunk ONLY when
+/// this chan is the fid's LAST live reference (Arc::strong_count == 1).
+/// Open shares the walked fid's Arc and dup clones it, so every close
+/// dispatch that is not the last ref skips — the value-copy era's
+/// double-Tclunk divergence is retired by construction (paqfs's rclunk
+/// no-op semantics stop being load-bearing).  Walked-but-never-opened
+/// chans hold fids too: namec's close arm and walk sweep call this
+/// REGARDLESS of copen.  Best-effort like clunk: a failure logs and
+/// swallows.
+pub fn clunk_if_last(c: &Chan) {
+    let Some(fid) = &c.mnt_fid else { return };
+    if Arc::strong_count(fid) != 1 {
+        return;
+    }
+    clunk(c);
 }
 
 /// sys_exec's byte source for a mounted binary (05-07 Task 2's wiring):

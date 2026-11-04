@@ -268,7 +268,13 @@ pub struct Proc {
     /// preopened at construction (D-15, Plan 9 convention).  The group
     /// Lock is a LEAF (syscall context only, briefly; never from IRQ
     /// context, never held across a blocking pipe op — the checked-out
-    /// chan pattern, fdgrp.rs).
+    /// chan pattern, fdgrp.rs).  261104-b4p (item 4 — the 05-06 exit-sweep
+    /// deferral RESOLVED): exit_tail detaches the dying proc's group and,
+    /// when it was the LAST sharer (Arc::strong_count == 1), drains every
+    /// occupied slot and close-dispatches each chan AFTER the lock drops
+    /// (the donor pexit closefgrp; syscall.rs's exit_tail comment names
+    /// the structural exclusions — the devsrv registry clone and the
+    /// parked paqfs io child are never swept BY DESIGN).
     pub fd_group: Arc<Lock<FdGroup<MAX_FDS>>>,
     /// User mappings, exec/fault-appended — rfork-copy/exit-free walk this.
     pub mapping_log: Vec<MappingRecord>,
@@ -1562,24 +1568,33 @@ pub fn rfork_noteg_split(proc: &mut Proc) {
 }
 
 /// The tick's timeout sweep (05-08; the donor's tsleep wakeup + alarm.c's
-/// alarmkproc expiry arm): ready every Blocked proc whose sys_sleep
-/// deadline passed, and post the "alarm" note to each proc whose armed
-/// alarm expired (disarming it — the donor's `rp->alarm = 0`).  Notes
-/// append via push_note (Moribund/full-queue skips are the donor
-/// pgrpnote's waserror shape); delivery rides the 04-08 return-to-EL0
-/// boundary unchanged.  PROC_TABLE from tick (trap) context — the
-/// reschedule() precedent (the module header's locking discipline).
+/// alarmkproc expiry arm; 261104-b4p item 6's note-interruptible sleep):
+/// per proc, the ALARM expiry arm runs FIRST (posting the "alarm" note
+/// and disarming — the donor's `rp->alarm = 0`), THEN the sleep wake arm
+/// readies a Blocked sleeper whose deadline passed OR whose note_queue is
+/// non-empty (a posted note interrupts the sleep — the donor tsleep
+/// shape; the sleeper's sys_sleep discriminates early-wake-vs-expiry
+/// against its local deadline copy, so this arm's alarm-first ordering
+/// makes an alarm fired at the same tick interrupt a sleep that would
+/// otherwise expire).  sleep_until clears either way.  Notes append via
+/// push_note (Moribund/full-queue skips are the donor pgrpnote's
+/// waserror shape); delivery rides the 04-08 return-to-EL0 boundary
+/// unchanged.  PROC_TABLE from tick (trap) context — the reschedule()
+/// precedent (the module header's locking discipline).
 pub fn tick_timeouts(now: u64) {
     let node = LockNode::new();
     let mut table = PROC_TABLE.lock(&node);
     for p in table.procs.iter_mut().flatten() {
-        if p.state == ProcState::Blocked && p.sleep_until != 0 && now >= p.sleep_until {
-            p.sleep_until = 0;
-            p.state = ProcState::Ready;
-        }
         if p.alarm_at != 0 && now >= p.alarm_at {
             p.alarm_at = 0;
             let _ = push_note(p, b"alarm");
+        }
+        if p.state == ProcState::Blocked
+            && p.sleep_until != 0
+            && (now >= p.sleep_until || !p.note_queue.is_empty())
+        {
+            p.sleep_until = 0;
+            p.state = ProcState::Ready;
         }
     }
 }
