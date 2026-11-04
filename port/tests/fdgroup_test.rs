@@ -152,3 +152,27 @@ fn fd_group_copy_shares_the_pipe_queue() {
     assert_eq!(&buf[..n as usize], b"alive");
     parent.store(1, parent_r);
 }
+
+/// 261104-b4p (item 4 — the donor pexit closefgrp's table half):
+/// drain_all takes EVERY occupied slot (leaving Nones) and returns the
+/// chans in slot order, leaving a reusable empty group — exit_tail's
+/// sweep shape (close dispatch happens on the drained Vec AFTER the
+/// group lock drops, never under it).
+#[test]
+fn fd_group_drain_all_empties_every_slot() {
+    let mut g = FdGroup::<N>::new();
+    assert_eq!(g.alloc_lowest(cons_chan()), Some(0));
+    assert_eq!(g.alloc_lowest(cons_chan()), Some(1));
+    assert_eq!(g.alloc_lowest(cons_chan()), Some(2));
+    g.take(1); // leave a hole — slots 0 and 2 occupied
+
+    let drained = g.drain_all();
+    assert_eq!(drained.len(), 2, "every occupied slot drains (order pinned: slot order)");
+    assert!(drained.iter().all(|c| c.dev == DEV_CONS), "the slot chans are returned");
+    assert!(g.get(0).is_none() && g.get(1).is_none() && g.get(2).is_none(), "the group is left empty");
+    assert!(g.list_open().is_empty(), "no open slots remain");
+
+    // The drained group is reusable (the Moribund proc holds it — a fresh
+    // alloc lands at slot 0).
+    assert_eq!(g.alloc_lowest(cons_chan()), Some(0), "the drained group is reusable");
+}

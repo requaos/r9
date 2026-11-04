@@ -674,28 +674,28 @@ pub fn fversion(chan: &mut Chan, offer: u32, out: &mut [u8]) -> Result<u64> {
 /// sys_mount's attach (donor mntattach via bindmount): attach the session's
 /// tree root and return the mount-root chan (DEV_MNT, fresh fid, the
 /// server's root qid).  The caller sets the path (the mount target's) and
-/// inserts it into the pgrp mount table.
+/// inserts it into the pgrp mount table.  261104-b4p: the fid is Arc'd.
 pub fn attach(mnt: &Arc<Mnt>, aname: &[u8]) -> Result<Chan> {
     let (fid, qid) = mnt.attach(b"glenda", aname)?;
     let mut c = Chan::new(DEV_MNT, qid, 0);
     c.mnt = Some(mnt.clone());
-    c.mnt_fid = fid;
+    c.mnt_fid = Some(Arc::new(fid));
     Ok(c)
 }
 
 /// The DEV_MNT walk leg (namec's dev_walk): Twalk to a fresh fid.
 pub fn walk(c: &Chan, name: &[u8]) -> Result<Chan> {
     let Some(mnt) = &c.mnt else { return Err("devmnt: walk of a non-mount chan") };
-    if c.mnt_fid == 0 {
+    let Some(fid) = &c.mnt_fid else {
         return Err("devmnt: walk of an fid-less chan");
-    }
+    };
     if c.qid.typ & QTDIR == 0 {
         return Err("devmnt: walk of a non-directory");
     }
-    let (newfid, qid) = mnt.walk(c.mnt_fid, name)?;
+    let (newfid, qid) = mnt.walk(**fid, name)?;
     let mut nc = Chan::new(DEV_MNT, qid, 0);
     nc.mnt = Some(mnt.clone());
-    nc.mnt_fid = newfid;
+    nc.mnt_fid = Some(Arc::new(newfid));
     nc.path = c.path.clone();
     nc.path.push(b'/');
     nc.path.extend_from_slice(name);
@@ -710,13 +710,13 @@ pub fn walk(c: &Chan, name: &[u8]) -> Result<Chan> {
 /// later walk from it Rerror'd).
 pub fn clone_chan(c: &Chan) -> Result<Chan> {
     let Some(mnt) = &c.mnt else { return Err("devmnt: clone of a non-mount chan") };
-    if c.mnt_fid == 0 {
+    let Some(fid) = &c.mnt_fid else {
         return Err("devmnt: clone of an fid-less chan");
-    }
-    let newfid = mnt.clone_fid(c.mnt_fid)?;
+    };
+    let newfid = mnt.clone_fid(**fid)?;
     let mut nc = Chan::new(DEV_MNT, c.qid, c.mode);
     nc.mnt = Some(mnt.clone());
-    nc.mnt_fid = newfid;
+    nc.mnt_fid = Some(Arc::new(newfid));
     nc.path = c.path.clone();
     Ok(nc)
 }
@@ -724,19 +724,23 @@ pub fn clone_chan(c: &Chan) -> Result<Chan> {
 /// The DEV_MNT open leg (namec's open_chan): Topen; directory opens are
 /// OREAD-only (the donor namec discipline); OTRUNC/ORCLOSE ride the wire
 /// byte for the server to answer (paqfs refuses both — Erdonly).
+/// 261104-b4p: the open SHARES the walked fid's Arc (the donor's
+/// open-doesn't-realloc shape) — the walked chan and the opened chan are
+/// two refs on ONE server-side fid, and the last ref's close dispatches
+/// the Tclunk.
 pub fn open(c: &Chan, mode: u32) -> Result<Chan> {
     let Some(mnt) = &c.mnt else { return Err("devmnt: open of a non-mount chan") };
-    if c.mnt_fid == 0 {
+    let Some(fid) = &c.mnt_fid else {
         return Err("devmnt: open of an fid-less chan");
-    }
+    };
     let access = mode & OMASK;
     if c.qid.typ & QTDIR != 0 && access != OREAD {
         return Err("devmnt: directory opens OREAD only");
     }
-    let (qid, _iounit) = mnt.open(c.mnt_fid, (mode & 0xff) as u8)?;
+    let (qid, _iounit) = mnt.open(**fid, (mode & 0xff) as u8)?;
     let mut nc = Chan::new(DEV_MNT, qid, access);
     nc.mnt = Some(mnt.clone());
-    nc.mnt_fid = c.mnt_fid;
+    nc.mnt_fid = c.mnt_fid.clone();
     nc.path = c.path.clone();
     Ok(nc)
 }
@@ -746,15 +750,15 @@ pub fn open(c: &Chan, mode: u32) -> Result<Chan> {
 /// chan's streaming offset (the pread convention).
 pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
     let Some(mnt) = &c.mnt else { return Err("devmnt: read of a non-mount chan") };
-    if c.mnt_fid == 0 {
+    let Some(fid) = &c.mnt_fid else {
         return Err("devmnt: read of an fid-less chan");
-    }
+    };
     let cap = rpc_data_cap(mnt.msize());
     let mut off = if offset == u64::MAX { c.offset } else { offset };
     let mut done = 0usize;
     while done < buf.len() {
         let want = (buf.len() - done).min(cap);
-        let data = mnt.read(c.mnt_fid, off, want as u32)?;
+        let data = mnt.read(**fid, off, want as u32)?;
         let n = data.len();
         buf[done..done + n].copy_from_slice(&data);
         off += n as u64;
@@ -773,10 +777,10 @@ pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
 /// truncation shape (a tight buffer gets just the count prefix).
 pub fn stat(c: &Chan, sb: &mut [u8]) -> Result<u64> {
     let Some(mnt) = &c.mnt else { return Err("devmnt: stat of a non-mount chan") };
-    if c.mnt_fid == 0 {
+    let Some(fid) = &c.mnt_fid else {
         return Err("devmnt: stat of an fid-less chan");
-    }
-    let payload = mnt.stat(c.mnt_fid)?;
+    };
+    let payload = mnt.stat(**fid)?;
     if payload.len() > sb.len() {
         // The donor mntstat truncation: the count prefix alone.
         if sb.len() < 2 {
@@ -794,11 +798,9 @@ pub fn stat(c: &Chan, sb: &mut [u8]) -> Result<u64> {
 /// a failure logs and swallows (the donor's cclose never fails).
 pub fn clunk(c: &Chan) {
     let Some(mnt) = &c.mnt else { return };
-    if c.mnt_fid == 0 {
-        return;
-    }
-    if let Err(msg) = mnt.clunk(c.mnt_fid) {
-        println!("devmnt: clunk of fid {} failed: {msg}", c.mnt_fid);
+    let Some(fid) = &c.mnt_fid else { return };
+    if let Err(msg) = mnt.clunk(**fid) {
+        println!("devmnt: clunk of fid {} failed: {msg}", fid);
     }
 }
 
@@ -812,16 +814,16 @@ pub fn clunk(c: &Chan) {
 /// "too large".
 pub fn read_all(c: &Chan, cap: usize) -> Result<Vec<u8>> {
     let Some(mnt) = &c.mnt else { return Err("devmnt: read of a non-mount chan") };
-    if c.mnt_fid == 0 {
+    let Some(fid) = &c.mnt_fid else {
         return Err("devmnt: read of an fid-less chan");
-    }
+    };
     let rpc_cap = rpc_data_cap(mnt.msize());
     let mut out = Vec::new();
     loop {
         // want is always ≥ 1 here: out.len() ≤ cap (a larger length
         // errored below), so cap + 1 - out.len() ≥ 1.
         let want = rpc_cap.min(cap + 1 - out.len());
-        let data = mnt.read(c.mnt_fid, out.len() as u64, want as u32)?;
+        let data = mnt.read(**fid, out.len() as u64, want as u32)?;
         if data.is_empty() {
             break; // EOF — the file fits within the cap
         }

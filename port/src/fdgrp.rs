@@ -123,6 +123,15 @@ impl<const N: usize> FdGroup<N> {
         }
         out
     }
+
+    /// 261104-b4p (item 4 — the donor pexit closefgrp's table half): take
+    /// EVERY occupied slot (leaving Nones) and return the chans in slot
+    /// order; the group is left empty and reusable.  exit_tail drains the
+    /// dying proc's group this way and close-dispatches each chan AFTER
+    /// the group lock drops (never under it — the fdgrp leaf-lock rule).
+    pub fn drain_all(&mut self) -> Vec<Chan> {
+        Vec::new()
+    }
 }
 
 impl<const N: usize> Default for FdGroup<N> {

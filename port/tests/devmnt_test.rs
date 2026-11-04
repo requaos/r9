@@ -182,6 +182,9 @@ fn pack_stat(n: &Node, qid_path: u64) -> Vec<u8> {
 struct FakeServer {
     outq: VecDeque<u8>,
     fids: Rc<RefCell<HashMap<u32, u64>>>, // fid → node qid path
+    /// 261104-b4p (item 5): the Tclunk record — EVERY clunked fid, in
+    /// order (the exactly-once assertions read this, not just the table).
+    clunked: Rc<RefCell<Vec<u32>>>,
     /// The server's msize answer cap (rversion: min(offer, this)).
     server_msize: u32,
     /// Malformation knobs (T-05-13's rejection proofs):
@@ -194,12 +197,14 @@ struct FakeServer {
 }
 
 impl FakeServer {
-    fn new() -> (FakeServer, Rc<RefCell<HashMap<u32, u64>>>) {
+    fn new() -> (FakeServer, Rc<RefCell<HashMap<u32, u64>>>, Rc<RefCell<Vec<u32>>>) {
         let fids = Rc::new(RefCell::new(HashMap::new()));
+        let clunked = Rc::new(RefCell::new(Vec::new()));
         (
             FakeServer {
                 outq: VecDeque::new(),
                 fids: Rc::clone(&fids),
+                clunked: Rc::clone(&clunked),
                 server_msize: 8192,
                 inflate_msize: false,
                 size_boost: 0,
@@ -209,6 +214,7 @@ impl FakeServer {
                 replies: 0,
             },
             fids,
+            clunked,
         )
     }
 
@@ -355,6 +361,7 @@ impl FakeServer {
             TCLUNK => {
                 let fid = c.u32();
                 self.fids.borrow_mut().remove(&fid);
+                self.clunked.borrow_mut().push(fid);
                 self.finish(RCLUNK, tag, &[])
             }
             _ => self.rerror(tag, b"bad fcall type"),
@@ -380,9 +387,17 @@ impl MntIo for FakeServer {
 /// Build a negotiated session over a fresh, well-behaved fake (and the
 /// shared fid table for server-side assertions).
 fn session() -> (Mnt, Rc<RefCell<HashMap<u32, u64>>>) {
-    let (fake, fids) = FakeServer::new();
+    let (fake, fids, _clunked) = FakeServer::new();
     let mnt = Mnt::negotiate(Box::new(fake), 0).expect("the version handshake negotiates");
     (mnt, fids)
+}
+
+/// 261104-b4p: a session with the Tclunk record exposed (the fid
+/// lifecycle pins assert exact clunk counts, not just table presence).
+fn session_with_clunk_log() -> (Mnt, Rc<RefCell<HashMap<u32, u64>>>, Rc<RefCell<Vec<u32>>>) {
+    let (fake, fids, clunked) = FakeServer::new();
+    let mnt = Mnt::negotiate(Box::new(fake), 0).expect("the version handshake negotiates");
+    (mnt, fids, clunked)
 }
 
 // ---------------------------------------------------------------------------
@@ -439,7 +454,7 @@ fn devmnt_version_attach_walk_open_read_stat_clunk_round_trip() {
 
 #[test]
 fn devmnt_version_accepts_servers_lower_answer() {
-    let (mut fake, _fids) = FakeServer::new();
+    let (mut fake, _fids, _cl) = FakeServer::new();
     fake.server_msize = 2048;
     let mnt = Mnt::negotiate(Box::new(fake), 0).expect("the server answers lower");
     assert_eq!(mnt.msize(), 2048, "the negotiated msize is the server's lower answer");
@@ -447,7 +462,7 @@ fn devmnt_version_accepts_servers_lower_answer() {
 
 #[test]
 fn devmnt_rejects_server_msize_increase() {
-    let (mut fake, _fids) = FakeServer::new();
+    let (mut fake, _fids, _cl) = FakeServer::new();
     fake.inflate_msize = true; // the server answers HIGHER than the offer
     let err = Mnt::negotiate(Box::new(fake), 0).expect_err("a raised msize is a protocol error");
     assert!(err.contains("msize"), "the error names the msize violation: {err}");
@@ -459,7 +474,7 @@ fn devmnt_rejects_oversized_reply() {
     // msize is rejected BEFORE any field is trusted.  The knob is armed
     // BEFORE the handshake, so the Rversion's size field (19 real bytes +
     // 8192 boost = 8211 claimed) exceeds the 8192 offer.
-    let (mut fake, _fids) = FakeServer::new();
+    let (mut fake, _fids, _cl) = FakeServer::new();
     fake.size_boost = 8192;
     let err = Mnt::negotiate(Box::new(fake), 0)
         .expect_err("an R-message claiming more than the msize is a protocol error");
@@ -468,7 +483,7 @@ fn devmnt_rejects_oversized_reply() {
     // And post-negotiation: a clean handshake, then the ATTACH reply's
     // size field is inflated (20 real bytes + 8192 = 8212 > the
     // negotiated 8192) — the session bound, not just the handshake's.
-    let (mut fake2, _f) = FakeServer::new();
+    let (mut fake2, _f, _c2) = FakeServer::new();
     fake2.size_boost_after_first = 8192;
     let mnt = Mnt::negotiate(Box::new(fake2), 0).expect("a clean handshake negotiates");
     let err = mnt
@@ -479,7 +494,7 @@ fn devmnt_rejects_oversized_reply() {
 
 #[test]
 fn devmnt_rejects_tag_mismatch() {
-    let (mut fake, _fids) = FakeServer::new();
+    let (mut fake, _fids, _cl) = FakeServer::new();
     fake.wrong_tag = true; // every reply's tag is off by one
     let err = Mnt::negotiate(Box::new(fake), 0)
         .expect_err("a reply tag that is not the outstanding tag is a protocol error");
@@ -495,7 +510,7 @@ fn devmnt_walk_not_found_is_a_loud_error() {
     assert!(err.contains("devmnt"), "the error is a devmnt errstr: {err}");
     // The donor's other shape: Rwalk with nwqid < nwname (0 for a
     // single-name walk) is also the not-found.
-    let (mut fake2, _f) = FakeServer::new();
+    let (mut fake2, _f, _c2) = FakeServer::new();
     fake2.walk_zero_qid = true;
     let mnt2 = Mnt::negotiate(Box::new(fake2), 0).expect("negotiate");
     let (fid2, _) = mnt2.attach(b"glenda", b"").expect("attach");
@@ -652,4 +667,127 @@ fn devmnt_read_all_exact_cap_and_over_cap() {
 
     let staged = devmnt::read_all(&opened, 4096).expect("wide-cap stage succeeds");
     assert_eq!(staged, LEAF_CONTENT);
+}
+
+// ---------------------------------------------------------------------------
+// 261104-b4p (item 5 — the fid lifecycle): the Arc'd fid's exactly-once
+// close dispatch + namec's walk-intermediate sweep.  The fid table maps
+// fid → qid path, so fids are named test-side by the node they name.
+// ---------------------------------------------------------------------------
+
+/// The fid currently naming `qid` server-side (None when clunked/never
+/// minted).
+fn fid_for(fids: &Rc<RefCell<HashMap<u32, u64>>>, qid: u64) -> Option<u32> {
+    fids.borrow().iter().find(|(_, q)| **q == qid).map(|(f, _)| *f)
+}
+
+/// An open-then-dup'd chan closed twice Tclunks EXACTLY ONCE (the last
+/// ref only — the value-copy era's double-Tclunk divergence retired):
+/// open SHARES the walked fid's Arc, dup clones it, and only the final
+/// close dispatches.
+#[test]
+fn devmnt_dup_close_clunks_exactly_once() {
+    let (mnt, fids, clunked) = session_with_clunk_log();
+    let mnt = Arc::new(mnt);
+    let root = devmnt::attach(&mnt, b"").expect("attach the fake tree");
+
+    let adir = devmnt::walk(&root, b"adir").expect("walk adir");
+    let adir_fid = fid_for(&fids, QID_ADIR).expect("the server holds the adir fid");
+
+    // open shares the walked fid (open-doesn't-realloc); the walked-past
+    // intermediate's close dispatch is NOT the last ref — no Tclunk.
+    let opened = namec::open_chan(&adir, 0).expect("open adir OREAD");
+    namec::close_chan(&adir);
+    assert!(
+        fids.borrow().contains_key(&adir_fid),
+        "the intermediate's close never clunks a shared fid"
+    );
+    drop(adir); // the walked chan leaves scope (the Arc decrements)
+
+    // The fd-table dup (sys_dup/rfork's ref_clone) is a SECOND reference
+    // on the same fid, never a new fid: the first close must not Tclunk.
+    let dup = opened.dup();
+    namec::close_chan(&opened);
+    assert!(
+        fids.borrow().contains_key(&adir_fid),
+        "the first of two closes is not the last ref — no Tclunk"
+    );
+    namec::close_chan(&dup);
+    assert!(!fids.borrow().contains_key(&adir_fid), "the LAST ref's close Tclunks");
+    assert_eq!(
+        clunked.borrow().iter().filter(|f| **f == adir_fid).count(),
+        1,
+        "exactly one Tclunk for the shared fid (T-b4p-01's pin)"
+    );
+
+    // The attach (mount-root) fid is untouched throughout.
+    assert!(fid_for(&fids, QID_ROOT).is_some(), "the attach fid survives");
+}
+
+/// A two-component namec walk through a mounted tree leaves NO
+/// intermediate fids server-side while the final fid lives (the walk
+/// intermediates' leak retired — swept on the SUCCESS exit).
+#[test]
+fn devmnt_namec_walk_sweeps_intermediate_fids() {
+    let slash = fixture_slash();
+    let pg = Lock::new("pgrp-test", Pgrp::new());
+    let (mnt, fids, clunked) = session_with_clunk_log();
+    let root = devmnt::attach(&Arc::new(mnt), b"").expect("attach the fake tree");
+    let tgt = namec::namec(b"/dir", &slash, &slash, &pg, NamecMode::MountTarget)
+        .expect("the mount target resolves");
+    let node = LockNode::new();
+    pg.lock(&node).bind(root, &tgt, pgrp::MREPL).expect("the mount inserts");
+    let attach_fid = fid_for(&fids, QID_ROOT).expect("the table holds the attach fid");
+
+    let leaf = namec::namec(b"/dir/adir/leaf.txt", &slash, &slash, &pg, NamecMode::Open)
+        .expect("the crossed file resolves");
+    assert_eq!(leaf.dev, DEV_MNT);
+    let leaf_fid = fid_for(&fids, QID_LEAF).expect("the final fid lives server-side");
+    assert!(
+        !fids.borrow().values().any(|q| *q == QID_ADIR),
+        "the walk intermediate's fid was clunked on the success exit (no server-side leak)"
+    );
+    assert_eq!(
+        fids.borrow().len(),
+        2,
+        "only the mount table's attach fid + the returned chan's fid remain"
+    );
+    assert!(fids.borrow().contains_key(&attach_fid), "the mount table's fid is never touched");
+    assert!(fids.borrow().contains_key(&leaf_fid));
+    // The intermediate's clunk is recorded (the sweep really Tclunk'd —
+    // not merely dropped).
+    let adir_clunks = {
+        let log = clunked.borrow();
+        let live: Vec<u32> = fids.borrow().keys().copied().collect();
+        log.iter().filter(|f| !live.contains(f)).count()
+    };
+    assert!(adir_clunks >= 1, "the sweep dispatched a real Tclunk for the intermediate");
+}
+
+/// A mid-walk not-found Err clunks the intermediates minted so far (the
+/// sweep fires on EVERY exit — Err alike).
+#[test]
+fn devmnt_namec_walk_error_clunks_intermediates() {
+    let slash = fixture_slash();
+    let pg = Lock::new("pgrp-test", Pgrp::new());
+    let (mnt, fids, _clunked) = session_with_clunk_log();
+    let root = devmnt::attach(&Arc::new(mnt), b"").expect("attach the fake tree");
+    let tgt = namec::namec(b"/dir", &slash, &slash, &pg, NamecMode::MountTarget)
+        .expect("the mount target resolves");
+    let node = LockNode::new();
+    pg.lock(&node).bind(root, &tgt, pgrp::MREPL).expect("the mount inserts");
+    let attach_fid = fid_for(&fids, QID_ROOT).expect("the table holds the attach fid");
+
+    // adir resolves, then "nosuch" fails — the adir intermediate was
+    // minted before the error and must be clunked on the Err exit.
+    assert!(
+        namec::namec(b"/dir/adir/nosuch", &slash, &slash, &pg, NamecMode::Open).is_err(),
+        "a missing final component errors"
+    );
+    assert!(
+        !fids.borrow().values().any(|q| *q == QID_ADIR),
+        "the mid-walk intermediate was clunked on the error exit"
+    );
+    assert!(fids.borrow().contains_key(&attach_fid), "the mount table's fid is never touched");
+    assert_eq!(fids.borrow().len(), 1, "only the table's attach fid remains");
 }

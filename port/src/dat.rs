@@ -114,15 +114,18 @@ pub struct Chan {
     /// tree.  dup CLONES the Arc: devsrv's posted clone of the boot pipe
     /// carries the session to settime/newns's mounts.
     pub(crate) mnt: Option<Arc<crate::devmnt::Mnt>>,
-    /// The server-side fid this chan names (DEV_MNT chans only; 0 = none).
-    /// dup shares it (the value-copy convention — see devmnt.rs's fid
-    /// lifecycle note for the double-clunk implication).
-    pub(crate) mnt_fid: u32,
+    /// The server-side fid this chan names (DEV_MNT chans only; None =
+    /// fid-less).  261104-b4p (item 5): the fid is Arc'd — dup() CLONES
+    /// the Arc (the fid's reference count is real, shared across every
+    /// dup/open of the same walked chan), and the close dispatch
+    /// (devmnt::clunk_if_last) Tclunks only when the LAST ref leaves
+    /// (Arc::strong_count == 1) — the double-Tclunk divergence retired.
+    pub(crate) mnt_fid: Option<Arc<u32>>,
 }
 
 impl Chan {
     pub fn new(dev: usize, qid: Qid, mode: u32) -> Chan {
-        Chan { qid, mode, offset: 0, dev, path: Vec::new(), paqdir: None, pipe: None, copen: false, mnt: None, mnt_fid: 0 }
+        Chan { qid, mode, offset: 0, dev, path: Vec::new(), paqdir: None, pipe: None, copen: false, mnt: None, mnt_fid: None }
     }
 
     /// Mark the chan open (COPEN) OUTSIDE the funnel — the one
@@ -164,7 +167,7 @@ impl Chan {
             pipe: self.pipe.clone(),
             copen: self.copen,
             mnt: self.mnt.clone(),
-            mnt_fid: self.mnt_fid,
+            mnt_fid: self.mnt_fid.clone(),
         }
     }
 }
