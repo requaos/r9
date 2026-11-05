@@ -19,6 +19,7 @@
 //! lock-free ring; the ring→queue drain runs in the reader's own syscall
 //! context via timer.rs → proc::cons_input_wake).
 
+use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
@@ -1817,9 +1818,12 @@ fn sys_exits(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 /// paqfs io child never exits (a server self-Tclunking during its own
 /// exit would deadlock its own RPC — impossible this era).
 pub(crate) fn exit_tail(proc: &mut Proc, msg: &[u8]) -> ! {
-    // Detach + last-sharer sweep (see the doc comment).
-    let detached =
-        core::mem::replace(&mut proc.fd_group, Arc::new(Lock::new("fdgrp", FdGroup::<MAX_FDS>::new())));
+    // Detach + last-sharer sweep (see the doc comment).  The replacement
+    // is the SHARED empty group (proc.rs's empty_fdgroup): a fresh 32-slot
+    // table per exit was ~6 KB of heap retained per husk, and the tier-1
+    // sweep's ~200 fork+exit cycles measured the arena wall — a dead proc
+    // never touches its group, so the sharing is never observed.
+    let detached = core::mem::replace(&mut proc.fd_group, proc::empty_fdgroup());
     if Arc::strong_count(&detached) == 1 {
         let drained = {
             let node = LockNode::new();
@@ -1834,6 +1838,13 @@ pub(crate) fn exit_tail(proc: &mut Proc, msg: &[u8]) -> ! {
     // removes the proc from the rendezvous hash the same way).
     proc::rendez_remove(proc);
     proc.free_user_mappings();
+    // Drop the husk's remaining heap payloads (the slot itself is never
+    // reaped this era — its Vec/Arc payloads must not ride along):
+    // mapping_log/segments/text_source went with free_user_mappings; the
+    // exec-recorded argv and the wait-record/note queues go here.
+    proc.argv = Vec::new();
+    proc.wait_records = VecDeque::new();
+    proc.note_queue = VecDeque::new();
     proc.state = ProcState::Moribund;
     let pid = proc.pid;
     println!("process {pid} exited: \"{}\"", core::str::from_utf8(msg).unwrap_or("<bad utf8>"));

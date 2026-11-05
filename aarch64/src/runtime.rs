@@ -19,6 +19,6 @@ pub fn panic(info: &PanicInfo) -> ! {
 }
 
 #[alloc_error_handler]
-fn oom(_layout: Layout) -> ! {
-    panic!("oom");
+fn oom(layout: Layout) -> ! {
+    panic!("oom: size={} align={} (arena exhausted)", layout.size(), layout.align());
 }

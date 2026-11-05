@@ -487,6 +487,11 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
         block: proc::pipe_block_current,
         wake: proc::pipe_wake,
     });
+    // devmnt's contention-wait hook (06-07): a concurrent RPC caller
+    // parks ~1 tick and retries (the tier-1 sweep's pipelines are the
+    // first measured concurrent mount-session callers) — the same
+    // injected-hook idiom (port can't see PROC_TABLE).
+    port::devmnt::set_contention_hook(proc::mnt_contention_wait);
     // devether's EtherHooks (07-07) — the same shape: a data-file read
     // on an empty conversation queue parks the caller; the RX ingress
     // (the virtio-net IRQ retire's port-side entry) wakes the waiters,

@@ -1408,6 +1408,46 @@ pub fn pipe_wake(pids: &[u64]) {
     }
 }
 
+/// devmnt's RPC-contention wait (registered with port::devmnt at boot —
+/// port can't see PROC_TABLE, the devpipe set_hooks idiom): park the
+/// caller ~1 tick and let its enter() retry.  The 1 kHz tick's
+/// tick_timeouts always readies an expired sleeper — never a spin, never
+/// a lost wake, never a wedge (qlock(9)'s block-and-retry at this era's
+/// granularity).  sys_sleep's shape, minus the errstr bookkeeping.  The
+/// first measured concurrent caller is the 06-07 tier-1 sweep's
+/// pipelines (two children exec through the shared mount session
+/// concurrently).  dev_exec-only: the platform timer module exists only
+/// on the exec profiles (raspi has none — and no userspace to contend).
+#[cfg(dev_exec)]
+pub fn mnt_contention_wait() {
+    let mut cur = current().expect("mnt contention wait with no current process");
+    cur.sleep_until = crate::platform::timer::ticks() + 1;
+    sched();
+}
+
+/// The exit-time shared empty fd group (06-07, measured at the tier-1
+/// gate): exit_tail detaches the dying proc's group by REPLACING it, and
+/// the husk keeps the replacement forever (slots are never reaped this
+/// era) — a FRESH 32-slot FdGroup per exit is ~6 KB of heap retained per
+/// husk, and the tier-1 sweep's ~200 fork+exit cycles measured the arena
+/// wall.  Every husk shares ONE empty group instead (a dead proc never
+/// touches its group again, so the sharing is never observed).  The
+/// DRAIN decision reads the DETACHED (old) group's strong count — the
+/// replacement's sharing is invisible to it.
+pub fn empty_fdgroup() -> Arc<Lock<FdGroup<MAX_FDS>>> {
+    let node = LockNode::new();
+    let mut guard = EMPTY_FDGROUP.lock(&node);
+    if guard.is_none() {
+        *guard = Some(Arc::new(Lock::new("fdgrp", FdGroup::<MAX_FDS>::new())));
+    }
+    guard.as_ref().unwrap().clone()
+}
+
+/// The one shared empty fd group (lazily built at the first exit — a
+/// Vec allocation, so not const-constructible).
+static EMPTY_FDGROUP: Lock<Option<Arc<Lock<FdGroup<MAX_FDS>>>>> = Lock::new("emptyfdgrp", None);
+
+
 /// devproc-lite's write hook: append the note to the
 /// ADDRESSED pid's queue — no broadcast, no group semantics.  The write is
 /// the whole posting path (libc postnote(PNPROC) lands here via

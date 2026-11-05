@@ -70,7 +70,7 @@ use alloc::vec::Vec;
 
 use crate::dat::{Chan, Qid, DEV_MNT, DEV_PIPE, OMASK, ORDWR, OREAD, QTDIR};
 use crate::devpipe;
-use crate::mcslock::BusyCell;
+use crate::mcslock::{BusyCell, Lock, LockNode};
 use crate::println;
 use crate::Result;
 
@@ -299,13 +299,62 @@ impl core::fmt::Debug for Mnt {
     }
 }
 
+/// The arch-side contention-wait hook (the devpipe set_hooks idiom —
+/// port can't see PROC_TABLE): on RPC ownership contention the caller
+/// parks ~1 tick and retries (06-07's measured first concurrent caller —
+/// the tier-1 sweep's pipelines — needed the wait, not the loud error).
+/// Registered at boot before the first exec; absent on no-userspace
+/// profiles, where the loud error stays the (unreachable) fallback.
+static CONTENTION_WAIT: Lock<Option<fn()>> = Lock::new("devmnt-ctw", None);
+
+/// Register the arch-side contention-wait hook.  Once only.
+pub fn set_contention_hook(f: fn()) {
+    let node = LockNode::new();
+    let mut guard = CONTENTION_WAIT.lock(&node);
+    assert!(guard.is_none(), "devmnt: contention hook registered twice");
+    *guard = Some(f);
+}
+
+/// Park the current caller briefly so a concurrent RPC contender retries
+/// instead of failing (the hook fn is Copy; the leaf lock is never held
+/// across the park).
+fn contention_wait() -> Result<()> {
+    let f = {
+        let node = LockNode::new();
+        let guard = CONTENTION_WAIT.lock(&node);
+        *guard
+    };
+    match f {
+        Some(f) => {
+            f();
+            Ok(())
+        }
+        None => Err("devmnt: concurrent rpc this era"),
+    }
+}
+
 impl Mnt {
     /// Take RPC ownership (the era's serialization): one outstanding RPC
-    /// per session; a concurrent attempt is a LOUD error, never a wedge.
+    /// per session.  A concurrent attempt BLOCKS-and-retries at ~1-tick
+    /// granularity (qlock(9) at this era's shape): the contender parks via
+    /// the injected contention hook and the 1 kHz tick always readies an
+    /// expired sleeper (never a spin, never a lost wake, never a wedge).
+    /// The first measured concurrent caller is the 06-07 tier-1 sweep —
+    /// its pipelines' two children exec through the shared mount session
+    /// concurrently (measured on the composed gate: the pipeline checks
+    /// failed with "namec: does not exist" — namec.rs:260 masks this
+    /// error).  The pre-measurement shape (05-07, no measured concurrent
+    /// caller) was a loud error; the loud error stays as the fallback
+    /// when no hook is registered (bare/no-userspace profiles).
     /// The BusyCell guard IS the token — its Drop releases
     /// the session on any exit path.
     fn enter(&self) -> Result<crate::mcslock::BusyGuard<'_, MntCore>> {
-        self.core.enter().ok_or("devmnt: concurrent rpc this era")
+        loop {
+            if let Some(g) = self.core.enter() {
+                return Ok(g);
+            }
+            contention_wait()?;
+        }
     }
 
     /// The whole RPC round-trip (donor mountrpc + the receive half of
