@@ -344,17 +344,49 @@ impl<'a> DeviceTree<'a> {
     /// Return the first node carrying `phandle = <phandle>`, or None when
     /// no node does.  Interrupt-map parents are phandle references —
     /// resolving them is how the tuple stride's parent half is known.
-    pub fn find_phandle(&self, _phandle: u32) -> Option<Node> {
-        // RED STUB — GREEN implements the nodes() scan.
-        None
+    pub fn find_phandle(&self, phandle: u32) -> Option<Node> {
+        self.nodes().find(|n| {
+            self.property(n, "phandle").and_then(|p| self.property_value_as_u32(&p))
+                == Some(phandle)
+        })
     }
 
     /// The node's `#interrupt-cells` value, or None when the property is
     /// absent.  Absence is never a silent default: a node participating
     /// in interrupt routing without the property is malformed.
-    pub fn node_interrupt_cells(&self, _node: &Node) -> Option<usize> {
-        // RED STUB — GREEN reads the property.
-        None
+    pub fn node_interrupt_cells(&self, node: &Node) -> Option<usize> {
+        self.property(node, "#interrupt-cells")
+            .and_then(|p| self.property_value_as_u32(&p))
+            .map(|v| v as usize)
+    }
+
+    /// The byte slice + cell-count layout for `node`'s interrupt-map, or
+    /// None when any required piece is absent or malformed: the property
+    /// itself, the node's own #address-cells/#interrupt-cells, the first
+    /// tuple's parent phandle resolving to a node, and that parent's
+    /// #address-cells/#interrupt-cells (at most 3 — PciIrqMap carries
+    /// three specifier cells).  Every absence is a loud None: no default
+    /// cell count is ever assumed.
+    fn interrupt_map_layout(&self, node: &Node) -> Option<(&[u8], usize, usize, usize, usize)> {
+        let prop = self.property(node, "interrupt-map")?;
+        let value = self.property_value_bytes(&prop)?;
+        let child_addr_cells = self
+            .property(node, "#address-cells")
+            .and_then(|p| self.property_value_as_u32(&p))? as usize;
+        let child_intr_cells = self.node_interrupt_cells(node)?;
+        // The parent half of the stride comes from the FIRST tuple's
+        // phandle (all 16 committed entries share the GIC parent).
+        let phandle_off = (child_addr_cells + child_intr_cells) * 4;
+        let parent_phandle = value.get(phandle_off..).and_then(bytes_to_u32)?;
+        let parent = self.find_phandle(parent_phandle)?;
+        let parent_addr_cells = self
+            .property(&parent, "#address-cells")
+            .and_then(|p| self.property_value_as_u32(&p))? as usize;
+        let parent_intr_cells = self.node_interrupt_cells(&parent)?;
+        if parent_intr_cells > 3 {
+            return None;
+        }
+        Some((value, child_addr_cells, child_intr_cells, parent_addr_cells, parent_intr_cells))
     }
 
     /// Iterate a pci host node's `interrupt-map` property as decoded
@@ -362,9 +394,10 @@ impl<'a> DeviceTree<'a> {
     /// the interrupt parent's (resolved via the first tuple's phandle);
     /// an absent map, absent cell counts, or an unresolvable parent
     /// yields an empty iterator (the lookup layer's loud None).
-    pub fn interrupt_map_iter(&self, _node: Node) -> impl Iterator<Item = PciIrqMap> + '_ {
-        // RED STUB — GREEN wires interrupt_map_layout + decode.
-        decode_interrupt_map(&[], 0, 0, 0, 0)
+    pub fn interrupt_map_iter(&self, node: Node) -> impl Iterator<Item = PciIrqMap> + '_ {
+        let (value, ca, ci, pa, pi) =
+            self.interrupt_map_layout(&node).map_or((&[][..], 0, 0, 0, 0), |l| l);
+        decode_interrupt_map(value, ca, ci, pa, pi)
     }
 
     /// Masked interrupt-map lookup for a PCI (bus, dev, fn, pin): apply
@@ -373,14 +406,29 @@ impl<'a> DeviceTree<'a> {
     /// loud None — no default route is ever invented.
     pub fn interrupt_map_lookup(
         &self,
-        _node: Node,
-        _bus: u32,
-        _dev: u32,
-        _fun: u32,
-        _pin: u8,
+        node: Node,
+        bus: u32,
+        dev: u32,
+        fun: u32,
+        pin: u8,
     ) -> Option<PciIrqMap> {
-        // RED STUB — GREEN applies the mask over interrupt_map_iter.
-        None
+        let mask = self.property(&node, "interrupt-map-mask")?;
+        let mut cells = self.property_value_as_u32_iter(&mask);
+        let mask_hi = cells.next()?;
+        let mask_mid = cells.next()?;
+        let mask_lo = cells.next()?;
+        let mask_pin = cells.next()?;
+        // PciIrqMap keys on phys.hi + pin only, so a mask routing on the
+        // mid/lo cells is unsupported — loudly (the committed DTB's mask
+        // is 0x1800/0/0/0x07).
+        if mask_mid != 0 || mask_lo != 0 {
+            return None;
+        }
+        let key_hi = (bus << 16) | (dev << 11) | (fun << 8);
+        self.interrupt_map_iter(node).find(|e| {
+            (e.child_hi & mask_hi) == (key_hi & mask_hi)
+                && ((e.pin as u32) & mask_pin) == ((pin as u32) & mask_pin)
+        })
     }
 
     fn property_value_contains(&self, prop: &Property, bytes_to_find: &str) -> bool {
@@ -829,14 +877,35 @@ pub struct PciIrqMap {
 /// parent-intr cells).  A zero stride or a tail shorter than one tuple
 /// terminates iteration — never a panic, never a partial tuple (T-07-03).
 fn decode_interrupt_map(
-    _bytes: &[u8],
-    _child_addr_cells: usize,
-    _child_intr_cells: usize,
-    _parent_addr_cells: usize,
-    _parent_intr_cells: usize,
+    bytes: &[u8],
+    child_addr_cells: usize,
+    child_intr_cells: usize,
+    parent_addr_cells: usize,
+    parent_intr_cells: usize,
 ) -> impl Iterator<Item = PciIrqMap> + '_ {
-    // RED STUB — GREEN decodes the packed tuples.
-    core::iter::empty()
+    let stride =
+        (child_addr_cells + child_intr_cells + 1 + parent_addr_cells + parent_intr_cells) * 4;
+    let mut i = 0usize;
+    core::iter::from_fn(move || {
+        if stride == 0 {
+            return None;
+        }
+        let tuple = bytes.get(i..)?.get(..stride)?;
+        i += stride;
+        // In-bounds by construction: every index below is < stride/4.
+        let cell = |n: usize| u32::from_be_bytes(tuple[n * 4..n * 4 + 4].try_into().unwrap());
+        let child_hi = if child_addr_cells > 0 { cell(0) } else { 0 };
+        let pin = if child_intr_cells > 0 { cell(child_addr_cells) as u8 } else { 0 };
+        let parent_phandle = cell(child_addr_cells + child_intr_cells);
+        let irq_base = child_addr_cells + child_intr_cells + 1 + parent_addr_cells;
+        let mut parent_irq = [0u32; 3];
+        for (k, slot) in parent_irq.iter_mut().enumerate() {
+            if k < parent_intr_cells {
+                *slot = cell(irq_base + k);
+            }
+        }
+        Some(PciIrqMap { child_hi, pin, parent_phandle, parent_irq })
+    })
 }
 
 // ---------------------------------------------------------------------------
