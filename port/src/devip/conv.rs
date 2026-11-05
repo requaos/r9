@@ -176,7 +176,6 @@ pub(crate) struct Conv {
     /// 0 = off; 7 = udp's 52-byte Udphdr prefix mode; 6 = icmpv6's
     /// 40-byte prefix mode.  Written by udp's `headers` ctl (08-04
     /// Task 2) / icmpv6's (08-06); read by their data paths then.
-    #[allow(dead_code)]
     pub(crate) headers: u8,
     pub(crate) maxfragsize: u32,
     /// The conv's smoltcp socket (the seam's SocketSet), once connected
@@ -202,6 +201,19 @@ pub(crate) struct Conv {
     /// keeps its slot — and its listing entry — after close; conv_alloc
     /// reuses the slot but the mark persists).
     pub(crate) allocated: bool,
+    /// udp's Fsnewcall: the ANNOUNCED conv that spawned this one (None
+    /// for clone-allocated convs).  The spawned conv's datagrams arrive
+    /// on the announcer's socket — its read drains that socket first.
+    pub(crate) announcer: Option<usize>,
+    /// udp's devip-side datagram queue (the donor's per-conv rq):
+    /// datagrams drained off the announcer's socket land here for
+    /// spawned convs.  (Headers-mode and connected convs read their
+    /// smoltcp socket directly — no queue.)
+    pub(crate) dataq: VecDeque<Vec<u8>>,
+    /// udp's advise hangup (udpadvise's qhangup): set by
+    /// proto::udp_advise unless ignoreadvice; data reads/writes fail
+    /// while set (sticky until close — the donor's qhangup shape).
+    pub(crate) hangup: Option<Vec<u8>>,
 }
 
 impl Conv {
@@ -226,6 +238,9 @@ impl Conv {
             waiters: WaitPids::new(),
             mcast: Vec::new(),
             allocated: false,
+            announcer: None,
+            dataq: VecDeque::new(),
+            hangup: None,
         }
     }
 
@@ -332,6 +347,50 @@ pub(crate) fn conv_allocated(p: Proto) -> [bool; NCONV] {
         out[i] = c.allocated;
     }
     out
+}
+
+/// Fsnewcall (devip.c:1385-1426): clone a conv off the announced one to
+/// carry an incoming datagram's quad — raddr/rport from the sender,
+/// laddr/lport from the announcer, state Connected, appended to the
+/// announcer's incall queue.  Returns the new conv's id; None on table
+/// exhaustion (the donor drops the datagram on a full incall — the
+/// caller counts/logs it).  The caller holds the table lock (the udp
+/// RX drain's TABLES → STACK nesting discipline: spawn+dispatch happen
+/// under TABLES; the wake runs after it drops).  The donor's
+/// Maxincall=128 cap never binds before this era's 16-slot table does.
+pub(crate) fn fs_new_call(
+    t: &mut ConvTables,
+    p: Proto,
+    announcer: usize,
+    raddr: [u8; 16],
+    rport: u16,
+    laddr: [u8; 16],
+    lport: u16,
+) -> Option<usize> {
+    let id = {
+        let table = t.table(p);
+        let mut free = None;
+        for (id, c) in table.iter().enumerate() {
+            if c.inuse == 0 {
+                free = Some(id);
+                break;
+            }
+        }
+        free?
+    };
+    {
+        let c = &mut t.table_mut(p)[id];
+        c.reset();
+        c.allocated = true;
+        c.raddr = raddr;
+        c.rport = rport;
+        c.laddr = laddr;
+        c.lport = lport;
+        c.state = ConvState::Connected;
+        c.announcer = Some(announcer);
+    }
+    t.table_mut(p)[announcer].incall.push_back(id);
+    Some(id)
 }
 
 /// Re-open a conv's file (devip.c:417-444): inuse++, re-affirming the

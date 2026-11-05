@@ -888,6 +888,7 @@ const DEVIP_MEDIUM_MARKER: &str = "devip: medium loopback bound";
 const NETIP_SWEEP_DONE_MARKER: &str = "netip: NETIP-DONE";
 const NETIP_SWEEP_FAIL_MARKER: &str = "netip: FAIL";
 const NETIP_PING_OK_MARKER: &str = "netip: ping ok";
+const NETIP_UDP_OK_MARKER: &str = "netip: udp echo ok";
 
 /// Always-on negative scan: any panic/Unhandled-interrupt line in
 /// the capture fails the run — every profile EXCEPT the deliberate-panic
@@ -1668,6 +1669,7 @@ impl BootTestStep {
                     DEVIP_ATTACH_MARKER,
                     DEVIP_MEDIUM_MARKER,
                     NETIP_PING_OK_MARKER,
+                    NETIP_UDP_OK_MARKER,
                     NETIP_SWEEP_DONE_MARKER,
                 ] {
                     if !contains_marker(capture, marker.as_bytes()) {
@@ -1677,7 +1679,7 @@ impl BootTestStep {
                     }
                 }
                 println!(
-                    "boot-test: PASS -- banner, real Harvey boot chain (paqfs + stacksmoke), rc prompt, typed netip sweep ({mode} mode), the devip attach/medium markers, the sweep's ping leg marker and NETIP-DONE observed (NETIP-03)"
+                    "boot-test: PASS -- banner, real Harvey boot chain (paqfs + stacksmoke), rc prompt, typed netip sweep ({mode} mode), the devip attach/medium markers, the sweep's ping + udp echo leg markers and NETIP-DONE observed (NETIP-03)"
                 );
             }
         }

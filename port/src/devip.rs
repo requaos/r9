@@ -730,8 +730,9 @@ pub fn open(c: &Chan, mode: u32) -> Result<Chan> {
             let p = Proto::from_index(qproto(path)).ok_or("no free devices")?;
             // tcp/icmpv6 clone error Enodev until their protos land
             // (08-05/08-06) — clone exhaustion is the honest devip
-            // error (contract §3; the dirs EXIST).
-            if !matches!(p, Proto::Icmp | Proto::Ipifc) {
+            // error (contract §3; the dirs EXIST).  udp joined icmp/ipifc
+            // in 08-04 Task 2.
+            if !matches!(p, Proto::Icmp | Proto::Ipifc | Proto::Udp) {
                 return Err("no free devices");
             }
             let id = conv::conv_alloc(p)?;
@@ -782,6 +783,13 @@ fn listen_open(c: &Chan, p: Proto, id: usize, mode: u32) -> Result<Chan> {
     }
     let mut hooks: Option<stack::DevipHooks> = None;
     loop {
+        // udp's Fsnewcall machine: drain the announced conv's socket
+        // BEFORE checking the incall queue — a datagram that arrived
+        // since the last drain spawns the incoming call here (contract
+        // §6.2).  A no-op for the other protos.
+        if p == Proto::Udp {
+            proto::udp_rx_drain();
+        }
         {
             let node = LockNode::new();
             let mut t = conv::TABLES.lock(&node);
@@ -1093,9 +1101,10 @@ pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
             let p = Proto::from_index(qproto(path)).ok_or("devip: read of unknown file")?;
             match p {
                 Proto::Icmp => proto::icmp_read_data(qconv(path) as usize, buf),
-                // udp's read joins in Task 2; tcp/icmpv6 in 08-05/08-06.
-                // A conv of another proto can never be open here (its
-                // clone errored Enodev), so this arm is defensive.
+                Proto::Udp => proto::udp_read_data(qconv(path) as usize, buf),
+                // tcp/icmpv6 land in 08-05/08-06.  A conv of another proto
+                // can never be open here (its clone errored Enodev), so
+                // this arm is defensive.
                 _ => Err("devip: no data on this proto this era"),
             }
         }
@@ -1109,6 +1118,7 @@ pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
             let p = Proto::from_index(qproto(path)).ok_or("devip: read of unknown file")?;
             let content = match p {
                 Proto::Icmp => proto::icmp_stats(),
+                Proto::Udp => proto::udp_stats(),
                 Proto::Ipifc => ipifc_stats(),
                 _ => return Err("stats not implemented"),
             };
@@ -1193,6 +1203,7 @@ pub fn write(c: &mut Chan, buf: &[u8], offset: u64) -> Result<u64> {
             let p = Proto::from_index(qproto(path)).ok_or("permission denied")?;
             match p {
                 Proto::Icmp => proto::icmp_write_data(qconv(path) as usize, buf),
+                Proto::Udp => proto::udp_write_data(qconv(path) as usize, buf),
                 _ => Err("devip: no data on this proto this era"),
             }
         }
@@ -1558,6 +1569,14 @@ fn ipstat_count(name: &[u8]) -> u64 {
 pub(crate) static ICMP_RX_SLOTS: [crate::devip_waker::WakeSlot; conv::NCONV] =
     [const { crate::devip_waker::WakeSlot::new() }; conv::NCONV];
 pub(crate) static ICMP_TX_SLOTS: [crate::devip_waker::WakeSlot; conv::NCONV] =
+    [const { crate::devip_waker::WakeSlot::new() }; conv::NCONV];
+
+/// The udp data paths' wake-slot arrays (same invariant).  A spawned
+/// conv's read arms the slot on its ANNOUNCER's socket (its datagrams
+/// arrive there); the slot is still the spawned conv's own.
+pub(crate) static UDP_RX_SLOTS: [crate::devip_waker::WakeSlot; conv::NCONV] =
+    [const { crate::devip_waker::WakeSlot::new() }; conv::NCONV];
+pub(crate) static UDP_TX_SLOTS: [crate::devip_waker::WakeSlot; conv::NCONV] =
     [const { crate::devip_waker::WakeSlot::new() }; conv::NCONV];
 
 // ---------------------------------------------------------------------------

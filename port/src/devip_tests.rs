@@ -911,10 +911,7 @@ fn udp_headers_mode_synthesizes_the_52_byte_prefix() {
         .expect("pin (e): announce");
     crate::devip::proto::ctl_write(crate::devip::conv::Proto::Udp, id, b"headers")
         .expect("pin (e): headers");
-    let (.., lport) = {
-        let s = udp_conv_snapshot(id);
-        (s.0, s.1, s.2, s.3, s.4, s.5, s.6, s.7, s.8)
-    };
+    let lport = udp_conv_snapshot(id).3;
     assert_eq!(lport, 7, "pin (e): announce bound port 7");
     assert_eq!(udp_conv_snapshot(id).1, 7, "pin (e): headers=7 recorded");
 
@@ -922,7 +919,7 @@ fn udp_headers_mode_synthesizes_the_52_byte_prefix() {
     stack::drive_stack();
 
     let mut buf = [0u8; 128];
-    let n = crate::devip::proto::udp_read_data(id, &mut buf).expect("pin (e): read delivers");
+    let n = crate::devip::proto::udp_read_data(id, &mut buf).expect("pin (e): read delivers") as usize;
     assert_eq!(n, 52 + 11, "pin (e): one datagram, prefix + payload");
     assert_eq!(&buf[0..16], &mapped(PEER), "pin (e): raddr");
     assert_eq!(&buf[16..32], &mapped(GUEST), "pin (e): laddr (the receiving address)");
@@ -948,6 +945,7 @@ fn udp_fsnewcall_spawns_on_new_remote_quad() {
 
     // New quad → spawn.
     push_rx(udp4_frame(PEER, GUEST, 5000, 7, b"one"));
+    stack::drive_stack(); // the scripted frame reaches the socket at poll
     crate::devip::proto::udp_rx_drain();
     let snap = udp_conv_snapshot(id);
     assert_eq!(snap.7, 1, "pin (spawn): one incall after the first datagram");
@@ -966,12 +964,14 @@ fn udp_fsnewcall_spawns_on_new_remote_quad() {
 
     // Same quad → the SAME conv (no second spawn).
     push_rx(udp4_frame(PEER, GUEST, 5000, 7, b"two"));
+    stack::drive_stack();
     crate::devip::proto::udp_rx_drain();
     assert_eq!(udp_conv_snapshot(id).7, 1, "pin (spawn): no second spawn for a known quad");
     assert_eq!(udp_conv_snapshot(nid).8, 2, "pin (spawn): the repeat datagram queued on the same conv");
 
     // New quad → another spawn.
     push_rx(udp4_frame(PEER2, GUEST, 5001, 7, b"three"));
+    stack::drive_stack();
     crate::devip::proto::udp_rx_drain();
     assert_eq!(udp_conv_snapshot(id).7, 2, "pin (spawn): a second incall for the new quad");
 
@@ -991,9 +991,9 @@ fn udp_fsnewcall_spawns_on_new_remote_quad() {
     // The spawned conv's own data read delivers the queued datagrams in
     // order (Qmsg datagram-at-once).
     let mut buf = [0u8; 64];
-    let n = crate::devip::proto::udp_read_data(nid, &mut buf).expect("pin (spawn): spawned read");
+    let n = crate::devip::proto::udp_read_data(nid, &mut buf).expect("pin (spawn): spawned read") as usize;
     assert_eq!(&buf[..n], b"one", "pin (spawn): first datagram first");
-    let n = crate::devip::proto::udp_read_data(nid, &mut buf).expect("pin (spawn): spawned read");
+    let n = crate::devip::proto::udp_read_data(nid, &mut buf).expect("pin (spawn): spawned read") as usize;
     assert_eq!(&buf[..n], b"two", "pin (spawn): second datagram next");
 
     // Close out the spawned convs (the announcer's guard covers its own
@@ -1051,10 +1051,7 @@ fn udp_wedged_reader_never_blocks_a_sibling_conv() {
     // scripted reply → read.
     crate::devip::proto::ctl_write(crate::devip::conv::Proto::Udp, b, b"connect 10.0.0.2!7000")
         .expect("pin (wedge): B connects");
-    let (.., blport) = {
-        let s = udp_conv_snapshot(b);
-        (s.0, s.1, s.2, s.3, s.4, s.5, s.6, s.7, s.8)
-    };
+    let blport = udp_conv_snapshot(b).3;
     assert!(blport != 0, "pin (wedge): connect assigned B a local port");
     crate::devip::proto::udp_write_data(b, b"probe").expect("pin (wedge): B writes");
     assert!(tx_count() >= 1, "pin (wedge): B's datagram left the seam");
@@ -1070,7 +1067,7 @@ fn udp_wedged_reader_never_blocks_a_sibling_conv() {
     push_rx(udp4_frame(PEER, GUEST, 7000, blport, b"reply"));
     stack::drive_stack();
     let mut buf = [0u8; 64];
-    let n = crate::devip::proto::udp_read_data(b, &mut buf).expect("pin (wedge): B reads");
+    let n = crate::devip::proto::udp_read_data(b, &mut buf).expect("pin (wedge): B reads") as usize;
     assert_eq!(&buf[..n], b"reply", "pin (wedge): B's data path fully operational");
 
     assert!(
