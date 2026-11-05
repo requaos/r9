@@ -890,7 +890,7 @@ pub fn virtio_net_irq() {
                     // (the ring's used-len validation: 12 ≤ len ≤ 12+4096).
                     let frame = unsafe {
                         core::slice::from_raw_parts(
-                            (KZERO as usize + pa as usize + virtio::VIRTIO_NET_HDR_LEN)
+                            (KZERO as usize + pa as usize + virtio::virtio_net_frame_offset())
                                 as *const u8,
                             frame_len,
                         )

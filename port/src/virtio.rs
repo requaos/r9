@@ -832,6 +832,20 @@ pub const fn virtio_net_frame_len(used_len: u32) -> u32 {
     used_len - VIRTIO_NET_HDR_LEN as u32
 }
 
+/// The offset WITHIN an RX payload buffer at which the delivered frame
+/// begins.  RX buffers are posted as two-descriptor chains
+/// (setup_chains/rx_replenish): a 12-byte virtio_net_hdr descriptor
+/// pointing at the queue's shared header page, NEXT-chained to the
+/// payload descriptor.  Per §5.1.6.3.2 the device writes the header into
+/// the FIRST descriptor and the frame into the SECOND at offset 0 — the
+/// descriptor boundary is a hard I/O-vector boundary (qemu's iov_from_buf
+/// fills desc-1's exactly 12 bytes before touching desc-2).  The used
+/// length includes the header (virtio_net_frame_len strips it), but the
+/// payload buffer never contains it.
+pub const fn virtio_net_frame_offset() -> usize {
+    VIRTIO_NET_HDR_LEN
+}
+
 /// Per-queue IRQ accounting (ethervirtio.c's nintr/nnote — NETDRV-04's
 /// reconciliation surface; 07-07's ifstats file reads these).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]

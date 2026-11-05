@@ -81,5 +81,10 @@ mod virtio_tests;
 // port::devether/port::netif keep their unsafe-free forbid attributes.
 #[cfg(test)]
 mod devether_tests;
+// The RX chain slice-arithmetic pins live at the crate root for the
+// same reason: the Vec-backed ring arena and the device-write
+// simulation need alloc/std while port::virtio keeps its forbid.
+#[cfg(test)]
+mod rx_chain_tests;
 
 pub type Result<T> = core::result::Result<T, &'static str>;
