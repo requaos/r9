@@ -58,6 +58,8 @@ const NOTIFY: u64 = 28;
 const NOTED: u64 = 29;
 const RENDEZVOUS: u64 = 34;
 const UNMOUNT: u64 = 35;
+const SEMACQUIRE: u64 = 37;
+const SEMRELEASE: u64 = 38;
 const SEEK: u64 = 39;
 const FVERSION: u64 = 40;
 const ERRSTR: u64 = 41;
@@ -81,7 +83,9 @@ pub(crate) const RFFDG: u64 = 1 << 2;
 /// (the note groups — the console DEL target scoping).
 pub(crate) const RFNOTEG: u64 = 1 << 3;
 const RFPROC: u64 = 1 << 4;
-const RFMEM: u64 = 1 << 5;
+/// pub(crate): proc.rs's rfork_copy reads it (the RFMEM share arm —
+/// the Data/Bss page sharing per the donor dupseg shape).
+pub(crate) const RFMEM: u64 = 1 << 5;
 pub(crate) const RFNOWAIT: u64 = 1 << 6;
 pub(crate) const RFCNAMEG: u64 = 1 << 10;
 pub(crate) const RFCENVG: u64 = 1 << 11;
@@ -115,6 +119,12 @@ type Handler = fn(&mut TrapFrame, &mut Proc) -> u64;
 /// 8581 entry fragments over 201 pids) grew exactly two names, both with
 /// r9-runnable callers: NSEC(53) (Harvey libc time() = nsec()/1e9 —
 /// hdate/hipconfig) and RENDEZVOUS(34) (hfactotum's libthread start).
+/// 08-04 grew the semaphore pair SEMACQUIRE(37)/SEMRELEASE(38): RFMEM
+/// (08-04's rfork Data/Bss sharing) makes libc's CONTENDED lock() path
+/// reachable for the first time — ping's rfork(RFPROC|RFMEM|RFFDG)
+/// reader/sender pair shares its request list under listlock, and the
+/// loser's `while(semacquire(...) < 0)` retry spins forever on a
+/// loud-None.  TSEMACQUIRE(52) stays loud-None (no measured caller).
 /// The kernel's syscall attack surface is exactly the measured set.
 static DISPATCH: [Option<Handler>; 55] = {
     let mut t: [Option<Handler>; 55] = [None; 55];
@@ -136,6 +146,8 @@ static DISPATCH: [Option<Handler>; 55] = {
     t[RENDEZVOUS as usize] = Some(sys_rendezvous);
     t[BRK_ as usize] = Some(sys_brk_);
     t[UNMOUNT as usize] = Some(sys_unmount);
+    t[SEMACQUIRE as usize] = Some(sys_semacquire);
+    t[SEMRELEASE as usize] = Some(sys_semrelease);
     t[SEEK as usize] = Some(sys_seek);
     t[FVERSION as usize] = Some(sys_fversion);
     t[ERRSTR as usize] = Some(sys_errstr);
@@ -951,20 +963,160 @@ fn sys_brk_(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         return err(proc, "brk: bad argument block");
     };
     let addr = args[0] as usize; // a full-width pointer arg (no masking)
-    let Some(segs) = &mut proc.segments else {
+    if proc.segments.is_none() {
         return err(proc, "brk: no segments (pre-exec)");
-    };
+    }
     if addr == 0 {
         return 0; // no-op (libc never passes 0; defensive)
     }
-    if addr < segs.bss.0.start {
+    let (bss_start, old_end) = {
+        let segs = proc.segments.as_ref().unwrap();
+        (segs.bss.0.start, segs.bss.0.end)
+    };
+    if addr < bss_start {
         return err(proc, "brk: address below the heap base");
     }
     if addr > exec::USTOP {
         return err(proc, "brk: out of memory");
     }
-    segs.bss.0.end = addr;
-    0
+    match proc.rfmem_family {
+        // The ordinary private shape: move the caller's break only;
+        // growth pages fault in lazily on touch.
+        None => {
+            proc.segments.as_mut().unwrap().bss.0.end = addr;
+            0
+        }
+        // The RFMEM family shape (the donor's shared-segment break):
+        // every member's break moves together and growth pages are born
+        // shared — ping's sender-malloc'd request nodes are readable by
+        // the receiver.  proc.rs's rfmem_brk_set does the maps and the
+        // end moves (with a full unwind on failure).
+        Some(family) => match proc::rfmem_brk_set(family, old_end, addr) {
+            Ok(()) => 0,
+            Err(msg) => err(proc, msg),
+        },
+    }
+}
+
+/// Read the semaphore word (a user `int` — 4 bytes, little-endian on
+/// aarch64, the native word order).
+fn sem_word_read(word: &UserSliceMut) -> i32 {
+    i32::from_le_bytes(word.as_slice()[..4].try_into().expect("sem word is 4 bytes"))
+}
+
+/// Write the semaphore word.
+fn sem_word_write(word: &mut UserSliceMut, val: i32) {
+    word.as_slice_mut()[..4].copy_from_slice(&val.to_le_bytes());
+}
+
+/// The donor's canacquire: decrement a positive word, else fail.
+/// Single CPU + IRQ-masked syscall context (no preemption mid-handler)
+/// makes the load/store atomic against other procs; the RFMEM-shared
+/// page is the cross-proc synchronization point.
+fn sem_try_acquire(word: &mut UserSliceMut) -> bool {
+    let val = sem_word_read(word);
+    if val <= 0 {
+        return false;
+    }
+    sem_word_write(word, val - 1);
+    true
+}
+
+/// Translate a resident user VA to its physical address via the proc's
+/// mapping_log.  The semaphore's wait-queue key is the word's PHYSICAL
+/// address: RFMEM family members map the same PA (one queue per WORD),
+/// while unrelated procs reusing the VA name different PAs and never
+/// meet.
+fn sem_word_pa(proc: &Proc, va: u64) -> Option<u64> {
+    let va = va as usize;
+    proc.mapping_log
+        .iter()
+        .find(|m| m.va <= va && va < m.va + m.size)
+        .map(|m| m.phys as u64 + (va - m.va) as u64)
+}
+
+/// SEMACQUIRE(37): addr, block.  The donor's syssemacquire (9k
+/// sysproc.c): a counting semaphore whose WORD lives in user memory
+/// (libc Lock.sem — ping's listlock is the 08-04 gate's caller).  Fast
+/// path: decrement a positive word and return 1.  Contended path
+/// (block != 0): register the caller on the word's PA and block in
+/// sched(), re-checking on wake (spurious-allowed: a woken waiter that
+/// loses the unit race re-blocks and stays registered).  Returns 1 on
+/// acquire, 0 when block == 0 and the word is exhausted.  Era limit:
+/// the donor's note-interruptible sleep is NOT reproduced — r9's block
+/// is uninterruptible (a note queued mid-wait delivers at the syscall's
+/// return), so libc's `while(semacquire(...) < 0)` retry shape never
+/// fires here.
+fn sys_semacquire(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
+    let Some(args) = sargs(frame, proc, 2) else {
+        return err(proc, "semacquire: bad argument block");
+    };
+    let addr = args[0]; // a full-width pointer arg (no masking)
+    let block = args[1] & 0xffff_ffff; // block is an int (width discipline)
+    // The donor's entry validation (syssemacquire): evenaddr for an int,
+    // a writable in-segment word, a never-negative value.
+    if addr & 3 != 0 {
+        return err(proc, "bad arg in system call");
+    }
+    let mut word = match UserSliceMut::new(proc, addr, 4) {
+        Ok(w) => w,
+        Err(_) => return err(proc, "bad arg in system call"),
+    };
+    if sem_word_read(&word) < 0 {
+        return err(proc, "bad arg in system call");
+    }
+    // The fast path — the uncontended acquire (a private-memory lock is
+    // never contended at all; an RFMEM lock usually isn't either).
+    if sem_try_acquire(&mut word) {
+        return 1;
+    }
+    if block == 0 {
+        return 0;
+    }
+    // The word is resident (the constructor forced it), so the PA lookup
+    // cannot fail.
+    let Some(pa) = sem_word_pa(proc, addr) else {
+        return err(proc, "bad arg in system call");
+    };
+    proc::sem_register_waiter(pa, proc.pid);
+    loop {
+        if sem_try_acquire(&mut word) {
+            break;
+        }
+        proc::sched();
+    }
+    proc::sem_deregister_waiter(pa, proc.pid);
+    1
+}
+
+/// SEMRELEASE(38): addr, delta.  The donor's syssemrelease: add `delta`
+/// to the word, then wake up to `delta` waiters registered on the
+/// word's PA (registration order, the donor semwakeup's list walk).
+/// Returns the new value (the donor's `value+delta` wire result).
+fn sys_semrelease(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
+    let Some(args) = sargs(frame, proc, 2) else {
+        return err(proc, "semrelease: bad argument block");
+    };
+    let addr = args[0]; // a full-width pointer arg (no masking)
+    let delta = (args[1] & 0xffff_ffff) as i32; // delta is an int
+    if addr & 3 != 0 {
+        return err(proc, "bad arg in system call");
+    }
+    let mut word = match UserSliceMut::new(proc, addr, 4) {
+        Ok(w) => w,
+        Err(_) => return err(proc, "bad arg in system call"),
+    };
+    let value = sem_word_read(&word);
+    if delta < 0 || value < 0 {
+        return err(proc, "bad arg in system call");
+    }
+    let Some(pa) = sem_word_pa(proc, addr) else {
+        return err(proc, "bad arg in system call");
+    };
+    let new = value + delta;
+    sem_word_write(&mut word, new);
+    proc::sem_wake(pa, delta as u64);
+    new as u64
 }
 
 /// EXEC(7): path, argv — 2 syscall args (libc `exec(char *name,
@@ -1363,11 +1515,20 @@ fn sys_fd2path(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 /// RFORK(19): flag.  Donor sysrfork flag validation (9front@350266104f
 /// sys/src/9/port/sysproc.c): (RFFDG|RFCFDG), (RFNAMEG|RFCNAMEG) and
 /// (RFENVG|RFCENVG) are each mutually exclusive; RFMEM/RFNOWAIT require
-/// RFPROC.  Supported this era: the address space is ALWAYS eagerly copied
-/// page-for-page (no COW, no shared writable pages; the donor's
-/// RFMEM share-semantics is not honored, which the smoke does not depend
-/// on); RFNOWAIT is honored (EXITS posts no wait record); RFREND splits
-/// the rendezvous group (the RENDEZVOUS(34) handler's group semantics —
+/// RFPROC.  Supported this era: the address space follows the donor's
+/// dupseg shape (sys/src/9/port/segment.c) — WITHOUT RFMEM every user
+/// page is eagerly copied page-for-page (no COW); WITH RFMEM the
+/// Data/Bss pages SHARE the parent's physical pages (refcount-gated
+/// free at the last sharer's exit/exec; proc.rs's SHARED_PAGES) while
+/// Stack/Tos/Text stay fresh copies (SG_STACK is never shared — note
+/// delivery writes the proc's own stack).  Known limit: pages brk_-grown
+/// or demand-faulted by one sharer AFTER the fork are per-proc (the
+/// donor's shared-segment pte map would show them to both; ping's
+/// reader/sender pair never crosses this — its shared request list
+/// lives in fork-time-present pages); full demand-page sharing is a
+/// later refinement.  RFNOWAIT is honored (EXITS posts no wait record);
+/// RFREND splits the rendezvous group (the RENDEZVOUS(34) handler's
+/// group semantics —
 /// measured into the dispatch set by the 06-07 tier-1 trace); RFNOTEG
 /// has REAL note-group semantics
 /// (Proc.noteid — a fresh group per construction,

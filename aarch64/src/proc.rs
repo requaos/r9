@@ -204,6 +204,384 @@ impl ByteBacking {
     }
 }
 
+/// RFMEM shared-page refcounts — the donor dupseg `sameseg` accounting
+/// (sys/src/9/port/segment.c) translated to r9's per-proc mapping_log
+/// model.  The donor shares a Segment kernel object whose pte map both
+/// procs reference; r9 has no such object — each proc's root table maps
+/// the shared PHYS page directly, so the sharer count lives here keyed
+/// by physical address.  A page enters the table at its first RFMEM
+/// share (count = 2: parent + child) and leaves at the release that
+/// drops the count to 0 (the last sharer's exit/exec frees it — the
+/// donor's Segment `ref` hitting 0).  Pages never shared are absent
+/// from the table and free unconditionally — exactly the pre-RFMEM
+/// behavior.
+///
+/// Locking: syscall context only, briefly (rfork's share arm; the
+/// exit/exec release walk; the rfork mid-copy unwind) — never IRQ
+/// context, the same leaf discipline as PROC_TABLE.
+static SHARED_PAGES: Lock<SharedPages> = Lock::new("rfmem", SharedPages::new());
+
+/// The PA → sharer-count table behind SHARED_PAGES.  A Vec with a
+/// linear scan is the right shape: the entry count is the shared
+/// Data/Bss page count of the live RFMEM families (ping's is a
+/// handful), and share/release run at fork/exit rates, never per-op.
+struct SharedPages {
+    map: Vec<(u64, usize)>,
+}
+
+impl SharedPages {
+    const fn new() -> Self {
+        Self { map: Vec::new() }
+    }
+
+    /// Record one more sharer of `pa` (rfork's RFMEM arm): the first
+    /// share inserts at 2 (parent + child); a later share (a shared
+    /// proc forking again under RFMEM) increments.
+    fn share(&mut self, pa: u64) {
+        for entry in &mut self.map {
+            if entry.0 == pa {
+                entry.1 += 1;
+                return;
+            }
+        }
+        self.map.push((pa, 2));
+    }
+
+    /// Insert a page BORN shared by `count` procs (the rfork bss-sweep
+    /// and the brk_ family-growth arm: a fresh zero page mapped into
+    /// every family member at once).  The page must be absent — a
+    /// re-share of a live page goes through share().
+    fn share_new(&mut self, pa: u64, count: usize) {
+        debug_assert!(count >= 2, "share_new with fewer than two sharers");
+        self.map.push((pa, count));
+    }
+
+    /// Drop one sharer of `pa`.  Returns true when the caller must FREE
+    /// the page — either it was never shared (absent from the table:
+    /// an ordinary per-proc page, the pre-RFMEM free behavior) or this
+    /// release was the last sharer.  False = sibling sharers still map
+    /// the page: the caller unmaps it from the exiting proc's table but
+    /// must NOT return it to the allocator.
+    fn release(&mut self, pa: u64) -> bool {
+        if let Some(pos) = self.map.iter().position(|entry| entry.0 == pa) {
+            let remaining = self.map[pos].1 - 1;
+            if remaining == 0 {
+                self.map.swap_remove(pos);
+                return true;
+            }
+            self.map[pos].1 = remaining;
+            return false;
+        }
+        true
+    }
+}
+
+/// rfork's RFMEM arm: record the child sharing the parent's page.
+fn share_user_page(pa: u64) {
+    let node = LockNode::new();
+    SHARED_PAGES.lock(&node).share(pa);
+}
+
+/// The rfork bss-sweep and sys_brk_ family arm: record a page BORN
+/// shared by `count` members (never a re-share of a live page).
+fn share_new_user_page(pa: u64, count: usize) {
+    let node = LockNode::new();
+    SHARED_PAGES.lock(&node).share_new(pa, count);
+}
+
+/// The free-side pivot (free_user_mappings + rfork's mid-copy unwind):
+/// true = deallocate the page (never shared, or this was the last
+/// sharer); false = siblings still map it (unmap only).
+fn release_user_page(pa: u64) -> bool {
+    let node = LockNode::new();
+    SHARED_PAGES.lock(&node).release(pa)
+}
+
+/// An RFMEM family — the donor's shared-segment GROUP.  rfork under
+/// RFMEM makes the parent and child share their Data/Bss pages (the
+/// dupseg `sameseg` arm); the donor's shared SEGMENT then grows for
+/// both procs together (sysbrk_ moves the shared segment's break, and a
+/// page faulted into it is visible to both through the shared pte map).
+/// r9 has no shared segment object, so the family registry records the
+/// members: sys_brk_'s family arm maps the grown pages into EVERY
+/// member's root table (zeroed, refcounted in SHARED_PAGES) and moves
+/// every member's break, keeping the members' Data/Bss mappings
+/// identical by construction.  The invariant: at any instant, all
+/// members of a family map the same PAs across [bss start, break) and
+/// carry the same break.  rfork establishes it (the share arm + the
+/// bss sweep), brk_ maintains it, exec/exit dissolve membership.
+/// Stack/Tos pages are NEVER family-shared (SG_STACK is always a fresh
+/// copy — note delivery writes the proc's own stack).
+static RFMEM_FAMILIES: Lock<Vec<(u64, u64)>> = Lock::new("rfmemfam", Vec::new());
+
+/// The family-id allocator (fresh id per first RFMEM fork in a family).
+static NEXT_RFMEM_FAMILY: AtomicU64 = AtomicU64::new(1);
+
+/// The Proc field is `rfmem_family: Option<u64>`.
+/// Join the caller's family (or found one when the parent forks its
+/// first RFMEM child).  Runs ONLY after a successful rfork_copy (the
+/// unwind path has no family state to tear down).
+fn rfmem_join(parent: &mut Proc, child: &mut Proc) {
+    let family = match parent.rfmem_family {
+        Some(f) => f,
+        None => {
+            let f = NEXT_RFMEM_FAMILY.fetch_add(1, Ordering::Relaxed);
+            parent.rfmem_family = Some(f);
+            let node = LockNode::new();
+            RFMEM_FAMILIES.lock(&node).push((f, parent.pid));
+            f
+        }
+    };
+    child.rfmem_family = Some(family);
+    let node = LockNode::new();
+    RFMEM_FAMILIES.lock(&node).push((family, child.pid));
+}
+
+/// Dissolve the proc's membership (exec/exit via free_user_mappings —
+/// the address space the family co-owns is gone).  The pages themselves
+/// are released by the mapping_log walk's refcount pivot; this drops
+/// only the membership record.
+fn rfmem_leave(proc: &mut Proc) {
+    let Some(family) = proc.rfmem_family.take() else { return };
+    let node = LockNode::new();
+    let mut families = RFMEM_FAMILIES.lock(&node);
+    if let Some(pos) = families.iter().position(|&(f, pid)| f == family && pid == proc.pid) {
+        families.swap_remove(pos);
+    }
+}
+
+/// sys_brk_'s family arm (the donor's shared-segment break move): every
+/// member's break moves to `new_end`, and the GROWN range's pages are
+/// born shared — one fresh zeroed page per VA mapped into every
+/// member's table and refcounted at the member count.  This is what
+/// keeps an RFMEM family's Data/Bss mappings identical by construction:
+/// libc's malloc pool grows through brk_, and the grown pages must be
+/// visible to every member (the 08-04 ping gate: the sender's malloc'd
+/// request nodes must be readable by the receiver).  Shrink moves only
+/// the ends (r9 never frees pages on brk_ shrink — the standing lazy
+/// shape, now family-wide).  A one-live-member family (siblings
+/// exited/exec'd) is an ordinary private proc: lazy end move only.
+///
+/// Failure hygiene: a mid-arm failure (OOM) unmaps everything this call
+/// mapped and releases the published refcounts (the last release frees)
+/// — the family is left exactly as at entry.
+pub fn rfmem_brk_set(family: u64, old_end: usize, new_end: usize) -> Result<()> {
+    let members = rfmem_family_members(family);
+    if members.len() < 2 {
+        if let Some(&m) = members.first() {
+            // SAFETY: table-resident pointer (rfmem_family_members);
+            // single CPU, IRQ-masked syscall context — the member is
+            // not running while the caller's syscall executes.
+            unsafe {
+                if let Some(segs) = (*m).segments.as_mut() {
+                    segs.bss.0.end = new_end;
+                }
+            }
+        }
+        return Ok(());
+    }
+    let mut done: Vec<(usize, u64)> = Vec::new();
+    let mut va = old_end.next_multiple_of(PAGE_SIZE_4K);
+    let limit = new_end.next_multiple_of(PAGE_SIZE_4K);
+    while va < limit {
+        let pa = pagealloc::allocate_physpage().map_err(|_| "brk: out of memory")?;
+        map_kernel_alias(pa.addr())?;
+        // SAFETY: the page's KZERO+PA alias was just (re)mapped r/w in
+        // the kernel table above; one full fresh page, owned.
+        unsafe {
+            ptr::write_bytes(physaddr_as_ptr_mut_offset_from_kzero::<u8>(pa), 0, PAGE_SIZE_4K);
+        }
+        let entry = Entry::rw_user_data().with_phys_addr(pa);
+        let mut mapped: Vec<*mut Proc> = Vec::new();
+        let mut failed = false;
+        for &m in &members {
+            // SAFETY: table-resident pointer; single CPU, IRQ-masked
+            // syscall context.  map_to edits the member's table (ACTIVE
+            // for the caller, INACTIVE for its siblings — both handled)
+            // with the per-write TLB invalidate; the VA was unmapped, so
+            // no stale translation exists.
+            unsafe {
+                let p = &mut *m;
+                let mut physalloc = PhysPageAllocator {};
+                let mut vmt = VmTraitImpl {};
+                if (*p.root_table)
+                    .map_to(&mut physalloc, &mut vmt, entry, va, PageSize::Page4K, RootPageTableType::User)
+                    .is_err()
+                {
+                    failed = true;
+                    break;
+                }
+                p.mapping_log.push(MappingRecord {
+                    va,
+                    phys: pa.addr() as usize,
+                    size: PAGE_SIZE_4K,
+                    kind: SegKind::Bss,
+                });
+                mapped.push(m);
+            }
+        }
+        if failed {
+            // This page never published a refcount: unmap it from the
+            // members that took it, drop their records, free the page.
+            for &m in &mapped {
+                unsafe {
+                    let p = &mut *m;
+                    let mut physalloc = PhysPageAllocator {};
+                    let mut vmt = VmTraitImpl {};
+                    let _ = (*p.root_table).map_to(
+                        &mut physalloc,
+                        &mut vmt,
+                        Entry::empty(),
+                        va,
+                        PageSize::Page4K,
+                        RootPageTableType::User,
+                    );
+                    if let Some(pos) = p.mapping_log.iter().position(|r| r.va == va) {
+                        p.mapping_log.swap_remove(pos);
+                    }
+                }
+            }
+            let _ = pagealloc::deallocate_physpage(pa);
+            break;
+        }
+        share_new_user_page(pa.addr(), members.len());
+        done.push((va, pa.addr()));
+        va += PAGE_SIZE_4K;
+    }
+    let completed_all = va >= limit;
+    if !completed_all {
+        // Unwind the completed pages: unmap from every member and release
+        // per member — each page's count runs members.len() → 0, the
+        // last release freeing it.
+        for &(done_va, done_pa) in &done {
+            for &m in &members {
+                unsafe {
+                    let p = &mut *m;
+                    let mut physalloc = PhysPageAllocator {};
+                    let mut vmt = VmTraitImpl {};
+                    let _ = (*p.root_table).map_to(
+                        &mut physalloc,
+                        &mut vmt,
+                        Entry::empty(),
+                        done_va,
+                        PageSize::Page4K,
+                        RootPageTableType::User,
+                    );
+                    if let Some(pos) = p.mapping_log.iter().position(|r| r.va == done_va) {
+                        p.mapping_log.swap_remove(pos);
+                    }
+                }
+                release_user_page(done_pa);
+            }
+        }
+        return Err("brk: out of memory");
+    }
+    // Move every member's break (shrink included — ends only).
+    for &m in &members {
+        // SAFETY: as above.
+        unsafe {
+            if let Some(segs) = (*m).segments.as_mut() {
+                segs.bss.0.end = new_end;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The proc's family siblings as raw Proc pointers (sys_brk_'s growth
+/// arm edits every member).  PROC_TABLE-brief: the pointers are
+/// table-resident and stable under the module header's single-CPU/
+/// IRQ-masked invariant (the ProcGuard discipline); the caller mutates
+/// through them AFTER the lock drops.
+pub fn rfmem_family_members(family: u64) -> Vec<*mut Proc> {
+    let node = LockNode::new();
+    let pids: Vec<u64> = {
+        let families = RFMEM_FAMILIES.lock(&node);
+        families.iter().filter(|&&(f, _)| f == family).map(|&(_, pid)| pid).collect()
+    };
+    let table = PROC_TABLE.lock(&node);
+    let mut out = Vec::new();
+    for p in table.procs.iter() {
+        if let Some(p) = p {
+            if pids.contains(&p.pid) && p.state != ProcState::Moribund {
+                out.push(ptr::addr_of!(*p) as *mut Proc);
+            }
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// SEMACQUIRE/SEMRELEASE (37/38) — the semaphore wait registry.
+// The semaphore WORD lives in user memory (libc Lock.sem); the waiters
+// are keyed by the word's PHYSICAL address so an RFMEM family — whose
+// members map the same PA — contends on ONE queue, while unrelated
+/// procs reusing the same VA name different PAs and never meet.
+// ---------------------------------------------------------------------------
+
+/// (word PA, waiter pid) pairs.  Small and scanned at fork/lock rates:
+/// the contended-lock wait set of the whole system.
+static SEM_WAITERS: Lock<Vec<(u64, u64)>> = Lock::new("sem", Vec::new());
+
+/// sys_semacquire's contended arm: record the caller as a waiter on the
+/// word's PA (once — the acquire loop re-checks without re-registering).
+pub fn sem_register_waiter(pa: u64, pid: u64) {
+    let node = LockNode::new();
+    let mut waiters = SEM_WAITERS.lock(&node);
+    if !waiters.contains(&(pa, pid)) {
+        waiters.push((pa, pid));
+    }
+}
+
+/// Acquired (or erroring out): the caller leaves the wait set.
+pub fn sem_deregister_waiter(pa: u64, pid: u64) {
+    let node = LockNode::new();
+    let mut waiters = SEM_WAITERS.lock(&node);
+    if let Some(pos) = waiters.iter().position(|&e| e == (pa, pid)) {
+        waiters.swap_remove(pos);
+    }
+}
+
+/// sys_semrelease's wake half: ready up to `delta` waiters registered on
+/// the word's PA (registration order — the donor semwakeup's list walk).
+/// Entries are consumed as they are picked: a woken waiter that loses
+/// the unit race re-registers on its next block (the register→check→
+/// block ordering is wakeup-loss-free by construction — single CPU,
+/// IRQ-masked syscall context: no releaser can run between a waiter's
+/// check and its sched()).  A stale entry (a pid that exited mid-wait —
+/// possible only via a note kill of a blocked acquirer, which this era's
+/// uninterruptible semacquire never takes; kept as hygiene) is pruned
+/// without effect (a Moribund/absent pid is never Blocked).
+pub fn sem_wake(pa: u64, delta: u64) {
+    if delta == 0 {
+        return;
+    }
+    let node = LockNode::new();
+    let picked: Vec<u64> = {
+        let mut waiters = SEM_WAITERS.lock(&node);
+        let mut picked = Vec::new();
+        let mut i = 0;
+        while i < waiters.len() && (picked.len() as u64) < delta {
+            if waiters[i].0 == pa {
+                picked.push(waiters[i].1);
+                waiters.remove(i);
+            } else {
+                i += 1;
+            }
+        }
+        picked
+    };
+    if picked.is_empty() {
+        return;
+    }
+    let mut table = PROC_TABLE.lock(&node);
+    for p in table.procs.iter_mut().flatten() {
+        if p.state == ProcState::Blocked && picked.contains(&p.pid) {
+            p.state = ProcState::Ready;
+        }
+    }
+}
+
 /// The demand-page byte source for text/data: the backing (the paqfs image
 /// entry for devroot binaries; the staged whole file for devmnt ones) plus
 /// the data-segment file base (40 + textsize — data file offsets are NOT page-aligned).
@@ -405,6 +783,12 @@ pub struct Proc {
     /// second caller by tag overwrites it before readying us; our own
     /// stored offer rides the group's sleeper entry.
     pub rendval: u64,
+    /// The RFMEM family id (the donor's shared-segment group — see
+    /// RFMEM_FAMILIES).  Some only after an RFMEM rfork (the parent's
+    /// existing family joined, or a fresh family founded); None at
+    /// construction, after exec/exit (free_user_mappings dissolves the
+    /// membership), and for every non-RFMEM fork child.
+    pub rfmem_family: Option<u64>,
 }
 
 impl Proc {
@@ -472,6 +856,7 @@ impl Proc {
             pri: 0,
             rgrp: Arc::new(Lock::new("rendez", RendezGroup::new())),
             rendval: 0,
+            rfmem_family: None,
         };
         proc.set_name(name);
         proc
@@ -692,14 +1077,26 @@ impl Proc {
                         panic!("proc: user unmap failed at {:#x}: {err:?}", rec.va)
                     });
             }
-            if let Err(err) =
-                pagealloc::deallocate_physpage(PhysAddr::new(rec.phys as u64))
-            {
-                println!("proc: deallocate user page {:#x}: {err:?}", rec.phys);
+            // RFMEM: an RFMEM-shared page's leaf is cleared above, but the
+            // PHYS page goes back to the allocator only when this release
+            // is the last sharer's (the donor's Segment `ref` hitting 0);
+            // siblings keep mapping it until their own exit/exec.
+            if release_user_page(rec.phys as u64) {
+                if let Err(err) =
+                    pagealloc::deallocate_physpage(PhysAddr::new(rec.phys as u64))
+                {
+                    println!("proc: deallocate user page {:#x}: {err:?}", rec.phys);
+                }
             }
         }
         self.segments = None;
         self.text_source = None;
+        // The address space the RFMEM family co-owns is gone (EXEC's
+        // replacement path and EXITS both land here) — dissolve the
+        // membership.  The shared pages themselves were released by the
+        // refcount pivot above; the donor's exec drops the shared
+        // segments the same way (the proc's new image is private).
+        rfmem_leave(self);
     }
 
     /// EXITS: free the root-table page and the kernel-stack pages
@@ -1742,8 +2139,10 @@ pub fn post_wait_record(parent: *mut Proc, pid: u64, msg: &[u8]) {
 }
 
 /// RFORK: clone `parent` — a fresh proc (new kernel stack + root
-/// table via new_user_proc), an EAGER page-for-page copy of every user
-/// mapping (no COW, no shared writable pages), a dup'd fd table
+/// table via new_user_proc), the address space per the donor dupseg
+/// shape (an EAGER page-for-page copy without RFMEM; with RFMEM the
+/// Data/Bss pages SHARE the parent's physical pages, refcounted in
+/// SHARED_PAGES — Stack/Tos/Text stay fresh copies), a dup'd fd table
 /// (fresh Chan values naming the same files/devices), mirrored segment
 /// records + paqfs byte source, and a copy of the parent's live trap frame
 /// on the child's kstack with x0 = 0 (donor forkchild).  The child is
@@ -1775,14 +2174,25 @@ pub fn rfork_clone(parent: &mut Proc, frame: &TrapFrame, flag: u64) -> Result<u6
         child.state = ProcState::Moribund;
         // The copied pages' child-table entries die with the root-table
         // page below; the kernel-side KZERO+PA aliases stay mapped, per
-        // the free_root_table_and_kstack convention.
+        // the free_root_table_and_kstack convention.  The release pivot
+        // keeps RFMEM-shared pages alive (the parent still holds its
+        // share) while the fresh copies free as before.
         for rec in core::mem::take(&mut child.mapping_log) {
-            if let Err(err) = pagealloc::deallocate_physpage(PhysAddr::new(rec.phys as u64)) {
-                println!("rfork: unwind deallocate user page {:#x}: {err:?}", rec.phys);
+            if release_user_page(rec.phys as u64) {
+                if let Err(err) = pagealloc::deallocate_physpage(PhysAddr::new(rec.phys as u64)) {
+                    println!("rfork: unwind deallocate user page {:#x}: {err:?}", rec.phys);
+                }
             }
         }
         child.free_root_table_and_kstack();
         return Err(msg);
+    }
+    // The copy succeeded — under RFMEM the pair now co-owns the shared
+    // Data/Bss pages: record the family membership (the donor's shared
+    // segment GROUP) so brk_'s family arm keeps the members' breaks and
+    // mappings identical from here on.
+    if flag & crate::syscall::RFMEM != 0 {
+        rfmem_join(parent, &mut child);
     }
     // An RFNOWAIT child posts no wait record at EXITS and is never
     // reaped by AWAIT, so it must not count toward the parent's AWAIT
@@ -1801,17 +2211,71 @@ pub fn rfork_clone(parent: &mut Proc, frame: &TrapFrame, flag: u64) -> Result<u6
 /// page-for-page copy of every user mapping, a dup'd fd table, mirrored
 /// segment records + paqfs byte source, and a copy of the parent's live
 /// trap frame on the child's kstack with x0 = 0 (donor forkchild).
-fn rfork_copy(parent: &Proc, child: &mut Proc, frame: &TrapFrame, flag: u64) -> Result<()> {
+fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &TrapFrame, flag: u64) -> Result<()> {
     let nowait = flag & crate::syscall::RFNOWAIT != 0;
-    // The eager copy.  Each parent page's bytes go through the pages'
-    // KZERO+PA kernel aliases (map_to REPLACES existing entries, so
-    // re-mapping the exec/fault-side alias is idempotent); the child's
-    // fresh page maps into its INACTIVE root table at the same VA with the
-    // same entry kind (map_to's temp-recursive dance edits inactive
-    // tables).  The parent's mapping_log is stable: single CPU, the parent
-    // is current, IRQs are masked in syscall context.
+    let rfmem = flag & crate::syscall::RFMEM != 0;
+    // The eager copy, with the donor dupseg shape (sys/src/9/port/
+    // segment.c) under RFMEM: SG_STACK is ALWAYS a fresh copy (never
+    // shared — note delivery and the libc Tos machinery write the
+    // proc's OWN stack pages); SG_BSS/SG_DATA SHARE under RFMEM — the
+    // same PA mapped in both procs' root tables, refcounted in
+    // SHARED_PAGES against the exit/exec frees.  Text and Tos keep this
+    // era's eager copy (the donor shares SG_TEXT always; r9's proven
+    // copy behavior stands — ping's reader/sender pair shares only its
+    // data/bss).  KNOWN LIMIT (documented in the 08-04 record): a page
+    // brk_-grown or demand-faulted by one sharer AFTER the fork is not
+    // visible to the other — ping's request list lives in the
+    // fork-time-shared pages (its malloc arena grew during dial(),
+    // before the rfork), so the gate never crosses the limit; full
+    // demand-page sharing (a shared page-map structure, the donor's
+    // ptecpy-into-a-shared-segment shape) is a later refinement.
     let records: Vec<MappingRecord> = parent.mapping_log.clone();
     for rec in &records {
+        if rfmem && matches!(rec.kind, SegKind::Data | SegKind::Bss) {
+            // The RFMEM share arm: no copy, no kernel alias — the
+            // parent's PA maps straight into the child's INACTIVE root
+            // table at the same VA (map_to's temp-recursive dance edits
+            // inactive tables), then the refcount records the second
+            // sharer.  The parent's mapping stays exactly as it was.
+            let entry =
+                Entry::rw_user_data().with_phys_addr(PhysAddr::new(rec.phys as u64));
+            // SAFETY: child.root_table names the child's pagealloc'd root
+            // table (the construction invariant) — an INACTIVE table edited
+            // through its KZERO+PA alias via map_to's temp-recursive dance;
+            // single CPU, IRQ-masked syscall context.  The shared page's PA
+            // is the parent's live page — refcounted below before any free
+            // path can see the child's record.
+            unsafe {
+                let mut physalloc = PhysPageAllocator {};
+                let mut vmt = VmTraitImpl {};
+                (*child.root_table)
+                    .map_to(
+                        &mut physalloc,
+                        &mut vmt,
+                        entry,
+                        rec.va,
+                        PageSize::Page4K,
+                        RootPageTableType::User,
+                    )
+                    .map_err(|_| "rfork: child shared map failed")?;
+            }
+            share_user_page(rec.phys as u64);
+            child.mapping_log.push(MappingRecord {
+                va: rec.va,
+                phys: rec.phys,
+                size: rec.size,
+                kind: rec.kind,
+            });
+            continue;
+        }
+        // The copy arm (always for Text/Stack/Tos; for Data/Bss without
+        // RFMEM): each parent page's bytes go through the pages' KZERO+PA
+        // kernel aliases (map_to REPLACES existing entries, so re-mapping
+        // the exec/fault-side alias is idempotent); the child's fresh page
+        // maps into its INACTIVE root table at the same VA with the same
+        // entry kind.  The parent's mapping_log is stable through the loop:
+        // single CPU, the parent is current, IRQs are masked in syscall
+        // context.
         let pa = pagealloc::allocate_physpage().map_err(|_| "rfork: page alloc failed")?;
         map_kernel_alias(rec.phys as u64)?;
         map_kernel_alias(pa.addr())?;
@@ -1858,6 +2322,77 @@ fn rfork_copy(parent: &Proc, child: &mut Proc, frame: &TrapFrame, flag: u64) -> 
     // No icache maintenance on the copy: identical bytes land at identical
     // VAs (a stale VIPT line would return the same bytes), and any later
     // exec's text page-in flushes per page (fault.rs).  Documented limit.
+
+    // The bss sweep (RFMEM only): the log walk above shares only PRESENT
+    // pages, but the parent's bss range can cover pages brk_-grown and
+    // never touched (exec maps data+bss eagerly; brk_ extends lazily).
+    // Left alone, each proc would fault such a page in PRIVATELY —
+    // silent divergence where the donor's shared segment shows both
+    // procs the same page.  Materialize each absent in-range page now as
+    // ONE zeroed page mapped into BOTH tables (the parent's ACTIVE table
+    // and the child's INACTIVE one — map_to handles both), closing the
+    // hole by construction; from here on the family's bss grows only
+    // through sys_brk_'s family arm.
+    if rfmem {
+        let sweep = parent.segments.as_ref().map(|segs| {
+            (segs.bss.0.start & !(PAGE_SIZE_4K - 1), segs.bss.0.end.next_multiple_of(PAGE_SIZE_4K))
+        });
+        if let Some((start, end)) = sweep {
+            let mut va = start;
+            while va < end {
+                if parent.mapping_log.iter().any(|m| m.va == va) {
+                    va += PAGE_SIZE_4K;
+                    continue;
+                }
+                let pa =
+                    pagealloc::allocate_physpage().map_err(|_| "rfork: sweep page alloc failed")?;
+                map_kernel_alias(pa.addr())?;
+                // SAFETY: the page's KZERO+PA alias was just (re)mapped r/w
+                // in the kernel table above; one full fresh page, owned.
+                unsafe {
+                    ptr::write_bytes(physaddr_as_ptr_mut_offset_from_kzero::<u8>(pa), 0, PAGE_SIZE_4K);
+                }
+                let entry = Entry::rw_user_data().with_phys_addr(pa);
+                // SAFETY (both map_to calls): parent.root_table is the
+                // parent's ACTIVE user table (map_to's per-write TLB
+                // invalidate covers the addition — the VA was unmapped, so
+                // no stale translation); child.root_table is INACTIVE and
+                // edited via the temp-recursive dance.  Single CPU,
+                // IRQ-masked syscall context throughout.
+                unsafe {
+                    let mut physalloc = PhysPageAllocator {};
+                    let mut vmt = VmTraitImpl {};
+                    (*parent.root_table)
+                        .map_to(
+                            &mut physalloc,
+                            &mut vmt,
+                            entry,
+                            va,
+                            PageSize::Page4K,
+                            RootPageTableType::User,
+                        )
+                        .map_err(|_| "rfork: sweep parent map failed")?;
+                    let mut physalloc = PhysPageAllocator {};
+                    let mut vmt = VmTraitImpl {};
+                    (*child.root_table)
+                        .map_to(
+                            &mut physalloc,
+                            &mut vmt,
+                            entry,
+                            va,
+                            PageSize::Page4K,
+                            RootPageTableType::User,
+                        )
+                        .map_err(|_| "rfork: sweep child map failed")?;
+                }
+                let rec = MappingRecord { va, phys: pa.addr() as usize, size: PAGE_SIZE_4K, kind: SegKind::Bss };
+                parent.mapping_log.push(rec);
+                child.mapping_log.push(rec);
+                share_new_user_page(pa.addr(), 2);
+                va += PAGE_SIZE_4K;
+            }
+        }
+    }
 
     // Mirror the segment map + demand-page byte source so the child's
     // future faults resolve in the child.
@@ -1967,4 +2502,88 @@ fn map_kernel_alias(pa: u64) -> Result<()> {
         )
         .map_err(|_| "rfork: kernel alias map failed")
         .map(|_| ())
+}
+
+/// Host pins for the RFMEM shared-page refcount table (the donor dupseg
+/// `sameseg` accounting): the free-side pivot is the piece a regression
+/// would silently break — a page freed while a sibling still maps it is
+/// use-after-free corruption with no marker.  The full share semantics
+/// (both procs reading each other's writes through the same PA) are
+/// guest-verified by the 08-04 ping gate; these pins cover the table's
+/// share/release/refcount-gated-free decisions.
+#[cfg(test)]
+mod rfmem_tests {
+    use super::SharedPages;
+
+    /// A never-shared page frees unconditionally (the pre-RFMEM behavior
+    /// for every ordinary page — the absence from the table IS the
+    /// verdict).
+    #[test]
+    fn unshared_page_frees_immediately() {
+        let mut t = SharedPages::new();
+        assert!(t.release(0x1000));
+        assert!(t.release(0x1000)); // idempotent shape: still absent
+    }
+
+    /// The ping shape: parent + child share; the child's exit must NOT
+    /// free (the parent's release later must).
+    #[test]
+    fn last_sharers_release_frees() {
+        let mut t = SharedPages::new();
+        t.share(0x2000); // parent + child = 2
+        assert!(!t.release(0x2000)); // first sharer exits — sibling holds
+        assert!(t.release(0x2000)); // last sharer exits — free now
+        // The table entry is gone: a later page at the same PA (recycled
+        // by the allocator) is an ordinary page again.
+        assert!(t.release(0x2000));
+    }
+
+    /// A shared proc forking again under RFMEM (the three-way shape):
+    /// two releases leave the page mapped; the third frees.
+    #[test]
+    fn double_fork_refcounts_three() {
+        let mut t = SharedPages::new();
+        t.share(0x3000); // parent + child = 2
+        t.share(0x3000); // + grandchild = 3
+        assert!(!t.release(0x3000));
+        assert!(!t.release(0x3000));
+        assert!(t.release(0x3000));
+    }
+
+    /// Pages are independent: one page's lifecycle never frees another's.
+    #[test]
+    fn pages_are_independent() {
+        let mut t = SharedPages::new();
+        t.share(0x4000);
+        t.share(0x5000);
+        assert!(!t.release(0x4000));
+        assert!(t.release(0x4000)); // 0x4000 fully released
+        assert!(!t.release(0x5000)); // 0x5000 still held by its sibling
+        assert!(t.release(0x5000));
+    }
+
+    /// Re-share after a full release starts a fresh lifecycle at 2
+    /// (no stale count leaks into the recycled PA's next family).
+    #[test]
+    fn reshare_after_full_release_starts_fresh() {
+        let mut t = SharedPages::new();
+        t.share(0x6000);
+        assert!(!t.release(0x6000));
+        assert!(t.release(0x6000)); // family gone
+        t.share(0x6000); // a NEW family shares the recycled page
+        assert!(!t.release(0x6000));
+        assert!(t.release(0x6000));
+    }
+
+    /// share_new: a page BORN shared by N members (the rfork bss sweep
+    /// and brk_ family-growth arm) frees at the Nth release.
+    #[test]
+    fn born_shared_frees_at_the_last_release() {
+        let mut t = SharedPages::new();
+        t.share_new(0x7000, 3); // a brk_ growth page in a 3-member family
+        assert!(!t.release(0x7000));
+        assert!(!t.release(0x7000));
+        assert!(t.release(0x7000));
+        assert!(t.release(0x7000)); // absent now — recycled PA is ordinary
+    }
 }

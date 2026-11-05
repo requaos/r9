@@ -1570,9 +1570,14 @@ impl BootTestStep {
     fn finish(&self, log_abs: &Path, capture: &[u8], profile: BootProfile) -> Result<()> {
         // Final negative-scan sweep over the whole capture (the exec gate
         // demands a clean boot end to end; the deliberate-panic profile is
-        // the sole exception).
+        // the sole exception).  Both real-chain profiles (Net, Netip)
+        // exempt exactly the designed fauth fall-through line (D-02) —
+        // the mid-sweep scan's netip_profile handling, extended here.
         if profile != BootProfile::Panic
-            && let Some(hit) = negative_scan_hit_for(capture, profile == BootProfile::Net)
+            && let Some(hit) = negative_scan_hit_for(
+                capture,
+                matches!(profile, BootProfile::Net | BootProfile::Netip),
+            )
         {
             return Err(self.fail_pretty(capture, &format!("negative scan hit {hit:?}")));
         }
