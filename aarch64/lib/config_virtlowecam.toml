@@ -1,0 +1,40 @@
+# virtlowecam — the NETDRV-01 moved-window perturbation gate (Harvey phase
+# 07, plan 07-02).  Identical to config_virt.toml except the machine flag
+# disabling the high ECAM window (which moves it to 0x3f000000/16 MiB and
+# shrinks bus-range to 0x00-0x0f) and the matching committed DTB.  A driver
+# that hardcoded the standard window would fail this boot loudly; discovery
+# from data passes with the SAME interrupt route (the interrupt-map is
+# byte-identical to virt-gicv2's).
+
+[build]
+target = "lib/aarch64-unknown-none-elf.json"
+buildflags = ["-Z", "build-std=core,alloc"]
+
+[link]
+# linker script to use
+script = 'aarch64/lib/kernel.ld'
+
+# kernel load address to insert into kernel.ld (KZERO + 0x40080000; AT()
+# emits p_paddr 0x40080000, qemu virt's -kernel load address)
+load-address = '0xffff800040080000'
+
+[config]
+platform = "virt"
+# no dtb key here: virt's DTB is qemu-facing, passed via [qemu].dtb
+
+[qemu]
+machine = "virt,gic-version=2,highmem-ecam=off"
+# TCG reference CPU.  For hvf on darwin pass --accel hvf (or R9_ACCEL=hvf):
+# xtask swaps in the gicv3 machine/DTB and -cpu host itself.
+cpu = "cortex-a72"
+smp = 1
+memory = "1024M"
+accel = "tcg"
+# Committed moved-window DTB (virt-gicv2-lowecam.dts is its source):
+# qemu loads it at 0x40000000 (the ELF-boot fix — without -dtb, qemu
+# 11.1.2 loads no DTB at all for ELF kernels and x0 is 0)
+dtb = "aarch64/lib/virt-gicv2-lowecam.dtb"
+
+[dist]
+# ELF is the boot image on virt; skip the objcopy+gzip flat-image pipeline
+format = "elf"

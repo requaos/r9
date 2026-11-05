@@ -848,6 +848,18 @@ const BOOT_STACKSMOKE_MARKER: &str = "stacksmoke: depth 64 ok";
 /// shape, presence-only).
 const BOOT_SMOKESLEEP_MARKER: &str = "smokesleep: interrupted";
 
+/// PCI discovery contract (07-02, NETDRV-01): on every aarch64 virt boot
+/// the kernel prints the DTB-decoded ECAM window, the found virtio-net
+/// device, and the decoded INTx route.  finish() asserts presence, with
+/// the expected ECAM base keyed off the config NAME — virtlowecam boots
+/// the moved-window machine (`highmem-ecam=off`), so its DTB decodes to a
+/// DIFFERENT base; that divergence is the perturbation proof.  The hex
+/// constants live here, in test expectations — never in kernel code.
+const PCI_NET_DEVICE_MARKER: &str = "pci: virtio-net 1af4:1041";
+const PCI_NET_ROUTE_MARKER: &str = "pci: inta -> spi 4 intid 36";
+const PCI_ECAM_BASE_STANDARD: &str = "pci: ecam base 0x4010000000";
+const PCI_ECAM_BASE_LOWECAM: &str = "pci: ecam base 0x3f000000";
+
 /// Always-on negative scan: any panic/Unhandled-interrupt line in
 /// the capture fails the run — every profile EXCEPT the deliberate-panic
 /// one (whose expected flow prints exactly that dump).  Case-insensitive,
@@ -1370,6 +1382,25 @@ impl BootTestStep {
         // the sole exception).
         if profile != BootProfile::Panic && let Some(hit) = negative_scan_hit(capture) {
             return Err(self.fail_pretty(capture, &format!("negative scan hit {hit:?}")));
+        }
+        // The PCI discovery contract (NETDRV-01): every aarch64 virt boot
+        // prints the DTB-decoded window/device/route lines.  Presence-only,
+        // never order (the v1.0 marker discipline); the expected ECAM base
+        // is keyed off the config NAME — virtlowecam boots the
+        // `highmem-ecam=off` machine whose window moved, and a single
+        // constant serving both configs would prove nothing.
+        if self.config.config.as_ref().and_then(|c| c.platform.as_deref()) == Some("virt") {
+            let ecam_marker = if self.config_name == "virtlowecam" {
+                PCI_ECAM_BASE_LOWECAM
+            } else {
+                PCI_ECAM_BASE_STANDARD
+            };
+            for marker in [ecam_marker, PCI_NET_DEVICE_MARKER, PCI_NET_ROUTE_MARKER] {
+                if !contains_marker(capture, marker.as_bytes()) {
+                    return Err(self
+                        .fail_pretty(capture, &format!("pci discovery line {marker:?} absent")));
+                }
+            }
         }
         match profile {
             BootProfile::Panic => {
