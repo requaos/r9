@@ -114,7 +114,7 @@ fn set_ticks(t: u64) {
 }
 
 fn take_wake_log() -> Vec<u64> {
-    std::mem::take(&mut *WAKE_LOG.lock().unwrap())
+    std::mem::take(&mut *WAKE_LOG.lock().unwrap_or_else(|e| e.into_inner()))
 }
 
 /// Register the stub hooks + clock exactly once per process.
@@ -130,9 +130,11 @@ fn ensure_hooks() {
 }
 
 /// Install a FRESH scripted stack with the clock at 0 and a clean wake log.
-/// Returns the guard serializing this pin against the others.
+/// Returns the guard serializing this pin against the others.  Poison-tolerant:
+/// a panicking pin must not cascade PoisonError into its siblings — the fresh
+/// install below resets the whole seam state anyway.
 fn fresh_scripted_stack() -> std::sync::MutexGuard<'static, ()> {
-    let guard = SEAM_TEST_LOCK.lock().unwrap();
+    let guard = SEAM_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     ensure_hooks();
     set_ticks(0);
     take_wake_log();
@@ -163,10 +165,6 @@ struct TcpLeg {
     seq: i32,
     ack: Option<i32>,
     syn: bool,
-    fin: bool,
-    rst: bool,
-    psh: bool,
-    payload: Vec<u8>,
 }
 
 /// Craft a bare-IPv4 UDP datagram with valid checksums.
@@ -259,10 +257,6 @@ fn parse_tcp4(frame: &[u8]) -> TcpLeg {
         seq: tcp.seq_number().0,
         ack: if tcp.ack() { Some(tcp.ack_number().0) } else { None },
         syn: tcp.syn(),
-        fin: tcp.fin(),
-        rst: tcp.rst(),
-        psh: tcp.psh(),
-        payload: tcp.payload().to_vec(),
     }
 }
 
@@ -374,7 +368,7 @@ fn establish_tcp(local_port: u16, remote_port: u16) -> (SocketHandle, i32, i32) 
     {
         let mut g = stack::enter_stack();
         let core = g.core.as_mut().expect("pin: stack installed");
-        let mut s = core.sockets.get_mut::<tcp::Socket>(handle);
+        let s = core.sockets.get_mut::<tcp::Socket>(handle);
         s.connect(core.iface.context(), (IpAddress::Ipv4(PEER), remote_port), local_port)
             .expect("pin: connect");
     }
@@ -382,6 +376,7 @@ fn establish_tcp(local_port: u16, remote_port: u16) -> (SocketHandle, i32, i32) 
     let syn = tx_tcp(tx_count() - 1);
     assert!(syn.syn && syn.ack.is_none(), "pin: first frame is a bare SYN");
     assert_eq!(syn.src, GUEST);
+    assert_eq!(syn.dst, PEER);
     assert_eq!(syn.sport, local_port);
     assert_eq!(syn.dport, remote_port);
     let local_isn = syn.seq;
@@ -484,7 +479,7 @@ fn dhcp_shaped_exchange_sources_0_0_0_0_on_the_wire() {
     {
         let mut g = stack::enter_stack();
         let core = g.core.as_mut().expect("pin: stack installed");
-        let mut s = core.sockets.get_mut::<udp::Socket>(handle);
+        let s = core.sockets.get_mut::<udp::Socket>(handle);
         s.send_slice(
             &bootp_shaped_payload(DHCP_MARKER),
             IpEndpoint::new(IpAddress::Ipv4(Ipv4Address::BROADCAST), 67),
@@ -500,7 +495,7 @@ fn dhcp_shaped_exchange_sources_0_0_0_0_on_the_wire() {
     {
         let mut g = stack::enter_stack();
         let core = g.core.as_mut().expect("pin: stack installed");
-        let mut s = core.sockets.get_mut::<udp::Socket>(handle);
+        let s = core.sockets.get_mut::<udp::Socket>(handle);
         let mut meta = UdpMetadata::from(IpEndpoint::new(IpAddress::Ipv4(Ipv4Address::BROADCAST), 67));
         meta.local_address = Some(IpAddress::Ipv4(Ipv4Address::UNSPECIFIED));
         s.send_slice(&bootp_shaped_payload(DHCP_MARKER), meta).expect("pin: bridge send");
@@ -525,7 +520,7 @@ fn dhcp_shaped_exchange_sources_0_0_0_0_on_the_wire() {
     {
         let mut g = stack::enter_stack();
         let core = g.core.as_mut().expect("pin: stack installed");
-        let mut s = core.sockets.get_mut::<udp::Socket>(handle);
+        let s = core.sockets.get_mut::<udp::Socket>(handle);
         assert!(s.can_recv(), "pin: the broadcast Offer is accepted with no iface address");
         let mut buf = alloc_vec(4096);
         let (n, meta) = s.recv_slice(&mut buf).expect("pin: recv the Offer");
@@ -569,7 +564,7 @@ fn waker_bridge_fires_on_rx_close_and_buffer_space() {
     {
         let mut g = stack::enter_stack();
         let core = g.core.as_mut().expect("pin: stack installed");
-        let mut s = core.sockets.get_mut::<tcp::Socket>(handle);
+        let s = core.sockets.get_mut::<tcp::Socket>(handle);
         assert!(s.can_recv());
         let mut buf = alloc_vec(64);
         let n = s.recv_slice(&mut buf).expect("pin: recv");
@@ -582,7 +577,7 @@ fn waker_bridge_fires_on_rx_close_and_buffer_space() {
     {
         let mut g = stack::enter_stack();
         let core = g.core.as_mut().expect("pin: stack installed");
-        let mut s = core.sockets.get_mut::<tcp::Socket>(handle);
+        let s = core.sockets.get_mut::<tcp::Socket>(handle);
         s.send_slice(b"xyz").expect("pin: send");
     }
     stack::drive_stack(); // data out
@@ -673,7 +668,7 @@ fn register_wake_reregister_never_loses_a_wake() {
         {
             let mut g = stack::enter_stack();
             let core = g.core.as_mut().expect("pin: stack installed");
-            let mut s = core.sockets.get_mut::<udp::Socket>(handle);
+            let s = core.sockets.get_mut::<udp::Socket>(handle);
             assert!(s.can_recv(), "pin (b): cycle {cycle} — re-check observes the datagram");
             let mut buf = alloc_vec(64);
             let (n, meta) = s.recv_slice(&mut buf).expect("pin: recv");
@@ -701,7 +696,7 @@ fn deadline_arms_from_poll_at_across_retransmit() {
     {
         let mut g = stack::enter_stack();
         let core = g.core.as_mut().expect("pin: stack installed");
-        let mut s = core.sockets.get_mut::<tcp::Socket>(handle);
+        let s = core.sockets.get_mut::<tcp::Socket>(handle);
         s.connect(core.iface.context(), (IpAddress::Ipv4(PEER), 1234), 49152).expect("pin: connect");
     }
 
@@ -785,7 +780,7 @@ fn stack_debt_drains_on_next_op() {
     {
         let mut g = stack::enter_stack();
         let core = g.core.as_mut().expect("pin: stack installed");
-        let mut s = core.sockets.get_mut::<tcp::Socket>(handle);
+        let s = core.sockets.get_mut::<tcp::Socket>(handle);
         s.connect(core.iface.context(), (IpAddress::Ipv4(PEER), 1234), 49152).expect("pin: connect");
     }
     stack::drive_stack();
@@ -794,8 +789,12 @@ fn stack_debt_drains_on_next_op() {
 
     // The deadline fires with ZERO registered waiters (nobody blocked in a
     // devip op): the tick sweep sets the debt instead of waking anyone.
+    // (tick_check takes the observed tick count as a parameter — the clock
+    // only matters when a DRIVE runs: poll_maintenance compares the
+    // retransmit timer against instant_now().)
     stack::tick_check(999);
     assert!(!stack::STACK_DEBT.load(Ordering::Acquire), "pin (g): no debt before the deadline");
+    set_ticks(1000); // time reaches the deadline — the drain's drive runs at t=1000
     stack::tick_check(1000);
     assert!(stack::STACK_DEBT.load(Ordering::Acquire), "pin (g): the fired deadline set the debt");
     assert_eq!(take_wake_log(), Vec::<u64>::new(), "pin (g): no waiters to wake");

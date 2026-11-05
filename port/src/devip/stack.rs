@@ -65,7 +65,8 @@ use alloc::vec::Vec;
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use smoltcp::iface::{Config, Interface, PollIngressSingleResult, SocketSet};
+use smoltcp::iface::{Config, Interface, PollIngressSingleResult, SocketHandle, SocketSet};
+use smoltcp::socket::tcp;
 use smoltcp::time::Instant;
 use smoltcp::wire::HardwareAddress;
 
@@ -400,4 +401,117 @@ pub(crate) fn install_test_stack(core: StackCore) {
 #[cfg(test)]
 pub(crate) fn enter_stack() -> crate::mcslock::BusyGuard<'static, StackState> {
     STACK.enter().expect("devip: stack contended")
+}
+
+// ---------------------------------------------------------------------------
+// The accept pool (contract §12.3; Pitfall P-A).
+// ---------------------------------------------------------------------------
+
+/// The devip-exact accept-pool depth (devip `Maxincall`, contract §12.3):
+/// 128 members × (2048 + 2048)-byte socket buffers = 512 KiB per announced
+/// conv, allocated AT announce.  The pool manager's depth is a parameter so
+/// the host pins run test-scaled pools — the demux shape is
+/// depth-independent.
+pub const ACCEPT_POOL_DEPTH: usize = 128;
+
+/// The TCP socket buffer size per pool member (contract §12.3).
+pub const POOL_SOCK_BUF: usize = 2048;
+
+/// The accept pool: smoltcp has NO listen backlog — excess SYNs to a
+/// listening socket are RSTed (docs.rs verbatim) — so devip's Maxincall
+/// incall queue maps onto N smoltcp sockets all `listen(port)`.  smoltcp's
+/// `accepts()` lets the FIRST still-Listen member absorb each SYN (its
+/// tuple is unset); the tuple binds on the SynReceived transition, so the
+/// next SYN falls through to the next member.  The listen-file open pops
+/// the oldest connected member and the pool refills.
+///
+/// The pool's ops enter the STACK cell themselves (short acquisitions;
+/// never hold the cell across a pool op).
+pub struct AcceptPool {
+    members: Vec<SocketHandle>,
+    port: u16,
+    depth: usize,
+}
+
+impl AcceptPool {
+    /// devip's `announce <port>`: allocate `depth` listening sockets
+    /// (production callers pass ACCEPT_POOL_DEPTH).  On a mid-allocation
+    /// failure the partial pool is torn down — no half-announced conv.
+    pub fn announce(depth: usize, port: u16) -> Result<AcceptPool> {
+        let mut guard = STACK.enter().expect("devip: stack contended");
+        let core = guard.core.as_mut().ok_or("devip: no bound medium")?;
+        let mut members = Vec::with_capacity(depth);
+        for _ in 0..depth {
+            match Self::spawn_listener(core, port) {
+                Ok(h) => members.push(h),
+                Err(e) => {
+                    for h in members {
+                        core.sockets.remove(h);
+                    }
+                    return Err(e);
+                }
+            }
+        }
+        Ok(AcceptPool { members, port, depth })
+    }
+
+    /// Pop the OLDEST pool member that has left Listen (an incoming call
+    /// landed — SynReceived and beyond).  devip's listen-file open consumes
+    /// the returned handle's conv; the caller refills the pool after.
+    pub fn take_connected(&mut self) -> Option<SocketHandle> {
+        let mut guard = STACK.enter().expect("devip: stack contended");
+        let core = guard.core.as_mut()?;
+        let pos = self.members.iter().position(|&h| {
+            let s = core.sockets.get::<tcp::Socket>(h);
+            s.state() != tcp::State::Listen && s.is_open()
+        })?;
+        Some(self.members.remove(pos))
+    }
+
+    /// Top the pool back up to its depth with fresh Listen sockets.
+    pub fn refill(&mut self) -> Result<()> {
+        let mut guard = STACK.enter().expect("devip: stack contended");
+        let core = guard.core.as_mut().ok_or("devip: no bound medium")?;
+        while self.members.len() < self.depth {
+            let h = Self::spawn_listener(core, self.port)?;
+            self.members.push(h);
+        }
+        Ok(())
+    }
+
+    /// Allocate one listening pool member: 2048/2048 buffers (contract
+    /// §12.3) and hop limit 255 (contract §12.8 — devip's MAXTTL; smoltcp's
+    /// 64 default must never leak).
+    fn spawn_listener(core: &mut StackCore, port: u16) -> Result<SocketHandle> {
+        let mut s = tcp::Socket::new(
+            tcp::SocketBuffer::new(alloc::vec![0; POOL_SOCK_BUF]),
+            tcp::SocketBuffer::new(alloc::vec![0; POOL_SOCK_BUF]),
+        );
+        s.set_hop_limit(Some(255));
+        s.listen(port).map_err(|_| "devip: listen failed")?;
+        Ok(core.sockets.add(s))
+    }
+
+    /// The pool's current members (pin assertions).
+    #[cfg(test)]
+    pub(crate) fn members(&self) -> &[SocketHandle] {
+        &self.members
+    }
+
+    /// Count of members still in Listen (pin assertions).
+    #[cfg(test)]
+    pub(crate) fn listening_count(&self) -> usize {
+        let guard = STACK.enter().expect("devip: stack contended");
+        let Some(core) = guard.core.as_ref() else { return 0 };
+        self.members
+            .iter()
+            .filter(|&&h| core.sockets.get::<tcp::Socket>(h).state() == tcp::State::Listen)
+            .count()
+    }
+
+    /// All members in Listen (pin assertions).
+    #[cfg(test)]
+    pub(crate) fn all_listening(&self) -> bool {
+        !self.members.is_empty() && self.listening_count() == self.members.len()
+    }
 }
