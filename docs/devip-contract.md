@@ -641,6 +641,20 @@ The IRQ-masked syscall invariant makes register → re-check → block wakeup-lo
 construction.  The `core::task::Waker` construction (RawWaker vtable) is the seam's only new
 unsafe; it carries the SAFETY comment + an UNSAFE-AUDIT.md entry per the audit contract.
 
+**Feature correction (08-02, verified against the 0.14.0 crate source):** the waker methods AND
+every internal `wake()` call are gated behind smoltcp's `async` cargo feature
+(`#[cfg(feature = "async")]` on every site in `socket/{tcp,udp,icmp}.rs`).  The feature is in the
+dependency set — it is zero-dependency (`async = []` in smoltcp's Cargo.toml): no executor, no
+runtime, no threads, and the committed Cargo.lock closure is unchanged.  The phase research's
+"async outdated" note is corrected here: that note's own rationale ("the wakers bridge onto the
+block/wake hooks, not an executor") IS this design — the feature is the only way smoltcp wakes
+the bridge.  Without it the bridge does not compile and no wake ever fires.
+
+**Wake-after-drop (08-02):** the bridge's vtable wake NEVER calls the arch wake hook directly —
+it fires mid-`poll` with the seam's STACK cell held, and the hook takes PROC_TABLE.  It records
+the pid into the seam's pending-wake set; `drive_stack` drains the set after the cell drops (the
+netif wake-after-drop discipline, asserted by pins (a)/(b)).
+
 ### 12.3 The accept pool (OQ-3) — with the memory math
 
 smoltcp has NO listen backlog: excess SYNs to a listening socket are RSTed (docs.rs verbatim).
@@ -709,7 +723,19 @@ succeeds and feeds the view — `ipv6.c:604-615`.)
   PASS-path/SHIM-path verdict is recorded here as a dated line when the pin lands.  The recorded
   fallback stays D-09's dhcpv4 socket.
 
-  *(2026-11-05: pin pending — this line is replaced by the 08-02 verdict.)*
+  *(2026-11-05: OQ-1 RESOLVED — **PASS-path**, with one bridge-side obligation.  Pin (h)
+  (`cargo test -p port devip`, ScriptedDev TX capture) proves: a udp socket bound to port 68
+  with NO configured interface address transmits the broadcast Discover (dst 255.255.255.255:67)
+  with **src 0.0.0.0 on the wire** when the send metadata carries `local_address:
+  Some(0.0.0.0)` — smoltcp's udp dispatch uses an explicit `packet_meta.local_address` in
+  preference to source selection (`socket/udp.rs` dispatch).  WITHOUT it the datagram is
+  **silently dropped** (`get_source_address` returns None on an address-less interface;
+  net_trace only, no error — the pin asserts zero TX frames for the naive shape).  The
+  broadcast Offer back to port 68 is accepted with no configured address (udp `accepts()`:
+  port match + broadcast dst).  Bridge rule: a conv whose recorded laddr is the unspecified
+  address (the absorbed `add 0.0.0.0 0.0.0.0` DHCP-in-progress marker above) MUST pass
+  `local_address: Some(0.0.0.0)` in the UdpMetadata of every send.  No wire-layer shim is
+  needed; the D-09 dhcpv4-socket fallback stays unwired.)*
 
 ### 12.7 UDP err-file ICMP advice
 
