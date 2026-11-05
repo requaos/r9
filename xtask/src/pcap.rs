@@ -72,6 +72,213 @@ pub fn reply_count(frames: &[ArpFrame]) -> usize {
     frames.iter().filter(|f| f.oper == 2).count()
 }
 
+// ---- The net-gate assertion machinery (07-05 task 2, D-06/D-08) -------
+//
+// The sweep's evidence arrives as the serial capture: the driver's
+// `#l0: virtio: ...` bind line (the guest-MAC source — the assertions
+// never read a hardcoded MAC), the netif.c stats block (`in: <n>` /
+// `out: <n>` counters), the per-queue ifstats lines
+// (`vq<q>: avail=<a> used=<u> lastused=<l> nintr=<x> nnote=<m>`), and the
+// sweep's own markers.  Byte-slice scanning in the count_marker_lines
+// style: split on \n, trim one trailing \r (kernel prints are CRLF-cooked,
+// the sweep's cat output is byte-exact \n), key on line prefixes.  Every
+// failure names the mismatched field with got/want values — a gate
+// failure is a debugging session's head start, never a bare mismatch
+// (T-07-07: absence or malformation is a loud Err, never a silent pass).
+
+/// slirp's fixed addressing (RESEARCH Q9, the libslirp defaults): the
+/// guest's DHCP address and the gateway the ping-pong ARPs target.
+const SLIRP_GUEST_IP: [u8; 4] = [10, 0, 2, 15];
+const SLIRP_GATEWAY_IP: [u8; 4] = [10, 0, 2, 2];
+/// The blast mode's unreachable target (no slirp responder — pure TX).
+const BLAST_TARGET_IP: [u8; 4] = [10, 0, 2, 99];
+/// devether's write path enforces ETHERMINTU: every frame on the wire is
+/// exactly 60 bytes.
+const ETHERMINTU: usize = 60;
+
+/// The capture as lines, CRLF-tolerant.
+fn capture_lines(capture: &[u8]) -> impl Iterator<Item = &[u8]> {
+    capture.split(|b| *b == b'\n').map(|line| match line.last() {
+        Some(b'\r') => &line[..line.len() - 1],
+        _ => line,
+    })
+}
+
+fn mac_str(mac: &[u8; 6]) -> String {
+    format!(
+        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+    )
+}
+
+fn ip_str(ip: &[u8; 4]) -> String {
+    format!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3])
+}
+
+fn parse_hex_byte(s: &[u8]) -> Option<u8> {
+    if s.len() != 2 {
+        return None;
+    }
+    let hi = (s[0] as char).to_digit(16)?;
+    let lo = (s[1] as char).to_digit(16)?;
+    Some((hi * 16 + lo) as u8)
+}
+
+/// The guest MAC, parsed from the driver's `#l0: virtio: ...` bind line
+/// (devether.c's print shape; RESEARCH Q11).  The MAC is the line's final
+/// 17 bytes (`xx:xx:xx:xx:xx:xx`), whatever the prefix's mbps text says.
+fn guest_mac(capture: &[u8]) -> Result<[u8; 6], String> {
+    for line in capture_lines(capture) {
+        if line.starts_with(b"#l") && line.windows(9).any(|w| w == b": virtio:") {
+            if line.len() >= 17 {
+                let tail = &line[line.len() - 17..];
+                let parts: Vec<&[u8]> = tail.split(|b| *b == b':').collect();
+                if parts.len() == 6 {
+                    let mut mac = [0u8; 6];
+                    let mut ok = true;
+                    for (i, p) in parts.iter().enumerate() {
+                        match parse_hex_byte(p) {
+                            Some(v) => mac[i] = v,
+                            None => {
+                                ok = false;
+                                break;
+                            }
+                        }
+                    }
+                    if ok {
+                        return Ok(mac);
+                    }
+                }
+            }
+            return Err(format!(
+                "net gate: the `#l0: virtio:` bind line is malformed (no MAC tail): {}",
+                String::from_utf8_lossy(line)
+            ));
+        }
+    }
+    Err("net gate: no `#l0: virtio:` bind line in the capture — the guest MAC source is gone \
+         (devether never bound?)"
+        .to_string())
+}
+
+/// One stats counter (`in:` / `out:`) from the sweep's stats cat — the
+/// netif.c line shape `<key>: <n>` at line start.
+fn stat_value(capture: &[u8], key: &str) -> Result<u64, String> {
+    let prefix = format!("{key}: ");
+    for line in capture_lines(capture) {
+        if let Some(rest) = line.strip_prefix(prefix.as_bytes()) {
+            let text = String::from_utf8_lossy(rest);
+            return text
+                .trim()
+                .parse::<u64>()
+                .map_err(|e| format!("net gate: stats `{prefix}<n>` not numeric ({text:?}): {e}"));
+        }
+    }
+    Err(format!(
+        "net gate: no `{prefix}<n>` line in the capture (the sweep's stats cat never ran)"
+    ))
+}
+
+/// The blaster's sent count from its `netblast: sent <n> frames` marker.
+fn netblast_sent(capture: &[u8]) -> Result<u64, String> {
+    for line in capture_lines(capture) {
+        if let Some(rest) = line.strip_prefix(b"netblast: sent ") {
+            let text = String::from_utf8_lossy(rest);
+            let num = text.split(' ').next().unwrap_or("");
+            return num
+                .parse::<u64>()
+                .map_err(|e| format!("net gate: `netblast: sent` count not numeric ({num:?}): {e}"));
+        }
+    }
+    Err("net gate: no `netblast: sent <n> frames` line in the capture (netblast never ran?)"
+        .to_string())
+}
+
+/// One parsed ifstats queue line.  avail/nnote are shape-validated as
+/// key=value pairs but carry no plan invariant, so they are not stored.
+struct IfStats {
+    queue: u64,
+    used: u64,
+    lastused: u64,
+    nintr: u64,
+}
+
+/// A `key=<num>` field from an ifstats line's space-separated tokens
+/// (prefix-matched at token start, so `used` never matches `lastused`).
+fn kv_field(fields: &[u8], key: &str) -> Option<u64> {
+    for tok in String::from_utf8_lossy(fields).split_whitespace() {
+        if let Some(v) = tok.strip_prefix(key).and_then(|s| s.strip_prefix('=')) {
+            return v.parse::<u64>().ok();
+        }
+    }
+    None
+}
+
+/// The per-queue ifstats lines: `vq<q>: avail=<a> used=<u> lastused=<l>
+/// nintr=<x> nnote=<m>`.  Malformed lines are skipped, not fatal — a
+/// capture with NO parsed lines is the loud failure (the reconcile
+/// caller), so a stray `vq...` line elsewhere can never silently pass.
+fn ifstats_lines(capture: &[u8]) -> Vec<IfStats> {
+    let mut out = Vec::new();
+    for line in capture_lines(capture) {
+        let Some(rest) = line.strip_prefix(b"vq") else { continue };
+        let Some(colon) = rest.iter().position(|b| *b == b':') else { continue };
+        let Ok(queue) = String::from_utf8_lossy(&rest[..colon]).parse::<u64>() else { continue };
+        let fields = &rest[colon + 1..];
+        let (Some(used), Some(lastused), Some(nintr)) =
+            (kv_field(fields, "used"), kv_field(fields, "lastused"), kv_field(fields, "nintr"))
+        else {
+            continue;
+        };
+        out.push(IfStats { queue, used, lastused, nintr });
+    }
+    out
+}
+
+/// The ifstats reconciliation (NETDRV-04's accounting surface): every
+/// parsed queue line must show used == lastused at print time (the ring
+/// drained — no stuck entries), and a queue that MOVED frames (vq0 = RX
+/// rides the stats `in` count, vq1 = TX rides `out` — virtio-net's queue
+/// assignment) must show nintr in [1, frames]: an interrupt fired at
+/// least once, and never more often than the work it reported.
+fn reconcile_ifstats(capture: &[u8], rx_frames: u64, tx_frames: u64) -> Result<(), String> {
+    let queues = ifstats_lines(capture);
+    if queues.is_empty() {
+        return Err("net gate: no ifstats `vq<q>:` lines in the capture (the driver hook never \
+                    printed — the sweep's ifstats cat produced nothing)"
+            .to_string());
+    }
+    for q in queues {
+        if q.used != q.lastused {
+            return Err(format!(
+                "net gate: ifstats vq{} undrained ring: used={} != lastused={} at print time \
+                 (stuck entries)",
+                q.queue, q.used, q.lastused
+            ));
+        }
+        let moved = match q.queue {
+            0 => rx_frames,
+            1 => tx_frames,
+            _ => continue, // a queue beyond RX/TX carries no plan invariant
+        };
+        if moved > 0 && q.nintr == 0 {
+            return Err(format!(
+                "net gate: ifstats vq{} moved {moved} frames but nintr=0 — an interrupt never \
+                 fired for work the queue provably did",
+                q.queue
+            ));
+        }
+        if moved > 0 && q.nintr > moved {
+            return Err(format!(
+                "net gate: ifstats vq{} nintr={} exceeds the {moved} frames the queue moved \
+                 (want nintr in [1, {moved}])",
+                q.queue, q.nintr
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// The arp-mode (ping-pong) gate assertion, NETDRV-03: N guest ARP
 /// requests (oper=1, sha = the guest MAC parsed from the capture's
 /// `#l0: virtio:` bind line — never a hardcoded constant, spa 10.0.2.15,
@@ -81,19 +288,111 @@ pub fn reply_count(frames: &[ArpFrame]) -> usize {
 /// pcap's total frame count == 2N (idle slirp emits nothing else), and
 /// the ifstats per-queue reconciliation (nintr in [1, frames] on a queue
 /// that moved frames; used == lastused at print time).  Returns N.
-/// Every failure names the mismatched field with got/want values.
 pub fn assert_arp_pingpong(
     frames: &[ArpFrame],
     total_frames: usize,
     capture: &[u8],
 ) -> Result<usize, String> {
-    // Placeholder body so the Net profile's finish() call sites (07-05
-    // task 1) compile; the real assertion lands with this plan's task 2
-    // TDD cycle (its RED fixtures fail against this Err; GREEN replaces
-    // the body).  Never reached on the live red path — the sweep's
-    // fast-fail fires before finish().
-    let _ = (frames, total_frames, capture);
-    Err("assert_arp_pingpong: assertion suite lands in 07-05 task 2".to_string())
+    let mac = guest_mac(capture)?;
+    let n = request_count(frames);
+    let nrep = reply_count(frames);
+    if n == 0 {
+        return Err(
+            "net gate: zero ARP request frames in the pcap (the sweep's dd writes never emitted?)"
+                .to_string(),
+        );
+    }
+    for (i, f) in frames.iter().filter(|f| f.oper == 1).enumerate() {
+        // devether's write path rewrites the ethernet source to the NIC's
+        // own address (devether.c's memmove), so on the wire src_mac ==
+        // sha == the guest MAC.
+        if f.src_mac != mac {
+            return Err(format!(
+                "net gate: ARP request #{i}: src_mac got {} want {} (the guest MAC)",
+                mac_str(&f.src_mac),
+                mac_str(&mac)
+            ));
+        }
+        if f.sha != mac {
+            return Err(format!(
+                "net gate: ARP request #{i}: sha got {} want {} (the guest MAC)",
+                mac_str(&f.sha),
+                mac_str(&mac)
+            ));
+        }
+        if f.spa != SLIRP_GUEST_IP {
+            return Err(format!(
+                "net gate: ARP request #{i}: spa got {} want {}",
+                ip_str(&f.spa),
+                ip_str(&SLIRP_GUEST_IP)
+            ));
+        }
+        if f.tpa != SLIRP_GATEWAY_IP {
+            return Err(format!(
+                "net gate: ARP request #{i}: tpa got {} want {} (slirp answers only its own \
+                 addresses)",
+                ip_str(&f.tpa),
+                ip_str(&SLIRP_GATEWAY_IP)
+            ));
+        }
+        if f.frame_len != ETHERMINTU {
+            return Err(format!(
+                "net gate: ARP request #{i}: len got {} want {ETHERMINTU} (ETHERMINTU)",
+                f.frame_len
+            ));
+        }
+    }
+    if nrep != n {
+        return Err(format!(
+            "net gate: ping-pong count mismatch: {n} ARP requests but {nrep} replies (want N==N)"
+        ));
+    }
+    for (i, f) in frames.iter().filter(|f| f.oper == 2).enumerate() {
+        if f.spa != SLIRP_GATEWAY_IP {
+            return Err(format!(
+                "net gate: ARP reply #{i}: spa got {} want {}",
+                ip_str(&f.spa),
+                ip_str(&SLIRP_GATEWAY_IP)
+            ));
+        }
+        if f.tpa != SLIRP_GUEST_IP {
+            return Err(format!(
+                "net gate: ARP reply #{i}: tpa got {} want {}",
+                ip_str(&f.tpa),
+                ip_str(&SLIRP_GUEST_IP)
+            ));
+        }
+        if f.tha != mac {
+            return Err(format!(
+                "net gate: ARP reply #{i}: tha got {} want {} (the guest MAC)",
+                mac_str(&f.tha),
+                mac_str(&mac)
+            ));
+        }
+        if f.frame_len != ETHERMINTU {
+            return Err(format!(
+                "net gate: ARP reply #{i}: len got {} want {ETHERMINTU}",
+                f.frame_len
+            ));
+        }
+    }
+    let sin = stat_value(capture, "in")?;
+    let sout = stat_value(capture, "out")?;
+    if sin != n as u64 {
+        return Err(format!("net gate: stats in: got {sin} want {n} (the ping-pong RX count)"));
+    }
+    if sout != n as u64 {
+        return Err(format!("net gate: stats out: got {sout} want {n} (the ping-pong TX count)"));
+    }
+    if total_frames != 2 * n {
+        return Err(format!(
+            "net gate: pcap carries {total_frames} frames, want exactly 2N={} ({n} requests + \
+             {n} replies) — idle slirp emits nothing else",
+            2 * n
+        ));
+    }
+    reconcile_ifstats(capture, n as u64, n as u64)?;
+    Ok(n)
 }
 
 /// The blast-mode (TX-bulk) gate assertion, NETDRV-04's load leg: the
@@ -108,10 +407,79 @@ pub fn assert_blast(
     total_frames: usize,
     capture: &[u8],
 ) -> Result<usize, String> {
-    // Placeholder body — same task-2 TDD contract as
-    // assert_arp_pingpong above.
-    let _ = (frames, total_frames, capture);
-    Err("assert_blast: assertion suite lands in 07-05 task 2".to_string())
+    let mac = guest_mac(capture)?;
+    let sent = netblast_sent(capture)?;
+    let sin = stat_value(capture, "in")?;
+    let sout = stat_value(capture, "out")?;
+    if sin != 0 {
+        return Err(format!(
+            "net gate: fresh blast boot stats in: got {sin} want 0 (tpa {} has no responder — no \
+             RX traffic may arrive)",
+            ip_str(&BLAST_TARGET_IP)
+        ));
+    }
+    let nrep = reply_count(frames);
+    if nrep != 0 {
+        return Err(format!(
+            "net gate: blast mode carries {nrep} ARP reply frames, want zero (the TX-bulk leg is \
+             pure TX)"
+        ));
+    }
+    for (i, f) in frames.iter().enumerate() {
+        if f.oper != 1 {
+            return Err(format!(
+                "net gate: blast frame #{i}: oper got {} want 1 (requests only)",
+                f.oper
+            ));
+        }
+        if f.sha != mac {
+            return Err(format!(
+                "net gate: blast frame #{i}: sha got {} want {} (the guest MAC)",
+                mac_str(&f.sha),
+                mac_str(&mac)
+            ));
+        }
+        if f.tpa != BLAST_TARGET_IP {
+            return Err(format!(
+                "net gate: blast frame #{i}: tpa got {} want {}",
+                ip_str(&f.tpa),
+                ip_str(&BLAST_TARGET_IP)
+            ));
+        }
+        if f.frame_len != ETHERMINTU {
+            return Err(format!(
+                "net gate: blast frame #{i}: len got {} want {ETHERMINTU}",
+                f.frame_len
+            ));
+        }
+    }
+    if frames.len() as u64 != sent {
+        return Err(format!(
+            "net gate: blast count mismatch: netblast sent {sent} but the pcap carries {} ARP \
+             frames",
+            frames.len()
+        ));
+    }
+    if total_frames as u64 != sent {
+        return Err(format!(
+            "net gate: blast count mismatch: netblast sent {sent} but the pcap carries \
+             {total_frames} total frames"
+        ));
+    }
+    if sout != sent {
+        return Err(format!("net gate: stats out: got {sout} want {sent} (the blast TX count)"));
+    }
+    if !capture
+        .windows(b"netsweep: NET-DONE".len())
+        .any(|w| w == b"netsweep: NET-DONE")
+    {
+        return Err(
+            "net gate: netsweep: NET-DONE absent from the capture (the sweep never completed)"
+                .to_string(),
+        );
+    }
+    reconcile_ifstats(capture, 0, sent)?;
+    Ok(sent as usize)
 }
 
 /// Validate the 24-byte global header, returning the capture's byte order
