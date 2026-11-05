@@ -2114,24 +2114,58 @@ fn annotated_status(cmd: &mut Command) -> Result<process::ExitStatus> {
 mod tests {
     use super::{
         BOOT_ECHO_PROBE, BOOT_TICK_MARKER, contains_marker, count_marker_lines,
-        count_register_lines, negative_scan_hit,
+        count_register_lines, negative_scan_hit_for,
     };
 
     /// The always-on negative scan: panic/Unhandled-interrupt lines fail
     /// non-panic profiles, case-insensitively.
     #[test]
     fn negative_scan_hits_panic_and_unhandled() {
-        assert_eq!(negative_scan_hit(b"ok\r\nkernel panic: bad\r\n"), Some("panic"));
-        assert_eq!(negative_scan_hit(b"PANIC\r\n"), Some("panic"));
-        assert_eq!(negative_scan_hit(b"blah\r\nUnhandled interrupt\r\n"), Some("Unhandled interrupt"));
-        assert_eq!(negative_scan_hit(b"unhandled interrupt\r\n"), Some("Unhandled interrupt"));
+        assert_eq!(negative_scan_hit_for(b"ok\r\nkernel panic: bad\r\n", false), Some("panic"));
+        assert_eq!(negative_scan_hit_for(b"PANIC\r\n", false), Some("panic"));
+        assert_eq!(
+            negative_scan_hit_for(b"blah\r\nUnhandled interrupt\r\n", false),
+            Some("Unhandled interrupt")
+        );
+        assert_eq!(
+            negative_scan_hit_for(b"unhandled interrupt\r\n", false),
+            Some("Unhandled interrupt")
+        );
     }
 
     #[test]
     fn negative_scan_passes_clean_captures() {
-        assert_eq!(negative_scan_hit(b"r9 from the Internet\r\n"), None);
-        assert_eq!(negative_scan_hit(b"hello aarch64 harvey\r\n"), None);
-        assert_eq!(negative_scan_hit(b""), None);
+        assert_eq!(negative_scan_hit_for(b"r9 from the Internet\r\n", false), None);
+        assert_eq!(negative_scan_hit_for(b"hello aarch64 harvey\r\n", false), None);
+        assert_eq!(negative_scan_hit_for(b"", false), None);
+    }
+
+    /// The scan's Pitfall-N10 arm: the stray-IRQ line's lowercase shape is
+    /// a hit (once 07-06 arms the NIC's IRQ source, a stray interrupt is a
+    /// bind-ordering bug, not a cosmetic).
+    #[test]
+    fn negative_scan_hits_stray_irq_line() {
+        assert_eq!(negative_scan_hit_for(b"unhandled IRQ 36\r\n", false), Some("unhandled IRQ"));
+        assert_eq!(negative_scan_hit_for(b"unhandled irq 36\r\n", true), Some("unhandled IRQ"));
+    }
+
+    /// The Net profile exempts exactly the D-02 designed fauth line (the
+    /// real Harvey chain prints `syscall 10 unimplemented` twice a boot);
+    /// any OTHER unimplemented syscall still fails the run.
+    #[test]
+    fn negative_scan_net_exempts_fauth_only() {
+        assert_eq!(negative_scan_hit_for(b"syscall 10 unimplemented\r\n", true), None);
+        assert_eq!(
+            negative_scan_hit_for(b"syscall 10 unimplemented\r\n", false),
+            Some("unimplemented syscall")
+        );
+        assert_eq!(
+            negative_scan_hit_for(
+                b"syscall 10 unimplemented\r\nsyscall 99 unimplemented\r\n",
+                true
+            ),
+            Some("unimplemented syscall")
+        );
     }
 
     /// Serial lines arrive CRLF (console putb maps \n to \r\n); the tick

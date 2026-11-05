@@ -384,4 +384,275 @@ mod tests {
         assert_eq!(frames[0].oper, 1);
         assert_eq!(frames[0].tpa, GATEWAY_IP);
     }
+
+    // ---- 07-05 task 2: the net-gate assertion suite (D-06/D-08) -------
+    // Fixtures below build the SERIAL capture the sweep produces (bind
+    // line, stats block, ifstats lines, markers) and the pcap frame sets
+    // each mode asserts over.  The guest MAC appears ONLY in fixtures
+    // (the bind line's tail bytes) — the assertion path parses it out,
+    // never reads a constant.
+
+    /// The guest-MAC bind line the driver prints at attach (RESEARCH
+    /// Q11's target shape) — kernel-printed, so CRLF-cooked on the wire.
+    const BIND_LINE: &str = "#l0: virtio: 1000Mbps: 52:54:00:12:34:56\r\n";
+
+    /// A blast-mode TX frame: netblast's static 60-byte ARP request with
+    /// tpa 10.0.2.99 (no slirp responder — pure TX, zero RX noise).
+    fn blast_request() -> Vec<u8> {
+        let mut f = arp_request();
+        f[38..42].copy_from_slice(&[10, 0, 2, 99]); // tpa
+        f
+    }
+
+    /// The netif.c stats block (in:/out: are the gate's counters), as the
+    /// sweep's cat prints it — userland writes are byte-exact (bare \n).
+    fn stats_block(in_n: u64, out_n: u64) -> String {
+        format!(
+            "in: {in_n}\nlink: 1\nout: {out_n}\ncrc errs: 0\noverflows: 0\n\
+             soft overflows: 0\nframing errs: 0\nbuffer errs: 0\noutput errs: 0\n\
+             prom: 0\nmbps: 1000\naddr: 525400123456\n"
+        )
+    }
+
+    /// One ifstats per-queue line (the 07-07 driver hook's shape):
+    /// `vq<q>: avail=<a> used=<u> lastused=<l> nintr=<x> nnote=<m>`.
+    fn ifstats_line(q: u32, used: u64, lastused: u64, nintr: u64) -> String {
+        format!("vq{q}: avail={used} used={used} lastused={lastused} nintr={nintr} nnote=0\n")
+    }
+
+    /// The arp-mode golden capture: bind line + stats(N,N) + both queues
+    /// reconciled (nintr in [1,N], used == lastused) + NET-DONE.
+    fn arp_capture(n: u64) -> Vec<u8> {
+        let mut s = String::new();
+        s.push_str(BIND_LINE);
+        s.push_str(&stats_block(n, n));
+        s.push_str(&ifstats_line(0, n, n, 2));
+        s.push_str(&ifstats_line(1, n, n, 2));
+        s.push_str("netsweep: NET-DONE\r\n");
+        s.into_bytes()
+    }
+
+    /// The blast-mode golden capture: bind line + netblast's sent line +
+    /// stats (in 0, out N) + queues (RX unmoved: nintr=0; TX reconciled)
+    /// + NET-DONE.
+    fn blast_capture(n: u64) -> Vec<u8> {
+        let mut s = String::new();
+        s.push_str(BIND_LINE);
+        s.push_str(&format!("netblast: sent {n} frames\r\n"));
+        s.push_str(&stats_block(0, n));
+        s.push_str(&ifstats_line(0, 0, 0, 0));
+        s.push_str(&ifstats_line(1, n, n, 7));
+        s.push_str("netsweep: NET-DONE\r\n");
+        s.into_bytes()
+    }
+
+    /// A pcap carrying n requests + n replies (the arp ping-pong shape).
+    fn pingpong_pcap(n: usize) -> Vec<u8> {
+        let mut buf = global_header();
+        for _ in 0..n {
+            buf.extend_from_slice(&record(&arp_request()));
+        }
+        for _ in 0..n {
+            buf.extend_from_slice(&record(&arp_reply()));
+        }
+        buf
+    }
+
+    /// A pcap carrying n blast requests (pure TX).
+    fn blast_pcap(n: usize) -> Vec<u8> {
+        let mut buf = global_header();
+        for _ in 0..n {
+            buf.extend_from_slice(&record(&blast_request()));
+        }
+        buf
+    }
+
+    /// Golden arp mode: 4 requests + 4 replies + the reconciled capture
+    /// passes, with N=4 derived from the data (never a constant).
+    #[test]
+    fn arp_pingpong_golden() {
+        let buf = pingpong_pcap(4);
+        let frames = parse_pcap(&buf).expect("a valid capture parses");
+        let total = frame_count(&buf).expect("a valid capture counts");
+        let n = assert_arp_pingpong(&frames, total, &arp_capture(4)).expect("golden arp passes");
+        assert_eq!(n, 4, "N is derived from the capture data");
+    }
+
+    /// Negative: 4 requests but 3 replies fails naming the count mismatch.
+    #[test]
+    fn arp_count_mismatch_fails() {
+        let mut buf = global_header();
+        for _ in 0..4 {
+            buf.extend_from_slice(&record(&arp_request()));
+        }
+        for _ in 0..3 {
+            buf.extend_from_slice(&record(&arp_reply()));
+        }
+        let frames = parse_pcap(&buf).expect("parses");
+        let total = frame_count(&buf).expect("counts");
+        let e = assert_arp_pingpong(&frames, total, &arp_capture(4))
+            .expect_err("4 requests + 3 replies must fail");
+        assert!(e.contains("count mismatch"), "names the count mismatch: {e}");
+    }
+
+    /// Negative: a request with tpa 10.0.2.3 (slirp's DNS address, not
+    /// the gateway) fails naming the field with the got value.
+    #[test]
+    fn arp_wrong_field_fails() {
+        let mut bad = arp_request();
+        bad[38..42].copy_from_slice(&[10, 0, 2, 3]); // tpa: not the gateway
+        let mut buf = global_header();
+        buf.extend_from_slice(&record(&bad));
+        let frames = parse_pcap(&buf).expect("parses");
+        let total = frame_count(&buf).expect("counts");
+        let e = assert_arp_pingpong(&frames, total, &arp_capture(1))
+            .expect_err("a wrong-tpa request must fail");
+        assert!(e.contains("tpa"), "names the field: {e}");
+        assert!(e.contains("10.0.2.3"), "the got value is present: {e}");
+    }
+
+    /// Negative: an extra non-ARP frame (total != 2N) fails naming the
+    /// 2N invariant — idle slirp emits nothing else.
+    #[test]
+    fn arp_extra_frame_fails() {
+        let mut buf = pingpong_pcap(4);
+        let mut ipv4 = arp_request();
+        ipv4[12] = 0x08;
+        ipv4[13] = 0x00; // ethertype IPv4: a frame, not ARP
+        buf.extend_from_slice(&record(&ipv4));
+        let frames = parse_pcap(&buf).expect("parses");
+        let total = frame_count(&buf).expect("counts");
+        let e = assert_arp_pingpong(&frames, total, &arp_capture(4))
+            .expect_err("an extra frame must fail");
+        assert!(e.contains("2N"), "names the 2N invariant: {e}");
+    }
+
+    /// Negative: no `#l0: virtio:` bind line in the capture — the guest
+    /// MAC source is gone — fails naming it.
+    #[test]
+    fn arp_missing_bind_line_fails() {
+        let buf = pingpong_pcap(1);
+        let frames = parse_pcap(&buf).expect("parses");
+        let total = frame_count(&buf).expect("counts");
+        let capture = b"netsweep: NET-DONE\r\n".to_vec();
+        let e = assert_arp_pingpong(&frames, total, &capture)
+            .expect_err("a capture with no bind line must fail");
+        assert!(e.contains("#l0: virtio:"), "names the bind line: {e}");
+    }
+
+    /// Negative: stats counters absent from the capture fail loudly
+    /// (T-07-07: absence or mismatch, never a silent pass).
+    #[test]
+    fn arp_missing_stats_fails() {
+        let buf = pingpong_pcap(1);
+        let frames = parse_pcap(&buf).expect("parses");
+        let total = frame_count(&buf).expect("counts");
+        let mut capture = BIND_LINE.to_string();
+        capture.push_str(&ifstats_line(0, 1, 1, 1));
+        capture.push_str(&ifstats_line(1, 1, 1, 1));
+        let e = assert_arp_pingpong(&frames, total, capture.as_bytes())
+            .expect_err("a capture with no stats block must fail");
+        assert!(e.contains("in:"), "names the missing stats key: {e}");
+    }
+
+    /// Golden blast mode: 256 TX frames + the matching capture passes,
+    /// returning the blast count.
+    #[test]
+    fn blast_golden() {
+        let buf = blast_pcap(256);
+        let frames = parse_pcap(&buf).expect("parses");
+        let total = frame_count(&buf).expect("counts");
+        let n = assert_blast(&frames, total, &blast_capture(256)).expect("golden blast passes");
+        assert_eq!(n, 256);
+    }
+
+    /// Negative: netblast's sent count disagrees with the pcap's frame
+    /// count — fails naming the mismatch.
+    #[test]
+    fn blast_sent_count_mismatch_fails() {
+        let buf = blast_pcap(256);
+        let frames = parse_pcap(&buf).expect("parses");
+        let total = frame_count(&buf).expect("counts");
+        let e = assert_blast(&frames, total, &blast_capture(255))
+            .expect_err("sent 255 vs 256 frames must fail");
+        assert!(e.contains("sent"), "names the sent-count mismatch: {e}");
+    }
+
+    /// Negative: any oper=2 frame in a blast capture fails — the TX-bulk
+    /// leg carries zero replies.
+    #[test]
+    fn blast_reply_present_fails() {
+        let mut buf = blast_pcap(4);
+        buf.extend_from_slice(&record(&arp_reply()));
+        let frames = parse_pcap(&buf).expect("parses");
+        let total = frame_count(&buf).expect("counts");
+        let e = assert_blast(&frames, total, &blast_capture(4))
+            .expect_err("a reply frame in blast mode must fail");
+        assert!(e.contains("repl"), "names the zero-reply invariant: {e}");
+    }
+
+    /// Negative: stats in != 0 on a fresh blast boot fails (no RX traffic
+    /// may arrive — tpa 10.0.2.99 has no responder).
+    #[test]
+    fn blast_rx_noise_fails() {
+        let buf = blast_pcap(2);
+        let frames = parse_pcap(&buf).expect("parses");
+        let total = frame_count(&buf).expect("counts");
+        let mut capture = String::new();
+        capture.push_str(BIND_LINE);
+        capture.push_str("netblast: sent 2 frames\r\n");
+        capture.push_str(&stats_block(1, 2)); // in: 1 — RX noise
+        capture.push_str(&ifstats_line(0, 0, 0, 0));
+        capture.push_str(&ifstats_line(1, 2, 2, 1));
+        capture.push_str("netsweep: NET-DONE\r\n");
+        let e = assert_blast(&frames, total, capture.as_bytes())
+            .expect_err("stats in != 0 must fail");
+        assert!(e.contains("in:"), "names the in counter: {e}");
+    }
+
+    /// Negative: nintr == 0 on a queue that moved frames fails — an
+    /// interrupt never fired for work the queue provably did.
+    #[test]
+    fn ifstats_nintr_zero_fails() {
+        let buf = pingpong_pcap(4);
+        let frames = parse_pcap(&buf).expect("parses");
+        let total = frame_count(&buf).expect("counts");
+        let mut capture = String::new();
+        capture.push_str(BIND_LINE);
+        capture.push_str(&stats_block(4, 4));
+        capture.push_str(&ifstats_line(0, 4, 4, 2));
+        capture.push_str(&ifstats_line(1, 4, 4, 0)); // TX moved 4, nintr 0
+        capture.push_str("netsweep: NET-DONE\r\n");
+        let e = assert_arp_pingpong(&frames, total, capture.as_bytes())
+            .expect_err("nintr=0 on a moved queue must fail");
+        assert!(e.contains("nintr"), "names nintr: {e}");
+    }
+
+    /// Negative: used != lastused at print time fails naming the
+    /// undrained ring (stuck entries).
+    #[test]
+    fn ifstats_undrained_ring_fails() {
+        let buf = pingpong_pcap(4);
+        let frames = parse_pcap(&buf).expect("parses");
+        let total = frame_count(&buf).expect("counts");
+        let mut capture = String::new();
+        capture.push_str(BIND_LINE);
+        capture.push_str(&stats_block(4, 4));
+        capture.push_str(&ifstats_line(0, 4, 3, 2)); // used 4, lastused 3
+        capture.push_str(&ifstats_line(1, 4, 4, 2));
+        capture.push_str("netsweep: NET-DONE\r\n");
+        let e = assert_arp_pingpong(&frames, total, capture.as_bytes())
+            .expect_err("used != lastused must fail");
+        assert!(e.contains("undrained"), "names the undrained ring: {e}");
+    }
+
+    /// The red-path live capture's shape: a 24-byte-header-only pcap (an
+    /// idle NIC emits nothing) parses to zero frames without error.
+    #[test]
+    fn empty_capture_parses_zero_frames() {
+        let buf = global_header();
+        let frames = parse_pcap(&buf).expect("the header-only capture parses");
+        assert!(frames.is_empty());
+        assert_eq!(frame_count(&buf).expect("counts"), 0);
+    }
 }
