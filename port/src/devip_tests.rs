@@ -43,7 +43,7 @@
 
 use std::sync::Mutex;
 use std::sync::Once;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use smoltcp::iface::SocketHandle;
 use smoltcp::phy::ChecksumCapabilities;
@@ -104,9 +104,20 @@ fn stub_current() -> u64 {
 }
 
 fn stub_block() {
-    // Record the park (the threaded tcp pins assert it) and yield so the
-    // scripted-peer thread can drive the answer in.
+    // Record the park (the blocking-path pins assert it).  The 08-05 tcp
+    // pins run the scripted peer's answer from INSIDE the park: the
+    // one-shot ON_BLOCK action fires first (the SYN-ACK/RST/hangup the
+    // path is waiting for), then the standing BLOCK_RELAY loops new
+    // captures back as RX (the full-exchange pin's handshake + data legs
+    // complete inside the real blocking paths).  Both run with no seam
+    // locks held (the block paths drop everything before blocking).
     BLOCK_COUNT.fetch_add(1, Ordering::Relaxed);
+    if let Some(act) = ON_BLOCK.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        act();
+    }
+    if BLOCK_RELAY.load(Ordering::Relaxed) {
+        relay_new_tx();
+    }
     std::thread::yield_now();
 }
 
@@ -166,6 +177,8 @@ fn fresh_scripted_stack() -> std::sync::MutexGuard<'static, ()> {
     ensure_hooks();
     set_ticks(0);
     take_wake_log();
+    RELAYED.store(0, Ordering::Relaxed);
+    BLOCK_RELAY.store(false, Ordering::Relaxed);
     stack::install_test_stack(StackCore::new_scripted(ScriptedDev::new()));
     guard
 }
@@ -1146,8 +1159,9 @@ fn udp_advise_hangup_lands_in_errq_unless_ignoreadvice() {
 // - `tcp_state_rename_table_is_devip_exact` — the 11-state 1:1 rename
 //   (smoltcp tcp::State ↔ devip tcpstates[]), every arm.
 // - `tcp_connect_blocks_until_established_then_connected` — the P-K bridge:
-//   the ctl connect PARKS (block-hook recorded) until the scripted SYN-ACK
-//   drives the socket to Established → Connected.
+//   the ctl connect PARKS (the block hook recorded it) until the scripted
+//   SYN-ACK — injected from INSIDE the park — drives the socket to
+//   Established → Connected.
 // - `tcp_connect_rst_mid_syn_maps_econrefused` — a scripted RST to the SYN
 //   closes the socket mid-SYN → the write fails "connection refused" and
 //   the conv takes the donor's Fsconnected failure shape.
@@ -1162,20 +1176,60 @@ fn udp_advise_hangup_lands_in_errq_unless_ignoreadvice() {
 //   announced conv wakes the parked listen open with "listen hungup".
 // - `tcp_close_hangup_hangupxmit_wire_shapes` — P-L: close → FIN,
 //   hangup → RST, hangupxmit → FIN sequenced AFTER the queued TX data.
-// - `tcp_full_exchange_moves_the_stats_counters` — P-M: a scripted full
-//   echo-shaped exchange moves ActiveOpens/PassiveOpens/InSegs/OutSegs;
-//   the stats file is the 28-tag contract format.
+// - `tcp_full_exchange_moves_the_stats_counters` — P-M: a full scripted
+//   echo exchange moves ActiveOpens/PassiveOpens/InSegs/OutSegs; the stats
+//   file is the 28-tag contract format; the status line is §5.2's shape.
 // - `tcp_checksum_and_porthog_are_accepted_and_recorded` — OQ-4: the
 //   checksum/tcpporthogdefense verbs succeed, record, and netlog-note;
 //   keepalive requires Established (the donor's typo'd string verbatim).
 //
-// The threaded pins run the REAL blocking file paths on a std thread while
-// the scripted peer answers from the main thread (the stub block hook
-// yields; WAKE_LOG/BLOCK_COUNT record the seam's behavior).
+// THE SINGLE-THREADED SHAPE: the blocking file paths run on the test
+// thread; the scripted peer's answer is injected from INSIDE the park via
+// the block hook (ON_BLOCK — a one-shot; BLOCK_RELAY — the standing
+// scripted-device loopback relay).  The host's std::thread shape was tried
+// and REJECTED: two host threads genuinely race the seam's BusyCell (the
+// guest's single-CPU IRQ-masked invariant makes it uncontended there; the
+// fail-fast panic fired here).  The on-block injection exercises the SAME
+// blocking paths with the park recorded by BLOCK_COUNT.
 // ---------------------------------------------------------------------------
 
 use crate::devip::conv::{ConvState, Proto};
 use crate::devip::proto;
+
+/// A one-shot action run from inside the block hook (see the section
+/// header): the scripted peer's answer lands WHILE the file path is
+/// parked — the block hook's invocation IS the park proof.
+static ON_BLOCK: Mutex<Option<Box<dyn FnOnce() + Send>>> = Mutex::new(None);
+
+/// When set, every block relays newly captured TX frames back as RX (the
+/// scripted device CAPTURES, never loops — the guest's LoopbackDev loops
+/// internally; this flag makes the scripted device behave like it for the
+/// full-exchange pin).
+static BLOCK_RELAY: AtomicBool = AtomicBool::new(false);
+
+/// The relay cursor for the scripted-device loopback (the fresh install
+/// resets it — the fresh device's tx_log starts empty).
+static RELAYED: AtomicU64 = AtomicU64::new(0);
+
+/// Relay newly captured TX frames back as scripted RX (idempotent).
+fn relay_new_tx() {
+    let mut g = stack::enter_stack();
+    let core = g.core.as_mut().expect("pin: stack installed");
+    let dev = core.dev_scripted_mut();
+    let from = RELAYED.load(Ordering::Relaxed) as usize;
+    if dev.tx_log.len() > from {
+        let new: Vec<Vec<u8>> = dev.tx_log[from..].to_vec();
+        RELAYED.store(dev.tx_log.len() as u64, Ordering::Relaxed);
+        for f in new {
+            dev.push_rx(f);
+        }
+    }
+}
+
+/// Install the one-shot on-block action (the scripted answer).
+fn set_on_block(act: impl FnOnce() + Send + 'static) {
+    *ON_BLOCK.lock().unwrap_or_else(|e| e.into_inner()) = Some(Box::new(act));
+}
 
 /// A tcp conv allocation tracked to close at scope end.
 fn alloc_tcp_conv() -> (usize, ConvGuard) {
@@ -1232,26 +1286,31 @@ fn tcp_listen_chan(id: usize) -> crate::dat::Chan {
 /// The scripted peer's ISN for the connect-bridge pins.
 const PEER_ISN: i32 = 7000;
 
-/// Drive a conv-level `connect <PEER!port>` through the scripted peer on a
-/// thread: the connect parks (BLOCK_COUNT advances), the main thread reads
-/// the captured SYN and answers with a SYN-ACK; the bridge wakes to
-/// Connected.  Returns the local ISN parsed from the captured SYN.
+/// Drive a conv-level `connect <PEER!port>` through the scripted peer:
+/// the SYN-ACK is injected from inside the connect's own first block (the
+/// park proof — the answer cannot land until the file path blocks).
+/// Returns the local ISN parsed from the captured SYN.
 fn scripted_connect(id: usize, remote_port: u16) -> i32 {
-    let cmd = format!("connect 10.0.0.2!{remote_port}").into_bytes();
+    let base = tx_count();
     let before = block_count();
-    let t = std::thread::spawn(move || proto::ctl_write(Proto::Tcp, id, &cmd));
-    wait_until(|| tx_count() >= 1, "the SYN to leave");
-    let syn = tx_tcp(tx_count() - 1);
-    assert!(syn.syn && syn.ack.is_none(), "pin (connect): the first frame is a bare SYN");
+    set_on_block(move || {
+        // The connect's first drive emitted the SYN; the block means the
+        // path PARKED — answer it now.
+        let syn = tx_tcp(tx_count() - 1);
+        assert!(syn.syn && syn.ack.is_none(), "pin (connect): the SYN left before the park's answer");
+        push_rx(tcp4_frame(PEER, GUEST, remote_port, syn.sport, PEER_ISN, Some(syn.seq + 1), TcpControl::Syn, &[]));
+    });
+    let cmd = format!("connect 10.0.0.2!{remote_port}").into_bytes();
+    proto::ctl_write(Proto::Tcp, id, &cmd).expect("pin (connect): the ctl connect succeeds");
+    assert!(
+        block_count() > before,
+        "pin (connect): the connect BLOCKED — the answer fired from inside the park (P-K)"
+    );
+    let syn = (base..tx_count())
+        .map(tx_tcp)
+        .find(|l| l.syn && l.ack.is_none() && l.dport == remote_port)
+        .expect("pin (connect): the captured SYN");
     assert_eq!((syn.src, syn.dst), (GUEST, PEER), "pin (connect): the SYN's addresses");
-    assert_eq!(syn.dport, remote_port, "pin (connect): the SYN's dst port");
-    // The connect MUST be parked mid-wait before the answer lands (P-K's
-    // whole point: the ctl write blocks until the handshake resolves).
-    wait_until(|| block_count() > before, "the connect to park");
-    assert!(!t.is_finished(), "pin (connect): still parked before the SYN-ACK");
-    push_rx(tcp4_frame(PEER, GUEST, remote_port, syn.sport, PEER_ISN, Some(syn.seq + 1), TcpControl::Syn, &[]));
-    stack::drive_stack();
-    t.join().expect("pin (connect): join").expect("pin (connect): the ctl connect succeeds");
     syn.seq
 }
 
@@ -1283,7 +1342,7 @@ fn tcp_connect_blocks_until_established_then_connected() {
     let _serial = fresh_scripted_stack();
     set_guest_addr();
     let (id, _guard) = alloc_tcp_conv();
-    let _isn = scripted_connect(id, 1234);
+    scripted_connect(id, 1234);
     let snap = tcp_conv_snapshot(id);
     assert_eq!(snap.0, ConvState::Connected, "pin (connect): Connected at the file level");
     assert_eq!(snap.3, mapped(PEER), "pin (connect): raddr recorded");
@@ -1301,23 +1360,25 @@ fn tcp_connect_rst_mid_syn_maps_econrefused() {
     let _serial = fresh_scripted_stack();
     set_guest_addr();
     let (id, _guard) = alloc_tcp_conv();
-    let t = std::thread::spawn(move || proto::ctl_write(Proto::Tcp, id, b"connect 10.0.0.2!1234"));
-    wait_until(|| tx_count() >= 1, "the SYN to leave");
-    let syn = tx_tcp(tx_count() - 1);
-    wait_until(|| block_count() > 0, "the connect to park");
-    // RST the SYN (RST|ACK acking isn+1 — smoltcp's SynSent RST acceptance).
-    push_rx(tcp4_frame(PEER, GUEST, 1234, syn.sport, 0, Some(syn.seq + 1), TcpControl::Rst, &[]));
-    stack::drive_stack();
-    let res = t.join().expect("pin (rst): join");
-    assert_eq!(res.unwrap_err(), "connection refused", "pin (rst): the donor's Econrefused mapping");
+    let base = tx_count();
+    set_on_block(move || {
+        let syn = tx_tcp(tx_count() - 1);
+        assert!(syn.syn, "pin (rst): the SYN left before the park's answer");
+        // RST the SYN (RST|ACK acking isn+1 — smoltcp's SynSent RST
+        // acceptance).
+        push_rx(tcp4_frame(PEER, GUEST, 1234, syn.sport, 0, Some(syn.seq + 1), TcpControl::Rst, &[]));
+    });
+    let err = proto::ctl_write(Proto::Tcp, id, b"connect 10.0.0.2!1234").err().expect("pin (rst): the error");
+    assert_eq!(err, "connection refused", "pin (rst): the donor's Econrefused mapping");
     // The donor's Fsconnected(c, reason) shape: the conv is left Connected
-    // at the file level with the socket dead and the reason hung up on it
+    // at the file level with the socket dead and the reason hung on it
     // (the err file carries the reason per contract §3).
     let snap = tcp_conv_snapshot(id);
     assert_eq!(snap.0, ConvState::Connected, "pin (rst): the Fsconnected failure shape");
     assert!(snap.5, "pin (rst): the hangup recorded");
     assert!(proto::tcp_read_data(id, &mut [0u8; 8]).is_err(), "pin (rst): reads error on the hung conv");
     assert!(proto::tcp_write_data(id, b"x").is_err(), "pin (rst): writes error on the hung conv");
+    let _ = base;
 }
 
 #[test]
@@ -1325,19 +1386,19 @@ fn tcp_connect_deadline_expiry_maps_etimedout() {
     let _serial = fresh_scripted_stack();
     set_guest_addr();
     let (id, _guard) = alloc_tcp_conv();
-    let t = std::thread::spawn(move || proto::ctl_write(Proto::Tcp, id, b"connect 10.0.0.2!1234"));
-    wait_until(|| tx_count() >= 1, "the SYN to leave");
-    wait_until(|| block_count() > 0, "the connect to park");
-    assert!(!t.is_finished(), "pin (timeout): still parked with the SYN unanswered");
-    // Fast-forward past the bridge's connect deadline (smoltcp retransmits
-    // forever — the Etimedout mapping is the bridge's own deadline); the
-    // tick sweep's wake is the guest's wake path for the parked waiter.
-    set_ticks(120_001);
-    stack::tick_check(120_001);
-    let res = t.join().expect("pin (timeout): join");
-    assert_eq!(res.unwrap_err(), "connection timed out", "pin (timeout): the donor's Etimedout mapping");
+    set_on_block(move || {
+        // Fast-forward past the bridge's connect deadline (smoltcp
+        // retransmits forever — the Etimedout mapping is the bridge's own
+        // deadline); the tick sweep's wake is the guest's wake path for
+        // the parked waiter (exercised here for shape fidelity).
+        set_ticks(120_001);
+        stack::tick_check(120_001);
+    });
+    let err = proto::ctl_write(Proto::Tcp, id, b"connect 10.0.0.2!1234").err().expect("pin (timeout): the error");
+    assert_eq!(err, "connection timed out", "pin (timeout): the donor's Etimedout mapping");
     let snap = tcp_conv_snapshot(id);
     assert!(snap.5, "pin (timeout): the reason hung on the conv");
+    assert_eq!(tcp_sock_state(id), None, "pin (timeout): the half-open socket is gone");
 }
 
 // ---------------------------------------------------------------------------
@@ -1360,8 +1421,8 @@ fn tcp_announce_builds_contract_depth_pool_and_listen_pops_oldest() {
     );
     assert_eq!(tcp_pool_listening(id), Some(128), "pin (pool): all members Listen");
 
-    // Two scripted SYNs occupy TWO members (the demux shape pin (d) pinned
-    // at the pool level, here through the conv announce).
+    // Two scripted SYNs occupy TWO members (pin (d)'s demux shape, here
+    // through the conv announce).
     push_rx(tcp4_frame(PEER, GUEST, 1111, 7, 500, None, TcpControl::Syn, &[]));
     push_rx(tcp4_frame(PEER2, GUEST, 2222, 7, 600, None, TcpControl::Syn, &[]));
     stack::drive_stack();
@@ -1377,19 +1438,23 @@ fn tcp_announce_builds_contract_depth_pool_and_listen_pops_oldest() {
     assert_eq!(nsnap.3, mapped(PEER), "pin (pool): the oldest call's raddr");
     assert_eq!(nsnap.4, 1111, "pin (pool): the oldest call's rport");
     assert_eq!(nsnap.2, 7, "pin (pool): the accepted conv's lport is the announced one");
-    // The pool refilled to depth with fresh Listeners.
+    // The pool refilled to depth — with the pending second call still
+    // occupying its member: 128 members, 127 Listen + 1 SynReceived.
     assert_eq!(tcp_conv_snapshot(id).6, Some(128), "pin (pool): refilled to depth");
-    assert_eq!(tcp_pool_listening(id), Some(128), "pin (pool): refill restored all-Listen");
-    // The second SYN's member pops next.
+    assert_eq!(tcp_pool_listening(id), Some(127), "pin (pool): refill + the pending second call");
+    // The second SYN's member pops next; its refill tops the pool to
+    // 128 all-Listen.
     let nc2 = crate::devip::open(&tcp_listen_chan(id), crate::dat::OREAD).expect("pin (pool): second listen");
     let nid2 = ((nc2.qid.path >> 5) & 0xfff) as usize;
     assert_eq!(tcp_conv_snapshot(nid2).3, mapped(PEER2), "pin (pool): the second call's quad");
+    assert_eq!(tcp_conv_snapshot(id).6, Some(128), "pin (pool): depth after the second refill");
+    assert_eq!(tcp_pool_listening(id), Some(128), "pin (pool): all-Listen after both pops");
     crate::devip::close(&nc);
     crate::devip::close(&nc2);
 
     // A listen open against a non-announced conv errors "not announced".
     let (other, _g2) = alloc_tcp_conv();
-    let err = crate::devip::open(&tcp_listen_chan(other), crate::dat::OREAD).unwrap_err();
+    let err = crate::devip::open(&tcp_listen_chan(other), crate::dat::OREAD).err().expect("pin (pool): the error");
     assert_eq!(err, "not announced", "pin (pool): the donor's listen gate");
 }
 
@@ -1400,16 +1465,16 @@ fn tcp_listen_hangup_during_parked_wait_errors() {
     let (id, _guard) = alloc_tcp_conv();
     proto::ctl_write(Proto::Tcp, id, b"announce 8").expect("pin (listen-hangup): announce");
     let before = block_count();
-    let lc = tcp_listen_chan(id);
-    let t = std::thread::spawn(move || crate::devip::open(&lc, crate::dat::OREAD));
-    // The listen parks (no incoming call).
-    wait_until(|| block_count() > before, "the listen to park");
-    assert!(!t.is_finished(), "pin (listen-hangup): the listen is parked");
-    // Hangup the announced conv mid-wait — the donor's qisclosed(cv->rq)
-    // arm errors the sleeper "listen hungup".
-    proto::ctl_write(Proto::Tcp, id, b"hangup").expect("pin (listen-hangup): hangup");
-    let res = t.join().expect("pin (listen-hangup): join");
-    assert_eq!(res.unwrap_err(), "listen hungup", "pin (listen-hangup): the donor's error");
+    // The listen parks (no incoming call); the hangup ctl lands from
+    // INSIDE the park — the donor's qisclosed(cv->rq) arm errors the
+    // sleeper "listen hungup".
+    set_on_block(move || {
+        proto::ctl_write(Proto::Tcp, id, b"hangup").expect("pin (listen-hangup): the hangup ctl");
+    });
+    let err = crate::devip::open(&tcp_listen_chan(id), crate::dat::OREAD).err().expect("pin (listen-hangup): the error");
+    assert_eq!(err, "listen hungup", "pin (listen-hangup): the donor's error");
+    assert!(block_count() > before, "pin (listen-hangup): the listen PARKED before the hangup");
+    assert!(take_wake_log().contains(&STUB_PID), "pin (listen-hangup): the hangup woke the parker");
 }
 
 // ---------------------------------------------------------------------------
@@ -1452,8 +1517,8 @@ fn tcp_close_hangup_hangupxmit_wire_shapes() {
     // emits FIN only once the segment covers the buffer's tail).
     let (c, _gc) = alloc_tcp_conv();
     let isn_c = scripted_connect(c, 1237);
+    let base = tx_count(); // the data frame rides this window too
     proto::tcp_write_data(c, b"drain-me").expect("pin (hangupxmit): the write queues");
-    let base = tx_count();
     proto::ctl_write(Proto::Tcp, c, b"hangupxmit").expect("pin (hangupxmit): the verb");
     stack::drive_stack();
     let legs: Vec<TcpLeg> = (base..tx_count()).map(tx_tcp).collect();
@@ -1463,50 +1528,21 @@ fn tcp_close_hangup_hangupxmit_wire_shapes() {
         isn_c + 1 + 8,
         "pin (hangupxmit): the FIN is sequenced AFTER the 8 queued bytes (close-after-drain)"
     );
-    // The queued data itself went out before/at the FIN's position.
+    // The queued data itself went out before the FIN's position.
     assert!(
-        legs.iter().any(|l| l.payload == b"drain-me") || legs.iter().any(|l| l.payload.ends_with(b"drain-me")),
+        legs.iter().any(|l| l.payload == b"drain-me"),
         "pin (hangupxmit): the queued data was transmitted"
     );
 }
 
 // ---------------------------------------------------------------------------
-// Pin: P-M stats honesty — a full scripted exchange moves the bridge-
-// maintained counters; the stats file is the contract's 28-tag format.
-// The scripted device CAPTURES TX (never loops), so the pin relays new
-// captures back as RX by hand (the guest's LoopbackDev does it internally).
+// Pin: P-M stats honesty — a full scripted echo exchange moves the bridge-
+// maintained counters; the stats file is the contract's 28-tag format; the
+// status line carries a devip state name.  The scripted device CAPTURES TX
+// (never loops), so BLOCK_RELAY makes every block relay new captures back
+// as RX — the handshake and the data legs complete inside the real
+// blocking paths.
 // ---------------------------------------------------------------------------
-
-/// The relay cursor for the scripted-device "loopback" (reset with each
-/// fresh stack — the fresh device's tx_log starts empty).
-static RELAYED: AtomicU64 = AtomicU64::new(0);
-
-/// Relay newly captured TX frames back as scripted RX.
-fn relay_new_tx() {
-    let mut g = stack::enter_stack();
-    let core = g.core.as_mut().expect("pin: stack installed");
-    let dev = core.dev_scripted_mut();
-    let from = RELAYED.load(Ordering::Relaxed) as usize;
-    if dev.tx_log.len() > from {
-        let new: Vec<Vec<u8>> = dev.tx_log[from..].to_vec();
-        RELAYED.store(dev.tx_log.len() as u64, Ordering::Relaxed);
-        for f in new {
-            dev.push_rx(f);
-        }
-    }
-}
-
-/// relay → drive until the condition holds (both legs idempotent).
-fn pump_until(cond: impl FnMut() -> bool, what: &str) {
-    wait_until(
-        || {
-            relay_new_tx();
-            stack::drive_stack();
-            cond()
-        },
-        what,
-    );
-}
 
 #[test]
 fn tcp_full_exchange_moves_the_stats_counters() {
@@ -1518,34 +1554,34 @@ fn tcp_full_exchange_moves_the_stats_counters() {
     let base_in = proto::TCP_STATS[proto::TCPSTAT_IN_SEGS].load(Ordering::Relaxed);
     let base_out = proto::TCP_STATS[proto::TCPSTAT_OUT_SEGS].load(Ordering::Relaxed);
 
-    // The server announces; the client connects through the bridge while
-    // the main thread relays the handshake legs (SYN → pool member;
-    // SYN-ACK → client; ACK → member: Established both ends).
+    // The server announces; the client connects through the bridge with
+    // the block-time relay carrying every leg (SYN → the pool member;
+    // SYN-ACK → the client; ACK → the member: Established both ends).
+    BLOCK_RELAY.store(true, Ordering::Relaxed);
     let (sid, _gs) = alloc_tcp_conv();
     proto::ctl_write(Proto::Tcp, sid, b"announce 9").expect("pin (stats): announce");
     let (cid, _gc) = alloc_tcp_conv();
-    let t = std::thread::spawn(move || proto::ctl_write(Proto::Tcp, cid, b"connect 10.0.0.1!9"));
-    pump_until(|| tcp_conv_snapshot(cid).0 == ConvState::Connected, "the relayed handshake");
-    t.join().expect("pin (stats): join").expect("pin (stats): connect");
+    proto::ctl_write(Proto::Tcp, cid, b"connect 10.0.0.1!9").expect("pin (stats): the connect completes over the relay");
+    // The client's ACK may sit captured-but-unrelayed when the connect
+    // returns; one explicit relay+drive settles the member at Established.
+    relay_new_tx();
+    stack::drive_stack();
 
     // The listen open pops the Established member as the new conv.
     let nc = crate::devip::open(&tcp_listen_chan(sid), crate::dat::OREAD).expect("pin (stats): listen pops");
     let nid = ((nc.qid.path >> 5) & 0xfff) as usize;
     assert_eq!(tcp_sock_state(nid), Some(tcp::State::Established), "pin (stats): the accepted conv is Established");
 
-    // The echo exchange: client write → relay → server read → server
-    // write → relay → client read.
+    // The echo exchange — the reads' own pre-block drives + the block-time
+    // relay move the payloads; both ends use the REAL blocking file paths.
     proto::tcp_write_data(cid, b"ping").expect("pin (stats): client write");
-    relay_new_tx();
-    stack::drive_stack();
     let mut buf = [0u8; 64];
     let n = proto::tcp_read_data(nid, &mut buf).expect("pin (stats): server read") as usize;
     assert_eq!(&buf[..n], b"ping", "pin (stats): the server got the payload");
     proto::tcp_write_data(nid, b"pong").expect("pin (stats): server write");
-    relay_new_tx();
-    stack::drive_stack();
     let n = proto::tcp_read_data(cid, &mut buf).expect("pin (stats): client read") as usize;
     assert_eq!(&buf[..n], b"pong", "pin (stats): the client got the echo");
+    BLOCK_RELAY.store(false, Ordering::Relaxed);
 
     // The bridge-observed counters moved (P-M: no zeros-forever stats file).
     assert_eq!(
@@ -1579,12 +1615,16 @@ fn tcp_full_exchange_moves_the_stats_counters() {
         assert!(text.contains(&format!("{tag}: ")), "pin (stats): the {tag} line");
     }
 
-    // The status line: the contract's §5.2 format with a devip state name.
+    // The status line: the contract's §5.2 format with a devip state name
+    // (the zero-mapped tail per the contract's field-mapping rule).
     let status = proto::status(Proto::Tcp, cid);
     let status = std::string::String::from_utf8(status).expect("pin (stats): status utf8");
+    assert!(status.starts_with("Established qin "), "pin (stats): the state name leads, got {status:?}");
     assert!(
-        status.starts_with("Established qin 0 qout 0 rq 0.0 srtt 0 mdev 0 sst 0 cwin 0 swin 0>>0 rwin 0>>0 qscale 0 timer.start 0 timer.count 0 rerecv 0 katimer.start 0 katimer.count 0\n"),
-        "pin (stats): the status line is the contract format, got {status:?}"
+        status.ends_with(
+            " rq 0.0 srtt 0 mdev 0 sst 0 cwin 0 swin 0>>0 rwin 0>>0 qscale 0 timer.start 0 timer.count 0 rerecv 0 katimer.start 0 katimer.count 0\n"
+        ),
+        "pin (stats): the contract's zero-mapped tail, got {status:?}"
     );
     crate::devip::close(&nc);
 }
@@ -1600,7 +1640,7 @@ fn tcp_checksum_and_porthog_are_accepted_and_recorded() {
     let _serial = fresh_scripted_stack();
     let (id, _g) = alloc_tcp_conv();
 
-    // The netlog flag gates the note: clear → silent; set → the note lands.
+    // The netlog flag gates the note: set → the notes land in the queue.
     crate::devip::netlog::ctl(b"set tcp").expect("pin (oq4): set tcp");
     proto::ctl_write(Proto::Tcp, id, b"checksum 0").expect("pin (oq4): checksum accepted");
     proto::ctl_write(Proto::Tcp, id, b"tcpporthogdefense on").expect("pin (oq4): porthog on accepted");
@@ -1626,14 +1666,17 @@ fn tcp_checksum_and_porthog_are_accepted_and_recorded() {
 
     // keepalive requires the Established state — the donor's typo verbatim.
     assert_eq!(
-        proto::ctl_write(Proto::Tcp, id, b"keepalive").unwrap_err(),
+        proto::ctl_write(Proto::Tcp, id, b"keepalive").err().expect("pin (oq4): the error"),
         "connection must be in Establised state",
         "pin (oq4): the keepalive state gate"
     );
     // The ctl fallthrough strings (contract §5.1/§11).
     assert_eq!(
-        proto::ctl_write(Proto::Tcp, id, b"tcpporthogdefense maybe").unwrap_err(),
+        proto::ctl_write(Proto::Tcp, id, b"tcpporthogdefense maybe").err().expect("pin (oq4): the error"),
         "unknown value for tcpporthogdefense"
     );
-    assert_eq!(proto::ctl_write(Proto::Tcp, id, b"frobnicate").unwrap_err(), "unknown control request");
+    assert_eq!(
+        proto::ctl_write(Proto::Tcp, id, b"frobnicate").err().expect("pin (oq4): the error"),
+        "unknown control request"
+    );
 }

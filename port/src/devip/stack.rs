@@ -496,9 +496,13 @@ impl AcceptPool {
     /// Pop the OLDEST pool member that has left Listen (an incoming call
     /// landed — SynReceived and beyond).  devip's listen-file open consumes
     /// the returned handle's conv; the caller refills the pool after.
+    /// Members whose handshake died mid-way (RST → Closed) are PRUNED here
+    /// (they can never materialize; the slot returns to the pool via the
+    /// caller's refill).
     pub fn take_connected(&mut self) -> Option<SocketHandle> {
         let mut guard = STACK.enter().expect("devip: stack contended");
         let core = guard.core.as_mut()?;
+        self.prune_closed(core);
         let pos = self.members.iter().position(|&h| {
             let s = core.sockets.get::<tcp::Socket>(h);
             s.state() != tcp::State::Listen && s.is_open()
@@ -506,15 +510,50 @@ impl AcceptPool {
         Some(self.members.remove(pos))
     }
 
-    /// Top the pool back up to its depth with fresh Listen sockets.
+    /// Top the pool back up to its depth with fresh Listen sockets (after
+    /// pruning dead members — a SYN RSTed mid-handshake leaves a Closed
+    /// socket that must not count against the depth).
     pub fn refill(&mut self) -> Result<()> {
         let mut guard = STACK.enter().expect("devip: stack contended");
         let core = guard.core.as_mut().ok_or("devip: no bound medium")?;
+        self.prune_closed(core);
         while self.members.len() < self.depth {
             let h = Self::spawn_listener(core, self.port)?;
             self.members.push(h);
         }
         Ok(())
+    }
+
+    /// Remove fully-Closed members from the pool and the SocketSet (the
+    /// T-08-09 hygiene: an RSTed half-open never occupies a pool slot
+    /// forever).
+    fn prune_closed(&mut self, core: &mut StackCore) {
+        let mut i = 0;
+        while i < self.members.len() {
+            let h = self.members[i];
+            if core.sockets.get::<tcp::Socket>(h).state() == tcp::State::Closed {
+                core.sockets.remove(h);
+                self.members.remove(i);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    /// Tear the pool down: abort every member (RST where a handshake is in
+    /// flight; Listen members close silently) and remove the sockets from
+    /// the seam's SocketSet.  A dropped pool NEVER leaves live sockets
+    /// behind.  (The donor's listener close FINs its in-progress incall
+    /// convs; the abort-instead is a recorded mapping corner — an unpopped
+    /// member has no conv to carry a graceful close.)
+    pub fn teardown(mut self) {
+        let mut guard = STACK.enter().expect("devip: stack contended");
+        if let Some(core) = guard.core.as_mut() {
+            for h in self.members.drain(..) {
+                core.sockets.get_mut::<tcp::Socket>(h).abort();
+                core.sockets.remove(h);
+            }
+        }
     }
 
     /// Allocate one listening pool member: 2048/2048 buffers (contract
@@ -530,8 +569,8 @@ impl AcceptPool {
         Ok(core.sockets.add(s))
     }
 
-    /// The pool's current members (pin assertions).
-    #[cfg(test)]
+    /// The pool's current members (the listen open arms their recv wakers
+    /// on the parked pid; the pins assert on the set).
     pub(crate) fn members(&self) -> &[SocketHandle] {
         &self.members
     }

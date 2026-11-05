@@ -9,12 +9,13 @@
 //! as free functions (the devether.rs idiom — the dat.rs Dev trait is
 //! non-constructible), dispatched by chan.dev via namec.rs's legs +
 //! syscall.rs's pread/pwrite arms.  The model halves live in the
-//! submodules: `conv` (the conversation tables), `proto` (icmp/udp — the
-//! ctl verbs + data paths), `ipifc` (the interface/address model),
-//! `medium` (the medium registry), `stack` (THE SEAM), `phyadapt` (the
-//! Device adapters), and `crate::devip_waker` (the RawWaker bridge — the
-//! phase's ONE named unsafe site, mounted at the crate root because this
-//! file's forbid propagates to submodules).
+//! submodules: `conv` (the conversation tables), `proto` (icmp/udp/tcp —
+//! the ctl verbs + data paths), `ipifc` (the interface/address model),
+//! `medium` (the medium registry), `stack` (THE SEAM), `netlog` (/net/log
+//! + the D-07 flag word), `phyadapt` (the Device adapters), and
+//! `crate::devip_waker` (the RawWaker bridge — the phase's ONE named
+//! unsafe site, mounted at the crate root because this file's forbid
+//! propagates to submodules).
 //!
 //! THE TREE (contract §1-§3): three levels — the top directory (files
 //! arp/iproute/ipselftab/ndb/log + proto dirs), one directory per protocol
@@ -24,18 +25,17 @@
 //! field widths (Logtype=5, Logconv=12, Logproto=8) — devip's OWN scheme,
 //! never netif's NETQID.
 //!
-//! The top-level files this plan are EMPTY-OR-MINIMAL REAL files (the
-//! tracer's scope rule): arp/iproute read their (initially empty) table
-//! formats and take the contract's write verbs over real devip-owned
-//! tables; ipselftab reads the live self-table (the ipifc `add` path
-//! populates it); ndb is the real 1024-byte buffer (append-at-offset,
-//! vers bump, OWRITE|OTRUNC zeroes, Eio past end); log EXISTS with its
-//! 0666 mode — its read BLOCKS until netlog output (the contract's
-//! semantic; the netlog feed lands in 08-05 — a functionality gap, never
-//! an architectural stub), its set/clear/only writes parse and record
-//! the flags now.  tcp/icmpv6 proto dirs EXIST (0555) with clone opens
-//! erroring Enodev until their protos land (08-05/08-06); the D-08
-//! dropped protocols (gre/esp/rudp/igmp/ipmux) are simply ABSENT.
+//! The top-level files this era: arp/iproute read their devip-owned
+//! tables and take the contract's write verbs; ipselftab reads the live
+//! self-table (the ipifc `add` path populates it); ndb is the real
+//! 1024-byte buffer (append-at-offset, vers bump, OWRITE|OTRUNC zeroes,
+//! Eio past end); log EXISTS with its 0666 mode and the blocking read over
+//! netlog.rs's bounded line queue (08-05 — the feed is live: the OQ-4
+//! accepted-and-recorded verbs note into it under the `tcp` flag).
+//! tcp joined the live protos in 08-05 (the accept pool + the blocking
+//! connect bridge); icmpv6's proto dir EXISTS (0555) with clone opens
+//! erroring Enodev until 08-06; the D-08 dropped protocols
+//! (gre/esp/rudp/igmp/ipmux) are simply ABSENT.
 //!
 //! DELTAS FROM THE DONOR (the devether header discipline):
 //!
@@ -66,6 +66,7 @@ use crate::Result;
 pub mod conv;
 pub mod ipifc;
 pub mod medium;
+pub mod netlog;
 pub mod phyadapt;
 pub mod proto;
 pub mod stack;
@@ -212,10 +213,8 @@ struct FsState {
     /// The arp VIEW table (§12.5: snoop-fed on the ether leg; static
     /// add writes the view only — the recorded divergence).
     arp: Vec<ArpEntry>,
-    /// The netlog flags (set/clear/only record them; the feed lands in
-    /// 08-05).  `only` is the optional address restriction.
-    log_flags: u32,
-    log_only: Option<[u8; 16]>,
+    // The netlog flags/queue live in netlog.rs (08-05 — the module owns
+    // the flag word, the only-restriction, and the blocking read feed).
 }
 
 static FS: Lock<FsState> = Lock::new(
@@ -228,8 +227,6 @@ static FS: Lock<FsState> = Lock::new(
         selftab: Vec::new(),
         acceptall: false,
         arp: Vec::new(),
-        log_flags: 0,
-        log_only: None,
     },
 );
 
@@ -728,11 +725,11 @@ pub fn open(c: &Chan, mode: u32) -> Result<Chan> {
     match qtype(path) {
         QCLONE => {
             let p = Proto::from_index(qproto(path)).ok_or("no free devices")?;
-            // tcp/icmpv6 clone error Enodev until their protos land
-            // (08-05/08-06) — clone exhaustion is the honest devip
-            // error (contract §3; the dirs EXIST).  udp joined icmp/ipifc
-            // in 08-04 Task 2.
-            if !matches!(p, Proto::Icmp | Proto::Ipifc | Proto::Udp) {
+            // icmpv6's clone errors Enodev until its proto lands
+            // (08-06) — clone exhaustion is the honest devip error
+            // (contract §3; the dirs EXIST).  udp joined icmp/ipifc in
+            // 08-04 Task 2; tcp joined in 08-05.
+            if !matches!(p, Proto::Icmp | Proto::Ipifc | Proto::Udp | Proto::Tcp) {
                 return Err("no free devices");
             }
             let id = conv::conv_alloc(p)?;
@@ -770,9 +767,12 @@ pub fn open(c: &Chan, mode: u32) -> Result<Chan> {
 }
 
 /// The listen-file open (devip.c:445-495): requires state == Announced
-/// ("not announced"); blocks until an incoming call lands in the conv's
-/// incall queue; the returned chan points at the NEW conv's ctl.  A
-/// hangup of the waiting conv errors "listen hungup".
+/// ("not announced"); blocks until an incoming call lands; the returned
+/// chan points at the NEW conv's ctl.  A hangup of the waiting conv
+/// errors "listen hungup" (the donor's qisclosed(cv->rq) arm — r9's conv
+/// `hangup` marker, set by tcp's close/hangup verbs on a listener).
+/// udp's incoming calls queue in `incall` (the Fsnewcall drain); tcp's
+/// live in the ACCEPT POOL (§12.3 — the pool IS the incall queue).
 fn listen_open(c: &Chan, p: Proto, id: usize, mode: u32) -> Result<Chan> {
     {
         let node = LockNode::new();
@@ -790,6 +790,14 @@ fn listen_open(c: &Chan, p: Proto, id: usize, mode: u32) -> Result<Chan> {
         if p == Proto::Udp {
             proto::udp_rx_drain();
         }
+        // tcp's accept pool: pop the oldest connected member (a SYN
+        // landed — the member left Listen), materialize it as the new
+        // conv, refill the pool.
+        if p == Proto::Tcp
+            && let Some(nc) = tcp_listen_pop(c, id, mode)?
+        {
+            return Ok(nc);
+        }
         {
             let node = LockNode::new();
             let mut t = conv::TABLES.lock(&node);
@@ -806,20 +814,111 @@ fn listen_open(c: &Chan, p: Proto, id: usize, mode: u32) -> Result<Chan> {
                 nc.path = c.path.clone();
                 return Ok(nc);
             }
-            if cv.state != conv::ConvState::Announced {
+            // The hangup arm (donor: qisclosed(cv->rq) → "listen
+            // hungup"): tcp's close/hangup verbs on a listener set the
+            // marker; the state arm covers the rest.
+            if cv.hangup.is_some() || cv.state != conv::ConvState::Announced {
                 return Err("listen hungup");
             }
             // Register, drop, block (devpipe's wakeup-loss-free shape);
-            // Fsnewcall (udp Task 2 / tcp 08-05) wakes via wake_conv.
+            // Fsnewcall (udp 08-04) wakes via wake_conv; tcp's pool
+            // members wake via the waker bridge below.
             if hooks.is_none() {
                 hooks = Some(stack::hooks()?);
             }
             let pid = (hooks.unwrap().current)();
             cv.waiters.register(pid);
             stack::register_net_waiter(pid);
+            // tcp: arm EVERY pool member's recv waker on this pid — a
+            // SYN absorbed by any member transitions its state, and
+            // smoltcp's set_state fires the recv waker (socket/tcp.rs).
+            // The slot is the announcing conv's own RX slot (it never
+            // reads data itself, so no conflict with the data path).
+            if p == Proto::Tcp
+                && let Some(pool) = cv.pool.as_ref()
+            {
+                let mut g = stack::STACK.enter().expect("devip: stack contended");
+                if let Some(core) = g.core.as_mut() {
+                    for &h in pool.members() {
+                        TCP_RX_SLOTS[id].arm(pid);
+                        core.sockets
+                            .get_mut::<smoltcp::socket::tcp::Socket>(h)
+                            .register_recv_waker(&crate::devip_waker::waker_for(&TCP_RX_SLOTS[id]));
+                    }
+                }
+            }
         }
         (hooks.unwrap().block)();
     }
+}
+
+/// The tcp listen open's pop leg (contract §12.3): the OLDEST pool member
+/// that left Listen materializes as the NEW conv around its socket (the
+/// returned chan names the new conv's ctl); the pool refills.  None when
+/// no member has left Listen (the caller parks).  The hangup marker lands
+/// here too (a wake → re-probe sees it before touching the pool).
+fn tcp_listen_pop(c: &Chan, id: usize, mode: u32) -> Result<Option<Chan>> {
+    let popped = {
+        let node = LockNode::new();
+        let mut t = conv::TABLES.lock(&node);
+        let cv = &mut t.table_mut(Proto::Tcp)[id];
+        if cv.hangup.is_some() || cv.state != conv::ConvState::Announced {
+            return Err("listen hungup");
+        }
+        match cv.pool.as_mut() {
+            Some(pool) => pool.take_connected(),
+            None => None,
+        }
+    };
+    let Some(h) = popped else { return Ok(None) };
+    // The member's bound quad + handshake progress (read-only stack visit).
+    let (raddr, rport, laddr, lport, established) = {
+        let g = stack::STACK.enter().expect("devip: stack contended");
+        let Some(core) = g.core.as_ref() else {
+            return Err("devip: no bound medium");
+        };
+        let s = core.sockets.get::<smoltcp::socket::tcp::Socket>(h);
+        let re = s.remote_endpoint().ok_or("devip: listen pop without a peer")?;
+        let le = s.local_endpoint().ok_or("devip: listen pop without a local endpoint")?;
+        let established = s.state() == smoltcp::socket::tcp::State::Established;
+        let (smoltcp::wire::IpAddress::Ipv4(ra), smoltcp::wire::IpAddress::Ipv4(la)) = (re.addr, le.addr) else {
+            // A v6 incoming call lands with 08-06's ether leg.
+            return Err("bad ip address syntax");
+        };
+        (v4prefix_of(&ra.octets()), re.port, v4prefix_of(&la.octets()), le.port, established)
+    };
+    let nid = {
+        let node = LockNode::new();
+        let mut t = conv::TABLES.lock(&node);
+        let Some(nid) = conv::fs_new_call_tcp(&mut t, id, h, raddr, rport, laddr, lport) else {
+            // Table full: abort the incoming call and drop the member
+            // (the donor drops on a full incall); the listen errors
+            // Enodev (the clone-exhaustion string, contract §3).
+            let mut g = stack::STACK.enter().expect("devip: stack contended");
+            if let Some(core) = g.core.as_mut() {
+                core.sockets.get_mut::<smoltcp::socket::tcp::Socket>(h).abort();
+                core.sockets.remove(h);
+            }
+            return Err("no free devices");
+        };
+        proto::tcp_note_passive_open(&mut t, nid, established);
+        nid
+    };
+    // Refill the pool (the pop consumed a member).
+    {
+        let node = LockNode::new();
+        let mut t = conv::TABLES.lock(&node);
+        if let Some(pool) = t.table_mut(Proto::Tcp)[id].pool.as_mut() {
+            pool.refill()?;
+        }
+    }
+    let mut nc = Chan::new(
+        c.dev,
+        Qid { path: qid(Proto::Tcp.index(), nid as u64, QCTL), vers: 0, typ: QTFILE },
+        mode,
+    );
+    nc.path = c.path.clone();
+    Ok(Some(nc))
 }
 
 /// dat.rs Chan::dup's DEV_IP arm (the devether precedent): an open
@@ -894,6 +993,7 @@ fn conv_file_mode(p: Proto, id: usize, tag: u64) -> (u32, u64) {
                     match g.core.as_ref() {
                         Some(core) => match p {
                             Proto::Icmp => core.sockets.get::<smoltcp::socket::icmp::Socket>(h).recv_queue() as u64,
+                            Proto::Tcp => core.sockets.get::<smoltcp::socket::tcp::Socket>(h).recv_queue() as u64,
                             _ => 0,
                         },
                         None => 0,
@@ -1075,7 +1175,7 @@ pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
             let content = selftab_content();
             Ok(read_str(c, buf, offset, &content))
         }
-        QLOG => log_read(c, buf),
+        QLOG => netlog::read(buf),
         QCTL => {
             let content = conv::ctl_number_content(qconv(path) as usize);
             Ok(read_str(c, buf, offset, &content))
@@ -1102,7 +1202,8 @@ pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
             match p {
                 Proto::Icmp => proto::icmp_read_data(qconv(path) as usize, buf),
                 Proto::Udp => proto::udp_read_data(qconv(path) as usize, buf),
-                // tcp/icmpv6 land in 08-05/08-06.  A conv of another proto
+                Proto::Tcp => proto::tcp_read_data(qconv(path) as usize, buf),
+                // icmpv6 lands in 08-06.  A conv of another proto
                 // can never be open here (its clone errored Enodev), so
                 // this arm is defensive.
                 _ => Err("devip: no data on this proto this era"),
@@ -1119,6 +1220,7 @@ pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
             let content = match p {
                 Proto::Icmp => proto::icmp_stats(),
                 Proto::Udp => proto::udp_stats(),
+                Proto::Tcp => proto::tcp_stats(),
                 Proto::Ipifc => ipifc_stats(),
                 _ => return Err("stats not implemented"),
             };
@@ -1165,24 +1267,11 @@ fn err_read(_c: &mut Chan, buf: &mut [u8], path: u64) -> Result<u64> {
     }
 }
 
-/// The log read (netlogread's contract §2): BLOCKS until netlog output
-/// is available.  The netlog feed lands in 08-05 (a functionality gap,
-/// never an architectural stub — the file EXISTS with its 0666 mode and
-/// the blocking semantic now).  Same block shape as err_read on an
-/// empty, never-fed queue.
-fn log_read(c: &mut Chan, buf: &mut [u8]) -> Result<u64> {
-    // The Qlog qid's proto/conv fields are 0 — the block rides the
-    // global net waiter set (no conv to hang the wait on).
-    let _ = c;
-    let _ = buf;
-    let hooks = stack::hooks()?;
-    loop {
-        stack::register_net_waiter((hooks.current)());
-        (hooks.block)();
-        // The netlog feed lands in 08-05; a wake re-checks (nothing to
-        // read yet) and re-blocks.
-    }
-}
+/// The netlog machinery lives in netlog.rs (08-05): the blocking /net/log
+/// read over the bounded line queue, the set/clear/only ctl with the
+/// DONOR's flag-bit vocabulary (ip.h:485-500), and the flag-gated emit
+/// the proto modules note into (the OQ-4 verbs first).  The log file
+/// EXISTS with its 0666 mode and the blocking semantic live.
 
 // ---------------------------------------------------------------------------
 // write
@@ -1204,13 +1293,14 @@ pub fn write(c: &mut Chan, buf: &[u8], offset: u64) -> Result<u64> {
             match p {
                 Proto::Icmp => proto::icmp_write_data(qconv(path) as usize, buf),
                 Proto::Udp => proto::udp_write_data(qconv(path) as usize, buf),
+                Proto::Tcp => proto::tcp_write_data(qconv(path) as usize, buf),
                 _ => Err("devip: no data on this proto this era"),
             }
         }
         QNDB => ndb_write(c, buf, offset),
         QARP => arp_write(buf),
         QIPROUTE => route_write(buf),
-        QLOG => log_write(buf),
+        QLOG => netlog::ctl(buf),
         _ => Err("permission denied"),
     }
 }
@@ -1461,62 +1551,6 @@ fn ndb_write(c: &mut Chan, buf: &[u8], offset: u64) -> Result<u64> {
     Ok(n as u64)
 }
 
-/// The log write (netlogctl, contract §2): `set <flags…>` /
-/// `clear <flags…>` / `only <addr>`; too few arguments → Ebadnetctl.
-/// The flags are recorded now; the feed lands in 08-05.
-fn log_write(buf: &[u8]) -> Result<u64> {
-    let n = buf.len();
-    let text = &buf[..n.min(63)];
-    let fields: Vec<&[u8]> = text
-        .split(|&b| b == b' ' || b == b'\t' || b == b'\r' || b == b'\n')
-        .filter(|w| !w.is_empty())
-        .collect();
-    if fields.len() < 2 {
-        return Err("too few arguments for netlog control message");
-    }
-    let node = LockNode::new();
-    let mut g = FS.lock(&node);
-    match fields[0] {
-        b"set" => {
-            for f in &fields[1..] {
-                g.log_flags |= log_flag(f);
-            }
-            Ok(n as u64)
-        }
-        b"clear" => {
-            for f in &fields[1..] {
-                g.log_flags &= !log_flag(f);
-            }
-            Ok(n as u64)
-        }
-        b"only" => {
-            g.log_only = parse_ip(fields[1]);
-            Ok(n as u64)
-        }
-        _ => Err("too few arguments for netlog control message"),
-    }
-}
-
-/// The netlog flag names → bits (netlog.c's flags[]).
-fn log_flag(name: &[u8]) -> u32 {
-    match name {
-        b"ppp" => 1 << 0,
-        b"ip" => 1 << 1,
-        b"fs" => 1 << 2,
-        b"tcp" => 1 << 3,
-        b"icmp" => 1 << 4,
-        b"udp" => 1 << 5,
-        b"compress" => 1 << 6,
-        b"gre" => 1 << 7,
-        b"tcpwin" => (1 << 3) | (1 << 8),
-        b"tcprxmt" => (1 << 3) | (1 << 9),
-        b"udpmsg" => (1 << 5) | (1 << 10),
-        b"ipmsg" => (1 << 1) | (1 << 11),
-        b"esp" => 1 << 12,
-        _ => 0,
-    }
-}
-
 /// The ipifc stats (contract §9.4 — the MIB II 19 tagged lines;
 /// bridge-maintained per P-M: the counters increment at the bridge).
 fn ipifc_stats() -> Vec<u8> {
@@ -1577,6 +1611,15 @@ pub(crate) static ICMP_TX_SLOTS: [crate::devip_waker::WakeSlot; conv::NCONV] =
 pub(crate) static UDP_RX_SLOTS: [crate::devip_waker::WakeSlot; conv::NCONV] =
     [const { crate::devip_waker::WakeSlot::new() }; conv::NCONV];
 pub(crate) static UDP_TX_SLOTS: [crate::devip_waker::WakeSlot; conv::NCONV] =
+    [const { crate::devip_waker::WakeSlot::new() }; conv::NCONV];
+
+/// The tcp data paths' wake-slot arrays (same invariant).  For an
+/// ANNOUNCED conv the RX slot doubles as the accept pool's wake slot —
+/// the parked listen open arms every pool member's recv waker on it (the
+/// announcing conv never reads data itself, so no conflict).
+pub(crate) static TCP_RX_SLOTS: [crate::devip_waker::WakeSlot; conv::NCONV] =
+    [const { crate::devip_waker::WakeSlot::new() }; conv::NCONV];
+pub(crate) static TCP_TX_SLOTS: [crate::devip_waker::WakeSlot; conv::NCONV] =
     [const { crate::devip_waker::WakeSlot::new() }; conv::NCONV];
 
 // ---------------------------------------------------------------------------

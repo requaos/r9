@@ -1,8 +1,9 @@
 //! devip/proto.rs — the per-protocol modules (the donor's `Proto`
 //! vtable mapped to free functions per proto; contract §4's generic ctl
-//! verbs + the per-proto chapters).  This plan lands **icmp** (the
-//! NETIP-03 ping leg) and **udp** (Task 2 — the udp echo leg);
-//! tcp/icmpv6 land in 08-05/08-06.
+//! verbs + the per-proto chapters).  This file carries **icmp** (08-04's
+//! NETIP-03 ping leg), **udp** (08-04's udp echo leg), and **tcp**
+//! (08-05: the accept pool + the blocking connect bridge + close/hangup/
+//! hangupxmit + the status/stats files); icmpv6 lands in 08-06.
 //!
 //! THE CTL DISPATCH (devip.c:1115-1176 verbatim shape): a 64-byte-bounded
 //! tokenizer (T-08-06 — the donor's cmdbuf discipline per the plan's
@@ -37,8 +38,10 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use smoltcp::socket::icmp;
+use smoltcp::socket::tcp;
 use smoltcp::socket::udp;
 use smoltcp::storage::{PacketBuffer, PacketMetadata};
+use smoltcp::time::Duration;
 use smoltcp::wire::{IpAddress, IpEndpoint, IpListenEndpoint, Ipv4Address};
 
 use crate::mcslock::LockNode;
@@ -186,11 +189,13 @@ pub(crate) fn ctl_write(p: Proto, id: usize, buf: &[u8]) -> Result<u64> {
 
 /// The proto's own ctl verbs (the `x->ctl` fallthrough).  icmp has NONE
 /// (`icmp->ctl = nil`); ipifc's live in ipifc.rs; udp's `headers` is
-/// udp_ctl; tcp's set lands in 08-05.
+/// udp_ctl; tcp's set (close/hangup/hangupxmit/keepalive/checksum/
+/// tcpporthogdefense — contract §5.1) is tcp_ctl.
 fn proto_ctl(p: Proto, id: usize, verb: &[u8], args: &[&[u8]]) -> Result<()> {
     match p {
         Proto::Ipifc => super::ipifc::ctl(id, verb, args),
         Proto::Udp => udp_ctl(id, verb, args),
+        Proto::Tcp => tcp_ctl(id, verb, args),
         _ => Err("unknown control request"),
     }
 }
@@ -257,8 +262,11 @@ fn ctl_connect(p: Proto, id: usize, args: &[&[u8]]) -> Result<()> {
 }
 
 /// `announce <X>` (announcectlmsg + Fsstdannounce, devip.c:1004-1030):
-/// X is a decimal port or `*` (the donor's iseve gate on `*` collapses
-/// in the single-user era).
+/// X is `[addr!]port` — a decimal port, `*` (the wildcard announce), or
+/// the `addr!port` form libc's announce() actually writes (`announce
+/// *!7` for tcpecho).  Fsstdannounce routes through setladdrport's
+/// ANNOUNCING form — the hand-rolled atoi-only parse this replaced could
+/// not express `*!7` (Rule 1: the tcp/7 gate's literal-port announce).
 fn ctl_announce(p: Proto, id: usize, args: &[&[u8]]) -> Result<()> {
     if p == Proto::Ipifc {
         return Err("announce not supported");
@@ -269,30 +277,18 @@ fn ctl_announce(p: Proto, id: usize, args: &[&[u8]]) -> Result<()> {
     {
         let node = LockNode::new();
         let mut t = conv::TABLES.lock(&node);
-        let c = &mut t.table_mut(p)[id];
-        if c.state != ConvState::Idle {
-            return Err("connection in use");
-        }
-        // Fsstdannounce: raddr/rport cleared, laddr = IPnoaddr.
-        c.raddr = IP_NOADDR;
-        c.rport = 0;
-        c.laddr = IP_NOADDR;
-        c.state = ConvState::Announcing;
-        if args[0] == b"*" {
-            // setluniqueport(c, 0) — the wildcard announce (any
-            // unclaimed port; donor shape for the single-user era:
-            // port 0 marks the wildcard listener).
-            conv::setluniqueport(&mut t, p, id, 0)?;
-        } else {
-            // atoi semantics (the donor's atoi: garbage → 0 → a
-            // random port via setlport).
-            let port = atoi(args[0]) as u16;
-            if port == 0 {
-                conv::setlport(&mut t, p, id)?;
-            } else {
-                conv::setluniqueport(&mut t, p, id, port)?;
+        {
+            let c = &mut t.table_mut(p)[id];
+            if c.state != ConvState::Idle {
+                return Err("connection in use");
             }
+            // Fsstdannounce: raddr/rport cleared; laddr/lport are
+            // set_laddrport's to write.
+            c.raddr = IP_NOADDR;
+            c.rport = 0;
+            c.state = ConvState::Announcing;
         }
+        set_laddrport(&mut t, p, id, args[0], true, IP_NOADDR, 0)?;
     }
     announce_proto(p, id)?;
     {
@@ -462,7 +458,10 @@ const ICMP_BUF: usize = 64 * 1024;
 
 /// The per-proto connect: create the proto's smoltcp socket bound to
 /// the conv's local endpoint with hop limit = conv.ttl (255 default —
-/// §12.8: smoltcp's 64 default must never leak).
+/// §12.8: smoltcp's 64 default must never leak).  tcp's connect is the
+/// P-K BLOCKING bridge (contract §4): the socket connects, then the write
+/// blocks on the waker until Established → Connected / Closed-mid-SYN →
+/// Econrefused / the bridge deadline → Etimedout.
 fn connect_proto(p: Proto, id: usize) -> Result<()> {
     match p {
         Proto::Icmp => {
@@ -512,15 +511,76 @@ fn connect_proto(p: Proto, id: usize) -> Result<()> {
             }
             Ok(())
         }
+        Proto::Tcp => {
+            let (laddr, lport, raddr, rport, ttl) = {
+                let node = LockNode::new();
+                let t = conv::TABLES.lock(&node);
+                let c = &t.table(p)[id];
+                (c.laddr, c.lport, c.raddr, c.rport, c.ttl)
+            };
+            // The v4 leg (the donor's V4 arm); v6 destinations land with
+            // 08-06's ether leg (udp's recorded corner shape).
+            let Some(r4) = v4_of(&raddr) else {
+                return Err("bad ip address syntax");
+            };
+            let mut s = tcp_socket(ttl);
+            {
+                let mut g = stack::STACK.enter().expect("devip: stack contended");
+                let core = g.core.as_mut().ok_or("devip: no bound medium")?;
+                // IpListenEndpoint.addr = None → smoltcp's source pick
+                // (get_source_address); the conv's recorded laddr when set
+                // (the guest gate's 127.0.0.1).  NEVER an unspecified
+                // Some (smoltcp errors Unaddressable on it).
+                let local = IpListenEndpoint {
+                    addr: v4_of(&laddr).map(|a| IpAddress::Ipv4(Ipv4Address::from(a))),
+                    port: lport,
+                };
+                s.connect(
+                    core.iface.context(),
+                    IpEndpoint { addr: IpAddress::Ipv4(Ipv4Address::from(r4)), port: rport },
+                    local,
+                )
+                .map_err(|e| match e {
+                    tcp::ConnectError::InvalidState => "connection in use",
+                    // Remote port 0 / unspecified remote / no source
+                    // address: the donor's observable outcome for those
+                    // inputs is a SYN that never resolves → Etimedout.
+                    tcp::ConnectError::Unaddressable => "connection timed out",
+                })?;
+                let h = core.sockets.add(s);
+                drop(g);
+                let node = LockNode::new();
+                let mut t = conv::TABLES.lock(&node);
+                t.table_mut(p)[id].sock = Some(h);
+            }
+            TCP_STATS[TCPSTAT_ACTIVE_OPENS].fetch_add(1, Ordering::Relaxed);
+            // P-K: block until the handshake resolves (tcp.c's
+            // connectctlmsg sleep on c->cr until Connected/failed).
+            tcp_connect_wait(id)
+        }
         _ => Err("connect not supported"),
     }
 }
 
-/// The per-proto announce.
+/// The per-proto announce.  tcp's announce builds the ACCEPT POOL
+/// (contract §12.3: 128 listening sockets — smoltcp has no listen
+/// backlog, so devip's Maxincall maps onto the pool).
 fn announce_proto(p: Proto, id: usize) -> Result<()> {
     match p {
         Proto::Icmp => connect_proto(p, id), // icmp announce = the same socket bind (icmp.c's Fsstdannounce + Fsconnected)
         Proto::Udp => connect_proto(p, id),  // udp announce = the same socket bind (udp.c's Fsstdannounce shape)
+        Proto::Tcp => {
+            let lport = {
+                let node = LockNode::new();
+                let t = conv::TABLES.lock(&node);
+                t.table(p)[id].lport
+            };
+            let pool = stack::AcceptPool::announce(stack::ACCEPT_POOL_DEPTH, lport)?;
+            let node = LockNode::new();
+            let mut t = conv::TABLES.lock(&node);
+            t.table_mut(p)[id].pool = Some(pool);
+            Ok(())
+        }
         _ => Err("announce not supported"),
     }
 }
@@ -533,6 +593,9 @@ fn apply_hop_limit(core: &mut stack::StackCore, p: Proto, h: smoltcp::iface::Soc
         }
         Proto::Udp => {
             core.sockets.get_mut::<udp::Socket>(h).set_hop_limit(Some(v));
+        }
+        Proto::Tcp => {
+            core.sockets.get_mut::<tcp::Socket>(h).set_hop_limit(Some(v));
         }
         _ => {}
     }
@@ -752,8 +815,12 @@ fn synthesize_v4_packet(pkt: &[u8], remote: &IpAddress, laddr: [u8; 16], ttl: u3
 
 /// The conv's status line (icmpstate, icmp.c:128-137):
 /// `"Datagram qin %d qout %d\n"` — the queue byte counts read live from
-/// the socket (0 for a socket-less conv).
+/// the socket (0 for a socket-less conv).  tcp's line is the contract's
+/// §5.2 format (tcpstate, tcp.c:493-509) — tcp_status builds it.
 pub(crate) fn status(p: Proto, id: usize) -> Vec<u8> {
+    if p == Proto::Tcp {
+        return tcp_status(id);
+    }
     let (qin, qout) = {
         let node = LockNode::new();
         let t = conv::TABLES.lock(&node);
@@ -1335,4 +1402,718 @@ pub(crate) fn udp_stats() -> Vec<u8> {
     line(b"InErrors", UDP_IN_ERRS.load(Ordering::Relaxed));
     line(b"OutDatagrams", UDP_OUT.load(Ordering::Relaxed));
     out
+}
+
+// ---------------------------------------------------------------------------
+// tcp (contract §5): the accept pool (P-A/§12.3) + the blocking connect
+// bridge (P-K), close/hangup/hangupxmit (P-L), keepalive, the OQ-4
+// accepted-and-recorded verbs, the status/stats files (P-M), and the gc.
+// smoltcp owns the state machine (D-01); this module is the devip
+// semantics around it — exactly where the phase's bugs live, so the
+// behavior pins in devip_tests.rs landed BEFORE this module (TDD RED).
+//
+// THE STATS HONESTY RULE (P-M): the bridge increments a counter at every
+// packet transition it OBSERVES (connect initiation → ActiveOpens; accept
+// pop → PassiveOpens; send/recv completions → OutSegs/InSegs; abort() →
+// OutRsts).  smoltcp exposes NO packet counters and no retransmit/reseq/
+// recovery internals, so those tags print 0 — real where observable, zero
+// where not, never fabricated (the contract's field-mapping rule).  A
+// stats file that reads all zeros forever is a contract violation (D-08);
+// the gate asserts non-zero counters after the echo exchange.
+// ---------------------------------------------------------------------------
+
+/// The 28 stats tags (tcp.c:348-375's statnames[] — the SOURCE's list;
+/// the man documents only 11, [man-vs-src] recorded in contract §5.3).
+pub(crate) const TCPSTAT_MAX_CONN: usize = 0;
+pub(crate) const TCPSTAT_MAX_SEGMENT: usize = 1;
+pub(crate) const TCPSTAT_ACTIVE_OPENS: usize = 2;
+pub(crate) const TCPSTAT_PASSIVE_OPENS: usize = 3;
+#[allow(dead_code)] // EstabResets is zero-mapped this era (see TCP_STATS)
+pub(crate) const TCPSTAT_ESTAB_RESETS: usize = 4;
+pub(crate) const TCPSTAT_CURR_ESTAB: usize = 5;
+pub(crate) const TCPSTAT_IN_SEGS: usize = 6;
+pub(crate) const TCPSTAT_OUT_SEGS: usize = 7;
+#[allow(dead_code)] // the retransmit/reseq/recovery block: smoltcp-internal, zero-mapped
+pub(crate) const TCPSTAT_RETRANS_SEGS: usize = 8;
+pub(crate) const TCPSTAT_IN_ERRS: usize = 12;
+pub(crate) const TCPSTAT_OUT_RSTS: usize = 13;
+
+const TCP_STAT_NAMES: [&[u8]; 28] = [
+    b"MaxConn",
+    b"MaxSegment",
+    b"ActiveOpens",
+    b"PassiveOpens",
+    b"EstabResets",
+    b"CurrEstab",
+    b"InSegs",
+    b"OutSegs",
+    b"RetransSegs",
+    b"RetransSegsSent",
+    b"RetransTimeouts",
+    b"InErrs",
+    b"OutRsts",
+    b"CsumErrs",
+    b"HlenErrs",
+    b"LenErrs",
+    b"OutOfOrder",
+    b"Resequenced",
+    b"ReseqBytelim",
+    b"ReseqPktlim",
+    b"Delayack",
+    b"Wopenack",
+    b"Recovery",
+    b"RecoveryDone",
+    b"RecoveryRTO",
+    b"RecoveryNoSeq",
+    b"RecoveryCwind",
+    b"RecoveryPA",
+];
+
+/// The bridge-maintained counters (pub(crate) for the P-M pin's
+/// delta assertions).
+pub(crate) static TCP_STATS: [AtomicU64; 28] = [const { AtomicU64::new(0) }; 28];
+
+/// The CurrEstab decrement (conv_close's tcp arm — the conv left
+/// Established).
+pub(crate) fn tcp_curr_estab_dec() {
+    let _ = TCP_STATS[TCPSTAT_CURR_ESTAB]
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(1));
+}
+
+/// The accept-pop bookkeeping (devip.rs's listen path): the incoming call
+/// materialized → PassiveOpens; an already-Established member counts into
+/// CurrEstab and marks the new conv (its close unwinds).
+pub(crate) fn tcp_note_passive_open(t: &mut conv::ConvTables, nid: usize, established: bool) {
+    TCP_STATS[TCPSTAT_PASSIVE_OPENS].fetch_add(1, Ordering::Relaxed);
+    if established {
+        t.table_mut(Proto::Tcp)[nid].estab = true;
+        TCP_STATS[TCPSTAT_CURR_ESTAB].fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// The donor's `tcpporthogdefense` GLOBAL toggle (random-sequence
+/// keepalives shut hijacked connections) — no smoltcp mechanism; OQ-4's
+/// accepted-and-recorded verb: the static is the honest record (contract
+/// §5.1).  Never read: nothing steers on it this era.
+#[allow(dead_code)]
+static TCP_PORT_HOG_DEFENSE: AtomicU64 = AtomicU64::new(0);
+
+/// The bridge's connect deadline (P-K's Etimedout arm): the donor's SYN
+/// retransmit schedule gives up at MAXBACKOFF ≈ 2–3 min; smoltcp
+/// retransmits FOREVER (no give-up), so the Etimedout mapping needs a
+/// bridge-side deadline.  120 s sits in the donor's envelope, past
+/// smoltcp's 60 s RTO max (at least one max-interval retransmit precedes
+/// the give-up), and is never exercised by the happy-path gates.  The
+/// host pin fast-forwards the stub clock past it.
+const TCP_CONNECT_TIMEOUT_MS: i64 = 120_000;
+
+/// The 11-state rename table (contract §5.2): smoltcp `tcp::State` → the
+/// devip `tcpstates[]` strings — a pure 1:1 rename, pinned arm-by-arm.
+pub(crate) fn tcp_state_name(s: tcp::State) -> &'static [u8] {
+    match s {
+        tcp::State::Closed => b"Closed",
+        tcp::State::Listen => b"Listen",
+        tcp::State::SynSent => b"Syn_sent",
+        tcp::State::SynReceived => b"Syn_received",
+        tcp::State::Established => b"Established",
+        tcp::State::FinWait1 => b"Finwait1",
+        tcp::State::FinWait2 => b"Finwait2",
+        tcp::State::CloseWait => b"Close_wait",
+        tcp::State::Closing => b"Closing",
+        tcp::State::LastAck => b"Last_ack",
+        tcp::State::TimeWait => b"Time_wait",
+    }
+}
+
+/// Create a tcp socket (2048/2048 buffers per contract §12.3, hop limit
+/// = conv.ttl — §12.8's no-leak rule).
+fn tcp_socket(ttl: u32) -> tcp::Socket<'static> {
+    let mut s = tcp::Socket::new(
+        tcp::SocketBuffer::new(alloc::vec![0; stack::POOL_SOCK_BUF]),
+        tcp::SocketBuffer::new(alloc::vec![0; stack::POOL_SOCK_BUF]),
+    );
+    if ttl > 0 && ttl <= 255 {
+        s.set_hop_limit(Some(ttl as u8));
+    }
+    s
+}
+
+/// The P-K blocking connect wait (the donor's connectctlmsg sleep on
+/// c->cr until Connected/failed): probe the socket state → Established
+/// maps Connected; Closed mid-handshake maps Econrefused (the donor's
+/// localclose(s, Econrefused) on RST-to-SYN); the bridge deadline maps
+/// Etimedout (the donor's retransmit-exhaustion arm — smoltcp retransmits
+/// forever, so the deadline is ours).  The wait registers the conv's
+/// waker + the seam's net-waiter set, drives, and blocks (the udp read's
+/// probe → drive → register/arm → block shape); every wake re-checks
+/// (spurious-wake discipline, P-C).
+fn tcp_connect_wait(id: usize) -> Result<()> {
+    let deadline = stack::instant_now() + Duration::from_millis(TCP_CONNECT_TIMEOUT_MS as u64);
+    let mut hooks: Option<stack::DevipHooks> = None;
+    loop {
+        enum Probe {
+            Established,
+            Closed,
+            Progress,
+        }
+        let probe = {
+            let node = LockNode::new();
+            let t = conv::TABLES.lock(&node);
+            match t.table(Proto::Tcp)[id].sock {
+                Some(h) => {
+                    let g = stack::STACK.enter().expect("devip: stack contended");
+                    match g.core.as_ref() {
+                        Some(core) => match core.sockets.get::<tcp::Socket>(h).state() {
+                            tcp::State::Established => Probe::Established,
+                            tcp::State::Closed => Probe::Closed,
+                            _ => Probe::Progress,
+                        },
+                        None => Probe::Closed,
+                    }
+                }
+                None => Probe::Closed,
+            }
+        };
+        match probe {
+            Probe::Established => {
+                let node = LockNode::new();
+                let mut t = conv::TABLES.lock(&node);
+                t.table_mut(Proto::Tcp)[id].estab = true;
+                TCP_STATS[TCPSTAT_CURR_ESTAB].fetch_add(1, Ordering::Relaxed);
+                return Ok(());
+            }
+            Probe::Closed => return Err(tcp_connect_fail(id, "connection refused")),
+            Probe::Progress => {}
+        }
+        if stack::instant_now() >= deadline {
+            return Err(tcp_connect_fail(id, "connection timed out"));
+        }
+        // Register → drive → block.  On loopback the drive completes the
+        // handshake synchronously (the SYN loops in, the pool member's
+        // SYN-ACK loops back); on the ether leg the RX IRQ / the tick
+        // sweep's deadline wake the parker (D-05 legs 1/2).
+        if hooks.is_none() {
+            hooks = Some(stack::hooks()?);
+        }
+        let hks = hooks.unwrap();
+        let pid = (hks.current)();
+        {
+            let node = LockNode::new();
+            let mut t = conv::TABLES.lock(&node);
+            let c = &mut t.table_mut(Proto::Tcp)[id];
+            c.waiters.register(pid);
+            if let Some(h) = c.sock {
+                let mut g = stack::STACK.enter().expect("devip: stack contended");
+                if let Some(core) = g.core.as_mut() {
+                    super::TCP_RX_SLOTS[id].arm(pid);
+                    core.sockets
+                        .get_mut::<tcp::Socket>(h)
+                        .register_recv_waker(&crate::devip_waker::waker_for(&super::TCP_RX_SLOTS[id]));
+                }
+            }
+        }
+        stack::register_net_waiter(pid);
+        stack::drive_stack();
+        (hks.block)();
+    }
+}
+
+/// The connect failure tail (the donor's localclose + Fsconnected(c,
+/// reason)): the socket is dropped, the conv goes Connected at the FILE
+/// level with the reason hung on it (reads/writes error Ehungup; the err
+/// file carries the reason — contract §3), and any co-blocked readers
+/// wake.  The ctl write then errors with the reason.
+fn tcp_connect_fail(id: usize, reason: &'static str) -> &'static str {
+    let sock = {
+        let node = LockNode::new();
+        let mut t = conv::TABLES.lock(&node);
+        let c = &mut t.table_mut(Proto::Tcp)[id];
+        c.state = ConvState::Connected;
+        c.hangup = Some(reason.as_bytes().to_vec());
+        c.errq.push_back(reason.as_bytes().to_vec());
+        c.sock.take()
+    };
+    if let Some(h) = sock {
+        // No RST needed (the refused case: the peer already sent it; the
+        // timeout case: nobody is there) — just remove the half-open
+        // socket from the set.
+        let mut g = stack::STACK.enter().expect("devip: stack contended");
+        if let Some(core) = g.core.as_mut() {
+            core.sockets.remove(h);
+        }
+    }
+    conv::wake_conv(Proto::Tcp, id);
+    reason
+}
+
+/// tcp's own ctl verbs (tcpctl, tcp.c:3330-3345).
+fn tcp_ctl(id: usize, verb: &[u8], args: &[&[u8]]) -> Result<()> {
+    match verb {
+        b"close" if args.is_empty() => tcp_close_verb(id, CloseKind::Graceful),
+        b"hangup" if args.is_empty() => tcp_close_verb(id, CloseKind::Abort),
+        b"hangupxmit" if args.is_empty() => tcp_close_verb(id, CloseKind::XmitDrain),
+        b"keepalive" => {
+            // tcpstartka (tcp.c:2924-2941): requires Established — the
+            // donor's typo is the string VERBATIM; the default is 30000 ms
+            // (contract §5.1).  Values below MSPTICK (50 ms) leave the
+            // donor's timer unset — the record still applies (the conv
+            // carries the value; the era's smoltcp mapping sets it).
+            let ms = match args.first() {
+                None => 30_000,
+                Some(a) => atoi(a),
+            };
+            let sock = {
+                let node = LockNode::new();
+                let t = conv::TABLES.lock(&node);
+                t.table(Proto::Tcp)[id].sock
+            };
+            let Some(h) = sock else {
+                return Err("connection must be in Establised state");
+            };
+            let mut g = stack::STACK.enter().expect("devip: stack contended");
+            let Some(core) = g.core.as_mut() else {
+                return Err("devip: no bound medium");
+            };
+            let s = core.sockets.get_mut::<tcp::Socket>(h);
+            if s.state() != tcp::State::Established {
+                return Err("connection must be in Establised state");
+            }
+            s.set_keep_alive(Some(Duration::from_millis(u64::from(ms))));
+            Ok(())
+        }
+        b"checksum" => {
+            // tcpsetchecksum: `nochecksum = !atoi(f[1])` — n==0 emits zero
+            // checksums.  smoltcp has NO such mechanism (checksums are
+            // always computed) — OQ-4's resolution (contract §5.1, D-08):
+            // accepted-and-recorded with a netlog note, never
+            // loud-unimplemented.  (The donor dereferences f[1]
+            // unconditionally; a bare `checksum` maps to n=1 here —
+            // checksums stay on.)
+            let n = args.first().map(|a| atoi(a)).unwrap_or(1);
+            {
+                let node = LockNode::new();
+                let mut t = conv::TABLES.lock(&node);
+                t.table_mut(Proto::Tcp)[id].nochecksum = n == 0;
+            }
+            super::netlog::emit(
+                super::netlog::LOG_TCP,
+                alloc::format!("tcp: checksum {n} accepted-and-recorded (no smoltcp mechanism)").into_bytes(),
+            );
+            Ok(())
+        }
+        b"tcpporthogdefense" => {
+            // tcpporthogdefensectl: a GLOBAL toggle, `on`|`off` only.
+            // No smoltcp mechanism — OQ-4's accepted-and-recorded shape
+            // with a netlog note.
+            let Some(v) = args.first() else {
+                return Err("unknown value for tcpporthogdefense");
+            };
+            let on = match *v {
+                b"on" => 1u64,
+                b"off" => 0u64,
+                _ => return Err("unknown value for tcpporthogdefense"),
+            };
+            TCP_PORT_HOG_DEFENSE.store(on, Ordering::Relaxed);
+            super::netlog::emit(
+                super::netlog::LOG_TCP,
+                alloc::format!("tcp: tcpporthogdefense {} accepted-and-recorded (no smoltcp mechanism)", if on == 1 { "on" } else { "off" })
+                    .into_bytes(),
+            );
+            Ok(())
+        }
+        _ => Err("unknown control request"),
+    }
+}
+
+/// The close-kind (P-L; tcp.c's tcpclose2/tcphangup/tcpxmitclose).
+enum CloseKind {
+    /// `close` → `socket.close()` (FIN).  smoltcp's egress emits the FIN
+    /// only once the segment covers the TX buffer's tail — the FIN is
+    /// sequenced AFTER queued data by construction.
+    Graceful,
+    /// `hangup` → `socket.abort()` (RST — "one reset packet will be
+    /// sent", smoltcp socket/tcp.rs).
+    Abort,
+    /// `hangupxmit` (source-only verb) → close-after-TX-drain.  On the
+    /// wire this IS close() (the FIN never precedes queued data); the
+    /// donor's close-vs-hangupxmit distinction is the rq flush, which
+    /// smoltcp has no mechanism for — a recorded mapping corner.
+    XmitDrain,
+}
+
+/// The close/hangup/hangupxmit verbs.  On an ANNOUNCED conv (the
+/// listener): the donor's tcpclose/tcpxmitclose Listen arms run
+/// `Fsconnected(c, "Hangup")` — the parked listen open wakes and errors
+/// "listen hungup"; the pool tears down (unpopped members are aborted —
+/// a recorded corner: the donor FINs its incall convs, but r9's unpopped
+/// members have no conv to carry a graceful close).  On a connected conv:
+/// the socket close/abort per the kind.
+fn tcp_close_verb(id: usize, kind: CloseKind) -> Result<()> {
+    let (is_listener, sock, pool) = {
+        let node = LockNode::new();
+        let mut t = conv::TABLES.lock(&node);
+        let c = &mut t.table_mut(Proto::Tcp)[id];
+        let is_listener = c.pool.is_some()
+            || matches!(c.state, ConvState::Announced | ConvState::Announcing);
+        if is_listener {
+            c.hangup = Some(b"Hangup".to_vec());
+            c.errq.push_back(b"Hangup".to_vec());
+        }
+        // The listener's own socket (it has none — defensive take) and the
+        // pool leave the conv; a CONNECTED conv KEEPS its socket handle —
+        // the donor's close/hangup doesn't free the conv (the status file
+        // still reads the closing state machine; conv_close owns the drop).
+        (is_listener, if is_listener { c.sock.take() } else { c.sock }, c.pool.take())
+    };
+    if is_listener {
+        if let Some(pool) = pool {
+            pool.teardown();
+        }
+        if let Some(h) = sock {
+            // An announced conv carries no socket of its own; defensive.
+            let mut g = stack::STACK.enter().expect("devip: stack contended");
+            if let Some(core) = g.core.as_mut() {
+                core.sockets.remove(h);
+            }
+        }
+        // The parked listener's wake (after the table guard dropped).
+        conv::wake_conv(Proto::Tcp, id);
+        return Ok(());
+    }
+    let Some(h) = sock else {
+        // An Idle conv: the donor's localclose on a Closed tcb — a
+        // no-op at the file level.  Accept.
+        return Ok(());
+    };
+    {
+        let mut g = stack::STACK.enter().expect("devip: stack contended");
+        if let Some(core) = g.core.as_mut() {
+            let s = core.sockets.get_mut::<tcp::Socket>(h);
+            match kind {
+                CloseKind::Graceful | CloseKind::XmitDrain => s.close(),
+                CloseKind::Abort => {
+                    s.abort();
+                    TCP_STATS[TCPSTAT_OUT_RSTS].fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+    }
+    // CurrEstab unwinds (the conv left/was leaving Established).
+    {
+        let node = LockNode::new();
+        let mut t = conv::TABLES.lock(&node);
+        let c = &mut t.table_mut(Proto::Tcp)[id];
+        if c.estab {
+            c.estab = false;
+            tcp_curr_estab_dec();
+        }
+    }
+    // The FIN/RST leaves now (the generic ctl tail also drives).
+    stack::drive_stack();
+    Ok(())
+}
+
+/// The tcp data read (the donor's `qread(c->rq)` — a BYTE STREAM):
+/// recv from the conv's socket; EOF(0) when the peer closed and the
+/// buffer drained (RecvError::Finished — the donor's qread-returns-0
+/// arm); Ehungup when the conv's queues are hung (the connect-failure /
+/// hangup markers — qhangup's shape); otherwise the seam's probe →
+/// drive → re-probe → register/arm → block.
+pub(crate) fn tcp_read_data(id: usize, buf: &mut [u8]) -> Result<u64> {
+    let mut hooks: Option<stack::DevipHooks> = None;
+    loop {
+        enum R {
+            Done(u64),
+            Eof,
+            Block,
+        }
+        let r = {
+            let node = LockNode::new();
+            let mut t = conv::TABLES.lock(&node);
+            let c = &mut t.table_mut(Proto::Tcp)[id];
+            if c.hangup.is_some() {
+                return Err("i/o on hungup channel");
+            }
+            match c.sock {
+                Some(h) => {
+                    let mut g = stack::STACK.enter().expect("devip: stack contended");
+                    let Some(core) = g.core.as_mut() else {
+                        return Err("devip: no bound medium");
+                    };
+                    let s = core.sockets.get_mut::<tcp::Socket>(h);
+                    if s.can_recv() {
+                        match s.recv_slice(buf) {
+                            Ok(n) => {
+                                TCP_STATS[TCPSTAT_IN_SEGS].fetch_add(1, Ordering::Relaxed);
+                                R::Done(n as u64)
+                            }
+                            // can_recv raced the state; the Finished arm
+                            // is the graceful EOF.
+                            Err(_) => R::Eof,
+                        }
+                    } else if !s.may_recv() {
+                        // Peer closed and the buffer is drained (or the
+                        // socket aborted) → the donor's EOF read.
+                        R::Eof
+                    } else {
+                        R::Block
+                    }
+                }
+                None => {
+                    // Socket-less: an Idle conv EOFs (closeconv's
+                    // qclosed arm — a gc-stolen conv's reader EOFs); an
+                    // announced conv's data read BLOCKS (the listener
+                    // never receives — the donor's qread on its rq).
+                    if c.state == ConvState::Idle {
+                        R::Eof
+                    } else {
+                        R::Block
+                    }
+                }
+            }
+        };
+        match r {
+            R::Done(n) => return Ok(n),
+            R::Eof => return Ok(0),
+            R::Block => {}
+        }
+        // Flush pending loopback work before blocking (the D-05 leg-3
+        // read side), then re-probe via the loop.
+        stack::drive_stack();
+        {
+            let node = LockNode::new();
+            let mut t = conv::TABLES.lock(&node);
+            let c = &mut t.table_mut(Proto::Tcp)[id];
+            if c.hangup.is_some() {
+                continue; // the top probe takes the error
+            }
+            let can = if let Some(h) = c.sock {
+                let g = stack::STACK.enter().expect("devip: stack contended");
+                match g.core.as_ref() {
+                    Some(core) => {
+                        let s = core.sockets.get::<tcp::Socket>(h);
+                        s.can_recv() || !s.may_recv()
+                    }
+                    None => true,
+                }
+            } else {
+                c.state == ConvState::Idle
+            };
+            if can {
+                continue; // the top probe delivers/EOFs
+            }
+            // Register, drop, block (devpipe's wakeup-loss-free shape).
+            if hooks.is_none() {
+                hooks = Some(stack::hooks()?);
+            }
+            let hks = hooks.unwrap();
+            let pid = (hks.current)();
+            c.waiters.register(pid);
+            stack::register_net_waiter(pid);
+            if let Some(h) = c.sock {
+                let mut g = stack::STACK.enter().expect("devip: stack contended");
+                if let Some(core) = g.core.as_mut() {
+                    super::TCP_RX_SLOTS[id].arm(pid);
+                    core.sockets
+                        .get_mut::<tcp::Socket>(h)
+                        .register_recv_waker(&crate::devip_waker::waker_for(&super::TCP_RX_SLOTS[id]));
+                }
+            }
+        }
+        (hooks.unwrap().block)();
+    }
+}
+
+/// The tcp data write (the donor's qwrite(c->wq)): queue the bytes into
+/// the socket's TX buffer, looping while a full buffer blocks (register
+/// the SEND waker, drive, block — the icmp write's shape).  Writes on a
+/// hung conv error Ehungup; writes on a socket whose send half closed
+/// (our close/peer's full close) error Ehungup (the donor's
+/// qwrite-on-closed-queue arm).
+pub(crate) fn tcp_write_data(id: usize, buf: &[u8]) -> Result<u64> {
+    let n = buf.len();
+    let mut hooks: Option<stack::DevipHooks> = None;
+    let mut sent = 0usize;
+    while sent < n {
+        enum W {
+            Sent(usize),
+            Block,
+        }
+        let w = {
+            let node = LockNode::new();
+            let t = conv::TABLES.lock(&node);
+            let c = &t.table(Proto::Tcp)[id];
+            if c.hangup.is_some() {
+                return Err("i/o on hungup channel");
+            }
+            match c.sock {
+                Some(h) => {
+                    let mut g = stack::STACK.enter().expect("devip: stack contended");
+                    let Some(core) = g.core.as_mut() else {
+                        return Err("devip: no bound medium");
+                    };
+                    let s = core.sockets.get_mut::<tcp::Socket>(h);
+                    if !s.may_send() {
+                        // Closed send half — the donor's qwrite on a hung
+                        // wq.
+                        return Err("i/o on hungup channel");
+                    }
+                    if !s.can_send() {
+                        W::Block
+                    } else {
+                        match s.send_slice(&buf[sent..]) {
+                            Ok(0) => W::Block, // a zero enqueue: full — block
+                            Ok(m) => {
+                                TCP_STATS[TCPSTAT_OUT_SEGS].fetch_add(1, Ordering::Relaxed);
+                                W::Sent(m)
+                            }
+                            Err(_) => return Err("i/o on hungup channel"),
+                        }
+                    }
+                }
+                None => {
+                    // A never-connected conv: the donor's qwrite queues
+                    // the block and the state machine never drains it —
+                    // the write SUCCEEDS (fire-and-forget, the icmp/udp
+                    // never-connected shape).  Counted, never silent.
+                    TCP_STATS[TCPSTAT_IN_ERRS].fetch_add(1, Ordering::Relaxed);
+                    return Ok(n as u64);
+                }
+            }
+        };
+        match w {
+            W::Sent(m) => sent += m,
+            W::Block => {
+                if hooks.is_none() {
+                    hooks = Some(stack::hooks()?);
+                }
+                let hks = hooks.unwrap();
+                let pid = (hks.current)();
+                {
+                    let node = LockNode::new();
+                    let mut t = conv::TABLES.lock(&node);
+                    let c = &mut t.table_mut(Proto::Tcp)[id];
+                    c.waiters.register(pid);
+                    if let Some(h) = c.sock {
+                        let mut g = stack::STACK.enter().expect("devip: stack contended");
+                        if let Some(core) = g.core.as_mut() {
+                            super::TCP_TX_SLOTS[id].arm(pid);
+                            core.sockets
+                                .get_mut::<tcp::Socket>(h)
+                                .register_send_waker(&crate::devip_waker::waker_for(&super::TCP_TX_SLOTS[id]));
+                        }
+                    }
+                }
+                stack::register_net_waiter(pid);
+                stack::drive_stack();
+                (hks.block)();
+            }
+        }
+    }
+    // D-05 leg 3: the mutating write ends with a drive — the loopback
+    // loops the segment synchronously.
+    stack::drive_stack();
+    Ok(n as u64)
+}
+
+/// The tcp status line (tcpstate, tcp.c:493-509 — contract §5.2):
+/// `"State qin %d qout %d rq %d.%d srtt %d mdev %d sst %lud cwin %lud
+/// swin %lud>>%d rwin %lud>>%d qscale %d timer.start %d timer.count %d
+/// rerecv %d katimer.start %d katimer.count %d\n"`.  Real where smoltcp
+/// exposes it (state via the rename table, qin/qout = the socket's
+/// recv/send queue bytes), fixed/zero elsewhere (smoltcp 0.14 exposes
+/// none of the timer/reseq/window-scale internals — the contract's
+/// zero-mapped tail; gates assert the FORMAT and the state/qin/qout
+/// fields, never the zeros).
+pub(crate) fn tcp_status(id: usize) -> Vec<u8> {
+    let (name, qin, qout) = {
+        let node = LockNode::new();
+        let t = conv::TABLES.lock(&node);
+        let c = &t.table(Proto::Tcp)[id];
+        match c.sock {
+            Some(h) => {
+                let g = stack::STACK.enter().expect("devip: stack contended");
+                match g.core.as_ref() {
+                    Some(core) => {
+                        let s = core.sockets.get::<tcp::Socket>(h);
+                        (tcp_state_name(s.state()), s.recv_queue() as u64, s.send_queue() as u64)
+                    }
+                    None => (b"Closed".as_ref(), 0, 0),
+                }
+            }
+            // The ANNOUNCED conv (the pool owner) IS the listener; an
+            // Idle conv reads Closed (the donor's tcpcreate state).
+            None => {
+                if c.pool.is_some() {
+                    (b"Listen".as_ref(), 0, 0)
+                } else {
+                    (b"Closed".as_ref(), 0, 0)
+                }
+            }
+        }
+    };
+    let mut out = Vec::new();
+    out.extend_from_slice(name);
+    out.extend_from_slice(b" qin ");
+    out.extend_from_slice(&dec(qin));
+    out.extend_from_slice(b" qout ");
+    out.extend_from_slice(&dec(qout));
+    out.extend_from_slice(
+        b" rq 0.0 srtt 0 mdev 0 sst 0 cwin 0 swin 0>>0 rwin 0>>0 qscale 0 timer.start 0 timer.count 0 rerecv 0 katimer.start 0 katimer.count 0\n",
+    );
+    out
+}
+
+/// The tcp stats file (tcpstats, tcp.c:3348-3360): the 28 tagged lines
+/// from the bridge-maintained counters (P-M).
+pub(crate) fn tcp_stats() -> Vec<u8> {
+    let mut out = Vec::new();
+    for (i, name) in TCP_STAT_NAMES.iter().enumerate() {
+        out.extend_from_slice(name);
+        out.extend_from_slice(b": ");
+        out.extend_from_slice(&dec(TCP_STATS[i].load(Ordering::Relaxed)));
+        out.push(b'\n');
+    }
+    out
+}
+
+/// The tcp gc (contract §5.4 — the donor's tcpgc reaps timed-out convs
+/// under clone pressure; the smoltcp-era mapping: steal a slot whose
+/// socket is FULLY CLOSED).  The victim's socket leaves the SocketSet;
+/// its blocked readers wake to EOF (the reset's Idle-state read arm).
+/// Returns the stolen slot, reset, inuse = 1 (the clone-open shape).
+/// The caller (conv_alloc) holds TABLES.
+pub(crate) fn tcp_gc(t: &mut conv::ConvTables) -> Option<usize> {
+    // Find a fully-Closed socket (TABLES → STACK, the documented nesting).
+    let victim = {
+        let mut g = stack::STACK.enter().expect("devip: stack contended");
+        let core = g.core.as_mut()?;
+        let mut found = None;
+        for (id, c) in t.table(Proto::Tcp).iter().enumerate() {
+            if let Some(h) = c.sock
+                && core.sockets.get::<tcp::Socket>(h).state() == tcp::State::Closed
+            {
+                found = Some((id, h));
+                break;
+            }
+        }
+        if let Some((_, h)) = found {
+            core.sockets.remove(h);
+        }
+        found.map(|(id, _)| id)
+    }?;
+    let mut pids = [0u64; 16];
+    let n = {
+        let c = &mut t.table_mut(Proto::Tcp)[victim];
+        let n = c.waiters.take(&mut pids);
+        c.reset();
+        c.allocated = true;
+        n
+    };
+    if n > 0
+        && let Ok(h) = stack::hooks()
+    {
+        (h.wake)(&pids[..n]);
+    }
+    Some(victim)
 }

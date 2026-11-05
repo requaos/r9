@@ -889,6 +889,10 @@ const NETIP_SWEEP_DONE_MARKER: &str = "netip: NETIP-DONE";
 const NETIP_SWEEP_FAIL_MARKER: &str = "netip: FAIL";
 const NETIP_PING_OK_MARKER: &str = "netip: ping ok";
 const NETIP_UDP_OK_MARKER: &str = "netip: udp echo ok";
+/// The 08-05 tcp mode's leg markers (the tcp/7 echo + the P-M
+/// stats-honesty assertion), printed by /lib/netip-tcp.rc.
+const NETIP_TCP_OK_MARKER: &str = "netip: tcp echo ok";
+const NETIP_TCP_STATS_OK_MARKER: &str = "netip: tcp stats ok";
 
 /// Always-on negative scan: any panic/Unhandled-interrupt line in
 /// the capture fails the run — every profile EXCEPT the deliberate-panic
@@ -963,14 +967,14 @@ fn net_sweep_mode() -> Result<String> {
 }
 
 /// The netip sweep's mode: R9_NETIP_SWEEP selects the leg set — `loopback`
-/// (the 08-04 ping + udp echo legs, the only mode this plan).  A typo'd
-/// value is a harness bug, not a gate failure — validated before qemu
-/// spawns, never after a wasted boot.
+/// (the 08-04 ping + udp echo legs) or `tcp` (the 08-05 tcp/7 echo +
+/// stats-honesty legs).  A typo'd value is a harness bug, not a gate
+/// failure — validated before qemu spawns, never after a wasted boot.
 fn netip_sweep_mode() -> Result<String> {
     let mode = env::var("R9_NETIP_SWEEP").unwrap_or_else(|_| "loopback".to_string());
     match mode.as_str() {
-        "loopback" => Ok(mode),
-        _ => Err(format!("R9_NETIP_SWEEP must be \"loopback\", got {mode:?}").into()),
+        "loopback" | "tcp" => Ok(mode),
+        _ => Err(format!("R9_NETIP_SWEEP must be \"loopback\" or \"tcp\", got {mode:?}").into()),
     }
 }
 
@@ -1511,8 +1515,14 @@ impl BootTestStep {
                         // key on sweep-prefixed lines, which the typed
                         // line can never contain, so echo can't false-match.
                         if netip_profile {
-                            // 08-04: the loopback sweep (netip-loopback.rc).
-                            stream.write_all(b"rc /lib/netip-loopback.rc\r")?;
+                            // The netip sweep fixture by mode (08-04:
+                            // netip-loopback.rc; 08-05: netip-tcp.rc).
+                            let mode = netip_sweep_mode()?;
+                            let fixture = match mode.as_str() {
+                                "tcp" => "rc /lib/netip-tcp.rc\r",
+                                _ => "rc /lib/netip-loopback.rc\r",
+                            };
+                            stream.write_all(fixture.as_bytes())?;
                         } else {
                             let mode = net_sweep_mode()?;
                             stream.write_all(format!("rc /lib/net-sweep.rc {mode}\r").as_bytes())?;
@@ -1659,19 +1669,27 @@ impl BootTestStep {
                 );
             }
             BootProfile::Netip => {
-                // The NETIP-03 loopback gate (08-04): the devip wiring
-                // markers (#I0 attach + medium-bound), the sweep's leg
-                // markers, and NETIP-DONE.  NO pcap assertion — loopback
-                // traffic never touches the wire (that is the point of the
-                // NIC-free leg).  Presence-only, never order.
+                // The NETIP-03 gates: the devip wiring markers (#I0 attach
+                // + medium-bound), the sweep's leg markers, and NETIP-DONE.
+                // NO pcap assertion — loopback traffic never touches the
+                // wire (that is the point of the NIC-free leg).
+                // Presence-only, never order.  The leg set is mode-keyed:
+                // `loopback` = ping + udp echo (08-04); `tcp` = the tcp/7
+                // echo + the stats-honesty legs (08-05).
                 let mode = netip_sweep_mode()?;
-                for marker in [
-                    DEVIP_ATTACH_MARKER,
-                    DEVIP_MEDIUM_MARKER,
-                    NETIP_PING_OK_MARKER,
-                    NETIP_UDP_OK_MARKER,
-                    NETIP_SWEEP_DONE_MARKER,
-                ] {
+                let mut markers: Vec<&str> = vec![DEVIP_ATTACH_MARKER, DEVIP_MEDIUM_MARKER];
+                match mode.as_str() {
+                    "tcp" => {
+                        markers.push(NETIP_TCP_OK_MARKER);
+                        markers.push(NETIP_TCP_STATS_OK_MARKER);
+                    }
+                    _ => {
+                        markers.push(NETIP_PING_OK_MARKER);
+                        markers.push(NETIP_UDP_OK_MARKER);
+                    }
+                }
+                markers.push(NETIP_SWEEP_DONE_MARKER);
+                for marker in markers {
                     if !contains_marker(capture, marker.as_bytes()) {
                         return Err(
                             self.fail_pretty(capture, &format!("netip gate: marker {marker:?} absent"))
@@ -1679,7 +1697,7 @@ impl BootTestStep {
                     }
                 }
                 println!(
-                    "boot-test: PASS -- banner, real Harvey boot chain (paqfs + stacksmoke), rc prompt, typed netip sweep ({mode} mode), the devip attach/medium markers, the sweep's ping + udp echo leg markers and NETIP-DONE observed (NETIP-03)"
+                    "boot-test: PASS -- banner, real Harvey boot chain (paqfs + stacksmoke), rc prompt, typed netip sweep ({mode} mode), the devip attach/medium markers, the sweep's leg markers and NETIP-DONE observed (NETIP-03)"
                 );
             }
         }

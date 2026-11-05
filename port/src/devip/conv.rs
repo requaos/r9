@@ -120,7 +120,8 @@ pub(crate) struct WaitPids {
 }
 
 impl WaitPids {
-    const fn new() -> WaitPids {
+    /// (pub(crate) for netlog.rs's blocked-reader set — the same shape.)
+    pub(crate) const fn new() -> WaitPids {
         WaitPids { pids: [0; 16] }
     }
 
@@ -213,7 +214,25 @@ pub(crate) struct Conv {
     /// udp's advise hangup (udpadvise's qhangup): set by
     /// proto::udp_advise unless ignoreadvice; data reads/writes fail
     /// while set (sticky until close — the donor's qhangup shape).
+    /// tcp reuses the field for its hangup markers (the connect-failure
+    /// reason, the announcer's close/hangup — the donor's qhangup(rq)
+    /// arm; the listen open's "listen hungup" re-check reads it).
     pub(crate) hangup: Option<Vec<u8>>,
+    /// tcp's accept pool (contract §12.3): the ANNOUNCED conv owns the
+    /// pool of listening sockets; the listen-file open pops a connected
+    /// member and the pool refills.  Torn down at conv close (and at the
+    /// announcer's close/hangup ctl) — a dropped pool NEVER leaves live
+    /// sockets in the seam's SocketSet.
+    pub(crate) pool: Option<super::stack::AcceptPool>,
+    /// tcp: the bridge observed Established on this conv (the CurrEstab
+    /// stats bookkeeping — set at connect-wait success and at accept-pop,
+    /// decremented at conv close).
+    pub(crate) estab: bool,
+    /// tcp's `checksum <n>` record (tcpsetchecksum: n==0 → nochecksum).
+    /// smoltcp always computes checksums — OQ-4's accepted-and-recorded
+    /// verb: the field is the honest file-level record; the wire is
+    /// unaffected (contract §5.1).
+    pub(crate) nochecksum: bool,
 }
 
 impl Conv {
@@ -241,6 +260,9 @@ impl Conv {
             announcer: None,
             dataq: VecDeque::new(),
             hangup: None,
+            pool: None,
+            estab: false,
+            nochecksum: false,
         }
     }
 
@@ -248,7 +270,9 @@ impl Conv {
     /// field back to its freshly-allocated value, queues reopened
     /// (drained) for the next cloner.  The `allocated` mark survives
     /// (the donor's conv slots are permanent once allocated).
-    fn reset(&mut self) {
+    /// (pub(crate) for proto.rs's tcp_gc — the gc steals the slot by
+    /// the same reset.)
+    pub(crate) fn reset(&mut self) {
         let was = self.allocated;
         *self = Conv::new();
         self.allocated = was;
@@ -331,9 +355,15 @@ pub(crate) fn conv_alloc(p: Proto) -> Result<usize> {
             return Ok(id);
         }
     }
-    // The gc pass under pressure is tcp's (the donor's tcpgc reaps
-    // timed-out convs; icmp/udp have no gc — p->gc is nil and the
-    // donor falls straight to the Enodev arm).  08-05 lands it.
+    // The gc pass under pressure (contract §3/§5.4; the donor's
+    // p->gc — tcpgc — reaps stale convs): steal a tcp slot whose socket
+    // is fully Closed.  icmp/udp have no gc (p->gc is nil there) — the
+    // donor falls straight to the Enodev arm for them.
+    if p == Proto::Tcp
+        && let Some(id) = super::proto::tcp_gc(&mut t)
+    {
+        return Ok(id);
+    }
     Err("no free devices")
 }
 
@@ -393,6 +423,48 @@ pub(crate) fn fs_new_call(
     Some(id)
 }
 
+/// The tcp incoming-call materialization (contract §3's listen semantics
+/// over §12.3's accept pool): like Fsnewcall but carries the POPPED pool
+/// member's socket — the pool IS the tcp incall queue, so there is NO
+/// incall push here (the listen open's pop is the dequeue).  The new conv
+/// is Connected with the member's bound quad; its data path reads/writes
+/// the socket directly.  None on table exhaustion (the caller RSTs and
+/// drops the member — the donor drops the call on a full incall).
+pub(crate) fn fs_new_call_tcp(
+    t: &mut ConvTables,
+    announcer: usize,
+    sock: SocketHandle,
+    raddr: [u8; 16],
+    rport: u16,
+    laddr: [u8; 16],
+    lport: u16,
+) -> Option<usize> {
+    let id = {
+        let table = t.table(Proto::Tcp);
+        let mut free = None;
+        for (id, c) in table.iter().enumerate() {
+            if c.inuse == 0 {
+                free = Some(id);
+                break;
+            }
+        }
+        free?
+    };
+    {
+        let c = &mut t.table_mut(Proto::Tcp)[id];
+        c.reset();
+        c.allocated = true;
+        c.raddr = raddr;
+        c.rport = rport;
+        c.laddr = laddr;
+        c.lport = lport;
+        c.state = ConvState::Connected;
+        c.announcer = Some(announcer);
+        c.sock = Some(sock);
+    }
+    Some(id)
+}
+
 /// Re-open a conv's file (devip.c:417-444): inuse++, re-affirming the
 /// owner collapse; a closed-but-allocated conv is REOPENED in its
 /// closeconv-reset state (the donor's ipopen Qctl/Qdata arm has no
@@ -443,6 +515,7 @@ pub(crate) fn conv_close(p: Proto, id: usize) {
     }
     let mut pids = [0u64; 16];
     let nwake;
+    let mut tcp_drove_close = false;
     {
         let node = LockNode::new();
         let mut t = TABLES.lock(&node);
@@ -458,12 +531,17 @@ pub(crate) fn conv_close(p: Proto, id: usize) {
         }
         // TABLES → STACK (the documented nesting): drop the conv's
         // socket while the table guard is held.
-        let sock = {
+        let (sock, pool) = {
             let table = t.table_mut(p);
-            let (incall, sock) = {
+            let (incall, sock, pool, estab) = {
                 let c = &mut table[id];
                 nwake = c.waiters.take(&mut pids);
-                (core::mem::take(&mut c.incall), c.sock.take())
+                (
+                    core::mem::take(&mut c.incall),
+                    c.sock.take(),
+                    c.pool.take(),
+                    c.estab,
+                )
             };
             // Close pending incall convs (no listen will ever happen —
             // closeconv's incall sweep): their last-close shape runs
@@ -471,7 +549,12 @@ pub(crate) fn conv_close(p: Proto, id: usize) {
             for nid in incall {
                 table[nid].close_reset();
             }
-            sock
+            // tcp's CurrEstab unwind (the bridge counted the conv as
+            // established; close leaves the state).
+            if p == Proto::Tcp && estab {
+                super::proto::tcp_curr_estab_dec();
+            }
+            (sock, pool)
         };
         // The proto close hook BEFORE the reset (the donor's
         // closeconv order: `cv->p->close(cv); cv->state = Idle`).
@@ -481,12 +564,28 @@ pub(crate) fn conv_close(p: Proto, id: usize) {
         if p == Proto::Ipifc {
             super::ipifc::close_conv(&mut t, id);
         }
+        // tcp: the pool (an announcer) tears down — every member socket
+        // aborted + removed, never a live-socket leak (the donor's
+        // closeconv sweeps its incall convs; r9's pool members are
+        // sockets until popped).
+        if let Some(pool) = pool {
+            pool.teardown();
+        }
         // Drop the conv's socket from the seam's SocketSet (the
         // TABLES → STACK nesting — the cell is entered, the socket
         // removed, and the guard dropped, all under the table guard).
+        // tcp closes GRACEFULLY first (the donor's closeconv → tcpclose:
+        // close() sequences the FIN after the queued data, so the peer's
+        // read EOFs); the removal follows immediately — the FIN leaves
+        // at the drive below.
         if let Some(h) = sock {
             let mut g = super::stack::STACK.enter().expect("devip: stack contended");
             if let Some(core) = g.core.as_mut() {
+                if p == Proto::Tcp {
+                    let s = core.sockets.get_mut::<smoltcp::socket::tcp::Socket>(h);
+                    s.close();
+                    tcp_drove_close = true;
+                }
                 core.sockets.remove(h);
             }
         }
@@ -500,6 +599,11 @@ pub(crate) fn conv_close(p: Proto, id: usize) {
         && let Ok(h) = super::stack::hooks()
     {
         (h.wake)(&pids[..nwake]);
+    }
+    // Emit the FIN (the close sequenced it into the egress queue) — after
+    // every guard dropped (the seam's wake-after-drop discipline).
+    if tcp_drove_close {
+        super::stack::drive_stack();
     }
 }
 
