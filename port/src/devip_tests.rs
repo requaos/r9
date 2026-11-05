@@ -809,3 +809,301 @@ fn stack_debt_drains_on_next_op() {
     // A second drain on a clear flag is a no-op.
     assert!(!stack::drain_debt_if_set());
 }
+
+// ---------------------------------------------------------------------------
+// 08-04 Task 2 — the udp module pins (NETIP-03's second leg + the
+// NETIP-02 conv-isolation truth).  The udp proto lands behind these;
+// the pin shapes ride the same harness (scripted stack, stub hooks).
+// ---------------------------------------------------------------------------
+
+/// Drop-guard: every pin conv-closes what it allocated (a stale conv's
+/// SocketHandle names a prior pin's SocketSet — close drops it).
+struct ConvGuard(crate::devip::conv::Proto, usize);
+
+impl Drop for ConvGuard {
+    fn drop(&mut self) {
+        crate::devip::conv::conv_close(self.0, self.1);
+    }
+}
+
+/// A conv allocation tracked to close at scope end.
+fn alloc_udp_conv() -> (usize, ConvGuard) {
+    let id = crate::devip::conv::conv_alloc(crate::devip::conv::Proto::Udp)
+        .expect("pin: udp clone allocates");
+    (id, ConvGuard(crate::devip::conv::Proto::Udp, id))
+}
+
+/// The wedged reader's pid (never armed on a waker, never woken — the
+/// wedge simulation).
+const WEDGED_PID: u64 = 77;
+
+/// The v4-mapped 16-byte form (the devip address model).
+fn mapped(a: Ipv4Address) -> [u8; 16] {
+    crate::devip::v4prefix_of(&a.octets())
+}
+
+/// Read one udp conv's (state, headers, laddr, lport, raddr, rport,
+/// announcer, incall len, dataq len) — the pin inspection surface.
+fn udp_conv_snapshot(
+    id: usize,
+) -> (
+    crate::devip::conv::ConvState,
+    u8,
+    [u8; 16],
+    u16,
+    [u8; 16],
+    u16,
+    Option<usize>,
+    usize,
+    usize,
+) {
+    let node = crate::mcslock::LockNode::new();
+    let t = crate::devip::conv::TABLES.lock(&node);
+    let c = &t.table(crate::devip::conv::Proto::Udp)[id];
+    (
+        c.state,
+        c.headers,
+        c.laddr,
+        c.lport,
+        c.raddr,
+        c.rport,
+        c.announcer,
+        c.incall.len(),
+        c.dataq.len(),
+    )
+}
+
+/// Pop a spawned conv's data queue head (the pin's delivered-datagram
+/// readback).
+fn udp_dataq_front(id: usize) -> Option<Vec<u8>> {
+    let node = crate::mcslock::LockNode::new();
+    let t = crate::devip::conv::TABLES.lock(&node);
+    t.table(crate::devip::conv::Proto::Udp)[id].dataq.front().cloned()
+}
+
+/// The conv's recorded ttl/tos (the ctl-isolation pin's readback).
+fn udp_conv_ttl_tos(id: usize) -> (u32, u32) {
+    let node = crate::mcslock::LockNode::new();
+    let t = crate::devip::conv::TABLES.lock(&node);
+    let c = &t.table(crate::devip::conv::Proto::Udp)[id];
+    (c.ttl, c.tos)
+}
+
+/// The conv's hangup + errq head (the advise pin's readback).
+fn udp_conv_hangup_err(id: usize) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
+    let node = crate::mcslock::LockNode::new();
+    let t = crate::devip::conv::TABLES.lock(&node);
+    let c = &t.table(crate::devip::conv::Proto::Udp)[id];
+    (c.hangup.clone(), c.errq.front().cloned())
+}
+
+/// (e) The headers-mode pin (contract §6.2): a scripted inbound datagram
+/// to an announced, headers-mode conv reads back as the EXACT 52-byte
+/// Udphdr prefix (raddr[16] laddr[16] ifcaddr[16] rport[2] lport[2] —
+/// v4 mapped into v6 form, big-endian ports) + the payload, in one
+/// datagram-at-once read.
+#[test]
+fn udp_headers_mode_synthesizes_the_52_byte_prefix() {
+    let _serial = fresh_scripted_stack();
+    set_guest_addr();
+    let (id, _guard) = alloc_udp_conv();
+    crate::devip::proto::ctl_write(crate::devip::conv::Proto::Udp, id, b"announce 7")
+        .expect("pin (e): announce");
+    crate::devip::proto::ctl_write(crate::devip::conv::Proto::Udp, id, b"headers")
+        .expect("pin (e): headers");
+    let (.., lport) = {
+        let s = udp_conv_snapshot(id);
+        (s.0, s.1, s.2, s.3, s.4, s.5, s.6, s.7, s.8)
+    };
+    assert_eq!(lport, 7, "pin (e): announce bound port 7");
+    assert_eq!(udp_conv_snapshot(id).1, 7, "pin (e): headers=7 recorded");
+
+    push_rx(udp4_frame(PEER, GUEST, 4321, 7, b"pin payload"));
+    stack::drive_stack();
+
+    let mut buf = [0u8; 128];
+    let n = crate::devip::proto::udp_read_data(id, &mut buf).expect("pin (e): read delivers");
+    assert_eq!(n, 52 + 11, "pin (e): one datagram, prefix + payload");
+    assert_eq!(&buf[0..16], &mapped(PEER), "pin (e): raddr");
+    assert_eq!(&buf[16..32], &mapped(GUEST), "pin (e): laddr (the receiving address)");
+    assert_eq!(&buf[32..48], &mapped(GUEST), "pin (e): ifcaddr (the receiving interface's local)");
+    assert_eq!(&buf[48..50], &4321u16.to_be_bytes(), "pin (e): rport big-endian");
+    assert_eq!(&buf[50..52], &7u16.to_be_bytes(), "pin (e): lport big-endian");
+    assert_eq!(&buf[52..n], b"pin payload", "pin (e): the payload verbatim");
+}
+
+/// The Fsnewcall pin (contract §6.2): a datagram from a NEW remote quad
+/// to an announced (non-headers) conv spawns a new Connected conv
+/// carrying the quad + the datagram; the announcer's incall queue holds
+/// it until the listen open pops it (the returned chan names the NEW
+/// conv's ctl).  A repeat datagram from the same quad lands on the SAME
+/// spawned conv; a new quad spawns another.
+#[test]
+fn udp_fsnewcall_spawns_on_new_remote_quad() {
+    let _serial = fresh_scripted_stack();
+    set_guest_addr();
+    let (id, _guard) = alloc_udp_conv();
+    crate::devip::proto::ctl_write(crate::devip::conv::Proto::Udp, id, b"announce 7")
+        .expect("pin (spawn): announce");
+
+    // New quad → spawn.
+    push_rx(udp4_frame(PEER, GUEST, 5000, 7, b"one"));
+    crate::devip::proto::udp_rx_drain();
+    let snap = udp_conv_snapshot(id);
+    assert_eq!(snap.7, 1, "pin (spawn): one incall after the first datagram");
+    let nid = {
+        let node = crate::mcslock::LockNode::new();
+        let t = crate::devip::conv::TABLES.lock(&node);
+        t.table(crate::devip::conv::Proto::Udp)[id].incall[0]
+    };
+    let spawned = udp_conv_snapshot(nid);
+    assert_eq!(spawned.0, crate::devip::conv::ConvState::Connected, "pin (spawn): Connected");
+    assert_eq!(spawned.4, mapped(PEER), "pin (spawn): raddr is the sender");
+    assert_eq!(spawned.5, 5000, "pin (spawn): rport is the sender's");
+    assert_eq!(spawned.3, 7, "pin (spawn): lport is the announced port");
+    assert_eq!(spawned.6, Some(id), "pin (spawn): the announcer back-link");
+    assert_eq!(udp_dataq_front(nid).as_deref(), Some(&b"one"[..]), "pin (spawn): the first datagram delivered");
+
+    // Same quad → the SAME conv (no second spawn).
+    push_rx(udp4_frame(PEER, GUEST, 5000, 7, b"two"));
+    crate::devip::proto::udp_rx_drain();
+    assert_eq!(udp_conv_snapshot(id).7, 1, "pin (spawn): no second spawn for a known quad");
+    assert_eq!(udp_conv_snapshot(nid).8, 2, "pin (spawn): the repeat datagram queued on the same conv");
+
+    // New quad → another spawn.
+    push_rx(udp4_frame(PEER2, GUEST, 5001, 7, b"three"));
+    crate::devip::proto::udp_rx_drain();
+    assert_eq!(udp_conv_snapshot(id).7, 2, "pin (spawn): a second incall for the new quad");
+
+    // The listen open pops the FIRST spawned conv — the returned chan
+    // names the NEW conv's ctl (the file-level listen/accept path).
+    let lqid = crate::dat::Qid {
+        path: crate::devip::qid(crate::devip::conv::Proto::Udp.index(), id as u64, crate::devip::QLISTEN),
+        vers: 0,
+        typ: crate::dat::QTFILE,
+    };
+    let lc = crate::dat::Chan::new(crate::dat::DEV_IP, lqid, crate::dat::OREAD);
+    let nc = crate::devip::open(&lc, crate::dat::OREAD).expect("pin (spawn): listen open");
+    let popped = ((nc.qid.path >> 5) & 0xfff) as usize; // QID(p,c,y): c at bits 5..17
+    assert_eq!(popped, nid, "pin (spawn): listen pops the first incoming call");
+    assert_eq!(udp_conv_snapshot(id).7, 1, "pin (spawn): the incall queue popped");
+
+    // The spawned conv's own data read delivers the queued datagrams in
+    // order (Qmsg datagram-at-once).
+    let mut buf = [0u8; 64];
+    let n = crate::devip::proto::udp_read_data(nid, &mut buf).expect("pin (spawn): spawned read");
+    assert_eq!(&buf[..n], b"one", "pin (spawn): first datagram first");
+    let n = crate::devip::proto::udp_read_data(nid, &mut buf).expect("pin (spawn): spawned read");
+    assert_eq!(&buf[..n], b"two", "pin (spawn): second datagram next");
+
+    // Close out the spawned convs (the announcer's guard covers its own
+    // close; incall convs are closed by the announcer's last close).
+    let _ = nc;
+}
+
+/// The NETIP-02 isolation pin, part 1: concurrent clone opens allocate
+/// INDEPENDENT conversations (distinct conv ids, per-proto tables), and
+/// a ctl write on one conversation never appears in another's state.
+#[test]
+fn udp_conv_isolation_distinct_ids_and_ctl_isolation() {
+    let _serial = fresh_scripted_stack();
+    let (a, _ga) = alloc_udp_conv();
+    let (b, _gb) = alloc_udp_conv();
+    assert_ne!(a, b, "pin (isolation): concurrent clones allocate distinct conv ids");
+    // Cross-proto independence: an icmp clone never collides with udp's table.
+    let icmp_id = crate::devip::conv::conv_alloc(crate::devip::conv::Proto::Icmp)
+        .expect("pin (isolation): icmp clone");
+    let _gi = ConvGuard(crate::devip::conv::Proto::Icmp, icmp_id);
+    assert_eq!(
+        udp_conv_snapshot(a).0,
+        crate::devip::conv::ConvState::Idle,
+        "pin (isolation): fresh udp conv is Idle"
+    );
+
+    crate::devip::proto::ctl_write(crate::devip::conv::Proto::Udp, a, b"ttl 123")
+        .expect("pin (isolation): ttl on A");
+    crate::devip::proto::ctl_write(crate::devip::conv::Proto::Udp, b, b"tos 5")
+        .expect("pin (isolation): tos on B");
+    assert_eq!(udp_conv_ttl_tos(a), (123, 0), "pin (isolation): A carries its own ctl");
+    assert_eq!(udp_conv_ttl_tos(b), (255, 5), "pin (isolation): B never sees A's write");
+}
+
+/// The NETIP-02 isolation pin, part 2: a wedged reader on conv A
+/// (registered, never woken) leaves sibling conv B's data path fully
+/// operational — and the wedge's pid is never woken by B's activity.
+#[test]
+fn udp_wedged_reader_never_blocks_a_sibling_conv() {
+    let _serial = fresh_scripted_stack();
+    set_guest_addr();
+    let (a, _ga) = alloc_udp_conv();
+    let (b, _gb) = alloc_udp_conv();
+
+    // The wedge: a reader blocked on A forever (registered on the conv +
+    // the seam's net-waiter set, never armed on any waker).
+    {
+        let node = crate::mcslock::LockNode::new();
+        let mut t = crate::devip::conv::TABLES.lock(&node);
+        t.table_mut(crate::devip::conv::Proto::Udp)[a].waiters.register(WEDGED_PID);
+    }
+    stack::register_net_waiter(WEDGED_PID);
+
+    // B runs a full round-trip: connect → write (the TX is captured) →
+    // scripted reply → read.
+    crate::devip::proto::ctl_write(crate::devip::conv::Proto::Udp, b, b"connect 10.0.0.2!7000")
+        .expect("pin (wedge): B connects");
+    let (.., blport) = {
+        let s = udp_conv_snapshot(b);
+        (s.0, s.1, s.2, s.3, s.4, s.5, s.6, s.7, s.8)
+    };
+    assert!(blport != 0, "pin (wedge): connect assigned B a local port");
+    crate::devip::proto::udp_write_data(b, b"probe").expect("pin (wedge): B writes");
+    assert!(tx_count() >= 1, "pin (wedge): B's datagram left the seam");
+    let (src, dst, sport, dport, payload) = {
+        let g = stack::enter_stack();
+        let core = g.core.as_ref().expect("pin (wedge): stack installed");
+        parse_udp4(core.dev_scripted().tx_log.last().expect("pin (wedge): a TX frame"))
+    };
+    assert_eq!((src, dst), (GUEST, PEER), "pin (wedge): B's datagram addressed to the peer");
+    assert_eq!((sport, dport), (blport, 7000), "pin (wedge): B's quad on the wire");
+    assert_eq!(payload, b"probe", "pin (wedge): the payload verbatim");
+
+    push_rx(udp4_frame(PEER, GUEST, 7000, blport, b"reply"));
+    stack::drive_stack();
+    let mut buf = [0u8; 64];
+    let n = crate::devip::proto::udp_read_data(b, &mut buf).expect("pin (wedge): B reads");
+    assert_eq!(&buf[..n], b"reply", "pin (wedge): B's data path fully operational");
+
+    assert!(
+        !take_wake_log().contains(&WEDGED_PID),
+        "pin (wedge): the wedged reader was never woken by B's activity"
+    );
+}
+
+/// The advise pin (contract §6.2 + §12.7): an ICMP error associated with
+/// the conv qhangups it into the err file unless ignoreadvice — the
+/// conv-level wiring pinned host-side (the smoltcp icmp-ingress leg stays
+/// unwired per §12.7's listed-but-ungated record).
+#[test]
+fn udp_advise_hangup_lands_in_errq_unless_ignoreadvice() {
+    let _serial = fresh_scripted_stack();
+    set_guest_addr();
+    let (a, _ga) = alloc_udp_conv();
+    crate::devip::proto::ctl_write(crate::devip::conv::Proto::Udp, a, b"connect 10.0.0.2!7000")
+        .expect("pin (advise): A connects");
+
+    crate::devip::proto::udp_advise(a, b"icmp: port unreachable");
+    let (hangup, err) = udp_conv_hangup_err(a);
+    assert_eq!(hangup.as_deref(), Some(&b"icmp: port unreachable"[..]), "pin (advise): the hangup recorded");
+    assert_eq!(err.as_deref(), Some(&b"icmp: port unreachable"[..]), "pin (advise): the err file carries the message");
+    // qhangup's semantic: data reads/writes on the conv fail while hung up.
+    assert!(crate::devip::proto::udp_read_data(a, &mut [0u8; 16]).is_err(), "pin (advise): read fails");
+    assert!(crate::devip::proto::udp_write_data(a, b"x").is_err(), "pin (advise): write fails");
+
+    // ignoreadvice: the advice is dropped entirely.
+    let (b, _gb) = alloc_udp_conv();
+    crate::devip::proto::ctl_write(crate::devip::conv::Proto::Udp, b, b"ignoreadvice")
+        .expect("pin (advise): ignoreadvice on B");
+    crate::devip::proto::udp_advise(b, b"icmp: whatever");
+    let (hangup, err) = udp_conv_hangup_err(b);
+    assert!(hangup.is_none() && err.is_none(), "pin (advise): ignoreadvice suppresses the hangup");
+}
