@@ -22,7 +22,10 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use port::dat::{Chan, DEV_CONS, DEV_DUP, DEV_ENV, DEV_MNT, DEV_PIPE, DEV_PROC, DEV_ROOT, DEV_SRV, OEXEC, OTRUNC};
+use port::dat::{
+    Chan, DEV_CONS, DEV_DUP, DEV_ENV, DEV_ETHER, DEV_MNT, DEV_PIPE, DEV_PROC, DEV_ROOT, DEV_SRV,
+    OEXEC, OTRUNC,
+};
 use port::fdgrp::FdGroup;
 use port::mcslock::{Lock, LockNode};
 use port::namec::{self, NamecMode};
@@ -273,6 +276,12 @@ fn sys_pwrite(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             // this must actually work).
             port::devsrv::write(&mut chan, src.as_slice(), off)
         }
+        DEV_ETHER => {
+            // devether: the data file's write is the netif-faithful TX
+            // path (bounds, src-MAC overwrite, ring post, block-on-full);
+            // the ctl file takes the verb set (connect/promiscuous/…).
+            port::devether::write(&mut chan, src.as_slice(), off)
+        }
         DEV_MNT => {
             // devmnt: paqfs is a read-only server; the early
             // client-side error is clearer than the server's Erdonly.
@@ -357,6 +366,13 @@ fn sys_pread(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             // services (a service file's reads flow through its posted
             // chan — open returns it, the donor srvopen).
             port::devsrv::read(&mut chan, dst.as_slice_mut(), off)
+        }
+        DEV_ETHER => {
+            // devether: the netif file contract — dir listings, the
+            // blocking whole-frame data read (Qmsg; the gates never
+            // block on it — OQ-1), ctl's conversation id, and the live
+            // stats/ifstats/addr/type content.
+            port::devether::read(&mut chan, dst.as_slice_mut(), off)
         }
         DEV_MNT => {
             // devmnt: chunked Tread RPCs over the mounted tree's
@@ -1588,10 +1604,34 @@ fn sys_alarm(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     }
 }
 
+/// The %q quoting of a wait-record status (libc fmtquote's rule): quote
+/// with SINGLE quotes when the string is empty or carries a char ≤ ' '
+/// (whitespace/control) or a quote; internal quotes double.  Otherwise
+/// bare.  libc wait()'s tokenize (qtoken) strips exactly this shape.
+fn quote_status(msg: &str) -> alloc::string::String {
+    let needs_quote = msg.is_empty() || msg.bytes().any(|b| b <= b' ' || b == b'\'');
+    if !needs_quote {
+        return msg.into();
+    }
+    let mut out = alloc::string::String::with_capacity(msg.len() + 2);
+    out.push('\'');
+    for c in msg.chars() {
+        if c == '\'' {
+            out.push('\'');
+        }
+        out.push(c);
+    }
+    out.push('\'');
+    out
+}
+
 /// AWAIT(47): buf, buflen.  Donor sysawait shape: block (the
 /// swtch-based sched path) until a child's exit record exists, then write
-/// the Plan-9-shaped wait message `{pid} 0 0 0 "{msg}"` (utime/stime/
-/// realtime zeros this era) NUL-terminated into
+/// the Plan-9-shaped wait message `{pid} 0 0 0 {status}` (utime/stime/
+/// realtime zeros this era; the status is %q-quoted — SINGLE quotes,
+/// only when needed — because libc wait()'s tokenize strips exactly
+/// that shape; anything else arrives as literal bytes and rc's status
+/// branches invert) NUL-terminated into
 /// the validated user buffer and return the record length.  No children
 /// ever → loud -1 errstr (donor pwait's "no children").
 fn sys_await(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
@@ -1613,7 +1653,15 @@ fn sys_await(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         if let Some(rec) = proc.wait_records.pop_front() {
             proc.children_live = proc.children_live.saturating_sub(1);
             let msg = core::str::from_utf8(&rec.msg[..rec.msg_len]).unwrap_or("?");
-            let text = alloc::format!("{} 0 0 0 \"{}\"", rec.pid, msg);
+            // The status field is %q-quoted (the donor's waitmsg shape —
+            // SINGLE quotes, only when the status is empty or carries a
+            // whitespace/control/quote char, internal quotes doubled).
+            // libc's wait() tokenize strips single quotes; a double-quoted
+            // (or always-quoted) status arrives as literal quote bytes and
+            // rc's `||`/`&&` read a successful child as FAILED (07-07's
+            // net-sweep bind gate exposed this).
+            let qmsg = quote_status(msg);
+            let text = alloc::format!("{} 0 0 0 {}", rec.pid, qmsg);
             let bytes = text.as_bytes();
             let n = bytes.len().min(cap - 1);
             let dst = dst.as_slice_mut();

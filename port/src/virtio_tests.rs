@@ -527,13 +527,13 @@ fn avail_ring_prelinked_slots_permanently_name_chain_heads() {
 #[test]
 fn tx_post_fills_payload_advances_idx_and_ring_full_is_loud() {
     let mut r = rig(8, Dir::Tx);
-    assert_eq!(r.ring.tx_post(0x2000_0000, 60, &r.notify, 0, 1), Ok(0));
+    assert_eq!(r.ring.tx_post(0x2000_0000, 60, &r.notify, 0, 1).map(|p| p.slot), Ok(0));
     assert_eq!(r.desc.peek_u64(1 * 16), 0x2000_0000, "payload desc addr");
     assert_eq!(r.desc.peek_u32(1 * 16 + 8), 60, "payload desc len");
     assert_eq!(r.avail.peek_u16(2), 1, "avail idx advanced");
-    assert_eq!(r.ring.tx_post(0x2000_1000, 60, &r.notify, 0, 1), Ok(1));
-    assert_eq!(r.ring.tx_post(0x2000_2000, 60, &r.notify, 0, 1), Ok(2));
-    assert_eq!(r.ring.tx_post(0x2000_3000, 60, &r.notify, 0, 1), Ok(3));
+    assert_eq!(r.ring.tx_post(0x2000_1000, 60, &r.notify, 0, 1).map(|p| p.slot), Ok(1));
+    assert_eq!(r.ring.tx_post(0x2000_2000, 60, &r.notify, 0, 1).map(|p| p.slot), Ok(2));
+    assert_eq!(r.ring.tx_post(0x2000_3000, 60, &r.notify, 0, 1).map(|p| p.slot), Ok(3));
     let err = r.ring.tx_post(0x2000_4000, 60, &r.notify, 0, 1);
     assert!(err.is_err(), "a full ring is a loud error, never an alias: {err:?}");
 }
@@ -541,7 +541,9 @@ fn tx_post_fills_payload_advances_idx_and_ring_full_is_loud() {
 #[test]
 fn tx_post_barrier_sandwich_is_the_2_7_13_order() {
     let mut r = rig(8, Dir::Tx);
-    r.ring.tx_post(0x2000_0000, 60, &r.notify, 0, 1).unwrap();
+    let posted = r.ring.tx_post(0x2000_0000, 60, &r.notify, 0, 1).unwrap();
+    assert!(posted.notified, "an unsuppressed post notifies (the Posted flag)");
+    assert_eq!(posted.slot, 0);
     assert_subsequence(
         &r.log.borrow(),
         &[
@@ -561,7 +563,8 @@ fn tx_post_barrier_sandwich_is_the_2_7_13_order() {
 fn tx_post_suppresses_notify_when_device_sets_no_notify() {
     let mut r = rig(8, Dir::Tx);
     r.used.device_write_u16(0, 1); // VIRTQ_USED_F_NO_NOTIFY
-    r.ring.tx_post(0x2000_0000, 60, &r.notify, 0, 1).unwrap();
+    let posted = r.ring.tx_post(0x2000_0000, 60, &r.notify, 0, 1).unwrap();
+    assert!(!posted.notified, "the Posted return reports the suppression (exact nnote)");
     assert_eq!(r.avail.peek_u16(2), 1, "the post itself went through (idx advanced)");
     let notified = r.log.borrow().iter().any(|op| matches!(op, Op::Write("notify", ..)));
     assert!(!notified, "the notify write is suppressed by used.flags");
@@ -570,7 +573,7 @@ fn tx_post_suppresses_notify_when_device_sets_no_notify() {
 #[test]
 fn used_drain_is_acquire_ordered_and_recovers_the_slot() {
     let mut r = rig(8, Dir::Tx);
-    assert_eq!(r.ring.tx_post(0x2000_0000, 60, &r.notify, 0, 1), Ok(0));
+    assert_eq!(r.ring.tx_post(0x2000_0000, 60, &r.notify, 0, 1).map(|p| p.slot), Ok(0));
     device_complete(&r, 0, 72); // the device echoes the chain-head id 0
     let used = drain_one(&mut r).expect("the entry validates");
     assert_eq!(used, UsedBuf { slot: 0, len: 72 });
@@ -578,11 +581,11 @@ fn used_drain_is_acquire_ordered_and_recovers_the_slot() {
     // Slot recovery: the slot is chosen by the avail POSITION, so the
     // retired slot 0 is postable again when the position comes back around
     // (posts 1..3 take the fresh slots first).
-    assert_eq!(r.ring.tx_post(0x2000_1000, 60, &r.notify, 0, 1), Ok(1));
-    assert_eq!(r.ring.tx_post(0x2000_2000, 60, &r.notify, 0, 1), Ok(2));
-    assert_eq!(r.ring.tx_post(0x2000_3000, 60, &r.notify, 0, 1), Ok(3));
+    assert_eq!(r.ring.tx_post(0x2000_1000, 60, &r.notify, 0, 1).map(|p| p.slot), Ok(1));
+    assert_eq!(r.ring.tx_post(0x2000_2000, 60, &r.notify, 0, 1).map(|p| p.slot), Ok(2));
+    assert_eq!(r.ring.tx_post(0x2000_3000, 60, &r.notify, 0, 1).map(|p| p.slot), Ok(3));
     assert_eq!(
-        r.ring.tx_post(0x2000_8000, 60, &r.notify, 0, 1),
+        r.ring.tx_post(0x2000_8000, 60, &r.notify, 0, 1).map(|p| p.slot),
         Ok(0),
         "the retired slot is postable again (no RingFull on a recovered slot)"
     );
@@ -713,7 +716,7 @@ fn indices_wrap_at_u16_without_losing_slot_identity() {
     let total = 66000u32; // > 2^16: avail/used idx wrap mid-test
     for i in 0..total {
         let want_slot = (i % 128) as u16;
-        let slot = r.ring.tx_post(0x2000_0000, 60, &r.notify, 0, 1).unwrap();
+        let slot = r.ring.tx_post(0x2000_0000, 60, &r.notify, 0, 1).unwrap().slot;
         assert_eq!(slot, want_slot);
         device_complete(&r, u32::from(2 * want_slot), 72);
         let used = drain_one(&mut r).expect("the entry validates");

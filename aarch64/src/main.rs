@@ -487,6 +487,18 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
         block: proc::pipe_block_current,
         wake: proc::pipe_wake,
     });
+    // devether's EtherHooks (07-07) — the same shape: a data-file read
+    // on an empty conversation queue parks the caller; the RX ingress
+    // (the virtio-net IRQ retire's port-side entry) wakes the waiters,
+    // and a TX-full write blocks until the retire readies it.  Registered
+    // before the first exec; the hooks are only ever needed once a
+    // userspace caller blocks on #l.
+    #[cfg(dev_ether)]
+    port::devether::set_hooks(port::devether::EtherHooks {
+        current: proc::pipe_current_pid,
+        block: proc::pipe_block_current,
+        wake: proc::pipe_wake,
+    });
     // devdup's resolver/listing hooks and devsrv's fd resolver —
     // the `#d`/`#s` devices resolve the OPERATING proc's fd table through
     // these (port can't see PROC_TABLE — the devproc set_post_hook idiom).

@@ -20,7 +20,9 @@
 //! devroot.rs's header); the registry is a plain match over attach fns,
 //! the established free-function device idiom.
 
-use crate::dat::{Chan, DEV_CONS, DEV_DUP, DEV_ENV, DEV_MNT, DEV_PIPE, DEV_PROC, DEV_ROOT, DEV_SRV};
+use crate::dat::{
+    Chan, DEV_CONS, DEV_DUP, DEV_ENV, DEV_ETHER, DEV_MNT, DEV_PIPE, DEV_PROC, DEV_ROOT, DEV_SRV,
+};
 use crate::mcslock::{Lock, LockNode};
 use crate::pgrp::Pgrp;
 use crate::Result;
@@ -67,6 +69,10 @@ fn registry_attach(rune: char, spec: &[u8]) -> Result<Chan> {
         // and the '#s' service registry (boot's srvcreate).
         'd' => Ok(crate::devdup::attach()),
         's' => Ok(crate::devsrv::attach()),
+        // '#l' — devether (the netif.h file tree over the virtio-net
+        // driver).  The spec is the controller number (empty = unit 0);
+        // attach errors Enodev-shaped when the bind never published.
+        'l' => crate::devether::attach(spec),
         _ => Err("namec: unknown # device"),
     }
 }
@@ -106,6 +112,7 @@ fn dev_walk(c: &Chan, comp: &[u8]) -> Result<Chan> {
         DEV_PIPE => crate::devpipe::walk(c, comp),
         DEV_DUP => crate::devdup::walk(c, comp),
         DEV_SRV => crate::devsrv::walk(c, comp),
+        DEV_ETHER => crate::devether::walk(c, comp),
         // A walk into a mounted tree is a Twalk RPC (devmnt — the
         // mount entry's `to` chan carries the session + the attach fid).
         DEV_MNT => crate::devmnt::walk(c, comp),
@@ -326,6 +333,7 @@ pub fn open_chan(c: &Chan, mode: u32) -> Result<Chan> {
         DEV_PIPE => crate::devpipe::open(c, access)?,
         DEV_DUP => crate::devdup::open(c, access)?,
         DEV_SRV => crate::devsrv::open(c, mode)?,
+        DEV_ETHER => crate::devether::open(c, access)?,
         // Topen over the session (devmnt gets the FULL mode — it
         // masks the wire byte itself, OTRUNC included for the server to
         // refuse).
@@ -350,6 +358,7 @@ pub fn stat_chan(c: &Chan, sb: &mut [u8]) -> Result<u64> {
         DEV_PIPE => crate::devpipe::stat(c, sb),
         DEV_DUP => crate::devdup::stat(c, sb),
         DEV_SRV => crate::devsrv::stat(c, sb),
+        DEV_ETHER => crate::devether::stat(c, sb),
         // Tstat over the session (settime's stat of the /tmp mount).
         DEV_MNT => crate::devmnt::stat(c, sb),
         _ => Err("namec: chan with unknown device index"),
@@ -391,6 +400,14 @@ pub fn close_chan(c: &Chan) {
         DEV_PIPE => {
             if c.copen {
                 crate::devpipe::close(c);
+            }
+        }
+        DEV_ETHER => {
+            // devether: an open data/ctl chan's close decrements the
+            // conversation's open count; the last close resets the
+            // conversation (netifclose's shape).
+            if c.copen {
+                crate::devether::close(c);
             }
         }
         DEV_MNT => crate::devmnt::clunk_if_last(c),

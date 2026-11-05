@@ -56,11 +56,15 @@ use crate::vm::{
 pub const KNAMELEN: usize = 28;
 /// Plan 9 ERRMAX (sys/include/libc.h) — errstr and note-message buffers.
 pub const ERRMAX: usize = 128;
-/// Proc table size (the steady-state
-/// set is boot→init + the persistent paqfs server + rc + a transient
-/// command child, and rc pipelines multiply both procs and fds — sized
-/// for the boot chain with headroom; exhaustion is LOUD, never silent).
-pub const MAX_PROCS: usize = 16;
+/// Proc table size.  Slots are never REAPED this era (a Moribund husk
+/// pins its slot — the documented exit-sweep deferral), so the table is
+/// a boot-session fork BUDGET, not a concurrency bound: the 07-07 net
+/// sweep alone forks ~20 times (a dd + an echo per loop iteration, the
+/// bind/clone/cat/test machinery, the blaster), and the 16-slot table
+/// wedged mid-sweep ("proc: table full" at arp-send 3).  64 covers the
+/// gate with 3× headroom; the exit-sweep deferral stays the tracked
+/// follow-up (a long-lived shell still eventually fills ANY fixed table).
+pub const MAX_PROCS: usize = 64;
 /// Open fd slots per proc (init's closefds closes
 /// 3..29 — the table must hold fds through 29 without making that fatal;
 /// pipe+dup flows hold several at once).

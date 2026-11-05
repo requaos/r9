@@ -31,6 +31,11 @@ pub const DEV_SRV: usize = 6;
 /// mounted tree carry this index plus the session Arc and their
 /// server-side fid (the Chan `mnt`/`mnt_fid` slots land with the device).
 pub const DEV_MNT: usize = 7;
+/// devether — the ethernet device `#l` (NETDRV-03; the registry rune
+/// 'l').  No per-chan private slot: the qid path encodes the
+/// conversation (netif.rs's NETQID scheme) and the single `ether0`
+/// Netif is a module static this era.
+pub const DEV_ETHER: usize = 8;
 
 /// Plan 9 open-mode values (frozen: Harvey sys/include/libc.h).  The low
 /// two bits are an access-MODE field (not a bit set); the upper bits are
@@ -153,9 +158,18 @@ impl Chan {
     /// the pipe's open-end count bumps.  Without this rule a fork/dup'd
     /// pipe's ends would diverge into per-chan copies and connectembed's
     /// 9P exchange would deadlock silently.
+    ///
+    /// THE ETHER EXCEPTION (the same rule, devether's conversation
+    /// files): an OPEN data/ctl chan's value copy bumps the
+    /// conversation's inuse count — each fd copy close-dispatches
+    /// independently, so the count must track copies or the last-close
+    /// reset would fire early.
     pub fn dup(&self) -> Chan {
         if self.copen && let Some(pipe) = &self.pipe {
             crate::devpipe::ref_open_end(pipe, self.qid.path);
+        }
+        if self.copen && self.dev == DEV_ETHER {
+            crate::devether::ref_open(self.qid.path);
         }
         Chan {
             qid: self.qid,

@@ -222,6 +222,12 @@ const RX_PAYLOAD_CAP: u32 = PAGE_SIZE_4K as u32;
 /// qsize/2 two-descriptor chains — qemu's 256-entry queue posts 128.
 #[cfg(dev_ether)]
 const MAX_RX_SLOTS: usize = (virtio::MAX_QSIZE / 2) as usize;
+/// TX slots mirror RX (qsize/2 chains); each TX slot carries its own
+/// 4 KiB frame page for the ring's lifetime (devether's write path
+/// copies the frame in, posts, and the page frees when the slot's used
+/// entry retires — no separate allocator, no allocation mid-IRQ).
+#[cfg(dev_ether)]
+const MAX_TX_SLOTS: usize = (virtio::MAX_QSIZE / 2) as usize;
 
 /// The PciCfg seam over the mapped bus-0 ECAM window: the device's 4 KiB
 /// config space sits at base = dev<<15.
@@ -306,6 +312,13 @@ impl RingMem for VolatileMem {
 }
 
 /// The bound device's live state (see VIRTIO_NET's publish-once cell).
+/// Written once at bind; thereafter TWO writers share it, mutually
+/// exclusive in TIME by the kernel's single-CPU invariant (syscalls run
+/// IRQ-masked — the Phase-4 PSTATE.I discipline — so the IRQ handler and
+/// a syscall-context driver op can never interleave): the IRQ handler
+/// (retire/replenish/counters) and devether's syscall-context ops
+/// (tx_post/ifstats, 07-07).  No lock guards it; the publish-once cell
+/// discipline plus the masking invariant is the whole proof.
 #[cfg(dev_ether)]
 struct VirtioNetState {
     /// The ISR byte region (the isr cap's BAR4 window).  The handler's
@@ -319,9 +332,8 @@ struct VirtioNetState {
     rx: Ring<VolatileMem>,
     tx: Ring<VolatileMem>,
     rx_notify_off: usize,
-    /// TX's notify offset — consumed by 07-07's data-file TX path
-    /// (tx_post); the retire half never notifies.
-    #[allow(dead_code)]
+    /// TX's notify offset — devether's data-file write path's tx_post
+    /// consumes it (07-07); the retire half never notifies.
     tx_notify_off: usize,
     /// Slot → its RX buffer page's physical address (one page per chain).
     rx_buf_pa: [u64; MAX_RX_SLOTS],
@@ -330,10 +342,11 @@ struct VirtioNetState {
     /// aliased into user mappings (T-07-08's page hygiene).
     rx_free: [u64; MAX_RX_SLOTS],
     rx_free_len: usize,
+    /// Slot → its TX frame page's physical address (one page per chain,
+    /// bound at bring-up; the slot's posted flag IS the page's in-use
+    /// flag — 07-07's TX path).
+    tx_buf_pa: [u64; MAX_TX_SLOTS],
     counters: virtio::VirtioNetCounters,
-    /// The negotiated MAC (the bind line + 07-07's addr file).
-    #[allow(dead_code)]
-    mac: [u8; 6],
     /// One-time latch for the config-change print (the one-time-print
     /// IRQ-context carve-out; slirp's link never actually changes).
     link_reported: bool,
@@ -664,6 +677,17 @@ fn bind_virtio_net_inner(dt: &DeviceTree) -> port::Result<()> {
     }
     println!("virtio-net: rx pre-posted {} buffers qsize {}", outcome.offered, rx.qsize());
 
+    // TX frame pages: one zeroed page per slot, bound for the ring's
+    // lifetime (07-07's write path copies a frame into the slot's page
+    // and posts; the page is reusable when the slot's used entry
+    // retires).  Allocated here (boot context), never mid-IRQ.
+    let ntx = (tx.qsize() / 2) as usize;
+    let mut tx_buf_pa = [0u64; MAX_TX_SLOTS];
+    for slot in tx_buf_pa.iter_mut().take(ntx) {
+        let (pa, _vr) = alloc_ring_page("vnettxbuf")?;
+        *slot = pa;
+    }
+
     let state = VirtioNetState {
         isr,
         devcfg,
@@ -675,8 +699,8 @@ fn bind_virtio_net_inner(dt: &DeviceTree) -> port::Result<()> {
         rx_buf_pa,
         rx_free,
         rx_free_len,
+        tx_buf_pa,
         counters: virtio::VirtioNetCounters::default(),
-        mac,
         link_reported: false,
         faults: 0,
     };
@@ -689,6 +713,13 @@ fn bind_virtio_net_inner(dt: &DeviceTree) -> port::Result<()> {
         *VIRTIO_NET.get() = Some(state);
         *VIRTIO_NET_INTID.get() = intid;
     }
+    // Publish devether's driver seam (07-07): #l attaches resolve from
+    // here on.  Before the GIC arm so no IRQ can precede it.
+    port::devether::publish_driver(port::devether::EtherDriverOps {
+        mac,
+        tx_post: virtnet_tx_post,
+        ifstats: virtnet_ifstats,
+    });
     super::gic::enable(intid, 0xA0);
     println!(
         "#l0: virtio: 1000Mbps: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
@@ -704,6 +735,76 @@ fn bind_virtio_net_inner(dt: &DeviceTree) -> port::Result<()> {
 /// invocation — a wedge manifests as a gate timeout, never silence.
 #[cfg(dev_ether)]
 const DRAIN_CAP: u32 = virtio::MAX_QSIZE as u32;
+
+// ---------------------------------------------------------------------------
+// devether's driver ops (07-07): the syscall-context half of the file
+// contract.  Registered via port::devether::publish_driver at bind.
+// SYSCALL context only (IRQ-masked per the kernel invariant) — these and
+// the IRQ handler are the state's two writers, mutually exclusive in
+// TIME (see VirtioNetState's comment).
+// ---------------------------------------------------------------------------
+
+/// devether's TX-post op: copy the frame into the next slot's page and
+/// run the §2.7.13 publication sequence.  Ok(false) = the ring is full
+/// (the caller registers a TX waiter and blocks on the wake hook until
+/// the retire frees a slot — D-08's wedge-hunt: a stalled retire wedges
+/// the writer and the gate's deadline catches it).
+#[cfg(dev_ether)]
+fn virtnet_tx_post(frame: &[u8]) -> port::Result<bool> {
+    // SAFETY: syscall context (IRQ-masked — the kernel invariant), so
+    // this write can never interleave with the IRQ handler's retire; the
+    // cell was published once at bind.
+    let state = unsafe { &mut *VIRTIO_NET.get() };
+    let Some(state) = state.as_mut() else { return Err("devether: virtio-net not bound") };
+    let Some(slot) = state.tx.tx_next_slot() else { return Ok(false) };
+    let pa = state.tx_buf_pa[slot as usize];
+    // SAFETY: the page was allocated and mapped at KZERO+PA at bind and
+    // stays driver-owned; frame.len() ≤ 1514 < 4096 (devether's write
+    // path bounds-checked it); the slot is free (tx_next_slot), so the
+    // page carries no live frame.
+    unsafe {
+        core::ptr::copy_nonoverlapping(frame.as_ptr(), (KZERO as usize + pa as usize) as *mut u8, frame.len())
+    };
+    let posted = state.tx.tx_post(
+        pa,
+        frame.len() as u32,
+        &state.notify,
+        state.tx_notify_off,
+        virtio::VIRTIO_NET_QUEUE_TX,
+    )?;
+    if posted.notified {
+        state.counters.nnote[virtio::VIRTIO_NET_QUEUE_TX as usize] += 1;
+    }
+    Ok(true)
+}
+
+/// devether's ifstats op: the per-queue accounting snapshot (avail,
+/// used, lastused, nintr, nnote) for vq0 (RX) and vq1 (TX) —
+/// ethervirtio.c's ifstat fields, the NETDRV-04 reconciliation surface.
+#[cfg(dev_ether)]
+fn virtnet_ifstats() -> [(u16, u16, u16, u32, u32); 2] {
+    // SAFETY: syscall context (IRQ-masked); the cell's publish-once
+    // discipline.  The used-idx reads are volatile telemetry (the ring's
+    // accessor), not content trust.
+    let state = unsafe { &*VIRTIO_NET.get() };
+    let Some(state) = state.as_ref() else { return [(0, 0, 0, 0, 0); 2] };
+    [
+        (
+            state.rx.avail_idx(),
+            state.rx.used_idx(),
+            state.rx.last_used(),
+            state.counters.nintr[virtio::VIRTIO_NET_QUEUE_RX as usize],
+            state.counters.nnote[virtio::VIRTIO_NET_QUEUE_RX as usize],
+        ),
+        (
+            state.tx.avail_idx(),
+            state.tx.used_idx(),
+            state.tx.last_used(),
+            state.counters.nintr[virtio::VIRTIO_NET_QUEUE_TX as usize],
+            state.counters.nnote[virtio::VIRTIO_NET_QUEUE_TX as usize],
+        ),
+    ]
+}
 
 /// The trap.rs dispatch entry for the published INTID.  IRQ-context
 /// discipline (the pl011 CONS_RX rules — the next reader should not have
@@ -725,9 +826,10 @@ const DRAIN_CAP: u32 = virtio::MAX_QSIZE as u32;
 ///   config change) are the plan's explicit carve-out; slirp's link
 ///   never changes, so neither fires on the gates.
 /// - Publish-once device state: the cell is written once at bind (boot
-///   context, before gic::enable and the unmask paths) and never again;
-///   this handler is the only writer thereafter (single CPU, EL1 IRQs
-///   non-nesting by masking), so no lock guards it.
+///   context, before gic::enable and the unmask paths); thereafter two
+///   writers share it, mutually exclusive in TIME (syscalls run
+///   IRQ-masked — the handler and devether's syscall-context driver ops
+///   never interleave), so no lock guards it.
 /// - A NIC IRQ arriving with no bind (or before it) prints
 ///   `unhandled IRQ <n>` — the 07-05 negative scan trips on that line,
 ///   so a bind-ordering bug reds the gate loudly rather than passing
@@ -750,8 +852,8 @@ pub fn virtio_net_irq() {
             match state.tx.next_used() {
                 None => break,
                 Some(Ok(_used)) => {
-                    // The slot freed itself inside next_used; the posted
-                    // buffer's accounting is 07-07's TX path.
+                    // The slot freed itself inside next_used — its frame
+                    // page is bound to the slot and reusable from now.
                     retired[virtio::VIRTIO_NET_QUEUE_TX as usize] += 1;
                 }
                 Some(Err(msg)) => {
@@ -763,16 +865,37 @@ pub fn virtio_net_irq() {
                 }
             }
         }
+        // A TX retire freed slots — wake any write blocked on a full
+        // ring (07-07's block-on-full; D-08's wedge-hunt).  The wake
+        // rides the port-side entry (never a port lock from IRQ
+        // context; the BusyCell handoff + the proc hooks do the work).
+        if retired[virtio::VIRTIO_NET_QUEUE_TX as usize] > 0 {
+            port::devether::tx_retired();
+        }
         for _ in 0..DRAIN_CAP {
             match state.rx.next_used() {
                 None => break,
                 Some(Ok(used)) => {
                     retired[virtio::VIRTIO_NET_QUEUE_RX as usize] += 1;
-                    // The frame (used.len - 12 bytes at the slot's buffer
-                    // page + 12) is counted-but-dropped until 07-07's
-                    // devether demux; the page returns to the free stack.
-                    let _frame_len = virtio::virtio_net_frame_len(used.len);
+                    // Demux the frame (devether's etheriq, 07-07): the
+                    // 12-byte header is stripped, the frame lands in
+                    // every matching conversation's queue, blocked
+                    // readers wake; then the page returns to the free
+                    // stack (the ingress copied the bytes out).
+                    let frame_len = virtio::virtio_net_frame_len(used.len) as usize;
                     let pa = state.rx_buf_pa[used.slot as usize];
+                    // SAFETY: the page is mapped at KZERO+PA, driver-owned,
+                    // and the device finished with it (the acquire fence
+                    // inside next_used orders the read); frame_len ≤ 4096
+                    // (the ring's used-len validation: 12 ≤ len ≤ 12+4096).
+                    let frame = unsafe {
+                        core::slice::from_raw_parts(
+                            (KZERO as usize + pa as usize + virtio::VIRTIO_NET_HDR_LEN)
+                                as *const u8,
+                            frame_len,
+                        )
+                    };
+                    port::devether::rx_ingress(frame);
                     if state.rx_free_len < MAX_RX_SLOTS {
                         state.rx_free[state.rx_free_len] = pa;
                         state.rx_free_len += 1;

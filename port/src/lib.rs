@@ -28,6 +28,8 @@ pub mod devenv;
 #[forbid(unsafe_code)]
 pub mod devdup;
 #[forbid(unsafe_code)]
+pub mod devether;
+#[forbid(unsafe_code)]
 pub mod devmnt;
 #[forbid(unsafe_code)]
 pub mod devpipe;
@@ -49,6 +51,8 @@ pub mod mcslock;
 pub mod mem;
 #[forbid(unsafe_code)]
 pub mod namec;
+#[forbid(unsafe_code)]
+pub mod netif;
 #[forbid(unsafe_code)]
 pub mod pagealloc;
 #[forbid(unsafe_code)]

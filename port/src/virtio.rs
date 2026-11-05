@@ -599,11 +599,33 @@ impl<M: RingMem> Ring<M> {
         self.last_used
     }
 
+    /// The DEVICE's used position (the ring's used.idx, read volatile) —
+    /// the ifstats line's `used=` field (07-07's driver hook).  Reading it
+    /// carries no ordering obligation on its own (telemetry only); the
+    /// drain path's acquire fence is what content-trust requires.
+    pub fn used_idx(&self) -> u16 {
+        self.used.read_u16(USED_OFF_IDX)
+    }
+
+    /// The slot the next TX post would occupy, when it is free (None =
+    /// the ring is full — the caller blocks until a retire frees one).
+    /// Lets the TX caller bind the slot's payload buffer BEFORE posting
+    /// (devether's write path copies the frame into the slot's page).
+    pub fn tx_next_slot(&self) -> Option<u16> {
+        if self.dir != Dir::Tx {
+            return None;
+        }
+        let slot = (self.avail_idx & self.slot_mask()) as usize;
+        if self.posted[slot] { None } else { Some(slot as u16) }
+    }
+
     /// Post a TX frame: fill the slot's payload descriptor, then the
     /// §2.7.13 publication sequence — descriptor writes → avail-entry →
     /// fence(Release) → avail-idx store → fence(Release) → used-flags
     /// read → notify.  A full ring is a loud error, never an alias —
-    /// retire used entries first.
+    /// retire used entries first.  The `Posted` return carries the notify
+    /// truth so the caller's nnote accounting stays exact under
+    /// suppression (the rx_replenish `Replenish` shape).
     pub fn tx_post(
         &mut self,
         payload_pa: u64,
@@ -611,7 +633,7 @@ impl<M: RingMem> Ring<M> {
         notify: &M,
         notify_off: usize,
         queue_index: u16,
-    ) -> Result<u16> {
+    ) -> Result<Posted> {
         if self.dir != Dir::Tx {
             return Err("virtio: tx_post on an RX ring");
         }
@@ -635,11 +657,13 @@ impl<M: RingMem> Ring<M> {
         // §2.7.13.4.1: the idx must be visible before the suppression check.
         self.used.fence(Ordering::Release);
         let flags = self.used.read_u16(USED_OFF_FLAGS);
+        let mut notified = false;
         if flags & USED_F_NO_NOTIFY == 0 {
             notify.write_u16(notify_off, queue_index);
+            notified = true;
         }
         self.posted[slot] = true;
-        Ok(slot as u16)
+        Ok(Posted { slot: slot as u16, notified })
     }
 
     /// RX replenish-until-caught-up, then ONE notify (ethervirtio.c's
@@ -825,5 +849,14 @@ pub struct VirtioNetCounters {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Replenish {
     pub offered: u32,
+    pub notified: bool,
+}
+
+/// The tx_post outcome: the slot the frame occupies plus whether the
+/// notify write happened (the caller's nnote accounting input — the same
+/// suppression-exactness contract as `Replenish`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Posted {
+    pub slot: u16,
     pub notified: bool,
 }

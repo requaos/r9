@@ -369,9 +369,15 @@ pub fn assert_arp_pingpong(
                 mac_str(&mac)
             ));
         }
-        if f.frame_len != ETHERMINTU {
+        // The reply's PADDING is slirp's, not our contract — the plan's
+        // gate truth pins replies to oper=2 + the address fields, never a
+        // length.  Live captures show slirp's replies at 64 bytes (its
+        // encap pads past ETHERMINTU); only a RUNT reply (< 60) is a real
+        // defect.  (Requests stay pinned at exactly 60 — our own write
+        // path's ETHERMINTU enforcement is the thing under test there.)
+        if f.frame_len < ETHERMINTU {
             return Err(format!(
-                "net gate: ARP reply #{i}: len got {} want {ETHERMINTU}",
+                "net gate: ARP reply #{i}: len got {} — runt (want >= {ETHERMINTU})",
                 f.frame_len
             ));
         }
@@ -1022,5 +1028,42 @@ mod tests {
         let frames = parse_pcap(&buf).expect("the header-only capture parses");
         assert!(frames.is_empty());
         assert_eq!(frame_count(&buf).expect("counts"), 0);
+    }
+
+    /// Reply padding is slirp's, not ours (07-07 live-capture finding):
+    /// a 64-byte reply passes (slirp's real shape); a 59-byte RUNT reply
+    /// fails.  Requests stay pinned at exactly 60 either way.
+    #[test]
+    fn arp_reply_padding_is_slirps_business() {
+        // A one-round capture with nintr=1 (the [1, frames] bound at 1).
+        let one_round_capture = || {
+            let mut s = String::new();
+            s.push_str(BIND_LINE);
+            s.push_str(&stats_block(1, 1));
+            s.push_str(&ifstats_line(0, 1, 1, 1));
+            s.push_str(&ifstats_line(1, 1, 1, 1));
+            s.push_str("netsweep: NET-DONE\r\n");
+            s.into_bytes()
+        };
+        let mut buf = global_header();
+        buf.extend_from_slice(&record(&arp_request()));
+        let mut wide = arp_reply();
+        wide.extend_from_slice(&[0u8; 4]); // 64 bytes — the observed slirp shape
+        buf.extend_from_slice(&record(&wide));
+        let frames = parse_pcap(&buf).expect("parses");
+        let total = frame_count(&buf).expect("counts");
+        let n = assert_arp_pingpong(&frames, total, &one_round_capture())
+            .expect("a 64-byte (slirp-shaped) reply passes");
+        assert_eq!(n, 1);
+
+        let mut buf = global_header();
+        buf.extend_from_slice(&record(&arp_request()));
+        let runt = arp_reply()[..59].to_vec();
+        buf.extend_from_slice(&record(&runt));
+        let frames = parse_pcap(&buf).expect("parses");
+        let total = frame_count(&buf).expect("counts");
+        let e = assert_arp_pingpong(&frames, total, &one_round_capture())
+            .expect_err("a runt reply must fail");
+        assert!(e.contains("runt"), "names the runt: {e}");
     }
 }
