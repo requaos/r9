@@ -11,6 +11,24 @@ bitflags = "2.5"
 # decompressor.
 miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
 adler2 = { version = "2", default-features = false }
+# TCP/UDP/ICMP/ICMPv6/IPv4/IPv6/ARP/ND protocol engines behind the devip
+# file ABI (D-01) — port/'s first external crate (D-02: crates.io pin +
+# committed Cargo.lock as the supply-chain record).  default-features = false
+# keeps no_std; the feature set is the locked shape: no socket-dhcpv4 (D-09 —
+# the ipconfig path is the gate; the dhcpv4 socket is the recorded-only-if-
+# taken fallback), no socket-tcp-cubic (f64 in kernel), no proto-ipv6-slaac
+# (Out-of-Scope), no segmentation-offload phy (Pitfall 6).
+# Provenance: 0.14.0 compile-probed green 2026-11-05 on this repo's pinned
+# nightly-2026-01-30 for the host AND aarch64-unknown-none, #![no_std], with
+# exactly this feature set (phase 08 RESEARCH.md, Package Legitimacy Audit:
+# all OK).
+smoltcp = { version = "0.14.0", default-features = false, features = [
+    "medium-ethernet", "medium-ip",
+    "proto-ipv4", "proto-ipv6",
+    "proto-ipv4-fragmentation", "proto-ipv6-fragmentation",
+    "socket-tcp", "socket-udp", "socket-icmp", "socket-tcp-reno",
+    "alloc", "multicast", "auto-icmp-echo-reply",
+] }
 
 # Opt into the workspace clippy lints (undocumented_unsafe_blocks
 # = deny) — every remaining unsafe site in port carries a SAFETY comment.
