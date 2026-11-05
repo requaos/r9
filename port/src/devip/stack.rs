@@ -356,6 +356,28 @@ pub fn drive_stack() {
 // Host-test seams (crate-internal; compiled only in test builds).
 // ---------------------------------------------------------------------------
 
+impl StackCore {
+    /// The scripted device (pins only — asserts the core is the scripted one).
+    #[cfg(test)]
+    pub(crate) fn dev_scripted(&self) -> &super::phyadapt::ScriptedDev {
+        match &self.dev {
+            #[cfg(test)]
+            StackDev::Scripted(d) => d,
+            _ => panic!("pin: not a scripted core"),
+        }
+    }
+
+    /// The scripted device, mutably (the pins push inbound frames).
+    #[cfg(test)]
+    pub(crate) fn dev_scripted_mut(&mut self) -> &mut super::phyadapt::ScriptedDev {
+        match &mut self.dev {
+            #[cfg(test)]
+            StackDev::Scripted(d) => d,
+            _ => panic!("pin: not a scripted core"),
+        }
+    }
+}
+
 /// Install a fresh stack core for a pin, resetting the seam's global flags
 /// and wake sets (the devether_tests publish-once discipline: the pins
 /// serialize through a test lock and each gets a clean seam).
@@ -370,4 +392,12 @@ pub(crate) fn install_test_stack(core: StackCore) {
     let mut scratch = [0u64; 16];
     PENDING_WAKES.enter().expect("devip: pending wakes contended").take(&mut scratch);
     NET_WAITERS.enter().expect("devip: waiters contended").take(&mut scratch);
+}
+
+/// Enter the stack cell (pin surgery on the core under the real ownership
+/// discipline — the pins drive the seam's actual cell, never a side copy).
+/// The cell is a static, so the guard's lifetime is 'static.
+#[cfg(test)]
+pub(crate) fn enter_stack() -> crate::mcslock::BusyGuard<'static, StackState> {
+    STACK.enter().expect("devip: stack contended")
 }
