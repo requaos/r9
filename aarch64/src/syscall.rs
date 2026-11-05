@@ -1449,7 +1449,13 @@ fn sys_rfork(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 /// the validated rv pointer; the wire result is 0 (error: -1 + errstr,
 /// rv untouched — the wrapper then yields -1LL).  Donor sseek semantics:
 /// base 0 absolute, base 1 relative (negative deltas allowed, never below
-/// 0), directories error (Eisdir), SEEK_END loud-unsupported.
+/// 0); base 2 (SEEK_END) is offset-from-end via the chan's stat length
+/// (9k sysfile.c case 2: `c->dev->stat` → convM2D → dir.length) — the
+/// 06-07 tier-1 gate measured its need (tail -1's length probe,
+/// join.c:148's random-access check).  Stream devices (pipes) always
+/// error (the donor sseek's `dc == L'|'` → Eisstream check — tail.c's
+/// isseekable probe keys on it).  Directories error (Eisdir);
+/// base > 2 is a bad-args error.
 ///
 /// (An earlier version read fd/offset/base from slots 0/1/2 and returned
 /// the offset on the wire — wrong for this ABI; every early caller's
@@ -1473,6 +1479,14 @@ fn sys_seek(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         return err(proc, "seek: bad fd");
     };
     let result = (|chan: &mut Chan| {
+        // The donor sseek's stream-device rejection (9front sysfile.c:
+        // `devtab[c->type]->dc == L'|' → Eisstream`) — a pipe end is never
+        // seekable.  tail.c's isseekable probe (seek(fd, 0, 1) >= 0) keys
+        // on this failure to choose its read-forward path; without the
+        // rejection the probe "succeeds" and tail reads a pipe backward.
+        if chan.dev == port::dat::DEV_PIPE {
+            return Err("seek: stream device");
+        }
         if chan.qid.typ & port::dat::QTDIR != 0 {
             return Err("seek: is a directory");
         }
@@ -1482,7 +1496,24 @@ fn sys_seek(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
                 Some(v) => v,
                 None => return Err("seek: offset overflow"),
             },
-            _ => return Err("seek: SEEK_END unsupported this era"),
+            2 => {
+                // SEEK_END: the chan's stat gives the length (the donor's
+                // case-2 shape).  The stat wire's fixed prefix carries
+                // length as a u64 LE at byte offset 33 (size[2] type[2]
+                // dev[4] qid[13] mode[4] atime[4] mtime[4] precede it) —
+                // the prefix layout is stat(5)/convM2D-stable.
+                let mut sb = [0u8; 512];
+                let n = namec::stat_chan(chan, &mut sb)?;
+                if n < 41 {
+                    return Err("seek: short stat record");
+                }
+                let length = u64::from_le_bytes(sb[33..41].try_into().map_err(|_| "seek: stat length")?);
+                match (length as i64).checked_add(off) {
+                    Some(v) => v,
+                    None => return Err("seek: offset overflow"),
+                }
+            }
+            _ => return Err("seek: bad base"),
         };
         if new < 0 {
             return Err("seek: negative offset");
