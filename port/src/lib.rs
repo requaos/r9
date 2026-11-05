@@ -76,5 +76,10 @@ mod allocator_tests;
 // while port::virtio itself keeps its unsafe-free forbid attribute.
 #[cfg(test)]
 mod virtio_tests;
+// The devether/netif pins live at the crate root for the same reason:
+// the frame-store drive and the stub wake log need alloc/std while
+// port::devether/port::netif keep their unsafe-free forbid attributes.
+#[cfg(test)]
+mod devether_tests;
 
 pub type Result<T> = core::result::Result<T, &'static str>;

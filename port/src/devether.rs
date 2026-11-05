@@ -476,7 +476,8 @@ fn read_str(c: &mut Chan, buf: &mut [u8], offset: u64, content: &[u8]) -> u64 {
 /// justified in NUMSIZE-1 columns plus a trailing space (12 bytes
 /// total).  `connect -1` reads back through the donor's sign-extended
 /// %lud shape (the int is passed as a ulong).
-fn readnum_content(val: i64) -> Vec<u8> {
+/// pub(crate): the crate-root devether_tests pin module calls it.
+pub(crate) fn readnum_content(val: i64) -> Vec<u8> {
     // Decimal digits of the u64 bit pattern (the donor's ulong view).
     let v = val as u64;
     let mut digits = Vec::new();
