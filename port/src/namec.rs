@@ -21,7 +21,7 @@
 //! the established free-function device idiom.
 
 use crate::dat::{
-    Chan, DEV_CONS, DEV_DUP, DEV_ENV, DEV_ETHER, DEV_MNT, DEV_PIPE, DEV_PROC, DEV_ROOT, DEV_SRV,
+    Chan, DEV_CONS, DEV_DUP, DEV_ENV, DEV_ETHER, DEV_IP, DEV_MNT, DEV_PIPE, DEV_PROC, DEV_ROOT, DEV_SRV,
 };
 use crate::mcslock::{Lock, LockNode};
 use crate::pgrp::Pgrp;
@@ -73,6 +73,10 @@ fn registry_attach(rune: char, spec: &[u8]) -> Result<Chan> {
         // driver).  The spec is the controller number (empty = unit 0);
         // attach errors Enodev-shaped when the bind never published.
         'l' => crate::devether::attach(spec),
+        // '#I' — devip (the devip-exact /net tree over smoltcp; the
+        // spec is the stack number — only 0/empty attaches this era,
+        // anything else errors "bad specification").
+        'I' => crate::devip::attach(spec),
         _ => Err("namec: unknown # device"),
     }
 }
@@ -113,6 +117,7 @@ fn dev_walk(c: &Chan, comp: &[u8]) -> Result<Chan> {
         DEV_DUP => crate::devdup::walk(c, comp),
         DEV_SRV => crate::devsrv::walk(c, comp),
         DEV_ETHER => crate::devether::walk(c, comp),
+        DEV_IP => crate::devip::walk(c, comp),
         // A walk into a mounted tree is a Twalk RPC (devmnt — the
         // mount entry's `to` chan carries the session + the attach fid).
         DEV_MNT => crate::devmnt::walk(c, comp),
@@ -334,6 +339,9 @@ pub fn open_chan(c: &Chan, mode: u32) -> Result<Chan> {
         DEV_DUP => crate::devdup::open(c, access)?,
         DEV_SRV => crate::devsrv::open(c, mode)?,
         DEV_ETHER => crate::devether::open(c, access)?,
+        // devip gets the FULL mode (its ndb file honors OTRUNC —
+        // contract §2's zero-on-open; the devenv precedent).
+        DEV_IP => crate::devip::open(c, mode)?,
         // Topen over the session (devmnt gets the FULL mode — it
         // masks the wire byte itself, OTRUNC included for the server to
         // refuse).
@@ -359,6 +367,7 @@ pub fn stat_chan(c: &Chan, sb: &mut [u8]) -> Result<u64> {
         DEV_DUP => crate::devdup::stat(c, sb),
         DEV_SRV => crate::devsrv::stat(c, sb),
         DEV_ETHER => crate::devether::stat(c, sb),
+        DEV_IP => crate::devip::stat(c, sb),
         // Tstat over the session (settime's stat of the /tmp mount).
         DEV_MNT => crate::devmnt::stat(c, sb),
         _ => Err("namec: chan with unknown device index"),
@@ -408,6 +417,14 @@ pub fn close_chan(c: &Chan) {
             // conversation (netifclose's shape).
             if c.copen {
                 crate::devether::close(c);
+            }
+        }
+        DEV_IP => {
+            // devip: an open ctl/data/err chan's close runs closeconv
+            // (the last close resets the conv and wakes its blocked
+            // readers to EOF).
+            if c.copen {
+                crate::devip::close(c);
             }
         }
         DEV_MNT => crate::devmnt::clunk_if_last(c),

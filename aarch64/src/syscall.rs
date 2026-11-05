@@ -24,8 +24,8 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use port::dat::{
-    Chan, DEV_CONS, DEV_DUP, DEV_ENV, DEV_ETHER, DEV_MNT, DEV_PIPE, DEV_PROC, DEV_ROOT, DEV_SRV,
-    OEXEC, OTRUNC,
+    Chan, DEV_CONS, DEV_DUP, DEV_ENV, DEV_ETHER, DEV_IP, DEV_MNT, DEV_PIPE, DEV_PROC, DEV_ROOT,
+    DEV_SRV, OEXEC, OTRUNC,
 };
 use port::fdgrp::FdGroup;
 use port::mcslock::{Lock, LockNode};
@@ -295,6 +295,15 @@ fn sys_pwrite(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             // the ctl file takes the verb set (connect/promiscuous/…).
             port::devether::write(&mut chan, src.as_slice(), off)
         }
+        DEV_IP => {
+            // devip: the stack-debt drain FIRST (contract §12.1's idle
+            // corner — a deadline that fired while nobody was blocked
+            // is driven here, on the next devip-dispatched syscall),
+            // then the /net file contract: ctl verb dispatch, the
+            // proto data writes (icmp), ndb/arp/iproute/log.
+            port::devip::stack::drain_debt_if_set();
+            port::devip::write(&mut chan, src.as_slice(), off)
+        }
         DEV_MNT => {
             // devmnt: paqfs is a read-only server; the early
             // client-side error is clearer than the server's Erdonly.
@@ -386,6 +395,15 @@ fn sys_pread(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             // block on it — OQ-1), ctl's conversation id, and the live
             // stats/ifstats/addr/type content.
             port::devether::read(&mut chan, dst.as_slice_mut(), off)
+        }
+        DEV_IP => {
+            // devip: the stack-debt drain FIRST (contract §12.1's idle
+            // corner), then the /net file contract: dir listings, the
+            // blocking proto data reads (Qmsg — the seam's
+            // register→drop→block), ctl's conv number, and the live
+            // status/stats/local/remote/ipselftab content.
+            port::devip::stack::drain_debt_if_set();
+            port::devip::read(&mut chan, dst.as_slice_mut(), off)
         }
         DEV_MNT => {
             // devmnt: chunked Tread RPCs over the mounted tree's

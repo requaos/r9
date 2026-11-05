@@ -36,6 +36,11 @@ pub const DEV_MNT: usize = 7;
 /// conversation (netif.rs's NETQID scheme) and the single `ether0`
 /// Netif is a module static this era.
 pub const DEV_ETHER: usize = 8;
+/// devip — the IP protocol device `#I` (NETIP-02; the registry rune
+/// 'I').  The devip-exact /net file tree over smoltcp sockets; the qid
+/// path encodes proto/conv/file (devip.rs's QID(p,c,y) scheme — its
+/// OWN packing, never netif's).
+pub const DEV_IP: usize = 9;
 
 /// Plan 9 open-mode values (frozen: Harvey sys/include/libc.h).  The low
 /// two bits are an access-MODE field (not a bit set); the upper bits are
@@ -170,6 +175,14 @@ impl Chan {
         }
         if self.copen && self.dev == DEV_ETHER {
             crate::devether::ref_open(self.qid.path);
+        }
+        // THE DEVIP EXCEPTION (the same rule, devip's conversation
+        // files): an OPEN ctl/data/err chan's value copy bumps the
+        // conv's open count — rfork/dup'd fds close-dispatch
+        // independently, so the count must track copies or the
+        // last-close reset (closeconv) would fire early.
+        if self.copen && self.dev == DEV_IP {
+            crate::devip::ref_open(self.qid.path);
         }
         Chan {
             qid: self.qid,

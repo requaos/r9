@@ -504,6 +504,21 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
         block: proc::pipe_block_current,
         wake: proc::pipe_wake,
     });
+    // devip's DevipHooks + tick source (08-04, NETIP-02) — the same
+    // {current, block, wake} shape: a conv's blocked reader/writer parks
+    // via the sched machinery; the seam's waker bridge and the 1 ms
+    // tick's net-deadline sweep (timer.rs's cfg(dev_ip) arm) wake them.
+    // The clock is the arch's generic-timer tick count (1 tick = 1 ms —
+    // the smoltcp Instant bridge).  Registered before the first exec.
+    #[cfg(dev_ip)]
+    {
+        port::devip::stack::set_hooks(port::devip::stack::DevipHooks {
+            current: proc::pipe_current_pid,
+            block: proc::pipe_block_current,
+            wake: proc::pipe_wake,
+        });
+        port::devip::stack::set_clock(crate::platform::timer::ticks);
+    }
     // devdup's resolver/listing hooks and devsrv's fd resolver —
     // the `#d`/`#s` devices resolve the OPERATING proc's fd table through
     // these (port can't see PROC_TABLE — the devproc set_post_hook idiom).

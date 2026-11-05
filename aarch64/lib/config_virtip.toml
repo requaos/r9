@@ -1,0 +1,46 @@
+[build]
+target = "lib/aarch64-unknown-none-elf.json"
+buildflags = ["-Z", "build-std=core,alloc"]
+
+[link]
+# linker script to use
+script = 'aarch64/lib/kernel.ld'
+
+# kernel load address to insert into kernel.ld (KZERO + 0x40080000; AT()
+# emits p_paddr 0x40080000, qemu virt's -kernel load address)
+load-address = '0xffff800040080000'
+
+[config]
+platform = "virt"
+# no dtb key here: virt's DTB is qemu-facing, passed via [qemu].dtb
+# The NETIP-03 loopback gate profile (08-04) — virtnet's shape (the real
+# Harvey boot chain via dev_exec + dev_bootchain: pid 1 is the real
+# Harvey boot(8) at /boot/boot; the Harvey-baked bootfs.paq via the 07-01
+# harvey: initrd channel) plus devip: dev = [..., "ip"] emits
+# cfg(dev_ip), wiring the #I device (hook/clock registration in
+# main.rs, the net-deadline sweep in timer.rs).  cfg(dev_ip) was
+# predeclared in the workspace check-cfg list in 08-01; this TOML is its
+# first EMISSION.  "ether" stays in the list (the always-on NIC per
+# Phase 7 D-10) even though the loopback gates never touch it.
+dev = ["exec", "bootchain", "ether", "ip"]
+
+[qemu]
+machine = "virt,gic-version=2"
+# TCG reference CPU.  For hvf on darwin pass --accel hvf (or R9_ACCEL=hvf):
+# xtask swaps in the gicv3 machine/DTB and -cpu host itself.
+cpu = "cortex-a72"
+smp = 1
+memory = "1024M"
+accel = "tcg"
+# Committed trimmed DTB: qemu loads it at 0x40000000 (the ELF-boot fix —
+# without -dtb, qemu 11.1.2 loads no DTB at all for ELF kernels and x0 is 0)
+dtb = "aarch64/lib/virt-gicv2.dtb"
+# The Harvey-baked boot-chain image (08-03's payloads: ping/udpecho baked;
+# 08-04's fixtures: /lib/netaddr.rc + /lib/netip-loopback.rc), resolved
+# through R9_HARVEY_DIR; absence is a loud pre-spawn error naming
+# `sh build/aarch64/subset-build.sh` then `sh build/aarch64/mkimage.sh`.
+initrd = { file = "harvey:build/aarch64/bootfs.paq", addr = 0x48000000 }
+
+[dist]
+# ELF is the boot image on virt; skip the objcopy+gzip flat-image pipeline
+format = "elf"

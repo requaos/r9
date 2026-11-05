@@ -874,6 +874,21 @@ const NET_PROMPT_MARKER: &str = "% ";
 const NET_SWEEP_DONE_MARKER: &str = "netsweep: NET-DONE";
 const NET_SWEEP_FAIL_MARKER: &str = "netsweep: FAIL";
 
+/// NetIP profile (virtip, 08-04): the config boots the REAL Harvey boot
+/// chain (dev = ["exec", "bootchain", "ether", "ip"] — the devip `#I`
+/// device is live) to the rc `% ` prompt; the harness then types the
+/// loopback sweep invocation and the sweep's `netip:` markers come back
+/// over the socket serial.  The devip kernel markers assert the wiring:
+/// the `#I0` attach print and the medium-bound print.  The sweep's
+/// markers are printed by /lib/netip-loopback.rc: a FAIL line names its
+/// stage and aborts the run immediately (never a budget hang); the
+/// ping/udp legs' ok lines and NETIP-DONE gate completion.
+const DEVIP_ATTACH_MARKER: &str = "#I0: devip attached";
+const DEVIP_MEDIUM_MARKER: &str = "devip: medium loopback bound";
+const NETIP_SWEEP_DONE_MARKER: &str = "netip: NETIP-DONE";
+const NETIP_SWEEP_FAIL_MARKER: &str = "netip: FAIL";
+const NETIP_PING_OK_MARKER: &str = "netip: ping ok";
+
 /// Always-on negative scan: any panic/Unhandled-interrupt line in
 /// the capture fails the run — every profile EXCEPT the deliberate-panic
 /// one (whose expected flow prints exactly that dump).  Case-insensitive,
@@ -943,6 +958,18 @@ fn net_sweep_mode() -> Result<String> {
     match mode.as_str() {
         "arp" | "blast" => Ok(mode),
         _ => Err(format!("R9_NET_SWEEP_MODE must be \"arp\" or \"blast\", got {mode:?}").into()),
+    }
+}
+
+/// The netip sweep's mode: R9_NETIP_SWEEP selects the leg set — `loopback`
+/// (the 08-04 ping + udp echo legs, the only mode this plan).  A typo'd
+/// value is a harness bug, not a gate failure — validated before qemu
+/// spawns, never after a wasted boot.
+fn netip_sweep_mode() -> Result<String> {
+    let mode = env::var("R9_NETIP_SWEEP").unwrap_or_else(|_| "loopback".to_string());
+    match mode.as_str() {
+        "loopback" => Ok(mode),
+        _ => Err(format!("R9_NETIP_SWEEP must be \"loopback\", got {mode:?}").into()),
     }
 }
 
@@ -1068,6 +1095,12 @@ enum BootProfile {
     /// The virtnet net gate: the real Harvey boot chain to the rc prompt,
     /// the typed sweep invocation, and the finish()-time pcap assertion.
     Net,
+    /// The virtip netip gate (08-04): the real Harvey boot chain with the
+    /// devip `#I` device live, the typed loopback sweep, and the
+    /// finish()-time marker assertions (devip attach/bound markers, the
+    /// sweep's ping/udp ok lines, NETIP-DONE).  No pcap assertion —
+    /// loopback traffic never touches the wire (that is the point).
+    Netip,
 }
 
 /// Teardown: SIGKILL the spawned qemu's process GROUP (qemu spawned
@@ -1140,6 +1173,10 @@ impl BootTestStep {
         // failure, and a wasted TCG boot proves nothing.
         if self.config_name == "virtnet" {
             net_sweep_mode()?;
+        }
+        // Same discipline for the virtip profile (R9_NETIP_SWEEP, 08-04).
+        if self.config_name == "virtip" {
+            netip_sweep_mode()?;
         }
 
         let target = self.arch.target();
@@ -1314,7 +1351,10 @@ impl BootTestStep {
         // selected by config name — and its dev list CONTAINS "exec", so
         // the Banner-stage dispatch must check it FIRST (before the
         // exec-profile arm) or the exec flow would mis-select.
+        // The NETIP profile ("virtip", 08-04's NETIP-03 loopback gate)
+        // is the same shape — selected by name, checked first.
         let net_profile = self.config_name == "virtnet";
+        let netip_profile = self.config_name == "virtip";
 
         while Instant::now() < deadline {
             // Always-on negative scan: a panic/Unhandled-interrupt line
@@ -1322,14 +1362,15 @@ impl BootTestStep {
             // profile exempts exactly the D-02 designed fauth line (the
             // real Harvey chain prints `syscall 10 unimplemented` twice a
             // boot); every other pattern — and any other unimplemented
-            // syscall — still fails the run.
-            if !panic_profile && let Some(hit) = negative_scan_hit_for(&capture, net_profile) {
+            // syscall — still fails the run.  The netip profile rides the
+            // same real boot chain — the same single-line exemption.
+            if !panic_profile && let Some(hit) = negative_scan_hit_for(&capture, net_profile || netip_profile) {
                 return Err(self.fail(stage, &capture, &format!("negative scan hit {hit:?}")));
             }
             match stage {
                 BootStage::Banner => {
                     if contains_marker(&capture, BOOT_BANNER_MARKER.as_bytes()) {
-                        stage = if net_profile {
+                        stage = if net_profile || netip_profile {
                             BootStage::NetBoot
                         } else if panic_profile {
                             BootStage::PanicStart
@@ -1466,10 +1507,15 @@ impl BootTestStep {
                         // chain's % prompt (the tier1-r9.expect precedent:
                         // r9's devcons serves reads).  Cooked-mode echo puts
                         // the typed line on the wire — harmless: assertions
-                        // key on netsweep-prefixed lines, which the typed
+                        // key on sweep-prefixed lines, which the typed
                         // line can never contain, so echo can't false-match.
-                        let mode = net_sweep_mode()?;
-                        stream.write_all(format!("rc /lib/net-sweep.rc {mode}\r").as_bytes())?;
+                        if netip_profile {
+                            // 08-04: the loopback sweep (netip-loopback.rc).
+                            stream.write_all(b"rc /lib/netip-loopback.rc\r")?;
+                        } else {
+                            let mode = net_sweep_mode()?;
+                            stream.write_all(format!("rc /lib/net-sweep.rc {mode}\r").as_bytes())?;
+                        }
                         stage = BootStage::NetSweep;
                     }
                 }
@@ -1477,12 +1523,22 @@ impl BootTestStep {
                     // Fast-fail: the sweep's FAIL line aborts the run
                     // immediately, naming the sweep's own stage — never a
                     // 300s deadline hang.  NET-DONE gates completion.
-                    if let Some(line) = line_containing(&capture, NET_SWEEP_FAIL_MARKER.as_bytes())
-                    {
+                    // The marker prefixes key off the profile (netsweep:
+                    // for virtnet, netip: for virtip).
+                    let (fail_marker, done_marker) = if netip_profile {
+                        (NETIP_SWEEP_FAIL_MARKER, NETIP_SWEEP_DONE_MARKER)
+                    } else {
+                        (NET_SWEEP_FAIL_MARKER, NET_SWEEP_DONE_MARKER)
+                    };
+                    if let Some(line) = line_containing(&capture, fail_marker.as_bytes()) {
                         return Err(self.fail(stage, &capture, &format!("sweep failed: {line}")));
                     }
-                    if contains_marker(&capture, NET_SWEEP_DONE_MARKER.as_bytes()) {
-                        return self.finish(log_abs, &capture, BootProfile::Net);
+                    if contains_marker(&capture, done_marker.as_bytes()) {
+                        return self.finish(
+                            log_abs,
+                            &capture,
+                            if netip_profile { BootProfile::Netip } else { BootProfile::Net },
+                        );
                     }
                 }
             }
@@ -1594,6 +1650,29 @@ impl BootTestStep {
                 };
                 println!(
                     "boot-test: PASS -- banner, real Harvey boot chain (paqfs + stacksmoke), rc prompt, typed sweep ({mode} mode, N={n}), netsweep markers and the pcap assertion observed (NETDRV-03)"
+                );
+            }
+            BootProfile::Netip => {
+                // The NETIP-03 loopback gate (08-04): the devip wiring
+                // markers (#I0 attach + medium-bound), the sweep's leg
+                // markers, and NETIP-DONE.  NO pcap assertion — loopback
+                // traffic never touches the wire (that is the point of the
+                // NIC-free leg).  Presence-only, never order.
+                let mode = netip_sweep_mode()?;
+                for marker in [
+                    DEVIP_ATTACH_MARKER,
+                    DEVIP_MEDIUM_MARKER,
+                    NETIP_PING_OK_MARKER,
+                    NETIP_SWEEP_DONE_MARKER,
+                ] {
+                    if !contains_marker(capture, marker.as_bytes()) {
+                        return Err(
+                            self.fail_pretty(capture, &format!("netip gate: marker {marker:?} absent"))
+                        );
+                    }
+                }
+                println!(
+                    "boot-test: PASS -- banner, real Harvey boot chain (paqfs + stacksmoke), rc prompt, typed netip sweep ({mode} mode), the devip attach/medium markers, the sweep's ping leg marker and NETIP-DONE observed (NETIP-03)"
                 );
             }
         }

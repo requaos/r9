@@ -121,6 +121,13 @@ pub fn tick() {
         // exactly as preempt()/reschedule() do (the proc.rs module-header
         // discipline: the lock is only ever held in IRQ-masked context).
         crate::proc::tick_timeouts(n + 1);
+        // The net-deadline sweep (08-04, D-05's timer leg): the
+        // poll_at-armed one-shot deadline rides the existing 1 ms tick —
+        // on expiry the devip waiters wake and drive the stack from
+        // their WOKEN SYSCALL context (poll NEVER runs in IRQ/tick
+        // context — the no-alloc-in-IRQ and mcslock-LEAF invariants).
+        #[cfg(dev_ip)]
+        port::devip::stack::tick_check(n + 1);
         // Poll the UART FIFO directly before the wake check
         // — a byte that misses its RX/RT interrupt is collected here
         // within one tick, never lost until the next byte arrives.

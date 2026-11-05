@@ -131,6 +131,13 @@ pub(crate) fn instant_now() -> Instant {
     Instant::from_millis(ticks_now() as i64)
 }
 
+/// The raw tick count for seeding conv.rs's local-port PRNG (the
+/// donor's nrand role — the port crate cannot see the arch timer, so
+/// the seam exposes its registered clock).
+pub(crate) fn ticks_for_seed() -> u64 {
+    ticks_now()
+}
+
 /// Instant → tick units (1 tick = 1 ms).
 fn instant_to_ticks(at: Instant) -> u64 {
     at.total_millis() as u64
@@ -316,6 +323,17 @@ pub(crate) static STACK: BusyCell<StackState> = BusyCell::new(StackState { core:
 /// syscall-latency envelope gate-visible.
 pub const RX_DRIVE_CAP: usize = 64;
 
+/// The flag-guarded drive counter print (D-13 — devcons-style static
+/// flag): when set, each drive_stack completion prints `devip: drive ok
+/// <n>`.  Default off; the debug surface for the seam's event flow.
+pub static DRIVE_PRINT: AtomicBool = AtomicBool::new(false);
+static DRIVE_COUNT: AtomicU64 = AtomicU64::new(0);
+
+/// Set the drive-print flag (debug wiring — the gates never set it).
+pub fn set_drive_print(on: bool) {
+    DRIVE_PRINT.store(on, Ordering::Relaxed);
+}
+
 /// Drive the stack: bounded ingress, egress, maintenance, then re-arm the
 /// one-shot deadline — and AFTER the cell drops, wake every pid whose
 /// socket waker fired mid-poll.
@@ -328,15 +346,31 @@ pub fn drive_stack() {
     {
         let mut guard = STACK.enter().expect("devip: stack contended");
         if let Some(core) = guard.core.as_mut() {
-            // Bounded ingress (P-D): at most RX_DRIVE_CAP packets per drive.
-            for _ in 0..RX_DRIVE_CAP {
-                match core.iface.poll_ingress_single(now, &mut core.dev, &mut core.sockets) {
-                    PollIngressSingleResult::None => break,
-                    PollIngressSingleResult::PacketProcessed
-                    | PollIngressSingleResult::SocketStateChanged => {}
+            // THE LOOPBACK-FEEDBACK LOOP: a TX on the loopback Device
+            // loops the packet INTO the device's RX queue — egress
+            // produces ingress work.  Drive until the queue drains
+            // (bounded: each round's ingress is capped at RX_DRIVE_CAP
+            // and consumes the queue; the queue's own cap bounds the
+            // total; the ether leg's queues are ring-bounded the same
+            // way).  Without the loop a write's drive would leave the
+            // looped packet un-ingested until the NEXT drive — with all
+            // procs blocked, that drive never comes (the wedge the 08-04
+            // tracer exists to catch).
+            loop {
+                // Bounded ingress (P-D): at most RX_DRIVE_CAP packets
+                // per round.
+                for _ in 0..RX_DRIVE_CAP {
+                    match core.iface.poll_ingress_single(now, &mut core.dev, &mut core.sockets) {
+                        PollIngressSingleResult::None => break,
+                        PollIngressSingleResult::PacketProcessed
+                        | PollIngressSingleResult::SocketStateChanged => {}
+                    }
+                }
+                core.iface.poll_egress(now, &mut core.dev, &mut core.sockets);
+                if !core.dev.rx_pending() {
+                    break;
                 }
             }
-            core.iface.poll_egress(now, &mut core.dev, &mut core.sockets);
             core.iface.poll_maintenance(now);
             match core.iface.poll_at(now, &core.sockets) {
                 Some(at) => NET_DEADLINE.store(instant_to_ticks(at), Ordering::Release),
@@ -350,6 +384,10 @@ pub fn drive_stack() {
     let n = PENDING_WAKES.enter().expect("devip: pending wakes contended").take(&mut pids);
     if n > 0 && let Ok(h) = hooks() {
         (h.wake)(&pids[..n]);
+    }
+    if DRIVE_PRINT.load(Ordering::Relaxed) {
+        let n = DRIVE_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+        crate::println!("devip: drive ok {n}");
     }
 }
 

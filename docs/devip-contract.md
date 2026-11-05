@@ -415,10 +415,25 @@ source tag names govern.)  Bridge-maintained per P-M.
   with `c->lport` (`icmpkick`: `hnputs(p->icmpid, c->lport)`, `icmp.c:186`); RX dispatch matches
   the reply's ident against `lport` (`icmp.c:280-284`).  smoltcp mapping:
   `icmp::Endpoint::Ident(lport)` — accepts EchoRequest AND EchoReply with matching ident.
-* ping(8) exercises exactly this: `netmkaddr(host, "icmp", "1")` → `connect <host>!1` → raw
-  Icmphdr writes/reads on `data`; ping filters `type != echoreply` itself, which tolerates the
-  looped-back request (loopback deliver + smoltcp's `auto-icmp-echo-reply` both verified
-  compatible).
+* **The `data` file carries the full IPv4-packet shape in BOTH directions** — a 20-byte
+  IPv4-header area (`ICMP_IPSIZE`, the `Icmp` struct's leading fields, `icmp.c:10-27`) + the ICMP
+  message.  On write the kernel overwrites vihl/src/dst/proto/icmpid and recomputes the checksum
+  over the message (`icmpkick`, `icmp.c:164-191`); on read the delivered block keeps the wire
+  packet's header (`icmpiput` `qpass`es the whole block, `icmp.c:286-288`).  ping(8) builds and
+  parses exactly this shape (`geticmp(buf) = buf + IPV4HDR_LEN`, `IPV4HDR_LEN = 20`,
+  `sys/include/ip.h:10`; the sender fills `((Ip4hdr*)buf)->src`, `ping.c:260`).
+  **[doc-vs-src]** — the phase research's "v4: raw Icmphdr in the data payload (kernel builds the
+  IP header)" reading is CORRECTED here against the source (08-04): the file-level payload INCLUDES
+  the 20-byte header area.  smoltcp's icmp socket is payload-level, so the r9 bridge STRIPS the
+  20-byte area on write and SYNTHESIZES it on read (the same shape as the icmpv6 bridge's IP6HDR
+  synthesis, §8 — the synth header's ttl carries the conv's configured ttl because smoltcp exposes
+  no received hop limit on the icmp recv metadata; ping prints it cosmetically).
+* ping(8) exercises exactly this: `netmkaddr(host, "icmp", "1")` → `connect <host>!1` → the
+  full-packet writes/reads on `data`; ping filters `type != echoreply` itself, which tolerates the
+  looped-back request (smoltcp's `accepts_v4` matches EchoRequest AND EchoReply by ident — the
+  donor's `icmpiput` EchoRequest arm consumes-then-replies WITHOUT delivering to the conv, so the
+  donor's reader never sees the request; r9's smoltcp mapping delivers it and ping filters — a
+  recorded divergence, cosmetic "bad type/code/sequence" lines in the guest log).
 * status (`icmpstate`, `icmp.c:128-137`): `"Datagram qin %d qout %d\n"`.
 * stats (`/net/icmp/stats`): the man documents 26 tagged fields (messages received/sent per
   type: unreachables, time-exceededs, parameter problems, source quenches, redirects, echo
@@ -619,6 +634,14 @@ caller-driven).  `Interface::poll` runs in exactly three legs:
 3. **Local file-op activity** — every devip file op that mutates socket state (ctl writes, data
    writes, connect/announce) ends with `drive_stack()` in the same syscall context (0.13's
    egress-exhaustion means one poll flushes the egress queue).
+
+   **The loopback-feedback loop (08-04):** on the loopback Device, a TX loops the packet INTO the
+   device's RX queue — egress produces ingress work.  `drive_stack()` therefore loops
+   (ingress-cap → egress → repeat) until the device queue drains (`rx_pending()` false), each
+   round's ingress still RX_DRIVE_CAP-bounded — without it, a write's drive would leave the looped
+   packet un-ingested until the NEXT drive, and with all procs blocked in file ops that drive
+   never comes (the wedge the 08-04 tracer run caught empirically).  The queue's own cap bounds
+   the total work; a full `poll()` is still never run (P-D).
 
 **The stack-debt flag rule (the idle corner):** when the timer leg fires with no registered
 waiters, set the stack-debt flag; the next DEV_IP-dispatched syscall drives the stack first.

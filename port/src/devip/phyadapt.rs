@@ -55,6 +55,13 @@ impl LoopbackDev {
         LoopbackDev { queue: VecDeque::new(), dropped: 0 }
     }
 
+    /// Packets queued for ingress (the seam's drive loop's progress
+    /// check): a TX loops the packet INTO the RX queue — egress produces
+    /// ingress work, so drive_stack loops until this drains.
+    pub fn rx_pending(&self) -> bool {
+        !self.queue.is_empty()
+    }
+
     /// The drop counter (observability; the netlog wiring is 08-05's).
     pub fn dropped(&self) -> u64 {
         self.dropped
@@ -142,6 +149,12 @@ impl ScriptedDev {
     pub fn push_rx(&mut self, packet: Vec<u8>) {
         self.rx.push_back(packet);
     }
+
+    /// Scripted packets awaiting ingress (the seam's drive loop's
+    /// progress check).
+    pub fn rx_pending(&self) -> bool {
+        !self.rx.is_empty()
+    }
 }
 
 #[cfg(test)]
@@ -209,6 +222,18 @@ pub enum StackDev {
     Loopback(LoopbackDev),
     #[cfg(test)]
     Scripted(ScriptedDev),
+}
+
+impl StackDev {
+    /// Packets queued for ingress (the drive loop's progress check —
+    /// see drive_stack's loopback-feedback note).
+    pub fn rx_pending(&self) -> bool {
+        match self {
+            StackDev::Loopback(dev) => dev.rx_pending(),
+            #[cfg(test)]
+            StackDev::Scripted(dev) => dev.rx_pending(),
+        }
+    }
 }
 
 /// The unified RX token (enum dispatch — same shape as `StackDev`).
