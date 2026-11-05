@@ -68,6 +68,8 @@
 //!
 //! smp=1 this era — there is no cross-CPU sharing to model.
 
+#![forbid(unsafe_code)]
+
 extern crate alloc;
 
 use alloc::collections::VecDeque;

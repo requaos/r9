@@ -43,7 +43,7 @@
 //! the post's pool-alloc + avail-index window.  The guarantee the plan
 //! asks for is realized by the invariant itself; no new asm/DAIF
 //! sequence is needed (and none could exist here — this module is
-//! `#[forbid(unsafe_code)]`).
+//! unsafe-forbidden by attribute).
 //!
 //! The data-file read blocks per netif's qread semantics (Qmsg — one
 //! WHOLE frame per read, the 14-byte-header Ethernet frame, the 12-byte
@@ -75,6 +75,8 @@
 //! header lines of the donor are the legacy I/O-port register reads,
 //! meaningless on the modern path — omitted, the vq lines are THE
 //! NETDRV-04 reconciliation surface).
+
+#![forbid(unsafe_code)]
 
 extern crate alloc;
 
