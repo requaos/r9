@@ -84,6 +84,10 @@ const STUB_PID_TX: u64 = 43;
 
 /// The wake hook's record: every pid the seam woke, in wake order.
 static WAKE_LOG: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+/// The block hook's invocation count (08-05: the threaded tcp pins prove
+/// the blocking paths PARKED — the connect/listen waits record their
+/// blocks here before the scripted peer answers).
+static BLOCK_COUNT: AtomicU64 = AtomicU64::new(0);
 /// The advanceable stub clock (1 tick = 1 ms).
 static TEST_TICKS: AtomicU64 = AtomicU64::new(0);
 /// Serializes the stateful pins (process-global seam statics).
@@ -99,7 +103,12 @@ fn stub_current() -> u64 {
     STUB_PID
 }
 
-fn stub_block() {}
+fn stub_block() {
+    // Record the park (the threaded tcp pins assert it) and yield so the
+    // scripted-peer thread can drive the answer in.
+    BLOCK_COUNT.fetch_add(1, Ordering::Relaxed);
+    std::thread::yield_now();
+}
 
 fn stub_wake(pids: &[u64]) {
     WAKE_LOG.lock().unwrap().extend_from_slice(pids);
@@ -115,6 +124,25 @@ fn set_ticks(t: u64) {
 
 fn take_wake_log() -> Vec<u64> {
     std::mem::take(&mut *WAKE_LOG.lock().unwrap_or_else(|e| e.into_inner()))
+}
+
+/// The block hook's invocation count (see BLOCK_COUNT).
+fn block_count() -> u64 {
+    BLOCK_COUNT.load(Ordering::Relaxed)
+}
+
+/// Bounded spin-wait for a host-side condition (the threaded tcp pins):
+/// the condition must become true within ~5 s of yields or the pin FAILS
+/// loudly — a wedge is a test failure, never a hung suite.
+fn wait_until(mut cond: impl FnMut() -> bool, what: &str) {
+    let start = std::time::Instant::now();
+    while !cond() {
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(5),
+            "pin: wedged waiting for {what}"
+        );
+        std::thread::yield_now();
+    }
 }
 
 /// Register the stub hooks + clock exactly once per process.
@@ -165,6 +193,9 @@ struct TcpLeg {
     seq: i32,
     ack: Option<i32>,
     syn: bool,
+    fin: bool,
+    rst: bool,
+    payload: Vec<u8>,
 }
 
 /// Craft a bare-IPv4 UDP datagram with valid checksums.
@@ -257,6 +288,9 @@ fn parse_tcp4(frame: &[u8]) -> TcpLeg {
         seq: tcp.seq_number().0,
         ack: if tcp.ack() { Some(tcp.ack_number().0) } else { None },
         syn: tcp.syn(),
+        fin: tcp.fin(),
+        rst: tcp.rst(),
+        payload: tcp.payload().to_vec(),
     }
 }
 
@@ -1103,4 +1137,503 @@ fn udp_advise_hangup_lands_in_errq_unless_ignoreadvice() {
     crate::devip::proto::udp_advise(b, b"icmp: whatever");
     let (hangup, err) = udp_conv_hangup_err(b);
     assert!(hangup.is_none() && err.is_none(), "pin (advise): ignoreadvice suppresses the hangup");
+}
+
+// ---------------------------------------------------------------------------
+// 08-05 Task 1 — the tcp module pins (NETIP-03's third leg; the contract
+// doc's TCP chapter made executable).  Pinned here BEFORE the guest gate:
+//
+// - `tcp_state_rename_table_is_devip_exact` — the 11-state 1:1 rename
+//   (smoltcp tcp::State ↔ devip tcpstates[]), every arm.
+// - `tcp_connect_blocks_until_established_then_connected` — the P-K bridge:
+//   the ctl connect PARKS (block-hook recorded) until the scripted SYN-ACK
+//   drives the socket to Established → Connected.
+// - `tcp_connect_rst_mid_syn_maps_econrefused` — a scripted RST to the SYN
+//   closes the socket mid-SYN → the write fails "connection refused" and
+//   the conv takes the donor's Fsconnected failure shape.
+// - `tcp_connect_deadline_expiry_maps_etimedout` — the bridge's own
+//   deadline (smoltcp retransmits forever) → "connection timed out".
+// - `tcp_announce_builds_contract_depth_pool_and_listen_pops_oldest` — the
+//   P-A accept pool: announce builds 128 listeners (contract §12.3), two
+//   scripted SYNs occupy two members, the listen-file open pops the oldest
+//   connected member as the NEW conv, the pool refills, a non-announced
+//   conv errors "not announced".
+// - `tcp_listen_hangup_during_parked_wait_errors` — a hangup ctl on the
+//   announced conv wakes the parked listen open with "listen hungup".
+// - `tcp_close_hangup_hangupxmit_wire_shapes` — P-L: close → FIN,
+//   hangup → RST, hangupxmit → FIN sequenced AFTER the queued TX data.
+// - `tcp_full_exchange_moves_the_stats_counters` — P-M: a scripted full
+//   echo-shaped exchange moves ActiveOpens/PassiveOpens/InSegs/OutSegs;
+//   the stats file is the 28-tag contract format.
+// - `tcp_checksum_and_porthog_are_accepted_and_recorded` — OQ-4: the
+//   checksum/tcpporthogdefense verbs succeed, record, and netlog-note;
+//   keepalive requires Established (the donor's typo'd string verbatim).
+//
+// The threaded pins run the REAL blocking file paths on a std thread while
+// the scripted peer answers from the main thread (the stub block hook
+// yields; WAKE_LOG/BLOCK_COUNT record the seam's behavior).
+// ---------------------------------------------------------------------------
+
+use crate::devip::conv::{ConvState, Proto};
+use crate::devip::proto;
+
+/// A tcp conv allocation tracked to close at scope end.
+fn alloc_tcp_conv() -> (usize, ConvGuard) {
+    let id = crate::devip::conv::conv_alloc(Proto::Tcp).expect("pin: tcp clone allocates");
+    (id, ConvGuard(Proto::Tcp, id))
+}
+
+/// Snapshot a tcp conv for the pins: (state, laddr, lport, raddr, rport,
+/// hangup-present, pool depth, estab-marked).
+#[allow(clippy::type_complexity)]
+fn tcp_conv_snapshot(id: usize) -> (ConvState, [u8; 16], u16, [u8; 16], u16, bool, Option<usize>, bool) {
+    let node = crate::mcslock::LockNode::new();
+    let t = crate::devip::conv::TABLES.lock(&node);
+    let c = &t.table(Proto::Tcp)[id];
+    (
+        c.state,
+        c.laddr,
+        c.lport,
+        c.raddr,
+        c.rport,
+        c.hangup.is_some(),
+        c.pool.as_ref().map(|p| p.members().len()),
+        c.estab,
+    )
+}
+
+/// The announcing conv's pool member count still in Listen (None = no pool).
+fn tcp_pool_listening(id: usize) -> Option<usize> {
+    let node = crate::mcslock::LockNode::new();
+    let t = crate::devip::conv::TABLES.lock(&node);
+    t.table(Proto::Tcp)[id].pool.as_ref().map(|p| p.listening_count())
+}
+
+/// The live smoltcp state of the conv's socket (None = socket-less).
+fn tcp_sock_state(id: usize) -> Option<tcp::State> {
+    let node = crate::mcslock::LockNode::new();
+    let t = crate::devip::conv::TABLES.lock(&node);
+    let h = t.table(Proto::Tcp)[id].sock?;
+    let g = stack::enter_stack();
+    let core = g.core.as_ref().expect("pin: stack installed");
+    Some(core.sockets.get::<tcp::Socket>(h).state())
+}
+
+/// The listen-file chan for an announced tcp conv (the spawn pin's shape).
+fn tcp_listen_chan(id: usize) -> crate::dat::Chan {
+    let q = crate::devip::qid(Proto::Tcp.index(), id as u64, crate::devip::QLISTEN);
+    crate::dat::Chan::new(
+        crate::dat::DEV_IP,
+        crate::dat::Qid { path: q, vers: 0, typ: crate::dat::QTFILE },
+        crate::dat::OREAD,
+    )
+}
+
+/// The scripted peer's ISN for the connect-bridge pins.
+const PEER_ISN: i32 = 7000;
+
+/// Drive a conv-level `connect <PEER!port>` through the scripted peer on a
+/// thread: the connect parks (BLOCK_COUNT advances), the main thread reads
+/// the captured SYN and answers with a SYN-ACK; the bridge wakes to
+/// Connected.  Returns the local ISN parsed from the captured SYN.
+fn scripted_connect(id: usize, remote_port: u16) -> i32 {
+    let cmd = format!("connect 10.0.0.2!{remote_port}").into_bytes();
+    let before = block_count();
+    let t = std::thread::spawn(move || proto::ctl_write(Proto::Tcp, id, &cmd));
+    wait_until(|| tx_count() >= 1, "the SYN to leave");
+    let syn = tx_tcp(tx_count() - 1);
+    assert!(syn.syn && syn.ack.is_none(), "pin (connect): the first frame is a bare SYN");
+    assert_eq!((syn.src, syn.dst), (GUEST, PEER), "pin (connect): the SYN's addresses");
+    assert_eq!(syn.dport, remote_port, "pin (connect): the SYN's dst port");
+    // The connect MUST be parked mid-wait before the answer lands (P-K's
+    // whole point: the ctl write blocks until the handshake resolves).
+    wait_until(|| block_count() > before, "the connect to park");
+    assert!(!t.is_finished(), "pin (connect): still parked before the SYN-ACK");
+    push_rx(tcp4_frame(PEER, GUEST, remote_port, syn.sport, PEER_ISN, Some(syn.seq + 1), TcpControl::Syn, &[]));
+    stack::drive_stack();
+    t.join().expect("pin (connect): join").expect("pin (connect): the ctl connect succeeds");
+    syn.seq
+}
+
+// ---------------------------------------------------------------------------
+// Pin: the state rename table (contract §5.2 — every arm, a pure 1:1 rename).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tcp_state_rename_table_is_devip_exact() {
+    assert_eq!(proto::tcp_state_name(tcp::State::Closed), b"Closed");
+    assert_eq!(proto::tcp_state_name(tcp::State::Listen), b"Listen");
+    assert_eq!(proto::tcp_state_name(tcp::State::SynSent), b"Syn_sent");
+    assert_eq!(proto::tcp_state_name(tcp::State::SynReceived), b"Syn_received");
+    assert_eq!(proto::tcp_state_name(tcp::State::Established), b"Established");
+    assert_eq!(proto::tcp_state_name(tcp::State::FinWait1), b"Finwait1");
+    assert_eq!(proto::tcp_state_name(tcp::State::FinWait2), b"Finwait2");
+    assert_eq!(proto::tcp_state_name(tcp::State::CloseWait), b"Close_wait");
+    assert_eq!(proto::tcp_state_name(tcp::State::Closing), b"Closing");
+    assert_eq!(proto::tcp_state_name(tcp::State::LastAck), b"Last_ack");
+    assert_eq!(proto::tcp_state_name(tcp::State::TimeWait), b"Time_wait");
+}
+
+// ---------------------------------------------------------------------------
+// Pin: the P-K blocking-connect bridge.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tcp_connect_blocks_until_established_then_connected() {
+    let _serial = fresh_scripted_stack();
+    set_guest_addr();
+    let (id, _guard) = alloc_tcp_conv();
+    let _isn = scripted_connect(id, 1234);
+    let snap = tcp_conv_snapshot(id);
+    assert_eq!(snap.0, ConvState::Connected, "pin (connect): Connected at the file level");
+    assert_eq!(snap.3, mapped(PEER), "pin (connect): raddr recorded");
+    assert_eq!(snap.4, 1234, "pin (connect): rport recorded");
+    assert!(snap.2 != 0, "pin (connect): a local port was assigned");
+    assert!(snap.7, "pin (connect): the bridge observed Established (CurrEstab bookkeeping)");
+    assert_eq!(tcp_sock_state(id), Some(tcp::State::Established));
+    // The seam's wake fired for the parked connecter (the waker bridge —
+    // set_state(Established) on the SYN-ACK ingest wakes the recv waker).
+    assert!(take_wake_log().contains(&STUB_PID), "pin (connect): the waker bridge woke the parker");
+}
+
+#[test]
+fn tcp_connect_rst_mid_syn_maps_econrefused() {
+    let _serial = fresh_scripted_stack();
+    set_guest_addr();
+    let (id, _guard) = alloc_tcp_conv();
+    let t = std::thread::spawn(move || proto::ctl_write(Proto::Tcp, id, b"connect 10.0.0.2!1234"));
+    wait_until(|| tx_count() >= 1, "the SYN to leave");
+    let syn = tx_tcp(tx_count() - 1);
+    wait_until(|| block_count() > 0, "the connect to park");
+    // RST the SYN (RST|ACK acking isn+1 — smoltcp's SynSent RST acceptance).
+    push_rx(tcp4_frame(PEER, GUEST, 1234, syn.sport, 0, Some(syn.seq + 1), TcpControl::Rst, &[]));
+    stack::drive_stack();
+    let res = t.join().expect("pin (rst): join");
+    assert_eq!(res.unwrap_err(), "connection refused", "pin (rst): the donor's Econrefused mapping");
+    // The donor's Fsconnected(c, reason) shape: the conv is left Connected
+    // at the file level with the socket dead and the reason hung up on it
+    // (the err file carries the reason per contract §3).
+    let snap = tcp_conv_snapshot(id);
+    assert_eq!(snap.0, ConvState::Connected, "pin (rst): the Fsconnected failure shape");
+    assert!(snap.5, "pin (rst): the hangup recorded");
+    assert!(proto::tcp_read_data(id, &mut [0u8; 8]).is_err(), "pin (rst): reads error on the hung conv");
+    assert!(proto::tcp_write_data(id, b"x").is_err(), "pin (rst): writes error on the hung conv");
+}
+
+#[test]
+fn tcp_connect_deadline_expiry_maps_etimedout() {
+    let _serial = fresh_scripted_stack();
+    set_guest_addr();
+    let (id, _guard) = alloc_tcp_conv();
+    let t = std::thread::spawn(move || proto::ctl_write(Proto::Tcp, id, b"connect 10.0.0.2!1234"));
+    wait_until(|| tx_count() >= 1, "the SYN to leave");
+    wait_until(|| block_count() > 0, "the connect to park");
+    assert!(!t.is_finished(), "pin (timeout): still parked with the SYN unanswered");
+    // Fast-forward past the bridge's connect deadline (smoltcp retransmits
+    // forever — the Etimedout mapping is the bridge's own deadline); the
+    // tick sweep's wake is the guest's wake path for the parked waiter.
+    set_ticks(120_001);
+    stack::tick_check(120_001);
+    let res = t.join().expect("pin (timeout): join");
+    assert_eq!(res.unwrap_err(), "connection timed out", "pin (timeout): the donor's Etimedout mapping");
+    let snap = tcp_conv_snapshot(id);
+    assert!(snap.5, "pin (timeout): the reason hung on the conv");
+}
+
+// ---------------------------------------------------------------------------
+// Pin: the P-A accept pool at the conv level (announce → SYNs → listen pop).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tcp_announce_builds_contract_depth_pool_and_listen_pops_oldest() {
+    let _serial = fresh_scripted_stack();
+    set_guest_addr();
+    let (id, _guard) = alloc_tcp_conv();
+    proto::ctl_write(Proto::Tcp, id, b"announce 7").expect("pin (pool): announce");
+    let snap = tcp_conv_snapshot(id);
+    assert_eq!(snap.0, ConvState::Announced, "pin (pool): Announced");
+    assert_eq!(snap.2, 7, "pin (pool): the announced port");
+    assert_eq!(
+        snap.6,
+        Some(stack::ACCEPT_POOL_DEPTH),
+        "pin (pool): the pool builds at the contract-doc depth (128, §12.3)"
+    );
+    assert_eq!(tcp_pool_listening(id), Some(128), "pin (pool): all members Listen");
+
+    // Two scripted SYNs occupy TWO members (the demux shape pin (d) pinned
+    // at the pool level, here through the conv announce).
+    push_rx(tcp4_frame(PEER, GUEST, 1111, 7, 500, None, TcpControl::Syn, &[]));
+    push_rx(tcp4_frame(PEER2, GUEST, 2222, 7, 600, None, TcpControl::Syn, &[]));
+    stack::drive_stack();
+    assert_eq!(tcp_pool_listening(id), Some(126), "pin (pool): two SYNs occupied two members");
+
+    // The listen-file open pops the OLDEST connected member as the NEW
+    // conv (the returned chan names the new conv's ctl).
+    let nc = crate::devip::open(&tcp_listen_chan(id), crate::dat::OREAD).expect("pin (pool): listen open");
+    let nid = ((nc.qid.path >> 5) & 0xfff) as usize;
+    assert_ne!(nid, id, "pin (pool): the pop materialized a NEW conv");
+    let nsnap = tcp_conv_snapshot(nid);
+    assert_eq!(nsnap.0, ConvState::Connected, "pin (pool): the accepted conv is Connected");
+    assert_eq!(nsnap.3, mapped(PEER), "pin (pool): the oldest call's raddr");
+    assert_eq!(nsnap.4, 1111, "pin (pool): the oldest call's rport");
+    assert_eq!(nsnap.2, 7, "pin (pool): the accepted conv's lport is the announced one");
+    // The pool refilled to depth with fresh Listeners.
+    assert_eq!(tcp_conv_snapshot(id).6, Some(128), "pin (pool): refilled to depth");
+    assert_eq!(tcp_pool_listening(id), Some(128), "pin (pool): refill restored all-Listen");
+    // The second SYN's member pops next.
+    let nc2 = crate::devip::open(&tcp_listen_chan(id), crate::dat::OREAD).expect("pin (pool): second listen");
+    let nid2 = ((nc2.qid.path >> 5) & 0xfff) as usize;
+    assert_eq!(tcp_conv_snapshot(nid2).3, mapped(PEER2), "pin (pool): the second call's quad");
+    crate::devip::close(&nc);
+    crate::devip::close(&nc2);
+
+    // A listen open against a non-announced conv errors "not announced".
+    let (other, _g2) = alloc_tcp_conv();
+    let err = crate::devip::open(&tcp_listen_chan(other), crate::dat::OREAD).unwrap_err();
+    assert_eq!(err, "not announced", "pin (pool): the donor's listen gate");
+}
+
+#[test]
+fn tcp_listen_hangup_during_parked_wait_errors() {
+    let _serial = fresh_scripted_stack();
+    set_guest_addr();
+    let (id, _guard) = alloc_tcp_conv();
+    proto::ctl_write(Proto::Tcp, id, b"announce 8").expect("pin (listen-hangup): announce");
+    let before = block_count();
+    let lc = tcp_listen_chan(id);
+    let t = std::thread::spawn(move || crate::devip::open(&lc, crate::dat::OREAD));
+    // The listen parks (no incoming call).
+    wait_until(|| block_count() > before, "the listen to park");
+    assert!(!t.is_finished(), "pin (listen-hangup): the listen is parked");
+    // Hangup the announced conv mid-wait — the donor's qisclosed(cv->rq)
+    // arm errors the sleeper "listen hungup".
+    proto::ctl_write(Proto::Tcp, id, b"hangup").expect("pin (listen-hangup): hangup");
+    let res = t.join().expect("pin (listen-hangup): join");
+    assert_eq!(res.unwrap_err(), "listen hungup", "pin (listen-hangup): the donor's error");
+}
+
+// ---------------------------------------------------------------------------
+// Pin: the P-L close/hangup/hangupxmit wire shapes.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tcp_close_hangup_hangupxmit_wire_shapes() {
+    let _serial = fresh_scripted_stack();
+    set_guest_addr();
+
+    // `close` → a FIN on the wire (smoltcp close()).
+    let (a, _ga) = alloc_tcp_conv();
+    let isn_a = scripted_connect(a, 1234);
+    let base = tx_count();
+    proto::ctl_write(Proto::Tcp, a, b"close").expect("pin (close): the verb");
+    stack::drive_stack();
+    let fin = (base..tx_count())
+        .map(tx_tcp)
+        .find(|l| l.fin)
+        .expect("pin (close): a FIN left after the verb");
+    assert_eq!(fin.seq, isn_a + 1, "pin (close): the FIN follows the handshake sequence");
+    assert_eq!(tcp_sock_state(a), Some(tcp::State::FinWait1));
+
+    // `hangup` → an RST on the wire (smoltcp abort(): "one reset packet
+    // will be sent" — socket/tcp.rs).
+    let (b, _gb) = alloc_tcp_conv();
+    scripted_connect(b, 1235);
+    let base = tx_count();
+    proto::ctl_write(Proto::Tcp, b, b"hangup").expect("pin (hangup): the verb");
+    stack::drive_stack();
+    assert!(
+        (base..tx_count()).map(tx_tcp).any(|l| l.rst),
+        "pin (hangup): an RST left after the verb"
+    );
+    assert_eq!(tcp_sock_state(b), Some(tcp::State::Closed));
+
+    // `hangupxmit` → close-after-TX-drain (P-L): with unacked data queued,
+    // the FIN's sequence number comes AFTER the data (smoltcp's egress
+    // emits FIN only once the segment covers the buffer's tail).
+    let (c, _gc) = alloc_tcp_conv();
+    let isn_c = scripted_connect(c, 1237);
+    proto::tcp_write_data(c, b"drain-me").expect("pin (hangupxmit): the write queues");
+    let base = tx_count();
+    proto::ctl_write(Proto::Tcp, c, b"hangupxmit").expect("pin (hangupxmit): the verb");
+    stack::drive_stack();
+    let legs: Vec<TcpLeg> = (base..tx_count()).map(tx_tcp).collect();
+    let fin = legs.iter().find(|l| l.fin).expect("pin (hangupxmit): a FIN left");
+    assert_eq!(
+        fin.seq,
+        isn_c + 1 + 8,
+        "pin (hangupxmit): the FIN is sequenced AFTER the 8 queued bytes (close-after-drain)"
+    );
+    // The queued data itself went out before/at the FIN's position.
+    assert!(
+        legs.iter().any(|l| l.payload == b"drain-me") || legs.iter().any(|l| l.payload.ends_with(b"drain-me")),
+        "pin (hangupxmit): the queued data was transmitted"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Pin: P-M stats honesty — a full scripted exchange moves the bridge-
+// maintained counters; the stats file is the contract's 28-tag format.
+// The scripted device CAPTURES TX (never loops), so the pin relays new
+// captures back as RX by hand (the guest's LoopbackDev does it internally).
+// ---------------------------------------------------------------------------
+
+/// The relay cursor for the scripted-device "loopback" (reset with each
+/// fresh stack — the fresh device's tx_log starts empty).
+static RELAYED: AtomicU64 = AtomicU64::new(0);
+
+/// Relay newly captured TX frames back as scripted RX.
+fn relay_new_tx() {
+    let mut g = stack::enter_stack();
+    let core = g.core.as_mut().expect("pin: stack installed");
+    let dev = core.dev_scripted_mut();
+    let from = RELAYED.load(Ordering::Relaxed) as usize;
+    if dev.tx_log.len() > from {
+        let new: Vec<Vec<u8>> = dev.tx_log[from..].to_vec();
+        RELAYED.store(dev.tx_log.len() as u64, Ordering::Relaxed);
+        for f in new {
+            dev.push_rx(f);
+        }
+    }
+}
+
+/// relay → drive until the condition holds (both legs idempotent).
+fn pump_until(cond: impl FnMut() -> bool, what: &str) {
+    wait_until(
+        || {
+            relay_new_tx();
+            stack::drive_stack();
+            cond()
+        },
+        what,
+    );
+}
+
+#[test]
+fn tcp_full_exchange_moves_the_stats_counters() {
+    let _serial = fresh_scripted_stack();
+    RELAYED.store(0, Ordering::Relaxed);
+    set_guest_addr();
+    let base_active = proto::TCP_STATS[proto::TCPSTAT_ACTIVE_OPENS].load(Ordering::Relaxed);
+    let base_passive = proto::TCP_STATS[proto::TCPSTAT_PASSIVE_OPENS].load(Ordering::Relaxed);
+    let base_in = proto::TCP_STATS[proto::TCPSTAT_IN_SEGS].load(Ordering::Relaxed);
+    let base_out = proto::TCP_STATS[proto::TCPSTAT_OUT_SEGS].load(Ordering::Relaxed);
+
+    // The server announces; the client connects through the bridge while
+    // the main thread relays the handshake legs (SYN → pool member;
+    // SYN-ACK → client; ACK → member: Established both ends).
+    let (sid, _gs) = alloc_tcp_conv();
+    proto::ctl_write(Proto::Tcp, sid, b"announce 9").expect("pin (stats): announce");
+    let (cid, _gc) = alloc_tcp_conv();
+    let t = std::thread::spawn(move || proto::ctl_write(Proto::Tcp, cid, b"connect 10.0.0.1!9"));
+    pump_until(|| tcp_conv_snapshot(cid).0 == ConvState::Connected, "the relayed handshake");
+    t.join().expect("pin (stats): join").expect("pin (stats): connect");
+
+    // The listen open pops the Established member as the new conv.
+    let nc = crate::devip::open(&tcp_listen_chan(sid), crate::dat::OREAD).expect("pin (stats): listen pops");
+    let nid = ((nc.qid.path >> 5) & 0xfff) as usize;
+    assert_eq!(tcp_sock_state(nid), Some(tcp::State::Established), "pin (stats): the accepted conv is Established");
+
+    // The echo exchange: client write → relay → server read → server
+    // write → relay → client read.
+    proto::tcp_write_data(cid, b"ping").expect("pin (stats): client write");
+    relay_new_tx();
+    stack::drive_stack();
+    let mut buf = [0u8; 64];
+    let n = proto::tcp_read_data(nid, &mut buf).expect("pin (stats): server read") as usize;
+    assert_eq!(&buf[..n], b"ping", "pin (stats): the server got the payload");
+    proto::tcp_write_data(nid, b"pong").expect("pin (stats): server write");
+    relay_new_tx();
+    stack::drive_stack();
+    let n = proto::tcp_read_data(cid, &mut buf).expect("pin (stats): client read") as usize;
+    assert_eq!(&buf[..n], b"pong", "pin (stats): the client got the echo");
+
+    // The bridge-observed counters moved (P-M: no zeros-forever stats file).
+    assert_eq!(
+        proto::TCP_STATS[proto::TCPSTAT_ACTIVE_OPENS].load(Ordering::Relaxed),
+        base_active + 1,
+        "pin (stats): ActiveOpens"
+    );
+    assert_eq!(
+        proto::TCP_STATS[proto::TCPSTAT_PASSIVE_OPENS].load(Ordering::Relaxed),
+        base_passive + 1,
+        "pin (stats): PassiveOpens"
+    );
+    assert_eq!(
+        proto::TCP_STATS[proto::TCPSTAT_IN_SEGS].load(Ordering::Relaxed),
+        base_in + 2,
+        "pin (stats): InSegs (one per recv completion)"
+    );
+    assert_eq!(
+        proto::TCP_STATS[proto::TCPSTAT_OUT_SEGS].load(Ordering::Relaxed),
+        base_out + 2,
+        "pin (stats): OutSegs (one per send completion)"
+    );
+
+    // The stats file: the contract's 28 tagged "Name: N" lines (§5.3).
+    let stats = proto::tcp_stats();
+    let text = std::string::String::from_utf8(stats).expect("pin (stats): utf8");
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 28, "pin (stats): the 28-tag contract format");
+    assert!(lines.iter().all(|l| l.contains(": ")), "pin (stats): every line tagged");
+    for tag in ["ActiveOpens", "PassiveOpens", "CurrEstab", "InSegs", "OutSegs", "OutRsts"] {
+        assert!(text.contains(&format!("{tag}: ")), "pin (stats): the {tag} line");
+    }
+
+    // The status line: the contract's §5.2 format with a devip state name.
+    let status = proto::status(Proto::Tcp, cid);
+    let status = std::string::String::from_utf8(status).expect("pin (stats): status utf8");
+    assert!(
+        status.starts_with("Established qin 0 qout 0 rq 0.0 srtt 0 mdev 0 sst 0 cwin 0 swin 0>>0 rwin 0>>0 qscale 0 timer.start 0 timer.count 0 rerecv 0 katimer.start 0 katimer.count 0\n"),
+        "pin (stats): the status line is the contract format, got {status:?}"
+    );
+    crate::devip::close(&nc);
+}
+
+// ---------------------------------------------------------------------------
+// Pin: OQ-4 — checksum/tcpporthogdefense are accepted-and-recorded with a
+// netlog note (no smoltcp mechanism; contract §5.1), keepalive requires
+// Established, and the tcp ctl fallthrough errors the contract's strings.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tcp_checksum_and_porthog_are_accepted_and_recorded() {
+    let _serial = fresh_scripted_stack();
+    let (id, _g) = alloc_tcp_conv();
+
+    // The netlog flag gates the note: clear → silent; set → the note lands.
+    crate::devip::netlog::ctl(b"set tcp").expect("pin (oq4): set tcp");
+    proto::ctl_write(Proto::Tcp, id, b"checksum 0").expect("pin (oq4): checksum accepted");
+    proto::ctl_write(Proto::Tcp, id, b"tcpporthogdefense on").expect("pin (oq4): porthog on accepted");
+    {
+        let node = crate::mcslock::LockNode::new();
+        let t = crate::devip::conv::TABLES.lock(&node);
+        assert!(t.table(Proto::Tcp)[id].nochecksum, "pin (oq4): checksum 0 recorded on the conv");
+    }
+    let lines = crate::devip::netlog::drain_lines();
+    assert_eq!(lines.len(), 2, "pin (oq4): both verbs noted under the tcp flag");
+    assert!(lines[0].windows(8).any(|w| w == b"checksum"), "pin (oq4): the checksum note");
+    assert!(lines[1].windows(17).any(|w| w == b"tcpporthogdefense"), "pin (oq4): the porthog note");
+
+    // Flag cleared → the verbs stay accepted-and-recorded but no note emits.
+    crate::devip::netlog::ctl(b"clear tcp").expect("pin (oq4): clear tcp");
+    proto::ctl_write(Proto::Tcp, id, b"checksum 1").expect("pin (oq4): checksum 1 accepted");
+    {
+        let node = crate::mcslock::LockNode::new();
+        let t = crate::devip::conv::TABLES.lock(&node);
+        assert!(!t.table(Proto::Tcp)[id].nochecksum, "pin (oq4): checksum 1 recorded");
+    }
+    assert!(crate::devip::netlog::drain_lines().is_empty(), "pin (oq4): gated when clear");
+
+    // keepalive requires the Established state — the donor's typo verbatim.
+    assert_eq!(
+        proto::ctl_write(Proto::Tcp, id, b"keepalive").unwrap_err(),
+        "connection must be in Establised state",
+        "pin (oq4): the keepalive state gate"
+    );
+    // The ctl fallthrough strings (contract §5.1/§11).
+    assert_eq!(
+        proto::ctl_write(Proto::Tcp, id, b"tcpporthogdefense maybe").unwrap_err(),
+        "unknown value for tcpporthogdefense"
+    );
+    assert_eq!(proto::ctl_write(Proto::Tcp, id, b"frobnicate").unwrap_err(), "unknown control request");
 }
