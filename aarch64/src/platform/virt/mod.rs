@@ -6,6 +6,7 @@ pub mod devcons;
 pub mod gic;
 pub mod pci;
 pub mod pl011;
+pub mod rtc;
 pub mod timer;
 
 use port::fdt::DeviceTree;

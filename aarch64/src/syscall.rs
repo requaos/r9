@@ -55,6 +55,7 @@ const FD2PATH: u64 = 23;
 const BRK_: u64 = 24;
 const NOTIFY: u64 = 28;
 const NOTED: u64 = 29;
+const RENDEZVOUS: u64 = 34;
 const UNMOUNT: u64 = 35;
 const SEEK: u64 = 39;
 const FVERSION: u64 = 40;
@@ -65,6 +66,7 @@ const MOUNT: u64 = 46;
 const AWAIT: u64 = 47;
 const PREAD: u64 = 50;
 const PWRITE: u64 = 51;
+const NSEC: u64 = 53;
 
 // rfork flags (Harvey sys/include/libc.h — frozen values).
 // pub(crate): proc.rs's rfork_clone reads RFNAMEG/RFCNAMEG
@@ -83,7 +85,9 @@ pub(crate) const RFNOWAIT: u64 = 1 << 6;
 pub(crate) const RFCNAMEG: u64 = 1 << 10;
 pub(crate) const RFCENVG: u64 = 1 << 11;
 pub(crate) const RFCFDG: u64 = 1 << 12;
-const RFREND: u64 = 1 << 13;
+/// pub(crate): proc.rs's rfork_clone reads it (the rendezvous-group
+/// arm — the rgrp share/split semantics).
+pub(crate) const RFREND: u64 = 1 << 13;
 
 /// Handler shape: the live trap
 /// frame (arg source + result sink) and the calling proc.
@@ -101,10 +105,16 @@ type Handler = fn(&mut TrapFrame, &mut Proc) -> u64;
 /// tick's tick_timeouts).  The trace carries no brk_/segbrk(12) on the
 /// hello path; segbrk stays None.  FAUTH(10) stays None (the designed
 /// no-auth fall-through — nsinit/newns mount unauthenticated on its -1);
-/// REMOVE(25), WSTAT(44), FWSTAT(45) and OSEEK(16) were never measured
-/// (execinit's chmod is unchecked on the donor too — the chain does not
-/// need it), so they stay loud-None.  The kernel's syscall attack
-/// surface is exactly the measured set.
+/// REMOVE(25), WSTAT(44), FWSTAT(45) and OSEEK(16) stay loud-None: the
+/// 06-07 tier-1 trace DID measure remove/wstat/fwstat — but only inside
+/// the sweep's donor-venue guard (hrm/hmk/hyacc/hed/hchmod/hmv/htouch),
+/// the write-flow set r9 cannot serve this era (no writable fs), so the
+/// measured evidence RATIFIED the existing loud-None rather than growing
+/// it.  The 06-07 tier-1 measure-first trace (Harvey phase 06 evidence,
+/// 8581 entry fragments over 201 pids) grew exactly two names, both with
+/// r9-runnable callers: NSEC(53) (Harvey libc time() = nsec()/1e9 —
+/// hdate/hipconfig) and RENDEZVOUS(34) (hfactotum's libthread start).
+/// The kernel's syscall attack surface is exactly the measured set.
 static DISPATCH: [Option<Handler>; 55] = {
     let mut t: [Option<Handler>; 55] = [None; 55];
     t[BIND as usize] = Some(sys_bind);
@@ -122,6 +132,7 @@ static DISPATCH: [Option<Handler>; 55] = {
     t[FD2PATH as usize] = Some(sys_fd2path);
     t[NOTIFY as usize] = Some(sys_notify);
     t[NOTED as usize] = Some(sys_noted);
+    t[RENDEZVOUS as usize] = Some(sys_rendezvous);
     t[BRK_ as usize] = Some(sys_brk_);
     t[UNMOUNT as usize] = Some(sys_unmount);
     t[SEEK as usize] = Some(sys_seek);
@@ -133,6 +144,7 @@ static DISPATCH: [Option<Handler>; 55] = {
     t[AWAIT as usize] = Some(sys_await);
     t[PREAD as usize] = Some(sys_pread);
     t[PWRITE as usize] = Some(sys_pwrite);
+    t[NSEC as usize] = Some(sys_nsec);
     t
 };
 
@@ -1335,8 +1347,10 @@ fn sys_fd2path(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 /// RFPROC.  Supported this era: the address space is ALWAYS eagerly copied
 /// page-for-page (no COW, no shared writable pages; the donor's
 /// RFMEM share-semantics is not honored, which the smoke does not depend
-/// on); RFNOWAIT is honored (EXITS posts no wait record); RFREND is a
-/// no-op (no rendezvous this era); RFNOTEG has REAL note-group semantics
+/// on); RFNOWAIT is honored (EXITS posts no wait record); RFREND splits
+/// the rendezvous group (the RENDEZVOUS(34) handler's group semantics —
+/// measured into the dispatch set by the 06-07 tier-1 trace); RFNOTEG
+/// has REAL note-group semantics
 /// (Proc.noteid — a fresh group per construction,
 /// inherited without RFNOTEG, fresh with it; the console DEL posts
 /// "interrupt" to the readers' groups).
@@ -1408,6 +1422,11 @@ fn sys_rfork(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         // shell's group and never init.
         if flag & RFNOTEG != 0 {
             proc::rfork_noteg_split(proc);
+        }
+        // Non-RFPROC rfork(RFREND) re-groups the CALLER into a fresh
+        // rendezvous group (9k sysproc.c:69-72).
+        if flag & RFREND != 0 {
+            proc::rfork_rendez_split(proc);
         }
         return 0;
     }
@@ -1680,6 +1699,72 @@ fn sys_await(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     }
 }
 
+/// NSEC(53): no arguments (the libc stub passes none — there is no user
+/// memory to validate).  Return the epoch-nanosecond clock.  9k's
+/// sysnsec is todget(nil): time-of-day ns, EPOCH-based — libc's time()
+/// is nsec()/1e9, so the value must name the real epoch (the tier-1
+/// sweep's date check keys on a 20xx year).  The composition lives in
+/// platform::rtc (the PL031 epoch-seconds read anchored against the
+/// generic timer's monotonic count); a profile with no clock errors
+/// loudly.  Measured into the dispatch set by the 06-07 tier-1 trace
+/// (hdate, hipconfig — hmk/htouch/hcpp ride the donor-only guard).
+fn sys_nsec(_frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
+    #[cfg(dev_exec)]
+    {
+        match crate::platform::rtc::nsec_epoch() {
+            Some(ns) => ns,
+            None => err(proc, "nsec: no RTC"),
+        }
+    }
+    #[cfg(not(dev_exec))]
+    {
+        err(proc, "nsec: no clock in this profile")
+    }
+}
+
+/// RENDEZVOUS(34): tag, value — the user rendezvous (9k sysrendezvous,
+/// sysproc.c:853).  The proc's rendezvous group (rfork's RFREND arm;
+/// libthread's procs share one) is searched for a sleeper on `tag`.
+/// Found: the sleeper is handed OUR value and readied, and we return the
+/// SLEEPER's stored value — the symmetric first-sleeps exchange.
+/// Absent: we record (tag, value, pid) and block mid-syscall (the sched()
+/// shape — the group lock drops BEFORE the block, and register-then-
+/// block is atomic against wakers because syscalls serialize).  On wake
+/// we return the value the waker left in proc.rendval.  Both args are
+/// full-width pointers (no masking).  Measured ×1 by hfactotum in the
+/// 06-07 tier-1 trace (libthread's start sync).
+fn sys_rendezvous(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
+    let Some(args) = sargs(frame, proc, 2) else {
+        return err(proc, "rendezvous: bad argument block");
+    };
+    let (tag, value) = (args[0], args[1]);
+    let rgrp = proc.rgrp.clone();
+    let sleeper = {
+        let node = LockNode::new();
+        let mut g = rgrp.lock(&node);
+        match g.take_sleeper(tag) {
+            Some(s) => Some(s),
+            None => {
+                g.park(tag, value, proc.pid);
+                None
+            }
+        }
+    };
+    match sleeper {
+        Some(s) => {
+            // The peer was parked mid-syscall: hand it our value and
+            // ready it; our return is its stored offer.
+            proc::rendez_wake(s.pid, value);
+            s.value
+        }
+        None => {
+            // The first caller sleeps until a peer takes the entry.
+            proc::sched();
+            proc.rendval
+        }
+    }
+}
+
 /// EXITS(8): copy the optional message (nil = empty), free the proc's user
 /// pages + root-table page + kstack via the mapping_log / recorded PAs,
 /// mark Moribund, print the exit line, post the wait record to the parent
@@ -1745,6 +1830,9 @@ pub(crate) fn exit_tail(proc: &mut Proc, msg: &[u8]) -> ! {
         }
     }
     // count > 1: sharers keep the group; the detached Arc just drops.
+    // A parked rendezvous entry never outlives its proc (9k's pexit
+    // removes the proc from the rendezvous hash the same way).
+    proc::rendez_remove(proc);
     proc.free_user_mappings();
     proc.state = ProcState::Moribund;
     let pid = proc.pid;

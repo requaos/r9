@@ -41,6 +41,7 @@ use port::mem::{PAGE_SIZE_4K, PhysAddr, PhysRange, VirtRange};
 use port::paqfs::PaqDir;
 use port::pgrp::Pgrp;
 use port::println;
+use port::rendez::RendezGroup;
 
 use crate::kmem::{from_ptr_to_physaddr_offset_from_kzero, physaddr_as_ptr_mut_offset_from_kzero};
 use crate::pagealloc;
@@ -385,6 +386,20 @@ pub struct Proc {
     /// it but the /proc/N/status report).  rfork INHERITS it (donor
     /// forkchild); exec preserves it (Plan 9 convention).  0 until set.
     pub pri: u32,
+    /// The rendezvous group handle (port::rendez; 9k's Rgrp).  rfork
+    /// flag semantics per fork(2)/9k sysproc.c: RFPROC WITH RFREND gives
+    /// the child a FRESH empty group; WITHOUT it the child SHARES this
+    /// handle (Arc clone); the non-RFPROC RFREND arm re-groups the
+    /// CALLER (rfork_rendez_split).  rendezvous(34) parks/searches the
+    /// group's sleeper table — measured into the dispatch set by the
+    /// 06-07 tier-1 trace (hfactotum's libthread start).  The Lock is a
+    /// LEAF (syscall context only, briefly; never IRQ context, dropped
+    /// before the block's sched()).
+    pub rgrp: Arc<Lock<RendezGroup>>,
+    /// The value a rendezvous peer left for us (9k's up->rendval): the
+    /// second caller by tag overwrites it before readying us; our own
+    /// stored offer rides the group's sleeper entry.
+    pub rendval: u64,
 }
 
 impl Proc {
@@ -450,6 +465,8 @@ impl Proc {
             alarm_at: 0,
             argv: Vec::new(),
             pri: 0,
+            rgrp: Arc::new(Lock::new("rendez", RendezGroup::new())),
+            rendval: 0,
         };
         proc.set_name(name);
         proc
@@ -1566,6 +1583,45 @@ pub fn rfork_noteg_split(proc: &mut Proc) {
     proc.noteid = NEXT_NOTEID.fetch_add(1, Ordering::Relaxed);
 }
 
+/// Non-RFPROC rfork(RFREND)'s rendezvous-group half (9k sysproc.c:69-72
+/// — `if(flag & RFREND) { org = up->rgrp; up->rgrp = newrgrp(); ... }`):
+/// the CALLER joins a fresh empty group.
+pub fn rfork_rendez_split(proc: &mut Proc) {
+    proc.rgrp = Arc::new(Lock::new("rendez", RendezGroup::new()));
+}
+
+/// The rendezvous wake half (9k sysrendezvous's found arm): the sleeper
+/// named by `pid` is handed the waker's value (its sched() returns it via
+/// proc.rendval) and readied.  Caller MUST already have taken the sleeper
+/// entry off its group.  The PROC_TABLE idiom (post_wait_record's shape):
+/// table-resident procs, briefly locked, never from IRQ context (the
+/// syscall handler is the only caller).
+///
+/// No 9k `while(p->mach != 0)` spin: the sleeper called proc::sched()
+/// BEFORE the waker's syscall could run (syscalls are serialized —
+/// single CPU, IRQ-masked, preemption only at EL0), so by the time any
+/// waker executes the sleeper is fully switched out.
+pub fn rendez_wake(pid: u64, value: u64) {
+    let node = LockNode::new();
+    let mut table = PROC_TABLE.lock(&node);
+    let Some(p) = table.procs.iter_mut().flatten().find(|p| p.pid == pid) else {
+        return; // died between the park and the wake (the exit sweep removes it)
+    };
+    p.rendval = value;
+    if p.state == ProcState::Blocked {
+        p.state = ProcState::Ready;
+    }
+}
+
+/// Exit-time rendezvous sweep (9k's pexit removes the proc from the
+/// rendezvous hash the same way): a killed/exited sleeper must never
+/// linger as a wake target in its group.
+pub fn rendez_remove(proc: &mut Proc) {
+    let rgrp = proc.rgrp.clone();
+    let node = LockNode::new();
+    rgrp.lock(&node).remove_pid(proc.pid);
+}
+
 /// The tick's timeout sweep (the donor's tsleep wakeup + alarm.c's
 /// alarmkproc expiry arm, plus the note-interruptible sleep):
 /// per proc, the ALARM expiry arm runs FIRST (posting the "alarm" note
@@ -1830,6 +1886,16 @@ fn rfork_copy(parent: &Proc, child: &mut Proc, frame: &TrapFrame, flag: u64) -> 
     if flag & crate::syscall::RFNOTEG == 0 {
         child.noteid = parent.noteid;
     }
+    // The rendezvous group — 9k sysproc.c's RFPROC arm: WITH RFREND the
+    // child gets a FRESH empty group; WITHOUT it the child SHARES the
+    // parent's handle (Arc clone).  (libc fork() = rfork(RFPROC|RFFDG|
+    // RFREND) therefore gives its child a FRESH group; libthread's
+    // procs share one — the rendezvous exchange's whole point.)
+    child.rgrp = if flag & crate::syscall::RFREND != 0 {
+        Arc::new(Lock::new("rendez", RendezGroup::new()))
+    } else {
+        parent.rgrp.clone()
+    };
     // The recorded ctl priority is inherited (donor
     // forkchild); the argv record is NOT — a fork child's args are empty
     // until its own exec (Proc::new's construction), so /proc/N/args for
