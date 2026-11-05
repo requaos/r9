@@ -4,6 +4,7 @@
 
 pub mod devcons;
 pub mod gic;
+pub mod pci;
 pub mod pl011;
 pub mod timer;
 
@@ -13,7 +14,8 @@ use port::println;
 
 /// Print DTB-derived machine information: the "what machine am I
 /// on" slot virt occupies instead of raspi's mailbox-driven print_board_info.
-/// Discovery flows through port::fdt -- no hardcoded virt address tables.
+/// Discovery flows through port::fdt -- no hardcoded virt address tables
+/// (PCI included: window, device, and interrupt route all decode from data).
 pub fn print_machine_info(dt: &DeviceTree) {
     println!("Machine information:");
     if let Some(mem) = dt
@@ -32,4 +34,8 @@ pub fn print_machine_info(dt: &DeviceTree) {
             println!("  found: {compat}");
         }
     }
+    // PCI discovery rides every aarch64 virt boot (NETDRV-01's D-10
+    // staging): ECAM window, virtio-net device, and routed SPI — all
+    // decoded from the DTB, all loud-by-absence.
+    pci::discover_and_print(dt);
 }
