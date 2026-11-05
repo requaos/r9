@@ -12,9 +12,11 @@ extern crate alloc;
 // `globalalloc` (the GlobalAlloc shim: the trait's unsafe fn surface, the
 // arena-edge Block constructor, realloc, the QuickFit Sync proof) and
 // `mcslock` (the lock/cell primitives: the MCS queue's raw node pointers +
-// BusyCell + the MntCore Send proof).  The forbid is a compile-time
-// regression lock, not a promise: no new unsafe can enter any other port
-// module without deleting its forbid attribute first.
+// BusyCell + the MntCore Send proof) — plus the ONE named phase-08 bridge
+// module `devip_waker` (the smoltcp RawWaker vtable + Waker::from_raw
+// construction — irreducibly unsafe; see its entry below).  The forbid is
+// a compile-time regression lock, not a promise: no new unsafe can enter
+// any other port module without deleting its forbid attribute first.
 #[forbid(unsafe_code)]
 pub mod allocator;
 #[forbid(unsafe_code)]
@@ -29,6 +31,18 @@ pub mod devenv;
 pub mod devdup;
 #[forbid(unsafe_code)]
 pub mod devether;
+#[forbid(unsafe_code)]
+pub mod devip;
+// devip_waker (the file is port/src/devip/waker.rs) — the phase-08 ONE
+// named unsafe site in the devip work: the smoltcp socket-waker → r9
+// wake bridge (D-05).  It is mounted at the crate root via #[path]
+// precisely BECAUSE the forbid on `devip` above propagates into
+// submodules — as `devip::waker` the named exception would be
+// uncompilable.  Every other devip module carries the forbid.  (Beside
+// globalalloc/mcslock, the named floor modules — this one is a named
+// bridge, not floor; the UNSAFE-AUDIT.md entry carries the site counts.)
+#[path = "devip/waker.rs"]
+pub mod devip_waker;
 #[forbid(unsafe_code)]
 pub mod devmnt;
 #[forbid(unsafe_code)]
@@ -86,5 +100,11 @@ mod devether_tests;
 // simulation need alloc/std while port::virtio keeps its forbid.
 #[cfg(test)]
 mod rx_chain_tests;
+// The devip seam pins live at the crate root for the same reason: the
+// scripted-device drives and the stub wake log need alloc/std while
+// port::devip keeps its unsafe-free forbid attribute (and the waker
+// bridge keeps its lone documented exception).
+#[cfg(test)]
+mod devip_tests;
 
 pub type Result<T> = core::result::Result<T, &'static str>;

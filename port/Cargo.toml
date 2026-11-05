@@ -22,12 +22,21 @@ adler2 = { version = "2", default-features = false }
 # nightly-2026-01-30 for the host AND aarch64-unknown-none, #![no_std], with
 # exactly this feature set (phase 08 RESEARCH.md, Package Legitimacy Audit:
 # all OK).
+# "async" (added 08-02): un-gates ONLY the socket waker plumbing — in 0.14.0
+# every register_recv_waker/register_send_waker method and every internal
+# wake() call is #[cfg(feature = "async")] (verified against the crate
+# source: socket/{tcp,udp,icmp}.rs).  The D-05 waker bridge cannot exist
+# without it.  The feature pulls in ZERO dependencies (async = [] in
+# smoltcp's Cargo.toml) — no executor, no runtime, no threads; the wakers
+# bridge onto the devip block/wake hooks.  The phase research's "async
+# outdated" note is corrected in docs/devip-contract.md §12.2.
 smoltcp = { version = "0.14.0", default-features = false, features = [
     "medium-ethernet", "medium-ip",
     "proto-ipv4", "proto-ipv6",
     "proto-ipv4-fragmentation", "proto-ipv6-fragmentation",
     "socket-tcp", "socket-udp", "socket-icmp", "socket-tcp-reno",
     "alloc", "multicast", "auto-icmp-echo-reply",
+    "async",
 ] }
 
 # Opt into the workspace clippy lints (undocumented_unsafe_blocks
