@@ -474,12 +474,26 @@ fn read_str(c: &mut Chan, buf: &mut [u8], offset: u64, content: &[u8]) -> u64 {
 
 /// readnum's fixed-width number (9k devcons.c): the value right-
 /// justified in NUMSIZE-1 columns plus a trailing space (12 bytes
-/// total).  `connect -1` reads back through the donor's sign-extended
-/// %lud shape (the int is passed as a ulong).
+/// total).  The donor passes Netfile.type — a 32-bit int
+/// (netif.h:40) — through readnum's 32-bit `ulong` value parameter
+/// (devcons.c:712): truncating, never sign-extending, because Plan 9
+/// long/ulong is 32-bit even on amd64 (amd64/include/u.h — the 64-bit
+/// types are vlong/uvlong, hence VLNUMSIZE=22 for the 64-bit values
+/// NUMSIZE=12 cannot hold).  The `as u32` below reproduces that C
+/// conversion byte-for-byte: `connect -1` truncates to 4294967295
+/// (10 digits < NUMSIZE-1=11), so the pad arithmetic can never
+/// underflow — do NOT add a saturating clamp; a guard would mask a
+/// future width regression.
+/// Class sweep (the G-07-2 diagnosis's conclusion): this is the port's
+/// ONLY NUMSIZE-digits arithmetic site; the NCTLQID caller passes
+/// conversation ids 0..7 (cannot underflow; the donor's NETID macro
+/// truncates to ulong first, netif.h:26), and netif.rs contains zero
+/// NUMSIZE arithmetic.
 /// pub(crate): the crate-root devether_tests pin module calls it.
 pub(crate) fn readnum_content(val: i64) -> Vec<u8> {
-    // Decimal digits of the u64 bit pattern (the donor's ulong view).
-    let v = val as u64;
+    // Decimal digits of the donor's 32-bit ulong view (the int→ulong
+    // truncation — not a clamp, not an underflow guard).
+    let v = val as u32 as u64;
     let mut digits = Vec::new();
     if v == 0 {
         digits.push(b'0');
