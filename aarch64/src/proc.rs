@@ -62,10 +62,15 @@ pub const ERRMAX: usize = 128;
 /// a boot-session fork BUDGET, not a concurrency bound: the 07-07 net
 /// sweep alone forks ~20 times (a dd + an echo per loop iteration, the
 /// bind/clone/cat/test machinery, the blaster), and the 16-slot table
-/// wedged mid-sweep ("proc: table full" at arp-send 3).  64 covers the
-/// gate with 3× headroom; the exit-sweep deferral stays the tracked
-/// follow-up (a long-lived shell still eventually fills ANY fixed table).
-pub const MAX_PROCS: usize = 64;
+/// wedged mid-sweep ("proc: table full" at arp-send 3).  The 06-07
+/// tier-1 sweep MEASURES its fork count on the donor: 201 born-traced
+/// pids for the full sweep (each check's command forks + backquote
+/// pipelines; hfactotum's "rfork: proc: table full" was the 64-slot
+/// table's wall at the sweep's factotum check).  512 covers the
+/// measured 201 + the boot chain with >2× headroom; the exit-sweep
+/// deferral stays the tracked follow-up (a long-lived shell still
+/// eventually fills ANY fixed table).
+pub const MAX_PROCS: usize = 512;
 /// Open fd slots per proc (init's closefds closes
 /// 3..29 — the table must hold fds through 29 without making that fatal;
 /// pipe+dup flows hold several at once).
