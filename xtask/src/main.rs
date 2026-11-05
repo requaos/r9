@@ -15,9 +15,8 @@ use std::{
 use target_lexicon::Triple;
 
 mod config;
-// D-06 gate machinery: consumed by the Net profile's pcap assertion in
-// 07-05 — until then the module's API is exercised only by its unit tests.
-#[allow(dead_code)]
+// D-06 gate machinery: consumed by the Net profile's finish() pcap
+// assertion (07-05) and exercised by its in-file unit suite.
 mod pcap;
 mod uregcheck;
 
@@ -860,6 +859,21 @@ const PCI_NET_ROUTE_MARKER: &str = "pci: inta -> spi 4 intid 36";
 const PCI_ECAM_BASE_STANDARD: &str = "pci: ecam base 0x4010000000";
 const PCI_ECAM_BASE_LOWECAM: &str = "pci: ecam base 0x3f000000";
 
+/// Net profile (virtnet, 07-05): the config boots the REAL Harvey boot
+/// chain (dev = ["exec", "bootchain", "ether"], the Harvey-baked
+/// bootfs.paq via the 07-01 harvey: initrd channel) to the rc `% `
+/// prompt; the harness then types the one-line sweep invocation and the
+/// sweep's markers come back over the socket serial.  The boot-chain
+/// staging matches the packaged smoke's (build/aarch64/smoke-r9.expect):
+/// banner -> paqfs -> stacksmoke -> the literal "% ".  The sweep's
+/// markers are printed by /lib/net-sweep.rc (07-04): a FAIL line names
+/// its stage and aborts the run immediately (never a 300s hang);
+/// NET-DONE gates completion.
+const BOOT_PAQFS_MARKER: &str = "paqfs...";
+const NET_PROMPT_MARKER: &str = "% ";
+const NET_SWEEP_DONE_MARKER: &str = "netsweep: NET-DONE";
+const NET_SWEEP_FAIL_MARKER: &str = "netsweep: FAIL";
+
 /// Always-on negative scan: any panic/Unhandled-interrupt line in
 /// the capture fails the run — every profile EXCEPT the deliberate-panic
 /// one (whose expected flow prints exactly that dump).  Case-insensitive,
@@ -867,19 +881,68 @@ const PCI_ECAM_BASE_LOWECAM: &str = "pci: ecam base 0x3f000000";
 /// notes-era failures join: `note-timeout` (a note was never
 /// delivered) and `unimplemented` (a syscall outside the implemented set
 /// was called — a traced-set miss surfaces here; trace
-/// and implement the gap, never silence it).
-fn negative_scan_hit(capture: &[u8]) -> Option<&'static str> {
+/// and implement the gap, never silence it).  The stray-IRQ line's
+/// lowercase shape joins as a hit pattern (Pitfall N10): once 07-06 arms
+/// the NIC's IRQ source, any `unhandled IRQ <n>` line is a bind-ordering
+/// bug, not a cosmetic — none of the pre-net profiles emit it today.
+///
+/// Profile-aware: the Net profile rides the REAL Harvey boot chain, whose
+/// boot(8) auth handshake calls fauth — syscall 10 is loud-None by design
+/// (D-02), printing `syscall 10 unimplemented` on every real-chain boot.
+/// For the net profile exactly that ONE line is exempt; any OTHER
+/// unimplemented-syscall line (a traced-set miss) still fails the run,
+/// and every other pattern applies unchanged.
+fn negative_scan_hit_for(capture: &[u8], net_profile: bool) -> Option<&'static str> {
     let lower: Vec<u8> = capture.iter().map(|b| b.to_ascii_lowercase()).collect();
     if contains_marker(&lower, b"panic") {
         Some("panic")
     } else if contains_marker(&lower, b"unhandled interrupt") {
         Some("Unhandled interrupt")
+    } else if contains_marker(&lower, b"unhandled irq") {
+        Some("unhandled IRQ")
     } else if contains_marker(&lower, b"note-timeout") {
         Some("note-timeout")
-    } else if contains_marker(&lower, b"unimplemented") {
+    } else if unimplemented_hit(&lower, net_profile) {
         Some("unimplemented syscall")
     } else {
         None
+    }
+}
+
+/// The `unimplemented` arm, line-wise so the Net profile can exempt the
+/// D-02 designed fauth line while still failing any other
+/// unimplemented-syscall hit.
+fn unimplemented_hit(lower: &[u8], net_profile: bool) -> bool {
+    if !contains_marker(lower, b"unimplemented") {
+        return false;
+    }
+    if !net_profile {
+        return true;
+    }
+    lower.split(|b| *b == b'\n').any(|line| {
+        contains_marker(line, b"unimplemented") && !contains_marker(line, b"syscall 10 unimplemented")
+    })
+}
+
+/// The first capture line containing `needle`, CRLF-trimmed — the sweep's
+/// fast-fail names the sweep's own stage (`netsweep: FAIL bind`, etc.),
+/// never a bare marker name.
+fn line_containing(capture: &[u8], needle: &[u8]) -> Option<String> {
+    capture
+        .split(|b| *b == b'\n')
+        .find(|line| line.windows(needle.len()).any(|w| w == needle))
+        .map(|line| String::from_utf8_lossy(line).trim_end_matches('\r').to_string())
+}
+
+/// The net sweep's mode: R9_NET_SWEEP_MODE selects `arp` (the ping-pong
+/// gate, default) or `blast` (the TX-bulk gate).  A typo'd value is a
+/// harness bug, not a gate failure — validated before qemu spawns, never
+/// after a wasted boot.
+fn net_sweep_mode() -> Result<String> {
+    let mode = env::var("R9_NET_SWEEP_MODE").unwrap_or_else(|_| "arp".to_string());
+    match mode.as_str() {
+        "arp" | "blast" => Ok(mode),
+        _ => Err(format!("R9_NET_SWEEP_MODE must be \"arp\" or \"blast\", got {mode:?}").into()),
     }
 }
 
@@ -938,6 +1001,13 @@ enum BootStage {
     /// >= 1 sched-switch preemption line before awaiting all-exited.
     MultiMarkers,
     AllExited,
+    /// The net profile: after the banner, wait for the real Harvey boot
+    /// chain's markers (paqfs + stacksmoke), then the rc prompt.
+    NetBoot,
+    NetPrompt,
+    /// The sweep line has been typed; await the sweep's markers (fast-fail
+    /// on a `netsweep: FAIL` line, complete on `netsweep: NET-DONE`).
+    NetSweep,
 }
 
 impl fmt::Display for BootStage {
@@ -974,6 +1044,15 @@ impl fmt::Display for BootStage {
             BootStage::AllExited => {
                 write!(f, "all-exited marker {BOOT_ALL_EXITED_MARKER:?}")
             }
+            BootStage::NetBoot => write!(
+                f,
+                "boot-chain markers {{{BOOT_PAQFS_MARKER:?}, {BOOT_STACKSMOKE_MARKER:?}}}"
+            ),
+            BootStage::NetPrompt => write!(f, "rc prompt {NET_PROMPT_MARKER:?}"),
+            BootStage::NetSweep => write!(
+                f,
+                "sweep markers (fast-fail {NET_SWEEP_FAIL_MARKER:?}, completion {NET_SWEEP_DONE_MARKER:?})"
+            ),
         }
     }
 }
@@ -986,6 +1065,9 @@ enum BootProfile {
     Exec,
     Multi,
     Notes,
+    /// The virtnet net gate: the real Harvey boot chain to the rc prompt,
+    /// the typed sweep invocation, and the finish()-time pcap assertion.
+    Net,
 }
 
 /// Teardown: SIGKILL the spawned qemu's process GROUP (qemu spawned
@@ -1052,6 +1134,13 @@ impl BootTestStep {
         // runtime mystery).  Bare `cargo xtask build` instead tolerates a
         // missing checkout — the const asserts still guard there.
         uregcheck::check_for_boot_test()?;
+
+        // The virtnet profile's sweep mode is validated BEFORE qemu
+        // spawns — a typo'd R9_NET_SWEEP_MODE is a harness bug, not a gate
+        // failure, and a wasted TCG boot proves nothing.
+        if self.config_name == "virtnet" {
+            net_sweep_mode()?;
+        }
 
         let target = self.arch.target();
         let dir = self.profile.dir();
@@ -1221,17 +1310,28 @@ impl BootTestStep {
         // smokenote pair.
         let multi_profile = self.config_name == "virtmulti";
         let notes_profile = self.config_name == "virtnotes";
+        // The NET profile ("virtnet", the NETDRV-03/04 gate) is also
+        // selected by config name — and its dev list CONTAINS "exec", so
+        // the Banner-stage dispatch must check it FIRST (before the
+        // exec-profile arm) or the exec flow would mis-select.
+        let net_profile = self.config_name == "virtnet";
 
         while Instant::now() < deadline {
             // Always-on negative scan: a panic/Unhandled-interrupt line
-            // fails any profile except the deliberate-panic one.
-            if !panic_profile && let Some(hit) = negative_scan_hit(&capture) {
+            // fails any profile except the deliberate-panic one.  The net
+            // profile exempts exactly the D-02 designed fauth line (the
+            // real Harvey chain prints `syscall 10 unimplemented` twice a
+            // boot); every other pattern — and any other unimplemented
+            // syscall — still fails the run.
+            if !panic_profile && let Some(hit) = negative_scan_hit_for(&capture, net_profile) {
                 return Err(self.fail(stage, &capture, &format!("negative scan hit {hit:?}")));
             }
             match stage {
                 BootStage::Banner => {
                     if contains_marker(&capture, BOOT_BANNER_MARKER.as_bytes()) {
-                        stage = if panic_profile {
+                        stage = if net_profile {
+                            BootStage::NetBoot
+                        } else if panic_profile {
                             BootStage::PanicStart
                         } else if exec_profile || multi_profile || notes_profile {
                             BootStage::ExecEntry
@@ -1350,6 +1450,41 @@ impl BootTestStep {
                         return self.finish(log_abs, &capture, profile);
                     }
                 }
+                BootStage::NetBoot => {
+                    // The real Harvey boot chain's markers, presence-only
+                    // (the packaged smoke's staging: paqfs, then
+                    // stacksmoke's demand-paged stack proof).
+                    if contains_marker(&capture, BOOT_PAQFS_MARKER.as_bytes())
+                        && contains_marker(&capture, BOOT_STACKSMOKE_MARKER.as_bytes())
+                    {
+                        stage = BootStage::NetPrompt;
+                    }
+                }
+                BootStage::NetPrompt => {
+                    if contains_marker(&capture, NET_PROMPT_MARKER.as_bytes()) {
+                        // The one-line sweep invocation, typed at the real
+                        // chain's % prompt (the tier1-r9.expect precedent:
+                        // r9's devcons serves reads).  Cooked-mode echo puts
+                        // the typed line on the wire — harmless: assertions
+                        // key on netsweep-prefixed lines, which the typed
+                        // line can never contain, so echo can't false-match.
+                        let mode = net_sweep_mode()?;
+                        stream.write_all(format!("rc /lib/net-sweep.rc {mode}\r").as_bytes())?;
+                        stage = BootStage::NetSweep;
+                    }
+                }
+                BootStage::NetSweep => {
+                    // Fast-fail: the sweep's FAIL line aborts the run
+                    // immediately, naming the sweep's own stage — never a
+                    // 300s deadline hang.  NET-DONE gates completion.
+                    if let Some(line) = line_containing(&capture, NET_SWEEP_FAIL_MARKER.as_bytes())
+                    {
+                        return Err(self.fail(stage, &capture, &format!("sweep failed: {line}")));
+                    }
+                    if contains_marker(&capture, NET_SWEEP_DONE_MARKER.as_bytes()) {
+                        return self.finish(log_abs, &capture, BootProfile::Net);
+                    }
+                }
             }
 
             let mut buf = [0u8; 4096];
@@ -1380,7 +1515,9 @@ impl BootTestStep {
         // Final negative-scan sweep over the whole capture (the exec gate
         // demands a clean boot end to end; the deliberate-panic profile is
         // the sole exception).
-        if profile != BootProfile::Panic && let Some(hit) = negative_scan_hit(capture) {
+        if profile != BootProfile::Panic
+            && let Some(hit) = negative_scan_hit_for(capture, profile == BootProfile::Net)
+        {
             return Err(self.fail_pretty(capture, &format!("negative scan hit {hit:?}")));
         }
         // The PCI discovery contract (NETDRV-01): every aarch64 virt boot
@@ -1426,6 +1563,37 @@ impl BootTestStep {
             BootProfile::Notes => {
                 println!(
                     "boot-test: PASS -- banner, exec entry, init print, all smoke markers (hello + smokefork fd/child/await + smokenote got-note/resumed + init done), >= 1 sched-switch preemption line, and the all-exited marker observed (SC#4: rfork + notes + fd ops from EL0, panic-free)"
+                );
+            }
+            BootProfile::Net => {
+                // The D-06 assertion half: parse this run's pcap (the
+                // filter-dump capture the 07-01 netdev stanza wrote) and
+                // run the sweep mode's assertion over the frames + the
+                // serial capture.  Until 07-07 lands devether, finish() is
+                // never reached on this profile — the sweep's fast-fail
+                // fires first (no #l device, `netsweep: FAIL bind`) — so
+                // these call sites are exercised by pcap.rs's
+                // synthetic-fixture unit suite, and the live run is the
+                // red-path proof of boot -> typed line -> marker -> fail.
+                let pcap_rel = format!("target/boot-test-{}.pcap", self.config_name);
+                let pcap_abs = workspace().join(&pcap_rel);
+                let pcap_bytes = std::fs::read(&pcap_abs).map_err(|e| {
+                    format!("net gate: read {pcap_rel} (this run's pcap): {e}")
+                })?;
+                let frames = pcap::parse_pcap(&pcap_bytes)
+                    .map_err(|e| format!("net gate: parse {pcap_rel}: {e}"))?;
+                let total_frames = pcap::frame_count(&pcap_bytes)
+                    .map_err(|e| format!("net gate: count {pcap_rel}: {e}"))?;
+                let mode = net_sweep_mode()?;
+                let n = match mode.as_str() {
+                    "arp" => pcap::assert_arp_pingpong(&frames, total_frames, capture)
+                        .map_err(|e| format!("net gate (arp): {e}"))?,
+                    "blast" => pcap::assert_blast(&frames, total_frames, capture)
+                        .map_err(|e| format!("net gate (blast): {e}"))?,
+                    _ => unreachable!("net_sweep_mode validates arp|blast pre-spawn"),
+                };
+                println!(
+                    "boot-test: PASS -- banner, real Harvey boot chain (paqfs + stacksmoke), rc prompt, typed sweep ({mode} mode, N={n}), netsweep markers and the pcap assertion observed (NETDRV-03)"
                 );
             }
         }

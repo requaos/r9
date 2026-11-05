@@ -9,6 +9,16 @@
 //!
 //! Zero new crate dependencies — std-only byte slices, the
 //! contains_marker/count_marker_lines discipline (main.rs).
+//!
+//! The net-gate assertion suite (07-05, D-06/D-08): `assert_arp_pingpong`
+//! (arp mode: N requests <-> N replies, stats/ifstats reconciliation) and
+//! `assert_blast` (TX-bulk: pcap count == `netblast: sent` == stats out,
+//! zero RX).  The serial-side extraction helpers — the guest-MAC bind
+//! line, the stats `in:`/`out:` counters, the per-queue ifstats
+//! `vq<q>: avail=<a> used=<u> lastused=<l> nintr=<x> nnote=<m>` lines —
+//! live in this module (named here per the plan's placement rule), so the
+//! whole assertion half is one self-contained unit over the pcap frames
+//! and the serial capture.
 
 /// One classified ARP frame (ethertype 0x0806) with the fields the net
 /// gates assert on.  Multi-byte wire fields are big-endian (network order)
@@ -60,6 +70,48 @@ pub fn request_count(frames: &[ArpFrame]) -> usize {
 /// ARP replies (oper 2) among parsed frames.
 pub fn reply_count(frames: &[ArpFrame]) -> usize {
     frames.iter().filter(|f| f.oper == 2).count()
+}
+
+/// The arp-mode (ping-pong) gate assertion, NETDRV-03: N guest ARP
+/// requests (oper=1, sha = the guest MAC parsed from the capture's
+/// `#l0: virtio:` bind line — never a hardcoded constant, spa 10.0.2.15,
+/// tpa 10.0.2.2, len 60) elicit exactly N slirp replies (oper=2,
+/// spa 10.0.2.2, tpa 10.0.2.15, tha = the guest MAC), with N derived from
+/// the data (requests == replies == stats in == stats out, N >= 1), the
+/// pcap's total frame count == 2N (idle slirp emits nothing else), and
+/// the ifstats per-queue reconciliation (nintr in [1, frames] on a queue
+/// that moved frames; used == lastused at print time).  Returns N.
+/// Every failure names the mismatched field with got/want values.
+pub fn assert_arp_pingpong(
+    frames: &[ArpFrame],
+    total_frames: usize,
+    capture: &[u8],
+) -> Result<usize, String> {
+    // Placeholder body so the Net profile's finish() call sites (07-05
+    // task 1) compile; the real assertion lands with this plan's task 2
+    // TDD cycle (its RED fixtures fail against this Err; GREEN replaces
+    // the body).  Never reached on the live red path — the sweep's
+    // fast-fail fires before finish().
+    let _ = (frames, total_frames, capture);
+    Err("assert_arp_pingpong: assertion suite lands in 07-05 task 2".to_string())
+}
+
+/// The blast-mode (TX-bulk) gate assertion, NETDRV-04's load leg: the
+/// pcap's frames == the parsed `netblast: sent <n>` count == stats out
+/// (fresh boot: stats in == 0), every frame an ARP request (oper=1,
+/// sha = the guest MAC, tpa 10.0.2.99, len 60) with zero reply frames,
+/// NET-DONE present, and the same ifstats reconciliation.  Returns the
+/// blast count.  A wedge manifests as a deadline miss, a count mismatch,
+/// or a negative-scan hit — never silence.
+pub fn assert_blast(
+    frames: &[ArpFrame],
+    total_frames: usize,
+    capture: &[u8],
+) -> Result<usize, String> {
+    // Placeholder body — same task-2 TDD contract as
+    // assert_arp_pingpong above.
+    let _ = (frames, total_frames, capture);
+    Err("assert_blast: assertion suite lands in 07-05 task 2".to_string())
 }
 
 /// Validate the 24-byte global header, returning the capture's byte order

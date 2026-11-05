@@ -19,6 +19,9 @@ undocumented_unsafe_blocks = "deny"
 # predeclared for the exec config (dev = ["exec"] in config_virtexec.toml).
 # dev_bootchain is predeclared for the shell-chain config
 # (dev = ["exec", "bootchain"] in config_virtshell.toml).
+# dev_ether is predeclared for the net-gate config (dev = ["exec",
+# "bootchain", "ether"] in config_virtnet.toml) — the TOML emission is the
+# first appearance; the first code use lands with devether itself (07-06).
 # (Moved from aarch64/Cargo.toml — cargo forbids a crate-level
 # [lints.rust] override alongside `[lints] workspace = true`; only the gated
 # crates opt in.)
@@ -28,6 +31,7 @@ unexpected_cfgs = { level = "warn", check-cfg = [
     'cfg(dev_panic)',
     'cfg(dev_exec)',
     'cfg(dev_bootchain)',
+    'cfg(dev_ether)',
 ] }
 
 [profile.dev]
