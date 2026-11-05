@@ -341,6 +341,48 @@ impl<'a> DeviceTree<'a> {
         })
     }
 
+    /// Return the first node carrying `phandle = <phandle>`, or None when
+    /// no node does.  Interrupt-map parents are phandle references —
+    /// resolving them is how the tuple stride's parent half is known.
+    pub fn find_phandle(&self, _phandle: u32) -> Option<Node> {
+        // RED STUB — GREEN implements the nodes() scan.
+        None
+    }
+
+    /// The node's `#interrupt-cells` value, or None when the property is
+    /// absent.  Absence is never a silent default: a node participating
+    /// in interrupt routing without the property is malformed.
+    pub fn node_interrupt_cells(&self, _node: &Node) -> Option<usize> {
+        // RED STUB — GREEN reads the property.
+        None
+    }
+
+    /// Iterate a pci host node's `interrupt-map` property as decoded
+    /// tuples.  The stride derives from the pci node's cell counts plus
+    /// the interrupt parent's (resolved via the first tuple's phandle);
+    /// an absent map, absent cell counts, or an unresolvable parent
+    /// yields an empty iterator (the lookup layer's loud None).
+    pub fn interrupt_map_iter(&self, _node: Node) -> impl Iterator<Item = PciIrqMap> + '_ {
+        // RED STUB — GREEN wires interrupt_map_layout + decode.
+        decode_interrupt_map(&[], 0, 0, 0, 0)
+    }
+
+    /// Masked interrupt-map lookup for a PCI (bus, dev, fn, pin): apply
+    /// the node's `interrupt-map-mask` to key and entries alike, and
+    /// return the matched tuple.  An absent mask, map, or match is a
+    /// loud None — no default route is ever invented.
+    pub fn interrupt_map_lookup(
+        &self,
+        _node: Node,
+        _bus: u32,
+        _dev: u32,
+        _fun: u32,
+        _pin: u8,
+    ) -> Option<PciIrqMap> {
+        // RED STUB — GREEN applies the mask over interrupt_map_iter.
+        None
+    }
+
     fn property_value_contains(&self, prop: &Property, bytes_to_find: &str) -> bool {
         if let Some(init_value) = self.property_value_bytes(prop) {
             return init_value.split(|b| *b == b'\0').any(|bs| bs == bytes_to_find.as_bytes());
@@ -764,5 +806,163 @@ impl Range {
                 None
             }
         }
+    }
+}
+
+/// One decoded `interrupt-map` tuple (the PCI INTx swizzle table row).
+/// The committed virt DTB's stride is 10 cells: 3 child-address +
+/// 1 child-pin + 1 parent-phandle + 2 parent-address + 3 parent-specifier.
+#[derive(Debug, PartialEq, Copy, Clone)]
+pub struct PciIrqMap {
+    /// Child unit-address phys.hi cell: `bus<<16 | dev<<11 | fn<<8`.
+    pub child_hi: u32,
+    /// Child interrupt specifier: the INTx pin (1 = INTA .. 4 = INTD).
+    pub pin: u8,
+    /// Interrupt-parent phandle (the GIC node on virt).
+    pub parent_phandle: u32,
+    /// Parent interrupt specifier cells (GIC: type, number, flags).
+    pub parent_irq: [u32; 3],
+}
+
+/// Decode `bytes` as packed interrupt-map tuples of the given cell-count
+/// layout (stride = child-addr + child-intr + 1 phandle + parent-addr +
+/// parent-intr cells).  A zero stride or a tail shorter than one tuple
+/// terminates iteration — never a panic, never a partial tuple (T-07-03).
+fn decode_interrupt_map(
+    _bytes: &[u8],
+    _child_addr_cells: usize,
+    _child_intr_cells: usize,
+    _parent_addr_cells: usize,
+    _parent_intr_cells: usize,
+) -> impl Iterator<Item = PciIrqMap> + '_ {
+    // RED STUB — GREEN decodes the packed tuples.
+    core::iter::empty()
+}
+
+// ---------------------------------------------------------------------------
+// In-file decode tests over the committed qemu DTB blob
+// (../aarch64/lib/virt-gicv2.dtb — the same bytes the kernel parses at
+// boot).  Deliberate deviation from the crate-root test-placement
+// precedent (allocator_tests/virtio_tests live at lib.rs because their
+// arena/mock constructions need machinery that must stay out of the
+// forbidden modules): the fdt decode tests need no unsafe and only a
+// std::fs fixture read, and in-file placement keeps port/src/lib.rs
+// untouched so sibling plans extending the module registry never conflict
+// with this file-set.
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The committed qemu `-M virt,gic-version=2` blob — the kernel's
+    /// boot-time DTB, so a qemu drift reds this suite.
+    fn virt_gicv2_dtb() -> Vec<u8> {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../aarch64/lib/virt-gicv2.dtb");
+        std::fs::read(path).expect("committed virt-gicv2.dtb fixture")
+    }
+
+    fn pci_node(dt: &DeviceTree) -> Node {
+        dt.find_device_type("pci").next().expect("pci node in committed DTB")
+    }
+
+    #[test]
+    fn interrupt_map_decodes_all_16_entries() {
+        let blob = virt_gicv2_dtb();
+        let dt = DeviceTree::new(&blob).expect("header parses");
+        let pci = pci_node(&dt);
+        // The pci node publishes the cell counts the stride derives from.
+        assert_eq!(dt.node_interrupt_cells(&pci), Some(1));
+        let entries: Vec<PciIrqMap> = dt.interrupt_map_iter(pci).collect();
+        assert_eq!(entries.len(), 16, "dev 0-3 x INTA-D");
+        // Tuple 0: dev 0 INTA -> GIC SPI 3, level-high.
+        assert_eq!(entries[0].child_hi, 0x0000);
+        assert_eq!(entries[0].pin, 1);
+        assert_eq!(entries[0].parent_phandle, 0x8002);
+        assert_eq!(entries[0].parent_irq, [0, 3, 0x04]);
+        // Tuple 4: dev 1 INTA — the standard boot's NIC — -> SPI 4.
+        assert_eq!(entries[4].child_hi, 0x0800);
+        assert_eq!(entries[4].parent_irq, [0, 4, 0x04]);
+    }
+
+    #[test]
+    fn masked_lookup_routes_the_virtio_nic_inta_to_spi4() {
+        let blob = virt_gicv2_dtb();
+        let dt = DeviceTree::new(&blob).expect("header parses");
+        let pci = pci_node(&dt);
+        // The NIC sits at bus 0, dev 1, fn 0 on the standard qemu boot
+        // and raises INTA (pin 1) -> GIC SPI 4, level-high (0x04).
+        let route = dt.interrupt_map_lookup(pci, 0, 1, 0, 1);
+        assert!(route.is_some(), "dev 1 INTA route present");
+        let route = route.unwrap();
+        assert_eq!(route.parent_irq[0], 0, "SPI type cell");
+        assert_eq!(route.parent_irq[1], 4, "GIC SPI number (INTID = 32 + SPI)");
+        assert_eq!(route.parent_irq[2], 0x04, "level-high flags");
+    }
+
+    #[test]
+    fn swizzle_rotation_matches_the_decode_table() {
+        let blob = virt_gicv2_dtb();
+        let dt = DeviceTree::new(&blob).expect("header parses");
+        let pci = pci_node(&dt);
+        // The classic (dev + pin) rotation, dev 0-3 x INTA-D.
+        let expected = [[3, 4, 5, 6], [4, 5, 6, 3], [5, 6, 3, 4], [6, 3, 4, 5]];
+        for (dev, pins) in expected.iter().enumerate() {
+            for (pin, spi) in pins.iter().enumerate() {
+                let route = dt.interrupt_map_lookup(pci, 0, dev as u32, 0, pin as u8 + 1);
+                assert!(route.is_some(), "dev {dev} pin {} routed", pin + 1);
+                assert_eq!(route.unwrap().parent_irq[1], *spi, "dev {dev} pin {}", pin + 1);
+                assert_eq!(route.unwrap().parent_irq[2], 0x04);
+            }
+        }
+    }
+
+    #[test]
+    fn lookup_applies_the_mask_not_an_exact_compare() {
+        let blob = virt_gicv2_dtb();
+        let dt = DeviceTree::new(&blob).expect("header parses");
+        let pci = pci_node(&dt);
+        // interrupt-map-mask 0x1800/0/0/0x07: dev bits 0-1 and the pin
+        // participate; fn bits and dev bit >= 2 do not.
+        let base = dt.interrupt_map_lookup(pci, 0, 1, 0, 1).expect("dev 1 INTA");
+        let via_fn = dt.interrupt_map_lookup(pci, 0, 1, 7, 1).expect("fn bits masked out");
+        assert_eq!(via_fn.parent_irq, base.parent_irq);
+        let via_dev_hi = dt.interrupt_map_lookup(pci, 0, 5, 0, 1).expect("dev bit 2 masked out");
+        assert_eq!(via_dev_hi.parent_irq, base.parent_irq);
+        // Masked bits still discriminate: dev 2 INTA routes to SPI 5.
+        assert_eq!(dt.interrupt_map_lookup(pci, 0, 2, 0, 1).unwrap().parent_irq[1], 5);
+        // A pin outside INTA-D has no entry at all.
+        assert!(dt.interrupt_map_lookup(pci, 0, 1, 0, 5).is_none());
+    }
+
+    #[test]
+    fn loud_absence_returns_none_never_a_default() {
+        let blob = virt_gicv2_dtb();
+        let dt = DeviceTree::new(&blob).expect("header parses");
+        // Absent phandle -> None (no fallback node).
+        assert!(dt.find_phandle(0xffff_ffff).is_none());
+        // The memory node carries no #interrupt-cells -> None (no silent 1).
+        let mem = dt.find_device_type("memory").next().expect("memory node");
+        assert!(dt.node_interrupt_cells(&mem).is_none());
+        // ...and no interrupt-map property -> an empty iterator.
+        assert_eq!(dt.interrupt_map_iter(mem).count(), 0);
+    }
+
+    #[test]
+    fn decode_terminates_on_a_partial_tail() {
+        // 2.5 tuples at the committed DTB's stride (10 cells): the half
+        // tuple terminates iteration without panic (T-07-03).
+        let mut bytes = Vec::new();
+        let push = |bytes: &mut Vec<u8>, cells: [u32; 10]| {
+            for c in cells {
+                bytes.extend_from_slice(&c.to_be_bytes());
+            }
+        };
+        push(&mut bytes, [0x0000, 0, 0, 1, 0x8002, 0, 0, 0, 3, 4]);
+        push(&mut bytes, [0x0800, 0, 0, 1, 0x8002, 0, 0, 0, 4, 4]);
+        bytes.extend_from_slice(&[0u8; 12]); // a third tuple's prefix only
+        let decoded: Vec<PciIrqMap> = decode_interrupt_map(&bytes, 3, 1, 2, 3).collect();
+        assert_eq!(decoded.len(), 2);
+        assert_eq!(decoded[1].child_hi, 0x0800);
+        assert_eq!(decoded[1].parent_irq, [0, 4, 0x04]);
     }
 }
