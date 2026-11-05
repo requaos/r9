@@ -617,20 +617,20 @@ fn used_drain_rejects_lens_outside_the_queue_bounds() {
     // RX: len must cover the 12-byte header and fit the buffer capacity.
     let mut r = rig(8, Dir::Rx);
     let mut once = Some((0x3000_0000u64, RX_BUF_CAP));
-    let offered = r.ring.rx_replenish(|| once.take(), &r.notify, 0, 0).unwrap();
-    assert_eq!(offered, 1);
+    let offered = r.ring.rx_replenish(|_| once.take(), &r.notify, 0, 0).unwrap();
+    assert_eq!(offered.offered, 1);
     device_complete(&r, 0, 11); // shorter than the virtio-net header
     assert!(drain_one(&mut r).is_err(), "len < 12 is a device fault");
 
     let mut r = rig(8, Dir::Rx);
     let mut once = Some((0x3000_0000u64, RX_BUF_CAP));
-    r.ring.rx_replenish(|| once.take(), &r.notify, 0, 0).unwrap();
+    r.ring.rx_replenish(|_| once.take(), &r.notify, 0, 0).unwrap();
     device_complete(&r, 0, RX_BUF_CAP + 1);
     assert!(drain_one(&mut r).is_err(), "len beyond the buffer capacity is a device fault");
 
     let mut r = rig(8, Dir::Rx);
     let mut once = Some((0x3000_0000u64, RX_BUF_CAP));
-    r.ring.rx_replenish(|| once.take(), &r.notify, 0, 0).unwrap();
+    r.ring.rx_replenish(|_| once.take(), &r.notify, 0, 0).unwrap();
     device_complete(&r, 0, 72); // 12-byte header + 60-byte frame
     assert_eq!(drain_one(&mut r).expect("in-bounds len validates"), UsedBuf { slot: 0, len: 72 });
 }
@@ -642,7 +642,7 @@ fn rx_replenish_posts_until_caught_up_then_one_notify() {
     let offered = r
         .ring
         .rx_replenish(
-            || {
+            |_| {
                 nbuf += 1;
                 Some((0x3000_0000 + u64::from(nbuf) * 4096, RX_BUF_CAP))
             },
@@ -651,7 +651,8 @@ fn rx_replenish_posts_until_caught_up_then_one_notify() {
             0,
         )
         .unwrap();
-    assert_eq!(offered, 4, "all four slots pre-posted");
+    assert_eq!(offered.offered, 4, "all four slots pre-posted");
+    assert!(offered.notified, "no suppression -> the burst's one notify");
     assert_eq!(r.avail.peek_u16(2), 4, "avail idx after the burst");
     for s in 0..4usize {
         let payload = 2 * s + 1;
@@ -666,10 +667,44 @@ fn rx_replenish_posts_until_caught_up_then_one_notify() {
     device_complete(&r, 2, 72);
     assert!(drain_one(&mut r).is_ok());
     assert!(drain_one(&mut r).is_ok());
-    let offered = r.ring.rx_replenish(|| Some((0x3000_8000, RX_BUF_CAP)), &r.notify, 0, 0).unwrap();
-    assert_eq!(offered, 2, "replenish refills only the freed slots");
+    let offered = r.ring.rx_replenish(|_| Some((0x3000_8000, RX_BUF_CAP)), &r.notify, 0, 0).unwrap();
+    assert_eq!(offered.offered, 2, "replenish refills only the freed slots");
+    assert!(offered.notified);
     let notifies = r.log.borrow().iter().filter(|op| matches!(op, Op::Write("notify", ..))).count();
     assert_eq!(notifies, 2);
+}
+
+#[test]
+fn rx_replenish_reports_the_slot_and_suppression() {
+    // The alloc closure learns the slot being posted (the arch side binds
+    // each slot's buffer page there), and the Replenish outcome carries
+    // the notify truth for the nnote accounting.
+    let mut r = rig(8, Dir::Rx);
+    let mut slots = std::vec::Vec::new();
+    let out = r
+        .ring
+        .rx_replenish(
+            |s| {
+                slots.push(s);
+                Some((0x3100_0000 + u64::from(s) * 4096, RX_BUF_CAP))
+            },
+            &r.notify,
+            0,
+            0,
+        )
+        .unwrap();
+    assert_eq!(slots.as_slice(), &[0, 1, 2, 3], "alloc learns the slot being posted");
+    assert_eq!(out, virtio::Replenish { offered: 4, notified: true });
+
+    // With the device asking for no notifications, a refill reports
+    // !notified (and the ring really writes none).
+    device_complete(&r, 0, 72);
+    assert!(drain_one(&mut r).is_ok());
+    r.used.device_write_u16(0, 1); // USED_F_NO_NOTIFY
+    let out = r.ring.rx_replenish(|_| Some((0x3200_0000, RX_BUF_CAP)), &r.notify, 0, 0).unwrap();
+    assert_eq!(out, virtio::Replenish { offered: 1, notified: false });
+    let notifies = r.log.borrow().iter().filter(|op| matches!(op, Op::Write("notify", ..))).count();
+    assert_eq!(notifies, 1, "only the first burst notified");
 }
 
 #[test]

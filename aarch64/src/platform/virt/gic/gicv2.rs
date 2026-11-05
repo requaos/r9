@@ -23,6 +23,7 @@ pub const GICD_CTLR: usize = 0x000; // Distributor control register
 pub const GICD_ISENABLER0: usize = 0x100; // Interrupt set-enable, 32 irqs per word
 pub const GICD_IPRIORITYR0: usize = 0x400; // Interrupt priority, 4 irqs per word
 pub const GICD_ITARGETSR0: usize = 0x800; // Interrupt cpu targets, 4 irqs per word
+pub const GICD_ICFGR0: usize = 0xC00; // Interrupt trigger config, 16 irqs per word, 2 bits each
 
 // CPU interface (GICC) register offsets
 pub const GICC_CTLR: usize = 0x000; // CPU interface control register
@@ -86,9 +87,20 @@ impl Gicv2 {
 
     /// Enable interrupt intid at the given priority.  SPIs (intid >= 32)
     /// additionally get an ITARGETSR write targeting cpu0 (research P6);
-    /// PPIs are hardwired per-CPU and must not be written.
+    /// PPIs are hardwired per-CPU and must not be written.  The ICFGR
+    /// trigger bits are programmed LEVEL first — every source on this
+    /// machine is level-triggered (the DTB's flags cells say 0x04), and a
+    /// real GIC-400's ICFGR reset value is IMPLEMENTATION DEFINED (Pitfall
+    /// N4); qemu defaults level, but we never rely on it.
     pub fn enable(&self, intid: u32, prio: u8) {
         let intid = intid as usize;
+
+        // ICFGRn: 2 bits per interrupt, 16 per word; the trigger bit is the
+        // high bit of the pair (0 = level).  Written BEFORE ISENABLER so
+        // the interrupt is never enabled with the wrong trigger.
+        let icfgr_off = GICD_ICFGR0 + 4 * (intid / 16);
+        let icfgr = self.gicd.read(icfgr_off);
+        self.gicd.write(icfgr_off, icfgr & !(0b10 << (2 * (intid % 16))));
 
         // ISENABLERn: one bit per interrupt, 32 per word (read-modify-write).
         let isenabler_off = GICD_ISENABLER0 + 4 * (intid / 32);

@@ -13,6 +13,9 @@ load-address = '0xffff800040080000'
 [config]
 platform = "virt"
 # no dtb key here: virt's DTB is qemu-facing, passed via [qemu].dtb
+# devether (D-10: the NIC is part of the standard boot) — the virtio-net
+# driver binds in main9's IRQ-arming window and arms the DTB-routed SPI.
+dev = ["ether"]
 
 [qemu]
 machine = "virt,gic-version=2"

@@ -384,6 +384,15 @@ fn dispatch_irq(frame: &TrapFrame) -> bool {
         // PL011 UART RX (SPI 1 -> INTID 32+1): the devcons read-buffer
         // feed under dev_exec
         33 => platform::pl011::rx_irq(),
+        // virtio-net (dev_ether configs): keyed on the INTID pci.rs
+        // published at bind (0 = unbound — the guard never matches, so a
+        // stray line falls to the unhandled print); zero hardcoded
+        // interrupt numbers (NETDRV-01).  The handler's ISR-byte read
+        // deasserts the level line before the EOI below.
+        #[cfg(dev_ether)]
+        i if i == platform::virt::pci::virtio_irq_intid() && i != 0 => {
+            platform::virt::pci::virtio_net_irq()
+        }
         platform::gic::SPURIOUS_INTID => {} // spurious: acked, no EOI
         _ => println!("unhandled IRQ {intid}"),
     }

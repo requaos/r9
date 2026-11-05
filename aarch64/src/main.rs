@@ -366,6 +366,17 @@ pub extern "C" fn main9(dtb_va: usize) {
         platform::pl011::init_rx();
         platform::gic::enable(33, 0xA0);
 
+        // devether (dev_ether configs; D-10: the NIC is part of the
+        // standard boot): bind the virtio-net NIC — pci probe → BAR/caps →
+        // negotiate → queues → RX pre-post → publish → GIC arm → bind
+        // print.  Inside the arming window (IRQs still masked) and ahead
+        // of the dev_panic brk site, so the ring setup races nothing and
+        // the panic profile's dump stays deterministic.  A missing NIC or
+        // a rejected negotiation prints a loud named line and the boot
+        // CONTINUES (kernel tolerant, gates strict).
+        #[cfg(dev_ether)]
+        platform::pci::bind_virtio_net(&dt);
+
         // Deliberate panic (dev_panic configs, e.g. --config virtpanic;
         // the hook itself is platform-agnostic): raise a sync exception
         // through the REAL trap path BEFORE IRQs unmask, so the panic log is

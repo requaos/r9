@@ -42,6 +42,7 @@ pub const GICD_TYPER: usize = 0x004; // Interrupt controller type register
 pub const GICD_IGROUPR0: usize = 0x080; // Interrupt group, 32 irqs per word
 pub const GICD_ISENABLER0: usize = 0x100; // Interrupt set-enable, 32 irqs per word
 pub const GICD_IPRIORITYR0: usize = 0x400; // Interrupt priority, 4 irqs per word
+pub const GICD_ICFGR0: usize = 0xC00; // Interrupt trigger config (SPIs), 16 irqs per word
 pub const GICD_IROUTER0: usize = 0x6000; // Interrupt routing, one 64-bit reg per irq
 
 // GICD_CTLR bits
@@ -60,6 +61,7 @@ const GICR_WAKER_CHILDREN_ASLEEP: u32 = 1 << 2;
 pub const GICR_IGROUPR0: usize = 0x080; // Interrupt group (SGIs/PPIs)
 pub const GICR_ISENABLER0: usize = 0x100; // Interrupt set-enable
 pub const GICR_IPRIORITYR0: usize = 0x400; // Interrupt priority
+pub const GICR_ICFGR0: usize = 0xC00; // Interrupt trigger config (SGIs/PPIs)
 
 /// Size of one redistributor's RD frame (the SGI frame follows at +64 KiB).
 const GICR_RD_FRAME_SIZE: usize = 0x10000;
@@ -215,20 +217,35 @@ impl Gicv3 {
     /// Enable interrupt intid at the given priority.  SGIs/PPIs (intid < 32)
     /// live in this CPU's redistributor SGI frame; SPIs in the distributor,
     /// which also routes them to this CPU via GICD_IROUTERn (the v3
-    /// successor of ITARGETSR — RES0 with ARE on).
+    /// successor of ITARGETSR — RES0 with ARE on).  The ICFGR trigger bits
+    /// (SGI frame for intid < 32, GICD otherwise) are programmed LEVEL
+    /// first — every source on this machine is level-triggered (the DTB's
+    /// flags cells say 0x04), and real-silicon ICFGR reset is
+    /// IMPLEMENTATION DEFINED (Pitfall N4); qemu defaults level, but we
+    /// never rely on it.
     pub fn enable(&self, intid: u32, prio: u8) {
         let intid = intid as usize;
         let byte_shift = (intid % 4) * 8;
+        // ICFGRn: 2 bits per interrupt, 16 per word; the trigger bit is the
+        // high bit of the pair (0 = level).  Written BEFORE ISENABLER so
+        // the interrupt is never enabled with the wrong trigger.
+        let icfgr_bit = 0b10 << (2 * (intid % 16));
 
         if intid < 32 {
             // SGI/PPI: one bank total in the SGI frame (IGROUPR0 was set
             // all-Group-1 at init).
+            let icfgr_off = GICR_ICFGR0 + 4 * (intid / 16);
+            let icfgr = self.sgi.read(icfgr_off);
+            self.sgi.write(icfgr_off, icfgr & !icfgr_bit);
             let isenabler = self.sgi.read(GICR_ISENABLER0);
             self.sgi.write(GICR_ISENABLER0, isenabler | (1 << (intid % 32)));
             let iprio_off = GICR_IPRIORITYR0 + 4 * (intid / 4);
             let iprio = self.sgi.read(iprio_off);
             self.sgi.write(iprio_off, (iprio & !(0xff << byte_shift)) | ((prio as u32) << byte_shift));
         } else {
+            let icfgr_off = GICD_ICFGR0 + 4 * (intid / 16);
+            let icfgr = self.gicd.read(icfgr_off);
+            self.gicd.write(icfgr_off, icfgr & !icfgr_bit);
             let isenabler_off = GICD_ISENABLER0 + 4 * (intid / 32);
             let isenabler = self.gicd.read(isenabler_off);
             self.gicd.write(isenabler_off, isenabler | (1 << (intid % 32)));

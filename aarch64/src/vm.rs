@@ -548,6 +548,19 @@ pub fn next_free_device_page4k() -> VaMapping {
         .expect("next_free_device_page4k: unable to return new va")
 }
 
+/// Reserve a `len`-byte span (4 KiB-rounded up) of the device VA arena —
+/// the multi-page counterpart of next_free_device_page4k.  A multi-page
+/// map (e.g. the 1 MiB ECAM window, the 64 KiB GICD frame) must reserve
+/// its WHOLE span: bumping one page per map lets the next map alias the
+/// previous one's tail (the ECAM/GICD overlap the virtio-net bind hit).
+pub fn next_free_device_va_span(len: usize) -> VaMapping {
+    let len = len.next_multiple_of(PageSize::Page4K.size());
+    next_free_device_page_va
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| Some(current + len))
+        .map(VaMapping::Addr)
+        .expect("next_free_device_va_span: unable to return new va")
+}
+
 /// Return the root user or kernel level page table.
 ///
 /// Returns a guard newtype, never a `&'static mut` — the

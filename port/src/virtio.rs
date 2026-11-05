@@ -646,15 +646,15 @@ impl<M: RingMem> Ring<M> {
     /// rxproc loop): per slot — payload desc write → avail-entry →
     /// fence(Release) → idx advance; after the loop — fence(Release) →
     /// used-flags → notify.  `alloc` yields (payload_pa, capacity) for a
-    /// fresh buffer or None when the pool is empty.  Returns the number
-    /// of buffers offered.
+    /// fresh buffer FOR THE SLOT BEING POSTED (the arch side binds each
+    /// slot's buffer page there), or None when the pool is empty.
     pub fn rx_replenish(
         &mut self,
-        mut alloc: impl FnMut() -> Option<(u64, u32)>,
+        mut alloc: impl FnMut(u16) -> Option<(u64, u32)>,
         notify: &M,
         notify_off: usize,
         queue_index: u16,
-    ) -> Result<u32> {
+    ) -> Result<Replenish> {
         if self.dir != Dir::Rx {
             return Err("virtio: rx_replenish on a TX ring");
         }
@@ -664,7 +664,7 @@ impl<M: RingMem> Ring<M> {
             if self.posted[slot] {
                 break;
             }
-            let Some((pa, cap)) = alloc() else {
+            let Some((pa, cap)) = alloc(slot as u16) else {
                 break;
             };
             let payload = self.slot_head[slot] + 1;
@@ -684,14 +684,16 @@ impl<M: RingMem> Ring<M> {
                 break;
             }
         }
+        let mut notified = false;
         if offered > 0 {
             self.used.fence(Ordering::Release);
             let flags = self.used.read_u16(USED_OFF_FLAGS);
             if flags & USED_F_NO_NOTIFY == 0 {
                 notify.write_u16(notify_off, queue_index);
+                notified = true;
             }
         }
-        Ok(offered)
+        Ok(Replenish { offered, notified })
     }
 
     /// Drain one used-ring entry: None when caught up
@@ -775,4 +777,53 @@ impl VirtioNetHdr {
         b[10..12].copy_from_slice(&self.num_buffers.to_le_bytes());
         b
     }
+}
+
+// ---------------------------------------------------------------------------
+// virtio_net — the transport's first consumer (D-02; the arch-side bind
+// lands with it in 07-06): queue indices, ISR semantics, the RX
+// frame-length rule, and the IRQ-accounting counters.  Pure data and
+// small safe helpers — the arch side owns the volatile implementations
+// and the publish-once device state.
+// ---------------------------------------------------------------------------
+
+/// §5.1.2 queue indices: queue 0 is receiveq1, queue 1 transmitq1.
+/// (Queue 2 would be the control queue — CTRL_VQ is never negotiated
+/// under D-03, so it does not exist.)
+pub const VIRTIO_NET_QUEUE_RX: u16 = 0;
+pub const VIRTIO_NET_QUEUE_TX: u16 = 1;
+
+/// ISR status byte bits (§4.1.4.5): bit 0 = queue interrupt (used-ring
+/// progress), bit 1 = device configuration change (virtio-net: link
+/// status).  Reading the byte resets it to 0 and deasserts the interrupt
+/// line — a handler's FIRST device touch is always this read.
+pub const VIRTIO_ISR_QUEUE: u8 = 0x1;
+pub const VIRTIO_ISR_CONFIG: u8 = 0x2;
+
+/// RX frame length from a used-ring length: strip the 12-byte header
+/// (§5.1.6 — the used len includes it).  Callers pass a len already
+/// bounds-validated by `Ring::next_used` (≥ VIRTIO_NET_HDR_LEN), so the
+/// subtraction cannot underflow.
+pub const fn virtio_net_frame_len(used_len: u32) -> u32 {
+    used_len - VIRTIO_NET_HDR_LEN as u32
+}
+
+/// Per-queue IRQ accounting (ethervirtio.c's nintr/nnote — NETDRV-04's
+/// reconciliation surface; 07-07's ifstats file reads these).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct VirtioNetCounters {
+    /// Interrupts that observed work, per queue (ethervirtio.c's nintr:
+    /// one per interrupt per queue with pending used entries).
+    pub nintr: [u32; 2],
+    /// Notifications written, per queue (ethervirtio.c's nnote).
+    pub nnote: [u32; 2],
+}
+
+/// The rx_replenish outcome: how many buffers were offered and whether
+/// the closing notify was written (the caller's nnote accounting input —
+/// suppression stays inside the ring, the count stays exact).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Replenish {
+    pub offered: u32,
+    pub notified: bool,
 }
