@@ -706,14 +706,32 @@ fn bind_virtio_net_inner(dt: &DeviceTree) -> port::Result<()> {
 const DRAIN_CAP: u32 = virtio::MAX_QSIZE as u32;
 
 /// The trap.rs dispatch entry for the published INTID.  IRQ-context
-/// discipline (the pl011 CONS_RX rules): lock-free, no console on the hot
-/// path (the one-time prints are the plan's explicit carve-out), bounded
-/// work per invocation (DRAIN_CAP above).
+/// discipline (the pl011 CONS_RX rules — the next reader should not have
+/// to re-derive Pitfalls N4/N10):
 ///
-/// The ISR byte is read FIRST (§4.1.4.5): the read resets the ISR to 0
-/// and deasserts the level line at the source (qemu: qatomic_xchg(&isr,0)
-/// + pci_irq_deassert) — dispatch_irq's EOI then completes the GIC
-/// handshake, exactly the existing ack → handler → eoi flow.
+/// - ISR byte read FIRST (§4.1.4.5): the read resets the ISR to 0 and
+///   deasserts the level line at the source (qemu: qatomic_xchg(&isr,0)
+///   + pci_irq_deassert) — dispatch_irq's EOI then completes the GIC
+///   handshake, exactly the existing ack → handler → eoi flow.  Skipping
+///   the read wedges the line asserted forever (Pitfall N4).
+/// - Bounded drain with re-check: DRAIN_CAP entries per queue per
+///   invocation, with the ring's used-idx re-read each iteration
+///   (§2.7.14's re-check shape); mid-drain completions re-assert the
+///   line after EOI, so a storm spreads across invocations instead of
+///   pinning the handler (T-07-13).
+/// - No locks, no console on the hot path: the Console mcslock may be
+///   held by the interrupted context — taking it here would
+///   self-deadlock.  The one-time prints (first device fault, first
+///   config change) are the plan's explicit carve-out; slirp's link
+///   never changes, so neither fires on the gates.
+/// - Publish-once device state: the cell is written once at bind (boot
+///   context, before gic::enable and the unmask paths) and never again;
+///   this handler is the only writer thereafter (single CPU, EL1 IRQs
+///   non-nesting by masking), so no lock guards it.
+/// - A NIC IRQ arriving with no bind (or before it) prints
+///   `unhandled IRQ <n>` — the 07-05 negative scan trips on that line,
+///   so a bind-ordering bug reds the gate loudly rather than passing
+///   silently (Pitfall N10).
 #[cfg(dev_ether)]
 pub fn virtio_net_irq() {
     // SAFETY: the state was published once at bind (before gic::enable and

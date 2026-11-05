@@ -20,7 +20,9 @@ platform = "virt"
 # preemption).  Only the xtask boot-test assertion set differs, and it
 # is selected by config NAME (see the selection idiom beside BootTestStep
 # in xtask/src/main.rs).
-dev = ["exec"]
+# ether — D-10: the NIC is part of the standard boot (the virtio-net
+# driver binds in main9's IRQ-arming window and arms the DTB-routed SPI).
+dev = ["exec", "ether"]
 
 [qemu]
 machine = "virt,gic-version=2"

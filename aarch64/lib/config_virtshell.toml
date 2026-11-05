@@ -18,7 +18,9 @@ platform = "virt"
 # /boot/boot instead of the staged /init).  The image is delivered by
 # Harvey's launcher (build/aarch64/run-r9.sh), NOT xtask's [qemu] initrd
 # key.
-dev = ["exec", "bootchain"]
+# ether — D-10: the NIC is part of the standard boot; the packaged
+# kernel binds the NIC for the Harvey compose boot (07-08 consumes it).
+dev = ["exec", "bootchain", "ether"]
 
 [qemu]
 machine = "virt,gic-version=2"

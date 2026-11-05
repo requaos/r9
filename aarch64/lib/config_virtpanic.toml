@@ -26,7 +26,9 @@ platform = "virt"
 # mechanism (xtask/src/config.rs) maps this to `--cfg dev_panic`, which
 # enables the deliberate-panic hook in aarch64/src/main.rs.  Zero xtask
 # schema change; check-cfg predeclared dev_panic in aarch64/Cargo.toml.
-dev = ["panic"]
+# ether — D-10: the NIC is part of the standard boot (the virtio-net
+# driver binds in main9's IRQ-arming window and arms the DTB-routed SPI).
+dev = ["panic", "ether"]
 
 [qemu]
 machine = "virt,gic-version=2"

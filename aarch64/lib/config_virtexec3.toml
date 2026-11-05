@@ -16,7 +16,9 @@ platform = "virt"
 # The exec profile — main9's exec orchestration replaces the idle
 # loop (devroot + /init exec + the TTBR0 teardown + trap_return EL0
 # entry); the tick print is cfg-gated off under dev_exec.
-dev = ["exec"]
+# ether — D-10: the NIC is part of the standard boot (the virtio-net
+# driver binds in main9's IRQ-arming window and arms the DTB-routed SPI).
+dev = ["exec", "ether"]
 
 [qemu]
 machine = "virt,gic-version=3"
