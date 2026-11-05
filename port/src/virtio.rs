@@ -833,7 +833,8 @@ pub const fn virtio_net_frame_len(used_len: u32) -> u32 {
 }
 
 /// The offset WITHIN an RX payload buffer at which the delivered frame
-/// begins.  RX buffers are posted as two-descriptor chains
+/// begins: ZERO — the frame begins at the payload descriptor's offset 0.
+/// RX buffers are posted as two-descriptor chains
 /// (setup_chains/rx_replenish): a 12-byte virtio_net_hdr descriptor
 /// pointing at the queue's shared header page, NEXT-chained to the
 /// payload descriptor.  Per §5.1.6.3.2 the device writes the header into
@@ -843,7 +844,7 @@ pub const fn virtio_net_frame_len(used_len: u32) -> u32 {
 /// length includes the header (virtio_net_frame_len strips it), but the
 /// payload buffer never contains it.
 pub const fn virtio_net_frame_offset() -> usize {
-    VIRTIO_NET_HDR_LEN
+    0
 }
 
 /// Per-queue IRQ accounting (ethervirtio.c's nintr/nnote — NETDRV-04's

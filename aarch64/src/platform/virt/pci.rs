@@ -878,7 +878,11 @@ pub fn virtio_net_irq() {
                 Some(Ok(used)) => {
                     retired[virtio::VIRTIO_NET_QUEUE_RX as usize] += 1;
                     // Demux the frame (devether's etheriq, 07-07): the
-                    // 12-byte header is stripped, the frame lands in
+                    // 12-byte header is not "stripped" from this buffer —
+                    // it was never in it: the device wrote it into the
+                    // shared header-page descriptor (§5.1.6.3.2) and the
+                    // frame occupies the payload page from offset 0; only
+                    // used.len includes the 12 bytes.  The frame lands in
                     // every matching conversation's queue, blocked
                     // readers wake; then the page returns to the free
                     // stack (the ingress copied the bytes out).
@@ -886,8 +890,10 @@ pub fn virtio_net_irq() {
                     let pa = state.rx_buf_pa[used.slot as usize];
                     // SAFETY: the page is mapped at KZERO+PA, driver-owned,
                     // and the device finished with it (the acquire fence
-                    // inside next_used orders the read); frame_len ≤ 4096
-                    // (the ring's used-len validation: 12 ≤ len ≤ 12+4096).
+                    // inside next_used orders the read); the base is the
+                    // page's offset 0 and frame_len ≤ 4096 (next_used's
+                    // used-len validation: 12 ≤ len ≤ 12+4096), so the
+                    // slice stays within the page by construction.
                     let frame = unsafe {
                         core::slice::from_raw_parts(
                             (KZERO as usize + pa as usize + virtio::virtio_net_frame_offset())
