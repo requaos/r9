@@ -145,6 +145,69 @@ pub fn netaddr_slirp() -> Result<([u8; 4], [u8; 4]), String> {
     Ok((get("slirp_guestv4")?, get("slirp_gwv4")?))
 }
 
+/// A v6 address parse for the seam's `slirp_guestv6=` / `slirp_gwv6=`
+/// values (08-07): 8 colon-separated hex groups with `::` zero-run
+/// compression (the seam's own notation — the guest's eipfmt shape).
+fn parse_ipv6(s: &str) -> Option<[u8; 16]> {
+    let s = s.trim();
+    // Split on "::" once (the zero-run marker); each side is
+    // colon-separated groups.
+    let (head_s, tail_s) = match s.split_once("::") {
+        Some((h, t)) => (h, Some(t)),
+        None => (s, None),
+    };
+    let parse_groups = |part: &str| -> Option<Vec<u16>> {
+        if part.is_empty() {
+            return Some(Vec::new());
+        }
+        part.split(':').map(|g| u16::from_str_radix(g, 16).ok()).collect()
+    };
+    let head = parse_groups(head_s)?;
+    let tail = match tail_s {
+        Some(t) => parse_groups(t)?,
+        None => Vec::new(),
+    };
+    let total = head.len() + tail.len();
+    if total > 8 || (tail_s.is_none() && total != 8) {
+        return None;
+    }
+    let zeros = 8 - total;
+    let mut out = [0u8; 16];
+    let mut i = 0;
+    for g in head.iter().chain(std::iter::repeat(&0u16).take(zeros)).chain(tail.iter()) {
+        out[i] = (g >> 8) as u8;
+        out[i + 1] = (g & 0xff) as u8;
+        i += 2;
+    }
+    Some(out)
+}
+
+/// The slirp leg's (guest, gateway) v6 addresses from the seam's
+/// `slirp_guestv6=` / `slirp_gwv6=` lines (08-07's NETIP-06 gate — same
+/// loud-error discipline as netaddr_slirp).
+pub fn netaddr_slirp_v6() -> Result<([u8; 16], [u8; 16]), String> {
+    let path = crate::uregcheck::harvey_dir()
+        .map_err(|e| format!("{e}"))?
+        .join("build/aarch64/netaddr.rc");
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| format!("net gate: read {}: {e}", path.display()))?;
+    let get = |key: &str| -> Result<[u8; 16], String> {
+        for line in text.lines() {
+            let line = line.trim();
+            if line.starts_with('#') {
+                continue;
+            }
+            if let Some(v) = line.strip_prefix(key).and_then(|r| r.strip_prefix('=')) {
+                return parse_ipv6(v.trim()).ok_or_else(|| {
+                    format!("net gate: {} key {key} is not a v6 address: {v:?}", path.display())
+                });
+            }
+        }
+        Err(format!("net gate: {} lacks the {key}= line", path.display()))
+    };
+    Ok((get("slirp_guestv6")?, get("slirp_gwv6")?))
+}
+
 // ---- The ICMPv4 classifier (08-06 — the netip static gate's ping leg) --
 
 /// One classified ICMPv4 frame (ethertype 0x0800, IP proto 1) with the
@@ -485,6 +548,158 @@ pub fn assert_dhcp_dora(
         }
     }
     lease.ok_or_else(|| "net gate (dhcp): no AK — no lease".to_string())
+}
+
+// ---- The ICMPv6/ND classifier (08-07 — the NETIP-06 IPv6 gate) --------
+//
+// The gate's wire proof (D-06): the guest's Neighbor-Discovery exchange
+// with the gateway (the NS for the gateway's v6 address + the NA reply)
+// plus the guest's egress ICMPv6 echo frames.  ethertype 0x86dd, the
+// fixed 40-byte IPv6 header, next-header 58 (ICMPv6); the NS/NA carry
+// the 16-byte target at payload offset 8 (type 135/136).  Same
+// loud-Err/bounds-checked discipline as the v4 classifiers (T-07-01).
+
+/// One classified ICMPv6 frame with the fields the v6 gate asserts on.
+#[derive(Debug)]
+pub struct Icmpv6Frame {
+    /// Ethernet source/destination MAC.
+    pub src_mac: [u8; 6],
+    pub dst_mac: [u8; 6],
+    /// IPv6 source/destination (16 bytes).
+    pub src: [u8; 16],
+    pub dst: [u8; 16],
+    /// The ICMPv6 type byte (128 = echo request, 129 = echo reply,
+    /// 133 = RS, 134 = RA, 135 = NS, 136 = NA).
+    pub icmp_type: u8,
+    /// The NS/NA's 16-byte target address (None for other types).
+    pub target: Option<[u8; 16]>,
+    /// Captured frame length in bytes.
+    pub frame_len: usize,
+}
+
+/// Classify one Ethernet frame as ICMPv6 (ethertype 0x86dd, next-header
+/// 58); None for any other shape or a runt frame (shorter than eth + 40 +
+/// the type byte).
+fn classify_icmpv6(frame: &[u8]) -> Option<Icmpv6Frame> {
+    if frame.len() < 14 + 40 + 1 || u16::from_be_bytes([frame[12], frame[13]]) != 0x86dd {
+        return None;
+    }
+    let ip = &frame[14..];
+    if ip[0] >> 4 != 6 || ip[6] != 58 {
+        return None;
+    }
+    let icmp = &ip[40..];
+    // The NS/NA target field (payload offset 8, 16 bytes) — only when
+    // present in the captured bytes.
+    let target = if (icmp[0] == 135 || icmp[0] == 136) && icmp.len() >= 24 {
+        Some(icmp[8..24].try_into().expect("len checked"))
+    } else {
+        None
+    };
+    Some(Icmpv6Frame {
+        src_mac: frame[6..12].try_into().expect("len >= 55"),
+        dst_mac: frame[0..6].try_into().expect("len >= 55"),
+        src: ip[8..24].try_into().expect("len checked"),
+        dst: ip[24..40].try_into().expect("len checked"),
+        icmp_type: icmp[0],
+        target,
+        frame_len: frame.len(),
+    })
+}
+
+/// Parse every ICMPv6 frame in the capture.  Same loud-Err discipline as
+/// parse_pcap.
+pub fn parse_pcap_icmpv6(bytes: &[u8]) -> Result<Vec<Icmpv6Frame>, String> {
+    let mut frames = Vec::new();
+    for_each_record(bytes, &mut |frame| {
+        if let Some(f) = classify_icmpv6(frame) {
+            frames.push(f);
+        }
+    })?;
+    Ok(frames)
+}
+
+/// A v6 address for error messages (compressed-ish hex groups; errors
+/// name addresses, never silently mismatch).
+fn v6_str(a: &[u8; 16]) -> String {
+    let mut parts = Vec::new();
+    for i in 0..8 {
+        parts.push(format!("{:x}", u16::from_be_bytes([a[2 * i], a[2 * i + 1]])));
+    }
+    parts.join(":")
+}
+
+/// assert_nd_exchange (NETIP-06's wire proof): this run's capture carries
+/// the guest's NS for the gateway (type 135, target == gw6, L2 src the
+/// guest MAC) AND the guest's egress ICMPv6 echo requests to the gateway
+/// (type 128, guest6 → gw6 — the guest-side datapath proven either way);
+/// the NA reply (type 136, target == gw6) is asserted when `expect_na`
+/// (the probe-pinned slirp verdict — recorded in the 08-07 SUMMARY).
+/// Returns (ns_count, na_count, echo_req_count).
+pub fn assert_nd_exchange(
+    frames: &[Icmpv6Frame],
+    guest6: [u8; 16],
+    gw6: [u8; 16],
+    capture: &[u8],
+    expect_na: bool,
+) -> Result<(usize, usize, usize), String> {
+    let mac = guest_mac(capture)?;
+    let mut ns = 0;
+    let mut na = 0;
+    let mut echo_req = 0;
+    for f in frames {
+        if f.icmp_type == 135 && f.target == Some(gw6) {
+            if f.src_mac != mac {
+                return Err(format!(
+                    "net gate (v6): the NS for {} src_mac got {} want {} (the guest MAC — the guest's solicitation)",
+                    v6_str(&gw6),
+                    mac_str(&f.src_mac),
+                    mac_str(&mac)
+                ));
+            }
+            ns += 1;
+        }
+        if f.icmp_type == 136 && f.target == Some(gw6) {
+            na += 1;
+        }
+        if f.icmp_type == 128 && f.src == guest6 && f.dst == gw6 {
+            if f.src_mac != mac {
+                return Err(format!(
+                    "net gate (v6): echo request src_mac got {} want {} (the guest MAC)",
+                    mac_str(&f.src_mac),
+                    mac_str(&mac)
+                ));
+            }
+            echo_req += 1;
+        }
+    }
+    if ns == 0 {
+        return Err(format!(
+            "net gate (v6): no Neighbor Solicitation for the gateway {} in this run's capture — the ND exchange never ran",
+            v6_str(&gw6)
+        ));
+    }
+    if echo_req == 0 {
+        return Err(format!(
+            "net gate (v6): no guest ICMPv6 echo request {} → {} in this run's capture (the guest-side datapath never ran)",
+            v6_str(&guest6),
+            v6_str(&gw6)
+        ));
+    }
+    if expect_na && na == 0 {
+        return Err(format!(
+            "net gate (v6): no Neighbor Advertisement for {} in this run's capture (the probe pinned slirp answering)",
+            v6_str(&gw6)
+        ));
+    }
+    if !expect_na && na != 0 {
+        // A probe flip is evidence drift — loud, never a silent pass.
+        return Err(format!(
+            "net gate (v6): {na} NA(s) for {} but the probe pinned slirp NOT answering — re-probe and update the verdict",
+            v6_str(&gw6)
+        ));
+    }
+    Ok((ns, na, echo_req))
 }
 
 /// The capture as lines, CRLF-tolerant.
@@ -1730,5 +1945,155 @@ mod tests {
         let e = assert_dhcp_dora(&frames, GUEST_IP, GATEWAY_IP, BIND_LINE.as_bytes())
             .expect_err("no Discover must fail");
         assert!(e.contains("Discover"), "names the missing Discover: {e}");
+    }
+
+    // ---- 08-07 Task 2: the IPv6 ND assertion suite (NETIP-06) ---------
+    //
+    // Synthetic ethertype-0x86dd frames: the 14-byte eth header + the
+    // 40-byte IPv6 header + the ICMPv6 message.  The seam's v6 addresses
+    // (fec0::15 / fec0::2) appear as locals — the assertions take them
+    // as parameters (host-hermetic).
+
+    const GUEST6: [u8; 16] = [0xfe, 0xc0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x15];
+    const GW6: [u8; 16] = [0xfe, 0xc0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x02];
+
+    /// An ICMPv6-over-ethernet frame: v6 src/dst + the icmp type; NS/NA
+    /// carry the 16-byte target at payload offset 8.
+    fn icmpv6_frame(
+        src_mac: [u8; 6],
+        dst_mac: [u8; 6],
+        src: [u8; 16],
+        dst: [u8; 16],
+        icmp_type: u8,
+        target: Option<[u8; 16]>,
+    ) -> Vec<u8> {
+        let msglen = if target.is_some() { 24 } else { 8 };
+        let mut f = Vec::new();
+        f.extend_from_slice(&dst_mac);
+        f.extend_from_slice(&src_mac);
+        f.extend_from_slice(&[0x86, 0xdd]); // IPv6
+        f.push(0x60); // version 6
+        f.extend_from_slice(&[0; 3]); // tc/flow
+        f.extend_from_slice(&(msglen as u16).to_be_bytes()); // payload len
+        f.push(58); // next header: ICMPv6
+        f.push(255); // hop limit (ND's 255)
+        f.extend_from_slice(&src);
+        f.extend_from_slice(&dst);
+        f.push(icmp_type);
+        f.push(0); // code
+        f.extend_from_slice(&[0; 2]); // cksum
+        let mut rest = vec![0u8; msglen - 4];
+        if let Some(t) = target {
+            rest[4..20].copy_from_slice(&t);
+        }
+        f.extend_from_slice(&rest);
+        f
+    }
+
+    /// The golden ND shape: the guest's NS for the gateway (solicited-node
+    /// multicast dst), the gateway's NA, and the guest's echo request.
+    fn nd_frames() -> Vec<Vec<u8>> {
+        let mut smcast = [0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0xff, 0, 0, 0x02];
+        let _ = &mut smcast; // (the dst shape is documentary — the assertion keys on target)
+        vec![
+            icmpv6_frame(GUEST_MAC, [0x33, 0x33, 0xff, 0x00, 0x00, 0x02], GUEST6, smcast, 135, Some(GW6)),
+            icmpv6_frame(GATEWAY_MAC, GUEST_MAC, GW6, GUEST6, 136, Some(GW6)),
+            icmpv6_frame(GUEST_MAC, GATEWAY_MAC, GUEST6, GW6, 128, None),
+        ]
+    }
+
+    /// Golden: NS + NA + the guest's echo request pass with expect_na.
+    #[test]
+    fn nd_exchange_golden() {
+        let buf = pcap_of(&nd_frames());
+        let frames = parse_pcap_icmpv6(&buf).expect("parses");
+        assert_eq!(frames.len(), 3, "all three classify");
+        let (ns, na, echo) = assert_nd_exchange(&frames, GUEST6, GW6, BIND_LINE.as_bytes(), true)
+            .expect("the golden exchange passes");
+        assert_eq!((ns, na, echo), (1, 1, 1));
+    }
+
+    /// The probe-pinned no-NA shape: NS + the guest's egress echo present,
+    /// no NA — passes with expect_na = false (the recorded-absence arm).
+    #[test]
+    fn nd_exchange_recorded_absence_passes() {
+        let frames = vec![nd_frames()[0].clone(), nd_frames()[2].clone()];
+        let buf = pcap_of(&frames);
+        let frames = parse_pcap_bootp(&buf);
+        assert!(frames.as_ref().map(|f| f.is_empty()).unwrap_or(false), "no bootp frames here");
+        let frames = parse_pcap_icmpv6(&buf).expect("parses");
+        let (ns, na, echo) = assert_nd_exchange(&frames, GUEST6, GW6, BIND_LINE.as_bytes(), false)
+            .expect("the recorded-absence shape passes");
+        assert_eq!((ns, na, echo), (1, 0, 1));
+    }
+
+    /// Negative: no NS for the gateway fails naming it.
+    #[test]
+    fn nd_exchange_no_ns_fails() {
+        let frames = vec![nd_frames()[2].clone()];
+        let buf = pcap_of(&frames);
+        let frames = parse_pcap_icmpv6(&buf).expect("parses");
+        let e = assert_nd_exchange(&frames, GUEST6, GW6, BIND_LINE.as_bytes(), false)
+            .expect_err("a missing NS must fail");
+        assert!(e.contains("Neighbor Solicitation"), "names the NS: {e}");
+    }
+
+    /// Negative: no guest egress echo fails (the guest-side datapath never
+    /// ran).
+    #[test]
+    fn nd_exchange_no_egress_fails() {
+        let frames = vec![nd_frames()[0].clone(), nd_frames()[1].clone()];
+        let buf = pcap_of(&frames);
+        let frames = parse_pcap_icmpv6(&buf).expect("parses");
+        let e = assert_nd_exchange(&frames, GUEST6, GW6, BIND_LINE.as_bytes(), true)
+            .expect_err("a missing egress echo must fail");
+        assert!(e.contains("echo request"), "names the egress: {e}");
+    }
+
+    /// Negative: the NS's L2 src must be the guest MAC (someone ELSE's
+    /// solicitation is not the guest's ND).
+    #[test]
+    fn nd_exchange_wrong_ns_mac_fails() {
+        let mut frames = nd_frames();
+        frames[0] = icmpv6_frame(GATEWAY_MAC, [0x33, 0x33, 0xff, 0, 0, 2], GUEST6, GW6, 135, Some(GW6));
+        let buf = pcap_of(&frames);
+        let frames = parse_pcap_icmpv6(&buf).expect("parses");
+        let e = assert_nd_exchange(&frames, GUEST6, GW6, BIND_LINE.as_bytes(), true)
+            .expect_err("a wrong-MAC NS must fail");
+        assert!(e.contains("src_mac"), "names src_mac: {e}");
+    }
+
+    /// Negative: expect_na with no NA fails naming the probe verdict.
+    #[test]
+    fn nd_exchange_missing_na_fails_when_expected() {
+        let frames = vec![nd_frames()[0].clone(), nd_frames()[2].clone()];
+        let buf = pcap_of(&frames);
+        let frames = parse_pcap_icmpv6(&buf).expect("parses");
+        let e = assert_nd_exchange(&frames, GUEST6, GW6, BIND_LINE.as_bytes(), true)
+            .expect_err("a missing NA under expect_na must fail");
+        assert!(e.contains("Neighbor Advertisement"), "names the NA: {e}");
+    }
+
+    /// Negative: an NA under expect_na = false is evidence drift — loud,
+    /// never a silent pass.
+    #[test]
+    fn nd_exchange_unexpected_na_fails() {
+        let buf = pcap_of(&nd_frames());
+        let frames = parse_pcap_icmpv6(&buf).expect("parses");
+        let e = assert_nd_exchange(&frames, GUEST6, GW6, BIND_LINE.as_bytes(), false)
+            .expect_err("an NA under the no-NA verdict is drift");
+        assert!(e.contains("re-probe"), "names the re-probe discipline: {e}");
+    }
+
+    /// The seam's v6 parse: compressed + full forms.
+    #[test]
+    fn netaddr_v6_parse_shapes() {
+        assert_eq!(parse_ipv6("fec0::15"), Some(GUEST6));
+        assert_eq!(parse_ipv6("fec0::2"), Some(GW6));
+        let full = "fec0:0:0:0:0:0:0:15";
+        assert_eq!(parse_ipv6(full), Some(GUEST6));
+        assert_eq!(parse_ipv6("::1"), Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]));
+        assert_eq!(parse_ipv6("not-an-address"), None);
+        assert_eq!(parse_ipv6("fec0::2::15"), None);
     }
 }

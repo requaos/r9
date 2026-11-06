@@ -907,6 +907,14 @@ const NETIP_NOT_L2_MARKER: &str = "netip: NOT-L2-TRUTH slirp venue";
 /// The 08-07 dhcp mode's marker (NETIP-05), printed by
 /// /lib/netip-dhcp.rc after the real ipconfig's DORA configures the guest.
 const NETIP_DHCP_OK_MARKER: &str = "netip: dhcp ok";
+/// The 08-07 v6 mode's marker (NETIP-06), printed by /lib/netip-v6.rc
+/// after the unmodified ipconfig's static v6 configuration + ping -6 leg.
+const NETIP_V6_OK_MARKER: &str = "netip: v6 ok";
+/// The probe-pinned slirp ND verdict (08-07's Task-2 probe — the gate
+/// asserts the NA reply iff the probe observed slirp answering NS for
+/// its v6 gateway address; the SUMMARY records the probe).  Finalized
+/// from the recorded probe, never assumed.
+const NETIP_V6_SLIRP_NA: bool = true;
 
 /// Always-on negative scan: any panic/Unhandled-interrupt line in
 /// the capture fails the run — every profile EXCEPT the deliberate-panic
@@ -983,17 +991,20 @@ fn net_sweep_mode() -> Result<String> {
 /// The netip sweep's mode: R9_NETIP_SWEEP selects the leg set —
 /// `loopback` (the 08-04 ping + udp echo legs), `tcp` (the 08-05 tcp/7
 /// echo + stats-honesty legs), `static` (the 08-06 NETIP-04 static
-/// ipconfig gate on the ether leg, on slirp — labeled not-L2-truth), or
+/// ipconfig gate on the ether leg, on slirp — labeled not-L2-truth),
 /// `dhcp` (the 08-07 NETIP-05 gate: the REAL ipconfig dhcpclient's DORA
-/// over /net/udp broadcast fidelity, same venue label).
+/// over /net/udp broadcast fidelity, same venue label), or `v6` (the
+/// 08-07 NETIP-06 gate: the devip ip6 surface — icmpv6 full-packet bridge
+/// + ipifc add6/ra6/try — static v6 config via unmodified ipconfig, the
+/// NS/NA exchange + the guest's ICMPv6 echo leg pcap-proven).
 /// A typo'd value is a harness bug, not a gate failure — validated before
 /// qemu spawns, never after a wasted boot.
 fn netip_sweep_mode() -> Result<String> {
     let mode = env::var("R9_NETIP_SWEEP").unwrap_or_else(|_| "loopback".to_string());
     match mode.as_str() {
-        "loopback" | "tcp" | "static" | "dhcp" => Ok(mode),
+        "loopback" | "tcp" | "static" | "dhcp" | "v6" => Ok(mode),
         _ => Err(
-            format!("R9_NETIP_SWEEP must be \"loopback\", \"tcp\", \"static\", or \"dhcp\", got {mode:?}")
+            format!("R9_NETIP_SWEEP must be \"loopback\", \"tcp\", \"static\", \"dhcp\", or \"v6\", got {mode:?}")
                 .into(),
         ),
     }
@@ -1210,6 +1221,9 @@ impl BootTestStep {
             // precedent), never a wasted boot.
             if mode == "static" || mode == "dhcp" {
                 pcap::netaddr_slirp().map_err(|e| format!("netip {mode} gate: {e}"))?;
+            }
+            if mode == "v6" {
+                pcap::netaddr_slirp_v6().map_err(|e| format!("netip v6 gate: {e}"))?;
             }
         }
 
@@ -1547,12 +1561,14 @@ impl BootTestStep {
                             // The netip sweep fixture by mode (08-04:
                             // netip-loopback.rc; 08-05: netip-tcp.rc;
                             // 08-06: netip-static.rc — the NETIP-04 gate;
-                            // 08-07: netip-dhcp.rc — the NETIP-05 gate).
+                            // 08-07: netip-dhcp.rc + netip-v6.rc — the
+                            // NETIP-05/06 gates).
                             let mode = netip_sweep_mode()?;
                             let fixture = match mode.as_str() {
                                 "tcp" => "rc /lib/netip-tcp.rc\r",
                                 "static" => "rc /lib/netip-static.rc\r",
                                 "dhcp" => "rc /lib/netip-dhcp.rc\r",
+                                "v6" => "rc /lib/netip-v6.rc\r",
                                 _ => "rc /lib/netip-loopback.rc\r",
                             };
                             stream.write_all(fixture.as_bytes())?;
@@ -1737,6 +1753,14 @@ impl BootTestStep {
                         markers.push(NETIP_DHCP_OK_MARKER);
                         markers.push(NETIP_NOT_L2_MARKER);
                     }
+                    "v6" => {
+                        // 08-07 (NETIP-06): the ether medium's bind
+                        // marker, the fixture's ok marker, the D-10 venue
+                        // label — the pcap ND assertion rides below.
+                        markers.push(DEVIP_MEDIUM_ETHER_MARKER);
+                        markers.push(NETIP_V6_OK_MARKER);
+                        markers.push(NETIP_NOT_L2_MARKER);
+                    }
                     _ => {
                         markers.push(DEVIP_MEDIUM_MARKER);
                         markers.push(NETIP_PING_OK_MARKER);
@@ -1798,6 +1822,34 @@ impl BootTestStep {
                     println!(
                         "boot-test: PASS -- banner, real Harvey boot chain (paqfs + stacksmoke), rc prompt, typed netip sweep (dhcp mode), the devip attach/ether-medium markers, the dhcp/NOT-L2-TRUTH markers and NETIP-DONE observed, the pcap carries the four-message DORA (broadcast src-0.0.0.0 Discover/Request, Offer/AK from the gateway, lease {}) (NETIP-05 — slirp venue, NOT L2 truth)",
                         lease.iter().map(|b| b.to_string()).collect::<Vec<_>>().join(".")
+                    );
+                    return Ok(());
+                }
+                // The v6 mode's wire-level proof (08-07, NETIP-06): this
+                // run's pcap carries the guest's NS for the gateway + the
+                // guest's egress ICMPv6 echo requests (the guest-side
+                // datapath), with the NA per the probe-pinned slirp verdict
+                // (NETIP_V6_SLIRP_NA — the 08-07 SUMMARY records the probe).
+                if mode == "v6" {
+                    let pcap_rel = format!("target/boot-test-{}.pcap", self.config_name);
+                    let pcap_abs = workspace().join(&pcap_rel);
+                    let pcap_bytes = std::fs::read(&pcap_abs).map_err(|e| {
+                        format!("netip v6 gate: read {pcap_rel} (this run's pcap): {e}")
+                    })?;
+                    let (guest6, gw6) = pcap::netaddr_slirp_v6()
+                        .map_err(|e| format!("netip v6 gate: {e}"))?;
+                    let v6_frames = pcap::parse_pcap_icmpv6(&pcap_bytes)
+                        .map_err(|e| format!("netip v6 gate: parse {pcap_rel} (icmpv6): {e}"))?;
+                    let (ns, na, echo) = pcap::assert_nd_exchange(
+                        &v6_frames,
+                        guest6,
+                        gw6,
+                        capture,
+                        NETIP_V6_SLIRP_NA,
+                    )
+                    .map_err(|e| self.fail_pretty(capture, &e))?;
+                    println!(
+                        "boot-test: PASS -- banner, real Harvey boot chain (paqfs + stacksmoke), rc prompt, typed netip sweep (v6 mode), the devip attach/ether-medium markers, the v6/NOT-L2-TRUTH markers and NETIP-DONE observed, the pcap carries {ns} NS + {na} NA + {echo} guest echo request(s) (NETIP-06 — slirp venue, NOT L2 truth)"
                     );
                     return Ok(());
                 }
