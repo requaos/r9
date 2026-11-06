@@ -1045,7 +1045,68 @@ fn udp_fsnewcall_spawns_on_new_remote_quad() {
 
     // Close out the spawned convs (the announcer's guard covers its own
     // close; incall convs are closed by the announcer's last close).
-    let _ = nc;
+    // (An earlier `let _ = nc;` dropped the Chan value WITHOUT closing
+    // the conv — the popped spawned conv leaked across pins, and a later
+    // pin announcing the same port+quad found the stale conv in the
+    // drain's per-quad demux instead of spawning fresh.)
+    crate::devip::close(&nc);
+}
+
+/// The spawned-conv write (WR-01): a listen/accept udp server's reply on
+/// the accepted conv's data file rides the ANNOUNCER's socket with the
+/// conv's quad as per-write metadata (the donor sends on such convs —
+/// the headers-mode write's shape).  Pre-fix the write returned Ok(n)
+/// while DROPPING the datagram (success with data loss — the worst
+/// failure shape).  A dead/recycled announcer errors loudly, never a
+/// wrong-port send on an unrelated socket.
+#[test]
+fn udp_spawned_conv_writes_ride_the_announcers_socket() {
+    let _serial = fresh_scripted_stack();
+    set_guest_addr();
+    let (id, _guard) = alloc_udp_conv();
+    crate::devip::proto::ctl_write(crate::devip::conv::Proto::Udp, id, b"announce 7")
+        .expect("pin (spawnwr): announce");
+
+    // A datagram from a new quad spawns the conv (the Fsnewcall pin's
+    // shape).
+    push_rx(udp4_frame(PEER, GUEST, 5000, 7, b"ping"));
+    stack::drive_stack();
+    crate::devip::proto::udp_rx_drain();
+    let nid = {
+        let node = crate::mcslock::LockNode::new();
+        let t = crate::devip::conv::TABLES.lock(&node);
+        t.table(crate::devip::conv::Proto::Udp)[id].incall[0]
+    };
+
+    // The reply on the spawned conv's data file goes ON THE WIRE with
+    // the conv's quad: src GUEST:7 (the announced port wins), dst
+    // PEER:5000 (the sender's).
+    let base = tx_count();
+    let n = crate::devip::proto::udp_write_data(nid, b"pong").expect("pin (spawnwr): the spawned write sends");
+    assert_eq!(n, 4, "pin (spawnwr): the full count");
+    let (src, dst, sport, dport, payload) = {
+        let g = stack::enter_stack();
+        let core = g.core.as_ref().expect("pin (spawnwr): stack installed");
+        parse_udp4(core.dev_scripted().tx_log.get(base).expect("pin (spawnwr): a TX frame"))
+    };
+    assert_eq!((src, dst), (GUEST, PEER), "pin (spawnwr): the reply's addresses");
+    assert_eq!((sport, dport), (7, 5000), "pin (spawnwr): the reply's ports — the announced lport wins");
+    assert_eq!(payload, b"pong", "pin (spawnwr): the payload verbatim");
+
+    // The dead-announcer arm: pop the spawned conv (the listen open), then
+    // close the announcer — the spawned conv's write errors loudly.
+    let lqid = crate::dat::Qid {
+        path: crate::devip::qid(crate::devip::conv::Proto::Udp.index(), id as u64, crate::devip::QLISTEN),
+        vers: 0,
+        typ: crate::dat::QTFILE,
+    };
+    let lc = crate::dat::Chan::new(crate::dat::DEV_IP, lqid, crate::dat::OREAD);
+    let nc = crate::devip::open(&lc, crate::dat::OREAD).expect("pin (spawnwr): listen open");
+    crate::devip::conv::conv_close(crate::devip::conv::Proto::Udp, id);
+    let e = crate::devip::proto::udp_write_data(nid, b"pong")
+        .expect_err("pin (spawnwr): a dead announcer errors loudly");
+    assert_eq!(e, "udp: no socket on spawned conv", "pin (spawnwr): the loud-error string");
+    crate::devip::close(&nc);
 }
 
 /// The NETIP-02 isolation pin, part 1: concurrent clone opens allocate
