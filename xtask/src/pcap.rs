@@ -702,6 +702,169 @@ pub fn assert_nd_exchange(
     Ok((ns, na, echo_req))
 }
 
+// ---- The TCP-over-IPv4 classifier (08-08 — the NETIP-08 soak gate) ----
+//
+// The soak's wire proof: the tcpblast flow between the guest and the
+// slirp gateway's forwarded host echo endpoint is BIDIRECTIONAL — both
+// directions carry data segments above a byte threshold and NO frame on
+// the flow carries RST.  (The venue label — NOT L2 truth — rides the
+// serial log, not this assertion: the assertion proves the bidirectional
+// machinery, never that the leg is tap-faithful; the tap verdict is
+// Phase 9's joint gate per D-15.)
+
+/// One classified TCP/IPv4 frame (ethertype 0x0800, IP proto 6) with the
+/// fields the soak gate asserts on.  Wire fields are big-endian
+/// regardless of the capture's byte order.
+#[derive(Debug)]
+pub struct Tcpv4Frame {
+    /// Ethernet source/destination MAC.
+    pub src_mac: [u8; 6],
+    pub dst_mac: [u8; 6],
+    /// IP source / destination.
+    pub src: [u8; 4],
+    pub dst: [u8; 4],
+    /// TCP ports.
+    pub sport: u16,
+    pub dport: u16,
+    /// The RST flag (TCP flags byte bit 0x04).
+    pub rst: bool,
+    /// The segment's payload length in bytes (IP total length minus the
+    /// IP and TCP header lengths — header-only ACKs count 0).
+    pub payload_len: usize,
+    /// Captured frame length in bytes.
+    pub frame_len: usize,
+}
+
+/// Classify one Ethernet frame as TCP/IPv4 (ethertype 0x0800, IP proto
+/// 6); None for any other shape or a runt frame (the conservative bound:
+/// 14 + 20 + 20 with both header lengths re-checked against the actual
+/// frame below).
+fn classify_tcpv4(frame: &[u8]) -> Option<Tcpv4Frame> {
+    if frame.len() < 14 + 20 + 20 || u16::from_be_bytes([frame[12], frame[13]]) != 0x0800 {
+        return None;
+    }
+    let ip = &frame[14..];
+    let ihl = (ip[0] & 0x0f) as usize * 4;
+    if ihl < 20 || frame.len() < 14 + ihl + 20 || ip[9] != 6 {
+        return None;
+    }
+    let total_len = u16::from_be_bytes([ip[2], ip[3]]) as usize;
+    let tcp = &ip[ihl..];
+    let tcp_hl = ((tcp[12] >> 4) as usize) * 4;
+    if tcp_hl < 20 || frame.len() < 14 + ihl + tcp_hl {
+        return None;
+    }
+    let payload_len = total_len.saturating_sub(ihl + tcp_hl);
+    Some(Tcpv4Frame {
+        src_mac: frame[6..12].try_into().expect("len >= 54"),
+        dst_mac: frame[0..6].try_into().expect("len >= 54"),
+        src: ip[12..16].try_into().expect("len checked"),
+        dst: ip[16..20].try_into().expect("len checked"),
+        sport: u16::from_be_bytes([tcp[0], tcp[1]]),
+        dport: u16::from_be_bytes([tcp[2], tcp[3]]),
+        rst: tcp[13] & 0x04 != 0,
+        payload_len,
+        frame_len: frame.len(),
+    })
+}
+
+/// Parse every TCP/IPv4 frame in the capture (other records are skipped
+/// by the classifier; truncation stays a loud parse error — the
+/// for_each_record discipline).
+pub fn parse_pcap_tcpv4(bytes: &[u8]) -> Result<Vec<Tcpv4Frame>, String> {
+    let mut out = Vec::new();
+    for_each_record(bytes, &mut |frame| {
+        if let Some(f) = classify_tcpv4(frame) {
+            out.push(f);
+        }
+    })?;
+    Ok(out)
+}
+
+/// The NETIP-08 bidirectional-flow assertion over the blastport flow:
+/// guest→host AND host→guest payload bytes each at or above
+/// `min_bytes`, and ZERO RSTs on the flow.  Returns (out_bytes,
+/// in_bytes) for the PASS line.  The flow is keyed on the blastport
+/// (either side's port) between the seam's guest/gateway addresses —
+/// the seam values arrive as parameters (netaddr_slirp +
+/// netaddr_blastport), never a literal (D-11/Pitfall 9).
+pub fn assert_tcp_bidirectional(
+    frames: &[Tcpv4Frame],
+    guest: [u8; 4],
+    gw: [u8; 4],
+    port: u16,
+    min_bytes: u64,
+) -> Result<(u64, u64), String> {
+    let mut out_bytes = 0u64;
+    let mut in_bytes = 0u64;
+    let mut flow_frames = 0usize;
+    for f in frames {
+        let out = f.src == guest && f.dst == gw && f.dport == port;
+        let inbound = f.src == gw && f.dst == guest && f.sport == port;
+        if !out && !inbound {
+            continue;
+        }
+        flow_frames += 1;
+        if f.rst {
+            return Err(format!(
+                "net gate (soak): RST on the blast flow ({} → {} ports {} → {}) — the soak must be RST-free",
+                ip_str(&f.src),
+                ip_str(&f.dst),
+                f.sport,
+                f.dport
+            ));
+        }
+        if out {
+            out_bytes += f.payload_len as u64;
+        } else {
+            in_bytes += f.payload_len as u64;
+        }
+    }
+    if flow_frames == 0 {
+        return Err(format!(
+            "net gate (soak): no TCP frames on the blast flow ({} ↔ {} port {port}) in this run's capture — tcpblast never dialed?",
+            ip_str(&guest),
+            ip_str(&gw)
+        ));
+    }
+    if out_bytes < min_bytes {
+        return Err(format!(
+            "net gate (soak): guest→host payload bytes {out_bytes} < {min_bytes} (the outbound leg is thin — a unidirectional soak proves nothing)"
+        ));
+    }
+    if in_bytes < min_bytes {
+        return Err(format!(
+            "net gate (soak): host→guest payload bytes {in_bytes} < {min_bytes} (the inbound leg is thin — the echo path never carried data)"
+        ));
+    }
+    Ok((out_bytes, in_bytes))
+}
+
+/// The seam's `blastport=` value (netaddr.rc — the 08-08 soak's host
+/// echo endpoint port), parsed with the netaddr_slirp discipline (an
+/// unreadable file or absent/malformed key is a loud pre-spawn harness
+/// error naming the file/key).
+pub fn netaddr_blastport() -> Result<u16, String> {
+    let path = crate::uregcheck::harvey_dir()
+        .map_err(|e| format!("{e}"))?
+        .join("build/aarch64/netaddr.rc");
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| format!("net gate: read {}: {e}", path.display()))?;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('#') {
+            continue;
+        }
+        if let Some(v) = line.strip_prefix("blastport").and_then(|r| r.strip_prefix('=')) {
+            return v
+                .trim()
+                .parse::<u16>()
+                .map_err(|e| format!("net gate: {} key blastport is not a port: {v:?}: {e}", path.display()));
+        }
+    }
+    Err(format!("net gate: {} lacks the blastport= line", path.display()))
+}
+
 /// The capture as lines, CRLF-tolerant.
 fn capture_lines(capture: &[u8]) -> impl Iterator<Item = &[u8]> {
     capture.split(|b| *b == b'\n').map(|line| match line.last() {
@@ -769,7 +932,9 @@ fn guest_mac(capture: &[u8]) -> Result<[u8; 6], String> {
 
 /// One stats counter (`in:` / `out:`) from the sweep's stats cat — the
 /// netif.c line shape `<key>: <n>` at line start.
-fn stat_value(capture: &[u8], key: &str) -> Result<u64, String> {
+/// pub(crate): the 08-08 soak gate's /net/tcp/stats reconciliation reads
+/// InSegs/OutSegs through the same line shape.
+pub(crate) fn stat_value(capture: &[u8], key: &str) -> Result<u64, String> {
     let prefix = format!("{key}: ");
     for line in capture_lines(capture) {
         if let Some(rest) = line.strip_prefix(prefix.as_bytes()) {
@@ -2095,5 +2260,130 @@ mod tests {
         assert_eq!(parse_ipv6("::1"), Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]));
         assert_eq!(parse_ipv6("not-an-address"), None);
         assert_eq!(parse_ipv6("fec0::2::15"), None);
+    }
+
+    // ---- 08-08: the NETIP-08 soak gate's assertions ------------------
+
+    /// A TCP/IPv4 frame on the blast flow: the variable fields are the
+    /// direction (src/dst mac+ip), the ports, the RST bit, and the
+    /// payload length (the frame body is zero-padded to match — the
+    /// classifier reads only headers).
+    fn tcp_frame(
+        src_mac: [u8; 6],
+        dst_mac: [u8; 6],
+        src: [u8; 4],
+        dst: [u8; 4],
+        sport: u16,
+        dport: u16,
+        rst: bool,
+        payload_len: usize,
+    ) -> Vec<u8> {
+        let mut f = Vec::new();
+        f.extend_from_slice(&dst_mac);
+        f.extend_from_slice(&src_mac);
+        f.extend_from_slice(&[0x08, 0x00]); // ethertype IPv4
+        let total_len = (20 + 20 + payload_len) as u16;
+        f.extend_from_slice(&[
+            0x45, 0x00, // v4 + IHL 20, tos
+            (total_len >> 8) as u8, (total_len & 0xff) as u8,
+            0x00, 0x00, 0x00, 0x00, // id/frag
+            64, 6, // ttl, proto TCP
+            0x00, 0x00, // cksum (unchecked by the classifier)
+        ]);
+        f.extend_from_slice(&src);
+        f.extend_from_slice(&dst);
+        f.extend_from_slice(&sport.to_be_bytes());
+        f.extend_from_slice(&dport.to_be_bytes());
+        f.extend_from_slice(&[0x00; 8]); // seq + ack
+        f.extend_from_slice(&[0x50, if rst { 0x04 } else { 0x18 }]); // data offset 20, RST or ACK|PSH
+        f.extend_from_slice(&[0x00; 6]); // window + cksum + urg
+        f.extend_from_slice(&vec![0u8; payload_len]);
+        f
+    }
+
+    /// Golden: data segments BOTH ways above the threshold, zero RSTs —
+    /// passes with the per-direction byte counts.
+    #[test]
+    fn tcp_bidirectional_golden() {
+        let mut buf = global_header();
+        // Three 1000-byte segments out, two 1500-byte segments in.
+        for _ in 0..3 {
+            buf.extend_from_slice(&record(&tcp_frame(
+                GUEST_MAC, GATEWAY_MAC, GUEST_IP, GATEWAY_IP, 40000, 7777, false, 1000,
+            )));
+        }
+        for _ in 0..2 {
+            buf.extend_from_slice(&record(&tcp_frame(
+                GATEWAY_MAC, GUEST_MAC, GATEWAY_IP, GUEST_IP, 7777, 40000, false, 1500,
+            )));
+        }
+        // A header-only ACK each way (payload 0 — never counted).
+        buf.extend_from_slice(&record(&tcp_frame(
+            GUEST_MAC, GATEWAY_MAC, GUEST_IP, GATEWAY_IP, 40000, 7777, false, 0,
+        )));
+        let frames = parse_pcap_tcpv4(&buf).expect("parses");
+        assert_eq!(frames.len(), 6, "all frames classify");
+        let (out, into) = assert_tcp_bidirectional(&frames, GUEST_IP, GATEWAY_IP, 7777, 2000)
+            .expect("the bidirectional flow passes");
+        assert_eq!(out, 3000);
+        assert_eq!(into, 3000);
+    }
+
+    /// Negative: an RST anywhere on the flow fails naming it.
+    #[test]
+    fn tcp_bidirectional_rst_fails() {
+        let mut buf = global_header();
+        buf.extend_from_slice(&record(&tcp_frame(
+            GUEST_MAC, GATEWAY_MAC, GUEST_IP, GATEWAY_IP, 40000, 7777, false, 3000,
+        )));
+        buf.extend_from_slice(&record(&tcp_frame(
+            GATEWAY_MAC, GUEST_MAC, GATEWAY_IP, GUEST_IP, 7777, 40000, true, 3000,
+        )));
+        let frames = parse_pcap_tcpv4(&buf).expect("parses");
+        let e = assert_tcp_bidirectional(&frames, GUEST_IP, GATEWAY_IP, 7777, 2000)
+            .expect_err("an RST on the flow must fail");
+        assert!(e.contains("RST"), "names the RST: {e}");
+    }
+
+    /// Negative: one thin direction fails (the outbound leg here).
+    #[test]
+    fn tcp_bidirectional_thin_outbound_fails() {
+        let mut buf = global_header();
+        buf.extend_from_slice(&record(&tcp_frame(
+            GUEST_MAC, GATEWAY_MAC, GUEST_IP, GATEWAY_IP, 40000, 7777, false, 100,
+        )));
+        buf.extend_from_slice(&record(&tcp_frame(
+            GATEWAY_MAC, GUEST_MAC, GATEWAY_IP, GUEST_IP, 7777, 40000, false, 5000,
+        )));
+        let frames = parse_pcap_tcpv4(&buf).expect("parses");
+        let e = assert_tcp_bidirectional(&frames, GUEST_IP, GATEWAY_IP, 7777, 2000)
+            .expect_err("a thin outbound leg must fail");
+        assert!(e.contains("outbound"), "names the thin leg: {e}");
+    }
+
+    /// Negative: no frames on the flow at all fails (tcpblast never
+    /// dialed — a stray port keying catches nothing).
+    #[test]
+    fn tcp_bidirectional_no_flow_fails() {
+        let mut buf = global_header();
+        buf.extend_from_slice(&record(&tcp_frame(
+            GUEST_MAC, GATEWAY_MAC, GUEST_IP, GATEWAY_IP, 40000, 9999, false, 3000,
+        )));
+        let frames = parse_pcap_tcpv4(&buf).expect("parses");
+        let e = assert_tcp_bidirectional(&frames, GUEST_IP, GATEWAY_IP, 7777, 2000)
+            .expect_err("no flow frames must fail");
+        assert!(e.contains("no TCP frames"), "names the absent flow: {e}");
+    }
+
+    /// Negative: a runt frame (shorter than the TCP header) is skipped
+    /// by the classifier, never parsed.
+    #[test]
+    fn tcp_runt_frame_is_skipped() {
+        let mut frame = tcp_frame(GUEST_MAC, GATEWAY_MAC, GUEST_IP, GATEWAY_IP, 40000, 7777, false, 100);
+        frame.truncate(40); // shorter than 14+20+20
+        let mut buf = global_header();
+        buf.extend_from_slice(&record(&frame));
+        let frames = parse_pcap_tcpv4(&buf).expect("parses");
+        assert!(frames.is_empty(), "the runt frame is skipped");
     }
 }
