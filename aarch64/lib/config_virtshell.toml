@@ -20,7 +20,11 @@ platform = "virt"
 # key.
 # ether — D-10: the NIC is part of the standard boot; the packaged
 # kernel binds the NIC for the Harvey compose boot (07-08 consumes it).
-dev = ["exec", "bootchain", "ether"]
+# ip — 08-09: devip `#I` is part of the standard boot too, so the
+# packaged kernel (r9.packages.kernel-virt) serves Harvey's composed
+# NET smoke (D-13's `nix run .#boot-r9-net-smoke` — ping/udp/tcp echo +
+# ipconfig static/dhcp against /net).  Inert until a bind #I lands.
+dev = ["exec", "bootchain", "ether", "ip"]
 
 [qemu]
 machine = "virt,gic-version=2"
