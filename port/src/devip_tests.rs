@@ -1703,6 +1703,47 @@ fn tcp_conv_close_lingers_the_socket_until_closed() {
 }
 
 // ---------------------------------------------------------------------------
+// Pin: CR-06 — the tcp gc under clone pressure force-HANGS-UP stale convs
+// (the donor's tcpgc → localclose: qhangup + wake, slot ownership
+// unchanged) and the cloner gets Enodev; an in-use slot is NEVER reset and
+// handed out (that aliased the victim's open fds onto the cloner's fresh
+// conversation — reads/writes crossing conversations, and the victim's
+// eventual close resetting the live conv out from under its owner).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tcp_gc_hangs_up_stale_convs_but_never_steals_an_in_use_slot() {
+    let _serial = fresh_scripted_stack();
+    set_guest_addr();
+    // Fill the 16-slot table: each conv connected to the scripted peer,
+    // then hangup-aborted — the socket fully Closed with inuse = 1 (the
+    // common "read EOF, fd not yet closed" shape).
+    let mut guards = Vec::new();
+    for i in 0..crate::devip::conv::NCONV {
+        let (id, g) = alloc_tcp_conv();
+        scripted_connect(id, 1400 + i as u16);
+        proto::ctl_write(Proto::Tcp, id, b"hangup").expect("pin (gc): hangup aborts");
+        assert_eq!(tcp_sock_state(id), Some(tcp::State::Closed), "pin (gc): the aborted socket is Closed");
+        guards.push(g);
+    }
+    // Clone pressure: the gc hangs the stale convs up (never steals) and
+    // the retried scan still finds every slot in use → Enodev.
+    let e = crate::devip::conv::conv_alloc(Proto::Tcp).expect_err("pin (gc): a full table is Enodev");
+    assert_eq!(e, "no free devices", "pin (gc): the donor's exhaustion error");
+    // The victim's conversation survives the gc (no reset-and-hand-out)
+    // with the hangup recorded (localclose's qhangup).
+    let snap = tcp_conv_snapshot(0);
+    assert_eq!(snap.0, ConvState::Connected, "pin (gc): the victim's state survives the gc");
+    assert_eq!(snap.3, mapped(PEER), "pin (gc): the victim's quad survives the gc");
+    assert!(snap.5, "pin (gc): the gc's hangup marker stands");
+    // The slot frees at the OWNER's close: close conv 3, re-clone, get 3.
+    crate::devip::conv::conv_close(Proto::Tcp, 3);
+    let id = crate::devip::conv::conv_alloc(Proto::Tcp).expect("pin (gc): the owner's close freed the slot");
+    assert_eq!(id, 3, "pin (gc): the freed slot is the reusable one");
+    guards.push(ConvGuard(Proto::Tcp, id));
+}
+
+// ---------------------------------------------------------------------------
 // Pin: P-M stats honesty — a full scripted echo exchange moves the bridge-
 // maintained counters; the stats file is the contract's 28-tag format; the
 // status line carries a devip state name.  The scripted device CAPTURES TX
