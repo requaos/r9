@@ -2133,6 +2133,49 @@ fn iproute_longest_match_verbs_and_smoltcp_mirror() {
     assert_eq!(route_ctl(b"add 10.0.0.0 255.0.0.0").err().expect("pin (route): the error"), "bad arg in system call");
 }
 
+/// The default route lands at BIND (WR-06): `add 0.0.0.0 0.0.0.0 <gw>`
+/// written BEFORE any medium is bound is a legal ordering — the record
+/// stood devip-side and the mirror's comment claimed "the mirror lands
+/// at bind", but nothing replayed it: the guest had a default route on
+/// file and NO gateway on the wire.  The bind now replays the recorded
+/// defaults into the fresh core.
+#[test]
+fn iproute_default_recorded_before_bind_lands_at_bind() {
+    // A bare seam: NO core at all (the pre-bind record skips the mirror).
+    let _serial = SEAM_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    ensure_hooks();
+    set_ticks(0);
+    take_wake_log();
+    {
+        let mut g = stack::enter_stack();
+        g.core = None;
+        g.ether = None;
+    }
+    crate::devip::arp::test_flush();
+    use crate::devip::{conv, ipifc};
+    crate::devip::route::ctl(b"flush").expect("pin (wr06): flush");
+
+    // Record the default route with NO bound medium.
+    crate::devip::route::ctl(b"add 0.0.0.0 0.0.0.0 10.0.0.2").expect("pin (wr06): the pre-bind record");
+
+    // The bind replays it into the fresh core's smoltcp Routes.
+    let id = conv::conv_alloc(conv::Proto::Ipifc).expect("pin (wr06): ipifc clone");
+    ipifc::ctl(id, b"bind", &[b"loopback"]).expect("pin (wr06): bind loopback");
+    {
+        let g = stack::enter_stack();
+        let core = g.core.as_ref().expect("pin (wr06): the core");
+        assert!(
+            core.iface.routes().get_default_ipv4_route().is_some(),
+            "pin (wr06): the pre-bind record mirrored into smoltcp at bind"
+        );
+    }
+
+    // Teardown: flush the record, unbind, close.
+    crate::devip::route::ctl(b"flush").expect("pin (wr06): flush");
+    ipifc::ctl(id, b"unbind", &[]).expect("pin (wr06): unbind");
+    conv::conv_close(conv::Proto::Ipifc, id);
+}
+
 /// The ndb semantics (contract §2): append-at-offset, OWRITE|OTRUNC zeroes
 /// first, Eio past end (`off > strlen` or `off+n >= 1024`), qid.vers bumps
 /// on every write.
