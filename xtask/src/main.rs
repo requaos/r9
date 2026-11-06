@@ -10,6 +10,10 @@ use std::{
     path::{Path, PathBuf},
     process::{self, Command},
     str::FromStr,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 use target_lexicon::Triple;
@@ -772,6 +776,81 @@ struct BootTestStep {
     verbose: bool,
 }
 
+/// The NETIP-08 soak's host echo endpoint (08-08, Task 2): a
+/// std::net::TcpListener bound to 127.0.0.1:<the seam's blastport>
+/// (loopback-only bind — T-08-14's mitigation: the guest reaches it via
+/// slirp's gateway forwarding, so NO external interface ever sees it).
+/// Spawned BEFORE qemu starts (the guest never dials a closed port) and
+/// joined after the run; a startup line names the bound port so the
+/// harness log carries it.  std-only (no new crates — T-08-SC).
+struct HostEcho {
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl HostEcho {
+    /// Bind 127.0.0.1:port and spawn the accept+echo thread.  The
+    /// listener runs nonblocking with a short poll cadence so the stop
+    /// flag is observed promptly; each accepted stream echoes until
+    /// EOF/error/stop.
+    fn spawn(port: u16) -> Result<HostEcho> {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))
+            .map_err(|e| format!("netip soak gate: bind 127.0.0.1:{port}: {e}"))?;
+        listener
+            .set_nonblocking(true)
+            .map_err(|e| format!("netip soak gate: nonblocking listener: {e}"))?;
+        println!("netip: host echo endpoint listening on 127.0.0.1:{port} (the NETIP-08 soak's far end; loopback-only per T-08-14)");
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_thread = stop.clone();
+        let thread = std::thread::spawn(move || {
+            loop {
+                if stop_thread.load(Ordering::Relaxed) {
+                    break;
+                }
+                match listener.accept() {
+                    Ok((mut stream, _peer)) => {
+                        let _ = stream.set_read_timeout(Some(Duration::from_millis(100)));
+                        let mut buf = [0u8; 65536];
+                        loop {
+                            if stop_thread.load(Ordering::Relaxed) {
+                                break;
+                            }
+                            match stream.read(&mut buf) {
+                                Ok(0) => break,      // the peer closed
+                                Ok(n) => {
+                                    if stream.write_all(&buf[..n]).is_err() {
+                                        break;
+                                    }
+                                }
+                                // A read timeout just polls the stop flag.
+                                Err(e)
+                                    if e.kind() == std::io::ErrorKind::WouldBlock
+                                        || e.kind() == std::io::ErrorKind::TimedOut => {}
+                                Err(_) => break,
+                            }
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        Ok(HostEcho { stop, thread: Some(thread) })
+    }
+
+    /// Signal the endpoint to stop and join its thread (the post-run
+    /// teardown — one site covers pass/fail/timeout).
+    fn stop_and_join(mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
 /// Assertion markers, named so every profile reuses them.
 const BOOT_BANNER_MARKER: &str = "r9 from the Internet";
 const BOOT_TICK_MARKER: &str = "tick";
@@ -910,6 +989,26 @@ const NETIP_DHCP_OK_MARKER: &str = "netip: dhcp ok";
 /// The 08-07 v6 mode's marker (NETIP-06), printed by /lib/netip-v6.rc
 /// after the unmodified ipconfig's static v6 configuration + ping -6 leg.
 const NETIP_V6_OK_MARKER: &str = "netip: v6 ok";
+/// The 08-08 aan mode's markers (NETIP-07, D-14), printed by
+/// /lib/netip-aan.rc: the two round-trip markers (the remote rc's
+/// responses echoed to the console — BOTH are asserted because the
+/// resume-after-drop is the whole point), the ok marker after the
+/// scripted drop + resume completes, and the forbidden client exit
+/// string (aan's "connection refused" → threadexitsall — the listener
+/// surviving the drop is the gate's design).
+const NETIP_AAN_RT1_MARKER: &str = "netip: aan roundtrip 1";
+const NETIP_AAN_RT2_MARKER: &str = "netip: aan roundtrip 2";
+const NETIP_AAN_OK_MARKER: &str = "netip: aan ok";
+/// The server-side drop block's confirmation (it writes `hangup` to the
+/// underlying conv's ctl and prints this to the console) — asserted so
+/// a silent no-op drop can't masquerade as a resume.
+const NETIP_AAN_DROP_MARKER: &str = "netip: aan drop ok";
+const NETIP_AAN_DIED_LINE: &str = "server died";
+/// The 08-08 soak mode's markers (NETIP-08 machinery, D-15), printed by
+/// /lib/netip-soak.rc: the tcpblast payload's own completion line plus
+/// the fixture's ok marker and the D-10/D-15 venue label.
+const NETIP_SOAK_OK_MARKER: &str = "netip: soak ok";
+const TCPBLAST_DONE_MARKER: &str = "tcpblast: done";
 /// The probe-pinned slirp ND verdict (08-07's Task-2 probe — the gate
 /// asserts the NA reply iff the probe observed slirp answering NS for
 /// its v6 gateway address; the SUMMARY records the probe).  Finalized
@@ -993,21 +1092,41 @@ fn net_sweep_mode() -> Result<String> {
 /// echo + stats-honesty legs), `static` (the 08-06 NETIP-04 static
 /// ipconfig gate on the ether leg, on slirp — labeled not-L2-truth),
 /// `dhcp` (the 08-07 NETIP-05 gate: the REAL ipconfig dhcpclient's DORA
-/// over /net/udp broadcast fidelity, same venue label), or `v6` (the
+/// over /net/udp broadcast fidelity, same venue label), `v6` (the
 /// 08-07 NETIP-06 gate: the devip ip6 surface — icmpv6 full-packet bridge
 /// + ipifc add6/ra6/try — static v6 config via unmodified ipconfig, the
-/// NS/NA exchange + the guest's ICMPv6 echo leg pcap-proven).
+/// NS/NA exchange + the guest's ICMPv6 echo leg pcap-proven), or `aan`
+/// (the 08-08 NETIP-07 gate: the aan drop-and-resume over tcp loopback —
+/// D-14, NIC-free), or `soak` (the 08-08 NETIP-08 machinery gate: the
+/// tcpblast bidirectional soak against the host echo endpoint on slirp,
+/// pcap + guest-counter reconciled, labeled not-L2-truth).
 /// A typo'd value is a harness bug, not a gate failure — validated before
 /// qemu spawns, never after a wasted boot.
 fn netip_sweep_mode() -> Result<String> {
     let mode = env::var("R9_NETIP_SWEEP").unwrap_or_else(|_| "loopback".to_string());
     match mode.as_str() {
-        "loopback" | "tcp" | "static" | "dhcp" | "v6" => Ok(mode),
+        "loopback" | "tcp" | "static" | "dhcp" | "v6" | "aan" | "soak" => Ok(mode),
         _ => Err(
-            format!("R9_NETIP_SWEEP must be \"loopback\", \"tcp\", \"static\", \"dhcp\", or \"v6\", got {mode:?}")
+            format!("R9_NETIP_SWEEP must be \"loopback\", \"tcp\", \"static\", \"dhcp\", \"v6\", \"aan\", or \"soak\", got {mode:?}")
                 .into(),
         ),
     }
+}
+
+/// The soak gate's round count: R9_NETIP_SOAK_ROUNDS overrides the
+/// TCG-scaled gate default (64 — tcpblast's own default; the sustained
+/// dev-host soak per D-16 uses a named larger count, documented verbatim
+/// in the fixture's header).  Digits only, validated pre-spawn (a typo
+/// is a harness bug, never a wasted boot).
+fn soak_rounds() -> Result<String> {
+    let raw = env::var("R9_NETIP_SOAK_ROUNDS").unwrap_or_else(|_| "64".to_string());
+    if raw.is_empty() || raw.len() > 6 || !raw.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(format!(
+            "R9_NETIP_SOAK_ROUNDS must be 1-6 digits, got {raw:?}"
+        )
+        .into());
+    }
+    Ok(raw)
 }
 
 /// Count lines whose text starts with `marker`.  Serial lines arrive CRLF
@@ -1225,6 +1344,14 @@ impl BootTestStep {
             if mode == "v6" {
                 pcap::netaddr_slirp_v6().map_err(|e| format!("netip v6 gate: {e}"))?;
             }
+            if mode == "soak" {
+                // 08-08 (NETIP-08 machinery): the soak needs the v4 seam
+                // (the dial target) + the blastport (the host endpoint's
+                // bind) + the round count — all validated pre-spawn.
+                pcap::netaddr_slirp().map_err(|e| format!("netip soak gate: {e}"))?;
+                pcap::netaddr_blastport().map_err(|e| format!("netip soak gate: {e}"))?;
+                soak_rounds()?;
+            }
         }
 
         let target = self.arch.target();
@@ -1276,6 +1403,16 @@ impl BootTestStep {
         // invariant independent of qemu internals).
         let _ = std::fs::remove_file(&pcap_abs);
 
+        // 08-08 (NETIP-08 machinery): the soak mode's host echo endpoint
+        // spawns BEFORE qemu — the guest never dials a closed port; it
+        // joins after the run (one teardown site covers pass/fail/timeout).
+        let host_echo = if self.config_name == "virtip" && netip_sweep_mode()? == "soak" {
+            let port = pcap::netaddr_blastport().map_err(|e| format!("netip soak gate: {e}"))?;
+            Some(HostEcho::spawn(port)?)
+        } else {
+            None
+        };
+
         // Spawn qemu with the serial console on the socket chardev.  The
         // machine/cpu/smp/memory/accel/dtb plumbing is the resolved config's,
         // via the same apply path QemuStep uses.
@@ -1312,9 +1449,13 @@ impl BootTestStep {
 
         // Always reap the guest (by process group) and drop the
         // socket file.  One teardown site covers the pass, fail, and
-        // timeout paths: assert_markers always returns here.
+        // timeout paths: assert_markers always returns here.  The soak
+        // mode's host echo endpoint stops+joins here too (08-08).
         kill_process_group(&mut child);
         let _ = std::fs::remove_file(&sock_abs);
+        if let Some(echo) = host_echo {
+            echo.stop_and_join();
+        }
 
         result
     }
@@ -1562,14 +1703,20 @@ impl BootTestStep {
                             // netip-loopback.rc; 08-05: netip-tcp.rc;
                             // 08-06: netip-static.rc — the NETIP-04 gate;
                             // 08-07: netip-dhcp.rc + netip-v6.rc — the
-                            // NETIP-05/06 gates).
+                            // NETIP-05/06 gates; 08-08: netip-aan.rc —
+                            // the NETIP-07 drop-and-resume gate, and
+                            // netip-soak.rc — the NETIP-08 machinery gate,
+                            // carrying the R9_NETIP_SOAK_ROUNDS count as
+                            // the fixture's $1).
                             let mode = netip_sweep_mode()?;
                             let fixture = match mode.as_str() {
-                                "tcp" => "rc /lib/netip-tcp.rc\r",
-                                "static" => "rc /lib/netip-static.rc\r",
-                                "dhcp" => "rc /lib/netip-dhcp.rc\r",
-                                "v6" => "rc /lib/netip-v6.rc\r",
-                                _ => "rc /lib/netip-loopback.rc\r",
+                                "tcp" => "rc /lib/netip-tcp.rc\r".to_string(),
+                                "static" => "rc /lib/netip-static.rc\r".to_string(),
+                                "dhcp" => "rc /lib/netip-dhcp.rc\r".to_string(),
+                                "v6" => "rc /lib/netip-v6.rc\r".to_string(),
+                                "aan" => "rc /lib/netip-aan.rc\r".to_string(),
+                                "soak" => format!("rc /lib/netip-soak.rc {}\r", soak_rounds()?),
+                                _ => "rc /lib/netip-loopback.rc\r".to_string(),
                             };
                             stream.write_all(fixture.as_bytes())?;
                         } else {
@@ -1761,6 +1908,31 @@ impl BootTestStep {
                         markers.push(NETIP_V6_OK_MARKER);
                         markers.push(NETIP_NOT_L2_MARKER);
                     }
+                    "aan" => {
+                        // 08-08 (NETIP-07, D-14): the loopback medium's
+                        // bind marker + BOTH round-trip markers (the
+                        // resume-after-drop is the whole point) + the
+                        // server-side drop's console confirmation + the
+                        // ok marker.  NO pcap assertion — loopback
+                        // traffic never touches the wire (the NIC-free
+                        // leg's point).
+                        markers.push(DEVIP_MEDIUM_MARKER);
+                        markers.push(NETIP_AAN_RT1_MARKER);
+                        markers.push(NETIP_AAN_DROP_MARKER);
+                        markers.push(NETIP_AAN_RT2_MARKER);
+                        markers.push(NETIP_AAN_OK_MARKER);
+                    }
+                    "soak" => {
+                        // 08-08 (NETIP-08 machinery): the ether medium's
+                        // bind marker + the tcpblast payload's completion
+                        // line + the fixture's ok marker + the D-10/D-15
+                        // venue label — the pcap bidirectional assertion
+                        // + the guest-counter reconciliation ride below.
+                        markers.push(DEVIP_MEDIUM_ETHER_MARKER);
+                        markers.push(TCPBLAST_DONE_MARKER);
+                        markers.push(NETIP_SOAK_OK_MARKER);
+                        markers.push(NETIP_NOT_L2_MARKER);
+                    }
                     _ => {
                         markers.push(DEVIP_MEDIUM_MARKER);
                         markers.push(NETIP_PING_OK_MARKER);
@@ -1774,6 +1946,18 @@ impl BootTestStep {
                             self.fail_pretty(capture, &format!("netip gate: marker {marker:?} absent"))
                         );
                     }
+                }
+                // The aan mode's forbidden line (08-08, NETIP-07): the
+                // client's "connection refused" → threadexitsall exit —
+                // the listener must survive the scripted drop (the gate's
+                // design per RESEARCH §aan's caveat); its presence fails
+                // the gate even if every marker landed.
+                if mode == "aan" && contains_marker(capture, NETIP_AAN_DIED_LINE.as_bytes()) {
+                    return Err(self.fail_pretty(
+                        capture,
+                        "netip aan gate: the client exited `server died` — the announced listener \
+                         did not survive the scripted drop",
+                    ));
                 }
                 // The static mode's wire-level proof (08-06): this run's
                 // pcap (the filter-dump capture the netdev stanza wrote)
@@ -1850,6 +2034,62 @@ impl BootTestStep {
                     .map_err(|e| self.fail_pretty(capture, &e))?;
                     println!(
                         "boot-test: PASS -- banner, real Harvey boot chain (paqfs + stacksmoke), rc prompt, typed netip sweep (v6 mode), the devip attach/ether-medium markers, the v6/NOT-L2-TRUTH markers and NETIP-DONE observed, the pcap carries {ns} NS + {na} NA + {echo} guest echo request(s) (NETIP-06 — slirp venue, NOT L2 truth)"
+                    );
+                    return Ok(());
+                }
+                // The soak mode's wire-level proof (08-08, NETIP-08
+                // machinery): this run's pcap carries the tcpblast flow
+                // to the host echo endpoint via the slirp gateway's
+                // forwarding — BIDIRECTIONAL (both directions above the
+                // byte threshold, zero RSTs — the machinery proof, NOT
+                // the L2-truth verdict: the venue label rides the serial
+                // log; the tap verdict is Phase 9's joint gate per D-15).
+                // The guest's /net/tcp/stats counters reconcile: both
+                // directions non-zero in the guest's own book.
+                if mode == "soak" {
+                    let pcap_rel = format!("target/boot-test-{}.pcap", self.config_name);
+                    let pcap_abs = workspace().join(&pcap_rel);
+                    let pcap_bytes = std::fs::read(&pcap_abs).map_err(|e| {
+                        format!("netip soak gate: read {pcap_rel} (this run's pcap): {e}")
+                    })?;
+                    let (guest, gw) = pcap::netaddr_slirp()
+                        .map_err(|e| format!("netip soak gate: {e}"))?;
+                    let port = pcap::netaddr_blastport()
+                        .map_err(|e| format!("netip soak gate: {e}"))?;
+                    let tcp_frames = pcap::parse_pcap_tcpv4(&pcap_bytes)
+                        .map_err(|e| format!("netip soak gate: parse {pcap_rel} (tcp): {e}"))?;
+                    // The threshold scales with the rounds used: half the
+                    // nominal per-direction volume (rounds × 32 KiB) —
+                    // generous against slirp's segmentation, tight enough
+                    // to prove the bidirectional machinery (a thin leg is
+                    // a real failure shape), honest at every override
+                    // count (the D-16 sustained soak's 4096 included).
+                    let rounds: u64 = soak_rounds()?.parse().map_err(|e| {
+                        format!("netip soak gate: rounds parse: {e}")
+                    })?;
+                    let min_bytes = (rounds * 32768 / 2).max(65536);
+                    let (out_b, in_b) =
+                        pcap::assert_tcp_bidirectional(&tcp_frames, guest, gw, port, min_bytes)
+                            .map_err(|e| self.fail_pretty(capture, &e))?;
+                    // The guest-counter reconciliation: the fixture cat'd
+                    // /net/tcp/stats; the bridge-maintained InSegs/OutSegs
+                    // must both be non-zero (a zeros-forever stats file
+                    // would make the pcap's flow unaccounted — the 08-05
+                    // stats-honesty discipline, P-M).
+                    let insegs = pcap::stat_value(capture, "InSegs")
+                        .map_err(|e| self.fail_pretty(capture, &e))?;
+                    let outsegs = pcap::stat_value(capture, "OutSegs")
+                        .map_err(|e| self.fail_pretty(capture, &e))?;
+                    if insegs == 0 || outsegs == 0 {
+                        return Err(self.fail_pretty(
+                            capture,
+                            &format!(
+                                "netip soak gate: guest /net/tcp/stats not moving both ways (InSegs {insegs}, OutSegs {outsegs})"
+                            ),
+                        ));
+                    }
+                    println!(
+                        "boot-test: PASS -- banner, real Harvey boot chain (paqfs + stacksmoke), rc prompt, typed netip sweep (soak mode), the devip attach/ether-medium markers, the tcpblast/soak/NOT-L2-TRUTH markers and NETIP-DONE observed, the pcap carries the bidirectional blast flow ({out_b} bytes out, {in_b} bytes in, zero RSTs), guest stats reconcile (InSegs {insegs}, OutSegs {outsegs}) (NETIP-08 machinery — slirp venue, NOT L2 truth)"
                     );
                     return Ok(());
                 }
