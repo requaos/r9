@@ -2690,6 +2690,47 @@ fn ipifc_unbind_orphans_convs_on_the_dying_core() {
     conv::conv_close(conv::Proto::Ipifc, ifc);
 }
 
+/// The re-bind rejection (WR-04): one conv must not own TWO ifcs — the
+/// comment claimed the donor's `ifc->medium != nil` check but the code
+/// only checked the TARGET medium's slot, so `bind loopback` then `bind
+/// ether` on one conv owned both and for_conv's iteration order silently
+/// resolved every later op (add/unbind/status) to the loopback ifc.
+/// The cross-medium re-bind errors "interface already bound" BEFORE the
+/// medium's bind action runs.
+#[test]
+fn ipifc_bind_rejects_a_conv_already_bound_to_another_medium() {
+    // A bare seam (the bind installs the core itself).
+    let _serial = SEAM_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    ensure_hooks();
+    set_ticks(0);
+    take_wake_log();
+    {
+        let mut g = stack::enter_stack();
+        g.core = None;
+        g.ether = None;
+    }
+    crate::devip::arp::test_flush();
+    use crate::devip::{conv, ipifc};
+    let id = conv::conv_alloc(conv::Proto::Ipifc).expect("pin (rebind): ipifc clone");
+    ipifc::ctl(id, b"bind", &[b"loopback"]).expect("pin (rebind): bind loopback");
+
+    // The same-medium arm (pre-existing): the target slot is occupied.
+    let e = ipifc::ctl(id, b"bind", &[b"loopback"]).expect_err("pin (rebind): same-medium re-bind errors");
+    assert_eq!(e, "interface already bound", "pin (rebind): the slot arm");
+    // The CROSS-medium arm (WR-04): errors before the ether medium's
+    // bind action (which needs the host-absent netif machinery) runs.
+    let e = ipifc::ctl(id, b"bind", &[b"ether", b"#l0"])
+        .expect_err("pin (rebind): the cross-medium re-bind errors");
+    assert_eq!(e, "interface already bound", "pin (rebind): the donor's ifc->medium != nil check");
+
+    // After unbind the conv may bind again (the gate's bind → close →
+    // add lifecycle survives).
+    ipifc::ctl(id, b"unbind", &[]).expect("pin (rebind): unbind");
+    ipifc::ctl(id, b"bind", &[b"loopback"]).expect("pin (rebind): bind after unbind");
+    ipifc::ctl(id, b"unbind", &[]).expect("pin (rebind): teardown unbind");
+    conv::conv_close(conv::Proto::Ipifc, id);
+}
+
 // ---------------------------------------------------------------------------
 // 08-07 Task 1 — the NETIP-05 DHCP pins: the P-F absorption's file-level
 // shape (zero smoltcp addresses, the netlog note — D-07 observability) and
