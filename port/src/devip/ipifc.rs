@@ -206,8 +206,17 @@ pub(crate) fn bind(id: usize, args: &[&[u8]]) -> Result<()> {
     if guard.slot_mut(kind).is_some() {
         return Err("interface already bound");
     }
-    // The conv must be unbound too (a re-bind of a bound conv errors
-    // the same way — the donor's `ifc->medium != nil` check).
+    // The conv must be unbound too (a re-bind of a bound conv errors the
+    // same way — the donor's `ifc->medium != nil` check).  The slots are
+    // per-medium, so the TARGET slot's check above is not enough: a conv
+    // bound to ANOTHER medium is caught here, by the conv's ownership
+    // record.  (One conv owning both ifcs — `bind loopback` then `bind
+    // ether` — silently resolved every later for_conv op to the first
+    // slot: WR-04.)
+    if guard.for_conv(id).is_some() {
+        return Err("interface already bound");
+    }
+    // The binding conv must be open (the ctl write arrived on it).
     {
         let node = LockNode::new();
         let t = conv::TABLES.lock(&node);
