@@ -290,10 +290,28 @@ fn flush_icache_user_range(start: usize, end: usize) {
 
 /// Unresolvable fault: print the marker and kill the process loudly.
 fn unresolvable(frame: &TrapFrame, class: u8, far: u64, access: &str) -> ! {
+    // Name the faulting process in the print (the wedgedbg dump's
+    // `name=` precedent) — a bare pc/addr pair cannot say WHICH binary
+    // faulted when several share the text-base convention, and that
+    // identity is the first fact a post-mortem needs.  The full table
+    // dump follows (the wedge autopsy's shape): a wild read's family
+    // tree is the second fact.
+    let who = proc::current()
+        .map(|p| {
+            let n = p.name.iter().position(|&b| b == 0).unwrap_or(p.name.len());
+            let name = core::str::from_utf8(&p.name[..n]).unwrap_or("?");
+            alloc::format!("pid={} name={}", p.pid, name)
+        })
+        .unwrap_or_else(|| alloc::format!("pid=? name=?"));
     println!(
-        "user fault: unresolvable class={class} addr={far:#x} pc={:#x} {access}",
+        "user fault: unresolvable class={class} addr={far:#x} pc={:#x} {access} {who}",
         frame.pc()
     );
+    // The frame dump (the virtpanic autopsy shape): the faulter's
+    // registers are the third fact — a nil/garbage pointer's origin
+    // register is visible here.
+    println!("{:#?}", frame);
+    proc::dump_proc_states();
     kill_current_process();
 }
 

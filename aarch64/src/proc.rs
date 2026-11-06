@@ -1662,7 +1662,9 @@ fn cons_reader_blocked() -> bool {
 /// blocked_in_kernel, sleep_until, name) — the wedge autopsy.  Holds
 /// PROC_TABLE while printing: PROC_TABLE → Console is the documented
 /// nesting order (reschedule's switch print is the precedent).
-fn dump_proc_states() {
+/// pub(crate): fault.rs's unresolvable kill dumps the table too (a wild
+/// read's family tree is the first post-mortem fact after the name).
+pub(crate) fn dump_proc_states() {
     let node = LockNode::new();
     let table = PROC_TABLE.lock(&node);
     for p in table.procs.iter().flatten() {
@@ -1671,14 +1673,28 @@ fn dump_proc_states() {
         }
         let n = p.name.iter().position(|&b| b == 0).unwrap_or(KNAMELEN);
         let name = core::str::from_utf8(&p.name[..n]).unwrap_or("?");
+        // The parent pid + the exec-recorded argv (the spawn topology
+        // distinguishes a libthread proccreate child from a
+        // fork+exec'd command).  SAFETY: parent names a
+        // PROC_TABLE-resident Proc (recorded at rfork; slots are never
+        // freed this era) and the table lock is held — the deref cannot
+        // race (post_wait_record's precedent).
+        let parent_pid = if p.parent.is_null() {
+            0
+        } else {
+            unsafe { (*p.parent).pid }
+        };
+        let argv_str = core::str::from_utf8(&p.argv).unwrap_or("?");
         println!(
-            "wedgedbg: pid={} state={} cons_wait={} blocked_in_kernel={} sleep_until={} name={}",
+            "wedgedbg: pid={} state={} cons_wait={} blocked_in_kernel={} sleep_until={} name={} parent={} argv={}",
             p.pid,
             state_name(p.state),
             p.cons_waiting,
             p.blocked_in_kernel,
             p.sleep_until,
-            name
+            name,
+            parent_pid,
+            argv_str
         );
     }
 }
