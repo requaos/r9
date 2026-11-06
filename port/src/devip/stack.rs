@@ -325,6 +325,16 @@ pub struct StackCore {
     pub iface: Interface,
     pub sockets: SocketSet<'static>,
     pub dev: StackDev,
+    /// The close-linger list (the donor's closeconv → tcpclose shape: a
+    /// tcp conv's last close() SEQUENCES the FIN but the tcb — here, the
+    /// socket — must live until the close handshake completes/ages out,
+    /// or the FIN and any queued TX tail never reach the wire).  A closed
+    /// conv's socket parks here (still IN `sockets`, so poll_at's timers
+    /// and the poll legs keep driving it); drive_stack reaps the entry
+    /// once the socket reaches State::Closed.  The list dies WITH the
+    /// core (an unbind drops both), so an entry's handle can never name
+    /// a successor core's SocketSet.
+    pub(crate) linger: Vec<SocketHandle>,
 }
 
 impl StackCore {
@@ -349,7 +359,7 @@ impl StackCore {
         cfg.slaac = false;
         let mut dev = dev;
         let iface = Interface::new(cfg, &mut dev, instant_now());
-        StackCore { iface, sockets: SocketSet::new(Vec::new()), dev: StackDev::Ether(dev) }
+        StackCore { iface, sockets: SocketSet::new(Vec::new()), dev: StackDev::Ether(dev), linger: Vec::new() }
     }
 
     /// Construct the scripted-test core (host pins only).
@@ -368,7 +378,7 @@ impl StackCore {
         cfg.slaac = false;
         let mut dev = dev;
         let iface = Interface::new(cfg, &mut dev, instant_now());
-        StackCore { iface, sockets: SocketSet::new(Vec::new()), dev: StackDev::ScriptedEther(dev) }
+        StackCore { iface, sockets: SocketSet::new(Vec::new()), dev: StackDev::ScriptedEther(dev), linger: Vec::new() }
     }
 
     fn new(dev: StackDev) -> StackCore {
@@ -381,7 +391,7 @@ impl StackCore {
         cfg.random_seed = ticks_now() ^ 0x9e37_79b9_7f4a_7c15;
         cfg.slaac = false; // Out-of-Scope (REQUIREMENTS; contract §12)
         let iface = Interface::new(cfg, &mut dev, instant_now());
-        StackCore { iface, sockets: SocketSet::new(Vec::new()), dev }
+        StackCore { iface, sockets: SocketSet::new(Vec::new()), dev, linger: Vec::new() }
     }
 }
 
@@ -500,6 +510,25 @@ pub fn drive_stack() {
                 }
             }
             core.iface.poll_maintenance(now);
+            // The close-linger reap (the donor's tcb-free at the close
+            // handshake's end): a conv-closed tcp socket parked in the
+            // linger list was driven by the polls above — once it reaches
+            // State::Closed (the FIN acked / the close timer aged out —
+            // poll_at below keeps the deadline armed while it lingers)
+            // removal is safe.  BEFORE the poll_at read so a reaped
+            // socket's timers stop counting now.
+            {
+                let mut i = 0;
+                while i < core.linger.len() {
+                    let h = core.linger[i];
+                    if core.sockets.get::<tcp::Socket>(h).state() == tcp::State::Closed {
+                        core.sockets.remove(h);
+                        core.linger.swap_remove(i);
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
             if let Some(at) = core.iface.poll_at(now, &core.sockets) {
                 let t = instant_to_ticks(at);
                 next = Some(next.map_or(t, |n| n.min(t)));

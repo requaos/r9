@@ -13,9 +13,13 @@
 //!   iseve/owner perm checks collapse — same shape as devether).
 //! - `conv_close` (closeconv, devip.c:546-577): last close resets the
 //!   conv — pending incall convs closed, state = Idle, queues drained,
-//!   socket dropped from the seam's SocketSet, and any blocked readers
-//!   woken (they re-check and read EOF — the donor's qclose arm).  The
-//!   wake hook call is AFTER the table guard drops (netif's
+//!   socket dropped from the seam's SocketSet (tcp LINGERS it instead:
+//!   the close()'d socket stays in the core's linger list — driven by
+//!   the seam's poll legs until State::Closed, then reaped — so the
+//!   sequenced FIN and queued TX tail actually leave; the donor's tcb
+//!   survives closeconv the same way), and any blocked readers woken
+//!   (they re-check and read EOF — the donor's qclose arm).  The wake
+//!   hook call is AFTER the table guard drops (netif's
 //!   wake-after-drop discipline).
 //! - The `Chan::dup` ref-bump (dat.rs's DEV_IP arm → `conv_ref`):
 //!   rfork/dup'd fds must not double-decrement the conv at close.
@@ -585,20 +589,29 @@ pub(crate) fn conv_close(p: Proto, id: usize) {
         }
         // Drop the conv's socket from the seam's SocketSet (the
         // TABLES → STACK nesting — the cell is entered, the socket
-        // removed, and the guard dropped, all under the table guard).
+        // handled, and the guard dropped, all under the table guard).
         // tcp closes GRACEFULLY first (the donor's closeconv → tcpclose:
         // close() sequences the FIN after the queued data, so the peer's
-        // read EOFs); the removal follows immediately — the FIN leaves
-        // at the drive below.
+        // read EOFs) and the socket LINGERS in the core's set (the
+        // donor's tcb survives closeconv until the FIN is acked or aged
+        // out): smoltcp's close() only TRANSITIONS the state machine —
+        // removing the socket here would destroy the queued FIN (and any
+        // unsent TX tail) before any poll could emit it, and the peer
+        // would never see EOF.  drive_stack (below, and the deadline
+        // leg) drives the lingering socket; the seam reaps it once it
+        // reaches State::Closed.  udp/icmp have no close handshake —
+        // their sockets remove immediately.
         if let Some(h) = sock {
             let mut g = super::stack::STACK.enter().expect("devip: stack contended");
             if let Some(core) = g.core_mut(sel) {
                 if p == Proto::Tcp {
                     let s = core.sockets.get_mut::<smoltcp::socket::tcp::Socket>(h);
                     s.close();
+                    core.linger.push(h);
                     tcp_drove_close = true;
+                } else {
+                    core.sockets.remove(h);
                 }
-                core.sockets.remove(h);
             }
         }
         // Reset to the clone-time surface (closeconv: state = Idle,
