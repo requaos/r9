@@ -52,8 +52,14 @@ pub const TEXT_MAP_BASE: usize = 0x10000;
 /// page is mapped zeroed; r9 never writes Tos fields this phase (Harvey
 /// getpid reads #c/pid, not Tos — cheap insurance only).
 const TOS_SIZE: usize = 88;
-/// Cap on exec args — the initial stack frame must fit the seed page.
-const MAX_ARGS: usize = 16;
+/// Cap on exec args — the initial stack frame must fit the seed page
+/// (the byte-fit check in check_seed_fit is the REAL constraint; this
+/// pre-cap just keeps the slots array honest).  Measured need: the
+/// 06-07 tier-1 sweep's `echo T1-XDOBS $xdout` builds 17 argv entries
+/// (the xd dump's words ride echo's argv) — 16 was too small and its
+/// failure cascaded into rc's runq underflow ("pushword but no argv").
+/// 32 matches sys_exec's entry cap (MAX_EXEC_ARGS).
+const MAX_ARGS: usize = 32;
 
 /// A validated a.out header (all on-disk fields big-endian).
 #[derive(Debug)]
