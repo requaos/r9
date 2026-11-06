@@ -128,7 +128,7 @@ fn putb(uart: &dyn Uart, b: u8) {
 //
 // Qid encoding (collision-free): root = 0 (QTDIR), cons = 1 (QTFILE — the
 // fd 0/1/2 preopen convention, proc.rs), null = 2, user = 3, hostowner = 4,
-// time = 5, consctl = 6, pid = 7.
+// time = 5, consctl = 6, pid = 7, random = 8, urandom = 9.
 // ---------------------------------------------------------------------------
 
 /// Plan 9 Qid type bytes (sys/include/libc.h).
@@ -155,6 +155,14 @@ pub(crate) const QID_CONSCTL: u64 = 6;
 /// getpid() reads it (`open("#c/pid")` + atol), which is what lets
 /// init's `#p/%d/ctl` "pri 10" write name the REAL pid instead of 0.
 pub(crate) const QID_PID: u64 = 7;
+/// The random file (D-17) — a read serves fresh bytes from the
+/// DTB-seeded ChaCha20 DRBG (the random device section at the bottom of
+/// this file).  Read-only (0444): no write-to-stir surface this era.
+pub(crate) const QID_RANDOM: u64 = 8;
+/// The urandom file (D-17) — identical behavior to random this era
+/// (both are non-blocking reads from the same DRBG; Phase 11 hardens
+/// and splits the semantics).  Read-only (0444).
+pub(crate) const QID_URANDOM: u64 = 9;
 
 /// attach: the devcons root chan (one console tree this era — the attach
 /// spec is empty, the devroot attach precedent).
@@ -190,7 +198,7 @@ const TIME_DEFAULT: &[u8] = b"1700000000\n";
 /// The per-file static metadata (name, qid, mode) — the walk table and the
 /// directory listing share it.  lengths are computed at read/stat time
 /// (hostowner's and time's vary).
-const FILES: [(&[u8], u64, u32); 7] = [
+const FILES: [(&[u8], u64, u32); 9] = [
     (b"cons", QID_CONS, 0o666),
     (b"null", QID_NULL, 0o666),
     (b"user", QID_USER, 0o444),
@@ -198,6 +206,8 @@ const FILES: [(&[u8], u64, u32); 7] = [
     (b"time", QID_TIME, 0o664),
     (b"consctl", QID_CONSCTL, 0o664),
     (b"pid", QID_PID, 0o444),
+    (b"random", QID_RANDOM, 0o444),
+    (b"urandom", QID_URANDOM, 0o444),
 ];
 
 /// The arch-side current-pid hook for the pid file (the devproc
@@ -264,14 +274,20 @@ pub fn walk(c: &crate::dat::Chan, name: &[u8]) -> crate::Result<crate::dat::Chan
     Ok(nc)
 }
 
-/// Open a walked devcons chan.  The root dir opens OREAD only; user and
-/// pid are read-only (0444); cons/null/hostowner open for read or write.
+/// Open a walked devcons chan.  The root dir opens OREAD only; user, pid,
+/// random and urandom are read-only (0444); cons/null/hostowner open for
+/// read or write.
 pub fn open(c: &crate::dat::Chan, mode: u32) -> crate::Result<crate::dat::Chan> {
     if c.qid.typ == QTDIR && mode != crate::dat::OREAD {
         return Err("devcons: directory opens OREAD only");
     }
-    if (c.qid.path == QID_USER || c.qid.path == QID_PID) && mode != crate::dat::OREAD {
-        return Err("devcons: user/pid are read-only");
+    if (c.qid.path == QID_USER
+        || c.qid.path == QID_PID
+        || c.qid.path == QID_RANDOM
+        || c.qid.path == QID_URANDOM)
+        && mode != crate::dat::OREAD
+    {
+        return Err("devcons: user/pid/random/urandom are read-only");
     }
     let mut nc = crate::dat::Chan::new(c.dev, c.qid, mode);
     nc.path = c.path.clone();
@@ -449,6 +465,12 @@ pub fn read(c: &mut crate::dat::Chan, buf: &mut [u8], offset: u64) -> crate::Res
             buf[..n].copy_from_slice(&avail[..n]);
             n as u64
         }
+        // /dev/random + /dev/urandom (D-17): fresh bytes from the
+        // ChaCha20 DRBG on every read — streaming devices, the offset
+        // ignored (the cons/devpipe streaming precedent).  Both files
+        // behave identically this era (the module comment at the bottom
+        // records the minimality + the Phase-11 supersession).
+        QID_RANDOM | QID_URANDOM => return Ok(random_read(buf)),
         _ => return Err("devcons: read of unknown file"),
     };
     if offset == u64::MAX {
@@ -467,6 +489,7 @@ pub fn write(c: &mut crate::dat::Chan, buf: &[u8]) -> crate::Result<u64> {
         QID_CONS => Ok(write_bytes(buf) as u64),
         QID_NULL => Ok(buf.len() as u64),
         QID_USER => Err("devcons: user is read-only"),
+        QID_RANDOM | QID_URANDOM => Err("devcons: random/urandom are read-only"),
         QID_HOSTOWNER => {
             let node = LockNode::new();
             let mut stored = HOSTOWNER.lock(&node);
@@ -898,4 +921,226 @@ fn cons_read(buf: &mut [u8]) -> crate::Result<u64> {
         }
         (hooks.block)();
     }
+}
+
+// ---------------------------------------------------------------------------
+// /dev/random + /dev/urandom — the D-17 minimal DTB-seeded CSPRNG.
+//
+// D-17 (08-CONTEXT, 2026-11-05): the MINIMAL random device lands in Phase 8
+// because ipconfig's init() calls srand(truerand()) UNCONDITIONALLY and
+// libc's truerand() sysfatals without /dev/random (research OQ-2 / Pitfall
+// P-I); r9 had no random file.  Scope is deliberately minimal: the two
+// read-only (0444) files only — no devcap, no auth adjacency, no
+// virtio-rng, no write-to-stir surface.  **Phase 11 (AUTH-02) HARDENS and
+// EXPANDS this implementation** (a real entropy pool, reseed discipline, a
+// write surface, hardware RNG sources); the construction below is
+// superseded there.
+//
+// The CSPRNG: a ChaCha20-based DRBG in pure safe Rust (no new crate, no
+// unsafe — this module keeps its forbid attribute).  Counter-mode
+// keystream: a 32-byte key + an 8-byte counter (DJB's original layout:
+// state = constants ‖ key ‖ counter64 ‖ nonce64=0), 20 rounds with the
+// feed-forward add.  The DRBG is seeded LAZILY at the first read from the
+// DTB's /chosen/rng-seed property (qemu supplies real entropy there when
+// loading the blob — the committed virt-gicv2.dts header comment documents
+// the injection), read via port::fdt from the arch hook, mixed with
+// CNTFRQ+CNTPCT+tick jitter at seed time AND on every read.  The counter
+// increments per 64-byte block and the key is jitter-mixed per read, so no
+// two reads ever produce the same bytes; the read path never errors (a
+// truerand() caller must never fall back to a weaker path — T-08-11).
+//
+// `urandom` is the non-blocking read from the pool; `random` is IDENTICAL
+// this era (the pool never blocks) — the split is Phase 11's.
+//
+// Entropy hooks: the arch registers { rng_seed, jitter } once at boot
+// (main.rs, platform = "virt" this era — the only dev_exec platform).  A
+// read before registration (or on a platform with no registration) seeds
+// from the block constants alone — deterministic bytes; the file still
+// never errors, and the entropy guarantee is documented to require the
+// registered hooks (every gate platform has them).
+// ---------------------------------------------------------------------------
+
+/// The ChaCha20 state constants — "expand 32-byte k" (RFC 8439 §2.3).
+const CHACHA20_CONST: [u32; 4] = [0x6170_7865, 0x3320_646e, 0x7962_2d32, 0x6b20_6574];
+
+/// The ChaCha20 quarter-round (RFC 8439 §2.1): add-xor-rotate on the
+/// four named state words.
+fn quarter_round(s: &mut [u32; 16], a: usize, b: usize, c: usize, d: usize) {
+    s[a] = s[a].wrapping_add(s[b]);
+    s[d] = (s[d] ^ s[a]).rotate_left(16);
+    s[c] = s[c].wrapping_add(s[d]);
+    s[b] = (s[b] ^ s[c]).rotate_left(12);
+    s[a] = s[a].wrapping_add(s[b]);
+    s[d] = (s[d] ^ s[a]).rotate_left(8);
+    s[c] = s[c].wrapping_add(s[d]);
+    s[b] = (s[b] ^ s[c]).rotate_left(7);
+}
+
+/// The ChaCha20 block function (RFC 8439 §2.3): constants ‖ key ‖
+/// counter64 ‖ nonce64(=0), 20 rounds (10 double rounds: columns then
+/// diagonals), then the feed-forward add of the input state.  Counter
+/// mode over a 64-bit counter — the plan's "32-byte key + 8-byte
+/// counter" shape.
+fn chacha20_block(key: &[u32; 8], counter: u64, out: &mut [u32; 16]) {
+    let mut w = [0u32; 16];
+    w[0..4].copy_from_slice(&CHACHA20_CONST);
+    w[4..12].copy_from_slice(key);
+    w[12] = counter as u32;
+    w[13] = (counter >> 32) as u32;
+    // w[14..16] = nonce = 0 (fixed this era — the key+counter pair is
+    // never reused, which is what the nonce exists to protect).
+    let orig = w;
+    for _ in 0..10 {
+        quarter_round(&mut w, 0, 4, 8, 12);
+        quarter_round(&mut w, 1, 5, 9, 13);
+        quarter_round(&mut w, 2, 6, 10, 14);
+        quarter_round(&mut w, 3, 7, 11, 15);
+        quarter_round(&mut w, 0, 5, 10, 15);
+        quarter_round(&mut w, 1, 6, 11, 12);
+        quarter_round(&mut w, 2, 7, 8, 13);
+        quarter_round(&mut w, 3, 4, 9, 14);
+    }
+    for i in 0..16 {
+        out[i] = w[i].wrapping_add(orig[i]);
+    }
+}
+
+/// The DRBG state: the 32-byte key (as 8 little-endian words), the
+/// 64-bit block counter, and the seeded latch.
+struct Drbg {
+    key: [u32; 8],
+    counter: u64,
+    seeded: bool,
+}
+
+impl Drbg {
+    const fn new() -> Drbg {
+        Drbg { key: [0; 8], counter: 0, seeded: false }
+    }
+}
+
+/// The DRBG cell.  Syscall context only (the file read path); the mcslock
+/// static-publish idiom.  Lock order: DRBG → Console is the one-way order
+/// (the seeded-marker print happens under the DRBG guard; no path takes
+/// DRBG while holding Console — the console write/print paths never touch
+/// the DRBG).
+static DRBG: Lock<Drbg> = Lock::new("randomdrbg", Drbg::new());
+
+/// The arch-side entropy hooks — the dependency-inversion idiom (port
+/// cannot read the DTB or the aarch64 generic-timer registers).
+/// Registered once at boot before the first exec (main.rs); a second
+/// registration is a boot bug.
+#[derive(Clone, Copy)]
+pub struct RandomHooks {
+    /// Copy the DTB's /chosen/rng-seed property bytes into `buf`,
+    /// returning the byte count (0 when the property is absent — the
+    /// CNTFRQ/ticks mixing then carries the whole seed, the plan's
+    /// documented fallback).
+    pub rng_seed: fn(&mut [u8]) -> usize,
+    /// A jitter sample: CNTFRQ ^ CNTPCT ^ the 1 ms tick count (the
+    /// plan's "CNTFRQ + tick jitter"; CNTPCT is the term that varies
+    /// between back-to-back reads within one tick).
+    pub jitter: fn() -> u64,
+}
+
+static RANDOM_HOOKS: Lock<Option<RandomHooks>> = Lock::new("randomhooks", None);
+
+/// Register the arch-side entropy hooks.  A second registration is a
+/// boot bug.
+pub fn set_random_hooks(hooks: RandomHooks) {
+    let node = LockNode::new();
+    let mut guard = RANDOM_HOOKS.lock(&node);
+    assert!(guard.is_none(), "devcons: random hooks registered twice");
+    *guard = Some(hooks);
+}
+
+/// The once-at-seed marker guard (the ATTACH_PRINTED idiom in devip.rs):
+/// `devcons: random seeded` prints exactly once, at the first read's
+/// seed.
+static RANDOM_SEEDED_PRINTED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Mix one jitter sample-pair into the key (two samples, decorrelated
+/// across different key words with a rotate — CNTPCT advances between
+/// the two hook calls).
+fn drbg_mix_jitter(drbg: &mut Drbg, hooks: &RandomHooks) {
+    let j = (hooks.jitter)();
+    drbg.key[0] ^= j as u32;
+    drbg.key[1] ^= (j >> 32) as u32;
+    let j2 = (hooks.jitter)();
+    drbg.key[2] ^= (j2 as u32).rotate_left(11);
+    drbg.key[3] ^= ((j2 >> 32) as u32).rotate_left(11);
+}
+
+/// Seed the DRBG: fold the DTB rng-seed bytes into the key
+/// (add-and-rotate, little-endian byte order, wrapping across the 8
+/// words), mix the boot jitter, then compress with the block function
+/// itself (key ← lo(E(key,0)) + hi(E(key,0)) — the one-way fold that
+/// keeps the raw seed bytes unrecoverable from the later keystream).
+fn drbg_seed(drbg: &mut Drbg, hooks: &RandomHooks) {
+    let mut seed_bytes = [0u8; 64];
+    let n = (hooks.rng_seed)(&mut seed_bytes).min(seed_bytes.len());
+    for (i, &b) in seed_bytes[..n].iter().enumerate() {
+        let w = (i / 4) % 8;
+        let shift = (i % 4) * 8;
+        drbg.key[w] = drbg.key[w].wrapping_add((b as u32) << shift).rotate_left(7);
+    }
+    drbg_mix_jitter(drbg, hooks);
+    let mut out = [0u32; 16];
+    chacha20_block(&drbg.key, 0, &mut out);
+    for i in 0..8 {
+        drbg.key[i] = out[i].wrapping_add(out[i + 8]);
+    }
+    drbg.counter = 1;
+    drbg.seeded = true;
+}
+
+/// Serve a /dev/random (== /dev/urandom this era) read: seed lazily at
+/// the first call, mix fresh jitter on every call, then emit counter-mode
+/// keystream blocks (the counter increments per block — never the same
+/// bytes twice).  Never errors.
+fn random_read(buf: &mut [u8]) -> u64 {
+    let hooks = {
+        let node = LockNode::new();
+        *RANDOM_HOOKS.lock(&node)
+    };
+    let node = LockNode::new();
+    let mut drbg = DRBG.lock(&node);
+    if !drbg.seeded {
+        match hooks {
+            Some(h) => {
+                drbg_seed(&mut drbg, &h);
+                // The seeded marker (D-17's gate-visible proof) — once,
+                // under the DRBG guard; DRBG → Console is the one-way
+                // lock order (the INPUT → Console precedent).
+                if !RANDOM_SEEDED_PRINTED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+                    crate::println!("devcons: random seeded");
+                }
+            }
+            None => {
+                // No hooks registered (a non-gate platform): seed from
+                // the constants alone — deterministic bytes, documented
+                // in the module header; the file still never errors.
+                drbg.counter = 1;
+                drbg.seeded = true;
+            }
+        }
+    }
+    if let Some(h) = hooks {
+        drbg_mix_jitter(&mut drbg, &h);
+    }
+    let mut written = 0usize;
+    let mut block = [0u32; 16];
+    while written < buf.len() {
+        chacha20_block(&drbg.key, drbg.counter, &mut block);
+        drbg.counter = drbg.counter.wrapping_add(1);
+        for &w in &block {
+            for &b in &w.to_le_bytes() {
+                if written < buf.len() {
+                    buf[written] = b;
+                    written += 1;
+                }
+            }
+        }
+    }
+    written as u64
 }

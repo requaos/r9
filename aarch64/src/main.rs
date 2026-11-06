@@ -145,6 +145,13 @@ pub extern "C" fn main9(dtb_va: usize) {
     #[cfg(platform = "virt")]
     let dtb_va = if dtb_va - KZERO == 0 { KZERO + 0x4000_0000 } else { dtb_va };
 
+    // Record the DTB's VA for the D-17 random device's lazy rng-seed
+    // parse (08-06 — the parse runs at the first /dev/random read, off
+    // this recorded address; the DTB is reserved in pagealloc below and
+    // its KZERO+PA mapping is never torn down).
+    #[cfg(platform = "virt")]
+    platform::devcons::set_dtb_va(dtb_va);
+
     // Parse the DTB before we set up memory so we can correctly map it.
     // The two-pass construction: header prefix learns totalsize, then the
     // full slice.
@@ -545,6 +552,19 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
         post_group: proc::post_note_group_of_members,
         echo: cons_echo,
     });
+    // devcons's random-device hooks (D-17, 08-06): the DTB rng-seed read
+    // (lazy — at the first /dev/random read, via port::fdt off the DTB VA
+    // recorded in main9) + the generic-timer jitter sample.  virt-only
+    // this era (the only dev_exec platform; the tick count is the virt
+    // timer module's).  Registered before the first exec so the very
+    // first ipconfig's truerand() resolves.
+    #[cfg(platform = "virt")]
+    {
+        port::devcons::set_random_hooks(port::devcons::RandomHooks {
+            rng_seed: platform::devcons::rng_seed_read,
+            jitter: platform::devcons::random_jitter,
+        });
+    }
 
     // The kernel-seeded ROOT env group — the ONE mechanism
     // replacing both 9k's #ec config env and an argv hint.
