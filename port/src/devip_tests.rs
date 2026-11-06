@@ -2198,3 +2198,57 @@ fn address_class_demux_loopback_vs_ether() {
     }
 }
 
+/// Pin 5 (the 08-06 must_haves' backstop truth): ipifc add/remove at the
+/// boundary values follows the contract doc's behavior with the exact
+/// error strings — the 0.0.0.0/0 unnumbered DHCP preconfig ABSORBS (never
+/// a smoltcp panic, P-F), a duplicate add is a no-op, an invalid mask
+/// errors "bad ip address syntax", remove of a missing lifc errors
+/// "devip: no such local address", and a real remove succeeds.
+#[test]
+fn ipifc_add_remove_boundary_values_follow_the_contract() {
+    // A bare seam: NO pre-installed core — the bind below installs the
+    // loopback core itself (fresh_scripted_stack's install would trip the
+    // bind's already-bound guard).
+    let _serial = SEAM_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    ensure_hooks();
+    set_ticks(0);
+    take_wake_log();
+    {
+        let mut g = stack::enter_stack();
+        g.core = None;
+        g.ether = None;
+    }
+    crate::devip::arp::test_flush();
+    use crate::devip::{conv, ipifc};
+    let id = conv::conv_alloc(conv::Proto::Ipifc).expect("pin (bound): ipifc clone");
+    ipifc::ctl(id, b"bind", &[b"loopback"]).expect("pin (bound): bind loopback");
+    // The absorption (contract §12.6 / P-F): the unspecified add records
+    // the DHCP-in-progress marker and NEVER reaches smoltcp's
+    // update_ip_addrs (which would panic) — the write succeeds.  The
+    // donor's addselfcache null-address side effect fires: ipforme's
+    // accept-all flag sets (the DHCP era's accept-all state).
+    ipifc::ctl(id, b"add", &[b"0.0.0.0", b"0.0.0.0"]).expect("pin (bound): the absorbed add");
+    assert!(
+        crate::devip::selftab_acceptall(),
+        "pin (bound): the absorbed 0.0.0.0 set the accept-all flag (addselfcache's side effect)"
+    );
+    // A real address, then its DUPLICATE (the donor's already-a-local
+    // no-op, ipifc.c:423-437).
+    ipifc::ctl(id, b"add", &[b"127.0.0.1", b"255.0.0.0"]).expect("pin (bound): the real add");
+    ipifc::ctl(id, b"add", &[b"127.0.0.1", b"255.0.0.0"]).expect("pin (bound): the duplicate no-op");
+    // The invalid mask errors with the exact string.
+    let e = ipifc::ctl(id, b"add", &[b"127.0.0.2", b"999.0.0.0"]).expect_err("pin (bound): invalid mask errors");
+    assert_eq!(e, "bad ip address syntax", "pin (bound): the invalid-mask string");
+    // remove of a missing lifc errors; a real remove succeeds.
+    let e = ipifc::ctl(id, b"remove", &[b"10.9.9.9", b"255.255.255.255"])
+        .expect_err("pin (bound): remove of a missing lifc errors");
+    assert_eq!(e, "devip: no such local address", "pin (bound): the not-found string");
+    ipifc::ctl(id, b"remove", &[b"127.0.0.1", b"255.0.0.0"]).expect("pin (bound): the real remove");
+    // Clean teardown (the FS/static seam state survives across pins):
+    // drop the absorbed marker (accept-all clears) + unbind + close.
+    ipifc::ctl(id, b"remove", &[b"0.0.0.0", b"0.0.0.0"]).expect("pin (bound): drop the marker");
+    assert!(!crate::devip::selftab_acceptall(), "pin (bound): the marker's remove clears accept-all");
+    ipifc::ctl(id, b"unbind", &[]).expect("pin (bound): unbind");
+    conv::conv_close(conv::Proto::Ipifc, id);
+}
+
