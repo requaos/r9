@@ -263,13 +263,20 @@ pub(crate) fn unbind(id: usize) -> Result<()> {
         remove_address(lifc);
     }
     drop(guard);
-    // The seam core goes away (the iface is dropped; ether's drop closes
-    // the adapter's netif convs).
-    let mut g = stack::STACK.enter().expect("devip: stack contended");
-    match kind {
-        medium::MediumKind::Loopback => g.core = None,
-        medium::MediumKind::Ether => g.ether = None,
-    }
+    // The seam core goes away — TAKEN out of the cell and dropped only
+    // after the guard drops: ether's Drop closes the adapter's netif
+    // convs, and netif's close path takes NETIF/INGRESS — the seam
+    // never holds STACK across them (the bind path's "adapter
+    // construction OUTSIDE the stack cell" discipline, mirrored to the
+    // teardown).
+    let taken = {
+        let mut g = stack::STACK.enter().expect("devip: stack contended");
+        match kind {
+            medium::MediumKind::Loopback => g.core.take(),
+            medium::MediumKind::Ether => g.ether.take(),
+        }
+    };
+    drop(taken);
     Ok(())
 }
 

@@ -350,7 +350,6 @@ impl EtherDev {
     pub(crate) fn mac(&self) -> [u8; 6] {
         self.mac
     }
-
     /// Retry the staged TX frame (drive_stack's top-of-drive call).
     /// Restages on a still-full ring; an error drops + counts.
     pub(crate) fn flush_tx(&mut self) {
@@ -422,6 +421,27 @@ impl EtherDev {
     #[allow(dead_code)]
     pub(crate) fn dropped(&self) -> u64 {
         self.dropped
+    }
+}
+
+impl Drop for EtherDev {
+    /// The unbind path: ipifc's unbind drops the ether seam core, which
+    /// owns this adapter — closing the three netif conversations here
+    /// releases the ether types so a LATER re-bind can allocate them
+    /// again.  Without this close the convs leaked open and the re-bind
+    /// failed `devether: ether-type already in use` (the "the binding
+    /// never closes the convs this era" note in pop_merged — first
+    /// exercised live by Harvey's 08-09 composed net smoke's
+    /// static→dhcp unbind+rebind).  conv_close's last-close reset (typ
+    /// cleared, queue drained, blocked readers wake to EOF) is netif's
+    /// own discipline.  Runs OUTSIDE the stack cell — the caller
+    /// (ipifc's unbind) takes the core out of the cell and drops it
+    /// after the guard drops; the seam never holds STACK across netif's
+    /// locks (the bind path's discipline, mirrored).
+    fn drop(&mut self) {
+        for &id in &self.convs {
+            crate::netif::conv_close(id);
+        }
     }
 }
 
