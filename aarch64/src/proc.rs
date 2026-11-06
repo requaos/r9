@@ -471,7 +471,12 @@ pub fn rfmem_brk_set(family: u64, old_end: usize, new_end: usize) -> Result<()> 
                         p.mapping_log.swap_remove(pos);
                     }
                 }
-                release_user_page(done_pa);
+                // The LAST release (count → 0) frees: the return is the
+                // free verdict — ignoring it leaked every completed page
+                // of a failed growth (WR-03).
+                if release_user_page(done_pa) {
+                    let _ = pagealloc::deallocate_physpage(PhysAddr::new(done_pa));
+                }
             }
         }
         return Err("brk: out of memory");
@@ -2397,7 +2402,7 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &TrapFrame, flag: u64)
                 unsafe {
                     let mut physalloc = PhysPageAllocator {};
                     let mut vmt = VmTraitImpl {};
-                    (*parent.root_table)
+                    if (*parent.root_table)
                         .map_to(
                             &mut physalloc,
                             &mut vmt,
@@ -2406,10 +2411,17 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &TrapFrame, flag: u64)
                             PageSize::Page4K,
                             RootPageTableType::User,
                         )
-                        .map_err(|_| "rfork: sweep parent map failed")?;
+                        .is_err()
+                    {
+                        // The page never published a refcount nor a
+                        // mapping record — free it (the brk arm's failure
+                        // hygiene), or every failed growth leaks it.
+                        let _ = pagealloc::deallocate_physpage(pa);
+                        return Err("rfork: sweep parent map failed");
+                    }
                     let mut physalloc = PhysPageAllocator {};
                     let mut vmt = VmTraitImpl {};
-                    (*child.root_table)
+                    if (*child.root_table)
                         .map_to(
                             &mut physalloc,
                             &mut vmt,
@@ -2418,7 +2430,27 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &TrapFrame, flag: u64)
                             PageSize::Page4K,
                             RootPageTableType::User,
                         )
-                        .map_err(|_| "rfork: sweep child map failed")?;
+                        .is_err()
+                    {
+                        // The parent's mapping is UNTRACKED (the record
+                        // push below never ran for this page) — unmap it
+                        // and free the page, or the page leaks and the
+                        // parent's exit walk (free_user_mappings) can't
+                        // see it to free it (WR-03).  Mirrors the brk
+                        // arm's per-member failure unwind.
+                        let mut physalloc = PhysPageAllocator {};
+                        let mut vmt = VmTraitImpl {};
+                        let _ = (*parent.root_table).map_to(
+                            &mut physalloc,
+                            &mut vmt,
+                            Entry::empty(),
+                            va,
+                            PageSize::Page4K,
+                            RootPageTableType::User,
+                        );
+                        let _ = pagealloc::deallocate_physpage(pa);
+                        return Err("rfork: sweep child map failed");
+                    }
                 }
                 let rec = MappingRecord { va, phys: pa.addr() as usize, size: PAGE_SIZE_4K, kind: SegKind::Bss };
                 parent.mapping_log.push(rec);
