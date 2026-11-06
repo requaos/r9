@@ -1538,43 +1538,48 @@ fn tcp_socket(ttl: u32) -> tcp::Socket<'static> {
     s
 }
 
+
 /// The P-K blocking connect wait (the donor's connectctlmsg sleep on
 /// c->cr until Connected/failed): probe the socket state → Established
 /// maps Connected; Closed mid-handshake maps Econrefused (the donor's
 /// localclose(s, Econrefused) on RST-to-SYN); the bridge deadline maps
 /// Etimedout (the donor's retransmit-exhaustion arm — smoltcp retransmits
-/// forever, so the deadline is ours).  The wait registers the conv's
-/// waker + the seam's net-waiter set, drives, and blocks (the udp read's
-/// probe → drive → register/arm → block shape); every wake re-checks
-/// (spurious-wake discipline, P-C).
+/// forever, so the deadline is ours).  The wait is the seam's
+/// wakeup-loss-free shape — probe → DRIVE → RE-PROBE → register/arm →
+/// block: on loopback the drive completes the handshake SYNCHRONOUSLY
+/// (the SYN loops in, the SYN-ACK loops back — the Established
+/// transition and its waker fire DURING the drive), so the re-probe
+/// after the drive is load-bearing (a wake fired mid-drive readies a
+/// RUNNING proc — a no-op; without the re-probe the block wedges).
 fn tcp_connect_wait(id: usize) -> Result<()> {
     let deadline = stack::instant_now() + Duration::from_millis(TCP_CONNECT_TIMEOUT_MS as u64);
     let mut hooks: Option<stack::DevipHooks> = None;
-    loop {
-        enum Probe {
-            Established,
-            Closed,
-            Progress,
-        }
-        let probe = {
-            let node = LockNode::new();
-            let t = conv::TABLES.lock(&node);
-            match t.table(Proto::Tcp)[id].sock {
-                Some(h) => {
-                    let g = stack::STACK.enter().expect("devip: stack contended");
-                    match g.core.as_ref() {
-                        Some(core) => match core.sockets.get::<tcp::Socket>(h).state() {
-                            tcp::State::Established => Probe::Established,
-                            tcp::State::Closed => Probe::Closed,
-                            _ => Probe::Progress,
-                        },
-                        None => Probe::Closed,
-                    }
+    enum Probe {
+        Established,
+        Closed,
+        Progress,
+    }
+    // One probe of the socket state (TABLES → STACK nesting).
+    let probe_state = |id: usize| {
+        let node = LockNode::new();
+        let t = conv::TABLES.lock(&node);
+        match t.table(Proto::Tcp)[id].sock {
+            Some(h) => {
+                let g = stack::STACK.enter().expect("devip: stack contended");
+                match g.core.as_ref() {
+                    Some(core) => match core.sockets.get::<tcp::Socket>(h).state() {
+                        tcp::State::Established => Probe::Established,
+                        tcp::State::Closed => Probe::Closed,
+                        _ => Probe::Progress,
+                    },
+                    None => Probe::Closed,
                 }
-                None => Probe::Closed,
             }
-        };
-        match probe {
+            None => Probe::Closed,
+        }
+    };
+    loop {
+        match probe_state(id) {
             Probe::Established => {
                 let node = LockNode::new();
                 let mut t = conv::TABLES.lock(&node);
@@ -1588,10 +1593,21 @@ fn tcp_connect_wait(id: usize) -> Result<()> {
         if stack::instant_now() >= deadline {
             return Err(tcp_connect_fail(id, "connection timed out"));
         }
-        // Register → drive → block.  On loopback the drive completes the
-        // handshake synchronously (the SYN loops in, the pool member's
-        // SYN-ACK loops back); on the ether leg the RX IRQ / the tick
-        // sweep's deadline wake the parker (D-05 legs 1/2).
+        // Drive (the SYN leaves / the loopback handshake completes here),
+        // then RE-PROBE before registering — a wake fired mid-drive is
+        // consumed by the re-probe, never by a later block.
+        stack::drive_stack();
+        match probe_state(id) {
+            Probe::Established => continue, // the top arm records + returns
+            Probe::Closed => continue,      // the top arm maps Econrefused
+            Probe::Progress => {}
+        }
+        if stack::instant_now() >= deadline {
+            return Err(tcp_connect_fail(id, "connection timed out"));
+        }
+        // Register, drop, block (devpipe's wakeup-loss-free shape — the
+        // waker can only fire after block() swtch'es: the IRQ-masked
+        // single-CPU syscall invariant).
         if hooks.is_none() {
             hooks = Some(stack::hooks()?);
         }
@@ -1613,7 +1629,6 @@ fn tcp_connect_wait(id: usize) -> Result<()> {
             }
         }
         stack::register_net_waiter(pid);
-        stack::drive_stack();
         (hks.block)();
     }
 }
@@ -1984,6 +1999,36 @@ pub(crate) fn tcp_write_data(id: usize, buf: &[u8]) -> Result<u64> {
         match w {
             W::Sent(m) => sent += m,
             W::Block => {
+                // Buffer full.  Drive FIRST (a peer ACK already queued
+                // frees space now), then re-probe before parking — a
+                // send waker fired mid-drive readies a RUNNING proc (a
+                // no-op), so the register+block below must come after a
+                // post-drive re-probe (the connect wait's shape).
+                stack::drive_stack();
+                let sendable = {
+                    let node = LockNode::new();
+                    let t = conv::TABLES.lock(&node);
+                    let c = &t.table(Proto::Tcp)[id];
+                    if c.hangup.is_some() {
+                        return Err("i/o on hungup channel");
+                    }
+                    match c.sock {
+                        Some(h) => {
+                            let g = stack::STACK.enter().expect("devip: stack contended");
+                            match g.core.as_ref() {
+                                Some(core) => {
+                                    let s = core.sockets.get::<tcp::Socket>(h);
+                                    s.may_send() && s.can_send()
+                                }
+                                None => false,
+                            }
+                        }
+                        None => false,
+                    }
+                };
+                if sendable {
+                    continue;
+                }
                 if hooks.is_none() {
                     hooks = Some(stack::hooks()?);
                 }
@@ -2005,7 +2050,6 @@ pub(crate) fn tcp_write_data(id: usize, buf: &[u8]) -> Result<u64> {
                     }
                 }
                 stack::register_net_waiter(pid);
-                stack::drive_stack();
                 (hks.block)();
             }
         }
