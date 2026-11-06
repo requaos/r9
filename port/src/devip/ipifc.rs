@@ -247,6 +247,10 @@ pub(crate) fn bind(id: usize, args: &[&[u8]]) -> Result<()> {
         errin: 0,
         errout: 0,
     });
+    // WR-06: the route forest may hold default routes recorded BEFORE
+    // the bind (a legal ordering — the record-only arm of
+    // mirror_default_add); the mirror lands NOW, into the fresh core.
+    super::route::replay_default_routes();
     Ok(())
 }
 

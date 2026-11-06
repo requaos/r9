@@ -133,7 +133,7 @@ fn mirror_default_add(nexthop: &[u8; 16]) -> Result<()> {
     // add one; the fallback keeps the mirror well-defined).
     let core = if g.ether.is_some() { g.ether.as_mut() } else { g.core.as_mut() };
     let Some(core) = core else {
-        return Ok(()); // no bound medium yet — the record stands; the mirror lands at bind
+        return Ok(()); // no bound medium yet — the record stands; replay_default_routes lands it at bind
     };
     if let Some(gw4) = v4_of(nexthop) {
         core.iface
@@ -191,6 +191,41 @@ pub(crate) fn remove(target: [u8; 16], mask: [u8; 16]) {
     }
     if is_default(&target, &mask) {
         mirror_default_remove(was_default_v4);
+    }
+}
+
+/// Replay the recorded default routes into a freshly bound core (WR-06 —
+/// mirror_default_add's "the record stands; the mirror lands at bind"
+/// promise): an `add 0.0.0.0 0.0.0.0 <gw>` written BEFORE the bind (a
+/// legal ordering — ipconfig records the learned gateway whenever DHCP
+/// answers) stood as a devip-side record only; the bind now delivers it
+/// to smoltcp.  The target is the mirror's own rule (the ether core when
+/// bound, else the loopback core), and smoltcp's add-default replaces on
+/// re-add, so the replay is idempotent.  Called from ipifc's bind with
+/// the IFC guard held (the established IFC → ROUTES → STACK nesting).
+/// A replay failure (Routes storage full) never fails the bind — the
+/// record stands and the add-time mirror path stays the loud one — but
+/// the miss is note-worthy (D-07).
+pub(crate) fn replay_default_routes() {
+    let nexthops: Vec<[u8; 16]> = {
+        let node = LockNode::new();
+        let g = ROUTES.lock(&node);
+        g.routes
+            .iter()
+            .filter(|r| is_default(&r.target, &r.mask))
+            .map(|r| r.nexthop)
+            .collect()
+    };
+    for nexthop in nexthops {
+        if let Err(e) = mirror_default_add(&nexthop) {
+            super::netlog::emit(
+                super::netlog::LOG_IP,
+                alloc::format!(
+                    "devip: default-route replay at bind failed ({e}); the record stands"
+                )
+                .into_bytes(),
+            );
+        }
     }
 }
 
