@@ -1621,9 +1621,10 @@ pub(crate) fn icmp6_write_data(id: usize, buf: &[u8]) -> Result<u64> {
     // memsets, ipconfig's sendrs memsets.  Validating the version would
     // break the donor's own clients; the overwrite semantics govern.)
     let (dst16, msg_off): ([u8; 16], usize) = if headers6 {
-        if n < 40 + 4 {
-            // The donor's pullupblock(ICMP_USEAD6) failure arm — freed,
-            // the write succeeds.
+        if n < 40 + 8 {
+            // The donor's bound after consuming the ICMP_USEAD6 prefix:
+            // blocklen < IPICMPSZ (the IP6HDR pad + the 8-byte icmp
+            // header area) → freed; the write succeeds.
             IN_ERRORS6.fetch_add(1, Ordering::Relaxed);
             return Ok(n as u64);
         }
@@ -1634,8 +1635,10 @@ pub(crate) fn icmp6_write_data(id: usize, buf: &[u8]) -> Result<u64> {
         ra.copy_from_slice(&buf[24..40]);
         (ra, 40)
     } else {
-        if n < 40 + 4 {
+        if n < 40 + 8 {
             // blocklen(bp) < IPICMPSZ → freeblist (the write succeeds).
+            // The +8 is the icmp header area the donor's ident overwrite
+            // touches — the bridge's ident write has the same reach.
             IN_ERRORS6.fetch_add(1, Ordering::Relaxed);
             return Ok(n as u64);
         }
