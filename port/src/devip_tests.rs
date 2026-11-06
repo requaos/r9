@@ -2419,6 +2419,51 @@ fn ipifc_add_remove_boundary_values_follow_the_contract() {
     conv::conv_close(conv::Proto::Ipifc, id);
 }
 
+/// The P-F absorption's v4 extensions (CR-04): `add 224.0.0.1` (v4
+/// multicast) and `add 255.255.255.255` (the limited broadcast) must
+/// absorb record-only — smoltcp's check_ip_addrs PANICS on any address
+/// that is neither unicast nor unspecified (224/4 fails the unicast arm;
+/// the all-ones address is is_broadcast), so pushing either turns an
+/// unprivileged ctl write into a kernel panic.  The lifc records (and
+/// removes) cleanly; the iface's address list never moves.
+#[test]
+fn ipifc_add_v4_multicast_and_broadcast_absorb_without_panic() {
+    // A bare seam (the bind installs the core itself) — the boundary
+    // pin's shape.
+    let _serial = SEAM_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    ensure_hooks();
+    set_ticks(0);
+    take_wake_log();
+    {
+        let mut g = stack::enter_stack();
+        g.core = None;
+        g.ether = None;
+    }
+    crate::devip::arp::test_flush();
+    use crate::devip::{conv, ipifc};
+    let id = conv::conv_alloc(conv::Proto::Ipifc).expect("pin (mcast4): ipifc clone");
+    ipifc::ctl(id, b"bind", &[b"loopback"]).expect("pin (mcast4): bind loopback");
+
+    ipifc::ctl(id, b"add", &[b"224.0.0.1", b"255.0.0.0"]).expect("pin (mcast4): the v4-multicast add absorbs");
+    ipifc::ctl(id, b"add", &[b"255.255.255.255", b"255.255.255.255"])
+        .expect("pin (mcast4): the limited-broadcast add absorbs");
+    {
+        let g = stack::enter_stack();
+        let core = g.core.as_ref().expect("pin (mcast4): the loopback core");
+        assert!(
+            core.iface.ip_addrs().is_empty(),
+            "pin (mcast4): neither absorption reaches smoltcp (P-F)"
+        );
+    }
+    // The records are real lifcs (removable — recorded, not dropped).
+    ipifc::ctl(id, b"remove", &[b"224.0.0.1", b"255.0.0.0"]).expect("pin (mcast4): the mcast record removes");
+    ipifc::ctl(id, b"remove", &[b"255.255.255.255", b"255.255.255.255"])
+        .expect("pin (mcast4): the broadcast record removes");
+
+    ipifc::ctl(id, b"unbind", &[]).expect("pin (mcast4): unbind");
+    conv::conv_close(conv::Proto::Ipifc, id);
+}
+
 // ---------------------------------------------------------------------------
 // 08-07 Task 1 — the NETIP-05 DHCP pins: the P-F absorption's file-level
 // shape (zero smoltcp addresses, the netlog note — D-07 observability) and
