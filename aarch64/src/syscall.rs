@@ -250,9 +250,13 @@ fn err(proc: &mut Proc, msg: &'static str) -> u64 {
 /// (SZ_LONG=4), so the wire slot's upper half is 7c garbage and must be
 /// masked (the width discipline above).
 ///
-/// The fd is CHECKED OUT (fd_take) for the op and put back after
-/// (fd_store) — a blocking pipe write never holds the fd-group lock
-/// (fdgrp.rs's checked-out-chan pattern).
+/// The fd is held by a transient OP-REFERENCE (fd_op_ref/fd_op_done —
+/// fdgrp.rs): the slot keeps its chan across a blocking write (devip's
+/// buffer-full park, the pipe queue), so a shared-group sibling's
+/// concurrent op on the same fd never sees an emptied slot — the
+/// libthread interleave (aan: a blocked reader proc + the writer main
+/// on one netfd) is exactly that shape; the pre-08-08 take/store
+/// pattern's "pwrite: bad fd" wedge was its failure.
 fn sys_pwrite(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 4) else {
         return err(proc, "pwrite: bad argument block");
@@ -265,7 +269,7 @@ fn sys_pwrite(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         Ok(s) => s,
         Err(_) => return err(proc, "pwrite: bad user buffer"),
     };
-    let Some(mut chan) = proc.fd_take(fd) else {
+    let Some(mut chan) = proc.fd_op_ref(fd) else {
         return err(proc, "pwrite: bad fd");
     };
     let result = match chan.dev {
@@ -323,7 +327,7 @@ fn sys_pwrite(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         }
         _ => Err("pwrite: unknown device"),
     };
-    proc.fd_store(fd, chan);
+    proc.fd_op_done(fd, chan);
     match result {
         Ok(wrote) => wrote,
         Err(msg) => err(proc, msg),
@@ -338,8 +342,11 @@ fn sys_pwrite(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 /// injected hooks).  n is a `long` — 32-bit in Plan 9 C, so the wire
 /// slot's upper half is masked (same discipline as sys_pwrite).
 ///
-/// The fd is CHECKED OUT (fd_take) for the op and put back after
-/// (fd_store) — a blocking pipe read never holds the fd-group lock.
+/// The fd is held by a transient OP-REFERENCE (fd_op_ref/fd_op_done —
+/// fdgrp.rs): the slot keeps its chan across the block, so a
+/// shared-group sibling's concurrent op on the same fd (libthread's
+/// shape — aan's reader/writer procs ride one netfd) never sees an
+/// emptied slot; the fd-group lock is never held across the block.
 fn sys_pread(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 4) else {
         return err(proc, "pread: bad argument block");
@@ -351,7 +358,7 @@ fn sys_pread(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         Ok(s) => s,
         Err(_) => return err(proc, "pread: bad user buffer"),
     };
-    let Some(mut chan) = proc.fd_take(fd) else {
+    let Some(mut chan) = proc.fd_op_ref(fd) else {
         return err(proc, "pread: bad fd");
     };
     let result = match chan.dev {
@@ -365,7 +372,7 @@ fn sys_pread(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         }
         DEV_ROOT => {
             let Some(root) = port::devroot::root() else {
-                proc.fd_store(fd, chan);
+                proc.fd_op_done(fd, chan);
                 return err(proc, "devroot: not mounted");
             };
             root.read(&mut chan, dst.as_slice_mut(), off)
@@ -425,7 +432,7 @@ fn sys_pread(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         }
         _ => Err("pread: unknown device"),
     };
-    proc.fd_store(fd, chan);
+    proc.fd_op_done(fd, chan);
     match result {
         Ok(read) => read,
         Err(msg) => err(proc, msg),

@@ -948,6 +948,22 @@ impl Proc {
         self.fd_group.lock(&node).ref_clone(fd)
     }
 
+    /// The transient op-reference pair for blocking-capable syscalls
+    /// (pread/pwrite): the slot keeps its chan (a shared-group sibling's
+    /// concurrent op on the same fd never sees an emptied slot) and the
+    /// op rides a count-free clone.  fdgrp.rs's op_ref/op_done.
+    pub fn fd_op_ref(&mut self, fd: u64) -> Option<Chan> {
+        let node = LockNode::new();
+        self.fd_group.lock(&node).op_ref(fd)
+    }
+
+    /// The op-ref's return half (offset merge + release; never
+    /// close-dispatches an emptied slot here).
+    pub fn fd_op_done(&mut self, fd: u64, c: Chan) {
+        let node = LockNode::new();
+        self.fd_group.lock(&node).op_done(fd, c);
+    }
+
     /// The chan's walked path at fd (sys_fd2path's source) — a read, not
     /// a checkout.
     pub fn fd_path(&mut self, fd: u64) -> Option<Vec<u8>> {

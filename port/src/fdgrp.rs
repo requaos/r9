@@ -81,6 +81,31 @@ impl<const N: usize> FdGroup<N> {
         self.get(fd).map(|c| c.dup())
     }
 
+    /// The transient op-reference pair for blocking-capable syscalls
+    /// (pread/pwrite — the donor's fdtochan incref + fgrp-unlock): the
+    /// slot KEEPS its chan the whole time and the op rides a clone with
+    /// NO open-count effects (Chan::op_clone — not an open).  The
+    /// take/store pattern emptied the slot for the op's duration, so a
+    /// shared-group sibling's concurrent op on the SAME fd saw a closed
+    /// fd ("pwrite: bad fd") — the libthread shape (aan's blocked reader
+    /// + writer procs ride one netfd) is exactly that interleave.
+    pub fn op_ref(&self, fd: u64) -> Option<Chan> {
+        self.get(fd).map(|c| c.op_clone())
+    }
+
+    /// The op-ref's return half: merge the (possibly advanced) streaming
+    /// offset back into the slot when it's still occupied; a slot
+    /// emptied mid-op (a close raced us — its close-dispatch already
+    /// ran) just releases the clone.  The release runs devmnt's
+    /// clunk_if_last (the donor's decref-fires-the-check shape) via
+    /// Chan::drop_op_ref.
+    pub fn op_done(&mut self, fd: u64, c: Chan) {
+        if let Some(slot) = self.fds.get_mut(fd as usize).and_then(|s| s.as_mut()) {
+            slot.offset = c.offset;
+        }
+        c.drop_op_ref();
+    }
+
     /// Install `c` at the lowest free slot; None when the table is full
     /// (the caller names the error: "open: no free fd" etc. — loud,
     /// never a silent -1).

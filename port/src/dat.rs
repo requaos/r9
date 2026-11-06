@@ -197,6 +197,43 @@ impl Chan {
             mnt_fid: self.mnt_fid.clone(),
         }
     }
+
+    /// The transient OP-REFERENCE clone (fdgrp.rs's op_ref/op_done pair —
+    /// the donor's fdtochan incref/unlock shape): a value clone that
+    /// shares the pipe/mnt/fid Arcs WITHOUT dup()'s open-count bumps.  A
+    /// syscall holding an op-ref is not a new OPEN, so devpipe's qref /
+    /// devether's ref / devip's conv inuse must NOT move — and the slot
+    /// keeps its chan the whole time, so a shared-group sibling's
+    /// CONCURRENT op on the same fd (libthread's whole shape: aan's
+    /// blocked reader proc and writer proc ride one netfd) never sees an
+    /// emptied slot.
+    pub fn op_clone(&self) -> Chan {
+        Chan {
+            qid: self.qid,
+            mode: self.mode,
+            offset: self.offset,
+            dev: self.dev,
+            path: self.path.clone(),
+            paqdir: self.paqdir.clone(),
+            pipe: self.pipe.clone(),
+            copen: self.copen,
+            mnt: self.mnt.clone(),
+            mnt_fid: self.mnt_fid.clone(),
+        }
+    }
+
+    /// Release an op-ref (the donor's decref side of fdtochan): only
+    /// devmnt's fid lifecycle observes ref drops — clunk_if_last fires
+    /// the Tclunk when THIS op-ref is the last ref (the
+    /// close-raced-mid-op corner: the slot chan's close already ran and
+    /// saw the op-ref's extra Arc).  devpipe/devether/devip counts were
+    /// never bumped by op_clone, so their close-dispatch never fires
+    /// here.
+    pub fn drop_op_ref(self) {
+        if self.dev == DEV_MNT {
+            crate::devmnt::clunk_if_last(&self);
+        }
+    }
 }
 
 /// Little-endian field writer for the stat(5) wire buffer (stat(5) is LE).
