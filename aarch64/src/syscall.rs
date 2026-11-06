@@ -1977,12 +1977,37 @@ fn sys_rendezvous(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         }
         None => {
             // The first caller sleeps until a peer takes the entry.
+            // The proc::sched() wake is pid-keyed and FLAT
+            // (Blocked→Ready), not channel-keyed like the donor's
+            // Rendez — a STALE waiter-set registration (e.g. a devip
+            // net-waiter entry left behind by an already-completed
+            // listen/read, drained by a later tick/RX sweep) readies a
+            // parked proc with NO peer pairing (the 08-08 aan gate: the
+            // server main's listen-open registration survived into its
+            // libthread runthread park, and the spurious ready made
+            // runthread read a nil q->head — a wild-EL0-pointer kill).
+            // Every other blocking primitive re-checks its condition
+            // after sched() (semacquire/await/sleep/devpipe/devip all
+            // do) — rendezvous does it here: our entry still present =
+            // the wake was spurious (re-block; the entry stays for the
+            // real peer); entry gone = a peer's take_sleeper consumed
+            // it in the same serialized syscall window that readied us
+            // (rendval is valid).
             proc::sched();
+            loop {
+                let paired = {
+                    let node = LockNode::new();
+                    !rgrp.lock(&node).is_parked(proc.pid)
+                };
+                if paired {
+                    break;
+                }
+                proc::sched();
+            }
             proc.rendval
         }
     }
 }
-
 /// EXITS(8): copy the optional message (nil = empty), free the proc's user
 /// pages + root-table page + kstack via the mapping_log / recorded PAs,
 /// mark Moribund, print the exit line, post the wait record to the parent

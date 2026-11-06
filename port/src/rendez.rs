@@ -60,6 +60,17 @@ impl RendezGroup {
         self.sleepers.push(RendezSleeper { tag, value, pid });
     }
 
+    /// Is `pid` still parked (its entry unconsumed)?  sys_rendezvous's
+    /// post-sched() re-verification: r9's wake model is pid-keyed and
+    /// FLAT (Blocked→Ready), not channel-keyed like the donor's Rendez,
+    /// so a stale waiter-set entry elsewhere (a devip net-waiter
+    /// registration left behind by an already-completed op, drained by
+    /// a later tick/RX sweep) can ready a parked proc without any peer
+    /// pairing — the entry's PRESENCE is the pairing truth.
+    pub fn is_parked(&self, pid: u64) -> bool {
+        self.sleepers.iter().any(|s| s.pid == pid)
+    }
+
     /// Drop every entry naming `pid` — the exit-time sweep (a killed or
     /// exited sleeper must never linger as a wake target; 9k's pexit
     /// removes the proc from the rendezvous hash the same way).
