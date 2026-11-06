@@ -245,6 +245,18 @@ pub(crate) fn bind(id: usize, args: &[&[u8]]) -> Result<()> {
 /// (with its self-table + route entries), drop the seam core, drop the
 /// interface record.  The ether slot's drop closes the adapter's netif
 /// conversations (EtherDev's Drop) so a re-bind re-allocates cleanly.
+///
+/// THE ORPHAN SWEEP (CR-05): convs of EVERY proto may hold sockets/pools
+/// in the dying core's SocketSet (a conv's lifetime is its open fds —
+/// nothing ties it to the binding conv).  Dropping the core under them
+/// leaves stale handles: after a later RE-bind the fresh SocketSet
+/// reuses slot indices from zero, and the orphaned conv's next op would
+/// panic smoltcp's handle check or, worse, silently alias a different
+/// live conversation's socket.  So BEFORE the core drops, every conv
+/// whose `sel` names it is orphaned: sock/pool references cleared (the
+/// sockets themselves die with the core's drop), the hangup marker set
+/// (the read/write paths error "i/o on hungup channel" / the udp
+/// sibling), and blocked waiters woken — the closeconv wake shape.
 pub(crate) fn unbind(id: usize) -> Result<()> {
     let node = LockNode::new();
     let mut guard = IFC.lock(&node);
@@ -263,6 +275,35 @@ pub(crate) fn unbind(id: usize) -> Result<()> {
         remove_address(lifc);
     }
     drop(guard);
+    // The orphan sweep (above): TABLES → STACK is the documented nesting,
+    // but the sweep needs only TABLES (it clears CONV-side references; the
+    // sockets die with the core drop below).  The wake runs after every
+    // guard drops.
+    let sel = match kind {
+        medium::MediumKind::Loopback => stack::CoreSel::Loopback,
+        medium::MediumKind::Ether => stack::CoreSel::Ether,
+    };
+    let mut pids: Vec<u64> = Vec::new();
+    {
+        let node = LockNode::new();
+        let mut t = conv::TABLES.lock(&node);
+        let mut scratch = [0u64; 16];
+        for p in Proto::ALL {
+            for c in t.table_mut(p).iter_mut() {
+                if c.sel == sel && (c.sock.is_some() || c.pool.is_some()) {
+                    c.sock = None;
+                    c.pool = None; // the pool's member sockets die with the core drop
+                    let msg: Vec<u8> = b"devip: medium unbound".to_vec();
+                    if c.hangup.is_none() {
+                        c.hangup = Some(msg.clone());
+                    }
+                    c.errq.push_back(msg);
+                    let n = c.waiters.take(&mut scratch);
+                    pids.extend_from_slice(&scratch[..n]);
+                }
+            }
+        }
+    }
     // The seam core goes away — TAKEN out of the cell and dropped only
     // after the guard drops: ether's Drop closes the adapter's netif
     // convs, and netif's close path takes NETIF/INGRESS — the seam
@@ -277,6 +318,13 @@ pub(crate) fn unbind(id: usize) -> Result<()> {
         }
     };
     drop(taken);
+    // The orphaned convs' blocked readers/writers wake to the hangup
+    // error — AFTER every guard drops (the wake-after-drop discipline).
+    if !pids.is_empty()
+        && let Ok(h) = stack::hooks()
+    {
+        (h.wake)(&pids);
+    }
     Ok(())
 }
 
