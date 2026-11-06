@@ -2464,6 +2464,69 @@ fn ipifc_add_v4_multicast_and_broadcast_absorb_without_panic() {
     conv::conv_close(conv::Proto::Ipifc, id);
 }
 
+/// The unbind orphan sweep (CR-05): convs hold sockets/pools in the seam
+/// core independent of the BINDING conv's lifetime.  Dropping the core
+/// under them leaves stale SocketHandles; a later re-bind's fresh
+/// SocketSet reuses indices from zero, turning the orphaned conv's next
+/// op into a smoltcp panic or a silent alias of another conversation's
+/// socket.  The sweep orphans every conv whose sel names the dying core
+/// BEFORE the drop: references cleared, hangup set, waiters woken.
+#[test]
+fn ipifc_unbind_orphans_convs_on_the_dying_core() {
+    // A bare seam; bind loopback, then swap in the scripted capture
+    // device (the v6rt pin's shape — the scripted peer answers the tcp
+    // handshake).
+    let _serial = SEAM_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    ensure_hooks();
+    set_ticks(0);
+    take_wake_log();
+    {
+        let mut g = stack::enter_stack();
+        g.core = None;
+        g.ether = None;
+    }
+    crate::devip::arp::test_flush();
+    use crate::devip::{conv, ipifc};
+    let ifc = conv::conv_alloc(conv::Proto::Ipifc).expect("pin (orphan): ipifc clone");
+    ipifc::ctl(ifc, b"bind", &[b"loopback"]).expect("pin (orphan): bind loopback");
+    {
+        let mut g = stack::enter_stack();
+        g.core = Some(StackCore::new_scripted(ScriptedDev::new()));
+    }
+    set_guest_addr();
+
+    // A live tcp conv (the scripted peer completes the handshake) and a
+    // connected udp conv — both ride the loopback core (no ether bound).
+    let (t, _gt) = alloc_tcp_conv();
+    scripted_connect(t, 1300);
+    assert!(tcp_sock_state(t).is_some(), "pin (orphan): the tcp conv holds a socket");
+    let (u, _gu) = alloc_udp_conv();
+    proto::ctl_write(Proto::Udp, u, b"connect 10.0.0.2!7000").expect("pin (orphan): udp connect");
+
+    // The unbind (ridden by the BINDING conv, not theirs) orphans both.
+    ipifc::ctl(ifc, b"unbind", &[]).expect("pin (orphan): unbind");
+    assert_eq!(tcp_sock_state(t), None, "pin (orphan): the tcp conv's socket reference is cleared");
+    assert!(tcp_conv_snapshot(t).5, "pin (orphan): the tcp conv carries the hangup");
+    let (hu, _) = udp_conv_hangup_err(u);
+    assert!(hu.is_some(), "pin (orphan): the udp conv carries the hangup");
+    let e = proto::tcp_read_data(t, &mut [0u8; 16]).expect_err("pin (orphan): the orphaned tcp read errors");
+    assert_eq!(e, "i/o on hungup channel", "pin (orphan): the hangup error, not a socket touch");
+    assert!(proto::udp_write_data(u, b"x").is_err(), "pin (orphan): the orphaned udp write errors");
+
+    // The poison window: a RE-bind installs a fresh core whose SocketSet
+    // reuses indices from zero — touching the orphaned conv must error,
+    // never panic or alias a successor socket.
+    ipifc::ctl(ifc, b"bind", &[b"loopback"]).expect("pin (orphan): re-bind");
+    let e = proto::tcp_read_data(t, &mut [0u8; 16]).expect_err("pin (orphan): the post-rebind read errors");
+    assert_eq!(e, "i/o on hungup channel", "pin (orphan): no stale-handle touch after re-bind");
+    assert!(proto::udp_write_data(u, b"x").is_err(), "pin (orphan): the post-rebind udp write errors");
+
+    // Teardown: drop the second binding (the orphans hold no seam
+    // references, so this unbind's sweep is a no-op) and close the ifc.
+    ipifc::ctl(ifc, b"unbind", &[]).expect("pin (orphan): teardown unbind");
+    conv::conv_close(conv::Proto::Ipifc, ifc);
+}
+
 // ---------------------------------------------------------------------------
 // 08-07 Task 1 — the NETIP-05 DHCP pins: the P-F absorption's file-level
 // shape (zero smoltcp addresses, the netlog note — D-07 observability) and
