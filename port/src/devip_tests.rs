@@ -1536,6 +1536,76 @@ fn tcp_close_hangup_hangupxmit_wire_shapes() {
 }
 
 // ---------------------------------------------------------------------------
+// Pin: the LAST-close FIN delivery (CR-01 — conv_close's lingering socket).
+// smoltcp's close() only TRANSITIONS the state machine (FIN queued
+// internally): removing the socket from the set in the same breath destroys
+// the FIN before any poll can emit it (the peer never sees EOF) and drops
+// any queued-but-unsent TX tail.  The donor's tcb survives closeconv until
+// the close handshake completes/ages out; the seam's linger list is that
+// shape: the closed conv's socket stays IN the SocketSet until
+// State::Closed, then the drive reaps it.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tcp_conv_close_lingers_the_socket_until_closed() {
+    let _serial = fresh_scripted_stack();
+    set_guest_addr();
+    let (id, _guard) = alloc_tcp_conv();
+    let isn = scripted_connect(id, 1240);
+    let base = tx_count();
+
+    // The LAST close (the fd path — Harvey programs close fds on exit;
+    // distinct from the `close` VERB pinned above): the FIN must leave,
+    // and the socket must LINGER in the seam mid-close.
+    crate::devip::conv::conv_close(Proto::Tcp, id);
+    let fin = (base..tx_count())
+        .map(tx_tcp)
+        .find(|l| l.fin)
+        .expect("pin (linger): the last close emits the FIN");
+    assert_eq!(fin.seq, isn + 1, "pin (linger): the FIN follows the handshake sequence");
+    let handle = {
+        let g = stack::enter_stack();
+        let core = g.core.as_ref().expect("pin (linger): stack installed");
+        assert_eq!(core.linger.len(), 1, "pin (linger): the closed conv's socket lingers");
+        let h = core.linger[0];
+        assert_eq!(
+            core.sockets.get::<tcp::Socket>(h).state(),
+            tcp::State::FinWait1,
+            "pin (linger): the lingered socket is mid-close, not destroyed"
+        );
+        h
+    };
+
+    // The peer ACKs our FIN and closes its side too: the close handshake
+    // completes (our ACK leaves), the socket lands in TimeWait — still
+    // parked (the donor's tcb frees only when the close AGES OUT).
+    push_rx(tcp4_frame(PEER, GUEST, 1240, fin.sport, PEER_ISN + 1, Some(isn + 2), TcpControl::Fin, &[]));
+    stack::drive_stack();
+    {
+        let g = stack::enter_stack();
+        let core = g.core.as_ref().expect("pin (linger): stack installed");
+        assert_eq!(
+            core.sockets.get::<tcp::Socket>(handle).state(),
+            tcp::State::TimeWait,
+            "pin (linger): the completed handshake lands in TimeWait"
+        );
+        assert_eq!(core.linger.len(), 1, "pin (linger): TimeWait still lingers");
+    }
+
+    // The close timer ages the socket out (smoltcp's CLOSE_DELAY = 10 s,
+    // driven by the seam's poll legs — the stub clock jumps it): the next
+    // drive reaps the socket from the set entirely.
+    set_ticks(10_001);
+    stack::drive_stack();
+    {
+        let g = stack::enter_stack();
+        let core = g.core.as_ref().expect("pin (linger): stack installed");
+        assert!(core.linger.is_empty(), "pin (linger): the Closed socket is reaped");
+        assert_eq!(core.sockets.iter().count(), 0, "pin (linger): the SocketSet slot frees");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Pin: P-M stats honesty — a full scripted echo exchange moves the bridge-
 // maintained counters; the stats file is the contract's 28-tag format; the
 // status line carries a devip state name.  The scripted device CAPTURES TX
