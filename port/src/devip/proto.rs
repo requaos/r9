@@ -1241,31 +1241,59 @@ fn synthesize_udphdr(
 /// Headers mode: the user's buffer carries the 52-byte Udphdr prefix —
 /// raddr/rport from the prefix, the lport OVERRIDDEN by the conv's
 /// announced port and a non-local user laddr overridden by the conv's
-/// (the man/3/ip rule).  The OQ-1 bridge rule (§12.6): the send's
-/// local_address comes from the conv's recorded laddr (never the naive
-/// silent-drop shape); an unspecified laddr resolves via the interface
-/// for the destination.
+/// (the man/3/ip rule).  Spawned mode (a listen/accept conv — Connected
+/// with a quad but no socket): the write rides the ANNOUNCER's socket
+/// with the conv's quad as per-write metadata (the donor sends on such
+/// convs; a dead/recycled announcer errors "udp: no socket on spawned
+/// conv").  The OQ-1 bridge rule (§12.6): the send's local_address comes
+/// from the conv's recorded laddr (never the naive silent-drop shape); an
+/// unspecified laddr resolves via the interface for the destination.
 pub(crate) fn udp_write_data(id: usize, buf: &[u8]) -> Result<u64> {
     let n = buf.len();
     // (The conv's lport never appears here: the socket's bind pinned the
     // source port at connect/announce — the man's "the kernel overrides
     // the user-specified local port with the announced one" is thus
     // enforced by construction on every write.)
-    let (sock, raddr, rport, laddr, headers, sel) = {
+    let (sock, raddr, rport, laddr, lport, headers, sel, announcer) = {
         let node = LockNode::new();
         let t = conv::TABLES.lock(&node);
         let c = &t.table(Proto::Udp)[id];
         if c.hangup.is_some() {
             return Err("udp: hangup on advise");
         }
-        (c.sock, c.raddr, c.rport, c.laddr, c.headers == 7, c.sel)
+        (c.sock, c.raddr, c.rport, c.laddr, c.lport, c.headers == 7, c.sel, c.announcer)
     };
-    let Some(h) = sock else {
-        // Never-connected conv: the donor's qwrite queues the packet and
-        // ipoput4 drops it unroutable — fire-and-forget (the write
-        // succeeds).  Counted, never silent.
-        UDP_IN_ERRS.fetch_add(1, Ordering::Relaxed);
-        return Ok(n as u64);
+    // A SPAWNED conv (Fsnewcall — Connected with a full quad but no
+    // socket of its own) writes through its ANNOUNCER's socket with the
+    // per-write metadata quad below: the donor SENDS on such convs (the
+    // classic listen/accept server's reply path) — a silent Ok(n) drop
+    // was the review's WR-01 (success with data loss is the worst
+    // failure shape).  The announcer must still BE its announcer
+    // (Announced, same lport): a closed/recycled slot is the loud error,
+    // never a wrong-port send on an unrelated socket.
+    let (h, sel) = match sock {
+        Some(h) => (h, sel),
+        None => match announcer {
+            Some(aid) => {
+                let a = {
+                    let node = LockNode::new();
+                    let t = conv::TABLES.lock(&node);
+                    let a = &t.table(Proto::Udp)[aid];
+                    (a.sock, a.sel, a.state, a.lport)
+                };
+                match a {
+                    (Some(h), asel, ConvState::Announced, aport) if aport == lport => (h, asel),
+                    _ => return Err("udp: no socket on spawned conv"),
+                }
+            }
+            None => {
+                // Never-connected conv: the donor's qwrite queues the
+                // packet and ipoput4 drops it unroutable — fire-and-forget
+                // (the write succeeds).  Counted, never silent.
+                UDP_IN_ERRS.fetch_add(1, Ordering::Relaxed);
+                return Ok(n as u64);
+            }
+        },
     };
     let (daddr16, dport, laddr16, payload): ([u8; 16], u16, [u8; 16], &[u8]) = if headers {
         if n < 52 {
