@@ -182,6 +182,11 @@ pub(crate) struct Conv {
     /// The conv's smoltcp socket (the seam's SocketSet), once connected
     /// or announced.
     pub(crate) sock: Option<SocketHandle>,
+    /// Which bound core the conv's socket lives in (the two-core seam,
+    /// 08-6): recorded at socket creation from the address-class demux
+    /// (stack.rs's CoreSel); the pool's sockets carry theirs in the
+    /// pool record.  Default Loopback (the 08-04 era's only core).
+    pub(crate) sel: super::stack::CoreSel,
     /// The per-conv error queue (Qmsg — one message per read).  UDP
     /// ICMP advice hangups land here (§6); read blocks when empty.
     pub(crate) errq: VecDeque<Vec<u8>>,
@@ -252,6 +257,7 @@ impl Conv {
             headers: 0,
             maxfragsize: 0,
             sock: None,
+            sel: super::stack::CoreSel::Loopback,
             errq: VecDeque::new(),
             incall: VecDeque::new(),
             waiters: WaitPids::new(),
@@ -451,6 +457,10 @@ pub(crate) fn fs_new_call_tcp(
         free?
     };
     {
+        // The spawned conv inherits the announcer's core selection (the
+        // two-core seam, 08-6 — its socket lives in the SAME core's
+        // SocketSet as the pool member it materialized from).
+        let sel = t.table(Proto::Tcp)[announcer].sel;
         let c = &mut t.table_mut(Proto::Tcp)[id];
         c.reset();
         c.allocated = true;
@@ -461,6 +471,7 @@ pub(crate) fn fs_new_call_tcp(
         c.state = ConvState::Connected;
         c.announcer = Some(announcer);
         c.sock = Some(sock);
+        c.sel = sel;
     }
     Some(id)
 }
@@ -531,9 +542,9 @@ pub(crate) fn conv_close(p: Proto, id: usize) {
         }
         // TABLES → STACK (the documented nesting): drop the conv's
         // socket while the table guard is held.
-        let (sock, pool) = {
+        let (sock, pool, sel) = {
             let table = t.table_mut(p);
-            let (incall, sock, pool, estab) = {
+            let (incall, sock, pool, estab, sel) = {
                 let c = &mut table[id];
                 nwake = c.waiters.take(&mut pids);
                 (
@@ -541,6 +552,7 @@ pub(crate) fn conv_close(p: Proto, id: usize) {
                     c.sock.take(),
                     c.pool.take(),
                     c.estab,
+                    c.sel,
                 )
             };
             // Close pending incall convs (no listen will ever happen —
@@ -554,7 +566,7 @@ pub(crate) fn conv_close(p: Proto, id: usize) {
             if p == Proto::Tcp && estab {
                 super::proto::tcp_curr_estab_dec();
             }
-            (sock, pool)
+            (sock, pool, sel)
         };
         // The proto close hook BEFORE the reset (the donor's
         // closeconv order: `cv->p->close(cv); cv->state = Idle`).
@@ -580,7 +592,7 @@ pub(crate) fn conv_close(p: Proto, id: usize) {
         // at the drive below.
         if let Some(h) = sock {
             let mut g = super::stack::STACK.enter().expect("devip: stack contended");
-            if let Some(core) = g.core.as_mut() {
+            if let Some(core) = g.core_mut(sel) {
                 if p == Proto::Tcp {
                     let s = core.sockets.get_mut::<smoltcp::socket::tcp::Socket>(h);
                     s.close();

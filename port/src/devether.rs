@@ -141,6 +141,13 @@ fn driver() -> Result<EtherDriverOps> {
     DRIVER.lock(&node).ok_or("devether: no ether0")
 }
 
+/// The published driver ops for the kernel-internal ether consumer (the
+/// devip ether adapter, 08-06): the negotiated MAC + tx_post.  Errors
+/// "devether: no ether0" until the bind publishes.
+pub(crate) fn driver_ops() -> Result<EtherDriverOps> {
+    driver()
+}
+
 // ---------------------------------------------------------------------------
 // attach + the file tree
 // ---------------------------------------------------------------------------

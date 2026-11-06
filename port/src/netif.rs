@@ -217,13 +217,16 @@ const FRAME_SLOTS: usize = CONV_STORE_CAP / ETHERMAXTU; // 43
 /// bytes of slot storage plus the free stack and the (slot, len) FIFO.
 /// The FIFO is the donor's `Queue*` in Qmsg mode: one WHOLE frame per
 /// pop (a partial-frame read is a defect, never a behavior — the plan's
-/// NETDRV-03 prohibition).
+/// NETDRV-03 prohibition).  Each queued frame carries the GLOBAL ingress
+/// sequence stamp (08-06): the devip ether adapter's arrival-order merge
+/// across its three conversations (0x800/0x806/0x86dd) compares head
+/// stamps — per-conv FIFO order alone loses cross-conv arrival order.
 struct FrameStore {
     bytes: Vec<u8>,
     /// Free slot indices (a stack; every slot starts free).
     free: Vec<u16>,
-    /// Queued frames as (slot, len) pairs — FIFO, whole frames.
-    queue: VecDeque<(u16, u16)>,
+    /// Queued frames as (slot, len, seq) pairs — FIFO, whole frames.
+    queue: VecDeque<(u16, u16, u64)>,
 }
 
 impl FrameStore {
@@ -237,21 +240,28 @@ impl FrameStore {
 
     /// Push one whole frame: false when the store is absent (a closed
     /// conversation — impossible for a demux match, counted defensively
-    /// by the caller) or full (the soverflow arm).
-    fn push(&mut self, frame: &[u8]) -> bool {
+    /// by the caller) or full (the soverflow arm).  `seq` is the global
+    /// ingress stamp (the adapter's merge key).
+    fn push(&mut self, frame: &[u8], seq: u64) -> bool {
         let Some(slot) = self.free.pop() else { return false };
         let n = frame.len().min(ETHERMAXTU);
         let base = slot as usize * ETHERMAXTU;
         self.bytes[base..base + n].copy_from_slice(&frame[..n]);
-        self.queue.push_back((slot, n as u16));
+        self.queue.push_back((slot, n as u16, seq));
         true
+    }
+
+    /// The head frame's ingress stamp (None when empty) — the adapter's
+    /// merge reads it WITHOUT popping.
+    fn head_seq(&self) -> Option<u64> {
+        self.queue.front().map(|(_, _, s)| *s)
     }
 
     /// Pop one whole frame (Qmsg): the frame is CONSUMED; when the
     /// caller's buffer is shorter, the excess is discarded (the donor
     /// qread's Qmsg arm: `freeb(b)` on the leftover, never a putback).
     fn pop(&mut self, buf: &mut [u8]) -> Option<u64> {
-        let (slot, len) = self.queue.pop_front()?;
+        let (slot, len, _seq) = self.queue.pop_front()?;
         let base = slot as usize * ETHERMAXTU;
         let n = (len as usize).min(buf.len());
         buf[..n].copy_from_slice(&self.bytes[base..base + n]);
@@ -310,6 +320,11 @@ pub(crate) struct IngressState {
     /// Count of promiscuous conversations (the donor's `nif->prom` —
     /// the multicast filter's global arm).
     prom: u32,
+    /// The global ingress sequence counter (08-06): every inbound frame
+    /// takes the next stamp BEFORE the demux loop, so the stamp order IS
+    /// the arrival order across conversations (the devip ether adapter's
+    /// three-queue merge compares head stamps).
+    next_seq: u64,
 }
 
 /// A fixed-capacity pid set (one waiter per proc — the proc table is
@@ -359,6 +374,7 @@ pub(crate) static INGRESS: BusyCell<IngressState> = BusyCell::new(IngressState {
     addr: [0; 6],
     bcast: [0xff; 6],
     prom: 0,
+    next_seq: 1,
 });
 
 // ---------------------------------------------------------------------------
@@ -594,6 +610,11 @@ pub fn rx_ingress(frame: &[u8]) {
         return;
     }
     let etype = u16::from_be_bytes([frame[12], frame[13]]) as i32;
+    // The arrival stamp: ONE counter per frame, taken before the demux
+    // loop — the stamp order is the arrival order across conversations
+    // (the devip ether adapter's merge key).
+    let seq = ig.next_seq;
+    ig.next_seq = ig.next_seq.wrapping_add(1);
     let mut delivered = false;
     let mut drops: u64 = 0;
     for slot in ig.convs.iter_mut() {
@@ -608,7 +629,7 @@ pub fn rx_ingress(frame: &[u8]) {
         }
         match slot.store.as_mut() {
             Some(store) => {
-                if store.push(frame) {
+                if store.push(frame, seq) {
                     delivered = true;
                 } else {
                     drops += 1;
@@ -688,6 +709,18 @@ pub(crate) fn pop_frame(id: usize, buf: &mut [u8]) -> Pop {
         }
     }
     if slot.open { Pop::Empty } else { Pop::Closed }
+}
+
+/// The head frame's global ingress stamp on conversation `id` (None when
+/// empty) — the devip ether adapter's arrival-order merge peeks WITHOUT
+/// popping (08-06).  Syscall context (the adapter's receive runs inside
+/// the seam's drive).
+pub(crate) fn head_seq(id: usize) -> Option<u64> {
+    let ig = INGRESS.enter().expect("netif: head_seq with INGRESS contended (invariant violation)");
+    if id >= NFILE {
+        return None;
+    }
+    ig.convs[id].store.as_ref().and_then(|s| s.head_seq())
 }
 
 /// Register the calling pid as blocked on a data read (the read path's

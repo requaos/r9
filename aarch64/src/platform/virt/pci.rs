@@ -919,6 +919,15 @@ pub fn virtio_net_irq() {
         // nintr: one per queue with observed work (ethervirtio.c's shape).
         if retired[virtio::VIRTIO_NET_QUEUE_RX as usize] > 0 {
             state.counters.nintr[virtio::VIRTIO_NET_QUEUE_RX as usize] += 1;
+            // D-05 leg 1 (08-06): the devip seam's RX wake — the retired
+            // frames landed in the netif conv queues (rx_ingress above);
+            // the devip waiters wake here and drive the stack from their
+            // WOKEN SYSCALL context (poll NEVER runs in IRQ context — the
+            // no-alloc-in-IRQ and mcslock-LEAF invariants).  A WAKE, never
+            // a poll; the BusyCell handoff only; the wake hook runs after
+            // the seam's guard drops (stack.rs's note_rx_pending).
+            #[cfg(dev_ip)]
+            port::devip::note_rx_pending();
         }
         if retired[virtio::VIRTIO_NET_QUEUE_TX as usize] > 0 {
             state.counters.nintr[virtio::VIRTIO_NET_QUEUE_TX as usize] += 1;

@@ -63,6 +63,7 @@ use crate::dat::{Chan, Qid, DEV_IP, OREAD};
 use crate::mcslock::{Lock, LockNode};
 use crate::Result;
 
+pub mod arp;
 pub mod conv;
 pub mod ipifc;
 pub mod medium;
@@ -71,6 +72,10 @@ pub mod phyadapt;
 pub mod proto;
 pub mod route;
 pub mod stack;
+
+// The RX-IRQ wake's one-line re-export (08-06): the virtio-net IRQ
+// retire's call site reads `port::devip::note_rx_pending()`.
+pub use stack::note_rx_pending;
 
 use conv::Proto;
 
@@ -168,15 +173,6 @@ struct SelfEntry {
     bcast: bool,
 }
 
-/// One arp view entry (contract §2/§12.5 — the snoop-fed VIEW over
-/// smoltcp's accessor-less neighbor cache; 90-byte lines, no timeout).
-struct ArpEntry {
-    ip: [u8; 16],
-    mac: [u8; 6],
-    /// state: true = OK, false = WAIT (the donor's arpstate[]).
-    ok: bool,
-}
-
 struct FsState {
     /// The 1024-byte ndb buffer (Fs.ndb): free-form text, append at
     /// offset, NUL-terminated; `vers` bumps on every write.
@@ -187,24 +183,14 @@ struct FsState {
     /// ipforme's accept-all flag (set by adding the null address —
     /// addselfcache's side effect; the DHCP leg's preconfig state).
     acceptall: bool,
-    /// The arp VIEW table (§12.5: snoop-fed on the ether leg; static
-    /// add writes the view only — the recorded divergence).
-    arp: Vec<ArpEntry>,
-    // The route table lives in route.rs (08-05 — the forest, the verbs,
-    // the smoltcp default-route mirror); the netlog flags/queue live in
-    // netlog.rs (the module owns the flag word, the only-restriction,
-    // and the blocking read feed).
+    // The arp VIEW table lives in arp.rs (08-6 — the snoop-fed table,
+    // NCACHE=256 LRU, the offset%90 read gate, flush/add/del); the route
+    // table lives in route.rs; the netlog flags/queue live in netlog.rs.
 }
 
 static FS: Lock<FsState> = Lock::new(
     "devipfs",
-    FsState {
-        ndb: Vec::new(),
-        ndbvers: 0,
-        selftab: Vec::new(),
-        acceptall: false,
-        arp: Vec::new(),
-    },
+    FsState { ndb: Vec::new(), ndbvers: 0, selftab: Vec::new(), acceptall: false },
 );
 
 
@@ -799,8 +785,9 @@ fn listen_open(c: &Chan, p: Proto, id: usize, mode: u32) -> Result<Chan> {
             if p == Proto::Tcp
                 && let Some(pool) = cv.pool.as_ref()
             {
+                let sel = cv.sel;
                 let mut g = stack::STACK.enter().expect("devip: stack contended");
-                if let Some(core) = g.core.as_mut() {
+                if let Some(core) = g.core_mut(sel) {
                     for &h in pool.members() {
                         TCP_RX_SLOTS[id].arm(pid);
                         core.sockets
@@ -835,8 +822,15 @@ fn tcp_listen_pop(c: &Chan, id: usize, mode: u32) -> Result<Option<Chan>> {
     let Some(h) = popped else { return Ok(None) };
     // The member's bound quad + handshake progress (read-only stack visit).
     let (raddr, rport, laddr, lport, established) = {
+        // The pool's own core (the announcing conv's sel — the two-core
+        // seam, 08-06).
+        let sel = {
+            let node = LockNode::new();
+            let t = conv::TABLES.lock(&node);
+            t.table(Proto::Tcp)[id].sel
+        };
         let g = stack::STACK.enter().expect("devip: stack contended");
-        let Some(core) = g.core.as_ref() else {
+        let Some(core) = g.core_ref(sel) else {
             return Err("devip: no bound medium");
         };
         let s = core.sockets.get::<smoltcp::socket::tcp::Socket>(h);
@@ -856,8 +850,9 @@ fn tcp_listen_pop(c: &Chan, id: usize, mode: u32) -> Result<Option<Chan>> {
             // Table full: abort the incoming call and drop the member
             // (the donor drops on a full incall); the listen errors
             // Enodev (the clone-exhaustion string, contract §3).
+            let sel = t.table(Proto::Tcp)[id].sel;
             let mut g = stack::STACK.enter().expect("devip: stack contended");
-            if let Some(core) = g.core.as_mut() {
+            if let Some(core) = g.core_mut(sel) {
                 core.sockets.get_mut::<smoltcp::socket::tcp::Socket>(h).abort();
                 core.sockets.remove(h);
             }
@@ -952,8 +947,9 @@ fn conv_file_mode(p: Proto, id: usize, tag: u64) -> (u32, u64) {
             // documented order).
             let n = match c.sock {
                 Some(h) => {
+                    let sel = c.sel;
                     let g = stack::STACK.enter().expect("devip: stack contended");
-                    match g.core.as_ref() {
+                    match g.core_ref(sel) {
                         Some(core) => match p {
                             Proto::Icmp => core.sockets.get::<smoltcp::socket::icmp::Socket>(h).recv_queue() as u64,
                             Proto::Tcp => core.sockets.get::<smoltcp::socket::tcp::Socket>(h).recv_queue() as u64,
@@ -1122,10 +1118,7 @@ pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
         return Ok(read_str(c, buf, offset, &listing));
     }
     match qtype(path) {
-        QARP => {
-            let content = arp_content();
-            Ok(read_str(c, buf, offset, &content))
-        }
+        QARP => arp::read(c, buf, offset),
         QNDB => {
             let content = { let node = LockNode::new(); FS.lock(&node).ndb.clone() };
             Ok(read_str(c, buf, offset, &content))
@@ -1261,7 +1254,7 @@ pub fn write(c: &mut Chan, buf: &[u8], offset: u64) -> Result<u64> {
             }
         }
         QNDB => ndb_write(c, buf, offset),
-        QARP => arp_write(buf),
+        QARP => arp::write(buf),
         QIPROUTE => route::ctl(buf),
         QLOG => netlog::ctl(buf),
         _ => Err("permission denied"),
@@ -1269,89 +1262,13 @@ pub fn write(c: &mut Chan, buf: &[u8], offset: u64) -> Result<u64> {
 }
 
 // ---------------------------------------------------------------------------
-// The top-level files' content + verbs.
+// The top-level files' content + verbs.  The arp surface lives in arp.rs
+// (08-6): the snoop-fed view table with the 90-byte lines + the offset%90
+// gate + flush/add/del (NCACHE=256, LRU, no timeout).
 // ---------------------------------------------------------------------------
 
 fn arp_content_len() -> usize {
-    { let node = LockNode::new(); FS.lock(&node).arp.len() * 90 }
-}
-
-/// The arp read (contract §2): fixed 90-byte lines,
-/// `"%-6.6s %-8.8s %-40.40I %-32.32s\n"` (medium, state, ip, mac);
-/// `offset % 90 != 0` → 0 (enforced by the read's window onto the
-/// 90-byte-aligned content).
-fn arp_content() -> Vec<u8> {
-    let node = LockNode::new();
-    let g = FS.lock(&node);
-    let mut out = Vec::new();
-    for e in &g.arp {
-        let mut line = Vec::new();
-        line.extend_from_slice(&pad_right(b"loopback", 6));
-        line.push(b' ');
-        line.extend_from_slice(&pad_right(if e.ok { b"OK" } else { b"WAIT" }, 8));
-        line.push(b' ');
-        line.extend_from_slice(&pad_right(&format_ip(&e.ip), 40));
-        line.push(b' ');
-        let mut mac = Vec::new();
-        for (i, &b) in e.mac.iter().enumerate() {
-            if i > 0 {
-                mac.push(b':');
-            }
-            mac.extend_from_slice(&hex2(b));
-        }
-        line.extend_from_slice(&pad_right(&mac, 32));
-        line.push(b'\n');
-        // The line is 90 bytes by construction (6+1+8+1+40+1+32+1).
-        line.resize(90, b' ');
-        out.extend_from_slice(&line[..90]);
-    }
-    out
-}
-
-/// The arp write (contract §2): `flush` / `add ether <ip> <mac>` /
-/// `del <ip>`.  §12.5's divergence: the table is a VIEW — `add` writes
-/// the view only (no resolution steering).
-fn arp_write(buf: &[u8]) -> Result<u64> {
-    let n = buf.len();
-    let text = &buf[..n.min(63)];
-    let fields: Vec<&[u8]> = text
-        .split(|&b| b == b' ' || b == b'\t' || b == b'\r' || b == b'\n')
-        .filter(|w| !w.is_empty())
-        .collect();
-    if fields.is_empty() {
-        return Err("bad arp");
-    }
-    let node = LockNode::new();
-    let mut g = FS.lock(&node);
-    match fields[0] {
-        b"flush" => {
-            g.arp.clear();
-            Ok(n as u64)
-        }
-        b"add" => {
-            // The documented 4-field form: add ether <ip> <mac>.
-            if fields.len() != 4 {
-                return Err("bad arp");
-            }
-            if fields[1] != b"ether" {
-                return Err("bad arp"); // the medium name must resolve
-            }
-            let ip = parse_ip(fields[2]).ok_or("bad ip address syntax")?;
-            let mac = parse_mac(fields[3]).ok_or("bad arp")?;
-            g.arp.retain(|e| e.ip != ip);
-            g.arp.push(ArpEntry { ip, mac, ok: true });
-            Ok(n as u64)
-        }
-        b"del" => {
-            if fields.len() != 2 {
-                return Err("bad arp");
-            }
-            let ip = parse_ip(fields[1]).ok_or("bad ip address syntax")?;
-            g.arp.retain(|e| e.ip != ip);
-            Ok(n as u64)
-        }
-        _ => Err("bad arp"),
-    }
+    arp::content_len()
 }
 
 /// The iproute read/write (contract §2): the route forest lives in
@@ -1488,7 +1405,13 @@ pub(crate) static TCP_TX_SLOTS: [crate::devip_waker::WakeSlot; conv::NCONV] =
 // Small helpers
 // ---------------------------------------------------------------------------
 
-fn pad_right(s: &[u8], width: usize) -> Vec<u8> {
+// ---------------------------------------------------------------------------
+// Small helpers
+// ---------------------------------------------------------------------------
+
+/// Right-pad to `width` (arp.rs's 90-byte line builder + the status
+/// lines share it — pub(crate) for the submodules).
+pub(crate) fn pad_right(s: &[u8], width: usize) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(&s[..s.len().min(width)]);
     while out.len() < width {
@@ -1506,26 +1429,8 @@ fn pad_left(s: &[u8], width: usize) -> Vec<u8> {
     out
 }
 
-/// Lowercase hex byte pair.
-fn hex2(b: u8) -> [u8; 2] {
+/// Lowercase hex byte pair (arp.rs's MAC field builder shares it).
+pub(crate) fn hex2(b: u8) -> [u8; 2] {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     [HEX[(b >> 4) as usize], HEX[(b & 0xf) as usize]]
-}
-
-/// Parse a colon-separated MAC (aa:bb:cc:dd:ee:ff).
-fn parse_mac(s: &[u8]) -> Option<[u8; 6]> {
-    let mut out = [0u8; 6];
-    let parts: Vec<&[u8]> = s.split(|&b| b == b':').collect();
-    if parts.len() != 6 {
-        return None;
-    }
-    for (i, p) in parts.iter().enumerate() {
-        if p.len() != 2 || !p.iter().all(|b| b.is_ascii_hexdigit()) {
-            return None;
-        }
-        let hi = (p[0] as char).to_digit(16)?;
-        let lo = (p[1] as char).to_digit(16)?;
-        out[i] = ((hi << 4) | lo) as u8;
-    }
-    Some(out)
 }

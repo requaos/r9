@@ -73,7 +73,32 @@ use smoltcp::wire::HardwareAddress;
 use crate::mcslock::{BusyCell, Lock, LockNode};
 use crate::Result;
 
-use super::phyadapt::{LoopbackDev, StackDev};
+use super::phyadapt::{EtherDev, LoopbackDev, StackDev};
+
+// ---------------------------------------------------------------------------
+// The two-core shape (contract §12.4 — one smoltcp Interface per bound
+// ipifc): the loopback core (`core`, 08-04's field — the host pins' home)
+// and the ether core (`ether`, 08-06).  A conv's core is picked at socket
+// creation by the address-class demux and recorded on the conv (CoreSel).
+// ---------------------------------------------------------------------------
+
+/// Which bound medium's core a conv lives on.  Recorded at connect/
+/// announce/bind time via the demux; every later conv op reads it back
+/// (a conv's socket handle is valid only in its OWN core's SocketSet).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum CoreSel {
+    Loopback,
+    Ether,
+}
+
+/// The address class (contract §12.4): 127/8 (v4-mapped) and ::1 are the
+/// loopback class.
+pub(crate) fn is_loopback_class(a: &[u8; 16]) -> bool {
+    if let Some(v) = super::v4_of(a) {
+        return v[0] == 127;
+    }
+    a[..15].iter().all(|&b| b == 0) && a[15] == 1
+}
 
 // ---------------------------------------------------------------------------
 // The block/wake hooks (the devpipe/devether shape verbatim) + the tick
@@ -253,6 +278,31 @@ pub fn tick_check(now_ticks: u64) {
     }
 }
 
+/// D-05 leg 1's IRQ-side entry (08-06): the virtio-net RX retire's wake,
+/// called from pci.rs's virtio_net_irq right after the rx_ingress demux
+/// (cfg(dev_ip)-gated there).  Snapshots (drains) the devip waiter set and
+/// wakes it AFTER the guard drop — the woken SYSCALL contexts run
+/// drive_stack() (poll NEVER runs in IRQ context — the no-alloc-in-IRQ and
+/// mcslock-LEAF invariants).  A WAKE, never a poll.  With no registered
+/// waiters, sets the stack-debt flag (the unsolicited-frame corner — the
+/// next devip-dispatched op drains it via drain_debt_if_set).
+///
+/// IRQ-context discipline (the tick_check sibling shape): NET_WAITERS is
+/// the BusyCell, provably uncontended (syscalls run IRQ-masked — the IRQ
+/// can only fire while no syscall holds the cell); no port mcslock is
+/// taken; the wake hook (PROC_TABLE) runs after the guard drops.
+pub fn note_rx_pending() {
+    let mut pids = [0u64; 16];
+    let n = NET_WAITERS.enter().expect("devip: waiters contended (IRQ invariant violation)").take(&mut pids);
+    if n == 0 {
+        STACK_DEBT.store(true, Ordering::Release);
+        return;
+    }
+    if let Ok(h) = hooks() {
+        (h.wake)(&pids[..n]);
+    }
+}
+
 /// Drain the stack-debt flag: if a deadline fired while nobody was
 /// blocked, drive the stack now (the next devip-dispatched op's first
 /// move — the call site lands with the syscall arms in 08-04).  Returns
@@ -270,9 +320,7 @@ pub fn drain_debt_if_set() -> bool {
 // ---------------------------------------------------------------------------
 
 /// One bound medium's stack: the smoltcp Interface (one per bound ipifc —
-/// contract §12.4), its SocketSet, and its Device adapter.  This plan lands
-/// the loopback core; 08-06's ether leg grows `StackState` to per-medium
-/// cores with the address-class demux (127/8 + ::1 → loopback).
+/// contract §12.4), its SocketSet, and its Device adapter.
 pub struct StackCore {
     pub iface: Interface,
     pub sockets: SocketSet<'static>,
@@ -286,10 +334,41 @@ impl StackCore {
         Self::new(StackDev::Loopback(dev))
     }
 
+    /// Construct the ether core (the `bind ether` medium — 08-06): Config
+    /// from the negotiated MAC (devether's published addr — the Interface's
+    /// hardware_addr), slaac=false (REQUIREMENTS Out-of-Scope; contract
+    /// §12), random_seed from devcons's D-17 DRBG (the kernel-internal
+    /// draw — seeding it if this is the first read).
+    pub fn new_ether(dev: EtherDev) -> StackCore {
+        let mac = dev.mac();
+        let mut cfg = Config::new(HardwareAddress::Ethernet(smoltcp::wire::EthernetAddress(mac)));
+        // "strongly recommended… different on each boot" (docs.rs Config)
+        // — the D-17 DRBG's draw (a real CSPRNG seed, vs the loopback
+        // era's tick mix).
+        cfg.random_seed = crate::devcons::random_u64();
+        cfg.slaac = false;
+        let mut dev = dev;
+        let iface = Interface::new(cfg, &mut dev, instant_now());
+        StackCore { iface, sockets: SocketSet::new(Vec::new()), dev: StackDev::Ether(dev) }
+    }
+
     /// Construct the scripted-test core (host pins only).
     #[cfg(test)]
     pub(crate) fn new_scripted(dev: super::phyadapt::ScriptedDev) -> StackCore {
         Self::new(StackDev::Scripted(dev))
+    }
+
+    /// The scripted ETHER core (the 08-06 ether pins' device —
+    /// Medium::Ethernet, the snoop live, TX captured).
+    #[cfg(test)]
+    pub(crate) fn new_scripted_ether(dev: super::phyadapt::ScriptedEtherDev) -> StackCore {
+        let mac = dev.mac;
+        let mut cfg = Config::new(HardwareAddress::Ethernet(smoltcp::wire::EthernetAddress(mac)));
+        cfg.random_seed = 0x9e37_79b9_7f4a_7c15;
+        cfg.slaac = false;
+        let mut dev = dev;
+        let iface = Interface::new(cfg, &mut dev, instant_now());
+        StackCore { iface, sockets: SocketSet::new(Vec::new()), dev: StackDev::ScriptedEther(dev) }
     }
 
     fn new(dev: StackDev) -> StackCore {
@@ -306,16 +385,54 @@ impl StackCore {
     }
 }
 
-/// The seam's owned state.  One core per bound medium this era; `None`
-/// until the first `bind` installs one.
+/// The seam's owned state: one core per bound medium (contract §12.4).
+/// Both are `None` at boot; `bind loopback` / `bind ether` install them.
 pub struct StackState {
+    /// The loopback core (08-04's single `core` field — the host pins'
+    /// `g.core` home; the name stays for the pin surface).
     pub core: Option<StackCore>,
+    /// The ether core (08-06).
+    pub ether: Option<StackCore>,
+}
+
+impl StackState {
+    /// The address-class demux (contract §12.4/OQ-5): the loopback class
+    /// (127/8, ::1) rides the loopback core; EVERYTHING ELSE rides the
+    /// ether core WHEN BOUND — else the loopback core serves it (the
+    /// single-core fallback: the 08-04/08-05 loopback gates never bind
+    /// ether, so their wildcard announces and any-address connects stay
+    /// on the loopback core — byte-identical behavior there).
+    pub(crate) fn demux(&self, addr: &[u8; 16]) -> CoreSel {
+        if is_loopback_class(addr) {
+            CoreSel::Loopback
+        } else if self.ether.is_some() {
+            CoreSel::Ether
+        } else {
+            CoreSel::Loopback
+        }
+    }
+
+    /// The selected core, mutably (None when that medium isn't bound).
+    pub(crate) fn core_mut(&mut self, sel: CoreSel) -> Option<&mut StackCore> {
+        match sel {
+            CoreSel::Loopback => self.core.as_mut(),
+            CoreSel::Ether => self.ether.as_mut(),
+        }
+    }
+
+    /// The selected core, read-only.
+    pub(crate) fn core_ref(&self, sel: CoreSel) -> Option<&StackCore> {
+        match sel {
+            CoreSel::Loopback => self.core.as_ref(),
+            CoreSel::Ether => self.ether.as_ref(),
+        }
+    }
 }
 
 /// THE single-ownership cell.  See the module header for the locking
 /// invariants (uncontended by the IRQ-masked-syscall construction;
 /// fail-fast on violation).
-pub(crate) static STACK: BusyCell<StackState> = BusyCell::new(StackState { core: None });
+pub(crate) static STACK: BusyCell<StackState> = BusyCell::new(StackState { core: None, ether: None });
 
 /// The explicit per-drive ingress bound (P-D — never an unbounded full
 /// `poll()`; docs.rs's own DoS warning).  The adapter queues are bounded by
@@ -334,9 +451,10 @@ pub fn set_drive_print(on: bool) {
     DRIVE_PRINT.store(on, Ordering::Relaxed);
 }
 
-/// Drive the stack: bounded ingress, egress, maintenance, then re-arm the
-/// one-shot deadline — and AFTER the cell drops, wake every pid whose
-/// socket waker fired mid-poll.
+/// Drive the stack: bounded ingress, egress, maintenance on EACH bound
+/// core (08-06's ether core joined the loopback core), then re-arm the
+/// one-shot deadline from the EARLIEST of the cores' `poll_at()` — and
+/// AFTER the cell drops, wake every pid whose socket waker fired mid-poll.
 ///
 /// Called from exactly the three D-05 legs: the RX-woken context, the
 /// deadline-woken context (or the debt drain), and every mutating devip
@@ -345,17 +463,27 @@ pub fn drive_stack() {
     let now = instant_now();
     {
         let mut guard = STACK.enter().expect("devip: stack contended");
-        if let Some(core) = guard.core.as_mut() {
-            // THE LOOPBACK-FEEDBACK LOOP: a TX on the loopback Device
-            // loops the packet INTO the device's RX queue — egress
-            // produces ingress work.  Drive until the queue drains
-            // (bounded: each round's ingress is capped at RX_DRIVE_CAP
-            // and consumes the queue; the queue's own cap bounds the
-            // total; the ether leg's queues are ring-bounded the same
-            // way).  Without the loop a write's drive would leave the
-            // looped packet un-ingested until the NEXT drive — with all
-            // procs blocked, that drive never comes (the wedge the 08-04
-            // tracer exists to catch).
+        let mut next: Option<u64> = None; // the earliest armed deadline across the cores
+        // Destructure the guard to borrow the two slots disjointly (an
+        // array of &mut to both fields would double-borrow `guard`).
+        let StackState { core: lb, ether: eth } = &mut *guard;
+        for core in [lb, eth].into_iter().flatten() {
+            // The ether adapter's staged-TX retry FIRST (a ring-full
+            // consume staged one frame; it retries before new work — the
+            // gate's traffic never fills the 256-slot ring, so the retry
+            // lands on the next drive's timer/file-op/RX-wake leg).
+            core.dev.flush_tx();
+            // THE LOOPBACK-FEEDBACK LOOP (and the ether queues' drain): a
+            // TX on the loopback Device loops the packet INTO the device's
+            // RX queue — egress produces ingress work.  Drive until the
+            // queue drains (bounded: each round's ingress is capped at
+            // RX_DRIVE_CAP and consumes the queue; the queue's own cap
+            // bounds the total; the ether leg's queues are ring-bounded
+            // the same way — ether TX never loops back, so no feedback
+            // cycle exists there).  Without the loop a write's drive would
+            // leave the looped packet un-ingested until the NEXT drive —
+            // with all procs blocked, that drive never comes (the wedge
+            // the 08-04 tracer exists to catch).
             loop {
                 // Bounded ingress (P-D): at most RX_DRIVE_CAP packets
                 // per round.
@@ -372,10 +500,14 @@ pub fn drive_stack() {
                 }
             }
             core.iface.poll_maintenance(now);
-            match core.iface.poll_at(now, &core.sockets) {
-                Some(at) => NET_DEADLINE.store(instant_to_ticks(at), Ordering::Release),
-                None => NET_DEADLINE.store(DEADLINE_DISARMED, Ordering::Release),
+            if let Some(at) = core.iface.poll_at(now, &core.sockets) {
+                let t = instant_to_ticks(at);
+                next = Some(next.map_or(t, |n| n.min(t)));
             }
+        }
+        match next {
+            Some(t) => NET_DEADLINE.store(t, Ordering::Release),
+            None => NET_DEADLINE.store(DEADLINE_DISARMED, Ordering::Release),
         }
     }
     // Wake AFTER the guard drops — never the wake hook while the cell is
@@ -419,18 +551,29 @@ impl StackCore {
 
 /// Install a fresh stack core for a pin, resetting the seam's global flags
 /// and wake sets (the devether_tests publish-once discipline: the pins
-/// serialize through a test lock and each gets a clean seam).
+/// serialize through a test lock and each gets a clean seam).  The ether
+/// slot clears too (a pin never inherits a sibling pin's ether core).
 #[cfg(test)]
 pub(crate) fn install_test_stack(core: StackCore) {
     {
         let mut guard = STACK.enter().expect("devip: stack contended");
         guard.core = Some(core);
+        guard.ether = None;
     }
     NET_DEADLINE.store(DEADLINE_DISARMED, Ordering::Release);
     STACK_DEBT.store(false, Ordering::Release);
     let mut scratch = [0u64; 16];
     PENDING_WAKES.enter().expect("devip: pending wakes contended").take(&mut scratch);
     NET_WAITERS.enter().expect("devip: waiters contended").take(&mut scratch);
+}
+
+/// Install the ETHER core for a pin (08-6 — the two-core pins: the demux
+/// table + the scripted ether device's drives).  The loopback core from
+/// install_test_stack stays.
+#[cfg(test)]
+pub(crate) fn install_test_ether(core: StackCore) {
+    let mut guard = STACK.enter().expect("devip: stack contended");
+    guard.ether = Some(core);
 }
 
 /// Enter the stack cell (pin surgery on the core under the real ownership
@@ -469,15 +612,20 @@ pub struct AcceptPool {
     members: Vec<SocketHandle>,
     port: u16,
     depth: usize,
+    /// The core the pool's sockets live in (the announcing conv's demux
+    /// — 08-06's two-core seam: a pool is valid only in its own core's
+    /// SocketSet).
+    sel: CoreSel,
 }
 
 impl AcceptPool {
     /// devip's `announce <port>`: allocate `depth` listening sockets
-    /// (production callers pass ACCEPT_POOL_DEPTH).  On a mid-allocation
-    /// failure the partial pool is torn down — no half-announced conv.
-    pub fn announce(depth: usize, port: u16) -> Result<AcceptPool> {
+    /// (production callers pass ACCEPT_POOL_DEPTH) in the demuxed core.
+    /// On a mid-allocation failure the partial pool is torn down — no
+    /// half-announced conv.
+    pub(crate) fn announce(depth: usize, port: u16, sel: CoreSel) -> Result<AcceptPool> {
         let mut guard = STACK.enter().expect("devip: stack contended");
-        let core = guard.core.as_mut().ok_or("devip: no bound medium")?;
+        let core = guard.core_mut(sel).ok_or("devip: no bound medium")?;
         let mut members = Vec::with_capacity(depth);
         for _ in 0..depth {
             match Self::spawn_listener(core, port) {
@@ -490,7 +638,7 @@ impl AcceptPool {
                 }
             }
         }
-        Ok(AcceptPool { members, port, depth })
+        Ok(AcceptPool { members, port, depth, sel })
     }
 
     /// Pop the OLDEST pool member that has left Listen (an incoming call
@@ -501,7 +649,7 @@ impl AcceptPool {
     /// caller's refill).
     pub fn take_connected(&mut self) -> Option<SocketHandle> {
         let mut guard = STACK.enter().expect("devip: stack contended");
-        let core = guard.core.as_mut()?;
+        let core = guard.core_mut(self.sel)?;
         self.prune_closed(core);
         let pos = self.members.iter().position(|&h| {
             let s = core.sockets.get::<tcp::Socket>(h);
@@ -515,7 +663,7 @@ impl AcceptPool {
     /// socket that must not count against the depth).
     pub fn refill(&mut self) -> Result<()> {
         let mut guard = STACK.enter().expect("devip: stack contended");
-        let core = guard.core.as_mut().ok_or("devip: no bound medium")?;
+        let core = guard.core_mut(self.sel).ok_or("devip: no bound medium")?;
         self.prune_closed(core);
         while self.members.len() < self.depth {
             let h = Self::spawn_listener(core, self.port)?;
@@ -548,7 +696,7 @@ impl AcceptPool {
     /// member has no conv to carry a graceful close.)
     pub fn teardown(mut self) {
         let mut guard = STACK.enter().expect("devip: stack contended");
-        if let Some(core) = guard.core.as_mut() {
+        if let Some(core) = guard.core_mut(self.sel) {
             for h in self.members.drain(..) {
                 core.sockets.get_mut::<tcp::Socket>(h).abort();
                 core.sockets.remove(h);
@@ -578,8 +726,8 @@ impl AcceptPool {
     /// Count of members still in Listen (pin assertions).
     #[cfg(test)]
     pub(crate) fn listening_count(&self) -> usize {
-        let guard = STACK.enter().expect("devip: stack contended");
-        let Some(core) = guard.core.as_ref() else { return 0 };
+        let mut guard = STACK.enter().expect("devip: stack contended");
+        let Some(core) = guard.core_mut(self.sel) else { return 0 };
         self.members
             .iter()
             .filter(|&&h| core.sockets.get::<tcp::Socket>(h).state() == tcp::State::Listen)

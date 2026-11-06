@@ -128,7 +128,11 @@ fn mirror_default_add(nexthop: &[u8; 16]) -> Result<()> {
         return Ok(());
     }
     let mut g = stack::STACK.enter().expect("devip: stack contended");
-    let Some(core) = g.core.as_mut() else {
+    // The default route serves the real network — the ETHER core when
+    // bound (08-06), else the loopback core (the loopback-era gates never
+    // add one; the fallback keeps the mirror well-defined).
+    let core = if g.ether.is_some() { g.ether.as_mut() } else { g.core.as_mut() };
+    let Some(core) = core else {
         return Ok(()); // no bound medium yet — the record stands; the mirror lands at bind
     };
     if let Some(gw4) = v4_of(nexthop) {
@@ -150,7 +154,8 @@ fn mirror_default_add(nexthop: &[u8; 16]) -> Result<()> {
 /// Mirror a default-route removal out of smoltcp's Routes.
 fn mirror_default_remove(v4: bool) {
     let mut g = stack::STACK.enter().expect("devip: stack contended");
-    let Some(core) = g.core.as_mut() else { return };
+    let core = if g.ether.is_some() { g.ether.as_mut() } else { g.core.as_mut() };
+    let Some(core) = core else { return };
     if v4 {
         core.iface.routes_mut().remove_default_ipv4_route();
     } else {

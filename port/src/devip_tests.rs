@@ -782,7 +782,7 @@ fn accept_pool_demuxes_two_syns_to_two_members() {
     // announce(7) with a test-scaled depth of 2 (the production depth is
     // devip-exact Maxincall = 128 — contract §12.3; the demux SHAPE is
     // depth-independent).
-    let mut pool = stack::AcceptPool::announce(2, 7).expect("pin: announce");
+    let mut pool = stack::AcceptPool::announce(2, 7, stack::CoreSel::Loopback).expect("pin: announce");
     assert_eq!(pool.members().len(), 2);
     assert!(pool.all_listening(), "pin (d): the pool starts all-Listen");
 
@@ -1881,5 +1881,320 @@ fn netlog_set_emit_wakes_blocked_reader() {
     );
     // only <addr> records the restriction (the ether era's per-packet gate).
     crate::devip::netlog::ctl(b"only 10.0.0.1").expect("pin (netlog): only");
+}
+
+// ---------------------------------------------------------------------------
+// The ETHER leg's pins (08-06): the EtherDev arrival-order merge across
+// the three netif conv queues (0x800/0x806/0x86dd), the /net/arp snoop
+// feeding OK/WAIT entries BOTH directions, the gratuitous-ARP emission on
+// add, and the address-class demux (contract §12.4).  The scripted ether
+// device (ScriptedEtherDev) is Medium::Ethernet: whole 14-byte-header
+// frames; TX frames are captured; the snoop feed is live through the
+// real receive()/transmit() call sites.
+// ---------------------------------------------------------------------------
+
+/// The scripted ether MACs (guest + gateway).
+const GUEST_MAC: [u8; 6] = [0x52, 0x54, 0x00, 0x12, 0x34, 0x56];
+const GW_MAC: [u8; 6] = [0x52, 0x55, 0x0a, 0x00, 0x02, 0x02];
+/// The scripted guest/gateway v4 addresses (the slirp shape).
+const GW4: Ipv4Address = Ipv4Address::new(10, 0, 2, 2);
+const GUEST4: Ipv4Address = Ipv4Address::new(10, 0, 2, 15);
+
+/// Craft a WHOLE ARP frame (14-byte ethernet header + the 28-byte ARP
+/// payload) with smoltcp's wire codecs.
+fn arp_eth_frame(
+    op: smoltcp::wire::ArpOperation,
+    sha: [u8; 6],
+    spa: Ipv4Address,
+    tpa: Ipv4Address,
+) -> Vec<u8> {
+    use smoltcp::wire::{
+        ArpPacket, ArpRepr, EthernetAddress, EthernetFrame, EthernetProtocol, EthernetRepr,
+    };
+    let repr = ArpRepr::EthernetIpv4 {
+        operation: op,
+        source_hardware_addr: EthernetAddress(sha),
+        source_protocol_addr: spa,
+        target_hardware_addr: EthernetAddress([0; 6]),
+        target_protocol_addr: tpa,
+    };
+    let mut frame = alloc_vec(14 + 28);
+    let mut ef = EthernetFrame::new_unchecked(&mut frame[..]);
+    EthernetRepr {
+        src_addr: EthernetAddress(sha),
+        dst_addr: EthernetAddress([0xff; 6]),
+        ethertype: EthernetProtocol::Arp,
+    }
+    .emit(&mut ef);
+    let mut pkt = ArpPacket::new_unchecked(ef.payload_mut());
+    repr.emit(&mut pkt);
+    frame
+}
+
+/// Craft a minimal whole-frame IPv4 packet (the 0x800 lane) — `tag` is
+/// the frame's distinguishing last byte (the merge pin's identity).
+fn ipv4_eth_frame(tag: u8) -> Vec<u8> {
+    let mut bytes = alloc_vec(14 + 20);
+    {
+        let mut ef = smoltcp::wire::EthernetFrame::new_unchecked(&mut bytes[..]);
+        smoltcp::wire::EthernetRepr {
+            src_addr: smoltcp::wire::EthernetAddress(GUEST_MAC),
+            dst_addr: smoltcp::wire::EthernetAddress(GW_MAC),
+            ethertype: smoltcp::wire::EthernetProtocol::Ipv4,
+        }
+        .emit(&mut ef);
+    }
+    {
+        let mut ip = Ipv4Packet::new_unchecked(&mut bytes[14..]);
+        Ipv4Repr {
+            src_addr: GUEST4,
+            dst_addr: GW4,
+            next_header: IpProtocol::Tcp,
+            payload_len: 0,
+            hop_limit: 64,
+        }
+        .emit(&mut ip, &ChecksumCapabilities::default());
+    }
+    bytes[14 + 19] = tag; // the IP header's last byte carries the tag
+    bytes
+}
+
+/// Craft a minimal whole-frame IPv6 packet (the 0x86dd lane; next_header
+/// TCP — NOT ICMPv6, so the NDP snoop skips it).
+fn ipv6_eth_frame(tag: u8) -> Vec<u8> {
+    let mut bytes = alloc_vec(14 + 40);
+    {
+        let mut ef = smoltcp::wire::EthernetFrame::new_unchecked(&mut bytes[..]);
+        smoltcp::wire::EthernetRepr {
+            src_addr: smoltcp::wire::EthernetAddress(GUEST_MAC),
+            dst_addr: smoltcp::wire::EthernetAddress(GW_MAC),
+            ethertype: smoltcp::wire::EthernetProtocol::Ipv6,
+        }
+        .emit(&mut ef);
+    }
+    // Version 6 (the top nibble of byte 0) + the tag in the last byte.
+    bytes[14] = 0x60 | (tag >> 4);
+    bytes[14 + 39] = tag;
+    bytes
+}
+
+/// Pin 1: the EtherDev RX merge pops the three conv queues in ARRIVAL
+/// order (the global ingress seq stamps), not lane order.
+#[test]
+fn etherdev_merges_the_three_conv_queues_in_arrival_order() {
+    use smoltcp::phy::{Device, RxToken};
+    let _serial = fresh_scripted_stack();
+    crate::devip::arp::test_flush();
+    let mut dev = crate::devip::phyadapt::ScriptedEtherDev::new(GUEST_MAC);
+    // Out-of-order arrival across the three lanes: seq 3 on the IPv4
+    // lane, seq 1 on the IPv6 lane, seq 2 on the ARP lane.  (The ARP
+    // lane's frame carries a zeroed payload — unparseable as ARP, so the
+    // snoop skips it and the merge pin stays isolated from the table.)
+    let f_v6 = ipv6_eth_frame(1);
+    let f_arp = {
+        let mut f = alloc_vec(14 + 28);
+        f[12] = 0x08;
+        f[13] = 0x06;
+        f
+    };
+    let f_v4 = ipv4_eth_frame(3);
+    dev.push_rx(3, f_v4.clone());
+    dev.push_rx(1, f_v6.clone());
+    dev.push_rx(2, f_arp.clone());
+    for expected in [&f_v6, &f_arp, &f_v4] {
+        let (rx, _tx) = dev.receive(smoltcp::time::Instant::ZERO).expect("pin (merge): a frame");
+        rx.consume(|got| {
+            assert_eq!(got, expected.as_slice(), "pin (merge): arrival order, not lane order");
+        });
+    }
+    assert!(
+        dev.receive(smoltcp::time::Instant::ZERO).is_none(),
+        "pin (merge): the queues drained"
+    );
+}
+
+/// Pin 2: the /net/arp snoop feeds OK/WAIT entries on scripted frames in
+/// BOTH directions — an RX reply records (ip→mac, OK); a TX solicitation
+/// records (tpa, WAIT); the TX gratuitous announcement records OK; the
+/// WAIT completes to OK when the RX reply arrives.  Plus the file
+/// surface's 90-byte line + the offset%90 gate.
+#[test]
+fn arp_snoop_feeds_ok_and_wait_entries_both_directions() {
+    use smoltcp::phy::{Device, RxToken, TxToken};
+    let _serial = fresh_scripted_stack();
+    crate::devip::arp::test_flush();
+    let mut dev = crate::devip::phyadapt::ScriptedEtherDev::new(GUEST_MAC);
+
+    // RX: the gateway's ARP reply (gw is GW_MAC) — an OK entry.
+    let reply = arp_eth_frame(smoltcp::wire::ArpOperation::Reply, GW_MAC, GW4, GUEST4);
+    {
+        dev.push_rx(1, reply);
+        let (rx, _tx) = dev.receive(smoltcp::time::Instant::ZERO).expect("pin (arp): the reply");
+        rx.consume(|_| {});
+    }
+    let gw16 = crate::devip::v4prefix_of(&GW4.octets());
+    assert_eq!(
+        crate::devip::arp::test_lookup(&gw16),
+        Some((GW_MAC, true)),
+        "pin (arp): the RX reply fed (gw→mac, OK)"
+    );
+
+    // TX: our own solicitation (who-has 10.0.2.3 tell guest) — a WAIT
+    // entry keyed by the TARGET.
+    let server = Ipv4Address::new(10, 0, 2, 3);
+    let solicit = arp_eth_frame(smoltcp::wire::ArpOperation::Request, GUEST_MAC, GUEST4, server);
+    {
+        let tx = dev.transmit(smoltcp::time::Instant::ZERO).expect("pin (arp): a tx token");
+        tx.consume(solicit.len(), |buf| buf.copy_from_slice(&solicit));
+    }
+    let srv16 = crate::devip::v4prefix_of(&server.octets());
+    assert_eq!(
+        crate::devip::arp::test_lookup(&srv16),
+        Some(([0; 6], false)),
+        "pin (arp): the TX solicitation fed (target, WAIT)"
+    );
+
+    // RX: the server's reply completes the WAIT → OK with its mac.
+    let answer = arp_eth_frame(smoltcp::wire::ArpOperation::Reply, GW_MAC, server, GUEST4);
+    {
+        dev.push_rx(1, answer);
+        let (rx, _tx) = dev.receive(smoltcp::time::Instant::ZERO).expect("pin (arp): the reply");
+        rx.consume(|_| {});
+    }
+    assert_eq!(
+        crate::devip::arp::test_lookup(&srv16),
+        Some((GW_MAC, true)),
+        "pin (arp): the reply completed WAIT → OK"
+    );
+
+    // The gratuitous TX (spa == tpa) records the announcer as OK (not
+    // WAIT — an announcement is not a solicitation).
+    let garp = crate::devip::phyadapt::craft_gratuitous_arp(GUEST_MAC, GUEST4.octets());
+    {
+        let tx = dev.transmit(smoltcp::time::Instant::ZERO).expect("pin (arp): tx for the garp");
+        tx.consume(garp.len(), |buf| buf.copy_from_slice(&garp));
+    }
+    let g16 = crate::devip::v4prefix_of(&GUEST4.octets());
+    assert_eq!(
+        crate::devip::arp::test_lookup(&g16),
+        Some((GUEST_MAC, true)),
+        "pin (arp): the gratuitous TX announcement fed (self, OK)"
+    );
+
+    // The file surface: the 90-byte line shape with the real "ether"
+    // medium field, and the offset%90 gate (arp.c's arpread).
+    let mut chan = crate::dat::Chan::new(
+        crate::dat::DEV_IP,
+        crate::dat::Qid { path: crate::devip::qid(0, 0, crate::devip::QARP), vers: 0, typ: 0 },
+        0,
+    );
+    let mut one = [0u8; 4];
+    let n = crate::devip::arp::read(&mut chan, &mut one, 1).expect("pin (arp): the read");
+    assert_eq!(n, 0, "pin (arp): offset % 90 != 0 reads 0");
+    let mut buf = alloc_vec(90 * 4);
+    let n = crate::devip::arp::read(&mut chan, &mut buf, 0).expect("pin (arp): the aligned read")
+        as usize;
+    assert_eq!(n % 90, 0, "pin (arp): whole lines only");
+    assert!(n >= 3 * 90, "pin (arp): the three fed entries print");
+    // The gateway's line: "ether  OK       10.0.2.2 ... 52:55:0a:00:02:02".
+    let text = std::string::String::from_utf8_lossy(&buf[..n]);
+    assert!(text.contains("ether"), "pin (arp): the medium field names ether");
+    assert!(text.contains("10.0.2.2"), "pin (arp): the gateway line");
+    assert!(text.contains("52:55:0a:00:02:02"), "pin (arp): the gateway mac");
+}
+
+/// Pin 3: the gratuitous-ARP emission content (the donor's
+/// areg=sendgarp): the crafted frame is a broadcast who-has <ip> tell
+/// <ip> REQUEST from the guest MAC — and the seam-dispatch emission (the
+/// ipifc add arm's exact call shape) lands it in the scripted device's
+/// TX capture.
+#[test]
+fn gratuitous_arp_emission_content_on_add() {
+    let _serial = fresh_scripted_stack();
+    crate::devip::arp::test_flush();
+    crate::devip::stack::install_test_ether(StackCore::new_scripted_ether(
+        crate::devip::phyadapt::ScriptedEtherDev::new(GUEST_MAC),
+    ));
+    // The ipifc add arm's exact call shape (the ether core's device gets
+    // the sendgarp).
+    {
+        let mut g = stack::enter_stack();
+        let core = g.core_mut(stack::CoreSel::Ether).expect("pin (garp): the ether core");
+        core.dev.send_gratuitous_arp(GUEST4.octets());
+    }
+    let frame = {
+        let g = stack::enter_stack();
+        let core = g.core_ref(stack::CoreSel::Ether).expect("pin (garp): the ether core");
+        let crate::devip::phyadapt::StackDev::ScriptedEther(dev) = &core.dev else {
+            panic!("pin (garp): not the scripted ether device");
+        };
+        assert_eq!(dev.tx_log.len(), 1, "pin (garp): exactly one frame emitted");
+        dev.tx_log[0].clone()
+    };
+    // Parse it with the wire codecs: broadcast, ethertype ARP, op
+    // Request, sha = the guest MAC, spa == tpa == the guest address.
+    let ef = smoltcp::wire::EthernetFrame::new_checked(&frame[..]).expect("pin (garp): eth parse");
+    assert!(ef.dst_addr().is_broadcast(), "pin (garp): broadcast");
+    assert_eq!(ef.src_addr().0, GUEST_MAC, "pin (garp): src is the guest MAC");
+    assert_eq!(ef.ethertype(), smoltcp::wire::EthernetProtocol::Arp, "pin (garp): the 0x806 ethertype");
+    let pkt = smoltcp::wire::ArpPacket::new_checked(ef.payload()).expect("pin (garp): arp parse");
+    let repr = smoltcp::wire::ArpRepr::parse(&pkt).expect("pin (garp): the repr");
+    let (operation, source_hardware_addr, source_protocol_addr, target_protocol_addr) = match repr {
+        smoltcp::wire::ArpRepr::EthernetIpv4 {
+            operation,
+            source_hardware_addr,
+            source_protocol_addr,
+            target_protocol_addr,
+            ..
+        } => (operation, source_hardware_addr, source_protocol_addr, target_protocol_addr),
+        _ => panic!("pin (garp): not EthernetIpv4"),
+    };
+    assert_eq!(operation, smoltcp::wire::ArpOperation::Request, "pin (garp): a who-has REQUEST");
+    assert_eq!(source_hardware_addr.0, GUEST_MAC, "pin (garp): sha is the guest");
+    assert_eq!(source_protocol_addr, GUEST4, "pin (garp): spa is the guest");
+    assert_eq!(target_protocol_addr, GUEST4, "pin (garp): tpa == spa (tell-yourself)");
+}
+
+/// Pin 4: the address-class demux (contract §12.4): 127/8 and ::1 → the
+/// loopback core; everything else → the ether core WHEN BOUND, else the
+/// loopback core (the single-core fallback keeps the 08-04/08-05 gates'
+/// shape).
+#[test]
+fn address_class_demux_loopback_vs_ether() {
+    let _serial = fresh_scripted_stack();
+    let lo = crate::devip::v4prefix_of(&[127, 1, 2, 3]);
+    let other = crate::devip::v4prefix_of(&[10, 0, 2, 15]);
+    let v6lo = {
+        let mut a = [0u8; 16];
+        a[15] = 1;
+        a
+    };
+    let v6other = {
+        let mut a = [0u8; 16];
+        a[0] = 0x20;
+        a[15] = 1;
+        a
+    };
+    {
+        // Loopback-only (the 08-04/08-05 era): everything demuxes to the
+        // loopback core (the fallback — no ether bound).
+        let g = stack::enter_stack();
+        assert_eq!(g.demux(&lo), stack::CoreSel::Loopback, "pin (demux): 127/8 → loopback");
+        assert_eq!(g.demux(&v6lo), stack::CoreSel::Loopback, "pin (demux): ::1 → loopback");
+        assert_eq!(g.demux(&other), stack::CoreSel::Loopback, "pin (demux): fallback when no ether");
+    }
+    // Bind the ether core: the demux table's other arm goes live.
+    crate::devip::stack::install_test_ether(StackCore::new_scripted_ether(
+        crate::devip::phyadapt::ScriptedEtherDev::new(GUEST_MAC),
+    ));
+    {
+        let g = stack::enter_stack();
+        assert_eq!(g.demux(&lo), stack::CoreSel::Loopback, "pin (demux): 127/8 → loopback (ether bound)");
+        assert_eq!(g.demux(&v6lo), stack::CoreSel::Loopback, "pin (demux): ::1 → loopback (ether bound)");
+        assert_eq!(g.demux(&other), stack::CoreSel::Ether, "pin (demux): other v4 → ether");
+        assert_eq!(g.demux(&v6other), stack::CoreSel::Ether, "pin (demux): other v6 → ether");
+        // The wildcard (announce's noaddr) rides the ether core when bound.
+        assert_eq!(g.demux(&[0; 16]), stack::CoreSel::Ether, "pin (demux): wildcard → ether when bound");
+    }
 }
 

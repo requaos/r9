@@ -1,9 +1,10 @@
 //! devip/ipifc.rs — the interface protocol (contract §9; donor
-//! `ipifc.c`).  This plan lands the LOOPBACK leg: clone, then ctl verbs
-//! `bind loopback` / `add <local> [mask]` / `remove <local> <mask>` /
-//! `unbind`; `bind ether` is 08-06 (the ethermedium binding consumes
-//! Phase 7's devether); `bind pkt`/`bind netdev` are ABSENT per D-08
-//! (they hit "unknown interface type" like any unknown medium).
+//! `ipifc.c`).  The LOOPBACK leg landed in 08-04; the ETHER leg landed in
+//! 08-06: `bind ether <path>` creates the ether ipifc over the seam's
+//! `EtherDev` (the two-core seam — stack.rs), `add` on the ether ifc
+//! updates the ether core's address set and emits the gratuitous ARP
+//! (the donor's areg=sendgarp).  `bind pkt`/`bind netdev` are ABSENT per
+//! D-08 (they hit "unknown interface type" like any unknown medium).
 //!
 //! THE ADDRESS MODEL: the devip-visible tables (the self-table behind
 //! /net/ipselftab, the route table behind /net/iproute) are devip-owned
@@ -17,9 +18,9 @@
 //! overflow past IFACE_MAX_ADDR_COUNT maps to a devip error string,
 //! never a panic.
 //!
-//! BIND PERSISTENCE: the loopback medium's `unbindonclose` is 0 in the
-//! donor (loopbackmedium.c's Medium struct leaves it unset), so the
-//! binding SURVIVES a ctl-fd close — the gate's `bind`/`add` writes ride
+//! BIND PERSISTENCE: the loopback AND ether mediums' `unbindonclose` are
+//! 0 in the donor (their Medium structs leave it unset), so the binding
+//! SURVIVES a ctl-fd close — the gate's `bind`/`add` writes ride
 //! separate open/close cycles and must find the interface still bound.
 //! `close_conv` honors exactly that flag discipline.
 
@@ -60,17 +61,16 @@ pub(crate) struct Lifc {
     pub(crate) absorbed: bool,
 }
 
-/// The one bound interface this era (contract §12.4's
-/// one-Interface-per-bound-ipifc — the ether leg's second core joins in
-/// 08-06).  The seam's `StackState.core` is the loopback core's home;
-/// this record is the devip-side view (the conv that owns the binding,
-/// the medium name, the lifc list, the RA parameters).
+/// The one bound interface PER MEDIUM this era (contract §12.4's
+/// one-Interface-per-bound-ipifc — 08-06's ether leg joined the
+/// loopback): the record is the devip-side view (the conv that owns the
+/// binding, the medium name, the lifc list, the RA parameters).
 pub(crate) struct Ifc {
     /// The binding ipifc conv id.
     conv: usize,
     medium: medium::MediumKind,
     /// The bound device name (the donor's `ifc->dev`: medium name +
-    /// conv id — `loopback0`).
+    /// conv id — `loopback0`; ether's is the bound path's tail, `ether0`).
     devname: Vec<u8>,
     maxtu: u32,
     lifcs: Vec<Lifc>,
@@ -92,7 +92,51 @@ pub(crate) struct Ifc {
     errout: u64,
 }
 
-static IFC: Lock<Option<Ifc>> = Lock::new("devipifc", None);
+/// The bound interfaces: one slot per bound medium (the donor allows one
+/// binding PER CONV; the era's mediums are singletons — one loopback, one
+/// ether — so the slots are per-medium, and a re-bind of a bound medium
+/// errors "interface already bound").
+struct Ifcs {
+    loopback: Option<Ifc>,
+    ether: Option<Ifc>,
+}
+
+impl Ifcs {
+    fn slot_mut(&mut self, kind: medium::MediumKind) -> &mut Option<Ifc> {
+        match kind {
+            medium::MediumKind::Loopback => &mut self.loopback,
+            medium::MediumKind::Ether => &mut self.ether,
+        }
+    }
+
+    /// The ifc OWNING conv `id` (the conv that bound it).
+    fn for_conv(&self, id: usize) -> Option<&Ifc> {
+        [&self.loopback, &self.ether].into_iter().flatten().find(|i| i.conv == id)
+    }
+
+    fn for_conv_mut(&mut self, id: usize) -> Option<&mut Ifc> {
+        [&mut self.loopback, &mut self.ether].into_iter().flatten().find(|i| i.conv == id)
+    }
+}
+
+static IFC: Lock<Ifcs> = Lock::new("devipifc", Ifcs { loopback: None, ether: None });
+
+/// Is the ether ifc bound?  (arp.rs's route-mediated medium pick for the
+/// 3-field `add` — the era's ether medium is the only one with ARP
+/// machinery, and only when bound.)
+pub(crate) fn ether_bound() -> bool {
+    let node = LockNode::new();
+    IFC.lock(&node).ether.is_some()
+}
+
+/// The medium's seam-core selection (contract §12.4's per-ipifc
+/// Interface): the ifc's add/remove update_ip_addrs ride it.
+fn sel_of(kind: medium::MediumKind) -> stack::CoreSel {
+    match kind {
+        medium::MediumKind::Loopback => stack::CoreSel::Loopback,
+        medium::MediumKind::Ether => stack::CoreSel::Ether,
+    }
+}
 
 /// Bind the conv to a medium (`bind <type> [path]` — ipifcbind,
 /// ipifc.c:103-167).  The medium registry (medium.rs) resolves the name;
@@ -104,7 +148,7 @@ pub(crate) fn bind(id: usize, args: &[&[u8]]) -> Result<()> {
     let kind = medium::find(args[0])?;
     let node = LockNode::new();
     let mut guard = IFC.lock(&node);
-    if guard.is_some() {
+    if guard.slot_mut(kind).is_some() {
         return Err("interface already bound");
     }
     // The conv must be unbound too (a re-bind of a bound conv errors
@@ -116,8 +160,8 @@ pub(crate) fn bind(id: usize, args: &[&[u8]]) -> Result<()> {
             return Err("no free devices");
         }
     }
-    let devname = medium::bind_medium(kind, id)?;
-    *guard = Some(Ifc {
+    let devname = medium::bind_medium(kind, id, args.get(1).copied())?;
+    *guard.slot_mut(kind) = Some(Ifc {
         conv: id,
         medium: kind,
         devname,
@@ -142,46 +186,59 @@ pub(crate) fn bind(id: usize, args: &[&[u8]]) -> Result<()> {
 
 /// Unbind (`unbind` — ipifcunbind, ipifc.c:173-216): drop every lifc
 /// (with its self-table + route entries), drop the seam core, drop the
-/// interface record.
+/// interface record.  The ether slot's drop closes the adapter's netif
+/// conversations (EtherDev's Drop) so a re-bind re-allocates cleanly.
 pub(crate) fn unbind(id: usize) -> Result<()> {
     let node = LockNode::new();
     let mut guard = IFC.lock(&node);
-    let Some(ifc) = guard.as_ref() else { return Err("ipifc not yet bound to device") };
-    if ifc.conv != id {
+    // Which slot owns this conv?
+    let kind = if guard.loopback.as_ref().is_some_and(|i| i.conv == id) {
+        medium::MediumKind::Loopback
+    } else if guard.ether.as_ref().is_some_and(|i| i.conv == id) {
+        medium::MediumKind::Ether
+    } else {
         return Err("ipifc not yet bound to device");
-    }
-    let lifcs = core::mem::take(&mut guard.as_mut().unwrap().lifcs);
-    for lifc in &lifcs {
+    };
+    let Some(ifc) = guard.slot_mut(kind).take() else {
+        return Err("ipifc not yet bound to device");
+    };
+    for lifc in &ifc.lifcs {
         remove_address(lifc);
     }
-    *guard = None;
-    // The seam core goes away (the loopback iface is dropped).
+    drop(guard);
+    // The seam core goes away (the iface is dropped; ether's drop closes
+    // the adapter's netif convs).
     let mut g = stack::STACK.enter().expect("devip: stack contended");
-    g.core = None;
+    match kind {
+        medium::MediumKind::Loopback => g.core = None,
+        medium::MediumKind::Ether => g.ether = None,
+    }
     Ok(())
 }
 
 /// The proto close hook (conv.rs's closeconv calls here): unbind ONLY
-/// when the medium's unbindonclose flag is set — loopback's is 0, so
-/// the binding PERSISTS across ctl close (the gate's bind → close →
-/// add flow depends on it).
+/// when the medium's unbindonclose flag is set — loopback's AND ether's
+/// are 0 (the donors' Medium structs leave it unset), so the binding
+/// PERSISTS across ctl close (the gate's bind → close → add flow
+/// depends on it — ipconfig's open/close-per-write shape).
 pub(crate) fn close_conv(_t: &mut conv::ConvTables, _id: usize) {
-    // loopback: unbindonclose == 0 → no action (the donor's ipifcclose
-    // checks the flag and does nothing).
+    // unbindonclose == 0 for both mediums → no action (the donor's
+    // ipifcclose checks the flag and does nothing).
 }
 
 /// `add <local> [mask]` (ipifcadd, ipifc.c:368-530): validate BEFORE
 /// smoltcp (P-F), then the lifc + self-table + route + smoltcp updates.
 /// Defaults: class mask for mask, `local AND mask` for remote.
 /// A duplicate add of the same address is a no-op (the donor's
-/// already-a-local-address arm, ipifc.c:423-437).
+/// already-a-local-address arm, ipifc.c:423-437).  The ether arm (08-6)
+/// ends with the donor's areg=sendgarp: a gratuitous ARP announcing the
+/// new address (smoltcp never sends one — phyadapt's EtherDev emits it).
 pub(crate) fn add(id: usize, args: &[&[u8]], tentative: bool) -> Result<()> {
     let node = LockNode::new();
     let mut guard = IFC.lock(&node);
-    let Some(ifc) = guard.as_mut() else { return Err("ipifc not yet bound to device") };
-    if ifc.conv != id {
+    let Some(ifc) = guard.for_conv_mut(id) else {
         return Err("ipifc not yet bound to device");
-    }
+    };
     let ip = parse_ip(args.first().ok_or("bad arg in system call")?).ok_or("bad ip address syntax")?;
     let mask = match args.len() {
         1 => defmask(&ip),
@@ -225,6 +282,7 @@ pub(crate) fn add(id: usize, args: &[&[u8]], tentative: bool) -> Result<()> {
     if !unspecified && ifc.lifcs.iter().filter(|l| !l.absorbed).count() >= IFACE_MAX_ADDR_COUNT {
         return Err("devip: too many addresses");
     }
+    let sel = sel_of(ifc.medium);
     let lifc = Lifc {
         local: ip,
         mask,
@@ -235,9 +293,10 @@ pub(crate) fn add(id: usize, args: &[&[u8]], tentative: bool) -> Result<()> {
         absorbed: unspecified,
     };
     if !unspecified {
-        // smoltcp learns the unicast address.
+        // smoltcp learns the unicast address — on the ifc's OWN core
+        // (the two-core seam, 08-06).
         let mut g = stack::STACK.enter().expect("devip: stack contended");
-        let core = g.core.as_mut().ok_or("devip: no bound medium")?;
+        let core = g.core_mut(sel).ok_or("devip: no bound medium")?;
         if is_v4(&ip) {
             let v4 = v4_of(&ip).unwrap();
             let pfx = mask_prefix_v4(&mask);
@@ -246,12 +305,28 @@ pub(crate) fn add(id: usize, args: &[&[u8]], tentative: bool) -> Result<()> {
                 let _ = addrs.push(IpCidr::Ipv4(cidr));
             });
         }
-        // (v6 addresses join with the ether leg in 08-06.)
+        // (v6 addresses join with the icmpv6 leg — its plan lands the
+        // v6 update_ip_addrs arm + add6/ra6.)
     }
     // The devip-visible tables (the donor's addselfcache/v4addroute
     // tails), then the lifc joins the interface record.
     add_address(&lifc)?;
     ifc.lifcs.push(lifc);
+    // The donor's areg=sendgarp (contract §10): a gratuitous ARP on
+    // every new ether address (the who-has-own-address request, emitted
+    // devip-side — smoltcp does not send one on update_ip_addrs).
+    // AFTER the smoltcp update (the address is live when announced);
+    // after the guard-chain drops is not needed (IFC → STACK is the
+    // documented nesting — but the garp's tx_post is a driver op, no
+    // port lock; STACK is held here for the dev access).
+    if !unspecified && sel == stack::CoreSel::Ether
+        && let Some(v4) = v4_of(&ip)
+    {
+        let mut g = stack::STACK.enter().expect("devip: stack contended");
+        if let Some(core) = g.core_mut(stack::CoreSel::Ether) {
+            core.dev.send_gratuitous_arp(v4);
+        }
+    }
     Ok(())
 }
 
@@ -261,10 +336,9 @@ pub(crate) fn add(id: usize, args: &[&[u8]], tentative: bool) -> Result<()> {
 pub(crate) fn remove(id: usize, args: &[&[u8]]) -> Result<()> {
     let node = LockNode::new();
     let mut guard = IFC.lock(&node);
-    let Some(ifc) = guard.as_mut() else { return Err("ipifc not yet bound to device") };
-    if ifc.conv != id {
+    let Some(ifc) = guard.for_conv_mut(id) else {
         return Err("ipifc not yet bound to device");
-    }
+    };
     if args.len() != 2 {
         return Err("bad arg in system call");
     }
@@ -274,12 +348,14 @@ pub(crate) fn remove(id: usize, args: &[&[u8]]) -> Result<()> {
         return Err("devip: no such local address");
     };
     let lifc = ifc.lifcs.remove(pos);
+    let sel = sel_of(ifc.medium);
     remove_address(&lifc);
-    // smoltcp's address list drops the unicast address too.
+    // smoltcp's address list drops the unicast address too — on the
+    // ifc's OWN core (the two-core seam, 08-06).
     if !lifc.absorbed && is_v4(&lifc.local) {
         let v4 = v4_of(&lifc.local).unwrap();
         let mut g = stack::STACK.enter().expect("devip: stack contended");
-        if let Some(core) = g.core.as_mut() {
+        if let Some(core) = g.core_mut(sel) {
             core.iface.update_ip_addrs(|addrs| {
                 if let Some(i) = addrs.iter().position(|a| {
                     matches!(a, IpCidr::Ipv4(c) if c.address().octets() == v4)
@@ -304,7 +380,9 @@ pub(crate) fn ctl(id: usize, verb: &[u8], args: &[&[u8]]) -> Result<()> {
         b"mtu" => {
             let node = LockNode::new();
             let mut guard = IFC.lock(&node);
-            let Some(ifc) = guard.as_mut() else { return Err("ipifc not yet bound to device") };
+            let Some(ifc) = guard.for_conv_mut(id) else {
+                return Err("ipifc not yet bound to device");
+            };
             if args.is_empty() {
                 return Err("bad arg in system call");
             }
@@ -323,38 +401,34 @@ pub(crate) fn ctl(id: usize, verb: &[u8], args: &[&[u8]]) -> Result<()> {
 
 /// findlocalip (devip.c:723-726): the local address closest to the
 /// remote.  Address-class demux (contract §12.4): 127/8 and ::1 → the
-/// loopback iface's address; otherwise the first configured v4 address.
+/// loopback iface's address; otherwise the first configured v4 address
+/// (across BOTH bound ifcs this era — the ether leg's addresses join).
 /// IPnoaddr when nothing is bound/configured.
 pub(crate) fn find_local_ip(raddr: &[u8; 16]) -> [u8; 16] {
     let node = LockNode::new();
     let guard = IFC.lock(&node);
-    let Some(ifc) = guard.as_ref() else { return IP_NOADDR };
-    let loopback = is_loopback_addr(raddr);
-    for l in &ifc.lifcs {
-        if l.absorbed {
-            continue;
-        }
-        if loopback && is_loopback_addr(&l.local) {
-            return l.local;
+    let loopback = stack::is_loopback_class(raddr);
+    for ifc in [&guard.loopback, &guard.ether].into_iter().flatten() {
+        for l in &ifc.lifcs {
+            if l.absorbed {
+                continue;
+            }
+            if loopback && stack::is_loopback_class(&l.local) {
+                return l.local;
+            }
         }
     }
-    for l in &ifc.lifcs {
-        if l.absorbed {
-            continue;
-        }
-        if is_v4(&l.local) {
-            return l.local;
+    for ifc in [&guard.loopback, &guard.ether].into_iter().flatten() {
+        for l in &ifc.lifcs {
+            if l.absorbed {
+                continue;
+            }
+            if is_v4(&l.local) {
+                return l.local;
+            }
         }
     }
     IP_NOADDR
-}
-
-/// Is the address the loopback class (127/8 v4-mapped or ::1)?
-fn is_loopback_addr(a: &[u8; 16]) -> bool {
-    if let Some(v) = v4_of(a) {
-        return v[0] == 127;
-    }
-    a[..15].iter().all(|&b| b == 0) && a[15] == 1
 }
 
 /// ipforme (ipifc.c:1083-1098): is the address one of ours (the
@@ -371,14 +445,10 @@ pub(crate) fn status(id: usize) -> Vec<u8> {
     let node = LockNode::new();
     let guard = IFC.lock(&node);
     let mut out = Vec::new();
-    let Some(ifc) = guard.as_ref() else {
+    let Some(ifc) = guard.for_conv(id) else {
         out.extend_from_slice(b"\n");
         return out;
     };
-    if ifc.conv != id {
-        out.extend_from_slice(b"\n");
-        return out;
-    }
     out.extend_from_slice(b"device ");
     out.extend_from_slice(&ifc.devname);
     out.extend_from_slice(b" maxtu ");
@@ -437,10 +507,7 @@ pub(crate) fn local(id: usize) -> Vec<u8> {
     let node = LockNode::new();
     let guard = IFC.lock(&node);
     let mut out = Vec::new();
-    let Some(ifc) = guard.as_ref() else { return out };
-    if ifc.conv != id {
-        return out;
-    }
+    let Some(ifc) = guard.for_conv(id) else { return out };
     for l in &ifc.lifcs {
         out.extend_from_slice(&pad_right(&format_ip(&l.local), 40));
         out.extend_from_slice(b" ->");

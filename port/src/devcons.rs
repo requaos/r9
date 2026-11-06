@@ -1094,6 +1094,16 @@ fn drbg_seed(drbg: &mut Drbg, hooks: &RandomHooks) {
     drbg.seeded = true;
 }
 
+/// A kernel-internal seed draw: 8 bytes from the DRBG (smoltcp's
+/// Config.random_seed at the ether-core bind — 08-06).  Seeds the DRBG
+/// lazily on the first call (the once-marker prints then, wherever the
+/// first draw happens to come from).
+pub fn random_u64() -> u64 {
+    let mut b = [0u8; 8];
+    random_read(&mut b);
+    u64::from_le_bytes(b)
+}
+
 /// Serve a /dev/random (== /dev/urandom this era) read: seed lazily at
 /// the first call, mix fresh jitter on every call, then emit counter-mode
 /// keystream blocks (the counter increments per block — never the same
