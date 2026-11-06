@@ -2623,3 +2623,83 @@ mod rfmem_tests {
     }
 }
 
+/// Host pins for the semaphore wait registry (CR-03): `sem_wake` CONSUMES
+/// the registrations it picks, so the syscall loop's
+/// register → check → block-PER-ITERATION shape is load-bearing — a woken
+/// waiter that loses the unit race is only ever found by a future release
+/// because it RE-registers before re-blocking.  (An earlier shape
+/// registered once before the loop: the consumed registration was never
+/// restored and the waiter wedged permanently.)  These pins cover the
+/// registry's consume/idempotency/order decisions; the PROC_TABLE ready
+/// half no-ops on an empty host table, and the full two-waiter race is
+/// guest-covered by the RFMEM contention gates.
+#[cfg(test)]
+mod sem_tests {
+    use super::{SEM_WAITERS, sem_deregister_waiter, sem_register_waiter, sem_wake};
+    use port::mcslock::LockNode;
+
+    /// The pids registered on a word PA, in registration order.
+    fn waiters_for(pa: u64) -> Vec<u64> {
+        let node = LockNode::new();
+        SEM_WAITERS.lock(&node).iter().filter(|e| e.0 == pa).map(|e| e.1).collect()
+    }
+
+    /// Registration is idempotent (the loop re-registers before EVERY
+    /// block — a spuriously-woken waiter's re-register must not stack
+    /// duplicates).
+    #[test]
+    fn register_is_idempotent() {
+        let pa = 0x9100_0000;
+        sem_register_waiter(pa, 11);
+        sem_register_waiter(pa, 11);
+        assert_eq!(waiters_for(pa), vec![11]);
+        sem_deregister_waiter(pa, 11);
+        assert_eq!(waiters_for(pa), Vec::<u64>::new());
+    }
+
+    /// The wake CONSUMES up to delta registrations in registration order:
+    /// a picked waiter leaves the set (its re-registration on the next
+    /// block is what makes the consume safe).
+    #[test]
+    fn wake_consumes_picked_registrations_in_order() {
+        let pa = 0x9200_0000;
+        sem_register_waiter(pa, 21);
+        sem_register_waiter(pa, 22);
+        sem_wake(pa, 1);
+        assert_eq!(waiters_for(pa), vec![22], "the first-registered waiter is consumed");
+        sem_wake(pa, 0); // a zero-delta release wakes nobody
+        assert_eq!(waiters_for(pa), vec![22]);
+        sem_wake(pa, 5); // delta beyond the set drains what's there
+        assert_eq!(waiters_for(pa), Vec::<u64>::new());
+    }
+
+    /// The CR-03 shape: a woken (consumed) waiter that loses the unit
+    /// race RE-REGISTERS before re-blocking; the next release finds it.
+    #[test]
+    fn reregistered_waiter_is_found_by_the_next_release() {
+        let pa = 0x9300_0000;
+        sem_register_waiter(pa, 31);
+        sem_wake(pa, 1); // the release wakes (consumes) the waiter
+        assert_eq!(waiters_for(pa), Vec::<u64>::new());
+        // The waiter runs, loses the unit race, and re-blocks — the
+        // loop's register-before-block restores the registration.
+        sem_register_waiter(pa, 31);
+        assert_eq!(waiters_for(pa), vec![31]);
+        sem_wake(pa, 1); // the next release finds it
+        assert_eq!(waiters_for(pa), Vec::<u64>::new());
+    }
+
+    /// Waiters on OTHER words are never consumed (the PA keying — RFMEM
+    /// family members share a PA; unrelated procs never meet).
+    #[test]
+    fn wake_never_touches_other_words() {
+        let pa = 0x9400_0000;
+        let other = 0x9500_0000;
+        sem_register_waiter(pa, 41);
+        sem_register_waiter(other, 42);
+        sem_wake(pa, 8);
+        assert_eq!(waiters_for(pa), Vec::<u64>::new());
+        assert_eq!(waiters_for(other), vec![42]);
+        sem_deregister_waiter(other, 42);
+    }
+}
