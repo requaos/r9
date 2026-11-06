@@ -2657,51 +2657,52 @@ pub(crate) fn tcp_stats() -> Vec<u8> {
     out
 }
 
-/// The tcp gc (contract §5.4 — the donor's tcpgc reaps timed-out convs
-/// under clone pressure; the smoltcp-era mapping: steal a slot whose
-/// socket is FULLY CLOSED).  The victim's socket leaves the SocketSet;
-/// its blocked readers wake to EOF (the reset's Idle-state read arm).
-/// Returns the stolen slot, reset, inuse = 1 (the clone-open shape).
-/// The caller (conv_alloc) holds TABLES.
-pub(crate) fn tcp_gc(t: &mut conv::ConvTables) -> Option<usize> {
-    // Find a fully-Closed socket (TABLES → STACK, the documented nesting).
-    // The scan covers BOTH cores (the two-core seam, 08-06): a conv's
-    // socket lives in its recorded core's SocketSet.
-    let victim = {
-        let mut g = stack::STACK.enter().expect("devip: stack contended");
-        let mut found = None;
+/// The tcp gc (contract §5.4 — the donor's tcpgc reaps stale convs under
+/// clone pressure; the smoltcp-era mapping of "the tcb is done": the
+/// conv's socket is FULLY CLOSED).  The donor's action is localclose(c,
+/// Etimedout) — qhangup the conv's queues and wake its waiters; the
+/// slot's OWNERSHIP never changes (Fsprotoclone still requires
+/// inuse == 0): the owner errors out and closes, and the slot frees at
+/// ITS close.  Returns (whether any conv was hung up, the woken pids) —
+/// the caller (conv_alloc) retries the inuse == 0 scan on true and wakes
+/// the pids after the TABLES guard drops.  NEVER resets/hands out an
+/// in-use slot: that aliased the victim's open fds onto the cloner's
+/// fresh conversation (the victim's next read/write would operate on the
+/// new owner's socket, and its eventual conv_close would close-reset the
+/// live conversation) — the review's CR-06.
+pub(crate) fn tcp_gc(t: &mut conv::ConvTables) -> (bool, Vec<u64>) {
+    // Find the stale convs (TABLES → STACK, the documented nesting).  The
+    // scan covers BOTH cores (the two-core seam, 08-06): a conv's socket
+    // lives in its recorded core's SocketSet.
+    let mut stale: Vec<usize> = Vec::new();
+    {
+        let g = stack::STACK.enter().expect("devip: stack contended");
         for (id, c) in t.table(Proto::Tcp).iter().enumerate() {
             if let Some(h) = c.sock
                 && let Some(core) = g.core_ref(c.sel)
                 && core.sockets.get::<tcp::Socket>(h).state() == tcp::State::Closed
             {
-                found = Some((id, h));
-                break;
+                stale.push(id);
             }
         }
-        if let Some((_, h)) = found {
-            let sel = {
-                let (id, _) = found.unwrap();
-                t.table(Proto::Tcp)[id].sel
-            };
-            if let Some(core) = g.core_mut(sel) {
-                core.sockets.remove(h);
-            }
-        }
-        found.map(|(id, _)| id)
-    }?;
-    let mut pids = [0u64; 16];
-    let n = {
-        let c = &mut t.table_mut(Proto::Tcp)[victim];
-        let n = c.waiters.take(&mut pids);
-        c.reset();
-        c.allocated = true;
-        n
-    };
-    if n > 0
-        && let Ok(h) = stack::hooks()
-    {
-        (h.wake)(&pids[..n]);
     }
-    Some(victim)
+    if stale.is_empty() {
+        return (false, Vec::new());
+    }
+    // localclose's qhangup + wake (the donor never frees the conv here):
+    // the hangup marker errors every later read/write and the err file
+    // carries the reason (the donor's Etimedout string).
+    let mut pids: Vec<u64> = Vec::new();
+    let mut scratch = [0u64; 16];
+    for id in &stale {
+        let c = &mut t.table_mut(Proto::Tcp)[*id];
+        let msg: Vec<u8> = b"connection timed out".to_vec();
+        if c.hangup.is_none() {
+            c.hangup = Some(msg.clone());
+        }
+        c.errq.push_back(msg);
+        let n = c.waiters.take(&mut scratch);
+        pids.extend_from_slice(&scratch[..n]);
+    }
+    (true, pids)
 }

@@ -4,8 +4,10 @@
 //! ref/close with the donor's semantics:
 //!
 //! - `conv_alloc` (Fsprotoclone): first free slot, full field reset,
-//!   gc under pressure = drop fully-Closed convs' sockets (the donor's
-//!   gc hook maps to that in the smoltcp era); exhaustion → Enodev
+//!   gc under pressure = force-hangup tcp convs whose socket is fully
+//!   Closed (the donor's tcpgc → localclose: qhangup + wake; the slot's
+//!   ownership is unchanged — an in-use slot is NEVER handed out) and
+//!   the scan retries; exhaustion → Enodev
 //!   ("no free devices" — the donor's cpuserver panic arm is absent:
 //!   r9 has no cpuserver flag, the error is always Enodev).
 //! - `conv_open` (devip.c:417-444): inuse++; the first ctl/data/err
@@ -350,31 +352,52 @@ impl ConvTables {
 pub(crate) static TABLES: Lock<ConvTables> = Lock::new("devipconv", ConvTables::new());
 
 /// The clone-open allocation (Fsprotoclone): first slot with
-/// inuse == 0; a gc pass under pressure (drop fully-Closed convs'
-/// sockets — the smoltcp-era mapping of the donor's p->gc) and retry;
-/// exhaustion → Enodev.  Returns the conv id; the caller (devip::open)
-/// rewrites the chan's qid to QID(p, id, Qctl).
+/// inuse == 0; a gc pass under pressure (the donor's p->gc — tcpgc —
+/// force-HANGS-UP stale convs: localclose's qhangup+wake, slot ownership
+/// unchanged — the owner errors out and closes, freeing the slot at ITS
+/// close) and the scan RETRIES; exhaustion → Enodev ("no free devices").
+/// An in-use slot is NEVER handed out (CR-06).  Returns the conv id;
+/// the caller (devip::open) rewrites the chan's qid to QID(p, id, Qctl).
 pub(crate) fn conv_alloc(p: Proto) -> Result<usize> {
-    let node = LockNode::new();
-    let mut t = TABLES.lock(&node);
+    let mut gc_wakes: Vec<u64> = Vec::new();
+    let r = {
+        let node = LockNode::new();
+        let mut t = TABLES.lock(&node);
+        let mut alloc = first_free(&mut t, p);
+        // The gc pass under pressure (contract §3/§5.4).  icmp/udp have
+        // no gc (p->gc is nil there) — the donor falls straight to the
+        // Enodev arm for them.
+        if alloc.is_none() && p == Proto::Tcp {
+            let (hung, pids) = super::proto::tcp_gc(&mut t);
+            gc_wakes = pids;
+            if hung {
+                alloc = first_free(&mut t, p);
+            }
+        }
+        alloc.ok_or("no free devices")
+    };
+    // The gc's woken waiters — AFTER the table guard drops (the
+    // wake-after-drop discipline).
+    if !gc_wakes.is_empty()
+        && let Ok(h) = super::stack::hooks()
+    {
+        (h.wake)(&gc_wakes);
+    }
+    r
+}
+
+/// The first-free-slot scan (Fsprotoclone's walk): the slot resets to
+/// the clone-time surface and returns its id.
+fn first_free(t: &mut ConvTables, p: Proto) -> Option<usize> {
     let table = t.table_mut(p);
     for (id, c) in table.iter_mut().enumerate() {
         if c.inuse == 0 {
             c.reset();
             c.allocated = true;
-            return Ok(id);
+            return Some(id);
         }
     }
-    // The gc pass under pressure (contract §3/§5.4; the donor's
-    // p->gc — tcpgc — reaps stale convs): steal a tcp slot whose socket
-    // is fully Closed.  icmp/udp have no gc (p->gc is nil there) — the
-    // donor falls straight to the Enodev arm for them.
-    if p == Proto::Tcp
-        && let Some(id) = super::proto::tcp_gc(&mut t)
-    {
-        return Ok(id);
-    }
-    Err("no free devices")
+    None
 }
 
 /// The allocated-slot map for the walk/listing (the donor lists conv
