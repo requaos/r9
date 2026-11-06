@@ -49,7 +49,7 @@ use crate::Result;
 
 use super::conv::{self, ConvState, Proto};
 use super::stack;
-use super::{IP_NOADDR, atoi, format_ip, parse_ip, v4_of, v4prefix_of};
+use super::{IP_NOADDR, atoi, format_ip, is_v4, parse_ip, v4_of, v4prefix_of};
 
 // ---------------------------------------------------------------------------
 // The icmp stats counters (contract §7 — bridge-maintained per P-M;
@@ -187,7 +187,7 @@ pub(crate) fn ctl_write(p: Proto, id: usize, buf: &[u8]) -> Result<u64> {
                 let flag = match p {
                     Proto::Tcp => super::netlog::LOG_TCP,
                     Proto::Udp => super::netlog::LOG_UDP,
-                    Proto::Icmp => super::netlog::LOG_ICMP,
+                    Proto::Icmp | Proto::Icmp6 => super::netlog::LOG_ICMP,
                     _ => super::netlog::LOG_IP,
                 };
                 super::netlog::emit(
@@ -220,6 +220,7 @@ fn proto_ctl(p: Proto, id: usize, verb: &[u8], args: &[&[u8]]) -> Result<()> {
         Proto::Ipifc => super::ipifc::ctl(id, verb, args),
         Proto::Udp => udp_ctl(id, verb, args),
         Proto::Tcp => tcp_ctl(id, verb, args),
+        Proto::Icmp6 => icmp6_ctl(id, verb, args),
         _ => Err("unknown control request"),
     }
 }
@@ -488,7 +489,7 @@ const ICMP_BUF: usize = 64 * 1024;
 /// Econrefused / the bridge deadline → Etimedout.
 fn connect_proto(p: Proto, id: usize) -> Result<()> {
     match p {
-        Proto::Icmp => {
+        Proto::Icmp | Proto::Icmp6 => {
             let (lport, ttl, raddr) = {
                 let node = LockNode::new();
                 let t = conv::TABLES.lock(&node);
@@ -498,6 +499,9 @@ fn connect_proto(p: Proto, id: usize) -> Result<()> {
             // The address-class demux (contract §12.4): the conv's core
             // is picked from the REMOTE address class and recorded.
             let sel = demux_addr(&raddr);
+            // The icmp socket is dual-family (the destination's family
+            // selects v4/v6 at dispatch) — icmp AND icmpv6 convs build
+            // the identical shape (Ident(lport), hop limit 255).
             let mut s = icmp::Socket::new(
                 PacketBuffer::new(alloc::vec![PacketMetadata::EMPTY; ICMP_RX_META], alloc::vec![0; ICMP_BUF]),
                 PacketBuffer::new(alloc::vec![PacketMetadata::EMPTY; ICMP_RX_META], alloc::vec![0; ICMP_BUF]),
@@ -614,7 +618,7 @@ fn demux_addr(addr: &[u8; 16]) -> stack::CoreSel {
 /// backlog, so devip's Maxincall maps onto the pool).
 fn announce_proto(p: Proto, id: usize) -> Result<()> {
     match p {
-        Proto::Icmp => connect_proto(p, id), // icmp announce = the same socket bind (icmp.c's Fsstdannounce + Fsconnected)
+        Proto::Icmp | Proto::Icmp6 => connect_proto(p, id), // icmp/icmpv6 announce = the same socket bind (icmp.c's Fsstdannounce + Fsconnected)
         Proto::Udp => connect_proto(p, id),  // udp announce = the same socket bind (udp.c's Fsstdannounce shape)
         Proto::Tcp => {
             let (lport, laddr) = {
@@ -640,7 +644,7 @@ fn announce_proto(p: Proto, id: usize) -> Result<()> {
 /// Hop-limit application helper (the ttl ctl on a live socket).
 fn apply_hop_limit(core: &mut stack::StackCore, p: Proto, h: smoltcp::iface::SocketHandle, v: u8) {
     match p {
-        Proto::Icmp => {
+        Proto::Icmp | Proto::Icmp6 => {
             core.sockets.get_mut::<icmp::Socket>(h).set_hop_limit(Some(v));
         }
         Proto::Udp => {
@@ -885,7 +889,7 @@ pub(crate) fn status(p: Proto, id: usize) -> Vec<u8> {
                 let g = stack::STACK.enter().expect("devip: stack contended");
                 match g.core_ref(sel) {
                     Some(core) => match p {
-                        Proto::Icmp => {
+                        Proto::Icmp | Proto::Icmp6 => {
                             let s = core.sockets.get::<icmp::Socket>(h);
                             (s.recv_queue(), s.send_queue())
                         }
@@ -893,7 +897,7 @@ pub(crate) fn status(p: Proto, id: usize) -> Vec<u8> {
                             let s = core.sockets.get::<udp::Socket>(h);
                             (s.recv_queue(), s.send_queue())
                         }
-                        _ => (0, 0), // icmpv6 lands with its leg's plan
+                        _ => (0, 0),
                     },
                     None => (0, 0),
                 }
@@ -1477,6 +1481,384 @@ pub(crate) fn udp_stats() -> Vec<u8> {
     line(b"NoPorts", UDP_NO_PORTS.load(Ordering::Relaxed));
     line(b"InErrors", UDP_IN_ERRS.load(Ordering::Relaxed));
     line(b"OutDatagrams", UDP_OUT.load(Ordering::Relaxed));
+    out
+}
+
+// ---------------------------------------------------------------------------
+// icmpv6 (contract §8 — the mapping corner, Pitfall P-E): `headers` mode
+// (headers = 6, icmpctl6) + the FULL-PACKET data bridge.  Userspace
+// builds/parses the IP6 header itself: on write the buffer starts at the
+// IPv6 header (the donor's icmpkick6: padblock(bp, IP6HDR) — the kernel
+// fills src/dst and, unless headers mode, the ident); on read the
+// delivered block carries the packet WITH the IPv6 header (ping.c skips
+// IPV6HDR_LEN = 40 both directions; ipconfig's recvrahost reads a
+// Routeradv struct starting at the vcf field).  smoltcp's icmp socket is
+// payload-level → the bridge SPLITS the user's packet on write (the bare
+// ICMPv6 message to the socket, bound icmp::Endpoint::Ident(lport)) and
+// SYNTHESIZES the IP6 header on read.
+//
+// THE HEADERS-MODE PREFIX (ICMP_USEAD6 = 40, the man's Icmp6hdr
+// {unused[8], laddr[16], raddr[16]}): WRITE-SIDE ONLY — the donor's
+// icmpkick6 consumes it (laddr/raddr at bytes 8..24/24..40) and the read
+// side delivers the full packet from the IP6 header with NO prefix (the
+// man documents the prefix "before a write"; ipconfig's recvrahost reads
+// a Routeradv from byte 0 — source beats any both-directions reading).
+// Note the overlay: the prefix's laddr/raddr sit at the SAME offsets as
+// the IP6 header's src/dst — userspace (sendrs/sendra) writes the full
+// packet and the prefix interpretation reads src/dst out of it.
+//
+// THE RECORDED CORNERS (the bridge's honest deltas):
+// - The wire src is smoltcp's RFC 6724 source selection — smoltcp's icmp
+//   socket has no per-send source override (unlike udp's UdpMetadata), so
+//   the headers-mode user laddr is parsed but NOT honored on the wire
+//   (the donor's ipmove(p->src, laddr) cannot ride the socket).  The one
+//   shape this bites is the pre-autoconf RS's src=:: — smoltcp sources
+//   the configured link-local/global instead (RFC 4861 §4.1's
+//   link-local-present arm); slaac stays OFF so no r9 RS carries ::.
+// - smoltcp's NDISC owns NS/NA/RS/RA internally: they NEVER surface to
+//   the icmpv6 socket (accepts_v6 matches EchoRequest/EchoReply by ident
+//   only) — ipconfig's recvra path (dialicmp + RA reads) sees nothing on
+//   r9 (the donor surfaces RAs to a conv connected to port 134).  The
+//   guest's ND exchange still runs (smoltcp's neighbor machinery — the
+//   pcap-visible NS/NA), and the snoop feeds /net/arp; only the
+//   file-surface visibility of RA/RS diverges (recorded 08-07).
+// - ttl on the synthesized read header carries the conv's CONFIGURED ttl
+//   (smoltcp exposes no received hop limit — the v4 corner's twin; ping
+//   prints it cosmetically).
+// - The donor's ident overwrite (hnputs(p->icmpid, c->lport)) applies to
+//   NON-headers writes only (icmpkick6's else arm); headers-mode writes
+//   carry the user's message untouched.
+// ---------------------------------------------------------------------------
+
+/// The icmpv6 socket buffer sizing (the donor's icmpcreate6: a 64 KiB
+/// Qmsg rq) rides the icmp module's ICMP_RX_META/ICMP_BUF — the merged
+/// connect arm builds the identical shape.
+///
+/// The icmpv6 stats counters (icmpstats6's Nstats6 = 12 tagged lines +
+/// the per-type in/out lines; bridge-maintained per P-M — smoltcp exposes
+/// none).  The error counters are structurally still this era (smoltcp's
+/// wire layer drops malformed frames below the socket, never surfaced).
+static IN_MSGS6: AtomicU64 = AtomicU64::new(0);
+static IN_ERRORS6: AtomicU64 = AtomicU64::new(0);
+static OUT_MSGS6: AtomicU64 = AtomicU64::new(0);
+
+/// The per-type counters (icmpnames6's Maxtype6 = 137).
+static TYPE6_IN: [AtomicU64; 138] = [const { AtomicU64::new(0) }; 138];
+static TYPE6_OUT: [AtomicU64; 138] = [const { AtomicU64::new(0) }; 138];
+
+/// The per-type names (icmp6.c's icmpnames6[] — holes print NOTHING, the
+/// donor's dead `else if(0)` arm governs; the v6 echo/ND/RA types carry
+/// names).
+const ICMP6_NAMES: [Option<&[u8]>; 138] = {
+    let mut t: [Option<&[u8]>; 138] = [None; 138];
+    t[0] = Some(b"EchoReply");
+    t[1] = Some(b"UnreachableV6");
+    t[2] = Some(b"PacketTooBigV6");
+    t[3] = Some(b"TimeExceedV6");
+    t[4] = Some(b"SrcQuench"); // (the donor's table shares slot 4 with InParmProblem's v4 name — its literal is SrcQuench)
+    t[5] = Some(b"Redirect");
+    t[8] = Some(b"EchoRequest");
+    t[11] = Some(b"TimeExceed");
+    t[12] = Some(b"InParmProblem");
+    t[13] = Some(b"Timestamp");
+    t[14] = Some(b"TimestampReply");
+    t[15] = Some(b"InfoRequest");
+    t[16] = Some(b"InfoReply");
+    t[17] = Some(b"AddrMaskRequest");
+    t[18] = Some(b"AddrMaskReply");
+    t[128] = Some(b"EchoRequestV6");
+    t[129] = Some(b"EchoReplyV6");
+    t[133] = Some(b"RouterSolicit");
+    t[134] = Some(b"RouterAdvert");
+    t[135] = Some(b"NbrSolicit");
+    t[136] = Some(b"NbrAdvert");
+    t[137] = Some(b"RedirectV6");
+    t
+};
+
+/// icmpv6's own ctl verb (icmpctl6, icmp6.c:281-292): `headers` sets
+/// headers = 6 (the 40-byte ICMP_USEAD6 write-side prefix mode).
+/// Anything else is the generic dispatch's unknown-verb error.
+fn icmp6_ctl(id: usize, verb: &[u8], args: &[&[u8]]) -> Result<()> {
+    match verb {
+        b"headers" if args.is_empty() => {
+            let node = LockNode::new();
+            let mut t = conv::TABLES.lock(&node);
+            t.table_mut(Proto::Icmp6)[id].headers = 6;
+            Ok(())
+        }
+        _ => Err("unknown control request"),
+    }
+}
+
+/// The icmpv6 socket creation rides the shared `Proto::Icmp | Proto::Icmp6`
+/// connect arm (the icmp socket is dual-family — dispatch keys on the
+/// destination's family).
+
+/// The icmpv6 data write (icmpkick6, icmp6.c:236-279).  Returns the
+/// buffer count on success (the donor returns n); a short/unroutable
+/// write DROPS silently with a counter bump (the donor's freeblist arms
+/// — pullupblock/IPICMPSZ).
+pub(crate) fn icmp6_write_data(id: usize, buf: &[u8]) -> Result<u64> {
+    let n = buf.len();
+    let (sock, raddr, lport, headers6, sel) = {
+        let node = LockNode::new();
+        let t = conv::TABLES.lock(&node);
+        let c = &t.table(Proto::Icmp6)[id];
+        (c.sock, c.raddr, c.lport, c.headers == 6, c.sel)
+    };
+    let Some(h) = sock else {
+        // Never-connected conv: fire-and-forget (the donor's qwrite →
+        // ipoput6 drops; the write succeeds).  Counted, never silent.
+        IN_ERRORS6.fetch_add(1, Ordering::Relaxed);
+        return Ok(n as u64);
+    };
+    // Split the buffer into (the endpoint, the bare ICMPv6 message).
+    // T-08-14: the parse is BOUNDS-only and never trusted for slicing —
+    // the message boundary is the fixed 40 in both modes.  (No version
+    // validation: the donor OVERWRITES vcf/src/dst/ident and recomputes
+    // the checksum, so its consumers write zeroed header areas — ping.c
+    // memsets, ipconfig's sendrs memsets.  Validating the version would
+    // break the donor's own clients; the overwrite semantics govern.)
+    let (dst16, msg_off): ([u8; 16], usize) = if headers6 {
+        if n < 40 + 4 {
+            // The donor's pullupblock(ICMP_USEAD6) failure arm — freed,
+            // the write succeeds.
+            IN_ERRORS6.fetch_add(1, Ordering::Relaxed);
+            return Ok(n as u64);
+        }
+        // The prefix: {unused[8], laddr[16], raddr[16]} — the user's
+        // raddr is the endpoint.  (laddr parsed, NOT wire-honored — the
+        // module header's recorded corner.)
+        let mut ra = [0u8; 16];
+        ra.copy_from_slice(&buf[24..40]);
+        (ra, 40)
+    } else {
+        if n < 40 + 4 {
+            // blocklen(bp) < IPICMPSZ → freeblist (the write succeeds).
+            IN_ERRORS6.fetch_add(1, Ordering::Relaxed);
+            return Ok(n as u64);
+        }
+        // The full packet: the endpoint is the CONV's recorded raddr
+        // (the donor's ipmove(p->dst, c->raddr) — the user's dst field
+        // is overwritten).
+        (raddr, 40)
+    };
+    // A v4-mapped endpoint on the v6 file — the udp module's v6-dst arm
+    // mirrored (the honest error).
+    if is_v4(&dst16) || dst16 == IP_NOADDR {
+        return Err("bad ip address syntax");
+    }
+    let mut dst6 = [0u8; 16];
+    dst6.copy_from_slice(&dst16);
+    let mut msg = alloc::vec![0u8; n - msg_off];
+    msg.copy_from_slice(&buf[msg_off..]);
+    if !headers6 {
+        // icmpkick6's non-headers arm: hnputs(p->icmpid, c->lport) — the
+        // kernel OVERWRITES the message's ident field; the checksum is
+        // zeroed (smoltcp recomputes at dispatch: parse ignores it, the
+        // emit callback rewrites it).
+        msg[4] = (lport >> 8) as u8;
+        msg[5] = (lport & 0xff) as u8;
+        msg[2] = 0;
+        msg[3] = 0;
+    }
+    let mut hooks: Option<stack::DevipHooks> = None;
+    loop {
+        let send_res = {
+            let mut g = stack::STACK.enter().expect("devip: stack contended");
+            let Some(core) = g.core_mut(sel) else { return Err("devip: no bound medium") };
+            let s = core.sockets.get_mut::<icmp::Socket>(h);
+            s.send_slice(&msg, IpAddress::Ipv6(smoltcp::wire::Ipv6Address::from(dst6)))
+        };
+        match send_res {
+            Ok(()) => break,
+            Err(_) => {
+                // TX buffer full: block until the drive frees space
+                // (register → drop → block — the icmp module's shape).
+                if hooks.is_none() {
+                    hooks = Some(stack::hooks()?);
+                }
+                let hks = hooks.unwrap();
+                let pid = (hks.current)();
+                {
+                    let node = LockNode::new();
+                    let mut t = conv::TABLES.lock(&node);
+                    t.table_mut(Proto::Icmp6)[id].waiters.register(pid);
+                }
+                stack::register_net_waiter(pid);
+                {
+                    let mut g = stack::STACK.enter().expect("devip: stack contended");
+                    if let Some(core) = g.core_mut(sel) {
+                        super::ICMP6_TX_SLOTS[id].arm(pid);
+                        core.sockets
+                            .get_mut::<icmp::Socket>(h)
+                            .register_send_waker(&crate::devip_waker::waker_for(&super::ICMP6_TX_SLOTS[id]));
+                    }
+                }
+                stack::drive_stack();
+                (hks.block)();
+            }
+        }
+    }
+    OUT_MSGS6.fetch_add(1, Ordering::Relaxed);
+    let ty = msg[0] as usize;
+    if ty < 138 {
+        TYPE6_OUT[ty].fetch_add(1, Ordering::Relaxed);
+    }
+    // D-05 leg 3: the mutating write ends with a drive.
+    stack::drive_stack();
+    Ok(n as u64)
+}
+
+/// The icmpv6 data read (the donor's qread(c->rq) — Qmsg
+/// datagram-at-once): the delivered block is the full-IPv6-packet shape
+/// (the SYNTHESIZED 40-byte IP6 header + the message).  Blocks per the
+/// seam's probe → drive → register/drop/block shape.
+pub(crate) fn icmp6_read_data(id: usize, buf: &mut [u8]) -> Result<u64> {
+    let mut hooks: Option<stack::DevipHooks> = None;
+    loop {
+        {
+            let node = LockNode::new();
+            let mut t = conv::TABLES.lock(&node);
+            let c = &mut t.table_mut(Proto::Icmp6)[id];
+            if let Some(h) = c.sock {
+                let sel = c.sel;
+                let mut g = stack::STACK.enter().expect("devip: stack contended");
+                if let Some(core) = g.core_mut(sel) {
+                    let s = core.sockets.get_mut::<icmp::Socket>(h);
+                    if s.can_recv() {
+                        let Ok((pkt, remote)) = s.recv() else {
+                            drop(g);
+                            continue;
+                        };
+                        let n = synthesize_v6_packet(pkt, &remote, c.laddr, c.ttl, buf);
+                        IN_MSGS6.fetch_add(1, Ordering::Relaxed);
+                        let ty = pkt.first().copied().unwrap_or(0) as usize;
+                        if ty < 138 {
+                            TYPE6_IN[ty].fetch_add(1, Ordering::Relaxed);
+                        }
+                        return Ok(n as u64);
+                    }
+                }
+            }
+        }
+        // Flush pending work before blocking (D-05 leg 3's read side).
+        stack::drive_stack();
+        {
+            let node = LockNode::new();
+            let mut t = conv::TABLES.lock(&node);
+            let c = &mut t.table_mut(Proto::Icmp6)[id];
+            let has_data = if let Some(h) = c.sock {
+                let sel = c.sel;
+                let g = stack::STACK.enter().expect("devip: stack contended");
+                match g.core_ref(sel) {
+                    Some(core) => core.sockets.get::<icmp::Socket>(h).can_recv(),
+                    None => false,
+                }
+            } else {
+                false
+            };
+            if has_data {
+                continue;
+            }
+            if hooks.is_none() {
+                hooks = Some(stack::hooks()?);
+            }
+            let hks = hooks.unwrap();
+            let pid = (hks.current)();
+            c.waiters.register(pid);
+            stack::register_net_waiter(pid);
+            if let Some(h) = c.sock {
+                let sel = c.sel;
+                let mut g = stack::STACK.enter().expect("devip: stack contended");
+                if let Some(core) = g.core_mut(sel) {
+                    super::ICMP6_RX_SLOTS[id].arm(pid);
+                    core.sockets
+                        .get_mut::<icmp::Socket>(h)
+                        .register_recv_waker(&crate::devip_waker::waker_for(&super::ICMP6_RX_SLOTS[id]));
+                }
+            }
+        }
+        (hooks.unwrap().block)();
+    }
+}
+
+/// Synthesize the 40-byte IP6 header around the received ICMPv6 message
+/// (devip's full-packet read semantics — goticmpkt6 qpasses the whole
+/// block WITH the wire packet's header).  Fields: vcf 0x60, ploadlen =
+/// the message length, nexthdr 58 (ICMPv6), ttl = the conv's CONFIGURED
+/// ttl (smoltcp exposes no received hop limit — the recorded corner),
+/// src = the sender (the socket's recv metadata), dst = the conv's
+/// recorded local (or the resolved local when unspecified).  Qmsg
+/// truncation: a short buffer discards the excess.
+fn synthesize_v6_packet(pkt: &[u8], remote: &IpAddress, laddr: [u8; 16], ttl: u32, buf: &mut [u8]) -> usize {
+    let total = 40 + pkt.len();
+    let n = total.min(buf.len());
+    if n == 0 {
+        return 0;
+    }
+    let mut hdr = [0u8; 40];
+    hdr[0] = 0x60; // version 6, tc/flow 0
+    let pl = (pkt.len() as u16).to_be_bytes();
+    hdr[4] = pl[0];
+    hdr[5] = pl[1];
+    hdr[6] = 58; // next header: ICMPv6
+    hdr[7] = ttl.min(255) as u8;
+    let remote16 = match remote {
+        IpAddress::Ipv6(r) => r.octets(),
+        IpAddress::Ipv4(r) => v4prefix_of(&r.octets()),
+        #[allow(unreachable_patterns)]
+        _ => IP_NOADDR,
+    };
+    hdr[8..24].copy_from_slice(&remote16);
+    let local = if laddr == IP_NOADDR { super::ipifc::find_local_ip(&remote16) } else { laddr };
+    hdr[24..40].copy_from_slice(&local);
+    let hcpy = n.min(40);
+    buf[..hcpy].copy_from_slice(&hdr[..hcpy]);
+    if n > 40 {
+        let rest = n - 40;
+        buf[40..n].copy_from_slice(&pkt[..rest]);
+    }
+    n
+}
+
+/// The icmpv6 stats file (icmpstats6, icmp6.c:835-860): the 12 tagged
+/// lines (the bridge-observable ones move; the error counters are
+/// structurally still — recorded per P-M), then the per-type in/out
+/// lines for the NAMED types (the donor's dead `else if(0)` arm: holes
+/// print nothing).
+pub(crate) fn icmp6_stats() -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut line = |key: &[u8], val: u64| {
+        out.extend_from_slice(key);
+        out.extend_from_slice(b": ");
+        out.extend_from_slice(&dec(val));
+        out.push(b'\n');
+    };
+    // Nstats6's order (icmp6.c:31-44 + statnames6).
+    line(b"InMsgs", IN_MSGS6.load(Ordering::Relaxed));
+    line(b"InErrors", IN_ERRORS6.load(Ordering::Relaxed));
+    line(b"OutMsgs", OUT_MSGS6.load(Ordering::Relaxed));
+    line(b"CsumErrs", 0);
+    line(b"LenErrs", 0);
+    line(b"HlenErrs", 0);
+    line(b"HoplimErrs", 0);
+    line(b"IcmpCodeErrs", 0);
+    line(b"TargetErrs", 0);
+    line(b"OptlenErrs", 0);
+    line(b"AddrmxpErrs", 0);
+    line(b"RouterAddrErrs", 0);
+    for (i, name) in ICMP6_NAMES.iter().enumerate() {
+        if let Some(n) = name {
+            out.extend_from_slice(n);
+            out.extend_from_slice(b": ");
+            out.extend_from_slice(&dec(TYPE6_IN[i].load(Ordering::Relaxed)));
+            out.push(b' ');
+            out.extend_from_slice(&dec(TYPE6_OUT[i].load(Ordering::Relaxed)));
+            out.push(b'\n');
+        }
+    }
     out
 }
 

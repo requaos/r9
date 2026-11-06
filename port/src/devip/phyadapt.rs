@@ -645,6 +645,18 @@ impl StackDev {
             _ => {}
         }
     }
+
+    /// The device's MAC (the ipifc `add6` verb's pref2addr source —
+    /// ethermedium's EUI-64 derivation); None for non-ether devices (the
+    /// loopback medium has no pref2addr — the donor's error arm).
+    pub fn mac(&self) -> Option<[u8; 6]> {
+        match self {
+            StackDev::Ether(dev) => Some(dev.mac()),
+            #[cfg(test)]
+            StackDev::ScriptedEther(dev) => Some(dev.mac),
+            _ => None,
+        }
+    }
 }
 
 /// The unified RX token (enum dispatch — same shape as `StackDev`).

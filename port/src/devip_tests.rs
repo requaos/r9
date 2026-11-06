@@ -2418,3 +2418,381 @@ fn dhcp_broadcast_tx_shape_through_the_devip_file_surface() {
     conv::conv_close(conv::Proto::Ipifc, ifc_id);
 }
 
+// ---------------------------------------------------------------------------
+// 08-07 Task 2 — the NETIP-06 IPv6 pins: the icmpv6 full-packet bridge
+// (P-E), the 40-byte ICMP_USEAD6 headers prefix (write-side), and the
+// ipifc v6 verbs (add6/ra6/try + the tentative DAD lifecycle).
+// ---------------------------------------------------------------------------
+
+/// The scripted v6 guest/gateway addresses (the Medium::Ip scripted core).
+const GUEST6: smoltcp::wire::Ipv6Address =
+    smoltcp::wire::Ipv6Address::new(0xfec0, 0, 0, 0, 0, 0, 0, 0x15);
+const GW6: smoltcp::wire::Ipv6Address =
+    smoltcp::wire::Ipv6Address::new(0xfec0, 0, 0, 0, 0, 0, 0, 0x2);
+
+/// Craft a bare-IPv6 ICMPv6 echo frame (Medium::Ip — no ethernet header)
+/// with smoltcp's wire codecs (the checksum computed for real).
+fn icmpv6_echo_frame(
+    src: smoltcp::wire::Ipv6Address,
+    dst: smoltcp::wire::Ipv6Address,
+    request: bool,
+    ident: u16,
+    seq: u16,
+    payload: &[u8],
+) -> Vec<u8> {
+    use smoltcp::wire::{Icmpv6Packet, Icmpv6Repr, Ipv6Packet, Ipv6Repr};
+    let repr = if request {
+        Icmpv6Repr::EchoRequest { ident, seq_no: seq, data: payload }
+    } else {
+        Icmpv6Repr::EchoReply { ident, seq_no: seq, data: payload }
+    };
+    let mut bytes = alloc_vec(40 + repr.buffer_len());
+    {
+        let mut ip = Ipv6Packet::new_unchecked(&mut bytes);
+        Ipv6Repr {
+            src_addr: src,
+            dst_addr: dst,
+            next_header: IpProtocol::Icmpv6,
+            payload_len: repr.buffer_len(),
+            hop_limit: 255,
+        }
+        .emit(&mut ip);
+    }
+    {
+        let mut pkt = Icmpv6Packet::new_unchecked(&mut bytes[40..]);
+        repr.emit(&src, &dst, &mut pkt, &ChecksumCapabilities::default());
+    }
+    bytes
+}
+
+/// Parse a captured bare-IPv6 ICMPv6 frame: (src, dst, type, ident, seq,
+/// the message payload after the 8-byte echo header).  Panics loudly on
+/// a non-icmpv6 frame (a pin's parse failure IS the failure).
+fn parse_icmpv6(frame: &[u8]) -> (smoltcp::wire::Ipv6Address, smoltcp::wire::Ipv6Address, u8, u16, u16, Vec<u8>) {
+    let ip = smoltcp::wire::Ipv6Packet::new_checked(frame).expect("pin: ip6 parse");
+    let icmp = smoltcp::wire::Icmpv6Packet::new_checked(ip.payload()).expect("pin: icmpv6 parse");
+    let msg = ip.payload();
+    (
+        ip.src_addr(),
+        ip.dst_addr(),
+        icmp.msg_type().into(),
+        u16::from_be_bytes([msg[4], msg[5]]),
+        u16::from_be_bytes([msg[6], msg[7]]),
+        msg[8..].to_vec(),
+    )
+}
+
+/// Read one icmpv6 conv's (state, headers, laddr, lport, raddr) — the pin
+/// inspection surface (udp_conv_snapshot's sibling).
+fn icmp6_conv_snapshot(id: usize) -> (crate::devip::conv::ConvState, u8, [u8; 16], u16, [u8; 16]) {
+    let node = crate::mcslock::LockNode::new();
+    let t = crate::devip::conv::TABLES.lock(&node);
+    let c = &t.table(crate::devip::conv::Proto::Icmp6)[id];
+    (c.state, c.headers, c.laddr, c.lport, c.raddr)
+}
+
+/// The full-packet round-trip pin (P-E): a user-built IPv6 packet through
+/// the bridge — the scripted iface sees the PARSED payload (the bare
+/// ICMPv6 message to smoltcp's socket, the ident overwritten with the
+/// conv's lport per icmpkick6); a scripted inbound echo reply surfaces to
+/// the data read WITH the synthesized IP6 header (the version/ploadlen/
+/// proto/src/dst fields) and the correct ident dispatch.  The conv rides
+/// the loopback core over the scripted device (Medium::Ip — bare packets;
+/// the ipifc model carries the guest's v6 address so find_local_ip
+/// resolves).
+#[test]
+fn icmpv6_full_packet_round_trip_through_the_bridge() {
+    let _serial = SEAM_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    ensure_hooks();
+    set_ticks(0);
+    take_wake_log();
+    {
+        let mut g = stack::enter_stack();
+        g.core = None;
+        g.ether = None;
+    }
+    crate::devip::arp::test_flush();
+    use crate::devip::{conv, ipifc, proto};
+
+    // The ifc model + the scripted device: bind loopback, swap the core
+    // to the scripted capture device, add the guest's v6 address (the
+    // v6 update_ip_addrs arm lands it on the scripted iface).
+    let ifc_id = conv::conv_alloc(conv::Proto::Ipifc).expect("pin (v6rt): ipifc clone");
+    ipifc::ctl(ifc_id, b"bind", &[b"loopback"]).expect("pin (v6rt): bind");
+    {
+        let mut g = stack::enter_stack();
+        g.core = Some(StackCore::new_scripted(ScriptedDev::new()));
+    }
+    ipifc::ctl(ifc_id, b"add", &[b"fec0::15", b"/64"]).expect("pin (v6rt): the v6 add");
+    {
+        let g = stack::enter_stack();
+        let core = g.core.as_ref().expect("pin (v6rt): the core");
+        assert_eq!(
+            core.iface.ip_addrs().len(),
+            1,
+            "pin (v6rt): the v6 address reached the smoltcp iface"
+        );
+    }
+
+    // The conv: connect to the gateway (ping -6's dial shape) — laddr
+    // resolves via the v6 arm of find_local_ip.
+    let id = conv::conv_alloc(conv::Proto::Icmp6).expect("pin (v6rt): icmpv6 clone");
+    let _guard = ConvGuard(conv::Proto::Icmp6, id);
+    proto::ctl_write(conv::Proto::Icmp6, id, b"connect fec0::2!1").expect("pin (v6rt): connect");
+    let (state, _h, laddr, lport, raddr) = icmp6_conv_snapshot(id);
+    assert_eq!(state, conv::ConvState::Connected, "pin (v6rt): Connected");
+    assert_eq!(raddr, GW6.octets(), "pin (v6rt): the recorded raddr");
+    assert_eq!(laddr, GUEST6.octets(), "pin (v6rt): laddr resolved via the v6 ifc");
+    assert!(lport != 0, "pin (v6rt): the ident port assigned");
+
+    // The write: the user's FULL IPv6 packet (a zeroed 40-byte header
+    // area — ping.c's memset shape — + the EchoRequestV6 with a cosmetic
+    // user ident the kernel OVERWRITES).
+    let mut wbuf = alloc_vec(40);
+    wbuf.extend_from_slice(&[128, 0, 0xde, 0xad]); // type 128, code 0, junk cksum
+    wbuf.extend_from_slice(&0x1234u16.to_be_bytes()); // user ident (overwritten)
+    wbuf.extend_from_slice(&0x0007u16.to_be_bytes()); // seq 7
+    wbuf.extend_from_slice(b"pin6-payload");
+    let n = proto::icmp6_write_data(id, &wbuf).expect("pin (v6rt): the write");
+    assert_eq!(n as usize, wbuf.len(), "pin (v6rt): the write count");
+    // The scripted capture: one bare-IPv6 frame, guest → gateway, proto
+    // 58, the message's ident = the conv's lport (the kernel overwrite),
+    // the payload verbatim, and a VALID checksum (smoltcp recomputed).
+    {
+        let g = stack::enter_stack();
+        let core = g.core.as_ref().expect("pin (v6rt): the core");
+        assert_eq!(core.dev_scripted().tx_log.len(), 1, "pin (v6rt): one frame out");
+        let (src, dst, ty, ident, seq, data) = parse_icmpv6(&core.dev_scripted().tx_log[0]);
+        assert_eq!(src, GUEST6, "pin (v6rt): src = the iface's v6 (smoltcp's selection)");
+        assert_eq!(dst, GW6, "pin (v6rt): dst = the conv's raddr");
+        assert_eq!(ty, 128, "pin (v6rt): EchoRequestV6");
+        assert_eq!(ident, lport, "pin (v6rt): the ident overwrite with the conv's lport");
+        assert_eq!(seq, 7, "pin (v6rt): the seq verbatim");
+        assert_eq!(data, b"pin6-payload", "pin (v6rt): the payload verbatim");
+    }
+
+    // The read: the scripted echo REPLY (gateway → guest, the request's
+    // ident) surfaces with the synthesized 40-byte IP6 header.
+    push_rx(icmpv6_echo_frame(GW6, GUEST6, false, lport, 7, b"pin6-payload"));
+    let mut rbuf = alloc_vec(4096);
+    let n = proto::icmp6_read_data(id, &mut rbuf).expect("pin (v6rt): the read") as usize;
+    assert_eq!(n, 40 + 8 + 12, "pin (v6rt): the full-packet read (header + message)");
+    assert_eq!(rbuf[0] >> 4, 6, "pin (v6rt): the synthesized header's version 6");
+    let plen = u16::from_be_bytes([rbuf[4], rbuf[5]]);
+    assert_eq!(plen as usize, 8 + 12, "pin (v6rt): ploadlen = the message length");
+    assert_eq!(rbuf[6], 58, "pin (v6rt): next header ICMPv6");
+    assert_eq!(&rbuf[8..24], &GW6.octets(), "pin (v6rt): src = the sender");
+    assert_eq!(&rbuf[24..40], &GUEST6.octets(), "pin (v6rt): dst = the conv's local");
+    assert_eq!(rbuf[40], 129, "pin (v6rt): EchoReplyV6");
+    assert_eq!(&rbuf[44..46], &lport.to_be_bytes(), "pin (v6rt): the ident dispatch");
+    assert_eq!(&rbuf[48..n], b"pin6-payload", "pin (v6rt): the payload verbatim");
+
+    // Teardown.
+    ipifc::ctl(ifc_id, b"remove", &[b"fec0::15", b"/64"]).expect("pin (v6rt): the v6 remove");
+    {
+        let g = stack::enter_stack();
+        let core = g.core.as_ref().expect("pin (v6rt): the core");
+        assert!(core.iface.ip_addrs().is_empty(), "pin (v6rt): the remove dropped the smoltcp address");
+    }
+    ipifc::ctl(ifc_id, b"unbind", &[]).expect("pin (v6rt): unbind");
+    conv::conv_close(conv::Proto::Ipifc, ifc_id);
+}
+
+/// The headers-mode prefix pin (ICMP_USEAD6, the WRITE-side 40-byte
+/// {unused[8], laddr[16], raddr[16]} — the donor's icmpkick6 consumes it;
+/// the read side never carries it): a headers conv's write routes by the
+/// PREFIX's raddr (not the conv's — dialicmp's RA-listener shape), the
+/// message passes UNTOUCHED (no ident overwrite — the headers arm), and
+/// the ctl's exact error strings hold.
+#[test]
+fn icmpv6_headers_mode_prefix_shape() {
+    let _serial = SEAM_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    ensure_hooks();
+    set_ticks(0);
+    take_wake_log();
+    {
+        let mut g = stack::enter_stack();
+        g.core = None;
+        g.ether = None;
+    }
+    crate::devip::arp::test_flush();
+    use crate::devip::{conv, ipifc, proto};
+
+    let ifc_id = conv::conv_alloc(conv::Proto::Ipifc).expect("pin (v6hdr): ipifc clone");
+    ipifc::ctl(ifc_id, b"bind", &[b"loopback"]).expect("pin (v6hdr): bind");
+    {
+        let mut g = stack::enter_stack();
+        g.core = Some(StackCore::new_scripted(ScriptedDev::new()));
+    }
+    ipifc::ctl(ifc_id, b"add", &[b"fec0::15", b"/64"]).expect("pin (v6hdr): the v6 add");
+
+    let id = conv::conv_alloc(conv::Proto::Icmp6).expect("pin (v6hdr): icmpv6 clone");
+    let _guard = ConvGuard(conv::Proto::Icmp6, id);
+    // The ctl surface: an unknown verb errors EXACTLY "unknown control
+    // request"; `headers` sets 6.
+    let e = proto::ctl_write(conv::Proto::Icmp6, id, b"bogus").expect_err("pin (v6hdr): the unknown verb errors");
+    assert_eq!(e, "unknown control request", "pin (v6hdr): the exact string");
+    proto::ctl_write(conv::Proto::Icmp6, id, b"headers").expect("pin (v6hdr): headers");
+    assert_eq!(icmp6_conv_snapshot(id).1, 6, "pin (v6hdr): headers=6 recorded");
+
+    // dialicmp's shape: connect <mcast>!<type>!r <type> — the conv's
+    // raddr is the multicast; a headers-mode write's PREFIX raddr steers
+    // the message (the donor's headers arm).  Here: connect to the
+    // all-nodes address, then write an echo request whose PREFIX names
+    // the gateway.
+    let allnodes: [u8; 16] = {
+        let mut a = [0u8; 16];
+        a[0] = 0xff;
+        a[1] = 0x02;
+        a[15] = 1;
+        a
+    };
+    let _ = allnodes; // (the connect target is incidental to the prefix steering)
+    proto::ctl_write(conv::Proto::Icmp6, id, b"connect fec0::99!1").expect("pin (v6hdr): connect");
+    // The write: the 40-byte prefix (unused zeros, laddr = the guest,
+    // raddr = the GATEWAY — steering away from the conv's fec0::99) +
+    // the bare EchoRequestV6 whose ident must pass UNTOUCHED (headers
+    // mode skips the donor's overwrite).
+    let mut wbuf = alloc_vec(40);
+    wbuf[8..24].copy_from_slice(&GUEST6.octets()); // laddr
+    wbuf[24..40].copy_from_slice(&GW6.octets()); // raddr — the prefix steers
+    wbuf.extend_from_slice(&[128, 0, 0, 0]); // type 128, code 0, zero cksum
+    wbuf.extend_from_slice(&0x55aau16.to_be_bytes()); // the user's ident — UNTOUCHED
+    wbuf.extend_from_slice(&0x0003u16.to_be_bytes()); // seq 3
+    wbuf.extend_from_slice(b"hdr6");
+    let n = proto::icmp6_write_data(id, &wbuf).expect("pin (v6hdr): the write");
+    assert_eq!(n as usize, wbuf.len(), "pin (v6hdr): the write count");
+    {
+        let g = stack::enter_stack();
+        let core = g.core.as_ref().expect("pin (v6hdr): the core");
+        assert_eq!(core.dev_scripted().tx_log.len(), 1, "pin (v6hdr): one frame out");
+        let (src, dst, ty, ident, seq, data) = parse_icmpv6(&core.dev_scripted().tx_log[0]);
+        assert_eq!(dst, GW6, "pin (v6hdr): the PREFIX's raddr steered the message");
+        assert_eq!(src, GUEST6, "pin (v6hdr): src = smoltcp's RFC 6724 selection (the recorded corner)");
+        assert_eq!(ty, 128, "pin (v6hdr): EchoRequestV6");
+        assert_eq!(ident, 0x55aa, "pin (v6hdr): the headers-mode ident is UNTOUCHED");
+        assert_eq!(seq, 3, "pin (v6hdr): the seq verbatim");
+        assert_eq!(data, b"hdr6", "pin (v6hdr): the payload verbatim");
+    }
+
+    ipifc::ctl(ifc_id, b"remove", &[b"fec0::15", b"/64"]).expect("pin (v6hdr): remove");
+    ipifc::ctl(ifc_id, b"unbind", &[]).expect("pin (v6hdr): unbind");
+    conv::conv_close(conv::Proto::Ipifc, ifc_id);
+}
+
+/// The ipifc v6 verbs pin: `add6`'s EUI-64 derivation on an ether ifc
+/// (ethermedium's pref2addr), the exact donor error strings, `ra6`'s
+/// keyword recording (the status line prints it), and `try`'s tentative
+/// lifecycle (recorded, NEVER pushed to smoltcp until the confirming
+/// add — the DAD window's shape).
+#[test]
+fn ipifc_v6_verbs_add6_ra6_try() {
+    let _serial = SEAM_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    ensure_hooks();
+    set_ticks(0);
+    take_wake_log();
+    {
+        let mut g = stack::enter_stack();
+        g.core = None;
+        g.ether = None;
+    }
+    crate::devip::arp::test_flush();
+    use crate::devip::{conv, ipifc};
+
+    // add6 on a MAC-less medium errors "no pref2addr on interface"
+    // (the loopback Medium has no pref2addr — the donor's arm).
+    let lo_id = conv::conv_alloc(conv::Proto::Ipifc).expect("pin (verbs): ipifc clone");
+    ipifc::ctl(lo_id, b"bind", &[b"loopback"]).expect("pin (verbs): bind loopback");
+    let e = ipifc::ctl(lo_id, b"add6", &[b"fec0::", b"64"]).expect_err("pin (verbs): add6 on loopback errors");
+    assert_eq!(e, "no pref2addr on interface", "pin (verbs): the pref2addr arm");
+    // The arg-count + parse errors fire before the MAC lookup.
+    let e = ipifc::ctl(lo_id, b"add6", &[]).expect_err("pin (verbs): add6 with no args errors");
+    assert_eq!(e, "bad arg in system call", "pin (verbs): Ebadarg");
+    let e = ipifc::ctl(lo_id, b"add6", &[b"10.0.0.1"]).expect_err("pin (verbs): a v4 prefix errors");
+    assert_eq!(e, "bad ipv6 address", "pin (verbs): the not-v6 arm");
+    let e = ipifc::ctl(lo_id, b"add6", &[b"fe80::1", b"64"]).expect_err("pin (verbs): link-local errors");
+    assert_eq!(e, "ipv6 prefix is link-local", "pin (verbs): the link-local arm");
+    let e = ipifc::ctl(lo_id, b"add6", &[b"fec0::", b"64", b"1", b"1", b"5", b"9"]).expect_err("pin (verbs): validlt<preflt errors");
+    assert_eq!(e, "valid ipv6 lifetime less than preferred lifetime", "pin (verbs): the lifetime arm");
+    ipifc::ctl(lo_id, b"unbind", &[]).expect("pin (verbs): unbind loopback");
+    conv::conv_close(conv::Proto::Ipifc, lo_id);
+
+    // The ether leg: the scripted ether core + the test ifc record (the
+    // live netif machinery is absent on the host — the pin's seam).
+    crate::devip::stack::install_test_ether(StackCore::new_scripted_ether(
+        crate::devip::phyadapt::ScriptedEtherDev::new(GUEST_MAC),
+    ));
+    let et_id = conv::conv_alloc(conv::Proto::Ipifc).expect("pin (verbs): ether ipifc clone");
+    crate::devip::ipifc::test_bind_ether(et_id);
+
+    // add6 fec0:: 64 → the EUI-64 derivation of the scripted MAC
+    // (52:54:00:12:34:56 → 5254:00ff:fe12:3456 — the U/L bit (0x02) is
+    // already set in 0x52, so the |0x2 leaves the first octet unchanged).
+    ipifc::ctl(et_id, b"add6", &[b"fec0::", b"64"]).expect("pin (verbs): add6");
+    let eui64: [u8; 16] = [
+        0xfe, 0xc0, 0, 0, 0, 0, 0, 0, 0x52, 0x54, 0x00, 0xff, 0xfe, 0x12, 0x34, 0x56,
+    ];
+    {
+        let g = stack::enter_stack();
+        let core = g.core_ref(stack::CoreSel::Ether).expect("pin (verbs): the ether core");
+        assert!(
+            core.iface.ip_addrs().iter().any(|a| matches!(a, IpCidr::Ipv6(c) if c.address() == smoltcp::wire::Ipv6Address::from(eui64))),
+            "pin (verbs): the EUI-64 address reached the ether iface — got {:?}",
+            core.iface.ip_addrs()
+        );
+    }
+
+    // ra6: record + the status line prints it; the error arms.
+    let e = ipifc::ctl(et_id, b"ra6", &[b"recvra"]).expect_err("pin (verbs): an odd field count errors");
+    assert_eq!(e, "bad arg in system call", "pin (verbs): the odd-count arm");
+    let e = ipifc::ctl(et_id, b"ra6", &[b"bogus", b"1"]).expect_err("pin (verbs): an unknown keyword errors");
+    assert_eq!(e, "bad arg in system call", "pin (verbs): the unknown-keyword arm");
+    ipifc::ctl(et_id, b"ra6", &[b"maxraint", b"100", b"minraint", b"200"]).expect_err("pin (verbs): maxraint<minraint errors");
+    ipifc::ctl(et_id, b"ra6", &[b"recvra", b"1", b"mflag", b"1", b"maxraint", b"700000", b"ttl", b"64"])
+        .expect("pin (verbs): the ra6 record");
+    let status = ipifc::status(et_id);
+    let text = std::string::String::from_utf8_lossy(&status).into_owned();
+    assert!(text.contains("sendra 0 recvra 1"), "pin (verbs): the status line carries recvra: {text:?}");
+    assert!(text.contains("mflag 1"), "pin (verbs): mflag recorded");
+    assert!(text.contains("maxraint 700000"), "pin (verbs): maxraint recorded");
+    assert!(text.contains("ttl 64"), "pin (verbs): ttl recorded");
+    // The maxraint<minraint restore held: the earlier rejected write
+    // restored the defaults (minraint 200000 < maxraint 700000 now).
+    assert!(text.contains("minraint 200000"), "pin (verbs): the rejected pair was restored: {text:?}");
+
+    // try: the tentative lifc is recorded (the DAD window's model
+    // visibility) but NEVER pushed to smoltcp; the confirming add pushes
+    // it (the DAD tail).
+    let try6 = "fe80::9"; // link-local is FINE for try (the link-local
+                          // bar is add6's; ipifcadd has no such check)
+    let try6_addr: [u8; 16] = [0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9];
+    ipifc::ctl(et_id, b"try", &[try6.as_bytes(), b"/64"]).expect("pin (verbs): try");
+    {
+        let g = stack::enter_stack();
+        let core = g.core_ref(stack::CoreSel::Ether).expect("pin (verbs): the ether core");
+        assert!(
+            !core.iface.ip_addrs().iter().any(|a| matches!(a, IpCidr::Ipv6(c) if c.address() == smoltcp::wire::Ipv6Address::from(try6_addr))),
+            "pin (verbs): a tentative address is NEVER pushed to smoltcp (the DAD window)"
+        );
+    }
+    // The tentative is visible in the model (the status line's per-address
+    // list carries it).
+    let status = ipifc::status(et_id);
+    let text = std::string::String::from_utf8_lossy(&status).into_owned();
+    assert!(text.contains("fe80::9"), "pin (verbs): the tentative lifc is model-visible: {text:?}");
+    // The confirming add (the quiet DAD window's tail): pushed now.
+    ipifc::ctl(et_id, b"add", &[try6.as_bytes(), b"/64"]).expect("pin (verbs): the confirming add");
+    {
+        let g = stack::enter_stack();
+        let core = g.core_ref(stack::CoreSel::Ether).expect("pin (verbs): the ether core");
+        assert!(
+            core.iface.ip_addrs().iter().any(|a| matches!(a, IpCidr::Ipv6(c) if c.address() == smoltcp::wire::Ipv6Address::from(try6_addr))),
+            "pin (verbs): the confirming add pushed the address"
+        );
+    }
+
+    // Teardown: drop the ifc record + close (the scripted ether core is
+    // the pin's own; the next pin's fresh_scripted_stack clears it).
+    crate::devip::ipifc::test_unbind_ether();
+    conv::conv_close(conv::Proto::Ipifc, et_id);
+}

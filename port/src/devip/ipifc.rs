@@ -59,6 +59,14 @@ pub(crate) struct Lifc {
     /// recorded here and in the self-table but NEVER passed to smoltcp's
     /// update_ip_addrs (it panics on non-unicast).
     pub(crate) absorbed: bool,
+    /// The add6 verb's RFC 2461 §6.2.1 parameters (08-07 — recorded;
+    /// the router-side consumers land with a router era).
+    pub(crate) onlink: bool,
+    pub(crate) autoflag: bool,
+    /// The address's origin timestamp (the donor's origint = NOW/1000 —
+    /// recorded as 0 this era; no consumer reads it).
+    #[allow(dead_code)]
+    pub(crate) origint: u64,
 }
 
 /// The one bound interface PER MEDIUM this era (contract §12.4's
@@ -74,8 +82,10 @@ pub(crate) struct Ifc {
     devname: Vec<u8>,
     maxtu: u32,
     lifcs: Vec<Lifc>,
-    // The RA parameters (ipifcbind defaults, ipifc.c:143-153).  No
-    // consumer this era — carried for the status line's fidelity.
+    // The RA parameters (ipifcbind defaults, ipifc.c:143-153).
+    // recvra/sendra record the ra6 verb's flags (08-07).
+    recvra6: bool,
+    sendra6: bool,
     mflag: bool,
     oflag: bool,
     maxraint: u32,
@@ -129,6 +139,51 @@ pub(crate) fn ether_bound() -> bool {
     IFC.lock(&node).ether.is_some()
 }
 
+/// The host pins' ether-ifc installation (08-07's v6-verb pins): the
+/// record mirrors bind()'s ether arm, but pairs with the pin's SCRIPTED
+/// ether core (stack::install_test_ether) — the live netif machinery is
+/// absent on the host.  The pin owns teardown via test_unbind_ether.
+#[cfg(test)]
+pub(crate) fn test_bind_ether(conv: usize) {
+    let node = LockNode::new();
+    let mut guard = IFC.lock(&node);
+    guard.ether = Some(Ifc {
+        conv,
+        medium: medium::MediumKind::Ether,
+        devname: Vec::from(&b"ether0"[..]),
+        maxtu: medium::maxtu(medium::MediumKind::Ether),
+        lifcs: Vec::new(),
+        recvra6: false,
+        sendra6: false,
+        mflag: false,
+        oflag: false,
+        maxraint: 600000,
+        minraint: 200000,
+        linkmtu: 0,
+        reachtime: 0,
+        rxmitra: 0,
+        ttl: conv::MAX_TTL,
+        routerlt: 3 * 600000,
+        pktin: 0,
+        pktout: 0,
+        errin: 0,
+        errout: 0,
+    });
+}
+
+/// The test ether-ifc teardown (the pin's cleanup — drops the record and
+/// its lifcs' table entries).
+#[cfg(test)]
+pub(crate) fn test_unbind_ether() {
+    let node = LockNode::new();
+    let mut guard = IFC.lock(&node);
+    if let Some(ifc) = guard.ether.take() {
+        for lifc in &ifc.lifcs {
+            remove_address(lifc);
+        }
+    }
+}
+
 /// The medium's seam-core selection (contract §12.4's per-ipifc
 /// Interface): the ifc's add/remove update_ip_addrs ride it.
 fn sel_of(kind: medium::MediumKind) -> stack::CoreSel {
@@ -167,6 +222,8 @@ pub(crate) fn bind(id: usize, args: &[&[u8]]) -> Result<()> {
         devname,
         maxtu: medium::maxtu(kind),
         lifcs: Vec::new(),
+        recvra6: false,
+        sendra6: false,
         mflag: false,
         oflag: false,
         maxraint: 600000,
@@ -257,18 +314,41 @@ pub(crate) fn add(id: usize, args: &[&[u8]], tentative: bool) -> Result<()> {
         }
     }
     let remote = mask_ip(&ip, &mask);
-    // The duplicate no-op.
-    for l in ifc.lifcs.iter_mut() {
-        if l.local == ip {
-            l.tentative = tentative && !is_v4(&ip);
-            return Ok(());
+    // The duplicate arm (the donor's already-a-local no-op, ipifc.c:423-437,
+    // extended for the DAD tail): a tentative→confirmed transition (the
+    // `try` recorded the v6 address devip-side ONLY; the confirming `add`
+    // after a quiet DAD window pushes it to smoltcp NOW — the address was
+    // never usable while tentative).
+    if let Some(pos) = ifc.lifcs.iter().position(|l| l.local == ip) {
+        let was = ifc.lifcs[pos].tentative;
+        let absorbed = ifc.lifcs[pos].absorbed;
+        let m = ifc.lifcs[pos].mask;
+        ifc.lifcs[pos].tentative = tentative && !is_v4(&ip);
+        if was && !tentative && !absorbed && !is_v4(&ip) {
+            let sel = sel_of(ifc.medium);
+            // The P-F cap at the confirm push (the try consumed no slot).
+            let pushed = ifc.lifcs.iter().filter(|l| !l.absorbed && !l.tentative).count();
+            if pushed >= IFACE_MAX_ADDR_COUNT {
+                return Err("devip: too many addresses");
+            }
+            let mut g = stack::STACK.enter().expect("devip: stack contended");
+            if let Some(core) = g.core_mut(sel) {
+                let v6 = smoltcp::wire::Ipv6Address::from(ip);
+                core.iface.update_ip_addrs(|addrs| {
+                    let _ = addrs.push(IpCidr::Ipv6(smoltcp::wire::Ipv6Cidr::new(v6, mask_prefix(&m))));
+                });
+            }
         }
+        return Ok(());
     }
-    // P-F: the non-unicast absorption (0.0.0.0 / ::) — record the lifc
-    // (the DHCP-in-progress marker), update the devip-visible tables,
+    // P-F: the non-unicast absorption (0.0.0.0 / :: — the DHCP-in-progress
+    // marker — AND v6 multicast; smoltcp's update_ip_addrs panics on any
+    // non-unicast) — record the lifc, update the devip-visible tables,
     // NEVER call smoltcp's update_ip_addrs with it.
     let unspecified = ip == IP_NOADDR || (is_v4(&ip) && v4_of(&ip) == Some([0, 0, 0, 0]));
-    if unspecified {
+    let mcast6 = !is_v4(&ip) && ip[0] == 0xff;
+    let absorb = unspecified || mcast6;
+    if absorb {
         // A note-worthy event (D-07): the absorption is deliberate but
         // invisible on the wire — it shows up in netlog under `ip`.
         super::netlog::emit(
@@ -278,8 +358,10 @@ pub(crate) fn add(id: usize, args: &[&[u8]], tentative: bool) -> Result<()> {
         super::netlog::netlog_dbg!(super::netlog::LOG_IP, "devip: absorbed 0.0.0.0 add");
     }
     // The cap check BEFORE any mutation: overflow maps to a devip
-    // error — never an smoltcp panic (P-F).
-    if !unspecified && ifc.lifcs.iter().filter(|l| !l.absorbed).count() >= IFACE_MAX_ADDR_COUNT {
+    // error — never an smoltcp panic (P-F).  The count is of PUSHED
+    // addresses (absorbed markers and tentative (DAD-pending) v6 lifcs
+    // consume no smoltcp slot).
+    if !absorb && ifc.lifcs.iter().filter(|l| !l.absorbed && !l.tentative).count() >= IFACE_MAX_ADDR_COUNT {
         return Err("devip: too many addresses");
     }
     let sel = sel_of(ifc.medium);
@@ -290,11 +372,14 @@ pub(crate) fn add(id: usize, args: &[&[u8]], tentative: bool) -> Result<()> {
         validlt: u64::MAX,
         preflt: u64::MAX,
         tentative: tentative && !is_v4(&ip),
-        absorbed: unspecified,
+        absorbed: absorb,
+        onlink: true,
+        autoflag: true,
+        origint: 0,
     };
-    if !unspecified {
-        // smoltcp learns the unicast address — on the ifc's OWN core
-        // (the two-core seam, 08-06).
+    if !lifc.absorbed && !lifc.tentative {
+        // smoltcp learns the unicast, DAD-confirmed address — on the
+        // ifc's OWN core (the two-core seam, 08-06); v6 joined in 08-07.
         let mut g = stack::STACK.enter().expect("devip: stack contended");
         let core = g.core_mut(sel).ok_or("devip: no bound medium")?;
         if is_v4(&ip) {
@@ -304,12 +389,17 @@ pub(crate) fn add(id: usize, args: &[&[u8]], tentative: bool) -> Result<()> {
             core.iface.update_ip_addrs(|addrs| {
                 let _ = addrs.push(IpCidr::Ipv4(cidr));
             });
+        } else {
+            let v6 = smoltcp::wire::Ipv6Address::from(ip);
+            let cidr = smoltcp::wire::Ipv6Cidr::new(v6, mask_prefix(&mask));
+            core.iface.update_ip_addrs(|addrs| {
+                let _ = addrs.push(IpCidr::Ipv6(cidr));
+            });
         }
-        // (v6 addresses join with the icmpv6 leg — its plan lands the
-        // v6 update_ip_addrs arm + add6/ra6.)
     }
     // The devip-visible tables (the donor's addselfcache/v4addroute
     // tails), then the lifc joins the interface record.
+    let pushed = !lifc.absorbed && !lifc.tentative;
     add_address(&lifc)?;
     ifc.lifcs.push(lifc);
     // The donor's areg=sendgarp (contract §10): a gratuitous ARP on
@@ -318,8 +408,9 @@ pub(crate) fn add(id: usize, args: &[&[u8]], tentative: bool) -> Result<()> {
     // AFTER the smoltcp update (the address is live when announced);
     // after the guard-chain drops is not needed (IFC → STACK is the
     // documented nesting — but the garp's tx_post is a driver op, no
-    // port lock; STACK is held here for the dev access).
-    if !unspecified && sel == stack::CoreSel::Ether
+    // port lock; STACK is held here for the dev access).  A tentative
+    // (DAD-pending) or absorbed address was never pushed — no garp.
+    if pushed && sel == stack::CoreSel::Ether
         && let Some(v4) = v4_of(&ip)
     {
         let mut g = stack::STACK.enter().expect("devip: stack contended");
@@ -350,19 +441,30 @@ pub(crate) fn remove(id: usize, args: &[&[u8]]) -> Result<()> {
     let lifc = ifc.lifcs.remove(pos);
     let sel = sel_of(ifc.medium);
     remove_address(&lifc);
-    // smoltcp's address list drops the unicast address too — on the
-    // ifc's OWN core (the two-core seam, 08-06).
-    if !lifc.absorbed && is_v4(&lifc.local) {
-        let v4 = v4_of(&lifc.local).unwrap();
+    // smoltcp's address list drops the address too (only when it was
+    // PUSHED — an absorbed or tentative lifc never reached smoltcp) —
+    // on the ifc's OWN core (the two-core seam, 08-06); v6 joined 08-07.
+    if !lifc.absorbed && !lifc.tentative {
         let mut g = stack::STACK.enter().expect("devip: stack contended");
         if let Some(core) = g.core_mut(sel) {
-            core.iface.update_ip_addrs(|addrs| {
-                if let Some(i) = addrs.iter().position(|a| {
-                    matches!(a, IpCidr::Ipv4(c) if c.address().octets() == v4)
-                }) {
-                    addrs.remove(i);
-                }
-            });
+            if is_v4(&lifc.local) {
+                let v4 = v4_of(&lifc.local).unwrap();
+                core.iface.update_ip_addrs(|addrs| {
+                    if let Some(i) = addrs.iter().position(|a| {
+                        matches!(a, IpCidr::Ipv4(c) if c.address().octets() == v4)
+                    }) {
+                        addrs.remove(i);
+                    }
+                });
+            } else {
+                core.iface.update_ip_addrs(|addrs| {
+                    if let Some(i) = addrs.iter().position(|a| {
+                        matches!(a, IpCidr::Ipv6(c) if c.address().octets() == lifc.local)
+                    }) {
+                        addrs.remove(i);
+                    }
+                });
+            }
         }
     }
     Ok(())
@@ -375,6 +477,8 @@ pub(crate) fn ctl(id: usize, verb: &[u8], args: &[&[u8]]) -> Result<()> {
         b"bind" => bind(id, args),
         b"add" => add(id, args, false),
         b"try" => add(id, args, true),
+        b"add6" => add6(id, args),
+        b"ra6" => ra6(id, args),
         b"remove" => remove(id, args),
         b"unbind" => unbind(id),
         b"mtu" => {
@@ -399,18 +503,224 @@ pub(crate) fn ctl(id: usize, verb: &[u8], args: &[&[u8]]) -> Result<()> {
     }
 }
 
+/// `add6 <v6addr> <pfx-len> [onlink auto validlt preflt]` (ipifcadd6,
+/// ipifc.c:1611-1673): the PREFIX + the ifc's MAC derive the EUI-64
+/// address (ethermedium's pref2addr — pref[8]=ea[0]|0x2, 0xFFFE infix),
+/// then the plain `add` path with the `/<plen>` mask; the lifc records
+/// the RFC 2461 §6.2.1 parameters.  Donor errors verbatim: "bad arg in
+/// system call" (Ebadarg — field count), "bad ipv6 address" (the prefix
+/// didn't parse as v6), "valid ipv6 lifetime less than preferred
+/// lifetime", "negative ipv6 prefix length", "ipv6 prefix is link-local",
+/// "no pref2addr on interface" (a MAC-less medium).
+fn add6(id: usize, args: &[&[u8]]) -> Result<()> {
+    if args.is_empty() || args.len() > 6 {
+        return Err("bad arg in system call");
+    }
+    let prefix = parse_ip(args[0]).ok_or("bad ipv6 address")?;
+    // The donor's parseip(...) != 6 arm: a v4-mapped parse is not a v6
+    // prefix.
+    if is_v4(&prefix) {
+        return Err("bad ipv6 address");
+    }
+    // plen defaults 64 (the donor's `int plen = 64`); atoi semantics.
+    let plen: i64 = if args.len() >= 2 { atoi(args[1]) as i64 } else { 64 };
+    let onlink = if args.len() >= 3 { atoi(args[2]) != 0 } else { true };
+    let autoflag = if args.len() >= 4 { atoi(args[3]) != 0 } else { true };
+    let validlt = if args.len() >= 5 { atoi(args[4]) as u64 } else { u64::MAX };
+    let preflt = if args.len() >= 6 { atoi(args[5]) as u64 } else { u64::MAX };
+    if validlt < preflt {
+        return Err("valid ipv6 lifetime less than preferred lifetime");
+    }
+    if plen < 0 {
+        return Err("negative ipv6 prefix length");
+    }
+    // islinklocal: fe80::/10 (the top 10 bits 0x3f8).
+    if prefix[0] == 0xfe && (prefix[1] & 0xc0) == 0x80 {
+        return Err("ipv6 prefix is link-local");
+    }
+    // pref2addr needs the ifc's MAC (ethermedium's pref2addr — the
+    // loopback medium has none).
+    let mac = {
+        let node = LockNode::new();
+        let guard = IFC.lock(&node);
+        let Some(ifc) = guard.for_conv(id) else {
+            return Err("ipifc not yet bound to device");
+        };
+        let sel = sel_of(ifc.medium);
+        let g = stack::STACK.enter().expect("devip: stack contended");
+        g.core_ref(sel).and_then(|core| core.dev.mac())
+    };
+    let Some(mac) = mac else {
+        return Err("no pref2addr on interface");
+    };
+    // etherpref2addr (ethermedium.c:757-767): prefix | EUI-64(mac).
+    let mut addr = prefix;
+    addr[8] = mac[0] | 0x2;
+    addr[9] = mac[1];
+    addr[10] = mac[2];
+    addr[11] = 0xff;
+    addr[12] = 0xfe;
+    addr[13] = mac[3];
+    addr[14] = mac[4];
+    addr[15] = mac[5];
+    // The donor re-enters ipifcadd with `add <addr> /<plen>`; replicate
+    // with the parameter block recorded on the lifc.
+    let mut mask = [0u8; 16];
+    let plen = plen.min(128) as usize;
+    for i in 0..plen {
+        mask[i / 8] |= 0x80 >> (i % 8);
+    }
+    add6_record(id, addr, mask, onlink, autoflag, validlt, preflt)
+}
+
+/// The add6 tail: the plain `add` path with the RFC parameters carried
+/// (the donor's lifcp handoff — ipifc.c:446-451).
+fn add6_record(
+    id: usize,
+    addr: [u8; 16],
+    mask: [u8; 16],
+    onlink: bool,
+    autoflag: bool,
+    validlt: u64,
+    preflt: u64,
+) -> Result<()> {
+    // The duplicate arm (ipifc.c:428-434): a re-add6 of an existing
+    // address refreshes the parameter block (never tentative).
+    {
+        let node = LockNode::new();
+        let mut guard = IFC.lock(&node);
+        let Some(ifc) = guard.for_conv_mut(id) else {
+            return Err("ipifc not yet bound to device");
+        };
+        if let Some(l) = ifc.lifcs.iter_mut().find(|l| l.local == addr) {
+            l.onlink = onlink;
+            l.autoflag = autoflag;
+            l.validlt = validlt;
+            l.preflt = preflt;
+            let was = l.tentative;
+            l.tentative = false;
+            let absorbed = l.absorbed;
+            let sel = sel_of(ifc.medium);
+            if was && !absorbed {
+                let pushed = ifc.lifcs.iter().filter(|l| !l.absorbed && !l.tentative).count();
+                if pushed >= IFACE_MAX_ADDR_COUNT {
+                    return Err("devip: too many addresses");
+                }
+                let mut g = stack::STACK.enter().expect("devip: stack contended");
+                if let Some(core) = g.core_mut(sel) {
+                    core.iface.update_ip_addrs(|addrs| {
+                        let _ = addrs.push(IpCidr::Ipv6(smoltcp::wire::Ipv6Cidr::new(
+                            smoltcp::wire::Ipv6Address::from(addr),
+                            mask_prefix(&mask),
+                        )));
+                    });
+                }
+            }
+            return Ok(());
+        }
+    }
+    // The fresh lifc: add()'s shape with the parameter block (never
+    // tentative — add6 is the RA/autoconf path's confirmed form).
+    {
+        let node = LockNode::new();
+        let mut guard = IFC.lock(&node);
+        let Some(ifc) = guard.for_conv_mut(id) else {
+            return Err("ipifc not yet bound to device");
+        };
+        let absorb = addr[0] == 0xff; // the P-F multicast guard
+        if !absorb && ifc.lifcs.iter().filter(|l| !l.absorbed && !l.tentative).count() >= IFACE_MAX_ADDR_COUNT {
+            return Err("devip: too many addresses");
+        }
+        let sel = sel_of(ifc.medium);
+        let lifc = Lifc {
+            local: addr,
+            mask,
+            remote: mask_ip(&addr, &mask),
+            validlt,
+            preflt,
+            tentative: false,
+            absorbed: absorb,
+            onlink,
+            autoflag,
+            origint: 0,
+        };
+        if !lifc.absorbed {
+            let mut g = stack::STACK.enter().expect("devip: stack contended");
+            let core = g.core_mut(sel).ok_or("devip: no bound medium")?;
+            core.iface.update_ip_addrs(|addrs| {
+                let _ = addrs.push(IpCidr::Ipv6(smoltcp::wire::Ipv6Cidr::new(
+                    smoltcp::wire::Ipv6Address::from(addr),
+                    mask_prefix(&mask),
+                )));
+            });
+        }
+        add_address(&lifc)?;
+        ifc.lifcs.push(lifc);
+    }
+    Ok(())
+}
+
+/// `ra6 <keyword> <value> ...` (ipifcra6, ipifc.c:705-752): the RA
+/// parameter block — keywords recvra sendra mflag oflag maxraint
+/// minraint linkmtu reachtime rxmitra ttl routerlt (the contract §9.1
+/// list).  Ebadarg on an odd field count / unknown keyword; the
+/// maxraint<minraint consistency check RESTORES the old values before
+/// erroring (the donor's shape).  smoltcp-side only what maps — the
+/// parameters are the ifc's file-visible RA record this era (slaac is
+/// OFF; the router-advertisement RX path never surfaces per proto.rs's
+/// icmpv6 module header).
+fn ra6(id: usize, args: &[&[u8]]) -> Result<()> {
+    if args.len() % 2 != 0 {
+        return Err("bad arg in system call");
+    }
+    let node = LockNode::new();
+    let mut guard = IFC.lock(&node);
+    let Some(ifc) = guard.for_conv_mut(id) else {
+        return Err("ipifc not yet bound to device");
+    };
+    let vmax = ifc.maxraint;
+    let vmin = ifc.minraint;
+    let mut i = 0;
+    while i + 1 < args.len() {
+        let kw = args[i];
+        let val = args[i + 1];
+        match kw {
+            b"recvra" => ifc.recvra6 = atoi(val) != 0,
+            b"sendra" => ifc.sendra6 = atoi(val) != 0,
+            b"mflag" => ifc.mflag = atoi(val) != 0,
+            b"oflag" => ifc.oflag = atoi(val) != 0,
+            b"maxraint" => ifc.maxraint = atoi(val),
+            b"minraint" => ifc.minraint = atoi(val),
+            b"linkmtu" => ifc.linkmtu = atoi(val),
+            b"reachtime" => ifc.reachtime = atoi(val),
+            b"rxmitra" => ifc.rxmitra = atoi(val),
+            b"ttl" => ifc.ttl = atoi(val),
+            b"routerlt" => ifc.routerlt = atoi(val),
+            _ => return Err("bad arg in system call"),
+        }
+        i += 2;
+    }
+    if ifc.maxraint < ifc.minraint {
+        ifc.maxraint = vmax;
+        ifc.minraint = vmin;
+        return Err("bad arg in system call");
+    }
+    Ok(())
+}
+
 /// findlocalip (devip.c:723-726): the local address closest to the
 /// remote.  Address-class demux (contract §12.4): 127/8 and ::1 → the
-/// loopback iface's address; otherwise the first configured v4 address
-/// (across BOTH bound ifcs this era — the ether leg's addresses join).
-/// IPnoaddr when nothing is bound/configured.
+/// loopback iface's address; a v4 remote → the first configured v4
+/// address; a real-v6 remote → the first configured v6 address (08-07's
+/// icmpv6 leg — the connect path's recorded laddr).  IPnoaddr when
+/// nothing is bound/configured.
 pub(crate) fn find_local_ip(raddr: &[u8; 16]) -> [u8; 16] {
     let node = LockNode::new();
     let guard = IFC.lock(&node);
     let loopback = stack::is_loopback_class(raddr);
     for ifc in [&guard.loopback, &guard.ether].into_iter().flatten() {
         for l in &ifc.lifcs {
-            if l.absorbed {
+            if l.absorbed || l.tentative {
                 continue;
             }
             if loopback && stack::is_loopback_class(&l.local) {
@@ -418,13 +728,26 @@ pub(crate) fn find_local_ip(raddr: &[u8; 16]) -> [u8; 16] {
             }
         }
     }
-    for ifc in [&guard.loopback, &guard.ether].into_iter().flatten() {
-        for l in &ifc.lifcs {
-            if l.absorbed {
-                continue;
+    if is_v4(raddr) {
+        for ifc in [&guard.loopback, &guard.ether].into_iter().flatten() {
+            for l in &ifc.lifcs {
+                if l.absorbed || l.tentative {
+                    continue;
+                }
+                if is_v4(&l.local) {
+                    return l.local;
+                }
             }
-            if is_v4(&l.local) {
-                return l.local;
+        }
+    } else if !loopback {
+        for ifc in [&guard.loopback, &guard.ether].into_iter().flatten() {
+            for l in &ifc.lifcs {
+                if l.absorbed || l.tentative {
+                    continue;
+                }
+                if !is_v4(&l.local) && l.local != IP_NOADDR {
+                    return l.local;
+                }
             }
         }
     }
@@ -453,7 +776,12 @@ pub(crate) fn status(id: usize) -> Vec<u8> {
     out.extend_from_slice(&ifc.devname);
     out.extend_from_slice(b" maxtu ");
     out.extend_from_slice(&super::proto::dec(u64::from(ifc.maxtu)));
-    out.extend_from_slice(b" sendra 0 recvra 0");
+    out.push(b' ');
+    out.extend_from_slice(b"sendra ");
+    out.extend_from_slice(if ifc.sendra6 { b"1" } else { b"0" });
+    out.push(b' ');
+    out.extend_from_slice(b"recvra ");
+    out.extend_from_slice(if ifc.recvra6 { b"1" } else { b"0" });
     out.extend_from_slice(b" mflag ");
     out.extend_from_slice(if ifc.mflag { b"1" } else { b"0" });
     out.extend_from_slice(b" oflag ");
@@ -593,6 +921,17 @@ fn defmask(ip: &[u8; 16]) -> [u8; 16] {
 fn mask_prefix_v4(mask: &[u8; 16]) -> u8 {
     let mut n = 0u8;
     for &b in &mask[12..16] {
+        n += b.count_ones() as u8;
+    }
+    n
+}
+
+/// The prefix length of a full 16-byte mask (the v6 form — count of 1
+/// bits across the whole mask; `add6`'s `/<plen>` and the v6 `add`'s
+/// parse_ipmask shape).
+fn mask_prefix(mask: &[u8; 16]) -> u8 {
+    let mut n = 0u8;
+    for &b in mask.iter() {
         n += b.count_ones() as u8;
     }
     n

@@ -467,6 +467,29 @@ struct Icmp6hdr {
 * ipconfig's RA path uses it: `connect <addr>!<port>!r <port>` on an icmpv6 clone ctl, then
   `headers`, then RS/RA I/O on data (`ipv6.c:346-384` dialicmp).
 
+  *(2026-11-06, 08-07 — the bridge as LANDED, with its recorded corners:*
+  *The prefix is WRITE-SIDE ONLY (the donor's icmpkick6 consumes it; the read side delivers the
+  full packet from the IP6 header with NO prefix — ipconfig's recvrahost reads a Routeradv from
+  byte 0).  The write-side bridge splits at the fixed 40 (never trusting user bytes for slicing —
+  T-08-14), honors the prefix's raddr as the endpoint, and passes the headers-mode message
+  UNTOUCHED (the donor overwrites the ident only in the non-headers arm).  The wire src is
+  smoltcp's RFC 6724 selection — the icmp socket has no per-send source override, so the
+  headers-mode user laddr is parsed but never wire-honored (the one bitten shape is the
+  pre-autoconf RS's src=::, unreachable this era with slaac OFF).  smoltcp's NDISC owns
+  NS/NA/RS/RA internally — they NEVER surface to the icmpv6 socket (accepts_v6 matches echo
+  request/reply by ident only), so ipconfig's recvra path sees nothing on r9: a real divergence
+  from the donor (whose goticmpkt6 muxkeys RS/RA to a conv by type), recorded here per the
+  phase's fidelity-discipline rule — the guest's ND exchange itself runs (smoltcp's neighbor
+  machinery, pcap-visible), and the snoop feeds /net/arp; only the file-surface visibility of
+  RA/RS diverges.  The synthesized read header's ttl carries the conv's configured ttl (smoltcp
+  exposes no received hop limit — §7's v4 corner's twin).  The DAD leg: `try` records the
+  tentative lifc devip-side and NEVER pushes it to smoltcp (a tentative address is not usable);
+  the post-window `add` confirms+pushes.  r9 does NOT emit the donor's DAD NS (icmpns
+  SRC_UNSPEC) on `try` — the donor's own TX would land in the snoop-fed /net/arp as a WAIT
+  entry for the tentative address, which ipconfig's DAD scan would read as a FALSE DUPLICATE
+  (ipv6.c:425-455); slirp has no competing fec0::15, so the scan is quiet either way — the
+  non-emission is the era's shape, recorded.)*
+
 ---
 
 ## 9. ipifc
@@ -500,6 +523,20 @@ packet-interface `bind pkt` path is dropped per D-08).
 * `ra6 <keyword> <value> ...` — set RA parameters; keywords: `recvra sendra mflag oflag maxraint
   minraint linkmtu reachtime rxmitra ttl routerlt` (man/3/ip + ipconfig ipv6.c issuerara6 /
   issuebasera6).
+
+  *(2026-11-06, 08-07 — the verbs as LANDED: add6 derives the address from the PREFIX + the
+  ifc's MAC via ethermedium's pref2addr (EUI-64 — ethermedium.c:757) exactly as the donor
+  (ipifc.c:1611-1673), with the donor's error strings verbatim ("bad ipv6 address", "valid ipv6
+  lifetime less than preferred lifetime", "negative ipv6 prefix length", "ipv6 prefix is
+  link-local", "no pref2addr on interface"; Ebadarg's mapped "bad arg in system call").
+  ra6 records the keyword values into the ifc's RA parameter block (the status line prints
+  sendra/recvra live) with the donor's maxraint<minraint restore-before-error shape; nothing
+  maps smoltcp-side this era (slaac OFF — Config.slaac=false everywhere, asserted by grep on
+  stack.rs).  The v6 `add`/`remove`/`try` arms push/drop the ether core's address set through
+  the same P-F guard discipline (a tentative lifc is recorded, never pushed; the confirming add
+  pushes; absorbed/multicast never reach update_ip_addrs).  The status line's per-address format
+  is unchanged; find_local_ip gained the v6 arm (a real-v6 remote → the first configured v6
+  lifc) feeding the icmpv6 conv's recorded laddr.)*
 * The man's ether-side list (`bridge`, `promiscuous`, `connect <type>`, `addmulti`, `remmulti`,
   `scanbs`, `headersonly`) is devether's own conv-ctl surface (Phase 7 locked depth), NOT
   ipifc's: the contract assigns each verb its exact home — those seven live at

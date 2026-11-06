@@ -514,17 +514,24 @@ pub(crate) fn format_ip(a: &[u8; 16]) -> Vec<u8> {
     }
     let mut out = Vec::new();
     let mut first = true;
+    // After a "::" compression the NEXT group takes NO separator (the
+    // "::" carries both) — then ":" separation resumes.  (08-07's fix:
+    // the previous shape printed "fec0:::2" — a latent bug the v4-only
+    // gates never exercised.)
+    let mut after_compression = false;
     let mut i = 0;
     while i < 8 {
         if Some(i) == best_start {
             out.extend_from_slice(b"::");
             i += best_len;
-            first = false; // the "::" carries the separator
+            first = false;
+            after_compression = true;
             continue;
         }
-        if !first {
+        if !first && !after_compression {
             out.push(b':');
         }
+        after_compression = false;
         // lowercase hex, no leading zeros
         let mut hex = Vec::new();
         let mut g = groups[i];
@@ -673,11 +680,11 @@ pub fn open(c: &Chan, mode: u32) -> Result<Chan> {
     match qtype(path) {
         QCLONE => {
             let p = Proto::from_index(qproto(path)).ok_or("no free devices")?;
-            // icmpv6's clone errors Enodev until its proto lands
-            // (08-06) — clone exhaustion is the honest devip error
-            // (contract §3; the dirs EXIST).  udp joined icmp/ipifc in
-            // 08-04 Task 2; tcp joined in 08-05.
-            if !matches!(p, Proto::Icmp | Proto::Ipifc | Proto::Udp | Proto::Tcp) {
+            // The five protos' clones allocate (tcp/udp/ipifc/icmp +
+            // icmpv6 — the icmpv6 proto landed in 08-07; clone
+            // exhaustion is the honest devip error, contract §3).
+            // udp joined icmp/ipifc in 08-04 Task 2; tcp in 08-05.
+            if !matches!(p, Proto::Icmp | Proto::Ipifc | Proto::Udp | Proto::Tcp | Proto::Icmp6) {
                 return Err("no free devices");
             }
             let id = conv::conv_alloc(p)?;
@@ -1159,9 +1166,9 @@ pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
                 Proto::Icmp => proto::icmp_read_data(qconv(path) as usize, buf),
                 Proto::Udp => proto::udp_read_data(qconv(path) as usize, buf),
                 Proto::Tcp => proto::tcp_read_data(qconv(path) as usize, buf),
-                // icmpv6 lands in 08-06.  A conv of another proto
-                // can never be open here (its clone errored Enodev), so
-                // this arm is defensive.
+                Proto::Icmp6 => proto::icmp6_read_data(qconv(path) as usize, buf),
+                // A conv of another proto can never be open here (its
+                // clone errored Enodev), so this arm is defensive.
                 _ => Err("devip: no data on this proto this era"),
             }
         }
@@ -1178,7 +1185,7 @@ pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
                 Proto::Udp => proto::udp_stats(),
                 Proto::Tcp => proto::tcp_stats(),
                 Proto::Ipifc => ipifc_stats(),
-                _ => return Err("stats not implemented"),
+                Proto::Icmp6 => proto::icmp6_stats(),
             };
             Ok(read_str(c, buf, offset, &content))
         }
@@ -1250,6 +1257,7 @@ pub fn write(c: &mut Chan, buf: &[u8], offset: u64) -> Result<u64> {
                 Proto::Icmp => proto::icmp_write_data(qconv(path) as usize, buf),
                 Proto::Udp => proto::udp_write_data(qconv(path) as usize, buf),
                 Proto::Tcp => proto::tcp_write_data(qconv(path) as usize, buf),
+                Proto::Icmp6 => proto::icmp6_write_data(qconv(path) as usize, buf),
                 _ => Err("devip: no data on this proto this era"),
             }
         }
@@ -1399,6 +1407,12 @@ pub(crate) static UDP_TX_SLOTS: [crate::devip_waker::WakeSlot; conv::NCONV] =
 pub(crate) static TCP_RX_SLOTS: [crate::devip_waker::WakeSlot; conv::NCONV] =
     [const { crate::devip_waker::WakeSlot::new() }; conv::NCONV];
 pub(crate) static TCP_TX_SLOTS: [crate::devip_waker::WakeSlot; conv::NCONV] =
+    [const { crate::devip_waker::WakeSlot::new() }; conv::NCONV];
+
+/// The icmpv6 data paths' wake-slot arrays (same invariant; 08-07).
+pub(crate) static ICMP6_RX_SLOTS: [crate::devip_waker::WakeSlot; conv::NCONV] =
+    [const { crate::devip_waker::WakeSlot::new() }; conv::NCONV];
+pub(crate) static ICMP6_TX_SLOTS: [crate::devip_waker::WakeSlot; conv::NCONV] =
     [const { crate::devip_waker::WakeSlot::new() }; conv::NCONV];
 
 // ---------------------------------------------------------------------------
