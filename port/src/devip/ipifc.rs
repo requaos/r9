@@ -211,6 +211,15 @@ pub(crate) fn add(id: usize, args: &[&[u8]], tentative: bool) -> Result<()> {
     // (the DHCP-in-progress marker), update the devip-visible tables,
     // NEVER call smoltcp's update_ip_addrs with it.
     let unspecified = ip == IP_NOADDR || (is_v4(&ip) && v4_of(&ip) == Some([0, 0, 0, 0]));
+    if unspecified {
+        // A note-worthy event (D-07): the absorption is deliberate but
+        // invisible on the wire — it shows up in netlog under `ip`.
+        super::netlog::emit(
+            super::netlog::LOG_IP,
+            alloc::format!("ipifc: absorbed add of the unspecified address (the DHCP-in-progress marker)").into_bytes(),
+        );
+        super::netlog::netlog_dbg!(super::netlog::LOG_IP, "devip: absorbed 0.0.0.0 add");
+    }
     // The cap check BEFORE any mutation: overflow maps to a devip
     // error — never an smoltcp panic (P-F).
     if !unspecified && ifc.lifcs.iter().filter(|l| !l.absorbed).count() >= IFACE_MAX_ADDR_COUNT {
@@ -241,7 +250,7 @@ pub(crate) fn add(id: usize, args: &[&[u8]], tentative: bool) -> Result<()> {
     }
     // The devip-visible tables (the donor's addselfcache/v4addroute
     // tails), then the lifc joins the interface record.
-    add_address(&lifc);
+    add_address(&lifc)?;
     ifc.lifcs.push(lifc);
     Ok(())
 }
@@ -447,13 +456,15 @@ pub(crate) fn local(id: usize) -> Vec<u8> {
 
 /// Add the lifc's entries to the self-table + route table (ipifcadd's
 /// tails): the unicast entry (Runi), and for v4 the four
-/// broadcast/network self-cache entries + the local route.
-fn add_address(lifc: &Lifc) {
+/// broadcast/network self-cache entries + the local route.  The local
+/// route add can only fail on smoltcp's route-table overflow (never
+/// mirrored — it is not a default route); propagate honestly.
+fn add_address(lifc: &Lifc) -> Result<()> {
     // The unicast self entry.
     super::selftab_add(lifc.local, false);
     // The local route (ipifcadd's v4addroute: target = remote (the
     // net), mask, nexthop = remote, Rifc|Runi).
-    super::route_add(lifc.remote, lifc.mask, lifc.remote, true);
+    super::route::add(lifc.remote, lifc.mask, lifc.remote, true)?;
     if is_v4(&lifc.local) || lifc.local == IP_NOADDR {
         // The v4 self-cache family (ipifc.c:481-504): subnet-directed
         // broadcast + network with the GIVEN mask, network-directed
@@ -471,12 +482,13 @@ fn add_address(lifc: &Lifc) {
         super::selftab_add(net2, true);
         super::selftab_add(v4prefix_of(&[255, 255, 255, 255]), true);
     }
+    Ok(())
 }
 
 /// Remove the lifc's entries (ipifcremlifc's shape).
 fn remove_address(lifc: &Lifc) {
     super::selftab_remove(lifc.local);
-    super::route_remove(lifc.remote, lifc.mask);
+    super::route::remove(lifc.remote, lifc.mask);
     if is_v4(&lifc.local) || lifc.local == IP_NOADDR {
         let mask = lifc.mask;
         super::selftab_remove(bor_not(&lifc.local, &mask));

@@ -178,7 +178,30 @@ pub(crate) fn ctl_write(p: Proto, id: usize, buf: &[u8]) -> Result<u64> {
             let mut t = conv::TABLES.lock(&node);
             t.table_mut(p)[id].maxfragsize = atoi(a);
         }
-        _ => proto_ctl(p, id, verb, args)?,
+        _ => {
+            // The proto fallthrough; a reject is a note-worthy parse
+            // event (D-07) — netlog under the proto's flag.
+            let r = proto_ctl(p, id, verb, args);
+            if r.is_err() {
+                let flag = match p {
+                    Proto::Tcp => super::netlog::LOG_TCP,
+                    Proto::Udp => super::netlog::LOG_UDP,
+                    Proto::Icmp => super::netlog::LOG_ICMP,
+                    _ => super::netlog::LOG_IP,
+                };
+                super::netlog::emit(
+                    flag,
+                    alloc::format!(
+                        "devip: ctl parse reject on {} conv {}: {}",
+                        alloc::string::String::from_utf8_lossy(p.name()),
+                        id,
+                        alloc::string::String::from_utf8_lossy(verb)
+                    )
+                    .into_bytes(),
+                );
+            }
+            r?;
+        }
     }
     // D-05 leg 3: every mutating ctl write ends with a drive (the
     // loopback's synchronous TX loop lands replies in the same file-op
@@ -1585,12 +1608,17 @@ fn tcp_connect_wait(id: usize) -> Result<()> {
                 let mut t = conv::TABLES.lock(&node);
                 t.table_mut(Proto::Tcp)[id].estab = true;
                 TCP_STATS[TCPSTAT_CURR_ESTAB].fetch_add(1, Ordering::Relaxed);
+                super::netlog::netlog_dbg!(super::netlog::LOG_TCP, "devip: tcp {id} connect established");
                 return Ok(());
             }
-            Probe::Closed => return Err(tcp_connect_fail(id, "connection refused")),
+            Probe::Closed => {
+                super::netlog::netlog_dbg!(super::netlog::LOG_TCP, "devip: tcp {id} connect refused");
+                return Err(tcp_connect_fail(id, "connection refused"));
+            }
             Probe::Progress => {}
         }
         if stack::instant_now() >= deadline {
+            super::netlog::netlog_dbg!(super::netlog::LOG_TCP, "devip: tcp {id} connect timed out");
             return Err(tcp_connect_fail(id, "connection timed out"));
         }
         // Drive (the SYN leaves / the loopback handshake completes here),

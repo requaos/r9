@@ -1680,3 +1680,206 @@ fn tcp_checksum_and_porthog_are_accepted_and_recorded() {
         "unknown control request"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 08-05 Task 2 — the observability + remaining-surface pins: the iproute
+// longest-match + verbs + smoltcp mirror, the ndb offset/OTRUNC/Eio/vers
+// semantics, the netlog set→emit→blocked-reader-wakes cycle, and the
+// generic ctl verbs' contract error strings on tcp.
+// ---------------------------------------------------------------------------
+
+/// A chan for a top-level /net file (the QTOPDIR-child qid shape).
+fn top_file_chan(tag: u64) -> crate::dat::Chan {
+    let q = crate::devip::qid(0, 0, tag);
+    crate::dat::Chan::new(
+        crate::dat::DEV_IP,
+        crate::dat::Qid { path: q, vers: 0, typ: crate::dat::QTFILE },
+        crate::dat::OREAD,
+    )
+}
+
+/// The generic ctl verbs land on tcp with the contract's error strings
+/// (contract §4 — the acceptance is "handled on EVERY proto's ctl"; the
+/// pin exercises tcp — icmp/udp/ipifc share the same dispatch by
+/// construction).
+#[test]
+fn tcp_generic_verbs_land_with_contract_errors() {
+    let _serial = fresh_scripted_stack();
+    let (id, _g) = alloc_tcp_conv();
+    // maxfragsize (the source-only verb): bare → the needs-size error;
+    // with a value → recorded on the conv.
+    assert_eq!(
+        proto::ctl_write(Proto::Tcp, id, b"maxfragsize").err().expect("pin (gen): the error"),
+        "maxfragsize needs size"
+    );
+    proto::ctl_write(Proto::Tcp, id, b"maxfragsize 1400").expect("pin (gen): maxfragsize lands");
+    {
+        let node = crate::mcslock::LockNode::new();
+        let t = crate::devip::conv::TABLES.lock(&node);
+        assert_eq!(t.table(Proto::Tcp)[id].maxfragsize, 1400, "pin (gen): maxfragsize recorded");
+    }
+    // addmulti/remmulti's contract strings.
+    assert_eq!(
+        proto::ctl_write(Proto::Tcp, id, b"addmulti").err().expect("pin (gen): the error"),
+        "addmulti needs interface address"
+    );
+    assert_eq!(
+        proto::ctl_write(Proto::Tcp, id, b"addmulti 127.0.0.1").err().expect("pin (gen): the error"),
+        "addmulti for a non multicast address",
+        "pin (gen): a non-multicast raddr rejects"
+    );
+    assert_eq!(
+        proto::ctl_write(Proto::Tcp, id, b"remmulti").err().expect("pin (gen): the error"),
+        "remmulti needs interface address"
+    );
+    // ignoreadvice records.
+    proto::ctl_write(Proto::Tcp, id, b"ignoreadvice").expect("pin (gen): ignoreadvice");
+    {
+        let node = crate::mcslock::LockNode::new();
+        let t = crate::devip::conv::TABLES.lock(&node);
+        assert!(t.table(Proto::Tcp)[id].ignoreadvice, "pin (gen): ignoreadvice recorded");
+    }
+}
+
+/// The iproute forest: longest-match lookup, the verb semantics, the
+/// contract line format, and the default route's smoltcp mirror.
+#[test]
+fn iproute_longest_match_verbs_and_smoltcp_mirror() {
+    let _serial = fresh_scripted_stack();
+    set_guest_addr();
+    let route_ctl = |buf: &[u8]| crate::devip::route::ctl(buf);
+    // Clean slate (the table is process-global; pins serialize).
+    route_ctl(b"flush").expect("pin (route): flush");
+    // A /8 and a /16 under it: the /16 wins inside it, the /8 covers the
+    // rest, nothing matches outside.
+    route_ctl(b"add 10.0.0.0 255.0.0.0 10.0.0.9").expect("pin (route): add /8");
+    route_ctl(b"add 10.1.0.0 255.255.0.0 10.0.0.10").expect("pin (route): add /16");
+    let r = crate::devip::route::lookup(&mapped(Ipv4Address::new(10, 1, 2, 3))).expect("pin (route): the /16 matches");
+    assert_eq!(r.nexthop, mapped(Ipv4Address::new(10, 0, 0, 10)), "pin (route): longest-match picks the /16");
+    let r = crate::devip::route::lookup(&mapped(Ipv4Address::new(10, 2, 3, 4))).expect("pin (route): the /8 matches");
+    assert_eq!(r.nexthop, mapped(Ipv4Address::new(10, 0, 0, 9)), "pin (route): the /8 covers the rest");
+    assert!(
+        crate::devip::route::lookup(&mapped(Ipv4Address::new(11, 0, 0, 1))).is_none(),
+        "pin (route): no match outside the table"
+    );
+    // The tag verb binds to subsequent adds.
+    route_ctl(b"tag test").expect("pin (route): tag");
+    route_ctl(b"add 192.168.0.0 255.255.0.0 10.0.0.11").expect("pin (route): tagged add");
+    let r = crate::devip::route::lookup(&mapped(Ipv4Address::new(192, 168, 1, 1))).expect("pin (route): the tagged route");
+    assert_eq!(&r.tag, b"test", "pin (route): the tag bound");
+    // The read content is the contract's line format ("%-15I %-4M %-15I
+    // %4.4s %4.4s %3s\n" — target mask nexthop flags tag ifc).
+    let text = std::string::String::from_utf8(crate::devip::route::content()).expect("pin (route): utf8");
+    assert!(text.contains("10.0.0.0"), "pin (route): the target column");
+    assert!(text.contains("255.0.0.0"), "pin (route): the mask column");
+    assert!(text.contains("10.0.0.9"), "pin (route): the nexthop column");
+    assert!(text.contains("test"), "pin (route): the tag column");
+    // remove: the /16 falls away, the /8 covers.
+    route_ctl(b"remove 10.1.0.0 255.255.0.0").expect("pin (route): remove");
+    let r = crate::devip::route::lookup(&mapped(Ipv4Address::new(10, 1, 2, 3))).expect("pin (route): falls through");
+    assert_eq!(r.nexthop, mapped(Ipv4Address::new(10, 0, 0, 9)), "pin (route): the /8 covers after the remove");
+    // The default route mirrors into smoltcp's Routes (and out on remove).
+    route_ctl(b"add 0.0.0.0 0.0.0.0 10.0.0.2").expect("pin (route): add default");
+    {
+        let g = stack::enter_stack();
+        let core = g.core.as_ref().expect("pin (route): stack installed");
+        let def = core.iface.routes().get_default_ipv4_route();
+        assert!(def.is_some(), "pin (route): the default route mirrored into smoltcp's Routes");
+    }
+    route_ctl(b"remove 0.0.0.0 0.0.0.0").expect("pin (route): remove default");
+    {
+        let g = stack::enter_stack();
+        let core = g.core.as_ref().expect("pin (route): stack installed");
+        assert!(
+            core.iface.routes().get_default_ipv4_route().is_none(),
+            "pin (route): the remove mirrored out of smoltcp's Routes"
+        );
+    }
+    // flush empties the table.
+    route_ctl(b"flush").expect("pin (route): flush");
+    assert!(crate::devip::route::content().is_empty(), "pin (route): flush empties");
+    // The verb error strings (contract §2/§11).
+    assert_eq!(route_ctl(b"frobnicate").err().expect("pin (route): the error"), "bad arg in system call");
+    assert_eq!(route_ctl(b"add 10.0.0.0 255.0.0.0").err().expect("pin (route): the error"), "bad arg in system call");
+}
+
+/// The ndb semantics (contract §2): append-at-offset, OWRITE|OTRUNC zeroes
+/// first, Eio past end (`off > strlen` or `off+n >= 1024`), qid.vers bumps
+/// on every write.
+#[test]
+fn ndb_offset_otrunc_eio_and_vers_bumps() {
+    let _serial = fresh_scripted_stack();
+    let base = top_file_chan(crate::devip::QNDB);
+    // OWRITE|OTRUNC open zeroes the buffer first (the era's single-user
+    // collapse dropped the donor's iseve gate).
+    let mut c = crate::devip::open(&base, crate::dat::OWRITE | crate::dat::OTRUNC).expect("pin (ndb): open");
+    let stat_vers = |c: &crate::dat::Chan| {
+        let mut sb = [0u8; 128];
+        let n = crate::devip::stat(c, &mut sb).expect("pin (ndb): stat") as usize;
+        assert!(n >= 11, "pin (ndb): a full stat record");
+        u32::from_le_bytes([sb[7], sb[8], sb[9], sb[10]])
+    };
+    let v0 = stat_vers(&c);
+    crate::devip::write(&mut c, b"hello", 0).expect("pin (ndb): write at 0");
+    let v1 = stat_vers(&c);
+    assert!(v1 > v0, "pin (ndb): vers bumped on the write");
+    let mut buf = [0u8; 16];
+    let n = crate::devip::read(&mut c, &mut buf, 0).expect("pin (ndb): read back") as usize;
+    assert_eq!(&buf[..n], b"hello", "pin (ndb): the content read back");
+    // Append at the CURRENT end (off == strlen is legal; off > strlen is Eio).
+    crate::devip::write(&mut c, b" world", 5).expect("pin (ndb): append at end");
+    let n = crate::devip::read(&mut c, &mut buf, 0).expect("pin (ndb): re-read") as usize;
+    assert_eq!(&buf[..n], b"hello world", "pin (ndb): the append landed at the offset");
+    assert_eq!(
+        crate::devip::write(&mut c, b"x", 12).err().expect("pin (ndb): the error"),
+        "i/o error",
+        "pin (ndb): off > strlen → Eio"
+    );
+    // off+n >= 1024 → Eio (the donor's 1024-byte Fs.ndb bound).
+    assert_eq!(
+        crate::devip::write(&mut c, &[0u8; 8], 1020).err().expect("pin (ndb): the error"),
+        "i/o error",
+        "pin (ndb): off+n >= 1024 → Eio"
+    );
+    // A fresh OWRITE|OTRUNC open zeroes again (the content is gone).
+    let mut c2 = crate::devip::open(&base, crate::dat::OWRITE | crate::dat::OTRUNC).expect("pin (ndb): reopen otrunc");
+    let n = crate::devip::read(&mut c2, &mut buf, 0).expect("pin (ndb): read after otrunc") as usize;
+    assert_eq!(n, 0, "pin (ndb): OWRITE|OTRUNC zeroed the buffer");
+}
+
+/// The netlog cycle (D-07 + contract §2's `log`): set arms the flag, the
+/// gated emit lands the line, and the reader — BLOCKED on the empty queue
+/// first — wakes and pops it.
+#[test]
+fn netlog_set_emit_wakes_blocked_reader() {
+    let _serial = fresh_scripted_stack();
+    // A clean slate: clear the flags and drain anything queued.
+    crate::devip::netlog::ctl(b"clear tcp udp icmp ip").expect("pin (netlog): clear");
+    let _ = crate::devip::netlog::drain_lines();
+    // The verb error strings (contract §2): bare set/clear/only → Ebadnetctl.
+    assert_eq!(
+        crate::devip::netlog::ctl(b"set").err().expect("pin (netlog): the error"),
+        "too few arguments for netlog control message"
+    );
+    // Gated: with the flag clear the emit is dropped.
+    crate::devip::netlog::emit(crate::devip::netlog::LOG_TCP, b"tcp: dropped note".to_vec());
+    assert!(crate::devip::netlog::drain_lines().is_empty(), "pin (netlog): gated when clear");
+    // Set the flag; the reader parks on the empty queue; the emit lands
+    // from INSIDE the park (the on-block seam — the park is recorded).
+    crate::devip::netlog::ctl(b"set tcp").expect("pin (netlog): set tcp");
+    let before = block_count();
+    set_on_block(|| {
+        crate::devip::netlog::emit(crate::devip::netlog::LOG_TCP, b"tcp: test note".to_vec());
+    });
+    let mut buf = [0u8; 128];
+    let n = crate::devip::netlog::read(&mut buf).expect("pin (netlog): the read returns");
+    assert_eq!(&buf[..n as usize], b"tcp: test note", "pin (netlog): the line landed verbatim");
+    assert!(block_count() > before, "pin (netlog): the read BLOCKED before the emit landed");
+    assert!(
+        take_wake_log().contains(&STUB_PID),
+        "pin (netlog): the emit woke the blocked reader (the wake-after-drop drain)"
+    );
+    // only <addr> records the restriction (the ether era's per-packet gate).
+    crate::devip::netlog::ctl(b"only 10.0.0.1").expect("pin (netlog): only");
+}
+

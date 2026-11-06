@@ -893,6 +893,10 @@ const NETIP_UDP_OK_MARKER: &str = "netip: udp echo ok";
 /// stats-honesty assertion), printed by /lib/netip-tcp.rc.
 const NETIP_TCP_OK_MARKER: &str = "netip: tcp echo ok";
 const NETIP_TCP_STATS_OK_MARKER: &str = "netip: tcp stats ok";
+/// The D-13 netlog-activity marker: the ctl acceptance print for the
+/// fixture's `set tcp udp icmp` write (clean gate traffic legitimately
+/// produces no netlog packet lines — the marker proves the path live).
+const NETIP_NETLOG_MARKER: &str = "netlog: flags set";
 
 /// Always-on negative scan: any panic/Unhandled-interrupt line in
 /// the capture fails the run — every profile EXCEPT the deliberate-panic
@@ -1680,6 +1684,7 @@ impl BootTestStep {
                 let mut markers: Vec<&str> = vec![DEVIP_ATTACH_MARKER, DEVIP_MEDIUM_MARKER];
                 match mode.as_str() {
                     "tcp" => {
+                        markers.push(NETIP_NETLOG_MARKER);
                         markers.push(NETIP_TCP_OK_MARKER);
                         markers.push(NETIP_TCP_STATS_OK_MARKER);
                     }

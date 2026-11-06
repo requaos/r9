@@ -69,6 +69,7 @@ pub mod medium;
 pub mod netlog;
 pub mod phyadapt;
 pub mod proto;
+pub mod route;
 pub mod stack;
 
 use conv::Proto;
@@ -167,22 +168,6 @@ struct SelfEntry {
     bcast: bool,
 }
 
-/// One route (the donor's route entry — the file-visible fields; the
-/// ifc name is the bound interface's devname when the route is local).
-struct Route {
-    target: [u8; 16],
-    mask: [u8; 16],
-    nexthop: [u8; 16],
-    /// v4 route (the `4` flag) vs v6 (`6`).
-    v4: bool,
-    /// local interface route (the `i` flag; set for ipifc add's routes).
-    ifc: bool,
-    /// local unicast (the `u` flag).
-    uni: bool,
-    /// The originating tag (the `tag` verb's binding).
-    tag: [u8; 4],
-}
-
 /// One arp view entry (contract §2/§12.5 — the snoop-fed VIEW over
 /// smoltcp's accessor-less neighbor cache; 90-byte lines, no timeout).
 struct ArpEntry {
@@ -197,14 +182,6 @@ struct FsState {
     /// offset, NUL-terminated; `vers` bumps on every write.
     ndb: Vec<u8>,
     ndbvers: u32,
-    /// The route table (devip-owned; smoltcp's Routes mirror the
-    /// default route when a gateway exists — none this era).
-    routes: Vec<Route>,
-    /// The current route tag (the `tag` verb's record; the donor binds
-    /// it per-fd via IPaux — r9's Chan has no aux slot this era, so the
-    /// tag is per-stack: behaviorally identical for every phase
-    /// consumer — ipconfig's route adds never tag).
-    route_tag: [u8; 4],
     /// The self-table (devip-owned; ipselftab's content).
     selftab: Vec<SelfEntry>,
     /// ipforme's accept-all flag (set by adding the null address —
@@ -213,8 +190,10 @@ struct FsState {
     /// The arp VIEW table (§12.5: snoop-fed on the ether leg; static
     /// add writes the view only — the recorded divergence).
     arp: Vec<ArpEntry>,
-    // The netlog flags/queue live in netlog.rs (08-05 — the module owns
-    // the flag word, the only-restriction, and the blocking read feed).
+    // The route table lives in route.rs (08-05 — the forest, the verbs,
+    // the smoltcp default-route mirror); the netlog flags/queue live in
+    // netlog.rs (the module owns the flag word, the only-restriction,
+    // and the blocking read feed).
 }
 
 static FS: Lock<FsState> = Lock::new(
@@ -222,8 +201,6 @@ static FS: Lock<FsState> = Lock::new(
     FsState {
         ndb: Vec::new(),
         ndbvers: 0,
-        routes: Vec::new(),
-        route_tag: *b"    ",
         selftab: Vec::new(),
         acceptall: false,
         arp: Vec::new(),
@@ -262,23 +239,8 @@ pub(crate) fn selftab_acceptall() -> bool {
     { let node = LockNode::new(); FS.lock(&node).acceptall }
 }
 
-/// The route add (devip-side table of record; the donor's
-/// v4addroute/v6addroute shape — replace on same target+mask).
-pub(crate) fn route_add(target: [u8; 16], mask: [u8; 16], nexthop: [u8; 16], ifc: bool) {
-    let node = LockNode::new();
-    let mut g = FS.lock(&node);
-    let tag = g.route_tag;
-    let v4 = is_v4(&target);
-    // Replace on same target+mask (routewrite's add arm).
-    g.routes.retain(|r| !(r.target == target && r.mask == mask));
-    g.routes.push(Route { target, mask, nexthop, v4, ifc, uni: true, tag });
-}
-
-pub(crate) fn route_remove(target: [u8; 16], mask: [u8; 16]) {
-    let node = LockNode::new();
-    let mut g = FS.lock(&node);
-    g.routes.retain(|r| !(r.target == target && r.mask == mask));
-}
+// The route table's mutators moved to route.rs (08-05): route::add /
+// route::remove / route::lookup / route::content / route::ctl.
 
 // ---------------------------------------------------------------------------
 // The IP address vocabulary (16-byte IPv6 form; v4 mapped under the
@@ -904,6 +866,7 @@ fn tcp_listen_pop(c: &Chan, id: usize, mode: u32) -> Result<Option<Chan>> {
         proto::tcp_note_passive_open(&mut t, nid, established);
         nid
     };
+    netlog::netlog_dbg!(netlog::LOG_TCP, "devip: tcp {id} accepted a call as conv {nid}");
     // Refill the pool (the pop consumed a member).
     {
         let node = LockNode::new();
@@ -1168,7 +1131,7 @@ pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
             Ok(read_str(c, buf, offset, &content))
         }
         QIPROUTE => {
-            let content = route_content();
+            let content = route::content();
             Ok(read_str(c, buf, offset, &content))
         }
         QIPSELFTAB => {
@@ -1299,7 +1262,7 @@ pub fn write(c: &mut Chan, buf: &[u8], offset: u64) -> Result<u64> {
         }
         QNDB => ndb_write(c, buf, offset),
         QARP => arp_write(buf),
-        QIPROUTE => route_write(buf),
+        QIPROUTE => route::ctl(buf),
         QLOG => netlog::ctl(buf),
         _ => Err("permission denied"),
     }
@@ -1391,110 +1354,9 @@ fn arp_write(buf: &[u8]) -> Result<u64> {
     }
 }
 
-/// The iproute read (contract §2): one line per route,
-/// `"%-15I %-4M %-15I %4.4s %4.4s %3s\n"` (target mask nexthop flags
-/// tag ifc).
-fn route_content() -> Vec<u8> {
-    let node = LockNode::new();
-    let g = FS.lock(&node);
-    let mut out = Vec::new();
-    for r in &g.routes {
-        out.extend_from_slice(&pad_right(&format_ip(&r.target), 15));
-        out.push(b' ');
-        out.extend_from_slice(&pad_right(&format_mask(&r.mask), 4));
-        out.push(b' ');
-        out.extend_from_slice(&pad_right(&format_ip(&r.nexthop), 15));
-        out.push(b' ');
-        // The flags (routetype): version char + i + u/b/m/p.
-        let mut flags = Vec::new();
-        flags.push(if r.v4 { b'4' } else { b'6' });
-        if r.ifc {
-            flags.push(b'i');
-        }
-        if r.uni {
-            flags.push(b'u');
-        }
-        out.extend_from_slice(&pad_right(&flags, 4));
-        out.push(b' ');
-        out.extend_from_slice(&pad_right(&r.tag, 4));
-        out.push(b' ');
-        let ifc = if r.ifc { b"loopback0".as_ref() } else { b"".as_ref() };
-        out.extend_from_slice(&pad_right(ifc, 3));
-        out.push(b'\n');
-    }
-    out
-}
-
-/// The iproute write (contract §2): `flush` / `tag <string>` /
-/// `add <target> <mask> <nexthop>` / `remove <target> <mask>` /
-/// `route <target>` (console print, the debug aid).
-fn route_write(buf: &[u8]) -> Result<u64> {
-    let n = buf.len();
-    let text = &buf[..n.min(63)];
-    let fields: Vec<&[u8]> = text
-        .split(|&b| b == b' ' || b == b'\t' || b == b'\r' || b == b'\n')
-        .filter(|w| !w.is_empty())
-        .collect();
-    if fields.is_empty() {
-        return Err("bad arg in system call");
-    }
-    match fields[0] {
-        b"flush" => {
-            { let node = LockNode::new(); FS.lock(&node).routes.clear() };
-            Ok(n as u64)
-        }
-        b"tag" => {
-            if fields.len() != 2 {
-                return Err("bad arg in system call");
-            }
-            let mut tag = *b"    ";
-            let src = &fields[1][..fields[1].len().min(4)];
-            tag[..src.len()].copy_from_slice(src);
-            { let node = LockNode::new(); FS.lock(&node).route_tag = tag };
-            Ok(n as u64)
-        }
-        b"add" => {
-            if fields.len() != 4 {
-                return Err("bad arg in system call");
-            }
-            let target = parse_ip(fields[1]).ok_or("bad ip address syntax")?;
-            let mask = parse_ipmask(fields[2]).ok_or("bad ip address syntax")?;
-            let nexthop = parse_ip(fields[3]).ok_or("bad ip address syntax")?;
-            route_add(target, mask, nexthop, false);
-            Ok(n as u64)
-        }
-        b"remove" => {
-            if fields.len() != 3 {
-                return Err("bad arg in system call");
-            }
-            let target = parse_ip(fields[1]).ok_or("bad ip address syntax")?;
-            let mask = parse_ipmask(fields[2]).ok_or("bad ip address syntax")?;
-            route_remove(target, mask);
-            Ok(n as u64)
-        }
-        b"route" => {
-            if fields.len() != 2 {
-                return Err("bad arg in system call");
-            }
-            let target = parse_ip(fields[1]).ok_or("bad ip address syntax")?;
-            let found = {
-                let node = LockNode::new();
-                let g = FS.lock(&node);
-                g.routes.iter().find(|r| mask_ip(&target, &r.mask) == r.target).map(|r| {
-                    (format_ip(&r.target), format_mask(&r.mask), format_ip(&r.nexthop))
-                })
-            };
-            match found {
-                Some((t, m, h)) => {
-                    crate::println!("devip: route {:?} {:?} {:?}", String::from_utf8_lossy(&t), String::from_utf8_lossy(&m), String::from_utf8_lossy(&h));
-                }
-                None => crate::println!("devip: no route"),
-            }
-            Ok(n as u64)
-        }
-        _ => Err("bad arg in system call"),
-    }
-}
+/// The iproute read/write (contract §2): the route forest lives in
+/// route.rs (08-05 — longest-match lookup, the five verbs, the smoltcp
+/// default-route mirror).
 
 /// The ipselftab read (contract §2; ipifc.c:1028-1052):
 /// `"%-44.44I %2.2d %4.4s\n"` per local address (addr, ifc use-count,

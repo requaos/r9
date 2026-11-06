@@ -23,7 +23,8 @@
 //!
 //! 08-05 Task 1 lands the module + the OQ-4 note sites; Task 2 adds the
 //! `netlog: flags set <mask>` ctl-acceptance serial marker (D-13), the
-//! remaining note feeds, and the host pins.
+//! remaining note feeds (absorbed 0.0.0.0 adds, parse rejects), the
+//! flag-guarded debug-print macro, and the host pins.
 
 #![forbid(unsafe_code)]
 
@@ -98,11 +99,24 @@ pub(crate) fn flag_on(flag: u32) -> bool {
     FLAGS.load(Ordering::Relaxed) & flag != 0
 }
 
-/// The current mask (the Task-2 ctl-acceptance marker prints it).
-#[allow(dead_code)] // Task 2's marker read
+/// The current mask (the ctl-acceptance marker prints it).
 pub(crate) fn flags() -> u32 {
     FLAGS.load(Ordering::Relaxed)
 }
+
+/// The flag-guarded debug print (D-07 — the devcons convention: a static
+/// flag word gates serial prints).  Per-flag use:
+/// `netlog_dbg!(LOG_TCP, "devip: tcp ...")` prints only when the flag is
+/// set.  NEVER on a per-packet path at line rate — connection lifecycle
+/// events and error shapes only.
+macro_rules! netlog_dbg {
+    ($flag:expr, $($arg:tt)*) => {
+        if crate::devip::netlog::flag_on($flag) {
+            crate::println!($($arg)*);
+        }
+    };
+}
+pub(crate) use netlog_dbg;
 
 // ---------------------------------------------------------------------------
 // The queue + blocked readers.
@@ -157,7 +171,10 @@ pub(crate) fn emit(flag: u32, line: Vec<u8>) {
 /// The /net/log write (netlogctl): `set <flags…>` / `clear <flags…>` /
 /// `only <addr>`; too few arguments → Ebadnetctl.  Unknown flag names are
 /// silently ignored (the donor's cmdtab-match shape: an unmatched flag
-/// contributes nothing).
+/// contributes nothing).  A ctl ACCEPTANCE prints the D-13 marker
+/// (`netlog: flags set <mask>`) — the gates' netlog-activity evidence
+/// (clean gate traffic legitimately produces no netlog packet lines, so
+/// the marker proves the ctl path live).
 pub(crate) fn ctl(buf: &[u8]) -> Result<u64> {
     let n = buf.len();
     let text = &buf[..n.min(63)];
@@ -175,6 +192,7 @@ pub(crate) fn ctl(buf: &[u8]) -> Result<u64> {
                 mask |= flag_bits(f);
             }
             FLAGS.store(mask, Ordering::Relaxed);
+            crate::println!("netlog: flags set {}", mask);
             Ok(n as u64)
         }
         b"clear" => {
@@ -183,6 +201,7 @@ pub(crate) fn ctl(buf: &[u8]) -> Result<u64> {
                 mask &= !flag_bits(f);
             }
             FLAGS.store(mask, Ordering::Relaxed);
+            crate::println!("netlog: flags set {}", mask);
             Ok(n as u64)
         }
         b"only" => {
