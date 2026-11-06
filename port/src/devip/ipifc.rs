@@ -956,7 +956,11 @@ fn add_address(lifc: &Lifc) -> Result<()> {
     Ok(())
 }
 
-/// Remove the lifc's entries (ipifcremlifc's shape).
+/// Remove the lifc's entries (ipifcremlifc's shape).  The v4
+/// broadcast/network family (and the all-ones broadcast) is SHARED by
+/// every lifc on the subnet — the self-table refcounts its entries
+/// (WR-05), so these deletes drop only this lifc's own implier count;
+/// the entries survive while another lifc still implies them.
 fn remove_address(lifc: &Lifc) {
     super::selftab_remove(lifc.local);
     super::route::remove(lifc.remote, lifc.mask);

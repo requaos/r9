@@ -167,10 +167,16 @@ const PROTO_FILES: [(&[u8], u64, u32); 2] = [(b"clone", QCLONE, 0o666), (b"stats
 // ---------------------------------------------------------------------------
 
 /// One self-table entry (the donor's Ipself): the address + its flags
-/// (Runi / Rbcast per ipifcadd's family).
+/// (Runi / Rbcast per ipifcadd's family) + the IMPLIER count (WR-05):
+/// the v4 broadcast/network self-cache entries are SHARED by every lifc
+/// on a subnet (add collapses duplicates), so a remove must drop the
+/// entry only when its last implier goes — an unconditional delete
+/// stripped the broadcast self-recognition entries a surviving lifc
+/// still needed.
 struct SelfEntry {
     addr: [u8; 16],
     bcast: bool,
+    refs: u32,
 }
 
 struct FsState {
@@ -199,21 +205,30 @@ static FS: Lock<FsState> = Lock::new(
 pub(crate) fn selftab_add(addr: [u8; 16], bcast: bool) {
     let node = LockNode::new();
     let mut g = FS.lock(&node);
-    if g.selftab.iter().any(|e| e.addr == addr) {
-        return; // the donor's exists check (addselfcache)
+    if let Some(e) = g.selftab.iter_mut().find(|e| e.addr == addr) {
+        e.refs += 1; // the donor's exists check (addselfcache) — now the share count
+        return;
     }
     if addr == IP_NOADDR || addr == v4prefix_of(&[0, 0, 0, 0]) {
         g.acceptall = true; // addselfcache's null-address side effect
     }
-    g.selftab.push(SelfEntry { addr, bcast });
+    g.selftab.push(SelfEntry { addr, bcast, refs: 1 });
 }
 
 pub(crate) fn selftab_remove(addr: [u8; 16]) {
     let node = LockNode::new();
     let mut g = FS.lock(&node);
-    g.selftab.retain(|e| e.addr != addr);
-    if addr == IP_NOADDR || addr == v4prefix_of(&[0, 0, 0, 0]) {
-        g.acceptall = false;
+    // Decrement the implier count; the entry (and, for the null address,
+    // the accept-all side effect) goes only with its LAST implier.
+    if let Some(pos) = g.selftab.iter().position(|e| e.addr == addr) {
+        if g.selftab[pos].refs > 1 {
+            g.selftab[pos].refs -= 1;
+            return;
+        }
+        g.selftab.remove(pos);
+        if addr == IP_NOADDR || addr == v4prefix_of(&[0, 0, 0, 0]) {
+            g.acceptall = false;
+        }
     }
 }
 
