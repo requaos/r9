@@ -1109,6 +1109,67 @@ fn udp_spawned_conv_writes_ride_the_announcers_socket() {
     crate::devip::close(&nc);
 }
 
+/// The spawned conv's dataq is BOUNDED (WR-02 — the donor's per-conv rq
+/// is a 64 KiB Qmsg queue; pre-fix the VecDeque grew one Vec per datagram
+/// with no cap: a fast sender to an unread spawned conv grew kernel heap
+/// without limit — network-driven kernel memory exhaustion).  The cap is
+/// the socket buffer's own parity (UDP_RX_META datagrams / UDP_BUF
+/// bytes); past it, the datagram drops and counts.
+#[test]
+fn udp_spawned_conv_dataq_is_capped() {
+    let _serial = fresh_scripted_stack();
+    set_guest_addr();
+    let (id, _guard) = alloc_udp_conv();
+    crate::devip::proto::ctl_write(crate::devip::conv::Proto::Udp, id, b"announce 7")
+        .expect("pin (cap): announce");
+    // Parse the stats file's InErrors line (the drop counter).
+    fn in_errors() -> u64 {
+        let content = crate::devip::proto::udp_stats();
+        let text = std::string::String::from_utf8_lossy(&content);
+        text.lines()
+            .find_map(|l| l.strip_prefix("InErrors: "))
+            .expect("pin (cap): the InErrors line")
+            .trim()
+            .parse()
+            .expect("pin (cap): a number")
+    }
+
+    // The count cap: flood one quad well past UDP_RX_META (8) datagrams —
+    // the queue holds exactly 8 (the first + 7 more), the rest drop.
+    push_rx(udp4_frame(PEER, GUEST, 5000, 7, b"first"));
+    stack::drive_stack();
+    crate::devip::proto::udp_rx_drain();
+    let nid = {
+        let node = crate::mcslock::LockNode::new();
+        let t = crate::devip::conv::TABLES.lock(&node);
+        t.table(crate::devip::conv::Proto::Udp)[id].incall[0]
+    };
+    let before = in_errors();
+    for _ in 0..12 {
+        push_rx(udp4_frame(PEER, GUEST, 5000, 7, b"flood"));
+        stack::drive_stack();
+        crate::devip::proto::udp_rx_drain();
+    }
+    assert_eq!(udp_conv_snapshot(nid).8, 8, "pin (cap): the datagram-count cap (UDP_RX_META parity)");
+    assert!(in_errors() > before, "pin (cap): the drops counted");
+
+    // The byte cap: a new quad's conv takes one 48 KiB datagram; the
+    // second 48 KiB exceeds the 64 KiB byte budget (UDP_BUF parity) and
+    // drops.
+    push_rx(udp4_frame(PEER, GUEST, 5001, 7, &alloc_vec(48 * 1024)));
+    stack::drive_stack();
+    crate::devip::proto::udp_rx_drain();
+    let nid2 = {
+        let node = crate::mcslock::LockNode::new();
+        let t = crate::devip::conv::TABLES.lock(&node);
+        t.table(crate::devip::conv::Proto::Udp)[id].incall[1]
+    };
+    push_rx(udp4_frame(PEER, GUEST, 5001, 7, &alloc_vec(48 * 1024)));
+    stack::drive_stack();
+    crate::devip::proto::udp_rx_drain();
+    assert_eq!(udp_conv_snapshot(nid2).8, 1, "pin (cap): the byte cap dropped the second 48 KiB datagram");
+}
+
 /// The NETIP-02 isolation pin, part 1: concurrent clone opens allocate
 /// INDEPENDENT conversations (distinct conv ids, per-proto tables), and
 /// a ctl write on one conversation never appears in another's state.
