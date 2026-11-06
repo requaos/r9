@@ -1490,7 +1490,23 @@ pub(crate) fn udp_rx_drain() {
                         nid
                     }
                 };
-                t.table_mut(Proto::Udp)[nid].dataq.push_back(pkt);
+                // The per-conv queue is BOUNDED (WR-02 — the donor's
+                // per-conv rq is a 64 KiB Qmsg queue): an announced port
+                // whose spawned conv is never read must not grow kernel
+                // heap without limit (network-driven kernel memory
+                // exhaustion).  Cap at the socket buffer's own parity
+                // (UDP_RX_META datagrams / UDP_BUF bytes); past the cap,
+                // drop + count (the boundary-drop discipline — and no
+                // wake: nothing new was queued).
+                {
+                    let c = &mut t.table_mut(Proto::Udp)[nid];
+                    let qbytes: usize = c.dataq.iter().map(|m| m.len()).sum();
+                    if c.dataq.len() >= UDP_RX_META || qbytes + pkt.len() > UDP_BUF {
+                        UDP_IN_ERRS.fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+                    c.dataq.push_back(pkt);
+                }
                 wakes.push(nid); // the spawned conv's readers wake
             }
         }
