@@ -349,20 +349,32 @@ pub(crate) fn add(id: usize, args: &[&[u8]], tentative: bool) -> Result<()> {
         return Ok(());
     }
     // P-F: the non-unicast absorption (0.0.0.0 / :: — the DHCP-in-progress
-    // marker — AND v6 multicast; smoltcp's update_ip_addrs panics on any
-    // non-unicast) — record the lifc, update the devip-visible tables,
-    // NEVER call smoltcp's update_ip_addrs with it.
+    // marker — v6 multicast, v4 MULTICAST (224/4), and the v4 limited
+    // broadcast 255.255.255.255; smoltcp's update_ip_addrs panics on any
+    // address that is neither unicast nor unspecified — check_ip_addrs
+    // fails 224/4's non-unicast and 255.255.255.255's is_broadcast) —
+    // record the lifc, update the devip-visible tables, NEVER call
+    // smoltcp's update_ip_addrs with it.
     let unspecified = ip == IP_NOADDR || (is_v4(&ip) && v4_of(&ip) == Some([0, 0, 0, 0]));
     let mcast6 = !is_v4(&ip) && ip[0] == 0xff;
-    let absorb = unspecified || mcast6;
+    let mcast4 = is_v4(&ip) && v4_of(&ip).is_some_and(|v| (v[0] & 0xf0) == 0xe0);
+    let bcast4 = v4_of(&ip) == Some([255, 255, 255, 255]);
+    let absorb = unspecified || mcast6 || mcast4 || bcast4;
     if absorb {
         // A note-worthy event (D-07): the absorption is deliberate but
         // invisible on the wire — it shows up in netlog under `ip`.
+        let what = if unspecified {
+            "the unspecified address (the DHCP-in-progress marker)"
+        } else if mcast6 {
+            "a v6 multicast address"
+        } else {
+            "a v4 multicast/broadcast address"
+        };
         super::netlog::emit(
             super::netlog::LOG_IP,
-            alloc::format!("ipifc: absorbed add of the unspecified address (the DHCP-in-progress marker)").into_bytes(),
+            alloc::format!("ipifc: absorbed add of {what}").into_bytes(),
         );
-        super::netlog::netlog_dbg!(super::netlog::LOG_IP, "devip: absorbed 0.0.0.0 add");
+        super::netlog::netlog_dbg!(super::netlog::LOG_IP, "devip: absorbed non-unicast add");
     }
     // The cap check BEFORE any mutation: overflow maps to a devip
     // error — never an smoltcp panic (P-F).  The count is of PUSHED
