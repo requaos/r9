@@ -2731,6 +2731,68 @@ fn ipifc_bind_rejects_a_conv_already_bound_to_another_medium() {
     conv::conv_close(conv::Proto::Ipifc, id);
 }
 
+/// The self-table share count (WR-05): two v4 lifcs on the same subnet
+/// share the net/bcast/defmask/255.255.255.255 self-cache entries (the
+/// adds collapse duplicates), so removing ONE address must keep the
+/// entries the other lifc still implies — pre-fix the unconditional
+/// deletes stripped the surviving address's broadcast self-recognition.
+#[test]
+fn ipifc_remove_keeps_shared_selftab_entries_for_surviving_lifcs() {
+    // A bare seam (the bind installs the core itself).
+    let _serial = SEAM_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    ensure_hooks();
+    set_ticks(0);
+    take_wake_log();
+    {
+        let mut g = stack::enter_stack();
+        g.core = None;
+        g.ether = None;
+    }
+    crate::devip::arp::test_flush();
+    use crate::devip::{conv, ipifc};
+    let id = conv::conv_alloc(conv::Proto::Ipifc).expect("pin (share): ipifc clone");
+    ipifc::ctl(id, b"bind", &[b"loopback"]).expect("pin (share): bind loopback");
+
+    // Two lifcs on the SAME subnet (10.0.0/24): the family entries stand
+    // once each (the adds collapsed the duplicates).
+    ipifc::ctl(id, b"add", &[b"10.0.0.1", b"255.255.255.0"]).expect("pin (share): first add");
+    ipifc::ctl(id, b"add", &[b"10.0.0.2", b"255.255.255.0"]).expect("pin (share): second add");
+    // The entry forms (the donor's addselfcache arithmetic over the
+    // v4-mapped pair, ipifc.c:481-504): the NETWORK entries keep the
+    // v4-mapped form ((ip & mask) & mask preserves the 00..00 ff ff
+    // prefix); the BROADCAST entries carry 0xff prefix bytes
+    // ((ip & mask) | ~mask sets every ~mask bit, incl. the prefix).
+    let mut bcast = [0xffu8; 16];
+    bcast[12..].copy_from_slice(&[10, 0, 0, 255]);
+    let net = crate::devip::v4prefix_of(&[10, 0, 0, 0]);
+    let allones = crate::devip::v4prefix_of(&[255, 255, 255, 255]);
+    assert!(crate::devip::selftab_contains(&bcast), "pin (share): the subnet broadcast stands");
+    assert!(crate::devip::selftab_contains(&net), "pin (share): the network entry stands");
+
+    // Remove one lifc: its own unicast entry goes; the shared family
+    // SURVIVES (the second lifc still implies it).
+    ipifc::ctl(id, b"remove", &[b"10.0.0.1", b"255.255.255.0"]).expect("pin (share): the first remove");
+    assert!(
+        !crate::devip::selftab_contains(&mapped(Ipv4Address::new(10, 0, 0, 1))),
+        "pin (share): the removed address's unicast entry goes"
+    );
+    assert!(crate::devip::selftab_contains(&bcast), "pin (share): the subnet broadcast survives");
+    assert!(crate::devip::selftab_contains(&net), "pin (share): the network entry survives");
+    assert!(crate::devip::selftab_contains(&allones), "pin (share): the all-ones broadcast survives");
+    assert!(
+        crate::devip::selftab_contains(&mapped(Ipv4Address::new(10, 0, 0, 2))),
+        "pin (share): the survivor's unicast entry stands"
+    );
+
+    // Removing the survivor strips the family (the last implier went).
+    ipifc::ctl(id, b"remove", &[b"10.0.0.2", b"255.255.255.0"]).expect("pin (share): the second remove");
+    assert!(!crate::devip::selftab_contains(&bcast), "pin (share): the last implier's remove strips the broadcast");
+    assert!(!crate::devip::selftab_contains(&net), "pin (share): the last implier's remove strips the network");
+
+    ipifc::ctl(id, b"unbind", &[]).expect("pin (share): unbind");
+    conv::conv_close(conv::Proto::Ipifc, id);
+}
+
 // ---------------------------------------------------------------------------
 // 08-07 Task 1 — the NETIP-05 DHCP pins: the P-F absorption's file-level
 // shape (zero smoltcp addresses, the netlog note — D-07 observability) and
