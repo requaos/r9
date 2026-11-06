@@ -897,6 +897,13 @@ const NETIP_TCP_STATS_OK_MARKER: &str = "netip: tcp stats ok";
 /// fixture's `set tcp udp icmp` write (clean gate traffic legitimately
 /// produces no netlog packet lines — the marker proves the path live).
 const NETIP_NETLOG_MARKER: &str = "netlog: flags set";
+/// The 08-06 static mode's markers: the ether medium's bind (the device
+/// is #l0's published NIC), the fixture's leg markers, and the D-10 venue
+/// label (slirp-green is never L2-truth — the label rides the gate log).
+const DEVIP_MEDIUM_ETHER_MARKER: &str = "devip: medium ether bound #l0";
+const NETIP_STATIC_OK_MARKER: &str = "netip: static ok";
+const NETIP_ARP_OK_MARKER: &str = "netip: arp view ok";
+const NETIP_NOT_L2_MARKER: &str = "netip: NOT-L2-TRUTH slirp venue";
 
 /// Always-on negative scan: any panic/Unhandled-interrupt line in
 /// the capture fails the run — every profile EXCEPT the deliberate-panic
@@ -970,15 +977,20 @@ fn net_sweep_mode() -> Result<String> {
     }
 }
 
-/// The netip sweep's mode: R9_NETIP_SWEEP selects the leg set — `loopback`
-/// (the 08-04 ping + udp echo legs) or `tcp` (the 08-05 tcp/7 echo +
-/// stats-honesty legs).  A typo'd value is a harness bug, not a gate
-/// failure — validated before qemu spawns, never after a wasted boot.
+/// The netip sweep's mode: R9_NETIP_SWEEP selects the leg set —
+/// `loopback` (the 08-04 ping + udp echo legs), `tcp` (the 08-05 tcp/7
+/// echo + stats-honesty legs), or `static` (the 08-06 NETIP-04 static
+/// ipconfig gate on the ether leg, on slirp — labeled not-L2-truth).
+/// A typo'd value is a harness bug, not a gate failure — validated before
+/// qemu spawns, never after a wasted boot.
 fn netip_sweep_mode() -> Result<String> {
     let mode = env::var("R9_NETIP_SWEEP").unwrap_or_else(|_| "loopback".to_string());
     match mode.as_str() {
-        "loopback" | "tcp" => Ok(mode),
-        _ => Err(format!("R9_NETIP_SWEEP must be \"loopback\" or \"tcp\", got {mode:?}").into()),
+        "loopback" | "tcp" | "static" => Ok(mode),
+        _ => Err(
+            format!("R9_NETIP_SWEEP must be \"loopback\", \"tcp\", or \"static\", got {mode:?}")
+                .into(),
+        ),
     }
 }
 
@@ -1185,7 +1197,15 @@ impl BootTestStep {
         }
         // Same discipline for the virtip profile (R9_NETIP_SWEEP, 08-04).
         if self.config_name == "virtip" {
-            netip_sweep_mode()?;
+            let mode = netip_sweep_mode()?;
+            // The static mode's pcap assertions derive their addresses
+            // from the Harvey checkout's netaddr.rc seam (D-11) — resolve
+            // it BEFORE qemu spawns, so an absent/unreadable seam is a
+            // loud pre-spawn harness error (the 07-01 harvey:-channel
+            // precedent), never a wasted boot.
+            if mode == "static" {
+                pcap::netaddr_slirp().map_err(|e| format!("netip static gate: {e}"))?;
+            }
         }
 
         let target = self.arch.target();
@@ -1520,10 +1540,12 @@ impl BootTestStep {
                         // line can never contain, so echo can't false-match.
                         if netip_profile {
                             // The netip sweep fixture by mode (08-04:
-                            // netip-loopback.rc; 08-05: netip-tcp.rc).
+                            // netip-loopback.rc; 08-05: netip-tcp.rc;
+                            // 08-06: netip-static.rc — the NETIP-04 gate).
                             let mode = netip_sweep_mode()?;
                             let fixture = match mode.as_str() {
                                 "tcp" => "rc /lib/netip-tcp.rc\r",
+                                "static" => "rc /lib/netip-static.rc\r",
                                 _ => "rc /lib/netip-loopback.rc\r",
                             };
                             stream.write_all(fixture.as_bytes())?;
@@ -1681,14 +1703,27 @@ impl BootTestStep {
                 // `loopback` = ping + udp echo (08-04); `tcp` = the tcp/7
                 // echo + the stats-honesty legs (08-05).
                 let mode = netip_sweep_mode()?;
-                let mut markers: Vec<&str> = vec![DEVIP_ATTACH_MARKER, DEVIP_MEDIUM_MARKER];
+                let mut markers: Vec<&str> = vec![DEVIP_ATTACH_MARKER];
                 match mode.as_str() {
                     "tcp" => {
+                        markers.push(DEVIP_MEDIUM_MARKER);
                         markers.push(NETIP_NETLOG_MARKER);
                         markers.push(NETIP_TCP_OK_MARKER);
                         markers.push(NETIP_TCP_STATS_OK_MARKER);
                     }
+                    "static" => {
+                        // 08-06 (NETIP-04): the ether medium's bind
+                        // marker, the fixture's two leg markers, and the
+                        // D-10 venue label (the log itself carries
+                        // not-L2-truth — slirp evidence is never L2
+                        // proof; the tap verdict is Phase 9's).
+                        markers.push(DEVIP_MEDIUM_ETHER_MARKER);
+                        markers.push(NETIP_STATIC_OK_MARKER);
+                        markers.push(NETIP_ARP_OK_MARKER);
+                        markers.push(NETIP_NOT_L2_MARKER);
+                    }
                     _ => {
+                        markers.push(DEVIP_MEDIUM_MARKER);
                         markers.push(NETIP_PING_OK_MARKER);
                         markers.push(NETIP_UDP_OK_MARKER);
                     }
@@ -1700,6 +1735,32 @@ impl BootTestStep {
                             self.fail_pretty(capture, &format!("netip gate: marker {marker:?} absent"))
                         );
                     }
+                }
+                // The static mode's wire-level proof (08-06): this run's
+                // pcap (the filter-dump capture the netdev stanza wrote)
+                // carries the gratuitous ARP from the address add and the
+                // ICMP echo exchange with the gateway.  The seam's
+                // addresses derive from netaddr.rc (no 10.0.2.x literal).
+                if mode == "static" {
+                    let pcap_rel = format!("target/boot-test-{}.pcap", self.config_name);
+                    let pcap_abs = workspace().join(&pcap_rel);
+                    let pcap_bytes = std::fs::read(&pcap_abs).map_err(|e| {
+                        format!("netip static gate: read {pcap_rel} (this run's pcap): {e}")
+                    })?;
+                    let (guest, gw) = pcap::netaddr_slirp()
+                        .map_err(|e| format!("netip static gate: {e}"))?;
+                    let arp_frames = pcap::parse_pcap(&pcap_bytes)
+                        .map_err(|e| format!("netip static gate: parse {pcap_rel}: {e}"))?;
+                    pcap::assert_gratuitous_arp(&arp_frames, guest, capture)
+                        .map_err(|e| self.fail_pretty(capture, &e))?;
+                    let icmp_frames = pcap::parse_pcap_icmpv4(&pcap_bytes)
+                        .map_err(|e| format!("netip static gate: parse {pcap_rel} (icmp): {e}"))?;
+                    let n = pcap::assert_icmp_exchange(&icmp_frames, guest, gw, capture)
+                        .map_err(|e| self.fail_pretty(capture, &e))?;
+                    println!(
+                        "boot-test: PASS -- banner, real Harvey boot chain (paqfs + stacksmoke), rc prompt, typed netip sweep (static mode), the devip attach/ether-medium markers, the static/arp/NOT-L2-TRUTH markers and NETIP-DONE observed, the pcap carries the gratuitous ARP + {n} ICMP echo request(s) with replies (NETIP-04 — slirp venue, NOT L2 truth)"
+                    );
+                    return Ok(());
                 }
                 println!(
                     "boot-test: PASS -- banner, real Harvey boot chain (paqfs + stacksmoke), rc prompt, typed netip sweep ({mode} mode), the devip attach/medium markers, the sweep's leg markers and NETIP-DONE observed (NETIP-03)"

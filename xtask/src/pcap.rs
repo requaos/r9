@@ -96,6 +96,187 @@ const BLAST_TARGET_IP: [u8; 4] = [10, 0, 2, 99];
 /// exactly 60 bytes.
 const ETHERMINTU: usize = 60;
 
+// ---- The D-11 addressing seam reader (08-06) ---------------------------
+//
+// The netip static gate's assertions derive their addresses from
+// $R9_HARVEY_DIR/build/aarch64/netaddr.rc (the rc KEY=VALUE seam file the
+// fixture sources in-guest) — NO 10.0.2.x literal in the 08-06
+// assertions (the phase's transparency prohibition: the sweep, the baked
+// fragments, and these assertions all derive from the seam).
+
+/// A dotted-quad parse ("10.0.2.15" → [10,0,2,15]).
+fn parse_ipv4_dotted(s: &str) -> Option<[u8; 4]> {
+    let mut out = [0u8; 4];
+    let parts: Vec<&str> = s.split('.').collect();
+    if parts.len() != 4 {
+        return None;
+    }
+    for (i, p) in parts.iter().enumerate() {
+        out[i] = p.parse().ok()?;
+    }
+    Some(out)
+}
+
+/// The slirp leg's (guest, gateway) addresses, parsed from the seam
+/// file's `slirp_guestv4=` / `slirp_gwv4=` lines.  An unreadable file or
+/// an absent/malformed key is a loud error naming the file/key (the
+/// 07-01 harvey:-channel precedent — a pre-spawn harness bug, never a
+/// silent default).
+pub fn netaddr_slirp() -> Result<([u8; 4], [u8; 4]), String> {
+    let path = crate::uregcheck::harvey_dir()
+        .map_err(|e| format!("{e}"))?
+        .join("build/aarch64/netaddr.rc");
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| format!("net gate: read {}: {e}", path.display()))?;
+    let get = |key: &str| -> Result<[u8; 4], String> {
+        for line in text.lines() {
+            let line = line.trim();
+            if line.starts_with('#') {
+                continue;
+            }
+            if let Some(v) = line.strip_prefix(key).and_then(|r| r.strip_prefix('=')) {
+                return parse_ipv4_dotted(v.trim()).ok_or_else(|| {
+                    format!("net gate: {} key {key} is not a dotted quad: {v:?}", path.display())
+                });
+            }
+        }
+        Err(format!("net gate: {} lacks the {key}= line", path.display()))
+    };
+    Ok((get("slirp_guestv4")?, get("slirp_gwv4")?))
+}
+
+// ---- The ICMPv4 classifier (08-06 — the netip static gate's ping leg) --
+
+/// One classified ICMPv4 frame (ethertype 0x0800, IP proto 1) with the
+/// fields the netip static gate asserts on.  Wire fields are big-endian
+/// regardless of the capture's byte order.
+#[derive(Debug)]
+pub struct Icmpv4Frame {
+    /// Ethernet source MAC (the frame's sender).
+    pub src_mac: [u8; 6],
+    /// IP source / destination.
+    pub src: [u8; 4],
+    pub dst: [u8; 4],
+    /// The ICMP type byte (8 = echo request, 0 = echo reply).
+    pub icmp_type: u8,
+    /// Captured frame length in bytes.
+    pub frame_len: usize,
+}
+
+/// Parse every ICMPv4 frame in the capture (other records are counted by
+/// frame_count and skipped here).  Same loud-Err discipline as
+/// parse_pcap.
+pub fn parse_pcap_icmpv4(bytes: &[u8]) -> Result<Vec<Icmpv4Frame>, String> {
+    let mut frames = Vec::new();
+    for_each_record(bytes, &mut |frame| {
+        if let Some(f) = classify_icmpv4(frame) {
+            frames.push(f);
+        }
+    })?;
+    Ok(frames)
+}
+
+/// Classify one Ethernet frame as ICMPv4 (ethertype 0x0800, IP proto 1),
+/// extracting the gate's fields; None for any other shape or a runt
+/// frame (shorter than eth + minimal-IPv4 + the ICMP type byte).
+fn classify_icmpv4(frame: &[u8]) -> Option<Icmpv4Frame> {
+    if frame.len() < 14 + 20 + 1 || u16::from_be_bytes([frame[12], frame[13]]) != 0x0800 {
+        return None;
+    }
+    let ip = &frame[14..];
+    let ihl = (ip[0] & 0x0f) as usize * 4;
+    if ihl < 20 || frame.len() < 14 + ihl + 1 || ip[9] != 1 {
+        return None;
+    }
+    Some(Icmpv4Frame {
+        src_mac: frame[6..12].try_into().expect("len >= 35"),
+        src: ip[12..16].try_into().expect("len checked"),
+        dst: ip[16..20].try_into().expect("len checked"),
+        icmp_type: frame[14 + ihl],
+        frame_len: frame.len(),
+    })
+}
+
+/// assert_gratuitous_arp (NETIP-04's wire proof of the donor's
+/// areg=sendgarp, contract §10): an ARP REQUEST whose sender protocol
+/// address equals the guest's SEAM address appears in this run's capture
+/// — the who-has-SELF shape (spa == tpa == guest) — sourced from the
+/// guest MAC (the capture's bind line, never a constant).  devip emits
+/// the gratuitous ARP on ipconfig's address add; smoltcp never does.
+/// `guest` is the seam's slirp_guestv4 (the caller resolves the seam —
+/// netaddr_slirp — so this assertion stays host-testable).
+pub fn assert_gratuitous_arp(frames: &[ArpFrame], guest: [u8; 4], capture: &[u8]) -> Result<(), String> {
+    let mac = guest_mac(capture)?;
+    for f in frames {
+        if f.oper == 1 && f.spa == guest && f.tpa == guest {
+            if f.sha != mac {
+                return Err(format!(
+                    "net gate (static): the gratuitous ARP's sha got {} want {} (the guest MAC)",
+                    mac_str(&f.sha),
+                    mac_str(&mac)
+                ));
+            }
+            return Ok(());
+        }
+    }
+    Err(format!(
+        "net gate (static): no gratuitous ARP (oper=1, spa == tpa == {}) in this run's capture — \
+         the devip sendgarp never emitted on the address add",
+        ip_str(&guest)
+    ))
+}
+
+/// assert_icmp_exchange (NETIP-04's ping wire proof): an ICMP echo
+/// REQUEST guest→gateway AND an echo REPLY gateway→guest in this run's
+/// capture — the request's ethernet source is the guest MAC (the capture's
+/// bind line).  `guest`/`gw` are the seam's slirp_guestv4/slirp_gwv4 (the
+/// caller resolves the seam — netaddr_slirp).  Returns the request
+/// count.  (The venue label — NOT L2 truth — rides the serial log, not
+/// this assertion: the assertion proves the exchange happened, never
+/// that the leg is tap-faithful.)
+pub fn assert_icmp_exchange(
+    frames: &[Icmpv4Frame],
+    guest: [u8; 4],
+    gw: [u8; 4],
+    capture: &[u8],
+) -> Result<usize, String> {
+    let mac = guest_mac(capture)?;
+    let mut reqs = 0;
+    let mut reps = 0;
+    for f in frames {
+        if f.icmp_type == 8 && f.src == guest && f.dst == gw {
+            if f.src_mac != mac {
+                return Err(format!(
+                    "net gate (static): echo request src_mac got {} want {} (the guest MAC)",
+                    mac_str(&f.src_mac),
+                    mac_str(&mac)
+                ));
+            }
+            reqs += 1;
+        }
+        if f.icmp_type == 0 && f.src == gw && f.dst == guest {
+            reps += 1;
+        }
+    }
+    if reqs == 0 {
+        return Err(format!(
+            "net gate (static): no ICMP echo request {} → {} in this run's capture",
+            ip_str(&guest),
+            ip_str(&gw)
+        ));
+    }
+    if reps == 0 {
+        return Err(format!(
+            "net gate (static): no ICMP echo reply {} → {} in this run's capture ({} requests saw \
+             no answer)",
+            ip_str(&gw),
+            ip_str(&guest),
+            reqs
+        ));
+    }
+    Ok(reqs)
+}
+
 /// The capture as lines, CRLF-tolerant.
 fn capture_lines(capture: &[u8]) -> impl Iterator<Item = &[u8]> {
     capture.split(|b| *b == b'\n').map(|line| match line.last() {
@@ -1065,5 +1246,100 @@ mod tests {
         let e = assert_arp_pingpong(&frames, total, &one_round_capture())
             .expect_err("a runt reply must fail");
         assert!(e.contains("runt"), "names the runt: {e}");
+    }
+
+    // ---- 08-06: the netip static gate's assertions (NETIP-04) ---------
+
+    /// A gratuitous ARP request (the devip sendgarp shape): oper 1,
+    /// sha = the guest MAC, spa == tpa == the guest address.
+    fn gratuitous_arp() -> Vec<u8> {
+        let mut f = arp_request(); // oper 1, sha/spa guest, tpa gateway
+        f[38..42].copy_from_slice(&GUEST_IP); // tpa == spa (who-has-self)
+        f
+    }
+
+    /// A minimal ICMPv4 echo frame (eth IPv4, proto 1, 8-byte ICMP).
+    fn icmp_frame(src_mac: [u8; 6], dst_mac: [u8; 6], src: [u8; 4], dst: [u8; 4], ty: u8) -> Vec<u8> {
+        let mut f = Vec::new();
+        f.extend_from_slice(&dst_mac);
+        f.extend_from_slice(&src_mac);
+        f.extend_from_slice(&[0x08, 0x00]); // ethertype IPv4
+        f.extend_from_slice(&[
+            0x45, 0x00, // v4 + IHL 20, tos
+            0x00, 28,   // total len
+            0x00, 0x00, 0x00, 0x00, // id/frag
+            64, 1, // ttl, proto ICMP
+            0x00, 0x00, // cksum (unchecked by the classifier)
+        ]);
+        f.extend_from_slice(&src);
+        f.extend_from_slice(&dst);
+        f.extend_from_slice(&[ty, 0x00]); // ICMP type, code
+        f.extend_from_slice(&[0x00; 6]); // cksum + rest
+        f
+    }
+
+    /// Golden: the gratuitous ARP appears (and only the guest's own
+    /// request shape matches — the ping solicitation is not it).
+    #[test]
+    fn gratuitous_arp_golden() {
+        let mut buf = global_header();
+        buf.extend_from_slice(&record(&arp_request())); // the ping solicitation (tpa=gw)
+        buf.extend_from_slice(&record(&gratuitous_arp())); // the sendgarp
+        let frames = parse_pcap(&buf).expect("parses");
+        assert_gratuitous_arp(&frames, GUEST_IP, BIND_LINE.as_bytes()).expect("the garp is found");
+    }
+
+    /// Negative: a capture with only the ping solicitation (tpa=gw) has
+    /// no gratuitous ARP — fails naming the missing shape.
+    #[test]
+    fn gratuitous_arp_absent_fails() {
+        let mut buf = global_header();
+        buf.extend_from_slice(&record(&arp_request()));
+        let frames = parse_pcap(&buf).expect("parses");
+        let e = assert_gratuitous_arp(&frames, GUEST_IP, BIND_LINE.as_bytes())
+            .expect_err("no who-has-self frame must fail");
+        assert!(e.contains("gratuitous"), "names the missing garp: {e}");
+    }
+
+    /// Golden: one echo request + one reply passes with the request count.
+    #[test]
+    fn icmp_exchange_golden() {
+        let req = icmp_frame(GUEST_MAC, GATEWAY_MAC, GUEST_IP, GATEWAY_IP, 8);
+        let rep = icmp_frame(GATEWAY_MAC, GUEST_MAC, GATEWAY_IP, GUEST_IP, 0);
+        let mut buf = global_header();
+        buf.extend_from_slice(&record(&req));
+        buf.extend_from_slice(&record(&rep));
+        let frames = parse_pcap_icmpv4(&buf).expect("parses");
+        assert_eq!(frames.len(), 2, "both frames classify");
+        let n = assert_icmp_exchange(&frames, GUEST_IP, GATEWAY_IP, BIND_LINE.as_bytes())
+            .expect("the exchange passes");
+        assert_eq!(n, 1);
+    }
+
+    /// Negative: requests without a reply fail naming the missing reply.
+    #[test]
+    fn icmp_exchange_no_reply_fails() {
+        let req = icmp_frame(GUEST_MAC, GATEWAY_MAC, GUEST_IP, GATEWAY_IP, 8);
+        let mut buf = global_header();
+        buf.extend_from_slice(&record(&req));
+        let frames = parse_pcap_icmpv4(&buf).expect("parses");
+        let e = assert_icmp_exchange(&frames, GUEST_IP, GATEWAY_IP, BIND_LINE.as_bytes())
+            .expect_err("a reply-less exchange must fail");
+        assert!(e.contains("reply"), "names the missing reply: {e}");
+    }
+
+    /// Negative: an echo request whose ethernet source is NOT the guest
+    /// MAC fails (the guest never sent it).
+    #[test]
+    fn icmp_exchange_wrong_src_mac_fails() {
+        let req = icmp_frame(GATEWAY_MAC, GATEWAY_MAC, GUEST_IP, GATEWAY_IP, 8); // wrong src_mac
+        let rep = icmp_frame(GATEWAY_MAC, GUEST_MAC, GATEWAY_IP, GUEST_IP, 0);
+        let mut buf = global_header();
+        buf.extend_from_slice(&record(&req));
+        buf.extend_from_slice(&record(&rep));
+        let frames = parse_pcap_icmpv4(&buf).expect("parses");
+        let e = assert_icmp_exchange(&frames, GUEST_IP, GATEWAY_IP, BIND_LINE.as_bytes())
+            .expect_err("a wrong src_mac must fail");
+        assert!(e.contains("src_mac"), "names src_mac: {e}");
     }
 }
