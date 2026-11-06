@@ -702,6 +702,15 @@ pub(crate) fn icmp_write_data(id: usize, buf: &[u8]) -> Result<u64> {
     msg[5] = (lport & 0xff) as u8;
     msg[2] = 0;
     msg[3] = 0;
+    // The permanent-full arm: a message larger than the socket's TX
+    // payload buffer can NEVER enqueue (PacketBuffer::enqueue's
+    // capacity arm returns Full forever) — error it now (the donor's
+    // Etoobig string) instead of treating it as transient pressure:
+    // on a quiet connection nothing is ever enqueued, no send-waker
+    // ever fires, and the block loop below would wedge the writer.
+    if msg.len() > ICMP_BUF {
+        return Err("read or write too large");
+    }
     let mut hooks: Option<stack::DevipHooks> = None;
     loop {
         let send_res = {
@@ -712,10 +721,16 @@ pub(crate) fn icmp_write_data(id: usize, buf: &[u8]) -> Result<u64> {
         };
         match send_res {
             Ok(()) => break,
-            Err(_) => {
-                // TX buffer full: block until the drive frees space
-                // (register → drop → block — wakeup-loss-free per the
-                // seam's IRQ-masked-syscall invariant).
+            // A permanent failure smoltcp 0.14 collapses into the same
+            // SendError surface as the transient full: the destination
+            // is unspecified (a v4-mapped 0.0.0.0 raddr).  Error out —
+            // blocking here waits on a wake that can never come.
+            Err(icmp::SendError::Unaddressable) => return Err("devip: unaddressable endpoint"),
+            // TX buffer full (transient — the oversize arm is guarded
+            // above): block until the drive frees space
+            // (register → drop → block — wakeup-loss-free per the
+            // seam's IRQ-masked-syscall invariant).
+            Err(icmp::SendError::BufferFull) => {
                 if hooks.is_none() {
                     hooks = Some(stack::hooks()?);
                 }
@@ -1271,6 +1286,14 @@ pub(crate) fn udp_write_data(id: usize, buf: &[u8]) -> Result<u64> {
     } else {
         (raddr, rport, laddr, buf)
     };
+    // The permanent-full arm: a datagram larger than the socket's TX
+    // payload buffer can NEVER enqueue (PacketBuffer::enqueue's capacity
+    // arm returns Full forever) — error it now (the donor's Etoobig
+    // string); treating it as transient wedges the writer on a quiet
+    // connection (nothing enqueued, no send-waker fires, poll_at disarms).
+    if payload.len() > UDP_BUF {
+        return Err("read or write too large");
+    }
     let Some(dst4) = v4_of(&daddr16) else {
         // A v6 destination on the v4 udp conv — the donor's udpwrite4/
         // udpwrite6 split; the v6 leg lands with 08-06.
@@ -1315,9 +1338,15 @@ pub(crate) fn udp_write_data(id: usize, buf: &[u8]) -> Result<u64> {
         };
         match send_res {
             Ok(()) => break,
-            Err(_) => {
-                // TX buffer full: block until the drive frees space
-                // (register → drop → block — icmp_write_data's shape).
+            // A permanent failure smoltcp 0.14 collapses into the same
+            // SendError surface as the transient full: the endpoint is
+            // unspecified (a v4-mapped 0.0.0.0/port-0 quad).  Error out —
+            // blocking here waits on a wake that can never come.
+            Err(udp::SendError::Unaddressable) => return Err("devip: unaddressable endpoint"),
+            // TX buffer full (transient — the oversize arm is guarded
+            // above): block until the drive frees space
+            // (register → drop → block — icmp_write_data's shape).
+            Err(udp::SendError::BufferFull) => {
                 if hooks.is_none() {
                     hooks = Some(stack::hooks()?);
                 }
@@ -1666,6 +1695,13 @@ pub(crate) fn icmp6_write_data(id: usize, buf: &[u8]) -> Result<u64> {
         msg[2] = 0;
         msg[3] = 0;
     }
+    // The permanent-full arm (the icmp module's guard mirrored): a
+    // message larger than the socket's TX payload buffer can NEVER
+    // enqueue — error it now (the donor's Etoobig string) instead of
+    // wedging the writer on a wake that can never come.
+    if msg.len() > ICMP_BUF {
+        return Err("read or write too large");
+    }
     let mut hooks: Option<stack::DevipHooks> = None;
     loop {
         let send_res = {
@@ -1676,9 +1712,14 @@ pub(crate) fn icmp6_write_data(id: usize, buf: &[u8]) -> Result<u64> {
         };
         match send_res {
             Ok(()) => break,
-            Err(_) => {
-                // TX buffer full: block until the drive frees space
-                // (register → drop → block — the icmp module's shape).
+            // A permanent failure smoltcp 0.14 collapses into the same
+            // SendError surface as the transient full (an unspecified
+            // destination).  Error out — blocking waits forever.
+            Err(icmp::SendError::Unaddressable) => return Err("devip: unaddressable endpoint"),
+            // TX buffer full (transient — the oversize arm is guarded
+            // above): block until the drive frees space
+            // (register → drop → block — the icmp module's shape).
+            Err(icmp::SendError::BufferFull) => {
                 if hooks.is_none() {
                     hooks = Some(stack::hooks()?);
                 }
