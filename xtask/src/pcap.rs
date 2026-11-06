@@ -277,6 +277,216 @@ pub fn assert_icmp_exchange(
     Ok(reqs)
 }
 
+// ---- The BOOTP/DHCP classifier (08-07 — the NETIP-05 DHCP gate) -------
+//
+// The gate's wire proof: the REAL ipconfig dhcpclient's DORA exchange over
+// /net/udp broadcast fidelity (D-09).  A BOOTP frame is IPv4/UDP between
+// ports 68 (client) and 67 (server) with the 236-byte BOOTP fixed part,
+// the magic cookie (99 130 83 99) at 236..240, and RFC 2132 options after
+// — option 53 (one byte) names the message type (1 Discover, 2 Offer,
+// 3 Request, 5 AK).  ipconfig emits ODtype FIRST after the cookie
+// (main.c:1104) but the assertion scans the options area boundedly — a
+// layout change is a read, never a panic (T-07-01's discipline).
+
+/// One classified BOOTP/DHCP frame with the fields the DHCP gate asserts
+/// on.  Wire fields are big-endian regardless of the capture's byte order.
+#[derive(Debug)]
+pub struct BootpFrame {
+    /// Ethernet source/destination MAC.
+    pub src_mac: [u8; 6],
+    pub dst_mac: [u8; 6],
+    /// IP source / destination.
+    pub src: [u8; 4],
+    pub dst: [u8; 4],
+    /// UDP ports (68 = client side, 67 = server side).
+    pub sport: u16,
+    pub dport: u16,
+    /// The DHCP message type (option 53): 1 Discover, 2 Offer, 3 Request,
+    /// 5 AK (0 = the option was absent — a malformed DHCP message).
+    pub msg_type: u8,
+    /// The yiaddr field (the offered/acknowledged lease address).
+    pub yiaddr: [u8; 4],
+    /// Captured frame length in bytes.
+    pub frame_len: usize,
+}
+
+/// The BOOTP magic cookie (99 130 83 99) at offset 236 of the UDP payload.
+const BOOTP_COOKIE: [u8; 4] = [99, 130, 83, 99];
+
+/// Classify one Ethernet frame as BOOTP/DHCP (ethertype 0x0800, IP proto
+/// 17, UDP ports 68↔67, payload ≥ 240 with the cookie).  None for any
+/// other shape or a runt frame.
+fn classify_bootp(frame: &[u8]) -> Option<BootpFrame> {
+    if frame.len() < 14 + 20 + 8 || u16::from_be_bytes([frame[12], frame[13]]) != 0x0800 {
+        return None;
+    }
+    let ip = &frame[14..];
+    let ihl = (ip[0] & 0x0f) as usize * 4;
+    if ihl < 20 || frame.len() < 14 + ihl + 8 || ip[9] != 17 {
+        return None;
+    }
+    let udp = &frame[14 + ihl..];
+    let sport = u16::from_be_bytes([udp[0], udp[1]]);
+    let dport = u16::from_be_bytes([udp[2], udp[3]]);
+    if !((sport == 68 && dport == 67) || (sport == 67 && dport == 68)) {
+        return None;
+    }
+    let payload = &udp[8..];
+    if payload.len() < 240 || payload[236..240] != BOOTP_COOKIE {
+        return None;
+    }
+    // Option 53 (DHCP message type): scan the options area boundedly for
+    // the [53, 1, t] triplet (skipping PAD(0)/END(255) per RFC 2132).
+    let mut msg_type = 0u8;
+    let opts = &payload[240..];
+    let mut i = 0usize;
+    while i < opts.len() {
+        match opts[i] {
+            0 => i += 1,
+            255 => break,
+            tag if i + 1 < opts.len() => {
+                let len = opts[i + 1] as usize;
+                if tag == 53 && len == 1 && i + 2 < opts.len() {
+                    msg_type = opts[i + 2];
+                }
+                i += 2 + len;
+            }
+            _ => break,
+        }
+    }
+    Some(BootpFrame {
+        src_mac: frame[6..12].try_into().expect("len >= 35"),
+        dst_mac: frame[0..6].try_into().expect("len >= 35"),
+        src: ip[12..16].try_into().expect("len checked"),
+        dst: ip[16..20].try_into().expect("len checked"),
+        sport,
+        dport,
+        msg_type,
+        yiaddr: payload[16..20].try_into().expect("payload >= 240"),
+        frame_len: frame.len(),
+    })
+}
+
+/// Parse every BOOTP/DHCP frame in the capture (other records are counted
+/// by frame_count and skipped here).  Same loud-Err discipline as
+/// parse_pcap.
+pub fn parse_pcap_bootp(bytes: &[u8]) -> Result<Vec<BootpFrame>, String> {
+    let mut frames = Vec::new();
+    for_each_record(bytes, &mut |frame| {
+        if let Some(f) = classify_bootp(frame) {
+            frames.push(f);
+        }
+    })?;
+    Ok(frames)
+}
+
+/// assert_dhcp_dora (NETIP-05's wire proof, D-09): this run's capture
+/// carries the four-message exchange IN ORDER — Discover (src
+/// 0.0.0.0:68 → dst 255.255.255.255:67, broadcast MAC, the guest's MAC as
+/// the L2 src), Offer (from the seam gateway), Request (the 0.0.0.0/broadcast
+/// shape again, the guest's negotiated MAC as L2 src), AK (from the
+/// gateway, yiaddr == the seam's guest address — the lease ties to the
+/// seam).  Retransmits are tolerated (the assertion is a subsequence
+/// match on the first instance of each type; ipconfig's 4 s timer may
+/// legitimately re-Discover under TCG).  `guest`/`gw` are the seam's
+/// slirp_guestv4/slirp_gwv4 (the caller resolves netaddr.rc).  Returns
+/// the negotiated lease (the AK's yiaddr).
+pub fn assert_dhcp_dora(
+    frames: &[BootpFrame],
+    guest: [u8; 4],
+    gw: [u8; 4],
+    capture: &[u8],
+) -> Result<[u8; 4], String> {
+    let mac = guest_mac(capture)?;
+    let bcast_mac = [0xff; 6];
+    let zero = [0u8; 4];
+    let bcast = [255u8; 4];
+    let names = ["?", "Discover", "Offer", "Request", "?", "AK"];
+    // The ordered subsequence walk: first Discover, then the first Offer
+    // after it, then the first Request, then the first AK.
+    let mut pos = 0usize;
+    let mut lease = None;
+    for want_type in [1u8, 2, 3, 5] {
+        let mut found = None;
+        for (i, f) in frames.iter().enumerate().skip(pos) {
+            if f.msg_type == want_type {
+                found = Some((i, f));
+                break;
+            }
+        }
+        let Some((i, f)) = found else {
+            return Err(format!(
+                "net gate (dhcp): no {} (type {want_type}) frame {}in this run's capture — the DORA exchange never completed",
+                names[want_type as usize],
+                if pos == 0 { "" } else { "after the prior step " }
+            ));
+        };
+        pos = i + 1;
+        match want_type {
+            // The client-side shapes (Discover + Request): src 0.0.0.0:68
+            // → dst 255.255.255.255:67, broadcast MAC, L2 src the guest.
+            1 | 3 => {
+                if f.src != zero || f.sport != 68 {
+                    return Err(format!(
+                        "net gate (dhcp): {} src got {}:{} want 0.0.0.0:68 (the OQ-1 broadcast fidelity)",
+                        names[want_type as usize],
+                        ip_str(&f.src),
+                        f.sport
+                    ));
+                }
+                if f.dst != bcast || f.dport != 67 {
+                    return Err(format!(
+                        "net gate (dhcp): {} dst got {}:{} want 255.255.255.255:67",
+                        names[want_type as usize],
+                        ip_str(&f.dst),
+                        f.dport
+                    ));
+                }
+                if f.dst_mac != bcast_mac {
+                    return Err(format!(
+                        "net gate (dhcp): {} dst_mac got {} want ff:ff:ff:ff:ff:ff (broadcast)",
+                        names[want_type as usize],
+                        mac_str(&f.dst_mac)
+                    ));
+                }
+                if f.src_mac != mac {
+                    return Err(format!(
+                        "net gate (dhcp): {} src_mac got {} want {} (the guest's negotiated MAC)",
+                        names[want_type as usize],
+                        mac_str(&f.src_mac),
+                        mac_str(&mac)
+                    ));
+                }
+            }
+            // The server-side shapes (Offer + AK): from the seam gateway
+            // (67 → 68); the AK's yiaddr is the lease, tied to the seam.
+            _ => {
+                if f.src != gw || f.sport != 67 || f.dport != 68 {
+                    return Err(format!(
+                        "net gate (dhcp): {} got {}:{}→:{} want {}:67→:68 (the seam gateway)",
+                        names[want_type as usize],
+                        ip_str(&f.src),
+                        f.sport,
+                        f.dport,
+                        ip_str(&gw)
+                    ));
+                }
+                if want_type == 5 {
+                    if f.yiaddr != guest {
+                        return Err(format!(
+                            "net gate (dhcp): the AK's yiaddr got {} want {} (the seam's guest address — the lease never tied)",
+                            ip_str(&f.yiaddr),
+                            ip_str(&guest)
+                        ));
+                    }
+                    lease = Some(f.yiaddr);
+                }
+            }
+        }
+    }
+    lease.ok_or_else(|| "net gate (dhcp): no AK — no lease".to_string())
+}
+
 /// The capture as lines, CRLF-tolerant.
 fn capture_lines(capture: &[u8]) -> impl Iterator<Item = &[u8]> {
     capture.split(|b| *b == b'\n').map(|line| match line.last() {
@@ -1341,5 +1551,184 @@ mod tests {
         let e = assert_icmp_exchange(&frames, GUEST_IP, GATEWAY_IP, BIND_LINE.as_bytes())
             .expect_err("a wrong src_mac must fail");
         assert!(e.contains("src_mac"), "names src_mac: {e}");
+    }
+
+    // ---- 08-07 Task 1: the DHCP DORA assertion suite (NETIP-05) -------
+    //
+    // Synthetic BOOTP frames: the 14-byte eth header + minimal IPv4 + UDP
+    // + the 236-byte BOOTP fixed part + the cookie + option 53 (the type).
+    // The guest MAC appears ONLY via BIND_LINE (the assertion parses it).
+
+    /// A DHCP frame: `client_side` picks the 68→67 direction (else 67→68);
+    /// `msg_type` lands in option 53; yiaddr carries the lease on AKs.
+    fn dhcp_frame(
+        src_mac: [u8; 6],
+        dst_mac: [u8; 6],
+        src: [u8; 4],
+        dst: [u8; 4],
+        msg_type: u8,
+        yiaddr: [u8; 4],
+    ) -> Vec<u8> {
+        let sport: u16 = if msg_type == 1 || msg_type == 3 { 68 } else { 67 };
+        let dport: u16 = if msg_type == 1 || msg_type == 3 { 67 } else { 68 };
+        let mut payload = vec![0u8; 240];
+        payload[0] = 1; // op: Bootrequest (cosmetic for the gate)
+        payload[16..20].copy_from_slice(&yiaddr);
+        payload[236..240].copy_from_slice(&[99, 130, 83, 99]); // the cookie
+        payload.extend_from_slice(&[53, 1, msg_type, 255]); // ODtype + END
+        let udplen = 8 + payload.len() as u16;
+        let iplen = 20 + udplen;
+        let mut f = Vec::new();
+        f.extend_from_slice(&dst_mac);
+        f.extend_from_slice(&src_mac);
+        f.extend_from_slice(&[0x08, 0x00]); // IPv4
+        f.push(0x45); // v4, 20-byte header
+        f.push(0);
+        f.extend_from_slice(&iplen.to_be_bytes());
+        f.extend_from_slice(&[0; 4]); // id/frag
+        f.push(255); // ttl
+        f.push(17); // UDP
+        f.extend_from_slice(&[0; 2]); // cksum
+        f.extend_from_slice(&src);
+        f.extend_from_slice(&dst);
+        f.extend_from_slice(&sport.to_be_bytes());
+        f.extend_from_slice(&dport.to_be_bytes());
+        f.extend_from_slice(&udplen.to_be_bytes());
+        f.extend_from_slice(&[0; 2]); // udp cksum
+        f.extend_from_slice(&payload);
+        f
+    }
+
+    /// The golden exchange: Discover → Offer → Request → AK.
+    fn dora_frames() -> Vec<Vec<u8>> {
+        vec![
+            dhcp_frame(GUEST_MAC, [0xff; 6], [0, 0, 0, 0], [255; 4], 1, [0; 4]),
+            dhcp_frame(GATEWAY_MAC, [0xff; 6], GATEWAY_IP, [255; 4], 2, GUEST_IP),
+            dhcp_frame(GUEST_MAC, [0xff; 6], [0, 0, 0, 0], [255; 4], 3, [0; 4]),
+            dhcp_frame(GATEWAY_MAC, [0xff; 6], GATEWAY_IP, [255; 4], 5, GUEST_IP),
+        ]
+    }
+
+    fn pcap_of(frames: &[Vec<u8>]) -> Vec<u8> {
+        let mut buf = global_header();
+        for f in frames {
+            buf.extend_from_slice(&record(f));
+        }
+        buf
+    }
+
+    /// Golden DORA: the four-message exchange passes and returns the lease
+    /// (the AK's yiaddr == the seam guest).
+    #[test]
+    fn dhcp_dora_golden() {
+        let buf = pcap_of(&dora_frames());
+        let frames = parse_pcap_bootp(&buf).expect("parses");
+        assert_eq!(frames.len(), 4, "all four messages classify");
+        let lease = assert_dhcp_dora(&frames, GUEST_IP, GATEWAY_IP, BIND_LINE.as_bytes())
+            .expect("the golden DORA passes");
+        assert_eq!(lease, GUEST_IP, "the lease is the seam guest");
+    }
+
+    /// Retransmit tolerance: two Discovers (ipconfig's 4 s timer) before
+    /// the Offer still passes (the subsequence match).
+    #[test]
+    fn dhcp_dora_retransmitted_discover_passes() {
+        let mut frames = vec![dhcp_frame(GUEST_MAC, [0xff; 6], [0, 0, 0, 0], [255; 4], 1, [0; 4])];
+        frames.extend_from_slice(&dora_frames());
+        let buf = pcap_of(&frames);
+        let frames = parse_pcap_bootp(&buf).expect("parses");
+        assert_dhcp_dora(&frames, GUEST_IP, GATEWAY_IP, BIND_LINE.as_bytes())
+            .expect("a retransmitted Discover still passes");
+    }
+
+    /// Negative: no AK (the server never committed) fails naming it.
+    #[test]
+    fn dhcp_dora_missing_ak_fails() {
+        let buf = pcap_of(&dora_frames()[..3]);
+        let frames = parse_pcap_bootp(&buf).expect("parses");
+        let e = assert_dhcp_dora(&frames, GUEST_IP, GATEWAY_IP, BIND_LINE.as_bytes())
+            .expect_err("a DOR without the AK must fail");
+        assert!(e.contains("AK"), "names the missing AK: {e}");
+    }
+
+    /// Negative: a Discover with a REAL src address (not 0.0.0.0) fails —
+    /// the OQ-1 broadcast fidelity is the gate's whole point.
+    #[test]
+    fn dhcp_discover_nonzero_src_fails() {
+        let mut frames = dora_frames();
+        frames[0] = dhcp_frame(GUEST_MAC, [0xff; 6], GUEST_IP, [255; 4], 1, [0; 4]);
+        let buf = pcap_of(&frames);
+        let frames = parse_pcap_bootp(&buf).expect("parses");
+        let e = assert_dhcp_dora(&frames, GUEST_IP, GATEWAY_IP, BIND_LINE.as_bytes())
+            .expect_err("a non-0.0.0.0 Discover must fail");
+        assert!(e.contains("0.0.0.0:68"), "names the want: {e}");
+        assert!(e.contains("10.0.2.15"), "the got value is present: {e}");
+    }
+
+    /// Negative: a Discover whose ethernet dst is NOT broadcast fails.
+    #[test]
+    fn dhcp_discover_unicast_mac_fails() {
+        let mut frames = dora_frames();
+        frames[0] = dhcp_frame(GUEST_MAC, GATEWAY_MAC, [0, 0, 0, 0], [255; 4], 1, [0; 4]);
+        let buf = pcap_of(&frames);
+        let frames = parse_pcap_bootp(&buf).expect("parses");
+        let e = assert_dhcp_dora(&frames, GUEST_IP, GATEWAY_IP, BIND_LINE.as_bytes())
+            .expect_err("a non-broadcast Discover must fail");
+        assert!(e.contains("dst_mac"), "names dst_mac: {e}");
+    }
+
+    /// Negative: the Request's L2 src must be the guest's negotiated MAC.
+    #[test]
+    fn dhcp_request_wrong_src_mac_fails() {
+        let mut frames = dora_frames();
+        frames[2] = dhcp_frame(GATEWAY_MAC, [0xff; 6], [0, 0, 0, 0], [255; 4], 3, [0; 4]);
+        let buf = pcap_of(&frames);
+        let frames = parse_pcap_bootp(&buf).expect("parses");
+        let e = assert_dhcp_dora(&frames, GUEST_IP, GATEWAY_IP, BIND_LINE.as_bytes())
+            .expect_err("a wrong-MAC Request must fail");
+        assert!(e.contains("Request"), "names the Request: {e}");
+        assert!(e.contains("src_mac"), "names src_mac: {e}");
+    }
+
+    /// Negative: out-of-order (the AK before the Request) fails.
+    #[test]
+    fn dhcp_dora_out_of_order_fails() {
+        let mut frames = dora_frames();
+        frames.swap(2, 3); // AK before the Request
+        let buf = pcap_of(&frames);
+        let frames = parse_pcap_bootp(&buf).expect("parses");
+        let e = assert_dhcp_dora(&frames, GUEST_IP, GATEWAY_IP, BIND_LINE.as_bytes())
+            .expect_err("an out-of-order DORA must fail");
+        assert!(e.contains("AK"), "names the out-of-order step: {e}");
+    }
+
+    /// Negative: the AK's yiaddr naming a DIFFERENT address than the
+    /// seam's guest fails (the lease never tied to the seam).
+    #[test]
+    fn dhcp_ak_wrong_lease_fails() {
+        let mut frames = dora_frames();
+        frames[3] = dhcp_frame(GATEWAY_MAC, [0xff; 6], GATEWAY_IP, [255; 4], 5, [10, 0, 2, 99]);
+        let buf = pcap_of(&frames);
+        let frames = parse_pcap_bootp(&buf).expect("parses");
+        let e = assert_dhcp_dora(&frames, GUEST_IP, GATEWAY_IP, BIND_LINE.as_bytes())
+            .expect_err("a wrong-yiaddr AK must fail");
+        assert!(e.contains("yiaddr"), "names yiaddr: {e}");
+        assert!(e.contains("10.0.2.99"), "the got value is present: {e}");
+    }
+
+    /// Negative: a frame with a corrupt cookie is skipped by the
+    /// classifier (never parsed), so a Discover with a bad cookie reads
+    /// as NO Discover — the loud failure names the absence.
+    #[test]
+    fn dhcp_bad_cookie_is_not_a_discover() {
+        let mut bad = dhcp_frame(GUEST_MAC, [0xff; 6], [0, 0, 0, 0], [255; 4], 1, [0; 4]);
+        let payload_off = 14 + 20 + 8;
+        bad[payload_off + 236] = 0; // corrupt the cookie
+        let buf = pcap_of(&[bad]);
+        let frames = parse_pcap_bootp(&buf).expect("parses");
+        assert!(frames.is_empty(), "a bad-cookie frame never classifies");
+        let e = assert_dhcp_dora(&frames, GUEST_IP, GATEWAY_IP, BIND_LINE.as_bytes())
+            .expect_err("no Discover must fail");
+        assert!(e.contains("Discover"), "names the missing Discover: {e}");
     }
 }
