@@ -1153,6 +1153,103 @@ fn udp_advise_hangup_lands_in_errq_unless_ignoreadvice() {
 }
 
 // ---------------------------------------------------------------------------
+// Pins: CR-02 — permanent send failures error instead of wedging the
+// writer.  smoltcp 0.14 collapses two PERMANENT failures into the same
+// SendError surface as transient TX pressure: an oversized payload
+// (PacketBuffer::enqueue's capacity arm returns Full FOREVER) and an
+// unaddressable endpoint.  Treated as "buffer full → block", both wedge
+// the writer with no wake source (a quiet connection enqueues nothing,
+// no send-waker ever fires, poll_at disarms).  The pins assert the
+// immediate error (the donor's Etoobig string / the unaddressable
+// endpoint error) and that the write NEVER parked.  (RED note: pre-fix
+// these pins do not fail — they WEDGE, which is the defect.)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn udp_write_oversized_or_unaddressable_errors_instead_of_wedging() {
+    let _serial = fresh_scripted_stack();
+    set_guest_addr();
+    let (id, _guard) = alloc_udp_conv();
+    crate::devip::proto::ctl_write(crate::devip::conv::Proto::Udp, id, b"connect 10.0.0.2!7000")
+        .expect("pin (cr02): connect");
+
+    // Oversized: one byte past the socket's 64 KiB TX payload buffer
+    // (proto.rs's UDP_BUF) can never enqueue — the donor's Etoobig.
+    let before = block_count();
+    let e = crate::devip::proto::udp_write_data(id, &alloc_vec(64 * 1024 + 1))
+        .expect_err("pin (cr02): the oversized write errors");
+    assert_eq!(e, "read or write too large", "pin (cr02): the Etoobig string");
+    assert_eq!(block_count(), before, "pin (cr02): the oversized write never parked");
+
+    // Unaddressable: a connected conv whose raddr is the v4-mapped
+    // unspecified address reaches send_slice with dst 0.0.0.0 →
+    // SendError::Unaddressable — permanent, never a block.
+    let (id2, _guard2) = alloc_udp_conv();
+    crate::devip::proto::ctl_write(crate::devip::conv::Proto::Udp, id2, b"connect 0.0.0.0!7000")
+        .expect("pin (cr02): the 0.0.0.0 connect binds");
+    let before = block_count();
+    let e = crate::devip::proto::udp_write_data(id2, b"probe")
+        .expect_err("pin (cr02): the unaddressable write errors");
+    assert_eq!(e, "devip: unaddressable endpoint", "pin (cr02): the unaddressable string");
+    assert_eq!(block_count(), before, "pin (cr02): the unaddressable write never parked");
+}
+
+#[test]
+fn icmp_write_oversized_or_unaddressable_errors_instead_of_wedging() {
+    let _serial = fresh_scripted_stack();
+    set_guest_addr();
+    let (id, _guard) = (crate::devip::conv::conv_alloc(crate::devip::conv::Proto::Icmp)
+        .map(|id| (id, ConvGuard(crate::devip::conv::Proto::Icmp, id))))
+    .expect("pin (cr02): icmp clone");
+    crate::devip::proto::ctl_write(crate::devip::conv::Proto::Icmp, id, b"connect 10.0.0.2!7")
+        .expect("pin (cr02): connect");
+
+    // Oversized: the write is the 20-byte header area + the ICMP message;
+    // one byte of message past the 64 KiB TX buffer (proto.rs's ICMP_BUF)
+    // can never enqueue.
+    let mut wbuf = alloc_vec(20 + 64 * 1024 + 1);
+    wbuf[20] = 8; // EchoRequest (the type byte — cosmetic here)
+    let before = block_count();
+    let e = crate::devip::proto::icmp_write_data(id, &wbuf)
+        .expect_err("pin (cr02): the oversized write errors");
+    assert_eq!(e, "read or write too large", "pin (cr02): the Etoobig string");
+    assert_eq!(block_count(), before, "pin (cr02): the oversized write never parked");
+
+    // Unaddressable: raddr = the v4-mapped 0.0.0.0.
+    let id2 = crate::devip::conv::conv_alloc(crate::devip::conv::Proto::Icmp).expect("pin (cr02): icmp clone 2");
+    let _g2 = ConvGuard(crate::devip::conv::Proto::Icmp, id2);
+    crate::devip::proto::ctl_write(crate::devip::conv::Proto::Icmp, id2, b"connect 0.0.0.0!7")
+        .expect("pin (cr02): the 0.0.0.0 connect binds");
+    let mut wbuf = alloc_vec(20 + 8);
+    wbuf[20] = 8;
+    let before = block_count();
+    let e = crate::devip::proto::icmp_write_data(id2, &wbuf)
+        .expect_err("pin (cr02): the unaddressable write errors");
+    assert_eq!(e, "devip: unaddressable endpoint", "pin (cr02): the unaddressable string");
+    assert_eq!(block_count(), before, "pin (cr02): the unaddressable write never parked");
+}
+
+#[test]
+fn icmp6_write_oversized_errors_instead_of_wedging() {
+    let _serial = fresh_scripted_stack();
+    set_guest_addr();
+    let id = crate::devip::conv::conv_alloc(crate::devip::conv::Proto::Icmp6).expect("pin (cr02): icmpv6 clone");
+    let _guard = ConvGuard(crate::devip::conv::Proto::Icmp6, id);
+    crate::devip::proto::ctl_write(crate::devip::conv::Proto::Icmp6, id, b"connect fec0::2!1")
+        .expect("pin (cr02): connect");
+
+    // Oversized: the write is the 40-byte IP6 header area + the message;
+    // one byte of message past the 64 KiB TX buffer can never enqueue.
+    let mut wbuf = alloc_vec(40 + 64 * 1024 + 1);
+    wbuf[40] = 128; // EchoRequest (cosmetic)
+    let before = block_count();
+    let e = crate::devip::proto::icmp6_write_data(id, &wbuf)
+        .expect_err("pin (cr02): the oversized write errors");
+    assert_eq!(e, "read or write too large", "pin (cr02): the Etoobig string");
+    assert_eq!(block_count(), before, "pin (cr02): the oversized write never parked");
+}
+
+// ---------------------------------------------------------------------------
 // 08-05 Task 1 — the tcp module pins (NETIP-03's third leg; the contract
 // doc's TCP chapter made executable).  Pinned here BEFORE the guest gate:
 //
@@ -2866,3 +2963,4 @@ fn ipifc_v6_verbs_add6_ra6_try() {
     crate::devip::ipifc::test_unbind_ether();
     conv::conv_close(conv::Proto::Ipifc, et_id);
 }
+
