@@ -1278,6 +1278,24 @@ pub(crate) fn udp_write_data(id: usize, buf: &[u8]) -> Result<u64> {
             let r = super::ipifc::find_local_ip(&daddr16);
             v4_of(&r).map(|a| IpAddress::Ipv4(Ipv4Address::from(a)))
         });
+    // The OQ-1 bridge rule (contract §12.6's recorded PASS-path verdict):
+    // a conv whose recorded laddr is the unspecified address IN THE
+    // absorbed `add 0.0.0.0 0.0.0.0` DHCP-in-progress state (the
+    // addselfcache null-address side effect — the self-table's accept-all
+    // flag) MUST pass local_address Some(0.0.0.0) on every send.  A None
+    // there is SILENTLY DROPPED at dispatch (get_source_address → None on
+    // an address-less interface; net_trace only, no error) — exactly the
+    // naive shape the 08-02 pin (h) proved dead.  Keyed on the accept-all
+    // marker, NOT just the unspecified laddr: an unspecified-laddr conv on
+    // an ADDRESSED interface must ride smoltcp's source selection (the
+    // iface's real address), never 0.0.0.0.
+    let local = match local {
+        Some(a) => Some(a),
+        None if laddr16 == IP_NOADDR && super::selftab_acceptall() => {
+            Some(IpAddress::Ipv4(Ipv4Address::UNSPECIFIED))
+        }
+        None => None,
+    };
     let meta = udp::UdpMetadata {
         endpoint: IpEndpoint { addr: IpAddress::Ipv4(Ipv4Address::from(dst4)), port: dport },
         local_address: local,

@@ -2252,3 +2252,169 @@ fn ipifc_add_remove_boundary_values_follow_the_contract() {
     conv::conv_close(conv::Proto::Ipifc, id);
 }
 
+// ---------------------------------------------------------------------------
+// 08-07 Task 1 — the NETIP-05 DHCP pins: the P-F absorption's file-level
+// shape (zero smoltcp addresses, the netlog note — D-07 observability) and
+// the broadcast TX shape THROUGH the devip file surface (the 08-02 OQ-1
+// pin (h)'s raw-seam verdict extended to the conv/ctl/data path the real
+// ipconfig drives).
+// ---------------------------------------------------------------------------
+
+/// The absorption pin (contract §12.6 / P-F, the plan's Task-1 pin 2a):
+/// an `add 0.0.0.0 0.0.0.0` ctl write on a bound ifc SUCCEEDS, leaves ZERO
+/// configured addresses on the iface (smoltcp's update_ip_addrs is never
+/// called with it — it would PANIC on the non-unicast address), and the
+/// absorption is note-worthy in netlog (D-07: deliberate but
+/// wire-invisible events are observable).
+#[test]
+fn ipifc_dhcp_preconfig_absorbs_with_zero_iface_addresses_and_a_netlog_note() {
+    // A bare seam (the bind installs the core itself) — the boundary
+    // pin's shape.
+    let _serial = SEAM_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    ensure_hooks();
+    set_ticks(0);
+    take_wake_log();
+    {
+        let mut g = stack::enter_stack();
+        g.core = None;
+        g.ether = None;
+    }
+    crate::devip::arp::test_flush();
+    use crate::devip::{conv, ipifc, netlog};
+    // The note is flag-gated (netlog's emit drops when the flag is off):
+    // enable `ip` first; drain any stale lines so the assertion reads
+    // only THIS pin's output.
+    netlog::ctl(b"set ip").expect("pin (absorb): set ip");
+    let _ = netlog::drain_lines();
+
+    let id = conv::conv_alloc(conv::Proto::Ipifc).expect("pin (absorb): ipifc clone");
+    ipifc::ctl(id, b"bind", &[b"loopback"]).expect("pin (absorb): bind loopback");
+    ipifc::ctl(id, b"add", &[b"0.0.0.0", b"0.0.0.0"]).expect("pin (absorb): the absorbed add");
+
+    // Zero configured addresses on the iface (the marker never reached
+    // smoltcp).
+    {
+        let g = stack::enter_stack();
+        let core = g.core.as_ref().expect("pin (absorb): the loopback core");
+        assert!(
+            core.iface.ip_addrs().is_empty(),
+            "pin (absorb): the absorbed add leaves zero smoltcp addresses (P-F)"
+        );
+    }
+    assert!(
+        crate::devip::selftab_acceptall(),
+        "pin (absorb): the addselfcache null-address side effect (accept-all) set"
+    );
+    let lines = netlog::drain_lines();
+    assert!(
+        lines.iter().any(|l| l.windows(b"absorbed".len()).any(|w| w == b"absorbed")),
+        "pin (absorb): the netlog note records the absorption (D-07); got {lines:?}"
+    );
+
+    // Teardown: drop the marker + unbind + close; clear the ip flag.
+    ipifc::ctl(id, b"remove", &[b"0.0.0.0", b"0.0.0.0"]).expect("pin (absorb): drop the marker");
+    ipifc::ctl(id, b"unbind", &[]).expect("pin (absorb): unbind");
+    conv::conv_close(conv::Proto::Ipifc, id);
+    netlog::ctl(b"clear ip").expect("pin (absorb): clear ip");
+}
+
+/// The broadcast-TX pin (the plan's Task-1 pin 2b): a Bootp-sized
+/// datagram written to a port-68 headers-mode conv in the absorbed
+/// DHCP-in-progress state leaves the adapter with **src 0.0.0.0** +
+/// **dst 255.255.255.255:67** (udp 68 → 67, payload intact) — the OQ-1
+/// PASS-path verdict (contract §12.6) driven through the devip file
+/// surface the real ipconfig exercises (`announce *!68` → `headers` →
+/// the full-size Bootp write, main.c:1082-1170).  The Offer's return
+/// leg (broadcast dst to port 68, still no configured address) reads
+/// back the 52-byte Udphdr prefix + the payload.
+#[test]
+fn dhcp_broadcast_tx_shape_through_the_devip_file_surface() {
+    // Bare seam; the loopback bind installs the core, then the scripted
+    // device REPLACES it (the pin asserts the IP-level wire shape — the
+    // medium (loopback-vs-ether) never alters src/dst at that layer; the
+    // ether adapter's construction needs the live netif machinery the
+    // host lacks).
+    let _serial = SEAM_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    ensure_hooks();
+    set_ticks(0);
+    take_wake_log();
+    {
+        let mut g = stack::enter_stack();
+        g.core = None;
+        g.ether = None;
+    }
+    crate::devip::arp::test_flush();
+    use crate::devip::{conv, ipifc, proto};
+
+    let ifc_id = conv::conv_alloc(conv::Proto::Ipifc).expect("pin (dora): ipifc clone");
+    ipifc::ctl(ifc_id, b"bind", &[b"loopback"]).expect("pin (dora): bind loopback");
+    {
+        let mut g = stack::enter_stack();
+        g.core = Some(StackCore::new_scripted(ScriptedDev::new()));
+    }
+    // The DHCP preconfig (main.c:926's `add %I %I` of IPnoaddr):
+    // absorbed devip-side, accept-all set.
+    ipifc::ctl(ifc_id, b"add", &[b"0.0.0.0", b"0.0.0.0"]).expect("pin (dora): the absorbed add");
+    assert!(crate::devip::selftab_acceptall(), "pin (dora): the DHCP-in-progress marker");
+
+    // The udp conv exactly as ipconfig's openlisten builds it
+    // (main.c:1381-1411): announce udp!*!68 (libc writes `announce
+    // *!68`), then `headers`.
+    let (id, _guard) = alloc_udp_conv();
+    proto::ctl_write(conv::Proto::Udp, id, b"announce *!68").expect("pin (dora): announce *!68");
+    proto::ctl_write(conv::Proto::Udp, id, b"headers").expect("pin (dora): headers");
+    let (_, hdrs, laddr, lport, _, _, _, _, _) = udp_conv_snapshot(id);
+    assert_eq!(lport, 68, "pin (dora): announced port 68");
+    assert_eq!(hdrs, 7, "pin (dora): headers=7 recorded");
+    assert_eq!(laddr, [0; 16], "pin (dora): the wildcard announce's laddr is unspecified");
+
+    // The Bootp-shaped headers-mode write: the 52-byte Udphdr prefix
+    // (raddr = broadcast, laddr = zeros — dhcpsend's memset shape) + the
+    // Bootp fixed part + magic cookie + the marker tail.
+    let mut wbuf = alloc_vec(52);
+    wbuf[0..16].copy_from_slice(&mapped(Ipv4Address::BROADCAST)); // raddr
+    // laddr[16..32] stays zeros (the memset 0 of dhcpsend's Bootp.udphdr)
+    wbuf[48..50].copy_from_slice(&67u16.to_be_bytes()); // rport
+    wbuf[50..52].copy_from_slice(&68u16.to_be_bytes()); // lport
+    let payload = bootp_shaped_payload(DHCP_MARKER);
+    let n_payload = payload.len();
+    wbuf.extend_from_slice(&payload);
+    let n = proto::udp_write_data(id, &wbuf).expect("pin (dora): the write succeeds");
+    assert_eq!(n as usize, wbuf.len(), "pin (dora): the write count");
+
+    // The adapter's capture: exactly one frame, src 0.0.0.0 ON THE WIRE,
+    // dst 255.255.255.255, udp 68 → 67, payload intact.
+    assert_eq!(tx_count(), 1, "pin (dora): the Discover left the adapter (never the silent drop)");
+    let (src, dst, sport, dport, got) = {
+        let g = stack::enter_stack();
+        let core = g.core.as_ref().expect("pin (dora): the core");
+        parse_udp4(&core.dev_scripted().tx_log[0])
+    };
+    assert_eq!(src, Ipv4Address::UNSPECIFIED, "pin (dora): OQ-1's src 0.0.0.0 through the file surface");
+    assert_eq!(dst, Ipv4Address::BROADCAST, "pin (dora): broadcast dst");
+    assert_eq!((sport, dport), (68, 67), "pin (dora): the bootp ports");
+    assert_eq!(got.len(), n_payload, "pin (dora): the full Bootp payload");
+    assert!(got.ends_with(DHCP_MARKER), "pin (dora): payload integrity");
+
+    // The Offer's return leg: broadcast dst to port 68 with STILL no
+    // configured address — accepted (udp accepts(): port match +
+    // broadcast dst); the headers-mode read synthesizes the 52-byte
+    // Udphdr prefix (raddr = the server, rport 67, lport 68).
+    let offer_payload = bootp_shaped_payload(OFFER_MARKER);
+    push_rx(udp4_frame(DHCP_SERVER, Ipv4Address::BROADCAST, 67, 68, &offer_payload));
+    let mut rbuf = alloc_vec(4096);
+    let n = proto::udp_read_data(id, &mut rbuf).expect("pin (dora): the Offer reads") as usize;
+    assert_eq!(n, 52 + offer_payload.len(), "pin (dora): the prefixed datagram");
+    assert_eq!(&rbuf[0..16], &mapped(DHCP_SERVER), "pin (dora): raddr = the server");
+    assert_eq!(&rbuf[48..50], &67u16.to_be_bytes(), "pin (dora): rport big-endian");
+    assert_eq!(&rbuf[50..52], &68u16.to_be_bytes(), "pin (dora): lport big-endian");
+    assert!(rbuf[52..n].ends_with(OFFER_MARKER), "pin (dora): the Offer payload verbatim");
+
+    // Teardown: the lease's post-DORA `remove %I %I` (main.c:963) clears
+    // the marker; the convs close.
+    ipifc::ctl(ifc_id, b"remove", &[b"0.0.0.0", b"0.0.0.0"]).expect("pin (dora): drop the marker");
+    assert!(!crate::devip::selftab_acceptall(), "pin (dora): accept-all clears post-lease");
+    ipifc::ctl(ifc_id, b"unbind", &[]).expect("pin (dora): unbind");
+    conv::conv_close(conv::Proto::Ipifc, ifc_id);
+}
+

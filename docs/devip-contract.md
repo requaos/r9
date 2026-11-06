@@ -760,6 +760,17 @@ succeeds and feeds the view — `ipv6.c:604-615`.)
   `local_address: Some(0.0.0.0)` in the UdpMetadata of every send.  No wire-layer shim is
   needed; the D-09 dhcpv4-socket fallback stays unwired.)*
 
+  *(2026-11-06: the verdict's bridge predicate, pinned at the file surface (08-07).  The
+  `local_address: Some(0.0.0.0)` override fires when the conv's recorded laddr is unspecified
+  AND the self-table's accept-all flag is set — the addselfcache null-address side effect IS
+  the absorbed-DHCP marker, and keying on it keeps an unspecified-laddr conv on an ADDRESSED
+  interface on smoltcp's own source selection (the iface's real address), never 0.0.0.0.
+  Host pins: `ipifc_dhcp_preconfig_absorbs_with_zero_iface_addresses_and_a_netlog_note` (the
+  absorption leaves zero smoltcp addresses + the D-07 netlog note) and
+  `dhcp_broadcast_tx_shape_through_the_devip_file_surface` (announce `*!68` → `headers` → the
+  Bootp write leaves the adapter src 0.0.0.0 / dst 255.255.255.255 / udp 68→67; the broadcast
+  Offer reads back with the synthesized 52-byte prefix).)*
+
 ### 12.7 UDP err-file ICMP advice
 
 smoltcp's icmp socket `Endpoint::Udp(port)` receives the associated ICMP errors, so the
