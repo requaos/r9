@@ -1046,9 +1046,11 @@ fn sem_word_pa(proc: &Proc, va: u64) -> Option<u64> {
 /// sysproc.c): a counting semaphore whose WORD lives in user memory
 /// (libc Lock.sem — ping's listlock is the 08-04 gate's caller).  Fast
 /// path: decrement a positive word and return 1.  Contended path
-/// (block != 0): register the caller on the word's PA and block in
-/// sched(), re-checking on wake (spurious-allowed: a woken waiter that
-/// loses the unit race re-blocks and stays registered).  Returns 1 on
+/// (block != 0): register the caller on the word's PA BEFORE EACH block
+/// (sem_wake consumes registrations as it wakes, so a woken waiter that
+/// loses the unit race re-registers on its next block — the
+/// register → check → block loop is wakeup-loss-free) and block in
+/// sched(), re-checking on wake (spurious-allowed).  Returns 1 on
 /// acquire, 0 when block == 0 and the word is exhausted.  Era limit:
 /// the donor's note-interruptible sleep is NOT reproduced — r9's block
 /// is uninterruptible (a note queued mid-wait delivers at the syscall's
@@ -1085,8 +1087,15 @@ fn sys_semacquire(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let Some(pa) = sem_word_pa(proc, addr) else {
         return err(proc, "bad arg in system call");
     };
-    proc::sem_register_waiter(pa, proc.pid);
     loop {
+        // Register BEFORE every block: sem_wake CONSUMES registrations
+        // when it picks its wakers, so a woken waiter that loses the unit
+        // race must RE-register before re-blocking — without this the
+        // re-block is unregistered and no future release ever finds the
+        // waiter (a permanent wedge).  register → check → block per
+        // iteration is wakeup-loss-free: single CPU, IRQ-masked syscall
+        // context, so no releaser can run between the check and sched().
+        proc::sem_register_waiter(pa, proc.pid);
         if sem_try_acquire(&mut word) {
             break;
         }

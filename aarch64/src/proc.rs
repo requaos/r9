@@ -524,7 +524,10 @@ pub fn rfmem_family_members(family: u64) -> Vec<*mut Proc> {
 static SEM_WAITERS: Lock<Vec<(u64, u64)>> = Lock::new("sem", Vec::new());
 
 /// sys_semacquire's contended arm: record the caller as a waiter on the
-/// word's PA (once — the acquire loop re-checks without re-registering).
+/// word's PA.  Idempotent (the contains check) — the acquire loop
+/// RE-registers before every block: sem_wake consumes registrations as
+/// it picks its wakers, so a woken waiter that loses the unit race
+/// re-registers on its next block (the wakeup-loss-free shape).
 pub fn sem_register_waiter(pa: u64, pid: u64) {
     let node = LockNode::new();
     let mut waiters = SEM_WAITERS.lock(&node);
@@ -2619,3 +2622,4 @@ mod rfmem_tests {
         assert!(t.release(0x7000)); // absent now — recycled PA is ordinary
     }
 }
+
