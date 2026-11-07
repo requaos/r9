@@ -883,6 +883,14 @@ const BOOT_TEST_TIMEOUT_SECS: u64 = 300;
 /// wall-clock allowance, not a timing assertion.
 const BOOT_FIRST_MARKER_TIMEOUT_SECS: u64 = 20;
 
+/// The q35 machine-info fact line prefix (13-02, X64-01's kernel half):
+/// the main9-x64 payload prints one `q35: memory ...` line per mb2
+/// memory-map range it parsed.  The gate asserts >= 1 such line strictly
+/// after the banner's byte offset — the ordered-presence shape the
+/// virtlowecam profile uses for its ecam marker.  Presence, never
+/// timings; the negative panic scan above stays on.
+const BOOT_Q35_MEMORY_MARKER: &str = "q35: memory";
+
 /// Panic-profile markers: a config with dev = ["panic"] boots
 /// virt to a deliberate brk #0 sync exception BEFORE trap::unmask_irq(), so
 /// the log is deterministic (zero IRQ interleaving) -- banner, start marker,
@@ -1160,6 +1168,13 @@ fn contains_marker(capture: &[u8], marker: &[u8]) -> bool {
     capture.windows(marker.len()).any(|w| w == marker)
 }
 
+/// The first byte offset at which `marker` occurs (the ordered-presence
+/// anchor: a later stage counts its own markers only past this point,
+/// so a marker that rode the wire BEFORE the anchor never satisfies it).
+fn marker_position(capture: &[u8], marker: &[u8]) -> Option<usize> {
+    capture.windows(marker.len()).position(|w| w == marker)
+}
+
 /// Count TrapFrame register-dump rows: lines shaped `<spaces>x<N>:` (the
 /// {:#?} Debug prints x0..x30 one per line, space-indented, bare register
 /// names).  Serial lines arrive CRLF; the digit/colon scan never reaches
@@ -1211,6 +1226,10 @@ enum BootStage {
     /// The sweep line has been typed; await the sweep's markers (fast-fail
     /// on a `netsweep: FAIL` line, complete on `netsweep: NET-DONE`).
     NetSweep,
+    /// The x86_64 facts stage (13-02): banner observed, now await >= 1
+    /// `q35: memory` fact line strictly after the banner's byte offset —
+    /// the mb2 parse's on-serial evidence.
+    Q35Facts,
 }
 
 impl fmt::Display for BootStage {
@@ -1256,6 +1275,9 @@ impl fmt::Display for BootStage {
                 f,
                 "sweep markers (fast-fail {NET_SWEEP_FAIL_MARKER:?}, completion {NET_SWEEP_DONE_MARKER:?})"
             ),
+            BootStage::Q35Facts => {
+                write!(f, ">= 1 line beginning {BOOT_Q35_MEMORY_MARKER:?} after the banner")
+            }
         }
     }
 }
@@ -1277,10 +1299,11 @@ enum BootProfile {
     /// sweep's ping/udp ok lines, NETIP-DONE).  No pcap assertion —
     /// loopback traffic never touches the wire (that is the point).
     Netip,
-    /// The x86_64 channel gate (13-01, X64-01): SeaBIOS -> GRUB2 -> mb2 ->
-    /// kernel to the banner marker on the serial socket.  The payload is
-    /// the parked old-gen kernel — no ticks/echo stages yet (13-02's
-    /// main9-x64 rewrite lands them).
+    /// The x86_64 channel gate (13-01 opened it; 13-02 grew it to the
+    /// kernel half): SeaBIOS -> GRUB2 -> mb2 kernel, banner marker, then
+    /// >= 1 `q35: memory` mb2-fact line strictly after the banner — the
+    /// main9-x64 payload's parse evidence.  Ticks/echo stages land with
+    /// 13-03's timer.
     X64,
 }
 
@@ -1570,6 +1593,9 @@ impl BootTestStep {
         let mut capture: Vec<u8> = Vec::new();
         let mut stage = BootStage::Banner;
         let mut probe_at = 0usize;
+        // The X64 facts stage's ordered-presence anchor: the byte offset
+        // just past the banner, set when the banner is observed.
+        let mut facts_after = 0usize;
 
         // Assertion profile selection: a [config] dev list containing
         // "panic" selects the panic profile -- banner, the virtpanic start
@@ -1644,21 +1670,35 @@ impl BootTestStep {
                 BootStage::Banner => {
                     if contains_marker(&capture, BOOT_BANNER_MARKER.as_bytes()) {
                         if self.arch == Arch::X86_64 {
-                            // The X64-01 channel gate (13-01): the banner is
-                            // the whole assertion set — the payload is the
-                            // parked old-gen kernel, and the main9-x64
-                            // rewrite (13-02) lands the timer/echo stages.
-                            return self.finish(log_abs, &capture, BootProfile::X64);
-                        }
-                        stage = if net_profile || netip_profile {
-                            BootStage::NetBoot
-                        } else if panic_profile {
-                            BootStage::PanicStart
-                        } else if exec_profile || multi_profile || notes_profile {
-                            BootStage::ExecEntry
+                            // The X64-01 channel gate (13-01) grew its
+                            // kernel half in 13-02: the banner alone no
+                            // longer satisfies the gate — the main9-x64
+                            // payload must print the mb2 facts on the same
+                            // wire.  Advance to the facts stage with the
+                            // anchor set just past the banner, so the
+                            // memory lines are asserted strictly after it
+                            // (a fact line that rode the wire pre-banner
+                            // can never satisfy the stage).
+                            facts_after = marker_position(&capture, BOOT_BANNER_MARKER.as_bytes())
+                                .map(|p| p + BOOT_BANNER_MARKER.len())
+                                .unwrap_or(capture.len());
+                            stage = BootStage::Q35Facts;
                         } else {
-                            BootStage::Ticks
-                        };
+                            stage = if net_profile || netip_profile {
+                                BootStage::NetBoot
+                            } else if panic_profile {
+                                BootStage::PanicStart
+                            } else if exec_profile || multi_profile || notes_profile {
+                                BootStage::ExecEntry
+                            } else {
+                                BootStage::Ticks
+                            };
+                        }
+                    }
+                }
+                BootStage::Q35Facts => {
+                    if count_marker_lines(&capture[facts_after..], BOOT_Q35_MEMORY_MARKER) >= 1 {
+                        return self.finish(log_abs, &capture, BootProfile::X64);
                     }
                 }
                 BootStage::Ticks => {
@@ -1911,7 +1951,7 @@ impl BootTestStep {
             }
             BootProfile::X64 => {
                 println!(
-                    "boot-test: PASS -- SeaBIOS -> GRUB2 -> mb2 kernel boot: banner marker observed on the serial socket (X64-01 channel)"
+                    "boot-test: PASS -- SeaBIOS -> GRUB2 -> mb2 kernel boot: banner marker then >= 1 q35 memory-map fact line observed in order on the serial socket (X64-01 channel)"
                 );
             }
             BootProfile::Exec => {
@@ -2878,8 +2918,9 @@ fn annotated_status(cmd: &mut Command) -> Result<process::ExitStatus> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BOOT_ECHO_PROBE, BOOT_TICK_MARKER, check_mb2_header, contains_marker, count_marker_lines,
-        count_register_lines, negative_scan_hit_for,
+        BOOT_ECHO_PROBE, BOOT_Q35_MEMORY_MARKER, BOOT_TICK_MARKER, check_mb2_header,
+        contains_marker, count_marker_lines, count_register_lines, marker_position,
+        negative_scan_hit_for,
     };
 
     /// Build a synthetic image around one mb2 header (the fixture shape
@@ -3023,6 +3064,30 @@ mod tests {
         assert_eq!(count_marker_lines(b"", BOOT_TICK_MARKER), 0);
         // A marker directly after \n with no \r still counts (line start).
         assert_eq!(count_marker_lines(b"tick 0\n", BOOT_TICK_MARKER), 1);
+    }
+
+    /// The X64 facts stage's ordered-presence anchor (13-02): the q35
+    /// memory lines count only STRICTLY PAST the banner's byte offset —
+    /// a fact line that rode the wire before the banner can never
+    /// satisfy the stage.
+    #[test]
+    fn q35_memory_facts_count_only_after_the_banner() {
+        let wire = b"q35: memory 0x0..0x9fc00 (0x9fc00) available\r\n\
+                     r9 from the Internet\r\n\
+                     q35: memory 0x100000..0x3ffdf000 available\r\n\
+                     q35: acpi rsdt 0x3ffe2345\r\n";
+        let after = marker_position(wire, b"r9 from the Internet")
+            .map(|p| p + "r9 from the Internet".len())
+            .unwrap_or(wire.len());
+        // Before the anchor: the pre-banner fact line exists but the
+        // whole-wire count would over-credit; past the anchor exactly
+        // the one post-banner memory line counts.
+        assert_eq!(count_marker_lines(wire, BOOT_Q35_MEMORY_MARKER), 2);
+        assert_eq!(count_marker_lines(&wire[after..], BOOT_Q35_MEMORY_MARKER), 1);
+        // The acpi fact line shares the `q35: ` prefix but not the
+        // memory marker's line prefix.
+        assert_eq!(count_marker_lines(&wire[after..], "q35: acpi"), 1);
+        assert!(marker_position(b"no marker here", BOOT_Q35_MEMORY_MARKER.as_bytes()).is_none());
     }
 
     #[test]
