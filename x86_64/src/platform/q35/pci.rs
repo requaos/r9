@@ -28,6 +28,11 @@
 use core::cell::SyncUnsafeCell;
 use core::ptr::read_volatile;
 
+#[cfg(dev_ether)]
+use core::ptr::write_volatile;
+#[cfg(dev_ether)]
+use port::virtio::{self, CommonCfg, PciCfg, Ring, RingMem};
+
 use super::acpi::{Acpi, McfgEntry};
 
 #[cfg(not(test))]
@@ -136,23 +141,17 @@ static DISCOVERY: SyncUnsafeCell<Option<Discovery>> = SyncUnsafeCell::new(None);
 /// publishes it here).  Written once by the bind inside the pre-sti
 /// window, read lock-free from IRQ context thereafter (the aarch64
 /// virtio_irq_intid analog).
+#[cfg(dev_ether)]
 static VIRTIO_VECTOR: SyncUnsafeCell<Option<u8>> = SyncUnsafeCell::new(None);
 
 /// The bound virtio-net device's IDT vector, if a bind published one
 /// (None until the bind ran — the dispatch arm never matches then).
+#[cfg(dev_ether)]
 pub fn virtio_irq_vector() -> Option<u8> {
     // SAFETY: publish-once — written by the bind in boot context (IF=0,
     // before sti), read lock-free from the trap dispatch thereafter.
     *unsafe { &*VIRTIO_VECTOR.get() }
 }
-
-/// The virtio-net IRQ handler: the read-to-ack-first drain (the ISR
-/// byte read deasserts the level-triggered line BEFORE the dispatcher's
-/// LAPIC EOI — Pitfall 5's storm class), bounded with re-check, no
-/// locks/no console on the hot path.  Unreachable until a bind
-/// publishes the vector (the dispatch arm guards on it) — the drain
-/// body lands with the bind (13-05 Task 2, same plan).
-pub fn virtio_net_irq() {}
 
 // ---------------------------------------------------------------------------
 // The D-07 carve-out: the kernel's ONE CF8/CFC access (see the module
@@ -471,6 +470,880 @@ pub fn discover_and_print(acpi: &Acpi) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The virtio-net bind (13-05 Task 2, X64-04) — the aarch64 platform/virt
+// bind arc re-keyed over the identity map: the four port seams (PciCfg
+// over ECAM, CommonCfg over the assigned BAR, RingMem over the ring
+// pages, Uart already done at devcons), BAR sizing + assignment from the
+// q35 MMIO window derived from live config, the modern-only negotiation
+// with its audit print, the §4.1.5.1.3 queue bring-up, RX pre-post +
+// DRIVER_OK, the ISR-read-first IRQ handler, and the driver-ops surface
+// devether publishes as /net/ether0.  cfg(dev_ether) per D-01a's
+// idle-unbound-then-bound staging; everything the idle build needs stays
+// ungated above.
+//
+// Memory-model note (RESEARCH Pitfall 6's verdict): VolatileMem KEEPS
+// the RingMem trait's core-fence default — NO x86 fence specialization.
+// core's fence(Release)/fence(Acquire) lower to compiler-only barriers
+// on x86 TSO (no mfence), which is correct here because EVENT_IDX (bit
+// 29) is never negotiated and the avail no-notify flag is never set, so
+// no notify-skip decision depends on the sandwich's one store→load
+// adjacency.  The whole file runs through l.S's 1 GiB WB identity window
+// (13-03's do-not-resplit finding: a UC split of device pages broke MMIO
+// under BOTH accels on this channel; real-hardware hygiene would map the
+// notify BAR UC — revisit only if EVENT_IDX ever enters a negotiation
+// mask, and then with fence(SeqCst) at the ordering points).
+// ---------------------------------------------------------------------------
+
+/// The IDT vector the NIC's line is armed at — the bind's own arming
+/// decision, the first spare past the timer in the 0x20..=0x3F IRQ span
+/// trap.rs documents.  The dispatch guards on the PUBLISHED value (the
+/// VIRTIO_VECTOR cell), never on this constant — zero hardcoded vectors
+/// at the dispatch; moving the arming choice is a one-line change with
+/// no dispatch edit.
+#[cfg(dev_ether)]
+const VIRTIO_NET_VECTOR: u8 = 0x21;
+
+/// PCI config-space offsets the bind touches beyond the discovery set.
+#[cfg(dev_ether)]
+const PCI_OFF_COMMAND: u8 = 0x04;
+/// PCI_COMMAND bits: Memory Space (1) and Bus Master (2) — both
+/// explicit: qemu's modern virtio path never auto-enables bus-master,
+/// and without it DMA silently does nothing.
+#[cfg(dev_ether)]
+const PCI_COMMAND_MEMORY: u16 = 1 << 1;
+#[cfg(dev_ether)]
+const PCI_COMMAND_MASTER: u16 = 1 << 2;
+/// The first BAR register's config offset (BAR i at 0x10 + 4i — the
+/// caps' own bar field picks WHICH one; no hardcoded BAR index).
+#[cfg(dev_ether)]
+const PCI_OFF_BAR0: u8 = 0x10;
+
+/// One 4 KiB page per RX buffer (12-byte header + 1514 max frame fits
+/// trivially).
+#[cfg(dev_ether)]
+const RX_PAYLOAD_CAP: u32 = 4096;
+/// qsize/2 two-descriptor chains — qemu's 256-entry queue posts 128.
+#[cfg(dev_ether)]
+const MAX_RX_SLOTS: usize = (virtio::MAX_QSIZE / 2) as usize;
+/// TX slots mirror RX; each carries its own 4 KiB frame page for the
+/// ring's lifetime (devether's write path copies the frame in; the page
+/// frees when the slot's used entry retires — no allocation mid-IRQ).
+#[cfg(dev_ether)]
+const MAX_TX_SLOTS: usize = (virtio::MAX_QSIZE / 2) as usize;
+
+/// Bounded used-ring retire per queue per invocation (T-07-13): at most
+/// qsize/2 chains are outstanding, so a quiet queue always drains
+/// inside the cap; under a storm the completions arriving mid-drain
+/// re-assert the level line after EOI, so the leftover is picked up by
+/// the next invocation — a wedge manifests as a gate timeout, never
+/// silence.
+#[cfg(dev_ether)]
+const DRAIN_CAP: u32 = virtio::MAX_QSIZE as u32;
+
+/// The published device state (rings, ISR/notify regions, buffer pages,
+/// counters).  Written once at bind; the IRQ handler is its only writer
+/// thereafter — single CPU with the whole kernel booting IRQ-masked
+/// until sti, and the netgate/tx_post callers run from boot context
+/// post-sti where an interrupt CAN interleave... which is exactly why
+/// the state's two writer classes stay safe: the IRQ handler retires
+/// rings and bumps counters while tx_post only touches the TX ring's
+/// avail side through slot ownership (posted flags) that the handler
+/// clears under the same single-CPU invariant — mutual exclusion in
+/// TIME, no lock (the aarch64 VirtioNetState contract, whose syscall
+/// masking becomes the idle-loop shape here until exec arrives).
+#[cfg(dev_ether)]
+struct VirtioNetState {
+    /// The ISR byte's identity address (the isr cap's BAR window) — the
+    /// handler's FIRST read (read-to-ack, §4.1.4.5).
+    isr: u64,
+    /// The device-config region's identity address: the MAC at offset 0,
+    /// the link status le16 at offset 6 (§5.1.4).
+    devcfg: u64,
+    /// The notify window.
+    notify: VolatileMem,
+    rx: Ring<VolatileMem>,
+    tx: Ring<VolatileMem>,
+    rx_notify_off: usize,
+    /// TX's notify offset — the netgate/tx_post consumers use it; the
+    /// retire half never notifies.
+    tx_notify_off: usize,
+    /// Slot → its RX buffer page's physical address (one page per chain;
+    /// PA doubles as VA under the identity map).
+    rx_buf_pa: [u64; MAX_RX_SLOTS],
+    /// The free stack of RX buffer pages (popped by replenish, pushed by
+    /// retire).  Ring/buffer pages are exclusively driver-owned.
+    rx_free: [u64; MAX_RX_SLOTS],
+    rx_free_len: usize,
+    /// Slot → its TX frame page's physical address (one page per chain,
+    /// bound at bring-up; the slot's posted flag IS the page's in-use
+    /// flag).
+    tx_buf_pa: [u64; MAX_TX_SLOTS],
+    counters: virtio::VirtioNetCounters,
+    /// One-time latch for the config-change print (the one-time-print
+    /// IRQ-context carve-out; slirp's link never actually changes).
+    link_reported: bool,
+    /// Device-fault count (T-07-12 surfaces) — the first is printed.
+    faults: u32,
+}
+
+/// The published state cell: written once at bind (boot context, IF=0),
+/// read lock-free from IRQ context thereafter.
+#[cfg(dev_ether)]
+static VIRTIO_NET: SyncUnsafeCell<Option<VirtioNetState>> = SyncUnsafeCell::new(None);
+
+// ---------------------------------------------------------------------------
+// The seams.  x86_64 runs on l.S's identity map of the first 4 GiB
+// (PA==VA), so every "mapping" is an address inside the window that
+// new()/discover_and_print already bounds-checked — the aarch64
+// VirtRange plumbing collapses to raw addresses and the volatile floor.
+// ---------------------------------------------------------------------------
+
+/// Width-matched identity-window MMIO reads/writes (the lapic.rs family,
+/// pci.rs edition).
+#[cfg(dev_ether)]
+fn mmio_read8(addr: u64) -> u8 {
+    debug_assert!(addr < BOOT_IDENTITY_LIMIT);
+    // SAFETY: callers pass BAR-derived addresses bounds-checked against
+    // the BAR extent inside the identity window; volatile is the MMIO
+    // floor.
+    unsafe { read_volatile(addr as usize as *const u8) }
+}
+
+#[cfg(dev_ether)]
+fn mmio_read32(addr: u64) -> u32 {
+    debug_assert!(addr + 4 <= BOOT_IDENTITY_LIMIT);
+    // SAFETY: as mmio_read8; width-matched.
+    unsafe { read_volatile(addr as usize as *const u32) }
+}
+
+#[cfg(dev_ether)]
+fn mmio_write8(addr: u64, v: u8) {
+    debug_assert!(addr < BOOT_IDENTITY_LIMIT);
+    // SAFETY: as mmio_read8; the volatile write is the MMIO floor.
+    unsafe { write_volatile(addr as usize as *mut u8, v) }
+}
+
+#[cfg(dev_ether)]
+fn mmio_write16(addr: u64, v: u16) {
+    debug_assert!(addr + 2 <= BOOT_IDENTITY_LIMIT);
+    // SAFETY: as mmio_read8; width-matched.
+    unsafe { write_volatile(addr as usize as *mut u16, v) }
+}
+
+#[cfg(dev_ether)]
+fn mmio_write32(addr: u64, v: u32) {
+    debug_assert!(addr + 4 <= BOOT_IDENTITY_LIMIT);
+    // SAFETY: as mmio_read8; width-matched.
+    unsafe { write_volatile(addr as usize as *mut u32, v) }
+}
+
+/// ECAM config-space writes (BAR sizing/assignment, PCI_COMMAND) — the
+/// write complements of the ecam_read* family.
+#[cfg(dev_ether)]
+fn ecam_write32(base: u64, bus: u8, dev: u8, fun: u8, off: u8, v: u32) {
+    let addr = ecam_addr(base, bus, dev, fun, off);
+    debug_assert!(addr + 4 <= BOOT_IDENTITY_LIMIT);
+    // SAFETY: as ecam_read32 — bus inside the MCFG range, window inside
+    // the boot identity map (both checked in discover_and_print).
+    unsafe { write_volatile(addr as usize as *mut u32, v) }
+}
+
+#[cfg(dev_ether)]
+fn ecam_write16(base: u64, bus: u8, dev: u8, fun: u8, off: u8, v: u16) {
+    let addr = ecam_addr(base, bus, dev, fun, off);
+    debug_assert!(addr + 2 <= BOOT_IDENTITY_LIMIT);
+    // SAFETY: as ecam_write32; width-matched to the COMMAND field.
+    unsafe { write_volatile(addr as usize as *mut u16, v) }
+}
+
+/// The PciCfg seam over the device's ECAM config page (the aarch64
+/// EcamCfg re-keyed: the function's 4 KiB config space at the ecam
+/// address arithmetic, byte-granular).
+#[cfg(dev_ether)]
+struct EcamDev {
+    base: u64,
+    bus: u8,
+    dev: u8,
+    fun: u8,
+}
+
+#[cfg(dev_ether)]
+impl PciCfg for EcamDev {
+    fn len(&self) -> usize {
+        4096
+    }
+    fn read_u8(&self, off: usize) -> u8 {
+        ecam_read8(self.base, self.bus, self.dev, self.fun, off as u8)
+    }
+    fn read_u32(&self, off: usize) -> u32 {
+        ecam_read32(self.base, self.bus, self.dev, self.fun, off as u8)
+    }
+}
+
+/// The CommonCfg seam over the assigned BAR's identity window — the
+/// §4.1.3.1 width-matched access discipline (64-bit fields as two
+/// 32-bit halves live inside port::virtio).
+#[cfg(dev_ether)]
+struct Regs {
+    base: u64,
+}
+
+#[cfg(dev_ether)]
+impl CommonCfg for Regs {
+    fn read8(&self, off: usize) -> u8 {
+        mmio_read8(self.base + off as u64)
+    }
+    fn read16(&self, off: usize) -> u16 {
+        mmio_read16(self.base + off as u64)
+    }
+    fn read32(&self, off: usize) -> u32 {
+        mmio_read32(self.base + off as u64)
+    }
+    fn write8(&self, off: usize, v: u8) {
+        mmio_write8(self.base + off as u64, v)
+    }
+    fn write16(&self, off: usize, v: u16) {
+        mmio_write16(self.base + off as u64, v)
+    }
+    fn write32(&self, off: usize, v: u32) {
+        mmio_write32(self.base + off as u64, v)
+    }
+}
+
+/// The RingMem seam over an identity-mapped page — the Normal ring pages
+/// (pagealloc PA==VA) or the BAR's notify window.  fence() KEEPS the
+/// trait's default: the Pitfall-6 verdict — core's fences lower to
+/// compiler-only barriers on x86 TSO, correct because EVENT_IDX is never
+/// negotiated and the notify-skip decision never rides the sandwich's
+/// store→load adjacency (see the module header; the objdump check at
+/// Task 2's verify records the lowering — no mfence at the notify site).
+#[cfg(dev_ether)]
+struct VolatileMem {
+    base: usize,
+}
+
+#[cfg(dev_ether)]
+impl RingMem for VolatileMem {
+    fn read_u16(&self, off: usize) -> u16 {
+        let addr = self.base + off;
+        debug_assert!(addr + 2 <= BOOT_IDENTITY_LIMIT as usize);
+        // SAFETY: ring pages are pagealloc pages (PA==VA inside the
+        // identity map) or the bounds-checked notify window; volatile is
+        // the DMA-memory floor.
+        unsafe { read_volatile(addr as *const u16) }
+    }
+    fn read_u32(&self, off: usize) -> u32 {
+        let addr = self.base + off;
+        debug_assert!(addr + 4 <= BOOT_IDENTITY_LIMIT as usize);
+        // SAFETY: as read_u16; width-matched.
+        unsafe { read_volatile(addr as *const u32) }
+    }
+    fn read_u64(&self, off: usize) -> u64 {
+        let addr = self.base + off;
+        debug_assert!(addr as u64 + 8 <= BOOT_IDENTITY_LIMIT);
+        // SAFETY: as read_u16; width-matched.
+        unsafe { read_volatile(addr as *const u64) }
+    }
+    fn write_u16(&self, off: usize, v: u16) {
+        let addr = self.base + off;
+        debug_assert!(addr + 2 <= BOOT_IDENTITY_LIMIT as usize);
+        // SAFETY: as read_u16; the volatile write is the DMA floor.
+        unsafe { write_volatile(addr as *mut u16, v) }
+    }
+    fn write_u32(&self, off: usize, v: u32) {
+        let addr = self.base + off;
+        debug_assert!(addr + 4 <= BOOT_IDENTITY_LIMIT as usize);
+        // SAFETY: as read_u16; width-matched.
+        unsafe { write_volatile(addr as *mut u32, v) }
+    }
+    fn write_u64(&self, off: usize, v: u64) {
+        let addr = self.base + off;
+        debug_assert!(addr as u64 + 8 <= BOOT_IDENTITY_LIMIT);
+        // SAFETY: as read_u16; width-matched.
+        unsafe { write_volatile(addr as *mut u64, v) }
+    }
+}
+
+/// One zeroed 4 KiB pagealloc page — the identity-map shape of the
+/// aarch64 alloc_ring_page: no vm mapping needed, the boot PML4s already
+/// cover the page (PA doubles as VA).  Returns the physical address.
+#[cfg(dev_ether)]
+fn alloc_ring_page() -> port::Result<u64> {
+    let pa = crate::pagealloc::allocate_physpage().map_err(|_| "virtio: pagealloc exhausted")?;
+    let va = pa.addr() as usize;
+    // SAFETY: the page is freshly allocated (exclusively ours) inside
+    // the identity-mapped first 4 GiB; the zero fill writes exactly the
+    // one page (T-07-08 hygiene: no stale data in DMA buffers).
+    unsafe { core::ptr::write_bytes(va as *mut u8, 0, 4096) };
+    Ok(pa.addr())
+}
+
+/// The q35 MMIO window for BAR assignment, derived from live config
+/// (never a constant): [ECAM-window end, IOAPIC base) — both endpoints
+/// from parsed firmware tables (MCFG's base+bus span, the MADT IOAPIC
+/// entry).  This is the aarch64 DTB `ranges` window's x86 analog.
+#[cfg(any(test, dev_ether))]
+fn mmio_window(mcfg: &McfgEntry, ioapic_base: u64) -> Option<(u64, u64)> {
+    let span = ((mcfg.end_bus - mcfg.start_bus) as u64 + 1) << 20;
+    let start = mcfg.base.checked_add(span)?;
+    if start >= ioapic_base {
+        return None;
+    }
+    Some((start, ioapic_base))
+}
+
+/// Decide the BAR's assignment: a firmware-assigned (nonzero) address
+/// inside the identity map is KEPT — SeaBIOS already ran PCI resource
+/// allocation on this channel, and rewriting its choice could collide
+/// with another device's; an unassigned BAR takes the derived window's
+/// 4 KiB-aligned base.  Returns (address, firmware_assigned); None when
+/// neither fits (a loud bind failure, never a silent dead zone).
+#[cfg(any(test, dev_ether))]
+fn bar_assignment(orig: u64, size: u64, win: (u64, u64)) -> Option<(u64, bool)> {
+    let fw = orig & !0xF;
+    if fw != 0 && fw.checked_add(size).is_some_and(|end| end <= BOOT_IDENTITY_LIMIT) {
+        return Some((fw, true));
+    }
+    let base = win.0 & !0xFFF;
+    if base != 0 && base.checked_add(size).is_some_and(|end| end <= win.1) {
+        return Some((base, false));
+    }
+    None
+}
+
+/// Size a 64-bit BAR: write all-ones to both halves, read the mask back,
+/// restore the original contents (T-07-09: the sizing write is always
+/// restored).  Returns (size_bytes, original_value).
+#[cfg(dev_ether)]
+fn size_bar64(base: u64, bus: u8, dev: u8, fun: u8, bar_off: u8) -> (u64, u64) {
+    let orig_lo = ecam_read32(base, bus, dev, fun, bar_off);
+    let orig_hi = ecam_read32(base, bus, dev, fun, bar_off + 4);
+    ecam_write32(base, bus, dev, fun, bar_off, !0);
+    ecam_write32(base, bus, dev, fun, bar_off + 4, !0);
+    let mask_lo = ecam_read32(base, bus, dev, fun, bar_off);
+    let mask_hi = ecam_read32(base, bus, dev, fun, bar_off + 4);
+    ecam_write32(base, bus, dev, fun, bar_off, orig_lo);
+    ecam_write32(base, bus, dev, fun, bar_off + 4, orig_hi);
+    let mask = (u64::from(mask_hi) << 32) | u64::from(mask_lo);
+    let orig = (u64::from(orig_hi) << 32) | u64::from(orig_lo);
+    let size = (!(mask & !0xF)).wrapping_add(1);
+    (size, orig)
+}
+
+/// One queue's bring-up (§4.1.5.1.3 order): select → read queue_size
+/// (accepted as-offered, never downsized; the one-page-per-part bound is
+/// checked honestly) → allocate + zero the ring pages → program the
+/// three area physical addresses → read the notify offset → queue_enable
+/// LAST.
+#[cfg(dev_ether)]
+fn bring_up_queue(
+    common: &Regs,
+    queue: u16,
+    dir: virtio::Dir,
+    notify_mult: u32,
+) -> port::Result<(Ring<VolatileMem>, usize)> {
+    let qsize = virtio::queue_size(common, queue);
+    if qsize == 0 {
+        return Err("virtio: queue absent (queue_size 0)");
+    }
+    // One 4 KiB page per part: desc 16×qsize, avail 6+2×qsize, used
+    // 6+8×qsize (qsize ≤ MAX_QSIZE=256 keeps each within a page — desc
+    // fills it exactly at 256).
+    let desc_bytes = 16 * qsize as usize;
+    let avail_bytes = 6 + 2 * qsize as usize;
+    let used_bytes = 6 + 8 * qsize as usize;
+    if desc_bytes > 4096 || avail_bytes > 4096 || used_bytes > 4096 {
+        return Err("virtio: queue size spills a page (unsupported)");
+    }
+    let desc_pa = alloc_ring_page()?;
+    let avail_pa = alloc_ring_page()?;
+    let used_pa = alloc_ring_page()?;
+    let hdr_pa = alloc_ring_page()?;
+    // The RX used-len bound covers the 12-byte header + one payload page.
+    let rx_cap = virtio::VIRTIO_NET_HDR_LEN as u32 + RX_PAYLOAD_CAP;
+    let ring = Ring::new(
+        VolatileMem { base: desc_pa as usize },
+        VolatileMem { base: avail_pa as usize },
+        VolatileMem { base: used_pa as usize },
+        qsize,
+        dir,
+        hdr_pa,
+        rx_cap,
+    )?;
+    virtio::set_queue_addresses(common, queue, desc_pa, avail_pa, used_pa);
+    let notify_off = usize::from(virtio::queue_notify_off(common, queue)) * notify_mult as usize;
+    virtio::enable_queue(common, queue);
+    Ok((ring, notify_off))
+}
+
+/// Bind the discovered virtio-net NIC.  Called from main9's pre-sti
+/// window under cfg(dev_ether) — after ioapic::init, strictly before
+/// sti, so the whole ring setup runs with IRQs still masked and races
+/// nothing.  Tolerant-kernel posture: every failure is a loud named
+/// print and a skipped bind — the boot continues (the gates are what
+/// assert presence).  Zero arguments: everything consumed is published
+/// (the discovery cell, the ACPI facts cell).
+#[cfg(dev_ether)]
+pub fn bind_virtio_net() {
+    if let Err(msg) = bind_inner() {
+        println!("virtio-net: bind failed: {msg}");
+    }
+}
+
+#[cfg(dev_ether)]
+fn bind_inner() -> port::Result<()> {
+    // SAFETY: the discovery cell's publish-once discipline (written once
+    // by discover_and_print, earlier in this same boot context).
+    let discovery = unsafe { &*DISCOVERY.get() };
+    let Some(disc) = discovery.as_ref() else {
+        println!("virtio-net: no discovery — bind skipped");
+        return Ok(());
+    };
+    let Some(nic) = disc.nic else {
+        println!("virtio-net: no NIC in discovery — bind skipped");
+        return Ok(());
+    };
+    let Some(acpi) = super::acpi_facts() else {
+        return Err("no acpi facts for the bind");
+    };
+    let ioapic_base = acpi
+        .madt
+        .as_ref()
+        .and_then(|m| m.ioapic)
+        .map(|io| io.addr)
+        .ok_or("no ioapic base for the mmio window")?;
+
+    // The capabilities NAME the BAR they ride (data, never a constant
+    // BAR index — the aarch64 code asserted bar==4; q35 takes whatever
+    // bar the caps say, requiring only that all four agree).
+    let ecam_cfg = EcamDev { base: nic.ecam_base, bus: nic.bus, dev: nic.dev, fun: nic.fun };
+    let caps = virtio::Caps::parse(&ecam_cfg)?;
+    let bar = caps.common.bar;
+    for t in [caps.common, caps.notify, caps.isr] {
+        if t.bar != bar {
+            return Err("virtio: capabilities split across bars (unsupported)");
+        }
+    }
+    let device = caps.device.ok_or("virtio: no device config capability")?;
+    if device.bar != bar {
+        return Err("virtio: device capability outside the caps' bar");
+    }
+    let bar_off = PCI_OFF_BAR0 + 4 * bar;
+
+    // BAR sizing (all-ones mask/restore, T-07-09), then assignment: keep
+    // SeaBIOS's assignment when it made one, else the derived window.
+    let (bar_size, orig) = size_bar64(nic.ecam_base, nic.bus, nic.dev, nic.fun, bar_off);
+    if bar_size == 0 || bar_size > (16 << 20) {
+        return Err("bar size implausible (device fault)");
+    }
+    let win = mmio_window(&disc.mcfg, ioapic_base)
+        .ok_or("no q35 mmio window between the ecam end and the ioapic")?;
+    let Some((bar_pa, fw_assigned)) = bar_assignment(orig, bar_size, win) else {
+        return Err("bar assignment outside the mmio window");
+    };
+    if !fw_assigned {
+        ecam_write32(nic.ecam_base, nic.bus, nic.dev, nic.fun, bar_off, bar_pa as u32);
+        ecam_write32(nic.ecam_base, nic.bus, nic.dev, nic.fun, bar_off + 4, (bar_pa >> 32) as u32);
+    }
+    // PCI_COMMAND Memory|Master explicit (qemu's modern path never
+    // auto-enables bus-master), with the readback check.
+    let cmd = ecam_read16(nic.ecam_base, nic.bus, nic.dev, nic.fun, PCI_OFF_COMMAND);
+    ecam_write16(
+        nic.ecam_base,
+        nic.bus,
+        nic.dev,
+        nic.fun,
+        PCI_OFF_COMMAND,
+        cmd | PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER,
+    );
+    if ecam_read16(nic.ecam_base, nic.bus, nic.dev, nic.fun, PCI_OFF_COMMAND)
+        & (PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER)
+        != (PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER)
+    {
+        return Err("pci command readback mismatch");
+    }
+    let rb = (u64::from(ecam_read32(nic.ecam_base, nic.bus, nic.dev, nic.fun, bar_off + 4)) << 32)
+        | (u64::from(ecam_read32(nic.ecam_base, nic.bus, nic.dev, nic.fun, bar_off)) & !0xF);
+    println!(
+        "pci: bar{bar} pa {bar_pa:#x} size {bar_size:#x}{} readback {rb:#x}",
+        if fw_assigned { " (firmware)" } else { " (kernel-assigned)" }
+    );
+    if rb != bar_pa {
+        return Err("bar readback mismatch");
+    }
+    // Each cap's (bar, offset, length) bounds-checked against the BAR
+    // size BEFORE the region is trusted (T-07-11 — a lying cap aborts
+    // the bind loudly).
+    for t in [caps.common, caps.notify, caps.isr, device] {
+        if u64::from(t.offset) + u64::from(t.length) > bar_size {
+            return Err("virtio: capability extent beyond the bar (device fault)");
+        }
+    }
+    if device.length < 6 {
+        return Err("virtio: device config capability too small for a MAC");
+    }
+    println!(
+        "pci: caps common@{:#x}+{:#x} notify@{:#x} isr@{:#x} device@{:#x} mult {}",
+        caps.common.offset,
+        caps.common.length,
+        caps.notify.offset,
+        caps.isr.offset,
+        device.offset,
+        caps.notify_off_multiplier
+    );
+
+    let common = Regs { base: bar_pa + u64::from(caps.common.offset) };
+    let isr_pa = bar_pa + u64::from(caps.isr.offset);
+    let devcfg_pa = bar_pa + u64::from(device.offset);
+    let notify = VolatileMem { base: (bar_pa + u64::from(caps.notify.offset)) as usize };
+
+    // The §3.1.1 machine: reset+read-back wait, ACKNOWLEDGE, DRIVER,
+    // two-window feature read, exactly MAC|STATUS|VERSION_1 accepted
+    // (the locked D-03 mask), FEATURES_OK with the re-read — a rejecting
+    // device is left FAILED and the Err propagates to the loud bind-fail
+    // print (a legacy/transitional fallback path is forbidden).
+    let negotiated = virtio::negotiate(&common)?;
+    // The audit pair: offered AND negotiated (the device_feature
+    // registers are RO — the post-negotiation re-read returns the
+    // offered windows).
+    common.write32(virtio::CFG_DEVICE_FEATURE_SELECT, 0);
+    let offered_lo = common.read32(virtio::CFG_DEVICE_FEATURE);
+    common.write32(virtio::CFG_DEVICE_FEATURE_SELECT, 1);
+    let offered_hi = common.read32(virtio::CFG_DEVICE_FEATURE);
+    let offered = (u64::from(offered_hi) << 32) | u64::from(offered_lo);
+    let neg = (u64::from(negotiated.hi) << 32) | u64::from(negotiated.lo);
+    println!("virtio-net: features offered {offered:#x} negotiated {neg:#x}");
+    if !negotiated.has_mac() {
+        return Err("virtio: MAC feature not negotiated");
+    }
+
+    // The device config's MAC (§5.1.4: 6 bytes at the DEVICE cap's
+    // bar+offset+0, valid under the negotiated MAC feature).
+    let mut mac = [0u8; 6];
+    for (i, b) in mac.iter_mut().enumerate() {
+        *b = mmio_read8(devcfg_pa + i as u64);
+    }
+
+    // Queues: 0 = RX, 1 = TX (§5.1.2; queue 2 needs CTRL_VQ, never
+    // negotiated).  queue_enable is written LAST per queue; DRIVER_OK
+    // comes after both, before any notify.
+    let (mut rx, rx_notify_off) = bring_up_queue(
+        &common,
+        virtio::VIRTIO_NET_QUEUE_RX,
+        virtio::Dir::Rx,
+        caps.notify_off_multiplier,
+    )?;
+    let (tx, tx_notify_off) = bring_up_queue(
+        &common,
+        virtio::VIRTIO_NET_QUEUE_TX,
+        virtio::Dir::Tx,
+        caps.notify_off_multiplier,
+    )?;
+    virtio::set_driver_ok(&common);
+
+    // RX pre-post: every chain gets one zeroed 4 KiB buffer page, then
+    // ONE notify — the first notify, after DRIVER_OK (§3.1.1).
+    let nslots = (rx.qsize() / 2) as usize;
+    let mut rx_free = [0u64; MAX_RX_SLOTS];
+    let mut rx_free_len = 0usize;
+    for _ in 0..nslots {
+        let pa = alloc_ring_page()?;
+        rx_free[rx_free_len] = pa;
+        rx_free_len += 1;
+    }
+    let mut rx_buf_pa = [0u64; MAX_RX_SLOTS];
+    let outcome = rx.rx_replenish(
+        |slot| {
+            if rx_free_len == 0 {
+                return None;
+            }
+            rx_free_len -= 1;
+            let pa = rx_free[rx_free_len];
+            rx_buf_pa[slot as usize] = pa;
+            Some((pa, RX_PAYLOAD_CAP))
+        },
+        &notify,
+        rx_notify_off,
+        virtio::VIRTIO_NET_QUEUE_RX,
+    )?;
+    if outcome.offered as usize != nslots {
+        return Err("virtio: rx pre-post short");
+    }
+    println!("virtio-net: rx pre-posted {} buffers qsize {}", outcome.offered, rx.qsize());
+
+    // TX frame pages: one zeroed page per slot, bound for the ring's
+    // lifetime (the write path copies a frame into the slot's page and
+    // posts; the page is reusable when the slot's used entry retires).
+    let ntx = (tx.qsize() / 2) as usize;
+    let mut tx_buf_pa = [0u64; MAX_TX_SLOTS];
+    for slot in tx_buf_pa.iter_mut().take(ntx) {
+        *slot = alloc_ring_page()?;
+    }
+
+    let state = VirtioNetState {
+        isr: isr_pa,
+        devcfg: devcfg_pa,
+        notify,
+        rx,
+        tx,
+        rx_notify_off,
+        tx_notify_off,
+        rx_buf_pa,
+        rx_free,
+        rx_free_len,
+        tx_buf_pa,
+        counters: virtio::VirtioNetCounters::default(),
+        link_reported: false,
+        faults: 0,
+    };
+    // SAFETY: publish-once — these writes run at bind (boot context,
+    // IF=0, before ioapic::enable and before sti), so no IRQ reader can
+    // observe a torn write; the cells are never written again (the gic
+    // registry discipline).
+    unsafe {
+        *VIRTIO_NET.get() = Some(state);
+        *VIRTIO_VECTOR.get() = Some(VIRTIO_NET_VECTOR);
+    }
+    // Publish devether's driver seam: #l attaches resolve from here on.
+    // Before the IOAPIC arm so no interrupt can precede it.
+    port::devether::publish_driver(port::devether::EtherDriverOps {
+        mac,
+        tx_post: virtnet_tx_post,
+        ifstats: virtnet_ifstats,
+    });
+    super::ioapic::enable(nic.gsi, VIRTIO_NET_VECTOR, true);
+    println!(
+        "#l0: virtio: 1000Mbps: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+    );
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// The driver-ops surface (the netgate's and devether's syscall/boot-
+// context half) + the IRQ handler.  Registered via
+// port::devether::publish_driver at bind.
+// ---------------------------------------------------------------------------
+
+/// The TX-post op: copy the frame into the next slot's page and run the
+/// §2.7.13 publication sequence.  Ok(false) = the ring is full (the
+/// caller waits for a retire — the netgate's bounded backpressure shape;
+/// a stalled retire wedges the writer and the gate's deadline catches
+/// it, never a silent drop).
+#[cfg(dev_ether)]
+fn virtnet_tx_post(frame: &[u8]) -> port::Result<bool> {
+    // SAFETY: boot/syscall context with the single-CPU invariant — the
+    // state's writers are mutually exclusive in TIME (see
+    // VirtioNetState's contract); the cell was published once at bind.
+    let state = unsafe { &mut *VIRTIO_NET.get() };
+    let Some(state) = state.as_mut() else { return Err("devether: virtio-net not bound") };
+    let Some(slot) = state.tx.tx_next_slot() else { return Ok(false) };
+    let pa = state.tx_buf_pa[slot as usize];
+    // SAFETY: the page was allocated (identity-mapped, PA==VA) at bind
+    // and stays driver-owned; frame.len() ≤ 1514 < 4096 (the write path
+    // bounds-checked it); the slot is free (tx_next_slot), so the page
+    // carries no live frame.
+    unsafe {
+        core::ptr::copy_nonoverlapping(frame.as_ptr(), pa as usize as *mut u8, frame.len())
+    };
+    let posted = state.tx.tx_post(
+        pa,
+        frame.len() as u32,
+        &state.notify,
+        state.tx_notify_off,
+        virtio::VIRTIO_NET_QUEUE_TX,
+    )?;
+    if posted.notified {
+        state.counters.nnote[virtio::VIRTIO_NET_QUEUE_TX as usize] += 1;
+    }
+    Ok(true)
+}
+
+/// The ifstats op: the per-queue accounting snapshot (avail, used,
+/// lastused, nintr, nnote) for vq0 (RX) and vq1 (TX) — ethervirtio.c's
+/// ifstat fields, the X64-02 reconciliation surface.
+#[cfg(dev_ether)]
+fn virtnet_ifstats() -> [(u16, u16, u16, u32, u32); 2] {
+    // SAFETY: as virtnet_tx_post's contract; the used-idx reads are
+    // volatile telemetry, not content trust.
+    let state = unsafe { &*VIRTIO_NET.get() };
+    let Some(state) = state.as_ref() else { return [(0, 0, 0, 0, 0); 2] };
+    [
+        (
+            state.rx.avail_idx(),
+            state.rx.used_idx(),
+            state.rx.last_used(),
+            state.counters.nintr[virtio::VIRTIO_NET_QUEUE_RX as usize],
+            state.counters.nnote[virtio::VIRTIO_NET_QUEUE_RX as usize],
+        ),
+        (
+            state.tx.avail_idx(),
+            state.tx.used_idx(),
+            state.tx.last_used(),
+            state.counters.nintr[virtio::VIRTIO_NET_QUEUE_TX as usize],
+            state.counters.nnote[virtio::VIRTIO_NET_QUEUE_TX as usize],
+        ),
+    ]
+}
+
+/// The trap.rs dispatch entry for the published vector.  IRQ-context
+/// discipline (the aarch64 header, re-keyed for the IOAPIC/LAPIC chain):
+///
+/// - ISR byte read FIRST (§4.1.4.5): the read resets the ISR to 0 and
+///   deasserts the level-triggered line at the source (qemu:
+///   qatomic_xchg(&isr,0) + pci_irq_deassert) — the dispatcher's LAPIC
+///   EOI then completes the handshake.  An EOI written before this read
+///   re-delivers the still-asserted line immediately: the interrupt
+///   storm class Pitfall 5 exists to catch (nintr racing past the frame
+///   counts is its signature).
+/// - Bounded drain with re-check: DRAIN_CAP entries per queue per
+///   invocation, the ring's used-idx re-read each iteration (§2.7.14's
+///   re-check shape); mid-drain completions re-assert the line after
+///   EOI, so a storm spreads across invocations instead of pinning the
+///   handler (T-07-13).
+/// - No locks, no console on the hot path: the Console mcslock may be
+///   held by the interrupted context — taking it here would
+///   self-deadlock.  The one-time prints (first device fault, first
+///   config change) are the explicit carve-out; slirp's link never
+///   changes after DRIVER_OK, so the link line fires exactly once per
+///   boot.
+/// - Publish-once device state: written once at bind (before
+///   ioapic::enable and sti); the handler and the boot-context driver
+///   ops are mutually exclusive in TIME on this single-CPU kernel.
+/// - A NIC interrupt arriving with no bind cannot match the dispatch
+///   guard (the vector cell is empty) and prints `unhandled IRQ` — the
+///   negative scan trips on that line, so a bind-ordering bug reds the
+///   gate loudly.
+#[cfg(dev_ether)]
+pub fn virtio_net_irq() {
+    // SAFETY: the state was published once at bind (before
+    // ioapic::enable and sti); the IDT entry that lands here masks
+    // further interrupts, so this is the only writer — the publish-once
+    // discipline.
+    let state = unsafe { &mut *VIRTIO_NET.get() };
+    let Some(state) = state.as_mut() else { return };
+
+    // FIRST device touch: the ISR byte (read-to-ack).
+    let isr = mmio_read8(state.isr);
+
+    if isr & virtio::VIRTIO_ISR_QUEUE != 0 {
+        let mut retired = [0u32; 2];
+        for _ in 0..DRAIN_CAP {
+            match state.tx.next_used() {
+                None => break,
+                Some(Ok(_used)) => {
+                    // The slot freed itself inside next_used — its frame
+                    // page is bound to the slot and reusable from now.
+                    retired[virtio::VIRTIO_NET_QUEUE_TX as usize] += 1;
+                }
+                Some(Err(msg)) => {
+                    state.faults += 1;
+                    if state.faults == 1 {
+                        println!("virtio-net: device fault: {msg}");
+                    }
+                    break;
+                }
+            }
+        }
+        // A TX retire freed slots — wake any writer blocked on a full
+        // ring (the netgate's bounded wait).  The wake rides the
+        // port-side entry (never a port lock from IRQ context).
+        if retired[virtio::VIRTIO_NET_QUEUE_TX as usize] > 0 {
+            port::devether::tx_retired();
+        }
+        for _ in 0..DRAIN_CAP {
+            match state.rx.next_used() {
+                None => break,
+                Some(Ok(used)) => {
+                    retired[virtio::VIRTIO_NET_QUEUE_RX as usize] += 1;
+                    // Demux the frame (devether's etheriq): the 12-byte
+                    // header is not "stripped" from this buffer — it was
+                    // never in it: the device wrote it into the shared
+                    // header-page descriptor (§5.1.6.3.2) and the frame
+                    // occupies the payload page from offset 0; only
+                    // used.len includes the 12 bytes.  The frame lands in
+                    // every matching conversation's queue, blocked
+                    // readers wake; then the page returns to the free
+                    // stack (the ingress copied the bytes out).
+                    let frame_len = virtio::virtio_net_frame_len(used.len) as usize;
+                    let pa = state.rx_buf_pa[used.slot as usize];
+                    // SAFETY: the page is identity-mapped (PA==VA),
+                    // driver-owned, and the device finished with it (the
+                    // acquire fence inside next_used orders the read);
+                    // the base is the page's offset 0 and frame_len
+                    // ≤ 4096 (next_used's used-len validation:
+                    // 12 ≤ len ≤ 12+4096), so the slice stays within the
+                    // page by construction.
+                    let frame = unsafe {
+                        core::slice::from_raw_parts(
+                            (pa as usize + virtio::virtio_net_frame_offset()) as *const u8,
+                            frame_len,
+                        )
+                    };
+                    port::devether::rx_ingress(frame);
+                    if state.rx_free_len < MAX_RX_SLOTS {
+                        state.rx_free[state.rx_free_len] = pa;
+                        state.rx_free_len += 1;
+                    }
+                }
+                Some(Err(msg)) => {
+                    state.faults += 1;
+                    if state.faults == 1 {
+                        println!("virtio-net: device fault: {msg}");
+                    }
+                    break;
+                }
+            }
+        }
+        // nintr: one per queue with observed work (ethervirtio.c's shape).
+        if retired[virtio::VIRTIO_NET_QUEUE_RX as usize] > 0 {
+            state.counters.nintr[virtio::VIRTIO_NET_QUEUE_RX as usize] += 1;
+            // The devip seam's RX wake (dev_ip configs only): the waiters
+            // drive the stack from their syscall context — a WAKE, never
+            // a poll.  x86_64 never sets dev_ip this phase; the cfg keeps
+            // the port-side surface identical across arches.
+            #[cfg(dev_ip)]
+            port::devip::note_rx_pending();
+        }
+        if retired[virtio::VIRTIO_NET_QUEUE_TX as usize] > 0 {
+            state.counters.nintr[virtio::VIRTIO_NET_QUEUE_TX as usize] += 1;
+        }
+        // Replenish RX (reposting the retired pages), then ONE notify.
+        match state.rx.rx_replenish(
+            |slot| {
+                if state.rx_free_len == 0 {
+                    return None;
+                }
+                state.rx_free_len -= 1;
+                let pa = state.rx_free[state.rx_free_len];
+                state.rx_buf_pa[slot as usize] = pa;
+                Some((pa, RX_PAYLOAD_CAP))
+            },
+            &state.notify,
+            state.rx_notify_off,
+            virtio::VIRTIO_NET_QUEUE_RX,
+        ) {
+            Ok(r) => {
+                if r.notified {
+                    state.counters.nnote[virtio::VIRTIO_NET_QUEUE_RX as usize] += 1;
+                }
+            }
+            Err(_) => {} // the direction guard — unreachable for an RX ring
+        }
+    }
+
+    if isr & virtio::VIRTIO_ISR_CONFIG != 0 && !state.link_reported {
+        // One-time print (the plan's IRQ-context carve-out): STATUS bit 0
+        // is LINK_UP (§5.1.4).  qemu/slirp's link never actually changes
+        // after DRIVER_OK, so this line exists for the audit trail, not
+        // the hot path.
+        state.link_reported = true;
+        let status = mmio_read16(state.devcfg + 6);
+        println!("virtio-net: link {}", if status & 1 != 0 { "up" } else { "down" });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -511,5 +1384,50 @@ mod tests {
     fn root_route_clamps_bogus_pins() {
         assert_eq!(root_route(2, 0, &[]), root_route(2, 1, &[]));
         assert_eq!(root_route(2, 9, &[]), root_route(2, 4, &[]));
+    }
+
+    // The q35 MMIO window, derived from live config only: the gap
+    // between the MCFG ECAM window's end and the MADT IOAPIC base —
+    // both endpoints from parsed firmware tables, never a constant
+    // (the live values: 0xb0000000 + the 256-bus 256 MiB span =
+    // 0xc0000000, up to the IOAPIC at 0xfec00000).
+    #[test]
+    fn mmio_window_spans_ecam_end_to_ioapic() {
+        let mcfg = McfgEntry { base: 0xb000_0000, seg: 0, start_bus: 0, end_bus: 255 };
+        assert_eq!(mmio_window(&mcfg, 0xFEC0_0000), Some((0xC000_0000, 0xFEC0_0000)));
+        // A moved ECAM window moves the BAR window with it — the same
+        // data-following the perturbation gate proves for discovery.
+        let moved = McfgEntry { base: 0xe000_0000, seg: 0, start_bus: 0, end_bus: 255 };
+        assert_eq!(mmio_window(&moved, 0xFEC0_0000), Some((0xF000_0000, 0xFEC0_0000)));
+        // A narrow bus range shrinks the span to its actual size.
+        let narrow = McfgEntry { base: 0xb000_0000, seg: 0, start_bus: 0, end_bus: 0 };
+        assert_eq!(mmio_window(&narrow, 0xFEC0_0000), Some((0xB010_0000, 0xFEC0_0000)));
+        // No room between the ECAM window's end and the IOAPIC: None —
+        // a loud bind failure, never a silent overlap.
+        let tight = McfgEntry { base: 0xFE00_0000, seg: 0, start_bus: 0, end_bus: 255 };
+        assert_eq!(mmio_window(&tight, 0xFEC0_0000), None);
+    }
+
+    // The BAR assignment decision: a firmware-assigned (nonzero,
+    // identity-mappable) address is kept verbatim (SeaBIOS already ran
+    // PCI resource allocation on this channel — rewriting its choice
+    // could collide with another device's); an unassigned or unmappable
+    // BAR falls back to the derived window's base; a size that fits
+    // nowhere is a loud None.
+    #[test]
+    fn bar_assignment_keeps_firmware_and_falls_back_to_the_window() {
+        let win = (0xC000_0000, 0xFEC0_0000);
+        // firmware assignments kept (the flags nibble masked off)
+        assert_eq!(bar_assignment(0xFD00_0000 | 0x4, 0x4000, win), Some((0xFD00_0000, true)));
+        assert_eq!(bar_assignment(0xC000_0000, 0x4000, win), Some((0xC000_0000, true)));
+        // unassigned (zero BAR) -> the window base, kernel-assigned
+        assert_eq!(bar_assignment(0x0, 0x4000, win), Some((0xC000_0000, false)));
+        // a firmware address outside the identity map -> the window
+        assert_eq!(
+            bar_assignment(0xFFF0_0000_0000_0000 | 0x4, 0x4000, win),
+            Some((0xC000_0000, false))
+        );
+        // a size that fits neither branch -> None (the loud bind error)
+        assert_eq!(bar_assignment(0x0, 0x1000_0000, (0xF000_0000, 0xFEC0_0000)), None);
     }
 }

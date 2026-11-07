@@ -11,7 +11,7 @@
 /// all stay OUT of the free pool (13-04 walks ACPI tables inside type-3
 /// ranges; a compiled-in RAM size or base address never appears).
 use port::bitmapalloc::BitmapPageAlloc;
-use port::mem::{PhysRange, PAGE_SIZE_4K};
+use port::mem::{PhysAddr, PhysRange, PAGE_SIZE_4K};
 use port::mcslock::{Lock, LockNode};
 use port::pagealloc::PageAllocError;
 
@@ -101,4 +101,14 @@ pub fn usage_bytes() -> (usize, usize) {
     let mut lock = PAGE_ALLOC.lock(&node);
     let page_alloc = &mut *lock;
     page_alloc.usage_bytes()
+}
+
+/// Allocate one free physical page (the aarch64 allocate_physpage shape).
+/// Note the page is NOT mapped anywhere — the identity map of the first
+/// 4 GiB (l.S's boot PML4s) already covers every page this allocator can
+/// hand out, so the returned PA doubles as its kernel VA.
+pub fn allocate_physpage() -> Result<PhysAddr, PageAllocError> {
+    let node = LockNode::new();
+    let mut lock = PAGE_ALLOC.lock(&node);
+    lock.allocate()
 }

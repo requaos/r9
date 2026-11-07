@@ -57,7 +57,7 @@ pub const REG_RTE: u8 = 0x10;
 /// presents the PIRQ lines active-high at the IOAPIC even though PCI
 /// INTx# is electrically active-low; Linux's PCI IOAPIC entries use
 /// level + active-high).
-#[allow(dead_code)] // enable() ORs it — the bind is its first caller (13-05 Task 2, next task)
+#[allow(dead_code)] // enable() ORs it — the bind is its first caller the 13-05 dev_ether bind (idle q35 leaves it unlinked)
 pub const RTE_TRIGGER_LEVEL: u32 = 1 << 15;
 /// RTE lo bit 16: the mask.  Set while the entry is configured, cleared
 /// by the final write — the unmask LAST.
@@ -84,7 +84,7 @@ struct Ioapic {
     /// valid RTE indices are 0..=nrtes.
     nrtes: u8,
     /// The MADT IntSrcOverrides, folded by override_applies.
-    #[allow(dead_code)] // read by override_applies — the bind's routing call (13-05 Task 2)
+    #[allow(dead_code)] // read by override_applies — the bind's routing call (the 13-05 dev_ether bind)
     overrides: [super::acpi::IntSrcOverride; MAX_INTSRC_OVERRIDES],
     #[allow(dead_code)] // as overrides
     noverrides: usize,
@@ -93,7 +93,7 @@ struct Ioapic {
 /// The pure ISA-source fold: an IntSrcOverride with bus 0 and the given
 /// source remaps it to its GSI; an unmatched source is identity.
 /// Split out so the host tests pin the fold without a device.
-#[allow(dead_code)] // kernel callers arrive with the bind (13-05 Task 2); tests pin it now
+#[allow(dead_code)] // kernel callers arrive with the bind (the 13-05 dev_ether bind); tests pin it now
 fn overrides_fold(overrides: &[super::acpi::IntSrcOverride], source_irq: u32) -> u32 {
     for s in overrides {
         if s.bus == 0 && u32::from(s.source) == source_irq {
@@ -106,7 +106,7 @@ fn overrides_fold(overrides: &[super::acpi::IntSrcOverride], source_irq: u32) ->
 /// The pure RTE-index arithmetic: gsi - gsib, inside the table's bounds
 /// (None is loud at the caller — a GSI the table cannot reach is a
 /// routing error, never an out-of-bounds select).
-#[allow(dead_code)] // kernel callers arrive with the bind (13-05 Task 2); tests pin it now
+#[allow(dead_code)] // kernel callers arrive with the bind (the 13-05 dev_ether bind); tests pin it now
 fn rte_index_for(gsib: u32, nrtes: u8, gsi: u32) -> Option<u8> {
     if gsi < gsib {
         return None;
@@ -123,7 +123,7 @@ fn rte_index_for(gsib: u32, nrtes: u8, gsi: u32) -> Option<u8> {
 /// destination | active-high | (level|edge) | (masked|unmasked).  The
 /// trigger mode lands in the same write as the vector, but the entry
 /// only goes live on the final UNMASKED write.
-#[allow(dead_code)] // kernel callers arrive with the bind (13-05 Task 2); tests pin it now
+#[allow(dead_code)] // kernel callers arrive with the bind (the 13-05 dev_ether bind); tests pin it now
 fn rte_lo(vector: u8, level: bool, masked: bool) -> u32 {
     let mut lo = u32::from(vector);
     if level {
@@ -179,13 +179,13 @@ impl Ioapic {
     /// to (identity when no override covers it).  The per-override
     /// provenance lines (q35: intsrc ...) are already printed and gated
     /// by 13-04's fact block.
-    #[allow(dead_code)] // the bind's ISA-source routing helper (13-05 Task 2)
+    #[allow(dead_code)] // the bind's ISA-source routing helper (the 13-05 dev_ether bind)
     pub fn override_applies(&self, source_irq: u32) -> u32 {
         let _ = self.noverrides; // the count rides the array; see fold
         overrides_fold(&self.overrides, source_irq)
     }
 
-    #[allow(dead_code)] // enable()'s table bounds (13-05 Task 2)
+    #[allow(dead_code)] // enable()'s table bounds (the 13-05 dev_ether bind)
     fn rte_index(&self, gsi: u32) -> Option<u8> {
         rte_index_for(self.gsib, self.nrtes, gsi)
     }
@@ -249,7 +249,7 @@ pub fn init() {
 /// (gicv2's trigger-before-enable discipline, and the Phase-3 rule that
 /// no interrupt may be deliverable before its handler exists — the trap
 /// dispatch arm guards on the published vector).
-#[allow(dead_code)] // the bind inside the pre-sti window is the first caller (13-05 Task 2, next task)
+#[allow(dead_code)] // the bind inside the pre-sti window is the first caller the 13-05 dev_ether bind (idle q35 leaves it unlinked)
 pub fn enable(gsi: u32, vector: u8, level: bool) {
     with(|io| {
         let Some(idx) = io.rte_index(gsi) else {
@@ -274,7 +274,7 @@ pub fn enable(gsi: u32, vector: u8, level: bool) {
     });
 }
 
-#[allow(dead_code)] // enable()'s publish-once reader (13-05 Task 2)
+#[allow(dead_code)] // enable()'s publish-once reader (the 13-05 dev_ether bind)
 fn with(f: impl FnOnce(&Ioapic)) {
     // SAFETY: IOAPIC's write-once discipline — published at init inside
     // the arming window (IF=0), read lock-free thereafter.

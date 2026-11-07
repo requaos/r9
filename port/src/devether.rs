@@ -142,9 +142,11 @@ fn driver() -> Result<EtherDriverOps> {
 }
 
 /// The published driver ops for the kernel-internal ether consumer (the
-/// devip ether adapter, 08-06): the negotiated MAC + tx_post.  Errors
+/// devip ether adapter, 08-06; the x86_64 netgate kernel-side ARP
+/// trigger, 13-05 — the OQ-1 resolution: the ONE widened seam, pub(crate)
+/// -> pub, no new port surface): the negotiated MAC + tx_post.  Errors
 /// "devether: no ether0" until the bind publishes.
-pub(crate) fn driver_ops() -> Result<EtherDriverOps> {
+pub fn driver_ops() -> Result<EtherDriverOps> {
     driver()
 }
 

@@ -17,6 +17,13 @@ static_assertions = "1.1.0"
 
 # check-cfg predeclare (the workspace Cargo.toml discipline, applied here
 # because this crate is not lint-opted-in like riscv64): platform="q35"
-# is emitted by config_q35.toml via xtask apply_platform_config.
+# is emitted by config_q35.toml via xtask apply_platform_config;
+# dev_ether joins in the same commit config_q35net.toml first emits it
+# (dev = ["ether"] — the D-01a bound step), dev_ip for the future devip
+# profile.
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(platform, values("q35"))'] }
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(platform, values("q35"))',
+    'cfg(dev_ether)',
+    'cfg(dev_ip)',
+] }

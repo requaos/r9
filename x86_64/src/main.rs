@@ -156,6 +156,16 @@ pub extern "C" fn main(mach: &mut dat::Mach, mbdata: u64) {
     // land inside this window, before sti.
     platform::q35::ioapic::init();
 
+    // The NIC bind (D-01a's bound step, cfg(dev_ether) — the aarch64
+    // main9 window shape): the whole virtio-net bring-up — BAR
+    // sizing/assignment, the modern-only negotiation, queue bring-up,
+    // RX pre-post, DRIVER_OK, devether's publish — runs here with IRQs
+    // still masked, and its ioapic::enable RTE write (the unmask) lands
+    // inside this window too, so no interrupt can precede the published
+    // state or its handler.
+    #[cfg(dev_ether)]
+    platform::pci::bind_virtio_net();
+
     // Unmask LAST (the Phase-3 hazard, x86 edition): sti happens here,
     // once, after every handler the armed sources can fire exists in
     // the dispatch.  Any earlier unmask would hit an empty dispatch
