@@ -476,18 +476,22 @@ impl DistStep {
                 }
             }
             Arch::X86_64 => {
-                let mut cmd = Command::new(objcopy());
-                cmd.arg("--input-target=elf64-x86-64");
-                cmd.arg("--output-target=elf32-i386");
-                cmd.arg(format!("target/{}/{}/x86_64", self.arch.target(), self.profile.dir()));
-                cmd.arg(format!("target/{}/{}/r9.elf32", self.arch.target(), self.profile.dir()));
-                cmd.current_dir(workspace());
-                if self.verbose {
-                    println!("Executing {cmd:?}");
-                }
-                let status = annotated_status(&mut cmd)?;
-                if !status.success() {
-                    return Err("objcopy failed".into());
+                // D-02 retired the elf32 objcopy conversion (the -kernel
+                // load path): the q35 configs ship the ELF64 itself,
+                // staged into the grub-mkrescue ISO by the qemu steps
+                // (see build_x86_64_iso).  Any other format value is a
+                // config error — there is no x86_64 flat-image pipeline
+                // anymore.
+                if self.config.dist.as_ref().and_then(|d| d.format.as_deref()) == Some("elf") {
+                    println!(
+                        "dist format \"elf\": the kernel ELF feeds the grub-mkrescue ISO; no objcopy"
+                    );
+                } else {
+                    return Err(
+                        "x86_64 dist supports only format = \"elf\" (the mb2/GRUB2 channel; the \
+                         32-bit objcopy conversion path is retired)"
+                            .into(),
+                    );
                 }
             }
             Arch::Riscv64 => {
@@ -713,33 +717,32 @@ impl QemuStep {
                 }
             }
             Arch::X86_64 => {
+                // D-01/D-02: the q35 channel is TOML-driven through the
+                // same apply path aarch64 uses (machine/accel/cpu/smp/
+                // memory from [qemu], --accel/--cpu flag > R9_ACCEL/
+                // R9_CPU env > TOML at emission) — the retired hardcoded
+                // -M q35/-smp 8/-m 8192/-kernel arm is gone.  The kernel
+                // ships inside the grub-mkrescue ISO and boots via
+                // -cdrom (SeaBIOS -> GRUB2 -> mb2 -> kernel), never as a
+                // -kernel ELF.
+                let overrides = QemuOverrides {
+                    accel: self.accel.clone(),
+                    cpu: self.cpu.clone(),
+                };
+                let kernel = format!("target/{target}/{dir}/x86_64");
+                let iso = build_x86_64_iso(&kernel, &self.config_name, self.verbose)?;
+
                 let mut cmd = Command::new(qemu_system);
+                apply_to_qemu_step_with_overrides(&mut cmd, &self.config, &overrides);
                 cmd.arg("-nographic");
-                // cmd.arg("-display");
-                // cmd.arg("curses");
-                if self.kvm {
-                    cmd.arg("-accel").arg("kvm");
-                    cmd.arg("-cpu").arg("host,pdpe1gb,xsaveopt,fsgsbase,apic,msr");
-                } else {
-                    cmd.arg("-M").arg("q35");
-                    cmd.arg("-cpu").arg("qemu64,pdpe1gb,xsaveopt,fsgsbase,apic,msr");
-                }
-                cmd.arg("-smp");
-                cmd.arg("8");
-                cmd.arg("-s");
-                cmd.arg("-m");
-                cmd.arg("8192");
+                // COM1 (the kernel console) on stdio, monitor muxed.
+                cmd.arg("-serial");
+                cmd.arg("mon:stdio");
                 if self.wait_for_gdb {
                     cmd.arg("-s").arg("-S");
                 }
-                //cmd.arg("-device");
-                //cmd.arg("ahci,id=ahci0");
-                //cmd.arg("-drive");
-                //cmd.arg("id=sdahci0,file=sdahci0.img,if=none");
-                //cmd.arg("-device");
-                //cmd.arg("ide-hd,drive=sdahci0,bus=ahci0.0");
-                cmd.arg("-kernel");
-                cmd.arg(format!("target/{target}/{dir}/r9.elf32"));
+                cmd.arg("-cdrom");
+                cmd.arg(&iso);
                 cmd.current_dir(workspace());
                 if self.verbose {
                     println!("Executing {cmd:?}");
@@ -862,6 +865,14 @@ const BOOT_ECHO_PROBE: &[u8] = b"r9echo7";
 /// Overall wall-clock budget for the whole marker sequence (overridable via
 /// R9_BOOT_TEST_TIMEOUT); one total budget, never per-marker timings.
 const BOOT_TEST_TIMEOUT_SECS: u64 = 300;
+/// The x86_64 -cdrom channel's FIRST-marker budget (overridable via
+/// R9_BOOT_TEST_FIRST_MARKER_TIMEOUT): SeaBIOS + GRUB2 add seconds of
+/// firmware wall-clock before the kernel banner (Pitfall 8), so the banner
+/// wait is budgeted generously on its own, INSIDE the overall budget above
+/// — a wedged firmware/bootloader fails fast with a channel-aware message
+/// instead of consuming the whole total.  Order, never timings: this is a
+/// wall-clock allowance, not a timing assertion.
+const BOOT_FIRST_MARKER_TIMEOUT_SECS: u64 = 20;
 
 /// Panic-profile markers: a config with dev = ["panic"] boots
 /// virt to a deliberate brk #0 sync exception BEFORE trap::unmask_irq(), so
@@ -1257,6 +1268,11 @@ enum BootProfile {
     /// sweep's ping/udp ok lines, NETIP-DONE).  No pcap assertion —
     /// loopback traffic never touches the wire (that is the point).
     Netip,
+    /// The x86_64 channel gate (13-01, X64-01): SeaBIOS -> GRUB2 -> mb2 ->
+    /// kernel to the banner marker on the serial socket.  The payload is
+    /// the parked old-gen kernel — no ticks/echo stages yet (13-02's
+    /// main9-x64 rewrite lands them).
+    X64,
 }
 
 /// Teardown: SIGKILL the spawned qemu's process GROUP (qemu spawned
@@ -1313,16 +1329,20 @@ impl BootTestStep {
     }
 
     fn run(self) -> Result<()> {
-        if self.arch != Arch::Aarch64 {
-            return Err("boot-test currently supports aarch64 only".into());
+        if self.arch == Arch::Riscv64 {
+            return Err("boot-test currently supports aarch64 and x86_64 only".into());
         }
 
         // The cross-repo ureg.h drift gate runs before qemu
         // spawns — a drifted (or absent) Harvey checkout fails every
-        // boot-test profile (an ABI mismatch is a build failure, not a
-        // runtime mystery).  Bare `cargo xtask build` instead tolerates a
-        // missing checkout — the const asserts still guard there.
-        uregcheck::check_for_boot_test()?;
+        // aarch64 boot-test profile (an ABI mismatch is a build failure,
+        // not a runtime mystery).  Bare `cargo xtask build` instead
+        // tolerates a missing checkout — the const asserts still guard
+        // there.  x86_64 skips it: the amd64 Ureg ABI is Phase 14's
+        // XEXEC-01 (out of scope this phase).
+        if self.arch == Arch::Aarch64 {
+            uregcheck::check_for_boot_test()?;
+        }
 
         // The virtnet profile's sweep mode is validated BEFORE qemu
         // spawns — a typo'd R9_NET_SWEEP_MODE is a harness bug, not a gate
@@ -1356,12 +1376,27 @@ impl BootTestStep {
 
         let target = self.arch.target();
         let dir = self.profile.dir();
-        // On virt the cargo-built ELF is the -kernel directly.
-        let kernel = format!("target/{target}/{dir}/aarch64");
+        // On virt the cargo-built ELF is the -kernel directly; on q35 the
+        // freshly built ELF feeds the grub-mkrescue ISO (D-02's -cdrom
+        // channel — never a -kernel load).
+        let kernel = match self.arch {
+            Arch::Aarch64 => format!("target/{target}/{dir}/aarch64"),
+            Arch::X86_64 => format!("target/{target}/{dir}/x86_64"),
+            Arch::Riscv64 => unreachable!("riscv64 rejected at the arch gate"),
+        };
         let kernel_path = workspace().join(&kernel);
         if !kernel_path.exists() {
             return Err(format!("kernel image {kernel} missing (build step ran first?)").into());
         }
+        // The ISO is built from THIS invocation's kernel build (evidence
+        // freshness — the same discipline as the aarch64 -kernel ELF)
+        // and carries the mb2 header check inside: the channel refuses
+        // to boot an ISO around a kernel GRUB would silently reject.
+        let iso_rel = if self.arch == Arch::X86_64 {
+            Some(build_x86_64_iso(&kernel, &self.config_name, self.verbose)?)
+        } else {
+            None
+        };
 
         // Resolve accel/cpu + the effective config up front: virt's chain is
         // --accel/--cpu flag > R9_ACCEL/R9_CPU env > TOML > tcg/cortex-a72,
@@ -1424,12 +1459,24 @@ impl BootTestStep {
         apply_virt_netdev(&mut cmd, &config, &pcap_rel);
         cmd.arg("-display");
         cmd.arg("none");
+        if self.arch == Arch::X86_64 {
+            // A wedged channel (bad entry, triple fault) must not ride a
+            // SeaBIOS reboot loop through the whole budget — exit loudly
+            // on the first reset instead (Pitfall 8).
+            cmd.arg("-no-reboot");
+        }
         cmd.arg("-chardev");
         cmd.arg(format!("socket,id=cons,path={sock_rel},server=on,wait=on"));
         cmd.arg("-serial");
         cmd.arg("chardev:cons");
-        cmd.arg("-kernel");
-        cmd.arg(&kernel);
+        if let Some(iso) = &iso_rel {
+            // D-02: SeaBIOS -> GRUB2 -> mb2 -> kernel from the ISO.
+            cmd.arg("-cdrom");
+            cmd.arg(iso);
+        } else {
+            cmd.arg("-kernel");
+            cmd.arg(&kernel);
+        }
         cmd.current_dir(workspace());
         if self.verbose {
             println!("Executing {cmd:?}");
@@ -1473,6 +1520,16 @@ impl BootTestStep {
             .and_then(|v| v.parse().ok())
             .unwrap_or(BOOT_TEST_TIMEOUT_SECS);
         let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+        // The x86_64 channel's dedicated first-marker budget (Pitfall 8):
+        // firmware time precedes the banner on the -cdrom path, and this
+        // arm's gate is the banner itself.
+        let first_marker_deadline = Instant::now()
+            + Duration::from_secs(
+                env::var("R9_BOOT_TEST_FIRST_MARKER_TIMEOUT")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(BOOT_FIRST_MARKER_TIMEOUT_SECS),
+            );
 
         // wait=on means qemu holds guest start until this connect, so the
         // capture covers the entire boot.  Retry while qemu creates the
@@ -1556,9 +1613,30 @@ impl BootTestStep {
             if !panic_profile && let Some(hit) = negative_scan_hit_for(&capture, net_profile || netip_profile) {
                 return Err(self.fail(stage, &capture, &format!("negative scan hit {hit:?}")));
             }
+            // The x86_64 channel's dedicated first-marker budget: the
+            // banner is the gate's first marker, and SeaBIOS + GRUB
+            // precede it on the wire.
+            if self.arch == Arch::X86_64
+                && stage == BootStage::Banner
+                && Instant::now() >= first_marker_deadline
+            {
+                return Err(self.fail(
+                    stage,
+                    &capture,
+                    "first-marker budget expired (SeaBIOS+GRUB+kernel: check the ISO boot for \
+                     loader errors on the captured serial tail)",
+                ));
+            }
             match stage {
                 BootStage::Banner => {
                     if contains_marker(&capture, BOOT_BANNER_MARKER.as_bytes()) {
+                        if self.arch == Arch::X86_64 {
+                            // The X64-01 channel gate (13-01): the banner is
+                            // the whole assertion set — the payload is the
+                            // parked old-gen kernel, and the main9-x64
+                            // rewrite (13-02) lands the timer/echo stages.
+                            return self.finish(log_abs, &capture, BootProfile::X64);
+                        }
                         stage = if net_profile || netip_profile {
                             BootStage::NetBoot
                         } else if panic_profile {
@@ -1816,6 +1894,11 @@ impl BootTestStep {
             BootProfile::Ticks => {
                 println!(
                     "boot-test: PASS -- banner, >= {BOOT_TICK_MIN} ticks and the echo probe observed in order"
+                );
+            }
+            BootProfile::X64 => {
+                println!(
+                    "boot-test: PASS -- SeaBIOS -> GRUB2 -> mb2 kernel boot: banner marker observed on the serial socket (X64-01 channel)"
                 );
             }
             BootProfile::Exec => {
@@ -2572,6 +2655,174 @@ fn ensure_initrd_image(config: &Configuration, verbose: bool) -> Result<()> {
     Ok(())
 }
 
+/// The Multiboot2 header constants the check validates against (spec
+/// 3.1.1-3.1.2; mirrors GRUB's loader: MULTIBOOT2_SEARCH/HEADER_ALIGN).
+const MB2_MAGIC: u32 = 0xE85250D6;
+const MB2_SEARCH: usize = 32768;
+const MB2_HEADER_ALIGN: usize = 8;
+
+/// Post-build Multiboot2 header check (T-13-01 mitigation, D-02): parse
+/// the built image's first 32 KiB exactly the way GRUB does — scan
+/// 8-byte-aligned offsets for the magic, then validate the header
+/// arithmetic — so the channel refuses to build an ISO around a kernel
+/// GRUB would silently reject (a malformed header is a "not a multiboot
+/// image" drop at boot, never a build error).  Returns the file offset
+/// of the validated header.
+fn check_mb2_header(bytes: &[u8]) -> std::result::Result<usize, String> {
+    let window = &bytes[..bytes.len().min(MB2_SEARCH)];
+    let read_u16 =
+        |off: usize| u16::from_le_bytes([window[off], window[off + 1]]);
+    let read_u32 =
+        |off: usize| u32::from_le_bytes([window[off], window[off + 1], window[off + 2], window[off + 3]]);
+
+    // GRUB's scan: the magic at an 8-byte-aligned offset within the first
+    // 32768 bytes of the image.
+    let mut off = 0;
+    let header = loop {
+        if off + 16 > window.len() {
+            return Err(format!(
+                "mb2 header check: magic {MB2_MAGIC:#x} not found at any 8-byte-aligned offset \
+                 within the first {MB2_SEARCH} bytes (GRUB would reject the image: \"not a \
+                 multiboot image\")"
+            ));
+        }
+        if read_u32(off) == MB2_MAGIC {
+            break off;
+        }
+        off += MB2_HEADER_ALIGN;
+    };
+
+    let arch = read_u32(header + 4);
+    let header_length = read_u32(header + 8) as usize;
+    let checksum = read_u32(header + 12);
+
+    // Checksum arithmetic: magic + architecture + header_length + checksum
+    // == 0 (mod 2^32), exactly the two's-complement sum l.S encodes.
+    if MB2_MAGIC
+        .wrapping_add(arch)
+        .wrapping_add(header_length as u32)
+        .wrapping_add(checksum)
+        != 0
+    {
+        return Err(format!(
+            "mb2 header check at {header:#x}: checksum arithmetic wrong (magic {MB2_MAGIC:#x} + \
+             arch {arch:#x} + header_length {header_length:#x} + checksum {checksum:#x} != 0)"
+        ));
+    }
+    // r9's header declares architecture 0 (i386 protected-mode entry).
+    if arch != 0 {
+        return Err(format!(
+            "mb2 header check at {header:#x}: architecture {arch:#x} != 0 (i386)"
+        ));
+    }
+    // The header (fixed part + tags + end tag) must be entirely within the
+    // searched window and internally consistent.
+    if header_length < 16 {
+        return Err(format!(
+            "mb2 header check at {header:#x}: header_length {header_length} < 16 (fixed part alone)"
+        ));
+    }
+    if header + header_length > window.len() || header + header_length > MB2_SEARCH {
+        return Err(format!(
+            "mb2 header check at {header:#x}: header ({header_length} bytes) not entirely within \
+             the first {MB2_SEARCH} bytes of the image"
+        ));
+    }
+
+    // Tag walk from the fixed part's end: each tag is {u16 type, u16 flags,
+    // u32 size}, 8-byte aligned (size includes padding), terminated by the
+    // required end tag (type 0, flags 0, size 8) exactly at header_length.
+    let mut tag = header + 16;
+    loop {
+        if tag + 8 > window.len() {
+            return Err(format!(
+                "mb2 header check at {header:#x}: tag walk runs off the image before the end tag"
+            ));
+        }
+        let tag_type = read_u16(tag);
+        let tag_flags = read_u16(tag + 2);
+        let tag_size = read_u32(tag + 4) as usize;
+        if tag_size < 8 || !tag_size.is_multiple_of(MB2_HEADER_ALIGN) {
+            return Err(format!(
+                "mb2 header check at {header:#x}: tag at {tag:#x} size {tag_size} (< 8 or not \
+                 8-byte aligned)"
+            ));
+        }
+        if tag_type == 0 {
+            if tag_flags != 0 || tag_size != 8 {
+                return Err(format!(
+                    "mb2 header check at {header:#x}: end tag (flags {tag_flags}, size {tag_size}) \
+                     malformed (flags 0, size 8 required)"
+                ));
+            }
+            if tag + 8 != header + header_length {
+                return Err(format!(
+                    "mb2 header check at {header:#x}: end tag at {tag:#x} does not terminate the \
+                     header exactly ({:#x} != header start + header_length {:#x})",
+                    tag + 8,
+                    header + header_length
+                ));
+            }
+            return Ok(header);
+        }
+        tag += tag_size;
+        if tag > header + header_length {
+            return Err(format!(
+                "mb2 header check at {header:#x}: tag walk overruns header_length before the end tag"
+            ));
+        }
+    }
+}
+
+/// Build the x86_64 boot ISO for the D-02 channel: stage the freshly built
+/// kernel ELF + the committed grub.cfg under target/iso-<config>/, then run
+/// grub-mkrescue (BIOS-only; no EFI image, so no mtools).  The post-build
+/// mb2 header check runs FIRST — the channel refuses to build an ISO
+/// around a kernel GRUB would silently reject (T-13-01).  Returns the ISO
+/// path relative to the workspace (the qemu steps run with cwd =
+/// workspace).
+fn build_x86_64_iso(kernel_rel: &str, config_name: &str, verbose: bool) -> Result<String> {
+    let kernel_abs = workspace().join(kernel_rel);
+    if !kernel_abs.exists() {
+        return Err(format!("kernel image {kernel_rel} missing (build step ran first?)").into());
+    }
+    let kernel_bytes =
+        std::fs::read(&kernel_abs).map_err(|e| format!("read {kernel_rel}: {e}"))?;
+    let header = check_mb2_header(&kernel_bytes)?;
+    println!(
+        "mb2: header at file offset {header:#x} validated (magic/arch/length/checksum/end tag)"
+    );
+
+    // Stage boot/kernel + boot/grub/grub.cfg — the committed grub.cfg's
+    // `multiboot2 /boot/kernel` names the staged ELF at its fixed ISO path.
+    let stage_rel = format!("target/iso-{config_name}");
+    let stage = workspace().join(&stage_rel);
+    if stage.exists() {
+        std::fs::remove_dir_all(&stage)?;
+    }
+    std::fs::create_dir_all(stage.join("boot/grub"))?;
+    std::fs::copy(&kernel_abs, stage.join("boot/kernel"))?;
+    std::fs::copy(workspace().join("x86_64/lib/grub.cfg"), stage.join("boot/grub/grub.cfg"))?;
+
+    let iso_rel = format!("target/boot-{config_name}.iso");
+    let mut cmd = Command::new("grub-mkrescue");
+    cmd.arg("-o").arg(&iso_rel).arg(&stage_rel);
+    cmd.current_dir(workspace());
+    if verbose {
+        println!("Executing {cmd:?}");
+    }
+    let status = cmd.status().map_err(|e| {
+        format!(
+            "spawn grub-mkrescue: {e} — run under `nix develop` (or `nix shell nixpkgs#grub2 \
+             nixpkgs#xorriso` until the devshell carries both)"
+        )
+    })?;
+    if !status.success() {
+        return Err("grub-mkrescue failed".into());
+    }
+    Ok(iso_rel)
+}
+
 struct UregCheckStep {}
 
 impl UregCheckStep {
@@ -2614,9 +2865,85 @@ fn annotated_status(cmd: &mut Command) -> Result<process::ExitStatus> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BOOT_ECHO_PROBE, BOOT_TICK_MARKER, contains_marker, count_marker_lines,
+        BOOT_ECHO_PROBE, BOOT_TICK_MARKER, check_mb2_header, contains_marker, count_marker_lines,
         count_register_lines, negative_scan_hit_for,
     };
+
+    /// Build a synthetic image around one mb2 header (the fixture shape
+    /// l.S emits: fixed part + end tag, header_length 24) at `prefix`
+    /// bytes of leading padding, with every field overridable so the
+    /// failure modes are one argument away.
+    fn mb2_fixture(
+        prefix: usize,
+        magic: u32,
+        arch: u32,
+        checksum: u32,
+        end_flags: u16,
+        end_size: u32,
+    ) -> Vec<u8> {
+        let mut v = vec![0u8; prefix];
+        v.extend_from_slice(&magic.to_le_bytes());
+        v.extend_from_slice(&arch.to_le_bytes());
+        v.extend_from_slice(&24u32.to_le_bytes()); // header_length (fixed + end tag)
+        v.extend_from_slice(&checksum.to_le_bytes());
+        v.extend_from_slice(&0u16.to_le_bytes()); // end tag type 0
+        v.extend_from_slice(&end_flags.to_le_bytes());
+        v.extend_from_slice(&end_size.to_le_bytes());
+        v.extend_from_slice(&[0u8; 64]); // trailing image bytes
+        v
+    }
+
+    fn valid_checksum() -> u32 {
+        0xE85250D6u32.wrapping_add(0).wrapping_add(24).wrapping_neg()
+    }
+
+    /// The l.S-shaped header validates at offset 0 and at an 8-byte-aligned
+    /// offset past the ELF-hack padding — the check mirrors GRUB's scan,
+    /// not a fixed offset.
+    #[test]
+    fn mb2_header_valid_fixture_passes() {
+        let img = mb2_fixture(0, 0xE85250D6, 0, valid_checksum(), 0, 8);
+        assert_eq!(check_mb2_header(&img), Ok(0));
+        let img = mb2_fixture(16, 0xE85250D6, 0, valid_checksum(), 0, 8);
+        assert_eq!(check_mb2_header(&img), Ok(16));
+    }
+
+    /// No magic in the window (the silent-GRUB-rejection case) is a loud
+    /// error naming the scan GRUB performs.
+    #[test]
+    fn mb2_header_missing_magic_fails() {
+        let img = mb2_fixture(0, 0x1BADB002, 0, valid_checksum(), 0, 8);
+        assert!(check_mb2_header(&img).is_err());
+        assert!(check_mb2_header(&[0u8; 128]).is_err());
+    }
+
+    /// Checksum arithmetic, architecture and the end-tag shape are each
+    /// validated — one broken field per fixture.
+    #[test]
+    fn mb2_header_arithmetic_and_end_tag_fails() {
+        let bad_sum = valid_checksum().wrapping_add(1);
+        assert!(check_mb2_header(&mb2_fixture(0, 0xE85250D6, 0, bad_sum, 0, 8)).is_err());
+        // architecture 4 (MIPS) is not r9's i386 entry
+        let mips_sum = 0xE85250D6u32.wrapping_add(4).wrapping_add(24).wrapping_neg();
+        assert!(check_mb2_header(&mb2_fixture(0, 0xE85250D6, 4, mips_sum, 0, 8)).is_err());
+        // end tag flags/size must be 0/8
+        assert!(check_mb2_header(&mb2_fixture(0, 0xE85250D6, 0, valid_checksum(), 1, 8)).is_err());
+        assert!(check_mb2_header(&mb2_fixture(0, 0xE85250D6, 0, valid_checksum(), 0, 16)).is_err());
+    }
+
+    /// A header whose declared header_length disagrees with the end tag's
+    /// position fails (the walk must terminate exactly at header_length).
+    #[test]
+    fn mb2_header_length_mismatch_fails() {
+        let mut img = mb2_fixture(0, 0xE85250D6, 0, valid_checksum(), 0, 8);
+        // header_length 32 (checksum then also wrong) — the arithmetic
+        // fires first; make it arithmetic-consistent but walk-inconsistent.
+        img[8..12].copy_from_slice(&32u32.to_le_bytes());
+        img[12..16].copy_from_slice(
+            &0xE85250D6u32.wrapping_add(0).wrapping_add(32).wrapping_neg().to_le_bytes(),
+        );
+        assert!(check_mb2_header(&img).is_err());
+    }
 
     /// The always-on negative scan: panic/Unhandled-interrupt lines fail
     /// non-panic profiles, case-insensitively.

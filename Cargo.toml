@@ -25,12 +25,15 @@ undocumented_unsafe_blocks = "deny"
 # dev_ip is predeclared for the devip config (dev = ["ip"] in the virtip TOML
 # lands in plan 08-04) — the predeclare rule demands the declaration BEFORE
 # the first code use.
+# q35 is predeclared for the x86_64 platform config (platform = "q35" in
+# x86_64/lib/config_q35.toml, 13-01) — the TOML emission is the first
+# appearance; the first kernel code use lands with the platform tree (13-02).
 # (Moved from aarch64/Cargo.toml — cargo forbids a crate-level
 # [lints.rust] override alongside `[lints] workspace = true`; only the gated
 # crates opt in.)
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [
-    'cfg(platform, values("virt", "raspi3b", "raspi4b"))',
+    'cfg(platform, values("virt", "raspi3b", "raspi4b", "q35"))',
     'cfg(dev_panic)',
     'cfg(dev_exec)',
     'cfg(dev_bootchain)',

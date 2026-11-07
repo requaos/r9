@@ -23,12 +23,6 @@
 .set Seg32LIMIT,		((0xF<<48)+0xFFFF)
 .set Seg32DEF,			(Seg32DEFAULT|Seg32GRAN|Seg32LIMIT)
 
-.set MULTIBOOT_FLAG_PGALIGN,	(1<<0)
-.set MULTIBOOT_FLAG_MEMINFO,	(1<<1)
-.set MULTIBOOT_MAGIC,		0x1BADB002
-.set MULTIBOOT_FLAGS,		(MULTIBOOT_FLAG_PGALIGN | MULTIBOOT_FLAG_MEMINFO)
-.set MULTIBOOT_CHECKSUM,	-(MULTIBOOT_MAGIC + MULTIBOOT_FLAGS)
-
 .set KiB,			(1<<10)
 .set MiB,			(1<<20)
 .set GiB,			(1<<30)
@@ -106,11 +100,24 @@
 .globl start
 start:
 	jmp	1f	// Jump over the multiboot header
-	// Multiboot 1 header.
+	// Multiboot 2 header (spec 3.1.1-3.1.2): 8-byte aligned and
+	// entirely within the first 32 KiB of the image — .text.boot is
+	// emitted first by kernel.ld, and start: is its first code, so the
+	// header rides the head of the file GRUB scans.  The i386 entry
+	// contract (spec 3.3) matches the assumptions below: EAX magic,
+	// EBX info-structure pointer, IF=0, GDTR possibly invalid — the
+	// cli/cld/save-%ebx/own-GDT sequence already implements it.
 	.balign 8
-	.long	MULTIBOOT_MAGIC
-	.long	MULTIBOOT_FLAGS
-	.long	MULTIBOOT_CHECKSUM
+mb2_header:
+	.long	0xE85250D6			// magic
+	.long	0				// architecture: 0 = i386
+	.long	mb2_header_end - mb2_header	// header_length
+	.long	-(0xE85250D6 + 0 + (mb2_header_end - mb2_header))	// checksum
+	// required end tag
+	.short	0				// type 0 = end
+	.short	0				// flags
+	.long	8				// size
+mb2_header_end:
 	.balign 16
 1:
 	cli

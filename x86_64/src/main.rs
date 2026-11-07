@@ -18,25 +18,10 @@ mod trap;
 mod uart16550;
 mod vsvm;
 
-use proc::{Label, swtch};
-
 #[cfg(not(test))]
 core::arch::global_asm!(include_str!("l.S"), options(att_syntax));
 
 use port::println;
-
-static mut THRSTACK: [u64; 1024] = [0; 1024];
-static mut CTX: u64 = 0;
-static mut THR: u64 = 0;
-
-fn jumpback() {
-    println!("in a thread");
-    unsafe {
-        let thr = &mut *(THR as *mut Label);
-        let ctx = &mut *(CTX as *mut Label);
-        swtch(thr, ctx);
-    }
-}
 
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn main(mach: &mut dat::Mach, _mbdata: u64) {
@@ -44,25 +29,16 @@ pub extern "C" fn main(mach: &mut dat::Mach, _mbdata: u64) {
         vsvm::init(mach);
     }
     syscall::init();
-    let x = trap::splhi();
     devcons::init();
     println!();
     println!("r9 from the Internet");
-    println!("looping now");
-    let mut ctx = Label::new();
-    let mut thr = Label::new();
-    thr.pc = jumpback as *const () as usize as u64;
-    unsafe {
-        thr.sp = &mut THRSTACK[1023] as *mut _ as u64;
-        CTX = &mut ctx as *mut _ as u64;
-        THR = &mut thr as *mut _ as u64;
-        swtch(&mut ctx, &mut thr);
-    }
-    println!("came out the other side of a context switch");
-    trap::splx(x);
-    unsafe { core::arch::asm!("int3") };
+    // The old-generation demonstration (swtch/jumpback/int3) is parked
+    // (13-01): the mb2/GRUB2 channel boots this payload only to the
+    // banner, so halt cleanly with IRQs masked — the boot-test gate's
+    // negative panic scan stays green on the new channel.  The main9-x64
+    // rewrite is 13-02.
     loop {
-        trap::spllo();
+        unsafe { core::arch::asm!("cli; hlt") };
     }
 }
 

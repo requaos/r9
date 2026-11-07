@@ -1,0 +1,32 @@
+[build]
+target = "lib/x86_64-unknown-none-elf.json"
+buildflags = [
+    "-Z", "build-std=core,alloc"
+]
+
+[link]
+script = 'x86_64/lib/kernel.ld'
+load-address = '0xffffffff80200000'
+
+[config]
+# D-01: the q35 platform config — the x86_64 analog of aarch64's virt.
+# The dev list is idle this plan (dev = []): the boot-test channel proof
+# boots the parked old-gen payload to the banner only; dev_ether joins
+# in 13-05 per D-01a's idle-unbound-then-bound staging order.
+platform = "q35"
+dev = []
+
+[qemu]
+# D-01: KVM-native gate default (-accel kvm -cpu host), q35 machine,
+# -smp 1 (SMP stays a Future item), 1024M guest RAM.  TCG fallback runs
+# per-invocation with --accel tcg --cpu qemu64 (X64-05 documents it).
+machine = "q35"
+accel = "kvm"
+cpu = "host"
+smp = 1
+memory = "1024M"
+
+[dist]
+# The ELF64 is what GRUB loads (D-02: no objcopy, no -kernel); the ISO
+# build (xtask, grub-mkrescue) stages this ELF directly.
+format = "elf"
