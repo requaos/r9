@@ -172,6 +172,15 @@ pub extern "C" fn main(mach: &mut dat::Mach, mbdata: u64) {
     // table — a wedge, not a print.
     cpu::sti();
 
+    // The kernel-side ARP trigger (13-05 Task 3, X64-04 — the
+    // Open-Question-1 resolution: kernel-side ONLY this phase; the
+    // userspace dd-through-the-file-contract proof is Phase 14's XEXEC
+    // seam): posts the baked 60-byte frame, ping-pong xN + TX-bulk,
+    // reconciles the ifstats counters fail-closed, and prints the
+    // X64-NET-DONE marker the q35net gate asserts.
+    #[cfg(dev_ether)]
+    platform::q35::netgate::run();
+
     // The idle loop: hlt wakes on each timer interrupt and trap()'s
     // IRQ branch iretq's back here (the aarch64 wfi shape, x86
     // edition).  It prints nothing, which is what makes tick()'s

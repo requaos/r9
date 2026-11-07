@@ -1259,6 +1259,88 @@ pub fn assert_blast(
     Ok(sent as usize)
 }
 
+/// The kernel netgate's ping-pong N, parsed from its
+/// `netgate: ping-pong done N/N` serial marker (the count the KERNEL
+/// pinned and reconciled — the assertion's floor is data, never a
+/// second constant that could drift from the kernel's).
+fn pingpong_n(capture: &[u8]) -> Result<usize, String> {
+    for line in capture_lines(capture) {
+        if let Some(rest) = line.strip_prefix(b"netgate: ping-pong done ") {
+            let text = String::from_utf8_lossy(rest);
+            let first = text.split(' ').next().unwrap_or("");
+            let n = first.split('/').next().unwrap_or("");
+            return n.parse::<usize>().map_err(|e| {
+                format!("net gate (q35net): `ping-pong done` N not numeric ({first:?}): {e}")
+            });
+        }
+    }
+    Err("net gate (q35net): no `netgate: ping-pong done N/N` line in the capture (the kernel \
+         trigger never completed its ping-pong stage?)"
+        .to_string())
+}
+
+/// The x86_64 netgate gate assertion (13-05, X64-04): the kernel-side
+/// trigger's frames are host-observable in THIS run's capture — >= N
+/// ARP requests (oper=1, exactly 60 bytes = ETHERMINTU, src_mac = the
+/// guest MAC parsed from the `#l0: virtio:` bind line, spa 10.0.2.15,
+/// tpa the gateway 10.0.2.2 — the slirp watch-out carried verbatim) and
+/// >= 1 reply (the gateway answers its own addresses).  The exact
+/// RX==N/TX==N/ifstats reconciliation is the kernel netgate's own
+/// fail-closed check (its `netgate: FAIL` lines fail the serial stages
+/// fast, and a missing X64-NET-DONE never finishes); this is the
+/// host-side wire proof over the filter-dump capture.  Returns
+/// (requests, replies) for the PASS line.
+pub fn assert_x64_netgate(frames: &[ArpFrame], capture: &[u8]) -> Result<(usize, usize), String> {
+    let mac = guest_mac(capture)?;
+    let n = pingpong_n(capture)?;
+    let reqs = request_count(frames);
+    let reps = reply_count(frames);
+    if reqs < n {
+        return Err(format!(
+            "net gate (q35net): pcap carries {reqs} ARP requests, want >= {n} (the kernel-side \
+             trigger's posts)"
+        ));
+    }
+    if reps < 1 {
+        return Err(
+            "net gate (q35net): zero ARP replies — the gateway 10.0.2.2 never answered (the \
+             slirp-answers-only-its-own watch-out)"
+                .to_string(),
+        );
+    }
+    for (i, f) in frames.iter().filter(|f| f.oper == 1).enumerate() {
+        if f.src_mac != mac {
+            return Err(format!(
+                "net gate (q35net): ARP request #{i}: src_mac got {} want {} (the guest MAC)",
+                mac_str(&f.src_mac),
+                mac_str(&mac)
+            ));
+        }
+        if f.spa != SLIRP_GUEST_IP {
+            return Err(format!(
+                "net gate (q35net): ARP request #{i}: spa got {} want {}",
+                ip_str(&f.spa),
+                ip_str(&SLIRP_GUEST_IP)
+            ));
+        }
+        if f.tpa != SLIRP_GATEWAY_IP {
+            return Err(format!(
+                "net gate (q35net): ARP request #{i}: tpa got {} want {} (the gateway — slirp \
+                 answers only its own addresses)",
+                ip_str(&f.tpa),
+                ip_str(&SLIRP_GATEWAY_IP)
+            ));
+        }
+        if f.frame_len != ETHERMINTU {
+            return Err(format!(
+                "net gate (q35net): ARP request #{i}: len got {} want {ETHERMINTU} (ETHERMINTU)",
+                f.frame_len
+            ));
+        }
+    }
+    Ok((reqs, reps))
+}
+
 /// Validate the 24-byte global header, returning the capture's byte order
 /// (true = little-endian).  The magic's byte sequence names the order (the
 /// classic-pcap reader convention): qemu's filter-dump writes host-endian,
@@ -2385,5 +2467,96 @@ mod tests {
         buf.extend_from_slice(&record(&frame));
         let frames = parse_pcap_tcpv4(&buf).expect("parses");
         assert!(frames.is_empty(), "the runt frame is skipped");
+    }
+
+    // ---- 13-05 task 3: the x86_64 netgate assertion (X64-04) -----------
+
+    /// The kernel trigger's serial capture shape: the driver's bind
+    /// line + the `ping-pong done N/N` marker the floor parses from.
+    fn x64_netgate_capture(n: usize) -> Vec<u8> {
+        let mut c = Vec::new();
+        c.extend_from_slice(BIND_LINE.as_bytes());
+        c.extend_from_slice(format!("netgate: ping-pong done {n}/{n} intr rx {n} tx {n}\r\n").as_bytes());
+        c.extend_from_slice(b"netgate: tx-bulk done 4096\r\n");
+        c.extend_from_slice(b"X64-NET-DONE\r\n");
+        c
+    }
+
+    /// Golden: N requests + N replies in the pcap over the matching
+    /// serial capture passes with (N, N) — the floor parsed from the
+    /// marker, every request field-checked.
+    #[test]
+    fn x64_netgate_golden_passes() {
+        let mut buf = global_header();
+        for _ in 0..256 {
+            buf.extend_from_slice(&record(&arp_request()));
+            buf.extend_from_slice(&record(&arp_reply()));
+        }
+        let frames = parse_pcap(&buf).expect("parses");
+        let (reqs, reps) =
+            assert_x64_netgate(&frames, &x64_netgate_capture(256)).expect("the golden shape passes");
+        assert_eq!((reqs, reps), (256, 256));
+        // requests beyond the floor (the tx-bulk leg's) are fine — the
+        // wire carries more posts than the ping-pong floor
+        let (reqs, _) = assert_x64_netgate(&frames, &x64_netgate_capture(200)).expect("passes");
+        assert_eq!(reqs, 256);
+    }
+
+    /// The N floor is data: requests below the marker's N fail naming
+    /// the shortfall (the kernel claimed more than the wire saw).
+    #[test]
+    fn x64_netgate_short_requests_fail() {
+        let mut buf = global_header();
+        for _ in 0..199 {
+            buf.extend_from_slice(&record(&arp_request()));
+            buf.extend_from_slice(&record(&arp_reply()));
+        }
+        let frames = parse_pcap(&buf).expect("parses");
+        let e = assert_x64_netgate(&frames, &x64_netgate_capture(200))
+            .expect_err("199 requests < N=200 must fail");
+        assert!(e.contains("199 ARP requests"), "names the shortfall: {e}");
+    }
+
+    /// Zero replies fail naming the slirp watch-out — the gateway must
+    /// answer its own addresses.
+    #[test]
+    fn x64_netgate_no_replies_fail() {
+        let mut buf = global_header();
+        for _ in 0..256 {
+            buf.extend_from_slice(&record(&arp_request()));
+        }
+        let frames = parse_pcap(&buf).expect("parses");
+        let e = assert_x64_netgate(&frames, &x64_netgate_capture(256))
+            .expect_err("zero replies must fail");
+        assert!(e.contains("never answered"), "names the watch-out: {e}");
+    }
+
+    /// A request whose ethernet source is not the bind line's MAC fails
+    /// (the negotiated-MAC overwrite is part of the frame contract).
+    #[test]
+    fn x64_netgate_wrong_src_mac_fails() {
+        let mut other = arp_request();
+        other[6..12].copy_from_slice(&[0xde, 0xad, 0xbe, 0xef, 0x00, 0x01]);
+        let mut buf = global_header();
+        buf.extend_from_slice(&record(&other));
+        buf.extend_from_slice(&record(&arp_reply()));
+        let frames = parse_pcap(&buf).expect("parses");
+        let e = assert_x64_netgate(&frames, &x64_netgate_capture(1))
+            .expect_err("a foreign src_mac must fail");
+        assert!(e.contains("src_mac"), "names the field: {e}");
+    }
+
+    /// A missing `ping-pong done` marker (the kernel trigger never
+    /// completed) is the loud pre-pcap failure — the floor has no data
+    /// source.
+    #[test]
+    fn x64_netgate_missing_marker_fails() {
+        let mut buf = global_header();
+        buf.extend_from_slice(&record(&arp_request()));
+        buf.extend_from_slice(&record(&arp_reply()));
+        let frames = parse_pcap(&buf).expect("parses");
+        let capture = b"#l0: virtio: 1000Mbps: 52:54:00:12:34:56\r\n";
+        let e = assert_x64_netgate(&frames, capture).expect_err("no marker must fail");
+        assert!(e.contains("ping-pong done"), "names the absent marker: {e}");
     }
 }

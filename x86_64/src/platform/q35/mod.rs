@@ -9,6 +9,10 @@ pub mod devcons;
 pub mod ioapic;
 pub mod lapic;
 pub mod mb2;
+// netgate's pure halves (the fixture frame, the reconcile shapes) are
+// host-testable; run() itself is dev_ether-only.
+#[cfg(any(test, dev_ether))]
+pub mod netgate;
 pub mod pci;
 pub mod timer;
 

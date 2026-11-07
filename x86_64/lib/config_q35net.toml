@@ -1,10 +1,11 @@
 # The q35 net gate profile (13-05, X64-04) — config_q35.toml with the
-# D-01a bound step landed: dev = ["ether"] compiles cfg(dev_ether), so
-# the virtio-net bind (pci.rs's bind half) runs inside main9's pre-sti
-# window and the netdev stanza 13-01 staged idle now carries a driver.
-# The kernel-side ARP trigger (netgate.rs, cfg(dev_ether)) rides the
-# same dev key after sti — kernel-side ONLY this phase (Pitfall 11: no
-# exec/bootchain machinery until Phase 14's XEXEC).
+# D-01a bound step landed: the dev list below gains the ether key, which
+# compiles cfg(dev_ether), so the virtio-net bind (pci.rs's bind half)
+# runs inside main9's pre-sti window and the netdev stanza 13-01 staged
+# idle now carries a driver.  The kernel-side ARP trigger (netgate.rs,
+# cfg(dev_ether)) rides the same dev key after sti — kernel-side ONLY
+# this phase (Pitfall 11: no userspace-launch machinery until Phase 14's
+# XEXEC scope).
 [build]
 target = "lib/x86_64-unknown-none-elf.json"
 buildflags = [

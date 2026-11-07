@@ -913,6 +913,19 @@ const BOOT_Q35_MEMORY_MARKER: &str = "q35: memory";
 const Q35_MCFG_MARKER: &str = "q35: mcfg";
 const Q35_PCIEXBAR_MARKER: &str = "pciexbar: ";
 
+/// The q35net bind + trigger markers (13-05, X64-04): the negotiation
+/// audit pair and the devether `#l0:` bind line (the driver half), then
+/// the kernel-side netgate's stage markers and the terminal — asserted
+/// IN ORDER past the discovery stage's anchor; the pcap assertion at
+/// finish() proves the frames host-side.  `netgate: FAIL` (the kernel's
+/// fail-closed reconcile) fails the stage loop fast from any stage.
+const Q35_BIND_FEATURES_MARKER: &str = "virtio-net: features offered";
+const Q35_BIND_L0_MARKER: &str = "#l0: virtio:";
+const Q35_NETGATE_PINGPONG_MARKER: &str = "netgate: ping-pong done";
+const Q35_NETGATE_TXBULK_MARKER: &str = "netgate: tx-bulk done";
+const Q35_NET_DONE_MARKER: &str = "X64-NET-DONE";
+const Q35_NETGATE_FAIL_MARKER: &str = "netgate: FAIL";
+
 /// Panic-profile markers: a config with dev = ["panic"] boots
 /// virt to a deliberate brk #0 sync exception BEFORE trap::unmask_irq(), so
 /// the log is deterministic (zero IRQ interleaving) -- banner, start marker,
@@ -1291,6 +1304,18 @@ enum BootStage {
     /// device-found line, all strictly after the facts stage's anchor —
     /// X64-03's on-serial evidence.
     Q35PciDiscovery,
+    /// The q35net bind stage (13-05): discovery observed, now await the
+    /// virtio-net negotiation audit pair and the devether `#l0:` bind
+    /// line — X64-04's driver-half evidence, strictly after the
+    /// discovery stage's anchor.
+    X64Bind,
+    /// The q35net trigger stages (13-05): the kernel-side netgate's
+    /// `ping-pong done` then `tx-bulk done` then the terminal
+    /// X64-NET-DONE marker, in order (a `netgate: FAIL` line fails fast
+    /// from any of them).
+    X64PingPong,
+    X64TxBulk,
+    X64NetDone,
 }
 
 impl fmt::Display for BootStage {
@@ -1343,6 +1368,15 @@ impl fmt::Display for BootStage {
                 f,
                 "discovery markers {{{Q35_MCFG_MARKER:?}, {Q35_PCIEXBAR_MARKER:?}, {PCI_NET_DEVICE_MARKER:?}}} after the facts"
             ),
+            BootStage::X64Bind => write!(
+                f,
+                "bind markers {{{Q35_BIND_FEATURES_MARKER:?}, {Q35_BIND_L0_MARKER:?}}} after the discovery"
+            ),
+            BootStage::X64PingPong => {
+                write!(f, "netgate marker {Q35_NETGATE_PINGPONG_MARKER:?} after the bind")
+            }
+            BootStage::X64TxBulk => write!(f, "netgate marker {Q35_NETGATE_TXBULK_MARKER:?}"),
+            BootStage::X64NetDone => write!(f, "terminal marker {Q35_NET_DONE_MARKER:?}"),
         }
     }
 }
@@ -1371,6 +1405,14 @@ enum BootProfile {
     /// the facts, then the typed echo probe reappearing — X64-01's full
     /// Phase-3-style platform-gate shape, order-anchored at every stage.
     X64,
+    /// The q35net net gate (13-05, X64-04 + X64-02's load proof): the
+    /// X64 discovery stages, then the bind markers (negotiation audit,
+    /// `#l0:`), the kernel-side netgate's ping-pong/tx-bulk stage
+    /// markers, and the terminal X64-NET-DONE — with the finish()-time
+    /// pcap assertion over this run's filter-dump capture (>= N
+    /// requests parsed-from-the-marker, >= 1 gateway reply, 60-byte
+    /// frames sourced from the guest MAC).
+    X64Net,
 }
 
 /// Teardown: SIGKILL the spawned qemu's process GROUP (qemu spawned
@@ -1735,6 +1777,17 @@ impl BootTestStep {
         // is the same shape — selected by name, checked first.
         let net_profile = self.config_name == "virtnet";
         let netip_profile = self.config_name == "virtip";
+        // The Q35NET profile ("q35net", 13-05's X64-04 gate) is the same
+        // shape — selected by config name; its dev list carries "ether"
+        // but no exec (the kernel-side trigger prohibition), so the
+        // Banner-stage dispatch must route it at the X64 facts stages
+        // and the Q35PciDiscovery satisfaction branches into the bind +
+        // netgate stages below.
+        let q35net_profile = self.arch == Arch::X86_64 && self.config_name == "q35net";
+        // The X64 bind stage's ordered-presence anchor (13-05): the byte
+        // offset at the discovery stage's satisfaction — a bind line
+        // that rode the wire earlier never counts.
+        let mut bind_after = 0usize;
 
         while Instant::now() < deadline {
             // Always-on negative scan: a panic/Unhandled-interrupt line
@@ -1746,6 +1799,19 @@ impl BootTestStep {
             // same real boot chain — the same single-line exemption.
             if !panic_profile && let Some(hit) = negative_scan_hit_for(&capture, net_profile || netip_profile) {
                 return Err(self.fail(stage, &capture, &format!("negative scan hit {hit:?}")));
+            }
+            // The q35net fail-fast (13-05): the kernel netgate's own
+            // reconciliation is fail-closed — a `netgate: FAIL` line
+            // means a stage mismatch the missing terminal marker would
+            // otherwise only surface as a slow budget expiry.  Fail the
+            // gate the moment the kernel names its stage.
+            if q35net_profile && contains_marker(&capture, Q35_NETGATE_FAIL_MARKER.as_bytes()) {
+                let tail = String::from_utf8_lossy(&capture[capture.len().saturating_sub(200)..]);
+                return Err(self.fail(
+                    stage,
+                    &capture,
+                    &format!("kernel netgate failed ({Q35_NETGATE_FAIL_MARKER}): {tail}"),
+                ));
             }
             // The x86_64 channel's dedicated first-marker budget: the
             // banner is the gate's first marker, and SeaBIOS + GRUB
@@ -1814,10 +1880,48 @@ impl BootTestStep {
                         && contains_marker(&capture[pci_after..], Q35_PCIEXBAR_MARKER.as_bytes())
                         && contains_marker(&capture[pci_after..], PCI_NET_DEVICE_MARKER.as_bytes())
                     {
-                        // 13-03: the gate's timer half — the tick count
-                        // is anchored strictly past the discovery stage.
-                        ticks_after = capture.len();
-                        stage = BootStage::Ticks;
+                        if q35net_profile {
+                            // 13-05: the net gate continues into the bind
+                            // half — the negotiation audit + `#l0:` lines,
+                            // anchored strictly past the discovery stage
+                            // (the bind runs inside main9's pre-sti
+                            // window, so its lines arrive right after).
+                            bind_after = capture.len();
+                            stage = BootStage::X64Bind;
+                        } else {
+                            // 13-03: the gate's timer half — the tick
+                            // count is anchored strictly past the
+                            // discovery stage.
+                            ticks_after = capture.len();
+                            stage = BootStage::Ticks;
+                        }
+                    }
+                }
+                BootStage::X64Bind => {
+                    if contains_marker(&capture[bind_after..], Q35_BIND_FEATURES_MARKER.as_bytes())
+                        && contains_marker(&capture[bind_after..], Q35_BIND_L0_MARKER.as_bytes())
+                    {
+                        // The trigger stages follow sti; anchor each past
+                        // the previous stage's satisfaction.
+                        bind_after = capture.len();
+                        stage = BootStage::X64PingPong;
+                    }
+                }
+                BootStage::X64PingPong => {
+                    if contains_marker(&capture[bind_after..], Q35_NETGATE_PINGPONG_MARKER.as_bytes()) {
+                        bind_after = capture.len();
+                        stage = BootStage::X64TxBulk;
+                    }
+                }
+                BootStage::X64TxBulk => {
+                    if contains_marker(&capture[bind_after..], Q35_NETGATE_TXBULK_MARKER.as_bytes()) {
+                        bind_after = capture.len();
+                        stage = BootStage::X64NetDone;
+                    }
+                }
+                BootStage::X64NetDone => {
+                    if contains_marker(&capture[bind_after..], Q35_NET_DONE_MARKER.as_bytes()) {
+                        return self.finish(log_abs, &capture, BootProfile::X64Net);
                     }
                 }
                 BootStage::Ticks => {
@@ -2100,6 +2204,33 @@ impl BootTestStep {
                      device found, route), >= {BOOT_TICK_MIN} tick lines and the typed echo probe \
                      observed in order on the serial socket (X64-01 platform gate + X64-03 \
                      discovery contract)"
+                );
+            }
+            BootProfile::X64Net => {
+                // The finish()-time pcap assertion (13-05, X64-04): this
+                // run's filter-dump capture carries the kernel trigger's
+                // frames — >= N requests (N parsed from the kernel's own
+                // ping-pong marker), >= 1 gateway reply, 60-byte frames
+                // sourced from the guest MAC.  The exact RX==N/TX==N
+                // reconcile already ran kernel-side (fail-closed); this
+                // is the host-side wire proof (the 07 discipline: the
+                // stale-pcap removal pre-spawn makes this capture THIS
+                // run's).
+                let pcap_rel = format!("target/boot-test-{}.pcap", self.config_name);
+                let pcap_abs = workspace().join(&pcap_rel);
+                let pcap_bytes = std::fs::read(&pcap_abs).map_err(|e| {
+                    format!("net gate (q35net): read {pcap_rel} (this run's pcap): {e}")
+                })?;
+                let frames = pcap::parse_pcap(&pcap_bytes)
+                    .map_err(|e| format!("net gate (q35net): parse {pcap_rel}: {e}"))?;
+                let (reqs, reps) = pcap::assert_x64_netgate(&frames, capture)
+                    .map_err(|e| format!("net gate (q35net): {e}"))?;
+                println!(
+                    "boot-test: PASS -- SeaBIOS -> GRUB2 -> mb2 kernel boot: banner, discovery \
+                     markers, the bind markers (negotiation audit + #l0: + MAC), the kernel-side \
+                     netgate ping-pong xN/tx-bulk stages and X64-NET-DONE in order; the pcap \
+                     assertion holds ({reqs} ARP requests, {reps} gateway replies, 60-byte \
+                     frames from the guest MAC) — X64-04 closed and X64-02's load proof landed"
                 );
             }
             BootProfile::Exec => {
