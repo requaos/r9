@@ -9,6 +9,12 @@ pub const NMI_TRAPNO: u8 = 2;
 pub const BREAKPOINT_TRAPNO: u8 = 3;
 pub const DOUBLE_FAULT_TRAPNO: u8 = 8;
 
+/// The LAPIC timer's IDT vector — the first vector past the
+/// architectural exception range 0..=31.  The 0x20..=0x3F span is the
+/// spare IRQ span 13-05's IOAPIC lines occupy; every gate already
+/// exists (the stub array and Idt::init cover all 256).
+pub const TIMER_VECTOR: u8 = 0x20;
+
 pub const SWAPPED: u8 = 0x80;
 pub const SWAPPED_CS_OFFSET: usize = 7;
 
@@ -411,6 +417,15 @@ pub fn splx(x: IntrStatus) -> IntrStatus {
 }
 
 extern "C" fn trap(vector: u8, trap_frame: &mut Ureg) -> u32 {
+    // Hardware interrupts (vectors >= 32): dispatch, never the
+    // exception dump — the timer alone fires these until 13-05's
+    // IOAPIC lines arrive.
+    if vector >= 32 {
+        dispatch_irq(vector);
+        return 0;
+    }
+    // Synchronous exception (0..=31): dump and park — the 13-02
+    // early-exception diagnostics shape.
     crate::println!("trap {vector:?}", vector = crate::dat::Trap::from(vector));
     match vector {
         2 => {}
@@ -418,4 +433,25 @@ extern "C" fn trap(vector: u8, trap_frame: &mut Ureg) -> u32 {
         _ => crate::println!("frame: {trap_frame:#x?}"),
     }
     0
+}
+
+/// IRQ dispatch, the aarch64 dispatch_irq shape re-keyed: the entry
+/// stub encoded the vector (the stub array's return-address arithmetic
+/// in intrcommon); the registered handler runs FIRST, THEN the LAPIC
+/// EOI — device work before the acknowledge, never EOI-first (a
+/// level-triggered line still asserted would re-deliver immediately:
+/// the read-to-ack-before-EOI ordering Pitfall 5 pins for the
+/// virtio INTx lines that arrive in 13-05).  Strays print and still
+/// EOI — an EOI-less stray would wedge the LAPIC's in-service state.
+/// The spurious vector skips the EOI per the LAPIC spec (it was never
+/// in service).
+fn dispatch_irq(vector: u8) {
+    if vector == crate::platform::q35::lapic::SPURIOUS_VECTOR {
+        return;
+    }
+    match vector {
+        TIMER_VECTOR => crate::platform::q35::timer::tick(),
+        _ => crate::println!("unhandled IRQ {vector}"),
+    }
+    crate::platform::q35::lapic::eoi();
 }

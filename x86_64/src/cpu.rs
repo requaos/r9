@@ -134,15 +134,15 @@ pub unsafe fn _rdmsr(msr: u32) -> u64 {
 /// Unused until 13-03's timer lands (leaf 1 ECX bit 24 — the
 /// TSC-deadline gate — and the 0x15/0x16 frequency leaves).
 ///
-/// # Safety
 /// CPUID faults nowhere; an unimplemented leaf returns the maximum
-/// leaf's values by architectural definition (SDM Vol 2, CPUID).  %rbx
-/// cannot be named as an inline-asm operand on this toolchain (LLVM
-/// reserves it), so the value is walked through scratch operands with
-/// the original %rbx saved and restored around the instruction — cpuid
-/// writes ebx, and the compiler is free to hold live state there.
+/// leaf's values by architectural definition (SDM Vol 2, CPUID) — the
+/// function is safe.  %rbx cannot be named as an inline-asm operand on
+/// this toolchain (LLVM reserves it), so the value is walked through
+/// scratch operands with the original %rbx saved and restored around
+/// the instruction — cpuid writes ebx, and the compiler is free to
+/// hold live state there.
 #[allow(dead_code)]
-pub unsafe fn cpuid(leaf: u32, subleaf: u32) -> (u32, u32, u32, u32) {
+pub fn cpuid(leaf: u32, subleaf: u32) -> (u32, u32, u32, u32) {
     let (a, c, d): (u32, u32, u32);
     let (_rbx_saved, rbx_val): (u64, u64);
     unsafe {
@@ -191,15 +191,12 @@ pub fn has_tsc_deadline(cpuid1_ecx: u32) -> bool {
     cpuid1_ecx & (1 << 24) != 0
 }
 
-/// Writes an MSR
-///
-/// Unused since the old-generation syscall/vsvm init retired; 13-03's
-/// TSC-deadline timer re-arms it (MSR 0x832) — kept as the substrate.
+/// Writes an MSR — the TSC-deadline timer's arm (MSR 0x832, 13-03:
+/// written only inside the CPUID.1.ECX[24]-gated mode).
 ///
 /// # Safety
 /// The caller must ensure that the value and MSR are
 /// valid, and that the value makes sense for the MSR.
-#[allow(dead_code)]
 pub(crate) unsafe fn wrmsr(msr: u32, value: u64) {
     unsafe {
         asm!("wrmsr",
