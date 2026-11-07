@@ -24,10 +24,6 @@
 // signature + length + checksum BEFORE any pointer is derived from it;
 // a failing table is a loud named error and NO partial facts — never a
 // walk off the end, never a panic.
-//
-// Task 1 lands the parser ahead of its Task 2 consumer (mod.rs's
-// print_machine_info + pci.rs); the allow dies with the wiring commit.
-#![allow(dead_code)]
 
 use super::mb2::AcpiRoot;
 
@@ -38,11 +34,6 @@ const RSDP_SIG: &[u8; 8] = b"RSD PTR ";
 /// revision 1 + oemid 6 + oemtableid 8 + oemrevision 4 + creatorid 4 +
 /// creatorrevision 4).
 pub const SDT_HEADER_SIZE: usize = 36;
-
-/// The byte-offset of the checksum inside an SDT header, and the RSDP's
-/// own first checksum right after its 8-byte signature.
-const SDT_CSUM_OFF: usize = 9;
-const RSDP_CSUM_OFF: usize = 8;
 
 /// Upper bound on any table this parser will read: MCFG/MADT/HPET/XSDT
 /// are all far below; a length beyond this is a loud BadLength, so a
@@ -271,7 +262,12 @@ pub fn parse_mcfg(bytes: &[u8]) -> Result<McfgEntry, ParseError> {
 /// BadEntry — never a panic, never a partial Madt.
 pub fn parse_madt(bytes: &[u8]) -> Result<Madt, ParseError> {
     const MADT_LAPIC_ADDR: usize = 36; // u32 local intc address
-    const MADT_FIRST_ENTRY: usize = 40;
+    const MADT_FLAGS: usize = 40; // u32 flags (PCAT_COMPAT lives here)
+    // The header's fixed tail is lapic_addr + flags — the first entry
+    // lands at 44 (the live q35 MADT's type-0 LAPIC entry sits exactly
+    // there; an off-by-four read the first synthetic fixtures shared,
+    // found against SeaBIOS's real table).
+    const MADT_FIRST_ENTRY: usize = MADT_FLAGS + 4;
     const IOAPIC_ENTRY_LEN: usize = 12; // {ty, len, id, rsvd, u32 addr, u32 gsib}
     const INTSRC_ENTRY_LEN: usize = 10; // {ty, len, bus, src, u32 gsi, u16 flags}
     let len = bytes.len();
@@ -523,11 +519,11 @@ pub fn discover(mem: &impl PhysMem, mb2_root: Option<AcpiRoot>) -> Acpi {
 /// The kernel's PhysMem: l.S's bootidentitypt3 identity-maps the first
 /// 4 GiB PA==VA, and every table this walk touches (EBDA, the RSDP/XSDT
 /// in the ACPI-reclaimable low window, and later the MCFG-named ECAM
-/// base) lives inside it.  Host tests supply their own image.
-#[cfg(not(test))]
+/// base) lives inside it.  Host tests supply their own image; this impl
+/// compiles everywhere (read_volatile is core) but only the kernel ever
+/// constructs it.
 pub struct IdentityMem;
 
-#[cfg(not(test))]
 impl PhysMem for IdentityMem {
     fn read_phys(&self, pa: u64, buf: &mut [u8]) -> bool {
         let Some(end) = pa.checked_add(buf.len() as u64) else {
@@ -555,8 +551,13 @@ mod tests {
     // ------------------------------------------------------------------
     // Host fixtures: a synthetic physical-memory image plus builders for
     // every table, checksums patched to spec (ACPI on x86 is
-    // little-endian).
+    // little-endian).  The checksum offsets live here with the builders
+    // that patch them: the SDT header's at offset 9, the RSDP's own
+    // first checksum right after its 8-byte signature at offset 8.
     // ------------------------------------------------------------------
+    const SDT_CSUM_OFF: usize = 9;
+    const RSDP_CSUM_OFF: usize = 8;
+
     struct Image {
         mem: Vec<u8>,
     }
@@ -709,6 +710,9 @@ mod tests {
     fn madt_table(local_intc: u32, entries: &[u8]) -> Vec<u8> {
         let mut body = Vec::new();
         body.extend_from_slice(&local_intc.to_le_bytes());
+        // The flags dword (PCAT_COMPAT) sits between the address and the
+        // entries — the live q35 MADT carries 1 here.
+        body.extend_from_slice(&1u32.to_le_bytes());
         body.extend_from_slice(entries);
         sdt(b"APIC", &body)
     }

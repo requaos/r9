@@ -902,6 +902,17 @@ const TCG_OVERALL_MULT: u64 = 6;
 /// timings; the negative panic scan above stays on.
 const BOOT_Q35_MEMORY_MARKER: &str = "q35: memory";
 
+/// The q35 discovery markers (13-04, X64-03): after the memory facts,
+/// print_machine_info walks the ACPI tables and pci.rs programs the MCH
+/// PCIEXBAR from the checksummed MCFG before the recursive bridge walk.
+/// The gate asserts the MCFG parse line, the pciexbar old->new audit
+/// line, and the virtio-net device-found line, strictly after the facts
+/// stage — presence, never timings; the negative panic scan stays on.
+/// The exact expected BASES are keyed off the config NAME (Task 3's
+/// moved-window proof), exactly like the aarch64 ecam markers.
+const Q35_MCFG_MARKER: &str = "q35: mcfg";
+const Q35_PCIEXBAR_MARKER: &str = "pciexbar: ";
+
 /// Panic-profile markers: a config with dev = ["panic"] boots
 /// virt to a deliberate brk #0 sync exception BEFORE trap::unmask_irq(), so
 /// the log is deterministic (zero IRQ interleaving) -- banner, start marker,
@@ -1186,6 +1197,24 @@ fn marker_position(capture: &[u8], marker: &[u8]) -> Option<usize> {
     capture.windows(marker.len()).position(|w| w == marker)
 }
 
+/// The byte offset just past the LAST line starting with `marker`
+/// (including its terminator) — a POSITIONAL anchor.  The X64 discovery
+/// stage (13-04) anchors here, not at capture length: the kernel prints
+/// the whole facts+discovery block in one serial burst, so a
+/// satisfaction-time anchor would skip past the discovery lines that
+/// arrived in the same socket read.
+fn last_marker_line_end(capture: &[u8], marker: &str) -> Option<usize> {
+    let mut off = 0usize;
+    let mut found = None;
+    for line in capture.split_inclusive(|b| *b == b'\n') {
+        off += line.len();
+        if line.starts_with(marker.as_bytes()) {
+            found = Some(off);
+        }
+    }
+    found
+}
+
 /// Count TrapFrame register-dump rows: lines shaped `<spaces>x<N>:` (the
 /// {:#?} Debug prints x0..x30 one per line, space-indented, bare register
 /// names).  Serial lines arrive CRLF; the digit/colon scan never reaches
@@ -1241,6 +1270,11 @@ enum BootStage {
     /// `q35: memory` fact line strictly after the banner's byte offset —
     /// the mb2 parse's on-serial evidence.
     Q35Facts,
+    /// The x86_64 discovery stage (13-04): facts observed, now await the
+    /// ACPI MCFG parse line, the pciexbar audit line, and the virtio-net
+    /// device-found line, all strictly after the facts stage's anchor —
+    /// X64-03's on-serial evidence.
+    Q35PciDiscovery,
 }
 
 impl fmt::Display for BootStage {
@@ -1289,6 +1323,10 @@ impl fmt::Display for BootStage {
             BootStage::Q35Facts => {
                 write!(f, ">= 1 line beginning {BOOT_Q35_MEMORY_MARKER:?} after the banner")
             }
+            BootStage::Q35PciDiscovery => write!(
+                f,
+                "discovery markers {{{Q35_MCFG_MARKER:?}, {Q35_PCIEXBAR_MARKER:?}, {PCI_NET_DEVICE_MARKER:?}}} after the facts"
+            ),
         }
     }
 }
@@ -1628,8 +1666,12 @@ impl BootTestStep {
         // The X64 facts stage's ordered-presence anchor: the byte offset
         // just past the banner, set when the banner is observed.
         let mut facts_after = 0usize;
+        // The X64 discovery stage's ordered-presence anchor (13-04): the
+        // byte offset at the facts stage's satisfaction, so a discovery
+        // line that rode the wire earlier never counts.
+        let mut pci_after = 0usize;
         // The X64 ticks stage's ordered-presence anchor (13-03): the
-        // byte offset just past the facts stage's satisfaction, so a
+        // byte offset just past the discovery stage's satisfaction, so a
         // tick line that rode the wire earlier never counts.  0 on the
         // aarch64 profiles (the whole capture counts, as before).
         let mut ticks_after = 0usize;
@@ -1735,11 +1777,29 @@ impl BootTestStep {
                 }
                 BootStage::Q35Facts => {
                     if count_marker_lines(&capture[facts_after..], BOOT_Q35_MEMORY_MARKER) >= 1 {
-                        // 13-03: the gate grew to the timer half —
-                        // X64-01's full Phase-3-style shape.  The tick
-                        // count is anchored strictly past the facts (a
-                        // tick line that rode the wire pre-facts never
-                        // satisfies the stage).
+                        // 13-04: the gate grew to the discovery half —
+                        // X64-03's evidence.  The anchor is POSITIONAL
+                        // (just past the last memory fact line): the
+                        // kernel prints the whole facts+discovery block
+                        // in one burst, so anchoring at capture length
+                        // would skip past the discovery lines that
+                        // arrived in the same socket read.
+                        pci_after = last_marker_line_end(
+                            &capture[facts_after..],
+                            BOOT_Q35_MEMORY_MARKER,
+                        )
+                        .map(|p| facts_after + p)
+                        .unwrap_or(capture.len());
+                        stage = BootStage::Q35PciDiscovery;
+                    }
+                }
+                BootStage::Q35PciDiscovery => {
+                    if contains_marker(&capture[pci_after..], Q35_MCFG_MARKER.as_bytes())
+                        && contains_marker(&capture[pci_after..], Q35_PCIEXBAR_MARKER.as_bytes())
+                        && contains_marker(&capture[pci_after..], PCI_NET_DEVICE_MARKER.as_bytes())
+                    {
+                        // 13-03: the gate's timer half — the tick count
+                        // is anchored strictly past the discovery stage.
                         ticks_after = capture.len();
                         stage = BootStage::Ticks;
                     }
@@ -2995,8 +3055,9 @@ fn annotated_status(cmd: &mut Command) -> Result<process::ExitStatus> {
 mod tests {
     use super::{
         BOOT_ECHO_PROBE, BOOT_Q35_MEMORY_MARKER, BOOT_TICK_MARKER, BOOT_TICK_MIN, check_mb2_header,
-        contains_marker, count_marker_lines, count_register_lines, marker_position,
-        negative_scan_hit_for,
+        contains_marker, count_marker_lines, count_register_lines, last_marker_line_end,
+        marker_position, negative_scan_hit_for, PCI_NET_DEVICE_MARKER, Q35_MCFG_MARKER,
+        Q35_PCIEXBAR_MARKER,
     };
 
     /// Build a synthetic image around one mb2 header (the fixture shape
@@ -3164,6 +3225,73 @@ mod tests {
         // memory marker's line prefix.
         assert_eq!(count_marker_lines(&wire[after..], "q35: acpi"), 1);
         assert!(marker_position(b"no marker here", BOOT_Q35_MEMORY_MARKER.as_bytes()).is_none());
+    }
+
+    /// The X64 gate's discovery stage (13-04) demands the MCFG parse,
+    /// the pciexbar audit, and the device-found markers only past the
+    /// facts stage's anchor: lines that rode the wire before the facts
+    /// were observed never satisfy the stage, and any missing marker
+    /// keeps it red (X64-03's presence contract).
+    #[test]
+    fn x64_discovery_markers_count_only_past_the_facts() {
+        let wire = b"r9 from the Internet\r\n\
+                     q35: mcfg 0xb0000000 buses 0x0-0xff (seg 0)\r\n\
+                     q35: memory 0x100000..0x3ffdf000 available\r\n\
+                     q35: ioapic 0xfec00000 gsib 0 (id 8)\r\n\
+                     q35: mcfg 0xb0000000 buses 0x0-0xff (seg 0)\r\n\
+                     pciexbar: 0xb0000001 -> 0xb0000001\r\n\
+                     pci: virtio-net 1af4:1041 at 00:02.0 rev 01 pin 1 (inta) bars 2\r\n";
+        let facts_after = marker_position(wire, b"q35: memory")
+            .map(|p| p + "q35: memory 0x100000..0x3ffdf000 available\r\n".len())
+            .unwrap_or(wire.len());
+        // The pre-facts mcfg line never satisfies the stage: the anchor
+        // starts at the facts stage's satisfaction, where all three
+        // markers must appear.
+        assert!(contains_marker(wire, Q35_MCFG_MARKER.as_bytes()));
+        assert!(contains_marker(&wire[facts_after..], Q35_MCFG_MARKER.as_bytes()));
+        assert!(contains_marker(&wire[facts_after..], Q35_PCIEXBAR_MARKER.as_bytes()));
+        assert!(contains_marker(&wire[facts_after..], PCI_NET_DEVICE_MARKER.as_bytes()));
+        // The stage is all-three: a wire missing the audit line (the
+        // programming step silently skipped) stays red.
+        let no_exbar = b"q35: memory 0x100000..0x3ffdf000 available\r\n\
+                         q35: mcfg 0xb0000000 buses 0x0-0xff\r\n\
+                         pci: virtio-net 1af4:1041 at 00:02.0 rev 01\r\n";
+        assert!(!contains_marker(no_exbar, Q35_PCIEXBAR_MARKER.as_bytes()));
+        // And the device line is vendor-exact: a transitional reject
+        // print (0x1000) is not the found marker.
+        let rejected = b"pci: virtio-net 1af4:1000 at 00:02.0 rejected (transitional)\r\n";
+        assert!(!contains_marker(rejected, PCI_NET_DEVICE_MARKER.as_bytes()));
+    }
+
+    /// The discovery stage's anchor is POSITIONAL (13-04): one burst
+    /// carries banner+facts+discovery together, so the anchor must sit
+    /// just past the LAST memory line — not at the capture length the
+    /// stage transition observed (which already includes the burst's
+    /// discovery lines and would deadlock the stage).
+    #[test]
+    fn discovery_anchor_is_the_last_memory_line_not_capture_length() {
+        // One burst: the whole machine-info block arrives together.
+        let burst = b"r9 from the Internet\r\n\
+                      q35: memory 0x0..0x9fc00 available\r\n\
+                      q35: acpi rsdt 0x3ffe2345 via mb2 acpi tag\r\n\
+                      q35: mcfg 0xb0000000 buses 0x0-0xff\r\n\
+                      pciexbar: 0xb0000001 -> 0xb0000001\r\n\
+                      pci: virtio-net 1af4:1041 at 00:02.0\r\n";
+        let anchor = last_marker_line_end(burst, BOOT_Q35_MEMORY_MARKER).unwrap();
+        // A capture-length anchor (burst.len()) would exclude every
+        // discovery line from its own stage; the positional anchor sits
+        // just past the memory line, before the discovery lines.
+        assert!(anchor < burst.len());
+        assert!(contains_marker(&burst[anchor..], Q35_MCFG_MARKER.as_bytes()));
+        assert!(contains_marker(&burst[anchor..], Q35_PCIEXBAR_MARKER.as_bytes()));
+        assert!(contains_marker(&burst[anchor..], PCI_NET_DEVICE_MARKER.as_bytes()));
+        // And a discovery line BEFORE the last memory line never counts.
+        let shuffled = b"pciexbar: 0xb0000001 -> 0xb0000001\r\n\
+                         q35: memory 0x0..0x9fc00 available\r\n";
+        let anchor = last_marker_line_end(shuffled, BOOT_Q35_MEMORY_MARKER).unwrap();
+        assert!(!contains_marker(&shuffled[anchor..], Q35_PCIEXBAR_MARKER.as_bytes()));
+        // No memory line at all: None.
+        assert!(last_marker_line_end(b"banner\r\n", BOOT_Q35_MEMORY_MARKER).is_none());
     }
 
     /// The X64 gate's tick stage (13-03) counts `tick` lines only past
