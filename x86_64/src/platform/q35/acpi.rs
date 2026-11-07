@@ -254,7 +254,7 @@ pub fn parse_mcfg(bytes: &[u8]) -> Result<McfgEntry, ParseError> {
         return Err(ParseError::BadLength);
     }
     let entries = len - SDT_HEADER_SIZE - MCFG_BODY_FIXED;
-    if entries % MCFG_ENTRY_SIZE != 0 {
+    if !entries.is_multiple_of(MCFG_ENTRY_SIZE) {
         return Err(ParseError::BadEntry);
     }
     Ok(McfgEntry {
@@ -375,7 +375,7 @@ fn fetch_table(
         return Ok(None);
     }
     let len = le_u32(&hdr, 4).ok_or(ParseError::BadLength)? as usize;
-    if len < SDT_HEADER_SIZE || len > TABLE_CAP {
+    if !(SDT_HEADER_SIZE..=TABLE_CAP).contains(&len) {
         return Err(ParseError::BadLength);
     }
     if !mem.read_phys(pa, &mut buf[..len]) {
@@ -464,12 +464,12 @@ fn rsdp_scan_region(mem: &impl PhysMem, base: u64, len: u64) -> Option<AcpiRoot>
     let mut off = 0u64;
     while off < len {
         let pa = base + off;
-        if mem.read_phys(pa, &mut sig) && sig == *RSDP_SIG {
-            if mem.read_phys(pa, &mut cand) {
-                if let Ok(root) = rsdp_root(&cand) {
-                    return Some(root);
-                }
-            }
+        if mem.read_phys(pa, &mut sig)
+            && sig == *RSDP_SIG
+            && mem.read_phys(pa, &mut cand)
+            && let Ok(root) = rsdp_root(&cand)
+        {
+            return Some(root);
         }
         off += 16;
     }
@@ -483,10 +483,10 @@ fn scan_for_rsdp(mem: &impl PhysMem) -> Option<AcpiRoot> {
     let mut bda = [0u8; 2];
     if mem.read_phys(0x40E, &mut bda) {
         let ebda = (u16::from_le_bytes(bda) as u64) << 4;
-        if ebda != 0 {
-            if let Some(root) = rsdp_scan_region(mem, ebda, 1024) {
-                return Some(root);
-            }
+        if ebda != 0
+            && let Some(root) = rsdp_scan_region(mem, ebda, 1024)
+        {
+            return Some(root);
         }
     }
     rsdp_scan_region(mem, 0xE_0000, 0x2_0000)
