@@ -12,6 +12,7 @@ mod dat;
 mod devcons;
 mod node0;
 mod pio;
+mod platform;
 mod proc;
 mod syscall;
 mod trap;
