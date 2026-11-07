@@ -7,6 +7,9 @@ use crate::dat::{Flags, Gdt, Idt};
 use bit_field::BitField;
 use core::arch::asm;
 
+/// Unused until user processes exist (Phase 14 XEXEC swaps %gs on
+/// syscall entry/exit).
+#[allow(dead_code)]
 pub const MSR_KERNEL_GS_BASE: u32 = 0xc0000102;
 
 /// Retrieves a copy of the `RFLAGS` registers.
@@ -19,6 +22,9 @@ pub(crate) fn flags() -> Flags {
     }
 }
 
+/// The IA32_FMASK value syscalls enter with (the syscall entry's MSR
+/// write retired with the old generation; Phase 14 XEXEC re-arms it).
+#[allow(dead_code)]
 pub(crate) fn fmask() -> u64 {
     Flags::empty().with_intr(true).with_trap(true).with_dir(true).bits()
 }
@@ -124,9 +130,13 @@ pub unsafe fn _rdmsr(msr: u32) -> u64 {
 
 /// Writes an MSR
 ///
+/// Unused since the old-generation syscall/vsvm init retired; 13-03's
+/// TSC-deadline timer re-arms it (MSR 0x832) — kept as the substrate.
+///
 /// # Safety
 /// The caller must ensure that the value and MSR are
 /// valid, and that the value makes sense for the MSR.
+#[allow(dead_code)]
 pub(crate) unsafe fn wrmsr(msr: u32, value: u64) {
     unsafe {
         asm!("wrmsr",
@@ -139,10 +149,15 @@ pub(crate) unsafe fn wrmsr(msr: u32, value: u64) {
 
 /// Writes the GS Base register.
 ///
+/// Unused since the old-generation vsvm init retired (l.S's warp64 does
+/// the boot-time wrgsbase in asm); user-process %gs swaps (Phase 14)
+/// re-arm it.
+///
 /// # Safety
 /// The caller must ensure that the given value makes sense as
 /// a %gs segment base value.  Note that we assume we can use
 /// the `WRGSBASE` instruction.
+#[allow(dead_code)]
 pub(crate) unsafe fn wrgsbase(value: u64) {
     unsafe {
         asm!("wrgsbase {}", in(reg) value, options(att_syntax));

@@ -1,4 +1,4 @@
-pub use crate::vsvm::{Gdt, Idt, Tss};
+pub use crate::seg::{Gdt, Idt, Tss};
 
 use bitstruct::bitstruct;
 use port::dat as portdat;
@@ -6,25 +6,9 @@ use zerocopy::FromZeros;
 
 pub const KCPUZERO: usize = 0xffff_ff00_0000_0000;
 pub const KMACH: usize = KCPUZERO + 0x0010_0000;
-pub const KMACHTSS: usize = KMACH + core::mem::offset_of!(Mach, tss);
 
 pub const UREG_TRAPNO_OFFSET: usize = 19 * core::mem::size_of::<u64>();
 pub const UREG_CS_OFFSET: usize = 22 * core::mem::size_of::<u64>();
-
-/// A Host Physical Address (HPA).
-///
-/// An HPA represents a physical address in the host physical
-/// address space (as distinct from a device or guest physical
-/// address space).
-#[derive(Clone, Copy, Debug, FromZeros)]
-#[repr(transparent)]
-pub struct HPA(pub u64);
-
-impl HPA {
-    pub fn from_phys(pa: u64) -> HPA {
-        HPA(pa)
-    }
-}
 
 /// The user register and trap frame structure.
 ///
@@ -235,8 +219,8 @@ pub struct Mach {
 
     // Architecturally defined data.
     pub tss: Tss, // Truly per-CPU
-    idt: Idt,     // Mapped to per-node IDT
-    gdt: Gdt,     // Mapped to per-CPU GDT; padded to 64k with zeros
+    pub idt: Idt, // Mapped to per-node IDT
+    pub gdt: Gdt, // Mapped to per-CPU GDT; padded to 64k with zeros
 }
 static_assertions::const_assert_eq!(core::mem::offset_of!(Mach, pml4), 65536 * 2 + 4096);
 static_assertions::const_assert_eq!(core::mem::offset_of!(Mach, stack), 65536);
@@ -317,6 +301,10 @@ bitstruct! {
 }
 
 impl Flags {
+    // empty/bits feed cpu::fmask (the Phase-14 syscall FMASK value); the
+    // family rides the pre-existing dead spl/syscall chains until
+    // 13-03/14 re-arm them.
+    #[allow(dead_code)]
     pub fn empty() -> Self {
         Self(0)
     }
@@ -325,6 +313,7 @@ impl Flags {
         Self(raw).with_mb1(true)
     }
 
+    #[allow(dead_code)]
     pub fn bits(self) -> u64 {
         self.0
     }

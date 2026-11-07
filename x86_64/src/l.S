@@ -67,6 +67,10 @@
 .set I8259A0,			0x20
 .set I8259A1,			0xA0
 
+// The mb2 info stash's size cap (mb2info in Rust .bss): matches the
+// array bound; the early copy clamps total_size to this.
+.set MB2INFOMAX,		4096
+
 // When we get here we are in protected mode with a GDT.  We set
 // up IA32e mode and get into long mode with paging enabled, then
 // jump to Rust.
@@ -125,6 +129,23 @@ mb2_header_end:
 
 	// Save the multiboot information pointer.
 	movl	%ebx, %ebp
+
+	// Stash the mb2 info structure in the kernel's .bss BEFORE the
+	// second-mebibyte zeroing below: GRUB 2.14's heap can land the
+	// structure inside that mebibyte (observed live at 0x16dc08 on
+	// this channel — 13-02), and the zeroing would destroy the only
+	// copy of the firmware data the kernel boots from.  The copy is
+	// capped at the stash buffer's size; a loader that hands us a
+	// corrupt total_size cannot walk off the buffer.
+	movl	(%ebp), %ecx		// total_size (u32, little-endian)
+	cmpl	$MB2INFOMAX, %ecx
+	jbe	1f
+	movl	$MB2INFOMAX, %ecx
+1:	movl	$(mb2info - KZERO), %edi
+	movl	%ebp, %esi
+	shrl	$2, %ecx		// copy whole words (total_size is 4-aligned)
+	cld
+	rep movsl
 
 	// Mask off the PIC.  We never use it.
 	movw	$(I8259A0 + 1), %dx
@@ -212,33 +233,24 @@ mb2_header_end:
 	movw	%ax, %gs
 
 	// We can now use linked addresses for the stack and code.
-	// Jump to the code that initialized ccNUMA node 0 and the
-	// cpu0 Mach, returning to warp64, which removes the
-	// identity map, sets the SP to the scheduler stack, and
-	// jumps into `main` in Rust.
-	leaq	KMACH, %rdi
-	leaq	KLOSTK, %rsp
-	movabsq	$warp64, %rax
-	pushq	%rax
-	movabsq	$init0, %rax
-	pushq	%rax
-	ret
-
+	// Enter the kernel proper: load the Mach stack, point %gs at the
+	// Mach, and jump into `main` in Rust.  The port-based system (13-02)
+	// runs on the hand-crafted boot PML4s — the identity map of the
+	// first 4 GiB stays live so `main` can read firmware data (the
+	// stashed mb2 info) at physical addresses, and node0's full
+	// address-space construction is retired with the old generation.
+	// The port-based vm layer rebuilds the proper kernel map in the
+	// later bring-up plans.
 warp64:
-	// Now load the stack pointer with our Mach stack.
 	movabsq	$(KCPUZERO+KMACH), %rdi
 	wrgsbase %rdi
 	leaq	MACHSTKOFF+MACHSTKSZ(%rdi), %rsp
-	// At this point, we are fully in the kernel virtual
-	// address space and can discard the identity mapping.
-	// To do so, we load the early PML4 that does not have
-	// that entry.
-	movq	%rax, %cr3			// Also flushes TLB.
 
 	// A pointer to the Mach is already in %rdi, and is the
 	// first argument to `main`.  We also pass the multiboot info
-	// pointer.
-	movq	%rbp, %rsi
+	// stash's address (the .bss copy taken above; the original
+	// at %ebp may already be zeroed).
+	movabsq	$mb2info, %rsi
 
 	// Push a dummy stack frame and jump to `main`.
 	pushq	$0

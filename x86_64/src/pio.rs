@@ -20,3 +20,16 @@ pub unsafe fn outl(port: u16, l: u32) {
         core::arch::asm!("outl %eax, %dx", in("dx") port, in("ax") l, options(att_syntax));
     }
 }
+
+pub unsafe fn inb(port: u16) -> u8 {
+    #[cfg(not(test))]
+    unsafe {
+        let b: u8;
+        core::arch::asm!("inb %dx, %al", in("dx") port, lateout("al") b, options(att_syntax));
+        b
+    }
+    #[cfg(test)]
+    {
+        0
+    }
+}

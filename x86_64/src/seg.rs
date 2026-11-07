@@ -1,12 +1,13 @@
-//! "Vestigial Segmented Virtual Memory"
-//!
-//! This module is a bit unfortunate; it's simply a grab-bag of
-//! x86 legacy.  Nominally, all of this ought to go into dat.rs,
-//! but that's already busy enough without polluting it with
-//! this goo.
+//! The x86 segment/descriptor layer: the GDT, IDT, and TSS types the
+//! Mach embeds, plus the descriptor-building machinery behind them.
+//! Relocated verbatim from the retired old-generation `vsvm.rs` (13-02)
+//! — only the module surface changed: the old `init()` per-CPU %gs dance
+//! is gone (l.S's warp64 wrgsbase is the keeper), and `Gdt::init` fills
+//! the embedded descriptor table directly (node0 used to fill separate
+//! pages aliased at the Mach's GDT/IDT addresses from l.S-called code).
 
-use crate::cpu::{self, MSR_KERNEL_GS_BASE};
-use crate::dat::{Mach, MachMode, Page, Stack};
+use crate::cpu;
+use crate::dat::{MachMode, Stack};
 use crate::trap;
 use crate::trap::BREAKPOINT_TRAPNO;
 use crate::trap::{DEBUG_TRAPNO, DOUBLE_FAULT_TRAPNO, NMI_TRAPNO};
@@ -14,7 +15,7 @@ use crate::trap::{DEBUG_TRAPNO, DOUBLE_FAULT_TRAPNO, NMI_TRAPNO};
 use bit_field::BitField;
 use zerocopy::FromZeros;
 
-pub mod seg {
+pub mod descr {
     use super::{Gdt, IstIndex, MachMode, Tss, trap};
 
     use bit_field::BitField;
@@ -85,6 +86,7 @@ pub mod seg {
                 .with_code(false)
                 .with_readable(true)
                 .with_present(true)
+                .with_long(true)
                 .with_iopl(MachMode::User)
         }
     }
@@ -187,30 +189,24 @@ pub mod seg {
 #[derive(FromZeros, Debug)]
 #[repr(C)]
 struct GdtData {
-    null: seg::Descr,
-    ktext: seg::Descr,
-    kdata: seg::Descr,
-    udata: seg::Descr,
-    utext: seg::Descr,
-    unused: seg::Descr,
-    task: seg::TaskStateDescr,
+    null: descr::Descr,
+    ktext: descr::Descr,
+    kdata: descr::Descr,
+    udata: descr::Descr,
+    utext: descr::Descr,
+    unused: descr::Descr,
+    task: descr::TaskStateDescr,
 }
 
 impl GdtData {
-    fn init_in(page: &mut Page, tss: *mut Tss) {
-        let ptr = page.as_mut_ptr() as *mut Self;
-        let gdt = unsafe { &mut *ptr };
-        gdt.init(tss);
-    }
-
     pub fn init(&mut self, tss: *mut Tss) {
-        self.null = seg::Descr::null();
-        self.ktext = seg::Descr::ktext64();
-        self.kdata = seg::Descr::kdata64();
-        self.udata = seg::Descr::udata64();
-        self.utext = seg::Descr::utext64();
-        self.unused = seg::Descr::empty();
-        self.task = seg::TaskStateDescr::new(tss);
+        self.null = descr::Descr::null();
+        self.ktext = descr::Descr::ktext64();
+        self.kdata = descr::Descr::kdata64();
+        self.udata = descr::Descr::udata64();
+        self.utext = descr::Descr::utext64();
+        self.unused = descr::Descr::empty();
+        self.task = descr::TaskStateDescr::new(tss);
     }
 }
 
@@ -219,15 +215,14 @@ impl GdtData {
 pub struct Gdt(GdtData);
 
 impl Gdt {
-    pub fn init_in(page: &mut Page, tss: *mut Tss) {
-        GdtData::init_in(page, tss);
+    /// Fill the embedded descriptor table (the Mach's own Gdt — node0's
+    /// separate-page init_in fill is retired with it).
+    pub fn init(&mut self, tss: *mut Tss) {
+        self.0.init(tss);
     }
 
     pub const fn ktextsel() -> u16 {
         core::mem::offset_of!(GdtData, ktext) as u16
-    }
-    pub const fn utextsel() -> u16 {
-        core::mem::offset_of!(GdtData, utext) as u16
     }
     pub const fn tasksel() -> u16 {
         core::mem::offset_of!(GdtData, task) as u16
@@ -260,6 +255,16 @@ impl Gdt {
     // for CS and not SS.  So for portability, we
     // explicitly OR a user RPL into the STAR bits.
     // This is idempotent for CS.
+    //
+    // Unused until Phase 14 (XEXEC) restores the syscall entry.
+    #[allow(dead_code)]
+    pub const fn utextsel() -> u16 {
+        core::mem::offset_of!(GdtData, utext) as u16
+    }
+
+    /// The IA32_STAR value SYSRET needs (see utextsel above).  Unused
+    /// until Phase 14 (XEXEC) restores the syscall entry.
+    #[allow(dead_code)]
     pub fn star() -> u64 {
         const RPL_USER: u64 = MachMode::User as u64;
         const UTEXTSEL: u64 = Gdt::utextsel() as u64;
@@ -354,11 +359,11 @@ impl Tss {
 
 #[derive(FromZeros)]
 #[repr(C, align(4096))]
-pub struct Idt([seg::IntrGateDescr; 256]);
+pub struct Idt([descr::IntrGateDescr; 256]);
 
 impl Idt {
     pub const fn empty() -> Self {
-        Idt([seg::IntrGateDescr::empty(); 256])
+        Idt([descr::IntrGateDescr::empty(); 256])
     }
 
     pub fn init(&mut self, stubs: &[trap::Stub; 256]) {
@@ -366,7 +371,7 @@ impl Idt {
             let trapno = k as u8;
             let index = IstIndex::from_trap(trapno);
             let dpl = if trapno == BREAKPOINT_TRAPNO { MachMode::User } else { MachMode::Kernel };
-            self.0[k] = seg::IntrGateDescr::new(thunk, dpl, index);
+            self.0[k] = descr::IntrGateDescr::new(thunk, dpl, index);
         }
     }
 
@@ -377,15 +382,5 @@ impl Idt {
         unsafe {
             cpu::lidt(self);
         }
-    }
-}
-
-pub unsafe fn init(mach: &mut Mach) {
-    unsafe {
-        mach.init();
-        let ptr = mach as *mut Mach;
-        let me = ptr.addr() + 0x002_0000;
-        cpu::wrgsbase(me as u64);
-        cpu::wrmsr(MSR_KERNEL_GS_BASE, 0);
     }
 }

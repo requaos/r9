@@ -5,10 +5,11 @@
 //   { u32 total_size; u32 reserved; tags... }
 // Tags are 8-byte aligned, each { u32 type; u32 size } with size counting
 // the 8-byte header; the walk advances 8-aligned and terminates at the
-// type-0 end tag.  The memory map rides tag 6; ACPI RSDP pointers ride
-// tags 14 (old, u32) / 15 (new, u64) — the preferred RSDP source per the
-// D-03 loader-mediated theme (13-04 consumes it; on BIOS boots GRUB emits
-// neither, and the loud-absence print is the expected case).
+// type-0 end tag.  The memory map rides tag 6; the ACPI tags 14/15 embed
+// the RSDP structure itself — the root-table address inside it is the
+// loader-mediated platform-data source per D-03's theme (13-04 walks the
+// table from there; a boot whose map carries neither tag is the loud-
+// absence case the EBDA scan covers).
 //
 // Ground truth (live hex dump of GRUB 2.14's structure on the q35 channel,
 // 13-02): the boot-loader-name tag carries size 18, an empty cmdline tag
@@ -58,8 +59,10 @@ pub enum ParseError {
     InvalidEntrySize,
     /// Memory-map tag: entry_version is not 0 (an unknown future format).
     InvalidEntryVersion,
-    /// A tag's body undercuts the fixed fields its type requires (an RSDP
-    /// tag smaller than its pointer, an end tag not exactly 8 bytes).
+    /// A tag's body undercuts the fixed fields its type requires or fails
+    /// their validation (an RSDP tag smaller than the structure it embeds
+    /// or with a bad "RSD PTR " signature, an end tag not exactly 8
+    /// bytes).
     InvalidTagBody,
     /// More memory-map entries than Facts carries (live GRUB/q35 reports
     /// 9; MAX_RANGES is the headroom).
@@ -115,14 +118,31 @@ pub struct MemRange {
 /// Headroom over the 9 entries live GRUB/q35 reports.
 pub const MAX_RANGES: usize = 32;
 
-/// The parsed facts main boots from: the memory map and the optional RSDP
-/// physical pointer.  Only type-1 (available) ranges ever seed the page
-/// allocator; everything else stays reserved (T-13-04).
+/// The ACPI root-table fact the mb2 ACPI tags carry: GRUB embeds the
+/// RSDP structure ITSELF in the tag (spec 3.9.6/3.9.7 — "a copy of the
+/// RSDP", not a pointer to it), so the extractable fact is the root
+/// table address inside the structure: tag 14 embeds the v1 shape
+/// (rsdt_address at structure offset 16), tag 15 the v2 shape
+/// (xsdt_address at offset 24).  13-04's RSDP→XSDT walk prefers the
+/// xsdt arm; the "RSD PTR " signature is validated before any address
+/// is taken.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AcpiRoot {
+    /// The RSDT (tag 14, v1) or XSDT (tag 15, v2) physical address.
+    pub table: u64,
+    /// True when `table` is an XSDT (64-bit tables — the preferred
+    /// D-07 walk); false when it is an RSDT.
+    pub xsdt: bool,
+}
+
+/// The parsed facts main boots from: the memory map and the optional
+/// ACPI root-table address.  Only type-1 (available) ranges ever seed
+/// the page allocator; everything else stays reserved (T-13-04).
 #[derive(Debug, PartialEq)]
 pub struct Facts {
     ranges: [MemRange; MAX_RANGES],
     nranges: usize,
-    pub rsdp: Option<u64>,
+    pub acpi_root: Option<AcpiRoot>,
 }
 
 impl Facts {
@@ -130,7 +150,7 @@ impl Facts {
         Facts {
             ranges: [MemRange { base: 0, len: 0, kind: MemKind::Available }; MAX_RANGES],
             nranges: 0,
-            rsdp: None,
+            acpi_root: None,
         }
     }
 
@@ -141,10 +161,6 @@ impl Facts {
         self.ranges[self.nranges] = range;
         self.nranges += 1;
         Ok(())
-    }
-
-    pub fn nranges(&self) -> usize {
-        self.nranges
     }
 
     /// The ranges in firmware order (GRUB passes the BIOS e820 order
@@ -164,7 +180,7 @@ impl Facts {
 pub const MB2_PREFIX_SIZE: usize = 8;
 
 fn validate_total_size(total: usize) -> Result<(), ParseError> {
-    if total < MB2_PREFIX_SIZE + 8 || total % 8 != 0 {
+    if total < MB2_PREFIX_SIZE + 8 || !total.is_multiple_of(8) {
         return Err(ParseError::InvalidTotalSize);
     }
     Ok(())
@@ -174,21 +190,114 @@ fn validate_total_size(total: usize) -> Result<(), ParseError> {
 /// total_size from the prefix so the boot caller can form the full slice.
 /// `prefix` must hold at least MB2_PREFIX_SIZE bytes.
 pub fn header_total_size(prefix: &[u8]) -> Result<usize, ParseError> {
-    // RED stub (TDD, 13-02 Task 2): fails loudly so the golden test fails
-    // on its planned assertion; the fdt.rs-discipline walk lands with the
-    // feat commit (Task 1's main9-x64 arc).
-    let _ = (prefix, &validate_total_size);
-    Err(ParseError::BufferTooSmall)
+    let total = le_u32(prefix, 0).ok_or(ParseError::BufferTooSmall)? as usize;
+    validate_total_size(total)?;
+    Ok(total)
 }
 
 /// Pass 2: parse the full info structure.  `data` must be exactly
 /// total_size long — the boot caller forms it via header_total_size, and
 /// a disagreement is a named error, never a silent truncation.
 pub fn parse(data: &[u8]) -> Result<Facts, ParseError> {
-    // RED stub (TDD, 13-02 Task 2): every parse fails loudly so the five
-    // behavior tests fail on their planned assertions.
-    let _ = data;
-    Err(ParseError::BufferTooSmall)
+    let total = header_total_size(data)?;
+    if total != data.len() {
+        return Err(ParseError::InvalidTotalSize);
+    }
+    let mut facts = Facts::empty();
+    let mut off = MB2_PREFIX_SIZE;
+    loop {
+        let ty = le_u32(data, off).ok_or(ParseError::MissingEndTag)?;
+        let size = le_u32(data, off + 4).ok_or(ParseError::MissingEndTag)? as usize;
+        if size < 8 {
+            return Err(ParseError::TagHeaderTooSmall);
+        }
+        if off + size > total {
+            return Err(ParseError::TagOverrunsTotal);
+        }
+        match ty {
+            TAG_END => {
+                // The spec fixes the end tag at exactly 8 bytes.
+                if size != 8 {
+                    return Err(ParseError::InvalidTagBody);
+                }
+                return Ok(facts);
+            }
+            TAG_MMAP => parse_mmap(data, off, size, &mut facts)?,
+            TAG_ACPI_OLD_RSDP | TAG_ACPI_NEW_RSDP => {
+                let root = parse_acpi_root(data, off, size, ty)?;
+                // Tag 15 (the v2/XSDT shape) is the preferred source; a
+                // tag 14 never displaces it.
+                if ty == TAG_ACPI_NEW_RSDP || facts.acpi_root.is_none() {
+                    facts.acpi_root = Some(root);
+                }
+            }
+            // Unknown tag types walk past untouched — size and bounds
+            // were validated above, so this is the spec's forward
+            // compatibility, not a silent skip of a malformed tag.
+            _ => {}
+        }
+        // Next tag at the 8-aligned advance (spec 3.2: tags are padded to
+        // alignment; the live dump proved sizes themselves are not
+        // 8-multiples).
+        off = (off + size + 7) & !7;
+        if off + 8 > total {
+            // No room for another tag header: the end tag never came.
+            return Err(ParseError::MissingEndTag);
+        }
+    }
+}
+
+/// The ACPI RSDP tags: the tag body IS the RSDP structure ("a copy of
+/// the RSDP", spec 3.9.6/3.9.7 — not a pointer to it).  Signature
+/// validated, then the root-table address taken: v1 (tag 14) carries
+/// rsdt_address (u32) at structure offset 16; v2 (tag 15) carries
+/// xsdt_address (u64) at offset 24.
+fn parse_acpi_root(data: &[u8], off: usize, size: usize, ty: u32) -> Result<AcpiRoot, ParseError> {
+    // Signature "RSD PTR " — the 8 bytes every RSDP revision starts with.
+    for (k, want) in [b'R', b'S', b'D', b' ', b'P', b'T', b'R', b' '].into_iter().enumerate() {
+        let got = data.get(off + 8 + k).copied().ok_or(ParseError::InvalidTagBody)?;
+        if got != want {
+            return Err(ParseError::InvalidTagBody);
+        }
+    }
+    if ty == TAG_ACPI_NEW_RSDP {
+        if size < 8 + 36 {
+            return Err(ParseError::InvalidTagBody);
+        }
+        let xsdt = le_u64(data, off + 8 + 24).ok_or(ParseError::InvalidTagBody)?;
+        Ok(AcpiRoot { table: xsdt, xsdt: true })
+    } else {
+        if size < 8 + 20 {
+            return Err(ParseError::InvalidTagBody);
+        }
+        let rsdt = le_u32(data, off + 8 + 16).ok_or(ParseError::InvalidTagBody)? as u64;
+        Ok(AcpiRoot { table: rsdt, xsdt: false })
+    }
+}
+
+/// The memory-map tag (type 6): {u32 entry_size, u32 entry_version,
+/// entries[]} — every field validated before any entry slice is formed.
+fn parse_mmap(data: &[u8], off: usize, size: usize, facts: &mut Facts) -> Result<(), ParseError> {
+    let entry_size = le_u32(data, off + 8).ok_or(ParseError::InvalidTagBody)? as usize;
+    let entry_version = le_u32(data, off + 12).ok_or(ParseError::InvalidTagBody)?;
+    if entry_size < MMAP_ENTRY_SIZE {
+        return Err(ParseError::InvalidEntrySize);
+    }
+    if entry_version != 0 {
+        return Err(ParseError::InvalidEntryVersion);
+    }
+    let body = size - 16;
+    if !body.is_multiple_of(entry_size) {
+        return Err(ParseError::InvalidEntrySize);
+    }
+    for k in 0..body / entry_size {
+        let e = off + 16 + k * entry_size;
+        let base = le_u64(data, e).ok_or(ParseError::InvalidEntrySize)?;
+        let len = le_u64(data, e + 8).ok_or(ParseError::InvalidEntrySize)?;
+        let kind = le_u32(data, e + 16).ok_or(ParseError::InvalidEntrySize)?;
+        facts.push(MemRange { base, len, kind: MemKind::from_raw(kind) })?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -257,7 +366,7 @@ mod tests {
         assert_eq!(header_total_size(&buf).unwrap(), buf.len());
 
         let facts = parse(&buf).expect("golden buffer must parse");
-        assert_eq!(facts.nranges(), 2);
+        assert_eq!(facts.ranges().count(), 2);
         let ranges: Vec<MemRange> = facts.ranges().collect();
         assert_eq!(
             ranges[0],
@@ -285,7 +394,7 @@ mod tests {
         let total = buf.len() as u32;
         buf[0..4].copy_from_slice(&total.to_le_bytes());
         let facts = parse(&buf).expect("walk must stop at the end tag");
-        assert_eq!(facts.nranges(), 0);
+        assert_eq!(facts.ranges().count(), 0);
 
         // (b) a tag whose declared end passes total_size.
         let mut cut = vec![0u8; 0x20];
@@ -321,7 +430,7 @@ mod tests {
         b.tag(2, b"GRUB 2.14\0"); // size 18 — observed live
         b.tag(TAG_MMAP, &mmap_body(24, 0, &[(0x100000, 0x3fedf000, 1)]));
         let facts = parse(&b.finish()).expect("live GRUB shape must parse");
-        assert_eq!(facts.nranges(), 1);
+        assert_eq!(facts.ranges().count(), 1);
 
         // (c) total_size not 8-aligned.
         let mut mis = vec![0u8; 0x1c];
@@ -342,36 +451,72 @@ mod tests {
         assert_eq!(parse(&b.finish()), Err(ParseError::InvalidEntrySize));
     }
 
-    // Test 4: the RSDP tags — a type-15 (EFI64) tag yields the pointer,
-    // type 14 (EFI32) the old one, tag 15 wins when both ride, and a
-    // BIOS boot carrying neither yields None (the absence 13-04 handles
-    // loudly at boot).
+    // Test 4: the ACPI tags — the tag body IS the RSDP structure (spec
+    // 3.9.6/3.9.7, confirmed live: a naive pointer read yields the
+    // "RSD " signature bytes).  A type-15 tag yields the embedded v2
+    // structure's XSDT address, a type-14 tag the v1 RSDT address, tag
+    // 15 wins when both ride, a bad signature is a loud named error,
+    // and a boot carrying neither tag yields None (the absence 13-04
+    // handles loudly via the EBDA scan).
+    fn rsdp_v1_body(rsdt: u32) -> Vec<u8> {
+        let mut body = Vec::new();
+        body.extend_from_slice(b"RSD PTR "); // signature
+        body.push(0); // checksum
+        body.extend_from_slice(b"BOCHS "); // OEMID (6)
+        body.push(0); // revision (0 = v1)
+        body.extend_from_slice(&rsdt.to_le_bytes());
+        body
+    }
+
+    fn rsdp_v2_body(xsdt: u64) -> Vec<u8> {
+        let mut body = rsdp_v1_body(0);
+        body.extend_from_slice(&36u32.to_le_bytes()); // length
+        body.extend_from_slice(&xsdt.to_le_bytes());
+        body.extend_from_slice(&[0u8; 4]); // ext checksum + reserved
+        body
+    }
+
     #[test]
-    fn rsdp_tags_yield_pointer_and_absence_yields_none() {
+    fn acpi_tags_yield_root_table_and_absence_yields_none() {
         let mut b = Mb2Builder::new();
-        b.tag(TAG_ACPI_NEW_RSDP, &0xdead_beef_0000_1000u64.to_le_bytes());
+        b.tag(TAG_ACPI_NEW_RSDP, &rsdp_v2_body(0xdead_beef_0000_1000));
         let facts = parse(&b.finish()).unwrap();
-        assert_eq!(facts.rsdp, Some(0xdead_beef_0000_1000));
+        assert_eq!(
+            facts.acpi_root,
+            Some(AcpiRoot { table: 0xdead_beef_0000_1000, xsdt: true })
+        );
 
         let mut b = Mb2Builder::new();
-        b.tag(TAG_ACPI_OLD_RSDP, &0xbfbf_f000u32.to_le_bytes());
+        b.tag(TAG_ACPI_OLD_RSDP, &rsdp_v1_body(0xbfbf_f000));
         let facts = parse(&b.finish()).unwrap();
-        assert_eq!(facts.rsdp, Some(0xbfbf_f000));
+        assert_eq!(facts.acpi_root, Some(AcpiRoot { table: 0xbfbf_f000, xsdt: false }));
 
         // 15 is preferred when both ride, in either order.
         let mut b = Mb2Builder::new();
-        b.tag(TAG_ACPI_OLD_RSDP, &0xbfbf_f000u32.to_le_bytes());
-        b.tag(TAG_ACPI_NEW_RSDP, &0xdead_beef_0000_1000u64.to_le_bytes());
-        assert_eq!(parse(&b.finish()).unwrap().rsdp, Some(0xdead_beef_0000_1000));
+        b.tag(TAG_ACPI_OLD_RSDP, &rsdp_v1_body(0xbfbf_f000));
+        b.tag(TAG_ACPI_NEW_RSDP, &rsdp_v2_body(0xdead_beef_0000_1000));
+        assert_eq!(
+            parse(&b.finish()).unwrap().acpi_root,
+            Some(AcpiRoot { table: 0xdead_beef_0000_1000, xsdt: true })
+        );
         let mut b = Mb2Builder::new();
-        b.tag(TAG_ACPI_NEW_RSDP, &0xdead_beef_0000_1000u64.to_le_bytes());
-        b.tag(TAG_ACPI_OLD_RSDP, &0xbfbf_f000u32.to_le_bytes());
-        assert_eq!(parse(&b.finish()).unwrap().rsdp, Some(0xdead_beef_0000_1000));
+        b.tag(TAG_ACPI_NEW_RSDP, &rsdp_v2_body(0xdead_beef_0000_1000));
+        b.tag(TAG_ACPI_OLD_RSDP, &rsdp_v1_body(0xbfbf_f000));
+        assert_eq!(
+            parse(&b.finish()).unwrap().acpi_root,
+            Some(AcpiRoot { table: 0xdead_beef_0000_1000, xsdt: true })
+        );
 
-        // Neither tag (the BIOS-boot case): None.
+        // A tag whose embedded structure does not carry the RSDP
+        // signature is a loud named error, never a bogus address.
+        let mut b = Mb2Builder::new();
+        b.tag(TAG_ACPI_OLD_RSDP, &[0u8; 20]);
+        assert_eq!(parse(&b.finish()), Err(ParseError::InvalidTagBody));
+
+        // Neither tag: None.
         let mut b = Mb2Builder::new();
         b.tag(TAG_MMAP, &mmap_body(24, 0, &[(0x100000, 0x3fedf000, 1)]));
-        assert_eq!(parse(&b.finish()).unwrap().rsdp, None);
+        assert_eq!(parse(&b.finish()).unwrap().acpi_root, None);
     }
 
     // Test 5: truncation safety — every buffer cut mid-structure errors
@@ -384,7 +529,7 @@ mod tests {
             TAG_MMAP,
             &mmap_body(24, 0, &[(0x1000000, 0x3ff00000, 1), (0x0, 0x8000, 2)]),
         );
-        b.tag(TAG_ACPI_NEW_RSDP, &0xdead_beef_0000_1000u64.to_le_bytes());
+        b.tag(TAG_ACPI_NEW_RSDP, &rsdp_v2_body(0xdead_beef_0000_1000));
         let buf = b.finish();
         assert!(parse(&buf).is_ok());
         for cut in 0..buf.len() {
