@@ -1,0 +1,65 @@
+# q35lowmcfg — the X64-03 moved-window perturbation gate (13-04 Task 3,
+# the virtlowecam precedent re-keyed).  Identical to config_q35.toml
+# except the [qemu] extra tokens injecting a MOVED MCFG table into the
+# guest's ACPI: the kernel must program the MCH PCIEXBAR register from
+# the table's base before the first ECAM access (the SeaBIOS hazard,
+# RESEARCH Pitfall 1 — SeaBIOS hardcodes 0xb0000000 into PCIEXBAR on
+# every boot regardless of where MCFG points), so under this config the
+# audit line must show old 0xb0000001 (SeaBIOS's hardcode) moving to
+# new 0xe0000001 (the table), the MCFG parse print must show
+# 0xe0000000, and the device + route facts must stay IDENTICAL to the
+# base config — the boot-test arm asserts exactly that, keyed off this
+# config's name.  A kernel with a compiled-in default base passes the
+# default boot and fails this one loudly.
+#
+# Mechanism note (qemu 11.1.2 drift, found live at 13-04): the planned
+# `-global q35-pcihost.MCFG=0xe0000000` property CRASHES qemu at machine
+# init on 11.1.2 — the property stores into PCIExpressHost.base_addr,
+# which pcie_host_mmcfg_unmap() also uses as its is-mapped state, so any
+# pre-realize set (even to the default value) trips the
+# memory_region_del_subregion assertion on the first reset.  The
+# accommodation is qemu's native `-acpitable` injection: the committed
+# q35-mcfg-moved.bin is qemu 11.1.2's own guest MCFG (as dumped live
+# from a SeaBIOS boot: 36-byte header, OEM BOCHS/BXPC, one allocation
+# entry) with the entry base moved to 0xe0000000 and the header
+# checksum recomputed (byte 9 = 0x5c; the whole table sums to zero).
+# qemu/SeaBIOS ADD the user table after the built-ins — the guest RSDT
+# carries two MCFG entries, the moved one last — and acpi.rs's walk
+# takes the last MCFG it meets (later tables override earlier ones, the
+# ACPI override idiom); the gate's exact-base assertions make any
+# ordering drift a loud red, never a silent pass.  The proper drift note
+# lands in build/x86_64/README.md with 13-06.
+
+[build]
+target = "lib/x86_64-unknown-none-elf.json"
+buildflags = [
+    "-Z", "build-std=core,alloc"
+]
+
+[link]
+script = 'x86_64/lib/kernel.ld'
+load-address = '0xffffffff80200000'
+
+[config]
+platform = "q35"
+dev = []
+
+[qemu]
+machine = "q35"
+accel = "kvm"
+cpu = "host"
+smp = 1
+memory = "1024M"
+# The moved window (data, the X64-03 proof): the injected MCFG names
+# 0xe0000000 while SeaBIOS's register still says 0xb0000001.
+extra = ["-acpitable", "file=x86_64/lib/q35-mcfg-moved.bin"]
+
+# Identical idle-NIC stanza to the base config (the device must still be
+# found — same slot, same route — through the moved window).
+[qemu.netdev]
+mode = "user"
+device = "virtio-net-pci-non-transitional"
+pcap = true
+
+[dist]
+format = "elf"

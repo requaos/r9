@@ -988,6 +988,22 @@ const PCI_NET_ROUTE_MARKER: &str = "pci: inta -> spi 4 intid 36";
 const PCI_ECAM_BASE_STANDARD: &str = "pci: ecam base 0x4010000000";
 const PCI_ECAM_BASE_LOWECAM: &str = "pci: ecam base 0x3f000000";
 
+/// The q35 discovery contract (13-04, X64-03): every q35 boot prints the
+/// MCFG-parsed window, the pciexbar old->new audit line, the found
+/// device, and the derived route.  The expected BASES are keyed off the
+/// config NAME — q35lowmcfg boots the moved-MCFG machine
+/// (`-global q35-pcihost.MCFG=0xe0000000`), where the kernel must
+/// follow the table: the MCFG parse print shows the moved base and the
+/// audit line shows SeaBIOS's hardcoded old value (0xb0000001) moving
+/// to it.  A single constant serving both configs would prove nothing —
+/// the virtlowecam ecm pattern, re-keyed.  The device and route markers
+/// are shared: discovery must not degrade under the move.
+const Q35_MCFG_BASE_DEFAULT: &str = "q35: mcfg 0xb0000000";
+const Q35_MCFG_BASE_MOVED: &str = "q35: mcfg 0xe0000000";
+const Q35_PCIEXBAR_NEW_DEFAULT: &str = "-> 0xb0000001";
+const Q35_PCIEXBAR_NEW_MOVED: &str = "-> 0xe0000001";
+const Q35_NET_ROUTE_MARKER: &str = "pci: inta -> gsi 22";
+
 /// Net profile (virtnet, 07-05): the config boots the REAL Harvey boot
 /// chain (dev = ["exec", "bootchain", "ether"], the Harvey-baked
 /// bootfs.paq via the 07-01 harvey: initrd channel) to the rc `% `
@@ -2049,6 +2065,23 @@ impl BootTestStep {
                 }
             }
         }
+        // The q35 discovery contract (X64-03): same shape as the virt
+        // block above — the expected window bases are per-config, the
+        // device and route facts are shared (the moved window must not
+        // degrade discovery).
+        if self.config.config.as_ref().and_then(|c| c.platform.as_deref()) == Some("q35") {
+            let (mcfg_marker, exbar_marker) = if self.config_name == "q35lowmcfg" {
+                (Q35_MCFG_BASE_MOVED, Q35_PCIEXBAR_NEW_MOVED)
+            } else {
+                (Q35_MCFG_BASE_DEFAULT, Q35_PCIEXBAR_NEW_DEFAULT)
+            };
+            for marker in [mcfg_marker, exbar_marker, PCI_NET_DEVICE_MARKER, Q35_NET_ROUTE_MARKER] {
+                if !contains_marker(capture, marker.as_bytes()) {
+                    return Err(self
+                        .fail_pretty(capture, &format!("q35 discovery line {marker:?} absent")));
+                }
+            }
+        }
         match profile {
             BootProfile::Panic => {
                 println!(
@@ -2063,8 +2096,10 @@ impl BootTestStep {
             BootProfile::X64 => {
                 println!(
                     "boot-test: PASS -- SeaBIOS -> GRUB2 -> mb2 kernel boot: banner, >= 1 q35 \
-                     memory-map fact line, >= {BOOT_TICK_MIN} tick lines and the typed echo probe \
-                     observed in order on the serial socket (X64-01 platform gate)"
+                     memory-map fact line, the discovery markers (MCFG parse, pciexbar audit, \
+                     device found, route), >= {BOOT_TICK_MIN} tick lines and the typed echo probe \
+                     observed in order on the serial socket (X64-01 platform gate + X64-03 \
+                     discovery contract)"
                 );
             }
             BootProfile::Exec => {
