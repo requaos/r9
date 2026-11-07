@@ -130,6 +130,30 @@ pub struct Discovery {
 /// 13-05's bind reads it later in the same boot context.
 static DISCOVERY: SyncUnsafeCell<Option<Discovery>> = SyncUnsafeCell::new(None);
 
+/// The IDT vector the bound virtio-net line was armed at — the trap
+/// dispatch's guard (zero hardcoded vectors: the discovery cell carries
+/// the GSI; the bind derives the vector, arms the IOAPIC RTE at it, and
+/// publishes it here).  Written once by the bind inside the pre-sti
+/// window, read lock-free from IRQ context thereafter (the aarch64
+/// virtio_irq_intid analog).
+static VIRTIO_VECTOR: SyncUnsafeCell<Option<u8>> = SyncUnsafeCell::new(None);
+
+/// The bound virtio-net device's IDT vector, if a bind published one
+/// (None until the bind ran — the dispatch arm never matches then).
+pub fn virtio_irq_vector() -> Option<u8> {
+    // SAFETY: publish-once — written by the bind in boot context (IF=0,
+    // before sti), read lock-free from the trap dispatch thereafter.
+    *unsafe { &*VIRTIO_VECTOR.get() }
+}
+
+/// The virtio-net IRQ handler: the read-to-ack-first drain (the ISR
+/// byte read deasserts the level-triggered line BEFORE the dispatcher's
+/// LAPIC EOI — Pitfall 5's storm class), bounded with re-check, no
+/// locks/no console on the hot path.  Unreachable until a bind
+/// publishes the vector (the dispatch arm guards on it) — the drain
+/// body lands with the bind (13-05 Task 2, same plan).
+pub fn virtio_net_irq() {}
+
 // ---------------------------------------------------------------------------
 // The D-07 carve-out: the kernel's ONE CF8/CFC access (see the module
 // header).  Everything else in this file reaches config space via ECAM.

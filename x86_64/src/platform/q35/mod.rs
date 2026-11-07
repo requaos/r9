@@ -6,6 +6,7 @@
 
 pub mod acpi;
 pub mod devcons;
+pub mod ioapic;
 pub mod lapic;
 pub mod mb2;
 pub mod pci;
@@ -21,6 +22,16 @@ use port::println;
 /// a second walk).  Written in print_machine_info — boot context, long
 /// before sti — and never written again.
 static ACPI: SyncUnsafeCell<Option<acpi::Acpi>> = SyncUnsafeCell::new(None);
+
+/// The published ACPI facts (the publish-once read): None only before
+/// print_machine_info ran — every caller (ioapic init, the 13-05 bind)
+/// runs later in boot, inside the arming window.
+pub fn acpi_facts() -> Option<&'static acpi::Acpi> {
+    // SAFETY: publish-once — written once in print_machine_info (boot
+    // context, before the arming window and long before sti) and never
+    // written again; this lock-free read runs after, from boot context.
+    (unsafe { &*ACPI.get() }).as_ref()
+}
 
 /// Print mb2- and ACPI-derived machine information: the "what machine
 /// am I on" slot q35 occupies (the aarch64 virt/mod.rs print_machine_info

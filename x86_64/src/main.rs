@@ -149,6 +149,13 @@ pub extern "C" fn main(mach: &mut dat::Mach, mbdata: u64) {
     // console-RX echo, so serial input goes live the moment ticks do.
     platform::q35::timer::init();
 
+    // The IOAPIC: MADT-driven (base + GSI base + the IntSrcOverride
+    // fold — D-06, zero hardcoded GSIs), every RTE masked for a known
+    // state.  It initializes AHEAD of the device bind: the bind's
+    // ioapic::enable is the only unmask path, and its RTE write must
+    // land inside this window, before sti.
+    platform::q35::ioapic::init();
+
     // Unmask LAST (the Phase-3 hazard, x86 edition): sti happens here,
     // once, after every handler the armed sources can fire exists in
     // the dispatch.  Any earlier unmask would hit an empty dispatch

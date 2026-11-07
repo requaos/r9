@@ -461,6 +461,15 @@ fn dispatch_irq(vector: u8) {
     }
     match vector {
         TIMER_VECTOR => crate::platform::q35::timer::tick(),
+        // The virtio-net device line: guarded on the vector the bind
+        // published — zero hardcoded vectors (the aarch64
+        // virtio_irq_intid guard re-keyed; the discovery cell carries
+        // the GSI, and the bind derives the IDT vector and publishes
+        // it).  None until a bind ran: the arm never matches and a
+        // stray on the line prints below.
+        v if crate::platform::q35::pci::virtio_irq_vector() == Some(v) => {
+            crate::platform::q35::pci::virtio_net_irq();
+        }
         _ => crate::println!("unhandled IRQ {vector}"),
     }
     crate::platform::q35::lapic::eoi();
