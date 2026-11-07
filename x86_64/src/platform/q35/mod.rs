@@ -1,9 +1,10 @@
 // The qemu q35 platform module (Phase 13): the mb2 firmware-data parser
-// (host-testable, the port/fdt.rs discipline) and the console glue; the
-// later bring-up layers (acpi, lapic, ioapic, timer, pci) grow here in
-// execution-gated order.
+// (host-testable, the port/fdt.rs discipline), the console glue, and
+// the LAPIC registry; the later bring-up layers (acpi, ioapic, timer,
+// pci) grow here in execution-gated order.
 
 pub mod devcons;
+pub mod lapic;
 pub mod mb2;
 
 #[cfg(not(test))]

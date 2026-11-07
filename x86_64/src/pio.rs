@@ -33,3 +33,29 @@ pub unsafe fn inb(port: u16) -> u8 {
         0
     }
 }
+
+pub unsafe fn inw(port: u16) -> u16 {
+    #[cfg(not(test))]
+    unsafe {
+        let w: u16;
+        core::arch::asm!("inw %dx, %ax", in("dx") port, lateout("ax") w, options(att_syntax));
+        w
+    }
+    #[cfg(test)]
+    {
+        0
+    }
+}
+
+pub unsafe fn inl(port: u16) -> u32 {
+    #[cfg(not(test))]
+    unsafe {
+        let l: u32;
+        core::arch::asm!("inl %dx, %eax", in("dx") port, lateout("eax") l, options(att_syntax));
+        l
+    }
+    #[cfg(test)]
+    {
+        0
+    }
+}
