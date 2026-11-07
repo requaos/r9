@@ -6,6 +6,7 @@
 pub mod devcons;
 pub mod lapic;
 pub mod mb2;
+pub mod timer;
 
 #[cfg(not(test))]
 use port::println;
