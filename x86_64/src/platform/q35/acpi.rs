@@ -39,10 +39,10 @@ const RSDP_SIG: &[u8; 8] = b"RSD PTR ";
 /// creatorrevision 4).
 pub const SDT_HEADER_SIZE: usize = 36;
 
-/// The byte-offset of the checksum inside an SDT header (and of the
-/// RSDP's own first checksum).
+/// The byte-offset of the checksum inside an SDT header, and the RSDP's
+/// own first checksum right after its 8-byte signature.
 const SDT_CSUM_OFF: usize = 9;
-const RSDP_CSUM_OFF: usize = 1;
+const RSDP_CSUM_OFF: usize = 8;
 
 /// Upper bound on any table this parser will read: MCFG/MADT/HPET/XSDT
 /// are all far below; a length beyond this is a loud BadLength, so a
@@ -213,8 +213,33 @@ pub trait PhysMem {
 /// signature, 20-byte checksum, RSDT PA at offset 16 (the devacpi.c
 /// acpirsdptr flow).
 pub fn rsdp_root(bytes: &[u8]) -> Result<AcpiRoot, ParseError> {
-    let _ = bytes;
-    Err(ParseError::NotFound)
+    if bytes.len() < 20 {
+        return Err(ParseError::BufferTooSmall);
+    }
+    if bytes[..8] != *RSDP_SIG {
+        return Err(ParseError::BadSignature);
+    }
+    let rev = bytes[15];
+    if rev >= 2 {
+        if bytes.len() < 36 {
+            return Err(ParseError::BufferTooSmall);
+        }
+        if !checksum_zero(&bytes[..36]) {
+            return Err(ParseError::BadChecksum);
+        }
+        let len = le_u32(bytes, 20).ok_or(ParseError::BadLength)? as usize;
+        if len < 36 {
+            return Err(ParseError::BadLength);
+        }
+        let xsdt = le_u64(bytes, 24).ok_or(ParseError::BadLength)?;
+        Ok(AcpiRoot { table: xsdt, xsdt: true })
+    } else {
+        if !checksum_zero(&bytes[..20]) {
+            return Err(ParseError::BadChecksum);
+        }
+        let rsdt = le_u32(bytes, 16).ok_or(ParseError::BadLength)? as u64;
+        Ok(AcpiRoot { table: rsdt, xsdt: false })
+    }
 }
 
 /// Parse a fully-validated MCFG table (header included): the first
@@ -222,8 +247,22 @@ pub fn rsdp_root(bytes: &[u8]) -> Result<AcpiRoot, ParseError> {
 /// entry and divide evenly — anything else is BadEntry, and no partial
 /// entry is ever returned.
 pub fn parse_mcfg(bytes: &[u8]) -> Result<McfgEntry, ParseError> {
-    let _ = bytes;
-    Err(ParseError::NotFound)
+    const MCFG_BODY_FIXED: usize = 8; // u64 reserved before the entries
+    const MCFG_ENTRY_SIZE: usize = 16; // {u64 base, u16 seg, u8 s, u8 e, u32 rsvd}
+    let len = bytes.len();
+    if len < SDT_HEADER_SIZE + MCFG_BODY_FIXED + MCFG_ENTRY_SIZE {
+        return Err(ParseError::BadLength);
+    }
+    let entries = len - SDT_HEADER_SIZE - MCFG_BODY_FIXED;
+    if entries % MCFG_ENTRY_SIZE != 0 {
+        return Err(ParseError::BadEntry);
+    }
+    Ok(McfgEntry {
+        base: le_u64(bytes, 44).ok_or(ParseError::BadLength)?,
+        seg: le_u16(bytes, 52).ok_or(ParseError::BadLength)?,
+        start_bus: bytes[54],
+        end_bus: bytes[55],
+    })
 }
 
 /// Parse a fully-validated MADT (header included): the local-intc
@@ -231,16 +270,226 @@ pub fn parse_mcfg(bytes: &[u8]) -> Result<McfgEntry, ParseError> {
 /// whose length undercuts its type's fixed body or overruns the table is
 /// BadEntry — never a panic, never a partial Madt.
 pub fn parse_madt(bytes: &[u8]) -> Result<Madt, ParseError> {
-    let _ = bytes;
-    Err(ParseError::NotFound)
+    const MADT_LAPIC_ADDR: usize = 36; // u32 local intc address
+    const MADT_FIRST_ENTRY: usize = 40;
+    const IOAPIC_ENTRY_LEN: usize = 12; // {ty, len, id, rsvd, u32 addr, u32 gsib}
+    const INTSRC_ENTRY_LEN: usize = 10; // {ty, len, bus, src, u32 gsi, u16 flags}
+    let len = bytes.len();
+    if len < MADT_FIRST_ENTRY {
+        return Err(ParseError::BadLength);
+    }
+    let mut madt = Madt {
+        local_intc: le_u32(bytes, MADT_LAPIC_ADDR).ok_or(ParseError::BadLength)? as u64,
+        ioapic: None,
+        intsrc: [IntSrcOverride { bus: 0, source: 0, gsi: 0, flags: 0 }; MAX_INTSRC_OVERRIDES],
+        nintsrc: 0,
+    };
+    let mut off = MADT_FIRST_ENTRY;
+    while off < len {
+        let ty = bytes.get(off).copied().ok_or(ParseError::BadEntry)?;
+        let elen = bytes.get(off + 1).copied().ok_or(ParseError::BadEntry)? as usize;
+        if elen < 2 || off.checked_add(elen).is_none_or(|end| end > len) {
+            return Err(ParseError::BadEntry);
+        }
+        match ty {
+            1 => {
+                if elen < IOAPIC_ENTRY_LEN {
+                    return Err(ParseError::BadEntry);
+                }
+                let e = IoApicEntry {
+                    id: bytes[off + 2],
+                    addr: le_u32(bytes, off + 4).ok_or(ParseError::BadEntry)? as u64,
+                    gsib: le_u32(bytes, off + 8).ok_or(ParseError::BadEntry)?,
+                };
+                if madt.ioapic.is_none() {
+                    madt.ioapic = Some(e);
+                }
+            }
+            2 => {
+                if elen < INTSRC_ENTRY_LEN {
+                    return Err(ParseError::BadEntry);
+                }
+                if madt.nintsrc == MAX_INTSRC_OVERRIDES {
+                    return Err(ParseError::TooManyEntries);
+                }
+                madt.intsrc[madt.nintsrc] = IntSrcOverride {
+                    bus: bytes[off + 2],
+                    source: bytes[off + 3],
+                    gsi: le_u32(bytes, off + 4).ok_or(ParseError::BadEntry)?,
+                    flags: le_u16(bytes, off + 8).ok_or(ParseError::BadEntry)?,
+                };
+                madt.nintsrc += 1;
+            }
+            // Type 0 (LAPIC) and every other entry kind: walked past on
+            // their own declared length — validated above, so this is
+            // forward compatibility, not a silent skip.
+            _ => {}
+        }
+        off += elen;
+    }
+    Ok(madt)
 }
 
 /// The HPET base (best-effort): the GAS at table offset 40 must name
 /// system memory, with the u64 address at offset 44; any malformation or
 /// absence yields None — the loud-by-absence case the caller prints.
 pub fn parse_hpet(bytes: &[u8]) -> Option<u64> {
-    let _ = bytes;
+    // 36 header + 4 block id + the 12-byte GAS covers the address at
+    // offset 44..52; the trailing HPET-number/min-tick fields are not
+    // needed for the base.
+    const HPET_GAS_OFF: usize = 40;
+    const HPET_ADDR_OFF: usize = 44;
+    if bytes.len() < HPET_ADDR_OFF + 8 {
+        return None;
+    }
+    // GAS address-space id 0 = system memory (anything else is not the
+    // MMIO HPET this platform would use).
+    if bytes[HPET_GAS_OFF] != 0 {
+        return None;
+    }
+    le_u64(bytes, HPET_ADDR_OFF)
+}
+
+/// Read and fully validate a table at `pa`.  `want` names the expected
+/// 4-byte signature; `None` accepts XSDT or RSDT (the root table — its
+/// own signature selects the entry width, never the hint).  Returns:
+/// `Ok(None)` — signature mismatch (not the wanted table; not an error),
+/// `Ok(Some(len))` — validated, `buf[..len]` is the table,
+/// `Err(e)` — a loud named gate failure.
+fn fetch_table(
+    mem: &impl PhysMem,
+    pa: u64,
+    want: Option<&[u8; 4]>,
+    buf: &mut [u8; TABLE_CAP],
+) -> Result<Option<usize>, ParseError> {
+    let mut hdr = [0u8; SDT_HEADER_SIZE];
+    if !mem.read_phys(pa, &mut hdr) {
+        return Err(ParseError::BufferTooSmall);
+    }
+    let sig: [u8; 4] = hdr[..4].try_into().unwrap();
+    let matches = match want {
+        Some(w) => sig == *w,
+        None => sig == *b"XSDT" || sig == *b"RSDT",
+    };
+    if !matches {
+        return Ok(None);
+    }
+    let len = le_u32(&hdr, 4).ok_or(ParseError::BadLength)? as usize;
+    if len < SDT_HEADER_SIZE || len > TABLE_CAP {
+        return Err(ParseError::BadLength);
+    }
+    if !mem.read_phys(pa, &mut buf[..len]) {
+        return Err(ParseError::BufferTooSmall);
+    }
+    // The sdtchecksum gate: no pointer inside the table is read before
+    // the whole-table sum passes (T-13-07).
+    if !checksum_zero(&buf[..len]) {
+        return Err(ParseError::BadChecksum);
+    }
+    Ok(Some(len))
+}
+
+/// Walk the root table's entries, parsing MCFG/MADT/HPET when their
+/// signatures appear.  Each sub-table is fully gated before parsing; a
+/// failure is recorded and the walk continues (no partial facts).
+fn walk_root_table(mem: &impl PhysMem, root: AcpiRoot, via: &'static str, acpi: &mut Acpi) {
+    let mut root_buf = [0u8; TABLE_CAP];
+    let mut tbl = [0u8; TABLE_CAP];
+    let len = match fetch_table(mem, root.table, None, &mut root_buf) {
+        Ok(Some(len)) => len,
+        // The signature check inside fetch_table passed for the root
+        // kinds only; Ok(None) is unreachable here — treat it as a bad
+        // signature anyway so the arm is total.
+        Ok(None) | Err(ParseError::BadSignature) => {
+            acpi.push_error("root table", ParseError::BadSignature);
+            return;
+        }
+        Err(e) => {
+            acpi.push_error("root table", e);
+            return;
+        }
+    };
+    let xsdt = root_buf[..4] == *b"XSDT";
+    let (stride, nentries) = if xsdt {
+        (8usize, (len - SDT_HEADER_SIZE) / 8)
+    } else {
+        (4usize, (len - SDT_HEADER_SIZE) / 4)
+    };
+    acpi.root = Some(RootInfo { table: root.table, xsdt, nentries, via });
+    for i in 0..nentries {
+        let off = SDT_HEADER_SIZE + i * stride;
+        let pa = if xsdt {
+            le_u64(&root_buf[..len], off).unwrap_or(0)
+        } else {
+            u64::from(le_u32(&root_buf[..len], off).unwrap_or(0))
+        };
+        let mut sig = [0u8; 4];
+        if !mem.read_phys(pa, &mut sig) {
+            acpi.push_error("root entry", ParseError::BufferTooSmall);
+            continue;
+        }
+        if sig == *b"MCFG" {
+            match fetch_table(mem, pa, Some(b"MCFG"), &mut tbl) {
+                Ok(Some(tlen)) => match parse_mcfg(&tbl[..tlen]) {
+                    Ok(entry) => acpi.mcfg = Some(entry),
+                    Err(e) => acpi.push_error("mcfg table", e),
+                },
+                Ok(None) => {}
+                Err(e) => acpi.push_error("mcfg table", e),
+            }
+        } else if sig == *b"APIC" {
+            match fetch_table(mem, pa, Some(b"APIC"), &mut tbl) {
+                Ok(Some(tlen)) => match parse_madt(&tbl[..tlen]) {
+                    Ok(madt) => acpi.madt = Some(madt),
+                    Err(e) => acpi.push_error("madt table", e),
+                },
+                Ok(None) => {}
+                Err(e) => acpi.push_error("madt table", e),
+            }
+        } else if sig == *b"HPET" {
+            // Best-effort: gate failures here are plain absences, not
+            // walk errors (the timer calibrates without the HPET).
+            if let Ok(Some(tlen)) = fetch_table(mem, pa, Some(b"HPET"), &mut tbl) {
+                acpi.hpet = parse_hpet(&tbl[..tlen]);
+            }
+        }
+    }
+}
+
+/// Scan one 16-byte-stepped region for a checksum-valid RSDP (the
+/// rsdscan half of devacpi.c's rsdsearch).
+fn rsdp_scan_region(mem: &impl PhysMem, base: u64, len: u64) -> Option<AcpiRoot> {
+    let mut cand = [0u8; 36];
+    let mut sig = [0u8; 8];
+    let mut off = 0u64;
+    while off < len {
+        let pa = base + off;
+        if mem.read_phys(pa, &mut sig) && sig == *RSDP_SIG {
+            if mem.read_phys(pa, &mut cand) {
+                if let Ok(root) = rsdp_root(&cand) {
+                    return Some(root);
+                }
+            }
+        }
+        off += 16;
+    }
     None
+}
+
+/// The EBDA/ROM RSDP scan (devacpi.c rsdsearch): the BDA 0x40:0x0E word
+/// names the EBDA segment — its first KiB first — then the BIOS ROM
+/// window 0xE0000-0xFFFFF.
+fn scan_for_rsdp(mem: &impl PhysMem) -> Option<AcpiRoot> {
+    let mut bda = [0u8; 2];
+    if mem.read_phys(0x40E, &mut bda) {
+        let ebda = (u16::from_le_bytes(bda) as u64) << 4;
+        if ebda != 0 {
+            if let Some(root) = rsdp_scan_region(mem, ebda, 1024) {
+                return Some(root);
+            }
+        }
+    }
+    rsdp_scan_region(mem, 0xE_0000, 0x2_0000)
 }
 
 /// The full walk: resolve the root table (mb2 hint first, EBDA/ROM scan
@@ -248,8 +497,55 @@ pub fn parse_hpet(bytes: &[u8]) -> Option<u64> {
 /// entry pointers — each fully gated before parsing.  Returns the facts
 /// with every failure recorded as a named error for the caller to print.
 pub fn discover(mem: &impl PhysMem, mb2_root: Option<AcpiRoot>) -> Acpi {
-    let _ = (mem, mb2_root);
-    Acpi::empty()
+    let mut acpi = Acpi::empty();
+    // Loader-mediated root first (D-03's theme): the mb2 ACPI tags
+    // embedded the RSDP and 13-02's parser signature-validated it and
+    // extracted this address; the TABLE it names is fully gated below.
+    match mb2_root {
+        Some(root) if root.table != 0 => {
+            walk_root_table(mem, root, "mb2 acpi tag", &mut acpi)
+        }
+        Some(_) => acpi.push_error("rsdp", ParseError::BadLength), // zero table address
+        None => {}
+    }
+    if acpi.root.is_none() {
+        // The fallback arm: the EBDA/ROM scan (cross-check when the
+        // loader's hint proved unusable).
+        match scan_for_rsdp(mem) {
+            Some(root) => walk_root_table(mem, root, "ebda/rom scan", &mut acpi),
+            None if mb2_root.is_none() => acpi.push_error("rsdp", ParseError::NotFound),
+            None => {}
+        }
+    }
+    acpi
+}
+
+/// The kernel's PhysMem: l.S's bootidentitypt3 identity-maps the first
+/// 4 GiB PA==VA, and every table this walk touches (EBDA, the RSDP/XSDT
+/// in the ACPI-reclaimable low window, and later the MCFG-named ECAM
+/// base) lives inside it.  Host tests supply their own image.
+#[cfg(not(test))]
+pub struct IdentityMem;
+
+#[cfg(not(test))]
+impl PhysMem for IdentityMem {
+    fn read_phys(&self, pa: u64, buf: &mut [u8]) -> bool {
+        let Some(end) = pa.checked_add(buf.len() as u64) else {
+            return false;
+        };
+        if end > 0x1_0000_0000 {
+            return false;
+        }
+        for (k, b) in buf.iter_mut().enumerate() {
+            // SAFETY: pa+k is inside the identity-mapped first 4 GiB
+            // (the bound checked above); the volatile byte read keeps
+            // firmware RAM reads unfused and unelided — the mb2-stash
+            // discipline (tables may live in memory other firmware
+            // could touch; volatile is the conservative floor).
+            *b = unsafe { core::ptr::read_volatile((pa + k as u64) as usize as *const u8) };
+        }
+        true
+    }
 }
 
 #[cfg(test)]
@@ -402,11 +698,11 @@ mod tests {
         e
     }
 
-    /// A type-0 LAPIC entry (8 bytes) — walked past untouched.
+    /// A type-0 LAPIC entry — {type, len, uid, apic id, u32 flags},
+    /// exactly the declared 8 bytes — walked past untouched.
     fn lapic_entry() -> Vec<u8> {
-        let mut e = vec![0u8, 8, 0, 0];
-        e.extend_from_slice(&0u32.to_le_bytes());
-        e.extend_from_slice(&0u32.to_le_bytes());
+        let mut e = vec![0u8, 8, 0, 2];
+        e.extend_from_slice(&1u32.to_le_bytes());
         e
     }
 
