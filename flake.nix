@@ -114,7 +114,10 @@
         in
         {
           default = pkgs.mkShellNoCC {
-            packages = [ toolchain pkgs.qemu pkgs.dtc ];
+            # grub2 + xorriso (13-01): grub-mkrescue for the x86_64 mb2
+            # boot channel — permanently in the devshell so `nix develop`
+            # builds the q35 ISO without a wrapping `nix shell`.
+            packages = [ toolchain pkgs.qemu pkgs.dtc pkgs.grub2 pkgs.xorriso ];
             shellHook = ''
               ${objcopyHook toolchain}
               echo "r9 devshell: $(rustc --version)"

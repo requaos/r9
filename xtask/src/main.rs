@@ -1,7 +1,7 @@
 use crate::config::Configuration;
 use config::{
-    QemuOverrides, apply_to_build_step, apply_to_clippy_step, apply_to_qemu_step_with_overrides,
-    apply_virt_netdev, prepare_initrd_dtb, virt_resolved,
+    QemuOverrides, apply_netdev, apply_to_build_step, apply_to_clippy_step,
+    apply_to_qemu_step_with_overrides, apply_virt_netdev, prepare_initrd_dtb, virt_resolved,
 };
 use std::{
     env, fmt,
@@ -734,6 +734,15 @@ impl QemuStep {
 
                 let mut cmd = Command::new(qemu_system);
                 apply_to_qemu_step_with_overrides(&mut cmd, &self.config, &overrides);
+                // D-01a: the idle NIC + per-run pcap ride every q35
+                // invocation from the [qemu] netdev table (data; the
+                // aarch64 apply_virt_netdev stays the frozen-at-pin
+                // legacy consumer).
+                apply_netdev(
+                    &mut cmd,
+                    &self.config,
+                    &format!("target/qemu-{}.pcap", self.config_name),
+                );
                 cmd.arg("-nographic");
                 // COM1 (the kernel console) on stdio, monitor muxed.
                 cmd.arg("-serial");
@@ -1457,6 +1466,10 @@ impl BootTestStep {
         // + a fresh per-run pcap capture of its netdev (the gate evidence
         // channel; no kernel code probes the device this plan).
         apply_virt_netdev(&mut cmd, &config, &pcap_rel);
+        // D-01a: the q35 leg's idle NIC + pcap ride the same emission
+        // point, from the [qemu] netdev table (data — the generalized
+        // q35 emitter; a no-op for every aarch64 config).
+        apply_netdev(&mut cmd, &config, &pcap_rel);
         cmd.arg("-display");
         cmd.arg("none");
         if self.arch == Arch::X86_64 {

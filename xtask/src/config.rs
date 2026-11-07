@@ -102,6 +102,40 @@ pub struct Qemu {
     /// fixed physical address and xtask writes linux,initrd-start/end into a
     /// patched copy of the DTB (see prepare_initrd_dtb).
     pub initrd: Option<Initrd>,
+
+    /// The idle-then-bound NIC stanza as data (13-01, D-01a): a netdev
+    /// backend + PCI device model + optional filter-dump capture, emitted
+    /// by apply_netdev (the q35 generalization of the frozen-at-pin
+    /// aarch64 apply_virt_netdev emission — that consumer is NOT
+    /// migrated this phase).  Emit-only-when-set: an absent table changes
+    /// no existing argv shape.
+    pub netdev: Option<Netdev>,
+
+    /// Verbatim extra argv tokens appended after the structured keys —
+    /// the data path for machine-specific perturbations (13-04's
+    /// `-global q35-pcihost.MCFG=0xe0000000` moved-window profile).
+    /// Emit-only-when-set.
+    pub extra: Option<Vec<String>>,
+}
+
+/// The [qemu] netdev table (13-01, D-01a): the NIC staged as data.
+/// `mode = "user"` + `device = "virtio-net-pci-non-transitional"` +
+/// `pcap = true` expresses `-netdev user,id=n0` +
+/// `-device virtio-net-pci-non-transitional,netdev=n0` +
+/// `-object filter-dump,id=f0,netdev=n0,file=<path>` — the same stanza
+/// shape the aarch64 virt leg emits from Rust, single-sourced here as
+/// TOML so Phase 16 (HNET-02) consumes the same table.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Netdev {
+    /// netdev backend mode ("user" — slirp)
+    pub mode: String,
+
+    /// PCI device model bound to the netdev (virtio-net-pci-non-transitional
+    /// — the modern-only, non-transitional transport, Phase 7 D-03)
+    pub device: String,
+
+    /// attach a per-run filter-dump pcap capture object when true
+    pub pcap: bool,
 }
 
 /// The [qemu] initrd table: the image file plus the guest physical address
@@ -405,6 +439,43 @@ fn apply_qemu_config(cmd: &mut Command, config: &Configuration, overrides: &Qemu
             cmd.arg("-device");
             cmd.arg(initrd.loader_device_arg());
         }
+        // Verbatim extra tokens ride AFTER the structured keys — never
+        // before them (an override of the same flag stays possible).
+        if let Some(extra) = &config.extra {
+            for arg in extra {
+                cmd.arg(arg);
+            }
+        }
+    }
+}
+
+/// The q35 netdev stanza, emitted from data (13-01, D-01a).  A [qemu]
+/// netdev table (mode/device/pcap) emits `-netdev <mode>,id=n0` +
+/// `-device <device>,netdev=n0` + (pcap) `-object
+/// filter-dump,id=f0,netdev=n0,file=<path>`, gated on the config's
+/// platform == "q35" — the emission is per-platform DATA consumed by a
+/// generalized emitter, never a Rust-formatted string keyed on the
+/// platform name alone.  Both x86_64 call sites (the interactive QemuStep
+/// arm AND BootTestStep) share this one emission, each passing its own
+/// per-step pcap path (target/qemu-<config>.pcap /
+/// target/boot-test-<config>.pcap — a gate never asserts against a
+/// previous run's capture).  The aarch64 `apply_virt_netdev` stays
+/// byte-untouched as the frozen-at-pin legacy consumer (OQ-2: no
+/// migration this phase).  The device sits idle and unbound (dev = []
+/// still): an untouched virtio device never asserts an interrupt — the
+/// 07-01 D-10 idle-NIC staging shape.
+pub fn apply_netdev(cmd: &mut Command, config: &Configuration, pcap_path: &str) {
+    let q35 = config.config.as_ref().and_then(|c| c.platform.as_deref()) == Some("q35");
+    if !q35 {
+        return;
+    }
+    let Some(netdev) = config.qemu.as_ref().and_then(|q| q.netdev.as_ref()) else {
+        return;
+    };
+    cmd.arg("-netdev").arg(format!("{},id=n0", netdev.mode));
+    cmd.arg("-device").arg(format!("{},netdev=n0", netdev.device));
+    if netdev.pcap {
+        cmd.arg("-object").arg(format!("filter-dump,id=f0,netdev=n0,file={pcap_path}"));
     }
 }
 
@@ -709,6 +780,121 @@ mod tests {
                 .expect("test TOML must parse");
         let mut cmd = std::process::Command::new("qemu-system-aarch64");
         super::apply_virt_netdev(&mut cmd, &raspi, "target/qemu-default.pcap");
+        assert_eq!(cmd.get_args().count(), 0);
+    }
+
+    /// 13-01 (D-01a): the [qemu] netdev table emits the idle-NIC stanza
+    /// from data on q35 — the generalization of the frozen-at-pin
+    /// aarch64 emission.  The per-step pcap paths ride the caller's
+    /// argument: target/boot-test-q35.pcap (BootTestStep) /
+    /// target/qemu-q35.pcap (QemuStep).  pcap = false drops only the
+    /// filter-dump object; a non-q35 platform (virt shown) gains
+    /// nothing — its emission stays apply_virt_netdev's.
+    #[test]
+    fn q35_netdev_stanza_emits_from_data() {
+        let q35: Configuration = toml::from_str(
+            "[config]\nplatform = \"q35\"\n[qemu]\nmachine = \"q35\"\n[qemu.netdev]\nmode = \
+             \"user\"\ndevice = \"virtio-net-pci-non-transitional\"\npcap = true\n",
+        )
+        .expect("test TOML must parse");
+        let mut cmd = std::process::Command::new("qemu-system-x86_64");
+        super::apply_netdev(&mut cmd, &q35, "target/boot-test-q35.pcap");
+        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(
+            args,
+            vec![
+                "-netdev",
+                "user,id=n0",
+                "-device",
+                "virtio-net-pci-non-transitional,netdev=n0",
+                "-object",
+                "filter-dump,id=f0,netdev=n0,file=target/boot-test-q35.pcap",
+            ]
+        );
+        let mut cmd = std::process::Command::new("qemu-system-x86_64");
+        super::apply_netdev(&mut cmd, &q35, "target/qemu-q35.pcap");
+        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert!(args.last().is_some_and(|a| a.ends_with("file=target/qemu-q35.pcap")));
+
+        let nocap: Configuration = toml::from_str(
+            "[config]\nplatform = \"q35\"\n[qemu]\nmachine = \"q35\"\n[qemu.netdev]\nmode = \
+             \"user\"\ndevice = \"virtio-net-pci-non-transitional\"\npcap = false\n",
+        )
+        .expect("test TOML must parse");
+        let mut cmd = std::process::Command::new("qemu-system-x86_64");
+        super::apply_netdev(&mut cmd, &nocap, "target/qemu-q35.pcap");
+        assert_eq!(cmd.get_args().count(), 4);
+
+        let virt: Configuration = toml::from_str(
+            "[config]\nplatform = \"virt\"\n[qemu]\nmachine = \"virt,gic-version=2\"\n[qemu.netdev]\nmode = \
+             \"user\"\ndevice = \"virtio-net-pci-non-transitional\"\npcap = true\n",
+        )
+        .expect("test TOML must parse");
+        let mut cmd = std::process::Command::new("qemu-system-x86_64");
+        super::apply_netdev(&mut cmd, &virt, "target/qemu-virt.pcap");
+        assert_eq!(cmd.get_args().count(), 0);
+    }
+
+    /// A [qemu] netdev table with no mode/device/pcap trio is a config
+    /// error, not a silently partial stanza — serde names the missing
+    /// key before any qemu argv exists.
+    #[test]
+    fn q35_netdev_table_requires_all_three_keys() {
+        let bad = toml::from_str::<Configuration>(
+            "[config]\nplatform = \"q35\"\n[qemu]\nmachine = \"q35\"\n[qemu.netdev]\nmode = \
+             \"user\"\n",
+        );
+        assert!(bad.is_err());
+    }
+
+    /// 13-01: the [qemu] extra list emits its tokens verbatim, in order,
+    /// after the structured keys — the data path 13-04's
+    /// `-global q35-pcihost.MCFG=0xe0000000` moved-window profile rides.
+    #[test]
+    fn q35_extra_args_emit_verbatim_after_structured_keys() {
+        let args = qemu_argv(
+            r#"
+                [qemu]
+                machine = "q35"
+                accel = "kvm"
+                cpu = "host"
+                smp = 1
+                memory = "1024M"
+                extra = ["-global", "q35-pcihost.MCFG=0xe0000000"]
+            "#,
+        );
+        assert_eq!(
+            args,
+            vec![
+                "-M",
+                "q35",
+                "-accel",
+                "kvm",
+                "-cpu",
+                "host",
+                "-smp",
+                "1",
+                "-m",
+                "1024M",
+                "-global",
+                "q35-pcihost.MCFG=0xe0000000",
+            ]
+        );
+    }
+
+    /// The emit-only-when-set regression guard: a [qemu] section without
+    /// the netdev table and the extra list emits NEITHER — every
+    /// pre-13-01 argv shape stays byte-identical.
+    #[test]
+    fn minimal_qemu_section_emits_neither_netdev_nor_extra() {
+        let args =
+            qemu_argv("[qemu]\nmachine = \"raspi3b\"\ndtb = \"aarch64/lib/bcm2710-rpi-3-b.dtb\"\n");
+        assert_eq!(args, vec!["-M", "raspi3b", "-dtb", "aarch64/lib/bcm2710-rpi-3-b.dtb"]);
+        let config: Configuration =
+            toml::from_str("[config]\nplatform = \"q35\"\n[qemu]\nmachine = \"q35\"\n")
+                .expect("test TOML must parse");
+        let mut cmd = std::process::Command::new("qemu-system-x86_64");
+        super::apply_netdev(&mut cmd, &config, "target/qemu-q35.pcap");
         assert_eq!(cmd.get_args().count(), 0);
     }
 

@@ -26,6 +26,16 @@ cpu = "host"
 smp = 1
 memory = "1024M"
 
+# D-01a: the idle NIC staged as data (the 07-01 D-10 shape, x86 leg) —
+# present on EVERY q35 invocation, unbound until 13-05's dev_ether
+# (dev = [] above; an untouched virtio device never asserts an
+# interrupt).  The filter-dump capture rides the same netdev, per-step
+# pcap path (target/boot-test-q35.pcap / target/qemu-q35.pcap).
+[qemu.netdev]
+mode = "user"
+device = "virtio-net-pci-non-transitional"
+pcap = true
+
 [dist]
 # The ELF64 is what GRUB loads (D-02: no objcopy, no -kernel); the ISO
 # build (xtask, grub-mkrescue) stages this ELF directly.
