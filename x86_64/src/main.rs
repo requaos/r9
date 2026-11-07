@@ -134,10 +134,36 @@ pub extern "C" fn main(mach: &mut dat::Mach, mbdata: u64) {
     platform::print_machine_info(facts);
     print_memory_info();
 
-    // Park cleanly with IRQs masked — the boot-test gate's negative
-    // panic scan stays green.  The next bring-up step (13-03) arms the
-    // LAPIC/timer before the first sti.
-    halt();
+    // The IRQ-arming window (the Phase-3 ordering hazard applies
+    // verbatim on x86: no interrupt may be deliverable before its
+    // handler exists).  The IDT — stubs, gates, IST stacks — plus the
+    // GDT and TSS loaded at entry, so what remains here is arming the
+    // sources in order and unmasking LAST; the mb2 i386 entry contract
+    // guarantees EFLAGS.IF=0 at entry and nothing above raised it.
+    //
+    // LAPIC first: SVR software-enable + the D-04 LINT mask policy —
+    // every later arming step programs LVT entries through it.
+    platform::q35::lapic::init();
+    // The timer: CPUID-gated mode, runtime-resolved frequency, LVT
+    // programming and the first arm.  Its tick sweep carries the
+    // console-RX echo, so serial input goes live the moment ticks do.
+    platform::q35::timer::init();
+
+    // Unmask LAST (the Phase-3 hazard, x86 edition): sti happens here,
+    // once, after every handler the armed sources can fire exists in
+    // the dispatch.  Any earlier unmask would hit an empty dispatch
+    // table — a wedge, not a print.
+    cpu::sti();
+
+    // The idle loop: hlt wakes on each timer interrupt and trap()'s
+    // IRQ branch iretq's back here (the aarch64 wfi shape, x86
+    // edition).  It prints nothing, which is what makes tick()'s
+    // println from IRQ context safe against the Console lock (single
+    // CPU; the aarch64 timer.rs doctrine).
+    loop {
+        // SAFETY: hlt faults nowhere and parks until an interrupt.
+        unsafe { core::arch::asm!("hlt") };
+    }
 }
 
 fn halt() -> ! {

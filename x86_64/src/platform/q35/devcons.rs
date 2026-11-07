@@ -7,11 +7,8 @@ use port::println;
 
 use crate::pio;
 use crate::uart16550;
+use crate::uart16550::COM1;
 
-// qemu q35's -serial rides the architectural COM1 16550 — a fixed
-// platform fact of the machine model (the same fact the pre-13-02
-// x86_64 console registration relied on), not firmware-provided data.
-const COM1: u16 = 0x3f8;
 const SCR: u16 = 7;
 
 struct Uart16550 {

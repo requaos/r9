@@ -424,15 +424,25 @@ extern "C" fn trap(vector: u8, trap_frame: &mut Ureg) -> u32 {
         dispatch_irq(vector);
         return 0;
     }
-    // Synchronous exception (0..=31): dump and park — the 13-02
-    // early-exception diagnostics shape.
+    // Synchronous exception (0..=31): dump once, then park.  Returning
+    // would re-execute the faulting instruction and loop the dump
+    // forever (observed live at 13-03 bring-up: a 6 MiB serial storm
+    // from one #GP) — the dump-and-park is the aarch64 trap() doctrine,
+    // and the boot-test gate then fails with a small readable capture
+    // instead of a log flood.
     crate::println!("trap {vector:?}", vector = crate::dat::Trap::from(vector));
     match vector {
         2 => {}
-        8 => unsafe { core::arch::asm!("hlt") },
+        8 => {}
         _ => crate::println!("frame: {trap_frame:#x?}"),
     }
-    0
+    crate::println!("kernel halted");
+    loop {
+        // SAFETY: hlt faults nowhere and parks until an interrupt; the
+        // interrupt path iretq's back here (an exception at boot is
+        // terminal, the halt is the point).
+        unsafe { core::arch::asm!("hlt") };
+    }
 }
 
 /// IRQ dispatch, the aarch64 dispatch_irq shape re-keyed: the entry

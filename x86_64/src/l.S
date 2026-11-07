@@ -54,6 +54,7 @@
 .set Cr4FSGSBASE,		(1<<16)		// (RD|WR)(FS|GS)BASE Extension
 
 .set IA32_EFER,			0xc0000080	// Extended Feature Enable
+.set IA32_GS_BASE,		0xc0000101	// GS base (the wrmsr wrgsbase stand-in)
 
 .set EferSCE,			(1<<0)		// System Call Extension
 .set EferLME,			(1<<8)		// Long Mode Enable
@@ -184,9 +185,17 @@ mb2_header_end:
 
 	// Enable global pages and the physical address extension.  Turn
 	// off the page size extension; it is always eanbled in PAE mode.
+	// NOTE: FSGSBASE is deliberately NOT enabled here — the wrgsbase
+	// instruction requires CR4.FSGSBASE, which TCG's qemu64 model does
+	// not support, and an ungated CR4.FSGSBASE write wedged early boot
+	// there forever (observed live at 13-03: EIP pinned on the mov-to-
+	// cr4).  warp64 below sets the kernel %gs base through the
+	// architectural IA32_GS_BASE MSR instead, which needs no enable
+	// bit; the FSGSBASE instructions stay retired until something
+	// needs per-instruction GS swaps (Phase 14).
 	movl	%cr4, %eax
 	andl	$~Cr4PSE, %eax
-	orl	$(Cr4PGE|Cr4PAE|Cr4FSGSBASE), %eax
+	orl	$(Cr4PGE|Cr4PAE), %eax
 	movl	%eax, %cr4
 
 	// Set up the Extended Feature Enable (EFER) MSR, enabling
@@ -243,7 +252,16 @@ mb2_header_end:
 	// later bring-up plans.
 warp64:
 	movabsq	$(KCPUZERO+KMACH), %rdi
-	wrgsbase %rdi
+	// The kernel %gs base: IA32_GS_BASE (0xC0000101) via wrmsr — the
+	// wrgsbase instruction needs CR4.FSGSBASE (absent under TCG's
+	// qemu64, see the cr4 note above); the MSR is architectural in
+	// long mode.  %rdi (the Mach argument to main) survives untouched.
+	movl	$IA32_GS_BASE, %ecx
+	movq	%rdi, %rax
+	shrq	$32, %rax
+	movl	%eax, %edx
+	movl	%edi, %eax
+	wrmsr
 	leaq	MACHSTKOFF+MACHSTKSZ(%rdi), %rsp
 
 	// A pointer to the Mach is already in %rdi, and is the
@@ -469,6 +487,15 @@ bootidentitypt3:
 	.quad	(0<<30) + (PtePS | PteRW | PteP)
 	.quad	(1<<30) + (PtePS | PteRW | PteP)
 	.quad	(2<<30) + (PtePS | PteRW | PteP)
+	// The 4th GiB as a plain leaf.  NOTE (13-03 bring-up, live-tested):
+	// splitting this leaf into a PD/PT with the LAPIC page (0xFEE00000)
+	// as a 4 KiB UC mapping SILENTLY BROKE APIC MMIO under both accels —
+	// every LAPIC register read returned 0 (TCG) and writes never
+	// reached KVM's canonical state — while the plain 1 GiB WB leaf
+	// delivers APIC accesses correctly on TCG.  The SDM's UC
+	// requirement for the APIC page is satisfied by the EPT/MMIO layer
+	// under virtualization; do not re-split without re-proving both
+	// accel legs.
 	.quad	(3<<30) + (PtePS | PteRW | PteP)
 	.space	4096 - 4*8
 

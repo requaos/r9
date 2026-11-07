@@ -8,13 +8,6 @@
 // else PIT-calibrated over a fixed one-shot window) and printed with
 // its source — never a compiled-in constant.
 
-// TEMPORARY (13-03): the machinery lands ahead of Task 3's main.rs
-// arming-window wiring; until then the bin crate's dead_code lint would
-// fire on init/ticks (no kernel caller yet — the tests exercise the
-// pure core only).  Task 3's wiring commit removes this whole-file
-// allow (together with lapic.rs's).
-#![allow(dead_code)]
-
 use core::cell::SyncUnsafeCell;
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -109,7 +102,9 @@ pub fn tick_plan(state: &TimerState, now: u64, ticks: &AtomicU64) -> (Rearm, u64
 
 static TICKS: AtomicU64 = AtomicU64::new(0);
 
-/// The current tick count (the deadlines consumer).
+/// The current tick count (the deadlines consumer — the port-side
+/// sleep/alarm sweep that reads it arrives with the exec era).
+#[allow(dead_code)]
 pub fn ticks() -> u64 {
     TICKS.load(Ordering::Relaxed)
 }
@@ -205,9 +200,20 @@ pub fn tick() {
     if prev % PRINT_EVERY == 0 {
         println!("tick {}", prev / PRINT_EVERY);
     }
-    // The polled console-RX sweep (13-03 Task 3's one-line hook — the
-    // 16550 LSR poll + echo): uart16550::rx_echo(COM1);
+    // The polled console-RX sweep: drain + echo the 16550 (the
+    // bring-up console's RX path rides the tick; IRQ-driven RX is not
+    // this phase).
+    crate::uart16550::rx_echo(crate::uart16550::COM1);
 }
+
+/// The plausible-TSC sanity floor/ceiling for CPUID-reported
+/// frequencies: synthetic qemu CPU models return nonsense leaf-0x15/0x16
+/// values (measured: Skylake-Client under TCG reports a ~68 kHz
+/// "crystal" — 832*576/7); a frequency outside the band is treated as
+/// garbage and the chain falls through to the next source (Linux's
+/// sanity-check discipline).
+const TSC_HZ_MIN: u64 = 1_000_000;
+const TSC_HZ_MAX: u64 = 1_000_000_000_000;
 
 /// Resolve the TSC frequency at runtime: CPUID 0x15 (the core crystal
 /// clock ratio) when the leaf is real, else CPUID 0x16 (the nominal
@@ -219,14 +225,17 @@ fn resolve_tsc_hz() -> Result<(u64, &'static str), &'static str> {
         // TSC = crystal (ECX) * numerator (EBX) / denominator (EAX).
         if let Some(hz) = u64::from(ecx15).checked_mul(u64::from(ebx15)) {
             let hz = hz / u64::from(eax15);
-            if hz > 0 {
+            if (TSC_HZ_MIN..=TSC_HZ_MAX).contains(&hz) {
                 return Ok((hz, "cpuid 0x15"));
             }
         }
     }
     let (eax16, _, _, _) = cpu::cpuid(0x16, 0);
     if eax16 != 0 {
-        return Ok((u64::from(eax16) * 1_000_000, "cpuid 0x16"));
+        let hz = u64::from(eax16) * 1_000_000;
+        if (TSC_HZ_MIN..=TSC_HZ_MAX).contains(&hz) {
+            return Ok((hz, "cpuid 0x16"));
+        }
     }
     pit_calibrate_tsc()
 }

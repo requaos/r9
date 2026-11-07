@@ -129,10 +129,8 @@ pub unsafe fn _rdmsr(msr: u32) -> u64 {
 }
 
 /// Executes `CPUID` with the given leaf and subleaf, returning
-/// (eax, ebx, ecx, edx).
-///
-/// Unused until 13-03's timer lands (leaf 1 ECX bit 24 — the
-/// TSC-deadline gate — and the 0x15/0x16 frequency leaves).
+/// (eax, ebx, ecx, edx).  The timer's mode gate (leaf 1 ECX bit 24)
+/// and its frequency leaves (0x15/0x16) ride this.
 ///
 /// CPUID faults nowhere; an unimplemented leaf returns the maximum
 /// leaf's values by architectural definition (SDM Vol 2, CPUID) — the
@@ -141,7 +139,6 @@ pub unsafe fn _rdmsr(msr: u32) -> u64 {
 /// scratch operands with the original %rbx saved and restored around
 /// the instruction — cpuid writes ebx, and the compiler is free to
 /// hold live state there.
-#[allow(dead_code)]
 pub fn cpuid(leaf: u32, subleaf: u32) -> (u32, u32, u32, u32) {
     let (a, c, d): (u32, u32, u32);
     let (_rbx_saved, rbx_val): (u64, u64);
@@ -165,14 +162,11 @@ pub fn cpuid(leaf: u32, subleaf: u32) -> (u32, u32, u32, u32) {
     (a, rbx_val as u32, c, d)
 }
 
-/// Reads the 64-bit time-stamp counter.
-///
-/// Unused until 13-03's timer lands (the TSC-deadline arm and the
+/// Reads the 64-bit time-stamp counter (the TSC-deadline arm and the
 /// frequency calibration both read it).
 ///
 /// # Safety
 /// RDTSC is unprivileged and always available.
-#[allow(dead_code)]
 pub fn rdtsc() -> u64 {
     let lo: u32;
     let hi: u32;
@@ -185,8 +179,7 @@ pub fn rdtsc() -> u64 {
 /// Pure decision helper: does leaf-1 ECX bit 24
 /// (`CPUID_EXT_TSC_DEADLINE_TIMER`) select TSC-deadline timer mode?
 /// Host-testable without a CPU — the timer's mode gate routes through
-/// this (13-03 Task 2, RESEARCH Pitfall 2: TCG never exposes the bit).
-#[allow(dead_code)]
+/// this (RESEARCH Pitfall 2: TCG never exposes the bit).
 pub fn has_tsc_deadline(cpuid1_ecx: u32) -> bool {
     cpuid1_ecx & (1 << 24) != 0
 }

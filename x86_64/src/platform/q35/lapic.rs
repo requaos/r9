@@ -12,12 +12,6 @@
 // so the aarch64 io.rs read_reg/write_reg volatile family re-keys over
 // the identity window with offset bounds checks.
 
-// TEMPORARY (13-03): the registry lands in Task 1 ahead of Task 2's
-// timer/trap consumers; every not-yet-referenced item would trip the
-// bin crate's dead_code lint.  Task 2's GREEN commit (timer.rs + the
-// trap dispatch) removes this whole-file allow.
-#![allow(dead_code)]
-
 use core::cell::SyncUnsafeCell;
 use core::ptr::{read_volatile, write_volatile};
 
@@ -124,21 +118,26 @@ static LAPIC: SyncUnsafeCell<Option<Lapic>> = SyncUnsafeCell::new(None);
 /// a failure prints and leaves the cell empty (eoi() then no-ops, so
 /// the IRQ path degrades instead of panicking).
 ///
-/// Sequence (the 9k apiconline order, xAPIC-classic): TPR 0, LINT0 and
-/// LINT1 masked (D-04 — there is no PIC to receive their delivery, and
-/// none will ever be enabled), the error LVT set, then the SVR
-/// software-enable with the spurious vector, then a drain EOI for
-/// anything left in-service.  All of it runs while EFLAGS.IF=0 (the mb2
-/// entry contract; nothing raises it before the arming window's tail),
-/// so no interrupt can observe a half-initialized unit.
+/// Sequence (the 9k apiconline order, xAPIC-classic): TPR 0, then the
+/// SVR software-enable with the spurious vector FIRST, and only then
+/// the LVT programming — LINT0/LINT1 masked (D-04: there is no PIC to
+/// receive their delivery, and none will ever be enabled) and the
+/// error LVT set — then a drain EOI for anything left in-service.
+/// The enable-first order is load-bearing: emulator APICs (qemu's
+/// userspace model and KVM's in-kernel one) discard LVT writes while
+/// the unit is software-disabled (observed live at 13-03 — LVT
+/// programming silently vanished), and 9k writes its LVTs after the
+/// SVR too.  All of it runs while EFLAGS.IF=0 (the mb2 entry
+/// contract; nothing raises it before the arming window's tail), so
+/// no interrupt can observe a half-initialized unit.
 pub fn init() {
     match Lapic::new() {
         Ok(lapic) => {
             lapic.write(TPR, 0);
+            lapic.write(SVR, SVR_ENABLE | u32::from(SPURIOUS_VECTOR));
             lapic.write(LVT_LINT0, LVT_MASKED);
             lapic.write(LVT_LINT1, LVT_MASKED);
             lapic.write(LVT_ERROR, u32::from(ERROR_VECTOR));
-            lapic.write(SVR, SVR_ENABLE | u32::from(SPURIOUS_VECTOR));
             // Drain any outstanding in-service state (apiconline's
             // post-enable EOI).
             lapic.write(EOI_REG, 0);

@@ -883,6 +883,17 @@ const BOOT_TEST_TIMEOUT_SECS: u64 = 300;
 /// wall-clock allowance, not a timing assertion.
 const BOOT_FIRST_MARKER_TIMEOUT_SECS: u64 = 20;
 
+/// The same budgets under TCG (13-03): SeaBIOS+GRUB run tens of times
+/// slower there, and GRUB's BIOS-disk load of the debug kernel ELF (18 MB
+/// class) is the dominant cost — measured at 13+ MINUTES on this host
+/// (KVM boots the same ISO in seconds).  The multipliers scale both
+/// budgets when the EFFECTIVE accel resolves to tcg (flag > TOML, same
+/// chain as the qemu emission); the env overrides still beat the scaled
+/// defaults.  Still order-never-timings: these are wall-clock
+/// allowances for firmware+loader, not assertions on the guest.
+const TCG_FIRST_MARKER_MULT: u64 = 45;
+const TCG_OVERALL_MULT: u64 = 6;
+
 /// The q35 machine-info fact line prefix (13-02, X64-01's kernel half):
 /// the main9-x64 payload prints one `q35: memory ...` line per mb2
 /// memory-map range it parsed.  The gate asserts >= 1 such line strictly
@@ -1300,10 +1311,11 @@ enum BootProfile {
     /// loopback traffic never touches the wire (that is the point).
     Netip,
     /// The x86_64 channel gate (13-01 opened it; 13-02 grew it to the
-    /// kernel half): SeaBIOS -> GRUB2 -> mb2 kernel, banner marker, then
-    /// >= 1 `q35: memory` mb2-fact line strictly after the banner — the
-    /// main9-x64 payload's parse evidence.  Ticks/echo stages land with
-    /// 13-03's timer.
+    /// kernel half; 13-03 completed it to the timer half): SeaBIOS ->
+    /// GRUB2 -> mb2 kernel, banner marker, >= 1 `q35: memory` mb2-fact
+    /// line strictly after the banner, >= 3 tick lines strictly after
+    /// the facts, then the typed echo probe reappearing — X64-01's full
+    /// Phase-3-style platform-gate shape, order-anchored at every stage.
     X64,
 }
 
@@ -1528,7 +1540,18 @@ impl BootTestStep {
             .spawn()
             .map_err(|e| format!("{}: {}", cmd.get_program().to_string_lossy(), e))?;
 
-        let result = self.assert_markers(&mut child, &sock_abs, &log_abs);
+        // The accel-aware budget axis (13-03): TCG's firmware+loader are
+        // tens of times slower than KVM's — the resolved accel (the same
+        // chain the qemu emission uses: flag > TOML) scales the gate's
+        // wall-clock allowances.  A missing accel key leaves the defaults.
+        let effective_accel = overrides
+            .accel
+            .clone()
+            .or_else(|| config.qemu.as_ref().and_then(|q| q.accel.clone()))
+            .unwrap_or_default();
+        let tcg_budgets = effective_accel == "tcg";
+
+        let result = self.assert_markers(&mut child, &sock_abs, &log_abs, tcg_budgets);
 
         // Always reap the guest (by process group) and drop the
         // socket file.  One teardown site covers the pass, fail, and
@@ -1545,16 +1568,22 @@ impl BootTestStep {
 
     /// Connect, capture, and assert the ordered markers.  Writes every
     /// captured byte to the evidence log at target/boot-test-<config>.log.
+    /// `tcg_budgets` scales the wall-clock allowances for TCG's slower
+    /// firmware+loader (13-03; the env overrides still win).
     fn assert_markers(
         &self,
         child: &mut process::Child,
         sock_abs: &Path,
         log_abs: &Path,
+        tcg_budgets: bool,
     ) -> Result<()> {
         let timeout_secs: u64 = env::var("R9_BOOT_TEST_TIMEOUT")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(BOOT_TEST_TIMEOUT_SECS);
+            .unwrap_or({
+                let base = BOOT_TEST_TIMEOUT_SECS;
+                if tcg_budgets { base * TCG_OVERALL_MULT } else { base }
+            });
         let deadline = Instant::now() + Duration::from_secs(timeout_secs);
         // The x86_64 channel's dedicated first-marker budget (Pitfall 8):
         // firmware time precedes the banner on the -cdrom path, and this
@@ -1564,7 +1593,10 @@ impl BootTestStep {
                 env::var("R9_BOOT_TEST_FIRST_MARKER_TIMEOUT")
                     .ok()
                     .and_then(|v| v.parse().ok())
-                    .unwrap_or(BOOT_FIRST_MARKER_TIMEOUT_SECS),
+                    .unwrap_or({
+                        let base = BOOT_FIRST_MARKER_TIMEOUT_SECS;
+                        if tcg_budgets { base * TCG_FIRST_MARKER_MULT } else { base }
+                    }),
             );
 
         // wait=on means qemu holds guest start until this connect, so the
@@ -1596,6 +1628,11 @@ impl BootTestStep {
         // The X64 facts stage's ordered-presence anchor: the byte offset
         // just past the banner, set when the banner is observed.
         let mut facts_after = 0usize;
+        // The X64 ticks stage's ordered-presence anchor (13-03): the
+        // byte offset just past the facts stage's satisfaction, so a
+        // tick line that rode the wire earlier never counts.  0 on the
+        // aarch64 profiles (the whole capture counts, as before).
+        let mut ticks_after = 0usize;
 
         // Assertion profile selection: a [config] dev list containing
         // "panic" selects the panic profile -- banner, the virtpanic start
@@ -1698,11 +1735,17 @@ impl BootTestStep {
                 }
                 BootStage::Q35Facts => {
                     if count_marker_lines(&capture[facts_after..], BOOT_Q35_MEMORY_MARKER) >= 1 {
-                        return self.finish(log_abs, &capture, BootProfile::X64);
+                        // 13-03: the gate grew to the timer half —
+                        // X64-01's full Phase-3-style shape.  The tick
+                        // count is anchored strictly past the facts (a
+                        // tick line that rode the wire pre-facts never
+                        // satisfies the stage).
+                        ticks_after = capture.len();
+                        stage = BootStage::Ticks;
                     }
                 }
                 BootStage::Ticks => {
-                    if count_marker_lines(&capture, BOOT_TICK_MARKER) >= BOOT_TICK_MIN {
+                    if count_marker_lines(&capture[ticks_after..], BOOT_TICK_MARKER) >= BOOT_TICK_MIN {
                         // Ticks prove IRQs are live; type the probe now.
                         stream.write_all(BOOT_ECHO_PROBE)?;
                         probe_at = capture.len();
@@ -1711,7 +1754,15 @@ impl BootTestStep {
                 }
                 BootStage::Echo => {
                     if contains_marker(&capture[probe_at..], BOOT_ECHO_PROBE) {
-                        return self.finish(log_abs, &capture, BootProfile::Ticks);
+                        // The X64 arm (13-03) rides the same Ticks->Echo
+                        // stages behind its facts stage — its finish
+                        // message names the full q35 marker chain.
+                        let profile = if self.arch == Arch::X86_64 {
+                            BootProfile::X64
+                        } else {
+                            BootProfile::Ticks
+                        };
+                        return self.finish(log_abs, &capture, profile);
                     }
                 }
                 BootStage::PanicStart => {
@@ -1951,7 +2002,9 @@ impl BootTestStep {
             }
             BootProfile::X64 => {
                 println!(
-                    "boot-test: PASS -- SeaBIOS -> GRUB2 -> mb2 kernel boot: banner marker then >= 1 q35 memory-map fact line observed in order on the serial socket (X64-01 channel)"
+                    "boot-test: PASS -- SeaBIOS -> GRUB2 -> mb2 kernel boot: banner, >= 1 q35 \
+                     memory-map fact line, >= {BOOT_TICK_MIN} tick lines and the typed echo probe \
+                     observed in order on the serial socket (X64-01 platform gate)"
                 );
             }
             BootProfile::Exec => {
@@ -2839,12 +2892,6 @@ fn build_x86_64_iso(kernel_rel: &str, config_name: &str, verbose: bool) -> Resul
     if !kernel_abs.exists() {
         return Err(format!("kernel image {kernel_rel} missing (build step ran first?)").into());
     }
-    let kernel_bytes =
-        std::fs::read(&kernel_abs).map_err(|e| format!("read {kernel_rel}: {e}"))?;
-    let header = check_mb2_header(&kernel_bytes)?;
-    println!(
-        "mb2: header at file offset {header:#x} validated (magic/arch/length/checksum/end tag)"
-    );
 
     // Stage boot/kernel + boot/grub/grub.cfg — the committed grub.cfg's
     // `multiboot2 /boot/kernel` names the staged ELF at its fixed ISO path.
@@ -2854,7 +2901,36 @@ fn build_x86_64_iso(kernel_rel: &str, config_name: &str, verbose: bool) -> Resul
         std::fs::remove_dir_all(&stage)?;
     }
     std::fs::create_dir_all(stage.join("boot/grub"))?;
-    std::fs::copy(&kernel_abs, stage.join("boot/kernel"))?;
+
+    // The staged kernel is a STRIPPED copy of the built ELF (13-03):
+    // GRUB loads only the PT_LOAD segments, so debug info is pure load
+    // weight through the BIOS-disk channel — under TCG an 18 MB debug
+    // image took 20+ MINUTES to load (measured; KVM loads it in
+    // seconds).  `objcopy --strip-debug` keeps every loadable segment
+    // and the mb2 header byte-identical; the header check below runs
+    // against the EXACT stripped bytes GRUB will scan, so the ISO
+    // refuse-to-boot guarantee (13-01) is unchanged.
+    let staged_kernel = stage.join("boot/kernel");
+    let mut strip = Command::new("objcopy");
+    strip.arg("--strip-debug").arg(&kernel_abs).arg(&staged_kernel);
+    strip.current_dir(workspace());
+    if verbose {
+        println!("Executing {strip:?}");
+    }
+    let status = strip
+        .status()
+        .map_err(|e| format!("spawn objcopy (binutils in the devshell): {e}"))?;
+    if !status.success() {
+        return Err("objcopy --strip-debug failed".into());
+    }
+    let kernel_bytes = std::fs::read(&staged_kernel)
+        .map_err(|e| format!("read stripped kernel: {e}"))?;
+    let header = check_mb2_header(&kernel_bytes)?;
+    println!(
+        "mb2: header at file offset {header:#x} validated on the stripped ISO kernel \
+         (magic/arch/length/checksum/end tag)"
+    );
+
     std::fs::copy(workspace().join("x86_64/lib/grub.cfg"), stage.join("boot/grub/grub.cfg"))?;
 
     let iso_rel = format!("target/boot-{config_name}.iso");
@@ -2918,7 +2994,7 @@ fn annotated_status(cmd: &mut Command) -> Result<process::ExitStatus> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BOOT_ECHO_PROBE, BOOT_Q35_MEMORY_MARKER, BOOT_TICK_MARKER, check_mb2_header,
+        BOOT_ECHO_PROBE, BOOT_Q35_MEMORY_MARKER, BOOT_TICK_MARKER, BOOT_TICK_MIN, check_mb2_header,
         contains_marker, count_marker_lines, count_register_lines, marker_position,
         negative_scan_hit_for,
     };
@@ -3088,6 +3164,46 @@ mod tests {
         // memory marker's line prefix.
         assert_eq!(count_marker_lines(&wire[after..], "q35: acpi"), 1);
         assert!(marker_position(b"no marker here", BOOT_Q35_MEMORY_MARKER.as_bytes()).is_none());
+    }
+
+    /// The X64 gate's tick stage (13-03) counts `tick` lines only past
+    /// the facts stage's anchor: a tick line that rode the wire before
+    /// the facts were observed never satisfies the stage, and the aarch64
+    /// profiles' whole-capture count (anchor 0) is unchanged.
+    #[test]
+    fn x64_tick_lines_count_only_past_the_facts() {
+        let wire = b"r9 from the Internet\r\n\
+                     tick 0\r\n\
+                     q35: memory 0x100000..0x3ffdf000 available\r\n\
+                     q35: acpi rsdt 0x3ffe2345\r\n\
+                     tick 0\r\n\
+                     tick 1\r\n\
+                     tick 2\r\n";
+        // The facts anchor sits just past the banner; the ticks anchor
+        // sits just past the last fact line (the stage sets it to the
+        // capture length at satisfaction time).
+        let facts_after = marker_position(wire, b"r9 from the Internet")
+            .map(|p| p + "r9 from the Internet".len())
+            .unwrap_or(wire.len());
+        let facts_end = marker_position(wire, b"q35: acpi rsdt")
+            .map(|p| p + "q35: acpi rsdt 0x3ffe2345\r\n".len())
+            .unwrap_or(wire.len());
+        // Whole wire: the pre-facts tick line would over-credit (4 >=
+        // BOOT_TICK_MIN) — and past the BANNER alone it still counts
+        // (the tick line between banner and facts), which is why the
+        // ticks stage carries its own anchor past the FACTS.  Past that
+        // anchor exactly the 3 post-facts lines count, so the ordered
+        // stage still demands 3 real ticks.
+        assert_eq!(count_marker_lines(wire, BOOT_TICK_MARKER), 4);
+        assert_eq!(count_marker_lines(&wire[facts_after..], BOOT_TICK_MARKER), 4);
+        assert_eq!(count_marker_lines(&wire[facts_end..], BOOT_TICK_MARKER), 3);
+        // The aarch64 shape: anchor 0 counts everything.
+        assert_eq!(count_marker_lines(&wire[0..], BOOT_TICK_MARKER), 4);
+        // Fewer than 3 post-anchor lines never satisfies the stage:
+        // from the second post-facts tick onward only 2 remain.
+        let tick1 = marker_position(wire, b"tick 1").unwrap();
+        assert_eq!(count_marker_lines(&wire[tick1..], BOOT_TICK_MARKER), 2);
+        assert!(count_marker_lines(&wire[tick1..], BOOT_TICK_MARKER) < BOOT_TICK_MIN);
     }
 
     #[test]
