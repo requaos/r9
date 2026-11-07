@@ -184,8 +184,18 @@ pub fn has_tsc_deadline(cpuid1_ecx: u32) -> bool {
     cpuid1_ecx & (1 << 24) != 0
 }
 
-/// Writes an MSR — the TSC-deadline timer's arm (MSR 0x832, 13-03:
-/// written only inside the CPUID.1.ECX[24]-gated mode).
+/// Pure decision helper: does leaf-1 ECX bit 21 (`CPUID_EXT_X2APIC`)
+/// advertise x2APIC mode?  Host-testable without a CPU — lapic's mode
+/// gate routes through this.  KVM's `-cpu host` passes the host's x2APIC
+/// through (the i7-1260P gate host has it); TCG's qemu64 never exposes
+/// the bit (the fallback leg keeps exercising classic xAPIC MMIO).
+pub fn has_x2apic(cpuid1_ecx: u32) -> bool {
+    cpuid1_ecx & (1 << 21) != 0
+}
+
+/// Writes an MSR — the TSC-deadline timer's arm (MSR 0x6E0, 13-03:
+/// written only inside the CPUID.1.ECX[24]-gated mode) and the x2APIC
+/// mode switch (IA32_APIC_BASE 0x1B, lapic.rs).
 ///
 /// # Safety
 /// The caller must ensure that the value and MSR are

@@ -1,7 +1,7 @@
 // The LAPIC timer for qemu's q35 machine — one tick()/ticks() surface
 // over two CPUID-gated modes (the aarch64 platform/virt/timer.rs shape,
 // re-keyed): CPUID.1.ECX[24] set (the KVM -cpu host default) selects
-// TSC-deadline — a one-shot armed by wrmsr(0x832) = rdtsc() + delta and
+// TSC-deadline — a one-shot armed by wrmsr(0x6E0) = rdtsc() + delta and
 // re-armed inside tick(); clear (TCG never exposes the bit — RESEARCH
 // Pitfall 2) selects LAPIC periodic — DCR divide + ICR initial count.
 // The frequency is resolved at RUNTIME (CPUID 0x15/0x16 when present,
@@ -19,11 +19,19 @@ use crate::pio;
 use crate::platform::q35::lapic;
 use crate::trap;
 
-/// IA32_TSC_DEADLINE — the TSC-deadline arm MSR.  Written ONLY inside
-/// the CPUID.1.ECX[24]-gated mode (init's arm and tick's re-arm); an
-/// unconditional write would fault or hang under TCG, silently making
-/// the gates KVM-only (the prohibition, RESEARCH Pitfall 2).
-const MSR_IA32_TSC_DEADLINE: u32 = 0x832;
+/// IA32_TSC_DEADLINE — the TSC-deadline arm MSR, 0x6E0 (SDM Vol 3A
+/// 10.5.4.2; Linux and qemu both name MSR_IA32_TSC_DEADLINE/DEADLINE at
+/// 0x6e0).  NOT 0x832: that is the x2APIC-mode address of the LVT-timer
+/// register ITSELF (0x800+(0x320>>4)), and KVM gates MSR-range
+/// 0x800-0xBFF on the guest APIC actually being in x2APIC mode —
+/// wrmsr(0x832) from xAPIC mode is what injected the #GP(0) that
+/// blocked this gate (the 13-03 dispatch-3 root cause), and from x2APIC
+/// mode it would clobber the LVT entry, not arm a deadline.  Written
+/// ONLY inside the CPUID.1.ECX[24]-gated mode (init's arm and tick's
+/// re-arm); an unconditional write would fault or hang under TCG,
+/// silently making the gates KVM-only (the prohibition, RESEARCH
+/// Pitfall 2).
+const MSR_IA32_TSC_DEADLINE: u32 = 0x6E0;
 
 /// Tick rate: 100 Hz (the 10 ms slice — generous enough that TCG's
 /// slower tick paths still reach the gate's marker counts inside the
@@ -38,7 +46,7 @@ const PRINT_EVERY: u64 = TICKS_PER_SEC;
 /// The CPUID-gated timer mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TimerMode {
-    /// TSC-deadline (D-05): one-shot, armed by wrmsr(0x832) =
+    /// TSC-deadline (D-05): one-shot, armed by wrmsr(0x6E0) =
     /// rdtsc() + delta, re-armed inside tick().
     TscDeadline,
     /// LAPIC periodic (the TCG fallback): DCR divide + ICR initial
@@ -80,7 +88,7 @@ pub struct TimerState {
 /// handler idiom).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Rearm {
-    /// TSC-deadline: write the absolute deadline to MSR 0x832.
+    /// TSC-deadline: write the absolute deadline to MSR 0x6E0.
     TscDeadline(u64),
     /// Periodic: rewrite the LAPIC initial count.
     Periodic(u32),
