@@ -236,6 +236,12 @@ pub unsafe extern "C" fn intrspecial() {
         popq %rax;
         je 1f;
         swapgs;
+        // The scratch pushes above are popped, so %rsp is back at
+        // its entry value and the frame matches intrregular's: the
+        // saved CS word is at +24, and byte SWAPPED_CS_OFFSET+24 is
+        // its high byte (the free bit 63 of the zero-extended CS
+        // push).  +16 would be the saved RIP's high byte — setting
+        // the witness there would corrupt the return RIP.
         orb ${SWAPPED}, {SWAPPED_CS_OFFSET}(%rsp)
         1:
         pushq ${intrcommon};
@@ -243,7 +249,7 @@ pub unsafe extern "C" fn intrspecial() {
         "#,
         KMACH = const dat::KMACH,
         SWAPPED = const SWAPPED,
-        SWAPPED_CS_OFFSET = const SWAPPED_CS_OFFSET + 16,
+        SWAPPED_CS_OFFSET = const SWAPPED_CS_OFFSET + 24,
         intrcommon = sym intrcommon,
         options(att_syntax))
 }
