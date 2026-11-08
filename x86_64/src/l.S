@@ -477,6 +477,10 @@ apwarp64:
 e1978:
 
 .balign 4096
+// .globl: the Rust process machinery (14-04 proc.rs) reads this
+// table's kernel-half entries (510/511) to share them into every
+// per-process PML4 — the OQ-2 resolution.  Read-only to Rust.
+.globl bootpml4
 bootpml4:
 	.quad	bootidentitypt3 - KZERO + (PteRW | PteP)
 	.space	4096 - 3*8

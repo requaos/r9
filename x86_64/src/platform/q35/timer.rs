@@ -187,9 +187,15 @@ pub fn init() {
 /// The timer interrupt handler (IRQ context, from trap's dispatch).
 /// Re-arm FIRST (both modes — a one-shot fires exactly once otherwise),
 /// account exactly one tick, print at the 1 Hz pacing, then the polled
-/// console-RX sweep.  Printing from IRQ context is safe only because
-/// post-boot nothing else holds the Console lock (the aarch64 timer.rs
-/// doctrine: the idle loop prints nothing).
+/// console-RX sweep.
+///
+/// Printing from IRQ context is safe only because post-boot nothing
+/// else holds the Console lock (the aarch64 timer.rs doctrine: the
+/// idle loop prints nothing).  Under dev_exec that invariant ENDS —
+/// syscall context takes the Console MCS lock (devcons writes), so the
+/// tick println is cfg-gated OFF there (Pitfall 8, the aarch64
+/// exec-profile precedent): the tick's dev_exec arms are the timeout
+/// sweep and the preemption instead, and the wire stays quiet.
 pub fn tick() {
     // SAFETY: STATE's write-once discipline — published at init inside
     // the arming window, read lock-free here.
@@ -205,8 +211,17 @@ pub fn tick() {
         }
         Rearm::Periodic(count) => lapic::timer_init_count(count),
     }
+    #[cfg(not(dev_exec))]
     if prev % PRINT_EVERY == 0 {
         println!("tick {}", prev / PRINT_EVERY);
+    }
+    // The exec-profile arms (the aarch64 tick's dev_exec block, re-keyed):
+    // the timeout sweep (alarm expiry + sleep wakes) then the round-robin
+    // preemption — both no-ops until the first proc exists.
+    #[cfg(dev_exec)]
+    {
+        crate::proc::tick_timeouts(prev + 1);
+        crate::proc::preempt();
     }
     // The polled console-RX sweep: drain + echo the 16550 (the
     // bring-up console's RX path rides the tick; IRQ-driven RX is not

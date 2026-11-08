@@ -202,12 +202,8 @@ impl Segments {
         // last-data/first-bss page must classify as Data: page-in
         // order then yields the right bytes either way (the aarch64
         // silent-corruption rule, carried verbatim).
-        let data_classify_end = self
-            .data
-            .0
-            .end
-            .next_multiple_of(PAGE_SIZE_4K)
-            .min(self.bss.0.end.max(self.data.0.end));
+        let data_classify_end =
+            round_up_page(self.data.0.end).min(self.bss.0.end.max(self.data.0.end));
         if self.text.0.contains(&va) {
             Some(SegKind::Text)
         } else if self.data.0.start <= va && va < data_classify_end {
@@ -391,6 +387,14 @@ pub(crate) fn free_phys_page(pa: u64) {
 // ---------------------------------------------------------------------------
 
 /// One entry of the table at `table_pa`.
+
+/// Power-of-two page round-up — `usize::next_multiple_of` lowers
+/// through u128 arithmetic (`__multi3`, soft-float here); the page
+/// size is a power of two, so the mask form is exact.
+fn round_up_page(x: usize) -> usize {
+    (x + PAGE_SIZE_4K - 1) & !(PAGE_SIZE_4K - 1)
+}
+
 fn table_entry(table_pa: u64, idx: usize) -> u64 {
     // SAFETY: table_pa names a page this module allocated (the seam)
     // and 0-initialized; idx < 512 by the callers' masks.
@@ -694,8 +698,8 @@ pub fn rfmem_brk_set(family: u64, old_end: usize, new_end: usize) -> Result<()> 
         return Ok(());
     }
     let mut done: Vec<(usize, u64)> = Vec::new();
-    let mut va = old_end.next_multiple_of(PAGE_SIZE_4K);
-    let limit = new_end.next_multiple_of(PAGE_SIZE_4K);
+    let mut va = round_up_page(old_end);
+    let limit = round_up_page(new_end);
     while va < limit {
         let pa = alloc_phys_page().map_err(|_| "brk: out of memory")?;
         // (The page is pre-zeroed by the seam.)
@@ -2243,7 +2247,7 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &Ureg, flag: u64) -> R
     // hole by construction.
     if rfmem {
         let sweep = parent.segments.as_ref().map(|segs| {
-            (segs.bss.0.start & !(PAGE_SIZE_4K - 1), segs.bss.0.end.next_multiple_of(PAGE_SIZE_4K))
+            (segs.bss.0.start & !(PAGE_SIZE_4K - 1), round_up_page(segs.bss.0.end))
         });
         if let Some((start, end)) = sweep {
             let mut va = start;

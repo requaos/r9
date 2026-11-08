@@ -84,7 +84,7 @@ fn install_image(
     // Record the segment map (page-rounded text for the classifier;
     // byte-exact data/bss ends — the aarch64 shape) and the byte
     // source.
-    let text_end = (aout.text_va + aout.text as usize).next_multiple_of(PAGE_SIZE_4K);
+    let text_end = round_up_pow2(aout.text_va + aout.text as usize, PAGE_SIZE_4K);
     let data_end = aout.data_va + aout.data as usize;
     let bss_end = data_end + aout.bss as usize;
     proc.segments = Some(Segments {
@@ -146,7 +146,7 @@ fn map_data_bss_eager(proc: &mut Proc, source: &ByteSource, aout: &AoutHeader) -
     let bss_end = data_end + aout.bss as usize;
     let data_file_base = HDR_SIZE as u64 + aout.text;
     let mut page_va = aout.data_va;
-    let data_pages_end = data_end.next_multiple_of(PAGE_SIZE_4K);
+    let data_pages_end = round_up_pow2(data_end, PAGE_SIZE_4K);
     while page_va < data_pages_end {
         let pa = proc.map_user_page(page_va, SegKind::Data)?;
         let clamp = data_end.saturating_sub(page_va).min(PAGE_SIZE_4K);
@@ -161,7 +161,7 @@ fn map_data_bss_eager(proc: &mut Proc, source: &ByteSource, aout: &AoutHeader) -
         }
         page_va += PAGE_SIZE_4K;
     }
-    let bss_pages_end = bss_end.next_multiple_of(PAGE_SIZE_4K);
+    let bss_pages_end = round_up_pow2(bss_end, PAGE_SIZE_4K);
     let mut page_va = data_pages_end;
     while page_va < bss_pages_end {
         proc.map_user_page(page_va, SegKind::Bss)?;
@@ -406,6 +406,16 @@ pub struct SegmentLayout {
     pub bss: VirtRange,
 }
 
+
+/// Power-of-two round-up (the local `next_multiple_of` replacement):
+/// `usize::next_multiple_of` lowers through u128 arithmetic
+/// (`__multi3` — soft-float in this SSE-free kernel), a link error
+/// once the syscall chain made this module's code live.  Both
+/// alignments here are powers of two, so the mask form is exact.
+fn round_up_pow2(x: usize, align: usize) -> usize {
+    (x + align - 1) & !(align - 1)
+}
+
 fn be32(b: &[u8], off: usize) -> Option<u32> {
     Some(u32::from_be_bytes(b.get(off..off + 4)?.try_into().ok()?))
 }
@@ -443,7 +453,7 @@ pub fn parse_aout(bytes: &[u8]) -> Result<AoutHeader> {
     // Data VA: the next 2 MiB-aligned VA above text end (6l's INITRND
     // for HEADTYPE 2).  File offset is 40+textsize — NOT page-aligned.
     // The sum cannot overflow: u32-derived u64s on a VA below 2^47.
-    let data_va = (text_va + text as usize).next_multiple_of(DATA_ALIGN);
+    let data_va = round_up_pow2(text_va + text as usize, DATA_ALIGN);
     check_data_bss_below_ustop(data_va, data, bss)?;
     Ok(AoutHeader { text, data, bss, syms, entry, text_va, data_va })
 }
@@ -467,7 +477,7 @@ fn check_data_bss_below_ustop(data_va: usize, data: u64, bss: u64) -> Result<()>
 /// file offset is pageVA - TEXT_MAP_BASE); data/bss keep byte-exact
 /// ends (the eager mapper clamps the data tail inside its last page).
 pub fn segment_layout(aout: &AoutHeader) -> SegmentLayout {
-    let text_end = (aout.text_va + aout.text as usize).next_multiple_of(PAGE_SIZE_4K);
+    let text_end = round_up_pow2(aout.text_va + aout.text as usize, PAGE_SIZE_4K);
     let data_end = aout.data_va + aout.data as usize;
     let bss_end = data_end + aout.bss as usize;
     SegmentLayout {

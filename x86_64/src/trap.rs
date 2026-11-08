@@ -678,22 +678,19 @@ pub unsafe extern "C" fn syscallreturn() {
         options(att_syntax))
 }
 
-/// The SYSCALL dispatch target — the fillable stub whose SHAPE is the
-/// contract (14-04's syscall module replaces the body, not the
-/// signature).  Wire facts (amd64/ABI.md): the number travels in
-/// BP/RARG (passed through as `number` — the same value the entry
-/// pushed and frame.bp holds), arguments sit at the user sp+8 slots,
-/// and the result belongs in the frame's ax slot — this function
-/// RETURNS normally; the return tail reads the frame after.
+/// The SYSCALL dispatch target — the 14-02 fillable stub's body now
+/// the real module entry (the SHAPE preserved: the asm's CALL target
+/// and argument order unchanged; only the Rust-side body grew, 14-04).
+/// Wire facts (amd64/ABI.md): the number travels in BP/RARG (passed
+/// through as `number` — the same value the entry pushed and frame.bp
+/// holds), arguments sit at the user sp+8 slots, and the result
+/// belongs in the frame's ax slot — this function RETURNS normally;
+/// the return tail reads the frame after.
 ///
 /// Unreachable until 14-05's exec bootstrap lands a user image (the
-/// entry is armed-but-idle: SYSCALL only executes from ring 3) — but
-/// loud if it ever is: the message prints, then the panic handler
-/// parks.
+/// entry is armed-but-idle: SYSCALL only executes from ring 3).
 extern "C" fn syscall(number: u64, frame: &mut Ureg) {
-    let _ = (number, frame);
-    crate::println!("syscall {number}: dispatch not yet ported (14-04 fills this)");
-    panic!("syscall dispatch not yet ported");
+    crate::syscall::entry(number, frame)
 }
 
 pub enum IntrStatus {
@@ -816,10 +813,33 @@ pub fn splx(x: IntrStatus) -> IntrStatus {
 extern "C" fn trap(vector: u8, trap_frame: &mut Ureg) -> u32 {
     // Hardware interrupts (vectors >= 32): dispatch, never the
     // exception dump — the timer alone fires these until 13-05's
-    // IOAPIC lines arrive.
+    // IOAPIC lines arrive.  Under dev_exec the return may have been
+    // rescheduled onto another proc's frame (the tick's preempt) — the
+    // frame this entry built IS the one the iretq tail restores (each
+    // proc's frame sits on its own kstack), and the note boundary runs
+    // in the syscall entry path.
     if vector >= 32 {
         dispatch_irq(vector);
         return 0;
+    }
+    // A ring-3-origin synchronous exception under dev_exec: the user
+    // image faulted (this era has no trap-context pager — exec maps
+    // text/data/bss eagerly, so an unhandled user fault is a user bug,
+    // never a kernel one).  The donor faultnote shape: name it, then
+    // kill the process loudly via the exit tail — never the whole-
+    // kernel halt a kernel-origin fault still takes below.
+    #[cfg(dev_exec)]
+    {
+        if trap_frame.cs & 3 == 3 {
+            crate::println!(
+                "user trap: unhandled vector {vector} pc={:#x}",
+                trap_frame.pc
+            );
+            match crate::proc::current() {
+                Some(mut p) => crate::syscall::exit_tail(&mut p, b"sys: trap"),
+                None => crate::println!("user trap with no current process"),
+            }
+        }
     }
     // Synchronous exception (0..=31): dump once, then park.  Returning
     // would re-execute the faulting instruction and loop the dump
