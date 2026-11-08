@@ -781,9 +781,6 @@ pub fn idle_wait() {
 /// park_forever role: syscall's all-exited halt, trap()'s dump-and-halt
 /// and the fault paths all converge here).  IF stays masked: only an
 /// NMI can wake it, and nothing this era arms one that returns.
-// Unused until the syscall module's exit tail (14-04 Task 2) references
-// it — the transitional allow keeps the warning count A/B-stable.
-#[allow(dead_code)]
 pub fn park_forever() -> ! {
     loop {
         // SAFETY: cli;hlt parks; no memory operands.

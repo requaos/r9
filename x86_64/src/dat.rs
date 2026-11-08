@@ -168,6 +168,59 @@ impl Ureg {
         self.gs = crate::trap::USER_DATA_SEL;
         self.type_ = 64;
     }
+
+    /// The note-delivery frame push: the live frame's whole 184 bytes
+    /// (the ABI sizeof — on amd64 the kernel frame IS the wire frame,
+    /// no stride mismatch like aarch64's 280-vs-288) into the
+    /// validated, resident user window.  Homed on the frame's own
+    /// module so callers carry no frame-reinterpretation unsafe.
+    pub(crate) fn copy_to_saved(&self, dst: &mut [u8]) {
+        assert_eq!(dst.len(), core::mem::size_of::<Ureg>(), "saved ureg size");
+        // SAFETY: self is a live Ureg; exactly 184 bytes are read;
+        // dst is validated + resident (usermem's constructor
+        // invariant).  Overlap is impossible (src kernel, dst user).
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                self as *const Ureg as *const u8,
+                dst.as_mut_ptr(),
+                core::mem::size_of::<Ureg>(),
+            );
+        }
+    }
+
+    /// NOTED's NCONT/NRSTR restore: overwrite the live frame with the
+    /// saved Ureg's 184 bytes — the whole frame, since the sizes agree
+    /// on amd64.
+    pub(crate) fn restore_from_saved(&mut self, src: &[u8]) {
+        assert_eq!(src.len(), core::mem::size_of::<Ureg>(), "saved ureg size");
+        // SAFETY: self is a live Ureg; the copy writes exactly 184
+        // bytes inside it; src is validated + resident and read for
+        // exactly its length.  Overlap is impossible.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                src.as_ptr(),
+                self as *mut Ureg as *mut u8,
+                core::mem::size_of::<Ureg>(),
+            );
+        }
+    }
+
+    /// Force the restored return state to user privilege — the amd64
+    /// analog of aarch64's force_psr_el0t.  The saved frame crosses
+    /// from USER-WRITABLE memory (the notejmp contract lets a handler
+    /// edit it), and although SYSRETQ derives CS/SS from STAR (not the
+    /// frame — kernel selectors cannot leak in that way), the frame's
+    /// cs/ss are still what userureg-style consumers see, and RFLAGS
+    /// rides R11 straight into the CPU: a handler-edited IOPL would
+    /// grant the user I/O privilege.  Force the flat user selectors,
+    /// clear IOPL, and set IF (the unmask-at-handoff discipline).
+    pub(crate) fn force_user_return(&mut self) {
+        const IF: u64 = 0x200;
+        const IOPL: u64 = 3 << 12;
+        self.cs = crate::trap::USER_TEXT_SEL as u64;
+        self.ss = crate::trap::USER_DATA_SEL as u64;
+        self.flags = (self.flags & !IOPL) | IF;
+    }
 }
 
 /// A structured representation of a trap, as derived
