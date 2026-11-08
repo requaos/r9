@@ -303,8 +303,11 @@ unsafe extern "C" fn intrregular() {
 #[unsafe(naked)]
 unsafe extern "C" fn intrcommon() {
     naked_asm!(r#"
-        // Allocate space to save registers.
-        subq $((4 + 15) * 8), %rsp
+        // Allocate space to save registers: 15 GP qwords
+        // plus ONE packed segment qword below the vector
+        // slot — the 9k syscallentry carve arithmetic (the
+        // u16 ds/es/fs/gs quartet shares qword 15).
+        subq $(16 * 8), %rsp
         // Save the general purpose registers.
         movq %r15, 14*8(%rsp);
         movq %r14, 13*8(%rsp);
@@ -321,21 +324,16 @@ unsafe extern "C" fn intrcommon() {
         movq %rcx, 2*8(%rsp);
         movq %rbx, 1*8(%rsp);
         movq %rax, 0*8(%rsp);
-        // Save the x86 segmentation registers.  Uses %rdi
-        // as a scratch register, so we do this after we've
-        // saved the GP registers..  Note that the 32-bit
-        // `movl` zero-extends the segmentation register and
-        // clears the upper bits of %rdi.  We use this
-        // because the result has a denser encoding than
-        // other instruction sequences.
-        movl %gs, %edi;
-        movq %rdi, 18*8(%rsp);
-        movl %fs, %edi;
-        movq %rdi, 17*8(%rsp);
-        movl %es, %edi;
-        movq %rdi, 16*8(%rsp);
-        movl %ds, %edi;
-        movq %rdi, 15*8(%rsp);
+        // Save the x86 segmentation registers.  The four
+        // u16 selectors pack into ONE qword at 15*8 — exactly
+        // 9k's syscallentry store arithmetic (MOVW to
+        // (15*8+n)(SP)) and Harvey's amd64/include/ureg.h:
+        // ds@15*8+0, es@15*8+2, fs@15*8+4, gs@15*8+6.
+        // Direct word stores need no scratch register.
+        movw %ds, 15*8+0(%rsp);
+        movw %es, 15*8+2(%rsp);
+        movw %fs, 15*8+4(%rsp);
+        movw %gs, 15*8+6(%rsp);
         // Fix up the trap number.  We got here via a CALL,
         // so hardware pushed the address after the CALLQ
         // instruction onto the stack.  But we know that
@@ -356,7 +354,13 @@ unsafe extern "C" fn intrcommon() {
         movq %rdi, {TRAPNO_OFFSET}(%rsp);
         movq %rsp, %rsi;
         callq {trap};
-        // If we're returning to kernel mode, don't swap %gs.
+        // If we're returning to kernel mode, don't swap %gs.  The
+        // witness bit lands in the HIGH BYTE of the saved CS word
+        // (SWAPPED_CS_OFFSET + UREG_CS_OFFSET = 7 + 152 = 159); the
+        // 184-byte re-key moved UREG_CS_OFFSET 176→152 and this
+        // expression rides the const, so the witness still tests the
+        // CS qword — never the saved RIP (the CR-01 class, pinned by
+        // re-derivation at every layout change).
         btr ${SWAPPED}, {SWAPPED_CS_OFFSET}(%rsp);
         je 1f;
         swapgs;
@@ -377,17 +381,20 @@ unsafe extern "C" fn intrcommon() {
         movq 12*8(%rsp), %r13;
         movq 13*8(%rsp), %r14;
         movq 14*8(%rsp), %r15;
-        // Restore the segmentation registers.
-        movw 15*8(%rsp), %ds;
-        movw 16*8(%rsp), %es;
+        // Restore the segmentation registers (the packed
+        // u16 quartet in the qword at 15*8).
+        movw 15*8+0(%rsp), %ds;
+        movw 15*8+2(%rsp), %es;
         // %gs is restored via swapgs above.  The system never changes
         // it, so we don't bother restoring it here.  %fs is special.
         // We do save and restore it, for TLS if anyone ever uses green
         // threads.
-        movw 17*8(%rsp), %fs;
-        // movw 18*8(%rsp), %gs;
-        // Pop registers, alignment word and error.
-        addq $((2 + 4 + 15) * 8), %rsp;
+        movw 15*8+4(%rsp), %fs;
+        // movw 15*8+6(%rsp), %gs;
+        // Pop GP registers, packed segment qword, vector
+        // and error words (the iretq pops ip/cs/flags
+        // [+sp/ss when returning to user] itself).
+        addq $((2 + 1 + 15) * 8), %rsp;
         // Go back to whence you came.
         iretq
         "#,

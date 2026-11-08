@@ -7,14 +7,26 @@ use zerocopy::FromZeros;
 pub const KCPUZERO: usize = 0xffff_ff00_0000_0000;
 pub const KMACH: usize = KCPUZERO + 0x0010_0000;
 
-pub const UREG_TRAPNO_OFFSET: usize = 19 * core::mem::size_of::<u64>();
-pub const UREG_CS_OFFSET: usize = 22 * core::mem::size_of::<u64>();
+// Slot indices into the 184-byte Ureg (the D-01 frozen layout):
+// the 15 GP qwords occupy slots 0-14, the packed u16 segment
+// quartet shares slot 15 (one qword at byte 120), and `type`
+// sits at slot 16 (byte 128) with cs at slot 19 (byte 152).
+pub const UREG_TRAPNO_OFFSET: usize = 16 * core::mem::size_of::<u64>();
+pub const UREG_CS_OFFSET: usize = 19 * core::mem::size_of::<u64>();
 
 /// The user register and trap frame structure.
 ///
 /// This stores both user state during system calls, and
 /// and trap frames for any kind of interrupt, exception,
 /// or fault.
+///
+/// Phase 14 D-01: this layout is byte-verbatim Harvey's
+/// `amd64/include/ureg.h` (published as `amd64/ABI.md`) —
+/// 184 bytes, no translation anywhere, so the same 6.outs
+/// run on both the 9k and r9 kernels.  Drift between this
+/// struct and the header is a build failure (the const
+/// asserts below plus the xtask ureg-check), never a
+/// runtime mystery.
 ///
 /// Warning: The format of this structure is (necessarily)
 /// known to assembly language.  Caveat emptor.
@@ -38,21 +50,24 @@ pub struct Ureg {
     r14: u64,
     r15: u64,
 
-    // It is arguable whether we should care about
-    // these registers.  x86 segmentation (aside from
-    // FS and GS) isn't used once we're in long mode,
-    // and r9 doesn't support real or compatibility
-    // mode, so these are effectively unused.
+    // The x86 segmentation registers.  Aside from %fs and
+    // %gs these are effectively unused in long mode, but
+    // they exist, so we save and restore them (some kernels
+    // do this, some do not; %fs and %gs are special).
     //
-    // Regardless, they exist, so we save and restore
-    // them.  Some kernels do this, some do not.  Note
-    // that %fs and %gs are special.
-    ds: u64, // Really these are u16s, but
-    es: u64, // we waste a few bytes to keep
-    fs: u64, // the stack aligned.  Thank
-    gs: u64, // you, x86 segmentation.
+    // ureg.h declares them u16, packed into ONE qword at
+    // offset 120 — ds@120, es@122, fs@124, gs@126 — with
+    // no padding before `type` (120+8 == 128).
+    ds: u16,
+    es: u16,
+    fs: u16,
+    gs: u16,
 
-    trapno: u64,
+    // ureg.h names this field `type`; it carries the trap
+    // vector (the stub-encoded return address on the IDT
+    // path).  `type` is a Rust keyword, so the field is
+    // `type_` here — the ABI table uses the header's name.
+    type_: u64,
 
     // Sometimes pushed by hardware.
     pub ecode: u64,
@@ -64,6 +79,26 @@ pub struct Ureg {
     sp: u64,
     ss: u64,
 }
+
+// Pinned byte offsets from Harvey's amd64/include/ureg.h, the
+// D-01 frozen source of truth (published as amd64/ABI.md).
+// Always on — any layout drift fails `cargo build`, no Harvey
+// checkout needed (the xtask ureg-check covers the header itself).
+const _: () = assert!(core::mem::offset_of!(Ureg, ax) == 0);
+const _: () = assert!(core::mem::offset_of!(Ureg, bp) == 48);
+const _: () = assert!(core::mem::offset_of!(Ureg, r15) == 112);
+const _: () = assert!(core::mem::offset_of!(Ureg, ds) == 120);
+const _: () = assert!(core::mem::offset_of!(Ureg, es) == 122);
+const _: () = assert!(core::mem::offset_of!(Ureg, fs) == 124);
+const _: () = assert!(core::mem::offset_of!(Ureg, gs) == 126);
+const _: () = assert!(core::mem::offset_of!(Ureg, type_) == 128);
+const _: () = assert!(core::mem::offset_of!(Ureg, ecode) == 136);
+const _: () = assert!(core::mem::offset_of!(Ureg, pc) == 144);
+const _: () = assert!(core::mem::offset_of!(Ureg, cs) == 152);
+const _: () = assert!(core::mem::offset_of!(Ureg, flags) == 160);
+const _: () = assert!(core::mem::offset_of!(Ureg, sp) == 168);
+const _: () = assert!(core::mem::offset_of!(Ureg, ss) == 176);
+const _: () = assert!(core::mem::size_of::<Ureg>() == 184);
 
 /// A structured representation of a trap, as derived
 /// from a trap number.
