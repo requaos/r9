@@ -34,6 +34,8 @@ mod proc;
 mod usermem;
 #[allow(dead_code)]
 mod swtch;
+#[allow(dead_code)]
+mod syscall;
 
 extern crate alloc;
 

@@ -32,6 +32,20 @@ use port::mem::{PAGE_SIZE_4K, VirtRange};
 use port::Result;
 
 use crate::dat::Ureg;
+use crate::proc::{ByteBacking, Proc};
+
+/// EXEC's replace-the-running-image engine (the 14-04 proc-port half
+/// this module's doc assigns).  RED stub — the behavior battery fails
+/// against it by design.
+pub fn exec_replace(
+    _proc: &mut Proc,
+    _backing: ByteBacking,
+    _name: &str,
+    _args: &[&[u8]],
+    _frame: &mut Ureg,
+) -> Result<u64> {
+    Err("exec: stub")
+}
 
 // --- r9 user address-space policy (r9 owns stack-top placement,
 // segment/growth policy, and the initial stack frame; text/data VAs are
