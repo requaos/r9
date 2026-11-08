@@ -701,6 +701,96 @@ pub enum IntrStatus {
     Enabled = 1,
 }
 
+/// trap_return — resume (into ring 3) from a planted or preempted Ureg
+/// (the aarch64 `trap_return_exec` role; intrcommon's restore tail as a
+/// free function).  Entered from the scheduler's Resume::Return arm with
+/// the frame pointer in `%rdi`; the frame sits at the top of the target
+/// proc's kernel stack (the SYSCALL entry's software-built frame, an
+/// IDT preempt's hardware frame, or the exec seed — one layout, D-01).
+///
+/// SWAPGS is conditional on the frame's saved CS RPL: every path that
+/// reaches here runs with the kernel GS base loaded (the SYSCALL/IDT
+/// entries swapped at entry and nothing swapped back), and a ring-3
+/// resume must leave the user on the user base (0, the arming's
+/// KernelGSbase pair).  This is the ONLY way the scheduler enters CPL3;
+/// `swtch` never does.
+///
+/// # Safety
+///
+/// The caller (proc.rs's scheduler) must hold the PROC_TABLE-locked
+/// switch invariant: the frame names a live Ureg on the target proc's
+/// kernel stack, that proc's PML4 is the active CR3, and the TSS rsp0
+/// names that same stack.
+#[unsafe(link_section = ".trap")]
+#[unsafe(naked)]
+pub unsafe extern "C" fn trap_return(frame: *mut Ureg) -> ! {
+    naked_asm!(
+        r#"
+        movq %rdi, %rsp;
+        // Ring-3 target?  The saved CS selector's low bits (UREG_CS at
+        // 19*8, byte 0) carry the RPL — swap back to the user GS base
+        // only for a CPL3 resume (the entry paths left the kernel base
+        // loaded; a kernel resume keeps it).
+        testb $3, 19*8(%rsp);
+        je 1f;
+        swapgs;
+        1:
+        // The GP half — true user values, from the frame.
+        movq 0*8(%rsp), %rax;
+        movq 1*8(%rsp), %rbx;
+        movq 2*8(%rsp), %rcx;
+        movq 3*8(%rsp), %rdx;
+        movq 4*8(%rsp), %rsi;
+        movq 5*8(%rsp), %rdi;
+        movq 6*8(%rsp), %rbp;
+        movq 7*8(%rsp), %r8;
+        movq 8*8(%rsp), %r9;
+        movq 9*8(%rsp), %r10;
+        movq 10*8(%rsp), %r11;
+        movq 11*8(%rsp), %r12;
+        movq 12*8(%rsp), %r13;
+        movq 13*8(%rsp), %r14;
+        movq 14*8(%rsp), %r15;
+        // The packed segment quartet (frame 120..126).
+        movw 15*8+0(%rsp), %ds;
+        movw 15*8+2(%rsp), %es;
+        movw 15*8+4(%rsp), %fs;
+        movw 15*8+6(%rsp), %gs;
+        // Skip the carve + type + error (18 qwords) to the hardware
+        // half; iretq pops ip/cs/flags, plus sp/ss when the target is
+        // ring 3 (every frame this era).
+        addq $(18 * 8), %rsp;
+        iretq;
+        "#,
+        options(att_syntax))
+}
+
+/// The scheduler's idle wait (proc.rs's sched_loop idle arm): briefly
+/// unmask, `hlt` (the tick fires and re-arms), re-mask.  `sti`'s
+/// one-instruction shadow makes the sti/hlt pair atomic — no interrupt
+/// window opens before the halt parks (the canonical x86 idle idiom).
+pub fn idle_wait() {
+    // SAFETY: sti/hlt/cli carry no memory operands (sti/cli DO touch
+    // EFLAGS.IF, so no preserves_flags claim); the caller contract
+    // (the sched idle arm — a handler for every armed source exists)
+    // is the ordering discipline.
+    unsafe { core::arch::asm!("sti", "hlt", "cli", options(nostack)) };
+}
+
+/// Park the CPU forever (the clean-halt stop — the aarch64
+/// park_forever role: syscall's all-exited halt, trap()'s dump-and-halt
+/// and the fault paths all converge here).  IF stays masked: only an
+/// NMI can wake it, and nothing this era arms one that returns.
+// Unused until the syscall module's exit tail (14-04 Task 2) references
+// it — the transitional allow keeps the warning count A/B-stable.
+#[allow(dead_code)]
+pub fn park_forever() -> ! {
+    loop {
+        // SAFETY: cli;hlt parks; no memory operands.
+        unsafe { core::arch::asm!("cli", "hlt", options(nostack)) };
+    }
+}
+
 #[inline(always)]
 fn intrstatus() -> IntrStatus {
     let flags = cpu::flags();

@@ -112,3 +112,11 @@ pub fn allocate_physpage() -> Result<PhysAddr, PageAllocError> {
     let mut lock = PAGE_ALLOC.lock(&node);
     lock.allocate()
 }
+
+/// Free one physical page (the aarch64 deallocate_physpage shape —
+/// 14-04's process machinery frees per-proc pages by recorded PA).
+pub fn deallocate_physpage(pa: PhysAddr) -> Result<(), PageAllocError> {
+    let node = LockNode::new();
+    let mut lock = PAGE_ALLOC.lock(&node);
+    lock.deallocate(pa)
+}

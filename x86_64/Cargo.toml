@@ -20,10 +20,14 @@ static_assertions = "1.1.0"
 # is emitted by config_q35.toml via xtask apply_platform_config;
 # dev_ether joins in the same commit config_q35net.toml first emits it
 # (dev = ["ether"] — the D-01a bound step), dev_ip for the future devip
-# profile.
+# profile; dev_exec/dev_bootchain join at 14-04/14-05 (dev = ["exec"] /
+# "bootchain" — the exec profiles' keys; predeclared together so the
+# first emitting commit lands warning-free).
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [
     'cfg(platform, values("q35"))',
     'cfg(dev_ether)',
     'cfg(dev_ip)',
+    'cfg(dev_exec)',
+    'cfg(dev_bootchain)',
 ] }

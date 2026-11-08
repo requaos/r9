@@ -19,14 +19,21 @@ mod uart16550;
 // exec substrate (14-03): usermem is the validated user-access surface
 // (the ONLY path a user VA may cross into kernel code through), exec the
 // amd64 a.out loader (parse/validate, segment math, the Ureg seed).
-// Compiled into every build config but call-site-free until 14-04's
-// proc/syscall port wires the syscall paths — the module-level
-// dead-code allowance mirrors aarch64's `mod exec`/`mod proc` precedent
-// (non-exec configs compile the machinery without calling it).
+// Process machinery (14-04): proc is the per-process CR3/TSS-rsp0
+// substrate (Proc, the round-robin scheduler, rfork/await, notes) and
+// swtch its kernel-context switch.  Compiled into every build config
+// but call-site-free until the syscall wiring (14-04 Task 2/3) and the
+// exec bootstrap (14-05) — the module-level dead-code allowance mirrors
+// aarch64's `mod exec`/`mod proc` precedent (non-exec configs compile
+// the machinery without calling it).
 #[allow(dead_code)]
 mod exec;
 #[allow(dead_code)]
+mod proc;
+#[allow(dead_code)]
 mod usermem;
+#[allow(dead_code)]
+mod swtch;
 
 extern crate alloc;
 
@@ -38,8 +45,10 @@ use port::println;
 use crate::platform::q35::mb2;
 
 /// KZERO — the higher-half base (kernel.ld); the kernel's physical
-/// address of any linked symbol is its VA minus this.
-const KZERO: u64 = 0xffff_ffff_8000_0000;
+/// address of any linked symbol is its VA minus this.  Homed in proc
+/// (14-04 — the process machinery's kernel-half alias constant); one
+/// definition, both consumers.
+use proc::KZERO;
 
 /// The mb2 info stash's size — l.S's MB2INFOMAX must match this.
 const MB2_STASH_SIZE: usize = 4096;

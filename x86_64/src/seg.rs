@@ -341,6 +341,19 @@ impl Tss {
         self.set_stack(0, stack);
     }
 
+    /// Re-point rsp0 at a raw stack top — the per-process kstack
+    /// re-point the scheduler applies as one locked step on every
+    /// switch (14-04: boot-time rsp0 names the Mach's own scheduler
+    /// stack; the process machinery is the writer from here on).  The
+    /// computed form of set_rsp0 for stacks that are not a `Stack`
+    /// impl's &mut borrow away (the proc's kstack lives in its own
+    /// PML4's fixed kernel-half window — proc.rs owns its geometry).
+    pub fn set_rsp0_raw(&mut self, top: u64) {
+        let lower = (top & 0xffff_ffff) as u32;
+        let upper = (top >> 32) as u32;
+        self.rsp0 = [lower, upper];
+    }
+
     fn set_stack(&mut self, trapno: u8, stack: &mut dyn Stack) {
         let index = IstIndex::from_trap(trapno);
         let va = stack.top_mut().addr();

@@ -40,14 +40,16 @@ pub const UREG_SP_OFFSET: usize = core::mem::offset_of!(Ureg, sp);
 #[derive(Clone, Debug)]
 #[repr(C)]
 pub struct Ureg {
-    // Pushed by software.
-    ax: u64,
+    // Pushed by software.  ax/bp/sp are pub(crate) — the SYSCALL wire
+    // slots the dispatch reads/writes (result in ax, the number in bp,
+    // the argument block at sp+8 — amd64/ABI.md's contract).
+    pub(crate) ax: u64,
     bx: u64,
     cx: u64,
     dx: u64,
     si: u64,
     di: u64,
-    bp: u64,
+    pub(crate) bp: u64,
     r8: u64,
     r9: u64,
     r10: u64,
@@ -79,12 +81,15 @@ pub struct Ureg {
     // Sometimes pushed by hardware.
     pub ecode: u64,
 
-    // Pushed by hardware.
+    // Pushed by hardware.  pc/cs/flags/ss are pub(crate) for the note
+    // machinery (the handler redirect rewrites pc; the post-restore
+    // privilege force rewrites cs/ss/flags — syscall.rs's
+    // force_user_return).
     pub pc: u64,
-    cs: u64,
-    flags: u64,
-    sp: u64,
-    ss: u64,
+    pub(crate) cs: u64,
+    pub(crate) flags: u64,
+    pub(crate) sp: u64,
+    pub(crate) ss: u64,
 }
 
 // Pinned byte offsets from Harvey's amd64/include/ureg.h, the
@@ -242,11 +247,14 @@ pub struct Label {
     pub pc: u64,
     pub sp: u64,
     pub fp: u64,
-    rbx: u64,
-    r12: u64,
-    r13: u64,
-    r14: u64,
-    r15: u64,
+    /// The remaining callee-saved registers — pub(crate): the swtch
+    /// module's naked asm addresses these slots and witnesses the
+    /// offsets against the struct (swtch.rs's const asserts).
+    pub(crate) rbx: u64,
+    pub(crate) r12: u64,
+    pub(crate) r13: u64,
+    pub(crate) r14: u64,
+    pub(crate) r15: u64,
 }
 
 impl Label {
