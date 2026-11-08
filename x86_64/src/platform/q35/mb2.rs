@@ -5,11 +5,12 @@
 //   { u32 total_size; u32 reserved; tags... }
 // Tags are 8-byte aligned, each { u32 type; u32 size } with size counting
 // the 8-byte header; the walk advances 8-aligned and terminates at the
-// type-0 end tag.  The memory map rides tag 6; the ACPI tags 14/15 embed
-// the RSDP structure itself — the root-table address inside it is the
-// loader-mediated platform-data source per D-03's theme (13-04 walks the
-// table from there; a boot whose map carries neither tag is the loud-
-// absence case the EBDA scan covers).
+// type-0 end tag.  The memory map rides tag 6; the boot modules ride tag 3
+// (one tag per module, may repeat — D-03's bootfs delivery); the ACPI
+// tags 14/15 embed the RSDP structure itself — the root-table address
+// inside it is the loader-mediated platform-data source per D-03's theme
+// (13-04 walks the table from there; a boot whose map carries neither tag
+// is the loud-absence case the EBDA scan covers).
 //
 // Ground truth (live hex dump of GRUB 2.14's structure on the q35 channel,
 // 13-02): the boot-loader-name tag carries size 18, an empty cmdline tag
@@ -27,6 +28,7 @@ const MMAP_ENTRY_SIZE: usize = 24;
 
 /// The tag types this parser consumes (spec 3.2.2).
 const TAG_END: u32 = 0;
+const TAG_MODULE: u32 = 3;
 const TAG_MMAP: u32 = 6;
 const TAG_ACPI_OLD_RSDP: u32 = 14;
 const TAG_ACPI_NEW_RSDP: u32 = 15;
@@ -67,6 +69,22 @@ pub enum ParseError {
     /// More memory-map entries than Facts carries (live GRUB/q35 reports
     /// 9; MAX_RANGES is the headroom).
     TooManyRanges,
+    /// Module tag (type 3): the body undercuts the fixed {mod_start,
+    /// mod_end} physical-address pair (a truncated tag — never a
+    /// partial-read module).
+    InvalidModuleBody,
+    /// Module tag: mod_end does not name a non-empty range above
+    /// mod_start (inverted or empty).
+    InvalidModuleRange,
+    /// Module tag: the physical range is not contained in one AVAILABLE
+    /// memory-map range — checked at parse completion (the mmap tag may
+    /// walk after the module tag), BEFORE any consumer maps the range
+    /// (T-14-08: GRUB allocates modules from its own available-RAM heap,
+    /// so anything else is malformed firmware input).
+    ModuleNotInMemoryMap,
+    /// More module tags than Facts carries (the composed ISO stages one
+    /// bootfs.paq; MAX_MODULES is the headroom).
+    TooManyModules,
 }
 
 /// Memory-range kinds (the mb2 tag mirrors EFI_MEMORY_DESCRIPTOR types;
@@ -135,13 +153,30 @@ pub struct AcpiRoot {
     pub xsdt: bool,
 }
 
-/// The parsed facts main boots from: the memory map and the optional
-/// ACPI root-table address.  Only type-1 (available) ranges ever seed
-/// the page allocator; everything else stays reserved (T-13-04).
+/// A boot module the loader delivered (mb2 tag 3, D-03): the physical
+/// byte range [start, end) GRUB placed the file at — u32 PHYSICAL
+/// addresses the loader chose (no fixed load address; the aarch64
+/// fixed-addr `-device loader` delivery is deliberately not carried).
+/// The kernel consumes the range through its KZERO alias of all RAM.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Module {
+    pub start: u64,
+    pub end: u64,
+}
+
+/// Headroom over the one module the composed ISO stages (bootfs.paq).
+pub const MAX_MODULES: usize = 4;
+
+/// The parsed facts main boots from: the memory map, the boot modules,
+/// and the optional ACPI root-table address.  Only type-1 (available)
+/// ranges ever seed the page allocator; everything else stays reserved
+/// (T-13-04).
 #[derive(Debug, PartialEq)]
 pub struct Facts {
     ranges: [MemRange; MAX_RANGES],
     nranges: usize,
+    modules: [Module; MAX_MODULES],
+    nmodules: usize,
     pub acpi_root: Option<AcpiRoot>,
 }
 
@@ -150,6 +185,8 @@ impl Facts {
         Facts {
             ranges: [MemRange { base: 0, len: 0, kind: MemKind::Available }; MAX_RANGES],
             nranges: 0,
+            modules: [Module { start: 0, end: 0 }; MAX_MODULES],
+            nmodules: 0,
             acpi_root: None,
         }
     }
@@ -163,6 +200,15 @@ impl Facts {
         Ok(())
     }
 
+    fn push_module(&mut self, module: Module) -> Result<(), ParseError> {
+        if self.nmodules == MAX_MODULES {
+            return Err(ParseError::TooManyModules);
+        }
+        self.modules[self.nmodules] = module;
+        self.nmodules += 1;
+        Ok(())
+    }
+
     /// The ranges in firmware order (GRUB passes the BIOS e820 order
     /// through; the map is not sorted by address).
     pub fn ranges(&self) -> impl Iterator<Item = MemRange> {
@@ -172,6 +218,31 @@ impl Facts {
     /// The type-1 (available) ranges only — the page-allocator seed set.
     pub fn available_ranges(&self) -> impl Iterator<Item = MemRange> {
         self.ranges().filter(|r| r.kind == MemKind::Available)
+    }
+
+    /// The boot modules in firmware order (tags may repeat — one tag
+    /// per module; the composed ISO stages bootfs.paq alone).
+    pub fn modules(&self) -> impl Iterator<Item = Module> {
+        self.modules[..self.nmodules].iter().copied()
+    }
+
+    /// D-03/T-14-08: every collected module range is bounds-checked
+    /// against the parsed memory map at parse completion — BEFORE any
+    /// consumer maps it.  GRUB allocates modules from its own
+    /// available-RAM heap, so a range outside one AVAILABLE map entry
+    /// is malformed firmware input: a loud named error, never a wild
+    /// map.  (checked_add: an overflowing map entry contains nothing.)
+    fn validate_modules(&self) -> Result<(), ParseError> {
+        for m in self.modules() {
+            let contained = self.available_ranges().any(|r| match r.base.checked_add(r.len) {
+                Some(top) => r.base <= m.start && m.end <= top,
+                None => false,
+            });
+            if !contained {
+                return Err(ParseError::ModuleNotInMemoryMap);
+            }
+        }
+        Ok(())
     }
 }
 
@@ -220,8 +291,13 @@ pub fn parse(data: &[u8]) -> Result<Facts, ParseError> {
                 if size != 8 {
                     return Err(ParseError::InvalidTagBody);
                 }
+                // D-03's trust boundary (T-14-08): every collected module
+                // range is bounds-checked against the (now fully parsed)
+                // memory map before the walk hands Facts to any consumer.
+                facts.validate_modules()?;
                 return Ok(facts);
             }
+            TAG_MODULE => parse_module(data, off, size, &mut facts)?,
             TAG_MMAP => parse_mmap(data, off, size, &mut facts)?,
             TAG_ACPI_OLD_RSDP | TAG_ACPI_NEW_RSDP => {
                 let root = parse_acpi_root(data, off, size, ty)?;
@@ -273,6 +349,24 @@ fn parse_acpi_root(data: &[u8], off: usize, size: usize, ty: u32) -> Result<Acpi
         let rsdt = le_u32(data, off + 8 + 16).ok_or(ParseError::InvalidTagBody)? as u64;
         Ok(AcpiRoot { table: rsdt, xsdt: false })
     }
+}
+
+/// The module tag (type 3, D-03): {u32 mod_start, u32 mod_end, u8
+/// cmdline[]} — mod_start/mod_end are 32-bit PHYSICAL addresses of the
+/// range GRUB placed the module file at ([start, end)), the cmdline a
+/// NUL-terminated string the loader appends (unused here).  One tag
+/// per module and tags may repeat: each is collected; the range check
+/// against the memory map runs at parse completion (validate_modules).
+fn parse_module(data: &[u8], off: usize, size: usize, facts: &mut Facts) -> Result<(), ParseError> {
+    if size < 16 {
+        return Err(ParseError::InvalidModuleBody);
+    }
+    let start = le_u32(data, off + 8).ok_or(ParseError::InvalidModuleBody)? as u64;
+    let end = le_u32(data, off + 12).ok_or(ParseError::InvalidModuleBody)? as u64;
+    if end <= start {
+        return Err(ParseError::InvalidModuleRange);
+    }
+    facts.push_module(Module { start, end })
 }
 
 /// The memory-map tag (type 6): {u32 entry_size, u32 entry_version,
@@ -345,6 +439,96 @@ mod tests {
             body.extend_from_slice(&0u32.to_le_bytes());
         }
         body
+    }
+
+    /// A module-tag body: {u32 mod_start, u32 mod_end, cmdline} — the
+    /// physical placement GRUB chose (the composed ISO stages bootfs.paq).
+    fn module_body(start: u32, end: u32, cmdline: &str) -> Vec<u8> {
+        let mut body = Vec::new();
+        body.extend_from_slice(&start.to_le_bytes());
+        body.extend_from_slice(&end.to_le_bytes());
+        body.extend_from_slice(cmdline.as_bytes());
+        body.push(0); // NUL
+        body
+    }
+
+    // Test 4a: the module tag round-trip (D-03) — a module inside an
+    // available map range parses to exactly its physical [start, end)
+    // range, repeated tags collect in order (one tag per module), and a
+    // boot with no module tag yields none (kernel-only ISOs).
+    #[test]
+    fn module_tags_collect_ranges() {
+        let mut b = Mb2Builder::new();
+        b.tag(TAG_MMAP, &mmap_body(24, 0, &[(0x1000000, 0x3ff00000, 1)]));
+        b.tag(TAG_MODULE, &module_body(0x4000000, 0x4001000, "/boot/bootfs.paq"));
+        b.tag(TAG_MODULE, &module_body(0x5000000, 0x5000800, "other"));
+        let facts = parse(&b.finish()).expect("module tags must parse");
+        let mods: Vec<Module> = facts.modules().collect();
+        assert_eq!(
+            mods,
+            vec![
+                Module { start: 0x4000000, end: 0x4001000 },
+                Module { start: 0x5000000, end: 0x5000800 },
+            ]
+        );
+
+        // The module tag may also walk BEFORE the mmap tag — the range
+        // check runs at parse completion, not collection time.
+        let mut b = Mb2Builder::new();
+        b.tag(TAG_MODULE, &module_body(0x4000000, 0x4001000, "/boot/bootfs.paq"));
+        b.tag(TAG_MMAP, &mmap_body(24, 0, &[(0x1000000, 0x3ff00000, 1)]));
+        assert_eq!(
+            parse(&b.finish()).unwrap().modules().collect::<Vec<_>>(),
+            vec![Module { start: 0x4000000, end: 0x4001000 }]
+        );
+
+        // Kernel-only boot: no module tag, no modules.
+        let mut b = Mb2Builder::new();
+        b.tag(TAG_MMAP, &mmap_body(24, 0, &[(0x1000000, 0x3ff00000, 1)]));
+        assert_eq!(parse(&b.finish()).unwrap().modules().count(), 0);
+    }
+
+    // Test 4b: the module tag's malformed cases are loud named errors,
+    // never a partial module — a body under the fixed {mod_start,
+    // mod_end} pair, an inverted/empty range, and (T-14-08) a range
+    // outside every AVAILABLE memory-map entry.
+    #[test]
+    fn module_tag_violations_are_loud() {
+        // Truncated body: size 12 undercuts the 16-byte fixed minimum.
+        // (Hand-built: the builder would pad the body to spec shape.)
+        let mut b = Mb2Builder::new();
+        b.tag(TAG_MMAP, &mmap_body(24, 0, &[(0x1000000, 0x3ff00000, 1)]));
+        b.tag(TAG_MODULE, &[0u8; 4]);
+        assert_eq!(parse(&b.finish()), Err(ParseError::InvalidModuleBody));
+
+        // Inverted range (end below start) and the empty range.
+        let mut b = Mb2Builder::new();
+        b.tag(TAG_MMAP, &mmap_body(24, 0, &[(0x1000000, 0x3ff00000, 1)]));
+        b.tag(TAG_MODULE, &module_body(0x4001000, 0x4000000, "x"));
+        assert_eq!(parse(&b.finish()), Err(ParseError::InvalidModuleRange));
+        let mut b = Mb2Builder::new();
+        b.tag(TAG_MMAP, &mmap_body(24, 0, &[(0x1000000, 0x3ff00000, 1)]));
+        b.tag(TAG_MODULE, &module_body(0x4000000, 0x4000000, "x"));
+        assert_eq!(parse(&b.finish()), Err(ParseError::InvalidModuleRange));
+
+        // Out-of-mmap range: inside a RESERVED entry, above every entry,
+        // and straddling the available entry's end (top = 0x40f00000) —
+        // none is contained in one AVAILABLE range, so all three refuse
+        // before any mapping.
+        for (start, end) in [(0x1000u32, 0x2000u32), (0x60000000, 0x60001000), (0x40f00000 - 0x800, 0x40f00800)] {
+            let mut b = Mb2Builder::new();
+            b.tag(TAG_MMAP, &mmap_body(24, 0, &[(0x1000000, 0x3ff00000, 1), (0x0, 0x8000, 2)]));
+            b.tag(TAG_MODULE, &module_body(start, end, "x"));
+            assert_eq!(parse(&b.finish()), Err(ParseError::ModuleNotInMemoryMap));
+        }
+
+        // More module tags than Facts carries.
+        let mut b = Mb2Builder::new();
+        b.tag(TAG_MMAP, &mmap_body(24, 0, &[(0x1000000, 0x3ff00000, 1)]));
+        for _ in 0..(MAX_MODULES + 1) {
+            b.tag(TAG_MODULE, &module_body(0x4000000, 0x4001000, "x"));
+        }
+        assert_eq!(parse(&b.finish()), Err(ParseError::TooManyModules));
     }
 
     // Test 1: the golden memory map — a well-formed mmap tag parses to
@@ -529,6 +713,9 @@ mod tests {
             TAG_MMAP,
             &mmap_body(24, 0, &[(0x1000000, 0x3ff00000, 1), (0x0, 0x8000, 2)]),
         );
+        // A module inside the available range (14-05, D-03): the walk
+        // must parse it AND the truncation cuts must still all be loud.
+        b.tag(TAG_MODULE, &module_body(0x4000000, 0x4001000, "/boot/bootfs.paq"));
         b.tag(TAG_ACPI_NEW_RSDP, &rsdp_v2_body(0xdead_beef_0000_1000));
         let buf = b.finish();
         assert!(parse(&buf).is_ok());

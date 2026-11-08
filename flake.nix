@@ -180,7 +180,16 @@ WRAP
               # while breaking both the full-path and the hash match.
               objcopy --strip-all "${kernel-x64}/kernel-x64.elf" "$stage/boot/kernel"
               sed -E "s|/nix/store/[a-z0-9]{32}-|/nix/store/00000000000000000000000000000000-|g" -i "$stage/boot/kernel"
-              cp x86_64/lib/grub.cfg "$stage/boot/grub/grub.cfg"
+              # 14-05 (D-03): the committed grub.cfg is the TEMPLATE SOURCE
+              # for the staged loader config — the kernel-only FOD emits
+              # through the same strip rule xtask's build_x86_64_iso uses
+              # (drop the @R9-MODULE-DOC@ documentation lines and the
+              # @R9-MODULE@ placeholder), so the staged bytes — and this
+              # derivation's wired outputHash — stay exactly Phase 13's.
+              # Composed ISOs (14-07's parameterized builder) emit the
+              # module2 line IN when a module rides the stage.
+              sed -e '/^# @R9-MODULE-DOC@/d' -e '/^[[:space:]]*# @R9-MODULE@ /d' \
+                x86_64/lib/grub.cfg > "$stage/boot/grub/grub.cfg"
               grub-mkrescue -d "$moddir" -o "$NIX_BUILD_TOP/boot.iso" "$stage" --xorriso "$xorrisoPinned"
               runHook postBuild
             '';

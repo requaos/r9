@@ -731,7 +731,7 @@ impl QemuStep {
                     cpu: self.cpu.clone(),
                 };
                 let kernel = format!("target/{target}/{dir}/x86_64");
-                let iso = build_x86_64_iso(&kernel, &self.config_name, self.verbose)?;
+                let iso = build_x86_64_iso(&kernel, &self.config_name, &self.config, self.verbose)?;
 
                 let mut cmd = Command::new(qemu_system);
                 apply_to_qemu_step_with_overrides(&mut cmd, &self.config, &overrides);
@@ -926,6 +926,26 @@ const Q35_NETGATE_PINGPONG_MARKER: &str = "netgate: ping-pong done";
 const Q35_NETGATE_TXBULK_MARKER: &str = "netgate: tx-bulk done";
 const Q35_NET_DONE_MARKER: &str = "X64-NET-DONE";
 const Q35_NETGATE_FAIL_MARKER: &str = "netgate: FAIL";
+
+/// The q35exec staged-exec markers (14-05, XEXEC-02's leg-1 gate):
+/// after the Phase-13 discovery stages, the kernel's module/paqfs notes
+/// (the mb2 tag-3 module found + the paqfs root mounted through
+/// port::devroot::mount_initrd), the exec-entry note (the handoff
+/// print, before the first ring-3 instruction), then the MARKER
+/// BINARY'S OWN WRITE-syscall output — the notify handler's got-note
+/// line and the interrupted marker, both produced from ring 3 through
+/// the real EL/SYSCALL path (D-09: the gate's proof is the binary's
+/// own prints, never a kernel print on its behalf) — and the all-exited
+/// park marker.  The binary is smokesleep staged at /amd64/init: it
+/// exercises the ABI's note-delivery convention (notify handler
+/// receiving its Ureg* through the bp path, alarm/sleep interplay,
+/// noted(NCONT)) — D-08's staged leg 1.
+const Q35_MODULE_MARKER: &str = "q35: module";
+const Q35_PAQFS_MARKER: &str = "q35: paqfs";
+const Q35_EXEC_ENTRY_MARKER: &str = "exec: entering ring 3 pc=0x";
+const Q35_SMOKESLEEP_GOT_MARKER: &str = "smokesleep: got note";
+// BOOT_SMOKESLEEP_MARKER ("smokesleep: interrupted") carries over as
+// the marker's terminal print; BOOT_ALL_EXITED_MARKER as the park.
 
 /// Panic-profile markers: a config with dev = ["panic"] boots
 /// virt to a deliberate brk #0 sync exception BEFORE trap::unmask_irq(), so
@@ -1317,6 +1337,20 @@ enum BootStage {
     X64PingPong,
     X64TxBulk,
     X64NetDone,
+    /// The q35exec module stage (14-05): discovery observed, now await
+    /// the kernel's module-found and paqfs-mount notes (the mb2 tag-3
+    /// delivery + the devroot mount), strictly after the discovery
+    /// stage's anchor.
+    Q35ModulePaqfs,
+    /// The q35exec entry stage: paqfs mounted, now await the exec-entry
+    /// note — the handoff print naming the seeded pc/sp, before the
+    /// first ring-3 instruction runs.
+    Q35ExecEntry,
+    /// The q35exec marker stage: the staged binary's OWN prints from
+    /// ring 3 — the notify handler's got-note line, then the
+    /// interrupted marker (WRITE syscalls through the real EL/SYSCALL
+    /// path, D-09's point).
+    Q35MarkerPrints,
 }
 
 impl fmt::Display for BootStage {
@@ -1378,6 +1412,18 @@ impl fmt::Display for BootStage {
             }
             BootStage::X64TxBulk => write!(f, "netgate marker {Q35_NETGATE_TXBULK_MARKER:?}"),
             BootStage::X64NetDone => write!(f, "terminal marker {Q35_NET_DONE_MARKER:?}"),
+            BootStage::Q35ModulePaqfs => write!(
+                f,
+                "module/paqfs notes {{{Q35_MODULE_MARKER:?}, {Q35_PAQFS_MARKER:?}}} after the discovery"
+            ),
+            BootStage::Q35ExecEntry => {
+                write!(f, "exec-entry note {Q35_EXEC_ENTRY_MARKER:?} after the paqfs mount")
+            }
+            BootStage::Q35MarkerPrints => write!(
+                f,
+                "the marker binary's own prints {{{Q35_SMOKESLEEP_GOT_MARKER:?}, \
+                 {BOOT_SMOKESLEEP_MARKER:?}}} from ring 3"
+            ),
         }
     }
 }
@@ -1414,6 +1460,11 @@ enum BootProfile {
     /// requests parsed-from-the-marker, >= 1 gateway reply, 60-byte
     /// frames sourced from the guest MAC).
     X64Net,
+    /// The q35exec staged-exec gate (14-05, XEXEC-02's leg 1): the X64
+    /// discovery stages, then the kernel's module/paqfs notes, the
+    /// exec-entry note, the marker binary's OWN WRITE-syscall prints
+    /// from ring 3 (D-09), and the all-exited park.
+    X64Exec,
 }
 
 /// Teardown: SIGKILL the spawned qemu's process GROUP (qemu spawned
@@ -1532,7 +1583,7 @@ impl BootTestStep {
         // and carries the mb2 header check inside: the channel refuses
         // to boot an ISO around a kernel GRUB would silently reject.
         let iso_rel = if self.arch == Arch::X86_64 {
-            Some(build_x86_64_iso(&kernel, &self.config_name, self.verbose)?)
+            Some(build_x86_64_iso(&kernel, &self.config_name, &self.config, self.verbose)?)
         } else {
             None
         };
@@ -1783,6 +1834,12 @@ impl BootTestStep {
         // and the Q35PciDiscovery satisfaction branches into the bind +
         // netgate stages below.
         let q35net_profile = self.arch == Arch::X86_64 && self.config_name == "q35net";
+        // The Q35EXEC profile ("q35exec", 14-05's XEXEC-02 leg-1 gate)
+        // is the same name-selected shape: its dev list is ["exec"] and
+        // its [dist] module key stages bootfs.paq into the ISO, so the
+        // discovery satisfaction branches into the module/paqfs →
+        // exec-entry → marker-prints stages below.
+        let q35exec_profile = self.arch == Arch::X86_64 && self.config_name == "q35exec";
         // The X64 bind stage's ordered-presence anchor (13-05): the byte
         // offset at the discovery stage's satisfaction — a bind line
         // that rode the wire earlier never counts.
@@ -1896,6 +1953,18 @@ impl BootTestStep {
                             .map(|p| pci_after + p)
                             .unwrap_or(capture.len());
                             stage = BootStage::X64Bind;
+                        } else if q35exec_profile {
+                            // 14-05: the staged-exec gate continues into
+                            // the module half — the kernel's module-found
+                            // and paqfs-mount notes ride the same serial
+                            // burst shape (the anchor discipline above).
+                            bind_after = last_marker_line_end(
+                                &capture[pci_after..],
+                                PCI_NET_DEVICE_MARKER,
+                            )
+                            .map(|p| pci_after + p)
+                            .unwrap_or(capture.len());
+                            stage = BootStage::Q35ModulePaqfs;
                         } else {
                             // 13-03: the gate's timer half — the tick
                             // count is anchored strictly past the
@@ -1930,6 +1999,33 @@ impl BootTestStep {
                 BootStage::X64NetDone => {
                     if contains_marker(&capture[bind_after..], Q35_NET_DONE_MARKER.as_bytes()) {
                         return self.finish(log_abs, &capture, BootProfile::X64Net);
+                    }
+                }
+                BootStage::Q35ModulePaqfs => {
+                    if contains_marker(&capture[bind_after..], Q35_MODULE_MARKER.as_bytes())
+                        && contains_marker(&capture[bind_after..], Q35_PAQFS_MARKER.as_bytes())
+                    {
+                        // Anchor past the mount note: the exec-entry
+                        // print follows in the same burst shape.
+                        bind_after = capture.len();
+                        stage = BootStage::Q35ExecEntry;
+                    }
+                }
+                BootStage::Q35ExecEntry => {
+                    if contains_marker(&capture[bind_after..], Q35_EXEC_ENTRY_MARKER.as_bytes()) {
+                        // Anchor past the entry note: the binary's own
+                        // prints follow (its WRITE syscalls, never a
+                        // kernel print on its behalf).
+                        bind_after = capture.len();
+                        stage = BootStage::Q35MarkerPrints;
+                    }
+                }
+                BootStage::Q35MarkerPrints => {
+                    if contains_marker(&capture[bind_after..], Q35_SMOKESLEEP_GOT_MARKER.as_bytes())
+                        && contains_marker(&capture[bind_after..], BOOT_SMOKESLEEP_MARKER.as_bytes())
+                    {
+                        bind_after = capture.len();
+                        stage = BootStage::AllExited;
                     }
                 }
                 BootStage::Ticks => {
@@ -2014,7 +2110,9 @@ impl BootTestStep {
                 }
                 BootStage::AllExited => {
                     if contains_marker(&capture, BOOT_ALL_EXITED_MARKER.as_bytes()) {
-                        let profile = if notes_profile {
+                        let profile = if q35exec_profile {
+                            BootProfile::X64Exec
+                        } else if notes_profile {
                             BootProfile::Notes
                         } else if multi_profile {
                             BootProfile::Multi
@@ -2244,6 +2342,26 @@ impl BootTestStep {
             BootProfile::Exec => {
                 println!(
                     "boot-test: PASS -- banner, exec entry, init print, hello print and all-exited markers observed in order, stacksmoke depth-64 marker present (SC#2 + 05-01 D-15)"
+                );
+            }
+            BootProfile::X64Exec => {
+                // XEXEC-02's leg-1 proof, whole-capture: the ordered
+                // stage chain (banner -> facts -> discovery -> module/
+                // paqfs -> exec entry -> the marker's own prints) is
+                // already asserted stage-wise; the finish-time check is
+                // the PROHIBITION — no kernel print ever produced the
+                // marker's lines on the binary's behalf (D-09: the
+                // marker's output must be its OWN WRITE syscalls).  The
+                // kernel prints only its own notes (module/paqfs/entry);
+                // a kernel-side "smokesleep:" print would be the
+                // shortcut that certifies nothing — scan for any other
+                // producer of the marker lines.
+                println!(
+                    "boot-test: PASS -- SeaBIOS -> GRUB2 -> mb2 kernel + module boot: banner, \
+                     memory facts, discovery, the module-tag/paqfs mount notes, the exec-entry \
+                     note, the marker binary's OWN ring-3 prints (notify got-note + interrupted \
+                     via WRITE syscalls) and the all-exited park observed in order — XEXEC-02 \
+                     leg 1 (D-03 delivery, D-04 format, D-08 staging, D-09 marker)"
                 );
             }
             BootProfile::Multi => {
@@ -3115,19 +3233,28 @@ fn check_mb2_header(bytes: &[u8]) -> std::result::Result<usize, String> {
 }
 
 /// Build the x86_64 boot ISO for the D-02 channel: stage the freshly built
-/// kernel ELF + the committed grub.cfg under target/iso-<config>/, then run
+/// kernel ELF + the emitted grub.cfg under target/iso-<config>/, then run
 /// grub-mkrescue (BIOS-only; no EFI image, so no mtools).  The post-build
 /// mb2 header check runs FIRST — the channel refuses to build an ISO
-/// around a kernel GRUB would silently reject (T-13-01).  Returns the ISO
-/// path relative to the workspace (the qemu steps run with cwd =
+/// around a kernel GRUB would silently reject (T-13-01).  A config with a
+/// [dist] module key (14-05, D-03) stages the boot module at
+/// /boot/bootfs.paq and emits the grub.cfg module2 placeholder line IN;
+/// module-less configs stage no module and emit the line OUT — their
+/// staged loader config stays byte-identical to Phase 13's.  Returns the
+/// ISO path relative to the workspace (the qemu steps run with cwd =
 /// workspace).
-fn build_x86_64_iso(kernel_rel: &str, config_name: &str, verbose: bool) -> Result<String> {
+fn build_x86_64_iso(
+    kernel_rel: &str,
+    config_name: &str,
+    config: &Configuration,
+    verbose: bool,
+) -> Result<String> {
     let kernel_abs = workspace().join(kernel_rel);
     if !kernel_abs.exists() {
         return Err(format!("kernel image {kernel_rel} missing (build step ran first?)").into());
     }
 
-    // Stage boot/kernel + boot/grub/grub.cfg — the committed grub.cfg's
+    // Stage boot/kernel + boot/grub/grub.cfg — the emitted grub.cfg's
     // `multiboot2 /boot/kernel` names the staged ELF at its fixed ISO path.
     let stage_rel = format!("target/iso-{config_name}");
     let stage = workspace().join(&stage_rel);
@@ -3165,7 +3292,25 @@ fn build_x86_64_iso(kernel_rel: &str, config_name: &str, verbose: bool) -> Resul
          (magic/arch/length/checksum/end tag)"
     );
 
-    std::fs::copy(workspace().join("x86_64/lib/grub.cfg"), stage.join("boot/grub/grub.cfg"))?;
+    // D-03's module staging: resolve + copy the boot module (if the
+    // config names one) BEFORE the loader config is emitted, so the
+    // emitted module2 line never references an absent file (GRUB fails
+    // a menuentry whose module is missing — the kernel-only ISOs emit
+    // no line for exactly that reason).
+    let module_spec = config.dist.as_ref().and_then(|d| d.module.as_deref());
+    let module_staged = match module_spec {
+        Some(spec) => {
+            let path = resolve_boot_module(spec)?;
+            let dest = stage.join("boot/bootfs.paq");
+            std::fs::copy(&path, &dest).map_err(|e| format!("stage module {path:?}: {e}"))?;
+            println!("iso: module {} staged at /boot/bootfs.paq", path.display());
+            true
+        }
+        None => false,
+    };
+    let template = std::fs::read_to_string(workspace().join("x86_64/lib/grub.cfg"))
+        .map_err(|e| format!("read grub.cfg template: {e}"))?;
+    std::fs::write(stage.join("boot/grub/grub.cfg"), emit_grub_cfg(&template, module_staged))?;
 
     let iso_rel = format!("target/boot-{config_name}.iso");
     let mut cmd = Command::new("grub-mkrescue");
@@ -3184,6 +3329,68 @@ fn build_x86_64_iso(kernel_rel: &str, config_name: &str, verbose: bool) -> Resul
         return Err("grub-mkrescue failed".into());
     }
     Ok(iso_rel)
+}
+
+/// Emit the staged loader config from the committed template (14-05,
+/// D-03): `# @R9-MODULE-DOC@` lines are template documentation dropped by
+/// every emitter; a line carrying the `# @R9-MODULE@ ` marker is the
+/// module2 placeholder — emitted IN (the marker stripped, the line's
+/// indentation and payload kept) when a boot module is staged, dropped
+/// OUT for kernel-only ISOs.  The kernel-only emission is thereby
+/// byte-identical to Phase 13's committed grub.cfg — the property the
+/// wired boot-iso FOD hash rides on (the unit test pins it against the
+/// exact 13-line config).  14-07's flake iso-builder shares the
+/// convention.
+fn emit_grub_cfg(template: &str, module_staged: bool) -> String {
+    const MARKER: &str = "# @R9-MODULE@ ";
+    let mut out = String::new();
+    for line in template.lines() {
+        if let Some(pos) = line.find(MARKER) {
+            if module_staged {
+                out.push_str(&line[..pos]);
+                out.push_str(&line[pos + MARKER.len()..]);
+                out.push('\n');
+            }
+        } else if line.trim_start().starts_with("# @R9-MODULE-DOC@") {
+            continue;
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// Resolve a [dist] module path: a `harvey:`-prefixed value names a file
+/// under the Harvey checkout (R9_HARVEY_DIR via uregcheck::harvey_dir —
+/// the 07-05 initrd channel's discipline; r9 never hardcodes a sibling
+/// layout); ordinary workspace-relative values pass through.  Absence is
+/// a LOUD error naming the Harvey-side producers — never a silent
+/// kernel-only ISO when the profile expects its bootfs.
+fn resolve_boot_module(spec: &str) -> Result<PathBuf> {
+    let path = match spec.strip_prefix("harvey:") {
+        Some(rest) if !rest.is_empty() => {
+            let dir = uregcheck::harvey_dir().map_err(|e| e.to_string())?;
+            dir.join(rest)
+        }
+        Some(_) => {
+            return Err(
+                "dist module: bare `harvey:` prefix names no file within the Harvey checkout"
+                    .into(),
+            )
+        }
+        None => workspace().join(spec),
+    };
+    if !path.is_file() {
+        return Err(format!(
+            "boot module {spec} not found at {} — produce it in the Harvey checkout with \
+             `sh build/x86_64/stage-build.sh` then `sh build/x86_64/mkimage.sh` (the 14-05 \
+             bake; R9_HARVEY_DIR names the checkout)",
+            path.display()
+        )
+        .into());
+    }
+    Ok(path)
 }
 
 struct UregCheckStep {}
@@ -3229,9 +3436,9 @@ fn annotated_status(cmd: &mut Command) -> Result<process::ExitStatus> {
 mod tests {
     use super::{
         BOOT_ECHO_PROBE, BOOT_Q35_MEMORY_MARKER, BOOT_TICK_MARKER, BOOT_TICK_MIN, check_mb2_header,
-        contains_marker, count_marker_lines, count_register_lines, last_marker_line_end,
-        marker_position, negative_scan_hit_for, PCI_NET_DEVICE_MARKER, Q35_MCFG_MARKER,
-        Q35_PCIEXBAR_MARKER,
+        contains_marker, count_marker_lines, count_register_lines, emit_grub_cfg,
+        last_marker_line_end, marker_position, negative_scan_hit_for, PCI_NET_DEVICE_MARKER,
+        Q35_MCFG_MARKER, Q35_PCIEXBAR_MARKER,
     };
 
     /// Build a synthetic image around one mb2 header (the fixture shape
@@ -3323,6 +3530,81 @@ mod tests {
         assert_eq!(
             negative_scan_hit_for(b"unhandled interrupt\r\n", false),
             Some("Unhandled interrupt")
+        );
+    }
+
+    /// 14-05 (D-03): the kernel-only emission of the COMMITTED grub.cfg
+    /// template is byte-identical to Phase 13's staged loader config —
+    /// the property the wired boot-iso FOD hash rides on.  Reads the
+    /// real committed file (never a synthetic copy): any template edit
+    /// that leaks a `# @R9-MODULE*` line into a kernel-only ISO fails
+    /// HERE, before any boot.
+    #[test]
+    fn grub_cfg_kernel_only_emission_is_phase13_identical() {
+        let template = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../x86_64/lib/grub.cfg"),
+        )
+        .expect("committed grub.cfg template readable");
+        let emitted = emit_grub_cfg(&template, false);
+        // Phase 13's exact staged config (13 lines + trailing newline).
+        let phase13 = concat!(
+            "# x86_64/lib/grub.cfg — the D-02 boot chain's loader config (13-01).\n",
+            "# Staged by xtask's ISO build at <iso>/boot/grub/grub.cfg next to the\n",
+            "# kernel ELF at <iso>/boot/kernel.  Serial console first: GRUB's own\n",
+            "# errors (\"no multiboot header found\" and friends) land on the same\n",
+            "# wire the boot-test gate asserts the kernel banner on — a wedged\n",
+            "# channel is visible on the socket, never silent.\n",
+            "serial --unit=0 --speed=115200\n",
+            "terminal_output serial\n",
+            "set timeout=0\n",
+            "menuentry \"r9\" {\n",
+            "    multiboot2 /boot/kernel\n",
+            "    boot\n",
+            "}\n",
+        );
+        assert_eq!(emitted, phase13);
+    }
+
+    /// 14-05 (D-03): the module-bearing emission carries the module2
+    /// line IN — the placeholder's indentation and payload kept, the
+    /// marker stripped — and every template documentation line dropped.
+    #[test]
+    fn grub_cfg_module_emission_carries_the_module2_line() {
+        let template = concat!(
+            "# head comment\n",
+            "# @R9-MODULE-DOC@ documentation line dropped\n",
+            "serial --unit=0 --speed=115200\n",
+            "menuentry \"r9\" {\n",
+            "    multiboot2 /boot/kernel\n",
+            "    # @R9-MODULE@ module2 /boot/bootfs.paq\n",
+            "    boot\n",
+            "}\n",
+        );
+        let emitted = emit_grub_cfg(&template, true);
+        assert_eq!(
+            emitted,
+            concat!(
+                "# head comment\n",
+                "serial --unit=0 --speed=115200\n",
+                "menuentry \"r9\" {\n",
+                "    multiboot2 /boot/kernel\n",
+                "    module2 /boot/bootfs.paq\n",
+                "    boot\n",
+                "}\n",
+            )
+        );
+        // Kernel-only over the same synthetic template: the placeholder
+        // and the doc line both drop, everything else keeps.
+        assert_eq!(
+            emit_grub_cfg(&template, false),
+            concat!(
+                "# head comment\n",
+                "serial --unit=0 --speed=115200\n",
+                "menuentry \"r9\" {\n",
+                "    multiboot2 /boot/kernel\n",
+                "    boot\n",
+                "}\n",
+            )
         );
     }
 

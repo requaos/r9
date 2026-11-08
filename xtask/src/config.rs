@@ -214,6 +214,18 @@ impl Initrd {
 pub struct Dist {
     /// Boot image format: "flat-gzip" (default when absent) or "elf".
     pub format: Option<String>,
+
+    /// Boot module staged into the x86_64 ISO at /boot/bootfs.paq with
+    /// the grub.cfg `module2` placeholder line emitted IN (14-05, D-03
+    /// — GRUB delivers bootfs as an mb2 tag-3 module; the kernel finds
+    /// it through the tag walker, never a fixed address).  A `harvey:`
+    /// prefix resolves the remainder under the Harvey checkout named by
+    /// R9_HARVEY_DIR (the 07-05 initrd channel's discipline — absence is
+    /// a loud error naming the Harvey-side producers).  Absent key =
+    /// kernel-only ISO: no module staged, no module2 line emitted (the
+    /// staged loader config stays byte-identical to Phase 13's, so the
+    /// wired boot-iso FOD hash holds).
+    pub module: Option<String>,
 }
 
 /// the TOML document

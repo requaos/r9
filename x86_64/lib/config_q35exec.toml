@@ -1,0 +1,49 @@
+# The q35exec staged-exec profile (14-05, XEXEC-02's leg-1 gate — D-08's
+# staged-init carried from aarch64 Phase 4/5): config_q35.toml with the
+# exec orchestration selected — dev = ["exec"] compiles cfg(dev_exec), so
+# main's post-arming path runs exec_bootstrap (IRQ-masked through the
+# whole bootstrap, unmask only at the ring-3 handoff — the inflate
+# heisenbug discipline) against BOOT_ENTRY's /amd64/init, the staged
+# smokesleep marker.  The tick println is cfg-gated OFF under dev_exec
+# (14-04, Pitfall 8: syscall context takes the Console MCS lock).
+#
+# D-03 note — NO initrd key, deliberately: the aarch64 fixed-address
+# loader-delivery config key ([qemu] initrd = qemu's generic loader at a
+# pinned PA + the DTB /chosen patch) does NOT carry to x86_64.  Here GRUB
+# delivers bootfs.paq as an mb2 tag-3 MODULE off the same ISO (the
+# [dist] module key below + the grub.cfg module2 placeholder); the
+# kernel parses the module range from the mb2 tags the 13-02 walker
+# collects — no fixed address, no DTB.
+[build]
+target = "lib/x86_64-unknown-none-elf.json"
+buildflags = [
+    "-Z", "build-std=core,alloc"
+]
+
+[link]
+script = 'x86_64/lib/kernel.ld'
+load-address = '0xffffffff80200000'
+
+[config]
+platform = "q35"
+dev = ["exec"]
+
+[qemu]
+machine = "q35"
+accel = "kvm"
+cpu = "host"
+smp = 1
+memory = "1024M"
+
+[qemu.netdev]
+mode = "user"
+device = "virtio-net-pci-non-transitional"
+pcap = true
+
+[dist]
+format = "elf"
+# The staged bootfs (D-03): Harvey's 14-05 bake produces this under the
+# checkout R9_HARVEY_DIR names; the ISO builder stages it at
+# /boot/bootfs.paq and emits the grub.cfg module2 line IN.  Absence is
+# a loud pre-ISO error naming the Harvey-side producers.
+module = "harvey:build/x86_64/out/bootfs.paq"
