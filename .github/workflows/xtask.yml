@@ -61,6 +61,12 @@ jobs:
   # i386-pc BIOS modules), xorriso, qemu-system-x86.
   boot-test-x86-64:
     runs-on: ubuntu-latest
+    # Three sequential TCG boot tests, each legitimately capped by
+    # its own 1800 s overall budget (300 s x TCG_OVERALL_MULT 6),
+    # plus apt provisioning and three kernel+ISO builds: 120 min
+    # bounds the worst legitimate case while keeping a wedged qemu
+    # or grub-mkrescue stall far below GitHub's 360-min default.
+    timeout-minutes: 120
 
     steps:
     - uses: actions/checkout@v3
