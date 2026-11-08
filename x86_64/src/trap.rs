@@ -26,8 +26,10 @@ pub const SWAPPED_CS_OFFSET: usize = 7;
 // SSEL(si, SsRPL3) re-keyed to r9's GDT order: udata@0x18 → 0x1B
 // (DS/ES/FS/GS and the frame's ss slot), utext@0x20 → 0x23 (the cs
 // slot — the user CS comparison value, amd64/ABI.md's entry state).
-const USER_DATA_SEL: u16 = Gdt::udatasel() | MachMode::User as u16;
-const USER_TEXT_SEL: u16 = Gdt::utextsel() | MachMode::User as u16;
+// pub(crate): the exec seed (dat.rs seed_exec_entry) plants the same
+// selector values into the seeded Ureg.
+pub(crate) const USER_DATA_SEL: u16 = Gdt::udatasel() | MachMode::User as u16;
+pub(crate) const USER_TEXT_SEL: u16 = Gdt::utextsel() | MachMode::User as u16;
 
 /// UTZERO — first address of user text (ABI.md's stack-top policy);
 /// +0x28 (past the a.out header, HEADR=40) is the seeded first

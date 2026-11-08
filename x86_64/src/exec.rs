@@ -92,32 +92,92 @@ pub struct SegmentLayout {
     pub bss: VirtRange,
 }
 
-/// RED stub — the validation battery's target (see mod tests).
-pub fn parse_aout(bytes: &[u8]) -> Result<AoutHeader> {
-    let _ = bytes;
-    Err("exec: a.out loader not yet ported (RED stub)")
+fn be32(b: &[u8], off: usize) -> Option<u32> {
+    Some(u32::from_be_bytes(b.get(off..off + 4)?.try_into().ok()?))
 }
 
-/// RED stub — the segment math's target.
+fn be64(b: &[u8], off: usize) -> Option<u64> {
+    Some(u64::from_be_bytes(b.get(off..off + 8)?.try_into().ok()?))
+}
+
+/// Parse and validate an a.out header (the donor sysexec check set,
+/// ported — every violation is a loud Err before any mapping exists).
+pub fn parse_aout(bytes: &[u8]) -> Result<AoutHeader> {
+    if bytes.len() < HDR_SIZE {
+        return Err("exec: short a.out header");
+    }
+    let magic = be32(bytes, 0).ok_or("exec: short a.out header")?;
+    if magic != S_MAGIC_AMD64 {
+        return Err("exec: bad a.out magic (not S_MAGIC amd64)");
+    }
+    // Bounds proven above: the header is 40 bytes.
+    let text = be32(bytes, 4).unwrap() as u64;
+    let data = be32(bytes, 8).unwrap() as u64;
+    let bss = be32(bytes, 12).unwrap() as u64;
+    let syms = be32(bytes, 16).unwrap() as u64;
+    // The u32 entry field at 20 is vestigial on HDR_MAGIC arches; the
+    // real entry point is the BE u64 at bytes 32..39.
+    let entry = be64(bytes, 32).ok_or("exec: short a.out header")?;
+
+    if text == 0 {
+        return Err("exec: empty text segment");
+    }
+    let text_va = INITTEXT;
+    if entry < text_va as u64 || entry >= text_va as u64 + text {
+        return Err("exec: entry point outside text segment");
+    }
+    // Data VA: the next 2 MiB-aligned VA above text end (6l's INITRND
+    // for HEADTYPE 2).  File offset is 40+textsize — NOT page-aligned.
+    // The sum cannot overflow: u32-derived u64s on a VA below 2^47.
+    let data_va = (text_va + text as usize).next_multiple_of(DATA_ALIGN);
+    check_data_bss_below_ustop(data_va, data, bss)?;
+    Ok(AoutHeader { text, data, bss, syms, entry, text_va, data_va })
+}
+
+/// The USTOP ceiling check (the donor's, carried verbatim): data+bss
+/// must leave room below the stack.  NOTE: with u32 a.out size fields
+/// (~8 GiB max) against the 128 TiB user map this can never fire for a
+/// parseable header — it is defense-in-depth (a future 64-bit format
+/// or a moved stack policy), factored out so its boundary arithmetic
+/// is host-pinned anyway.
+fn check_data_bss_below_ustop(data_va: usize, data: u64, bss: u64) -> Result<()> {
+    if data_va as u64 + data + bss >= USTOP as u64 {
+        return Err("exec: text+data+bss exceeds USTOP");
+    }
+    Ok(())
+}
+
+/// The exec segment map (the install_image ranges, 14-04's consumer):
+/// text page-rounded for the fault classifier, mapped from
+/// TEXT_MAP_BASE (the 40-byte header rides the text mapping — the text
+/// file offset is pageVA - TEXT_MAP_BASE); data/bss keep byte-exact
+/// ends (the eager mapper clamps the data tail inside its last page).
 pub fn segment_layout(aout: &AoutHeader) -> SegmentLayout {
-    let _ = aout;
+    let text_end = (aout.text_va + aout.text as usize).next_multiple_of(PAGE_SIZE_4K);
+    let data_end = aout.data_va + aout.data as usize;
+    let bss_end = data_end + aout.bss as usize;
     SegmentLayout {
-        text: VirtRange::with_end(0, 0),
-        data: VirtRange::with_end(0, 0),
-        bss: VirtRange::with_end(0, 0),
+        text: VirtRange::with_end(TEXT_MAP_BASE, text_end),
+        data: VirtRange::with_end(aout.data_va, data_end),
+        bss: VirtRange::with_end(data_end, bss_end),
     }
 }
 
-/// Seed the forkret-shaped 184-byte Ureg at the top of the proc's
-/// kernel stack (9k sysexecregs + touser shape).  RED stub: plants a
-/// ZEROED frame only — the seed tests assert the planted entry state.
+/// Seed the forkret-shaped 184-byte Ureg at the top of the proc's kernel
+/// stack (9k sysexecregs + touser shape): zeroed, then the entry state
+/// planted.  The frame-return tail (14-02's syscallreturn) enters ring 3
+/// from exactly this frame — CX=ip, R11=flags, the quartet loads, the
+/// user sp — and the first instruction fetch faults in the first text
+/// page.
 pub fn seed_exec_frame(kstack_top: usize, entry: u64, user_sp: u64, tos_va: u64) -> *mut Ureg {
-    let _ = (entry, user_sp, tos_va);
     let frame_ptr = (kstack_top - core::mem::size_of::<Ureg>()) as *mut Ureg;
-    // SAFETY: the frame slot sits inside the caller-named kstack (the
-    // host tests pass a real buffer; the kernel passes the proc's
-    // kstack top); one Ureg is written.
-    unsafe { *frame_ptr = Ureg::zeroed() };
+    // SAFETY: the frame sits at the top of the proc's freshly-mapped
+    // kstack (184 bytes below kstack_top — mapped by construction; the
+    // host tests pass a real buffer); nothing else aliases it until the
+    // first ring-3 entry.
+    let frame = unsafe { &mut *frame_ptr };
+    *frame = Ureg::zeroed();
+    frame.seed_exec_entry(tos_va, user_sp, entry);
     frame_ptr
 }
 
@@ -202,9 +262,28 @@ mod tests {
 
     #[test]
     fn data_bss_overflowing_ustop_is_a_named_err() {
-        // data_va + data + bss >= USTOP (0x00007ffffffff000 - 16 MiB).
-        let h = aout_header(S_MAGIC_AMD64, 0x1000, 0x7f00_0000, 0x7f00_0000, 0, INITTEXT as u64);
-        assert_eq!(parse_aout(&h), Err("exec: text+data+bss exceeds USTOP"));
+        // Driven at the check itself: u32 a.out fields (~8 GiB max)
+        // cannot reach USTOP on the 128 TiB user map, so no synthetic
+        // header can trip the parse-path call — the boundary arithmetic
+        // is pinned here instead (the check is donor-carried
+        // defense-in-depth; parse_aout calls this same function).
+        let base = 0x400000usize;
+        let exact = (USTOP - base) as u64;
+        assert_eq!(
+            check_data_bss_below_ustop(base, USTOP as u64, 0),
+            Err("exec: text+data+bss exceeds USTOP")
+        );
+        // The exact boundary is >= (rejected)...
+        assert_eq!(
+            check_data_bss_below_ustop(base, exact, 0),
+            Err("exec: text+data+bss exceeds USTOP")
+        );
+        // ...one byte below it is accepted.
+        assert_eq!(check_data_bss_below_ustop(base, exact - 1, 0), Ok(()));
+        assert_eq!(check_data_bss_below_ustop(base, 0, exact - 1), Ok(()));
+        // A maximal u32-field header stays legal everywhere on the map.
+        let h = aout_header(S_MAGIC_AMD64, 0x1000, 0xffff_ffff, 0xffff_ffff, 0, INITTEXT as u64);
+        assert!(parse_aout(&h).is_ok());
     }
 
     #[test]
