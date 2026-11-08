@@ -75,6 +75,10 @@ pub extern "C" fn main(mach: &mut dat::Mach, mbdata: u64) {
         mach.idt.init(trap::stubs());
         mach.gdt.init(&mut mach.tss);
         mach.init();
+        // Arm the SYSCALL/SYSRET entry contract beside the descriptor
+        // load — the 9k donor's vsvminit order (descriptors, then the
+        // MSRs; vsvm.c:170-185).
+        arm_syscall_entry(&mach);
     }
 
     // Parse the stashed mb2 info — the two-pass fdt.rs discipline.
@@ -189,6 +193,52 @@ pub extern "C" fn main(mach: &mut dat::Mach, mbdata: u64) {
     loop {
         // SAFETY: hlt faults nowhere and parks until an interrupt.
         unsafe { core::arch::asm!("hlt") };
+    }
+}
+
+/// Arm the SYSCALL/SYSRET entry contract at kernel init — the 9k
+/// donor's vsvminit sequence (vsvm.c:174-185): the GS-base pair,
+/// Efer.Sce, Star, Sfmask.  Lstar lands with the entry asm
+/// (trap.rs's `syscallentry`, the next commit of this plan): the rule
+/// is to never arm Lstar at a hole, and l.S's default of 0 stays until
+/// the real entry exists.
+///
+/// Provably inert while the kernel is kernel-only: SYSCALL executes
+/// only from ring 3, and no user image exists until the exec bootstrap
+/// (14-05) — which is what every boot-test gate re-proves with the
+/// arming live.  l.S already sets Efer.Sce for long-mode bring-up (with
+/// Star/Lstar/Sfmask at 0); this adds the selector/flag routing and
+/// re-affirms Sce read-modify-write style.
+///
+/// # Safety
+/// Runs once at init on the boot CPU with interrupts masked; the MSR
+/// values must match the loaded GDT's selector order (they do — both
+/// sides derive from `seg::GdtData`).
+unsafe fn arm_syscall_entry(mach: &dat::Mach) {
+    unsafe {
+        // FSbase = 0, GSbase = the Mach pointer, KernelGSbase = 0 (the
+        // user GS base is 0 — user code does not use GS).  l.S's
+        // warp64 already set GSbase; the write is idempotent.  The
+        // explicit KernelGSbase = 0 is what makes the return-path
+        // SWAPGS land the user on base 0 (the donor's scheme).
+        cpu::wrmsr(cpu::MSR_FS_BASE, 0);
+        cpu::wrmsr(cpu::MSR_GS_BASE, mach as *const dat::Mach as u64);
+        cpu::wrmsr(cpu::MSR_KERNEL_GS_BASE, 0);
+
+        // Efer |= Sce — SYSCALL/SYSRET enabled.  Read-modify-write: the
+        // MSR carries LME/NXE from l.S and must keep them.
+        let efer = cpu::_rdmsr(cpu::MSR_EFER);
+        cpu::wrmsr(cpu::MSR_EFER, efer | cpu::EFER_SCE);
+
+        // Star: SYSRET loads CS from STAR[63:48]+16 and SS from
+        // STAR[63:48]+8; SYSCALL's own CS/SS come from STAR[47:32](+8).
+        // Gdt::star()'s udata@0x18/utext@0x20 arithmetic makes both
+        // SYSRET loads land on the flat user selectors — the revived
+        // dead code, already SYSRET-correct by GDT construction.
+        cpu::wrmsr(cpu::MSR_STAR, dat::Gdt::star());
+
+        // Sfmask = If only — the donor's value (cpu::fmask's re-key).
+        cpu::wrmsr(cpu::MSR_SFMASK, cpu::fmask());
     }
 }
 

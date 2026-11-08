@@ -256,15 +256,13 @@ impl Gdt {
     // explicitly OR a user RPL into the STAR bits.
     // This is idempotent for CS.
     //
-    // Unused until Phase 14 (XEXEC) restores the syscall entry.
-    #[allow(dead_code)]
     pub const fn utextsel() -> u16 {
         core::mem::offset_of!(GdtData, utext) as u16
     }
 
-    /// The IA32_STAR value SYSRET needs (see utextsel above).  Unused
-    /// until Phase 14 (XEXEC) restores the syscall entry.
-    #[allow(dead_code)]
+    /// The IA32_STAR value SYSRET needs (see utextsel above) — consumed
+    /// by the kernel-init MSR arming (`main::arm_syscall_entry`, the
+    /// 14-02 XEXEC entry contract).
     pub fn star() -> u64 {
         const RPL_USER: u64 = MachMode::User as u64;
         const UTEXTSEL: u64 = Gdt::utextsel() as u64;

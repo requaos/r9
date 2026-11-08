@@ -7,9 +7,29 @@ use crate::dat::{Flags, Gdt, Idt};
 use bit_field::BitField;
 use core::arch::asm;
 
-/// Unused until user processes exist (Phase 14 XEXEC swaps %gs on
-/// syscall entry/exit).
+/// The SYSCALL/SYSRET entry-contract MSRs — the vsvm.c:174-185 arming
+/// order's operands.  l.S already sets `MSR_EFER`'s Sce bit for
+/// long-mode bring-up (leaving Star/Lstar/Sfmask at 0); the kernel-init
+/// arming (`main::arm_syscall_entry`) writes the full donor set so the
+/// routing every user SYSCALL depends on exists from boot.
+pub const MSR_EFER: u32 = 0xc0000080;
+pub const MSR_STAR: u32 = 0xc0000081;
+/// The SYSCALL entry target.  Armed only at the real entry asm
+/// (trap.rs's `syscallentry`) once it exists — never at a stub or a
+/// hole: the 14-02 rule (an armed Lstar beats l.S's default of 0 only
+/// when something real lives there).
 #[allow(dead_code)]
+pub const MSR_LSTAR: u32 = 0xc0000082;
+pub const MSR_SFMASK: u32 = 0xc0000084;
+pub const MSR_FS_BASE: u32 = 0xc0000100;
+pub const MSR_GS_BASE: u32 = 0xc0000101;
+
+/// EFER bit 0 — SYSCALL/SYSRET enable (SDM Vol 2, EFER).
+pub const EFER_SCE: u64 = 1;
+
+/// The kernel-side of the SWAPGS pair: kernel GS base = the Mach, user
+/// (this MSR's counterpart at boot) = 0 — the arming writes it
+/// explicitly so the return-path SWAPGS lands the user on base 0.
 pub const MSR_KERNEL_GS_BASE: u32 = 0xc0000102;
 
 /// Retrieves a copy of the `RFLAGS` registers.
@@ -22,11 +42,14 @@ pub(crate) fn flags() -> Flags {
     }
 }
 
-/// The IA32_FMASK value syscalls enter with (the syscall entry's MSR
-/// write retired with the old generation; Phase 14 XEXEC re-arms it).
-#[allow(dead_code)]
+/// The IA32_FMASK value syscalls enter with: `If` ONLY — the 9k
+/// donor's `wrmsr(Sfmask, If)` (vsvm.c:185), per D-02a (whatever 9k
+/// emits).  The old dead code's IF|TF|DF is deliberately NOT carried:
+/// 9k lets TF/DF pass through to the handler untouched
+/// (amd64/ABI.md's wire contract), and masking them here would diverge
+/// from the frozen ABI.
 pub(crate) fn fmask() -> u64 {
-    Flags::empty().with_intr(true).with_trap(true).with_dir(true).bits()
+    Flags::empty().with_intr(true).bits()
 }
 
 /// Executes the `STI` instruction that enables interrupt
