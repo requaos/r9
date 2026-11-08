@@ -249,9 +249,10 @@ fn main() {
         )
         .subcommand(
             clap::Command::new("ureg-check").about(
-                "Verify the Harvey checkout's aarch64/include/ureg.h matches the pinned \
-                 TrapFrame layout (D-06 layer 2; R9_HARVEY_DIR names the checkout — required \
-                 since 05-10, 05-CONTEXT D-10)",
+                "Verify the Harvey checkout's aarch64/include/ureg.h and \
+                 amd64/include/ureg.h match the pinned layouts (D-06/D-02b layer 2, \
+                 amd64 arm + negative control; R9_HARVEY_DIR names the checkout — \
+                 required since 05-10, 05-CONTEXT D-10)",
             ),
         )
         .subcommand(
@@ -1475,14 +1476,12 @@ impl BootTestStep {
 
         // The cross-repo ureg.h drift gate runs before qemu
         // spawns — a drifted (or absent) Harvey checkout fails every
-        // aarch64 boot-test profile (an ABI mismatch is a build failure,
-        // not a runtime mystery).  Bare `cargo xtask build` instead
-        // tolerates a missing checkout — the const asserts still guard
-        // there.  x86_64 skips it: the amd64 Ureg ABI is Phase 14's
-        // XEXEC-01 (out of scope this phase).
-        if self.arch == Arch::Aarch64 {
-            uregcheck::check_for_boot_test()?;
-        }
+        // boot-test profile on BOTH arches (aarch64 pins
+        // aarch64/include/ureg.h, x86_64 pins amd64/include/ureg.h —
+        // an ABI mismatch is a build failure, not a runtime mystery).
+        // Bare `cargo xtask build` instead tolerates a missing
+        // checkout — the const asserts still guard there.
+        uregcheck::check_for_boot_test(self.arch)?;
 
         // The virtnet profile's sweep mode is validated BEFORE qemu
         // spawns — a typo'd R9_NET_SWEEP_MODE is a harness bug, not a gate
