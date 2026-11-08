@@ -90,8 +90,7 @@ pub struct Ureg {
 // Pinned byte offsets from Harvey's amd64/include/ureg.h, the
 // D-01 frozen source of truth (published as amd64/ABI.md).
 // Always on — any layout drift fails `cargo build`, no Harvey
-// checkout needed (the xtask ureg-check covers the header itself).
-const _: () = assert!(core::mem::offset_of!(Ureg, ax) == 0);
+// checkout needed (the xtask ureg-check covers the header itself).const _: () = assert!(core::mem::offset_of!(Ureg, ax) == 0);
 const _: () = assert!(core::mem::offset_of!(Ureg, bp) == 48);
 const _: () = assert!(core::mem::offset_of!(Ureg, r15) == 112);
 const _: () = assert!(core::mem::offset_of!(Ureg, ds) == 120);
@@ -106,6 +105,41 @@ const _: () = assert!(core::mem::offset_of!(Ureg, flags) == 160);
 const _: () = assert!(core::mem::offset_of!(Ureg, sp) == 168);
 const _: () = assert!(core::mem::offset_of!(Ureg, ss) == 176);
 const _: () = assert!(core::mem::size_of::<Ureg>() == 184);
+
+impl Ureg {
+    /// The all-zero frame (the aarch64 TrapFrame::zeroed idiom — the
+    /// exec seed's starting state before the entry fields are planted).
+    pub const fn zeroed() -> Ureg {
+        Ureg {
+            ax: 0,
+            bx: 0,
+            cx: 0,
+            dx: 0,
+            si: 0,
+            di: 0,
+            bp: 0,
+            r8: 0,
+            r9: 0,
+            r10: 0,
+            r11: 0,
+            r12: 0,
+            r13: 0,
+            r14: 0,
+            r15: 0,
+            ds: 0,
+            es: 0,
+            fs: 0,
+            gs: 0,
+            type_: 0,
+            ecode: 0,
+            pc: 0,
+            cs: 0,
+            flags: 0,
+            sp: 0,
+            ss: 0,
+        }
+    }
+}
 
 /// A structured representation of a trap, as derived
 /// from a trap number.
