@@ -1882,11 +1882,20 @@ impl BootTestStep {
                     {
                         if q35net_profile {
                             // 13-05: the net gate continues into the bind
-                            // half — the negotiation audit + `#l0:` lines,
-                            // anchored strictly past the discovery stage
-                            // (the bind runs inside main9's pre-sti
-                            // window, so its lines arrive right after).
-                            bind_after = capture.len();
+                            // half — the negotiation audit + `#l0:` lines.
+                            // The anchor is POSITIONAL (just past the last
+                            // device-found line), mirroring the facts
+                            // stage above: the bind prints ride the same
+                            // serial burst as the discovery prints, so a
+                            // capture-length anchor would skip past the
+                            // bind lines that arrived in the same socket
+                            // read — X64Bind would never satisfy.
+                            bind_after = last_marker_line_end(
+                                &capture[pci_after..],
+                                PCI_NET_DEVICE_MARKER,
+                            )
+                            .map(|p| pci_after + p)
+                            .unwrap_or(capture.len());
                             stage = BootStage::X64Bind;
                         } else {
                             // 13-03: the gate's timer half — the tick
