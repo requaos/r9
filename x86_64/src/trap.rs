@@ -40,13 +40,22 @@ macro_rules! gen_stub {
     (err) => {
         r#".balign 8; callq {intrregular};"#
     };
+    // A hardware error word is already on the frame, but the
+    // entry needs the special GSBASE check (the double fault).
+    (err_spec) => {
+        r#".balign 8; callq {intrspecial};"#
+    };
 }
 
 macro_rules! gen_trap_stub {
     // These cases include hardware-generated error words
-    // on the trap frame
+    // on the trap frame.  The double fault (8) is ALSO one
+    // of the special cases below — an exception inside
+    // exception handling makes the CS-selector proxy
+    // unreliable, so it takes the special path while keeping
+    // its hardware error word (no fake error push).
     (8) => {
-        gen_stub!(err)
+        gen_stub!(err_spec)
     };
     (10) => {
         gen_stub!(err)
@@ -75,9 +84,6 @@ macro_rules! gen_trap_stub {
         gen_stub!(spec)
     };
     (3) => {
-        gen_stub!(spec)
-    };
-    (8) => {
         gen_stub!(spec)
     };
     // No hardware error
