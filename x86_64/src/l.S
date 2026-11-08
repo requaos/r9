@@ -72,6 +72,13 @@
 // array bound; the early copy clamps total_size to this.
 .set MB2INFOMAX,		4096
 
+// The boot-module stash's size cap (modstash in Rust .bss): headroom
+// over the composed bootfs images this era (the 14-05 leg-1 bake is
+// ~36 KB; the Phase-15 tier payloads grow it into the MBs).  The early
+// module copy clamps to this; an oversized module fails loudly
+// kernel-side (the stash-length reconciliation below).
+.set MODSTASHMAX,		(8*1024*1024)
+
 // When we get here we are in protected mode with a GDT.  We set
 // up IA32e mode and get into long mode with paging enabled, then
 // jump to Rust.
@@ -147,6 +154,46 @@ mb2_header_end:
 	shrl	$2, %ecx		// copy whole words (total_size is 4-aligned)
 	cld
 	rep movsl
+
+	// 14-05 (D-03): stash the first mb2 module the loader delivered
+	// BEFORE the second-mebibyte zeroing below — GRUB's heap places
+	// modules in low memory, and the first live one landed at 0x141000,
+	// INSIDE the Mach's mebibyte (the same 13-02 hazard class as the
+	// info-structure stash above; the module needs its own buffer
+	// because its bytes ARE the payload, not firmware metadata).  Walk
+	// the STASHED info's tags (8-aligned advance, the kernel-side
+	// walker's rule), copy the first type-3 module's bytes to the
+	// .bss stash capped at its size, and record the copied length (0 =
+	// no module — the kernel errors loudly in that case).
+	movl	$(mb2info - KZERO), %esi
+	movl	$8, %ebx
+1:	cmpl	$(MB2INFOMAX - 8), %ebx
+	jae	4f			// walk exhausted: no module tag
+	movl	(%esi,%ebx), %eax	// tag type
+	movl	4(%esi,%ebx), %ecx	// tag size
+	cmpl	$3, %eax		// TAG_MODULE
+	je	2f
+	testl	%eax, %eax		// TAG_END
+	jz	4f
+	leal	7(%ecx), %ecx
+	andl	$-8, %ecx
+	addl	%ecx, %ebx		// 8-aligned advance
+	jmp	1b
+2:	movl	8(%esi,%ebx), %edx	// mod_start (u32 phys)
+	movl	12(%esi,%ebx), %ecx	// mod_end (u32 phys)
+	subl	%edx, %ecx		// length
+	jbe	4f			// empty/inverted: treat as none
+	cmpl	$MODSTASHMAX, %ecx
+	jbe	3f
+	movl	$MODSTASHMAX, %ecx	// clamp; the kernel errors loudly
+3:	movl	$(modstash - KZERO), %edi
+	movl	%ecx, %edx		// save the copied length
+	movl	8(%esi,%ebx), %esi	// src = mod_start
+	cld
+	rep movsb
+	movl	$(modstash_len - KZERO), %edi
+	movl	%edx, (%edi)
+4:
 
 	// Mask off the PIC.  We never use it.
 	movw	$(I8259A0 + 1), %dx
@@ -270,10 +317,19 @@ warp64:
 	// at %ebp may already be zeroed).
 	movabsq	$mb2info, %rsi
 
-	// Push a dummy stack frame and jump to `main`.
+	// Push a dummy stack frame and jump to `main` — at its LINKED
+	// (KZERO) address, NOT RIP-relative.  The 64-bit entry above
+	// far-jumped to (1f-KZERO), the identity/physical alias of the
+	// early code, so an RIP-relative leaq here would drop `main` (and
+	// the entire kernel after it) into the identity window: harmless
+	// while the boot PML4's slot-0 identity map stayed live, FATAL the
+	// first time a per-process PML4 loaded — those tables carry only
+	// the kernel half (510/511), and the next instruction fetch in the
+	// alias faulted (14-05 bring-up, PF ecode=fetch at phys-text VAs).
+	// movabsq resolves the linked VA absolutely.
 	pushq	$0
 	xorl	%ebp, %ebp
-	leaq	main(%rip), %rax
+	movabsq	$main, %rax
 	pushq	%rax
 	pushq	$2				// clear flags
 	popfq

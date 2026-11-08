@@ -103,8 +103,16 @@ const KSTACK_PAGES: usize = 4;
 /// SYSCALL/IDT entries find it under whichever per-process table is
 /// active, and ring 3 can never reach it.
 const KSTACK_PML4_INDEX: usize = 400;
-/// The kstack window's base VA (KSTACK_PML4_INDEX sign-extended).
-const KSTACK_VA: usize = 0xffff_3200_0000_0000;
+/// The kstack window's base VA (KSTACK_PML4_INDEX sign-extended:
+/// 400 << 39 = 0x0000_c800_0000_0000, bit 47 set, so the canonical
+/// form carries 0xffff in the top half).  The bring-up value
+/// 0xffff_3200_0000_0000 was NON-canonical (0x3200_0000_0000 is index
+/// 100's low-half offset — bits 63:47 disagreed), and any access
+/// through it raised #GP(0): invisible while nothing dereferenced the
+/// window (host tests check PTEs and write via the PA alias), loud the
+/// moment 14-05's bootstrap read the seeded frame through it (PF/#GP
+/// at the exec print, live).
+const KSTACK_VA: usize = 0xffff_c800_0000_0000;
 /// Queued-notes capacity (the note delivery path fills it).
 pub const NOTE_QUEUE_CAP: usize = 8;
 /// The exec-recorded argv's byte bound (the /proc/N/args content —
@@ -1573,12 +1581,16 @@ fn scheduler_stack_top() -> usize {
 }
 
 /// First activation (exec_bootstrap's only call): publish the proc as
-/// current + Running and point the TSS rsp0 at its kstack — the
-/// mechanism every ring-3 entry (SYSCALL and IDT alike) then shares.
+/// current + Running, point the TSS rsp0 at its kstack — the mechanism
+/// every ring-3 entry (SYSCALL and IDT alike) then shares — and record
+/// the seeded frame in CURFRAME (the live-frame record the scheduler's
+/// preempt path stashes from; the aarch64 activate_first published the
+/// CURKSTACK analog).
 pub fn activate_first(p: &mut Proc) {
     p.state = ProcState::Running;
     set_current_proc(p);
     set_tss_rsp0(p.kstack_top as u64);
+    write_curframe(p.frame);
 }
 
 /// The timer-tick preemption entry.  Acts only when the current proc

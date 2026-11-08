@@ -67,6 +67,29 @@ pub struct Mb2InfoStash([u8; MB2_STASH_SIZE]);
 #[unsafe(no_mangle)]
 pub static mut mb2info: Mb2InfoStash = Mb2InfoStash([0; 4096]);
 
+/// The boot-module stash's size — l.S's MODSTASHMAX must match this.
+/// Headroom over the composed bootfs images this era (the 14-05 leg-1
+/// bake is ~36 KB; Phase-15 tier payloads grow it).  The stash is .bss
+/// (NOBITS): no file weight, the loader zeroes it, and the `end` symbol
+/// covers it so the page allocator never reuses it.
+const MOD_STASH_SIZE: usize = 8 * 1024 * 1024;
+
+/// The boot-module stash (D-03, the 13-02 stash discipline extended to
+/// the payload): l.S walks the stashed mb2 info's tags in 32-bit early
+/// boot and copies the FIRST type-3 module's bytes here BEFORE the
+/// second-mebibyte zeroing — GRUB's heap places modules in low memory,
+/// and the first live one landed at 0x141000, INSIDE the Mach's
+/// mebibyte (the zeroing would destroy the only copy of the bootfs).
+/// `modstash_len` carries the copied byte count; 0 = no module.
+#[repr(C, align(8))]
+pub struct ModStash([u8; MOD_STASH_SIZE]);
+
+#[unsafe(no_mangle)]
+pub static mut modstash: ModStash = ModStash([0; 8 * 1024 * 1024]);
+
+#[unsafe(no_mangle)]
+pub static mut modstash_len: u32 = 0;
+
 fn print_memory_info() {
     println!("Memory usage:");
     let (used, total) = pagealloc::usage_bytes();
@@ -198,7 +221,14 @@ pub extern "C" fn main(mach: &mut dat::Mach, mbdata: u64) {
     // Unmask LAST (the Phase-3 hazard, x86 edition): sti happens here,
     // once, after every handler the armed sources can fire exists in
     // the dispatch.  Any earlier unmask would hit an empty dispatch
-    // table — a wedge, not a print.
+    // table — a wedge, not a print.  EXCEPT under dev_exec: the exec
+    // bootstrap is a non-preemptible boot critical section (the
+    // aarch64 inflate-heisenbug discipline, 14-RESEARCH Pattern 4) —
+    // IF stays 0 through the whole bootstrap and the seeded frame's If
+    // flag unmasks interrupts AT the ring-3 handoff (the pending tick
+    // then delivers as a clean ring-3-origin IRQ on the proc's kstack,
+    // never an EL1h-style window mid-bootstrap).
+    #[cfg(not(dev_exec))]
     cpu::sti();
 
     // The kernel-side ARP trigger (13-05 Task 3, X64-04 — the
@@ -206,15 +236,24 @@ pub extern "C" fn main(mach: &mut dat::Mach, mbdata: u64) {
     // userspace dd-through-the-file-contract proof is Phase 14's XEXEC
     // seam): posts the baked 60-byte frame, ping-pong xN + TX-bulk,
     // reconciles the ifstats counters fail-closed, and prints the
-    // X64-NET-DONE marker the q35net gate asserts.
-    #[cfg(dev_ether)]
+    // X64-NET-DONE marker the q35net gate asserts.  The seam stays
+    // runnable under its own cfg (13-05's regression shape); the
+    // exec profiles select exec instead.
+    #[cfg(all(dev_ether, not(dev_exec)))]
     platform::q35::netgate::run();
 
-    // The idle loop: hlt wakes on each timer interrupt and trap()'s
-    // IRQ branch iretq's back here (the aarch64 wfi shape, x86
-    // edition).  It prints nothing, which is what makes tick()'s
-    // println from IRQ context safe against the Console lock (single
-    // CPU; the aarch64 timer.rs doctrine).
+    // Under dev_exec the boot continues into the first-process exec
+    // orchestration and never returns — ring 3 is entered through
+    // trap_return with the seeded forkret-shaped 184-byte Ureg (swtch
+    // never enters ring 3).  Without dev_exec the q35 idle loop stands:
+    // hlt wakes on each tick; trap()'s IRQ branch iretq's back here.  It
+    // prints nothing, which is what makes tick()'s println from IRQ
+    // context safe against the Console lock (see timer.rs).
+    #[cfg(dev_exec)]
+    exec_bootstrap(facts);
+
+    // The idle loop (kernel-only boots).
+    #[cfg(not(dev_exec))]
     loop {
         // SAFETY: hlt faults nowhere and parks until an interrupt.
         unsafe { core::arch::asm!("hlt") };
@@ -276,6 +315,217 @@ fn halt() -> ! {
     loop {
         unsafe { core::arch::asm!("cli; hlt") };
     }
+}
+
+/// The pid-1 entry path (the aarch64 BOOT_ENTRY selection, re-keyed to
+/// the x86_64 image layout): dev_bootchain configs (14-06's q35shell)
+/// will exec the real Harvey boot(8) at /boot/boot — a multi-component
+/// devroot walk; every pre-existing exec profile keeps the staged
+/// marker at /amd64/init (D-08's leg 1: the first exec is a
+/// purpose-built static marker binary, D-09).
+#[cfg(all(dev_exec, dev_bootchain))]
+const BOOT_ENTRY: &[u8] = b"/boot/boot";
+#[cfg(all(dev_exec, not(dev_bootchain)))]
+const BOOT_ENTRY: &[u8] = b"/amd64/init";
+
+/// The first-process exec orchestration (the aarch64 exec_bootstrap
+/// port, 14-05): entered after the q35 IRQ-arming window with IF=0 —
+/// the whole bootstrap is a non-preemptible boot critical section (the
+/// inflate-heisenbug discipline; interrupts unmask only at the ring-3
+/// handoff via the seeded frame's If flag).  Finds the mb2 module
+/// (D-03's bootfs delivery — the range was bounds-checked against the
+/// memory map at parse time), reads it through the KZERO alias of all
+/// RAM (no new mapping: the boot PML4's slot-511 entry maps every
+/// guest page, the aarch64 initrd discovery/map step collapsed into
+/// the alias), mounts it as devroot, walks+opens BOOT_ENTRY, builds
+/// the first proc, execs, switches to the proc's CR3, and hands off to
+/// ring 3 through trap_return.  Never returns.
+#[cfg(dev_exec)]
+fn exec_bootstrap(facts: &mb2::Facts) -> ! {
+    // D-03: the bootfs module.  GRUB loaded bootfs.paq as mb2 tag 3;
+    // the ISO builder staged it because this config's [dist] module
+    // key named it — its absence is a config/staging bug, loud here.
+    // The BYTES come from the l.S stash (modstash): GRUB's heap placed
+    // this boot's module at 0x141000 — INSIDE the Mach mebibyte the
+    // early boot zeroes — so l.S copied them to .bss before the
+    // zeroing (the 13-02 info-stash discipline, extended to the
+    // payload).  The facts-side range reconciles against the stash:
+    // a clamp (module larger than MODSTASHMAX) or a length
+    // disagreement is a loud named panic, never a truncated image.
+    let module = facts.modules().next().unwrap_or_else(|| {
+        panic!("dev_exec: no mb2 module tag found — stage bootfs.paq into the ISO (the config's [dist] module key; bake it with Harvey's build/x86_64/mkimage.sh)")
+    });
+    let module_len = (module.end - module.start) as usize;
+    // SAFETY: l.S published both words before the mebibyte zeroing
+    // (single writer, pre-kernel); volatile reads because the asm
+    // wrote them outside Rust's memory model.
+    let stash_len = unsafe { core::ptr::read_volatile(&raw const modstash_len) } as usize;
+    if stash_len == 0 {
+        panic!("dev_exec: l.S stashed no module bytes (tag walk found none — loader/config bug)");
+    }
+    if stash_len != module_len {
+        panic!(
+            "dev_exec: module stash length {stash_len:#x} != tag length {module_len:#x} \
+             (MODSTASHMAX clamp — grow the stash)"
+        );
+    }
+    println!("q35: module @{:#x} +{:#x} (mb2 tag 3, stashed)", module.start, stash_len);
+    // SAFETY: modstash is a .bss static linked into the kernel image —
+    // mapped for the kernel's lifetime (and its pages sit below
+    // kernel_phys_end, so the allocator never reuses them); the length
+    // was reconciled above; the slice lives for the kernel's lifetime
+    // (the module IS the root filesystem's backing).
+    let img: &'static [u8] = unsafe {
+        core::slice::from_raw_parts((&raw const modstash).cast::<u8>(), stash_len)
+    };
+
+    // The port-device hooks (the aarch64 registration block re-keyed —
+    // port/ is arch-neutral and expects these before the first exec).
+    // devproc-lite's note-post hook — the arch-side half of the /proc
+    // device (port can't see PROC_TABLE; the devcons set_uart
+    // dependency-inversion shape).
+    port::devproc::set_post_hook(proc::post_note);
+    // devproc's proc-table hooks (ps(1)'s data source + init's
+    // #p/N/ctl "pri" record) and devcons's #c/pid hook (getpid).
+    port::devproc::set_proc_hooks(port::devproc::ProcHooks {
+        list: proc::proc_list_live,
+        info: proc::proc_info,
+        set_pri: proc::proc_set_pri,
+    });
+    port::devcons::set_pid_hook(proc::current_pid);
+    // devpipe's block/wake hooks — a read on an empty pipe parks the
+    // caller via the sched machinery (registered before the first exec
+    // so the very first blocked reader resolves).
+    port::devpipe::set_hooks(port::devpipe::PipeHooks {
+        current: proc::pipe_current_pid,
+        block: proc::pipe_block_current,
+        wake: proc::pipe_wake,
+    });
+    // devmnt's contention-wait hook (the same injected-hook idiom).
+    port::devmnt::set_contention_hook(proc::mnt_contention_wait);
+    // devether/devip hooks under their own cfgs (the q35exec profile
+    // selects neither; q35shell-era profiles will).
+    #[cfg(dev_ether)]
+    port::devether::set_hooks(port::devether::EtherHooks {
+        current: proc::pipe_current_pid,
+        block: proc::pipe_block_current,
+        wake: proc::pipe_wake,
+    });
+    #[cfg(dev_ip)]
+    {
+        port::devip::stack::set_hooks(port::devip::stack::DevipHooks {
+            current: proc::pipe_current_pid,
+            block: proc::pipe_block_current,
+            wake: proc::pipe_wake,
+        });
+        port::devip::stack::set_clock(platform::timer::ticks);
+    }
+    // devdup's resolver/listing hooks and devsrv's fd resolver — the
+    // #d/#s devices resolve the OPERATING proc's fd table through
+    // these.
+    port::devdup::set_hooks(port::devdup::DupHooks {
+        resolve: proc::current_fd_resolve,
+        list: proc::current_fd_list,
+    });
+    port::devsrv::set_resolve_hook(proc::current_fd_resolve);
+    // NOTE vs aarch64: no devcons ConsHooks/RandomHooks registration —
+    // the x86_64 console RX rides the tick's polled 16550 sweep (there
+    // is no PL011-ring analog to drain this era) and there is no DTB
+    // rng-seed source; the marker binary writes only (pwrite on fd 1,
+    // no hook needed by the write path).
+
+    // The kernel-seeded ROOT env group — the ONE mechanism replacing
+    // both 9k's #ec config env and an argv hint (the aarch64 seeding
+    // re-keyed: cputype=amd64 feeds boot's execinit path build when
+    // the boot chain arrives at 14-06).
+    port::devenv::set_group_hook(proc::current_env_group);
+    let root_env = port::devenv::seed_root_group(&[
+        (b"cputype", b"amd64"),
+        (b"nobootprompt", b"embed"),
+        (b"readparts", b"0"),
+    ]);
+    println!("devenv: seeded cputype=amd64 nobootprompt=embed readparts=0");
+
+    // The module paqfs is the root tree (D-04: the format carried
+    // verbatim — port::devroot::mount_initrd + the miniz-inflate
+    // reader, the collision-refusal discipline included).  exec
+    // sources the entry binary through the devroot walk/open path (one
+    // mechanism; the walk loops over the entry path's components —
+    // devroot's walk is single-component).
+    let root =
+        port::devroot::mount_initrd(img).unwrap_or_else(|err| panic!("devroot: mount: {err}"));
+    println!("q35: paqfs root mounted from module ({} bytes)", img.len());
+    let entry_path = BOOT_ENTRY;
+    let entry_str = core::str::from_utf8(entry_path).unwrap_or("?");
+    let slash_chan =
+        root.attach_root().unwrap_or_else(|err| panic!("devroot: attach: {err}"));
+    let mut entry_chan = slash_chan.dup();
+    let mut leaf: &[u8] = entry_path;
+    for comp in entry_path.split(|&b| b == b'/').filter(|c| !c.is_empty()) {
+        leaf = comp;
+        entry_chan = match root.walk(&entry_chan, comp) {
+            Ok(c) => c,
+            Err(err) => panic!("devroot: walk {entry_str}: {err}"),
+        };
+    }
+    let entry_open = match root.open(&entry_chan, port::devroot::OEXEC) {
+        Ok(c) => c,
+        Err(err) => panic!("devroot: open {entry_str}: {err}"),
+    };
+    let bin = match root.entry(&entry_open) {
+        Ok(bin) => bin,
+        Err(err) => panic!("devroot: {entry_str} entry: {err}"),
+    };
+    println!("devroot: {entry_str} open ({} bytes)", bin.length);
+
+    // Build the first process and exec the entry: a.out parse + the
+    // eager text/data/bss pages + the two seed pages + the
+    // forkret-shaped Ureg at kstack_top-184 (14-03/14-04's substrate).
+    let name = core::str::from_utf8(leaf).unwrap_or("?");
+    let argv: &[&[u8]] = &[leaf];
+    let mut proc = proc::new_user_proc(name).unwrap_or_else(|err| panic!("proc: {err}"));
+    // The first process's namespace root — slash and dot both start at
+    // the devroot attach (rfork inherits them, exec preserves them).
+    proc.slash = Some(slash_chan.dup());
+    proc.dot = Some(slash_chan);
+    // pid 1 runs in the seeded ROOT env group (the slash/dot seeding's
+    // twin — Proc::new's fresh empty group is the never-seeded
+    // default).
+    proc.env_group = root_env;
+    exec::exec_into(&mut proc, img, &bin, name, argv)
+        .unwrap_or_else(|err| panic!("exec: {entry_str}: {err}"));
+
+    // The one-way CR3 switch into the proc's table.  Order discipline
+    // (reschedule's locked-step rule): the frame pointer is only ever
+    // dereferenced UNDER the new table — the kstack window VA maps
+    // solely in the proc's PML4 — so the switch lands before any frame
+    // read; the kernel half (510/511) is shared, so every print, the
+    // console, and all runtime MMIO stay alive (the aarch64
+    // complete-table-before-switch + console-alive proof, x86 edition).
+    proc::switch_cr3(proc.pml4_pa);
+    // SAFETY: proc.frame names the seeded forkret frame on the proc's
+    // kstack (exec_into's construction), now mapped under the live
+    // CR3; read-only here.
+    let frame = unsafe { &*proc.frame };
+    println!(
+        "exec: entering ring 3 pc={:#x} sp={:#x} path={entry_str} argv=[{name}]",
+        frame.pc,
+        frame.sp
+    );
+
+    // Publish current + Running + rsp0 (+ CURFRAME — the live-frame
+    // record the scheduler's preempt path stashes from) and hand off:
+    // trap_return restores the seeded frame and iretq's into ring 3 —
+    // the frame's If flag unmasks interrupts at the handoff, the
+    // pending tick delivering as a clean ring-3-origin IRQ on this
+    // proc's kstack.  IRQs never unmasked in kernel context on the way
+    // in (the whole bootstrap ran IF=0).
+    proc::activate_first(&mut proc);
+    let frame_ptr = proc.frame;
+    // SAFETY: frame_ptr names the seeded forkret frame on the proc's
+    // kstack; activate_first just published current + rsp0 + CURFRAME —
+    // the single first ring-3 entry (the caller contract in trap.rs).
+    unsafe { trap::trap_return(frame_ptr) }
 }
 
 mod runtime;
