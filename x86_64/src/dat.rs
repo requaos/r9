@@ -14,6 +14,13 @@ pub const KMACH: usize = KCPUZERO + 0x0010_0000;
 pub const UREG_TRAPNO_OFFSET: usize = 16 * core::mem::size_of::<u64>();
 pub const UREG_CS_OFFSET: usize = 19 * core::mem::size_of::<u64>();
 
+// The SYSCALL entry asm's remaining slot offsets (trap.rs, 14-02) —
+// computed from the struct like the two above, so the asm's literals
+// are witnessed against the layout itself, not a restated number.
+pub const UREG_BP_OFFSET: usize = core::mem::offset_of!(Ureg, bp);
+pub const UREG_DS_OFFSET: usize = core::mem::offset_of!(Ureg, ds);
+pub const UREG_SP_OFFSET: usize = core::mem::offset_of!(Ureg, sp);
+
 /// The user register and trap frame structure.
 ///
 /// This stores both user state during system calls, and
@@ -259,6 +266,13 @@ pub struct Mach {
 }
 static_assertions::const_assert_eq!(core::mem::offset_of!(Mach, pml4), 65536 * 2 + 4096);
 static_assertions::const_assert_eq!(core::mem::offset_of!(Mach, stack), 65536);
+
+/// The byte offset of the Mach's entry scratch word — the SYSCALL
+/// entry's user-sp stash (the field's documented purpose: "a scratch
+/// word used on entry to kernel"; the 14-02 entry asm addresses it
+/// gs-relative, and the field is private, so the computed offset is
+/// exported instead of the pin).
+pub(crate) const MACH_SCRATCH_OFFSET: usize = core::mem::offset_of!(Mach, scratch);
 
 impl Mach {
     pub unsafe fn init(&mut self) {

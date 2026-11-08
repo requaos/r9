@@ -14,11 +14,10 @@ use core::arch::asm;
 /// routing every user SYSCALL depends on exists from boot.
 pub const MSR_EFER: u32 = 0xc0000080;
 pub const MSR_STAR: u32 = 0xc0000081;
-/// The SYSCALL entry target.  Armed only at the real entry asm
-/// (trap.rs's `syscallentry`) once it exists — never at a stub or a
-/// hole: the 14-02 rule (an armed Lstar beats l.S's default of 0 only
-/// when something real lives there).
-#[allow(dead_code)]
+/// The SYSCALL entry target — armed at the real entry asm (trap.rs's
+/// `syscallentry`) by `main::arm_syscall_entry`; never at a stub or a
+/// hole (the 14-02 rule: the missing-symbol link error is the presence
+/// guard).
 pub const MSR_LSTAR: u32 = 0xc0000082;
 pub const MSR_SFMASK: u32 = 0xc0000084;
 pub const MSR_FS_BASE: u32 = 0xc0000100;

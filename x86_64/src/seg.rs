@@ -228,6 +228,13 @@ impl Gdt {
         core::mem::offset_of!(GdtData, task) as u16
     }
 
+    /// The flat user data selector's GDT offset (udata@0x18) — the
+    /// use sites OR the user RPL on (SSEL(SiUDS, SsRPL3) in donor
+    /// terms).  Consumed by trap.rs's SYSCALL entry trio (14-02).
+    pub const fn udatasel() -> u16 {
+        core::mem::offset_of!(GdtData, udata) as u16
+    }
+
     /// # Safety
     /// It is up to the caller to ensure that `self` has
     /// been properly initialized.
@@ -270,6 +277,13 @@ impl Gdt {
         ((UTEXTSEL - 16) | RPL_USER) << 48 | KTEXTSEL << 32
     }
 }
+
+/// The byte offset of `Tss::rsp0` — the ONE kernel-stack mechanism both
+/// ring-3 entry paths share: the CPU loads it for IDT delivery from
+/// CPL3, and the SYSCALL entry reads it gs-relative (trap.rs's
+/// `syscallentry`, 14-02 — SYSCALL itself switches no stack).  Computed
+/// from the struct, never hand-pinned.
+pub(crate) const TSS_RSP0_OFFSET: usize = core::mem::offset_of!(Tss, rsp0);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IstIndex {

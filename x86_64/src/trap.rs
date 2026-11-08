@@ -1,6 +1,10 @@
 use crate::cpu;
 use crate::dat;
-use crate::dat::{UREG_CS_OFFSET, UREG_TRAPNO_OFFSET, Ureg};
+use crate::dat::{
+    Gdt, MACH_SCRATCH_OFFSET, MachMode, UREG_BP_OFFSET, UREG_CS_OFFSET, UREG_DS_OFFSET,
+    UREG_SP_OFFSET, UREG_TRAPNO_OFFSET, Ureg,
+};
+use crate::seg::TSS_RSP0_OFFSET;
 
 use core::arch::naked_asm;
 
@@ -17,6 +21,41 @@ pub const TIMER_VECTOR: u8 = 0x20;
 
 pub const SWAPPED: u8 = 0x80;
 pub const SWAPPED_CS_OFFSET: usize = 7;
+
+// The SYSCALL entry contract's flat user selectors — the donor's
+// SSEL(si, SsRPL3) re-keyed to r9's GDT order: udata@0x18 → 0x1B
+// (DS/ES/FS/GS and the frame's ss slot), utext@0x20 → 0x23 (the cs
+// slot — the user CS comparison value, amd64/ABI.md's entry state).
+const USER_DATA_SEL: u16 = Gdt::udatasel() | MachMode::User as u16;
+const USER_TEXT_SEL: u16 = Gdt::utextsel() | MachMode::User as u16;
+
+/// UTZERO — first address of user text (ABI.md's stack-top policy);
+/// +0x28 (past the a.out header, HEADR=40) is the seeded first
+/// process's linked entry — 6l's `INITTEXT = 0x200000+HEADR`.
+/// Unused until 14-05's exec_bootstrap (touser's planted entry).
+#[allow(dead_code)]
+const UTZERO: u64 = 2 * 1024 * 1024;
+
+/// The byte offset of the TSS's rsp0 within the Mach — the SYSCALL
+/// entry's kernel-stack switch reads it gs-relative (see
+/// `syscallentry`).  Computed from the structs, never hand-pinned.
+const MACH_TSS_RSP0: usize = core::mem::offset_of!(dat::Mach, tss) + TSS_RSP0_OFFSET;
+
+// Compile-time witnesses: the entry asm's slot arithmetic against the
+// frozen 184-byte layout (the D-01 frame).  dat.rs's assert block pins
+// the struct; these pin the asm's literals to the SAME numbers via the
+// exported UREG_* offsets — bp@48 (the wire number's slot), the
+// quartet qword@120, ip@144, cs@152, sp@168, and the carve+hardware
+// halves summing to 184.
+const _: () = assert!(core::mem::offset_of!(Ureg, pc) == 18 * 8);
+const _: () = assert!(UREG_CS_OFFSET == 19 * 8);
+const _: () = assert!(UREG_BP_OFFSET == 6 * 8);
+const _: () = assert!(UREG_DS_OFFSET == 15 * 8);
+const _: () = assert!(UREG_SP_OFFSET == 21 * 8);
+const _: () = assert!(18 * 8 + 5 * 8 == core::mem::size_of::<Ureg>());
+// The selector pins catch any GdtData reorder: udata@0x18|3, utext@0x20|3.
+const _: () = assert!(USER_DATA_SEL == 0x1b);
+const _: () = assert!(USER_TEXT_SEL == 0x23);
 
 type Thunk = unsafe extern "C" fn();
 
@@ -403,6 +442,256 @@ unsafe extern "C" fn intrcommon() {
         TRAPNO_OFFSET = const UREG_TRAPNO_OFFSET,
         trap = sym trap,
         options(att_syntax))
+}
+
+/// touser — the first ring-3 entry (the donor l64syscall.s:8-22).
+///
+/// Input contract (donor-verbatim): the user sp arrives in `%rbp`
+/// (RARG, the 6c first-argument register — the donor's `MOVQ RARG,
+/// SP`); the entry ip is fixed at `UTZERO+0x28` (the seeded first
+/// process, past the a.out header) and the flags at `If` — exec'd
+/// processes instead enter through the frame-return tail
+/// (`syscallreturn`), which is why the donor can fix both here.
+/// 14-05's exec_bootstrap hands the first process off through this.
+///
+/// CLI, SWAPGS (kernel GS base → the user base 0; the arming's
+/// KernelGSbase=0 makes the pair land right), the flat user data
+/// selector into DS/ES/FS/GS, CX=ip, R11=flags, SP=user sp, SYSRETQ
+/// (CS/SS derive from STAR's +16/+8 arithmetic; the planted flags
+/// carry IF=1 — the unmask-at-handoff discipline).
+///
+/// # Safety
+///
+/// Invoked at the ring-3 handoff with interrupts masked; the caller
+/// must have a user address space live and the TSS rsp0 set to the
+/// entering process's kernel stack.
+// Unused until 14-05's exec_bootstrap hands the first process off —
+// nothing can reach it while no user image exists (armed-but-idle).
+#[allow(dead_code)]
+#[unsafe(link_section = ".trap")]
+#[unsafe(naked)]
+pub unsafe extern "C" fn touser() {
+    naked_asm!(
+        r#"
+        cli;
+        swapgs;
+        movl ${UDS}, %eax;
+        movw %ax, %ds;
+        movw %ax, %es;
+        movw %ax, %fs;
+        movw %ax, %gs;
+
+        movq ${ENTRY}, %rcx;
+        movq ${IF}, %r11;
+
+        movq %rbp, %rsp;
+
+        sysretq;
+        "#,
+        UDS = const USER_DATA_SEL,
+        ENTRY = const UTZERO + 0x28,
+        IF = const 0x200,    // If — the user enters with IF=1
+        options(att_syntax))
+}
+
+/// syscallentry — the SYSCALL/LSTAR target (the donor
+/// l64syscall.s:26-48; the r9 deltas per the 14-02 pattern map).
+///
+/// SYSCALL pushes NOTHING — no SS/RSP/FLAGS/CS/RIP.  The
+/// architectural contract instead deposits: RCX = user rip, R11 = user
+/// flags, RSP still the user sp, IF cleared (Sfmask = If), CPL 0,
+/// CS/SS from STAR[47:32].  This entry software-builds the
+/// hardware-frame half of the 184-byte Ureg from those, stores the GP
+/// half, and calls the Rust dispatch — then jumps to the return tail.
+///
+/// Deltas from the donor (each documented; the frame arithmetic is
+/// donor-exact):
+/// - SWAPGS unconditional — SYSCALL only fires from ring 3, no
+///   CS-check witness (unlike the IDT path).  NMI-safe: intrspecial
+///   re-derives its swap from rdgsbase, so an NMI anywhere in the
+///   entry window stays consistent either way.
+/// - the kernel-stack switch reads the TSS rsp0 gs-relative — the
+///   donor walks `m->proc->kstack`; r9's Proc is the 14-03 substrate,
+///   and rsp0 is the ONE mechanism both ring-3 entry paths share (the
+///   CPU loads it for IDT delivery; the entry loads it here since
+///   SYSCALL switches no stack).  Boot-time rsp0 names the Mach's own
+///   scheduler stack; the exec bootstrap re-points it at the entering
+///   process's kstack (the donor's tssrsp0 idiom).
+/// - the 15 GP registers are stored to the frame around the dispatch
+///   call: 9k's C `syscall()` preserves everything-but-AX by 6c
+///   convention, but the Rust dispatch follows the Rust ABI
+///   (caller-saved registers clobbered freely).  Every slot gets the
+///   TRUE user value — the donor sacrifices r13/r14/r15 as RMACH/
+///   RUSER carriers, while the gs-relative switch below needs no
+///   carrier register at all; the only scratch is the Mach's entry
+///   word.
+/// - the dispatch args are pushed donor-style (Ureg*, number) and
+///   reloaded into the Rust convention's argument registers; the
+///   return tail consumes them per the donor's ADDQ arithmetic.
+///
+/// # Safety
+///
+/// The LSTAR target, armed at kernel init (main::arm_syscall_entry).
+#[unsafe(link_section = ".trap")]
+#[unsafe(naked)]
+pub unsafe extern "C" fn syscallentry() {
+    naked_asm!(
+        r#"
+        swapgs;
+        // Stash the user sp in the Mach's entry scratch word — the
+        // stack switch below destroys RSP and no register may be
+        // sacrificed.  IF=0 (Sfmask=If): the window is atomic.
+        movq %rsp, %gs:{SCRATCH};
+        // The kernel stack: the same rsp0 the CPU loads for a ring-3
+        // IDT delivery.
+        movq %gs:{TSS_RSP0}, %rsp;
+        // The hardware-frame half, software-built (the donor's push
+        // order): ss, sp, flags, cs, ip.
+        pushq ${SS};
+        pushq %gs:{SCRATCH};
+        pushq %r11;
+        pushq ${CS};
+        pushq %rcx;
+        // The carve: 15 GP qwords, the u16 quartet's qword, `type`,
+        // and the error slot — 18 qwords below the hardware half
+        // (the donor's SUBQ $(18*8); type/ecode stay unwritten on
+        // this path, exactly as the donor leaves them).
+        subq $(18 * 8), %rsp;
+        // The GP half — every slot the true user value.
+        movq %rax, 0*8(%rsp);
+        movq %rbx, 1*8(%rsp);
+        movq %rcx, 2*8(%rsp);
+        movq %rdx, 3*8(%rsp);
+        movq %rsi, 4*8(%rsp);
+        movq %rdi, 5*8(%rsp);
+        movq %rbp, 6*8(%rsp);
+        movq %r8, 7*8(%rsp);
+        movq %r9, 8*8(%rsp);
+        movq %r10, 9*8(%rsp);
+        movq %r11, 10*8(%rsp);
+        movq %r12, 11*8(%rsp);
+        movq %r13, 12*8(%rsp);
+        movq %r14, 13*8(%rsp);
+        movq %r15, 14*8(%rsp);
+        // The packed segment quartet — the donor's (15*8+n) stores:
+        // ds CONSTRUCTED as the flat user data selector (the donor
+        // MOVW $SSEL(SiUDS, SsRPL3), (15*8+0)(SP)), es/fs/gs the live
+        // selector registers.
+        movw ${DS}, 15*8+0(%rsp);
+        movw %es, 15*8+2(%rsp);
+        movw %fs, 15*8+4(%rsp);
+        movw %gs, 15*8+6(%rsp);
+        // The dispatch args, donor-style (PUSHQ SP; PUSHQ RARG) —
+        // %rbp IS the wire number (RARG = BP, ABI.md's wire
+        // contract) — reloaded into the Rust convention's registers.
+        pushq %rsp;
+        pushq %rbp;
+        movq 0(%rsp), %rdi;
+        movq 8(%rsp), %rsi;
+        // SysV wants %rsp 16-byte aligned at the call: the frame
+        // build lands at 8 mod 16 and the two args restore 8, so pad
+        // one qword (the boot rsp0 is 64KiB-aligned — 0 mod 16).
+        subq $8, %rsp;
+        callq {syscall};
+        addq $8, %rsp;
+        // Drop the pushed args — %rsp is the Ureg base — and take
+        // the donor's fall-through into the return tail as a jump
+        // (Rust naked fns cannot share a fall-through body).
+        addq $(2 * 8), %rsp;
+        jmp {syscallreturn};
+        "#,
+        SCRATCH = const MACH_SCRATCH_OFFSET,
+        TSS_RSP0 = const MACH_TSS_RSP0,
+        SS = const USER_DATA_SEL,
+        CS = const USER_TEXT_SEL,
+        DS = const USER_DATA_SEL,
+        syscall = sym syscall,
+        syscallreturn = sym syscallreturn,
+        options(att_syntax))
+}
+
+/// syscallreturn — the SYSCALL-path return tail (the donor
+/// l64syscall.s:50-68).  Entered with %rsp at the Ureg base: from the
+/// entry's dispatch call (via its closing jmp), or from any future
+/// first-entry site that plants a frame (the donor's sysrforkret
+/// shape — 14-05's territory).
+///
+/// The dispatch has written its result into the frame's ax slot and
+/// may have rewritten bp (the note-delivery convention passes the
+/// handler's Ureg* through ureg->bp) — both are re-read from the
+/// frame, never assumed live in registers.  The GP registers are
+/// restored from the frame (the entry stored the true user values;
+/// the Rust ABI clobbered the caller-saved set), then the donor's
+/// post-ADDQ choreography: CLI (the dispatch ran spllo), SWAPGS (back
+/// to the user GS base 0), the quartet loads, CX=ip, R11=flags, and
+/// the user sp LAST — the load destroys the frame pointer — then
+/// SYSRETQ (CS/SS derive from STAR).
+///
+/// # Safety
+///
+/// Tail-called only from the SYSCALL entry path (or a planted frame).
+#[unsafe(link_section = ".trap")]
+#[unsafe(naked)]
+pub unsafe extern "C" fn syscallreturn() {
+    naked_asm!(
+        r#"
+        // The result and the notify channel — through the frame (the
+        // donor's MOVQ 16(SP), AX / (16+6*8)(SP), BP re-keyed to the
+        // base-relative slots).
+        movq 0*8(%rsp), %rax;
+        movq 6*8(%rsp), %rbp;
+        // The GP half — true user values.  rcx/r11 get overwritten by
+        // the exit-state plants below; the last writes win, exactly
+        // the donor's read order.
+        movq 1*8(%rsp), %rbx;
+        movq 2*8(%rsp), %rcx;
+        movq 3*8(%rsp), %rdx;
+        movq 4*8(%rsp), %rsi;
+        movq 5*8(%rsp), %rdi;
+        movq 7*8(%rsp), %r8;
+        movq 8*8(%rsp), %r9;
+        movq 9*8(%rsp), %r10;
+        movq 10*8(%rsp), %r11;
+        movq 11*8(%rsp), %r12;
+        movq 12*8(%rsp), %r13;
+        movq 13*8(%rsp), %r14;
+        movq 14*8(%rsp), %r15;
+        cli;
+        swapgs;
+        // The packed quartet loads (the donor's post-ADDQ 0/2/4/6
+        // reads at the frame's 120..126).
+        movw 15*8+0(%rsp), %ds;
+        movw 15*8+2(%rsp), %es;
+        movw 15*8+4(%rsp), %fs;
+        movw 15*8+6(%rsp), %gs;
+        // The SYSRETQ exit state: CX=ip, R11=flags (the donor's
+        // 24/40 post-ADDQ reads — frame 144/160).
+        movq 18*8(%rsp), %rcx;
+        movq 20*8(%rsp), %r11;
+        // The user sp last (the load destroys the frame pointer) —
+        // the donor's MOVQ 48(SP), SP at frame 168.
+        movq 21*8(%rsp), %rsp;
+        sysretq;
+        "#,
+        options(att_syntax))
+}
+
+/// The SYSCALL dispatch target — the fillable stub whose SHAPE is the
+/// contract (14-04's syscall module replaces the body, not the
+/// signature).  Wire facts (amd64/ABI.md): the number travels in
+/// BP/RARG (passed through as `number` — the same value the entry
+/// pushed and frame.bp holds), arguments sit at the user sp+8 slots,
+/// and the result belongs in the frame's ax slot — this function
+/// RETURNS normally; the return tail reads the frame after.
+///
+/// Unreachable until 14-05's exec bootstrap lands a user image (the
+/// entry is armed-but-idle: SYSCALL only executes from ring 3) — but
+/// loud if it ever is: the message prints, then the panic handler
+/// parks.
+extern "C" fn syscall(number: u64, frame: &mut Ureg) {
+    let _ = (number, frame);
+    crate::println!("syscall {number}: dispatch not yet ported (14-04 fills this)");
+    panic!("syscall dispatch not yet ported");
 }
 
 pub enum IntrStatus {

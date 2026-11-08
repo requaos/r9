@@ -198,10 +198,9 @@ pub extern "C" fn main(mach: &mut dat::Mach, mbdata: u64) {
 
 /// Arm the SYSCALL/SYSRET entry contract at kernel init — the 9k
 /// donor's vsvminit sequence (vsvm.c:174-185): the GS-base pair,
-/// Efer.Sce, Star, Sfmask.  Lstar lands with the entry asm
-/// (trap.rs's `syscallentry`, the next commit of this plan): the rule
-/// is to never arm Lstar at a hole, and l.S's default of 0 stays until
-/// the real entry exists.
+/// Efer.Sce, Star, Lstar, Sfmask.  The Lstar write is last-in-plan by
+/// construction: the entry asm (trap.rs's `syscallentry`) and this
+/// arming landed together so Lstar was never armed at a hole.
 ///
 /// Provably inert while the kernel is kernel-only: SYSCALL executes
 /// only from ring 3, and no user image exists until the exec bootstrap
@@ -239,6 +238,12 @@ unsafe fn arm_syscall_entry(mach: &dat::Mach) {
 
         // Sfmask = If only — the donor's value (cpu::fmask's re-key).
         cpu::wrmsr(cpu::MSR_SFMASK, cpu::fmask());
+
+        // Lstar — the entry target, at the real entry asm (trap.rs's
+        // `syscallentry`; the missing-symbol link error is the presence
+        // guard).  Sequenced after the entry exists — never armed at a
+        // hole — and it beats l.S's default of 0.
+        cpu::wrmsr(cpu::MSR_LSTAR, trap::syscallentry as *const () as u64);
     }
 }
 
