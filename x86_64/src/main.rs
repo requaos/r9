@@ -16,6 +16,17 @@ mod seg;
 mod trap;
 mod uart16550;
 
+// exec substrate (14-03): usermem is the validated user-access surface
+// (the ONLY path a user VA may cross into kernel code through).  Compiled
+// into every build config but call-site-free until 14-04's proc/syscall
+// port wires the syscall paths — the module-level dead-code allowance
+// mirrors aarch64's `mod exec`/`mod proc` precedent (non-exec configs
+// compile the machinery without calling it).
+#[allow(dead_code)]
+mod usermem;
+
+extern crate alloc;
+
 #[cfg(not(test))]
 core::arch::global_asm!(include_str!("l.S"), options(att_syntax));
 
