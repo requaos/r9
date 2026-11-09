@@ -384,10 +384,24 @@ WRAP
             # this builder, run over FOUR independent fresh kernel builds
             # (two per body), produced the IDENTICAL ISO — file-level
             # sha256 cdcfa00835c0ee37b0b7cbc2064ed8511db632408699faaad8814b49a885118a,
-            # NAR hash (what this attr checks) 944aad869ee1d0974037cad4208b48fb753af84401fad12a2340e3aba994a99b.
-            # `nix build .#boot-iso --rebuild` re-ran the whole chain with
-            # a freshly rebuilt kernel and re-verified this hash.
-            outputHash = "sha256-lEqthp7h0JdAN8rUIItI+3U6+EQB+tEqI0Djq6mUqZs=";
+            # NAR hash (what this attr checks)
+            # 944aad869ee1d0974037cad4208b48fb753af84401fad12a2340e3aba994a99b
+            # (sha256-lEqthp7h…, wired at fe39d83).
+            # The phase's own post-fe39d83 kernel commits (8a338a6 console
+            # RX, e5def72 SWAPGS cmpw, e417660 user SSE + eager stack —
+            # the phase-close pin) re-staled that hash: the drift class is
+            # standing (ANY kernel-byte commit re-stales this FOD; the pin
+            # discipline requires a re-wire at close).  The 14-VERIFICATION
+            # gap fix re-wired it at e417660 with the same two-derivation
+            # proof: two independent fresh-kernel builds (version-override
+            # clones) through the non-FOD bootIso realization produced the
+            # byte-identical ISO — file-level sha256
+            # bd0281bbc00f96f0b7a615bdf23e17b0c69cc00059733fc64abb6304b74804e3,
+            # NAR hash (what this attr checks)
+            # 9706c34aa63160d1bc648863903b338879448c53372493846229e5def6ca59ac
+            # — and `nix build .#boot-iso` + `--rebuild` re-verify at the
+            # wired value.
+            outputHash = "sha256-lwbDSqYxYNG8ZIhjkDsziHlEjFM3JJOEYinl3vbKWaw=";
           };
         });
 
