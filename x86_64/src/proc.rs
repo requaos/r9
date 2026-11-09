@@ -66,6 +66,29 @@ use crate::swtch;
 /// boot PML4 and under any per-process PML4.
 pub(crate) const KZERO: u64 = 0xffff_ffff_8000_0000;
 
+/// The device-MMIO alias window's base (l.S's bootmachpt3 entries 2..5,
+/// inside PML4[510] — the slot every proc table SHARES): the four low
+/// GiB of PA re-mapped at a fixed higher-half VA.  Every device
+/// volatile deref MUST go through `kaddr` — the raw identity VA
+/// (PA==VA) is covered only by the boot table's PML4[0], which
+/// per-proc tables do not carry ([0] is the user half), so a post-fork
+/// device access (the tick's xAPIC EOI, an ether IRQ's virtio queue
+/// work) faults under the running proc's CR3 (the 14-06 chain gate
+/// surfaced it as a kernel write fault at 0xFEE00380 in timer::tick
+/// under a proc table).  The KZERO alias cannot host these: KZERO
+/// sits 2 GiB below the top of the canonical space, so KZERO+pa
+/// overflows u64 for every pa >= 2 GiB (measured: checked_add fails
+/// at the ECAM base 0xB0000000).
+pub(crate) const MMIO_ALIAS: usize = 0xFFFF_FF00_8000_0000;
+
+#[track_caller]
+pub(crate) fn kaddr(pa: u64) -> usize {
+    if pa >> 32 >= 4 {
+        panic!("kaddr: PA {pa:#x} outside the 4 GiB device window");
+    }
+    MMIO_ALIAS + pa as usize
+}
+
 /// The KZERO window's ceiling: the boot tables map exactly the first
 /// 1 GiB of physical memory at KZERO (l.S's bootkernpt3 single 1 GiB
 /// leaf), and the q35 gate guest is 1024 MiB — an exact fit.  A page
@@ -1609,17 +1632,30 @@ pub fn preempt() {
 
 /// Round-robin reschedule from the tick (IRQ-from-ring-3: the live
 /// frame sits at the current proc's kstack top, recorded in CURFRAME).
-/// On a switch: stash the live frame into the current proc, mark it
-/// Ready, install the next (current + TSS rsp0 + CURFRAME + CR3, one
-/// locked step), and print the marker `sched: switch old->new` —
-/// marker-not-order evidence.  Ready procs holding a saved kernel
-/// context (blocked_in_kernel) are skipped here — only the sched loop
-/// can swtch them back in.
+/// When another runnable proc exists: PARK — stash the live frame,
+/// mark Ready + blocked_in_kernel, drop the lock, and swtch into the
+/// scheduler context (the Mach's own stack, which no CR3 switch can
+/// alias).  The sched loop then performs the real switch (pick_next's
+/// locked step) and resumes procs per their kind; when THIS proc is
+/// eventually picked, the swtch returns here and the ordinary
+/// interrupt-return path iretq's into the stashed frame — the whole
+/// round trip runs on this proc's OWN kstack.
+///
+/// 14-06 root cause this shape replaces: the old reschedule performed
+/// the CR3 switch ITSELF, inside the lock scope, while executing on
+/// the CURRENT proc's kstack at the FIXED window VA (PML4[400]) — the
+/// moment CR3 flipped, that VA aliased the NEXT proc's kstack pages,
+/// destroying every spilled local, the MCS LockNode, and the return
+/// chain mid-flight (the post-switch println read clobbered locals —
+/// the observed `sched: switch 0->0` — and the lock drop then walked
+/// a node of the wrong proc's bytes, the wild-write that corrupted
+/// kernel statics).  Park-and-swtch never switches CR3 in the
+/// preempted proc's context at all — the same discipline sched() has
+/// proven since 14-05's await path.
 pub fn reschedule() {
-    let Some(cur) = current() else { return };
+    let Some(mut cur) = current() else { return };
     let cur_pid = cur.pid;
     let node = LockNode::new();
-    let next_pid;
     {
         let mut table = PROC_TABLE.lock(&node);
         let Some(cur_idx) =
@@ -1636,25 +1672,32 @@ pub fn reschedule() {
                 break;
             }
         }
-        let Some(ni) = pick else { return };
+        // No other runnable proc: return through OUR OWN stack — no
+        // switch ever happens and the interrupt-return is ordinary.
+        let Some(_ni) = pick else { return };
         let curp = table.procs[cur_idx].as_mut().unwrap();
         curp.frame = read_curframe();
         curp.state = ProcState::Ready;
-        let next = table.procs[ni].as_mut().unwrap();
-        next.state = ProcState::Running;
-        next_pid = next.pid;
-        // The locked switch step: current pointer, TSS rsp0 (the
-        // kstack mechanism), the CURFRAME record, and CR3 — LAST, so
-        // the frame pointer stored above is only ever dereferenced
-        // under the NEW table (the resume arms run after the lock
-        // drops).
-        set_current_proc(next);
-        set_tss_rsp0(next.kstack_top as u64);
-        write_curframe(next.frame);
-        switch_cr3(next.pml4_pa);
+        // The parked proc resumes via the sched loop's Switch arm (the
+        // swtch below lands mid-interrupt on this kstack — trap_return
+        // would be wrong), so mark it like sched()'s blocked procs.
+        curp.blocked_in_kernel = true;
     }
-    // Outside the lock; still IRQ-masked trap context.
-    println!("sched: switch {cur_pid}->{next_pid}");
+    println!("sched: park {cur_pid}");
+    // Park into the scheduler context.  The swtch saves this proc's
+    // callee-saved state into its PROC_TABLE-resident context — never
+    // this kstack — so nothing under this frame is invalidated by any
+    // later switch; the Mach stack is mapped identically under every
+    // table (the kernel half is shared).
+    // SAFETY: sched_context()'s seed-once discipline; cur.context is
+    // PROC_TABLE-resident (a stable address across the switch).
+    unsafe {
+        swtch::swtch(&mut cur.context, &*sched_context());
+    }
+    // Resumed: pick_next re-installed this proc (current + rsp0 +
+    // CURFRAME + CR3, one locked step) before swtch'ing back — our
+    // kstack pages own this VA again.  Return up through preempt and
+    // the interrupt path; the iretq pops the frame at our kstack top.
 }
 
 /// How the sched loop resumes the picked proc: swtch into its saved
@@ -1721,7 +1764,7 @@ fn sched_loop() -> ! {
         match pick_next() {
             // SAFETY: sched_context() is seeded; ctx names the picked
             // proc's PROC_TABLE-resident saved context.
-            Some(Resume::Switch(ctx)) => unsafe { swtch::swtch(&mut *sched_context(), &*ctx) },
+            Some(Resume::Switch(ctx)) => unsafe { swtch::swtch(&mut *sched_context(), &*ctx) }
             // SAFETY: frame names the picked proc's kstack-resident
             // Ureg (pick_next installed the switch under the lock just
             // above — CR3 included); trap_return iretqs into it and

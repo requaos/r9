@@ -27,6 +27,7 @@
 
 use core::cell::SyncUnsafeCell;
 use core::ptr::read_volatile;
+use crate::proc::kaddr;
 
 #[cfg(dev_ether)]
 use core::ptr::write_volatile;
@@ -207,7 +208,7 @@ fn ecam_read32(base: u64, bus: u8, dev: u8, fun: u8, off: u8) -> u32 {
     // window inside the boot identity map (both checked in
     // discover_and_print before the walk); a 32-bit read at the computed
     // address stays inside the function's 4 KiB config page.
-    unsafe { read_volatile(addr as usize as *const u32) }
+    unsafe { read_volatile(kaddr(addr) as *const u32) }
 }
 
 fn ecam_read16(base: u64, bus: u8, dev: u8, fun: u8, off: u8) -> u16 {
@@ -215,7 +216,7 @@ fn ecam_read16(base: u64, bus: u8, dev: u8, fun: u8, off: u8) -> u16 {
     debug_assert!(addr + 2 <= BOOT_IDENTITY_LIMIT);
     // SAFETY: as ecam_read32; the 16-bit read is width-matched to the
     // vendor/device field.
-    unsafe { read_volatile(addr as usize as *const u16) }
+    unsafe { read_volatile(kaddr(addr) as *const u16) }
 }
 
 fn ecam_read8(base: u64, bus: u8, dev: u8, fun: u8, off: u8) -> u8 {
@@ -223,7 +224,7 @@ fn ecam_read8(base: u64, bus: u8, dev: u8, fun: u8, off: u8) -> u8 {
     debug_assert!(addr < BOOT_IDENTITY_LIMIT);
     // SAFETY: as ecam_read32; the byte read is width-matched to the
     // revision/pin fields.
-    unsafe { read_volatile(addr as usize as *const u8) }
+    unsafe { read_volatile(kaddr(addr) as *const u8) }
 }
 
 /// A plain identity-window MMIO read outside ECAM (the RCBA IRR
@@ -233,7 +234,7 @@ fn mmio_read16(addr: u64) -> u16 {
     // SAFETY: callers pass addresses inside the boot identity map (the
     // RCBA base is read from the LPC's config space and masked); the
     // volatile read is the MMIO floor.
-    unsafe { read_volatile(addr as usize as *const u16) }
+    unsafe { read_volatile(kaddr(addr) as *const u16) }
 }
 
 // ---------------------------------------------------------------------------
@@ -607,35 +608,35 @@ fn mmio_read8(addr: u64) -> u8 {
     // SAFETY: callers pass BAR-derived addresses bounds-checked against
     // the BAR extent inside the identity window; volatile is the MMIO
     // floor.
-    unsafe { read_volatile(addr as usize as *const u8) }
+    unsafe { read_volatile(kaddr(addr) as *const u8) }
 }
 
 #[cfg(dev_ether)]
 fn mmio_read32(addr: u64) -> u32 {
     debug_assert!(addr + 4 <= BOOT_IDENTITY_LIMIT);
     // SAFETY: as mmio_read8; width-matched.
-    unsafe { read_volatile(addr as usize as *const u32) }
+    unsafe { read_volatile(kaddr(addr) as *const u32) }
 }
 
 #[cfg(dev_ether)]
 fn mmio_write8(addr: u64, v: u8) {
     debug_assert!(addr < BOOT_IDENTITY_LIMIT);
     // SAFETY: as mmio_read8; the volatile write is the MMIO floor.
-    unsafe { write_volatile(addr as usize as *mut u8, v) }
+    unsafe { write_volatile(kaddr(addr) as *mut u8, v) }
 }
 
 #[cfg(dev_ether)]
 fn mmio_write16(addr: u64, v: u16) {
     debug_assert!(addr + 2 <= BOOT_IDENTITY_LIMIT);
     // SAFETY: as mmio_read8; width-matched.
-    unsafe { write_volatile(addr as usize as *mut u16, v) }
+    unsafe { write_volatile(kaddr(addr) as *mut u16, v) }
 }
 
 #[cfg(dev_ether)]
 fn mmio_write32(addr: u64, v: u32) {
     debug_assert!(addr + 4 <= BOOT_IDENTITY_LIMIT);
     // SAFETY: as mmio_read8; width-matched.
-    unsafe { write_volatile(addr as usize as *mut u32, v) }
+    unsafe { write_volatile(kaddr(addr) as *mut u32, v) }
 }
 
 /// ECAM config-space writes (BAR sizing/assignment, PCI_COMMAND) — the
@@ -646,7 +647,7 @@ fn ecam_write32(base: u64, bus: u8, dev: u8, fun: u8, off: u8, v: u32) {
     debug_assert!(addr + 4 <= BOOT_IDENTITY_LIMIT);
     // SAFETY: as ecam_read32 — bus inside the MCFG range, window inside
     // the boot identity map (both checked in discover_and_print).
-    unsafe { write_volatile(addr as usize as *mut u32, v) }
+    unsafe { write_volatile(kaddr(addr) as *mut u32, v) }
 }
 
 #[cfg(dev_ether)]
@@ -654,7 +655,7 @@ fn ecam_write16(base: u64, bus: u8, dev: u8, fun: u8, off: u8, v: u16) {
     let addr = ecam_addr(base, bus, dev, fun, off);
     debug_assert!(addr + 2 <= BOOT_IDENTITY_LIMIT);
     // SAFETY: as ecam_write32; width-matched to the COMMAND field.
-    unsafe { write_volatile(addr as usize as *mut u16, v) }
+    unsafe { write_volatile(kaddr(addr) as *mut u16, v) }
 }
 
 /// The PciCfg seam over the device's ECAM config page (the aarch64
@@ -731,37 +732,37 @@ impl RingMem for VolatileMem {
         // SAFETY: ring pages are pagealloc pages (PA==VA inside the
         // identity map) or the bounds-checked notify window; volatile is
         // the DMA-memory floor.
-        unsafe { read_volatile(addr as *const u16) }
+        unsafe { read_volatile(kaddr(addr as u64) as *const u16) }
     }
     fn read_u32(&self, off: usize) -> u32 {
         let addr = self.base + off;
         debug_assert!(addr + 4 <= BOOT_IDENTITY_LIMIT as usize);
         // SAFETY: as read_u16; width-matched.
-        unsafe { read_volatile(addr as *const u32) }
+        unsafe { read_volatile(kaddr(addr as u64) as *const u32) }
     }
     fn read_u64(&self, off: usize) -> u64 {
         let addr = self.base + off;
         debug_assert!(addr as u64 + 8 <= BOOT_IDENTITY_LIMIT);
         // SAFETY: as read_u16; width-matched.
-        unsafe { read_volatile(addr as *const u64) }
+        unsafe { read_volatile(kaddr(addr as u64) as *const u64) }
     }
     fn write_u16(&self, off: usize, v: u16) {
         let addr = self.base + off;
         debug_assert!(addr + 2 <= BOOT_IDENTITY_LIMIT as usize);
         // SAFETY: as read_u16; the volatile write is the DMA floor.
-        unsafe { write_volatile(addr as *mut u16, v) }
+        unsafe { write_volatile(kaddr(addr as u64) as *mut u16, v) }
     }
     fn write_u32(&self, off: usize, v: u32) {
         let addr = self.base + off;
         debug_assert!(addr + 4 <= BOOT_IDENTITY_LIMIT as usize);
         // SAFETY: as read_u16; width-matched.
-        unsafe { write_volatile(addr as *mut u32, v) }
+        unsafe { write_volatile(kaddr(addr as u64) as *mut u32, v) }
     }
     fn write_u64(&self, off: usize, v: u64) {
         let addr = self.base + off;
         debug_assert!(addr as u64 + 8 <= BOOT_IDENTITY_LIMIT);
         // SAFETY: as read_u16; width-matched.
-        unsafe { write_volatile(addr as *mut u64, v) }
+        unsafe { write_volatile(kaddr(addr as u64) as *mut u64, v) }
     }
 }
 
@@ -775,7 +776,7 @@ fn alloc_ring_page() -> port::Result<u64> {
     // SAFETY: the page is freshly allocated (exclusively ours) inside
     // the identity-mapped first 4 GiB; the zero fill writes exactly the
     // one page (T-07-08 hygiene: no stale data in DMA buffers).
-    unsafe { core::ptr::write_bytes(va as *mut u8, 0, 4096) };
+    unsafe { core::ptr::write_bytes(kaddr(va as u64) as *mut u8, 0, 4096) };
     Ok(pa.addr())
 }
 
@@ -1145,7 +1146,7 @@ fn virtnet_tx_post(frame: &[u8]) -> port::Result<bool> {
     // bounds-checked it); the slot is free (tx_next_slot), so the page
     // carries no live frame.
     unsafe {
-        core::ptr::copy_nonoverlapping(frame.as_ptr(), pa as usize as *mut u8, frame.len())
+        core::ptr::copy_nonoverlapping(frame.as_ptr(), kaddr(pa) as *mut u8, frame.len())
     };
     let posted = state.tx.tx_post(
         pa,
@@ -1277,7 +1278,7 @@ pub fn virtio_net_irq() {
                     // page by construction.
                     let frame = unsafe {
                         core::slice::from_raw_parts(
-                            (pa as usize + virtio::virtio_net_frame_offset()) as *const u8,
+                            (kaddr(pa) + virtio::virtio_net_frame_offset()) as *const u8,
                             frame_len,
                         )
                     };

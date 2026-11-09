@@ -158,7 +158,7 @@ impl Ioapic {
     fn select(&self, sel: u8) {
         // SAFETY: base was bounds-checked at new() inside the boot
         // identity map; the volatile write is the MMIO floor.
-        unsafe { write_volatile((self.base + IOREGSEL) as *mut u32, u32::from(sel)) }
+        unsafe { write_volatile(crate::proc::kaddr((self.base + IOREGSEL) as u64) as *mut u32, u32::from(sel)) }
     }
 
     fn read_reg(&self, sel: u8) -> u32 {
@@ -166,13 +166,13 @@ impl Ioapic {
         // SAFETY: the data window is 4 bytes past the select window,
         // inside the same bounds-checked span; the volatile read is the
         // MMIO floor.
-        unsafe { read_volatile((self.base + IOWIN) as *const u32) }
+        unsafe { read_volatile(crate::proc::kaddr((self.base + IOWIN) as u64) as *const u32) }
     }
 
     fn write_reg(&self, sel: u8, val: u32) {
         self.select(sel);
         // SAFETY: as read_reg; the volatile write is the MMIO floor.
-        unsafe { write_volatile((self.base + IOWIN) as *mut u32, val) }
+        unsafe { write_volatile(crate::proc::kaddr((self.base + IOWIN) as u64) as *mut u32, val) }
     }
 
     /// Fold the MADT IntSrcOverrides: the GSI an ISA-source IRQ routes

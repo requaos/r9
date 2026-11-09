@@ -562,7 +562,30 @@ bootidentitypt3:
 bootmachpt3:
 	// The CPU part
 	.quad	(0<<30) + (PtePS | PteRW | PteP)
-	.space	4096/2 - 1*8
+	.quad	0
+	// The device-MMIO alias (14-06): ALL FOUR low GiB as PA leaves at
+	// PDPT entries 2..5 — VAs [0xFFFFFF00_80000000,
+	// 0xFFFFFF01_80000000).  The device bases (ECAM 0xB0000000-class,
+	// virtio BARs 0xFE000000-class, IOAPIC 0xFEC00000, LAPIC
+	// 0xFEE00000) are otherwise reachable ONLY through the boot
+	// table's PML4[0] identity window, which per-proc tables do not
+	// carry ([0] is the user half) — a post-fork device access (the
+	// tick's xAPIC EOI, an ether IRQ's virtio queue work) faulted
+	// under the running proc's CR3 (observed live: a kernel write
+	// fault at 0xFEE00380 in timer::tick under a proc table).  This
+	// window rides PML4[510], which every proc table SHARES (the
+	// kernel-half copy), so the alias is valid under every CR3.
+	// NOTE: the KZERO alias (PML4[511]) CANNOT host these — KZERO
+	// sits 2 GiB below the top of the canonical space, so KZERO+pa
+	// overflows for every pa >= 2 GiB (measured: checked_add panics
+	// at the ECAM base 0xB0000000).  Same leaf discipline as
+	// bootidentitypt3's 4th-GiB note: plain WB leaves — do not
+	// re-split without re-proving both accels.
+	.quad	(0<<30) + (PtePS | PteRW | PteP)
+	.quad	(1<<30) + (PtePS | PteRW | PteP)
+	.quad	(2<<30) + (PtePS | PteRW | PteP)
+	.quad	(3<<30) + (PtePS | PteRW | PteP)
+	.space	4096/2 - 6*8
 	// The node part
 	.quad	(0<<30) + (PtePS | PteRW | PteP)
 	.space	4096/2 - 1*8

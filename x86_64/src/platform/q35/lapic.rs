@@ -167,7 +167,7 @@ impl Lapic {
                 // register span (bounds-checked by offset_addr); the
                 // volatile read is the MMIO-volatility floor — reads
                 // may have side effects (the CCR class), never elided.
-                unsafe { read_volatile(src as *const u32) }
+                unsafe { read_volatile(crate::proc::kaddr(src as u64) as *const u32) }
             }
             ApicMode::X2Apic => {
                 if offset >= LAPIC_SPAN {
@@ -189,7 +189,7 @@ impl Lapic {
                 // SAFETY: dst lies inside the identity-mapped LAPIC
                 // register span (bounds-checked by offset_addr); the
                 // volatile write is the MMIO-volatility floor.
-                unsafe { write_volatile(dst as *mut u32, val) }
+                unsafe { write_volatile(crate::proc::kaddr(dst as u64) as *mut u32, val) }
             }
             ApicMode::X2Apic => {
                 if offset >= LAPIC_SPAN {
