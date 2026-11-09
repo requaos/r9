@@ -37,13 +37,6 @@ pub const TIMER_VECTOR: u8 = 0x20;
 pub(crate) const USER_DATA_SEL: u16 = Gdt::udatasel() | MachMode::User as u16;
 pub(crate) const USER_TEXT_SEL: u16 = Gdt::utextsel() | MachMode::User as u16;
 
-/// UTZERO — first address of user text (ABI.md's stack-top policy);
-/// +0x28 (past the a.out header, HEADR=40) is the seeded first
-/// process's linked entry — 6l's `INITTEXT = 0x200000+HEADR`.
-/// Unused until 14-05's exec_bootstrap (touser's planted entry).
-#[allow(dead_code)]
-const UTZERO: u64 = 2 * 1024 * 1024;
-
 /// The byte offset of the TSS's rsp0 within the Mach — the SYSCALL
 /// entry's kernel-stack switch reads it gs-relative (see
 /// `syscallentry`).  Computed from the structs, never hand-pinned.
@@ -447,57 +440,6 @@ unsafe extern "C" fn intrcommon() {
         trap = sym trap,
         KTEXT_SEL = const 8,
         RCS_OFFSET = const UREG_CS_OFFSET,
-        options(att_syntax))
-}
-
-/// touser — the first ring-3 entry (the donor l64syscall.s:8-22).
-///
-/// Input contract (donor-verbatim): the user sp arrives in `%rbp`
-/// (RARG, the 6c first-argument register — the donor's `MOVQ RARG,
-/// SP`); the entry ip is fixed at `UTZERO+0x28` (the seeded first
-/// process, past the a.out header) and the flags at `If` — exec'd
-/// processes instead enter through the frame-return tail
-/// (`syscallreturn`), which is why the donor can fix both here.
-/// 14-05's exec_bootstrap hands the first process off through this.
-///
-/// CLI, SWAPGS (kernel GS base → the user base 0; the arming's
-/// KernelGSbase=0 makes the pair land right), the flat user data
-/// selector into DS/ES/FS/GS, CX=ip, R11=flags, SP=user sp, SYSRETQ
-/// (CS/SS derive from STAR's +16/+8 arithmetic; the planted flags
-/// carry IF=1 — the unmask-at-handoff discipline).
-///
-/// # Safety
-///
-/// Invoked at the ring-3 handoff with interrupts masked; the caller
-/// must have a user address space live and the TSS rsp0 set to the
-/// entering process's kernel stack.
-
-// Unused until 14-05's exec_bootstrap hands the first process off —
-// nothing can reach it while no user image exists (armed-but-idle).
-#[allow(dead_code)]
-#[unsafe(link_section = ".trap")]
-#[unsafe(naked)]
-pub unsafe extern "C" fn touser() {
-    naked_asm!(
-        r#"
-        cli;
-        swapgs;
-        movl ${UDS}, %eax;
-        movw %ax, %ds;
-        movw %ax, %es;
-        movw %ax, %fs;
-        movw %ax, %gs;
-
-        movq ${ENTRY}, %rcx;
-        movq ${IF}, %r11;
-
-        movq %rbp, %rsp;
-
-        sysretq;
-        "#,
-        UDS = const USER_DATA_SEL,
-        ENTRY = const UTZERO + 0x28,
-        IF = const 0x200,    // If — the user enters with IF=1
         options(att_syntax))
 }
 
