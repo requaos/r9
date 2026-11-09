@@ -412,8 +412,20 @@ WRAP
             # NAR hash (what this attr checks)
             # 3cb7f2637bf8f10aeea2760af9327b27e0a2ea855a085f3cc24ce1145d925735
             # (sha256-PLfyY3v…), in three-way agreement with the FOD's own
+            # measured got-value.  The IN fixes (IN-01's park-print
+            # removal from reschedule's hot path, IN-02's dead
+            # touser/UTZERO deletion — kernel bytes again) re-staled it
+            # once more; re-wired at 2679bb7 with the same
+            # two-derivation proof: two independent fresh-kernel builds
+            # (version-override clones reviewfix2-proof-a/-b) through
+            # the non-FOD bootIso realization produced the
+            # byte-identical ISO — file-level sha256
+            # b0435dd294c6face846032c3535ea389a2296146fdbefed095278d9b62044a73,
+            # NAR hash (what this attr checks)
+            # ada738310c47b9236f48f1c691129e4d2faa66095acc140ba2def8d1d8ee7ade
+            # (sha256-rac4MQx…), in three-way agreement with the FOD's own
             # measured got-value.
-            outputHash = "sha256-PLfyY3v48QruonYK+TJ7J+Ci6oVaCF88wkzhFF2SVzU=";
+            outputHash = "sha256-rac4MQxHuSNvSPHGkRKeTS+qZglazBQLot740djuet4=";
           };
         });
 
