@@ -94,8 +94,9 @@ pub struct Ureg {
 
 // Pinned byte offsets from Harvey's amd64/include/ureg.h, the
 // D-01 frozen source of truth (published as amd64/ABI.md).
-// Always on — any layout drift fails `cargo build`, no Harvey
-// checkout needed (the xtask ureg-check covers the header itself).const _: () = assert!(core::mem::offset_of!(Ureg, ax) == 0);
+// Always on — any layout drift fails `cargo build`, no Harvey checkout
+// needed (the xtask ureg-check covers the header itself).
+const _: () = assert!(core::mem::offset_of!(Ureg, ax) == 0);
 const _: () = assert!(core::mem::offset_of!(Ureg, bp) == 48);
 const _: () = assert!(core::mem::offset_of!(Ureg, r15) == 112);
 const _: () = assert!(core::mem::offset_of!(Ureg, ds) == 120);
