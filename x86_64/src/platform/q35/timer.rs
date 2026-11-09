@@ -223,10 +223,23 @@ pub fn tick() {
         crate::proc::tick_timeouts(prev + 1);
         crate::proc::preempt();
     }
-    // The polled console-RX sweep: drain + echo the 16550 (the
-    // bring-up console's RX path rides the tick; IRQ-driven RX is not
-    // this phase).
+    // The console-RX sweep, cfg-keyed (aarch64's rx_irq echo/buffer
+    // split re-keyed to the tick-polled 16550): the bring-up profile
+    // echoes typed bytes verbatim (the Phase-13 typed-probe gate — no
+    // reader exists, the wire echo is the proof); the exec profile
+    // feeds the RX ring (uart16550::cons_rx) and wakes cons readers —
+    // the cooked echo moves to the devcons input engine (reader
+    // context, the echo hook), never tick context (the Console-lock
+    // race the aarch64 P8 rule forbids).
+    #[cfg(not(dev_exec))]
     crate::uart16550::rx_echo(crate::uart16550::COM1);
+    #[cfg(dev_exec)]
+    {
+        crate::uart16550::rx_ring_buffer(crate::uart16550::COM1);
+        if crate::uart16550::cons_rx_pending() {
+            crate::proc::cons_input_wake();
+        }
+    }
 }
 
 /// The plausible-TSC sanity floor/ceiling for CPUID-reported

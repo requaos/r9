@@ -328,6 +328,15 @@ const BOOT_ENTRY: &[u8] = b"/boot/boot";
 #[cfg(all(dev_exec, not(dev_bootchain)))]
 const BOOT_ENTRY: &[u8] = b"/amd64/init";
 
+/// devcons's echo hook (the aarch64 cons_echo re-key): cooked-mode
+/// input echo writes byte-exact through the device-write path — the
+/// syscall-context Console-lock precedent; devcons calls it only AFTER
+/// the INPUT lock drops (the INPUT→Console non-nesting rule).
+#[cfg(dev_exec)]
+fn cons_echo(bytes: &[u8]) {
+    port::devcons::write_bytes(bytes);
+}
+
 /// The first-process exec orchestration (the aarch64 exec_bootstrap
 /// port, 14-05): entered after the q35 IRQ-arming window with IF=0 —
 /// the whole bootstrap is a non-preemptible boot critical section (the
@@ -428,11 +437,24 @@ fn exec_bootstrap(facts: &mb2::Facts) -> ! {
         list: proc::current_fd_list,
     });
     port::devsrv::set_resolve_hook(proc::current_fd_resolve);
-    // NOTE vs aarch64: no devcons ConsHooks/RandomHooks registration —
-    // the x86_64 console RX rides the tick's polled 16550 sweep (there
-    // is no PL011-ring analog to drain this era) and there is no DTB
-    // rng-seed source; the marker binary writes only (pwrite on fd 1,
-    // no hook needed by the write path).
+    // devcons's read-path hooks — the aarch64 registration re-keyed
+    // (main.rs:536 there): the console's input engine rides the 16550
+    // RX ring (drain_rx — the tick's polled sweep is the producer, see
+    // uart16550.rs), the sched machinery (block), and the note-group
+    // post (the DEL path's foreground-group target).  The echo hook —
+    // cooked-mode input echo rides the device-write path (write_bytes,
+    // the syscall-context Console-lock precedent); devcons calls it
+    // only AFTER the INPUT lock drops.  14-07: the composed chain's
+    // interactive gate is the first console-READ consumer on x86_64 —
+    // without these hooks rc's #c/cons read errors ("cons read path
+    // not initialized") and the typed bytes never leave the UART.
+    port::devcons::set_cons_hooks(port::devcons::ConsHooks {
+        current: proc::current_pid,
+        drain_rx: crate::uart16550::cons_rx_drain,
+        block: proc::cons_block_current,
+        post_group: proc::post_note_group_of_members,
+        echo: cons_echo,
+    });
 
     // The kernel-seeded ROOT env group — the ONE mechanism replacing
     // both 9k's #ec config env and an argv hint (the aarch64 seeding
