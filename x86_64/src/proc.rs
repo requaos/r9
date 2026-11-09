@@ -1683,7 +1683,6 @@ pub fn reschedule() {
         // would be wrong), so mark it like sched()'s blocked procs.
         curp.blocked_in_kernel = true;
     }
-    println!("sched: park {cur_pid}");
     // Park into the scheduler context.  The swtch saves this proc's
     // callee-saved state into its PROC_TABLE-resident context — never
     // this kstack — so nothing under this frame is invalidated by any
