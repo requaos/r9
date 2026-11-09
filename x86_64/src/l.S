@@ -51,6 +51,8 @@
 .set Cr4PSE,			(1<<4)		// Page-Size Extensions
 .set Cr4PAE,			(1<<5)		// Physical Address Extension
 .set Cr4PGE,			(1<<7)		// Page-Global Enable
+.set Cr4OSFXSR,			(1<<9)		// OS Support for FXSAVE/FXRSTOR+SIMD
+.set Cr4OSXMMEXCPT,		(1<<10)		// OS Support for unmasked SIMD exceptions
 .set Cr4FSGSBASE,		(1<<16)		// (RD|WR)(FS|GS)BASE Extension
 
 .set IA32_EFER,			0xc0000080	// Extended Feature Enable
@@ -240,9 +242,16 @@ mb2_header_end:
 	// architectural IA32_GS_BASE MSR instead, which needs no enable
 	// bit; the FSGSBASE instructions stay retired until something
 	// needs per-instruction GS swaps (Phase 14).
+	// 14-08: arm OSFXSR+OSXMMEXCPT — user SSE #UDs without OSFXSR
+	// (6c's libc memcpy.s movdqu tail and every double the fmt family
+	// prints; surfaced live by the first tier-1 sweep on r9-x86_64 as
+	// T1-FAIL awk/float-d01/seq, vector 6).  The kernel itself stays
+	// SSE-free (14-04's no-soft-float rule); these bits only unmask
+	// USER use, and exec resets the unit per image (exec.rs's
+	// fp_reset_for_exec) — the donor's fpstate=FPinit equivalent.
 	movl	%cr4, %eax
 	andl	$~Cr4PSE, %eax
-	orl	$(Cr4PGE|Cr4PAE), %eax
+	orl	$(Cr4PGE|Cr4PAE|Cr4OSFXSR|Cr4OSXMMEXCPT), %eax
 	movl	%eax, %cr4
 
 	// Set up the Extended Feature Enable (EFER) MSR, enabling
@@ -472,9 +481,10 @@ b1982:
 	// Enable and activate Long Mode.
 	movl	%cr4, %eax
 	andl	$~Cr4PSE, %eax		// PSE always true in long mode
-	// Enable page global, physical address extension, and FS/GS base
-	// load/store instruction support.
-	orl	$(Cr4PGE|Cr4PAE|Cr4FSGSBASE), %eax
+	// Enable page global, physical address extension, FS/GS base
+	// load/store instruction support, and (14-08) the user-SSE pair —
+	// an AP boot must not lose what CPU0's path arms.
+	orl	$(Cr4PGE|Cr4PAE|Cr4FSGSBASE|Cr4OSFXSR|Cr4OSXMMEXCPT), %eax
 	movl	%eax, %cr4
 
 	movl	$IA32_EFER, %ecx	// Extended Feature Enable

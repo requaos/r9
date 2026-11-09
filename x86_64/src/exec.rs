@@ -41,12 +41,16 @@ use crate::proc::{self, ByteBacking, ByteSource, Proc, ProcState, SegKind, Segme
 /// never writes Tos fields this phase (cheap insurance only).
 const TOS_SIZE: usize = 88;
 
-/// 14-06: the eagerly-mapped stack depth at exec (32 pages = 128 KiB)
-/// — the no-pager era's stand-in for the aarch64 demand-paged stack:
-/// the chain's boot(8) already ran ~8.6 KiB deep, and rc's parser
-/// recursion goes deeper; the 16 MiB USTKSIZE policy bound stays the
-/// ceiling, the pager is the follow-up.
-const STACK_EAGER_PAGES: usize = 32;
+/// 14-06: the eagerly-mapped stack depth at exec — the no-pager era's
+/// stand-in for the aarch64 demand-paged stack: the chain's boot(8)
+/// already ran ~8.6 KiB deep, and rc's parser recursion goes deeper;
+/// the 16 MiB USTKSIZE policy bound stays the ceiling, the pager is the
+/// follow-up.  14-08 grew it 32→64 pages (128→256 KiB): the tier-1
+/// sweep's cmp ran `uchar buf1[65536], buf2[65536]` locals — a frame
+/// 392 bytes PAST the 32-page seed faulted at USTKTOP-0x10188 (vector
+/// 14, the sweep's only stack-class T1-FAIL); 64 pages gives the
+/// deepest current consumer 2x headroom.
+const STACK_EAGER_PAGES: usize = 64;
 /// Cap on exec args — the initial stack frame must fit the seed page
 /// (the byte-fit check in check_seed_fit is the REAL constraint; this
 /// pre-cap just keeps the slots array honest).  32 matches sys_exec's
@@ -117,7 +121,43 @@ fn install_image(
     // SEED: the eager stack-side pages — the top-of-stack seed page
     // (args + the Tos struct at its very top) and the deeper eager
     // stack below it (14-06).
-    seed_user_pages(proc, args)
+    let seeded = seed_user_pages(proc, args);
+    if seeded.is_ok() {
+        // 14-08: every exec starts with the FP unit at power-on
+        // defaults — the donor's fpstate=FPinit equivalent (sysproc's
+        // exec clears the FP state; 9k's first-use trap loads the
+        // init template).  Without this, a new image inherits the
+        // previous FP user's x87/MXCSR state.
+        fp_reset_for_exec();
+    }
+    seeded
+}
+
+/// 14-08: reset the FP unit for the incoming image — fninit (x87
+/// env/stack) + ldmxcsr 0x1f80 (SSE: all exceptions masked, rounding
+/// nearest, the architecture's reset value).  CR4.OSFXSR/OSXMMEXCPT
+/// are armed at boot (l.S) so user SSE instructions execute; the
+/// KERNEL stays SSE-free (14-04's no-soft-float rule) so nothing
+/// clobbers this between the reset and the ring-3 handoff.  Era limit
+/// (recorded): no per-proc FXSAVE/XRSTOR on context switch — the FP
+/// registers survive switches in place, correct while the kernel
+/// never touches FP and FP-using images never interleave (the
+/// sequential sweep); the real FP context switch lands with the pager
+/// era.
+#[inline]
+fn fp_reset_for_exec() {
+    // ldmxcsr takes a MEMORY operand only (m32 — register form is
+    // invalid), so the reset value rides the stack and the asm
+    // dereferences it.
+    let mxcsr: u32 = 0x1f80;
+    unsafe {
+        core::arch::asm!(
+            "fninit",
+            "ldmxcsr ({mxcsr})",
+            mxcsr = in(reg) &mxcsr,
+            options(att_syntax),
+        );
+    }
 }
 
 /// Eager text mapping (the x86_64 policy deviation): every text page
