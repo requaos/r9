@@ -166,19 +166,25 @@ mb2_header_end:
 	// the STASHED info's tags (8-aligned advance, the kernel-side
 	// walker's rule), copy the first type-3 module's bytes to the
 	// .bss stash capped at its size, and record the copied length (0 =
-	// no module — the kernel errors loudly in that case).
+	// no module — the kernel errors loudly in that case).  A corrupt
+	// tag size (under 8, or so large the +7 rounds the advance to 0)
+	// bails to no-module rather than stalling the walk — mb2.rs, which
+	// rejects size<8 loudly, never runs if the asm walk hangs first.
 	movl	$(mb2info - KZERO), %esi
 	movl	$8, %ebx
-1:	cmpl	$(MB2INFOMAX - 8), %ebx
-	jae	4f			// walk exhausted: no module tag
+1:	cmpl	$(MB2INFOMAX - 16), %ebx	// the tag header AND the fixed
+	jae	4f			// module body must fit the stash
 	movl	(%esi,%ebx), %eax	// tag type
 	movl	4(%esi,%ebx), %ecx	// tag size
+	cmpl	$8, %ecx		// a tag is at least its 8-byte header
+	jb	4f			// corrupt — bail; mb2.rs reports loudly
 	cmpl	$3, %eax		// TAG_MODULE
 	je	2f
 	testl	%eax, %eax		// TAG_END
 	jz	4f
 	leal	7(%ecx), %ecx
 	andl	$-8, %ecx
+	jz	4f			// size+7 wrapped to 0: no advance — bail
 	addl	%ecx, %ebx		// 8-aligned advance
 	jmp	1b
 2:	movl	8(%esi,%ebx), %edx	// mod_start (u32 phys)
