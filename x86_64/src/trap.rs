@@ -19,8 +19,14 @@ pub const DOUBLE_FAULT_TRAPNO: u8 = 8;
 /// exists (the stub array and Idt::init cover all 256).
 pub const TIMER_VECTOR: u8 = 0x20;
 
-pub const SWAPPED: u8 = 0x80;
-pub const SWAPPED_CS_OFFSET: usize = 7;
+// The retired SWAPGS witness-bit discipline (SWAPPED/SWAPPED_CS_OFFSET,
+// CR-01's class): its bit lived in the pushed CS qword's upper bytes,
+// which are only written on the from-user entry arm — a kernel-origin
+// frame inherited stale stack bytes there, and a stale set bit made
+// intrcommon's return swap %gs spuriously (the 14-07 root cause; the
+// discipline is now the donor's: both sides cmpw the saved CS word,
+// which carries only CPU-written selector bits).  Retired with the
+// fix; the history lives in the git log and 14-07's SUMMARY.
 
 // The SYSCALL entry contract's flat user selectors — the donor's
 // SSEL(si, SsRPL3) re-keyed to r9's GDT order: udata@0x18 → 0x1B
@@ -283,20 +289,14 @@ pub unsafe extern "C" fn intrspecial() {
         popq %rax;
         je 1f;
         swapgs;
-        // The scratch pushes above are popped, so %rsp is back at
-        // its entry value and the frame matches intrregular's: the
-        // saved CS word is at +24, and byte SWAPPED_CS_OFFSET+24 is
-        // its high byte (the free bit 63 of the zero-extended CS
-        // push).  +16 would be the saved RIP's high byte — setting
-        // the witness there would corrupt the return RIP.
-        orb ${SWAPPED}, {SWAPPED_CS_OFFSET}(%rsp)
+        // No witness bit: the return side re-tests the saved CS word
+        // itself (the donor's CMPW discipline — a stale upper byte in
+        // the pushed CS qword can never forge the swap-back decision).
         1:
         pushq ${intrcommon};
         retq;
         "#,
         KMACH = const dat::KMACH,
-        SWAPPED = const SWAPPED,
-        SWAPPED_CS_OFFSET = const SWAPPED_CS_OFFSET + 24,
         intrcommon = sym intrcommon,
         options(att_syntax))
 }
@@ -318,13 +318,10 @@ unsafe extern "C" fn intrregular() {
         cmpw ${KTEXT_SEL}, {CS_OFFSET}(%rsp);
         je 1f;
         swapgs;
-        orb ${SWAPPED}, {SWAPPED_CS_OFFSET}(%rsp)
         1:
         jmp {intrcommon}
         "#,
         KTEXT_SEL = const 8,
-        SWAPPED = const SWAPPED,
-        SWAPPED_CS_OFFSET = const SWAPPED_CS_OFFSET + 24,
         CS_OFFSET = const 24,
         intrcommon = sym intrcommon,
         options(att_syntax));
@@ -395,14 +392,21 @@ unsafe extern "C" fn intrcommon() {
         movq %rdi, {TRAPNO_OFFSET}(%rsp);
         movq %rsp, %rsi;
         callq {trap};
-        // If we're returning to kernel mode, don't swap %gs.  The
-        // witness bit lands in the HIGH BYTE of the saved CS word
-        // (SWAPPED_CS_OFFSET + UREG_CS_OFFSET = 7 + 152 = 159); the
-        // 184-byte re-key moved UREG_CS_OFFSET 176→152 and this
-        // expression rides the const, so the witness still tests the
-        // CS qword — never the saved RIP (the CR-01 class, pinned by
-        // re-derivation at every layout change).
-        btr ${SWAPPED}, {SWAPPED_CS_OFFSET}(%rsp);
+        // If we're returning to kernel mode, don't swap %gs — the
+        // donor's discipline (l64idt.s's return-side CMPW 48(SP)):
+        // re-test the SAVED CS WORD itself instead of a witness bit.
+        // A witness bit in the pushed CS qword's upper bytes is only
+        // ever written on the from-user arm, so a kernel-origin frame
+        // inherits whatever stale bytes sit at that stack slot — on
+        // the Mach scheduler stack (the idle ticks) a stale set bit
+        // made the return swap %gs spuriously and left the per-CPU GS
+        // pair at ring-3 orientation mid-kernel, so the next SYSCALL
+        // entry's Mach-scratch store faulted (the 14-07 composed-gate
+        // root cause, caught by a GS-observation ring: the flip
+        // happened inside an idle-hlt tick's return).  The 16-bit
+        // compare reads only the selector bits the CPU pushed —
+        // immune to the stale upper bytes by construction.
+        cmpw ${KTEXT_SEL}, {RCS_OFFSET}(%rsp);
         je 1f;
         swapgs;
         1:
@@ -439,10 +443,10 @@ unsafe extern "C" fn intrcommon() {
         // Go back to whence you came.
         iretq
         "#,
-        SWAPPED = const SWAPPED,
-        SWAPPED_CS_OFFSET = const SWAPPED_CS_OFFSET + UREG_CS_OFFSET,
         TRAPNO_OFFSET = const UREG_TRAPNO_OFFSET,
         trap = sym trap,
+        KTEXT_SEL = const 8,
+        RCS_OFFSET = const UREG_CS_OFFSET,
         options(att_syntax))
 }
 
@@ -467,6 +471,7 @@ unsafe extern "C" fn intrcommon() {
 /// Invoked at the ring-3 handoff with interrupts masked; the caller
 /// must have a user address space live and the TSS rsp0 set to the
 /// entering process's kernel stack.
+
 // Unused until 14-05's exec_bootstrap hands the first process off —
 // nothing can reach it while no user image exists (armed-but-idle).
 #[allow(dead_code)]
