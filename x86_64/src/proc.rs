@@ -1796,16 +1796,26 @@ pub(crate) fn dump_proc_states() {
         }
         let n = p.name.iter().position(|&b| b == 0).unwrap_or(KNAMELEN);
         let name = core::str::from_utf8(&p.name[..n]).unwrap_or("?");
-        let parent_pid = if p.parent.is_null() {
+        // 14-06 cycle 3: the dump must SURVIVE a corrupt parent —
+        // it exists to diagnose wedges, and the first live run of the
+        // chain wedged with one proc holding a garbage parent pointer
+        // (the dump crashed before naming the blocked procs).  Print
+        // the raw pointer when it is outside the table; the audit of
+        // WHO set it follows from the printed value.
+        let lo = ptr::from_ref(&PROC_TABLE) as usize;
+        let hi = lo + core::mem::size_of::<ProcTable>();
+        let pp = p.parent as usize;
+        let parent_pid = if pp == 0 {
             0
+        } else if (lo..=hi).contains(&pp) {
+            // SAFETY: bounds-proven table-resident; the lock is held.
+            unsafe { (*(pp as *const Proc)).pid }
         } else {
-            // SAFETY: parent names a PROC_TABLE-resident Proc and the
-            // table lock is held — the deref cannot race.
-            unsafe { (*p.parent).pid }
+            0xffff
         };
         let argv_str = core::str::from_utf8(&p.argv).unwrap_or("?");
         println!(
-            "wedgedbg: pid={} state={} cons_wait={} blocked_in_kernel={} sleep_until={} name={} parent={} argv={}",
+            "wedgedbg: pid={} state={} cons_wait={} blocked_in_kernel={} sleep_until={} name={} parent={} (raw {:#x}) argv={}",
             p.pid,
             state_name(p.state),
             p.cons_waiting,
@@ -1813,6 +1823,7 @@ pub(crate) fn dump_proc_states() {
             p.sleep_until,
             name,
             parent_pid,
+            pp,
             argv_str
         );
     }
