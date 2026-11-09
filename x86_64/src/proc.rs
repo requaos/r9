@@ -1700,12 +1700,31 @@ pub fn reschedule() {
     // the interrupt path; the iretq pops the frame at our kstack top.
 }
 
-/// How the sched loop resumes the picked proc: swtch into its saved
-/// kernel context (blocked mid-syscall) or trap_return into its frame
-/// (everything else).
-enum Resume {
-    Switch(*mut swtch::Context),
-    Return(*mut Ureg),
+/// A fresh (never-entered) proc's first ring-3 entry: EVERY resume —
+/// first entry included — rides the sched loop's swtch arm (see
+/// sched_loop for why the loop must never diverge via trap_return).
+/// The fork child's context is seeded to enter here with its planted
+/// Ureg pointer carried in rbx (one of swtch's saved registers); this
+/// shim hands it to trap_return, which iretq's into ring 3 and
+/// diverges ON THE CHILD'S OWN KSTACK — the scheduler's context was
+/// re-saved by the swtch that landed here, so it stays resumable.
+#[cfg(not(test))]
+#[unsafe(naked)]
+unsafe extern "C" fn first_entry() -> ! {
+    use core::arch::naked_asm;
+    naked_asm!(
+        "movq %rbx, %rdi",
+        "jmp {target}",
+        target = sym crate::trap::trap_return,
+        options(att_syntax),
+    )
+}
+
+/// The host-test stand-in (the swtch.rs doctrine): no kernel stacks
+/// exist on the host — loud, never a silent fallthrough.
+#[cfg(test)]
+unsafe extern "C" fn first_entry() -> ! {
+    unreachable!("first_entry is unavailable on the host (no kernel stacks)")
 }
 
 /// The scheduler context — a kernel-context switch target running
@@ -1755,21 +1774,38 @@ pub fn sched() {
 /// The scheduler loop (entered via swtch on the Mach's scheduler
 /// stack): pick the next Ready proc — pick_next applies the TSS rsp0 +
 /// CURFRAME + CR3 + current-proc swap under the PROC_TABLE lock
-/// BEFORE the resume — then resume it per its kind.  Nothing Ready →
-/// hlt with IRQs briefly unmasked: the tick fires, re-arms, and the
-/// loop re-scans.
+/// BEFORE the resume — then resume it through THE ONE swtch arm.
+/// Nothing Ready → hlt with IRQs briefly unmasked: the tick fires,
+/// re-arms, and the loop re-scans.
+///
+/// 14-06 root cause this shape closes: the loop ONCE had a second arm
+/// — `Resume::Return` — that called trap_return(frame) directly for a
+/// fresh fork's first entry.  trap_return diverges (it never
+/// returns), so that arm left SCHED_CONTEXT holding the LAST
+/// Switch-arm save — a save whose saved sp/return-address slot the
+/// scheduler's own continuation had already popped and reused (the
+/// next pick_next call lands its return address on exactly that
+/// slot).  The next blocked proc's swtch-to-SCHED_CONTEXT then re-
+/// entered the loop at the STALE save: the ret popped a reused slot
+/// and the match read its discriminant from whatever RAX carried —
+/// execution went wild with corrupted stack locals, producing the
+/// chain's deterministic "lying panic" right after init's first block
+/// (different panic message per build layout, self-contradictory
+/// values — cold-block-merged panic entries under a garbage register
+/// state; the truncated prints were the wild path landing inside the
+/// console lock's usage).  Now EVERY resume rides the swtch arm —
+/// fresh forks enter via the first_entry trampoline seeded into their
+/// context at fork time — so each resume re-saves SCHED_CONTEXT and
+/// every sched() re-entry lands on a CURRENT save.
 fn sched_loop() -> ! {
     let mut all_blocked = 0u32;
     loop {
         match pick_next() {
             // SAFETY: sched_context() is seeded; ctx names the picked
-            // proc's PROC_TABLE-resident saved context.
-            Some(Resume::Switch(ctx)) => unsafe { swtch::swtch(&mut *sched_context(), &*ctx) }
-            // SAFETY: frame names the picked proc's kstack-resident
-            // Ureg (pick_next installed the switch under the lock just
-            // above — CR3 included); trap_return iretqs into it and
-            // diverges.
-            Some(Resume::Return(frame)) => unsafe { crate::trap::trap_return(frame) },
+            // proc's PROC_TABLE-resident saved context (a mid-syscall
+            // block's sched() save, a preempt park's save, or the
+            // fork-seeded first_entry trampoline).
+            Some(ctx) => unsafe { swtch::swtch(&mut *sched_context(), &*ctx) }
             None => {
                 all_blocked += 1;
                 if all_blocked == 200_000 {
@@ -1833,12 +1869,14 @@ pub(crate) fn dump_proc_states() {
 /// applying the full switch as one PROC_TABLE-locked step (state,
 /// current-proc pointer, TSS rsp0, CURFRAME, CR3) so the resumed
 /// proc's return path reads its OWN frame, never the previous proc's.
-/// None when no other Ready proc exists.
+/// Returns the proc's saved kernel context — every resume (mid-syscall
+/// block, preempt park, or a fresh fork's first_entry trampoline)
+/// rides sched_loop's ONE swtch arm.  None when no Ready proc exists.
 ///
 /// The current proc is NOT skipped — only its scan PRIORITY wraps
 /// (the round-robin start is cur+1, so cur is picked last; the
 /// cons-read deadlock the aarch64 port documented lives here too).
-fn pick_next() -> Option<Resume> {
+fn pick_next() -> Option<*mut swtch::Context> {
     let cur_pid = current().map(|p| p.pid);
     let node = LockNode::new();
     let mut table = PROC_TABLE.lock(&node);
@@ -1855,15 +1893,11 @@ fn pick_next() -> Option<Resume> {
         set_current_proc(p);
         set_tss_rsp0(p.kstack_top as u64);
         write_curframe(p.frame);
+        p.blocked_in_kernel = false;
         // CR3 last (reschedule's ordering note): the frame pointer is
         // dereferenced only after the lock drops, under this table.
         switch_cr3(p.pml4_pa);
-        return Some(if p.blocked_in_kernel {
-            p.blocked_in_kernel = false;
-            Resume::Switch(&mut p.context as *mut swtch::Context)
-        } else {
-            Resume::Return(p.frame)
-        });
+        return Some(&mut p.context as *mut swtch::Context);
     }
     None
 }
@@ -2415,6 +2449,15 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &Ureg, flag: u64) -> R
         (*dst).ax = 0;
     }
     child.frame = (child.kstack_top - core::mem::size_of::<Ureg>()) as *mut Ureg;
+    // The child's FIRST resume rides the swtch arm like every other
+    // (sched_loop's 14-06 root-cause note): seed its context to the
+    // first_entry trampoline — pc = the shim, sp = a kstack scratch
+    // (never dereferenced: trap_return replaces rsp before any push),
+    // rbx = the planted Ureg (the shim's carrier into rdi).
+    child.context.set_return(first_entry as *const () as u64);
+    #[cfg(not(test))]
+    child.context.set_stack_pointer(child.kstack_top as u64 - 0x400);
+    child.context.rbx = child.frame as u64;
     child.parent = ptr::addr_of!(*parent) as *mut Proc;
     child.nowait = nowait;
     // Donor newproc: the child INHERITS the notify handler; the note
