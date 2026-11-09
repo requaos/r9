@@ -400,8 +400,20 @@ WRAP
             # NAR hash (what this attr checks)
             # 9706c34aa63160d1bc648863903b338879448c53372493846229e5def6ca59ac
             # — and `nix build .#boot-iso` + `--rebuild` re-verify at the
-            # wired value.
-            outputHash = "sha256-lwbDSqYxYNG8ZIhjkDsziHlEjFM3JJOEYinl3vbKWaw=";
+            # wired value.  The 14 code-review fixes (CR-01's shared
+            # seed_tos_va exec pre-check, WR-01's live ax@0 assert, WR-02's
+            # l.S tag-walk hardening — kernel bytes again) re-staled it
+            # once more; re-wired at 86a8677 with the same two-derivation
+            # proof: two independent fresh-kernel builds (version-override
+            # clones reviewfix-proof-a/-b) through the non-FOD bootIso
+            # realization produced the byte-identical ISO — file-level
+            # sha256
+            # 2be9a177cea8c6e59b080b6bf45e67bc85dd2506f3d651d16c6c797960889be5,
+            # NAR hash (what this attr checks)
+            # 3cb7f2637bf8f10aeea2760af9327b27e0a2ea855a085f3cc24ce1145d925735
+            # (sha256-PLfyY3v…), in three-way agreement with the FOD's own
+            # measured got-value.
+            outputHash = "sha256-PLfyY3v48QruonYK+TJ7J+Ci6oVaCF88wkzhFF2SVzU=";
           };
         });
 
