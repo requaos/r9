@@ -218,6 +218,15 @@ fn map_data_bss_eager(proc: &mut Proc, source: &ByteSource, aout: &AoutHeader) -
     Ok(())
 }
 
+/// The Tos struct's 16-aligned base at the very top of the seed page
+/// (USTACKTOP - TOS_SIZE rounded down — 96 bytes below the page top
+/// for the 88-byte struct).  ONE definition shared by check_seed_fit
+/// and seed_user_pages so the pre-free check can never diverge from
+/// the seeder's arithmetic.
+const fn seed_tos_va() -> usize {
+    (USTACKTOP - TOS_SIZE) & !0xf
+}
+
 /// The pre-free seed-fit check: mirrors seed_user_pages's arithmetic
 /// so exec_replace never fails for ARG-SHAPE reasons after the old
 /// image is freed (post-free ALLOCATION failures kill via the exit
@@ -227,11 +236,17 @@ fn check_seed_fit(args: &[&[u8]]) -> Result<()> {
         return Err("exec: too many args");
     }
     let strings: usize = args.iter().map(|a| a.len() + 1).sum();
-    let slots = 8 * (args.len() + 2) + 16; // argc slot + argv + nil + align slack
-    if strings + slots > PAGE_SIZE_4K {
-        return Err("exec: arg strings overflow the seed page");
+    // The seed's EXACT arithmetic (14-REVIEW CR-01): the strings grow
+    // down from seed_tos_va (96 bytes below the page top), then the
+    // [argc][argv…]…[nil] array loses up to 15 bytes to the !0xf
+    // alignment before its 8*(argc+2) bytes must fit below them — not
+    // the old strings+8n+16<=4096 approximation, whose ~80-byte
+    // optimism passed arg shapes the seeder rejected post-free.
+    let usable = seed_tos_va() - (USTACKTOP - PAGE_SIZE_4K);
+    match usable.checked_sub(strings).map(|room| room & !0xf) {
+        Some(aligned) if 8 * (args.len() + 2) <= aligned => Ok(()),
+        _ => Err("exec: arg strings overflow the seed page"),
     }
-    Ok(())
 }
 
 /// Map the two eager exec pages and write the initial stack frame
@@ -265,7 +280,7 @@ fn seed_user_pages(proc: &mut Proc, args: &[&[u8]]) -> Result<(usize, usize)> {
     // the struct's 88 bytes ever sit above the arg block.  The page is
     // zeroed; r9 writes no Tos fields (libc's plock reads tos->pid and
     // tolerates zero/garbage; getpid reads #c/pid).
-    let tos_va = (USTACKTOP - TOS_SIZE) & !0xf;
+    let tos_va = seed_tos_va();
 
     // Write [argc][argv0]…[nil] + strings into the seed page via its
     // kernel alias.  Layout ascending from user_sp (the execregs
