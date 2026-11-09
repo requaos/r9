@@ -58,7 +58,22 @@ pub mod descr {
                 .with_code(true)
                 .with_readable(true)
                 .with_present(true)
-                .with_conforming(true)
+                // NON-conforming (0x9A, not 0x9E) — the 14-06 boot-chain
+                // fix, the same latent-defect class as 14-05's trio: a
+                // CONFORMING kernel-text descriptor is indistinguishable
+                // from a non-conforming one while everything runs at
+                // CPL 0 (every gate until the first ring-3 exec), but
+                // the first RING-3-origin interrupt delivery exposed
+                // it — for a conforming gate target the delivery sets
+                // dpl := cpl, so the interrupt is delivered to the
+                // stub AT CPL 3 (no stack switch: the hardware frame
+                // pushed on the user stack, CS = ktext|3), and the
+                // supervisor-page fetch of the stub faults, looping
+                // until triple-fault.  Every real kernel (the 9k donor
+                // included) uses a non-conforming kernel code segment;
+                // with CPL==DPL the bit is irrelevant, so every
+                // Phase-13/14 gate's behavior is unchanged.
+                .with_conforming(false)
                 .with_long(true)
                 .with_iopl(MachMode::Kernel)
         }

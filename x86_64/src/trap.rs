@@ -831,9 +831,21 @@ extern "C" fn trap(vector: u8, trap_frame: &mut Ureg) -> u32 {
     #[cfg(dev_exec)]
     {
         if trap_frame.cs & 3 == 3 {
+            // CR2 in the print (the donor faultnote's addr field): a
+            // #PF's faulting address is the first fact a post-mortem
+            // needs — `pc` alone cannot distinguish a NULL deref from
+            // a wild pointer (14-06's chain bring-up needed exactly
+            // this to place boot(8)'s _tos read).
+            let cr2 = {
+                let v: u64;
+                // SAFETY: a register read with no memory effect.
+                unsafe { core::arch::asm!("mov %cr2, %rax", out("rax") v, options(att_syntax, nomem, nostack, preserves_flags)) };
+                v
+            };
             crate::println!(
-                "user trap: unhandled vector {vector} pc={:#x}",
-                trap_frame.pc
+                "user trap: unhandled vector {vector} pc={:#x} addr={:#x}",
+                trap_frame.pc,
+                cr2
             );
             match crate::proc::current() {
                 Some(mut p) => crate::syscall::exit_tail(&mut p, b"sys: trap"),

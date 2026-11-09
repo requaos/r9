@@ -40,6 +40,13 @@ use crate::proc::{self, ByteBacking, ByteSource, Proc, ProcState, SegKind, Segme
 /// identical pointer/long sizes) — the Tos page is mapped zeroed; r9
 /// never writes Tos fields this phase (cheap insurance only).
 const TOS_SIZE: usize = 88;
+
+/// 14-06: the eagerly-mapped stack depth at exec (32 pages = 128 KiB)
+/// — the no-pager era's stand-in for the aarch64 demand-paged stack:
+/// the chain's boot(8) already ran ~8.6 KiB deep, and rc's parser
+/// recursion goes deeper; the 16 MiB USTKSIZE policy bound stays the
+/// ceiling, the pager is the follow-up.
+const STACK_EAGER_PAGES: usize = 32;
 /// Cap on exec args — the initial stack frame must fit the seed page
 /// (the byte-fit check in check_seed_fit is the REAL constraint; this
 /// pre-cap just keeps the slots array honest).  32 matches sys_exec's
@@ -107,8 +114,9 @@ fn install_image(
     map_data_bss_eager(proc, &source, aout)?;
     proc.text_source = Some(source);
 
-    // SEED: the two eager stack-side pages — the top-of-stack seed
-    // page and the zeroed Tos page just below it.
+    // SEED: the eager stack-side pages — the top-of-stack seed page
+    // (args + the Tos struct at its very top) and the deeper eager
+    // stack below it (14-06).
     seed_user_pages(proc, args)
 }
 
@@ -198,21 +206,35 @@ fn seed_user_pages(proc: &mut Proc, args: &[&[u8]]) -> Result<(usize, usize)> {
     }
     let stack_va = USTACKTOP - PAGE_SIZE_4K;
     let stack_pa = proc.map_user_page(stack_va, SegKind::Stack)?;
-    let tos_page_va = USTACKTOP - 2 * PAGE_SIZE_4K;
-    proc.map_user_page(tos_page_va, SegKind::Tos)?;
+    // 14-06: the deeper stack, EAGERLY — the chain's boot(8) ran ~8.6 KiB
+    // deep and faulted one page past the old two seed pages (the
+    // no-pager limit the chain gate surfaced).  Same eager policy as
+    // the text mapping; the demand pager remains the follow-up.  The
+    // range covers the old tos page's slot (the Tos struct itself now
+    // lives in the TOP seed page — the donor placement — so a
+    // downward-growing stack can never overwrite it).
+    let mut va = USTACKTOP - 2 * PAGE_SIZE_4K;
+    while va >= USTACKTOP - STACK_EAGER_PAGES * PAGE_SIZE_4K {
+        proc.map_user_page(va, SegKind::Stack)?;
+        va -= PAGE_SIZE_4K;
+    }
 
-    // Tos sits 16-aligned at the top of its page, just below the seed
-    // stack page (the donor shape; the page is zeroed — r9 writes no
-    // Tos fields).
-    let tos_va = (USTACKTOP - PAGE_SIZE_4K - TOS_SIZE) & !0xf;
+    // Tos sits 16-aligned at the very top of the seed page — the 9k
+    // donor's placement (sysexec: `stack = TSTKTOP-sizeof(Tos)`), NOT
+    // below the seed pages: the stack grows DOWN, so at the top only
+    // the struct's 88 bytes ever sit above the arg block.  The page is
+    // zeroed; r9 writes no Tos fields (libc's plock reads tos->pid and
+    // tolerates zero/garbage; getpid reads #c/pid).
+    let tos_va = (USTACKTOP - TOS_SIZE) & !0xf;
 
     // Write [argc][argv0]…[nil] + strings into the seed page via its
     // kernel alias.  Layout ascending from user_sp (the execregs
     // contract — libc main9.s/_callmain consumes exactly this):
     //   user_sp+0: argc; then the argv pointers; then nil; strings
-    //   packed top-down above, in argument order.
+    //   packed top-down above, in argument order — all BELOW the Tos
+    //   struct at the page's top.
     let kbase = proc::phys_ptr_mut(stack_pa) as usize;
-    let mut cursor = USTACKTOP; // one past the seed page's top
+    let mut cursor = tos_va; // the Tos struct's aligned base caps the args
     let mut arg_ptrs = [0usize; MAX_ARGS];
     for (i, arg) in args.iter().enumerate() {
         let room = cursor - stack_va;
@@ -271,7 +293,8 @@ pub fn exec_into(
 
     // The forkret-shaped 184-byte Ureg at kstack_top-184 (through the
     // top kstack page's kernel alias — the correct edit path from the
-    // bootstrap's table context): bp = tos (RARG), sp = the seeded
+    // bootstrap's table context): ax = tos (the exec-return contract
+    // main9's `MOVQ AX, _tos` consumes), sp = the seeded
     // user stack, pc = entry — the resume tail SYSRETQs into ring 3
     // from exactly this frame.
     let frame = proc.seed_frame(aout.entry, user_sp as u64, tos_va as u64);
@@ -289,8 +312,9 @@ pub fn exec_into(
 /// fallible pre-check), FREE the old mappings second, SEED third — so
 /// a validation failure returns -1/errstr with the old image intact,
 /// and the live-frame rewrite happens only after a fully seeded new
-/// image.  On success the caller's Ureg is rewritten in place (bp =
-/// tos, sp = the new seed stack, pc = the new entry) and the dispatch
+/// image.  On success the caller's Ureg is rewritten in place (ax =
+/// tos — the dispatch result writeback lands exec_replace's return —
+/// sp = the new seed stack, pc = the new entry) and the dispatch
 /// return SYSRETQs into the new image — success never returns to the
 /// old image (donor exec semantics).  The proc keeps its pid, kstack,
 /// PML4, and fd table (fds survive exec, Plan 9 convention).
@@ -412,7 +436,7 @@ pub struct SegmentLayout {
 /// (`__multi3` — soft-float in this SSE-free kernel), a link error
 /// once the syscall chain made this module's code live.  Both
 /// alignments here are powers of two, so the mask form is exact.
-fn round_up_pow2(x: usize, align: usize) -> usize {
+pub(crate) fn round_up_pow2(x: usize, align: usize) -> usize {
     (x + align - 1) & !(align - 1)
 }
 
@@ -663,9 +687,13 @@ mod tests {
         let read16 = |off: usize| -> u16 {
             unsafe { ((frame as usize + off) as *const u16).read_unaligned() }
         };
-        // bp carries the Tos pointer (RARG = BP — the 6c first-arg
-        // register, the aarch64 x0 analog).
-        assert_eq!(read(48), tos_va);
+        // ax carries the Tos pointer — the exec-return contract (the
+        // donor's sysexecregs return riding AX; main9.s stores AX into
+        // _tos; 6l fuses the same prologue into main9-less mains like
+        // boot(8)'s).  bp (the 6c FIRST-ARG register) stays zero —
+        // argc arrives on the stack and main9's prologue reloads it.
+        assert_eq!(read(0), tos_va);
+        assert_eq!(read(48), 0); // bp
         // type: the donor's "fiction for acid" (sysexecregs).
         assert_eq!(read(128), 64);
         // ip: the a.out entry field.
@@ -686,8 +714,7 @@ mod tests {
         assert_eq!(read16(124), 0x1b);
         assert_eq!(read16(126), 0x1b);
         // Everything the seed does not plant stays zero.
-        assert_eq!(read(0), 0); // ax
-        assert_eq!(read(16), 0); // cx
+        assert_eq!(read(8), 0); // bx
         assert_eq!(read(136), 0); // ecode
     }
 }

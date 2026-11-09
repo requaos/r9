@@ -34,7 +34,7 @@ use port::println;
 
 use crate::dat::Ureg;
 use crate::exec;
-use crate::proc::{self, ByteBacking, Proc, ProcState, ERRMAX};
+use crate::proc::{self, ByteBacking, Proc, ProcState, SegKind, ERRMAX};
 use crate::usermem::{UserPtr, UserSlice, UserSliceMut, UserString};
 
 // The frozen syscall numbers (Harvey sys/src/libc/9syscall/sys.h —
@@ -802,10 +802,26 @@ fn sys_brk_(frame: &mut Ureg, proc: &mut Proc) -> u64 {
         return err(proc, "brk: out of memory");
     }
     match proc.rfmem_family {
-        // The ordinary private shape: move the caller's break only;
-        // growth pages fault in lazily on touch (ensure_user_resident
-        // pages them from syscall context).
+        // The ordinary private shape: move the caller's break and map
+        // the growth pages NOW — the 14-06 x86_64 deviation from
+        // aarch64's lazy fault-in (ensure_user_resident pages them
+        // from syscall context there): this era has no trap-context
+        // pager, so a lazily-grown page's first touch fault-kills the
+        // proc (boot(8)'s first malloc died exactly there — the chain
+        // gate surfaced it).  Same policy as map_text_eager/
+        // map_data_bss_eager: the mapping is eager, the demand pager
+        // is the follow-up.
         None => {
+            let page = port::mem::PAGE_SIZE_4K;
+            let grown_start = exec::round_up_pow2(old_end, page);
+            let grown_end = exec::round_up_pow2(addr, page);
+            let mut va = grown_start;
+            while va < grown_end {
+                if proc.map_user_page(va, SegKind::Bss).is_err() {
+                    return err(proc, "brk: growth page map failed");
+                }
+                va += page;
+            }
             proc.segments.as_mut().unwrap().bss.0.end = addr;
             0
         }
@@ -1975,7 +1991,11 @@ mod tests {
         }
         // The live frame was rewritten to the new image's entry.
         assert_eq!(frame.pc as usize, INITTEXT);
-        // bp carries the seeded Tos (the RARG first-arg convention).
-        assert_eq!(frame.bp, tos_va);
+        // ax carries the seeded Tos (the exec-return contract — the
+        // dispatch result writeback lands exec_replace's return, which
+        // IS the Tos pointer; main9.s stores exactly that AX into
+        // _tos).  bp (the 6c first-arg register) stays whatever the
+        // caller had — argc arrives on the seeded stack.
+        assert_eq!(frame.ax, tos_va);
     }
 }

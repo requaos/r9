@@ -947,6 +947,23 @@ const Q35_SMOKESLEEP_GOT_MARKER: &str = "smokesleep: got note";
 // BOOT_SMOKESLEEP_MARKER ("smokesleep: interrupted") carries over as
 // the marker's terminal print; BOOT_ALL_EXITED_MARKER as the park.
 
+/// The q35shell boot-chain markers (14-06, XEXEC-03's leg-2 gate):
+/// after the q35exec stages (module/paqfs notes + the exec-entry note —
+/// the same anchors), pid 1 is the real Harvey boot(8) at /boot/boot,
+/// and the chain's OWN prints from ring 3 are the evidence: boot(8)'s
+/// paqfs-server handoff then its 9P version handshake ("paqfs...",
+/// "version..."), init's rc handoff ("init: starting /bin/rc"), then
+/// the interactive rc prompt ("% " — the same literal the aarch64 Net
+/// gate asserts; rc/lib/rcmain sets it, staged verbatim by the bake).
+/// Presence and order, never timings; the negative panic scan stays on
+/// with the real-chain fauth exemption (syscall 10 — the Net-profile
+/// precedent: boot's nsinit fauth and settime's mount path print it on
+/// every real-chain boot).
+const Q35_BOOT_VERSION_MARKER: &str = "version...";
+const Q35_CHAIN_INIT_MARKER: &str = "init: starting /bin/rc";
+// BOOT_PAQFS_MARKER ("paqfs...") and NET_PROMPT_MARKER ("% ") carry
+// over from the aarch64 Net gate — the same literals on the same wire.
+
 /// Panic-profile markers: a config with dev = ["panic"] boots
 /// virt to a deliberate brk #0 sync exception BEFORE trap::unmask_irq(), so
 /// the log is deterministic (zero IRQ interleaving) -- banner, start marker,
@@ -1351,6 +1368,19 @@ enum BootStage {
     /// interrupted marker (WRITE syscalls through the real EL/SYSCALL
     /// path, D-09's point).
     Q35MarkerPrints,
+    /// The q35shell chain-boot stage (14-06): the exec-entry note
+    /// observed, now await boot(8)'s OWN prints from ring 3 — the
+    /// paqfs-server handoff and the 9P version handshake — strictly
+    /// after the entry stage's anchor.
+    Q35ChainBoot,
+    /// The q35shell init stage: boot(8)'s prints observed, now await
+    /// init's rc-handoff line.
+    Q35ChainInit,
+    /// The q35shell prompt stage: init observed, now await the
+    /// interactive rc prompt — the gate's terminal marker (the chain
+    /// stays running; the interactive expect sweep is 14-07's
+    /// Harvey-side gate).
+    Q35ChainPrompt,
 }
 
 impl fmt::Display for BootStage {
@@ -1424,6 +1454,17 @@ impl fmt::Display for BootStage {
                 "the marker binary's own prints {{{Q35_SMOKESLEEP_GOT_MARKER:?}, \
                  {BOOT_SMOKESLEEP_MARKER:?}}} from ring 3"
             ),
+            BootStage::Q35ChainBoot => write!(
+                f,
+                "boot(8)'s own prints {{{BOOT_PAQFS_MARKER:?}, {Q35_BOOT_VERSION_MARKER:?}}} \
+                 after the exec entry"
+            ),
+            BootStage::Q35ChainInit => {
+                write!(f, "init handoff {Q35_CHAIN_INIT_MARKER:?} after boot(8)'s prints")
+            }
+            BootStage::Q35ChainPrompt => {
+                write!(f, "the interactive rc prompt {NET_PROMPT_MARKER:?}")
+            }
         }
     }
 }
@@ -1465,6 +1506,11 @@ enum BootProfile {
     /// exec-entry note, the marker binary's OWN WRITE-syscall prints
     /// from ring 3 (D-09), and the all-exited park.
     X64Exec,
+    /// The q35shell boot-chain gate (14-06, XEXEC-03's r9-side leg): the
+    /// X64 discovery + bind stages, the module/paqfs notes, the
+    /// exec-entry note, then the real Harvey boot(8)→init→rc chain's
+    /// own prints through to the interactive `% ` prompt.
+    X64Shell,
 }
 
 /// Teardown: SIGKILL the spawned qemu's process GROUP (qemu spawned
@@ -1840,6 +1886,15 @@ impl BootTestStep {
         // discovery satisfaction branches into the module/paqfs →
         // exec-entry → marker-prints stages below.
         let q35exec_profile = self.arch == Arch::X86_64 && self.config_name == "q35exec";
+        // The Q35SHELL profile ("q35shell", 14-06's XEXEC-03 leg-2
+        // gate) — the boot-chain profile: dev = ["exec", "bootchain",
+        // "ether", "ip"], so the discovery satisfaction routes through
+        // the bind stage (dev_ether is on — the Phase-13 netgate
+        // placement virtshell carries) and then the module stages chain
+        // into boot(8)/init/rc below.  Its [dist] module key stages the
+        // CHAIN bake (bootfs-chain.paq — the marker bake stays
+        // bootfs.paq for q35exec).
+        let q35shell_profile = self.arch == Arch::X86_64 && self.config_name == "q35shell";
         // The X64 bind stage's ordered-presence anchor (13-05): the byte
         // offset at the discovery stage's satisfaction — a bind line
         // that rode the wire earlier never counts.
@@ -1853,7 +1908,7 @@ impl BootTestStep {
             // boot); every other pattern — and any other unimplemented
             // syscall — still fails the run.  The netip profile rides the
             // same real boot chain — the same single-line exemption.
-            if !panic_profile && let Some(hit) = negative_scan_hit_for(&capture, net_profile || netip_profile) {
+            if !panic_profile && let Some(hit) = negative_scan_hit_for(&capture, net_profile || netip_profile || q35shell_profile) {
                 return Err(self.fail(stage, &capture, &format!("negative scan hit {hit:?}")));
             }
             // The q35net fail-fast (13-05): the kernel netgate's own
@@ -1953,6 +2008,18 @@ impl BootTestStep {
                             .map(|p| pci_after + p)
                             .unwrap_or(capture.len());
                             stage = BootStage::X64Bind;
+                        } else if q35shell_profile {
+                            // 14-06: the chain profile carries ether (the
+                            // virtshell membership) — assert the bind half
+                            // first (the /net substrate 14-09 consumes),
+                            // the same positional-anchor discipline.
+                            bind_after = last_marker_line_end(
+                                &capture[pci_after..],
+                                PCI_NET_DEVICE_MARKER,
+                            )
+                            .map(|p| pci_after + p)
+                            .unwrap_or(capture.len());
+                            stage = BootStage::X64Bind;
                         } else if q35exec_profile {
                             // 14-05: the staged-exec gate continues into
                             // the module half — the kernel's module-found
@@ -1979,9 +2046,16 @@ impl BootTestStep {
                         && contains_marker(&capture[bind_after..], Q35_BIND_L0_MARKER.as_bytes())
                     {
                         // The trigger stages follow sti; anchor each past
-                        // the previous stage's satisfaction.
+                        // the previous stage's satisfaction.  The chain
+                        // profile (14-06) continues into the module half
+                        // instead — its exec bootstrap never runs the
+                        // kernel-side netgate.
                         bind_after = capture.len();
-                        stage = BootStage::X64PingPong;
+                        stage = if q35shell_profile {
+                            BootStage::Q35ModulePaqfs
+                        } else {
+                            BootStage::X64PingPong
+                        };
                     }
                 }
                 BootStage::X64PingPong => {
@@ -2015,9 +2089,15 @@ impl BootTestStep {
                     if contains_marker(&capture[bind_after..], Q35_EXEC_ENTRY_MARKER.as_bytes()) {
                         // Anchor past the entry note: the binary's own
                         // prints follow (its WRITE syscalls, never a
-                        // kernel print on its behalf).
+                        // kernel print on its behalf).  The chain profile
+                        // (14-06) awaits boot(8)'s prints instead of the
+                        // marker's — pid 1 IS the real boot(8).
                         bind_after = capture.len();
-                        stage = BootStage::Q35MarkerPrints;
+                        stage = if q35shell_profile {
+                            BootStage::Q35ChainBoot
+                        } else {
+                            BootStage::Q35MarkerPrints
+                        };
                     }
                 }
                 BootStage::Q35MarkerPrints => {
@@ -2026,6 +2106,39 @@ impl BootTestStep {
                     {
                         bind_after = capture.len();
                         stage = BootStage::AllExited;
+                    }
+                }
+                BootStage::Q35ChainBoot => {
+                    // 14-06: boot(8)'s OWN prints from ring 3 — the
+                    // paqfs-server exec handoff and the 9P version
+                    // handshake (embed's connectembed + connectroot),
+                    // both past the exec-entry anchor (the kernel's own
+                    // "q35: paqfs root mounted" note can never satisfy
+                    // the "paqfs..." literal).
+                    if contains_marker(&capture[bind_after..], BOOT_PAQFS_MARKER.as_bytes())
+                        && contains_marker(&capture[bind_after..], Q35_BOOT_VERSION_MARKER.as_bytes())
+                    {
+                        bind_after = capture.len();
+                        stage = BootStage::Q35ChainInit;
+                    }
+                }
+                BootStage::Q35ChainInit => {
+                    // init's rc handoff — the REAL init's line (the bake's
+                    // inverted identity guard pinned out/init on the host
+                    // side; this asserts the running binary).
+                    if contains_marker(&capture[bind_after..], Q35_CHAIN_INIT_MARKER.as_bytes()) {
+                        bind_after = capture.len();
+                        stage = BootStage::Q35ChainPrompt;
+                    }
+                }
+                BootStage::Q35ChainPrompt => {
+                    // The interactive rc prompt — rcmain's '% ' (staged
+                    // verbatim; the same literal the aarch64 Net gate
+                    // asserts).  The chain stays running: finishing here
+                    // is the gate's terminal state (the interactive
+                    // expect sweep is 14-07's Harvey-side gate).
+                    if contains_marker(&capture[bind_after..], NET_PROMPT_MARKER.as_bytes()) {
+                        return self.finish(log_abs, &capture, BootProfile::X64Shell);
                     }
                 }
                 BootStage::Ticks => {
@@ -2251,7 +2364,7 @@ impl BootTestStep {
         if profile != BootProfile::Panic
             && let Some(hit) = negative_scan_hit_for(
                 capture,
-                matches!(profile, BootProfile::Net | BootProfile::Netip),
+                matches!(profile, BootProfile::Net | BootProfile::Netip | BootProfile::X64Shell),
             )
         {
             return Err(self.fail_pretty(capture, &format!("negative scan hit {hit:?}")));
@@ -2362,6 +2475,28 @@ impl BootTestStep {
                      note, the marker binary's OWN ring-3 prints (notify got-note + interrupted \
                      via WRITE syscalls) and the all-exited park observed in order — XEXEC-02 \
                      leg 1 (D-03 delivery, D-04 format, D-08 staging, D-09 marker)"
+                );
+            }
+            BootProfile::X64Shell => {
+                // XEXEC-03's r9-side leg (14-06): the ordered stage
+                // chain (banner -> facts -> discovery -> bind -> module/
+                // paqfs -> exec entry -> boot(8)'s paqfs/version prints
+                // -> init's rc handoff -> the `% ` prompt) is asserted
+                // stage-wise; the finish-time whole-capture scans are
+                // the negative space — the D-09 prohibition shape
+                // re-keyed for the chain: every chain marker line
+                // (paqfs.../version.../init: starting/% ) is produced
+                // by a ring-3 Harvey binary through the real syscall
+                // path, never by the kernel on the chain's behalf (the
+                // kernel's own notes stop at the exec-entry line).
+                println!(
+                    "boot-test: PASS -- SeaBIOS -> GRUB2 -> mb2 kernel + chain-module boot: \
+                     banner, memory facts, discovery, the NIC bind, the module-tag/paqfs mount \
+                     notes, the exec-entry note, then the REAL boot(8)→init→rc chain's own \
+                     ring-3 prints (paqfs/version handoffs, the init rc handoff) through to the \
+                     interactive `% ` prompt, observed in order — XEXEC-03 leg 2 (D-08's staged \
+                     chain on the proven exec substrate; the composed Harvey-side gate is \
+                     14-07's)"
                 );
             }
             BootProfile::Multi => {

@@ -319,7 +319,7 @@ fn halt() -> ! {
 
 /// The pid-1 entry path (the aarch64 BOOT_ENTRY selection, re-keyed to
 /// the x86_64 image layout): dev_bootchain configs (14-06's q35shell)
-/// will exec the real Harvey boot(8) at /boot/boot — a multi-component
+/// exec the real Harvey boot(8) at /boot/boot — a multi-component
 /// devroot walk; every pre-existing exec profile keeps the staged
 /// marker at /amd64/init (D-08's leg 1: the first exec is a
 /// purpose-built static marker binary, D-09).

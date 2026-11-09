@@ -1,0 +1,53 @@
+# The q35shell boot-chain profile (14-06, XEXEC-03's leg-2 gate — D-08's
+# staged leg 2): config_q35exec.toml's shape with the boot-chain entry
+# selection — dev = ["exec", "bootchain", "ether", "ip"] compiles
+# cfg(dev_bootchain) alongside cfg(dev_exec), so exec_bootstrap's
+# BOOT_ENTRY becomes the real Harvey boot(8) at /boot/boot (pid 1 runs
+# the chain: boot(8) execs /boot/paqfs, mounts the paqfs root, execs
+# /amd64/init, init fexecs /bin/rc, rcmain/termrc run, the interactive
+# `% ` prompt arrives).  The tick println is cfg-gated OFF under
+# dev_exec (14-04, Pitfall 8) — unchanged from q35exec.
+#
+# ether/ip — the Phase-13 netgate placement carried from virtshell's
+# membership: the NIC binds in the pre-sti window (the X64Bind stage
+# asserts it) and devip's `#I` compiles in, so /net exists for 14-09's
+# userspace gates.  Inert on the chain path this era.
+#
+# D-03 note — NO initrd key, deliberately (the q35exec note carried):
+# GRUB delivers the bootfs as an mb2 tag-3 MODULE off the same ISO (the
+# [dist] module key below + the grub.cfg module2 placeholder).  This
+# profile stages the CHAIN bake — the marker bake stays bootfs.paq for
+# q35exec's gate (the marker IS that image's /amd64/init).
+[build]
+target = "lib/x86_64-unknown-none-elf.json"
+buildflags = [
+    "-Z", "build-std=core,alloc"
+]
+
+[link]
+script = 'x86_64/lib/kernel.ld'
+load-address = '0xffffffff80200000'
+
+[config]
+platform = "q35"
+dev = ["exec", "bootchain", "ether", "ip"]
+
+[qemu]
+machine = "q35"
+accel = "kvm"
+cpu = "host"
+smp = 1
+memory = "1024M"
+
+[qemu.netdev]
+mode = "user"
+device = "virtio-net-pci-non-transitional"
+pcap = true
+
+[dist]
+format = "elf"
+# The CHAIN bootfs (D-03): Harvey's 14-06 bake produces this under the
+# checkout R9_HARVEY_DIR names; the ISO builder stages it at
+# /boot/bootfs.paq and emits the grub.cfg module2 line IN.  Absence is
+# a loud pre-ISO error naming the Harvey-side producers.
+module = "harvey:build/x86_64/out/bootfs-chain.paq"

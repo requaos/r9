@@ -147,16 +147,26 @@ impl Ureg {
 
     /// Seed the exec entry state — the 9k donor's sysexecregs (k10
     /// syscall.c: `ureg->sp`, `ureg->ip`, `ureg->type = 64` — the
-    /// "fiction for acid"; the returned Tos address rides bp, the 6c
-    /// RARG/first-arg register that is the aarch64 x0 analog) plus the
-    /// ring-3 context fields 14-02's touser/syscallreturn consume on
-    /// entry: the flat user selectors (cs/ss = utext/udata|RPL3, the
-    /// packed quartet = udata|RPL3) and flags = If — the user enters
-    /// with IF=1, the unmask-at-handoff discipline.  Everything else
-    /// stays zeroed.
+    /// "fiction for acid"; the returned Tos address rides ax — the
+    /// exec-return contract: the donor's sysexecregs RETURNS the Tos
+    /// pointer and syscallreturn writes ar0.p into AX, and main9.s
+    /// stores exactly that AX into _tos.  The 14-03 seed planted it in
+    /// bp instead (a mis-reading of RARG: bp is 6c's FIRST-ARG
+    /// register, and main9 reads AX, not bp) — invisible until the
+    /// 14-06 chain, whose boot(8) main (6l fuses a main9 prologue:
+    /// `mov %rax, _tos` at the entry) deref'd a zero _tos in
+    /// malloc's plock and fault-killed at addr 0x40.  bp stays zero —
+    /// the fused/main9 prologue reloads argc from the stack, and the
+    /// exec syscall path lands the same tos in ax via the dispatch
+    /// result writeback (sys_exec returns exec_replace's tos_va).
+    /// Plus the ring-3 context fields 14-02's touser/syscallreturn
+    /// consume on entry: the flat user selectors (cs/ss =
+    /// utext/udata|RPL3, the packed quartet = udata|RPL3) and flags =
+    /// If — the user enters with IF=1, the unmask-at-handoff
+    /// discipline.  Everything else stays zeroed.
     pub fn seed_exec_entry(&mut self, tos_va: u64, user_sp: u64, entry: u64) {
         const IF: u64 = 0x200; // If — touser's R11 plant
-        self.bp = tos_va;
+        self.ax = tos_va;
         self.sp = user_sp;
         self.pc = entry;
         self.flags = IF;
