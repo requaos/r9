@@ -40,8 +40,232 @@
         done
         export OBJCOPY="''${OBJCOPY:-$_r9_objcopy}"
       '';
+      # 14-07 (D-05): the parameterized ISO builder — ONE implementation
+      # of the whole reproducibility machinery, shared UN-FORKED by r9's
+      # own packages.boot-iso FOD (kernel-only, its wired hash riding the
+      # same bytes) and by Harvey's compose app (kernel + Harvey-baked
+      # bootfs module, driven at runtime through the exported
+      # packages.iso-builder script).  Two consumers, one source of
+      # truth: the FOD and the flake-lib derivation BOTH invoke the same
+      # r9-iso-builder script below — no duplicated wrapper logic.
+      isoBuilderFor = pkgs:
+        let
+          # The committed loader-config TEMPLATE as a store file — the
+          # same source xtask's build_x86_64_iso emits from (14-05 D-03):
+          # kernel-only emission drops the @R9-MODULE* lines and stays
+          # byte-identical to Phase 13's staged config; module-bearing
+          # emission expands the placeholder to one module2 line per
+          # staged module (the xtask emit_grub_cfg convention).
+          grubCfg = pkgs.writeText "r9-grub.cfg" (builtins.readFile ./x86_64/lib/grub.cfg);
+          # The argv-driven builder:
+          #   r9-iso-builder KERNEL-ELF OUTDIR [MODULE-PATH MODULE-NAME ...]
+          # stages the pinned-date xorriso pipeline (grub-mkrescue) and
+          # writes OUTDIR/boot.iso.  Modules stage VERBATIM at
+          # /boot/<MODULE-NAME> — a bootfs.paq is a paqfs archive, never
+          # stripped (the kernel stage is strip-ALL, not the xtask dev
+          # copy's strip-debug: rustc's per-invocation-random
+          # .llvm.<u64> symbols make any symtab-carrying stage break ISO
+          # byte-identity — the measured 13-06 result; the dev copy keeps
+          # symbols for debugging, the distributable/composed ISO cannot.
+          # The xtask dev ISO also runs grub-mkrescue without the
+          # pinned-date xorriso wrapper — its per-invocation copy is
+          # evidence-fresh, never hashed.  Those two deltas are the ONLY
+          # intentional differences from the xtask staging; the template,
+          # the strip direction, and the module staging match it).
+          iso-builder = pkgs.writeShellApplication {
+            name = "r9-iso-builder";
+            # gawk: the module-bearing emission's awk program (kernel-only
+            # builds never reach it, but Harvey's compose always stages
+            # the bootfs module — the script must run standalone for BOTH
+            # consumers).
+            runtimeInputs = [ pkgs.grub2 pkgs.xorriso pkgs.binutils pkgs.gnused pkgs.coreutils pkgs.gawk ];
+            text = ''
+              # r9-iso-builder — the D-05 parameterized ISO builder (the
+              # 13-06 boot-iso FOD body factored out verbatim, argv-driven).
+              # One implementation behind three doors: r9's kernel-only
+              # FOD, r9.lib.bootIso derivations, and Harvey's compose app.
+              usage() {
+                echo "usage: r9-iso-builder KERNEL-ELF OUTDIR [MODULE-PATH MODULE-NAME ...]" >&2
+                echo "  KERNEL-ELF  the r9 x86_64 kernel ELF (strip-ALL staged at /boot/kernel)" >&2
+                echo "  OUTDIR      receives boot.iso" >&2
+                echo "  MODULE pairs  stage each module verbatim at /boot/<NAME> and emit" >&2
+                echo "               its grub.cfg module2 line (zero modules = kernel-only" >&2
+                echo "               ISO, the Phase-13-identical loader config)" >&2
+                exit 2
+              }
+              err() { echo "r9-iso-builder: $*" >&2; exit 1; }
+
+              [ "$#" -ge 2 ] || usage
+              KERNEL=$1; OUTDIR=$2; shift 2
+              [ -f "$KERNEL" ] || err "kernel $KERNEL not found"
+              modpaths=(); modnames=()
+              while [ "$#" -gt 0 ]; do
+                [ "$#" -ge 2 ] || usage
+                [ -f "$1" ] || err "module $1 not found"
+                modpaths+=("$1"); modnames+=("$2"); shift 2
+              done
+              mkdir -p "$OUTDIR"
+
+              # Reproducibility pins (13-06, measured on grub 2.14 +
+              # xorriso 1.5.8.pl02): grub-mkrescue injects a CURRENT-TIME
+              # --modification-date into its xorriso argv and has no
+              # SOURCE_DATE_EPOCH support, and the staged/grub file mtimes
+              # ride through into Rock Ridge TF records — the wrapper
+              # below pins the modification date, overrides every file
+              # date (--set_all_file_dates) and pins the volume id.
+              export SOURCE_DATE_EPOCH="''${SOURCE_DATE_EPOCH:-1735689600}"
+              export R9_ISO_DATE="''${R9_ISO_DATE:-2025010100000000}"
+              export R9_ISO_VOLID="''${R9_ISO_VOLID:-R9BOOT}"
+
+              WORK=$(mktemp -d "''${TMPDIR:-/tmp}/r9-iso-builder.XXXXXX")
+              trap 'chmod -R u+w "$WORK" 2>/dev/null || true; rm -rf "$WORK"' EXIT
+
+              xorrisoPinned="$WORK/xorriso-pinned"
+              cat > "$xorrisoPinned" <<'WRAP'
+#!/bin/sh
+a1=$1; shift
+a2=$1; shift
+n=$#
+i=0
+while [ "$i" -lt "$n" ]; do
+  x=$1
+  shift
+  case "$x" in
+    --modification-date=*) x="--modification-date=$R9_ISO_DATE" ;;
+  esac
+  set -- "$@" "$x"
+  i=$((i+1))
+done
+exec xorriso "$a1" "$a2" \
+  "--modification-date=$R9_ISO_DATE" \
+  "--set_all_file_dates" "$R9_ISO_DATE" \
+  "-volid" "$R9_ISO_VOLID" \
+  "$@"
+WRAP
+              chmod +x "$xorrisoPinned"
+
+              # The grub module tree rides the ISO verbatim, and nixpkgs'
+              # modinfo.sh carries a store-path bash shebang — a
+              # fixed-output derivation must not reference store paths,
+              # so graft from a copy with the shebang scrubbed.
+              moddir="$WORK/grub-i386-pc"
+              cp -r "${pkgs.grub2}/lib/grub/i386-pc" "$moddir"
+              chmod -R u+w "$moddir"
+              sed -i "s|^#![^ ]*bin/bash|#!/bin/sh|" "$moddir/modinfo.sh"
+
+              stage="$WORK/stage"
+              mkdir -p "$stage/boot/grub"
+
+              # The staged kernel is a FULLY stripped copy — strip-all,
+              # not the xtask dev-copy's strip-debug: rustc emits
+              # per-invocation-random `.llvm.<u64>` suffixes on ~200
+              # anonymous-namespace symbols (measured: two fresh sandbox
+              # builds from identical source produce kernels differing
+              # ONLY there), so any symtab-carrying stage breaks ISO
+              # byte-identity.  GRUB's mb2 loader reads only PT_LOAD
+              # segments (all intact under strip-all; the mb2 header
+              # rides .text.boot).  The sed then zeroes the store-hash
+              # runs inside build-std's panic-location strings
+              # (/nix/store/<hash>-rust-default/... rides the kernel's
+              # .rodata): a fixed-output derivation must not reference
+              # store paths, and nix's scanner keys on the hash — the
+              # length-preserving zero-zap keeps the strings readable
+              # while breaking both the full-path and the hash match.
+              objcopy --strip-all "$KERNEL" "$stage/boot/kernel"
+              sed -E "s|/nix/store/[a-z0-9]{32}-|/nix/store/00000000000000000000000000000000-|g" -i "$stage/boot/kernel"
+
+              # D-03 module staging: each module lands VERBATIM at
+              # /boot/<NAME> (never stripped — paqfs archives), BEFORE
+              # the loader config is emitted, so the emitted module2
+              # lines never reference an absent file (GRUB fails a
+              # menuentry whose module is missing).
+              for i in "''${!modpaths[@]}"; do
+                cp "''${modpaths[$i]}" "$stage/boot/''${modnames[$i]}"
+              done
+
+              # The loader config, emitted from the committed template
+              # (14-05 D-03).  Kernel-only: the same sed rule the 13-06
+              # FOD ran — the staged bytes stay byte-identical to Phase
+              # 13's 13-line config (the awk emitter was cmp-proven
+              # against this sed output on the committed template during
+              # 14-07's re-proof).  Module-bearing: the placeholder line
+              # expands IN PLACE to one module2 line per staged module —
+              # indentation kept, payload re-keyed to the staged name,
+              # every @R9-MODULE-DOC@ documentation line dropped (the
+              # xtask emit_grub_cfg convention).
+              if [ "''${#modnames[@]}" -eq 0 ]; then
+                sed -e '/^# @R9-MODULE-DOC@/d' -e '/^[[:space:]]*# @R9-MODULE@ /d' \
+                  "${grubCfg}" > "$stage/boot/grub/grub.cfg"
+              else
+                printf '%s\n' "''${modnames[@]}" | awk '
+                  NR == FNR { names[++n] = $1; next }
+                  /^[[:space:]]*# @R9-MODULE@ / {
+                    match($0, /^[[:space:]]*/); indent = substr($0, 1, RLENGTH)
+                    for (i = 1; i <= n; i++) print indent "module2 /boot/" names[i]
+                    next
+                  }
+                  /^# @R9-MODULE-DOC@/ { next }
+                  { print }
+                ' - "${grubCfg}" > "$stage/boot/grub/grub.cfg"
+              fi
+
+              grub-mkrescue -d "$moddir" -o "$WORK/boot.iso" "$stage" --xorriso "$xorrisoPinned"
+              cp "$WORK/boot.iso" "$OUTDIR/boot.iso"
+              echo "r9-iso-builder: $OUTDIR/boot.iso $(sha256sum "$OUTDIR/boot.iso" | cut -d" " -f1) (modules: ''${modnames[*]:-none})"
+            '';
+          };
+        in
+        {
+          inherit iso-builder;
+          # The derivation former — pure-eval consumers (r9.lib.bootIso)
+          # and r9's own packages.boot-iso both call this with the SAME
+          # script; outputHash is injectable so the FOD wiring and the
+          # hash-free byte-identity proof builds share one path (the
+          # 13-06 discipline: wire a hash only after two independent
+          # derivations agree).
+          bootIso = { kernel-elf, modules ? [ ], outputHash ? null }:
+            let
+              moduleArgs = nixpkgs.lib.concatMapStringsSep " "
+                (m: nixpkgs.lib.escapeShellArg m.path + " " + nixpkgs.lib.escapeShellArg m.name)
+                modules;
+            in
+            pkgs.stdenv.mkDerivation ({
+              pname = "r9-boot-iso";
+              version = self.shortRev or "wip";
+              # no src: every input rides the iso-builder script's
+              # closure (the kernel via the kernel-elf argument's string
+              # context, the template and the toolchain via the script)
+              dontUnpack = true;
+              buildPhase = ''
+                runHook preBuild
+                ${iso-builder}/bin/r9-iso-builder ${nixpkgs.lib.escapeShellArg kernel-elf} "$NIX_BUILD_TOP/iso" ${moduleArgs}
+                runHook postBuild
+              '';
+              installPhase = ''
+                runHook preInstall
+                mkdir -p "$out"
+                cp "$NIX_BUILD_TOP/iso/boot.iso" "$out/boot.iso"
+                runHook postInstall
+              '';
+            } // nixpkgs.lib.optionalAttrs (outputHash != null) {
+              outputHashAlgo = "sha256";
+              outputHashMode = "recursive";
+              inherit outputHash;
+            });
+        };
     in
     {
+      # D-05's pure-eval surface: r9.lib.bootIso { system, kernel-elf,
+      # modules, outputHash } → the ISO derivation built by the same
+      # r9-iso-builder script r9's own boot-iso FOD uses.  (lib values
+      # are functions, so `nix eval .#lib --json` cannot serialize them
+      # — eval the function itself: nix eval .#lib.bootIso --apply
+      # 'f: builtins.functionArgs f'.)
+      lib = {
+        bootIso = { system, kernel-elf, modules ? [ ], outputHash ? null }:
+          (isoBuilderFor (pkgsFor system)).bootIso { inherit kernel-elf modules outputHash; };
+      };
+
       # D-11 (05-10): the ONLY artifact Harvey's flake input consumes — a
       # derivation that builds the shell-capable aarch64 kernel ELF
       # (`cargo xtask build --arch aarch64 --config virtshell`, debug profile:
@@ -79,10 +303,12 @@
           # X64-05 (13-06): the x86_64 sibling of kernel-virt, built the
           # same way (same cargoDeps symlinkJoin, same toolchain/
           # cargoSetupHook inputs) — the Phase-14 compose contract:
-          # r9.packages.<system>.kernel-x64.  The buildPhase invokes the
-          # SAME `cargo xtask build --arch x86-64 --config q35` the
-          # KVM-native gates prove — the shipped artifact is the gated
-          # artifact.
+          # r9.packages.<system>.kernel-x64.  14-07 re-keyed the build
+          # config to q35shell: the compose consumes this kernel to boot
+          # Harvey's bootfs chain (exec + bootchain devs required — the
+          # plain q35 profile carries no user mode), and the shipped
+          # artifact is the gated artifact (q35shell is the 14-06
+          # full-chain gate, green twice consecutively).
           kernel-x64 = pkgs.stdenv.mkDerivation {
             pname = "r9-kernel-x64";
             version = self.shortRev or "wip";
@@ -92,7 +318,7 @@
             buildPhase = ''
               runHook preBuild
               ${objcopyExport toolchain}
-              cargo xtask build --arch x86-64 --config q35
+              cargo xtask build --arch x86-64 --config q35shell
               runHook postBuild
             '';
             installPhase = ''
@@ -102,116 +328,7 @@
               runHook postInstall
             '';
           };
-          # X64-05 (13-06): the reproducible boot ISO — the flake owns
-          # the DISTRIBUTABLE ISO (the OQ-3 boundary decision); the
-          # xtask gate keeps building its own dev copy each invocation
-          # so the gate's evidence is always fresh against the tree it
-          # just built.  Byte-reproducibility mechanics (measured on
-          # grub 2.14 + xorriso 1.5.8.pl02): grub-mkrescue injects a
-          # CURRENT-TIME --modification-date into its xorriso argv and
-          # has no SOURCE_DATE_EPOCH support, and the staged/grub file
-          # mtimes ride through into Rock Ridge TF records — the
-          # `--xorriso` wrapper below pins the modification date,
-          # overrides every file date (--set_all_file_dates) and pins
-          # the volume id.  BIOS-only (nixpkgs grub2 carries only the
-          # i386-pc platform; no EFI image, so no mtools).  The
-          # outputHash is wired ONLY after the double-build
-          # byte-identity check passes (nix build --rebuild): a hash
-          # wired to non-reproducible bytes would red on every rebuild.
-          boot-iso = pkgs.stdenv.mkDerivation {
-            pname = "r9-boot-iso";
-            version = self.shortRev or "wip";
-            src = ./.;
-            nativeBuildInputs = [ pkgs.grub2 pkgs.xorriso ];
-            buildPhase = ''
-              runHook preBuild
-              export SOURCE_DATE_EPOCH=1735689600
-              export R9_ISO_DATE=2025010100000000
-              export R9_ISO_VOLID=R9BOOT
-              xorrisoPinned="$NIX_BUILD_TOP/xorriso-pinned"
-              cat > "$xorrisoPinned" <<'WRAP'
-              #!/bin/sh
-              a1=$1; shift
-              a2=$1; shift
-              n=$#
-              i=0
-              while [ "$i" -lt "$n" ]; do
-                x=$1
-                shift
-                case "$x" in
-                  --modification-date=*) x="--modification-date=$R9_ISO_DATE" ;;
-                esac
-                set -- "$@" "$x"
-                i=$((i+1))
-              done
-              exec xorriso "$a1" "$a2" \
-                "--modification-date=$R9_ISO_DATE" \
-                "--set_all_file_dates" "$R9_ISO_DATE" \
-                "-volid" "$R9_ISO_VOLID" \
-                "$@"
-WRAP
-              chmod +x "$xorrisoPinned"
-              # The grub module tree rides the ISO verbatim, and
-              # nixpkgs' modinfo.sh carries a store-path bash shebang —
-              # a fixed-output derivation must not reference store
-              # paths, so graft from a copy with the shebang scrubbed.
-              moddir="$NIX_BUILD_TOP/grub-i386-pc"
-              cp -r "${pkgs.grub2}/lib/grub/i386-pc" "$moddir"
-              chmod -R u+w "$moddir"
-              sed -i "s|^#![^ ]*bin/bash|#!/bin/sh|" "$moddir/modinfo.sh"
-              stage="$NIX_BUILD_TOP/stage"
-              mkdir -p "$stage/boot/grub"
-              # The staged kernel is a FULLY stripped copy — strip-all,
-              # not the xtask dev-copy's strip-debug: rustc emits
-              # per-invocation-random `.llvm.<u64>` suffixes on ~200
-              # anonymous-namespace symbols (measured: two fresh
-              # sandbox builds from identical source produce kernels
-              # differing ONLY there), so any symtab-carrying stage
-              # breaks ISO byte-identity.  GRUB's mb2 loader reads only
-              # PT_LOAD segments (all intact under strip-all; the mb2
-              # header rides .text.boot); debug weight is pure
-              # BIOS-disk load time besides.  The sed then zeroes the
-              # store-hash runs inside build-std's panic-location
-              # strings (/nix/store/<hash>-rust-default/... rides the
-              # kernel's .rodata): a fixed-output derivation must not
-              # reference store paths, and nix's scanner keys on the
-              # hash, so a prefix remap alone is not enough — the
-              # length-preserving zero-zap keeps the strings readable
-              # while breaking both the full-path and the hash match.
-              objcopy --strip-all "${kernel-x64}/kernel-x64.elf" "$stage/boot/kernel"
-              sed -E "s|/nix/store/[a-z0-9]{32}-|/nix/store/00000000000000000000000000000000-|g" -i "$stage/boot/kernel"
-              # 14-05 (D-03): the committed grub.cfg is the TEMPLATE SOURCE
-              # for the staged loader config — the kernel-only FOD emits
-              # through the same strip rule xtask's build_x86_64_iso uses
-              # (drop the @R9-MODULE-DOC@ documentation lines and the
-              # @R9-MODULE@ placeholder), so the staged bytes — and this
-              # derivation's wired outputHash — stay exactly Phase 13's.
-              # Composed ISOs (14-07's parameterized builder) emit the
-              # module2 line IN when a module rides the stage.
-              sed -e '/^# @R9-MODULE-DOC@/d' -e '/^[[:space:]]*# @R9-MODULE@ /d' \
-                x86_64/lib/grub.cfg > "$stage/boot/grub/grub.cfg"
-              grub-mkrescue -d "$moddir" -o "$NIX_BUILD_TOP/boot.iso" "$stage" --xorriso "$xorrisoPinned"
-              runHook postBuild
-            '';
-            installPhase = ''
-              runHook preInstall
-              mkdir -p "$out"
-              cp "$NIX_BUILD_TOP/boot.iso" "$out/boot.iso"
-              runHook postInstall
-            '';
-            # Fixed-output, wired ONLY after the double-build
-            # byte-identity check passed: two INDEPENDENT derivations
-            # (fresh kernel builds under both) produced the identical
-            # ISO sha256
-            # 87a96c23a421ce886411ef103723b36c025fbb46f7e94ced726685369ca82003
-            # with zero live store-hash references in the image.
-            # `nix build .#boot-iso --rebuild` re-runs the derivation
-            # and verifies this hash against freshly produced bytes —
-            # the reproducibility proof on every rebuild.
-            outputHashAlgo = "sha256";
-            outputHashMode = "recursive";
-            outputHash = "sha256-dCSPPVirOX7LkVLyVHy6HTPZDAZBbTlICiJr0xBXYXo=";
-          };
+          builder = isoBuilderFor pkgs;
         in
         {
           kernel-virt = pkgs.stdenv.mkDerivation {
@@ -243,14 +360,35 @@ WRAP
           };
         }
         # The x86_64 deliverables: the kernel package on every linux
-        # host (the rustc target spec is cross-platform), the BIOS ISO
-        # only where grub2 ships the i386-pc modules it embeds — the
-        # q35 channel's loaders and gates are x86_64-native (X64-05).
+        # host (the rustc target spec is cross-platform); the BIOS ISO
+        # machinery only where grub2 ships the i386-pc modules it embeds
+        # — the q35 channel's loaders and gates are x86_64-native
+        # (X64-05).  14-07 (D-05): iso-builder (the argv-driven script
+        # Harvey's compose app consumes) exports beside boot-iso (the
+        # kernel-only FOD, re-expressed through the same builder).
         // nixpkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           inherit kernel-x64;
         }
         // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
-          inherit boot-iso;
+          inherit (builder) iso-builder;
+          boot-iso = builder.bootIso {
+            kernel-elf = "${kernel-x64}/kernel-x64.elf";
+            # Fixed-output.  13-06 wired the first hash only after a
+            # two-derivation byte-identity proof; every Phase-14 kernel
+            # commit since 14-01 changed the kernel ELF bytes the FOD
+            # stages, so the 13-06 hash went stale THEN (proven
+            # pre-existing at abee15c — 14-05's deferred-items note).
+            # 14-07 re-wired it after the refactor's own byte-preservation
+            # proof plus fresh independent-derivation proofs (same
+            # discipline, new kernel bytes): the old 13-06 FOD body and
+            # this builder, run over FOUR independent fresh kernel builds
+            # (two per body), produced the IDENTICAL ISO — file-level
+            # sha256 cdcfa00835c0ee37b0b7cbc2064ed8511db632408699faaad8814b49a885118a,
+            # NAR hash (what this attr checks) 944aad869ee1d0974037cad4208b48fb753af84401fad12a2340e3aba994a99b.
+            # `nix build .#boot-iso --rebuild` re-ran the whole chain with
+            # a freshly rebuilt kernel and re-verified this hash.
+            outputHash = "sha256-lEqthp7h0JdAN8rUIItI+3U6+EQB+tEqI0Djq6mUqZs=";
+          };
         });
 
       devShells = forAllSystems (system:
