@@ -75,11 +75,14 @@
 .set MB2INFOMAX,		4096
 
 // The boot-module stash's size cap (modstash in Rust .bss): headroom
-// over the composed bootfs images this era (the 14-05 leg-1 bake is
-// ~36 KB; the Phase-15 tier payloads grow it into the MBs).  The early
-// module copy clamps to this; an oversized module fails loudly
-// kernel-side (the stash-length reconciliation below).
-.set MODSTASHMAX,		(8*1024*1024)
+// over the composed bootfs images this era (the 14-05 leg-1 bake was
+// ~36 KB; the Phase-15 tier payloads grew it into the MBs; the 15-08
+// DESK-03 font payload puts the services bake at ~26.5 MB — the 8 MiB
+// cap clamped it, so the era moves to 64 MiB, matching main.rs's
+// MOD_STASH_SIZE).  The early module copy clamps to this; an oversized
+// module fails loudly kernel-side (the stash-length reconciliation
+// below).
+.set MODSTASHMAX,		(64*1024*1024)
 
 // When we get here we are in protected mode with a GDT.  We set
 // up IA32e mode and get into long mode with paging enabled, then

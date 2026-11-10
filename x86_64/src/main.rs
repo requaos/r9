@@ -69,10 +69,16 @@ pub static mut mb2info: Mb2InfoStash = Mb2InfoStash([0; 4096]);
 
 /// The boot-module stash's size — l.S's MODSTASHMAX must match this.
 /// Headroom over the composed bootfs images this era (the 14-05 leg-1
-/// bake is ~36 KB; Phase-15 tier payloads grow it).  The stash is .bss
-/// (NOBITS): no file weight, the loader zeroes it, and the `end` symbol
-/// covers it so the page allocator never reuses it.
-const MOD_STASH_SIZE: usize = 8 * 1024 * 1024;
+/// bake was ~36 KB; the Phase-15 tier payloads grew it into the MBs;
+/// the 15-08 DESK-03 font payload puts the services bake at ~26.5 MB —
+/// the 8 MiB-era cap clamped that module and panicked the stash-length
+/// reconciliation, so the era moves to 64 MiB, the same 8x step the
+/// kernel heap took when the services venue outgrew its arena).  The
+/// stash is .bss (NOBITS): no file weight, the loader zeroes it, and
+/// the `end` symbol covers it so the page allocator never reuses it —
+/// the cost is 64 MiB of allocatable RAM on every venue (all x64
+/// configs boot -m 1024M or larger).
+const MOD_STASH_SIZE: usize = 64 * 1024 * 1024;
 
 /// The boot-module stash (D-03, the 13-02 stash discipline extended to
 /// the payload): l.S walks the stashed mb2 info's tags in 32-bit early
@@ -85,7 +91,7 @@ const MOD_STASH_SIZE: usize = 8 * 1024 * 1024;
 pub struct ModStash([u8; MOD_STASH_SIZE]);
 
 #[unsafe(no_mangle)]
-pub static mut modstash: ModStash = ModStash([0; 8 * 1024 * 1024]);
+pub static mut modstash: ModStash = ModStash([0; MOD_STASH_SIZE]);
 
 #[unsafe(no_mangle)]
 pub static mut modstash_len: u32 = 0;
