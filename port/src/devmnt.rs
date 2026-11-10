@@ -92,6 +92,8 @@ const TREAD: u8 = 116;
 const RREAD: u8 = 117;
 const TWRITE: u8 = 118;
 const RWRITE: u8 = 119;
+const TCREATE: u8 = 114;
+const RCREATE: u8 = 115;
 const TCLUNK: u8 = 120;
 const RCLUNK: u8 = 121;
 const TSTAT: u8 = 124;
@@ -646,6 +648,30 @@ impl Mnt {
         Ok(count.min(data.len() as u32))
     }
 
+    /// One Tcreate RPC (donor mntcreate): the perm is the FULL 32-bit
+    /// word (DMDIR and friends ride the high bits — keyfs's DMDIR
+    /// creates are the measured caller, 15-03); the mode byte is the
+    /// low 8 (OTRUNC/ORCLOSE ride the wire per fcall.h).
+    pub fn create(&self, fid: u32, name: &[u8], perm: u32, mode: u8) -> Result<(Qid, u32)> {
+        let mut core = self.enter()?;
+        let tag = Self::alloc_tag(&mut core);
+        let mut body = Vec::new();
+        pw32(&mut body, fid);
+        pwstr(&mut body, name);
+        pw32(&mut body, perm);
+        body.push(mode);
+        let msg = tmsg(TCREATE, tag, &body);
+        let size = self.transact(&mut core, &msg, RCREATE, tag)?;
+        let mut cur = RepCur::new(&core.rx[7..size]);
+        let qid = cur.qid()?;
+        let iounit = cur.u32()?;
+        cur.done()?;
+        // The donor's clamp (mntopencreate): 0 or oversized → msize-IOHDRSZ.
+        let cap = self.msize - IOHDRSZ;
+        let iounit = if iounit == 0 || iounit > cap { cap } else { iounit };
+        Ok((qid, iounit))
+    }
+
     /// Tstat (donor mntstat): the reply's stat payload (nstat bytes — the
     /// stat(5) image WITH its own 2-byte prefix, whose value must be
     /// nstat-2 — the malformation check).
@@ -869,6 +895,33 @@ pub fn write(c: &mut Chan, buf: &[u8], offset: u64) -> Result<u64> {
         c.offset += done as u64;
     }
     Ok(done as u64)
+}
+
+/// The DEV_MNT create leg (namec's create_chan): Tcreate TRANSFORMS the
+/// fid it is handed (fcall.h), so the create rides a clone of the
+/// parent's fid and the created chan owns the clone; the parent's fid
+/// stays a directory fid.
+pub fn create(c: &Chan, name: &[u8], mode: u32, perm: u32) -> Result<Chan> {
+    let Some(mnt) = &c.mnt else { return Err("devmnt: create of a non-mount chan") };
+    let Some(fid) = &c.mnt_fid else {
+        return Err("devmnt: create of an fid-less chan")
+    };
+    if c.qid.typ & QTDIR == 0 {
+        return Err("devmnt: create under a non-directory");
+    }
+    // Tcreate TRANSFORMS the fid it is handed (fcall.h: on success the
+    // fid represents the created file) — so the create rides a CLONE,
+    // and the parent's fid (the Arc the walked chan shares) stays a
+    // directory fid (the donor mntcreate's clone-then-create shape).
+    let newfid = mnt.clone_fid(**fid)?;
+    let (qid, _iounit) = mnt.create(newfid, name, perm, (mode & 0xff) as u8)?;
+    let mut nc = Chan::new(DEV_MNT, qid, mode & OMASK);
+    nc.mnt = Some(mnt.clone());
+    nc.mnt_fid = Some(Arc::new(newfid));
+    nc.path = c.path.clone();
+    nc.path.push(b'/');
+    nc.path.extend_from_slice(name);
+    Ok(nc)
 }
 
 /// The DEV_MNT stat leg (sys_stat/sys_fstat): Tstat, the donor mntstat's

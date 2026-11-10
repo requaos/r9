@@ -377,15 +377,16 @@ pub fn stat_chan(c: &Chan, sb: &mut [u8]) -> Result<u64> {
 /// The create dispatch (sys_create — the donor chan.c Acreate's
 /// device half): per-device create by dev index, returning the new chan
 /// OPEN (copen marked here — the open funnel's twin).  Devices without a
-/// create op error loudly (never a silent no-op); devenv (env keys) and
-/// devsrv (service names) are this era's two creators.
+/// create op error loudly (never a silent no-op); devenv (env keys),
+/// devsrv (service names), and devmnt (Tcreate — 15-03's keyfs DMDIR
+/// creates) are this era's creators.
 pub fn create_chan(c: &Chan, name: &[u8], mode: u32, perm: u32) -> Result<Chan> {
     let mut created = match c.dev {
         DEV_ENV => crate::devenv::create(c, name, mode, perm)?,
         DEV_SRV => crate::devsrv::create(c, name, mode, perm)?,
-        // The mounted tree is a read-only server this era (paqfs's
-        // rcreate would refuse regardless) — loud, never a silent no-op.
-        DEV_MNT => return Err("devmnt: create unsupported (read-only server this era)"),
+        // 15-03: writes AND creates flow through mounts — the SERVER
+        // owns the policy (paqfs refuses; keyfs serves its users tree).
+        DEV_MNT => crate::devmnt::create(c, name, mode, perm)?,
         _ => return Err("namec: device has no create"),
     };
     created.copen = true;

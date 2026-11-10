@@ -1118,8 +1118,10 @@ fn sys_dup(frame: &mut Ureg, proc: &mut Proc) -> u64 {
 
 /// CREATE(22): path, mode, perm.  Resolve the PARENT (open-style union
 /// redirect), then if the final component EXISTS open it OTRUNC
-/// (unless OEXCL), else dispatch the device's create op.  Directory
-/// creates have no measured caller — loud error.
+/// (unless OEXCL), else dispatch the device's create op.  DMDIR rides
+/// the perm word to the device (mkdir through a mount — keyfs's user
+/// creates — is the measured caller, 15-03); a device that cannot make
+/// directories errors its own loud error.
 fn sys_create(frame: &mut Ureg, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 3) else {
         return err(proc, "create: bad argument block");
@@ -1129,10 +1131,7 @@ fn sys_create(frame: &mut Ureg, proc: &mut Proc) -> u64 {
         (args[1] & 0xffff_ffff) as u32,
         (args[2] & 0xffff_ffff) as u32,
     ); // mode/perm are ints
-    if perm & 0x8000_0000 != 0 {
-        // DMDIR
-        return err(proc, "create: directories unsupported this era");
-    }
+
     let path = match copy_user_str(proc, path_va, ERRMAX) {
         Ok(path) => path,
         Err(msg) => return err(proc, msg),
