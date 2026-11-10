@@ -999,6 +999,10 @@ pub struct Proc {
     /// The recorded scheduling priority (devproc ctl's "pri N" — the
     /// honest degradation: nothing READS it but the status report).
     pub pri: u32,
+    /// The donor's privatemem (CMprivate — factotum's anti-debug write,
+    /// recorded, never yet enforced: the /proc mem files are a later
+    /// era).
+    pub privatemem: bool,
     /// The rendezvous group handle (port::rendez; 9k's Rgrp).
     pub rgrp: Arc<Lock<RendezGroup>>,
     /// The value a rendezvous peer left for us.
@@ -1056,6 +1060,7 @@ impl Proc {
             alarm_at: 0,
             argv: Vec::new(),
             pri: 0,
+            privatemem: false,
             rgrp: Arc::new(Lock::new("rendez", RendezGroup::new())),
             rendval: 0,
             rfmem_family: None,
@@ -2067,7 +2072,24 @@ pub fn proc_set_pri(pid: u64, pri: u32) -> Result<()> {
     Ok(())
 }
 
-/// The note-queue append shared by post_note and the note-group post:
+/// devproc's ctl hook: record the "private" write on the ADDRESSED pid
+/// (the donor CMprivate's p->privatemem = 1).  Accepting + storing is
+/// the honest degradation — the /proc mem-read exclusions are a later
+/// era.  Missing/Moribund -> the loud error.
+pub fn proc_set_private(pid: u64) -> Result<()> {
+    let node = LockNode::new();
+    let mut table = PROC_TABLE.lock(&node);
+    let Some(p) = table.procs.iter_mut().flatten().find(|p| p.pid == pid) else {
+        return Err("devproc: no such process");
+    };
+    if p.state == ProcState::Moribund {
+        return Err("devproc: no such process");
+    }
+    p.privatemem = true;
+    Ok(())
+}
+
+/// The note-queue append shared by post_note (per-pid) and the note-group post:
 /// Moribund targets and full queues are skipped per the donor's
 /// postnote failure shape.
 fn push_note(p: &mut Proc, msg: &[u8]) -> Result<()> {

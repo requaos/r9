@@ -481,6 +481,7 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
         list: proc::proc_list_live,
         info: proc::proc_info,
         set_pri: proc::proc_set_pri,
+        set_private: proc::proc_set_private,
     });
     port::devcons::set_pid_hook(proc::current_pid);
 

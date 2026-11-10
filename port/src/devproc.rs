@@ -110,12 +110,17 @@ pub struct ProcInfo {
 /// The arch-side proc-table hooks (the note-post hook's
 /// siblings): `list` returns the LIVE (non-Moribund) pids (the root
 /// listing's content); `info` returns a pid's status/args data (None =
-/// no such live process); `set_pri` records a ctl priority write.
+/// no such live process); `set_pri` records a ctl priority write;
+/// `set_private` records the donor's privatemem flag.
 #[derive(Clone, Copy)]
 pub struct ProcHooks {
     pub list: fn() -> alloc::vec::Vec<u64>,
     pub info: fn(u64) -> Option<ProcInfo>,
     pub set_pri: fn(u64, u32) -> Result<()>,
+    /// Record the "private" ctl verb on the addressed pid (the donor's
+    /// p->privatemem = 1; the /proc mem exclusions ride the donor's
+    /// arms when /proc mem files land).
+    pub set_private: fn(u64) -> Result<()>,
 }
 
 /// The arch-side proc hooks.  Same one-time-publish idiom as POST_HOOK.
@@ -446,19 +451,49 @@ pub fn write(c: &mut Chan, buf: &[u8]) -> Result<u64> {
             let text = core::str::from_utf8(buf).map_err(|_| "devproc: ctl write is not utf8")?;
             let mut it = text.split_whitespace();
             let (verb, arg, extra) = (it.next(), it.next(), it.next());
-            if verb != Some("pri") {
-                return Err("devproc: unknown ctl verb");
+            match verb {
+                // The "pri N" control (init.c:52's write of "pri 10" to
+                // #p/<getpid>/ctl): parse + RECORD via the arch hooks —
+                // accepting and storing is the honest degradation (no
+                // scheduler priority exists this era).
+                Some("pri") => {
+                    if extra.is_some() {
+                        return Err("devproc: malformed ctl write");
+                    }
+                    let Some(arg) = arg else {
+                        return Err("devproc: ctl pri needs a decimal number");
+                    };
+                    let v: u32 =
+                        arg.parse().map_err(|_| "devproc: ctl pri needs a decimal number")?;
+                    let hooks = proc_hooks()?;
+                    (hooks.set_pri)(pid, v)?;
+                    Ok(buf.len() as u64)
+                }
+                // "private" (donor CMprivate: p->privatemem = 1 —
+                // factotum's private() writes it so other procs cannot
+                // read its key pages through /proc): recorded via the
+                // same arch hook shape; the /proc mem-read exclusions
+                // ride the donor's proc.c:407 arms when /proc mem files
+                // land.  Accepting the verb keeps factotum's startup
+                // warnings silent without lying about enforcement.
+                Some("private") => {
+                    if arg.is_some() || extra.is_some() {
+                        return Err("devproc: malformed ctl write");
+                    }
+                    let hooks = proc_hooks()?;
+                    (hooks.set_private)(pid)?;
+                    Ok(buf.len() as u64)
+                }
+                // "noswap" (donor CMnoswap): RETIRED upstream — a no-op
+                // success, never an error.
+                Some("noswap") => {
+                    if arg.is_some() || extra.is_some() {
+                        return Err("devproc: malformed ctl write");
+                    }
+                    Ok(buf.len() as u64)
+                }
+                _ => Err("devproc: unknown ctl verb"),
             }
-            if extra.is_some() {
-                return Err("devproc: malformed ctl write");
-            }
-            let Some(arg) = arg else {
-                return Err("devproc: ctl pri needs a decimal number");
-            };
-            let v: u32 = arg.parse().map_err(|_| "devproc: ctl pri needs a decimal number")?;
-            let hooks = proc_hooks()?;
-            (hooks.set_pri)(pid, v)?;
-            Ok(buf.len() as u64)
         }
         _ => Err("devproc: write of a read-only file"),
     }

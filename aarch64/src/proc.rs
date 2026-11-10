@@ -777,6 +777,10 @@ pub struct Proc {
     /// it but the /proc/N/status report).  rfork INHERITS it (donor
     /// forkchild); exec preserves it (Plan 9 convention).  0 until set.
     pub pri: u32,
+    /// The donor's privatemem (CMprivate — factotum's anti-debug write,
+    /// recorded, never yet enforced: the /proc mem files are a later
+    /// era).
+    pub privatemem: bool,
     /// The rendezvous group handle (port::rendez; 9k's Rgrp).  rfork
     /// flag semantics per fork(2)/9k sysproc.c: RFPROC WITH RFREND gives
     /// the child a FRESH empty group; WITHOUT it the child SHARES this
@@ -862,6 +866,7 @@ impl Proc {
             alarm_at: 0,
             argv: Vec::new(),
             pri: 0,
+            privatemem: false,
             rgrp: Arc::new(Lock::new("rendez", RendezGroup::new())),
             rendval: 0,
             rfmem_family: None,
@@ -1969,6 +1974,22 @@ pub fn proc_set_pri(pid: u64, pri: u32) -> Result<()> {
         return Err("devproc: no such process");
     }
     p.pri = pri;
+    Ok(())
+}
+
+/// devproc's ctl hook: record the "private" write on the ADDRESSED pid
+/// (the donor CMprivate's p->privatemem = 1) — the x86_64 sibling's
+/// shape, so the port hook surface stays arch-uniform.
+pub fn proc_set_private(pid: u64) -> Result<()> {
+    let node = LockNode::new();
+    let mut table = PROC_TABLE.lock(&node);
+    let Some(p) = table.procs.iter_mut().flatten().find(|p| p.pid == pid) else {
+        return Err("devproc: no such process");
+    };
+    if p.state == ProcState::Moribund {
+        return Err("devproc: no such process");
+    }
+    p.privatemem = true;
     Ok(())
 }
 

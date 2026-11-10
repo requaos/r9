@@ -400,6 +400,7 @@ fn exec_bootstrap(facts: &mb2::Facts) -> ! {
         list: proc::proc_list_live,
         info: proc::proc_info,
         set_pri: proc::proc_set_pri,
+        set_private: proc::proc_set_private,
     });
     port::devcons::set_pid_hook(proc::current_pid);
     // devpipe's block/wake hooks — a read on an empty pipe parks the
