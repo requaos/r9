@@ -31,4 +31,9 @@ mod global {
     }
 }
 
+// The module is kernel-only (the host test harness cannot link the
+// global allocator), so the re-export rides the same cfg — an ungated
+// `use global::…` is E0432 under cfg(test) and broke the canonical
+// `cargo test -p x86_64 --bins` battery (15-regression catch).
+#[cfg(not(test))]
 pub(crate) use global::heap_stats;
