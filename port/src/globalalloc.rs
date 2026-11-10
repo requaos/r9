@@ -139,7 +139,16 @@ mod global {
     use core::ptr;
     use core::sync::atomic::{AtomicPtr, Ordering};
 
-    const GLOBAL_HEAP_SIZE: usize = 4 * 1024 * 1024;
+    // 32 MiB (15-03's services-venue raise, measured): the 4 MiB
+    // era-sized for the 36 KB leg-1 image + a handful of procs; the
+    // services venue measured 0x3ff000/0x400000 exhausted mid-sweep
+    // (exec staging peaks of the 100-400 KB h* binaries + resident
+    // daemons + ~70 procs' residue — evidence/15-03's oom print).  The
+    // arena is .bss (NOBITS — no file weight, no runtime cost until
+    // carved); the per-proc exit-residue LEAK audit stays Phase 17's
+    // (the plan's RFMEM-OOM-leaks boundary), the raise only removes the
+    // artificial capacity ceiling.
+    const GLOBAL_HEAP_SIZE: usize = 32 * 1024 * 1024;
 
     /// A GlobalHeap is an aligned wrapper around an owned
     /// buffer.

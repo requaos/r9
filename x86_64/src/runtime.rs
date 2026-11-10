@@ -18,6 +18,11 @@ pub fn panic(info: &PanicInfo) -> ! {
 }
 
 #[alloc_error_handler]
-fn oom(_layout: Layout) -> ! {
-    panic!("oom");
+fn oom(layout: Layout) -> ! {
+    // The layout + arena high-water on the wire: an oom with the arena
+    // full names a leak or an era-capacity gap; an oom with arena LEFT
+    // names a fragmentation/size-class failure (the quick/misc lists
+    // could not serve a fit the tail still had room for).
+    let (used, total) = crate::allocator::heap_stats();
+    panic!("oom: {layout:?} arena used {used:#x} of {total:#x}");
 }

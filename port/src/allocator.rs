@@ -570,3 +570,20 @@ impl QuickFit {
 pub mod global {
     pub use crate::globalalloc::{GlobalHeap, GlobalQuickAlloc};
 }
+
+// Diagnostic surface (15-03, the services-venue oom hunt): read-only
+// arena stats off the live QuickFit.  tail.cursor is the bump
+// high-water mark (bytes carved from the arena's front, irreversibly
+// for blocks still allocated AND for the never-reused prefix holes);
+// arena.len() is the fixed GLOBAL_HEAP_SIZE.  The difference is NOT
+// "free" in a bump sense (freed blocks recycle through the quick/misc
+// lists, and the cursor only ever grows) — the pair still localizes a
+// leak: a cursor that climbs with every proc while live allocations
+// stay flat names a permanent-burn bug's slope.
+impl QuickFit {
+    /// The bump cursor (bytes carved from the arena front so far) and
+    /// the arena size.  Read-only; single CPU this era.
+    pub fn arena_stats(&self) -> (usize, usize) {
+        (self.tail.cursor.load(core::sync::atomic::Ordering::Relaxed), self.tail.arena.len())
+    }
+}
