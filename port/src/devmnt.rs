@@ -90,6 +90,8 @@ const TOPEN: u8 = 112;
 const ROPEN: u8 = 113;
 const TREAD: u8 = 116;
 const RREAD: u8 = 117;
+const TWRITE: u8 = 118;
+const RWRITE: u8 = 119;
 const TCLUNK: u8 = 120;
 const RCLUNK: u8 = 121;
 const TSTAT: u8 = 124;
@@ -625,6 +627,25 @@ impl Mnt {
         Ok(data[..keep].to_vec())
     }
 
+    /// One Twrite RPC (donor mntrdwr's write inner loop): count is clamped
+    /// by the caller to the era's per-RPC bound; the reply's count is
+    /// clamped to the request (the donor's silent clamp).
+    pub fn write(&self, fid: u32, off: u64, data: &[u8]) -> Result<u32> {
+        let mut core = self.enter()?;
+        let tag = Self::alloc_tag(&mut core);
+        let mut body = Vec::new();
+        pw32(&mut body, fid);
+        pw64(&mut body, off);
+        pw32(&mut body, data.len() as u32);
+        body.extend_from_slice(data);
+        let msg = tmsg(TWRITE, tag, &body);
+        let size = self.transact(&mut core, &msg, RWRITE, tag)?;
+        let mut cur = RepCur::new(&core.rx[7..size]);
+        let count = cur.u32()?;
+        cur.done()?;
+        Ok(count.min(data.len() as u32))
+    }
+
     /// Tstat (donor mntstat): the reply's stat payload (nstat bytes — the
     /// stat(5) image WITH its own 2-byte prefix, whose value must be
     /// nstat-2 — the malformation check).
@@ -812,6 +833,36 @@ pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
         done += n;
         if n < want {
             break; // a short reply = EOF (the donor mntrdwr break)
+        }
+    }
+    if offset == u64::MAX {
+        c.offset += done as u64;
+    }
+    Ok(done as u64)
+}
+
+/// The DEV_MNT write leg (sys_pwrite): chunked Twrites (donor mntrdwr —
+/// the read leg's mirror); u64::MAX offset uses + advances the chan's
+/// streaming offset (the pwrite convention).  The mounted tree stopped
+/// being read-only the day the services venues needed ctl writes through
+/// srv-mounted daemons (15-03: cs/dns query writes, factotum's ctl
+/// round-trip) — the SERVER still enforces its own permissions (paqfs
+/// keeps refusing writes; Erdonly is paqfs's answer, not devmnt's).
+pub fn write(c: &mut Chan, buf: &[u8], offset: u64) -> Result<u64> {
+    let Some(mnt) = &c.mnt else { return Err("devmnt: write of a non-mount chan") };
+    let Some(fid) = &c.mnt_fid else {
+        return Err("devmnt: write of an fid-less chan");
+    };
+    let cap = rpc_data_cap(mnt.msize());
+    let mut off = if offset == u64::MAX { c.offset } else { offset };
+    let mut done = 0usize;
+    while done < buf.len() {
+        let take = (buf.len() - done).min(cap);
+        let wrote = mnt.write(**fid, off, &buf[done..done + take])? as usize;
+        off += wrote as u64;
+        done += wrote;
+        if wrote < take {
+            break; // a short reply = the server's fill point (the donor break)
         }
     }
     if offset == u64::MAX {

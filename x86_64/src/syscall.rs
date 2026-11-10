@@ -297,7 +297,7 @@ fn sys_pwrite(frame: &mut Ureg, proc: &mut Proc) -> u64 {
             port::devip::stack::drain_debt_if_set();
             port::devip::write(&mut chan, src.as_slice(), off)
         }
-        DEV_MNT => Err("devmnt: the mounted tree is read-only this era"),
+        DEV_MNT => port::devmnt::write(&mut chan, src.as_slice(), off),
         _ => Err("pwrite: unknown device"),
     };
     proc.fd_op_done(fd, chan);
