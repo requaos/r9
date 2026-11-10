@@ -27,7 +27,7 @@ use port::dat::{
     Chan, DEV_CONS, DEV_DUP, DEV_ENV, DEV_ETHER, DEV_IP, DEV_MNT, DEV_PIPE, DEV_PROC, DEV_ROOT,
     DEV_SRV, OEXEC, OTRUNC,
 };
-use port::mcslock::LockNode;
+use port::mcslock::{Lock, LockNode};
 use port::namec::{self, NamecMode};
 use port::pgrp::{MAFTER, MBEFORE, MMASK, MORDER};
 use port::println;
@@ -1274,12 +1274,26 @@ fn sys_rfork(frame: &mut Ureg, proc: &mut Proc) -> u64 {
         return err(proc, "rfork: unsupported flags");
     }
     if flag & RFPROC == 0 {
-        // Donor non-RFPROC branch: RFMEM/RFNOWAIT are Ebadarg; the
-        // fd-group split is unsupported this era (loud); the namespace
+        // Donor non-RFPROC branch (sysproc.c:50-57): RFMEM/RFNOWAIT are
+        // Ebadarg; RFFDG privatizes a COPY of the fd group in place and
+        // RFCFDG empties it (dupfgrp(ofg)/dupfgrp(nil)); the namespace
         // and env group splits re-group the CALLER, as do the note and
-        // rendezvous group splits.
-        if flag & (RFMEM | RFNOWAIT | RFFDG | RFCFDG) != 0 {
+        // rendezvous group splits.  The in-place RFFDG is load-bearing
+        // for lib9p's _postmountsrv (post.c): after forking the server
+        // child (which SHARES the fd group), the parent rfork(RFFDG)s
+        // to keep its srvfd private before the child's close(s->srvfd)
+        // lands in the SHARED table — without it every postmountsrv
+        // mount dies "mount: bad fd" (15-03's services sweep finding,
+        // measured on mntgen/cs/dns/factotum/keyfs).
+        if flag & (RFMEM | RFNOWAIT) != 0 {
             return err(proc, "rfork: bad flags for non-RFPROC");
+        }
+        if flag & RFFDG != 0 {
+            let node = LockNode::new();
+            let copy = proc.fd_group.lock(&node).deep_copy();
+            proc.fd_group = Arc::new(Lock::new("fdgrp", copy));
+        } else if flag & RFCFDG != 0 {
+            proc.fd_group = proc::empty_fdgroup();
         }
         if flag & (RFNAMEG | RFCNAMEG) != 0 {
             proc::rfork_namespace_split(proc, flag & RFNAMEG != 0);
