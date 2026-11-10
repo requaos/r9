@@ -424,8 +424,20 @@ WRAP
             # NAR hash (what this attr checks)
             # ada738310c47b9236f48f1c691129e4d2faa66095acc140ba2def8d1d8ee7ade
             # (sha256-rac4MQx…), in three-way agreement with the FOD's own
+            # measured got-value.  The 15-03 services fixes re-staled it
+            # once more and were re-wired at 3362cf7 (NCK9JST5… above);
+            # the 15-08 DESK-03 module-stash raise (8->64 MiB — kernel
+            # bytes again) re-staled it in turn; re-wired at the fix
+            # commit with the same two-derivation proof: two independent
+            # fresh-kernel builds (version-override clones
+            # desk03-proof-a/-b) through the non-FOD bootIo realization
+            # produced the byte-identical ISO — file-level sha256
+            # 1a175703d2e6492f935dc23029a91a97c8f0b33eab4af69e0a841955917a37b2,
+            # NAR hash (what this attr checks)
+            # ab9e19a76fcb1120ee4b08c8c14e0451e45ad85c0182f68a05c7422af98949be
+            # (sha256-q54Zp2…), in three-way agreement with the FOD's own
             # measured got-value.
-            outputHash = "sha256-NCK9JST5OliyA9RKcVJ/D3hQVrXBIJtjg5J+yZPFroc=";
+            outputHash = "sha256-q54Zp2/LESDuSwjIwU4EUeRa2FwBgvaKBcdCKvmJSb4=";
           };
         });
 
