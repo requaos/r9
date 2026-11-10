@@ -425,7 +425,7 @@ WRAP
             # ada738310c47b9236f48f1c691129e4d2faa66095acc140ba2def8d1d8ee7ade
             # (sha256-rac4MQx…), in three-way agreement with the FOD's own
             # measured got-value.
-            outputHash = "sha256-rac4MQxHuSNvSPHGkRKeTS+qZglazBQLot740djuet4=";
+            outputHash = "sha256-NCK9JST5OliyA9RKcVJ/D3hQVrXBIJtjg5J+yZPFroc=";
           };
         });
 
