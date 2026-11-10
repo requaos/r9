@@ -58,6 +58,17 @@ fn hook_set_pri(pid: u64, pri: u32) -> port::Result<()> {
     Ok(())
 }
 
+fn hook_set_private(pid: u64) -> port::Result<()> {
+    // The 15-03 "private" verb: recorded-only this era (no /proc mem
+    // files to exclude yet) — the test hook accepts for the live pid.
+    let t = PROCS.lock().unwrap();
+    if t.iter().any(|p| p.pid == pid) {
+        Ok(())
+    } else {
+        Err("devproc: no such process")
+    }
+}
+
 fn hook_post(pid: u64, msg: &[u8]) -> port::Result<()> {
     NOTES.lock().unwrap().push((pid, msg.to_vec()));
     Ok(())
@@ -121,6 +132,7 @@ fn devproc_root_status_args_ctl_and_note_surface() {
         list: hook_list,
         info: hook_info,
         set_pri: hook_set_pri,
+        set_private: hook_set_private,
     });
     devproc::set_post_hook(hook_post);
 
