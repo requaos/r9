@@ -58,5 +58,25 @@ hostfwd = [
 ]
 pcap = true
 
+# The tap leg (16-01 Task 2, HNET-03): the live-probed NixOS shape —
+# br=br0 (the NAT'd private bridge) and the EXPLICIT setuid helper
+# wrapper path (Pitfall 1: qemu's compiled-in default helper is its
+# own nosuid store libexec, where the setuid bit is dead).  The vmnet
+# leg (HNET-04) is darwin-only documented-manual: socket_vmnet's
+# conventional socket path, emitted by the ONE builder so the darwin
+# docs cite exactly what this table prints.
+[qemu.netdev.tap]
+mode = "tap"
+device = "virtio-net-pci-non-transitional"
+br = "br0"
+helper = "/run/wrappers/bin/qemu-bridge-helper"
+pcap = true
+
+[qemu.netdev.vmnet]
+mode = "vmnet-socket"
+device = "virtio-net-pci-non-transitional"
+socket-path = "/var/run/socket_vmnet"
+pcap = false
+
 [dist]
 format = "elf"

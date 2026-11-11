@@ -590,6 +590,27 @@ pub fn netdev_args_checked(
             }
             (token, &t.device, t.pcap)
         }
+        "tap" => {
+            let Some(t) = netdev.tap.as_ref() else {
+                return Err(
+                    "netdev mode `tap` has no [qemu.netdev.tap] table in this config".to_string()
+                );
+            };
+            (
+                format!("{},id=n0,br={},helper={}", t.mode, t.br, t.helper),
+                &t.device,
+                t.pcap,
+            )
+        }
+        "vmnet" => {
+            let Some(t) = netdev.vmnet.as_ref() else {
+                return Err(
+                    "netdev mode `vmnet` has no [qemu.netdev.vmnet] table in this config"
+                        .to_string(),
+                );
+            };
+            (format!("{},id=n0,path={}", t.mode, t.socket_path), &t.device, t.pcap)
+        }
         _ => {
             return Err(format!("unknown netdev mode `{mode}`: want slirp|tap|vmnet"));
         }
