@@ -1079,6 +1079,111 @@ mod tests {
         assert_eq!(via_apply, via_builder);
     }
 
+    /// 16-01 Task 2 (D-05, HNET-03): the tap table emits the
+    /// bridge-attach stanza with br and helper VERBATIM — the explicit
+    /// helper is the NixOS-correct shape (the compiled-in default is
+    /// the nosuid store libexec, 16-RESEARCH Pitfall 1).  filter-dump
+    /// rides only when the caller supplies a pcap path.
+    #[test]
+    fn netdev_args_tap_emits_br_and_helper_verbatim() {
+        let q35: Configuration = toml::from_str(
+            "[config]\nplatform = \"q35\"\n[qemu]\nmachine = \"q35\"\n[qemu.netdev]\ndefault = \
+             \"slirp\"\n[qemu.netdev.slirp]\nmode = \"user\"\ndevice = \
+             \"virtio-net-pci-non-transitional\"\nhostfwd = []\npcap = true\n[qemu.netdev.tap]\n\
+             mode = \"tap\"\ndevice = \"virtio-net-pci-non-transitional\"\nbr = \"br0\"\nhelper \
+             = \"/run/wrappers/bin/qemu-bridge-helper\"\npcap = true\n",
+        )
+        .expect("test TOML must parse");
+        let args = super::netdev_args_checked(&q35, "tap", Some("/tmp/probe.pcap"))
+            .expect("tap must emit");
+        assert_eq!(
+            args,
+            vec![
+                "-netdev",
+                "tap,id=n0,br=br0,helper=/run/wrappers/bin/qemu-bridge-helper",
+                "-device",
+                "virtio-net-pci-non-transitional,netdev=n0",
+                "-object",
+                "filter-dump,id=f0,netdev=n0,file=/tmp/probe.pcap",
+            ]
+        );
+        // No path, no filter-dump — the caller places the capture.
+        let bare = super::netdev_args_checked(&q35, "tap", None).expect("tap must emit");
+        assert_eq!(bare.len(), 4);
+    }
+
+    /// 16-01 Task 2 (D-05, HNET-04): the vmnet table emits the
+    /// darwin socket_vmnet stanza from data — documented-manual this
+    /// era, but its argv is still emitted by the ONE builder so the
+    /// darwin docs cite exactly what this prints.  pcap = false keeps
+    /// the object off even when a path is supplied.
+    #[test]
+    fn netdev_args_vmnet_emits_socket_path() {
+        let q35: Configuration = toml::from_str(
+            "[config]\nplatform = \"q35\"\n[qemu]\nmachine = \"q35\"\n[qemu.netdev]\ndefault = \
+             \"slirp\"\n[qemu.netdev.slirp]\nmode = \"user\"\ndevice = \
+             \"virtio-net-pci-non-transitional\"\nhostfwd = []\npcap = true\n[qemu.netdev.vmnet]\n\
+             mode = \"vmnet-socket\"\ndevice = \
+             \"virtio-net-pci-non-transitional\"\nsocket-path = \"/var/run/socket_vmnet\"\npcap \
+             = false\n",
+        )
+        .expect("test TOML must parse");
+        let args = super::netdev_args_checked(&q35, "vmnet", Some("/tmp/probe.pcap"))
+            .expect("vmnet must emit");
+        assert_eq!(
+            args,
+            vec![
+                "-netdev",
+                "vmnet-socket,id=n0,path=/var/run/socket_vmnet",
+                "-device",
+                "virtio-net-pci-non-transitional,netdev=n0",
+            ]
+        );
+    }
+
+    /// 16-01 Task 2: an unknown mode is a LOUD error listing the valid
+    /// selectors — never a silently empty argv; a valid selector whose
+    /// sub-table this config lacks names the gap.
+    #[test]
+    fn netdev_args_unknown_mode_is_a_loud_error() {
+        let q35: Configuration = toml::from_str(
+            "[config]\nplatform = \"q35\"\n[qemu]\nmachine = \"q35\"\n[qemu.netdev]\ndefault = \
+             \"slirp\"\n[qemu.netdev.slirp]\nmode = \"user\"\ndevice = \
+             \"virtio-net-pci-non-transitional\"\nhostfwd = []\npcap = true\n",
+        )
+        .expect("test TOML must parse");
+        let err = super::netdev_args_checked(&q35, "bogus", None)
+            .expect_err("an unknown mode must never emit");
+        assert!(
+            err.contains("slirp|tap|vmnet"),
+            "the error must list the valid modes: {err}"
+        );
+        let err = super::netdev_args_checked(&q35, "tap", None)
+            .expect_err("a selector without its table must never emit");
+        assert!(
+            err.contains("[qemu.netdev.tap]"),
+            "the error must name the absent table: {err}"
+        );
+    }
+
+    /// 16-01 Task 2: a tap table missing br or helper fails
+    /// deserialization — BOTH keys are required (the helper MUST be
+    /// explicit per Pitfall 1; a helper-less tap stanza would fall
+    /// back to the nosuid store default and fail obscurely inside
+    /// qemu).
+    #[test]
+    fn netdev_tap_table_requires_br_and_helper() {
+        let bad = toml::from_str::<Configuration>(
+            "[config]\nplatform = \"q35\"\n[qemu]\nmachine = \"q35\"\n[qemu.netdev.tap]\nmode = \
+             \"tap\"\ndevice = \"virtio-net-pci-non-transitional\"\nbr = \"br0\"\npcap = true\n",
+        );
+        let err = bad.expect_err("a tap table without helper must not deserialize");
+        assert!(
+            err.to_string().contains("helper"),
+            "serde must name the missing helper key: {err}"
+        );
+    }
+
     /// 13-01: the [qemu] extra list emits its tokens verbatim, in order,
     /// after the structured keys — the data path 13-04's
     /// `-global q35-pcihost.MCFG=0xe0000000` moved-window profile rides.
