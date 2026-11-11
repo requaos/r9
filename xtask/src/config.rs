@@ -795,51 +795,59 @@ mod tests {
         assert_eq!(cmd.get_args().count(), 0);
     }
 
-    /// 13-01 (D-01a): the [qemu] netdev table emits the idle-NIC stanza
-    /// from data on q35 — the generalization of the frozen-at-pin
-    /// aarch64 emission.  The per-step pcap paths ride the caller's
-    /// argument: target/boot-test-q35.pcap (BootTestStep) /
-    /// target/qemu-q35.pcap (QemuStep).  pcap = false drops only the
-    /// filter-dump object; a non-q35 platform (virt shown) gains
+    /// 13-01 (D-01a) / 16-01 (D-05): the [qemu.netdev] mode tables
+    /// emit the slirp default stanza from data on q35 — the sub-table
+    /// shape (default selector + [qemu.netdev.slirp]) carrying the
+    /// D-04 hostfwd set verbatim, loopback-bound host addresses only
+    /// (host 17010 -> guest 17010, host 5670 -> guest 567).  The
+    /// per-step pcap paths ride the caller's argument:
+    /// target/boot-test-q35shell.pcap (BootTestStep) /
+    /// target/qemu-q35shell.pcap (QemuStep).  pcap = false drops only
+    /// the filter-dump object; a non-q35 platform (virt shown) gains
     /// nothing — its emission stays apply_virt_netdev's.
     #[test]
     fn q35_netdev_stanza_emits_from_data() {
         let q35: Configuration = toml::from_str(
-            "[config]\nplatform = \"q35\"\n[qemu]\nmachine = \"q35\"\n[qemu.netdev]\nmode = \
-             \"user\"\ndevice = \"virtio-net-pci-non-transitional\"\npcap = true\n",
+            "[config]\nplatform = \"q35\"\n[qemu]\nmachine = \"q35\"\n[qemu.netdev]\ndefault = \
+             \"slirp\"\n[qemu.netdev.slirp]\nmode = \"user\"\ndevice = \
+             \"virtio-net-pci-non-transitional\"\nhostfwd = [\"tcp:127.0.0.1:17010-:17010\", \
+             \"tcp:127.0.0.1:5670-:567\"]\npcap = true\n",
         )
         .expect("test TOML must parse");
         let mut cmd = std::process::Command::new("qemu-system-x86_64");
-        super::apply_netdev(&mut cmd, &q35, "target/boot-test-q35.pcap");
+        super::apply_netdev(&mut cmd, &q35, "target/boot-test-q35shell.pcap");
         let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
         assert_eq!(
             args,
             vec![
                 "-netdev",
-                "user,id=n0",
+                "user,id=n0,hostfwd=tcp:127.0.0.1:17010-:17010,hostfwd=tcp:127.0.0.1:5670-:567",
                 "-device",
                 "virtio-net-pci-non-transitional,netdev=n0",
                 "-object",
-                "filter-dump,id=f0,netdev=n0,file=target/boot-test-q35.pcap",
+                "filter-dump,id=f0,netdev=n0,file=target/boot-test-q35shell.pcap",
             ]
         );
         let mut cmd = std::process::Command::new("qemu-system-x86_64");
-        super::apply_netdev(&mut cmd, &q35, "target/qemu-q35.pcap");
+        super::apply_netdev(&mut cmd, &q35, "target/qemu-q35shell.pcap");
         let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
-        assert!(args.last().is_some_and(|a| a.ends_with("file=target/qemu-q35.pcap")));
+        assert!(args.last().is_some_and(|a| a.ends_with("file=target/qemu-q35shell.pcap")));
 
         let nocap: Configuration = toml::from_str(
-            "[config]\nplatform = \"q35\"\n[qemu]\nmachine = \"q35\"\n[qemu.netdev]\nmode = \
-             \"user\"\ndevice = \"virtio-net-pci-non-transitional\"\npcap = false\n",
+            "[config]\nplatform = \"q35\"\n[qemu]\nmachine = \"q35\"\n[qemu.netdev]\ndefault = \
+             \"slirp\"\n[qemu.netdev.slirp]\nmode = \"user\"\ndevice = \
+             \"virtio-net-pci-non-transitional\"\nhostfwd = [\"tcp:127.0.0.1:17010-:17010\", \
+             \"tcp:127.0.0.1:5670-:567\"]\npcap = false\n",
         )
         .expect("test TOML must parse");
         let mut cmd = std::process::Command::new("qemu-system-x86_64");
-        super::apply_netdev(&mut cmd, &nocap, "target/qemu-q35.pcap");
+        super::apply_netdev(&mut cmd, &nocap, "target/qemu-q35shell.pcap");
         assert_eq!(cmd.get_args().count(), 4);
 
         let virt: Configuration = toml::from_str(
-            "[config]\nplatform = \"virt\"\n[qemu]\nmachine = \"virt,gic-version=2\"\n[qemu.netdev]\nmode = \
-             \"user\"\ndevice = \"virtio-net-pci-non-transitional\"\npcap = true\n",
+            "[config]\nplatform = \"virt\"\n[qemu]\nmachine = \"virt,gic-version=2\"\n[qemu.netdev]\ndefault = \
+             \"slirp\"\n[qemu.netdev.slirp]\nmode = \"user\"\ndevice = \
+             \"virtio-net-pci-non-transitional\"\nhostfwd = []\npcap = true\n",
         )
         .expect("test TOML must parse");
         let mut cmd = std::process::Command::new("qemu-system-x86_64");
@@ -847,16 +855,22 @@ mod tests {
         assert_eq!(cmd.get_args().count(), 0);
     }
 
-    /// A [qemu] netdev table with no mode/device/pcap trio is a config
-    /// error, not a silently partial stanza — serde names the missing
-    /// key before any qemu argv exists.
+    /// A [qemu.netdev.slirp] table missing any required key is a
+    /// config error, not a silently partial stanza — serde names the
+    /// missing sub-table key before any qemu argv exists (16-01,
+    /// re-keyed from the flat-stanza trio guard).
     #[test]
     fn q35_netdev_table_requires_all_three_keys() {
         let bad = toml::from_str::<Configuration>(
-            "[config]\nplatform = \"q35\"\n[qemu]\nmachine = \"q35\"\n[qemu.netdev]\nmode = \
-             \"user\"\n",
+            "[config]\nplatform = \"q35\"\n[qemu]\nmachine = \"q35\"\n[qemu.netdev]\ndefault = \
+             \"slirp\"\n[qemu.netdev.slirp]\nmode = \"user\"\ndevice = \
+             \"virtio-net-pci-non-transitional\"\npcap = true\n",
         );
-        assert!(bad.is_err());
+        let err = bad.expect_err("a slirp table without hostfwd must not deserialize");
+        assert!(
+            err.to_string().contains("hostfwd"),
+            "serde must name the missing sub-table key: {err}"
+        );
     }
 
     /// 13-01: the [qemu] extra list emits its tokens verbatim, in order,
