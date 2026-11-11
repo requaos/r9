@@ -38,6 +38,16 @@ fn value_of(flag: &str, inline: Option<String>, rest: &mut impl Iterator<Item = 
     inline.or_else(|| rest.next()).unwrap_or_else(|| usage_exit(&format!("{flag} needs a value")))
 }
 
+/// A caller-supplied value is safe to interpolate into the output line
+/// only when non-empty and whitespace-free: the committed contract is
+/// ONE space-separated line whose tokens contain no spaces, and every
+/// consumer word-splits that line back into qemu argv tokens.  A spaced
+/// value would silently corrupt the split (the stray fragments become
+/// arbitrary qemu options parsed from the path).
+fn token_safe(v: &str) -> bool {
+    !v.is_empty() && !v.chars().any(char::is_whitespace)
+}
+
 fn main() {
     let mut mode: Option<String> = None;
     let mut pcap: Option<String> = None;
@@ -66,6 +76,18 @@ fn main() {
         "slirp" | "tap" | "vmnet" => {}
         _ => usage_exit(&format!("unknown mode `{mode}`")),
     }
+    // The --pcap path is interpolated verbatim into a filter-dump token,
+    // so a spaced/empty value would break the bin's own no-spaces output
+    // contract — reject it at the CLI boundary, before any argv exists.
+    // (--config is only read from disk, never interpolated into a token,
+    // so it needs no such check.)
+    if let Some(p) = &pcap {
+        if !token_safe(p) {
+            usage_exit(&format!(
+                "--pcap value {p:?} contains whitespace/is empty — tokens are split on spaces by every consumer"
+            ));
+        }
+    }
     let text = match &config_path {
         Some(p) => std::fs::read_to_string(p)
             .unwrap_or_else(|e| usage_exit(&format!("--config {p}: {e}"))),
@@ -76,4 +98,23 @@ fn main() {
     let argv = netdev_args_checked(&config, &mode, pcap.as_deref())
         .unwrap_or_else(|e| usage_exit(&e));
     println!("{}", argv.join(" "));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::token_safe;
+
+    /// The no-spaces token contract the header states and every
+    /// consumer's word-split relies on: clean paths pass, empty and
+    /// whitespace-carrying values (space, tab, newline) are rejected
+    /// at the CLI boundary.
+    #[test]
+    fn pcap_token_safety_rejects_empty_and_whitespace() {
+        assert!(token_safe("/tmp/r9-net-smoke.pcap"));
+        assert!(token_safe("out.pcap"));
+        assert!(!token_safe(""));
+        assert!(!token_safe("/tmp/my dir/x.pcap"));
+        assert!(!token_safe("/tmp/x\ty.pcap"));
+        assert!(!token_safe("/tmp/x\ny.pcap"));
+    }
 }
