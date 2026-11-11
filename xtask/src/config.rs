@@ -1,6 +1,6 @@
 /// Test
 ///
-use crate::{Command, DynError, Profile};
+use crate::{DynError, Profile};
 
 use serde::{Deserialize, Serialize};
 use std::{
@@ -8,7 +8,7 @@ use std::{
     fs::{self, File, create_dir_all},
     io::Write,
     path::PathBuf,
-    process::exit,
+    process::{Command, exit},
 };
 
 /// build section
@@ -103,12 +103,13 @@ pub struct Qemu {
     /// patched copy of the DTB (see prepare_initrd_dtb).
     pub initrd: Option<Initrd>,
 
-    /// The idle-then-bound NIC stanza as data (13-01, D-01a): a netdev
-    /// backend + PCI device model + optional filter-dump capture, emitted
-    /// by apply_netdev (the q35 generalization of the frozen-at-pin
-    /// aarch64 apply_virt_netdev emission — that consumer is NOT
-    /// migrated this phase).  Emit-only-when-set: an absent table changes
-    /// no existing argv shape.
+    /// The host-net mode tables as data (13-01 D-01a, re-shaped 16-01
+    /// D-05): a default selector plus one optional sub-table per mode
+    /// (slirp/tap/vmnet), emitted by the ONE shared builder
+    /// netdev_args through the apply_netdev front-end (the q35
+    /// generalization of the frozen-at-pin aarch64 apply_virt_netdev
+    /// emission — that consumer is NOT migrated).  Emit-only-when-set:
+    /// an absent table changes no existing argv shape.
     pub netdev: Option<Netdev>,
 
     /// Verbatim extra argv tokens appended after the structured keys —
@@ -118,23 +119,105 @@ pub struct Qemu {
     pub extra: Option<Vec<String>>,
 }
 
-/// The [qemu] netdev table (13-01, D-01a): the NIC staged as data.
-/// `mode = "user"` + `device = "virtio-net-pci-non-transitional"` +
-/// `pcap = true` expresses `-netdev user,id=n0` +
-/// `-device virtio-net-pci-non-transitional,netdev=n0` +
-/// `-object filter-dump,id=f0,netdev=n0,file=<path>` — the same stanza
-/// shape the aarch64 virt leg emits from Rust, single-sourced here as
-/// TOML so Phase 16 (HNET-02) consumes the same table.
+/// The [qemu.netdev] mode tables (13-01 D-01a, re-shaped 16-01 D-05):
+/// a `default` selector plus one OPTIONAL sub-table per host-net mode.
+/// Every mode's argv comes from ONE builder — netdev_args below —
+/// consumed by the in-process apply_netdev front-end AND the exported
+/// r9-netdev-args bin (Harvey's flake input; two front-ends, one
+/// emission).  The sub-table KEY is the selector name
+/// (slirp/tap/vmnet); each table's `mode` field is the qemu backend
+/// string it emits ("user", "tap", "vmnet-socket") — the two are
+/// distinct, never conflated.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Netdev {
-    /// netdev backend mode ("user" — slirp)
+    /// default selector used when a caller passes no explicit mode
+    /// ("slirp" — the hermetic, zero-privilege, CI-able venue HNET-01)
+    pub default: String,
+
+    /// the slirp/user table — the committed default venue
+    pub slirp: Option<SlirpNetdev>,
+
+    /// the linux tap/bridge table (HNET-03; the helper path is
+    /// explicit data per 16-RESEARCH Pitfall 1 — the compiled-in
+    /// default helper is the nosuid store libexec on nixpkgs qemu)
+    pub tap: Option<TapNetdev>,
+
+    /// the darwin socket_vmnet table (HNET-04 — documented-manual;
+    /// its data still lands in the ONE config so the emitter prints
+    /// the exact argv the darwin docs cite)
+    pub vmnet: Option<VmnetNetdev>,
+}
+
+/// [qemu.netdev.slirp] — the qemu "user" backend as data.  The hostfwd
+/// rules bind loopback host addresses ONLY (16-01 D-04): the host
+/// entry point for auth is 127.0.0.1:5670 -> guest 567, because a
+/// literal host:567 bind needs privilege on default Linux
+/// (ip_unprivileged_port_start 1024) and the hermetic default must
+/// stay zero-privilege; the 1:1 sysctl variant is docs-only.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SlirpNetdev {
+    /// qemu backend string ("user" — the slirp selector's backend;
+    /// the selector KEY is "slirp", this is the wire name)
     pub mode: String,
 
     /// PCI device model bound to the netdev (virtio-net-pci-non-transitional
     /// — the modern-only, non-transitional transport, Phase 7 D-03)
     pub device: String,
 
-    /// attach a per-run filter-dump pcap capture object when true
+    /// hostfwd rules, appended to the -netdev token in order —
+    /// loopback-bound host addresses only (D-04)
+    pub hostfwd: Vec<String>,
+
+    /// attach a per-run filter-dump pcap capture object when true AND
+    /// the caller supplies a capture path (the gating is the
+    /// builder's: data enables, the caller places)
+    pub pcap: bool,
+}
+
+/// [qemu.netdev.tap] — the linux bridge-attached tap backend as data.
+/// `br` and `helper` are BOTH required keys: the helper MUST be
+/// explicit (Pitfall 1 — qemu's compiled-in default is its own nosuid
+/// store libexec, where the setuid bit is dead; NixOS's live wrapper
+/// is /run/wrappers/bin/qemu-bridge-helper).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TapNetdev {
+    /// qemu backend string ("tap")
+    pub mode: String,
+
+    /// PCI device model bound to the netdev
+    pub device: String,
+
+    /// host bridge the tap attaches to (br0 — the NAT'd private
+    /// bridge, 16-CONTEXT D-08)
+    pub br: String,
+
+    /// path of the setuid qemu-bridge-helper wrapper
+    pub helper: String,
+
+    /// attach a per-run filter-dump pcap capture object when true AND
+    /// the caller supplies a capture path
+    pub pcap: bool,
+}
+
+/// [qemu.netdev.vmnet] — the darwin socket_vmnet backend as data
+/// (HNET-04, documented-manual this era: socket_vmnet runs as root
+/// exposing vmnet over a UNIX socket; qemu's builtin vmnet-* backends
+/// are entitlement-walled on nixpkgs-built qemu).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VmnetNetdev {
+    /// qemu backend string ("vmnet-socket" — qemu >= 9.0)
+    pub mode: String,
+
+    /// PCI device model bound to the netdev
+    pub device: String,
+
+    /// the socket_vmnet UNIX socket path (16-RESEARCH darwin facts;
+    /// /var/run/socket_vmnet is the conventional default)
+    #[serde(rename = "socket-path")]
+    pub socket_path: String,
+
+    /// attach a per-run filter-dump pcap capture object when true AND
+    /// the caller supplies a capture path
     pub pcap: bool,
 }
 
@@ -461,21 +544,81 @@ fn apply_qemu_config(cmd: &mut Command, config: &Configuration, overrides: &Qemu
     }
 }
 
-/// The q35 netdev stanza, emitted from data (13-01, D-01a).  A [qemu]
-/// netdev table (mode/device/pcap) emits `-netdev <mode>,id=n0` +
-/// `-device <device>,netdev=n0` + (pcap) `-object
-/// filter-dump,id=f0,netdev=n0,file=<path>`, gated on the config's
-/// platform == "q35" — the emission is per-platform DATA consumed by a
-/// generalized emitter, never a Rust-formatted string keyed on the
-/// platform name alone.  Both x86_64 call sites (the interactive QemuStep
-/// arm AND BootTestStep) share this one emission, each passing its own
-/// per-step pcap path (target/qemu-<config>.pcap /
+/// The ONE netdev argv builder (16-01, D-05): every -netdev /
+/// -device / filter-dump token for every mode, keyed on the selector
+/// name.  The fatal front-end: an unknown mode (or a mode whose
+/// sub-table this config lacks) prints the error and exits 1 — the
+/// eprintln/exit idiom (Initrd::loader_device_arg) — never a
+/// silently empty argv.  Both consumers (the in-process apply_netdev
+/// and the exported r9-netdev-args bin) route through this one
+/// implementation; nothing re-assembles netdev argv by hand.
+pub fn netdev_args(config: &Configuration, mode: &str, pcap_path: Option<&str>) -> Vec<String> {
+    match netdev_args_checked(config, mode, pcap_path) {
+        Ok(args) => args,
+        Err(e) => {
+            eprintln!("qemu netdev: {e}");
+            exit(1);
+        }
+    }
+}
+
+/// The pure, testable core of netdev_args (the emitter bin prints its
+/// own usage line from the Err).  pcap gating: the filter-dump object
+/// exists only when the mode table's pcap is true AND the caller
+/// supplies a capture path — a path alone (pcap = false) emits
+/// nothing, and the table's pcap = true alone emits nothing.
+pub fn netdev_args_checked(
+    config: &Configuration,
+    mode: &str,
+    pcap_path: Option<&str>,
+) -> Result<Vec<String>, String> {
+    let Some(netdev) = config.qemu.as_ref().and_then(|q| q.netdev.as_ref()) else {
+        return Err("no [qemu.netdev] table in this config".to_string());
+    };
+    let (netdev_token, device, pcap) = match mode {
+        "slirp" => {
+            let Some(t) = netdev.slirp.as_ref() else {
+                return Err(
+                    "netdev mode `slirp` has no [qemu.netdev.slirp] table in this config"
+                        .to_string(),
+                );
+            };
+            let mut token = format!("{},id=n0", t.mode);
+            for fwd in &t.hostfwd {
+                token.push_str(",hostfwd=");
+                token.push_str(fwd);
+            }
+            (token, &t.device, t.pcap)
+        }
+        _ => {
+            return Err(format!("unknown netdev mode `{mode}`: want slirp|tap|vmnet"));
+        }
+    };
+    let mut args = vec!["-netdev".to_string(), netdev_token];
+    args.push("-device".to_string());
+    args.push(format!("{device},netdev=n0"));
+    if pcap {
+        if let Some(path) = pcap_path {
+            args.push("-object".to_string());
+            args.push(format!("filter-dump,id=f0,netdev=n0,file={path}"));
+        }
+    }
+    Ok(args)
+}
+
+/// The q35 netdev emission front-end (13-01 D-01a; a thin wrapper
+/// since 16-01 D-05): resolve the effective mode — these in-process
+/// call sites boot the TOML default (no explicit selector exists at
+/// either qemu step) — and push the ONE builder's argv onto the
+/// Command.  Gated on the config's platform == "q35": a non-q35
+/// config gains nothing.  Both x86_64 call sites (the interactive
+/// QemuStep arm AND BootTestStep) share this one emission, each
+/// passing its own per-step pcap path (target/qemu-<config>.pcap /
 /// target/boot-test-<config>.pcap — a gate never asserts against a
 /// previous run's capture).  The aarch64 `apply_virt_netdev` stays
 /// byte-untouched as the frozen-at-pin legacy consumer (OQ-2: no
-/// migration this phase).  The device sits idle and unbound (dev = []
-/// still): an untouched virtio device never asserts an interrupt — the
-/// 07-01 D-10 idle-NIC staging shape.
+/// migration).  The device sits idle and unbound until a driver binds
+/// it — the 07-01 D-10 idle-NIC staging shape.
 pub fn apply_netdev(cmd: &mut Command, config: &Configuration, pcap_path: &str) {
     let q35 = config.config.as_ref().and_then(|c| c.platform.as_deref()) == Some("q35");
     if !q35 {
@@ -484,10 +627,8 @@ pub fn apply_netdev(cmd: &mut Command, config: &Configuration, pcap_path: &str) 
     let Some(netdev) = config.qemu.as_ref().and_then(|q| q.netdev.as_ref()) else {
         return;
     };
-    cmd.arg("-netdev").arg(format!("{},id=n0", netdev.mode));
-    cmd.arg("-device").arg(format!("{},netdev=n0", netdev.device));
-    if netdev.pcap {
-        cmd.arg("-object").arg(format!("filter-dump,id=f0,netdev=n0,file={pcap_path}"));
+    for arg in netdev_args(config, &netdev.default, Some(pcap_path)) {
+        cmd.arg(arg);
     }
 }
 
@@ -871,6 +1012,71 @@ mod tests {
             err.to_string().contains("hostfwd"),
             "serde must name the missing sub-table key: {err}"
         );
+    }
+
+    /// A [qemu.netdev] table without a default selector is a config
+    /// error — the in-process front-ends resolve their effective mode
+    /// from it (16-01, D-05).
+    #[test]
+    fn netdev_table_requires_default_key() {
+        let bad = toml::from_str::<Configuration>(
+            "[config]\nplatform = \"q35\"\n[qemu]\nmachine = \"q35\"\n[qemu.netdev.slirp]\nmode \
+             = \"user\"\ndevice = \"virtio-net-pci-non-transitional\"\nhostfwd = []\npcap = \
+             true\n",
+        );
+        let err = bad.expect_err("a netdev table without default must not deserialize");
+        assert!(
+            err.to_string().contains("default"),
+            "serde must name the missing default key: {err}"
+        );
+    }
+
+    /// 16-01 (D-05) pcap gating, caller-side: the slirp table's
+    /// pcap = true alone emits NO filter-dump — the capture object
+    /// exists only when the builder is also handed a path.  The
+    /// default-path argv stays the four netdev/device tokens.
+    #[test]
+    fn netdev_args_without_pcap_path_emits_no_filter_dump() {
+        let q35: Configuration = toml::from_str(
+            "[config]\nplatform = \"q35\"\n[qemu]\nmachine = \"q35\"\n[qemu.netdev]\ndefault = \
+             \"slirp\"\n[qemu.netdev.slirp]\nmode = \"user\"\ndevice = \
+             \"virtio-net-pci-non-transitional\"\nhostfwd = [\"tcp:127.0.0.1:17010-:17010\", \
+             \"tcp:127.0.0.1:5670-:567\"]\npcap = true\n",
+        )
+        .expect("test TOML must parse");
+        let args = super::netdev_args_checked(&q35, "slirp", None).expect("slirp must emit");
+        assert_eq!(
+            args,
+            vec![
+                "-netdev",
+                "user,id=n0,hostfwd=tcp:127.0.0.1:17010-:17010,hostfwd=tcp:127.0.0.1:5670-:567",
+                "-device",
+                "virtio-net-pci-non-transitional,netdev=n0",
+            ]
+        );
+    }
+
+    /// 16-01 (D-05), the two-front-ends rule pinned in-process:
+    /// apply_netdev (the qemu steps' front-end, resolving the TOML
+    /// default mode) and the shared builder emit byte-identical argv
+    /// for the same config and pcap path — the exported bin rides the
+    /// same builder, so its stdout is this same sequence.
+    #[test]
+    fn netdev_args_matches_apply_netdev_default_path() {
+        let q35: Configuration = toml::from_str(
+            "[config]\nplatform = \"q35\"\n[qemu]\nmachine = \"q35\"\n[qemu.netdev]\ndefault = \
+             \"slirp\"\n[qemu.netdev.slirp]\nmode = \"user\"\ndevice = \
+             \"virtio-net-pci-non-transitional\"\nhostfwd = [\"tcp:127.0.0.1:17010-:17010\", \
+             \"tcp:127.0.0.1:5670-:567\"]\npcap = true\n",
+        )
+        .expect("test TOML must parse");
+        let mut cmd = std::process::Command::new("qemu-system-x86_64");
+        super::apply_netdev(&mut cmd, &q35, "target/qemu-q35shell.pcap");
+        let via_apply: Vec<String> =
+            cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        let via_builder =
+            super::netdev_args(&q35, "slirp", Some("target/qemu-q35shell.pcap"));
+        assert_eq!(via_apply, via_builder);
     }
 
     /// 13-01: the [qemu] extra list emits its tokens verbatim, in order,

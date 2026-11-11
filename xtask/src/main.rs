@@ -1,8 +1,8 @@
-use crate::config::Configuration;
-use config::{
-    QemuOverrides, apply_netdev, apply_to_build_step, apply_to_clippy_step,
+use xtask::config::{
+    Configuration, QemuOverrides, apply_netdev, apply_to_build_step, apply_to_clippy_step,
     apply_to_qemu_step_with_overrides, apply_virt_netdev, prepare_initrd_dtb, virt_resolved,
 };
+use xtask::{Arch, DynError, Profile, Result, env_or, uregcheck};
 use std::{
     env, fmt,
     io::{Read, Write},
@@ -18,73 +18,14 @@ use std::{
 };
 use target_lexicon::Triple;
 
-mod config;
+// The config/uregcheck modules and the Arch/Profile/DynError/Result/
+// env_or root types moved to the lib target (16-01, D-05) — this bin
+// and the emitter bin (src/bin/r9-netdev-args.rs) are both consumers
+// of the xtask lib.
+//
 // D-06 gate machinery: consumed by the Net profile's finish() pcap
 // assertion (07-05) and exercised by its in-file unit suite.
 mod pcap;
-mod uregcheck;
-
-type DynError = Box<dyn std::error::Error>;
-type Result<T> = std::result::Result<T, DynError>;
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Profile {
-    Debug,
-    Release,
-}
-
-impl Profile {
-    fn from(matches: &clap::ArgMatches) -> Self {
-        if matches.get_flag("release") { Profile::Release } else { Profile::Debug }
-    }
-
-    fn dir(&self) -> &'static str {
-        match self {
-            Profile::Debug => "debug",
-            Profile::Release => "release",
-        }
-    }
-}
-
-impl fmt::Display for Profile {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{self:?}")
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, clap::ValueEnum)]
-enum Arch {
-    Aarch64,
-    Riscv64,
-    X86_64,
-}
-
-impl Arch {
-    fn from(matches: &clap::ArgMatches) -> Self {
-        *matches.get_one::<Arch>("arch").unwrap_or(&Arch::X86_64)
-    }
-
-    fn qemu_system(&self) -> String {
-        env_or(
-            "QEMU",
-            match self {
-                Arch::Aarch64 => "qemu-system-aarch64",
-                Arch::Riscv64 => "qemu-system-riscv64",
-                Arch::X86_64 => "qemu-system-x86_64",
-            },
-        )
-    }
-
-    fn target(&self) -> String {
-        env_or("TARGET", format!("{}-unknown-none-elf", self.to_string().to_lowercase()).as_str())
-    }
-}
-
-impl fmt::Display for Arch {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{self:?}")
-    }
-}
 
 struct RustupState {
     installed_targets: Vec<Triple>,
@@ -305,11 +246,6 @@ fn main() {
         eprintln!("{e}");
         process::exit(1);
     }
-}
-
-fn env_or(var: &str, default: &str) -> String {
-    let default = default.to_string();
-    env::var(var).unwrap_or(default)
 }
 
 fn cargo() -> String {

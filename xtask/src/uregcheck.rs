@@ -69,10 +69,11 @@ pub enum CheckStatus {
 
 /// The Harvey checkout to check against: $R9_HARVEY_DIR — REQUIRED.
 /// The implicit `../harvey` default was removed
-/// here; an unset (or empty) variable is a named error, never a silent
-/// relative-path guess.  pub(crate) for the initrd step, which
-/// resolves the same checkout.
-pub(crate) fn harvey_dir() -> Result<PathBuf> {
+/// here; an unset (or empty) variable is a named error, never a
+/// silent relative-path guess.  pub since 16-01's lib split: the
+/// config module (same lib), the xtask bin's initrd/pcap steps, and
+/// the emitter bin all resolve the same checkout.
+pub fn harvey_dir() -> Result<PathBuf> {
     match env::var("R9_HARVEY_DIR") {
         Ok(dir) if !dir.is_empty() => Ok(PathBuf::from(dir)),
         _ => Err("R9_HARVEY_DIR is not set — point it at the Harvey checkout (it must contain \

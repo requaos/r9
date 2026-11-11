@@ -1,3 +1,7 @@
+# The base q35 profile (13-01, D-01/D-02).  16-01 (D-05): the
+# [qemu.netdev] stanza below is the mode-tables shape — default
+# selector + per-mode sub-tables; the D-04 hostfwd remap (host 5670 ->
+# guest 567) rides the slirp table as data.
 [build]
 target = "lib/x86_64-unknown-none-elf.json"
 buildflags = [
@@ -31,9 +35,27 @@ memory = "1024M"
 # (dev = [] above; an untouched virtio device never asserts an
 # interrupt).  The filter-dump capture rides the same netdev, per-step
 # pcap path (target/boot-test-q35.pcap / target/qemu-q35.pcap).
+# 16-01 (D-05): the mode tables — the flat stanza is retired; ONE
+# shared builder (xtask config::netdev_args) serves the in-process
+# boots and the exported r9-netdev-args bin.  The slirp hostfwd set is
+# D-04: loopback-bound host addresses only, host 5670 -> guest 567 (a
+# literal host:567 bind needs privilege on default Linux —
+# ip_unprivileged_port_start 1024 — and the hermetic default must
+# stay zero-privilege/CI-able, HNET-01).
+#
+# Parallel-boot constraint: two simultaneous q35 boots on one host now
+# both bind the two loopback hostfwd ports (127.0.0.1:17010 and
+# 127.0.0.1:5670) at netdev init — run the x86_64 gates sequentially.
 [qemu.netdev]
+default = "slirp"
+
+[qemu.netdev.slirp]
 mode = "user"
 device = "virtio-net-pci-non-transitional"
+hostfwd = [
+    "tcp:127.0.0.1:17010-:17010",
+    "tcp:127.0.0.1:5670-:567",
+]
 pcap = true
 
 [dist]

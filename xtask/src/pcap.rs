@@ -123,7 +123,7 @@ fn parse_ipv4_dotted(s: &str) -> Option<[u8; 4]> {
 /// 07-01 harvey:-channel precedent — a pre-spawn harness bug, never a
 /// silent default).
 pub fn netaddr_slirp() -> Result<([u8; 4], [u8; 4]), String> {
-    let path = crate::uregcheck::harvey_dir()
+    let path = xtask::uregcheck::harvey_dir()
         .map_err(|e| format!("{e}"))?
         .join("build/aarch64/netaddr.rc");
     let text = std::fs::read_to_string(&path)
@@ -186,7 +186,7 @@ fn parse_ipv6(s: &str) -> Option<[u8; 16]> {
 /// `slirp_guestv6=` / `slirp_gwv6=` lines (08-07's NETIP-06 gate — same
 /// loud-error discipline as netaddr_slirp).
 pub fn netaddr_slirp_v6() -> Result<([u8; 16], [u8; 16]), String> {
-    let path = crate::uregcheck::harvey_dir()
+    let path = xtask::uregcheck::harvey_dir()
         .map_err(|e| format!("{e}"))?
         .join("build/aarch64/netaddr.rc");
     let text = std::fs::read_to_string(&path)
@@ -845,7 +845,7 @@ pub fn assert_tcp_bidirectional(
 /// unreadable file or absent/malformed key is a loud pre-spawn harness
 /// error naming the file/key).
 pub fn netaddr_blastport() -> Result<u16, String> {
-    let path = crate::uregcheck::harvey_dir()
+    let path = xtask::uregcheck::harvey_dir()
         .map_err(|e| format!("{e}"))?
         .join("build/aarch64/netaddr.rc");
     let text = std::fs::read_to_string(&path)

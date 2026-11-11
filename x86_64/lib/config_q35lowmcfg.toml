@@ -29,6 +29,11 @@
 # ACPI override idiom); the gate's exact-base assertions make any
 # ordering drift a loud red, never a silent pass.  The proper drift note
 # lands in build/x86_64/README.md with 13-06.
+#
+# 16-01 (D-05): the [qemu.netdev] stanza below is the mode-tables
+# shape (default selector + per-mode sub-tables) — the flat
+# mode/device/pcap stanza is retired; the D-04 hostfwd remap (host
+# 5670 -> guest 567) rides the slirp table as data.
 
 [build]
 target = "lib/x86_64-unknown-none-elf.json"
@@ -54,11 +59,28 @@ memory = "1024M"
 # 0xe0000000 while SeaBIOS's register still says 0xb0000001.
 extra = ["-acpitable", "file=x86_64/lib/q35-mcfg-moved.bin"]
 
-# Identical idle-NIC stanza to the base config (the device must still be
-# found — same slot, same route — through the moved window).
+# Identical netdev mode tables to the base config (the device must
+# still be found — same slot, same route — through the moved window).
+# 16-01 (D-05): ONE shared builder (xtask config::netdev_args) serves
+# the in-process boots and the exported r9-netdev-args bin.  The slirp
+# hostfwd set is D-04: loopback-bound host addresses only, host 5670 ->
+# guest 567 (a literal host:567 bind needs privilege on default Linux —
+# ip_unprivileged_port_start 1024 — and the hermetic default must stay
+# zero-privilege/CI-able, HNET-01).
+#
+# Parallel-boot constraint: two simultaneous q35 boots on one host now
+# both bind the two loopback hostfwd ports (127.0.0.1:17010 and
+# 127.0.0.1:5670) at netdev init — run the x86_64 gates sequentially.
 [qemu.netdev]
+default = "slirp"
+
+[qemu.netdev.slirp]
 mode = "user"
 device = "virtio-net-pci-non-transitional"
+hostfwd = [
+    "tcp:127.0.0.1:17010-:17010",
+    "tcp:127.0.0.1:5670-:567",
+]
 pcap = true
 
 [dist]
