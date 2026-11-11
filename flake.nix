@@ -328,6 +328,36 @@ WRAP
               runHook postInstall
             '';
           };
+          # 16-01 (D-05): the exported netdev emitter — a HOST-STD bin
+          # wrapping the ONE shared builder (xtask's
+          # config::netdev_args) with the committed config_q35shell.toml
+          # embedded at build time.  Harvey's flake consumes
+          # packages.<system>.netdev-args at the 16-04 pin advance
+          # (boot-r9-x64.sh substitutes this bin's stdout for its
+          # hardcoded -netdev/-device lines).  Mirrors kernel-x64's
+          # skeleton (cargoSetupHook + the same cargoDeps symlinkJoin)
+          # minus the objcopy/sysroot machinery — plain cargo builds
+          # this host bin; reshaping the export later re-touches both
+          # lockfiles and both call sites (the CONTEXT D-05 costly
+          # rating).
+          netdev-args = pkgs.stdenv.mkDerivation {
+            pname = "r9-netdev-args";
+            version = self.shortRev or "wip";
+            src = ./.;
+            nativeBuildInputs = [ toolchain pkgs.rustPlatform.cargoSetupHook ];
+            inherit cargoDeps;
+            buildPhase = ''
+              runHook preBuild
+              cargo build --release --bin r9-netdev-args
+              runHook postBuild
+            '';
+            installPhase = ''
+              runHook preInstall
+              mkdir -p "$out/bin"
+              cp target/release/r9-netdev-args "$out/bin/r9-netdev-args"
+              runHook postInstall
+            '';
+          };
           builder = isoBuilderFor pkgs;
         in
         {
@@ -359,15 +389,20 @@ WRAP
             '';
           };
         }
-        # The x86_64 deliverables: the kernel package on every linux
-        # host (the rustc target spec is cross-platform); the BIOS ISO
+        # The x86_64 deliverables: the kernel package and the netdev
+        # emitter on every linux host (the rustc target spec is
+        # cross-platform; the emitter is host-std); the BIOS ISO
         # machinery only where grub2 ships the i386-pc modules it embeds
         # — the q35 channel's loaders and gates are x86_64-native
         # (X64-05).  14-07 (D-05): iso-builder (the argv-driven script
         # Harvey's compose app consumes) exports beside boot-iso (the
         # kernel-only FOD, re-expressed through the same builder).
+        # 16-01 (D-05): netdev-args exports beside kernel-x64 — its own
+        # gate is this same isLinux optionalAttrs (r9's own package
+        # surface; the frozen-list anti-pattern applies to Harvey's
+        # consumer side, not here).
         // nixpkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
-          inherit kernel-x64;
+          inherit kernel-x64 netdev-args;
         }
         // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
           inherit (builder) iso-builder;

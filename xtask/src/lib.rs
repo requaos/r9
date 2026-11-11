@@ -100,3 +100,59 @@ pub fn env_or(var: &str, default: &str) -> String {
 // contract does.  (Defined in config beside the Netdev tables they
 // read; this re-export is the public seam.)
 pub use config::{netdev_args, netdev_args_checked};
+
+/// The committed q35shell config embedded at build time — the
+/// r9-netdev-args bin's default --config source (16-01 Task 3): ONE
+/// committed TOML is the single source, build-time embedded, never a
+/// copied data blob.  The q35shell lineage is the config the Harvey
+/// flake boots (kernel-x64's own build config).
+pub const DEFAULT_NETDEV_CONFIG: &str = include_str!("../../x86_64/lib/config_q35shell.toml");
+
+#[cfg(test)]
+mod tests {
+    use super::DEFAULT_NETDEV_CONFIG;
+    use crate::config::Configuration;
+
+    /// The bin's embedded default parses and its netdev default
+    /// selector is slirp — the no-`--config` contract (16-01 Task 3).
+    #[test]
+    fn netdev_embedded_default_config_is_slirp() {
+        let config: Configuration =
+            toml::from_str(DEFAULT_NETDEV_CONFIG).expect("embedded q35shell TOML must parse");
+        let netdev = config
+            .qemu
+            .as_ref()
+            .and_then(|q| q.netdev.as_ref())
+            .expect("embedded q35shell TOML carries a netdev table");
+        assert_eq!(netdev.default, "slirp");
+    }
+
+    /// All five committed q35 TOMLs parse and carry the FULL D-05
+    /// mode-table set — default slirp + the three sub-tables.  This is
+    /// the data-layer machine check of the phase's must-haves truth: a
+    /// broken or half-migrated stanza surfaces here at test time,
+    /// never at boot time.
+    #[test]
+    fn netdev_all_five_q35_tomls_carry_the_mode_tables() {
+        let configs = [
+            ("config_q35", include_str!("../../x86_64/lib/config_q35.toml")),
+            ("config_q35exec", include_str!("../../x86_64/lib/config_q35exec.toml")),
+            ("config_q35lowmcfg", include_str!("../../x86_64/lib/config_q35lowmcfg.toml")),
+            ("config_q35net", include_str!("../../x86_64/lib/config_q35net.toml")),
+            ("config_q35shell", include_str!("../../x86_64/lib/config_q35shell.toml")),
+        ];
+        for (name, text) in configs {
+            let config: Configuration = toml::from_str(text)
+                .unwrap_or_else(|e| panic!("{name}: committed TOML must parse: {e}"));
+            let netdev = config
+                .qemu
+                .as_ref()
+                .and_then(|q| q.netdev.as_ref())
+                .unwrap_or_else(|| panic!("{name}: committed TOML carries a netdev table"));
+            assert_eq!(netdev.default, "slirp", "{name}: default selector");
+            assert!(netdev.slirp.is_some(), "{name}: slirp sub-table");
+            assert!(netdev.tap.is_some(), "{name}: tap sub-table");
+            assert!(netdev.vmnet.is_some(), "{name}: vmnet sub-table");
+        }
+    }
+}

@@ -2,6 +2,11 @@
 name = "xtask"
 version = "0.1.0"
 edition = "2024"
+# 16-01: the package grew a second bin (src/bin/r9-netdev-args.rs, the
+# exported netdev emitter) beside its main bin — `cargo xtask ...`
+# (cargo's custom-subcommand protocol, which the flake's kernel-x64
+# buildPhase also rides) needs the default disambiguated.
+default-run = "xtask"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
