@@ -752,6 +752,15 @@ impl<M: RingMem> Ring<M> {
         }
         // Slot recovery (ethervirtio.c): the used id is the chain head.
         let slot = ((id & u32::from(self.qmask())) >> 1) as usize;
+        // WR-06 (17-03) slot liveness: a duplicated used id (a lying
+        // device double-completing a chain head) reaches here with the
+        // slot already recovered — retiring it again would push one
+        // buffer page into the caller's free stack twice, aliasing two
+        // live chains onto the same page.  Loud reject in the same
+        // family as the checks above; never a panic (V5 posture).
+        if !self.posted[slot] {
+            return Some(Err("virtio: used-ring id for an unposted slot (device fault)"));
+        }
         self.posted[slot] = false;
         Some(Ok(UsedBuf { slot: slot as u16, len }))
     }
