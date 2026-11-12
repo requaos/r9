@@ -492,7 +492,20 @@ WRAP
             # 2bad0ee078c4d2cd1eb2e08dab4c11dfe41007c06b169516fc6bf7c95023da15
             # (sha256-K60O4HjE…), in three-way agreement with the FOD's own
             # measured got-value.
-            outputHash = "sha256-K60O4HjE0s0esuCNq0wR3+QQB8BrFpUW/Gv3yVAj2hU=";
+            # The 17-02 churn commits (the churn profile + the two
+            # root-caused kernel fixes — kernel bytes, plus kernel-x64
+            # re-pointed at q35churnshell) re-staled it once more;
+            # re-wired at 17-02's close with the same two-derivation
+            # proof: two independent fresh-kernel builds (kernel A plain
+            # + kernel B under a never-before-used churnproof-b version
+            # override) through the non-FOD lib.bootIso realization
+            # produced the byte-identical ISO — file-level sha256
+            # 16bef2bffc095dfbd3c2577d6006ac252bf154cb661cdef554cb9963a8d73340,
+            # NAR hash (what this attr checks)
+            # c0b656a0678278c3107c078744b93f8427d02a8fac9d8ae7b66e89b72744c912
+            # (sha256-wLZWhm…), in three-way agreement with the FOD's own
+            # measured got-value.
+            outputHash = "sha256-wLZWhmeBy8MQb0HcRj44ToH7StPvqNsJy2CO/ntnRJA=";
           };
         });
 
