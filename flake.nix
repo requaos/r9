@@ -515,7 +515,21 @@ WRAP
             # f05ec06a8a736f6c10474277d80a8176da7ac424fdcf2a08d8eb38393ba4391
             # (sha256-bw7Ank…).  nix build + --rebuild green at the wired
             # value.
-            outputHash = "sha256-bw7AnkikIXnYGPYhJEd/DSa/cENfaL/dwu8DMN/GWbk=";
+            # The 17-03 WR-05/WR-06 hardening fixes (the WaitSet resize
+            # to MAX_WAITERS=512 + the loud full arm across netif/devip,
+            # and the used-ring unposted-slot liveness reject — port
+            # bytes, kernel bytes with them) re-staled it once more;
+            # re-wired with the same two-derivation proof: two
+            # independent fresh-kernel builds (kernel A plain + kernel B
+            # under a never-before-used wr05wr06-proof-b version
+            # override) through the non-FOD lib.bootIso realization
+            # produced the byte-identical ISO — file-level sha256
+            # 8f3f6e2aa172bd6ce4741dc80da036bb87d0ebbe97b8c32ec977fde683856bda,
+            # NAR hash (what this attr checks)
+            # d0a19c8335db1408535d4a216f810d15f44d19e8ba21f8909e9cb96eb29d6b22
+            # (sha256-0KGcgz…), in three-way agreement with the FOD's
+            # own measured got-value.
+            outputHash = "sha256-0KGcgzXbFAhTXUohb4ENFfRNGei6IfiQnpy5brKdayI=";
           };
         });
 
