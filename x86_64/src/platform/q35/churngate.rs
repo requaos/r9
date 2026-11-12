@@ -81,17 +81,17 @@ pub const SEM_EVERY: u32 = 35;
 /// exec, steady leg), derived from the first measured-green baseline
 /// as max(3 x steady, 1024) + 512:
 ///
-///   first measured-green run (KVM, q35churn, 17-02): steady = 0
-///   bytes/exec over the 2..=BASELINE_N leg (the cursor was FLAT from
-///   the one-exec sample through the baseline leg — the quickfit free
-///   lists absorb the per-exec alloc/free cycle whole) -> ceiling =
-///   max(3 x 0, 1024) + 512 = 1536 bytes/exec.
+///   first measured-green run (KVM, q35churn, 17-02, post-#44-fix):
+///   steady = 420 bytes/exec over the 2..=BASELINE_N leg (the early
+///   leg still carries allocator-warmup drift; the steady leg itself
+///   measured 60) -> ceiling = max(3 x 420, 1024) + 512 = 1772
+///   bytes/exec.
 ///
-/// The negative control (this const doctored to 512, below what any
-/// plausible residue floor allows) demonstrably fired churngate: FAIL
-/// and reded the xtask assert before the gate was trusted, then was
-/// reverted (T-17-04: the bound has teeth).
-pub const CEILING_BYTES_PER_EXEC: u64 = 1536;
+/// The negative control (this const doctored to 32, far below the
+/// measured 60) fired churngate: FAIL naming both numbers and reded
+/// the xtask assert, then was reverted (T-17-04: the bound has
+/// teeth).
+pub const CEILING_BYTES_PER_EXEC: u64 = 1772;
 
 /// Watchdog for one waited exec child (timer ticks, 100 Hz — 3 s of
 /// wall clock; a churnmark cycle completes in single-digit
@@ -353,8 +353,16 @@ fn churn_main() -> ! {
     print_census("end");
     let measured = per_exec_delta(s_base, s_end, CHURN_N - BASELINE_N);
     port::println!("{}", slope_marker(steady, measured, CEILING_BYTES_PER_EXEC));
-    let ok = slope_ok(measured, CEILING_BYTES_PER_EXEC).is_ok();
-    finish(ok, CHURN_N, semgens)
+    match slope_ok(measured, CEILING_BYTES_PER_EXEC) {
+        Ok(()) => finish(true, CHURN_N, semgens),
+        Err(msg) => {
+            // The fail-closed verdict: the FAIL line names both numbers
+            // (the xtask fail-fast reds on it instantly — DONE alone
+            // missing would only surface as a slow budget expiry).
+            port::println!("{}", fail_marker(&msg));
+            finish(false, CHURN_N, semgens)
+        }
+    }
 }
 
 /// The terminal tail: the presence-based DONE (or its withholding —
@@ -487,8 +495,9 @@ mod tests {
         assert!(derive_ceiling(10_000) > 3 * 10_000 - 512);
         // monotone in the baseline
         assert!(derive_ceiling(7) < derive_ceiling(7000));
-        // the committed ceiling IS the derivation of a flat (0) baseline
-        assert_eq!(CEILING_BYTES_PER_EXEC, derive_ceiling(0));
+        // the committed ceiling IS the derivation of the first
+        // measured-green baseline (420 bytes/exec, 17-02's KVM run)
+        assert_eq!(CEILING_BYTES_PER_EXEC, derive_ceiling(420));
     }
 
     // The marker shapes the xtask constants grep and the post-pass
