@@ -2206,20 +2206,23 @@ static EMPTY_RENDEZGROUP: Lock<Option<Arc<Lock<RendezGroup>>>> = Lock::new("empt
 /// forever, so every heap payload it retains is a permanent allocation
 /// (the churn gate measured the whole set: one fresh fd group + the
 /// pgrp/env/rgrp Arc shells + the slash/dot chans per exit).  The donor
-/// pexit's closefgrp/closepgrp/closergrp + slash/dot cclose re-keyed:
-/// the group handles swap for shared singletons (the old Arcs drop
-/// here — a last sharer's group dies with it), and the chans
-/// close-dispatch and clear.
+/// pexit's closefgrp/closepgrp/closergrp re-keyed: the group handles
+/// swap for shared singletons (the old Arcs drop here — a last sharer's
+/// group dies with it).  The slash/dot chans DROP without the
+/// close-dispatch: r9's exit tail is not 9P-safe (a devmnt clunk is a
+/// BLOCKING RPC, and the mounted venue measured userland pool
+/// corruption when exits talked 9P mid-exit — 17-02's composed-leg
+/// catch), so the chan values (their Vecs, the mnt fid Arcs) release
+/// by plain drop; the server-side fid of a husk's chan clone leaks
+/// until the server dies — a bounded, documented era shape (the last
+/// Arc's drop cannot Tclunk without the RPC; the real fix rides the
+/// exit-path-9P-safety work).
 pub fn sweep_husk_payloads(proc: &mut Proc) {
     proc.pgrp = empty_pgrp();
     proc.env_group = empty_env_group();
     proc.rgrp = empty_rendez_group();
-    if let Some(c) = proc.slash.take() {
-        port::namec::close_chan(&c);
-    }
-    if let Some(c) = proc.dot.take() {
-        port::namec::close_chan(&c);
-    }
+    let _ = proc.slash.take();
+    let _ = proc.dot.take();
 }
 
 /// devproc-lite's write hook: append the note to the ADDRESSED pid's
