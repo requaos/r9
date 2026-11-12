@@ -2734,6 +2734,79 @@ mod tests {
         sem_deregister_waiter(other, 42);
     }
 
+    /// The pids registered on a word PA, in registration order (the
+    /// aarch64 sem_tests idiom — 17-01's CR-03 pins re-keyed to x86_64).
+    fn sem_waiters_for(pa: u64) -> Vec<u64> {
+        let node = LockNode::new();
+        SEM_WAITERS.lock(&node).iter().filter(|e| e.0 == pa).map(|e| e.1).collect()
+    }
+
+    /// CR-03 pin (aarch64's register_is_idempotent, re-keyed): the loop
+    /// re-registers before EVERY block — a spuriously-woken waiter's
+    /// re-register must not stack duplicates.  Distinct word PAs from
+    /// the sibling sem pin above: SEM_WAITERS is one shared static and
+    /// cargo runs this bin's tests in parallel.
+    #[test]
+    fn sem_register_is_idempotent() {
+        let pa = 0x9600_0000;
+        sem_register_waiter(pa, 11);
+        sem_register_waiter(pa, 11);
+        assert_eq!(sem_waiters_for(pa), vec![11]);
+        sem_deregister_waiter(pa, 11);
+        assert_eq!(sem_waiters_for(pa), Vec::<u64>::new());
+    }
+
+    /// CR-03 pin (aarch64's wake_consumes_picked_registrations_in_order):
+    /// the wake consumes up to delta registrations in registration
+    /// order — a picked waiter's re-registration on the next block is
+    /// what makes the consume safe.
+    #[test]
+    fn sem_wake_consumes_picked_registrations_in_order() {
+        let pa = 0x9700_0000;
+        sem_register_waiter(pa, 21);
+        sem_register_waiter(pa, 22);
+        sem_wake(pa, 1);
+        assert_eq!(sem_waiters_for(pa), vec![22], "the first-registered waiter is consumed");
+        sem_wake(pa, 0); // a zero-delta release wakes nobody
+        assert_eq!(sem_waiters_for(pa), vec![22]);
+        sem_wake(pa, 5); // delta beyond the set drains what's there
+        assert_eq!(sem_waiters_for(pa), Vec::<u64>::new());
+    }
+
+    /// CR-03 pin (aarch64's reregistered_waiter_is_found_by_the_next_release):
+    /// a woken (consumed) waiter that loses the unit race RE-REGISTERS
+    /// before re-blocking; the next release finds it — the exact
+    /// syscall.rs loop contract (register -> check -> block, per
+    /// iteration) the Phase-8 fix landed.
+    #[test]
+    fn sem_reregistered_waiter_is_found_by_the_next_release() {
+        let pa = 0x9800_0000;
+        sem_register_waiter(pa, 31);
+        sem_wake(pa, 1); // the release wakes (consumes) the waiter
+        assert_eq!(sem_waiters_for(pa), Vec::<u64>::new());
+        // The waiter runs, loses the unit race, and re-blocks — the
+        // loop's register-before-block restores the registration.
+        sem_register_waiter(pa, 31);
+        assert_eq!(sem_waiters_for(pa), vec![31]);
+        sem_wake(pa, 1); // the next release finds it
+        assert_eq!(sem_waiters_for(pa), Vec::<u64>::new());
+    }
+
+    /// CR-03 pin (aarch64's wake_never_touches_other_words): waiters on
+    /// OTHER words are never consumed (the PA keying — RFMEM family
+    /// members share a PA; unrelated procs never meet).
+    #[test]
+    fn sem_wake_never_touches_other_words() {
+        let pa = 0x9900_0000;
+        let other = 0x9a00_0000;
+        sem_register_waiter(pa, 41);
+        sem_register_waiter(other, 42);
+        sem_wake(pa, 8);
+        assert_eq!(sem_waiters_for(pa), Vec::<u64>::new());
+        assert_eq!(sem_waiters_for(other), vec![42]);
+        sem_deregister_waiter(other, 42);
+    }
+
     /// new_user_proc through the host seam: the PML4, the kstack
     /// window mapping, and the cons preopen all construct (the
     /// mapping machinery's host-exercised proof — the "PAs" are host
