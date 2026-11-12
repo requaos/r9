@@ -71,7 +71,7 @@ use smoltcp::time::Instant;
 use smoltcp::wire::HardwareAddress;
 
 use crate::mcslock::{BusyCell, Lock, LockNode};
-use crate::Result;
+use crate::{MAX_WAITERS, Result};
 
 use super::phyadapt::{EtherDev, LoopbackDev, StackDev};
 
@@ -170,18 +170,23 @@ fn instant_to_ticks(at: Instant) -> u64 {
 
 // ---------------------------------------------------------------------------
 // The fixed-capacity pid sets (netif.rs's WaitSet shape): one waiter per
-// proc (MAX_PROCS=16 slots can never fill; pid 0 marks an empty slot).  NO
-// allocation ANYWHERE — the IRQ-side tick sweep and the waker bridge move
-// pids through a caller's stack buffer.
+// proc, sized by the shared MAX_WAITERS const to the LIVE proc table
+// (512 on both arches — the stale "MAX_PROCS=16" capacity comment this
+// once carried was false the moment the table grew; WR-05, 17-03).  pid
+// 0 marks an empty slot.  NO allocation ANYWHERE — the IRQ-side tick
+// sweep and the waker bridge move pids through a caller's stack buffer.
 // ---------------------------------------------------------------------------
 
 pub(crate) struct WaitSet {
-    pids: [u64; 16],
+    pids: [u64; MAX_WAITERS],
+    /// Registrations dropped because the set was full (WR-05's loud
+    /// arm: counted + reported, never silent).
+    dropped: u64,
 }
 
 impl WaitSet {
     pub(crate) const fn new() -> WaitSet {
-        WaitSet { pids: [0; 16] }
+        WaitSet { pids: [0; MAX_WAITERS], dropped: 0 }
     }
     pub(crate) fn register(&mut self, pid: u64) {
         if pid == 0 || self.pids.contains(&pid) {
@@ -189,12 +194,21 @@ impl WaitSet {
         }
         if let Some(slot) = self.pids.iter_mut().find(|p| **p == 0) {
             *slot = pid;
+        } else {
+            // WR-05: the set is full — count + report, never a silent
+            // drop and never a panic.  The caller still blocks and would
+            // rely on a wake this set can no longer deliver, so the drop
+            // must be VISIBLE (a lost wakeup silently wedges a proc).
+            self.dropped += 1;
+            crate::println!(
+                "devip: waiter set full — registration for pid {pid} dropped (total dropped {})",
+                self.dropped
+            );
         }
-        // The full case is impossible (one waiter per proc, ≤ 16 procs).
     }
     /// Drain the set into a stack buffer (the wake hook's input) — returns
     /// the count; every drained slot clears.
-    pub(crate) fn take(&mut self, out: &mut [u64; 16]) -> usize {
+    pub(crate) fn take(&mut self, out: &mut [u64; MAX_WAITERS]) -> usize {
         let mut n = 0;
         for p in self.pids.iter_mut() {
             if *p != 0 {
@@ -204,6 +218,12 @@ impl WaitSet {
             }
         }
         n
+    }
+    /// The full-arm drop count (WR-05's loud observable; 0 whenever
+    /// capacity held).
+    #[cfg(test)]
+    pub(crate) fn dropped(&self) -> u64 {
+        self.dropped
     }
 }
 
@@ -267,7 +287,7 @@ pub fn tick_check(now_ticks: u64) {
     if now_ticks < deadline {
         return;
     }
-    let mut pids = [0u64; 16];
+    let mut pids = [0u64; MAX_WAITERS];
     let n = NET_WAITERS.enter().expect("devip: waiters contended (invariant violation)").take(&mut pids);
     if n == 0 {
         STACK_DEBT.store(true, Ordering::Release);
@@ -292,7 +312,7 @@ pub fn tick_check(now_ticks: u64) {
 /// can only fire while no syscall holds the cell); no port mcslock is
 /// taken; the wake hook (PROC_TABLE) runs after the guard drops.
 pub fn note_rx_pending() {
-    let mut pids = [0u64; 16];
+    let mut pids = [0u64; MAX_WAITERS];
     let n = NET_WAITERS.enter().expect("devip: waiters contended (IRQ invariant violation)").take(&mut pids);
     if n == 0 {
         STACK_DEBT.store(true, Ordering::Release);
@@ -541,7 +561,7 @@ pub fn drive_stack() {
     }
     // Wake AFTER the guard drops — never the wake hook while the cell is
     // held (the hook takes PROC_TABLE).
-    let mut pids = [0u64; 16];
+    let mut pids = [0u64; MAX_WAITERS];
     let n = PENDING_WAKES.enter().expect("devip: pending wakes contended").take(&mut pids);
     if n > 0 && let Ok(h) = hooks() {
         (h.wake)(&pids[..n]);
@@ -591,7 +611,7 @@ pub(crate) fn install_test_stack(core: StackCore) {
     }
     NET_DEADLINE.store(DEADLINE_DISARMED, Ordering::Release);
     STACK_DEBT.store(false, Ordering::Release);
-    let mut scratch = [0u64; 16];
+    let mut scratch = [0u64; MAX_WAITERS];
     PENDING_WAKES.enter().expect("devip: pending wakes contended").take(&mut scratch);
     NET_WAITERS.enter().expect("devip: waiters contended").take(&mut scratch);
 }

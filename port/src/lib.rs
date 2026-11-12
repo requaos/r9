@@ -108,3 +108,17 @@ mod rx_chain_tests;
 mod devip_tests;
 
 pub type Result<T> = core::result::Result<T, &'static str>;
+
+/// The shared fixed capacity of every kernel waiter set (WR-05, 17-03):
+/// one waiter slot per possible proc.  The port crate cannot import the
+/// arch crates' `MAX_PROCS` (they depend on port), so the value is
+/// defined HERE, once, and must track the arch tables it mirrors —
+/// `x86_64/src/proc.rs` (`MAX_PROCS: usize = 512`) and
+/// `aarch64/src/proc.rs` (512 since the v2.0 pin).  Any arch bump of
+/// MAX_PROCS must bump this in the same change; the waiter sets' loud
+/// full arm (counted + reported, never a silent drop) is the guard
+/// that fires if the two ever drift apart under load.  (The dev_churn
+/// gate profile raises x86_64's fork BUDGET to 2048 for the churn
+/// loop's ~1600 procs; those are not net waiters — and a waiter set
+/// that ever fills there reports loudly instead of dropping silently.)
+pub const MAX_WAITERS: usize = 512;

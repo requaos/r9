@@ -36,7 +36,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use crate::mcslock::{Lock, LockNode};
-use crate::Result;
+use crate::{MAX_WAITERS, Result};
 
 use super::conv::WaitPids;
 use super::{parse_ip, stack};
@@ -150,7 +150,7 @@ pub(crate) fn emit(flag: u32, line: Vec<u8>) {
     if !flag_on(flag) {
         return;
     }
-    let mut pids = [0u64; 16];
+    let mut pids = [0u64; MAX_WAITERS];
     let n = {
         let node = LockNode::new();
         let mut g = NETLOG.lock(&node);

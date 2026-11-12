@@ -44,7 +44,7 @@ use alloc::vec::Vec;
 use smoltcp::iface::SocketHandle;
 
 use crate::mcslock::{Lock, LockNode};
-use crate::Result;
+use crate::{MAX_WAITERS, Result};
 
 /// The five conv states (`ip.h:71-75` verbatim).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -117,18 +117,23 @@ impl Proto {
 }
 
 /// A per-conv blocked-reader pid set (fixed capacity: one waiter per
-/// proc, MAX_PROCS=16 slots can never fill; pid 0 marks an empty slot;
-/// NO allocation — the wake drain moves pids through a caller's stack
-/// buffer).  The CONV — not the waker — owns the waiter set (contract
-/// §12.2, P-C).
+/// proc, sized by the shared MAX_WAITERS const to the LIVE proc table —
+/// 512 on both arches; the stale "MAX_PROCS=16 slots can never fill"
+/// comment this once carried was false the moment the table grew,
+/// WR-05/17-03.  pid 0 marks an empty slot; NO allocation — the wake
+/// drain moves pids through a caller's stack buffer).  The CONV — not
+/// the waker — owns the waiter set (contract §12.2, P-C).
 pub(crate) struct WaitPids {
-    pids: [u64; 16],
+    pids: [u64; MAX_WAITERS],
+    /// Registrations dropped because the set was full (WR-05's loud
+    /// arm: counted + reported, never silent).
+    dropped: u64,
 }
 
 impl WaitPids {
     /// (pub(crate) for netlog.rs's blocked-reader set — the same shape.)
     pub(crate) const fn new() -> WaitPids {
-        WaitPids { pids: [0; 16] }
+        WaitPids { pids: [0; MAX_WAITERS], dropped: 0 }
     }
 
     pub(crate) fn register(&mut self, pid: u64) {
@@ -137,13 +142,22 @@ impl WaitPids {
         }
         if let Some(slot) = self.pids.iter_mut().find(|p| **p == 0) {
             *slot = pid;
+        } else {
+            // WR-05: the set is full — count + report, never a silent
+            // drop and never a panic.  The caller still blocks and would
+            // rely on a wake this set can no longer deliver, so the drop
+            // must be VISIBLE (a lost wakeup silently wedges a proc).
+            self.dropped += 1;
+            crate::println!(
+                "devip: conv waiter set full — registration for pid {pid} dropped (total dropped {})",
+                self.dropped
+            );
         }
-        // The full case is impossible (one waiter per proc, ≤ 16 procs).
     }
 
     /// Drain the set into a stack buffer (the wake hook's input) —
     /// returns the count; every drained slot clears.
-    pub(crate) fn take(&mut self, out: &mut [u64; 16]) -> usize {
+    pub(crate) fn take(&mut self, out: &mut [u64; MAX_WAITERS]) -> usize {
         let mut n = 0;
         for p in self.pids.iter_mut() {
             if *p != 0 {
@@ -153,6 +167,13 @@ impl WaitPids {
             }
         }
         n
+    }
+
+    /// The full-arm drop count (WR-05's loud observable; 0 whenever
+    /// capacity held).
+    #[cfg(test)]
+    pub(crate) fn dropped(&self) -> u64 {
+        self.dropped
     }
 }
 
@@ -551,7 +572,7 @@ pub(crate) fn conv_close(p: Proto, id: usize) {
     if id >= NCONV {
         return;
     }
-    let mut pids = [0u64; 16];
+    let mut pids = [0u64; MAX_WAITERS];
     let nwake;
     let mut tcp_drove_close = false;
     {
@@ -659,7 +680,7 @@ pub(crate) fn conv_close(p: Proto, id: usize) {
 /// proto's hangup paths — a reader that blocked before the socket
 /// existed re-checks and registers on the now-real socket).
 pub(crate) fn wake_conv(p: Proto, id: usize) {
-    let mut pids = [0u64; 16];
+    let mut pids = [0u64; MAX_WAITERS];
     let n = {
         let node = LockNode::new();
         let mut t = TABLES.lock(&node);

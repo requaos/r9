@@ -33,7 +33,7 @@ use alloc::vec::Vec;
 use smoltcp::wire::{IpCidr, Ipv4Cidr};
 
 use crate::mcslock::{Lock, LockNode};
-use crate::Result;
+use crate::{MAX_WAITERS, Result};
 
 use super::conv::{self, Proto};
 use super::medium;
@@ -300,7 +300,7 @@ pub(crate) fn unbind(id: usize) -> Result<()> {
     {
         let node = LockNode::new();
         let mut t = conv::TABLES.lock(&node);
-        let mut scratch = [0u64; 16];
+        let mut scratch = [0u64; MAX_WAITERS];
         for p in Proto::ALL {
             for c in t.table_mut(p).iter_mut() {
                 if c.sel == sel && (c.sock.is_some() || c.pool.is_some()) {

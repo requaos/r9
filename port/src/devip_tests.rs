@@ -3400,7 +3400,7 @@ fn stack_waitset_retains_the_whole_proc_table_and_take_returns_all() {
     for pid in 1..=512u64 {
         ws.register(pid);
     }
-    let mut out = [0u64; 16];
+    let mut out = [0u64; crate::MAX_WAITERS];
     let n = ws.take(&mut out);
     assert_eq!(n, 512, "512 distinct live pids all register (the set is sized to the table)");
     let mut seen: Vec<u64> = out[..n].to_vec();
@@ -3416,9 +3416,12 @@ fn stack_waitset_513th_registration_is_loudly_dropped() {
     for pid in 1..=513u64 {
         ws.register(pid);
     }
-    let mut out = [0u64; 16];
+    let mut out = [0u64; crate::MAX_WAITERS];
     let n = ws.take(&mut out);
     assert_eq!(n, 512, "the table-sized prefix survives; only the beyond-capacity 513th drops");
+    // The loud arm's observable: the beyond-capacity drop is counted
+    // (and reported on the console in-kernel) — never silent.
+    assert_eq!(ws.dropped(), 1, "the 513th registration's drop is counted and reported, not silent");
 }
 
 /// stack::WaitSet — the register contract below capacity is unchanged
@@ -3429,12 +3432,13 @@ fn stack_waitset_duplicate_and_zero_registrations_stay_idempotent() {
     ws.register(7);
     ws.register(7);
     ws.register(0);
-    let mut out = [0u64; 16];
+    let mut out = [0u64; crate::MAX_WAITERS];
     let n = ws.take(&mut out);
     assert_eq!(n, 1, "duplicate and zero registrations add nothing");
     assert_eq!(out[0], 7);
     let n2 = ws.take(&mut out);
     assert_eq!(n2, 0, "take drains the set");
+    assert_eq!(ws.dropped(), 0, "below capacity nothing is ever dropped");
 }
 
 /// conv::WaitPids (the per-conv blocked-reader set — the third WaitSet
@@ -3445,7 +3449,7 @@ fn conv_waitset_retains_the_whole_proc_table_and_take_returns_all() {
     for pid in 1..=512u64 {
         wp.register(pid);
     }
-    let mut out = [0u64; 16];
+    let mut out = [0u64; crate::MAX_WAITERS];
     let n = wp.take(&mut out);
     assert_eq!(n, 512, "512 distinct live pids all register (the set is sized to the table)");
     let mut seen: Vec<u64> = out[..n].to_vec();
@@ -3461,9 +3465,12 @@ fn conv_waitset_513th_registration_is_loudly_dropped() {
     for pid in 1..=513u64 {
         wp.register(pid);
     }
-    let mut out = [0u64; 16];
+    let mut out = [0u64; crate::MAX_WAITERS];
     let n = wp.take(&mut out);
     assert_eq!(n, 512, "the table-sized prefix survives; only the beyond-capacity 513th drops");
+    // The loud arm's observable: the beyond-capacity drop is counted
+    // (and reported on the console in-kernel) — never silent.
+    assert_eq!(wp.dropped(), 1, "the 513th registration's drop is counted and reported, not silent");
 }
 
 /// conv::WaitPids — the register contract below capacity is unchanged
@@ -3474,10 +3481,11 @@ fn conv_waitset_duplicate_and_zero_registrations_stay_idempotent() {
     wp.register(7);
     wp.register(7);
     wp.register(0);
-    let mut out = [0u64; 16];
+    let mut out = [0u64; crate::MAX_WAITERS];
     let n = wp.take(&mut out);
     assert_eq!(n, 1, "duplicate and zero registrations add nothing");
     assert_eq!(out[0], 7);
     let n2 = wp.take(&mut out);
     assert_eq!(n2, 0, "take drains the set");
+    assert_eq!(wp.dropped(), 0, "below capacity nothing is ever dropped");
 }

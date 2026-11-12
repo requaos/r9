@@ -45,7 +45,7 @@ use smoltcp::time::Duration;
 use smoltcp::wire::{IpAddress, IpEndpoint, IpListenEndpoint, Ipv4Address};
 
 use crate::mcslock::LockNode;
-use crate::Result;
+use crate::{MAX_WAITERS, Result};
 
 use super::conv::{self, ConvState, Proto};
 use super::stack;
@@ -2737,7 +2737,7 @@ pub(crate) fn tcp_gc(t: &mut conv::ConvTables) -> (bool, Vec<u64>) {
     // the hangup marker errors every later read/write and the err file
     // carries the reason (the donor's Etimedout string).
     let mut pids: Vec<u64> = Vec::new();
-    let mut scratch = [0u64; 16];
+    let mut scratch = [0u64; MAX_WAITERS];
     for id in &stale {
         let c = &mut t.table_mut(Proto::Tcp)[*id];
         let msg: Vec<u8> = b"connection timed out".to_vec();

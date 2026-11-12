@@ -76,7 +76,7 @@ use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
 use crate::mcslock::{BusyCell, Lock, LockNode};
-use crate::Result;
+use crate::{MAX_WAITERS, Result};
 
 // ---------------------------------------------------------------------------
 // Qid scheme (netif.h:5-28 verbatim).  The tags are the low 5 bits of the
@@ -327,17 +327,22 @@ pub(crate) struct IngressState {
     next_seq: u64,
 }
 
-/// A fixed-capacity pid set (one waiter per proc — the proc table is
-/// MAX_PROCS=16, so 16 slots can never fill).  pid 0 marks an empty
-/// slot (pids start at 1).  No allocation ANYWHERE — the IRQ-side drain
-/// moves the pids into a caller's stack buffer.
+/// A fixed-capacity pid set (one waiter per proc — sized by the shared
+/// MAX_WAITERS const to the LIVE proc table, 512 on both arches; the
+/// stale "MAX_PROCS=16" invariant this once rested on was false the
+/// moment the table grew).  pid 0 marks an empty slot (pids start at
+/// 1).  No allocation ANYWHERE — the IRQ-side drain moves the pids
+/// into a caller's stack buffer.
 pub(crate) struct WaitSet {
-    pids: [u64; 16],
+    pids: [u64; MAX_WAITERS],
+    /// Registrations dropped because the set was full (WR-05's loud
+    /// arm: counted + reported, never silent — the soverflows shape).
+    dropped: u64,
 }
 
 impl WaitSet {
     pub(crate) const fn new() -> WaitSet {
-        WaitSet { pids: [0; 16] }
+        WaitSet { pids: [0; MAX_WAITERS], dropped: 0 }
     }
     pub(crate) fn register(&mut self, pid: u64) {
         if pid == 0 || self.pids.contains(&pid) {
@@ -345,12 +350,22 @@ impl WaitSet {
         }
         if let Some(slot) = self.pids.iter_mut().find(|p| **p == 0) {
             *slot = pid;
+        } else {
+            // WR-05: the set is full — count + report, never a silent
+            // drop and never a panic.  The caller still blocks and
+            // would rely on a wake this set can no longer deliver, so
+            // the drop must be VISIBLE (a lost wakeup silently wedges a
+            // proc — the exact failure this module's header forbids).
+            self.dropped += 1;
+            crate::println!(
+                "devether: waiter set full — registration for pid {pid} dropped (total dropped {})",
+                self.dropped
+            );
         }
-        // The full case is impossible (one waiter per proc, ≤ 16 procs).
     }
     /// Drain the set into a stack buffer (the wake hook's input) —
     /// returns the count; every drained slot clears.
-    pub(crate) fn take(&mut self, out: &mut [u64; 16]) -> usize {
+    pub(crate) fn take(&mut self, out: &mut [u64; MAX_WAITERS]) -> usize {
         let mut n = 0;
         for p in self.pids.iter_mut() {
             if *p != 0 {
@@ -360,6 +375,12 @@ impl WaitSet {
             }
         }
         n
+    }
+    /// The full-arm drop count (WR-05's loud observable — the pins
+    /// read it; 0 whenever capacity held).
+    #[cfg(test)]
+    pub(crate) fn dropped(&self) -> u64 {
+        self.dropped
     }
 }
 
@@ -492,7 +513,7 @@ pub(crate) fn conv_close(id: usize) {
     if id >= NFILE {
         return;
     }
-    let mut pids = [0u64; 16];
+    let mut pids = [0u64; MAX_WAITERS];
     let mut nwake = 0;
     {
         let node = LockNode::new();
@@ -642,7 +663,7 @@ pub fn rx_ingress(frame: &[u8]) {
     if !delivered {
         return;
     }
-    let mut pids = [0u64; 16];
+    let mut pids = [0u64; MAX_WAITERS];
     let nwake = ig.rx_waiters.take(&mut pids);
     drop(ig);
     // The wake AFTER the guard drops (INGRESS is never held across the
@@ -659,7 +680,7 @@ pub fn rx_ingress(frame: &[u8]) {
 /// gate's timeout catches it) readies here.  Called by the IRQ handler
 /// when its TX drain retired ≥1 entry.
 pub fn tx_retired() {
-    let mut pids = [0u64; 16];
+    let mut pids = [0u64; MAX_WAITERS];
     let nwake = {
         let mut ig = match INGRESS.enter() {
             Some(g) => g,
