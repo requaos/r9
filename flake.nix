@@ -471,8 +471,20 @@ WRAP
             # NAR hash (what this attr checks)
             # ab9e19a76fcb1120ee4b08c8c14e0451e45ad85c0182f68a05c7422af98949be
             # (sha256-q54Zp2…), in three-way agreement with the FOD's own
+            # measured got-value.  The 17-01 WR-03 OOM-release fixes
+            # (pml4_map_user's walk-failure unwind, map_user_page's leaf
+            # free, rfork_copy's copy-arm free, new_user_proc's
+            # kstack-table prefix — kernel bytes again) re-staled it in
+            # turn; re-wired with the same two-derivation proof: two
+            # independent fresh-kernel builds (version-override clones
+            # wr03fix-proof-a/-b) through the non-FOD bootIo realization
+            # produced the byte-identical ISO — file-level sha256
+            # 1cd4ef4036cfba865d54b9117529b1d3848a90c7852f58b0b9ca53d005d9405b,
+            # NAR hash (what this attr checks)
+            # 2bad0ee078c4d2cd1eb2e08dab4c11dfe41007c06b169516fc6bf7c95023da15
+            # (sha256-K60O4HjE…), in three-way agreement with the FOD's own
             # measured got-value.
-            outputHash = "sha256-q54Zp2/LESDuSwjIwU4EUeRa2FwBgvaKBcdCKvmJSb4=";
+            outputHash = "sha256-K60O4HjE0s0esuCNq0wR3+QQB8BrFpUW/Gv3yVAj2hU=";
           };
         });
 
