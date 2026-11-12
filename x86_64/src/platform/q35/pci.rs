@@ -800,6 +800,10 @@ fn mmio_window(mcfg: &McfgEntry, ioapic_base: u64) -> Option<(u64, u64)> {
 /// with another device's; an unassigned BAR takes the derived window's
 /// 4 KiB-aligned base.  Returns (address, firmware_assigned); None when
 /// neither fits (a loud bind failure, never a silent dead zone).
+/// WR-03 (17-04): the derived base must also be NATURALLY ALIGNED to the
+/// BAR size — a base the device's decoded mask cannot address is a dead
+/// assignment.  checked_rem: a zero size is a loud None, never a
+/// divide-by-zero.
 #[cfg(any(test, dev_ether))]
 fn bar_assignment(orig: u64, size: u64, win: (u64, u64)) -> Option<(u64, bool)> {
     let fw = orig & !0xF;
@@ -807,18 +811,36 @@ fn bar_assignment(orig: u64, size: u64, win: (u64, u64)) -> Option<(u64, bool)> 
         return Some((fw, true));
     }
     let base = win.0 & !0xFFF;
-    if base != 0 && base.checked_add(size).is_some_and(|end| end <= win.1) {
+    if base != 0
+        && base.checked_rem(size) == Some(0)
+        && base.checked_add(size).is_some_and(|end| end <= win.1)
+    {
         return Some((base, false));
     }
     None
 }
 
+/// The BAR type nibble a 64-bit sizing probe may trust (WR-03, 17-04):
+/// bit 0 clear (a memory BAR, not I/O) and bits 2:1 == 0b10 (64-bit,
+/// relocatable anywhere) — otherwise the high-dword all-ones write lands
+/// in the NEXT BAR's register (or meaningless I/O space) and the
+/// computed size is garbage.  Pure: pinned beside the probe.
+#[cfg(any(test, dev_ether))]
+fn is_64bit_mem_bar_nibble(lo: u32) -> bool {
+    lo & 0x1 == 0 && (lo >> 1) & 0b11 == 0b10
+}
+
 /// Size a 64-bit BAR: write all-ones to both halves, read the mask back,
 /// restore the original contents (T-07-09: the sizing write is always
-/// restored).  Returns (size_bytes, original_value).
+/// restored).  Returns (size_bytes, original_value); None when the BAR's
+/// type nibble is not a 64-bit memory BAR — the probe is never trusted
+/// on a BAR it cannot size (WR-03, 17-04).
 #[cfg(dev_ether)]
-fn size_bar64(base: u64, bus: u8, dev: u8, fun: u8, bar_off: u8) -> (u64, u64) {
+fn size_bar64(base: u64, bus: u8, dev: u8, fun: u8, bar_off: u8) -> Option<(u64, u64)> {
     let orig_lo = ecam_read32(base, bus, dev, fun, bar_off);
+    if !is_64bit_mem_bar_nibble(orig_lo) {
+        return None;
+    }
     let orig_hi = ecam_read32(base, bus, dev, fun, bar_off + 4);
     ecam_write32(base, bus, dev, fun, bar_off, !0);
     ecam_write32(base, bus, dev, fun, bar_off + 4, !0);
@@ -829,7 +851,16 @@ fn size_bar64(base: u64, bus: u8, dev: u8, fun: u8, bar_off: u8) -> (u64, u64) {
     let mask = (u64::from(mask_hi) << 32) | u64::from(mask_lo);
     let orig = (u64::from(orig_hi) << 32) | u64::from(orig_lo);
     let size = (!(mask & !0xF)).wrapping_add(1);
-    (size, orig)
+    Some((size, orig))
+}
+
+/// WR-01 (17-04): the queue's notify write (a u16 at notify_off within
+/// the notify cap) must land inside the cap's declared length — a device
+/// advertising a short notify region faults at the first notify.  Pure:
+/// pinned beside the bring-up.
+#[cfg(any(test, dev_ether))]
+fn notify_reachable(notify_off: usize, notify_len: u32) -> bool {
+    notify_off + 2 <= notify_len as usize
 }
 
 /// One queue's bring-up (§4.1.5.1.3 order): select → read queue_size
@@ -843,6 +874,7 @@ fn bring_up_queue(
     queue: u16,
     dir: virtio::Dir,
     notify_mult: u32,
+    notify_len: u32,
 ) -> port::Result<(Ring<VolatileMem>, usize)> {
     let qsize = virtio::queue_size(common, queue);
     if qsize == 0 {
@@ -874,6 +906,12 @@ fn bring_up_queue(
     )?;
     virtio::set_queue_addresses(common, queue, desc_pa, avail_pa, used_pa);
     let notify_off = usize::from(virtio::queue_notify_off(common, queue)) * notify_mult as usize;
+    // WR-01 (17-04): queue_notify_off × multiplier must address a u16
+    // INSIDE the notify cap's declared length (bind-time reject, the
+    // '(device fault)' family — never a faulting notify write).
+    if !notify_reachable(notify_off, notify_len) {
+        return Err("virtio: notify offset beyond the notify capability (device fault)");
+    }
     virtio::enable_queue(common, queue);
     Ok((ring, notify_off))
 }
@@ -890,6 +928,56 @@ pub fn bind_virtio_net() {
     if let Err(msg) = bind_inner() {
         println!("virtio-net: bind failed: {msg}");
     }
+}
+
+/// Each typed cap's (bar, offset, length) bounds-checked against the BAR
+/// size BEFORE the region is trusted (T-07-11 — a lying cap aborts the
+/// bind loudly).  The 17-04 admission holes (WR-01/WR-02) closed:
+/// zero-length extents rejected (a cap at offset == bar_size with
+/// length 0 previously passed the `>` check — the empty region faults at
+/// the first register touch), minimum extents enforced (common covers
+/// the register block through CFG_QUEUE_DEVICE+8; the isr cap's one byte
+/// is subsumed by the zero-length reject), and the device config must
+/// cover the MAC AND the link-status le16 the IRQ handler reads at
+/// devcfg+6 (the config-change arm) — 8, not 6.
+///
+/// End edge: an extent must fit inside [0, bar_size); offset+length >
+/// bar_size is rejected.  An extent ending EXACTLY at the boundary is
+/// legal and required: qemu sizes the modern BAR
+/// pow2ceil(notify.offset + notify.size) with the notify cap length =
+/// notify_off_multiplier * VIRTIO_QUEUE_MAX (4 * 1024 = 0x1000 at
+/// offset 0x3000), so the live notify cap ends exactly at the 0x4000
+/// boundary — a >=-style edge would reject the real device.  The
+/// zero-length reject is what closes the offset == bar_size hole.  The
+/// sum is u64-widened: no 32-bit wrap can admit an out-of-bounds cap.
+/// Pure: host-testable beside the bind path (17-04).
+#[cfg(any(test, dev_ether))]
+fn check_cap_extents(caps: &port::virtio::Caps, bar_size: u64) -> port::Result<()> {
+    let device = caps.device.ok_or("virtio: no device config capability")?;
+    for t in [caps.common, caps.notify, caps.isr, device] {
+        if t.length == 0 {
+            return Err("virtio: zero-length capability extent (device fault)");
+        }
+        if u64::from(t.offset) + u64::from(t.length) > bar_size {
+            return Err("virtio: capability extent beyond the bar (device fault)");
+        }
+    }
+    if caps.common.length < 0x40 {
+        // The register block runs through CFG_QUEUE_DEVICE (0x30) + its
+        // u64 — 0x38 touched, 0x40 rounded past the highest offset the
+        // transport ever uses (WR-01's prescribed minimum).
+        return Err("virtio: common capability smaller than the register block (device fault)");
+    }
+    if device.length < 8 {
+        // MAC (offsets 0..5) + the link-status le16 at +6..8 read by the
+        // IRQ handler on the first config-change interrupt
+        // (mmio_read16(state.devcfg + 6)) — the old `< 6` admitted a
+        // config the handler then over-read (WR-02).
+        return Err(
+            "virtio: device config capability too small for MAC + link status (device fault)",
+        );
+    }
+    Ok(())
 }
 
 #[cfg(dev_ether)]
@@ -934,7 +1022,13 @@ fn bind_inner() -> port::Result<()> {
 
     // BAR sizing (all-ones mask/restore, T-07-09), then assignment: keep
     // SeaBIOS's assignment when it made one, else the derived window.
-    let (bar_size, orig) = size_bar64(nic.ecam_base, nic.bus, nic.dev, nic.fun, bar_off);
+    // WR-03 (17-04): the type nibble is validated inside the probe — a
+    // 32-bit or I/O BAR can never have its high-dword sizing write
+    // trusted.
+    let Some((bar_size, orig)) = size_bar64(nic.ecam_base, nic.bus, nic.dev, nic.fun, bar_off)
+    else {
+        return Err("bar not a 64-bit memory BAR (device fault)");
+    };
     if bar_size == 0 || bar_size > (16 << 20) {
         return Err("bar size implausible (device fault)");
     }
@@ -976,14 +1070,7 @@ fn bind_inner() -> port::Result<()> {
     // Each cap's (bar, offset, length) bounds-checked against the BAR
     // size BEFORE the region is trusted (T-07-11 — a lying cap aborts
     // the bind loudly).
-    for t in [caps.common, caps.notify, caps.isr, device] {
-        if u64::from(t.offset) + u64::from(t.length) > bar_size {
-            return Err("virtio: capability extent beyond the bar (device fault)");
-        }
-    }
-    if device.length < 6 {
-        return Err("virtio: device config capability too small for a MAC");
-    }
+    check_cap_extents(&caps, bar_size)?;
     println!(
         "pci: caps common@{:#x}+{:#x} notify@{:#x} isr@{:#x} device@{:#x} mult {}",
         caps.common.offset,
@@ -1034,12 +1121,14 @@ fn bind_inner() -> port::Result<()> {
         virtio::VIRTIO_NET_QUEUE_RX,
         virtio::Dir::Rx,
         caps.notify_off_multiplier,
+        caps.notify.length,
     )?;
     let (tx, tx_notify_off) = bring_up_queue(
         &common,
         virtio::VIRTIO_NET_QUEUE_TX,
         virtio::Dir::Tx,
         caps.notify_off_multiplier,
+        caps.notify.length,
     )?;
     virtio::set_driver_ok(&common);
 
@@ -1430,5 +1519,148 @@ mod tests {
         );
         // a size that fits neither branch -> None (the loud bind error)
         assert_eq!(bar_assignment(0x0, 0x1000_0000, (0xF000_0000, 0xFEC0_0000)), None);
+    }
+
+    // ------------------------------------------------------------------
+    // 17-04: the cap-walk admission holes (WR-01/WR-02/WR-03)
+    // ------------------------------------------------------------------
+
+    // The live q35 virtio-net cap shape, mirrored from caps_fixture and
+    // the live bind print: a 0x4000 BAR4 carrying common@0x0+0x1000,
+    // isr@0x1000, device@0x2000, notify@0x3000+0x1000 (qemu sizes the
+    // modern BAR pow2ceil(notify.offset + notify.size) with
+    // notify.size = notify_off_multiplier * VIRTIO_QUEUE_MAX =
+    // 4 * 1024 = 0x1000 — the notify cap ends EXACTLY at the bar
+    // boundary; see cap_extents_admit_the_live_q35_shape).
+    fn live_caps() -> port::virtio::Caps {
+        let t = |offset: u32, length: u32| port::virtio::CapTriple { bar: 4, offset, length };
+        port::virtio::Caps {
+            common: t(0x0000, 0x1000),
+            notify: t(0x3000, 0x1000),
+            isr: t(0x1000, 0x1000),
+            device: Some(t(0x2000, 0x1000)),
+            notify_off_multiplier: 4,
+        }
+    }
+
+    // The live shape binds — the guard against over-tightening the end
+    // edge: qemu's notify cap ends exactly AT the bar boundary
+    // (0x3000 + 0x1000 == 0x4000), which is legal (its last byte,
+    // 0x3FFF, is inside the BAR).  A >=-style end edge would reject the
+    // real device and redden every net gate — the edge was re-derived
+    // against the live caps per the plan's own over-rejection
+    // fails_when.
+    #[test]
+    fn cap_extents_admit_the_live_q35_shape() {
+        check_cap_extents(&live_caps(), 0x4000).expect("the live cap layout binds");
+    }
+
+    // WR-01: a zero-length extent is an empty region — the first
+    // register touch faults instead of binding.  The exact hole shape
+    // (offset == bar_size, length == 0) previously passed the `>` check.
+    #[test]
+    fn cap_extents_reject_zero_length_caps() {
+        let mut caps = live_caps();
+        caps.common.length = 0; // at offset 0, inside the bar
+        assert_eq!(
+            check_cap_extents(&caps, 0x4000).unwrap_err(),
+            "virtio: zero-length capability extent (device fault)"
+        );
+        let mut caps = live_caps();
+        caps.isr = port::virtio::CapTriple { bar: 4, offset: 0x4000, length: 0 };
+        let err = check_cap_extents(&caps, 0x4000).unwrap_err();
+        assert!(err.contains("zero-length"), "the error names the empty extent: {err}");
+    }
+
+    // The end edge: an extent hanging past the BAR's last byte is a
+    // device fault (the pre-existing check, pinned), and the u64-widened
+    // sum means a u32-wrapped offset+length pair can never be admitted.
+    #[test]
+    fn cap_extents_reject_extents_past_the_bar_end() {
+        let mut caps = live_caps();
+        caps.device = Some(port::virtio::CapTriple { bar: 4, offset: 0x3ff0, length: 0x1000 });
+        let err = check_cap_extents(&caps, 0x4000).unwrap_err();
+        assert!(err.contains("beyond the bar"), "the error names the overrun: {err}");
+        // offset + length would wrap as u32 (0xffff_ffff + 0xffff_ffff):
+        // widened, the sum is ~8.6e9 and must be rejected, never wrapped
+        // into admission.
+        let mut caps = live_caps();
+        caps.notify = port::virtio::CapTriple { bar: 4, offset: u32::MAX, length: u32::MAX };
+        let err = check_cap_extents(&caps, 0x4000).unwrap_err();
+        assert!(err.contains("beyond the bar"), "no 32-bit wrap admits an OOB cap: {err}");
+    }
+
+    // WR-01's minimum extents: the common cap must cover the register
+    // block (0x40 — CFG_QUEUE_DEVICE at 0x30 + its u64, rounded); WR-02:
+    // the device config must cover the MAC (0..5) AND the link-status
+    // le16 at +6..8 the IRQ handler reads on the config-change
+    // interrupt — 6 and 7 used to pass the `< 6` check.
+    #[test]
+    fn cap_extents_reject_undersized_common_and_device_configs() {
+        let mut caps = live_caps();
+        caps.common.length = 0x3f; // just under the register block
+        let err = check_cap_extents(&caps, 0x4000).unwrap_err();
+        assert!(err.contains("register block"), "the error names the common minimum: {err}");
+        caps.common.length = 0x40; // the minimum itself is legal
+        check_cap_extents(&caps, 0x4000).expect("a 0x40 common cap binds");
+
+        for len in [6u32, 7] {
+            caps.device = Some(port::virtio::CapTriple { bar: 4, offset: 0x2000, length: len });
+            let err = check_cap_extents(&caps, 0x4000).unwrap_err();
+            assert!(
+                err.contains("MAC + link status"),
+                "length {len} admits a config the handler over-reads: {err}"
+            );
+        }
+        caps.device = Some(port::virtio::CapTriple { bar: 4, offset: 0x2000, length: 8 });
+        check_cap_extents(&caps, 0x4000).expect("an 8-byte device config binds");
+    }
+
+    // WR-03(b): the derived window base must be naturally aligned to the
+    // BAR size — a base the device's decoded mask cannot address is a
+    // loud None, never a silent dead zone.  The window END check stays
+    // (a size that runs past win.1 is still None), and a zero size can
+    // never divide (checked_rem, not %).
+    #[test]
+    fn bar_assignment_rejects_naturally_misaligned_window_bases() {
+        // window base 0xC000_1000 against a 0x4000 BAR: fits the window
+        // END but is not 0x4000-aligned — the device decodes only
+        // 0x4000-aligned addresses inside its BAR.
+        assert_eq!(bar_assignment(0x0, 0x4000, (0xC000_1000, 0xFEC0_0000)), None);
+        // aligned base still assigned (kernel-assigned arm)
+        assert_eq!(
+            bar_assignment(0x0, 0x4000, (0xC000_0000, 0xFEC0_0000)),
+            Some((0xC000_0000, false))
+        );
+        // size 0: no modulo, a loud None — never a divide-by-zero panic
+        assert_eq!(bar_assignment(0x0, 0, (0xC000_0000, 0xFEC0_0000)), None);
+    }
+
+    // WR-03(a): only a 64-bit MEMORY BAR's type nibble may be trusted
+    // for the all-ones sizing probe — the live device presents 0b10<<1
+    // (bit 0 clear, 64-bit), everything else (I/O bit set, 32-bit, or
+    // the reserved/expansable ROM types) makes the high-dword write
+    // garbage.
+    #[test]
+    fn only_64bit_memory_nibbles_are_sizing_trusted() {
+        // The type field is bits 2:1 (0b10 = 64-bit) with bit 0 the
+        // memory/I/O flag — the live device presents nibble 0b100.
+        assert!(is_64bit_mem_bar_nibble(0b100), "the live 64-bit memory nibble");
+        assert!(!is_64bit_mem_bar_nibble(0b000), "32-bit memory");
+        assert!(!is_64bit_mem_bar_nibble(0b110), "reserved below-ROM type");
+        assert!(!is_64bit_mem_bar_nibble(0b101), "I/O BAR (bit 0 set)");
+        assert!(!is_64bit_mem_bar_nibble(0), "unprogrammed BAR");
+    }
+
+    // WR-01's notify minimum: queue_notify_off × multiplier must address
+    // a u16 inside the notify cap's declared length (the live shape:
+    // mult 4, queue 0/1 notify_off 0/4 against a 0x1000 cap).
+    #[test]
+    fn notify_offsets_must_reach_inside_the_notify_cap() {
+        assert!(notify_reachable(0, 0x1000), "the live queue-0 shape");
+        assert!(notify_reachable(4, 0x1000), "the live queue-1 shape");
+        assert!(notify_reachable(0xFFE, 0x1000), "the last u16 that fits");
+        assert!(!notify_reachable(0x1000, 0x1000), "a u16 write past the cap end");
+        assert!(!notify_reachable(0xFFF, 0x1000), "a straddling write");
     }
 }

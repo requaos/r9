@@ -359,6 +359,47 @@ fn caps_parse_missing_list_errors_loudly() {
     assert!(Caps::parse(&SliceCfg(b)).is_err());
 }
 
+/// WR-04 (17-04): PCI capability pointers are dword-aligned by spec, but
+/// the module's V5 posture treats the device as untrusted — a malformed
+/// device returning a misaligned list pointer makes the walk's read_u32s
+/// (offset/length/multiplier) unaligned volatile reads on the real ECAM
+/// seam (UB in Rust; a Device-memory alignment fault in the kernel).  The
+/// parser must reject the pointer BEFORE any read at it — one pin per
+/// residue class.
+#[test]
+fn caps_parse_rejects_misaligned_capability_pointers() {
+    for residue in 1..4u8 {
+        let mut b = caps_fixture();
+        // A valid-looking VNDR cap copied to a misaligned offset, its next
+        // terminating the list, the list head pointing at it: the walk
+        // must reject the pointer, never read through it.
+        let cap: Vec<u8> = b[0x40..0x50].to_vec(); // the common cap's bytes
+        let at = 0x40 + residue as usize;
+        b[at..at + 0x10].copy_from_slice(&cap);
+        b[at + 1] = 0; // next: terminate the list at the misaligned cap
+        b[0x34] = at as u8; // the list head -> the misaligned cap
+        let err =
+            Caps::parse(&SliceCfg(b)).expect_err("a misaligned cap pointer is a device fault");
+        assert!(err.contains("misaligned"), "the error names the misalignment: {err}");
+    }
+}
+
+/// WR-04's companion (17-04): the notify arm bounds-checks the config
+/// space (p + CAP_NOTIFY_LEN) but never the cap's OWN declared cap_len —
+/// a notify cap declaring cap_len == 16 has its notify_off_multiplier
+/// read out of the NEXT cap's bytes.  The fixture bumps the notify cap_len
+/// to 20 at 0x62; leaving it at the put() default 16 is exactly the lying
+/// shape (0x60 + 20 still fits the 256-byte config space).
+#[test]
+fn caps_parse_rejects_short_notify_capabilities() {
+    let mut b = caps_fixture();
+    b[0x62] = 16; // cap_len 16 < CAP_NOTIFY_LEN 20 — the multiplier read
+    // would run past the cap struct it belongs to.
+    let err = Caps::parse(&SliceCfg(b))
+        .expect_err("a notify cap shorter than its multiplier field is a device fault");
+    assert!(err.contains("shorter"), "the error names the short cap: {err}");
+}
+
 // ---------------------------------------------------------------------------
 // Negotiation tests (§3.1.1, the D-03 mask)
 // ---------------------------------------------------------------------------

@@ -137,6 +137,15 @@ impl Caps {
         let mut p = cfg.read_u8(PCI_OFF_CAP_LIST) as usize;
         let mut walked = 0usize;
         while p != 0 {
+            if p & 3 != 0 {
+                // WR-04 (17-04): capability pointers are dword-aligned by
+                // spec, but the device is untrusted (V5) — a misaligned
+                // pointer would make every read below an unaligned
+                // volatile u32 on the real ECAM seam (UB; a Device-memory
+                // alignment fault in the kernel).  Reject the pointer
+                // BEFORE any read at it.
+                return Err("virtio: misaligned capability pointer");
+            }
             walked += 1;
             if walked > MAX_CAPS {
                 return Err("virtio: capability list does not terminate");
@@ -158,6 +167,15 @@ impl Caps {
                 match cfg.read_u8(p + CAP_OFF_CFG_TYPE) {
                     CFG_TYPE_COMMON => common = Some(triple),
                     CFG_TYPE_NOTIFY => {
+                        if cap_len < CAP_NOTIFY_LEN {
+                            // WR-04's companion (17-04): the cap struct
+                            // must OWN its multiplier field — a short
+                            // cap_len reads it out of the NEXT cap's
+                            // bytes.
+                            return Err(
+                                "virtio: notify capability shorter than the multiplier field",
+                            );
+                        }
                         if p + CAP_NOTIFY_LEN > cfg.len() {
                             return Err("virtio: truncated notify capability");
                         }
