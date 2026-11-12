@@ -30,14 +30,15 @@ mod global {
         }
     }
 
-    /// The live-block census (17-02, the churn leak hunt): which size
-    /// classes are currently outstanding — the leak's fingerprint.
-    pub(crate) fn heap_census() -> alloc::vec::Vec<(usize, usize)> {
+    /// The live/pooled block census (17-02, the churn leak hunt): which
+    /// size classes are genuinely outstanding vs parked on the free
+    /// lists — the leak-vs-fragmentation fingerprint.
+    pub(crate) fn heap_census() -> (alloc::vec::Vec<(usize, usize)>, alloc::vec::Vec<(usize, usize)>) {
         // SAFETY: read-only access, as heap_stats.
         unsafe {
             let a = GLOBAL_ALLOCATOR.0.load(core::sync::atomic::Ordering::Relaxed);
             assert!(!a.is_null(), "global allocator is nil");
-            (*a).live_census()
+            (*a).split_census()
         }
     }
 }

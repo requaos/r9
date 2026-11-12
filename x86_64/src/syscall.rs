@@ -1624,13 +1624,20 @@ fn sys_exits(frame: &mut Ureg, proc: &mut Proc) -> u64 {
     // Copy the message BEFORE freeing anything (it lives in user
     // memory).  exits(nil) carries a zero pointer; an invalid string is
     // not an error either — exits must never be wedged by its own
-    // diagnostics.
-    let msg = if msg_va == 0 {
+    // diagnostics.  17-02 (the #44 fix): the copy lands in a STACK
+    // buffer and the Vec dies HERE — exit_tail diverges on this proc's
+    // dead kstack, so a heap Vec held in this frame would ride it
+    // forever (the churn gate measured the class).
+    let msg_vec = if msg_va == 0 {
         Vec::new()
     } else {
         copy_user_str(proc, msg_va, ERRMAX).unwrap_or_default()
     };
-    exit_tail(proc, &msg);
+    let mut sbuf = [0u8; ERRMAX];
+    let n = msg_vec.len().min(ERRMAX);
+    sbuf[..n].copy_from_slice(&msg_vec[..n]);
+    drop(msg_vec);
+    exit_tail(proc, &sbuf[..n]);
 }
 
 /// The shared exit tail: sys_exits's user-message path and the note
@@ -1655,15 +1662,29 @@ pub(crate) fn exit_tail(proc: &mut Proc, msg: &[u8]) -> ! {
         for c in &drained {
             port::namec::close_chan(c);
         }
+        // 17-02 (the #44 fix): exit_tail DIVERGES (park /
+        // sched_from_moribund) — every local still live at the tail
+        // rides the dead kstack forever.  The churn gate measured the
+        // detached fd group's Arc as ~8 KiB leaked PER EXIT (the
+        // 15-03 "~16 KiB per-exit residue" — this plus the husk
+        // payloads swept below); the transients die HERE, before any
+        // divergence.
+        drop(drained);
     }
-    // count > 1: sharers keep the group; the detached Arc just drops.
+    // count > 1: sharers keep the group; the detached Arc just drops —
+    // HERE, before the diverging tail (same #44 fix).
+    drop(detached);
     proc::rendez_remove(proc);
     proc.free_user_mappings();
     // Drop the husk's remaining heap payloads (the slot itself is never
-    // reaped this era).
+    // reaped this era): the argv/wait/note queues AND — 17-02's #44
+    // fix — the group handles + slash/dot chans (the donor pexit's
+    // closepgrp/closergrp/slash+dot cclose re-keyed as singleton
+    // swaps; a last sharer's group dies with the old Arc's drop).
     proc.argv = Vec::new();
     proc.wait_records = VecDeque::new();
     proc.note_queue = VecDeque::new();
+    proc::sweep_husk_payloads(proc);
     proc.state = ProcState::Moribund;
     let pid = proc.pid;
     println!("process {pid} exited: \"{}\"", core::str::from_utf8(msg).unwrap_or("<bad utf8>"));

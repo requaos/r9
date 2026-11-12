@@ -223,3 +223,61 @@ fn realloc_growth_stress_preserves_contents() {
         qf.free(b, big);
     }
 }
+
+/// 17-02 (the churn gate's measured finding): sustained fork+exec-style
+/// allocation ladders — a Vec<Record>'s doubling rungs plus per-page
+/// read temps, all freed by iteration end — must reach a steady pool,
+/// not strand one rung per class per iteration.  The kernel gate
+/// measured ~4 parked blocks per exec cycle (live=0) until the header
+/// side table exhausted; this is the host repro of that shape.
+#[test]
+fn churn_ladder_reaches_steady_pool() {
+    let mut arena = alloc::vec![0u8; 1024 * 1024];
+    let start = arena.as_mut_ptr();
+    let len = arena.len();
+    let tail = BumpAlloc::new(unsafe { Block::new_from_raw_parts(start, len) });
+    let mut qf = QuickFit::new(tail);
+
+    let rung = |n: usize| Layout::from_size_align(n * 40, 8).unwrap();
+    let read_temp = Layout::from_size_align(4096, 1).unwrap();
+    let mut final_cap = rung(4);
+    let run_one_cycle = |qf: &mut QuickFit, final_cap: &mut Layout| {
+        // The Vec-growth ladder: alloc the next rung, free the previous.
+        let mut cur = qf.malloc(*final_cap);
+        assert!(!cur.is_null());
+        for &records in &[8usize, 16, 32, 64, 128] {
+            let next = qf.malloc(rung(records));
+            assert!(!next.is_null());
+            qf.free(cur, *final_cap);
+            cur = next;
+            *final_cap = rung(records);
+        }
+        // Per-page read temps (blocksize read, freed each page).
+        for _ in 0..6 {
+            let t = qf.malloc(read_temp);
+            assert!(!t.is_null());
+            qf.free(t, read_temp);
+        }
+        // Cycle end: the final buffer dies.
+        qf.free(cur, *final_cap);
+    };
+
+    // Warm 5 cycles, snapshot the census; 50 more; the pooled classes
+    // must NOT keep climbing (live must be zero throughout).
+    for _ in 0..5 {
+        run_one_cycle(&mut qf, &mut final_cap);
+    }
+    let (live_a, pooled_a) = qf.split_census();
+    let pooled_bytes_a: usize = pooled_a.iter().map(|&(s, n)| s * n).sum();
+    assert!(live_a.is_empty(), "all cycle allocations are freed: live={live_a:?}");
+    for _ in 0..50 {
+        run_one_cycle(&mut qf, &mut final_cap);
+    }
+    let (live_b, pooled_b) = qf.split_census();
+    let pooled_bytes_b: usize = pooled_b.iter().map(|&(s, n)| s * n).sum();
+    assert!(live_b.is_empty(), "live must stay zero: {live_b:?}");
+    assert!(
+        pooled_bytes_b <= pooled_bytes_a + 4096,
+        "the pool must reach steady state, not strand rungs per cycle: {pooled_bytes_a} -> {pooled_bytes_b} ({pooled_b:?})"
+    );
+}

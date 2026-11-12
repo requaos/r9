@@ -199,7 +199,7 @@ pub struct QuickFit {
 }
 
 impl QuickFit {
-    /// Constructs a QuickFit from the given `tail`.
+    /// Constructs a QuickFit from the given tail.
     pub const fn new(tail: BumpAlloc) -> QuickFit {
         // The offset model requires the arena to be u32-sized.
         assert!(tail.arena.len() <= u32::MAX as usize, "arena exceeds the u32 offset model");
@@ -220,8 +220,8 @@ impl QuickFit {
     }
 
     /// Allocates a block of memory of the requested size and
-    /// alignment.  Returns a pointer to such a block, or nil if
-    /// the block cannot be allocated.
+    /// alignment.  Returns a pointer to such a block, or nil if the
+    /// block cannot be allocated.
     pub fn malloc(&mut self, layout: Layout) -> *mut u8 {
         let (size, align) = Self::adjust(layout);
         let p = self.alloc_quick(size, align);
@@ -587,25 +587,54 @@ impl QuickFit {
         (self.tail.cursor.load(core::sync::atomic::Ordering::Relaxed), self.tail.arena.len())
     }
 
-    /// A read-only census of LIVE blocks by size class (17-02, the
-    /// churn leak hunt): every used slot below the high watermarks,
-    /// bucketed (size, count) ascending.  The diagnosis surface for a
-    /// cursor that climbs while a load should hold steady — WHICH size
-    /// classes accumulate names the leaking allocation.  Single CPU;
-    /// read-only.
-    pub fn live_census(&self) -> alloc::vec::Vec<(usize, usize)> {
-        let mut sizes = alloc::vec::Vec::new();
+    /// A read-only census of blocks by size class (17-02, the churn
+    /// leak hunt), split LIVE vs POOLED: a slot's header is "used" both
+    /// while the block is allocated AND while it sits on a quick/misc
+    /// FREE list (free() parks freed blocks there via their header), so
+    /// used-ness alone cannot name a leak.  LIVE = used and on NO free
+    /// list (a quick/tail allocation in service, or a misc block on its
+    /// allocated hash chain); POOLED = the free lists' recyclable
+    /// capacity.  Returns (live census, pooled census), each (size,
+    /// count) ascending — a cursor that climbs while LIVE stays flat
+    /// names fragmentation, not a leak; a LIVE class that climbs names
+    /// the leaking allocation.  Single CPU; read-only.
+    pub fn split_census(
+        &self,
+    ) -> (alloc::vec::Vec<(usize, usize)>, alloc::vec::Vec<(usize, usize)>) {
+        // Mark every slot on a free list (quick lists, the misc list)
+        // or a free-slot chain as pooled/uninteresting.
+        let mut pooled_bits = [0u64; (HEADER_TOTAL + 63) / 64];
+        let mut mark = |i: Idx| pooled_bits[(i as usize) / 64] |= 1u64 << ((i as usize) % 64);
+        let mut walk = |head: Option<Idx>, mark: &mut dyn FnMut(Idx)| {
+            let mut cur = head;
+            while let Some(i) = cur {
+                mark(i);
+                cur = self.slots[i as usize].next;
+            }
+        };
+        for q in self.qlists {
+            walk(q, &mut mark);
+        }
+        walk(self.misc, &mut mark);
+        walk(self.free_main, &mut mark);
+        walk(self.free_reserve, &mut mark);
+        let mut live = alloc::vec::Vec::new();
+        let mut pooled = alloc::vec::Vec::new();
         let high = core::cmp::max(self.high_main, self.high_reserve) as usize;
-        for s in self.slots[..core::cmp::min(high, self.slots.len())].iter() {
+        for (i, s) in self.slots[..core::cmp::min(high, self.slots.len())].iter().enumerate() {
             if !s.used {
                 continue;
             }
-            match sizes.iter_mut().find(|(sz, _)| *sz == s.size) {
+            let on_free_list = pooled_bits[i / 64] & (1u64 << (i % 64)) != 0;
+            let bucket = if on_free_list { &mut pooled } else { &mut live };
+            match bucket.iter_mut().find(|(sz, _)| *sz == s.size) {
                 Some((_, n)) => *n += 1,
-                None => sizes.push((s.size, 1)),
+                None => bucket.push((s.size, 1)),
             }
         }
-        sizes.sort_unstable();
-        sizes
+        live.sort_unstable();
+        pooled.sort_unstable();
+        (live, pooled)
     }
+
 }

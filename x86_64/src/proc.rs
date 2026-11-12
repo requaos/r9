@@ -747,9 +747,52 @@ pub fn rfmem_brk_set(family: u64, old_end: usize, new_end: usize) -> Result<()> 
     let members = rfmem_family_members(family);
     if members.len() < 2 {
         if let Some(&m) = members.first() {
-            // SAFETY: table-resident pointer (rfmem_family_members);
-            // single CPU, IRQ-masked syscall context — the member is
-            // not running while the caller's syscall executes.
+            // 17-02 (the churn gate's contention-leg finding): a family
+            // reduced to its last member still brks — the grown pages
+            // map into it exactly like the private arm.  The previous
+            // shape moved only segs.bss.end, leaving the growth
+            // UNMAPPED: the last RFMEM sibling's exit leaves the
+            // survivor a lone member (rfmem_leave dissolves only the
+            // leaver's entry), and the survivor's next brk — its
+            // malloc pool's first growth, precisely the churn sem
+            // parent's post-reap print — fault-killed it at the pool
+            // header (33/39 generations died at exactly this page).
+            let page = PAGE_SIZE_4K;
+            let mut va = round_up_page(old_end);
+            let limit = round_up_page(new_end);
+            while va < limit {
+                let pa = alloc_phys_page().map_err(|_| "brk: out of memory")?;
+                // SAFETY: table-resident pointer (rfmem_family_members);
+                // single CPU, IRQ-masked syscall context — the member is
+                // not running while the caller's syscall executes; the
+                // kernel-half alias makes the caller's OWN active table
+                // an ordinary edit target.
+                unsafe {
+                    let p = &mut *m;
+                    match pml4_map_user(p.pml4_pa, va, pa, SegKind::Bss.pte()) {
+                        Ok(created) => {
+                            for c in created.into_iter().flatten() {
+                                p.mapping_tables.push(c);
+                            }
+                        }
+                        Err(_) => {
+                            // The walk freed its own intermediates; the
+                            // fresh leaf was never recorded — free it
+                            // (the record-or-unwind hygiene).
+                            free_phys_page(pa);
+                            return Err("brk: growth page map failed");
+                        }
+                    }
+                    p.mapping_log.push(MappingRecord {
+                        va,
+                        phys: pa as usize,
+                        size: PAGE_SIZE_4K,
+                        kind: SegKind::Bss,
+                    });
+                }
+                va += page;
+            }
+            // SAFETY: as above.
             unsafe {
                 if let Some(segs) = (*m).segments.as_mut() {
                     segs.bss.0.end = new_end;
@@ -2115,6 +2158,69 @@ pub fn empty_fdgroup() -> Arc<Lock<FdGroup<MAX_FDS>>> {
 
 /// The one shared empty fd group (lazily built at the first exit).
 static EMPTY_FDGROUP: Lock<Option<Arc<Lock<FdGroup<MAX_FDS>>>>> = Lock::new("emptyfdgrp", None);
+
+/// 17-02 (the #44 fix, WINDOWS row closure): the shared EMPTY pgrp —
+/// the exit sweep's singleton (empty_fdgroup's shape).  Slots are never
+/// reaped this era, so every group handle a Moribund husk pins is a
+/// permanent allocation; the sweep swaps each for a singleton clone
+/// (refcount bump only) and lets the old Arc drop — a last sharer's
+/// group (and its mount table) dies with it, the donor pexit
+/// closepgrp's refcount semantics.
+pub fn empty_pgrp() -> Arc<Lock<Pgrp>> {
+    let node = LockNode::new();
+    let mut guard = EMPTY_PGRP.lock(&node);
+    if guard.is_none() {
+        *guard = Some(Arc::new(Lock::new("pgrp", Pgrp::new())));
+    }
+    guard.as_ref().unwrap().clone()
+}
+
+static EMPTY_PGRP: Lock<Option<Arc<Lock<Pgrp>>>> = Lock::new("emptypgrp", None);
+
+/// The exit sweep's shared EMPTY env group (the RFCENVG-fresh shape).
+pub fn empty_env_group() -> Arc<Lock<EnvGroup>> {
+    let node = LockNode::new();
+    let mut guard = EMPTY_ENVGROUP.lock(&node);
+    if guard.is_none() {
+        *guard = Some(Arc::new(Lock::new("env", EnvGroup::new())));
+    }
+    guard.as_ref().unwrap().clone()
+}
+
+static EMPTY_ENVGROUP: Lock<Option<Arc<Lock<EnvGroup>>>> = Lock::new("emptyenvgrp", None);
+
+/// The exit sweep's shared EMPTY rendezvous group (the RFREND-fresh
+/// shape).
+pub fn empty_rendez_group() -> Arc<Lock<RendezGroup>> {
+    let node = LockNode::new();
+    let mut guard = EMPTY_RENDEZGROUP.lock(&node);
+    if guard.is_none() {
+        *guard = Some(Arc::new(Lock::new("rendez", RendezGroup::new())));
+    }
+    guard.as_ref().unwrap().clone()
+}
+
+static EMPTY_RENDEZGROUP: Lock<Option<Arc<Lock<RendezGroup>>>> = Lock::new("emptyrgrp", None);
+
+/// 17-02 (the #44 fix): the exit sweep — a Moribund husk pins its slot
+/// forever, so every heap payload it retains is a permanent allocation
+/// (the churn gate measured the whole set: one fresh fd group + the
+/// pgrp/env/rgrp Arc shells + the slash/dot chans per exit).  The donor
+/// pexit's closefgrp/closepgrp/closergrp + slash/dot cclose re-keyed:
+/// the group handles swap for shared singletons (the old Arcs drop
+/// here — a last sharer's group dies with it), and the chans
+/// close-dispatch and clear.
+pub fn sweep_husk_payloads(proc: &mut Proc) {
+    proc.pgrp = empty_pgrp();
+    proc.env_group = empty_env_group();
+    proc.rgrp = empty_rendez_group();
+    if let Some(c) = proc.slash.take() {
+        port::namec::close_chan(&c);
+    }
+    if let Some(c) = proc.dot.take() {
+        port::namec::close_chan(&c);
+    }
+}
 
 /// devproc-lite's write hook: append the note to the ADDRESSED pid's
 /// queue — no broadcast, no group semantics.  Delivery happens at the
