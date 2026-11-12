@@ -505,7 +505,17 @@ WRAP
             # c0b656a0678278c3107c078744b93f8427d02a8fac9d8ae7b66e89b72744c912
             # (sha256-wLZWhm…), in three-way agreement with the FOD's own
             # measured got-value.
-            outputHash = "sha256-wLZWhmeBy8MQb0HcRj44ToH7StPvqNsJy2CO/ntnRJA=";
+            # The 17-02 sweep fix (slash/dot plain-drop — kernel bytes)
+            # re-staled it within the same plan; re-wired with the same
+            # two-derivation proof (kernel A plain + kernel B under a
+            # churnproof-c version override): byte-identical ISOs, file
+            # sha256
+            # fc5cde5559cb1728433e7392aea0480400978ca7d07a09b44c3e760dabd4accf,
+            # NAR hash (what this attr checks)
+            # f05ec06a8a736f6c10474277d80a8176da7ac424fdcf2a08d8eb38393ba4391
+            # (sha256-bw7Ank…).  nix build + --rebuild green at the wired
+            # value.
+            outputHash = "sha256-bw7AnkikIXnYGPYhJEd/DSa/cENfaL/dwu8DMN/GWbk=";
           };
         });
 
