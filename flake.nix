@@ -529,7 +529,21 @@ WRAP
             # d0a19c8335db1408535d4a216f810d15f44d19e8ba21f8909e9cb96eb29d6b22
             # (sha256-0KGcgz…), in three-way agreement with the FOD's
             # own measured got-value.
-            outputHash = "sha256-0KGcgzXbFAhTXUohb4ENFfRNGei6IfiQnpy5brKdayI=";
+            # The 17-04 cap-walk admission-hole fixes (WR-01..04 — the
+            # parse alignment/short-notify rejects, the extent
+            # zero-length/minimum/devcfg-8 rejects, the BAR type-nibble
+            # and natural-alignment checks — kernel bytes) re-staled it
+            # once more; re-wired with the same two-derivation proof:
+            # two independent fresh-kernel builds (kernel A plain +
+            # kernel B under a never-before-used wr04fix-proof-b version
+            # override) through the non-FOD lib.bootIso realization
+            # produced the byte-identical ISO — file-level sha256
+            # f50320fa6dae382c035e9578e0eb66d8d13e33297f4b9372622ea76662b39448,
+            # NAR hash (what this attr checks)
+            # f602b50d5f2b4073df53bea56e873ed035aab919107a506fbda4fb39443f009e
+            # (sha256-9gK1DV…), in three-way agreement with the FOD's
+            # own measured got-value.
+            outputHash = "sha256-9gK1DV8rQHPfU76lboc+0DWquRkQelBvvaT7OUQ/AJ4=";
           };
         });
 
