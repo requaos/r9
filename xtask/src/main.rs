@@ -2116,8 +2116,19 @@ impl BootTestStep {
                     }
                 }
                 BootStage::Q35ChurnDone => {
-                    if contains_marker(&capture[bind_after..], Q35_CHURN_DONE_MARKER.as_bytes()) {
-                        return self.finish(log_abs, &capture, BootProfile::X64Churn);
+                    // Wait for the COMPLETE line, not the prefix: the
+                    // marker can satisfy mid-flush (serial chunks) and
+                    // the post-pass parses both fields off this very
+                    // line — finishing on "…iterations=1400 semge"
+                    // truncated the run (17-02's live catch).  The
+                    // line helper is CRLF-trimmed; a partial line
+                    // lacks semgens= and the loop waits on.
+                    if let Some(line) =
+                        line_containing(&capture[bind_after..], Q35_CHURN_DONE_MARKER.as_bytes())
+                    {
+                        if line.contains("semgens=") {
+                            return self.finish(log_abs, &capture, BootProfile::X64Churn);
+                        }
                     }
                 }
                 BootStage::Q35ExecEntry => {
