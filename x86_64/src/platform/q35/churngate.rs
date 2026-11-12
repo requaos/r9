@@ -207,17 +207,20 @@ fn sample(tag: &str) -> usize {
     used
 }
 
-/// The live-block census line: `churngate: census <tag> <blocks>
-/// <bytes>; <size>x<count> ...` — the leak's fingerprint (which size
-/// classes are outstanding).
+/// The live/pooled census lines: `churngate: census <tag> live <blocks>
+/// <bytes>; <size>x<count> ...` + the pooled twin — live classes that
+/// climb name the leak; a climbing cursor with flat live classes names
+/// fragmentation.
 #[cfg(dev_churn)]
 fn print_census(tag: &str) {
-    let census = crate::allocator::heap_census();
-    let blocks: usize = census.iter().map(|&(_, n)| n).sum();
-    let bytes: usize = census.iter().map(|&(s, n)| s * n).sum();
-    let classes: alloc::vec::Vec<alloc::string::String> =
-        census.iter().map(|&(s, n)| alloc::format!("{s}x{n}")).collect();
-    port::println!("churngate: census {tag} {blocks} blocks {bytes} bytes; {}", classes.join(" "));
+    let (live, pooled) = crate::allocator::heap_census();
+    for (kind, census) in [("live", &live), ("pooled", &pooled)] {
+        let blocks: usize = census.iter().map(|&(_, n)| n).sum();
+        let bytes: usize = census.iter().map(|&(s, n)| s * n).sum();
+        let classes: alloc::vec::Vec<alloc::string::String> =
+            census.iter().map(|&(s, n)| alloc::format!("{s}x{n}")).collect();
+        port::println!("churngate: census {tag} {kind} {blocks} blocks {bytes} bytes; {}", classes.join(" "));
+    }
 }
 
 /// The dev_churn boot path (main.rs's dispatch: dev_exec without

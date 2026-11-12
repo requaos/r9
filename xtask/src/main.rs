@@ -1745,7 +1745,19 @@ impl BootTestStep {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or({
-                let base = BOOT_TEST_TIMEOUT_SECS;
+                let mut base = BOOT_TEST_TIMEOUT_SECS;
+                // 17-02 (the churn profile's own budget, the 16-08
+                // soak_stage_timeout precedent): the #44 repro shape is
+                // ~1400 fork+exec iterations + contention generations,
+                // and the measured KVM pace is ~0.28 s per exec cycle —
+                // consistent with 16-08's measured KVM syscall pacing
+                // (~2.5 rounds/s for the tcpblast baseline) — so the
+                // whole gate runs ~400 s of wall clock.  The carried
+                // 300 s default would kill it mid-loop; 900 s carries
+                // the loop + the drain with headroom.  Env still wins.
+                if self.config_name == "q35churn" {
+                    base = 900;
+                }
                 if tcg_budgets { base * TCG_OVERALL_MULT } else { base }
             });
         let deadline = Instant::now() + Duration::from_secs(timeout_secs);

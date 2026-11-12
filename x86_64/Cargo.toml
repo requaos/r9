@@ -22,7 +22,8 @@ static_assertions = "1.1.0"
 # (dev = ["ether"] — the D-01a bound step), dev_ip for the future devip
 # profile; dev_exec/dev_bootchain join at 14-04/14-05 (dev = ["exec"] /
 # "bootchain" — the exec profiles' keys; predeclared together so the
-# first emitting commit lands warning-free).
+# first emitting commit lands warning-free); dev_churn joins at 17-02
+# (the churn profile's key — q35churn/q35churnshell emit it).
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [
     'cfg(platform, values("q35"))',
@@ -30,4 +31,5 @@ unexpected_cfgs = { level = "warn", check-cfg = [
     'cfg(dev_ip)',
     'cfg(dev_exec)',
     'cfg(dev_bootchain)',
+    'cfg(dev_churn)',
 ] }

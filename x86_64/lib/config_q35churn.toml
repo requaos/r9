@@ -42,6 +42,27 @@ cpu = "host"
 smp = 1
 memory = "1024M"
 
+# The netdev stanza is CARRIED (q35exec's shape) even though the churn
+# load touches no net device: the q35 DISCOVERY contract (every q35
+# profile's finish()) asserts the virtio-net device-found line — the
+# NIC must exist on the PCI bus for the walk to find it.  Like q35exec
+# (dev carries no ether key), the device stays UNBOUND: discovery
+# prints, the bind never runs.
+#
+# Parallel-boot constraint (carried): two simultaneous q35 boots bind
+# the two loopback hostfwd ports — run the x86_64 gates sequentially.
+[qemu.netdev]
+default = "slirp"
+
+[qemu.netdev.slirp]
+mode = "user"
+device = "virtio-net-pci-non-transitional"
+hostfwd = [
+    "tcp:127.0.0.1:17010-:17010",
+    "tcp:127.0.0.1:5670-:567",
+]
+pcap = false
+
 [dist]
 format = "elf"
 # The staged bootfs (the 17-02 marker bake: init/smokesleep PLUS
