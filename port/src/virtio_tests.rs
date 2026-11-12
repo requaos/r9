@@ -615,6 +615,30 @@ fn used_drain_rejects_out_of_range_and_odd_ids() {
     assert!(drain_one(&mut r).is_err(), "an odd id would alias the wrong slot");
 }
 
+/// WR-06 (17-03): a lying device double-completing the same used id
+/// passes the range/evenness/len checks on the second completion — slot
+/// LIVENESS is the missing V5 check.  Without it the second retire
+/// returns Ok and the caller pushes one buffer page into the free stack
+/// twice (two live RX chains DMA into the same page).
+#[test]
+fn used_drain_rejects_unposted_slot_ids() {
+    // The clean first completion: post slot 0, the device retires it.
+    let mut r = rig(8, Dir::Tx);
+    r.ring.tx_post(0x2000_0000, 60, &r.notify, 0, 1).unwrap();
+    device_complete(&r, 0, 72); // the device echoes the chain-head id 0
+    assert_eq!(
+        drain_one(&mut r).expect("the first completion retires cleanly"),
+        UsedBuf { slot: 0, len: 72 }
+    );
+    // The device LIES: the same id again — slot 0 is no longer posted.
+    device_complete(&r, 0, 72);
+    let second = drain_one(&mut r);
+    let Err(e) = second else {
+        panic!("a used-ring id for an unposted slot must be rejected, not retired twice");
+    };
+    assert_eq!(e, "virtio: used-ring id for an unposted slot (device fault)");
+}
+
 #[test]
 fn used_drain_rejects_lens_outside_the_queue_bounds() {
     // RX: len must cover the 12-byte header and fit the buffer capacity.
