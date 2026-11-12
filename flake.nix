@@ -309,6 +309,14 @@ WRAP
           # plain q35 profile carries no user mode), and the shipped
           # artifact is the gated artifact (q35shell is the 14-06
           # full-chain gate, green twice consecutively).
+          # 17-02 re-keyed it to q35churnshell — q35shell VERBATIM plus
+          # the churn dev key — so the composed venue's kernel carries
+          # the per-exit churngate heap marker (the composed churn
+          # gate's memory-side probe, same cfg gate as the r9-side
+          # tier): the boot chain, every device, and every existing
+          # composed gate's semantics are unchanged (the churn DRIVER
+          # never runs under dev_bootchain); q35shell.toml itself stays
+          # byte-stable (Pitfall 7).
           kernel-x64 = pkgs.stdenv.mkDerivation {
             pname = "r9-kernel-x64";
             version = self.shortRev or "wip";
@@ -318,7 +326,7 @@ WRAP
             buildPhase = ''
               runHook preBuild
               ${objcopyExport toolchain}
-              cargo xtask build --arch x86-64 --config q35shell
+              cargo xtask build --arch x86-64 --config q35churnshell
               runHook postBuild
             '';
             installPhase = ''

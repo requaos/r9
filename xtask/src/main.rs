@@ -863,6 +863,23 @@ const Q35_NETGATE_TXBULK_MARKER: &str = "netgate: tx-bulk done";
 const Q35_NET_DONE_MARKER: &str = "X64-NET-DONE";
 const Q35_NETGATE_FAIL_MARKER: &str = "netgate: FAIL";
 
+/// The q35churn churn-gate markers (17-02, FLUSH-02's D-06 tier (a)):
+/// the kernel driver's per-sample heap lines (tag start/one/base/end),
+/// the slope line (every number the finish()-time post-pass re-derives
+/// the verdict from — parsed from the kernel's own markers, never a
+/// second hardcoded constant), the fail-closed FAIL (fast-fails the
+/// stage loop from any stage, the netgate precedent), the terminal
+/// DONE carrying the iteration + generation counts the post-pass
+/// counts the staged binaries' own ring-3 prints against, and those
+/// prints themselves (churnmark's per-exec ready line, churnsem's
+/// per-generation contender line).
+const Q35_CHURN_HEAP_MARKER: &str = "churngate: heap ";
+const Q35_CHURN_SLOPE_MARKER: &str = "churngate: slope ";
+const Q35_CHURN_DONE_MARKER: &str = "churngate: DONE iterations=";
+const Q35_CHURN_FAIL_MARKER: &str = "churngate: FAIL";
+const Q35_CHURN_MARK_MARKER: &str = "churnmark: ready";
+const Q35_CHURN_SEMGEN_MARKER: &str = "churngate: semgen";
+
 /// The q35exec staged-exec markers (14-05, XEXEC-02's leg-1 gate):
 /// after the Phase-13 discovery stages, the kernel's module/paqfs notes
 /// (the mb2 tag-3 module found + the paqfs root mounted through
@@ -1290,6 +1307,13 @@ enum BootStage {
     X64PingPong,
     X64TxBulk,
     X64NetDone,
+    /// The q35churn terminal stage (17-02): the module/paqfs notes
+    /// observed, now await the churn driver's terminal
+    /// `churngate: DONE iterations=<n> semgens=<k>` marker (a
+    /// `churngate: FAIL` line fails fast from any stage; the heap
+    /// sample lines and the staged binaries' prints ride unordered
+    /// between — the finish()-time post-pass owns them).
+    Q35ChurnDone,
     /// The q35exec module stage (14-05): discovery observed, now await
     /// the kernel's module-found and paqfs-mount notes (the mb2 tag-3
     /// delivery + the devroot mount), strictly after the discovery
@@ -1378,6 +1402,9 @@ impl fmt::Display for BootStage {
             }
             BootStage::X64TxBulk => write!(f, "netgate marker {Q35_NETGATE_TXBULK_MARKER:?}"),
             BootStage::X64NetDone => write!(f, "terminal marker {Q35_NET_DONE_MARKER:?}"),
+            BootStage::Q35ChurnDone => {
+                write!(f, "terminal marker {Q35_CHURN_DONE_MARKER:?} iterations=… semgens=…")
+            }
             BootStage::Q35ModulePaqfs => write!(
                 f,
                 "module/paqfs notes {{{Q35_MODULE_MARKER:?}, {Q35_PAQFS_MARKER:?}}} after the discovery"
@@ -1447,6 +1474,15 @@ enum BootProfile {
     /// exec-entry note, then the real Harvey boot(8)→init→rc chain's
     /// own prints through to the interactive `% ` prompt.
     X64Shell,
+    /// The q35churn churn gate (17-02, FLUSH-02's D-06 tier (a)): the
+    /// X64 discovery stages, the module/paqfs notes, then the
+    /// kernel-context churn driver's terminal `churngate: DONE` — with
+    /// the finish()-time post-pass asserting the heap bound from the
+    /// kernel's own markers (the four tagged heap samples, the slope
+    /// line, the DONE counts vs the staged binaries' own prints, and
+    /// zero `churngate: FAIL` — the fast-fail arm already aborts on
+    /// the first).
+    X64Churn,
 }
 
 /// Teardown: SIGKILL the spawned qemu's process GROUP (qemu spawned
@@ -1816,6 +1852,13 @@ impl BootTestStep {
         // and the Q35PciDiscovery satisfaction branches into the bind +
         // netgate stages below.
         let q35net_profile = self.arch == Arch::X86_64 && self.config_name == "q35net";
+        // The Q35CHURN profile ("q35churn", 17-02's D-06 tier (a)) is
+        // the same name-selected shape: its dev list is ["exec",
+        // "churn"] — exec is IN the list, so any exec-profile dispatch
+        // must check this FIRST (the virtnet ordering rule), and the
+        // discovery satisfaction branches into the module stage below
+        // (no bind stage — the profile is net-free by design).
+        let q35churn_profile = self.arch == Arch::X86_64 && self.config_name == "q35churn";
         // The Q35EXEC profile ("q35exec", 14-05's XEXEC-02 leg-1 gate)
         // is the same name-selected shape: its dev list is ["exec"] and
         // its [dist] module key stages bootfs.paq into the ISO, so the
@@ -1858,6 +1901,21 @@ impl BootTestStep {
                     stage,
                     &capture,
                     &format!("kernel netgate failed ({Q35_NETGATE_FAIL_MARKER}): {tail}"),
+                ));
+            }
+            // The q35churn fail-fast (17-02): the churn driver's own
+            // verdict is fail-closed — a `churngate: FAIL` line (slope
+            // over ceiling, a wedge watchdog, a spawn failure) means
+            // the missing terminal marker would otherwise only surface
+            // as a slow budget expiry.  Fail the gate the moment the
+            // kernel names its stage; the staged churnsem binary's own
+            // rfork/wait failures print the same family.
+            if q35churn_profile && contains_marker(&capture, Q35_CHURN_FAIL_MARKER.as_bytes()) {
+                let tail = String::from_utf8_lossy(&capture[capture.len().saturating_sub(200)..]);
+                return Err(self.fail(
+                    stage,
+                    &capture,
+                    &format!("kernel churngate failed ({Q35_CHURN_FAIL_MARKER}): {tail}"),
                 ));
             }
             // The x86_64 channel's dedicated first-marker budget: the
@@ -1968,6 +2026,21 @@ impl BootTestStep {
                             .map(|p| pci_after + p)
                             .unwrap_or(capture.len());
                             stage = BootStage::Q35ModulePaqfs;
+                        } else if q35churn_profile {
+                            // 17-02: the churn gate continues into the
+                            // same module half (the churn profile's
+                            // bootstrap runs exec_bootstrap's own
+                            // prologue — identical module/paqfs notes),
+                            // then awaits the churn driver's terminal
+                            // marker (no exec-entry note: the driver is
+                            // a kernel-context proc, never ring 3).
+                            bind_after = last_marker_line_end(
+                                &capture[pci_after..],
+                                PCI_NET_DEVICE_MARKER,
+                            )
+                            .map(|p| pci_after + p)
+                            .unwrap_or(capture.len());
+                            stage = BootStage::Q35ModulePaqfs;
                         } else {
                             // 13-03: the gate's timer half — the tick
                             // count is anchored strictly past the
@@ -2018,7 +2091,21 @@ impl BootTestStep {
                         // Anchor past the mount note: the exec-entry
                         // print follows in the same burst shape.
                         bind_after = capture.len();
-                        stage = BootStage::Q35ExecEntry;
+                        stage = if q35churn_profile {
+                            // 17-02: the churn venue's next marker is
+                            // the driver's terminal DONE — the heap
+                            // samples, the exec'd binaries' prints, and
+                            // the exit lines ride unordered between
+                            // (the finish() post-pass owns them).
+                            BootStage::Q35ChurnDone
+                        } else {
+                            BootStage::Q35ExecEntry
+                        };
+                    }
+                }
+                BootStage::Q35ChurnDone => {
+                    if contains_marker(&capture[bind_after..], Q35_CHURN_DONE_MARKER.as_bytes()) {
+                        return self.finish(log_abs, &capture, BootProfile::X64Churn);
                     }
                 }
                 BootStage::Q35ExecEntry => {
@@ -2391,6 +2478,120 @@ impl BootTestStep {
             BootProfile::Exec => {
                 println!(
                     "boot-test: PASS -- banner, exec entry, init print, hello print and all-exited markers observed in order, stacksmoke depth-64 marker present (SC#2 + 05-01 D-15)"
+                );
+            }
+            BootProfile::X64Churn => {
+                // The finish()-time heap-bound post-pass (17-02,
+                // T-17-04: the bound has teeth): every number is
+                // PARSED from the kernel's own markers — the DONE
+                // line's iteration/generation counts, the four tagged
+                // heap samples, the slope line's steady/measured/
+                // ceiling — never a second hardcoded constant.  The
+                // kernel already compared measured vs ceiling
+                // fail-closed (DONE withheld on FAIL, and the
+                // fast-fail arm aborts on the first FAIL line); this
+                // re-derives the verdict from the RAW samples, so a
+                // kernel-side comparison bug cannot certify a leak as
+                // bounded.
+                let field = |line: &str, key: &str| -> Option<u64> {
+                    line.split_whitespace()
+                        .find_map(|t| t.strip_prefix(key).and_then(|v| v.parse().ok()))
+                };
+                let done_line = line_containing(capture, Q35_CHURN_DONE_MARKER.as_bytes())
+                    .ok_or_else(|| "churn gate: no DONE line in capture".to_string())?;
+                let iterations = field(&done_line, "iterations=")
+                    .ok_or_else(|| format!("churn gate: DONE line lacks iterations=: {done_line}"))?;
+                let semgens = field(&done_line, "semgens=")
+                    .ok_or_else(|| format!("churn gate: DONE line lacks semgens=: {done_line}"))?;
+                if semgens > iterations {
+                    return Err(format!(
+                        "churn gate: semgens={semgens} exceeds iterations={iterations} (driver bookkeeping)"
+                    ).into());
+                }
+                // (a) zero FAIL lines whole-capture (the fast-fail
+                //     already aborted on the first; belt-and-braces).
+                let fails = count_marker_lines(capture, Q35_CHURN_FAIL_MARKER);
+                if fails != 0 {
+                    return Err(format!("churn gate: {fails} {Q35_CHURN_FAIL_MARKER} line(s)").into());
+                }
+                // (b) the exact-count contract, against the kernel's
+                //     own numbers: every iteration entered ring 3
+                //     (churnmark's own prints — D-09) and every
+                //     generation's contenders completed.
+                let marks = count_marker_lines(capture, Q35_CHURN_MARK_MARKER) as u64;
+                let want_marks = iterations - semgens;
+                if marks != want_marks {
+                    return Err(format!(
+                        "churn gate: churnmark: ready COUNT FAILED — {marks} for iterations={iterations} - semgens={semgens} (short names a lost exec, long names a duplicate)"
+                    ).into());
+                }
+                let gens = count_marker_lines(capture, Q35_CHURN_SEMGEN_MARKER) as u64;
+                if gens != semgens {
+                    return Err(format!(
+                        "churn gate: semgen COUNT FAILED — {gens} for semgens={semgens}"
+                    ).into());
+                }
+                // (c) the slope verdict, re-derived from the raw
+                //     samples: the window between the `heap base` and
+                //     `heap end` sample lines carries the churn leg —
+                //     its mark + generation counts reconstruct the
+                //     kernel's exact denominator.
+                let slope_line = line_containing(capture, Q35_CHURN_SLOPE_MARKER.as_bytes())
+                    .ok_or_else(|| "churn gate: no slope line in capture".to_string())?;
+                let steady = field(&slope_line, "steady=")
+                    .ok_or_else(|| format!("churn gate: slope line lacks steady=: {slope_line}"))?;
+                let measured = field(&slope_line, "measured=")
+                    .ok_or_else(|| format!("churn gate: slope line lacks measured=: {slope_line}"))?;
+                let ceiling = field(&slope_line, "ceiling=")
+                    .ok_or_else(|| format!("churn gate: slope line lacks ceiling=: {slope_line}"))?;
+                let base_end = last_marker_line_end(capture, &format!("{Q35_CHURN_HEAP_MARKER}base"))
+                    .ok_or_else(|| "churn gate: no `churngate: heap base` sample line".to_string())?;
+                let end_start = marker_position(capture, format!("{Q35_CHURN_HEAP_MARKER}end").as_bytes())
+                    .ok_or_else(|| "churn gate: no `churngate: heap end` sample line".to_string())?;
+                if base_end > end_start {
+                    return Err("churn gate: heap end sample precedes heap base".into());
+                }
+                let window = &capture[base_end..end_start];
+                let leg_marks = count_marker_lines(window, Q35_CHURN_MARK_MARKER) as u64;
+                let leg_gens = count_marker_lines(window, Q35_CHURN_SEMGEN_MARKER) as u64;
+                if leg_marks + leg_gens == 0 {
+                    return Err("churn gate: empty churn-leg window (sample anchors wrong)".into());
+                }
+                // The sample lines' shape: `churngate: heap <tag>
+                // <used> <total>` — the cursor is the 4th token.
+                let sample_used = |tag: &str| -> Option<u64> {
+                    let needle = format!("{Q35_CHURN_HEAP_MARKER}{tag}");
+                    let l = line_containing(capture, needle.as_bytes())?;
+                    l.split_whitespace().nth(3).and_then(|t| t.parse().ok())
+                };
+                let base_used = sample_used("base")
+                    .ok_or_else(|| "churn gate: heap base sample lacks its cursor bytes".to_string())?;
+                let end_used = sample_used("end")
+                    .ok_or_else(|| "churn gate: heap end sample lacks its cursor bytes".to_string())?;
+                if end_used < base_used {
+                    return Err(format!(
+                        "churn gate: cursor SHRANK ({base_used} -> {end_used}) — impossible by the slope doctrine"
+                    ).into());
+                }
+                let recomputed = (end_used - base_used) / (leg_marks + leg_gens);
+                if recomputed != measured {
+                    return Err(format!(
+                        "churn gate: slope re-derivation mismatch — kernel measured={measured}, host recomputed {recomputed} from ({end_used}-{base_used})/({leg_marks}+{leg_gens})"
+                    ).into());
+                }
+                if measured > ceiling {
+                    return Err(format!(
+                        "churn gate: heap bound FAILED host-side — measured={measured} > ceiling={ceiling} bytes/exec (the kernel's own comparison should have withheld DONE)"
+                    ).into());
+                }
+                println!(
+                    "boot-test: PASS -- SeaBIOS -> GRUB2 -> mb2 kernel + module boot: banner, memory \
+                     facts, discovery, the module-tag/paqfs mount notes, then the kernel-context \
+                     churn driver's {iterations} exec iterations ({want_marks} churnmark ring-3 \
+                     prints counted) + {semgens} RFMEM contention generations, drain, and the \
+                     heap slope held: steady={steady} measured={measured} <= ceiling={ceiling} \
+                     bytes/exec (host re-derived from the kernel's own samples) — D-06 tier (a) \
+                     green, CR-03's in-kernel contention leg landed"
                 );
             }
             BootProfile::X64Exec => {

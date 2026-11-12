@@ -1,0 +1,49 @@
+# The q35churn churn gate profile (17-02, FLUSH-02's D-06 tier (a) +
+# CR-03's in-kernel contention leg): config_q35exec's staged-exec shape
+# (D-08's module delivery — the [dist] module key stages bootfs.paq,
+# whose 17-02 bake carries the churn pair beside /amd64/init) plus the
+# churn dev key, which compiles cfg(dev_churn):
+#
+#   main.rs routes dev_exec+dev_churn (no bootchain) to churngate's
+#   bootstrap — the same prologue (module stash, hooks, env seed,
+#   devroot mount), then a kernel-context driver proc (never ring 3)
+#   execs /amd64/churnmark ~1400 times (WINDOWS #44's repro shape),
+#   spawning an /amd64/churnsem RFMEM contention generation every 35th
+#   iteration, sampling heap_stats before/one/baseline/end and
+#   asserting the steady-leg per-exec cursor delta against the
+#   CEILING_BYTES_PER_EXEC derived from the first measured-green
+#   baseline (churngate.rs's own comment documents the number).
+#
+# Net-free by design: the churn load touches no device the netdev
+# stanza would serve, and omitting [qemu.netdev] keeps the
+# parallel-boot hostfwd ports (127.0.0.1:17010/5670) unbound for any
+# gate running alongside (Pitfall 9's sequencing rule made structural).
+# The tick println stays cfg-gated OFF under dev_exec (14-04, Pitfall
+# 8: syscall-context prints own the Console lock; the driver's context
+# is syscall-shaped — always IRQ-masked).
+[build]
+target = "lib/x86_64-unknown-none-elf.json"
+buildflags = [
+    "-Z", "build-std=core,alloc"
+]
+
+[link]
+script = 'x86_64/lib/kernel.ld'
+load-address = '0xffffffff80200000'
+
+[config]
+platform = "q35"
+dev = ["exec", "churn"]
+
+[qemu]
+machine = "q35"
+accel = "kvm"
+cpu = "host"
+smp = 1
+memory = "1024M"
+
+[dist]
+format = "elf"
+# The staged bootfs (the 17-02 marker bake: init/smokesleep PLUS
+# churnmark/churnsem — the churn driver walks the pair by name).
+module = "harvey:build/x86_64/out/bootfs.paq"

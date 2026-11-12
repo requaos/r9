@@ -255,8 +255,18 @@ pub extern "C" fn main(mach: &mut dat::Mach, mbdata: u64) {
     // hlt wakes on each tick; trap()'s IRQ branch iretq's back here.  It
     // prints nothing, which is what makes tick()'s println from IRQ
     // context safe against the Console lock (see timer.rs).
-    #[cfg(dev_exec)]
+    //
+    // 17-02 (dev_churn without the boot chain): the churn profile's
+    // bootstrap replaces the first ring-3 proc with the kernel-context
+    // churn driver (same prologue; churngate's own walk/dispatch).  A
+    // dev_churn BOOT-CHAIN config (the composed venue's kernel) keeps
+    // the normal exec_bootstrap — its churn surface is the per-exit
+    // heap marker, not the driver.
+    #[cfg(all(dev_exec, any(not(dev_churn), dev_bootchain)))]
     exec_bootstrap(facts);
+
+    #[cfg(all(dev_exec, dev_churn, not(dev_bootchain)))]
+    platform::q35::churngate::bootstrap_and_run(facts);
 
     // The idle loop (kernel-only boots).
     #[cfg(not(dev_exec))]
@@ -343,20 +353,24 @@ fn cons_echo(bytes: &[u8]) {
     port::devcons::write_bytes(bytes);
 }
 
-/// The first-process exec orchestration (the aarch64 exec_bootstrap
-/// port, 14-05): entered after the q35 IRQ-arming window with IF=0 —
-/// the whole bootstrap is a non-preemptible boot critical section (the
-/// inflate-heisenbug discipline; interrupts unmask only at the ring-3
-/// handoff via the seeded frame's If flag).  Finds the mb2 module
-/// (D-03's bootfs delivery — the range was bounds-checked against the
-/// memory map at parse time), reads it through the KZERO alias of all
-/// RAM (no new mapping: the boot PML4's slot-511 entry maps every
-/// guest page, the aarch64 initrd discovery/map step collapsed into
-/// the alias), mounts it as devroot, walks+opens BOOT_ENTRY, builds
-/// the first proc, execs, switches to the proc's CR3, and hands off to
-/// ring 3 through trap_return.  Never returns.
+/// The exec-bootstrap prologue's outputs (17-02's split): the stashed
+/// module image, the devroot root attach chan, and the seeded ROOT env
+/// group — everything both the first-ring-3-proc bootstrap and the
+/// churn driver's bootstrap consume before their paths diverge.
 #[cfg(dev_exec)]
-fn exec_bootstrap(facts: &mb2::Facts) -> ! {
+pub(crate) struct ExecPrologue {
+    pub(crate) img: &'static [u8],
+    pub(crate) slash: port::dat::Chan,
+    pub(crate) root_env: alloc::sync::Arc<port::mcslock::Lock<port::devenv::EnvGroup>>,
+}
+
+/// The shared first-exec prologue (14-05's body, split out 17-02 so
+/// the churn driver's bootstrap consumes the IDENTICAL steps and
+/// prints): the mb2 module stash reconciliation, the port-device hook
+/// registrations, the ROOT env seed, and the devroot mount with its
+/// root attach.  Runs entirely in the IF=0 boot window.
+#[cfg(dev_exec)]
+pub(crate) fn exec_prologue(facts: &mb2::Facts) -> ExecPrologue {
     // D-03: the bootfs module.  GRUB loaded bootfs.paq as mb2 tag 3;
     // the ISO builder staged it because this config's [dist] module
     // key named it — its absence is a config/staging bug, loud here.
@@ -484,10 +498,25 @@ fn exec_bootstrap(facts: &mb2::Facts) -> ! {
     let root =
         port::devroot::mount_initrd(img).unwrap_or_else(|err| panic!("devroot: mount: {err}"));
     println!("q35: paqfs root mounted from module ({} bytes)", img.len());
+    let slash = root.attach_root().unwrap_or_else(|err| panic!("devroot: attach: {err}"));
+    ExecPrologue { img, slash, root_env }
+}
+
+/// The first-process exec orchestration (the aarch64 exec_bootstrap
+/// port, 14-05): entered after the q35 IRQ-arming window with IF=0 —
+/// the whole bootstrap is a non-preemptible boot critical section (the
+/// inflate-heisenbug discipline; interrupts unmask only at the ring-3
+/// handoff via the seeded frame's If flag).  Runs the shared
+/// prologue, walks+opens BOOT_ENTRY, builds the first proc, execs,
+/// switches to the proc's CR3, and hands off to ring 3 through
+/// trap_return.  Never returns.
+#[cfg(dev_exec)]
+fn exec_bootstrap(facts: &mb2::Facts) -> ! {
+    let pro = exec_prologue(facts);
+    let root = port::devroot::root().expect("devroot: the prologue just mounted the root");
     let entry_path = BOOT_ENTRY;
     let entry_str = core::str::from_utf8(entry_path).unwrap_or("?");
-    let slash_chan =
-        root.attach_root().unwrap_or_else(|err| panic!("devroot: attach: {err}"));
+    let slash_chan = pro.slash.dup();
     let mut entry_chan = slash_chan.dup();
     let mut leaf: &[u8] = entry_path;
     for comp in entry_path.split(|&b| b == b'/').filter(|c| !c.is_empty()) {
@@ -520,8 +549,8 @@ fn exec_bootstrap(facts: &mb2::Facts) -> ! {
     // pid 1 runs in the seeded ROOT env group (the slash/dot seeding's
     // twin — Proc::new's fresh empty group is the never-seeded
     // default).
-    proc.env_group = root_env;
-    exec::exec_into(&mut proc, img, &bin, name, argv)
+    proc.env_group = pro.root_env;
+    exec::exec_into(&mut proc, pro.img, &bin, name, argv)
         .unwrap_or_else(|err| panic!("exec: {entry_str}: {err}"));
 
     // The one-way CR3 switch into the proc's table.  Order discipline

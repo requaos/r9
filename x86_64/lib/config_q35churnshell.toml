@@ -1,0 +1,111 @@
+# The q35churnshell profile (17-02, the composed venue's kernel):
+# config_q35shell.toml VERBATIM plus the churn dev key — the composed
+# boot-iso's kernel (r9's flake kernel-x64 builds this config), so the
+# composed churn gate's venue carries the heap-marker surface through
+# the SAME cfg gate as the r9-side tier: exit_tail prints
+# `churngate: heap exit <used> <total>' per exit (the memory-side
+# probe Harvey's churn expect driver bounds the /bin/cat churn window
+# with — D-06 tier (b)'s preferred bounded-memory mechanism).  The
+# churn DRIVER itself never runs here: dev_churn + dev_bootchain keeps
+# the normal boot chain (main.rs's dispatch), so every composed gate's
+# boot sequence is unchanged apart from the diagnostic line.
+#
+# A separate config (not an edit to q35shell.toml) so every existing
+# profile stays byte-stable (17-02's Pitfall 7).
+# The q35shell boot-chain profile (14-06, XEXEC-03's leg-2 gate — D-08's
+# staged leg 2): config_q35exec.toml's shape with the boot-chain entry
+# selection — dev = ["exec", "bootchain", "ether", "ip", "churn"] compiles
+# cfg(dev_bootchain) alongside cfg(dev_exec), so exec_bootstrap's
+# BOOT_ENTRY becomes the real Harvey boot(8) at /boot/boot (pid 1 runs
+# the chain: boot(8) execs /boot/paqfs, mounts the paqfs root, execs
+# /amd64/init, init fexecs /bin/rc, rcmain/termrc run, the interactive
+# `% ` prompt arrives).  The tick println is cfg-gated OFF under
+# dev_exec (14-04, Pitfall 8) — unchanged from q35exec.
+#
+# ether/ip — the Phase-13 netgate placement carried from virtshell's
+# membership: the NIC binds in the pre-sti window (the X64Bind stage
+# asserts it) and devip's `#I` compiles in, so /net exists for 14-09's
+# userspace gates.  Inert on the chain path this era.
+#
+# D-03 note — NO initrd key, deliberately (the q35exec note carried):
+# GRUB delivers the bootfs as an mb2 tag-3 MODULE off the same ISO (the
+# [dist] module key below + the grub.cfg module2 placeholder).  This
+# profile stages the CHAIN bake — the marker bake stays bootfs.paq for
+# q35exec's gate (the marker IS that image's /amd64/init).
+#
+# 16-01 (D-05): the [qemu.netdev] stanza below is the mode-tables
+# shape (default selector + per-mode sub-tables) — the flat
+# mode/device/pcap stanza is retired; the D-04 hostfwd remap (host
+# 5670 -> guest 567) rides the slirp table as data.  This committed
+# TOML is also the build-time-embedded default config of the exported
+# r9-netdev-args emitter bin (16-01 Task 3).
+[build]
+target = "lib/x86_64-unknown-none-elf.json"
+buildflags = [
+    "-Z", "build-std=core,alloc"
+]
+
+[link]
+script = 'x86_64/lib/kernel.ld'
+load-address = '0xffffffff80200000'
+
+[config]
+platform = "q35"
+dev = ["exec", "bootchain", "ether", "ip", "churn"]
+
+[qemu]
+machine = "q35"
+accel = "kvm"
+cpu = "host"
+smp = 1
+memory = "1024M"
+
+# 16-01 (D-05): the mode tables — ONE shared builder (xtask
+# config::netdev_args) serves the in-process boots and the exported
+# r9-netdev-args bin.  The slirp hostfwd set is D-04: loopback-bound
+# host addresses only, host 5670 -> guest 567 (a literal host:567 bind
+# needs privilege on default Linux — ip_unprivileged_port_start 1024 —
+# and the hermetic default must stay zero-privilege/CI-able, HNET-01).
+#
+# Parallel-boot constraint: two simultaneous q35 boots on one host now
+# both bind the two loopback hostfwd ports (127.0.0.1:17010 and
+# 127.0.0.1:5670) at netdev init — run the x86_64 gates sequentially.
+[qemu.netdev]
+default = "slirp"
+
+[qemu.netdev.slirp]
+mode = "user"
+device = "virtio-net-pci-non-transitional"
+hostfwd = [
+    "tcp:127.0.0.1:17010-:17010",
+    "tcp:127.0.0.1:5670-:567",
+]
+pcap = true
+
+# The tap leg (16-01 Task 2, HNET-03): the live-probed NixOS shape —
+# br=br0 (the NAT'd private bridge) and the EXPLICIT setuid helper
+# wrapper path (Pitfall 1: qemu's compiled-in default helper is its
+# own nosuid store libexec, where the setuid bit is dead).  The vmnet
+# leg (HNET-04) is darwin-only documented-manual: socket_vmnet's
+# conventional socket path, emitted by the ONE builder so the darwin
+# docs cite exactly what this table prints.
+[qemu.netdev.tap]
+mode = "tap"
+device = "virtio-net-pci-non-transitional"
+br = "br0"
+helper = "/run/wrappers/bin/qemu-bridge-helper"
+pcap = true
+
+[qemu.netdev.vmnet]
+mode = "vmnet-socket"
+device = "virtio-net-pci-non-transitional"
+socket-path = "/var/run/socket_vmnet"
+pcap = false
+
+[dist]
+format = "elf"
+# The CHAIN bootfs (D-03): Harvey's 14-06 bake produces this under the
+# checkout R9_HARVEY_DIR names; the ISO builder stages it at
+# /boot/bootfs.paq and emits the grub.cfg module2 line IN.  Absence is
+# a loud pre-ISO error naming the Harvey-side producers.
+module = "harvey:build/x86_64/out/bootfs-chain.paq"

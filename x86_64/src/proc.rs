@@ -108,7 +108,16 @@ pub const ERRMAX: usize = 128;
 /// the boot chain with >2x headroom; the exit-sweep deferral stays the
 /// tracked follow-up (a long-lived shell still eventually fills ANY
 /// fixed table).
+#[cfg(not(dev_churn))]
 pub const MAX_PROCS: usize = 512;
+/// The churn profile's fork budget (17-02, cfg-gated so every other
+/// build keeps the measured-201 shape above): WINDOWS #44's repro
+/// shape is ~1400 fork+exec iterations plus CR-03's RFMEM contenders
+/// (~40 generations x 5 procs) — a boot-session budget above the
+/// default.  The static table grows ~1 MiB of .bss under the gate (a
+/// Proc is ~600 bytes); the 1024M guest carries it trivially.
+#[cfg(dev_churn)]
+pub const MAX_PROCS: usize = 2048;
 /// Open fd slots per proc (init's closefds closes 3..29 — the table
 /// must hold fds through 29 without making that fatal; pipe+dup flows
 /// hold several at once).
@@ -1468,6 +1477,22 @@ pub fn any_active_procs() -> bool {
     table.procs.iter().flatten().any(|p| p.state != ProcState::Moribund)
 }
 
+/// 17-02 (dev_churn): the drain probe — true while any proc OTHER than
+/// `my_pid` is non-Moribund (the churn driver's final wait: every
+/// nowait contention generation's contenders gone before the end
+/// sample).  any_active_procs minus self, the table- private-field
+/// read living here beside its sibling.
+#[cfg(dev_churn)]
+pub fn any_other_active_procs(my_pid: u64) -> bool {
+    let node = LockNode::new();
+    let table = PROC_TABLE.lock(&node);
+    table
+        .procs
+        .iter()
+        .flatten()
+        .any(|p| p.pid != my_pid && p.state != ProcState::Moribund)
+}
+
 /// The shared mid-construction unwind for new_user_proc — free the
 /// PML4 page, the kstack pages, and the kstack's intermediate tables
 /// (the caller passes exactly the live prefixes).  Never called with a
@@ -1661,6 +1686,49 @@ pub fn activate_first(p: &mut Proc) {
     set_current_proc(p);
     set_tss_rsp0(p.kstack_top as u64);
     write_curframe(p.frame);
+}
+
+/// 17-02 (dev_churn): seed a freshly built proc's KERNEL entry — the
+/// SCHED_CONTEXT seeding shape re-keyed onto a proc.  The context
+/// resume jumps into `entry` on the proc's own kstack (rsp one qword
+/// under the 64-KiB-aligned top, SysV entry-aligned); no Ureg, no
+/// ring 3 — the churn driver's orchestrator context.  The proc is
+/// queued Ready like any fork child; pick_next installs it and the
+/// scheduler's ONE swtch arm enters it.
+#[cfg(dev_churn)]
+pub(crate) fn seed_kernel_context(p: &mut Proc, entry: fn() -> !) {
+    p.context.set_return(entry as *const () as u64);
+    #[cfg(not(test))]
+    p.context.set_stack_pointer(p.kstack_top as u64 - 8);
+}
+
+/// 17-02 (dev_churn): the first-resume seeding for a proc built by
+/// exec_into (the bootstrap's direct-trap_return path never runs for
+/// it): the rfork_copy tail verbatim — the context enters the
+/// first_entry trampoline with the planted Ureg in rbx, so the
+/// scheduler's ONE swtch arm performs the ring-3 entry like any
+/// fork's.
+#[cfg(dev_churn)]
+pub(crate) fn first_resume_seed(p: &mut Proc) {
+    p.context.set_return(first_entry as *const () as u64);
+    #[cfg(not(test))]
+    p.context.set_stack_pointer(p.kstack_top as u64 - 0x400);
+    p.context.rbx = p.frame as u64;
+}
+
+/// 17-02 (dev_churn): park the boot context into the scheduler loop —
+/// the one-way handoff for the profile whose first "process" is a
+/// kernel-context orchestrator (the churn driver): the boot context
+/// never resumes (its save lands in a scratch Context nothing reads),
+/// and sched_loop runs on the Mach's scheduler stack from here on,
+/// dispatching the already-Ready driver.
+#[cfg(dev_churn)]
+pub(crate) fn enter_sched_loop_from_boot() -> ! {
+    static BOOT_CTX: SyncUnsafeCell<swtch::Context> = SyncUnsafeCell::new(swtch::Context::new());
+    // SAFETY: single CPU; runs once from the boot context (IRQ-masked,
+    // driver already Ready); BOOT_CTX is never read again.
+    unsafe { swtch::swtch(BOOT_CTX.get(), sched_context()) }
+    unreachable!("the boot context parked into the scheduler loop")
 }
 
 /// The timer-tick preemption entry.  Acts only when the current proc

@@ -586,4 +586,26 @@ impl QuickFit {
     pub fn arena_stats(&self) -> (usize, usize) {
         (self.tail.cursor.load(core::sync::atomic::Ordering::Relaxed), self.tail.arena.len())
     }
+
+    /// A read-only census of LIVE blocks by size class (17-02, the
+    /// churn leak hunt): every used slot below the high watermarks,
+    /// bucketed (size, count) ascending.  The diagnosis surface for a
+    /// cursor that climbs while a load should hold steady — WHICH size
+    /// classes accumulate names the leaking allocation.  Single CPU;
+    /// read-only.
+    pub fn live_census(&self) -> alloc::vec::Vec<(usize, usize)> {
+        let mut sizes = alloc::vec::Vec::new();
+        let high = core::cmp::max(self.high_main, self.high_reserve) as usize;
+        for s in self.slots[..core::cmp::min(high, self.slots.len())].iter() {
+            if !s.used {
+                continue;
+            }
+            match sizes.iter_mut().find(|(sz, _)| *sz == s.size) {
+                Some((_, n)) => *n += 1,
+                None => sizes.push((s.size, 1)),
+            }
+        }
+        sizes.sort_unstable();
+        sizes
+    }
 }
