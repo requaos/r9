@@ -3381,3 +3381,103 @@ fn ipifc_v6_verbs_add6_ra6_try() {
     conv::conv_close(conv::Proto::Ipifc, et_id);
 }
 
+
+// ---------------------------------------------------------------------------
+// WR-05 capacity pins (17-03), devip half: the stack's NET_WAITERS /
+// PENDING_WAKES WaitSet and the conv's per-conv WaitPids must hold
+// EVERY possible waiter — one per proc, the live table is 512 — and the
+// full arm must be LOUD (counted + reported, never a silent drop,
+// never a panic).  Pure-struct pins over the same contract the netif
+// home pins (devether_tests.rs): each set is driven directly, never
+// through the seam's statics (no publish, no hooks — Pitfall 8).
+// ---------------------------------------------------------------------------
+
+/// stack::WaitSet — the table-sized capacity (512 distinct pids all
+/// register and all come back on take).
+#[test]
+fn stack_waitset_retains_the_whole_proc_table_and_take_returns_all() {
+    let mut ws = stack::WaitSet::new();
+    for pid in 1..=512u64 {
+        ws.register(pid);
+    }
+    let mut out = [0u64; 16];
+    let n = ws.take(&mut out);
+    assert_eq!(n, 512, "512 distinct live pids all register (the set is sized to the table)");
+    let mut seen: Vec<u64> = out[..n].to_vec();
+    seen.sort_unstable();
+    assert_eq!(seen, (1..=512).collect::<Vec<u64>>(), "no pid silently dropped");
+}
+
+/// stack::WaitSet — the 513th distinct registration hits the full arm:
+/// the table-sized prefix survives, the drop is loud, never a panic.
+#[test]
+fn stack_waitset_513th_registration_is_loudly_dropped() {
+    let mut ws = stack::WaitSet::new();
+    for pid in 1..=513u64 {
+        ws.register(pid);
+    }
+    let mut out = [0u64; 16];
+    let n = ws.take(&mut out);
+    assert_eq!(n, 512, "the table-sized prefix survives; only the beyond-capacity 513th drops");
+}
+
+/// stack::WaitSet — the register contract below capacity is unchanged
+/// (duplicates idempotent, pid 0 ignored, take drains).
+#[test]
+fn stack_waitset_duplicate_and_zero_registrations_stay_idempotent() {
+    let mut ws = stack::WaitSet::new();
+    ws.register(7);
+    ws.register(7);
+    ws.register(0);
+    let mut out = [0u64; 16];
+    let n = ws.take(&mut out);
+    assert_eq!(n, 1, "duplicate and zero registrations add nothing");
+    assert_eq!(out[0], 7);
+    let n2 = ws.take(&mut out);
+    assert_eq!(n2, 0, "take drains the set");
+}
+
+/// conv::WaitPids (the per-conv blocked-reader set — the third WaitSet
+/// copy) — the table-sized capacity.
+#[test]
+fn conv_waitset_retains_the_whole_proc_table_and_take_returns_all() {
+    let mut wp = crate::devip::conv::WaitPids::new();
+    for pid in 1..=512u64 {
+        wp.register(pid);
+    }
+    let mut out = [0u64; 16];
+    let n = wp.take(&mut out);
+    assert_eq!(n, 512, "512 distinct live pids all register (the set is sized to the table)");
+    let mut seen: Vec<u64> = out[..n].to_vec();
+    seen.sort_unstable();
+    assert_eq!(seen, (1..=512).collect::<Vec<u64>>(), "no pid silently dropped");
+}
+
+/// conv::WaitPids — the 513th distinct registration hits the full arm:
+/// the table-sized prefix survives, the drop is loud, never a panic.
+#[test]
+fn conv_waitset_513th_registration_is_loudly_dropped() {
+    let mut wp = crate::devip::conv::WaitPids::new();
+    for pid in 1..=513u64 {
+        wp.register(pid);
+    }
+    let mut out = [0u64; 16];
+    let n = wp.take(&mut out);
+    assert_eq!(n, 512, "the table-sized prefix survives; only the beyond-capacity 513th drops");
+}
+
+/// conv::WaitPids — the register contract below capacity is unchanged
+/// (duplicates idempotent, pid 0 ignored, take drains).
+#[test]
+fn conv_waitset_duplicate_and_zero_registrations_stay_idempotent() {
+    let mut wp = crate::devip::conv::WaitPids::new();
+    wp.register(7);
+    wp.register(7);
+    wp.register(0);
+    let mut out = [0u64; 16];
+    let n = wp.take(&mut out);
+    assert_eq!(n, 1, "duplicate and zero registrations add nothing");
+    assert_eq!(out[0], 7);
+    let n2 = wp.take(&mut out);
+    assert_eq!(n2, 0, "take drains the set");
+}

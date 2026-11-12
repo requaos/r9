@@ -148,3 +148,61 @@ fn conv_close_last_close_reset_is_donor_intentional() {
     // drained + closed.
     assert!(matches!(netif::pop_frame(id, &mut buf), Pop::Closed));
 }
+
+// ---------------------------------------------------------------------------
+// WR-05 capacity pins (17-03): the WaitSet must hold EVERY possible
+// waiter — one per proc, and the live proc table is 512 (MAX_PROCS at
+// x86_64/src/proc.rs:112 and aarch64/src/proc.rs:73) — and the full arm
+// must be LOUD (counted + reported, never a silent drop, never a
+// panic).  Pure-struct pins: each constructs the set directly and never
+// touches the published device (Pitfall 8 — the publish-once discipline
+// above stays the single publish's only consumer).
+// ---------------------------------------------------------------------------
+
+/// The table-sized capacity: 512 distinct nonzero pids all register and
+/// are ALL returned by take — none silently dropped (the 16-slot arrays
+/// fail this today; that is the RED).
+#[test]
+fn netif_waitset_retains_the_whole_proc_table_and_take_returns_all() {
+    let mut ws = crate::netif::WaitSet::new();
+    for pid in 1..=512u64 {
+        ws.register(pid);
+    }
+    let mut out = [0u64; 16];
+    let n = ws.take(&mut out);
+    assert_eq!(n, 512, "512 distinct live pids all register (the set is sized to the table)");
+    let mut seen: Vec<u64> = out[..n].to_vec();
+    seen.sort_unstable();
+    assert_eq!(seen, (1..=512).collect::<Vec<u64>>(), "no pid silently dropped");
+}
+
+/// The 513th distinct registration hits the full arm: the table-sized
+/// prefix survives, the beyond-capacity registration is dropped —
+/// LOUDLY (counted + reported), never a panic, never silence.
+#[test]
+fn netif_waitset_513th_registration_is_loudly_dropped() {
+    let mut ws = crate::netif::WaitSet::new();
+    for pid in 1..=513u64 {
+        ws.register(pid);
+    }
+    let mut out = [0u64; 16];
+    let n = ws.take(&mut out);
+    assert_eq!(n, 512, "the table-sized prefix survives; only the beyond-capacity 513th drops");
+}
+
+/// The register contract below capacity is unchanged: duplicates stay
+/// idempotent (one slot, never two), pid 0 stays ignored (the empty-slot
+/// marker), and take drains.
+#[test]
+fn netif_waitset_duplicate_and_zero_registrations_stay_idempotent() {
+    let mut ws = crate::netif::WaitSet::new();
+    ws.register(7);
+    ws.register(7); // duplicate — one slot, never two
+    ws.register(0); // pid 0 marks an empty slot: ignored by contract
+    let mut out = [0u64; 16];
+    let n = ws.take(&mut out);
+    assert_eq!(n, 1, "duplicate and zero registrations add nothing");
+    assert_eq!(out[0], 7);
+    let n2 = ws.take(&mut out);
+    assert_eq!(n2, 0, "take drains the set");
+}

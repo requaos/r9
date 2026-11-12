@@ -175,15 +175,15 @@ fn instant_to_ticks(at: Instant) -> u64 {
 // pids through a caller's stack buffer.
 // ---------------------------------------------------------------------------
 
-struct WaitSet {
+pub(crate) struct WaitSet {
     pids: [u64; 16],
 }
 
 impl WaitSet {
-    const fn new() -> WaitSet {
+    pub(crate) const fn new() -> WaitSet {
         WaitSet { pids: [0; 16] }
     }
-    fn register(&mut self, pid: u64) {
+    pub(crate) fn register(&mut self, pid: u64) {
         if pid == 0 || self.pids.contains(&pid) {
             return;
         }
@@ -194,7 +194,7 @@ impl WaitSet {
     }
     /// Drain the set into a stack buffer (the wake hook's input) — returns
     /// the count; every drained slot clears.
-    fn take(&mut self, out: &mut [u64; 16]) -> usize {
+    pub(crate) fn take(&mut self, out: &mut [u64; 16]) -> usize {
         let mut n = 0;
         for p in self.pids.iter_mut() {
             if *p != 0 {
