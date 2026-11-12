@@ -13,6 +13,10 @@ pub mod mb2;
 // host-testable; run() itself is dev_ether-only.
 #[cfg(any(test, dev_ether))]
 pub mod netgate;
+// churngate's pure halves (the slope logic, the marker shapes) are
+// host-testable; the driver itself is dev_churn-only.
+#[cfg(any(test, dev_churn))]
+pub mod churngate;
 pub mod pci;
 pub mod timer;
 
