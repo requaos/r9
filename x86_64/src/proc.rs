@@ -466,7 +466,7 @@ fn pml4_map_user(
     let mut created: [Option<u64>; 3] = [None, None, None];
     let inter = PTE_P | PTE_RW | PTE_US;
     let mut table_pa = pml4_pa;
-    for (level, slot) in created.iter_mut().enumerate() {
+    for level in 0..3 {
         let shift = 39 - 9 * level;
         let idx = (va >> shift) & 0x1ff;
         let next = {
@@ -474,8 +474,29 @@ fn pml4_map_user(
             if e & PTE_P != 0 {
                 e & 0x000f_ffff_ffff_f000
             } else {
-                let np = alloc_phys_page()?;
-                *slot = Some(np);
+                let np = match alloc_phys_page() {
+                    Ok(np) => np,
+                    Err(msg) => {
+                        // A walk failure frees its own intermediates
+                        // (17-01, the WR-03 OOM-release family — this
+                        // doc's "leaving no leaks" contract, now true):
+                        // each created page is unlinked from the entry
+                        // this call wrote into its parent and freed,
+                        // innermost first.  No invlpg: the VA was
+                        // unmapped before the call and single-CPU
+                        // IRQ-masked syscall context means no
+                        // translation through these just-written
+                        // entries can exist.
+                        for l in (0..level).rev() {
+                            let pidx = (va >> (39 - 9 * l)) & 0x1ff;
+                            let parent = if l == 0 { pml4_pa } else { created[l - 1].unwrap() };
+                            set_table_entry(parent, pidx, 0);
+                            free_phys_page(created[l].unwrap());
+                        }
+                        return Err(msg);
+                    }
+                };
+                created[level] = Some(np);
                 set_table_entry(table_pa, idx, np | inter);
                 np
             }
@@ -1301,7 +1322,16 @@ impl Proc {
     /// return the page's PA (exec's install body consumer).
     pub(crate) fn map_user_page(&mut self, va: usize, kind: SegKind) -> Result<u64> {
         let pa = alloc_phys_page()?;
-        let created = pml4_map_user(self.pml4_pa, va, pa, kind.pte())?;
+        let created = match pml4_map_user(self.pml4_pa, va, pa, kind.pte()) {
+            Ok(created) => created,
+            Err(msg) => {
+                // The walk already freed its own intermediates; the
+                // fresh leaf page never mapped — free it too or it
+                // leaks (17-01, the WR-03 OOM-release family).
+                free_phys_page(pa);
+                return Err(msg);
+            }
+        };
         for c in created.into_iter().flatten() {
             self.mapping_tables.push(c);
         }
@@ -1481,13 +1511,25 @@ pub fn new_user_proc(name: &str) -> Result<ProcGuard> {
     // (no PTE_US — ring 3 can never reach the window even though its
     // VA is fixed and known).  Explicit (not lazily walked) so the
     // mid-construction unwind knows exactly what to free.
-    let tables = match (alloc_phys_page(), alloc_phys_page(), alloc_phys_page()) {
-        (Ok(a), Ok(b), Ok(c)) => [a, b, c],
-        _ => {
-            unwind_new_proc(pml4_pa, &[], &[], "kstack-tables");
-            return Err("proc: kstack table alloc failed");
+    let mut tables = [0u64; 3];
+    for slot in tables.iter_mut() {
+        match alloc_phys_page() {
+            Ok(pa) => *slot = pa,
+            Err(_) => {
+                // Partial-prefix hygiene (the kstack pages' own idiom
+                // below): free the table pages that DID allocate before
+                // the unwind — the tuple form leaked them (17-01, the
+                // WR-03 OOM-release family).
+                for &t in tables.iter() {
+                    if t != 0 {
+                        free_phys_page(t);
+                    }
+                }
+                unwind_new_proc(pml4_pa, &[], &[], "kstack-tables");
+                return Err("proc: kstack table alloc failed");
+            }
         }
-    };
+    }
     let [pdpt_pa, pd_pa, pt_pa] = tables;
     set_table_entry(pml4_pa, KSTACK_PML4_INDEX, pdpt_pa | PTE_P | PTE_RW);
     set_table_entry(pdpt_pa, 0, pd_pa | PTE_P | PTE_RW);
@@ -2345,8 +2387,16 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &Ureg, flag: u64) -> R
             let dst = phys_ptr_mut(pa);
             ptr::copy_nonoverlapping(src, dst, PAGE_SIZE_4K);
         }
-        let created = pml4_map_user(child.pml4_pa, rec.va, pa, rec.kind.pte())
-            .map_err(|_| "rfork: child user map failed")?;
+        let created = match pml4_map_user(child.pml4_pa, rec.va, pa, rec.kind.pte()) {
+            Ok(created) => created,
+            Err(_) => {
+                // The copied page was never recorded — free it (the
+                // sweep arms' record-or-unwind hygiene, 17-01/WR-03
+                // family; the walk freed its own intermediates).
+                free_phys_page(pa);
+                return Err("rfork: child user map failed");
+            }
+        };
         for c in created.into_iter().flatten() {
             child.mapping_tables.push(c);
         }
