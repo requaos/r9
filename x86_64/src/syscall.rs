@@ -1118,10 +1118,13 @@ fn sys_dup(frame: &mut Ureg, proc: &mut Proc) -> u64 {
 
 /// CREATE(22): path, mode, perm.  Resolve the PARENT (open-style union
 /// redirect), then if the final component EXISTS open it OTRUNC
-/// (unless OEXCL), else dispatch the device's create op.  DMDIR rides
-/// the perm word to the device (mkdir through a mount — keyfs's user
-/// creates — is the measured caller, 15-03); a device that cannot make
-/// directories errors its own loud error.
+/// (unless OEXCL), else dispatch the device's create op — both the
+/// probe and the create run through the union-aware twins
+/// (walk_one_union/create_chan_union, 17-05 #45: a create through a
+/// union-mounted tree consults the chain, first-accepting member).
+/// DMDIR rides the perm word to the device (mkdir through a mount —
+/// keyfs's user creates — is the measured caller, 15-03); a device
+/// that cannot make directories errors its own loud error.
 fn sys_create(frame: &mut Ureg, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 3) else {
         return err(proc, "create: bad argument block");
@@ -1181,7 +1184,7 @@ fn sys_create(frame: &mut Ureg, proc: &mut Proc) -> u64 {
         port::namec::close_chan(&parent);
         return err(proc, "create: parent not a directory");
     }
-    let opened = match namec::walk_one(&parent, final_name) {
+    let opened = match namec::walk_one_union(&parent, final_name, &proc.pgrp) {
         Ok(existing) => {
             if mode & port::dat::OEXCL != 0 {
                 port::namec::close_chan(&existing);
@@ -1197,11 +1200,12 @@ fn sys_create(frame: &mut Ureg, proc: &mut Proc) -> u64 {
                 }
             }
         }
-        Err(_) => match namec::create_chan(
+        Err(_) => match namec::create_chan_union(
             &parent,
             final_name,
             mode & !(port::dat::OEXCL | port::dat::OCEXEC),
             perm,
+            &proc.pgrp,
         ) {
             Ok(c) => c,
             Err(msg) => {

@@ -106,6 +106,12 @@ mod rx_chain_tests;
 // bridge keeps its lone documented exception).
 #[cfg(test)]
 mod devip_tests;
+// The namec union pins (17-05, WINDOWS #45) live at the crate root for
+// the same reason: the synthetic paqfs image and the stub env-group
+// hook need alloc/std while port::namec keeps its unsafe-free forbid
+// attribute.
+#[cfg(test)]
+mod namec_tests;
 
 pub type Result<T> = core::result::Result<T, &'static str>;
 

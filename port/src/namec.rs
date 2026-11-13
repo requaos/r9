@@ -317,6 +317,41 @@ pub fn walk_one(c: &Chan, name: &[u8]) -> Result<Chan> {
     dev_walk(c, name)
 }
 
+/// walk_one's union-aware twin (#45, 17-05): sys_create's
+/// final-component probe consults the union chain the same way the
+/// multi-component walker does — snapshot the chain under the per-consult
+/// pgrp lock (chain_snapshot), drop the lock, then walk each member in
+/// chain order (first-accepting member wins; the LOCKING contract at
+/// namec's header applies unchanged).  Without the consult a create
+/// through a union-mounted directory missed non-head members entirely:
+/// the probe walked only the head device, so a name living in a later
+/// member reported "does not exist" and the create fell through to
+/// create_chan, which errored "namec: device has no create" on the head
+/// device (rc's `>` is create-first — the original #45 repro shape).
+pub fn walk_one_union(c: &Chan, name: &[u8], pg: &Lock<Pgrp>) -> Result<Chan> {
+    let chain = {
+        let node = LockNode::new();
+        let guard = pg.lock(&node);
+        guard.chain_snapshot(&c.path)
+    };
+    let Some(chain) = chain else {
+        return dev_walk(c, name);
+    };
+    for entry in &chain {
+        // Re-root the member at the mount point (the multi-component
+        // walker's shape: the walked chan carries the caller-visible
+        // path so deeper mount points match on it).  Failed member
+        // bases drop unclunked exactly like the walker's — the entry
+        // dup Arc-shares the mount table's fid (never the last ref).
+        let mut base = entry.to.dup();
+        base.path = c.path.clone();
+        if let Ok(nc) = dev_walk(&base, name) {
+            return Ok(nc);
+        }
+    }
+    Err("namec: does not exist")
+}
+
 /// The open dispatch for a resolved chan (per-device open by dev index —
 /// the registry's twin).  Each device's open enforces its own mode
 /// discipline (devroot rejects write-side modes and OTRUNC; the flag bits
@@ -391,6 +426,42 @@ pub fn create_chan(c: &Chan, name: &[u8], mode: u32, perm: u32) -> Result<Chan> 
     };
     created.copen = true;
     Ok(created)
+}
+
+/// create_chan's union-aware twin (#45, 17-05): when the parent sits on
+/// a mount point, the create follows the union chain in order to the
+/// first member whose device ACCEPTS a create (devenv/devsrv/devmnt —
+/// the create_chan dispatch set).  Only the structural "device has no
+/// create" arm falls through to the next member; a member whose create
+/// op runs and FAILS propagates its error (the 15-03
+/// server-owns-the-policy stance: a refusing mounted server — paqfs on
+/// a read-only image — must error, never silently land the file in a
+/// shadowed member).  The donor's createdir gates members on MCREATE;
+/// r9 deliberately does not (15-03: creates flow through mounts with
+/// the server deciding — no current bind passes MCREATE, and gating
+/// here would refuse every boot-chain create through a mount).
+pub fn create_chan_union(c: &Chan, name: &[u8], mode: u32, perm: u32, pg: &Lock<Pgrp>) -> Result<Chan> {
+    let chain = {
+        let node = LockNode::new();
+        let guard = pg.lock(&node);
+        guard.chain_snapshot(&c.path)
+    };
+    let Some(chain) = chain else {
+        return create_chan(c, name, mode, perm);
+    };
+    for entry in &chain {
+        let mut base = entry.to.dup();
+        base.path = c.path.clone();
+        match base.dev {
+            // The create_chan dispatch set — the devices whose create
+            // op exists at all.  Only this structural arm advances the
+            // chain: a member whose create runs and FAILS propagates
+            // (see the doc comment above).
+            DEV_ENV | DEV_SRV | DEV_MNT => return create_chan(&base, name, mode, perm),
+            _ => continue,
+        }
+    }
+    Err("namec: device has no create")
 }
 
 /// The close dispatch (the donor's devclose): called when an

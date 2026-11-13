@@ -914,7 +914,21 @@ pub fn create(c: &Chan, name: &[u8], mode: u32, perm: u32) -> Result<Chan> {
     // and the parent's fid (the Arc the walked chan shares) stays a
     // directory fid (the donor mntcreate's clone-then-create shape).
     let newfid = mnt.clone_fid(**fid)?;
-    let (qid, _iounit) = mnt.create(newfid, name, perm, (mode & 0xff) as u8)?;
+    let (qid, _iounit) = match mnt.create(newfid, name, perm, (mode & 0xff) as u8) {
+        Ok(v) => v,
+        Err(msg) => {
+            // The clone never became a file — clunk it best-effort so a
+            // create the server refuses does not leak the fid
+            // server-side.  Load-bearing since 17-05: namec's
+            // create_chan_union tries union members in chain order, so
+            // a refusing member is on the normal resolution path, not a
+            // rare error tail.
+            if let Err(cmsg) = mnt.clunk(newfid) {
+                println!("devmnt: clunk of failed-create fid {newfid} failed: {cmsg}");
+            }
+            return Err(msg);
+        }
+    };
     let mut nc = Chan::new(DEV_MNT, qid, mode & OMASK);
     nc.mnt = Some(mnt.clone());
     nc.mnt_fid = Some(Arc::new(newfid));
