@@ -543,7 +543,20 @@ WRAP
             # f602b50d5f2b4073df53bea56e873ed035aab919107a506fbda4fb39443f009e
             # (sha256-9gK1DV…), in three-way agreement with the FOD's
             # own measured got-value.
-            outputHash = "sha256-9gK1DV8rQHPfU76lboc+0DWquRkQelBvvaT7OUQ/AJ4=";
+            # The 17-05 namec union consult (#45 — walk_one_union/
+            # create_chan_union + the devmnt failed-create fid clunk —
+            # kernel bytes) re-staled it once more; re-wired with the
+            # same two-derivation proof: two independent fresh-kernel
+            # builds (kernel A plain + kernel B under a
+            # never-before-used namec45-proof-b version override)
+            # through the non-FOD lib.bootIso realization produced the
+            # byte-identical ISO — file-level sha256
+            # 08f62ea8401611ed09f1e1f1df805f45f4d292edf16f83bd875747676bf66660,
+            # NAR hash (what this attr checks)
+            # 4591058f3ee6f8b813034cf4eb002d1041896ac711d3fe76bfefa262b85bc432
+            # (sha256-RZEFjz…), in three-way agreement with the FOD's
+            # own measured got-value.
+            outputHash = "sha256-RZEFjz7m+LgTA0z06wAtEEGJascR0/52v++iYrhbxDI=";
           };
         });
 
