@@ -247,6 +247,47 @@ fn bind_locked(
     pg.lock(&node).bind(s, &t, flag)
 }
 
+/// The tier1-date regression pin (17-05 follow-up): a #-rooted parent
+/// NEVER consults — a registry attach's chan carries an EMPTY path, and
+/// the boot namespace's `bind -a /root /` owns the empty mount-table
+/// key.  Without the nomount bit, init's setenv("#e/timezone") create
+/// consulted the ROOT union and died on its members (no create), so
+/// the timezone env silently vanished and the tier1 date check fell
+/// from its accidental ctime(0)+garbage-timezone green to 1970 GMT.
+#[test]
+fn create_chan_union_nomount_never_consults_the_root_key() {
+    let _seam = seam_guard();
+    install_group_hook_once();
+    set_current_group(Arc::new(Lock::new("env", EnvGroup::new())));
+
+    let pg = Lock::new("pgrp-test", Pgrp::new());
+    let slash = slash();
+    // The boot namespace's empty-key mount: `bind -a /root /` owns
+    // normalize("/") == "".
+    bind_locked(&pg, &slash, "#p", "/", pgrp::MAFTER).expect("bind #p MAFTER /");
+
+    // The #-rooted parent: devenv's registry attach chan, EMPTY path.
+    let parent = namec::namec(b"#e", &slash, &slash, &pg, NamecMode::Open).expect("#e resolves");
+    assert_eq!(parent.dev, DEV_ENV);
+    assert!(parent.path.is_empty(), "the registry attach chan carries the empty path");
+
+    // nomount=true: the create flows to devenv — the timezone cpenv's
+    // exact shape.
+    let mut created = namec::create_chan_union(&parent, b"timezone", OWRITE, 0o664, &pg, true)
+        .expect("a #-rooted create never consults the root union");
+    assert_eq!(created.dev, DEV_ENV);
+    assert_eq!(devenv::write(&mut created, b"EST -18000", u64::MAX).expect("write"), 10);
+
+    // The collision the bit guards against, pinned as the counterfactual:
+    // WITHOUT the bit the same create consults the empty key's chain
+    // (underlying devroot + devproc — neither has a create op) and
+    // errors.  If this arm ever starts succeeding, the nomount bit has
+    // rotted and the boot chain's setenv("#e/…") is one regression
+    // away from silence.
+    let err = err_of(namec::create_chan_union(&parent, b"probe2", OWRITE, 0o664, &pg, false));
+    assert_eq!(err, "namec: device has no create", "the empty-key collision is real");
+}
+
 // ---------------------------------------------------------------------------
 // The devenv current-group hook (the devenv_test.rs idiom): registered
 // ONCE per process; group-dependent tests serialize on the seam lock
@@ -302,7 +343,7 @@ fn walk_one_union_without_mounts_keeps_direct_dispatch() {
 
 fn walk_one_union(pg: &Lock<Pgrp>, slash: &Chan, name: &[u8]) -> crate::Result<Chan> {
     let parent = resolve(pg, slash, "/")?;
-    namec::walk_one_union(&parent, name, pg)
+    namec::walk_one_union(&parent, name, pg, false)
 }
 
 /// The #45 repro shape: a name that lives ONLY in a non-head union
@@ -323,7 +364,7 @@ fn walk_one_union_finds_nonhead_member() {
     assert_eq!(parent.dev, DEV_ROOT, "MAFTER: the head is the underlying dir");
 
     // The consult reaches the devproc member.
-    let nc = namec::walk_one_union(&parent, b"123", &pg)
+    let nc = namec::walk_one_union(&parent, b"123", &pg, false)
         .expect("the probe must consult the union chain (the #45 fix)");
     assert_eq!(nc.dev, DEV_PROC, "the name lives only in the MAFTER member");
 
@@ -344,7 +385,7 @@ fn create_chan_union_without_mounts_keeps_direct_dispatch() {
     let slash = slash();
 
     let parent = resolve(&pg, &slash, "/dev").expect("/dev resolves");
-    let err = err_of(namec::create_chan_union(&parent, b"newfile", OWRITE, 0o644, &pg));
+    let err = err_of(namec::create_chan_union(&parent, b"newfile", OWRITE, 0o644, &pg, false));
     assert_eq!(err, "namec: device has no create");
 }
 
@@ -367,7 +408,7 @@ fn create_chan_union_reaches_accepting_member() {
     let parent = resolve(&pg, &slash, "/dev").expect("/dev resolves");
     assert_eq!(parent.dev, DEV_ROOT);
 
-    let mut created = namec::create_chan_union(&parent, b"unionkey", OWRITE, 0o644, &pg)
+    let mut created = namec::create_chan_union(&parent, b"unionkey", OWRITE, 0o644, &pg, false)
         .expect("the create must reach the accepting union member (the #45 fix)");
     assert_eq!(created.dev, DEV_ENV);
     assert_eq!(created.path.as_slice(), b"/dev/unionkey");
@@ -405,11 +446,11 @@ fn create_chan_union_refusal_propagates_not_falls_through() {
     // chain order? no — MAFTER puts the underlying dir first; the
     // devenv member is the tail that accepts).
     let parent = resolve(&pg, &slash, "/dev").expect("/dev resolves");
-    let mut first =
-        namec::create_chan_union(&parent, b"dupkey", OWRITE, 0o644, &pg).expect("first create");
+    let mut first = namec::create_chan_union(&parent, b"dupkey", OWRITE, 0o644, &pg, false)
+        .expect("first create");
     assert_eq!(devenv::write(&mut first, b"v", u64::MAX).expect("write"), 1);
 
     // The duplicate create: devenv's own Eexist must propagate.
-    let err = err_of(namec::create_chan_union(&parent, b"dupkey", OWRITE, 0o644, &pg));
+    let err = err_of(namec::create_chan_union(&parent, b"dupkey", OWRITE, 0o644, &pg, false));
     assert_eq!(err, "devenv: name exists", "a member refusal propagates, never falls through");
 }

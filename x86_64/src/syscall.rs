@@ -1151,6 +1151,14 @@ fn sys_create(frame: &mut Ureg, proc: &mut Proc) -> u64 {
     let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
         return err(proc, "create: no namespace (pre-exec)");
     };
+    // namec's `#`-arm bit, re-derived here for the final-component
+    // probe/create twins: a #-rooted parent (an empty-path registry
+    // attach chan) NEVER consults the mount table — the boot
+    // namespace's `bind -a /root /` owns the empty mount-table key a
+    // registry attach's path would collide with (the tier1 date
+    // regression: setenv("#e/timezone") consulting the ROOT union and
+    // dying on the paqfs member's refusal).
+    let nomount = path[0] == b'#';
     let parent = match split {
         Some(0) => namec::namec(b"/", slash, dot, &proc.pgrp, NamecMode::Open),
         Some(i) => namec::namec(&path[..i], slash, dot, &proc.pgrp, NamecMode::Open),
@@ -1184,7 +1192,7 @@ fn sys_create(frame: &mut Ureg, proc: &mut Proc) -> u64 {
         port::namec::close_chan(&parent);
         return err(proc, "create: parent not a directory");
     }
-    let opened = match namec::walk_one_union(&parent, final_name, &proc.pgrp) {
+    let opened = match namec::walk_one_union(&parent, final_name, &proc.pgrp, nomount) {
         Ok(existing) => {
             if mode & port::dat::OEXCL != 0 {
                 port::namec::close_chan(&existing);
@@ -1206,6 +1214,7 @@ fn sys_create(frame: &mut Ureg, proc: &mut Proc) -> u64 {
             mode & !(port::dat::OEXCL | port::dat::OCEXEC),
             perm,
             &proc.pgrp,
+            nomount,
         ) {
             Ok(c) => c,
             Err(msg) => {

@@ -328,7 +328,20 @@ pub fn walk_one(c: &Chan, name: &[u8]) -> Result<Chan> {
 /// member reported "does not exist" and the create fell through to
 /// create_chan, which errored "namec: device has no create" on the head
 /// device (rc's `>` is create-first — the original #45 repro shape).
-pub fn walk_one_union(c: &Chan, name: &[u8], pg: &Lock<Pgrp>) -> Result<Chan> {
+///
+/// `nomount` carries namec's `#`-arm bit (the donor's `walk(...,
+/// nomount)`): a #-rooted parent NEVER consults.  The empty-path
+/// collision this guards against is real and measured: a registry
+/// attach's chan (devenv's root, say) carries an EMPTY path, and
+/// `bind -a /root /` in the boot namespace mounts at the key that
+/// normalizes to empty — without the bit, every `setenv("#e/x", …)`
+/// create consulted the ROOT union instead of devenv and died on the
+/// paqfs member's refusal (the tier1 date regression: init's timezone
+/// cpenv silently failing).
+pub fn walk_one_union(c: &Chan, name: &[u8], pg: &Lock<Pgrp>, nomount: bool) -> Result<Chan> {
+    if nomount {
+        return dev_walk(c, name);
+    }
     let chain = {
         let node = LockNode::new();
         let guard = pg.lock(&node);
@@ -440,7 +453,21 @@ pub fn create_chan(c: &Chan, name: &[u8], mode: u32, perm: u32) -> Result<Chan> 
 /// r9 deliberately does not (15-03: creates flow through mounts with
 /// the server deciding — no current bind passes MCREATE, and gating
 /// here would refuse every boot-chain create through a mount).
-pub fn create_chan_union(c: &Chan, name: &[u8], mode: u32, perm: u32, pg: &Lock<Pgrp>) -> Result<Chan> {
+///
+/// `nomount` is namec's `#`-arm bit (see walk_one_union): a #-rooted
+/// parent (an empty-path registry attach chan) never consults — the
+/// boot namespace's `bind -a /root /` owns the empty mount-table key.
+pub fn create_chan_union(
+    c: &Chan,
+    name: &[u8],
+    mode: u32,
+    perm: u32,
+    pg: &Lock<Pgrp>,
+    nomount: bool,
+) -> Result<Chan> {
+    if nomount {
+        return create_chan(c, name, mode, perm);
+    }
     let chain = {
         let node = LockNode::new();
         let guard = pg.lock(&node);
