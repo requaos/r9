@@ -568,7 +568,19 @@ WRAP
             # 8e51d4acf5f6eaf9935fcb96f4792b72494d70a54a5230ad752dc47d821b304b
             # (sha256-jlHUr…), in three-way agreement with the FOD's
             # own measured got-value.
-            outputHash = "sha256-jlHUrPX26vmTX8uW9HkrcklNcKVKUjCtdS3EfYIbMEs=";
+            # The 17-07 CR-07 deregister fix (d4a5d38 — the NET_WAITERS
+            # scope/dereg counterpart across devip stack/proto/devip,
+            # kernel bytes) re-staled it once more; re-wired with the
+            # same two-derivation proof: two independent fresh-kernel
+            # builds (kernel A plain at d4a5d38 + kernel B at 4be2f58,
+            # a kernel-neutral derivation-independence marker commit in
+            # a separate clone) through the non-FOD lib.bootIso
+            # realization produced the byte-identical ISO — file-level
+            # sha256
+            # 2bd99a04bf16fd46d43db6cfd69bdfeccd73c2aa55d2dbf19ee59b773ee6832a,
+            # in three-way agreement with the FOD's own measured
+            # got-value (sha256-VOkIAa…).
+            outputHash = "sha256-VOkIAa6xxw4Yfa2AL3pXsnJfzaV34ig9oC9OQEeH71o=";
           };
         });
 
