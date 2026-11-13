@@ -556,7 +556,19 @@ WRAP
             # 4591058f3ee6f8b813034cf4eb002d1041896ac711d3fe76bfefa262b85bc432
             # (sha256-RZEFjz…), in three-way agreement with the FOD's
             # own measured got-value.
-            outputHash = "sha256-RZEFjz7m+LgTA0z06wAtEEGJascR0/52v++iYrhbxDI=";
+            # The 17-05 nomount follow-up (421d5e1 — the #-arm bit for
+            # the union-consult twins, kernel bytes) re-staled it once
+            # more; re-wired with the same two-derivation proof: two
+            # independent fresh-kernel builds (kernel A plain + kernel B
+            # under a never-before-used namec45b-proof-b version
+            # override) through the non-FOD lib.bootIso realization
+            # produced the byte-identical ISO — file-level sha256
+            # 4f99894f90bf3c4172d4443b1c1832336f195deccbae3222f74015dd0f4abe7d,
+            # NAR hash (what this attr checks)
+            # 8e51d4acf5f6eaf9935fcb96f4792b72494d70a54a5230ad752dc47d821b304b
+            # (sha256-jlHUr…), in three-way agreement with the FOD's
+            # own measured got-value.
+            outputHash = "sha256-jlHUrPX26vmTX8uW9HkrcklNcKVKUjCtdS3EfYIbMEs=";
           };
         });
 
