@@ -671,6 +671,11 @@ fn apply_hop_limit(core: &mut stack::StackCore, p: Proto, h: smoltcp::iface::Soc
 /// ICMP_HDRSIZE` → freeblist, return) — the write itself succeeds.  We
 /// replicate that (counted via HlenErrs, never silent).
 pub(crate) fn icmp_write_data(id: usize, buf: &[u8]) -> Result<u64> {
+    // CR-07/17-07: the scoped NET_WAITERS membership — registers here,
+    // deregisters on EVERY exit path (Drop), so the drain-all wake set
+    // holds exactly the pids inside devip blocking paths (the stale-
+    // registration herd closed; the sem register/deregister pairing).
+    let _net_waiter = stack::NetWaiterScope::enter()?;
     let n = buf.len();
     if n < 20 + 8 {
         HLEN_ERRS.fetch_add(1, Ordering::Relaxed);
@@ -775,6 +780,11 @@ pub(crate) fn icmp_write_data(id: usize, buf: &[u8]) -> Result<u64> {
 /// register → drop → block shape; a wake is always followed by a
 /// `can_recv` re-check (spurious-wake discipline, P-C).
 pub(crate) fn icmp_read_data(id: usize, buf: &mut [u8]) -> Result<u64> {
+    // CR-07/17-07: the scoped NET_WAITERS membership — registers here,
+    // deregisters on EVERY exit path (Drop), so the drain-all wake set
+    // holds exactly the pids inside devip blocking paths (the stale-
+    // registration herd closed; the sem register/deregister pairing).
+    let _net_waiter = stack::NetWaiterScope::enter()?;
     let mut hooks: Option<stack::DevipHooks> = None;
     loop {
         {
@@ -1140,6 +1150,11 @@ fn udp_try_recv(id: usize, buf: &mut [u8]) -> Result<Option<u64>> {
 /// destination socket and fires its waker — without it a loopback
 /// exchange deadlocks with both ends blocked.
 pub(crate) fn udp_read_data(id: usize, buf: &mut [u8]) -> Result<u64> {
+    // CR-07/17-07: the scoped NET_WAITERS membership — registers here,
+    // deregisters on EVERY exit path (Drop), so the drain-all wake set
+    // holds exactly the pids inside devip blocking paths (the stale-
+    // registration herd closed; the sem register/deregister pairing).
+    let _net_waiter = stack::NetWaiterScope::enter()?;
     let mut hooks: Option<stack::DevipHooks> = None;
     loop {
         if let Some(n) = udp_try_recv(id, buf)? {
@@ -1249,6 +1264,11 @@ fn synthesize_udphdr(
 /// from the conv's recorded laddr (never the naive silent-drop shape); an
 /// unspecified laddr resolves via the interface for the destination.
 pub(crate) fn udp_write_data(id: usize, buf: &[u8]) -> Result<u64> {
+    // CR-07/17-07: the scoped NET_WAITERS membership — registers here,
+    // deregisters on EVERY exit path (Drop), so the drain-all wake set
+    // holds exactly the pids inside devip blocking paths (the stale-
+    // registration herd closed; the sem register/deregister pairing).
+    let _net_waiter = stack::NetWaiterScope::enter()?;
     let n = buf.len();
     // (The conv's lport never appears here: the socket's bind pinned the
     // source port at connect/announce — the man's "the kernel overrides
@@ -1673,6 +1693,11 @@ fn icmp6_ctl(id: usize, verb: &[u8], args: &[&[u8]]) -> Result<()> {
 /// write DROPS silently with a counter bump (the donor's freeblist arms
 /// — pullupblock/IPICMPSZ).
 pub(crate) fn icmp6_write_data(id: usize, buf: &[u8]) -> Result<u64> {
+    // CR-07/17-07: the scoped NET_WAITERS membership — registers here,
+    // deregisters on EVERY exit path (Drop), so the drain-all wake set
+    // holds exactly the pids inside devip blocking paths (the stale-
+    // registration herd closed; the sem register/deregister pairing).
+    let _net_waiter = stack::NetWaiterScope::enter()?;
     let n = buf.len();
     let (sock, raddr, lport, headers6, sel) = {
         let node = LockNode::new();
@@ -1804,6 +1829,11 @@ pub(crate) fn icmp6_write_data(id: usize, buf: &[u8]) -> Result<u64> {
 /// (the SYNTHESIZED 40-byte IP6 header + the message).  Blocks per the
 /// seam's probe → drive → register/drop/block shape.
 pub(crate) fn icmp6_read_data(id: usize, buf: &mut [u8]) -> Result<u64> {
+    // CR-07/17-07: the scoped NET_WAITERS membership — registers here,
+    // deregisters on EVERY exit path (Drop), so the drain-all wake set
+    // holds exactly the pids inside devip blocking paths (the stale-
+    // registration herd closed; the sem register/deregister pairing).
+    let _net_waiter = stack::NetWaiterScope::enter()?;
     let mut hooks: Option<stack::DevipHooks> = None;
     loop {
         {
@@ -2098,6 +2128,11 @@ fn tcp_socket(ttl: u32) -> tcp::Socket<'static> {
 /// after the drive is load-bearing (a wake fired mid-drive readies a
 /// RUNNING proc — a no-op; without the re-probe the block wedges).
 fn tcp_connect_wait(id: usize) -> Result<()> {
+    // CR-07/17-07: the scoped NET_WAITERS membership — registers here,
+    // deregisters on EVERY exit path (Drop), so the drain-all wake set
+    // holds exactly the pids inside devip blocking paths (the stale-
+    // registration herd closed; the sem register/deregister pairing).
+    let _net_waiter = stack::NetWaiterScope::enter()?;
     let deadline = stack::instant_now() + Duration::from_millis(TCP_CONNECT_TIMEOUT_MS as u64);
     let mut hooks: Option<stack::DevipHooks> = None;
     enum Probe {
@@ -2408,6 +2443,11 @@ fn tcp_close_verb(id: usize, kind: CloseKind) -> Result<()> {
 /// hangup markers — qhangup's shape); otherwise the seam's probe →
 /// drive → re-probe → register/arm → block.
 pub(crate) fn tcp_read_data(id: usize, buf: &mut [u8]) -> Result<u64> {
+    // CR-07/17-07: the scoped NET_WAITERS membership — registers here,
+    // deregisters on EVERY exit path (Drop), so the drain-all wake set
+    // holds exactly the pids inside devip blocking paths (the stale-
+    // registration herd closed; the sem register/deregister pairing).
+    let _net_waiter = stack::NetWaiterScope::enter()?;
     let mut hooks: Option<stack::DevipHooks> = None;
     loop {
         enum R {
@@ -2522,6 +2562,11 @@ pub(crate) fn tcp_read_data(id: usize, buf: &mut [u8]) -> Result<u64> {
 /// (our close/peer's full close) error Ehungup (the donor's
 /// qwrite-on-closed-queue arm).
 pub(crate) fn tcp_write_data(id: usize, buf: &[u8]) -> Result<u64> {
+    // CR-07/17-07: the scoped NET_WAITERS membership — registers here,
+    // deregisters on EVERY exit path (Drop), so the drain-all wake set
+    // holds exactly the pids inside devip blocking paths (the stale-
+    // registration herd closed; the sem register/deregister pairing).
+    let _net_waiter = stack::NetWaiterScope::enter()?;
     let n = buf.len();
     let mut hooks: Option<stack::DevipHooks> = None;
     let mut sent = 0usize;

@@ -728,6 +728,130 @@ fn register_wake_reregister_never_loses_a_wake() {
 }
 
 // ---------------------------------------------------------------------------
+// Pins (17-07, CR-07) — the multi-waiter interleaving contracts for the
+// NET_WAITERS deregistration fix: the drain-all wake set must hold
+// EXACTLY the pids currently inside a devip blocking path.  The
+// register sites had no deregister counterpart (register_net_waiter x11,
+// deregister: zero — the sem machinery's own register/deregister pairing
+// is the fix precedent), so stale registrations survived loop exits and
+// every RX/tick wake could spuriously kick pids blocked in OTHER
+// subsystems (and exited pids) — the audit's N1, the strongest candidate
+// the 17-CR07-ROOTCAUSE record names.  These pins drive the two
+// IRQ-context wake entries (note_rx_pending + tick_check) directly
+// through the stub-wake-log harness: no socket is needed — the waiter
+// set is the unit under pin.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn multi_waiter_drain_wakes_every_registered_waiter_once() {
+    let _serial = fresh_scripted_stack();
+    let a = STUB_PID;
+    let b = STUB_PID_TX;
+    stack::register_net_waiter(a);
+    stack::register_net_waiter(b);
+    // The RX-IRQ entry's drain-all contract: EVERY registered waiter is
+    // woken in ONE shot (the herd the wake hook takes — the contract the
+    // fix preserves; presence-based, never order-asserted).
+    stack::note_rx_pending();
+    let mut log = take_wake_log();
+    log.sort_unstable();
+    assert_eq!(
+        log,
+        {
+            let mut want = std::vec![a, b];
+            want.sort_unstable();
+            want
+        },
+        "pin (17-07): the drain-all wakes every registered waiter in one shot"
+    );
+    // The drain is total: a quiet second RX finds NO waiters (the set
+    // emptied by the first drain) and sets the stack-debt flag instead.
+    stack::note_rx_pending();
+    assert_eq!(take_wake_log(), Vec::<u64>::new());
+    assert!(
+        stack::STACK_DEBT.load(core::sync::atomic::Ordering::Acquire),
+        "pin (17-07): the drain is total — the second RX sets the debt flag, wakes nobody"
+    );
+}
+
+#[test]
+fn deregistered_waiter_is_absent_from_the_next_rx_wake() {
+    let _serial = fresh_scripted_stack();
+    stack::register_net_waiter(STUB_PID);
+    // The block-loop EXIT contract (the fix): a waiter that left the
+    // blocking path deregisters — a stale registration must never ride
+    // the next wake (no spurious kick of a context blocked elsewhere,
+    // no wake of an exited pid).
+    stack::deregister_net_waiter(STUB_PID);
+    stack::register_net_waiter(STUB_PID_TX);
+    stack::note_rx_pending();
+    assert_eq!(
+        take_wake_log(),
+        std::vec![STUB_PID_TX],
+        "pin (17-07): the deregistered pid is absent from the next RX wake — the set holds exactly the live waiters"
+    );
+    // Dereg of a pid not present is a no-op (a wake already drained it
+    // and the loop never re-blocked) — the exit path never faults.
+    stack::deregister_net_waiter(STUB_PID_TX);
+    stack::deregister_net_waiter(STUB_PID_TX);
+    stack::register_net_waiter(STUB_PID);
+    stack::note_rx_pending();
+    assert_eq!(
+        take_wake_log(),
+        std::vec![STUB_PID],
+        "pin (17-07): double dereg then re-register behaves exactly"
+    );
+}
+
+#[test]
+fn reregistered_waiter_is_woken_by_the_next_drain() {
+    let _serial = fresh_scripted_stack();
+    // The re-block discipline PRESERVED by the fix: a wake drains the
+    // set, the loop iterates, re-registers before every re-block — the
+    // next drain reaches the waiter again (wakeup-loss-free; pin (b)'s
+    // socket-level twin, at the waiter-set level).
+    stack::register_net_waiter(STUB_PID);
+    stack::note_rx_pending();
+    assert_eq!(take_wake_log(), std::vec![STUB_PID]);
+    stack::register_net_waiter(STUB_PID);
+    stack::note_rx_pending();
+    assert_eq!(
+        take_wake_log(),
+        std::vec![STUB_PID],
+        "pin (17-07): the re-registered waiter is found by the next drain"
+    );
+}
+
+#[test]
+fn tick_wake_twin_respects_the_deregister_contract() {
+    let _serial = fresh_scripted_stack();
+    // The timer twin (tick_check — the other IRQ-context drain entry,
+    // deadline-gated): same contracts, both waiters woken when the
+    // deadline passes, the deregistered one absent.
+    stack::register_net_waiter(STUB_PID);
+    stack::register_net_waiter(STUB_PID_TX);
+    stack::NET_DEADLINE.store(10, core::sync::atomic::Ordering::Release);
+    stack::tick_check(20);
+    let mut log = take_wake_log();
+    log.sort_unstable();
+    let mut want = std::vec![STUB_PID, STUB_PID_TX];
+    want.sort_unstable();
+    assert_eq!(
+        log, want,
+        "pin (17-07): an expired deadline wakes every registered waiter (the tick twin)"
+    );
+    stack::register_net_waiter(STUB_PID);
+    stack::deregister_net_waiter(STUB_PID);
+    stack::NET_DEADLINE.store(10, core::sync::atomic::Ordering::Release);
+    stack::tick_check(30);
+    assert_eq!(
+        take_wake_log(),
+        Vec::<u64>::new(),
+        "pin (17-07): a deadline past with every waiter deregistered wakes nobody (debt instead)"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Pin (c) — deadline arming from poll_at across a retransmit schedule.
 // ---------------------------------------------------------------------------
 

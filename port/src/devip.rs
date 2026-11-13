@@ -744,6 +744,11 @@ pub fn open(c: &Chan, mode: u32) -> Result<Chan> {
 /// udp's incoming calls queue in `incall` (the Fsnewcall drain); tcp's
 /// live in the ACCEPT POOL (§12.3 — the pool IS the incall queue).
 fn listen_open(c: &Chan, p: Proto, id: usize, mode: u32) -> Result<Chan> {
+    // CR-07/17-07: the scoped NET_WAITERS membership — registers here,
+    // deregisters on EVERY exit path (Drop), so the drain-all wake set
+    // holds exactly the pids inside devip blocking paths (the stale-
+    // registration herd closed; the sem register/deregister pairing).
+    let _net_waiter = stack::NetWaiterScope::enter()?;
     {
         let node = LockNode::new();
         let t = conv::TABLES.lock(&node);
@@ -1212,6 +1217,11 @@ pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
 /// read; blocks when empty (the donor's qread(c->eq)); EOF when the
 /// conv was closed mid-read (the qclosed arm — closeconv wakes us).
 fn err_read(_c: &mut Chan, buf: &mut [u8], path: u64) -> Result<u64> {
+    // CR-07/17-07: the scoped NET_WAITERS membership — registers here,
+    // deregisters on EVERY exit path (Drop), so the drain-all wake set
+    // holds exactly the pids inside devip blocking paths (the stale-
+    // registration herd closed; the sem register/deregister pairing).
+    let _net_waiter = stack::NetWaiterScope::enter()?;
     let p = Proto::from_index(qproto(path)).ok_or("devip: read of unknown file")?;
     let id = qconv(path) as usize;
     let mut hooks: Option<stack::DevipHooks> = None;

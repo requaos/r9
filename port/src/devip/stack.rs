@@ -219,6 +219,17 @@ impl WaitSet {
         }
         n
     }
+    /// Remove one pid (CR-07/17-07: the block-loop EXIT path's arm — the
+    /// deregister counterpart register never had).  A pid not present is
+    /// a no-op (a wake already drained it and the loop never re-blocked).
+    pub(crate) fn remove(&mut self, pid: u64) {
+        if pid == 0 {
+            return;
+        }
+        if let Some(slot) = self.pids.iter_mut().find(|p| **p == pid) {
+            *slot = 0;
+        }
+    }
     /// The full-arm drop count (WR-05's loud observable; 0 whenever
     /// capacity held).
     #[cfg(test)]
@@ -248,6 +259,50 @@ pub(crate) fn note_wake(pid: u64) {
 /// run IRQ-masked: the waker can only run after block() swtch'es).
 pub fn register_net_waiter(pid: u64) {
     NET_WAITERS.enter().expect("devip: waiters contended").register(pid);
+}
+
+/// Remove a pid from the devip waiter set — the block-loop EXIT path's
+/// arm (CR-07/17-07: register_net_waiter had eleven call sites and NO
+/// deregister counterpart, so stale registrations survived loop exits —
+/// the drain-all wake set then carried pids of procs blocked in OTHER
+/// subsystems (spurious kicks on every RX/tick wake) and of exited
+/// procs.  The sem machinery's own register/deregister pairing —
+/// CR-03's fix precedent — brought to devip).  Syscall context only
+/// (the loops' exit paths); the BusyCell discipline of register
+/// applies unchanged.
+pub fn deregister_net_waiter(pid: u64) {
+    NET_WAITERS.enter().expect("devip: waiters contended").remove(pid);
+}
+
+/// A scoped NET_WAITERS membership: registers the CURRENT pid at
+/// construction and deregisters on DROP — the exit-path counterpart
+/// the block loops' per-iteration registers need, so the drain-all
+/// wake set is EXACTLY the set of pids currently inside a devip
+/// blocking path.  The per-block `register_net_waiter` calls inside
+/// the loops stay verbatim (a wake DRAINS the set — every re-block
+/// re-registers; the block/wake discipline is preserved untouched);
+/// registration is idempotent (WaitSet::register drops duplicates), so
+/// the scope's construction-time register is belt-and-braces.  The
+/// Drop fires on EVERY exit path — returns and `?` errors alike —
+/// which is exactly the coverage the eleven hand-written loop exits
+/// could not each be trusted to remember.
+pub struct NetWaiterScope {
+    pid: u64,
+}
+
+impl NetWaiterScope {
+    /// Resolve the current pid through the hooks and register it.
+    pub fn enter() -> Result<NetWaiterScope> {
+        let pid = (hooks()?.current)();
+        register_net_waiter(pid);
+        Ok(NetWaiterScope { pid })
+    }
+}
+
+impl Drop for NetWaiterScope {
+    fn drop(&mut self) {
+        deregister_net_waiter(self.pid);
+    }
 }
 
 // ---------------------------------------------------------------------------
