@@ -900,6 +900,25 @@ const RANDOM_READS_MARKER: &str = "random: READS-OK";
 const SUBSTRATE_DONE_MARKER: &str = "substrate: DONE";
 const SUBSTRATE_FAIL_MARKER: &str = "substrate: FAIL";
 
+/// The q35auth devcap markers (18-02, AUTH-03/D-06+D-07): the staged
+/// driver's `#¤` legs over a PRECOMPUTED fixture pair (from=glenda,
+/// to=norbert — the cap string and its HMAC-SHA1 fixed at
+/// implementation time, cross-pinned host-side by
+/// devcap_tests::devcap_boot_fixture_hash_matches_the_module).
+/// POST-OK: the hostowner posts the 20 hash bytes to #¤/caphash.
+/// USE-OK: the capuse present consumes and #c/user reads `norbert` —
+/// the first r9 kernel uid mutation, read back live from ring 3.
+/// ONESHOT-REJECT: the SAME cap presented again errors the donor's
+/// formatted `invalid capability` (remcap consumed it — the one-shot
+/// rule).  HOSTOWNER-GATE: the mutated user is no longer eve; the
+/// caphash open Eperms (the eve gate holds AFTER the mutation).  All
+/// four are the driver's OWN prints (the D-09 discipline); a cap-leg
+/// failure prints the SUBSTRATE_FAIL family (the shared fail-fast).
+const CAP_POST_MARKER: &str = "cap: POST-OK";
+const CAP_USE_MARKER: &str = "cap: USE-OK";
+const CAP_ONESHOT_MARKER: &str = "cap: ONESHOT-REJECT";
+const CAP_HOSTOWNER_MARKER: &str = "cap: HOSTOWNER-GATE";
+
 /// The q35exec staged-exec markers (14-05, XEXEC-02's leg-1 gate):
 /// after the Phase-13 discovery stages, the kernel's module/paqfs notes
 /// (the mb2 tag-3 module found + the paqfs root mounted through
@@ -2748,10 +2767,19 @@ impl BootTestStep {
                     ));
                 }
                 // The driver's evidence, whole-capture: READS-OK + DONE
-                // (the stage loop anchored them past the exec entry) and
-                // zero FAIL lines anywhere (the fast-fail already
-                // aborted on the first; belt-and-braces).
-                for marker in [RANDOM_READS_MARKER, SUBSTRATE_DONE_MARKER] {
+                // (the stage loop anchored them past the exec entry), the
+                // four devcap markers (18-02: post/consume/one-shot/
+                // hostowner over the fixture pair), and zero FAIL lines
+                // anywhere (the fast-fail already aborted on the first;
+                // belt-and-braces).
+                for marker in [
+                    RANDOM_READS_MARKER,
+                    SUBSTRATE_DONE_MARKER,
+                    CAP_POST_MARKER,
+                    CAP_USE_MARKER,
+                    CAP_ONESHOT_MARKER,
+                    CAP_HOSTOWNER_MARKER,
+                ] {
                     if !contains_marker(capture, marker.as_bytes()) {
                         return Err(self
                             .fail_pretty(capture, &format!("substrate marker {marker:?} absent")));
@@ -2769,8 +2797,10 @@ impl BootTestStep {
                      memory facts, discovery, the module/paqfs mount notes, the exec-entry note, \
                      the armed source {expect:?} (venue {effective_accel:?}), then the staged \
                      driver's OWN ring-3 prints (two 64-byte /dev/random reads, full-length and \
-                     pairwise distinct -> READS-OK + DONE via WRITE syscalls) — AUTH-02's \
-                     substrate re-key live (D-05/D-07)"
+                     pairwise distinct -> READS-OK; the #¤ fixture legs: post, consume with the \
+                     /dev/user readback, one-shot reject, hostowner gate -> the four cap markers; \
+                     DONE via WRITE syscalls) — AUTH-02's substrate re-key + AUTH-03's devcap \
+                     live (D-05/D-06/D-07)"
                 );
             }
             BootProfile::X64Exec => {
