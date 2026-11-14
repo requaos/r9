@@ -179,6 +179,12 @@ fn fresh_scripted_stack() -> std::sync::MutexGuard<'static, ()> {
     take_wake_log();
     RELAYED.store(0, Ordering::Relaxed);
     BLOCK_RELAY.store(false, Ordering::Relaxed);
+    // The one-shot ON_BLOCK action is seam state too: a pin whose park
+    // bound never fired (its flow completed without parking) leaves the
+    // action armed, and the NEXT pin whose real path blocks inherits the
+    // stale panic — a scheduling-dependent false failure (found live when
+    // 19-02's pins changed the lock-queue order).  Every pin starts clean.
+    *ON_BLOCK.lock().unwrap_or_else(|e| e.into_inner()) = None;
     stack::install_test_stack(StackCore::new_scripted(ScriptedDev::new()));
     guard
 }
@@ -2160,6 +2166,181 @@ fn tcp_two_write_client_pattern_round_trips() {
     assert_eq!(n2, 31, "pin (two_write): the payload read returns 31");
     assert_eq!(got_payload, payload, "pin (two_write): the payload bytes arrive second, in order");
     crate::devip::close(&nc);
+}
+
+// ---------------------------------------------------------------------------
+// Pins (19-02, D-08/CR-03 — the AcceptPool half of the 18-07 fix): every
+// socket accepted from the announce path is a pool member FOR LIFE
+// (take_connected hands the member's handle to the listen-file conv — the
+// connection never gets a fresh socket), so the member must carry the
+// DONOR's TCP shape at spawn time or the accepted connection keeps
+// smoltcp's stock Nagle + 10 ms delayed-ACK for its whole life.  WR-04's
+// legs: the pool-member options pin, the accepted-conv identity pin, and
+// the >POOL_SOCK_BUF bulk-write drain over a REAL announced-accepted pair
+// (18-07's two-write pin pinned only the client/connect side at 2+31 B —
+// CR-03's blind spot).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tcp_pool_members_carry_the_donor_tcp_shape() {
+    let _serial = fresh_scripted_stack();
+    set_guest_addr();
+    let (id, _guard) = alloc_tcp_conv();
+    proto::ctl_write(Proto::Tcp, id, b"announce 4242").expect("pin (pool-shape): announce");
+
+    // Walk the REAL conv's pool members (the TABLES → STACK nesting
+    // discipline) and pin each socket's shape at spawn: the donor's TCP
+    // (tcp_socket, the 18-07 fix) mirrored member-for-member — Nagle OFF,
+    // ACK delay None, hop limit 255 (§12.8 stays).
+    let handles = {
+        let node = crate::mcslock::LockNode::new();
+        let t = crate::devip::conv::TABLES.lock(&node);
+        let pool = t.table(Proto::Tcp)[id]
+            .pool
+            .as_ref()
+            .expect("pin (pool-shape): the announced conv owns its pool");
+        assert!(
+            !pool.members().is_empty(),
+            "pin (pool-shape): the pool spawned members"
+        );
+        pool.members().to_vec()
+    };
+    let g = stack::enter_stack();
+    let core = g.core.as_ref().expect("pin (pool-shape): stack installed");
+    for h in handles {
+        let s = core.sockets.get::<tcp::Socket>(h);
+        assert_eq!(
+            s.hop_limit(),
+            Some(255),
+            "pin (pool-shape): hop limit 255 (§12.8, unchanged by the fix)"
+        );
+        assert!(
+            !s.nagle_enabled(),
+            "pin (pool-shape): Nagle OFF — the donor's shape at spawn (18-07 mirrored at the pool site)"
+        );
+        assert_eq!(
+            s.ack_delay(),
+            None,
+            "pin (pool-shape): no delayed ACK — the donor's shape at spawn (18-07 mirrored at the pool site)"
+        );
+    }
+}
+
+#[test]
+fn tcp_accepted_connection_keeps_the_donor_shape_for_life() {
+    let _serial = fresh_scripted_stack();
+    set_guest_addr();
+    let (id, _guard) = alloc_tcp_conv();
+    proto::ctl_write(Proto::Tcp, id, b"announce 7").expect("pin (accept-shape): announce");
+    push_rx(tcp4_frame(PEER, GUEST, 1111, 7, 500, None, TcpControl::Syn, &[]));
+    stack::drive_stack();
+    let nc = crate::devip::open(&tcp_listen_chan(id), crate::dat::OREAD).expect("pin (accept-shape): listen pops");
+    let nid = ((nc.qid.path >> 5) & 0xfff) as usize;
+    assert_ne!(nid, id, "pin (accept-shape): the pop materialized a NEW conv");
+    assert_eq!(
+        tcp_conv_snapshot(nid).0,
+        ConvState::Connected,
+        "pin (accept-shape): the accepted conv is Connected"
+    );
+
+    // The accepted conv's socket IS the popped pool member (for life — no
+    // fresh socket ever replaces it): its options are the connection's
+    // options.  The take_connected path must inherit the member shape
+    // exactly, nothing re-defaults at accept time.  (The ConvGuard closes
+    // the popped conv even on a panic — a failed pin must not leak the
+    // slot into the gc pin's full-table arithmetic.)
+    let _gnid = ConvGuard(Proto::Tcp, nid);
+    let node = crate::mcslock::LockNode::new();
+    let t = crate::devip::conv::TABLES.lock(&node);
+    let h = t.table(Proto::Tcp)[nid]
+        .sock
+        .expect("pin (accept-shape): the accepted conv owns a socket");
+    let g = stack::enter_stack();
+    let core = g.core.as_ref().expect("pin (accept-shape): stack installed");
+    let s = core.sockets.get::<tcp::Socket>(h);
+    assert!(
+        !s.nagle_enabled(),
+        "pin (accept-shape): the accepted connection carries Nagle OFF for life"
+    );
+    assert_eq!(
+        s.ack_delay(),
+        None,
+        "pin (accept-shape): the accepted connection carries no delayed ACK for life"
+    );
+    assert_eq!(s.hop_limit(), Some(255), "pin (accept-shape): hop limit 255 for life");
+    drop(g);
+    drop(t);
+}
+
+#[test]
+fn tcp_announced_connection_bulk_write_round_trips() {
+    use crate::devip::phyadapt::LoopbackDev;
+    let _serial = fresh_scripted_stack();
+    stack::install_test_stack(StackCore::new_loopback(LoopbackDev::new()));
+    // the venue's loopback address (netaddr.rc's `add 127.0.0.1 255.0.0.0')
+    {
+        let mut g = stack::enter_stack();
+        let core = g.core.as_mut().expect("pin (wr04): core installed");
+        core.iface.update_ip_addrs(|addrs| {
+            addrs.push(IpCidr::Ipv4(Ipv4Cidr::new(Ipv4Address::new(127, 0, 0, 1), 8)))
+                .expect("pin (wr04): addr fits");
+        });
+    }
+
+    let (sid, _gsrv) = alloc_tcp_conv();
+    proto::ctl_write(Proto::Tcp, sid, b"announce 5357").expect("pin (wr04): announce");
+    let (cid, _gcli) = alloc_tcp_conv();
+    proto::ctl_write(Proto::Tcp, cid, b"connect 127.0.0.1!5357").expect("pin (wr04): connect");
+    let nc = crate::devip::open(&tcp_listen_chan(sid), crate::dat::OREAD).expect("pin (wr04): listen pops");
+    let nid = ((nc.qid.path >> 5) & 0xfff) as usize;
+    assert_eq!(
+        tcp_sock_state(nid),
+        Some(tcp::State::Established),
+        "pin (wr04): the accepted conv is Established"
+    );
+
+    // THE PAYLOAD: >POOL_SOCK_BUF — the exportfs-into-tcp17010 class (a
+    // secstore PUT of any real file; 18-07's ack_delay record named this
+    // exact arm).  The CLIENT writes it INTO the announced connection:
+    // the ACK that drains the writer's tx buffer comes from the ACCEPTED
+    // POOL MEMBER (the server end), so the member's own ack_delay gates
+    // the drain — exactly the stock-defaults hole CR-03 names.
+    let _gnid = ConvGuard(Proto::Tcp, nid); // closed even on the park-bound panic below
+    let payload = [0x5au8; stack::POOL_SOCK_BUF + 952]; // 3000 bytes: 2048 + the overflow tail
+
+    // The park bound (armed AFTER the handshake legs — the two_write
+    // discipline): the single-threaded harness makes a park LOUD.  With
+    // stock pool defaults the writer's 2048-byte tx buffer fills, the
+    // POOL MEMBER's pure ACK waits out its 10 ms delay (no drive will
+    // ever run it — every devip proc is parked), and the writer parks in
+    // tcp_write_data's send arm — the guest stall made loud, CR-03's
+    // mechanism.
+    set_on_block(|| {
+        panic!(
+            "pin (wr04): a devip path PARKED mid bulk write — the >2048-byte write into \
+             the ANNOUNCED connection did not complete on the writes'/reads' own drives \
+             (the stock Nagle + 10 ms delayed-ACK hold on the accept-pool member: the \
+             tx-buffer drain waits on a post-deadline drive no parked proc can ever run \
+             — the CR-03 mechanism record)"
+        );
+    });
+
+    // The client's bulk write through the REAL tcp_write_data path — the
+    // wire shape exportfs/secstore issue into an announced connection.
+    proto::tcp_write_data(cid, &payload).expect("pin (wr04): the bulk write");
+
+    // The accepted connection drains ALL 3000 bytes through the REAL
+    // tcp_read_data path — the first read empties the 2048 rx buffer,
+    // and the drain of the remaining tail rides the reads' own pre-block
+    // drives (the window-update leg), never a timer.
+    let mut got = [0u8; stack::POOL_SOCK_BUF + 952];
+    let mut filled = 0usize;
+    while filled < got.len() {
+        let n = proto::tcp_read_data(nid, &mut got[filled..]).expect("pin (wr04): the drain read") as usize;
+        assert!(n > 0, "pin (wr04): a mid-drain EOF — the bulk write truncated");
+        filled += n;
+    }
+    assert_eq!(got, payload, "pin (wr04): every byte arrived, in order, uncorrupted");
 }
 
 // ---------------------------------------------------------------------------

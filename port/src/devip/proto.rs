@@ -2120,7 +2120,10 @@ pub(crate) fn tcp_state_name(s: tcp::State) -> &'static [u8] {
 /// `tcp_two_write_client_pattern_round_trips` (the 10ms delayed ACK
 /// also gated tx-buffer drain: a >2048-byte bulk write would block in
 /// the send arm on the same never-driven timer — Phase 19's cpu path
-/// rides this seam).
+/// rides this seam).  19-02 (D-08/CR-03) mirrors the same two calls at
+/// the accept-pool site (`stack::spawn_listener`) — announced
+/// connections are pool members for life, so the donor shape holds on
+/// both ends of every connection.
 fn tcp_socket(ttl: u32) -> tcp::Socket<'static> {
     let mut s = tcp::Socket::new(
         tcp::SocketBuffer::new(alloc::vec![0; stack::POOL_SOCK_BUF]),

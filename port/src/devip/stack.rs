@@ -811,12 +811,29 @@ impl AcceptPool {
     /// Allocate one listening pool member: 2048/2048 buffers (contract
     /// §12.3) and hop limit 255 (contract §12.8 — devip's MAXTTL; smoltcp's
     /// 64 default must never leak).
+    ///
+    /// 19-02 (D-08, CR-03): the DONOR's TCP shape — no Nagle, no delayed
+    /// ACK — mirrored from `tcp_socket` (18-07) exactly.  A pool member is
+    /// the accepted connection's socket FOR LIFE (take_connected hands
+    /// the handle to the listen-file conv; nothing re-defaults at accept
+    /// time), so the member's options are the announced connection's
+    /// options: under the stock defaults a >POOL_SOCK_BUF bulk write into
+    /// the announced connection (exportfs into tcp17010, a secstore PUT)
+    /// parks forever in tcp_write_data's send arm — the peer's delayed
+    /// pure ACK only egresses in a post-deadline drive, and a fully
+    /// parked venue runs none.  Nothing else changes (buffers, hop limit,
+    /// listen order stay).  Pinned by `tcp_pool_members_carry_the_donor_tcp_shape`,
+    /// `tcp_accepted_connection_keeps_the_donor_shape_for_life`, and the
+    /// WR-04 bulk-drain leg
+    /// `tcp_announced_connection_bulk_write_round_trips`.
     fn spawn_listener(core: &mut StackCore, port: u16) -> Result<SocketHandle> {
         let mut s = tcp::Socket::new(
             tcp::SocketBuffer::new(alloc::vec![0; POOL_SOCK_BUF]),
             tcp::SocketBuffer::new(alloc::vec![0; POOL_SOCK_BUF]),
         );
         s.set_hop_limit(Some(255));
+        s.set_nagle_enabled(false);
+        s.set_ack_delay(None);
         s.listen(port).map_err(|_| "devip: listen failed")?;
         Ok(core.sockets.add(s))
     }
