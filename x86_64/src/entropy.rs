@@ -51,12 +51,11 @@ pub(crate) fn classify(max_leaf: u32, cpuid1_ecx: u32, cpuid7_ebx: u32) -> Sourc
     }
 }
 
-/// The host-pin source override (entropy tests only).  The live probe
-/// would classify the HOST CPU — this dev machine carries rdrand+
-/// rdseed on every core — so pins force the source under test and
-/// script the TSC through the seam below instead.
-#[cfg(test)]
-static TEST_SOURCE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(2);
+/// The host-pin source override RETIRED (18-06/CR-02): the probe pins
+/// script the CPUID seam below instead, so the tested composition is
+/// the REAL probe->classify path (a source override tested nothing
+/// about which register fed which bit — exactly the mis-wiring CR-02
+/// found).
 
 /// The scripted TSC queue (cfg(test) only — module-level so the seam
 /// and the test helper share ONE storage).  Pins push the exact
@@ -69,6 +68,21 @@ mod test_tsc {
     use std::collections::VecDeque;
     thread_local! {
         pub static QUEUE: RefCell<VecDeque<u64>> = const { RefCell::new(VecDeque::new()) };
+    }
+}
+
+/// The scripted CPUID results (cfg(test) only — the test_tsc idiom):
+/// pins install the exact (leaf, subleaf) -> (eax, ebx, ecx, edx)
+/// answers the probe under test will draw; an UNSCRIPTED leaf is a
+/// loud test bug (the same expect discipline as the TSC queue),
+/// never a silent real-cpuid fallthrough.
+#[cfg(test)]
+mod test_cpuid {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    thread_local! {
+        pub static RESULTS: RefCell<HashMap<(u32, u32), (u32, u32, u32, u32)>> =
+            RefCell::new(HashMap::new());
     }
 }
 
@@ -90,25 +104,40 @@ fn tsc() -> u64 {
     })
 }
 
-/// Probe the live CPUID state and classify the armed source.  Main's
+/// The cpuid seam (18-06/CR-02): `cpu::cpuid` in production; under
+/// cfg(test) the scripted results store so the probe pins exercise
+/// the probe->classify composition against scripted venue shapes,
+/// never the host CPU's real leaves.
+#[cfg(not(test))]
+fn cpuid(leaf: u32, subleaf: u32) -> (u32, u32, u32, u32) {
+    cpu::cpuid(leaf, subleaf)
+}
+
+#[cfg(test)]
+fn cpuid(leaf: u32, subleaf: u32) -> (u32, u32, u32, u32) {
+    test_cpuid::RESULTS.with(|r| {
+        *r.borrow().get(&(leaf, subleaf)).unwrap_or_else(|| {
+            panic!(
+                "entropy test: cpuid({leaf},{subleaf}) unscripted — install the leaf answers before the call under test"
+            )
+        })
+    })
+}
+
+/// Probe the CPUID state (real leaves in production, the scripted
+/// seam under test) and classify the armed source.  Main's
 /// registration consults this once, beside the hook registration
 /// (before any consumer: the ether bind's smoltcp seed and the first
 /// exec both draw through the hooks).
 pub(crate) fn armed_source() -> Source {
-    #[cfg(test)]
-    {
-        match TEST_SOURCE.load(core::sync::atomic::Ordering::Relaxed) {
-            0 => Source::Rdseed,
-            1 => Source::Rdrand,
-            _ => Source::Jitter,
-        }
-    }
-    #[cfg(not(test))]
-    {
-        let (max_leaf, _, _, _) = cpu::cpuid(0, 0);
-        let (_, ebx7, ecx1, _) = cpu::cpuid(7, 0);
-        classify(max_leaf, ecx1, ebx7)
-    }
+    let (max_leaf, _, _, _) = cpuid(0, 0);
+    // 18-06/CR-02 rebind: cpuid1_ecx comes from a FRESH cpuid(1, 0)
+    // call (leaf-1 ECX bit 30 is the RDRAND feature bit has_rdrand
+    // tests); the leaf-7 call supplies ONLY its EBX (bit 18, RDSEED —
+    // has_rdseed's contract, unchanged).
+    let (_, _, cpuid1_ecx, _) = cpuid(1, 0);
+    let (_, cpuid7_ebx, _, _) = cpuid(7, 0);
+    classify(max_leaf, cpuid1_ecx, cpuid7_ebx)
 }
 
 /// The pure two-sample fold — the x86_64 equivalent of aarch64's
@@ -199,8 +228,16 @@ mod tests {
         test_tsc::QUEUE.with(|q| *q.borrow_mut() = samples.iter().copied().collect());
     }
 
-    fn set_source(s: Source) {
-        TEST_SOURCE.store(s as u8, core::sync::atomic::Ordering::Relaxed);
+    /// Script the CPUID seam: install the (leaf, subleaf) answers the
+    /// probe under test will draw — (leaf, subleaf, eax, ebx, ecx, edx)
+    /// tuples, replacing any earlier script (the push_tsc idiom).
+    fn push_cpuid(leaves: &[(u32, u32, u32, u32, u32, u32)]) {
+        test_cpuid::RESULTS.with(|r| {
+            *r.borrow_mut() = leaves
+                .iter()
+                .map(|&(leaf, sub, eax, ebx, ecx, edx)| ((leaf, sub), (eax, ebx, ecx, edx)))
+                .collect()
+        });
     }
 
     /// has_rdrand: leaf-1 ECX bit 30, set and clear vectors — set
@@ -252,12 +289,77 @@ mod tests {
         assert_eq!(classify(0x20, 0, 0), Source::Jitter);
     }
 
+    /// CR-02 probe pin 1 (18-06): armed_source derives classify's
+    /// cpuid1_ecx from a FRESH cpuid(1,0) call — leaf-1 ECX bit 30 set
+    /// with leaf-7 EBX bit 18 clear arms Rdrand.  Pre-fix this
+    /// returned Jitter: the mis-wiring fed leaf-7 ECX into the
+    /// leaf-1 RDRAND test, silently downgrading RDRAND-without-RDSEED
+    /// hardware (Ivy Bridge/Haswell class) to the jitter fold.
+    #[test]
+    fn entropy_probe_arms_rdrand_from_leaf1_ecx() {
+        push_cpuid(&[
+            (0, 0, 0x16, 0, 0, 0), // max standard leaf 0x16 (admits leaf 7)
+            (1, 0, 0, 0, 1 << 30, 0), // leaf-1 ECX: RDRAND
+            (7, 0, 0, 0, 0, 0),    // leaf-7 EBX: no RDSEED
+        ]);
+        assert_eq!(armed_source(), Source::Rdrand, "leaf-1 ECX bit 30 must arm Rdrand");
+    }
+
+    /// CR-02 probe pin 2 (18-06): leaf-7 ECX bit 30 is NOT the RDRAND
+    /// feature bit — with leaf-1 ECX clear and only leaf-7 ECX bit 30
+    /// set the probe must arm Jitter.  Pre-fix this armed Rdrand: an
+    /// instruction path the CPU would #UD on.
+    #[test]
+    fn entropy_probe_ignores_leaf7_ecx_bit30() {
+        push_cpuid(&[
+            (0, 0, 7, 0, 0, 0),    // max standard leaf 7
+            (1, 0, 0, 0, 0, 0),    // leaf-1 ECX: no RDRAND
+            (7, 0, 0, 0, 1 << 30, 0), // leaf-7 ECX bit 30 (not a bit we read)
+        ]);
+        assert_eq!(armed_source(), Source::Jitter, "leaf-7 ECX bit 30 must not arm Rdrand");
+    }
+
+    /// CR-02 probe pin 3 (18-06): the two evidence venue shapes stay
+    /// classification-correct THROUGH THE PROBE — the KVM -cpu host
+    /// shape (RDSEED via the correctly-bound leaf-7 EBX bit 18 wins
+    /// even with RDRAND also present — the declared venue
+    /// precondition this pin makes tested rather than
+    /// load-bearing-by-luck) and the TCG qemu64 shape (neither bit ->
+    /// Jitter).  The finish()-time venue assert consumes these labels.
+    #[test]
+    fn entropy_probe_venue_shapes_stay_correct() {
+        // KVM -cpu host on this machine: both bits present, RDSEED wins.
+        push_cpuid(&[
+            (0, 0, 0x20, 0, 0, 0),
+            (1, 0, 0, 0, (1 << 30) | (1 << 21), 0),
+            (7, 0, 0, 1 << 18, 0, 0),
+        ]);
+        assert_eq!(armed_source(), Source::Rdseed, "the KVM-host shape: RDSEED wins");
+        // TCG qemu64: leaf-1 ECX carries only SSE3|CX16, leaf-7 EBX
+        // carries nothing (and the max-leaf-first check would reject
+        // it anyway at max leaf 1).
+        push_cpuid(&[
+            (0, 0, 1, 0, 0, 0),
+            (1, 0, 0, 0, (1 << 0) | (1 << 13), 0),
+            (7, 0, 0, 0, 0, 0),
+        ]);
+        assert_eq!(armed_source(), Source::Jitter, "the TCG qemu64 shape: Jitter");
+    }
+
     /// The mixing pin (the 18-01 must-have): two rng_seed fills over
     /// DIFFERING TSC inputs differ, while the SAME input reproduces —
-    /// injected through the cfg(test) seam, never the real counter.
+    /// injected through the cfg(test) seams (18-06: the source is no
+    /// longer forced through a TEST_SOURCE override; the fill rides
+    /// the probe->classify composition over a scripted jitter-venue
+    /// CPUID — the TCG qemu64 shape, neither feature bit).
     #[test]
     fn entropy_rng_seed_fill_same_input_reproduces_differing_differs() {
-        set_source(Source::Jitter);
+        push_cpuid(&[
+            (0, 0, 1, 0, 0, 0),
+            (1, 0, 0, 0, (1 << 0) | (1 << 13), 0),
+            (7, 0, 0, 0, 0, 0),
+        ]);
+        assert_eq!(armed_source(), Source::Jitter, "the scripted venue classifies Jitter");
         // 64-byte fill = 8 words x one jitter() = 16 TSC samples.
         let frozen: Vec<u64> = std::iter::repeat(11u64).take(16).collect();
         let advancing: Vec<u64> = (0..16).map(|i| 1000 + i as u64 * 37).collect();
