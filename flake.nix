@@ -580,7 +580,21 @@ WRAP
             # 2bd99a04bf16fd46d43db6cfd69bdfeccd73c2aa55d2dbf19ee59b773ee6832a,
             # in three-way agreement with the FOD's own measured
             # got-value (sha256-VOkIAa…).
-            outputHash = "sha256-VOkIAa6xxw4Yfa2AL3pXsnJfzaV34ig9oC9OQEeH71o=";
+            # The 18-01/18-02 kernel bytes (the entropy re-key
+            # f7079e1, then hmac-sha1 + per-proc user + devcap —
+            # 0358cbe/82b5cdb/9ef9390) re-staled it once more; re-wired
+            # at 18-02's close with the same two-derivation proof: two
+            # independent fresh-kernel builds (kernel A plain at 9ef9390
+            # + kernel B at 42e0a83, a kernel-neutral
+            # derivation-independence marker commit in a separate
+            # clone) through the non-FOD lib.bootIso realization
+            # produced the byte-identical ISO — file-level sha256
+            # 3a5b4d81645dab237166254ed9d0bca1f724a3969ab6fb1ccc7244a3851774f6,
+            # NAR hash (what this attr checks)
+            # 8a6fb30880150b262f2b2dfa759d1de054141d21c577d6325c5815f086a9f295
+            # (sha256-im+zCI…), in three-way agreement with the FOD's
+            # own measured got-value.
+            outputHash = "sha256-im+zCIAVCyYvKy36dZ0d4FQUHSHFd9YyXFgV8Iap8pU=";
           };
         });
 
