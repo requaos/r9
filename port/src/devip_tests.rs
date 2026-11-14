@@ -2344,6 +2344,53 @@ fn tcp_announced_connection_bulk_write_round_trips() {
 }
 
 // ---------------------------------------------------------------------------
+// Pin (19-02, D-10 — the park-timer wake): a REAL parked devip waiter
+// (blocked inside a socket path, registered in NET_WAITERS by the real
+// blocking machinery) wakes through tick_check ALONE — the timer sweep is
+// the only wake source, no drive_stack runs from any syscall context.
+// This is the mechanical chain the x86_64 q35 tick() call joins this
+// phase (the aarch64 virt venue has carried it since 08-04): without the
+// tick-side call, a fully-parked venue's retransmit/keepalive/connect-
+// timeout deadlines never fire and the waiter parks forever.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn parked_socket_waiter_wakes_at_the_poll_at_deadline_via_tick_check() {
+    let _serial = fresh_scripted_stack();
+    set_guest_addr();
+    let (id, _guard) = alloc_tcp_conv();
+
+    // The connect parks inside tcp_connect_wait with the SYN's
+    // retransmit deadline armed from poll_at (the 1000 ms RTO floor —
+    // pin (c)'s fact).  From INSIDE the park: advance the clock past the
+    // deadline and run the timer sweep — NEVER drive_stack — then assert
+    // the waiter transitioned to WOKEN on the timer leg alone.
+    set_on_block(move || {
+        assert_eq!(
+            stack::net_deadline(),
+            Some(1000),
+            "pin (park-timer): the retransmit deadline is armed from poll_at at the park"
+        );
+        set_ticks(120_001); // past the connect deadline too — the woken loop terminates
+        stack::tick_check(120_001); // the timer sweep: the ONLY wake source
+        assert_eq!(
+            take_wake_log(),
+            std::vec![STUB_PID],
+            "pin (park-timer): tick_check alone WOKE the parked socket waiter — no syscall-context poll anywhere"
+        );
+    });
+
+    // The WOKEN context drives the stack itself (the D-05 discipline) and
+    // the connect maps its deadline verdict — the full mechanical chain
+    // the q35 tick now calls under dev_ip.
+    let err = proto::ctl_write(Proto::Tcp, id, b"connect 10.0.0.2!1234")
+        .err()
+        .expect("pin (park-timer): the connect ends");
+    assert_eq!(err, "connection timed out", "pin (park-timer): the woken waiter drives to its deadline verdict");
+    assert!(block_count() > 0, "pin (park-timer): the connect PARKED — the wake above woke a real park");
+}
+
+// ---------------------------------------------------------------------------
 // Pin: OQ-4 — checksum/tcpporthogdefense are accepted-and-recorded with a
 // netlog note (no smoltcp mechanism; contract §5.1), keepalive requires
 // Established, and the tcp ctl fallthrough errors the contract's strings.

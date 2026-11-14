@@ -221,6 +221,19 @@ pub fn tick() {
     #[cfg(dev_exec)]
     {
         crate::proc::tick_timeouts(prev + 1);
+        // The net-deadline sweep (08-04, D-05's timer leg — D-10 wires it
+        // on x86_64, the aarch64 platform/virt/timer.rs precedent
+        // verbatim): the poll_at-armed one-shot deadline rides the
+        // existing tick (the 100 Hz q35 slice here — 1 ms on aarch64; the
+        // sweep is deadline-driven, not rate-driven) — on expiry the
+        // devip waiters wake and drive the stack from their WOKEN SYSCALL
+        // context (poll NEVER runs in IRQ/tick context — the
+        // no-alloc-in-IRQ and mcslock-LEAF invariants).  Without this
+        // call, retransmit/keepalive/connect-timeout timers never fire
+        // under full park on this venue (the 18-07 record's adjacent
+        // latent defect).
+        #[cfg(dev_ip)]
+        port::devip::stack::tick_check(prev + 1);
         crate::proc::preempt();
     }
     // The console-RX sweep, cfg-keyed (aarch64's rx_irq echo/buffer
