@@ -21,7 +21,8 @@
 //! the established free-function device idiom.
 
 use crate::dat::{
-    Chan, DEV_CONS, DEV_DUP, DEV_ENV, DEV_ETHER, DEV_IP, DEV_MNT, DEV_PIPE, DEV_PROC, DEV_ROOT, DEV_SRV,
+    Chan, DEV_CAP, DEV_CONS, DEV_DUP, DEV_ENV, DEV_ETHER, DEV_IP, DEV_MNT, DEV_PIPE, DEV_PROC,
+    DEV_ROOT, DEV_SRV,
 };
 use crate::mcslock::{Lock, LockNode};
 use crate::pgrp::Pgrp;
@@ -77,6 +78,15 @@ fn registry_attach(rune: char, spec: &[u8]) -> Result<Chan> {
         // spec is the stack number — only 0/empty attaches this era,
         // anything else errors "bad specification").
         'I' => crate::devip::attach(spec),
+        // '#¤' — devcap (the capability device, 18-02/AUTH-03; the
+        // rune is U+00A4, two UTF-8 bytes, decoded above).  cfg-gated
+        // on the dev key: a config declares `cap` in its [config] dev
+        // list to serve the device (config_q35auth.toml); the module
+        // compiles everywhere, the ATTACH is the gate — without the
+        // key, '#¤' errors "unknown # device" (the donor's Enodev
+        // shape for a config that omits the device).
+        #[cfg(dev_cap)]
+        '¤' => Ok(crate::devcap::attach()),
         _ => Err("namec: unknown # device"),
     }
 }
@@ -118,6 +128,7 @@ fn dev_walk(c: &Chan, comp: &[u8]) -> Result<Chan> {
         DEV_SRV => crate::devsrv::walk(c, comp),
         DEV_ETHER => crate::devether::walk(c, comp),
         DEV_IP => crate::devip::walk(c, comp),
+        DEV_CAP => crate::devcap::walk(c, comp),
         // A walk into a mounted tree is a Twalk RPC (devmnt — the
         // mount entry's `to` chan carries the session + the attach fid).
         DEV_MNT => crate::devmnt::walk(c, comp),
@@ -390,6 +401,7 @@ pub fn open_chan(c: &Chan, mode: u32) -> Result<Chan> {
         // devip gets the FULL mode (its ndb file honors OTRUNC —
         // contract §2's zero-on-open; the devenv precedent).
         DEV_IP => crate::devip::open(c, mode)?,
+        DEV_CAP => crate::devcap::open(c, access)?,
         // Topen over the session (devmnt gets the FULL mode — it
         // masks the wire byte itself, OTRUNC included for the server to
         // refuse).
@@ -416,6 +428,7 @@ pub fn stat_chan(c: &Chan, sb: &mut [u8]) -> Result<u64> {
         DEV_SRV => crate::devsrv::stat(c, sb),
         DEV_ETHER => crate::devether::stat(c, sb),
         DEV_IP => crate::devip::stat(c, sb),
+        DEV_CAP => crate::devcap::stat(c, sb),
         // Tstat over the session (settime's stat of the /tmp mount).
         DEV_MNT => crate::devmnt::stat(c, sb),
         _ => Err("namec: chan with unknown device index"),

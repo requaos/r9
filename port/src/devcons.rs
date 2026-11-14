@@ -1283,6 +1283,14 @@ pub(crate) mod tests {
         *TEST_USER.lock().unwrap() = user.to_vec();
     }
 
+    /// Reset the HOSTOWNER static to the empty default (the eve base
+    /// reverts to the seeded glenda; /dev/hostowner reads EOF again).
+    /// Callers hold the seam guard.
+    pub(crate) fn clear_stub_hostowner() {
+        let node = crate::mcslock::LockNode::new();
+        super::HOSTOWNER.lock(&node).clear();
+    }
+
     /// The seam guard: poison-immune (a RED assertion under the lock
     /// must not cascade into the sibling pins).
     pub(crate) fn seam_guard() -> std::sync::MutexGuard<'static, ()> {

@@ -14,9 +14,11 @@
 # venue-matches the label against the resolved accel and fails on a
 # mismatch or a missing line (T-18-02: a silent downgrade to the
 # deterministic-seed era can never pass unnoticed).  No statistical
-# battery (D-07 declined it).  18-02 joins the devcap dev key + the
-# cap legs on this profile; no random-side dev key exists (devcons
-# serves random unconditionally).
+# battery (D-07 declined it).  18-02 joined the devcap dev key (`cap`
+# — the '#¤' registry arm's cfg) + the cap marker legs on this profile
+# (post/consume/one-shot/hostowner over a PRECOMPUTED fixture pair);
+# no random-side dev key exists (devcons serves random
+# unconditionally).
 #
 # Net-free by design (the q35churn precedent): the substrate touches
 # no net device, and the carried netdev stanza keeps the q35 DISCOVERY
@@ -39,7 +41,7 @@ load-address = '0xffffffff80200000'
 
 [config]
 platform = "q35"
-dev = ["exec"]
+dev = ["exec", "cap"]
 
 [qemu]
 machine = "q35"

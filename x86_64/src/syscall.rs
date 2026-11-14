@@ -20,12 +20,13 @@
 //! IRQ-masked.
 
 use alloc::collections::VecDeque;
+use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use port::dat::{
-    Chan, DEV_CONS, DEV_DUP, DEV_ENV, DEV_ETHER, DEV_IP, DEV_MNT, DEV_PIPE, DEV_PROC, DEV_ROOT,
-    DEV_SRV, OEXEC, OTRUNC,
+    Chan, DEV_CAP, DEV_CONS, DEV_DUP, DEV_ENV, DEV_ETHER, DEV_IP, DEV_MNT, DEV_PIPE, DEV_PROC,
+    DEV_ROOT, DEV_SRV, OEXEC, OTRUNC,
 };
 use port::mcslock::{Lock, LockNode};
 use port::namec::{self, NamecMode};
@@ -227,6 +228,16 @@ fn err(proc: &mut Proc, msg: &'static str) -> u64 {
     -1i64 as u64
 }
 
+/// err's dynamic twin (18-02, devcap): the donor's FORMATTED error
+/// strings ("invalid capability %s@%s") carry user bytes the port
+/// Result's `&'static str` cannot hold — devcap's CapErr transports
+/// them and this arm lands them in the errstr verbatim (lossy UTF-8:
+/// errstr is a diagnostic surface; real cap strings are ASCII).
+fn err_dyn(proc: &mut Proc, msg: &str) -> u64 {
+    proc.set_errstr(msg);
+    -1i64 as u64
+}
+
 /// EXEC's argv staging: the path string + the NUL-terminated argv
 /// block out of user memory, everything COPIED to kernel memory before
 /// exec_replace runs (the replacement frees the old image's pages,
@@ -298,6 +309,24 @@ fn sys_pwrite(frame: &mut Ureg, proc: &mut Proc) -> u64 {
             port::devip::write(&mut chan, src.as_slice(), off)
         }
         DEV_MNT => port::devmnt::write(&mut chan, src.as_slice(), off),
+        // devcap's write carries a FORMATTED error variant (the donor's
+        // "invalid capability %s@%s") — translate inline and complete
+        // the syscall here: the common arm's `&'static str` funnel
+        // cannot land the dynamic message (the DEV_ROOT early-return
+        // precedent, sys_pread's shape).
+        DEV_CAP => {
+            // Streaming device — the offset is meaningless (the donor's
+            // capwrite ignores its vlong offset), like cons/devpipe.
+            let r = port::devcap::write(&mut chan, src.as_slice());
+            proc.fd_op_done(fd, chan);
+            return match r {
+                Ok(wrote) => wrote,
+                Err(port::devcap::CapErr::Static(msg)) => err(proc, msg),
+                Err(port::devcap::CapErr::InvalidCapability(msg)) => {
+                    err_dyn(proc, &String::from_utf8_lossy(&msg))
+                }
+            };
+        }
         _ => Err("pwrite: unknown device"),
     };
     proc.fd_op_done(fd, chan);
@@ -341,6 +370,7 @@ fn sys_pread(frame: &mut Ureg, proc: &mut Proc) -> u64 {
             port::devip::read(&mut chan, dst.as_slice_mut(), off)
         }
         DEV_MNT => port::devmnt::read(&mut chan, dst.as_slice_mut(), off),
+        DEV_CAP => port::devcap::read(&mut chan, dst.as_slice_mut(), off),
         _ => Err("pread: unknown device"),
     };
     proc.fd_op_done(fd, chan);

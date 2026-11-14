@@ -25,6 +25,10 @@ undocumented_unsafe_blocks = "deny"
 # dev_ip is predeclared for the devip config (dev = ["ip"] in the virtip TOML
 # lands in plan 08-04) — the predeclare rule demands the declaration BEFORE
 # the first code use.
+# dev_cap is predeclared for the q35auth substrate config (dev = ["exec",
+# "cap"] in x86_64/lib/config_q35auth.toml, 18-02) — the TOML emission and
+# port/src/namec.rs's '#¤' registry arm (the first code use) land in the
+# SAME commit (the declared rule).
 # q35 is predeclared for the x86_64 platform config (platform = "q35" in
 # x86_64/lib/config_q35.toml, 13-01) — the TOML emission is the first
 # appearance; the first kernel code use lands with the platform tree (13-02).
@@ -39,6 +43,7 @@ unexpected_cfgs = { level = "warn", check-cfg = [
     'cfg(dev_bootchain)',
     'cfg(dev_ether)',
     'cfg(dev_ip)',
+    'cfg(dev_cap)',
 ] }
 
 [profile.dev]

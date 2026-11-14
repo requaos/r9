@@ -51,9 +51,16 @@ pub mod devpipe;
 pub mod devproc;
 #[forbid(unsafe_code)]
 pub mod devsrv;
+// devcap (18-02, AUTH-03) — the `#¤` capability device, a semantics
+// port of 9k's devcap.c.  Compiles everywhere (aarch64 included — the
+// v2.0-pin freeze bars aarch64 SOURCE changes, not port additions);
+// the namec registry arm is cfg(dev_cap)-gated so no frozen config
+// ever declares the device.
+#[forbid(unsafe_code)]
+pub mod devcap;
 // hmacsha1 (18-02, AUTH-03): hand-rolled SHA-1+HMAC in pure safe Rust
 // (the devcons ChaCha20 no-new-crate precedent) — devcap's donor cap
-// format hashes with it.  The devcap module itself joins in Task 2.
+// format hashes with it.
 #[forbid(unsafe_code)]
 pub mod hmacsha1;
 #[forbid(unsafe_code)]
@@ -117,6 +124,11 @@ mod devip_tests;
 // attribute.
 #[cfg(test)]
 mod namec_tests;
+// The devcap pins (18-02) live at the crate root for the same reason:
+// the stub user/tick hooks and the FIFO fixtures need alloc/std while
+// port::devcap keeps its unsafe-free forbid attribute.
+#[cfg(test)]
+mod devcap_tests;
 
 pub type Result<T> = core::result::Result<T, &'static str>;
 

@@ -458,6 +458,11 @@ pub(crate) fn exec_prologue(facts: &mb2::Facts) -> ExecPrologue {
         current: proc::current_user,
         set: proc::set_current_user,
     });
+    // devcap's recorded-but-never-read ticks source (the devip set_clock
+    // idiom), under the cap dev key — only the '#¤'-declaring config
+    // ever reads it, and even there the value is dead state kept honest.
+    #[cfg(dev_cap)]
+    port::devcap::set_tick_hook(platform::timer::ticks);
     // devpipe's block/wake hooks — a read on an empty pipe parks the
     // caller via the sched machinery (registered before the first exec
     // so the very first blocked reader resolves).
