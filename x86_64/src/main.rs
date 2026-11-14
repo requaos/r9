@@ -541,11 +541,18 @@ pub(crate) fn exec_prologue(facts: &mb2::Facts) -> ExecPrologue {
     let root_env = port::devenv::seed_root_group(&seed);
     println!("devenv: seeded cputype=amd64 nobootprompt=embed readparts=0");
     // The cmdline-sourced keys on their OWN line (the gate pins the
-    // merge here without the compiled line's bytes ever moving).
+    // merge here without the compiled line's bytes ever moving).  The
+    // compose-time seam validates printable ASCII, so from_utf8 holds
+    // for every sanctioned bootconf; a hand-crafted non-UTF8 line
+    // prints <?> for the offending side (the PAIRS still seed — this
+    // print is evidence, never the mechanism).
     if !bootconf.is_empty() {
+        fn show(b: &[u8]) -> &str {
+            core::str::from_utf8(b).unwrap_or("<?>")
+        }
         port::print!("devenv: bootconf");
         for (k, v) in bootconf.pairs() {
-            port::print!(" {}={}", core::str::from_utf8_lossy(k), core::str::from_utf8_lossy(v));
+            port::print!(" {}={}", show(k), show(v));
         }
         port::println!();
     }
