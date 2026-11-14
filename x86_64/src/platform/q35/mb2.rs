@@ -22,16 +22,43 @@
 // The pointer GRUB hands the kernel is untrusted firmware input (T-13-03):
 // every bounds or alignment violation is a loud named ParseError — never a
 // silent skip, never a walk off the end.
+//
+// 19-01 (CPU-02): the cmdline tag (type 1) joins the consumed set — the
+// x86_64 /chosen/bootargs analog.  GRUB's `-append` (and the grub.cfg
+// append seam the ISO builders emit) lands its string there, the kernel
+// parses it into key=value bootconf pairs (parse_bootconf_pairs — the
+// donor plan9.ini shape, one line), and main's exec prologue merges
+// those pairs into the seeded ROOT env group BEFORE boot(8) runs: the
+// ONE mechanism replacing 9k's #ec config env, image-scoped per the
+// ISO's cmdline (an absent tag = zero pairs = the pre-19-01 boot
+// byte-for-byte).  The live empty-cmdline shape is the observed size-9
+// tag (header + one NUL) — a real boot always carries the tag, empty.
 
 /// A memory-map entry's fixed size: {u64 base, u64 len, u32 type, u32 res}.
 const MMAP_ENTRY_SIZE: usize = 24;
 
 /// The tag types this parser consumes (spec 3.2.2).
 const TAG_END: u32 = 0;
+const TAG_CMDLINE: u32 = 1;
 const TAG_MODULE: u32 = 3;
 const TAG_MMAP: u32 = 6;
 const TAG_ACPI_OLD_RSDP: u32 = 14;
 const TAG_ACPI_NEW_RSDP: u32 = 15;
+
+/// The cmdline string's hard cap — a bootconf longer than 256 bytes is
+/// rejected LOUDLY at parse, never silently truncated (the cmdline is
+/// host-controlled compose-time input; an overlong line means a
+/// mis-staged ISO, and first boot is the cheapest place to say so).
+pub const MAX_CMDLINE: usize = 256;
+
+/// The bootconf pair cap — defensive headroom over the one- or two-pair
+/// lines the images actually carry (init= alone today); exceeded is a
+/// loud named error like every other malformed-input class here.
+// Consumed only under dev_exec (main's exec prologue); the dead-code
+// allowance is the `mod exec` precedent — the host tests exercise this
+// from every config.
+#[allow(dead_code)]
+pub const MAX_BOOTCONF_PAIRS: usize = 32;
 
 /// Every extraction goes through checked slice gets — never raw indexing.
 fn le_u32(bytes: &[u8], off: usize) -> Option<u32> {
@@ -85,6 +112,23 @@ pub enum ParseError {
     /// More module tags than Facts carries (the composed ISO stages one
     /// bootfs.paq; MAX_MODULES is the headroom).
     TooManyModules,
+    /// Cmdline tag (type 1): the declared tag body carries no NUL inside
+    /// it — the spec's string is NUL-terminated within the tag, so
+    /// anything else is a truncated tag, never a partial string.
+    InvalidCmdlineTag,
+    /// Cmdline tag: the string is longer than MAX_CMDLINE.  A loud
+    /// reject, never a silent truncate — the bootconf is host-controlled
+    /// and an overlong line means a mis-staged ISO (T-19-01).
+    CmdlineTooLong,
+    /// Bootconf pair parse: a whitespace token with no '=' arrives
+    /// before any pair it could continue, or carries an empty key —
+    /// malformed bootconf input, loud at first boot.
+    #[allow(dead_code)] // dev_exec-only consumers (main's prologue); tests pin it
+    InvalidBootconfToken,
+    /// More key=value pairs than the bootconf carries room for
+    /// (MAX_BOOTCONF_PAIRS).
+    #[allow(dead_code)] // dev_exec-only consumers (main's prologue); tests pin it
+    TooManyBootconfPairs,
 }
 
 /// Memory-range kinds (the mb2 tag mirrors EFI_MEMORY_DESCRIPTOR types;
@@ -168,15 +212,17 @@ pub struct Module {
 pub const MAX_MODULES: usize = 4;
 
 /// The parsed facts main boots from: the memory map, the boot modules,
-/// and the optional ACPI root-table address.  Only type-1 (available)
-/// ranges ever seed the page allocator; everything else stays reserved
-/// (T-13-04).
+/// the cmdline string (19-01), and the optional ACPI root-table address.
+/// Only type-1 (available) ranges ever seed the page allocator;
+/// everything else stays reserved (T-13-04).
 #[derive(Debug, PartialEq)]
 pub struct Facts {
     ranges: [MemRange; MAX_RANGES],
     nranges: usize,
     modules: [Module; MAX_MODULES],
     nmodules: usize,
+    cmdline: [u8; MAX_CMDLINE],
+    ncmdline: usize,
     pub acpi_root: Option<AcpiRoot>,
 }
 
@@ -187,8 +233,19 @@ impl Facts {
             nranges: 0,
             modules: [Module { start: 0, end: 0 }; MAX_MODULES],
             nmodules: 0,
+            cmdline: [0; MAX_CMDLINE],
+            ncmdline: 0,
             acpi_root: None,
         }
+    }
+
+    /// The cmdline tag's string, NUL stripped — empty when the boot
+    /// carried no tag or the live empty-tag shape (size 9).  The bytes
+    /// borrow Facts (copied at parse), so the seed merge in main can
+    /// hold the slices through the prologue.
+    #[allow(dead_code)] // dev_exec-only consumers (main's prologue); tests pin it
+    pub fn cmdline(&self) -> &[u8] {
+        &self.cmdline[..self.ncmdline]
     }
 
     fn push(&mut self, range: MemRange) -> Result<(), ParseError> {
@@ -298,6 +355,7 @@ pub fn parse(data: &[u8]) -> Result<Facts, ParseError> {
                 return Ok(facts);
             }
             TAG_MODULE => parse_module(data, off, size, &mut facts)?,
+            TAG_CMDLINE => parse_cmdline(data, off, size, &mut facts)?,
             TAG_MMAP => parse_mmap(data, off, size, &mut facts)?,
             TAG_ACPI_OLD_RSDP | TAG_ACPI_NEW_RSDP => {
                 let root = parse_acpi_root(data, off, size, ty)?;
@@ -367,6 +425,133 @@ fn parse_module(data: &[u8], off: usize, size: usize, facts: &mut Facts) -> Resu
         return Err(ParseError::InvalidModuleRange);
     }
     facts.push_module(Module { start, end })
+}
+
+/// The cmdline tag (type 1, 19-01/CPU-02): {u8 string[], NUL} — the
+/// NUL-terminated kernel command line the loader appended (GRUB
+/// `-append` / the grub.cfg append seam).  The string is the bytes up
+/// to the FIRST NUL, which must land inside the declared tag (the live
+/// empty shape is size 9 — header + NUL alone); past the NUL the tag
+/// may carry padding the spec's alignment rules on.  Copied into
+/// Facts's fixed buffer (capped by MAX_CMDLINE — overlong is loud,
+/// T-19-01).  A repeated cmdline tag keeps the FIRST copy (the spec
+/// fixes exactly one; a repeat is loader weirdness, and deterministic
+/// first-wins beats last-wins on input this early).
+fn parse_cmdline(data: &[u8], off: usize, size: usize, facts: &mut Facts) -> Result<(), ParseError> {
+    // The NUL must sit inside the declared body [off+8, off+size).
+    let body = data.get(off + 8..off + size).ok_or(ParseError::InvalidCmdlineTag)?;
+    let nul = body.iter().position(|&b| b == 0).ok_or(ParseError::InvalidCmdlineTag)?;
+    if facts.ncmdline != 0 {
+        return Ok(()); // first tag wins on repeats
+    }
+    let string = &body[..nul];
+    let Some(buf) = facts.cmdline.get_mut(..string.len()) else {
+        return Err(ParseError::CmdlineTooLong);
+    };
+    buf.copy_from_slice(string);
+    facts.ncmdline = string.len();
+    Ok(())
+}
+
+/// A parsed bootconf: the cmdline's key=value pairs, key and value
+/// slices BORROWED from the cmdline string (no allocation — the same
+/// heap-less discipline as Facts).  Consumed by main's exec prologue to
+/// merge into the seeded ROOT env group.
+// dev_exec-only consumer (main's prologue); the dead-code allowance is
+// the `mod exec` precedent — the host tests exercise it from every
+// config.
+#[allow(dead_code)]
+#[derive(Debug, PartialEq)]
+pub struct Bootconf<'a> {
+    pairs: [(&'a [u8], &'a [u8]); MAX_BOOTCONF_PAIRS],
+    npairs: usize,
+}
+
+#[allow(dead_code)]
+impl<'a> Bootconf<'a> {
+    fn empty() -> Bootconf<'a> {
+        Bootconf { pairs: [(&[], &[]); MAX_BOOTCONF_PAIRS], npairs: 0 }
+    }
+
+    /// The parsed pairs in cmdline order.
+    pub fn pairs(&self) -> impl Iterator<Item = (&'a [u8], &'a [u8])> {
+        self.pairs[..self.npairs].iter().copied()
+    }
+
+    /// True when the cmdline carried no pairs (the absent/empty case —
+    /// the pre-19-01 boot, zero seed changes).
+    pub fn is_empty(&self) -> bool {
+        self.npairs == 0
+    }
+}
+
+/// Parse a cmdline string into key=value bootconf pairs — the donor
+/// plan9.ini shape, one line (19-01/CPU-02):
+///
+/// - tokens are whitespace-separated; a token containing '=' opens a
+///   pair, split at the FIRST '=' — further '=' inside the value are
+///   literal and the value runs to the token's end (the next
+///   whitespace);
+/// - a token WITHOUT '=' continues the previous pair's value, the
+///   value's span extending to the token's end: the one-line analog of
+///   plan9.ini's value-runs-to-end-of-line (the donor carries values
+///   with spaces — `init=/amd64/init -c` is exactly this shape, and
+///   boot(8)'s execinit tokenizes the multi-word value verbatim,
+///   sys/src/9k/boot/boot.c:208-214);
+/// - a continuation with no preceding pair, or an empty key, is a loud
+///   named error — malformed bootconf surfaces at first boot, never a
+///   silent drop;
+/// - the empty string parses to zero pairs (the no-op).
+// dev_exec-only consumer (main's prologue); the dead-code allowance is
+// the `mod exec` precedent — the host tests exercise it from every
+// config.
+#[allow(dead_code)]
+pub fn parse_bootconf_pairs<'a>(cmdline: &'a [u8]) -> Result<Bootconf<'a>, ParseError> {
+    // Pair spans as cmdline INDEX ranges; the borrowed slices materialize
+    // only when the walk finishes (a continuation extends the previous
+    // value's end index — no slice surgery mid-walk).
+    let mut keys = [(0usize, 0usize); MAX_BOOTCONF_PAIRS];
+    let mut vals = [(0usize, 0usize); MAX_BOOTCONF_PAIRS];
+    let mut npairs = 0usize;
+    let mut i = 0usize;
+    while i < cmdline.len() {
+        while i < cmdline.len() && cmdline[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let start = i;
+        while i < cmdline.len() && !cmdline[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i == start {
+            break; // trailing whitespace only
+        }
+        match cmdline[start..i].iter().position(|&b| b == b'=') {
+            Some(0) => return Err(ParseError::InvalidBootconfToken), // empty key ("=v")
+            Some(eq) => {
+                if npairs == MAX_BOOTCONF_PAIRS {
+                    return Err(ParseError::TooManyBootconfPairs);
+                }
+                keys[npairs] = (start, start + eq);
+                vals[npairs] = (start + eq + 1, i);
+                npairs += 1;
+            }
+            None => {
+                // Continuation: extend the previous value's span to this
+                // token's end (the whitespace between joins into the
+                // value, exactly the donor's runs-to-end-of-line).
+                if npairs == 0 {
+                    return Err(ParseError::InvalidBootconfToken);
+                }
+                vals[npairs - 1].1 = i;
+            }
+        }
+    }
+    let mut out = Bootconf::empty();
+    out.npairs = npairs;
+    for k in 0..npairs {
+        out.pairs[k] = (&cmdline[keys[k].0..keys[k].1], &cmdline[vals[k].0..vals[k].1]);
+    }
+    Ok(out)
 }
 
 /// The memory-map tag (type 6): {u32 entry_size, u32 entry_version,
@@ -608,9 +793,11 @@ mod tests {
         assert_eq!(parse(&tiny), Err(ParseError::TagHeaderTooSmall));
 
         // (b) the live-GRUB shape: unpadded sizes walk via 8-aligned
-        // advance, and the mmap tag behind them still parses.
+        // advance, and the mmap tag behind them still parses.  The
+        // cmdline tag carries its NUL (size 9 — observed live; 19-01
+        // made the tag a consumed fact).
         let mut b = Mb2Builder::new();
-        b.tag(1, b""); // size 9 — observed live
+        b.tag(1, b"\0"); // size 9 — observed live
         b.tag(2, b"GRUB 2.14\0"); // size 18 — observed live
         b.tag(TAG_MMAP, &mmap_body(24, 0, &[(0x100000, 0x3fedf000, 1)]));
         let facts = parse(&b.finish()).expect("live GRUB shape must parse");
@@ -703,12 +890,127 @@ mod tests {
         assert_eq!(parse(&b.finish()).unwrap().acpi_root, None);
     }
 
+    // Test 6 (19-01, CPU-02): the cmdline tag round-trips into Facts and
+    // the bootconf pair parse carries the donor plan9.ini shape — the
+    // empty tag is a no-op, two pairs parse, an embedded '=' rides the
+    // value literally, and the multi-word init= shape (the cpu image's
+    // bootconf line) keeps its flags inside the value so boot(8)'s
+    // execinit tokenizes them verbatim.
+    #[test]
+    fn cmdline_tag_parses_and_bootconf_pairs_merge() {
+        // The live empty-cmdline shape (size 9): empty string, zero
+        // pairs — the pre-19-01 boot byte-for-byte.
+        let mut b = Mb2Builder::new();
+        b.tag(TAG_MMAP, &mmap_body(24, 0, &[(0x100000, 0x3fedf000, 1)]));
+        b.tag(1, b"\0");
+        let facts = parse(&b.finish()).expect("empty cmdline tag must parse");
+        assert_eq!(facts.cmdline(), b"");
+        assert!(parse_bootconf_pairs(facts.cmdline()).unwrap().is_empty());
+
+        // No cmdline tag at all: same no-op (kernel-only ISOs today).
+        let mut b = Mb2Builder::new();
+        b.tag(TAG_MMAP, &mmap_body(24, 0, &[(0x100000, 0x3fedf000, 1)]));
+        let facts = parse(&b.finish()).unwrap();
+        assert_eq!(facts.cmdline(), b"");
+
+        // The real bootconf line, unpadded size (8 + 20 = 28).
+        let mut b = Mb2Builder::new();
+        b.tag(1, b"init=/amd64/init -c\0");
+        let facts = parse(&b.finish()).expect("cmdline tag must parse");
+        assert_eq!(facts.cmdline(), b"init=/amd64/init -c");
+        let bootconf = parse_bootconf_pairs(facts.cmdline()).unwrap();
+        assert_eq!(bootconf.pairs().collect::<Vec<_>>(), vec![(b"init".as_slice(), b"/amd64/init -c".as_slice())]);
+
+        // Two pairs, the plain plan9.ini shape.
+        let bootconf = parse_bootconf_pairs(b"cputype=amd64 nobootprompt=embed").unwrap();
+        assert_eq!(
+            bootconf.pairs().collect::<Vec<_>>(),
+            vec![(b"cputype".as_slice(), b"amd64".as_slice()), (b"nobootprompt".as_slice(), b"embed".as_slice())]
+        );
+
+        // '=' inside a value is literal — the FIRST '=' splits, the
+        // value runs to the next whitespace.
+        let bootconf = parse_bootconf_pairs(b"key=a=b c=d=e").unwrap();
+        assert_eq!(
+            bootconf.pairs().collect::<Vec<_>>(),
+            vec![(b"key".as_slice(), b"a=b".as_slice()), (b"c".as_slice(), b"d=e".as_slice())]
+        );
+
+        // Leading/trailing whitespace and the empty string: zero pairs
+        // (the walk skips the runs).
+        assert!(parse_bootconf_pairs(b"").unwrap().is_empty());
+        assert!(parse_bootconf_pairs(b"   ").unwrap().is_empty());
+        let bootconf = parse_bootconf_pairs(b"  a=1  ").unwrap();
+        assert_eq!(bootconf.pairs().collect::<Vec<_>>(), vec![(b"a".as_slice(), b"1".as_slice())]);
+
+        // A continuation after a fresh pair extends only the LAST value.
+        let bootconf = parse_bootconf_pairs(b"a=1 b=2 tail").unwrap();
+        assert_eq!(
+            bootconf.pairs().collect::<Vec<_>>(),
+            vec![(b"a".as_slice(), b"1".as_slice()), (b"b".as_slice(), b"2 tail".as_slice())]
+        );
+    }
+
+    // Test 6b (19-01, T-19-01): the loud classes — an overlong cmdline
+    // is rejected AT PARSE (never silently truncated), a tag without its
+    // NUL is a named error, and the bootconf token/pair shapes that
+    // carry no unambiguous meaning refuse loudly.
+    #[test]
+    fn cmdline_and_bootconf_violations_are_loud() {
+        // Overlong string: 257 'a' bytes + NUL — one past MAX_CMDLINE.
+        let mut over = vec![b'a'; MAX_CMDLINE + 1];
+        over.push(0);
+        let mut b = Mb2Builder::new();
+        b.tag(1, &over);
+        assert_eq!(parse(&b.finish()), Err(ParseError::CmdlineTooLong));
+
+        // Exactly at the cap parses (256 is the boundary, not over it).
+        let mut cap = vec![b'a'; MAX_CMDLINE];
+        cap.push(0);
+        let mut b = Mb2Builder::new();
+        b.tag(1, &cap);
+        assert!(parse(&b.finish()).is_ok());
+
+        // A tag whose declared body carries no NUL at all: the builder
+        // always terminates, so hand-build — tag at 8 {type 1, size
+        // 0x10}, body [0x10, 0x18) all non-NUL, end tag at 0x18.
+        let mut cut = vec![0u8; 0x20];
+        cut[0..4].copy_from_slice(&0x20u32.to_le_bytes());
+        cut[8..12].copy_from_slice(&1u32.to_le_bytes());
+        cut[12..16].copy_from_slice(&0x10u32.to_le_bytes());
+        for k in 0x10..0x18 {
+            cut[k] = b'x';
+        }
+        cut[0x18..0x20].copy_from_slice(&[0, 0, 0, 0, 8, 0, 0, 0]);
+        assert_eq!(parse(&cut), Err(ParseError::InvalidCmdlineTag));
+
+        // A continuation with no preceding pair, and an empty key.
+        assert_eq!(
+            parse_bootconf_pairs(b"-c"),
+            Err(ParseError::InvalidBootconfToken)
+        );
+        assert_eq!(
+            parse_bootconf_pairs(b"=value"),
+            Err(ParseError::InvalidBootconfToken)
+        );
+
+        // More pairs than Bootconf carries.
+        let mut many = String::new();
+        for k in 0..=MAX_BOOTCONF_PAIRS {
+            many.push_str(&format!("k{k}=v{k} "));
+        }
+        assert_eq!(
+            parse_bootconf_pairs(many.as_bytes()),
+            Err(ParseError::TooManyBootconfPairs)
+        );
+    }
+
     // Test 5: truncation safety — every buffer cut mid-structure errors
     // loudly by name; never a panic, never a partial Facts.
     #[test]
     fn every_truncation_errors_loudly() {
         let mut b = Mb2Builder::new();
-        b.tag(1, b""); // size 9 — the unpadded live shape
+        b.tag(1, b"init=/amd64/init -c\0"); // the 19-01 bootconf carrier
         b.tag(
             TAG_MMAP,
             &mmap_body(24, 0, &[(0x1000000, 0x3ff00000, 1), (0x0, 0x8000, 2)]),

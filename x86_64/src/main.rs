@@ -520,14 +520,35 @@ pub(crate) fn exec_prologue(facts: &mb2::Facts) -> ExecPrologue {
     // The kernel-seeded ROOT env group — the ONE mechanism replacing
     // both 9k's #ec config env and an argv hint (the aarch64 seeding
     // re-keyed: cputype=amd64 feeds boot's execinit path build when
-    // the boot chain arrives at 14-06).
+    // the boot chain arrives at 14-06).  19-01 (CPU-02): the mb2
+    // cmdline tag's bootconf pairs MERGE into the compiled seed — the
+    // GRUB `-append` lineage (the x86_64 /chosen/bootargs analog),
+    // image-scoped per the ISO's cmdline, appended so the compiled
+    // facts can never be replaced by loader input (T-19-01's
+    // pairs-merge-never-replace arm).  An absent/empty cmdline leaves
+    // the seed byte-identical to the pre-19-01 boot; a malformed or
+    // overlong one is a loud panic HERE, at first boot, before boot(8)
+    // can half-run on a mis-staged image.
+    let bootconf = mb2::parse_bootconf_pairs(facts.cmdline())
+        .unwrap_or_else(|err| panic!("bootconf: mb2 cmdline parse failed: {err:?}"));
     port::devenv::set_group_hook(proc::current_env_group);
-    let root_env = port::devenv::seed_root_group(&[
+    let mut seed: alloc::vec::Vec<(&[u8], &[u8])> = alloc::vec![
         (b"cputype", b"amd64"),
         (b"nobootprompt", b"embed"),
         (b"readparts", b"0"),
-    ]);
+    ];
+    seed.extend(bootconf.pairs());
+    let root_env = port::devenv::seed_root_group(&seed);
     println!("devenv: seeded cputype=amd64 nobootprompt=embed readparts=0");
+    // The cmdline-sourced keys on their OWN line (the gate pins the
+    // merge here without the compiled line's bytes ever moving).
+    if !bootconf.is_empty() {
+        port::print!("devenv: bootconf");
+        for (k, v) in bootconf.pairs() {
+            port::print!(" {}={}", core::str::from_utf8_lossy(k), core::str::from_utf8_lossy(v));
+        }
+        port::println!();
+    }
 
     // The module paqfs is the root tree (D-04: the format carried
     // verbatim — port::devroot::mount_initrd + the miniz-inflate
