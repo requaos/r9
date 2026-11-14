@@ -41,6 +41,11 @@ pub const DEV_ETHER: usize = 8;
 /// path encodes proto/conv/file (devip.rs's QID(p,c,y) scheme — its
 /// OWN packing, never netif's).
 pub const DEV_IP: usize = 9;
+/// devcap — the capability device `#¤` (18-02, AUTH-03; the registry
+/// rune '¤', the donor devcap.c).  Attached only under the dev_cap
+/// config key (namec's registry arm); the qid paths are the donor's
+/// Qdir/Qhash/Quse enum values.
+pub const DEV_CAP: usize = 10;
 
 /// Plan 9 open-mode values (frozen: Harvey sys/include/libc.h).  The low
 /// two bits are an access-MODE field (not a bit set); the upper bits are

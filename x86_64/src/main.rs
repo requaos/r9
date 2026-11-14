@@ -450,6 +450,14 @@ pub(crate) fn exec_prologue(facts: &mb2::Facts) -> ExecPrologue {
         set_private: proc::proc_set_private,
     });
     port::devcons::set_pid_hook(proc::current_pid);
+    // devcons's current-user hooks (18-02, AUTH-03): #c/user serves the
+    // per-proc field (seeded glenda, fork-copied), devcap's eve gate
+    // and capuse mutation ride the same pair.  NOT dev-gated — every
+    // dev_exec platform serves #c/user.
+    port::devcons::set_user_hooks(port::devcons::UserHooks {
+        current: proc::current_user,
+        set: proc::set_current_user,
+    });
     // devpipe's block/wake hooks — a read on an empty pipe parks the
     // caller via the sched machinery (registered before the first exec
     // so the very first blocked reader resolves).

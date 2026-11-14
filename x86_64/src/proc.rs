@@ -1083,6 +1083,12 @@ pub struct Proc {
     /// The RFMEM family id (None at construction, after exec/exit, and
     /// for every non-RFMEM fork child).
     pub rfmem_family: Option<u64>,
+    /// The proc's user (donor `up->user`): seeded `glenda` at
+    /// construction, fork-copied, served by #c/user through the devcons
+    /// hooks, and MUTATED by devcap's capuse success path (the donor's
+    /// `kstrdup(&up->user, to)` — 18-02's AUTH-03, the first r9 kernel
+    /// uid mutation).  No trailing newline (the readstr serve rule).
+    pub user: Vec<u8>,
 }
 
 impl Proc {
@@ -1137,6 +1143,12 @@ impl Proc {
             rgrp: Arc::new(Lock::new("rendez", RendezGroup::new())),
             rendval: 0,
             rfmem_family: None,
+            // The donor seeds the first proc's user from eve (k10
+            // main.c: `kstrdup(&p->user, eve)`); r9's sane-default era
+            // seeds glenda directly — every #c/user consumer (init's
+            // readenv, devcap's eve gate) sees the same bytes the
+            // const-serve era produced.
+            user: b"glenda".to_vec(),
         };
         proc.set_name(name);
         proc
@@ -2353,6 +2365,18 @@ pub fn current_pid() -> u64 {
     current().expect("device op with no current process").pid
 }
 
+/// The calling proc's user bytes (devcons's UserHooks.current — the
+/// #c/user serve, devcap's eve gate and user-match read).
+pub fn current_user() -> Vec<u8> {
+    current().expect("user read with no current process").user.clone()
+}
+
+/// Mutate the calling proc's user (devcons's UserHooks.set — devcap
+/// capuse's success path, the donor's `kstrdup(&up->user, to)`).
+pub fn set_current_user(user: Vec<u8>) {
+    current().expect("user set with no current process").user = user;
+}
+
 /// devcons's block hook: park the calling proc in its cons read until
 /// the tick's cons_input_wake readies it.
 pub fn cons_block_current() {
@@ -2679,6 +2703,10 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &Ureg, flag: u64) -> R
     };
     child.slash = parent.slash.as_ref().map(|c| c.dup());
     child.dot = parent.dot.as_ref().map(|c| c.dup());
+    // The user copies at fork (donor proc.c newproc:
+    // `kstrdup(p->user, up->user)`) — no rfork flag governs it; a cap
+    // the parent presents does NOT carry to the child's user.
+    child.user = parent.user.clone();
 
     // The forkchild frame: a copy of the parent's live Ureg on the
     // CHILD's kernel stack, with ax = 0 (the child's wire result — the
@@ -3009,6 +3037,39 @@ mod tests {
         let g = guard.fd_group.lock(&node);
         assert!(g.fds[0].is_some() && g.fds[1].is_some() && g.fds[2].is_some());
         assert!(g.fds[3].is_none());
+        // 18-02 (AUTH-03): the user seeds glenda at construction (the
+        // donor's first-proc `kstrdup(&p->user, eve)` re-keyed to the
+        // sane-default era) — the #c/user serve stays byte-identical to
+        // the const era for every default boot.
+        assert_eq!(guard.user, b"glenda".to_vec(), "the user seeds glenda at construction");
+    }
+
+    /// 18-02 (AUTH-03): the fork copy — the child's user is the
+    /// parent's user at rfork time (donor newproc's
+    /// `kstrdup(p->user, up->user)`), with no rfork flag governing it.
+    /// A mapping-free parent exercises the copy site through the same
+    /// host seam the address-space pin rides.
+    #[test]
+    fn rfork_copies_the_parent_user() {
+        let mut parent = new_user_proc("forkuser").expect("construction succeeds");
+        parent.user = b"norbert".to_vec();
+        let frame = crate::dat::Ureg::zeroed();
+        let child_pid =
+            rfork_clone(&mut parent, &frame, RFPROC).expect("rfork_clone copies the user");
+        let node = LockNode::new();
+        let mut table = PROC_TABLE.lock(&node);
+        let child = table
+            .procs
+            .iter_mut()
+            .flatten()
+            .find(|p| p.pid == child_pid)
+            .expect("the child is table-resident");
+        assert_eq!(child.user, b"norbert".to_vec(), "the child inherits the parent's user");
+        // The parent's user is untouched by the copy (no aliasing).
+        assert_eq!(parent.user, b"norbert".to_vec());
+        // Retire the test child so it never counts as a live proc for
+        // any later pin in this binary.
+        child.state = ProcState::Moribund;
     }
 
     /// map_user_page + pml4_unmap_user round-trip through the seam: a

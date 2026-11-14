@@ -51,6 +51,11 @@ pub mod devpipe;
 pub mod devproc;
 #[forbid(unsafe_code)]
 pub mod devsrv;
+// hmacsha1 (18-02, AUTH-03): hand-rolled SHA-1+HMAC in pure safe Rust
+// (the devcons ChaCha20 no-new-crate precedent) — devcap's donor cap
+// format hashes with it.  The devcap module itself joins in Task 2.
+#[forbid(unsafe_code)]
+pub mod hmacsha1;
 #[forbid(unsafe_code)]
 pub mod devroot;
 #[forbid(unsafe_code)]

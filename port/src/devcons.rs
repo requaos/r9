@@ -226,6 +226,74 @@ pub fn set_pid_hook(hook: fn() -> u64) {
     *guard = Some(hook);
 }
 
+// ---------------------------------------------------------------------------
+// The per-proc user (18-02, AUTH-03): the /dev/user serve + devcap's
+// eve gate + capuse's user mutation all consult the CURRENT process's
+// user through these injected hooks (the devsrv ResolveHook idiom —
+// port cannot see the arch proc table).  Registered once at boot
+// before the first exec (main.rs, beside set_pid_hook — NOT dev-gated:
+// every dev_exec platform serves #c/user); a read before registration
+// errors loudly (a pre-exec user read is a boot bug).
+// ---------------------------------------------------------------------------
+
+/// The arch-side current-user hooks: `current` returns the operating
+/// proc's user bytes (no trailing newline — the serve rule below);
+/// `set` mutates them (devcap capuse's success path — the donor's
+/// `kstrdup(&up->user, to)`, the first r9 kernel uid mutation).
+#[derive(Clone, Copy)]
+pub struct UserHooks {
+    pub current: fn() -> alloc::vec::Vec<u8>,
+    pub set: fn(alloc::vec::Vec<u8>),
+}
+
+static USER_HOOKS: Lock<Option<UserHooks>> = Lock::new("userhooks", None);
+
+/// Register the arch-side current-user hooks.  A second registration is
+/// a boot bug.
+pub fn set_user_hooks(hooks: UserHooks) {
+    let node = LockNode::new();
+    let mut guard = USER_HOOKS.lock(&node);
+    assert!(guard.is_none(), "devcons: user hooks registered twice");
+    *guard = Some(hooks);
+}
+
+fn user_hooks() -> crate::Result<UserHooks> {
+    let node = LockNode::new();
+    USER_HOOKS.lock(&node).ok_or("devcons: user hooks not registered")
+}
+
+/// The current proc's user bytes — the /dev/user serve, devcap's
+/// user-match read, and the eve comparison all go through here.
+pub fn current_user() -> crate::Result<alloc::vec::Vec<u8>> {
+    Ok((user_hooks()?.current)())
+}
+
+/// Mutate the current proc's user (devcap's capuse success path; the
+/// donor's `kstrdup(&up->user, to)` + `up->basepri = PriNormal` — the
+/// priority half has no r9 equivalent yet, deliberately not invented).
+pub fn set_current_user(user: alloc::vec::Vec<u8>) -> crate::Result<()> {
+    (user_hooks()?.set)(user);
+    Ok(())
+}
+
+/// The eve gate (the donor sysauth.c `iseve`: `strcmp(eve, up->user)
+/// == 0` — eve and the hostowner are the SAME string in the donor;
+/// hostownerwrite sets both).  The comparison base is the HOSTOWNER
+/// static, DEFAULTING to the seeded `glenda` until the first
+/// `#c/hostowner` write: the donor's boot chain writehostowner precedes
+/// every devcap use, and r9's no-boot(8) venues (the substrate
+/// profile's first exec is the marker itself) ride the same sane
+/// default the /dev/user seed carries — /dev/hostowner READS stay
+/// byte-identical (EOF until written).
+pub fn iseve() -> crate::Result<bool> {
+    let base = {
+        let node = LockNode::new();
+        let stored = HOSTOWNER.lock(&node);
+        if stored.is_empty() { b"glenda".to_vec() } else { stored.clone() }
+    };
+    Ok(current_user()? == base)
+}
+
 /// The pid file's content: the operating proc's pid as decimal ASCII
 /// (getpid's atol parses it; the donor's fixed-width readnum padding is
 /// cosmetic and omitted).
@@ -315,12 +383,23 @@ fn consctl_len() -> u64 {
     if inq.raw { 4 } else { 7 }
 }
 
-/// The "user" file's content (the sane default: glenda — the auth stub
-/// never runs a real handshake).  NO trailing newline (the
-/// donor's Quser read is `readstr(up->user)` — the bare name): init's
-/// readenv("#c/user") feeds newns's `$user` → `/usr/$user` verbatim, so a
-/// newline would poison the home path.
-const USER_CONTENT: &[u8] = b"glenda";
+/// The "user" file's content: the CURRENT proc's user bytes (18-02's
+/// per-proc user via the injected hooks; seeded `glenda`, fork-copied,
+/// mutated by devcap's capuse).  NO trailing newline (the donor's Quser
+/// read is `readstr(up->user)` — the bare name): init's
+/// readenv("#c/user") feeds newns's `$user` → `/usr/$user` verbatim, so
+/// a newline would poison the home path.  Byte-identical to the
+/// const-`glenda` era for every default-seed boot (the hook source
+/// seeds glenda).
+fn user_content() -> crate::Result<alloc::vec::Vec<u8>> {
+    current_user()
+}
+
+/// The user file's current length (for stat/dir listings) — 0 before
+/// the hooks register (pre-exec; no #c listing happens then).
+fn user_len() -> u64 {
+    user_content().map(|c| c.len() as u64).unwrap_or(0)
+}
 
 /// One stat(5) wire record for a file (the shared StatWriter shape; the
 /// 41-byte fixed part + FOUR length-prefixed strings — name, uid, gid,
@@ -365,6 +444,8 @@ pub fn stat(c: &crate::dat::Chan, sb: &mut [u8]) -> crate::Result<u64> {
         consctl_len()
     } else if *qid == QID_PID {
         pid_len()
+    } else if *qid == QID_USER {
+        user_len()
     } else {
         0
     };
@@ -374,7 +455,9 @@ pub fn stat(c: &crate::dat::Chan, sb: &mut [u8]) -> crate::Result<u64> {
 /// Read from a devcons chan.  `offset` u64::MAX uses + advances the chan's
 /// streaming offset (the pread convention).  cons reads are the read
 /// path (cons_read: cooked line discipline / raw, blocking until bytes are
-/// available); null reads EOF; user reads "glenda"; hostowner reads the
+/// available); null reads EOF; user reads the CURRENT proc's user (the
+/// per-proc serve — seeded glenda, byte-identical for default boots);
+/// hostowner reads the
 /// stored bytes; consctl reads the mode word; the root dir serves the
 /// stat-wire listing (partinit's readparts consumes it — no sd* entries
 /// exist).
@@ -396,6 +479,8 @@ pub fn read(c: &mut crate::dat::Chan, buf: &mut [u8], offset: u64) -> crate::Res
                     consctl_len()
                 } else if qid == QID_PID {
                     pid_len()
+                } else if qid == QID_USER {
+                    user_len()
                 } else {
                     0
                 };
@@ -415,8 +500,9 @@ pub fn read(c: &mut crate::dat::Chan, buf: &mut [u8], offset: u64) -> crate::Res
         QID_CONS => return cons_read(buf),
         QID_NULL => 0, // null reads EOF
         QID_USER => {
-            let start = (off as usize).min(USER_CONTENT.len());
-            let avail = &USER_CONTENT[start..];
+            let content = user_content()?;
+            let start = (off as usize).min(content.len());
+            let avail = &content[start..];
             let n = avail.len().min(buf.len());
             buf[..n].copy_from_slice(&avail[..n]);
             n as u64
@@ -1153,4 +1239,170 @@ fn random_read(buf: &mut [u8]) -> u64 {
         }
     }
     written as u64
+}
+
+// ---------------------------------------------------------------------------
+// The per-proc user host pins (18-02): the stub-hook statics live HERE
+// (devcons owns the user hooks), registered ONCE per process — the
+// devip_tests Once idiom — so every later pin home (devcap_tests) shares
+// the ONE registration.  Group-dependent pins serialize on the seam
+// lock and swap the stub's served user per test.
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+pub(crate) mod tests {
+    use std::sync::{Mutex, Once};
+
+    use crate::dat::{Chan, Qid};
+    use super::{QTDIR, QTFILE};
+
+    static SEAM_LOCK: Mutex<()> = Mutex::new(());
+    static TEST_USER: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+
+    fn stub_current_user() -> alloc::vec::Vec<u8> {
+        TEST_USER.lock().unwrap().clone()
+    }
+
+    fn stub_set_user(user: alloc::vec::Vec<u8>) {
+        *TEST_USER.lock().unwrap() = user;
+    }
+
+    /// Install the stub user hooks ONCE (the whole test binary shares
+    /// them — the set_user_hooks assert-once would fire on a second).
+    pub(crate) fn install_user_hooks_once() {
+        static ONCE: Once = Once::new();
+        ONCE.call_once(|| {
+            super::set_user_hooks(super::UserHooks {
+                current: stub_current_user,
+                set: stub_set_user,
+            })
+        });
+    }
+
+    /// Swap the stub's served user (callers hold the seam guard).
+    pub(crate) fn set_stub_user(user: &[u8]) {
+        *TEST_USER.lock().unwrap() = user.to_vec();
+    }
+
+    /// The seam guard: poison-immune (a RED assertion under the lock
+    /// must not cascade into the sibling pins).
+    pub(crate) fn seam_guard() -> std::sync::MutexGuard<'static, ()> {
+        SEAM_LOCK.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// A resolved, unopened #c/user chan (the walk shape namec mints).
+    fn user_chan() -> Chan {
+        Chan::new(
+            crate::dat::DEV_CONS,
+            Qid { path: crate::devcons::QID_USER, vers: 0, typ: QTFILE },
+            0,
+        )
+    }
+
+    /// A resolved #c/root dir chan (for the listing pin).
+    fn root_chan() -> Chan {
+        Chan::new(
+            crate::dat::DEV_CONS,
+            Qid { path: 0, vers: 0, typ: QTDIR },
+            0,
+        )
+    }
+
+    /// The serve pin: /dev/user reads back EXACTLY the current proc's
+    /// user bytes with NO trailing newline (the donor's readstr shape —
+    /// a newline would poison init's `$user` → `/usr/$user` path), and
+    /// the mutation hook is visible to the very next read (the resolver
+    /// pair consults ONE source — the isolation pin).
+    #[test]
+    fn user_serve_is_the_current_users_bytes_no_newline() {
+        let _g = seam_guard();
+        install_user_hooks_once();
+        for name in [&b"glenda"[..], &b"norbert"[..]] {
+            set_stub_user(name);
+            let mut c = user_chan();
+            let mut buf = [0u8; 64];
+            let n = super::read(&mut c, &mut buf, 0).expect("user read");
+            assert_eq!(&buf[..n as usize], name, "the serve must be the current user verbatim");
+            assert_ne!(buf[n as usize - 1], b'\n', "no trailing newline (the readstr rule)");
+        }
+        // Back to the default seed for any later pin.
+        set_stub_user(b"glenda");
+    }
+
+    /// The offset discipline carries over the per-proc serve: a partial
+    /// read at offset N serves the tail (readstr's second call).
+    #[test]
+    fn user_serve_honors_offsets() {
+        let _g = seam_guard();
+        install_user_hooks_once();
+        set_stub_user(b"norbert");
+        let mut c = user_chan();
+        let mut buf = [0u8; 64];
+        let n = super::read(&mut c, &mut buf, 4).expect("user read at offset 4");
+        assert_eq!(&buf[..n as usize], b"ert", "the tail past offset 4");
+        set_stub_user(b"glenda");
+    }
+
+    /// The eve pin: default hostowner (empty static → the glenda
+    /// default) + the seeded user is eve; a mutated user is NOT; an
+    /// explicit #c/hostowner write re-seeds the comparison base (the
+    /// donor's hostownerwrite sets eve).
+    #[test]
+    fn user_eve_gate_default_and_hostowner_write() {
+        let _g = seam_guard();
+        install_user_hooks_once();
+        // Default base: glenda (the static is empty until written; the
+        // HOSTOWNER write below re-seeds it, so reset first via the
+        // module's own store — the write path's replace semantics).
+        set_stub_user(b"glenda");
+        {
+            let node = crate::mcslock::LockNode::new();
+            super::HOSTOWNER.lock(&node).clear();
+        }
+        assert!(super::iseve().expect("iseve"), "glenda is eve under the default base");
+        set_stub_user(b"norbert");
+        assert!(!super::iseve().expect("iseve"), "norbert is not eve");
+        // The hostowner write re-seeds the base (write requires an open
+        // hostowner chan — the donor hostownerwrite's eve gate is
+        // sysauth.c's, honored only by the WRITER device half this era;
+        // the store is what the write lands in).
+        {
+            let node = crate::mcslock::LockNode::new();
+            let mut stored = super::HOSTOWNER.lock(&node);
+            stored.clear();
+            stored.extend_from_slice(b"norbert");
+        }
+        assert!(super::iseve().expect("iseve"), "the mutated user matches the written hostowner");
+        // Restore the empty static (byte-identical EOF reads for other pins).
+        {
+            let node = crate::mcslock::LockNode::new();
+            super::HOSTOWNER.lock(&node).clear();
+        }
+        set_stub_user(b"glenda");
+    }
+
+    /// The dir listing's user length follows the current user (the
+    /// stat wire's length field — the pid/hostowner precedent).
+    #[test]
+    fn user_dir_listing_length_tracks_the_user() {
+        let _g = seam_guard();
+        install_user_hooks_once();
+        set_stub_user(b"norbert");
+        let mut c = root_chan();
+        let mut buf = [0u8; 1024];
+        let n = super::read(&mut c, &mut buf, 0).expect("root listing");
+        let listing = &buf[..n as usize];
+        // The stat record's length field sits at fixed offset 33..41
+        // (StatWriter's layout); find the user record by its name
+        // string and assert the length is 7 ("norbert").
+        let name_at = listing
+            .windows(6)
+            .position(|w| *w == [4u8, 0, b'u', b's', b'e', b'r'])
+            .expect("the listing carries the user name")
+            + 2; // the name bytes begin after the u16 length prefix
+        let len_bytes: [u8; 8] = listing[name_at - 10..name_at - 2]
+            .try_into()
+            .expect("the 8 length bytes before the name's length prefix");
+        assert_eq!(u64::from_le_bytes(len_bytes), 7, "the user record's length is the user byte count");
+        set_stub_user(b"glenda");
+    }
 }
