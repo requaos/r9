@@ -9,6 +9,7 @@
 mod allocator;
 mod cpu;
 mod dat;
+mod entropy;
 mod pagealloc;
 mod pio;
 mod platform;
@@ -191,6 +192,32 @@ pub extern "C" fn main(mach: &mut dat::Mach, mbdata: u64) {
     // The "what machine am I on" slot: one q35: line per mb2 fact.
     platform::print_machine_info(facts);
     print_memory_info();
+
+    // devcons's random-device hooks (D-05, AUTH-02, 18-01): the x86_64
+    // entropy gather — CPUID-gated RDSEED/RDRAND with the two-sample
+    // TSC fold fallback.  The aarch64 main.rs registration re-keyed:
+    // there is no DTB on x86_64 and before 18-01 no hooks registered
+    // at all (devcons's deterministic-seed era).  Registered
+    // unconditionally — the functions branch on CPUID internally —
+    // ahead of every consumer (the ether bind's smoltcp seed below and
+    // the first exec both draw through the hooks; the first read's
+    // `devcons: random seeded` once-marker stays the port side's).
+    // The armed source publishes ONCE per boot here, at registration,
+    // in the boot-facts family — D-07's gate vocabulary (RDSEED-armed
+    // boots print the rdrand-family label; the two-way distinction is
+    // RDRAND-family vs jitter).
+    port::devcons::set_random_hooks(port::devcons::RandomHooks {
+        rng_seed: entropy::rng_seed,
+        jitter: entropy::jitter,
+    });
+    match entropy::armed_source() {
+        entropy::Source::Rdseed | entropy::Source::Rdrand => {
+            println!("random: source=rdrand");
+        }
+        entropy::Source::Jitter => {
+            println!("random: source=jitter");
+        }
+    }
 
     // The IRQ-arming window (the Phase-3 ordering hazard applies
     // verbatim on x86: no interrupt may be deliverable before its

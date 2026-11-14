@@ -215,6 +215,66 @@ pub fn has_x2apic(cpuid1_ecx: u32) -> bool {
     cpuid1_ecx & (1 << 21) != 0
 }
 
+/// Pure decision helper: does leaf-1 ECX bit 30 (`CPUID_EXT_RDRAND`)
+/// advertise the RDRAND instruction?  Host-testable without a CPU —
+/// entropy's source gate routes through this (18-01/D-05).  KVM's
+/// `-cpu host` passes the host's RDRAND through; TCG's qemu64 never
+/// exposes the bit (the jitter fallback keeps exercising the TSC mix
+/// there).
+pub fn has_rdrand(cpuid1_ecx: u32) -> bool {
+    cpuid1_ecx & (1 << 30) != 0
+}
+
+/// Pure decision helper: does leaf-7 subleaf-0 EBX bit 18
+/// (`CPUID_LEAF7_EBX_RDSEED`) advertise the RDSEED instruction, given
+/// the CPU's maximum standard leaf?  The max-leaf check comes FIRST:
+/// a CPU whose maximum leaf is below 7 returns the maximum leaf's
+/// values for any higher leaf request, so those EBX bits are
+/// meaningless (SDM Vol 2, CPUID — the same recycled-register trap
+/// the x2APIC probe guards against).  Host-testable without a CPU.
+pub fn has_rdseed(max_leaf: u32, cpuid7_ebx: u32) -> bool {
+    max_leaf >= 7 && cpuid7_ebx & (1 << 18) != 0
+}
+
+/// Executes RDRAND — one hardware-random qword with carry-set-on-
+/// valid semantics (SDM Vol 2, RDRAND): CF=1 means the destination
+/// holds a valid value; CF=0 is the bounded-retry signal (the retry
+/// loop and its budget live at the caller, entropy.rs — never an
+/// unbounded spin).  The `setc` captures CF immediately; only the
+/// has_rdrand-gated paths call this (RDRAND without CPUID support is
+/// #UD).
+pub fn rdrand() -> Option<u64> {
+    let val: u64;
+    let ok: u8;
+    unsafe {
+        asm!("rdrand {val}",
+            "setc {ok}",
+            val = out(reg) val,
+            ok = out(reg_byte) ok,
+            options(att_syntax));
+    }
+    if ok != 0 { Some(val) } else { None }
+}
+
+/// Executes RDSEED — one conditioned-entropy qword for seeding a
+/// PRBG (Intel DRNG Software Implementation Guide: RDSEED is the
+/// seeding instruction; RDRAND is the PRNG output).  Same carry-only
+/// result contract as `rdrand` (SDM Vol 2, RDSEED); the bounded
+/// retry lives at the caller.  Only the has_rdseed-gated path calls
+/// this (RDSEED without CPUID support is #UD).
+pub fn rdseed() -> Option<u64> {
+    let val: u64;
+    let ok: u8;
+    unsafe {
+        asm!("rdseed {val}",
+            "setc {ok}",
+            val = out(reg) val,
+            ok = out(reg_byte) ok,
+            options(att_syntax));
+    }
+    if ok != 0 { Some(val) } else { None }
+}
+
 /// Writes an MSR — the TSC-deadline timer's arm (MSR 0x6E0, 13-03:
 /// written only inside the CPUID.1.ECX[24]-gated mode) and the x2APIC
 /// mode switch (IA32_APIC_BASE 0x1B, lapic.rs).
