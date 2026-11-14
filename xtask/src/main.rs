@@ -880,6 +880,26 @@ const Q35_CHURN_FAIL_MARKER: &str = "churngate: FAIL";
 const Q35_CHURN_MARK_MARKER: &str = "churnmark: ready";
 const Q35_CHURN_SEMGEN_MARKER: &str = "churngate: semgen";
 
+/// The q35auth substrate markers (18-01, AUTH-02/D-05+D-07): the
+/// once-per-boot armed-source line (main's registration print — D-05's
+/// CPUID-gated source selection, the 13-03 dual-mode precedent applied
+/// to entropy; KVM -cpu host arms the RDRAND family, TCG's qemu64 the
+/// two-sample TSC fold), the staged driver's OWN distinctness evidence
+/// from ring 3 (randread as the substrate image's /amd64/init: two
+/// 64-byte /dev/random reads, full-length and pairwise distinct — the
+/// whole statistical battery D-07 declined), and the terminal DONE /
+/// fail-fast FAIL family (the churngate: FAIL precedent).  The
+/// finish()-time venue assert matches the armed label against the
+/// RESOLVED accel (flag > R9_ACCEL > TOML, the emission's own chain):
+/// an rdrand label on a TCG leg, a jitter label on KVM, or a missing
+/// line fails the run — a silent downgrade to the deterministic-seed
+/// era can never pass unnoticed (T-18-02).
+const RANDOM_SOURCE_RDRAND_MARKER: &str = "random: source=rdrand";
+const RANDOM_SOURCE_JITTER_MARKER: &str = "random: source=jitter";
+const RANDOM_READS_MARKER: &str = "random: READS-OK";
+const SUBSTRATE_DONE_MARKER: &str = "substrate: DONE";
+const SUBSTRATE_FAIL_MARKER: &str = "substrate: FAIL";
+
 /// The q35exec staged-exec markers (14-05, XEXEC-02's leg-1 gate):
 /// after the Phase-13 discovery stages, the kernel's module/paqfs notes
 /// (the mb2 tag-3 module found + the paqfs root mounted through
@@ -1328,6 +1348,13 @@ enum BootStage {
     /// interrupted marker (WRITE syscalls through the real EL/SYSCALL
     /// path, D-09's point).
     Q35MarkerPrints,
+    /// The q35auth substrate stage (18-01): the exec-entry note
+    /// observed, now await the staged driver's OWN prints from ring 3
+    /// — the /dev/random distinctness evidence then the terminal DONE
+    /// (any failure prints `substrate: FAIL`, which fails fast from
+    /// any stage; the finish()-time venue assert owns the
+    /// armed-source line pair).
+    Q35SubstratePrints,
     /// The q35shell chain-boot stage (14-06): the exec-entry note
     /// observed, now await boot(8)'s OWN prints from ring 3 — the
     /// paqfs-server handoff and the 9P version handshake — strictly
@@ -1417,6 +1444,11 @@ impl fmt::Display for BootStage {
                 "the marker binary's own prints {{{Q35_SMOKESLEEP_GOT_MARKER:?}, \
                  {BOOT_SMOKESLEEP_MARKER:?}}} from ring 3"
             ),
+            BootStage::Q35SubstratePrints => write!(
+                f,
+                "the substrate driver's own prints {{{RANDOM_READS_MARKER:?}, \
+                 {SUBSTRATE_DONE_MARKER:?}}} from ring 3"
+            ),
             BootStage::Q35ChainBoot => write!(
                 f,
                 "boot(8)'s own prints {{{BOOT_PAQFS_MARKER:?}, {Q35_BOOT_VERSION_MARKER:?}}} \
@@ -1483,6 +1515,16 @@ enum BootProfile {
     /// zero `churngate: FAIL` — the fast-fail arm already aborts on
     /// the first).
     X64Churn,
+    /// The q35auth substrate gate (18-01, AUTH-02/D-05+D-07): the X64
+    /// discovery stages, the module/paqfs notes, the exec-entry note,
+    /// then the staged driver's OWN prints from ring 3 (`random:
+    /// READS-OK` + `substrate: DONE`) — with the finish()-time venue
+    /// assert matching the armed-source line pair (`random:
+    /// source=rdrand` / `random: source=jitter`) against the RESOLVED
+    /// accel leg and re-asserting the markers whole-capture plus zero
+    /// `substrate: FAIL` (the fast-fail arm already aborts on the
+    /// first).
+    X64Substrate,
 }
 
 /// Teardown: SIGKILL the spawned qemu's process GROUP (qemu spawned
@@ -1871,6 +1913,12 @@ impl BootTestStep {
         // discovery satisfaction branches into the module stage below
         // (no bind stage — the profile is net-free by design).
         let q35churn_profile = self.arch == Arch::X86_64 && self.config_name == "q35churn";
+        // The Q35AUTH profile ("q35auth", 18-01's AUTH-02/D-07
+        // substrate gate) is the same name-selected shape: its dev
+        // list is ["exec"] (like q35exec's), so the module-stage and
+        // entry-stage routing below names it explicitly — the staged
+        // driver's prints, not smokesleep's, are the marker set.
+        let q35auth_profile = self.arch == Arch::X86_64 && self.config_name == "q35auth";
         // The Q35EXEC profile ("q35exec", 14-05's XEXEC-02 leg-1 gate)
         // is the same name-selected shape: its dev list is ["exec"] and
         // its [dist] module key stages bootfs.paq into the ISO, so the
@@ -1928,6 +1976,20 @@ impl BootTestStep {
                     stage,
                     &capture,
                     &format!("kernel churngate failed ({Q35_CHURN_FAIL_MARKER}): {tail}"),
+                ));
+            }
+            // The q35auth fail-fast (18-01): the staged driver's own
+            // verdict is fail-closed — a `substrate: FAIL` line (open
+            // failure, short read, identical consecutive reads) means
+            // the missing terminal DONE would otherwise only surface
+            // as a slow budget expiry.  Fail the gate the moment the
+            // driver names its failure.
+            if q35auth_profile && contains_marker(&capture, SUBSTRATE_FAIL_MARKER.as_bytes()) {
+                let tail = String::from_utf8_lossy(&capture[capture.len().saturating_sub(200)..]);
+                return Err(self.fail(
+                    stage,
+                    &capture,
+                    &format!("substrate driver failed ({SUBSTRATE_FAIL_MARKER}): {tail}"),
                 ));
             }
             // The x86_64 channel's dedicated first-marker budget: the
@@ -2053,6 +2115,20 @@ impl BootTestStep {
                             .map(|p| pci_after + p)
                             .unwrap_or(capture.len());
                             stage = BootStage::Q35ModulePaqfs;
+                        } else if q35auth_profile {
+                            // 18-01: the substrate gate continues into
+                            // the same module half (dev = ["exec"] —
+                            // exec_bootstrap's own prologue runs, the
+                            // module/paqfs notes included), then the
+                            // exec-entry note, then the staged
+                            // driver's own prints from ring 3.
+                            bind_after = last_marker_line_end(
+                                &capture[pci_after..],
+                                PCI_NET_DEVICE_MARKER,
+                            )
+                            .map(|p| pci_after + p)
+                            .unwrap_or(capture.len());
+                            stage = BootStage::Q35ModulePaqfs;
                         } else {
                             // 13-03: the gate's timer half — the tick
                             // count is anchored strictly past the
@@ -2137,13 +2213,28 @@ impl BootTestStep {
                         // prints follow (its WRITE syscalls, never a
                         // kernel print on its behalf).  The chain profile
                         // (14-06) awaits boot(8)'s prints instead of the
-                        // marker's — pid 1 IS the real boot(8).
+                        // marker's — pid 1 IS the real boot(8).  The
+                        // substrate profile (18-01) awaits the randread
+                        // driver's own prints — pid 1 IS the driver.
                         bind_after = capture.len();
                         stage = if q35shell_profile {
                             BootStage::Q35ChainBoot
+                        } else if q35auth_profile {
+                            BootStage::Q35SubstratePrints
                         } else {
                             BootStage::Q35MarkerPrints
                         };
+                    }
+                }
+                BootStage::Q35SubstratePrints => {
+                    // The driver's OWN prints (D-09): the distinctness
+                    // evidence then the terminal DONE — both anchored
+                    // past the exec entry.  The armed-source venue pair
+                    // is finish()'s (whole-capture, accel-matched).
+                    if contains_marker(&capture[bind_after..], RANDOM_READS_MARKER.as_bytes())
+                        && contains_marker(&capture[bind_after..], SUBSTRATE_DONE_MARKER.as_bytes())
+                    {
+                        return self.finish(log_abs, &capture, BootProfile::X64Substrate);
                     }
                 }
                 BootStage::Q35MarkerPrints => {
@@ -2615,6 +2706,71 @@ impl BootTestStep {
                      heap slope held: steady={steady} measured={measured} <= ceiling={ceiling} \
                      bytes/exec (host re-derived from the kernel's own samples) — D-06 tier (a) \
                      green, CR-03's in-kernel contention leg landed"
+                );
+            }
+            BootProfile::X64Substrate => {
+                // The finish()-time venue assert (18-01, D-07/T-18-02):
+                // exactly ONE of the two armed-source labels, matching
+                // the RESOLVED accel venue (flag > R9_ACCEL > TOML —
+                // the same chain the qemu emission and the budget
+                // scaling use).  A missing line means the hooks never
+                // armed (the deterministic-seed era); a wrong label
+                // means the CPUID gate misclassified the venue; both
+                // labels means a double print.  None may pass.
+                let effective_accel = self
+                    .accel
+                    .clone()
+                    .or_else(|| self.config.qemu.as_ref().and_then(|q| q.accel.clone()))
+                    .unwrap_or_default();
+                let (expect, forbid) = if effective_accel == "tcg" {
+                    (RANDOM_SOURCE_JITTER_MARKER, RANDOM_SOURCE_RDRAND_MARKER)
+                } else {
+                    (RANDOM_SOURCE_RDRAND_MARKER, RANDOM_SOURCE_JITTER_MARKER)
+                };
+                if !contains_marker(capture, expect.as_bytes()) {
+                    return Err(self.fail_pretty(
+                        capture,
+                        &format!(
+                            "substrate gate: armed-source line {expect:?} absent — the D-05 \
+                             registration print never ran (hooks not armed: the \
+                             deterministic-seed era, never a green)"
+                        ),
+                    ));
+                }
+                if contains_marker(capture, forbid.as_bytes()) {
+                    return Err(self.fail_pretty(
+                        capture,
+                        &format!(
+                            "substrate gate: armed-source venue mismatch — {forbid:?} on a \
+                             {effective_accel:?}-accel leg (expected {expect:?}; the CPUID gate \
+                             misclassified the venue)"
+                        ),
+                    ));
+                }
+                // The driver's evidence, whole-capture: READS-OK + DONE
+                // (the stage loop anchored them past the exec entry) and
+                // zero FAIL lines anywhere (the fast-fail already
+                // aborted on the first; belt-and-braces).
+                for marker in [RANDOM_READS_MARKER, SUBSTRATE_DONE_MARKER] {
+                    if !contains_marker(capture, marker.as_bytes()) {
+                        return Err(self
+                            .fail_pretty(capture, &format!("substrate marker {marker:?} absent")));
+                    }
+                }
+                let fails = count_marker_lines(capture, SUBSTRATE_FAIL_MARKER);
+                if fails != 0 {
+                    return Err(self.fail_pretty(
+                        capture,
+                        &format!("substrate gate: {fails} {SUBSTRATE_FAIL_MARKER} line(s)"),
+                    ));
+                }
+                println!(
+                    "boot-test: PASS -- SeaBIOS -> GRUB2 -> mb2 kernel + module boot: banner, \
+                     memory facts, discovery, the module/paqfs mount notes, the exec-entry note, \
+                     the armed source {expect:?} (venue {effective_accel:?}), then the staged \
+                     driver's OWN ring-3 prints (two 64-byte /dev/random reads, full-length and \
+                     pairwise distinct -> READS-OK + DONE via WRITE syscalls) — AUTH-02's \
+                     substrate re-key live (D-05/D-07)"
                 );
             }
             BootProfile::X64Exec => {

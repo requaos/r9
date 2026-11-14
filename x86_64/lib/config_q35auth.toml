@@ -1,0 +1,87 @@
+# The q35auth substrate gate profile (18-01, AUTH-02/D-05+D-07) — the
+# q35exec staged-exec shape (dev = ["exec"], the [dist] module key)
+# carrying the SUBSTRATE marker image: /amd64/init IS randread (the
+# D-08 leg-1 rule applied per-image — the q35exec image's marker stays
+# smokesleep), so the first ring-3 exec opens /dev/random, reads 64
+# bytes twice, asserts the reads are full-length and pairwise
+# DISTINCT, and prints the D-07 evidence (`random: READS-OK` then
+# `substrate: DONE`; any failure prints `substrate: FAIL`, the
+# fail-fast the gate aborts on).  The random hooks (D-05) arm
+# unconditionally in main's boot-facts window and publish the armed
+# source once per boot BEFORE the reads: `random: source=rdrand` (KVM
+# -cpu host: RDRAND/RDSEED present) or `random: source=jitter` (TCG
+# qemu64: the two-sample TSC fold — CI's load-bearing leg) — the gate
+# venue-matches the label against the resolved accel and fails on a
+# mismatch or a missing line (T-18-02: a silent downgrade to the
+# deterministic-seed era can never pass unnoticed).  No statistical
+# battery (D-07 declined it).  18-02 joins the devcap dev key + the
+# cap legs on this profile; no random-side dev key exists (devcons
+# serves random unconditionally).
+#
+# Net-free by design (the q35churn precedent): the substrate touches
+# no net device, and the carried netdev stanza keeps the q35 DISCOVERY
+# contract honest — every q35 profile's finish() asserts the
+# virtio-net device-found line, so the NIC must exist on the PCI bus
+# (present, unbound: no ether dev key).
+#
+# Parallel-boot constraint (carried): two simultaneous q35 boots bind
+# the two loopback hostfwd ports (127.0.0.1:17010/5670) — run the
+# x86_64 gates sequentially.
+[build]
+target = "lib/x86_64-unknown-none-elf.json"
+buildflags = [
+    "-Z", "build-std=core,alloc"
+]
+
+[link]
+script = 'x86_64/lib/kernel.ld'
+load-address = '0xffffffff80200000'
+
+[config]
+platform = "q35"
+dev = ["exec"]
+
+[qemu]
+machine = "q35"
+accel = "kvm"
+cpu = "host"
+smp = 1
+memory = "1024M"
+
+# The netdev stanza is CARRIED (the q35churn shape) for the discovery
+# contract above; pcap stays false (this gate never reads a capture).
+# The TCG leg rides the env overrides (R9_ACCEL=tcg R9_CPU=qemu64 —
+# the 13-06 no-silent-downgrade chain; TOML cpu=host is KVM-only).
+[qemu.netdev]
+default = "slirp"
+
+[qemu.netdev.slirp]
+mode = "user"
+device = "virtio-net-pci-non-transitional"
+hostfwd = [
+    "tcp:127.0.0.1:17010-:17010",
+    "tcp:127.0.0.1:5670-:567",
+]
+pcap = false
+
+[qemu.netdev.tap]
+mode = "tap"
+device = "virtio-net-pci-non-transitional"
+br = "br0"
+helper = "/run/wrappers/bin/qemu-bridge-helper"
+pcap = true
+
+[qemu.netdev.vmnet]
+mode = "vmnet-socket"
+device = "virtio-net-pci-non-transitional"
+socket-path = "/var/run/socket_vmnet"
+pcap = false
+
+[dist]
+format = "elf"
+# The staged bootfs (the 18-01 substrate bake): Harvey's mkimage §13
+# bakes out/bootfs-substrate.paq (randread as /amd64/init); the ISO
+# builder stages it at /boot/bootfs.paq and emits the grub.cfg module2
+# line IN.  Absence is a loud pre-ISO error naming the Harvey-side
+# producers (stage-build.sh + mkimage.sh).
+module = "harvey:build/x86_64/out/bootfs-substrate.paq"

@@ -127,15 +127,20 @@ mod tests {
         assert_eq!(netdev.default, "slirp");
     }
 
-    /// All five committed q35 TOMLs parse and carry the FULL D-05
-    /// mode-table set — default slirp + the three sub-tables.  This is
-    /// the data-layer machine check of the phase's must-haves truth: a
-    /// broken or half-migrated stanza surfaces here at test time,
-    /// never at boot time.
+    /// Every committed q35 TOML that carries a netdev stanza parses and
+    /// carries the FULL D-05 mode-table set — default slirp + the three
+    /// sub-tables.  (q35churn is the one deliberate exception: its
+    /// carried stanza is slirp-only by design — the net-free churn
+    /// gate.)  This is the data-layer machine check of the must-haves
+    /// truth: a broken or half-migrated stanza surfaces here at test
+    /// time, never at boot time.  18-01 joins q35auth; 17-02's
+    /// q35churnshell joins the family it already carried.
     #[test]
-    fn netdev_all_five_q35_tomls_carry_the_mode_tables() {
+    fn netdev_all_q35_tomls_carry_the_mode_tables() {
         let configs = [
             ("config_q35", include_str!("../../x86_64/lib/config_q35.toml")),
+            ("config_q35auth", include_str!("../../x86_64/lib/config_q35auth.toml")),
+            ("config_q35churnshell", include_str!("../../x86_64/lib/config_q35churnshell.toml")),
             ("config_q35exec", include_str!("../../x86_64/lib/config_q35exec.toml")),
             ("config_q35lowmcfg", include_str!("../../x86_64/lib/config_q35lowmcfg.toml")),
             ("config_q35net", include_str!("../../x86_64/lib/config_q35net.toml")),
