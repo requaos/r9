@@ -2103,6 +2103,24 @@ pub(crate) fn tcp_state_name(s: tcp::State) -> &'static [u8] {
 
 /// Create a tcp socket (2048/2048 buffers per contract §12.3, hop limit
 /// = conv.ttl — §12.8's no-leak rule).
+///
+/// 18-07 (AUTH-08's kernel half): the DONOR's TCP shape — no Nagle, no
+/// delayed ACK.  smoltcp's stock defaults (`nagle: true`,
+/// `ack_delay: Some(10ms)`) hold every sub-MSS follow-up write until the
+/// peer's delayed pure ACK egresses — which only happens in a drive at/
+/// after the `poll_at` deadline — and with every devip proc parked no
+/// drive ever runs (all `drive_stack` callers are devip file ops), so
+/// SConn's count-then-payload pattern (secstore/SConn.c SC_write) parked
+/// both procs forever (the 18-05 isolation matrix + the 18-07 repro:
+/// qout 2 → 33 across the payload write, still 33 at t+3s).  Plan 9's
+/// stack sends immediately and ACKs immediately (its loopbackmedium is
+/// synchronous by design), so both timer-mediated holds are OFF: every
+/// write egresses in its own terminal drive, every ACK rides the next
+/// drive — delivery never depends on the deadline leg.  Pinned by
+/// `tcp_two_write_client_pattern_round_trips` (the 10ms delayed ACK
+/// also gated tx-buffer drain: a >2048-byte bulk write would block in
+/// the send arm on the same never-driven timer — Phase 19's cpu path
+/// rides this seam).
 fn tcp_socket(ttl: u32) -> tcp::Socket<'static> {
     let mut s = tcp::Socket::new(
         tcp::SocketBuffer::new(alloc::vec![0; stack::POOL_SOCK_BUF]),
@@ -2111,6 +2129,8 @@ fn tcp_socket(ttl: u32) -> tcp::Socket<'static> {
     if ttl > 0 && ttl <= 255 {
         s.set_hop_limit(Some(ttl as u8));
     }
+    s.set_nagle_enabled(false);
+    s.set_ack_delay(None);
     s
 }
 

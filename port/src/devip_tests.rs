@@ -2084,6 +2084,85 @@ fn tcp_full_exchange_moves_the_stats_counters() {
 }
 
 // ---------------------------------------------------------------------------
+// Pin (18-07, AUTH-08's kernel half): the SConn two-write client pattern
+// over the REAL loopback core.  The donor wire shape (secstore/SConn.c
+// SC_write): a 2-byte count write IMMEDIATELY followed by the payload
+// write; the peer's tcp_read_data must return BOTH writes IN ORDER with
+// no clock advance — the writes' own terminal drives are the only
+// delivery mechanism the pattern may depend on (the guest's 18-05/18-07
+// stall: the second write sat in the tx queue behind smoltcp's stock
+// Nagle + 10 ms delayed-ACK defaults while every devip proc was parked).
+//
+// The loopback core is the guest's own medium (the scripted device is
+// the OTHER venue); the connect/listen/handshake legs complete in their
+// own drives exactly as they do in the guest.  The park bound: the
+// harness's single-threaded discipline (the threaded shape races the
+// seam's BusyCell — the rejected shape above), so a PARKED peer read
+// fires the ON_BLOCK one-shot and FAILS the pin with the stall's own
+// diagnosis — the park IS the guest stall made loud.
+// ---------------------------------------------------------------------------
+#[test]
+fn tcp_two_write_client_pattern_round_trips() {
+    use crate::devip::phyadapt::LoopbackDev;
+    let _serial = fresh_scripted_stack();
+    stack::install_test_stack(StackCore::new_loopback(LoopbackDev::new()));
+    // the venue's loopback address (netaddr.rc's `add 127.0.0.1 255.0.0.0')
+    {
+        let mut g = stack::enter_stack();
+        let core = g.core.as_mut().expect("pin (two_write): core installed");
+        core.iface.update_ip_addrs(|addrs| {
+            addrs.push(IpCidr::Ipv4(Ipv4Cidr::new(Ipv4Address::new(127, 0, 0, 1), 8)))
+                .expect("pin (two_write): addr fits");
+        });
+    }
+
+    let (sid, _gsrv) = alloc_tcp_conv();
+    proto::ctl_write(Proto::Tcp, sid, b"announce 5356").expect("pin (two_write): announce");
+    let (cid, _gcli) = alloc_tcp_conv();
+    proto::ctl_write(Proto::Tcp, cid, b"connect 127.0.0.1!5356").expect("pin (two_write): connect");
+    let nc = crate::devip::open(&tcp_listen_chan(sid), crate::dat::OREAD).expect("pin (two_write): listen pops");
+    let nid = ((nc.qid.path >> 5) & 0xfff) as usize;
+    assert_eq!(
+        tcp_sock_state(nid),
+        Some(tcp::State::Established),
+        "pin (two_write): the accepted conv is Established"
+    );
+
+    // The donor's count frame (SSL-style: 0x80 | len>>8, len) and a
+    // 31-byte payload — the exact mode-2 shape from the 18-05/18-07
+    // isolation matrix.
+    let count = [0x80u8, 31u8];
+    let payload = [0xa5u8; 31];
+
+    // The park bound (armed AFTER the handshake legs — they never park
+    // on loopback; the reads below are its only tenants).
+    set_on_block(|| {
+        panic!(
+            "pin (two_write): the peer's read PARKED — the two-write pattern was not delivered \
+             (the Nagle/delayed-ACK hold: the payload write sits in the tx queue and no parked \
+             proc can ever drive its release; the 18-07 mechanism record)"
+        );
+    });
+
+    // The client's two writes through the REAL tcp_write_data path —
+    // back-to-back, exactly as SC_write issues them.
+    proto::tcp_write_data(cid, &count).expect("pin (two_write): the count write");
+    proto::tcp_write_data(cid, &payload).expect("pin (two_write): the payload write");
+
+    // The peer reads BOTH writes IN ORDER through the REAL tcp_read_data
+    // path (T-18-17: reorder or truncation fails the content asserts).
+    let mut got_count = [0u8; 2];
+    let n1 = proto::tcp_read_data(nid, &mut got_count).expect("pin (two_write): the count read") as usize;
+    assert_eq!(n1, 2, "pin (two_write): the count read returns 2");
+    assert_eq!(got_count, count, "pin (two_write): the count bytes arrive first, in order");
+    let mut got_payload = [0u8; 31];
+    let n2 = proto::tcp_read_data(nid, &mut got_payload).expect("pin (two_write): the payload read") as usize;
+    assert_eq!(n2, 31, "pin (two_write): the payload read returns 31");
+    assert_eq!(got_payload, payload, "pin (two_write): the payload bytes arrive second, in order");
+    crate::devip::close(&nc);
+}
+
+// ---------------------------------------------------------------------------
 // Pin: OQ-4 — checksum/tcpporthogdefense are accepted-and-recorded with a
 // netlog note (no smoltcp mechanism; contract §5.1), keepalive requires
 // Established, and the tcp ctl fallthrough errors the contract's strings.
