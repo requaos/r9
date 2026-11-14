@@ -594,7 +594,24 @@ WRAP
             # 8a6fb30880150b262f2b2dfa759d1de054141d21c577d6325c5815f086a9f295
             # (sha256-im+zCI…), in three-way agreement with the FOD's
             # own measured got-value.
-            outputHash = "sha256-im+zCIAVCyYvKy36dZ0d4FQUHSHFd9YyXFgV8Iap8pU=";
+            # The 18-06/18-07 gap-fix kernel bytes (CR-01's iseve
+            # hostowner-write gate 652f025, CR-02's RDRAND probe
+            # rebind f594b4c, and the devip two-write TCP delivery
+            # fix ab4cb66 — kernel bytes) re-staled it once more;
+            # re-wired at 18-08's close — the phase's single FOD pass
+            # covering BOTH gap plans together — with the same
+            # two-derivation proof: two independent fresh-kernel
+            # builds (kernel A plain at ab4cb66 + kernel B at
+            # 27a141ac, a kernel-neutral derivation-independence
+            # marker commit in a discarded separate clone) through the
+            # non-FOD lib.bootIso realization produced the
+            # byte-identical ISO — file-level sha256
+            # a1cffdb4564d1906b704d14b5e4378ba79eab2b54f44957e377b3b90e4e3ac0a,
+            # NAR hash (what this attr checks)
+            # f2e2fb99191a6f2c4f0fb36217e77bd8de4af05d33cd6d7ad4f952716bedbeb3
+            # (sha256-8uL7mR…), in three-way agreement with the FOD's
+            # own measured got-value.
+            outputHash = "sha256-8uL7mRkabyxPD7NiF+d72N5K8F0zzW161PlScWvtvrM=";
           };
         });
 
