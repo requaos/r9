@@ -567,8 +567,13 @@ pub fn read(c: &mut crate::dat::Chan, buf: &mut [u8], offset: u64) -> crate::Res
 
 /// Write to a devcons chan: cons writes byte-exact through the Console MCS
 /// lock; null discards; user is
-/// read-only; hostowner STORES the bytes (replace semantics — the glenda
-/// no-op writes once); consctl flips the input mode; the root dir
+/// read-only; hostowner accepts an EVE-ONLY, length-bounded store (the
+/// donor hostownerwrite's gate and 128-byte bound, 18-06/CR-01: a
+/// non-eve writer Eperms, an empty or >=128-byte write Ebadargs, and
+/// only then the replace-store — WITHOUT the donor's rename-user side
+/// effects; no in-tree writer exists, and an eve writing a foreign
+/// name makes the base foreign — fail-closed); consctl flips the input
+/// mode; the root dir
 /// refuses.
 pub fn write(c: &mut crate::dat::Chan, buf: &[u8]) -> crate::Result<u64> {
     match c.qid.path {
@@ -577,6 +582,19 @@ pub fn write(c: &mut crate::dat::Chan, buf: &[u8]) -> crate::Result<u64> {
         QID_USER => Err("devcons: user is read-only"),
         QID_RANDOM | QID_URANDOM => Err("devcons: random/urandom are read-only"),
         QID_HOSTOWNER => {
+            // The donor hostownerwrite gate + bound (sysauth.c:148-165,
+            // 18-06/CR-01): iseve FIRST — a non-eve writer Eperms BEFORE
+            // the store is touched (iseve reads HOSTOWNER under its own
+            // lock; taking the store lock first would self-deadlock),
+            // then the donor's `n <= 0 || n >= 128` Ebadarg bound.  The
+            // eve path keeps the replace-store; the donor's rename-user
+            // side effects are NOT ported (no in-tree writer exists).
+            if !iseve()? {
+                return Err("devcons: hostowner write requires the hostowner");
+            }
+            if buf.is_empty() || buf.len() >= 128 {
+                return Err("devcons: bad arg to hostowner write");
+            }
             let node = LockNode::new();
             let mut stored = HOSTOWNER.lock(&node);
             stored.clear();
@@ -1306,6 +1324,16 @@ pub(crate) mod tests {
         )
     }
 
+    /// A resolved, unopened #c/hostowner chan (the write-gate pins'
+    /// subject — the same walk shape).
+    fn hostowner_chan() -> Chan {
+        Chan::new(
+            crate::dat::DEV_CONS,
+            Qid { path: crate::devcons::QID_HOSTOWNER, vers: 0, typ: QTFILE },
+            0,
+        )
+    }
+
     /// A resolved #c/root dir chan (for the listing pin).
     fn root_chan() -> Chan {
         Chan::new(
@@ -1369,10 +1397,10 @@ pub(crate) mod tests {
         assert!(super::iseve().expect("iseve"), "glenda is eve under the default base");
         set_stub_user(b"norbert");
         assert!(!super::iseve().expect("iseve"), "norbert is not eve");
-        // The hostowner write re-seeds the base (write requires an open
-        // hostowner chan — the donor hostownerwrite's eve gate is
-        // sysauth.c's, honored only by the WRITER device half this era;
-        // the store is what the write lands in).
+        // The hostowner write re-seeds the base.  Since 18-06 the WRITE
+        // ARM itself is gated (iseve + the donor bound — see the
+        // hostowner_write_* pins below); this pin seeds the store
+        // directly because it tests the COMPARISON, not the write arm.
         {
             let node = crate::mcslock::LockNode::new();
             let mut stored = super::HOSTOWNER.lock(&node);
@@ -1385,6 +1413,108 @@ pub(crate) mod tests {
             let node = crate::mcslock::LockNode::new();
             super::HOSTOWNER.lock(&node).clear();
         }
+        set_stub_user(b"glenda");
+    }
+
+    /// The CR-01 gate pin (18-06): a NON-EVE writer is refused before
+    /// the store is touched — the donor hostownerwrite's iseve->Eperm
+    /// arm.  The exploit this kills: a capuse-mutated process writing
+    /// its own name to #c/hostowner to re-gain eve and reopen
+    /// #¤/caphash.
+    #[test]
+    fn hostowner_write_refused_for_non_eve() {
+        let _g = seam_guard();
+        install_user_hooks_once();
+        // The base is a written glenda; the stub user is the mutated
+        // norbert (capuse's to-field — the exploit chain's writer).
+        set_stub_user(b"norbert");
+        {
+            let node = crate::mcslock::LockNode::new();
+            let mut stored = super::HOSTOWNER.lock(&node);
+            stored.clear();
+            stored.extend_from_slice(b"glenda");
+        }
+        let err = super::write(&mut hostowner_chan(), b"norbert\n")
+            .expect_err("a non-eve hostowner write must refuse");
+        assert!(
+            err.contains("requires the hostowner"),
+            "the Eperm-class refusal, got {err:?}"
+        );
+        // The store is UNCHANGED — the gate fires before any mutation.
+        {
+            let node = crate::mcslock::LockNode::new();
+            let stored = super::HOSTOWNER.lock(&node);
+            assert_eq!(stored.as_slice(), b"glenda".as_slice(), "the base is untouched");
+        }
+        clear_stub_hostowner();
+        set_stub_user(b"glenda");
+    }
+
+    /// The CR-01 bound pin (18-06): the donor hostownerwrite's Ebadarg
+    /// arm — for an EVE writer an empty write and a 128-byte write each
+    /// refuse, and the boundary at 127 stores (the donor's
+    /// `n <= 0 || n >= sizeof buf` over `char buf[128]`).
+    #[test]
+    fn hostowner_write_length_bound_refused() {
+        let _g = seam_guard();
+        install_user_hooks_once();
+        set_stub_user(b"glenda");
+        {
+            let node = crate::mcslock::LockNode::new();
+            let mut stored = super::HOSTOWNER.lock(&node);
+            stored.clear();
+            stored.extend_from_slice(b"glenda");
+        }
+        for bad in [&b""[..], &[b'x'; 128][..]] {
+            let err = super::write(&mut hostowner_chan(), bad)
+                .expect_err("an out-of-bound hostowner write must refuse");
+            assert!(err.contains("bad arg"), "the Ebadarg-class refusal, got {err:?}");
+        }
+        // The boundary: 127 bytes is the last legal length, and it stores.
+        let long = [b'y'; 127];
+        assert_eq!(
+            super::write(&mut hostowner_chan(), &long).expect("the 127-byte eve write"),
+            127
+        );
+        {
+            let node = crate::mcslock::LockNode::new();
+            let stored = super::HOSTOWNER.lock(&node);
+            assert_eq!(stored.len(), 127, "the boundary write stored");
+            assert!(stored.iter().all(|&b| b == b'y'), "the stored bytes are verbatim");
+        }
+        clear_stub_hostowner();
+        set_stub_user(b"glenda");
+    }
+
+    /// The CR-01 eve-path pin (18-06): the gate never breaks the
+    /// boot-default arm — an eve writer's write stores (replace
+    /// semantics) and returns the byte count.  Documented divergence
+    /// from the donor: hostownerwrite also RENAMES the writer
+    /// (`kstrdup(&up->user, buf)`); no in-tree writer exists, so the
+    /// rename is NOT ported — an eve writing a foreign name makes the
+    /// base foreign, and iseve() flips FALSE for the writer
+    /// (fail-closed; the donor's rename semantics arrive with the first
+    /// real hostowner-write consumer).
+    #[test]
+    fn hostowner_write_stores_for_eve() {
+        let _g = seam_guard();
+        install_user_hooks_once();
+        set_stub_user(b"glenda");
+        clear_stub_hostowner(); // the empty static defaults the base to glenda -> eve
+        assert_eq!(
+            super::write(&mut hostowner_chan(), b"bootes\n").expect("the eve write"),
+            7
+        );
+        {
+            let node = crate::mcslock::LockNode::new();
+            let stored = super::HOSTOWNER.lock(&node);
+            assert_eq!(stored.as_slice(), b"bootes\n".as_slice(), "replace-store semantics");
+        }
+        assert!(
+            !super::iseve().expect("iseve"),
+            "glenda is no longer eve after writing bootes — fail-closed (no donor rename this era)"
+        );
+        clear_stub_hostowner();
         set_stub_user(b"glenda");
     }
 

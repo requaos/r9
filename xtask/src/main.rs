@@ -919,6 +919,15 @@ const CAP_USE_MARKER: &str = "cap: USE-OK";
 const CAP_ONESHOT_MARKER: &str = "cap: ONESHOT-REJECT";
 const CAP_HOSTOWNER_MARKER: &str = "cap: HOSTOWNER-GATE";
 
+/// The hostowner-write REFUSAL marker (18-06, AUTH-03/CR-01): after the
+/// HOSTOWNER-GATE leg the mutated (non-eve) user writes its own name to
+/// #c/hostowner — the eve-base rewrite the old ungated write arm
+/// accepted (the CR-01 bypass: re-gain eve, reopen #¤/caphash).  The
+/// donor hostownerwrite's iseve gate now REFUSES the write (Eperm
+/// class); the refusal is the marker, a successful write is the
+/// substrate fail-fast family (the bypass itself).
+const CAP_HOSTOWNER_REFUSED_MARKER: &str = "cap: HOSTOWNER-REFUSED";
+
 /// The q35exec staged-exec markers (14-05, XEXEC-02's leg-1 gate):
 /// after the Phase-13 discovery stages, the kernel's module/paqfs notes
 /// (the mb2 tag-3 module found + the paqfs root mounted through
@@ -2768,8 +2777,9 @@ impl BootTestStep {
                 }
                 // The driver's evidence, whole-capture: READS-OK + DONE
                 // (the stage loop anchored them past the exec entry), the
-                // four devcap markers (18-02: post/consume/one-shot/
-                // hostowner over the fixture pair), and zero FAIL lines
+                // five cap markers (18-02: post/consume/one-shot/hostowner
+                // over the fixture pair; 18-06: the CR-01 hostowner-write
+                // refusal), and zero FAIL lines
                 // anywhere (the fast-fail already aborted on the first;
                 // belt-and-braces).
                 for marker in [
@@ -2779,6 +2789,7 @@ impl BootTestStep {
                     CAP_USE_MARKER,
                     CAP_ONESHOT_MARKER,
                     CAP_HOSTOWNER_MARKER,
+                    CAP_HOSTOWNER_REFUSED_MARKER,
                 ] {
                     if !contains_marker(capture, marker.as_bytes()) {
                         return Err(self
@@ -2798,9 +2809,10 @@ impl BootTestStep {
                      the armed source {expect:?} (venue {effective_accel:?}), then the staged \
                      driver's OWN ring-3 prints (two 64-byte /dev/random reads, full-length and \
                      pairwise distinct -> READS-OK; the #¤ fixture legs: post, consume with the \
-                     /dev/user readback, one-shot reject, hostowner gate -> the four cap markers; \
-                     DONE via WRITE syscalls) — AUTH-02's substrate re-key + AUTH-03's devcap \
-                     live (D-05/D-06/D-07)"
+                     /dev/user readback, one-shot reject, hostowner gate, hostowner write \
+                     refused -> the five cap markers; DONE via WRITE syscalls) — AUTH-02's \
+                     substrate re-key + AUTH-03's devcap live with CR-01's eve-base gate closed \
+                     (D-05/D-06/D-07, 18-06)"
                 );
             }
             BootProfile::X64Exec => {
