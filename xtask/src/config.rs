@@ -309,6 +309,19 @@ pub struct Dist {
     /// staged loader config stays byte-identical to Phase 13's, so the
     /// wired boot-iso FOD hash holds).
     pub module: Option<String>,
+
+    /// The kernel cmdline append (19-01, CPU-02): substituted for the
+    /// template's `@R9-APPEND@` token on the multiboot2 line — GRUB
+    /// delivers it as the mb2 tag-1 string, which the kernel parses
+    /// into the ROOT env seed's bootconf pairs (the donor plan9.ini
+    /// shape — the `service=cpu` delivery seam, image-scoped per ISO;
+    /// 19-09's --system flag later rides it).  Absent/empty = the token
+    /// strips and the emission stays byte-identical to the no-append
+    /// shape; a configured value is validated at compose time (content,
+    /// the kernel's 256-byte cmdline cap, printable bytes only) — a
+    /// bootconf the boot would silently ignore or loudly reject never
+    /// reaches an ISO.
+    pub append: Option<String>,
 }
 
 /// the TOML document

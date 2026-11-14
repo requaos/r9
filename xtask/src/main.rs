@@ -965,6 +965,17 @@ const Q35_CHAIN_INIT_MARKER: &str = "init: starting /bin/rc";
 // BOOT_PAQFS_MARKER ("paqfs...") and NET_PROMPT_MARKER ("% ") carry
 // over from the aarch64 Net gate — the same literals on the same wire.
 
+/// The q35cpu bootconf-tracer markers (19-01, CPU-02): the kernel's
+/// cmdline-merge print (`devenv: bootconf` — main's exec prologue
+/// naming the cmdline-sourced env pairs) and the staged cpurc
+/// fixture's own marker (`cpurc: RAN` — the §15 cpu image's flat echo
+/// at /rc/bin/cpurc, run by init -c's cpustart).  The negative space:
+/// `init: starting /bin/rc` (the terminal arm's loop print, and the
+/// Pitfall-5 failure-loop symptom when a cpu boot's rc child dies and
+/// init re-spawns it) must be ABSENT — the cpu path never prints it.
+const Q35_BOOTCONF_MARKER: &str = "devenv: bootconf";
+const Q35_CPURC_MARKER: &str = "cpurc: RAN";
+
 /// Panic-profile markers: a config with dev = ["panic"] boots
 /// virt to a deliberate brk #0 sync exception BEFORE trap::unmask_irq(), so
 /// the log is deterministic (zero IRQ interleaving) -- banner, start marker,
@@ -1396,6 +1407,13 @@ enum BootStage {
     /// stays running; the interactive expect sweep is 14-07's
     /// Harvey-side gate).
     Q35ChainPrompt,
+    /// The q35cpu cpurc stage (19-01): boot(8)'s prints observed, now
+    /// await the cpurc fixture's OWN marker from ring 3 — `cpurc: RAN`,
+    /// the init -c path's terminal evidence (the bootconf seed line
+    /// printed far earlier, whole-capture-asserted at finish; an
+    /// `init: starting /bin/rc` line here is the failure-loop symptom
+    /// and fails the gate).
+    Q35CpuRc,
 }
 
 impl fmt::Display for BootStage {
@@ -1488,6 +1506,9 @@ impl fmt::Display for BootStage {
             BootStage::Q35ChainPrompt => {
                 write!(f, "the interactive rc prompt {NET_PROMPT_MARKER:?}")
             }
+            BootStage::Q35CpuRc => {
+                write!(f, "the cpurc fixture's own marker {Q35_CPURC_MARKER:?} from ring 3")
+            }
         }
     }
 }
@@ -1543,6 +1564,13 @@ enum BootProfile {
     /// zero `churngate: FAIL` — the fast-fail arm already aborts on
     /// the first).
     X64Churn,
+    /// The q35cpu bootconf-tracer gate (19-01, CPU-02): the X64
+    /// discovery + module/paqfs stages, boot(8)'s chain prints, then
+    /// the cpurc fixture's own `cpurc: RAN` from ring 3 — with the
+    /// finish()-time post-pass asserting the kernel's bootconf-merge
+    /// line (`devenv: bootconf`) and ZERO `init: starting /bin/rc`
+    /// lines (the failure-loop symptom; the cpu path never prints it).
+    X64Cpu,
     /// The q35auth substrate gate (18-01, AUTH-02/D-05+D-07): the X64
     /// discovery stages, the module/paqfs notes, the exec-entry note,
     /// then the staged driver's OWN prints from ring 3 (`random:
@@ -1962,6 +1990,17 @@ impl BootTestStep {
         // CHAIN bake (bootfs-chain.paq — the marker bake stays
         // bootfs.paq for q35exec).
         let q35shell_profile = self.arch == Arch::X86_64 && self.config_name == "q35shell";
+        // The Q35CPU profile ("q35cpu", 19-01's CPU-02 tracer) — the
+        // bootconf seam's gate: dev = ["exec", "bootchain"] (the chain
+        // without ether/ip — the tracer needs no net; the NIC stays
+        // present-unbound per the discovery contract), the [dist]
+        // module stages the §15 cpu bake (bootfs-cpu.paq), and the
+        // [dist] append key rides the grub.cfg @R9-APPEND@ token with
+        // `init=/amd64/init -c` — the cmdline the kernel merges into
+        // the ROOT env seed, boot(8)'s execinit consumes, and init -c's
+        // cpustart answers by running /rc/bin/cpurc.  The control leg
+        // is q35shell itself (no append, the terminal path untouched).
+        let q35cpu_profile = self.arch == Arch::X86_64 && self.config_name == "q35cpu";
         // The X64 bind stage's ordered-presence anchor (13-05): the byte
         // offset at the discovery stage's satisfaction — a bind line
         // that rode the wire earlier never counts.
@@ -1969,13 +2008,14 @@ impl BootTestStep {
 
         while Instant::now() < deadline {
             // Always-on negative scan: a panic/Unhandled-interrupt line
-            // fails any profile except the deliberate-panic one.  The net
-            // profile exempts exactly the D-02 designed fauth line (the
+            // fails any profile except the deliberate-panic one.  The
+            // net profile exempts exactly the D-02 designed fauth line (the
             // real Harvey chain prints `syscall 10 unimplemented` twice a
             // boot); every other pattern — and any other unimplemented
             // syscall — still fails the run.  The netip profile rides the
-            // same real boot chain — the same single-line exemption.
-            if !panic_profile && let Some(hit) = negative_scan_hit_for(&capture, net_profile || netip_profile || q35shell_profile) {
+            // same real boot chain — the same single-line exemption, and
+            // so does the q35cpu tracer (the same boot(8) fauth path).
+            if !panic_profile && let Some(hit) = negative_scan_hit_for(&capture, net_profile || netip_profile || q35shell_profile || q35cpu_profile) {
                 return Err(self.fail(stage, &capture, &format!("negative scan hit {hit:?}")));
             }
             // The q35net fail-fast (13-05): the kernel netgate's own
@@ -2157,6 +2197,20 @@ impl BootTestStep {
                             .map(|p| pci_after + p)
                             .unwrap_or(capture.len());
                             stage = BootStage::Q35ModulePaqfs;
+                        } else if q35cpu_profile {
+                            // 19-01: the cpu tracer continues into the
+                            // same module half (dev = ["exec",
+                            // "bootchain"] — no ether bind, the NIC
+                            // present-unbound), then the exec-entry
+                            // note and boot(8)'s chain prints, ending
+                            // at the cpurc marker below.
+                            bind_after = last_marker_line_end(
+                                &capture[pci_after..],
+                                PCI_NET_DEVICE_MARKER,
+                            )
+                            .map(|p| pci_after + p)
+                            .unwrap_or(capture.len());
+                            stage = BootStage::Q35ModulePaqfs;
                         } else {
                             // 13-03: the gate's timer half — the tick
                             // count is anchored strictly past the
@@ -2243,9 +2297,11 @@ impl BootTestStep {
                         // (14-06) awaits boot(8)'s prints instead of the
                         // marker's — pid 1 IS the real boot(8).  The
                         // substrate profile (18-01) awaits the randread
-                        // driver's own prints — pid 1 IS the driver.
+                        // driver's own prints — pid 1 IS the driver.  The
+                        // cpu tracer (19-01) rides the chain profile's
+                        // arm — its pid 1 is the same real boot(8).
                         bind_after = capture.len();
-                        stage = if q35shell_profile {
+                        stage = if q35shell_profile || q35cpu_profile {
                             BootStage::Q35ChainBoot
                         } else if q35auth_profile {
                             BootStage::Q35SubstratePrints
@@ -2284,7 +2340,18 @@ impl BootTestStep {
                         && contains_marker(&capture[bind_after..], Q35_BOOT_VERSION_MARKER.as_bytes())
                     {
                         bind_after = capture.len();
-                        stage = BootStage::Q35ChainInit;
+                        // 19-01: the cpu path SKIPS init's terminal
+                        // rc-handoff marker — init -c runs cpustart
+                        // directly (init.c's `init: starting /bin/rc`
+                        // loop print belongs to the terminal arm only,
+                        // and its presence on a cpu boot IS the
+                        // failure-loop symptom the gate counts at
+                        // finish).  Await the cpurc marker instead.
+                        stage = if q35cpu_profile {
+                            BootStage::Q35CpuRc
+                        } else {
+                            BootStage::Q35ChainInit
+                        };
                     }
                 }
                 BootStage::Q35ChainInit => {
@@ -2304,6 +2371,32 @@ impl BootTestStep {
                     // expect sweep is 14-07's Harvey-side gate).
                     if contains_marker(&capture[bind_after..], NET_PROMPT_MARKER.as_bytes()) {
                         return self.finish(log_abs, &capture, BootProfile::X64Shell);
+                    }
+                }
+                BootStage::Q35CpuRc => {
+                    // 19-01: the cpurc fixture's OWN print from ring 3
+                    // (the §15 image's flat marker echo, run by init
+                    // -c's cpustart through the real exec/rc path).
+                    // The fail-fast arm: an `init: starting /bin/rc`
+                    // line means the terminal loop re-spawned rc — the
+                    // bootconf never reached execinit (or the cpurc
+                    // exec died) and init fell into its 1s loop; the
+                    // missing marker would only surface as a slow
+                    // budget expiry.
+                    if count_marker_lines(&capture, Q35_CHAIN_INIT_MARKER) > 0 {
+                        return Err(self.fail(
+                            stage,
+                            &capture,
+                            &format!(
+                                "cpu gate: the failure-loop symptom {Q35_CHAIN_INIT_MARKER:?} \
+                                 printed — init fell into its terminal re-spawn loop (the \
+                                 bootconf init= pair never reached execinit, or the cpurc \
+                                 exec died)"
+                            ),
+                        ));
+                    }
+                    if contains_marker(&capture[bind_after..], Q35_CPURC_MARKER.as_bytes()) {
+                        return self.finish(log_abs, &capture, BootProfile::X64Cpu);
                     }
                 }
                 BootStage::Ticks => {
@@ -2529,7 +2622,10 @@ impl BootTestStep {
         if profile != BootProfile::Panic
             && let Some(hit) = negative_scan_hit_for(
                 capture,
-                matches!(profile, BootProfile::Net | BootProfile::Netip | BootProfile::X64Shell),
+                matches!(
+                    profile,
+                    BootProfile::Net | BootProfile::Netip | BootProfile::X64Shell | BootProfile::X64Cpu
+                ),
             )
         {
             return Err(self.fail_pretty(capture, &format!("negative scan hit {hit:?}")));
@@ -2855,6 +2951,55 @@ impl BootTestStep {
                      interactive `% ` prompt, observed in order — XEXEC-03 leg 2 (D-08's staged \
                      chain on the proven exec substrate; the composed Harvey-side gate is \
                      14-07's)"
+                );
+            }
+            BootProfile::X64Cpu => {
+                // 19-01's CPU-02 whole-capture post-pass: the ordered
+                // stage chain (banner -> facts -> discovery -> module/
+                // paqfs -> exec entry -> boot(8)'s prints -> cpurc) is
+                // asserted stage-wise; the finish-time scans carry the
+                // seam's own evidence — the bootconf-merge line (the
+                // kernel's `devenv: bootconf` print names the
+                // cmdline-sourced pairs, proving the append reached the
+                // ROOT env seed) and the failure-loop prohibition
+                // (ZERO `init: starting /bin/rc` lines — the terminal
+                // arm's loop print; on a cpu boot it means execinit
+                // never consumed the init= pair and init re-spawned rc
+                // in its 1s loop).
+                if !contains_marker(capture, Q35_BOOTCONF_MARKER.as_bytes()) {
+                    return Err(self.fail_pretty(
+                        capture,
+                        &format!(
+                            "cpu gate: the bootconf-merge line {Q35_BOOTCONF_MARKER:?} absent — \
+                             the cmdline never reached the ROOT env seed (the append seam or \
+                             the mb2 tag-1 parse dropped it)"
+                        ),
+                    ));
+                }
+                let loops = count_marker_lines(capture, Q35_CHAIN_INIT_MARKER);
+                if loops != 0 {
+                    return Err(self.fail_pretty(
+                        capture,
+                        &format!(
+                            "cpu gate: {loops} {Q35_CHAIN_INIT_MARKER:?} line(s) — the \
+                             failure-loop symptom (init ran the terminal re-spawn loop, not \
+                             cpustart)"
+                        ),
+                    ));
+                }
+                if !contains_marker(capture, Q35_CPURC_MARKER.as_bytes()) {
+                    return Err(self
+                        .fail_pretty(capture, &format!("cpu marker {Q35_CPURC_MARKER:?} absent")));
+                }
+                println!(
+                    "boot-test: PASS -- SeaBIOS -> GRUB2 -> mb2 kernel + cpu-module boot with \
+                     the append seam live: banner, memory facts, discovery, the module/paqfs \
+                     notes, the exec-entry note, the bootconf-merge line \
+                     ({Q35_BOOTCONF_MARKER}: the cmdline's key=value pairs in the ROOT env \
+                     seed), boot(8)'s own ring-3 prints, then init -c's cpustart running \
+                     /rc/bin/cpurc — the fixture's own {Q35_CPURC_MARKER} print, with ZERO \
+                     terminal-loop lines — CPU-02's service=cpu architecture proven on the \
+                     kernel layer (19-01)"
                 );
             }
             BootProfile::Multi => {
@@ -3803,7 +3948,18 @@ fn build_x86_64_iso(
     };
     let template = std::fs::read_to_string(workspace().join("x86_64/lib/grub.cfg"))
         .map_err(|e| format!("read grub.cfg template: {e}"))?;
-    std::fs::write(stage.join("boot/grub/grub.cfg"), emit_grub_cfg(&template, module_staged))?;
+    // 19-01 (CPU-02): the append seam — the config's [dist] append key
+    // substitutes for the template's @R9-APPEND@ token on the
+    // multiboot2 line.  Compose-time validation: a configured append
+    // that carries no content, exceeds the kernel's 256-byte cmdline
+    // cap (mb2::MAX_CMDLINE — the boot would reject it loudly at first
+    // boot), or carries control characters (it is one loader line and
+    // one NUL-terminated tag string) is refused HERE, never staged.
+    let append = validate_append(config.dist.as_ref().and_then(|d| d.append.as_deref()))?;
+    if let Some(a) = append {
+        println!("iso: kernel cmdline append {a:?} (mb2 tag 1, the bootconf carrier)");
+    }
+    std::fs::write(stage.join("boot/grub/grub.cfg"), emit_grub_cfg(&template, module_staged, append)?)?;
 
     let iso_rel = format!("target/boot-{config_name}.iso");
     let mut cmd = Command::new("grub-mkrescue");
@@ -3824,34 +3980,101 @@ fn build_x86_64_iso(
     Ok(iso_rel)
 }
 
+/// The kernel cmdline's byte cap — mirrors the kernel-side
+/// `mb2::MAX_CMDLINE` (the bootconf string's loud reject threshold at
+/// parse); compose time refuses EARLIER so a mis-sized append never
+/// reaches an ISO the boot would then refuse at first boot.
+pub const MAX_CMDLINE_APPEND: usize = 256;
+
+/// Compose-time append validation (19-01, CPU-02): a CONFIGURED append
+/// must carry real content, fit the kernel's cmdline cap, and be
+/// printable (one loader line, one NUL-terminated tag string).  An
+/// absent key passes through untouched (the no-append emission stays
+/// byte-identical to the pre-token config).
+fn validate_append(append: Option<&str>) -> std::result::Result<Option<&str>, String> {
+    let Some(a) = append else {
+        return Ok(None);
+    };
+    if a.trim().is_empty() {
+        return Err(format!(
+            "dist append: the configured append {a:?} carries no bootconf content — drop the \
+             key or set a real cmdline line"
+        ));
+    }
+    if a.len() > MAX_CMDLINE_APPEND {
+        return Err(format!(
+            "dist append: {} bytes exceeds the kernel cmdline cap of {MAX_CMDLINE_APPEND} \
+             (mb2::MAX_CMDLINE — the boot would reject it loudly at first boot)",
+            a.len()
+        ));
+    }
+    if a.bytes().any(|b| !(0x20..0x7f).contains(&b)) {
+        return Err(format!(
+            "dist append: {a:?} carries non-printable bytes — the cmdline is one loader line \
+             and one NUL-terminated tag string"
+        ));
+    }
+    Ok(Some(a))
+}
+
 /// Emit the staged loader config from the committed template (14-05,
-/// D-03): `# @R9-MODULE-DOC@` lines are template documentation dropped by
+/// D-03; 19-01 adds the append token): `# @R9-MODULE-DOC@` and
+/// `# @R9-APPEND-DOC@` lines are template documentation dropped by
 /// every emitter; a line carrying the `# @R9-MODULE@ ` marker is the
 /// module2 placeholder — emitted IN (the marker stripped, the line's
 /// indentation and payload kept) when a boot module is staged, dropped
-/// OUT for kernel-only ISOs.  The kernel-only emission is thereby
-/// byte-identical to Phase 13's committed grub.cfg — the property the
-/// wired boot-iso FOD hash rides on (the unit test pins it against the
-/// exact 13-line config).  14-07's flake iso-builder shares the
-/// convention.
-fn emit_grub_cfg(template: &str, module_staged: bool) -> String {
+/// OUT for kernel-only ISOs.  The `@R9-APPEND@` token on the
+/// multiboot2 line substitutes ` <append>` when one is configured and
+/// strips to nothing when none is — the kernel-only AND module-bearing
+/// no-append emissions stay byte-identical to Phase 13's committed
+/// grub.cfg, the property the wired boot-iso FOD hash rides on (the
+/// unit test pins it against the exact 13-line config).  A configured
+/// append against a tokenless template is a LOUD error — the bootconf
+/// would be silently dropped (the seam drifted).  14-07's flake
+/// iso-builder shares the convention.
+fn emit_grub_cfg(template: &str, module_staged: bool, append: Option<&str>) -> std::result::Result<String, String> {
     const MARKER: &str = "# @R9-MODULE@ ";
+    const APPEND_TOKEN: &str = "@R9-APPEND@";
+    const DOC_MARKERS: [&str; 2] = ["# @R9-MODULE-DOC@", "# @R9-APPEND-DOC@"];
+    if append.is_some() && !template.contains(APPEND_TOKEN) {
+        return Err(format!(
+            "grub.cfg template lacks the {APPEND_TOKEN} token — a configured append would be \
+             silently dropped (the committed template and this emitter drifted; fix the template)"
+        ));
+    }
+    let subst = append.map(|a| format!(" {a}")).unwrap_or_default();
     let mut out = String::new();
     for line in template.lines() {
+        // Doc lines drop WHOLE, before the marker scan: the committed
+        // template's documentation EMBEDS the marker literal in
+        // backticks (`# @R9-MODULE@ `), and a marker-first order
+        // mangled that comment through the module branch — the
+        // module-bearing emission carried a half-stripped doc line
+        // (latent since 14-05, caught by 19-01's module-bearing
+        // byte-stability pin).  The placeholder line itself never
+        // starts with a doc marker (`@R9-MODULE@ ` vs
+        // `@R9-MODULE-DOC@` differ right after MODULE), so the order
+        // is safe.
+        if DOC_MARKERS.iter().any(|m| line.trim_start().starts_with(m)) {
+            continue;
+        }
         if let Some(pos) = line.find(MARKER) {
             if module_staged {
                 out.push_str(&line[..pos]);
                 out.push_str(&line[pos + MARKER.len()..]);
                 out.push('\n');
             }
-        } else if line.trim_start().starts_with("# @R9-MODULE-DOC@") {
-            continue;
+        } else if let Some(pos) = line.find(APPEND_TOKEN) {
+            out.push_str(&line[..pos]);
+            out.push_str(&subst);
+            out.push_str(&line[pos + APPEND_TOKEN.len()..]);
+            out.push('\n');
         } else {
             out.push_str(line);
             out.push('\n');
         }
     }
-    out
+    Ok(out)
 }
 
 /// Resolve a [dist] module path: a `harvey:`-prefixed value names a file
@@ -3928,10 +4151,10 @@ fn annotated_status(cmd: &mut Command) -> Result<process::ExitStatus> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BOOT_ECHO_PROBE, BOOT_Q35_MEMORY_MARKER, BOOT_TICK_MARKER, BOOT_TICK_MIN, check_mb2_header,
-        contains_marker, count_marker_lines, count_register_lines, emit_grub_cfg,
-        last_marker_line_end, marker_position, negative_scan_hit_for, PCI_NET_DEVICE_MARKER,
-        Q35_MCFG_MARKER, Q35_PCIEXBAR_MARKER,
+        check_mb2_header, contains_marker, count_marker_lines, count_register_lines,
+        emit_grub_cfg, last_marker_line_end, marker_position, negative_scan_hit_for,
+        validate_append, BOOT_ECHO_PROBE, BOOT_Q35_MEMORY_MARKER, BOOT_TICK_MARKER, BOOT_TICK_MIN,
+        MAX_CMDLINE_APPEND, PCI_NET_DEVICE_MARKER, Q35_MCFG_MARKER, Q35_PCIEXBAR_MARKER,
     };
 
     /// Build a synthetic image around one mb2 header (the fixture shape
@@ -4030,15 +4253,17 @@ mod tests {
     /// template is byte-identical to Phase 13's staged loader config —
     /// the property the wired boot-iso FOD hash rides on.  Reads the
     /// real committed file (never a synthetic copy): any template edit
-    /// that leaks a `# @R9-MODULE*` line into a kernel-only ISO fails
-    /// HERE, before any boot.
+    /// that leaks a `# @R9-MODULE*`/`# @R9-APPEND*` line or a stray
+    /// @R9-APPEND@ token into a kernel-only ISO fails HERE, before any
+    /// boot.  19-01: both no-append shapes (kernel-only AND
+    /// module-bearing) pin the empty-append byte-stability.
     #[test]
     fn grub_cfg_kernel_only_emission_is_phase13_identical() {
         let template = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../x86_64/lib/grub.cfg"),
         )
         .expect("committed grub.cfg template readable");
-        let emitted = emit_grub_cfg(&template, false);
+        let emitted = emit_grub_cfg(&template, false, None).expect("emission");
         // Phase 13's exact staged config (13 lines + trailing newline).
         let phase13 = concat!(
             "# x86_64/lib/grub.cfg — the D-02 boot chain's loader config (13-01).\n",
@@ -4056,6 +4281,79 @@ mod tests {
             "}\n",
         );
         assert_eq!(emitted, phase13);
+        // The module-bearing no-append emission over the SAME committed
+        // template: identical to the kernel-only one except the module2
+        // line IN — the current staged-config shape, byte-stable under
+        // the append seam (19-01's pin).
+        let module_emitted =
+            emit_grub_cfg(&template, true, None).expect("module emission");
+        let phase13_module = phase13.replace(
+            "    multiboot2 /boot/kernel\n",
+            "    multiboot2 /boot/kernel\n    module2 /boot/bootfs.paq\n",
+        );
+        assert_eq!(module_emitted, phase13_module);
+    }
+
+    /// 19-01 (CPU-02): the append seam — a configured append substitutes
+    /// ` <cmdline>` for the @R9-APPEND@ token on the multiboot2 line
+    /// (module-bearing and kernel-only alike), and a configured append
+    /// against a tokenless template is a LOUD error (the bootconf would
+    /// be silently dropped).
+    #[test]
+    fn grub_cfg_append_substitutes_on_the_multiboot_line() {
+        let template = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../x86_64/lib/grub.cfg"),
+        )
+        .expect("committed grub.cfg template readable");
+        // The cpu image's bootconf line, module-bearing (the q35cpu
+        // shape): the multiboot2 line carries the append; the doc lines
+        // and the token are gone.
+        let emitted = emit_grub_cfg(&template, true, Some("init=/amd64/init -c"))
+            .expect("append emission");
+        assert!(
+            emitted
+                .lines()
+                .any(|l| l == "    multiboot2 /boot/kernel init=/amd64/init -c"),
+            "the multiboot2 line must carry the append verbatim:\n{emitted}"
+        );
+        assert!(emitted.lines().any(|l| l == "    module2 /boot/bootfs.paq"));
+        assert!(!emitted.contains("@R9-APPEND"));
+        // Kernel-only with an append: same substitution, no module line.
+        let emitted = emit_grub_cfg(&template, false, Some("a=1")).expect("emission");
+        assert!(emitted.lines().any(|l| l == "    multiboot2 /boot/kernel a=1"));
+        assert!(!emitted.contains("module2"));
+
+        // The loud drift class: a configured append on a template that
+        // lost its token refuses — never a silent drop.
+        let tokenless = concat!(
+            "menuentry \"r9\" {\n",
+            "    multiboot2 /boot/kernel\n",
+            "    boot\n",
+            "}\n",
+        );
+        assert!(emit_grub_cfg(tokenless, false, Some("a=1")).is_err());
+        // The same template without an append still emits (the token
+        // simply is not there to strip).
+        assert_eq!(emit_grub_cfg(tokenless, false, None).unwrap(), tokenless);
+    }
+
+    /// 19-01: compose-time append validation — the kernel rejects
+    /// overlong bootconfs loudly at first boot; the emitter refuses
+    /// EARLIER.  Whitespace-only and control-character appends never
+    /// reach an ISO (one loader line, one NUL-terminated tag string).
+    #[test]
+    fn append_validation_is_loud_at_compose_time() {
+        assert_eq!(validate_append(None), Ok(None));
+        assert_eq!(validate_append(Some("init=/amd64/init -c")), Ok(Some("init=/amd64/init -c")));
+        assert!(validate_append(Some("   ")).is_err());
+        assert!(validate_append(Some("\t")).is_err());
+        let over = "k=".to_string() + &"a".repeat(MAX_CMDLINE_APPEND);
+        assert!(validate_append(Some(&over)).is_err());
+        // Exactly at the cap passes (256 is the boundary, not over it).
+        let at_cap = "k=".to_string() + &"a".repeat(MAX_CMDLINE_APPEND - 2);
+        assert_eq!(validate_append(Some(&at_cap)), Ok(Some(at_cap.as_str())));
+        assert!(validate_append(Some("a=1\nb=2")).is_err());
+        assert!(validate_append(Some("a=1\tb=2")).is_err());
     }
 
     /// 14-05 (D-03): the module-bearing emission carries the module2
@@ -4073,7 +4371,7 @@ mod tests {
             "    boot\n",
             "}\n",
         );
-        let emitted = emit_grub_cfg(&template, true);
+        let emitted = emit_grub_cfg(&template, true, None).expect("emission");
         assert_eq!(
             emitted,
             concat!(
@@ -4089,7 +4387,7 @@ mod tests {
         // Kernel-only over the same synthetic template: the placeholder
         // and the doc line both drop, everything else keeps.
         assert_eq!(
-            emit_grub_cfg(&template, false),
+            emit_grub_cfg(&template, false, None).unwrap(),
             concat!(
                 "# head comment\n",
                 "serial --unit=0 --speed=115200\n",

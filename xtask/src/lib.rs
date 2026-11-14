@@ -134,13 +134,16 @@ mod tests {
     /// gate.)  This is the data-layer machine check of the must-haves
     /// truth: a broken or half-migrated stanza surfaces here at test
     /// time, never at boot time.  18-01 joins q35auth; 17-02's
-    /// q35churnshell joins the family it already carried.
+    /// q35churnshell joins the family it already carried; 19-01 joins
+    /// q35cpu (the cpu tracer's carried stanza — the discovery
+    /// contract's present-unbound NIC, pcap off).
     #[test]
     fn netdev_all_q35_tomls_carry_the_mode_tables() {
         let configs = [
             ("config_q35", include_str!("../../x86_64/lib/config_q35.toml")),
             ("config_q35auth", include_str!("../../x86_64/lib/config_q35auth.toml")),
             ("config_q35churnshell", include_str!("../../x86_64/lib/config_q35churnshell.toml")),
+            ("config_q35cpu", include_str!("../../x86_64/lib/config_q35cpu.toml")),
             ("config_q35exec", include_str!("../../x86_64/lib/config_q35exec.toml")),
             ("config_q35lowmcfg", include_str!("../../x86_64/lib/config_q35lowmcfg.toml")),
             ("config_q35net", include_str!("../../x86_64/lib/config_q35net.toml")),

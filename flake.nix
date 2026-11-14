@@ -58,9 +58,15 @@
           # staged module (the xtask emit_grub_cfg convention).
           grubCfg = pkgs.writeText "r9-grub.cfg" (builtins.readFile ./x86_64/lib/grub.cfg);
           # The argv-driven builder:
-          #   r9-iso-builder KERNEL-ELF OUTDIR [MODULE-PATH MODULE-NAME ...]
+          #   r9-iso-builder KERNEL-ELF OUTDIR [--append=CMDLINE] [MODULE-PATH MODULE-NAME ...]
           # stages the pinned-date xorriso pipeline (grub-mkrescue) and
-          # writes OUTDIR/boot.iso.  Modules stage VERBATIM at
+          # writes OUTDIR/boot.iso.  --append=CMDLINE substitutes for
+          # the template's @R9-APPEND@ token on the multiboot2 line
+          # (19-01, CPU-02: the mb2 tag-1 kernel cmdline the kernel
+          # parses into the ROOT env seed's bootconf pairs; absent =
+          # the token strips and the emission stays byte-identical to
+          # the no-append shape — the wired FOD hash rides on those
+          # bytes).  Modules stage VERBATIM at
           # /boot/<MODULE-NAME> — a bootfs.paq is a paqfs archive, never
           # stripped (the kernel stage is strip-ALL, not the xtask dev
           # copy's strip-debug: rustc's per-invocation-random
@@ -85,9 +91,13 @@
               # One implementation behind three doors: r9's kernel-only
               # FOD, r9.lib.bootIso derivations, and Harvey's compose app.
               usage() {
-                echo "usage: r9-iso-builder KERNEL-ELF OUTDIR [MODULE-PATH MODULE-NAME ...]" >&2
+                echo "usage: r9-iso-builder KERNEL-ELF OUTDIR [--append=CMDLINE] [MODULE-PATH MODULE-NAME ...]" >&2
                 echo "  KERNEL-ELF  the r9 x86_64 kernel ELF (strip-ALL staged at /boot/kernel)" >&2
                 echo "  OUTDIR      receives boot.iso" >&2
+                echo "  --append=CMDLINE  substitute CMDLINE for the template's @R9-APPEND@" >&2
+                echo "               token on the multiboot2 line (the mb2 tag-1 kernel cmdline;" >&2
+                echo "               absent = token stripped, the no-append emission stays" >&2
+                echo "               byte-identical)" >&2
                 echo "  MODULE pairs  stage each module verbatim at /boot/<NAME> and emit" >&2
                 echo "               its grub.cfg module2 line (zero modules = kernel-only" >&2
                 echo "               ISO, the Phase-13-identical loader config)" >&2
@@ -99,11 +109,33 @@
               KERNEL=$1; OUTDIR=$2; shift 2
               [ -f "$KERNEL" ] || err "kernel $KERNEL not found"
               modpaths=(); modnames=()
+              append=""
               while [ "$#" -gt 0 ]; do
-                [ "$#" -ge 2 ] || usage
-                [ -f "$1" ] || err "module $1 not found"
-                modpaths+=("$1"); modnames+=("$2"); shift 2
+                case "$1" in
+                  --append=*)
+                    append="''${1#--append=}"
+                    [ -n "$append" ] || err "--append= requires a non-empty cmdline"
+                    shift ;;
+                  *)
+                    [ "$#" -ge 2 ] || usage
+                    [ -f "$1" ] || err "module $1 not found"
+                    modpaths+=("$1"); modnames+=("$2"); shift 2 ;;
+                esac
               done
+              # Compose-time append validation (19-01, the seam's teeth):
+              # the kernel rejects an overlong bootconf LOUDLY at first
+              # boot — the builder refuses EARLIER, never staging an ISO
+              # the boot would refuse.  Non-printable bytes would corrupt
+              # the loader line or the NUL-terminated tag string.
+              _alen=$(printf '%s' "$append" | wc -c | tr -d ' ')
+              [ "$_alen" -le 256 ] \
+                || err "--append= is $_alen bytes; the kernel cmdline cap is 256 (mb2 MAX_CMDLINE)"
+              if [ -n "$append" ] && [ -z "$(printf '%s' "$append" | tr -d '[:space:]')" ]; then
+                err "--append= carries no bootconf content (whitespace only)"
+              fi
+              case "$append" in
+                *[![:print:]]*) err "--append= carries non-printable bytes" ;;
+              esac
               mkdir -p "$OUTDIR"
 
               # Reproducibility pins (13-06, measured on grub 2.14 +
@@ -184,20 +216,36 @@ WRAP
               done
 
               # The loader config, emitted from the committed template
-              # (14-05 D-03).  Kernel-only: the same sed rule the 13-06
-              # FOD ran — the staged bytes stay byte-identical to Phase
-              # 13's 13-line config (the awk emitter was cmp-proven
-              # against this sed output on the committed template during
-              # 14-07's re-proof).  Module-bearing: the placeholder line
-              # expands IN PLACE to one module2 line per staged module —
-              # indentation kept, payload re-keyed to the staged name,
-              # every @R9-MODULE-DOC@ documentation line dropped (the
-              # xtask emit_grub_cfg convention).
-              if [ "''${#modnames[@]}" -eq 0 ]; then
+              # (14-05 D-03; 19-01 adds the append token).  Kernel-only
+              # AND append-less: the same sed rule the 13-06 FOD ran,
+              # extended only to drop the @R9-APPEND-DOC@ documentation
+              # lines and strip the @R9-APPEND@ token — the staged bytes
+              # stay byte-identical to Phase 13's 13-line config (the
+              # awk emitter was cmp-proven against this sed output on
+              # the committed template during 14-07's re-proof).
+              # Module-bearing and/or appended: the awk emitter — the
+              # placeholder line expands IN PLACE to one module2 line
+              # per staged module (indentation kept, payload re-keyed to
+              # the staged name), the append token substitutes through
+              # index/substr with the replacement in ENVIRON (raw bytes:
+              # no escape reprocessing, no regex & semantics), and every
+              # @R9-MODULE-DOC@/@R9-APPEND-DOC@ documentation line drops
+              # (the xtask emit_grub_cfg convention).
+              if [ "''${#modnames[@]}" -eq 0 ] && [ -z "$append" ]; then
                 sed -e '/^# @R9-MODULE-DOC@/d' -e '/^[[:space:]]*# @R9-MODULE@ /d' \
+                    -e '/^# @R9-APPEND-DOC@/d' -e 's/@R9-APPEND@//' \
                   "${grubCfg}" > "$stage/boot/grub/grub.cfg"
               else
-                printf '%s\n' "''${modnames[@]}" | awk '
+                if [ -n "$append" ]; then
+                  export R9_APPEND_SUBST=" $append"
+                else
+                  export R9_APPEND_SUBST=""
+                fi
+                {
+                  if [ "''${#modnames[@]}" -gt 0 ]; then
+                    printf '%s\n' "''${modnames[@]}"
+                  fi
+                } | awk '
                   NR == FNR { names[++n] = $1; next }
                   /^[[:space:]]*# @R9-MODULE@ / {
                     match($0, /^[[:space:]]*/); indent = substr($0, 1, RLENGTH)
@@ -205,13 +253,21 @@ WRAP
                     next
                   }
                   /^# @R9-MODULE-DOC@/ { next }
-                  { print }
+                  /^# @R9-APPEND-DOC@/ { next }
+                  {
+                    line = $0
+                    tok = "@R9-APPEND@"
+                    i = index(line, tok)
+                    if (i > 0)
+                      line = substr(line, 1, i-1) ENVIRON["R9_APPEND_SUBST"] substr(line, i+length(tok))
+                    print line
+                  }
                 ' - "${grubCfg}" > "$stage/boot/grub/grub.cfg"
               fi
 
               grub-mkrescue -d "$moddir" -o "$WORK/boot.iso" "$stage" --xorriso "$xorrisoPinned"
               cp "$WORK/boot.iso" "$OUTDIR/boot.iso"
-              echo "r9-iso-builder: $OUTDIR/boot.iso $(sha256sum "$OUTDIR/boot.iso" | cut -d" " -f1) (modules: ''${modnames[*]:-none})"
+              echo "r9-iso-builder: $OUTDIR/boot.iso $(sha256sum "$OUTDIR/boot.iso" | cut -d" " -f1) (modules: ''${modnames[*]:-none}''${append:+ append=$append})"
             '';
           };
         in
