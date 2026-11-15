@@ -71,8 +71,25 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     - name: Provision the boot chain (grub-mkrescue, xorriso, qemu)
-      run: sudo apt-get update && sudo apt-get install -y grub-pc-bin xorriso qemu-system-x86
+      run: sudo apt-get update && sudo apt-get install -y grub-pc-bin xorriso mtools qemu-system-x86
+    # 19-05: boot-test's ureg-check gate reads
+    # $R9_HARVEY_DIR/amd64/include/ureg.h (the cross-repo Ureg-table
+    # pin, 14-01 D-02b) BEFORE any boot — without a Harvey checkout
+    # every invocation aborts at that precondition, which is why this
+    # job had never been green (13-06..19-04: 35 consecutive red runs,
+    # each dying ~30s into the step).  The header is 2008-stable in
+    # the Harvey tree, so the default-branch checkout satisfies the
+    # pin.  mtools is insurance for the hybrid-ISO case: if the runner
+    # image carries grub-efi modules, grub-mkrescue builds an ESP via
+    # mformat and dies without it.
+    - name: Check out the Harvey tree (R9_HARVEY_DIR — the ureg-check gate)
+      uses: actions/checkout@v3
+      with:
+        repository: requaos/harvey
+        path: harvey
     - name: Boot-test the three q35 profiles (explicit TCG — hosted runners are KVM-less)
+      env:
+        R9_HARVEY_DIR: ${{ github.workspace }}/harvey
       run: |
         cargo xtask boot-test --arch x86-64 --config q35 --accel tcg --cpu qemu64 --verbose
         cargo xtask boot-test --arch x86-64 --config q35lowmcfg --accel tcg --cpu qemu64 --verbose
