@@ -246,6 +246,14 @@ pub trait MntIo {
     fn write_msg(&mut self, buf: &[u8]) -> Result<u64>;
     /// Read available bytes (blocks on empty); 0 = EOF (the peer hung up).
     fn read_some(&mut self, buf: &mut [u8]) -> Result<u64>;
+    /// Release the transport's kernel reference (the session-teardown
+    /// half, the donor mntdec's cclose of m->c): the SESSION's Drop
+    /// calls this so a dying session's connection chans dispatch their
+    /// close (a bare Box drop would leak the open counts — the ssl conv
+    /// would never hang its TCP wire up, and the peer's exportfs would
+    /// never see the session end).  Default no-op (the host fakes own
+    /// nothing).
+    fn close_chan(&mut self) {}
 }
 
 /// The kernel transport: a 9P-capable chan — a pipe end (the /srv and
@@ -272,6 +280,9 @@ impl MntIo for ChanIo {
             DEV_SSL => crate::devssl::read(&mut self.chan, buf, u64::MAX),
             _ => Err("devmnt: fd is not a 9P-capable connection"),
         }
+    }
+    fn close_chan(&mut self) {
+        crate::namec::close_chan(&self.chan);
     }
 }
 
@@ -350,6 +361,28 @@ pub struct Mnt {
 impl core::fmt::Debug for Mnt {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("Mnt(9p session)")
+    }
+}
+
+impl Drop for Mnt {
+    /// The donor's session teardown (mntdec → mntdestroy's cclose of
+    /// the connection chan): when the LAST chan of the mounted tree
+    /// goes — the service tree exits, the pgrp dies, the mount-table
+    /// entry's chan value drops the session Arc — the session's io
+    /// halves dispatch their close.  Without this the ssl conv's refc
+    /// never reaches zero, its TCP wire never hangs up, and the peer's
+    /// exportfs session never ends (the -G session-exit stage's
+    /// measured stall: the whole service tree had exited and the
+    /// connection still lived).  The BusyCells cannot be held at drop
+    /// time: any in-flight rpc holds the session Arc through its
+    /// caller's chan, so refcount 0 proves no reader or writer exists.
+    fn drop(&mut self) {
+        if let Some(mut g) = self.io_r.enter() {
+            g.0.close_chan();
+        }
+        if let Some(mut g) = self.io_w.enter() {
+            g.0.close_chan();
+        }
     }
 }
 
