@@ -115,10 +115,12 @@ type Handler = fn(&mut Ureg, &mut Proc) -> u64;
 /// the process family EXEC/RFORK/AWAIT/EXITS/NOTIFY/NOTED, the
 /// connectembed family DUP/PIPE/CREATE/FD2PATH, the memory pair
 /// BRK_/SEMACQUIRE/SEMRELEASE, the timer pair ALARM/SLEEP, plus
-/// SEEK/ERRSTR/RENDEZVOUS/NSEC.  REMOVE/WSTAT/FWSTAT/OSEEK/FAUTH stay
-/// loud-None (the measured evidence ratified the loud gap, not a
-/// silent one).  The kernel's syscall attack surface is exactly the
-/// measured set.
+/// SEEK/ERRSTR/RENDEZVOUS/NSEC.  19-03 (CPU-03) arms the
+/// REMOVE/WSTAT/FWSTAT five (REMOVE=25, _WSTAT=26, _FWSTAT=27,
+/// WSTAT=44, FWSTAT=45 — exportfs's Xremove/dirwstat/dirfwstat
+/// consumers); OSEEK/FAUTH stay loud-None (the measured evidence
+/// ratified the loud gap, not a silent one).  The kernel's syscall
+/// attack surface is exactly the measured set.
 static DISPATCH: [Option<Handler>; 55] = {
     let mut t: [Option<Handler>; 55] = [None; 55];
     t[BIND as usize] = Some(sys_bind);
@@ -134,6 +136,11 @@ static DISPATCH: [Option<Handler>; 55] = {
     t[PIPE as usize] = Some(sys_pipe);
     t[CREATE as usize] = Some(sys_create);
     t[FD2PATH as usize] = Some(sys_fd2path);
+    t[REMOVE as usize] = Some(sys_remove);
+    t[WSTAT_ as usize] = Some(sys_wstat);
+    t[FWSTAT_ as usize] = Some(sys_fwstat);
+    t[WSTAT as usize] = Some(sys_wstat);
+    t[FWSTAT as usize] = Some(sys_fwstat);
     t[NOTIFY as usize] = Some(sys_notify);
     t[NOTED as usize] = Some(sys_noted);
     t[RENDEZVOUS as usize] = Some(sys_rendezvous);
@@ -819,8 +826,6 @@ fn sys_fstat(frame: &mut Ureg, proc: &mut Proc) -> u64 {
     }
 }
 
-// 19-03 RED: table-unreferenced until the GREEN arms DISPATCH (removed there)
-#[allow(dead_code)]
 /// The donor's validstat core (statcheck, libc 9sys/convM2D.c — the
 /// kernel-side validstat calls it before any device wstat): the buffer
 /// must be a WHOLE stat(5) record — n == BIT16SZ + size, n >=
@@ -831,27 +836,41 @@ fn sys_fstat(frame: &mut Ureg, proc: &mut Proc) -> u64 {
 /// T-19-06: a ring-3-supplied buffer never reaches a device arm
 /// unvalidated.)
 fn valid_stat_wire(stat: &[u8]) -> Result<(), &'static str> {
-    // 19-03 stub (pre-change: no validation exists): accepts every
-    // buffer; the pins' reject arms fail against this shape.
-    let _ = stat;
+    // convM2D.c's statcheck, verbatim re-keyed: GBIT16 is LE (stat(5)
+    // is little-endian), the strings walk starts at STATFIXLEN -
+    // 4*BIT16SZ (the first string count), and the walk must consume
+    // exactly the whole buffer.
+    const BIT16SZ: usize = 2;
+    const STATFIXLEN: usize = 49; // BIT16SZ+QIDSZ+5*BIT16SZ+4*BIT32SZ+BIT64SZ
+    let gbit16 = |b: &[u8], off: usize| u16::from_le_bytes([b[off], b[off + 1]]) as usize;
+    if stat.len() < STATFIXLEN || stat.len() != BIT16SZ + gbit16(stat, 0) {
+        return Err("malformed stat buffer");
+    }
+    let mut p = STATFIXLEN - 4 * BIT16SZ;
+    for _ in 0..4 {
+        if p + BIT16SZ > stat.len() {
+            return Err("malformed stat buffer");
+        }
+        p += BIT16SZ + gbit16(stat, p);
+    }
+    if p != stat.len() {
+        return Err("malformed stat buffer");
+    }
     Ok(())
 }
 
-// 19-03 RED: table-unreferenced until the GREEN arms DISPATCH (removed there)
-#[allow(dead_code)]
 /// The per-device remove routing (the donor's dev->remove dispatch at
 /// sysremove's c->dev->remove(c), sysfile.c:1360): the ported arms
 /// run, every device without one refuses LOUDLY naming the gap —
 /// never a silent 0.  devcap's caphash remove (18-02's ported arm) is
 /// the first consumer.
 fn remove_chan(c: &Chan) -> Result<u64, &'static str> {
-    // 19-03 stub (pre-change: no routing): everything refuses.
-    let _ = c;
-    Err("remove: device does not implement remove")
+    match c.dev {
+        DEV_CAP => port::devcap::remove(c).map(|_| 0),
+        _ => Err("remove: device does not implement remove"),
+    }
 }
 
-// 19-03 RED: table-unreferenced until the GREEN arms DISPATCH (removed there)
-#[allow(dead_code)]
 /// The per-device wstat routing (the donor's dev->wstat dispatch at
 /// wstat()'s c->dev->wstat(c, p, n), sysfile.c:1390).  NO device ports
 /// a wstat arm this era — the 15-06 measured set has rio with no
@@ -862,8 +881,6 @@ fn wstat_chan(_c: &Chan, _stat: &[u8]) -> Result<u64, &'static str> {
     Err("wstat: device does not implement wstat")
 }
 
-// 19-03 RED: table-unreferenced until the GREEN arms DISPATCH (removed there)
-#[allow(dead_code)]
 /// REMOVE(25): path.  Donor sysremove (sysfile.c:1333-1366): namec
 /// walks the path (NO open — the walk only, the donor's Aremove), the
 /// device's remove arm runs, return 0.  The donor's mount-point guard
@@ -894,8 +911,6 @@ fn sys_remove(frame: &mut Ureg, proc: &mut Proc) -> u64 {
     }
 }
 
-// 19-03 RED: table-unreferenced until the GREEN arms DISPATCH (removed there)
-#[allow(dead_code)]
 /// WSTAT(44) and _WSTAT(26): name, edir, nedir — donor syswstat
 /// (sysfile.c:1399-1423): validate the user Stat buffer FIRST
 /// (validaddr + validstat), then namec the name (the donor's Aaccess —
@@ -926,8 +941,6 @@ fn sys_wstat(frame: &mut Ureg, proc: &mut Proc) -> u64 {
     }
 }
 
-// 19-03 RED: table-unreferenced until the GREEN arms DISPATCH (removed there)
-#[allow(dead_code)]
 /// FWSTAT(45) and _FWSTAT(27): fd, edir, nedir — donor sysfwstat
 /// (sysfile.c:1425-1448): validate the buffer first, then the fd's
 /// chan through the same device wstat routing.
@@ -952,8 +965,6 @@ fn sys_fwstat(frame: &mut Ureg, proc: &mut Proc) -> u64 {
     }
 }
 
-// 19-03 RED: table-unreferenced until the GREEN arms DISPATCH (removed there)
-#[allow(dead_code)]
 /// The wstat arms' shared staging: copy the path (name form only; the
 /// fd form passes 0) and the Stat buffer into kernel memory, then run
 /// the statcheck port — the donor's validaddr + validstat pair, in the
@@ -2263,11 +2274,13 @@ mod tests {
     #[test]
     fn valid_stat_wire_ports_the_donor_statcheck() {
         assert_eq!(valid_stat_wire(&stat_wire(b"caphash")), Ok(()));
-        // n < STATFIXLEN (49): an empty-strings record is exactly 49 —
-        // one byte short of it is malformed.
-        let forty8 = stat_wire(b"");
-        assert_eq!(forty8.len(), 49);
-        assert_eq!(valid_stat_wire(&forty8[..48]), Err("malformed stat buffer"));
+        // n < STATFIXLEN (49): the all-empty-strings record is exactly
+        // 49 (41 fixed + four zero counts) — one byte short is
+        // malformed.
+        let mut empty49 = alloc::vec![0u8; 49];
+        empty49[0..2].copy_from_slice(&47u16.to_le_bytes());
+        assert_eq!(valid_stat_wire(&empty49), Ok(()));
+        assert_eq!(valid_stat_wire(&empty49[..48]), Err("malformed stat buffer"));
         // n != BIT16SZ + size: the size field lies about the record.
         let mut lying = stat_wire(b"x");
         lying[0] = 0xff;
@@ -2358,12 +2371,13 @@ mod tests {
         let env = port::devenv::attach(b"").expect("devenv attach");
         mock.proc().slash = Some(env.dup());
         mock.proc().dot = Some(env);
-        // The name at +0, the stat buffer at +16.
+        // The name at +0; the stat buffer at +32, clear of the arg
+        // block (SP+0 the return slot, SP+8/16/24 the three args).
         mock.buf[0..3].copy_from_slice(b"#e\0");
         let good = stat_wire(b"x");
-        mock.buf[16..16 + good.len()].copy_from_slice(&good);
+        mock.buf[32..32 + good.len()].copy_from_slice(&good);
         mock.put(8, mock.base());
-        mock.put(16, mock.base() + 16);
+        mock.put(16, mock.base() + 32);
         mock.put(24, good.len() as u64);
         let mut frame = Ureg::zeroed();
         frame.bp = WSTAT;
@@ -2381,7 +2395,7 @@ mod tests {
         let mut bad = stat_wire(b"x");
         bad[0] = 0xee;
         bad[1] = 0x0e;
-        mock.buf[16..16 + bad.len()].copy_from_slice(&bad);
+        mock.buf[32..32 + bad.len()].copy_from_slice(&bad);
         mock.proc().set_errstr("");
         dispatch_proc(frame.bp, &mut frame, mock.proc());
         assert_eq!(frame.ax, -1i64 as u64);
@@ -2405,9 +2419,9 @@ mod tests {
             .fd_install_lowest(env)
             .expect("fd installs") as u64;
         let good = stat_wire(b"x");
-        mock.buf[0..good.len()].copy_from_slice(&good);
+        mock.buf[32..32 + good.len()].copy_from_slice(&good);
         mock.put(8, fd);
-        mock.put(16, mock.base());
+        mock.put(16, mock.base() + 32);
         mock.put(24, good.len() as u64);
         let mut frame = Ureg::zeroed();
         frame.bp = FWSTAT;
