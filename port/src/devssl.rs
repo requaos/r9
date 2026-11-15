@@ -62,10 +62,11 @@
 
 extern crate alloc;
 
+use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use crate::dat::{Chan, Qid, DEV_SSL, OREAD, QTDIR, QTFILE};
+use crate::dat::{Chan, Qid, DEV_SSL, OREAD, ORDWR, OWRITE, QTDIR, QTFILE};
 use crate::mcslock::{Lock, LockNode};
 use crate::{devcons, rc4, Result};
 
@@ -225,11 +226,12 @@ static DSSTATE: Lock<SslState> = Lock::new(
 /// CALLING proc's fd N as an open-reference chan.  Registered once at
 /// boot (the devsrv set_resolve_hook idiom); the x86_64 boot wires
 /// proc::current_fd_resolve.
-static FD_RESOLVE: Lock<Option<fn(u64) -> Option<Chan>>> = Lock::new("devsslfd", None);
+type FdResolve = fn(u64) -> Option<Chan>;
+static FD_RESOLVE: Lock<Option<FdResolve>> = Lock::new("devsslfd", None);
 
 /// Register the arch-side fd resolver.  A second registration is a
 /// boot bug.
-pub fn set_fd_resolve_hook(hook: fn(u64) -> Option<Chan>) {
+pub fn set_fd_resolve_hook(hook: FdResolve) {
     let node = LockNode::new();
     let mut guard = FD_RESOLVE.lock(&node);
     assert!(guard.is_none(), "devssl: fd resolver registered twice");
@@ -360,48 +362,485 @@ pub fn walk(c: &Chan, name: &[u8]) -> Result<Chan> {
     }
 }
 
+/// The donor's open-perm mapping (sslopen): OREAD->4, OWRITE->2,
+/// ORDWR->6 over the access-mode field.
+fn open_perm(access: u32) -> u32 {
+    match access {
+        OREAD => 4,
+        OWRITE => 2,
+        ORDWR => 6,
+        _ => 0,
+    }
+}
+
 /// Open (donor sslopen): dirs/encalgs/hashalgs OREAD-only (Eperm
 /// otherwise); clone ALLOCATES a conv (first empty slot, dsclone) and
 /// the returned chan's qid becomes the conv's ctl (donor dsnew's
 /// Qclonus->Qctl rewrite); ctl/data/secretin/secretout create the conv
 /// when the slot is empty (donor dsnew) or perm-check + ref-bump.
 pub fn open(c: &Chan, mode: u32) -> Result<Chan> {
-    let _ = (c, mode);
-    Err("devssl: not implemented this pass")
+    let access = mode & crate::dat::OMASK;
+    let perm = open_perm(access);
+    let opened = |qid: Qid| -> Chan {
+        let mut nc = Chan::new(DEV_SSL, qid, mode);
+        nc.path = c.path.clone();
+        nc
+    };
+    match typ_of(c.qid.path) {
+        QTOPDIR | QPROTODIR | QCONVDIR => {
+            if access != OREAD {
+                return Err("permission denied");
+            }
+            Ok(opened(c.qid))
+        }
+        QCLONUS => {
+            // dsclone: the donor's first-empty-slot scan; exhaustion
+            // refuses loudly (Enodev), never wraps.
+            let user = devcons::current_user()?;
+            let node = LockNode::new();
+            let mut guard = DSSTATE.lock(&node);
+            let Some(slot) = (0..MAXDSTATE).find(|&i| guard.convs[i].is_none()) else {
+                return Err("no free devices");
+            };
+            guard.convs[slot] = Some(Arc::new(Lock::new("dstate", Dstate::new(user))));
+            if slot >= guard.hiwat {
+                guard.hiwat = slot + 1;
+            }
+            drop(guard);
+            // donor dsnew: the clone chan's qid becomes the conv CTL.
+            Ok(opened(Qid { path: qid(slot, QCTL), vers: 0, typ: QTFILE }))
+        }
+        QENCALGS | QHASHALGS => {
+            if access != OREAD {
+                return Err("permission denied");
+            }
+            Ok(opened(c.qid))
+        }
+        QCTL | QDATA | QSECRETIN | QSECRETOUT => {
+            let conv = conv_of(c.qid.path);
+            let user = devcons::current_user()?;
+            let node = LockNode::new();
+            let mut guard = DSSTATE.lock(&node);
+            if guard.convs[conv].is_none() {
+                guard.convs[conv] = Some(Arc::new(Lock::new("dstate", Dstate::new(user))));
+                if conv >= guard.hiwat {
+                    guard.hiwat = conv + 1;
+                }
+            } else {
+                // The existing-conv arm: perm check then ref bump
+                // (donor sslopen under dslock).
+                let ds = guard.convs[conv].as_ref().unwrap().clone();
+                drop(guard);
+                let dnode = LockNode::new();
+                let mut d = ds.lock(&dnode);
+                if (perm & (d.perm >> 6)) != perm && (user != d.user || (perm & d.perm) != perm) {
+                    return Err("permission denied");
+                }
+                d.refc += 1;
+            }
+            Ok(opened(c.qid))
+        }
+        _ => Err("devssl: open of unknown file"),
+    }
+}
+
+/// The conv's Arc under a brief table lock (None when the slot is
+/// empty — the donor's dstate[i]==0 shapes error Ebadusefd).
+fn conv_arc(conv: usize) -> Result<Arc<Lock<Dstate>>> {
+    let node = LockNode::new();
+    DSSTATE
+        .lock(&node)
+        .convs
+        .get(conv)
+        .and_then(|s| s.clone())
+        .ok_or("inappropriate use of fd")
 }
 
 /// Read (donor sslread): dirs serve the listing (sslgen); ctl serves
 /// the decimal conv id; data serves sslbread's decoded stream;
 /// encalgs/hashalgs serve the algorithm tables.
 pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
-    let _ = (buf, offset);
+    let conv = conv_of(c.qid.path);
     match typ_of(c.qid.path) {
-        QTOPDIR | QPROTODIR | QCONVDIR => Err("devssl: not implemented this pass"),
-        _ => Err("devssl: not implemented this pass"),
+        QTOPDIR | QPROTODIR | QCONVDIR => {
+            let off = if offset == u64::MAX { c.offset } else { offset };
+            let hiwat = {
+                let node = LockNode::new();
+                DSSTATE.lock(&node).hiwat
+            };
+            let mut listing = Vec::new();
+            let mut push = |name: &[u8], path: u64, typ: u8, mode: u32| -> Result<()> {
+                let start = listing.len();
+                listing.resize(start + 41 + (2 + name.len()) + 3 * (2 + 6), 0);
+                write_stat_record(&mut listing[start..], name, path, typ, mode, 0)?;
+                Ok(())
+            };
+            match typ_of(c.qid.path) {
+                QTOPDIR => push(b"ssl", qid(0, QPROTODIR), QTDIR, 0o555)?,
+                QPROTODIR => {
+                    for s in 0..hiwat {
+                        let name: Vec<u8> = s.to_string().into_bytes();
+                        push(&name, qid(s, QCONVDIR), QTDIR, 0o555)?;
+                    }
+                    push(b"clone", qid(0, QCLONUS), QTFILE, 0o555)?;
+                }
+                _ => {
+                    for (fname, typ) in &CONVFILES {
+                        push(fname, qid(conv, *typ), QTFILE, 0o660)?;
+                    }
+                }
+            }
+            let start = (off as usize).min(listing.len());
+            let avail = &listing[start..];
+            let n = avail.len().min(buf.len());
+            buf[..n].copy_from_slice(&avail[..n]);
+            if offset == u64::MAX {
+                c.offset += n as u64;
+            }
+            Ok(n as u64)
+        }
+        QCTL => {
+            let s: Vec<u8> = conv.to_string().into_bytes();
+            read_str_at(c, buf, offset, &s)
+        }
+        QENCALGS => read_str_at(c, buf, offset, ENCALGS),
+        QHASHALGS => read_str_at(c, buf, offset, HASHALGS),
+        QDATA => {
+            let arc = conv_arc(conv)?;
+            let node = LockNode::new();
+            let mut d = arc.lock(&node);
+            let taken = sslbread(&mut d, buf.len())?;
+            buf[..taken.len()].copy_from_slice(&taken);
+            Ok(taken.len() as u64)
+        }
+        _ => Err("inappropriate use of fd"),
     }
 }
 
-/// Write (donor sslwrite): data rides sslput (the SSL-format record
-/// builder); secretin/secretout set the RAW bytes as the direction's
-/// secret (donor setsecret — the dec64 path is the CTL verbs'); ctl
-/// runs the verb machine.
-pub fn write(c: &mut Chan, buf: &[u8]) -> Result<u64> {
-    let _ = buf;
-    match typ_of(c.qid.path) {
-        QTOPDIR | QPROTODIR | QCONVDIR | QENCALGS | QHASHALGS | QCLONUS => {
-            Err("devssl: not implemented this pass")
-        }
-        _ => Err("devssl: not implemented this pass"),
+/// readstr (the donor's readstr(offset, a, n, buf) over the device's
+/// string): offset-honoring, streaming when offset is the chan's.
+fn read_str_at(c: &mut Chan, buf: &mut [u8], offset: u64, s: &[u8]) -> Result<u64> {
+    let off = if offset == u64::MAX { c.offset } else { offset };
+    let start = (off as usize).min(s.len());
+    let avail = &s[start..];
+    let n = avail.len().min(buf.len());
+    buf[..n].copy_from_slice(&avail[..n]);
+    if offset == u64::MAX {
+        c.offset += n as u64;
     }
+    Ok(n as u64)
+}
+
+/// ensure (donor ensure): read wire bytes until `unprocessed` holds at
+/// least `n`; a zero-byte read is the hangup (Ehungup).
+fn ensure(io: &mut Chan, unprocessed: &mut Vec<u8>, n: usize) -> Result<()> {
+    let mut scratch = alloc::vec![0u8; MAXDMSG];
+    while unprocessed.len() < n {
+        let got = io_read_some(io, &mut scratch)?;
+        if got == 0 {
+            return Err("i/o on hungup channel");
+        }
+        unprocessed.extend_from_slice(&scratch[..got as usize]);
+    }
+    Ok(())
+}
+
+/// checkdigestb (donor): sha1(secret || message-after-digest ||
+/// big-endian mid) against the record's leading diglen bytes.
+fn check_digest(d: &Dstate, body: &[u8]) -> Result<()> {
+    let diglen = d.diglen as usize;
+    let mut input = Vec::with_capacity(d.inway.secret.len() + body.len() + 4);
+    input.extend_from_slice(&d.inway.secret);
+    input.extend_from_slice(&body[diglen..]);
+    input.extend_from_slice(&d.inway.mid.to_be_bytes());
+    let digest = crate::hmacsha1::sha1(&input);
+    if digest[..diglen] != body[..diglen] {
+        return Err("bad digest");
+    }
+    Ok(())
+}
+
+/// sslbread (donor sslbread over Block lists, ported to Vec buffers):
+/// parse the SSL-format header off the wire, decrypt/digest-check the
+/// record, stage the plaintext.  The 2-byte |0x80 form is the
+/// encrypted/digest shape this device writes; the 3-byte padded form
+/// is still PARSED (donor-exact — a block-cipher peer's frame must not
+/// wedge the reader).
+fn sslbread(d: &mut Dstate, want: usize) -> Result<Vec<u8>> {
+    if d.state == SINCOMPLETE {
+        return Err("inappropriate use of fd");
+    }
+    if d.processed.is_empty() {
+        let (len, pad, toconsume) = {
+            let io = d.io.as_mut().ok_or("inappropriate use of fd")?;
+            ensure(io, &mut d.unprocessed, 3)?;
+            let p = &d.unprocessed;
+            if p[0] & 0x80 != 0 {
+                ((((p[0] & 0x7f) as usize) << 8) | p[1] as usize, 0usize, 2usize)
+            } else {
+                let len = (((p[0] & 0x3f) as usize) << 8) | p[1] as usize;
+                let pad = p[2] as usize;
+                if pad > len {
+                    return Err("bad pad in ssl message");
+                }
+                (len, pad, 3)
+            }
+        };
+        ensure(d.io.as_mut().unwrap(), &mut d.unprocessed, toconsume + len)?;
+        d.unprocessed.drain(..toconsume);
+        let mut body: Vec<u8> = d.unprocessed.drain(..len).collect();
+        let mut plen = len;
+        match d.state {
+            SENCRYPTING => {
+                if body.is_empty() {
+                    return Err("ssl message too short (encrypting)");
+                }
+                if let Some(st) = d.inway.rc4.as_mut() {
+                    st.rc4(&mut body);
+                }
+            }
+            SDIGESTING | SDIGENC => {
+                if d.state == SDIGENC
+                    && let Some(st) = d.inway.rc4.as_mut()
+                {
+                    st.rc4(&mut body);
+                }
+                if body.len() < d.diglen as usize {
+                    return Err("ssl message too short (dig+enc)");
+                }
+                check_digest(d, &body)?;
+                body.drain(..d.diglen as usize);
+                plen -= d.diglen as usize;
+            }
+            _ => {}
+        }
+        if pad > 0 && pad <= plen {
+            body.truncate(plen - pad);
+        }
+        d.processed = body;
+        d.inway.mid += 1;
+    }
+    let n = want.min(d.processed.len());
+    Ok(d.processed.drain(..n).collect())
+}
+
+/// One SSL-format record (donor sslput's loop body, the pad-free
+/// shape — blocklen is only ever 1 this era, the rc4_256 class, so no
+/// block padding is ever WRITTEN; the reader still parses padded
+/// frames): [0x80|len_hi, len_lo] counting digest+payload, the digest
+/// computed over secret||payload||mid and prepended INSIDE the
+/// encrypted body (the header stays clear — drawterm's vendored arm
+/// runs the identical bytes).
+fn sslput_record(d: &mut Dstate, chunk: &[u8]) -> Result<()> {
+    let diglen = d.diglen as usize;
+    let l2 = chunk.len() as u32 + d.diglen as u32;
+    let mut rec = alloc::vec![0u8; 2 + diglen + chunk.len()];
+    rec[0] = ((l2 >> 8) as u8) | 0x80;
+    rec[1] = l2 as u8;
+    rec[2 + diglen..].copy_from_slice(chunk);
+    if d.hashing {
+        let mut input = Vec::with_capacity(d.outway.secret.len() + chunk.len() + 4);
+        input.extend_from_slice(&d.outway.secret);
+        input.extend_from_slice(chunk);
+        input.extend_from_slice(&d.outway.mid.to_be_bytes());
+        let digest = crate::hmacsha1::sha1(&input);
+        rec[2..2 + diglen].copy_from_slice(&digest[..diglen]);
+    }
+    if d.encryptalg == RC4ALG
+        && let Some(st) = d.outway.rc4.as_mut()
+    {
+        st.rc4(&mut rec[2..]);
+    }
+    let io = d.io.as_mut().ok_or("inappropriate use of fd")?;
+    io_write(io, &rec)?;
+    d.outway.mid += 1;
+    Ok(())
+}
+
+/// Write (donor sslwrite): data rides sslput (the SSL-format record
+/// builder, chunked at max); secretin/secretout set the RAW bytes as
+/// the direction's secret (donor setsecret — the dec64 path is the
+/// CTL verbs'); ctl runs the verb machine.
+pub fn write(c: &mut Chan, buf: &[u8]) -> Result<u64> {
+    let conv = conv_of(c.qid.path);
+    match typ_of(c.qid.path) {
+        QDATA => {
+            let arc = conv_arc(conv)?;
+            let node = LockNode::new();
+            let mut d = arc.lock(&node);
+            if d.state == SINCOMPLETE {
+                return Err("inappropriate use of fd");
+            }
+            let max = d.max.max(1) as usize;
+            for chunk in buf.chunks(max) {
+                sslput_record(&mut d, chunk)?;
+            }
+            Ok(buf.len() as u64)
+        }
+        QSECRETIN => {
+            let arc = conv_arc(conv)?;
+            let node = LockNode::new();
+            let mut d = arc.lock(&node);
+            d.inway.secret = buf.to_vec();
+            Ok(buf.len() as u64)
+        }
+        QSECRETOUT => {
+            let arc = conv_arc(conv)?;
+            let node = LockNode::new();
+            let mut d = arc.lock(&node);
+            d.outway.secret = buf.to_vec();
+            Ok(buf.len() as u64)
+        }
+        QCTL => {
+            let arc = conv_arc(conv)?;
+            let node = LockNode::new();
+            let mut d = arc.lock(&node);
+            ctl_write(&mut d, buf)
+        }
+        QCLONUS => Err("devssl: clone is not writable"),
+        QENCALGS | QHASHALGS => {
+            // The donor PANICS here (sslwrite's default arm) — a
+            // write refusal is the port's loud-refusal discipline for
+            // the donor's own bug class.
+            Err("devssl: alg tables are not writable")
+        }
+        _ => Err("devssl: directory is not writable"),
+    }
+}
+
+/// The ctl verb machine (donor sslwrite's Qctl parse, devssl.c:1139-1211
+/// — verb at the first space, secrets dec64'd, fd-before-alg enforced).
+fn ctl_write(d: &mut Dstate, buf: &[u8]) -> Result<u64> {
+    if buf.len() >= 128 {
+        return Err("arg too long");
+    }
+    let mut line = buf;
+    if let Some(nl) = line.iter().position(|&b| b == b'\n') {
+        line = &line[..nl];
+    }
+    let (verb, p) = match line.iter().position(|&b| b == b' ') {
+        Some(sp) => (&line[..sp], Some(&line[sp + 1..])),
+        None => (line, None),
+    };
+
+    if verb == b"fd" {
+        // buftochan: fdtochan incref (the resolver's dup shape), the
+        // device's own files refused (donor's "cannot ssl encrypt
+        // devssl files" — the recursion guard).
+        let Some(p) = p else { return Err("bad arg in system call") };
+        let s = core::str::from_utf8(p).map_err(|_| "bad arg in system call")?;
+        let fd: u64 = s.trim().parse().map_err(|_| "bad arg in system call")?;
+        let chan = resolve_fd(fd)?;
+        if chan.dev == DEV_SSL {
+            crate::namec::close_chan(&chan);
+            return Err("cannot ssl encrypt devssl files");
+        }
+        d.io = Some(chan);
+        // Default is clear (msg delimiters only) — donor's fd arm.
+        d.state = SCLEAR;
+        d.blocklen = 1;
+        d.diglen = 0;
+        d.max = rc4::ssl_max(1, 0);
+        d.maxpad = rc4::ssl_maxpad(1, 0);
+        d.inway.mid = 0;
+        d.outway.mid = 0;
+        return Ok(buf.len() as u64);
+    }
+
+    if verb == b"alg" {
+        let Some(p) = p else { return Err("bad arg in system call") };
+        d.blocklen = 1;
+        d.diglen = 0;
+        if d.io.is_none() {
+            return Err("must set fd before algorithm");
+        }
+        d.state = SCLEAR;
+        d.max = rc4::ssl_max(1, 0);
+        d.maxpad = rc4::ssl_maxpad(1, 0);
+        if p == b"clear" {
+            return Ok(buf.len() as u64); // the -e clear debug fallback
+        }
+        // The donor's single-secret auto-copy (alg with only one
+        // direction armed mirrors it to the other).
+        if !d.inway.secret.is_empty() && d.outway.secret.is_empty() {
+            d.outway.secret = d.inway.secret.clone();
+        }
+        if !d.outway.secret.is_empty() && d.inway.secret.is_empty() {
+            d.inway.secret = d.outway.secret.clone();
+        }
+        if d.inway.secret.is_empty() || d.outway.secret.is_empty() {
+            return Err("algorithm but no secret");
+        }
+        d.hashing = false;
+        d.encryptalg = NOENCRYPTION;
+        d.blocklen = 1;
+        // Donor parsehashalg || parseencryptalg per space-separated
+        // token (empty tokens fail — the donor's split shape).
+        for tok in p.split(|&b| b == b' ') {
+            if tok == b"sha1" {
+                d.hashing = true;
+                d.diglen = SHA1DIGLEN;
+                d.state &= !SCLEAR;
+                d.state |= SDIGESTING;
+            } else if tok == b"rc4_256" {
+                d.encryptalg = RC4ALG;
+                d.blocklen = 1;
+                d.inway.rc4 = Some(rc4::setup_rc4_state(&d.inway.secret));
+                d.outway.rc4 = Some(rc4::setup_rc4_state(&d.outway.secret));
+                d.state &= !SCLEAR;
+                d.state |= SENCRYPTING;
+            } else {
+                return Err("bad algorithm");
+            }
+        }
+        if !d.hashing && d.encryptalg == NOENCRYPTION {
+            return Err("bad algorithm");
+        }
+        d.max = rc4::ssl_max(d.blocklen, d.diglen);
+        d.maxpad = rc4::ssl_maxpad(d.blocklen, d.diglen);
+        return Ok(buf.len() as u64);
+    }
+
+    if verb == b"secretin" || verb == b"secretout" {
+        let Some(p) = p else { return Err("bad arg in system call") };
+        // Donor buffer bounds: (strlen*3)/2 for secretin, +1 for
+        // secretout (both over-provisioned for base64 — kept).
+        let l = (p.len() * 3) / 2 + usize::from(verb == b"secretout");
+        let mut x = alloc::vec![0u8; l];
+        let t = rc4::dec64(&mut x, p);
+        if t == 0 {
+            return Err("bad arg in system call");
+        }
+        let secret = x[..t].to_vec();
+        if verb == b"secretin" {
+            d.inway.secret = secret;
+        } else {
+            d.outway.secret = secret;
+        }
+        return Ok(buf.len() as u64);
+    }
+
+    Err("bad arg in system call")
 }
 
 /// stat (donor sslstat over sslgen): "#D"/"ssl"/decimal conv dirs at
 /// 0555; clone at 0555; conv files at 0660.
 pub fn stat(c: &Chan, sb: &mut [u8]) -> Result<u64> {
-    let _ = sb;
+    let conv = conv_of(c.qid.path);
     match typ_of(c.qid.path) {
-        QTOPDIR | QPROTODIR | QCONVDIR | QCLONUS => Err("devssl: not implemented this pass"),
-        _ => Err("devssl: not implemented this pass"),
+        QTOPDIR => write_stat_record(sb, b"#D", c.qid.path, QTDIR, 0x8000_0000 | 0o555, 0),
+        QPROTODIR => write_stat_record(sb, b"ssl", c.qid.path, QTDIR, 0x8000_0000 | 0o555, 0),
+        QCONVDIR => {
+            let name: Vec<u8> = conv.to_string().into_bytes();
+            write_stat_record(sb, &name, c.qid.path, QTDIR, 0x8000_0000 | 0o555, 0)
+        }
+        QCLONUS => write_stat_record(sb, b"clone", c.qid.path, QTFILE, 0o555, 0),
+        t => {
+            let Some((name, _)) = CONVFILES.iter().find(|(_, ty)| *ty == t) else {
+                return Err("devssl: stat of unknown file");
+            };
+            write_stat_record(sb, name, c.qid.path, QTFILE, 0o660, 0)
+        }
     }
 }
 
@@ -410,7 +849,37 @@ pub fn stat(c: &Chan, sb: &mut [u8]) -> Result<u64> {
 /// conv up, and releases the underlying fd chan (the donor's cclose —
 /// namec::close_chan on the held open-ref clone).
 pub fn close(c: &Chan) {
-    let _ = c;
+    if !matches!(typ_of(c.qid.path), QCTL | QDATA | QSECRETIN | QSECRETOUT) || !c.copen {
+        return;
+    }
+    let conv = conv_of(c.qid.path);
+    let node = LockNode::new();
+    let arc = DSSTATE.lock(&node).convs.get(conv).and_then(|s| s.clone());
+    let Some(arc) = arc else { return };
+    let last = {
+        let mut d = arc.lock(&node);
+        if d.refc == 0 {
+            return;
+        }
+        d.refc -= 1;
+        d.refc == 0
+    };
+    if last {
+        {
+            let mut guard = DSSTATE.lock(&node);
+            if let Some(slot) = guard.convs.get(conv)
+                && slot.as_ref().is_some_and(|s| Arc::ptr_eq(s, &arc))
+            {
+                guard.convs[conv] = None;
+            }
+        }
+        // sslhangup + the frees: processed/unprocessed drop with the
+        // Dstate once the table slot and this Arc go; the io chan
+        // gets the donor's explicit cclose.
+        if let Some(io) = arc.lock(&node).io.take() {
+            crate::namec::close_chan(&io);
+        }
+    }
 }
 
 /// The donor's io on the underlying chan (s->c->dev->bread/bwrite):
