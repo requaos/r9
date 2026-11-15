@@ -824,6 +824,21 @@ fn listen_open(c: &Chan, p: Proto, id: usize, mode: u32) -> Result<Chan> {
                 }
             }
         }
+        // D-05 leg 1's other half (19-08, the -G interop gate's finding):
+        // the RX-IRQ wake (note_rx_pending) readies the parked listener,
+        // but its re-probe above pops a pool member ONLY if smoltcp has
+        // already PROCESSED the SYN — and nothing else drives ingress on
+        // an otherwise-idle venue (every prior gate's traffic was guest-
+        // initiated, its polls ingressing replies in the same syscall
+        // context; an unsolicited incoming connection is fresh surface —
+        // measured live: the handshake's SYN sat in the ether queue,
+        // pktin stayed 0, and drawterm's session black-holed).  The icmp
+        // park shape (proto.rs's arm → drive → block): drive AFTER the
+        // arming so the pending SYN is processed in THIS context — the
+        // member's state change fires the recv waker just armed, the
+        // drive's wake drain readies this pid, and the block below
+        // returns immediately to a pop that succeeds.
+        stack::drive_stack();
         (hooks.unwrap().block)();
     }
 }
