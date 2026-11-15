@@ -712,7 +712,23 @@ WRAP
             # ISOs — file sha256
             # 9055d76e9bdcb91c252d28355ede20751f2a2f9760fe61a283ef09797fa0467e,
             # NAR sha256-+0pYwT..., three-way agreed.
-            outputHash = "sha256-+0pYwTBhw0rXPV/+XmHgFGOGrkqh9h07cYmVgZ6Wzn4=";
+            # The 19-10 desktop-leg kernel bytes (d5445dc: the Ropen
+            # iounit carried end to end — Chan.iounit + devmnt's
+            # open/create legs + devdup's #d/Nctl fd line, the
+            # mounted-draw max-write ABI libdraw's initdisplay sizes
+            # by) re-staled it once more; re-wired with the same
+            # two-derivation proof: kernel A plain at d5445dc (fresh
+            # r9-kernel-x64-d5445dc.drv) + kernel B at 7affab3 (a
+            # kernel-neutral derivation-independence marker commit in
+            # the discarded /tmp/r9-marker-1910 clone, FRESH
+            # r9-kernel-x64-7affab3.drv) through the non-FOD
+            # lib.bootIso realization produced the byte-identical ISO
+            # — file sha256
+            # 10f2de17d52071ce682afb0cdaa5e3fd3f439ecb98e3bcf18ec1ba09397f63fc,
+            # NAR sha256-xbHRtc..., three-way agreed with the FOD's
+            # own measured got-value (the realization with this hash
+            # wired built green).
+            outputHash = "sha256-xbHRtc04za2/E+bab/Q4Z6a1jFGhWuoABshGLsZg/MU=";
           };
         });
 
