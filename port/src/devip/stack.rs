@@ -113,6 +113,9 @@ pub struct DevipHooks {
     pub current: fn() -> u64,
     pub block: fn(),
     pub wake: fn(&[u64]),
+    /// The blocking loops' note probe (the donor's notepending check
+    /// around sleep): true = a queued note interrupts this read.
+    pub note_pending: fn() -> bool,
 }
 
 static HOOKS: Lock<Option<DevipHooks>> = Lock::new("devip", None);

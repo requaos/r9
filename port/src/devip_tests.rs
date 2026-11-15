@@ -164,6 +164,7 @@ fn ensure_hooks() {
             current: stub_current,
             block: stub_block,
             wake: stub_wake,
+            note_pending: || false,
         });
     });
 }

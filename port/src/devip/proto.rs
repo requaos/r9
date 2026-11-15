@@ -837,6 +837,13 @@ pub(crate) fn icmp_read_data(id: usize, buf: &mut [u8]) -> Result<u64> {
             if hooks.is_none() {
                 hooks = Some(stack::hooks()?);
             }
+            // The donor's notepending pre-check (qread's sleep): a
+            // queued note interrupts the read — post_note READIED us
+            // (proc.rs push_note), so reaching the block arm again
+            // with a pending note means nothing else will.
+            if (hooks.as_ref().unwrap().note_pending)() {
+                return Err("interrupted");
+            }
             let hks = hooks.unwrap();
             let pid = (hks.current)();
             c.waiters.register(pid);
@@ -2558,6 +2565,13 @@ pub(crate) fn tcp_read_data(id: usize, buf: &mut [u8]) -> Result<u64> {
             // Register, drop, block (devpipe's wakeup-loss-free shape).
             if hooks.is_none() {
                 hooks = Some(stack::hooks()?);
+            }
+            // The donor's notepending pre-check (qread's sleep): a
+            // queued note interrupts the read — post_note READIED us
+            // (proc.rs push_note), so reaching the block arm again
+            // with a pending note means nothing else will.
+            if (hooks.as_ref().unwrap().note_pending)() {
+                return Err("interrupted");
             }
             let hks = hooks.unwrap();
             let pid = (hks.current)();

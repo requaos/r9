@@ -229,7 +229,12 @@ fn test_wake(pids: &[u64]) {
 /// reader-wakes-on-close arm (a close while parked ends the read at EOF).
 #[test]
 fn pipe_blocks_on_empty_and_write_wakes_with_bytes() {
-    devpipe::set_hooks(PipeHooks { current: test_current, block: test_block, wake: test_wake });
+    devpipe::set_hooks(PipeHooks {
+        current: test_current,
+        block: test_block,
+        wake: test_wake,
+        note_pending: || false,
+    });
 
     // Arm A: the read blocks; the scripted peer write wakes it with bytes.
     let (e0, mut e1) = pipe_pair();

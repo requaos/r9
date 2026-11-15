@@ -2322,7 +2322,13 @@ pub fn proc_set_private(pid: u64) -> Result<()> {
 
 /// The note-queue append shared by post_note (per-pid) and the note-group post:
 /// Moribund targets and full queues are skipped per the donor's
-/// postnote failure shape.
+/// postnote failure shape.  A Blocked target is READIED (the donor
+/// postnote's ready(p)): the note must reach a proc parked in an
+/// indefinite device read — the read's loop re-runs on wake, sees the
+/// pending note, and errors "interrupted" (the note-interruptible
+/// blocking-IO contract; without the wake, a kill note to a parked
+/// reader sits queued forever and the reader's session never tears
+/// down — the 19-08 session-exit variance).
 fn push_note(p: &mut Proc, msg: &[u8]) -> Result<()> {
     if p.state == ProcState::Moribund {
         return Err("devproc: no such process");
@@ -2333,7 +2339,20 @@ fn push_note(p: &mut Proc, msg: &[u8]) -> Result<()> {
     let mut note = Note { buf: [0; ERRMAX], len: msg.len().min(ERRMAX - 1) };
     note.buf[..note.len].copy_from_slice(&msg[..note.len]);
     p.note_queue.push_back(note);
+    if p.state == ProcState::Blocked {
+        p.sleep_until = 0;
+        p.state = ProcState::Ready;
+    }
     Ok(())
+}
+
+/// The current proc has a queued note (the blocking-IO loops' interrupt
+/// probe — the donor's `if(!notepending())` around every sleep).
+pub fn note_pending() -> bool {
+    match current() {
+        Some(p) => !p.note_queue.is_empty(),
+        None => false,
+    }
 }
 
 /// devcons's DEL path — post a note to the note GROUPS of the given

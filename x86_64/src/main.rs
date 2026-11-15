@@ -470,6 +470,7 @@ pub(crate) fn exec_prologue(facts: &mb2::Facts) -> ExecPrologue {
         current: proc::pipe_current_pid,
         block: proc::pipe_block_current,
         wake: proc::pipe_wake,
+        note_pending: proc::note_pending,
     });
     // devmnt's contention-wait hook (the same injected-hook idiom).
     port::devmnt::set_contention_hook(proc::mnt_contention_wait);
@@ -487,6 +488,7 @@ pub(crate) fn exec_prologue(facts: &mb2::Facts) -> ExecPrologue {
             current: proc::pipe_current_pid,
             block: proc::pipe_block_current,
             wake: proc::pipe_wake,
+            note_pending: proc::note_pending,
         });
         port::devip::stack::set_clock(platform::timer::ticks);
     }

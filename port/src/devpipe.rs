@@ -118,6 +118,9 @@ pub struct PipeHooks {
     pub current: fn() -> u64,
     pub block: fn(),
     pub wake: fn(&[u64]),
+    /// The blocking loops' note probe (the donor's notepending check
+    /// around sleep): true = a queued note interrupts this read.
+    pub note_pending: fn() -> bool,
 }
 
 static HOOKS: Lock<Option<PipeHooks>> = Lock::new("devpipe", None);
@@ -344,6 +347,13 @@ pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
             }
             if h.is_none() {
                 h = Some(hooks()?);
+            }
+            // The donor's notepending pre-check (qread's sleep): a
+            // queued note interrupts the read — post_note READIED us
+            // (proc.rs push_note), so reaching the block arm again
+            // with a pending note means nothing else will.
+            if (h.as_ref().unwrap().note_pending)() {
+                return Err("interrupted");
             }
             let pid = (h.unwrap().current)();
             if !q.waiters.contains(&pid) {
