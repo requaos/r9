@@ -34,15 +34,29 @@
 //! conv table (donor `dstate[Maxdstate]`, Maxdstate=512 — capacity
 //! only; drawterm's own 128 does not constrain the kernel side) +
 //! free-function attach/walk/open/read/write/stat/close.  The
-//! per-conv state rides `Arc<Lock<Dstate>>` so a blocking wire read
-//! on one conv never holds the TABLE lock (the donor's per-conv in.q
-//! /out.q discipline, folded to one lock per conv — a tightening,
-//! never a loosening: the donor's ctl path takes BOTH in.ctlq and
-//! out.q).  The underlying fd chan (`fd N` -> donor buftochan's
-//! fdtochan incref) arrives through the arch-registered fd-resolver
-//! hook — the devsrv set_resolve_hook idiom; the x86_64 boot wires
+//! per-conv state rides `Arc<Conv>`: a brief-op `Lock<Dstate>` for
+//! the table/ctl-visible fields, plus TWO direction cells (donor
+//! `s->in.q` / `s->out.q`, 19-08's lock split — the donor-faithful
+//! direction separation that keeps a parked ssl READ from blocking
+//! ssl WRITES on the same conv: the -G session's 9P reader parks
+//! indefinitely in the in-direction while rc's prompt Twrites ride
+//! the out-direction).  The directions are `BusyCell`s, not MCS
+//! locks, because their guards SPAN the blocking wire IO (the
+//! donor holds in.q across ensure()): an MCS lock held across a
+//! park would spin-deadlock an IRQ-masked contender on this
+//! single-CPU era (mcslock's BusyCell note) — a BusyCell contender
+//! parks ~1 tick and retries via devmnt's contention hook instead.
+//! The ctl path claims BOTH directions (the donor's in.ctlq+out.q),
+//! so algorithm changes are excluded while either direction runs.
+//! The underlying fd chan (`fd N` -> donor buftochan's fdtochan
+//! incref) arrives through the arch-registered fd-resolver hook —
+//! the devsrv set_resolve_hook idiom; the x86_64 boot wires
 //! `proc::current_fd_resolve` (ref_clone = Chan::dup, the open-ref
-//! shape whose conv-free close_chan balances).
+//! shape whose conv-free close_chan balances).  The conv keeps TWO
+//! dups of it — one per direction — so the parked reader and an
+//! active writer hold SEPARATE chan handles (concurrent &mut on one
+//! Chan is impossible; the pipe/TCP state itself lives behind the
+//! device's own Arc locks).
 //!
 //! Qid scheme (donor devssl.c:86-101, verbatim): the enum
 //! Qtopdir=1..Qhashalgs=10, `QID(c,y) = (c<<5)|y`, `TYPE(x) =
@@ -67,7 +81,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use crate::dat::{Chan, Qid, DEV_SSL, OREAD, ORDWR, OWRITE, QTDIR, QTFILE};
-use crate::mcslock::{Lock, LockNode};
+use crate::mcslock::{BusyCell, Lock, LockNode};
 use crate::{devcons, rc4, Result};
 
 /// The device-registry rune (namec.rs's '#D' arm — pushssl hard-codes
@@ -141,8 +155,8 @@ const CONVFILES: [(&[u8], u64); 6] = [
     (b"hashalgs", QHASHALGS),
 ];
 
-/// One direction of the session (donor OneWay minus its locks — the
-/// conv lock stands in for q/ctlq).
+/// One direction of the session (donor OneWay minus its locks —
+/// direction ownership stands in for q/ctlq).
 struct OneWay {
     /// Donor `w->secret`/`w->slen`: the dec64'd (or raw file-written)
     /// secret bytes.
@@ -161,11 +175,50 @@ impl OneWay {
     }
 }
 
-/// One ssl conversation (donor Dstate).
-struct Dstate {
-    /// Donor `s->c`: the underlying fd's chan (buftochan's incref'd
-    /// reference — a dup-shape clone whose conv-free close balances).
+/// The IN direction (donor `s->in` + its half of the wire): everything
+/// the direction's owner mutates while it holds the BusyCell — the
+/// guard IS the lock (the BusyCell discipline; an MCS guard would spin
+/// a contender when this direction parks in ensure()).
+struct InDir {
+    /// This direction's dup of the underlying fd chan (donor `s->c`,
+    /// split per direction so a parked read and an active write hold
+    /// separate handles).
     io: Option<Chan>,
+    way: OneWay,
+    /// Decoded plaintext not yet handed to the reader (donor
+    /// s->processed).
+    processed: Vec<u8>,
+    /// Wire bytes read but not yet parsed into a record (donor
+    /// s->unprocessed) — kept here so an interrupted ensure resumes
+    /// exactly where it parked (the donor's Eintr discipline).
+    unprocessed: Vec<u8>,
+}
+
+impl InDir {
+    fn new() -> InDir {
+        InDir { io: None, way: OneWay::new(), processed: Vec::new(), unprocessed: Vec::new() }
+    }
+}
+
+/// The OUT direction (donor `s->out` + its half of the wire).
+struct OutDir {
+    io: Option<Chan>,
+    way: OneWay,
+}
+
+impl OutDir {
+    fn new() -> OutDir {
+        OutDir { io: None, way: OneWay::new() }
+    }
+}
+
+/// The brief-op per-conv state (donor Dstate's table/ctl-visible
+/// fields).  Guarded by a plain MCS `Lock` — every access under it is
+/// short and never spans a park.  Mutations additionally require BOTH
+/// direction claims (the donor's ctl path takes in.ctlq AND out.q), so
+/// a direction owner's post-claim snapshot is stable for its whole
+/// ownership.
+struct Dstate {
     state: u8,
     refc: u32,
     encryptalg: u8,
@@ -175,14 +228,6 @@ struct Dstate {
     hashing: bool,
     max: u32,
     maxpad: u32,
-    inway: OneWay,
-    outway: OneWay,
-    /// Decoded plaintext not yet handed to the reader (donor
-    /// s->processed).
-    processed: Vec<u8>,
-    /// Wire bytes read but not yet parsed into a record (donor
-    /// s->unprocessed).
-    unprocessed: Vec<u8>,
     user: Vec<u8>,
     perm: u32,
 }
@@ -190,7 +235,6 @@ struct Dstate {
 impl Dstate {
     fn new(user: Vec<u8>) -> Dstate {
         Dstate {
-            io: None,
             state: SINCOMPLETE,
             refc: 1,
             encryptalg: NOENCRYPTION,
@@ -199,13 +243,72 @@ impl Dstate {
             hashing: false,
             max: 0,
             maxpad: 0,
-            inway: OneWay::new(),
-            outway: OneWay::new(),
-            processed: Vec::new(),
-            unprocessed: Vec::new(),
             user,
             perm: 0o660,
         }
+    }
+}
+
+/// One ssl conversation: the shared brief-op state + the two
+/// direction cells (donor `s->in`/`s->out`).
+struct Conv {
+    shared: Lock<Dstate>,
+    indir: BusyCell<InDir>,
+    outdir: BusyCell<OutDir>,
+}
+
+impl Conv {
+    fn new(user: Vec<u8>) -> Conv {
+        Conv {
+            shared: Lock::new("dstate", Dstate::new(user)),
+            indir: BusyCell::new(InDir::new()),
+            outdir: BusyCell::new(OutDir::new()),
+        }
+    }
+}
+
+/// Claim the in-direction, parking ~1 tick between attempts (the
+/// BusyCell discipline — see the module header).  Returns with
+/// NOTHING else held; snapshot the shared params only AFTER this
+/// succeeds (mutations need both directions, so the claim freezes
+/// them).
+fn claim_in(conv: &Arc<Conv>) -> Result<crate::mcslock::BusyGuard<'_, InDir>> {
+    loop {
+        if let Some(g) = conv.indir.enter() {
+            return Ok(g);
+        }
+        crate::devmnt::contention_park("devssl: concurrent ssl read this era")?;
+    }
+}
+
+/// Claim the out-direction (the write sibling of `claim_in`).
+fn claim_out(conv: &Arc<Conv>) -> Result<crate::mcslock::BusyGuard<'_, OutDir>> {
+    loop {
+        if let Some(g) = conv.outdir.enter() {
+            return Ok(g);
+        }
+        crate::devmnt::contention_park("devssl: concurrent ssl write this era")?;
+    }
+}
+
+/// The algorithm parameters a direction owner snapshots after its
+/// claim (stable for the ownership's duration — mutations require
+/// both directions).
+struct AlgParams {
+    state: u8,
+    encryptalg: u8,
+    diglen: u16,
+    hashing: bool,
+    max: u32,
+}
+
+fn alg_params(d: &Dstate) -> AlgParams {
+    AlgParams {
+        state: d.state,
+        encryptalg: d.encryptalg,
+        diglen: d.diglen,
+        hashing: d.hashing,
+        max: d.max,
     }
 }
 
@@ -213,7 +316,7 @@ impl Dstate {
 /// slots + the high-water mark of ever-allocated slots (the donor's
 /// walkable-set bound — it only grows).
 struct SslState {
-    convs: [Option<Arc<Lock<Dstate>>>; MAXDSTATE],
+    convs: [Option<Arc<Conv>>; MAXDSTATE],
     hiwat: usize,
 }
 
@@ -402,7 +505,7 @@ pub fn open(c: &Chan, mode: u32) -> Result<Chan> {
             let Some(slot) = (0..MAXDSTATE).find(|&i| guard.convs[i].is_none()) else {
                 return Err("no free devices");
             };
-            guard.convs[slot] = Some(Arc::new(Lock::new("dstate", Dstate::new(user))));
+            guard.convs[slot] = Some(Arc::new(Conv::new(user)));
             if slot >= guard.hiwat {
                 guard.hiwat = slot + 1;
             }
@@ -422,7 +525,7 @@ pub fn open(c: &Chan, mode: u32) -> Result<Chan> {
             let node = LockNode::new();
             let mut guard = DSSTATE.lock(&node);
             if guard.convs[conv].is_none() {
-                guard.convs[conv] = Some(Arc::new(Lock::new("dstate", Dstate::new(user))));
+                guard.convs[conv] = Some(Arc::new(Conv::new(user)));
                 if conv >= guard.hiwat {
                     guard.hiwat = conv + 1;
                 }
@@ -432,7 +535,7 @@ pub fn open(c: &Chan, mode: u32) -> Result<Chan> {
                 let ds = guard.convs[conv].as_ref().unwrap().clone();
                 drop(guard);
                 let dnode = LockNode::new();
-                let mut d = ds.lock(&dnode);
+                let mut d = ds.shared.lock(&dnode);
                 if (perm & (d.perm >> 6)) != perm && (user != d.user || (perm & d.perm) != perm) {
                     return Err("permission denied");
                 }
@@ -461,13 +564,13 @@ pub(crate) fn ref_open(qid_path: u64) {
     let Some(arc) = DSSTATE.lock(&node).convs.get(conv).and_then(|s| s.clone()) else {
         return;
     };
-    let mut d = arc.lock(&node);
+    let mut d = arc.shared.lock(&node);
     d.refc += 1;
 }
 
 /// The conv's Arc under a brief table lock (None when the slot is
 /// empty — the donor's dstate[i]==0 shapes error Ebadusefd).
-fn conv_arc(conv: usize) -> Result<Arc<Lock<Dstate>>> {
+fn conv_arc(conv: usize) -> Result<Arc<Conv>> {
     let node = LockNode::new();
     DSSTATE
         .lock(&node)
@@ -528,11 +631,25 @@ pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
         QHASHALGS => read_str_at(c, buf, offset, HASHALGS),
         QDATA => {
             let arc = conv_arc(conv)?;
-            let node = LockNode::new();
-            let mut d = arc.lock(&node);
-            let taken = sslbread(&mut d, buf.len())?;
-            buf[..taken.len()].copy_from_slice(&taken);
-            Ok(taken.len() as u64)
+            // The donor's in-direction (qlock(&s->in.q)): ownership
+            // spans the blocking ensure() reads — a concurrent WRITE
+            // on the same conv proceeds on ITS direction (19-08's
+            // deadlock fix; the BusyCell never spins a contender).
+            let mut dir = claim_in(&arc)?;
+            let p = {
+                let node = LockNode::new();
+                alg_params(&arc.shared.lock(&node))
+            };
+            if p.state == SINCOMPLETE {
+                return Err("inappropriate use of fd");
+            }
+            if dir.processed.is_empty() {
+                sslbread(&mut dir, &p)?;
+            }
+            let n = buf.len().min(dir.processed.len());
+            let taken: Vec<u8> = dir.processed.drain(..n).collect();
+            buf[..n].copy_from_slice(&taken);
+            Ok(n as u64)
         }
         _ => Err("inappropriate use of fd"),
     }
@@ -553,7 +670,9 @@ fn read_str_at(c: &mut Chan, buf: &mut [u8], offset: u64, s: &[u8]) -> Result<u6
 }
 
 /// ensure (donor ensure): read wire bytes until `unprocessed` holds at
-/// least `n`; a zero-byte read is the hangup (Ehungup).
+/// least `n`; a zero-byte read is the hangup (Ehungup).  Called with
+/// the in-direction owned (the park inside is the direction owner's to
+/// make — no shared lock is held across it).
 fn ensure(io: &mut Chan, unprocessed: &mut Vec<u8>, n: usize) -> Result<()> {
     let mut scratch = alloc::vec![0u8; MAXDMSG];
     while unprocessed.len() < n {
@@ -568,12 +687,12 @@ fn ensure(io: &mut Chan, unprocessed: &mut Vec<u8>, n: usize) -> Result<()> {
 
 /// checkdigestb (donor): sha1(secret || message-after-digest ||
 /// big-endian mid) against the record's leading diglen bytes.
-fn check_digest(d: &Dstate, body: &[u8]) -> Result<()> {
-    let diglen = d.diglen as usize;
-    let mut input = Vec::with_capacity(d.inway.secret.len() + body.len() + 4);
-    input.extend_from_slice(&d.inway.secret);
+fn check_digest(dir: &InDir, diglen: u16, body: &[u8]) -> Result<()> {
+    let diglen = diglen as usize;
+    let mut input = Vec::with_capacity(dir.way.secret.len() + body.len() + 4);
+    input.extend_from_slice(&dir.way.secret);
     input.extend_from_slice(&body[diglen..]);
-    input.extend_from_slice(&d.inway.mid.to_be_bytes());
+    input.extend_from_slice(&dir.way.mid.to_be_bytes());
     let digest = crate::hmacsha1::sha1(&input);
     if digest[..diglen] != body[..diglen] {
         return Err("bad digest");
@@ -583,66 +702,65 @@ fn check_digest(d: &Dstate, body: &[u8]) -> Result<()> {
 
 /// sslbread (donor sslbread over Block lists, ported to Vec buffers):
 /// parse the SSL-format header off the wire, decrypt/digest-check the
-/// record, stage the plaintext.  The 2-byte |0x80 form is the
-/// encrypted/digest shape this device writes; the 3-byte padded form
-/// is still PARSED (donor-exact — a block-cipher peer's frame must not
-/// wedge the reader).
-fn sslbread(d: &mut Dstate, want: usize) -> Result<Vec<u8>> {
-    if d.state == SINCOMPLETE {
+/// record, stage the plaintext into `processed`.  The 2-byte |0x80
+/// form is the encrypted/digest shape this device writes; the 3-byte
+/// padded form is still PARSED (donor-exact — a block-cipher peer's
+/// frame must not wedge the reader).  Runs under IN-direction
+/// ownership with the claim-time algorithm snapshot `p` (stable for
+/// the ownership — ctl needs both directions).
+fn sslbread(dir: &mut InDir, p: &AlgParams) -> Result<()> {
+    if p.state == SINCOMPLETE {
         return Err("inappropriate use of fd");
     }
-    if d.processed.is_empty() {
-        let (len, pad, toconsume) = {
-            let io = d.io.as_mut().ok_or("inappropriate use of fd")?;
-            ensure(io, &mut d.unprocessed, 3)?;
-            let p = &d.unprocessed;
-            if p[0] & 0x80 != 0 {
-                ((((p[0] & 0x7f) as usize) << 8) | p[1] as usize, 0usize, 2usize)
-            } else {
-                let len = (((p[0] & 0x3f) as usize) << 8) | p[1] as usize;
-                let pad = p[2] as usize;
-                if pad > len {
-                    return Err("bad pad in ssl message");
-                }
-                (len, pad, 3)
+    let (len, pad, toconsume) = {
+        let io = dir.io.as_mut().ok_or("inappropriate use of fd")?;
+        ensure(io, &mut dir.unprocessed, 3)?;
+        let h = &dir.unprocessed;
+        if h[0] & 0x80 != 0 {
+            ((((h[0] & 0x7f) as usize) << 8) | h[1] as usize, 0usize, 2usize)
+        } else {
+            let len = (((h[0] & 0x3f) as usize) << 8) | h[1] as usize;
+            let pad = h[2] as usize;
+            if pad > len {
+                return Err("bad pad in ssl message");
             }
-        };
-        ensure(d.io.as_mut().unwrap(), &mut d.unprocessed, toconsume + len)?;
-        d.unprocessed.drain(..toconsume);
-        let mut body: Vec<u8> = d.unprocessed.drain(..len).collect();
-        let mut plen = len;
-        match d.state {
-            SENCRYPTING => {
-                if body.is_empty() {
-                    return Err("ssl message too short (encrypting)");
-                }
-                if let Some(st) = d.inway.rc4.as_mut() {
-                    st.rc4(&mut body);
-                }
-            }
-            SDIGESTING | SDIGENC => {
-                if d.state == SDIGENC
-                    && let Some(st) = d.inway.rc4.as_mut()
-                {
-                    st.rc4(&mut body);
-                }
-                if body.len() < d.diglen as usize {
-                    return Err("ssl message too short (dig+enc)");
-                }
-                check_digest(d, &body)?;
-                body.drain(..d.diglen as usize);
-                plen -= d.diglen as usize;
-            }
-            _ => {}
+            (len, pad, 3)
         }
-        if pad > 0 && pad <= plen {
-            body.truncate(plen - pad);
+    };
+    ensure(dir.io.as_mut().unwrap(), &mut dir.unprocessed, toconsume + len)?;
+    dir.unprocessed.drain(..toconsume);
+    let mut body: Vec<u8> = dir.unprocessed.drain(..len).collect();
+    let mut plen = len;
+    match p.state {
+        SENCRYPTING => {
+            if body.is_empty() {
+                return Err("ssl message too short (encrypting)");
+            }
+            if let Some(st) = dir.way.rc4.as_mut() {
+                st.rc4(&mut body);
+            }
         }
-        d.processed = body;
-        d.inway.mid += 1;
+        SDIGESTING | SDIGENC => {
+            if p.state == SDIGENC
+                && let Some(st) = dir.way.rc4.as_mut()
+            {
+                st.rc4(&mut body);
+            }
+            if body.len() < p.diglen as usize {
+                return Err("ssl message too short (dig+enc)");
+            }
+            check_digest(dir, p.diglen, &body)?;
+            body.drain(..p.diglen as usize);
+            plen -= p.diglen as usize;
+        }
+        _ => {}
     }
-    let n = want.min(d.processed.len());
-    Ok(d.processed.drain(..n).collect())
+    if pad > 0 && pad <= plen {
+        body.truncate(plen - pad);
+    }
+    dir.processed = body;
+    dir.way.mid += 1;
+    Ok(())
 }
 
 /// One SSL-format record (donor sslput's loop body, the pad-free
@@ -651,72 +769,70 @@ fn sslbread(d: &mut Dstate, want: usize) -> Result<Vec<u8>> {
 /// frames): [0x80|len_hi, len_lo] counting digest+payload, the digest
 /// computed over secret||payload||mid and prepended INSIDE the
 /// encrypted body (the header stays clear — drawterm's vendored arm
-/// runs the identical bytes).
-fn sslput_record(d: &mut Dstate, chunk: &[u8]) -> Result<()> {
-    let diglen = d.diglen as usize;
-    let l2 = chunk.len() as u32 + d.diglen as u32;
+/// runs the identical bytes).  Runs under OUT-direction ownership
+/// with the claim-time snapshot `p` — a parked ssl read on the same
+/// conv never blocks this (19-08's direction split).
+fn sslput_record(dir: &mut OutDir, p: &AlgParams, chunk: &[u8]) -> Result<()> {
+    let diglen = p.diglen as usize;
+    let l2 = chunk.len() as u32 + p.diglen as u32;
     let mut rec = alloc::vec![0u8; 2 + diglen + chunk.len()];
     rec[0] = ((l2 >> 8) as u8) | 0x80;
     rec[1] = l2 as u8;
     rec[2 + diglen..].copy_from_slice(chunk);
-    if d.hashing {
-        let mut input = Vec::with_capacity(d.outway.secret.len() + chunk.len() + 4);
-        input.extend_from_slice(&d.outway.secret);
+    if p.hashing {
+        let mut input = Vec::with_capacity(dir.way.secret.len() + chunk.len() + 4);
+        input.extend_from_slice(&dir.way.secret);
         input.extend_from_slice(chunk);
-        input.extend_from_slice(&d.outway.mid.to_be_bytes());
+        input.extend_from_slice(&dir.way.mid.to_be_bytes());
         let digest = crate::hmacsha1::sha1(&input);
         rec[2..2 + diglen].copy_from_slice(&digest[..diglen]);
     }
-    if d.encryptalg == RC4ALG
-        && let Some(st) = d.outway.rc4.as_mut()
+    if p.encryptalg == RC4ALG
+        && let Some(st) = dir.way.rc4.as_mut()
     {
         st.rc4(&mut rec[2..]);
     }
-    let io = d.io.as_mut().ok_or("inappropriate use of fd")?;
+    let io = dir.io.as_mut().ok_or("inappropriate use of fd")?;
     io_write(io, &rec)?;
-    d.outway.mid += 1;
+    dir.way.mid += 1;
     Ok(())
 }
 
 /// Write (donor sslwrite): data rides sslput (the SSL-format record
-/// builder, chunked at max); secretin/secretout set the RAW bytes as
-/// the direction's secret (donor setsecret — the dec64 path is the
-/// CTL verbs'); ctl runs the verb machine.
+/// builder, chunked at max) under OUT-direction ownership;
+/// secretin/secretout/ctl claim BOTH directions (the donor's
+/// in.ctlq+out.q) and run the verb machine.
 pub fn write(c: &mut Chan, buf: &[u8]) -> Result<u64> {
     let conv = conv_of(c.qid.path);
     match typ_of(c.qid.path) {
         QDATA => {
             let arc = conv_arc(conv)?;
-            let node = LockNode::new();
-            let mut d = arc.lock(&node);
-            if d.state == SINCOMPLETE {
+            // The donor's out-direction (qlock(&s->out.q)): a parked
+            // ssl READ on the same conv holds only ITS direction.
+            let mut dir = claim_out(&arc)?;
+            let p = {
+                let node = LockNode::new();
+                alg_params(&arc.shared.lock(&node))
+            };
+            if p.state == SINCOMPLETE {
                 return Err("inappropriate use of fd");
             }
-            let max = d.max.max(1) as usize;
+            let max = p.max.max(1) as usize;
             for chunk in buf.chunks(max) {
-                sslput_record(&mut d, chunk)?;
+                sslput_record(&mut dir, &p, chunk)?;
             }
             Ok(buf.len() as u64)
         }
-        QSECRETIN => {
+        QSECRETIN | QSECRETOUT | QCTL => {
             let arc = conv_arc(conv)?;
+            // The donor's ctl-path locks (in.ctlq THEN out.q), taken
+            // in that order; mutations hold BOTH, so a direction
+            // owner's post-claim snapshot is stable.
+            let mut indir = claim_in(&arc)?;
+            let mut outdir = claim_out(&arc)?;
             let node = LockNode::new();
-            let mut d = arc.lock(&node);
-            d.inway.secret = buf.to_vec();
-            Ok(buf.len() as u64)
-        }
-        QSECRETOUT => {
-            let arc = conv_arc(conv)?;
-            let node = LockNode::new();
-            let mut d = arc.lock(&node);
-            d.outway.secret = buf.to_vec();
-            Ok(buf.len() as u64)
-        }
-        QCTL => {
-            let arc = conv_arc(conv)?;
-            let node = LockNode::new();
-            let mut d = arc.lock(&node);
-            ctl_write(&mut d, buf)
+            let mut d = arc.shared.lock(&node);
+            ctl_write(&mut d, &mut indir, &mut outdir, buf)
         }
         QCLONUS => Err("devssl: clone is not writable"),
         QENCALGS | QHASHALGS => {
@@ -731,7 +847,9 @@ pub fn write(c: &mut Chan, buf: &[u8]) -> Result<u64> {
 
 /// The ctl verb machine (donor sslwrite's Qctl parse, devssl.c:1139-1211
 /// — verb at the first space, secrets dec64'd, fd-before-alg enforced).
-fn ctl_write(d: &mut Dstate, buf: &[u8]) -> Result<u64> {
+/// Runs with BOTH directions claimed and the shared lock held (the
+/// donor's in.ctlq+out.q).
+fn ctl_write(d: &mut Dstate, indir: &mut InDir, outdir: &mut OutDir, buf: &[u8]) -> Result<u64> {
     if buf.len() >= 128 {
         return Err("arg too long");
     }
@@ -747,7 +865,11 @@ fn ctl_write(d: &mut Dstate, buf: &[u8]) -> Result<u64> {
     if verb == b"fd" {
         // buftochan: fdtochan incref (the resolver's dup shape), the
         // device's own files refused (donor's "cannot ssl encrypt
-        // devssl files" — the recursion guard).
+        // devssl files" — the recursion guard).  The conv keeps TWO
+        // dups — one per direction — so a parked read and an active
+        // write hold separate Chan handles (19-08's split); any
+        // previous pair is released first (the donor's incref/decref
+        // balance, which the single-store replace used to skip).
         let Some(p) = p else { return Err("bad arg in system call") };
         let s = core::str::from_utf8(p).map_err(|_| "bad arg in system call")?;
         let fd: u64 = s.trim().parse().map_err(|_| "bad arg in system call")?;
@@ -756,15 +878,23 @@ fn ctl_write(d: &mut Dstate, buf: &[u8]) -> Result<u64> {
             crate::namec::close_chan(&chan);
             return Err("cannot ssl encrypt devssl files");
         }
-        d.io = Some(chan);
+        let wchan = chan.dup();
+        if let Some(old) = indir.io.take() {
+            crate::namec::close_chan(&old);
+        }
+        if let Some(old) = outdir.io.take() {
+            crate::namec::close_chan(&old);
+        }
+        indir.io = Some(chan);
+        outdir.io = Some(wchan);
         // Default is clear (msg delimiters only) — donor's fd arm.
         d.state = SCLEAR;
         d.blocklen = 1;
         d.diglen = 0;
         d.max = rc4::ssl_max(1, 0);
         d.maxpad = rc4::ssl_maxpad(1, 0);
-        d.inway.mid = 0;
-        d.outway.mid = 0;
+        indir.way.mid = 0;
+        outdir.way.mid = 0;
         return Ok(buf.len() as u64);
     }
 
@@ -772,7 +902,7 @@ fn ctl_write(d: &mut Dstate, buf: &[u8]) -> Result<u64> {
         let Some(p) = p else { return Err("bad arg in system call") };
         d.blocklen = 1;
         d.diglen = 0;
-        if d.io.is_none() {
+        if indir.io.is_none() {
             return Err("must set fd before algorithm");
         }
         d.state = SCLEAR;
@@ -783,13 +913,13 @@ fn ctl_write(d: &mut Dstate, buf: &[u8]) -> Result<u64> {
         }
         // The donor's single-secret auto-copy (alg with only one
         // direction armed mirrors it to the other).
-        if !d.inway.secret.is_empty() && d.outway.secret.is_empty() {
-            d.outway.secret = d.inway.secret.clone();
+        if !indir.way.secret.is_empty() && outdir.way.secret.is_empty() {
+            outdir.way.secret = indir.way.secret.clone();
         }
-        if !d.outway.secret.is_empty() && d.inway.secret.is_empty() {
-            d.inway.secret = d.outway.secret.clone();
+        if !outdir.way.secret.is_empty() && indir.way.secret.is_empty() {
+            indir.way.secret = outdir.way.secret.clone();
         }
-        if d.inway.secret.is_empty() || d.outway.secret.is_empty() {
+        if indir.way.secret.is_empty() || outdir.way.secret.is_empty() {
             return Err("algorithm but no secret");
         }
         d.hashing = false;
@@ -806,8 +936,8 @@ fn ctl_write(d: &mut Dstate, buf: &[u8]) -> Result<u64> {
             } else if tok == b"rc4_256" {
                 d.encryptalg = RC4ALG;
                 d.blocklen = 1;
-                d.inway.rc4 = Some(rc4::setup_rc4_state(&d.inway.secret));
-                d.outway.rc4 = Some(rc4::setup_rc4_state(&d.outway.secret));
+                indir.way.rc4 = Some(rc4::setup_rc4_state(&indir.way.secret));
+                outdir.way.rc4 = Some(rc4::setup_rc4_state(&outdir.way.secret));
                 d.state &= !SCLEAR;
                 d.state |= SENCRYPTING;
             } else {
@@ -834,9 +964,9 @@ fn ctl_write(d: &mut Dstate, buf: &[u8]) -> Result<u64> {
         }
         let secret = x[..t].to_vec();
         if verb == b"secretin" {
-            d.inway.secret = secret;
+            indir.way.secret = secret;
         } else {
-            d.outway.secret = secret;
+            outdir.way.secret = secret;
         }
         return Ok(buf.len() as u64);
     }
@@ -867,8 +997,9 @@ pub fn stat(c: &Chan, sb: &mut [u8]) -> Result<u64> {
 
 /// close (donor sslclose): an OPEN ctl/data/secretin/secretout chan
 /// drops a conv reference; the last close frees the slot, hangs the
-/// conv up, and releases the underlying fd chan (the donor's cclose —
-/// namec::close_chan on the held open-ref clone).
+/// conv up, and releases BOTH direction io chans (the donor's cclose —
+/// namec::close_chan on each held dup; refc==0 means no data read can
+/// be parked mid-record — the reading syscall holds an open chan).
 pub fn close(c: &Chan) {
     if !matches!(typ_of(c.qid.path), QCTL | QDATA | QSECRETIN | QSECRETOUT) || !c.copen {
         return;
@@ -878,7 +1009,7 @@ pub fn close(c: &Chan) {
     let arc = DSSTATE.lock(&node).convs.get(conv).and_then(|s| s.clone());
     let Some(arc) = arc else { return };
     let last = {
-        let mut d = arc.lock(&node);
+        let mut d = arc.shared.lock(&node);
         if d.refc == 0 {
             return;
         }
@@ -894,11 +1025,20 @@ pub fn close(c: &Chan) {
                 guard.convs[conv] = None;
             }
         }
-        // sslhangup + the frees: processed/unprocessed drop with the
-        // Dstate once the table slot and this Arc go; the io chan
-        // gets the donor's explicit cclose.
-        if let Some(io) = arc.lock(&node).io.take() {
-            crate::namec::close_chan(&io);
+        // sslhangup + the frees: the direction cells drop with the
+        // Conv once the table slot and this Arc go; each direction's
+        // io dup gets the donor's explicit cclose.  Claim both cells
+        // first (uncontended at refc==0 — the parked-reader window
+        // cannot exist without an open chan keeping refc>0).
+        if let Ok(mut indir) = claim_in(&arc)
+            && let Ok(mut outdir) = claim_out(&arc)
+        {
+            if let Some(io) = indir.io.take() {
+                crate::namec::close_chan(&io);
+            }
+            if let Some(io) = outdir.io.take() {
+                crate::namec::close_chan(&io);
+            }
         }
     }
 }
