@@ -63,6 +63,11 @@ pub mod devcap;
 // format hashes with it.
 #[forbid(unsafe_code)]
 pub mod hmacsha1;
+// rc4 (19-04, DESK-04): the donor-verbatim rc4_256 key class + the
+// SSL-format framing arithmetic + dec64 — devssl's algorithm half
+// (libsec rc4.c / devssl.c / libc u64.c as the donors of record).
+#[forbid(unsafe_code)]
+pub mod rc4;
 #[forbid(unsafe_code)]
 pub mod devroot;
 #[forbid(unsafe_code)]
