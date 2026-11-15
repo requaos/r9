@@ -685,7 +685,24 @@ WRAP
             # 5e5b61e0fa725ed1e6933a8786b4b215b0c8542cc659e5677ddd332e8298165f
             # (sha256-Xlth4P…), in three-way agreement with the FOD's
             # own measured got-value.
-            outputHash = "sha256-Xlth4PpyXtHmkzqHhrSyFbDIVCzGWeVnfd0zLoKYFl8=";
+            # The 19-08 kernel bytes (the listen-park ingress drive
+            # 9704b2e, the five-defect -G session chain 917685c, the
+            # devssl direction split 22d40fb, the devmnt tag-mux
+            # 091614a, the session-teardown Drop 3c67e2a, the note-
+            # interrupt fix 1f14a50) re-staled it once more; re-wired
+            # at 19-08's close with the same two-derivation proof:
+            # two independent kernel builds (kernel A plain at 1f14a50
+            # + kernel B at 9858748, a kernel-neutral
+            # derivation-independence marker commit in a discarded
+            # separate clone, FRESH r9-kernel-x64-9858748.drv) through
+            # the non-FOD lib.bootIso realization produced the
+            # byte-identical ISO — file-level sha256
+            # d1e8a9fd5de60cc1ca7d234b764ad467c85a2ec5f59ca51ec43f6b248203fcda,
+            # NAR hash (what this attr checks)
+            # 2a1301c81e62a88cb41d2d2c8d419a9d2b48036dd36b2228d896cafb17192ad2
+            # (sha256-KhMByB…), in three-way agreement with the FOD's
+            # own measured got-value.
+            outputHash = "sha256-KhMByB5iqIy0HS0sjUGanStIA23TayIo2JbK+xcZKtI=";
           };
         });
 
