@@ -30,6 +30,7 @@
 //! HEADTYPE 2 defaults: HEADR 40, INITTEXT 0x200000+HEADR, INITRND
 //! 0x200000) — published as amd64/ABI.md's stack-top policy section.
 
+use alloc::vec::Vec;
 use port::mem::{PAGE_SIZE_4K, VirtRange};
 use port::Result;
 
@@ -104,11 +105,58 @@ pub(crate) fn shebang_pass(
     elem: &[u8],
     caller_args: &[&[u8]],
 ) -> Result<Option<ShebangExec>> {
-    // 19-03 stub (pre-change behavior): no sniff — every file takes the
-    // plain a.out path.  The pins below fail against this shape for the
-    // planned reasons.
-    let _ = (head, n, file, elem, caller_args, SHEBANG_LINE_BOUND);
-    Ok(None)
+    // The donor's hdrsz < 2 gate (sysproc.c:288-289) is NOT ported as a
+    // reject: a head shorter than the marker cannot BE a script, and
+    // the plain path's own unchanged loud error (read_aout's short
+    // read) owns that shape — the else-branch stays byte-identical
+    // with today.
+    if n < 2 || !(head[0] == b'#' && head[1] == b'!') {
+        return Ok(None);
+    }
+    // memccpy to the newline within MIN(sizeof(Exec), hdrsz)
+    // (sysproc.c:293): a line that does not close inside the bound is
+    // the donor's Ebadexec.
+    let bound = n.min(SHEBANG_LINE_BOUND).min(head.len());
+    let Some(nl) = head[..bound].iter().position(|&b| b == b'\n') else {
+        return Err("exec: bad header (hash-bang line unterminated)");
+    };
+    // tokenize(line+2) (sysproc.c:297): whitespace-separated tokens,
+    // empty runs skipped; an empty token list is the donor's Ebadexec.
+    let tokens: Vec<&[u8]> = head[2..nl]
+        .split(|&b| b == b' ' || b == b'\t')
+        .filter(|t| !t.is_empty())
+        .collect();
+    if tokens.is_empty() {
+        return Err("exec: bad header (empty hash-bang line)");
+    }
+    // The donor argv assembly (sysproc.c:301-309): the script path is
+    // appended after the #! tokens, then progarg[0] (the interpreter
+    // path) is REPLACED by elem — the interpreter is opened as the new
+    // image while argv[0] names the SCRIPT ("replace $0 with the
+    // original path's name").
+    let mut argv: Vec<Vec<u8>> = Vec::with_capacity(1 + tokens.len() + caller_args.len());
+    argv.push(elem.to_vec());
+    for t in &tokens[1..] {
+        argv.push(t.to_vec());
+    }
+    argv.push(file.to_vec());
+    // The caller's argv follows with argv[0] thrown away (sysproc.c:
+    // 446-447 — "argv[0] gets validated even though it will be thrown
+    // away if this is a shell script"): listen's blind execl of a
+    // service file becomes the interpreter with -R, the trailing
+    // service/proto/dir args after the script path.
+    for a in caller_args.iter().skip(1) {
+        argv.push(a.to_vec());
+    }
+    // The donor's tokenize silently drops tokens past nelem(progarg)=17
+    // and the seed's own bound is MAX_ARGS; the 19-03 plan pins the
+    // LOUD shape instead (T-19-05's token cap) — never a silent
+    // truncation.  The message matches check_seed_fit's, the same
+    // bound in both halves of the exec path.
+    if argv.len() > MAX_ARGS {
+        return Err("exec: too many args");
+    }
+    Ok(Some(ShebangExec { interpreter: tokens[0].to_vec(), argv }))
 }
 
 /// The EXEC syscall's full entry (19-03, CPU-01): the #! pre-pass in
@@ -131,9 +179,38 @@ pub fn exec_with_shebang(
     frame: &mut Ureg,
     resolve: &mut dyn FnMut(&mut Proc, &[u8]) -> Result<ByteBacking>,
 ) -> Result<u64> {
-    // 19-03 stub (pre-change behavior): straight to exec_replace.
-    let _ = (file, resolve, MAX_SHEBANG_DEPTH);
-    exec_replace(proc, backing, name, args, frame)
+    // The pre-pass loop: after each expansion's header read, BEFORE
+    // parse_aout's magic check, branch on the first two bytes.  `file`
+    // and `name` stay the ORIGINAL exec's across every hop (the donor
+    // takes elem once, before the #! branch — sysproc.c:278 — and
+    // seeds up->text with it); each hop's caller argv is the previous
+    // hop's product, so the donor rule composes across recursion.
+    let mut backing = backing;
+    let mut staged: Vec<Vec<u8>> = args.iter().map(|a| a.to_vec()).collect();
+    for depth in 0..=MAX_SHEBANG_DEPTH {
+        let mut head = [0u8; HDR_SIZE];
+        let n = backing.read_at(0, &mut head)?;
+        let slices: Vec<&[u8]> = staged.iter().map(|a| a.as_slice()).collect();
+        match shebang_pass(&head, n, file, name.as_bytes(), &slices)? {
+            None => break,
+            Some(script) => {
+                if depth == MAX_SHEBANG_DEPTH {
+                    // The donor's implicit one-hop protection (the
+                    // post-#! magic check) made explicit: a third
+                    // expansion is a loud reject.
+                    return Err("exec: hash-bang recursion too deep");
+                }
+                // "read a new header from the file indicated by the #!"
+                // (sysproc.c:313): the interpreter resolves through the
+                // caller's namespace seam and its header is read on
+                // the next iteration.
+                backing = resolve(proc, &script.interpreter)?;
+                staged = script.argv;
+            }
+        }
+    }
+    let final_args: Vec<&[u8]> = staged.iter().map(|a| a.as_slice()).collect();
+    exec_replace(proc, backing, name, &final_args, frame)
 }
 
 /// Read + parse + validate the 40-byte a.out header through the byte
@@ -912,30 +989,34 @@ mod tests {
     /// Test 5 (the MAX_ARGS bound): #! tokens plus the caller's argv
     /// past 32 args fail loudly — never a silent truncation (the
     /// donor's nelem(progarg)=17 silent-drop made loud per the plan).
+    /// The #! line itself is bounded by the donor's 32-byte memccpy
+    /// rule, so the growth past MAX_ARGS rides the CALLER's argv
+    /// (copy_exec_args stages up to 32 caller entries).
     #[test]
     fn shebang_argv_growth_respects_max_args() {
-        // A line of 29 tokens: [elem] + 28 + file = 30 from the line,
-        // plus the caller's argv[1..] (2) = 32 — exactly at the bound.
-        let mut line = alloc::vec![];
-        line.extend_from_slice(b"#!/bin/rc");
-        for i in 0..28u32 {
-            line.push(b' ');
-            line.extend_from_slice(alloc::format!("t{i}").as_bytes());
+        // A two-token line: [elem, -x, file] = 3 from the sniff; the
+        // caller's argv[1..] supplies the rest.  29 surviving caller
+        // args -> 32, exactly at the bound.
+        let head = shebang_head(b"#!/bin/rc -x\n");
+        let mut caller: alloc::vec::Vec<alloc::vec::Vec<u8>> =
+            alloc::vec![SCRIPT.to_vec()];
+        for i in 0..29u32 {
+            caller.push(alloc::vec![b'a'; 2 + (i as usize % 3)]);
         }
-        line.push(b'\n');
-        let head = shebang_head(&line);
-        let at_bound = shebang_pass(
-            &head,
-            line.len(),
-            SCRIPT,
-            ELEM,
-            &[SCRIPT, b"a1", b"a2"],
-        )
-        .expect("32 args is at the bound")
-        .expect("script");
-        assert_eq!(at_bound.argv.len(), MAX_ARGS);
+        let slices: alloc::vec::Vec<&[u8]> = caller.iter().map(|a| a.as_slice()).collect();
+        assert_eq!(slices.len(), 30, "caller argv + argv[0]");
+        let pass = shebang_pass(&head, 40, SCRIPT, ELEM, &slices)
+            .expect("32 args is at the bound")
+            .expect("script");
+        assert_eq!(pass.argv.len(), MAX_ARGS);
         // One more caller arg: 33 — the loud reject.
-        assert!(shebang_pass(&head, line.len(), SCRIPT, ELEM, &[SCRIPT, b"a1", b"a2", b"a3"]).is_err());
+        let mut over = caller.clone();
+        over.push(b"one-too-many".to_vec());
+        let over_slices: alloc::vec::Vec<&[u8]> = over.iter().map(|a| a.as_slice()).collect();
+        assert_eq!(
+            shebang_pass(&head, 40, SCRIPT, ELEM, &over_slices),
+            Err("exec: too many args")
+        );
     }
 
     /// A synthetic 6l-shaped a.out for the interpreter-re-exec pins.
