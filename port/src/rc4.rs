@@ -45,8 +45,24 @@ const INVAL: u8 = 255;
 /// range — UB it never reaches because devssl gates dec64 length > 0;
 /// the port makes the unreachable loud instead).
 pub fn setup_rc4_state(key: &[u8]) -> Rc4state {
-    let _ = key;
-    Rc4state { x: 0, y: 0, state: [0; 256] }
+    assert!(!key.is_empty(), "rc4: empty key (dec64's t>0 gate makes this unreachable)");
+    let mut st = Rc4state { x: 0, y: 0, state: [0; 256] };
+    for i in 0..256 {
+        st.state[i] = i as u8;
+    }
+    let mut index2: usize = 0;
+    let mut p = 0usize;
+    for i in 0..256 {
+        let t = st.state[i];
+        index2 = (key[p] as usize + t as usize + index2) & 255;
+        st.state[i] = st.state[index2];
+        st.state[index2] = t;
+        p += 1;
+        if p >= key.len() {
+            p = 0;
+        }
+    }
+    st
 }
 
 /// The donor's RC4state (libsec rc4.h shape): the two stream indices +
@@ -63,7 +79,19 @@ impl Rc4state {
     /// `y = (y+tx)&255`, swap, output `state[(tx+ty)&255]`.  In place,
     /// length-agnostic (the donor's `rc4(key, p, len)`).
     pub fn rc4(&mut self, p: &mut [u8]) {
-        let _ = p;
+        let mut x = self.x as usize;
+        let mut y = self.y as usize;
+        for b in p.iter_mut() {
+            x = (x + 1) & 255;
+            let tx = self.state[x];
+            y = (y + tx as usize) & 255;
+            let ty = self.state[y];
+            self.state[x] = ty;
+            self.state[y] = tx;
+            *b ^= self.state[(tx as usize + ty as usize) & 255];
+        }
+        self.x = x as u8;
+        self.y = y as u8;
     }
 }
 
@@ -75,8 +103,12 @@ impl Rc4state {
 /// interop silently (Pitfall 11), so the formula is pinned, not
 /// restyled.
 pub fn ssl_max(blocklen: u16, diglen: u16) -> u32 {
-    let _ = (blocklen, diglen);
-    0
+    let max = 32768 - diglen as u32 - 1;
+    if blocklen != 1 {
+        max - max % blocklen as u32
+    } else {
+        max
+    }
 }
 
 /// The SSL-format padded record bound (devssl.c:1192-1195): stream
@@ -84,8 +116,12 @@ pub fn ssl_max(blocklen: u16, diglen: u16) -> u32 {
 /// rounded down to a block multiple.  rc4_256 never pads — the value
 /// exists because the framing arithmetic is one pinned whole.
 pub fn ssl_maxpad(blocklen: u16, diglen: u16) -> u32 {
-    let _ = (blocklen, diglen);
-    0
+    if blocklen != 1 {
+        let maxpad = 16384 - diglen as u32 - 1;
+        maxpad - maxpad % blocklen as u32
+    } else {
+        ssl_max(blocklen, diglen)
+    }
 }
 
 /// The donor's dec64 decode table (u64.c `t64d`): standard base64
@@ -122,8 +158,52 @@ const fn t64d() -> [u8; 256] {
 /// the same donor codec, so the pseudo-random 15 bytes ARE the rc4
 /// secret (never hex-decode: the must-have's exact words).
 pub fn dec64(out: &mut [u8], input: &[u8]) -> usize {
-    let _ = (out, input);
-    0
+    const T64D: [u8; 256] = t64d();
+    let mut b24: u32 = 0;
+    let mut i: i32 = 0;
+    let mut w = 0usize;
+    for &ch in input {
+        let c = T64D[ch as usize];
+        if c == INVAL {
+            continue;
+        }
+        match i {
+            0 => b24 = (c as u32) << 18,
+            1 => b24 |= (c as u32) << 12,
+            2 => b24 |= (c as u32) << 6,
+            _ => {
+                b24 |= c as u32;
+                if w + 3 > out.len() {
+                    return w; // exhausted (the donor's goto)
+                }
+                out[w] = (b24 >> 16) as u8;
+                out[w + 1] = (b24 >> 8) as u8;
+                out[w + 2] = b24 as u8;
+                w += 3;
+                i = -1;
+            }
+        }
+        i += 1;
+    }
+    match i {
+        2 => {
+            if w + 1 > out.len() {
+                return w;
+            }
+            out[w] = (b24 >> 16) as u8;
+            w += 1;
+        }
+        3 => {
+            if w + 2 > out.len() {
+                return w;
+            }
+            out[w] = (b24 >> 16) as u8;
+            out[w + 1] = (b24 >> 8) as u8;
+            w += 2;
+        }
+        _ => {}
+    }
+    w
 }
 
 // ---------------------------------------------------------------------------
