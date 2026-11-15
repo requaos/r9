@@ -26,7 +26,7 @@ use alloc::vec::Vec;
 
 use port::dat::{
     Chan, DEV_CAP, DEV_CONS, DEV_DUP, DEV_ENV, DEV_ETHER, DEV_IP, DEV_MNT, DEV_PIPE, DEV_PROC,
-    DEV_ROOT, DEV_SRV, OEXEC, OTRUNC,
+    DEV_ROOT, DEV_SRV, DEV_SSL, OEXEC, OTRUNC,
 };
 use port::mcslock::{Lock, LockNode};
 use port::namec::{self, NamecMode};
@@ -348,6 +348,7 @@ fn sys_pwrite(frame: &mut Ureg, proc: &mut Proc) -> u64 {
                 }
             };
         }
+        DEV_SSL => port::devssl::write(&mut chan, src.as_slice()),
         _ => Err("pwrite: unknown device"),
     };
     proc.fd_op_done(fd, chan);
@@ -392,6 +393,7 @@ fn sys_pread(frame: &mut Ureg, proc: &mut Proc) -> u64 {
         }
         DEV_MNT => port::devmnt::read(&mut chan, dst.as_slice_mut(), off),
         DEV_CAP => port::devcap::read(&mut chan, dst.as_slice_mut(), off),
+        DEV_SSL => port::devssl::read(&mut chan, dst.as_slice_mut(), off),
         _ => Err("pread: unknown device"),
     };
     proc.fd_op_done(fd, chan);

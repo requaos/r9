@@ -22,6 +22,7 @@
 
 use crate::dat::{
     Chan, DEV_CAP, DEV_CONS, DEV_DUP, DEV_ENV, DEV_ETHER, DEV_IP, DEV_MNT, DEV_PIPE, DEV_PROC,
+    DEV_SSL,
     DEV_ROOT, DEV_SRV,
 };
 use crate::mcslock::{Lock, LockNode};
@@ -87,6 +88,14 @@ fn registry_attach(rune: char, spec: &[u8]) -> Result<Chan> {
         // shape for a config that omits the device).
         #[cfg(dev_cap)]
         '¤' => Ok(crate::devcap::attach()),
+        // '#D' — devssl (the ssl device pushssl hard-codes, 19-04/
+        // DESK-04).  Unconditional this era: the donor carries devssl
+        // in every standard k10 CONF, the module is self-contained
+        // (rc4_256/sha1 lives in port), and no boot profile declares
+        // a dev key for it — 19-04's CONTEXT discretion resolved that
+        // no separate boot profile joins (host pins are the substrate
+        // evidence; the live encrypted proof is 19-08's -G gate).
+        'D' => Ok(crate::devssl::attach()),
         _ => Err("namec: unknown # device"),
     }
 }
@@ -129,6 +138,7 @@ fn dev_walk(c: &Chan, comp: &[u8]) -> Result<Chan> {
         DEV_ETHER => crate::devether::walk(c, comp),
         DEV_IP => crate::devip::walk(c, comp),
         DEV_CAP => crate::devcap::walk(c, comp),
+        DEV_SSL => crate::devssl::walk(c, comp),
         // A walk into a mounted tree is a Twalk RPC (devmnt — the
         // mount entry's `to` chan carries the session + the attach fid).
         DEV_MNT => crate::devmnt::walk(c, comp),
@@ -402,6 +412,7 @@ pub fn open_chan(c: &Chan, mode: u32) -> Result<Chan> {
         // contract §2's zero-on-open; the devenv precedent).
         DEV_IP => crate::devip::open(c, mode)?,
         DEV_CAP => crate::devcap::open(c, access)?,
+        DEV_SSL => crate::devssl::open(c, access)?,
         // Topen over the session (devmnt gets the FULL mode — it
         // masks the wire byte itself, OTRUNC included for the server to
         // refuse).
@@ -429,6 +440,7 @@ pub fn stat_chan(c: &Chan, sb: &mut [u8]) -> Result<u64> {
         DEV_ETHER => crate::devether::stat(c, sb),
         DEV_IP => crate::devip::stat(c, sb),
         DEV_CAP => crate::devcap::stat(c, sb),
+        DEV_SSL => crate::devssl::stat(c, sb),
         // Tstat over the session (settime's stat of the /tmp mount).
         DEV_MNT => crate::devmnt::stat(c, sb),
         _ => Err("namec: chan with unknown device index"),
@@ -540,6 +552,14 @@ pub fn close_chan(c: &Chan) {
             }
         }
         DEV_MNT => crate::devmnt::clunk_if_last(c),
+        // devssl: an open conv file chan drops a conv reference (the
+        // last close frees the slot + releases the fd chan — donor
+        // sslclose).
+        DEV_SSL => {
+            if c.copen {
+                crate::devssl::close(c);
+            }
+        }
         _ => {}
     }
 }

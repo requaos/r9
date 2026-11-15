@@ -40,6 +40,9 @@ use crate::dat::{Chan, ORDWR, OREAD};
 use crate::devcons;
 use crate::devpipe;
 use crate::devssl;
+use crate::mcslock::Lock;
+use crate::namec::{self, NamecMode};
+use crate::pgrp::Pgrp;
 
 /// The mksecret pair (see the module doc): the client arm passes
 /// (FC, FS) as (secretin, secretout); srvp9auth passes them SWAPPED.
@@ -302,4 +305,24 @@ fn swapped_server_arm_secrets_round_trip_both_directions() {
         Err("bad digest"),
         "client order meets client order: without the swap the digest fails"
     );
+}
+
+/// Task 3's registry-level proof (the plan's acceptance criterion): the
+/// guest's name-resolution surface — namec's '#D' arm, the per-device
+/// walk dispatch, and the open funnel — resolves #D/ssl/clone
+/// end-to-end, the exact path a guest process's open() rides (no boot
+/// profile declares a dev key for #D this era; this pin is the
+/// substrate evidence, the live encrypted proof is 19-08's -G gate).
+#[test]
+fn registry_level_name_resolution_of_the_d_walk() {
+    let _g = ready();
+    let anchor = devssl::attach();
+    let pg = Lock::new("devsslpgtest", Pgrp::new());
+    let clone = namec::namec(b"#D/ssl/clone", &anchor, &anchor, &pg, NamecMode::Open)
+        .expect("#D/ssl/clone resolves through namec's registry arm");
+    assert_eq!(clone.qid.path & 0xf, 3, "the clone qid (QID(0, Qclonus))");
+    let mut ctl = namec::open_chan(&clone, ORDWR).expect("clone opens through the funnel");
+    let mut buf = [0u8; 8];
+    let n = devssl::read(&mut ctl, &mut buf, 0).expect("ctl read") as usize;
+    assert_eq!(&buf[..n], b"0", "the fresh conv's decimal id");
 }

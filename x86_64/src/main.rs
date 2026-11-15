@@ -498,6 +498,13 @@ pub(crate) fn exec_prologue(facts: &mb2::Facts) -> ExecPrologue {
         list: proc::current_fd_list,
     });
     port::devsrv::set_resolve_hook(proc::current_fd_resolve);
+    // devssl's fd resolver (19-04, DESK-04) — the same idiom: the "fd
+    // N" ctl verb resolves the CALLING proc's fd table through this
+    // hook (donor buftochan's fdtochan; ref_clone = the open-ref
+    // shape whose conv-free close balances).  #D itself is
+    // unconditional in the registry (no dev key — no boot profile
+    // joins it this era); only the fd seam needs the arch side.
+    port::devssl::set_fd_resolve_hook(proc::current_fd_resolve);
     // devcons's read-path hooks — the aarch64 registration re-keyed
     // (main.rs:536 there): the console's input engine rides the 16550
     // RX ring (drain_rx — the tick's polled sweep is the producer, see
