@@ -57,6 +57,85 @@ const STACK_EAGER_PAGES: usize = 64;
 /// entry cap (MAX_EXEC_ARGS).
 const MAX_ARGS: usize = 32;
 
+/// The #! (hash-bang) line bound — the donor's MIN(sizeof(Exec), hdrsz)
+/// (sysproc.c:293): sizeof(Exec) is 32 on the 8-u32 Exec shape, so the
+/// interpreter line INCLUDING its newline must close within 32 bytes of
+/// the file head.
+const SHEBANG_LINE_BOUND: usize = 32;
+
+/// The recursion cap (19-03, CPU-01): the donor allows exactly ONE #!
+/// hop implicitly (the post-#! magic check rejects a script
+/// interpreter), made explicit per the plan — a #! interpreter that is
+/// itself a #! script recurses through the same path at most twice; a
+/// third expansion is a loud reject.
+const MAX_SHEBANG_DEPTH: usize = 2;
+
+/// The #! pre-pass's result (the pure half of the donor algorithm of
+/// record, sysproc.c:282-324).
+#[derive(Debug, PartialEq)]
+pub(crate) struct ShebangExec {
+    /// progarg[0] BEFORE its substitution — the interpreter file to
+    /// open in place of the script (T-19-05: resolved by normal namec,
+    /// no extra path handling).
+    pub interpreter: Vec<u8>,
+    /// The FULL replacement argv, donor order verbatim:
+    /// [elem, #!tokens[1..], file, caller.argv[1..]] — the donor
+    /// replaces progarg[0] (the interpreter path) with `elem` (the
+    /// script's final path element, sysproc.c:308-309 "replace $0 with
+    /// the original path's name") and throws the caller's argv[0] away
+    /// (sysproc.c:446-447, "argv[0] gets validated even though it will
+    /// be thrown away if this is a shell script").
+    pub argv: Vec<Vec<u8>>,
+}
+
+/// The #! sniff + argv construction — the pure, host-pinnable half of
+/// the pre-pass.  `head` carries the first `n` bytes read from the
+/// file (the donor's hdrsz — NOT required to reach the 40-byte a.out
+/// header: a service script is typically ~15 bytes); `file` is the
+/// path the caller exec'd (donor `file`), `elem` its final element
+/// (donor `elem`, from the original namec), `caller_args` the exec'd
+/// call's argv.  Returns Ok(None) for a non-#! file (the plain a.out
+/// path proceeds byte-identically), Ok(Some(..)) for a script, Err for
+/// the donor's Ebadexec-class rejects.
+pub(crate) fn shebang_pass(
+    head: &[u8],
+    n: usize,
+    file: &[u8],
+    elem: &[u8],
+    caller_args: &[&[u8]],
+) -> Result<Option<ShebangExec>> {
+    // 19-03 stub (pre-change behavior): no sniff — every file takes the
+    // plain a.out path.  The pins below fail against this shape for the
+    // planned reasons.
+    let _ = (head, n, file, elem, caller_args, SHEBANG_LINE_BOUND);
+    Ok(None)
+}
+
+/// The EXEC syscall's full entry (19-03, CPU-01): the #! pre-pass in
+/// front of exec_replace.  After the header read and BEFORE parse_aout's
+/// magic check, a file whose first two bytes are hash-bang re-execs the
+/// interpreter: the #! line's tokens become the leading argv (argv[0]
+/// substituted by `elem`), the script path lands after them, the
+/// caller's argv follows — then the interpreter's header is read and
+/// parsed in place of the script's (the donor "read a new header from
+/// the file indicated by the #!").  `resolve` is the syscall layer's
+/// namespace half (namec + OEXEC open + backing); `name` (the original
+/// file's leaf) stays the proc's name across every hop (donor: elem is
+/// taken once, before the #! branch, and `up->text = elem`).
+pub fn exec_with_shebang(
+    proc: &mut Proc,
+    backing: ByteBacking,
+    file: &[u8],
+    name: &str,
+    args: &[&[u8]],
+    frame: &mut Ureg,
+    resolve: &mut dyn FnMut(&mut Proc, &[u8]) -> Result<ByteBacking>,
+) -> Result<u64> {
+    // 19-03 stub (pre-change behavior): straight to exec_replace.
+    let _ = (file, resolve, MAX_SHEBANG_DEPTH);
+    exec_replace(proc, backing, name, args, frame)
+}
+
 /// Read + parse + validate the 40-byte a.out header through the byte
 /// backing's window — byte-granular (no page-alignment assumptions on
 /// file offsets).  Runs BEFORE any mapping or freeing in both exec
@@ -719,6 +798,254 @@ mod tests {
         assert_eq!(l.text.0.end, 0x400000);
         assert_eq!(l.data.0.start, 0x400000);
         assert_eq!(l.data.0.end, 0x400000 + 0x1234);
+    }
+
+    // --- 19-03 (CPU-01): the #! pre-pass pins — the donor argv order,
+    // the negative shapes, and the live interpreter re-exec ---
+
+    /// Build a file head carrying `line` padded with 'x' filler past
+    /// the #! region — the head a real backing read would deliver (at
+    /// least the 40-byte a.out header read, longer when the line is).
+    fn shebang_head(line: &[u8]) -> alloc::vec::Vec<u8> {
+        let mut v = alloc::vec![b'x'; 40.max(line.len())];
+        v[..line.len()].copy_from_slice(line);
+        v
+    }
+
+    /// listen's blind execl shape (listen.c:541): the caller argv is
+    /// [script, serv, proto, dir].
+    const SCRIPT: &[u8] = b"/bin/service/tcp17010";
+    const ELEM: &[u8] = b"tcp17010";
+
+    /// Test 1 (the donor order pin): one interpreter token produces
+    /// [elem, script-path, caller.argv[1..]] — the donor substitutes
+    /// elem for progarg[0] (sysproc.c:308-309) and drops the caller's
+    /// argv[0] (sysproc.c:446-447).
+    #[test]
+    fn shebang_one_token_builds_the_donor_argv_order() {
+        let head = shebang_head(b"#!/bin/rc\n");
+        let pass = shebang_pass(&head, 40, SCRIPT, ELEM, &[SCRIPT, b"17010", b"tcp"])
+            .expect("loud reject-free pass")
+            .expect("the script sniffs as a script");
+        assert_eq!(pass.interpreter, b"/bin/rc");
+        assert_eq!(
+            pass.argv,
+            vec![
+                b"tcp17010".to_vec(),
+                b"/bin/service/tcp17010".to_vec(),
+                b"17010".to_vec(),
+                b"tcp".to_vec(),
+            ]
+        );
+    }
+
+    /// Test 2 (the tcp17010 shape): two #! tokens (the `-R` flag)
+    /// precede the script path — remoteside's ARGBEGIN sees -R, the
+    /// trailing caller args follow the script path.
+    #[test]
+    fn shebang_flag_tokens_precede_the_script_path() {
+        let head = shebang_head(b"#!/bin/cpu -R\n");
+        let pass = shebang_pass(&head, 40, SCRIPT, ELEM, &[SCRIPT, b"17010", b"tcp"])
+            .expect("loud reject-free pass")
+            .expect("the script sniffs as a script");
+        assert_eq!(pass.interpreter, b"/bin/cpu");
+        assert_eq!(
+            pass.argv,
+            vec![
+                b"tcp17010".to_vec(),
+                b"-R".to_vec(),
+                b"/bin/service/tcp17010".to_vec(),
+                b"17010".to_vec(),
+                b"tcp".to_vec(),
+            ]
+        );
+    }
+
+    /// Test 3 (the donor's Ebadexec rejects): a #! line with no
+    /// newline within the donor's MIN(sizeof(Exec), hdrsz) bound, and
+    /// an empty token list, are LOUD rejects — and a head shorter than
+    /// the marker is not a script at all (the plain path's own loud
+    /// error fires, byte-identical with today).
+    #[test]
+    fn shebang_negative_shapes_are_loud_rejects() {
+        // No newline within the 32-byte bound: the x filler buries it.
+        let head = shebang_head(b"#!/bin/rc -x");
+        assert!(shebang_pass(&head, 40, SCRIPT, ELEM, &[SCRIPT]).is_err());
+        // The bound follows the bytes actually read, not the buffer.
+        let short = b"#!/bin/rc -x no newline";
+        assert!(shebang_pass(short, short.len(), SCRIPT, ELEM, &[SCRIPT]).is_err());
+        // Empty token lists: bare marker, whitespace-only line.
+        for line in [&b"#!\n"[..], &b"#!   \n"[..], &b"#!\t\n"[..]] {
+            let head = shebang_head(line);
+            assert!(shebang_pass(&head, line.len(), SCRIPT, ELEM, &[SCRIPT]).is_err());
+        }
+        // n < 2: NOT a script — the plain path's unchanged short-read
+        // error owns this shape.
+        assert_eq!(shebang_pass(&head[..1], 1, SCRIPT, ELEM, &[SCRIPT]), Ok(None));
+        assert_eq!(shebang_pass(&[], 0, SCRIPT, ELEM, &[SCRIPT]), Ok(None));
+    }
+
+    /// Test 4 (the else-branch pin): a plain a.out header sniffs
+    /// Ok(None) and a short plain file still fails with today's exact
+    /// error — the sniff changes nothing for binaries.
+    #[test]
+    fn plain_aout_head_is_not_a_script() {
+        let h = aout_header(S_MAGIC_AMD64, 0x1000, 0x100, 0x80, 0x40, INITTEXT as u64);
+        assert_eq!(
+            shebang_pass(&h, 40, b"/amd64/bin/rc", b"rc", &[b"/amd64/bin/rc"]),
+            Ok(None)
+        );
+        // The unchanged else-branch: a non-#! file too short for the
+        // a.out header keeps read_aout's own loud error.
+        let mut guard = crate::proc::new_user_proc("t-sheb-plain").expect("proc");
+        let junk = alloc::sync::Arc::new(alloc::vec![b'z'; 20]);
+        let r = exec_replace(
+            &mut *guard,
+            ByteBacking::Mnt { file: junk },
+            "z",
+            &[b"z"],
+            &mut Ureg::zeroed(),
+        );
+        assert_eq!(r, Err("exec: short read of a.out header"));
+    }
+
+    /// Test 5 (the MAX_ARGS bound): #! tokens plus the caller's argv
+    /// past 32 args fail loudly — never a silent truncation (the
+    /// donor's nelem(progarg)=17 silent-drop made loud per the plan).
+    #[test]
+    fn shebang_argv_growth_respects_max_args() {
+        // A line of 29 tokens: [elem] + 28 + file = 30 from the line,
+        // plus the caller's argv[1..] (2) = 32 — exactly at the bound.
+        let mut line = alloc::vec![];
+        line.extend_from_slice(b"#!/bin/rc");
+        for i in 0..28u32 {
+            line.push(b' ');
+            line.extend_from_slice(alloc::format!("t{i}").as_bytes());
+        }
+        line.push(b'\n');
+        let head = shebang_head(&line);
+        let at_bound = shebang_pass(
+            &head,
+            line.len(),
+            SCRIPT,
+            ELEM,
+            &[SCRIPT, b"a1", b"a2"],
+        )
+        .expect("32 args is at the bound")
+        .expect("script");
+        assert_eq!(at_bound.argv.len(), MAX_ARGS);
+        // One more caller arg: 33 — the loud reject.
+        assert!(shebang_pass(&head, line.len(), SCRIPT, ELEM, &[SCRIPT, b"a1", b"a2", b"a3"]).is_err());
+    }
+
+    /// A synthetic 6l-shaped a.out for the interpreter-re-exec pins.
+    fn fake_aout() -> alloc::vec::Vec<u8> {
+        let mut bin = alloc::vec![0u8; HDR_SIZE + 0x1000];
+        bin[0..4].copy_from_slice(&S_MAGIC_AMD64.to_be_bytes());
+        bin[4..8].copy_from_slice(&0x1000u32.to_be_bytes());
+        bin[32..40].copy_from_slice(&(INITTEXT as u64).to_be_bytes());
+        bin
+    }
+
+    /// The live half: exec_with_shebang on a #! script installs the
+    /// INTERPRETER's image with the donor argv — the script never
+    /// reaches parse_aout (its bytes are not an a.out at all).
+    #[test]
+    fn exec_with_shebang_installs_the_interpreter_image() {
+        let mut guard = crate::proc::new_user_proc("t-sheb-exec").expect("proc");
+        let script: alloc::vec::Vec<u8> = b"#!/amd64/bin/fake -R\n".to_vec();
+        let interp = fake_aout();
+        let mut resolved: alloc::vec::Vec<u8> = alloc::vec![];
+        let mut resolve = |_p: &mut Proc, path: &[u8]| -> Result<ByteBacking> {
+            resolved = path.to_vec();
+            Ok(ByteBacking::Mnt { file: alloc::sync::Arc::new(interp.clone()) })
+        };
+        let mut frame = Ureg::zeroed();
+        let tos = exec_with_shebang(
+            &mut *guard,
+            ByteBacking::Mnt { file: alloc::sync::Arc::new(script) },
+            b"/bin/service/tcp17010",
+            "tcp17010",
+            &[b"/bin/service/tcp17010".as_slice(), b"17010".as_slice()],
+            &mut frame,
+            &mut resolve,
+        )
+        .expect("the interpreter image installs");
+        assert_ne!(tos, 0);
+        // The interpreter resolved by its #! token, through the seam.
+        assert_eq!(resolved, b"/amd64/bin/fake");
+        // The recorded argv (devproc's /proc/N/args, NUL-packed) is
+        // the DONOR order: [elem, -R, script-path, caller.argv[1..]].
+        assert_eq!(
+            guard.argv,
+            b"tcp17010\x00-R\x00/bin/service/tcp17010\x0017010\x00".to_vec()
+        );
+        // The live frame entered the interpreter's entry.
+        assert_eq!(frame.pc as usize, INITTEXT);
+        // The proc NAME is the script's leaf (donor: up->text = elem,
+        // taken once before the #! branch): "tcp17010", NUL-padded.
+        let name_end = guard.name.iter().position(|&b| b == 0).unwrap_or(guard.name.len());
+        assert_eq!(&guard.name[..name_end], b"tcp17010");
+    }
+
+    /// The recursion cap: a #! interpreter that is itself a #! script
+    /// recurses (depth 2), a THIRD expansion rejects loudly — the
+    /// donor's implicit one-hop protection made explicit.
+    #[test]
+    fn shebang_recursion_is_capped_at_two_with_a_loud_reject() {
+        // Depth-1 is fine: scriptA -> interpreter (a #! script) -> binary.
+        let script_b: alloc::vec::Vec<u8> = b"#!/amd64/bin/fake\n".to_vec();
+        let interp = fake_aout();
+        let table: &[(&[u8], alloc::vec::Vec<u8>)] = &[
+            (b"/amd64/bin/scriptb", script_b),
+            (b"/amd64/bin/fake", interp),
+        ];
+        let mut resolve = |_p: &mut Proc, path: &[u8]| -> Result<ByteBacking> {
+            table
+                .iter()
+                .find(|(k, _)| *k == path)
+                .map(|(_, v)| ByteBacking::Mnt { file: alloc::sync::Arc::new(v.clone()) })
+                .ok_or("test: unknown interpreter")
+        };
+        let mut guard = crate::proc::new_user_proc("t-sheb-depth-ok").expect("proc");
+        let mut frame = Ureg::zeroed();
+        exec_with_shebang(
+            &mut *guard,
+            ByteBacking::Mnt { file: alloc::sync::Arc::new(b"#!/amd64/bin/scriptb\n".to_vec()) },
+            b"/bin/a",
+            "a",
+            &[b"/bin/a".as_slice()],
+            &mut frame,
+            &mut resolve,
+        )
+        .expect("two hops reach the binary");
+        // Depth-2: scriptA -> scriptB -> scriptC(#!) -> the third
+        // expansion is the loud reject.
+        let script_c: alloc::vec::Vec<u8> = b"#!/amd64/bin/fake\n".to_vec();
+        let table2: &[(&[u8], alloc::vec::Vec<u8>)] = &[
+            (b"/amd64/bin/scriptb", b"#!/amd64/bin/scriptc\n".to_vec()),
+            (b"/amd64/bin/scriptc", script_c.clone()),
+            (b"/amd64/bin/fake", fake_aout()),
+        ];
+        let mut resolve2 = |_p: &mut Proc, path: &[u8]| -> Result<ByteBacking> {
+            table2
+                .iter()
+                .find(|(k, _)| *k == path)
+                .map(|(_, v)| ByteBacking::Mnt { file: alloc::sync::Arc::new(v.clone()) })
+                .ok_or("test: unknown interpreter")
+        };
+        let mut guard2 = crate::proc::new_user_proc("t-sheb-depth-bad").expect("proc");
+        let mut frame2 = Ureg::zeroed();
+        let r = exec_with_shebang(
+            &mut *guard2,
+            ByteBacking::Mnt { file: alloc::sync::Arc::new(b"#!/amd64/bin/scriptb\n".to_vec()) },
+            b"/bin/a",
+            "a",
+            &[b"/bin/a".as_slice()],
+            &mut frame2,
+            &mut resolve2,
+        );
+        assert_eq!(r, Err("exec: hash-bang recursion too deep"));
     }
 
     #[test]

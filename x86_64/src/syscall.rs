@@ -970,39 +970,28 @@ fn sys_semrelease(frame: &mut Ureg, proc: &mut Proc) -> u64 {
     new as u64
 }
 
-/// EXEC(7): path, argv — 2 syscall args.  Donor semantics: returns
-/// ONLY on failure (-1/errstr, old image intact); on success
-/// exec::exec_replace rewrites the live Ureg and the dispatch return
-/// SYSRETQs into the new image.
-fn sys_exec(frame: &mut Ureg, proc: &mut Proc) -> u64 {
-    /// The whole-file staging ceiling for a MOUNTED binary — bounded
-    /// so an untrusted server can never stream the kernel into an
-    /// unbounded allocation.
-    const EXEC_STAGE_CAP: usize = 16 * 1024 * 1024;
-    let Some(args) = sargs(frame, proc, 2) else {
-        return err(proc, "exec: bad argument block");
-    };
-    let (path_va, argv_va) = (args[0], args[1]);
-    let (path, argv) = match copy_exec_args(proc, path_va, argv_va) {
-        Ok(v) => v,
-        Err(msg) => return err(proc, msg),
-    };
+/// The whole-file staging ceiling for a MOUNTED binary — bounded
+/// so an untrusted server can never stream the kernel into an
+/// unbounded allocation.
+const EXEC_STAGE_CAP: usize = 16 * 1024 * 1024;
 
-    // Resolve through the NAMESPACE — namec + the proc's mount table —
-    // so an exec path crosses mounts.  NO pgrp lock is held across
-    // resolution, open, or stage.
+/// Open `path` for exec and build its byte backing (sys_exec's
+/// resolution step, factored out as the #! pre-pass's interpreter
+/// re-resolution — donor sysproc.c:313 `chan = namec(p, Aopen, OEXEC,
+/// 0)`, T-19-05: the interpreter resolves by normal namec, no extra
+/// path handling).  Resolves through the NAMESPACE — namec + the
+/// proc's mount table — with NO pgrp lock held across resolution,
+/// open, or stage.
+fn exec_backing_for(proc: &mut Proc, path: &[u8]) -> Result<ByteBacking, &'static str> {
     let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
-        return err(proc, "exec: no namespace (pre-exec)");
+        return Err("exec: no namespace (pre-exec)");
     };
-    let c = match namec::namec(&path, slash, dot, &proc.pgrp, NamecMode::Open) {
-        Ok(c) => c,
-        Err(msg) => return err(proc, msg),
-    };
+    let c = namec::namec(path, slash, dot, &proc.pgrp, NamecMode::Open)?;
     let opened = match namec::open_chan(&c, OEXEC) {
         Ok(c) => c,
         Err(msg) => {
             port::namec::close_chan(&c);
-            return err(proc, msg);
+            return Err(msg);
         }
     };
     // The walked chan is walked-past once the open SHARES its fid's
@@ -1013,13 +1002,13 @@ fn sys_exec(frame: &mut Ureg, proc: &mut Proc) -> u64 {
         DEV_ROOT => {
             let Some(root) = port::devroot::root() else {
                 port::namec::close_chan(&opened);
-                return err(proc, "devroot: not mounted");
+                return Err("devroot: not mounted");
             };
             match root.entry(&opened) {
                 Ok(bin) => ByteBacking::Paq { dir: bin, image: root.image() },
                 Err(msg) => {
                     port::namec::close_chan(&opened);
-                    return err(proc, msg);
+                    return Err(msg);
                 }
             }
         }
@@ -1030,22 +1019,52 @@ fn sys_exec(frame: &mut Ureg, proc: &mut Proc) -> u64 {
                 Ok(bytes) => ByteBacking::Mnt { file: Arc::new(bytes) },
                 Err(msg) => {
                     port::namec::close_chan(&opened);
-                    return err(proc, msg);
+                    return Err(msg);
                 }
             }
         }
         _ => {
             port::namec::close_chan(&opened);
-            return err(proc, "exec: path is not an executable source");
+            return Err("exec: path is not an executable source");
         }
     };
     // The exec chan is a transient (never fd-installed):
     // close-dispatch it.
     port::namec::close_chan(&opened);
+    Ok(backing)
+}
+
+/// EXEC(7): path, argv — 2 syscall args.  Donor semantics: returns
+/// ONLY on failure (-1/errstr, old image intact); on success
+/// exec::exec_with_shebang (the #! pre-pass, 19-03, then
+/// exec_replace) rewrites the live Ureg and the dispatch return
+/// SYSRETQs into the new image.
+fn sys_exec(frame: &mut Ureg, proc: &mut Proc) -> u64 {
+    let Some(args) = sargs(frame, proc, 2) else {
+        return err(proc, "exec: bad argument block");
+    };
+    let (path_va, argv_va) = (args[0], args[1]);
+    let (path, argv) = match copy_exec_args(proc, path_va, argv_va) {
+        Ok(v) => v,
+        Err(msg) => return err(proc, msg),
+    };
+
+    let backing = match exec_backing_for(proc, &path) {
+        Ok(b) => b,
+        Err(msg) => return err(proc, msg),
+    };
     let leaf = path.split(|&b| b == b'/').rfind(|c| !c.is_empty()).unwrap_or(&path[..]);
     let name = core::str::from_utf8(leaf).unwrap_or("?");
     let arg_slices: Vec<&[u8]> = argv.iter().map(|a| a.as_slice()).collect();
-    match exec::exec_replace(proc, backing, name, &arg_slices, frame) {
+    match exec::exec_with_shebang(
+        proc,
+        backing,
+        &path,
+        name,
+        &arg_slices,
+        frame,
+        &mut |proc, path| exec_backing_for(proc, path),
+    ) {
         // dispatch writes frame.ax = tos_va — alongside the seeded bp
         // (the RARG slot carries the same Tos by seed_exec_entry).
         Ok(tos_va) => tos_va,
