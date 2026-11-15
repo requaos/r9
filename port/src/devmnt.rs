@@ -26,15 +26,25 @@
 //! prove rejection of oversized and mis-tagged replies
 //! (port/tests/devmnt_test.rs).
 //!
-//! Concurrency this era (documented era limit): exactly ONE RPC is
-//! outstanding per session — syscalls are serialized and the boot chain's
-//! client side is strictly sequential.  A second concurrent RPC gets a
-//! LOUD error ("devmnt: concurrent rpc this era"), never a wedge — the
-//! tag-multiplexing reader (the donor's mountio/mountmux) arrives with
-//! the virtio-9p/SMP era.  The busy flag is a plain AtomicBool because
-//! the RPC's recv BLOCKS (the pipe read schedules the server proc): an
-//! MCS lock held across that block would spin-deadlock a contender
-//! (IRQ-masked syscall context), so ownership is the flag, not the lock.
+//! Concurrency (19-08's rework — the donor's mountio/mountmux model,
+//! previously the era's documented single-outstanding limit): MANY
+//! rpcs may be outstanding per session, multiplexed by TAG.  Everyone
+//! SENDS (whole messages; the transport serializes at message
+//! granularity); exactly ONE context READS the wire at a time — the
+//! io_r BusyCell is the donor's `m->rip` reader token, and its guard
+//! spans WHOLE-MESSAGE framing only, never a release between a
+//! message's header and its body (the mid-frame window is the boot
+//! race the first rework attempt died of).  The reader demuxes by
+//! tag: its own reply ends its loop; a queued rpc's reply is ROUTED
+//! to its slot (owners poll — the injected park hook bounds the
+//! retry, no wakeup machinery to lose); a reply matching NOTHING
+//! outstanding is a loud protocol error.  A reader parked on an
+//! indefinite rpc (cpunote, console stdin over /mnt/term) keeps
+//! serving everyone else's replies — the donor's designated-reader
+//! shape, which is what un-deadlocks session exit.  BusyCells (not
+//! MCS locks) guard everything whose ownership spans a blocking read:
+//! an MCS lock held across a park would spin-deadlock an IRQ-masked
+//! contender on this single-CPU era.
 //!
 //! Transport bound (the pipe's atomic-write ceiling): devpipe writes
 //! whole messages or fail ("pipe full"), and the queue cap is 4096, so
@@ -65,6 +75,7 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
+use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
@@ -268,31 +279,66 @@ impl MntIo for ChanIo {
 // The session
 // ---------------------------------------------------------------------------
 
-/// The RPC-critical-section state: only the busy-flag OWNER touches it
-/// (the flag IS the mutex — see the module header's concurrency note).
-/// pub(crate) so the Send proof can live beside BusyCell
-/// (mcslock.rs) — devmnt.rs itself carries zero unsafe for the
-/// #[forbid(unsafe_code)] regression lock.
-pub(crate) struct MntCore {
-    io: Box<dyn MntIo>,
-    /// Fid/tag sequences (donor mntchan/alloctag): fids from 1 up (never
-    /// NOFID, never reused this era); tags from 1 up (never 0, never
-    /// NOTAG — devmnt.c's mntreset exclusions).
-    next_fid: u32,
-    next_tag: u16,
-    /// The msize-sized receive scratch (HEAP — an 8 KiB stack buffer is
-    /// the kstack-overflow lesson).
-    rx: Vec<u8>,
+/// One io half's wrapper (the Send proof lives beside the BusyCell
+/// primitive in mcslock.rs — devmnt itself is forbid(unsafe_code)).
+pub(crate) struct MntIoBox(pub(crate) Box<dyn MntIo>);
+
+/// The outstanding-rpc registry entry (the donor's queued Mntrpc's
+/// completed half): the tag awaited and the slot the routed reply
+/// lands in.  `Some` in `reply` IS the done flag (the donor's
+/// q->done): the OWNER polls `take`, the READER `route`s — the leaf
+/// lock orders the handoff, and a routed reply is never re-read off
+/// the wire.
+struct MntSlot {
+    tag: u16,
+    reply: Lock<Option<Vec<u8>>>,
 }
 
-/// A 9P client session (the donor's `Mnt`): one connection's negotiated
-/// state plus the fid/tag allocators.  Shared by every chan in the
-/// mounted tree (and by the pipe chan that fversion created it over) as
-/// `Arc<Mnt>`; the busy flag serializes RPCs (one outstanding — the era's
-/// documented limit).
+impl MntSlot {
+    fn new(tag: u16) -> MntSlot {
+        MntSlot { tag, reply: Lock::new("mntslot", None) }
+    }
+    /// Route a framed reply to its owner (reader side).  The whole
+    /// reply message lands here; the owner's check_reply re-validates
+    /// it end-to-end (untrusted input, same as ever).
+    fn route(&self, msg: Vec<u8>) {
+        let node = LockNode::new();
+        *self.reply.lock(&node) = Some(msg);
+    }
+    /// The routed reply, if any (owner side).  Once only.
+    fn take(&self) -> Option<Vec<u8>> {
+        let node = LockNode::new();
+        self.reply.lock(&node).take()
+    }
+}
+
+/// The fid/tag allocator state (donor mntchan/alloctag): fids from 1
+/// up (never NOFID, never reused this era); tags from 1 up (never 0,
+/// never NOTAG — devmnt.c's mntreset exclusions).  Leaf-locked — far
+/// briefer than the old whole-rpc busy flag.
+struct MntAlloc {
+    next_fid: u32,
+    next_tag: u16,
+}
+
+/// A 9P client session (the donor's `Mnt`): one connection's
+/// negotiated state plus the fid/tag allocators and the tag-mux
+/// registry.  Shared by every chan in the mounted tree (and by the
+/// pipe chan that fversion created it over) as `Arc<Mnt>` — see the
+/// module header's concurrency note for the reader-token model.
 pub struct Mnt {
-    /// The RPC-mutable session state (io, fid/tag sequences, rx scratch).
-    core: BusyCell<MntCore>,
+    /// The READ half + the single-wire-reader token in one BusyCell
+    /// (the donor's m->rip): enter() = become the reader.  The guard
+    /// spans blocking reads by design (the parked reader serves
+    /// everyone); contenders park-retry, never spin.
+    io_r: BusyCell<MntIoBox>,
+    /// The WRITE half: enter() = the write slot (concurrent rpcs send
+    /// interleaved whole messages; the cell serializes senders).
+    io_w: BusyCell<MntIoBox>,
+    /// The fid/tag allocators.
+    alloc: Lock<MntAlloc>,
+    /// The outstanding-rpc registry (the donor's mnt->queue).
+    queue: Lock<VecDeque<Arc<MntSlot>>>,
     /// The negotiated msize (the reply's answer, ≤ the offer) — set once
     /// at negotiation, frozen after (plain shared reads, no guard).
     msize: u32,
@@ -325,8 +371,9 @@ pub fn set_contention_hook(f: fn()) {
 
 /// Park the current caller briefly so a concurrent RPC contender retries
 /// instead of failing (the hook fn is Copy; the leaf lock is never held
-/// across the park).
-fn contention_wait() -> Result<()> {
+/// across the park).  `loud` is the errstr for the no-hook venue (bare
+/// profiles never contend — the hook is dev_exec-only wiring).
+pub(crate) fn contention_park(loud: &'static str) -> Result<()> {
     let f = {
         let node = LockNode::new();
         let guard = CONTENTION_WAIT.lock(&node);
@@ -337,59 +384,85 @@ fn contention_wait() -> Result<()> {
             f();
             Ok(())
         }
-        None => Err("devmnt: concurrent rpc this era"),
+        None => Err(loud),
     }
 }
 
+fn contention_wait() -> Result<()> {
+    contention_park("devmnt: concurrent rpc this era")
+}
+
+/// Test seam: replace the contention hook.  The production setter is
+/// once-only by assert (a second registration is a boot bug); the mux
+/// host pin needs a yield-based park inside the test binary, where no
+/// arch-side hook exists.  Test-only by convention — nothing in the
+/// kernel calls this.
+#[doc(hidden)]
+pub fn set_contention_hook_for_test(f: fn()) {
+    let node = LockNode::new();
+    let mut guard = CONTENTION_WAIT.lock(&node);
+    *guard = Some(f);
+}
+
 impl Mnt {
-    /// Take RPC ownership (the era's serialization): one outstanding RPC
-    /// per session.  A concurrent attempt BLOCKS-and-retries at ~1-tick
-    /// granularity (qlock(9) at this era's shape): the contender parks via
-    /// the injected contention hook and the 1 kHz tick always readies an
-    /// expired sleeper (never a spin, never a lost wake, never a wedge).
-    /// The first measured concurrent caller is the 06-07 tier-1 sweep —
-    /// its pipelines' two children exec through the shared mount session
-    /// concurrently (measured on the composed gate: the pipeline checks
-    /// failed with "namec: does not exist" — namec.rs:260 masks this
-    /// error).  The pre-measurement shape (05-07, no measured concurrent
-    /// caller) was a loud error; the loud error stays as the fallback
-    /// when no hook is registered (bare/no-userspace profiles).
-    /// The BusyCell guard IS the token — its Drop releases
-    /// the session on any exit path.
-    fn enter(&self) -> Result<crate::mcslock::BusyGuard<'_, MntCore>> {
+    fn alloc_fid(&self) -> Result<u32> {
+        let node = LockNode::new();
+        let mut a = self.alloc.lock(&node);
+        let fid = a.next_fid;
+        if fid == NOFID {
+            return Err("devmnt: fid space exhausted");
+        }
+        a.next_fid += 1;
+        Ok(fid)
+    }
+
+    fn alloc_tag(&self) -> u16 {
+        let node = LockNode::new();
+        let mut a = self.alloc.lock(&node);
+        let tag = a.next_tag;
+        // NOTAG stays reserved; 0 is never issued (devmnt.c's mntreset).
+        a.next_tag = if tag == NOTAG - 1 { 1 } else { tag + 1 };
+        tag
+    }
+
+    /// Send one whole T-message (the donor mountio's write half —
+    /// everyone sends).  The write cell serializes concurrent senders
+    /// at message granularity (the transport is whole-message atomic
+    /// anyway; this keeps ssl/TCP writes from interleaving record
+    /// bodies).
+    fn send(&self, msg: &[u8]) -> Result<()> {
         loop {
-            if let Some(g) = self.core.enter() {
-                return Ok(g);
+            let Some(mut guard) = self.io_w.enter() else {
+                contention_wait()?;
+                continue;
+            };
+            let w = guard.0.write_msg(msg)? as usize;
+            if w != msg.len() {
+                return Err("devmnt: short write on the 9P connection");
             }
-            contention_wait()?;
+            return Ok(());
         }
     }
 
-    /// The whole RPC round-trip (donor mountrpc + the receive half of
-    /// mountio/mntrpcread): send the T-message whole, then frame the
-    /// reply — read the 4-byte size prefix, mntchk it against the
-    /// negotiated msize BEFORE reading the body, read exactly
-    /// `size` bytes, then require the expected type (Rerror maps to a
-    /// loud errstr with the server's ename on the serial log) and the
-    /// outstanding tag.  Returns the reply's total size (the body sits in
-    /// the session's rx scratch).
-    /// The RPC round-trip.  `core` rides the live BusyCell guard — holding
-    /// it IS the ownership proof (only enter() hands it out).
-    fn transact(&self, core: &mut MntCore, msg: &[u8], expect_type: u8, expect_tag: u16) -> Result<usize> {
-        let w = core.io.write_msg(msg)?;
-        if w as usize != msg.len() {
-            return Err("devmnt: short write on the 9P connection");
-        }
-        // Frame the reply: the 4-byte size prefix first.
+    /// Frame exactly ONE whole message off the wire (the donor
+    /// mntrpcread): the 4-byte size prefix, mntchk against the
+    /// negotiated msize BEFORE the body is read, then exactly `size`
+    /// bytes.  Called ONLY by the reader-token holder — the token
+    /// spans this whole call, parks included (a release between the
+    /// header and the body would let a second reader mis-frame the
+    /// stream: the first rework attempt's boot race, eliminated
+    /// structurally).
+    fn frame_one(io: &mut MntIoBox, msize: u32) -> Result<Vec<u8>> {
+        let mut hdr = [0u8; 4];
         let mut got = 0usize;
         while got < 4 {
-            let n = core.io.read_some(&mut core.rx[got..4])? as usize;
+            let n = io.0.read_some(&mut hdr[got..4])? as usize;
             if n == 0 {
                 return Err("devmnt: eof waiting for a reply");
             }
             got += n;
         }
-        let size = u32::from_le_bytes(core.rx[0..4].try_into().unwrap()) as usize;
+        let size = u32::from_le_bytes(hdr) as usize;
         // mntchk: the claimed size is untrusted until it passes
         // BOTH bounds — never read (or trust) a body the claim doesn't
         // cover, never read more than the negotiated msize.
@@ -397,21 +470,86 @@ impl Mnt {
             println!("devmnt: runt reply message ({size} bytes)");
             return Err("devmnt: runt reply message");
         }
-        if size > self.msize as usize {
-            println!("devmnt: reply claims {size} bytes over msize {}", self.msize);
+        if size > msize as usize {
+            println!("devmnt: reply claims {size} bytes over msize {msize}");
             return Err("devmnt: reply exceeds negotiated msize");
         }
-        while got < size {
-            let n = core.io.read_some(&mut core.rx[got..size])? as usize;
+        let mut msg = Vec::with_capacity(size);
+        msg.extend_from_slice(&hdr);
+        let mut body = alloc::vec![0u8; size - 4];
+        let mut gotb = 0usize;
+        while gotb < body.len() {
+            let n = io.0.read_some(&mut body[gotb..])? as usize;
             if n == 0 {
                 return Err("devmnt: eof mid-message");
             }
-            got += n;
+            gotb += n;
         }
-        let rtype = core.rx[4];
-        let rtag = u16::from_le_bytes(core.rx[5..7].try_into().unwrap());
+        msg.extend_from_slice(&body);
+        Ok(msg)
+    }
+
+    /// Route a framed reply by tag (the donor mountmux): a queued
+    /// rpc's reply lands in its slot and the registry entry leaves
+    /// the queue at route time.  False when NOTHING outstanding owns
+    /// the tag — the donor prints "unexpected reply tag" and drops;
+    /// this port makes it a loud protocol error instead (the donor's
+    /// drop arm exists for Tflush races, and Tflush does not exist
+    /// this era — a foreign tag here is wire garbage or a server
+    /// bug, and erroring drains the waiters in turn as each takes
+    /// the token).
+    fn route(&self, msg: Vec<u8>, tag: u16) -> bool {
+        let node = LockNode::new();
+        let mut q = self.queue.lock(&node);
+        for (i, s) in q.iter().enumerate() {
+            if s.tag == tag {
+                let s = q.remove(i).unwrap();
+                drop(q);
+                s.route(msg);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Remove `slot` from the registry (error exits — a LATE reply to
+    /// an abandoned rpc must hit the unexpected-tag arm, never a
+    /// phantom owner).  Tolerant of an already-routed (removed) slot.
+    fn dequeue(&self, slot: &Arc<MntSlot>) {
+        let node = LockNode::new();
+        self.queue.lock(&node).retain(|s| !Arc::ptr_eq(s, slot));
+    }
+
+    /// The reader loop (the donor mountio's read half): frame one
+    /// whole message at a time and demux, until MY reply is routed
+    /// (by a prior reader or this one).  Holds the reader token for
+    /// the whole loop — including across the parks inside frame_one;
+    /// that IS the design (the parked reader serves everyone else's
+    /// replies — the cpunote/console-stdin shape).
+    fn read_loop(&self, io: &mut MntIoBox, mine: &Arc<MntSlot>) -> Result<Vec<u8>> {
+        loop {
+            if let Some(r) = mine.take() {
+                return Ok(r);
+            }
+            let msg = Self::frame_one(io, self.msize)?;
+            let rtag = u16::from_le_bytes(msg[5..7].try_into().unwrap());
+            if !self.route(msg, rtag) {
+                println!("devmnt: unexpected reply tag {rtag}");
+                return Err("devmnt: unexpected reply tag");
+            }
+        }
+    }
+
+    /// The reply validation (the old transact's tail, run by the
+    /// OWNER on its routed reply — every R-message is untrusted input
+    /// whoever framed it): Rerror maps to a loud errstr with the
+    /// server's ename on the serial log; the tag/type checks stay as
+    /// defense in depth (routing already matched the tag).
+    fn check_reply(reply: &[u8], expect_type: u8, expect_tag: u16) -> Result<()> {
+        let rtype = reply[4];
+        let rtag = u16::from_le_bytes(reply[5..7].try_into().unwrap());
         if rtype == RERROR {
-            let mut cur = RepCur::new(&core.rx[7..size]);
+            let mut cur = RepCur::new(&reply[7..]);
             let ename = cur.string().unwrap_or_else(|_| b"<malformed Rerror>".to_vec());
             println!("devmnt: server error: {}", alloc::string::String::from_utf8_lossy(&ename));
             return Err("devmnt: server error");
@@ -424,42 +562,67 @@ impl Mnt {
             println!("devmnt: reply type {rtype} is not the expected {expect_type}");
             return Err("devmnt: unexpected reply type");
         }
-        Ok(size)
+        Ok(())
     }
 
-    fn alloc_fid(core: &mut MntCore) -> Result<u32> {
-        let fid = core.next_fid;
-        if fid == NOFID {
-            return Err("devmnt: fid space exhausted");
+    /// The whole RPC (the donor mountrpc + mountio): queue the slot,
+    /// send the T-message, then gate onto the wire ONE reader at a
+    /// time — take the reader token (frame + demux for everyone,
+    /// donor mntgate on exit: the token frees at a message boundary)
+    /// or poll this rpc's slot while another reader works.  The park
+    /// hook bounds the poll; with no hook registered (bare profiles)
+    /// contention stays the loud error, exactly as before.
+    fn rpc(&self, msg: &[u8], expect_type: u8, expect_tag: u16) -> Result<Vec<u8>> {
+        let slot = Arc::new(MntSlot::new(expect_tag));
+        {
+            let node = LockNode::new();
+            self.queue.lock(&node).push_back(slot.clone());
         }
-        core.next_fid += 1;
-        Ok(fid)
-    }
-
-    fn alloc_tag(core: &mut MntCore) -> u16 {
-        let tag = core.next_tag;
-        // NOTAG stays reserved; 0 is never issued (devmnt.c's mntreset).
-        core.next_tag = if tag == NOTAG - 1 { 1 } else { tag + 1 };
-        tag
+        if let Err(e) = self.send(msg) {
+            self.dequeue(&slot);
+            return Err(e);
+        }
+        let reply = loop {
+            if let Some(r) = slot.take() {
+                break r;
+            }
+            match self.io_r.enter() {
+                Some(mut reader) => {
+                    let out = self.read_loop(&mut reader, &slot);
+                    drop(reader); // mntgate: the token frees at a message boundary
+                    match out {
+                        Ok(r) => break r,
+                        Err(e) => {
+                            self.dequeue(&slot);
+                            return Err(e);
+                        }
+                    }
+                }
+                None => contention_wait()?,
+            }
+        };
+        Self::check_reply(&reply, expect_type, expect_tag)?;
+        Ok(reply)
     }
 
     /// The Tversion exchange (donor mntversion): offer `offer` (0 →
     /// DEFAULT_MSIZE), send Tversion(NOTAG, msize, "9P2000"), validate the
     /// Rversion (the server never increases the msize — devmnt.c's "server
     /// tries to increase msize"; nonsense bounds 256..=1MiB; the version
-    /// string answers "9P2000"), and park the negotiated session.
-    pub fn negotiate(io: Box<dyn MntIo>, offer: u32) -> Result<Mnt> {
+    /// string answers "9P2000"), and park the negotiated session.  The
+    /// two io halves arrive separately (the read half IS the reader
+    /// token's cell — a pipe/ssl dup each, so a parked reader and an
+    /// active writer never share one Chan).
+    pub fn negotiate(io_r: Box<dyn MntIo>, io_w: Box<dyn MntIo>, offer: u32) -> Result<Mnt> {
         let offer = if offer == 0 { DEFAULT_MSIZE } else { offer };
         if !(MSIZE_MIN..=MSIZE_MAX).contains(&offer) {
             return Err("devmnt: nonsense msize in fversion");
         }
         let mut mnt = Mnt {
-            core: BusyCell::new(MntCore {
-                io,
-                next_fid: 1,
-                next_tag: 1,
-                rx: alloc::vec![0u8; offer as usize],
-            }),
+            io_r: BusyCell::new(MntIoBox(io_r)),
+            io_w: BusyCell::new(MntIoBox(io_w)),
+            alloc: Lock::new("mntalloc", MntAlloc { next_fid: 1, next_tag: 1 }),
+            queue: Lock::new("mntqueue", VecDeque::new()),
             msize: offer, // the handshake's bound is the offer itself
             version: Vec::new(),
         };
@@ -467,14 +630,11 @@ impl Mnt {
         pw32(&mut body, offer);
         pwstr(&mut body, VERSION9P);
         let msg = tmsg(TVERSION, NOTAG, &body);
-        // The guard is held across the reply parse (the RPC's ownership
-        // ends when the parsed values are committed, not when transact
-        // returns).  The Mnt is a not-yet-shared local, so enter() can
-        // never contend.
+        // The Mnt is a not-yet-shared local: the token is free and the
+        // queue holds only this rpc, so rpc() runs uncontended.
+        let reply = mnt.rpc(&msg, RVERSION, NOTAG)?;
         let (msize, version) = {
-            let mut core = mnt.enter()?;
-            let size = mnt.transact(&mut core, &msg, RVERSION, NOTAG)?;
-            let mut cur = RepCur::new(&core.rx[7..size]);
+            let mut cur = RepCur::new(&reply[7..]);
             let msize = cur.u32()?;
             let version = cur.string()?;
             cur.done()?;
@@ -509,17 +669,16 @@ impl Mnt {
     /// with afid = NOFID (no auth this era; nsinit's fall-through
     /// is the designed path).  Returns (fid, the root qid).
     pub fn attach(&self, uname: &[u8], aname: &[u8]) -> Result<(u32, Qid)> {
-        let mut core = self.enter()?;
-        let fid = Self::alloc_fid(&mut core)?;
-        let tag = Self::alloc_tag(&mut core);
+        let fid = self.alloc_fid()?;
+        let tag = self.alloc_tag();
         let mut body = Vec::new();
         pw32(&mut body, fid);
         pw32(&mut body, NOFID);
         pwstr(&mut body, uname);
         pwstr(&mut body, aname);
         let msg = tmsg(TATTACH, tag, &body);
-        let size = self.transact(&mut core, &msg, RATTACH, tag)?;
-        let mut cur = RepCur::new(&core.rx[7..size]);
+        let reply = self.rpc(&msg, RATTACH, tag)?;
+        let mut cur = RepCur::new(&reply[7..]);
         let qid = cur.qid()?;
         cur.done()?;
         Ok((fid, qid))
@@ -533,17 +692,16 @@ impl Mnt {
         if name.is_empty() || name.contains(&b'/') {
             return Err("devmnt: walk takes a single name component");
         }
-        let mut core = self.enter()?;
-        let newfid = Self::alloc_fid(&mut core)?;
-        let tag = Self::alloc_tag(&mut core);
+        let newfid = self.alloc_fid()?;
+        let tag = self.alloc_tag();
         let mut body = Vec::new();
         pw32(&mut body, fid);
         pw32(&mut body, newfid);
         pw16(&mut body, 1); // nwname
         pwstr(&mut body, name);
         let msg = tmsg(TWALK, tag, &body);
-        let size = self.transact(&mut core, &msg, RWALK, tag)?;
-        let mut cur = RepCur::new(&core.rx[7..size]);
+        let reply = self.rpc(&msg, RWALK, tag)?;
+        let mut cur = RepCur::new(&reply[7..]);
         let nwqid = cur.u16()? as usize;
         // The donor's bounds: nwqid never exceeds MAXWELEM nor nwname (1).
         if nwqid > MAXWELEM || nwqid > 1 {
@@ -567,22 +725,22 @@ impl Mnt {
     /// Enotexist).  The redirects now clone the fid, so the open/clunk
     /// lifecycle rides the clone and the table's fid stays pristine.
     pub fn clone_fid(&self, fid: u32) -> Result<u32> {
-        let mut core = self.enter()?;
-        let newfid = Self::alloc_fid(&mut core)?;
-        let tag = Self::alloc_tag(&mut core);
+        let newfid = self.alloc_fid()?;
+        let tag = self.alloc_tag();
         let mut body = Vec::new();
         pw32(&mut body, fid);
         pw32(&mut body, newfid);
         pw16(&mut body, 0); // nwname = 0 — the fid-clone idiom
         let msg = tmsg(TWALK, tag, &body);
-        let size = self.transact(&mut core, &msg, RWALK, tag)?;
-        let mut cur = RepCur::new(&core.rx[7..size]);
+        let reply = self.rpc(&msg, RWALK, tag)?;
+        let mut cur = RepCur::new(&reply[7..]);
         let nwqid = cur.u16()? as usize;
         // A zero-name walk answers nwqid = 0; the clone carries the
         // source's qid (the position is unchanged by construction).
         if nwqid != 0 {
             return Err("devmnt: fid clone returned qids");
         }
+        cur.done()?;
         Ok(newfid)
     }
 
@@ -591,14 +749,13 @@ impl Mnt {
     /// era never sends).  Returns (the opened qid, the iounit after the
     /// donor's clamp).
     pub fn open(&self, fid: u32, mode: u8) -> Result<(Qid, u32)> {
-        let mut core = self.enter()?;
-        let tag = Self::alloc_tag(&mut core);
+        let tag = self.alloc_tag();
         let mut body = Vec::new();
         pw32(&mut body, fid);
         body.push(mode);
         let msg = tmsg(TOPEN, tag, &body);
-        let size = self.transact(&mut core, &msg, ROPEN, tag)?;
-        let mut cur = RepCur::new(&core.rx[7..size]);
+        let reply = self.rpc(&msg, ROPEN, tag)?;
+        let mut cur = RepCur::new(&reply[7..]);
         let qid = cur.qid()?;
         let iounit = cur.u32()?;
         cur.done()?;
@@ -613,15 +770,14 @@ impl Mnt {
     /// exactly cover the message body (convM2S's exact-size check) and is
     /// clamped to the request (the donor's silent clamp).
     pub fn read(&self, fid: u32, off: u64, count: u32) -> Result<Vec<u8>> {
-        let mut core = self.enter()?;
-        let tag = Self::alloc_tag(&mut core);
+        let tag = self.alloc_tag();
         let mut body = Vec::new();
         pw32(&mut body, fid);
         pw64(&mut body, off);
         pw32(&mut body, count);
         let msg = tmsg(TREAD, tag, &body);
-        let size = self.transact(&mut core, &msg, RREAD, tag)?;
-        let mut cur = RepCur::new(&core.rx[7..size]);
+        let reply = self.rpc(&msg, RREAD, tag)?;
+        let mut cur = RepCur::new(&reply[7..]);
         let rcount = cur.u32()? as usize;
         let remaining = cur.b.len() - cur.p;
         if rcount != remaining {
@@ -637,16 +793,15 @@ impl Mnt {
     /// by the caller to the era's per-RPC bound; the reply's count is
     /// clamped to the request (the donor's silent clamp).
     pub fn write(&self, fid: u32, off: u64, data: &[u8]) -> Result<u32> {
-        let mut core = self.enter()?;
-        let tag = Self::alloc_tag(&mut core);
+        let tag = self.alloc_tag();
         let mut body = Vec::new();
         pw32(&mut body, fid);
         pw64(&mut body, off);
         pw32(&mut body, data.len() as u32);
         body.extend_from_slice(data);
         let msg = tmsg(TWRITE, tag, &body);
-        let size = self.transact(&mut core, &msg, RWRITE, tag)?;
-        let mut cur = RepCur::new(&core.rx[7..size]);
+        let reply = self.rpc(&msg, RWRITE, tag)?;
+        let mut cur = RepCur::new(&reply[7..]);
         let count = cur.u32()?;
         cur.done()?;
         Ok(count.min(data.len() as u32))
@@ -657,16 +812,15 @@ impl Mnt {
     /// creates are the measured caller, 15-03); the mode byte is the
     /// low 8 (OTRUNC/ORCLOSE ride the wire per fcall.h).
     pub fn create(&self, fid: u32, name: &[u8], perm: u32, mode: u8) -> Result<(Qid, u32)> {
-        let mut core = self.enter()?;
-        let tag = Self::alloc_tag(&mut core);
+        let tag = self.alloc_tag();
         let mut body = Vec::new();
         pw32(&mut body, fid);
         pwstr(&mut body, name);
         pw32(&mut body, perm);
         body.push(mode);
         let msg = tmsg(TCREATE, tag, &body);
-        let size = self.transact(&mut core, &msg, RCREATE, tag)?;
-        let mut cur = RepCur::new(&core.rx[7..size]);
+        let reply = self.rpc(&msg, RCREATE, tag)?;
+        let mut cur = RepCur::new(&reply[7..]);
         let qid = cur.qid()?;
         let iounit = cur.u32()?;
         cur.done()?;
@@ -680,13 +834,12 @@ impl Mnt {
     /// stat(5) image WITH its own 2-byte prefix, whose value must be
     /// nstat-2 — the malformation check).
     pub fn stat(&self, fid: u32) -> Result<Vec<u8>> {
-        let mut core = self.enter()?;
-        let tag = Self::alloc_tag(&mut core);
+        let tag = self.alloc_tag();
         let mut body = Vec::new();
         pw32(&mut body, fid);
         let msg = tmsg(TSTAT, tag, &body);
-        let size = self.transact(&mut core, &msg, RSTAT, tag)?;
-        let mut cur = RepCur::new(&core.rx[7..size]);
+        let reply = self.rpc(&msg, RSTAT, tag)?;
+        let mut cur = RepCur::new(&reply[7..]);
         let nstat = cur.u16()? as usize;
         if nstat < 2 {
             return Err("devmnt: malformed stat reply");
@@ -705,13 +858,12 @@ impl Mnt {
 
     /// Tclunk (donor mntclunk): release the fid server-side.
     pub fn clunk(&self, fid: u32) -> Result<()> {
-        let mut core = self.enter()?;
-        let tag = Self::alloc_tag(&mut core);
+        let tag = self.alloc_tag();
         let mut body = Vec::new();
         pw32(&mut body, fid);
         let msg = tmsg(TCLUNK, tag, &body);
-        let size = self.transact(&mut core, &msg, RCLUNK, tag)?;
-        RepCur::new(&core.rx[7..size]).done()?;
+        let reply = self.rpc(&msg, RCLUNK, tag)?;
+        RepCur::new(&reply[7..]).done()?;
         Ok(())
     }
 }
@@ -772,11 +924,14 @@ pub fn fversion(chan: &mut Chan, offer: u32, out: &mut [u8]) -> Result<u64> {
     if chan.mode & OMASK != ORDWR {
         return Err("fversion: fd is not open for read+write");
     }
-    // The session's io chan: a dup (an open pipe end's count bumps — the
-    // session holds a live reference even after the fd closes; the mount
-    // must outlive it — boot's fd closes at init's closefds).
-    let io = ChanIo { chan: chan.dup() };
-    let mnt = Arc::new(Mnt::negotiate(Box::new(io), offer)?);
+    // The session's io chans: TWO dups (one per direction — a parked
+    // reader and an active writer must hold separate Chan handles).
+    // Open-end counts bump per dup (the session holds live references
+    // even after the fd closes; the mount must outlive them — boot's
+    // fd closes at init's closefds).
+    let io_r = ChanIo { chan: chan.dup() };
+    let io_w = ChanIo { chan: chan.dup() };
+    let mnt = Arc::new(Mnt::negotiate(Box::new(io_r), Box::new(io_w), offer)?);
     if let Some(pipe) = &chan.pipe {
         crate::devpipe::set_shared_mnt_session(pipe, chan.qid.path, mnt.clone());
     }

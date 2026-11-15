@@ -22,7 +22,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 
 use port::dat::{Chan, DEV_MNT, DEV_ROOT};
 use port::devmnt::{self, Mnt, MntIo};
@@ -369,18 +369,36 @@ impl FakeServer {
     }
 }
 
-impl MntIo for FakeServer {
+impl MntIo for FakeHalf {
     fn write_msg(&mut self, buf: &[u8]) -> Result<u64> {
-        let reply = self.handle(buf);
-        self.outq.extend(reply);
+        let reply = self.0.borrow_mut().handle(buf);
+        self.0.borrow_mut().outq.extend(reply);
         Ok(buf.len() as u64)
     }
     fn read_some(&mut self, buf: &mut [u8]) -> Result<u64> {
-        let n = self.outq.len().min(buf.len());
-        for b in buf.iter_mut().take(n) {
-            *b = self.outq.pop_front().unwrap();
-        }
+        let n = {
+            let mut f = self.0.borrow_mut();
+            let n = f.outq.len().min(buf.len());
+            for b in buf.iter_mut().take(n) {
+                *b = f.outq.pop_front().unwrap();
+            }
+            n
+        };
         Ok(n as u64)
+    }
+}
+
+/// The session's split-wire shape over one shared fake: BOTH halves
+/// borrow the SAME server (the kernel's two ChanIo dups share one
+/// wire — a parked reader in io_r and an active writer in io_w see
+/// one reply queue).
+struct FakeHalf(Rc<RefCell<FakeServer>>);
+
+impl FakeServer {
+    /// The (io_r, io_w) pair over this server, moved behind Rc.
+    fn split(self) -> (Box<FakeHalf>, Box<FakeHalf>) {
+        let rc = Rc::new(RefCell::new(self));
+        (Box::new(FakeHalf(Rc::clone(&rc))), Box::new(FakeHalf(rc)))
     }
 }
 
@@ -388,7 +406,8 @@ impl MntIo for FakeServer {
 /// shared fid table for server-side assertions).
 fn session() -> (Mnt, Rc<RefCell<HashMap<u32, u64>>>) {
     let (fake, fids, _clunked) = FakeServer::new();
-    let mnt = Mnt::negotiate(Box::new(fake), 0).expect("the version handshake negotiates");
+    let (r, w) = fake.split();
+    let mnt = Mnt::negotiate(r, w, 0).expect("the version handshake negotiates");
     (mnt, fids)
 }
 
@@ -396,7 +415,8 @@ fn session() -> (Mnt, Rc<RefCell<HashMap<u32, u64>>>) {
 /// lifecycle pins assert exact clunk counts, not just table presence).
 fn session_with_clunk_log() -> (Mnt, Rc<RefCell<HashMap<u32, u64>>>, Rc<RefCell<Vec<u32>>>) {
     let (fake, fids, clunked) = FakeServer::new();
-    let mnt = Mnt::negotiate(Box::new(fake), 0).expect("the version handshake negotiates");
+    let (r, w) = fake.split();
+    let mnt = Mnt::negotiate(r, w, 0).expect("the version handshake negotiates");
     (mnt, fids, clunked)
 }
 
@@ -456,7 +476,8 @@ fn devmnt_version_attach_walk_open_read_stat_clunk_round_trip() {
 fn devmnt_version_accepts_servers_lower_answer() {
     let (mut fake, _fids, _cl) = FakeServer::new();
     fake.server_msize = 2048;
-    let mnt = Mnt::negotiate(Box::new(fake), 0).expect("the server answers lower");
+    let (r, w) = fake.split();
+    let mnt = Mnt::negotiate(r, w, 0).expect("the server answers lower");
     assert_eq!(mnt.msize(), 2048, "the negotiated msize is the server's lower answer");
 }
 
@@ -464,7 +485,8 @@ fn devmnt_version_accepts_servers_lower_answer() {
 fn devmnt_rejects_server_msize_increase() {
     let (mut fake, _fids, _cl) = FakeServer::new();
     fake.inflate_msize = true; // the server answers HIGHER than the offer
-    let err = Mnt::negotiate(Box::new(fake), 0).expect_err("a raised msize is a protocol error");
+    let (r, w) = fake.split();
+    let err = Mnt::negotiate(r, w, 0).expect_err("a raised msize is a protocol error");
     assert!(err.contains("msize"), "the error names the msize violation: {err}");
 }
 
@@ -476,7 +498,8 @@ fn devmnt_rejects_oversized_reply() {
     // 8192 boost = 8211 claimed) exceeds the 8192 offer.
     let (mut fake, _fids, _cl) = FakeServer::new();
     fake.size_boost = 8192;
-    let err = Mnt::negotiate(Box::new(fake), 0)
+    let (r, w) = fake.split();
+    let err = Mnt::negotiate(r, w, 0)
         .expect_err("an R-message claiming more than the msize is a protocol error");
     assert!(err.contains("msize"), "the error names the size violation: {err}");
 
@@ -485,7 +508,8 @@ fn devmnt_rejects_oversized_reply() {
     // negotiated 8192) — the session bound, not just the handshake's.
     let (mut fake2, _f, _c2) = FakeServer::new();
     fake2.size_boost_after_first = 8192;
-    let mnt = Mnt::negotiate(Box::new(fake2), 0).expect("a clean handshake negotiates");
+    let (r2, w2) = fake2.split();
+    let mnt = Mnt::negotiate(r2, w2, 0).expect("a clean handshake negotiates");
     let err = mnt
         .attach(b"glenda", b"")
         .expect_err("the inflated Rattach exceeds the negotiated msize");
@@ -496,7 +520,8 @@ fn devmnt_rejects_oversized_reply() {
 fn devmnt_rejects_tag_mismatch() {
     let (mut fake, _fids, _cl) = FakeServer::new();
     fake.wrong_tag = true; // every reply's tag is off by one
-    let err = Mnt::negotiate(Box::new(fake), 0)
+    let (r, w) = fake.split();
+    let err = Mnt::negotiate(r, w, 0)
         .expect_err("a reply tag that is not the outstanding tag is a protocol error");
     assert!(err.contains("tag"), "the error names the tag violation: {err}");
 }
@@ -512,7 +537,8 @@ fn devmnt_walk_not_found_is_a_loud_error() {
     // single-name walk) is also the not-found.
     let (mut fake2, _f, _c2) = FakeServer::new();
     fake2.walk_zero_qid = true;
-    let mnt2 = Mnt::negotiate(Box::new(fake2), 0).expect("negotiate");
+    let (r2, w2) = fake2.split();
+    let mnt2 = Mnt::negotiate(r2, w2, 0).expect("negotiate");
     let (fid2, _) = mnt2.attach(b"glenda", b"").expect("attach");
     assert!(mnt2.walk(fid2, b"nosuch").is_err(), "Rwalk(0) on a single-name walk is not-found");
 }
@@ -794,4 +820,248 @@ fn devmnt_namec_walk_error_clunks_intermediates() {
     );
     assert!(fids.borrow().contains_key(&attach_fid), "the mount table's fid is never touched");
     assert_eq!(fids.borrow().len(), 1, "only the table's attach fid remains");
+}
+
+// ---------------------------------------------------------------------------
+// 19-08: the tag-mux pins — concurrent rpcs demux by tag, the exact
+// class the -G session needs (a parked indefinite reader must keep
+// serving a concurrent rpc's reply).
+// ---------------------------------------------------------------------------
+
+/// A thread-safe scripted server whose READ half blocks until bytes
+/// arrive (the kernel pipe shape — the Condvar stands in for the
+/// park/wake hooks; the 10s cap keeps a broken mux a loud failure,
+/// never a hung suite).  `write_msg` handles the T synchronously.
+///
+/// The out-of-order knob (`stash_first`): the reply to the FIRST Tread
+/// is stashed and released only when the SECOND Twrite arrives — the
+/// wire then holds the second rpc's reply BEFORE the first's, so the
+/// first rpc's reader (parked on the wire, holding the reader token)
+/// must frame and ROUTE a reply it does not own before its own
+/// arrives.
+struct ThreadFakeState {
+    outq: VecDeque<u8>,
+    /// fid → content (the walk set).
+    files: HashMap<u32, Vec<u8>>,
+    /// T writes handled (the interleave observable).
+    writes: usize,
+    /// Contexts currently parked inside read_some.
+    reads_waiting: usize,
+    stash_first: bool,
+    stashed: Option<Vec<u8>>,
+    /// The tags queued onto the wire, in order (the reorder assert).
+    queued_tags: Vec<u16>,
+}
+
+struct ThreadFake(Arc<(Mutex<ThreadFakeState>, Condvar)>);
+
+impl ThreadFake {
+    fn clone_fake(&self) -> ThreadFake {
+        ThreadFake(self.0.clone())
+    }
+
+    fn new() -> (ThreadFake, Arc<(Mutex<ThreadFakeState>, Condvar)>) {
+        let st = Arc::new((
+            Mutex::new(ThreadFakeState {
+                outq: VecDeque::new(),
+                files: HashMap::new(),
+                writes: 0,
+                reads_waiting: 0,
+                stash_first: false,
+                stashed: None,
+                queued_tags: Vec::new(),
+            }),
+            Condvar::new(),
+        ));
+        (ThreadFake(st.clone()), st)
+    }
+
+    /// One canned reply: Rversion/Rattach/Rwalk by type; Tread serves
+    /// the walked fid's content.  fid mapping is fixed by the test.
+    fn handle(state: &mut ThreadFakeState, buf: &[u8]) -> Vec<u8> {
+        let size = u32::from_le_bytes(buf[0..4].try_into().unwrap()) as usize;
+        let body = &buf[7..size];
+        let typ = buf[4];
+        let tag = u16::from_le_bytes(buf[5..7].try_into().unwrap());
+        match typ {
+            100 => {
+                // Tversion -> Rversion(offer, 9P2000)
+                let mut b = Vec::new();
+                pu32(&mut b, 8192);
+                pstr(&mut b, b"9P2000");
+                frame(101, tag, &b)
+            }
+            104 => {
+                // Tattach -> Rattach(dir qid); fid 1 = root (the fid
+                // word is positional — the mapping is fixed by the
+                // test's walk order)
+                state.files.insert(1, Vec::new());
+                let mut b = Vec::new();
+                pqid(&mut b, 0x80, 0, 100);
+                frame(105, tag, &b)
+            }
+            110 => {
+                // Twalk(one name) -> Rwalk(one qid); the CONTENT maps
+                // by NAME onto the new fid (the source fid word is
+                // positional — the test's walk order fixes it).
+                let newfid = u32::from_le_bytes(body[4..8].try_into().unwrap());
+                let nlen = u16::from_le_bytes(body[10..12].try_into().unwrap()) as usize;
+                let name = &body[12..12 + nlen];
+                let content = match name {
+                    b"adir" => Vec::new(),
+                    b"leaf.txt" => LEAF_CONTENT.to_vec(),
+                    b"top.txt" => TOP_CONTENT.to_vec(),
+                    _ => Vec::new(),
+                };
+                state.files.insert(newfid, content);
+                let mut b = Vec::new();
+                pu16(&mut b, 1);
+                pqid(&mut b, 0x00, 0, 102);
+                frame(111, tag, &b)
+            }
+            116 => {
+                // Tread -> Rread(content)
+                let fid = u32::from_le_bytes(body[0..4].try_into().unwrap());
+                let off = u64::from_le_bytes(body[4..12].try_into().unwrap());
+                let count = u32::from_le_bytes(body[12..16].try_into().unwrap()) as usize;
+                let content = state.files.get(&fid).cloned().unwrap_or_default();
+                let data = &content[off.min(content.len() as u64) as usize..(off as usize + count).min(content.len())];
+                let mut b = Vec::new();
+                pu32(&mut b, data.len() as u32);
+                b.extend_from_slice(data);
+                frame(117, tag, &b)
+            }
+            _ => frame(107, tag, b"bad type"),
+        }
+    }
+
+    /// Queue one reply onto the wire (raw — the stash decision is
+    /// made by the caller, which knows whether the reply is FRESH or
+    /// a RELEASE; the release must never re-stash).
+    fn queue(state: &mut ThreadFakeState, reply: Vec<u8>) {
+        let tag = u16::from_le_bytes(reply[5..7].try_into().unwrap());
+        state.queued_tags.push(tag);
+        state.outq.extend(reply);
+    }
+}
+
+impl MntIo for ThreadFake {
+    fn write_msg(&mut self, buf: &[u8]) -> Result<u64> {
+        {
+            let mut st = self.0.0.lock().unwrap();
+            st.writes += 1;
+            let reply = Self::handle(&mut st, buf);
+            // The stash trigger fires on FRESH replies only (the
+            // first Rread after arming) — and the release fires only
+            // when the stash PREDATES this write (otherwise the
+            // stashing write would immediately release its own
+            // stash and A would never park).
+            let mut just_stashed = false;
+            if st.stash_first && st.stashed.is_none() && reply[4] == 117 {
+                st.stashed = Some(reply);
+                just_stashed = true;
+            } else {
+                Self::queue(&mut st, reply);
+            }
+            // A LATER write releases the stash AFTER this reply
+            // queues (the wire then holds [this reply, the stashed
+            // one]).
+            if !just_stashed && let Some(stash) = st.stashed.take() {
+                Self::queue(&mut st, stash);
+            }
+        }
+        self.0.1.notify_all();
+        Ok(buf.len() as u64)
+    }
+
+    fn read_some(&mut self, buf: &mut [u8]) -> Result<u64> {
+        let mut st = self.0.0.lock().unwrap();
+        loop {
+            if !st.outq.is_empty() {
+                let n = st.outq.len().min(buf.len());
+                for b in buf.iter_mut().take(n) {
+                    *b = st.outq.pop_front().unwrap();
+                }
+                return Ok(n as u64);
+            }
+            st.reads_waiting += 1;
+            let (guard, _timeout) = self.0.1
+                .wait_timeout(st, std::time::Duration::from_secs(10))
+                .unwrap();
+            st = guard;
+            st.reads_waiting -= 1;
+            if st.outq.is_empty() {
+                // The cap: an empty wire after a full timeout is the
+                // server hanging up (the client's loud eof error).
+                return Ok(0);
+            }
+        }
+    }
+}
+
+/// The park hook for the threaded pin: sleep ~1ms (the kernel's
+/// park-a-tick; without a hook, contention is the loud error).
+fn test_park_one_tick() {
+    std::thread::sleep(std::time::Duration::from_millis(1));
+}
+
+/// THE mux pin: rpc A parks on the wire (reader token held, reply
+/// stashed — the cpunote/console-stdin shape); rpc B sends and its
+/// reply arrives FIRST on the wire.  B must receive exactly its own
+/// reply — routed by A — and A must then receive its own.  Out-of-
+/// order delivery is proven from the server's own queue record.
+#[test]
+fn mux_parked_reader_routes_a_concurrent_rpcs_reply_before_its_own() {
+    devmnt::set_contention_hook_for_test(test_park_one_tick);
+    let (fake, st) = ThreadFake::new();
+    let (r, w) = (Box::new(fake.clone_fake()), Box::new(fake));
+    let mnt = Mnt::negotiate(r, w, 0).expect("negotiate over the threaded fake");
+
+    let (_root_fid, _) = mnt.attach(b"glenda", b"").expect("attach");
+    let (adir, _) = mnt.walk(1, b"adir").expect("walk adir");
+    let (leaf_fid, _) = mnt.walk(adir, b"leaf.txt").expect("walk leaf");
+    let (top_fid, _) = mnt.walk(adir, b"top.txt").expect("walk top");
+
+    // Arm the stash: the NEXT Tread's reply (A's) is held until the
+    // following write (B's Tread) — then the wire order is
+    // [B's reply, A's reply].
+    {
+        let mut s = st.0.lock().unwrap();
+        s.stash_first = true;
+        s.queued_tags.clear();
+    }
+
+    let mnt = Arc::new(mnt);
+    let mnt_a = mnt.clone();
+    let a = std::thread::spawn(move || mnt_a.read(leaf_fid, 0, 4096).expect("A reads its leaf"));
+
+    // Wait until A has SENT its Tread and is parked inside read_some
+    // holding the reader token (the deterministic interleave).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        {
+            let s = st.0.lock().unwrap();
+            if s.writes >= 1 && s.reads_waiting >= 1 {
+                break;
+            }
+        }
+        assert!(std::time::Instant::now() < deadline, "A never parked on the wire");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+
+    // B's rpc: sends while A holds the token; the wire answers B
+    // FIRST.  B parks on the token (the 1ms hook) until A routes it.
+    let b = mnt.read(top_fid, 0, 4096).expect("B reads its top");
+    assert_eq!(b, TOP_CONTENT, "B receives exactly its own reply, never A's");
+
+    let a_out = a.join().expect("A completes");
+    assert_eq!(a_out, LEAF_CONTENT, "A receives its own reply after routing B's");
+
+    // The wire really did answer B first (the reorder, from the
+    // server's own queue record — the pin's premise, proven).
+    {
+        let s = st.0.lock().unwrap();
+        assert_eq!(s.queued_tags.len(), 2, "two replies crossed the wire");
+        assert!(s.queued_tags[0] != s.queued_tags[1], "the two replies are distinct rpcs");
+    }
 }

@@ -226,12 +226,13 @@ impl<T> Drop for BusyGuard<'_, T> {
     }
 }
 
-// SAFETY: MntCore's io transport is a !Send trait object (the MntIo trait
-// can't carry the bound — the unmodified host tests' FakeServer shares its
-// fid table by Rc), so the proof lands here: only a BusyCell<MntCore>
-// guard ever touches an MntCore, and the guard is the cell's single owner
-// (enter()'s swap excludes every other contender for its lifetime).  The
-// BusyCell Send/Sync impls above extend the discipline to the session.
-// (Homed with the primitive because devmnt.rs is
-// #[forbid(unsafe_code)].)
-unsafe impl Send for crate::devmnt::MntCore {}
+// SAFETY: the io halves are !Send trait objects (the MntIo trait
+// can't carry the bound — the unmodified host tests' FakeServer
+// shares its fid table by Rc), so the proof lands here: only a
+// BusyCell<MntIoBox> guard ever touches a half, and the guard is the
+// cell's single owner (enter()'s swap excludes every other contender
+// for its lifetime — the read half doubly so, the donor's
+// one-reader-at-a-time token).  The BusyCell Send/Sync impls above
+// extend the discipline to the session.  (Homed with the primitive
+// because devmnt.rs is #[forbid(unsafe_code)].)
+unsafe impl Send for crate::devmnt::MntIoBox {}
