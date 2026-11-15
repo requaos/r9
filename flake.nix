@@ -702,7 +702,17 @@ WRAP
             # 2a1301c81e62a88cb41d2d2c8d419a9d2b48036dd36b2228d896cafb17192ad2
             # (sha256-KhMByB…), in three-way agreement with the FOD's
             # own measured got-value.
-            outputHash = "sha256-KhMByB5iqIy0HS0sjUGanStIA23TayIo2JbK+xcZKtI=";
+            # The same session's LAST bytes (56acaea: devpipe's
+            # blocking write on a full queue — the tier1 gate's
+            # measured paqfs root death under the tag-mux's
+            # concurrent rpcs) re-staled the KhMByB wiring within the
+            # hour; re-wired again with the same proof: kernel A
+            # plain at 56acaea + kernel B at 3fe2807 (fresh
+            # derivation-independence marker clone), byte-identical
+            # ISOs — file sha256
+            # 9055d76e9bdcb91c252d28355ede20751f2a2f9760fe61a283ef09797fa0467e,
+            # NAR sha256-+0pYwT..., three-way agreed.
+            outputHash = "sha256-+0pYwTBhw0rXPV/+XmHgFGOGrkqh9h07cYmVgZ6Wzn4=";
           };
         });
 
