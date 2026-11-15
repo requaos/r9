@@ -56,7 +56,7 @@ fn fake_pipe_fds() -> (Chan, Chan) {
 /// error loudly.
 #[test]
 fn devdup_walk_validation() {
-    let root = devdup::attach();
+    let mut root = devdup::attach();
     let c = devdup::walk(&root, b"0").expect("walk #d/0");
     assert_eq!(c.qid.path, 1, "the donor's qid encoding: 2*fd+1");
     let c = devdup::walk(&root, b"12").expect("walk #d/12");
@@ -237,4 +237,80 @@ fn devdup_devsrv_device_flow() {
 
     namec::close_chan(&posted);
     let _ = e0; // the pair's end 0 (fd-table copy) is covered above
+
+    // --- 19-10 (the desktop leg): the CTL half of #d — `#d/Nctl` walks
+    // to its own qid (2*N+2), opens ITSELF (the donor `f = c` arm —
+    // never the referenced fd's chan), and reads the donor procfdprint
+    // fd line whose 8th whitespace token is the chan's IOUNIT — libc
+    // iounit(2)'s parse contract (sys/src/libc/9sys/iounit.c tokenizes
+    // and takes args[7]).  The kernel-side pair of this pin is devmnt's
+    // Ropen-iounit leg; the consumer is libdraw's initdisplay (bufsize
+    // = iounit(/dev/draw/data)), whose 8000 fallback over the 4072
+    // mount-transport cap split draw writes mid-message and killed
+    // cpu-session rio at `can't open display`.
+
+    // fd 0 = a pipe end carrying a mount-style iounit (the Ropen leg's
+    // value; 4072 = the era's per-rpc data cap) — a FRESH table so the
+    // ctl assertions see exactly fd 0 (the set-once hooks above already
+    // registered; the global table is ours to replace)
+    let dir = devpipe::attach();
+    let c0 = devpipe::walk(&dir, b"data").expect("walk data");
+    let mut e0 = namec::open_chan(&c0, ORDWR).expect("open data");
+    e0.iounit = 4072;
+    let mut table = FdGroup::<32>::new();
+    assert_eq!(table.alloc_lowest(e0.dup()), Some(0));
+    *FAKE_TABLE.lock().unwrap() = Some(table);
+
+    // walk + qid encoding: the ctl file is 2*N+2 (the donor's odd-s arm)
+    let mut root = devdup::attach();
+    let ctl = devdup::walk(&root, b"0ctl").expect("walk #d/0ctl");
+    assert_eq!(ctl.qid.path, 2, "the donor's qid encoding: 2*fd+2 for ctl");
+    assert!(devdup::walk(&root, b"ctl").is_err(), "a bare ctl (no fd) errors loudly");
+
+    // open returns the CTL chan itself — never the referenced pipe chan
+    let mut opened = devdup::open(&ctl, OREAD).expect("open #d/0ctl");
+    assert_eq!(opened.dev, port::dat::DEV_DUP, "the ctl chan opens itself (donor f = c)");
+
+    // the read: the donor fd line — `fd mode dc devno (qid) iounit offset path`
+    // — tokenizing exactly as libc iounit(2) does (field 7 = iounit)
+    let mut buf = [0u8; 256];
+    let n = devdup::read(&mut opened, &mut buf, 0).expect("read the ctl line") as usize;
+    let line = String::from_utf8(buf[..n].to_vec()).unwrap();
+    let toks: Vec<&str> = line.split_whitespace().collect();
+    assert!(toks.len() >= 8, "at least the 8 fields iounit(2) tokenizes (got: {line})");
+    assert_eq!(toks[0], "0", "field 0 is the fd number");
+    assert_eq!(toks[1], "rw", "field 1 is the two-char mode (the pipe end is ORDWR)");
+    assert_eq!(toks[7].parse::<u32>().unwrap(), 4072, "field 7 is the IOUNIT (iounit(2)'s args[7])");
+    assert!(line.ends_with('\n'), "the line is newline-terminated (readstr's shape)");
+
+    // a second read at the line's offset is empty (the readstr contract)
+    let n2 = devdup::read(&mut opened, &mut buf, n as u64).expect("offset read");
+    assert_eq!(n2, 0, "the ctl line reads once (offset >= len is EOF)");
+
+    // the root listing now carries BOTH entries per fd: the name strings
+    // 0 and 0ctl (the length-prefixed name bytes are contiguous)
+    let mut listing = [0u8; 512];
+    let ln = devdup::read(&mut root, &mut listing, 0).expect("listing") as usize;
+    assert!(listing[..ln].windows(4).any(|w| w == b"0ctl"), "the listing names the ctl file");
+    // CR-01's shape still holds: every record is the 4-string stat(5)
+    let mut i = 0usize;
+    while i + 2 <= ln {
+        let sz = u16::from_le_bytes([listing[i], listing[i + 1]]) as usize;
+        if sz == 0 {
+            break;
+        }
+        stat_strings(&listing[i..i + 2 + sz]);
+        i += 2 + sz;
+    }
+    assert_eq!(i, ln, "the listing parses to the last byte (4-string records)");
+
+    // stat of the ctl file: name 0ctl, perm 0400 (the donor's odd arm;
+    // mode is the u32 at buffer offset 21 (past the size prefix) — after type/dev/typ/
+    // vers/qid)
+    let mut sb = [0u8; 256];
+    let sn = devdup::stat(&ctl, &mut sb).expect("stat ctl") as usize;
+    let strs = stat_strings(&sb[..sn]);
+    assert_eq!(strs[0], "0ctl", "the ctl file's stat name");
+    assert_eq!(u32::from_le_bytes([sb[21], sb[22], sb[23], sb[24]]) & 0o777, 0o400, "the ctl file's perm");
+
 }

@@ -446,8 +446,16 @@ fn devmnt_version_attach_walk_open_read_stat_clunk_round_trip() {
     assert_eq!(leaf_qid.typ, QTFILE);
 
     // open OREAD, then read the content in two offset-addressed RPCs.
-    let (open_qid, _iounit) = mnt.open(leaf_fid, 0).expect("open OREAD");
+    let (open_qid, iounit) = mnt.open(leaf_fid, 0).expect("open OREAD");
     assert_eq!(open_qid.path, QID_LEAF);
+    // 19-10 (the desktop leg): the Ropen iounit — the fake answers 0
+    // (paqfs's shape) and the clamp must land on the era's per-rpc DATA
+    // cap (rpc_data_cap: min(msize, TRANSPORT_MSG_MAX)-IOHDRSZ = 4072
+    // at the 8192 negotiation), NOT msize-24 — the iounit is the
+    // caller's max-single-write contract, and a value above the
+    // transport splits writes mid-message (libdraw's draw buffer sizes
+    // by iounit; the cpu-session rio death this pin guards).
+    assert_eq!(iounit, 4072, "iounit 0 clamps to rpc_data_cap, never msize-24");
     let first = mnt.read(leaf_fid, 0, 4).expect("read [0..4]");
     assert_eq!(first.as_slice(), b"hell");
     let rest = mnt.read(leaf_fid, 4, 100).expect("read [4..] clamps at EOF");

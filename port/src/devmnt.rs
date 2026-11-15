@@ -792,8 +792,15 @@ impl Mnt {
         let qid = cur.qid()?;
         let iounit = cur.u32()?;
         cur.done()?;
-        // The donor's clamp (mntopencreate): 0 or oversized → msize-IOHDRSZ.
-        let cap = self.msize - IOHDRSZ;
+        // The donor's clamp (mntopencreate): 0 or oversized → the
+        // session's per-message data cap.  The donor's cap is
+        // msize-IOHDRSZ; THIS era's transport (devpipe's whole-message
+        // 4096 bound) caps per-rpc DATA at rpc_data_cap below that, and
+        // the iounit is the caller's max-single-write contract — it must
+        // never exceed what one rpc can carry (19-10: libdraw sizes its
+        // draw buffer by iounit; a cap above the transport split draw
+        // writes mid-message).
+        let cap = rpc_data_cap(self.msize) as u32;
         let iounit = if iounit == 0 || iounit > cap { cap } else { iounit };
         Ok((qid, iounit))
     }
@@ -857,8 +864,15 @@ impl Mnt {
         let qid = cur.qid()?;
         let iounit = cur.u32()?;
         cur.done()?;
-        // The donor's clamp (mntopencreate): 0 or oversized → msize-IOHDRSZ.
-        let cap = self.msize - IOHDRSZ;
+        // The donor's clamp (mntopencreate): 0 or oversized → the
+        // session's per-message data cap.  The donor's cap is
+        // msize-IOHDRSZ; THIS era's transport (devpipe's whole-message
+        // 4096 bound) caps per-rpc DATA at rpc_data_cap below that, and
+        // the iounit is the caller's max-single-write contract — it must
+        // never exceed what one rpc can carry (19-10: libdraw sizes its
+        // draw buffer by iounit; a cap above the transport split draw
+        // writes mid-message).
+        let cap = rpc_data_cap(self.msize) as u32;
         let iounit = if iounit == 0 || iounit > cap { cap } else { iounit };
         Ok((qid, iounit))
     }
@@ -1046,11 +1060,18 @@ pub fn open(c: &Chan, mode: u32) -> Result<Chan> {
     if c.qid.typ & QTDIR != 0 && access != OREAD {
         return Err("devmnt: directory opens OREAD only");
     }
-    let (qid, _iounit) = mnt.open(**fid, (mode & 0xff) as u8)?;
+    let (qid, iounit) = mnt.open(**fid, (mode & 0xff) as u8)?;
     let mut nc = Chan::new(DEV_MNT, qid, access);
     nc.mnt = Some(mnt.clone());
     nc.mnt_fid = c.mnt_fid.clone();
     nc.path = c.path.clone();
+    // The donor's c->iounit = reply.iounit (clamped) — mnt.open already
+    // clamped (0 or over-cap → the cap), so the opened chan carries the
+    // per-rpc data cap devdup's #d/Nctl line reports (19-10: libdraw's
+    // iounit(2) sizes its draw-message buffer; an iounit of 0 fell back
+    // to 8000, over this era's 4072 transport cap, and the mid-message
+    // write split killed cpu-session rio at `can't open display`).
+    nc.iounit = iounit;
     Ok(nc)
 }
 
@@ -1129,7 +1150,7 @@ pub fn create(c: &Chan, name: &[u8], mode: u32, perm: u32) -> Result<Chan> {
     // and the parent's fid (the Arc the walked chan shares) stays a
     // directory fid (the donor mntcreate's clone-then-create shape).
     let newfid = mnt.clone_fid(**fid)?;
-    let (qid, _iounit) = match mnt.create(newfid, name, perm, (mode & 0xff) as u8) {
+    let (qid, iounit) = match mnt.create(newfid, name, perm, (mode & 0xff) as u8) {
         Ok(v) => v,
         Err(msg) => {
             // The clone never became a file — clunk it best-effort so a
@@ -1150,6 +1171,10 @@ pub fn create(c: &Chan, name: &[u8], mode: u32, perm: u32) -> Result<Chan> {
     nc.path = c.path.clone();
     nc.path.push(b'/');
     nc.path.extend_from_slice(name);
+    // The donor's iounit leg for creates too (mntopencreate serves both
+    // open and create — see open()'s note): the created chan carries the
+    // clamped reply iounit.
+    nc.iounit = iounit;
     Ok(nc)
 }
 

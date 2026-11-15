@@ -141,11 +141,24 @@ pub struct Chan {
     /// (devmnt::clunk_if_last) Tclunks only when the LAST ref leaves
     /// (Arc::strong_count == 1) — the double-Tclunk divergence retired.
     pub(crate) mnt_fid: Option<Arc<u32>>,
+    /// The chan's iounit — the Ropen/Rcreate reply's iounit, clamped to
+    /// the session's per-rpc data cap (the donor devmnt.c mntopencreate:
+    /// `c->iounit = r->reply.iounit; if(c->iounit == 0 || c->iounit >
+    /// mnt->msize-IOHDRSZ) c->iounit = mnt->msize-IOHDRSZ`).  Set ONLY by
+    /// devmnt's open/create legs; 0 for every device-local chan (the
+    /// donor leaves it 0 there too — the clamp is the mount's business).
+    /// Read by devdup's `#d/Nctl` fd line (libc iounit(2)'s parse
+    /// source), so a mounted /dev/draw reports its real rpc cap and
+    /// libdraw sizes its message buffer to whole-message writes — the
+    /// 19-10 desktop leg's load-bearing ABI (an iounit of 0 made libdraw
+    /// fall back to 8000, over the era's 4072 transport cap, and the
+    /// mid-message split killed rio at `can't open display`).
+    pub iounit: u32,
 }
 
 impl Chan {
     pub fn new(dev: usize, qid: Qid, mode: u32) -> Chan {
-        Chan { qid, mode, offset: 0, dev, path: Vec::new(), paqdir: None, pipe: None, copen: false, mnt: None, mnt_fid: None }
+        Chan { qid, mode, offset: 0, dev, path: Vec::new(), paqdir: None, pipe: None, copen: false, mnt: None, mnt_fid: None, iounit: 0 }
     }
 
     /// Mark the chan open (COPEN) OUTSIDE the funnel — the one
@@ -214,6 +227,7 @@ impl Chan {
             copen: self.copen,
             mnt: self.mnt.clone(),
             mnt_fid: self.mnt_fid.clone(),
+            iounit: self.iounit,
         }
     }
 
@@ -238,6 +252,7 @@ impl Chan {
             copen: self.copen,
             mnt: self.mnt.clone(),
             mnt_fid: self.mnt_fid.clone(),
+            iounit: self.iounit,
         }
     }
 
