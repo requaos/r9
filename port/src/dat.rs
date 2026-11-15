@@ -194,6 +194,15 @@ impl Chan {
         if self.copen && self.dev == DEV_IP {
             crate::devip::ref_open(self.qid.path);
         }
+        // THE DEVSSL EXCEPTION (19-08, the same rule, #D's
+        // conversations): an OPEN ctl/data chan's value copy bumps the
+        // conv's refc — a 9P session's io dup (devmnt::fversion over a
+        // pushssl fd) must keep the conversation alive past the caller's
+        // close, or every post-mount rpc of the mounted session dies
+        // with the hung-up conversation (cpu -R's /mnt/term).
+        if self.copen && self.dev == DEV_SSL {
+            crate::devssl::ref_open(self.qid.path);
+        }
         Chan {
             qid: self.qid,
             mode: self.mode,

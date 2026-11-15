@@ -965,27 +965,28 @@ const Q35_CHAIN_INIT_MARKER: &str = "init: starting /bin/rc";
 // BOOT_PAQFS_MARKER ("paqfs...") and NET_PROMPT_MARKER ("% ") carry
 // over from the aarch64 Net gate — the same literals on the same wire.
 
-/// The q35cpu bootconf-tracer markers (19-01, CPU-02): the kernel's
-/// cmdline-merge print (`devenv: bootconf` — main's exec prologue
-/// naming the cmdline-sourced env pairs) and the staged cpurc
-/// fixture's own marker (`cpurc: RAN` — the §15 cpu image's flat echo
-/// at /rc/bin/cpurc, run by init -c's cpustart).  The negative space:
-/// `init: starting /bin/rc` (the terminal arm's loop print, and the
-/// Pitfall-5 failure-loop symptom when a cpu boot's rc child dies and
-/// init re-spawns it) must be ABSENT — the cpu path never prints it.
+/// The q35cpu bootconf-tracer markers (19-01, CPU-02; re-keyed 19-08
+/// for 19-07's REAL §15 cpurc): the kernel's cmdline-merge print
+/// (`devenv: bootconf` — main's exec prologue naming the cmdline-sourced
+/// env pairs) and the cpurc ladder's own verdict markers —
+/// `cpurc: PAIR-OK` (the D-02 pairing leg, the first rung) and
+/// `cpurc: DONE` (the full ladder green: pairing -> ether -> keyfs ->
+/// authsrv listen -> factotum -> tcp17010 listen).  The 19-03 fixture
+/// legs (SHEBANG-OK/REMOVE-OK/cpurc: RAN) are RETIRED with the fixture
+/// body: their proof is load-bearing at the tcp17010 service point on
+/// the composed drawterm gate (every per-connection exec of the service
+/// file rides the same kernel #! pre-pass).  The 19-01 negative space
+/// (`init: starting /bin/rc` absent) is retired too: the real cpurc
+/// RUNS TO COMPLETION and exits, so init's post-cpustart terminal
+/// handoff printing `init: starting /bin/rc` (exactly once, after
+/// DONE) is the EXPECTED shape now — the failure-loop symptom it used
+/// to catch cannot be distinguished from it at line level, and the
+/// DONE marker already proves cpustart consumed the bootconf pair.
 const Q35_BOOTCONF_MARKER: &str = "devenv: bootconf";
-const Q35_CPURC_MARKER: &str = "cpurc: RAN";
-/// The 19-03 ring-3 leg markers (CPU-01/CPU-03): the §15 cpurc SCRIPT
-/// (itself #!-exec'd — the first live proof) runs two legs.  SHEBANG-OK
-/// appears TWICE by design: once as the service script's #! token
-/// echoed by its interpreter (/amd64/bin/echo argv: token, script
-/// path — the donor argv order live) and once as the leg's own verdict
-/// marker.  REMOVE-OK: rm #¤/caphash through the ported devcap arm,
-/// then test -e proves the absence.  The named failure markers
-/// (SHEBANG-FAIL/REMOVE-FAIL) and the bare word FAIL are prohibited
-/// whole-capture — the gate greps both directions.
-const Q35_CPU_SHEBANG_OK_MARKER: &str = "SHEBANG-OK";
-const Q35_CPU_REMOVE_OK_MARKER: &str = "REMOVE-OK";
+const Q35_CPURC_MARKER: &str = "cpurc: DONE";
+const Q35_CPURC_LADDER_MARKER: &str = "cpurc: PAIR-OK";
+/// The ladder's failure vocabulary (each leg prints `cpurc: FAIL <leg>`
+/// and skips every later rung): prohibited whole-capture.
 const Q35_CPU_FAIL_WORD: &str = "FAIL";
 
 /// Panic-profile markers: a config with dev = ["panic"] boots
@@ -1523,8 +1524,8 @@ impl fmt::Display for BootStage {
             BootStage::Q35CpuRc => {
                 write!(
                     f,
-                    "the cpurc script markers {{{Q35_CPURC_MARKER:?}, \
-                     {Q35_CPU_SHEBANG_OK_MARKER:?}, {Q35_CPU_REMOVE_OK_MARKER:?}}} from ring 3"
+                    "the cpurc ladder markers {{{Q35_CPURC_LADDER_MARKER:?}, \
+                     {Q35_CPURC_MARKER:?}}} from ring 3"
                 )
             }
         }
@@ -2219,11 +2220,11 @@ impl BootTestStep {
                             stage = BootStage::Q35ModulePaqfs;
                         } else if q35cpu_profile {
                             // 19-01: the cpu tracer continues into the
-                            // same module half (dev = ["exec",
-                            // "bootchain"] — no ether bind, the NIC
-                            // present-unbound), then the exec-entry
-                            // note and boot(8)'s chain prints, ending
-                            // at the cpurc marker below.
+                            // same module half (19-08: ether+ip joined
+                            // q35cpu's dev set — the §15 ladder's
+                            // ipconfig leg needs the bound NIC), then
+                            // the exec-entry note and boot(8)'s chain
+                            // prints, ending at the cpurc marker below.
                             bind_after = last_marker_line_end(
                                 &capture[pci_after..],
                                 PCI_NET_DEVICE_MARKER,
@@ -2360,13 +2361,13 @@ impl BootTestStep {
                         && contains_marker(&capture[bind_after..], Q35_BOOT_VERSION_MARKER.as_bytes())
                     {
                         bind_after = capture.len();
-                        // 19-01: the cpu path SKIPS init's terminal
-                        // rc-handoff marker — init -c runs cpustart
-                        // directly (init.c's `init: starting /bin/rc`
-                        // loop print belongs to the terminal arm only,
-                        // and its presence on a cpu boot IS the
-                        // failure-loop symptom the gate counts at
-                        // finish).  Await the cpurc marker instead.
+                        // 19-01: the cpu path's cpustart runs BEFORE
+                        // any terminal handoff — await the cpurc ladder
+                        // marker instead of init's rc handoff (19-08:
+                        // the REAL cpurc exits after DONE and init then
+                        // hands off to the terminal rc — that later
+                        // `init: starting /bin/rc` line is expected; the
+                        // stage terminates at DONE before it).
                         stage = if q35cpu_profile {
                             BootStage::Q35CpuRc
                         } else {
@@ -2394,48 +2395,27 @@ impl BootTestStep {
                     }
                 }
                 BootStage::Q35CpuRc => {
-                    // 19-01: the cpurc fixture's OWN print from ring 3
-                    // (run by init -c's cpustart through the real
-                    // exec/rc path; since 19-03 the fixture is a REAL
-                    // #! rc script — cpurc: RAN proves the #! pre-pass
-                    // at the cpurc point).  19-03: the stage's
-                    // terminal is now the LAST leg's verdict
-                    // (REMOVE-OK) — the legs' own failure markers
-                    // fast-fail the same way the 19-01 loop symptom
-                    // does.
-                    if count_marker_lines(&capture, Q35_CHAIN_INIT_MARKER) > 0 {
-                        return Err(self.fail(
-                            stage,
-                            &capture,
-                            &format!(
-                                "cpu gate: the failure-loop symptom {Q35_CHAIN_INIT_MARKER:?} \
-                                 printed — init fell into its terminal re-spawn loop (the \
-                                 bootconf init= pair never reached execinit, or the cpurc \
-                                 exec died)"
-                            ),
-                        ));
-                    }
+                    // 19-08 re-key: the REAL §15 cpurc (19-07) runs a
+                    // six-rung fail-loud ladder to `cpurc: DONE`.  The
+                    // 19-01 failure-loop prohibition is retired here —
+                    // the real cpurc EXITS and init's terminal handoff
+                    // (`init: starting /bin/rc`, once, after DONE) can
+                    // win the poll race against this stage seeing DONE;
+                    // the ladder's own `cpurc: FAIL <leg>` vocabulary
+                    // fast-fails instead.
                     if count_marker_lines(&capture, Q35_CPU_FAIL_WORD) > 0 {
                         return Err(self.fail(
                             stage,
                             &capture,
                             &format!(
-                                "cpu gate: a FAIL marker printed — a 19-03 leg failed (grep \
-                                 the log for {Q35_CPU_FAIL_WORD:?}); the cpurc: RAN line \
-                                 above it names how far the script got"
+                                "cpu gate: a FAIL marker printed — a cpurc ladder leg failed \
+                                 (grep the log for {:?}); the last OK rung above it names \
+                                 how far the ladder got",
+                                 Q35_CPU_FAIL_WORD
                             ),
                         ));
                     }
-                    if contains_marker(&capture[bind_after..], Q35_CPURC_MARKER.as_bytes())
-                        && contains_marker(
-                            &capture[bind_after..],
-                            Q35_CPU_SHEBANG_OK_MARKER.as_bytes(),
-                        )
-                        && contains_marker(
-                            &capture[bind_after..],
-                            Q35_CPU_REMOVE_OK_MARKER.as_bytes(),
-                        )
-                    {
+                    if contains_marker(&capture[bind_after..], Q35_CPURC_MARKER.as_bytes()) {
                         return self.finish(log_abs, &capture, BootProfile::X64Cpu);
                     }
                 }
@@ -2994,18 +2974,25 @@ impl BootTestStep {
                 );
             }
             BootProfile::X64Cpu => {
-                // 19-01's CPU-02 whole-capture post-pass: the ordered
+                // 19-08 re-key (19-07's REAL §15 cpurc): the ordered
                 // stage chain (banner -> facts -> discovery -> module/
-                // paqfs -> exec entry -> boot(8)'s prints -> cpurc) is
-                // asserted stage-wise; the finish-time scans carry the
-                // seam's own evidence — the bootconf-merge line (the
-                // kernel's `devenv: bootconf` print names the
-                // cmdline-sourced pairs, proving the append reached the
-                // ROOT env seed) and the failure-loop prohibition
-                // (ZERO `init: starting /bin/rc` lines — the terminal
-                // arm's loop print; on a cpu boot it means execinit
-                // never consumed the init= pair and init re-spawned rc
-                // in its 1s loop).
+                // paqfs -> exec entry -> boot(8)'s prints -> the cpurc
+                // ladder) is asserted stage-wise, terminating at
+                // `cpurc: DONE`.  The finish-time scans keep the seam's
+                // own evidence — the bootconf-merge line (the kernel's
+                // `devenv: bootconf` print proves the append reached
+                // the ROOT env seed) and the ladder's pairing rung
+                // (`cpurc: PAIR-OK` — the bake-artifact leg, the first
+                // rung DONE implies but named for the evidence).  The
+                // 19-01 failure-loop prohibition (`init: starting
+                // /bin/rc` == 0) is RETIRED: the real cpurc exits after
+                // DONE and init's terminal handoff prints that line
+                // exactly once — the expected shape; the DONE marker
+                // already proves execinit consumed the bootconf pair.
+                // The 19-03 fixture legs (SHEBANG-OK/REMOVE-OK) are
+                // retired with the fixture body (their #! proof is
+                // load-bearing at the tcp17010 service point on the
+                // composed gate).
                 if !contains_marker(capture, Q35_BOOTCONF_MARKER.as_bytes()) {
                     return Err(self.fail_pretty(
                         capture,
@@ -3016,14 +3003,13 @@ impl BootTestStep {
                         ),
                     ));
                 }
-                let loops = count_marker_lines(capture, Q35_CHAIN_INIT_MARKER);
-                if loops != 0 {
+                if !contains_marker(capture, Q35_CPURC_LADDER_MARKER.as_bytes()) {
                     return Err(self.fail_pretty(
                         capture,
                         &format!(
-                            "cpu gate: {loops} {Q35_CHAIN_INIT_MARKER:?} line(s) — the \
-                             failure-loop symptom (init ran the terminal re-spawn loop, not \
-                             cpustart)"
+                            "cpu gate: the ladder's pairing rung {Q35_CPURC_LADDER_MARKER:?} \
+                             absent — the D-02 pairing leg never passed (a bad bake never \
+                             reaches the later rungs)"
                         ),
                     ));
                 }
@@ -3031,38 +3017,13 @@ impl BootTestStep {
                     return Err(self
                         .fail_pretty(capture, &format!("cpu marker {Q35_CPURC_MARKER:?} absent")));
                 }
-                // 19-03's leg markers: both OK markers present (the
-                // shebang token reaching its interpreter + the remove
-                // round-trip through the ported devcap arm), zero FAIL
-                // words anywhere in the capture — the gate greps both
-                // directions.
-                if !contains_marker(capture, Q35_CPU_SHEBANG_OK_MARKER.as_bytes()) {
-                    return Err(self.fail_pretty(
-                        capture,
-                        &format!(
-                            "cpu gate: the hash-bang leg marker {Q35_CPU_SHEBANG_OK_MARKER:?} \
-                             absent — the #! exec round-trip did not complete (the service \
-                             script's interpreter never saw its token)"
-                        ),
-                    ));
-                }
-                if !contains_marker(capture, Q35_CPU_REMOVE_OK_MARKER.as_bytes()) {
-                    return Err(self.fail_pretty(
-                        capture,
-                        &format!(
-                            "cpu gate: the remove leg marker {Q35_CPU_REMOVE_OK_MARKER:?} \
-                             absent — the rm/test round-trip over the ported devcap arm did \
-                             not complete"
-                        ),
-                    ));
-                }
                 let fail_words = count_marker_lines(capture, Q35_CPU_FAIL_WORD);
                 if fail_words != 0 {
                     return Err(self.fail_pretty(
                         capture,
                         &format!(
                             "cpu gate: {fail_words} line(s) carrying {Q35_CPU_FAIL_WORD:?} — a \
-                             leg verdict (SHEBANG-FAIL/REMOVE-FAIL) or stray failure print"
+                             cpurc ladder leg verdict or stray failure print"
                         ),
                     ));
                 }
@@ -3072,13 +3033,13 @@ impl BootTestStep {
                      notes, the exec-entry note, the bootconf-merge line \
                      ({Q35_BOOTCONF_MARKER}: the cmdline's key=value pairs in the ROOT env \
                      seed), boot(8)'s own ring-3 prints, then init -c's cpustart #!-exec'ing \
-                     the /rc/bin/cpurc SCRIPT — {Q35_CPURC_MARKER}, the hash-bang leg \
-                     ({Q35_CPU_SHEBANG_OK_MARKER}: the #! token reaching /amd64/bin/echo \
-                     through the kernel pre-pass — the donor argv order live), and the remove \
-                     leg ({Q35_CPU_REMOVE_OK_MARKER}: rm #¤/caphash through the ported devcap \
-                     arm + test -e absence), ZERO terminal-loop lines, ZERO FAIL words — \
-                     CPU-02's service=cpu architecture + CPU-01's kernel half + CPU-03's \
-                     syscall half proven live from ring 3 (19-01/19-03)"
+                     the REAL /rc/bin/cpurc — the six-rung fail-loud ladder (pairing -> ether \
+                     -> keyfs -> authsrv listen -> factotum -> tcp17010 listen) green to \
+                     {Q35_CPURC_MARKER} with the pairing rung ({Q35_CPURC_LADDER_MARKER}) and \
+                     ZERO FAIL words, then init's post-cpustart terminal handoff to the `% ` \
+                     prompt (the retired 19-01 loop-prohibition's expected successor) — \
+                     CPU-02's service=cpu architecture live from ring 3 on 19-07's §15 image \
+                     (19-01/19-03/19-08)"
                 );
             }
             BootProfile::Multi => {

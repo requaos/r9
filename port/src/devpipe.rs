@@ -93,6 +93,20 @@ pub struct Pipe {
     q: [PipeQueue; 2],
     qref: [usize; 2],
     id: u64,
+    /// The 9P session negotiated on each END's wire (19-08: the donor's
+    /// srvopen hands out the SAME chan object, so the session its mount
+    /// negotiated (c->mux) survives on the registry chan and every later
+    /// open+mount REUSES it.  r9's devsrv::open returns a value dup, so
+    /// the session must live on the SHARED connection instead — one slot
+    /// per end (a session per wire direction), consulted by
+    /// devmnt::fversion before negotiating.  Without it every mount of
+    /// an /srv file negotiates a fresh session whose fid numbering
+    /// restarts at 1 while the server (lib9p's fid space is
+    /// per-CONNECTION) still holds the earlier session's fids — the
+    /// measured `duplicate fid' Rerror at cpu -R's auth_chuid factotum
+    /// re-mount (the first /srv-open-based double mount the tree ever
+    /// ran).
+    mnt_session: [Option<alloc::sync::Arc<crate::devmnt::Mnt>>; 2],
 }
 
 /// The arch-side block/wake hooks (the devproc.rs set_post_hook idiom —
@@ -138,7 +152,12 @@ pub fn attach() -> Chan {
     };
     let pipe = Arc::new(Lock::new(
         "pipe",
-        Pipe { q: [PipeQueue::new(), PipeQueue::new()], qref: [0, 0], id },
+        Pipe {
+            q: [PipeQueue::new(), PipeQueue::new()],
+            qref: [0, 0],
+            id,
+            mnt_session: [None, None],
+        },
     ));
     let mut c = Chan::new(DEV_PIPE, Qid { path: (id << 5) | QDIR, vers: 0, typ: QTDIR }, 0);
     c.pipe = Some(pipe);
@@ -168,6 +187,38 @@ pub(crate) fn ref_open_end(pipe: &Arc<Lock<Pipe>>, qid_path: u64) {
     };
     let node = LockNode::new();
     pipe.lock(&node).qref[side] += 1;
+}
+
+/// The end-tag consult (19-08): the session a previous mount negotiated
+/// on THIS pipe end's wire, if any — devmnt::fversion's reuse probe.
+pub(crate) fn shared_mnt_session(pipe: &Arc<Lock<Pipe>>, qid_path: u64) -> Option<alloc::sync::Arc<crate::devmnt::Mnt>> {
+    let side = match qid_path & 0x1f {
+        QDATA0 => 0,
+        QDATA1 => 1,
+        _ => return None,
+    };
+    let node = LockNode::new();
+    pipe.lock(&node).mnt_session[side].clone()
+}
+
+/// The end-tag store (19-08): remember the session so every later dup
+/// of this end (a fresh devsrv::open) reuses it instead of negotiating
+/// a colliding second session over the same wire.
+pub(crate) fn set_shared_mnt_session(
+    pipe: &Arc<Lock<Pipe>>,
+    qid_path: u64,
+    mnt: alloc::sync::Arc<crate::devmnt::Mnt>,
+) {
+    let side = match qid_path & 0x1f {
+        QDATA0 => 0,
+        QDATA1 => 1,
+        _ => return,
+    };
+    let node = LockNode::new();
+    let mut guard = pipe.lock(&node);
+    if guard.mnt_session[side].is_none() {
+        guard.mnt_session[side] = Some(mnt);
+    }
 }
 
 /// Walk a single name component from the pipe root: "data" (end 0) or

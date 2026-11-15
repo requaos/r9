@@ -12,6 +12,17 @@
 #
 # A separate config (not an edit to q35shell.toml) so every existing
 # profile stays byte-stable (17-02's Pitfall 7).
+#
+# 19-08 adds "cap": the composed kernel IS the venue every Harvey-side
+# gate boots (flake kernel-x64), and the -G drawterm session's cpu -R
+# dies at auth_chuid without it — factotum's initcap open("#¤/caphash")
+# fails "namec: unknown # device" (measured live from cpurc), every
+# mkcap returns nil, the authinfo carries no capability, and
+# srvp9auth's auth_chuid fails "no capability".  No composed gate
+# consumed a capability before 19-08's session, so the absence was
+# invisible since 18-02 (the q35auth/q35cpu profiles carry the key;
+# q35churnshell never did).  devssl #D is unconditional (19-04) and
+# needs no key; q35shell.toml stays byte-untouched.
 # The q35shell boot-chain profile (14-06, XEXEC-03's leg-2 gate — D-08's
 # staged leg 2): config_q35exec.toml's shape with the boot-chain entry
 # selection — dev = ["exec", "bootchain", "ether", "ip", "churn"] compiles
@@ -51,7 +62,7 @@ load-address = '0xffffffff80200000'
 
 [config]
 platform = "q35"
-dev = ["exec", "bootchain", "ether", "ip", "churn"]
+dev = ["exec", "bootchain", "ether", "ip", "churn", "cap"]
 
 [qemu]
 machine = "q35"

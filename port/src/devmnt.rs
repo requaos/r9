@@ -68,7 +68,7 @@ use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use crate::dat::{Chan, Qid, DEV_MNT, DEV_PIPE, OMASK, ORDWR, OREAD, QTDIR};
+use crate::dat::{Chan, Qid, DEV_MNT, DEV_PIPE, DEV_SSL, OMASK, ORDWR, OREAD, QTDIR};
 use crate::devpipe;
 use crate::mcslock::{BusyCell, Lock, LockNode};
 use crate::println;
@@ -237,10 +237,12 @@ pub trait MntIo {
     fn read_some(&mut self, buf: &mut [u8]) -> Result<u64>;
 }
 
-/// The kernel transport: a 9P-capable chan (the pipe end).  Reads/writes
-/// ride devpipe's ops directly (streaming — offsets don't apply to pipe
-/// ends); anything else is a loud contract violation (sys_fversion/sys_mount
-/// validate the fd before constructing this).
+/// The kernel transport: a 9P-capable chan — a pipe end (the /srv and
+/// boot mounts) or a DEVSSL data chan (19-08: cpu -R's remoteside
+/// fversions/mounts the client's exportfs over the encrypted session).
+/// Reads/writes ride the device's streaming ops directly (offsets don't
+/// apply); anything else is a loud contract violation
+/// (sys_fversion/sys_mount validate the fd before constructing this).
 pub struct ChanIo {
     pub chan: Chan,
 }
@@ -249,12 +251,14 @@ impl MntIo for ChanIo {
     fn write_msg(&mut self, buf: &[u8]) -> Result<u64> {
         match self.chan.dev {
             DEV_PIPE => devpipe::write(&mut self.chan, buf, u64::MAX),
+            DEV_SSL => crate::devssl::write(&mut self.chan, buf),
             _ => Err("devmnt: fd is not a 9P-capable connection"),
         }
     }
     fn read_some(&mut self, buf: &mut [u8]) -> Result<u64> {
         match self.chan.dev {
             DEV_PIPE => devpipe::read(&mut self.chan, buf, u64::MAX),
+            DEV_SSL => crate::devssl::read(&mut self.chan, buf, u64::MAX),
             _ => Err("devmnt: fd is not a 9P-capable connection"),
         }
     }
@@ -728,6 +732,21 @@ fn rpc_data_cap(msize: u32) -> usize {
 /// the caller's version buffer (EMPTY = no write-back, the donor's
 /// returnlen==0); returns the version string's length.
 pub fn fversion(chan: &mut Chan, offer: u32, out: &mut [u8]) -> Result<u64> {
+    // 19-08: the shared-wire rule.  The donor's srvopen returns the
+    // registry's chan OBJECT, so the session the first mount negotiated
+    // survives on it and every later mount reuses it; r9's devsrv::open
+    // hands out a value dup, so the session is hosted on the pipe
+    // instead (Pipe::mnt_session, keyed by end).  Without this probe
+    // every fresh open+mount of an /srv file negotiates a SECOND session
+    // whose fid numbering restarts at 1 while the server (one lib9p Srv
+    // per connection) still holds the first session's fids — the
+    // `duplicate fid' Rerror (measured at cpu -R's auth_chuid factotum
+    // re-mount).
+    if chan.mnt.is_none() && chan.dev == DEV_PIPE && let Some(pipe) = &chan.pipe {
+        if let Some(mnt) = crate::devpipe::shared_mnt_session(pipe, chan.qid.path) {
+            chan.mnt = Some(mnt);
+        }
+    }
     if let Some(mnt) = &chan.mnt {
         // The donor's c->mux replay: an established session answers from
         // the stored negotiation (and refuses a version CHANGE — the
@@ -742,7 +761,12 @@ pub fn fversion(chan: &mut Chan, offer: u32, out: &mut [u8]) -> Result<u64> {
         }
         return Ok(version.len() as u64);
     }
-    if chan.dev != DEV_PIPE {
+    // 19-08: the connection chan may be a PIPE end (the /srv and boot
+    // mounts) or a DEVSSL data chan (cpu -R's remoteside fversions the
+    // CLIENT's exportfs over the encrypted session — pushssl's returned
+    // fd).  The session io wraps either; only the shared-session probe
+    // above is pipe-specific.
+    if chan.dev != DEV_PIPE && chan.dev != DEV_SSL {
         return Err("fversion: fd is not a 9P-capable connection");
     }
     if chan.mode & OMASK != ORDWR {
@@ -752,7 +776,10 @@ pub fn fversion(chan: &mut Chan, offer: u32, out: &mut [u8]) -> Result<u64> {
     // session holds a live reference even after the fd closes; the mount
     // must outlive it — boot's fd closes at init's closefds).
     let io = ChanIo { chan: chan.dup() };
-    let mnt = Mnt::negotiate(Box::new(io), offer)?;
+    let mnt = Arc::new(Mnt::negotiate(Box::new(io), offer)?);
+    if let Some(pipe) = &chan.pipe {
+        crate::devpipe::set_shared_mnt_session(pipe, chan.qid.path, mnt.clone());
+    }
     let version = mnt.version();
     if !out.is_empty() {
         if out.len() < version.len() {
@@ -761,7 +788,7 @@ pub fn fversion(chan: &mut Chan, offer: u32, out: &mut [u8]) -> Result<u64> {
         out[..version.len()].copy_from_slice(&version);
     }
     let len = version.len() as u64;
-    chan.mnt = Some(Arc::new(mnt));
+    chan.mnt = Some(mnt);
     Ok(len)
 }
 

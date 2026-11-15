@@ -732,7 +732,12 @@ fn sys_mount(frame: &mut Ureg, proc: &mut Proc) -> u64 {
     let Some(mut chan) = proc.fd_take(fd) else {
         return err(proc, "mount: bad fd");
     };
-    if chan.dev != DEV_PIPE || chan.mode & port::dat::OMASK != port::dat::ORDWR {
+    // 19-08: a DEVSSL data chan is a mountable 9P connection too (cpu -R
+    // mounts the client's exportfs at /mnt/term over the encrypted
+    // session — the ssl fd fversion'd into a session just lines before).
+    if (chan.dev != port::dat::DEV_PIPE && chan.dev != port::dat::DEV_SSL)
+        || chan.mode & port::dat::OMASK != port::dat::ORDWR
+    {
         proc.fd_store(fd, chan);
         return err(proc, "mount: fd is not a 9P connection");
     }

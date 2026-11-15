@@ -42,7 +42,13 @@ platform = "q35"
 # 19-03 adds "cap": the §15 remove leg's #¤/caphash round-trip needs
 # devcap in the kernel (the ported remove arm's named consumer —
 # CPU-03's first live proof; the q35auth substrate precedent's key).
-dev = ["exec", "bootchain", "cap"]
+# 19-08 re-keys the set for 19-07's REAL §15 cpurc: the ladder's ether
+# leg binds '#I'/'#l0' from userspace (ipconfig over the slirp NIC), so
+# ether+ip join the set — without them cpurc's leg 2 fails `unknown #
+# device' and the DONE verdict never arrives; the 19-03 fixture legs
+# (SHEBANG-OK/REMOVE-OK) are retired with the fixture body (their proof
+# is load-bearing at the tcp17010 service point on the composed gate).
+dev = ["exec", "bootchain", "cap", "ether", "ip"]
 
 [qemu]
 machine = "q35"

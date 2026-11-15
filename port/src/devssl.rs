@@ -444,6 +444,27 @@ pub fn open(c: &Chan, mode: u32) -> Result<Chan> {
     }
 }
 
+/// dat.rs Chan::dup's bump (19-08): every value copy of an OPEN ssl
+/// data/ctl chan is a new open reference (devpipe's ref_open_end rule
+/// extended to #D).  Without it the io dup a 9P session holds
+/// (devmnt::fversion's ChanIo) does not keep the conversation alive —
+/// cpu -R's remoteside closes the ssl fd after mounting /mnt/term, the
+/// conv's refc hits zero, and the hung-up conversation kills every
+/// later rpc of the mounted session (the measured post-mount walk
+/// failures: /mnt/term/dev/cpunote + /mnt/term/dev/cons).
+pub(crate) fn ref_open(qid_path: u64) {
+    if !matches!(typ_of(qid_path), QCTL | QDATA) {
+        return;
+    }
+    let conv = conv_of(qid_path);
+    let node = LockNode::new();
+    let Some(arc) = DSSTATE.lock(&node).convs.get(conv).and_then(|s| s.clone()) else {
+        return;
+    };
+    let mut d = arc.lock(&node);
+    d.refc += 1;
+}
+
 /// The conv's Arc under a brief table lock (None when the slot is
 /// empty — the donor's dstate[i]==0 shapes error Ebadusefd).
 fn conv_arc(conv: usize) -> Result<Arc<Lock<Dstate>>> {
