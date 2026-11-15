@@ -667,7 +667,25 @@ WRAP
             # f2e2fb99191a6f2c4f0fb36217e77bd8de4af05d33cd6d7ad4f952716bedbeb3
             # (sha256-8uL7mR…), in three-way agreement with the FOD's
             # own measured got-value.
-            outputHash = "sha256-8uL7mRkabyxPD7NiF+d72N5K8F0zzW161PlScWvtvrM=";
+            # The 19-01..19-04 kernel bytes (the bootconf seed + append
+            # seam e491ed5, the AcceptPool donor TCP shape + the q35
+            # tick_check wiring df9ada8, the #! exec pre-pass + the
+            # WSTAT/FWSTAT/REMOVE arms f691914, devssl #D 07889e2)
+            # re-staled it once more; re-wired at 19-05's close — the
+            # phase's single FOD pass covering ALL FOUR kernel plans
+            # together — with the same two-derivation proof: two
+            # independent kernel builds (kernel A plain at 07889e2 +
+            # kernel B at fbc5ac2, a kernel-neutral
+            # derivation-independence marker commit in a discarded
+            # separate clone, FRESH r9-kernel-x64-fbc5ac2.drv) through
+            # the non-FOD lib.bootIso realization produced the
+            # byte-identical ISO — file-level sha256
+            # 186e223f8232b76ede5ba0c2e945f18afb6a6584af84da855c71ea1d7ff38802,
+            # NAR hash (what this attr checks)
+            # 5e5b61e0fa725ed1e6933a8786b4b215b0c8542cc659e5677ddd332e8298165f
+            # (sha256-Xlth4P…), in three-way agreement with the FOD's
+            # own measured got-value.
+            outputHash = "sha256-Xlth4PpyXtHmkzqHhrSyFbDIVCzGWeVnfd0zLoKYFl8=";
           };
         });
 
