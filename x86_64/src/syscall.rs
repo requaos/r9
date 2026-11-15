@@ -57,6 +57,14 @@ const PIPE: u64 = 21;
 const CREATE: u64 = 22;
 const FD2PATH: u64 = 23;
 const BRK_: u64 = 24;
+const REMOVE: u64 = 25;
+/// _WSTAT(26) — the donor's retired "old wstat" slot (this tree's 9k
+/// systab maps it to the "old wstat system call - recompile" error);
+/// the 19-03 plan arms all five CPU-03 slots with real semantics, so
+/// it carries the live name-based body (the WSTAT(44) twin).
+const WSTAT_: u64 = 26;
+/// _FWSTAT(27) — the fd-based twin of WSTAT_ (FWSTAT(45)'s body).
+const FWSTAT_: u64 = 27;
 const NOTIFY: u64 = 28;
 const NOTED: u64 = 29;
 const RENDEZVOUS: u64 = 34;
@@ -68,6 +76,12 @@ const FVERSION: u64 = 40;
 const ERRSTR: u64 = 41;
 const STAT: u64 = 42;
 const FSTAT: u64 = 43;
+/// WSTAT(44)/FWSTAT(45) — the LIVE wstat pair on this ABI: Harvey's
+/// libc stub generator emits `wstat`/`fwstat` (dirwstat/dirfwstat's
+/// callees) against numbers 44/45, with 26/27 the retired old slots
+/// (see WSTAT_ above).
+const WSTAT: u64 = 44;
+const FWSTAT: u64 = 45;
 const MOUNT: u64 = 46;
 const AWAIT: u64 = 47;
 const PREAD: u64 = 50;
@@ -803,6 +817,169 @@ fn sys_fstat(frame: &mut Ureg, proc: &mut Proc) -> u64 {
         Ok(count) => count,
         Err(msg) => err(proc, msg),
     }
+}
+
+// 19-03 RED: table-unreferenced until the GREEN arms DISPATCH (removed there)
+#[allow(dead_code)]
+/// The donor's validstat core (statcheck, libc 9sys/convM2D.c — the
+/// kernel-side validstat calls it before any device wstat): the buffer
+/// must be a WHOLE stat(5) record — n == BIT16SZ + size, n >=
+/// STATFIXLEN, and the four string lengths (name/uid/gid/muid)
+/// consuming exactly the rest.  (The donor's follow-on name-entry
+/// check — validname on a <=63-byte name — is server-protection
+/// nicety; the wire-shape check is the load-bearing half ported here,
+/// T-19-06: a ring-3-supplied buffer never reaches a device arm
+/// unvalidated.)
+fn valid_stat_wire(stat: &[u8]) -> Result<(), &'static str> {
+    // 19-03 stub (pre-change: no validation exists): accepts every
+    // buffer; the pins' reject arms fail against this shape.
+    let _ = stat;
+    Ok(())
+}
+
+// 19-03 RED: table-unreferenced until the GREEN arms DISPATCH (removed there)
+#[allow(dead_code)]
+/// The per-device remove routing (the donor's dev->remove dispatch at
+/// sysremove's c->dev->remove(c), sysfile.c:1360): the ported arms
+/// run, every device without one refuses LOUDLY naming the gap —
+/// never a silent 0.  devcap's caphash remove (18-02's ported arm) is
+/// the first consumer.
+fn remove_chan(c: &Chan) -> Result<u64, &'static str> {
+    // 19-03 stub (pre-change: no routing): everything refuses.
+    let _ = c;
+    Err("remove: device does not implement remove")
+}
+
+// 19-03 RED: table-unreferenced until the GREEN arms DISPATCH (removed there)
+#[allow(dead_code)]
+/// The per-device wstat routing (the donor's dev->wstat dispatch at
+/// wstat()'s c->dev->wstat(c, p, n), sysfile.c:1390).  NO device ports
+/// a wstat arm this era — the 15-06 measured set has rio with no
+/// Wstat and sam using Remove only, and exportfs relays the refusal to
+/// its client — so the routing refuses LOUDLY for every device; a
+/// ported arm joins as a match arm here (devcap::remove's shape).
+fn wstat_chan(_c: &Chan, _stat: &[u8]) -> Result<u64, &'static str> {
+    Err("wstat: device does not implement wstat")
+}
+
+// 19-03 RED: table-unreferenced until the GREEN arms DISPATCH (removed there)
+#[allow(dead_code)]
+/// REMOVE(25): path.  Donor sysremove (sysfile.c:1333-1366): namec
+/// walks the path (NO open — the walk only, the donor's Aremove), the
+/// device's remove arm runs, return 0.  The donor's mount-point guard
+/// (Eismtpt) rides the Chan ismtpt flag r9 does not carry this era —
+/// no measured consumer removes through a mount point (the ported arm
+/// is devcap's registry file), and the loud refusal arm below is the
+/// boundary.
+fn sys_remove(frame: &mut Ureg, proc: &mut Proc) -> u64 {
+    let Some(args) = sargs(frame, proc, 1) else {
+        return err(proc, "remove: bad argument block");
+    };
+    let path = match copy_user_str(proc, args[0], ERRMAX) {
+        Ok(s) => s,
+        Err(msg) => return err(proc, msg),
+    };
+    let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
+        return err(proc, "remove: no namespace (pre-exec)");
+    };
+    let c = match namec::namec(&path, slash, dot, &proc.pgrp, NamecMode::Open) {
+        Ok(c) => c,
+        Err(msg) => return err(proc, msg),
+    };
+    let result = remove_chan(&c);
+    port::namec::close_chan(&c);
+    match result {
+        Ok(v) => v,
+        Err(msg) => err(proc, msg),
+    }
+}
+
+// 19-03 RED: table-unreferenced until the GREEN arms DISPATCH (removed there)
+#[allow(dead_code)]
+/// WSTAT(44) and _WSTAT(26): name, edir, nedir — donor syswstat
+/// (sysfile.c:1399-1423): validate the user Stat buffer FIRST
+/// (validaddr + validstat), then namec the name (the donor's Aaccess —
+/// the open-style union redirect), then the device wstat arm.  The
+/// wire result is the device's count (0/positive on success; -1 +
+/// errstr here on every failure shape this era).
+fn sys_wstat(frame: &mut Ureg, proc: &mut Proc) -> u64 {
+    let Some(args) = sargs(frame, proc, 3) else {
+        return err(proc, "wstat: bad argument block");
+    };
+    let (name_va, edir_va, n) = (args[0], args[1], args[2] & 0xffff_ffff); // n is an int
+    let (path, stat) = match wstat_stage_args(proc, name_va, edir_va, n) {
+        Ok(v) => v,
+        Err(msg) => return err(proc, msg),
+    };
+    let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
+        return err(proc, "wstat: no namespace (pre-exec)");
+    };
+    let c = match namec::namec(&path, slash, dot, &proc.pgrp, NamecMode::Open) {
+        Ok(c) => c,
+        Err(msg) => return err(proc, msg),
+    };
+    let result = wstat_chan(&c, &stat);
+    port::namec::close_chan(&c);
+    match result {
+        Ok(v) => v,
+        Err(msg) => err(proc, msg),
+    }
+}
+
+// 19-03 RED: table-unreferenced until the GREEN arms DISPATCH (removed there)
+#[allow(dead_code)]
+/// FWSTAT(45) and _FWSTAT(27): fd, edir, nedir — donor sysfwstat
+/// (sysfile.c:1425-1448): validate the buffer first, then the fd's
+/// chan through the same device wstat routing.
+fn sys_fwstat(frame: &mut Ureg, proc: &mut Proc) -> u64 {
+    let Some(args) = sargs(frame, proc, 3) else {
+        return err(proc, "fwstat: bad argument block");
+    };
+    let (fd, edir_va, n) = (args[0] & 0xffff_ffff, args[1], args[2] & 0xffff_ffff); // fd, n are ints
+    // Stage the buffer with the name slot unused (fd form).
+    let (_name, stat) = match wstat_stage_args(proc, 0, edir_va, n) {
+        Ok(v) => v,
+        Err(msg) => return err(proc, msg),
+    };
+    let Some(chan) = proc.fd_take(fd) else {
+        return err(proc, "fwstat: bad fd");
+    };
+    let result = wstat_chan(&chan, &stat);
+    proc.fd_store(fd, chan);
+    match result {
+        Ok(v) => v,
+        Err(msg) => err(proc, msg),
+    }
+}
+
+// 19-03 RED: table-unreferenced until the GREEN arms DISPATCH (removed there)
+#[allow(dead_code)]
+/// The wstat arms' shared staging: copy the path (name form only; the
+/// fd form passes 0) and the Stat buffer into kernel memory, then run
+/// the statcheck port — the donor's validaddr + validstat pair, in the
+/// donor's order (validation BEFORE any device routing, T-19-06).
+/// The length cap is statcheck's own (2 + the u16 size field): any
+/// larger n is malformed by construction, rejected before the copy.
+fn wstat_stage_args(
+    proc: &mut Proc,
+    name_va: u64,
+    edir_va: u64,
+    n: u64,
+) -> Result<(Vec<u8>, Vec<u8>), &'static str> {
+    if n > 2 + u16::MAX as u64 {
+        return Err("malformed stat buffer");
+    }
+    let name = if name_va == 0 {
+        Vec::new()
+    } else {
+        UserString::copy_from(proc, name_va, ERRMAX)?
+    };
+    let stat = match UserSlice::new(proc, edir_va, n) {
+        Ok(s) => s.as_slice().to_vec(),
+        Err(_) => return Err("wstat: bad user buffer"),
+    };
+    valid_stat_wire(&stat)?;
+    Ok((name, stat))
 }
 
 /// BRK_(24): addr (malloc's pool growth rides it).  Donor sysbrk_:
@@ -2014,6 +2191,235 @@ mod tests {
         assert_eq!(frame.ax, 1_700_000_000_123_456_789u64);
         // The errstr side channel is untouched (no failed arg block).
         assert_eq!(mock.proc().errstr[0], 0);
+    }
+
+    // --- 19-03 (CPU-03): the WSTAT/FWSTAT/REMOVE DISPATCH pins ---
+
+    /// The x86_64 tests' eve-gate seam (port's install_user_hooks_once
+    /// is pub(crate)-private): a stub user-hook pair installed ONCE —
+    /// no other test in this binary touches the user seam.
+    static TEST_USER: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
+    fn install_user_hooks_once() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            port::devcons::set_user_hooks(port::devcons::UserHooks {
+                current: || TEST_USER.lock().unwrap().clone(),
+                set: |u| *TEST_USER.lock().unwrap() = u,
+            });
+        });
+    }
+
+    /// A well-formed stat(5) wire record (statcheck-clean): 41 fixed
+    /// bytes + the four length-prefixed strings.
+    fn stat_wire(name: &[u8]) -> Vec<u8> {
+        let strs = [name, b"glenda", b"glenda", b"glenda"];
+        let total = 41 + strs.iter().map(|s| 2 + s.len()).sum::<usize>();
+        assert!(total >= 49);
+        let mut b = Vec::new();
+        b.extend_from_slice(&((total - 2) as u16).to_le_bytes());
+        b.extend_from_slice(&0u16.to_le_bytes()); // type
+        b.extend_from_slice(&0u32.to_le_bytes()); // dev
+        b.push(0); // qid.type
+        b.extend_from_slice(&0u32.to_le_bytes()); // qid.vers
+        b.extend_from_slice(&0u64.to_le_bytes()); // qid.path
+        b.extend_from_slice(&0u32.to_le_bytes()); // mode
+        b.extend_from_slice(&0u32.to_le_bytes()); // atime
+        b.extend_from_slice(&0u32.to_le_bytes()); // mtime
+        b.extend_from_slice(&0u64.to_le_bytes()); // length
+        for s in strs {
+            b.extend_from_slice(&(s.len() as u16).to_le_bytes());
+            b.extend_from_slice(s);
+        }
+        b
+    }
+
+    /// Test 1 (the dispatch-table pin): each of the five CPU-03
+    /// numbers carries a named handler — no None remains at those
+    /// slots.
+    #[test]
+    fn cpu03_slots_carry_named_handlers() {
+        for n in [REMOVE, WSTAT_, FWSTAT_, WSTAT, FWSTAT] {
+            assert!(
+                DISPATCH[n as usize].is_some(),
+                "slot {n} must carry a named handler"
+            );
+        }
+    }
+
+    /// Test 4 (no collateral arming): other loud-None slots stay None —
+    /// the measured-set discipline is untouched outside the five.
+    #[test]
+    fn other_loud_none_slots_stay_unarmed() {
+        // 9 _FSESSION, 10 FAUTH, 30 SEGATTACH, 36 _WAIT, 48 _MSPRINT?
+        // — the loud-None class outside the CPU-03 five.
+        for n in [9u64, 10, 30, 31, 36] {
+            assert!(DISPATCH[n as usize].is_none(), "slot {n} must stay loud-None");
+        }
+    }
+
+    /// valid_stat_wire ports the donor's statcheck: a well-formed
+    /// record passes; short, size-mismatched, and string-overflowing
+    /// buffers reject with the donor's Ebadstat text.
+    #[test]
+    fn valid_stat_wire_ports_the_donor_statcheck() {
+        assert_eq!(valid_stat_wire(&stat_wire(b"caphash")), Ok(()));
+        // n < STATFIXLEN (49): an empty-strings record is exactly 49 —
+        // one byte short of it is malformed.
+        let forty8 = stat_wire(b"");
+        assert_eq!(forty8.len(), 49);
+        assert_eq!(valid_stat_wire(&forty8[..48]), Err("malformed stat buffer"));
+        // n != BIT16SZ + size: the size field lies about the record.
+        let mut lying = stat_wire(b"x");
+        lying[0] = 0xff;
+        lying[1] = 0x0f; // size says much more than the buffer holds
+        assert_eq!(valid_stat_wire(&lying), Err("malformed stat buffer"));
+        // A string count that runs past the end: the gid count (byte
+        // 55 is its high byte — the layout is name@41, uid@47, gid@55,
+        // muid@63) says far more than the record holds.
+        let mut over = stat_wire(b"name");
+        over[55] = 0xf0;
+        assert_eq!(valid_stat_wire(&over), Err("malformed stat buffer"));
+        // Strings that stop short of the record end: muid's count
+        // zeroed leaves slack the walk must reject.
+        let mut under = stat_wire(b"name");
+        under[63] = 0x00;
+        under[64] = 0x00;
+        assert_eq!(valid_stat_wire(&under), Err("malformed stat buffer"));
+    }
+
+    /// Test 2 (the functional remove round-trip): sys_remove's routing
+    /// reaches devcap's PORTED arm (the eve-gated caphash hide) and
+    /// every device without an arm refuses loudly — never a silent 0.
+    #[test]
+    fn remove_round_trips_through_the_devcap_arm_and_refuses_unported() {
+        install_user_hooks_once();
+        *TEST_USER.lock().unwrap() = b"glenda".to_vec(); // eve (HOSTOWNER defaults to glenda)
+        // The ported arm: walk the cap root to caphash, remove it.
+        let cap_root = port::devcap::attach();
+        let caphash = port::devcap::walk(&cap_root, b"caphash").expect("caphash walks");
+        assert_eq!(remove_chan(&caphash), Ok(0), "the ported arm runs");
+        // The routing refusal: a device with no remove arm.
+        let cons = port::devcons::attach();
+        assert_eq!(
+            remove_chan(&cons),
+            Err("remove: device does not implement remove")
+        );
+        // The DEVICE-level refusal (the arm's own Eperm — proving the
+        // routing reaches real per-device semantics, not a blanket):
+        // the cap ROOT chan is not caphash.
+        let cap_root2 = port::devcap::attach();
+        assert!(remove_chan(&cap_root2).is_err(), "devcap's own gate refuses");
+    }
+
+    /// Test 3 (the loud-refusal shape for unported wstat): a VALID stat
+    /// buffer over a device without a wstat port returns the routing
+    /// refusal — -1/errstr at the syscall layer, never 0.
+    #[test]
+    fn wstat_over_an_unported_device_refuses_loudly_never_zero() {
+        let cons = port::devcons::attach();
+        assert_eq!(
+            wstat_chan(&cons, &stat_wire(b"cons")),
+            Err("wstat: device does not implement wstat")
+        );
+    }
+
+    /// The REMOVE behavioral pin: dispatch_proc routes syscall 25,
+    /// args read from SP+8 upward, the path resolves through namec
+    /// (the #e registry), and the refusal lands as -1 + the named
+    /// errstr.
+    #[test]
+    fn remove_syscall_dispatches_and_refuses_loudly() {
+        let mut mock = MockStack::new("t-cpu03-rm");
+        // A minimal namespace: slash/dot chans for the # path arm.
+        let env = port::devenv::attach(b"").expect("devenv attach");
+        mock.proc().slash = Some(env.dup());
+        mock.proc().dot = Some(env);
+        mock.buf[0..3].copy_from_slice(b"#e\0");
+        mock.put(8, mock.base());
+        let mut frame = Ureg::zeroed();
+        frame.bp = REMOVE;
+        frame.sp = mock.base();
+        dispatch_proc(frame.bp, &mut frame, mock.proc());
+        assert_eq!(frame.ax, -1i64 as u64);
+        let e = &mock.proc().errstr;
+        let n = e.iter().position(|&b| b == 0).unwrap_or(crate::proc::ERRMAX);
+        assert_eq!(
+            core::str::from_utf8(&e[..n]).unwrap(),
+            "remove: device does not implement remove"
+        );
+    }
+
+    /// The WSTAT(44) behavioral pin: a malformed Stat buffer fails the
+    /// donor's validstat BEFORE any routing; a VALID buffer reaches the
+    /// device refusal — both loud, neither a silent 0.
+    #[test]
+    fn wstat_syscall_validates_then_refuses() {
+        let mut mock = MockStack::new("t-cpu03-ws");
+        let env = port::devenv::attach(b"").expect("devenv attach");
+        mock.proc().slash = Some(env.dup());
+        mock.proc().dot = Some(env);
+        // The name at +0, the stat buffer at +16.
+        mock.buf[0..3].copy_from_slice(b"#e\0");
+        let good = stat_wire(b"x");
+        mock.buf[16..16 + good.len()].copy_from_slice(&good);
+        mock.put(8, mock.base());
+        mock.put(16, mock.base() + 16);
+        mock.put(24, good.len() as u64);
+        let mut frame = Ureg::zeroed();
+        frame.bp = WSTAT;
+        frame.sp = mock.base();
+        dispatch_proc(frame.bp, &mut frame, mock.proc());
+        assert_eq!(frame.ax, -1i64 as u64);
+        let e = &mock.proc().errstr;
+        let n = e.iter().position(|&b| b == 0).unwrap_or(crate::proc::ERRMAX);
+        assert_eq!(
+            core::str::from_utf8(&e[..n]).unwrap(),
+            "wstat: device does not implement wstat",
+            "a valid buffer reaches the device refusal"
+        );
+        // Malformed: the size field lies.
+        let mut bad = stat_wire(b"x");
+        bad[0] = 0xee;
+        bad[1] = 0x0e;
+        mock.buf[16..16 + bad.len()].copy_from_slice(&bad);
+        mock.proc().set_errstr("");
+        dispatch_proc(frame.bp, &mut frame, mock.proc());
+        assert_eq!(frame.ax, -1i64 as u64);
+        let e = &mock.proc().errstr;
+        let n = e.iter().position(|&b| b == 0).unwrap_or(crate::proc::ERRMAX);
+        assert_eq!(
+            core::str::from_utf8(&e[..n]).unwrap(),
+            "malformed stat buffer",
+            "validstat fires before any routing"
+        );
+    }
+
+    /// The FWSTAT(45) behavioral pin: the fd form over an OPEN fd
+    /// reaches the same device refusal.
+    #[test]
+    fn fwstat_syscall_over_an_open_fd_refuses_loudly() {
+        let mut mock = MockStack::new("t-cpu03-fw");
+        let env = port::devenv::attach(b"").expect("devenv attach");
+        let fd = mock
+            .proc()
+            .fd_install_lowest(env)
+            .expect("fd installs") as u64;
+        let good = stat_wire(b"x");
+        mock.buf[0..good.len()].copy_from_slice(&good);
+        mock.put(8, fd);
+        mock.put(16, mock.base());
+        mock.put(24, good.len() as u64);
+        let mut frame = Ureg::zeroed();
+        frame.bp = FWSTAT;
+        frame.sp = mock.base();
+        dispatch_proc(frame.bp, &mut frame, mock.proc());
+        assert_eq!(frame.ax, -1i64 as u64);
+        let e = &mock.proc().errstr;
+        let n = e.iter().position(|&b| b == 0).unwrap_or(crate::proc::ERRMAX);
+        assert_eq!(
+            core::str::from_utf8(&e[..n]).unwrap(),
+            "wstat: device does not implement wstat"
+        );
     }
 
     /// copy_exec_args preserves argv ORDER verbatim (the pointers walk
