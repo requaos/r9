@@ -68,6 +68,12 @@ pub mod hmacsha1;
 // (libsec rc4.c / devssl.c / libc u64.c as the donors of record).
 #[forbid(unsafe_code)]
 pub mod rc4;
+// devssl (19-04, DESK-04) — the `#D` device pushssl hard-codes, a
+// semantics port of 9k's devssl.c (the devcap skeleton).  Compiles
+// everywhere (aarch64 included — the v2.0-pin freeze bars aarch64
+// SOURCE changes, not port additions).
+#[forbid(unsafe_code)]
+pub mod devssl;
 #[forbid(unsafe_code)]
 pub mod devroot;
 #[forbid(unsafe_code)]
@@ -134,6 +140,11 @@ mod namec_tests;
 // port::devcap keeps its unsafe-free forbid attribute.
 #[cfg(test)]
 mod devcap_tests;
+// The devssl pins (19-04) live at the crate root for the same reason:
+// the devcons user-seam stub + the pipe loopback fixtures need
+// alloc/std while port::devssl keeps its unsafe-free forbid attribute.
+#[cfg(test)]
+mod devssl_tests;
 
 pub type Result<T> = core::result::Result<T, &'static str>;
 

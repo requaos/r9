@@ -47,6 +47,11 @@ pub const DEV_IP: usize = 9;
 /// Qdir/Qhash/Quse enum values.
 pub const DEV_CAP: usize = 10;
 
+/// devssl — the secure-sockets-layer device `#D` (19-04, DESK-04; the
+/// registry rune 'D', the donor devssl.c — pushssl hard-codes #D).
+/// The qid paths carry the donor's QID(c,y)=(c<<5)|y layout.
+pub const DEV_SSL: usize = 11;
+
 /// Plan 9 open-mode values (frozen: Harvey sys/include/libc.h).  The low
 /// two bits are an access-MODE field (not a bit set); the upper bits are
 /// flags.  These replace the retired `Mode` bitflags skeleton, whose
