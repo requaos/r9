@@ -975,6 +975,18 @@ const Q35_CHAIN_INIT_MARKER: &str = "init: starting /bin/rc";
 /// init re-spawns it) must be ABSENT — the cpu path never prints it.
 const Q35_BOOTCONF_MARKER: &str = "devenv: bootconf";
 const Q35_CPURC_MARKER: &str = "cpurc: RAN";
+/// The 19-03 ring-3 leg markers (CPU-01/CPU-03): the §15 cpurc SCRIPT
+/// (itself #!-exec'd — the first live proof) runs two legs.  SHEBANG-OK
+/// appears TWICE by design: once as the service script's #! token
+/// echoed by its interpreter (/amd64/bin/echo argv: token, script
+/// path — the donor argv order live) and once as the leg's own verdict
+/// marker.  REMOVE-OK: rm #¤/caphash through the ported devcap arm,
+/// then test -e proves the absence.  The named failure markers
+/// (SHEBANG-FAIL/REMOVE-FAIL) and the bare word FAIL are prohibited
+/// whole-capture — the gate greps both directions.
+const Q35_CPU_SHEBANG_OK_MARKER: &str = "SHEBANG-OK";
+const Q35_CPU_REMOVE_OK_MARKER: &str = "REMOVE-OK";
+const Q35_CPU_FAIL_WORD: &str = "FAIL";
 
 /// Panic-profile markers: a config with dev = ["panic"] boots
 /// virt to a deliberate brk #0 sync exception BEFORE trap::unmask_irq(), so
@@ -1407,12 +1419,14 @@ enum BootStage {
     /// stays running; the interactive expect sweep is 14-07's
     /// Harvey-side gate).
     Q35ChainPrompt,
-    /// The q35cpu cpurc stage (19-01): boot(8)'s prints observed, now
-    /// await the cpurc fixture's OWN marker from ring 3 — `cpurc: RAN`,
-    /// the init -c path's terminal evidence (the bootconf seed line
-    /// printed far earlier, whole-capture-asserted at finish; an
-    /// `init: starting /bin/rc` line here is the failure-loop symptom
-    /// and fails the gate).
+    /// The q35cpu cpurc stage (19-01, extended 19-03): boot(8)'s
+    /// prints observed, now await the cpurc SCRIPT's markers from ring
+    /// 3 — `cpurc: RAN` (the init -c path's evidence, itself a #! exec
+    /// since 19-03) plus the two legs' OK markers (SHEBANG-OK,
+    /// REMOVE-OK; the bootconf seed line printed far earlier,
+    /// whole-capture-asserted at finish; an `init: starting /bin/rc`
+    /// line here is the failure-loop symptom, and any FAIL word is a
+    /// failed leg — both fail the gate).
     Q35CpuRc,
 }
 
@@ -1507,7 +1521,11 @@ impl fmt::Display for BootStage {
                 write!(f, "the interactive rc prompt {NET_PROMPT_MARKER:?}")
             }
             BootStage::Q35CpuRc => {
-                write!(f, "the cpurc fixture's own marker {Q35_CPURC_MARKER:?} from ring 3")
+                write!(
+                    f,
+                    "the cpurc script markers {{{Q35_CPURC_MARKER:?}, \
+                     {Q35_CPU_SHEBANG_OK_MARKER:?}, {Q35_CPU_REMOVE_OK_MARKER:?}}} from ring 3"
+                )
             }
         }
     }
@@ -1564,12 +1582,14 @@ enum BootProfile {
     /// zero `churngate: FAIL` — the fast-fail arm already aborts on
     /// the first).
     X64Churn,
-    /// The q35cpu bootconf-tracer gate (19-01, CPU-02): the X64
-    /// discovery + module/paqfs stages, boot(8)'s chain prints, then
-    /// the cpurc fixture's own `cpurc: RAN` from ring 3 — with the
-    /// finish()-time post-pass asserting the kernel's bootconf-merge
-    /// line (`devenv: bootconf`) and ZERO `init: starting /bin/rc`
-    /// lines (the failure-loop symptom; the cpu path never prints it).
+    /// The q35cpu bootconf-tracer gate (19-01 CPU-02, extended 19-03):
+    /// the X64 discovery + module/paqfs stages, boot(8)'s chain prints,
+    /// then the cpurc SCRIPT's own `cpurc: RAN` + the two 19-03 ring-3
+    /// legs' OK markers from ring 3 — with the finish()-time post-pass
+    /// asserting the kernel's bootconf-merge line (`devenv: bootconf`),
+    /// ZERO `init: starting /bin/rc` lines (the failure-loop symptom),
+    /// both leg markers present, and ZERO `FAIL` words (the gate greps
+    /// both directions).
     X64Cpu,
     /// The q35auth substrate gate (18-01, AUTH-02/D-05+D-07): the X64
     /// discovery stages, the module/paqfs notes, the exec-entry note,
@@ -2375,14 +2395,14 @@ impl BootTestStep {
                 }
                 BootStage::Q35CpuRc => {
                     // 19-01: the cpurc fixture's OWN print from ring 3
-                    // (the §15 image's flat marker echo, run by init
-                    // -c's cpustart through the real exec/rc path).
-                    // The fail-fast arm: an `init: starting /bin/rc`
-                    // line means the terminal loop re-spawned rc — the
-                    // bootconf never reached execinit (or the cpurc
-                    // exec died) and init fell into its 1s loop; the
-                    // missing marker would only surface as a slow
-                    // budget expiry.
+                    // (run by init -c's cpustart through the real
+                    // exec/rc path; since 19-03 the fixture is a REAL
+                    // #! rc script — cpurc: RAN proves the #! pre-pass
+                    // at the cpurc point).  19-03: the stage's
+                    // terminal is now the LAST leg's verdict
+                    // (REMOVE-OK) — the legs' own failure markers
+                    // fast-fail the same way the 19-01 loop symptom
+                    // does.
                     if count_marker_lines(&capture, Q35_CHAIN_INIT_MARKER) > 0 {
                         return Err(self.fail(
                             stage,
@@ -2395,7 +2415,27 @@ impl BootTestStep {
                             ),
                         ));
                     }
-                    if contains_marker(&capture[bind_after..], Q35_CPURC_MARKER.as_bytes()) {
+                    if count_marker_lines(&capture, Q35_CPU_FAIL_WORD) > 0 {
+                        return Err(self.fail(
+                            stage,
+                            &capture,
+                            &format!(
+                                "cpu gate: a FAIL marker printed — a 19-03 leg failed (grep \
+                                 the log for {Q35_CPU_FAIL_WORD:?}); the cpurc: RAN line \
+                                 above it names how far the script got"
+                            ),
+                        ));
+                    }
+                    if contains_marker(&capture[bind_after..], Q35_CPURC_MARKER.as_bytes())
+                        && contains_marker(
+                            &capture[bind_after..],
+                            Q35_CPU_SHEBANG_OK_MARKER.as_bytes(),
+                        )
+                        && contains_marker(
+                            &capture[bind_after..],
+                            Q35_CPU_REMOVE_OK_MARKER.as_bytes(),
+                        )
+                    {
                         return self.finish(log_abs, &capture, BootProfile::X64Cpu);
                     }
                 }
@@ -2991,15 +3031,54 @@ impl BootTestStep {
                     return Err(self
                         .fail_pretty(capture, &format!("cpu marker {Q35_CPURC_MARKER:?} absent")));
                 }
+                // 19-03's leg markers: both OK markers present (the
+                // shebang token reaching its interpreter + the remove
+                // round-trip through the ported devcap arm), zero FAIL
+                // words anywhere in the capture — the gate greps both
+                // directions.
+                if !contains_marker(capture, Q35_CPU_SHEBANG_OK_MARKER.as_bytes()) {
+                    return Err(self.fail_pretty(
+                        capture,
+                        &format!(
+                            "cpu gate: the hash-bang leg marker {Q35_CPU_SHEBANG_OK_MARKER:?} \
+                             absent — the #! exec round-trip did not complete (the service \
+                             script's interpreter never saw its token)"
+                        ),
+                    ));
+                }
+                if !contains_marker(capture, Q35_CPU_REMOVE_OK_MARKER.as_bytes()) {
+                    return Err(self.fail_pretty(
+                        capture,
+                        &format!(
+                            "cpu gate: the remove leg marker {Q35_CPU_REMOVE_OK_MARKER:?} \
+                             absent — the rm/test round-trip over the ported devcap arm did \
+                             not complete"
+                        ),
+                    ));
+                }
+                let fail_words = count_marker_lines(capture, Q35_CPU_FAIL_WORD);
+                if fail_words != 0 {
+                    return Err(self.fail_pretty(
+                        capture,
+                        &format!(
+                            "cpu gate: {fail_words} line(s) carrying {Q35_CPU_FAIL_WORD:?} — a \
+                             leg verdict (SHEBANG-FAIL/REMOVE-FAIL) or stray failure print"
+                        ),
+                    ));
+                }
                 println!(
                     "boot-test: PASS -- SeaBIOS -> GRUB2 -> mb2 kernel + cpu-module boot with \
                      the append seam live: banner, memory facts, discovery, the module/paqfs \
                      notes, the exec-entry note, the bootconf-merge line \
                      ({Q35_BOOTCONF_MARKER}: the cmdline's key=value pairs in the ROOT env \
-                     seed), boot(8)'s own ring-3 prints, then init -c's cpustart running \
-                     /rc/bin/cpurc — the fixture's own {Q35_CPURC_MARKER} print, with ZERO \
-                     terminal-loop lines — CPU-02's service=cpu architecture proven on the \
-                     kernel layer (19-01)"
+                     seed), boot(8)'s own ring-3 prints, then init -c's cpustart #!-exec'ing \
+                     the /rc/bin/cpurc SCRIPT — {Q35_CPURC_MARKER}, the hash-bang leg \
+                     ({Q35_CPU_SHEBANG_OK_MARKER}: the #! token reaching /amd64/bin/echo \
+                     through the kernel pre-pass — the donor argv order live), and the remove \
+                     leg ({Q35_CPU_REMOVE_OK_MARKER}: rm #¤/caphash through the ported devcap \
+                     arm + test -e absence), ZERO terminal-loop lines, ZERO FAIL words — \
+                     CPU-02's service=cpu architecture + CPU-01's kernel half + CPU-03's \
+                     syscall half proven live from ring 3 (19-01/19-03)"
                 );
             }
             BootProfile::Multi => {

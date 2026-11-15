@@ -12,10 +12,15 @@
 # there (echo cpurc: RAN), so the q35cpu gate asserts the WHOLE
 # architecture — append seam -> mb2 tag 1 -> bootconf pairs -> env seed
 # (the devenv: bootconf line) -> execinit -> init -c -> cpurc — with
-# the failure-loop symptom (init: starting /bin/rc) prohibited.  The
-# CONTROL leg is q35shell itself: no append key, the terminal path
-# byte-untouched (one-image-per-gate; 19-07 expands the fixture into
-# the real cpurc).
+# the failure-loop symptom (init: starting /bin/rc) prohibited.  Since
+# 19-03 the fixture is a REAL #! rc SCRIPT (the kernel #! pre-pass
+# re-execs it) carrying the two ring-3 legs: the hash-bang exec
+# round-trip (SHEBANG-OK — the #! token reaching the interpreter is
+# the argv-order proof) and the REMOVE/sys_remove round-trip over the
+# ported devcap arm (REMOVE-OK); the gate greps both directions
+# (success markers present, FAIL markers absent).  The CONTROL leg is
+# q35shell itself: no append key, the terminal path byte-untouched
+# (one-image-per-gate; 19-07 expands the fixture into the real cpurc).
 #
 # Venue (the q35auth shape): KVM-native (the TCG leg rides R9_ACCEL=tcg
 # R9_CPU=qemu64 — the 13-06 no-silent-downgrade chain), smp 1, 1 GiB.
@@ -34,7 +39,10 @@ load-address = '0xffffffff80200000'
 
 [config]
 platform = "q35"
-dev = ["exec", "bootchain"]
+# 19-03 adds "cap": the §15 remove leg's #¤/caphash round-trip needs
+# devcap in the kernel (the ported remove arm's named consumer —
+# CPU-03's first live proof; the q35auth substrate precedent's key).
+dev = ["exec", "bootchain", "cap"]
 
 [qemu]
 machine = "q35"
