@@ -76,11 +76,25 @@ pub struct PipeQueue {
     closed: bool,
     /// Pids blocked reading this queue (woken by write/close).
     waiters: Vec<u64>,
+    /// Pids blocked WRITING this queue (the queue is full — 19-08's
+    /// blocking-write fix; woken by reads that drain and by the close
+    /// paths).  The donor's qwrite BLOCKS on a full queue; the
+    /// error-on-full shape killed the root paqfs under the tag-mux
+    /// (concurrent client rpcs let server replies pile up while their
+    /// owners park between polls — measured: `paqfs: mount write' ->
+    /// the whole root died).
+    wwaiters: Vec<u64>,
 }
 
 impl PipeQueue {
     fn new() -> PipeQueue {
-        PipeQueue { buf: VecDeque::new(), hungup: false, closed: false, waiters: Vec::new() }
+        PipeQueue {
+            buf: VecDeque::new(),
+            hungup: false,
+            closed: false,
+            waiters: Vec::new(),
+            wwaiters: Vec::new(),
+        }
     }
 }
 
@@ -335,6 +349,14 @@ pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
                 for (i, b) in q.buf.drain(..n).enumerate() {
                     buf[i] = b;
                 }
+                // The drain made room: wake parked writers (19-08's
+                // blocking write — the donor's writer wakeup).
+                let wwriters = core::mem::take(&mut q.wwaiters);
+                drop(g);
+                if !wwriters.is_empty() {
+                    let hh = h.unwrap_or_else(|| hooks().expect("devpipe: hooks"));
+                    (hh.wake)(&wwriters);
+                }
                 return Ok(n as u64);
             }
             if q.hungup {
@@ -364,10 +386,14 @@ pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
     }
 }
 
-/// Write to a pipe end (donor pipewrite: end i writes q[1-i]).  Errors
-/// when the read side is fully closed ("write on closed pipe") or the
-/// write would exceed the queue bound ("pipe full" — atomic, never
-/// partial, never silent).  Wakes blocked readers after the bytes land.
+/// Write to a pipe end (donor pipewrite: end i writes q[1-i]).
+/// BLOCKS while the queue lacks room for the whole message (the
+/// donor's qwrite — whole-message atomic, never partial, never
+/// silent; 19-08: the old error-on-full killed the root paqfs under
+/// the tag-mux's concurrent rpcs).  Errors when the read side is
+/// fully closed ("write on closed pipe").  Wakes blocked readers
+/// after the bytes land; the read path wakes parked writers as it
+/// drains.
 pub fn write(c: &mut Chan, buf: &[u8], _offset: u64) -> Result<u64> {
     if c.qid.typ == QTDIR {
         return Err("devpipe: write of a directory");
@@ -379,25 +405,50 @@ pub fn write(c: &mut Chan, buf: &[u8], _offset: u64) -> Result<u64> {
         return Err("devpipe: write of unattached pipe chan");
     };
     let n = buf.len();
-    let node = LockNode::new();
-    let waiters = {
-        let mut g = pipe.lock(&node);
-        let q = &mut g.q[1 - side];
-        if q.closed {
-            return Err("devpipe: write on closed pipe");
+    let mut h: Option<PipeHooks> = None;
+    loop {
+        let node = LockNode::new();
+        let mut readers: Vec<u64> = Vec::new();
+        let mut written = false;
+        {
+            let mut g = pipe.lock(&node);
+            let q = &mut g.q[1 - side];
+            if q.closed {
+                return Err("devpipe: write on closed pipe");
+            }
+            if n <= PIPE_Q_CAP - q.buf.len() {
+                q.buf.extend(buf.iter().copied());
+                readers = core::mem::take(&mut q.waiters);
+                written = true;
+            } else {
+                // Full: register as a write-waiter and park (the
+                // donor's blocking qwrite; a draining read or the
+                // close paths wake us).
+                if h.is_none() {
+                    h = Some(hooks()?);
+                }
+                // A pending note interrupts the parked write (the
+                // note-interruptible blocking-IO contract).
+                if (h.as_ref().unwrap().note_pending)() {
+                    return Err("interrupted");
+                }
+                let pid = (h.as_ref().unwrap().current)();
+                if !q.wwaiters.contains(&pid) {
+                    q.wwaiters.push(pid);
+                }
+            }
         }
-        if n > PIPE_Q_CAP - q.buf.len() {
-            return Err("devpipe: pipe full");
+        if written {
+            if !readers.is_empty() {
+                let hh = h.unwrap_or_else(|| hooks().expect("devpipe: hooks"));
+                (hh.wake)(&readers);
+            }
+            return Ok(n as u64);
         }
-        q.buf.extend(buf.iter().copied());
-        core::mem::take(&mut q.waiters)
-    };
-    // Hooks are needed only to WAKE (a write with no blocked readers is
-    // hook-free — the dir/listing/queue paths never require registration).
-    if !waiters.is_empty() {
-        (hooks()?.wake)(&waiters);
+        // Park until a reader drains (register-under-lock + drop +
+        // block — the wakeup-loss-free discipline).
+        (h.as_ref().unwrap().block)();
     }
-    Ok(n as u64)
 }
 
 /// Close an open pipe end (namec::close_chan's DEV_PIPE leg — donor
@@ -420,12 +471,19 @@ pub fn close(c: &Chan) {
         }
         let mut wake = Vec::new();
         if g.qref[side] == 0 {
-            // qhangup(q[1-side]): the peer's readers drain then EOF.
+            // qhangup(q[1-side]): the peer's readers drain then EOF;
+            // its parked WRITERS (full-queue parks) must also wake —
+            // the draining EOF frees room and the close paths below
+            // settle their fate (19-08's blocking write).
             let peer = &mut g.q[1 - side];
             peer.hungup = true;
             wake.append(&mut peer.waiters);
-            // qclose(q[side]): writers into it error from now on.
-            g.q[side].closed = true;
+            wake.append(&mut peer.wwaiters);
+            // qclose(q[side]): writers into it error from now on —
+            // wake any parked ones so they take the error.
+            let mine = &mut g.q[side];
+            mine.closed = true;
+            wake.append(&mut mine.wwaiters);
         }
         if g.qref == [0, 0] {
             // qreopen: both ends closed — the queues reset.
@@ -434,6 +492,7 @@ pub fn close(c: &Chan) {
                 q.hungup = false;
                 q.closed = false;
                 q.waiters.clear();
+                q.wwaiters.clear();
             }
         }
         wake

@@ -60,23 +60,34 @@ fn pipe_pair_write_read_round_trip() {
     assert_eq!(&buf[..n as usize], b"cdef", "prior bytes are consumed exactly once");
 }
 
-/// The bounded queue: a write that would exceed the 4 KiB bound errors
-/// with a NAMED errstr and lands NOTHING (atomic — a partial 9P message
-/// would corrupt the stream); the queued bytes drain intact.
+/// The bounded queue under the DONOR's blocking write (19-08): a
+/// write into a full queue PARKS (whole-message atomic — nothing lands
+/// partially) until a reader drains room; the drain WAKES the parked
+/// writer; the queued bytes drain intact.  (The old error-on-full
+/// shape killed the root paqfs under the tag-mux's concurrent rpcs —
+/// the tier1 gate's measured `paqfs: mount write' root death.)
 #[test]
-fn pipe_full_is_a_named_atomic_error() {
+fn pipe_full_write_blocks_until_a_reader_drains() {
+    let _script = script_guard();
+    ensure_hooks();
     let (mut e0, mut e1) = pipe_pair();
     let chunk = [0xABu8; 1024];
     for _ in 0..(PIPE_Q_CAP / 1024) {
         devpipe::write(&mut e0, &chunk, u64::MAX).expect("write within capacity");
     }
-    let err = devpipe::write(&mut e0, b"x", u64::MAX).expect_err("an overflowing write must error");
-    assert!(err.contains("full"), "the named overflow errstr, got: {err}");
+    // The overflowing write parks; the scripted step (the PEER end is
+    // e1, the reader of q[1]) drains the whole queue, which wakes the
+    // parked writer — the write then completes whole.
+    *PEER_END.lock().unwrap() = Some(e1);
+    SCRIPT.lock().unwrap().push_back(Step::Read(PIPE_Q_CAP));
+    WAKES.lock().unwrap().clear();
+    devpipe::write(&mut e0, b"x", u64::MAX).expect("the parked write completes after the drain");
+    assert_eq!(WAKES.lock().unwrap().as_slice(), &[vec![TEST_PID]], "the drain woke the parked writer");
 
-    let mut buf = vec![0u8; PIPE_Q_CAP];
-    let n = devpipe::read(&mut e1, &mut buf, u64::MAX).expect("drain");
-    assert_eq!(n as usize, PIPE_Q_CAP, "nothing was lost or added by the refused write");
-    assert!(buf.iter().all(|&b| b == 0xAB));
+    let mut e1 = PEER_END.lock().unwrap().take().expect("the scripted peer end");
+    let mut buf = [0u8; 8];
+    let n = devpipe::read(&mut e1, &mut buf, u64::MAX).expect("read the landed byte");
+    assert_eq!(&buf[..n as usize], b"x", "the parked write landed WHOLE after the drain — nothing partial, nothing lost");
 }
 
 /// Behavior bullet 3 (drain arm): closing the write end makes the reader
@@ -193,6 +204,10 @@ enum Step {
     Write(Vec<u8>),
     /// Close the peer's end (end 0) — the write side of the reader's queue.
     Close,
+    /// Drain `n` bytes off the peer end's read queue (the scripted
+    /// reader for 19-08's blocking write: a parked writer completes
+    /// only after the drain makes room).
+    Read(usize),
 }
 
 static SCRIPT: Mutex<VecDeque<Step>> = Mutex::new(VecDeque::new());
@@ -218,6 +233,11 @@ fn test_block() {
         Step::Close => {
             namec::close_chan(peer);
         }
+        Step::Read(n) => {
+            let mut scratch = vec![0u8; n];
+            let got = devpipe::read(peer, &mut scratch, u64::MAX).expect("scripted peer read");
+            assert!(got as usize <= n, "the scripted drain stays in bounds");
+        }
     }
 }
 
@@ -227,14 +247,37 @@ fn test_wake(pids: &[u64]) {
 
 /// Behavior bullet 2: block-on-empty + wake-on-write, then the
 /// reader-wakes-on-close arm (a close while parked ends the read at EOF).
+/// Register the scripted hooks exactly once per process (set_hooks
+/// is once-only by assert — the boot's own discipline).
+fn ensure_hooks() {
+    HOOKS_ONCE.call_once(|| {
+        devpipe::set_hooks(PipeHooks {
+            current: test_current,
+            block: test_block,
+            wake: test_wake,
+            note_pending: || false,
+        });
+    });
+}
+static HOOKS_ONCE: std::sync::Once = std::sync::Once::new();
+
+/// Serialize the scripted tests (the script state is process-global
+/// and cargo runs tests in parallel): each scripted test holds this
+/// guard for its duration, starting from a clean slate.
+fn script_guard() -> std::sync::MutexGuard<'static, ()> {
+    static SCRIPT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let g = SCRIPT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    *BLOCKS.lock().unwrap() = 0;
+    WAKES.lock().unwrap().clear();
+    SCRIPT.lock().unwrap().clear();
+    *PEER_END.lock().unwrap() = None;
+    g
+}
+
 #[test]
 fn pipe_blocks_on_empty_and_write_wakes_with_bytes() {
-    devpipe::set_hooks(PipeHooks {
-        current: test_current,
-        block: test_block,
-        wake: test_wake,
-        note_pending: || false,
-    });
+    let _script = script_guard();
+    ensure_hooks();
 
     // Arm A: the read blocks; the scripted peer write wakes it with bytes.
     let (e0, mut e1) = pipe_pair();
