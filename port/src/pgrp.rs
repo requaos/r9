@@ -69,6 +69,28 @@ impl Pgrp {
         Pgrp { mounts: Vec::new(), next_mountid: 1 }
     }
 
+    /// The donor closepgrp's mount half (the 19-10 cont-6 fix): take
+    /// every mount-table chan OUT for close-dispatch.  The donor's
+    /// closepgrp -> Mhead/Mount free -> cclose(m->to) chain ran at
+    /// pgrp death; without it the mount ROOT fid (the ATTACH fid of
+    /// every mounted tree — rio's wsys attach carries a window ref in
+    /// xfidattach's `if(!newlymade) incref(w)`) never Tclunks: the
+    /// ref leaks, the window's shell-exit clunk chain lands one short,
+    /// and the window never deletes.  The CALLER close-chans the
+    /// returned values outside the group lock (the leaf-lock rule) —
+    /// closing can park (a Tclunk round trip), which the group lock
+    /// must never span.
+    pub fn take_mount_chans(&mut self) -> alloc::vec::Vec<Chan> {
+        let mut out = alloc::vec::Vec::new();
+        for m in self.mounts.drain(..) {
+            out.push(m.from);
+            for e in m.chain {
+                out.push(e.to);
+            }
+        }
+        out
+    }
+
     /// bind/mount's table half (9k cmount, chan.c): validate the
     /// dir/file agreement, then insert per the order bits — MREPL
     /// replaces the chain; the first non-MREPL bind at a point adds the

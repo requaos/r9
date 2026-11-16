@@ -1934,12 +1934,20 @@ fn sys_exits(frame: &mut Ureg, proc: &mut Proc) -> u64 {
 pub(crate) fn exit_tail(proc: &mut Proc, msg: &[u8]) -> ! {
     let detached = core::mem::replace(&mut proc.fd_group, proc::empty_fdgroup());
     if Arc::strong_count(&detached) == 1 {
-        let drained = {
+        let mut drained = {
             let node = LockNode::new();
             detached.lock(&node).drain_all()
         };
-        for c in &drained {
-            port::namec::close_chan(c);
+        // 19-10 cont 6: consume ONE chan at a time — close_chan under a
+        // BORROW pins every duplicate of the same server fid inside the
+        // batch, so clunk_if_last never sees the last ref and the Tclunk
+        // never fires (rio's wsys cons: the window never deleted on the
+        // shell's exit).  Taking ownership drops each chan BEFORE the
+        // next close, so a later duplicate observes the freed count —
+        // the donor closefgrp's nil-the-slot-then-cclose cascade.
+        for c in drained.drain(..) {
+            port::namec::close_chan(&c);
+            drop(c);
         }
         // 17-02 (the #44 fix): exit_tail DIVERGES (park /
         // sched_from_moribund) — every local still live at the tail

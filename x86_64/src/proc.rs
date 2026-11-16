@@ -2230,6 +2230,23 @@ static EMPTY_RENDEZGROUP: Lock<Option<Arc<Lock<RendezGroup>>>> = Lock::new("empt
 /// Arc's drop cannot Tclunk without the RPC; the real fix rides the
 /// exit-path-9P-safety work).
 pub fn sweep_husk_payloads(proc: &mut Proc) {
+    // 19-10 cont 6: the donor closepgrp's mount half — when THIS proc
+    // holds the LAST reference to its namespace group, the mount
+    // table's chans (every mount's ROOT/attach fid) close-dispatch
+    // before the handle drops.  A plain Arc drop never Tclunks them:
+    // the attach fid leaks server-side (rio's wsys attach carries a
+    // window ref — xfidattach's `if(!newlymade) incref(w)`), the
+    // shell-exit clunk chain lands one short, and `exit` in a window
+    // leaves the window on screen (the owner's live report).
+    if Arc::strong_count(&proc.pgrp) == 1 {
+        let chans = {
+            let node = LockNode::new();
+            proc.pgrp.lock(&node).take_mount_chans()
+        };
+        for c in chans {
+            port::namec::close_chan(&c);
+        }
+    }
     proc.pgrp = empty_pgrp();
     proc.env_group = empty_env_group();
     proc.rgrp = empty_rendez_group();

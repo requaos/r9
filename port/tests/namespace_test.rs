@@ -454,3 +454,48 @@ fn unmount_removes_and_errors_on_never_mounted() {
     pg.lock(&node).unmount(&point, None).expect("whole-point unmount");
     assert_eq!(resolve(&pg, &slash, "/dev/cons").unwrap().dev, DEV_ROOT);
 }
+
+// ---------------------------------------------------------------------------
+// 19-10 Leg-1 cont 6: the donor closepgrp mount half (take_mount_chans)
+// ---------------------------------------------------------------------------
+
+/// At namespace-group death the mount table's chans must LEAVE the table
+/// for close-dispatch — the donor's closepgrp -> Mhead/Mount free ->
+/// cclose(m->to) chain.  Without it the mount ROOT fid (the attach fid —
+/// rio's wsys attach carries a window ref in xfidattach's
+/// `if(!newlymade) incref(w)`) never Tclunks: `exit` in a rio window
+/// releases every cons fid but the attach ref leaks and the window never
+/// deletes (the owner's live report at the pinned tree).
+#[test]
+fn take_mount_chans_empties_the_table_and_returns_every_chan() {
+    let pg = Lock::new("pgrp-test", Pgrp::new());
+    let slash = slash();
+    let node = LockNode::new();
+    bind_locked(&pg, &slash, "#c", "/dev", pgrp::MREPL).expect("bind #c /dev MREPL");
+    bind_locked(&pg, &slash, "#p", "/dev", pgrp::MBEFORE).expect("bind #p /dev MBEFORE");
+
+    let chans = pg.lock(&node).take_mount_chans();
+    // The table is now EMPTY (a second take returns nothing) — the
+    // donor's closepgrp consumed the mount list.
+    assert!(pg.lock(&node).take_mount_chans().is_empty(), "the table drains whole");
+    // Every mount point contributed its `from` chan plus its chain
+    // entries (the #c and #p mounts + each union's underlying member).
+    // The precise count is layout-dependent; the invariant is that BOTH
+    // bound devices' chans are present: at least one chan with dev
+    // DEV_CONS (the #c mount's `to`) and one with DEV_PROC.
+    let has = |d: usize| chans.iter().any(|c| c.dev == d);
+    assert!(has(DEV_CONS), "the #c mount's chan is in the drain set");
+    assert!(has(DEV_PROC), "the #p mount's chan is in the drain set");
+    // The mount points' `from` chans (the /dev target) are in the set
+    // too — the whole table, chans and chains both.  Both binds target
+    // the SAME point, so the table holds ONE MountPoint whose chain
+    // carries both mounts: from + [to_#c, to_#p, the underlying /dev
+    // member] = 4 chans... or a merged 3-entry shape when the first
+    // MREPL bind made the underlying member one with the point — the
+    // invariant that matters is emptiness + both devices present.
+    assert!(
+        chans.len() >= 3,
+        "the shared point's from + both mounts' tos minimum; got {}",
+        chans.len()
+    );
+}
