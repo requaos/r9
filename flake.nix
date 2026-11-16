@@ -745,7 +745,25 @@ WRAP
             # NAR sha256-BfU8eS..., three-way agreed with the FOD's
             # own measured got-value (the realization with this hash
             # wired built green).
-            outputHash = "sha256-BfU8eS6TA7x6HMx1Vv3h818DyJEMD6SxSDePI2lb3ME=";
+            # The 19-10 Leg-1 continuation-4 kernel bytes (99714a6:
+            # close-on-exec ported — Chan.cexec recorded at the open
+            # funnel, FdGroup::take_cexec, exec_replace's
+            # close_on_exec_fds sweep in the donor's sysexec order,
+            # the libthread procexec status-pipe semantics rio's
+            # new() recvul park needs) re-staled it once more;
+            # re-wired with the same two-derivation proof: kernel A
+            # plain at 99714a6 (fresh r9-kernel-x64-99714a6.drv) +
+            # kernel B at 609a5e9 (a kernel-neutral
+            # derivation-independence marker commit in the discarded
+            # /tmp/r9-marker-1910c clone, FRESH
+            # r9-kernel-x64-609a5e9.drv) through the non-FOD
+            # lib.bootIo realization produced the byte-identical ISO
+            # — file sha256
+            # 44146f064d941456a78ecf60416805fd88cd7a2e4783f5506d9059b886caffaa,
+            # NAR sha256-4xttiQ..., three-way agreed with the FOD's
+            # own measured got-value (the realization with this hash
+            # wired built green).
+            outputHash = "sha256-4xttiQSvMBpt00zWPi9z0lzNKW417/JkozvDw7qxuxM=";
           };
         });
 
