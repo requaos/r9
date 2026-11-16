@@ -763,7 +763,25 @@ WRAP
             # NAR sha256-4xttiQ..., three-way agreed with the FOD's
             # own measured got-value (the realization with this hash
             # wired built green).
-            outputHash = "sha256-4xttiQSvMBpt00zWPi9z0lzNKW417/JkozvDw7qxuxM=";
+            # The 19-10 cont-5 kernel bytes (501a7c5: devmnt's
+            # write loop SENDS the zero-count Twrite — the donor
+            # mntrdwr do-while re-keyed onto both devmnt::write and
+            # ::read; libdraw setcursor(nil)'s 0-byte write is the
+            # cursor-arrow revert drawterm's devmouse carries on
+            # n < 72 — the owner's stuck-contextual-cursor root
+            # cause) re-staled it once more; re-wired with the same
+            # two-derivation proof: kernel A plain at 501a7c5 (fresh
+            # r9-kernel-x64-501a7c5.drv) + kernel B at 7c275a5 (a
+            # kernel-neutral derivation-independence marker commit in
+            # the discarded /tmp/r9-marker-1910d clone, FRESH
+            # r9-kernel-x64-7c275a5.drv) through the non-FOD
+            # lib.bootIo realization produced the byte-identical ISO
+            # — file sha256
+            # b3ae4de391dede7cd9246672467d16e8653b820fc5de6616e13d102519cbbbfe,
+            # NAR sha256-YaslMB..., three-way agreed with the FOD's
+            # own measured got-value (the realization with this hash
+            # wired built green).
+            outputHash = "sha256-YaslMBV6zwHpGHElMEW/9HUAb7B/xp8805KuWQkR+FI=";
           };
         });
 
