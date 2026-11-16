@@ -434,6 +434,13 @@ pub fn open_chan(c: &Chan, mode: u32) -> Result<Chan> {
     // The donor's COPEN — every funnel-opened chan is marked;
     // Chan::dup's pipe-reference rule and close_chan's dispatch read it.
     opened.copen = true;
+    // The donor chan.c Aopen arm: OCEXEC is fd state, recorded on the
+    // chan AFTER the device open (the bit never reaches the device —
+    // `access` masked it above; the donor passes omode&~OCEXEC).  exec's
+    // close_cexec_fds sweep reads it.
+    if mode & crate::dat::OCEXEC != 0 {
+        opened.cexec = true;
+    }
     Ok(opened)
 }
 

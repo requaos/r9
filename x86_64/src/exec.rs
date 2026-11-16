@@ -537,6 +537,19 @@ pub fn exec_into(
 ///
 /// Returns the new tos_va: the handler passes it up so dispatch's
 /// `frame.ax = result` writeback lands alongside the seeded bp.
+/// The donor sysexec close-on-exec sweep: take every cexec-marked fd
+/// out of the table and close-dispatch it OUTSIDE the group lock (the
+/// fdgrp leaf-lock rule).  A shared fd group (rfork without RFFDG)
+/// closes the slots for every sharer — the donor's fdclose mutates
+/// up->fgrp the same way.
+fn close_on_exec_fds(proc: &mut Proc) {
+    let node = port::mcslock::LockNode::new();
+    let taken = proc.fd_group.lock(&node).take_cexec();
+    for c in taken {
+        port::namec::close_chan(&c);
+    }
+}
+
 pub fn exec_replace(
     proc: &mut Proc,
     backing: ByteBacking,
@@ -549,6 +562,19 @@ pub fn exec_replace(
     // Every remaining VALIDATION check runs BEFORE the free: the
     // seed-fit arithmetic.
     check_seed_fit(args)?;
+
+    // Close on exec (the donor sysexec `fdclose(i, CCEXEC)` loop,
+    // 9k sysproc.c:519-523 — run after the args are committed, BEFORE
+    // the segment frees): every fd whose chan carries the OCEXEC mark
+    // leaves the table.  libthread's procexec DEPENDS on the semantics:
+    // its exec-status pipe write end is opened OWRITE|OCEXEC, and the
+    // parent's status read only sees EOF when the exec'ed child's copy
+    // closes here — without the sweep the read parks forever and every
+    // procexec caller wedges (rio's new() recvul park: the window is
+    // created and the shell runs, but mousethread never returns to the
+    // event loop and the whole mouse chain dies post-sweep — the
+    // 19-10 Leg-1 cont 4 live defect).
+    close_on_exec_fds(proc);
 
     // FREE second: unmap every current user mapping from the (active)
     // PML4 and deallocate the phys pages; drop the old segment records
@@ -1179,5 +1205,54 @@ mod tests {
         // Everything the seed does not plant stays zero.
         assert_eq!(read(8), 0); // bx
         assert_eq!(read(136), 0); // ecode
+    }
+
+    /// The close-on-exec sweep (the donor sysexec `fdclose(i, CCEXEC)`
+    /// loop, sysproc.c:519-523): exec_replace closes every fd whose
+    /// chan carries the OCEXEC mark and keeps every plain fd.  The live
+    /// wedge this pins: libthread procexec's exec-status pipe write end
+    /// is OWRITE|OCEXEC — without the sweep the exec'ed child keeps the
+    /// write end open, the parent's status read never EOFs, procexec
+    /// never sendul's the pid, and every libthread caller of it parks
+    /// (rio's new() recvul: the window is created and the shell runs,
+    /// but mousethread never returns to the event loop and the mouse
+    /// chain dies post-sweep — 19-10 Leg-1 cont 4's live defect).
+    #[test]
+    fn exec_replace_closes_cexec_fds_and_keeps_plain_fds() {
+        let mut guard = crate::proc::new_user_proc("t-cexec").expect("proc");
+        // A cexec-marked chan and a plain chan, both close-dispatch-safe
+        // synthetic CONS chans (copen false: close_chan's arms no-op).
+        let mut marked = port::dat::Chan::new(
+            port::dat::DEV_CONS,
+            port::dat::Qid { path: 1, vers: 0, typ: port::dat::QTFILE },
+            port::dat::ORDWR,
+        );
+        marked.cexec = true;
+        let plain = port::dat::Chan::new(
+            port::dat::DEV_CONS,
+            port::dat::Qid { path: 2, vers: 0, typ: port::dat::QTFILE },
+            port::dat::ORDWR,
+        );
+        let fd_marked = guard.fd_install_lowest(marked).expect("install marked");
+        let fd_plain = guard.fd_install_lowest(plain).expect("install plain");
+        let mut frame = Ureg::zeroed();
+        let bin = fake_aout();
+        exec_replace(
+            &mut *guard,
+            ByteBacking::Mnt { file: alloc::sync::Arc::new(bin) },
+            "t-cexec",
+            &[b"t-cexec".as_slice()],
+            &mut frame,
+        )
+        .expect("the image installs");
+        // The marked fd left the table; the plain fd survives.
+        assert!(
+            guard.fd_group.lock(&port::mcslock::LockNode::new()).get(fd_marked).is_none(),
+            "the OCEXEC-marked fd must close at exec"
+        );
+        assert!(
+            guard.fd_group.lock(&port::mcslock::LockNode::new()).get(fd_plain).is_some(),
+            "a plain fd must survive exec"
+        );
     }
 }

@@ -567,3 +567,37 @@ fn create_chan_union_refusal_propagates_not_falls_through() {
     let err = err_of(namec::create_chan_union(&parent, b"dupkey", OWRITE, 0o644, &pg, false));
     assert_eq!(err, "devenv: name exists", "a member refusal propagates, never falls through");
 }
+
+// ---------------------------------------------------------------------------
+// 19-10 Leg-1 cont 4: OCEXEC recording (the donor chan.c Aopen arm)
+// ---------------------------------------------------------------------------
+
+/// OCEXEC is fd state recorded on the chan at the open funnel — never
+/// passed to the device (the donor opens with omode&~OCEXEC) — so exec's
+/// close_cexec_fds sweep can see it.  The live consumer is libthread
+/// procexec's exec-status pipe (`open(PIPEMNT "/data1", OWRITE|OCEXEC)`):
+/// the mark is what EOFs the parent's status read at the child's exec
+/// (rio's new() recvul wedge — the post-sweep mouse death).
+#[test]
+fn open_chan_records_oceexec_as_fd_state() {
+    let _seam = seam_guard();
+    install_group_hook_once();
+    set_current_group(Arc::new(Lock::new("env", EnvGroup::new())));
+
+    let pg = Lock::new("pgrp-test", Pgrp::new());
+    let slash = slash();
+    bind_locked(&pg, &slash, "#e", "/dev", pgrp::MAFTER).expect("bind #e MAFTER /dev");
+    let parent = resolve(&pg, &slash, "/dev").expect("/dev resolves");
+    let _created = namec::create_chan_union(&parent, b"cexeckey", OWRITE, 0o644, &pg, false)
+        .expect("create the env entry the opens target");
+    let c = resolve(&pg, &slash, "/dev/cexeckey").expect("/dev/cexeckey resolves through the union");
+    let marked = namec::open_chan(&c, OREAD | crate::dat::OCEXEC)
+        .expect("open OREAD|OCEXEC");
+    assert!(marked.cexec, "the OCEXEC bit must be recorded on the chan");
+    // The device never saw the bit (open_chan masks to the access mode
+    // before the device dispatch) — the companion assertion is the
+    // donor's other arm: a plain open leaves the mark clear.
+    let c2 = resolve(&pg, &slash, "/dev/cexeckey").expect("/dev/cexeckey resolves again");
+    let plain = namec::open_chan(&c2, OREAD).expect("plain open");
+    assert!(!plain.cexec, "a plain open leaves the mark clear");
+}

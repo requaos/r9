@@ -74,6 +74,24 @@ impl<const N: usize> FdGroup<N> {
         self.fds.get_mut(fd as usize)?.replace(c)
     }
 
+    /// The donor sysexec close-on-exec sweep's table half: take every
+    /// cexec-marked chan OUT of its slot (the `fdclose(i, CCEXEC)`
+    /// loop's per-fd arm — flag-matched closes only).  The CALLER
+    /// close-dispatches the returned chans — never under the group lock
+    /// (the leaf-lock rule).
+    pub fn take_cexec(&mut self) -> Vec<Chan> {
+        let mut out = Vec::new();
+        for slot in self.fds.iter_mut() {
+            let marked = matches!(slot.as_ref(), Some(c) if c.cexec);
+            if marked {
+                if let Some(c) = slot.take() {
+                    out.push(c);
+                }
+            }
+        }
+        out
+    }
+
     /// A REFERENCE clone of the chan at `fd` (Chan::dup — bumps an open
     /// pipe end's count; the donor's fdtochan incref).  sys_dup,
     /// rfork's fd copy and devsrv's store ride this.

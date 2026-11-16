@@ -136,6 +136,19 @@ pub struct Chan {
     /// open funnel; namec::create_chan sets it for creates).  Read by
     /// dup's pipe-reference rule and namec::close_chan's dispatch.
     pub(crate) copen: bool,
+    /// The donor's CCEXEC (portdat.h 0x0008, "close on exec"): this fd
+    /// leaves the table at EXEC.  Recorded by namec::open_chan and
+    /// sys_create when the open mode carries OCEXEC (the donor chan.c
+    /// Aopen/Acreate arms — the bit never reaches the device), and
+    /// swept by exec_replace's close_cexec_fds (the donor sysexec
+    /// `fdclose(i, CCEXEC)` loop).  The live consumer is libthread's
+    /// procexec: its exec-status pipe write end is opened
+    /// OWRITE|OCEXEC, and the parent's status read only sees EOF when
+    /// the exec'ed child's copy closes at exec — without the sweep the
+    /// read parks forever and every procexec caller wedges (rio's
+    /// new() recvul park: the post-sweep mouse death, 19-10 Leg-1
+    /// cont 4).
+    pub cexec: bool,
     /// The devmnt 9P session — set by
     /// devmnt::fversion on the PIPE chan (the donor's `c->mux`; sys_mount
     /// finds it there) and carried by every DEV_MNT chan in the mounted
@@ -166,7 +179,7 @@ pub struct Chan {
 
 impl Chan {
     pub fn new(dev: usize, qid: Qid, mode: u32) -> Chan {
-        Chan { qid, mode, offset: 0, dev, devno: 0, path: Vec::new(), paqdir: None, pipe: None, copen: false, mnt: None, mnt_fid: None, iounit: 0 }
+        Chan { qid, mode, offset: 0, dev, devno: 0, path: Vec::new(), paqdir: None, pipe: None, copen: false, cexec: false, mnt: None, mnt_fid: None, iounit: 0 }
     }
 
     /// Mark the chan open (COPEN) OUTSIDE the funnel — the one
@@ -234,6 +247,7 @@ impl Chan {
             paqdir: self.paqdir.clone(),
             pipe: self.pipe.clone(),
             copen: self.copen,
+            cexec: self.cexec,
             mnt: self.mnt.clone(),
             mnt_fid: self.mnt_fid.clone(),
             iounit: self.iounit,
@@ -260,6 +274,7 @@ impl Chan {
             paqdir: self.paqdir.clone(),
             pipe: self.pipe.clone(),
             copen: self.copen,
+            cexec: self.cexec,
             mnt: self.mnt.clone(),
             mnt_fid: self.mnt_fid.clone(),
             iounit: self.iounit,
