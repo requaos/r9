@@ -728,7 +728,24 @@ WRAP
             # NAR sha256-xbHRtc..., three-way agreed with the FOD's
             # own measured got-value (the realization with this hash
             # wired built green).
-            outputHash = "sha256-xbHRtc04za2/E+bab/Q4Z6a1jFGhWuoABshGLsZg/MU=";
+            # The 19-10 Leg-1 kernel bytes (fe67c75: mount consults
+            # keyed by chan identity — Chan.devno + devmnt's per-session
+            # stamp + pgrp's identity-keyed MountPoint + namec's
+            # consult sites + sys_unmount's donor arg shape, the
+            # dual-cons-reader root cause) re-staled it once more;
+            # re-wired with the same two-derivation proof: kernel A
+            # plain at fe67c75 (fresh r9-kernel-x64-fe67c75.drv) +
+            # kernel B at fcab10c (a kernel-neutral
+            # derivation-independence marker commit in the discarded
+            # /tmp/r9-marker-1910 clone, FRESH
+            # r9-kernel-x64-fcab10c.drv) through the non-FOD
+            # lib.bootIso realization produced the byte-identical ISO
+            # — file sha256
+            # fb11e6b0aea3af0cd5df7e91816a0a8c66ce9d3f5c1403aa08712bda919fe38d,
+            # NAR sha256-BfU8eS..., three-way agreed with the FOD's
+            # own measured got-value (the realization with this hash
+            # wired built green).
+            outputHash = "sha256-BfU8eS6TA7x6HMx1Vv3h818DyJEMD6SxSDePI2lb3ME=";
           };
         });
 
