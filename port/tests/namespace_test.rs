@@ -423,8 +423,15 @@ fn unmount_removes_and_errors_on_never_mounted() {
     let pg = Lock::new("pgrp-test", Pgrp::new());
     let slash = slash();
 
+    // The syscall layer's target shape: resolve the MOUNT POINT chan
+    // (Amount — no final redirect) BEFORE taking the table lock (namec
+    // consults the table itself — resolving under the held lock would
+    // re-enter the mcslock).
+    let devpoint =
+        || namec::namec(b"/dev", &slash, &slash, &pg, NamecMode::MountTarget).unwrap();
     let node = LockNode::new();
-    assert!(pg.lock(&node).unmount(b"/dev", None).is_err(), "unmount of a never-mounted point must error");
+    let point = devpoint();
+    assert!(pg.lock(&node).unmount(&point, None).is_err(), "unmount of a never-mounted point must error");
 
     bind_locked(&pg, &slash, "#c", "/dev", pgrp::MBEFORE).expect("bind");
     assert_eq!(resolve(&pg, &slash, "/dev/cons").unwrap().dev, DEV_CONS);
@@ -432,15 +439,18 @@ fn unmount_removes_and_errors_on_never_mounted() {
     // Remove the named entry: the #c mount leaves the union; the
     // underlying /dev is all that remains.
     let cons_root = namec::namec(b"#c", &slash, &slash, &pg, NamecMode::BindSource).unwrap();
-    pg.lock(&node).unmount(b"/dev", Some(&cons_root)).expect("unmount the #c entry");
+    let point = devpoint();
+    pg.lock(&node).unmount(&point, Some(&cons_root)).expect("unmount the #c entry");
     assert_eq!(resolve(&pg, &slash, "/dev/cons").unwrap().dev, DEV_ROOT,
         "after unmount the underlying directory serves /dev again");
 
     // The same unmount a second time errors (the entry is gone).
-    assert!(pg.lock(&node).unmount(b"/dev", Some(&cons_root)).is_err(), "a removed entry errors on re-unmount");
+    let point = devpoint();
+    assert!(pg.lock(&node).unmount(&point, Some(&cons_root)).is_err(), "a removed entry errors on re-unmount");
 
-    // Whole-point unmount (nil old): everything at /dev goes.
+    // Whole-point unmount (nil name): everything at /dev goes.
     bind_locked(&pg, &slash, "#c", "/dev", pgrp::MBEFORE).expect("rebind");
-    pg.lock(&node).unmount(b"/dev", None).expect("whole-point unmount");
+    let point = devpoint();
+    pg.lock(&node).unmount(&point, None).expect("whole-point unmount");
     assert_eq!(resolve(&pg, &slash, "/dev/cons").unwrap().dev, DEV_ROOT);
 }

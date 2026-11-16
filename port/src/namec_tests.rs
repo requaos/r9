@@ -247,13 +247,17 @@ fn bind_locked(
     pg.lock(&node).bind(s, &t, flag)
 }
 
-/// The tier1-date regression pin (17-05 follow-up): a #-rooted parent
-/// NEVER consults — a registry attach's chan carries an EMPTY path, and
-/// the boot namespace's `bind -a /root /` owns the empty mount-table
-/// key.  Without the nomount bit, init's setenv("#e/timezone") create
-/// consulted the ROOT union and died on its members (no create), so
-/// the timezone env silently vanished and the tier1 date check fell
-/// from its accidental ctime(0)+garbage-timezone green to 1970 GMT.
+/// The tier1-date regression pin (17-05 follow-up, re-keyed 19-10): a
+/// #-rooted parent NEVER consults — the donor's nomount discipline for
+/// device-attach roots.  The pre-19-10 rationale (a registry attach's
+/// EMPTY path keying to the boot root's mount-table key under
+/// PATH-string keying — the tier1 timezone silence) is STRUCTURALLY
+/// GONE under identity keying: the devenv root chan and the boot root
+/// dir chan differ by dev, so no consult can collide regardless of the
+/// bit.  Both truths are pinned: the nomount arm still short-circuits,
+/// and the old collision counterfactual now creates cleanly (the
+/// identity consult finds no point at the devenv root and falls to the
+/// direct dispatch).
 #[test]
 fn create_chan_union_nomount_never_consults_the_root_key() {
     let _seam = seam_guard();
@@ -262,8 +266,8 @@ fn create_chan_union_nomount_never_consults_the_root_key() {
 
     let pg = Lock::new("pgrp-test", Pgrp::new());
     let slash = slash();
-    // The boot namespace's empty-key mount: `bind -a /root /` owns
-    // normalize("/") == "".
+    // The boot namespace's root mount: `bind -a /root /` over the slash
+    // chan (the donor's Mhead.from — the devroot root DIR chan).
     bind_locked(&pg, &slash, "#p", "/", pgrp::MAFTER).expect("bind #p MAFTER /");
 
     // The #-rooted parent: devenv's registry attach chan, EMPTY path.
@@ -278,14 +282,50 @@ fn create_chan_union_nomount_never_consults_the_root_key() {
     assert_eq!(created.dev, DEV_ENV);
     assert_eq!(devenv::write(&mut created, b"EST -18000", u64::MAX).expect("write"), 10);
 
-    // The collision the bit guards against, pinned as the counterfactual:
-    // WITHOUT the bit the same create consults the empty key's chain
-    // (underlying devroot + devproc — neither has a create op) and
-    // errors.  If this arm ever starts succeeding, the nomount bit has
-    // rotted and the boot chain's setenv("#e/…") is one regression
-    // away from silence.
-    let err = err_of(namec::create_chan_union(&parent, b"probe2", OWRITE, 0o664, &pg, false));
-    assert_eq!(err, "namec: device has no create", "the empty-key collision is real");
+    // The old path-key collision counterfactual, re-keyed to the
+    // identity truth: WITHOUT the bit the consult now finds no mount
+    // point at the devenv root's IDENTITY (dev mismatch — the root
+    // point's from is the devroot root dir chan) and the create flows
+    // to devenv directly.  If this arm ever errors again, path-shaped
+    // keying has crept back into the consults.
+    let mut probe = namec::create_chan_union(&parent, b"probe2", OWRITE, 0o664, &pg, false)
+        .expect("identity keying: no root-union consult for a #-rooted parent");
+    assert_eq!(probe.dev, DEV_ENV);
+    assert_eq!(devenv::write(&mut probe, b"x", u64::MAX).expect("write"), 1);
+}
+
+/// The devno discriminator (the donor eqchanddq triple): two mount
+/// points whose target chans share (dev, qid.path) but differ in devno
+/// are TWO points — two mounted 9P trees with colliding server qids
+/// never blur into one identity.  devmnt stamps each session's chans
+/// (mntalloc.id++); this pin holds the table half of that contract.
+#[test]
+fn mount_points_with_equal_qids_but_distinct_devno_stay_distinct() {
+    let pg = Lock::new("pgrp-test", Pgrp::new());
+    // Two synthetic target chans: same device index, same qid path,
+    // different devno (the shape two DEV_MNT sessions produce when
+    // their servers hand out colliding qids).  File-shaped both sides —
+    // an MREPL file bind (the profile's /dev/cons shape).
+    let mk = |devno: u32| {
+        let mut c = Chan::new(DEV_PROC, crate::dat::Qid { path: 0x42, vers: 0, typ: 0 }, 0);
+        c.devno = devno;
+        c
+    };
+    let src = || Chan::new(DEV_ROOT, crate::dat::Qid { path: 0x77, vers: 0, typ: 0 }, 0);
+    let t1 = mk(1);
+    let t2 = mk(2);
+    {
+        let node = LockNode::new();
+        let mut g = pg.lock(&node);
+        g.bind(src(), &t1, pgrp::MREPL).expect("bind at devno 1");
+        g.bind(src(), &t2, pgrp::MREPL).expect("bind at devno 2");
+    }
+    let node = LockNode::new();
+    let g = pg.lock(&node);
+    assert!(g.chain_snapshot(&t1).is_some(), "devno 1's point is consultable");
+    assert!(g.chain_snapshot(&t2).is_some(), "devno 2's point is consultable");
+    let plain = mk(3);
+    assert!(g.chain_snapshot(&plain).is_none(), "an unseen devno never matches either point");
 }
 
 // ---------------------------------------------------------------------------
@@ -421,6 +461,79 @@ fn create_chan_union_reaches_accepting_member() {
     let mut buf = [0u8; 32];
     let n = devenv::read(&mut key, &mut buf, u64::MAX).expect("read back");
     assert_eq!(&buf[..n as usize], b"union-value");
+}
+
+// ---------------------------------------------------------------------------
+// 19-10 Leg-1: the final-redirect hijack (the live-probed dual-cons defect)
+// ---------------------------------------------------------------------------
+
+/// The live-probed defect shape (evidence 19-10-leg1-livecons-probe.log):
+/// rio's winshell child mounts wsys at /mnt/wsys, `bind -b /mnt/wsys /dev`
+/// (union HEAD), then opens /dev/cons — and the cpu profile's
+/// `bind /mnt/term/dev/cons /dev/cons` REPL bind owns the FINAL path.
+/// namec's final-component redirect re-consulted the mount table BY PATH
+/// STRING at "/dev/cons" and replaced the correctly head-resolved wsys
+/// cons chan with the session terminal cons — the window's rc ran with
+/// fds 0/1/2 on the SESSION cons (prompt painted at the left over the
+/// desktop, keystrokes alternating between rio's keyboard reader and the
+/// hijacked rc).  The donor never re-crosses there: findmount keys mount
+/// points by the mount-point CHAN's identity (eqchanddq: dc, devno,
+/// qid.path — chan.c), and a file reached THROUGH a union member is a
+/// different chan.  This pin is the stand-in shape: devenv as the union
+/// head serving "cons", the kmsg file as the REPL-bind target.
+#[test]
+fn final_redirect_must_not_hijack_union_head_resolution() {
+    let _seam = seam_guard();
+    install_group_hook_once();
+    set_current_group(Arc::new(Lock::new("env", EnvGroup::new())));
+
+    let pg = Lock::new("pgrp-test", Pgrp::new());
+    let slash = slash();
+
+    // The session-cons stand-in: the profile's REPL bind at the FILE
+    // (bind /mnt/term/dev/cons /dev/cons) — kmsg plays the terminal cons.
+    bind_locked(&pg, &slash, "/dev/kmsg", "/dev/cons", pgrp::MREPL)
+        .expect("bind kmsg MREPL /dev/cons");
+
+    // The window-cons stand-in: an env var named cons under a devenv
+    // union head (bind -b '#e' /dev), exactly the live probe's shape.
+    let parent = namec::namec(b"#e", &slash, &slash, &pg, NamecMode::Open).expect("#e resolves");
+    let mut var = namec::create_chan(&parent, b"cons", OWRITE, 0o664).expect("env cons created");
+    assert_eq!(devenv::write(&mut var, b"HEAD-WINS", u64::MAX).expect("write"), 9);
+    bind_locked(&pg, &slash, "#e", "/dev", pgrp::MBEFORE).expect("bind #e MBEFORE /dev");
+
+    // The winshell open: /dev/cons through the union head.  The walk
+    // resolves "cons" via the devenv head (first-accepting); the final
+    // redirect must NOT re-cross the REPL bind at the same path.
+    let c = namec::namec(b"/dev/cons", &slash, &slash, &pg, NamecMode::Open)
+        .expect("/dev/cons resolves");
+    let opened = namec::open_chan(&c, OREAD).expect("open /dev/cons OREAD");
+    assert_eq!(opened.dev, DEV_ENV, "the union head's resolution must survive the final redirect");
+    let mut op = opened;
+    let mut buf = [0u8; 32];
+    let n = devenv::read(&mut op, &mut buf, 0).expect("read the env cons");
+    assert_eq!(&buf[..n as usize], b"HEAD-WINS");
+}
+
+/// The contrast shape (the session shell's own open): the REPL bind at
+/// the file must STILL cross when the final component resolves through
+/// the underlying directory — the identity match is the bind-time target
+/// chan itself.  The crossing is load-bearing (the cpu session's shell
+/// reads the terminal cons through exactly this redirect).
+#[test]
+fn repl_bind_final_cross_still_fires_without_union_head() {
+    let pg = Lock::new("pgrp-test", Pgrp::new());
+    let slash = slash();
+
+    // The bind-time target chan (the file the REPL bind shadows).
+    let kmsg = resolve(&pg, &slash, "/dev/kmsg").expect("/dev/kmsg resolves");
+    bind_locked(&pg, &slash, "/dev/kmsg", "/dev/cons", pgrp::MREPL)
+        .expect("bind kmsg MREPL /dev/cons");
+
+    let c = namec::namec(b"/dev/cons", &slash, &slash, &pg, NamecMode::Open)
+        .expect("/dev/cons resolves");
+    assert_eq!(c.dev, kmsg.dev, "the final redirect crosses into the REPL bind's head");
+    assert_eq!(c.qid.path, kmsg.qid.path, "the crossed chan IS the REPL-bound file");
 }
 
 /// The refusal arm: a member whose create op runs and FAILS propagates

@@ -14,6 +14,15 @@
 //! "subsequent mounts attach to the original directory") or chdir
 //! (Atodir).
 //!
+//! MOUNT CONSULTS ARE IDENTITY-KEYED (the donor findmount/eqchanddq
+//! shape, 19-10 Leg-1): a consult matches the CURRENT chan's identity
+//! (dev, devno, qid.path) against the mount table — never its path
+//! string.  A final component resolved THROUGH a union member is a
+//! different chan than the underlying file at the same path, so an
+//! unrelated bind over that path never hijacks the head's resolution
+//! (rio's winshell open of /dev/cons under a wsys union head, against
+//! the cpu profile's REPL bind of the terminal cons at /dev/cons).
+//!
 //! Errors are "namec: …"-prefixed static strings; device-layer errors
 //! propagate with their own "devX: …" prefixes.  The dat.rs `Dev` trait
 //! is NOT implemented here (its skeleton is non-constructible — see
@@ -229,7 +238,7 @@ fn namec_walk(
         } else {
             let node = LockNode::new();
             let guard = pg.lock(&node);
-            guard.chain_snapshot(&c.path)
+            guard.chain_snapshot(&c)
         };
         // "." is the devwalk Accept arm (9k dev.c devwalk:
         // `strcmp(n, ".") == 0` keeps the current qid) — AFTER the mount
@@ -289,11 +298,16 @@ fn namec_walk(
 
     // The final component's mount crossing (chan.c's namec tail):
     // open/stat-style resolution lands on the union head; bind targets and
-    // chdir stay before the mount point.  A DEV_MNT head is
-    // fid-CLONED (never bare-dup'd) — the redirect's open/close lifecycle
-    // must not touch the mount table's server-side fid (a bare dup let an
-    // open+close Tclunk the table's fid, and every later walk from it
-    // Rerror'd).  The
+    // chdir stay before the mount point.  The consult is IDENTITY-KEYED
+    // (findmount's eqchanddq — the CURRENT chan's dev/devno/qid.path, never
+    // its path string): a component resolved through a union member is not
+    // the underlying file, so a bind over the same PATH never hijacks it
+    // (19-10 Leg-1's dual-cons defect — the rio child's /dev/cons under the
+    // wsys head against the profile's REPL bind at /dev/cons).  A DEV_MNT
+    // head is fid-CLONED (never bare-dup'd) — the redirect's open/close
+    // lifecycle must not touch the mount table's server-side fid (a bare
+    // dup let an open+close Tclunk the table's fid, and every later walk
+    // from it Rerror'd).  The
     // consult snapshots under a per-consult lock, then drops it.
     if !nomount
         && mode != NamecMode::MountTarget
@@ -302,7 +316,7 @@ fn namec_walk(
         let chain = {
             let node = LockNode::new();
             let guard = pg.lock(&node);
-            guard.chain_snapshot(&c.path)
+            guard.chain_snapshot(&c)
         };
         if let Some(chain) = chain {
             let Some(head) = chain.first() else {
@@ -351,14 +365,12 @@ pub fn walk_one(c: &Chan, name: &[u8]) -> Result<Chan> {
 /// device (rc's `>` is create-first — the original #45 repro shape).
 ///
 /// `nomount` carries namec's `#`-arm bit (the donor's `walk(...,
-/// nomount)`): a #-rooted parent NEVER consults.  The empty-path
-/// collision this guards against is real and measured: a registry
-/// attach's chan (devenv's root, say) carries an EMPTY path, and
-/// `bind -a /root /` in the boot namespace mounts at the key that
-/// normalizes to empty — without the bit, every `setenv("#e/x", …)`
-/// create consulted the ROOT union instead of devenv and died on the
-/// paqfs member's refusal (the tier1 date regression: init's timezone
-/// cpenv silently failing).
+/// nomount)`): a #-rooted parent NEVER consults — the donor's discipline
+/// for device-attach roots.  (The 17-05 empty-path collision this bit
+/// guarded — a registry attach's empty path keying to the boot root's
+/// mount point — is STRUCTURALLY GONE under identity keying: a devenv
+/// root chan's identity differs from the boot root dir chan's by dev,
+/// so no consult can collide regardless; the bit stays donor-faithful.)
 pub fn walk_one_union(c: &Chan, name: &[u8], pg: &Lock<Pgrp>, nomount: bool) -> Result<Chan> {
     if nomount {
         return dev_walk(c, name);
@@ -366,7 +378,7 @@ pub fn walk_one_union(c: &Chan, name: &[u8], pg: &Lock<Pgrp>, nomount: bool) -> 
     let chain = {
         let node = LockNode::new();
         let guard = pg.lock(&node);
-        guard.chain_snapshot(&c.path)
+        guard.chain_snapshot(&c)
     };
     let Some(chain) = chain else {
         return dev_walk(c, name);
@@ -480,8 +492,9 @@ pub fn create_chan(c: &Chan, name: &[u8], mode: u32, perm: u32) -> Result<Chan> 
 /// here would refuse every boot-chain create through a mount).
 ///
 /// `nomount` is namec's `#`-arm bit (see walk_one_union): a #-rooted
-/// parent (an empty-path registry attach chan) never consults — the
-/// boot namespace's `bind -a /root /` owns the empty mount-table key.
+/// parent never consults (the donor's discipline for device-attach
+/// roots; the pre-19-10 empty-path-key collision it guarded against is
+/// structurally gone under identity keying — see walk_one_union's note).
 pub fn create_chan_union(
     c: &Chan,
     name: &[u8],
@@ -496,7 +509,7 @@ pub fn create_chan_union(
     let chain = {
         let node = LockNode::new();
         let guard = pg.lock(&node);
-        guard.chain_snapshot(&c.path)
+        guard.chain_snapshot(&c)
     };
     let Some(chain) = chain else {
         return create_chan(c, name, mode, perm);

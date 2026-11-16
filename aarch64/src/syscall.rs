@@ -684,19 +684,18 @@ fn sys_chdir(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 }
 
 /// UNMOUNT(35): name, old (boot's settime /tmp
-/// handling).  9k sysunmount + cunmount: the mount point resolves WITHOUT
-/// the redirect (Amount semantics); old == nil removes the whole mount
-/// point, otherwise only the chain entry whose mounted chan matches old's
-/// identity.  "Not a mount point" / "not in the union" are loud errors.
+/// handling).  9k sysunmount + cunmount, the donor arg shape (sysfile.c):
+/// `old` (arg 1) is the MOUNT POINT, resolved Amount (no final redirect);
+/// `name` (arg 0) is the MOUNTED SOURCE, resolved Aopen/OREAD (opening
+/// is the only way at the real Chan for /srv/cs-style names); name == nil
+/// removes the whole mount point.  "Not a mount point" / "not in the
+/// union" are loud errors.  (The pre-19-10 shape resolved the args with
+/// swapped modes; aligned to the donor with the identity-keyed consults.)
 fn sys_unmount(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 2) else {
         return err(proc, "unmount: bad argument block");
     };
     let (name_va, old_va) = (args[0], args[1]);
-    let name = match copy_user_str(proc, name_va, ERRMAX) {
-        Ok(s) => s,
-        Err(msg) => return err(proc, msg),
-    };
 
     let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
         return err(proc, "unmount: no namespace (pre-exec)");
@@ -704,26 +703,49 @@ fn sys_unmount(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     // Both resolves run WITHOUT the pgrp lock held (namec's
     // per-consult snapshots); the lock covers the mount-table REMOVAL
     // only.
-    let tgt = match namec::namec(&name, slash, dot, &proc.pgrp, NamecMode::MountTarget) {
+    let old = match copy_user_str(proc, old_va, ERRMAX) {
+        Ok(s) => s,
+        Err(msg) => return err(proc, msg),
+    };
+    let tgt = match namec::namec(&old, slash, dot, &proc.pgrp, NamecMode::MountTarget) {
         Ok(c) => c,
         Err(msg) => return err(proc, msg),
     };
-    let from = if old_va == 0 {
+    let from = if name_va == 0 {
         None
     } else {
-        let old = match copy_user_str(proc, old_va, ERRMAX) {
+        let name = match copy_user_str(proc, name_va, ERRMAX) {
             Ok(s) => s,
-            Err(msg) => return err(proc, msg),
+            Err(msg) => {
+                port::namec::close_chan(&tgt);
+                return err(proc, msg);
+            }
         };
-        match namec::namec(&old, slash, dot, &proc.pgrp, NamecMode::BindSource) {
-            Ok(c) => Some(c),
-            Err(msg) => return err(proc, msg),
+        // Aopen: walk with the final redirect, then open OREAD — the
+        // opened chan is the chan identity cunmount matches against.
+        let walked = match namec::namec(&name, slash, dot, &proc.pgrp, NamecMode::Open) {
+            Ok(c) => c,
+            Err(msg) => {
+                port::namec::close_chan(&tgt);
+                return err(proc, msg);
+            }
+        };
+        match namec::open_chan(&walked, port::dat::OREAD) {
+            Ok(opened) => {
+                port::namec::close_chan(&walked);
+                Some(opened)
+            }
+            Err(msg) => {
+                port::namec::close_chan(&walked);
+                port::namec::close_chan(&tgt);
+                return err(proc, msg);
+            }
         }
     };
     let pg = proc.pgrp.clone();
     let node = LockNode::new();
     let mut guard = pg.lock(&node);
-    let result = guard.unmount(&tgt.path, from.as_ref());
+    let result = guard.unmount(&tgt, from.as_ref());
     drop(guard);
     // The resolved chans are never installed —
     // close-dispatch them (clunk_if_last's count check protects any
@@ -1431,7 +1453,7 @@ fn sys_create(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             let chain = {
                 let node = LockNode::new();
                 let guard = proc.pgrp.lock(&node);
-                guard.chain_snapshot(&d.path)
+                guard.chain_snapshot(&d)
             };
             if let Some(chain) = chain {
                 let Some(head) = chain.first() else {

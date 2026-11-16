@@ -7,6 +7,20 @@
 //! MAFTER binds (bind order); MREPL replaces the whole chain.  The frozen
 //! M* flag values are re-exported from dat.rs.
 //!
+//! The mount point is keyed by the mount-point CHAN's IDENTITY — the
+//! donor findmount/eqchanddq shape (chan.c: `eqchanddq(mh->from, dc,
+//! devno, qid, 1)` over the MOUNTH(qid) hash): (dev, devno, qid.path).
+//! A file reached THROUGH a union member is a DIFFERENT chan (its own
+//! devno for a mounted tree, the server's qid) and never re-crosses a
+//! mount bound over the underlying file at the same path.  Path-string
+//! keying — the pre-19-10 shape — hijacked exactly that: rio's winshell
+//! child resolved /dev/cons through the wsys union head, and the final
+//! redirect re-consulted "/dev/cons" BY PATH, finding the cpu profile's
+//! REPL bind of the terminal cons — the window's rc ran on the session
+//! cons (the dual-cons-reader defect, live-probed 2026-11-16).
+//! `Chan::devno` is the instance discriminator (devmnt stamps each 9P
+//! session — the donor's mntalloc.id++).
+//!
 //! The group is shared state: Proc holds it as `Arc<Lock<Pgrp>>` (the arch
 //! side's wiring), and the rfork flag semantics follow fork(2) — neither
 //! RFNAMEG nor RFCNAMEG (with RFPROC) shares the handle, RFNAMEG
@@ -26,11 +40,13 @@ use crate::Result;
 /// cmount's QTDIR-xor check needs.
 const QTDIR: u8 = 0x80;
 
-/// A mount point (the donor's Mhead): the normalized target path plus its
-/// ordered union chain.
+/// A mount point (the donor's Mhead): the mount-point chan (identity
+/// key + the chain's underlying member) plus its ordered union chain.
 struct MountPoint {
-    /// Normalized absolute target path ("" = the root; no trailing '/').
-    target: Vec<u8>,
+    /// The mount-point chan — the donor's `mh->from`.  IDENTITY of the
+    /// point (findmount's eqchanddq key: dev, devno, qid.path) and the
+    /// underlying-directory member in one value.
+    from: Chan,
     /// The union chain in 9k order (see the module header).
     chain: Vec<MountEntry>,
 }
@@ -42,25 +58,10 @@ pub struct Pgrp {
     next_mountid: u64,
 }
 
-/// Normalize a target path to the table's key shape: strip trailing '/'
-/// (the root normalizes to "", matching devroot's root-chan path
-/// convention — components append "/"+name from there).
-fn normalize(path: &[u8]) -> Vec<u8> {
-    let mut p = path;
-    while p.len() > 1 && p.last() == Some(&b'/') {
-        p = &p[..p.len() - 1];
-    }
-    if p == b"/" {
-        return Vec::new();
-    }
-    p.to_vec()
-}
-
-/// Chan identity for unmount matching (9k eqchan, skipvers): the device
-/// index plus qid path and type.  Path strings are NOT identity (two names
-/// can reach one file through a union).
-fn same_chan(a: &Chan, b: &Chan) -> bool {
-    a.dev == b.dev && a.qid.path == b.qid.path && a.qid.typ == b.qid.typ
+/// Chan identity for mount-table matching (9k eqchanddq with skipvers:
+/// dev, devno, qid.path — vers and the qid type byte are not identity).
+fn same_point(a: &Chan, b: &Chan) -> bool {
+    a.dev == b.dev && a.devno == b.devno && a.qid.path == b.qid.path
 }
 
 impl Pgrp {
@@ -73,6 +74,11 @@ impl Pgrp {
     /// replaces the chain; the first non-MREPL bind at a point adds the
     /// underlying directory to the chain; MBEFORE head-inserts; MAFTER
     /// appends.  Returns the new mount id.
+    ///
+    /// The point is found by the TARGET chan's identity (cmount's
+    /// eqchan(mhead->from, old, 1) — never by path: two binds at the
+    /// same path whose target walks land on different chans are two
+    /// mount points, the donor's semantics).
     ///
     /// The target must already exist (the caller resolves it via namec
     /// first — Pitfall-8: MCREATE permits later creation IN the mounted
@@ -87,7 +93,6 @@ impl Pgrp {
         if !target_dir && order != MREPL {
             return Err("bind: union mount of a non-directory");
         }
-        let key = normalize(&target.path);
         let id = self.next_mountid;
         self.next_mountid += 1;
         let entry = MountEntry { to: from, mflag: flag & MCREATE, mountid: id };
@@ -96,33 +101,37 @@ impl Pgrp {
                 // cmount: mountfree the whole chain; the underlying
                 // directory is NOT carried (a replaced point shadows
                 // everything, including the dir it was bound over).
-                let replaced = MountPoint { target: key, chain: alloc::vec![entry] };
-                if let Some(i) = self.mounts.iter().position(|m| m.target == replaced.target) {
+                let replaced = MountPoint { from: target.dup(), chain: alloc::vec![entry] };
+                if let Some(i) = self.mounts.iter().position(|m| same_point(&m.from, target)) {
                     self.mounts[i] = replaced;
                 } else {
                     self.mounts.push(replaced);
                 }
             }
             MBEFORE => {
-                if let Some(mp) = self.mounts.iter_mut().find(|m| m.target == key) {
+                if let Some(mp) = self.mounts.iter_mut().find(|m| same_point(&m.from, target)) {
                     // Head insertion (latest MBEFORE resolves first).
                     mp.chain.insert(0, entry);
                 } else {
                     // First bind here: the underlying directory joins the
                     // union after the mounted chan (cmount's newmount(mhead,
                     // old, 0, 0)).
-                    let underlying =
-                        MountEntry { to: target.dup(), mflag: 0, mountid: 0 };
-                    self.mounts.push(MountPoint { target: key, chain: alloc::vec![entry, underlying] });
+                    let underlying = MountEntry { to: target.dup(), mflag: 0, mountid: 0 };
+                    self.mounts.push(MountPoint {
+                        from: target.dup(),
+                        chain: alloc::vec![entry, underlying],
+                    });
                 }
             }
             MAFTER => {
-                if let Some(mp) = self.mounts.iter_mut().find(|m| m.target == key) {
+                if let Some(mp) = self.mounts.iter_mut().find(|m| same_point(&m.from, target)) {
                     mp.chain.push(entry);
                 } else {
-                    let underlying =
-                        MountEntry { to: target.dup(), mflag: 0, mountid: 0 };
-                    self.mounts.push(MountPoint { target: key, chain: alloc::vec![underlying, entry] });
+                    let underlying = MountEntry { to: target.dup(), mflag: 0, mountid: 0 };
+                    self.mounts.push(MountPoint {
+                        from: target.dup(),
+                        chain: alloc::vec![underlying, entry],
+                    });
                 }
             }
             _ => return Err("bind: bad order bits"),
@@ -132,11 +141,10 @@ impl Pgrp {
 
     /// unmount(name, old) (9k cunmount): `from` None removes the whole
     /// mount point; Some(chan) removes only the chain entry whose mounted
-    /// chan matches that identity.  Errors when nothing is mounted there
-    /// or the named entry is not in the union.
-    pub fn unmount(&mut self, target_path: &[u8], from: Option<&Chan>) -> Result<()> {
-        let key = normalize(target_path);
-        let Some(i) = self.mounts.iter().position(|m| m.target == key) else {
+    /// chan matches that identity.  Errors when nothing is mounted at
+    /// the target or the named entry is not in the union.
+    pub fn unmount(&mut self, target: &Chan, from: Option<&Chan>) -> Result<()> {
+        let Some(i) = self.mounts.iter().position(|m| same_point(&m.from, target)) else {
             return Err("unmount: not a mount point");
         };
         match from {
@@ -148,7 +156,7 @@ impl Pgrp {
                 let mp = &mut self.mounts[i];
                 // The underlying-directory chain entry (mountid 0) is not
                 // removable by name — cunmount removes mounted chans.
-                let Some(j) = mp.chain.iter().position(|e| e.mountid != 0 && same_chan(&e.to, c))
+                let Some(j) = mp.chain.iter().position(|e| e.mountid != 0 && same_point(&e.to, c))
                 else {
                     return Err("unmount: name not in union");
                 };
@@ -173,7 +181,7 @@ impl Pgrp {
                 .mounts
                 .iter()
                 .map(|mp| MountPoint {
-                    target: mp.target.clone(),
+                    from: mp.from.dup(),
                     chain: mp
                         .chain
                         .iter()
@@ -185,22 +193,22 @@ impl Pgrp {
         }
     }
 
-    /// namec's mount consult: the ordered union chain at a walked path,
-    /// if the path is a mount point.
-    pub fn chain_at(&self, path: &[u8]) -> Option<&[MountEntry]> {
-        let key = normalize(path);
-        self.mounts.iter().find(|m| m.target == key).map(|m| m.chain.as_slice())
+    /// namec's mount consult: the ordered union chain at a walked chan,
+    /// if that chan is a mount point (findmount by identity — never by
+    /// path; see the module header).
+    pub fn chain_at(&self, c: &Chan) -> Option<&[MountEntry]> {
+        self.mounts.iter().find(|m| same_point(&m.from, c)).map(|m| m.chain.as_slice())
     }
 
-    /// A COPY of the union chain at `path` (the snapshot discipline):
+    /// A COPY of the union chain at `c` (the snapshot discipline):
     /// namec consults the mount table under the pgrp lock, drops the lock,
     /// then walks — the lock is never held across a device walk that can
     /// RPC (a devmnt Twalk blocks mid-syscall; a 9P server proc sharing
     /// this pgrp that takes the lock while serving would deadlock the
     /// system).  Chan copies ride dup() (the pipe open-end reference
     /// rule), deep_copy's shape.
-    pub fn chain_snapshot(&self, path: &[u8]) -> Option<Vec<MountEntry>> {
-        self.chain_at(path).map(|chain| {
+    pub fn chain_snapshot(&self, c: &Chan) -> Option<Vec<MountEntry>> {
+        self.chain_at(c).map(|chain| {
             chain
                 .iter()
                 .map(|e| MountEntry { to: e.to.dup(), mflag: e.mflag, mountid: e.mountid })

@@ -113,6 +113,14 @@ pub struct Chan {
     pub offset: u64,
     /// Device-table index of the serving device (DEV_ROOT / DEV_CONS).
     pub dev: usize,
+    /// The donor's `c->devno` (chan.c): the DEVICE-INSTANCE discriminator
+    /// mount-table identity needs.  0 for every single-instance device;
+    /// devmnt stamps each 9P session with its own id (the donor's
+    /// devmnt.c `c->devno = mntalloc.id++`) so two mounted trees whose
+    /// servers hand out colliding qids never blur into one identity —
+    /// eqchanddq's (dc, devno, qid.path) triple, the mount-consult key
+    /// (19-10 Leg-1: the path-keyed consult hijacked rio's window cons).
+    pub devno: u32,
     /// Walked-path bookkeeping (device-maintained; for diagnostics/walks).
     pub path: Vec<u8>,
     /// Private devroot slot: the paqfs entry this chan currently names.
@@ -158,7 +166,7 @@ pub struct Chan {
 
 impl Chan {
     pub fn new(dev: usize, qid: Qid, mode: u32) -> Chan {
-        Chan { qid, mode, offset: 0, dev, path: Vec::new(), paqdir: None, pipe: None, copen: false, mnt: None, mnt_fid: None, iounit: 0 }
+        Chan { qid, mode, offset: 0, dev, devno: 0, path: Vec::new(), paqdir: None, pipe: None, copen: false, mnt: None, mnt_fid: None, iounit: 0 }
     }
 
     /// Mark the chan open (COPEN) OUTSIDE the funnel — the one
@@ -221,6 +229,7 @@ impl Chan {
             mode: self.mode,
             offset: self.offset,
             dev: self.dev,
+            devno: self.devno,
             path: self.path.clone(),
             paqdir: self.paqdir.clone(),
             pipe: self.pipe.clone(),
@@ -246,6 +255,7 @@ impl Chan {
             mode: self.mode,
             offset: self.offset,
             dev: self.dev,
+            devno: self.devno,
             path: self.path.clone(),
             paqdir: self.paqdir.clone(),
             pipe: self.pipe.clone(),

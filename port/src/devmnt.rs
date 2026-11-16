@@ -356,7 +356,16 @@ pub struct Mnt {
     /// The negotiated version string (answered on re-version, the donor's
     /// c->mux replay in mntversion) — set-once, frozen.
     version: Vec<u8>,
+    /// The session's device-instance id (the donor devmnt.c
+    /// `c->devno = mntalloc.id++`): every chan this session mints carries
+    /// it, making the mount-consult identity (dev, devno, qid.path —
+    /// eqchanddq) unique per mounted tree even when two servers hand out
+    /// colliding qids (19-10 Leg-1's identity keying).
+    id: u32,
 }
+
+/// The mount-session id sequence — 9k's mntalloc.id.
+static NEXT_MNT_ID: Lock<u32> = Lock::new("mntid", 1);
 
 impl core::fmt::Debug for Mnt {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -658,6 +667,13 @@ impl Mnt {
             queue: Lock::new("mntqueue", VecDeque::new()),
             msize: offer, // the handshake's bound is the offer itself
             version: Vec::new(),
+            id: {
+                let node = LockNode::new();
+                let mut g = NEXT_MNT_ID.lock(&node);
+                let id = *g;
+                *g += 1;
+                id
+            },
         };
         let mut body = Vec::new();
         pw32(&mut body, offer);
@@ -1003,6 +1019,7 @@ pub fn attach(mnt: &Arc<Mnt>, aname: &[u8]) -> Result<Chan> {
     let mut c = Chan::new(DEV_MNT, qid, 0);
     c.mnt = Some(mnt.clone());
     c.mnt_fid = Some(Arc::new(fid));
+    c.devno = mnt.id;
     Ok(c)
 }
 
@@ -1019,6 +1036,7 @@ pub fn walk(c: &Chan, name: &[u8]) -> Result<Chan> {
     let mut nc = Chan::new(DEV_MNT, qid, 0);
     nc.mnt = Some(mnt.clone());
     nc.mnt_fid = Some(Arc::new(newfid));
+    nc.devno = mnt.id;
     nc.path = c.path.clone();
     nc.path.push(b'/');
     nc.path.extend_from_slice(name);
@@ -1040,6 +1058,7 @@ pub fn clone_chan(c: &Chan) -> Result<Chan> {
     let mut nc = Chan::new(DEV_MNT, c.qid, c.mode);
     nc.mnt = Some(mnt.clone());
     nc.mnt_fid = Some(Arc::new(newfid));
+    nc.devno = mnt.id;
     nc.path = c.path.clone();
     Ok(nc)
 }
@@ -1064,6 +1083,7 @@ pub fn open(c: &Chan, mode: u32) -> Result<Chan> {
     let mut nc = Chan::new(DEV_MNT, qid, access);
     nc.mnt = Some(mnt.clone());
     nc.mnt_fid = c.mnt_fid.clone();
+    nc.devno = mnt.id;
     nc.path = c.path.clone();
     // The donor's c->iounit = reply.iounit (clamped) — mnt.open already
     // clamped (0 or over-cap → the cap), so the opened chan carries the
@@ -1168,6 +1188,7 @@ pub fn create(c: &Chan, name: &[u8], mode: u32, perm: u32) -> Result<Chan> {
     let mut nc = Chan::new(DEV_MNT, qid, mode & OMASK);
     nc.mnt = Some(mnt.clone());
     nc.mnt_fid = Some(Arc::new(newfid));
+    nc.devno = mnt.id;
     nc.path = c.path.clone();
     nc.path.push(b'/');
     nc.path.extend_from_slice(name);

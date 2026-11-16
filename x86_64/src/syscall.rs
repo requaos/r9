@@ -615,42 +615,66 @@ fn sys_chdir(frame: &mut Ureg, proc: &mut Proc) -> u64 {
     0
 }
 
-/// UNMOUNT(35): name, old.  The mount point resolves WITHOUT the
-/// redirect; old == nil removes the whole mount point, otherwise only
-/// the chain entry whose mounted chan matches old's identity.
+/// UNMOUNT(35): name, old — the donor sysunmount shape (sysfile.c):
+/// `old` (arg 1) is the MOUNT POINT, resolved Amount (no final
+/// redirect); `name` (arg 0) is the MOUNTED SOURCE, resolved
+/// Aopen/OREAD — "if arg[0] is something like /srv/cs or /fd/0, opening
+/// it is the only way to get at the real Chan underneath" — and name ==
+/// nil removes the whole mount point.  (The pre-19-10 shape resolved
+/// the two args with swapped modes — name→Amount, old→Abind — so every
+/// named unmount failed; live-probed 2026-11-16, `unmount '#e' /dev`.)
 fn sys_unmount(frame: &mut Ureg, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 2) else {
         return err(proc, "unmount: bad argument block");
     };
     let (name_va, old_va) = (args[0], args[1]);
-    let name = match copy_user_str(proc, name_va, ERRMAX) {
-        Ok(s) => s,
-        Err(msg) => return err(proc, msg),
-    };
 
     let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
         return err(proc, "unmount: no namespace (pre-exec)");
     };
-    let tgt = match namec::namec(&name, slash, dot, &proc.pgrp, NamecMode::MountTarget) {
+    let old = match copy_user_str(proc, old_va, ERRMAX) {
+        Ok(s) => s,
+        Err(msg) => return err(proc, msg),
+    };
+    let tgt = match namec::namec(&old, slash, dot, &proc.pgrp, NamecMode::MountTarget) {
         Ok(c) => c,
         Err(msg) => return err(proc, msg),
     };
-    let from = if old_va == 0 {
+    let from = if name_va == 0 {
         None
     } else {
-        let old = match copy_user_str(proc, old_va, ERRMAX) {
+        let name = match copy_user_str(proc, name_va, ERRMAX) {
             Ok(s) => s,
-            Err(msg) => return err(proc, msg),
+            Err(msg) => {
+                port::namec::close_chan(&tgt);
+                return err(proc, msg);
+            }
         };
-        match namec::namec(&old, slash, dot, &proc.pgrp, NamecMode::BindSource) {
-            Ok(c) => Some(c),
-            Err(msg) => return err(proc, msg),
+        // Aopen: walk with the final redirect, then open OREAD — the
+        // opened chan is the chan identity cunmount matches against.
+        let walked = match namec::namec(&name, slash, dot, &proc.pgrp, NamecMode::Open) {
+            Ok(c) => c,
+            Err(msg) => {
+                port::namec::close_chan(&tgt);
+                return err(proc, msg);
+            }
+        };
+        match namec::open_chan(&walked, port::dat::OREAD) {
+            Ok(opened) => {
+                port::namec::close_chan(&walked);
+                Some(opened)
+            }
+            Err(msg) => {
+                port::namec::close_chan(&walked);
+                port::namec::close_chan(&tgt);
+                return err(proc, msg);
+            }
         }
     };
     let pg = proc.pgrp.clone();
     let node = LockNode::new();
     let mut guard = pg.lock(&node);
-    let result = guard.unmount(&tgt.path, from.as_ref());
+    let result = guard.unmount(&tgt, from.as_ref());
     drop(guard);
     port::namec::close_chan(&tgt);
     if let Some(f) = &from {
@@ -1396,12 +1420,10 @@ fn sys_create(frame: &mut Ureg, proc: &mut Proc) -> u64 {
         return err(proc, "create: no namespace (pre-exec)");
     };
     // namec's `#`-arm bit, re-derived here for the final-component
-    // probe/create twins: a #-rooted parent (an empty-path registry
-    // attach chan) NEVER consults the mount table — the boot
-    // namespace's `bind -a /root /` owns the empty mount-table key a
-    // registry attach's path would collide with (the tier1 date
-    // regression: setenv("#e/timezone") consulting the ROOT union and
-    // dying on the paqfs member's refusal).
+    // probe/create twins: a #-rooted parent (a registry attach chan)
+    // NEVER consults the mount table — the donor's nomount discipline
+    // for device-attach roots (the pre-19-10 empty-path-key collision
+    // note is moot under identity keying; the bit stays donor-faithful).
     let nomount = path[0] == b'#';
     let parent = match split {
         Some(0) => namec::namec(b"/", slash, dot, &proc.pgrp, NamecMode::Open),
@@ -1412,7 +1434,7 @@ fn sys_create(frame: &mut Ureg, proc: &mut Proc) -> u64 {
             let chain = {
                 let node = LockNode::new();
                 let guard = proc.pgrp.lock(&node);
-                guard.chain_snapshot(&d.path)
+                guard.chain_snapshot(&d)
             };
             if let Some(chain) = chain {
                 let Some(head) = chain.first() else {
