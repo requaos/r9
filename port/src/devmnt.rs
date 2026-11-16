@@ -1106,15 +1106,19 @@ pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
     let cap = rpc_data_cap(mnt.msize());
     let mut off = if offset == u64::MAX { c.offset } else { offset };
     let mut done = 0usize;
-    while done < buf.len() {
+    // Do-while, the write loop's donor-faithful shape (mntrdwr runs at
+    // least one rpc — a zero-length request is a real protocol event).
+    loop {
         let want = (buf.len() - done).min(cap);
         let data = mnt.read(**fid, off, want as u32)?;
         let n = data.len();
         buf[done..done + n].copy_from_slice(&data);
         off += n as u64;
         done += n;
-        if n < want {
-            break; // a short reply = EOF (the donor mntrdwr break)
+        if n < want || done == buf.len() {
+            // a short reply = EOF (the donor break); done == len covers
+            // the zero-length first pass.
+            break;
         }
     }
     if offset == u64::MAX {
@@ -1138,13 +1142,23 @@ pub fn write(c: &mut Chan, buf: &[u8], offset: u64) -> Result<u64> {
     let cap = rpc_data_cap(mnt.msize());
     let mut off = if offset == u64::MAX { c.offset } else { offset };
     let mut done = 0usize;
-    while done < buf.len() {
+    // The donor mntrdwr is a do-while: AT LEAST ONE rpc goes out even
+    // for a ZERO-LENGTH write (request.count = 0) — the server OBSERVES
+    // the empty write and some devices carry semantics on exactly that
+    // event (drawterm's devmouse Qcursor: n < 72 is the ARROW RESET —
+    // libdraw setcursor(nil) writes 0 bytes; a skip-when-empty loop
+    // swallowed it and the cursor stuck at the last contextual shape:
+    // the 19-10 Leg-1 cont-5 owner report, no zero-length Qcursor ever
+    // observed host-side across every retained trace).
+    loop {
         let take = (buf.len() - done).min(cap);
         let wrote = mnt.write(**fid, off, &buf[done..done + take])? as usize;
         off += wrote as u64;
         done += wrote;
-        if wrote < take {
-            break; // a short reply = the server's fill point (the donor break)
+        if wrote < take || done == buf.len() {
+            // a short reply = the server's fill point; done == len
+            // covers the zero-length case (0 == 0 on the first pass).
+            break;
         }
     }
     if offset == u64::MAX {

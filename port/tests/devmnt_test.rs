@@ -125,7 +125,9 @@ const TOPEN: u8 = 112;
 const ROPEN: u8 = 113;
 const TREAD: u8 = 116;
 const RREAD: u8 = 117;
+const TWRITE: u8 = 118;
 const TCLUNK: u8 = 120;
+const RWRITE: u8 = 119;
 const RCLUNK: u8 = 121;
 const TSTAT: u8 = 124;
 const RSTAT: u8 = 125;
@@ -185,6 +187,10 @@ struct FakeServer {
     /// 261104-b4p (item 5): the Tclunk record — EVERY clunked fid, in
     /// order (the exactly-once assertions read this, not just the table).
     clunked: Rc<RefCell<Vec<u32>>>,
+    /// 19-10 cont-5: EVERY observed Twrite's data, in order — the
+    /// zero-count Twrite pin reads this (the server OBSERVES empty
+    /// writes; a skip-when-empty client loop never appears here).
+    writes: Rc<RefCell<Vec<Vec<u8>>>>,
     /// The server's msize answer cap (rversion: min(offer, this)).
     server_msize: u32,
     /// Malformation knobs (T-05-13's rejection proofs):
@@ -198,13 +204,26 @@ struct FakeServer {
 
 impl FakeServer {
     fn new() -> (FakeServer, Rc<RefCell<HashMap<u32, u64>>>, Rc<RefCell<Vec<u32>>>) {
+        let (f, fids, clunked, _writes) = FakeServer::new_with_writes();
+        (f, fids, clunked)
+    }
+
+    /// 19-10 cont-5: the writes-log variant (the zero-count Twrite pin).
+    fn new_with_writes() -> (
+        FakeServer,
+        Rc<RefCell<HashMap<u32, u64>>>,
+        Rc<RefCell<Vec<u32>>>,
+        Rc<RefCell<Vec<Vec<u8>>>>,
+    ) {
         let fids = Rc::new(RefCell::new(HashMap::new()));
         let clunked = Rc::new(RefCell::new(Vec::new()));
+        let writes = Rc::new(RefCell::new(Vec::new()));
         (
             FakeServer {
                 outq: VecDeque::new(),
                 fids: Rc::clone(&fids),
                 clunked: Rc::clone(&clunked),
+                writes: Rc::clone(&writes),
                 server_msize: 8192,
                 inflate_msize: false,
                 size_boost: 0,
@@ -215,6 +234,7 @@ impl FakeServer {
             },
             fids,
             clunked,
+            writes,
         )
     }
 
@@ -358,6 +378,20 @@ impl FakeServer {
                 body.extend_from_slice(&stat);
                 self.finish(RSTAT, tag, &body)
             }
+            TWRITE => {
+                let fid = c.u32();
+                let _off = c.u64();
+                let count = c.u32();
+                let start = c.p;
+                let data = msg[start..start + count as usize].to_vec();
+                if !self.fids.borrow().contains_key(&fid) {
+                    return self.rerror(tag, b"fid not found");
+                }
+                self.writes.borrow_mut().push(data);
+                let mut body = Vec::new();
+                pu32(&mut body, count);
+                self.finish(RWRITE, tag, &body)
+            }
             TCLUNK => {
                 let fid = c.u32();
                 self.fids.borrow_mut().remove(&fid);
@@ -418,6 +452,46 @@ fn session_with_clunk_log() -> (Mnt, Rc<RefCell<HashMap<u32, u64>>>, Rc<RefCell<
     let (r, w) = fake.split();
     let mnt = Mnt::negotiate(r, w, 0).expect("the version handshake negotiates");
     (mnt, fids, clunked)
+}
+
+// ---------------------------------------------------------------------------
+// 19-10 Leg-1 cont 5: the zero-count Twrite (the cursor-arrow revert)
+// ---------------------------------------------------------------------------
+
+/// The donor mntrdwr is a do-while: even a ZERO-LENGTH write sends one
+/// Twrite with count=0, and the SERVER observes it — drawterm's devmouse
+/// Qcursor carries the arrow reset on exactly that event (libdraw
+/// setcursor(nil) writes 0 bytes).  A skip-when-empty client loop
+/// returns Ok(0) having sent NOTHING: the cursor sticks at the last
+/// contextual shape (the owner's live report — no zero-length Qcursor
+/// write ever observed host-side across every retained trace).
+#[test]
+fn zero_length_write_sends_the_zero_count_twrite() {
+    let (fake, fids, _clunked, writes) = FakeServer::new_with_writes();
+    let (r, w) = fake.split();
+    let mnt = Mnt::negotiate(r, w, 0).expect("negotiate");
+    let root = devmnt::attach(&Arc::new(mnt), b"").expect("attach");
+    // open top.txt OWRITE (the fake's tree's plain file)
+    let leaf = devmnt::walk(&root, b"top.txt").expect("walk top.txt");
+    let mut chan = devmnt::open(&leaf, 2 /* OWRITE */).expect("open OWRITE");
+
+    // The zero-length write: Ok(0) AND the server saw ONE empty Twrite.
+    let n = devmnt::write(&mut chan, &[], u64::MAX).expect("zero-length write");
+    assert_eq!(n, 0, "the byte count is 0");
+    let log = writes.borrow();
+    assert_eq!(
+        log.len(),
+        1,
+        "the server must OBSERVE the zero-count Twrite (the donor do-while)"
+    );
+    assert!(log[0].is_empty(), "the observed Twrite carries count=0");
+
+    // A follow-up non-empty write lands as its own Twrite (order kept).
+    drop(log);
+    devmnt::write(&mut chan, b"xy", u64::MAX).expect("2-byte write");
+    assert_eq!(writes.borrow().len(), 2);
+    assert_eq!(writes.borrow()[1].as_slice(), b"xy");
+    let _ = fids; // session fid table lives as long as the assertions
 }
 
 // ---------------------------------------------------------------------------
