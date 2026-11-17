@@ -1,5 +1,5 @@
 //! The cross-repo trap-frame drift gate, dual-arch (D-02b).  Parses
-//! the frozen `aarch64/include/ureg.h` AND `amd64/include/ureg.h` in
+//! the frozen `arm64/include/ureg.h` AND `amd64/include/ureg.h` in
 //! the Harvey checkout named by R9_HARVEY_DIR and asserts the Ureg
 //! field names/order/count match the pinned tables r9's TrapFrame and
 //! x86_64 Ureg are built against (aarch64/ABI.md and amd64/ABI.md
@@ -77,7 +77,7 @@ pub fn harvey_dir() -> Result<PathBuf> {
     match env::var("R9_HARVEY_DIR") {
         Ok(dir) if !dir.is_empty() => Ok(PathBuf::from(dir)),
         _ => Err("R9_HARVEY_DIR is not set — point it at the Harvey checkout (it must contain \
-             aarch64/include/ureg.h and amd64/include/ureg.h, and for the initrd bake \
+             arm64/include/ureg.h and amd64/include/ureg.h, and for the initrd bake \
              build/aarch64/smoke-out/ plus .build/bin/mkpaqfs); r9's xtask no longer defaults \
              to a sibling ../harvey checkout (05-CONTEXT D-10)"
             .into()),
@@ -94,7 +94,7 @@ pub fn run_check() -> Result<CheckStatus> {
     let dir = harvey_dir()?;
 
     // Arm 1: aarch64 (frozen at the v2.0 pin — checked, not changed).
-    let header = dir.join("aarch64/include/ureg.h");
+    let header = dir.join("arm64/include/ureg.h");
     let mut aarch64 = CheckStatus::SkippedNoHarvey;
     if !header.exists() {
         println!(
@@ -107,7 +107,7 @@ pub fn run_check() -> Result<CheckStatus> {
         compare_to_pinned(&text).map_err(|diff| -> DynError {
             format!("ureg-check: ureg.h drift detected in {}:\n{diff}", header.display()).into()
         })?;
-        println!("ureg-check: 35 fields match aarch64/include/ureg.h");
+        println!("ureg-check: 35 fields match arm64/include/ureg.h");
         aarch64 = CheckStatus::Match;
     }
 
@@ -143,12 +143,12 @@ pub fn run_check() -> Result<CheckStatus> {
 /// The boot-test precondition: drift fails the run, and so does an
 /// unset or headerless Harvey checkout — the cross-repo gate is the
 /// point of the harness.  Each arch requires ITS OWN frozen header:
-/// aarch64 profiles pin aarch64/include/ureg.h, x86_64 profiles pin
+/// aarch64 profiles pin arm64/include/ureg.h, x86_64 profiles pin
 /// amd64/include/ureg.h.
 pub fn check_for_boot_test(arch: Arch) -> Result<()> {
     let dir = harvey_dir()?;
     let (header, arm) = match arch {
-        Arch::Aarch64 => (dir.join("aarch64/include/ureg.h"), "aarch64/include/ureg.h"),
+        Arch::Aarch64 => (dir.join("arm64/include/ureg.h"), "arm64/include/ureg.h"),
         Arch::X86_64 => (dir.join("amd64/include/ureg.h"), "amd64/include/ureg.h"),
         Arch::Riscv64 => {
             return Err("ureg-check: boot-test currently supports aarch64 and x86_64 only".into())
@@ -393,7 +393,7 @@ fn strip_block_comments(text: &str) -> String {
 mod tests {
     use super::*;
 
-    /// The frozen header's exact shape (aarch64/include/ureg.h), comments
+    /// The frozen header's exact shape (arm64/include/ureg.h), comments
     /// and tabs included.
     const FROZEN_UREG: &str = "\
 typedef struct Ureg {

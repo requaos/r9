@@ -36,7 +36,7 @@ use port::pgrp::Pgrp;
 /// The kernel seed contract (05-05 must_haves; main.rs prints the same
 /// triple in its `devenv: seeded …` gate line).
 const SEED: &[(&[u8], &[u8])] =
-    &[(b"cputype", b"aarch64"), (b"nobootprompt", b"embed"), (b"readparts", b"0")];
+    &[(b"cputype", b"arm64"), (b"nobootprompt", b"embed"), (b"readparts", b"0")];
 
 fn seed_group() -> EnvGroup {
     EnvGroup::seeded(SEED).expect("the seed pairs are well-formed")
@@ -52,7 +52,7 @@ fn seed_group() -> EnvGroup {
 #[test]
 fn seeded_keys_read_back_and_unset_is_absent() {
     let g = seed_group();
-    assert_eq!(g.get(b"cputype").map(|e| e.value.as_slice()), Some(&b"aarch64"[..]));
+    assert_eq!(g.get(b"cputype").map(|e| e.value.as_slice()), Some(&b"arm64"[..]));
     assert_eq!(g.get(b"nobootprompt").map(|e| e.value.as_slice()), Some(&b"embed"[..]));
     assert_eq!(g.get(b"readparts").map(|e| e.value.as_slice()), Some(&b"0"[..]));
     assert!(g.get(b"nosuchvar").is_none(), "an unset key must be absent (fail-soft)");
@@ -68,8 +68,8 @@ fn seeded_keys_read_back_and_unset_is_absent() {
 fn write_replace_and_create_round_trip() {
     let mut g = EnvGroup::new();
     let q = g.create(b"objtype").expect("create objtype");
-    assert_eq!(g.write(q, b"aarch64", 0).expect("write"), 7);
-    assert_eq!(g.get(b"objtype").map(|e| e.value.as_slice()), Some(&b"aarch64"[..]));
+    assert_eq!(g.write(q, b"arm64", 0).expect("write"), 5);
+    assert_eq!(g.get(b"objtype").map(|e| e.value.as_slice()), Some(&b"arm64"[..]));
 
     // Replace via the setenv shape: trunc (create-on-existing's OTRUNC
     // open arm) then write at 0.
@@ -107,14 +107,14 @@ fn rfork_env_semantics_share_copy_empty() {
         let node = LockNode::new();
         let mut g = shared.lock(&node);
         let q = g.create(b"objtype").expect("create in shared group");
-        g.write(q, b"aarch64", 0).expect("write in shared group");
+        g.write(q, b"arm64", 0).expect("write in shared group");
     }
     {
         let node = LockNode::new();
         let g = parent.lock(&node);
         assert_eq!(
             g.get(b"objtype").map(|e| e.value.as_slice()),
-            Some(&b"aarch64"[..]),
+            Some(&b"arm64"[..]),
             "neither-flag fork SHARES: the child's setenv is visible to the parent"
         );
     }
@@ -131,7 +131,7 @@ fn rfork_env_semantics_share_copy_empty() {
         let mut g = copied.lock(&node);
         assert_eq!(
             g.get(b"cputype").map(|e| e.value.as_slice()),
-            Some(&b"aarch64"[..]),
+            Some(&b"arm64"[..]),
             "RFENVG copy: prior values survive intact"
         );
         let q = g.create(b"user").expect("create in copied group");
@@ -148,7 +148,7 @@ fn rfork_env_semantics_share_copy_empty() {
         );
         assert_eq!(
             g.get(b"cputype").map(|e| e.value.as_slice()),
-            Some(&b"aarch64"[..]),
+            Some(&b"arm64"[..]),
             "RFENVG copy: the child's overwrite never touches the parent's value"
         );
     }
@@ -167,10 +167,10 @@ fn two_groups_hold_same_key_independently() {
     let mut b = seed_group();
     let qa = a.get(b"cputype").map(|e| e.qid_path).expect("a cputype");
     let qb = b.get(b"cputype").map(|e| e.qid_path).expect("b cputype");
-    a.write(qa, b"aarch64-hosta", 0).expect("write a");
-    b.write(qb, b"aarch64-hostb", 0).expect("write b");
-    assert_eq!(a.get(b"cputype").map(|e| e.value.as_slice()), Some(&b"aarch64-hosta"[..]));
-    assert_eq!(b.get(b"cputype").map(|e| e.value.as_slice()), Some(&b"aarch64-hostb"[..]));
+    a.write(qa, b"arm64-hosta", 0).expect("write a");
+    b.write(qb, b"arm64-hostb", 0).expect("write b");
+    assert_eq!(a.get(b"cputype").map(|e| e.value.as_slice()), Some(&b"arm64-hosta"[..]));
+    assert_eq!(b.get(b"cputype").map(|e| e.value.as_slice()), Some(&b"arm64-hostb"[..]));
 }
 
 /// The donor's bounds: writes beyond Maxenvsize error Etoobig; names are
@@ -250,7 +250,7 @@ fn devenv_device_flow_over_dynamic_groups() {
     let mut c = devenv::open(&c, OREAD).expect("open OREAD");
     let mut buf = [0u8; 64];
     let n = devenv::read(&mut c, &mut buf, u64::MAX).expect("read seeded value");
-    assert_eq!(&buf[..n as usize], b"aarch64", "a seeded key reads back its seeded value");
+    assert_eq!(&buf[..n as usize], b"arm64", "a seeded key reads back its seeded value");
     // EOF after the value (streaming offset advanced).
     let n = devenv::read(&mut c, &mut buf, u64::MAX).expect("read at end");
     assert_eq!(n, 0, "EOF is a 0 read, never an error");
@@ -263,19 +263,19 @@ fn devenv_device_flow_over_dynamic_groups() {
     // Write/replace via the setenv shape: OTRUNC open, write, re-read.
     let c = devenv::walk(&root, b"cputype").expect("re-walk cputype");
     let mut c = devenv::open(&c, OWRITE | OTRUNC).expect("open OWRITE|OTRUNC");
-    let n = devenv::write(&mut c, b"aarch64-r9", u64::MAX).expect("replace write");
+    let n = devenv::write(&mut c, b"arm64-r9", u64::MAX).expect("replace write");
     assert_eq!(n, 10);
     let mut c = devenv::open(&devenv::walk(&root, b"cputype").unwrap(), OREAD).unwrap();
     let n = devenv::read(&mut c, &mut buf, u64::MAX).expect("re-read");
-    assert_eq!(&buf[..n as usize], b"aarch64-r9", "write replaces the value");
+    assert_eq!(&buf[..n as usize], b"arm64-r9", "write replaces the value");
 
     // Create: a new key in the OPERATING group, open for write
     // immediately (the init setenv("#e/objtype", …) flow).
     let mut c = devenv::create(&root, b"objtype", OWRITE, 0o644).expect("create objtype");
-    assert_eq!(devenv::write(&mut c, b"aarch64", u64::MAX).expect("write new key"), 7);
+    assert_eq!(devenv::write(&mut c, b"arm64", u64::MAX).expect("write new key"), 5);
     let mut c = devenv::open(&devenv::walk(&root, b"objtype").unwrap(), OREAD).unwrap();
     let n = devenv::read(&mut c, &mut buf, u64::MAX).expect("read new key");
-    assert_eq!(&buf[..n as usize], b"aarch64");
+    assert_eq!(&buf[..n as usize], b"arm64");
     assert!(devenv::create(&root, b"objtype", OWRITE, 0o644).is_err(), "dup create errors");
     assert!(
         devenv::create(&c, b"x", OWRITE, 0o644).is_err(),

@@ -41,7 +41,7 @@ interruptstackbase:	.space INTERRUPTSTACKSZ
 .endm
 
 // One unified frame serves all 16 vectors: the TrapFrame IS Harvey's
-// Ureg (aarch64/include/ureg.h) field-for-field — x0..x28, x29, x30, sp, pc,
+// Ureg (arm64/include/ureg.h) field-for-field — x0..x28, x29, x30, sp, pc,
 // psr, type (aarch64/ABI.md's kernel-side enforcement appendix).
 // We save all general purpose registers, and these system registers:
 // - sp  @248: the interrupted context's stack pointer.  EL0-origin traps:

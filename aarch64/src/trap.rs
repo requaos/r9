@@ -88,7 +88,7 @@ pub fn debug_sync_trap() {
 }
 
 /// Register frame at the time the trap was taken.  This struct IS Harvey's
-/// `Ureg` (`aarch64/include/ureg.h`) field-for-field — the layout is the
+/// `Ureg` (`arm64/include/ureg.h`) field-for-field — the layout is the
 /// published Harvey↔r9 trap-frame ABI (aarch64/ABI.md's kernel-side
 /// enforcement appendix), pinned by the const asserts below
 /// (always-on) and the xtask `ureg-check` cross-repo gate.

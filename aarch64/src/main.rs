@@ -570,7 +570,7 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
     // The kernel-seeded ROOT env group — the ONE mechanism
     // replacing both 9k's #ec config env and an argv hint.
     // cputype feeds boot's
-    // execinit path build ("/aarch64/init -t"; without it boot builds
+    // execinit path build ("/arm64/init -t"; without it boot builds
     // "//init" and dies); nobootprompt=embed selects the root-server
     // method WITHOUT the outin() prompt (rootserver reads #e/nobootprompt
     // first — a devenv failure here hangs at outin and the boot gate
@@ -580,11 +580,11 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
     // every later proc's group from its parent.
     port::devenv::set_group_hook(proc::current_env_group);
     let root_env = port::devenv::seed_root_group(&[
-        (b"cputype", b"aarch64"),
+        (b"cputype", b"arm64"),
         (b"nobootprompt", b"embed"),
         (b"readparts", b"0"),
     ]);
-    println!("devenv: seeded cputype=aarch64 nobootprompt=embed readparts=0");
+    println!("devenv: seeded cputype=arm64 nobootprompt=embed readparts=0");
 
     // The initrd paqfs is the root tree; exec sources the entry binary
     // through the devroot walk/open path (one mechanism).  The walk

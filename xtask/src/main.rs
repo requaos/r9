@@ -190,7 +190,7 @@ fn main() {
         )
         .subcommand(
             clap::Command::new("ureg-check").about(
-                "Verify the Harvey checkout's aarch64/include/ureg.h and \
+                "Verify the Harvey checkout's arm64/include/ureg.h and \
                  amd64/include/ureg.h match the pinned layouts (D-06/D-02b layer 2, \
                  amd64 arm + negative control; R9_HARVEY_DIR names the checkout — \
                  required since 05-10, 05-CONTEXT D-10)",
@@ -1665,7 +1665,7 @@ impl BootTestStep {
         // The cross-repo ureg.h drift gate runs before qemu
         // spawns — a drifted (or absent) Harvey checkout fails every
         // boot-test profile on BOTH arches (aarch64 pins
-        // aarch64/include/ureg.h, x86_64 pins amd64/include/ureg.h —
+        // arm64/include/ureg.h, x86_64 pins amd64/include/ureg.h —
         // an ABI mismatch is a build failure, not a runtime mystery).
         // Bare `cargo xtask build` instead tolerates a missing
         // checkout — the const asserts still guard there.

@@ -1213,7 +1213,7 @@ fn sys_exec(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 
     // Resolve through the NAMESPACE —
     // namec + the proc's mount table — so an exec path crosses mounts
-    // (execinit's /aarch64/init through the union-mounted /; init's
+    // (execinit's /arm64/init through the union-mounted /; init's
     // /bin/rc through the post-newns /bin union into the mounted tree).
     // The old devroot-only prefix walk is retired (resolution lives in
     // the namespace core).
