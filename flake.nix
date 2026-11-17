@@ -800,7 +800,26 @@ WRAP
             # NAR sha256-2XQHRQ..., three-way agreed with the FOD's
             # own measured got-value (the realization with this hash
             # wired built green).
-            outputHash = "sha256-2XQHRQc/wtEtrIv5l9wgoh74unuxt7zcEwmB3b/WVVM=";
+            # The 19-10 cont-6b kernel bytes (1cbc1db: the donor
+            # mountmux DROP arm restored — a late reply whose owner
+            # is gone is logged and dropped, never fatal to the
+            # reader; the exit-time mount drain's interrupted
+            # clunks made late replies real and the loud error
+            # drained a healthy waiter — the -G gate's measured
+            # session-exit regression at the first cont-6 pin
+            # attempt) re-staled it within the hour; re-wired with
+            # the same two-derivation proof: kernel A plain at
+            # 1cbc1db (fresh r9-kernel-x64-1cbc1db.drv) + kernel B
+            # at 06b94f8 (a kernel-neutral derivation-independence
+            # marker commit in the discarded /tmp/r9-marker-1910f
+            # clone, FRESH r9-kernel-x64-06b94f8.drv) through the
+            # non-FOD lib.bootIo realization produced the
+            # byte-identical ISO — file sha256
+            # cb7dbb44cdb0f4064efa9d85ca45d480c244ffd1ea0bf5c0c634e4da74d714ac,
+            # NAR sha256-0ahIuT..., three-way agreed with the FOD's
+            # own measured got-value (the realization with this hash
+            # wired built green).
+            outputHash = "sha256-0ahIuTLZdlE/puHj0DPgLrTC6duQki2ePr+ZlrpmweM=";
           };
         });
 
