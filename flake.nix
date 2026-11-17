@@ -781,7 +781,26 @@ WRAP
             # NAR sha256-YaslMB..., three-way agreed with the FOD's
             # own measured got-value (the realization with this hash
             # wired built green).
-            outputHash = "sha256-YaslMBV6zwHpGHElMEW/9HUAb7B/xp8805KuWQkR+FI=";
+            # The 19-10 cont-6 kernel bytes (ab0a977: the window
+            # never deleted on shell exit — exit_tail's fd drain
+            # cascades under ownership (the donor closefgrp
+            # nil-slot-then-cclose shape) and the namespace group's
+            # death now drains the mount table for close-dispatch (the
+            # donor closepgrp's cclose(m->to) chain — the leaked wsys
+            # attach fid was the window ref that kept rio's wclose one
+            # short) re-staled it once more; re-wired with the same
+            # two-derivation proof: kernel A plain at ab0a977 (fresh
+            # r9-kernel-x64-ab0a977.drv) + kernel B at accf880 (a
+            # kernel-neutral derivation-independence marker commit in
+            # the discarded /tmp/r9-marker-1910e clone, FRESH
+            # r9-kernel-x64-accf880.drv) through the non-FOD
+            # lib.bootIo realization produced the byte-identical ISO
+            # — file sha256
+            # 645662f6c15f60f772498fa027f4822d45f5f4bbf3ad30af5cc502c0cb681eb2,
+            # NAR sha256-2XQHRQ..., three-way agreed with the FOD's
+            # own measured got-value (the realization with this hash
+            # wired built green).
+            outputHash = "sha256-2XQHRQc/wtEtrIv5l9wgoh74unuxt7zcEwmB3b/WVVM=";
           };
         });
 
