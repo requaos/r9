@@ -484,6 +484,16 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
         set_private: proc::proc_set_private,
     });
     port::devcons::set_pid_hook(proc::current_pid);
+    // devcons's current-user hooks (20-01, the x86_64 18-02 AUTH-03
+    // twin): #c/user serves the per-proc field (seeded glenda,
+    // fork-copied); boot's #c/hostowner write and devcap's eve gate and
+    // capuse mutation ride the same pair.  NOT dev-gated and NOT
+    // platform-gated — every dev_exec platform serves #c/user, and an
+    // unregistered pair prints `hooks not registered` on every read.
+    port::devcons::set_user_hooks(port::devcons::UserHooks {
+        current: proc::current_user,
+        set: proc::set_current_user,
+    });
 
     // devpipe's block/wake hooks — a read on an empty pipe
     // parks the caller via the sched machinery; a write or close
@@ -494,6 +504,7 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
         current: proc::pipe_current_pid,
         block: proc::pipe_block_current,
         wake: proc::pipe_wake,
+        note_pending: proc::note_pending,
     });
     // devmnt's contention-wait hook (06-07): a concurrent RPC caller
     // parks ~1 tick and retries (the tier-1 sweep's pipelines are the
@@ -524,6 +535,7 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
             current: proc::pipe_current_pid,
             block: proc::pipe_block_current,
             wake: proc::pipe_wake,
+            note_pending: proc::note_pending,
         });
         port::devip::stack::set_clock(crate::platform::timer::ticks);
     }

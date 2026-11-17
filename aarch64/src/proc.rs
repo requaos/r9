@@ -801,6 +801,12 @@ pub struct Proc {
     /// construction, after exec/exit (free_user_mappings dissolves the
     /// membership), and for every non-RFMEM fork child.
     pub rfmem_family: Option<u64>,
+    /// The proc's user (donor `up->user`): seeded `glenda` at
+    /// construction, fork-copied, served by #c/user through the devcons
+    /// hooks, and MUTATED by devcap's capuse success path (the donor's
+    /// `kstrdup(&up->user, to)`).  No trailing newline (the readstr
+    /// serve rule).  An owned Vec per proc — fork copies, never shares.
+    pub user: Vec<u8>,
 }
 
 impl Proc {
@@ -870,6 +876,12 @@ impl Proc {
             rgrp: Arc::new(Lock::new("rendez", RendezGroup::new())),
             rendval: 0,
             rfmem_family: None,
+            // The donor seeds the first proc's user from eve (k10
+            // main.c: `kstrdup(&p->user, eve)`); r9's sane-default era
+            // seeds glenda directly — every #c/user consumer (init's
+            // readenv, devcap's eve gate) sees the same bytes the
+            // const-serve era produced.
+            user: b"glenda".to_vec(),
         };
         proc.set_name(name);
         proc
@@ -1996,7 +2008,13 @@ pub fn proc_set_private(pid: u64) -> Result<()> {
 /// The note-queue append shared by post_note (per-pid) and the
 /// note-group post: Moribund targets and full queues are skipped per the
 /// donor's postnote failure shape (the caller's group post ignores
-/// individual failures — pgrpnote's waserror skip).
+/// individual failures — pgrpnote's waserror skip).  A Blocked target is
+/// READIED (the donor postnote's ready(p)): the note must reach a proc
+/// parked in an indefinite device read — the read's loop re-runs on
+/// wake, sees the pending note, and errors "interrupted" (the
+/// note-interruptible blocking-IO contract; without the wake, a kill
+/// note to a parked reader sits queued forever and the reader's session
+/// never tears down — the 19-08 session-exit variance).
 fn push_note(p: &mut Proc, msg: &[u8]) -> Result<()> {
     if p.state == ProcState::Moribund {
         return Err("devproc: no such process");
@@ -2007,7 +2025,20 @@ fn push_note(p: &mut Proc, msg: &[u8]) -> Result<()> {
     let mut note = Note { buf: [0; ERRMAX], len: msg.len().min(ERRMAX - 1) };
     note.buf[..note.len].copy_from_slice(&msg[..note.len]);
     p.note_queue.push_back(note);
+    if p.state == ProcState::Blocked {
+        p.sleep_until = 0;
+        p.state = ProcState::Ready;
+    }
     Ok(())
+}
+
+/// The current proc has a queued note (the blocking-IO loops' interrupt
+/// probe — the donor's `if(!notepending())` around every sleep).
+pub fn note_pending() -> bool {
+    match current() {
+        Some(p) => !p.note_queue.is_empty(),
+        None => false,
+    }
 }
 
 /// devcons's DEL path — post a note to the note GROUPS of
@@ -2045,6 +2076,18 @@ pub fn post_note_group_of_members(readers: &[u64], msg: &[u8]) {
 /// site).  Syscall context only — a device op always has a current proc.
 pub fn current_pid() -> u64 {
     current().expect("device op with no current process").pid
+}
+
+/// The calling proc's user bytes (devcons's UserHooks.current — the
+/// #c/user serve, devcap's eve gate and user-match read).
+pub fn current_user() -> Vec<u8> {
+    current().expect("user read with no current process").user.clone()
+}
+
+/// Mutate the calling proc's user (devcons's UserHooks.set — devcap
+/// capuse's success path, the donor's `kstrdup(&up->user, to)`).
+pub fn set_current_user(user: Vec<u8>) {
+    current().expect("user set with no current process").user = user;
 }
 
 /// devcons's block hook: park the calling proc in its cons
@@ -2530,6 +2573,10 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &TrapFrame, flag: u64)
     };
     child.slash = parent.slash.as_ref().map(|c| c.dup());
     child.dot = parent.dot.as_ref().map(|c| c.dup());
+    // The user copies at fork (donor proc.c newproc:
+    // `kstrdup(p->user, up->user)`) — no rfork flag governs it; a cap
+    // the parent presents does NOT carry to the child's user.
+    child.user = parent.user.clone();
 
     // The forkchild frame: a copy of the parent's live frame on the
     // CHILD's kernel stack, with x0 = 0 (the child's wire result).
