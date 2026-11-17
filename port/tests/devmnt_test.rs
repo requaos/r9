@@ -603,9 +603,20 @@ fn devmnt_rejects_tag_mismatch() {
     let (mut fake, _fids, _cl) = FakeServer::new();
     fake.wrong_tag = true; // every reply's tag is off by one
     let (r, w) = fake.split();
+    // 19-10 cont 6 re-keyed this pin: the foreign tag is the donor
+    // mountmux's DROP arm (logged + dropped, the reader keeps
+    // serving), so the negotiating rpc no longer fails with the tag
+    // error — it fails when the wire runs dry waiting for the reply
+    // that never came (the foreign-tag print rides the log).  The
+    // mismatch is still LOUD on the serial log; the SEMANTIC change
+    // is that a late reply can no longer drain a healthy waiter (the
+    // -G session-exit regression the cont-6 exit-drain exposed).
     let err = Mnt::negotiate(r, w, 0)
-        .expect_err("a reply tag that is not the outstanding tag is a protocol error");
-    assert!(err.contains("tag"), "the error names the tag violation: {err}");
+        .expect_err("a reply tag that is not the outstanding tag never satisfies the rpc");
+    assert!(
+        err.contains("eof") || err.contains("tag"),
+        "the rpc fails on the missing reply (eof) or the tag violation: {err}"
+    );
 }
 
 #[test]
@@ -1146,4 +1157,31 @@ fn mux_parked_reader_routes_a_concurrent_rpcs_reply_before_its_own() {
         assert_eq!(s.queued_tags.len(), 2, "two replies crossed the wire");
         assert!(s.queued_tags[0] != s.queued_tags[1], "the two replies are distinct rpcs");
     }
+}
+
+/// 19-10 cont 6: the donor mountmux's DROP arm — a late reply whose
+/// owner is gone (an interrupted exit-time clunk's answer) is logged
+/// and dropped, never fatal: the reader keeps serving the live
+/// waiters.  RED against the loud-error route (the -G gate's measured
+/// session-exit regression: the late reply drained a HEALTHY rpc).
+#[test]
+fn mux_foreign_reply_is_dropped_and_live_waiters_still_complete() {
+    let (fake, st) = ThreadFake::new();
+    let (r, w) = (Box::new(fake.clone_fake()), Box::new(fake));
+    let mnt = Mnt::negotiate(r, w, 0).expect("negotiate");
+
+    let (_root_fid, _) = mnt.attach(b"glenda", b"").expect("attach");
+    let (leaf_fid, _) = mnt.walk(1, b"adir").and_then(|(f, _)| Mnt::walk(&mnt, f, b"leaf.txt")).expect("walk leaf");
+
+    // Queue a FOREIGN reply (a tag nobody owns — the interrupted
+    // clunk's late answer) directly onto the fake's wire, THEN run a
+    // real read: the reader frames the foreign reply first, must DROP
+    // it, and must still deliver the real read's answer.
+    {
+        let mut s = st.0.lock().unwrap();
+        let foreign = frame(119, 0xBEEF, &[0u8; 4][..]); // Rwrite-shaped, unknown tag
+        ThreadFake::queue(&mut s, foreign);
+    }
+    let out = mnt.read(leaf_fid, 0, 4096).expect("the live read completes past the dropped reply");
+    assert_eq!(out, LEAF_CONTENT);
 }

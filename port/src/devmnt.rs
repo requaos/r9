@@ -534,12 +534,18 @@ impl Mnt {
     /// Route a framed reply by tag (the donor mountmux): a queued
     /// rpc's reply lands in its slot and the registry entry leaves
     /// the queue at route time.  False when NOTHING outstanding owns
-    /// the tag — the donor prints "unexpected reply tag" and drops;
-    /// this port makes it a loud protocol error instead (the donor's
-    /// drop arm exists for Tflush races, and Tflush does not exist
-    /// this era — a foreign tag here is wire garbage or a server
-    /// bug, and erroring drains the waiters in turn as each takes
-    /// the token).
+    /// the tag: the donor prints "unexpected reply tag" and DROPS —
+    /// the donor's arm covers the interrupted-rpc race (a caller
+    /// erroring out from under a sent request; the donor pairs it
+    /// with Tflush, which does not exist this era).  This port first
+    /// made the foreign tag a loud protocol error — right while
+    /// nothing could strand a sent request, WRONG once 19-10 cont-6's
+    /// exit-time mount drain (the closepgrp port) made interruptible
+    /// clunks real: a teardown kill note lands mid-Tclunk, the clunk
+    /// errors "interrupted", and its LATE reply then drained a
+    /// healthy waiter's rpc (the -G gate's measured session-exit
+    /// regression).  Donor-faithful again: the reply is logged and
+    /// dropped; the reader keeps serving the live waiters.
     fn route(&self, msg: Vec<u8>, tag: u16) -> bool {
         let node = LockNode::new();
         let mut q = self.queue.lock(&node);
@@ -576,8 +582,12 @@ impl Mnt {
             let msg = Self::frame_one(io, self.msize)?;
             let rtag = u16::from_le_bytes(msg[5..7].try_into().unwrap());
             if !self.route(msg, rtag) {
-                println!("devmnt: unexpected reply tag {rtag}");
-                return Err("devmnt: unexpected reply tag");
+                // The donor mountmux's drop arm (route's doc): a reply
+                // whose owner is gone — an interrupted exit-time
+                // clunk's late answer (cont-6's measured -G regression:
+                // the reply drained a HEALTHY waiter's rpc) — is logged
+                // and dropped, never fatal to the reader.
+                println!("devmnt: unexpected reply tag {rtag} (dropped)");
             }
         }
     }
