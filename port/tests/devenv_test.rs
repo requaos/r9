@@ -264,7 +264,7 @@ fn devenv_device_flow_over_dynamic_groups() {
     let c = devenv::walk(&root, b"cputype").expect("re-walk cputype");
     let mut c = devenv::open(&c, OWRITE | OTRUNC).expect("open OWRITE|OTRUNC");
     let n = devenv::write(&mut c, b"arm64-r9", u64::MAX).expect("replace write");
-    assert_eq!(n, 10);
+    assert_eq!(n, 8);
     let mut c = devenv::open(&devenv::walk(&root, b"cputype").unwrap(), OREAD).unwrap();
     let n = devenv::read(&mut c, &mut buf, u64::MAX).expect("re-read");
     assert_eq!(&buf[..n as usize], b"arm64-r9", "write replaces the value");
@@ -290,7 +290,7 @@ fn devenv_device_flow_over_dynamic_groups() {
     let name_len = u16::from_le_bytes([sb[41], sb[42]]) as usize;
     assert_eq!(&sb[43..43 + name_len], b"cputype");
     let length = u64::from_le_bytes(sb[33..41].try_into().unwrap());
-    assert_eq!(length, 10, "stat length is the value's length");
+    assert_eq!(length, 8, "stat length is the value's length");
     // CR-01: the record is FOUR length-prefixed strings (name, uid, gid,
     // muid — statcheck walks four and rejects a record that ends early,
     // convM2D.c); this assertion previously pinned the 3-string count and
