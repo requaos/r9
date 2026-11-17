@@ -675,10 +675,24 @@ pub unsafe fn switch(page_table: &RootPageTable, pgtype: RootPageTableType) {
     unsafe {
         let pt_phys = from_ptr_to_physaddr_offset_from_kzero(page_table).addr();
         // https://forum.osdev.org/viewtopic.php?t=36412&p=303237
+        //
+        // Invariant: the TTBR write must be context-synchronized (isb)
+        // BEFORE the tlbi.  Until an isb, the new TTBR value is not
+        // guaranteed to be in effect, so table walks in that window —
+        // speculative ones included — can still use the outgoing root
+        // table, and a TLB entry filled after the tlbi has executed
+        // survives the trailing isb.  r9 uses no ASIDs, so the incoming
+        // process then runs on the outgoing process's translations for
+        // every VA the two share: a fork child ran on its parent's
+        // physical pages and rc aborted with `pushword but no argv`
+        // (WINDOWS #49; the r9 Harvey phase 20-02 root cause).  Real
+        // cores under HVF walk speculatively and hit it; qemu TCG never
+        // fills its software TLB speculatively, so TCG never fired.
         match pgtype {
             RootPageTableType::User => {
                 core::arch::asm!(
                     "msr ttbr0_el1, {pt_phys}",
+                    "isb",            // make the new TTBR0 visible to the walker
                     "tlbi vmalle1is", // invalidate all TLB entries
                     "dsb ish",      // ensure write has completed
                     "isb",          // synchronize context and ensure that no instructions
@@ -688,6 +702,7 @@ pub unsafe fn switch(page_table: &RootPageTable, pgtype: RootPageTableType) {
             RootPageTableType::Kernel => {
                 core::arch::asm!(
                     "msr ttbr1_el1, {pt_phys}",
+                    "isb",            // same ordering as the TTBR0 arm above
                     "tlbi vmalle1is", // invalidate all TLB entries
                     "dsb ish",      // ensure write has completed
                     "isb",          // synchronize context and ensure that no instructions
