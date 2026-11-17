@@ -161,7 +161,12 @@ impl<const NUM_BITMAPS: usize, const BITMAP_SIZE_BYTES: usize>
         if !bitmap.is_set(8 * byte_idx + bit_idx) {
             return Err(PageAllocError::NotAllocated);
         }
-        bitmap.set(bit_idx, false);
+        // Clear the same bit is_set just checked.  Clearing `bit_idx` alone
+        // hit byte 0 of the bitmap instead: no page was ever really freed,
+        // and the first 8 pages of each bitmap (on aarch64 virt the initrd
+        // at 0x48000000) were marked free and handed out (WINDOWS #49's
+        // pin, r9 Harvey phase 20-03).
+        bitmap.set(8 * byte_idx + bit_idx, false);
 
         self.next_pa_to_scan = pa; // Next allocation will reuse this
 
@@ -406,6 +411,35 @@ mod tests {
         // Allocate once more, expecting the physical address we just deallocated
         assert_eq!(alloc.allocate()?, PhysAddr::new(4));
 
+        Ok(())
+    }
+
+    #[test]
+    fn bitmappagealloc_deallocate_outside_byte_0() -> Result<(), PageAllocError> {
+        // 2 bitmaps, 2 bytes per bitmap, pages of 4 bytes: 64 bytes per
+        // bitmap, 128 bytes in all.  Free pages that sit in byte 1 of
+        // each bitmap, where 8 * byte_idx + bit_idx differs from bit_idx.
+        let mut alloc = BitmapPageAlloc::<2, 2>::new_all_allocated(4);
+        alloc.mark_free(&PhysRange::with_end(0, alloc.max_bytes() as u64))?;
+        for _ in 0..32 {
+            alloc.allocate()?;
+        }
+        assert_eq!(alloc.bytes(), [0xff, 0xff, 0xff, 0xff]);
+
+        // PA 36: bitmap 0, byte 1, bit 1.  Only that bit clears; byte 0
+        // stays fully allocated.
+        assert!(alloc.deallocate(PhysAddr::new(36)).is_ok());
+        assert_eq!(alloc.bytes(), [0xff, 0xfd, 0xff, 0xff]);
+        assert_eq!(alloc.deallocate(PhysAddr::new(36)).unwrap_err(), PageAllocError::NotAllocated);
+        assert_eq!(alloc.allocate()?, PhysAddr::new(36));
+        assert_eq!(alloc.bytes(), [0xff, 0xff, 0xff, 0xff]);
+
+        // PA 100: bitmap 1, byte 1, bit 1.
+        assert!(alloc.deallocate(PhysAddr::new(100)).is_ok());
+        assert_eq!(alloc.bytes(), [0xff, 0xff, 0xff, 0xfd]);
+        assert_eq!(alloc.usage_bytes(), (124, 128));
+        assert_eq!(alloc.allocate()?, PhysAddr::new(100));
+        assert_eq!(alloc.allocate().unwrap_err(), PageAllocError::OutOfSpace);
         Ok(())
     }
 
