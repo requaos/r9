@@ -43,6 +43,18 @@ jobs:
     - name: Build
       run: cargo xtask build --arch aarch64 --verbose
 
+  # 20-04: the default aarch64 config is raspi3b, which has no dev
+  # list, so build-aarch64 never compiles the dev_exec code.  Without
+  # this lane no CI job compiled it, which is how the drift that broke
+  # the Harvey pin from aa55a27 on went unnoticed.
+  build-aarch64-virtshell:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Build
+      run: cargo xtask build --arch aarch64 --config virtshell --verbose
+
   build-riscv64:
     runs-on: ubuntu-latest
 
