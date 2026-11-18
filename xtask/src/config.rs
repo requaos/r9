@@ -801,7 +801,27 @@ pub fn apply_to_build_step(
     apply_build(cmd, &mut rustflags, config);
     apply_platform_config(cmd, &mut rustflags, config);
     apply_link(&mut rustflags, config, target, profile, workspace_path);
+    apply_path_remap(&mut rustflags, workspace_path);
     apply_rustflags(cmd, &rustflags);
+}
+
+/// Reproducible kernel bytes: rustc embeds absolute source paths (panic
+/// locations, symbol/module hashes), and a nix sandbox build directory
+/// differs on every build, so two builds of one source never matched byte
+/// for byte.  Remap the build directory and the workspace to fixed
+/// prefixes.  When several remaps match, rustc applies the last one, so the
+/// more specific workspace remap goes after the NIX_BUILD_TOP one.
+/// The flags ride build.rustflags (apply_rustflags), never RUSTFLAGS: the
+/// env var would replace the --cfg set wholesale.
+fn apply_path_remap(rustflags: &mut Vec<String>, workspace_path: &str) {
+    if let Ok(top) = std::env::var("NIX_BUILD_TOP") {
+        if !top.is_empty() && !top.contains(char::is_whitespace) {
+            rustflags.push(format!("--remap-path-prefix={top}=/build"));
+        }
+    }
+    if !workspace_path.is_empty() && !workspace_path.contains(char::is_whitespace) {
+        rustflags.push(format!("--remap-path-prefix={workspace_path}=/r9"));
+    }
 }
 
 pub fn apply_to_qemu_step_with_overrides(
