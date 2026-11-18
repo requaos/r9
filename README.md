@@ -1,6 +1,10 @@
 # r9
 [Plan 9](https://plan9.io/plan9/) in Rust
 
+<p align="center">
+  <img src="docs/img/plan-r.svg" alt="A TOP SECRET dispatch sheet bearing a large boxed letter R: Plan R authenticated, proceed with r9" width="560">
+</p>
+
 R9 is a reimplementation of the plan9 kernel in Rust.  It is
 not only inspired by but in many ways derived from the original
 [Plan 9](https://plan9.io/plan9/) source code.
