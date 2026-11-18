@@ -819,7 +819,7 @@ WRAP
             # NAR sha256-0ahIuT..., three-way agreed with the FOD's
             # own measured got-value (the realization with this hash
             # wired built green).
-            outputHash = "sha256-0ahIuTLZdlE/puHj0DPgLrTC6duQki2ePr+ZlrpmweM=";
+            outputHash = "sha256-rl+HA3pgTy+xfK7ztJ6ArQ4V9geBhXK/vJrBXw20tpQ=";
           };
         });
 
