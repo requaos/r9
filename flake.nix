@@ -832,8 +832,10 @@ WRAP
           default = pkgs.mkShellNoCC {
             # grub2 + xorriso (13-01): grub-mkrescue for the x86_64 mb2
             # boot channel — permanently in the devshell so `nix develop`
-            # builds the q35 ISO without a wrapping `nix shell`.
-            packages = [ toolchain pkgs.qemu pkgs.dtc pkgs.grub2 pkgs.xorriso ];
+            # builds the q35 ISO without a wrapping `nix shell`.  Linux-only
+            # since 20-04: grub2 has no darwin hostPlatform.
+            packages = [ toolchain pkgs.qemu pkgs.dtc ]
+              ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.grub2 pkgs.xorriso ];
             shellHook = ''
               ${objcopyHook toolchain}
               echo "r9 devshell: $(rustc --version)"
