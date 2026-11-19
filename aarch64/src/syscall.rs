@@ -2094,14 +2094,17 @@ fn sys_exits(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 /// because the swtch save writes only the PROC_TABLE-resident context),
 /// then the all-exited halt or the sched-loop hand-off.  Diverges.
 ///
-/// The FIRST step is the fd-group sweep (the donor pexit's closefgrp).
-/// The proc's group is DETACHED (replaced by a fresh
-/// empty Arc — the Moribund proc holds the empty one), and only when the
-/// detached Arc's count is 1 (this proc was the group's LAST sharer) are
-/// its occupied slots drained and close-dispatched (namec::close_chan —
-/// devpipe's open-count decrement, devmnt's clunk_if_last).  A fork child
-/// SHARING its parent's group (RFPROC without RFFDG/RFCFDG) never
-/// triggers the sweep (count > 1 — the sharers keep the group).
+/// The FIRST step is the fd-group sweep (the donor pexit's closefgrp),
+/// proc::release_fd_group: the proc's group is DETACHED (replaced by the
+/// shared empty group — the Moribund proc holds that one), and only when
+/// the detached Arc's count is 1 (this proc was the group's LAST sharer)
+/// are its occupied slots drained and close-dispatched (namec::close_chan
+/// — devpipe's open-count decrement, devmnt's clunk_if_last).  A fork
+/// child SHARING its parent's group (RFPROC without RFFDG/RFCFDG) never
+/// triggers the sweep (count > 1 — the sharers keep the group), but its
+/// reference must be RELEASED: the helper returns, so the detached Arc
+/// drops there.  Held as a local of this diverging function it would
+/// never drop, and the group's last sharer would never drain it.
 ///
 /// Ordering: the sweep runs BEFORE free_user_mappings because close_chan
 /// may RPC-block for DEV_MNT (the Tclunk's pipe read schedules the server
@@ -2120,18 +2123,10 @@ pub(crate) fn exit_tail(proc: &mut Proc, msg: &[u8]) -> ! {
     // is the SHARED empty group (proc.rs's empty_fdgroup): a fresh 32-slot
     // table per exit was ~6 KB of heap retained per husk, and the tier-1
     // sweep's ~200 fork+exit cycles measured the arena wall — a dead proc
-    // never touches its group, so the sharing is never observed.
-    let detached = core::mem::replace(&mut proc.fd_group, proc::empty_fdgroup());
-    if Arc::strong_count(&detached) == 1 {
-        let drained = {
-            let node = LockNode::new();
-            detached.lock(&node).drain_all()
-        };
-        for c in &drained {
-            port::namec::close_chan(c);
-        }
-    }
-    // count > 1: sharers keep the group; the detached Arc just drops.
+    // never touches its group, so the sharing is never observed.  The
+    // sweep is a RETURNING helper so the detached reference drops before
+    // this function diverges.
+    proc::release_fd_group(&mut proc.fd_group, proc::empty_fdgroup(), port::namec::close_chan);
     // A parked rendezvous entry never outlives its proc (9k's pexit
     // removes the proc from the rendezvous hash the same way).
     proc::rendez_remove(proc);

@@ -1901,6 +1901,40 @@ pub fn empty_fdgroup() -> Arc<Lock<FdGroup<MAX_FDS>>> {
 /// Vec allocation, so not const-constructible).
 static EMPTY_FDGROUP: Lock<Option<Arc<Lock<FdGroup<MAX_FDS>>>>> = Lock::new("emptyfdgrp", None);
 
+/// The exit sweep's fd-group half (the donor pexit's closefgrp): swap the
+/// dying proc's group in `slot` for `empty`, and only when this proc was
+/// the group's LAST sharer drain every occupied slot and hand each chan
+/// to `close` (exit_tail passes namec::close_chan — devpipe's open-count
+/// decrement, devmnt's clunk_if_last).  The close dispatch runs AFTER
+/// the group lock drops (the fdgrp leaf-lock rule; a close can block).
+/// A non-last sharer only gives up its reference.
+///
+/// A RETURNING function on purpose: exit_tail diverges (park_forever /
+/// sched_from_moribund), so a local it holds is never dropped.  The
+/// detached Arc used to live there, so every non-last sharer's exit
+/// leaked one strong reference: a group shared through a plain
+/// rfork(RFPROC) then still read count 2 at its LAST sharer's exit, the
+/// drain never ran, and a pipe write end in it stayed open forever (the
+/// Harvey 20-07 `{rfdprobe -s} reader never saw EOF).  Here every local
+/// drops at the return, before the tail diverges.  (x86_64's exit_tail
+/// drops it explicitly — r9 c4f2f2c, the #44 fix.)
+pub(crate) fn release_fd_group(
+    slot: &mut Arc<Lock<FdGroup<MAX_FDS>>>,
+    empty: Arc<Lock<FdGroup<MAX_FDS>>>,
+    mut close: impl FnMut(&Chan),
+) {
+    let detached = core::mem::replace(slot, empty);
+    if Arc::strong_count(&detached) == 1 {
+        let drained = {
+            let node = LockNode::new();
+            detached.lock(&node).drain_all()
+        };
+        for c in &drained {
+            close(c);
+        }
+    }
+}
+
 
 /// devproc-lite's write hook: append the note to the
 /// ADDRESSED pid's queue — no broadcast, no group semantics.  The write is
@@ -2801,5 +2835,128 @@ mod sem_tests {
         assert_eq!(waiters_for(pa), Vec::<u64>::new());
         assert_eq!(waiters_for(other), vec![42]);
         sem_deregister_waiter(other, 42);
+    }
+}
+
+/// exit_tail's fd-group sweep (release_fd_group) with real devpipe
+/// pipes — the Harvey 20-07 shared-table leak.  rfdprobe -s shape: a
+/// process whose fd 1 is a backquote pipe's write end forks a plain
+/// rfork(RFPROC) child (the SHARED table — an Arc clone), both exit, and
+/// the reader must then see EOF.  Each sharer's exit is one
+/// release_fd_group call on its own handle.
+#[cfg(test)]
+mod fdgrp_release_tests {
+    use super::{MAX_FDS, release_fd_group};
+    use alloc::sync::Arc;
+    use port::dat::{Chan, ORDWR};
+    use port::fdgrp::FdGroup;
+    use port::mcslock::{Lock, LockNode};
+    use port::{devpipe, namec};
+
+    type Group = Arc<Lock<FdGroup<MAX_FDS>>>;
+
+    fn empty() -> Group {
+        Arc::new(Lock::new("fdgrp", FdGroup::new()))
+    }
+
+    /// A fresh group holding a pipe's write end at fd 1 (rfdprobe's
+    /// stdout), and the pipe's other end (the reader rc keeps).
+    fn group_with_pipe_writer() -> (Group, Chan) {
+        let dir = devpipe::attach();
+        let c0 = devpipe::walk(&dir, b"data").expect("walk data");
+        let c1 = devpipe::walk(&dir, b"data1").expect("walk data1");
+        let reader = namec::open_chan(&c0, ORDWR).expect("open data");
+        let writer = namec::open_chan(&c1, ORDWR).expect("open data1");
+        let g = empty();
+        {
+            let node = LockNode::new();
+            assert!(g.lock(&node).store(1, writer).is_none());
+        }
+        (g, reader)
+    }
+
+    fn holds_fd1(g: &Group) -> bool {
+        let node = LockNode::new();
+        g.lock(&node).get(1).is_some()
+    }
+
+    /// Only called once the write side should be fully closed: on the
+    /// host an empty pipe that is still open returns an error (no
+    /// block hooks), so this never parks.
+    fn at_eof(reader: &mut Chan) -> bool {
+        let mut buf = [0u8; 8];
+        devpipe::read(reader, &mut buf, u64::MAX) == Ok(0)
+    }
+
+    /// The reproducer: the child exits first, then the parent.
+    #[test]
+    fn last_sharer_release_closes_the_shared_pipe_writer() {
+        let (mut parent, mut reader) = group_with_pipe_writer();
+        let mut child = parent.clone(); // rfork(RFPROC): the shared table
+        let mut closes = 0;
+
+        let husk = empty();
+        release_fd_group(&mut child, husk.clone(), |c| {
+            closes += 1;
+            namec::close_chan(c);
+        });
+        assert!(Arc::ptr_eq(&child, &husk), "the exiting proc holds the empty group");
+        assert_eq!(closes, 0, "a non-last sharer closes nothing");
+        assert_eq!(Arc::strong_count(&parent), 1, "the child's exit released its reference");
+        assert!(holds_fd1(&parent), "the parent keeps the shared writer");
+
+        release_fd_group(&mut parent, empty(), |c| {
+            closes += 1;
+            namec::close_chan(c);
+        });
+        assert_eq!(closes, 1, "the last sharer closes the writer exactly once");
+        assert!(at_eof(&mut reader), "the reader sees EOF after the last sharer's exit");
+    }
+
+    /// Boundary: an unshared group (fork()'s RFFDG copy, count 1)
+    /// drains at its only holder's exit.
+    #[test]
+    fn unshared_group_release_closes_at_once() {
+        let (mut g, mut reader) = group_with_pipe_writer();
+        let mut closes = 0;
+        release_fd_group(&mut g, empty(), |c| {
+            closes += 1;
+            namec::close_chan(c);
+        });
+        assert_eq!(closes, 1);
+        assert!(at_eof(&mut reader));
+    }
+
+    /// Boundary: three sharers (two shared children) — each non-last
+    /// exit releases exactly one reference; only the third drains.
+    #[test]
+    fn three_sharers_drain_only_at_the_third_release() {
+        let (mut a, mut reader) = group_with_pipe_writer();
+        let mut b = a.clone();
+        let mut c = a.clone();
+        let mut closes = 0;
+
+        release_fd_group(&mut a, empty(), |ch| {
+            closes += 1;
+            namec::close_chan(ch);
+        });
+        assert_eq!(closes, 0);
+        assert_eq!(Arc::strong_count(&b), 2);
+        assert!(holds_fd1(&b));
+
+        release_fd_group(&mut b, empty(), |ch| {
+            closes += 1;
+            namec::close_chan(ch);
+        });
+        assert_eq!(closes, 0);
+        assert_eq!(Arc::strong_count(&c), 1);
+        assert!(holds_fd1(&c));
+
+        release_fd_group(&mut c, empty(), |ch| {
+            closes += 1;
+            namec::close_chan(ch);
+        });
+        assert_eq!(closes, 1);
+        assert!(at_eof(&mut reader));
     }
 }
