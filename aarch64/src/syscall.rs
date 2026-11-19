@@ -320,11 +320,10 @@ fn sys_pwrite(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             port::devip::stack::drain_debt_if_set();
             port::devip::write(&mut chan, src.as_slice(), off)
         }
-        DEV_MNT => {
-            // devmnt: paqfs is a read-only server; the early
-            // client-side error is clearer than the server's Erdonly.
-            Err("devmnt: the mounted tree is read-only this era")
-        }
+        // devmnt: the write crosses to the mounted server as Twrite
+        // RPCs (a read-only server such as paqfs answers with its own
+        // Erdonly; a writable one such as ramfs takes the bytes).
+        DEV_MNT => port::devmnt::write(&mut chan, src.as_slice(), off),
         _ => Err("pwrite: unknown device"),
     };
     proc.fd_op_done(fd, chan);
@@ -1404,17 +1403,16 @@ fn sys_dup(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 /// else dispatch the device's create op (devenv/devsrv are this era's
 /// creators; a device without a create op errors loudly).  The donor's
 /// create-then-fail retry (the create/create race) is unreachable this
-/// era: syscalls are serialized.  Directory creates (perm&DMDIR) have no
-/// measured caller — loud error, never a silent fake.
+/// era: syscalls are serialized.  Directory creates (perm&DMDIR) ride
+/// the perm word to the device, which accepts or refuses them (mkdir
+/// through a ramfs mount).  The final-component probe and create go
+/// through the union twins, so a create through a union lands in the
+/// first member that allows creates (MCREATE).
 fn sys_create(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 3) else {
         return err(proc, "create: bad argument block");
     };
     let (path_va, mode, perm) = (args[0], (args[1] & 0xffff_ffff) as u32, (args[2] & 0xffff_ffff) as u32); // mode/perm are ints
-    if perm & 0x8000_0000 != 0 {
-        // DMDIR
-        return err(proc, "create: directories unsupported this era");
-    }
     let path = match copy_user_str(proc, path_va, ERRMAX) {
         Ok(path) => path,
         Err(msg) => return err(proc, msg),
@@ -1435,6 +1433,11 @@ fn sys_create(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
         return err(proc, "create: no namespace (pre-exec)");
     };
+    // namec's `#`-arm bit, re-derived here for the final-component
+    // probe/create twins: a #-rooted parent (a registry attach chan)
+    // NEVER consults the mount table — the donor's nomount discipline
+    // for device-attach roots.  final_name is non-empty, so path is too.
+    let nomount = path[0] == b'#';
     // Resolution runs WITHOUT the pgrp lock held — namec consults
     // under per-consult snapshots, and the dot-redirect consult below
     // snapshots under a scoped lock, dropping it BEFORE the fid-clone (a
@@ -1481,7 +1484,7 @@ fn sys_create(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         port::namec::close_chan(&parent);
         return err(proc, "create: parent not a directory");
     }
-    let opened = match namec::walk_one(&parent, final_name) {
+    let opened = match namec::walk_one_union(&parent, final_name, &proc.pgrp, nomount) {
         Ok(existing) => {
             // The donor's Acreate existing-file arm: OEXCL → Eexist;
             // otherwise open OTRUNC (the create-on-existing fallback).
@@ -1500,7 +1503,14 @@ fn sys_create(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             }
         }
         Err(_) => {
-            match namec::create_chan(&parent, final_name, mode & !(port::dat::OEXCL | port::dat::OCEXEC), perm) {
+            match namec::create_chan_union(
+                &parent,
+                final_name,
+                mode & !(port::dat::OEXCL | port::dat::OCEXEC),
+                perm,
+                &proc.pgrp,
+                nomount,
+            ) {
                 Ok(c) => c,
                 Err(msg) => {
                     port::namec::close_chan(&parent);
@@ -1591,9 +1601,12 @@ fn sys_fd2path(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 /// Arc), RFCFDG empties (dupfgrp(nil)).  libc fork() =
 /// rfork(RFPROC|RFFDG|RFREND) = COPY — connectembed's child dup/close
 /// choreography depends on it.
-/// The non-RFPROC fd-group split (RFFDG/RFCFDG) has no measured caller
-/// and stays a loud -1 — never silent partial semantics.  Every other
-/// bit combination is a loud -1 errstr.
+/// The non-RFPROC fd-group split re-groups the CALLER in place: RFFDG
+/// privatizes a deep COPY, RFCFDG takes the empty group.  Its caller
+/// class is a lib9p server's `_postmountsrv` (post.c's bare
+/// rfork(RFFDG)); the measured caller in the arm64 image is
+/// /bin/rfdprobe (20-07), not ramfs, whose own rfork carries RFPROC.
+/// Every other bit combination is a loud -1 errstr.
 fn sys_rfork(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 1) else {
         return err(proc, "rfork: bad argument block");
@@ -1620,13 +1633,25 @@ fn sys_rfork(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         return err(proc, "rfork: unsupported flags");
     }
     if flag & RFPROC == 0 {
-        // Donor non-RFPROC branch: RFMEM/RFNOWAIT are Ebadarg; the fd-group
-        // split is unsupported this era (loud); the namespace group split
-        // (RFNAMEG copy / RFCNAMEG wipe) re-groups the CALLER, as does
-        // the env group split (RFENVG copy / RFCENVG empty —
-        // newns's rfork(RFENVG|RFCNAMEG)).
-        if flag & (RFMEM | RFNOWAIT | RFFDG | RFCFDG) != 0 {
+        // Donor non-RFPROC branch (sysproc.c:50-57): RFMEM/RFNOWAIT are
+        // Ebadarg; RFFDG privatizes a COPY of the fd group in place and
+        // RFCFDG empties it (dupfgrp(ofg)/dupfgrp(nil)); the namespace
+        // group split (RFNAMEG copy / RFCNAMEG wipe) re-groups the
+        // CALLER, as does the env group split (RFENVG copy / RFCENVG
+        // empty — newns's rfork(RFENVG|RFCNAMEG)).  The in-place RFFDG
+        // is load-bearing for lib9p's _postmountsrv: after forking the
+        // server child (which SHARES the fd group), the parent keeps its
+        // srvfd private before the child's close(s->srvfd) lands in the
+        // shared table.
+        if flag & (RFMEM | RFNOWAIT) != 0 {
             return err(proc, "rfork: bad flags for non-RFPROC");
+        }
+        if flag & RFFDG != 0 {
+            let node = LockNode::new();
+            let copy = proc.fd_group.lock(&node).deep_copy();
+            proc.fd_group = Arc::new(Lock::new("fdgrp", copy));
+        } else if flag & RFCFDG != 0 {
+            proc.fd_group = proc::empty_fdgroup();
         }
         if flag & (RFNAMEG | RFCNAMEG) != 0 {
             proc::rfork_namespace_split(proc, flag & RFNAMEG != 0);
