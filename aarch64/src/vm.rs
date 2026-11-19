@@ -688,9 +688,19 @@ pub unsafe fn switch(page_table: &RootPageTable, pgtype: RootPageTableType) {
         // (WINDOWS #49; the r9 Harvey phase 20-02 root cause).  Real
         // cores under HVF walk speculatively and hit it; qemu TCG never
         // fills its software TLB speculatively, so TCG never fired.
+        //
+        // The leading dsb ishst makes every prior page-table store
+        // (the incoming process's tables, built by rfork_copy or a
+        // fault handler, possibly in pages just freed by another
+        // process and reallocated) visible to the table walker before
+        // the new TTBR can be used.  Without it a walk may read the
+        // stale contents of a reused table page.  The isb fix alone
+        // left a residual: a fork child faulted on a corrupt rc argv
+        // word under HVF (r9 Harvey phase 20-06, net-smoke run 21).
         match pgtype {
             RootPageTableType::User => {
                 core::arch::asm!(
+                    "dsb ishst",      // page-table stores visible to the walker
                     "msr ttbr0_el1, {pt_phys}",
                     "isb",            // make the new TTBR0 visible to the walker
                     "tlbi vmalle1is", // invalidate all TLB entries
@@ -701,6 +711,7 @@ pub unsafe fn switch(page_table: &RootPageTable, pgtype: RootPageTableType) {
             }
             RootPageTableType::Kernel => {
                 core::arch::asm!(
+                    "dsb ishst",      // same ordering as the TTBR0 arm above
                     "msr ttbr1_el1, {pt_phys}",
                     "isb",            // same ordering as the TTBR0 arm above
                     "tlbi vmalle1is", // invalidate all TLB entries
@@ -716,12 +727,15 @@ pub unsafe fn switch(page_table: &RootPageTable, pgtype: RootPageTableType) {
 #[allow(unused_variables)]
 pub unsafe fn invalidate_all_tlb_entries() {
     #[cfg(not(test))]
-    // SAFETY: tlbi vmalle1is + dsb ish + isb is the architected full-TLB
-    // maintenance sequence — pure maintenance ops, no memory operands (the
-    // TLB/barrier floor; safe at any EL1 point).
+    // SAFETY: dsb ishst + tlbi vmalle1is + dsb ish + isb is the architected
+    // full-TLB maintenance sequence — pure barrier and maintenance ops, no
+    // memory operands (the TLB/barrier floor; safe at any EL1 point).
     unsafe {
         // https://forum.osdev.org/viewtopic.php?t=36412&p=303237
+        // The dsb ishst orders the caller's page-table store before the
+        // tlbi, so no walk after the invalidation can refill the old entry.
         core::arch::asm!(
+            "dsb ishst",      // the page-table store completes first
             "tlbi vmalle1is", // invalidate all TLB entries
             "dsb ish",        // ensure write has completed
             "isb"             // synchronize context and ensure that no instructions
