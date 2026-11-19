@@ -951,12 +951,18 @@ pub fn sem_register_waiter(pa: u64, pid: u64) {
     }
 }
 
-/// Acquired (or erroring out): the caller leaves the wait set.
+/// Acquired (or erroring out): the caller leaves the wait set.  An
+/// ORDER-PRESERVING remove: sem_wake picks each word's waiters in
+/// registration order, and every word shares this one Vec, so
+/// swap_remove (the Vec's last entry moved into the freed slot) reordered
+/// OTHER words' waiters — a deregister on word A turned word B's
+/// [21, 22] into [22, 21].  That broke B's FIFO wake order, and it was the
+/// ~1/500 flake of the parallel sem tests (two tests' words in one Vec).
 pub fn sem_deregister_waiter(pa: u64, pid: u64) {
     let node = LockNode::new();
     let mut waiters = SEM_WAITERS.lock(&node);
     if let Some(pos) = waiters.iter().position(|&e| e == (pa, pid)) {
-        waiters.swap_remove(pos);
+        waiters.remove(pos);
     }
 }
 
@@ -3137,6 +3143,26 @@ mod tests {
         assert_eq!(sem_waiters_for(pa), Vec::<u64>::new());
         assert_eq!(sem_waiters_for(other), vec![42]);
         sem_deregister_waiter(other, 42);
+    }
+
+    /// A deregister on ONE word keeps every OTHER word's waiters in
+    /// registration order (the wake's FIFO).  swap_remove moved the
+    /// shared Vec's last entry into the freed slot, so this exact
+    /// sequence flipped word b's [71, 72] to [72, 71] and woke 72 first
+    /// (aarch64 carries the same pin).
+    #[test]
+    fn sem_deregister_on_one_word_keeps_another_words_fifo() {
+        let a = 0x9c00_0000;
+        let b = 0x9d00_0000;
+        sem_register_waiter(a, 61);
+        sem_register_waiter(b, 71);
+        sem_register_waiter(b, 72);
+        sem_deregister_waiter(a, 61);
+        assert_eq!(sem_waiters_for(b), vec![71, 72], "b's registration order survives a's deregister");
+        sem_wake(b, 1);
+        assert_eq!(sem_waiters_for(b), vec![72], "the first-registered waiter is woken first");
+        sem_wake(b, 5);
+        assert_eq!(sem_waiters_for(b), Vec::<u64>::new());
     }
 
     /// new_user_proc through the host seam: the PML4, the kstack
