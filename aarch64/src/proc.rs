@@ -1918,6 +1918,14 @@ static EMPTY_FDGROUP: Lock<Option<Arc<Lock<FdGroup<MAX_FDS>>>>> = Lock::new("emp
 /// Harvey 20-07 `{rfdprobe -s} reader never saw EOF).  Here every local
 /// drops at the return, before the tail diverges.  (x86_64's exit_tail
 /// drops it explicitly — r9 c4f2f2c, the #44 fix.)
+///
+/// The drained chans are consumed ONE at a time (x86_64 ab0a977, 19-10
+/// cont 6): each drops before the next close, so a later duplicate of
+/// the same server fid sees the earlier one gone.  A close under a
+/// BORROW of the whole batch pinned every duplicate, so devmnt's
+/// clunk_if_last (a strong-count test on the fid Arc) never saw the last
+/// reference and the Tclunk never fired — the donor closefgrp nils each
+/// slot before its cclose.
 pub(crate) fn release_fd_group(
     slot: &mut Arc<Lock<FdGroup<MAX_FDS>>>,
     empty: Arc<Lock<FdGroup<MAX_FDS>>>,
@@ -1925,12 +1933,13 @@ pub(crate) fn release_fd_group(
 ) {
     let detached = core::mem::replace(slot, empty);
     if Arc::strong_count(&detached) == 1 {
-        let drained = {
+        let mut drained = {
             let node = LockNode::new();
             detached.lock(&node).drain_all()
         };
-        for c in &drained {
-            close(c);
+        for c in drained.drain(..) {
+            close(&c);
+            drop(c);
         }
     }
 }
@@ -1964,6 +1973,88 @@ pub(crate) fn split_fd_group_in_place(
         Arc::new(Lock::new("fdgrp", FdGroup::new()))
     };
     release_fd_group(slot, fresh, close);
+}
+
+/// The exit sweep's shared EMPTY pgrp (x86_64 c4f2f2c, the #44 fix —
+/// empty_fdgroup's shape).  Slots are never reaped this era, so every
+/// group handle a Moribund husk pins is a permanent allocation; the sweep
+/// swaps each for a singleton clone (a refcount bump) and lets the old
+/// Arc drop — a last sharer's group dies with it.  Husks only: a live
+/// proc is never handed one (the fresh-table rule of
+/// split_fd_group_in_place).
+pub fn empty_pgrp() -> Arc<Lock<Pgrp>> {
+    let node = LockNode::new();
+    let mut guard = EMPTY_PGRP.lock(&node);
+    if guard.is_none() {
+        *guard = Some(Arc::new(Lock::new("pgrp", Pgrp::new())));
+    }
+    guard.as_ref().unwrap().clone()
+}
+
+static EMPTY_PGRP: Lock<Option<Arc<Lock<Pgrp>>>> = Lock::new("emptypgrp", None);
+
+/// The exit sweep's shared EMPTY env group (husks only; see empty_pgrp).
+pub fn empty_env_group() -> Arc<Lock<EnvGroup>> {
+    let node = LockNode::new();
+    let mut guard = EMPTY_ENVGROUP.lock(&node);
+    if guard.is_none() {
+        *guard = Some(Arc::new(Lock::new("env", EnvGroup::new())));
+    }
+    guard.as_ref().unwrap().clone()
+}
+
+static EMPTY_ENVGROUP: Lock<Option<Arc<Lock<EnvGroup>>>> = Lock::new("emptyenvgrp", None);
+
+/// The exit sweep's shared EMPTY rendezvous group (husks only; see
+/// empty_pgrp).
+pub fn empty_rendez_group() -> Arc<Lock<RendezGroup>> {
+    let node = LockNode::new();
+    let mut guard = EMPTY_RENDEZGROUP.lock(&node);
+    if guard.is_none() {
+        *guard = Some(Arc::new(Lock::new("rendez", RendezGroup::new())));
+    }
+    guard.as_ref().unwrap().clone()
+}
+
+static EMPTY_RENDEZGROUP: Lock<Option<Arc<Lock<RendezGroup>>>> = Lock::new("emptyrgrp", None);
+
+/// The donor closepgrp, mount half included (x86_64 ab0a977, 19-10
+/// cont 6): swap the namespace group in `slot` for `fresh` and, only
+/// when this holder had the LAST reference, close-dispatch every
+/// mount-table chan (each point's `from` and its whole chain) one at a
+/// time, outside the group lock (a Tclunk can park).  A plain Arc drop
+/// never Tclunks them: every mounted tree's root/attach fid leaks
+/// server-side (rio's wsys attach carries a window reference, so a
+/// window whose shell exits never deletes).
+pub(crate) fn release_pgrp(slot: &mut Arc<Lock<Pgrp>>, fresh: Arc<Lock<Pgrp>>, mut close: impl FnMut(&Chan)) {
+    let detached = core::mem::replace(slot, fresh);
+    if Arc::strong_count(&detached) == 1 {
+        let chans = {
+            let node = LockNode::new();
+            detached.lock(&node).take_mount_chans()
+        };
+        for c in chans {
+            close(&c);
+        }
+    }
+}
+
+/// The #44 husk sweep (x86_64 c4f2f2c, 72edbba, ab0a977): a Moribund
+/// husk pins its slot forever, so every heap payload it keeps is a
+/// permanent allocation.  The donor pexit's closepgrp/closeegrp/
+/// closergrp re-keyed as singleton swaps — the old Arcs drop here, a
+/// last sharer's group dies with it, and a last namespace holder's mount
+/// table close-dispatches first (release_pgrp).  slash/dot DROP without
+/// the close dispatch (72edbba): a devmnt clunk of a husk's root/dot
+/// clone mid-exit measured userland pool corruption on x86_64's mounted
+/// venue, so they release by plain drop (the server-side fid of the
+/// clone leaks until the server dies — the documented era shape).
+pub fn sweep_husk_payloads(proc: &mut Proc) {
+    release_pgrp(&mut proc.pgrp, empty_pgrp(), port::namec::close_chan);
+    proc.env_group = empty_env_group();
+    proc.rgrp = empty_rendez_group();
+    let _ = proc.slash.take();
+    let _ = proc.dot.take();
 }
 
 
@@ -3079,5 +3170,121 @@ mod fdgrp_release_tests {
         });
         assert_eq!(closes, 2);
         assert!(at_eof(&mut reader));
+    }
+
+    /// A table holding a pipe writer AND its dup (two slots, one open
+    /// object — the dup'd-fd shape): the last sharer's drain must
+    /// close-dispatch every slot, or the dup's open count keeps the
+    /// pipe up.
+    #[test]
+    fn last_sharer_drain_closes_every_duplicate() {
+        let (mut g, mut reader) = group_with_pipe_writer();
+        {
+            let node = LockNode::new();
+            let mut t = g.lock(&node);
+            let d = t.ref_clone(1).expect("dup fd 1");
+            assert!(t.store(2, d).is_none());
+        }
+        let mut closes = 0;
+        release_fd_group(&mut g, empty(), |c| {
+            closes += 1;
+            namec::close_chan(c);
+        });
+        assert_eq!(closes, 2, "both duplicates close");
+        assert!(at_eof(&mut reader));
+    }
+}
+
+/// The #44 husk sweep's namespace half (release_pgrp — the donor
+/// closepgrp with its mount half, x86_64 ab0a977): a pipe write end
+/// mounted in a namespace stands in for a mounted tree's attach fid
+/// (both are chans only the mount table holds), so the reader's EOF
+/// proves the mount table was close-dispatched.
+#[cfg(test)]
+mod husk_sweep_tests {
+    use super::{empty_env_group, empty_pgrp, empty_rendez_group, release_pgrp};
+    use alloc::sync::Arc;
+    use port::dat::{Chan, DEV_CONS, ORDWR, Qid};
+    use port::mcslock::{Lock, LockNode};
+    use port::pgrp::{MREPL, Pgrp};
+    use port::{devpipe, namec};
+
+    type Ns = Arc<Lock<Pgrp>>;
+
+    fn fresh() -> Ns {
+        Arc::new(Lock::new("pgrp", Pgrp::new()))
+    }
+
+    /// A namespace whose mount table holds a pipe's write end (MREPL
+    /// over a plain file point), and the pipe's other end.
+    fn ns_with_mounted_writer() -> (Ns, Chan) {
+        let dir = devpipe::attach();
+        let c0 = devpipe::walk(&dir, b"data").expect("walk data");
+        let c1 = devpipe::walk(&dir, b"data1").expect("walk data1");
+        let reader = namec::open_chan(&c0, ORDWR).expect("open data");
+        let writer = namec::open_chan(&c1, ORDWR).expect("open data1");
+        let point = Chan::new(DEV_CONS, Qid { path: 7, vers: 0, typ: 0 }, ORDWR);
+        let ns = fresh();
+        {
+            let node = LockNode::new();
+            ns.lock(&node).bind(writer, &point, MREPL).expect("bind the writer over the point");
+        }
+        (ns, reader)
+    }
+
+    fn at_eof(reader: &mut Chan) -> bool {
+        let mut buf = [0u8; 8];
+        devpipe::read(reader, &mut buf, u64::MAX) == Ok(0)
+    }
+
+    /// Two procs share a namespace (rfork without RFNAMEG): the first
+    /// exit closes nothing and gives up its reference; the last closes
+    /// the whole mount table (the point's `from` + the mounted chan).
+    #[test]
+    fn last_holder_release_closes_the_mount_table() {
+        let (mut a, mut reader) = ns_with_mounted_writer();
+        let mut b = a.clone();
+        let mut closes = 0;
+        release_pgrp(&mut a, fresh(), |c| {
+            closes += 1;
+            namec::close_chan(c);
+        });
+        assert_eq!(closes, 0, "a non-last holder closes nothing");
+        assert_eq!(Arc::strong_count(&b), 1, "its reference is released");
+
+        release_pgrp(&mut b, fresh(), |c| {
+            closes += 1;
+            namec::close_chan(c);
+        });
+        assert_eq!(closes, 2, "the point's from + the mounted chan");
+        assert!(at_eof(&mut reader), "the mounted writer was closed");
+    }
+
+    /// Boundary: an unshared namespace (RFNAMEG's private copy) closes
+    /// its mount table at its only holder's exit, and the slot then holds
+    /// the replacement it was given.
+    #[test]
+    fn unshared_release_closes_at_once_and_installs_the_replacement() {
+        let (mut ns, mut reader) = ns_with_mounted_writer();
+        let husk = fresh();
+        let mut closes = 0;
+        release_pgrp(&mut ns, husk.clone(), |c| {
+            closes += 1;
+            namec::close_chan(c);
+        });
+        assert_eq!(closes, 2);
+        assert!(at_eof(&mut reader));
+        assert!(Arc::ptr_eq(&ns, &husk));
+    }
+
+    /// The husk singletons are one shared object each (a refcount bump
+    /// per exit, never a fresh allocation) and start empty.
+    #[test]
+    fn husk_singletons_are_shared() {
+        assert!(Arc::ptr_eq(&empty_pgrp(), &empty_pgrp()));
+        assert!(Arc::ptr_eq(&empty_env_group(), &empty_env_group()));
+        assert!(Arc::ptr_eq(&empty_rendez_group(), &empty_rendez_group()));
+        let node = LockNode::new();
+        assert!(empty_pgrp().lock(&node).take_mount_chans().is_empty());
     }
 }

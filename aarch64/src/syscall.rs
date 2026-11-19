@@ -2074,13 +2074,20 @@ fn sys_exits(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     };
     // Copy the message BEFORE freeing anything (it lives in user memory).
     // exits(nil) carries a zero pointer; an invalid string is not an error
-    // either — exits must never be wedged by its own diagnostics.
-    let msg = if msg_va == 0 {
+    // either — exits must never be wedged by its own diagnostics.  The
+    // copy lands in a STACK buffer and the Vec dies HERE (x86_64 c4f2f2c,
+    // the #44 fix): exit_tail diverges, so a heap Vec held in this frame
+    // would never be freed.
+    let msg_vec = if msg_va == 0 {
         Vec::new()
     } else {
         copy_user_str(proc, msg_va, ERRMAX).unwrap_or_default()
     };
-    exit_tail(proc, &msg);
+    let mut sbuf = [0u8; ERRMAX];
+    let n = msg_vec.len().min(ERRMAX);
+    sbuf[..n].copy_from_slice(&msg_vec[..n]);
+    drop(msg_vec);
+    exit_tail(proc, &sbuf[..n]);
 }
 
 /// The shared exit tail: sys_exits's user-message path and the
@@ -2127,6 +2134,12 @@ pub(crate) fn exit_tail(proc: &mut Proc, msg: &[u8]) -> ! {
     // A parked rendezvous entry never outlives its proc (9k's pexit
     // removes the proc from the rendezvous hash the same way).
     proc::rendez_remove(proc);
+    // The #44 husk sweep (proc::sweep_husk_payloads): the pgrp/env/rgrp
+    // handles swap for the husk singletons and slash/dot drop; a last
+    // namespace holder's mount table close-dispatches first.  After
+    // rendez_remove (it reads rgrp) and BEFORE free_user_mappings, for the
+    // same reason as the fd sweep: a mount chan's Tclunk can RPC-block.
+    proc::sweep_husk_payloads(proc);
     proc.free_user_mappings();
     // Drop the husk's remaining heap payloads (the slot itself is never
     // reaped this era — its Vec/Arc payloads must not ride along):
