@@ -521,6 +521,29 @@ fn pml4_map_user(
     Ok(created)
 }
 
+/// The PML4 slots of the user half (the canonical low half, VAs below
+/// 0x0000_8000_0000_0000).  Every table under them was created by
+/// pml4_map_user and recorded in the owning proc's mapping_tables.
+const USER_PML4_SLOTS: usize = 256;
+const _: () = assert!(KSTACK_PML4_INDEX >= USER_PML4_SLOTS);
+
+/// Clear every user-half entry of the root at `pml4_pa` (the kstack and
+/// kernel-half slots stay: the exit tail still runs on them), then
+/// flush what may still name the tables below.  The per-leaf invlpg's
+/// came first, and a walk after them can re-cache an upper-level entry
+/// in the paging-structure caches; a CR3 reload drops every non-global
+/// translation, and user mappings are never global.  Only the ACTIVE
+/// root can hold such entries (no PCIDs: every CR3 switch flushes).
+fn unlink_user_half(pml4_pa: u64) {
+    for idx in 0..USER_PML4_SLOTS {
+        set_table_entry(pml4_pa, idx, 0);
+    }
+    let cr3 = read_cr3();
+    if cr3 & 0x000f_ffff_ffff_f000 == pml4_pa {
+        switch_cr3(cr3);
+    }
+}
+
 /// Clear the 4 KiB leaf at `va` (if present).  Returns true when a
 /// mapping existed (the caller's free-side bookkeeping).
 fn pml4_unmap_user(pml4_pa: u64, va: usize) -> bool {
@@ -1420,7 +1443,14 @@ impl Proc {
                 free_phys_page(rec.phys as u64);
             }
         }
-        // The user-half intermediate tables die with the address space.
+        // The user-half intermediate tables die with the address space,
+        // but the PML4 does not: EXEC maps the new image into this same
+        // root.  Unlink them BEFORE they go back to the allocator, or
+        // the new image's walk descends into pages the allocator hands
+        // out again as text/data leaves (the image bytes then land in
+        // live tables — r9 8958c9e made frees real; until then these
+        // pages simply leaked).
+        unlink_user_half(self.pml4_pa);
         for pa in core::mem::take(&mut self.mapping_tables) {
             free_phys_page(pa);
         }
@@ -3148,5 +3178,93 @@ mod tests {
         for t in core::mem::take(&mut guard.mapping_tables) {
             free_phys_page(t);
         }
+    }
+
+    /// The user-half table pages reachable from `pml4_pa` (PDPT, PD and
+    /// PT pages under PML4[0..256)), in walk order.
+    fn reachable_user_tables(pml4_pa: u64) -> Vec<u64> {
+        let mask = 0x000f_ffff_ffff_f000;
+        let mut out = Vec::new();
+        for i in 0..256 {
+            let e4 = table_entry(pml4_pa, i);
+            if e4 & PTE_P == 0 {
+                continue;
+            }
+            let pdpt = e4 & mask;
+            out.push(pdpt);
+            for j in 0..512 {
+                let e3 = table_entry(pdpt, j);
+                if e3 & PTE_P == 0 {
+                    continue;
+                }
+                let pd = e3 & mask;
+                out.push(pd);
+                for k in 0..512 {
+                    let e2 = table_entry(pd, k);
+                    if e2 & PTE_P != 0 {
+                        out.push(e2 & mask);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The exec-reuse pin: EXEC frees the old image's mappings and then
+    /// maps the new image into the SAME PML4.  free_user_mappings
+    /// returns the user-half intermediate tables to the allocator, so it
+    /// must also unlink them from the surviving PML4 first.  With the
+    /// PML4 entries left behind, the new image's walk descends into the
+    /// freed pages while the allocator hands those same pages out again
+    /// as leaf pages: text and data bytes then land in live page tables.
+    /// On the q35 venue that was a garbage PTE (the KZERO-window panic
+    /// at phys_ptr_mut) or a PTE written over a text page (#UD at a
+    /// 0xff8 page offset) once 8958c9e made frees real.
+    #[test]
+    fn free_user_mappings_unlinks_the_freed_tables_for_exec_reuse() {
+        let mut guard = new_user_proc("execreuse").expect("construction succeeds");
+        // The text base and the top stack page: PML4[0] and PML4[255],
+        // the two user-half subtrees every exec'd image builds.
+        let text_va = 0x0020_0000usize;
+        let stack_va = 0x0000_7fff_ffff_e000usize;
+        guard.map_user_page(text_va, SegKind::Text).expect("text map succeeds");
+        guard.map_user_page(stack_va, SegKind::Stack).expect("stack map succeeds");
+        assert_eq!(table_entry(guard.pml4_pa, 0) & PTE_P, PTE_P);
+        assert_eq!(table_entry(guard.pml4_pa, 255) & PTE_P, PTE_P);
+        let kstack_entry = table_entry(guard.pml4_pa, KSTACK_PML4_INDEX);
+
+        guard.free_user_mappings();
+
+        // Every user-half PML4 entry is gone: the freed tables are no
+        // longer reachable from the root the next image reuses.  (Read
+        // before any further walk: under the defect a walk here would
+        // read freed pages.)
+        for i in 0..256 {
+            assert_eq!(
+                table_entry(guard.pml4_pa, i),
+                0,
+                "PML4[{i}] still links a freed user-half table after free_user_mappings"
+            );
+        }
+        assert!(guard.mapping_tables.is_empty());
+        // The kernel side survives: the exit tail still runs on the
+        // kstack mapped through PML4[400].
+        assert_eq!(table_entry(guard.pml4_pa, KSTACK_PML4_INDEX), kstack_entry);
+
+        // The exec re-map builds fresh tables, and every table page the
+        // root reaches is one this proc owns (recorded for its next
+        // free), so no walk can land in a page the allocator handed out.
+        guard.map_user_page(text_va, SegKind::Text).expect("text re-map succeeds");
+        guard.map_user_page(stack_va, SegKind::Stack).expect("stack re-map succeeds");
+        let reachable = reachable_user_tables(guard.pml4_pa);
+        assert_eq!(reachable.len(), 6, "two subtrees of PDPT+PD+PT each");
+        for t in &reachable {
+            assert!(
+                guard.mapping_tables.contains(t),
+                "table page {t:#x} is reachable but not owned by the proc"
+            );
+        }
+        guard.free_user_mappings();
+        guard.state = ProcState::Moribund;
     }
 }
