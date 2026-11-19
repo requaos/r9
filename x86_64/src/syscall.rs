@@ -28,7 +28,7 @@ use port::dat::{
     Chan, DEV_CAP, DEV_CONS, DEV_DUP, DEV_ENV, DEV_ETHER, DEV_IP, DEV_MNT, DEV_PIPE, DEV_PROC,
     DEV_ROOT, DEV_SRV, DEV_SSL, OEXEC, OTRUNC,
 };
-use port::mcslock::{Lock, LockNode};
+use port::mcslock::LockNode;
 use port::namec::{self, NamecMode};
 use port::pgrp::{MAFTER, MBEFORE, MMASK, MORDER};
 use port::println;
@@ -1566,12 +1566,10 @@ fn sys_rfork(frame: &mut Ureg, proc: &mut Proc) -> u64 {
         if flag & (RFMEM | RFNOWAIT) != 0 {
             return err(proc, "rfork: bad flags for non-RFPROC");
         }
-        if flag & RFFDG != 0 {
-            let node = LockNode::new();
-            let copy = proc.fd_group.lock(&node).deep_copy();
-            proc.fd_group = Arc::new(Lock::new("fdgrp", copy));
-        } else if flag & RFCFDG != 0 {
-            proc.fd_group = proc::empty_fdgroup();
+        if flag & (RFFDG | RFCFDG) != 0 {
+            // A fresh table for the caller, then the old one is released
+            // (closefgrp) — see proc::split_fd_group_in_place.
+            proc::split_fd_group_in_place(&mut proc.fd_group, flag & RFFDG != 0, namec::close_chan);
         }
         if flag & (RFNAMEG | RFCNAMEG) != 0 {
             proc::rfork_namespace_split(proc, flag & RFNAMEG != 0);
@@ -1932,35 +1930,14 @@ fn sys_exits(frame: &mut Ureg, proc: &mut Proc) -> u64 {
 /// the group is DETACHED, and only when this proc was the LAST sharer
 /// are its occupied slots drained and close-dispatched.
 pub(crate) fn exit_tail(proc: &mut Proc, msg: &[u8]) -> ! {
-    let detached = core::mem::replace(&mut proc.fd_group, proc::empty_fdgroup());
-    if Arc::strong_count(&detached) == 1 {
-        let mut drained = {
-            let node = LockNode::new();
-            detached.lock(&node).drain_all()
-        };
-        // 19-10 cont 6: consume ONE chan at a time — close_chan under a
-        // BORROW pins every duplicate of the same server fid inside the
-        // batch, so clunk_if_last never sees the last ref and the Tclunk
-        // never fires (rio's wsys cons: the window never deleted on the
-        // shell's exit).  Taking ownership drops each chan BEFORE the
-        // next close, so a later duplicate observes the freed count —
-        // the donor closefgrp's nil-the-slot-then-cclose cascade.
-        for c in drained.drain(..) {
-            port::namec::close_chan(&c);
-            drop(c);
-        }
-        // 17-02 (the #44 fix): exit_tail DIVERGES (park /
-        // sched_from_moribund) — every local still live at the tail
-        // rides the dead kstack forever.  The churn gate measured the
-        // detached fd group's Arc as ~8 KiB leaked PER EXIT (the
-        // 15-03 "~16 KiB per-exit residue" — this plus the husk
-        // payloads swept below); the transients die HERE, before any
-        // divergence.
-        drop(drained);
-    }
-    // count > 1: sharers keep the group; the detached Arc just drops —
-    // HERE, before the diverging tail (same #44 fix).
-    drop(detached);
+    // The fd-group sweep (proc::release_fd_group: the last sharer drains
+    // one chan at a time — 19-10 cont 6).  17-02 (the #44 fix):
+    // exit_tail DIVERGES (park / sched_from_moribund), so every local
+    // still live at the tail rides the dead kstack forever — the churn
+    // gate measured the detached fd group's Arc as ~8 KiB leaked PER
+    // EXIT.  The sweep is a RETURNING helper, so the detached reference
+    // drops there, before any divergence.
+    proc::release_fd_group(&mut proc.fd_group, proc::empty_fdgroup(), port::namec::close_chan);
     proc::rendez_remove(proc);
     proc.free_user_mappings();
     // Drop the husk's remaining heap payloads (the slot itself is never

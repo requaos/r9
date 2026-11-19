@@ -1935,6 +1935,37 @@ pub(crate) fn release_fd_group(
     }
 }
 
+/// The non-RFPROC rfork fd-group split (donor sysproc.c: `ofg =
+/// up->fgrp; up->fgrp = dupfgrp(copy ? ofg : nil); closefgrp(ofg)`):
+/// re-group the CALLER in place — `copy` (RFFDG) gives it a private
+/// slot-by-slot copy, otherwise (RFCFDG) a FRESH empty table — then
+/// release the old handle exactly as an exit does (release_fd_group:
+/// the last holder drains and close-dispatches it; a shared table just
+/// loses this reference).
+///
+/// The fresh table is never empty_fdgroup(): that singleton is the exit
+/// husks' shared replacement, so a LIVE proc handed it would install
+/// its later fds in a table every husk and every other RFCFDG caller
+/// shares, and no exit would ever drain it (its count is never 1).
+/// And the old handle is never just dropped: a private table's chans
+/// would then skip close_chan — after RFFDG every pipe end keeps the
+/// copy's extra open count (its peer never sees hangup), after RFCFDG
+/// none of them closes at all.
+pub(crate) fn split_fd_group_in_place(
+    slot: &mut Arc<Lock<FdGroup<MAX_FDS>>>,
+    copy: bool,
+    close: impl FnMut(&Chan),
+) {
+    let fresh = if copy {
+        let node = LockNode::new();
+        let copied = slot.lock(&node).deep_copy();
+        Arc::new(Lock::new("fdgrp", copied))
+    } else {
+        Arc::new(Lock::new("fdgrp", FdGroup::new()))
+    };
+    release_fd_group(slot, fresh, close);
+}
+
 
 /// devproc-lite's write hook: append the note to the
 /// ADDRESSED pid's queue — no broadcast, no group semantics.  The write is
@@ -2846,7 +2877,7 @@ mod sem_tests {
 /// release_fd_group call on its own handle.
 #[cfg(test)]
 mod fdgrp_release_tests {
-    use super::{MAX_FDS, release_fd_group};
+    use super::{MAX_FDS, empty_fdgroup, release_fd_group, split_fd_group_in_place};
     use alloc::sync::Arc;
     use port::dat::{Chan, ORDWR};
     use port::fdgrp::FdGroup;
@@ -2957,6 +2988,96 @@ mod fdgrp_release_tests {
             namec::close_chan(ch);
         });
         assert_eq!(closes, 1);
+        assert!(at_eof(&mut reader));
+    }
+
+    /// Bare rfork(RFCFDG) (split_fd_group_in_place, copy = false): the
+    /// caller gets a PRIVATE fresh table — never the exit husks'
+    /// singleton, never another RFCFDG caller's — and its old private
+    /// table is released (the donor's closefgrp), so the pipe writer it
+    /// held closes.
+    #[test]
+    fn bare_rfcfdg_gets_a_private_fresh_table_and_releases_the_old_one() {
+        let (mut a, mut reader) = group_with_pipe_writer();
+        let mut closes = 0;
+        split_fd_group_in_place(&mut a, false, |c| {
+            closes += 1;
+            namec::close_chan(c);
+        });
+        assert_eq!(closes, 1, "the old private table is released");
+        assert!(at_eof(&mut reader), "its pipe writer closed");
+        assert!(!holds_fd1(&a), "the fresh table is empty");
+        assert!(!Arc::ptr_eq(&a, &empty_fdgroup()), "never the husk singleton");
+
+        // A later fd in this table must stay private to it.
+        let (mut other, _other_reader) = group_with_pipe_writer();
+        {
+            let node = LockNode::new();
+            let fd = a.lock(&node).alloc_lowest(Chan::new(
+                port::dat::DEV_CONS,
+                port::dat::Qid { path: 1, vers: 0, typ: 0 },
+                ORDWR,
+            ));
+            assert_eq!(fd, Some(0));
+        }
+        split_fd_group_in_place(&mut other, false, namec::close_chan);
+        assert!(!Arc::ptr_eq(&a, &other), "two RFCFDG callers never share");
+        {
+            let node = LockNode::new();
+            assert!(other.lock(&node).get(0).is_none(), "the other caller's table is empty");
+        }
+        {
+            let node = LockNode::new();
+            assert!(empty_fdgroup().lock(&node).get(0).is_none(), "the husk singleton is untouched");
+        }
+    }
+
+    /// Bare rfork(RFFDG) on a PRIVATE table (rio's startup shape): the
+    /// copy dup'd the writer (open count +1), so the old table must be
+    /// released (-1) or the pipe never hangs up after the caller exits.
+    #[test]
+    fn bare_rffdg_on_a_private_table_keeps_the_pipe_balanced() {
+        let (mut g, mut reader) = group_with_pipe_writer();
+        let mut closes = 0;
+        split_fd_group_in_place(&mut g, true, |c| {
+            closes += 1;
+            namec::close_chan(c);
+        });
+        assert_eq!(closes, 1, "the old private table is released");
+        assert!(holds_fd1(&g), "the copy keeps the writer");
+        release_fd_group(&mut g, empty(), |c| {
+            closes += 1;
+            namec::close_chan(c);
+        });
+        assert_eq!(closes, 2);
+        assert!(at_eof(&mut reader), "the reader sees EOF after the caller's exit");
+    }
+
+    /// Bare rfork(RFFDG) on a SHARED table (lib9p _postmountsrv: the
+    /// server child shares, the parent privatizes): nothing closes at
+    /// the split; each table closes its own copy at its holder's exit.
+    #[test]
+    fn bare_rffdg_on_a_shared_table_closes_nothing_at_the_split() {
+        let (mut child, mut reader) = group_with_pipe_writer();
+        let mut parent = child.clone();
+        let mut closes = 0;
+        split_fd_group_in_place(&mut parent, true, |c| {
+            closes += 1;
+            namec::close_chan(c);
+        });
+        assert_eq!(closes, 0, "the child still holds the shared table");
+        assert_eq!(Arc::strong_count(&child), 1, "the parent's reference moved to its copy");
+        assert!(holds_fd1(&parent) && holds_fd1(&child));
+
+        release_fd_group(&mut child, empty(), |c| {
+            closes += 1;
+            namec::close_chan(c);
+        });
+        release_fd_group(&mut parent, empty(), |c| {
+            closes += 1;
+            namec::close_chan(c);
+        });
+        assert_eq!(closes, 2);
         assert!(at_eof(&mut reader));
     }
 }

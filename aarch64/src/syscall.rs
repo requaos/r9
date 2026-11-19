@@ -20,7 +20,6 @@
 //! context via timer.rs → proc::cons_input_wake).
 
 use alloc::collections::VecDeque;
-use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use port::dat::{
@@ -28,7 +27,7 @@ use port::dat::{
     DEV_SRV, OEXEC, OTRUNC,
 };
 use port::fdgrp::FdGroup;
-use port::mcslock::{Lock, LockNode};
+use port::mcslock::LockNode;
 use port::namec::{self, NamecMode};
 use port::pgrp::{MAFTER, MBEFORE, MMASK, MORDER};
 use port::println;
@@ -1646,12 +1645,10 @@ fn sys_rfork(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         if flag & (RFMEM | RFNOWAIT) != 0 {
             return err(proc, "rfork: bad flags for non-RFPROC");
         }
-        if flag & RFFDG != 0 {
-            let node = LockNode::new();
-            let copy = proc.fd_group.lock(&node).deep_copy();
-            proc.fd_group = Arc::new(Lock::new("fdgrp", copy));
-        } else if flag & RFCFDG != 0 {
-            proc.fd_group = proc::empty_fdgroup();
+        if flag & (RFFDG | RFCFDG) != 0 {
+            // A fresh table for the caller, then the old one is released
+            // (closefgrp) — see proc::split_fd_group_in_place.
+            proc::split_fd_group_in_place(&mut proc.fd_group, flag & RFFDG != 0, port::namec::close_chan);
         }
         if flag & (RFNAMEG | RFCNAMEG) != 0 {
             proc::rfork_namespace_split(proc, flag & RFNAMEG != 0);
