@@ -159,6 +159,10 @@ pub fn create(c: &Chan, name: &[u8], mode: u32, perms: u32) -> Result<Chan> {
 pub fn open(c: &Chan, mode: u32) -> Result<Chan> {
     let access = mode & crate::dat::OMASK;
     if c.qid.typ == QTDIR {
+        // Donor srvopen: the registry itself is never remove-on-close.
+        if mode & crate::dat::ORCLOSE != 0 {
+            return Err("devsrv: remove-on-close of the directory");
+        }
         if access != OREAD {
             return Err("devsrv: directory opens OREAD only");
         }
@@ -220,6 +224,30 @@ pub fn write(c: &mut Chan, buf: &[u8], _offset: u64) -> Result<u64> {
     }
     e.chan = Some(chan);
     Ok(buf.len() as u64)
+}
+
+/// Remove a service entry (donor srvremove): the entry leaves the
+/// registry, and its posted chan's reference is close-dispatched (the
+/// donor's `cclose(sp->chan)`) after the registry lock is dropped (a
+/// pipe end's close takes the pipe's lock).  Reached from namec's
+/// remove-on-close arm, so a server's `/srv/<name>` posted OWRITE|ORCLOSE
+/// goes when the server's last reference to it closes.
+pub fn remove(c: &Chan) -> Result<()> {
+    if c.qid.typ == QTDIR {
+        return Err("devsrv: remove of the directory");
+    }
+    let posted = {
+        let node = LockNode::new();
+        let mut guard = SRV.lock(&node);
+        let Some(i) = guard.0.iter().position(|e| e.qid_path == c.qid.path) else {
+            return Err("devsrv: nonexistent service");
+        };
+        guard.0.remove(i).chan
+    };
+    if let Some(p) = posted {
+        crate::namec::close_chan(&p);
+    }
+    Ok(())
 }
 
 /// Read a devsrv chan.  The root dir serves the stat-wire listing of the

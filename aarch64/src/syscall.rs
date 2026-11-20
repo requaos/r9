@@ -1522,12 +1522,14 @@ fn sys_create(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 
 /// sys_create's new-file arm (the donor chan.c Acreate): the device
 /// creates with `omode&~(OEXCL|OCEXEC)`, since both bits are namec and
-/// fd state, never the device's.  OCEXEC is then recorded on the new
-/// chan (the donor's CCEXEC), as namec::open_chan records it on the
-/// existing-file arm.  exec's close_on_exec_fds takes only marked chans,
-/// so without the mark a file created OCEXEC stays open across exec
-/// (lib9p's postfd, rio and the plumber create their /srv posts
-/// OWRITE|ORCLOSE|OCEXEC).
+/// fd state, never the device's.  Then namec::mark_fd_state records
+/// OCEXEC (the donor's CCEXEC) and ORCLOSE (CRCLOSE) on the new chan, as
+/// namec::open_chan does on the existing-file arm.  exec's
+/// close_on_exec_fds takes only cexec-marked chans, and close_chan
+/// removes only rclose-marked ones, so without the marks a file created
+/// OCEXEC stays open across exec and one created ORCLOSE outlives its
+/// last close (lib9p's postfd, rio and the plumber create their /srv
+/// posts OWRITE|ORCLOSE|OCEXEC).
 fn create_new_chan(
     parent: &Chan,
     name: &[u8],
@@ -1538,9 +1540,7 @@ fn create_new_chan(
 ) -> port::Result<Chan> {
     let device_mode = mode & !(port::dat::OEXCL | port::dat::OCEXEC);
     let mut c = namec::create_chan_union(parent, name, device_mode, perm, pg, nomount)?;
-    if mode & port::dat::OCEXEC != 0 {
-        c.cexec = true;
-    }
+    port::namec::mark_fd_state(&mut c, mode);
     Ok(c)
 }
 
@@ -2248,5 +2248,18 @@ mod create_cexec_tests {
         assert!(create(b"a64-cexec-postfd", OWRITE | ORCLOSE | OCEXEC).cexec);
         assert!(create(b"a64-cexec-excl", OWRITE | OEXCL | OCEXEC).cexec);
         assert!(!create(b"a64-cexec-exclonly", OWRITE | OEXCL).cexec);
+    }
+
+    /// ORCLOSE on the new-file arm: the /srv post goes at the last close
+    /// of the create (lib9p postfd's OWRITE|ORCLOSE|OCEXEC), not before.
+    #[test]
+    fn created_orclose_srv_post_goes_at_the_last_close() {
+        let c = create(b"a64-rclose-post", OWRITE | ORCLOSE | OCEXEC);
+        let copy = c.dup();
+        port::namec::close_chan(&copy);
+        drop(copy);
+        assert!(devsrv::walk(&devsrv::attach(), b"a64-rclose-post").is_ok(), "a copy's close keeps it");
+        port::namec::close_chan(&c);
+        assert!(devsrv::walk(&devsrv::attach(), b"a64-rclose-post").is_err(), "the last close removes it");
     }
 }

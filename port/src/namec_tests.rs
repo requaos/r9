@@ -601,3 +601,69 @@ fn open_chan_records_oceexec_as_fd_state() {
     let plain = namec::open_chan(&c2, OREAD).expect("plain open");
     assert!(!plain.cexec, "a plain open leaves the mark clear");
 }
+
+// ---------------------------------------------------------------------------
+// ORCLOSE (the donor CRCLOSE arm of srvclose/envclose): remove at the LAST
+// close of the open
+// ---------------------------------------------------------------------------
+
+fn srv_exists(name: &[u8]) -> bool {
+    crate::devsrv::walk(&crate::devsrv::attach(), name).is_ok()
+}
+
+/// A /srv post created ORCLOSE (lib9p postfd's shape) is removed when
+/// its last reference closes — not when an rfork'd/dup'd copy closes
+/// first.  A plain create's entry stays.
+#[test]
+fn orclose_srv_entry_goes_at_the_last_close_only() {
+    let mut c = crate::devsrv::create(&crate::devsrv::attach(), b"rc-last", OWRITE, 0o600)
+        .expect("devsrv create");
+    namec::mark_fd_state(&mut c, OWRITE | crate::dat::ORCLOSE);
+    let copy = c.dup();
+    namec::close_chan(&copy);
+    drop(copy);
+    assert!(srv_exists(b"rc-last"), "a copy's close removes nothing");
+    namec::close_chan(&c);
+    assert!(!srv_exists(b"rc-last"), "the last close removes the entry");
+
+    let plain = crate::devsrv::create(&crate::devsrv::attach(), b"rc-plain", OWRITE, 0o600)
+        .expect("devsrv create");
+    namec::close_chan(&plain);
+    assert!(srv_exists(b"rc-plain"), "no ORCLOSE, no remove");
+}
+
+/// The close-raced-mid-op corner: the slot's close saw an op-ref's
+/// share, so the remove lands at drop_op_ref.
+#[test]
+fn orclose_remove_waits_for_an_in_flight_op_ref() {
+    let mut c = crate::devsrv::create(&crate::devsrv::attach(), b"rc-opref", OWRITE, 0o600)
+        .expect("devsrv create");
+    namec::mark_fd_state(&mut c, OWRITE | crate::dat::ORCLOSE);
+    let op = c.op_clone();
+    namec::close_chan(&c);
+    drop(c);
+    assert!(srv_exists(b"rc-opref"), "an in-flight op still holds the open");
+    op.drop_op_ref();
+    assert!(!srv_exists(b"rc-opref"), "the op-ref's release is the last close");
+}
+
+/// devenv: an ORCLOSE open of a key removes it from the operating
+/// group at the last close; the group vers moves.
+#[test]
+fn orclose_env_key_goes_at_the_last_close() {
+    let _seam = seam_guard();
+    install_group_hook_once();
+    let group = Arc::new(Lock::new("env", EnvGroup::new()));
+    set_current_group(group.clone());
+    let root = devenv::attach(b"").expect("#e attach");
+    let created = devenv::create(&root, b"rckey", OWRITE, 0o666).expect("create");
+    drop(created);
+    let key = devenv::walk(&root, b"rckey").expect("walk");
+    let opened = namec::open_chan(&key, OWRITE | crate::dat::ORCLOSE).expect("open ORCLOSE");
+    let vers = { let n = LockNode::new(); group.lock(&n).vers() };
+    namec::close_chan(&opened);
+    let n = LockNode::new();
+    let g = group.lock(&n);
+    assert!(g.get(b"rckey").is_none(), "the key is removed at the last close");
+    assert!(g.vers() > vers, "the remove bumps the group vers");
+}

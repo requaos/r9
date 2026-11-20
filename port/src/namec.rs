@@ -434,14 +434,67 @@ pub fn open_chan(c: &Chan, mode: u32) -> Result<Chan> {
     // The donor's COPEN — every funnel-opened chan is marked;
     // Chan::dup's pipe-reference rule and close_chan's dispatch read it.
     opened.copen = true;
-    // The donor chan.c Aopen arm: OCEXEC is fd state, recorded on the
-    // chan AFTER the device open (the bit never reaches the device —
-    // `access` masked it above; the donor passes omode&~OCEXEC).  exec's
-    // close_cexec_fds sweep reads it.
-    if mode & crate::dat::OCEXEC != 0 {
-        opened.cexec = true;
-    }
+    // The donor chan.c Aopen arm: OCEXEC and ORCLOSE are fd state,
+    // recorded on the chan AFTER the device open (the bits never reach
+    // a local device — `access` masked them above).
+    mark_fd_state(&mut opened, mode);
     Ok(opened)
+}
+
+/// Record an open or create mode's fd-state bits on the chan the device
+/// returned (the donor chan.c Aopen/Acreate arms, which set CCEXEC and
+/// CRCLOSE after the device op): OCEXEC → `cexec` (exec's close-on-exec
+/// sweep), ORCLOSE → a fresh `rclose` reference (close_chan's
+/// remove-on-close arm).  open_chan calls it, and the arch sys_create's
+/// new-file arm must too: every arm that yields an open chan.
+pub fn mark_fd_state(c: &mut Chan, mode: u32) {
+    if mode & crate::dat::OCEXEC != 0 {
+        c.cexec = true;
+    }
+    if mode & crate::dat::ORCLOSE != 0 {
+        c.rclose = Some(alloc::sync::Arc::new(()));
+    }
+}
+
+/// The per-device remove dispatch (the donor's `c->dev->remove(c)`):
+/// the one routing for both REMOVE(25)'s sysremove and the ORCLOSE
+/// close path.  Ported arms run; every other device refuses LOUDLY,
+/// naming the gap, never a silent 0.  devmnt is not here this era (a
+/// mounted remove would be a Tremove RPC; no measured caller).
+pub fn remove_chan(c: &Chan) -> Result<()> {
+    match c.dev {
+        DEV_CAP => crate::devcap::remove(c),
+        DEV_SRV => crate::devsrv::remove(c),
+        DEV_ENV => crate::devenv::remove(c),
+        _ => Err("remove: device does not implement remove"),
+    }
+}
+
+/// The donor's CRCLOSE arm of the local devices' close (devsrv.c
+/// srvclose, devenv.c envclose): when this chan holds the LAST
+/// reference to an ORCLOSE open, remove the file it names through
+/// remove_chan.  Errors are dropped (cclose cannot fail — envclose's
+/// comment).  Only devsrv and devenv: those are the donor devices whose
+/// close honours CRCLOSE (capclose does not).  devmnt is not here
+/// either: ORCLOSE rode its Topen/Tcreate mode byte, and the server
+/// removes the file at the Tclunk.
+///
+/// LOCK RISK (open, owner-noted 2026-11-20): Chan::drop_op_ref also
+/// calls this, and fdgrp's op_done runs drop_op_ref UNDER the fd-group
+/// lock.  So when a close races an in-flight op on an ORCLOSE fd, the
+/// remove (and devsrv's close of the posted chan — a pipe end takes the
+/// pipe lock) runs with the fd-group leaf lock held.  devmnt's
+/// clunk_if_last already runs there.  Every other path (sys_close,
+/// dup eviction, the exec sweep, the exit drains) calls close_chan
+/// outside the group lock.
+pub(crate) fn remove_if_last_rclose(c: &Chan) {
+    let Some(r) = &c.rclose else { return };
+    if alloc::sync::Arc::strong_count(r) != 1 {
+        return;
+    }
+    if matches!(c.dev, DEV_SRV | DEV_ENV) {
+        let _ = remove_chan(c);
+    }
 }
 
 /// The stat dispatch for a resolved chan (sys_stat/sys_fstat
@@ -549,6 +602,7 @@ pub fn create_chan_union(
 /// non-last refs a no-op).  Non-open chans of close-less devices are
 /// no-ops.
 pub fn close_chan(c: &Chan) {
+    remove_if_last_rclose(c);
     match c.dev {
         DEV_PIPE => {
             if c.copen {

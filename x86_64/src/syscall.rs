@@ -891,15 +891,12 @@ fn valid_stat_wire(stat: &[u8]) -> Result<(), &'static str> {
 }
 
 /// The per-device remove routing (the donor's dev->remove dispatch at
-/// sysremove's c->dev->remove(c), sysfile.c:1360): the ported arms
-/// run, every device without one refuses LOUDLY naming the gap —
-/// never a silent 0.  devcap's caphash remove (18-02's ported arm) is
-/// the first consumer.
+/// sysremove's c->dev->remove(c), sysfile.c:1360): port's shared
+/// namec::remove_chan, the same dispatch the ORCLOSE close path uses
+/// (devcap's caphash, devsrv's services, devenv's keys); every device
+/// without an arm refuses LOUDLY naming the gap — never a silent 0.
 fn remove_chan(c: &Chan) -> Result<u64, &'static str> {
-    match c.dev {
-        DEV_CAP => port::devcap::remove(c).map(|_| 0),
-        _ => Err("remove: device does not implement remove"),
-    }
+    port::namec::remove_chan(c).map(|_| 0)
 }
 
 /// The per-device wstat routing (the donor's dev->wstat dispatch at
@@ -1491,12 +1488,14 @@ fn sys_create(frame: &mut Ureg, proc: &mut Proc) -> u64 {
 
 /// sys_create's new-file arm (the donor chan.c Acreate): the device
 /// creates with `omode&~(OEXCL|OCEXEC)`, since both bits are namec and
-/// fd state, never the device's.  OCEXEC is then recorded on the new
-/// chan (the donor's CCEXEC), as namec::open_chan records it on the
-/// existing-file arm.  exec's close_on_exec_fds takes only marked chans,
-/// so without the mark a file created OCEXEC stays open across exec
-/// (lib9p's postfd, rio and the plumber create their /srv posts
-/// OWRITE|ORCLOSE|OCEXEC).
+/// fd state, never the device's.  Then namec::mark_fd_state records
+/// OCEXEC (the donor's CCEXEC) and ORCLOSE (CRCLOSE) on the new chan, as
+/// namec::open_chan does on the existing-file arm.  exec's
+/// close_on_exec_fds takes only cexec-marked chans, and close_chan
+/// removes only rclose-marked ones, so without the marks a file created
+/// OCEXEC stays open across exec and one created ORCLOSE outlives its
+/// last close (lib9p's postfd, rio and the plumber create their /srv
+/// posts OWRITE|ORCLOSE|OCEXEC).
 fn create_new_chan(
     parent: &Chan,
     name: &[u8],
@@ -1507,9 +1506,7 @@ fn create_new_chan(
 ) -> port::Result<Chan> {
     let device_mode = mode & !(port::dat::OEXCL | port::dat::OCEXEC);
     let mut c = namec::create_chan_union(parent, name, device_mode, perm, pg, nomount)?;
-    if mode & port::dat::OCEXEC != 0 {
-        c.cexec = true;
-    }
+    port::namec::mark_fd_state(&mut c, mode);
     Ok(c)
 }
 
@@ -2353,6 +2350,12 @@ mod tests {
         // the cap ROOT chan is not caphash.
         let cap_root2 = port::devcap::attach();
         assert!(remove_chan(&cap_root2).is_err(), "devcap's own gate refuses");
+        // The shared dispatch's devsrv arm (the ORCLOSE close path's
+        // device half): a service entry is removed.
+        let srv = port::devsrv::attach();
+        let post = port::devsrv::create(&srv, b"x64-rm-post", OWRITE, 0o600).expect("srv create");
+        assert_eq!(remove_chan(&post), Ok(0), "devsrv's arm runs");
+        assert!(port::devsrv::walk(&srv, b"x64-rm-post").is_err(), "the entry is gone");
     }
 
     /// Test 3 (the loud-refusal shape for unported wstat): a VALID stat
@@ -2369,8 +2372,8 @@ mod tests {
 
     /// The REMOVE behavioral pin: dispatch_proc routes syscall 25,
     /// args read from SP+8 upward, the path resolves through namec
-    /// (the #e registry), and the refusal lands as -1 + the named
-    /// errstr.
+    /// (the #c registry — devcons has no remove arm; #e gained one with
+    /// ORCLOSE), and the refusal lands as -1 + the named errstr.
     #[test]
     fn remove_syscall_dispatches_and_refuses_loudly() {
         let mut mock = MockStack::new("t-cpu03-rm");
@@ -2378,7 +2381,7 @@ mod tests {
         let env = port::devenv::attach(b"").expect("devenv attach");
         mock.proc().slash = Some(env.dup());
         mock.proc().dot = Some(env);
-        mock.buf[0..3].copy_from_slice(b"#e\0");
+        mock.buf[0..3].copy_from_slice(b"#c\0");
         mock.put(8, mock.base());
         let mut frame = Ureg::zeroed();
         frame.bp = REMOVE;
@@ -2603,6 +2606,20 @@ mod tests {
         assert!(srv_create(b"x64-cexec-postfd", OWRITE | orclose | OCEXEC).cexec);
         assert!(srv_create(b"x64-cexec-excl", OWRITE | port::dat::OEXCL | OCEXEC).cexec);
         assert!(!srv_create(b"x64-cexec-exclonly", OWRITE | port::dat::OEXCL).cexec);
+    }
+
+    /// ORCLOSE on the new-file arm: the /srv post goes at the last close
+    /// of the create (lib9p postfd's OWRITE|ORCLOSE|OCEXEC), not before.
+    #[test]
+    fn created_orclose_srv_post_goes_at_the_last_close() {
+        let c = srv_create(b"x64-rclose-post", OWRITE | port::dat::ORCLOSE | OCEXEC);
+        let copy = c.dup();
+        port::namec::close_chan(&copy);
+        drop(copy);
+        let root = port::devsrv::attach();
+        assert!(port::devsrv::walk(&root, b"x64-rclose-post").is_ok(), "a copy's close keeps it");
+        port::namec::close_chan(&c);
+        assert!(port::devsrv::walk(&root, b"x64-rclose-post").is_err(), "the last close removes it");
     }
 
     /// CREATE(22) end to end on the real handler, then the real exec

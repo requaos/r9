@@ -149,6 +149,16 @@ pub struct Chan {
     /// new() recvul park: the post-sweep mouse death, 19-10 Leg-1
     /// cont 4).
     pub cexec: bool,
+    /// The donor's CRCLOSE (portdat.h, "remove on close"): the file
+    /// this open names is removed when the LAST reference to the open
+    /// goes (the donor's srvclose/envclose arms).  Recorded by
+    /// namec::mark_fd_state when the open or create mode carries
+    /// ORCLOSE.  The Arc is the open's reference count — the donor's
+    /// one refcounted Chan, which r9 copies by value: dup and op_clone
+    /// share it, and namec::close_chan / drop_op_ref remove only when
+    /// the closing chan holds the last one, so an rfork'd or dup'd copy
+    /// that closes first removes nothing.
+    pub(crate) rclose: Option<Arc<()>>,
     /// The devmnt 9P session — set by
     /// devmnt::fversion on the PIPE chan (the donor's `c->mux`; sys_mount
     /// finds it there) and carried by every DEV_MNT chan in the mounted
@@ -179,7 +189,7 @@ pub struct Chan {
 
 impl Chan {
     pub fn new(dev: usize, qid: Qid, mode: u32) -> Chan {
-        Chan { qid, mode, offset: 0, dev, devno: 0, path: Vec::new(), paqdir: None, pipe: None, copen: false, cexec: false, mnt: None, mnt_fid: None, iounit: 0 }
+        Chan { qid, mode, offset: 0, dev, devno: 0, path: Vec::new(), paqdir: None, pipe: None, copen: false, cexec: false, rclose: None, mnt: None, mnt_fid: None, iounit: 0 }
     }
 
     /// Mark the chan open (COPEN) OUTSIDE the funnel — the one
@@ -248,6 +258,7 @@ impl Chan {
             pipe: self.pipe.clone(),
             copen: self.copen,
             cexec: self.cexec,
+            rclose: self.rclose.clone(),
             mnt: self.mnt.clone(),
             mnt_fid: self.mnt_fid.clone(),
             iounit: self.iounit,
@@ -275,6 +286,7 @@ impl Chan {
             pipe: self.pipe.clone(),
             copen: self.copen,
             cexec: self.cexec,
+            rclose: self.rclose.clone(),
             mnt: self.mnt.clone(),
             mnt_fid: self.mnt_fid.clone(),
             iounit: self.iounit,
@@ -292,6 +304,12 @@ impl Chan {
         if self.dev == DEV_MNT {
             crate::devmnt::clunk_if_last(&self);
         }
+        // The same corner for ORCLOSE: the slot's close saw this op-ref's
+        // extra share of the rclose Arc, so the remove lands here.  OPEN
+        // LOCK RISK: fdgrp's op_done calls this under the fd-group lock,
+        // so this remove runs with that leaf lock held (see
+        // namec::remove_if_last_rclose).
+        crate::namec::remove_if_last_rclose(&self);
     }
 }
 

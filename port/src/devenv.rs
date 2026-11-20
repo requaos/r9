@@ -241,6 +241,19 @@ impl EnvGroup {
         Ok(())
     }
 
+    /// envremove's table half: drop the entry with `qid_path` and bump
+    /// the group vers (donor `eg->vers++`).  The donor swaps the last
+    /// entry into the hole; r9 keeps insertion order (deep_copy's
+    /// renumbering reads it).
+    pub fn remove(&mut self, qid_path: u64) -> Result<()> {
+        let Some(i) = self.entries.iter().position(|e| e.qid_path == qid_path) else {
+            return Err("devenv: nonexistent entry");
+        };
+        self.entries.remove(i);
+        self.vers += 1;
+        Ok(())
+    }
+
     /// envcpy: a deep copy — same names/values, FRESH qid paths (the
     /// donor renumbers: `ne->qid.path = ++to->path`), entry vers 0.
     pub fn deep_copy(&self) -> EnvGroup {
@@ -431,6 +444,20 @@ pub fn create(c: &Chan, name: &[u8], mode: u32, perms: u32) -> Result<Chan> {
     nc.path.push(b'/');
     nc.path.extend_from_slice(name);
     Ok(nc)
+}
+
+/// Remove a key (donor envremove) from the OPERATING process's group —
+/// the same dynamic resolution as every other `#e` op.  Reached from
+/// namec's remove-on-close arm; the exit tails drain the fd table
+/// before they swap the env group out, so an exiting proc's ORCLOSE
+/// keys go from its own group.
+pub fn remove(c: &Chan) -> Result<()> {
+    if c.qid.typ == QTDIR {
+        return Err("devenv: remove of the directory");
+    }
+    let group = current_group()?;
+    let node = LockNode::new();
+    group.lock(&node).remove(c.qid.path)
 }
 
 /// stat of an env chan (sys_stat/sys_fstat's dispatch leg): the root
