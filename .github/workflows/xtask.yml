@@ -55,6 +55,18 @@ jobs:
     - name: Build
       run: cargo xtask build --arch aarch64 --config virtshell --verbose
 
+  # 20-11: the dev_churn aarch64 code (20-09's churn gate driver) is
+  # compiled only by the virtchurn config; neither build-aarch64
+  # (raspi3b) nor build-aarch64-virtshell carries it, so without this
+  # lane no CI job compiles it.
+  build-aarch64-virtchurn:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Build
+      run: cargo xtask build --arch aarch64 --config virtchurn --verbose
+
   build-riscv64:
     runs-on: ubuntu-latest
 
