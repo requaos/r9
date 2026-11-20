@@ -1,0 +1,60 @@
+# The virtchurn churn gate profile (20-09, D-08's arm64 churn gate — the
+# x86_64 q35churn gate ported): config_virtexec's initrd-carrying exec
+# shape (the same build, link, qemu and initrd stanzas; target/bootfs.paq,
+# whose `cargo xtask initrd` bake carries churnmark/churnsem beside /init)
+# plus the churn dev key, which compiles cfg(dev_churn):
+#
+#   main9 routes dev_exec+dev_churn (no bootchain) to churngate's
+#   bootstrap — the same prologue (hooks, env seed, devroot mount) as
+#   exec_bootstrap, then a kernel-context driver proc (never EL0) execs
+#   /churnmark ~1400 times (WINDOWS #44's repro shape), spawning a
+#   /churnsem RFMEM contention generation every 35th iteration,
+#   sampling heap_stats before/one/baseline/end and asserting the
+#   steady-leg per-exec cursor delta against CEILING_BYTES_PER_EXEC —
+#   the x86_64 gate's number, carried unchanged (never tuned to the
+#   aarch64 reading).
+#
+# TCG like its siblings (the virt profiles' reference venue; --accel hvf
+# or R9_ACCEL=hvf swaps in the gicv3 machine).  The tick print stays
+# cfg-gated off under dev_exec: the driver's context is syscall-shaped
+# (always IRQ-masked) and owns the Console lock when it prints.
+[build]
+target = "lib/aarch64-unknown-none-elf.json"
+buildflags = ["-Z", "build-std=core,alloc"]
+
+[link]
+# linker script to use
+script = 'aarch64/lib/kernel.ld'
+
+# kernel load address to insert into kernel.ld (KZERO + 0x40080000; AT()
+# emits p_paddr 0x40080000, qemu virt's -kernel load address)
+load-address = '0xffff800040080000'
+
+[config]
+platform = "virt"
+# no dtb key here: virt's DTB is qemu-facing, passed via [qemu].dtb
+# exec — the first-process orchestration (here: the churn driver's
+# bootstrap instead of /init's exec).
+# ether — D-10: the NIC is part of the standard boot (the virtio-net
+# driver binds in main9's IRQ-arming window), carried from virtexec so
+# the virt discovery contract every profile's finish() asserts holds.
+# churn — cfg(dev_churn): the churngate driver + the per-exit heap line.
+dev = ["exec", "ether", "churn"]
+
+[qemu]
+machine = "virt,gic-version=2"
+# TCG reference CPU.  For hvf on darwin pass --accel hvf (or R9_ACCEL=hvf):
+# xtask swaps in the gicv3 machine/DTB and -cpu host itself.
+cpu = "cortex-a72"
+smp = 1
+memory = "1024M"
+accel = "tcg"
+# Committed trimmed DTB (virtexec's).
+dtb = "aarch64/lib/virt-gicv2.dtb"
+# The initrd (virtexec's stanza): xtask places target/bootfs.paq via
+# qemu's generic loader at the fixed PA below and patches /chosen.
+initrd = { file = "target/bootfs.paq", addr = 0x48000000 }
+
+[dist]
+# ELF is the boot image on virt; skip the objcopy+gzip flat-image pipeline
+format = "elf"

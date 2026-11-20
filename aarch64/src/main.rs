@@ -409,10 +409,19 @@ pub extern "C" fn main9(dtb_va: usize) {
         // EL0 entry (exec_bootstrap) — the exec orchestration is a
         // non-preemptible boot critical section (nothing in it needs
         // interrupts), and the tick's domain is EL0 userland.
+        //
+        // 20-09 (dev_churn without the boot chain, the x86_64 17-02
+        // shape): the churn profile's bootstrap replaces the first EL0
+        // proc with the kernel-context churn driver (same prologue;
+        // churngate's own walk/dispatch).  A dev_churn BOOT-CHAIN config
+        // would keep the normal exec_bootstrap — its churn surface is the
+        // per-exit heap marker, not the driver.
         #[cfg(not(dev_exec))]
         trap::unmask_irq();
-        #[cfg(dev_exec)]
+        #[cfg(all(dev_exec, any(not(dev_churn), dev_bootchain)))]
         exec_bootstrap(initrd_img);
+        #[cfg(all(dev_exec, dev_churn, not(dev_bootchain)))]
+        platform::virt::churngate::bootstrap_and_run(initrd_img);
         #[cfg(not(dev_exec))]
         // The consolidated halt primitive (wfi wakes on each
         // tick; trap()'s IRQ branch erets back here).
@@ -442,7 +451,7 @@ fn cons_echo(bytes: &[u8]) {
 /// (the staged regression gates are untouched).
 #[cfg(all(dev_exec, dev_bootchain))]
 const BOOT_ENTRY: &[u8] = b"/boot/boot";
-#[cfg(all(dev_exec, not(dev_bootchain)))]
+#[cfg(all(dev_exec, not(dev_bootchain), not(dev_churn)))]
 const BOOT_ENTRY: &[u8] = b"/init";
 
 /// The first-process exec
@@ -454,8 +463,119 @@ const BOOT_ENTRY: &[u8] = b"/init";
 /// mechanism), builds the first proc, execs, tears down the TTBR0 identity
 /// map (complete-table-before-switch order), then erets into EL0 via
 /// trap_return with the seeded forkret frame.  Never returns.
-#[cfg(dev_exec)]
+#[cfg(all(dev_exec, any(not(dev_churn), dev_bootchain)))]
 fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
+    let pro = exec_prologue(initrd_img);
+    let img = pro.img;
+    let root = pro.root;
+    let root_env = pro.root_env;
+    let slash_chan = pro.slash;
+    // Exec sources the entry binary through the devroot walk/open path
+    // (one mechanism).  The walk generalizes to a PATH — devroot's walk
+    // is single-component, so loop it over the entry path's components
+    // ("/boot/boot" walks boot→boot).
+    let entry_path = BOOT_ENTRY;
+    let entry_str = core::str::from_utf8(entry_path).unwrap_or("?");
+    let mut entry_chan = slash_chan.dup();
+    let mut leaf: &[u8] = entry_path;
+    for comp in entry_path.split(|&b| b == b'/').filter(|c| !c.is_empty()) {
+        leaf = comp;
+        entry_chan = match root.walk(&entry_chan, comp) {
+            Ok(c) => c,
+            Err(err) => panic!("devroot: walk {entry_str}: {err}"),
+        };
+    }
+    let entry_open = match root.open(&entry_chan, port::devroot::OEXEC) {
+        Ok(c) => c,
+        Err(err) => panic!("devroot: open {entry_str}: {err}"),
+    };
+    let bin = match root.entry(&entry_open) {
+        Ok(bin) => bin,
+        Err(err) => panic!("devroot: {entry_str} entry: {err}"),
+    };
+    println!("devroot: {entry_str} open ({} bytes)", bin.length);
+
+    // Build the first process and exec the entry: a.out parse + segment
+    // record + the eager data/bss pages + exactly
+    // two eager stack-side pages (the seed stack and the zeroed Tos page) +
+    // the forkret frame.  Text/stack/tos fault in.
+    // argv is [boot] — the kernel-seeded env group above is
+    // THE method-selection mechanism (boot's rootserver reads
+    // #e/nobootprompt before any argv fallback).
+    let name = core::str::from_utf8(leaf).unwrap_or("?");
+    let argv: &[&[u8]] = &[leaf];
+    let mut proc = proc::new_user_proc(name).unwrap_or_else(|err| panic!("proc: {err}"));
+    // The first process's namespace root — slash and dot both
+    // start at the devroot attach (the donor's slash/dot; rfork inherits
+    // them, exec preserves them).  Every later proc gets its own Chan value
+    // naming the same tree.
+    proc.slash = Some(slash_chan.dup());
+    proc.dot = Some(slash_chan);
+    // pid 1 runs in the seeded ROOT env group (assigned
+    // explicitly — the slash/dot seeding's twin; Proc::new's fresh empty
+    // group is the never-seeded default).
+    proc.env_group = root_env;
+    exec::exec_into(&mut proc, img, &bin, name, argv)
+        .unwrap_or_else(|err| panic!("exec: {entry_str}: {err}"));
+    // SAFETY: proc.frame names the seeded forkret frame on the proc's
+    // freshly-mapped kstack (exec_into's construction); read-only here.
+    let frame = unsafe { &*proc.frame };
+    let argv_print: alloc::vec::Vec<&str> =
+        argv.iter().map(|a| core::str::from_utf8(a).unwrap_or("?")).collect();
+    println!(
+        "exec: entering EL0 pc={:#x} sp={:#x} path={entry_str} argv={argv_print:?}",
+        frame.pc(),
+        frame.sp()
+    );
+
+    // The proc's fully-built root table REPLACES
+    // the TTBR0 identity map.  Order: the table is complete (its
+    // recursive slot-511 self-entry was written at construction and the seed
+    // pages are mapped) BEFORE the switch; the console print immediately
+    // after proves all runtime MMIO is TTBR1-side — a dead console here is
+    // an instant visible failure.
+    // SAFETY: the proc's root table is fully built (the recursive
+    // self-entry + the seed pages — the complete-before-switch
+    // order) and owned
+    // by the proc; this is the one-way TTBR0 switch into it.
+    unsafe { vm::switch(&*proc.root_table, RootPageTableType::User) };
+    println!("exec: ttbr0 switched, console alive");
+
+    let frame_ptr = proc.frame;
+    // Publish current + Running + CURKSTACK (the trap_return tail
+    // loads SP_EL1 from CURKSTACK on the EL0t-bound return below).  IRQs
+    // stay MASKED at EL1 through the tail: the seed frame's psr=0 unmasks
+    // them at EL0 via the eret's SPSR restore, so the pending tick's first
+    // delivery is a clean EL0-origin IRQ on the proc's kstack — never an
+    // EL1h IRQ mid-tail, whose preempt() would see "Running" and stash a
+    // transient boot-stack frame over proc.frame.
+    proc::activate_first(&mut proc);
+    // SAFETY: frame_ptr names the seeded forkret frame on the proc's
+    // kstack (exec_into's construction); CURKSTACK/CURFRAME were just
+    // published by activate_first — the single first EL0 entry.
+    unsafe { trap::trap_return(frame_ptr) }
+}
+
+/// What the shared first-exec prologue hands its consumer (the
+/// x86_64 17-02 ExecPrologue, plus the mounted root itself): the initrd
+/// image, the mounted devroot, the root attach chan, and the seeded
+/// ROOT env group.
+#[cfg(dev_exec)]
+pub(crate) struct ExecPrologue {
+    pub(crate) img: &'static [u8],
+    pub(crate) root: port::devroot::DevRoot,
+    pub(crate) slash: port::dat::Chan,
+    pub(crate) root_env: alloc::sync::Arc<port::mcslock::Lock<port::devenv::EnvGroup>>,
+}
+
+/// The shared first-exec prologue (exec_bootstrap's head, split out in
+/// 20-09 so the churn driver's bootstrap consumes the IDENTICAL steps
+/// and prints — the x86_64 17-02 split): the initrd presence check, the
+/// port-device hook registrations, the ROOT env seed, and the devroot
+/// mount with its root attach.  Runs entirely in the IRQ-masked boot
+/// window.
+#[cfg(dev_exec)]
+pub(crate) fn exec_prologue(initrd_img: Option<&'static [u8]>) -> ExecPrologue {
     let img = initrd_img.unwrap_or_else(|| {
         panic!("dev_exec: config carries no initrd image (set [qemu] initrd to target/bootfs.paq)")
     });
@@ -598,92 +718,11 @@ fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
     ]);
     println!("devenv: seeded cputype=arm64 nobootprompt=embed readparts=0");
 
-    // The initrd paqfs is the root tree; exec sources the entry binary
-    // through the devroot walk/open path (one mechanism).  The walk
-    // generalizes to a PATH — devroot's walk is single-component, so loop it
-    // over the entry path's components ("/boot/boot" walks boot→boot).
+    // The initrd paqfs is the root tree; the consumer sources its entry
+    // binaries through the devroot walk/open path (one mechanism).
     let root =
         port::devroot::mount_initrd(img).unwrap_or_else(|err| panic!("devroot: mount: {err}"));
-    let entry_path = BOOT_ENTRY;
-    let entry_str = core::str::from_utf8(entry_path).unwrap_or("?");
-    let slash_chan =
+    let slash =
         root.attach_root().unwrap_or_else(|err| panic!("devroot: attach: {err}"));
-    let mut entry_chan = slash_chan.dup();
-    let mut leaf: &[u8] = entry_path;
-    for comp in entry_path.split(|&b| b == b'/').filter(|c| !c.is_empty()) {
-        leaf = comp;
-        entry_chan = match root.walk(&entry_chan, comp) {
-            Ok(c) => c,
-            Err(err) => panic!("devroot: walk {entry_str}: {err}"),
-        };
-    }
-    let entry_open = match root.open(&entry_chan, port::devroot::OEXEC) {
-        Ok(c) => c,
-        Err(err) => panic!("devroot: open {entry_str}: {err}"),
-    };
-    let bin = match root.entry(&entry_open) {
-        Ok(bin) => bin,
-        Err(err) => panic!("devroot: {entry_str} entry: {err}"),
-    };
-    println!("devroot: {entry_str} open ({} bytes)", bin.length);
-
-    // Build the first process and exec the entry: a.out parse + segment
-    // record + the eager data/bss pages + exactly
-    // two eager stack-side pages (the seed stack and the zeroed Tos page) +
-    // the forkret frame.  Text/stack/tos fault in.
-    // argv is [boot] — the kernel-seeded env group above is
-    // THE method-selection mechanism (boot's rootserver reads
-    // #e/nobootprompt before any argv fallback).
-    let name = core::str::from_utf8(leaf).unwrap_or("?");
-    let argv: &[&[u8]] = &[leaf];
-    let mut proc = proc::new_user_proc(name).unwrap_or_else(|err| panic!("proc: {err}"));
-    // The first process's namespace root — slash and dot both
-    // start at the devroot attach (the donor's slash/dot; rfork inherits
-    // them, exec preserves them).  Every later proc gets its own Chan value
-    // naming the same tree.
-    proc.slash = Some(slash_chan.dup());
-    proc.dot = Some(slash_chan);
-    // pid 1 runs in the seeded ROOT env group (assigned
-    // explicitly — the slash/dot seeding's twin; Proc::new's fresh empty
-    // group is the never-seeded default).
-    proc.env_group = root_env;
-    exec::exec_into(&mut proc, img, &bin, name, argv)
-        .unwrap_or_else(|err| panic!("exec: {entry_str}: {err}"));
-    // SAFETY: proc.frame names the seeded forkret frame on the proc's
-    // freshly-mapped kstack (exec_into's construction); read-only here.
-    let frame = unsafe { &*proc.frame };
-    let argv_print: alloc::vec::Vec<&str> =
-        argv.iter().map(|a| core::str::from_utf8(a).unwrap_or("?")).collect();
-    println!(
-        "exec: entering EL0 pc={:#x} sp={:#x} path={entry_str} argv={argv_print:?}",
-        frame.pc(),
-        frame.sp()
-    );
-
-    // The proc's fully-built root table REPLACES
-    // the TTBR0 identity map.  Order: the table is complete (its
-    // recursive slot-511 self-entry was written at construction and the seed
-    // pages are mapped) BEFORE the switch; the console print immediately
-    // after proves all runtime MMIO is TTBR1-side — a dead console here is
-    // an instant visible failure.
-    // SAFETY: the proc's root table is fully built (the recursive
-    // self-entry + the seed pages — the complete-before-switch
-    // order) and owned
-    // by the proc; this is the one-way TTBR0 switch into it.
-    unsafe { vm::switch(&*proc.root_table, RootPageTableType::User) };
-    println!("exec: ttbr0 switched, console alive");
-
-    let frame_ptr = proc.frame;
-    // Publish current + Running + CURKSTACK (the trap_return tail
-    // loads SP_EL1 from CURKSTACK on the EL0t-bound return below).  IRQs
-    // stay MASKED at EL1 through the tail: the seed frame's psr=0 unmasks
-    // them at EL0 via the eret's SPSR restore, so the pending tick's first
-    // delivery is a clean EL0-origin IRQ on the proc's kstack — never an
-    // EL1h IRQ mid-tail, whose preempt() would see "Running" and stash a
-    // transient boot-stack frame over proc.frame.
-    proc::activate_first(&mut proc);
-    // SAFETY: frame_ptr names the seeded forkret frame on the proc's
-    // kstack (exec_into's construction); CURKSTACK/CURFRAME were just
-    // published by activate_first — the single first EL0 entry.
-    unsafe { trap::trap_return(frame_ptr) }
+    ExecPrologue { img, root, slash, root_env }
 }

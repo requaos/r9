@@ -70,7 +70,15 @@ pub const ERRMAX: usize = 128;
 /// measured 201 + the boot chain with >2× headroom; the exit-sweep
 /// deferral stays the tracked follow-up (a long-lived shell still
 /// eventually fills ANY fixed table).
+#[cfg(not(dev_churn))]
 pub const MAX_PROCS: usize = 512;
+/// The churn profile's fork budget (20-09, the x86_64 17-02 twin,
+/// cfg-gated so every other build keeps the measured-201 shape above):
+/// the churn driver's ~1400 exec iterations plus the churnsem RFMEM
+/// contenders (~40 generations x 5 procs) each pin a husk slot — a
+/// boot-session budget above the default.
+#[cfg(dev_churn)]
+pub const MAX_PROCS: usize = 2048;
 /// Open fd slots per proc (init's closefds closes
 /// 3..29 — the table must hold fds through 29 without making that fatal;
 /// pipe+dup flows hold several at once).
@@ -1218,6 +1226,22 @@ pub fn any_active_procs() -> bool {
     table.procs.iter().flatten().any(|p| p.state != ProcState::Moribund)
 }
 
+/// 20-09 (dev_churn, the x86_64 17-02 twin): the drain probe — true
+/// while any proc OTHER than `my_pid` is non-Moribund (the churn
+/// driver's final wait: every nowait contention generation's
+/// contenders gone before the end sample).  any_active_procs minus
+/// self, the table-private-field read living here beside its sibling.
+#[cfg(dev_churn)]
+pub fn any_other_active_procs(my_pid: u64) -> bool {
+    let node = LockNode::new();
+    let table = PROC_TABLE.lock(&node);
+    table
+        .procs
+        .iter()
+        .flatten()
+        .any(|p| p.pid != my_pid && p.state != ProcState::Moribund)
+}
+
 /// The shared mid-construction unwind for new_user_proc — free the
 /// root-table page and the already-allocated kstack pages (the caller
 /// passes exactly the live prefix, kstack_pas[..n]).  The kernel-side VA
@@ -1476,6 +1500,53 @@ pub fn activate_first(p: &mut Proc) {
     p.state = ProcState::Running;
     set_current_proc(p);
     write_curkstack(p.kstack_top);
+}
+
+/// 20-09 (dev_churn, the x86_64 17-02 twin): seed a freshly built
+/// proc's KERNEL entry — the SCHED_CONTEXT seeding shape re-keyed onto
+/// a proc.  The context resume `ret`s into `entry` on the proc's own
+/// kstack (sp 16 bytes under the top, AAPCS64-aligned); no TrapFrame,
+/// never EL0 — the churn driver's orchestrator context.  aarch64's
+/// pick_next resumes a Ready proc through swtch only when
+/// blocked_in_kernel is set (everything else trap_returns into its
+/// frame, and new_user_proc leaves that frame null), so the flag is
+/// what routes the driver's first pick to `entry`.
+#[cfg(dev_churn)]
+pub(crate) fn seed_kernel_context(p: &mut Proc, entry: fn() -> !) {
+    p.context.set_return(entry as *const () as u64);
+    p.context.set_stack_pointer(p.kstack_top as u64 - 16);
+    p.blocked_in_kernel = true;
+}
+
+/// 20-09 (dev_churn): park the boot context into the scheduler loop —
+/// the one-way handoff for the profile whose first "process" is a
+/// kernel-context orchestrator (the churn driver): the boot context
+/// never resumes (its save lands in a scratch Context nothing reads),
+/// and sched_loop runs on the interrupt stack from here on, dispatching
+/// the already-Ready driver.  The x86_64 17-02 shape.
+#[cfg(dev_churn)]
+pub(crate) fn enter_sched_loop_from_boot() -> ! {
+    static BOOT_CTX: SyncUnsafeCell<swtch::Context> = SyncUnsafeCell::new(swtch::Context {
+        x19: 0,
+        x20: 0,
+        x21: 0,
+        x22: 0,
+        x23: 0,
+        x24: 0,
+        x25: 0,
+        x26: 0,
+        x27: 0,
+        x28: 0,
+        x29: 0,
+        x30: 0,
+        sp: 0,
+        spsr: 0,
+    });
+    // SAFETY: single CPU; runs once from the boot context (IRQ-masked,
+    // driver already Ready); BOOT_CTX is never read again, and
+    // sched_context()'s seed-once discipline covers the target.
+    unsafe { swtch::swtch(&mut *BOOT_CTX.get(), &*sched_context()) }
+    unreachable!("the boot context parked into the scheduler loop")
 }
 
 /// The timer-tick preemption entry.  Acts only when the current

@@ -29,6 +29,10 @@ undocumented_unsafe_blocks = "deny"
 # "cap"] in x86_64/lib/config_q35auth.toml, 18-02) — the TOML emission and
 # port/src/namec.rs's '#¤' registry arm (the first code use) land in the
 # SAME commit (the declared rule).
+# dev_churn joins for the aarch64 churn gate (dev = ["exec", "ether",
+# "churn"] in aarch64/lib/config_virtchurn.toml, 20-09) — the TOML and the
+# crate's first code uses (platform/virt/churngate.rs, the exit-tail heap
+# marker) land in the SAME commit; x86_64 declares it in its own crate.
 # q35 is predeclared for the x86_64 platform config (platform = "q35" in
 # x86_64/lib/config_q35.toml, 13-01) — the TOML emission is the first
 # appearance; the first kernel code use lands with the platform tree (13-02).
@@ -44,6 +48,7 @@ unexpected_cfgs = { level = "warn", check-cfg = [
     'cfg(dev_ether)',
     'cfg(dev_ip)',
     'cfg(dev_cap)',
+    'cfg(dev_churn)',
 ] }
 
 [profile.dev]

@@ -2,6 +2,11 @@
 // the DTB's compatible string, so one kernel boots both TCG gicv2 and
 // TCG/hvf gicv3).
 
+// churngate's pure halves (the slope logic, the marker shapes) are
+// host-testable; the driver itself is dev_churn-only (20-09, the
+// x86_64 q35 module gating).
+#[cfg(any(test, dev_churn))]
+pub mod churngate;
 pub mod devcons;
 pub mod gic;
 pub mod pci;

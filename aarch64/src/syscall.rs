@@ -2151,6 +2151,16 @@ pub(crate) fn exit_tail(proc: &mut Proc, msg: &[u8]) -> ! {
     proc.state = ProcState::Moribund;
     let pid = proc.pid;
     println!("process {pid} exited: \"{}\"", core::str::from_utf8(msg).unwrap_or("<bad utf8>"));
+    // 20-09 (dev_churn, the x86_64 17-02 marker): the per-exit heap
+    // line.  The kernel-side churn driver samples the cursor at its own
+    // four points; this line gives any churn venue the same vocabulary
+    // at per-exit granularity.  Sampled AFTER the mapping/Vec frees —
+    // the residue the slope doctrine names is what is left here.
+    #[cfg(dev_churn)]
+    {
+        let (used, total) = crate::allocator::heap_stats();
+        println!("churngate: heap exit {used} {total}");
+    }
     // Post the wait record to the parent and wake it BEFORE the
     // final frees (the record is kernel memory in the parent's table slot;
     // RFNOWAIT children post nothing, donor-style).
