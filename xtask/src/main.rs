@@ -1052,6 +1052,23 @@ const BOOT_STACKSMOKE_MARKER: &str = "stacksmoke: depth 64 ok";
 /// shape, presence-only).
 const BOOT_SMOKESLEEP_MARKER: &str = "smokesleep: interrupted";
 
+/// The virtchurn churn-gate markers (20-09, D-08's arm64 churn gate):
+/// the aarch64 mirror of the q35churn set.  The kernel driver
+/// (aarch64/src/platform/virt/churngate.rs) and the staged churnmark/
+/// churnsem binaries print the x86_64 vocabulary verbatim, so the
+/// strings equal the Q35_CHURN_* ones; the separate names keep each
+/// profile's assertion set self-describing.  The per-sample heap lines
+/// (tag start/one/base/end), the slope line the finish()-time post-pass
+/// re-derives from, the fail-closed FAIL (fast-fails the stage loop),
+/// the terminal DONE with the iteration + generation counts, and the
+/// staged binaries' own EL0 prints the post-pass counts against them.
+const VIRT_CHURN_HEAP_MARKER: &str = "churngate: heap ";
+const VIRT_CHURN_SLOPE_MARKER: &str = "churngate: slope ";
+const VIRT_CHURN_DONE_MARKER: &str = "churngate: DONE iterations=";
+const VIRT_CHURN_FAIL_MARKER: &str = "churngate: FAIL";
+const VIRT_CHURN_MARK_MARKER: &str = "churnmark: ready";
+const VIRT_CHURN_SEMGEN_MARKER: &str = "churngate: semgen";
+
 /// PCI discovery contract (07-02, NETDRV-01): on every aarch64 virt boot
 /// the kernel prints the DTB-decoded ECAM window, the found virtio-net
 /// device, and the decoded INTx route.  finish() asserts presence, with
@@ -1386,6 +1403,13 @@ enum BootStage {
     /// sample lines and the staged binaries' prints ride unordered
     /// between — the finish()-time post-pass owns them).
     Q35ChurnDone,
+    /// The virtchurn terminal stage (20-09, the aarch64 mirror of
+    /// Q35ChurnDone): the banner observed, now await the aarch64 churn
+    /// driver's terminal `churngate: DONE iterations=<n> semgens=<k>`
+    /// marker (a `churngate: FAIL` line fails fast from any stage; the
+    /// heap samples and the staged binaries' prints ride unordered
+    /// between — the finish()-time post-pass owns them).
+    VirtChurnDone,
     /// The q35exec module stage (14-05): discovery observed, now await
     /// the kernel's module-found and paqfs-mount notes (the mb2 tag-3
     /// delivery + the devroot mount), strictly after the discovery
@@ -1493,6 +1517,9 @@ impl fmt::Display for BootStage {
             BootStage::Q35ChurnDone => {
                 write!(f, "terminal marker {Q35_CHURN_DONE_MARKER:?} iterations=… semgens=…")
             }
+            BootStage::VirtChurnDone => {
+                write!(f, "terminal marker {VIRT_CHURN_DONE_MARKER:?} iterations=… semgens=…")
+            }
             BootStage::Q35ModulePaqfs => write!(
                 f,
                 "module/paqfs notes {{{Q35_MODULE_MARKER:?}, {Q35_PAQFS_MARKER:?}}} after the discovery"
@@ -1583,6 +1610,13 @@ enum BootProfile {
     /// zero `churngate: FAIL` — the fast-fail arm already aborts on
     /// the first).
     X64Churn,
+    /// The virtchurn churn gate (20-09, D-08's arm64 churn gate): the
+    /// banner, then the aarch64 kernel-context churn driver's terminal
+    /// `churngate: DONE` — with the finish()-time post-pass (the
+    /// q35churn one, shared) asserting the heap bound from the kernel's
+    /// own markers, the DONE counts vs the staged binaries' own prints,
+    /// and zero `churngate: FAIL`.
+    VirtChurn,
     /// The q35cpu bootconf-tracer gate (19-01 CPU-02, extended 19-03):
     /// the X64 discovery + module/paqfs stages, boot(8)'s chain prints,
     /// then the cpurc SCRIPT's own `cpurc: RAN` + the two 19-03 ring-3
@@ -1877,6 +1911,12 @@ impl BootTestStep {
                 if self.config_name == "q35churn" {
                     base = 900;
                 }
+                // 20-09: the aarch64 virtchurn gate runs the same loop
+                // shape; it carries the q35churn base (TCG scales it by
+                // TCG_OVERALL_MULT below, like every virt profile).
+                if self.arch == Arch::Aarch64 && self.config_name == "virtchurn" {
+                    base = 900;
+                }
                 if tcg_budgets { base * TCG_OVERALL_MULT } else { base }
             });
         let deadline = Instant::now() + Duration::from_secs(timeout_secs);
@@ -1990,6 +2030,13 @@ impl BootTestStep {
         // discovery satisfaction branches into the module stage below
         // (no bind stage — the profile is net-free by design).
         let q35churn_profile = self.arch == Arch::X86_64 && self.config_name == "q35churn";
+        // The VIRTCHURN profile ("virtchurn", 20-09's D-08 arm64 churn
+        // gate) is the q35churn shape on aarch64: dev = ["exec",
+        // "ether", "churn"] — exec is IN the list, so the Banner-stage
+        // dispatch checks it FIRST (the virtnet ordering rule) and routes
+        // straight to the churn driver's terminal marker (no exec-entry
+        // note: the driver is a kernel-context proc, never EL0).
+        let virtchurn_profile = self.arch == Arch::Aarch64 && self.config_name == "virtchurn";
         // The Q35AUTH profile ("q35auth", 18-01's AUTH-02/D-07
         // substrate gate) is the same name-selected shape: its dev
         // list is ["exec"] (like q35exec's), so the module-stage and
@@ -2067,6 +2114,16 @@ impl BootTestStep {
                     &format!("kernel churngate failed ({Q35_CHURN_FAIL_MARKER}): {tail}"),
                 ));
             }
+            // The virtchurn fail-fast (20-09): the aarch64 driver's
+            // verdict is fail-closed the same way.
+            if virtchurn_profile && contains_marker(&capture, VIRT_CHURN_FAIL_MARKER.as_bytes()) {
+                let tail = String::from_utf8_lossy(&capture[capture.len().saturating_sub(200)..]);
+                return Err(self.fail(
+                    stage,
+                    &capture,
+                    &format!("kernel churngate failed ({VIRT_CHURN_FAIL_MARKER}): {tail}"),
+                ));
+            }
             // The q35auth fail-fast (18-01): the staged driver's own
             // verdict is fail-closed — a `substrate: FAIL` line (open
             // failure, short read, identical consecutive reads) means
@@ -2115,6 +2172,8 @@ impl BootTestStep {
                         } else {
                             stage = if net_profile || netip_profile {
                                 BootStage::NetBoot
+                            } else if virtchurn_profile {
+                                BootStage::VirtChurnDone
                             } else if panic_profile {
                                 BootStage::PanicStart
                             } else if exec_profile || multi_profile || notes_profile {
@@ -2307,6 +2366,18 @@ impl BootTestStep {
                     {
                         if line.contains("semgens=") {
                             return self.finish(log_abs, &capture, BootProfile::X64Churn);
+                        }
+                    }
+                }
+                BootStage::VirtChurnDone => {
+                    // The COMPLETE line, not the prefix (the q35churn
+                    // live catch: the marker can satisfy mid-flush and
+                    // the post-pass parses both fields off this line).
+                    if let Some(line) =
+                        line_containing(&capture, VIRT_CHURN_DONE_MARKER.as_bytes())
+                    {
+                        if line.contains("semgens=") {
+                            return self.finish(log_abs, &capture, BootProfile::VirtChurn);
                         }
                     }
                 }
@@ -2739,109 +2810,8 @@ impl BootTestStep {
                 );
             }
             BootProfile::X64Churn => {
-                // The finish()-time heap-bound post-pass (17-02,
-                // T-17-04: the bound has teeth): every number is
-                // PARSED from the kernel's own markers — the DONE
-                // line's iteration/generation counts, the four tagged
-                // heap samples, the slope line's steady/measured/
-                // ceiling — never a second hardcoded constant.  The
-                // kernel already compared measured vs ceiling
-                // fail-closed (DONE withheld on FAIL, and the
-                // fast-fail arm aborts on the first FAIL line); this
-                // re-derives the verdict from the RAW samples, so a
-                // kernel-side comparison bug cannot certify a leak as
-                // bounded.
-                let field = |line: &str, key: &str| -> Option<u64> {
-                    line.split_whitespace()
-                        .find_map(|t| t.strip_prefix(key).and_then(|v| v.parse().ok()))
-                };
-                let done_line = line_containing(capture, Q35_CHURN_DONE_MARKER.as_bytes())
-                    .ok_or_else(|| "churn gate: no DONE line in capture".to_string())?;
-                let iterations = field(&done_line, "iterations=")
-                    .ok_or_else(|| format!("churn gate: DONE line lacks iterations=: {done_line}"))?;
-                let semgens = field(&done_line, "semgens=")
-                    .ok_or_else(|| format!("churn gate: DONE line lacks semgens=: {done_line}"))?;
-                if semgens > iterations {
-                    return Err(format!(
-                        "churn gate: semgens={semgens} exceeds iterations={iterations} (driver bookkeeping)"
-                    ).into());
-                }
-                // (a) zero FAIL lines whole-capture (the fast-fail
-                //     already aborted on the first; belt-and-braces).
-                let fails = count_marker_lines(capture, Q35_CHURN_FAIL_MARKER);
-                if fails != 0 {
-                    return Err(format!("churn gate: {fails} {Q35_CHURN_FAIL_MARKER} line(s)").into());
-                }
-                // (b) the exact-count contract, against the kernel's
-                //     own numbers: every iteration entered ring 3
-                //     (churnmark's own prints — D-09) and every
-                //     generation's contenders completed.
-                let marks = count_marker_lines(capture, Q35_CHURN_MARK_MARKER) as u64;
-                let want_marks = iterations - semgens;
-                if marks != want_marks {
-                    return Err(format!(
-                        "churn gate: churnmark: ready COUNT FAILED — {marks} for iterations={iterations} - semgens={semgens} (short names a lost exec, long names a duplicate)"
-                    ).into());
-                }
-                let gens = count_marker_lines(capture, Q35_CHURN_SEMGEN_MARKER) as u64;
-                if gens != semgens {
-                    return Err(format!(
-                        "churn gate: semgen COUNT FAILED — {gens} for semgens={semgens}"
-                    ).into());
-                }
-                // (c) the slope verdict, re-derived from the raw
-                //     samples: the window between the `heap base` and
-                //     `heap end` sample lines carries the churn leg —
-                //     its mark + generation counts reconstruct the
-                //     kernel's exact denominator.
-                let slope_line = line_containing(capture, Q35_CHURN_SLOPE_MARKER.as_bytes())
-                    .ok_or_else(|| "churn gate: no slope line in capture".to_string())?;
-                let steady = field(&slope_line, "steady=")
-                    .ok_or_else(|| format!("churn gate: slope line lacks steady=: {slope_line}"))?;
-                let measured = field(&slope_line, "measured=")
-                    .ok_or_else(|| format!("churn gate: slope line lacks measured=: {slope_line}"))?;
-                let ceiling = field(&slope_line, "ceiling=")
-                    .ok_or_else(|| format!("churn gate: slope line lacks ceiling=: {slope_line}"))?;
-                let base_end = last_marker_line_end(capture, &format!("{Q35_CHURN_HEAP_MARKER}base"))
-                    .ok_or_else(|| "churn gate: no `churngate: heap base` sample line".to_string())?;
-                let end_start = marker_position(capture, format!("{Q35_CHURN_HEAP_MARKER}end").as_bytes())
-                    .ok_or_else(|| "churn gate: no `churngate: heap end` sample line".to_string())?;
-                if base_end > end_start {
-                    return Err("churn gate: heap end sample precedes heap base".into());
-                }
-                let window = &capture[base_end..end_start];
-                let leg_marks = count_marker_lines(window, Q35_CHURN_MARK_MARKER) as u64;
-                let leg_gens = count_marker_lines(window, Q35_CHURN_SEMGEN_MARKER) as u64;
-                if leg_marks + leg_gens == 0 {
-                    return Err("churn gate: empty churn-leg window (sample anchors wrong)".into());
-                }
-                // The sample lines' shape: `churngate: heap <tag>
-                // <used> <total>` — the cursor is the 4th token.
-                let sample_used = |tag: &str| -> Option<u64> {
-                    let needle = format!("{Q35_CHURN_HEAP_MARKER}{tag}");
-                    let l = line_containing(capture, needle.as_bytes())?;
-                    l.split_whitespace().nth(3).and_then(|t| t.parse().ok())
-                };
-                let base_used = sample_used("base")
-                    .ok_or_else(|| "churn gate: heap base sample lacks its cursor bytes".to_string())?;
-                let end_used = sample_used("end")
-                    .ok_or_else(|| "churn gate: heap end sample lacks its cursor bytes".to_string())?;
-                if end_used < base_used {
-                    return Err(format!(
-                        "churn gate: cursor SHRANK ({base_used} -> {end_used}) — impossible by the slope doctrine"
-                    ).into());
-                }
-                let recomputed = (end_used - base_used) / (leg_marks + leg_gens);
-                if recomputed != measured {
-                    return Err(format!(
-                        "churn gate: slope re-derivation mismatch — kernel measured={measured}, host recomputed {recomputed} from ({end_used}-{base_used})/({leg_marks}+{leg_gens})"
-                    ).into());
-                }
-                if measured > ceiling {
-                    return Err(format!(
-                        "churn gate: heap bound FAILED host-side — measured={measured} > ceiling={ceiling} bytes/exec (the kernel's own comparison should have withheld DONE)"
-                    ).into());
-                }
+                let v = churn_post_pass(capture, &Q35_CHURN_MARKERS)?;
+                let ChurnVerdict { iterations, want_marks, semgens, steady, measured, ceiling } = v;
                 println!(
                     "boot-test: PASS -- SeaBIOS -> GRUB2 -> mb2 kernel + module boot: banner, memory \
                      facts, discovery, the module-tag/paqfs mount notes, then the kernel-context \
@@ -2850,6 +2820,21 @@ impl BootTestStep {
                      heap slope held: steady={steady} measured={measured} <= ceiling={ceiling} \
                      bytes/exec (host re-derived from the kernel's own samples) — D-06 tier (a) \
                      green, CR-03's in-kernel contention leg landed"
+                );
+            }
+            BootProfile::VirtChurn => {
+                // 20-09: the same post-pass over the aarch64 driver's
+                // markers (the vocabulary is x86_64's verbatim; the
+                // ceiling is parsed from the kernel's own slope line).
+                let v = churn_post_pass(capture, &VIRT_CHURN_MARKERS)?;
+                let ChurnVerdict { iterations, want_marks, semgens, steady, measured, ceiling } = v;
+                println!(
+                    "boot-test: PASS -- aarch64 virt kernel + initrd boot: banner, then the \
+                     kernel-context churn driver's {iterations} exec iterations ({want_marks} \
+                     churnmark EL0 prints counted) + {semgens} RFMEM contention generations, \
+                     drain, and the heap slope held: steady={steady} measured={measured} <= \
+                     ceiling={ceiling} bytes/exec (host re-derived from the kernel's own samples) \
+                     — D-08's arm64 churn gate green"
                 );
             }
             BootProfile::X64Substrate => {
@@ -3654,8 +3639,19 @@ const BOOTFS_PAQ: &str = "target/bootfs.paq";
 /// The staged binaries the initrd carries (the staged
 /// init + the hello ABI-bisect binary + the rfork/fd-ops smoke +
 /// the notes smoke + the stack-growth smoke + the
-/// interruptible-sleep smoke).
-const INITRD_FILES: [&str; 6] = ["init", "hello", "smokefork", "smokenote", "stacksmoke", "smokesleep"];
+/// interruptible-sleep smoke) + the 20-09 churn pair (churnmark, the
+/// virtchurn driver's exec payload, and churnsem, its RFMEM contention
+/// generation — walked by name from the flat root).
+const INITRD_FILES: [&str; 8] = [
+    "init",
+    "hello",
+    "smokefork",
+    "smokenote",
+    "stacksmoke",
+    "smokesleep",
+    "churnmark",
+    "churnsem",
+];
 
 impl InitrdStep {
     fn new(matches: &clap::ArgMatches) -> Self {
@@ -3726,6 +3722,152 @@ fn assemble_initrd(verbose: bool) -> Result<()> {
     let sha = sha256_of(&paq)?;
     println!("initrd: {} sha256 {sha}", paq.display());
     Ok(())
+}
+
+/// One churn gate's marker vocabulary (17-02's q35churn set and its
+/// 20-09 aarch64 mirror, virtchurn) — the shared post-pass reads the
+/// capture through it.
+struct ChurnMarkers {
+    heap: &'static str,
+    slope: &'static str,
+    done: &'static str,
+    fail: &'static str,
+    mark: &'static str,
+    semgen: &'static str,
+}
+
+const Q35_CHURN_MARKERS: ChurnMarkers = ChurnMarkers {
+    heap: Q35_CHURN_HEAP_MARKER,
+    slope: Q35_CHURN_SLOPE_MARKER,
+    done: Q35_CHURN_DONE_MARKER,
+    fail: Q35_CHURN_FAIL_MARKER,
+    mark: Q35_CHURN_MARK_MARKER,
+    semgen: Q35_CHURN_SEMGEN_MARKER,
+};
+
+const VIRT_CHURN_MARKERS: ChurnMarkers = ChurnMarkers {
+    heap: VIRT_CHURN_HEAP_MARKER,
+    slope: VIRT_CHURN_SLOPE_MARKER,
+    done: VIRT_CHURN_DONE_MARKER,
+    fail: VIRT_CHURN_FAIL_MARKER,
+    mark: VIRT_CHURN_MARK_MARKER,
+    semgen: VIRT_CHURN_SEMGEN_MARKER,
+};
+
+/// The numbers a green churn post-pass reports.
+#[derive(Debug, PartialEq)]
+struct ChurnVerdict {
+    iterations: u64,
+    want_marks: u64,
+    semgens: u64,
+    steady: u64,
+    measured: u64,
+    ceiling: u64,
+}
+
+/// The finish()-time churn heap-bound post-pass (17-02, T-17-04: the
+/// bound has teeth; shared with the aarch64 virtchurn gate in 20-09):
+/// every number is PARSED from the kernel's own markers — the DONE
+/// line's iteration/generation counts, the tagged heap samples, the
+/// slope line's steady/measured/ceiling — never a second hardcoded
+/// constant.  The kernel already compared measured vs ceiling
+/// fail-closed (DONE withheld on FAIL, and the fast-fail arm aborts on
+/// the first FAIL line); this re-derives the verdict from the RAW
+/// samples, so a kernel-side comparison bug cannot certify a leak as
+/// bounded.
+fn churn_post_pass(capture: &[u8], m: &ChurnMarkers) -> Result<ChurnVerdict> {
+    let field = |line: &str, key: &str| -> Option<u64> {
+        line.split_whitespace()
+            .find_map(|t| t.strip_prefix(key).and_then(|v| v.parse().ok()))
+    };
+    let done_line = line_containing(capture, m.done.as_bytes())
+        .ok_or_else(|| "churn gate: no DONE line in capture".to_string())?;
+    let iterations = field(&done_line, "iterations=")
+        .ok_or_else(|| format!("churn gate: DONE line lacks iterations=: {done_line}"))?;
+    let semgens = field(&done_line, "semgens=")
+        .ok_or_else(|| format!("churn gate: DONE line lacks semgens=: {done_line}"))?;
+    if semgens > iterations {
+        return Err(format!(
+            "churn gate: semgens={semgens} exceeds iterations={iterations} (driver bookkeeping)"
+        ).into());
+    }
+    // (a) zero FAIL lines whole-capture (the fast-fail
+    //     already aborted on the first; belt-and-braces).
+    let fails = count_marker_lines(capture, m.fail);
+    if fails != 0 {
+        return Err(format!("churn gate: {fails} {} line(s)", m.fail).into());
+    }
+    // (b) the exact-count contract, against the kernel's
+    //     own numbers: every iteration entered ring 3
+    //     (churnmark's own prints — D-09) and every
+    //     generation's contenders completed.
+    let marks = count_marker_lines(capture, m.mark) as u64;
+    let want_marks = iterations - semgens;
+    if marks != want_marks {
+        return Err(format!(
+            "churn gate: churnmark: ready COUNT FAILED — {marks} for iterations={iterations} - semgens={semgens} (short names a lost exec, long names a duplicate)"
+        ).into());
+    }
+    let gens = count_marker_lines(capture, m.semgen) as u64;
+    if gens != semgens {
+        return Err(format!(
+            "churn gate: semgen COUNT FAILED — {gens} for semgens={semgens}"
+        ).into());
+    }
+    // (c) the slope verdict, re-derived from the raw
+    //     samples: the window between the `heap base` and
+    //     `heap end` sample lines carries the churn leg —
+    //     its mark + generation counts reconstruct the
+    //     kernel's exact denominator.
+    let slope_line = line_containing(capture, m.slope.as_bytes())
+        .ok_or_else(|| "churn gate: no slope line in capture".to_string())?;
+    let steady = field(&slope_line, "steady=")
+        .ok_or_else(|| format!("churn gate: slope line lacks steady=: {slope_line}"))?;
+    let measured = field(&slope_line, "measured=")
+        .ok_or_else(|| format!("churn gate: slope line lacks measured=: {slope_line}"))?;
+    let ceiling = field(&slope_line, "ceiling=")
+        .ok_or_else(|| format!("churn gate: slope line lacks ceiling=: {slope_line}"))?;
+    let base_end = last_marker_line_end(capture, &format!("{}base", m.heap))
+        .ok_or_else(|| "churn gate: no `churngate: heap base` sample line".to_string())?;
+    let end_start = marker_position(capture, format!("{}end", m.heap).as_bytes())
+        .ok_or_else(|| "churn gate: no `churngate: heap end` sample line".to_string())?;
+    if base_end > end_start {
+        return Err("churn gate: heap end sample precedes heap base".into());
+    }
+    let window = &capture[base_end..end_start];
+    let leg_marks = count_marker_lines(window, m.mark) as u64;
+    let leg_gens = count_marker_lines(window, m.semgen) as u64;
+    if leg_marks + leg_gens == 0 {
+        return Err("churn gate: empty churn-leg window (sample anchors wrong)".into());
+    }
+    // The sample lines' shape: `churngate: heap <tag>
+    // <used> <total>` — the cursor is the 4th token.
+    let sample_used = |tag: &str| -> Option<u64> {
+        let needle = format!("{}{tag}", m.heap);
+        let l = line_containing(capture, needle.as_bytes())?;
+        l.split_whitespace().nth(3).and_then(|t| t.parse().ok())
+    };
+    let base_used = sample_used("base")
+        .ok_or_else(|| "churn gate: heap base sample lacks its cursor bytes".to_string())?;
+    let end_used = sample_used("end")
+        .ok_or_else(|| "churn gate: heap end sample lacks its cursor bytes".to_string())?;
+    if end_used < base_used {
+        return Err(format!(
+            "churn gate: cursor SHRANK ({base_used} -> {end_used}) — impossible by the slope doctrine"
+        ).into());
+    }
+    let recomputed = (end_used - base_used) / (leg_marks + leg_gens);
+    if recomputed != measured {
+        return Err(format!(
+            "churn gate: slope re-derivation mismatch — kernel measured={measured}, host recomputed {recomputed} from ({end_used}-{base_used})/({leg_marks}+{leg_gens})"
+        ).into());
+    }
+    if measured > ceiling {
+        return Err(format!(
+            "churn gate: heap bound FAILED host-side — measured={measured} > ceiling={ceiling} bytes/exec (the kernel's own comparison should have withheld DONE)"
+        ).into());
+    }
+    Ok(ChurnVerdict { iterations, want_marks, semgens, steady, measured, ceiling })
 }
 
 /// sha256 of a file via a host tool — no new crates.  coreutils
@@ -4660,5 +4802,82 @@ mod tests {
         assert_eq!(count_register_lines(b"    x: 0x0\r\n"), 0);
         assert_eq!(count_register_lines(b"    esr_el1: 0x0\r\n"), 0);
         assert_eq!(count_register_lines(b""), 0);
+    }
+
+    /// A synthetic virtchurn capture: the sample ladder, `marks`
+    /// churnmark prints and `gens` semgen lines in the churn leg, the
+    /// slope line and the DONE line, with the cursor at `base_used` and
+    /// `end_used`.
+    fn churn_capture(base_used: u64, end_used: u64, measured: u64, ceiling: u64) -> Vec<u8> {
+        let mut c = String::new();
+        c.push_str("churngate: heap start 1000 33554432\r\n");
+        c.push_str("churnmark: ready\r\n");
+        c.push_str("churngate: heap one 2000 33554432\r\n");
+        c.push_str("churnmark: ready\r\n");
+        c.push_str(&format!("churngate: heap base {base_used} 33554432\r\n"));
+        // churn leg: 4 marks + 1 semgen (the denominator is 5)
+        for _ in 0..4 {
+            c.push_str("churnmark: ready\r\n");
+            c.push_str("churngate: heap exit 9 33554432\r\n");
+        }
+        c.push_str("churngate: semgen 4 contenders done\r\n");
+        c.push_str(&format!("churngate: heap end {end_used} 33554432\r\n"));
+        c.push_str(&format!("churngate: slope steady=0 measured={measured} ceiling={ceiling}\r\n"));
+        c.push_str("churngate: DONE iterations=7 semgens=1\r\n");
+        c.into_bytes()
+    }
+
+    // 20-09: the shared churn post-pass over the virtchurn vocabulary —
+    // a capture whose re-derived slope matches the kernel's and sits
+    // under the ceiling passes, reporting the parsed numbers.
+    #[test]
+    fn virtchurn_post_pass_accepts_a_bounded_slope() {
+        let cap = churn_capture(10_000, 15_000, 1000, 1772);
+        let v = super::churn_post_pass(&cap, &super::VIRT_CHURN_MARKERS).expect("bounded slope");
+        assert_eq!(
+            v,
+            super::ChurnVerdict {
+                iterations: 7,
+                want_marks: 6,
+                semgens: 1,
+                steady: 0,
+                measured: 1000,
+                ceiling: 1772
+            }
+        );
+    }
+
+    // ...a slope over the ceiling fails host-side even with a DONE line
+    // (the kernel-side comparison bug the re-derivation exists for)...
+    #[test]
+    fn virtchurn_post_pass_rejects_an_over_ceiling_slope() {
+        let cap = churn_capture(10_000, 20_000, 2000, 1772);
+        let err = super::churn_post_pass(&cap, &super::VIRT_CHURN_MARKERS).unwrap_err();
+        assert!(err.to_string().contains("heap bound FAILED"), "{err}");
+    }
+
+    // ...a kernel `measured=` that the raw samples do not reproduce
+    // fails, and so does any FAIL line.
+    #[test]
+    fn virtchurn_post_pass_rejects_mismatch_and_fail_lines() {
+        let cap = churn_capture(10_000, 15_000, 999, 1772);
+        let err = super::churn_post_pass(&cap, &super::VIRT_CHURN_MARKERS).unwrap_err();
+        assert!(err.to_string().contains("re-derivation mismatch"), "{err}");
+        let mut cap = churn_capture(10_000, 15_000, 1000, 1772);
+        cap.extend_from_slice(b"churngate: FAIL exec child did not exit\r\n");
+        let err = super::churn_post_pass(&cap, &super::VIRT_CHURN_MARKERS).unwrap_err();
+        assert!(err.to_string().contains("churngate: FAIL"), "{err}");
+    }
+
+    // The aarch64 vocabulary mirrors the x86_64 one string for string
+    // (the kernel driver and the staged binaries print x86_64's
+    // vocabulary verbatim on both arches).
+    #[test]
+    fn virtchurn_markers_mirror_q35churn() {
+        let (q, v) = (&super::Q35_CHURN_MARKERS, &super::VIRT_CHURN_MARKERS);
+        assert_eq!(
+            (q.heap, q.slope, q.done, q.fail, q.mark, q.semgen),
+            (v.heap, v.slope, v.done, v.fail, v.mark, v.semgen)
+        );
     }
 }
