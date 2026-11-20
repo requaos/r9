@@ -1501,22 +1501,13 @@ fn sys_create(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
                 }
             }
         }
-        Err(_) => {
-            match namec::create_chan_union(
-                &parent,
-                final_name,
-                mode & !(port::dat::OEXCL | port::dat::OCEXEC),
-                perm,
-                &proc.pgrp,
-                nomount,
-            ) {
-                Ok(c) => c,
-                Err(msg) => {
-                    port::namec::close_chan(&parent);
-                    return err(proc, msg);
-                }
+        Err(_) => match create_new_chan(&parent, final_name, mode, perm, &proc.pgrp, nomount) {
+            Ok(c) => c,
+            Err(msg) => {
+                port::namec::close_chan(&parent);
+                return err(proc, msg);
             }
-        }
+        },
     };
     // The parent's fid (the dot-redirect clone's, on
     // the bare-name arm) is walked-past on success too — sweep it.  (The
@@ -1527,6 +1518,30 @@ fn sys_create(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         Some(slot) => slot,
         None => err(proc, "create: no free fd"),
     }
+}
+
+/// sys_create's new-file arm (the donor chan.c Acreate): the device
+/// creates with `omode&~(OEXCL|OCEXEC)`, since both bits are namec and
+/// fd state, never the device's.  OCEXEC is then recorded on the new
+/// chan (the donor's CCEXEC), as namec::open_chan records it on the
+/// existing-file arm.  exec's close_on_exec_fds takes only marked chans,
+/// so without the mark a file created OCEXEC stays open across exec
+/// (lib9p's postfd, rio and the plumber create their /srv posts
+/// OWRITE|ORCLOSE|OCEXEC).
+fn create_new_chan(
+    parent: &Chan,
+    name: &[u8],
+    mode: u32,
+    perm: u32,
+    pg: &port::mcslock::Lock<port::pgrp::Pgrp>,
+    nomount: bool,
+) -> port::Result<Chan> {
+    let device_mode = mode & !(port::dat::OEXCL | port::dat::OCEXEC);
+    let mut c = namec::create_chan_union(parent, name, device_mode, perm, pg, nomount)?;
+    if mode & port::dat::OCEXEC != 0 {
+        c.cexec = true;
+    }
+    Ok(c)
 }
 
 /// FD2PATH(23): fd, buf, n.  Donor sysfd2path: the fd's chan's walked
@@ -2183,4 +2198,55 @@ pub(crate) fn exit_tail(proc: &mut Proc, msg: &[u8]) -> ! {
     // The sched loop picks the next Ready proc (the
     // woken parent, or a sibling).  Diverges.
     proc::sched_from_moribund();
+}
+
+#[cfg(test)]
+mod create_cexec_tests {
+    use super::create_new_chan;
+    use crate::proc::MAX_FDS;
+    use port::dat::{Chan, OCEXEC, OEXCL, ORCLOSE, OWRITE};
+    use port::devsrv;
+    use port::fdgrp::FdGroup;
+    use port::mcslock::Lock;
+    use port::pgrp::Pgrp;
+
+    /// The creator is devsrv: its registry needs no arch hook, and a
+    /// /srv post is the live create(OCEXEC) shape (lib9p's postfd).  The
+    /// registry is a process-wide static, so every test uses its own
+    /// names.  `#s` is a device-attach root, so nomount is set.
+    fn create(name: &[u8], mode: u32) -> Chan {
+        let pg = Lock::new("pgrp-test", Pgrp::new());
+        create_new_chan(&devsrv::attach(), name, mode, 0o600, &pg, true).expect("devsrv create")
+    }
+
+    /// The defect: create(.., OCEXEC) left the new chan unmarked, so
+    /// exec's sweep (FdGroup::take_cexec, the table half of
+    /// exec::close_on_exec_fds) kept the fd.
+    #[test]
+    fn created_ocexec_fd_is_taken_by_the_exec_sweep() {
+        let marked = create(b"a64-cexec-marked", OWRITE | OCEXEC);
+        assert!(marked.cexec, "create(OCEXEC) records the mark on the new chan");
+        let plain = create(b"a64-cexec-plain", OWRITE);
+        assert!(!plain.cexec, "a plain create leaves the mark clear");
+
+        let mut g: FdGroup<MAX_FDS> = FdGroup::new();
+        assert!(g.store(3, marked).is_none());
+        assert!(g.store(4, plain).is_none());
+        let taken = g.take_cexec();
+        assert_eq!(taken.len(), 1, "the sweep takes exactly the created OCEXEC fd");
+        assert_eq!(taken[0].path, b"#s/a64-cexec-marked");
+        assert!(g.get(3).is_none(), "the created OCEXEC fd leaves the table at exec");
+        assert!(g.get(4).is_some(), "the plain created fd survives exec");
+    }
+
+    /// Neighbours: the mark rides beside the other create bits.  lib9p
+    /// postfd's OWRITE|ORCLOSE|OCEXEC is marked; OEXCL (sys_create's
+    /// new-file-only bit, stripped before the device like OCEXEC) hides
+    /// nothing; OEXCL alone sets no mark.
+    #[test]
+    fn create_records_ocexec_beside_the_other_create_bits() {
+        assert!(create(b"a64-cexec-postfd", OWRITE | ORCLOSE | OCEXEC).cexec);
+        assert!(create(b"a64-cexec-excl", OWRITE | OEXCL | OCEXEC).cexec);
+        assert!(!create(b"a64-cexec-exclonly", OWRITE | OEXCL).cexec);
+    }
 }

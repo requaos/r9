@@ -541,8 +541,9 @@ pub fn exec_into(
 /// out of the table and close-dispatch it OUTSIDE the group lock (the
 /// fdgrp leaf-lock rule).  A shared fd group (rfork without RFFDG)
 /// closes the slots for every sharer — the donor's fdclose mutates
-/// up->fgrp the same way.
-fn close_on_exec_fds(proc: &mut Proc) {
+/// up->fgrp the same way.  (pub(crate) for syscall.rs's create host
+/// test, which runs the real sweep after a CREATE.)
+pub(crate) fn close_on_exec_fds(proc: &mut Proc) {
     let node = port::mcslock::LockNode::new();
     let taken = proc.fd_group.lock(&node).take_cexec();
     for c in taken {

@@ -1474,14 +1474,7 @@ fn sys_create(frame: &mut Ureg, proc: &mut Proc) -> u64 {
                 }
             }
         }
-        Err(_) => match namec::create_chan_union(
-            &parent,
-            final_name,
-            mode & !(port::dat::OEXCL | port::dat::OCEXEC),
-            perm,
-            &proc.pgrp,
-            nomount,
-        ) {
+        Err(_) => match create_new_chan(&parent, final_name, mode, perm, &proc.pgrp, nomount) {
             Ok(c) => c,
             Err(msg) => {
                 port::namec::close_chan(&parent);
@@ -1494,6 +1487,30 @@ fn sys_create(frame: &mut Ureg, proc: &mut Proc) -> u64 {
         Some(slot) => slot,
         None => err(proc, "create: no free fd"),
     }
+}
+
+/// sys_create's new-file arm (the donor chan.c Acreate): the device
+/// creates with `omode&~(OEXCL|OCEXEC)`, since both bits are namec and
+/// fd state, never the device's.  OCEXEC is then recorded on the new
+/// chan (the donor's CCEXEC), as namec::open_chan records it on the
+/// existing-file arm.  exec's close_on_exec_fds takes only marked chans,
+/// so without the mark a file created OCEXEC stays open across exec
+/// (lib9p's postfd, rio and the plumber create their /srv posts
+/// OWRITE|ORCLOSE|OCEXEC).
+fn create_new_chan(
+    parent: &Chan,
+    name: &[u8],
+    mode: u32,
+    perm: u32,
+    pg: &port::mcslock::Lock<port::pgrp::Pgrp>,
+    nomount: bool,
+) -> port::Result<Chan> {
+    let device_mode = mode & !(port::dat::OEXCL | port::dat::OCEXEC);
+    let mut c = namec::create_chan_union(parent, name, device_mode, perm, pg, nomount)?;
+    if mode & port::dat::OCEXEC != 0 {
+        c.cexec = true;
+    }
+    Ok(c)
 }
 
 /// FD2PATH(23): fd, buf, n.  The fd's chan's walked path into the
@@ -2540,5 +2557,90 @@ mod tests {
         // _tos).  bp (the 6c first-arg register) stays whatever the
         // caller had — argc arrives on the seeded stack.
         assert_eq!(frame.ax, tos_va);
+    }
+
+    // --- create(.., OCEXEC): the new-file arm records the mark ---
+
+    use port::dat::{OCEXEC, OWRITE};
+
+    /// The creator is devsrv: its registry needs no arch hook, and a
+    /// /srv post is the live create(OCEXEC) shape (lib9p's postfd).  The
+    /// registry is a process-wide static, so every test uses its own
+    /// names.  `#s` is a device-attach root, so nomount is set.
+    fn srv_create(name: &[u8], mode: u32) -> Chan {
+        let pg = port::mcslock::Lock::new("pgrp-test", port::pgrp::Pgrp::new());
+        create_new_chan(&port::devsrv::attach(), name, mode, 0o600, &pg, true)
+            .expect("devsrv create")
+    }
+
+    /// The defect: create(.., OCEXEC) left the new chan unmarked, so
+    /// exec's sweep (FdGroup::take_cexec, the table half of
+    /// exec::close_on_exec_fds) kept the fd.
+    #[test]
+    fn created_ocexec_fd_is_taken_by_the_exec_sweep() {
+        let marked = srv_create(b"x64-cexec-marked", OWRITE | OCEXEC);
+        assert!(marked.cexec, "create(OCEXEC) records the mark on the new chan");
+        let plain = srv_create(b"x64-cexec-plain", OWRITE);
+        assert!(!plain.cexec, "a plain create leaves the mark clear");
+
+        let mut g: port::fdgrp::FdGroup<{ crate::proc::MAX_FDS }> = port::fdgrp::FdGroup::new();
+        assert!(g.store(3, marked).is_none());
+        assert!(g.store(4, plain).is_none());
+        let taken = g.take_cexec();
+        assert_eq!(taken.len(), 1, "the sweep takes exactly the created OCEXEC fd");
+        assert_eq!(taken[0].path, b"#s/x64-cexec-marked");
+        assert!(g.get(3).is_none(), "the created OCEXEC fd leaves the table at exec");
+        assert!(g.get(4).is_some(), "the plain created fd survives exec");
+    }
+
+    /// Neighbours: the mark rides beside the other create bits.  lib9p
+    /// postfd's OWRITE|ORCLOSE|OCEXEC is marked; OEXCL (sys_create's
+    /// new-file-only bit, stripped before the device like OCEXEC) hides
+    /// nothing; OEXCL alone sets no mark.
+    #[test]
+    fn create_records_ocexec_beside_the_other_create_bits() {
+        let orclose = port::dat::ORCLOSE;
+        assert!(srv_create(b"x64-cexec-postfd", OWRITE | orclose | OCEXEC).cexec);
+        assert!(srv_create(b"x64-cexec-excl", OWRITE | port::dat::OEXCL | OCEXEC).cexec);
+        assert!(!srv_create(b"x64-cexec-exclonly", OWRITE | port::dat::OEXCL).cexec);
+    }
+
+    /// CREATE(22) end to end on the real handler, then the real exec
+    /// sweep: a `#s` service created OWRITE|OCEXEC leaves the fd table
+    /// at exec, a plain one stays.  (A #-rooted path never consults
+    /// slash or dot, so any chan stands in for the namespace.)
+    #[test]
+    fn create_syscall_ocexec_fd_is_closed_by_exec() {
+        let mut mock = MockStack::new("tcx");
+        mock.proc().slash = Some(port::devsrv::attach());
+        mock.proc().dot = Some(port::devsrv::attach());
+        let marked_path = b"#s/x64-cexec-syscall\0";
+        let plain_path = b"#s/x64-cexec-syscall-plain\0";
+        mock.buf[96..96 + marked_path.len()].copy_from_slice(marked_path);
+        mock.buf[160..160 + plain_path.len()].copy_from_slice(plain_path);
+        fn create(mock: &mut MockStack, path_off: u64, mode: u32) -> u64 {
+            let mut frame = Ureg::zeroed();
+            frame.bp = CREATE;
+            frame.sp = mock.base();
+            mock.put(0, 0xdead); // SP+0: the return-address slot, never an arg
+            mock.put(8, mock.base() + path_off);
+            mock.put(16, mode as u64);
+            mock.put(24, 0o600);
+            dispatch_proc(frame.bp, &mut frame, mock.proc());
+            assert_ne!(frame.ax, -1i64 as u64, "create succeeds");
+            frame.ax
+        }
+        let marked = create(&mut mock, 96, OWRITE | OCEXEC);
+        let plain = create(&mut mock, 160, OWRITE);
+        assert_ne!(marked, plain);
+        assert!(mock.proc().fd_path(marked).is_some() && mock.proc().fd_path(plain).is_some());
+
+        crate::exec::close_on_exec_fds(mock.proc());
+        assert_eq!(mock.proc().fd_path(marked), None, "the created OCEXEC fd is closed by exec");
+        assert_eq!(
+            mock.proc().fd_path(plain).as_deref(),
+            Some(&b"#s/x64-cexec-syscall-plain"[..]),
+            "the plain created fd survives exec"
+        );
     }
 }
