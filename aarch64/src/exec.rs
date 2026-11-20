@@ -266,6 +266,21 @@ pub fn exec_into(
     Ok(())
 }
 
+/// The donor sysexec close-on-exec sweep (x86_64 exec.rs's twin): take
+/// every cexec-marked fd out of the table and close-dispatch it OUTSIDE
+/// the group lock (the fdgrp leaf-lock rule; a devmnt close can block).
+/// A shared fd group (rfork without RFFDG) closes the slots for every
+/// sharer — the donor's fdclose mutates up->fgrp the same way.
+fn close_on_exec_fds(proc: &mut Proc) {
+    let taken = {
+        let node = port::mcslock::LockNode::new();
+        proc.fd_group.lock(&node).take_cexec()
+    };
+    for c in taken {
+        port::namec::close_chan(&c);
+    }
+}
+
 /// EXEC behind a running process (Plan 9 sysexec
 /// semantics): REPLACE the caller's image with the binary carried by
 /// `backing` (the byte-source abstraction — devroot's paqfs image
@@ -307,6 +322,16 @@ pub fn exec_replace(
     // kills via the exit tail below rather than returning -1 to a trap
     // frame whose pc/sp name freed text pages.)
     check_seed_fit(args)?;
+
+    // Close on exec (the donor sysexec `fdclose(i, CCEXEC)` loop, 9k
+    // sysproc.c:519-523; x86_64's placement): after every validation
+    // check, so a failed exec closes nothing, and BEFORE the segment
+    // frees, because a devmnt close can RPC-block and needs the address
+    // space live.  Every fd whose chan carries the OCEXEC mark leaves
+    // the table.  libthread's procexec depends on it: its exec-status
+    // pipe write end is opened OWRITE|OCEXEC, and the parent's status
+    // read only sees EOF when the exec'ed child's copy closes here.
+    close_on_exec_fds(proc);
 
     // FREE second: unmap every current user mapping from the (active) root
     // table and deallocate the phys pages; drop the old segment records and

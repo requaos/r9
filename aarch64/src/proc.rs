@@ -369,6 +369,10 @@ fn rfmem_leave(proc: &mut Proc) {
 /// the ends (r9 never frees pages on brk_ shrink — the standing lazy
 /// shape, now family-wide).  A one-live-member family (siblings
 /// exited/exec'd) is an ordinary private proc: lazy end move only.
+/// Harvey 20-07 measured that arm (brkprobe, 5 HVF + 5 TCG runs, owner
+/// D-09 ramfs-venue-brk-holds): the lone member's 8 MiB growth took
+/// exactly 2048 demand bss page-ins, so x86_64's eager one-member
+/// mapping is deliberately NOT ported — aarch64 demand-faults Bss.
 ///
 /// Failure hygiene: a mid-arm failure (OOM) unmaps everything this call
 /// mapped and releases the published refcounts (the last release frees)
