@@ -53,6 +53,14 @@ const PIPE: u64 = 21;
 const CREATE: u64 = 22;
 const FD2PATH: u64 = 23;
 const BRK_: u64 = 24;
+const REMOVE: u64 = 25;
+/// _WSTAT(26) — the donor's retired "old wstat" slot (the 9k systab
+/// maps it to the "old wstat system call - recompile" error); x86_64
+/// arms all five slots with real semantics, so it carries the live
+/// name-based body (the WSTAT(44) twin).  Parity with x86_64.
+const WSTAT_: u64 = 26;
+/// _FWSTAT(27) — the fd-based twin of WSTAT_ (FWSTAT(45)'s body).
+const FWSTAT_: u64 = 27;
 const NOTIFY: u64 = 28;
 const NOTED: u64 = 29;
 const RENDEZVOUS: u64 = 34;
@@ -64,6 +72,12 @@ const FVERSION: u64 = 40;
 const ERRSTR: u64 = 41;
 const STAT: u64 = 42;
 const FSTAT: u64 = 43;
+/// WSTAT(44)/FWSTAT(45) — the LIVE wstat pair on this ABI: Harvey's
+/// libc stub generator emits `wstat`/`fwstat` (dirwstat/dirfwstat's
+/// callees) against numbers 44/45, with 26/27 the retired old slots
+/// (see WSTAT_ above).
+const WSTAT: u64 = 44;
+const FWSTAT: u64 = 45;
 const MOUNT: u64 = 46;
 const AWAIT: u64 = 47;
 const PREAD: u64 = 50;
@@ -109,12 +123,13 @@ type Handler = fn(&mut TrapFrame, &mut Proc) -> u64;
 /// tick's tick_timeouts).  The trace carries no brk_/segbrk(12) on the
 /// hello path; segbrk stays None.  FAUTH(10) stays None (the designed
 /// no-auth fall-through — nsinit/newns mount unauthenticated on its -1);
-/// REMOVE(25), WSTAT(44), FWSTAT(45) and OSEEK(16) stay loud-None: the
-/// 06-07 tier-1 trace DID measure remove/wstat/fwstat — but only inside
-/// the sweep's donor-venue guard (hrm/hmk/hyacc/hed/hchmod/hmv/htouch),
-/// the write-flow set r9 cannot serve this era (no writable fs), so the
-/// measured evidence RATIFIED the existing loud-None rather than growing
-/// it.  The 06-07 tier-1 measure-first trace (Harvey phase 06 evidence,
+/// OSEEK(16) stays loud-None.  The REMOVE/WSTAT/FWSTAT five are armed at
+/// x86_64 parity (REMOVE=25, _WSTAT=26, _FWSTAT=27, WSTAT=44,
+/// FWSTAT=45): REMOVE routes through port's one remove dispatch
+/// (namec::remove_chan — devcap, devsrv, devenv and devmnt's Tremove;
+/// every other device refuses loudly), and every wstat refuses loudly
+/// after the stat buffer is validated (no device ports a wstat arm this
+/// era).  The 06-07 tier-1 measure-first trace (Harvey phase 06 evidence,
 /// 8581 entry fragments over 201 pids) grew exactly two names, both with
 /// r9-runnable callers: NSEC(53) (Harvey libc time() = nsec()/1e9 —
 /// hdate/hipconfig) and RENDEZVOUS(34) (hfactotum's libthread start).
@@ -140,6 +155,11 @@ static DISPATCH: [Option<Handler>; 55] = {
     t[PIPE as usize] = Some(sys_pipe);
     t[CREATE as usize] = Some(sys_create);
     t[FD2PATH as usize] = Some(sys_fd2path);
+    t[REMOVE as usize] = Some(sys_remove);
+    t[WSTAT_ as usize] = Some(sys_wstat);
+    t[FWSTAT_ as usize] = Some(sys_fwstat);
+    t[WSTAT as usize] = Some(sys_wstat);
+    t[FWSTAT as usize] = Some(sys_fwstat);
     t[NOTIFY as usize] = Some(sys_notify);
     t[NOTED as usize] = Some(sys_noted);
     t[RENDEZVOUS as usize] = Some(sys_rendezvous);
@@ -974,6 +994,167 @@ fn sys_fstat(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         Ok(count) => count,
         Err(msg) => err(proc, msg),
     }
+}
+
+/// The donor's validstat core (statcheck, libc 9sys/convM2D.c — the
+/// kernel-side validstat calls it before any device wstat): the buffer
+/// must be a WHOLE stat(5) record — n == BIT16SZ + size, n >=
+/// STATFIXLEN, and the four string lengths (name/uid/gid/muid)
+/// consuming exactly the rest.  (The donor's follow-on name-entry
+/// check — validname on a <=63-byte name — is server-protection
+/// nicety; the wire-shape check is the load-bearing half ported here:
+/// a ring-3-supplied buffer never reaches a device arm unvalidated.)
+/// The x86_64 valid_stat_wire, ported unchanged.
+fn valid_stat_wire(stat: &[u8]) -> Result<(), &'static str> {
+    // convM2D.c's statcheck, verbatim re-keyed: GBIT16 is LE (stat(5)
+    // is little-endian), the strings walk starts at STATFIXLEN -
+    // 4*BIT16SZ (the first string count), and the walk must consume
+    // exactly the whole buffer.
+    const BIT16SZ: usize = 2;
+    const STATFIXLEN: usize = 49; // BIT16SZ+QIDSZ+5*BIT16SZ+4*BIT32SZ+BIT64SZ
+    let gbit16 = |b: &[u8], off: usize| u16::from_le_bytes([b[off], b[off + 1]]) as usize;
+    if stat.len() < STATFIXLEN || stat.len() != BIT16SZ + gbit16(stat, 0) {
+        return Err("malformed stat buffer");
+    }
+    let mut p = STATFIXLEN - 4 * BIT16SZ;
+    for _ in 0..4 {
+        if p + BIT16SZ > stat.len() {
+            return Err("malformed stat buffer");
+        }
+        p += BIT16SZ + gbit16(stat, p);
+    }
+    if p != stat.len() {
+        return Err("malformed stat buffer");
+    }
+    Ok(())
+}
+
+/// The per-device remove routing (the donor's dev->remove dispatch at
+/// sysremove's c->dev->remove(c), sysfile.c:1360): port's shared
+/// namec::remove_chan, the same dispatch the ORCLOSE close path uses
+/// (devcap's caphash, devsrv's services, devenv's keys, devmnt's
+/// Tremove); every device without an arm refuses LOUDLY naming the
+/// gap — never a silent 0.  The x86_64 remove_chan.
+fn remove_chan(c: &Chan) -> Result<u64, &'static str> {
+    port::namec::remove_chan(c).map(|_| 0)
+}
+
+/// The per-device wstat routing (the donor's dev->wstat dispatch at
+/// wstat()'s c->dev->wstat(c, p, n), sysfile.c:1390).  NO device ports
+/// a wstat arm this era (x86_64 parity), so the routing refuses LOUDLY
+/// for every device; a ported arm joins as a match arm here.
+fn wstat_chan(_c: &Chan, _stat: &[u8]) -> Result<u64, &'static str> {
+    Err("wstat: device does not implement wstat")
+}
+
+/// REMOVE(25): path.  Donor sysremove (sysfile.c:1333-1366): namec
+/// walks the path (NO open — the walk only, the donor's Aremove), the
+/// device's remove arm runs, return 0.  The donor's mount-point guard
+/// (Eismtpt) rides the Chan ismtpt flag r9 does not carry this era
+/// (x86_64 parity).
+fn sys_remove(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
+    let Some(args) = sargs(frame, proc, 1) else {
+        return err(proc, "remove: bad argument block");
+    };
+    let path = match copy_user_str(proc, args[0], ERRMAX) {
+        Ok(s) => s,
+        Err(msg) => return err(proc, msg),
+    };
+    let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
+        return err(proc, "remove: no namespace (pre-exec)");
+    };
+    let c = match namec::namec(&path, slash, dot, &proc.pgrp, NamecMode::Open) {
+        Ok(c) => c,
+        Err(msg) => return err(proc, msg),
+    };
+    let result = remove_chan(&c);
+    port::namec::close_chan(&c);
+    match result {
+        Ok(v) => v,
+        Err(msg) => err(proc, msg),
+    }
+}
+
+/// WSTAT(44) and _WSTAT(26): name, edir, nedir — donor syswstat
+/// (sysfile.c:1399-1423): validate the user Stat buffer FIRST
+/// (validaddr + validstat), then namec the name (the donor's Aaccess —
+/// the open-style union redirect), then the device wstat arm.  The
+/// wire result is the device's count (0/positive on success; -1 +
+/// errstr here on every failure shape this era).
+fn sys_wstat(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
+    let Some(args) = sargs(frame, proc, 3) else {
+        return err(proc, "wstat: bad argument block");
+    };
+    let (name_va, edir_va, n) = (args[0], args[1], args[2] & 0xffff_ffff); // n is an int
+    let (path, stat) = match wstat_stage_args(proc, name_va, edir_va, n) {
+        Ok(v) => v,
+        Err(msg) => return err(proc, msg),
+    };
+    let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
+        return err(proc, "wstat: no namespace (pre-exec)");
+    };
+    let c = match namec::namec(&path, slash, dot, &proc.pgrp, NamecMode::Open) {
+        Ok(c) => c,
+        Err(msg) => return err(proc, msg),
+    };
+    let result = wstat_chan(&c, &stat);
+    port::namec::close_chan(&c);
+    match result {
+        Ok(v) => v,
+        Err(msg) => err(proc, msg),
+    }
+}
+
+/// FWSTAT(45) and _FWSTAT(27): fd, edir, nedir — donor sysfwstat
+/// (sysfile.c:1425-1448): validate the buffer first, then the fd's
+/// chan through the same device wstat routing.
+fn sys_fwstat(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
+    let Some(args) = sargs(frame, proc, 3) else {
+        return err(proc, "fwstat: bad argument block");
+    };
+    let (fd, edir_va, n) = (args[0] & 0xffff_ffff, args[1], args[2] & 0xffff_ffff); // fd, n are ints
+    // Stage the buffer with the name slot unused (fd form).
+    let (_name, stat) = match wstat_stage_args(proc, 0, edir_va, n) {
+        Ok(v) => v,
+        Err(msg) => return err(proc, msg),
+    };
+    let Some(chan) = proc.fd_take(fd) else {
+        return err(proc, "fwstat: bad fd");
+    };
+    let result = wstat_chan(&chan, &stat);
+    proc.fd_store(fd, chan);
+    match result {
+        Ok(v) => v,
+        Err(msg) => err(proc, msg),
+    }
+}
+
+/// The wstat arms' shared staging: copy the path (name form only; the
+/// fd form passes 0) and the Stat buffer into kernel memory, then run
+/// the statcheck port — the donor's validaddr + validstat pair, in the
+/// donor's order (validation BEFORE any device routing).  The length
+/// cap is statcheck's own (2 + the u16 size field): any larger n is
+/// malformed by construction, rejected before the copy.
+fn wstat_stage_args(
+    proc: &mut Proc,
+    name_va: u64,
+    edir_va: u64,
+    n: u64,
+) -> Result<(Vec<u8>, Vec<u8>), &'static str> {
+    if n > 2 + u16::MAX as u64 {
+        return Err("malformed stat buffer");
+    }
+    let name = if name_va == 0 {
+        Vec::new()
+    } else {
+        UserString::copy_from(proc, name_va, ERRMAX)?
+    };
+    let stat = match UserSlice::new(proc, edir_va, n) {
+        Ok(s) => s.as_slice().to_vec(),
+        Err(_) => return Err("wstat: bad user buffer"),
+    };
+    valid_stat_wire(&stat)?;
+    Ok((name, stat))
 }
 
 /// BRK_(24): addr (malloc's pool growth rides it —
