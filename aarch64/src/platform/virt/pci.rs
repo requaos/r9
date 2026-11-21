@@ -516,6 +516,60 @@ pub fn bind_virtio_net(dt: &DeviceTree) {
     }
 }
 
+/// Each typed cap's (offset, length) bounds-checked against the BAR
+/// size BEFORE the region is trusted (T-07-11, T-20-41 -- a lying cap
+/// aborts the bind loudly).  x86_64's check (q35/pci.rs), ported with
+/// its four rules and messages: the device config cap must exist;
+/// zero-length extents are rejected (a cap at offset == bar_size with
+/// length 0 would pass a bare `>` check -- the empty region faults at
+/// the first register touch); common must cover the register block
+/// through CFG_QUEUE_DEVICE+8 (0x40; the isr cap's one byte is subsumed
+/// by the zero-length reject); and the device config must cover the MAC
+/// AND the link-status le16 the IRQ handler reads at devcfg+6 (the
+/// config-change arm) -- 8, not 6.
+///
+/// End edge: an extent must fit inside [0, bar_size); offset+length >
+/// bar_size is rejected.  An extent ending EXACTLY at the boundary is
+/// legal and required: qemu sizes the modern BAR
+/// pow2ceil(notify.offset + notify.size) with the notify cap length =
+/// notify_off_multiplier * VIRTIO_QUEUE_MAX (4 * 1024 = 0x1000 at
+/// offset 0x3000), so the live notify cap ends exactly at the 0x4000
+/// boundary -- a >=-style edge would reject the real device.  The
+/// zero-length reject is what closes the offset == bar_size hole.  The
+/// sum is u64-widened: no 32-bit wrap can admit an out-of-bounds cap.
+///
+/// The BAR NUMBER is not checked here: aarch64 maps only bar4, and the
+/// bind path enforces `bar == 4` for all four caps itself (x86_64 takes
+/// the BAR from the caps, so that check has no counterpart there).
+/// Pure: host-testable beside the bind path.
+#[cfg(any(test, dev_ether))]
+fn check_cap_extents(caps: &port::virtio::Caps, bar_size: u64) -> port::Result<()> {
+    let device = caps.device.ok_or("virtio: no device config capability")?;
+    for t in [caps.common, caps.notify, caps.isr, device] {
+        if t.length == 0 {
+            return Err("virtio: zero-length capability extent (device fault)");
+        }
+        if u64::from(t.offset) + u64::from(t.length) > bar_size {
+            return Err("virtio: capability extent beyond the bar (device fault)");
+        }
+    }
+    if caps.common.length < 0x40 {
+        // The register block runs through CFG_QUEUE_DEVICE (0x30) + its
+        // u64 -- 0x38 touched, 0x40 rounded past the highest offset the
+        // transport ever uses.
+        return Err("virtio: common capability smaller than the register block (device fault)");
+    }
+    if device.length < 8 {
+        // MAC (offsets 0..5) + the link-status le16 at +6..8 read by the
+        // IRQ handler on the first config-change interrupt -- a `< 6`
+        // floor would admit a config the handler then over-reads.
+        return Err(
+            "virtio: device config capability too small for MAC + link status (device fault)",
+        );
+    }
+    Ok(())
+}
+
 #[cfg(dev_ether)]
 fn bind_virtio_net_inner(dt: &DeviceTree) -> port::Result<()> {
     // SAFETY: the discovery cell's publish-once discipline (written once
@@ -570,22 +624,16 @@ fn bind_virtio_net_inner(dt: &DeviceTree) -> port::Result<()> {
     };
     let ecam_cfg = EcamCfg { range: ecam.clone(), base: cfg };
     let caps = virtio::Caps::parse(&ecam_cfg)?;
+    // Extents and minimum lengths first (x86_64's check, ported); then
+    // aarch64's own bar4-only requirement for all four caps.
+    check_cap_extents(&caps, bar_size)?;
     for t in [caps.common, caps.notify, caps.isr] {
         if t.bar != 4 {
             return Err("virtio: capability outside bar4 (unsupported)");
         }
-        if u64::from(t.offset) + u64::from(t.length) > bar_size {
-            return Err("virtio: capability extent beyond bar4 (device fault)");
-        }
     }
     let device = match caps.device {
-        Some(d)
-            if d.bar == 4
-                && d.length >= 6
-                && u64::from(d.offset) + u64::from(d.length) <= bar_size =>
-        {
-            d
-        }
+        Some(d) if d.bar == 4 && d.length >= 8 => d,
         _ => return Err("virtio: no usable device config capability"),
     };
     println!(
