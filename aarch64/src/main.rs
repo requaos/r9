@@ -31,6 +31,7 @@ mod regblock;
 mod registers;
 mod swtch;
 mod syscall;
+mod textcopy;
 mod trap;
 mod usermem;
 mod vm;
@@ -424,6 +425,24 @@ pub extern "C" fn main9(dtb_va: usize) {
         // over-long string's named panic reaches the console; it rides
         // into exec_bootstrap by value (which never returns, so the
         // buffer outlives the pairs borrowed from it).
+        // The rfork text-copy I-cache guard (WINDOWS #49's residual):
+        // before any process exists, prove a page rewritten through the
+        // fork copy path executes its NEW code at the same VA.  A failure
+        // halts the boot by name — every gate that boots an exec profile
+        // runs it; the control count says whether this venue can see the
+        // hazard at all (HVF: yes; TCG has no I-cache model).
+        #[cfg(all(dev_exec, any(not(dev_churn), dev_bootchain)))]
+        {
+            let (fresh, stale, rounds) = textcopy::selftest();
+            println!(
+                "icache: rfork text-copy selftest {fresh}/{rounds} fresh (control without maintenance: {stale}/{rounds} stale)"
+            );
+            if fresh != rounds {
+                panic!(
+                    "icache: rfork text-copy selftest FAILED, {fresh}/{rounds} fresh — a fork child would run stale instructions (WINDOWS #49)"
+                );
+            }
+        }
         #[cfg(all(dev_exec, any(not(dev_churn), dev_bootchain)))]
         exec_bootstrap(initrd_img, platform::bootconf::read_bootargs(&dt));
         #[cfg(all(dev_exec, dev_churn, not(dev_bootchain)))]

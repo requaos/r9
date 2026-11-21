@@ -2571,7 +2571,10 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &TrapFrame, flag: u64)
     // demand-page sharing (a shared page-map structure, the donor's
     // ptecpy-into-a-shared-segment shape) is a later refinement.
     let records: Vec<MappingRecord> = parent.mapping_log.clone();
-    let mut copied_text = false;
+    // Every page copy below goes through the ONE copy path, which owes
+    // the I-cache sync for copied text (textcopy.rs: WINDOWS #49's
+    // residual — the boot-time selftest guards it on real hardware).
+    let mut text_copy = crate::textcopy::TextCopy::new();
     for rec in &records {
         if rfmem && matches!(rec.kind, SegKind::Data | SegKind::Bss) {
             // The RFMEM share arm: no copy, no kernel alias — the
@@ -2624,17 +2627,12 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &TrapFrame, flag: u64)
         // SAFETY: both pages' KZERO+PA aliases were just (re)mapped r/w in
         // the kernel table above; src names the parent's live page, dst
         // the child's fresh page — one full page copied, non-overlapping.
+        // A text page is new instructions written through a DATA alias:
+        // copy_page cleans it to PoU and arms the one I-cache sync.
         unsafe {
             let src = physaddr_as_ptr_mut_offset_from_kzero::<u8>(PhysAddr::new(rec.phys as u64));
             let dst = physaddr_as_ptr_mut_offset_from_kzero::<u8>(pa);
-            ptr::copy_nonoverlapping(src, dst, PAGE_SIZE_4K);
-        }
-        // A text copy is new instructions written through a DATA alias:
-        // clean it to the point of unification now (the I-cache is
-        // invalidated once, after the loop).
-        if rec.kind == SegKind::Text {
-            vm::clean_dcache_to_pou(pa.addr() as usize + KZERO, PAGE_SIZE_4K);
-            copied_text = true;
+            text_copy.copy_page(src, dst, rec.kind == SegKind::Text);
         }
         // Text is UXN-clear/PXN-set; everything else rw_user_data — the
         // same kind→entry mapping fault.rs's page-in uses.
@@ -2668,30 +2666,11 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &TrapFrame, flag: u64)
             kind: rec.kind,
         });
     }
-    // I-cache coherence for the copied text.  Each text page above was
-    // written through the destination's KZERO DATA alias into a fresh
-    // physical page, and since frees became real (8958c9e) that page is
-    // often one another process executed moments ago: the allocator
-    // hands a fork child pages the command that just exited freed.  With
-    // CTR_EL0.DIC == 0 the instruction side is not coherent with those
-    // data writes, and on the HVF hosts (Apple M-series, 4 KiB granule)
-    // it keeps the OLD instructions for a (VA, PA) pair: a boot-time
-    // self-test rewrote a code page through its data alias and fetched
-    // the stale instructions at the same VA 64 times in 64, through an
-    // unmap + tlbi + remap of that VA (TLB maintenance does not clear
-    // them), while other VAs aliasing the page fetched the new bytes and
-    // `ic ialluis` restored them 64 in 64.  So when the child's copy of
-    // VA v lands on the page the previous process mapped at the same v,
-    // the child runs the old owner's code: WINDOWS #49's residual (rc's
-    // simple.c page landing on bind's just-executed page at 0x18000 in
-    // the net-smoke fixture, HVF only — TCG models no caches).  Clean the
-    // copies to PoU (above) and invalidate the whole I-cache once per
-    // fork that copied text; IC IALLUIS also covers any VA-indexed
-    // instruction state that by-VA maintenance through the kernel alias
-    // would miss.
-    if copied_text {
-        vm::invalidate_icache_all();
-    }
+    // Discharge the I-cache sync before the child can run any copied
+    // text (textcopy.rs carries the why: a recycled page keeps the old
+    // owner's instructions for the same VA on the HVF hosts).  An early
+    // return above discharges it at drop.
+    text_copy.finish();
 
     // The bss sweep (RFMEM only): the log walk above shares only PRESENT
     // pages, but the parent's bss range can cover pages brk_-grown and
