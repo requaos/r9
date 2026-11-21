@@ -1273,13 +1273,15 @@ fn exec_backing_for(proc: &mut Proc, path: &[u8]) -> Result<ByteBacking, &'stati
 
 /// EXEC(7): path, argv — 2 syscall args (libc `exec(char *name,
 /// char *argv[])`).  Donor semantics: returns ONLY on failure (-1/errstr,
-/// old image intact); on success exec::exec_replace rewrites the live trap
-/// frame (R0 = tos, SP → new seed stack, PC = new entry, PSR = 0) and the
-/// dispatch return erets into the new image.
+/// old image intact); on success exec::exec_with_shebang (the #! pre-pass,
+/// then exec_replace) rewrites the live trap frame (R0 = tos, SP → new seed
+/// stack, PC = new entry, PSR = 0) and the dispatch return erets into the
+/// new image.
 ///
 /// copy_exec_args stages the user arguments into kernel memory and
-/// exec_backing_for resolves the path through the namespace; both run
-/// before exec_replace frees the old image.
+/// exec_backing_for resolves the path through the namespace (and, as the
+/// pre-pass's resolver, each #! interpreter); all of it runs before
+/// exec_replace frees the old image.
 fn sys_exec(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 2) else {
         return err(proc, "exec: bad argument block");
@@ -1296,7 +1298,15 @@ fn sys_exec(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let leaf = path.split(|&b| b == b'/').filter(|c| !c.is_empty()).last().unwrap_or(&path[..]);
     let name = core::str::from_utf8(leaf).unwrap_or("?");
     let arg_slices: Vec<&[u8]> = argv.iter().map(|a| a.as_slice()).collect();
-    match exec::exec_replace(proc, backing, name, &arg_slices, frame) {
+    match exec::exec_with_shebang(
+        proc,
+        backing,
+        &path,
+        name,
+        &arg_slices,
+        frame,
+        &mut |proc, path| exec_backing_for(proc, path),
+    ) {
         // dispatch writes frame.x0 = tos_va — the same value exec_replace
         // seeded into the frame's x0, so the writeback agrees by
         // construction and the eret enters the new image with R0 = tos.

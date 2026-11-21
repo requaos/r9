@@ -11,6 +11,7 @@
 //! (parse first, free second, seed third, then rewrite the live trap
 //! frame in place).
 
+use alloc::vec::Vec;
 use core::ptr;
 
 use port::Result;
@@ -60,6 +61,107 @@ const TOS_SIZE: usize = 88;
 /// failure cascaded into rc's runq underflow ("pushword but no argv").
 /// 32 matches sys_exec's entry cap (MAX_EXEC_ARGS).
 const MAX_ARGS: usize = 32;
+
+/// The #! (hash-bang) line bound — the donor's MIN(sizeof(Exec), hdrsz)
+/// (sysproc.c:293): sizeof(Exec) is 32 on the 8-u32 Exec shape, so the
+/// interpreter line INCLUDING its newline must close within 32 bytes of
+/// the file head.  The x86_64 SHEBANG_LINE_BOUND.
+const SHEBANG_LINE_BOUND: usize = 32;
+
+/// The recursion cap: the donor allows exactly ONE #! hop implicitly
+/// (the post-#! magic check rejects a script interpreter), made
+/// explicit — a #! interpreter that is itself a #! script recurses
+/// through the same path at most twice; a third expansion is a loud
+/// reject.  The x86_64 MAX_SHEBANG_DEPTH.
+const MAX_SHEBANG_DEPTH: usize = 2;
+
+/// The #! pre-pass's result (the pure half of the donor algorithm of
+/// record, sysproc.c:282-324).
+#[derive(Debug, PartialEq)]
+pub(crate) struct ShebangExec {
+    /// progarg[0] BEFORE its substitution — the interpreter file to
+    /// open in place of the script (resolved by normal namec, no extra
+    /// path handling).
+    pub interpreter: Vec<u8>,
+    /// The FULL replacement argv, donor order verbatim:
+    /// [elem, #!tokens[1..], file, caller.argv[1..]] — the donor
+    /// replaces progarg[0] (the interpreter path) with `elem` (the
+    /// script's final path element, sysproc.c:308-309 "replace $0 with
+    /// the original path's name") and throws the caller's argv[0] away
+    /// (sysproc.c:446-447, "argv[0] gets validated even though it will
+    /// be thrown away if this is a shell script").
+    pub argv: Vec<Vec<u8>>,
+}
+
+/// The #! sniff + argv construction — the pure, host-pinnable half of
+/// the pre-pass (the x86_64 shebang_pass, ported unchanged).  `head`
+/// carries the first `n` bytes read from the file (the donor's hdrsz —
+/// NOT required to reach the 40-byte a.out header: a service script is
+/// typically ~15 bytes); `file` is the path the caller exec'd (donor
+/// `file`), `elem` its final element (donor `elem`, from the original
+/// namec), `caller_args` the exec'd call's argv.  Returns Ok(None) for
+/// a non-#! file (the plain a.out path proceeds byte-identically),
+/// Ok(Some(..)) for a script, Err for the donor's Ebadexec-class
+/// rejects.
+pub(crate) fn shebang_pass(
+    head: &[u8],
+    n: usize,
+    file: &[u8],
+    elem: &[u8],
+    caller_args: &[&[u8]],
+) -> Result<Option<ShebangExec>> {
+    // The donor's hdrsz < 2 gate (sysproc.c:288-289) is NOT ported as a
+    // reject: a head shorter than the marker cannot BE a script, and
+    // the plain path's own unchanged loud error (read_aout's short
+    // read) owns that shape — the else-branch stays byte-identical
+    // with today.
+    if n < 2 || !(head[0] == b'#' && head[1] == b'!') {
+        return Ok(None);
+    }
+    // memccpy to the newline within MIN(sizeof(Exec), hdrsz)
+    // (sysproc.c:293): a line that does not close inside the bound is
+    // the donor's Ebadexec.
+    let bound = n.min(SHEBANG_LINE_BOUND).min(head.len());
+    let Some(nl) = head[..bound].iter().position(|&b| b == b'\n') else {
+        return Err("exec: bad header (hash-bang line unterminated)");
+    };
+    // tokenize(line+2) (sysproc.c:297): whitespace-separated tokens,
+    // empty runs skipped; an empty token list is the donor's Ebadexec.
+    let tokens: Vec<&[u8]> = head[2..nl]
+        .split(|&b| b == b' ' || b == b'\t')
+        .filter(|t| !t.is_empty())
+        .collect();
+    if tokens.is_empty() {
+        return Err("exec: bad header (empty hash-bang line)");
+    }
+    // The donor argv assembly (sysproc.c:301-309): the script path is
+    // appended after the #! tokens, then progarg[0] (the interpreter
+    // path) is REPLACED by elem — the interpreter is opened as the new
+    // image while argv[0] names the SCRIPT ("replace $0 with the
+    // original path's name").
+    let mut argv: Vec<Vec<u8>> = Vec::with_capacity(1 + tokens.len() + caller_args.len());
+    argv.push(elem.to_vec());
+    for t in &tokens[1..] {
+        argv.push(t.to_vec());
+    }
+    argv.push(file.to_vec());
+    // The caller's argv follows with argv[0] thrown away (sysproc.c:
+    // 446-447): listen's blind execl of a service file becomes the
+    // interpreter with -R, the trailing service/proto/dir args after
+    // the script path.
+    for a in caller_args.iter().skip(1) {
+        argv.push(a.to_vec());
+    }
+    // The donor's tokenize silently drops tokens past nelem(progarg)=17
+    // and the seed's own bound is MAX_ARGS; the LOUD shape is pinned
+    // instead (the token cap) — never a silent truncation.  The message
+    // matches check_seed_fit's, the same bound in both halves of the
+    // exec path.
+    if argv.len() > MAX_ARGS {
+        return Err("exec: too many args");
+    }
+    Ok(Some(ShebangExec { interpreter: tokens[0].to_vec(), argv }))
+}
 
 /// A validated a.out header (all on-disk fields big-endian).
 #[derive(Debug)]
@@ -279,6 +381,62 @@ fn close_on_exec_fds(proc: &mut Proc) {
     for c in taken {
         port::namec::close_chan(&c);
     }
+}
+
+/// The EXEC syscall's full entry: the #! pre-pass in front of
+/// exec_replace (the x86_64 exec_with_shebang, `Ureg` -> `TrapFrame`).
+/// After the header read and BEFORE parse_aout's magic check, a file
+/// whose first two bytes are hash-bang re-execs the interpreter: the #!
+/// line's tokens become the leading argv (argv[0] substituted by
+/// `elem`), the script path lands after them, the caller's argv follows
+/// — then the interpreter's header is read and parsed in place of the
+/// script's (the donor "read a new header from the file indicated by
+/// the #!").  `resolve` is the syscall layer's namespace half (namec +
+/// OEXEC open + backing); `name` (the original file's leaf) stays the
+/// proc's name across every hop (donor: elem is taken once, before the
+/// #! branch, and `up->text = elem`).  A file without the two marker
+/// bytes goes straight to exec_replace unchanged.
+pub fn exec_with_shebang(
+    proc: &mut Proc,
+    backing: ByteBacking,
+    file: &[u8],
+    name: &str,
+    args: &[&[u8]],
+    frame: &mut TrapFrame,
+    resolve: &mut dyn FnMut(&mut Proc, &[u8]) -> Result<ByteBacking>,
+) -> Result<u64> {
+    // The pre-pass loop: after each expansion's header read, BEFORE
+    // parse_aout's magic check, branch on the first two bytes.  `file`
+    // and `name` stay the ORIGINAL exec's across every hop (the donor
+    // takes elem once, before the #! branch — sysproc.c:278 — and
+    // seeds up->text with it); each hop's caller argv is the previous
+    // hop's product, so the donor rule composes across recursion.
+    let mut backing = backing;
+    let mut staged: Vec<Vec<u8>> = args.iter().map(|a| a.to_vec()).collect();
+    for depth in 0..=MAX_SHEBANG_DEPTH {
+        let mut head = [0u8; HDR_SIZE];
+        let n = backing.read_at(0, &mut head)?;
+        let slices: Vec<&[u8]> = staged.iter().map(|a| a.as_slice()).collect();
+        match shebang_pass(&head, n, file, name.as_bytes(), &slices)? {
+            None => break,
+            Some(script) => {
+                if depth == MAX_SHEBANG_DEPTH {
+                    // The donor's implicit one-hop protection (the
+                    // post-#! magic check) made explicit: a third
+                    // expansion is a loud reject.
+                    return Err("exec: hash-bang recursion too deep");
+                }
+                // "read a new header from the file indicated by the #!"
+                // (sysproc.c:313): the interpreter resolves through the
+                // caller's namespace seam and its header is read on
+                // the next iteration.
+                backing = resolve(proc, &script.interpreter)?;
+                staged = script.argv;
+            }
+        }
+    }
+    let final_args: Vec<&[u8]> = staged.iter().map(|a| a.as_slice()).collect();
+    exec_replace(proc, backing, name, &final_args, frame)
 }
 
 /// EXEC behind a running process (Plan 9 sysexec
