@@ -418,8 +418,14 @@ pub extern "C" fn main9(dtb_va: usize) {
         // per-exit heap marker, not the driver.
         #[cfg(not(dev_exec))]
         trap::unmask_irq();
+        //
+        // The DTB boot string (ARM-10) is read here, while the
+        // DeviceTree is still in scope and after devcons::init, so an
+        // over-long string's named panic reaches the console; it rides
+        // into exec_bootstrap by value (which never returns, so the
+        // buffer outlives the pairs borrowed from it).
         #[cfg(all(dev_exec, any(not(dev_churn), dev_bootchain)))]
-        exec_bootstrap(initrd_img);
+        exec_bootstrap(initrd_img, platform::bootconf::read_bootargs(&dt));
         #[cfg(all(dev_exec, dev_churn, not(dev_bootchain)))]
         platform::virt::churngate::bootstrap_and_run(initrd_img);
         #[cfg(not(dev_exec))]
@@ -464,8 +470,11 @@ const BOOT_ENTRY: &[u8] = b"/init";
 /// map (complete-table-before-switch order), then erets into EL0 via
 /// trap_return with the seeded forkret frame.  Never returns.
 #[cfg(all(dev_exec, any(not(dev_churn), dev_bootchain)))]
-fn exec_bootstrap(initrd_img: Option<&'static [u8]>) -> ! {
-    let pro = exec_prologue(initrd_img);
+fn exec_bootstrap(
+    initrd_img: Option<&'static [u8]>,
+    bootargs: platform::bootconf::BootArgs,
+) -> ! {
+    let pro = exec_prologue_with_bootargs(initrd_img, bootargs.as_bytes());
     let img = pro.img;
     let root = pro.root;
     let root_env = pro.root_env;
@@ -574,8 +583,21 @@ pub(crate) struct ExecPrologue {
 /// port-device hook registrations, the ROOT env seed, and the devroot
 /// mount with its root attach.  Runs entirely in the IRQ-masked boot
 /// window.
-#[cfg(dev_exec)]
+///
+/// The churn driver's entry (dev_churn without the boot chain) reads no
+/// boot string: it seeds the compiled pairs alone, as before.
+#[cfg(all(dev_exec, dev_churn))]
 pub(crate) fn exec_prologue(initrd_img: Option<&'static [u8]>) -> ExecPrologue {
+    exec_prologue_with_bootargs(initrd_img, &[])
+}
+
+/// The shared prologue proper: `bootargs` is the DTB boot string (empty
+/// when the launcher wrote none), merged into the ROOT env seed.
+#[cfg(dev_exec)]
+pub(crate) fn exec_prologue_with_bootargs(
+    initrd_img: Option<&'static [u8]>,
+    bootargs: &[u8],
+) -> ExecPrologue {
     let img = initrd_img.unwrap_or_else(|| {
         panic!("dev_exec: config carries no initrd image (set [qemu] initrd to target/bootfs.paq)")
     });
@@ -710,13 +732,41 @@ pub(crate) fn exec_prologue(initrd_img: Option<&'static [u8]>) -> ExecPrologue {
     // (boot.c partinit's getenv).  The hook + seed land BEFORE the first
     // proc exists; pid 1 gets the root group below, and rfork derives
     // every later proc's group from its parent.
+    //
+    // ARM-10: the DTB boot string's bootconf pairs MERGE into the
+    // compiled seed -- the x86_64 mb2 cmdline (GRUB `-append`) twin,
+    // carried here by /chosen/bootargs.  The compiled pairs come FIRST
+    // and the loader pairs are appended after them, so loader input can
+    // never replace or reorder the compiled facts (merge, never
+    // replace).  An absent/empty string leaves the seed and its line
+    // byte-identical to the pre-bootconf boot; a malformed one is a
+    // loud panic HERE, at first boot, before boot(8) can half-run on a
+    // mis-staged image.
+    let bootconf = platform::bootconf::parse_bootconf_pairs(bootargs)
+        .unwrap_or_else(|err| panic!("bootconf: DTB bootargs parse failed: {err:?}"));
     port::devenv::set_group_hook(proc::current_env_group);
-    let root_env = port::devenv::seed_root_group(&[
+    let mut seed: alloc::vec::Vec<(&[u8], &[u8])> = alloc::vec![
         (b"cputype", b"arm64"),
         (b"nobootprompt", b"embed"),
         (b"readparts", b"0"),
-    ]);
+    ];
+    seed.extend(bootconf.pairs());
+    let root_env = port::devenv::seed_root_group(&seed);
     println!("devenv: seeded cputype=arm64 nobootprompt=embed readparts=0");
+    // The loader-sourced keys on their OWN line (a gate pins the merge
+    // here without the compiled line's bytes ever moving).  A non-UTF-8
+    // side prints <?> (the PAIRS still seed -- this print is evidence,
+    // never the mechanism).
+    if !bootconf.is_empty() {
+        fn show(b: &[u8]) -> &str {
+            core::str::from_utf8(b).unwrap_or("<?>")
+        }
+        port::print!("devenv: bootconf");
+        for (k, v) in bootconf.pairs() {
+            port::print!(" {}={}", show(k), show(v));
+        }
+        println!();
+    }
 
     // The initrd paqfs is the root tree; the consumer sources its entry
     // binaries through the devroot walk/open path (one mechanism).

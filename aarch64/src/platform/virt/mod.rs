@@ -5,6 +5,10 @@
 // churngate's pure halves (the slope logic, the marker shapes) are
 // host-testable; the driver itself is dev_churn-only (20-09, the
 // x86_64 q35 module gating).
+// The DTB bootconf reader and pair parser (ARM-10): consumed only by
+// the dev_exec exec prologue; the pure halves are host-testable.
+#[cfg(any(test, dev_exec))]
+pub mod bootconf;
 #[cfg(any(test, dev_churn))]
 pub mod churngate;
 pub mod devcons;
