@@ -893,7 +893,8 @@ fn valid_stat_wire(stat: &[u8]) -> Result<(), &'static str> {
 /// The per-device remove routing (the donor's dev->remove dispatch at
 /// sysremove's c->dev->remove(c), sysfile.c:1360): port's shared
 /// namec::remove_chan, the same dispatch the ORCLOSE close path uses
-/// (devcap's caphash, devsrv's services, devenv's keys); every device
+/// (devcap's caphash, devsrv's services, devenv's keys, devmnt's
+/// Tremove); every device
 /// without an arm refuses LOUDLY naming the gap — never a silent 0.
 fn remove_chan(c: &Chan) -> Result<u64, &'static str> {
     port::namec::remove_chan(c).map(|_| 0)

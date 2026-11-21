@@ -131,6 +131,8 @@ const RWRITE: u8 = 119;
 const RCLUNK: u8 = 121;
 const TSTAT: u8 = 124;
 const RSTAT: u8 = 125;
+const TREMOVE: u8 = 122;
+const RREMOVE: u8 = 123;
 
 const QID_ROOT: u64 = 100;
 const QID_ADIR: u64 = 101;
@@ -191,6 +193,9 @@ struct FakeServer {
     /// zero-count Twrite pin reads this (the server OBSERVES empty
     /// writes; a skip-when-empty client loop never appears here).
     writes: Rc<RefCell<Vec<Vec<u8>>>>,
+    /// 20-14: EVERY Tremove the server accepted, as (fid, removed qid)
+    /// — the remove pins read which fid carried the remove.
+    removed: Rc<RefCell<Vec<(u32, u64)>>>,
     /// The server's msize answer cap (rversion: min(offer, this)).
     server_msize: u32,
     /// Malformation knobs (T-05-13's rejection proofs):
@@ -224,6 +229,7 @@ impl FakeServer {
                 fids: Rc::clone(&fids),
                 clunked: Rc::clone(&clunked),
                 writes: Rc::clone(&writes),
+                removed: Rc::new(RefCell::new(Vec::new())),
                 server_msize: 8192,
                 inflate_msize: false,
                 size_boost: 0,
@@ -391,6 +397,21 @@ impl FakeServer {
                 let mut body = Vec::new();
                 pu32(&mut body, count);
                 self.finish(RWRITE, tag, &body)
+            }
+            TREMOVE => {
+                // remove(5): the fid is clunked whether or not the
+                // remove succeeds.  The fake refuses directories (the
+                // loud-refusal pin) and logs every accepted remove.
+                let fid = c.u32();
+                let found = { self.fids.borrow_mut().remove(&fid) };
+                let Some(node) = found else {
+                    return self.rerror(tag, b"fid not found");
+                };
+                if t[&node].typ == QTDIR {
+                    return self.rerror(tag, b"permission denied");
+                }
+                self.removed.borrow_mut().push((fid, node));
+                self.finish(RREMOVE, tag, &[])
             }
             TCLUNK => {
                 let fid = c.u32();
@@ -1184,4 +1205,80 @@ fn mux_foreign_reply_is_dropped_and_live_waiters_still_complete() {
     }
     let out = mnt.read(leaf_fid, 0, 4096).expect("the live read completes past the dropped reply");
     assert_eq!(out, LEAF_CONTENT);
+}
+
+// ---------------------------------------------------------------------------
+// 20-14: the DEV_MNT remove leg (devmnt::remove via namec::remove_chan)
+// ---------------------------------------------------------------------------
+
+/// A mounted fake with the clunk and remove logs exposed, bound at /dir.
+fn mounted_with_remove_log() -> (
+    Chan,
+    Lock<Pgrp>,
+    Rc<RefCell<HashMap<u32, u64>>>,
+    Rc<RefCell<Vec<u32>>>,
+    Rc<RefCell<Vec<(u32, u64)>>>,
+) {
+    let slash = fixture_slash();
+    let pg = Lock::new("pgrp-test", Pgrp::new());
+    let (fake, fids, clunked) = FakeServer::new();
+    let removed = Rc::clone(&fake.removed);
+    let (r, w) = fake.split();
+    let mnt = Mnt::negotiate(r, w, 0).expect("the version handshake negotiates");
+    let root = devmnt::attach(&Arc::new(mnt), b"").expect("attach the fake tree");
+    let tgt = namec::namec(b"/dir", &slash, &slash, &pg, NamecMode::MountTarget)
+        .expect("the mount target resolves");
+    let node = LockNode::new();
+    pg.lock(&node).bind(root, &tgt, pgrp::MREPL).expect("the mount inserts");
+    (slash, pg, fids, clunked, removed)
+}
+
+/// sysremove through a mount: the Tremove rides a CLONE of the walked
+/// chan's fid (Tremove consumes the fid it is handed), so the chan's own
+/// fid is still live after the remove and close_chan Tclunks it exactly
+/// once; the clone is never Tclunk'd by the client (the server already
+/// released it).  No fid leaks either side.
+#[test]
+fn devmnt_remove_rides_a_clone_and_close_clunks_the_walked_fid_once() {
+    let (slash, pg, fids, clunked, removed) = mounted_with_remove_log();
+    let attach_fid = fid_for(&fids, QID_ROOT).expect("the table holds the attach fid");
+    let leaf = namec::namec(b"/dir/adir/leaf.txt", &slash, &slash, &pg, NamecMode::Open)
+        .expect("the crossed file resolves");
+    assert_eq!(leaf.dev, DEV_MNT);
+    let leaf_fid = fid_for(&fids, QID_LEAF).expect("the walked fid lives server-side");
+
+    namec::remove_chan(&leaf).expect("the DEV_MNT arm sends a Tremove the server accepts");
+    let log = removed.borrow().clone();
+    assert_eq!(log.len(), 1, "exactly one Tremove");
+    assert_eq!(log[0].1, QID_LEAF, "the Tremove named the walked file");
+    assert_ne!(log[0].0, leaf_fid, "the Tremove rode a clone, not the chan's own fid");
+    assert!(fids.borrow().contains_key(&leaf_fid), "the chan's own fid survives the remove");
+
+    namec::close_chan(&leaf);
+    drop(leaf);
+    assert_eq!(
+        clunked.borrow().iter().filter(|f| **f == leaf_fid).count(),
+        1,
+        "the walked fid is Tclunk'd exactly once, at close"
+    );
+    assert!(!clunked.borrow().contains(&log[0].0), "the consumed clone is never Tclunk'd");
+    assert_eq!(fids.borrow().len(), 1, "only the mount table's attach fid remains");
+    assert!(fids.borrow().contains_key(&attach_fid));
+}
+
+/// A remove the server refuses is the loud error (devmnt's Rerror arm),
+/// never a silent 0, and still leaks no fid: the server clunked the
+/// clone, and close_chan clunks the walked fid.
+#[test]
+fn devmnt_remove_refused_is_loud_and_leaks_no_fid() {
+    let (slash, pg, fids, _clunked, removed) = mounted_with_remove_log();
+    let adir = namec::namec(b"/dir/adir", &slash, &slash, &pg, NamecMode::Open)
+        .expect("the crossed directory resolves");
+    let before = fids.borrow().len();
+    assert_eq!(namec::remove_chan(&adir), Err("devmnt: server error"));
+    assert!(removed.borrow().is_empty(), "the server accepted nothing");
+    assert_eq!(fids.borrow().len(), before, "the refused Tremove's clone is gone server-side");
+    namec::close_chan(&adir);
+    drop(adir);
+    assert_eq!(fids.borrow().len(), 1, "only the mount table's attach fid remains");
 }

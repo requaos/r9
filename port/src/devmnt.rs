@@ -107,6 +107,8 @@ const TCREATE: u8 = 114;
 const RCREATE: u8 = 115;
 const TCLUNK: u8 = 120;
 const RCLUNK: u8 = 121;
+const TREMOVE: u8 = 122;
+const RREMOVE: u8 = 123;
 const TSTAT: u8 = 124;
 const RSTAT: u8 = 125;
 
@@ -929,6 +931,19 @@ impl Mnt {
         Ok(out)
     }
 
+    /// Tremove (donor mntremove): remove the file the fid names.  9P
+    /// clunks the fid server-side whether or not the remove succeeds
+    /// (remove(5)), so the caller must never Tclunk it afterwards.
+    pub fn remove(&self, fid: u32) -> Result<()> {
+        let tag = self.alloc_tag();
+        let mut body = Vec::new();
+        pw32(&mut body, fid);
+        let msg = tmsg(TREMOVE, tag, &body);
+        let reply = self.rpc(&msg, RREMOVE, tag)?;
+        RepCur::new(&reply[7..]).done()?;
+        Ok(())
+    }
+
     /// Tclunk (donor mntclunk): release the fid server-side.
     pub fn clunk(&self, fid: u32) -> Result<()> {
         let tag = self.alloc_tag();
@@ -1242,6 +1257,27 @@ pub fn stat(c: &Chan, sb: &mut [u8]) -> Result<u64> {
     }
     sb[..payload.len()].copy_from_slice(&payload);
     Ok(payload.len() as u64)
+}
+
+/// The DEV_MNT remove leg (namec::remove_chan, sysremove's
+/// c->dev->remove): Tremove the file the walked chan names.  Tremove
+/// consumes the fid it is handed (remove(5): the fid is clunked even
+/// when the remove fails), but the walked chan's fid Arc is still owned
+/// by the chan and close_chan's clunk_if_last Tclunks it after the
+/// remove — so the remove rides a CLONE of the fid (create's
+/// clone-then-transform shape) and the chan's own fid lifecycle stays
+/// untouched.  The donor instead marks the chan dead after mntremove
+/// (c->type = 0); r9's close dispatch has no such mark.  The clone
+/// walk needs an unopened fid, which is what sysremove's namec yields
+/// (the ORCLOSE close path never reaches here: devmnt's ORCLOSE rides
+/// the Topen/Tcreate mode byte and the server removes at Tclunk).
+pub fn remove(c: &Chan) -> Result<()> {
+    let Some(mnt) = &c.mnt else { return Err("devmnt: remove of a non-mount chan") };
+    let Some(fid) = &c.mnt_fid else {
+        return Err("devmnt: remove of an fid-less chan");
+    };
+    let newfid = mnt.clone_fid(**fid)?;
+    mnt.remove(newfid)
 }
 
 /// The DEV_MNT close dispatch (namec::close_chan): Tclunk, best-effort —

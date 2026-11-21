@@ -459,13 +459,15 @@ pub fn mark_fd_state(c: &mut Chan, mode: u32) {
 /// The per-device remove dispatch (the donor's `c->dev->remove(c)`):
 /// the one routing for both REMOVE(25)'s sysremove and the ORCLOSE
 /// close path.  Ported arms run; every other device refuses LOUDLY,
-/// naming the gap, never a silent 0.  devmnt is not here this era (a
-/// mounted remove would be a Tremove RPC; no measured caller).
+/// naming the gap, never a silent 0.  DEV_MNT is the Tremove RPC
+/// (devmnt::remove — `rm` through a mounted tree); remove_if_last_rclose
+/// never routes a DEV_MNT chan here (its ORCLOSE rides the wire).
 pub fn remove_chan(c: &Chan) -> Result<()> {
     match c.dev {
         DEV_CAP => crate::devcap::remove(c),
         DEV_SRV => crate::devsrv::remove(c),
         DEV_ENV => crate::devenv::remove(c),
+        DEV_MNT => crate::devmnt::remove(c),
         _ => Err("remove: device does not implement remove"),
     }
 }
