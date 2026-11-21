@@ -25,6 +25,7 @@ mod pre_mmu;
 #[allow(dead_code)]
 mod exec;
 mod fault;
+mod fpu;
 #[allow(dead_code)]
 mod proc;
 mod regblock;

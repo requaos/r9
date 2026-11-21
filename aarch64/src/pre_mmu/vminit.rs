@@ -163,9 +163,11 @@ fn earlyvm_pages_physrange() -> PhysRange {
 pub extern "C" fn init_vm(dtb_pa: u64) {
     // Qemu's ELF -kernel boot enters DIRECTLY at EL1,
     // skipping l.S's el2 path -- which is the only place CPACR_EL1.FPEN is
-    // set.  With FPEN at its reset value, any compiler-emitted SIMD/FP
-    // instruction traps (ESR EC=0x07).  Enable FP/SIMD access at EL1 here,
-    // the earliest Rust point.  Raspi reaches EL1 through the el2 path where
+    // set.  With FPEN at its reset value, any SIMD/FP instruction traps
+    // (ESR EC=0x07).  The kernel's compiled code uses none (the softfloat
+    // target), but user programs do at EL0 and fpu.rs's save/restore does
+    // at EL1, so enable FP/SIMD access for both here, the earliest Rust
+    // point.  Raspi reaches EL1 through the el2 path where
     // l.S already wrote the same value, so it is gated out (its register
     // state stays byte-identical).
     #[cfg(all(not(test), platform = "virt"))]

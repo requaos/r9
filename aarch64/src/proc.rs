@@ -707,6 +707,13 @@ pub struct Proc {
     /// blocked mid-syscall).  The sched loop resumes such procs via swtch;
     /// every other Ready proc resumes via trap_return on `frame`.
     pub blocked_in_kernel: bool,
+    /// The user FP/SIMD state (q0-q31, FPCR, FPSR) while the proc is OFF
+    /// the CPU; stale while it is on it (the live registers are then its
+    /// state — fpu.rs's invariant).  Restored at every install
+    /// (activate_first, pick_next, reschedule), saved at every leave
+    /// (sched, reschedule); rfork seeds a child's from the parent's live
+    /// registers, exec zeroes it.
+    pub fpsave: crate::fpu::FpState,
     /// The rfork parent — EXITS posts the wait record here.  Null
     /// for the staged init (its exits posts nothing).
     pub parent: *mut Proc,
@@ -869,6 +876,7 @@ impl Proc {
             last_note: [0; ERRMAX],
             last_note_len: 0,
             blocked_in_kernel: false,
+            fpsave: crate::fpu::FpState::ZERO,
             parent: ptr::null_mut(),
             children_live: 0,
             nowait: false,
@@ -1504,6 +1512,8 @@ pub fn activate_first(p: &mut Proc) {
     p.state = ProcState::Running;
     set_current_proc(p);
     write_curkstack(p.kstack_top);
+    // Install: the proc's user FP/SIMD state (exec zeroed it) goes live.
+    crate::fpu::restore(&p.fpsave);
 }
 
 /// 20-09 (dev_churn, the x86_64 17-02 twin): seed a freshly built
@@ -1604,12 +1614,16 @@ pub fn reschedule() {
         let curp = table.procs[cur_idx].as_mut().unwrap();
         curp.frame = read_curframe();
         curp.state = ProcState::Ready;
+        // Leave: the live FP/SIMD registers are cur's user state (the
+        // kernel never touches them) — park them before next's go live.
+        crate::fpu::save(&mut curp.fpsave);
         let next = table.procs[ni].as_mut().unwrap();
         next.state = ProcState::Running;
         next_pid = next.pid;
         set_current_proc(next);
         write_curkstack(next.kstack_top);
         write_curframe(next.frame);
+        crate::fpu::restore(&next.fpsave);
         // SAFETY: next's root table is fully built (the construction
         // invariant — recursive self-entry + its mappings) and named by
         // the pointer the PROC_TABLE slot owns; the switch runs with the
@@ -1678,6 +1692,9 @@ pub fn sched() {
     let mut cur = current().expect("sched with no current process");
     cur.state = ProcState::Blocked;
     cur.blocked_in_kernel = true;
+    // Leave: park the user FP/SIMD state — the sched loop installs the
+    // next proc's (possibly this one again, from this save).
+    crate::fpu::save(&mut cur.fpsave);
     // SAFETY: sched_context()'s seed-once discipline (single CPU,
     // IRQ-masked syscall context); cur's context field is
     // PROC_TABLE-resident (a stable address across the switch).
@@ -1838,6 +1855,9 @@ fn pick_next() -> Option<Resume> {
         set_current_proc(p);
         write_curkstack(p.kstack_top);
         write_curframe(p.frame);
+        // Install: the proc's saved user FP/SIMD state goes live (every
+        // path into the sched loop parked or dropped the previous one).
+        crate::fpu::restore(&p.fpsave);
         // SAFETY: p's root table is fully built (construction invariant)
         // and owned by the table slot; the switch runs under the
         // PROC_TABLE lock in IRQ-masked context.
@@ -2535,6 +2555,11 @@ pub fn rfork_clone(parent: &mut Proc, frame: &TrapFrame, flag: u64) -> Result<u6
     if flag & crate::syscall::RFMEM != 0 {
         rfmem_join(parent, &mut child);
     }
+    // The child starts with the parent's user FP/SIMD state: the parent
+    // is on the CPU in its own rfork syscall, so the live registers ARE
+    // that state (fpu.rs); the child is off the CPU, so it lands in its
+    // fpsave, which its first install restores.
+    crate::fpu::save(&mut child.fpsave);
     // An RFNOWAIT child posts no wait record at EXITS and is never
     // reaped by AWAIT, so it must not count toward the parent's AWAIT
     // block-vs-"no children" pivot (Plan 9: an RFNOWAIT child is invisible
