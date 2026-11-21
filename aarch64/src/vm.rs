@@ -795,6 +795,40 @@ pub fn flush_icache_user_range(start: usize, end: usize) {
     }
 }
 
+/// Clean the data cache to the point of unification over [start,
+/// start+len) by VA (any mapping of the range — rfork's copy uses the
+/// KZERO alias of the destination page), line size from CTR_EL0.DminLine,
+/// then `dsb ish` so the cleans complete before any I-cache maintenance.
+#[allow(unused_variables)]
+pub fn clean_dcache_to_pou(start: usize, len: usize) {
+    #[cfg(not(test))]
+    // SAFETY: dc cvau + dsb are pure cache maintenance on a range the
+    // caller has mapped (no memory operands beyond the named range).
+    unsafe {
+        let dline = 4usize << ((ctr_el0() >> 16) & 0xf);
+        let mut p = start & !(dline - 1);
+        while p < start + len {
+            core::arch::asm!("dc cvau, {}", in(reg) p);
+            p += dline;
+        }
+        core::arch::asm!("dsb ish");
+    }
+}
+
+/// Invalidate every instruction cache to the point of unification
+/// (Inner Shareable), then synchronize: `ic ialluis; dsb ish; isb`.
+/// Needed after instructions are written through a data mapping into
+/// physical pages that may still have I-cache lines from a previous use
+/// (CTR_EL0.DIC = 0).
+pub fn invalidate_icache_all() {
+    #[cfg(not(test))]
+    // SAFETY: ic ialluis + dsb + isb are pure maintenance/barrier ops —
+    // no memory operands; always executable at EL1.
+    unsafe {
+        core::arch::asm!("ic ialluis", "dsb ish", "isb");
+    }
+}
+
 pub trait PageAllocator {
     fn alloc_physpage(&mut self) -> Result<PhysAddr, PageAllocError>;
 }
