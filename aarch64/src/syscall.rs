@@ -1155,76 +1155,69 @@ fn sys_semrelease(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     new as u64
 }
 
-/// EXEC(7): path, argv — 2 syscall args (libc `exec(char *name,
-/// char *argv[])`).  Donor semantics: returns ONLY on failure (-1/errstr,
-/// old image intact); on success exec::exec_replace rewrites the live trap
-/// frame (R0 = tos, SP → new seed stack, PC = new entry, PSR = 0) and the
-/// dispatch return erets into the new image.
-///
-/// Both args are user memory crossing the trust boundary: the
-/// path string and the argv block + every pointed-to string are validated
-/// against the proc's segment map before copying, with argc bounded at 32
-/// and each arg at 128 bytes.  Everything is COPIED to kernel memory before
-/// exec_replace runs — the replacement frees the old image's pages, which
-/// is where the arguments lived.
-fn sys_exec(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
+/// EXEC's argv staging: the path string + the NUL-terminated argv
+/// block out of user memory, everything COPIED to kernel memory before
+/// exec_replace runs (the replacement frees the old image's pages,
+/// which is where the arguments lived).  Both args cross the trust
+/// boundary: the path string and the argv block + every pointed-to
+/// string are validated against the proc's segment map before copying,
+/// with argc bounded at 32 and each arg at 128 bytes.  Order-stable by
+/// construction (the walk ascends the argv array; each string copies in
+/// turn).  The x86_64 copy_exec_args, with the aarch64 errstr for a bad
+/// argv slot kept.
+pub(crate) fn copy_exec_args(
+    proc: &Proc,
+    path_va: u64,
+    argv_va: u64,
+) -> Result<(Vec<u8>, Vec<Vec<u8>>), &'static str> {
     const MAX_EXEC_ARGS: usize = 32;
     const MAX_EXEC_ARG_LEN: usize = 128;
-    /// The whole-file staging ceiling for a MOUNTED binary (read
-    /// eagerly at exec because the trap-context pager never RPCs) — far
-    /// past every subset binary (rc is ~250 KB), bounded so an untrusted
-    /// server can never stream the kernel into an unbounded allocation.
-    const EXEC_STAGE_CAP: usize = 16 * 1024 * 1024;
-    let Some(args) = sargs(frame, proc, 2) else {
-        return err(proc, "exec: bad argument block");
-    };
-    let (path_va, argv_va) = (args[0], args[1]);
-    let path = match copy_user_str(proc, path_va, ERRMAX) {
-        Ok(path) => path,
-        Err(msg) => return err(proc, msg),
-    };
+    let path = copy_user_str(proc, path_va, ERRMAX)?;
     let mut argv: Vec<Vec<u8>> = Vec::new();
     if argv_va != 0 {
         loop {
             if argv.len() >= MAX_EXEC_ARGS {
-                return err(proc, "exec: too many args");
+                return Err("exec: too many args");
             }
             let slot_va = argv_va + 8 * argv.len() as u64;
             // The argv slot block rides
             // usermem's validated-only pointer — the slots are user
             // stack/data the process itself wrote to set up the call
             // (resident by construction).
-            let slot = match UserPtr::validated_only(proc, slot_va) {
-                Ok(p) => p,
-                Err(_) => return err(proc, "exec: bad argv block"),
-            };
+            let slot = UserPtr::validated_only(proc, slot_va).map_err(|_| "exec: bad argv block")?;
             let ptr = slot.read_u64();
             if ptr == 0 {
                 break;
             }
-            match copy_user_str(proc, ptr, MAX_EXEC_ARG_LEN) {
-                Ok(s) => argv.push(s),
-                Err(msg) => return err(proc, msg),
-            }
+            argv.push(copy_user_str(proc, ptr, MAX_EXEC_ARG_LEN)?);
         }
     }
+    Ok((path, argv))
+}
 
-    // Resolve through the NAMESPACE —
-    // namec + the proc's mount table — so an exec path crosses mounts
-    // (execinit's /arm64/init through the union-mounted /; init's
-    // /bin/rc through the post-newns /bin union into the mounted tree).
-    // The old devroot-only prefix walk is retired (resolution lives in
-    // the namespace core).
-    // NO pgrp lock is held across resolution, open, or stage —
-    // namec consults under per-consult snapshots; a devmnt open/read RPCs
-    // and BLOCKS mid-syscall (the pipe read schedules the server proc).
+/// Open `path` for exec and build its byte backing (sys_exec's
+/// resolution step, factored out so the #! pre-pass can re-resolve an
+/// interpreter the same way — the x86_64 exec_backing_for).
+///
+/// Resolve through the NAMESPACE —
+/// namec + the proc's mount table — so an exec path crosses mounts
+/// (execinit's /arm64/init through the union-mounted /; init's
+/// /bin/rc through the post-newns /bin union into the mounted tree).
+/// The old devroot-only prefix walk is retired (resolution lives in
+/// the namespace core).
+/// NO pgrp lock is held across resolution, open, or stage —
+/// namec consults under per-consult snapshots; a devmnt open/read RPCs
+/// and BLOCKS mid-syscall (the pipe read schedules the server proc).
+fn exec_backing_for(proc: &mut Proc, path: &[u8]) -> Result<ByteBacking, &'static str> {
+    /// The whole-file staging ceiling for a MOUNTED binary (read
+    /// eagerly at exec because the trap-context pager never RPCs) — far
+    /// past every subset binary (rc is ~250 KB), bounded so an untrusted
+    /// server can never stream the kernel into an unbounded allocation.
+    const EXEC_STAGE_CAP: usize = 16 * 1024 * 1024;
     let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
-        return err(proc, "exec: no namespace (pre-exec)");
+        return Err("exec: no namespace (pre-exec)");
     };
-    let c = match namec::namec(&path, slash, dot, &proc.pgrp, NamecMode::Open) {
-        Ok(c) => c,
-        Err(msg) => return err(proc, msg),
-    };
+    let c = namec::namec(path, slash, dot, &proc.pgrp, NamecMode::Open)?;
     let opened = match namec::open_chan(&c, OEXEC) {
         Ok(c) => c,
         Err(msg) => {
@@ -1232,7 +1225,7 @@ fn sys_exec(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             // error exit too — close-dispatch it (clunk_if_last's count
             // check protects non-DEV_MNT chans).
             port::namec::close_chan(&c);
-            return err(proc, msg);
+            return Err(msg);
         }
     };
     // The walked chan is walked-past once the open
@@ -1244,13 +1237,13 @@ fn sys_exec(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         DEV_ROOT => {
             let Some(root) = port::devroot::root() else {
                 port::namec::close_chan(&opened);
-                return err(proc, "devroot: not mounted");
+                return Err("devroot: not mounted");
             };
             match root.entry(&opened) {
                 Ok(bin) => ByteBacking::Paq { dir: bin, image: root.image() },
                 Err(msg) => {
                     port::namec::close_chan(&opened);
-                    return err(proc, msg);
+                    return Err(msg);
                 }
             }
         }
@@ -1263,18 +1256,43 @@ fn sys_exec(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
                 Ok(bytes) => ByteBacking::Mnt { file: alloc::sync::Arc::new(bytes) },
                 Err(msg) => {
                     port::namec::close_chan(&opened);
-                    return err(proc, msg);
+                    return Err(msg);
                 }
             }
         }
         _ => {
             port::namec::close_chan(&opened);
-            return err(proc, "exec: path is not an executable source");
+            return Err("exec: path is not an executable source");
         }
     };
     // The exec chan is a transient (never fd-installed): close-dispatch it
     // (devmnt Tclunks the fid — the staged bytes now own the content).
     port::namec::close_chan(&opened);
+    Ok(backing)
+}
+
+/// EXEC(7): path, argv — 2 syscall args (libc `exec(char *name,
+/// char *argv[])`).  Donor semantics: returns ONLY on failure (-1/errstr,
+/// old image intact); on success exec::exec_replace rewrites the live trap
+/// frame (R0 = tos, SP → new seed stack, PC = new entry, PSR = 0) and the
+/// dispatch return erets into the new image.
+///
+/// copy_exec_args stages the user arguments into kernel memory and
+/// exec_backing_for resolves the path through the namespace; both run
+/// before exec_replace frees the old image.
+fn sys_exec(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
+    let Some(args) = sargs(frame, proc, 2) else {
+        return err(proc, "exec: bad argument block");
+    };
+    let (path_va, argv_va) = (args[0], args[1]);
+    let (path, argv) = match copy_exec_args(proc, path_va, argv_va) {
+        Ok(v) => v,
+        Err(msg) => return err(proc, msg),
+    };
+    let backing = match exec_backing_for(proc, &path) {
+        Ok(b) => b,
+        Err(msg) => return err(proc, msg),
+    };
     let leaf = path.split(|&b| b == b'/').filter(|c| !c.is_empty()).last().unwrap_or(&path[..]);
     let name = core::str::from_utf8(leaf).unwrap_or("?");
     let arg_slices: Vec<&[u8]> = argv.iter().map(|a| a.as_slice()).collect();
