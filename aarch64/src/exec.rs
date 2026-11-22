@@ -686,3 +686,142 @@ pub fn seed_exec_frame(
     frame.seed_el0_entry(tos_va, user_sp, entry);
     frame_ptr
 }
+
+// The #! pre-pass host pins (Harvey 20-17 Task 1, the aarch64 host-test
+// battery): the x86_64 19-03 shebang_pass pins ported for the pure half.
+// The interpreter re-exec pins (exec_with_shebang_*, the recursion cap
+// and the plain-path short read) build a proc with new_user_proc, which
+// is not host-runnable on aarch64 (pagealloc has no memory on the host,
+// Harvey 20-12); the live `boot-r9-cpu` gate's shebang leg (the baked
+// #! cpurc calling the #! /lib/shebangecho) covers them.
+#[cfg(test)]
+mod shebang_tests {
+    use super::{MAX_ARGS, R_MAGIC_AARCH64, ShebangExec, shebang_pass};
+    use alloc::vec;
+    use alloc::vec::Vec;
+
+    /// A file head carrying `line`, padded with 'x' past the #! region
+    /// (the head a real backing read delivers: at least the 40-byte
+    /// a.out header read).
+    fn shebang_head(line: &[u8]) -> Vec<u8> {
+        let mut v = vec![b'x'; 40.max(line.len())];
+        v[..line.len()].copy_from_slice(line);
+        v
+    }
+
+    /// listen's blind execl shape: the caller argv is [script, serv, proto].
+    const SCRIPT: &[u8] = b"/bin/service/tcp17010";
+    const ELEM: &[u8] = b"tcp17010";
+
+    #[test]
+    fn shebang_non_marker_heads_yield_no_rewrite() {
+        // A real 7l a.out header: the plain path proceeds unchanged.
+        let mut h = [0u8; 40];
+        h[0..4].copy_from_slice(&R_MAGIC_AARCH64.to_be_bytes());
+        assert_eq!(shebang_pass(&h, 40, b"/arm64/bin/rc", b"rc", &[b"/arm64/bin/rc"]), Ok(None));
+        // Text that is not a #! line, and a lone '#'.
+        assert_eq!(shebang_pass(&shebang_head(b"# comment\n"), 40, SCRIPT, ELEM, &[SCRIPT]), Ok(None));
+        assert_eq!(shebang_pass(b"!#/bin/rc\n", 10, SCRIPT, ELEM, &[SCRIPT]), Ok(None));
+        // n < 2: never a script; read_aout's short-read error owns it.
+        let head = shebang_head(b"#!/bin/rc\n");
+        assert_eq!(shebang_pass(&head[..1], 1, SCRIPT, ELEM, &[SCRIPT]), Ok(None));
+        assert_eq!(shebang_pass(&[], 0, SCRIPT, ELEM, &[SCRIPT]), Ok(None));
+    }
+
+    #[test]
+    fn shebang_one_token_builds_the_donor_argv_order() {
+        let head = shebang_head(b"#!/bin/rc\n");
+        let pass = shebang_pass(&head, 40, SCRIPT, ELEM, &[SCRIPT, b"17010", b"tcp"])
+            .expect("loud reject-free pass")
+            .expect("the script sniffs as a script");
+        assert_eq!(pass.interpreter, b"/bin/rc");
+        assert_eq!(
+            pass.argv,
+            vec![
+                b"tcp17010".to_vec(),
+                b"/bin/service/tcp17010".to_vec(),
+                b"17010".to_vec(),
+                b"tcp".to_vec(),
+            ]
+        );
+    }
+
+    /// `#!/bin/rc -x` on file `f` with caller argv [f, a]: the
+    /// interpreter is /bin/rc, and the argv is [elem, -x, f, a] -- the
+    /// donor puts the script's name (elem) where the interpreter path
+    /// was, keeps the flag tokens, then the script path, then the
+    /// caller's argv[1..].
+    #[test]
+    fn shebang_flag_tokens_precede_the_script_path() {
+        let head = shebang_head(b"#!/bin/rc -x\n");
+        let pass = shebang_pass(&head, 40, b"f", b"f", &[b"f", b"a"]).expect("pass").expect("script");
+        assert_eq!(
+            pass,
+            ShebangExec {
+                interpreter: b"/bin/rc".to_vec(),
+                argv: vec![b"f".to_vec(), b"-x".to_vec(), b"f".to_vec(), b"a".to_vec()],
+            }
+        );
+        // Tabs and runs of blanks separate tokens; empty runs are skipped.
+        let head = shebang_head(b"#! /bin/rc \t-x  \n");
+        let pass = shebang_pass(&head, 40, b"f", b"f", &[b"f", b"a"]).expect("pass").expect("script");
+        assert_eq!(pass.interpreter, b"/bin/rc");
+        assert_eq!(pass.argv, vec![b"f".to_vec(), b"-x".to_vec(), b"f".to_vec(), b"a".to_vec()]);
+    }
+
+    #[test]
+    fn shebang_unterminated_line_is_rejected() {
+        // No newline within the 32-byte bound: the filler buries it.
+        let head = shebang_head(b"#!/bin/rc -x");
+        assert_eq!(
+            shebang_pass(&head, 40, SCRIPT, ELEM, &[SCRIPT]),
+            Err("exec: bad header (hash-bang line unterminated)")
+        );
+        // A newline at byte 32 is one past the bound (the line with its
+        // newline must close within 32 bytes); at byte 31 it closes.
+        let mut long = vec![b'a'; 40];
+        long[0] = b'#';
+        long[1] = b'!';
+        long[32] = b'\n';
+        assert!(shebang_pass(&long, 40, SCRIPT, ELEM, &[SCRIPT]).is_err());
+        long[32] = b'a';
+        long[31] = b'\n';
+        assert!(shebang_pass(&long, 40, SCRIPT, ELEM, &[SCRIPT]).unwrap().is_some());
+        // The bound follows the bytes actually read, not the buffer.
+        let head = shebang_head(b"#!/bin/rc\n");
+        assert!(shebang_pass(&head, 5, SCRIPT, ELEM, &[SCRIPT]).is_err());
+    }
+
+    #[test]
+    fn shebang_empty_token_lists_are_rejected() {
+        for line in [&b"#!\n"[..], &b"#!   \n"[..], &b"#!\t\n"[..]] {
+            let head = shebang_head(line);
+            assert_eq!(
+                shebang_pass(&head, line.len(), SCRIPT, ELEM, &[SCRIPT]),
+                Err("exec: bad header (empty hash-bang line)")
+            );
+        }
+    }
+
+    /// The MAX_ARGS bound: the #! line is bounded by 32 bytes, so growth
+    /// past MAX_ARGS rides the caller's argv.  Exactly MAX_ARGS is
+    /// accepted; one more is the loud reject, never a truncation.
+    #[test]
+    fn shebang_argv_growth_respects_max_args() {
+        // [elem, -x, file] = 3 from the sniff; 29 caller args after
+        // argv[0] reach exactly 32.
+        let head = shebang_head(b"#!/bin/rc -x\n");
+        let mut caller: Vec<Vec<u8>> = vec![SCRIPT.to_vec()];
+        for i in 0..29usize {
+            caller.push(vec![b'a'; 2 + i % 3]);
+        }
+        let slices: Vec<&[u8]> = caller.iter().map(|a| a.as_slice()).collect();
+        let pass = shebang_pass(&head, 40, SCRIPT, ELEM, &slices)
+            .expect("32 args is at the bound")
+            .expect("script");
+        assert_eq!(pass.argv.len(), MAX_ARGS);
+        caller.push(b"one-too-many".to_vec());
+        let over: Vec<&[u8]> = caller.iter().map(|a| a.as_slice()).collect();
+        assert_eq!(shebang_pass(&head, 40, SCRIPT, ELEM, &over), Err("exec: too many args"));
+    }
+}

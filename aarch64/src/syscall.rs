@@ -2664,3 +2664,141 @@ mod create_cexec_tests {
         assert!(devsrv::walk(&devsrv::attach(), b"a64-rclose-post").is_err(), "the last close removes it");
     }
 }
+
+// The stat-validation and remove/wstat routing host pins (Harvey 20-17
+// Task 1): x86_64's valid_stat_wire pin ported and split per shape, plus
+// the routing pins that need no proc.  Not ported: the syscall-level
+// MockStack pins (remove_syscall_dispatches_and_refuses_loudly,
+// wstat_syscall_validates_then_refuses,
+// fwstat_syscall_over_an_open_fd_refuses_loudly) and the devcap half of
+// the remove round trip.  MockStack is built on new_user_proc, which is
+// not host-runnable on aarch64 (Harvey 20-12: pagealloc OutOfSpace on
+// the host), and the devcap half needs the eve user hook installed.  The
+// live boot-r9-cpu gate covers them: cpuprobe's stat leg (the exact
+// wstat/fwstat refusals and `malformed stat buffer`), its cap leg (the
+// caphash remove as eve) and cpurc's remove leg.
+#[cfg(test)]
+mod stat_wire_tests {
+    use super::{
+        DISPATCH, FWSTAT, FWSTAT_, REMOVE, WSTAT, WSTAT_, remove_chan, valid_stat_wire, wstat_chan,
+    };
+    use alloc::vec;
+    use alloc::vec::Vec;
+    use port::dat::OWRITE;
+
+    /// A well-formed stat(5) record: 41 fixed bytes, then the four
+    /// counted strings name/uid/gid/muid (offsets 41, 43+n, ...).
+    fn stat_wire(name: &[u8]) -> Vec<u8> {
+        let strs = [name, b"glenda", b"glenda", b"glenda"];
+        let total = 41 + strs.iter().map(|s| 2 + s.len()).sum::<usize>();
+        let mut b = Vec::new();
+        b.extend_from_slice(&((total - 2) as u16).to_le_bytes());
+        b.extend_from_slice(&[0u8; 39]); // type dev qid mode atime mtime length
+        for s in strs {
+            b.extend_from_slice(&(s.len() as u16).to_le_bytes());
+            b.extend_from_slice(s);
+        }
+        assert_eq!(b.len(), total);
+        b
+    }
+
+    /// The minimal record: 41 fixed bytes + four empty strings = 49
+    /// (STATFIXLEN), size field 47.
+    fn empty49() -> Vec<u8> {
+        let mut b = vec![0u8; 49];
+        b[0..2].copy_from_slice(&47u16.to_le_bytes());
+        b
+    }
+
+    #[test]
+    fn valid_stat_wire_accepts_well_formed_records() {
+        assert_eq!(valid_stat_wire(&empty49()), Ok(()));
+        assert_eq!(valid_stat_wire(&stat_wire(b"caphash")), Ok(()));
+    }
+
+    #[test]
+    fn valid_stat_wire_rejects_a_48_byte_buffer() {
+        let b = empty49();
+        assert_eq!(valid_stat_wire(&b[..48]), Err("malformed stat buffer"));
+        // Even with a size field that agrees with 48.
+        let mut b48 = vec![0u8; 48];
+        b48[0..2].copy_from_slice(&46u16.to_le_bytes());
+        assert_eq!(valid_stat_wire(&b48), Err("malformed stat buffer"));
+        assert_eq!(valid_stat_wire(&[]), Err("malformed stat buffer"));
+    }
+
+    #[test]
+    fn valid_stat_wire_rejects_a_size_field_that_disagrees_with_the_length() {
+        let mut lying = stat_wire(b"x");
+        lying[0] = 0xff;
+        lying[1] = 0x0f;
+        assert_eq!(valid_stat_wire(&lying), Err("malformed stat buffer"));
+        // Off by one in either direction.
+        let mut short = empty49();
+        short[0..2].copy_from_slice(&46u16.to_le_bytes());
+        assert_eq!(valid_stat_wire(&short), Err("malformed stat buffer"));
+        let mut long = empty49();
+        long[0..2].copy_from_slice(&48u16.to_le_bytes());
+        assert_eq!(valid_stat_wire(&long), Err("malformed stat buffer"));
+    }
+
+    #[test]
+    fn valid_stat_wire_rejects_a_string_count_that_overruns() {
+        // name@41, uid@47, gid@55, muid@63 for name "name": the gid
+        // count's high byte says far more than the record holds.
+        let mut over = stat_wire(b"name");
+        over[55] = 0xf0;
+        assert_eq!(valid_stat_wire(&over), Err("malformed stat buffer"));
+        // The name count alone overruns the minimal record.
+        let mut b = empty49();
+        b[41] = 1;
+        assert_eq!(valid_stat_wire(&b), Err("malformed stat buffer"));
+    }
+
+    #[test]
+    fn valid_stat_wire_rejects_trailing_bytes() {
+        // muid's count zeroed: the strings stop short of the record end.
+        let mut under = stat_wire(b"name");
+        under[63] = 0;
+        under[64] = 0;
+        assert_eq!(valid_stat_wire(&under), Err("malformed stat buffer"));
+        // A trailing byte with the size field grown to cover it.
+        let mut b = empty49();
+        b.push(0);
+        b[0..2].copy_from_slice(&48u16.to_le_bytes());
+        assert_eq!(valid_stat_wire(&b), Err("malformed stat buffer"));
+    }
+
+    /// The dispatch-table pin (x86_64 cpu03_slots_carry_named_handlers):
+    /// REMOVE and the four wstat numbers each carry a handler, so none of
+    /// them is the loud "syscall N unimplemented" any more.
+    #[test]
+    fn remove_and_stat_wire_consumer_slots_carry_named_handlers() {
+        for n in [REMOVE, WSTAT_, FWSTAT_, WSTAT, FWSTAT] {
+            assert!(DISPATCH[n as usize].is_some(), "slot {n} must carry a named handler");
+        }
+    }
+
+    /// A valid stat_wire buffer over a device with no wstat arm reaches
+    /// the routing refusal -- loud, never a silent 0.
+    #[test]
+    fn wstat_with_a_valid_stat_wire_refuses_loudly_never_zero() {
+        let cons = port::devcons::attach();
+        assert_eq!(
+            wstat_chan(&cons, &stat_wire(b"cons")),
+            Err("wstat: device does not implement wstat")
+        );
+    }
+
+    /// remove_chan routes through port's shared dispatch: devsrv's arm
+    /// removes a service entry, and a device with no arm refuses loudly.
+    #[test]
+    fn remove_routes_devsrv_and_refuses_unported_devices() {
+        let srv = port::devsrv::attach();
+        let post = port::devsrv::create(&srv, b"a64-rm-post", OWRITE, 0o600).expect("srv create");
+        assert_eq!(remove_chan(&post), Ok(0), "devsrv's arm runs");
+        assert!(port::devsrv::walk(&srv, b"a64-rm-post").is_err(), "the entry is gone");
+        let cons = port::devcons::attach();
+        assert_eq!(remove_chan(&cons), Err("remove: device does not implement remove"));
+    }
+}

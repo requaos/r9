@@ -1,6 +1,7 @@
 use xtask::config::{
     Configuration, QemuOverrides, apply_netdev, apply_to_build_step, apply_to_clippy_step,
-    apply_to_qemu_step_with_overrides, apply_virt_netdev, prepare_initrd_dtb, virt_resolved,
+    apply_to_qemu_step_with_overrides, apply_to_test_step, apply_virt_netdev, prepare_initrd_dtb,
+    virt_resolved,
 };
 use xtask::{Arch, DynError, Profile, Result, env_or, uregcheck};
 use std::{
@@ -288,6 +289,30 @@ fn load_config(arch: Arch, matches: &clap::ArgMatches) -> Configuration {
         arch.to_string().to_lowercase(),
         config_file
     ))
+}
+
+/// Load `<arch>/lib/config_<name>.toml` by name (no clap matches).
+fn load_named_config(arch: Arch, name: &str) -> Configuration {
+    Configuration::load(format!(
+        "{}/{}/lib/config_{}.toml",
+        workspace().display(),
+        arch.to_string().to_lowercase(),
+        name
+    ))
+}
+
+/// The host triple of the rustc cargo will run (`rustc -vV`'s `host:`
+/// line), or None when rustc cannot be asked.
+fn host_triple() -> Option<String> {
+    let output = Command::new(env_or("RUSTC", "rustc")).arg("-vV").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout)
+        .ok()?
+        .lines()
+        .find_map(|l| l.strip_prefix("host: "))
+        .map(|h| h.trim().to_string())
 }
 
 fn verbose(matches: &clap::ArgMatches) -> bool {
@@ -3421,35 +3446,64 @@ impl TestStep {
     }
 
     fn run(self) -> Result<()> {
-        let mut all_cmd_args = Vec::new();
+        // Each leg: the cargo args plus an optional profile whose cfg set
+        // the leg compiles under (None = the crate's bare default cfg).
+        let mut all_cmd_args: Vec<(Vec<String>, Option<Configuration>)> = Vec::new();
 
-        all_cmd_args.push(vec![
-            "test".to_string(),
-            "--package".to_string(),
-            "port".to_string(),
-            "--lib".to_string(),
-            "--tests".to_string(),
-        ]);
+        all_cmd_args.push((
+            vec![
+                "test".to_string(),
+                "--package".to_string(),
+                "port".to_string(),
+                "--lib".to_string(),
+                "--tests".to_string(),
+            ],
+            None,
+        ));
 
         let rustup_state = RustupState::new();
 
         let arch = std::env::consts::ARCH;
-        if let Some(target) = rustup_state.std_supported_target(arch) {
-            all_cmd_args.push(vec![
+        let mut target = rustup_state.std_supported_target(arch).map(|t| t.to_string());
+        // The aarch64 crate's host tests (HOST-TEST-ROUTE A, Harvey
+        // 20-12/20-17): the nix devshell has no rustup, so the rustup
+        // probe above finds nothing and the leg used to be skipped
+        // silently.  On an aarch64 host the host triple itself carries
+        // std (the nix toolchain ships it), so fall back to it.  The
+        // fallback is aarch64-only: the x86_64 and riscv64 legs keep
+        // their rustup-only selection unchanged.
+        if target.is_none() && arch == "aarch64" {
+            target = host_triple();
+        }
+        if let Some(target) = target {
+            let leg = vec![
                 "test".to_string(),
                 "--package".to_string(),
                 arch.to_string(),
                 "--bins".to_string(),
                 "--target".to_string(),
-                target.to_string(),
-            ]);
+                target,
+            ];
+            all_cmd_args.push((leg.clone(), None));
+            // The second aarch64 leg runs the crate under the virtshell
+            // profile's cfg set (platform="virt", dev_exec, dev_bootchain,
+            // dev_ether, dev_ip), passed the way the build step passes it,
+            // so the virt platform and the dev_exec-gated pure logic
+            // (shebang_pass, valid_stat_wire, parse_bootconf_pairs,
+            // check_cap_extents) are pinned on the host too.
+            if arch == "aarch64" {
+                all_cmd_args.push((leg, Some(load_named_config(Arch::Aarch64, "virtshell"))));
+            }
         }
 
-        for cmd_args in all_cmd_args {
+        for (cmd_args, config) in all_cmd_args {
             let mut cmd = Command::new(cargo());
             cmd.current_dir(workspace());
 
             cmd.args(cmd_args);
+            if let Some(config) = &config {
+                apply_to_test_step(&mut cmd, config);
+            }
             if self.json_output {
                 cmd.arg("--message-format=json").arg("--quiet");
             }

@@ -1013,3 +1013,105 @@ pub fn virtio_net_irq() {
         println!("virtio-net: link {}", if status & 1 != 0 { "up" } else { "down" });
     }
 }
+
+// The capability-extent host pins (Harvey 20-17 Task 1): x86_64's
+// q35/pci.rs cap_extents pins ported.  The bind path around the check
+// (ECAM, BAR sizing, the bar == 4 rule) is MMIO and stays covered by the
+// live net gates' `pci: caps ...` line.
+#[cfg(test)]
+mod cap_extents_tests {
+    use super::check_cap_extents;
+    use port::virtio::{CapTriple, Caps};
+
+    /// The live qemu virt virtio-net layout (every arm64 net boot prints
+    /// `pci: bar4 ... size 0x4000` and `pci: caps common@0x0+0x1000
+    /// notify@0x3000 isr@0x1000 device@0x2000 mult 4`): the notify cap
+    /// ends exactly at the 0x4000 BAR boundary.
+    fn live_caps() -> Caps {
+        let t = |offset: u32, length: u32| CapTriple { bar: 4, offset, length };
+        Caps {
+            common: t(0x0000, 0x1000),
+            notify: t(0x3000, 0x1000),
+            isr: t(0x1000, 0x1000),
+            device: Some(t(0x2000, 0x1000)),
+            notify_off_multiplier: 4,
+        }
+    }
+
+    #[test]
+    fn cap_extents_admit_the_live_virt_shape() {
+        check_cap_extents(&live_caps(), 0x4000).expect("the live cap layout binds");
+    }
+
+    #[test]
+    fn cap_extents_reject_zero_length_caps() {
+        let mut caps = live_caps();
+        caps.common.length = 0;
+        assert_eq!(
+            check_cap_extents(&caps, 0x4000),
+            Err("virtio: zero-length capability extent (device fault)")
+        );
+        // The offset == bar_size hole a bare `>` edge would admit.
+        let mut caps = live_caps();
+        caps.isr = CapTriple { bar: 4, offset: 0x4000, length: 0 };
+        assert_eq!(
+            check_cap_extents(&caps, 0x4000),
+            Err("virtio: zero-length capability extent (device fault)")
+        );
+    }
+
+    #[test]
+    fn cap_extents_reject_extents_past_the_bar_end() {
+        // One byte past the BAR.
+        let mut caps = live_caps();
+        caps.notify.length = 0x1001;
+        assert_eq!(
+            check_cap_extents(&caps, 0x4000),
+            Err("virtio: capability extent beyond the bar (device fault)")
+        );
+        let mut caps = live_caps();
+        caps.device = Some(CapTriple { bar: 4, offset: 0x3ff0, length: 0x1000 });
+        assert_eq!(
+            check_cap_extents(&caps, 0x4000),
+            Err("virtio: capability extent beyond the bar (device fault)")
+        );
+        // A u32-wrapping offset + length is widened, never admitted.
+        let mut caps = live_caps();
+        caps.notify = CapTriple { bar: 4, offset: u32::MAX, length: u32::MAX };
+        assert_eq!(
+            check_cap_extents(&caps, 0x4000),
+            Err("virtio: capability extent beyond the bar (device fault)")
+        );
+    }
+
+    #[test]
+    fn cap_extents_reject_undersized_common_and_device_configs() {
+        let mut caps = live_caps();
+        caps.common.length = 0x3f;
+        assert_eq!(
+            check_cap_extents(&caps, 0x4000),
+            Err("virtio: common capability smaller than the register block (device fault)")
+        );
+        caps.common.length = 0x40;
+        check_cap_extents(&caps, 0x4000).expect("a 0x40 common cap binds");
+        for len in [6u32, 7] {
+            caps.device = Some(CapTriple { bar: 4, offset: 0x2000, length: len });
+            assert_eq!(
+                check_cap_extents(&caps, 0x4000),
+                Err(
+                    "virtio: device config capability too small for MAC + link status (device fault)"
+                ),
+                "device length {len}"
+            );
+        }
+        caps.device = Some(CapTriple { bar: 4, offset: 0x2000, length: 8 });
+        check_cap_extents(&caps, 0x4000).expect("an 8-byte device config binds");
+    }
+
+    #[test]
+    fn cap_extents_reject_an_absent_device_capability() {
+        let mut caps = live_caps();
+        caps.device = None;
+        assert_eq!(check_cap_extents(&caps, 0x4000), Err("virtio: no device config capability"));
+    }
+}

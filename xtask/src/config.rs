@@ -790,6 +790,16 @@ pub fn apply_to_clippy_step(cmd: &mut Command, config: &Configuration) {
     apply_rustflags(cmd, &rustflags);
 }
 
+/// The host-test leg's cfg set: the profile's platform/dev/... cfgs only
+/// (no link script, no build-std, no path remap -- a host `cargo test`
+/// links against std).  Same flag source as the build step, so a test
+/// run under a profile sees exactly the cfgs that profile's kernel has.
+pub fn apply_to_test_step(cmd: &mut Command, config: &Configuration) {
+    let mut rustflags: Vec<String> = Vec::new();
+    apply_platform_config(cmd, &mut rustflags, config);
+    apply_rustflags(cmd, &rustflags);
+}
+
 pub fn apply_to_build_step(
     cmd: &mut Command,
     config: &Configuration,

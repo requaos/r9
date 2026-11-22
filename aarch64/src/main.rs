@@ -436,7 +436,10 @@ pub extern "C" fn main9(dtb_va: usize) {
         // halts the boot by name — every gate that boots an exec profile
         // runs it; the control count says whether this venue can see the
         // hazard at all (HVF: yes; TCG has no I-cache model).
-        #[cfg(all(dev_exec, any(not(dev_churn), dev_bootchain)))]
+        // not(test): selftest is kernel-only (textcopy.rs gates it the
+        // same way), so the virtshell-cfg host tests compile this body
+        // without it.
+        #[cfg(all(not(test), dev_exec, any(not(dev_churn), dev_bootchain)))]
         {
             let (fresh, stale, rounds) = textcopy::selftest();
             println!(

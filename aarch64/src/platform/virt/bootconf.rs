@@ -200,3 +200,96 @@ pub fn parse_bootconf_pairs(cmdline: &[u8]) -> Result<Bootconf<'_>, BootconfErro
     }
     Ok(out)
 }
+
+// The bootconf host pins (Harvey 20-17 Task 1): x86_64's mb2.rs
+// cmdline/bootconf pins ported for the six behaviors 20-13 Task 3 kept.
+// read_bootargs (the DTB walk) is covered live: every boot-r9-cpu run
+// requires its `devenv: bootconf init=/arm64/init -c` line.
+#[cfg(test)]
+mod bootconf_tests {
+    use super::{BootArgs, BootconfError, MAX_BOOTCONF_PAIRS, MAX_CMDLINE, parse_bootconf_pairs};
+    use alloc::format;
+    use alloc::string::String;
+    use alloc::vec;
+    use alloc::vec::Vec;
+
+    fn pairs(s: &[u8]) -> Vec<(&[u8], &[u8])> {
+        parse_bootconf_pairs(s).expect("parses").pairs().collect()
+    }
+
+    #[test]
+    fn bootconf_empty_and_absent_strings_parse_to_zero_pairs() {
+        // An absent property reads as the empty BootArgs.
+        assert!(parse_bootconf_pairs(BootArgs::empty().as_bytes()).unwrap().is_empty());
+        assert!(parse_bootconf_pairs(b"").unwrap().is_empty());
+        assert!(parse_bootconf_pairs(b"   ").unwrap().is_empty());
+        // A property holding only its NUL.
+        let raw = BootArgs::from_raw(b"\0").unwrap();
+        assert_eq!(raw.as_bytes(), b"");
+        assert!(parse_bootconf_pairs(raw.as_bytes()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn bootconf_multi_word_init_is_one_pair() {
+        assert_eq!(pairs(b"init=/arm64/init -c"), vec![(&b"init"[..], &b"/arm64/init -c"[..])]);
+        // A continuation after a fresh pair extends only the LAST value.
+        assert_eq!(
+            pairs(b"a=1 b=2 tail"),
+            vec![(&b"a"[..], &b"1"[..]), (&b"b"[..], &b"2 tail"[..])]
+        );
+    }
+
+    #[test]
+    fn bootconf_pairs_keep_order_and_literal_equals() {
+        assert_eq!(pairs(b"a=1 b=2"), vec![(&b"a"[..], &b"1"[..]), (&b"b"[..], &b"2"[..])]);
+        assert_eq!(
+            pairs(b"key=a=b c=d=e"),
+            vec![(&b"key"[..], &b"a=b"[..]), (&b"c"[..], &b"d=e"[..])]
+        );
+        assert_eq!(pairs(b"  a=1  "), vec![(&b"a"[..], &b"1"[..])]);
+    }
+
+    #[test]
+    fn bootconf_leading_continuation_and_empty_key_are_invalid() {
+        assert_eq!(parse_bootconf_pairs(b"-c"), Err(BootconfError::InvalidBootconfToken));
+        assert_eq!(parse_bootconf_pairs(b"=value"), Err(BootconfError::InvalidBootconfToken));
+        assert_eq!(parse_bootconf_pairs(b"a=1 =2"), Err(BootconfError::InvalidBootconfToken));
+    }
+
+    #[test]
+    fn bootconf_pair_and_length_caps_are_loud() {
+        // Exactly MAX_BOOTCONF_PAIRS parses; one more is refused.
+        let mut many = String::new();
+        for k in 0..MAX_BOOTCONF_PAIRS {
+            many.push_str(&format!("k{k}=v "));
+        }
+        assert_eq!(
+            parse_bootconf_pairs(many.as_bytes()).unwrap().pairs().count(),
+            MAX_BOOTCONF_PAIRS
+        );
+        many.push_str("one=more");
+        assert_eq!(parse_bootconf_pairs(many.as_bytes()), Err(BootconfError::TooManyBootconfPairs));
+        // 256 bytes before the NUL is the cap itself; 257 is refused.
+        let mut cap = vec![b'a'; MAX_CMDLINE];
+        cap.push(0);
+        assert_eq!(BootArgs::from_raw(&cap).unwrap().as_bytes().len(), MAX_CMDLINE);
+        let mut over = vec![b'a'; MAX_CMDLINE + 1];
+        assert!(matches!(BootArgs::from_raw(&over), Err(BootconfError::CmdlineTooLong)));
+        over.push(0);
+        assert!(matches!(BootArgs::from_raw(&over), Err(BootconfError::CmdlineTooLong)));
+    }
+
+    #[test]
+    fn bootconf_bytes_after_the_first_nul_are_ignored() {
+        let raw = BootArgs::from_raw(b"init=/arm64/init -c\0junk=1 more").unwrap();
+        assert_eq!(raw.as_bytes(), b"init=/arm64/init -c");
+        assert_eq!(
+            parse_bootconf_pairs(raw.as_bytes()).unwrap().pairs().collect::<Vec<_>>(),
+            vec![(&b"init"[..], &b"/arm64/init -c"[..])]
+        );
+        // A long tail after the NUL does not count toward the cap.
+        let mut long_tail = b"a=1\0".to_vec();
+        long_tail.extend(vec![b'z'; 2 * MAX_CMDLINE]);
+        assert_eq!(BootArgs::from_raw(&long_tail).unwrap().as_bytes(), b"a=1");
+    }
+}

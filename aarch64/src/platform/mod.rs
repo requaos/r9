@@ -18,5 +18,13 @@ pub use crate::platform::raspi4b::*;
 
 #[cfg(any(test, not(platform = "virt")))]
 pub mod raspi3b;
-#[cfg(any(test, platform = "raspi3b", not(any(platform = "virt", platform = "raspi4b"))))]
+// The test arm is narrowed to non-virt builds: under the virtshell cfg
+// (`cargo xtask test`'s aarch64 leg, HOST-TEST-ROUTE A) a bare `test`
+// arm glob-imported raspi3b beside virt and made `devcons` ambiguous
+// (E0659).  The raspi3b module itself still compiles under test.
+#[cfg(any(
+    all(test, not(platform = "virt")),
+    platform = "raspi3b",
+    not(any(platform = "virt", platform = "raspi4b"))
+))]
 pub use crate::platform::raspi3b::*;
