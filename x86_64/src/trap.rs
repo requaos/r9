@@ -461,10 +461,11 @@ unsafe extern "C" fn intrcommon() {
 ///
 /// SYSCALL pushes NOTHING — no SS/RSP/FLAGS/CS/RIP.  The
 /// architectural contract instead deposits: RCX = user rip, R11 = user
-/// flags, RSP still the user sp, IF cleared (Sfmask = If), CPL 0,
-/// CS/SS from STAR[47:32].  This entry software-builds the
-/// hardware-frame half of the 184-byte Ureg from those, stores the GP
-/// half, and calls the Rust dispatch — then jumps to the return tail.
+/// flags, RSP still the user sp, IF/TF/DF/NT/AC cleared (Sfmask =
+/// cpu::fmask — not the donor's If-only value), CPL 0, CS/SS from
+/// STAR[47:32].  This entry software-builds the hardware-frame half of
+/// the 184-byte Ureg from those, stores the GP half, and calls the Rust
+/// dispatch — then jumps to the return tail.
 ///
 /// Deltas from the donor (each documented; the frame arithmetic is
 /// donor-exact):
@@ -502,7 +503,7 @@ pub unsafe extern "C" fn syscallentry() {
         swapgs;
         // Stash the user sp in the Mach's entry scratch word — the
         // stack switch below destroys RSP and no register may be
-        // sacrificed.  IF=0 (Sfmask=If): the window is atomic.
+        // sacrificed.  IF=0 (Sfmask): the window is atomic.
         movq %rsp, %gs:{SCRATCH};
         // The kernel stack: the same rsp0 the CPU loads for a ring-3
         // IDT delivery.

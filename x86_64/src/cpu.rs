@@ -41,14 +41,35 @@ pub(crate) fn flags() -> Flags {
     }
 }
 
-/// The IA32_FMASK value syscalls enter with: `If` ONLY — the 9k
-/// donor's `wrmsr(Sfmask, If)` (vsvm.c:185), per D-02a (whatever 9k
-/// emits).  The old dead code's IF|TF|DF is deliberately NOT carried:
-/// 9k lets TF/DF pass through to the handler untouched
-/// (amd64/ABI.md's wire contract), and masking them here would diverge
-/// from the frozen ABI.
+/// The IA32_FMASK value: the RFLAGS bits SYSCALL clears on the way into
+/// the kernel — IF, TF, DF, NT and AC, the set Linux masks.  The user's
+/// own RFLAGS are untouched by this: SYSCALL saves them in R11 before
+/// masking, the entry stores R11 as the frame's flags, and SYSRETQ (or
+/// NOTED's IRETQ) hands them back.
+///
+/// This reverses D-02a's If-only value (the 9k donor's `wrmsr(Sfmask,
+/// If)`, vsvm.c:185).  The donor could leave TF and DF to the user
+/// because its 6c kernel never relied on DF (every string instruction in
+/// it sets the direction itself: l64v.s's CLD before each REP) and the
+/// ABI says nothing about the flags a syscall runs with.  r9's kernel is
+/// Rust: the SysV ABI requires DF=0 at every call, and compiler_builtins'
+/// memcpy/memset are bare `rep movs`/`rep stos`, so a user DF ran every
+/// kernel copy backwards.  The other bits are the same trust question
+/// (WINDOWS #71): TF raised a single-step #DB on the entry's first
+/// instruction, still on the user stack; NT made the kernel's next IRETQ
+/// fault (#GP in IA-32e mode) — NOTED's return, or another proc resumed
+/// by the scheduler, since swtch carries no RFLAGS; AC would turn SMAP
+/// off in ring 0 once SMAP is enabled.  Masking at SYSCALL is the only
+/// place the TF trap can be stopped (an entry-stub reset runs too late);
+/// the interrupt gates clear TF and NT for the IDT path themselves.
 pub(crate) fn fmask() -> u64 {
-    Flags::empty().with_intr(true).bits()
+    Flags::empty()
+        .with_intr(true)
+        .with_trap(true)
+        .with_dir(true)
+        .with_nestedt(true)
+        .with_access(true)
+        .bits()
 }
 
 /// Executes the `STI` instruction that enables interrupt
@@ -306,5 +327,38 @@ pub(crate) unsafe fn wrmsr(msr: u32, value: u64) {
 pub(crate) unsafe fn wrgsbase(value: u64) {
     unsafe {
         asm!("wrgsbase {}", in(reg) value, options(att_syntax));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // RFLAGS bit positions (SDM Vol 1, 3.4.3), spelled out so the test
+    // does not lean on the Flags field names it is checking.
+    const IF: u64 = 1 << 9;
+    const TF: u64 = 1 << 8;
+    const DF: u64 = 1 << 10;
+    const NT: u64 = 1 << 14;
+    const AC: u64 = 1 << 18;
+
+    /// WINDOWS #71: SYSCALL must reach the kernel's first instruction
+    /// with every user-settable flag the kernel cannot run with cleared —
+    /// TF (single-step #DB on the user stack), DF (backwards kernel
+    /// copies), NT (#GP at the next IRETQ), AC (SMAP off) — plus IF.
+    #[test]
+    fn fmask_clears_the_flags_the_kernel_must_not_inherit() {
+        let m = fmask();
+        for (name, bit) in [("IF", IF), ("TF", TF), ("DF", DF), ("NT", NT), ("AC", AC)] {
+            assert_ne!(m & bit, 0, "IA32_FMASK leaves {name} set on SYSCALL entry");
+        }
+    }
+
+    /// Exactly the Linux set: the arithmetic flags, IOPL (a CPL3 POPFQ
+    /// cannot change it) and ID stay the user's, and R11 carries the
+    /// user's RFLAGS back either way.
+    #[test]
+    fn fmask_is_exactly_if_tf_df_nt_ac() {
+        assert_eq!(fmask(), IF | TF | DF | NT | AC);
     }
 }

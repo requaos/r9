@@ -217,14 +217,19 @@ impl Ureg {
     }
 
     /// Force the restored return state to user privilege — the amd64
-    /// analog of aarch64's force_psr_el0t.  The saved frame crosses
-    /// from USER-WRITABLE memory (the notejmp contract lets a handler
-    /// edit it), and although SYSRETQ derives CS/SS from STAR (not the
-    /// frame — kernel selectors cannot leak in that way), the frame's
-    /// cs/ss are still what userureg-style consumers see, and RFLAGS
-    /// rides R11 straight into the CPU: a handler-edited IOPL would
-    /// grant the user I/O privilege.  Force the flat user selectors,
-    /// clear IOPL, and set IF (the unmask-at-handoff discipline).
+    /// side of aarch64's user_return_psr.  The saved frame crosses from
+    /// USER-WRITABLE memory (the notejmp contract lets a handler edit
+    /// it), and NOTED leaves through IRETQ, which loads CS, SS and
+    /// RFLAGS from it: force the flat user selectors, clear IOPL (an
+    /// IRETQ from CPL0 would grant the user I/O privilege), and set IF
+    /// (the unmask-at-handoff discipline).  The other bits a handler can
+    /// write — TF, DF, NT, AC, RF, ID — are the user's own flags (a CPL3
+    /// POPFQ sets them as well) and stay: they act in ring 3 only,
+    /// because every way back into the kernel clears the ones it cannot
+    /// run with (SYSCALL through IA32_FMASK, cpu::fmask; the interrupt
+    /// gates TF and NT), and IRETQ's NT check reads the kernel's live
+    /// RFLAGS, never this image.  VM, VIF and VIP are inert in IA-32e
+    /// mode without CR4.VME/PVI.
     pub(crate) fn force_user_return(&mut self) {
         const IF: u64 = 0x200;
         const IOPL: u64 = 3 << 12;

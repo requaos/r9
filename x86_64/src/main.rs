@@ -357,7 +357,8 @@ unsafe fn arm_syscall_entry(mach: &dat::Mach) {
         // dead code, already SYSRET-correct by GDT construction.
         cpu::wrmsr(cpu::MSR_STAR, dat::Gdt::star());
 
-        // Sfmask = If only — the donor's value (cpu::fmask's re-key).
+        // Sfmask = If|Tf|Df|Nt|Ac — not the donor's If-only value
+        // (cpu::fmask's doc records the D-02a reversal, WINDOWS #71).
         cpu::wrmsr(cpu::MSR_SFMASK, cpu::fmask());
 
         // Lstar — the entry target, at the real entry asm (trap.rs's
