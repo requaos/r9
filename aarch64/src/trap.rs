@@ -438,18 +438,19 @@ fn dispatch_irq(_frame: &TrapFrame) -> bool {
 /// + kill via the exits path (the donor donotify pexit shape).
 ///
 /// In-handler guard (the donor donotify `up->notified` check): a
-/// second note is NOT delivered while a note handler is running —
-/// delivering would overwrite note_ureg/last_note mid-handler and the
-/// FIRST handler's noted(NCONT) would then restore the SECOND note's
-/// saved frame, resuming the wrong context.  The note stays queued;
-/// noted() clears note_ureg and the next return-to-EL0 boundary retries.
+/// second note is NOT delivered while a note handler is running — the
+/// note stays queued; noted() clears `notified` and the next
+/// return-to-EL0 boundary retries.  After noted(NSAVE) notes are enabled
+/// again inside the trampoline, so a note may nest: the word just below
+/// each saved Ureg holds the previous saved-Ureg VA (the donor notify's
+/// `*(Ureg**)(nureg-BY2WD) = up->noteureg`), and NOTED pops back
+/// through it.
 pub(crate) fn deliver_notes(frame: &mut TrapFrame) {
     let Some(mut proc) = proc::current() else {
         return;
     };
-    // Leave the note queued while a handler is active (note_ureg
-    // doubles as the donor's up->notified flag).
-    if proc.note_ureg != 0 {
+    // Leave the note queued while a handler is active.
+    if proc.notified {
         return;
     }
     let Some(note) = proc.note_queue.pop_front() else { return };
@@ -487,6 +488,7 @@ pub(crate) fn deliver_notes(frame: &mut TrapFrame) {
     // window over [final_sp, window_end) — the constructor re-runs the
     // fused validate+resident discipline (a no-op second walk here, the
     // explicit checks above carry the kill paths' messages).
+    let prev_ureg = proc.note_ureg;
     let mut window = crate::usermem::UserSliceMut::new(&mut proc, final_sp, window_end - final_sp)
         .expect("note window validated + resident above");
     let w = window.as_slice_mut();
@@ -500,12 +502,16 @@ pub(crate) fn deliver_notes(frame: &mut TrapFrame) {
     // The arg homes: [sp+8] = nureg (arg0), [sp+16] = &msg (arg1).
     window.write_u64(8, nureg);
     window.write_u64(16, msg_va);
+    // The chain word just below the saved Ureg (between it and the note
+    // bytes): the previous saved Ureg, popped by NOTED NCONT/NRSTR.
+    window.write_u64((nureg - 8 - final_sp) as usize, prev_ureg);
     frame.x0 = nureg;
     frame.sp = final_sp;
     frame.pc = handler;
     frame.link_register = 0;
-    // The donor's up->noteureg: NOTED's NCONT/NRSTR restore source.
+    // The donor's up->noteureg: NOTED's restore source.
     proc.note_ureg = nureg;
+    proc.notified = true;
     // ... and the donor's fpunotify: record the interrupted code's
     // FP/SIMD state; the handler runs on a copy of it (the live
     // registers stay as they are) and NOTED gives this one back.

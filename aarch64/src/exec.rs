@@ -508,6 +508,7 @@ pub fn exec_replace(
     proc.notify_handler = None;
     proc.note_queue.clear();
     proc.note_ureg = 0;
+    proc.notified = false;
     proc.last_note_len = 0;
 
     // SEED third: fresh seed-stack + Tos pages, new segment records, new

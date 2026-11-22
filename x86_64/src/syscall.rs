@@ -163,28 +163,46 @@ static DISPATCH: [Option<Handler>; 55] = {
 
 /// The dispatch: number from frame.bp, handler result to frame.ax (the
 /// restore tail's `movq 0*8(%rsp), %rax` propagates it to user AX).
-pub fn dispatch(frame: &mut Ureg) {
+/// Returns true when the frame now holds a restored user context
+/// (a successful NOTED), which must leave through the IRETQ tail.
+pub fn dispatch(frame: &mut Ureg) -> bool {
     let Some(mut p) = proc::current() else {
         // A SYSCALL with no current process is a kernel-orchestration
         // bug (the exec bootstrap execs before any ring 3 exists),
         // never a user error.
         panic!("syscall dispatch with no current process (n={})", frame.bp);
     };
-    dispatch_proc(frame.bp, frame, &mut p);
+    dispatch_proc(frame.bp, frame, &mut p)
 }
 
 /// The entry the 14-02 asm calls (trap.rs's `syscall` stub body):
 /// dispatch, then the note-delivery boundary — every return to ring 3
 /// is the delivery point.
+///
+/// A successful NOTED leaves through the IRETQ tail (trap::trap_return),
+/// never SYSRETQ: the frame now holds a restored user context — one an
+/// interrupt may have captured mid-instruction-stream (the note-delivery
+/// boundary on the interrupt return) — and SYSRETQ would load rcx with
+/// the return pc and r11 with the flags, destroying two live registers.
+/// IRETQ restores every register from the frame (the donor's noteret).
 pub fn entry(_number: u64, frame: &mut Ureg) {
-    dispatch(frame);
+    let restored = dispatch(frame);
     deliver_notes(frame);
+    if restored {
+        // SAFETY: frame is this proc's live SYSCALL Ureg at its kstack
+        // top (the entry built it there — the same placement as an IDT
+        // frame, which trap_return pops); its cs/ss/flags were forced to
+        // the user return state by NOTED; the CR3 and TSS rsp0 are this
+        // proc's; kernel context runs IF=0, so the swapgs/iretq window is
+        // atomic.  Nothing on the Rust frames above needs dropping.
+        unsafe { crate::trap::trap_return(frame) }
+    }
 }
 
 /// The dispatch core (everything `dispatch` does after the
 /// current-proc fetch — the module's host-test seam: tests substitute
 /// a table-resident proc for the global).
-pub(crate) fn dispatch_proc(n: u64, frame: &mut Ureg, proc: &mut Proc) {
+pub(crate) fn dispatch_proc(n: u64, frame: &mut Ureg, proc: &mut Proc) -> bool {
     let result = match DISPATCH.get(n as usize) {
         Some(Some(handler)) => handler(frame, proc),
         _ => {
@@ -199,11 +217,12 @@ pub(crate) fn dispatch_proc(n: u64, frame: &mut Ureg, proc: &mut Proc) {
     // the frame untouched and DO write back; NDFLT diverged inside the
     // handler.
     if n == NOTED && result != -1i64 as u64 {
-        return;
+        return true;
     }
     // EXITS never reaches here (it parks divergent); every other
     // handler's result rides frame.ax back to user AX.
     frame.ax = result;
+    false
 }
 
 /// Read the argument slots from user memory at SP+8 (the frozen ABI
@@ -434,66 +453,142 @@ fn sys_notify(frame: &mut Ureg, proc: &mut Proc) -> u64 {
     0
 }
 
-/// NOTED(29): action (int-width arg — width discipline).  NCONT(0)/
-/// NRSTR(3) restore the saved Ureg over the live frame in place; the
-/// success return takes dispatch's no-writeback special path.  NDFLT(1)
-/// exits with the delivered note message.  NSAVE(2) is
-/// loud-unimplemented.
+/// NOTED's decision for NCONT/NRSTR/NSAVE, from the proc's note state
+/// and the saved Ureg alone (no memory touched — the host-testable core
+/// of sys_noted): the donor sysnoted's legality rule and noted()'s resume
+/// target.  sys_noted validates the stack window and commits.
+#[derive(Debug, PartialEq, Eq)]
+struct NotedPlan {
+    /// Where the restored context resumes (NSAVE: the handler's own sp).
+    resume_sp: u64,
+    /// NSAVE: the trampoline's arg0, the saved Ureg (bp/RARG and
+    /// [sp+8], with [sp] = 0).
+    nsave_arg: Option<u64>,
+    /// note_ureg afterwards: the chain word for NCONT/NRSTR, unchanged
+    /// for NSAVE (the trampoline's NRSTR returns through it).
+    note_ureg: u64,
+}
+
+fn plan_noted(
+    action: u64,
+    notified: bool,
+    nureg: u64,
+    chain: u64,
+    saved_sp: u64,
+    pc_in_text: bool,
+) -> Result<NotedPlan, &'static str> {
+    // Outside a handler only NRSTR is legal (it returns from an NSAVE
+    // trampoline, which runs with notes enabled again).
+    if (!notified && action != NRSTR) || nureg < 8 {
+        return Err("noted: not notified");
+    }
+    let nsave = action == NSAVE;
+    // NSAVE restarts on the handler's stack: the donor's
+    // sp = oureg - 4*BY2WD - ERRMAX (the delivery's handler sp).  x86 code
+    // has no alignment rule, so only the sp's word alignment is checked.
+    let resume_sp = if nsave { nureg.wrapping_sub(4 * 8 + ERRMAX as u64) } else { saved_sp };
+    if resume_sp & 7 != 0 || !pc_in_text {
+        return Err("noted: bad resume frame");
+    }
+    Ok(NotedPlan {
+        resume_sp,
+        nsave_arg: nsave.then_some(nureg),
+        note_ureg: if nsave { nureg } else { chain },
+    })
+}
+
+/// NOTED(29): action (int-width arg — width discipline), the donor
+/// sysnoted + noted().  Outside a handler (`notified` clear) only NRSTR is
+/// legal — it returns from an NSAVE trampoline; NCONT/NSAVE need a
+/// delivered note.  All three read the saved Ureg (184 bytes) and the
+/// chain word just below it, validate the resume target BEFORE touching
+/// anything, then:
+/// - NCONT/NRSTR: the saved Ureg over the live frame, note_ureg popped to
+///   the chain word, notified cleared — resume the interrupted code;
+/// - NSAVE: the saved Ureg over the live frame, then a handler restarts
+///   at its pc (the first handler retargets it) on the handler's own
+///   stack — sp = nureg - 4*8 - ERRMAX (the delivery's handler sp), arg0
+///   (bp, RARG, and [sp+8]) = nureg, [sp] = 0 — with notes enabled again;
+///   note_ureg stays so the trampoline's NRSTR returns through it.
+///
+/// The interrupted code's FPU/SSE state goes back (the donor's fpunoted)
+/// only while a handler is running.  Success returns true through
+/// dispatch_proc and entry() leaves through the IRETQ tail (every
+/// register restored); NDFLT(1) exits with the delivered note.
 fn sys_noted(frame: &mut Ureg, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 1) else {
         return err(proc, "noted: bad argument block");
     };
     let action = args[0] & 0xffff_ffff; // noted's action is an int
     match action {
-        NCONT | NRSTR => {
-            // The saved ureg is kernel-tracked (the donor's
-            // up->noteureg): libc's noted(action) passes NO pointer.
-            let nureg = proc.note_ureg;
-            if nureg == 0 {
+        NCONT | NRSTR | NSAVE => {
+            if !proc.notified && action != NRSTR {
                 return err(proc, "noted: not notified");
             }
-            // The saved-ureg window rides the usermem validated-only
-            // variant — delivery forced its pages resident and nothing
-            // unmaps them while the handler runs.
-            let saved = match UserSlice::validated_only(proc, nureg, UREG_SIZE as u64) {
+            // The saved Ureg is kernel-tracked (the donor's
+            // up->noteureg): libc's noted(action) passes NO pointer.
+            let nureg = proc.note_ureg;
+            if nureg < 8 {
+                return err(proc, "noted: not notified");
+            }
+            // [nureg-8, nureg+184): the chain word and the saved Ureg,
+            // through the usermem validated-only variant — delivery
+            // forced its pages resident and nothing unmaps them while the
+            // handler runs.  Saved-Ureg byte offsets: sp@168, pc@144.
+            let saved = match UserSlice::validated_only(proc, nureg - 8, 8 + UREG_SIZE as u64) {
                 Ok(s) => s,
                 Err(_) => return err(proc, "noted: bad saved ureg"),
             };
-            // Validate the resume target BEFORE committing the restore
-            // (the donor noted()'s okaddr checks, pre-copy so a bad
-            // saved frame leaves the live frame untouched and the -1
-            // writeback is truthful).  Saved-Ureg byte offsets: sp@168,
-            // pc@144 (the frozen table).
-            let saved_sp = saved.read_u64(168).expect("ureg->sp in range");
-            let saved_pc = saved.read_u64(144).expect("ureg->pc in range");
-            let in_text = proc
-                .segments
-                .as_ref()
-                .is_some_and(|s| s.text.0.contains(&(saved_pc as usize)));
-            if saved_sp & 7 != 0 || !in_text {
-                return err(proc, "noted: bad resume frame");
-            }
-            if proc.validate_user_range(saved_sp, 8, true).is_err() {
+            let prev = saved.read_u64(0).expect("chain word in range");
+            let saved_sp = saved.read_u64(8 + 168).expect("ureg->sp in range");
+            let saved_pc = saved.read_u64(8 + 144).expect("ureg->pc in range");
+            let mut ureg = [0u8; UREG_SIZE];
+            ureg.copy_from_slice(&saved.as_slice()[8..]);
+            // Validate the resume target BEFORE committing (the donor
+            // noted()'s okaddr checks, so a bad saved frame leaves the
+            // live frame untouched and the -1 writeback is truthful).
+            let in_text =
+                proc.segments.as_ref().is_some_and(|s| s.text.0.contains(&(saved_pc as usize)));
+            let plan = match plan_noted(action, proc.notified, nureg, prev, saved_sp, in_text) {
+                Ok(p) => p,
+                Err(e) => return err(proc, e),
+            };
+            let resume_sp = plan.resume_sp;
+            let stack_len = if plan.nsave_arg.is_some() { 4 * 8 } else { 8 };
+            if proc.validate_user_range(resume_sp, stack_len, true).is_err() {
                 return err(proc, "noted: bad resume stack");
             }
-            // Restore: the saved 184 bytes over the live frame (the
-            // usermem slice is the source; the frame-side byte copy
-            // lives on the frame's own module).
-            frame.restore_from_saved(saved.as_slice());
+            if plan.nsave_arg.is_some() {
+                // The trampoline's arg homes: [sp] = 0 (no return pc),
+                // [sp+8] = the saved Ureg (arg0's home).
+                let mut homes = match UserSliceMut::new(proc, resume_sp, 16) {
+                    Ok(w) => w,
+                    Err(_) => return err(proc, "noted: bad resume stack"),
+                };
+                homes.write_u64(0, 0);
+                homes.write_u64(8, nureg);
+            }
+            // Commit.  The donor's fpunoted first (only inside a handler).
+            if proc.notified {
+                let interrupted = proc.note_fpsave;
+                crate::fpu::replace(&mut proc.fpsave, &interrupted);
+            }
+            frame.restore_from_saved(&ureg);
             // The restored cs/ss/flags came from user-writable memory
             // (the notejmp contract lets the handler edit the saved
             // Ureg) — force the user return state (the flat selectors,
             // IOPL cleared, IF set) so a handler-edited frame can never
-            // steer SYSRETQ's RFLAGS load (Ureg::force_user_return's
-            // doc).  The saved `type` field stays
-            // informational-only (ABI.md documents it as such).
+            // steer the IRETQ tail (Ureg::force_user_return's doc).  The
+            // saved `type` field stays informational-only (ABI.md
+            // documents it as such).
             frame.force_user_return();
-            // The donor's fpunoted: the interrupted code's FPU/SSE state
-            // (recorded at delivery) replaces whatever the handler left.
-            let interrupted = proc.note_fpsave;
-            crate::fpu::replace(&mut proc.fpsave, &interrupted);
+            if let Some(arg) = plan.nsave_arg {
+                frame.sp = resume_sp;
+                frame.bp = arg;
+            }
+            proc.note_ureg = plan.note_ureg;
             // Allow the next note (the donor's up->notified = 0).
-            proc.note_ureg = 0;
+            proc.notified = false;
             0
         }
         NDFLT => {
@@ -502,10 +597,6 @@ fn sys_noted(frame: &mut Ureg, proc: &mut Proc) -> u64 {
             let msg = proc.last_note;
             let len = proc.last_note_len;
             exit_tail(proc, &msg[..len]);
-        }
-        NSAVE => {
-            println!("noted: NSAVE unimplemented");
-            err(proc, "noted: NSAVE unimplemented")
         }
         _ => err(proc, "noted: bad action"),
     }
@@ -2023,15 +2114,23 @@ pub(crate) fn exit_tail(proc: &mut Proc, msg: &[u8]) -> ! {
 ///
 /// In-handler guard (the donor donotify `up->notified` check): a
 /// second note is NOT delivered while a handler is running; the note
-/// stays queued, noted() clears note_ureg and the next boundary
-/// retries.
+/// stays queued, noted() clears `notified` and the next boundary
+/// retries.  After noted(NSAVE) notes are enabled again inside the
+/// trampoline, so a note may nest: the word just below each saved Ureg
+/// holds the previous saved-Ureg VA (the donor notify's
+/// `*(Ureg**)(nureg-BY2WD) = up->noteureg`), and NOTED pops back
+/// through it.
+///
+/// Two boundaries call it: the SYSCALL return (entry()) and the
+/// interrupt return to ring 3 (trap.rs's trap()), so a note posted while
+/// the proc computes in ring 3 — an alarm, a DEL — interrupts it at the
+/// next interrupt instead of waiting for its next syscall.
 pub(crate) fn deliver_notes(frame: &mut Ureg) {
     let Some(mut proc) = proc::current() else {
         return;
     };
-    // Leave the note queued while a handler is active (note_ureg
-    // doubles as the donor's up->notified flag).
-    if proc.note_ureg != 0 {
+    // Leave the note queued while a handler is active.
+    if proc.notified {
         return;
     }
     let Some(note) = proc.note_queue.pop_front() else { return };
@@ -2064,6 +2163,7 @@ pub(crate) fn deliver_notes(frame: &mut Ureg) {
 
     // The user-memory writes ride a single usermem window over
     // [final_sp, window_end).
+    let prev_ureg = proc.note_ureg;
     let mut window = crate::usermem::UserSliceMut::new(&mut *proc, final_sp, window_end - final_sp)
         .expect("note window validated + resident above");
     let w = window.as_slice_mut();
@@ -2074,14 +2174,18 @@ pub(crate) fn deliver_notes(frame: &mut Ureg) {
     // The arg homes: [sp+8] = nureg (arg0), [sp+16] = &msg (arg1).
     window.write_u64(8, nureg);
     window.write_u64(16, msg_va);
+    // The chain word just below the saved Ureg (between it and the note
+    // bytes): the previous saved Ureg, popped by NOTED NCONT/NRSTR.
+    window.write_u64((nureg - 8 - final_sp) as usize, prev_ureg);
     // The donor's redirect: arg0 through ureg->bp (RARG — the 6c
     // first-arg register), the handler as the resume ip, the shrunk
     // sp.
     frame.bp = nureg;
     frame.sp = final_sp;
     frame.pc = handler;
-    // The donor's up->noteureg: NOTED's NCONT/NRSTR restore source.
+    // The donor's up->noteureg: NOTED's restore source.
     proc.note_ureg = nureg;
+    proc.notified = true;
     // ... and the donor's fpunotify: record the interrupted code's
     // FPU/SSE state; the handler runs on a copy of it (the live
     // registers stay as they are) and NOTED gives this one back.
@@ -2098,6 +2202,139 @@ mod tests {
     /// The test clock hook (nsec's seam — u64::MAX = unset).
     pub(crate) static TEST_NSEC: core::sync::atomic::AtomicU64 =
         core::sync::atomic::AtomicU64::new(u64::MAX);
+
+    /// NOTED's decision table (plan_noted): NSAVE restarts on the
+    /// handler's stack and keeps the saved Ureg; NCONT/NRSTR resume at the
+    /// saved sp and pop the chain; outside a handler only NRSTR is legal;
+    /// a misaligned sp or a pc outside text is refused.
+    #[test]
+    fn noted_plan_follows_the_donor_rules() {
+        const NUREG: u64 = 0x3_f000;
+        const CHAIN: u64 = 0x3_f800;
+        const SAVED_SP: u64 = 0x3_fff0;
+        assert_eq!(
+            plan_noted(NSAVE, true, NUREG, CHAIN, SAVED_SP, true),
+            Ok(NotedPlan {
+                resume_sp: NUREG - 4 * 8 - ERRMAX as u64,
+                nsave_arg: Some(NUREG),
+                note_ureg: NUREG
+            })
+        );
+        for action in [NCONT, NRSTR] {
+            assert_eq!(
+                plan_noted(action, true, NUREG, CHAIN, SAVED_SP, true),
+                Ok(NotedPlan { resume_sp: SAVED_SP, nsave_arg: None, note_ureg: CHAIN })
+            );
+        }
+        assert!(
+            plan_noted(NRSTR, false, NUREG, CHAIN, SAVED_SP, true).is_ok(),
+            "NRSTR after NSAVE"
+        );
+        assert_eq!(
+            plan_noted(NCONT, false, NUREG, CHAIN, SAVED_SP, true),
+            Err("noted: not notified")
+        );
+        assert_eq!(
+            plan_noted(NSAVE, false, NUREG, CHAIN, SAVED_SP, true),
+            Err("noted: not notified")
+        );
+        assert_eq!(plan_noted(NRSTR, false, 0, CHAIN, SAVED_SP, true), Err("noted: not notified"));
+        assert_eq!(
+            plan_noted(NCONT, true, NUREG, CHAIN, SAVED_SP + 4, true),
+            Err("noted: bad resume frame")
+        );
+        assert_eq!(
+            plan_noted(NSAVE, true, NUREG, CHAIN, SAVED_SP, false),
+            Err("noted: bad resume frame")
+        );
+    }
+
+    /// NSAVE then NRSTR through the real NOTED path on a mock user stack:
+    /// the trampoline frame (pc = the retargeted saved pc, sp = the
+    /// handler's sp, bp = [sp+8] = the saved Ureg, [sp] = 0), notes
+    /// enabled again with the saved Ureg kept, the interrupted FP state
+    /// back at NSAVE; then NRSTR (legal while not notified) resumes at the
+    /// saved sp, pops the chain word and leaves the FP state alone.  Both
+    /// report a restored context, so entry() leaves through IRETQ.
+    #[test]
+    fn noted_nsave_then_nrstr_runs_the_trampoline_and_returns() {
+        let mut guard = crate::proc::new_user_proc("tnsave").expect("construction succeeds");
+        let mem: &'static mut [u64; 256] =
+            alloc::boxed::Box::leak(alloc::boxed::Box::new([0u64; 256]));
+        let base = mem.as_ptr() as usize;
+        let len = core::mem::size_of_val(mem);
+        let text = VirtRange::with_len(0x20_0000, 0x1_0000);
+        guard.segments = Some(Segments {
+            text,
+            data: VirtRange::with_len(0x1000_0000, 0),
+            bss: VirtRange::with_len(0x1000_0000, 0),
+            stack: VirtRange::with_end(base, base + len),
+            tos: VirtRange::with_len(0x1000_0000, 0),
+        });
+        let mut page = base & !(PAGE_SIZE_4K - 1);
+        while page < base + len {
+            guard.mapping_log.push(MappingRecord {
+                va: page,
+                phys: page,
+                size: PAGE_SIZE_4K,
+                kind: SegKind::Stack,
+            });
+            page += PAGE_SIZE_4K;
+        }
+        fn bytes(m: &mut [u64; 256]) -> &mut [u8] {
+            // SAFETY: the u64 array viewed as its 2048 bytes (same storage).
+            unsafe { core::slice::from_raw_parts_mut(m.as_mut_ptr() as *mut u8, 2048) }
+        }
+        let nureg = (base + 1024) as u64;
+        let saved_sp = (base + 1800) as u64;
+        let saved_pc = 0x20_0013u64; // an odd text address: no alignment rule on x86
+        let chain = 0x7777_0000u64;
+        let mut saved = Ureg::zeroed();
+        saved.sp = saved_sp;
+        saved.pc = saved_pc;
+        saved.ax = 0x1234;
+        saved.copy_to_saved(&mut bytes(mem)[1024..1024 + UREG_SIZE]);
+        bytes(mem)[1016..1024].copy_from_slice(&chain.to_le_bytes());
+        let mut interrupted = crate::fpu::FpState::DEFAULT;
+        interrupted.set_mxcsr(0x1f80 | (2 << 13));
+        guard.note_ureg = nureg;
+        guard.notified = true;
+        guard.note_fpsave = interrupted;
+
+        // noted(NSAVE): the arg block at frame.sp+8.
+        fn noted(guard: &mut ProcGuard, mem: &mut [u64; 256], action: u64) -> (bool, Ureg) {
+            let mut frame = Ureg::zeroed();
+            frame.bp = NOTED;
+            frame.sp = mem.as_ptr() as u64 + 64;
+            mem[(64 + 8) / 8] = action;
+            let restored = dispatch_proc(NOTED, &mut frame, guard);
+            (restored, frame)
+        }
+        let (restored, frame) = noted(&mut guard, mem, NSAVE);
+        assert!(restored, "NSAVE restores a context: entry() must leave through IRETQ");
+        let tramp_sp = nureg - 4 * 8 - ERRMAX as u64;
+        assert_eq!((frame.pc, frame.sp, frame.bp, frame.ax), (saved_pc, tramp_sp, nureg, 0x1234));
+        let off = (tramp_sp as usize - base) / 8;
+        assert_eq!((mem[off], mem[off + 1]), (0, nureg), "[sp] = 0, [sp+8] = the saved Ureg");
+        assert!(!guard.notified, "NSAVE enables notes again");
+        assert_eq!(guard.note_ureg, nureg, "NSAVE keeps the saved Ureg for NRSTR");
+        assert_eq!(guard.fpsave, interrupted, "NSAVE gives back the interrupted FP state");
+
+        // noted(NRSTR), legal while not notified.
+        let mut later = crate::fpu::FpState::DEFAULT;
+        later.set_mxcsr(0x1f80 | (3 << 13));
+        guard.fpsave = later;
+        let (restored, frame) = noted(&mut guard, mem, NRSTR);
+        assert!(restored);
+        assert_eq!((frame.pc, frame.sp, frame.ax), (saved_pc, saved_sp, 0x1234));
+        assert_eq!(guard.note_ureg, chain, "NRSTR pops the chain word");
+        assert_eq!(guard.fpsave, later, "an NRSTR outside a handler leaves the FP state alone");
+
+        // noted(NCONT) outside a handler is refused (frame.ax = -1).
+        let (restored, frame) = noted(&mut guard, mem, NCONT);
+        assert!(!restored);
+        assert_eq!(frame.ax, u64::MAX);
+    }
 
     /// A table-resident proc whose "user stack" is a REAL leaked host
     /// buffer: the segments' stack range IS the buffer's address range

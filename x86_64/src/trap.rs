@@ -773,13 +773,24 @@ pub fn splx(x: IntrStatus) -> IntrStatus {
 extern "C" fn trap(vector: u8, trap_frame: &mut Ureg) -> u32 {
     // Hardware interrupts (vectors >= 32): dispatch, never the
     // exception dump — the timer alone fires these until 13-05's
-    // IOAPIC lines arrive.  Under dev_exec the return may have been
-    // rescheduled onto another proc's frame (the tick's preempt) — the
-    // frame this entry built IS the one the iretq tail restores (each
-    // proc's frame sits on its own kstack), and the note boundary runs
-    // in the syscall entry path.
+    // IOAPIC lines arrive.  Under dev_exec the tick's preempt may park
+    // this proc and resume it later, but always back here on its own
+    // kstack: the frame this entry built IS the one the iretq tail
+    // restores.
     if vector >= 32 {
         dispatch_irq(vector);
+        // The note boundary on the interrupt return to ring 3 (the
+        // donor's notify() at every return to user mode): a note posted
+        // while this proc computed in ring 3 — an alarm, a DEL —
+        // interrupts it here rather than at its next syscall.  The
+        // handler's noted() returns through the IRETQ tail
+        // (syscall::entry), so the interrupted context's every register,
+        // rcx and r11 included, comes back.  Kernel-origin interrupts
+        // (the idle loop's hlt) are never a boundary.
+        #[cfg(dev_exec)]
+        if trap_frame.cs & 3 == 3 {
+            crate::syscall::deliver_notes(trap_frame);
+        }
         return 0;
     }
     // A ring-3-origin synchronous exception under dev_exec: the user

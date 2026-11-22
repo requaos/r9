@@ -563,6 +563,7 @@ pub fn exec_replace(
     proc.notify_handler = None;
     proc.note_queue.clear();
     proc.note_ureg = 0;
+    proc.notified = false;
     proc.last_note_len = 0;
 
     // SEED third.  A failure HERE is post-free: the process dies

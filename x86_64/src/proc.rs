@@ -1077,9 +1077,16 @@ pub struct Proc {
     pub note_queue: VecDeque<Note>,
     pub notify_handler: Option<u64>,
     /// The saved-Ureg user VA of the most recently delivered note
-    /// (donor `up->noteureg`): set by the note-delivery boundary, read
-    /// and cleared by NOTED.  0 = not inside a note handler.
+    /// (donor `up->noteureg`): set by the note-delivery boundary, which
+    /// also writes the previous value into the word just below the new
+    /// saved Ureg (the donor's chain); NOTED NCONT/NRSTR pop back through
+    /// that word, NSAVE keeps it (a later NRSTR returns through it).
+    /// 0 = no saved Ureg.
     pub note_ureg: u64,
+    /// The donor's `up->notified`: a note handler is running, so further
+    /// notes stay queued.  Set at delivery; NOTED's NCONT/NRSTR/NSAVE
+    /// clear it (NSAVE re-enables notes inside its trampoline).
+    pub notified: bool,
     /// The last delivered note's bytes (donor `up->lastnote`) — NOTED's
     /// NDFLT arm exits with this message.
     pub last_note: [u8; ERRMAX],
@@ -1159,6 +1166,7 @@ impl Proc {
             note_queue: VecDeque::with_capacity(NOTE_QUEUE_CAP),
             notify_handler: None,
             note_ureg: 0,
+            notified: false,
             last_note: [0; ERRMAX],
             last_note_len: 0,
             blocked_in_kernel: false,

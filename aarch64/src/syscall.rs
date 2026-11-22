@@ -487,66 +487,145 @@ fn sys_notify(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     0
 }
 
-/// NOTED(29): action (int-width arg — width discipline).  NCONT(0)/NRSTR(3)
-/// restore the saved Ureg (the 280 bytes deliver_notes pushed — the frozen
-/// sizeof, NOT r9's 288 stride) over the live frame in place; the success
-/// return takes dispatch's no-writeback special path (the donor dosyscall
-/// NOTED case).  NDFLT(1) exits with the delivered note message.  NSAVE(2)
-/// is loud-unimplemented (the smoke's notejmp path uses NCONT).
+/// NOTED's decision for NCONT/NRSTR/NSAVE, from the proc's note state
+/// and the saved Ureg alone (no memory touched — the host-testable core
+/// of sys_noted): the donor sysnoted's legality rule and noted()'s resume
+/// target.  sys_noted validates the stack window and commits.
+#[derive(Debug, PartialEq, Eq)]
+struct NotedPlan {
+    /// Where the restored context resumes (NSAVE: the handler's own sp).
+    resume_sp: u64,
+    /// NSAVE: the trampoline's arg0, the saved Ureg (R0 and [sp+8], with
+    /// [sp] = 0).
+    nsave_arg: Option<u64>,
+    /// note_ureg afterwards: the chain word for NCONT/NRSTR, unchanged
+    /// for NSAVE (the trampoline's NRSTR returns through it).
+    note_ureg: u64,
+}
+
+fn plan_noted(
+    action: u64,
+    notified: bool,
+    nureg: u64,
+    chain: u64,
+    saved_sp: u64,
+    saved_pc: u64,
+    pc_in_text: bool,
+) -> Result<NotedPlan, &'static str> {
+    // Outside a handler only NRSTR is legal (it returns from an NSAVE
+    // trampoline, which runs with notes enabled again).
+    if (!notified && action != trap::NRSTR) || nureg < 8 {
+        return Err("noted: not notified");
+    }
+    let nsave = action == trap::NSAVE;
+    // NSAVE restarts on the handler's stack: the donor's
+    // sp = oureg - 4*BY2WD - ERRMAX (deliver_notes' handler sp).
+    let resume_sp = if nsave { nureg.wrapping_sub(4 * 8 + ERRMAX as u64) } else { saved_sp };
+    if saved_pc & 3 != 0 || resume_sp & 7 != 0 || !pc_in_text {
+        return Err("noted: bad resume frame");
+    }
+    Ok(NotedPlan {
+        resume_sp,
+        nsave_arg: nsave.then_some(nureg),
+        note_ureg: if nsave { nureg } else { chain },
+    })
+}
+
+/// NOTED(29): action (int-width arg — width discipline), the donor
+/// sysnoted + noted().  Outside a handler (`notified` clear) only NRSTR is
+/// legal — it returns from an NSAVE trampoline; NCONT/NSAVE need a
+/// delivered note.  All three read the saved Ureg (the 280 bytes
+/// deliver_notes pushed — the frozen sizeof, NOT r9's 288 stride) and the
+/// chain word just below it, validate the resume target BEFORE touching
+/// anything, then:
+/// - NCONT/NRSTR: the saved Ureg over the live frame, note_ureg popped to
+///   the chain word, notified cleared — resume the interrupted code;
+/// - NSAVE: the saved Ureg over the live frame, then a handler restarts
+///   at its pc (the first handler retargets it) on the handler's own
+///   stack — sp = nureg - 4*8 - ERRMAX (deliver_notes' handler sp), arg0
+///   (R0 and [sp+8]) = nureg, [sp] = 0 — with notes enabled again;
+///   note_ureg stays so the trampoline's NRSTR returns through it.
+///
+/// The interrupted code's FP/SIMD state goes back (the donor's fpunoted)
+/// only while a handler is running: an NRSTR after NSAVE finds it back
+/// already.  Success takes dispatch's no-writeback special path (the
+/// donor dosyscall NOTED case).  NDFLT(1) exits with the delivered note.
 fn sys_noted(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 1) else {
         return err(proc, "noted: bad argument block");
     };
     let action = args[0] & 0xffff_ffff; // noted's action is an int
     match action {
-        trap::NCONT | trap::NRSTR => {
-            // The saved ureg is kernel-tracked (the donor's up->noteureg):
-            // libc's noted(action) passes NO pointer.
-            let nureg = proc.note_ureg;
-            if nureg == 0 {
+        trap::NCONT | trap::NRSTR | trap::NSAVE => {
+            if !proc.notified && action != trap::NRSTR {
                 return err(proc, "noted: not notified");
             }
-            // The saved-ureg window rides the usermem validated-only
-            // variant — deliver_notes forced its pages resident at
-            // delivery time and nothing unmaps them while the handler
-            // runs (validated without re-forcing residency).
-            let saved = match UserSlice::validated_only(proc, nureg, trap::UREG_SIZE as u64) {
+            // The saved Ureg is kernel-tracked (the donor's up->noteureg):
+            // libc's noted(action) passes NO pointer.
+            let nureg = proc.note_ureg;
+            if nureg < 8 {
+                return err(proc, "noted: not notified");
+            }
+            // [nureg-8, nureg+280): the chain word and the saved Ureg,
+            // through the usermem validated-only variant — deliver_notes
+            // forced the pages resident and nothing unmaps them while the
+            // handler runs.
+            let saved = match UserSlice::validated_only(proc, nureg - 8, 8 + trap::UREG_SIZE as u64)
+            {
                 Ok(s) => s,
                 Err(_) => return err(proc, "noted: bad saved ureg"),
             };
-            // Validate the resume target BEFORE committing the restore
-            // (the donor noted()'s okaddr(pc)+okaddr(sp)+alignment checks,
-            // pre-copy so a bad saved frame leaves the live frame
-            // untouched and the -1 writeback is truthful).
-            let saved_sp = saved.read_u64(248).expect("ureg->sp in range"); // ureg->sp
-            let saved_pc = saved.read_u64(256).expect("ureg->pc in range"); // ureg->pc
-            let in_text = proc
-                .segments
-                .as_ref()
-                .is_some_and(|s| s.text.0.contains(&(saved_pc as usize)));
-            if saved_pc & 3 != 0 || saved_sp & 7 != 0 || !in_text {
-                return err(proc, "noted: bad resume frame");
-            }
-            if proc.validate_user_range(saved_sp, 8, true).is_err() {
+            let prev = saved.read_u64(0).expect("chain word in range");
+            let saved_sp = saved.read_u64(8 + 248).expect("ureg->sp in range"); // ureg->sp
+            let saved_pc = saved.read_u64(8 + 256).expect("ureg->pc in range"); // ureg->pc
+            let mut ureg = [0u8; trap::UREG_SIZE];
+            ureg.copy_from_slice(&saved.as_slice()[8..]);
+            // Validate the resume target BEFORE committing (the donor
+            // noted()'s okaddr + alignment checks, so a bad saved frame
+            // leaves the live frame untouched and the -1 writeback is
+            // truthful).
+            let in_text =
+                proc.segments.as_ref().is_some_and(|s| s.text.0.contains(&(saved_pc as usize)));
+            let plan =
+                match plan_noted(action, proc.notified, nureg, prev, saved_sp, saved_pc, in_text) {
+                    Ok(p) => p,
+                    Err(e) => return err(proc, e),
+                };
+            let resume_sp = plan.resume_sp;
+            let stack_len = if plan.nsave_arg.is_some() { 4 * 8 } else { 8 };
+            if proc.validate_user_range(resume_sp, stack_len, true).is_err() {
                 return err(proc, "noted: bad resume stack");
             }
-            // Restore: the saved 280 bytes over the live frame's 35 fields
-            // (the usermem slice is the source; the frame-side byte copy
-            // lives in TrapFrame::restore_from_saved).
-            frame.restore_from_saved(saved.as_slice());
-            // The copied psr came from user-writable memory (the
-            // notejmp contract lets the handler edit the saved Ureg) —
-            // force the privilege bits to EL0t so a handler-edited M field
-            // can never steer trap.S's eret to EL1 (a user-triggerable
-            // kernel panic).  The saved `type` field stays
-            // informational-only (aarch64/ABI.md documents it as such).
+            if plan.nsave_arg.is_some() {
+                // The trampoline's arg homes: [sp] = 0 (no return pc),
+                // [sp+8] = the saved Ureg (arg0).
+                let mut homes = match UserSliceMut::new(proc, resume_sp, 16) {
+                    Ok(w) => w,
+                    Err(_) => return err(proc, "noted: bad resume stack"),
+                };
+                homes.write_u64(0, 0);
+                homes.write_u64(8, nureg);
+            }
+            // Commit.  The donor's fpunoted first (only inside a handler).
+            if proc.notified {
+                let interrupted = proc.note_fpsave;
+                crate::fpu::replace(&mut proc.fpsave, &interrupted);
+            }
+            frame.restore_from_saved(&ureg);
+            // The copied psr came from user-writable memory (the notejmp
+            // contract lets the handler edit the saved Ureg) — force the
+            // privilege bits to EL0t so a handler-edited M field can never
+            // steer trap.S's eret to EL1 (a user-triggerable kernel panic).
+            // The saved `type` field stays informational-only
+            // (aarch64/ABI.md documents it as such).
             frame.force_psr_el0t();
-            // The donor's fpunoted: the interrupted code's FP/SIMD state
-            // (recorded at delivery) replaces whatever the handler left.
-            let interrupted = proc.note_fpsave;
-            crate::fpu::replace(&mut proc.fpsave, &interrupted);
+            if let Some(arg) = plan.nsave_arg {
+                frame.sp = resume_sp;
+                frame.x0 = arg;
+            }
+            proc.note_ureg = plan.note_ureg;
             // Allow the next note (the donor's up->notified = 0).
-            proc.note_ureg = 0;
+            proc.notified = false;
             0
         }
         trap::NDFLT => {
@@ -555,10 +634,6 @@ fn sys_noted(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             let msg = proc.last_note;
             let len = proc.last_note_len;
             exit_tail(proc, &msg[..len]);
-        }
-        trap::NSAVE => {
-            println!("noted: NSAVE unimplemented");
-            err(proc, "noted: NSAVE unimplemented")
         }
         _ => err(proc, "noted: bad action"),
     }
@@ -2411,6 +2486,75 @@ pub(crate) fn exit_tail(proc: &mut Proc, msg: &[u8]) -> ! {
     // The sched loop picks the next Ready proc (the
     // woken parent, or a sibling).  Diverges.
     proc::sched_from_moribund();
+}
+
+#[cfg(test)]
+mod noted_plan_tests {
+    use super::{NotedPlan, plan_noted};
+    use crate::proc::ERRMAX;
+    use crate::trap::{NCONT, NRSTR, NSAVE};
+
+    const NUREG: u64 = 0x3_f000;
+    const CHAIN: u64 = 0x3_f800;
+    const SP: u64 = 0x3_fff0;
+    const PC: u64 = 0x1_2340;
+
+    #[test]
+    fn nsave_restarts_on_the_handler_stack_and_keeps_the_saved_ureg() {
+        let plan = plan_noted(NSAVE, true, NUREG, CHAIN, SP, PC, true).unwrap();
+        assert_eq!(
+            plan,
+            NotedPlan {
+                resume_sp: NUREG - 4 * 8 - ERRMAX as u64,
+                nsave_arg: Some(NUREG),
+                note_ureg: NUREG
+            }
+        );
+        // the donor's sp is deliver_notes' handler sp: nureg - (8+ERRMAX) - 3*8
+        assert_eq!(plan.resume_sp, NUREG - (8 + ERRMAX as u64) - 3 * 8);
+    }
+
+    #[test]
+    fn ncont_and_nrstr_resume_at_the_saved_sp_and_pop_the_chain() {
+        for action in [NCONT, NRSTR] {
+            let plan = plan_noted(action, true, NUREG, CHAIN, SP, PC, true).unwrap();
+            assert_eq!(plan, NotedPlan { resume_sp: SP, nsave_arg: None, note_ureg: CHAIN });
+        }
+    }
+
+    #[test]
+    fn outside_a_handler_only_nrstr_is_legal() {
+        assert!(plan_noted(NRSTR, false, NUREG, CHAIN, SP, PC, true).is_ok(), "NRSTR after NSAVE");
+        assert_eq!(
+            plan_noted(NCONT, false, NUREG, CHAIN, SP, PC, true),
+            Err("noted: not notified")
+        );
+        assert_eq!(
+            plan_noted(NSAVE, false, NUREG, CHAIN, SP, PC, true),
+            Err("noted: not notified")
+        );
+        assert_eq!(plan_noted(NRSTR, false, 0, CHAIN, SP, PC, true), Err("noted: not notified"));
+    }
+
+    #[test]
+    fn a_bad_resume_target_is_refused() {
+        assert_eq!(
+            plan_noted(NCONT, true, NUREG, CHAIN, SP, PC + 2, true),
+            Err("noted: bad resume frame")
+        );
+        assert_eq!(
+            plan_noted(NCONT, true, NUREG, CHAIN, SP + 4, PC, true),
+            Err("noted: bad resume frame")
+        );
+        assert_eq!(
+            plan_noted(NSAVE, true, NUREG, CHAIN, SP, PC, false),
+            Err("noted: bad resume frame")
+        );
+        assert_eq!(
+            plan_noted(NSAVE, true, NUREG + 4, CHAIN, SP, PC, true),
+            Err("noted: bad resume frame")
+        );
+    }
 }
 
 #[cfg(test)]
