@@ -418,9 +418,11 @@ fn sys_notify(frame: &mut Ureg, proc: &mut Proc) -> u64 {
         proc.notify_handler = None;
         return 0;
     }
-    if handler & 3 != 0 {
-        return err(proc, "notify: misaligned handler");
-    }
+    // No alignment test: x86 code has no alignment rule and 6l places
+    // functions at any byte address, so a word-alignment check (the
+    // aarch64 port's, where instructions are 4-byte aligned) refused
+    // real handlers.  The donor sysnotify only validates the address;
+    // the in-text check below is that validation.
     let in_text = proc
         .segments
         .as_ref()
@@ -2042,10 +2044,6 @@ pub(crate) fn deliver_notes(frame: &mut Ureg) {
         println!("note: pid {} has no notify handler", proc.pid);
         exit_tail(&mut proc, msg);
     };
-    if handler & 3 != 0 {
-        println!("note: pid {} misaligned notify handler", proc.pid);
-        exit_tail(&mut proc, msg);
-    }
 
     // The donor stack construction (verbatim arithmetic; wrapping_sub
     // so a pathological frame.sp can't panic before the validation):
@@ -2148,6 +2146,33 @@ mod tests {
         fn proc(&mut self) -> &mut crate::proc::Proc {
             &mut self.guard
         }
+    }
+
+    /// NOTIFY(28) records a handler at ANY byte address inside text: x86
+    /// code has no alignment rule and 6l places functions at odd
+    /// addresses (the amd64 fpprobe's handler was refused by the old
+    /// word-alignment check, so its notes killed it).  Outside text is
+    /// still refused.
+    #[test]
+    fn notify_accepts_a_handler_at_an_odd_text_address() {
+        let mut mock = MockStack::new("tnotify");
+        let text = VirtRange::with_len(0x20_0000, 0x1_0000);
+        mock.proc().segments.as_mut().unwrap().text = text;
+        for (handler, want) in [(0x20_0001u64, Some(0x20_0001u64)), (0x20_0f13, Some(0x20_0f13))] {
+            let mut frame = Ureg::zeroed();
+            frame.bp = NOTIFY;
+            frame.sp = mock.base();
+            mock.put(8, handler);
+            dispatch_proc(frame.bp, &mut frame, mock.proc());
+            assert_eq!(frame.ax, 0, "notify({handler:#x}) failed");
+            assert_eq!(mock.proc().notify_handler, want);
+        }
+        let mut frame = Ureg::zeroed();
+        frame.bp = NOTIFY;
+        frame.sp = mock.base();
+        mock.put(8, 0x40_0001);
+        dispatch_proc(frame.bp, &mut frame, mock.proc());
+        assert_eq!(frame.ax, u64::MAX, "a handler outside text is refused");
     }
 
     /// ERRSTR(41) routed from frame.bp: args materialize from SP+8
