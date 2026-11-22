@@ -672,6 +672,12 @@ pub(crate) fn exec_prologue_with_bootargs(
         current: proc::current_user,
         set: proc::set_current_user,
     });
+    // devcap's recorded-but-never-read ticks source (20-15, the x86_64
+    // 18-02 registration; the devip set_clock idiom).  Gated on the cap
+    // dev key: only a '#¤'-declaring config (virtcpu) can reach devcap,
+    // and an unregistered hook is harmless (devcap records 0 ticks).
+    #[cfg(dev_cap)]
+    port::devcap::set_tick_hook(crate::platform::timer::ticks);
 
     // devpipe's block/wake hooks — a read on an empty pipe
     // parks the caller via the sched machinery; a write or close
@@ -725,6 +731,11 @@ pub(crate) fn exec_prologue_with_bootargs(
         list: proc::current_fd_list,
     });
     port::devsrv::set_resolve_hook(proc::current_fd_resolve);
+    // devssl's fd resolver (20-15, the x86_64 19-04 registration): the
+    // "fd N" ctl verb resolves the CALLING proc's own fd table through
+    // this hook (donor buftochan's fdtochan).  NOT dev-gated: namec's
+    // '#D' arm is unconditional, so every dev_exec config serves #D.
+    port::devssl::set_fd_resolve_hook(proc::current_fd_resolve);
 
     // devcons's read-path hooks — the console's input
     // engine rides the arch's lock-free PL011 RX ring (drain_rx), the

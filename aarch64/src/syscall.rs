@@ -23,8 +23,8 @@ use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
 use port::dat::{
-    Chan, DEV_CONS, DEV_DUP, DEV_ENV, DEV_ETHER, DEV_IP, DEV_MNT, DEV_PIPE, DEV_PROC, DEV_ROOT,
-    DEV_SRV, OEXEC, OTRUNC,
+    Chan, DEV_CAP, DEV_CONS, DEV_DUP, DEV_ENV, DEV_ETHER, DEV_IP, DEV_MNT, DEV_PIPE, DEV_PROC,
+    DEV_ROOT, DEV_SRV, DEV_SSL, OEXEC, OTRUNC,
 };
 use port::fdgrp::FdGroup;
 use port::mcslock::LockNode;
@@ -260,6 +260,16 @@ fn err(proc: &mut Proc, msg: &'static str) -> u64 {
     -1i64 as u64
 }
 
+/// err's dynamic twin (20-15, the x86_64 18-02 form): devcap's
+/// FORMATTED error ("invalid capability %s@%s") carries user bytes the
+/// port Result's `&'static str` cannot hold — devcap's CapErr
+/// transports them and the pwrite arm lands them here verbatim (lossy
+/// UTF-8: errstr is a diagnostic surface; real cap strings are ASCII).
+fn err_dyn(proc: &mut Proc, msg: &str) -> u64 {
+    proc.set_errstr(msg);
+    -1i64 as u64
+}
+
 /// PWRITE(51): fd, buf, n, offset.  Offset -1 (u64::MAX) is the streaming
 /// channel offset (Harvey libc write() = pwrite(fd, buf, n, -1LL));
 /// the console ignores offsets (writes append), devroot is read-only,
@@ -343,6 +353,30 @@ fn sys_pwrite(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         // RPCs (a read-only server such as paqfs answers with its own
         // Erdonly; a writable one such as ramfs takes the bytes).
         DEV_MNT => port::devmnt::write(&mut chan, src.as_slice(), off),
+        // devcap (20-15, the x86_64 arm): the write carries a FORMATTED
+        // error variant (the donor's "invalid capability %s@%s"), so the
+        // arm returns the fd and completes the syscall here — the common
+        // `&'static str` funnel below cannot land the dynamic message
+        // (the DEV_ROOT early-return precedent in sys_pread).  The eve
+        // gate, the hash check and the one-use consume all stay in
+        // port::devcap; nothing here decides who may use a capability.
+        DEV_CAP => {
+            // Streaming device — the offset is meaningless (the donor's
+            // capwrite ignores its vlong offset), like cons/devpipe.
+            let r = port::devcap::write(&mut chan, src.as_slice());
+            proc.fd_op_done(fd, chan);
+            return match r {
+                Ok(wrote) => wrote,
+                Err(port::devcap::CapErr::Static(msg)) => err(proc, msg),
+                Err(port::devcap::CapErr::InvalidCapability(msg)) => {
+                    err_dyn(proc, &alloc::string::String::from_utf8_lossy(&msg))
+                }
+            };
+        }
+        // devssl (20-15, the x86_64 arm): the #D data/ctl/secret writes
+        // (pushssl's "fd N" ctl verb resolves through the fd hook main
+        // registers; data writes are the SSL-framed conversation).
+        DEV_SSL => port::devssl::write(&mut chan, src.as_slice()),
         _ => Err("pwrite: unknown device"),
     };
     proc.fd_op_done(fd, chan);
@@ -448,6 +482,13 @@ fn sys_pread(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             // server proc; the fd is checked out, never the group lock).
             port::devmnt::read(&mut chan, dst.as_slice_mut(), off)
         }
+        // devcap (20-15, the x86_64 arm): the root dir serves the
+        // dirtab listing; every file read errors in the device (capuse
+        // and caphash are write-only — hashes never read back).
+        DEV_CAP => port::devcap::read(&mut chan, dst.as_slice_mut(), off),
+        // devssl (20-15, the x86_64 arm): the #D listings, clone's
+        // conversation number, and the decrypted data read.
+        DEV_SSL => port::devssl::read(&mut chan, dst.as_slice_mut(), off),
         _ => Err("pread: unknown device"),
     };
     proc.fd_op_done(fd, chan);
@@ -950,7 +991,13 @@ fn sys_mount(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let Some(mut chan) = proc.fd_take(fd) else {
         return err(proc, "mount: bad fd");
     };
-    if chan.dev != DEV_PIPE || chan.mode & port::dat::OMASK != port::dat::ORDWR {
+    // 20-15 (x86_64 19-08): a DEVSSL data chan is a mountable 9P
+    // connection too (cpu -R mounts the client's exportfs over the
+    // encrypted session — the ssl fd fversion'd into a session first;
+    // port::devmnt's ChanIo already dispatches devssl read/write).
+    if (chan.dev != DEV_PIPE && chan.dev != DEV_SSL)
+        || chan.mode & port::dat::OMASK != port::dat::ORDWR
+    {
         proc.fd_store(fd, chan);
         return err(proc, "mount: fd is not a 9P connection");
     }
