@@ -227,9 +227,9 @@ impl Ureg {
     /// POPFQ sets them as well) and stay: they act in ring 3 only,
     /// because every way back into the kernel clears the ones it cannot
     /// run with (SYSCALL through IA32_FMASK, cpu::fmask; the interrupt
-    /// gates TF and NT), and IRETQ's NT check reads the kernel's live
-    /// RFLAGS, never this image.  VM, VIF and VIP are inert in IA-32e
-    /// mode without CR4.VME/PVI.
+    /// gates TF and NT, intrcommon DF), and IRETQ's NT check reads the
+    /// kernel's live RFLAGS, never this image.  VM, VIF and VIP are inert
+    /// in IA-32e mode without CR4.VME/PVI.
     pub(crate) fn force_user_return(&mut self) {
         const IF: u64 = 0x200;
         const IOPL: u64 = 3 << 12;

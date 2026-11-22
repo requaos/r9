@@ -334,6 +334,15 @@ unsafe extern "C" fn intrregular() {
 #[unsafe(naked)]
 unsafe extern "C" fn intrcommon() {
     naked_asm!(r#"
+        // DF=0 before any Rust runs: an interrupt or exception gate
+        // clears TF, NT and RF (and IF) but keeps DF, so a tick that
+        // lands while ring 3 holds DF — amd64 libc memmove's backward
+        // copy sets it — would run trap(), the IRQ handlers and note
+        // delivery with every compiler_builtins rep movs/stos copying
+        // backwards (the SysV ABI promises DF=0 at each call).  SYSCALL
+        // gets the same guarantee from IA32_FMASK (cpu::fmask).  AC is
+        // inert at CPL0 until SMAP is enabled; a CLAC belongs here then.
+        cld;
         // Allocate space to save registers: 15 GP qwords
         // plus ONE packed segment qword below the vector
         // slot — the 9k syscallentry carve arithmetic (the
@@ -875,4 +884,25 @@ fn dispatch_irq(vector: u8) {
         _ => crate::println!("unhandled IRQ {vector}"),
     }
     crate::platform::q35::lapic::eoi();
+}
+
+#[cfg(test)]
+mod tests {
+    /// The IDT path's DF guarantee (intrcommon's comment): `cld` runs
+    /// before the entry calls into Rust.  The naked entry cannot run on
+    /// the host, so this reads its source — the fpu.rs target-spec
+    /// test's approach — and fails if the instruction is dropped or
+    /// moved past the call.  The boot-level pin is fpprobe's flags-dfirq
+    /// round on the x64 tier-1 gate.
+    #[test]
+    fn intrcommon_clears_df_before_calling_trap() {
+        let src = include_str!("trap.rs");
+        let body =
+            src.split("unsafe extern \"C\" fn intrcommon()").nth(1).expect("intrcommon in trap.rs");
+        let call = body.find("callq {trap}").expect("intrcommon's call into trap");
+        assert!(
+            body[..call].lines().any(|l| l.trim() == "cld;"),
+            "intrcommon must execute cld before `callq {{trap}}`"
+        );
+    }
 }

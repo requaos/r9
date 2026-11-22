@@ -61,7 +61,7 @@ pub(crate) fn flags() -> Flags {
 /// by the scheduler, since swtch carries no RFLAGS; AC would turn SMAP
 /// off in ring 0 once SMAP is enabled.  Masking at SYSCALL is the only
 /// place the TF trap can be stopped (an entry-stub reset runs too late);
-/// the interrupt gates clear TF and NT for the IDT path themselves.
+/// on the IDT path the gates clear TF and NT and intrcommon clears DF.
 pub(crate) fn fmask() -> u64 {
     Flags::empty()
         .with_intr(true)
