@@ -17,6 +17,7 @@ Standing constraint on every requirement below: the golden invariant (boots to r
 - [ ] **HARN-04**: Switching one manifest entry to its Rust replacement swaps that single artifact into the assembled image and removes it from the Harvey fallback set, and the golden gate passes at that commit; switching it back restores the Harvey artifact (owner direction; IG-V02 risk 4)
 - [ ] **HARN-05**: The harness fails fast with a named error when the image contains a Harvey artifact not in the manifest, or when an entry marked Rust still resolves to the Harvey artifact (the manifest and the image cannot drift)
 - [ ] **HARN-06**: Existing x86_64 q35 boot-test profiles and the aarch64 virt quick pass (tier-1 on HVF and TCG, smoke, net-smoke and cpu once on HVF) still pass through the reconciled mechanism
+- [ ] **HARN-07**: The r9 nix flake is the supplier of the read-only Harvey tree: the flake pins Harvey, and the default devshell (`nix develop`) exports the resolved tree location (`R9_HARVEY_DIR`) so every `cargo xtask` command run inside the devshell finds it with no manual setup; the tree it names is read-only and contains the pre-built artifacts the harness draws from; xtask itself keeps no built-in default path (outside the devshell an unset variable is still a named error); the flake apps and CI use the same supply (owner direction 2026-11-22)
 
 ### Design Lock and Flag Reservation (guide Phase 0)
 
@@ -230,6 +231,7 @@ Which phases cover which requirements. Each requirement maps to exactly one phas
 | HARN-04 | Phase 1 | Pending |
 | HARN-05 | Phase 1 | Pending |
 | HARN-06 | Phase 1 | Pending |
+| HARN-07 | Phase 1 | Pending |
 | DSGN-01 | Phase 2 | Pending |
 | DSGN-02 | Phase 2 | Pending |
 | DSGN-03 | Phase 2 | Pending |
@@ -351,8 +353,8 @@ Which phases cover which requirements. Each requirement maps to exactly one phas
 | RETIRE-05 | Phase 16 | Pending |
 
 **Coverage:**
-- v1 requirements: 125 total
-- Mapped to phases: 125
+- v1 requirements: 126 total
+- Mapped to phases: 126
 - Unmapped: 0
 
 ---
