@@ -10,10 +10,10 @@
 //! on the CPU needs a save and a restore.  The state is the 512-byte
 //! FXSAVE image: CR4.OSXSAVE is never set, so AVX and later state is
 //! unusable at CPL3 and FXSAVE covers everything a user can touch.  The
-//! invariant, kept by `LIVE_OWNER` (in `percpu`):
+//! invariant, kept by the CPU's owner (`CpuFp`):
 //!
 //! - the registers hold the user state of exactly the `Proc::fpsave` slot
-//!   `LIVE_OWNER` (in `percpu`) names (null: nobody's — the registers are scratch);
+//!   the CPU's owner (`CpuFp`) names (null: nobody's — the registers are scratch);
 //! - every other proc's state is in its own `fpsave`.
 //!
 //! proc.rs installs a proc's slot when it goes on the CPU ([`install`]:
@@ -55,6 +55,7 @@
 
 use core::marker::PhantomData;
 use core::ptr;
+use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
 /// One proc's saved user FPU/SSE state: the FXSAVE64 image (16-byte
 /// aligned, 512 bytes).  Layout (SDM Vol 1, 10.5.1): FCW @0, FSW @2,
@@ -116,57 +117,59 @@ impl FpState {
     }
 }
 
-/// The per-CPU FP bookkeeping: which `fpsave` slot's user state is
-/// live in the registers (LIVE_OWNER; null: none) and whether a kernel
-/// SIMD section is open (IN_KERNEL_SIMD).  The kernel has one CPU and
-/// touches these only from IF=0 kernel context; host tests give every
-/// test thread its own copy (a thread is a "CPU" there), so tests that
-/// run in parallel never see each other's sections or owners.
-#[cfg(not(test))]
-mod percpu {
-    use super::FpState;
-    use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+/// One CPU's FP bookkeeping: which `fpsave` slot's user state is live
+/// in this CPU's registers (the owner; null: none) and whether a kernel
+/// SIMD section is open on it.  Per CPU because both describe this
+/// CPU's register file: a second CPU has its own registers, its own
+/// owner and its own sections.  Touched only from IF=0 kernel context
+/// on the CPU it describes; atomics so a shared reference is sound.
+/// All-zero is the empty state (FromZeros: the Mach that embeds it is
+/// zero-constructible).
+#[derive(zerocopy::FromZeros)]
+pub struct CpuFp {
+    owner: AtomicPtr<FpState>,
+    in_section: AtomicBool,
+}
 
-    static LIVE_OWNER: AtomicPtr<FpState> = AtomicPtr::new(core::ptr::null_mut());
-    static IN_KERNEL_SIMD: AtomicBool = AtomicBool::new(false);
-
-    pub fn owner() -> *mut FpState {
-        LIVE_OWNER.load(Ordering::Relaxed)
+impl CpuFp {
+    pub const fn new() -> CpuFp {
+        CpuFp { owner: AtomicPtr::new(core::ptr::null_mut()), in_section: AtomicBool::new(false) }
     }
-    pub fn set_owner(p: *mut FpState) {
-        LIVE_OWNER.store(p, Ordering::Relaxed)
+    fn owner(&self) -> *mut FpState {
+        self.owner.load(Ordering::Relaxed)
     }
-    pub fn in_section() -> bool {
-        IN_KERNEL_SIMD.load(Ordering::Relaxed)
+    fn set_owner(&self, p: *mut FpState) {
+        self.owner.store(p, Ordering::Relaxed)
+    }
+    fn in_section(&self) -> bool {
+        self.in_section.load(Ordering::Relaxed)
     }
     /// Set the flag; returns its previous value.
-    pub fn set_in_section(v: bool) -> bool {
-        IN_KERNEL_SIMD.swap(v, Ordering::Relaxed)
+    fn set_in_section(&self, v: bool) -> bool {
+        self.in_section.swap(v, Ordering::Relaxed)
     }
 }
 
+/// This CPU's bookkeeping: the field in this CPU's Mach (each CPU
+/// maps its own Mach at dat::KMACH — the TSS access's idiom).
+#[cfg(not(test))]
+fn this_cpu() -> &'static CpuFp {
+    // SAFETY: the Mach lives at the fixed per-CPU VA l.S maps
+    // (dat::KMACH) for the kernel's lifetime, and Mach::init set `fpu`
+    // before any FP hook runs; CpuFp is all atomics, so a shared
+    // reference is sound.
+    unsafe { &(*(crate::dat::KMACH as *const crate::dat::Mach)).fpu }
+}
+
+/// Host tests: every test thread is its own "CPU" (one leaked CpuFp per
+/// thread), so tests that run in parallel never see each other's owners
+/// or sections.
 #[cfg(test)]
-mod percpu {
-    use super::FpState;
-    use std::cell::Cell;
-
+fn this_cpu() -> &'static CpuFp {
     std::thread_local! {
-        static LIVE_OWNER: Cell<*mut FpState> = const { Cell::new(core::ptr::null_mut()) };
-        static IN_KERNEL_SIMD: Cell<bool> = const { Cell::new(false) };
+        static CPU: &'static CpuFp = Box::leak(Box::new(CpuFp::new()));
     }
-
-    pub fn owner() -> *mut FpState {
-        LIVE_OWNER.with(|c| c.get())
-    }
-    pub fn set_owner(p: *mut FpState) {
-        LIVE_OWNER.with(|c| c.set(p))
-    }
-    pub fn in_section() -> bool {
-        IN_KERNEL_SIMD.with(|c| c.get())
-    }
-    pub fn set_in_section(v: bool) -> bool {
-        IN_KERNEL_SIMD.with(|c| c.replace(v))
-    }
+    CPU.with(|c| *c)
 }
 
 /// Store the live FPU/SSE registers into `*dst`.
@@ -229,9 +232,9 @@ pub fn reset() {
 
 /// The scheduler and the user-state helpers never run inside a kernel
 /// SIMD section (no sleeping or switching under a live guard).
-fn assert_outside_kernel_simd(site: &str) {
+fn assert_outside_kernel_simd(cpu: &CpuFp, site: &str) {
     assert!(
-        !percpu::in_section(),
+        !cpu.in_section(),
         "fpu: {site} inside a kernel SIMD section (no sleeping or switching under a KernelSimd guard)"
     );
 }
@@ -239,35 +242,51 @@ fn assert_outside_kernel_simd(site: &str) {
 /// A proc goes on the CPU: its saved user state goes live and its slot
 /// becomes the owner.
 pub fn install(slot: &mut FpState) {
-    assert_outside_kernel_simd("install");
+    install_on(this_cpu(), slot)
+}
+
+fn install_on(cpu: &CpuFp, slot: &mut FpState) {
+    assert_outside_kernel_simd(cpu, "install");
     restore(slot);
-    percpu::set_owner(slot);
+    cpu.set_owner(slot);
 }
 
 /// The proc owning `slot` leaves the CPU: park the live registers in its
 /// slot (if they are its state) and leave the registers unowned.
 pub fn leave(slot: &mut FpState) {
-    assert_outside_kernel_simd("leave");
+    leave_on(this_cpu(), slot)
+}
+
+fn leave_on(cpu: &CpuFp, slot: &mut FpState) {
+    assert_outside_kernel_simd(cpu, "leave");
     let p: *mut FpState = slot;
-    if percpu::owner() == p {
+    if cpu.owner() == p {
         save(slot);
-        percpu::set_owner(ptr::null_mut());
+        cpu.set_owner(ptr::null_mut());
     }
 }
 
 /// `slot`'s proc exited: its live state (if any) is dropped unsaved.
 pub fn discard(slot: &mut FpState) {
+    discard_on(this_cpu(), slot)
+}
+
+fn discard_on(cpu: &CpuFp, slot: &mut FpState) {
     let p: *mut FpState = slot;
-    if percpu::owner() == p {
-        percpu::set_owner(ptr::null_mut());
+    if cpu.owner() == p {
+        cpu.set_owner(ptr::null_mut());
     }
 }
 
 /// `slot`'s current user state: the live registers when it owns them,
 /// otherwise the slot itself.
 pub fn snapshot(slot: &FpState) -> FpState {
-    assert_outside_kernel_simd("snapshot");
-    if ptr::eq(percpu::owner(), slot) {
+    snapshot_on(this_cpu(), slot)
+}
+
+fn snapshot_on(cpu: &CpuFp, slot: &FpState) -> FpState {
+    assert_outside_kernel_simd(cpu, "snapshot");
+    if ptr::eq(cpu.owner(), slot) {
         let mut st = FpState::DEFAULT;
         save(&mut st);
         st
@@ -279,10 +298,14 @@ pub fn snapshot(slot: &FpState) -> FpState {
 /// Make `new` `slot`'s user state — the live registers too when `slot`
 /// owns them.
 pub fn replace(slot: &mut FpState, new: &FpState) {
-    assert_outside_kernel_simd("replace");
+    replace_on(this_cpu(), slot, new)
+}
+
+fn replace_on(cpu: &CpuFp, slot: &mut FpState, new: &FpState) {
+    assert_outside_kernel_simd(cpu, "replace");
     *slot = *new;
     let p: *mut FpState = slot;
-    if percpu::owner() == p {
+    if cpu.owner() == p {
         restore(slot);
     }
 }
@@ -305,13 +328,19 @@ pub struct KernelSimd {
     /// The slot whose user state begin parked (null: the registers were
     /// unowned).
     parked: *mut FpState,
+    /// The CPU the section belongs to (its owner is restored there).
+    cpu: &'static CpuFp,
     _not_send: PhantomData<*mut ()>,
 }
 
 /// Open a kernel SIMD section.  Panics by name if one is already open or
 /// if interrupts are enabled.
 pub fn kernel_begin() -> KernelSimd {
-    if percpu::set_in_section(true) {
+    kernel_begin_on(this_cpu())
+}
+
+fn kernel_begin_on(cpu: &'static CpuFp) -> KernelSimd {
+    if cpu.set_in_section(true) {
         panic!(
             "fpu: nested kernel_begin (a KernelSimd section is already open; sections are not reentrant)"
         );
@@ -321,8 +350,8 @@ pub fn kernel_begin() -> KernelSimd {
         interrupts_disabled(),
         "fpu: kernel_begin with interrupts enabled (a section must not be interruptible)"
     );
-    let owner = percpu::owner();
-    percpu::set_owner(ptr::null_mut());
+    let owner = cpu.owner();
+    cpu.set_owner(ptr::null_mut());
     if !owner.is_null() {
         // SAFETY: owner names a live PROC_TABLE-resident (or boot
         // self-test) fpsave slot — install recorded it and leave/discard
@@ -330,7 +359,7 @@ pub fn kernel_begin() -> KernelSimd {
         // touches the slot while IF=0 on the single CPU.
         unsafe { save_raw(owner) };
     }
-    KernelSimd { parked: owner, _not_send: PhantomData }
+    KernelSimd { parked: owner, cpu, _not_send: PhantomData }
 }
 
 impl Drop for KernelSimd {
@@ -343,9 +372,9 @@ impl Drop for KernelSimd {
             // SAFETY: kernel_begin's contract on the parked slot (its
             // image came from FXSAVE, so its MXCSR is valid).
             unsafe { restore_raw(self.parked) };
-            percpu::set_owner(self.parked);
+            self.cpu.set_owner(self.parked);
         }
-        percpu::set_in_section(false);
+        self.cpu.set_in_section(false);
     }
 }
 
@@ -576,7 +605,7 @@ mod tests {
         restore(&with_mxcsr(RD_FZ)); // user code changed its state after install
         {
             let simd = kernel_begin();
-            assert!(percpu::owner().is_null(), "begin leaves the registers unowned");
+            assert!(this_cpu().owner().is_null(), "begin leaves the registers unowned");
             assert_eq!(
                 slot.mxcsr(),
                 RD_FZ,
@@ -587,15 +616,55 @@ mod tests {
             assert_eq!(live_mxcsr(), DFLT);
         }
         assert_eq!(live_mxcsr(), RD_FZ, "end restored the parked state");
-        assert!(ptr::eq(percpu::owner(), &slot), "end made the owner live again");
+        assert!(ptr::eq(this_cpu().owner(), &slot), "end made the owner live again");
         leave(&mut slot);
-        assert!(percpu::owner().is_null());
+        assert!(this_cpu().owner().is_null());
+        reset();
+    }
+
+    /// Per-CPU bookkeeping: each CPU's owner and section are its own (a
+    /// second CPU has its own register file).  Bookkeeping only — the
+    /// host has one register file, so register contents are not compared.
+    #[test]
+    fn each_cpu_keeps_its_own_owner_and_section() {
+        let a: &'static CpuFp = Box::leak(Box::new(CpuFp::new()));
+        let b: &'static CpuFp = Box::leak(Box::new(CpuFp::new()));
+        let mut sa = FpState::DEFAULT;
+        let mut sb = FpState::DEFAULT;
+        install_on(a, &mut sa);
+        assert!(ptr::eq(a.owner(), &sa) && b.owner().is_null(), "an install touches only its CPU");
+        install_on(b, &mut sb);
+        assert!(ptr::eq(a.owner(), &sa) && ptr::eq(b.owner(), &sb));
+        {
+            let _on_b = kernel_begin_on(b);
+            assert!(b.in_section() && !a.in_section(), "a section is its CPU's");
+            assert!(b.owner().is_null(), "B's section parked B's owner");
+            assert!(ptr::eq(a.owner(), &sa), "A's owner is untouched by B's section");
+            // A may still switch, and open its own section, while B is in one.
+            leave_on(a, &mut sa);
+            install_on(a, &mut sa);
+            let _on_a = kernel_begin_on(a);
+            assert!(a.in_section() && a.owner().is_null());
+        }
+        assert!(
+            ptr::eq(a.owner(), &sa) && ptr::eq(b.owner(), &sb),
+            "each section gave back its own CPU's owner"
+        );
+        assert!(!a.in_section() && !b.in_section());
+        leave_on(a, &mut sa);
+        leave_on(b, &mut sb);
+        assert!(a.owner().is_null() && b.owner().is_null());
         reset();
     }
 
     #[test]
+    fn this_cpu_is_stable() {
+        assert!(ptr::eq(this_cpu(), this_cpu()));
+    }
+
+    #[test]
     fn a_section_without_an_owner_leaves_the_default_state() {
-        assert!(percpu::owner().is_null());
+        assert!(this_cpu().owner().is_null());
         with_simd(|_| restore(&with_mxcsr(RZ))); // kernel data left behind
         assert_eq!(live_mxcsr(), DFLT, "end loaded the default state");
     }
@@ -642,7 +711,7 @@ mod tests {
             "replacing the owner rewrites the live state"
         );
         discard(&mut owner);
-        assert!(percpu::owner().is_null(), "discard drops the owner");
+        assert!(this_cpu().owner().is_null(), "discard drops the owner");
         reset();
     }
 
@@ -654,7 +723,7 @@ mod tests {
         restore(&with_mxcsr(RU));
         leave(&mut stranger);
         assert_eq!(stranger.mxcsr(), RZ);
-        assert!(ptr::eq(percpu::owner(), &owner));
+        assert!(ptr::eq(this_cpu().owner(), &owner));
         leave(&mut owner);
         assert_eq!(owner.mxcsr(), RU, "leave parked the live state in the owner's slot");
         reset();

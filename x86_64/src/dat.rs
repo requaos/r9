@@ -379,6 +379,11 @@ pub struct Mach {
 
     sched: Label,
 
+    /// This CPU's FP bookkeeping (fpu.rs's CpuFp: the owner of the live
+    /// FPU/SSE registers, the open kernel-SIMD section) — per CPU because
+    /// each CPU has its own register file.
+    pub(crate) fpu: crate::fpu::CpuFp,
+
     // All preceding data after the stack fits within a single 4KiB page.
     // Paging structures that follow are sized in page multiples and aligned.
     pml4: PTable,  // PML4 root page table for this Mach
@@ -408,6 +413,11 @@ impl Mach {
     pub unsafe fn init(&mut self) {
         use crate::trap;
         self.me = self;
+        // The FP bookkeeping starts empty (no owner, no section) before
+        // any FP hook can run; written whole, never read first (the Mach
+        // page's prior contents are not assumed).
+        // SAFETY: `fpu` is a field of this exclusively borrowed Mach.
+        unsafe { core::ptr::write(&mut self.fpu, crate::fpu::CpuFp::new()) };
         self.tss.init(&mut [
             (0, &mut self.stack),
             (trap::NMI_TRAPNO, &mut self.nmi_stack),
