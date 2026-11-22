@@ -384,7 +384,20 @@ unsafe extern "C" fn intrcommon() {
         movzbl {TRAPNO_OFFSET}(%rsp), %edi;
         movq %rdi, {TRAPNO_OFFSET}(%rsp);
         movq %rsp, %rsi;
+        // The SysV ABI wants %rsp 16-byte aligned at the call, and the
+        // Ureg base sits at 8 mod 16 (23 qwords below the CPU's
+        // 16-aligned frame top — the SYSCALL entry pads one qword for
+        // the same reason).  Calling from it ran trap() and everything
+        // under it misaligned by 8: harmless until something there needs
+        // 16-byte alignment — FXSAVE of a stack FpState on the note
+        // boundary this path now runs, or a kernel-SIMD section in an
+        // interrupt handler.  Align, and keep the frame base in %rbx:
+        // callee-saved, so trap() (and any swtch park and resume inside
+        // it) hands it back.
+        movq %rsp, %rbx;
+        andq $-16, %rsp;
         callq {trap};
+        movq %rbx, %rsp;
         // If we're returning to kernel mode, don't swap %gs — the
         // donor's discipline (l64idt.s's return-side CMPW 48(SP)):
         // re-test the SAVED CS WORD itself instead of a witness bit.
