@@ -452,6 +452,34 @@ WRAP
               runHook postInstall
             '';
           };
+          # 20-15 (ARM-09, the owner's separate-profile decision at 20-12):
+          # the devcap-carrying arm64 kernel — kernel-virt's derivation with
+          # --config virtcpu (virtshell's dev set plus "cap").  The SAME
+          # store-path contract (kernel-virt.elf + both DTBs at their
+          # repo-relative paths), so Harvey's launchers consume it through
+          # the existing R9_KERNEL_PKG seam (boot-r9-cpu, 20-16) while
+          # kernel-virt keeps serving the smoke/net-smoke/tier1 gates.
+          kernel-virt-cpu = pkgs.stdenv.mkDerivation {
+            pname = "r9-kernel-virt-cpu";
+            version = self.shortRev or "wip";
+            src = ./.;
+            nativeBuildInputs = [ toolchain pkgs.rustPlatform.cargoSetupHook ];
+            inherit cargoDeps;
+            buildPhase = ''
+              runHook preBuild
+              ${objcopyExport toolchain}
+              cargo xtask build --arch aarch64 --config virtcpu
+              runHook postBuild
+            '';
+            installPhase = ''
+              runHook preInstall
+              mkdir -p "$out/aarch64/lib"
+              cp target/aarch64-unknown-none-elf/debug/aarch64 "$out/kernel-virt.elf"
+              cp aarch64/lib/virt-gicv2.dtb "$out/aarch64/lib/virt-gicv2.dtb"
+              cp aarch64/lib/virt-gicv3.dtb "$out/aarch64/lib/virt-gicv3.dtb"
+              runHook postInstall
+            '';
+          };
         }
         # The x86_64 deliverables: the kernel package and the netdev
         # emitter on every linux host (the rustc target spec is

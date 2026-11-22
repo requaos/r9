@@ -1,0 +1,50 @@
+# The virtcpu profile (20-15, ARM-09) — the arm64 cpu-fixture kernel:
+# virtshell's boot-chain dev set plus "cap", packaged as
+# r9.packages.kernel-virt-cpu for Harvey's boot-r9-cpu gate (20-16, the
+# owner's separate-profile decision at 20-12).  "cap" compiles namec's
+# '#¤' registry arm (cfg(dev_cap)) and main's devcap tick hook; the
+# devcap pread/pwrite arms and port::devcap itself are compiled in every
+# profile, so this key is the only difference from virtshell.  The image
+# (bootfs.paq) and the boot string (/chosen/bootargs, e.g.
+# init=/arm64/init -c) are delivered Harvey-side — the launcher's DTB
+# copy patched with fdtput — never by xtask's [qemu] keys.  The CONTROL
+# leg is virtshell itself (kernel-virt): its dev set and the
+# smoke/net-smoke/tier1 gates that boot it stay untouched.
+[build]
+target = "lib/aarch64-unknown-none-elf.json"
+buildflags = ["-Z", "build-std=core,alloc"]
+
+[link]
+# linker script to use
+script = 'aarch64/lib/kernel.ld'
+
+# kernel load address to insert into kernel.ld (KZERO + 0x40080000; AT()
+# emits p_paddr 0x40080000, qemu virt's -kernel load address)
+load-address = '0xffff800040080000'
+
+[config]
+platform = "virt"
+# no dtb key here: virt's DTB is qemu-facing, passed via [qemu].dtb
+# exec + bootchain + ether + ip: virtshell's set (see
+# config_virtshell.toml for each key's history).
+# cap — 20-15: the '#¤' capability device (factotum's caphash post and
+# the capuse presentation; the cpu fixture's `rm '#¤/caphash'` leg is
+# its first named consumer, 20-16).
+dev = ["exec", "bootchain", "cap", "ether", "ip"]
+
+[qemu]
+machine = "virt,gic-version=2"
+# TCG reference CPU.  For hvf on darwin pass --accel hvf (or R9_ACCEL=hvf):
+# xtask swaps in the gicv3 machine/DTB and -cpu host itself.
+cpu = "cortex-a72"
+smp = 1
+memory = "1024M"
+accel = "tcg"
+# Committed trimmed DTB: qemu loads it at 0x40000000 (the ELF-boot fix —
+# without -dtb, qemu 11.1.2 loads no DTB at all for ELF kernels and x0 is 0)
+dtb = "aarch64/lib/virt-gicv2.dtb"
+# NO initrd key: the image is baked and delivered Harvey-side.
+
+[dist]
+# ELF is the boot image on virt; skip the objcopy+gzip flat-image pipeline
+format = "elf"
