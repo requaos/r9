@@ -43,6 +43,13 @@ Requirements: HARN-01 to HARN-08. Not in this phase: porting any real tool (Trac
 - **D-17:** The swap is proven with a trivial `no_std` Rust program built as a Plan 9 `a.out` that replaces one harmless tool (for example `echo`) and prints a recognisable marker; the gate checks the marker, then the entry is flipped back. This pulls the minimum Rust-to-`a.out` path (`elf2aout`) forward from Phase 9, only as far as this probe needs.
 - **D-18:** The probe is removed once it has proven the mechanism; the result is recorded. The default image stays all-Harvey and no throwaway code remains in the tree.
 
+### Decisions after research (owner, 2026-11-22)
+- **D-19:** Refines D-07. The gate drivers (`nix/*.sh` scripts and `*.expect` files) move to r9. The guest-side fixtures (sweep `.rc` scripts, termrc files, the `root-tree` skeleton, tier lists, fixture `.c` sources built with Harvey's compilers) stay in Harvey and r9 reads them from the pinned tree. The Harvey commit must not delete anything r9's tree derivation still reads.
+- **D-20:** Narrows D-08. Phase 1 delivers one Harvey command that builds and boots Harvey's own kernel in q35 QEMU to a prompt. The drawterm command stays as it is today; a standalone Harvey drawterm session against Harvey's own kernel is deferred.
+- **D-21:** Reconciles D-01 with D-05. The devshell exports `R9_HARVEY_DIR_AMD64` and `R9_HARVEY_DIR_ARM64`, each a complete tree for its architecture. `R9_HARVEY_DIR` remains a manual override that wins when set. HARN-07 is amended to match.
+- **D-22:** The phase is planned in two passes. Pass 1 plans and runs the research spikes S1 to S6 (`01-RESEARCH.md`, "Wave 0 Gaps") and ends at an owner checkpoint. The remaining plans are written after the spike results. The Mac builder mechanism (D-04) is chosen after spike S2.
+- **D-23:** The first Harvey pin is the pushed `legacy-final` commit (`bd7a698`); r9 never locks an unpushed Harvey commit.
+
 ### Claude's Discretion
 - The exact marker used to show rio is serving (D-11) and how it is observed without a display.
 - Manifest file format and location inside `xtask/`.
@@ -60,6 +67,7 @@ Requirements: HARN-01 to HARN-08. Not in this phase: porting any real tool (Trac
 - `.planning/ROADMAP.md` (Phase 1 section) — goal, seven success criteria, findings at HEAD
 - `.planning/REQUIREMENTS.md` (HARN-01 to HARN-08) — the phase requirements
 - `.planning/PROJECT.md` (note N4, Key Decisions) — flake ownership and golden-invariant context
+- `.planning/phases/01-stage-p0-cross-build-harness/01-RESEARCH.md` — findings on each locked decision, the six spikes, commit ordering across the two repos, what cannot run on the Mac
 - `.planning/STATE.md` — owner standing rules (push approval, `port/src` diff approval, x86_64 kernel byte-change procedure)
 - `.planning/r9-implementation-guide-amended-v3.md` §8 — Track P, Stage P0 as specified by the guide
 
@@ -113,6 +121,8 @@ Requirements: HARN-01 to HARN-08. Not in this phase: porting any real tool (Trac
 
 - Re-expressing the shell and expect gates as `cargo xtask` commands in Rust was considered and not chosen for this phase; it remains an option before Harvey retirement (Phase 16).
 - A binary cache for the built Harvey tree was considered for the Mac and not chosen.
+- A standalone Harvey drawterm session against Harvey's own kernel (the second half of D-08) is deferred by D-20.
+- Moving the guest-side gate fixtures out of Harvey is deferred by D-19 until Track P ports the things they exercise.
 
 </deferred>
 
