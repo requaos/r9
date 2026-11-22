@@ -541,6 +541,10 @@ fn sys_noted(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             // kernel panic).  The saved `type` field stays
             // informational-only (aarch64/ABI.md documents it as such).
             frame.force_psr_el0t();
+            // The donor's fpunoted: the interrupted code's FP/SIMD state
+            // (recorded at delivery) replaces whatever the handler left.
+            let interrupted = proc.note_fpsave;
+            crate::fpu::replace(&mut proc.fpsave, &interrupted);
             // Allow the next note (the donor's up->notified = 0).
             proc.note_ureg = 0;
             0

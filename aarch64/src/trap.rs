@@ -506,6 +506,10 @@ pub(crate) fn deliver_notes(frame: &mut TrapFrame) {
     frame.link_register = 0;
     // The donor's up->noteureg: NOTED's NCONT/NRSTR restore source.
     proc.note_ureg = nureg;
+    // ... and the donor's fpunotify: record the interrupted code's
+    // FP/SIMD state; the handler runs on a copy of it (the live
+    // registers stay as they are) and NOTED gives this one back.
+    proc.note_fpsave = crate::fpu::snapshot(&proc.fpsave);
 }
 
 fn trap(frame: &mut TrapFrame) {

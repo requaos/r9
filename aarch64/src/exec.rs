@@ -276,10 +276,10 @@ fn install_image(
     });
     proc.set_name(name);
     // A new image's user FP/SIMD state starts at zero (q0-q31, FPCR,
-    // FPSR).  This is the saved copy; exec_replace also zeroes the live
-    // registers (the exec'ing proc is on the CPU there), while a proc
-    // built by exec_into is not yet installed and gets it at install.
-    proc.fpsave = crate::fpu::FpState::ZERO;
+    // FPSR): the saved copy, plus the live registers when this proc owns
+    // them (exec_replace — the exec'ing proc is on the CPU); a proc built
+    // by exec_into is not yet installed and gets it at install.
+    crate::fpu::replace(&mut proc.fpsave, &crate::fpu::FpState::ZERO);
     // Record the argv for devproc's /proc/N/args (the
     // donor's p->args) — install_image is shared by exec_into (the
     // bootstrap path) and exec_replace (the EXEC syscall), so EVERY exec
@@ -527,9 +527,6 @@ pub fn exec_replace(
     // REWRITE THE LIVE TRAP FRAME in place — the dispatch return path's
     // restore + eret enters the new image.
     frame.seed_el0_entry(tos_va as u64, user_sp as u64, aout.entry);
-    // ... with zeroed FP/SIMD registers: this proc is on the CPU, so the
-    // live file is its state (fpu.rs); install_image zeroed the saved copy.
-    crate::fpu::reset();
     Ok(tos_va as u64)
 }
 
