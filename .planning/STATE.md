@@ -1,8 +1,15 @@
 ---
-gsd_state_version: '1.0'
+gsd_state_version: "1.0"
 milestone: v3.0
-milestone_name: Cross-Build Harness and Wire Foundations
+milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
+current_phase: 1
+current_phase_name: Stage P0 - Cross-Build Harness
 status: planning
+stopped_at: Phase 1 context gathered
+last_updated: "2026-11-22T22:59:02.432Z"
+last_activity: 2026-11-22
+last_activity_desc: Roadmap created from ingest; W11 decided by the owner
+state_head: b8d28ed4232fd48401e1126643e1d7c93de3cab6
 progress:
   total_phases: 4
   completed_phases: 0
@@ -112,6 +119,6 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 
 ## Session Continuity
 
-Last session: 2026-11-22
-Stopped at: Roadmap, requirements and state written from the ingest; ready to plan Phase 1
-Resume file: None (`.planning/HANDOFF.md` says to delete it once the first r9 planning pass has absorbed it; it is left in place for the owner)
+Last session: 2026-11-22T22:59:02.419Z
+Stopped at: Phase 1 context gathered
+Resume file: .planning/phases/01-stage-p0-cross-build-harness/01-CONTEXT.md
