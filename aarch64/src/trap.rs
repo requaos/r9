@@ -4,7 +4,7 @@ use core::fmt;
 use crate::platform;
 use crate::fault;
 use crate::proc;
-use crate::registers::{EsrEl1, ExceptionClass};
+use crate::registers::EsrEl1;
 use crate::syscall;
 use aarch64_cpu::registers::FAR_EL1;
 use aarch64_cpu::registers::Readable;
@@ -410,9 +410,10 @@ fn dispatch_irq(_frame: &TrapFrame) -> bool {
 }
 
 /// Note delivery at the return-to-EL0 boundary.  Called on
-/// every return to EL0 — after syscall dispatch AND after a handled IRQ —
-/// with the frame the shared trap_return tail is about to restore (the
-/// caller resolved CURFRAME and checked the frame is EL0t-bound).  Pops
+/// every return to EL0 from a trap — after syscall dispatch, after a
+/// resolved demand fault, and after a handled IRQ — with the frame the
+/// shared trap_return tail is about to restore (the caller resolved
+/// CURFRAME and checked the frame is EL0t-bound).  Pops
 /// the current proc's pending note and redirects the frame into the
 /// notify()-installed handler, donor notify() verbatim (9front@350266104f
 /// sys/src/9/arm64/trap.c:209-238):
@@ -518,6 +519,42 @@ pub(crate) fn deliver_notes(frame: &mut TrapFrame) {
     proc.note_fpsave = crate::fpu::snapshot(&proc.fpsave);
 }
 
+/// Where trap() sends a synchronous exception, from ESR_EL1.EC and the
+/// interrupted context's SPSR mode bits (M[3:0] = 0 is EL0t).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SyncRoute {
+    /// EC 0x15, SVC: syscall::dispatch.
+    Syscall,
+    /// EC 0x20/0x24, instruction/data abort from EL0: fault::user_fault
+    /// (resolves the fault, or kills the process and never returns).
+    DemandFault,
+    /// Any other EL0-origin exception: named, then the process is killed.
+    UserKill,
+    /// Anything else (an EL1-origin exception): dump and halt.
+    KernelHalt,
+}
+
+impl SyncRoute {
+    fn of(ec: u8, psr: u64) -> SyncRoute {
+        match ec {
+            0x15 => SyncRoute::Syscall,
+            0x20 | 0x24 => SyncRoute::DemandFault,
+            _ if psr & 0xF == 0 => SyncRoute::UserKill,
+            _ => SyncRoute::KernelHalt,
+        }
+    }
+
+    /// The routes that come back to trap() and return to the interrupted
+    /// context.  Each is a note boundary when that context is EL0 — the
+    /// donor runs notify() at the end of trap() for every user trap
+    /// (9front@350266104f sys/src/9/arm64/trap.c), so a note pending when
+    /// a demand fault returns is delivered there, not at the next tick or
+    /// syscall.
+    fn returns(self) -> bool {
+        matches!(self, SyncRoute::Syscall | SyncRoute::DemandFault)
+    }
+}
+
 fn trap(frame: &mut TrapFrame) {
     // ESR_EL1/FAR_EL1 are read LIVE at trap entry and flow as
     // arguments to the dispatchers — never frame fields.  The fault
@@ -546,7 +583,8 @@ fn trap(frame: &mut TrapFrame) {
         return;
     }
 
-    if esr.ec() == 0x15 {
+    let route = SyncRoute::of(esr.ec(), frame.psr);
+    match route {
         // SVC: the real dispatch.  The WIRE syscall number is R0
         // (frame.x0), args sit at user SP+8 in 8-byte slots, and the result
         // is written back to frame.x0 (aarch64/ABI.md).  Dispatch itself
@@ -554,48 +592,83 @@ fn trap(frame: &mut TrapFrame) {
         // the measured set + named core — loud, never wedged.  EXITS
         // diverges (parks); every other path returns here and the shared
         // trap_return tail erets back into EL0.
-        crate::syscall::dispatch(frame);
-        // Note-delivery boundary (syscall return path): dispatch
-        // runs IRQ-masked so no preemption happened — `frame` IS the
-        // returning proc's live frame (== CURFRAME).
-        if frame.psr & 0xF == 0 {
-            deliver_notes(frame);
-        }
-        return;
-    } else if matches!(
-        esr.exception_class_enum(),
-        Ok(ExceptionClass::InstructionAbortLowerEl) | Ok(ExceptionClass::DataAbortLowerEl)
-    ) {
+        SyncRoute::Syscall => crate::syscall::dispatch(frame),
         // EC 0x20/0x24: lower-EL instruction/data abort — the demand-paging
         // path.  Returns with the fault resolved and the restore path
         // erets back into EL0; an unresolvable fault kills the process and
-        // parks inside the handler (single-process era).
-        fault::user_fault(frame, esr, far);
-        return;
-    } else if frame.psr & 0xF == 0 {
-        // Other EL0-origin sync (EL0t psr) — the donor faultnote shape: name
-        // it, then kill the process loudly (a handlerless process dies,
-        // never hangs).
-        println!(
-            "user trap: unhandled ec={:#04x} addr={far:#018x} pc={:#018x}",
-            esr.ec(),
-            frame.pc
-        );
-        fault::kill_current_process();
-    } else {
-        println!("{:#?}", frame);
-        // ESR/FAR print from the live trap() locals — outside the
-        // frame — so the panic profile's x0..x30 row-count gate is untouched.
-        println!("esr_el1: {esr:#?}");
-        println!("far_el1: {far:#018x}");
-        println!("Unhandled interrupt");
-        // Deterministic clean halt: the full register state is on
-        // the console, then the marker, then park in wfi -- a wedge-free stop
-        // that doesn't burn the host on a spin.  Applies to every platform;
-        // raspi's dump path gains the same marker.
-        println!("kernel halted");
+        // never returns.
+        SyncRoute::DemandFault => fault::user_fault(frame, esr, far),
+        SyncRoute::UserKill => {
+            // Other EL0-origin sync (EL0t psr) — the donor faultnote shape:
+            // name it, then kill the process loudly (a handlerless process
+            // dies, never hangs).
+            println!(
+                "user trap: unhandled ec={:#04x} addr={far:#018x} pc={:#018x}",
+                esr.ec(),
+                frame.pc
+            );
+            fault::kill_current_process();
+        }
+        SyncRoute::KernelHalt => {
+            println!("{:#?}", frame);
+            // ESR/FAR print from the live trap() locals — outside the
+            // frame — so the panic profile's x0..x30 row-count gate is
+            // untouched.
+            println!("esr_el1: {esr:#?}");
+            println!("far_el1: {far:#018x}");
+            println!("Unhandled interrupt");
+            // Deterministic clean halt: the full register state is on
+            // the console, then the marker, then park in wfi -- a
+            // wedge-free stop that doesn't burn the host on a spin.
+            // Applies to every platform; raspi's dump path gains the same
+            // marker.
+            println!("kernel halted");
+            // The dump-and-halt parks via the consolidated primitive.
+            park_forever()
+        }
+    }
+    // Note-delivery boundary (synchronous return path): syscall dispatch
+    // and the demand pager run IRQ-masked and never switch procs, so
+    // `frame` IS the returning proc's live frame (== CURFRAME).  A note
+    // can be pending at a fault return when the return to EL0 before the
+    // fault skipped the boundary (the sched loop resumes a preempted or
+    // new proc with a bare trap_return) or, with more than one CPU, when
+    // another CPU posts it during the fault.
+    if route.returns() && frame.psr & 0xF == 0 {
+        deliver_notes(frame);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SyncRoute;
+
+    const EL0T: u64 = 0x8000_0000; // N set, M[3:0] = 0
+    const EL1H: u64 = 0x3c5;
+
+    #[test]
+    fn every_returning_el0_trap_is_a_note_boundary() {
+        // SVC and both lower-EL aborts come back to trap() and return to
+        // EL0: each must run the note boundary.
+        for (ec, want) in [
+            (0x15, SyncRoute::Syscall),
+            (0x20, SyncRoute::DemandFault),
+            (0x24, SyncRoute::DemandFault),
+        ] {
+            let r = SyncRoute::of(ec, EL0T);
+            assert_eq!(r, want, "ec {ec:#x}");
+            assert!(r.returns(), "ec {ec:#x} ({r:?}) must be a note boundary");
+        }
     }
 
-    // The dump-and-halt parks via the consolidated primitive.
-    park_forever()
+    #[test]
+    fn diverging_routes_are_not_boundaries() {
+        // Other EL0-origin classes kill the process; EL1-origin ones halt.
+        for ec in [0x00, 0x07, 0x0e, 0x22, 0x26, 0x2f, 0x3c] {
+            assert_eq!(SyncRoute::of(ec, EL0T), SyncRoute::UserKill, "ec {ec:#x}");
+            assert_eq!(SyncRoute::of(ec, EL1H), SyncRoute::KernelHalt, "ec {ec:#x}");
+        }
+        assert!(!SyncRoute::UserKill.returns());
+        assert!(!SyncRoute::KernelHalt.returns());
+    }
 }
