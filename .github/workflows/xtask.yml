@@ -67,6 +67,36 @@ jobs:
     - name: Build
       run: cargo xtask build --arch aarch64 --config virtchurn --verbose
 
+  # 20-17: the dev_cap aarch64 code (20-15's devcap arm and tick hook,
+  # namec's '#¤' registry arm) is compiled only by the virtcpu config,
+  # the kernel Harvey's boot-r9-cpu gate boots; without this lane no CI
+  # job compiles it.
+  build-aarch64-virtcpu:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Build
+      run: cargo xtask build --arch aarch64 --config virtcpu --verbose
+
+  # 20-17: the aarch64 crate's host tests (the cpu-port battery:
+  # shebang_pass, valid_stat_wire, parse_bootconf_pairs,
+  # check_cap_extents, at the default and the virtshell cfg) run only
+  # on an aarch64 host -- `cargo xtask test` picks the crate leg by the
+  # host arch, and every other job here runs on ubuntu-latest (x86_64).
+  # ubuntu-24.04-arm is the GitHub-hosted arm64 linux label, available
+  # to public repositories on the free plan.  This lane was not
+  # observable before it was pushed: if the label is unavailable to
+  # this repository, or the crate does not build on linux arm64, the
+  # owner decides between fixing and dropping it.
+  test-aarch64-host:
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Run tests
+      run: cargo xtask test --verbose
+
   build-riscv64:
     runs-on: ubuntu-latest
 
