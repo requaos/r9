@@ -18,6 +18,7 @@ Standing constraint on every requirement below: the golden invariant (boots to r
 - [ ] **HARN-05**: The harness fails fast with a named error when the image contains a Harvey artifact not in the manifest, or when an entry marked Rust still resolves to the Harvey artifact (the manifest and the image cannot drift)
 - [ ] **HARN-06**: Existing x86_64 q35 boot-test profiles and the aarch64 virt quick pass (tier-1 on HVF and TCG, smoke, net-smoke and cpu once on HVF) still pass through the reconciled mechanism
 - [ ] **HARN-07**: The r9 nix flake is the supplier of the read-only Harvey tree: the flake pins Harvey, and the default devshell (`nix develop`) exports the resolved tree location (`R9_HARVEY_DIR`) so every `cargo xtask` command run inside the devshell finds it with no manual setup; the tree it names is read-only and contains the pre-built artifacts the harness draws from; xtask itself keeps no built-in default path (outside the devshell an unset variable is still a named error); the flake apps and CI use the same supply (owner direction 2026-11-22)
+- [ ] **HARN-08**: Flake ownership is flipped: r9's flake imports Harvey and produces the composed outputs that Harvey's flake owns today (the `boot-r9*` apps for aarch64 and x86_64 including smoke, net-smoke, tier1, cpu, services, net-soak, churn, stress and auth, plus `drawterm-gate-x64` and the helpers they need such as `net-doctor` and `drawterm`); Harvey's flake no longer has an `r9` input or any `boot-r9*`/gate output and keeps only what builds Harvey itself; each moved gate passes from r9 at the flip commit with results equivalent to its Harvey-hosted run; no lock cycle remains between the two repos (owner direction 2026-11-22). This edits `flake.nix` in both repos; the Harvey commit and both pushes need owner approval
 
 ### Design Lock and Flag Reservation (guide Phase 0)
 
@@ -189,7 +190,7 @@ Standing constraint on every requirement below: the golden invariant (boots to r
 - [ ] **RETIRE-01**: Every device in the devtab is safe Rust, confirmed by an inventory scan covering devices beyond the seven in Stage P1 (owner deprecation checklist)
 - [ ] **RETIRE-02**: The root image contains zero Harvey C binaries, confirmed by an empty fallback manifest and an image scan (owner deprecation checklist)
 - [ ] **RETIRE-03**: With the Harvey tree absent (not merely unused), native Plan 9 C software builds with ported 6c/6l over classic APE, modern C++/LLVM builds via Clang against `vendor/apex/`, and `rustc` and `rust-lld` run natively (owner deprecation checklist)
-- [ ] **RETIRE-04**: Every composed gate previously hosted in Harvey's flake (boot-r9-x64 smokes, net smoke, auth, drawterm, rio) runs from the r9 repo without Harvey, and the golden-invariant gate is green (derived: Harvey cannot be archived while its flake owns the gates; note N4)
+- [ ] **RETIRE-04**: Every composed gate previously hosted in Harvey's flake (boot-r9-x64 smokes, net smoke, auth, drawterm, rio) runs from the r9 repo without Harvey, and the golden-invariant gate is green (derived; the gates themselves move to r9's flake in Phase 1 under HARN-08, so what remains here is running them with no Harvey tree at all; note N4)
 - [ ] **RETIRE-05**: `vendor/harvey/` is removed, the Harvey repository is archived read-only, and the r9 README carries the banner (owner deprecation checklist)
 
 ## v2 Requirements
@@ -232,6 +233,7 @@ Which phases cover which requirements. Each requirement maps to exactly one phas
 | HARN-05 | Phase 1 | Pending |
 | HARN-06 | Phase 1 | Pending |
 | HARN-07 | Phase 1 | Pending |
+| HARN-08 | Phase 1 | Pending |
 | DSGN-01 | Phase 2 | Pending |
 | DSGN-02 | Phase 2 | Pending |
 | DSGN-03 | Phase 2 | Pending |
@@ -353,8 +355,8 @@ Which phases cover which requirements. Each requirement maps to exactly one phas
 | RETIRE-05 | Phase 16 | Pending |
 
 **Coverage:**
-- v1 requirements: 126 total
-- Mapped to phases: 126
+- v1 requirements: 127 total
+- Mapped to phases: 127
 - Unmapped: 0
 
 ---
