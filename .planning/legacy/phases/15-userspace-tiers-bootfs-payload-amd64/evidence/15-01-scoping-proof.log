@@ -1,0 +1,22 @@
+=== 15-01 scoping proof 2026-11-10T17:29:11Z ===
+expected (computed from the tier data by the filters' own awk keep-rules):
+EXP:cmd-TARG: basename cal cat cmp comm date dc du echo fmt import join ls md5sum mntgen nm pr ps read screenlock sed seq sha1sum sleep sort srv stats strings sum tail test time tr uniq units wc winwatch xd 
+EXP:cmd-DIRS: cc 4a 4c 4l 5a 5c 5i 5l 6a 6c 6l 7a 7c 7l 8a 8c 8l 9660srv 9a 9c 9l 9nfs abaco acid acme aquarela astro auth aux awk bzip2 cb cc cdfs cec cfs cifs compress con cpp cwfs db dial dict diff disk dossrv eqn execnet exportfs ext2srv faces fax fossil fscfs git go grap graph grep gs gzip hoc htmlfmt htmlroff ia ic il iostats ip jpg jtagfs ka kc ki kl ld lex lp lzip map mk ndb page paqfs pic plot plumb postscript proof ptrace qa qc qi ql ramcfs ratfs rc replica rio sam samterm scat scuzz snap spell spin srvold9p ssh1 ssh2 syscall tapefs tarsplit tbl tcs telco troff troff2html upas usb va vac vc venti vi vl vnc vt webfs wikifs 
+EXP:aux-TARG: listen 
+EXP:aux-DIRS: flashfs gps mnihongo na realemu vga 
+EXP:ip-TARG: 6in4 dhcpclient ftpd gping hogports httpfile iscsisrv linklocal pppoe pptp pptpd rarpd rexexec rip rlogind telnet telnetd tftpd traceroute wol 
+EXP:auth-TARG: as asn12dsa asn12rsa authsrv changeuser convkeys convkeys2 cron debug dsa2pub dsa2ssh dsagen guard.srv keyfs login netkey newns none passwd pemdecode pemencode printnetkey readnvram rsa2csr rsa2pub rsa2ssh rsa2x509 rsafill rsagen uniq warning wrkey 
+EXP:fact-TARG: factotum 
+
+mk-evaluated (namespace dry runs):
+MK:cmd-TARG: basename cal cat cmp comm date dc du echo fmt import join ls md5sum mntgen nm pr ps read screenlock sed seq sha1sum sleep sort srv stats strings sum tail test time tr uniq units wc winwatch xd 
+MK:cmd-DIRS: 4a 4c 4l 5a 5c 5i 5l 6a 6c 6l 7a 7c 7l 8a 8c 8l 9660srv 9a 9c 9l 9nfs abaco acid acme aquarela astro auth aux awk bzip2 cb cc cc cdfs cec cfs cifs compress con cpp cwfs db dial dict diff disk dossrv eqn execnet exportfs ext2srv faces fax fossil fscfs git go grap graph grep gs gzip hoc htmlfmt htmlroff ia ic il iostats ip jpg jtagfs ka kc ki kl ld lex lp lzip map mk ndb page paqfs pic plot plumb postscript proof ptrace qa qc qi ql ramcfs ratfs rc replica rio sam samterm scat scuzz snap spell spin srvold9p ssh1 ssh2 syscall tapefs tarsplit tbl tcs telco troff troff2html upas usb va vac vc venti vi vl vnc vt webfs wikifs 
+MK:aux-TARG: listen 
+MK:aux-DIRS: flashfs gps mnihongo na realemu vga 
+MK:aux-TARG-SWEEP-COUNT:      38
+MK:ip-TARG: 6in4 dhcpclient ftpd gping hogports httpfile iscsisrv linklocal pppoe pptp pptpd rarpd rexexec rip rlogind telnet telnetd tftpd traceroute wol 
+MK:ip-DIRS: dhcpd ftpfs httpd imap4d ipconfig ppp snoopy 
+MK:auth-TARG: as asn12dsa asn12rsa authsrv changeuser convkeys convkeys2 cron debug dsa2pub dsa2ssh dsagen guard.srv keyfs login netkey newns none passwd pemdecode pemencode printnetkey readnvram rsa2csr rsa2pub rsa2ssh rsa2x509 rsafill rsagen uniq warning wrkey 
+MK:auth-DIRS: factotum secstore 
+MK:fact-TARG: factotum 
+MK:fact-TARG-SWEEP: factotum fgui 

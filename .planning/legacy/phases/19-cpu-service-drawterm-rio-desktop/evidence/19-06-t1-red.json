@@ -1,0 +1,13 @@
+{
+ "command": "cd sys/src/cmd/unix/drawterm && ./flagtest.sh ./drawterm ./cpu.c",
+ "exitCode": 1,
+ "output": "1..6\nnot ok 1 - -O bogus=1 rejected with usage\n# got: xinitscreen: XOpenDisplay:  [DISPLAY=<nil>]\nnot ok 2 - -O cpu=x,auth=y rejected with usage\n# got: xinitscreen: XOpenDisplay:  [DISPLAY=<nil>]\nnot ok 3 - -G with a valid -O spec dials with no window and no env reads\n# rc=0 first-lines: xinitscreen: XOpenDisplay:  [DISPLAY=<nil>]|\nnot ok 4 - -G session terminates on dial failure\n# rc=0 (124=timed out, 0=zero)\nnot ok 5 - env reads are behind the no-O path\n# getenv(cpu) at 120, ARGEND at 161\nok 6 - default ealgs stays rc4_256 sha1\n",
+ "targetTest": "-G with a valid -O spec dials with no window and no env reads",
+ "targetFile": "sys/src/cmd/unix/drawterm/flagtest.sh",
+ "expected": "not ok \u2014 the -O/-G flags do not exist yet: the run dies at xinitscreen/XOpenDisplay before arg parsing, and the env reads precede ARGBEGIN",
+ "actual": "1..6\nnot ok 1 - -O bogus=1 rejected with usage\n# got: xinitscreen: XOpenDisplay:  [DISPLAY=<nil>]\nnot ok 2 - -O cpu=x,auth=y rejected with usage\n# got: xinitscreen: XOpenDisplay:  [DISPLAY=<nil>]\nnot ok 3 - -G with a valid -O spec dials with no window and no env reads\n# rc=0 first-lines: xinitscreen: XOpenDisplay:  [DISPLAY=<nil>]|\nnot ok 4 - -G session terminates on dial failure\n# rc=0 (124=timed out, 0=zero)\nnot ok 5 - env reads are behind the no-O path\n# getenv(cpu) at 120, ARGEND at 161\nok 6 - default ealgs stays rc4_256 sha1\n",
+ "reportFormat": "tap",
+ "runStartedAt": "2026-11-14T22:55:00Z",
+ "notes": "TAP 13 from the committed flagtest.sh harness; 6 tests discovered, 5 failing on the planned assertions, 1 passing guard (ealgs default). RED for plan 19-06 task 1 behaviors 1-2.",
+ "semanticAssessment": "Target test executed and failed on the planned assertion: with no -O/-G support and screeninit ahead of arg parsing, a headless run exits at XOpenDisplay (rc 0) instead of reaching the dial, hostile env is untested because the flags are absent, and cpu.c:getenv('cpu') sits ahead of ARGEND. Failures are the planned behaviors absent, not fixture/crash noise."
+}

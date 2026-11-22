@@ -1,0 +1,51 @@
+19-10 Leg-1 dual-cons fix: host-pin RED/GREEN record (r9 port::namec_tests)
+=============================================================================
+
+RED (pre-fix tree at r9 dae4397, the pin the owner's guest runs):
+
+  $ cargo test -p port final_redirect_must_not_hijack_union_head_resolution
+  test namec_tests::final_redirect_must_not_hijack_union_head_resolution ... FAILED
+  assertion `left == right` failed: the union head's resolution must survive the final redirect
+    left: 0    (DEV_ROOT — the REPL-bound kmsg chan: the final redirect hijacked)
+   right: 3    (DEV_ENV — the union head the walk resolved)
+
+  Contrast pin green pre-fix (the session-shell crossing is load-bearing):
+  test namec_tests::repl_bind_final_cross_still_fires_without_union_head ... ok
+
+GREEN (r9 fe67c75, identity-keyed consults):
+
+  $ cargo test -p port --lib
+  test result: ok. 163 passed; 0 failed; 0 ignored
+  (161 pre-existing + final_redirect_must_not_hijack_union_head_resolution
+   + repl_bind_final_cross_still_fires_without_union_head
+   + mount_points_with_equal_qids_but_distinct_devno_stay_distinct)
+
+  $ cargo test -p port --tests          # all integration binaries
+  namespace_test 9 ok (unmount fixture re-keyed to the chan signature)
+  devmnt_test 14 ok, devenv 6, devpipe 7, fdgroup 4, devroot 4, ... all ok
+
+Live guest record: evidence/19-10-leg1-livecons-probe.log (the owner's
+live guest at the old pin — the discriminator FAILS: consctl hijacked to
+`devmnt: server error`) and evidence/19-10-leg1-livecons-verify.log (a
+fresh guest at the new pin, hostfwd remapped 17011/5671 — the same
+discriminator returns HEAD-WINS-CTL).  umprobe.log isolates the
+mount/unmount exec gap (the binaries are absent from the §15 image —
+not a kernel defect; see deferred-items' corrected item).
+
+FOD/choreography: two-derivation proof over fe67c75 (plain) + fcab10c
+(kernel-neutral marker clone, discarded) — byte-identical ISOs, file
+sha256 fb11e6b0aea3af0cd5df7e91816a0a8c66ce9d3f5c1403aa08712bda919fe38d,
+NAR sha256-BfU8eS6TA7x6HMx1Vv3h818DyJEMD6SxSDePI2lb3ME=, three-way
+agreed; FOD re-wired at r9 56109c3 (flake.nix only); pushed; hosted CI
+run 43887537787 SUCCESS at the pushed HEAD; harvey flake.lock advanced
+dae4397 -> 56109c3 lock-only (ff21c4786).
+
+Gates re-greened at the advanced pin (run after the owner's guest went
+down, freeing the canonical hostfwd ports):
+  drawterm-gate-x64: ALL STAGES PASS (§15 cpu boot, cpurc ladder,
+    hostfwd pair, drawterm -G pty session, p9any->p9sk1 password feed,
+    encrypted rc4_256 sha1 session, remote shell prompt + fed command,
+    teardown, zero FAIL, zero panic, redacted) — capture retained at
+    evidence/19-10-leg1-identitykey-gate.console
+  boot-r9-smoke-x64: ALL STAGES PASS (chain leg + cpu-chain leg with
+    the full cpurc ladder, hostfwd observation, zero FAIL/panic)

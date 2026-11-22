@@ -1,0 +1,32 @@
+narrow burstn=8 burstrounds=1 run 1: rc=0 05:28:37Z
+narrow burstn=8 burstrounds=1 run 2: rc=0 05:29:05Z
+narrow burstn=8 burstrounds=1 run 3: rc=0 05:29:31Z
+narrow burstn=8 burstrounds=1 run 4: rc=0 05:29:57Z
+narrow burstn=8 burstrounds=1 run 5: rc=0 05:30:22Z
+narrow burstn=4 burstrounds=1 run 1: rc=0 05:30:48Z
+narrow burstn=4 burstrounds=1 run 2: rc=0 05:31:13Z
+narrow burstn=4 burstrounds=1 run 3: rc=0 05:31:39Z
+narrow burstn=4 burstrounds=1 run 4: rc=0 05:32:04Z
+narrow burstn=4 burstrounds=1 run 5: rc=0 05:32:30Z
+narrow burstn=2 burstrounds=1 run 1: rc=0 05:32:55Z
+narrow burstn=2 burstrounds=1 run 2: rc=0 05:33:21Z
+narrow burstn=2 burstrounds=1 run 3: rc=0 05:33:46Z
+narrow burstn=2 burstrounds=1 run 4: rc=0 05:34:11Z
+narrow burstn=2 burstrounds=1 run 5: rc=0 05:34:37Z
+NARROW-DONE
+width burstn=4 burstrounds=512 run 1: rc=0 05:41:19Z
+width burstn=4 burstrounds=512 run 2: rc=0 05:44:43Z
+width burstn=4 burstrounds=512 run 3: rc=0 05:48:07Z
+width burstn=4 burstrounds=512 run 4: rc=0 05:51:30Z
+width burstn=4 burstrounds=512 run 5: rc=0 05:54:53Z
+width burstn=2 burstrounds=512 run 1: rc=0 05:58:16Z
+width burstn=2 burstrounds=512 run 2: rc=0 06:01:40Z
+width burstn=2 burstrounds=512 run 3: rc=0 06:05:04Z
+width burstn=2 burstrounds=512 run 4: rc=0 06:08:27Z
+width burstn=2 burstrounds=512 run 5: rc=0 06:11:50Z
+width burstn=1 burstrounds=512 run 1: rc=0 06:15:15Z
+width burstn=1 burstrounds=512 run 2: rc=0 06:18:39Z
+width burstn=1 burstrounds=512 run 3: rc=0 06:22:04Z
+width burstn=1 burstrounds=512 run 4: rc=0 06:25:28Z
+width burstn=1 burstrounds=512 run 5: rc=0 06:28:54Z
+WIDTH-DONE

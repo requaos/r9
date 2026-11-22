@@ -1,0 +1,8 @@
+# 19-10 Leg-1 cont 5 — RED evidence: the zero-count Twrite pin against
+# the UNFIXED devmnt write loop (fix stashed; the skip-when-empty loop
+# sends nothing — the cursor-arrow revert never reaches the server):
+    zero_length_write_sends_the_zero_count_twrite
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p port --test devmnt_test`

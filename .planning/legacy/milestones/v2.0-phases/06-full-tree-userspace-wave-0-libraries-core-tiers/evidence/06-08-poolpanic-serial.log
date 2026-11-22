@@ -1,0 +1,16 @@
+
+Plan 9
+mmuinit: vmstart 0xfffffffff0000000 vmunused 0xfffffffff02f4000 vmunmapped 0xfffffffff0400000 vmend 0xfffffffffe000000
+sys->pd 0x108003 0x108023
+l 3 0xffffff7fbfdfeff8 107023
+l 2 0xffffff7fbfdffff8 108023
+l 1 0xffffff7fbffffc00 e3
+l 1 0xffffff7fbffffc00 e3
+kernel alloc space = -268,435,456
+base 0xfffffffff02f8000 ptr 0xfffffffff02f8000 nunits 14485504
+apic0: hz 1012620000 max 10126200 min 101262 div 1
+pcirouting: BIOS workaround: PCI.0.1.3 at pin 1 link 96 irq 10 -> 9
+igbe: p->cls 0x0, setting to 0x10
+#l0: i82543: 1Gbps port 0xfebc0000 irq 11: 525400123456
+508M memory: 1936K+230M kernel, 276M user
+root is from (tcp)[tcp]: 

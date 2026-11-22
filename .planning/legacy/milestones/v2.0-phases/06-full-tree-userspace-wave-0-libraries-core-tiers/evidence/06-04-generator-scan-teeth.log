@@ -1,0 +1,12 @@
+ok: G1 sys/src/cmd/awk/unix.maketab magic=7f454c46
+ok: G2 sys/src/cmd/jpg/unix.rgbycc magic=7f454c46
+ok: G3 sys/src/cmd/jpg/unix.rgbrgbv magic=7f454c46
+ok: G4 sys/src/cmd/jtagfs/unix.genrtab magic=7f454c46
+ok: G5 sys/src/cmd/spell/o.pcode magic=7f454c46
+skip (G6 runs=never-for-aarch64): sys/src/cmd/gs/mkfile:150
+ok: G7 sys/src/cmd/usb/usbd/mkdev magic=23212f62
+skip (G8 runs=never-cross): sys/src/cmd/upas/bayes/mkfile:17
+NOTE: G9 sys/src/cmd/7l/mkcname magic=6564202d (script/text or unclassified; not .7)
+RED: target-built generator in the tree: sys/src/cmd/jpg/7.rgbycc
+whitelist armed: 7.genarch (G6's guarded row; not present in the tree — expected under the current gs guard)
+GENERATOR-SCAN-FAIL

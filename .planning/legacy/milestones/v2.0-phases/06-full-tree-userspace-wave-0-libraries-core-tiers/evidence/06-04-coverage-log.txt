@@ -1,0 +1,459 @@
+COVERAGE-VISIT /sys/src/cmd
+COVERAGE-VISIT /sys/src/cmd/cc
+COVERAGE-EXIT /sys/src/cmd/cc 0
+COVERAGE-VISIT /sys/src/cmd/4a
+COVERAGE-EXIT /sys/src/cmd/4a 0
+COVERAGE-VISIT /sys/src/cmd/4c
+COVERAGE-EXIT /sys/src/cmd/4c 0
+COVERAGE-VISIT /sys/src/cmd/4l
+COVERAGE-EXIT /sys/src/cmd/4l 0
+COVERAGE-VISIT /sys/src/cmd/5a
+COVERAGE-EXIT /sys/src/cmd/5a 0
+COVERAGE-VISIT /sys/src/cmd/5c
+COVERAGE-EXIT /sys/src/cmd/5c 0
+COVERAGE-VISIT /sys/src/cmd/5i
+COVERAGE-EXIT /sys/src/cmd/5i 1
+COVERAGE-VISIT /sys/src/cmd/5l
+COVERAGE-EXIT /sys/src/cmd/5l 0
+COVERAGE-VISIT /sys/src/cmd/6a
+COVERAGE-EXIT /sys/src/cmd/6a 0
+COVERAGE-VISIT /sys/src/cmd/6c
+COVERAGE-EXIT /sys/src/cmd/6c 0
+COVERAGE-VISIT /sys/src/cmd/6l
+COVERAGE-EXIT /sys/src/cmd/6l 0
+COVERAGE-VISIT /sys/src/cmd/7a
+COVERAGE-EXIT /sys/src/cmd/7a 0
+COVERAGE-VISIT /sys/src/cmd/7c
+COVERAGE-EXIT /sys/src/cmd/7c 0
+COVERAGE-VISIT /sys/src/cmd/7l
+COVERAGE-EXIT /sys/src/cmd/7l 0
+COVERAGE-VISIT /sys/src/cmd/8a
+COVERAGE-EXIT /sys/src/cmd/8a 0
+COVERAGE-VISIT /sys/src/cmd/8c
+COVERAGE-EXIT /sys/src/cmd/8c 0
+COVERAGE-VISIT /sys/src/cmd/8l
+COVERAGE-EXIT /sys/src/cmd/8l 0
+COVERAGE-VISIT /sys/src/cmd/9660srv
+COVERAGE-EXIT /sys/src/cmd/9660srv 0
+COVERAGE-VISIT /sys/src/cmd/9a
+COVERAGE-EXIT /sys/src/cmd/9a 0
+COVERAGE-VISIT /sys/src/cmd/9c
+COVERAGE-EXIT /sys/src/cmd/9c 0
+COVERAGE-VISIT /sys/src/cmd/9l
+COVERAGE-EXIT /sys/src/cmd/9l 0
+COVERAGE-VISIT /sys/src/cmd/9nfs
+COVERAGE-EXIT /sys/src/cmd/9nfs 0
+COVERAGE-VISIT /sys/src/cmd/abaco
+COVERAGE-EXIT /sys/src/cmd/abaco 1
+COVERAGE-VISIT /sys/src/cmd/acid
+COVERAGE-EXIT /sys/src/cmd/acid 1
+COVERAGE-VISIT /sys/src/cmd/acme
+COVERAGE-EXIT /sys/src/cmd/acme 1
+COVERAGE-VISIT /sys/src/cmd/aquarela
+COVERAGE-EXIT /sys/src/cmd/aquarela 0
+COVERAGE-VISIT /sys/src/cmd/astro
+COVERAGE-EXIT /sys/src/cmd/astro 0
+COVERAGE-VISIT /sys/src/cmd/auth
+COVERAGE-VISIT /sys/src/cmd/auth/lib
+COVERAGE-EXIT /sys/src/cmd/auth/lib 0
+COVERAGE-VISIT /sys/src/cmd/auth/lib
+COVERAGE-EXIT /sys/src/cmd/auth/lib 0
+COVERAGE-VISIT /sys/src/cmd/auth/factotum
+COVERAGE-EXIT /sys/src/cmd/auth/factotum 0
+COVERAGE-VISIT /sys/src/cmd/auth/secstore
+COVERAGE-EXIT /sys/src/cmd/auth/secstore 0
+COVERAGE-EXIT /sys/src/cmd/auth 0
+COVERAGE-VISIT /sys/src/cmd/aux
+COVERAGE-VISIT /sys/src/cmd/aux/mnihongo
+COVERAGE-EXIT /sys/src/cmd/aux/mnihongo 0
+COVERAGE-VISIT /sys/src/cmd/aux/flashfs
+COVERAGE-EXIT /sys/src/cmd/aux/flashfs 0
+COVERAGE-VISIT /sys/src/cmd/aux/gps
+COVERAGE-EXIT /sys/src/cmd/aux/gps 0
+COVERAGE-VISIT /sys/src/cmd/aux/na
+COVERAGE-EXIT /sys/src/cmd/aux/na 1
+COVERAGE-EXIT /sys/src/cmd/aux 1
+COVERAGE-VISIT /sys/src/cmd/awk
+COVERAGE-VISIT /sys/src/cmd/awk
+COVERAGE-EXIT /sys/src/cmd/awk 0
+COVERAGE-EXIT /sys/src/cmd/awk 0
+COVERAGE-VISIT /sys/src/cmd/bzip2
+COVERAGE-VISIT /sys/src/cmd/bzip2/lib
+COVERAGE-EXIT /sys/src/cmd/bzip2/lib 0
+COVERAGE-EXIT /sys/src/cmd/bzip2 0
+COVERAGE-VISIT /sys/src/cmd/cb
+COVERAGE-EXIT /sys/src/cmd/cb 0
+COVERAGE-VISIT /sys/src/cmd/cc
+COVERAGE-EXIT /sys/src/cmd/cc 0
+COVERAGE-VISIT /sys/src/cmd/cdfs
+COVERAGE-EXIT /sys/src/cmd/cdfs 0
+COVERAGE-VISIT /sys/src/cmd/cec
+COVERAGE-EXIT /sys/src/cmd/cec 0
+COVERAGE-VISIT /sys/src/cmd/cfs
+COVERAGE-EXIT /sys/src/cmd/cfs 0
+COVERAGE-VISIT /sys/src/cmd/cifs
+COVERAGE-EXIT /sys/src/cmd/cifs 0
+COVERAGE-VISIT /sys/src/cmd/compress
+COVERAGE-EXIT /sys/src/cmd/compress 1
+COVERAGE-VISIT /sys/src/cmd/con
+COVERAGE-EXIT /sys/src/cmd/con 0
+COVERAGE-VISIT /sys/src/cmd/cpp
+COVERAGE-EXIT /sys/src/cmd/cpp 1
+COVERAGE-VISIT /sys/src/cmd/cwfs
+COVERAGE-VISIT /sys/src/cmd/cwfs/cwfs
+COVERAGE-EXIT /sys/src/cmd/cwfs/cwfs 0
+COVERAGE-EXIT /sys/src/cmd/cwfs 0
+COVERAGE-VISIT /sys/src/cmd/db
+COVERAGE-EXIT /sys/src/cmd/db 1
+COVERAGE-VISIT /sys/src/cmd/dial
+COVERAGE-EXIT /sys/src/cmd/dial 0
+COVERAGE-VISIT /sys/src/cmd/dict
+COVERAGE-EXIT /sys/src/cmd/dict 0
+COVERAGE-VISIT /sys/src/cmd/diff
+COVERAGE-EXIT /sys/src/cmd/diff 0
+COVERAGE-VISIT /sys/src/cmd/disk
+COVERAGE-VISIT /sys/src/cmd/disk/9660
+COVERAGE-EXIT /sys/src/cmd/disk/9660 0
+COVERAGE-VISIT /sys/src/cmd/disk/kfs
+COVERAGE-EXIT /sys/src/cmd/disk/kfs 0
+COVERAGE-VISIT /sys/src/cmd/disk/prep
+COVERAGE-EXIT /sys/src/cmd/disk/prep 0
+COVERAGE-EXIT /sys/src/cmd/disk 0
+COVERAGE-VISIT /sys/src/cmd/dossrv
+COVERAGE-EXIT /sys/src/cmd/dossrv 0
+COVERAGE-VISIT /sys/src/cmd/eqn
+COVERAGE-EXIT /sys/src/cmd/eqn 1
+COVERAGE-VISIT /sys/src/cmd/execnet
+COVERAGE-EXIT /sys/src/cmd/execnet 0
+COVERAGE-VISIT /sys/src/cmd/exportfs
+COVERAGE-EXIT /sys/src/cmd/exportfs 0
+COVERAGE-VISIT /sys/src/cmd/ext2srv
+COVERAGE-EXIT /sys/src/cmd/ext2srv 0
+COVERAGE-VISIT /sys/src/cmd/faces
+COVERAGE-EXIT /sys/src/cmd/faces 1
+COVERAGE-VISIT /sys/src/cmd/fax
+COVERAGE-EXIT /sys/src/cmd/fax 0
+COVERAGE-VISIT /sys/src/cmd/fossil
+COVERAGE-EXIT /sys/src/cmd/fossil 1
+COVERAGE-VISIT /sys/src/cmd/fscfs
+COVERAGE-EXIT /sys/src/cmd/fscfs 0
+COVERAGE-VISIT /sys/src/cmd/git
+COVERAGE-EXIT /sys/src/cmd/git 0
+COVERAGE-VISIT /sys/src/cmd/go
+COVERAGE-EXIT /sys/src/cmd/go 0
+COVERAGE-VISIT /sys/src/cmd/grap
+COVERAGE-EXIT /sys/src/cmd/grap 1
+COVERAGE-VISIT /sys/src/cmd/graph
+COVERAGE-EXIT /sys/src/cmd/graph 1
+COVERAGE-VISIT /sys/src/cmd/grep
+COVERAGE-EXIT /sys/src/cmd/grep 0
+COVERAGE-VISIT /sys/src/cmd/gs
+COVERAGE-EXIT /sys/src/cmd/gs 1
+COVERAGE-VISIT /sys/src/cmd/gzip
+COVERAGE-EXIT /sys/src/cmd/gzip 0
+COVERAGE-VISIT /sys/src/cmd/hoc
+COVERAGE-EXIT /sys/src/cmd/hoc 0
+COVERAGE-VISIT /sys/src/cmd/htmlfmt
+COVERAGE-EXIT /sys/src/cmd/htmlfmt 1
+COVERAGE-VISIT /sys/src/cmd/htmlroff
+COVERAGE-EXIT /sys/src/cmd/htmlroff 0
+COVERAGE-VISIT /sys/src/cmd/ia
+COVERAGE-EXIT /sys/src/cmd/ia 0
+COVERAGE-VISIT /sys/src/cmd/ic
+COVERAGE-EXIT /sys/src/cmd/ic 0
+COVERAGE-VISIT /sys/src/cmd/il
+COVERAGE-EXIT /sys/src/cmd/il 0
+COVERAGE-VISIT /sys/src/cmd/iostats
+COVERAGE-EXIT /sys/src/cmd/iostats 0
+COVERAGE-VISIT /sys/src/cmd/ip
+COVERAGE-VISIT /sys/src/cmd/ip/ftpfs
+COVERAGE-EXIT /sys/src/cmd/ip/ftpfs 0
+COVERAGE-VISIT /sys/src/cmd/ip/dhcpd
+COVERAGE-EXIT /sys/src/cmd/ip/dhcpd 0
+COVERAGE-VISIT /sys/src/cmd/ip/httpd
+COVERAGE-EXIT /sys/src/cmd/ip/httpd 1
+COVERAGE-EXIT /sys/src/cmd/ip 1
+COVERAGE-VISIT /sys/src/cmd/jpg
+COVERAGE-EXIT /sys/src/cmd/jpg 1
+COVERAGE-VISIT /sys/src/cmd/jtagfs
+COVERAGE-VISIT /sys/src/cmd/jtagfs
+COVERAGE-EXIT /sys/src/cmd/jtagfs 0
+COVERAGE-EXIT /sys/src/cmd/jtagfs 0
+COVERAGE-VISIT /sys/src/cmd/ka
+COVERAGE-EXIT /sys/src/cmd/ka 0
+COVERAGE-VISIT /sys/src/cmd/kc
+COVERAGE-EXIT /sys/src/cmd/kc 0
+COVERAGE-VISIT /sys/src/cmd/ki
+COVERAGE-EXIT /sys/src/cmd/ki 1
+COVERAGE-VISIT /sys/src/cmd/kl
+COVERAGE-EXIT /sys/src/cmd/kl 0
+COVERAGE-VISIT /sys/src/cmd/ld
+COVERAGE-EXIT /sys/src/cmd/ld 0
+COVERAGE-VISIT /sys/src/cmd/lex
+COVERAGE-EXIT /sys/src/cmd/lex 0
+COVERAGE-VISIT /sys/src/cmd/lp
+COVERAGE-EXIT /sys/src/cmd/lp 1
+COVERAGE-VISIT /sys/src/cmd/lzip
+COVERAGE-EXIT /sys/src/cmd/lzip 1
+COVERAGE-VISIT /sys/src/cmd/map
+COVERAGE-VISIT /sys/src/cmd/map/libmap
+COVERAGE-EXIT /sys/src/cmd/map/libmap 0
+COVERAGE-EXIT /sys/src/cmd/map 1
+COVERAGE-VISIT /sys/src/cmd/mk
+COVERAGE-EXIT /sys/src/cmd/mk 0
+COVERAGE-VISIT /sys/src/cmd/ndb
+COVERAGE-EXIT /sys/src/cmd/ndb 0
+COVERAGE-VISIT /sys/src/cmd/page
+COVERAGE-EXIT /sys/src/cmd/page 1
+COVERAGE-VISIT /sys/src/cmd/paqfs
+COVERAGE-EXIT /sys/src/cmd/paqfs 0
+COVERAGE-VISIT /sys/src/cmd/pic
+COVERAGE-EXIT /sys/src/cmd/pic 1
+COVERAGE-VISIT /sys/src/cmd/plot
+COVERAGE-VISIT /sys/src/cmd/plot/libplot
+COVERAGE-EXIT /sys/src/cmd/plot/libplot 0
+COVERAGE-EXIT /sys/src/cmd/plot 1
+COVERAGE-VISIT /sys/src/cmd/plumb
+COVERAGE-EXIT /sys/src/cmd/plumb 1
+COVERAGE-VISIT /sys/src/cmd/postscript
+COVERAGE-VISIT /sys/src/cmd/postscript/common
+COVERAGE-EXIT /sys/src/cmd/postscript/common 1
+COVERAGE-EXIT /sys/src/cmd/postscript 1
+COVERAGE-VISIT /sys/src/cmd/proof
+COVERAGE-EXIT /sys/src/cmd/proof 0
+COVERAGE-VISIT /sys/src/cmd/ptrace
+COVERAGE-EXIT /sys/src/cmd/ptrace 1
+COVERAGE-VISIT /sys/src/cmd/qa
+COVERAGE-EXIT /sys/src/cmd/qa 0
+COVERAGE-VISIT /sys/src/cmd/qc
+COVERAGE-EXIT /sys/src/cmd/qc 0
+COVERAGE-VISIT /sys/src/cmd/qi
+COVERAGE-EXIT /sys/src/cmd/qi 1
+COVERAGE-VISIT /sys/src/cmd/ql
+COVERAGE-EXIT /sys/src/cmd/ql 0
+COVERAGE-VISIT /sys/src/cmd/ramcfs
+COVERAGE-EXIT /sys/src/cmd/ramcfs 0
+COVERAGE-VISIT /sys/src/cmd/ratfs
+COVERAGE-EXIT /sys/src/cmd/ratfs 0
+COVERAGE-VISIT /sys/src/cmd/rc
+COVERAGE-EXIT /sys/src/cmd/rc 0
+COVERAGE-VISIT /sys/src/cmd/replica
+COVERAGE-EXIT /sys/src/cmd/replica 0
+COVERAGE-VISIT /sys/src/cmd/rio
+COVERAGE-EXIT /sys/src/cmd/rio 1
+COVERAGE-VISIT /sys/src/cmd/sam
+COVERAGE-EXIT /sys/src/cmd/sam 1
+COVERAGE-VISIT /sys/src/cmd/samterm
+COVERAGE-EXIT /sys/src/cmd/samterm 1
+COVERAGE-VISIT /sys/src/cmd/scat
+COVERAGE-EXIT /sys/src/cmd/scat 1
+COVERAGE-VISIT /sys/src/cmd/scuzz
+COVERAGE-EXIT /sys/src/cmd/scuzz 0
+COVERAGE-VISIT /sys/src/cmd/snap
+COVERAGE-EXIT /sys/src/cmd/snap 1
+COVERAGE-VISIT /sys/src/cmd/spell
+COVERAGE-VISIT /sys/src/cmd/spell
+COVERAGE-EXIT /sys/src/cmd/spell 0
+COVERAGE-EXIT /sys/src/cmd/spell 0
+COVERAGE-VISIT /sys/src/cmd/spin
+COVERAGE-EXIT /sys/src/cmd/spin 1
+COVERAGE-VISIT /sys/src/cmd/srvold9p
+COVERAGE-EXIT /sys/src/cmd/srvold9p 0
+COVERAGE-VISIT /sys/src/cmd/ssh1
+COVERAGE-EXIT /sys/src/cmd/ssh1 0
+COVERAGE-VISIT /sys/src/cmd/ssh2
+COVERAGE-EXIT /sys/src/cmd/ssh2 0
+COVERAGE-VISIT /sys/src/cmd/syscall
+COVERAGE-EXIT /sys/src/cmd/syscall 0
+COVERAGE-VISIT /sys/src/cmd/tapefs
+COVERAGE-EXIT /sys/src/cmd/tapefs 0
+COVERAGE-VISIT /sys/src/cmd/tarsplit
+COVERAGE-EXIT /sys/src/cmd/tarsplit 0
+COVERAGE-VISIT /sys/src/cmd/tbl
+COVERAGE-EXIT /sys/src/cmd/tbl 0
+COVERAGE-VISIT /sys/src/cmd/tcs
+COVERAGE-EXIT /sys/src/cmd/tcs 0
+COVERAGE-VISIT /sys/src/cmd/telco
+COVERAGE-EXIT /sys/src/cmd/telco 0
+COVERAGE-VISIT /sys/src/cmd/troff
+COVERAGE-EXIT /sys/src/cmd/troff 1
+COVERAGE-VISIT /sys/src/cmd/troff2html
+COVERAGE-EXIT /sys/src/cmd/troff2html 0
+COVERAGE-VISIT /sys/src/cmd/upas
+COVERAGE-VISIT /sys/src/cmd/upas/common
+COVERAGE-EXIT /sys/src/cmd/upas/common 0
+COVERAGE-VISIT /sys/src/cmd/upas/smtp
+COVERAGE-EXIT /sys/src/cmd/upas/smtp 0
+COVERAGE-VISIT /sys/src/cmd/upas/alias
+COVERAGE-EXIT /sys/src/cmd/upas/alias 0
+COVERAGE-VISIT /sys/src/cmd/upas/fs
+COVERAGE-EXIT /sys/src/cmd/upas/fs 1
+COVERAGE-EXIT /sys/src/cmd/upas 1
+COVERAGE-VISIT /sys/src/cmd/usb
+COVERAGE-VISIT /sys/src/cmd/usb/lib
+COVERAGE-EXIT /sys/src/cmd/usb/lib 0
+COVERAGE-VISIT /sys/src/cmd/usb/audio
+COVERAGE-EXIT /sys/src/cmd/usb/audio 0
+COVERAGE-VISIT /sys/src/cmd/usb/disk
+COVERAGE-EXIT /sys/src/cmd/usb/disk 0
+COVERAGE-VISIT /sys/src/cmd/usb/ether
+COVERAGE-EXIT /sys/src/cmd/usb/ether 0
+COVERAGE-VISIT /sys/src/cmd/usb/kb
+COVERAGE-EXIT /sys/src/cmd/usb/kb 0
+COVERAGE-VISIT /sys/src/cmd/usb/print
+COVERAGE-EXIT /sys/src/cmd/usb/print 0
+COVERAGE-VISIT /sys/src/cmd/usb/serial
+COVERAGE-EXIT /sys/src/cmd/usb/serial 0
+COVERAGE-VISIT /sys/src/cmd/usb/usbd
+COVERAGE-EXIT /sys/src/cmd/usb/usbd 0
+COVERAGE-EXIT /sys/src/cmd/usb 0
+COVERAGE-VISIT /sys/src/cmd/va
+COVERAGE-EXIT /sys/src/cmd/va 0
+COVERAGE-VISIT /sys/src/cmd/vac
+COVERAGE-EXIT /sys/src/cmd/vac 1
+COVERAGE-VISIT /sys/src/cmd/vc
+COVERAGE-EXIT /sys/src/cmd/vc 0
+COVERAGE-VISIT /sys/src/cmd/venti
+COVERAGE-VISIT /sys/src/cmd/venti/srv
+COVERAGE-EXIT /sys/src/cmd/venti/srv 1
+COVERAGE-EXIT /sys/src/cmd/venti 1
+COVERAGE-VISIT /sys/src/cmd/vi
+COVERAGE-EXIT /sys/src/cmd/vi 1
+COVERAGE-VISIT /sys/src/cmd/vl
+COVERAGE-EXIT /sys/src/cmd/vl 0
+COVERAGE-VISIT /sys/src/cmd/vnc
+COVERAGE-EXIT /sys/src/cmd/vnc 1
+COVERAGE-VISIT /sys/src/cmd/vt
+COVERAGE-EXIT /sys/src/cmd/vt 0
+COVERAGE-VISIT /sys/src/cmd/webfs
+COVERAGE-EXIT /sys/src/cmd/webfs 1
+COVERAGE-VISIT /sys/src/cmd/wikifs
+COVERAGE-EXIT /sys/src/cmd/wikifs 0
+COVERAGE-EXIT /sys/src/cmd 1
+COVERAGE-VISIT /sys/src/games
+COVERAGE-VISIT /sys/src/games/mahjongg
+COVERAGE-EXIT /sys/src/games/mahjongg 0
+COVERAGE-VISIT /sys/src/games/mp3dec
+COVERAGE-EXIT /sys/src/games/mp3dec 0
+COVERAGE-VISIT /sys/src/games/mp3enc
+COVERAGE-EXIT /sys/src/games/mp3enc 1
+COVERAGE-VISIT /sys/src/games/music
+COVERAGE-VISIT /sys/src/games/music/playlistfs
+COVERAGE-EXIT /sys/src/games/music/playlistfs 0
+COVERAGE-VISIT /sys/src/games/music/jukefs
+COVERAGE-EXIT /sys/src/games/music/jukefs 0
+COVERAGE-VISIT /sys/src/games/music/jukebox
+COVERAGE-EXIT /sys/src/games/music/jukebox 0
+COVERAGE-EXIT /sys/src/games/music 0
+COVERAGE-VISIT /sys/src/games/sokoban
+COVERAGE-EXIT /sys/src/games/sokoban 0
+COVERAGE-VISIT /sys/src/games/sudoku
+COVERAGE-EXIT /sys/src/games/sudoku 0
+COVERAGE-EXIT /sys/src/games 1
+SECOND-CHANCE /sys/src/cmd/aux/realemu
+COVERAGE-VISIT /sys/src/cmd/aux/realemu
+COVERAGE-EXIT /sys/src/cmd/aux/realemu 0
+SECOND-CHANCE /sys/src/cmd/aux/vga
+COVERAGE-VISIT /sys/src/cmd/aux/vga
+COVERAGE-EXIT /sys/src/cmd/aux/vga 0
+SECOND-CHANCE /sys/src/cmd/ip/imap4d
+COVERAGE-VISIT /sys/src/cmd/ip/imap4d
+COVERAGE-EXIT /sys/src/cmd/ip/imap4d 0
+SECOND-CHANCE /sys/src/cmd/ip/ipconfig
+COVERAGE-VISIT /sys/src/cmd/ip/ipconfig
+COVERAGE-EXIT /sys/src/cmd/ip/ipconfig 0
+SECOND-CHANCE /sys/src/cmd/ip/ppp
+COVERAGE-VISIT /sys/src/cmd/ip/ppp
+COVERAGE-EXIT /sys/src/cmd/ip/ppp 0
+SECOND-CHANCE /sys/src/cmd/ip/snoopy
+COVERAGE-VISIT /sys/src/cmd/ip/snoopy
+COVERAGE-EXIT /sys/src/cmd/ip/snoopy 0
+SECOND-CHANCE /sys/src/cmd/postscript/cropmarks
+COVERAGE-VISIT /sys/src/cmd/postscript/cropmarks
+COVERAGE-EXIT /sys/src/cmd/postscript/cropmarks 0
+SECOND-CHANCE /sys/src/cmd/postscript/download
+COVERAGE-VISIT /sys/src/cmd/postscript/download
+COVERAGE-EXIT /sys/src/cmd/postscript/download 1
+SECOND-CHANCE /sys/src/cmd/postscript/g3p9bit
+COVERAGE-VISIT /sys/src/cmd/postscript/g3p9bit
+COVERAGE-EXIT /sys/src/cmd/postscript/g3p9bit 0
+SECOND-CHANCE /sys/src/cmd/postscript/grabit
+COVERAGE-VISIT /sys/src/cmd/postscript/grabit
+COVERAGE-EXIT /sys/src/cmd/postscript/grabit 0
+SECOND-CHANCE /sys/src/cmd/postscript/hardcopy
+COVERAGE-VISIT /sys/src/cmd/postscript/hardcopy
+COVERAGE-EXIT /sys/src/cmd/postscript/hardcopy 0
+SECOND-CHANCE /sys/src/cmd/postscript/mpictures
+COVERAGE-VISIT /sys/src/cmd/postscript/mpictures
+COVERAGE-EXIT /sys/src/cmd/postscript/mpictures 0
+SECOND-CHANCE /sys/src/cmd/postscript/p9bitpost
+COVERAGE-VISIT /sys/src/cmd/postscript/p9bitpost
+COVERAGE-EXIT /sys/src/cmd/postscript/p9bitpost 1
+SECOND-CHANCE /sys/src/cmd/postscript/postgif
+COVERAGE-VISIT /sys/src/cmd/postscript/postgif
+COVERAGE-EXIT /sys/src/cmd/postscript/postgif 1
+SECOND-CHANCE /sys/src/cmd/postscript/postprint
+COVERAGE-VISIT /sys/src/cmd/postscript/postprint
+COVERAGE-EXIT /sys/src/cmd/postscript/postprint 1
+SECOND-CHANCE /sys/src/cmd/postscript/postreverse
+COVERAGE-VISIT /sys/src/cmd/postscript/postreverse
+COVERAGE-EXIT /sys/src/cmd/postscript/postreverse 1
+SECOND-CHANCE /sys/src/cmd/postscript/posttek
+COVERAGE-VISIT /sys/src/cmd/postscript/posttek
+COVERAGE-EXIT /sys/src/cmd/postscript/posttek 1
+SECOND-CHANCE /sys/src/cmd/postscript/printfont
+COVERAGE-VISIT /sys/src/cmd/postscript/printfont
+COVERAGE-EXIT /sys/src/cmd/postscript/printfont 0
+SECOND-CHANCE /sys/src/cmd/postscript/psencoding
+COVERAGE-VISIT /sys/src/cmd/postscript/psencoding
+COVERAGE-EXIT /sys/src/cmd/postscript/psencoding 0
+SECOND-CHANCE /sys/src/cmd/postscript/psfiles
+COVERAGE-VISIT /sys/src/cmd/postscript/psfiles
+COVERAGE-EXIT /sys/src/cmd/postscript/psfiles 0
+SECOND-CHANCE /sys/src/cmd/postscript/tcpostio
+COVERAGE-VISIT /sys/src/cmd/postscript/tcpostio
+COVERAGE-EXIT /sys/src/cmd/postscript/tcpostio 1
+SECOND-CHANCE /sys/src/cmd/postscript/text2post
+COVERAGE-VISIT /sys/src/cmd/postscript/text2post
+COVERAGE-EXIT /sys/src/cmd/postscript/text2post 0
+SECOND-CHANCE /sys/src/cmd/postscript/tr2post
+COVERAGE-VISIT /sys/src/cmd/postscript/tr2post
+COVERAGE-EXIT /sys/src/cmd/postscript/tr2post 1
+SECOND-CHANCE /sys/src/cmd/upas/bayes
+COVERAGE-VISIT /sys/src/cmd/upas/bayes
+COVERAGE-EXIT /sys/src/cmd/upas/bayes 0
+SECOND-CHANCE /sys/src/cmd/upas/filterkit
+COVERAGE-VISIT /sys/src/cmd/upas/filterkit
+COVERAGE-EXIT /sys/src/cmd/upas/filterkit 0
+SECOND-CHANCE /sys/src/cmd/upas/marshal
+COVERAGE-VISIT /sys/src/cmd/upas/marshal
+COVERAGE-EXIT /sys/src/cmd/upas/marshal 0
+SECOND-CHANCE /sys/src/cmd/upas/misc
+COVERAGE-VISIT /sys/src/cmd/upas/misc
+COVERAGE-EXIT /sys/src/cmd/upas/misc 0
+SECOND-CHANCE /sys/src/cmd/upas/ml
+COVERAGE-VISIT /sys/src/cmd/upas/ml
+COVERAGE-VISIT /sys/src/cmd/upas/smtp
+COVERAGE-EXIT /sys/src/cmd/upas/smtp 0
+COVERAGE-EXIT /sys/src/cmd/upas/ml 0
+SECOND-CHANCE /sys/src/cmd/upas/ned
+COVERAGE-VISIT /sys/src/cmd/upas/ned
+COVERAGE-EXIT /sys/src/cmd/upas/ned 1
+SECOND-CHANCE /sys/src/cmd/upas/pop3
+COVERAGE-VISIT /sys/src/cmd/upas/pop3
+COVERAGE-EXIT /sys/src/cmd/upas/pop3 0
+SECOND-CHANCE /sys/src/cmd/upas/q
+COVERAGE-VISIT /sys/src/cmd/upas/q
+COVERAGE-EXIT /sys/src/cmd/upas/q 0
+SECOND-CHANCE /sys/src/cmd/upas/scanmail
+COVERAGE-VISIT /sys/src/cmd/upas/scanmail
+COVERAGE-EXIT /sys/src/cmd/upas/scanmail 0
+SECOND-CHANCE /sys/src/cmd/upas/send
+COVERAGE-VISIT /sys/src/cmd/upas/send
+COVERAGE-EXIT /sys/src/cmd/upas/send 0
+SECOND-CHANCE /sys/src/cmd/upas/unesc
+COVERAGE-VISIT /sys/src/cmd/upas/unesc
+COVERAGE-EXIT /sys/src/cmd/upas/unesc 0
+SECOND-CHANCE /sys/src/cmd/upas/vf
+COVERAGE-VISIT /sys/src/cmd/upas/vf
+COVERAGE-EXIT /sys/src/cmd/upas/vf 0

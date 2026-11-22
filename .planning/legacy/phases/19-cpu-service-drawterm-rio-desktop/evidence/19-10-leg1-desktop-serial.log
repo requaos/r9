@@ -1,0 +1,551 @@
+this derivation will be built:
+  /nix/store/6rsfjg9wzbdasrzxkcvmg10799a1gng3-harvey-boot-r9-x64.drv
+building '/nix/store/6rsfjg9wzbdasrzxkcvmg10799a1gng3-harvey-boot-r9-x64.drv'...
+== r9 kernel package: /nix/store/dp9ana4wsp65zzsr32d7k049nixv9sqg-r9-kernel-x64-dae4397
+   kernel:     /nix/store/dp9ana4wsp65zzsr32d7k049nixv9sqg-r9-kernel-x64-dae4397/kernel-x64.elf
+   iso-builder: /nix/store/4wmj3a1gwklqiqbnlvkgdqznvrmnqlad-r9-iso-builder/bin/r9-iso-builder
+   netdev emitter: /nix/store/x71hl3kzvjz7mnvsajkf6x30s8aza5xb-r9-netdev-args-dae4397/bin/r9-netdev-args
+   shape:      q35 accel=kvm cpu=host net=slirp
+   system:     cpu
+   full system: net + auth + cpu listener together (the §15 image + the bootconf append; cpurc's ladder brings the listeners up — D-07's session recipe can dial 127.0.0.1:17010/5670 once LISTEN-17010 prints)
+== R9_SKIP_BUILD=1 — skipping the userland build (iteration hatch; not the documented command)
+== step 2/3: bake the bootfs images (build/x86_64/mkimage.sh — log tee'd to /tmp/boot-r9-x64-bake.Rn7SCb; §15's bootfs-cpu.paq is the selection)
+== PASS: baked /home/req/code/harvey/build/x86_64/out/bootfs.paq (106179 bytes; header 529ab12b trailer 6b46e688; KERNDATE 1794787052)
+chain manifest: /boot/boot staged
+chain manifest: /boot/paqfs staged
+chain manifest: /amd64/init staged
+chain manifest: /amd64/bin/rc staged
+chain manifest: /amd64/bin/ls staged
+chain manifest: /amd64/bin/cat staged
+chain manifest: /amd64/bin/echo staged
+chain manifest: /amd64/bin/ps staged
+chain manifest: /rc/lib/rcmain staged
+chain manifest: /rc/bin/termrc staged
+chain manifest: /lib/namespace staged
+chain manifest: /adm/timezone/local staged
+chain manifest: /usr/glenda/lib/profile staged
+== PASS: baked /home/req/code/harvey/build/x86_64/out/bootfs-chain.paq (389333 bytes; header 529ab12b trailer 6b46e688; KERNDATE 1794787052)
+== witness manifest verified: 38 members match the donor venue's embed set
+tier manifest: /boot/boot staged
+tier manifest: /boot/paqfs staged
+tier manifest: /amd64/init staged
+tier manifest: /amd64/bin/rc staged
+tier manifest: /amd64/bin/ls staged
+tier manifest: /amd64/bin/cat staged
+tier manifest: /amd64/bin/echo staged
+tier manifest: /amd64/bin/ps staged
+tier manifest: /rc/lib/rcmain staged
+tier manifest: /rc/bin/termrc staged
+tier manifest: /lib/namespace staged
+tier manifest: /adm/timezone/local staged
+tier manifest: /usr/glenda/lib/profile staged
+tier manifest: /lib/tier1-sweep.rc staged
+tier manifest: /lib/tier1/sentinel.txt staged
+tier manifest: /lib/tier1/nm-input.6 staged
+tier manifest: 37 h* sweep binaries staged (computed from tiers/tier1-cmds.txt)
+== PASS: baked /home/req/code/harvey/build/x86_64/out/bootfs-tier.paq (1864948 bytes; 37 h* binaries; header 529ab12b trailer 6b46e688; KERNDATE 1794787052)
+net manifest: /boot/boot staged
+net manifest: /boot/paqfs staged
+net manifest: /amd64/init staged
+net manifest: /amd64/bin/rc staged
+net manifest: /amd64/bin/ls staged
+net manifest: /amd64/bin/cat staged
+net manifest: /amd64/bin/echo staged
+net manifest: /amd64/bin/ps staged
+net manifest: /amd64/bin/ip/ipconfig staged
+net manifest: /amd64/bin/ip/ping staged
+net manifest: /amd64/bin/ip/udpecho staged
+net manifest: /amd64/bin/tcpecho staged
+net manifest: /amd64/bin/tcpblast staged
+net manifest: /amd64/bin/netblast staged
+net manifest: /amd64/bin/grep staged
+net manifest: /amd64/bin/sed staged
+net manifest: /amd64/bin/dd staged
+net manifest: /amd64/bin/wc staged
+net manifest: /amd64/bin/sha1sum staged
+net manifest: /amd64/bin/test staged
+net manifest: /amd64/bin/bind staged
+net manifest: /amd64/bin/dc staged
+net manifest: /rc/lib/rcmain staged
+net manifest: /rc/bin/termrc staged
+net manifest: /lib/namespace staged
+net manifest: /adm/timezone/local staged
+net manifest: /usr/glenda/lib/profile staged
+net manifest: /lib/netaddr.rc staged
+net manifest: /lib/netip-loopback.rc staged
+net manifest: /lib/netip-static.rc staged
+net manifest: /lib/netip-dhcp.rc staged
+net manifest: /lib/netip-tcp.rc staged
+net manifest: /lib/netip-tap.rc staged
+== PASS: baked /home/req/code/harvey/build/x86_64/out/bootfs-net.paq (907335 bytes; header 529ab12b trailer 6b46e688; KERNDATE 1794787052)
+payload manifest: /lib/ndb/local substituted from lib/ndb/local.template (the netaddr seam's slirp leg + ether; the 18-04 auth row stripped — no domain in this image) [services]
+payload manifest: /lib/font/bit staged (tree, 4303 files) [services]
+payload manifest: /usr/glenda/lib/profile staged [services]
+payload manifest: /lib/ndb/local staged [services]
+payload manifest: font /lib/font/bit/lucm/unicode.9.font staged [services]
+payload manifest: font /lib/font/bit/lucidasans/euro.8.font staged [services]
+payload manifest: font /lib/font/bit/pelm/latin1.8.font staged [services]
+payload manifest: font /lib/font/bit/pelm/euro.9.font staged [services]
+payload manifest: /lib/font/bit 4303 files 27676353 bytes (floors: 4303 files, 27000000 bytes) [services]
+payload manifest: /usr/glenda/lib/profile shape ok — terminal case rio-free, cpu case intact [services]
+services manifest: /boot/boot staged
+services manifest: /boot/paqfs staged
+services manifest: /boot/rcmain staged
+services manifest: /boot/sentinel.txt staged
+services manifest: /boot/tcp9901 staged
+services manifest: /boot/tcp9902 staged
+services manifest: /amd64/init staged
+services manifest: /amd64/bin/rc staged
+services manifest: /amd64/bin/ls staged
+services manifest: /amd64/bin/cat staged
+services manifest: /amd64/bin/echo staged
+services manifest: /amd64/bin/ps staged
+services manifest: /amd64/bin/ip/ipconfig staged
+services manifest: /amd64/bin/ip/ping staged
+services manifest: /amd64/bin/ip/udpecho staged
+services manifest: /amd64/bin/grep staged
+services manifest: /amd64/bin/sed staged
+services manifest: /amd64/bin/dd staged
+services manifest: /amd64/bin/wc staged
+services manifest: /amd64/bin/sha1sum staged
+services manifest: /amd64/bin/test staged
+services manifest: /amd64/bin/bind staged
+services manifest: /amd64/bin/hsvctcpecho staged
+services manifest: /amd64/bin/hmkdir staged
+services manifest: /rc/lib/rcmain staged
+services manifest: /rc/bin/termrc staged
+services manifest: /lib/namespace staged
+services manifest: /adm/timezone/local staged
+services manifest: /usr/glenda/lib/profile staged
+services manifest: /lib/netaddr.rc staged
+services manifest: /lib/netip-loopback.rc staged
+services manifest: /lib/netip-static.rc staged
+services manifest: /lib/netip-dhcp.rc staged
+services manifest: /lib/netip-tcp.rc staged
+services manifest: /lib/services-sweep.rc staged
+services manifest: 127 h* sweep binaries staged (tier-1 helpers + the tier-2 set computed from tiers/tier2-services.txt: 90 tier-2 members)
+== PASS: baked /home/req/code/harvey/build/x86_64/out/bootfs-services.paq (26671909 bytes; 127 h* binaries; header 529ab12b trailer 6b46e688; KERNDATE 1794787052)
+== PASS: baked /home/req/code/harvey/build/x86_64/out/bootfs-churn.paq (491879 bytes; chain + test/dc + churncats + /lib/churn-cats.rc; header 529ab12b trailer 6b46e688; KERNDATE 1794787052)
+== PASS: baked /home/req/code/harvey/build/x86_64/out/bootfs-substrate.paq (43672 bytes; skeleton + randread as /amd64/init; header 529ab12b trailer 6b46e688; KERNDATE 1794787052)
+authdomain-gen: generated /tmp/mkimage-x64.yT4zEr/authdom-stage: label=requaos authdom=requaos-harvey authid=bootes users=3
+authdomain-gen: DEMO material is throwaway — never reuse outside a gate image
+verify: OK dir=/tmp/mkimage-x64.yT4zEr/auth-verify label=requaos users=3
+== auth pairing verified over the staged copies (authdomain-gen -V over the bake's own scratch twin)
+== auth ndb: /lib/ndb/local composed from local.template (the seam's four tokens + @AUTHDOM@=requaos-harvey from the generator run + the tcp=ticket service row for the probe dials)
+auth manifest: /boot/boot staged
+auth manifest: /boot/paqfs staged
+auth manifest: /amd64/init staged
+auth manifest: /amd64/bin/rc staged
+auth manifest: /amd64/bin/ls staged
+auth manifest: /amd64/bin/cat staged
+auth manifest: /amd64/bin/echo staged
+auth manifest: /amd64/bin/ps staged
+auth manifest: /amd64/bin/bind staged
+auth manifest: /amd64/bin/authsrv staged
+auth manifest: /amd64/bin/hsvctcpecho staged
+auth manifest: /amd64/bin/hauthprobe staged
+auth manifest: /rc/lib/rcmain staged
+auth manifest: /rc/bin/termrc staged
+auth manifest: /lib/namespace staged
+auth manifest: /adm/timezone/local staged
+auth manifest: /usr/glenda/lib/profile staged
+auth manifest: /adm/nvram staged
+auth manifest: /adm/keys staged
+auth manifest: /adm/domain.manifest staged
+auth manifest: /lib/ndb/auth staged
+auth manifest: /lib/ndb/local staged
+auth manifest: /lib/auth-sweep.rc staged
+auth manifest: /boot/authfeed.txt staged
+auth manifest: /boot/secstore-obj.txt staged
+auth manifest: 26 h* sweep binaries staged (the auth-suite set computed from tiers/tier2-services.txt + the tier-1 helpers: 26 tier-2 members)
+== PASS: baked /home/req/code/harvey/build/x86_64/out/bootfs-auth.paq (2573935 bytes; chain + auth suite + the paired p9sk1 domain; header 529ab12b trailer 6b46e688; KERNDATE 1794787052)
+authdomain-gen: generated /tmp/mkimage-x64.yT4zEr/cpudom-stage: label=requaos authdom=requaos-harvey authid=bootes users=3
+authdomain-gen: DEMO material is throwaway — never reuse outside a gate image
+payload manifest: /lib/ndb/local substituted from lib/ndb/local.template (the seam's four tokens + authdom=requaos-harvey from the caller's own generator run — the 19-07 auth arm, row KEPT) [cpu]
+payload manifest: /lib/font/bit staged (tree, 4303 files) [cpu]
+payload manifest: /usr/glenda/lib/profile staged [cpu]
+payload manifest: /lib/ndb/local staged [cpu]
+payload manifest: font /lib/font/bit/lucm/unicode.9.font staged [cpu]
+payload manifest: font /lib/font/bit/lucidasans/euro.8.font staged [cpu]
+payload manifest: font /lib/font/bit/pelm/latin1.8.font staged [cpu]
+payload manifest: font /lib/font/bit/pelm/euro.9.font staged [cpu]
+payload manifest: /lib/font/bit 4303 files 27676353 bytes (floors: 4303 files, 27000000 bytes) [cpu]
+payload manifest: /usr/glenda/lib/profile shape ok — terminal case rio-free, cpu case intact [cpu]
+verify: OK dir=/tmp/mkimage-x64.yT4zEr/cpu-auth-verify label=requaos users=3
+== cpu pairing verified over the staged copies (authdomain-gen -V over the bake's own scratch twin)
+cpu manifest (§15): /boot/boot staged
+cpu manifest (§15): /boot/paqfs staged
+cpu manifest (§15): /amd64/init staged
+cpu manifest (§15): /amd64/bin/rc staged
+cpu manifest (§15): /amd64/bin/ls staged
+cpu manifest (§15): /amd64/bin/cat staged
+cpu manifest (§15): /amd64/bin/echo staged
+cpu manifest (§15): /amd64/bin/ps staged
+cpu manifest (§15): /amd64/bin/bind staged
+cpu manifest (§15): /amd64/bin/authsrv staged
+cpu manifest (§15): /amd64/bin/cpu staged
+cpu manifest (§15): /amd64/bin/aux/listen staged
+cpu manifest (§15): /amd64/bin/ip/ipconfig staged
+cpu manifest (§15): /amd64/bin/test staged
+cpu manifest (§15): /amd64/bin/rio staged
+cpu manifest (§15): /amd64/bin/plumber staged
+cpu manifest (§15): /amd64/bin/plumb staged
+cpu manifest (§15): /amd64/bin/ramfs staged
+cpu manifest (§15): /amd64/bin/syscall staged
+cpu manifest (§15): /amd64/bin/awd staged
+cpu manifest (§15): /rc/lib/rcmain staged
+cpu manifest (§15): /rc/bin/cpurc staged
+cpu manifest (§15): /rc/bin/service/tcp17010 staged
+cpu manifest (§15): /bin/service/tcp17010 staged
+cpu manifest (§15): /rc/bin/termrc staged
+cpu manifest (§15): /lib/namespace staged
+cpu manifest (§15): /lib/netaddr.rc staged
+cpu manifest (§15): /lib/ndb/auth staged
+cpu manifest (§15): /lib/ndb/local staged
+cpu manifest (§15): /adm/timezone/local staged
+cpu manifest (§15): /adm/nvram staged
+cpu manifest (§15): /adm/keys staged
+cpu manifest (§15): /adm/domain.manifest staged
+cpu manifest (§15): /boot/authid-creds.txt staged
+cpu manifest (§15): /usr/glenda/lib/profile staged
+cpu manifest (§15): /usr/glenda/lib/plumbing staged
+cpu manifest (§15): /sys/lib/plumb/basic staged
+cpu manifest (§15): /sys/lib/plumb/fileaddr staged
+cpu manifest (§15): 26 h* sweep binaries staged (§14's computed auth-suite set + the tier-1 helpers incl. hfactotum/hsed)
+== PASS: baked /home/req/code/harvey/build/x86_64/out/bootfs-cpu.paq (22003355 bytes; chain + the auth suite + cmd/cpu + aux/listen + the real cpurc + tcp17010 + the font payload + the §15 p9sk1 domain + the 19-10 desktop suite (test/rio/plumber/plumb/ramfs/syscall/awd + glenda's home + the plumb rules); header 529ab12b trailer 6b46e688; KERNDATE 1794787052)
+== step 3/3: composing the ISO (r9's iso-builder: kernel + bootfs-cpu.paq as /boot/bootfs.paq + the bootconf append init=/amd64/init -c)
+xorriso 1.5.8.pl02 : RockRidge filesystem manipulator, libburnia project.
+
+xorriso : NOTE : Environment variable SOURCE_DATE_EPOCH encountered with value 1735689600
+Drive current: -outdev 'stdio:/tmp/r9-iso-builder.kNNTFB/boot.iso'
+Media current: stdio file, overwriteable
+Media status : is blank
+Media summary: 0 sessions, 0 data blocks, 0 data,  328g free
+Added to ISO image: directory '/'='/tmp/grub.TmABhp'
+xorriso : UPDATE :     356 files added in 1 seconds
+Added to ISO image: directory '/'='/tmp/r9-iso-builder.kNNTFB/stage'
+xorriso : UPDATE :     361 files added in 1 seconds
+xorriso : NOTE : Copying to System Area: 512 bytes from file '/tmp/r9-iso-builder.kNNTFB/grub-i386-pc/boot_hybrid.img'
+ISO image produced: 20305 sectors
+Written to medium : 20305 sectors at LBA 0
+Writing to 'stdio:/tmp/r9-iso-builder.kNNTFB/boot.iso' completed successfully.
+
+r9-iso-builder: /tmp/boot-r9-x64.bTFVUF/boot.iso cfb1e13014f51fd259dc801bc49ba4f534745c7dabc4c3abe0de0c2b2eb8f8b6 (modules: bootfs.paq append=init=/amd64/init -c)
+== launching qemu — system=cpu, interactive on stdio (ctrl-a x to quit)
+== qemu argv: qemu-system-x86_64 -M q35 -cpu host -smp 1 -m 1024M -accel kvm -cdrom /tmp/boot-r9-x64.bTFVUF/boot.iso -netdev user,id=n0,hostfwd=tcp:127.0.0.1:17010-:17010,hostfwd=tcp:127.0.0.1:5670-:567 -device virtio-net-pci-non-transitional,netdev=n0 -nographic
+c[?7l[2J[0mSeaBIOS (version rel-1.17.0-0-gb52ca86e094d-prebuilt.qemu.org)
+
+
+iPXE (http://ipxe.org) 00:02.0 CA00 PCI2.10 PnP PMM+3EFD1B50+3EF31B50 CA00
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from Hard Disk...
+Boot failed: could not read the boot disk
+
+Booting from DVD/CD...
+[0;30;47mWelcome to GRUB[H[J[1;1H  Booting `r9'
+
+!
+
+
+r9 from the Internet
+Machine information:
+q35: memory 0x0..0x9fc00 (0x9fc00) available
+q35: memory 0x9fc00..0xa0000 (0x400) reserved
+q35: memory 0xf0000..0x100000 (0x10000) reserved
+q35: memory 0x100000..0x3ffdf000 (0x3fedf000) available
+q35: memory 0x3ffdf000..0x40000000 (0x21000) reserved
+q35: memory 0xb0000000..0xc0000000 (0x10000000) reserved
+q35: memory 0xfed1c000..0xfed20000 (0x4000) reserved
+q35: memory 0xfeffc000..0xff000000 (0x4000) reserved
+q35: memory 0xfffc0000..0x100000000 (0x40000) reserved
+q35: acpi rsdt 0x3ffe2345 (mb2 RSDP tag — 13-04 walks it)
+q35: acpi rsdt 0x3ffe2345 via mb2 acpi tag (5 entries)
+q35: mcfg 0xb0000000 buses 0x0-0xff (seg 0)
+q35: lapic 0xfee00000 (madt local intc)
+q35: ioapic 0xfec00000 gsib 0 (id 0)
+q35: intsrc bus 0 source 0 -> gsi 2 flags 0x0
+q35: intsrc bus 0 source 5 -> gsi 5 flags 0xd
+q35: intsrc bus 0 source 9 -> gsi 9 flags 0xd
+q35: intsrc bus 0 source 10 -> gsi 10 flags 0xd
+q35: intsrc bus 0 source 11 -> gsi 11 flags 0xd
+q35: hpet 0xfed00000
+pciexbar: 0xb0000001 -> 0xb0000001
+pci: virtio-net 1af4:1041 at 00:02.0 rev 01 pin 1 (inta) bars 2
+pci: inta -> gsi 22 (q35 root slot 2, pirq G: 16+6)
+Memory usage:
+  Used:		0x00000006a00000
+  Total:	0x0000003ffdf000
+random: source=rdrand
+lapic: cpuid leaf-1 ecx: x2apic=true tsc-deadline=true
+lapic: x2apic live (msr 0x800 map; lint0/1 masked, no pic)
+timer: 2496071620 Hz (pit 1193182 Hz reference), TscDeadline mode, armed
+ioapic: id 0 version 0x11 rtes 23 gsib 0 (madt 0xfec00000)
+pci: bar4 pa 0xfe000000 size 0x4000 (firmware) readback 0xfe000000
+pci: caps common@0x0+0x1000 notify@0x3000 isr@0x1000 device@0x2000 mult 4
+virtio-net: features offered 0x10130bf8024 negotiated 0x100010020
+virtio-net: rx pre-posted 128 buffers qsize 256
+ioapic: gsi 22 -> vector 0x21 (level)
+#l0: virtio: 1000Mbps: 52:54:00:12:34:56
+q35: module @0x6a00000 +0x14fbe9b (mb2 tag 3, stashed)
+devenv: seeded cputype=amd64 nobootprompt=embed readparts=0
+devenv: bootconf init=/amd64/init -c
+q35: paqfs root mounted from module (22003355 bytes)
+devroot: /boot/boot open (159349 bytes)
+exec: entering ring 3 pc=0x2054fa sp=0x7fffffffef78 path=/boot/boot argv=[boot]
+paqfs...version...root-cpu: Sun Nov 15 23:57:32 GMT 2026
+fingerprint: ab1657f1f0fe654c385d32edd0683889d5bd3a34
+process 2 exited: ""
+churngate: heap exit 90624 33554432
+syscall 10 unimplemented
+time...
+boot: opening #c/swap: namec: does not exist
+init: can't open #c/sysname: namec: does not exist
+syscall 10 unimplemented
+process 6 exited: ""
+churngate: heap exit 677888 33554432
+process 7 exited: ""
+churngate: heap exit 808192 33554432
+process 8 exited: ""
+churngate: heap exit 808192 33554432
+process 9 exited: ""
+churngate: heap exit 808192 33554432
+cpurc: PAIR-OK
+process 10 exited: ""
+churngate: heap exit 813056 33554432
+#I0: devip attached
+process 11 exited: ""
+churngate: heap exit 813056 33554432
+process 12 exited: ""
+churngate: heap exit 813056 33554432
+process 13 exited: ""
+churngate: heap exit 813056 33554432
+devcons: random seeded
+devip: medium ether bound #l0
+process 14 exited: ""
+churngate: heap exit 831104 33554432
+cpurc: ETHER-OK
+process 15 exited: ""
+churngate: heap exit 896384 33554432
+syscall 10 unimplemented
+process 16 exited: ""
+churngate: heap exit 1353984 33554432
+3 keys read
+process 18 exited: ""
+churngate: heap exit 1379968 33554432
+process 20 exited: ""
+churngate: heap exit 1523712 33554432
+process 21 exited: ""
+churngate: heap exit 1523712 33554432
+cpurc: KEYFS-OK
+process 22 exited: ""
+churngate: heap exit 1525760 33554432
+process 24 exited: ""
+churngate: heap exit 2584576 33554432
+process 25 exited: ""
+churngate: heap exit 2584576 33554432
+process 26 exited: ""
+churngate: heap exit 2584576 33554432
+cpurc: AUTHSRV-LISTEN
+process 27 exited: ""
+churngate: heap exit 2588672 33554432
+proc: deallocate page 0x8000000: NotAllocated
+proc: deallocate page 0x8004000: NotAllocated
+proc: deallocate page 0x8005000: NotAllocated
+proc: deallocate page 0x8006000: NotAllocated
+proc: deallocate page 0x8007000: NotAllocated
+proc: deallocate page 0x8001000: NotAllocated
+proc: deallocate page 0x8002000: NotAllocated
+proc: deallocate page 0x8003000: NotAllocated
+process 28 exited: ""
+churngate: heap exit 2605056 33554432
+process 29 exited: ""
+churngate: heap exit 2605056 33554432
+process 30 exited: ""
+churngate: heap exit 2605184 33554432
+syscall 10 unimplemented
+factotum warning: cannot chmod 666 /srv/factotum: wstat: device does not implement wstat
+process 31 exited: ""
+churngate: heap exit 3419520 33554432
+process 33 exited: ""
+churngate: heap exit 3419840 33554432
+process 34 exited: ""
+churngate: heap exit 3419840 33554432
+process 35 exited: ""
+churngate: heap exit 3419840 33554432
+process 36 exited: ""
+churngate: heap exit 3419968 33554432
+cpurc: FACTOTUM-OK
+process 37 exited: ""
+churngate: heap exit 3420032 33554432
+devmnt: server error: file does not exist
+process 38 exited: ""
+churngate: heap exit 3420224 33554432
+ Feb  7 01:28:16 started on tcp
+process 39 exited: ""
+churngate: heap exit 3430528 33554432
+devmnt: server error: file does not exist
+devmnt: server error: file does not exist
+process 41 exited: ""
+churngate: heap exit 4120576 33554432
+process 43 exited: ""
+churngate: heap exit 4120576 33554432
+process 44 exited: ""
+churngate: heap exit 4120640 33554432
+process 45 exited: ""
+churngate: heap exit 4120640 33554432
+cpurc: LISTEN-17010
+process 46 exited: ""
+churngate: heap exit 4126720 33554432
+cpurc: DONE
+process 47 exited: ""
+churngate: heap exit 4126720 33554432
+process 5 exited: ""
+churngate: heap exit 4126720 33554432
+process 4 exited: ""
+churngate: heap exit 4126720 33554432
+
+init: starting /bin/rc
+% devmnt: server error: file does not exist
+ Feb  7 01:28:16 tcp call for tcp17010 on chan /net/tcp/2 (10.0.2.2)
+devmnt: server error: file does not exist
+devmnt: server error: not found
+devmnt: server error: not found
+ Feb  7 01:28:16 tr-ok glenda@glenda(unknown) -> glenda@bootes
+process 50 exited: ""
+churngate: heap exit 4478976 33554432
+syscall 10 unimplemented
+process 53 exited: ""
+churngate: heap exit 4493312 33554432
+process 54 exited: ""
+churngate: heap exit 4493312 33554432
+process 55 exited: ""
+churngate: heap exit 4493312 33554432
+process 56 exited: ""
+churngate: heap exit 4493312 33554432
+process 57 exited: "namec: device has no create"
+churngate: heap exit 4521984 33554432
+process 58 exited: ""
+churngate: heap exit 4524288 33554432
+devmnt: server error: './mnt/wsys' does not exist
+process 60 exited: "false"
+churngate: heap exit 4524288 33554432
+process 61 exited: ""
+churngate: heap exit 4524288 33554432
+process 62 exited: ""
+churngate: heap exit 4524544 33554432
+process 63 exited: ""
+churngate: heap exit 4524800 33554432
+devmnt: server error: './mnt/wsys' does not exist
+process 64 exited: "false"
+churngate: heap exit 4655104 33554432
+process 65 exited: ""
+churngate: heap exit 4655104 33554432
+process 67 exited: ""
+churngate: heap exit 4981248 33554432
+process 66 exited: ""
+churngate: heap exit 4981248 33554432
+devmnt: server error: './dev/label' file does not exist
+devmnt: server error: './dev/winname' file does not exist
+devmnt: clunk of fid 7 failed: i/o on hungup channel
+process 52 exited: ""
+churngate: heap exit 5819264 33554432
+process 70 exited: "read error"
+churngate: heap exit 5819264 33554432
+process 71 exited: "error"
+churngate: heap exit 5819264 33554432
+devmnt: server error: file does not exist
+ Feb  7 01:28:16 tcp call for tcp17010 on chan /net/tcp/3 (10.0.2.2)
+devmnt: server error: file does not exist
+devmnt: server error: not found
+devmnt: server error: not found
+ Feb  7 01:28:16 tr-ok glenda@glenda(unknown) -> glenda@bootes
+process 76 exited: ""
+churngate: heap exit 5861376 33554432
+syscall 10 unimplemented
+process 79 exited: ""
+churngate: heap exit 5874176 33554432
+process 80 exited: ""
+churngate: heap exit 5874176 33554432
+process 81 exited: ""
+churngate: heap exit 5874176 33554432
+process 82 exited: ""
+churngate: heap exit 5874176 33554432
+process 83 exited: "namec: device has no create"
+churngate: heap exit 5874176 33554432
+process 84 exited: ""
+churngate: heap exit 5890048 33554432
+devmnt: server error: './mnt/wsys' does not exist
+process 86 exited: "false"
+churngate: heap exit 5890048 33554432
+process 87 exited: ""
+churngate: heap exit 5890048 33554432
+process 88 exited: ""
+churngate: heap exit 5890048 33554432
+process 89 exited: ""
+churngate: heap exit 5890304 33554432
+devmnt: server error: './mnt/wsys' does not exist
+process 90 exited: "false"
+churngate: heap exit 5890304 33554432
+process 91 exited: ""
+churngate: heap exit 5890304 33554432
+process 93 exited: ""
+churngate: heap exit 6210176 33554432
+process 92 exited: ""
+churngate: heap exit 6210176 33554432
+devmnt: server error: './dev/label' file does not exist
+devmnt: server error: './dev/winname' file does not exist
+devmnt: server error: file does not exist
+ Feb  7 01:28:16 tcp call for tcp17010 on chan /net/tcp/4 (10.0.2.2)
+devmnt: server error: file does not exist
+devmnt: server error: not found
+devmnt: server error: not found
+ Feb  7 01:28:16 tr-ok glenda@glenda(unknown) -> glenda@bootes
+process 102 exited: ""
+churngate: heap exit 7138688 33554432
+syscall 10 unimplemented
+process 105 exited: ""
+churngate: heap exit 7413760 33554432
+process 106 exited: ""
+churngate: heap exit 7413760 33554432
+process 107 exited: ""
+churngate: heap exit 7413760 33554432
+process 108 exited: ""
+churngate: heap exit 7413760 33554432
+process 109 exited: "namec: device has no create"
+churngate: heap exit 7413760 33554432
+process 110 exited: ""
+churngate: heap exit 7430144 33554432
+devmnt: server error: './mnt/wsys' does not exist
+process 112 exited: "false"
+churngate: heap exit 7430656 33554432
+process 113 exited: ""
+churngate: heap exit 7430656 33554432
+process 114 exited: ""
+churngate: heap exit 7430656 33554432
+process 115 exited: ""
+churngate: heap exit 7430912 33554432
+devmnt: server error: './mnt/wsys' does not exist
+process 116 exited: "false"
+churngate: heap exit 7430912 33554432
+devmnt: server error: './dev/draw' file does not exist
+process 117 exited: "false"
+churngate: heap exit 7430912 33554432
+process 118 exited: ""
+churngate: heap exit 7431040 33554432
+process 119 exited: ""
+churngate: heap exit 7431040 33554432
+process 121 exited: ""
+churngate: heap exit 7742208 33554432
+process 120 exited: ""
+churngate: heap exit 7742208 33554432
+process 124 exited: ""
+churngate: heap exit 7743488 33554432
+process 103 exited: ""
+churngate: heap exit 7743488 33554432
+process 101 exited: ""
+churngate: heap exit 7743488 33554432
+note: pid 104 has no notify handler
+process 104 exited: "kill"
+churngate: heap exit 7743488 33554432

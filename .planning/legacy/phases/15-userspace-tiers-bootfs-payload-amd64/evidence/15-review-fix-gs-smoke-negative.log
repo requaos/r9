@@ -1,0 +1,64 @@
+warning: Git tree '/home/req/code/harvey' is dirty
+harvey devshell: HARVEY=/home/req/code/harvey PLAN9=/nix/store/dzvnbi2n1x9jkmzvmwxdly607bwaxsbv-plan9port-0-unstable-2025-11-10/plan9
+  host bin: /home/req/code/harvey/.build/hostbin-linux-x86_64/bin
+  harness: /nix/store/2g4i96bcvmpksgmfpfcdl1xxfdfcwq1c-harness-0.1.0/bin/harness
+apps: nix run .#setup -> .#toolchain -> .#build | .#iso
+(. #build uses sudo unshare; run from the repo root)
+== amd64 build-tree lock held: /home/req/code/harvey/.build/amd64-tree.lock
+paq manifest: /amd64/bin/gs staged
+paq manifest: /amd64/bin/ramfs staged
+paq manifest: /amd64/bin/wc staged
+paq manifest: /lib/gs-render.ps staged
+paq manifest: /lib/trace-session.rc staged
+paq manifest: /rc/lib/rcmain staged
+paq manifest: /sys/lib/ghostscript staged (146 init files)
+paq manifest: blocksize 16384 (per-file cap 67108864 bytes; gs is 15574665)
+== bake OK: /home/req/code/harvey/build/x86_64/out/bootfs-gs.paq (3965842 bytes; header 529ab12b trailer 6b46e688) — this harness's OWN paq, name-keyed
+== gs leg: mode kvm (banner 60s, marker 600s), -m 1024
+== launching: /run/current-system/sw/bin/qemu-system-x86_64 -kernel /home/req/code/harvey/amd64/9kdraw.elf -initrd /tmp/nix-shell.sPwTDa/gs-smoke-boot.hAFD8J/bootfs-draw.paq -m 1024 -accel kvm -cpu host -display none -no-reboot -serial file:/home/req/code/harvey/.build/gs-serial.log
+== banner captured at 5s — waiting for GS-SMOKE-DONE (budget 600s)
+== GS-SMOKE-DONE observed at +0s
+qemu-system-x86_64: terminating on signal 15 from pid 1540681 (sh)
+GS-GATE-FAIL: gs did not exit clean (no GS-EXIT-OK; a GS-EXIT-FAIL line carries its status — a partial bitmap is not a render)
+GS-GATE-FAIL: missing GS-RENDER-OK (gs failed to render — the capture's gs error lines classify it; a typeface-referencing fixture is the first suspect)
+== serial capture (/home/req/code/harvey/.build/gs-serial.log):
+
+Plan 9
+mmuinit: vmstart 0xfffffffff0000000 vmunused 0xfffffffff06d3000 vmunmapped 0xfffffffff0800000 vmend 0xfffffffffe000000
+sys->pd 0x108003 0x108023
+l 3 0xffffff7fbfdfeff8 107023
+l 2 0xffffff7fbfdffff8 108023
+l 1 0xffffff7fbffffc00 e3
+l 1 0xffffff7fbffffc00 e3
+kernel alloc space = -268,435,456
+base 0xfffffffff06d7000 ptr 0xfffffffff06d7000 nunits 14231808
+apic0: hz 1003620740 max 10036207 min 100362 div 2
+pcirouting: BIOS workaround: PCI.0.1.3 at pin 1 link 96 irq 10 -> 9
+igbe: p->cls 0x0, setting to 0x10
+#l0: i82543: 1Gbps port 0xfebc0000 irq 11: 525400123456
+1017M memory: 2020K+247M kernel, 767M user
+gspaq-stage: Tue Nov 10 20:50:57 GMT 2026
+fingerprint: 54104002ea3a2b53bdf54161e2ac4fdeb201d31d
+FONT-CHANNEL-FAIL
+DRAW-SMOKE-OK
+KBINPROBE
+KBIN-OK
+MOUSEIN-OK
+GS-BIN-PRESENT
+Error: /undefinedresult in --div--
+Operand stack:
+   1   0
+Execution stack:
+   %interp_exit   .runexec2   --nostringval--   --nostringval--   --nostringval--   2   %stopped_push   --nostringval--   --nostringval--   --nostringval--   false   1   %stopped_push   1   3   %oparray_pop   1   3   %oparray_pop   1   3   %oparray_pop   1   3   %oparray_pop   .runexec2   --nostringval--   --nostringval--   --nostringval--   2   %stopped_push   --nostringval--
+Dictionary stack:
+   --dict:1121/1686(ro)(G)--   --dict:0/20(G)--   --dict:70/200(L)--
+Current allocation mode is local
+Last OS error: 20
+Current file position is 710
+AFPL Ghostscript 8.53: Unrecoverable error, exit code 1
+GS-EXIT-FAIL gs 33: 1
+GS-BITS 43269
+GS-RENDER-FAIL
+GS-SMOKE-DONE
+% == gate failed — capture NOT retained (the evidence of record is untouched; this run's capture is /home/req/code/harvey/.build/gs-serial.log)
+gs-negative rc=1

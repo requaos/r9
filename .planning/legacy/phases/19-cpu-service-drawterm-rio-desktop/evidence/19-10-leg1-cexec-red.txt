@@ -1,0 +1,12 @@
+
+thread 'exec::tests::exec_replace_closes_cexec_fds_and_keeps_plain_fds' (2360324) panicked at x86_64/src/exec.rs:1223:9:
+the OCEXEC-marked fd must close at exec
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    exec::tests::exec_replace_closes_cexec_fds_and_keeps_plain_fds
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 103 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p x86_64 --bin x86_64`

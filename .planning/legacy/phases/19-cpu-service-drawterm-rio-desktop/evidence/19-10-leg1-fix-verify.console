@@ -1,0 +1,61 @@
+# 19-10-leg1-fix-verify.console — the -s '' fix verified LIVE (2026-11-15)
+#
+# The owner's first Leg-1 attempt parked on an empty "Plan 9 console"
+# window (no rio, no password prompt): the wrapper exec'd drawterm
+# without -s '', so the secstore probe defaulted to the authserver and
+# the 3-part auth address passed through netmkaddr AS-IS — the probe
+# dialed the AUTH port and mutual-parked against authsrv's
+# readn(TICKREQLEN).  The 19-08 gate carries -s '' (its line 314 form);
+# the wrapper now does too.
+#
+# Venue: linux-x86_64, KVM (q35, slirp + the committed D-04 hostfwd
+# pair), a fresh `nix run .#boot-r9-x64 -- --system=cpu` guest whose
+# cpurc ladder ran PAIR-OK -> ETHER-OK -> KEYFS-OK -> AUTHSRV-LISTEN
+# -> FACTOTUM-OK -> LISTEN-17010 -> DONE before any dial.  r9 pin
+# df4ad78 (flake.lock); drawterm = packages.x86_64-linux.drawterm
+# (zffcffb4jsvagwf98sa5vbqp87753zms-drawterm-19.06).  Driver: expect
+# on a pty (a throwaway /tmp script — the two passes below are its
+# complete captured output).  No password was ever sent: the fix pass
+# is killed AT the prompt (the auth handshake surface is the
+# verification bar); no credential material appears in this capture.
+#
+# PASS A — the OLD form (the package binary directly, no -s ''), the
+# owner's reported shape; 25s park window:
+#
+--- pass A: old form (no -s '') ---
+spawn /nix/store/zffcffb4jsvagwf98sa5vbqp87753zms-drawterm-19.06/bin/drawterm -G -O cpu=127.0.0.1,auth=tcp!127.0.0.1!5670,user=glenda
+
+VERDICT-OLD: PARKED — no password prompt in 25s (the owner-reported defect REPRODUCED: the secstore probe mutual-parks on the AUTH port)
+#
+# PASS B — the FIXED wrapper (`nix run .#drawterm`, DISPLAY unset ->
+# the loud -G fallback); the flake evaluated the DIRTY working tree,
+# so the run exercised the edited wrapper text itself:
+#
+--- pass B: the fixed wrapper ---
+spawn nix run .#drawterm
+warning: Git tree '/home/req/code/harvey' is dirty
+this derivation will be built:
+  /nix/store/86r1fcdwla1k7z0vbz86cwp1aq8m6xhk-harvey-drawterm.drv
+building '/nix/store/86r1fcdwla1k7z0vbz86cwp1aq8m6xhk-harvey-drawterm.drv'...
+== drawterm: connect line (windowed default, encrypted rc4_256 sha1):
+   /nix/store/zffcffb4jsvagwf98sa5vbqp87753zms-drawterm-19.06/bin/drawterm -s '' -O cpu=127.0.0.1,auth=tcp!127.0.0.1!5670,user=glenda
+== text form (-G: no window, stdio session):
+   /nix/store/zffcffb4jsvagwf98sa5vbqp87753zms-drawterm-19.06/bin/drawterm -G -s '' -O cpu=127.0.0.1,auth=tcp!127.0.0.1!5670,user=glenda
+== DISPLAY unset — headless venue: running the -G stdio session (the windowed line needs a display; this is the loud fallback, never a silent downgrade)
+
+FIX-PRINT-WINDOWED-OK (the windowed connect line carries -s '' before -O)
+
+FIX-PRINT-G-OK (the -G text form carries -G -s '' -O)
+
+FIX-FALLBACK-LOUD-OK (the -G fallback announces itself)
+glenda@DEMO-harvey password:
+VERDICT-FIXED: PROMPT-REACHED in 3s from spawn (secstore probe skipped — 5356 unforwarded, refused instantly; NO park; session reached the auth handshake). Killed AT the prompt; no password sent.
+#
+# (The prompt's DEMO-harvey authdom is the running guest's baked DEMO
+# domain — reaching the prompt is the bar; the owner's Leg-1 session
+# authenticates with their own local-file domain credentials.)
+#
+# VERDICT: the park is closed on the human surface. Old form: no
+# prompt in 25s (park). Fixed wrapper: both printed lines carry
+# -s '' before -O, the fallback is loud, and the password prompt
+# arrives in 3s.

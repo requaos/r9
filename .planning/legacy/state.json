@@ -1,0 +1,108 @@
+{
+  "contract": "1.0.0",
+  "flavor": "core",
+  "milestone": "v2.1 — x86_64 Pivot + r9 Kernel Flush-Out",
+  "phases": [
+    {
+      "number": "1",
+      "name": "Build-Tail Green (9k amd64)",
+      "status": "complete"
+    },
+    {
+      "number": "2",
+      "name": "aarch64 Toolchain + libc",
+      "status": "complete"
+    },
+    {
+      "number": "3",
+      "name": "r9 qemu-virt Platform Bring-up",
+      "status": "complete"
+    },
+    {
+      "number": "4",
+      "name": "r9 Userspace-Exec + Harvey↔r9 ABI",
+      "status": "complete"
+    },
+    {
+      "number": "5",
+      "name": "Shell Boot + One-Command Integration",
+      "status": "complete"
+    },
+    {
+      "number": "6",
+      "name": "Full-Tree Userspace — Wave 0 + Libraries/Core",
+      "status": "complete"
+    },
+    {
+      "number": "7",
+      "name": "r9 PCI/ECAM + virtio-net + devether",
+      "status": "complete"
+    },
+    {
+      "number": "8",
+      "name": "r9 TCP/IP Path — devip-Compatible /net",
+      "status": "complete"
+    },
+    {
+      "number": "9",
+      "name": "Host Networking + boot-r9 Net Modes",
+      "status": "pending"
+    },
+    {
+      "number": "10",
+      "name": "Userspace Services + GUI Tiers + Bootfs",
+      "status": "pending"
+    },
+    {
+      "number": "11",
+      "name": "In-Guest p9sk1 Auth Domain",
+      "status": "pending"
+    },
+    {
+      "number": "12",
+      "name": "CPU Service + Drawterm + rio Desktop",
+      "status": "pending"
+    },
+    {
+      "number": "13",
+      "name": "r9 x86_64 Platform Bring-Up",
+      "status": "complete"
+    },
+    {
+      "number": "14",
+      "name": "Harvey amd64 Userspace on r9",
+      "status": "complete"
+    },
+    {
+      "number": "15",
+      "name": "Userspace Tiers + Bootfs Payload (amd64)",
+      "status": "complete"
+    },
+    {
+      "number": "16",
+      "name": "Host Net Modes + Networking Exit Gate",
+      "status": "complete"
+    },
+    {
+      "number": "17",
+      "name": "r9 Kernel Flush-Out",
+      "status": "complete"
+    },
+    {
+      "number": "18",
+      "name": "In-Guest p9sk1 Auth Domain",
+      "status": "complete"
+    },
+    {
+      "number": "19",
+      "name": "CPU Service + Drawterm + rio Desktop",
+      "status": "complete"
+    }
+  ],
+  "next": {
+    "command": "/gsd-progress",
+    "label": "Show progress",
+    "reason": "Unsure of state — showing progress"
+  },
+  "updated_at": "2026-11-22T18:52:48.896Z"
+}

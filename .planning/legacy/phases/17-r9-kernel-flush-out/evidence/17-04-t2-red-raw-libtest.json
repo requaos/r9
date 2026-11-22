@@ -1,0 +1,14 @@
+{ "type": "suite", "event": "started", "test_count": 6 }
+{ "type": "test", "event": "started", "name": "platform::q35::pci::tests::bar_assignment_keeps_firmware_and_falls_back_to_the_window" }
+{ "type": "test", "event": "started", "name": "platform::q35::pci::tests::bar_assignment_rejects_naturally_misaligned_window_bases" }
+{ "type": "test", "event": "started", "name": "platform::q35::pci::tests::cap_extents_admit_the_live_q35_shape" }
+{ "type": "test", "event": "started", "name": "platform::q35::pci::tests::cap_extents_reject_extents_past_the_bar_end" }
+{ "type": "test", "event": "started", "name": "platform::q35::pci::tests::cap_extents_reject_undersized_common_and_device_configs" }
+{ "type": "test", "event": "started", "name": "platform::q35::pci::tests::cap_extents_reject_zero_length_caps" }
+{ "type": "test", "name": "platform::q35::pci::tests::bar_assignment_keeps_firmware_and_falls_back_to_the_window", "event": "ok" }
+{ "type": "test", "name": "platform::q35::pci::tests::cap_extents_admit_the_live_q35_shape", "event": "ok" }
+{ "type": "test", "name": "platform::q35::pci::tests::cap_extents_reject_extents_past_the_bar_end", "event": "ok" }
+{ "type": "test", "name": "platform::q35::pci::tests::cap_extents_reject_undersized_common_and_device_configs", "event": "failed", "stdout": "\nthread 'platform::q35::pci::tests::cap_extents_reject_undersized_common_and_device_configs' (880324) panicked at x86_64/src/platform/q35/pci.rs:1523:52:\ncalled `Result::unwrap_err()` on an `Ok` value: ()\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n" }
+{ "type": "test", "name": "platform::q35::pci::tests::bar_assignment_rejects_naturally_misaligned_window_bases", "event": "failed", "stdout": "\nthread 'platform::q35::pci::tests::bar_assignment_rejects_naturally_misaligned_window_bases' (880321) panicked at x86_64/src/platform/q35/pci.rs:1550:9:\nassertion `left == right` failed\n  left: Some((3221229568, false))\n right: None\n" }
+{ "type": "test", "name": "platform::q35::pci::tests::cap_extents_reject_zero_length_caps", "event": "failed", "stdout": "\nthread 'platform::q35::pci::tests::cap_extents_reject_zero_length_caps' (880325) panicked at x86_64/src/platform/q35/pci.rs:1487:46:\ncalled `Result::unwrap_err()` on an `Ok` value: ()\n" }
+{ "type": "suite", "event": "failed", "passed": 3, "failed": 3, "ignored": 0, "measured": 0, "filtered_out": 68, "exec_time": 0.000401743 }

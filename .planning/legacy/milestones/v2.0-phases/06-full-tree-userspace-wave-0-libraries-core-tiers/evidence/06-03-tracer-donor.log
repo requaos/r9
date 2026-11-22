@@ -1,0 +1,53 @@
+127 holes free
+0x4072e000 0x59de9000 426487808
+426487808 bytes free
+
+Plan 9
+timer frequency 62500000 Hz
+cpu0: 1000MHz QEMU
+1023M memory: 413M kernel data, 610M user, 3660M swap
+pcienable PCI.0.1.0: pcr 0->2
+#l0: virtio10: 1000Mbps port 0x10004000 irq 0 ea 525400123456
+qemu.bootfs: Tue Nov  3 17:50:31 GMT 2026
+fingerprint: e6b7e95b2262ae30e9d2ce3ce7ec5eb8a7640863
+nusb/usbd: no hubs
+
+bootargs is (tcp, tls, il, local!device)[tcp] 
+auth address is? [10.0.2.100] 
+echo __GSD_SHELL_^OK__
+post...
+init: can't open /adm/timezone/local: file does not exist: '/adm/timezone'
+
+init: starting /bin/rc
+stacksmoke: depth 64 ok, checksum 2088960
+T1-OK stacksmoke
+T1-OK echo
+T1-OK ls
+T1-OK cat
+T1-OK grep
+T1-OK sed
+T1-OK wc
+T1-OK date
+T1-OK test
+T1-OK rc
+T1-OK ps
+T1-OK ipconfig
+T1-OK factotum
+T1-OK awk
+T1-OK float-d01
+T1-OK mkdir
+T1-OK cp
+T1-OK mv
+T1-OK rm
+T1-DONE
+echo __GSD_SHELL_^OK__
+
+init: starting /bin/rc
+% __GSD_SHELL_OK__
+% __GSD_SHELL_OK__
+% echo __GSD_SHELL_^OK__
+__GSD_SHELL_OK__
+% prompt='term% '
+term% echo __GSD_PROMPT_SET__
+__GSD_PROMPT_SET__
+term% 

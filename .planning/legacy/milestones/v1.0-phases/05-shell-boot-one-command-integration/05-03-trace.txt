@@ -1,0 +1,83 @@
+# date: 2026-11-03T04:50:25Z
+# donor pin: 350266104f1fed81c78c3d05fa44f523bec0ae4d (9front branch front)
+# rig: build/aarch64/trace-syscalls.py --boot-chain (05-03) + build/aarch64/trace-boot.rc + build/aarch64/pidwait.c
+# target: the REAL chain — 05-02's aarch64 boot(8) (staged /boot/ourboot)
+#   with the embed method over /boot/ourbootfs.paq (05-02's baked bootfs.paq),
+#   /boot/paqfs bind-overridden to OUR paqfs, the donor devroot's factotum
+#   covered ('#c/null' bind — the glenda path, D-02), the donor's /srv/boot
+#   removed (srvcreate collision), #e/init removed (the donor bootrc leaks
+#   init=/arm64/init into the shared env; execinit's cputype branch is the
+#   r9-faithful one), cputype=aarch64 + nobootprompt seeded, and the trace
+#   namespace bound over /lib/namespace (re-mounts #s/boot at /root after
+#   newns's RFCNAMEG wipe — the k10root mechanism — and overrides termrc).
+#   Chain: init -t → newns → termrc (stacksmoke) → rc -c '. oursweep.rc'
+#   (the D-09 sweep SOURCED, not typed: the donor's devcons fails /dev/cons
+#   reads by design — Egreg; console input there is kbdfs-served, and
+#   opencons's bind #c MBEFORE pins the kernel cons into the chain.  On r9
+#   devcons serves reads (D-06); 05-09 drives the console for real.)
+#   Then standalone step-traces of ourecho/ourls/ourps/ourcat/ourstacksmoke.
+# method: startsyscall+/proc/N/syscall per-pid loops (04-01 recipe extended);
+#   zero-slip launcher spin; born-traced children armed via pidwait -w
+#   (fork inherits procctl — donor sysproc.c:155 — so the connectembed
+#   child self-stops at its first syscall with the entry fragment pending)
+# serial log: /Users/neilskinner/code/harvey/.build/9front-dist/bootchain-trace-run.log (gitignored .build evidence)
+# traced processes: boot pid 234; paqfs pid 1259; srv pid 1741; rc pid 3413
+# per-role fragment counts: boot=312, paqfs=84, rc=392, srv=567, sweep:ourcat=30, sweep:ourecho=23, sweep:ourls=34, sweep:ourps=124, sweep:ourstacksmoke=22
+# boot stream opens with: create close create close create pwrite close create pwrite close create pwrite close close dup close exec close close close bind open open open
+# coverage boundary: the staging binds + env writes run in the untraced
+#   driver shell (a traced process's fork children are born traced and
+#   self-stop — /bin/bind forks would wedge the launcher in Await); the
+#   traced launcher itself does only spin+exec, so the boot pid's stream
+#   may open with rc async bookkeeping but provably contains opencons's
+#   close×3/bind/open×3 as a contiguous run (else listed as source-
+#   verified additions below).  rc's command children (the sweep's
+#   echo/ls/ps/cat as spawned by OUR rc) run untraced (born-traced,
+#   resumed by the sweeper) — their names are covered by the standalone
+#   sweep traces.
+2 bind
+3 chdir
+4 close
+5 dup
+6 alarm
+7 exec
+8 exits
+10 fauth
+14 open
+17 sleep
+19 rfork
+21 pipe
+22 create
+23 fd2path
+24 brk_
+28 notify
+35 unmount
+39 seek
+40 fversion
+41 errstr
+42 stat
+43 fstat
+46 mount
+47 await
+50 pread
+51 pwrite
+# NEW vs the Phase-4 implemented set {close exec exits open rfork notify
+#   noted errstr await pread pwrite}:
+#   2 bind (22 occurrences)
+#   3 chdir (2 occurrences)
+#   5 dup (9 occurrences)
+#   6 alarm (1 occurrences)
+#   10 fauth (2 occurrences)
+#   17 sleep (42 occurrences)
+#   21 pipe (1 occurrences)
+#   22 create (67 occurrences)
+#   23 fd2path (3 occurrences)
+#   24 brk_ (28 occurrences)
+#   35 unmount (1 occurrences)
+#   39 seek (72 occurrences)
+#   40 fversion (1 occurrences)
+#   42 stat (51 occurrences)
+#   43 fstat (3 occurrences)
+#   46 mount (3 occurrences)
+# source-verified additions (NOT measured — slipped the arming window):
+#   none — opencons's close×3/bind/open×3 appear as a contiguous run
+#   in the boot pid's stream (at offset 17; see 'boot stream opens with').

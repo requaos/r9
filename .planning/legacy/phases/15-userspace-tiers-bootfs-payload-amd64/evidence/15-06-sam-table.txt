@@ -1,0 +1,262 @@
+# 15-06 sam distilled syscall table — the 05-03 measured-set format
+# derived from 15-06-sam-raw.txt by build/x86_64/trace-distill.sh (the committed
+# derivation path — re-running it over the raw reproduces this file)
+# venue: k10draw draw donor (amd64 9k kernel), scripted-interaction
+# replay via /dev/mousein + /dev/kbin, tracesup born-traced arming
+# run: commit=c9d135a45 date=2026-11-10T14:09:15Z accel=kvm
+# row grammar: <syscall>\t<count>\t<args-shape (first sample)>
+#              B<TAB>syscall<TAB>count = per-binary aggregate
+#              P<TAB>syscall<TAB>count<TAB>path = distinct path args (digits->N)
+#              T<TAB>syscall<TAB>count = program-level union
+pid=209 name=sam fragments=201
+Pwrite	34	1 0x408d48/"....." 5 -1
+Pread	25	3 0x41adf8 2 -1
+Close	10	3
+Open	6	0x7fffffffedbc/"/env/home" 0x0
+Brk	5	0x41bb48
+Stat	4	0x7fffffffeda8/"/tmp/A209.syssam" 0x41b0c8 115
+Create	2	0x7fffffffeda8/"/tmp/A209.syssam" 0x62 0x180
+Dup	2	6 0
+Errstr	2	0x7fffffffe8c0 128
+Pipe	2	0x7fffffffee28
+Remove	2	0x4120f8/"/tmp/sam.err"
+Rfork	2	0x2014
+Seek	2	0x7fffffffed88 3 0x0 2
+Await	1	0x7fffffffeb00 511
+Exits	1	0/""
+Fd2path	1	4 0x7fffffffed40 256
+Fstat	1	4 0x420628 115
+Notify	1	0x2096de
+pid=220 name=sam fragments=14
+Close	4	4
+Dup	2	4 0
+Exec	1	0x4017a8/"/bin/aux/samterm" 0x400dff/"samterm"
+pid=220 name=samterm fragments=667
+Pwrite	186	4 0x426c00/"b.........1...............................?...?...." 51 -1
+Rendez	51	0x421a80 0x0
+Open	35	0x4261d8/"/dev/draw/new" 0x22
+Brk	17	0x422940
+Close	16	6
+Pread	16	3 0x426147 145 -1
+Rfork	5	0x2000
+Fstat	2	3 0x437c00 115
+Create	1	0x418c28/"/srv/sam.sys" 0x1 0x180
+Exits	1	0x40a5b1/""
+Notify	1	0x223ef9
+Pipe	1	0x4001c8
+Remove	1	0x418c28/"/srv/sam.sys"
+Stat	1	0x409ef0/"/dev/draw/new" 0x426a70 115
+pid=222 name=samterm fragments=47
+Pread	10	12 0x43da64 20 -1
+Rendez	8	0x421a80 0x0
+Close	2	12
+Open	2	0x43d9f4/"#p/222/args" 0x1
+Exits	1	0x40a5b1/""
+Pwrite	1	12 0x438830/"mouseproc." 10 -1
+pid=223 name=samterm fragments=55
+Pread	11	12 0x43f4f4 20 -1
+Rendez	11	0x421a80 0x0
+Close	2	12
+Open	2	0x43f484/"#p/223/args" 0x1
+Exits	1	0x40a5b1/""
+Pwrite	1	12 0x438a90/"kbdproc." 8 -1
+pid=224 name=samterm fragments=133
+Pread	33	0 0x41d00a 16384 -1
+Rendez	33	0x421a80 0x0
+Exits	1	0x40a5b1/""
+pid=225 name=samterm fragments=3
+Exits	1	0x40a5b1/""
+Pread	1	11 0x414c22 16384 -1
+pid=256 name=rc fragments=292
+Close	47	4
+Pread	39	3 0x406b88 65615 -1
+Open	32	0x4019d7/"/env" 0x0
+Create	13	0x40bfc8/"#c/cons" 0x1 0x1b6
+Pwrite	10	5 0x4078c8/"rc." 3 -1
+Brk	4	0x4076b8
+Await	1	0x7fffffffeaf0 511
+Exits	1	0x401af9/""
+Fd2path	1	0 0x7fffffffedb0 64
+Notify	1	0x20b61d
+Rfork	1	0x2014
+pid=256 name=sam fragments=16
+Dup	3	4 2
+Close	2	4
+Create	1	0x4120f8/"/tmp/sam.err" 0x1 0x1b6
+Exec	1	0x400268/"/bin/rc" 0x400010/"rc" 0x40030c/"-c" 0x4216f0/"echo SAM-SCRIPT
+Open	1	0x4002da/"/dev/null" 0x0
+pid=258 name=echo fragments=11
+Brk	1	0x4028f0
+Close	1	3
+Exits	1	0/""
+Open	1	0x400090/"#c/pid" 0x0
+Pread	1	3 0x7fffffffee64 20 -1
+Pwrite	1	1 0x401900/"SAM-SCRIPT-DONE." 16 -1
+pid=258 name=rc fragments=8
+Close	2	3
+Dup	1	4 1
+Exec	1	0x7fffffffe8e0/"/boot/echo" 0x40c048/"echo" 0x40bfc8/"SAM-SCRIPT-DONE"
+BINARY name=echo pids=1 entries=6
+BINARY name=rc pids=2 entries=154
+BINARY name=sam pids=3 entries=118
+BINARY name=samterm pids=5 entries=455
+B	Brk	1
+B	Close	1
+B	Exits	1
+B	Open	1
+B	Pread	1
+B	Pwrite	1
+B	Close	49
+B	Pread	39
+B	Open	32
+B	Create	13
+B	Pwrite	10
+B	Brk	4
+B	Await	1
+B	Dup	1
+B	Exec	1
+B	Exits	1
+B	Fd2path	1
+B	Notify	1
+B	Rfork	1
+B	Pwrite	34
+B	Pread	25
+B	Close	16
+B	Dup	7
+B	Open	7
+B	Brk	5
+B	Stat	4
+B	Create	3
+B	Errstr	2
+B	Exec	2
+B	Pipe	2
+B	Remove	2
+B	Rfork	2
+B	Seek	2
+B	Await	1
+B	Exits	1
+B	Fd2path	1
+B	Fstat	1
+B	Notify	1
+B	Pwrite	188
+B	Rendez	103
+B	Pread	71
+B	Open	39
+B	Close	20
+B	Brk	17
+B	Exits	5
+B	Rfork	5
+B	Fstat	2
+B	Create	1
+B	Notify	1
+B	Pipe	1
+B	Remove	1
+B	Stat	1
+PATHS name=echo
+P	Open	1	#c/pid
+PATHS name=rc
+P	Create	2	/env/*
+P	Create	2	/env/status
+P	Create	1	#c/cons
+P	Create	1	/env/N
+P	Create	1	/env/cflag
+P	Create	1	/env/fn#killroot
+P	Create	1	/env/fn#sigexit
+P	Create	1	/env/fn#trace-one
+P	Create	1	/env/fn#waitdone
+P	Create	1	/env/pid
+P	Create	1	/env/rcname
+P	Exec	1	/boot/echo
+P	Open	3	#c/pid
+P	Open	2	/env
+P	Open	1	/env/N
+P	Open	1	/env/T30
+P	Open	1	/env/T60
+P	Open	1	/env/apid
+P	Open	1	/env/cflag
+P	Open	1	/env/cmd
+P	Open	1	/env/cputype
+P	Open	1	/env/dir
+P	Open	1	/env/fn#killroot
+P	Open	1	/env/fn#trace-one
+P	Open	1	/env/fn#waitdone
+P	Open	1	/env/font
+P	Open	1	/env/home
+P	Open	1	/env/ifs
+P	Open	1	/env/name
+P	Open	1	/env/path
+P	Open	1	/env/pid
+P	Open	1	/env/prompt
+P	Open	1	/env/rcname
+P	Open	1	/env/rep
+P	Open	1	/env/root
+P	Open	1	/env/service
+P	Open	1	/env/status
+P	Open	1	/env/terminal
+P	Open	1	/env/wctl
+P	Open	1	/env/wsys
+P	Open	1	/rc/lib/rcmain
+PATHS name=sam
+P	Create	1	/tmp/A209.syssam
+P	Create	1	/tmp/sam.err
+P	Create	1	tmp/sam-replay.txt
+P	Exec	1	/bin/aux/samterm
+P	Exec	1	/bin/rc
+P	Open	2	#c/pid
+P	Open	1	.
+P	Open	1	/dev/null
+P	Open	1	/dev/user
+P	Open	1	/env/home
+P	Open	1	tmp/sam-replay.txt
+P	Remove	2	/tmp/sam.err
+P	Stat	2	tmp/sam-replay.txt
+P	Stat	1	/tmp/A209.syssam
+P	Stat	1	/tmp/sam.err
+PATHS name=samterm
+P	Create	1	/srv/sam.sys
+P	Open	5	#c/pid
+P	Open	4	/lib/font/bit/lucm/latin1.9.N
+P	Open	4	/proc/N/note
+P	Open	3	#p/N/args
+P	Open	2	/env/plumbsrv
+P	Open	2	/lib/font/bit/lucm/latin1.N
+P	Open	2	/mnt/plumb/send
+P	Open	2	/mnt/term/mnt/plumb/send
+P	Open	1	#d/Nctl
+P	Open	1	/dev/cons
+P	Open	1	/dev/consctl
+P	Open	1	/dev/cursor
+P	Open	1	/dev/draw/N/data
+P	Open	1	/dev/draw/N/refresh
+P	Open	1	/dev/draw/new
+P	Open	1	/dev/label
+P	Open	1	/dev/mouse
+P	Open	1	/dev/screen
+P	Open	1	/dev/user
+P	Open	1	/dev/winname
+P	Open	1	/env/font
+P	Open	1	/env/tabstop
+P	Open	1	/lib/font/bit/lucm/unicode.9.font
+P	Remove	1	/srv/sam.sys
+P	Stat	1	/dev/draw/new
+TOTAL pids=11 entries=733 binaries=4
+T	Pwrite	233
+T	Pread	136
+T	Rendez	103
+T	Close	86
+T	Open	79
+T	Brk	27
+T	Create	17
+T	Dup	8
+T	Exits	8
+T	Rfork	8
+T	Stat	5
+T	Exec	3
+T	Fstat	3
+T	Notify	3
+T	Pipe	3
+T	Remove	3
+T	Await	2
+T	Errstr	2
+T	Fd2path	2
+T	Seek	2

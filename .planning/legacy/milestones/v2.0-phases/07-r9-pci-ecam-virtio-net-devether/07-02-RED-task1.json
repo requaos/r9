@@ -1,0 +1,15 @@
+{
+  "command": "cd /Users/neilskinner/code/r9 && nix develop -c bash -c 'cargo test -p port fdt -- --nocapture'",
+  "exitCode": 101,
+  "targetTest": "fdt::tests::masked_lookup_routes_the_virtio_nic_inta_to_spi4",
+  "output": "running 6 tests\nnot ok 1 - fdt::tests::decode_terminates_on_a_partial_tail\nnot ok 2 - fdt::tests::interrupt_map_decodes_all_16_entries\nnot ok 3 - fdt::tests::lookup_applies_the_mask_not_an_exact_compare\nnot ok 4 - fdt::tests::masked_lookup_routes_the_virtio_nic_inta_to_spi4\nnot ok 5 - fdt::tests::swizzle_rotation_matches_the_decode_table\nok 6 - fdt::tests::loud_absence_returns_none_never_a_default\n# tests 6\n# pass 1\n# fail 5\n",
+  "expected": "interrupt_map_iter decodes all 16 tuples of the committed virt-gicv2.dtb (dev 0-3 x INTA-D); the masked lookup routes (bus 0, dev 1, fn 0, INTA) to SPI 4 with level-high flags 0x04; the (dev+pin) swizzle table matches; the mask is applied rather than exact-compared; a partial tuple tail terminates decode without panic",
+  "actual": "RED stubs return None/empty: 5 tests fail on behavior assertions (assert_eq!(entries.len(), 16) got 0; lookup .expect/.is_some pins fire; decode of 2.5 tuples yields 0) — no compile errors, no zero-test discovery (5 failed, 1 absence-pin test trivially green against stubs, 38 other-suite tests filtered out), no fixture crashes",
+  "evidence_log": "/private/var/folders/b_/d_zl68v16258dhmmjqgfqd2w0000gn/T/opencode/07-02-red.log",
+  "output_format_note": "cargo test does not emit TAP; the output field is a faithful TAP transcription of the cargo run retained at evidence_log (exit 101, 5 failed, 1 passed, names match). Transcribed because gsd_run check tdd-red-evidence parses TAP/Surefire summaries only.",
+  "recorded_at": "2026-11-05T00:12Z",
+  "plan": "07-02",
+  "task": 1,
+  "phase": "07-r9-pci-ecam-virtio-net-devether",
+  "notes": "Task 1 of 07-02 is tdd=true. loud_absence_returns_none_never_a_default passes against the RED stubs by construction (its pins are absence-shaped: None for an absent phandle/#interrupt-cells, empty iteration for a map-less node) — its behavior-5 companion (the malformed-tail half) lives in decode_terminates_on_a_partial_tail, which fails RED as required. The in-file test placement (fdt.rs, not crate root) is the plan-documented deviation keeping lib.rs untouched for 07-03's parallel edits."
+}

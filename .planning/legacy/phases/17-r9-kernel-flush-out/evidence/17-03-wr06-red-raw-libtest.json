@@ -1,0 +1,13 @@
+r9 devshell: rustc 1.95.0-nightly (842bd5be2 2026-01-29)
+QEMU emulator version 11.1.2
+apps: nix run .#build | nix run .#boot-virt | nix run .#default
+{ "type": "suite", "event": "started", "test_count": 4 }
+{ "type": "test", "event": "started", "name": "virtio_tests::used_drain_is_acquire_ordered_and_recovers_the_slot" }
+{ "type": "test", "event": "started", "name": "virtio_tests::used_drain_rejects_lens_outside_the_queue_bounds" }
+{ "type": "test", "event": "started", "name": "virtio_tests::used_drain_rejects_out_of_range_and_odd_ids" }
+{ "type": "test", "event": "started", "name": "virtio_tests::used_drain_rejects_unposted_slot_ids" }
+{ "type": "test", "name": "virtio_tests::used_drain_rejects_lens_outside_the_queue_bounds", "event": "ok" }
+{ "type": "test", "name": "virtio_tests::used_drain_is_acquire_ordered_and_recovers_the_slot", "event": "ok" }
+{ "type": "test", "name": "virtio_tests::used_drain_rejects_unposted_slot_ids", "event": "failed", "stdout": "\nthread 'virtio_tests::used_drain_rejects_unposted_slot_ids' (840181) panicked at port/src/virtio_tests.rs:637:9:\na used-ring id for an unposted slot must be rejected, not retired twice\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n" }
+{ "type": "test", "name": "virtio_tests::used_drain_rejects_out_of_range_and_odd_ids", "event": "ok" }
+{ "type": "suite", "event": "failed", "passed": 3, "failed": 1, "ignored": 0, "measured": 0, "filtered_out": 108, "exec_time": 0.000370268 }

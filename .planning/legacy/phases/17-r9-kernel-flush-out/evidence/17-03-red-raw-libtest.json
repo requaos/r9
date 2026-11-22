@@ -1,0 +1,23 @@
+r9 devshell: rustc 1.95.0-nightly (842bd5be2 2026-01-29)
+QEMU emulator version 11.1.2
+apps: nix run .#build | nix run .#boot-virt | nix run .#default
+{ "type": "suite", "event": "started", "test_count": 9 }
+{ "type": "test", "event": "started", "name": "devether_tests::netif_waitset_513th_registration_is_loudly_dropped" }
+{ "type": "test", "event": "started", "name": "devether_tests::netif_waitset_duplicate_and_zero_registrations_stay_idempotent" }
+{ "type": "test", "event": "started", "name": "devether_tests::netif_waitset_retains_the_whole_proc_table_and_take_returns_all" }
+{ "type": "test", "event": "started", "name": "devip_tests::conv_waitset_513th_registration_is_loudly_dropped" }
+{ "type": "test", "event": "started", "name": "devip_tests::conv_waitset_duplicate_and_zero_registrations_stay_idempotent" }
+{ "type": "test", "event": "started", "name": "devip_tests::conv_waitset_retains_the_whole_proc_table_and_take_returns_all" }
+{ "type": "test", "event": "started", "name": "devip_tests::stack_waitset_513th_registration_is_loudly_dropped" }
+{ "type": "test", "event": "started", "name": "devip_tests::stack_waitset_duplicate_and_zero_registrations_stay_idempotent" }
+{ "type": "test", "event": "started", "name": "devip_tests::stack_waitset_retains_the_whole_proc_table_and_take_returns_all" }
+{ "type": "test", "name": "devether_tests::netif_waitset_513th_registration_is_loudly_dropped", "event": "failed", "stdout": "\nthread 'devether_tests::netif_waitset_513th_registration_is_loudly_dropped' (837110) panicked at port/src/devether_tests.rs:190:5:\nassertion `left == right` failed: the table-sized prefix survives; only the beyond-capacity 513th drops\n  left: 16\n right: 512\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n" }
+{ "type": "test", "name": "devether_tests::netif_waitset_duplicate_and_zero_registrations_stay_idempotent", "event": "ok" }
+{ "type": "test", "name": "devether_tests::netif_waitset_retains_the_whole_proc_table_and_take_returns_all", "event": "failed", "stdout": "\nthread 'devether_tests::netif_waitset_retains_the_whole_proc_table_and_take_returns_all' (837112) panicked at port/src/devether_tests.rs:173:5:\nassertion `left == right` failed: 512 distinct live pids all register (the set is sized to the table)\n  left: 16\n right: 512\n" }
+{ "type": "test", "name": "devip_tests::conv_waitset_513th_registration_is_loudly_dropped", "event": "failed", "stdout": "\nthread 'devip_tests::conv_waitset_513th_registration_is_loudly_dropped' (837113) panicked at port/src/devip_tests.rs:3466:5:\nassertion `left == right` failed: the table-sized prefix survives; only the beyond-capacity 513th drops\n  left: 16\n right: 512\n" }
+{ "type": "test", "name": "devip_tests::conv_waitset_retains_the_whole_proc_table_and_take_returns_all", "event": "failed", "stdout": "\nthread 'devip_tests::conv_waitset_retains_the_whole_proc_table_and_take_returns_all' (837115) panicked at port/src/devip_tests.rs:3450:5:\nassertion `left == right` failed: 512 distinct live pids all register (the set is sized to the table)\n  left: 16\n right: 512\n" }
+{ "type": "test", "name": "devip_tests::stack_waitset_513th_registration_is_loudly_dropped", "event": "failed", "stdout": "\nthread 'devip_tests::stack_waitset_513th_registration_is_loudly_dropped' (837116) panicked at port/src/devip_tests.rs:3421:5:\nassertion `left == right` failed: the table-sized prefix survives; only the beyond-capacity 513th drops\n  left: 16\n right: 512\n" }
+{ "type": "test", "name": "devip_tests::conv_waitset_duplicate_and_zero_registrations_stay_idempotent", "event": "ok" }
+{ "type": "test", "name": "devip_tests::stack_waitset_duplicate_and_zero_registrations_stay_idempotent", "event": "ok" }
+{ "type": "test", "name": "devip_tests::stack_waitset_retains_the_whole_proc_table_and_take_returns_all", "event": "failed", "stdout": "\nthread 'devip_tests::stack_waitset_retains_the_whole_proc_table_and_take_returns_all' (837118) panicked at port/src/devip_tests.rs:3405:5:\nassertion `left == right` failed: 512 distinct live pids all register (the set is sized to the table)\n  left: 16\n right: 512\n" }
+{ "type": "suite", "event": "failed", "passed": 3, "failed": 6, "ignored": 0, "measured": 0, "filtered_out": 102, "exec_time": 0.000577317 }

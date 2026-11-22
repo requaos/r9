@@ -1,0 +1,12 @@
+diag2 run 1: rc=0 dur=213s dbgbytes=2700 evid=/tmp/netstress-r9-x64.IQ0f24
+diag2 run 2: rc=0 dur=210s dbgbytes=2700 evid=/tmp/netstress-r9-x64.6bVg4Z
+diag2 run 3: rc=0 dur=208s dbgbytes=2700 evid=/tmp/netstress-r9-x64.pRsVhO
+diag2 run 4: rc=0 dur=207s dbgbytes=2700 evid=/tmp/netstress-r9-x64.u90vDK
+diag2 run 5: rc=0 dur=207s dbgbytes=2700 evid=/tmp/netstress-r9-x64.3ds219
+diag2 run 6: rc=0 dur=207s dbgbytes=2700 evid=/tmp/netstress-r9-x64.qym5RX
+diag2 run 7: rc=0 dur=208s dbgbytes=2700 evid=/tmp/netstress-r9-x64.bRdUrv
+diag2 run 8: rc=0 dur=208s dbgbytes=2700 evid=/tmp/netstress-r9-x64.nDzlRK
+diag2 run 9: rc=0 dur=208s dbgbytes=2700 evid=/tmp/netstress-r9-x64.qTPAJZ
+diag2 run 10: rc=1 dur=25s dbgbytes=5400 evid=/tmp/netstress-r9-x64.XT5sO2
+FIRED(diag2) run 10 — /tmp/cr07-diag2/run-10.*
+DIAG2-DONE

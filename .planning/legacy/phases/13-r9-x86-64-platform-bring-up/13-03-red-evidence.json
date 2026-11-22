@@ -1,0 +1,15 @@
+{
+  "command": "cd ../r9 && nix develop --command sh -c 'cargo test -p x86_64 --bins --target x86_64-unknown-linux-gnu timer -- --nocapture'",
+  "exitCode": 101,
+  "targetTests": [
+    "platform::q35::timer::tests::mode_gate_keys_off_cpuid_leaf1_ecx_bit24",
+    "platform::q35::timer::tests::tsc_delta_converts_without_overflow_at_q35_scale",
+    "platform::q35::timer::tests::tick_accounts_once_and_rearms"
+  ],
+  "targetFile": "x86_64/src/platform/q35/timer.rs",
+  "expected": "all three target tests fail on their planned assertions against the loud stub (mode gate: Periodic stub != TscDeadline on the bit-24-set ECX; delta: Some(0) != Some(1_024_000_000); tick accounting: counter stays 41 != 42)",
+  "actual": "3 failed / 0 passed; each failure is an assert_eq on the planned behavior (left: Periodic/right: TscDeadline; left: Some(0)/right: Some(1024000000); left: 41/right: 42); no compile, discovery, or fixture faults",
+  "output": "running 3 tests\n\nthread 'platform::q35::timer::tests::mode_gate_keys_off_cpuid_leaf1_ecx_bit24' (224709) panicked at x86_64/src/platform/q35/timer.rs:83:9:\nassertion `left == right` failed\n  left: Periodic\n right: TscDeadline\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\nthread 'platform::q35::timer::tests::tick_accounts_once_and_rearms' (224710) panicked at x86_64/src/platform/q35/timer.rs:128:9:\nassertion `left == right` failed\n  left: 41\n right: 42\n\nthread 'platform::q35::timer::tests::tsc_delta_converts_without_overflow_at_q35_scale' (224711) panicked at x86_64/src/platform/q35/timer.rs:103:9:\nassertion `left == right` failed\n  left: Some(0)\n right: Some(1024000000)\ntest platform::q35::timer::tests::mode_gate_keys_off_cpuid_leaf1_ecx_bit24 ... FAILED\ntest platform::q35::timer::tests::tick_accounts_once_and_rearms ... FAILED\ntest platform::q35::timer::tests::tsc_delta_converts_without_overflow_at_q35_scale ... FAILED\n\nfailures:\n\nfailures:\n    platform::q35::timer::tests::mode_gate_keys_off_cpuid_leaf1_ecx_bit24\n    platform::q35::timer::tests::tick_accounts_once_and_rearms\n    platform::q35::timer::tests::tsc_delta_converts_without_overflow_at_q35_scale\n\ntest result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s\n\nerror: test failed, to rerun pass `-p x86_64 --bin x86_64`\n",
+  "semanticAssessment": "VALID RED: every named target executed and failed on the planned assertion for the intended reason (the stub returns the wrong-by-design value); zero tests passed; no syntax/import/fixture noise. Rust libtest console has no classifier adapter and workflow.tdd_mode is false in config \u2014 this record is on disk for review rather than machine-classified (the documented Rust gap, tdd.md #4379).",
+  "redEvidenceOk": true
+}

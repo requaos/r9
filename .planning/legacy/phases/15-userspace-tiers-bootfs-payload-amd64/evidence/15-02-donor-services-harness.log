@@ -1,0 +1,56 @@
+== amd64 build-tree lock held: /home/req/code/harvey/.build/amd64-tree.lock
+== mode: kvm (banner budget 60s, sweep budget 300s)
+== launching: /nix/store/bp9li432ba8adp47dr9z9y0hx56wn8v2-qemu-11.1.2/bin/qemu-system-x86_64 -kernel /home/req/code/harvey/amd64/9k10t1.elf -m 512 -accel kvm -cpu host -display none -no-reboot -serial file:/home/req/code/harvey/.build/tier-9k-serial.log
+== waiting for 'Plan 9' banner (budget 60s)
+== banner captured at 5s — sweeping (budget 300s)
+== SVC-DONE observed at +0s
+qemu-system-x86_64: terminating on signal 15 from pid 244242 (sh)
+== T1-VENUE-PASS ok=36 skip=22+2libtest fail=0 done=yes svc=9/0 ok/skip fail=0 accel=kvm commit=5fb06b0070171f24a2ae7a0462cb6d619635964d
+   ok markers (D-16 self-print — the capture is the authority, this is the runner-visible digest):
+T1-OK awk
+T1-OK basename
+T1-OK cal
+T1-OK cat
+T1-OK cmp
+T1-OK comm
+T1-OK date
+T1-OK dc
+T1-OK du
+T1-OK echo
+T1-OK float-d01
+T1-OK fmt
+T1-OK grep
+T1-OK join
+T1-OK ls
+T1-OK md5sum
+T1-OK nm
+T1-OK pr
+T1-OK ps
+T1-OK rc
+T1-OK read
+T1-OK sed
+T1-OK seq
+T1-OK sha1sum
+T1-OK sleep
+T1-OK sort
+T1-OK strings
+T1-OK sum
+T1-OK tail
+T1-OK test
+T1-OK time
+T1-OK tr
+T1-OK uniq
+T1-OK units
+T1-OK wc
+T1-OK xd
+   services ok markers (D-16 self-print):
+SVC-OK authsrv
+SVC-OK cs
+SVC-OK dns
+SVC-OK exportfs
+SVC-OK factotum
+SVC-OK keyfs
+SVC-OK listen
+SVC-OK mntgen
+SVC-OK srv
+   result file: /home/req/code/harvey/.build/tier-9k-result.txt

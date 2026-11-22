@@ -1,0 +1,23 @@
+r9 devshell: rustc 1.95.0-nightly (842bd5be2 2026-01-29)
+QEMU emulator version 11.1.2
+apps: nix run .#build | nix run .#boot-virt | nix run .#default
+{ "type": "suite", "event": "started", "test_count": 9 }
+{ "type": "test", "event": "started", "name": "entropy::tests::entropy_classify_orders_rdseed_rdrand_jitter" }
+{ "type": "test", "event": "started", "name": "entropy::tests::entropy_drng_fill_bounded_retry_and_fallback" }
+{ "type": "test", "event": "started", "name": "entropy::tests::entropy_has_rdrand_keys_off_leaf1_ecx_bit30" }
+{ "type": "test", "event": "started", "name": "entropy::tests::entropy_has_rdseed_keys_off_leaf7_ebx_bit18_maxleaf_first" }
+{ "type": "test", "event": "started", "name": "entropy::tests::entropy_jitter_fold_reproduces_and_separates" }
+{ "type": "test", "event": "started", "name": "entropy::tests::entropy_probe_arms_rdrand_from_leaf1_ecx" }
+{ "type": "test", "event": "started", "name": "entropy::tests::entropy_probe_ignores_leaf7_ecx_bit30" }
+{ "type": "test", "event": "started", "name": "entropy::tests::entropy_probe_venue_shapes_stay_correct" }
+{ "type": "test", "event": "started", "name": "entropy::tests::entropy_rng_seed_fill_same_input_reproduces_differing_differs" }
+{ "type": "test", "name": "entropy::tests::entropy_has_rdrand_keys_off_leaf1_ecx_bit30", "event": "ok" }
+{ "type": "test", "name": "entropy::tests::entropy_jitter_fold_reproduces_and_separates", "event": "ok" }
+{ "type": "test", "name": "entropy::tests::entropy_has_rdseed_keys_off_leaf7_ebx_bit18_maxleaf_first", "event": "ok" }
+{ "type": "test", "name": "entropy::tests::entropy_probe_ignores_leaf7_ecx_bit30", "event": "failed", "stdout": "\nthread 'entropy::tests::entropy_probe_ignores_leaf7_ecx_bit30' (607034) panicked at x86_64/src/entropy.rs:314:9:\nassertion `left == right` failed: leaf-7 ECX bit 30 must not arm Rdrand\n  left: Rdrand\n right: Jitter\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n" }
+{ "type": "test", "name": "entropy::tests::entropy_drng_fill_bounded_retry_and_fallback", "event": "ok" }
+{ "type": "test", "name": "entropy::tests::entropy_probe_arms_rdrand_from_leaf1_ecx", "event": "failed", "stdout": "\nthread 'entropy::tests::entropy_probe_arms_rdrand_from_leaf1_ecx' (607033) panicked at x86_64/src/entropy.rs:300:9:\nassertion `left == right` failed: leaf-1 ECX bit 30 must arm Rdrand\n  left: Jitter\n right: Rdrand\n" }
+{ "type": "test", "name": "entropy::tests::entropy_classify_orders_rdseed_rdrand_jitter", "event": "ok" }
+{ "type": "test", "name": "entropy::tests::entropy_probe_venue_shapes_stay_correct", "event": "ok" }
+{ "type": "test", "name": "entropy::tests::entropy_rng_seed_fill_same_input_reproduces_differing_differs", "event": "ok" }
+{ "type": "suite", "event": "failed", "passed": 7, "failed": 2, "ignored": 0, "measured": 0, "filtered_out": 77, "exec_time": 0.000640022 }

@@ -1,0 +1,629 @@
+warning: Git tree '/home/req/code/harvey' is dirty
+== r9 kernel package: /nix/store/4gn6gnqbgpmmbi3rnimw24awd8dxrqvf-r9-kernel-x64-d1c4849
+   kernel:     /nix/store/4gn6gnqbgpmmbi3rnimw24awd8dxrqvf-r9-kernel-x64-d1c4849/kernel-x64.elf
+   iso-builder: /nix/store/ncw5b2k3vhyv3ianz6aqya7nnccynv7w-r9-iso-builder/bin/r9-iso-builder
+   netdev emitter: /nix/store/avja2v4mz76g91a80a5p4swgyi8xwriv-r9-netdev-args-d1c4849/bin/r9-netdev-args
+   shape:      q35 accel=kvm cpu=host net=slirp
+== step 1/3: amd64 userland build (build/x86_64/stage-build.sh)
+== no passwordless sudo — running the stage build in an unprivileged user namespace (unshare -Ur -m chroot scaffold; log: /home/req/code/harvey/.build/stage-build-x64.log)
+== stage build provenance (Harvey's vendored toolchain):
+   6c: /harvey/.build/hostbin-linux-x86_64/bin/6c
+   6l: /harvey/.build/hostbin-linux-x86_64/bin/6l
+   mk: /nix/store/dzvnbi2n1x9jkmzvmwxdly607bwaxsbv-plan9port-0-unstable-2025-11-10/plan9/bin/mk
+== stage lib: libc (idempotent)
+for(i in 9sys 9syscall fmt port $objtype)@{
+	echo $i
+	cd $i
+	mk $MKFLAGS install
+}
+9sys
+ar vu /amd64/lib/libc.a abort.6 access.6 announce.6 callmain.6 convD2M.6 convM2D.6 convM2S.6 convS2M.6 cputime.6 ctime.6 dial.6 dirfstat.6 dirfwstat.6 dirmodefmt.6 dirread.6 dirstat.6 dirwstat.6 fcallfmt.6 fork.6 getnetconninfo.6 getenv.6 getpid.6 getppid.6 getwd.6 iounit.6 nulldir.6 postnote.6 privalloc.6 procsetname.6 pushssl.6 pushtls.6 putenv.6 qlock.6 read.6 read9pmsg.6 readv.6 rerrstr.6 sbrk.6 setnetmtpt.6 sysfatal.6 syslog.6 sysname.6 time.6 times.6 tm2sec.6 truerand.6 wait.6 waitpid.6 werrstr.6 write.6 writev.6
+9syscall
+SYS=`{sed '/^#define._X[123]/d; s/#define.([A-Z0-9_]*).*/\1/' sys.h}
+for(I in $SYS) {
+	i=`{echo $I|tr A-Z a-z}
+	n=`{sed -n '/[ 	]'$I'[ 	]/s/.*	//p' sys.h}
+	if(~ $i exits) i=_exits
+	{switch($objtype){
+	case mips
+		echo TEXT $i'(SB)', 1, '$0'
+		echo MOVW R1, '0(FP)'
+		echo MOVW '$'$n, R1
+		echo SYSCALL
+		if(~ $i seek || ~ $i nsec) {
+			echo 'MOVW $-1,R5
+			BNE R1,R5,4(PC)
+			MOVW a+0(FP),R5
+			MOVW R1,0(R5)
+			MOVW R1,4(R5)'
+		}
+		echo RET
+	case mips2
+		echo TEXT $i'(SB)', 1, '$0'
+		echo MOVW R1, '0(FP)'
+		echo MOVW '$'$n, R1
+		echo ADD '$4',R29
+		echo SYSCALL
+		echo ADD '$-4',R29
+		echo RET
+	case spim
+		echo TEXT $i'(SB)', 1, '$0'
+		echo MOVW R1, '0(FP)'
+		echo MOVW '$'$n, R1
+		echo ADD '$4',R29
+		echo SYSCALL
+		echo ADD '$-4',R29
+		if(~ $i seek || ~ $i nsec) {	# untested so far - geoff
+			echo 'MOVW $-1,R5
+			BNE R1,R5,4(PC)
+			MOVW a+0(FP),R5
+			MOVW R1,0(R5)
+			MOVW R1,4(R5)'
+		}
+		echo RET
+	case mips64
+		if(~ $i seek || ~ $i nsec)
+			echo TEXT _$i'(SB)', 1, '$0'
+		if not
+			echo TEXT $i'(SB)', 1, '$0'
+		echo MOVV R1, '0(FP)'
+		echo MOVW '$'$n, R1
+		echo ADDV '$8',R29
+		echo SYSCALL
+		echo ADDV '$-8',R29
+		echo RET
+	case spim64
+		if(~ $i seek || ~ $i nsec)
+			echo TEXT _$i'(SB)', 1, '$0'
+		if not
+			echo TEXT $i'(SB)', 1, '$0'
+		echo MOVV R1, '0(FP)'
+		echo MOVW '$'$n, R1
+		echo ADDV '$8',R29
+		echo SYSCALL
+		echo ADDV '$-8',R29
+		echo RET
+	case 386
+		echo TEXT $i'(SB)', 1, '$0'
+		echo MOVL '$'$n, AX
+		echo INT '$'64
+		if(~ $i seek || ~ $i nsec) {
+			echo 'CMPL AX,$-1
+			JNE 4(PC)
+			MOVL a+0(FP),CX
+			MOVL AX,0(CX)
+			MOVL AX,4(CX)'
+		}
+		echo RET
+	case amd64
+		if(~ $i seek)
+			echo TEXT _seek'(SB)', 1, '$0'
+		if not
+			echo TEXT $i'(SB)', 1, '$0'
+		#
+		# For architectures which pass the first argument
+		# in a register, if the system call takes no arguments
+		# there will be no 'a0+0(FP)' reserved on the stack.
+		#
+		if(! ~ $i nsec)
+			echo MOVQ RARG, 'a0+0(FP)'
+		echo MOVQ '$'$n, RARG
+		echo SYSCALL
+		echo RET
+	case aarch64
+		j=$i
+		if(~ $i seek) j=_seek
+		echo TEXT $j'(SB)', 1, '$0'
+		echo MOV R0, '0(FP)'
+		echo MOV '$'$n, R0
+		echo SVC
+		echo RETURN
+	case sparc
+		echo TEXT $i'(SB)', 1, '$0'
+		echo MOVW R7, '0(FP)'
+		echo MOVW '$'$n, R7
+		echo TA R0
+		if(~ $i seek || ~ $i nsec) {
+			echo 'CMP R7,$-1
+			BNE 4(PC)
+			MOVW a+0(FP),R8
+			MOVW R7,0(R8)
+			MOVW R7,4(R8)'
+		}
+		echo RETURN
+	case arm
+		echo TEXT $i'(SB)', 1, '$0'
+		echo MOVW R0, '0(FP)'
+		echo MOVW '$'$n, R0
+		echo SWI 0
+		if(~ $i seek || ~ $i nsec) {
+			echo 'CMP $-1,R0
+			BNE 4(PC)
+			MOVW a+0(FP),R1
+			MOVW R0,0(R1)
+			MOVW R0,4(R1)'
+		}
+		echo RET
+	case power
+		echo TEXT $i'(SB)', 1, '$0'
+		echo MOVW R3, '0(FP)'
+		echo MOVW '$'$n, R3
+		echo SYSCALL
+		if(~ $i seek || ~ $i nsec) {
+			echo 'CMP R3,$-1
+			BNE 4(PC)
+			MOVW a+0(FP),R8
+			MOVW R3,0(R8)
+			MOVW R3,4(R8)'
+		}
+		echo RETURN
+	case power64
+		if(~ $i seek)
+			echo TEXT _seek'(SB)', 1, '$0'
+		if not
+			echo TEXT $i'(SB)', 1, '$0'
+		echo MOVD R3, '0(FP)'
+		echo MOVW '$'$n, R3
+		echo SYSCALL
+		echo RETURN
+	case riscv
+		echo TEXT $i'(SB)', 1, '$0'
+		echo MOVW R8, '0(FP)'
+		echo MOVW '$'$n, R8
+		echo ECALL
+		if(~ $i seek) {
+			echo 'MOVW $-1, R9
+			BNE R8, R9, 4(PC)
+			MOVW a+0(FP),R9
+			MOVW R8,0(R9)
+			MOVW R8,4(R9)'
+		}
+		if(~ $i nsec) {
+			echo 'MOVW a+0(FP),R10
+			MOVW R8,0(R10)
+			MOVW R9,4(R10)'
+		}
+		echo RET
+	case riscv64
+		if(~ $i seek)
+			echo TEXT _seek'(SB)', 1, '$0'
+		if not
+			echo TEXT $i'(SB)', 1, '$0'
+		#
+		# For architectures which pass the first argument
+		# in a register, if the system call takes no arguments
+		# there will be no 'a0+0(FP)' reserved on the stack.
+		#
+		# jc doesn't widen longs to vlongs when pushing them.
+		# so we have to be careful here to only push longs
+		# for first arguments, where appropriate.
+		#
+		switch ($i) {
+		case nsec
+			;
+		case bind chdir exec _exits segbrk open create \
+		    brk_ remove notify pipe seek segdetach segfree \
+		    segflush rendezvous unmount semacquire \
+		    semrelease errstr stat wstat await tsemacquire
+			echo MOV R8, '0(FP)'
+		case *
+			echo MOVW R8, '0(FP)'
+		}
+		echo MOV '$'$n, R8
+		echo ECALL
+		echo RET
+	}} > $i.s
+	$AS $i.s
+}
+ar vu /$objtype/lib/libc.a *.$O
+rm -f *.$O *.s
+r - _errstr.6
+r - _exits.6
+r - _fsession.6
+r - _fstat.6
+r - _fwstat.6
+r - _mount.6
+r - _read.6
+r - _stat.6
+r - _wait.6
+r - _write.6
+r - _wstat.6
+r - alarm.6
+r - await.6
+r - bind.6
+r - brk_.6
+r - chdir.6
+r - close.6
+r - create.6
+r - dup.6
+r - errstr.6
+r - exec.6
+r - fauth.6
+r - fd2path.6
+r - fstat.6
+r - fversion.6
+r - fwstat.6
+r - mount.6
+r - nmount.6
+r - noted.6
+r - notify.6
+r - nsec.6
+r - open.6
+r - oseek.6
+r - pipe.6
+r - pread.6
+r - pwrite.6
+r - remove.6
+r - rendezvous.6
+r - rfork.6
+r - seek.6
+r - segattach.6
+r - segbrk.6
+r - segdetach.6
+r - segflush.6
+r - segfree.6
+r - semacquire.6
+r - semrelease.6
+r - sleep.6
+r - stat.6
+r - sysr1.6
+r - tsemacquire.6
+r - unmount.6
+r - wstat.6
+fmt
+ar vu /amd64/lib/libc.a dofmt.6 dorfmt.6 errfmt.6 fltfmt.6 fmt.6 fmtfd.6 fmtlock.6 fmtprint.6 fmtquote.6 fmtrune.6 fmtstr.6 fmtvprint.6 fprint.6 print.6 runefmtstr.6 runeseprint.6 runesmprint.6 runesnprint.6 runesprint.6 runevseprint.6 runevsmprint.6 runevsnprint.6 seprint.6 smprint.6 snprint.6 sprint.6 vfprint.6 vseprint.6 vsmprint.6 vsnprint.6
+port
+ar vu /amd64/lib/libc.a _assert.6 abs.6 asin.6 atan.6 atan2.6 atexit.6 atnotify.6 atof.6 atol.6 atoll.6 beget.6 cistrcmp.6 cistrncmp.6 cistrstr.6 charstod.6 cleanname.6 crypt.6 ctype.6 encodefmt.6 execl.6 exp.6 fabs.6 floor.6 fmod.6 frand.6 frexp.6 getfields.6 getuser.6 hangup.6 hypot.6 leget.6 lnrand.6 lock.6 log.6 lrand.6 malloc.6 mktemp.6 nan.6 needsrcquote.6 netcrypt.6 netmkaddr.6 nrand.6 ntruerand.6 perror.6 pool.6 pow.6 pow10.6 profile.6 qsort.6 quote.6 rand.6 readn.6 rune.6 runebase.6 runebsearch.6 runestrcat.6 runestrchr.6 runestrcmp.6 runestrcpy.6 runestrecpy.6 runestrdup.6 runestrncat.6 runestrncmp.6 runestrncpy.6 runestrrchr.6 runestrlen.6 runestrstr.6 runetype.6 sin.6 sinh.6 strcmp.6 strecpy.6 strcspn.6 strdup.6 strncat.6 strncmp.6 strncpy.6 strpbrk.6 strrchr.6 strspn.6 strstr.6 strtod.6 strtok.6 strtol.6 strtoll.6 strtoul.6 strtoull.6 tan.6 tanh.6 tokenize.6 toupper.6 utfecpy.6 utflen.6 utfnlen.6 utfrune.6 utfrrune.6 utfutf.6 u16.6 u32.6 u64.6
+amd64
+ar vu /amd64/lib/libc.a _seek.6 getcallerpc.6 notejmp.6 argv0.6 atom.6 cycles.6 getfcr.6 main9.6 main9p.6 memccpy.6 memchr.6 memcmp.6 memcpy.6 memmove.6 memset.6 muldiv.6 rdpmc.6 setjmp.6 sqrt.6 strcat.6 strchr.6 strcpy.6 strlen.6 tas.6
+== stage compile: build/x86_64/smokesleep.c -> smoke-out/smokesleep
+== chain lib: libbio (idempotent)
+ar vu /amd64/lib/libbio.a bbuffered.6 bfildes.6 bflush.6 bgetrune.6 bgetc.6 bgetd.6 binit.6 boffset.6 bprint.6 bputrune.6 bputc.6 brdline.6 brdstr.6 bread.6 bseek.6 bwrite.6 bvprint.6
+== chain lib: libauth (idempotent)
+ar vu /amd64/lib/libauth.a amount.6 amount_getkey.6 attr.6 auth_attr.6 auth_challenge.6 auth_chuid.6 auth_getkey.6 auth_getuserpasswd.6 auth_proxy.6 auth_respond.6 auth_rpc.6 auth_userpasswd.6 auth_wep.6 login.6 newns.6 noworld.6
+== chain lib: libip (idempotent)
+ar vu /amd64/lib/libip.a eipfmt.6 equivip.6 parseip.6 parseether.6 myetheraddr.6 myipaddr.6 classmask.6 bo.6 readipifc.6 ipaux.6 ptclbsum.6
+== chain lib: libmp (idempotent)
+for(i in port $objtype)@{
+	echo $i
+	cd $i
+	mk $MKFLAGS install
+}
+port
+ar vu /amd64/lib/libmp.a mpaux.6 mpfmt.6 strtomp.6 mptobe.6 mptole.6 betomp.6 letomp.6 mpadd.6 mpsub.6 mpcmp.6 mpfactorial.6 mpmul.6 mpleft.6 mpright.6 mpveccmp.6 mpdiv.6 mpexp.6 mpmod.6 mpextendedgcd.6 mpinvert.6 mprand.6 crt.6 mptoi.6 mptoui.6 mptov.6 mptouv.6
+amd64
+ar vu /amd64/lib/libmp.a mpdigdiv.6 mpvecadd.6 mpvecdigmuladd.6 mpvecdigmulsub.6 mpvecsub.6
+== chain lib: libsec (idempotent)
+for(i in port $objtype)@{
+	echo $i
+	cd $i
+	mk $MKFLAGS install
+}
+port
+ar vu /amd64/lib/libsec.a des.6 desmodes.6 desECB.6 desCBC.6 des3ECB.6 des3CBC.6 aes.6 blowfish.6 chacha.6 hmac.6 md5.6 md4.6 sha1.6 sha2_64.6 sha2_128.6 sha2block64.6 sha2block128.6 sha1pickle.6 md5pickle.6 rc4.6 genrandom.6 prng.6 fastrand.6 nfastrand.6 probably_prime.6 smallprimetest.6 genprime.6 dsaprimes.6 gensafeprime.6 genstrongprime.6 rsagen.6 rsafill.6 rsaencrypt.6 rsadecrypt.6 rsaalloc.6 rsaprivtopub.6 x509.6 decodepem.6 eggen.6 egencrypt.6 egdecrypt.6 egalloc.6 egprivtopub.6 egsign.6 egverify.6 dsagen.6 dsaalloc.6 dsaprivtopub.6 dsasign.6 dsaverify.6 tlshand.6 thumb.6 readcert.6 pbkdf2.6
+amd64
+ar vu /amd64/lib/libsec.a md5block.6 sha1block.6
+== chain lib: libflate (idempotent)
+ar vu /amd64/lib/libflate.a deflate.6 deflatezlib.6 deflateblock.6 deflatezlibblock.6 inflate.6 inflatezlib.6 inflateblock.6 inflatezlibblock.6 flateerr.6 crc.6 adler.6
+== chain lib: libauthsrv (idempotent)
+ar vu /amd64/lib/libauthsrv.a _asgetticket.6 _asrdresp.6 authdial.6 convA2M.6 convM2A.6 convM2PR.6 convM2T.6 convM2TR.6 convPR2M.6 convT2M.6 convTR2M.6 nvcsum.6 opasstokey.6 passtokey.6 readnvram.6
+== chain: boot(8) via mkfile.amd64 (the additive objtype-gated build)
+libboot.a6 doesn't exist: assuming it will be an archive
+6c -I. -FTVw bootr9.c
+6c -I. -FTVw printstub.c
+6c -I. -FTVw bootauth.c
+6c -I. -FTVw aux.c
+6c -I. -FTVw boot.c
+6c -I. -FTVw bootcache.c
+6c -I. -FTVw bootip.c
+6c -I. -FTVw local.c
+6c -I. -FTVw embed.c
+6c -I. -FTVw settime.c
+6c -I. -FTVw parts.c
+6c -I. -FTVw usb.c
+names=`{membername $newprereq}
+ar vu libboot.a6 $names
+rm $names
+ar: creating libboot.a6
+a - bootauth.6
+a - aux.6
+a - boot.6
+a - bootcache.6
+a - bootip.6
+a - local.6
+a - embed.6
+a - settime.6
+a - parts.6
+a - usb.6
+6l -o boot bootr9.6 libboot.a6 printstub.6
+rm -f *.[568ijqv7] libboot.a6 boot
+== chain: init (the real one — cmd's per-target rule)
+sed: Can't open /unix/mkfile
+6^l  -o 6.init init.6
+cp 6.init /$objtype/init
+== chain: rc
+yacc -d syn.y
+cmp -s x.tab.h y.tab.h || cp y.tab.h x.tab.h
+6c -FTVw code.c
+6c -FTVw exec.c
+6c -FTVw glob.c
+6c -FTVw here.c
+6c -FTVw io.c
+6c -FTVw lex.c
+6c -FTVw pcmd.c
+6c -FTVw pfnc.c
+6c -FTVw simple.c
+6c -FTVw subr.c
+6c -FTVw trap.c
+6c -FTVw tree.c
+6c -FTVw var.c
+6c -FTVw havefork.c
+6c -FTVw plan9.c
+6c -FTVw y.tab.c
+6l  -o 6.out code.6 exec.6 glob.6 here.6 io.6 lex.6 pcmd.6 pfnc.6 simple.6 subr.6 trap.6 tree.6 var.6 havefork.6 plan9.6 y.tab.6
+cp 6.out /amd64/bin/rc
+== chain: paqfs (per-target — mkpaqfs stays host-only)
+6c -FTVw paqfs.c
+6l  -o 6.paqfs paqfs.6
+cp 6.paqfs /amd64/bin/paqfs
+== chain: ls (the smoke sweep set)
+sed: Can't open /unix/mkfile
+6^c -FTVw ls.c
+6^l  -o 6.ls ls.6
+== chain: cat (the smoke sweep set)
+sed: Can't open /unix/mkfile
+6^c -FTVw cat.c
+6^l  -o 6.cat cat.6
+== chain: echo (the smoke sweep set)
+sed: Can't open /unix/mkfile
+6^c -FTVw echo.c
+6^l  -o 6.echo echo.6
+== chain: ps (the smoke sweep set)
+sed: Can't open /unix/mkfile
+6^c -FTVw ps.c
+6^l  -o 6.ps ps.6
+sed: Can't open /unix/mkfile
+rm -f [568ijqv7].init init.[568ijqv7]
+rm -f paqfs.[568ijqv7] [568ijqv7].paqfs paqfs.acid paqfs
+rm -f [568ijqv7].out *.[568ijqv7] [xy].tab.? y.debug rc
+== staged tree (/harvey/build/x86_64/smoke-out):
+--rwxr-xr-x M 0 root root 35293 Nov 11 08:16 /harvey/build/x86_64/smoke-out/init
+--rwxr-xr-x M 0 root root 35293 Nov 11 08:16 /harvey/build/x86_64/smoke-out/smokesleep
+== chain tree (/harvey/build/x86_64/out):
+--rwxr-xr-x M 0 root root   159349 Nov 11 08:16 /harvey/build/x86_64/out/boot
+--rw-r--r-- M 0 root root   377578 Nov 11 07:35 /harvey/build/x86_64/out/bootfs-chain.paq
+--rw-r--r-- M 0 root root 20385229 Nov 10 15:46 /harvey/build/x86_64/out/bootfs-draw.paq
+--rw-r--r-- M 0 root root       20 Nov 10 15:46 /harvey/build/x86_64/out/bootfs-draw.trace-sessions
+--rw-r--r-- M 0 root root  3965835 Nov 10 15:51 /harvey/build/x86_64/out/bootfs-gs.paq
+--rw-r--r-- M 0 root root   895555 Nov 11 07:35 /harvey/build/x86_64/out/bootfs-net.paq
+--rw-r--r-- M 0 root root 26490796 Nov 11 07:35 /harvey/build/x86_64/out/bootfs-services.paq
+--rw-r--r-- M 0 root root  1853062 Nov 11 07:35 /harvey/build/x86_64/out/bootfs-tier.paq
+--rw-r--r-- M 0 root root    54629 Nov 11 07:35 /harvey/build/x86_64/out/bootfs.paq
+--rwxr-xr-x M 0 root root    35621 Nov 11 08:16 /harvey/build/x86_64/out/cat
+--rwxr-xr-x M 0 root root    58896 Nov 11 08:16 /harvey/build/x86_64/out/echo
+--rwxr-xr-x M 0 root root   141989 Nov 11 08:16 /harvey/build/x86_64/out/init
+--rwxr-xr-x M 0 root root    84965 Nov 11 08:16 /harvey/build/x86_64/out/ls
+--rwxr-xr-x M 0 root root    36081 Nov 11 07:34 /harvey/build/x86_64/out/netblast
+--rwxr-xr-x M 0 root root   117524 Nov 11 08:16 /harvey/build/x86_64/out/paqfs
+--rwxr-xr-x M 0 root root    72152 Nov 11 08:16 /harvey/build/x86_64/out/ps
+--rwxr-xr-x M 0 root root   144025 Nov 11 08:16 /harvey/build/x86_64/out/rc
+--rwxr-xr-x M 0 root root   101678 Nov 11 07:34 /harvey/build/x86_64/out/tcpblast
+--rwxr-xr-x M 0 root root    41261 Nov 11 07:34 /harvey/build/x86_64/out/tcpecho
+STAGE-BUILD-OK
+stage: smokesleep magic 00008a97 verified (amd64 S_MAGIC, A1 real-binary proof)
+stage: init magic 00008a97 verified (amd64 S_MAGIC, A1 real-binary proof)
+stage: chain boot magic 00008a97 verified (amd64 S_MAGIC, A1 real-binary proof)
+stage: chain init magic 00008a97 verified (amd64 S_MAGIC, A1 real-binary proof)
+stage: chain rc magic 00008a97 verified (amd64 S_MAGIC, A1 real-binary proof)
+stage: chain paqfs magic 00008a97 verified (amd64 S_MAGIC, A1 real-binary proof)
+stage: chain ls magic 00008a97 verified (amd64 S_MAGIC, A1 real-binary proof)
+stage: chain cat magic 00008a97 verified (amd64 S_MAGIC, A1 real-binary proof)
+stage: chain echo magic 00008a97 verified (amd64 S_MAGIC, A1 real-binary proof)
+stage: chain ps magic 00008a97 verified (amd64 S_MAGIC, A1 real-binary proof)
+== PASS: staged init smokesleep into build/x86_64/smoke-out + boot bootfs-chain.paq bootfs-draw.paq bootfs-draw.trace-sessions bootfs-gs.paq bootfs-net.paq bootfs.paq bootfs-services.paq bootfs-tier.paq cat echo init ls netblast paqfs ps rc tcpblast tcpecho into build/x86_64/out (log: /home/req/code/harvey/.build/stage-build-x64.log)
+== step 2/3: bake bootfs.paq + bootfs-chain.paq (build/x86_64/mkimage.sh)
+== PASS: baked /home/req/code/harvey/build/x86_64/out/bootfs.paq (54620 bytes; header 529ab12b trailer 6b46e688; KERNDATE 1794402887)
+chain manifest: /boot/boot staged
+chain manifest: /boot/paqfs staged
+chain manifest: /amd64/init staged
+chain manifest: /amd64/bin/rc staged
+chain manifest: /amd64/bin/ls staged
+chain manifest: /amd64/bin/cat staged
+chain manifest: /amd64/bin/echo staged
+chain manifest: /amd64/bin/ps staged
+chain manifest: /rc/lib/rcmain staged
+chain manifest: /rc/bin/termrc staged
+chain manifest: /lib/namespace staged
+chain manifest: /adm/timezone/local staged
+chain manifest: /usr/glenda/lib/profile staged
+== PASS: baked /home/req/code/harvey/build/x86_64/out/bootfs-chain.paq (377569 bytes; header 529ab12b trailer 6b46e688; KERNDATE 1794402887)
+== witness manifest verified: 38 members match the donor venue's embed set
+tier manifest: /boot/boot staged
+tier manifest: /boot/paqfs staged
+tier manifest: /amd64/init staged
+tier manifest: /amd64/bin/rc staged
+tier manifest: /amd64/bin/ls staged
+tier manifest: /amd64/bin/cat staged
+tier manifest: /amd64/bin/echo staged
+tier manifest: /amd64/bin/ps staged
+tier manifest: /rc/lib/rcmain staged
+tier manifest: /rc/bin/termrc staged
+tier manifest: /lib/namespace staged
+tier manifest: /adm/timezone/local staged
+tier manifest: /usr/glenda/lib/profile staged
+tier manifest: /lib/tier1-sweep.rc staged
+tier manifest: /lib/tier1/sentinel.txt staged
+tier manifest: /lib/tier1/nm-input.6 staged
+tier manifest: 37 h* sweep binaries staged (computed from tiers/tier1-cmds.txt)
+== PASS: baked /home/req/code/harvey/build/x86_64/out/bootfs-tier.paq (1853061 bytes; 37 h* binaries; header 529ab12b trailer 6b46e688; KERNDATE 1794402887)
+net manifest: /boot/boot staged
+net manifest: /boot/paqfs staged
+net manifest: /amd64/init staged
+net manifest: /amd64/bin/rc staged
+net manifest: /amd64/bin/ls staged
+net manifest: /amd64/bin/cat staged
+net manifest: /amd64/bin/echo staged
+net manifest: /amd64/bin/ps staged
+net manifest: /amd64/bin/ip/ipconfig staged
+net manifest: /amd64/bin/ip/ping staged
+net manifest: /amd64/bin/ip/udpecho staged
+net manifest: /amd64/bin/tcpecho staged
+net manifest: /amd64/bin/tcpblast staged
+net manifest: /amd64/bin/netblast staged
+net manifest: /amd64/bin/grep staged
+net manifest: /amd64/bin/sed staged
+net manifest: /amd64/bin/dd staged
+net manifest: /amd64/bin/wc staged
+net manifest: /amd64/bin/sha1sum staged
+net manifest: /amd64/bin/test staged
+net manifest: /amd64/bin/bind staged
+net manifest: /amd64/bin/dc staged
+net manifest: /rc/lib/rcmain staged
+net manifest: /rc/bin/termrc staged
+net manifest: /lib/namespace staged
+net manifest: /adm/timezone/local staged
+net manifest: /usr/glenda/lib/profile staged
+net manifest: /lib/netaddr.rc staged
+net manifest: /lib/netip-loopback.rc staged
+net manifest: /lib/netip-static.rc staged
+net manifest: /lib/netip-dhcp.rc staged
+net manifest: /lib/netip-tcp.rc staged
+net manifest: /lib/netip-tap.rc staged
+== PASS: baked /home/req/code/harvey/build/x86_64/out/bootfs-net.paq (895550 bytes; header 529ab12b trailer 6b46e688; KERNDATE 1794402887)
+payload manifest: /lib/ndb/local substituted from lib/ndb/local.template (the netaddr seam's slirp leg) [services]
+payload manifest: /lib/font/bit staged (tree, 4303 files) [services]
+payload manifest: /usr/glenda/lib/profile staged [services]
+payload manifest: /lib/ndb/local staged [services]
+payload manifest: font /lib/font/bit/lucm/unicode.9.font staged [services]
+payload manifest: font /lib/font/bit/lucidasans/euro.8.font staged [services]
+payload manifest: font /lib/font/bit/pelm/latin1.8.font staged [services]
+payload manifest: font /lib/font/bit/pelm/euro.9.font staged [services]
+payload manifest: /lib/font/bit 4303 files 27676353 bytes (floors: 4303 files, 27000000 bytes) [services]
+payload manifest: /usr/glenda/lib/profile shape ok — terminal case rio-free, cpu case intact [services]
+services manifest: /boot/boot staged
+services manifest: /boot/paqfs staged
+services manifest: /boot/rcmain staged
+services manifest: /boot/sentinel.txt staged
+services manifest: /boot/tcp9901 staged
+services manifest: /boot/tcp9902 staged
+services manifest: /amd64/init staged
+services manifest: /amd64/bin/rc staged
+services manifest: /amd64/bin/ls staged
+services manifest: /amd64/bin/cat staged
+services manifest: /amd64/bin/echo staged
+services manifest: /amd64/bin/ps staged
+services manifest: /amd64/bin/ip/ipconfig staged
+services manifest: /amd64/bin/ip/ping staged
+services manifest: /amd64/bin/ip/udpecho staged
+services manifest: /amd64/bin/grep staged
+services manifest: /amd64/bin/sed staged
+services manifest: /amd64/bin/dd staged
+services manifest: /amd64/bin/wc staged
+services manifest: /amd64/bin/sha1sum staged
+services manifest: /amd64/bin/test staged
+services manifest: /amd64/bin/bind staged
+services manifest: /amd64/bin/hsvctcpecho staged
+services manifest: /amd64/bin/hmkdir staged
+services manifest: /rc/lib/rcmain staged
+services manifest: /rc/bin/termrc staged
+services manifest: /lib/namespace staged
+services manifest: /adm/timezone/local staged
+services manifest: /usr/glenda/lib/profile staged
+services manifest: /lib/netaddr.rc staged
+services manifest: /lib/netip-loopback.rc staged
+services manifest: /lib/netip-static.rc staged
+services manifest: /lib/netip-dhcp.rc staged
+services manifest: /lib/netip-tcp.rc staged
+services manifest: /lib/services-sweep.rc staged
+services manifest: 124 h* sweep binaries staged (tier-1 helpers + the tier-2 set computed from tiers/tier2-services.txt: 87 tier-2 members)
+== PASS: baked /home/req/code/harvey/build/x86_64/out/bootfs-services.paq (26490804 bytes; 124 h* binaries; header 529ab12b trailer 6b46e688; KERNDATE 1794402887)
+== step 3/3: composing the ISO (r9's iso-builder: kernel + bootfs-chain.paq as /boot/bootfs.paq)
+xorriso 1.5.8.pl02 : RockRidge filesystem manipulator, libburnia project.
+
+xorriso : NOTE : Environment variable SOURCE_DATE_EPOCH encountered with value 1735689600
+Drive current: -outdev 'stdio:/tmp/r9-iso-builder.3AuTth/boot.iso'
+Media current: stdio file, overwriteable
+Media status : is blank
+Media summary: 0 sessions, 0 data blocks, 0 data,  388g free
+Added to ISO image: directory '/'='/tmp/grub.T9aN4j'
+xorriso : UPDATE :     356 files added in 1 seconds
+Added to ISO image: directory '/'='/tmp/r9-iso-builder.3AuTth/stage'
+xorriso : UPDATE :     361 files added in 1 seconds
+xorriso : NOTE : Copying to System Area: 512 bytes from file '/tmp/r9-iso-builder.3AuTth/grub-i386-pc/boot_hybrid.img'
+ISO image produced: 8576 sectors
+Written to medium : 8576 sectors at LBA 0
+Writing to 'stdio:/tmp/r9-iso-builder.3AuTth/boot.iso' completed successfully.
+
+r9-iso-builder: /tmp/boot-r9-x64.IbE7kv/boot.iso e2efe4dbddb33c34d64367fdcc86a4d086b267ccdcb8d41c2383539ec62ce55b (modules: bootfs.paq)
+== launching qemu — interactive on stdio (ctrl-a x to quit)
+== qemu argv: qemu-system-x86_64 -M q35 -cpu host -smp 1 -m 1024M -accel kvm -cdrom /tmp/boot-r9-x64.IbE7kv/boot.iso -netdev user,id=n0,hostfwd=tcp:127.0.0.1:17010-:17010,hostfwd=tcp:127.0.0.1:5670-:567 -device virtio-net-pci-non-transitional,netdev=n0 -nographic
+c[?7l[2J[0mSeaBIOS (version rel-1.17.0-0-gb52ca86e094d-prebuilt.qemu.org)
+
+
+iPXE (http://ipxe.org) 00:02.0 CA00 PCI2.10 PnP PMM+3EFD1B50+3EF31B50 CA00
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from Hard Disk...
+Boot failed: could not read the boot disk
+
+Booting from DVD/CD...
+[0;30;47mWelcome to GRUB[H[J[1;1H  Booting `r9'
+
+!
+
+
+r9 from the Internet
+Machine information:
+q35: memory 0x0..0x9fc00 (0x9fc00) available
+q35: memory 0x9fc00..0xa0000 (0x400) reserved
+q35: memory 0xf0000..0x100000 (0x10000) reserved
+q35: memory 0x100000..0x3ffdf000 (0x3fedf000) available
+q35: memory 0x3ffdf000..0x40000000 (0x21000) reserved
+q35: memory 0xb0000000..0xc0000000 (0x10000000) reserved
+q35: memory 0xfed1c000..0xfed20000 (0x4000) reserved
+q35: memory 0xfeffc000..0xff000000 (0x4000) reserved
+q35: memory 0xfffc0000..0x100000000 (0x40000) reserved
+q35: acpi rsdt 0x3ffe2345 (mb2 RSDP tag — 13-04 walks it)
+q35: acpi rsdt 0x3ffe2345 via mb2 acpi tag (5 entries)
+q35: mcfg 0xb0000000 buses 0x0-0xff (seg 0)
+q35: lapic 0xfee00000 (madt local intc)
+q35: ioapic 0xfec00000 gsib 0 (id 0)
+q35: intsrc bus 0 source 0 -> gsi 2 flags 0x0
+q35: intsrc bus 0 source 5 -> gsi 5 flags 0xd
+q35: intsrc bus 0 source 9 -> gsi 9 flags 0xd
+q35: intsrc bus 0 source 10 -> gsi 10 flags 0xd
+q35: intsrc bus 0 source 11 -> gsi 11 flags 0xd
+q35: hpet 0xfed00000
+pciexbar: 0xb0000001 -> 0xb0000001
+pci: virtio-net 1af4:1041 at 00:02.0 rev 01 pin 1 (inta) bars 2
+pci: inta -> gsi 22 (q35 root slot 2, pirq G: 16+6)
+Memory usage:
+  Used:		0x00000006800000
+  Total:	0x0000003ffdf000
+lapic: cpuid leaf-1 ecx: x2apic=true tsc-deadline=true
+lapic: x2apic live (msr 0x800 map; lint0/1 masked, no pic)
+timer: 2496096980 Hz (pit 1193182 Hz reference), TscDeadline mode, armed
+ioapic: id 0 version 0x11 rtes 23 gsib 0 (madt 0xfec00000)
+pci: bar4 pa 0xfe000000 size 0x4000 (firmware) readback 0xfe000000
+pci: caps common@0x0+0x1000 notify@0x3000 isr@0x1000 device@0x2000 mult 4
+virtio-net: features offered 0x10130bf8024 negotiated 0x100010020
+virtio-net: rx pre-posted 128 buffers qsize 256
+ioapic: gsi 22 -> vector 0x21 (level)
+#l0: virtio: 1000Mbps: 52:54:00:12:34:56
+q35: module @0x101000 +0x5c2e1 (mb2 tag 3, stashed)
+devenv: seeded cputype=amd64 nobootprompt=embed readparts=0
+q35: paqfs root mounted from module (377569 bytes)
+devroot: /boot/boot open (159349 bytes)
+exec: entering ring 3 pc=0x2054fa sp=0x7fffffffef78 path=/boot/boot argv=[boot]
+paqfs...version...root-chain: Wed Nov 11 13:14:47 GMT 2026
+fingerprint: 86161e5de9235b5f176a9a78b4559d58c1b53107
+process 2 exited: ""
+syscall 10 unimplemented
+time...
+boot: opening #c/swap: namec: does not exist
+init: can't open #c/sysname: namec: does not exist
+syscall 10 unimplemented
+
+init: starting /bin/rc
+% qemu-system-x86_64: terminating on signal 15 from pid 1608104 (/etc/profiles/per-user/req/bin/bash)

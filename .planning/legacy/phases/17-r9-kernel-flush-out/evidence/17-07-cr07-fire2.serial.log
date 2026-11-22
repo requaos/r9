@@ -1,0 +1,163 @@
+c[?7l[2J[0mSeaBIOS (version rel-1.17.0-0-gb52ca86e094d-prebuilt.qemu.org)
+
+
+iPXE (http://ipxe.org) 00:02.0 CA00 PCI2.10 PnP PMM+3EFD1B50+3EF31B50 CA00
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from Hard Disk...
+Boot failed: could not read the boot disk
+
+Booting from DVD/CD...
+[0;30;47mWelcome to GRUB[H[J[1;1H  Booting `r9'
+
+!
+
+
+r9 from the Internet
+Machine information:
+q35: memory 0x0..0x9fc00 (0x9fc00) available
+q35: memory 0x9fc00..0xa0000 (0x400) reserved
+q35: memory 0xf0000..0x100000 (0x10000) reserved
+q35: memory 0x100000..0x3ffdf000 (0x3fedf000) available
+q35: memory 0x3ffdf000..0x40000000 (0x21000) reserved
+q35: memory 0xb0000000..0xc0000000 (0x10000000) reserved
+q35: memory 0xfed1c000..0xfed20000 (0x4000) reserved
+q35: memory 0xfeffc000..0xff000000 (0x4000) reserved
+q35: memory 0xfffc0000..0x100000000 (0x40000) reserved
+q35: acpi rsdt 0x3ffe2345 (mb2 RSDP tag — 13-04 walks it)
+q35: acpi rsdt 0x3ffe2345 via mb2 acpi tag (5 entries)
+q35: mcfg 0xb0000000 buses 0x0-0xff (seg 0)
+q35: lapic 0xfee00000 (madt local intc)
+q35: ioapic 0xfec00000 gsib 0 (id 0)
+q35: intsrc bus 0 source 0 -> gsi 2 flags 0x0
+q35: intsrc bus 0 source 5 -> gsi 5 flags 0xd
+q35: intsrc bus 0 source 9 -> gsi 9 flags 0xd
+q35: intsrc bus 0 source 10 -> gsi 10 flags 0xd
+q35: intsrc bus 0 source 11 -> gsi 11 flags 0xd
+q35: hpet 0xfed00000
+pciexbar: 0xb0000001 -> 0xb0000001
+pci: virtio-net 1af4:1041 at 00:02.0 rev 01 pin 1 (inta) bars 2
+pci: inta -> gsi 22 (q35 root slot 2, pirq G: 16+6)
+Memory usage:
+  Used:		0x00000006a00000
+  Total:	0x0000003ffdf000
+lapic: cpuid leaf-1 ecx: x2apic=true tsc-deadline=true
+lapic: x2apic live (msr 0x800 map; lint0/1 masked, no pic)
+timer: 2496179200 Hz (pit 1193182 Hz reference), TscDeadline mode, armed
+ioapic: id 0 version 0x11 rtes 23 gsib 0 (madt 0xfec00000)
+pci: bar4 pa 0xfe000000 size 0x4000 (firmware) readback 0xfe000000
+pci: caps common@0x0+0x1000 notify@0x3000 isr@0x1000 device@0x2000 mult 4
+virtio-net: features offered 0x1c0010130bfffa7 negotiated 0x100010020
+virtio-net: rx pre-posted 128 buffers qsize 256
+ioapic: gsi 22 -> vector 0x21 (level)
+#l0: virtio: 1000Mbps: 52:54:00:12:34:56
+q35: module @0x101000 +0xdb940 (mb2 tag 3, stashed)
+devenv: seeded cputype=amd64 nobootprompt=embed readparts=0
+q35: paqfs root mounted from module (899392 bytes)
+devroot: /boot/boot open (159349 bytes)
+exec: entering ring 3 pc=0x2054fa sp=0x7fffffffef78 path=/boot/boot argv=[boot]
+paqfs...version...root-net: Fri Nov 13 02:49:27 GMT 2026
+fingerprint: 05787e286f7169c46b2959d737b114424384b08a
+process 2 exited: ""
+churngate: heap exit 103680 33554432
+syscall 10 unimplemented
+time...
+boot: opening #c/swap: namec: does not exist
+init: can't open #c/sysname: namec: does not exist
+syscall 10 unimplemented
+
+init: starting /bin/rc
+% rc /lib/netstress.rc tap 1 8 512
+process 6 exited: ""
+churngate: heap exit 1209280 33554432
+#I0: devip attached
+process 7 exited: ""
+churngate: heap exit 1210752 33554432
+devip: medium ether bound #l0
+process 8 exited: ""
+churngate: heap exit 1276494 33554432
+netstress: static ok
+process 9 exited: ""
+churngate: heap exit 1341824 33554432
+netstress: venue tap L2-truth
+process 10 exited: ""
+churngate: heap exit 1341824 33554432
+sending 3 64 byte messages 1000 ms apart to icmp!192.168.122.1!1
+0: rtt 0 µs, avg rtt 0 µs, ttl = 255
+1: rtt 0 µs, avg rtt 0 µs, ttl = 255
+2: rtt 0 µs, avg rtt 0 µs, ttl = 255
+process 12 exited: ""
+churngate: heap exit 1684032 33554432
+process 11 exited: ""
+churngate: heap exit 1684032 33554432
+process 13 exited: ""
+churngate: heap exit 1684032 33554432
+netstress: arp view ok
+process 14 exited: ""
+churngate: heap exit 1684032 33554432
+tcpblast: round 0 ok
+tcpblast: done 1 rounds
+process 15 exited: ""
+churngate: heap exit 1684032 33554432
+process 18 exited: ""
+churngate: heap exit 1720320 33554432
+process 19 exited: ""
+churngate: heap exit 1720320 33554432
+process 17 exited: ""
+churngate: heap exit 1720320 33554432
+process 22 exited: ""
+churngate: heap exit 1742848 33554432
+process 23 exited: ""
+churngate: heap exit 1873152 33554432
+process 21 exited: ""
+churngate: heap exit 1873152 33554432
+process 26 exited: ""
+churngate: heap exit 1894400 33554432
+proc: deallocate page 0x8000000: NotAllocated
+proc: deallocate page 0x8001000: NotAllocated
+proc: deallocate page 0x8002000: NotAllocated
+proc: deallocate page 0x8003000: NotAllocated
+proc: deallocate page 0x8004000: NotAllocated
+proc: deallocate page 0x8005000: NotAllocated
+proc: deallocate page 0x8006000: NotAllocated
+proc: deallocate page 0x8007000: NotAllocated
+process 27 exited: ""
+churngate: heap exit 2024704 33554432
+process 25 exited: ""
+churngate: heap exit 2024704 33554432
+process 30 exited: ""
+churngate: heap exit 2045952 33554432
+process 31 exited: ""
+churngate: heap exit 2176256 33554432
+process 29 exited: ""
+churngate: heap exit 2176256 33554432
+process 34 exited: ""
+churngate: heap exit 2209792 33554432
+process 35 exited: ""
+churngate: heap exit 2340096 33554432
+process 33 exited: ""
+churngate: heap exit 2340096 33554432
+tcpblast: round 0 ok
+process 38 exited: ""
+churngate: heap exit 2361344 33554432
+process 39 exited: ""
+churngate: heap exit 2491648 33554432
+process 37 exited: ""
+churngate: heap exit 2491648 33554432
+tcpblast: round 0 ok
+process 42 exited: ""
+churngate: heap exit 2508800 33554432
+process 43 exited: ""
+churngate: heap exit 2639104 33554432
+process 41 exited: ""
+churngate: heap exit 2639104 33554432
+process 46 exited: ""
+churngate: heap exit 2656256 33554432
+tcpblast: round 0 ok
+process 47 exited: ""
+churngate: heap exit 2786560 33554432
+process 45 exited: ""
+churngate: heap exit 2786560 33554432
+tcpblast: round 0 ok
+c[?7l[2J[0mSeaBIOS (ve

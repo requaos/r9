@@ -1,0 +1,28 @@
+{
+  "mode": "yolo",
+  "granularity": "coarse",
+  "parallelization": true,
+  "commit_docs": true,
+  "model_profile": "inherit",
+  "git": {
+    "allow_default_branch_commits": true
+  },
+  "graphify": {
+    "enabled": true
+  },
+  "workflow": {
+    "research": true,
+    "plan_check": true,
+    "verifier": true,
+    "compact_content": false,
+    "nyquist_validation": false,
+    "_auto_chain_active": false,
+    "use_worktrees": false
+  },
+  "plan_review": {
+    "source_grounding": false
+  },
+  "ship": {
+    "pr_body_sections": []
+  }
+}

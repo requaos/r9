@@ -1,0 +1,18 @@
+[H[J[1;1H  Booting `r9'
+
+
+r9 from the Internet
+Machine information:
+q35: memory 0x0..0x9fc00 (0x9fc00) available
+q35: memory 0x9fc00..0xa0000 (0x400) reserved
+q35: memory 0xf0000..0x100000 (0x10000) reserved
+q35: memory 0x100000..0x3ffdf000 (0x3fedf000) available
+q35: memory 0x3ffdf000..0x40000000 (0x21000) reserved
+q35: memory 0xb0000000..0xc0000000 (0x10000000) reserved
+q35: memory 0xfed1c000..0xfed20000 (0x4000) reserved
+q35: memory 0xfeffc000..0xff000000 (0x4000) reserved
+q35: memory 0xfffc0000..0x100000000 (0x40000) reserved
+q35: acpi rsdt 0x3ffe2345 (mb2 RSDP tag — 13-04 walks it)
+Memory usage:
+  Used:		0x00000000800000
+  Total:	0x0000003ffdf000

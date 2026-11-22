@@ -1,0 +1,40 @@
+q35: memsmoke-r9-x64: stage ok — banner
+paqfs...smoke-r9-x64: stage ok — paqfs
+version...smoke-r9-x64: stage ok — version
+% smoke-r9-x64: stage ok — prompt
+echo r9x64shell7smoke-r9-x64: stage ok — echo-echoed
+smoke-r9-x64: stage ok — echo-response
+% smoke-r9-x64: stage ok — echo-prompt
+% smoke-r9-x64: stage ok — emptyline-prompt
+% smoke-r9-x64: stage ok — ls-prompt
+smoke-r9-x64: stage ok — ls /bin subset (rc ls cat echo ps present)
+% smoke-r9-x64: stage ok — ps-prompt
+smoke-r9-x64: stage ok — ps (4 process lines, rc present)
+% smoke-r9-x64: stage ok — cat-prompt
+smoke-r9-x64: stage ok — cat /lib/namespace (known line present)
+% smoke-r9-x64: stage ok — del-reprompt
+smoke-r9-x64: stage ok — del-echoed
+churngatsmoke-r9-x64: stage ok — del-answer
+% smoke-r9-x64: stage ok — del-prompt
+smoke-r9-x64: stage ok — restart-print
+% smoke-r9-x64: stage ok — restart-prompt
+smoke-r9-x64: stage ok — pid-warning-absent (no #p/0/ctl in the capture)
+smoke-r9-x64: stage ok — nic-bind (#l0: virtio: 1000Mbps: bind line present in the capture)
+smoke-r9-x64: stage ok — cpu-bootconf
+paqfs...smoke-r9-x64: stage ok — cpu-paqfs
+version...smoke-r9-x64: stage ok — cpu-version
+smoke-r9-x64: stage ok — hostfwd-17010-listening (127.0.0.1:17010 present in the host listening table)
+smoke-r9-x64: stage ok — hostfwd-5670-listening (127.0.0.1:5670 present in the host listening table)
+smoke-r9-x64: stage ok — cpu-pair-ok
+cpurc: ETHER-OKsmoke-r9-x64: stage ok — cpu-ether-ok
+smoke-r9-x64: stage ok — cpu-keyfs-ok
+smoke-r9-x64: stage ok — cpu-authsrv-listen
+cpurc: FACTOTUM-OKsmoke-r9-x64: stage ok — cpu-factotum-ok
+smoke-r9-x64: stage ok — cpu-listen-17010
+smoke-r9-x64: stage ok — cpu-ladder-done
+% smoke-r9-x64: stage ok — cpu-prompt
+smoke-r9-x64: cpu post-pass ok — zero cpurc: FAIL in the capture
+smoke-r9-x64: cpu post-pass ok — zero panic markers in the capture
+smoke-r9-x64: cpu post-pass ok — zero desktop font-line markers (DESK-02: the desktop is provably absent from boot)
+smoke-r9-x64: cpu post-pass ok — the bootconf line + DONE present whole-capture
+smoke-r9-x64: ALL STAGES PASS — chain leg: boot, echo (typed + answered), empty-line safety, ls/ps/cat sweep, DEL safety, restart, pid-warning-absent, nic-bind; cpu-chain leg: §15 boot with the bootconf append, the hostfwd pair observed host-side (17010 + 5670), the cpurc ladder in order (PAIR-OK, ETHER-OK, KEYFS-OK, AUTHSRV-LISTEN, FACTOTUM-OK, LISTEN-17010, DONE), the post-cpurc prompt, zero FAIL, zero panic, zero desktop font-line markers

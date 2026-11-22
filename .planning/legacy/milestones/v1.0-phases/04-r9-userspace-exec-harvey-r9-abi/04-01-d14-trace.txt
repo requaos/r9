@@ -1,0 +1,10 @@
+# date: 2026-11-02T12:33:23Z
+# donor pin: 350266104f1fed81c78c3d05fa44f523bec0ae4d (9front branch front)
+# target: /boot/tracehello (build/aarch64/tracehello.c, vendored 7c/7l in the lima guest namespace)
+# method: startsyscall+/proc/N/syscall (primary; RESEARCH.md D-14)
+# serial log: /Users/neilskinner/code/harvey/.build/9front-dist/trace-run.log (gitignored .build evidence)
+51 pwrite
+14 open
+50 pread
+4 close
+8 exits

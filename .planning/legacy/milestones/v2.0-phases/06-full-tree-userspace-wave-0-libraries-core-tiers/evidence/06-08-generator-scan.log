@@ -1,0 +1,17 @@
+warning: Git tree '/Users/neilskinner/code/harvey' has uncommitted changes
+harvey devshell: HARVEY=/Users/neilskinner/code/harvey PLAN9=/nix/store/7rakg00y5ajwwgpzdy4zv3k1rxli9g6i-plan9port-0-unstable-2025-11-10/plan9
+  host bin: /Users/neilskinner/code/harvey/.build/hostbin-darwin-aarch64/bin
+  harness: /nix/store/va7gdkblpmyccag9pdpdxf171p59400b-harness-0.1.0/bin/harness
+apps: nix run .#setup -> .#toolchain -> .#build | .#iso
+(. #build runs the Linux namespace build inside a lima VM)
+ok: G1 sys/src/cmd/awk/unix.maketab magic=7f454c46
+ok: G2 sys/src/cmd/jpg/unix.rgbycc magic=7f454c46
+ok: G3 sys/src/cmd/jpg/unix.rgbrgbv magic=7f454c46
+ok: G4 sys/src/cmd/jtagfs/unix.genrtab magic=7f454c46
+ok: G5 sys/src/cmd/spell/o.pcode magic=7f454c46
+skip (G6 runs=never-for-aarch64): sys/src/cmd/gs/mkfile:150
+ok: G7 sys/src/cmd/usb/usbd/mkdev magic=23212f62
+skip (G8 runs=never-cross): sys/src/cmd/upas/bayes/mkfile:17
+NOTE: G9 sys/src/cmd/7l/mkcname magic=6564202d (script/text or unclassified; not .7)
+whitelist armed: 7.genarch (G6's guarded row; not present in the tree — expected under the current gs guard)
+GENERATOR-SCAN-OK

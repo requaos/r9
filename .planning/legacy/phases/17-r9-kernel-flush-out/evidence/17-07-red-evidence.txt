@@ -1,0 +1,6 @@
+error[E0425]: cannot find function `deregister_net_waiter` in module `stack`
+error[E0425]: cannot find function `deregister_net_waiter` in module `stack`
+error[E0425]: cannot find function `deregister_net_waiter` in module `stack`
+error[E0425]: cannot find function `deregister_net_waiter` in module `stack`
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `port` (lib test) due to 4 previous errors; 2 warnings emitted

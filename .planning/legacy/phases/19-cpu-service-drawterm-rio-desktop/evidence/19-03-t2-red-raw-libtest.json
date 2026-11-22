@@ -1,0 +1,30 @@
+{ "type": "suite", "event": "started", "test_count": 14 }
+{ "type": "test", "event": "started", "name": "syscall::tests::arg_block_window_validates_before_copy" }
+{ "type": "test", "event": "started", "name": "syscall::tests::cpu03_slots_carry_named_handlers" }
+{ "type": "test", "event": "started", "name": "syscall::tests::dispatch_routes_args_from_sp8_upward_into_ax" }
+{ "type": "test", "event": "started", "name": "syscall::tests::exec_arg_staging_preserves_order" }
+{ "type": "test", "event": "started", "name": "syscall::tests::exec_replace_seeds_argv_order_verbatim" }
+{ "type": "test", "event": "started", "name": "syscall::tests::fwstat_syscall_over_an_open_fd_refuses_loudly" }
+{ "type": "test", "event": "started", "name": "syscall::tests::nsec_reads_no_user_stack" }
+{ "type": "test", "event": "started", "name": "syscall::tests::other_loud_none_slots_stay_unarmed" }
+{ "type": "test", "event": "started", "name": "syscall::tests::remove_round_trips_through_the_devcap_arm_and_refuses_unported" }
+{ "type": "test", "event": "started", "name": "syscall::tests::remove_syscall_dispatches_and_refuses_loudly" }
+{ "type": "test", "event": "started", "name": "syscall::tests::unimplemented_number_is_loud" }
+{ "type": "test", "event": "started", "name": "syscall::tests::valid_stat_wire_ports_the_donor_statcheck" }
+{ "type": "test", "event": "started", "name": "syscall::tests::wstat_over_an_unported_device_refuses_loudly_never_zero" }
+{ "type": "test", "event": "started", "name": "syscall::tests::wstat_syscall_validates_then_refuses" }
+{ "type": "test", "name": "syscall::tests::cpu03_slots_carry_named_handlers", "event": "failed", "stdout": "\nthread 'syscall::tests::cpu03_slots_carry_named_handlers' (823691) panicked at x86_64/src/syscall.rs:2242:13:\nslot 25 must carry a named handler\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n" }
+{ "type": "test", "name": "syscall::tests::dispatch_routes_args_from_sp8_upward_into_ax", "event": "ok" }
+{ "type": "test", "name": "syscall::tests::nsec_reads_no_user_stack", "event": "ok" }
+{ "type": "test", "name": "syscall::tests::other_loud_none_slots_stay_unarmed", "event": "ok" }
+{ "type": "test", "name": "syscall::tests::exec_arg_staging_preserves_order", "event": "ok" }
+{ "type": "test", "name": "syscall::tests::fwstat_syscall_over_an_open_fd_refuses_loudly", "event": "failed", "stdout": "\nthread 'syscall::tests::fwstat_syscall_over_an_open_fd_refuses_loudly' (823695) panicked at x86_64/src/syscall.rs:2419:9:\nassertion `left == right` failed\n  left: \"syscall not implemented\"\n right: \"wstat: device does not implement wstat\"\n" }
+{ "type": "test", "name": "syscall::tests::arg_block_window_validates_before_copy", "event": "ok" }
+{ "type": "test", "name": "syscall::tests::remove_round_trips_through_the_devcap_arm_and_refuses_unported", "event": "failed", "stdout": "\nthread 'syscall::tests::remove_round_trips_through_the_devcap_arm_and_refuses_unported' (823698) panicked at x86_64/src/syscall.rs:2300:9:\nassertion `left == right` failed: the ported arm runs\n  left: Err(\"remove: device does not implement remove\")\n right: Ok(0)\n" }
+{ "type": "test", "name": "syscall::tests::unimplemented_number_is_loud", "event": "ok" }
+{ "type": "test", "name": "syscall::tests::remove_syscall_dispatches_and_refuses_loudly", "event": "failed", "stdout": "\nthread 'syscall::tests::remove_syscall_dispatches_and_refuses_loudly' (823699) panicked at x86_64/src/syscall.rs:2346:9:\nassertion `left == right` failed\n  left: \"syscall not implemented\"\n right: \"remove: device does not implement remove\"\n" }
+{ "type": "test", "name": "syscall::tests::valid_stat_wire_ports_the_donor_statcheck", "event": "failed", "stdout": "\nthread 'syscall::tests::valid_stat_wire_ports_the_donor_statcheck' (823701) panicked at x86_64/src/syscall.rs:2269:9:\nassertion `left == right` failed\n  left: 67\n right: 49\n" }
+{ "type": "test", "name": "syscall::tests::wstat_over_an_unported_device_refuses_loudly_never_zero", "event": "ok" }
+{ "type": "test", "name": "syscall::tests::exec_replace_seeds_argv_order_verbatim", "event": "ok" }
+{ "type": "test", "name": "syscall::tests::wstat_syscall_validates_then_refuses", "event": "failed", "stdout": "\nthread 'syscall::tests::wstat_syscall_validates_then_refuses' (823703) panicked at x86_64/src/syscall.rs:2375:9:\nassertion `left == right` failed: a valid buffer reaches the device refusal\n  left: \"syscall not implemented\"\n right: \"wstat: device does not implement wstat\"\n" }
+{ "type": "suite", "event": "failed", "passed": 8, "failed": 6, "ignored": 0, "measured": 0, "filtered_out": 89, "exec_time": 0.001264165 }

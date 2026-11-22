@@ -1,0 +1,33 @@
+r9 devshell: rustc 1.95.0-nightly (842bd5be2 2026-01-29)
+QEMU emulator version 11.1.2
+apps: nix run .#build | nix run .#boot-virt | nix run .#default
+{ "type": "suite", "event": "started", "test_count": 14 }
+{ "type": "test", "event": "started", "name": "devip_tests::iproute_longest_match_verbs_and_smoltcp_mirror" }
+{ "type": "test", "event": "started", "name": "devip_tests::tcp_announce_builds_contract_depth_pool_and_listen_pops_oldest" }
+{ "type": "test", "event": "started", "name": "devip_tests::tcp_checksum_and_porthog_are_accepted_and_recorded" }
+{ "type": "test", "event": "started", "name": "devip_tests::tcp_close_hangup_hangupxmit_wire_shapes" }
+{ "type": "test", "event": "started", "name": "devip_tests::tcp_connect_blocks_until_established_then_connected" }
+{ "type": "test", "event": "started", "name": "devip_tests::tcp_connect_deadline_expiry_maps_etimedout" }
+{ "type": "test", "event": "started", "name": "devip_tests::tcp_connect_rst_mid_syn_maps_econrefused" }
+{ "type": "test", "event": "started", "name": "devip_tests::tcp_conv_close_lingers_the_socket_until_closed" }
+{ "type": "test", "event": "started", "name": "devip_tests::tcp_full_exchange_moves_the_stats_counters" }
+{ "type": "test", "event": "started", "name": "devip_tests::tcp_gc_hangs_up_stale_convs_but_never_steals_an_in_use_slot" }
+{ "type": "test", "event": "started", "name": "devip_tests::tcp_generic_verbs_land_with_contract_errors" }
+{ "type": "test", "event": "started", "name": "devip_tests::tcp_listen_hangup_during_parked_wait_errors" }
+{ "type": "test", "event": "started", "name": "devip_tests::tcp_state_rename_table_is_devip_exact" }
+{ "type": "test", "event": "started", "name": "devip_tests::tcp_two_write_client_pattern_round_trips" }
+{ "type": "test", "name": "devip_tests::tcp_state_rename_table_is_devip_exact", "event": "ok" }
+{ "type": "test", "name": "devip_tests::tcp_announce_builds_contract_depth_pool_and_listen_pops_oldest", "event": "ok" }
+{ "type": "test", "name": "devip_tests::iproute_longest_match_verbs_and_smoltcp_mirror", "event": "ok" }
+{ "type": "test", "name": "devip_tests::tcp_checksum_and_porthog_are_accepted_and_recorded", "event": "ok" }
+{ "type": "test", "name": "devip_tests::tcp_close_hangup_hangupxmit_wire_shapes", "event": "ok" }
+{ "type": "test", "name": "devip_tests::tcp_connect_blocks_until_established_then_connected", "event": "ok" }
+{ "type": "test", "name": "devip_tests::tcp_conv_close_lingers_the_socket_until_closed", "event": "ok" }
+{ "type": "test", "name": "devip_tests::tcp_connect_deadline_expiry_maps_etimedout", "event": "ok" }
+{ "type": "test", "name": "devip_tests::tcp_connect_rst_mid_syn_maps_econrefused", "event": "ok" }
+{ "type": "test", "name": "devip_tests::tcp_gc_hangs_up_stale_convs_but_never_steals_an_in_use_slot", "event": "ok" }
+{ "type": "test", "name": "devip_tests::tcp_generic_verbs_land_with_contract_errors", "event": "ok" }
+{ "type": "test", "name": "devip_tests::tcp_two_write_client_pattern_round_trips", "event": "failed", "stdout": "\nthread 'devip_tests::tcp_two_write_client_pattern_round_trips' (617242) panicked at port/src/devip_tests.rs:2140:9:\npin (two_write): the peer's read PARKED — the two-write pattern was not delivered (the Nagle/delayed-ACK hold: the payload write sits in the tx queue and no parked proc can ever drive its release; the 18-07 mechanism record)\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n" }
+{ "type": "test", "name": "devip_tests::tcp_listen_hangup_during_parked_wait_errors", "event": "ok" }
+{ "type": "test", "name": "devip_tests::tcp_full_exchange_moves_the_stats_counters", "event": "ok" }
+{ "type": "suite", "event": "failed", "passed": 13, "failed": 1, "ignored": 0, "measured": 0, "filtered_out": 133, "exec_time": 0.003699608 }

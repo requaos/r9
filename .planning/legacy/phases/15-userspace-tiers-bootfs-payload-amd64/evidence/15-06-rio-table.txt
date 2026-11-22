@@ -1,0 +1,249 @@
+# 15-06 rio distilled syscall table — the 05-03 measured-set format
+# derived from 15-06-rio-raw.txt by build/x86_64/trace-distill.sh (the committed
+# derivation path — re-running it over the raw reproduces this file)
+# venue: k10draw draw donor (amd64 9k kernel), scripted-interaction
+# replay via /dev/mousein + /dev/kbin, tracesup born-traced arming
+# run: commit=c9d135a45 date=2026-11-10T14:09:15Z accel=kvm
+# row grammar: <syscall>\t<count>\t<args-shape (first sample)>
+#              B<TAB>syscall<TAB>count = per-binary aggregate
+#              P<TAB>syscall<TAB>count<TAB>path = distinct path args (digits->N)
+#              T<TAB>syscall<TAB>count = program-level union
+pid=31 name=rio fragments=672
+Pwrite	140	3 0x40b7f0/"/lib/font/bit/lucm/unicode.9.font" 33 -1
+Rendez	42	0x412478 0x0
+Open	32	0x400328/"#c/pid" 0x0
+Brk	31	0x413338
+Semacquire	20	0x40cc1c 1
+Semrelease	20	0x40cc1c 1
+Pread	16	3 0x414c7c 20 -1
+Close	15	3
+Rfork	7	0x2000
+Create	5	0x414c28/"/env/font" 0x1 0x1b4
+Bind	2	0x40158b/"#|" 0x40158e/"/mnt/temp" 0x0
+Fstat	2	3 0x4265f8 115
+Unmount	2	0/"" 0x4015b7/"/mnt/temp"
+Fd2path	1	3 0x414d00 256
+Notify	1	0x21d720
+Stat	1	0x40b7f0/"/lib/font/bit/lucm/unicode.9.font" 0x4154a8 115
+pid=42 name=rio fragments=81
+Pread	19	13 0x42c45c 20 -1
+Rendez	17	0x412478 0x0
+Close	2	13
+Open	2	0x42c3ec/"#p/42/args" 0x1
+Pwrite	1	13 0x4272a8/"mouseproc." 10 -1
+pid=43 name=rio fragments=23
+Pread	4	13 0x42deec 20 -1
+Rendez	3	0x412478 0x0
+Close	2	13
+Open	2	0x42de7c/"#p/43/args" 0x1
+Pwrite	1	13 0x427508/"kbdproc." 8 -1
+pid=44 name=rio fragments=23
+Nsec	2	0x205932
+Semacquire	2	0x40cc1c 1
+Semrelease	2	0x40cc1c 1
+Close	1	13
+Open	1	0x430bf4/"#p/44/args" 0x1
+Pwrite	1	13 0x4442a8/"TIMERPROC." 10 -1
+Rendez	1	0x42e408 0x0
+Rfork	1	0x4
+Sleep	1	1
+pid=45 name=rio fragments=17
+Brk	2	0x43e940
+Semrelease	2	0x40cc1c 1
+Close	1	13
+Open	1	0x43d54c/"#p/45/args" 0x1
+Pread	1	14 0x43d990 8215 -1
+Pwrite	1	13 0x43d950/"WCTLPROC." 9 -1
+Semacquire	1	0x40cc1c 1
+pid=50 name=rio fragments=109
+Pread	22	16 0x4440c4 20 -1
+Rendez	21	0x412478 0x0
+Pwrite	4	16 0x444508/"FILSYSPROC." 11 -1
+Brk	3	0x447268
+Close	2	16
+Open	2	0x444054/"#p/50/args" 0x1
+Semacquire	1	0x40cc1c 1
+pid=70 name=rio fragments=42
+Close	5	11
+Open	4	0x407f79/"/dev/cons" 0x0
+Rfork	3	0x7
+Bind	2	0x4016a2/"/mnt/wsys" 0x4016ac/"/dev" 0x1
+Await	1	0x44cce0 511
+Dup	1	1 2
+Mount	1	10 -1 0x401686/"/mnt/wsys" 0x0 0x44cf48/"1"
+Notify	1	0x0
+Pread	1	10 0x44a558 127 -1
+Semacquire	1	0x412494 1
+Semrelease	1	0x41238c 1
+Unmount	1	0/"" 0x40bd8c/"/mnt/temp"
+pid=72 name=rc fragments=277
+Close	44	4
+Pread	38	3 0x406b88 65615 -1
+Open	31	0x4019d7/"/env" 0x0
+Create	12	0x40bfe8/"#c/cons" 0x1 0x1b6
+Pwrite	10	2 0x4066e8/"%." 2 -1
+Brk	4	0x4076b8
+Await	1	0x7fffffffeb18 511
+Notify	1	0x20b61d
+Rfork	1	0x2014
+pid=72 name=rio fragments=4
+Close	1	10
+Exec	1	0x40b9dc/"/bin/rc" 0x40b79b/"rc" 0x40b79e/"-i"
+pid=76 name=echo fragments=11
+Brk	1	0x4028f0
+Close	1	3
+Exits	1	0/""
+Open	1	0x400090/"#c/pid" 0x0
+Pread	1	3 0x7fffffffee64 20 -1
+Pwrite	1	1 0x401900/"RIO-SCRIPT-DONE." 16 -1
+pid=76 name=rc fragments=10
+Close	3	3
+Dup	1	5 1
+Exec	1	0x7fffffffe908/"/boot/echo" 0x428808/"echo" 0x428788/"RIO-SCRIPT-DONE"
+BINARY name=echo pids=1 entries=6
+BINARY name=rc pids=2 entries=147
+BINARY name=rio pids=8 entries=490
+B	Brk	1
+B	Close	1
+B	Exits	1
+B	Open	1
+B	Pread	1
+B	Pwrite	1
+B	Close	47
+B	Pread	38
+B	Open	31
+B	Create	12
+B	Pwrite	10
+B	Brk	4
+B	Await	1
+B	Dup	1
+B	Exec	1
+B	Notify	1
+B	Rfork	1
+B	Pwrite	148
+B	Rendez	84
+B	Pread	63
+B	Open	44
+B	Brk	36
+B	Close	29
+B	Semacquire	25
+B	Semrelease	25
+B	Rfork	11
+B	Create	5
+B	Bind	4
+B	Unmount	3
+B	Fstat	2
+B	Notify	2
+B	Nsec	2
+B	Await	1
+B	Dup	1
+B	Exec	1
+B	Fd2path	1
+B	Mount	1
+B	Sleep	1
+B	Stat	1
+PATHS name=echo
+P	Open	1	#c/pid
+PATHS name=rc
+P	Create	2	/env/*
+P	Create	1	#c/cons
+P	Create	1	/env/N
+P	Create	1	/env/cflag
+P	Create	1	/env/fn#killroot
+P	Create	1	/env/fn#sigexit
+P	Create	1	/env/fn#trace-one
+P	Create	1	/env/fn#waitdone
+P	Create	1	/env/pid
+P	Create	1	/env/rcname
+P	Create	1	/env/status
+P	Exec	1	/boot/echo
+P	Open	2	/env
+P	Open	1	#c/pid
+P	Open	1	#d/N
+P	Open	1	/env/N
+P	Open	1	/env/T30
+P	Open	1	/env/T60
+P	Open	1	/env/apid
+P	Open	1	/env/cflag
+P	Open	1	/env/cmd
+P	Open	1	/env/cputype
+P	Open	1	/env/dir
+P	Open	1	/env/fn#killroot
+P	Open	1	/env/fn#trace-one
+P	Open	1	/env/fn#waitdone
+P	Open	1	/env/font
+P	Open	1	/env/home
+P	Open	1	/env/ifs
+P	Open	1	/env/name
+P	Open	1	/env/path
+P	Open	1	/env/pid
+P	Open	1	/env/prompt
+P	Open	1	/env/rcname
+P	Open	1	/env/rep
+P	Open	1	/env/root
+P	Open	1	/env/service
+P	Open	1	/env/status
+P	Open	1	/env/terminal
+P	Open	1	/env/wctl
+P	Open	1	/env/wsys
+P	Open	1	/rc/lib/rcmain
+PATHS name=rio
+P	Bind	3	#| /mnt/temp
+P	Bind	1	/mnt/wsys /dev
+P	Create	1	/env/font
+P	Create	1	/env/wctl
+P	Create	1	/env/wsys
+P	Create	1	/srv/rio.sys.N
+P	Create	1	/srv/riowctl.sys.N
+P	Exec	1	/bin/rc
+P	Mount	1	/mnt/wsys 1
+P	Open	6	#c/pid
+P	Open	5	#p/N/args
+P	Open	4	/lib/font/bit/lucm/latin1.9.N
+P	Open	3	/dev/cons
+P	Open	3	/mnt/temp/data
+P	Open	3	/mnt/temp/data1
+P	Open	2	/env/font
+P	Open	2	/lib/font/bit/lucm/latin1.N
+P	Open	1	#d/Nctl
+P	Open	1	.
+P	Open	1	/dev/consctl
+P	Open	1	/dev/cursor
+P	Open	1	/dev/draw/N/data
+P	Open	1	/dev/draw/N/refresh
+P	Open	1	/dev/draw/new
+P	Open	1	/dev/label
+P	Open	1	/dev/mouse
+P	Open	1	/dev/snarf
+P	Open	1	/dev/time
+P	Open	1	/dev/user
+P	Open	1	/dev/winname
+P	Open	1	/env/tabstop
+P	Open	1	/lib/font/bit/lucm/unicode.9.font
+P	Open	1	/proc/N/notepg
+P	Stat	1	/lib/font/bit/lucm/unicode.9.font
+P	Unmount	3	 /mnt/temp
+TOTAL pids=11 entries=643 binaries=3
+T	Pwrite	159
+T	Pread	102
+T	Rendez	84
+T	Close	77
+T	Open	76
+T	Brk	41
+T	Semacquire	25
+T	Semrelease	25
+T	Create	17
+T	Rfork	12
+T	Bind	4
+T	Notify	3
+T	Unmount	3
+T	Await	2
+T	Dup	2
+T	Exec	2
+T	Fstat	2
+T	Nsec	2
+T	Exits	1
+T	Fd2path	1
+T	Mount	1
+T	Sleep	1
+T	Stat	1

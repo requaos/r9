@@ -1,0 +1,46 @@
+# 19-10 Leg-1 cont 4 — guest-side probes on the wedged sessions (verbatim
+# captures; typed into the LIVE window shell — the keyboard path works in the
+# wedge, itself a discriminator). Two independent guests: the owner-pin
+# kernel (hbm9j26z = 56109c3 content) and the CEXEC-fixed kernel.
+
+## Probe 1 — is the mouse fd still held by rio? (BOTH kernels)
+
+  cpu% cat /dev/mouse
+  cat: read: Interrupted system call
+
+  NO "open /dev/mouse: Einuse" on either kernel: the outer rio's mouse fid
+  was CLUNKED at/after the sweep. (The read blocking-then-interrupted shows
+  the device itself is healthy — a second reader can open and park on it.)
+
+## Probe 2 — the proc map of the wedged session (identical on both kernels)
+
+  50 exportfs | 51 rio (the session's exec rio) | 52-58 empty-args procs
+  (rio's proccreate'd helpers: fsysproc, the two libdraw _ioprocs, timer)
+  59 ramfs, 68/69 plumber (session collateral)
+  70, 72-75 "rio"-args procs CREATED BY THE SWEEP, 76 rc (the window shell)
+  71: GONE — "cat: error reading /proc/71/args: devproc: no such process"
+
+  rio's threads (mousethread etc.) are userspace threads INSIDE pid 51
+  (threadcreate adds no proc); the sweep-time proc burst (70-76) is the
+  window-creation chain: winctl (threadcreate — no, see note), winshell,
+  the _schedexec child, AND the NESTED RIO the window shell's rc -i
+  re-execs from the profile (the ghost — plus its own helper procs), plus
+  per-window ramfs/plumber collateral from the same profile run.
+
+  Note: every login session that sourced the profile with a draw-serving
+  drawterm also left a full proc group behind (ramfs + plumber x2 + rio
+  x5-6 + rc) — the -G probes with the gui-x11 binary (draw served) each
+  spawned a whole headless rio tree. The ps pollution this produced on
+  long-lived guests is the profile defect's footprint, not a leak.
+
+## Probe 3 — cursor shape (screenshot-verified)
+
+  The cursor after the wedge is the SWEEP crosscursor (a small + shape),
+  exactly as the owner reported ("does not return to the arrow shape").
+
+## The owner's live answers (relayed mid-run)
+
+  1. "The cursor does still move" (as the box shape) — consistent: X-native
+     pointer motion needs no event delivery.
+  2. "Typing still lands in the existing window" — the keyboard thread and
+     the window's wsys cons are unaffected.

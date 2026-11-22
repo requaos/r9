@@ -1,0 +1,34 @@
+# 19-10 Leg-1 cont 5 — the cursor-revert proof at the pinned tree
+# (harvey d109744b2, r9 c787ce9; the venue = the plain sanctioned
+# app pipeline; cursor observed via XFixesGetCursorImage — the REAL
+# X sprite, not framebuffer pixels)
+
+## Cursor identity per position (curdump: sum = pixel checksum)
+
+- BARE Xvfb ROOT before any session (the venue's default 'arrow'):
+  16x16 hot=7,7 nonzero=176 sum=4850486892418657216
+- WINDOW INTERIOR after sweep 1 (500,420):
+  SAME sum=4850486892418657216  -> the default (the revert)
+- RIGHT EDGE of window 1 (719,420):
+  sum=12164540935704190604 hot=8,7 nonzero=113 (rio's 'r' edge
+  cursor — the contextual shape, fires and renders)
+- BACK INTO THE INTERIOR (500,420):
+  sum=4850486892418657216  -> REVERTED TO THE DEFAULT
+- TOP-LEFT CORNER (401,301):
+  sum=9441550221336331986 hot=4,4 nonzero=136 (rio's tl corner)
+- BARE DESKTOP after window 2 (850,150):
+  sum=4850486892418657216  -> the default
+
+## Host-side trace (the instrumented drawterm, same session)
+DTDBG mousewrite Qcursor: n=72 msec=61878
+DTDBG mousewrite Qcursor: n=0 msec=65334
+DTDBG mousewrite Qcursor: n=72 msec=82345
+DTDBG mousewrite Qcursor: n=0 msec=83220
+DTDBG mousewrite Qcursor: n=72 msec=125592
+DTDBG mousewrite Qcursor: n=0 msec=126478
+DTDBG mousewrite Qcursor: n=72 msec=128322
+DTDBG mousewrite Qcursor: n=0 msec=131529
+
+The zero-length writes (n=0) are the arrow revert — the first ever
+observed on this venue (every prior retained trace carried only
+n=72 writes: the cursor stuck at the last contextual shape).

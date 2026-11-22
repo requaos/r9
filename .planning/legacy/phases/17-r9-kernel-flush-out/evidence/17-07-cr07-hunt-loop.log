@@ -1,0 +1,15 @@
+run 1: rc=0 dur=210s ended=03:18:42Z
+run 2: rc=0 dur=208s ended=03:22:10Z
+run 3: rc=0 dur=207s ended=03:25:37Z
+run 4: rc=0 dur=207s ended=03:29:04Z
+run 5: rc=0 dur=207s ended=03:32:31Z
+run 6: rc=0 dur=208s ended=03:35:59Z
+run 7: rc=0 dur=209s ended=03:39:28Z
+run 8: rc=0 dur=207s ended=03:42:55Z
+run 9: rc=0 dur=207s ended=03:46:22Z
+run 10: rc=0 dur=208s ended=03:49:50Z
+run 11: rc=0 dur=206s ended=03:53:16Z
+run 12: rc=0 dur=209s ended=03:56:45Z
+run 13: rc=1 dur=25s ended=03:57:10Z
+FIRED at run 13 — evidence: /tmp/cr07-hunt/run-13.console + run-13.serial.log
+LOOP-DONE

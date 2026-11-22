@@ -1,0 +1,9 @@
+{
+  "command": "cd /home/req/code/r9 && nix develop . -c cargo test -p port --lib namec (stub state: walk_one_union/create_chan_union pass through to the head-only walk_one/create_chan)",
+  "exitCode": 101,
+  "targetTest": "namec_tests::walk_one_union_finds_nonhead_member",
+  "targetFile": "port/src/namec_tests.rs",
+  "output": "TAP version 13\n1..5\nnot ok 1 - namec_tests::create_chan_union_reaches_accepting_member\nnot ok 2 - namec_tests::walk_one_union_finds_nonhead_member\nok 3 - namec_tests::create_chan_union_without_mounts_keeps_direct_dispatch\nok 4 - namec_tests::walk_one_union_without_mounts_keeps_direct_dispatch\nnot ok 5 - namec_tests::create_chan_union_refusal_propagates_not_falls_through\n# tests 5\n# pass 2\n# fail 3\n",
+  "expected": "walk_one_union from a chan whose path sits under a union mount point resolves the name through the union member (#45 behavior bullet 1: the MAFTER devproc member serves '123' that the devroot head does not)",
+  "actual": "the stub (head-only dev_walk) misses the non-head member: panicked at the planned assertion 'the probe must consult the union chain (the #45 fix): devroot: name not found'; the create twin fails the same shape at 'the create must reach the accepting union member (the #45 fix): namec: device has no create' (the original #45 error string verbatim); the refusal-propagation fixture fails at its own first create for the same missing consult; the two no-mounts regression pins pass (the None arm preserves the direct dispatch)"
+}

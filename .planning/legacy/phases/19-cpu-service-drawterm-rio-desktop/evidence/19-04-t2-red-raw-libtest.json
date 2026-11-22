@@ -1,0 +1,13 @@
+r9 devshell: rustc 1.95.0-nightly (842bd5be2 2026-01-29)
+QEMU emulator version 11.1.2
+apps: nix run .#build | nix run .#boot-virt | nix run .#default
+{ "type": "suite", "event": "started", "test_count": 4 }
+{ "type": "test", "event": "started", "name": "devssl_tests::ctl_verb_errors_carry_the_donor_strings" }
+{ "type": "test", "event": "started", "name": "devssl_tests::loopback_round_trips_rc4_256_sha1_and_detects_corruption" }
+{ "type": "test", "event": "started", "name": "devssl_tests::pushssl_protocol_walk_serves_the_verb_order_and_alg_clear" }
+{ "type": "test", "event": "started", "name": "devssl_tests::swapped_server_arm_secrets_round_trip_both_directions" }
+{ "type": "test", "name": "devssl_tests::loopback_round_trips_rc4_256_sha1_and_detects_corruption", "event": "failed", "stdout": "\nthread 'devssl_tests::loopback_round_trips_rc4_256_sha1_and_detects_corruption' (844085) panicked at port/src/devssl_tests.rs:85:47:\nclone open: \"devssl: not implemented this pass\"\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n" }
+{ "type": "test", "name": "devssl_tests::pushssl_protocol_walk_serves_the_verb_order_and_alg_clear", "event": "failed", "stdout": "\nthread 'devssl_tests::pushssl_protocol_walk_serves_the_verb_order_and_alg_clear' (844086) panicked at port/src/devssl_tests.rs:85:47:\nclone open: \"devssl: not implemented this pass\"\n" }
+{ "type": "test", "name": "devssl_tests::swapped_server_arm_secrets_round_trip_both_directions", "event": "failed", "stdout": "\nthread 'devssl_tests::swapped_server_arm_secrets_round_trip_both_directions' (844087) panicked at port/src/devssl_tests.rs:85:47:\nclone open: \"devssl: not implemented this pass\"\n" }
+{ "type": "test", "name": "devssl_tests::ctl_verb_errors_carry_the_donor_strings", "event": "failed", "stdout": "\nthread 'devssl_tests::ctl_verb_errors_carry_the_donor_strings' (844084) panicked at port/src/devssl_tests.rs:85:47:\nclone open: \"devssl: not implemented this pass\"\n" }
+{ "type": "suite", "event": "failed", "passed": 0, "failed": 4, "ignored": 0, "measured": 0, "filtered_out": 155, "exec_time": 0.00051744 }

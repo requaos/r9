@@ -1,0 +1,13 @@
+{
+  "command": "cargo test -p x86_64 --bins --target x86_64-unknown-linux-gnu mb2 -- --nocapture",
+  "cwd": "/home/req/code/r9",
+  "exitCode": 101,
+  "targetTest": "platform::q35::mb2::tests::golden_memory_map_parses_ranges_with_types",
+  "targetFile": "x86_64/src/platform/q35/mb2.rs",
+  "expected": "golden buffer parses: header_total_size == len; facts.nranges() == 2 with base/len/kind preserved",
+  "actual": "panicked at 'called Result::unwrap() on an Err value: BufferTooSmall' (expect on the planned golden-parse assertion); all 5 mb2 tests FAILED, 0 passed",
+  "reportFormat": "rust-libtest-console (no classifier adapter; tdd_mode off in config; Rust gap documented in tdd.md #4379)",
+  "output": "test result: FAILED. 0 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out\nfailures:\n    platform::q35::mb2::tests::alignment_and_header_violations_are_loud\n    platform::q35::mb2::tests::end_tag_stops_walk_and_cut_total_size_is_loud\n    platform::q35::mb2::mb2::tests::every_truncation_errors_loudly\n    platform::q35::mb2::tests::golden_memory_map_parses_ranges_with_types\n    platform::q35::mb2::tests::rsdp_tags_yield_pointer_and_absence_yields_none",
+  "semanticAssessment": "All five tests discovered and executed; each failure is an assertion failure for the planned behavior (expect/assert_eq/is_err-on-cut), caused solely by the RED stub returning Err(BufferTooSmall). No compile errors, no fixture or discovery faults.",
+  "runStartedAt": "2026-11-07T00:55:00Z"
+}

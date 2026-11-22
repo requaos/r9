@@ -1,0 +1,21 @@
+# 15-06 distill reproducibility proof (T-15-14's mitigation)
+#
+# trace-distill.sh is the committed derivation path: re-running it
+# over each committed raw log reproduces the committed table
+# byte-for-byte (the header names the raw by BASENAME, so the proof
+# is checkout-independent).  Command shape, from the repo root:
+#   NOTE=$(sed -n 's/^# //;1s/.*//;/^run: /p' <table> | head -1)  # the table's own provenance line
+#   sh build/x86_64/trace-distill.sh <bin> evidence/15-06-<bin>-raw.txt /tmp/repro.txt "$NOTE"
+#   cmp /tmp/repro.txt evidence/15-06-<bin>-table.txt
+#
+# Table grammar (the distiller's format note): tab-separated rows —
+#   pid=<n> name=<text> fragments=<n>   one block per (pid, image)
+#   <syscall><TAB><count><TAB><args-shape (first sample)>
+#   BINARY name=<text> pids entries / B<TAB>syscall<TAB>count   per-binary aggregate
+#   PATHS name=<text> / P<TAB>syscall<TAB>count<TAB>path         distinct path args (pure-digit
+#     path components fold to N — /proc/37/args reads /proc/N/args)
+#   TOTAL pids entries binaries / T<TAB>syscall<TAB>count        program-level union
+# Re-run over the final evidence set, 2026-11-10T14:12:13Z:
+  rio: REPRODUCED byte-identical (5676 bytes; note: run: commit=c9d135a45 date=2026-11-10T14:09:15Z accel=kvm)
+  acme: REPRODUCED byte-identical (6387 bytes; note: run: commit=c9d135a45 date=2026-11-10T14:09:15Z accel=kvm)
+  sam: REPRODUCED byte-identical (5924 bytes; note: run: commit=c9d135a45 date=2026-11-10T14:09:15Z accel=kvm)

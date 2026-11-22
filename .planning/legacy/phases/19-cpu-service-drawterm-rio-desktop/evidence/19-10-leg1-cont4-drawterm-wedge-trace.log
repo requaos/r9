@@ -1,0 +1,18 @@
+# 19-10 Leg-1 cont 4 — the drawterm-side wedge signature (run dt-dbg4, the
+# pre-fix control kernel; the identical signature reproduced on 3 further
+# guests incl. the CEXEC-fixed kernel and the owner's pin):
+#  - every mouse event of the sweep served one-by-one (enter park/SERVE pairs)
+#  - the sweep-exit moveto write [m720 524] arrives (rio's sweep Return)
+#  - exactly ONE further record served (the XWarpPointer motion the moveto
+#    generated) — then the guest NEVER issues another /dev/mouse read
+#  - no Qcursor write ever follows (the cursor-restore write never happens)
+#  - all later events (incl. a B3 press) pile up unqueued (ri/wi diverge)
+DTDBG mouseread: enter park loop (ri=11 wi=11) msec=18518
+DTDBG mouseread: SERVE slot 11: 680,496 b=4 msec=227802669 (skipped-ahead nn=1) now=18644
+DTDBG mouseread: enter park loop (ri=12 wi=12) msec=18651
+DTDBG mouseread: SERVE slot 12: 720,524 b=4 msec=227802803 (skipped-ahead nn=1) now=18777
+DTDBG mouseread: enter park loop (ri=13 wi=13) msec=18783
+DTDBG mouseread: SERVE slot 13: 720,524 b=0 msec=227803247 (skipped-ahead nn=1) now=19221
+DTDBG mouseread: enter park loop (ri=14 wi=14) msec=19230
+DTDBG mousewrite Qmouse: n=8 [m720 524] msec=19250
+DTDBG mouseread: SERVE slot 14: 720,524 b=0 msec=227803277 (skipped-ahead nn=1) now=19251

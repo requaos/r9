@@ -1,0 +1,4 @@
+run 1: GREEN dur-marker=ok 05:20:36Z
+run 2: GREEN dur-marker=ok 05:24:03Z
+FAILED-AT-RUN-3 rc=1 05:24:29Z
+greens=2

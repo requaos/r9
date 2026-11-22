@@ -1,0 +1,95 @@
+spawn /nix/store/y8h5ana2drnzs2fdx6fxgr74bwmzi8y9-drawterm-19.06/bin/drawterm -G -s  -O cpu=127.0.0.1,auth=tcp!127.0.0.1!5670,user=glenda
+glenda@requaos-harvey password: 
+cpu: failed to chdir to '/home/req/code/harvey'
+cpu% echo PROBE-START
+cat /usr/glenda/lib/profile
+echo PROBE-PS
+ps
+echo PROBE-ARGS
+cat /proc/*/args
+echo PROBE-END-MARKER
+PROBE-START
+cpu% # /usr/glenda/lib/profile — the D-17 trimmed cpu-aware profile (15-08),
+# staged in the committed root-tree skeleton (the DESK-03 payload's
+# profile half; trimmed from usr/glenda/lib/profile, the trim source
+# read verbatim):
+#   - the mail-filesystem start (source line 7) and the
+#     message-of-the-day calls (source lines 28 and 35 — the cpu AND
+#     con cases) dropped; this comment names neither command, so the
+#     gate's whole-file grep for them stays mechanically clean
+#   - the terminal case keeps the binds/tmp/font (lines 1-6, shared)
+#     but LOSES `exec rio -i riostart' — rio must provably NOT start at
+#     boot (the serial-console venue); its plumber + '#m/mousectl'
+#     writes are dropped with it: no devmouse or plumber substrate
+#     exists on the serial image and a failed redirect RAISES in rc
+#     (the 15-02 measured dialect) — a future draw-terminal venue
+#     re-derives its own mouse/plumbing bring-up
+#   - the cpu case stays INTACT except two GUARDED 19-07 additions
+#     (DESK-02/DESK-05): the window-manager exec sits behind a
+#     draw-presence guard (test -e /mnt/term/dev/draw — a text-mode
+#     -G session has no draw device and stays a plain cpu% shell
+#     instead of dying at the exec; boot never runs the profile at
+#     all, so the desktop is provably in-session only), and plumber
+#     starts in-session before it under the same guard
+bind -a $home/bin/rc /bin
+bind -a $home/bin/$cputype /bin
+bind -c tmp /tmp
+if(! syscall create /tmp/xxx 1 0666 >[2]/dev/null)
+	ramfs	# in case we're running off a cd
+font = /lib/font/bit/pelm/euro.9.font
+fn cd { builtin cd $* && awd }  # for acme
+switch($service){
+case terminal
+	prompt=('term% ' '	')
+	fn term%{ $* }
+case cpu
+	if (test -e /mnt/term/mnt/wsys) { # rio already running
+		bind -a /mnt/term/mnt/wsys /dev
+		if(test -w /dev/label)
+			echo -n $sysname > /dev/label
+	}
+	bind /mnt/term/dev/cons /dev/cons
+	bind /mnt/term/dev/consctl /dev/consctl
+	bind -a /mnt/term/dev /dev
+	prompt=('cpu% ' '	')
+	fn cpu%{ $* }
+	if (! test -e /mnt/term/mnt/wsys) {	# cpu call from drawterm
+		font=/lib/font/bit/pelm/latin1.8.font
+		if (test -e /mnt/term/dev/draw) {	# the client serves draw — the in-session desktop (DESK-02: guarded, so a text-mode -G session stays a plain cpu% shell instead of dying at the exec)
+			plumber	# in-session plumbing before the window manager (DESK-05)
+			exec rio
+		}
+	}
+case con
+	prompt=('cpu% ' '	')
+}
+cpu% PROBE-PS
+cpu% glenda            1    0:00   0:00        0K Blocked  init
+glenda            3    0:00   0:00        0K Blocked  paqfs
+glenda           17    0:00   0:00        0K Blocked  hmntgen
+glenda           19    0:00   0:00        0K Blocked  hkeyfs
+glenda           23    0:00   0:00        0K Blocked  hlisten1
+glenda           32    0:00   0:00        0K Blocked  hfactotum
+glenda           40    0:00   0:00        0K Blocked  listen
+glenda           42    0:00   0:00        0K Blocked  listen
+glenda           48    0:00   0:00        0K Blocked  rc
+glenda           49    0:00   0:00        0K Blocked  tcp17010
+glenda           51    0:00   0:00        0K Blocked  rio
+glenda           52    0:00   0:00        0K Blocked  tcp17010
+glenda           59    0:00   0:00        0K Blocked  ramfs
+glenda           68    0:00   0:00        0K Blocked  plumber
+glenda           69    0:00   0:00        0K Blocked  plumber
+glenda           70    0:00   0:00        0K Blocked  rio
+glenda           71    0:00   0:00        0K Blocked  rio
+glenda           72    0:00   0:00        0K Blocked  rio
+glenda           73    0:00   0:00        0K Blocked  rio
+glenda           74    0:00   0:00        0K Blocked  rio
+glenda           75    0:00   0:00        0K Blocked  tcp17010
+glenda           77    0:00   0:00        0K Blocked  rc
+glenda           78    0:00   0:00        0K Blocked  tcp17010
+glenda           85    0:00   0:00        0K Blocked  ramfs
+glenda           95    0:00   0:00        0K Running  ps
+cpu% PROBE-ARGS
+cpu% exit
+catexit: namec: does not exist
+cpu% 

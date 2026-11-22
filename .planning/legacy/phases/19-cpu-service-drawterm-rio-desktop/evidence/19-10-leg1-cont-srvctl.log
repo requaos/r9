@@ -1,0 +1,98 @@
+spawn /nix/store/y8h5ana2drnzs2fdx6fxgr74bwmzi8y9-drawterm-19.06/bin/drawterm -G -s  -O cpu=127.0.0.1,auth=tcp!127.0.0.1!5670,user=glenda
+glenda@requaos-harvey password: 
+cpu: failed to chdir to '/home/req/code/harvey'
+cpu% echo SRV-START
+ls /srv
+echo SRV-END
+SRV-START
+cpu% /srv/boot
+/srv/factotum
+/srv/plumb.glenda.67
+/srv/rio.glenda.51
+/srv/riowctl.glenda.51
+cpu% SRV-END
+cpu% exit
+spawn /nix/store/y8h5ana2drnzs2fdx6fxgr74bwmzi8y9-drawterm-19.06/bin/drawterm -G -s  -O cpu=127.0.0.1,auth=tcp!127.0.0.1!5670,user=glenda
+glenda@requaos-harvey password: 
+cpu: failed to chdir to '/home/req/code/harvey'
+cpu% echo WIN-START
+echo 'new -r 100 100 700 500 /bin/rc -i' >/srv/riowctl.glenda.51
+WIN-START
+cpu% ps
+echo: write error: devsrv: fd string too long
+cpu% echo WIN-FDS
+cat /proc/*/fd
+WIN-FDS
+cpu% echo WIN-END
+cat: can't open /proc/*/fd: namec: does not exist
+cpu% WIN-END
+cpu% exit
+spawn /nix/store/y8h5ana2drnzs2fdx6fxgr74bwmzi8y9-drawterm-19.06/bin/drawterm -G -s  -O cpu=127.0.0.1,auth=tcp!127.0.0.1!5670,user=glenda
+glenda@requaos-harvey password: 
+cpu: failed to chdir to '/home/req/code/harvey'
+cpu% echo W2-START
+mount /srv/rio.glenda.51 /mnt
+W2-START
+cpu% ls -p /mnt
+mount: namec: does not exist
+cpu% echo 'new -r 100 100 700 500 /bin/rc -i' >/mnt/wctl
+plumb
+temp
+term
+wsys
+cpu% /mnt/wctl: rc: can't open: namec: device has no create
+cpu% ps
+echo W2-FDS
+cat /proc/1/fd /proc/51/fd
+glenda            1    0:00   0:00        0K Blocked  init
+glenda            3    0:00   0:00        0K Blocked  paqfs
+glenda           17    0:00   0:00        0K Blocked  hmntgen
+glenda           19    0:00   0:00        0K Blocked  hkeyfs
+glenda           23    0:00   0:00        0K Blocked  hlisten1
+glenda           32    0:00   0:00        0K Blocked  hfactotum
+glenda           40    0:00   0:00        0K Blocked  listen
+glenda           42    0:00   0:00        0K Blocked  listen
+glenda           48    0:00   0:00        0K Blocked  rc
+glenda           49    0:00   0:00        0K Blocked  tcp17010
+glenda           51    0:00   0:00        0K Blocked  rio
+glenda           52    0:00   0:00        0K Blocked  tcp17010
+glenda           59    0:00   0:00        0K Blocked  ramfs
+glenda           68    0:00   0:00        0K Blocked  plumber
+glenda           69    0:00   0:00        0K Blocked  plumber
+glenda           70    0:00   0:00        0K Blocked  rio
+glenda           71    0:00   0:00        0K Blocked  rio
+glenda           72    0:00   0:00        0K Blocked  rio
+glenda           73    0:00   0:00        0K Blocked  rio
+glenda           74    0:00   0:00        0K Blocked  rio
+glenda           85    0:00   0:00        0K Blocked  ramfs
+glenda          108    0:00   0:00        0K Blocked  ramfs
+glenda          130    0:00   0:00        0K Blocked  ramfs
+glenda          150    0:00   0:00        0K Blocked  ramfs
+glenda          162    0:00   0:00        0K Blocked  tcp17010
+glenda          164    0:00   0:00        0K Blocked  rc
+glenda          165    0:00   0:00        0K Blocked  tcp17010
+glenda          172    0:00   0:00        0K Blocked  ramfs
+glenda          182    0:00   0:00        0K Running  ps
+cpu% echo W2-END
+W2-FDS
+cpu% cat: can't open /proc/1/fd: namec: does not exist
+cpu% W2-END
+cpu% exit
+spawn /nix/store/y8h5ana2drnzs2fdx6fxgr74bwmzi8y9-drawterm-19.06/bin/drawterm -G -s  -O cpu=127.0.0.1,auth=tcp!127.0.0.1!5670,user=glenda
+glenda@requaos-harvey password: 
+cpu: failed to chdir to '/home/req/code/harvey'
+cpu% echo W3-START
+mount /srv/rio.glenda.51 /mnt
+W3-START
+cpu% echo W3-LWSYS
+ls -p /mnt/wsys
+mount: namec: does not exist
+cpu% echo W3-TRY-WCTL
+echo 'new -r 100 100 700 500 /bin/rc -i' >/mnt/wsys/wctl
+W3-LWSYS
+cpu% cpu% W3-TRY-WCTL
+cpu% echo W3-PS
+ps
+echo W3-END
+			exit
+	

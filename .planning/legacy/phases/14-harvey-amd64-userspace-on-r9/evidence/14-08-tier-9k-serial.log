@@ -1,0 +1,79 @@
+
+Plan 9
+mmuinit: vmstart 0xfffffffff0000000 vmunused 0xfffffffff050d000 vmunmapped 0xfffffffff0800000 vmend 0xfffffffffe000000
+sys->pd 0x108003 0x108023
+l 3 0xffffff7fbfdfeff8 107023
+l 2 0xffffff7fbfdffff8 108023
+l 1 0xffffff7fbffffc00 e3
+l 1 0xffffff7fbffffc00 e3
+kernel alloc space = -268,435,456
+base 0xfffffffff0511000 ptr 0xfffffffff0511000 nunits 14348032
+apic0: hz 1000497680 max 10004976 min 100049 div 2
+pcirouting: BIOS workaround: PCI.0.1.3 at pin 1 link 96 irq 10 -> 9
+igbe: p->cls 0x0, setting to 0x10
+#l0: i82543: 1Gbps port 0xfebc0000 irq 11: 525400123456
+506M memory: 4084K+228M kernel, 274M user
+T1-OK echo
+T1-OK ls
+T1-OK cat
+T1-OK grep
+T1-OK sed
+T1-OK wc
+T1-OK date
+T1-OK test
+T1-OK rc
+T1-OK ps
+T1-OK awk
+T1-OK float-d01
+T1-OK sort
+T1-OK tr
+T1-OK uniq
+T1-OK tail
+T1-OK basename
+T1-OK sleep
+T1-OK cmp
+T1-OK sum
+T1-OK md5sum
+T1-OK sha1sum
+T1-OK dc
+T1-OK units
+T1-OK cal
+T1-OK fmt
+T1-OK seq
+0.00u 0.00s 0.00r 	 /boot/hecho __T1_TIME__
+T1-OK time
+T1-OK read
+T1-OK pr
+T1-OK strings
+T1-XDOBS 0000000 616c7068 61206272 61766f20 63686172 0000010 6c69650a 5f5f5355 42534554 5f475245 0000020 505f4c49 4e455f5f 0a000000 0000029
+T1-OK xd
+T1-OK du
+T1-OK comm
+T1-OK join
+T1-OK nm
+T1-SKIP mkdir
+T1-SKIP cp
+T1-SKIP mv
+T1-SKIP rm
+T1-SKIP bc
+T1-SKIP dd
+T1-SKIP tar
+T1-SKIP tee
+T1-SKIP chmod
+T1-SKIP touch
+T1-SKIP split
+T1-SKIP look
+T1-SKIP ed
+T1-SKIP cpp
+T1-SKIP yacc
+T1-SKIP lex
+T1-SKIP mk
+T1-SKIP 7a
+T1-SKIP selfhost-compile
+T1-SKIP selfhost
+T1-SKIP ipconfig
+T1-SKIP factotum
+T1-SKIP libtest-tdraw
+T1-SKIP libtest-disktest
+T1-DONE
+% 

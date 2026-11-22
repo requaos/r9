@@ -1,0 +1,26 @@
+spawn /tmp/dt-1910/bin/drawterm -G -s  -O cpu=127.0.0.1,auth=tcp!127.0.0.1!5670,user=glenda
+glenda@requaos-harvey password: 
+cpu: failed to chdir to '/home/req/code/harvey'
+cpu% 
+SUBSTRATE: CPU-PROMPT (rcmain guard passed; the profile's cpu case sourced)
+/bin/test -e $home/lib/profile && echo TEST-GUARD-OK
+
+SUBSTRATE: /bin/test runs (rcmain's guard binary)
+plumber
+TEST-GUARD-OK
+cpu% ls /mnt/plumb
+cpu% /mnt/plumb/edit
+/mnt/plumb/image
+/mnt/plumb/msword
+/mnt/plumb/none
+/mnt/plumb/postscript
+/mnt/plumb/rules
+/mnt/plumb/seemail
+/mnt/plumb/send
+/mnt/plumb/sendmail
+/mnt/plumb/showmail
+
+SUBSTRATE: PLUMB-PORTS (/mnt/plumb serves the plumber tree — DESK-05's in-session substrate)
+exit
+cpu% 
+SUBSTRATE: no eof

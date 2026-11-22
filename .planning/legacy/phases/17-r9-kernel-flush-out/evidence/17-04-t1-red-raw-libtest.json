@@ -1,0 +1,12 @@
+{ "type": "suite", "event": "started", "test_count": 5 }
+{ "type": "test", "event": "started", "name": "virtio_tests::caps_parse_missing_list_errors_loudly" }
+{ "type": "test", "event": "started", "name": "virtio_tests::caps_parse_rejects_misaligned_capability_pointers" }
+{ "type": "test", "event": "started", "name": "virtio_tests::caps_parse_rejects_short_notify_capabilities" }
+{ "type": "test", "event": "started", "name": "virtio_tests::caps_parse_truncated_list_errors_loudly" }
+{ "type": "test", "event": "started", "name": "virtio_tests::caps_parse_yields_the_typed_triples_and_notify_multiplier" }
+{ "type": "test", "name": "virtio_tests::caps_parse_missing_list_errors_loudly", "event": "ok" }
+{ "type": "test", "name": "virtio_tests::caps_parse_truncated_list_errors_loudly", "event": "ok" }
+{ "type": "test", "name": "virtio_tests::caps_parse_rejects_misaligned_capability_pointers", "event": "failed", "stdout": "\nthread 'virtio_tests::caps_parse_rejects_misaligned_capability_pointers' (879581) panicked at port/src/virtio_tests.rs:383:9:\nthe error names the misalignment: virtio: common/notify/ISR capabilities incomplete\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n" }
+{ "type": "test", "name": "virtio_tests::caps_parse_rejects_short_notify_capabilities", "event": "failed", "stdout": "\nthread 'virtio_tests::caps_parse_rejects_short_notify_capabilities' (879582) panicked at port/src/virtio_tests.rs:399:10:\na notify cap shorter than its multiplier field is a device fault: Caps { common: CapTriple { bar: 4, offset: 0, length: 4096 }, notify: CapTriple { bar: 4, offset: 12288, length: 4096 }, isr: CapTriple { bar: 4, offset: 4096, length: 4096 }, device: Some(CapTriple { bar: 4, offset: 8192, length: 4096 }), notify_off_multiplier: 4 }\n" }
+{ "type": "test", "name": "virtio_tests::caps_parse_yields_the_typed_triples_and_notify_multiplier", "event": "ok" }
+{ "type": "suite", "event": "failed", "passed": 3, "failed": 2, "ignored": 0, "measured": 0, "filtered_out": 109, "exec_time": 0.000446978 }

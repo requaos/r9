@@ -1,0 +1,152 @@
+# date: 2026-11-05T04:32:14Z
+# donor pin: 350266104f1fed81c78c3d05fa44f523bec0ae4d (9front branch front)
+# rig: harness trace-syscalls --tier1 (06-07) + build/aarch64/tracesup.c —
+#   the 05-03 rig's born-traced arming generalized to the tier scale:
+#   the sweep shell rides a spin-windowed, stop-armed subshell; the
+#   in-guest supervisor step-traces it and every born-traced descendant
+#   (donor sysproc.c:155), writing one newline-framed fragment stream per
+#   pid to /tmp/t1trace on the srv9 writable prefix (no per-fragment
+#   forks, no serial flood); the host parses + attributes per binary by
+#   each fragment's own text-name field.
+# target: build/aarch64/tier1-sweep.rc venue=donor — the full D-09
+#   membership's sweep SOURCED under the staged trace termrc override
+#   (subset-exec.sh's D-10 venue); stacksmoke rides the traced shell.
+# venue: the donor's own chain; srv9 --writable-prefix /tmp
+#   --writable-prefix /usr/glenda/tmp; srvroot staging (sys/lib
+#   skeletons, sys/include, aarch64/include + libc.a) per 06-06.
+# serial log: /Users/neilskinner/code/harvey/.build/9front-dist/tier1-trace-run.log (gitignored .build evidence)
+# traced pids: 201; measured syscall entry fragments: 8581
+# coverage boundary / classification (per-binary; tier1-sweep.rc's
+#   venue guard is the source of truth):
+#   r9-runnable — checks that run on BOTH venues (the read-only block
+#     + libtest-tdraw + stacksmoke): THE DELTA INPUT.
+#   write-flow — the donor-guarded legs (r9 has no writable fs this
+#     era; they emit named T1-SKIP lines there): mkdir cp mv rm bc dd
+#     tar tee chmod touch split look cpp yacc lex mk 7a 7c 7l
+#     selfhost-compile/selfhost (binaries h7c h7l h7a + the hello
+#     product) libtest-disktest; the bc shim's bind is the donor's own.
+#     ed joined the class on THIS run's evidence: the trace caught
+#     ed's unconditional mktemp create+remove (ed.c:159/930/1092,
+#     /tmp/eXXXXX) — a /tmp-writable dependency the read-only block
+#     hid; r9's root is read-only this era, so ed T1-SKIPs on r9.
+#   name caveat: a born-traced child's pre-exec fragments carry its
+#     parent's text name — the "rc" bucket aggregates the sweep
+#     shell, hrc invocations, and rc fork/backquote shims.
+# delta vs r9's current dispatch (aarch64/src/syscall.rs @ 2afa3d6ebfde):
+#   r9-runnable measured names: 19
+#   NEW (measured, NOT implemented) — the dispatch delta:
+#     34 rendezvous (1 occurrences)
+#     53 nsec (2 occurrences)
+#   implemented but unmeasured in this run (informational): alarm bind errstr fstat fversion mount noted sleep unmount
+#
+# per-binary measured multiset (entry-fragment counts):
+# bin=bind class=write-flow pids=1 total=2 bind=1 exits=1
+# bin=dc class=r9-runnable pids=1 total=12 brk_=1 close=2 exits=1 open=2 pread=5 pwrite=1
+# bin=echo class=r9-runnable pids=69 total=207 brk_=69 exits=69 pwrite=69
+# bin=h7a class=write-flow pids=1 total=27 brk_=6 close=5 create=1 exits=1 fd2path=1 open=6 pread=6 pwrite=1
+# bin=h7c class=write-flow pids=1 total=38 brk_=10 close=6 create=1 exits=1 fd2path=1 open=9 pread=9 pwrite=1
+# bin=h7l class=write-flow pids=1 total=481 brk_=298 close=3 create=1 exits=1 open=5 pread=110 pwrite=6 seek=57
+# bin=hawk class=r9-runnable pids=2 total=48 brk_=28 close=4 exits=2 notify=2 open=4 pread=6 pwrite=2
+# bin=hbasename class=r9-runnable pids=1 total=5 close=1 exits=1 open=1 pread=1 pwrite=1
+# bin=hbc class=write-flow pids=2 total=21 close=6 dup=2 exec=1 exits=1 open=2 pipe=1 pread=4 pwrite=3 rfork=1
+# bin=hcal class=r9-runnable pids=1 total=8 close=2 exits=1 open=2 pread=2 pwrite=1
+# bin=hcat class=r9-runnable pids=8 total=72 close=16 exits=8 open=16 pread=24 pwrite=8
+# bin=hchmod class=write-flow pids=1 total=7 brk_=1 close=1 exits=1 open=1 pread=1 stat=1 wstat=1
+# bin=hcmp class=r9-runnable pids=2 total=20 close=2 exits=2 open=6 pread=10
+# bin=hcomm class=r9-runnable pids=1 total=14 brk_=2 close=1 exits=1 open=3 pread=5 pwrite=2
+# bin=hcp class=write-flow pids=5 total=123 brk_=10 close=15 create=5 errstr=5 exits=5 open=10 pread=34 pwrite=24 stat=15
+# bin=hcpp class=write-flow pids=1 total=29 brk_=5 close=4 exits=1 fd2path=1 fstat=2 nsec=1 open=7 pread=5 pwrite=1 seek=2
+# bin=hdate class=r9-runnable pids=1 total=7 close=1 exits=1 nsec=1 open=2 pread=1 pwrite=1
+# bin=hdc class=r9-runnable pids=1 total=11 brk_=1 close=2 exits=1 open=2 pread=4 pwrite=1
+# bin=hdd class=write-flow pids=1 total=16 brk_=2 close=1 create=1 errstr=1 exits=1 open=2 pread=3 pwrite=3 seek=2
+# bin=hdisktest class=write-flow pids=1 total=10 brk_=1 close=1 exits=1 fstat=1 open=4 pread=1 pwrite=1
+# bin=hdu class=r9-runnable pids=1 total=7 brk_=1 close=1 exits=1 open=1 pread=1 pwrite=1 stat=1
+# bin=hecho class=r9-runnable pids=16 total=96 brk_=16 close=16 exits=16 open=16 pread=16 pwrite=16
+# bin=hed class=write-flow pids=1 total=23 brk_=1 close=4 create=1 exits=1 fstat=1 notify=1 open=3 pread=6 pwrite=3 remove=1 stat=1
+# bin=hello class=write-flow pids=1 total=5 close=1 exits=1 open=1 pread=1 pwrite=1
+# bin=hfactotum class=r9-runnable pids=1 total=19 brk_=1 close=3 create=1 notify=1 open=4 pipe=1 pread=2 pwrite=3 rendezvous=1 rfork=2
+# bin=hfmt class=r9-runnable pids=1 total=12 brk_=1 close=2 exits=1 open=3 pread=4 pwrite=1
+# bin=hgrep class=r9-runnable pids=3 total=38 brk_=3 close=9 exits=3 open=8 pread=12 pwrite=3
+# bin=hipconfig class=r9-runnable pids=1 total=14 brk_=1 close=2 exits=1 nsec=1 open=3 pread=3 pwrite=1 seek=2
+# bin=hjoin class=r9-runnable pids=1 total=17 brk_=2 close=2 exits=1 open=4 pread=5 pwrite=1 seek=2
+# bin=hlex class=write-flow pids=1 total=26 brk_=9 close=4 create=1 exits=1 open=4 pread=6 pwrite=1
+# bin=hlook class=write-flow pids=1 total=16 brk_=1 close=2 exits=1 open=3 pread=5 pwrite=1 seek=3
+# bin=hls class=r9-runnable pids=1 total=17 brk_=3 close=3 exits=1 open=3 pread=5 pwrite=1 stat=1
+# bin=hmd5sum class=r9-runnable pids=1 total=10 brk_=1 close=2 exits=1 open=2 pread=3 pwrite=1
+# bin=hmk class=write-flow pids=3 total=1510 await=1 brk_=11 close=182 create=87 dup=1 exec=1 exits=2 notify=1 nsec=5 open=90 pipe=1 pread=93 pwrite=1029 remove=3 rfork=3
+# bin=hmkdir class=write-flow pids=4 total=32 brk_=4 close=8 create=4 exits=4 open=4 pread=4 stat=4
+# bin=hmv class=write-flow pids=1 total=11 brk_=1 close=1 exits=1 open=1 pread=1 stat=5 wstat=1
+# bin=hnm class=r9-runnable pids=1 total=14 brk_=2 close=3 exits=1 open=3 pread=4 pwrite=1
+# bin=hpr class=r9-runnable pids=1 total=16 brk_=2 close=3 exits=1 open=4 pread=4 pwrite=1 stat=1
+# bin=hps class=r9-runnable pids=11 total=1377 brk_=22 chdir=11 close=426 exits=11 open=448 pread=448 pwrite=11
+# bin=hrc class=r9-runnable pids=5 total=596 await=3 brk_=14 close=197 create=37 dup=2 exec=3 exits=2 fd2path=2 notify=2 open=143 pipe=1 pread=160 pwrite=27 rfork=3
+# bin=hread class=r9-runnable pids=1 total=18 brk_=1 close=1 exits=1 open=1 pread=13 pwrite=1
+# bin=hrm class=write-flow pids=2 total=10 close=2 exits=2 open=2 pread=2 remove=2
+# bin=hsed class=r9-runnable pids=1 total=12 brk_=2 close=2 exits=1 open=2 pread=4 pwrite=1
+# bin=hseq class=r9-runnable pids=1 total=7 close=1 exits=1 open=1 pread=1 pwrite=3
+# bin=hsha1sum class=r9-runnable pids=1 total=10 brk_=1 close=2 exits=1 open=2 pread=3 pwrite=1
+# bin=hsleep class=r9-runnable pids=1 total=4 close=1 exits=1 open=1 pread=1
+# bin=hsort class=r9-runnable pids=1 total=15 brk_=2 close=3 exits=1 notify=1 open=3 pread=4 pwrite=1
+# bin=hsplit class=write-flow pids=1 total=19 brk_=2 close=4 create=2 exits=1 open=3 pread=5 pwrite=2
+# bin=hstacksmoke class=r9-runnable pids=1 total=5 close=1 exits=1 open=1 pread=1 pwrite=1
+# bin=hstrings class=r9-runnable pids=1 total=13 brk_=1 close=3 exits=1 open=3 pread=4 pwrite=1
+# bin=hsum class=r9-runnable pids=1 total=11 close=2 exits=1 open=2 pread=3 pwrite=3
+# bin=htail class=r9-runnable pids=1 total=12 brk_=1 close=2 exits=1 open=2 pread=4 pwrite=1 seek=1
+# bin=htar class=write-flow pids=2 total=41 brk_=5 chdir=3 close=7 create=1 errstr=1 exits=2 fd2path=1 fstat=2 open=6 pread=7 pwrite=3 seek=3
+# bin=htdraw class=r9-runnable pids=1 total=5 close=1 exits=1 open=1 pread=1 pwrite=1
+# bin=htee class=write-flow pids=1 total=10 brk_=1 close=1 create=1 exits=1 open=1 pread=3 pwrite=2
+# bin=htest class=r9-runnable pids=8 total=48 brk_=8 close=8 exits=8 open=8 pread=8 stat=8
+# bin=htime class=r9-runnable pids=2 total=10 await=1 brk_=1 close=1 exec=1 exits=1 notify=1 open=1 pread=1 pwrite=1 rfork=1
+# bin=htouch class=write-flow pids=1 total=10 brk_=1 close=2 create=1 exits=1 fwstat=1 nsec=1 open=1 pread=1 wstat=1
+# bin=htr class=r9-runnable pids=1 total=8 brk_=1 close=1 exits=1 open=1 pread=3 pwrite=1
+# bin=huniq class=r9-runnable pids=1 total=14 brk_=2 close=2 exits=1 open=2 pread=6 pwrite=1
+# bin=hunits class=r9-runnable pids=1 total=5 close=1 exits=1 open=1 pread=1 pwrite=1
+# bin=hwc class=r9-runnable pids=1 total=7 close=1 exits=1 open=1 pread=3 pwrite=1
+# bin=hxd class=r9-runnable pids=1 total=13 brk_=1 close=3 exits=1 open=3 pread=4 pwrite=1
+# bin=hyacc class=write-flow pids=1 total=45 brk_=5 close=9 create=3 errstr=2 exits=1 open=8 pread=11 pwrite=2 remove=2 stat=2
+# bin=rc class=r9-runnable pids=195 total=3215 await=193 brk_=60 chdir=1 close=1138 create=338 dup=110 exec=181 exits=15 notify=2 open=130 pipe=69 pread=467 pwrite=317 rfork=194
+# union multiset — class r9-runnable (the r9 dispatch input):
+3 chdir 12
+4 close 1874
+5 dup 112
+7 exec 185
+8 exits 167
+14 open 846
+19 rfork 200
+21 pipe 71
+22 create 376
+23 fd2path 2
+24 brk_ 251
+28 notify 9
+34 rendezvous 1
+39 seek 5
+42 stat 11
+47 await 197
+50 pread 1257
+51 pwrite 491
+53 nsec 2
+# union multiset — class write-flow (donor-only this era; r9 T1-SKIP):
+# 2 bind 1
+# 3 chdir 3
+# 4 close 269
+# 5 dup 3
+# 7 exec 2
+# 8 exits 33
+# 14 open 173
+# 19 rfork 4
+# 21 pipe 2
+# 22 create 110
+# 23 fd2path 4
+# 24 brk_ 374
+# 25 remove 8
+# 28 notify 2
+# 39 seek 67
+# 41 errstr 9
+# 42 stat 28
+# 43 fstat 6
+# 44 wstat 3
+# 45 fwstat 1
+# 47 await 1
+# 50 pread 318
+# 51 pwrite 1084
+# 53 nsec 7

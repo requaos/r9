@@ -1,0 +1,39 @@
+[H[J[1;1H  Booting `r9'
+
+
+r9 from the Internet
+Machine information:
+q35: memory 0x0..0x9fc00 (0x9fc00) available
+q35: memory 0x9fc00..0xa0000 (0x400) reserved
+q35: memory 0xf0000..0x100000 (0x10000) reserved
+q35: memory 0x100000..0x3ffdf000 (0x3fedf000) available
+q35: memory 0x3ffdf000..0x40000000 (0x21000) reserved
+q35: memory 0xb0000000..0xc0000000 (0x10000000) reserved
+q35: memory 0xfed1c000..0xfed20000 (0x4000) reserved
+q35: memory 0xfeffc000..0xff000000 (0x4000) reserved
+q35: memory 0xfffc0000..0x100000000 (0x40000) reserved
+q35: acpi rsdt 0x3ffe2345 (mb2 RSDP tag — 13-04 walks it)
+q35: acpi rsdt 0x3ffe2345 via mb2 acpi tag (5 entries)
+q35: mcfg 0xb0000000 buses 0x0-0xff (seg 0)
+q35: lapic 0xfee00000 (madt local intc)
+q35: ioapic 0xfec00000 gsib 0 (id 0)
+q35: intsrc bus 0 source 0 -> gsi 2 flags 0x0
+q35: intsrc bus 0 source 5 -> gsi 5 flags 0xd
+q35: intsrc bus 0 source 9 -> gsi 9 flags 0xd
+q35: intsrc bus 0 source 10 -> gsi 10 flags 0xd
+q35: intsrc bus 0 source 11 -> gsi 11 flags 0xd
+q35: hpet 0xfed00000
+pciexbar: 0xb0000001 -> 0xb0000001
+pci: virtio-net 1af4:1041 at 00:02.0 rev 01 pin 1 (inta) bars 2
+pci: inta -> gsi 22 (q35 root slot 2, pirq G: 16+6)
+Memory usage:
+  Used:		0x00000000800000
+  Total:	0x0000003ffdf000
+lapic: cpuid leaf-1 ecx: x2apic=true tsc-deadline=true
+lapic: x2apic live (msr 0x800 map; lint0/1 masked, no pic)
+timer: 2496108300 Hz (pit 1193182 Hz reference), TscDeadline mode, armed
+ioapic: id 0 version 0x11 rtes 23 gsib 0 (madt 0xfec00000)
+tick 0
+tick 1
+tick 2
+r9echo7

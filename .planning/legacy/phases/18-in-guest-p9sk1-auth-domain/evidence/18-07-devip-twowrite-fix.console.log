@@ -1,0 +1,559 @@
+c[?7l[2J[0mSeaBIOS (version rel-1.17.0-0-gb52ca86e094d-prebuilt.qemu.org)
+
+
+
+iPXE (http://ipxe.org) 00:02.0 CA00 PCI2.10 PnP PMM+3EFD1B50+3EF31B50 CA00
+
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...
+                                                                               
+
+
+
+Booting from Hard Disk...
+
+Boot failed: could not read the boot disk
+
+
+Booting from DVD/CD...
+
+[0;30;47mWelcome to GRUB[H[J[1;1H  Booting `r9'
+
+
+
+!
+
+
+
+
+r9 from the Internet
+
+Machine information:
+
+q35: memory 0x0..0x9fc00 (0x9fc00) available
+
+q35: memory 0x9fc00..0xa0000 (0x400) reserved
+
+q35: memory 0xf0000..0x100000 (0x10000) reserved
+
+q35: memory 0x100000..0x3ffdf000 (0x3fedf000) available
+
+q35: memory 0x3ffdf000..0x40000000 (0x21000) reserved
+
+q35: memory 0xb0000000..0xc0000000 (0x10000000) reserved
+
+q35: memory 0xfed1c000..0xfed20000 (0x4000) reserved
+
+q35: memory 0xfeffc000..0xff000000 (0x4000) reserved
+
+q35: memory 0xfffc0000..0x100000000 (0x40000) reserved
+
+q35: acpi rsdt 0x3ffe2345 (mb2 RSDP tag — 13-04 walks it)
+
+q35: acpi rsdt 0x3ffe2345 via mb2 acpi tag (5 entries)
+
+q35: mcfg 0xb0000000 buses 0x0-0xff (seg 0)
+
+q35: lapic 0xfee00000 (madt local intc)
+
+q35: ioapic 0xfec00000 gsib 0 (id 0)
+
+q35: intsrc bus 0 source 0 -> gsi 2 flags 0x0
+
+q35: intsrc bus 0 source 5 -> gsi 5 flags 0xd
+
+q35: intsrc bus 0 source 9 -> gsi 9 flags 0xd
+
+q35: intsrc bus 0 source 10 -> gsi 10 flags 0xd
+
+q35: intsrc bus 0 source 11 -> gsi 11 flags 0xd
+
+q35: hpet 0xfed00000
+
+pciexbar: 0xb0000001 -> 0xb0000001
+
+pci: virtio-net 1af4:1041 at 00:02.0 rev 01 pin 1 (inta) bars 2
+
+pci: inta -> gsi 22 (q35 root slot 2, pirq G: 16+6)
+
+Memory usage:
+
+  Used:		0x00000006a00000
+
+  Total:	0x0000003ffdf000
+
+random: source=rdrand
+
+lapic: cpuid leaf-1 ecx: x2apic=true tsc-deadline=true
+
+lapic: x2apic live (msr 0x800 map; lint0/1 masked, no pic)
+
+timer: 2496169360 Hz (pit 1193182 Hz reference), TscDeadline mode, armed
+
+ioapic: id 0 version 0x11 rtes 23 gsib 0 (madt 0xfec00000)
+
+pci: bar4 pa 0xfe000000 size 0x4000 (firmware) readback 0xfe000000
+
+pci: caps common@0x0+0x1000 notify@0x3000 isr@0x1000 device@0x2000 mult 4
+
+virtio-net: features offered 0x10130bf8024 negotiated 0x100010020
+
+virtio-net: rx pre-posted 128 buffers qsize 256
+
+ioapic: gsi 22 -> vector 0x21 (level)
+
+#l0: virtio: 1000Mbps: 52:54:00:12:34:56
+
+q35: module @0x6a00000 +0x27bd4f (mb2 tag 3, stashed)
+
+devenv: seeded cputype=amd64 nobootprompt=embed readparts=0
+
+q35: paqfs root mounted from module (2604367 bytes)
+
+devroot: /boot/boot open (159349 bytes)
+
+exec: entering ring 3 pc=0x2054fa sp=0x7fffffffef78 path=/boot/boot argv=[boot]
+
+paqfs...version...root-auth: Sat Nov 14 15:36:33 GMT 2026
+fingerprint: 8ccfab5fcdc919ad1be153547aff3b93d8691e6d
+process 2 exited: ""
+
+churngate: heap exit 103680 33554432
+
+syscall 10 unimplemented
+
+time...
+boot: opening #c/swap: namec: does not exist
+init: can't open #c/sysname: namec: does not exist
+syscall 10 unimplemented
+
+
+init: starting /bin/rc
+process 6 exited: ""
+
+churngate: heap exit 939840 33554432
+
+process 7 exited: ""
+
+churngate: heap exit 1070400 33554432
+
+process 8 exited: ""
+
+churngate: heap exit 1070528 33554432
+
+process 9 exited: ""
+
+churngate: heap exit 1070656 33554432
+
+authdom: PAIRED DEMO
+process 10 exited: ""
+
+churngate: heap exit 1073152 33554432
+
+syscall 10 unimplemented
+
+process 11 exited: ""
+
+churngate: heap exit 1358528 33554432
+
+3 keys read
+process 13 exited: ""
+
+churngate: heap exit 1391872 33554432
+
+process 15 exited: ""
+
+churngate: heap exit 1397184 33554432
+
+process 16 exited: ""
+
+churngate: heap exit 1397184 33554432
+
+AUTH-OK keyfs
+process 17 exited: ""
+
+churngate: heap exit 1400832 33554432
+
+#I0: devip attached
+
+process 18 exited: ""
+
+churngate: heap exit 1409024 33554432
+
+process 19 exited: ""
+
+churngate: heap exit 1409472 33554432
+
+process 20 exited: ""
+
+churngate: heap exit 1539840 33554432
+
+devip: medium loopback bound
+
+process 21 exited: ""
+
+churngate: heap exit 1539968 33554432
+
+process 22 exited: ""
+
+churngate: heap exit 1540160 33554432
+
+process 23 exited: ""
+
+churngate: heap exit 1540224 33554432
+
+AUTH-LOOPBACK-UP
+process 24 exited: ""
+
+churngate: heap exit 1540224 33554432
+
+process 25 exited: ""
+
+churngate: heap exit 1571968 33554432
+
+devmnt: server error: file does not exist
+
+process 27 exited: ""
+
+churngate: heap exit 1572416 33554432
+
+process 28 exited: ""
+
+churngate: heap exit 1572928 33554432
+
+AUTH-VENUEOBS ramfs-file-write-ok
+process 29 exited: ""
+
+churngate: heap exit 1572992 33554432
+
+ Feb  7 01:28:16 ANNOUNCE /net/tcp!*!5356
+process 32 exited: ""
+
+churngate: heap exit 3573760 33554432
+
+process 33 exited: ""
+
+churngate: heap exit 3573760 33554432
+
+process 34 exited: ""
+
+churngate: heap exit 3573760 33554432
+
+process 35 exited: ""
+
+churngate: heap exit 3573760 33554432
+
+process 36 exited: ""
+
+churngate: heap exit 3864576 33554432
+
+process 38 exited: ""
+
+churngate: heap exit 3915776 33554432
+
+AUTH-LISTENOBS connected
+process 37 exited: ""
+
+churngate: heap exit 3915776 33554432
+
+process 39 exited: ""
+
+churngate: heap exit 3915776 33554432
+
+process 40 exited: ""
+
+churngate: heap exit 3915776 33554432
+
+process 41 exited: ""
+
+churngate: heap exit 3915776 33554432
+
+process 42 exited: ""
+
+churngate: heap exit 3915776 33554432
+
+process 43 exited: ""
+
+churngate: heap exit 3915776 33554432
+
+AUTH-OK authsrv-listen
+process 44 exited: ""
+
+churngate: heap exit 3915776 33554432
+
+AUTH-OK secstored
+process 45 exited: ""
+
+churngate: heap exit 3915776 33554432
+
+syscall 25 unimplemented
+
+process 46 exited: ""
+
+churngate: heap exit 4190208 33554432
+
+process 47 exited: ""
+
+churngate: heap exit 4190208 33554432
+
+process 49 exited: ""
+
+churngate: heap exit 4190208 33554432
+
+process 50 exited: ""
+
+churngate: heap exit 4190208 33554432
+
+AUTH-CSOBS ipnet=harveynet ipmask=255.255.255.0 ipgw=10.0.2.2 authdom=DEMO-harvey auth=127.0.0.1
+process 51 exited: ""
+
+churngate: heap exit 4190720 33554432
+
+AUTH-OK cs
+process 52 exited: ""
+
+churngate: heap exit 4190720 33554432
+
+process 53 exited: ""
+
+churngate: heap exit 4190720 33554432
+
+devmnt: server error: cs: namec: does not exist
+
+syscall 10 unimplemented
+
+syscall 44 unimplemented
+
+factotum warning: cannot chmod 666 /srv/factotum: syscall not implemented
+process 54 exited: ""
+
+churngate: heap exit 5009408 33554432
+
+process 56 exited: ""
+
+churngate: heap exit 5009536 33554432
+
+process 57 exited: ""
+
+churngate: heap exit 5009664 33554432
+
+process 58 exited: ""
+
+churngate: heap exit 5009920 33554432
+
+process 59 exited: ""
+
+churngate: heap exit 5010048 33554432
+
+AUTH-FACTOBS key proto=p9sk1 user=norbert dom=DEMO-harvey !password?
+process 60 exited: ""
+
+churngate: heap exit 5010048 33554432
+
+AUTH-OK factotum
+process 61 exited: ""
+
+churngate: heap exit 5010048 33554432
+
+process 62 exited: ""
+
+churngate: heap exit 5010048 33554432
+
+process 64 exited: ""
+
+churngate: heap exit 5044096 33554432
+
+devmnt: server error: not found
+
+devmnt: server error: not found
+
+devcons: random seeded
+
+ Feb  7 01:28:16 tr-ok norbert@norbert(unknown) -> norbert@norbert
+devmnt: server error: not found
+
+devmnt: server error: file not found
+
+ Feb  7 01:28:16 tr-fail authid unknown
+devmnt: server error: not found
+
+ Feb  7 01:28:16 tr-ok norbert@norbert(unknown) -> norbert@<demo-pw-redacted>
+process 63 exited: "main"
+
+churngate: heap exit 5050368 33554432
+
+process 65 exited: ""
+
+churngate: heap exit 5050368 33554432
+
+AUTH-DEBUGOBS 	ticket request using norbert@DEMO-harvey key succeeded
+process 66 exited: ""
+
+churngate: heap exit 5050368 33554432
+
+authprobe: password: devmnt: server error: not found
+
+devmnt: server error: not found
+
+ Feb  7 01:28:16 tr-ok norbert@bootes(unknown) -> norbert@bootes
+authprobe: SPEAKSFOR-OK bootes for norbert
+process 67 exited: ""
+
+churngate: heap exit 5054464 33554432
+
+process 68 exited: ""
+
+churngate: heap exit 5054464 33554432
+
+authprobe: password: devmnt: server error: not found
+
+devmnt: server error: not found
+
+ Feb  7 01:28:16 tr-fail sys@bootes(unknown) -> sys@bootes no speaks for
+ Feb  7 01:28:16 tr-ok sys@bootes(unknown) -> sys@bootes
+authprobe: SPEAKSFOR-DENIED sys
+process 69 exited: ""
+
+churngate: heap exit 5060608 33554432
+
+process 70 exited: ""
+
+churngate: heap exit 5060608 33554432
+
+process 71 exited: ""
+
+churngate: heap exit 5060608 33554432
+
+AUTH-OK p9sk1-norbert
+process 72 exited: ""
+
+churngate: heap exit 5060608 33554432
+
+AUTH-OK speaksfor
+process 73 exited: ""
+
+churngate: heap exit 5060608 33554432
+
+AUTH-OK speaksfor-deny
+process 74 exited: ""
+
+churngate: heap exit 5060608 33554432
+
+AUTH-CONSOLEOBS restored
+process 75 exited: ""
+
+churngate: heap exit 5060608 33554432
+
+devmnt: server error: file does not exist
+
+first time setup for secstore: create /adm/secstore/who -17777777023
+devmnt: server error: file does not exist
+
+devmnt: server error: file does not exist
+
+first time setup for secstore: create /adm/secstore/store -17777777100
+devmnt: server error: file does not exist
+
+secuser norbert
+devmnt: server error: file does not exist
+
+devmnt: server error: file does not exist
+
+new account (because /adm/secstore/norbert namec: does not exist)
+devmnt: server error: file does not exist
+
+norbert password: 
+12 characters
+confirming...
+retype password: 
+expires [DDMMYYYY, default = 31121970]: 
+
+Enabled or Disabled [default Enabled]: E
+
+require STA? [default no]: N
+
+comments [default = ]: 
+
+ Feb  7 01:28:16 CHANGELOGIN for 'norbert'
+devmnt: server error: file does not exist
+
+change written
+devmnt: server error: file does not exist
+
+process 76 exited: ""
+
+churngate: heap exit 5321216 33554432
+
+secprobe: mode-1 single write (33 bytes)
+secprobe: m1-postdial Established qin 0 qout 0 rq 0.0 srtt 0 mdev 0 sst 0 cwin 0 swin 0>>0 rwin 0>>0 qscale 0 timer.start 0 timer.count 0 rerecv 0 katimer.start 0 katimer.count 0
+
+secprobe: m1-postwrite Established qin 0 qout 33 rq 0.0 srtt 0 mdev 0 sst 0 cwin 0 swin 0>>0 rwin 0>>0 qscale 0 timer.start 0 timer.count 0 rerecv 0 katimer.start 0 katimer.count 0
+
+ Feb  7 01:28:16 secstore from 127.0.0.1!46030
+process 78 exited: ""
+
+churngate: heap exit 5321216 33554432
+
+secprobe: REPLY 37 bytes
+secprobe: REPLYTEXT !protocol should start with ver alg
+secprobe: m1-postread Close_wait qin 0 qout 0 rq 0.0 srtt 0 mdev 0 sst 0 cwin 0 swin 0>>0 rwin 0>>0 qscale 0 timer.start 0 timer.count 0 rerecv 0 katimer.start 0 katimer.count 0
+
+secprobe: mode-2 two-write (count 2 + payload 31)
+secprobe: m2-postdial Established qin 0 qout 0 rq 0.0 srtt 0 mdev 0 sst 0 cwin 0 swin 0>>0 rwin 0>>0 qscale 0 timer.start 0 timer.count 0 rerecv 0 katimer.start 0 katimer.count 0
+
+secprobe: mode-2 wrote 2-byte count
+secprobe: m2-postcount Established qin 0 qout 2 rq 0.0 srtt 0 mdev 0 sst 0 cwin 0 swin 0>>0 rwin 0>>0 qscale 0 timer.start 0 timer.count 0 rerecv 0 katimer.start 0 katimer.count 0
+
+secprobe: mode-2 payload written (31 bytes), reading reply
+secprobe: m2-postpayload Established qin 0 qout 33 rq 0.0 srtt 0 mdev 0 sst 0 cwin 0 swin 0>>0 rwin 0>>0 qscale 0 timer.start 0 timer.count 0 rerecv 0 katimer.start 0 katimer.count 0
+
+ Feb  7 01:28:16 secstore from 127.0.0.1!56205
+process 80 exited: ""
+
+churngate: heap exit 5328896 33554432
+
+secprobe: mode-2 REPLY count read (2 bytes, len 35)
+secprobe: mode-2 REPLYTEXT !protocol should start with ver alglg
+secprobe: mode-2 child done err=
+process 79 exited: ""
+
+churngate: heap exit 5328896 33554432
+
+secprobe: m2-t1s Close_wait qin 0 qout 0 rq 0.0 srtt 0 mdev 0 sst 0 cwin 0 swin 0>>0 rwin 0>>0 qscale 0 timer.start 0 timer.count 0 rerecv 0 katimer.start 0 katimer.count 0
+
+secprobe: m2-t3s Close_wait qin 0 qout 0 rq 0.0 srtt 0 mdev 0 sst 0 cwin 0 swin 0>>0 rwin 0>>0 qscale 0 timer.start 0 timer.count 0 rerecv 0 katimer.start 0 katimer.count 0
+
+secprobe: mode-2 reader still parked at t+3s (the stall) pid=79
+process 77 exited: ""
+
+churngate: heap exit 5328896 33554432
+
+AUTH-SKIP-WHY r9-devip-two-write-tcp
+process 81 exited: ""
+
+churngate: heap exit 5328896 33554432
+
+AUTH-SKIP secstore-roundtrip
+process 82 exited: ""
+
+churngate: heap exit 5328896 33554432
+
+AUTH-SKIP secstore-put
+process 83 exited: ""
+
+churngate: heap exit 5328896 33554432
+
+AUTH-OK secuser
+process 84 exited: ""
+
+churngate: heap exit 5328896 33554432
+
+AUTH-DONE
+process 85 exited: ""
+
+churngate: heap exit 5328896 33554432
+
+process 5 exited: ""
+
+churngate: heap exit 5328896 33554432
+
+% 

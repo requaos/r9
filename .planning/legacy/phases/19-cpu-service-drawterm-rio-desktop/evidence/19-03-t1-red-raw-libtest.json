@@ -1,0 +1,40 @@
+{ "type": "suite", "event": "started", "test_count": 19 }
+{ "type": "test", "event": "started", "name": "exec::tests::adjacent_segments_at_the_2mib_boundary" }
+{ "type": "test", "event": "started", "name": "exec::tests::data_bss_overflowing_ustop_is_a_named_err" }
+{ "type": "test", "event": "started", "name": "exec::tests::empty_data_segment_maps_text_only" }
+{ "type": "test", "event": "started", "name": "exec::tests::empty_text_is_a_named_err" }
+{ "type": "test", "event": "started", "name": "exec::tests::entry_outside_text_is_a_named_err" }
+{ "type": "test", "event": "started", "name": "exec::tests::exec_with_shebang_installs_the_interpreter_image" }
+{ "type": "test", "event": "started", "name": "exec::tests::parse_aout_accepts_well_formed_s_magic" }
+{ "type": "test", "event": "started", "name": "exec::tests::plain_aout_head_is_not_a_script" }
+{ "type": "test", "event": "started", "name": "exec::tests::seed_exec_frame_plants_the_184_byte_ureg_entry_state" }
+{ "type": "test", "event": "started", "name": "exec::tests::shebang_argv_growth_respects_max_args" }
+{ "type": "test", "event": "started", "name": "exec::tests::shebang_flag_tokens_precede_the_script_path" }
+{ "type": "test", "event": "started", "name": "exec::tests::shebang_negative_shapes_are_loud_rejects" }
+{ "type": "test", "event": "started", "name": "exec::tests::shebang_one_token_builds_the_donor_argv_order" }
+{ "type": "test", "event": "started", "name": "exec::tests::shebang_recursion_is_capped_at_two_with_a_loud_reject" }
+{ "type": "test", "event": "started", "name": "exec::tests::truncated_header_is_a_loud_named_err" }
+{ "type": "test", "event": "started", "name": "exec::tests::wrong_magic_is_a_named_err" }
+{ "type": "test", "name": "exec::tests::data_bss_overflowing_ustop_is_a_named_err", "event": "ok" }
+{ "type": "test", "event": "started", "name": "exec::tests::zero_length_input_is_a_loud_named_err" }
+{ "type": "test", "name": "exec::tests::adjacent_segments_at_the_2mib_boundary", "event": "ok" }
+{ "type": "test", "event": "started", "name": "syscall::tests::exec_arg_staging_preserves_order" }
+{ "type": "test", "name": "exec::tests::empty_data_segment_maps_text_only", "event": "ok" }
+{ "type": "test", "event": "started", "name": "syscall::tests::exec_replace_seeds_argv_order_verbatim" }
+{ "type": "test", "name": "exec::tests::seed_exec_frame_plants_the_184_byte_ureg_entry_state", "event": "ok" }
+{ "type": "test", "name": "exec::tests::empty_text_is_a_named_err", "event": "ok" }
+{ "type": "test", "name": "exec::tests::entry_outside_text_is_a_named_err", "event": "ok" }
+{ "type": "test", "name": "exec::tests::exec_with_shebang_installs_the_interpreter_image", "event": "failed", "stdout": "\nthread 'exec::tests::exec_with_shebang_installs_the_interpreter_image' (821070) panicked at x86_64/src/exec.rs:973:10:\nthe interpreter image installs: \"exec: short read of a.out header\"\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n" }
+{ "type": "test", "name": "exec::tests::parse_aout_accepts_well_formed_s_magic", "event": "ok" }
+{ "type": "test", "name": "exec::tests::shebang_flag_tokens_precede_the_script_path", "event": "failed", "stdout": "\nthread 'exec::tests::shebang_flag_tokens_precede_the_script_path' (821075) panicked at x86_64/src/exec.rs:850:14:\nthe script sniffs as a script\n" }
+{ "type": "test", "name": "exec::tests::shebang_argv_growth_respects_max_args", "event": "failed", "stdout": "\nthread 'exec::tests::shebang_argv_growth_respects_max_args' (821074) panicked at x86_64/src/exec.rs:935:10:\nscript\n" }
+{ "type": "test", "name": "exec::tests::plain_aout_head_is_not_a_script", "event": "ok" }
+{ "type": "test", "name": "exec::tests::shebang_one_token_builds_the_donor_argv_order", "event": "failed", "stdout": "\nthread 'exec::tests::shebang_one_token_builds_the_donor_argv_order' (821077) panicked at x86_64/src/exec.rs:829:14:\nthe script sniffs as a script\n" }
+{ "type": "test", "name": "exec::tests::shebang_negative_shapes_are_loud_rejects", "event": "failed", "stdout": "\nthread 'exec::tests::shebang_negative_shapes_are_loud_rejects' (821076) panicked at x86_64/src/exec.rs:873:9:\nassertion failed: shebang_pass(&head, 40, SCRIPT, ELEM, &[SCRIPT]).is_err()\n" }
+{ "type": "test", "name": "exec::tests::truncated_header_is_a_loud_named_err", "event": "ok" }
+{ "type": "test", "name": "exec::tests::wrong_magic_is_a_named_err", "event": "ok" }
+{ "type": "test", "name": "exec::tests::zero_length_input_is_a_loud_named_err", "event": "ok" }
+{ "type": "test", "name": "exec::tests::shebang_recursion_is_capped_at_two_with_a_loud_reject", "event": "failed", "stdout": "\nthread 'exec::tests::shebang_recursion_is_capped_at_two_with_a_loud_reject' (821078) panicked at x86_64/src/exec.rs:1021:10:\ntwo hops reach the binary: \"exec: short read of a.out header\"\n" }
+{ "type": "test", "name": "syscall::tests::exec_arg_staging_preserves_order", "event": "ok" }
+{ "type": "test", "name": "syscall::tests::exec_replace_seeds_argv_order_verbatim", "event": "ok" }
+{ "type": "suite", "event": "failed", "passed": 13, "failed": 6, "ignored": 0, "measured": 0, "filtered_out": 76, "exec_time": 0.001832325 }

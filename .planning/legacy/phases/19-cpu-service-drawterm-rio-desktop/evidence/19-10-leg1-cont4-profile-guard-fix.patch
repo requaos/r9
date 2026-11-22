@@ -1,0 +1,32 @@
+diff --git a/build/x86_64/root-tree/usr/glenda/lib/profile b/build/x86_64/root-tree/usr/glenda/lib/profile
+index 637aac51a..75f929e15 100644
+--- a/build/x86_64/root-tree/usr/glenda/lib/profile
++++ b/build/x86_64/root-tree/usr/glenda/lib/profile
+@@ -32,8 +32,16 @@ case terminal
+ 	prompt=('term% ' '	')
+ 	fn term%{ $* }
+ case cpu
+-	if (test -e /mnt/term/mnt/wsys) { # rio already running
+-		bind -a /mnt/term/mnt/wsys /dev
++	# rio already running?  TWO shapes: terminal-side rio at
++	# /mnt/term/mnt/wsys (the stock drawterm idiom), and REMOTE rio —
++	# this venue's desktop, whose window shells see /mnt/wsys (winshell's
++	# own mount, fsys.c filsysmount).  Either way this shell is inside a
++	# desktop: bind the wsys dev tree and NEVER start a second one.
++	if (test -e /mnt/term/mnt/wsys || test -e /mnt/wsys) {
++		if (test -e /mnt/wsys)
++			bind -a /mnt/wsys /dev
++		if (test -e /mnt/term/mnt/wsys)
++			bind -a /mnt/term/mnt/wsys /dev
+ 		if(test -w /dev/label)
+ 			echo -n $sysname > /dev/label
+ 	}
+@@ -42,7 +50,7 @@ case cpu
+ 	bind -a /mnt/term/dev /dev
+ 	prompt=('cpu% ' '	')
+ 	fn cpu%{ $* }
+-	if (! test -e /mnt/term/mnt/wsys) {	# cpu call from drawterm
++	if (! test -e /mnt/term/mnt/wsys && ! test -e /mnt/wsys) {	# cpu call from drawterm — no desktop anywhere
+ 		font=/lib/font/bit/pelm/latin1.8.font
+ 		if (test -e /mnt/term/dev/draw) {	# the client serves draw — the in-session desktop (DESK-02: guarded, so a text-mode -G session stays a plain cpu% shell instead of dying at the exec)
+ 			plumber	# in-session plumbing before the window manager (DESK-05)

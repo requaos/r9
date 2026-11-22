@@ -1,0 +1,15 @@
+{
+  "command": "cd /Users/neilskinner/code/r9 && nix develop -c bash -c 'cargo test -p xtask pcap -- --nocapture'",
+  "exitCode": 101,
+  "targetTest": "pcap::tests::golden_arp_request_parses_all_fields",
+  "output": "    Finished `test` profile [unoptimized + debuginfo] target(s)\n     Running unittests src/main.rs (target/debug/deps/xtask-7f)\n\nrunning 7 tests\nnot ok 1 - pcap::tests::golden_arp_request_parses_all_fields\nnot ok 2 - pcap::tests::golden_arp_reply_parses_all_fields\nnot ok 3 - pcap::tests::non_arp_frame_is_counted_but_not_classified\nnot ok 4 - pcap::tests::truncated_record_errors_loudly\nnot ok 5 - pcap::tests::bad_magic_errors_loudly\nnot ok 6 - pcap::tests::request_reply_counts_over_mixed_fixture\nnot ok 7 - pcap::tests::big_endian_magic_accepted\n# tests 7\n# pass 0\n# fail 7\n",
+  "expected": "parse_pcap extracts ARP fields from golden request/reply fixtures; non-ARP frames counted but not classified; truncation and bad magic return loud Err; request/reply counts 2/1 over the mixed fixture; big-endian magic accepted",
+  "actual": "RED stubs return Ok(empty)/Ok(0)/0: all seven tests fail on their behavior assertions (assertion `left == right` failed / assert!(res.is_err()) fired) — no compile errors, no zero-test discovery (7 failed; 24 other-suite tests filtered out), no fixture crashes",
+  "evidence_log": "/private/var/folders/b_/d_zl68v16258dhmmjqgfqd2w0000gn/T/opencode/07-01-red.log",
+  "output_format_note": "cargo test does not emit TAP; the output field is a faithful TAP transcription of the cargo run retained at evidence_log (exit 101, 7 failed, 0 passed, names match). Transcribed because gsd_run check tdd-red-evidence parses TAP/Surefire summaries only.",
+  "recorded_at": "2026-11-04T23:15Z",
+  "plan": "07-01",
+  "task": 2,
+  "phase": "07-r9-pci-ecam-virtio-net-devether",
+  "notes": "Task 2 of 07-01 is tdd=true. The seventh test (big_endian_magic_accepted) pins the plan text's literal a1b2c3d4 byte order, which is the big-endian classic-pcap magic; qemu's filter-dump writes host-endian (d4c3b2a1 on the LE gate hosts), so the parser accepts both."
+}

@@ -1,0 +1,130 @@
+c[?7l[2J[0mSeaBIOS (version rel-1.17.0-0-gb52ca86e094d-prebuilt.qemu.org)
+
+
+iPXE (http://ipxe.org) 00:02.0 CA00 PCI2.10 PnP PMM+3EFD1B50+3EF31B50 CA00
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from Hard Disk...
+Boot failed: could not read the boot disk
+
+Booting from DVD/CD...
+[0;30;47mWelcome to GRUB[H[J[1;1H  Booting `r9'
+
+!
+
+
+r9 from the Internet
+Machine information:
+q35: memory 0x0..0x9fc00 (0x9fc00) available
+q35: memory 0x9fc00..0xa0000 (0x400) reserved
+q35: memory 0xf0000..0x100000 (0x10000) reserved
+q35: memory 0x100000..0x3ffdf000 (0x3fedf000) available
+q35: memory 0x3ffdf000..0x40000000 (0x21000) reserved
+q35: memory 0xb0000000..0xc0000000 (0x10000000) reserved
+q35: memory 0xfed1c000..0xfed20000 (0x4000) reserved
+q35: memory 0xfeffc000..0xff000000 (0x4000) reserved
+q35: memory 0xfffc0000..0x100000000 (0x40000) reserved
+q35: acpi rsdt 0x3ffe2345 (mb2 RSDP tag — 13-04 walks it)
+q35: acpi rsdt 0x3ffe2345 via mb2 acpi tag (5 entries)
+q35: mcfg 0xb0000000 buses 0x0-0xff (seg 0)
+q35: lapic 0xfee00000 (madt local intc)
+q35: ioapic 0xfec00000 gsib 0 (id 0)
+q35: intsrc bus 0 source 0 -> gsi 2 flags 0x0
+q35: intsrc bus 0 source 5 -> gsi 5 flags 0xd
+q35: intsrc bus 0 source 9 -> gsi 9 flags 0xd
+q35: intsrc bus 0 source 10 -> gsi 10 flags 0xd
+q35: intsrc bus 0 source 11 -> gsi 11 flags 0xd
+q35: hpet 0xfed00000
+pciexbar: 0xb0000001 -> 0xb0000001
+pci: virtio-net 1af4:1041 at 00:02.0 rev 01 pin 1 (inta) bars 2
+pci: inta -> gsi 22 (q35 root slot 2, pirq G: 16+6)
+Memory usage:
+  Used:		0x00000006800000
+  Total:	0x0000003ffdf000
+lapic: cpuid leaf-1 ecx: x2apic=true tsc-deadline=true
+lapic: x2apic live (msr 0x800 map; lint0/1 masked, no pic)
+timer: 2496096680 Hz (pit 1193182 Hz reference), TscDeadline mode, armed
+ioapic: id 0 version 0x11 rtes 23 gsib 0 (madt 0xfec00000)
+pci: bar4 pa 0xfe000000 size 0x4000 (firmware) readback 0xfe000000
+pci: caps common@0x0+0x1000 notify@0x3000 isr@0x1000 device@0x2000 mult 4
+virtio-net: features offered 0x10130bf8024 negotiated 0x100010020
+virtio-net: rx pre-posted 128 buffers qsize 256
+ioapic: gsi 22 -> vector 0x21 (level)
+#l0: virtio: 1000Mbps: 52:54:00:12:34:56
+q35: module @0x101000 +0x5b447 (mb2 tag 3, stashed)
+devenv: seeded cputype=amd64 nobootprompt=embed readparts=0
+q35: paqfs root mounted from module (373831 bytes)
+devroot: /boot/boot open (159349 bytes)
+exec: entering ring 3 pc=0x2054fa sp=0x7fffffffef78 path=/boot/boot argv=[boot]
+paqfs...version...root-chain: Tue Nov 10 19:17:16 GMT 2026
+fingerprint: 2d12a77d836be08a965c54f179682232fe549ce7
+process 2 exited: ""
+syscall 10 unimplemented
+time...
+boot: opening #c/swap: namec: does not exist
+init: can't open #c/sysname: namec: does not exist
+syscall 10 unimplemented
+
+init: starting /bin/rc
+% echo r9x64shell7
+r9x64shell7
+process 5 exited: ""
+% 
+% ls /bin
+/bin/cat
+/bin/echo
+/bin/ls
+/bin/ps
+/bin/rc
+process 6 exited: ""
+% ps
+glenda            1    0:00   0:00        0K Blocked  init
+glenda            3    0:00   0:00        0K Blocked  paqfs
+glenda            4    0:00   0:00        0K Blocked  rc
+glenda            7    0:00   0:00        0K Running  ps
+process 7 exited: ""
+% cat /lib/namespace
+# /lib/namespace for the r9 boot chain image — scoped
+# from lib/namespace, modeled on sys/src/9k/k10/root/k10root.namespace's
+# shape (re-keyed from the aarch64 sibling — arch-neutral: $cputype
+# resolves amd64 at runtime).  No network binds (#I/#l0) and no
+# factotum mount — auth is stub-by-absence and the embedded root has
+# no network this era.
+#
+# The RE-MOUNT pair comes FIRST (the binding finding,
+# proven empirically on the donor): newns's rfork(RFENVG|RFCNAMEG) WIPES
+# the mount table boot built, so the paqfs tree must be re-attached at
+# /root (via #s/boot — the devsrv entry boot's srvcreate posted) and
+# re-bound onto / before any /root-prefixed bind can resolve.  Without
+# this pair, the bin binds below fail soft and init's exec of /bin/rc
+# stalls.
+
+# re-mount the root server (the wiped table's reconstruction)
+mount -a #s/boot /root
+bind -a /root /
+
+# kernel devices
+bind #c /dev
+bind #d /fd
+bind -c #e /env
+bind #p /proc
+bind -c #s /srv
+
+# standard bin
+bind /root/$cputype/bin /bin
+bind -a /root/rc/bin /bin
+process 8 exited: ""
+% fnordnote: pid 4 has no notify handler
+process 4 exited: "interrupt"
+init: rc exit status: interrupt
+
+init: starting /bin/rc
+% echo r9x64delok
+r9x64delok
+process 10 exited: ""
+% exit
+process 9 exited: ""
+
+init: starting /bin/rc
+% 

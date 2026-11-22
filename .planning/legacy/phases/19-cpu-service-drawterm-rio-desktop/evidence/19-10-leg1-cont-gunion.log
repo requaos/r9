@@ -1,0 +1,21 @@
+spawn /nix/store/y8h5ana2drnzs2fdx6fxgr74bwmzi8y9-drawterm-19.06/bin/drawterm -G -s  -O cpu=127.0.0.1,auth=tcp!127.0.0.1!5670,user=glenda
+glenda@requaos-harvey password: 
+cpu: failed to chdir to '/home/req/code/harvey'
+cpu% echo UTEST-START
+mkdir /tmp/u
+echo THIS-IS-THE-BEFORE-MEMBER-CONTENT >/tmp/u/cons
+ls -l /dev/cons
+UTEST-START
+cpu% echo NOW-BINDING-BEFORE
+bind -b /tmp/u /dev
+mkdir: namec: does not exist
+cpu% ls -l /dev/cons
+ls -l /dev/consctl
+/tmp/u/consls: rc: can't open: namec: does not exist
+cpu% unmount /tmp/u /dev
+unmount: namec: does not exist
+cpu% ls -l /dev/cons
+--rw-rw---- c 0 req req 0 Feb  7  2006 /dev/cons
+cpu% echo UTEST-END
+UTEST-END
+cpu% exit

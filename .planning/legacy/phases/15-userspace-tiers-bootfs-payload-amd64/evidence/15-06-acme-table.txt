@@ -1,0 +1,282 @@
+# 15-06 acme distilled syscall table — the 05-03 measured-set format
+# derived from 15-06-acme-raw.txt by build/x86_64/trace-distill.sh (the committed
+# derivation path — re-running it over the raw reproduces this file)
+# venue: k10draw draw donor (amd64 9k kernel), scripted-interaction
+# replay via /dev/mousein + /dev/kbin, tracesup born-traced arming
+# run: commit=c9d135a45 date=2026-11-10T14:09:15Z accel=kvm
+# row grammar: <syscall>\t<count>\t<args-shape (first sample)>
+#              B<TAB>syscall<TAB>count = per-binary aggregate
+#              P<TAB>syscall<TAB>count<TAB>path = distinct path args (digits->N)
+#              T<TAB>syscall<TAB>count = program-level union
+pid=117 name=acme fragments=1877
+Semacquire	289	0x40dbdc 1
+Semrelease	288	0x40dbdc 1
+Pwrite	205	3 0x423d60/"/lib/font/bit/lucidasans/euro.8.font" 36 -1
+Open	38	0x423554/"/env/cputype" 0x0
+Rendez	33	0x43c330 0x0
+Brk	22	0x421c80
+Pread	21	3 0x423de0 5 -1
+Close	19	3
+Rfork	8	0x2000
+Seek	4	0x423520 3 0x0 2
+Create	3	0x423578/"/env/font" 0x1 0x1b4
+Fstat	3	3 0x434f40 115
+Bind	2	0x423648/"/acme/bin/amd64" 0x40c419/"/bin" 0x1
+Pipe	2	0x4235d8
+Fd2path	1	3 0x409dc0 512
+Notify	1	0x232119
+Stat	1	0x423540/"/tmp/A117.sysacme" 0x43fe40 115
+pid=128 name=acme fragments=19
+Nsec	2	0x21e678
+Close	1	8
+Open	1	0x43b6a4/"#p/128/args" 0x1
+Pwrite	1	8 0x435d50/"timerproc." 10 -1
+Rendez	1	0x438eb8 0x0
+Rfork	1	0x4
+Semacquire	1	0x40dbdc 1
+Semrelease	1	0x40dbdc 1
+Sleep	1	1
+pid=129 name=acme fragments=89
+Pread	19	8 0x43dc4c 20 -1
+Rendez	17	0x43c330 0x0
+Close	2	8
+Open	2	0x43dbdc/"#p/129/args" 0x1
+Semrelease	2	0x40dbdc 1
+Brk	1	0x43ef60
+Pwrite	1	8 0x43df70/"mouseproc." 10 -1
+Semacquire	1	0x40dbdc 1
+pid=132 name=acme fragments=35
+Pread	6	14 0x43fb24 20 -1
+Rendez	5	0x420dc0 0x0
+Close	2	14
+Open	2	0x43fab4/"#p/132/args" 0x1
+Brk	1	0x440ff0
+Pwrite	1	14 0x43fbd0/"kbdproc." 8 -1
+Semrelease	1	0x40dbdc 1
+pid=134 name=acme fragments=67
+Pread	15	11 0x4577f0 4 -1
+Rendez	8	0x420dc0 0x0
+Pwrite	5	14 0x4577b0/"fsysproc." 9 -1
+Semacquire	2	0x40dbdc 1
+Brk	1	0x469c20
+Close	1	14
+Open	1	0x4427d4/"#p/134/args" 0x1
+Semrelease	1	0x420cd4 1
+pid=135 name=acme fragments=15
+Semacquire	2	0x40dbdc 1
+Semrelease	2	0x40dbdc 1
+Close	1	14
+Open	1	0x44a864/"#p/135/args" 0x1
+Pread	1	16 0x455790 8192 -1
+Pwrite	1	14 0x455750/"acmeerrorproc." 14 -1
+pid=164 name=acme fragments=63
+Close	9	14
+Open	4	0x40a8ff/"/dev/null" 0x0
+Bind	3	0x40d224/"/mnt/acme" 0x40d22e/"/mnt/wsys" 0x0
+Create	3	0x45fac0/"/env/winid" 0x1 0x1b4
+Pwrite	3	14 0x45fb6c/"2" 1 -1
+Rfork	3	0xf
+Rendez	2	0x420dc0 0x0
+Await	1	0x45f880 511
+Dup	1	1 2
+Exits	1	0x7fffffffedb8/"procexec"
+Mount	1	10 -1 0x40d21a/"/mnt/acme" 0x0 0x45fa28/"1"
+Pread	1	10 0x45d3c0 127 -1
+Unmount	1	0/"" 0x40b314/"/mnt/temp"
+pid=166 name=acme fragments=4
+Close	1	10
+Exec	1	0x40a9a8/"/bin/rc" 0x40a9b0/"rc" 0x40a9b3/"-c" 0x45d270/"echo ACME-SCRIP
+pid=166 name=rc fragments=304
+Close	49	4
+Pread	41	3 0x406b88 65615 -1
+Open	34	0x4019d7/"/env" 0x0
+Create	13	0x4287e8/"#c/cons" 0x1 0x1b6
+Pwrite	10	5 0x407ae8/"rc." 3 -1
+Brk	4	0x4076b8
+Await	1	0x7fffffffeaf0 511
+Exits	1	0x401af9/""
+Fd2path	1	0 0x7fffffffedb0 64
+Notify	1	0x20b61d
+Rfork	1	0x2014
+pid=168 name=echo fragments=11
+Brk	1	0x4028f0
+Close	1	3
+Exits	1	0/""
+Open	1	0x400090/"#c/pid" 0x0
+Pread	1	3 0x7fffffffee64 20 -1
+Pwrite	1	1 0x401900/"ACME-SCRIPT-DONE." 17 -1
+pid=168 name=rc fragments=16
+Errstr	4	0x7fffffffe7b0 128
+Exec	3	0x7fffffffe8e0/"./echo" 0x428a28/"echo" 0x4289a8/"ACME-SCRIPT-DONE"
+Close	2	3
+Dup	1	4 1
+BINARY name=acme pids=8 entries=1090
+BINARY name=echo pids=1 entries=6
+BINARY name=rc pids=2 entries=166
+B	Semacquire	295
+B	Semrelease	295
+B	Pwrite	217
+B	Rendez	66
+B	Pread	63
+B	Open	49
+B	Close	36
+B	Brk	25
+B	Rfork	12
+B	Create	6
+B	Bind	5
+B	Seek	4
+B	Fstat	3
+B	Nsec	2
+B	Pipe	2
+B	Await	1
+B	Dup	1
+B	Exec	1
+B	Exits	1
+B	Fd2path	1
+B	Mount	1
+B	Notify	1
+B	Sleep	1
+B	Stat	1
+B	Unmount	1
+B	Brk	1
+B	Close	1
+B	Exits	1
+B	Open	1
+B	Pread	1
+B	Pwrite	1
+B	Close	51
+B	Pread	41
+B	Open	34
+B	Create	13
+B	Pwrite	10
+B	Brk	4
+B	Errstr	4
+B	Exec	3
+B	Await	1
+B	Dup	1
+B	Exits	1
+B	Fd2path	1
+B	Notify	1
+B	Rfork	1
+PATHS name=acme
+P	Bind	1	#| /mnt/temp
+P	Bind	1	/acme/bin /bin
+P	Bind	1	/acme/bin/amd64 /bin
+P	Bind	1	/mnt/acme /dev
+P	Bind	1	/mnt/acme /mnt/wsys
+P	Create	1	/env/%
+P	Create	1	/env/font
+P	Create	1	/env/path
+P	Create	1	/env/winid
+P	Create	1	/srv/acme.sys.N
+P	Create	1	/tmp/A117.sysacme
+P	Exec	1	/bin/rc
+P	Mount	1	/mnt/acme 1
+P	Open	5	#c/pid
+P	Open	5	#p/N/args
+P	Open	4	/lib/font/bit/lucidasans/lsr.14.N
+P	Open	3	/dev/user
+P	Open	2	/dev/cons
+P	Open	2	/env/plumbsrv
+P	Open	2	/lib/font/bit/lucidasans/lsr.N
+P	Open	2	/mnt/plumb/send
+P	Open	2	/mnt/term/mnt/plumb/send
+P	Open	1	#d/Nctl
+P	Open	1	.
+P	Open	1	/
+P	Open	1	/dev/consctl
+P	Open	1	/dev/cursor
+P	Open	1	/dev/draw/N/data
+P	Open	1	/dev/draw/N/refresh
+P	Open	1	/dev/draw/new
+P	Open	1	/dev/label
+P	Open	1	/dev/mouse
+P	Open	1	/dev/null
+P	Open	1	/dev/snarf
+P	Open	1	/dev/time
+P	Open	1	/dev/winname
+P	Open	1	/env/cputype
+P	Open	1	/env/home
+P	Open	1	/env/objtype
+P	Open	1	/env/tabstop
+P	Open	1	/fd/N
+P	Open	1	/lib/font/bit/lucidasans/euro.8.font
+P	Open	1	/mnt/temp/data
+P	Open	1	/mnt/temp/data1
+P	Stat	1	/tmp/A117.sysacme
+P	Unmount	1	 /mnt/temp
+PATHS name=echo
+P	Open	1	#c/pid
+PATHS name=rc
+P	Create	2	/env/*
+P	Create	2	/env/status
+P	Create	1	#c/cons
+P	Create	1	/env/N
+P	Create	1	/env/cflag
+P	Create	1	/env/fn#killroot
+P	Create	1	/env/fn#sigexit
+P	Create	1	/env/fn#trace-one
+P	Create	1	/env/fn#waitdone
+P	Create	1	/env/pid
+P	Create	1	/env/rcname
+P	Exec	1	./echo
+P	Exec	1	/bin/echo
+P	Exec	1	amd64/echo
+P	Open	3	#c/pid
+P	Open	2	/env
+P	Open	1	/env/*
+P	Open	1	/env/N
+P	Open	1	/env/T30
+P	Open	1	/env/T60
+P	Open	1	/env/apid
+P	Open	1	/env/cflag
+P	Open	1	/env/cmd
+P	Open	1	/env/cputype
+P	Open	1	/env/dir
+P	Open	1	/env/fn#killroot
+P	Open	1	/env/fn#trace-one
+P	Open	1	/env/fn#waitdone
+P	Open	1	/env/font
+P	Open	1	/env/home
+P	Open	1	/env/ifs
+P	Open	1	/env/name
+P	Open	1	/env/path
+P	Open	1	/env/pid
+P	Open	1	/env/prompt
+P	Open	1	/env/rcname
+P	Open	1	/env/rep
+P	Open	1	/env/root
+P	Open	1	/env/service
+P	Open	1	/env/status
+P	Open	1	/env/terminal
+P	Open	1	/env/wctl
+P	Open	1	/env/winid
+P	Open	1	/env/wsys
+P	Open	1	/rc/lib/rcmain
+TOTAL pids=11 entries=1262 binaries=3
+T	Semacquire	295
+T	Semrelease	295
+T	Pwrite	228
+T	Pread	105
+T	Close	88
+T	Open	84
+T	Rendez	66
+T	Brk	30
+T	Create	19
+T	Rfork	13
+T	Bind	5
+T	Errstr	4
+T	Exec	4
+T	Seek	4
+T	Exits	3
+T	Fstat	3
+T	Await	2
+T	Dup	2
+T	Fd2path	2
+T	Notify	2
+T	Nsec	2
+T	Pipe	2
+T	Mount	1
+T	Sleep	1
+T	Stat	1
+T	Unmount	1

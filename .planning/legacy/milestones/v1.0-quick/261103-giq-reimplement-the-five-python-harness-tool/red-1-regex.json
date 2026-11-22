@@ -1,0 +1,9 @@
+{
+  "command": "nix shell nixpkgs#cargo nixpkgs#rustc --command cargo test --manifest-path build/harness/Cargo.toml (TAP projection of cargo test output)",
+  "exitCode": 101,
+  "output": "not ok 1 - regex::tests::date_line\nnot ok 2 - regex::tests::bootargs_pattern\nnot ok 3 - regex::tests::auth_pattern\nnot ok 4 - regex::tests::capture_groups\nnot ok 5 - regex::tests::escape_lit_metachars\nnot ok 6 - regex::tests::entry_line_shape\nnot ok 7 - regex::tests::find_at_respects_base\nnot ok 8 - regex::tests::exit_and_promptset_markers\nnot ok 9 - regex::tests::panic_ci_alternation_matches\nnot ok 10 - regex::tests::frag_tag_capture\nnot ok 11 - regex::tests::prompt_anchored\nok 12 - regex::tests::panic_ci_alternation_nonmatches\nnot ok 13 - regex::tests::ps_factotum_word_boundary\nnot ok 14 - regex::tests::ps_rc_row\nok 15 - regex::tests::prompt_rejects_assignment_echo\nnot ok 16 - regex::tests::invalid_patterns_error\nnot ok 17 - regex::tests::literal_markers\nok 18 - regex::tests::shell_marker_rejects_echo_attack\nnot ok 19 - regex::tests::shell_marker_anchored\nnot ok 20 - regex::tests::usage_dot_star\nnot ok 21 - regex::tests::wc_count_row\nok 22 - srv9::tests::serving_line_byte_exact\nok 23 - srv9::tests::usage_and_arg_errors_exit_2\nnot ok 24 - srv9::tests::walk_confinement_and_missing\nnot ok 25 - srv9::tests::version_auth_attach_walk_open_read_stat_clunk\nnot ok 26 - srv9::tests::directory_listing_sorted_dotfree_whole_entries\nnot ok 27 - srv9::tests::writable_prefix_crud_and_vers_bumps\nok 28 - srv9::tests::malformed_frames_drop_the_connection\n# tests 28\n# pass 6\n# fail 22\n",
+  "targetTest": "regex::tests::shell_marker_anchored",
+  "targetFile": "build/harness/src/regex.rs",
+  "expected": "^__GSD_SHELL_OK__\\r?$ matches a bare marker output line in a captured serial buffer (rc's evaluated output)",
+  "actual": "stub Regex::is_match returns false for every input \u2014 the target assertion fails"
+}

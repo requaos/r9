@@ -1,0 +1,77 @@
+# 19-10 Leg-1 cont 4 — the combined two-window proof (2026-11-16, the
+# candidate venue: the sanctioned app pipeline `nix run .#boot-r9-x64
+# --override-input r9 path:/home/req/code/r9 -- --system=cpu` with the
+# staged flat profile baked; kernel = the close-on-exec port build).
+
+## Result: GREEN
+
+Sequence driven with xdotool XTEST through the windowed drawterm (Xvfb):
+B3 menu (press, hold, release in place = "New") -> B3 sweep 1 -> post-sweep
+motion over the bare desktop -> B3 menu RETRY (the owner's dead path) ->
+"New" -> B3 sweep 2.
+
+Screenshots (retained beside this record):
+- 19-10-leg1-cont4-window1.png  — after sweep 1: the white window with its
+  % prompt on the grey desktop (the swept rectangle), cursor reported as a
+  cross right at the window edge (the cornercursor — expected while
+  hovering the border; see below).
+- 19-10-leg1-cont4-twowindow.png — final state: BOTH windows on the
+  desktop, each with its own % prompt, and the cursor is the ARROW.
+
+What each observable means at this venue:
+1. Window 1 exists with a live shell prompt — the sweep completed and
+   new() returned (the close-on-exec half: without it, mousethread parks
+   at recvul and the window still paints, but the mouse chain is dead).
+2. The menu RETRY opened (window 2 was created THROUGH it) — the exact
+   interaction the owner reported dead. Under the wedge, the B3 press
+   piled up unserved (the drawterm-side trace: ri/wi diverge, no read).
+3. The ARROW cursor at the end — the cursor-restore write landed (the
+   wedge's stuck-crosscursor signature is gone).
+4. The desktop's mouse reads continue for the whole sequence (the
+   ghost-rio half: with the old guard a second rio raced the first over
+   the session's shared devices and the first rio's /dev/mouse fid was
+   lost — measured as no-Einuse on the wedged sessions).
+
+Cross-checks on the same venue (typed probes in the live shell):
+- T1: test -e /mnt/term/dev/draw = 0 (the client serves draw).
+- T2: test -e /mnt/wsys = 1 in a top-level shell (no false guard match).
+- The re-source test: after a rio IS running (sharing the shell's
+  namespace, so /mnt/wsys now exists), `. /usr/glenda/lib/profile`
+  completes with NO second desktop — the guard correctly detects the
+  running desktop and never starts the ghost.
+
+Residual (recorded honestly): at THIS venue the desktop did not
+auto-start at login (the session landed at a cpu% shell; the desktop
+came up via a manual `rio &`, after which the whole two-window sequence
+above ran green). The same login-time skip reproduced with the OLD
+profile on an app-baked venue (the 13:2x app2 run) and did NOT
+reproduce on the owner's 10:19 app-baked venue nor on the 13:0x
+direct-bake venue — it is NOT caused by the guard change (both profiles
+skip identically on the affected venues), and the manual-start path is
+fully green including the proof. The skip's own mechanism is open: on
+the affected venue a foreground `rio` after a failed attempt errors
+`rio: can't open display: screeninit failed` (twice), while the same
+binary on the proof venue started clean. Named as an open finding; the
+owner's Leg-1 re-presentation should use a fresh boot and, if the
+desktop does not auto-start, `rio` at the cpu% prompt (the DESK-02
+in-session-start caveat rides this residual).
+
+## Re-verified AT THE PINNED TREE (2026-11-16, harvey 6d6190676 with
+## flake.lock at r9 3e5ed0c — no override)
+
+The same venue recipe through the plain sanctioned app (`nix run
+.#boot-r9-x64 -- --system=cpu`): ladder DONE, listeners up, windowed
+login green (typed password), desktop via the documented manual start
+(`plumber; rio` — the residual above), then the FULL two-window drive:
+menu -> New -> sweep 1 (window + % prompt) -> post-sweep motion -> B3
+menu RETRY -> New -> sweep 2.  BOTH windows live with their prompts and
+the ARROW cursor at the end (screenshot retained as
+19-10-leg1-cont4-twowindow-atpin.png).  Host-side trace at the pin:
+39 mouse read parks across the session and TWO 72-byte cursor writes
+(the sweep cross set + a post-menu restore) — the mouse chain alive
+end-to-end, the wedge signature absent.
+
+Gates at the same pin: drawterm-gate ALL STAGES PASS + smoke (chain +
+cpu legs) ALL STAGES PASS.  r9 battery at 3e5ed0c: port 164 lib + 228
+all-targets + x86_64 104 bins, zero failures.  Hosted CI at both
+pushed HEADs observed SUCCESS (runs 43941101250, 43942790544).

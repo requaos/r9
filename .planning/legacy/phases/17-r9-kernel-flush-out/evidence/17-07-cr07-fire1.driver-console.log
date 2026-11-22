@@ -1,0 +1,374 @@
+warning: Git tree '/home/req/code/harvey' is dirty
+== r9 kernel package: /nix/store/b35qvpi1dwwryri4z2crqmmzlba44fcr-r9-kernel-x64-59d28fa
+   kernel:        /nix/store/b35qvpi1dwwryri4z2crqmmzlba44fcr-r9-kernel-x64-59d28fa/kernel-x64.elf
+   iso-builder:   /nix/store/ncw5b2k3vhyv3ianz6aqya7nnccynv7w-r9-iso-builder/bin/r9-iso-builder
+   netdev emitter: /nix/store/6779g7lsjnm03ck09sb7824mzh9s6yd6-r9-netdev-args-59d28fa/bin/r9-netdev-args
+   net doctor:    /nix/store/zwqxn99pxaj3jdprjd2njn2v59vca795-harvey-net-doctor/bin/harvey-net-doctor
+   host peer:     /nix/store/c3n3v0yyd5v9px0bmjhids8s105pvl0b-host-echo-16.05/bin/host-echo
+   shape:         q35 accel=kvm cpu=host net=tap (slirp runs carry the RACE-STRESS label on the wire)
+net-doctor: PASS bridge-exists: br0 present
+net-doctor: PASS bridge-up: br0 flags carry UP
+net-doctor: PASS bridge-addr: 192.168.122.1/24 present on br0 (the seam's tap_gwv4)
+net-doctor: PASS ip-forward: net.ipv4.ip_forward=1
+net-doctor: WARN masquerade: cannot read the netfilter ruleset unprivileged — verify with: sudo iptables-save | grep '192.168.122.0/24' (or: sudo nft list ruleset | grep '192.168.122.0/24'); want a MASQUERADE rule for 192.168.122.0/24 out the default route
+net-doctor: PASS helper-wrapper: /run/wrappers/bin/qemu-bridge-helper present + setuid (mode 4511)
+net-doctor: PASS bridge-conf-allow: /etc/qemu/bridge.conf carries the exact 'allow br0' line
+net-doctor: PASS blastport-free: port 7777 free (no LISTEN holder)
+net-doctor: DOCTOR-OK
+== doctor preflight PASS (tap mode — the preferred stress venue, #66's own)
+== seam: tap_gwv4=192.168.122.1 blastport=7777 (/nix/store/r13gz5p4m9hjg7ml5hi4yv69hg47j1f3-netaddr.rc); peer binds 192.168.122.1 (venue tap)
+== pcap capture: /tmp/netstress-r9-x64.bPB2JP/netstress.pcap
+== netdev argv (emitter, tap): -netdev tap,id=n0,br=br0,helper=/run/wrappers/bin/qemu-bridge-helper -device virtio-net-pci-non-transitional,netdev=n0 -object filter-dump,id=f0,netdev=n0,file=/tmp/netstress-r9-x64.bPB2JP/netstress.pcap
+== host echo peer up: pid 1322780 at 192.168.122.1:7777 (dies with this gate)
+== R9_SKIP_BUILD=1 — skipping the userland build (iteration hatch; not the gate)
+== step 2/4: bake bootfs-net.paq (build/x86_64/mkimage.sh, the net section; netstress.rc rides root-tree/lib)
+== PASS: baked /home/req/code/harvey/build/x86_64/out/bootfs.paq (104809 bytes; header 529ab12b trailer 6b46e688; KERNDATE 1794538167)
+chain manifest: /boot/boot staged
+chain manifest: /boot/paqfs staged
+chain manifest: /amd64/init staged
+chain manifest: /amd64/bin/rc staged
+chain manifest: /amd64/bin/ls staged
+chain manifest: /amd64/bin/cat staged
+chain manifest: /amd64/bin/echo staged
+chain manifest: /amd64/bin/ps staged
+chain manifest: /rc/lib/rcmain staged
+chain manifest: /rc/bin/termrc staged
+chain manifest: /lib/namespace staged
+chain manifest: /adm/timezone/local staged
+chain manifest: /usr/glenda/lib/profile staged
+== PASS: baked /home/req/code/harvey/build/x86_64/out/bootfs-chain.paq (381423 bytes; header 529ab12b trailer 6b46e688; KERNDATE 1794538167)
+== witness manifest verified: 38 members match the donor venue's embed set
+tier manifest: /boot/boot staged
+tier manifest: /boot/paqfs staged
+tier manifest: /amd64/init staged
+tier manifest: /amd64/bin/rc staged
+tier manifest: /amd64/bin/ls staged
+tier manifest: /amd64/bin/cat staged
+tier manifest: /amd64/bin/echo staged
+tier manifest: /amd64/bin/ps staged
+tier manifest: /rc/lib/rcmain staged
+tier manifest: /rc/bin/termrc staged
+tier manifest: /lib/namespace staged
+tier manifest: /adm/timezone/local staged
+tier manifest: /usr/glenda/lib/profile staged
+tier manifest: /lib/tier1-sweep.rc staged
+tier manifest: /lib/tier1/sentinel.txt staged
+tier manifest: /lib/tier1/nm-input.6 staged
+tier manifest: 37 h* sweep binaries staged (computed from tiers/tier1-cmds.txt)
+== PASS: baked /home/req/code/harvey/build/x86_64/out/bootfs-tier.paq (1857052 bytes; 37 h* binaries; header 529ab12b trailer 6b46e688; KERNDATE 1794538167)
+net manifest: /boot/boot staged
+net manifest: /boot/paqfs staged
+net manifest: /amd64/init staged
+net manifest: /amd64/bin/rc staged
+net manifest: /amd64/bin/ls staged
+net manifest: /amd64/bin/cat staged
+net manifest: /amd64/bin/echo staged
+net manifest: /amd64/bin/ps staged
+net manifest: /amd64/bin/ip/ipconfig staged
+net manifest: /amd64/bin/ip/ping staged
+net manifest: /amd64/bin/ip/udpecho staged
+net manifest: /amd64/bin/tcpecho staged
+net manifest: /amd64/bin/tcpblast staged
+net manifest: /amd64/bin/netblast staged
+net manifest: /amd64/bin/grep staged
+net manifest: /amd64/bin/sed staged
+net manifest: /amd64/bin/dd staged
+net manifest: /amd64/bin/wc staged
+net manifest: /amd64/bin/sha1sum staged
+net manifest: /amd64/bin/test staged
+net manifest: /amd64/bin/bind staged
+net manifest: /amd64/bin/dc staged
+net manifest: /rc/lib/rcmain staged
+net manifest: /rc/bin/termrc staged
+net manifest: /lib/namespace staged
+net manifest: /adm/timezone/local staged
+net manifest: /usr/glenda/lib/profile staged
+net manifest: /lib/netaddr.rc staged
+net manifest: /lib/netip-loopback.rc staged
+net manifest: /lib/netip-static.rc staged
+net manifest: /lib/netip-dhcp.rc staged
+net manifest: /lib/netip-tcp.rc staged
+net manifest: /lib/netip-tap.rc staged
+== PASS: baked /home/req/code/harvey/build/x86_64/out/bootfs-net.paq (899392 bytes; header 529ab12b trailer 6b46e688; KERNDATE 1794538167)
+payload manifest: /lib/ndb/local substituted from lib/ndb/local.template (the netaddr seam's slirp leg) [services]
+payload manifest: /lib/font/bit staged (tree, 4303 files) [services]
+payload manifest: /usr/glenda/lib/profile staged [services]
+payload manifest: /lib/ndb/local staged [services]
+payload manifest: font /lib/font/bit/lucm/unicode.9.font staged [services]
+payload manifest: font /lib/font/bit/lucidasans/euro.8.font staged [services]
+payload manifest: font /lib/font/bit/pelm/latin1.8.font staged [services]
+payload manifest: font /lib/font/bit/pelm/euro.9.font staged [services]
+payload manifest: /lib/font/bit 4303 files 27676353 bytes (floors: 4303 files, 27000000 bytes) [services]
+payload manifest: /usr/glenda/lib/profile shape ok — terminal case rio-free, cpu case intact [services]
+services manifest: /boot/boot staged
+services manifest: /boot/paqfs staged
+services manifest: /boot/rcmain staged
+services manifest: /boot/sentinel.txt staged
+services manifest: /boot/tcp9901 staged
+services manifest: /boot/tcp9902 staged
+services manifest: /amd64/init staged
+services manifest: /amd64/bin/rc staged
+services manifest: /amd64/bin/ls staged
+services manifest: /amd64/bin/cat staged
+services manifest: /amd64/bin/echo staged
+services manifest: /amd64/bin/ps staged
+services manifest: /amd64/bin/ip/ipconfig staged
+services manifest: /amd64/bin/ip/ping staged
+services manifest: /amd64/bin/ip/udpecho staged
+services manifest: /amd64/bin/grep staged
+services manifest: /amd64/bin/sed staged
+services manifest: /amd64/bin/dd staged
+services manifest: /amd64/bin/wc staged
+services manifest: /amd64/bin/sha1sum staged
+services manifest: /amd64/bin/test staged
+services manifest: /amd64/bin/bind staged
+services manifest: /amd64/bin/hsvctcpecho staged
+services manifest: /amd64/bin/hmkdir staged
+services manifest: /rc/lib/rcmain staged
+services manifest: /rc/bin/termrc staged
+services manifest: /lib/namespace staged
+services manifest: /adm/timezone/local staged
+services manifest: /usr/glenda/lib/profile staged
+services manifest: /lib/netaddr.rc staged
+services manifest: /lib/netip-loopback.rc staged
+services manifest: /lib/netip-static.rc staged
+services manifest: /lib/netip-dhcp.rc staged
+services manifest: /lib/netip-tcp.rc staged
+services manifest: /lib/services-sweep.rc staged
+services manifest: 124 h* sweep binaries staged (tier-1 helpers + the tier-2 set computed from tiers/tier2-services.txt: 87 tier-2 members)
+== PASS: baked /home/req/code/harvey/build/x86_64/out/bootfs-services.paq (26494779 bytes; 124 h* binaries; header 529ab12b trailer 6b46e688; KERNDATE 1794538167)
+== PASS: baked /home/req/code/harvey/build/x86_64/out/bootfs-churn.paq (483959 bytes; chain + test/dc + churncats + /lib/churn-cats.rc; header 529ab12b trailer 6b46e688; KERNDATE 1794538167)
+== step 3/4: composing the ISO (r9's iso-builder: kernel + bootfs-net.paq as /boot/bootfs.paq)
+xorriso 1.5.8.pl02 : RockRidge filesystem manipulator, libburnia project.
+
+xorriso : NOTE : Environment variable SOURCE_DATE_EPOCH encountered with value 1735689600
+Drive current: -outdev 'stdio:/tmp/r9-iso-builder.5ah1Sv/boot.iso'
+Media current: stdio file, overwriteable
+Media status : is blank
+Media summary: 0 sessions, 0 data blocks, 0 data,  373g free
+Added to ISO image: directory '/'='/tmp/grub.tsHYcb'
+xorriso : UPDATE :     356 files added in 1 seconds
+Added to ISO image: directory '/'='/tmp/r9-iso-builder.5ah1Sv/stage'
+xorriso : UPDATE :     361 files added in 1 seconds
+xorriso : NOTE : Copying to System Area: 512 bytes from file '/tmp/r9-iso-builder.5ah1Sv/grub-i386-pc/boot_hybrid.img'
+ISO image produced: 9959 sectors
+Written to medium : 9959 sectors at LBA 0
+Writing to 'stdio:/tmp/r9-iso-builder.5ah1Sv/boot.iso' completed successfully.
+
+r9-iso-builder: /tmp/stress-r9-net-x64.VvHpCn/boot.iso c613b1941e2b18c1de2fd9da2a69796657615b90b6a63d14c8a555443162b3f7 (modules: bootfs.paq)
+== step 4/4: the stress gate (build/x86_64/stress-r9.expect — venue tap, baseline 1 + burst 8x512 via rc /lib/netstress.rc, -d int,guest_errors cascade -> /tmp/netstress-r9-x64.bPB2JP/qemu-int-r9x64stress-1322720-1794542205.log)
+== capture: /home/req/code/harvey/build/x86_64/stress-r9.log
+spawn qemu-system-x86_64 -d int,guest_errors -D /tmp/netstress-r9-x64.bPB2JP/qemu-int-r9x64stress-1322720-1794542205.log -M q35 -cpu host -smp 1 -m 1024M -accel kvm -cdrom /tmp/stress-r9-net-x64.VvHpCn/boot.iso -netdev tap,id=n0,br=br0,helper=/run/wrappers/bin/qemu-bridge-helper -device virtio-net-pci-non-transitional,netdev=n0 -object filter-dump,id=f0,netdev=n0,file=/tmp/netstress-r9-x64.bPB2JP/netstress.pcap -nographic -name r9x64stress-1322720-1794542205
+c[?7l[2J[0mSeaBIOS (version rel-1.17.0-0-gb52ca86e094d-prebuilt.qemu.org)
+
+
+iPXE (http://ipxe.org) 00:02.0 CA00 PCI2.10 PnP PMM+3EFD1B50+3EF31B50 CA00
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from Hard Disk...
+Boot failed: could not read the boot disk
+
+Booting from DVD/CD...
+[0;30;47mWelcome to GRUB[H[J[1;1H  Booting `r9'
+
+!
+
+
+r9 from the Internet
+Machine informationstress-r9-x64: stage ok — banner
+:
+q35: memory 0x0..0x9fc00 (0x9fc00) available
+q35: memory 0x9fc00..0xa0000 (0x400) reserved
+q35: memory 0xf0000..0x100000 (0x10000) reserved
+q35: memory 0x100000..0x3ffdf000 (0x3fedf000) available
+q35: memory 0x3ffdf000..0x40000000 (0x21000) reserved
+q35: memory 0xb0000000..0xc0000000 (0x10000000) reserved
+q35: memory 0xfed1c000..0xfed20000 (0x4000) reserved
+q35: memory 0xfeffc000..0xff000000 (0x4000) reserved
+q35: memory 0xfffc0000..0x100000000 (0x40000) reserved
+q35: acpi rsdt 0x3ffe2345 (mb2 RSDP tag — 13-04 walks it)
+q35: acpi rsdt 0x3ffe2345 via mb2 acpi tag (5 entries)
+q35: mcfg 0xb0000000 buses 0x0-0xff (seg 0)
+q35: lapic 0xfee00000 (madt local intc)
+q35: ioapic 0xfec00000 gsib 0 (id 0)
+q35: intsrc bus 0 source 0 -> gsi 2 flags 0x0
+q35: intsrc bus 0 source 5 -> gsi 5 flags 0xd
+q35: intsrc bus 0 source 9 -> gsi 9 flags 0xd
+q35: intsrc bus 0 source 10 -> gsi 10 flags 0xd
+q35: intsrc bus 0 source 11 -> gsi 11 flags 0xd
+q35: hpet 0xfed00000
+pciexbar: 0xb0000001 -> 0xb0000001
+pci: virtio-net 1af4:1041 at 00:02.0 rev 01 pin 1 (inta) bars 2
+pci: inta -> gsi 22 (q35 root slot 2, pirq G: 16+6)
+Memory usage:
+  Used:		0x00000006a00000
+  Total:	0x0000003ffdf000
+lapic: cpuid leaf-1 ecx: x2apic=true tsc-deadline=true
+lapic: x2apic live (msr 0x800 map; lint0/1 masked, no pic)
+timer: 2496076620 Hz (pit 1193182 Hz reference), TscDeadline mode, armed
+ioapic: id 0 version 0x11 rtes 23 gsib 0 (madt 0xfec00000)
+pci: bar4 pa 0xfe000000 size 0x4000 (firmware) readback 0xfe000000
+pci: caps common@0x0+0x1000 notify@0x3000 isr@0x1000 device@0x2000 mult 4
+virtio-net: features offered 0x1c0010130bfffa7 negotiated 0x100010020
+virtio-net: rx pre-posted 128 buffers qsize 256
+ioapic: gsi 22 -> vector 0x21 (level)
+#l0: virtio: 1000Mbps: 52:54:00:12:34:56
+q35: module @0x101000 +0xdb940 (mb2 tag 3, stashed)
+devenv: seeded cputype=amd64 nobootprompt=embed readparts=0
+q35: paqfs root mounted from module (899392 bytes)
+devroot: /boot/boot open (159349 bytes)
+exec: entering ring 3 pc=0x2054fa sp=0x7fffffffef78 path=/boot/boot argv=[boot]
+paqfs...stress-r9-x64: stage ok — paqfs
+version...stress-r9-x64: stage ok — version
+root-net: Fri Nov 13 02:49:27 GMT 2026
+fingerprint: 05787e286f7169c46b2959d737b114424384b08a
+process 2 exited: ""
+churngate: heap exit 103680 33554432
+syscall 10 unimplemented
+time...
+boot: opening #c/swap: namec: does not exist
+init: can't open #c/sysname: namec: does not exist
+syscall 10 unimplemented
+
+init: starting /bin/rc
+% stress-r9-x64: stage ok — prompt
+rc /lib/netstress.rc tap 1 8 512
+process 6 exited: ""
+churngate: heap exit 1209280 33554432
+#I0: devip attached
+process 7 exited: ""
+churngate: heap exit 1210752 33554432
+devip: medium ether bound #l0
+process 8 exited: ""
+churngate: heap exit 1276494 33554432
+netstress: static ok
+stress-r9-x64: stage ok — stress-static
+process 9 exited: ""
+churngate: heap exit 1341824 33554432
+netstress: venue tap stress-r9-x64: stage ok — stress-venue
+L2-truth
+process 10 exited: ""
+churngate: heap exit 1341824 33554432
+sending 3 64 byte messages 1000 ms apart to icmp!192.168.122.1!1
+0: rtt 0 µs, avg rtt 0 µs, ttl = 255
+1: rtt 0 µs, avg rtt 0 µs, ttl = 255
+2: rtt 0 µs, avg rtt 0 µs, ttl = 255
+process 12 exited: ""
+churngate: heap exit 1684032 33554432
+process 11 exited: ""
+churngate: heap exit 1684032 33554432
+process 13 exited: ""
+churngate: heap exit 1684032 33554432
+netstress: arp view ok
+stress-r9-x64: stage ok — stress-arp
+process 14 exited: ""
+churngate: heap exit 1684032 33554432
+tcpblast: round 0 ok
+tcpblast: done 1 rounds
+process 15 exited: ""
+churngate: heap exit 1684032 33554432
+process 18 exited: ""
+churngate: heap exit 1720320 33554432
+process 19 exited: ""
+churngate: heap exit 1720320 33554432
+process 17 exited: ""
+churngate: heap exit 1720320 33554432
+process 22 exited: ""
+churngate: heap exit 1742848 33554432
+process 23 exited: ""
+churngate: heap exit 1873152 33554432
+process 21 exited: ""
+churngate: heap exit 1873152 33554432
+process 26 exited: ""
+churngate: heap exit 1894400 33554432
+proc: deallocate page 0x8000000: NotAllocated
+proc: deallocate page 0x8001000: NotAllocated
+proc: deallocate page 0x8002000: NotAllocated
+proc: deallocate page 0x8003000: NotAllocated
+proc: deallocate page 0x8004000: NotAllocated
+proc: deallocate page 0x8005000: NotAllocated
+proc: deallocate page 0x8006000: NotAllocated
+proc: deallocate page 0x8007000: NotAllocated
+process 27 exited: ""
+churngate: heap exit 2024704 33554432
+process 25 exited: ""
+churngate: heap exit 2024704 33554432
+process 30 exited: ""
+churngate: heap exit 2045952 33554432
+process 31 exited: ""
+churngate: heap exit 2176256 33554432
+process 29 exited: ""
+churngate: heap exit 2176256 33554432
+process 34 exited: ""
+churngate: heap exit 2209792 33554432
+process 35 exited: ""
+churngate: heap exit 2340096 33554432
+process 33 exited: ""
+churngate: heap exit 2340096 33554432
+tcpblast: round 0 ok
+process 38 exited: ""
+churngate: heap exit 2361344 33554432
+process 39 exited: ""
+churngate: heap exit 2491648 33554432
+process 37 exited: ""
+churngate: heap exit 2491648 33554432
+tcpblast: round 0 ok
+process 42 exited: ""
+churngate: heap exit 2508800 33554432
+process 43 exited: ""
+churngate: heap exit 2639104 33554432
+process 41 exited: ""
+churngate: heap exit 2639104 33554432
+process 46 exited: ""
+churngate: heap exit 2656256 33554432
+tcpblast: round 0 ok
+process 47 exited: ""
+churngate: heap exit 2786560 33554432
+process 45 exited: ""
+churngate: heap exit 2786560 33554432
+tcpblast: round 0 ok
+c[?7l[2J[0mSeaBIOS (vstress-r9-x64: GUEST RESET mid-run — the #66 signature (boot chain reappearance post-prompt, no kernel trap dump); the -D cascade file beside this capture holds the qemu exception record
+stress-r9-x64: capture tail (last 40 lines of /home/req/code/harvey/build/x86_64/stress-r9.log):
+  | process 38 exited: ""
+  | 
+  | churngate: heap exit 2361344 33554432
+  | 
+  | process 39 exited: ""
+  | 
+  | churngate: heap exit 2491648 33554432
+  | 
+  | process 37 exited: ""
+  | 
+  | churngate: heap exit 2491648 33554432
+  | 
+  | tcpblast: round 0 ok
+  | process 42 exited: ""
+  | 
+  | churngate: heap exit 2508800 33554432
+  | 
+  | process 43 exited: ""
+  | 
+  | churngate: heap exit 2639104 33554432
+  | 
+  | process 41 exited: ""
+  | 
+  | churngate: heap exit 2639104 33554432
+  | 
+  | process 46 exited: ""
+  | 
+  | churngate: heap exit 2656256 33554432
+  | 
+  | tcpblast: round 0 ok
+  | process 47 exited: ""
+  | 
+  | churngate: heap exit 2786560 33554432
+  | 
+  | process 45 exited: ""
+  | 
+  | churngate: heap exit 2786560 33554432
+  | 
+  | tcpblast: round 0 ok
+  | c[?7l[2J[0mSeaBIOS (v
+error: stress gate FAILED (the driver named the stage + printed the capture tail; capture: /home/req/code/harvey/build/x86_64/stress-r9.log, qemu cascade: /tmp/netstress-r9-x64.bPB2JP/qemu-int-r9x64stress-1322720-1794542205.log, peer log: /tmp/netstress-r9-x64.bPB2JP/hostecho.log)
+== stress evidence scratch retained: /tmp/netstress-r9-x64.bPB2JP (qemu -d cascade: qemu-int-*.log + netstress.pcap + hostecho.log)

@@ -1,0 +1,435 @@
+{
+  "status": "ok",
+  "commands": [
+    {
+      "command": "test -s ../r9/docs/devip-contract.md && grep -q 'QID(p,c,y)' ../r9/docs/devip-contract.md && grep -q 'cannot bind null device' ../r9/docs/devip-contract.md && grep -q 'Maxincall' ../r9/docs/devip-contract.md && grep -q 'unknown control request' ../r9/docs/devip-contract.md && grep -q 'man-vs-src' ../r9/docs/devip-contract.md && grep -q 'hangupxmit' ../r9/docs/devip-contract.md && grep -q 'maxfragsize' ../r9/docs/devip-contract.md && grep -q 'tcpstates' ../r9/docs/devip-contract.md && grep -qi 'accept pool' ../r9/docs/devip-contract.md && echo CONTRACT-DOC-OK",
+      "statement": "non-zero exit (file missing or any required section marker absent from the output chain before CONTRACT-DOC-OK)",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-01-PLAN.md",
+      "task": "Task 1: Write ../r9/docs/devip-contract.md — the full enumerated devip surface + the r9-side design decisions (D-03, D-08)"
+    },
+    {
+      "command": "cd ../r9 && cargo xtask check --verbose && cargo xtask clippy --verbose",
+      "statement": "non-zero exit, or any error/warning line naming smoltcp in the check/clippy output",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-01-PLAN.md",
+      "task": "Task 2: smoltcp 0.14.0 dependency entry + committed Cargo.lock + cfg(dev_ip) predeclare + NETIP-01 provenance record (D-01, D-02, D-04)"
+    },
+    {
+      "command": "grep -q 'name = \"smoltcp\"' ../r9/Cargo.lock && grep -q 'version = \"0.14.0\"' ../r9/Cargo.lock && grep -q 'cfg(dev_ip)' ../r9/Cargo.toml && grep -q 'smoltcp' ../r9/HowItWorks.md && grep -q 'virtio-drivers' ../r9/HowItWorks.md && grep -q 'costly' ../r9/HowItWorks.md && echo DEP-AND-RECORD-OK",
+      "statement": "non-zero exit (any grep misses: lockfile entry, cfg predeclare, or either provenance section absent)",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-01-PLAN.md",
+      "task": "Task 2: smoltcp 0.14.0 dependency entry + committed Cargo.lock + cfg(dev_ip) predeclare + NETIP-01 provenance record (D-01, D-02, D-04)"
+    },
+    {
+      "command": "cd ../r9 && export R9_HARVEY_DIR=\"$PWD/../harvey\" && cargo xtask boot-test --config virt",
+      "statement": "non-zero exit, or the negative scan fires (panic/Unhandled-interrupt line in target/boot-test-virt.log)",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-01-PLAN.md",
+      "task": "Task 2: smoltcp 0.14.0 dependency entry + committed Cargo.lock + cfg(dev_ip) predeclare + NETIP-01 provenance record (D-01, D-02, D-04)"
+    },
+    {
+      "command": "cd ../r9 && nix build .#kernel-virt -o target/nix-kernel-virt-smoltcp-check && echo NIX-VENDOR-OK",
+      "statement": "non-zero exit, or a hash-mismatch/vendor error naming the Cargo.lock change in stderr",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-01-PLAN.md",
+      "task": "Task 2: smoltcp 0.14.0 dependency entry + committed Cargo.lock + cfg(dev_ip) predeclare + NETIP-01 provenance record (D-01, D-02, D-04)"
+    },
+    {
+      "command": "cd ../r9 && cargo xtask check --verbose && cargo xtask clippy --verbose",
+      "statement": "non-zero exit, or any clippy warning naming devip (undocumented_unsafe_blocks deny lint fires on a missing SAFETY comment)",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-02-PLAN.md",
+      "task": "Task 1: The seam modules — stack.rs (ownership/drive/deadline/debt), waker.rs (the one unsafe bridge), phyadapt.rs (fixed-pool LoopbackDev) + module shell"
+    },
+    {
+      "command": "grep -q 'pub mod devip' ../r9/port/src/lib.rs && grep -q 'forbid(unsafe_code)' ../r9/port/src/devip.rs && grep -q 'drive_stack' ../r9/port/src/devip/stack.rs && grep -q 'RawWaker' ../r9/port/src/devip/waker.rs && grep -q 'LoopbackDev' ../r9/port/src/devip/phyadapt.rs && echo SEAM-MODULES-OK",
+      "statement": "non-zero exit (any module or marker absent)",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-02-PLAN.md",
+      "task": "Task 1: The seam modules — stack.rs (ownership/drive/deadline/debt), waker.rs (the one unsafe bridge), phyadapt.rs (fixed-pool LoopbackDev) + module shell"
+    },
+    {
+      "command": "cd ../r9 && cargo test -p port devip -- --nocapture",
+      "statement": "non-zero exit, or \"0 passed\" for the devip filter, or any FAILED line in the test output",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-02-PLAN.md",
+      "task": "Task 2: Host-side pins — OQ-1 DHCP-shaped exchange FIRST, then waker/deadline/accept-pool/debt pins + UNSAFE-AUDIT entry"
+    },
+    {
+      "command": "cd ../r9 && cargo xtask check --verbose && cargo xtask clippy --verbose",
+      "statement": "non-zero exit, or any warning naming devip/waker",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-02-PLAN.md",
+      "task": "Task 2: Host-side pins — OQ-1 DHCP-shaped exchange FIRST, then waker/deadline/accept-pool/debt pins + UNSAFE-AUDIT entry"
+    },
+    {
+      "command": "grep -q 'OQ-1' ../r9/docs/devip-contract.md && grep -qi 'waker' ../r9/UNSAFE-AUDIT.md && echo PINS-AND-AUDIT-OK",
+      "statement": "non-zero exit (the OQ-1 verdict line or the audit entry absent)",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-02-PLAN.md",
+      "task": "Task 2: Host-side pins — OQ-1 DHCP-shaped exchange FIRST, then waker/deadline/accept-pool/debt pins + UNSAFE-AUDIT entry"
+    },
+    {
+      "command": "sh build/aarch64/subset-build.sh && sh build/aarch64/mkimage.sh && echo BAKE-OK",
+      "statement": "non-zero exit, or any `fail`-line or bad-magic error in the output (the script's own vocabulary)",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-03-PLAN.md",
+      "task": "Task 1: Full-tree gate binaries (ipconfig, ping, udpecho, aan) via D-12 payload rules + bake asserts"
+    },
+    {
+      "command": "for f in ipconfig ping udpecho aan; do test -s \"build/aarch64/out/$f\" || exit 1; magic=$(od -An -tx1 -N4 \"build/aarch64/out/$f\" | tr -d ' \\n'); [ \"$magic\" = \"00008c47\" ] || exit 1; done && echo PAYLOADS-MAGIC-OK",
+      "statement": "non-zero exit (any payload missing from out/ or carrying a non-00008c47 magic)",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-03-PLAN.md",
+      "task": "Task 1: Full-tree gate binaries (ipconfig, ping, udpecho, aan) via D-12 payload rules + bake asserts"
+    },
+    {
+      "command": "sh build/aarch64/subset-build.sh && sh build/aarch64/mkimage.sh && echo BAKE-OK",
+      "statement": "non-zero exit, or any fail/bad-magic line in the output",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-03-PLAN.md",
+      "task": "Task 2: tcpblast + tcpecho payloads (new C files) + the D-11 addressing seam file + bake"
+    },
+    {
+      "command": "for f in tcpblast tcpecho; do test -s \"build/aarch64/out/$f\" || exit 1; magic=$(od -An -tx1 -N4 \"build/aarch64/out/$f\" | tr -d ' \\n'); [ \"$magic\" = \"00008c47\" ] || exit 1; done && grep -q 'guestv4=127.0.0.1' build/aarch64/netaddr.rc && grep -q '10.0.2.15' build/aarch64/netaddr.rc && grep -q 'blastport=' build/aarch64/netaddr.rc && echo PAYLOAD-AND-SEAM-OK",
+      "statement": "non-zero exit (payloads missing/bad magic, or the seam file missing the loopback/slirp/blastport keys)",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-03-PLAN.md",
+      "task": "Task 2: tcpblast + tcpecho payloads (new C files) + the D-11 addressing seam file + bake"
+    },
+    {
+      "command": "cd ../r9 && export R9_HARVEY_DIR=\"$PWD/../harvey\" && cargo xtask boot-test --config virtip",
+      "statement": "non-zero exit; or `netip: FAIL` in target/boot-test-virtip.log; or the negative scan fires (panic/Unhandled-interrupt line); or any of the devip markers, `netip: ping ok`, or `netip: NETIP-DONE` absent from the log",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-04-PLAN.md",
+      "task": "Task 1 (tracer): End-to-end ping 127.0.0.1 over loopback — the #I device shell, conv model, medium registry, ipifc loopback leg, icmp proto, full kernel wiring, and the virtip gate"
+    },
+    {
+      "command": "cd ../r9 && cargo test -p port devip -- --nocapture && cargo xtask check --verbose && cargo xtask clippy --verbose",
+      "statement": "non-zero exit, or any FAILED/warning line naming devip",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-04-PLAN.md",
+      "task": "Task 1 (tracer): End-to-end ping 127.0.0.1 over loopback — the #I device shell, conv model, medium registry, ipifc loopback leg, icmp proto, full kernel wiring, and the virtip gate"
+    },
+    {
+      "command": "cd ../r9 && export R9_HARVEY_DIR=\"$PWD/../harvey\" && for p in virt virtlowecam virtexec virtexec3 virtmulti virtnotes virtpanic virtnet; do cargo xtask boot-test --config \"$p\" || exit 1; done",
+      "statement": "non-zero exit on any profile (a regression in the seven non-net profiles or virtnet)",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-04-PLAN.md",
+      "task": "Task 1 (tracer): End-to-end ping 127.0.0.1 over loopback — the #I device shell, conv model, medium registry, ipifc loopback leg, icmp proto, full kernel wiring, and the virtip gate"
+    },
+    {
+      "command": "cd ../r9 && cargo test -p port devip -- --nocapture",
+      "statement": "non-zero exit, or any FAILED line — the new pins (headers synthesis, conv isolation, wedged reader) must all pass",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-04-PLAN.md",
+      "task": "Task 2: udp proto module + the udp echo gate + conv-isolation host pins (NETIP-02 concurrency truth)"
+    },
+    {
+      "command": "cd ../r9 && export R9_HARVEY_DIR=\"$PWD/../harvey\" && cargo xtask boot-test --config virtip",
+      "statement": "non-zero exit; or `netip: FAIL` in target/boot-test-virtip.log; or `netip: udp echo ok` absent; or the negative scan fires",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-04-PLAN.md",
+      "task": "Task 2: udp proto module + the udp echo gate + conv-isolation host pins (NETIP-02 concurrency truth)"
+    },
+    {
+      "command": "cd ../r9 && cargo test -p port devip -- --nocapture",
+      "statement": "non-zero exit, or any FAILED line — the tcp state-table, connect-bridge, accept-pool, and close-mapping pins must all pass",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-05-PLAN.md",
+      "task": "Task 1: tcp proto module — accept pool, blocking connect, listen/err files, close/hangup/hangupxmit mapping, status/stats — plus the tcp/7 echo gate"
+    },
+    {
+      "command": "cd ../r9 && export R9_HARVEY_DIR=\"$PWD/../harvey\" && R9_NETIP_SWEEP=tcp cargo xtask boot-test --config virtip",
+      "statement": "non-zero exit; or `netip: FAIL` in target/boot-test-virtip.log; or `netip: tcp echo ok`/`netip: tcp stats ok` absent; or the negative scan fires",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-05-PLAN.md",
+      "task": "Task 1: tcp proto module — accept pool, blocking connect, listen/err files, close/hangup/hangupxmit mapping, status/stats — plus the tcp/7 echo gate"
+    },
+    {
+      "command": "cd ../r9 && export R9_HARVEY_DIR=\"$PWD/../harvey\" && cargo xtask boot-test --config virtip && cargo xtask check --verbose && cargo xtask clippy --verbose",
+      "statement": "non-zero exit on any leg (the loopback mode stays green — regression — plus host check/clippy)",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-05-PLAN.md",
+      "task": "Task 1: tcp proto module — accept pool, blocking connect, listen/err files, close/hangup/hangupxmit mapping, status/stats — plus the tcp/7 echo gate"
+    },
+    {
+      "command": "cd ../r9 && cargo test -p port devip -- --nocapture && cargo xtask check --verbose && cargo xtask clippy --verbose",
+      "statement": "non-zero exit, or any FAILED/warning line — the iproute/ndb/netlog pins must pass",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-05-PLAN.md",
+      "task": "Task 2: Observability + remaining file surface — netlog.rs (/net/log + flags), route.rs (/net/iproute), live ipselftab/ndb/stats content, remaining generic ctl verbs"
+    },
+    {
+      "command": "cd ../r9 && export R9_HARVEY_DIR=\"$PWD/../harvey\" && R9_NETIP_SWEEP=tcp cargo xtask boot-test --config virtip",
+      "statement": "non-zero exit; or `netip: FAIL` in the log; or `netip: tcp echo ok`/`netip: tcp stats ok`/`netlog: flags set` absent; or the negative scan fires",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-05-PLAN.md",
+      "task": "Task 2: Observability + remaining file surface — netlog.rs (/net/log + flags), route.rs (/net/iproute), live ipselftab/ndb/stats content, remaining generic ctl verbs"
+    },
+    {
+      "command": "cd ../r9 && export R9_HARVEY_DIR=\"$PWD/../harvey\" && cargo xtask boot-test --config virtip",
+      "statement": "non-zero exit (loopback mode regression)",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-05-PLAN.md",
+      "task": "Task 2: Observability + remaining file surface — netlog.rs (/net/log + flags), route.rs (/net/iproute), live ipselftab/ndb/stats content, remaining generic ctl verbs"
+    },
+    {
+      "command": "cd ../r9 && export R9_HARVEY_DIR=\"$PWD/../harvey\" && cargo xtask boot-test --config virtip && grep -q 'devcons: random seeded' target/boot-test-virtip.log && echo RANDOM-SEEDED-OK",
+      "statement": "non-zero exit; or the seeded marker absent from target/boot-test-virtip.log; or the negative scan fires",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-06-PLAN.md",
+      "task": "Task 1: D-17 minimal random device — /dev/random + /dev/urandom, DTB-seeded CSPRNG (before any ipconfig gate)"
+    },
+    {
+      "command": "cd ../r9 && cargo xtask check --verbose && cargo xtask clippy --verbose",
+      "statement": "non-zero exit, or any warning naming devcons/random",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-06-PLAN.md",
+      "task": "Task 1: D-17 minimal random device — /dev/random + /dev/urandom, DTB-seeded CSPRNG (before any ipconfig gate)"
+    },
+    {
+      "command": "cd ../r9 && cargo test -p port devip -- --nocapture",
+      "statement": "non-zero exit, or any FAILED line — the EtherDev merge-order, ARP-snoop, gratuitous-ARP, and demux pins must pass",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-06-PLAN.md",
+      "task": "Task 2: ethermedium + EtherDev adapter + the snoop-fed /net/arp view + gratuitous ARP + the pci.rs RX wake"
+    },
+    {
+      "command": "cd ../r9 && cargo xtask check --verbose && cargo xtask clippy --verbose && export R9_HARVEY_DIR=\"$PWD/../harvey\" && cargo xtask boot-test --config virtip && R9_NETIP_SWEEP=tcp cargo xtask boot-test --config virtip",
+      "statement": "non-zero exit on any leg (lints, loopback mode, or tcp mode — the ether code lands inert until bound, and the loopback gates stay green)",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-06-PLAN.md",
+      "task": "Task 2: ethermedium + EtherDev adapter + the snoop-fed /net/arp view + gratuitous ARP + the pci.rs RX wake"
+    },
+    {
+      "command": "cd ../r9 && cargo test -p xtask pcap -- --nocapture",
+      "statement": "non-zero exit, or any FAILED line — the new gratuitous-ARP and ICMP-exchange assertions must pass against their committed fixtures/synthetics",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-06-PLAN.md",
+      "task": "Task 3: Static ipconfig gate on slirp (NETIP-04) — netip-static.rc + xtask pcap assertions, labeled not-L2-truth"
+    },
+    {
+      "command": "cd ../r9 && export R9_HARVEY_DIR=\"$PWD/../harvey\" && R9_NETIP_SWEEP=static cargo xtask boot-test --config virtip",
+      "statement": "non-zero exit; or `netip: FAIL` in target/boot-test-virtip.log; or `netip: static ok`/`netip: arp view ok`/`netip: NOT-L2-TRUTH` absent; or the pcap assertions fail; or the negative scan fires",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-06-PLAN.md",
+      "task": "Task 3: Static ipconfig gate on slirp (NETIP-04) — netip-static.rc + xtask pcap assertions, labeled not-L2-truth"
+    },
+    {
+      "command": "cd ../r9 && export R9_HARVEY_DIR=\"$PWD/../harvey\" && for p in virt virtlowecam virtexec virtexec3 virtmulti virtnotes virtpanic virtnet; do cargo xtask boot-test --config \"$p\" || exit 1; done",
+      "statement": "non-zero exit on any regression profile",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-06-PLAN.md",
+      "task": "Task 3: Static ipconfig gate on slirp (NETIP-04) — netip-static.rc + xtask pcap assertions, labeled not-L2-truth"
+    },
+    {
+      "command": "cd ../r9 && cargo test -p port devip -- --nocapture && cargo test -p xtask pcap -- --nocapture",
+      "statement": "non-zero exit, or any FAILED line — the absorption/broadcast pins and the DORA assertion tests must pass",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-07-PLAN.md",
+      "task": "Task 1: NETIP-05 DHCP gate — ipconfig dhcpclient over /net/udp broadcast fidelity on slirp, with pcap DORA proof"
+    },
+    {
+      "command": "cd ../r9 && export R9_HARVEY_DIR=\"$PWD/../harvey\" && R9_NETIP_SWEEP=dhcp cargo xtask boot-test --config virtip",
+      "statement": "non-zero exit; or `netip: FAIL` in target/boot-test-virtip.log; or `netip: dhcp ok`/`netip: NOT-L2-TRUTH` absent; or the DORA pcap assertion fails; or the negative scan fires",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-07-PLAN.md",
+      "task": "Task 1: NETIP-05 DHCP gate — ipconfig dhcpclient over /net/udp broadcast fidelity on slirp, with pcap DORA proof"
+    },
+    {
+      "command": "cd ../r9 && export R9_HARVEY_DIR=\"$PWD/../harvey\" && cargo xtask boot-test --config virtip && R9_NETIP_SWEEP=tcp cargo xtask boot-test --config virtip && R9_NETIP_SWEEP=static cargo xtask boot-test --config virtip",
+      "statement": "non-zero exit on any prior virtip mode (loopback/tcp/static regressions)",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-07-PLAN.md",
+      "task": "Task 1: NETIP-05 DHCP gate — ipconfig dhcpclient over /net/udp broadcast fidelity on slirp, with pcap DORA proof"
+    },
+    {
+      "command": "cd ../r9 && cargo test -p port devip -- --nocapture && cargo test -p xtask pcap -- --nocapture",
+      "statement": "non-zero exit, or any FAILED line — the icmpv6 bridge pins and the ND assertion tests must pass",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-07-PLAN.md",
+      "task": "Task 2: NETIP-06 IPv6 — icmpv6 full-packet bridge + ipifc v6 verbs + the ether-leg v6 gate (D-06)"
+    },
+    {
+      "command": "cd ../r9 && export R9_HARVEY_DIR=\"$PWD/../harvey\" && R9_NETIP_SWEEP=v6 cargo xtask boot-test --config virtip",
+      "statement": "non-zero exit; or `netip: FAIL` in target/boot-test-virtip.log; or `netip: v6 ok`/`netip: NOT-L2-TRUTH` absent; or the ND pcap assertion fails; or the negative scan fires",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-07-PLAN.md",
+      "task": "Task 2: NETIP-06 IPv6 — icmpv6 full-packet bridge + ipifc v6 verbs + the ether-leg v6 gate (D-06)"
+    },
+    {
+      "command": "cd ../r9 && export R9_HARVEY_DIR=\"$PWD/../harvey\" && for m in dhcp static tcp; do R9_NETIP_SWEEP=$m cargo xtask boot-test --config virtip || exit 1; done && cargo xtask boot-test --config virtip",
+      "statement": "non-zero exit on any prior virtip mode (regression)",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-07-PLAN.md",
+      "task": "Task 2: NETIP-06 IPv6 — icmpv6 full-packet bridge + ipifc v6 verbs + the ether-leg v6 gate (D-06)"
+    },
+    {
+      "command": "cd ../r9 && export R9_HARVEY_DIR=\"$PWD/../harvey\" && R9_NETIP_SWEEP=aan cargo xtask boot-test --config virtip",
+      "statement": "non-zero exit; or `netip: FAIL` in target/boot-test-virtip.log; or either `netip: aan roundtrip` marker or `netip: aan ok` absent (a missing roundtrip-2 = the resume never happened); or a \"server died\" line present; or the negative scan fires",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-08-PLAN.md",
+      "task": "Task 1: NETIP-07 aan gate — scripted drop-and-resume over tcp loopback (D-14)"
+    },
+    {
+      "command": "cd ../r9 && export R9_HARVEY_DIR=\"$PWD/../harvey\" && for m in v6 dhcp static tcp; do R9_NETIP_SWEEP=$m cargo xtask boot-test --config virtip || exit 1; done && cargo xtask boot-test --config virtip",
+      "statement": "non-zero exit on any prior virtip mode (regression)",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-08-PLAN.md",
+      "task": "Task 1: NETIP-07 aan gate — scripted drop-and-resume over tcp loopback (D-14)"
+    },
+    {
+      "command": "cd ../r9 && cargo test -p xtask pcap -- --nocapture",
+      "statement": "non-zero exit, or any FAILED line — assert_tcp_bidirectional's host unit tests must pass",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-08-PLAN.md",
+      "task": "Task 2: NETIP-08 machinery — tcpblast bidirectional soak on slirp with host echo endpoint + pcap/counter reconciliation + the documented manual soak command (D-15, D-16)"
+    },
+    {
+      "command": "cd ../r9 && export R9_HARVEY_DIR=\"$PWD/../harvey\" && R9_NETIP_SWEEP=soak cargo xtask boot-test --config virtip",
+      "statement": "non-zero exit; or `netip: FAIL` in target/boot-test-virtip.log; or `tcpblast: done`/`netip: soak ok`/`netip: NOT-L2-TRUTH` absent; or the bidirectional pcap assertion fails (missing a direction or any RST); or the negative scan fires",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-08-PLAN.md",
+      "task": "Task 2: NETIP-08 machinery — tcpblast bidirectional soak on slirp with host echo endpoint + pcap/counter reconciliation + the documented manual soak command (D-15, D-16)"
+    },
+    {
+      "command": "cd ../r9 && export R9_HARVEY_DIR=\"$PWD/../harvey\" && for m in aan v6 dhcp static tcp; do R9_NETIP_SWEEP=$m cargo xtask boot-test --config virtip || exit 1; done && cargo xtask boot-test --config virtip",
+      "statement": "non-zero exit on any prior virtip mode (regression)",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-08-PLAN.md",
+      "task": "Task 2: NETIP-08 machinery — tcpblast bidirectional soak on slirp with host echo endpoint + pcap/counter reconciliation + the documented manual soak command (D-15, D-16)"
+    },
+    {
+      "command": "grep -q 'R9_NETIP_SOAK_ROUNDS' build/aarch64/root-tree/lib/netip-soak.rc && grep -q 'Phase 9' build/aarch64/root-tree/lib/netip-soak.rc && echo SOAK-COMMAND-DOCUMENTED",
+      "statement": "non-zero exit (the manual soak command or the Phase-9 tap verdict pointer absent from the fixture header)",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-08-PLAN.md",
+      "task": "Task 2: NETIP-08 machinery — tcpblast bidirectional soak on slirp with host echo endpoint + pcap/counter reconciliation + the documented manual soak command (D-15, D-16)"
+    },
+    {
+      "command": "test -s build/aarch64/smoke-r9-net.expect && test -s nix/smoke-r9-net.sh && grep -q 'boot-r9-net-smoke' flake.nix && grep -q 'NET-SMOKE' build/aarch64/smoke-r9-net.expect && bash -n nix/smoke-r9-net.sh && echo NET-SMOKE-WIRED",
+      "statement": "non-zero exit (any file missing, the flake app entry absent, the completion marker vocabulary absent, or a wrapper syntax error)",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-09-PLAN.md",
+      "task": "Task 1: The composed net smoke — smoke-r9-net.expect + nix/smoke-r9-net.sh + the flake app (D-13)"
+    },
+    {
+      "command": "nix eval .#apps.aarch64-darwin.boot-r9-net-smoke --json 2>&1 | grep -q 'program' && echo FLAKE-APP-EVAL-OK",
+      "statement": "non-zero exit or \"program\" absent (the flake app does not evaluate)",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-09-PLAN.md",
+      "task": "Task 1: The composed net smoke — smoke-r9-net.expect + nix/smoke-r9-net.sh + the flake app (D-13)"
+    },
+    {
+      "command": "grep -q 'net-smoke' .github/workflows/r9-shell.yml && grep -q 'boot-r9-net-smoke' .github/workflows/r9-shell.yml && grep -q '3138316df39ed29be04236d7ffc686fa525866aa' .github/workflows/r9-shell.yml && echo CI-JOB-WIRED",
+      "statement": "non-zero exit (the job name, the app invocation, or the pinned installer SHA absent)",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-09-PLAN.md",
+      "task": "Task 2: CI — the net-smoke job in r9-shell.yml (D-16 short gates)"
+    },
+    {
+      "command": "python3 -c \"import yaml,sys; yaml.safe_load(open('.github/workflows/r9-shell.yml')); print('YAML-OK')\"",
+      "statement": "non-zero exit or a yaml parse error printed (invalid workflow syntax)",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-09-PLAN.md",
+      "task": "Task 2: CI — the net-smoke job in r9-shell.yml (D-16 short gates)"
+    },
+    {
+      "command": "test -s .planning/phases/08-r9-tcp-ip-path-devip-compatible-net/08-EVIDENCE.md && grep -q 'NOT-L2-TRUTH' .planning/phases/08-r9-tcp-ip-path-devip-compatible-net/08-EVIDENCE.md && grep -q 'R9_NETIP_SOAK_ROUNDS' .planning/phases/08-r9-tcp-ip-path-devip-compatible-net/08-EVIDENCE.md && grep -qE '[0-9a-f]{40}' .planning/phases/08-r9-tcp-ip-path-devip-compatible-net/08-EVIDENCE.md && echo EVIDENCE-INDEX-OK",
+      "statement": "non-zero exit (evidence file missing, the not-L2-truth labels absent, the soak command absent, or no 40-char r9 SHA recorded)",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-09-PLAN.md",
+      "task": "Task 3: Closure — 08-EVIDENCE.md + push-before-pin + flake.lock advance (own commit) + fresh hosted CI"
+    },
+    {
+      "command": "cd ../r9 && REMOTE=$(git ls-remote origin main) && [ -n \"$REMOTE\" ] && printf '%s\\n' \"$REMOTE\" | grep -q \"$(git rev-parse HEAD)\" && echo R9-PUSHED-OK",
+      "statement": "non-zero exit (ls-remote failed or returned empty, or origin/main does not equal the local r9 HEAD — the push has not happened)",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-09-PLAN.md",
+      "task": "Task 3: Closure — 08-EVIDENCE.md + push-before-pin + flake.lock advance (own commit) + fresh hosted CI"
+    },
+    {
+      "command": "python3 -c \"\nimport json\nlock = json.load(open('flake.lock'))\nr9 = lock['nodes']['r9']['locked']\nassert r9.get('owner') == 'requaos', r9\nrev = r9['rev']\nimport subprocess\nhead = subprocess.check_output(['git','-C','../r9','rev-parse','HEAD'], text=True).strip()\nassert rev == head, (rev, head)\nprint('PIN-STRUCT-OK', rev)\"",
+      "statement": "non-zero exit or an AssertionError pair printed (owner not requaos, or locked rev != live r9 HEAD)",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-09-PLAN.md",
+      "task": "Task 3: Closure — 08-EVIDENCE.md + push-before-pin + flake.lock advance (own commit) + fresh hosted CI"
+    },
+    {
+      "command": "COMMIT=$(git log -1 --format=%H -- flake.lock) && [ -n \"$COMMIT\" ] && STAT=$(git show --stat --format= \"$COMMIT\") && [ -n \"$STAT\" ] && printf '%s\\n' \"$STAT\" | grep -q 'flake.lock' && [ \"$(printf '%s\\n' \"$STAT\" | grep -c '|')\" = \"1\" ] && echo PIN-COMMIT-ISOLATED-OK",
+      "statement": "non-zero exit (no commit found, git show failed/empty, or the stat names more than flake.lock — the pin commit was not isolated)",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-09-PLAN.md",
+      "task": "Task 3: Closure — 08-EVIDENCE.md + push-before-pin + flake.lock advance (own commit) + fresh hosted CI"
+    },
+    {
+      "command": "nix run .#boot-r9-net-smoke",
+      "statement": "non-zero exit; or any stage timeout/failure line naming its stage; or `NET-SMOKE: ALL STAGES PASS` absent from the capture; or a panic/Unhandled-interrupt line present",
+      "status": "ok",
+      "severity": "none",
+      "plan": "08-09-PLAN.md",
+      "task": "Task 3: Closure — 08-EVIDENCE.md + push-before-pin + flake.lock advance (own commit) + fresh hosted CI"
+    }
+  ],
+  "counts": {
+    "blocker": 0,
+    "warning": 0,
+    "total": 53
+  },
+  "readError": null
+}

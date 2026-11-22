@@ -1,0 +1,213 @@
+c[?7l[2J[0mSeaBIOS (version rel-1.17.0-0-gb52ca86e094d-prebuilt.qemu.org)
+
+
+iPXE (http://ipxe.org) 00:02.0 CA00 PCI2.10 PnP PMM+3EFD1B50+3EF31B50 CA00
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from Hard Disk...
+Boot failed: could not read the boot disk
+
+Booting from DVD/CD...
+[0;30;47mWelcome to GRUB[H[J[1;1H  Booting `r9'
+
+!
+
+
+r9 from the Internet
+Machine information:
+q35: memory 0x0..0x9fc00 (0x9fc00) available
+q35: memory 0x9fc00..0xa0000 (0x400) reserved
+q35: memory 0xf0000..0x100000 (0x10000) reserved
+q35: memory 0x100000..0x3ffdf000 (0x3fedf000) available
+q35: memory 0x3ffdf000..0x40000000 (0x21000) reserved
+q35: memory 0xb0000000..0xc0000000 (0x10000000) reserved
+q35: memory 0xfed1c000..0xfed20000 (0x4000) reserved
+q35: memory 0xfeffc000..0xff000000 (0x4000) reserved
+q35: memory 0xfffc0000..0x100000000 (0x40000) reserved
+q35: acpi rsdt 0x3ffe2345 (mb2 RSDP tag — 13-04 walks it)
+q35: acpi rsdt 0x3ffe2345 via mb2 acpi tag (5 entries)
+q35: mcfg 0xb0000000 buses 0x0-0xff (seg 0)
+q35: lapic 0xfee00000 (madt local intc)
+q35: ioapic 0xfec00000 gsib 0 (id 0)
+q35: intsrc bus 0 source 0 -> gsi 2 flags 0x0
+q35: intsrc bus 0 source 5 -> gsi 5 flags 0xd
+q35: intsrc bus 0 source 9 -> gsi 9 flags 0xd
+q35: intsrc bus 0 source 10 -> gsi 10 flags 0xd
+q35: intsrc bus 0 source 11 -> gsi 11 flags 0xd
+q35: hpet 0xfed00000
+pciexbar: 0xb0000001 -> 0xb0000001
+pci: virtio-net 1af4:1041 at 00:02.0 rev 01 pin 1 (inta) bars 2
+pci: inta -> gsi 22 (q35 root slot 2, pirq G: 16+6)
+Memory usage:
+  Used:		0x00000003000000
+  Total:	0x0000003ffdf000
+lapic: cpuid leaf-1 ecx: x2apic=true tsc-deadline=true
+lapic: x2apic live (msr 0x800 map; lint0/1 masked, no pic)
+timer: 2496150360 Hz (pit 1193182 Hz reference), TscDeadline mode, armed
+ioapic: id 0 version 0x11 rtes 23 gsib 0 (madt 0xfec00000)
+pci: bar4 pa 0xfe000000 size 0x4000 (firmware) readback 0xfe000000
+pci: caps common@0x0+0x1000 notify@0x3000 isr@0x1000 device@0x2000 mult 4
+virtio-net: features offered 0x10130bf8024 negotiated 0x100010020
+virtio-net: rx pre-posted 128 buffers qsize 256
+ioapic: gsi 22 -> vector 0x21 (level)
+#l0: virtio: 1000Mbps: 52:54:00:12:34:56
+q35: module @0x3000000 +0x74a459 (mb2 tag 3, stashed)
+devenv: seeded cputype=amd64 nobootprompt=embed readparts=0
+q35: paqfs root mounted from module (7644249 bytes)
+devroot: /boot/boot open (159349 bytes)
+exec: entering ring 3 pc=0x2054fa sp=0x7fffffffef78 path=/boot/boot argv=[boot]
+paqfs...version...root-svc: Tue Nov 10 02:43:57 GMT 2026
+fingerprint: 6c631557c5dceb8480fed4c1856fc9e21a04085f
+process 2 exited: ""
+syscall 10 unimplemented
+time...
+boot: opening #c/swap: namec: does not exist
+init: can't open #c/sysname: namec: does not exist
+syscall 10 unimplemented
+
+init: starting /bin/rc
+syscall 10 unimplemented
+process 6 exited: ""
+process 8 exited: ""
+process 9 exited: ""
+SVC-OK mntgen
+process 10 exited: ""
+#I0: devip attached
+process 11 exited: ""
+process 12 exited: ""
+process 13 exited: ""
+devip: medium loopback bound
+process 14 exited: ""
+process 15 exited: ""
+process 16 exited: ""
+SVC-LOOPBACK-UP
+process 17 exited: ""
+syscall 25 unimplemented
+process 18 exited: ""
+process 19 exited: ""
+process 21 exited: ""
+process 22 exited: ""
+SVC-CSOBS ip=127.0.0.1
+process 23 exited: ""
+SVC-OK cs
+process 24 exited: ""
+ Feb  7 01:28:16 starting dns on 192.168.237.1's /net
+devmnt: server error: cs: file does not exist
+process 25 exited: ""
+process 26 exited: ""
+process 29 exited: ""
+process 31 exited: ""
+devmnt: server error: cs: file does not exist
+process 32 exited: ""
+process 30 exited: ""
+SVC-DNSOBS > probehost.test ip 127.0.0.1 >
+process 33 exited: ""
+SVC-OK dns
+process 34 exited: ""
+syscall 10 unimplemented
+process 35 exited: ""
+process 37 exited: ""
+post...
+process 38 exited: ""
+process 41 exited: ""
+SVC-OK srv
+process 43 exited: ""
+SVC-OK exportfs
+process 44 exited: ""
+ Feb  7 01:28:16 started on tcp
+process 45 exited: ""
+process 46 exited: ""
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+process 48 exited: "can't open /net/tcp/[0-9]*/local: namec: does not exist"
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+process 49 exited: ""
+process 52 exited: ""
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+process 53 exited: ""
+devmnt: server error: dns: file does not exist
+process 54 exited: ""
+process 55 exited: ""
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+process 57 exited: ""
+process 56 exited: ""
+devmnt: server error: dns: file does not exist
+SVC-LISTENOBS tcp9901 tcp /net/tcp/3
+process 58 exited: ""
+SVC-OK listen
+process 59 exited: ""
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+devmnt: server error: cs: namec: does not exist
+syscall 10 unimplemented
+syscall 44 unimplemented
+factotum warning: cannot chmod 666 /srv/factotum: syscall not implemented
+process 60 exited: ""
+process 62 exited: ""
+process 63 exited: ""
+process 64 exited: ""
+process 65 exited: ""
+SVC-FACTOBS key proto=pass service=test user=probe !password?
+process 66 exited: ""
+SVC-OK factotum
+process 67 exited: ""
+process 68 exited: "false"
+process 69 exited: ""
+readnvram: can't find nvram
+can't read NVRAM, please enter machine key
+devmnt: server error: not found
+process 70 exited: ""
+devmnt: server error: not found
+devmnt: server error: file not found
+devmnt: server error: not found
+devmnt: server error: file not found
+process 72 exited: ""
+devmnt: server error: not found
+process 73 exited: ""
+SVC-OK keyfs
+process 74 exited: ""
+process 75 exited: ""
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+process 76 exited: ""
+devmnt: server error: dns: file does not exist
+process 77 exited: ""
+devmnt: server error: dns: file does not exist
+process 78 exited: ""
+devmnt: server error: dns: file does not exist
+process 79 exited: ""
+process 80 exited: ""
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+process 81 exited: ""
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+ Feb  7 01:28:16 no /lib/ndb/auth
+process 82 exited: ""
+SVC-AUTHOBS connected
+process 83 exited: ""
+SVC-OK authsrv
+process 84 exited: ""
+SVC-DONE
+process 85 exited: ""
+process 5 exited: ""
+devmnt: server error: dns: file does not exist
+% 

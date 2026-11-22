@@ -1,0 +1,11 @@
+{
+  "command": "cd /home/req/code/r9 && nix develop . -c cargo test -p port --lib -- used_ -Z unstable-options --format json (libtest JSON mechanically converted to TAP; raw JSON preserved in evidence/17-03-wr06-red-raw-libtest.json)",
+  "exitCode": 101,
+  "output": "TAP version 13\n1..4\nok 1 - virtio_tests::used_drain_rejects_lens_outside_the_queue_bounds\nok 2 - virtio_tests::used_drain_is_acquire_ordered_and_recovers_the_slot\nnot ok 3 - virtio_tests::used_drain_rejects_unposted_slot_ids\n  ---\n  message: |\n    thread 'virtio_tests::used_drain_rejects_unposted_slot_ids' (840181) panicked at port/src/virtio_tests.rs:637:9:\n    a used-ring id for an unposted slot must be rejected, not retired twice\n    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n  ...\nok 4 - virtio_tests::used_drain_rejects_out_of_range_and_odd_ids\n",
+  "targetTest": "virtio_tests::used_drain_rejects_unposted_slot_ids",
+  "targetFile": "port/src/virtio_tests.rs",
+  "expected": "a device completion whose id maps to an unposted slot returns Some(Err) with the '(device fault)' vocabulary \u2014 not a silent posted[slot]=false clear; the existing out-of-range and odd-id rejects unchanged",
+  "actual": "the new pin fails on its planned assertion (the duplicate used id 0 was retired as Ok a second time); the 3 existing used_ negatives pass unchanged",
+  "rawReportNote": "libtest JSON is not a classifier-supported format; the TAP above is a lossless transform of the run's own test events (same names, same statuses, same panic messages); the unmodified JSON stream rides evidence/17-03-wr06-red-raw-libtest.json",
+  "semanticAssessment": "The target test executed and failed on its planned assertion: after a clean first completion recovered slot 0, the device's duplicate completion of the same id took the Some(Ok(UsedBuf)) arm - the unconditional posted[slot]=false clear is the WR-06 admission hole. Not a load/build failure: 4 tests were discovered and ran, 3 passed (the existing negatives unperturbed)."
+}

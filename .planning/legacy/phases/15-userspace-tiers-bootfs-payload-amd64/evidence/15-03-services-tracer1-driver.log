@@ -1,0 +1,2911 @@
+warning: Git tree '/home/req/code/harvey' is dirty
+this derivation will be built:
+  /nix/store/z9334lb09gmjn6m2ivzyngx4a31lcp3x-harvey-boot-r9-services-x64.drv
+building '/nix/store/z9334lb09gmjn6m2ivzyngx4a31lcp3x-harvey-boot-r9-services-x64.drv'...
+== r9 kernel package: /nix/store/jlcvxs0jv231c3jh7r3x0q04gq5r07p2-r9-kernel-x64-e560405
+   kernel:      /nix/store/jlcvxs0jv231c3jh7r3x0q04gq5r07p2-r9-kernel-x64-e560405/kernel-x64.elf
+   iso-builder: /nix/store/ncw5b2k3vhyv3ianz6aqya7nnccynv7w-r9-iso-builder/bin/r9-iso-builder
+   shape:       q35 accel=kvm cpu=host
+== step 1/4: amd64 tier build (build/x86_64/subset-build.sh — holds the phase build-tree lock itself)
+== amd64 build-tree lock held: /home/req/code/harvey/.build/amd64-tree.lock
+== no passwordless sudo — running the subset build in an unprivileged user namespace (unshare -Ur -m chroot scaffold; log: /home/req/code/harvey/.build/subset-build-x64.log)
+== subset build provenance (Harvey's vendored toolchain):
+   6c: /harvey/.build/hostbin-linux-x86_64/bin/6c
+   6a: /harvey/.build/hostbin-linux-x86_64/bin/6a
+   6l: /harvey/.build/hostbin-linux-x86_64/bin/6l
+   ar: /harvey/.build/hostbin-linux-x86_64/bin/ar
+   mk: /nix/store/dzvnbi2n1x9jkmzvmwxdly607bwaxsbv-plan9port-0-unstable-2025-11-10/plan9/bin/mk
+== nm shim: /tmp/tmp.rzqzjXvrn6/nm -> /nix/store/fi98g122a3kzbschgvbvsqvpyxrmqvvl-binutils-wrapper-2.46/bin/nm (9l autolib shadow)
+== tier0 lib: libc (explicit bootstrap, idempotent)
+for(i in 9sys 9syscall fmt port $objtype)@{
+	echo $i
+	cd $i
+	mk $MKFLAGS install
+}
+9sys
+ar vu /amd64/lib/libc.a abort.6 access.6 announce.6 callmain.6 convD2M.6 convM2D.6 convM2S.6 convS2M.6 cputime.6 ctime.6 dial.6 dirfstat.6 dirfwstat.6 dirmodefmt.6 dirread.6 dirstat.6 dirwstat.6 fcallfmt.6 fork.6 getnetconninfo.6 getenv.6 getpid.6 getppid.6 getwd.6 iounit.6 nulldir.6 postnote.6 privalloc.6 procsetname.6 pushssl.6 pushtls.6 putenv.6 qlock.6 read.6 read9pmsg.6 readv.6 rerrstr.6 sbrk.6 setnetmtpt.6 sysfatal.6 syslog.6 sysname.6 time.6 times.6 tm2sec.6 truerand.6 wait.6 waitpid.6 werrstr.6 write.6 writev.6
+ar: creating /amd64/lib/libc.a
+a - abort.6
+a - access.6
+a - announce.6
+a - callmain.6
+a - convD2M.6
+a - convM2D.6
+a - convM2S.6
+a - convS2M.6
+a - cputime.6
+a - ctime.6
+a - dial.6
+a - dirfstat.6
+a - dirfwstat.6
+a - dirmodefmt.6
+a - dirread.6
+a - dirstat.6
+a - dirwstat.6
+a - fcallfmt.6
+a - fork.6
+a - getnetconninfo.6
+a - getenv.6
+a - getpid.6
+a - getppid.6
+a - getwd.6
+a - iounit.6
+a - nulldir.6
+a - postnote.6
+a - privalloc.6
+a - procsetname.6
+a - pushssl.6
+a - pushtls.6
+a - putenv.6
+a - qlock.6
+a - read.6
+a - read9pmsg.6
+a - readv.6
+a - rerrstr.6
+a - sbrk.6
+a - setnetmtpt.6
+a - sysfatal.6
+a - syslog.6
+a - sysname.6
+a - time.6
+a - times.6
+a - tm2sec.6
+a - truerand.6
+a - wait.6
+a - waitpid.6
+a - werrstr.6
+a - write.6
+a - writev.6
+9syscall
+SYS=`{sed '/^#define._X[123]/d; s/#define.([A-Z0-9_]*).*/\1/' sys.h}
+for(I in $SYS) {
+	i=`{echo $I|tr A-Z a-z}
+	n=`{sed -n '/[ 	]'$I'[ 	]/s/.*	//p' sys.h}
+	if(~ $i exits) i=_exits
+	{switch($objtype){
+	case mips
+		echo TEXT $i'(SB)', 1, '$0'
+		echo MOVW R1, '0(FP)'
+		echo MOVW '$'$n, R1
+		echo SYSCALL
+		if(~ $i seek || ~ $i nsec) {
+			echo 'MOVW $-1,R5
+			BNE R1,R5,4(PC)
+			MOVW a+0(FP),R5
+			MOVW R1,0(R5)
+			MOVW R1,4(R5)'
+		}
+		echo RET
+	case mips2
+		echo TEXT $i'(SB)', 1, '$0'
+		echo MOVW R1, '0(FP)'
+		echo MOVW '$'$n, R1
+		echo ADD '$4',R29
+		echo SYSCALL
+		echo ADD '$-4',R29
+		echo RET
+	case spim
+		echo TEXT $i'(SB)', 1, '$0'
+		echo MOVW R1, '0(FP)'
+		echo MOVW '$'$n, R1
+		echo ADD '$4',R29
+		echo SYSCALL
+		echo ADD '$-4',R29
+		if(~ $i seek || ~ $i nsec) {	# untested so far - geoff
+			echo 'MOVW $-1,R5
+			BNE R1,R5,4(PC)
+			MOVW a+0(FP),R5
+			MOVW R1,0(R5)
+			MOVW R1,4(R5)'
+		}
+		echo RET
+	case mips64
+		if(~ $i seek || ~ $i nsec)
+			echo TEXT _$i'(SB)', 1, '$0'
+		if not
+			echo TEXT $i'(SB)', 1, '$0'
+		echo MOVV R1, '0(FP)'
+		echo MOVW '$'$n, R1
+		echo ADDV '$8',R29
+		echo SYSCALL
+		echo ADDV '$-8',R29
+		echo RET
+	case spim64
+		if(~ $i seek || ~ $i nsec)
+			echo TEXT _$i'(SB)', 1, '$0'
+		if not
+			echo TEXT $i'(SB)', 1, '$0'
+		echo MOVV R1, '0(FP)'
+		echo MOVW '$'$n, R1
+		echo ADDV '$8',R29
+		echo SYSCALL
+		echo ADDV '$-8',R29
+		echo RET
+	case 386
+		echo TEXT $i'(SB)', 1, '$0'
+		echo MOVL '$'$n, AX
+		echo INT '$'64
+		if(~ $i seek || ~ $i nsec) {
+			echo 'CMPL AX,$-1
+			JNE 4(PC)
+			MOVL a+0(FP),CX
+			MOVL AX,0(CX)
+			MOVL AX,4(CX)'
+		}
+		echo RET
+	case amd64
+		if(~ $i seek)
+			echo TEXT _seek'(SB)', 1, '$0'
+		if not
+			echo TEXT $i'(SB)', 1, '$0'
+		#
+		# For architectures which pass the first argument
+		# in a register, if the system call takes no arguments
+		# there will be no 'a0+0(FP)' reserved on the stack.
+		#
+		if(! ~ $i nsec)
+			echo MOVQ RARG, 'a0+0(FP)'
+		echo MOVQ '$'$n, RARG
+		echo SYSCALL
+		echo RET
+	case aarch64
+		j=$i
+		if(~ $i seek) j=_seek
+		echo TEXT $j'(SB)', 1, '$0'
+		echo MOV R0, '0(FP)'
+		echo MOV '$'$n, R0
+		echo SVC
+		echo RETURN
+	case sparc
+		echo TEXT $i'(SB)', 1, '$0'
+		echo MOVW R7, '0(FP)'
+		echo MOVW '$'$n, R7
+		echo TA R0
+		if(~ $i seek || ~ $i nsec) {
+			echo 'CMP R7,$-1
+			BNE 4(PC)
+			MOVW a+0(FP),R8
+			MOVW R7,0(R8)
+			MOVW R7,4(R8)'
+		}
+		echo RETURN
+	case arm
+		echo TEXT $i'(SB)', 1, '$0'
+		echo MOVW R0, '0(FP)'
+		echo MOVW '$'$n, R0
+		echo SWI 0
+		if(~ $i seek || ~ $i nsec) {
+			echo 'CMP $-1,R0
+			BNE 4(PC)
+			MOVW a+0(FP),R1
+			MOVW R0,0(R1)
+			MOVW R0,4(R1)'
+		}
+		echo RET
+	case power
+		echo TEXT $i'(SB)', 1, '$0'
+		echo MOVW R3, '0(FP)'
+		echo MOVW '$'$n, R3
+		echo SYSCALL
+		if(~ $i seek || ~ $i nsec) {
+			echo 'CMP R3,$-1
+			BNE 4(PC)
+			MOVW a+0(FP),R8
+			MOVW R3,0(R8)
+			MOVW R3,4(R8)'
+		}
+		echo RETURN
+	case power64
+		if(~ $i seek)
+			echo TEXT _seek'(SB)', 1, '$0'
+		if not
+			echo TEXT $i'(SB)', 1, '$0'
+		echo MOVD R3, '0(FP)'
+		echo MOVW '$'$n, R3
+		echo SYSCALL
+		echo RETURN
+	case riscv
+		echo TEXT $i'(SB)', 1, '$0'
+		echo MOVW R8, '0(FP)'
+		echo MOVW '$'$n, R8
+		echo ECALL
+		if(~ $i seek) {
+			echo 'MOVW $-1, R9
+			BNE R8, R9, 4(PC)
+			MOVW a+0(FP),R9
+			MOVW R8,0(R9)
+			MOVW R8,4(R9)'
+		}
+		if(~ $i nsec) {
+			echo 'MOVW a+0(FP),R10
+			MOVW R8,0(R10)
+			MOVW R9,4(R10)'
+		}
+		echo RET
+	case riscv64
+		if(~ $i seek)
+			echo TEXT _seek'(SB)', 1, '$0'
+		if not
+			echo TEXT $i'(SB)', 1, '$0'
+		#
+		# For architectures which pass the first argument
+		# in a register, if the system call takes no arguments
+		# there will be no 'a0+0(FP)' reserved on the stack.
+		#
+		# jc doesn't widen longs to vlongs when pushing them.
+		# so we have to be careful here to only push longs
+		# for first arguments, where appropriate.
+		#
+		switch ($i) {
+		case nsec
+			;
+		case bind chdir exec _exits segbrk open create \
+		    brk_ remove notify pipe seek segdetach segfree \
+		    segflush rendezvous unmount semacquire \
+		    semrelease errstr stat wstat await tsemacquire
+			echo MOV R8, '0(FP)'
+		case *
+			echo MOVW R8, '0(FP)'
+		}
+		echo MOV '$'$n, R8
+		echo ECALL
+		echo RET
+	}} > $i.s
+	$AS $i.s
+}
+ar vu /$objtype/lib/libc.a *.$O
+rm -f *.$O *.s
+a - _errstr.6
+a - _exits.6
+a - _fsession.6
+a - _fstat.6
+a - _fwstat.6
+a - _mount.6
+a - _read.6
+a - _stat.6
+a - _wait.6
+a - _write.6
+a - _wstat.6
+a - alarm.6
+a - await.6
+a - bind.6
+a - brk_.6
+a - chdir.6
+a - close.6
+a - create.6
+a - dup.6
+a - errstr.6
+a - exec.6
+a - fauth.6
+a - fd2path.6
+a - fstat.6
+a - fversion.6
+a - fwstat.6
+a - mount.6
+a - nmount.6
+a - noted.6
+a - notify.6
+a - nsec.6
+a - open.6
+a - oseek.6
+a - pipe.6
+a - pread.6
+a - pwrite.6
+a - remove.6
+a - rendezvous.6
+a - rfork.6
+a - seek.6
+a - segattach.6
+a - segbrk.6
+a - segdetach.6
+a - segflush.6
+a - segfree.6
+a - semacquire.6
+a - semrelease.6
+a - sleep.6
+a - stat.6
+a - sysr1.6
+a - tsemacquire.6
+a - unmount.6
+a - wstat.6
+fmt
+ar vu /amd64/lib/libc.a dofmt.6 dorfmt.6 errfmt.6 fltfmt.6 fmt.6 fmtfd.6 fmtlock.6 fmtprint.6 fmtquote.6 fmtrune.6 fmtstr.6 fmtvprint.6 fprint.6 print.6 runefmtstr.6 runeseprint.6 runesmprint.6 runesnprint.6 runesprint.6 runevseprint.6 runevsmprint.6 runevsnprint.6 seprint.6 smprint.6 snprint.6 sprint.6 vfprint.6 vseprint.6 vsmprint.6 vsnprint.6
+a - dofmt.6
+a - dorfmt.6
+a - errfmt.6
+a - fltfmt.6
+a - fmt.6
+a - fmtfd.6
+a - fmtlock.6
+a - fmtprint.6
+a - fmtquote.6
+a - fmtrune.6
+a - fmtstr.6
+a - fmtvprint.6
+a - fprint.6
+a - print.6
+a - runefmtstr.6
+a - runeseprint.6
+a - runesmprint.6
+a - runesnprint.6
+a - runesprint.6
+a - runevseprint.6
+a - runevsmprint.6
+a - runevsnprint.6
+a - seprint.6
+a - smprint.6
+a - snprint.6
+a - sprint.6
+a - vfprint.6
+a - vseprint.6
+a - vsmprint.6
+a - vsnprint.6
+port
+ar vu /amd64/lib/libc.a _assert.6 abs.6 asin.6 atan.6 atan2.6 atexit.6 atnotify.6 atof.6 atol.6 atoll.6 beget.6 cistrcmp.6 cistrncmp.6 cistrstr.6 charstod.6 cleanname.6 crypt.6 ctype.6 encodefmt.6 execl.6 exp.6 fabs.6 floor.6 fmod.6 frand.6 frexp.6 getfields.6 getuser.6 hangup.6 hypot.6 leget.6 lnrand.6 lock.6 log.6 lrand.6 malloc.6 mktemp.6 nan.6 needsrcquote.6 netcrypt.6 netmkaddr.6 nrand.6 ntruerand.6 perror.6 pool.6 pow.6 pow10.6 profile.6 qsort.6 quote.6 rand.6 readn.6 rune.6 runebase.6 runebsearch.6 runestrcat.6 runestrchr.6 runestrcmp.6 runestrcpy.6 runestrecpy.6 runestrdup.6 runestrncat.6 runestrncmp.6 runestrncpy.6 runestrrchr.6 runestrlen.6 runestrstr.6 runetype.6 sin.6 sinh.6 strcmp.6 strecpy.6 strcspn.6 strdup.6 strncat.6 strncmp.6 strncpy.6 strpbrk.6 strrchr.6 strspn.6 strstr.6 strtod.6 strtok.6 strtol.6 strtoll.6 strtoul.6 strtoull.6 tan.6 tanh.6 tokenize.6 toupper.6 utfecpy.6 utflen.6 utfnlen.6 utfrune.6 utfrrune.6 utfutf.6 u16.6 u32.6 u64.6
+a - _assert.6
+a - abs.6
+a - asin.6
+a - atan.6
+a - atan2.6
+a - atexit.6
+a - atnotify.6
+a - atof.6
+a - atol.6
+a - atoll.6
+a - beget.6
+a - cistrcmp.6
+a - cistrncmp.6
+a - cistrstr.6
+a - charstod.6
+a - cleanname.6
+a - crypt.6
+a - ctype.6
+a - encodefmt.6
+a - execl.6
+a - exp.6
+a - fabs.6
+a - floor.6
+a - fmod.6
+a - frand.6
+a - frexp.6
+a - getfields.6
+a - getuser.6
+a - hangup.6
+a - hypot.6
+a - leget.6
+a - lnrand.6
+a - lock.6
+a - log.6
+a - lrand.6
+a - malloc.6
+a - mktemp.6
+a - nan.6
+a - needsrcquote.6
+a - netcrypt.6
+a - netmkaddr.6
+a - nrand.6
+a - ntruerand.6
+a - perror.6
+a - pool.6
+a - pow.6
+a - pow10.6
+a - profile.6
+a - qsort.6
+a - quote.6
+a - rand.6
+a - readn.6
+a - rune.6
+a - runebase.6
+a - runebsearch.6
+a - runestrcat.6
+a - runestrchr.6
+a - runestrcmp.6
+a - runestrcpy.6
+a - runestrecpy.6
+a - runestrdup.6
+a - runestrncat.6
+a - runestrncmp.6
+a - runestrncpy.6
+a - runestrrchr.6
+a - runestrlen.6
+a - runestrstr.6
+a - runetype.6
+a - sin.6
+a - sinh.6
+a - strcmp.6
+a - strecpy.6
+a - strcspn.6
+a - strdup.6
+a - strncat.6
+a - strncmp.6
+a - strncpy.6
+a - strpbrk.6
+a - strrchr.6
+a - strspn.6
+a - strstr.6
+a - strtod.6
+a - strtok.6
+a - strtol.6
+a - strtoll.6
+a - strtoul.6
+a - strtoull.6
+a - tan.6
+a - tanh.6
+a - tokenize.6
+a - toupper.6
+a - utfecpy.6
+a - utflen.6
+a - utfnlen.6
+a - utfrune.6
+a - utfrrune.6
+a - utfutf.6
+a - u16.6
+a - u32.6
+a - u64.6
+amd64
+ar vu /amd64/lib/libc.a _seek.6 getcallerpc.6 notejmp.6 argv0.6 atom.6 cycles.6 getfcr.6 main9.6 main9p.6 memccpy.6 memchr.6 memcmp.6 memcpy.6 memmove.6 memset.6 muldiv.6 rdpmc.6 setjmp.6 sqrt.6 strcat.6 strchr.6 strcpy.6 strlen.6 tas.6
+a - _seek.6
+a - getcallerpc.6
+a - notejmp.6
+a - argv0.6
+a - atom.6
+a - cycles.6
+a - getfcr.6
+a - main9.6
+a - main9p.6
+a - memccpy.6
+a - memchr.6
+a - memcmp.6
+a - memcpy.6
+a - memmove.6
+a - memset.6
+a - muldiv.6
+a - rdpmc.6
+a - setjmp.6
+a - sqrt.6
+a - strcat.6
+a - strchr.6
+a - strcpy.6
+a - strlen.6
+a - tas.6
+T0-ART libc 5f3dca4ae4ee7631ae7864cf4e90d30d62fa8f98941d12fd816a2363559b2bc2
+== tier0 lib: libc
+for(i in 9sys 9syscall fmt port $objtype)@{
+	echo $i
+	cd $i
+	mk $MKFLAGS install
+}
+9sys
+ar vu /amd64/lib/libc.a abort.6 access.6 announce.6 callmain.6 convD2M.6 convM2D.6 convM2S.6 convS2M.6 cputime.6 ctime.6 dial.6 dirfstat.6 dirfwstat.6 dirmodefmt.6 dirread.6 dirstat.6 dirwstat.6 fcallfmt.6 fork.6 getnetconninfo.6 getenv.6 getpid.6 getppid.6 getwd.6 iounit.6 nulldir.6 postnote.6 privalloc.6 procsetname.6 pushssl.6 pushtls.6 putenv.6 qlock.6 read.6 read9pmsg.6 readv.6 rerrstr.6 sbrk.6 setnetmtpt.6 sysfatal.6 syslog.6 sysname.6 time.6 times.6 tm2sec.6 truerand.6 wait.6 waitpid.6 werrstr.6 write.6 writev.6
+ar: creating /amd64/lib/libc.a
+a - abort.6
+a - access.6
+a - announce.6
+a - callmain.6
+a - convD2M.6
+a - convM2D.6
+a - convM2S.6
+a - convS2M.6
+a - cputime.6
+a - ctime.6
+a - dial.6
+a - dirfstat.6
+a - dirfwstat.6
+a - dirmodefmt.6
+a - dirread.6
+a - dirstat.6
+a - dirwstat.6
+a - fcallfmt.6
+a - fork.6
+a - getnetconninfo.6
+a - getenv.6
+a - getpid.6
+a - getppid.6
+a - getwd.6
+a - iounit.6
+a - nulldir.6
+a - postnote.6
+a - privalloc.6
+a - procsetname.6
+a - pushssl.6
+a - pushtls.6
+a - putenv.6
+a - qlock.6
+a - read.6
+a - read9pmsg.6
+a - readv.6
+a - rerrstr.6
+a - sbrk.6
+a - setnetmtpt.6
+a - sysfatal.6
+a - syslog.6
+a - sysname.6
+a - time.6
+a - times.6
+a - tm2sec.6
+a - truerand.6
+a - wait.6
+a - waitpid.6
+a - werrstr.6
+a - write.6
+a - writev.6
+9syscall
+SYS=`{sed '/^#define._X[123]/d; s/#define.([A-Z0-9_]*).*/\1/' sys.h}
+for(I in $SYS) {
+	i=`{echo $I|tr A-Z a-z}
+	n=`{sed -n '/[ 	]'$I'[ 	]/s/.*	//p' sys.h}
+	if(~ $i exits) i=_exits
+	{switch($objtype){
+	case mips
+		echo TEXT $i'(SB)', 1, '$0'
+		echo MOVW R1, '0(FP)'
+		echo MOVW '$'$n, R1
+		echo SYSCALL
+		if(~ $i seek || ~ $i nsec) {
+			echo 'MOVW $-1,R5
+			BNE R1,R5,4(PC)
+			MOVW a+0(FP),R5
+			MOVW R1,0(R5)
+			MOVW R1,4(R5)'
+		}
+		echo RET
+	case mips2
+		echo TEXT $i'(SB)', 1, '$0'
+		echo MOVW R1, '0(FP)'
+		echo MOVW '$'$n, R1
+		echo ADD '$4',R29
+		echo SYSCALL
+		echo ADD '$-4',R29
+		echo RET
+	case spim
+		echo TEXT $i'(SB)', 1, '$0'
+		echo MOVW R1, '0(FP)'
+		echo MOVW '$'$n, R1
+		echo ADD '$4',R29
+		echo SYSCALL
+		echo ADD '$-4',R29
+		if(~ $i seek || ~ $i nsec) {	# untested so far - geoff
+			echo 'MOVW $-1,R5
+			BNE R1,R5,4(PC)
+			MOVW a+0(FP),R5
+			MOVW R1,0(R5)
+			MOVW R1,4(R5)'
+		}
+		echo RET
+	case mips64
+		if(~ $i seek || ~ $i nsec)
+			echo TEXT _$i'(SB)', 1, '$0'
+		if not
+			echo TEXT $i'(SB)', 1, '$0'
+		echo MOVV R1, '0(FP)'
+		echo MOVW '$'$n, R1
+		echo ADDV '$8',R29
+		echo SYSCALL
+		echo ADDV '$-8',R29
+		echo RET
+	case spim64
+		if(~ $i seek || ~ $i nsec)
+			echo TEXT _$i'(SB)', 1, '$0'
+		if not
+			echo TEXT $i'(SB)', 1, '$0'
+		echo MOVV R1, '0(FP)'
+		echo MOVW '$'$n, R1
+		echo ADDV '$8',R29
+		echo SYSCALL
+		echo ADDV '$-8',R29
+		echo RET
+	case 386
+		echo TEXT $i'(SB)', 1, '$0'
+		echo MOVL '$'$n, AX
+		echo INT '$'64
+		if(~ $i seek || ~ $i nsec) {
+			echo 'CMPL AX,$-1
+			JNE 4(PC)
+			MOVL a+0(FP),CX
+			MOVL AX,0(CX)
+			MOVL AX,4(CX)'
+		}
+		echo RET
+	case amd64
+		if(~ $i seek)
+			echo TEXT _seek'(SB)', 1, '$0'
+		if not
+			echo TEXT $i'(SB)', 1, '$0'
+		#
+		# For architectures which pass the first argument
+		# in a register, if the system call takes no arguments
+		# there will be no 'a0+0(FP)' reserved on the stack.
+		#
+		if(! ~ $i nsec)
+			echo MOVQ RARG, 'a0+0(FP)'
+		echo MOVQ '$'$n, RARG
+		echo SYSCALL
+		echo RET
+	case aarch64
+		j=$i
+		if(~ $i seek) j=_seek
+		echo TEXT $j'(SB)', 1, '$0'
+		echo MOV R0, '0(FP)'
+		echo MOV '$'$n, R0
+		echo SVC
+		echo RETURN
+	case sparc
+		echo TEXT $i'(SB)', 1, '$0'
+		echo MOVW R7, '0(FP)'
+		echo MOVW '$'$n, R7
+		echo TA R0
+		if(~ $i seek || ~ $i nsec) {
+			echo 'CMP R7,$-1
+			BNE 4(PC)
+			MOVW a+0(FP),R8
+			MOVW R7,0(R8)
+			MOVW R7,4(R8)'
+		}
+		echo RETURN
+	case arm
+		echo TEXT $i'(SB)', 1, '$0'
+		echo MOVW R0, '0(FP)'
+		echo MOVW '$'$n, R0
+		echo SWI 0
+		if(~ $i seek || ~ $i nsec) {
+			echo 'CMP $-1,R0
+			BNE 4(PC)
+			MOVW a+0(FP),R1
+			MOVW R0,0(R1)
+			MOVW R0,4(R1)'
+		}
+		echo RET
+	case power
+		echo TEXT $i'(SB)', 1, '$0'
+		echo MOVW R3, '0(FP)'
+		echo MOVW '$'$n, R3
+		echo SYSCALL
+		if(~ $i seek || ~ $i nsec) {
+			echo 'CMP R3,$-1
+			BNE 4(PC)
+			MOVW a+0(FP),R8
+			MOVW R3,0(R8)
+			MOVW R3,4(R8)'
+		}
+		echo RETURN
+	case power64
+		if(~ $i seek)
+			echo TEXT _seek'(SB)', 1, '$0'
+		if not
+			echo TEXT $i'(SB)', 1, '$0'
+		echo MOVD R3, '0(FP)'
+		echo MOVW '$'$n, R3
+		echo SYSCALL
+		echo RETURN
+	case riscv
+		echo TEXT $i'(SB)', 1, '$0'
+		echo MOVW R8, '0(FP)'
+		echo MOVW '$'$n, R8
+		echo ECALL
+		if(~ $i seek) {
+			echo 'MOVW $-1, R9
+			BNE R8, R9, 4(PC)
+			MOVW a+0(FP),R9
+			MOVW R8,0(R9)
+			MOVW R8,4(R9)'
+		}
+		if(~ $i nsec) {
+			echo 'MOVW a+0(FP),R10
+			MOVW R8,0(R10)
+			MOVW R9,4(R10)'
+		}
+		echo RET
+	case riscv64
+		if(~ $i seek)
+			echo TEXT _seek'(SB)', 1, '$0'
+		if not
+			echo TEXT $i'(SB)', 1, '$0'
+		#
+		# For architectures which pass the first argument
+		# in a register, if the system call takes no arguments
+		# there will be no 'a0+0(FP)' reserved on the stack.
+		#
+		# jc doesn't widen longs to vlongs when pushing them.
+		# so we have to be careful here to only push longs
+		# for first arguments, where appropriate.
+		#
+		switch ($i) {
+		case nsec
+			;
+		case bind chdir exec _exits segbrk open create \
+		    brk_ remove notify pipe seek segdetach segfree \
+		    segflush rendezvous unmount semacquire \
+		    semrelease errstr stat wstat await tsemacquire
+			echo MOV R8, '0(FP)'
+		case *
+			echo MOVW R8, '0(FP)'
+		}
+		echo MOV '$'$n, R8
+		echo ECALL
+		echo RET
+	}} > $i.s
+	$AS $i.s
+}
+ar vu /$objtype/lib/libc.a *.$O
+rm -f *.$O *.s
+a - _errstr.6
+a - _exits.6
+a - _fsession.6
+a - _fstat.6
+a - _fwstat.6
+a - _mount.6
+a - _read.6
+a - _stat.6
+a - _wait.6
+a - _write.6
+a - _wstat.6
+a - alarm.6
+a - await.6
+a - bind.6
+a - brk_.6
+a - chdir.6
+a - close.6
+a - create.6
+a - dup.6
+a - errstr.6
+a - exec.6
+a - fauth.6
+a - fd2path.6
+a - fstat.6
+a - fversion.6
+a - fwstat.6
+a - mount.6
+a - nmount.6
+a - noted.6
+a - notify.6
+a - nsec.6
+a - open.6
+a - oseek.6
+a - pipe.6
+a - pread.6
+a - pwrite.6
+a - remove.6
+a - rendezvous.6
+a - rfork.6
+a - seek.6
+a - segattach.6
+a - segbrk.6
+a - segdetach.6
+a - segflush.6
+a - segfree.6
+a - semacquire.6
+a - semrelease.6
+a - sleep.6
+a - stat.6
+a - sysr1.6
+a - tsemacquire.6
+a - unmount.6
+a - wstat.6
+fmt
+ar vu /amd64/lib/libc.a dofmt.6 dorfmt.6 errfmt.6 fltfmt.6 fmt.6 fmtfd.6 fmtlock.6 fmtprint.6 fmtquote.6 fmtrune.6 fmtstr.6 fmtvprint.6 fprint.6 print.6 runefmtstr.6 runeseprint.6 runesmprint.6 runesnprint.6 runesprint.6 runevseprint.6 runevsmprint.6 runevsnprint.6 seprint.6 smprint.6 snprint.6 sprint.6 vfprint.6 vseprint.6 vsmprint.6 vsnprint.6
+a - dofmt.6
+a - dorfmt.6
+a - errfmt.6
+a - fltfmt.6
+a - fmt.6
+a - fmtfd.6
+a - fmtlock.6
+a - fmtprint.6
+a - fmtquote.6
+a - fmtrune.6
+a - fmtstr.6
+a - fmtvprint.6
+a - fprint.6
+a - print.6
+a - runefmtstr.6
+a - runeseprint.6
+a - runesmprint.6
+a - runesnprint.6
+a - runesprint.6
+a - runevseprint.6
+a - runevsmprint.6
+a - runevsnprint.6
+a - seprint.6
+a - smprint.6
+a - snprint.6
+a - sprint.6
+a - vfprint.6
+a - vseprint.6
+a - vsmprint.6
+a - vsnprint.6
+port
+ar vu /amd64/lib/libc.a _assert.6 abs.6 asin.6 atan.6 atan2.6 atexit.6 atnotify.6 atof.6 atol.6 atoll.6 beget.6 cistrcmp.6 cistrncmp.6 cistrstr.6 charstod.6 cleanname.6 crypt.6 ctype.6 encodefmt.6 execl.6 exp.6 fabs.6 floor.6 fmod.6 frand.6 frexp.6 getfields.6 getuser.6 hangup.6 hypot.6 leget.6 lnrand.6 lock.6 log.6 lrand.6 malloc.6 mktemp.6 nan.6 needsrcquote.6 netcrypt.6 netmkaddr.6 nrand.6 ntruerand.6 perror.6 pool.6 pow.6 pow10.6 profile.6 qsort.6 quote.6 rand.6 readn.6 rune.6 runebase.6 runebsearch.6 runestrcat.6 runestrchr.6 runestrcmp.6 runestrcpy.6 runestrecpy.6 runestrdup.6 runestrncat.6 runestrncmp.6 runestrncpy.6 runestrrchr.6 runestrlen.6 runestrstr.6 runetype.6 sin.6 sinh.6 strcmp.6 strecpy.6 strcspn.6 strdup.6 strncat.6 strncmp.6 strncpy.6 strpbrk.6 strrchr.6 strspn.6 strstr.6 strtod.6 strtok.6 strtol.6 strtoll.6 strtoul.6 strtoull.6 tan.6 tanh.6 tokenize.6 toupper.6 utfecpy.6 utflen.6 utfnlen.6 utfrune.6 utfrrune.6 utfutf.6 u16.6 u32.6 u64.6
+a - _assert.6
+a - abs.6
+a - asin.6
+a - atan.6
+a - atan2.6
+a - atexit.6
+a - atnotify.6
+a - atof.6
+a - atol.6
+a - atoll.6
+a - beget.6
+a - cistrcmp.6
+a - cistrncmp.6
+a - cistrstr.6
+a - charstod.6
+a - cleanname.6
+a - crypt.6
+a - ctype.6
+a - encodefmt.6
+a - execl.6
+a - exp.6
+a - fabs.6
+a - floor.6
+a - fmod.6
+a - frand.6
+a - frexp.6
+a - getfields.6
+a - getuser.6
+a - hangup.6
+a - hypot.6
+a - leget.6
+a - lnrand.6
+a - lock.6
+a - log.6
+a - lrand.6
+a - malloc.6
+a - mktemp.6
+a - nan.6
+a - needsrcquote.6
+a - netcrypt.6
+a - netmkaddr.6
+a - nrand.6
+a - ntruerand.6
+a - perror.6
+a - pool.6
+a - pow.6
+a - pow10.6
+a - profile.6
+a - qsort.6
+a - quote.6
+a - rand.6
+a - readn.6
+a - rune.6
+a - runebase.6
+a - runebsearch.6
+a - runestrcat.6
+a - runestrchr.6
+a - runestrcmp.6
+a - runestrcpy.6
+a - runestrecpy.6
+a - runestrdup.6
+a - runestrncat.6
+a - runestrncmp.6
+a - runestrncpy.6
+a - runestrrchr.6
+a - runestrlen.6
+a - runestrstr.6
+a - runetype.6
+a - sin.6
+a - sinh.6
+a - strcmp.6
+a - strecpy.6
+a - strcspn.6
+a - strdup.6
+a - strncat.6
+a - strncmp.6
+a - strncpy.6
+a - strpbrk.6
+a - strrchr.6
+a - strspn.6
+a - strstr.6
+a - strtod.6
+a - strtok.6
+a - strtol.6
+a - strtoll.6
+a - strtoul.6
+a - strtoull.6
+a - tan.6
+a - tanh.6
+a - tokenize.6
+a - toupper.6
+a - utfecpy.6
+a - utflen.6
+a - utfnlen.6
+a - utfrune.6
+a - utfrrune.6
+a - utfutf.6
+a - u16.6
+a - u32.6
+a - u64.6
+amd64
+ar vu /amd64/lib/libc.a _seek.6 getcallerpc.6 notejmp.6 argv0.6 atom.6 cycles.6 getfcr.6 main9.6 main9p.6 memccpy.6 memchr.6 memcmp.6 memcpy.6 memmove.6 memset.6 muldiv.6 rdpmc.6 setjmp.6 sqrt.6 strcat.6 strchr.6 strcpy.6 strlen.6 tas.6
+a - _seek.6
+a - getcallerpc.6
+a - notejmp.6
+a - argv0.6
+a - atom.6
+a - cycles.6
+a - getfcr.6
+a - main9.6
+a - main9p.6
+a - memccpy.6
+a - memchr.6
+a - memcmp.6
+a - memcpy.6
+a - memmove.6
+a - memset.6
+a - muldiv.6
+a - rdpmc.6
+a - setjmp.6
+a - sqrt.6
+a - strcat.6
+a - strchr.6
+a - strcpy.6
+a - strlen.6
+a - tas.6
+T0-ART libc 2fb5baf931cfb59787a69f2fdd561a0f902fd97cddc9e607fa44119c4c58c36f
+== tier0 lib: libbio
+ar vu /amd64/lib/libbio.a bbuffered.6 bfildes.6 bflush.6 bgetrune.6 bgetc.6 bgetd.6 binit.6 boffset.6 bprint.6 bputrune.6 bputc.6 brdline.6 brdstr.6 bread.6 bseek.6 bwrite.6 bvprint.6
+ar: creating /amd64/lib/libbio.a
+a - bbuffered.6
+a - bfildes.6
+a - bflush.6
+a - bgetrune.6
+a - bgetc.6
+a - bgetd.6
+a - binit.6
+a - boffset.6
+a - bprint.6
+a - bputrune.6
+a - bputc.6
+a - brdline.6
+a - brdstr.6
+a - bread.6
+a - bseek.6
+a - bwrite.6
+a - bvprint.6
+T0-ART libbio c2df6c005bcee5e32fe66ad1158ee63aa062ea83bfa514a8329e68c2bcae5af4
+== tier0 lib: libregexp
+ar vu /amd64/lib/libregexp.a regcomp.6 regerror.6 regexec.6 regsub.6 regaux.6 rregexec.6 rregsub.6
+ar: creating /amd64/lib/libregexp.a
+a - regcomp.6
+a - regerror.6
+a - regexec.6
+a - regsub.6
+a - regaux.6
+a - rregexec.6
+a - rregsub.6
+T0-ART libregexp c8a89b518713a25f4e04e692b7e9b9d011d7daba118fe749c55046df2f66e0d6
+== tier0 lib: libmach
+ar vu /amd64/lib/libmach.a executable.6 map.6 obj.6 swap.6 sym.6 access.6 machdata.6 setmach.6 v.6 k.6 sparc64.6 q.6 4.6 68020.6 5.6 6.6 7.6 8.6 9.6 i.6 j.6 vdb.6 kdb.6 sparc64db.6 qdb.6 68020db.6 5db.6 7db.6 8db.6 idb.6 vobj.6 kobj.6 sparc64obj.6 68020obj.6 5obj.6 6obj.6 7obj.6 8obj.6 9obj.6 qobj.6 iobj.6 4obj.6 vcodas.6
+ar: creating /amd64/lib/libmach.a
+a - executable.6
+a - map.6
+a - obj.6
+a - swap.6
+a - sym.6
+a - access.6
+a - machdata.6
+a - setmach.6
+a - v.6
+a - k.6
+a - sparc64.6
+a - q.6
+a - 4.6
+a - 68020.6
+a - 5.6
+a - 6.6
+a - 7.6
+a - 8.6
+a - 9.6
+a - i.6
+a - j.6
+a - vdb.6
+a - kdb.6
+a - sparc64db.6
+a - qdb.6
+a - 68020db.6
+a - 5db.6
+a - 7db.6
+a - 8db.6
+a - idb.6
+a - vobj.6
+a - kobj.6
+a - sparc64obj.6
+a - 68020obj.6
+a - 5obj.6
+a - 6obj.6
+a - 7obj.6
+a - 8obj.6
+a - 9obj.6
+a - qobj.6
+a - iobj.6
+a - 4obj.6
+a - vcodas.6
+T0-ART libmach fabf8b89221477b102ac5303173d4e095138e494551990115a7674907149bdcd
+== tier0 lib: libip
+ar vu /amd64/lib/libip.a eipfmt.6 equivip.6 parseip.6 parseether.6 myetheraddr.6 myipaddr.6 classmask.6 bo.6 readipifc.6 ipaux.6 ptclbsum.6
+ar: creating /amd64/lib/libip.a
+a - eipfmt.6
+a - equivip.6
+a - parseip.6
+a - parseether.6
+a - myetheraddr.6
+a - myipaddr.6
+a - classmask.6
+a - bo.6
+a - readipifc.6
+a - ipaux.6
+a - ptclbsum.6
+T0-ART libip 1045c5f6289b7fdade395215d684409b967551656d34f6b6949b3dbc518bbe15
+== tier0 lib: libndb
+ar vu /amd64/lib/libndb.a csgetval.6 csipinfo.6 dnsquery.6 ipattr.6 ndbaux.6 ndbcache.6 ndbcat.6 ndbconcatenate.6 ndbdiscard.6 ndbfree.6 ndbgetipaddr.6 ndbgetval.6 ndbhash.6 ndbipinfo.6 ndblookval.6 ndbopen.6 ndbparse.6 ndbreorder.6 ndbsubstitute.6
+ar: creating /amd64/lib/libndb.a
+a - csgetval.6
+a - csipinfo.6
+a - dnsquery.6
+a - ipattr.6
+a - ndbaux.6
+a - ndbcache.6
+a - ndbcat.6
+a - ndbconcatenate.6
+a - ndbdiscard.6
+a - ndbfree.6
+a - ndbgetipaddr.6
+a - ndbgetval.6
+a - ndbhash.6
+a - ndbipinfo.6
+a - ndblookval.6
+a - ndbopen.6
+a - ndbparse.6
+a - ndbreorder.6
+a - ndbsubstitute.6
+T0-ART libndb c2d07439d30bee10ccd5796202d99602e6bfbd4c2921ddca5e51afa8d4fd011f
+== tier0 lib: libmp
+for(i in port $objtype)@{
+	echo $i
+	cd $i
+	mk $MKFLAGS install
+}
+port
+ar vu /amd64/lib/libmp.a mpaux.6 mpfmt.6 strtomp.6 mptobe.6 mptole.6 betomp.6 letomp.6 mpadd.6 mpsub.6 mpcmp.6 mpfactorial.6 mpmul.6 mpleft.6 mpright.6 mpveccmp.6 mpdiv.6 mpexp.6 mpmod.6 mpextendedgcd.6 mpinvert.6 mprand.6 crt.6 mptoi.6 mptoui.6 mptov.6 mptouv.6
+ar: creating /amd64/lib/libmp.a
+a - mpaux.6
+a - mpfmt.6
+a - strtomp.6
+a - mptobe.6
+a - mptole.6
+a - betomp.6
+a - letomp.6
+a - mpadd.6
+a - mpsub.6
+a - mpcmp.6
+a - mpfactorial.6
+a - mpmul.6
+a - mpleft.6
+a - mpright.6
+a - mpveccmp.6
+a - mpdiv.6
+a - mpexp.6
+a - mpmod.6
+a - mpextendedgcd.6
+a - mpinvert.6
+a - mprand.6
+a - crt.6
+a - mptoi.6
+a - mptoui.6
+a - mptov.6
+a - mptouv.6
+amd64
+ar vu /amd64/lib/libmp.a mpdigdiv.6 mpvecadd.6 mpvecdigmuladd.6 mpvecdigmulsub.6 mpvecsub.6
+a - mpdigdiv.6
+a - mpvecadd.6
+a - mpvecdigmuladd.6
+a - mpvecdigmulsub.6
+a - mpvecsub.6
+T0-ART libmp 44c5583b1509d966c701c35115131fa0c33e743ecc1a3a73ae286eee4f58811e
+== tier0 lib: libsec
+for(i in port $objtype)@{
+	echo $i
+	cd $i
+	mk $MKFLAGS install
+}
+port
+ar vu /amd64/lib/libsec.a des.6 desmodes.6 desECB.6 desCBC.6 des3ECB.6 des3CBC.6 aes.6 blowfish.6 chacha.6 hmac.6 md5.6 md4.6 sha1.6 sha2_64.6 sha2_128.6 sha2block64.6 sha2block128.6 sha1pickle.6 md5pickle.6 rc4.6 genrandom.6 prng.6 fastrand.6 nfastrand.6 probably_prime.6 smallprimetest.6 genprime.6 dsaprimes.6 gensafeprime.6 genstrongprime.6 rsagen.6 rsafill.6 rsaencrypt.6 rsadecrypt.6 rsaalloc.6 rsaprivtopub.6 x509.6 decodepem.6 eggen.6 egencrypt.6 egdecrypt.6 egalloc.6 egprivtopub.6 egsign.6 egverify.6 dsagen.6 dsaalloc.6 dsaprivtopub.6 dsasign.6 dsaverify.6 tlshand.6 thumb.6 readcert.6 pbkdf2.6
+ar: creating /amd64/lib/libsec.a
+a - des.6
+a - desmodes.6
+a - desECB.6
+a - desCBC.6
+a - des3ECB.6
+a - des3CBC.6
+a - aes.6
+a - blowfish.6
+a - chacha.6
+a - hmac.6
+a - md5.6
+a - md4.6
+a - sha1.6
+a - sha2_64.6
+a - sha2_128.6
+a - sha2block64.6
+a - sha2block128.6
+a - sha1pickle.6
+a - md5pickle.6
+a - rc4.6
+a - genrandom.6
+a - prng.6
+a - fastrand.6
+a - nfastrand.6
+a - probably_prime.6
+a - smallprimetest.6
+a - genprime.6
+a - dsaprimes.6
+a - gensafeprime.6
+a - genstrongprime.6
+a - rsagen.6
+a - rsafill.6
+a - rsaencrypt.6
+a - rsadecrypt.6
+a - rsaalloc.6
+a - rsaprivtopub.6
+a - x509.6
+a - decodepem.6
+a - eggen.6
+a - egencrypt.6
+a - egdecrypt.6
+a - egalloc.6
+a - egprivtopub.6
+a - egsign.6
+a - egverify.6
+a - dsagen.6
+a - dsaalloc.6
+a - dsaprivtopub.6
+a - dsasign.6
+a - dsaverify.6
+a - tlshand.6
+a - thumb.6
+a - readcert.6
+a - pbkdf2.6
+amd64
+ar vu /amd64/lib/libsec.a md5block.6 sha1block.6
+a - md5block.6
+a - sha1block.6
+T0-ART libsec dab22859fdb5c8aa6a6e22f5465a3826b53a9becde50f4ea889178c6680ae891
+== tier0 lib: libauth
+ar vu /amd64/lib/libauth.a amount.6 amount_getkey.6 attr.6 auth_attr.6 auth_challenge.6 auth_chuid.6 auth_getkey.6 auth_getuserpasswd.6 auth_proxy.6 auth_respond.6 auth_rpc.6 auth_userpasswd.6 auth_wep.6 login.6 newns.6 noworld.6
+ar: creating /amd64/lib/libauth.a
+a - amount.6
+a - amount_getkey.6
+a - attr.6
+a - auth_attr.6
+a - auth_challenge.6
+a - auth_chuid.6
+a - auth_getkey.6
+a - auth_getuserpasswd.6
+a - auth_proxy.6
+a - auth_respond.6
+a - auth_rpc.6
+a - auth_userpasswd.6
+a - auth_wep.6
+a - login.6
+a - newns.6
+a - noworld.6
+T0-ART libauth d215dcedfcceaec8c8659b8fed39d0f3851effee1fc3303834c665dc0b27b9a6
+== tier0 lib: libauthsrv
+ar vu /amd64/lib/libauthsrv.a _asgetticket.6 _asrdresp.6 authdial.6 convA2M.6 convM2A.6 convM2PR.6 convM2T.6 convM2TR.6 convPR2M.6 convT2M.6 convTR2M.6 nvcsum.6 opasstokey.6 passtokey.6 readnvram.6
+ar: creating /amd64/lib/libauthsrv.a
+a - _asgetticket.6
+a - _asrdresp.6
+a - authdial.6
+a - convA2M.6
+a - convM2A.6
+a - convM2PR.6
+a - convM2T.6
+a - convM2TR.6
+a - convPR2M.6
+a - convT2M.6
+a - convTR2M.6
+a - nvcsum.6
+a - opasstokey.6
+a - passtokey.6
+a - readnvram.6
+T0-ART libauthsrv 58777bde02f7f3e21703b07dd49eea346404ae3e28cd406ebf4d723aae174a9b
+== tier0 lib: libflate
+ar vu /amd64/lib/libflate.a deflate.6 deflatezlib.6 deflateblock.6 deflatezlibblock.6 inflate.6 inflatezlib.6 inflateblock.6 inflatezlibblock.6 flateerr.6 crc.6 adler.6
+ar: creating /amd64/lib/libflate.a
+a - deflate.6
+a - deflatezlib.6
+a - deflateblock.6
+a - deflatezlibblock.6
+a - inflate.6
+a - inflatezlib.6
+a - inflateblock.6
+a - inflatezlibblock.6
+a - flateerr.6
+a - crc.6
+a - adler.6
+T0-ART libflate 989862b4f6bb7520e0104ec246e72e380146143cfd5052564e86b617b41b9fd9
+== tier0 lib: libString
+ar vu /amd64/lib/libString.a s_alloc.6 s_append.6 s_array.6 s_copy.6 s_getline.6 s_grow.6 s_memappend.6 s_nappend.6 s_parse.6 s_putc.6 s_rdinstack.6 s_read.6 s_read_line.6 s_reset.6 s_terminate.6 s_tolower.6 s_unique.6
+ar: creating /amd64/lib/libString.a
+a - s_alloc.6
+a - s_append.6
+a - s_array.6
+a - s_copy.6
+a - s_getline.6
+a - s_grow.6
+a - s_memappend.6
+a - s_nappend.6
+a - s_parse.6
+a - s_putc.6
+a - s_rdinstack.6
+a - s_read.6
+a - s_read_line.6
+a - s_reset.6
+a - s_terminate.6
+a - s_tolower.6
+a - s_unique.6
+T0-ART libString fee31e22103157ab1022e8e9a71ddffa362b2db469afe0a99ac6bf8f73a3cc5d
+== tier0 lib: libthread
+ar vu /amd64/lib/libthread.a amd64.6 channel.6 chanprint.6 create.6 debug.6 dial.6 exec.6 exit.6 id.6 iocall.6 ioclose.6 iodial.6 ioopen.6 ioproc.6 ioread.6 ioreadn.6 iosleep.6 iowrite.6 kill.6 lib.6 main.6 note.6 ref.6 rendez.6 sched.6
+ar: creating /amd64/lib/libthread.a
+a - amd64.6
+a - channel.6
+a - chanprint.6
+a - create.6
+a - debug.6
+a - dial.6
+a - exec.6
+a - exit.6
+a - id.6
+a - iocall.6
+a - ioclose.6
+a - iodial.6
+a - ioopen.6
+a - ioproc.6
+a - ioread.6
+a - ioreadn.6
+a - iosleep.6
+a - iowrite.6
+a - kill.6
+a - lib.6
+a - main.6
+a - note.6
+a - ref.6
+a - rendez.6
+a - sched.6
+T0-ART libthread d46226616cc58ade86ec434d1b737833cb322c8f6966c6eb2dbe62bd5bb78aba
+== tier0 lib: lib9p
+ar vu /amd64/lib/lib9p.a auth.6 dirread.6 fid.6 file.6 intmap.6 listen.6 mem.6 req.6 parse.6 post.6 rfork.6 srv.6 thread.6 uid.6 util.6
+ar: creating /amd64/lib/lib9p.a
+a - auth.6
+a - dirread.6
+a - fid.6
+a - file.6
+a - intmap.6
+a - listen.6
+a - mem.6
+a - req.6
+a - parse.6
+a - post.6
+a - rfork.6
+a - srv.6
+a - thread.6
+a - uid.6
+a - util.6
+T0-ART lib9p 50dbbf09b82b58f613dced8a8a2ede53f098d45ed72676fd56845019e9e97f79
+== tier0 lib: libdisk
+ar vu /amd64/lib/libdisk.a disk.6 proto.6 scsi.6
+ar: creating /amd64/lib/libdisk.a
+a - disk.6
+a - proto.6
+a - scsi.6
+T0-ART libdisk e70a0790bc381695a6273b73a0b61197be853b817a02734b0719eef54265ebe1
+== tier0 lib: libhttpd
+ar vu /amd64/lib/libhttpd.a alloc.6 checkcontent.6 date.6 fail.6 gethead.6 hio.6 httpfmt.6 httpunesc.6 lower.6 okheaders.6 parse.6 parsereq.6 query.6 redirected.6 unallowed.6 urlfmt.6 urlunesc.6
+ar: creating /amd64/lib/libhttpd.a
+a - alloc.6
+a - checkcontent.6
+a - date.6
+a - fail.6
+a - gethead.6
+a - hio.6
+a - httpfmt.6
+a - httpunesc.6
+a - lower.6
+a - okheaders.6
+a - parse.6
+a - parsereq.6
+a - query.6
+a - redirected.6
+a - unallowed.6
+a - urlfmt.6
+a - urlunesc.6
+T0-ART libhttpd 49f453f36357a0997cf4f9a0a61b1d38359f22104b2f9901ec6e7d9869080de1
+== tier0 lib: libbin
+ar vu /amd64/lib/libbin.a bin.6
+ar: creating /amd64/lib/libbin.a
+a - bin.6
+T0-ART libbin 3b9e86a54fce57ea9eec4fd6a93b2619d1344e9ca2f4b52c305caed54b3424db
+== tier0 lib: libmemlayer
+ar vu /amd64/lib/libmemlayer.a draw.6 lalloc.6 layerop.6 ldelete.6 lhide.6 line.6 load.6 lorigin.6 lsetrefresh.6 ltofront.6 ltorear.6 unload.6
+ar: creating /amd64/lib/libmemlayer.a
+a - draw.6
+a - lalloc.6
+a - layerop.6
+a - ldelete.6
+a - lhide.6
+a - line.6
+a - load.6
+a - lorigin.6
+a - lsetrefresh.6
+a - ltofront.6
+a - ltorear.6
+a - unload.6
+T0-ART libmemlayer 4c7c48c9240c4e2d88f20a3c3e10134a98b2c4b2924cf3d5ffc3958e81103dad
+== tier0 lib: libmemdraw
+ar vu /amd64/lib/libmemdraw.a addr.6 alloc.6 arc.6 cload.6 cmap.6 cread.6 defont.6 draw.6 ellipse.6 fillpoly.6 hwdraw.6 iprint.6 line.6 load.6 memsetchan.6 openmemsubfont.6 poly.6 read.6 string.6 subfont.6 unload.6 write.6
+ar: creating /amd64/lib/libmemdraw.a
+a - addr.6
+a - alloc.6
+a - arc.6
+a - cload.6
+a - cmap.6
+a - cread.6
+a - defont.6
+a - draw.6
+a - ellipse.6
+a - fillpoly.6
+a - hwdraw.6
+a - iprint.6
+a - line.6
+a - load.6
+a - memsetchan.6
+a - openmemsubfont.6
+a - poly.6
+a - read.6
+a - string.6
+a - subfont.6
+a - unload.6
+a - write.6
+T0-ART libmemdraw 4742699b8e8b08f9ae18e32dc8c82b5bea588cd902926ba68526d32801ae51dd
+== tier0 lib: libdraw
+ar vu /amd64/lib/libdraw.a alloc.6 allocimagemix.6 arith.6 bezier.6 border.6 buildfont.6 bytesperline.6 chan.6 cloadimage.6 computil.6 creadimage.6 debug.6 defont.6 draw.6 drawrepl.6 egetrect.6 ellipse.6 emenuhit.6 event.6 fmt.6 font.6 freesubfont.6 getdefont.6 getrect.6 getsubfont.6 icossin.6 icossin2.6 init.6 keyboard.6 line.6 menuhit.6 mkfont.6 mouse.6 newwindow.6 openfont.6 poly.6 loadimage.6 readcolmap.6 readimage.6 readsubfont.6 rectclip.6 replclipr.6 rgb.6 scroll.6 string.6 stringbg.6 stringsubfont.6 stringwidth.6 subfont.6 subfontcache.6 subfontname.6 unloadimage.6 window.6 writecolmap.6 writeimage.6 writesubfont.6
+ar: creating /amd64/lib/libdraw.a
+a - alloc.6
+a - allocimagemix.6
+a - arith.6
+a - bezier.6
+a - border.6
+a - buildfont.6
+a - bytesperline.6
+a - chan.6
+a - cloadimage.6
+a - computil.6
+a - creadimage.6
+a - debug.6
+a - defont.6
+a - draw.6
+a - drawrepl.6
+a - egetrect.6
+a - ellipse.6
+a - emenuhit.6
+a - event.6
+a - fmt.6
+a - font.6
+a - freesubfont.6
+a - getdefont.6
+a - getrect.6
+a - getsubfont.6
+a - icossin.6
+a - icossin2.6
+a - init.6
+a - keyboard.6
+a - line.6
+a - menuhit.6
+a - mkfont.6
+a - mouse.6
+a - newwindow.6
+a - openfont.6
+a - poly.6
+a - loadimage.6
+a - readcolmap.6
+a - readimage.6
+a - readsubfont.6
+a - rectclip.6
+a - replclipr.6
+a - rgb.6
+a - scroll.6
+a - string.6
+a - stringbg.6
+a - stringsubfont.6
+a - stringwidth.6
+a - subfont.6
+a - subfontcache.6
+a - subfontname.6
+a - unloadimage.6
+a - window.6
+a - writecolmap.6
+a - writeimage.6
+a - writesubfont.6
+T0-ART libdraw e7978022e1980e1d8386b5f9d65de26f28e88f6df8843d68f8574a371af1ae1a
+== tier0 lib: libframe
+ar vu /amd64/lib/libframe.a frbox.6 frdraw.6 frdelete.6 frinit.6 frinsert.6 frptofchar.6 frselect.6 frstr.6 frutil.6
+ar: creating /amd64/lib/libframe.a
+a - frbox.6
+a - frdraw.6
+a - frdelete.6
+a - frinit.6
+a - frinsert.6
+a - frptofchar.6
+a - frselect.6
+a - frstr.6
+a - frutil.6
+T0-ART libframe 25f4b20a4dbf5702e272f7ed0a996d345759084205c0e4bd984a9a2367d38ec8
+== tier0 lib: libplumb
+ar vu /amd64/lib/libplumb.a event.6 mesg.6 plumbsendtext.6
+ar: creating /amd64/lib/libplumb.a
+a - event.6
+a - mesg.6
+a - plumbsendtext.6
+T0-ART libplumb 0d5464b19552e7a3631655654436f8cf296bad56552b534a370292400ef45779
+== tier0 lib: libcomplete
+ar vu /amd64/lib/libcomplete.a complete.6
+ar: creating /amd64/lib/libcomplete.a
+a - complete.6
+T0-ART libcomplete a6d571cd4ac99943bd79e98d849aa9abe47abb0be388b25ab71de3b86ae92ab8
+== tier1 entry: cmd/rc
+yacc -d syn.y
+cmp -s x.tab.h y.tab.h || cp y.tab.h x.tab.h
+6c -FTVw code.c
+6c -FTVw exec.c
+6c -FTVw glob.c
+6c -FTVw here.c
+6c -FTVw io.c
+6c -FTVw lex.c
+6c -FTVw pcmd.c
+6c -FTVw pfnc.c
+6c -FTVw simple.c
+6c -FTVw subr.c
+6c -FTVw trap.c
+6c -FTVw tree.c
+6c -FTVw var.c
+6c -FTVw havefork.c
+6c -FTVw plan9.c
+6c -FTVw y.tab.c
+6l  -o 6.out code.6 exec.6 glob.6 here.6 io.6 lex.6 pcmd.6 pfnc.6 simple.6 subr.6 trap.6 tree.6 var.6 havefork.6 plan9.6 y.tab.6
+cp 6.out /amd64/bin/rc
+T1-ART rc 8a6a2ff14943ef6c9b369663ea171a0470cca6fc5f92e007d4db1961c689ebe8
+== tier1 entry: cmd/grep
+yacc -d grep.y
+6c -FTVw main.c
+6c -FTVw comp.c
+6c -FTVw sub.c
+6c -FTVw y.tab.c
+6l  -o 6.out y.tab.6 main.6 comp.6 sub.6
+cp 6.out /amd64/bin/grep
+T1-ART grep fe88710235f60c7b1ed0147e3080fe659c4bbeed31d00d2e485ae0b9788bfe65
+== tier1 entry: cmd/cat
+6^c -FTVw cat.c
+6^l  -o 6.cat cat.6
+T1-ART cat 5a29214cde61906abbd829468e7f0ce7c6feaf74cfdb4a9a55610c76f96bd4d2
+== tier1 entry: cmd/date
+6^c -FTVw date.c
+6^l  -o 6.date date.6
+T1-ART date 345b085ee4477acd1591ecf428ee3b1728f6bc9ec7b4987b37b7b9c6e9a66dcb
+== tier1 entry: cmd/echo
+6^c -FTVw echo.c
+6^l  -o 6.echo echo.6
+T1-ART echo 3bef6e2234f9910699355f0e898762d68ed5705eb7c9075c7502edc0b4b00bf7
+== tier1 entry: cmd/ls
+6^c -FTVw ls.c
+6^l  -o 6.ls ls.6
+T1-ART ls b5e0931d04a5d29a2b8a04bb2b0212cfd8ff19339835641dcfc1c4e5813cc715
+== tier1 entry: cmd/ps
+6^c -FTVw ps.c
+6^l  -o 6.ps ps.6
+T1-ART ps f029a723212b13c86fa66d25b5eb358c0ebf4f9523832cc936769b4f9a2651ea
+== tier1 entry: cmd/sed
+6^c -FTVw sed.c
+6^l  -o 6.sed sed.6
+T1-ART sed 99869e13f09a4612ce197c17a56da79dc0f84bea8f7d245cf4b60317ac7451f1
+== tier1 entry: cmd/test
+6^c -FTVw test.c
+6^l  -o 6.test test.6
+T1-ART test 9c731a2c1f34ac2cea70ad0c77bd19e06cd9538ee1a658f865ccb037f42d7416
+== tier1 entry: cmd/wc
+6^c -FTVw wc.c
+6^l  -o 6.wc wc.6
+T1-ART wc 42ab40163599098a1601679aee1974c5aadfb827b2824e820a265368e456a127
+== tier1 entry: cmd/awk
+yacc -o awkgram.c -d awkgram.y
+
+conflicts: 42 shift/reduce, 83 reduce/reduce
+6c -FTVw re.c
+6c -FTVw lex.c
+6c -FTVw main.c
+6c -FTVw parse.c
+objtype=$cputype mk maketab.$cputype
+9c -FTVw maketab.c
+9l  -o $objtype.maketab maketab.o
+6c -FTVw popen.c
+6c -FTVw tran.c
+6c -FTVw lib.c
+6c -FTVw run.c
+6c -FTVw awkgram.c
+./$cputype.maketab >proctab.c
+6c -FTVw proctab.c
+6l  -o 6.out re.6 lex.6 main.6 parse.6 proctab.6 popen.6 tran.6 lib.6 run.6 awkgram.6
+cp 6.out /amd64/bin/awk
+T1-ART awk 72120f1ff2e09b86a3a43dde9417aeba4265c772b170a0015f927ca9e2c871f1
+== tier1 entry: cmd/sort
+6^c -FTVw sort.c
+6^l  -o 6.sort sort.6
+T1-ART sort 35f7841f10be00a200ad266a4983b82e35595f4a727c61ec0f3eb456e668d7a1
+== tier1 entry: cmd/tr
+6^c -FTVw tr.c
+6^l  -o 6.tr tr.6
+T1-ART tr 12fe0b0bb505578e2bf59a6963a93d93aafeb1a30b9fa4d688f66f251a1dc9bd
+== tier1 entry: cmd/uniq
+6^c -FTVw uniq.c
+6^l  -o 6.uniq uniq.6
+T1-ART uniq 4f083aad0953e06e62b9889ad44cab7b285475046e4583343e670bab19aefc13
+== tier1 entry: cmd/tail
+6^c -FTVw tail.c
+6^l  -o 6.tail tail.6
+T1-ART tail c68af7666269a33bb729857c518930e2cdb7fb708f40d0abae5be570f10883b7
+== tier1 entry: cmd/basename
+6^c -FTVw basename.c
+6^l  -o 6.basename basename.6
+T1-ART basename 10258b086e122a240546ea0434f42daee06f91dde51e1cc6a8a2af16cf5139c2
+== tier1 entry: cmd/sleep
+6^c -FTVw sleep.c
+6^l  -o 6.sleep sleep.6
+T1-ART sleep 146053f793a30747a4ce3c7edd7eb79249fd2901c3b80824715b870ef918d16e
+== tier1 entry: cmd/cmp
+6^c -FTVw cmp.c
+6^l  -o 6.cmp cmp.6
+T1-ART cmp 9068ba83984421b06f2700520fbc27c069cffae75f6a314aab142ad8a0c5ddd6
+== tier1 entry: cmd/sum
+6^c -FTVw sum.c
+6^l  -o 6.sum sum.6
+T1-ART sum 2054b15e5395bcdf14762673a3f81f51464ab6474f95ef735f8e9fa2bbd8928f
+== tier1 entry: cmd/md5sum
+6^c -FTVw md5sum.c
+6^l  -o 6.md5sum md5sum.6
+T1-ART md5sum f29578675a28e5fe60012cc401a554a97899fa0d198d90e902bc5e7084277433
+== tier1 entry: cmd/sha1sum
+6^c -FTVw sha1sum.c
+6^l  -o 6.sha1sum sha1sum.6
+T1-ART sha1sum 83a720ab70d2d26adc4b6b387f215cb993f2f6bb1771ba30627d8b548dfd8911
+== tier1 entry: cmd/dc
+6^c -FTVw dc.c
+6^l  -o 6.dc dc.6
+T1-ART dc 3abb959e4b87fe1bf42eed11e8290c6569165e5b2aa5432ddbe6637e5debf22a
+== tier1 entry: cmd/units
+yacc -d -s units units.y
+mv units.tab.c units.c
+6^c -FTVw units.c
+6^l  -o 6.units units.6
+T1-ART units 69378ec9f3e1372d89a2278c11b9c5f8bb3c94404ba80b6fef727e3c829fdbcc
+== tier1 entry: cmd/cal
+6^c -FTVw cal.c
+6^l  -o 6.cal cal.6
+T1-ART cal 3f53a6c50c94e374a7c81983418eaf3d7659999b3ab3e9afdb4b4e6c656d47e1
+== tier1 entry: cmd/fmt
+6^c -FTVw fmt.c
+6^l  -o 6.fmt fmt.6
+T1-ART fmt bd5ce22b19994db754bb08efa2ebbae9dcc15e53dafe173f28f650d44cd92f30
+== tier1 entry: cmd/seq
+6^c -FTVw seq.c
+6^l  -o 6.seq seq.6
+T1-ART seq 5ab88adf110304d5ee26e99750bea3a3f0ea2c652d5d28d3fd5f711520ff7891
+== tier1 entry: cmd/time
+6^c -FTVw time.c
+6^l  -o 6.time time.6
+T1-ART time 15223a6b8c0e79a1f423f1a087949a1a53eefd6849638974fdd8c73f7a150625
+== tier1 entry: cmd/read
+6^c -FTVw read.c
+6^l  -o 6.read read.6
+T1-ART read 8e5d33255217b371b9d750b70b2b4a5a262a2263264bfec7c87fd9f1e7dcda14
+== tier1 entry: cmd/pr
+6^c -FTVw pr.c
+6^l  -o 6.pr pr.6
+T1-ART pr 844dd3f8e7945f6c3dcad32cbf0183d928488da58f83ea4d4361fb62a50e3277
+== tier1 entry: cmd/strings
+6^c -FTVw strings.c
+6^l  -o 6.strings strings.6
+T1-ART strings c7087d7c921d775a640f190a62db3887655c8092772187c938af0f476f17b0e5
+== tier1 entry: cmd/xd
+6^c -FTVw xd.c
+6^l  -o 6.xd xd.6
+T1-ART xd 1e9fa2c3fc274c4dd920e1366bd51a28b8aa204a8206c19c482e66ebcd3cbec1
+== tier1 entry: cmd/du
+6^c -FTVw du.c
+6^l  -o 6.du du.6
+T1-ART du ec50c789a8ec0c9d60388ec57a4b302770398cc238361dcab3e405994997b1ce
+== tier1 entry: cmd/comm
+6^c -FTVw comm.c
+6^l  -o 6.comm comm.6
+T1-ART comm b933f2e53e259e4f2d368b42d7b535f4aede4662c40c2a9e37bba310bab7ba13
+== tier1 entry: cmd/join
+6^c -FTVw join.c
+6^l  -o 6.join join.6
+T1-ART join aed4bf87ed2ca9ceed8d0fa4b58af8564d2030843345e967702243726aa3d07f
+== tier1 entry: cmd/nm
+6^c -FTVw nm.c
+6^l  -o 6.nm nm.6
+T1-ART nm 5742f8e50f7ffc7b8d970c3ffc87154e7b6e3321955ffd0cfdb3ec7f116039b8
+== tier1 entry: cmd/ip/ipconfig
+6c -FTVw main.c
+6c -FTVw ipv6.c
+6c -FTVw ppp.c
+6l  -o 6.out main.6 ipv6.6 ppp.6
+cp 6.out /amd64/bin/ip/ipconfig
+T1-ART ipconfig 0226dbd795fcea1d2c3fd349961f4c384c6c9b273239eda4d92e04fe3dfd466e
+== tier1 entry: cmd/auth/factotum:factotum
+6c -FTVw apop.c
+6c -FTVw chap.c
+6c -FTVw httpdigest.c
+6c -FTVw p9any.c
+6c -FTVw p9cr.c
+6c -FTVw p9sk1.c
+6c -FTVw pass.c
+6c -FTVw rsa.c
+6c -FTVw wep.c
+6c -FTVw wpapsk.c
+6c -FTVw confirm.c
+6c -FTVw fs.c
+6c -FTVw log.c
+6c -FTVw rpc.c
+6c -FTVw util.c
+6c -FTVw secstore.c
+6l -o 6.factotum apop.6 chap.6 httpdigest.6 p9any.6 p9cr.6 p9sk1.6 pass.6 rsa.6 wep.6 wpapsk.6 confirm.6 fs.6 log.6 rpc.6 util.6 secstore.6
+cp 6.factotum /amd64/bin/auth/factotum
+T1-ART factotum 1d33b63a4ece6c391a0f9e8c76acee058c71f0478599145057471bb22dfd6df3
+== tier1 entry: 9k/boot
+libboot.a6 doesn't exist: assuming it will be an archive
+6c -I. -FTVw bootr9.c
+6c -I. -FTVw printstub.c
+6c -I. -FTVw bootauth.c
+6c -I. -FTVw aux.c
+6c -I. -FTVw boot.c
+6c -I. -FTVw bootcache.c
+6c -I. -FTVw bootip.c
+6c -I. -FTVw local.c
+6c -I. -FTVw embed.c
+6c -I. -FTVw settime.c
+6c -I. -FTVw parts.c
+6c -I. -FTVw usb.c
+names=`{membername $newprereq}
+ar vu libboot.a6 $names
+rm $names
+ar: creating libboot.a6
+a - bootauth.6
+a - aux.6
+a - boot.6
+a - bootcache.6
+a - bootip.6
+a - local.6
+a - embed.6
+a - settime.6
+a - parts.6
+a - usb.6
+6l -o boot bootr9.6 libboot.a6 printstub.6
+rm -f *.[568ijqv7] libboot.a6 boot
+T1-ART boot 9338fe39d6882de8e40612d9629242795b711a7c4b0a89d5ce4b616cbaee39e7
+== tier1 entry: stage/init
+6^l  -o 6.init init.6
+cp 6.init /$objtype/init
+T1-ART init e6fc656f8731443e8754c610284ba96377a9a95635b473ed8b8f847e879746bb
+== tier1 entry: cmd/paqfs:paqfs
+6c -FTVw paqfs.c
+6l  -o 6.paqfs paqfs.6
+cp 6.paqfs /amd64/bin/paqfs
+T1-ART paqfs c3327a2b268b030d558705ccf0b102383226a0ea3be6c7db3e97902c55351bc3
+== subset cmd: bind (link-only + harvest, the donor embed's member)
+6^c -FTVw bind.c
+6^l  -o 6.bind bind.6
+== net cmd: ping (link-only + harvest, the ip container)
+6c -FTVw ping.c
+6l  -o 6.ping ping.6
+== net cmd: udpecho (link-only + harvest, the ip container)
+6c -FTVw udpecho.c
+6l  -o 6.udpecho udpecho.6
+== net cmd: dd (link-only + harvest, the one-read discipline)
+6^c -FTVw dd.c
+6^l  -o 6.dd dd.6
+== net helper: build/x86_64/netblast.c -> out/netblast (6c/6l)
+== net helper: build/x86_64/tcpblast.c -> out/tcpblast (6c/6l)
+== net helper: build/x86_64/tcpecho.c -> out/tcpecho (6c/6l)
+== tier2 entry: cmd/aux:listen
+rm -f listen.[568ijqv7] [568ijqv7].listen listen.acid listen
+6c -FTVw listen.c
+6l  -o 6.listen listen.6
+T2-ART listen 3289ba74cdf6f597a80b1a569b0b8205ef946e9638ff6c57174eb6edbf7f2e46
+== tier2 entry: cmd/ndb
+rm -f *.[568ijqv7] *.a[568ijqv7] y.tab.? lex.yy.c y.debug y.output [568ijqv7].??* mkdb query mkhash mkhosts cs csquery dns dnsquery dnstcp dnsdebug ipquery inform $CLEANFILES
+for (i in mkdb query mkhash mkhosts cs csquery dns dnsquery dnstcp dnsdebug ipquery inform)
+	mk $MKFLAGS $i.install
+6c -FTVw mkdb.c
+6l  -o 6.mkdb mkdb.6
+cp 6.mkdb /amd64/bin/ndb/mkdb
+6c -FTVw query.c
+6l  -o 6.query query.6
+cp 6.query /amd64/bin/ndb/query
+6c -FTVw mkhash.c
+6l  -o 6.mkhash mkhash.6
+cp 6.mkhash /amd64/bin/ndb/mkhash
+6c -FTVw mkhosts.c
+6l  -o 6.mkhosts mkhosts.6
+cp 6.mkhosts /amd64/bin/ndb/mkhosts
+6c -FTVw cs.c
+6l -o 6.cs cs.6
+cp 6.cs /amd64/bin/ndb/cs
+6c -FTVw csquery.c
+6l  -o 6.csquery csquery.6
+cp 6.csquery /amd64/bin/ndb/csquery
+6c -FTVw dns.c
+6c -FTVw dnudpserver.c
+6c -FTVw dn.c
+6c -FTVw dnresolve.c
+6c -FTVw dblookup.c
+6c -FTVw dnserver.c
+6c -FTVw dnnotify.c
+6c -FTVw dnarea.c
+6c -FTVw convM2DNS.c
+6c -FTVw convDNS2M.c
+6l -o 6.dns dns.6 dnudpserver.6 dn.6 dnresolve.6 dblookup.6 dnserver.6 dnnotify.6 dnarea.6 convM2DNS.6 convDNS2M.6
+cp 6.dns /amd64/bin/ndb/dns
+6c -FTVw dnsquery.c
+6l  -o 6.dnsquery dnsquery.6
+cp 6.dnsquery /amd64/bin/ndb/dnsquery
+6c -FTVw dnstcp.c
+6l -o 6.dnstcp dnstcp.6 dn.6 dnresolve.6 dblookup.6 dnserver.6 dnarea.6 convM2DNS.6 convDNS2M.6
+cp 6.dnstcp /amd64/bin/ndb/dnstcp
+6c -FTVw dnsdebug.c
+6l -o 6.dnsdebug dnsdebug.6 dn.6 dnresolve.6 dblookup.6 dnserver.6 dnarea.6 convM2DNS.6 convDNS2M.6
+cp 6.dnsdebug /amd64/bin/ndb/dnsdebug
+6c -FTVw ipquery.c
+6l  -o 6.ipquery ipquery.6
+cp 6.ipquery /amd64/bin/ndb/ipquery
+6c -FTVw inform.c
+6l  -o 6.inform inform.6
+cp 6.inform /amd64/bin/ndb/inform
+T2-ART cs 295463ceb098f140505f0112af7ac6de6a1044fa2dda8befd315616b37379942
+T2-ART csquery 1a5fb5b4762c1bd8e36b7dbf01619cbea1288e2ce6fbdd93f6ff23d9ed13f894
+T2-ART dns e7e9169bae670be9b8efcbfdd3b66993fac06613d1bc6a8f6e0aae823aaece3f
+T2-ART dnsdebug 2ba61c31067f5adf6f11067a2a9412397b1c1c5a8aa8a7265dee89b0e5cdc46d
+T2-ART dnsquery 6e0b395b9fff8ca60f4a15f0d8f795649d16ff4de007a5a08fc2053a76aa1235
+T2-ART dnstcp 639beafcd8e1e720d36875d3e0a1d80216680b834c7e7ba164c412d0e78dd8f3
+T2-ART inform 764ea7bd27a5c993ae44e84294e7d8afe1a856a91f8bbfe5f378c115d5914a15
+T2-ART ipquery 223ce9c4cfb13ccd604e562983a27438302298e764fd07490f9ef568dbc32f66
+T2-ART mkdb 86e7a9eb38e2cc6fa0017494411d41812af1fbf80530656c3b1b43d3f68f7fff
+T2-ART mkhash 96b9d5679ff76ea1e19447a1b2e732ec889659f833542a1a67d2b7b694c728e3
+T2-ART mkhosts fedaa12eb3f3b07d8003d48366227f8a882359c924dcd4ed664ab0f35d9e6f69
+T2-ART query 16dd25c72e38c28d13610265377891a1545cdcd4adc820bb52cf109cc6badb7f
+rm -f *.[568ijqv7] *.a[568ijqv7] y.tab.? lex.yy.c y.debug y.output [568ijqv7].??* mkdb query mkhash mkhosts cs csquery dns dnsquery dnstcp dnsdebug ipquery inform $CLEANFILES
+== tier2 entry: cmd/exportfs
+rm -f *.[568ijqv7] [568ijqv7].out y.tab.? lex.yy.c y.debug y.output exportfs $CLEANFILES
+6c -FTVw exportfs.c
+6c -FTVw exportsrv.c
+6c -FTVw pattern.c
+6l  -o 6.out exportfs.6 exportsrv.6 pattern.6
+cp 6.out /amd64/bin/exportfs
+T2-ART exportfs 8b3e1625ad5f9e21816e271561670795a86fbc5a24496044922d83c1568462ce
+rm -f *.[568ijqv7] [568ijqv7].out y.tab.? lex.yy.c y.debug y.output exportfs $CLEANFILES
+== tier2 entry: cmd/dial
+rm -f *.[568ijqv7] *.a[568ijqv7] y.tab.? lex.yy.c y.debug y.output [568ijqv7].??* expect pass drain at $CLEANFILES
+for (i in expect pass drain at)
+	mk $MKFLAGS $i.install
+6c -FTVw expect.c
+6l  -o 6.expect expect.6
+cp 6.expect /amd64/bin/dial/expect
+6c -FTVw pass.c
+6l  -o 6.pass pass.6
+cp 6.pass /amd64/bin/dial/pass
+6c -FTVw drain.c
+6l  -o 6.drain drain.6
+cp 6.drain /amd64/bin/dial/drain
+6c -FTVw at.c
+6l  -o 6.at at.6
+cp 6.at /amd64/bin/dial/at
+T2-ART at 66ac8cdc32c3e2cc918c0d448981e13fe23e21ce074993cabe3b6b981ebfe81f
+T2-ART drain a0c2d4885b194e9fc8757ffaa53fb9e30cbc62218db244a485a111ce085d5736
+T2-ART expect 17c7e92e580ff6b795d34ca5c04a60714a6097bfc3750957451a1b161cc2f3bb
+T2-ART pass 0ed992104eabd7ba34169e9afe19790781bc8d8abb721f8f0b642fcc89619805
+rm -f *.[568ijqv7] *.a[568ijqv7] y.tab.? lex.yy.c y.debug y.output [568ijqv7].??* expect pass drain at $CLEANFILES
+== tier2 entry: cmd/mntgen
+6^c -FTVw mntgen.c
+6^l  -o 6.mntgen mntgen.6
+T2-ART mntgen 79d20dba311cd5186bcee8e32e25530d51453f5894d41bdc3e539b1e6d236de7
+== tier2 entry: cmd/srv
+6^c -FTVw srv.c
+6^l  -o 6.srv srv.6
+T2-ART srv dd964d1b3f14daa6a77669aa7a716dd7b809fbe7516c634615e55364376906a3
+== tier2 entry: cmd/import
+6^c -FTVw import.c
+6^l  -o 6.import import.6
+T2-ART import 2d8c110e25629fcb945dfc1cf68d45b38941e90499d4f6eaff6ecf9c912de14e
+== tier2 entry: cmd/ip/6in4
+6c -FTVw 6in4.c
+6l  -o 6.6in4 6in4.6
+T2-ART 6in4 257e9214e6046f777b2704949f63cb07cf9e60639dfa1ffe61bd194975841119
+== tier2 entry: cmd/ip/dhcpclient
+6c -FTVw dhcpclient.c
+6l  -o 6.dhcpclient dhcpclient.6
+T2-ART dhcpclient 6e823604af8abb48c03c666ef19ed0b75ae5a90f9cd66a6c128124d58f610ff1
+== tier2 entry: cmd/ip/ftpd
+6c -FTVw ftpd.c
+6l -o 6.ftpd ftpd.6 glob.6
+T2-ART ftpd eda86e80de6272375e2d04362fcd11430d76f11b9fa055520c241f9ef07ecc51
+== tier2 entry: cmd/ip/hogports
+6c -FTVw hogports.c
+6l  -o 6.hogports hogports.6
+T2-ART hogports 1d9492be36d4d874f0e27fb3b742f056089dccc7d14b44f90509212fd3cd6f2e
+== tier2 entry: cmd/ip/httpfile
+6c -FTVw httpfile.c
+6l  -o 6.httpfile httpfile.6
+T2-ART httpfile 4012f8210db6bf5fbe35f521ca38260ce75559f6b7670c18b78246c4b27bf23b
+== tier2 entry: cmd/ip/iscsisrv
+6c -FTVw iscsisrv.c
+6l  -o 6.iscsisrv iscsisrv.6
+T2-ART iscsisrv 9503f6ff5b7d80bf455749a6f38e86250257c6be088d2f31c068503e2325d275
+== tier2 entry: cmd/ip/linklocal
+6c -FTVw linklocal.c
+6l  -o 6.linklocal linklocal.6
+T2-ART linklocal 578add0c75692d946189b11f49c720011f3df2fc8aea51dde85b59ec241f7c1e
+== tier2 entry: cmd/ip/pppoe
+6c -FTVw pppoe.c
+6l  -o 6.pppoe pppoe.6
+T2-ART pppoe 3ecc2299e43615efa007411760d70643e1b6e6fb8dcc7b2d06f4194c65192ebf
+== tier2 entry: cmd/ip/pptp
+6c -FTVw pptp.c
+6l  -o 6.pptp pptp.6
+T2-ART pptp 053b89b41372ba0b87dc16be773220b109cceae81f9148a847c4e072912502ad
+== tier2 entry: cmd/ip/pptpd
+6c -FTVw pptpd.c
+6l  -o 6.pptpd pptpd.6
+T2-ART pptpd 3ec35e34d3f2b7d15b4fa29df935da178d33ef75ce0a582fb8d9aefc9ca9e340
+== tier2 entry: cmd/ip/rarpd
+6c -FTVw rarpd.c
+6l  -o 6.rarpd rarpd.6
+T2-ART rarpd fb5a2538ba7b9b2c17135401aa31a6b50d624396eb877f8cca92f5c99af674a5
+== tier2 entry: cmd/ip/rexexec
+6c -FTVw rexexec.c
+6l  -o 6.rexexec rexexec.6
+T2-ART rexexec 97996502b35bbbf88a3d8726cd9c2bf0b63268f1a6f89b8ddf5c879e8cd7918a
+== tier2 entry: cmd/ip/rip
+6c -FTVw rip.c
+6l  -o 6.rip rip.6
+T2-ART rip df1b8fabcaea588b08b0373acbb12cd047c660e431f33f60a9131fcfaec7b5a5
+== tier2 entry: cmd/ip/rlogind
+6c -FTVw rlogind.c
+6l  -o 6.rlogind rlogind.6
+T2-ART rlogind ba1b9a732f6b10b88693fb005d3f480a73dbff2205ee6610d0524394b2bbf451
+== tier2 entry: cmd/ip/telnet
+6c -FTVw telnet.c
+6l  -o 6.telnet telnet.6
+T2-ART telnet b256c1a445eff928eb2c26c3551a1e33fd54983f2715eaba2019268a9072ec5c
+== tier2 entry: cmd/ip/telnetd
+6c -FTVw telnetd.c
+6l  -o 6.telnetd telnetd.6
+T2-ART telnetd 825c14ab2fde3208bdab1743c5fcdaee3fbac29bf18085e639c773846655465d
+== tier2 entry: cmd/ip/tftpd
+6c -FTVw tftpd.c
+6l  -o 6.tftpd tftpd.6
+T2-ART tftpd d2c0c0cb294a8f839976ab8a9a1dfa70cd4af116764ff14b756792bcfd37dc07
+== tier2 entry: cmd/ip/traceroute
+6c -FTVw traceroute.c
+6l  -o 6.traceroute traceroute.6
+T2-ART traceroute cbf194a11a651bb814640e1a29ef3a57ac235f58bf958b7855349f32d4a0a37a
+== tier2 entry: cmd/ip/wol
+6c -FTVw wol.c
+6l  -o 6.wol wol.6
+T2-ART wol 1debdbcf6c9462c1e50283abd70e6772d78605d454e62c6c180148d76baaa4ae
+== tier2 entry: cmd/ip/dhcpd
+rm -f *.[568ijqv7] *.a[568ijqv7] y.tab.? lex.yy.c y.debug y.output [568ijqv7].??* dhcpd dhcpleases $CLEANFILES
+for (i in dhcpd dhcpleases)
+	mk $MKFLAGS $i.install
+6c -FTVw dhcpd.c
+6c -FTVw db.c
+6c -FTVw ndb.c
+6c -FTVw ping.c
+6l -o 6.dhcpd dhcpd.6 db.6 ndb.6 ping.6
+cp 6.dhcpd /amd64/bin/ip/dhcpd
+6c -FTVw dhcpleases.c
+6l -o 6.dhcpleases dhcpleases.6 db.6 ping.6
+cp 6.dhcpleases /amd64/bin/ip/dhcpleases
+T2-ART dhcpd 07731546c761fd41a4ebf63a8ff61136b3e56ecc7565f849e223bcd6608a3803
+T2-ART dhcpleases 8c6961c25fff00b62fbfa7316795279b5af8bc886142cfb77149a3f78829334b
+rm -f *.[568ijqv7] *.a[568ijqv7] y.tab.? lex.yy.c y.debug y.output [568ijqv7].??* dhcpd dhcpleases $CLEANFILES
+== tier2 entry: cmd/ip/ftpfs
+rm -f *.[568ijqv7] [568ijqv7].out y.tab.? lex.yy.c y.debug y.output ftpfs $CLEANFILES
+6c -FTVw ftpfs.c
+6c -FTVw proto.c
+6c -FTVw file.c
+6l  -o 6.out ftpfs.6 proto.6 file.6
+cp 6.out /amd64/bin/ftpfs
+T2-ART ftpfs 77183ec76d9923e21a602bd49bbb7333c743aa6462d8898b193e8b15b998ee60
+rm -f *.[568ijqv7] [568ijqv7].out y.tab.? lex.yy.c y.debug y.output ftpfs $CLEANFILES
+== tier2 entry: cmd/ip/httpd
+rm -f *.[568ijqv7] *.a[568ijqv7] y.tab.? lex.yy.c y.debug y.output [568ijqv7].??* httpd imagemap man2html save netlib_find netlib_history webls wikipost websocket $CLEANFILES
+for (i in httpd imagemap man2html save netlib_find netlib_history webls wikipost websocket)
+	mk $MKFLAGS $i.install
+6c -FTVw httpd.c
+6c -FTVw anonymous.c
+6c -FTVw content.c
+6c -FTVw emem.c
+6c -FTVw hints.c
+6c -FTVw init.c
+6c -FTVw log.c
+6c -FTVw redirect.c
+6c -FTVw sendfd.c
+6c -FTVw authorize.c
+ar vu libhttps.a6 anonymous.6 content.6 emem.6 hints.6 init.6 log.6 redirect.6 sendfd.6 authorize.6
+rm anonymous.6 content.6 emem.6 hints.6 init.6 log.6 redirect.6 sendfd.6 authorize.6
+# rm  - cannot do this because of mk race
+ar: creating libhttps.a6
+a - anonymous.6
+a - content.6
+a - emem.6
+a - hints.6
+a - init.6
+a - log.6
+a - redirect.6
+a - sendfd.6
+a - authorize.6
+6l  -o 6.httpd httpd.6 libhttps.a6
+cp 6.httpd /amd64/bin/ip/httpd/httpd
+6c -FTVw imagemap.c
+6l  -o 6.imagemap imagemap.6 libhttps.a6
+cp 6.imagemap /amd64/bin/ip/httpd/imagemap
+6c -FTVw man2html.c
+6l  -o 6.man2html man2html.6 libhttps.a6
+cp 6.man2html /amd64/bin/ip/httpd/man2html
+6c -FTVw save.c
+6l  -o 6.save save.6 libhttps.a6
+cp 6.save /amd64/bin/ip/httpd/save
+6c -FTVw netlib_find.c
+6l  -o 6.netlib_find netlib_find.6 libhttps.a6
+cp 6.netlib_find /amd64/bin/ip/httpd/netlib_find
+6c -FTVw netlib_history.c
+6l  -o 6.netlib_history netlib_history.6 libhttps.a6
+cp 6.netlib_history /amd64/bin/ip/httpd/netlib_history
+6c -FTVw webls.c
+6l  -o 6.webls webls.6 libhttps.a6
+cp 6.webls /amd64/bin/ip/httpd/webls
+6c -FTVw wikipost.c
+6l  -o 6.wikipost wikipost.6 libhttps.a6
+cp 6.wikipost /amd64/bin/ip/httpd/wikipost
+6c -FTVw websocket.c
+6l  -o 6.websocket websocket.6 libhttps.a6
+cp 6.websocket /amd64/bin/ip/httpd/websocket
+T2-ART httpd 4d8dc446a00302e200f8c81c64783afc4c9881b861a2acc0146b5bf8aeacb8e7
+T2-ART imagemap 6dfd3f16361d364cac631e7fb0dae5f411bb4ad7a40aabd70db5249cc8e36df3
+T2-ART man2html 98903e17f62c2480a26ef5fb96912a41562e690e7a6526520df4a8abed621ecb
+T2-ART netlib_find d474a7b30a404b7918d2098ca7c8b732a3247a34daabe4c91f600c9543c84b7d
+T2-ART netlib_history 601cf8f2700eda1e8f68579ef50c11bf4c25c0d427ebf5ba68d6fd500e8d556a
+T2-ART save 869b64872716c26b4a2ba65e3992b3dedc16ef89acf255d0b14921408fc3ef3a
+T2-ART webls d28e49dec36f6bd89334a474c3bc3dd661706e123f4f7fe29fa8932ef4a0a668
+T2-ART websocket 089af65a179c187d6395050493a33b485bde527d0ae4e199c3bd601dec4b7822
+T2-ART wikipost ccbf991111d36c18a951b97b9cab66a90d9490162bd22c4514999cacf8dade32
+rm -f *.[568ijqv7] *.a[568ijqv7] y.tab.? lex.yy.c y.debug y.output [568ijqv7].??* httpd imagemap man2html save netlib_find netlib_history webls wikipost websocket $CLEANFILES
+== tier2 entry: cmd/ip/ppp
+rm -f *.[568ijqv7] [568ijqv7].out y.tab.? lex.yy.c y.debug y.output ppp $CLEANFILES
+6c -FTVw ppp.c
+6c -FTVw compress.c
+6c -FTVw block.c
+6c -FTVw mppc.c
+6c -FTVw ipaux.c
+6c -FTVw thw.c
+6c -FTVw thwack.c
+6c -FTVw unthwack.c
+6l  -o 6.out ppp.6 compress.6 block.6 mppc.6 ipaux.6 thw.6 thwack.6 unthwack.6
+cp 6.out /amd64/bin/ip/ppp
+T2-ART ppp d9ee07d6d33c410e8d9cfdc8410df759d895be6da855c8396c7e546a1bf314e4
+rm -f *.[568ijqv7] [568ijqv7].out y.tab.? lex.yy.c y.debug y.output ppp $CLEANFILES
+== tier2 entry: cmd/ip/imap4d
+rm -f *.[568ijqv7] [568ijqv7].out y.tab.? lex.yy.c y.debug y.output imap4d $CLEANFILES
+6c -FTVw auth.c
+6c -FTVw copy.c
+6c -FTVw csquery.c
+6c -FTVw date.c
+6c -FTVw fetch.c
+6c -FTVw imap4d.c
+6c -FTVw list.c
+6c -FTVw mbox.c
+6c -FTVw msg.c
+6c -FTVw mutf7.c
+6c -FTVw nodes.c
+6c -FTVw folder.c
+6c -FTVw search.c
+6c -FTVw store.c
+6c -FTVw utils.c
+6c -FTVw debug.c
+6l  -o 6.out auth.6 copy.6 csquery.6 date.6 fetch.6 imap4d.6 list.6 mbox.6 msg.6 mutf7.6 nodes.6 folder.6 search.6 store.6 utils.6 debug.6
+cp 6.out /amd64/bin/ip/imap4d
+T2-ART imap4d 9757a5cf0a0fb2506ba2952f65a042cbff3b5fbebb273694ed12be9d6c01506f
+rm -f *.[568ijqv7] [568ijqv7].out y.tab.? lex.yy.c y.debug y.output imap4d $CLEANFILES
+== tier2 entry: cmd/ip/snoopy
+rm -f *.[568ijqv7] [568ijqv7].out y.tab.? lex.yy.c y.debug y.output snoopy protos.c protos.h
+{
+	for(i in aoe aoeata aoecmd aoemask aoemd aoerr arp bootp cec dhcp dns dump eap eap_identity eapol eapol_key ether gre hdlc icmp6 icmp il ip6 ip ninep ospf ppp ppp_ccp ppp_chap ppp_ipcp ppp_lcp pppoe_disc pppoe_sess rarp rc4keydesc rtcp rtp tcp ttls udp)
+		echo extern Proto $i';'
+} >protos.h
+yacc -d filter.y
+{
+	echo '#include <u.h>'
+	echo '#include <libc.h>'
+	echo '#include "dat.h"'
+	echo '#include "protos.h"'
+	echo 'Proto *protos[] ='
+	echo '{'
+	for(i in aoe aoeata aoecmd aoemask aoemd aoerr arp bootp cec dhcp dns dump eap eap_identity eapol eapol_key ether gre hdlc icmp6 icmp il ip6 ip ninep ospf ppp ppp_ccp ppp_chap ppp_ipcp ppp_lcp pppoe_disc pppoe_sess rarp rc4keydesc rtcp rtp tcp ttls udp)
+		echo '	&'$i','
+	echo '	0,'
+	echo '};'
+} >protos.c
+6c -FTVw main.c
+6c -FTVw y.tab.c
+6c -FTVw	/sys/src/cmd/ndb/convM2DNS.c
+6c -FTVw aoe.c
+6c -FTVw aoeata.c
+6c -FTVw aoecmd.c
+6c -FTVw aoemask.c
+6c -FTVw aoemd.c
+6c -FTVw aoerr.c
+6c -FTVw arp.c
+6c -FTVw bootp.c
+6c -FTVw cec.c
+6c -FTVw dhcp.c
+6c -FTVw dns.c
+6c -FTVw dump.c
+6c -FTVw eap.c
+6c -FTVw eap_identity.c
+6c -FTVw eapol.c
+6c -FTVw eapol_key.c
+6c -FTVw ether.c
+6c -FTVw gre.c
+6c -FTVw hdlc.c
+6c -FTVw icmp6.c
+6c -FTVw icmp.c
+6c -FTVw il.c
+6c -FTVw ip6.c
+6c -FTVw ip.c
+6c -FTVw ninep.c
+6c -FTVw ospf.c
+6c -FTVw ppp.c
+6c -FTVw ppp_ccp.c
+6c -FTVw ppp_chap.c
+6c -FTVw ppp_ipcp.c
+6c -FTVw ppp_lcp.c
+6c -FTVw pppoe_disc.c
+6c -FTVw pppoe_sess.c
+6c -FTVw rarp.c
+6c -FTVw rc4keydesc.c
+6c -FTVw rtcp.c
+6c -FTVw rtp.c
+6c -FTVw tcp.c
+6c -FTVw ttls.c
+6c -FTVw udp.c
+6c -FTVw protos.c
+6l  -o 6.out main.6 y.tab.6 protos.6 convM2DNS.6 aoe.6 aoeata.6 aoecmd.6 aoemask.6 aoemd.6 aoerr.6 arp.6 bootp.6 cec.6 dhcp.6 dns.6 dump.6 eap.6 eap_identity.6 eapol.6 eapol_key.6 ether.6 gre.6 hdlc.6 icmp6.6 icmp.6 il.6 ip6.6 ip.6 ninep.6 ospf.6 ppp.6 ppp_ccp.6 ppp_chap.6 ppp_ipcp.6 ppp_lcp.6 pppoe_disc.6 pppoe_sess.6 rarp.6 rc4keydesc.6 rtcp.6 rtp.6 tcp.6 ttls.6 udp.6
+cp 6.out /amd64/bin/snoopy
+T2-ART snoopy e6dea503220a1e633fa5ed10e7b847a55eadd1ccb99d3a8af703e06da00c3960
+rm -f *.[568ijqv7] [568ijqv7].out y.tab.? lex.yy.c y.debug y.output snoopy protos.c protos.h
+== tier2 entry: cmd/auth/as
+6c -FTVw as.c
+cd lib
+mk
+6c -FTVw -I.. keyfmt.c
+6c -FTVw -I.. netcheck.c
+6c -FTVw -I.. okpasswd.c
+6c -FTVw -I.. readwrite.c
+6c -FTVw -I.. readarg.c
+6c -FTVw -I.. readln.c
+6c -FTVw -I.. getauthkey.c
+6c -FTVw -I.. log.c
+6c -FTVw -I.. error.c
+6c -FTVw -I.. fs.c
+6c -FTVw -I.. rdbio.c
+6c -FTVw -I.. querybio.c
+6c -FTVw -I.. wrbio.c
+6c -FTVw -I.. getexpiration.c
+ar vu ../lib.6.a keyfmt.6 netcheck.6 okpasswd.6 readwrite.6 readarg.6 readln.6 getauthkey.6 log.6 error.6 fs.6 rdbio.6 querybio.6 wrbio.6 getexpiration.6
+ar: creating ../lib.6.a
+a - keyfmt.6
+a - netcheck.6
+a - okpasswd.6
+a - readwrite.6
+a - readarg.6
+a - readln.6
+a - getauthkey.6
+a - log.6
+a - error.6
+a - fs.6
+a - rdbio.6
+a - querybio.6
+a - wrbio.6
+a - getexpiration.6
+6l  -o 6.as as.6 lib.6.a
+T2-ART as b265fea6b293a6c832afa9759d146e367cfe140ff227eeb3d805dc3aaa0c48e8
+== tier2 entry: cmd/auth/asn12dsa
+6c -FTVw asn12dsa.c
+6l  -o 6.asn12dsa asn12dsa.6 lib.6.a
+T2-ART asn12dsa 95ce327c744fee05c444bf52be92e563db1cc863829a875663bf0f1e3c4614b4
+== tier2 entry: cmd/auth/asn12rsa
+6c -FTVw asn12rsa.c
+6l  -o 6.asn12rsa asn12rsa.6 lib.6.a
+T2-ART asn12rsa 76407e1cc71b5be2a2d0c9b0cfb48578d0478a3761ca341c2df5331ed1a486d8
+== tier2 entry: cmd/auth/authsrv
+6c -FTVw authsrv.c
+6l  -o 6.authsrv secureidcheck.6 authsrv.6 lib.6.a
+T2-ART authsrv 52dd8cd891d378ea3318fec43b4c9405b180a2264c79f9740f81f8d9697cc772
+== tier2 entry: cmd/auth/changeuser
+6c -FTVw changeuser.c
+6l  -o 6.changeuser changeuser.6 lib.6.a
+T2-ART changeuser c829d548215ab696b2944f37a50e9b33d7df103b241c66c1c092765749ba30c1
+== tier2 entry: cmd/auth/convkeys
+6c -FTVw convkeys.c
+6l  -o 6.convkeys convkeys.6 lib.6.a
+T2-ART convkeys 1e32e986b1dd8dc5a1a202a88859ff0668558a35ac3789b58a6f4dee6080d6f4
+== tier2 entry: cmd/auth/convkeys2
+6c -FTVw convkeys2.c
+6l  -o 6.convkeys2 convkeys2.6 lib.6.a
+T2-ART convkeys2 93c020aef58299ad050829c95c596ac2f69ed4992ccc548f528ea9bfa0201d86
+== tier2 entry: cmd/auth/cron
+6c -FTVw cron.c
+6l  -o 6.cron cron.6 lib.6.a
+T2-ART cron 5c3ae84bef6be5269ebb0ed2a8cb9ac6f0f516a9186f780cb06a513228b2102e
+== tier2 entry: cmd/auth/debug
+6c -FTVw debug.c
+6l  -o 6.debug debug.6 lib.6.a
+T2-ART debug 8b3aef6ec5602c82903964d5f860503f810e9d07bb6a3b6910e382d4dc00c055
+== tier2 entry: cmd/auth/dsa2pub
+6c -FTVw dsa2pub.c
+6l  -o 6.dsa2pub rsa2any.6 dsa2pub.6 lib.6.a
+T2-ART dsa2pub f4ab9363ac1ec6fda5aeace5c8d66a7920f34fd70f97148bfe46e32283c28c5d
+== tier2 entry: cmd/auth/dsa2ssh
+6c -FTVw dsa2ssh.c
+6l  -o 6.dsa2ssh rsa2any.6 dsa2ssh.6 lib.6.a
+T2-ART dsa2ssh 1add42d6a2e2b78de22eb288276c4ed73b5a952b984292db85c959bf605374c3
+== tier2 entry: cmd/auth/dsagen
+6c -FTVw dsagen.c
+6l  -o 6.dsagen dsagen.6 lib.6.a
+T2-ART dsagen 4b53647a6e826c38fb5bc7731f99c2cfa00078ae94078bca3608f378c1d49e18
+== tier2 entry: cmd/auth/guard.srv
+6c -FTVw guard.srv.c
+6l  -o 6.guard.srv secureidcheck.6 guard.srv.6 lib.6.a
+T2-ART guard.srv b412139c0b43a241480cd88eb9b1eac9155be08dc15229a3b9022cbfdb0f57d6
+== tier2 entry: cmd/auth/keyfs
+6c -FTVw keyfs.c
+6l  -o 6.keyfs keyfs.6 lib.6.a
+T2-ART keyfs e7703b7ee6a680fd210ccd4f72d89571d00ed2784750a8cb4d26a49db7324733
+== tier2 entry: cmd/auth/login
+6c -FTVw login.c
+6l  -o 6.login login.6 lib.6.a
+T2-ART login aa5626896cee2aeb2cd0bb0d13708629817b99e9d999fa144bc4a8105720994c
+== tier2 entry: cmd/auth/netkey
+6c -FTVw netkey.c
+6l  -o 6.netkey netkey.6 lib.6.a
+T2-ART netkey c059c624f521ca7484953e63e93fc48d54710a851a7284d040a2d1d6a2dc00cc
+== tier2 entry: cmd/auth/newns
+6c -FTVw newns.c
+6l  -o 6.newns newns.6 lib.6.a
+T2-ART newns cfeb8430293b546a2447ae7e78a9a98de05046c058a25e20a2af0b1f5ce35318
+== tier2 entry: cmd/auth/none
+6c -FTVw none.c
+6l  -o 6.none none.6 lib.6.a
+T2-ART none c6e10a4bad4c03139eb7ddea6153716f11179d027929d31fdbe49dcc3fee5b97
+== tier2 entry: cmd/auth/passwd
+6c -FTVw passwd.c
+6l  -o 6.passwd passwd.6 lib.6.a
+T2-ART passwd 5666214b46eb1c62f2d46347e60c7b986a27c327938659ba92cf3648fac7166e
+== tier2 entry: cmd/auth/pemdecode
+6c -FTVw pemdecode.c
+6l  -o 6.pemdecode pemdecode.6 lib.6.a
+T2-ART pemdecode fe45430b3ac321ac1bec2686c149d50a63f23fea2a5cca85ce41dd7e45a42876
+== tier2 entry: cmd/auth/pemencode
+6c -FTVw pemencode.c
+6l  -o 6.pemencode pemencode.6 lib.6.a
+T2-ART pemencode 372fd3904431d9b7345dce71d500d0009fb2b58f96d34dddb0b7b93a8ef52c43
+== tier2 entry: cmd/auth/printnetkey
+6c -FTVw printnetkey.c
+6l  -o 6.printnetkey printnetkey.6 lib.6.a
+T2-ART printnetkey c1dc6ec74093280dbd7453fa15d4d0d53c7037210ee644348e3e79377e9c1545
+== tier2 entry: cmd/auth/readnvram
+6c -FTVw readnvram.c
+6l  -o 6.readnvram readnvram.6 lib.6.a
+T2-ART readnvram e2b6be223e16ff1bb25a53e8bcaabe174f7c96c861b782d69bf2ed53a086a851
+== tier2 entry: cmd/auth/rsa2csr
+6c -FTVw rsa2csr.c
+6l  -o 6.rsa2csr rsa2any.6 rsa2csr.6 lib.6.a
+T2-ART rsa2csr a104a6048e02b6377da92c223c25ce4f7ecbc6e63147ff9ed6dc40efb747e275
+== tier2 entry: cmd/auth/rsa2pub
+6c -FTVw rsa2pub.c
+6l  -o 6.rsa2pub rsa2any.6 rsa2pub.6 lib.6.a
+T2-ART rsa2pub df926faf53d071c2c6b42b915ac590c004285eadc2f2195f587748353579a06b
+== tier2 entry: cmd/auth/rsa2ssh
+6c -FTVw rsa2ssh.c
+6l  -o 6.rsa2ssh rsa2any.6 rsa2ssh.6 lib.6.a
+T2-ART rsa2ssh c95c07edc96903a0f05823f40e523f2b573969233b80a051cb6bb1a22b5dfaa4
+== tier2 entry: cmd/auth/rsa2x509
+6c -FTVw rsa2x509.c
+6l  -o 6.rsa2x509 rsa2any.6 rsa2x509.6 lib.6.a
+T2-ART rsa2x509 b1337d120e8c2c1a6403e0284334223cf1a15b88a7b7391a49e1afa1e91b7834
+== tier2 entry: cmd/auth/rsafill
+6c -FTVw rsafill.c
+6l  -o 6.rsafill rsa2any.6 rsafill.6 lib.6.a
+T2-ART rsafill c644527adc08710fdf6c3c108640e87bf21998ba289b403bf39b69be1db30ddc
+== tier2 entry: cmd/auth/rsagen
+6c -FTVw rsagen.c
+6l  -o 6.rsagen rsagen.6 lib.6.a
+T2-ART rsagen 158742a43beb063ffeb43713d394d9b1c66fba1403812284f460b6f07df0e111
+== tier2 entry: cmd/auth/uniq
+6c -FTVw uniq.c
+6l  -o 6.uniq uniq.6 lib.6.a
+T2-ART uniq 54f54bd2dd65633bf4f448c923cf1ef54e15e0e52d61ccfd798bd036dee0835a
+== tier2 entry: cmd/auth/warning
+6c -FTVw warning.c
+6l  -o 6.warning warning.6 lib.6.a
+T2-ART warning d007520297b749a7f429b16d4d04ef217443b363e42359ba7ff7957a4d9359a9
+== tier2 entry: cmd/auth/wrkey
+6c -FTVw wrkey.c
+6l  -o 6.wrkey wrkey.6 lib.6.a
+T2-ART wrkey 0b6e6fbfaa2e6274ccc4d9ec4b6ed1bd616e62f1d9df6d39de0a70f0dc41f64b
+== tier2 entry: cmd/auth/secstore
+rm -f *.[568ijqv7] *.a[568ijqv7] y.tab.? lex.yy.c y.debug y.output [568ijqv7].??* secstore secstored secuser aescbc $CLEANFILES
+for (i in secstore secstored secuser aescbc)
+	mk $MKFLAGS $i.install
+6c -FTVw secstore.c
+6c -FTVw pak.c
+6c -FTVw password.c
+6c -FTVw SConn.c
+6c -FTVw util.c
+6l -o 6.secstore secstore.6 pak.6 password.6 SConn.6 util.6
+cp 6.secstore /amd64/bin/auth/secstore
+6c -FTVw secstored.c
+6c -FTVw dirls.c
+6c -FTVw ../secureidcheck.c
+6l -o 6.secstored secstored.6 dirls.6 secureidcheck.6 pak.6 password.6 SConn.6 util.6
+cp 6.secstored /amd64/bin/auth/secstored
+6c -FTVw secuser.c
+6l -o 6.secuser secuser.6 pak.6 password.6 SConn.6 util.6
+cp 6.secuser /amd64/bin/auth/secuser
+6c -FTVw aescbc.c
+6l -o 6.aescbc aescbc.6 util.6
+cp 6.aescbc /amd64/bin/auth/aescbc
+T2-ART aescbc 557dd1f0f5d44cd78601c84dc4e1ca7abea0b2a1d63b4930b47841d4c146a34f
+T2-ART secstore ff19253c35773c1e38dc9b3c690713976284995f17758dfd28c690e9cd607e2c
+T2-ART secstored 0447154720ed051e191f9b4d963904bf73b259bc52c5eeea86c8ed4b1f26c7e6
+T2-ART secuser a724cc4c28a002593803a501d531196a8a489fc0df44697fa2dc3d29af124bb3
+rm -f *.[568ijqv7] *.a[568ijqv7] y.tab.? lex.yy.c y.debug y.output [568ijqv7].??* secstore secstored secuser aescbc $CLEANFILES
+== tier3 entry: cmd/page
+rm -f *.[568ijqv7] [568ijqv7].out y.tab.? lex.yy.c y.debug y.output page $CLEANFILES
+6c -FTVw cache.c
+6c -FTVw filter.c
+6c -FTVw gfx.c
+6c -FTVw gs.c
+6c -FTVw page.c
+6c -FTVw pdf.c
+6c -FTVw ps.c
+6c -FTVw rotate.c
+6c -FTVw util.c
+6c -FTVw view.c
+6l  -o 6.out cache.6 filter.6 gfx.6 gs.6 page.6 pdf.6 ps.6 rotate.6 util.6 view.6 /amd64/lib/libdraw.a
+cp 6.out /amd64/bin/page
+T3-ART page bf0f53bca20a213fa77f6ea2bafc85405f095cd30fc9856c5827f30671cb5adc
+rm -f *.[568ijqv7] [568ijqv7].out y.tab.? lex.yy.c y.debug y.output page $CLEANFILES
+== tier3 entry: cmd/rio
+rm -f *.[568ijqv7] [568ijqv7].out y.tab.? lex.yy.c y.debug y.output rio $CLEANFILES
+6c -FTVw rio.c
+6c -FTVw data.c
+6c -FTVw fsys.c
+6c -FTVw scrl.c
+6c -FTVw time.c
+6c -FTVw util.c
+6c -FTVw wctl.c
+6c -FTVw wind.c
+6c -FTVw xfid.c
+6l  -o 6.out rio.6 data.6 fsys.6 scrl.6 time.6 util.6 wctl.6 wind.6 xfid.6 /amd64/lib/libdraw.a /amd64/lib/libframe.a /amd64/lib/libthread.a /amd64/lib/libplumb.a /amd64/lib/libc.a
+cp 6.out /amd64/bin/rio
+T3-ART rio 803528e7f336c9b2886259de3f93b9d416b101f93f8dafece655d99d6e447876
+rm -f *.[568ijqv7] [568ijqv7].out y.tab.? lex.yy.c y.debug y.output rio $CLEANFILES
+== tier3 entry: cmd/acme
+rm -f *.[568ijqv7] [568ijqv7].out y.tab.? lex.yy.c y.debug y.output acme $CLEANFILES
+6c -FTVw acme.c
+6c -FTVw addr.c
+6c -FTVw buff.c
+6c -FTVw cols.c
+6c -FTVw disk.c
+6c -FTVw ecmd.c
+6c -FTVw edit.c
+6c -FTVw elog.c
+6c -FTVw exec.c
+6c -FTVw file.c
+6c -FTVw fsys.c
+6c -FTVw look.c
+6c -FTVw regx.c
+6c -FTVw rows.c
+6c -FTVw scrl.c
+6c -FTVw text.c
+6c -FTVw time.c
+6c -FTVw util.c
+6c -FTVw wind.c
+6c -FTVw xfid.c
+6l  -o 6.out acme.6 addr.6 buff.6 cols.6 disk.6 ecmd.6 edit.6 elog.6 exec.6 file.6 fsys.6 look.6 regx.6 rows.6 scrl.6 text.6 time.6 util.6 wind.6 xfid.6 /amd64/lib/libframe.a /amd64/lib/libdraw.a /amd64/lib/libthread.a
+cp 6.out /amd64/bin/acme
+T3-ART acme d53c87120991e856f14d2a3e273870af7422ea14679e016906146e73d17a6fb5
+rm -f *.[568ijqv7] [568ijqv7].out y.tab.? lex.yy.c y.debug y.output acme $CLEANFILES
+== tier3 entry: cmd/sam
+rm -f *.[568ijqv7] [568ijqv7].out y.tab.? lex.yy.c y.debug y.output sam $CLEANFILES
+6c -FTVw sam.c
+6c -FTVw address.c
+6c -FTVw buff.c
+6c -FTVw cmd.c
+6c -FTVw disk.c
+6c -FTVw error.c
+6c -FTVw file.c
+6c -FTVw io.c
+6c -FTVw list.c
+6c -FTVw mesg.c
+6c -FTVw moveto.c
+6c -FTVw multi.c
+6c -FTVw plan9.c
+6c -FTVw rasp.c
+6c -FTVw regexp.c
+6c -FTVw shell.c
+6c -FTVw string.c
+6c -FTVw sys.c
+6c -FTVw util.c
+6c -FTVw xec.c
+6l  -o 6.out sam.6 address.6 buff.6 cmd.6 disk.6 error.6 file.6 io.6 list.6 mesg.6 moveto.6 multi.6 plan9.6 rasp.6 regexp.6 shell.6 string.6 sys.6 util.6 xec.6
+cp 6.out /amd64/bin/sam
+T3-ART sam 715fcae294e58f2139f3394503777c13c8111ab31bc888a68b108eececd166bc
+rm -f *.[568ijqv7] [568ijqv7].out y.tab.? lex.yy.c y.debug y.output sam $CLEANFILES
+== tier3 entry: cmd/samterm
+rm -f *.[568ijqv7] [568ijqv7].out y.tab.? lex.yy.c y.debug y.output samterm $CLEANFILES
+6c -I../sam -FTVw main.c
+6c -I../sam -FTVw icons.c
+6c -I../sam -FTVw menu.c
+6c -I../sam -FTVw mesg.c
+6c -I../sam -FTVw rasp.c
+6c -I../sam -FTVw scroll.c
+6c -I../sam -FTVw flayer.c
+6c -I../sam -FTVw io.c
+6c -I../sam -FTVw plan9.c
+6l  -o 6.out main.6 icons.6 menu.6 mesg.6 rasp.6 scroll.6 flayer.6 io.6 plan9.6 /amd64/lib/libdraw.a /amd64/lib/libframe.a
+cp 6.out /amd64/bin/aux/samterm
+T3-ART samterm 1a570895570f49e09d88fd8d7c878a15e3010abbb81d46020d3df8d17698a3f7
+rm -f *.[568ijqv7] [568ijqv7].out y.tab.? lex.yy.c y.debug y.output samterm $CLEANFILES
+== tier3 entry: cmd/plumb
+rm -f *.[568ijqv7] *.a[568ijqv7] y.tab.? lex.yy.c y.debug y.output [568ijqv7].??* plumber plumb $CLEANFILES
+for (i in plumber plumb)
+	mk $MKFLAGS $i.install
+6c -FTVw plumber.c
+6c -FTVw fsys.c
+6c -FTVw match.c
+6c -FTVw rules.c
+6l  -o 6.plumber plumber.6 fsys.6 match.6 rules.6
+cp 6.plumber /amd64/bin/plumber
+6c -FTVw plumb.c
+6l  -o 6.plumb plumb.6
+cp 6.plumb /amd64/bin/plumb
+T3-ART plumb 572c318f9fb088ad8d0e2e6dcc7948042e562b0df6185436b64a7965b5edd27f
+T3-ART plumber bf8fcee8a6f5383edd56714e702a14ffada5d314be18ea4b8f125b0db15b0188
+rm -f *.[568ijqv7] *.a[568ijqv7] y.tab.? lex.yy.c y.debug y.output [568ijqv7].??* plumber plumb $CLEANFILES
+== tier3 entry: cmd/stats
+6^c -FTVw stats.c
+6^l  -o 6.stats stats.6
+T3-ART stats 2ad4ba667c784b32c499efe93e0c213ba05589e454ca152f5356ae06443a77d5
+== tier3 entry: cmd/winwatch
+6^c -FTVw winwatch.c
+6^l  -o 6.winwatch winwatch.6
+T3-ART winwatch 4997b12024e5b56de6954c5509001306cbd7f3df627ca1508e316b2294e880ee
+== tier3 entry: cmd/proof
+rm -f *.[568ijqv7] [568ijqv7].out y.tab.? lex.yy.c y.debug y.output proof $CLEANFILES
+6c -FTVw main.c
+6c -FTVw font.c
+6c -FTVw htroff.c
+6c -FTVw screen.c
+6l  -o 6.out main.6 font.6 htroff.6 screen.6
+cp 6.out /amd64/bin/proof
+T3-ART proof 80aabac0e340af2e5dabce0184f5a94e3e981f55d5622a71a72b4e60bb97ce5d
+rm -f *.[568ijqv7] [568ijqv7].out y.tab.? lex.yy.c y.debug y.output proof $CLEANFILES
+== tier3 entry: cmd/screenlock
+6^c -FTVw screenlock.c
+6^l  -o 6.screenlock screenlock.6
+T3-ART screenlock 7d023416b9f2899265549f7276507390e6dff57d11a811f54ef2f122461edb4a
+== tier3 entry: cmd/ip/gping
+6c -FTVw gping.c
+6l  -o 6.gping gping.6
+T3-ART gping 534d3fb49995577344ab96b0acc8eaa5e10bcada945ffa04c09ad780d4ca927c
+rm -f [568ijqv7].out *.[568ijqv7] [xy].tab.? y.debug rc
+rm -f *.[568ijqv7] [568ijqv7].out *.maketab y.tab.? y.debug y.output awk
+rm -f *.[568ijqv7] [568ijqv7].out y.tab.? lex.yy.c y.debug y.output grep $CLEANFILES
+rm -f *.[568ijqv7] *.a[568ijqv7] y.tab.? lex.yy.c y.debug y.output [568ijqv7].??* mkpaqfs paqfs $CLEANFILES
+rm -f *.[568ijqv7] [568ijqv7].out y.tab.? lex.yy.c y.debug y.output ipconfig $CLEANFILES
+rm -f *.[568ijqv7] *.a[568ijqv7] y.tab.? lex.yy.c y.debug y.output [568ijqv7].??* factotum $CLEANFILES
+rm -f *.[568ijqv7] [568ijqv7].out $CLEANFILES
+== tier tree (/amd64/bin):
+/amd64/bin/acme
+/amd64/bin/ape
+/amd64/bin/auth
+/amd64/bin/aux
+/amd64/bin/awk
+/amd64/bin/basename
+/amd64/bin/bind
+/amd64/bin/bitsy
+/amd64/bin/cal
+/amd64/bin/cat
+/amd64/bin/cmp
+/amd64/bin/comm
+/amd64/bin/date
+/amd64/bin/dc
+/amd64/bin/dd
+/amd64/bin/dial
+/amd64/bin/disk
+/amd64/bin/du
+/amd64/bin/echo
+/amd64/bin/exportfs
+/amd64/bin/fmt
+/amd64/bin/fossil
+/amd64/bin/fs
+/amd64/bin/ftpfs
+/amd64/bin/games
+/amd64/bin/grep
+/amd64/bin/import
+/amd64/bin/ip
+/amd64/bin/join
+/amd64/bin/listen
+/amd64/bin/ls
+/amd64/bin/md5sum
+/amd64/bin/mntgen
+/amd64/bin/ndb
+/amd64/bin/nm
+/amd64/bin/page
+/amd64/bin/paqfs
+/amd64/bin/plumb
+/amd64/bin/plumber
+/amd64/bin/pr
+/amd64/bin/proof
+/amd64/bin/ps
+/amd64/bin/rc
+/amd64/bin/read
+/amd64/bin/replica
+/amd64/bin/rio
+/amd64/bin/sam
+/amd64/bin/screenlock
+/amd64/bin/sed
+/amd64/bin/seq
+/amd64/bin/sha1sum
+/amd64/bin/sleep
+/amd64/bin/snoopy
+/amd64/bin/sort
+/amd64/bin/srv
+/amd64/bin/stats
+/amd64/bin/strings
+/amd64/bin/sum
+/amd64/bin/tail
+/amd64/bin/test
+/amd64/bin/time
+/amd64/bin/tr
+/amd64/bin/uniq
+/amd64/bin/units
+/amd64/bin/upas
+/amd64/bin/usb
+/amd64/bin/venti
+/amd64/bin/wc
+/amd64/bin/winwatch
+/amd64/bin/xd
+-- ip:
+/amd64/bin/ip/6in4
+/amd64/bin/ip/dhcpclient
+/amd64/bin/ip/dhcpd
+/amd64/bin/ip/dhcpleases
+/amd64/bin/ip/ftpd
+/amd64/bin/ip/gping
+/amd64/bin/ip/hogports
+/amd64/bin/ip/httpd
+/amd64/bin/ip/httpfile
+/amd64/bin/ip/imap4d
+/amd64/bin/ip/ipconfig
+/amd64/bin/ip/iscsisrv
+/amd64/bin/ip/linklocal
+/amd64/bin/ip/ping
+/amd64/bin/ip/ppp
+/amd64/bin/ip/pppoe
+/amd64/bin/ip/pptp
+/amd64/bin/ip/pptpd
+/amd64/bin/ip/rarpd
+/amd64/bin/ip/rexexec
+/amd64/bin/ip/rip
+/amd64/bin/ip/rlogind
+/amd64/bin/ip/telnet
+/amd64/bin/ip/telnetd
+/amd64/bin/ip/tftpd
+/amd64/bin/ip/traceroute
+/amd64/bin/ip/udpecho
+/amd64/bin/ip/wol
+-- auth:
+/amd64/bin/auth/aescbc
+/amd64/bin/auth/as
+/amd64/bin/auth/asn12dsa
+/amd64/bin/auth/asn12rsa
+/amd64/bin/auth/authsrv
+/amd64/bin/auth/changeuser
+/amd64/bin/auth/convkeys
+/amd64/bin/auth/convkeys2
+/amd64/bin/auth/cron
+/amd64/bin/auth/debug
+/amd64/bin/auth/dsa2pub
+/amd64/bin/auth/dsa2ssh
+/amd64/bin/auth/dsagen
+/amd64/bin/auth/factotum
+/amd64/bin/auth/guard.srv
+/amd64/bin/auth/keyfs
+/amd64/bin/auth/login
+/amd64/bin/auth/netkey
+/amd64/bin/auth/newns
+/amd64/bin/auth/none
+/amd64/bin/auth/passwd
+/amd64/bin/auth/pemdecode
+/amd64/bin/auth/pemencode
+/amd64/bin/auth/printnetkey
+/amd64/bin/auth/readnvram
+/amd64/bin/auth/rsa2csr
+/amd64/bin/auth/rsa2pub
+/amd64/bin/auth/rsa2ssh
+/amd64/bin/auth/rsa2x509
+/amd64/bin/auth/rsafill
+/amd64/bin/auth/rsagen
+/amd64/bin/auth/secstore
+/amd64/bin/auth/secstored
+/amd64/bin/auth/secuser
+/amd64/bin/auth/uniq
+/amd64/bin/auth/warning
+/amd64/bin/auth/wrkey
+-- aux:
+/amd64/bin/aux/samterm
+TIER-BUILD-OK
+== markers: 24 T0-ART, 40 T1-ART, 91 T2-ART, 12 T3-ART (log: /home/req/code/harvey/.build/subset-build-x64.log)
+== PASS: amd64 tier-0/tier-1 set built and installed (70 entries in amd64/bin; log: /home/req/code/harvey/.build/subset-build-x64.log)
+== step 2/4: bake bootfs-services.paq (build/x86_64/mkimage.sh, the services section)
+== PASS: baked /home/req/code/harvey/build/x86_64/out/bootfs.paq (50027 bytes; header 529ab12b trailer 6b46e688; KERNDATE 1794272914)
+chain manifest: /boot/boot staged
+chain manifest: /boot/paqfs staged
+chain manifest: /amd64/init staged
+chain manifest: /amd64/bin/rc staged
+chain manifest: /amd64/bin/ls staged
+chain manifest: /amd64/bin/cat staged
+chain manifest: /amd64/bin/echo staged
+chain manifest: /amd64/bin/ps staged
+chain manifest: /rc/lib/rcmain staged
+chain manifest: /rc/bin/termrc staged
+chain manifest: /lib/namespace staged
+chain manifest: /adm/timezone/local staged
+chain manifest: /usr/glenda/lib/profile staged
+== PASS: baked /home/req/code/harvey/build/x86_64/out/bootfs-chain.paq (372146 bytes; header 529ab12b trailer 6b46e688; KERNDATE 1794272914)
+== witness manifest verified: 38 members match the donor venue's embed set
+tier manifest: /boot/boot staged
+tier manifest: /boot/paqfs staged
+tier manifest: /amd64/init staged
+tier manifest: /amd64/bin/rc staged
+tier manifest: /amd64/bin/ls staged
+tier manifest: /amd64/bin/cat staged
+tier manifest: /amd64/bin/echo staged
+tier manifest: /amd64/bin/ps staged
+tier manifest: /rc/lib/rcmain staged
+tier manifest: /rc/bin/termrc staged
+tier manifest: /lib/namespace staged
+tier manifest: /adm/timezone/local staged
+tier manifest: /usr/glenda/lib/profile staged
+tier manifest: /lib/tier1-sweep.rc staged
+tier manifest: /lib/tier1/sentinel.txt staged
+tier manifest: /lib/tier1/nm-input.6 staged
+tier manifest: 37 h* sweep binaries staged (computed from tiers/tier1-cmds.txt)
+== PASS: baked /home/req/code/harvey/build/x86_64/out/bootfs-tier.paq (1847030 bytes; 37 h* binaries; header 529ab12b trailer 6b46e688; KERNDATE 1794272914)
+net manifest: /boot/boot staged
+net manifest: /boot/paqfs staged
+net manifest: /amd64/init staged
+net manifest: /amd64/bin/rc staged
+net manifest: /amd64/bin/ls staged
+net manifest: /amd64/bin/cat staged
+net manifest: /amd64/bin/echo staged
+net manifest: /amd64/bin/ps staged
+net manifest: /amd64/bin/ip/ipconfig staged
+net manifest: /amd64/bin/ip/ping staged
+net manifest: /amd64/bin/ip/udpecho staged
+net manifest: /amd64/bin/tcpecho staged
+net manifest: /amd64/bin/tcpblast staged
+net manifest: /amd64/bin/netblast staged
+net manifest: /amd64/bin/grep staged
+net manifest: /amd64/bin/sed staged
+net manifest: /amd64/bin/dd staged
+net manifest: /amd64/bin/wc staged
+net manifest: /amd64/bin/sha1sum staged
+net manifest: /amd64/bin/test staged
+net manifest: /amd64/bin/bind staged
+net manifest: /rc/lib/rcmain staged
+net manifest: /rc/bin/termrc staged
+net manifest: /lib/namespace staged
+net manifest: /adm/timezone/local staged
+net manifest: /usr/glenda/lib/profile staged
+net manifest: /lib/netaddr.rc staged
+net manifest: /lib/netip-loopback.rc staged
+net manifest: /lib/netip-static.rc staged
+net manifest: /lib/netip-dhcp.rc staged
+net manifest: /lib/netip-tcp.rc staged
+== PASS: baked /home/req/code/harvey/build/x86_64/out/bootfs-net.paq (839073 bytes; header 529ab12b trailer 6b46e688; KERNDATE 1794272914)
+services manifest: /boot/boot staged
+services manifest: /boot/paqfs staged
+services manifest: /boot/rcmain staged
+services manifest: /boot/sentinel.txt staged
+services manifest: /boot/tcp9901 staged
+services manifest: /boot/tcp9902 staged
+services manifest: /amd64/init staged
+services manifest: /amd64/bin/rc staged
+services manifest: /amd64/bin/ls staged
+services manifest: /amd64/bin/cat staged
+services manifest: /amd64/bin/echo staged
+services manifest: /amd64/bin/ps staged
+services manifest: /amd64/bin/ip/ipconfig staged
+services manifest: /amd64/bin/ip/ping staged
+services manifest: /amd64/bin/ip/udpecho staged
+services manifest: /amd64/bin/grep staged
+services manifest: /amd64/bin/sed staged
+services manifest: /amd64/bin/dd staged
+services manifest: /amd64/bin/wc staged
+services manifest: /amd64/bin/sha1sum staged
+services manifest: /amd64/bin/test staged
+services manifest: /amd64/bin/bind staged
+services manifest: /amd64/bin/hsvctcpecho staged
+services manifest: /amd64/bin/hmkdir staged
+services manifest: /rc/lib/rcmain staged
+services manifest: /rc/bin/termrc staged
+services manifest: /lib/namespace staged
+services manifest: /adm/timezone/local staged
+services manifest: /usr/glenda/lib/profile staged
+services manifest: /lib/netaddr.rc staged
+services manifest: /lib/netip-loopback.rc staged
+services manifest: /lib/netip-static.rc staged
+services manifest: /lib/netip-dhcp.rc staged
+services manifest: /lib/netip-tcp.rc staged
+services manifest: /lib/services-sweep.rc staged
+services manifest: 124 h* sweep binaries staged (tier-1 helpers + the tier-2 set computed from tiers/tier2-services.txt: 87 tier-2 members)
+== PASS: baked /home/req/code/harvey/build/x86_64/out/bootfs-services.paq (7644231 bytes; 124 h* binaries; header 529ab12b trailer 6b46e688; KERNDATE 1794272914)
+== expected on r9: 5 SVC-OK subjects + 4 declared conditional SVC-SKIP names (computed)
+== step 3/4: composing the ISO (r9's iso-builder: kernel + bootfs-services.paq as /boot/bootfs.paq)
+xorriso 1.5.8.pl02 : RockRidge filesystem manipulator, libburnia project.
+
+xorriso : NOTE : Environment variable SOURCE_DATE_EPOCH encountered with value 1735689600
+Drive current: -outdev 'stdio:/tmp/r9-iso-builder.9nUnbM/boot.iso'
+Media current: stdio file, overwriteable
+Media status : is blank
+Media summary: 0 sessions, 0 data blocks, 0 data,  391g free
+Added to ISO image: directory '/'='/tmp/grub.dNKcho'
+xorriso : UPDATE :     356 files added in 1 seconds
+Added to ISO image: directory '/'='/tmp/r9-iso-builder.9nUnbM/stage'
+xorriso : UPDATE :     361 files added in 1 seconds
+xorriso : NOTE : Copying to System Area: 512 bytes from file '/tmp/r9-iso-builder.9nUnbM/grub-i386-pc/boot_hybrid.img'
+ISO image produced: 12124 sectors
+Written to medium : 12124 sectors at LBA 0
+Writing to 'stdio:/tmp/r9-iso-builder.9nUnbM/boot.iso' completed successfully.
+
+r9-iso-builder: /tmp/services-r9-x64.pxQzWu/boot.iso da37a85ccd48e72795d7b006e612a36c3406e7686b8daa135451ce469c48ff26 (modules: bootfs.paq)
+== step 4/4: the services gate on r9 (build/x86_64/services-r9.expect)
+== capture: /tmp/svc1.log
+spawn qemu-system-x86_64 -M q35 -cpu host -smp 1 -m 1024M -accel kvm -cdrom /tmp/services-r9-x64.pxQzWu/boot.iso -netdev user,id=n0 -device virtio-net-pci-non-transitional,netdev=n0 -nographic -name r9x64svc-312065-1794274169
+c[?7l[2J[0mSeaBIOS (version rel-1.17.0-0-gb52ca86e094d-prebuilt.qemu.org)
+
+
+iPXE (http://ipxe.org) 00:02.0 CA00 PCI2.10 PnP PMM+3EFD1B50+3EF31B50 CA00
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from Hard Disk...
+Boot failed: could not read the boot disk
+
+Booting from DVD/CD...
+[0;30;47mWelcome to GRUB[H[J[1;1H  Booting `r9'
+
+!
+
+
+r9 from the Internet
+Machine information:
+q35: memorservices-r9-x64: stage ok — banner
+y 0x0..0x9fc00 (0x9fc00) available
+q35: memory 0x9fc00..0xa0000 (0x400) reserved
+q35: memory 0xf0000..0x100000 (0x10000) reserved
+q35: memory 0x100000..0x3ffdf000 (0x3fedf000) available
+q35: memory 0x3ffdf000..0x40000000 (0x21000) reserved
+q35: memory 0xb0000000..0xc0000000 (0x10000000) reserved
+q35: memory 0xfed1c000..0xfed20000 (0x4000) reserved
+q35: memory 0xfeffc000..0xff000000 (0x4000) reserved
+q35: memory 0xfffc0000..0x100000000 (0x40000) reserved
+q35: acpi rsdt 0x3ffe2345 (mb2 RSDP tag — 13-04 walks it)
+q35: acpi rsdt 0x3ffe2345 via mb2 acpi tag (5 entries)
+q35: mcfg 0xb0000000 buses 0x0-0xff (seg 0)
+q35: lapic 0xfee00000 (madt local intc)
+q35: ioapic 0xfec00000 gsib 0 (id 0)
+q35: intsrc bus 0 source 0 -> gsi 2 flags 0x0
+q35: intsrc bus 0 source 5 -> gsi 5 flags 0xd
+q35: intsrc bus 0 source 9 -> gsi 9 flags 0xd
+q35: intsrc bus 0 source 10 -> gsi 10 flags 0xd
+q35: intsrc bus 0 source 11 -> gsi 11 flags 0xd
+q35: hpet 0xfed00000
+pciexbar: 0xb0000001 -> 0xb0000001
+pci: virtio-net 1af4:1041 at 00:02.0 rev 01 pin 1 (inta) bars 2
+pci: inta -> gsi 22 (q35 root slot 2, pirq G: 16+6)
+Memory usage:
+  Used:		0x00000001400000
+  Total:	0x0000003ffdf000
+lapic: cpuid leaf-1 ecx: x2apic=true tsc-deadline=true
+lapic: x2apic live (msr 0x800 map; lint0/1 masked, no pic)
+timer: 2496139620 Hz (pit 1193182 Hz reference), TscDeadline mode, armed
+ioapic: id 0 version 0x11 rtes 23 gsib 0 (madt 0xfec00000)
+pci: bar4 pa 0xfe000000 size 0x4000 (firmware) readback 0xfe000000
+pci: caps common@0x0+0x1000 notify@0x3000 isr@0x1000 device@0x2000 mult 4
+virtio-net: features offered 0x10130bf8024 negotiated 0x100010020
+virtio-net: rx pre-posted 128 buffers qsize 256
+ioapic: gsi 22 -> vector 0x21 (level)
+#l0: virtio: 1000Mbps: 52:54:00:12:34:56
+q35: module @0x1400000 +0x74a447 (mb2 tag 3, stashed)
+devenv: seeded cputype=amd64 nobootprompt=embed readparts=0
+q35: paqfs root mounted from module (7644231 bytes)
+devroot: /boot/boot open (159349 bytes)
+exec: entering ring 3 pc=0x2054fa sp=0x7fffffffef78 path=/boot/boot argv=[boot]
+paqfs...services-r9-x64: stage ok — paqfs
+version...services-r9-x64: stage ok — version
+root-svc: Tue Nov 10 01:08:34 GMT 2026
+fingerprint: 2a79d0a3cd40d7cee1c6dfcf722dcad19705ea05
+syscall 10 unimplemented
+process 2 exited: ""
+time...
+boot: opening #c/swap: namec: does not exist
+init: can't open #c/sysname: namec: does not exist
+syscall 10 unimplemented
+
+init: starting /bin/rc
+syscall 10 unimplemented
+/bin/hmntgen: mount /mnt: mount: bad fd
+process 6 exited: "mount /mnt: mount: bad fd"
+SVC-FAIL mntgen
+pservices-r9-x64: stage ok — mntgen-verdict
+rocess 8 exited: ""
+#I0: devip attached
+process 9 exited: ""
+process 10 exited: ""
+process 11 exited: ""
+devip: medium loopback bound
+process 12 exited: ""
+process 13 exited: ""
+process 14 exited: ""
+SVC-LOOPBACK-UP
+process 15 exiservices-r9-x64: stage ok — net-bringup
+ted: ""
+syscall 25 unimplemented
+process 16 exited: ""
+process 17 exited: ""
+process 19 exited: ""
+translating !ipinfo dom=probehost ip: devmnt: the mounted tree is read-only this era
+process 20 exited: "errors"
+SVC-CSOBS services-r9-x64: stage ok — cs-verdict
+
+process 21 exited: ""
+SVC-FAIL cs
+process 22 exited: ""
+ Feb  7 01:28:16 starting dns on 192.168.237.1's /net
+devmnt: server error: cs: file does not exist
+process 23 exited: ""
+process 24 exited: ""
+process 27 exited: ""
+process 29 exited: ""
+devmnt: server error: cs: file does not exist
+process 30 exited: ""
+process 28 exited: ""
+SVC-DNSOBS > !devmnt: the mounted tree is read-only this era >
+process 31 exited: ""
+SVC-FAIL dns
+services-r9-x64: stage ok — dns-verdict
+process 32 exited: ""
+process 34 exited: ""
+syscall 10 unimplemented
+/bin/hmntgen: mount /rc: mount: bad fd
+process 33 exited: "mount /rc: mount: bad fd"
+SVC-SKIP-WHY no-rc-lib-rcmain-the-srv-child-rc-dies
+process 35 exited: ""
+SVC-FAIL srv
+process 36 exited: ""
+SVC-FAIL exportfs
+services-r9-x64: stage ok — exportfs-verdict
+process 37 exited: ""
+ Feb  7 01:28:16 started on tcp
+process 38 exited: ""
+devmnt: server error: dns: file does not exist
+ Feb  7 01:28:16 giving up on tcp!*!9901: namec: does not exist
+process 41 exited: "ctl"
+devmnt: server error: dns: file does not exist
+ Feb  7 01:28:16 giving up on tcp!*!9902: namec: does not exist
+process 42 exited: "ctl"
+process 39 exited: ""
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+process 43 exited: "can't open /net/tcp/[0-9]*/local: namec: does not exist"
+process 44 exited: ""
+process 45 exited: ""
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+process 46 exited: "can't open /net/tcp/[0-9]*/local: namec: does not exist"
+process 47 exited: ""
+process 48 exited: ""
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+process 49 exited: "can't open /net/tcp/[0-9]*/local: namec: does not exist"
+process 50 exited: ""
+process 51 exited: ""
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+process 52 exited: "can't open /net/tcp/[0-9]*/local: namec: does not exist"
+process 53 exited: ""
+process 54 exited: ""
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+process 55 exited: "can't open /net/tcp/[0-9]*/local: namec: does not exist"
+process 56 exited: ""
+process 57 exited: ""
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+process 58 exited: "can't open /net/tcp/[0-9]*/local: namec: does not exist"
+process 59 exited: ""
+process 60 exited: ""
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+process 61 exited: "can't open /net/tcp/[0-9]*/local: namec: does not exist"
+process 62 exited: ""
+process 63 exited: ""
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+process 64 exited: "can't open /net/tcp/[0-9]*/local: namec: does not exist"
+process 65 exited: ""
+process 66 exited: ""
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+process 67 exited: "can't open /net/tcp/[0-9]*/local: namec: does not exist"
+process 68 exited: ""
+process 69 exited: ""
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+process 70 exited: "can't open /net/tcp/[0-9]*/local: namec: does not exist"
+process 71 exited: ""
+process 72 exited: "false"
+SVC-FAIL listen
+process 73 exited: ""
+Warning! /bin/hfactotum can't protect itself from debugging: devproc: unknown ctl verb
+Warning! /bin/hfactotum can't turn off swapping: devproc: unknown ctl verb
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+devmnt: server error: dns: file does not exist
+panickeservices-r9-x64: kernel panic marker on the wire — aborting
+error: services r9-x64 gate FAILED (the driver named the stage on stderr; capture: /tmp/svc1.log)

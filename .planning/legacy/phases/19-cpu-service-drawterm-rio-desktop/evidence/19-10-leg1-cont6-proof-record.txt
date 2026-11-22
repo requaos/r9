@@ -1,0 +1,43 @@
+# 19-10 Leg-1 cont 6 — the exit-deletes-the-window proof
+
+## Root causes (TWO r9 defects, isolated with instrumented-kernel
+# serial traces: DIAG-WALK/CLUNK/SKIP/EXIT prints, three diag rounds)
+
+1. exit_tail's fd drain closed under a BORROW — every duplicate of
+   one server fid inside the dying batch pinned the count, so
+   clunk_if_last never fired (measured: 4x DIAG-SKIP count=2 on
+   /dev/cons, ZERO wsys clunks at shell exit).  The donor
+   closefgrp nils each slot before its cclose.  Fix: ownership-
+   consuming drain (drop each chan before closing the next).
+2. The donor closepgrp's mount half was never ported: a namespace
+   group's death dropped the mount table as plain Rust drops —
+   the mounted tree's ROOT/attach fid never Tclunked.  rio's wsys
+   attach carries a window ref (xfidattach's !newlymade incref),
+   so the refcount stayed one short and wclosewin never ran.
+   Fix: Pgrp::take_mount_chans + the last-holder drain in
+   sweep_husk_payloads (closepgrp -> Mhead/Mount free -> cclose).
+
+## The regression the fix exposed (and its own fix)
+
+The first pin attempt FAILED the -G gate at session-exit: the new
+exit-time clunks race the teardown kill notes; an interrupted
+Tclunk's LATE reply hit the loud 'unexpected reply tag' error and
+drained a HEALTHY waiter (capture: 'clunk of fid 3 failed:
+interrupted' -> 'unexpected reply tag 20' -> 'clunk of fid 1
+failed').  r9 1cbc1db restored the donor mountmux DROP arm: a
+late reply is logged and dropped, never fatal.  (The tag-mismatch
+pin was re-keyed to this contract; a new
+mux_foreign_reply_is_dropped pin proves it.)
+
+## The proof at the pinned tree (r9 0921a1b / harvey 3f449fd72)
+
+Venue: the plain sanctioned app pipeline; two windows swept; 'exit'
+typed into window 1 (keyboard injection).  Pixels after:
+  (500,420) window 1's area: GREY (119,119,119) — DELETED
+  (200,200) window 2:        WHITE — alive, unaffected
+  (760,300) desktop:         GREY
+Screenshot beside this record.  On the instrumented precursor
+(same fix bytes + diag prints) the clunk trace at shell exit:
+  DIAG-CLUNK mnt=8 fid=4 / fid=3  (the cons fids — fix 1)
+  DIAG-CLUNK mnt=8 fid=2 / fid=1  (the mount root + attach — fix 2)
+  window pixel -> grey (deleted)

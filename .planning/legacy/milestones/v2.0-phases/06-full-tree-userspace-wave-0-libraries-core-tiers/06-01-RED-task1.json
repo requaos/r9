@@ -1,0 +1,9 @@
+{
+  "command": "GETHUNK_REPRO_HOSTBIN=.build/gethunk-repro-cc/pristine-bin sh build/aarch64/gethunk-repro-cc.sh verify",
+  "exitCode": 1,
+  "output": "== verify: pristine pair from snapshot\nTEETH-OK 6c (gethunk ENOMEM terminus)\nok 1 - pristine 6c hang signature (teeth)\nTEETH-OK 7c (gethunk ENOMEM terminus)\nok 2 - pristine 7c hang signature (teeth)\nRED 6c (rc=1, object bigmacro.6 missing; log: /Users/neilskinner/code/harvey/.build/gethunk-repro-cc/verify-fixed-6c.log)\nnot ok 3 - fixed 6c compiles within 60s\nRED 7c (rc=1, object bigmacro.7 missing; log: /Users/neilskinner/code/harvey/.build/gethunk-repro-cc/verify-fixed-7c.log)\nnot ok 4 - fixed 7c compiles within 60s\n# tests 4\n# pass 2\n# fail 2\n",
+  "targetTest": "fixed 6c compiles within 60s",
+  "targetFile": "build/aarch64/gethunk-repro-cc.sh",
+  "expected": "exit 0: fixed 6c compiles the >600KB macro input within the 60s timeout and writes bigmacro.6 (gethunk accumulate-when-contiguous in cc/macbody)",
+  "actual": "exit 1: RED 6c + RED 7c — pre-fix cc frontend (snapshot pair standing in as candidates) hits the unbounded gethunk loop at DEFINE time (ENOMEM terminus, rc=1, no object written) on the >600KB macro; TEETH-OK on both pristine binaries"
+}

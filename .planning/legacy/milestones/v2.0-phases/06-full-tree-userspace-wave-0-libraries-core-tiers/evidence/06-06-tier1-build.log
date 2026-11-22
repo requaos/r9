@@ -1,0 +1,2924 @@
+== pushing checkout to guest ~/harvey-build
+== ensuring guest toolchain (7c, ar)
+harvey host bin ready: /home/neilskinner.guest/harvey-build/.build/hostbin-linux-aarch64/bin
+6a
+6c
+6l
+7a
+7c
+7l
+8a
+8c
+8l
+ar
+awk
+basename
+cpp
+data2s
+date
+dd
+lex
+ls
+mklatinkbd
+nm
+pcc
+rm
+sed
+size
+yacc
++ set -e
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/6a
++ sh BUILD
+
+conflicts: 1 shift/reduce
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/6c
++ sh BUILD
+
+conflicts: 3 shift/reduce
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/6l
++ sh BUILD
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/8a
++ sh BUILD
+5 rules never reduced
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/8c
++ sh BUILD
+
+conflicts: 3 shift/reduce
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/8l
++ sh BUILD
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/7a
++ sh BUILD
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/7c
++ sh BUILD
+
+conflicts: 3 shift/reduce
+list.c:35:14: warning: ‘conds’ defined but not used [-Wunused-variable]
+   35 | static char *conds[] = {
+      |              ^~~~~
+swt.c:477:25: warning: overflow in conversion from ‘int’ to ‘char’ changes value from ‘320’ to ‘64’ [-Woverflow]
+  477 |                 bf[0] = ASIGNAME;
+      |                         ^~~~~~~~
+swt.c:489:25: warning: overflow in conversion from ‘int’ to ‘char’ changes value from ‘313’ to ‘57’ [-Woverflow]
+  489 |                 bf[0] = ANAME;
+      |                         ^~~~~
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/7l
++ sh BUILD
+asmout.c:37:17: warning: ‘oshrr’ declared ‘static’ but never defined [-Wunused-function]
+   37 | static long     oshrr(int, int, int);
+      |                 ^~~~~
+asmout.c:38:17: warning: ‘olhrr’ declared ‘static’ but never defined [-Wunused-function]
+   38 | static long     olhrr(int, int, int);
+      |                 ^~~~~
+obj.c:406:24: warning: unsigned conversion from ‘int’ to ‘uchar’ {aka ‘unsigned char’} changes value from ‘377’ to ‘121’ [-Woverflow]
+  406 |                 p[0] = ALAST+1;
+      |                        ^~~~~
+obj.c:417:24: warning: unsigned conversion from ‘int’ to ‘uchar’ {aka ‘unsigned char’} changes value from ‘377’ to ‘121’ [-Woverflow]
+  417 |                 p[0] = ALAST+1;
+      |                        ^~~~~
+obj.c:424:24: warning: unsigned conversion from ‘int’ to ‘uchar’ {aka ‘unsigned char’} changes value from ‘377’ to ‘121’ [-Woverflow]
+  424 |                 p[0] = ALAST+1;
+      |                        ^~~~~
+span.c:388:1: warning: ‘findmask64’ defined but not used [-Wunused-function]
+  388 | findmask64(Mask *m, uvlong v)
+      | ^~~~~~~~~~
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/cpp
++ sh BUILD
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/aux
++ sh BUILD
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd
++ sh nm.BUILD
+ar: creating /home/neilskinner.guest/harvey-build/sys/src/cmd/unix/9cc/obj.linux/lib9.a
+a - argv0.o
+a - charstod.o
+a - cistrcmp.o
+a - cistrncmp.o
+a - cistrstr.o
+a - cleanname.o
+a - convD2M.o
+a - convM2D.o
+a - convM2S.o
+a - convS2M.o
+a - create.o
+a - dirstat-posix.o
+a - dirwstat.o
+a - dofmt.o
+a - dorfmt.o
+a - errfmt.o
+a - errstr-posix.o
+a - exits.o
+a - fcallfmt.o
+a - fmt.o
+a - fmtfd.o
+a - fmtlock.o
+a - fmtprint.o
+a - fmtquote.o
+a - fmtrune.o
+a - fmtstr.o
+a - fmtvprint.o
+a - fprint.o
+a - getcallerpc.o
+a - getfields.o
+a - getuser-posix.o
+a - getwd-posix.o
+a - nulldir.o
+a - pow10.o
+a - print.o
+a - qsort.o
+a - readn.o
+a - rerrstr.o
+a - rune.o
+a - runeseprint.o
+a - runesmprint.o
+a - runesnprint.o
+a - runestrlen.o
+a - runevseprint.o
+a - sbrk-posix.o
+a - seek.o
+a - seprint.o
+a - smprint.o
+a - snprint.o
+a - sprint.o
+a - strdup.o
+a - strecpy.o
+a - strtoll.o
+a - sysfatal.o
+a - tokenize.o
+a - u16.o
+a - u32.o
+a - u64.o
+a - utfecpy.o
+a - utflen.o
+a - utfnlen.o
+a - utfrrune.o
+a - utfrune.o
+a - vfprint.o
+a - vseprint.o
+a - vsmprint.o
+a - vsnprint.o
+a - bbuffered.o
+a - bfildes.o
+a - bflush.o
+a - bgetc.o
+a - bgetd.o
+a - bgetrune.o
+a - binit.o
+a - boffset.o
+a - bprint.o
+a - bputc.o
+a - bputrune.o
+a - brdline.o
+a - brdstr.o
+a - bread.o
+a - bseek.o
+a - bvprint.o
+a - bwrite.o
+ar: creating /home/neilskinner.guest/harvey-build/sys/src/cmd/unix/9cc/obj.linux/libbio.a
+ar: creating /home/neilskinner.guest/harvey-build/sys/src/cmd/unix/9cc/obj.linux/libmach.a
+a - 4.o
+a - 5.o
+a - 5db.o
+a - 5obj.o
+a - 6.o
+a - 6obj.o
+a - 7.o
+a - 7obj.o
+a - 8.o
+a - 8db.o
+a - 8obj.o
+a - 9.o
+a - 9obj.o
+a - access.o
+a - executable.o
+a - k.o
+a - kdb.o
+a - kobj.o
+a - machdata.o
+a - map.o
+a - obj.o
+a - q.o
+a - qdb.o
+a - qobj.o
+a - setmach.o
+a - swap.o
+a - sym.o
+a - v.o
+a - vcodas.o
+a - vdb.o
+a - vobj.o
+/nix/store/bdzrp13aqp0nzbd4rwlidj5lyd87ii2y-binutils-2.46/bin/ld.bfd: /tmp/ccbVWFqI.o: in function `page':
+ar.c:(.text+0xff4): warning: the use of `mktemp' is dangerous, better use `mkstemp' or `mkdtemp'
+r - argv0.o
+r - charstod.o
+r - cistrcmp.o
+r - cistrncmp.o
+r - cistrstr.o
+r - cleanname.o
+r - convD2M.o
+r - convM2D.o
+r - convM2S.o
+r - convS2M.o
+r - create.o
+r - dirstat-posix.o
+r - dirwstat.o
+r - dofmt.o
+r - dorfmt.o
+r - errfmt.o
+r - errstr-posix.o
+r - exits.o
+r - fcallfmt.o
+r - fmt.o
+r - fmtfd.o
+r - fmtlock.o
+r - fmtprint.o
+r - fmtquote.o
+r - fmtrune.o
+r - fmtstr.o
+r - fmtvprint.o
+r - fprint.o
+r - getcallerpc.o
+r - getfields.o
+r - getuser-posix.o
+r - getwd-posix.o
+r - nulldir.o
+r - pow10.o
+r - print.o
+r - qsort.o
+r - readn.o
+r - rerrstr.o
+r - rune.o
+r - runeseprint.o
+r - runesmprint.o
+r - runesnprint.o
+r - runestrlen.o
+r - runevseprint.o
+r - sbrk-posix.o
+r - seek.o
+r - seprint.o
+r - smprint.o
+r - snprint.o
+r - sprint.o
+r - strdup.o
+r - strecpy.o
+r - strtoll.o
+r - sysfatal.o
+r - tokenize.o
+r - u16.o
+r - u32.o
+r - u64.o
+r - utfecpy.o
+r - utflen.o
+r - utfnlen.o
+r - utfrrune.o
+r - utfrune.o
+r - vfprint.o
+r - vseprint.o
+r - vsmprint.o
+r - vsnprint.o
+r - bbuffered.o
+r - bfildes.o
+r - bflush.o
+r - bgetc.o
+r - bgetd.o
+r - bgetrune.o
+r - binit.o
+r - boffset.o
+r - bprint.o
+r - bputc.o
+r - bputrune.o
+r - brdline.o
+r - brdstr.o
+r - bread.o
+r - bseek.o
+r - bvprint.o
+r - bwrite.o
+r - 4.o
+r - 5.o
+r - 5db.o
+r - 5obj.o
+r - 6.o
+r - 6obj.o
+r - 7.o
+r - 7obj.o
+r - 8.o
+r - 8db.o
+r - 8obj.o
+r - 9.o
+r - 9obj.o
+r - access.o
+r - executable.o
+r - k.o
+r - kdb.o
+r - kobj.o
+r - machdata.o
+r - map.o
+r - obj.o
+r - q.o
+r - qdb.o
+r - qobj.o
+r - setmach.o
+r - swap.o
+r - sym.o
+r - v.o
+r - vcodas.o
+r - vdb.o
+r - vobj.o
+/nix/store/bdzrp13aqp0nzbd4rwlidj5lyd87ii2y-binutils-2.46/bin/ld.bfd: /tmp/ccR8JVGx.o: in function `page':
+ar.c:(.text+0xff4): warning: the use of `mktemp' is dangerous, better use `mkstemp' or `mkdtemp'
+harvey toolchain built into /home/neilskinner.guest/harvey-build/.build/hostbin-linux-aarch64/bin
+== running in guest namespace: bash /tmp/gsd-subset-build-guest.sh
+harvey devshell: HARVEY=/home/neilskinner.guest/harvey-build PLAN9=/nix/store/klv976s6vl3smvfcnz64lz523i9hwv70-plan9port-0-unstable-2025-11-10/plan9
+  host bin: /home/neilskinner.guest/harvey-build/.build/hostbin-linux-aarch64/bin
+  harness: /nix/store/1ixryac7wzmqfrn1mndkchrax6lh13g7-harness-0.1.0/bin/harness
+apps: nix run .#setup -> .#toolchain -> .#build | .#iso
+(. #build uses sudo unshare; run from the repo root)
+== subset build provenance (Harvey's vendored toolchain):
+   7c: /home/neilskinner.guest/harvey-build/.build/hostbin-linux-aarch64/bin/7c
+   7a: /home/neilskinner.guest/harvey-build/.build/hostbin-linux-aarch64/bin/7a
+   7l: /home/neilskinner.guest/harvey-build/.build/hostbin-linux-aarch64/bin/7l
+   ar: /home/neilskinner.guest/harvey-build/.build/hostbin-linux-aarch64/bin/ar
+   mk: /nix/store/klv976s6vl3smvfcnz64lz523i9hwv70-plan9port-0-unstable-2025-11-10/plan9/bin/mk
+== nm shim: /tmp/nix-shell.b7r1l4/tmp.wGCa9beYsh/nm -> /nix/store/axf7w3k30q4n14mwxms3c2n8glz7lwvd-binutils-wrapper-2.46/bin/nm (9l autolib shadow)
+== tier0 lib: libc
+for(i in 9sys 9syscall fmt port $objtype)@{
+	echo $i
+	cd $i
+	mk $MKFLAGS install
+}
+9sys
+7c -FTVw abort.c
+7c -FTVw access.c
+7c -FTVw announce.c
+7c -FTVw callmain.c
+7c -FTVw convD2M.c
+7c -FTVw convM2D.c
+7c -FTVw convM2S.c
+7c -FTVw convS2M.c
+7c -FTVw cputime.c
+7c -FTVw ctime.c
+7c -FTVw dial.c
+7c -FTVw dirfstat.c
+7c -FTVw dirfwstat.c
+7c -FTVw dirmodefmt.c
+7c -FTVw dirread.c
+7c -FTVw dirstat.c
+7c -FTVw dirwstat.c
+7c -FTVw fcallfmt.c
+7c -FTVw fork.c
+7c -FTVw getnetconninfo.c
+7c -FTVw getenv.c
+7c -FTVw getpid.c
+7c -FTVw getppid.c
+7c -FTVw getwd.c
+7c -FTVw iounit.c
+7c -FTVw nulldir.c
+7c -FTVw postnote.c
+7c -FTVw privalloc.c
+7c -FTVw procsetname.c
+7c -FTVw pushssl.c
+7c -FTVw pushtls.c
+7c -FTVw putenv.c
+7c -FTVw qlock.c
+7c -FTVw read.c
+7c -FTVw read9pmsg.c
+7c -FTVw readv.c
+7c -FTVw rerrstr.c
+7c -FTVw sbrk.c
+7c -FTVw setnetmtpt.c
+7c -FTVw sysfatal.c
+7c -FTVw syslog.c
+7c -FTVw sysname.c
+7c -FTVw time.c
+7c -FTVw times.c
+7c -FTVw tm2sec.c
+7c -FTVw truerand.c
+7c -FTVw wait.c
+7c -FTVw waitpid.c
+7c -FTVw werrstr.c
+7c -FTVw write.c
+7c -FTVw writev.c
+ar vu /aarch64/lib/libc.a abort.7 access.7 announce.7 callmain.7 convD2M.7 convM2D.7 convM2S.7 convS2M.7 cputime.7 ctime.7 dial.7 dirfstat.7 dirfwstat.7 dirmodefmt.7 dirread.7 dirstat.7 dirwstat.7 fcallfmt.7 fork.7 getnetconninfo.7 getenv.7 getpid.7 getppid.7 getwd.7 iounit.7 nulldir.7 postnote.7 privalloc.7 procsetname.7 pushssl.7 pushtls.7 putenv.7 qlock.7 read.7 read9pmsg.7 readv.7 rerrstr.7 sbrk.7 setnetmtpt.7 sysfatal.7 syslog.7 sysname.7 time.7 times.7 tm2sec.7 truerand.7 wait.7 waitpid.7 werrstr.7 write.7 writev.7
+ar: creating /aarch64/lib/libc.a
+a - abort.7
+a - access.7
+a - announce.7
+a - callmain.7
+a - convD2M.7
+a - convM2D.7
+a - convM2S.7
+a - convS2M.7
+a - cputime.7
+a - ctime.7
+a - dial.7
+a - dirfstat.7
+a - dirfwstat.7
+a - dirmodefmt.7
+a - dirread.7
+a - dirstat.7
+a - dirwstat.7
+a - fcallfmt.7
+a - fork.7
+a - getnetconninfo.7
+a - getenv.7
+a - getpid.7
+a - getppid.7
+a - getwd.7
+a - iounit.7
+a - nulldir.7
+a - postnote.7
+a - privalloc.7
+a - procsetname.7
+a - pushssl.7
+a - pushtls.7
+a - putenv.7
+a - qlock.7
+a - read.7
+a - read9pmsg.7
+a - readv.7
+a - rerrstr.7
+a - sbrk.7
+a - setnetmtpt.7
+a - sysfatal.7
+a - syslog.7
+a - sysname.7
+a - time.7
+a - times.7
+a - tm2sec.7
+a - truerand.7
+a - wait.7
+a - waitpid.7
+a - werrstr.7
+a - write.7
+a - writev.7
+9syscall
+SYS=`{sed '/^#define._X[123]/d; s/#define.([A-Z0-9_]*).*/\1/' sys.h}
+for(I in $SYS) {
+	i=`{echo $I|tr A-Z a-z}
+	n=`{sed -n '/[ 	]'$I'[ 	]/s/.*	//p' sys.h}
+	if(~ $i exits) i=_exits
+	{switch($objtype){
+	case mips
+		echo TEXT $i'(SB)', 1, '$0'
+		echo MOVW R1, '0(FP)'
+		echo MOVW '$'$n, R1
+		echo SYSCALL
+		if(~ $i seek || ~ $i nsec) {
+			echo 'MOVW $-1,R5
+			BNE R1,R5,4(PC)
+			MOVW a+0(FP),R5
+			MOVW R1,0(R5)
+			MOVW R1,4(R5)'
+		}
+		echo RET
+	case mips2
+		echo TEXT $i'(SB)', 1, '$0'
+		echo MOVW R1, '0(FP)'
+		echo MOVW '$'$n, R1
+		echo ADD '$4',R29
+		echo SYSCALL
+		echo ADD '$-4',R29
+		echo RET
+	case spim
+		echo TEXT $i'(SB)', 1, '$0'
+		echo MOVW R1, '0(FP)'
+		echo MOVW '$'$n, R1
+		echo ADD '$4',R29
+		echo SYSCALL
+		echo ADD '$-4',R29
+		if(~ $i seek || ~ $i nsec) {	# untested so far - geoff
+			echo 'MOVW $-1,R5
+			BNE R1,R5,4(PC)
+			MOVW a+0(FP),R5
+			MOVW R1,0(R5)
+			MOVW R1,4(R5)'
+		}
+		echo RET
+	case mips64
+		if(~ $i seek || ~ $i nsec)
+			echo TEXT _$i'(SB)', 1, '$0'
+		if not
+			echo TEXT $i'(SB)', 1, '$0'
+		echo MOVV R1, '0(FP)'
+		echo MOVW '$'$n, R1
+		echo ADDV '$8',R29
+		echo SYSCALL
+		echo ADDV '$-8',R29
+		echo RET
+	case spim64
+		if(~ $i seek || ~ $i nsec)
+			echo TEXT _$i'(SB)', 1, '$0'
+		if not
+			echo TEXT $i'(SB)', 1, '$0'
+		echo MOVV R1, '0(FP)'
+		echo MOVW '$'$n, R1
+		echo ADDV '$8',R29
+		echo SYSCALL
+		echo ADDV '$-8',R29
+		echo RET
+	case 386
+		echo TEXT $i'(SB)', 1, '$0'
+		echo MOVL '$'$n, AX
+		echo INT '$'64
+		if(~ $i seek || ~ $i nsec) {
+			echo 'CMPL AX,$-1
+			JNE 4(PC)
+			MOVL a+0(FP),CX
+			MOVL AX,0(CX)
+			MOVL AX,4(CX)'
+		}
+		echo RET
+	case amd64
+		if(~ $i seek)
+			echo TEXT _seek'(SB)', 1, '$0'
+		if not
+			echo TEXT $i'(SB)', 1, '$0'
+		#
+		# For architectures which pass the first argument
+		# in a register, if the system call takes no arguments
+		# there will be no 'a0+0(FP)' reserved on the stack.
+		#
+		if(! ~ $i nsec)
+			echo MOVQ RARG, 'a0+0(FP)'
+		echo MOVQ '$'$n, RARG
+		echo SYSCALL
+		echo RET
+	case aarch64
+		j=$i
+		if(~ $i seek) j=_seek
+		echo TEXT $j'(SB)', 1, '$0'
+		echo MOV R0, '0(FP)'
+		echo MOV '$'$n, R0
+		echo SVC
+		echo RETURN
+	case sparc
+		echo TEXT $i'(SB)', 1, '$0'
+		echo MOVW R7, '0(FP)'
+		echo MOVW '$'$n, R7
+		echo TA R0
+		if(~ $i seek || ~ $i nsec) {
+			echo 'CMP R7,$-1
+			BNE 4(PC)
+			MOVW a+0(FP),R8
+			MOVW R7,0(R8)
+			MOVW R7,4(R8)'
+		}
+		echo RETURN
+	case arm
+		echo TEXT $i'(SB)', 1, '$0'
+		echo MOVW R0, '0(FP)'
+		echo MOVW '$'$n, R0
+		echo SWI 0
+		if(~ $i seek || ~ $i nsec) {
+			echo 'CMP $-1,R0
+			BNE 4(PC)
+			MOVW a+0(FP),R1
+			MOVW R0,0(R1)
+			MOVW R0,4(R1)'
+		}
+		echo RET
+	case power
+		echo TEXT $i'(SB)', 1, '$0'
+		echo MOVW R3, '0(FP)'
+		echo MOVW '$'$n, R3
+		echo SYSCALL
+		if(~ $i seek || ~ $i nsec) {
+			echo 'CMP R3,$-1
+			BNE 4(PC)
+			MOVW a+0(FP),R8
+			MOVW R3,0(R8)
+			MOVW R3,4(R8)'
+		}
+		echo RETURN
+	case power64
+		if(~ $i seek)
+			echo TEXT _seek'(SB)', 1, '$0'
+		if not
+			echo TEXT $i'(SB)', 1, '$0'
+		echo MOVD R3, '0(FP)'
+		echo MOVW '$'$n, R3
+		echo SYSCALL
+		echo RETURN
+	case riscv
+		echo TEXT $i'(SB)', 1, '$0'
+		echo MOVW R8, '0(FP)'
+		echo MOVW '$'$n, R8
+		echo ECALL
+		if(~ $i seek) {
+			echo 'MOVW $-1, R9
+			BNE R8, R9, 4(PC)
+			MOVW a+0(FP),R9
+			MOVW R8,0(R9)
+			MOVW R8,4(R9)'
+		}
+		if(~ $i nsec) {
+			echo 'MOVW a+0(FP),R10
+			MOVW R8,0(R10)
+			MOVW R9,4(R10)'
+		}
+		echo RET
+	case riscv64
+		if(~ $i seek)
+			echo TEXT _seek'(SB)', 1, '$0'
+		if not
+			echo TEXT $i'(SB)', 1, '$0'
+		#
+		# For architectures which pass the first argument
+		# in a register, if the system call takes no arguments
+		# there will be no 'a0+0(FP)' reserved on the stack.
+		#
+		# jc doesn't widen longs to vlongs when pushing them.
+		# so we have to be careful here to only push longs
+		# for first arguments, where appropriate.
+		#
+		switch ($i) {
+		case nsec
+			;
+		case bind chdir exec _exits segbrk open create \
+		    brk_ remove notify pipe seek segdetach segfree \
+		    segflush rendezvous unmount semacquire \
+		    semrelease errstr stat wstat await tsemacquire
+			echo MOV R8, '0(FP)'
+		case *
+			echo MOVW R8, '0(FP)'
+		}
+		echo MOV '$'$n, R8
+		echo ECALL
+		echo RET
+	}} > $i.s
+	$AS $i.s
+}
+ar vu /$objtype/lib/libc.a *.$O
+rm -f *.$O *.s
+a - _errstr.7
+a - _exits.7
+a - _fsession.7
+a - _fstat.7
+a - _fwstat.7
+a - _mount.7
+a - _read.7
+a - _stat.7
+a - _wait.7
+a - _write.7
+a - _wstat.7
+a - alarm.7
+a - await.7
+a - bind.7
+a - brk_.7
+a - chdir.7
+a - close.7
+a - create.7
+a - dup.7
+a - errstr.7
+a - exec.7
+a - fauth.7
+a - fd2path.7
+a - fstat.7
+a - fversion.7
+a - fwstat.7
+a - mount.7
+a - nmount.7
+a - noted.7
+a - notify.7
+a - nsec.7
+a - open.7
+a - oseek.7
+a - pipe.7
+a - pread.7
+a - pwrite.7
+a - remove.7
+a - rendezvous.7
+a - rfork.7
+a - seek.7
+a - segattach.7
+a - segbrk.7
+a - segdetach.7
+a - segflush.7
+a - segfree.7
+a - semacquire.7
+a - semrelease.7
+a - sleep.7
+a - stat.7
+a - sysr1.7
+a - tsemacquire.7
+a - unmount.7
+a - wstat.7
+fmt
+7c -FTVw dofmt.c
+7c -FTVw dorfmt.c
+7c -FTVw errfmt.c
+7c -FTVw fltfmt.c
+7c -FTVw fmt.c
+7c -FTVw fmtfd.c
+7c -FTVw fmtlock.c
+7c -FTVw fmtprint.c
+7c -FTVw fmtquote.c
+7c -FTVw fmtrune.c
+7c -FTVw fmtstr.c
+7c -FTVw fmtvprint.c
+7c -FTVw fprint.c
+7c -FTVw print.c
+7c -FTVw runefmtstr.c
+7c -FTVw runeseprint.c
+7c -FTVw runesmprint.c
+7c -FTVw runesnprint.c
+7c -FTVw runesprint.c
+7c -FTVw runevseprint.c
+7c -FTVw runevsmprint.c
+7c -FTVw runevsnprint.c
+7c -FTVw seprint.c
+7c -FTVw smprint.c
+7c -FTVw snprint.c
+7c -FTVw sprint.c
+7c -FTVw vfprint.c
+7c -FTVw vseprint.c
+7c -FTVw vsmprint.c
+7c -FTVw vsnprint.c
+ar vu /aarch64/lib/libc.a dofmt.7 dorfmt.7 errfmt.7 fltfmt.7 fmt.7 fmtfd.7 fmtlock.7 fmtprint.7 fmtquote.7 fmtrune.7 fmtstr.7 fmtvprint.7 fprint.7 print.7 runefmtstr.7 runeseprint.7 runesmprint.7 runesnprint.7 runesprint.7 runevseprint.7 runevsmprint.7 runevsnprint.7 seprint.7 smprint.7 snprint.7 sprint.7 vfprint.7 vseprint.7 vsmprint.7 vsnprint.7
+a - dofmt.7
+a - dorfmt.7
+a - errfmt.7
+a - fltfmt.7
+a - fmt.7
+a - fmtfd.7
+a - fmtlock.7
+a - fmtprint.7
+a - fmtquote.7
+a - fmtrune.7
+a - fmtstr.7
+a - fmtvprint.7
+a - fprint.7
+a - print.7
+a - runefmtstr.7
+a - runeseprint.7
+a - runesmprint.7
+a - runesnprint.7
+a - runesprint.7
+a - runevseprint.7
+a - runevsmprint.7
+a - runevsnprint.7
+a - seprint.7
+a - smprint.7
+a - snprint.7
+a - sprint.7
+a - vfprint.7
+a - vseprint.7
+a - vsmprint.7
+a - vsnprint.7
+port
+7c -FTVw _assert.c
+7c -FTVw abs.c
+7c -FTVw asin.c
+7c -FTVw atan.c
+7c -FTVw atan2.c
+7c -FTVw atexit.c
+7c -FTVw atnotify.c
+7c -FTVw atof.c
+7c -FTVw atol.c
+7c -FTVw atoll.c
+7c -FTVw beget.c
+7c -FTVw cistrcmp.c
+7c -FTVw cistrncmp.c
+7c -FTVw cistrstr.c
+7c -FTVw charstod.c
+7c -FTVw cleanname.c
+7c -FTVw crypt.c
+7c -FTVw ctype.c
+7c -FTVw encodefmt.c
+7c -FTVw execl.c
+7c -FTVw exp.c
+7c -FTVw fmod.c
+7c -FTVw frand.c
+7c -FTVw frexp.c
+7c -FTVw getfields.c
+7c -FTVw getuser.c
+7c -FTVw hangup.c
+7c -FTVw hypot.c
+7c -FTVw leget.c
+7c -FTVw lnrand.c
+7c -FTVw lock.c
+7c -FTVw log.c
+7c -FTVw lrand.c
+7c -FTVw malloc.c
+7c -FTVw memccpy.c
+7c -FTVw memchr.c
+7c -FTVw memcmp.c
+7c -FTVw mktemp.c
+7c -FTVw muldiv.c
+7c -FTVw nan.c
+7c -FTVw needsrcquote.c
+7c -FTVw netcrypt.c
+7c -FTVw netmkaddr.c
+7c -FTVw nrand.c
+7c -FTVw ntruerand.c
+7c -FTVw perror.c
+7c -FTVw pool.c
+7c -FTVw pow.c
+7c -FTVw pow10.c
+7c -FTVw profile.c
+7c -FTVw qsort.c
+7c -FTVw quote.c
+7c -FTVw rand.c
+7c -FTVw readn.c
+7c -FTVw rune.c
+7c -FTVw runebase.c
+7c -FTVw runebsearch.c
+7c -FTVw runestrcat.c
+7c -FTVw runestrchr.c
+7c -FTVw runestrcmp.c
+7c -FTVw runestrcpy.c
+7c -FTVw runestrecpy.c
+7c -FTVw runestrdup.c
+7c -FTVw runestrncat.c
+7c -FTVw runestrncmp.c
+7c -FTVw runestrncpy.c
+7c -FTVw runestrrchr.c
+7c -FTVw runestrlen.c
+7c -FTVw runestrstr.c
+7c -FTVw runetype.c
+7c -FTVw sin.c
+7c -FTVw sinh.c
+7c -FTVw strcat.c
+7c -FTVw strchr.c
+7c -FTVw strcmp.c
+7c -FTVw strcpy.c
+7c -FTVw strecpy.c
+7c -FTVw strcspn.c
+7c -FTVw strdup.c
+7c -FTVw strlen.c
+7c -FTVw strncat.c
+7c -FTVw strncmp.c
+7c -FTVw strncpy.c
+7c -FTVw strpbrk.c
+7c -FTVw strrchr.c
+7c -FTVw strspn.c
+7c -FTVw strstr.c
+7c -FTVw strtod.c
+7c -FTVw strtok.c
+7c -FTVw strtol.c
+7c -FTVw strtoll.c
+7c -FTVw strtoul.c
+7c -FTVw strtoull.c
+7c -FTVw tan.c
+7c -FTVw tanh.c
+7c -FTVw tokenize.c
+7c -FTVw toupper.c
+7c -FTVw utfecpy.c
+7c -FTVw utflen.c
+7c -FTVw utfnlen.c
+7c -FTVw utfrune.c
+7c -FTVw utfrrune.c
+7c -FTVw utfutf.c
+7c -FTVw u16.c
+7c -FTVw u32.c
+7c -FTVw u64.c
+ar vu /aarch64/lib/libc.a _assert.7 abs.7 asin.7 atan.7 atan2.7 atexit.7 atnotify.7 atof.7 atol.7 atoll.7 beget.7 cistrcmp.7 cistrncmp.7 cistrstr.7 charstod.7 cleanname.7 crypt.7 ctype.7 encodefmt.7 execl.7 exp.7 fmod.7 frand.7 frexp.7 getfields.7 getuser.7 hangup.7 hypot.7 leget.7 lnrand.7 lock.7 log.7 lrand.7 malloc.7 memccpy.7 memchr.7 memcmp.7 mktemp.7 muldiv.7 nan.7 needsrcquote.7 netcrypt.7 netmkaddr.7 nrand.7 ntruerand.7 perror.7 pool.7 pow.7 pow10.7 profile.7 qsort.7 quote.7 rand.7 readn.7 rune.7 runebase.7 runebsearch.7 runestrcat.7 runestrchr.7 runestrcmp.7 runestrcpy.7 runestrecpy.7 runestrdup.7 runestrncat.7 runestrncmp.7 runestrncpy.7 runestrrchr.7 runestrlen.7 runestrstr.7 runetype.7 sin.7 sinh.7 strcat.7 strchr.7 strcmp.7 strcpy.7 strecpy.7 strcspn.7 strdup.7 strlen.7 strncat.7 strncmp.7 strncpy.7 strpbrk.7 strrchr.7 strspn.7 strstr.7 strtod.7 strtok.7 strtol.7 strtoll.7 strtoul.7 strtoull.7 tan.7 tanh.7 tokenize.7 toupper.7 utfecpy.7 utflen.7 utfnlen.7 utfrune.7 utfrrune.7 utfutf.7 u16.7 u32.7 u64.7
+a - _assert.7
+a - abs.7
+a - asin.7
+a - atan.7
+a - atan2.7
+a - atexit.7
+a - atnotify.7
+a - atof.7
+a - atol.7
+a - atoll.7
+a - beget.7
+a - cistrcmp.7
+a - cistrncmp.7
+a - cistrstr.7
+a - charstod.7
+a - cleanname.7
+a - crypt.7
+a - ctype.7
+a - encodefmt.7
+a - execl.7
+a - exp.7
+a - fmod.7
+a - frand.7
+a - frexp.7
+a - getfields.7
+a - getuser.7
+a - hangup.7
+a - hypot.7
+a - leget.7
+a - lnrand.7
+a - lock.7
+a - log.7
+a - lrand.7
+a - malloc.7
+a - memccpy.7
+a - memchr.7
+a - memcmp.7
+a - mktemp.7
+a - muldiv.7
+a - nan.7
+a - needsrcquote.7
+a - netcrypt.7
+a - netmkaddr.7
+a - nrand.7
+a - ntruerand.7
+a - perror.7
+a - pool.7
+a - pow.7
+a - pow10.7
+a - profile.7
+a - qsort.7
+a - quote.7
+a - rand.7
+a - readn.7
+a - rune.7
+a - runebase.7
+a - runebsearch.7
+a - runestrcat.7
+a - runestrchr.7
+a - runestrcmp.7
+a - runestrcpy.7
+a - runestrecpy.7
+a - runestrdup.7
+a - runestrncat.7
+a - runestrncmp.7
+a - runestrncpy.7
+a - runestrrchr.7
+a - runestrlen.7
+a - runestrstr.7
+a - runetype.7
+a - sin.7
+a - sinh.7
+a - strcat.7
+a - strchr.7
+a - strcmp.7
+a - strcpy.7
+a - strecpy.7
+a - strcspn.7
+a - strdup.7
+a - strlen.7
+a - strncat.7
+a - strncmp.7
+a - strncpy.7
+a - strpbrk.7
+a - strrchr.7
+a - strspn.7
+a - strstr.7
+a - strtod.7
+a - strtok.7
+a - strtol.7
+a - strtoll.7
+a - strtoul.7
+a - strtoull.7
+a - tan.7
+a - tanh.7
+a - tokenize.7
+a - toupper.7
+a - utfecpy.7
+a - utflen.7
+a - utfnlen.7
+a - utfrune.7
+a - utfrrune.7
+a - utfutf.7
+a - u16.7
+a - u32.7
+a - u64.7
+aarch64
+7c -FTVw notejmp.c
+7c -FTVw _seek.c
+7a  argv0.s
+7a  atom.s
+7a  atomic.s
+7a  atomic64.s
+7a  cycles.s
+7a  fabs.s
+7a  floor.s
+7a  getcallerpc.s
+7a  getfcr.s
+7a  main9.s
+7a  main9p.s
+7a  memmove.s
+7a  memset.s
+7a  setjmp.s
+7a  sqrt.s
+7a  tas.s
+ar vu /aarch64/lib/libc.a notejmp.7 _seek.7 argv0.7 atom.7 atomic.7 atomic64.7 cycles.7 fabs.7 floor.7 getcallerpc.7 getfcr.7 main9.7 main9p.7 memmove.7 memset.7 setjmp.7 sqrt.7 tas.7
+a - notejmp.7
+a - _seek.7
+a - argv0.7
+a - atom.7
+a - atomic.7
+a - atomic64.7
+a - cycles.7
+a - fabs.7
+a - floor.7
+a - getcallerpc.7
+a - getfcr.7
+a - main9.7
+a - main9p.7
+a - memmove.7
+a - memset.7
+a - setjmp.7
+a - sqrt.7
+a - tas.7
+T0-ART libc 2cb40ac306f28a77daca2c29bd5f27714e633feb628abbc972b582a1690c7d78
+== tier0 lib: libbio
+7c -FTVw bbuffered.c
+7c -FTVw bfildes.c
+7c -FTVw bflush.c
+7c -FTVw bgetrune.c
+7c -FTVw bgetc.c
+7c -FTVw bgetd.c
+7c -FTVw binit.c
+7c -FTVw boffset.c
+7c -FTVw bprint.c
+7c -FTVw bputrune.c
+7c -FTVw bputc.c
+7c -FTVw brdline.c
+7c -FTVw brdstr.c
+7c -FTVw bread.c
+7c -FTVw bseek.c
+7c -FTVw bwrite.c
+7c -FTVw bvprint.c
+ar vu /aarch64/lib/libbio.a bbuffered.7 bfildes.7 bflush.7 bgetrune.7 bgetc.7 bgetd.7 binit.7 boffset.7 bprint.7 bputrune.7 bputc.7 brdline.7 brdstr.7 bread.7 bseek.7 bwrite.7 bvprint.7
+ar: creating /aarch64/lib/libbio.a
+a - bbuffered.7
+a - bfildes.7
+a - bflush.7
+a - bgetrune.7
+a - bgetc.7
+a - bgetd.7
+a - binit.7
+a - boffset.7
+a - bprint.7
+a - bputrune.7
+a - bputc.7
+a - brdline.7
+a - brdstr.7
+a - bread.7
+a - bseek.7
+a - bwrite.7
+a - bvprint.7
+T0-ART libbio a9fdd6a1acd64096c7fde26a2a21351d74233f8b8843a15ea0075110e7ed6ce0
+== tier0 lib: libregexp
+7c -FTVw regcomp.c
+7c -FTVw regerror.c
+7c -FTVw regexec.c
+7c -FTVw regsub.c
+7c -FTVw regaux.c
+7c -FTVw rregexec.c
+7c -FTVw rregsub.c
+ar vu /aarch64/lib/libregexp.a regcomp.7 regerror.7 regexec.7 regsub.7 regaux.7 rregexec.7 rregsub.7
+ar: creating /aarch64/lib/libregexp.a
+a - regcomp.7
+a - regerror.7
+a - regexec.7
+a - regsub.7
+a - regaux.7
+a - rregexec.7
+a - rregsub.7
+T0-ART libregexp b51a448d6906b6004b08121198fa5c2ad480ac8b5e69b468843385846c7c8ae7
+== tier0 lib: libip
+7c -FTVw eipfmt.c
+7c -FTVw equivip.c
+7c -FTVw parseip.c
+7c -FTVw parseether.c
+7c -FTVw myetheraddr.c
+7c -FTVw myipaddr.c
+7c -FTVw classmask.c
+7c -FTVw bo.c
+7c -FTVw readipifc.c
+7c -FTVw ipaux.c
+7c -FTVw ptclbsum.c
+ar vu /aarch64/lib/libip.a eipfmt.7 equivip.7 parseip.7 parseether.7 myetheraddr.7 myipaddr.7 classmask.7 bo.7 readipifc.7 ipaux.7 ptclbsum.7
+a - eipfmt.7
+a - equivip.7
+a - parseip.7
+a - parseether.7
+a - myetheraddr.7
+a - myipaddr.7
+a - classmask.7
+a - bo.7
+a - readipifc.7
+a - ipaux.7
+a - ptclbsum.7
+ar: creating /aarch64/lib/libip.a
+T0-ART libip a8737fd445c2220b23a490c997fc7e98b4cc40e2b7d7be78337ee8fc970df285
+== tier0 lib: libndb
+7c -FTVw csgetval.c
+7c -FTVw csipinfo.c
+7c -FTVw dnsquery.c
+7c -FTVw ipattr.c
+7c -FTVw ndbaux.c
+7c -FTVw ndbcache.c
+7c -FTVw ndbcat.c
+7c -FTVw ndbconcatenate.c
+7c -FTVw ndbdiscard.c
+7c -FTVw ndbfree.c
+7c -FTVw ndbgetipaddr.c
+7c -FTVw ndbgetval.c
+7c -FTVw ndbhash.c
+7c -FTVw ndbipinfo.c
+7c -FTVw ndblookval.c
+7c -FTVw ndbopen.c
+7c -FTVw ndbparse.c
+7c -FTVw ndbreorder.c
+7c -FTVw ndbsubstitute.c
+ar vu /aarch64/lib/libndb.a csgetval.7 csipinfo.7 dnsquery.7 ipattr.7 ndbaux.7 ndbcache.7 ndbcat.7 ndbconcatenate.7 ndbdiscard.7 ndbfree.7 ndbgetipaddr.7 ndbgetval.7 ndbhash.7 ndbipinfo.7 ndblookval.7 ndbopen.7 ndbparse.7 ndbreorder.7 ndbsubstitute.7
+ar: creating /aarch64/lib/libndb.a
+a - csgetval.7
+a - csipinfo.7
+a - dnsquery.7
+a - ipattr.7
+a - ndbaux.7
+a - ndbcache.7
+a - ndbcat.7
+a - ndbconcatenate.7
+a - ndbdiscard.7
+a - ndbfree.7
+a - ndbgetipaddr.7
+a - ndbgetval.7
+a - ndbhash.7
+a - ndbipinfo.7
+a - ndblookval.7
+a - ndbopen.7
+a - ndbparse.7
+a - ndbreorder.7
+a - ndbsubstitute.7
+T0-ART libndb 553f7a02e554dc3bca14715ac947722973309d600a2d29636de266ed866c42d9
+== tier0 lib: libmp
+for(i in port $objtype)@{
+	echo $i
+	cd $i
+	mk $MKFLAGS install
+}
+port
+7c -FTVw mpaux.c
+7c -FTVw mpfmt.c
+7c -FTVw strtomp.c
+7c -FTVw mptobe.c
+7c -FTVw mptole.c
+7c -FTVw betomp.c
+7c -FTVw letomp.c
+7c -FTVw mpadd.c
+7c -FTVw mpsub.c
+7c -FTVw mpcmp.c
+7c -FTVw mpfactorial.c
+7c -FTVw mpmul.c
+7c -FTVw mpleft.c
+7c -FTVw mpright.c
+7c -FTVw mpvecadd.c
+7c -FTVw mpvecsub.c
+7c -FTVw mpvecdigmuladd.c
+7c -FTVw mpvecdigmulsub.c
+7c -FTVw mpveccmp.c
+7c -FTVw mpdigdiv.c
+7c -FTVw mpdiv.c
+7c -FTVw mpexp.c
+7c -FTVw mpmod.c
+7c -FTVw mpextendedgcd.c
+7c -FTVw mpinvert.c
+7c -FTVw mprand.c
+7c -FTVw crt.c
+7c -FTVw mptoi.c
+7c -FTVw mptoui.c
+7c -FTVw mptov.c
+7c -FTVw mptouv.c
+ar vu /aarch64/lib/libmp.a mpaux.7 mpfmt.7 strtomp.7 mptobe.7 mptole.7 betomp.7 letomp.7 mpadd.7 mpsub.7 mpcmp.7 mpfactorial.7 mpmul.7 mpleft.7 mpright.7 mpvecadd.7 mpvecsub.7 mpvecdigmuladd.7 mpvecdigmulsub.7 mpveccmp.7 mpdigdiv.7 mpdiv.7 mpexp.7 mpmod.7 mpextendedgcd.7 mpinvert.7 mprand.7 crt.7 mptoi.7 mptoui.7 mptov.7 mptouv.7
+ar: creating /aarch64/lib/libmp.a
+a - mpaux.7
+a - mpfmt.7
+a - strtomp.7
+a - mptobe.7
+a - mptole.7
+a - betomp.7
+a - letomp.7
+a - mpadd.7
+a - mpsub.7
+a - mpcmp.7
+a - mpfactorial.7
+a - mpmul.7
+a - mpleft.7
+a - mpright.7
+a - mpvecadd.7
+a - mpvecsub.7
+a - mpvecdigmuladd.7
+a - mpvecdigmulsub.7
+a - mpveccmp.7
+a - mpdigdiv.7
+a - mpdiv.7
+a - mpexp.7
+a - mpmod.7
+a - mpextendedgcd.7
+a - mpinvert.7
+a - mprand.7
+a - crt.7
+a - mptoi.7
+a - mptoui.7
+a - mptov.7
+a - mptouv.7
+aarch64
+ar vu /aarch64/lib/libmp.a 
+T0-ART libmp 5065c4eb33258352aacd07aec82bc384424dcb55f7fb2529727c8e551701fb1e
+== tier0 lib: libsec
+for(i in port $objtype)@{
+	echo $i
+	cd $i
+	mk $MKFLAGS install
+}
+port
+7c -FTVw -I../../libmp/port des.c
+7c -FTVw -I../../libmp/port desmodes.c
+7c -FTVw -I../../libmp/port desECB.c
+7c -FTVw -I../../libmp/port desCBC.c
+7c -FTVw -I../../libmp/port des3ECB.c
+7c -FTVw -I../../libmp/port des3CBC.c
+7c -FTVw -I../../libmp/port aes.c
+7c -FTVw -I../../libmp/port blowfish.c
+7c -FTVw -I../../libmp/port chacha.c
+7c -FTVw -I../../libmp/port hmac.c
+7c -FTVw -I../../libmp/port md5.c
+7c -FTVw -I../../libmp/port md5block.c
+7c -FTVw -I../../libmp/port md4.c
+7c -FTVw -I../../libmp/port sha1.c
+7c -FTVw -I../../libmp/port sha1block.c
+7c -FTVw -I../../libmp/port sha2_64.c
+7c -FTVw -I../../libmp/port sha2_128.c
+7c -FTVw -I../../libmp/port sha2block64.c
+7c -FTVw -I../../libmp/port sha2block128.c
+7c -FTVw -I../../libmp/port sha1pickle.c
+7c -FTVw -I../../libmp/port md5pickle.c
+7c -FTVw -I../../libmp/port rc4.c
+7c -FTVw -I../../libmp/port genrandom.c
+7c -FTVw -I../../libmp/port prng.c
+7c -FTVw -I../../libmp/port fastrand.c
+7c -FTVw -I../../libmp/port nfastrand.c
+7c -FTVw -I../../libmp/port probably_prime.c
+7c -FTVw -I../../libmp/port smallprimetest.c
+7c -FTVw -I../../libmp/port genprime.c
+7c -FTVw -I../../libmp/port dsaprimes.c
+7c -FTVw -I../../libmp/port gensafeprime.c
+7c -FTVw -I../../libmp/port genstrongprime.c
+7c -FTVw -I../../libmp/port rsagen.c
+7c -FTVw -I../../libmp/port rsafill.c
+7c -FTVw -I../../libmp/port rsaencrypt.c
+7c -FTVw -I../../libmp/port rsadecrypt.c
+7c -FTVw -I../../libmp/port rsaalloc.c
+7c -FTVw -I../../libmp/port rsaprivtopub.c
+7c -FTVw -I../../libmp/port x509.c
+7c -FTVw -I../../libmp/port decodepem.c
+7c -FTVw -I../../libmp/port eggen.c
+7c -FTVw -I../../libmp/port egencrypt.c
+7c -FTVw -I../../libmp/port egdecrypt.c
+7c -FTVw -I../../libmp/port egalloc.c
+7c -FTVw -I../../libmp/port egprivtopub.c
+7c -FTVw -I../../libmp/port egsign.c
+7c -FTVw -I../../libmp/port egverify.c
+7c -FTVw -I../../libmp/port dsagen.c
+7c -FTVw -I../../libmp/port dsaalloc.c
+7c -FTVw -I../../libmp/port dsaprivtopub.c
+7c -FTVw -I../../libmp/port dsasign.c
+7c -FTVw -I../../libmp/port dsaverify.c
+7c -FTVw -I../../libmp/port tlshand.c
+7c -FTVw -I../../libmp/port thumb.c
+7c -FTVw -I../../libmp/port readcert.c
+7c -FTVw -I../../libmp/port pbkdf2.c
+ar vu /aarch64/lib/libsec.a des.7 desmodes.7 desECB.7 desCBC.7 des3ECB.7 des3CBC.7 aes.7 blowfish.7 chacha.7 hmac.7 md5.7 md5block.7 md4.7 sha1.7 sha1block.7 sha2_64.7 sha2_128.7 sha2block64.7 sha2block128.7 sha1pickle.7 md5pickle.7 rc4.7 genrandom.7 prng.7 fastrand.7 nfastrand.7 probably_prime.7 smallprimetest.7 genprime.7 dsaprimes.7 gensafeprime.7 genstrongprime.7 rsagen.7 rsafill.7 rsaencrypt.7 rsadecrypt.7 rsaalloc.7 rsaprivtopub.7 x509.7 decodepem.7 eggen.7 egencrypt.7 egdecrypt.7 egalloc.7 egprivtopub.7 egsign.7 egverify.7 dsagen.7 dsaalloc.7 dsaprivtopub.7 dsasign.7 dsaverify.7 tlshand.7 thumb.7 readcert.7 pbkdf2.7
+ar: creating /aarch64/lib/libsec.a
+a - des.7
+a - desmodes.7
+a - desECB.7
+a - desCBC.7
+a - des3ECB.7
+a - des3CBC.7
+a - aes.7
+a - blowfish.7
+a - chacha.7
+a - hmac.7
+a - md5.7
+a - md5block.7
+a - md4.7
+a - sha1.7
+a - sha1block.7
+a - sha2_64.7
+a - sha2_128.7
+a - sha2block64.7
+a - sha2block128.7
+a - sha1pickle.7
+a - md5pickle.7
+a - rc4.7
+a - genrandom.7
+a - prng.7
+a - fastrand.7
+a - nfastrand.7
+a - probably_prime.7
+a - smallprimetest.7
+a - genprime.7
+a - dsaprimes.7
+a - gensafeprime.7
+a - genstrongprime.7
+a - rsagen.7
+a - rsafill.7
+a - rsaencrypt.7
+a - rsadecrypt.7
+a - rsaalloc.7
+a - rsaprivtopub.7
+a - x509.7
+a - decodepem.7
+a - eggen.7
+a - egencrypt.7
+a - egdecrypt.7
+a - egalloc.7
+a - egprivtopub.7
+a - egsign.7
+a - egverify.7
+a - dsagen.7
+a - dsaalloc.7
+a - dsaprivtopub.7
+a - dsasign.7
+a - dsaverify.7
+a - tlshand.7
+a - thumb.7
+a - readcert.7
+a - pbkdf2.7
+aarch64
+ar vu /aarch64/lib/libsec.a 
+T0-ART libsec 184e38ce7ab2b5198d713b6da5370b0daedc7eb96f58df1f65c255f7ca2b3b85
+== tier0 lib: libString
+7c -FTVw s_alloc.c
+7c -FTVw s_append.c
+7c -FTVw s_array.c
+7c -FTVw s_copy.c
+7c -FTVw s_getline.c
+7c -FTVw s_grow.c
+7c -FTVw s_memappend.c
+7c -FTVw s_nappend.c
+7c -FTVw s_parse.c
+7c -FTVw s_putc.c
+7c -FTVw s_rdinstack.c
+7c -FTVw s_read.c
+7c -FTVw s_read_line.c
+7c -FTVw s_reset.c
+7c -FTVw s_terminate.c
+7c -FTVw s_tolower.c
+7c -FTVw s_unique.c
+ar vu /aarch64/lib/libString.a s_alloc.7 s_append.7 s_array.7 s_copy.7 s_getline.7 s_grow.7 s_memappend.7 s_nappend.7 s_parse.7 s_putc.7 s_rdinstack.7 s_read.7 s_read_line.7 s_reset.7 s_terminate.7 s_tolower.7 s_unique.7
+ar: creating /aarch64/lib/libString.a
+a - s_alloc.7
+a - s_append.7
+a - s_array.7
+a - s_copy.7
+a - s_getline.7
+a - s_grow.7
+a - s_memappend.7
+a - s_nappend.7
+a - s_parse.7
+a - s_putc.7
+a - s_rdinstack.7
+a - s_read.7
+a - s_read_line.7
+a - s_reset.7
+a - s_terminate.7
+a - s_tolower.7
+a - s_unique.7
+T0-ART libString 2932327829ebaf1c68f76ceb3160c47b11ad53477e648195dfa0f037a81e9cba
+== tier0 lib: libthread
+7c -FTVw aarch64.c
+7c -FTVw channel.c
+7c -FTVw chanprint.c
+7c -FTVw create.c
+7c -FTVw debug.c
+7c -FTVw dial.c
+7c -FTVw exec.c
+7c -FTVw exit.c
+7c -FTVw id.c
+7c -FTVw iocall.c
+7c -FTVw ioclose.c
+7c -FTVw iodial.c
+7c -FTVw ioopen.c
+7c -FTVw ioproc.c
+7c -FTVw ioread.c
+7c -FTVw ioreadn.c
+7c -FTVw iosleep.c
+7c -FTVw iowrite.c
+7c -FTVw kill.c
+7c -FTVw lib.c
+7c -FTVw main.c
+7c -FTVw note.c
+7c -FTVw ref.c
+7c -FTVw rendez.c
+7c -FTVw sched.c
+ar vu /aarch64/lib/libthread.a aarch64.7 channel.7 chanprint.7 create.7 debug.7 dial.7 exec.7 exit.7 id.7 iocall.7 ioclose.7 iodial.7 ioopen.7 ioproc.7 ioread.7 ioreadn.7 iosleep.7 iowrite.7 kill.7 lib.7 main.7 note.7 ref.7 rendez.7 sched.7
+ar: creating /aarch64/lib/libthread.a
+a - aarch64.7
+a - channel.7
+a - chanprint.7
+a - create.7
+a - debug.7
+a - dial.7
+a - exec.7
+a - exit.7
+a - id.7
+a - iocall.7
+a - ioclose.7
+a - iodial.7
+a - ioopen.7
+a - ioproc.7
+a - ioread.7
+a - ioreadn.7
+a - iosleep.7
+a - iowrite.7
+a - kill.7
+a - lib.7
+a - main.7
+a - note.7
+a - ref.7
+a - rendez.7
+a - sched.7
+T0-ART libthread 820012f47cd5e73bb230b2f1a48d857b2e4a29f09dab8e5638d21535ad347ddf
+== tier0 lib: lib9p
+7c -FTVw auth.c
+7c -FTVw dirread.c
+7c -FTVw fid.c
+7c -FTVw file.c
+7c -FTVw intmap.c
+7c -FTVw listen.c
+7c -FTVw mem.c
+7c -FTVw req.c
+7c -FTVw parse.c
+7c -FTVw post.c
+7c -FTVw rfork.c
+7c -FTVw srv.c
+7c -FTVw thread.c
+7c -FTVw uid.c
+7c -FTVw util.c
+ar vu /aarch64/lib/lib9p.a auth.7 dirread.7 fid.7 file.7 intmap.7 listen.7 mem.7 req.7 parse.7 post.7 rfork.7 srv.7 thread.7 uid.7 util.7
+ar: creating /aarch64/lib/lib9p.a
+a - auth.7
+a - dirread.7
+a - fid.7
+a - file.7
+a - intmap.7
+a - listen.7
+a - mem.7
+a - req.7
+a - parse.7
+a - post.7
+a - rfork.7
+a - srv.7
+a - thread.7
+a - uid.7
+a - util.7
+T0-ART lib9p b34945fb2143995d33b8a8325ff92ef71c1d2a17db4641cf4fab48b51c6d49e6
+== tier0 lib: libauth
+7c -FTVw amount.c
+7c -FTVw amount_getkey.c
+7c -FTVw attr.c
+7c -FTVw auth_attr.c
+7c -FTVw auth_challenge.c
+7c -FTVw auth_chuid.c
+7c -FTVw auth_getkey.c
+7c -FTVw auth_getuserpasswd.c
+7c -FTVw auth_proxy.c
+7c -FTVw auth_respond.c
+7c -FTVw auth_rpc.c
+7c -FTVw auth_userpasswd.c
+7c -FTVw auth_wep.c
+7c -FTVw login.c
+7c -FTVw newns.c
+7c -FTVw noworld.c
+ar vu /aarch64/lib/libauth.a amount.7 amount_getkey.7 attr.7 auth_attr.7 auth_challenge.7 auth_chuid.7 auth_getkey.7 auth_getuserpasswd.7 auth_proxy.7 auth_respond.7 auth_rpc.7 auth_userpasswd.7 auth_wep.7 login.7 newns.7 noworld.7
+ar: creating /aarch64/lib/libauth.a
+a - amount.7
+a - amount_getkey.7
+a - attr.7
+a - auth_attr.7
+a - auth_challenge.7
+a - auth_chuid.7
+a - auth_getkey.7
+a - auth_getuserpasswd.7
+a - auth_proxy.7
+a - auth_respond.7
+a - auth_rpc.7
+a - auth_userpasswd.7
+a - auth_wep.7
+a - login.7
+a - newns.7
+a - noworld.7
+T0-ART libauth d078aa93dc906c0e6fb05f7202a5ef002db54ecae59cce51a8a5aa885c815998
+== tier0 lib: libauthsrv
+7c -FTVw _asgetticket.c
+7c -FTVw _asrdresp.c
+7c -FTVw authdial.c
+7c -FTVw convA2M.c
+7c -FTVw convM2A.c
+7c -FTVw convM2PR.c
+7c -FTVw convM2T.c
+7c -FTVw convM2TR.c
+7c -FTVw convPR2M.c
+7c -FTVw convT2M.c
+7c -FTVw convTR2M.c
+7c -FTVw nvcsum.c
+7c -FTVw opasstokey.c
+7c -FTVw passtokey.c
+7c -FTVw readnvram.c
+ar vu /aarch64/lib/libauthsrv.a _asgetticket.7 _asrdresp.7 authdial.7 convA2M.7 convM2A.7 convM2PR.7 convM2T.7 convM2TR.7 convPR2M.7 convT2M.7 convTR2M.7 nvcsum.7 opasstokey.7 passtokey.7 readnvram.7
+ar: creating /aarch64/lib/libauthsrv.a
+a - _asgetticket.7
+a - _asrdresp.7
+a - authdial.7
+a - convA2M.7
+a - convM2A.7
+a - convM2PR.7
+a - convM2T.7
+a - convM2TR.7
+a - convPR2M.7
+a - convT2M.7
+a - convTR2M.7
+a - nvcsum.7
+a - opasstokey.7
+a - passtokey.7
+a - readnvram.7
+T0-ART libauthsrv 33f6f0e811ce451c3c26578806d75fa7c77907f93e082e08a3e53c1edcbf404a
+== tier0 lib: libflate
+7c -FTVw deflate.c
+7c -FTVw deflatezlib.c
+7c -FTVw deflateblock.c
+7c -FTVw deflatezlibblock.c
+7c -FTVw inflate.c
+7c -FTVw inflatezlib.c
+7c -FTVw inflateblock.c
+7c -FTVw inflatezlibblock.c
+7c -FTVw flateerr.c
+7c -FTVw crc.c
+7c -FTVw adler.c
+ar vu /aarch64/lib/libflate.a deflate.7 deflatezlib.7 deflateblock.7 deflatezlibblock.7 inflate.7 inflatezlib.7 inflateblock.7 inflatezlibblock.7 flateerr.7 crc.7 adler.7
+ar: creating /aarch64/lib/libflate.a
+a - deflate.7
+a - deflatezlib.7
+a - deflateblock.7
+a - deflatezlibblock.7
+a - inflate.7
+a - inflatezlib.7
+a - inflateblock.7
+a - inflatezlibblock.7
+a - flateerr.7
+a - crc.7
+a - adler.7
+T0-ART libflate b72671336d09095f41b5945ff726984fac2b2f2b546fe3ecfaf2dcccfac353ef
+== tier0 lib: libavl
+7c -FTVw avl.c
+ar vu /aarch64/lib/libavl.a avl.7
+a - avl.7
+ar: creating /aarch64/lib/libavl.a
+T0-ART libavl 489b4895218e7e40dafde2b077d61890661558e6b5ebff55c073be07c917530c
+== tier0 lib: libbin
+7c -FTVw bin.c
+ar vu /aarch64/lib/libbin.a bin.7
+ar: creating /aarch64/lib/libbin.a
+a - bin.7
+T0-ART libbin 3e9239cd669087ff6c206c5e62a8dd577652e206cdc714d6e55460acd9b155af
+== tier0 lib: libcomplete
+7c -FTVw complete.c
+ar vu /aarch64/lib/libcomplete.a complete.7
+a - complete.7
+ar: creating /aarch64/lib/libcomplete.a
+T0-ART libcomplete 5e8404701c7efab428910168b0320bba5745363fa35bbda35d1ccc77e50a4b0a
+== tier0 lib: libgeometry
+7c -FTVw arith3.c
+7c -FTVw matrix.c
+7c -FTVw qball.c
+7c -FTVw quaternion.c
+7c -FTVw transform.c
+7c -FTVw tstack.c
+ar vu /aarch64/lib/libgeometry.a arith3.7 matrix.7 qball.7 quaternion.7 transform.7 tstack.7
+ar: creating /aarch64/lib/libgeometry.a
+a - arith3.7
+a - matrix.7
+a - qball.7
+a - quaternion.7
+a - transform.7
+a - tstack.7
+T0-ART libgeometry 541347256bafb9d5edfe86d95a847d562d2623195863aa50a5db36900e582e87
+== tier0 lib: liblex
+7c -FTVw allprint.c
+7c -FTVw main.c
+7c -FTVw reject.c
+7c -FTVw yyless.c
+7c -FTVw yywrap.c
+ar vu /aarch64/lib/libl.a allprint.7 main.7 reject.7 yyless.7 yywrap.7
+ar: creating /aarch64/lib/libl.a
+a - allprint.7
+a - main.7
+a - reject.7
+a - yyless.7
+a - yywrap.7
+T0-ART liblex 1779fc94f39fc824aa4ccb686104c25ee03b2b428b2cbc5b2aa7a21e0fcacf6b
+== tier0 lib: libstdio
+7c -FTVw _IO_getc.c
+7c -FTVw _IO_putc.c
+7c -FTVw clearerr.c
+7c -FTVw dtoa.c
+7c -FTVw fclose.c
+7c -FTVw fdopen.c
+7c -FTVw feof.c
+7c -FTVw ferror.c
+7c -FTVw fflush.c
+7c -FTVw fgetc.c
+7c -FTVw fgetpos.c
+7c -FTVw fgets.c
+7c -FTVw fileno.c
+7c -FTVw fopen.c
+7c -FTVw fprintf.c
+7c -FTVw fputc.c
+7c -FTVw fputs.c
+7c -FTVw fread.c
+7c -FTVw freopen.c
+7c -FTVw fscanf.c
+7c -FTVw fseek.c
+7c -FTVw fseeko.c
+7c -FTVw fsetpos.c
+7c -FTVw ftell.c
+7c -FTVw ftello.c
+7c -FTVw fwrite.c
+7c -FTVw getc.c
+7c -FTVw gets.c
+7c -FTVw printf.c
+7c -FTVw putc.c
+7c -FTVw puts.c
+7c -FTVw rewind.c
+7c -FTVw scanf.c
+7c -FTVw sclose.c
+7c -FTVw setbuf.c
+7c -FTVw setvbuf.c
+7c -FTVw snprintf.c
+7c -FTVw sopenr.c
+7c -FTVw sopenw.c
+7c -FTVw sprintf.c
+7c -FTVw sscanf.c
+7c -FTVw tmpfile.c
+7c -FTVw tmpnam.c
+7c -FTVw ungetc.c
+7c -FTVw vfprintf.c
+7c -FTVw vfscanf.c
+7c -FTVw vprintf.c
+7c -FTVw vsnprintf.c
+7c -FTVw vsprintf.c
+ar vu /aarch64/lib/libstdio.a _IO_getc.7 _IO_putc.7 clearerr.7 dtoa.7 fclose.7 fdopen.7 feof.7 ferror.7 fflush.7 fgetc.7 fgetpos.7 fgets.7 fileno.7 fopen.7 fprintf.7 fputc.7 fputs.7 fread.7 freopen.7 fscanf.7 fseek.7 fseeko.7 fsetpos.7 ftell.7 ftello.7 fwrite.7 getc.7 gets.7 printf.7 putc.7 puts.7 rewind.7 scanf.7 sclose.7 setbuf.7 setvbuf.7 snprintf.7 sopenr.7 sopenw.7 sprintf.7 sscanf.7 tmpfile.7 tmpnam.7 ungetc.7 vfprintf.7 vfscanf.7 vprintf.7 vsnprintf.7 vsprintf.7
+ar: creating /aarch64/lib/libstdio.a
+a - _IO_getc.7
+a - _IO_putc.7
+a - clearerr.7
+a - dtoa.7
+a - fclose.7
+a - fdopen.7
+a - feof.7
+a - ferror.7
+a - fflush.7
+a - fgetc.7
+a - fgetpos.7
+a - fgets.7
+a - fileno.7
+a - fopen.7
+a - fprintf.7
+a - fputc.7
+a - fputs.7
+a - fread.7
+a - freopen.7
+a - fscanf.7
+a - fseek.7
+a - fseeko.7
+a - fsetpos.7
+a - ftell.7
+a - ftello.7
+a - fwrite.7
+a - getc.7
+a - gets.7
+a - printf.7
+a - putc.7
+a - puts.7
+a - rewind.7
+a - scanf.7
+a - sclose.7
+a - setbuf.7
+a - setvbuf.7
+a - snprintf.7
+a - sopenr.7
+a - sopenw.7
+a - sprintf.7
+a - sscanf.7
+a - tmpfile.7
+a - tmpnam.7
+a - ungetc.7
+a - vfprintf.7
+a - vfscanf.7
+a - vprintf.7
+a - vsnprintf.7
+a - vsprintf.7
+T0-ART libstdio 9328cfb5b7c71b628c65bb21924a08358f3d20b274c1265177e3684f9cf93f3f
+== tier0 lib: libdisk
+7c -FTVw disk.c
+7c -FTVw proto.c
+7c -FTVw scsi.c
+ar vu /aarch64/lib/libdisk.a disk.7 proto.7 scsi.7
+a - disk.7
+a - proto.7
+a - scsi.7
+ar: creating /aarch64/lib/libdisk.a
+T0-ART libdisk 58f8908beafc448427c3918b70d5cc1b4614da224325c2d64a39906f2acfa81a
+== tier0 lib: libplumb
+7c -FTVw event.c
+7c -FTVw mesg.c
+7c -FTVw plumbsendtext.c
+ar vu /aarch64/lib/libplumb.a event.7 mesg.7 plumbsendtext.7
+ar: creating /aarch64/lib/libplumb.a
+a - event.7
+a - mesg.7
+a - plumbsendtext.7
+T0-ART libplumb b6e7ea71118d7a03adfa448c073123c3971e28042af1217c57ddc6f99a67cfed
+== tier0 lib: libscribble
+7c -FTVw li_recognizer.c
+7c -FTVw hre_api.c
+7c -FTVw graffiti.c
+ar vu /aarch64/lib/libscribble.a li_recognizer.7 hre_api.7 graffiti.7
+ar: creating /aarch64/lib/libscribble.a
+a - li_recognizer.7
+a - hre_api.7
+a - graffiti.7
+T0-ART libscribble 1199db39a103b0b9aea844e1e6696a400a54b5832e98996f559d9089e4383dd3
+== tier0 lib: libmemdraw
+7c -FTVw addr.c
+7c -FTVw alloc.c
+7c -FTVw arc.c
+7c -FTVw cload.c
+7c -FTVw cmap.c
+7c -FTVw cread.c
+7c -FTVw defont.c
+7c -FTVw draw.c
+7c -FTVw ellipse.c
+7c -FTVw fillpoly.c
+7c -FTVw hwdraw.c
+7c -FTVw iprint.c
+7c -FTVw line.c
+7c -FTVw load.c
+7c -FTVw memsetchan.c
+7c -FTVw openmemsubfont.c
+7c -FTVw poly.c
+7c -FTVw read.c
+7c -FTVw string.c
+7c -FTVw subfont.c
+7c -FTVw unload.c
+7c -FTVw write.c
+ar vu /aarch64/lib/libmemdraw.a addr.7 alloc.7 arc.7 cload.7 cmap.7 cread.7 defont.7 draw.7 ellipse.7 fillpoly.7 hwdraw.7 iprint.7 line.7 load.7 memsetchan.7 openmemsubfont.7 poly.7 read.7 string.7 subfont.7 unload.7 write.7
+ar: creating /aarch64/lib/libmemdraw.a
+a - addr.7
+a - alloc.7
+a - arc.7
+a - cload.7
+a - cmap.7
+a - cread.7
+a - defont.7
+a - draw.7
+a - ellipse.7
+a - fillpoly.7
+a - hwdraw.7
+a - iprint.7
+a - line.7
+a - load.7
+a - memsetchan.7
+a - openmemsubfont.7
+a - poly.7
+a - read.7
+a - string.7
+a - subfont.7
+a - unload.7
+a - write.7
+T0-ART libmemdraw a49d55cd93253ab4f5f26ee0b6a85f9f05a55e28d2e08b97c9e7e34f441317ea
+== tier0 lib: libmemlayer
+7c -FTVw draw.c
+7c -FTVw lalloc.c
+7c -FTVw layerop.c
+7c -FTVw ldelete.c
+7c -FTVw lhide.c
+7c -FTVw line.c
+7c -FTVw load.c
+7c -FTVw lorigin.c
+7c -FTVw lsetrefresh.c
+7c -FTVw ltofront.c
+7c -FTVw ltorear.c
+7c -FTVw unload.c
+ar vu /aarch64/lib/libmemlayer.a draw.7 lalloc.7 layerop.7 ldelete.7 lhide.7 line.7 load.7 lorigin.7 lsetrefresh.7 ltofront.7 ltorear.7 unload.7
+ar: creating /aarch64/lib/libmemlayer.a
+a - draw.7
+a - lalloc.7
+a - layerop.7
+a - ldelete.7
+a - lhide.7
+a - line.7
+a - load.7
+a - lorigin.7
+a - lsetrefresh.7
+a - ltofront.7
+a - ltorear.7
+a - unload.7
+T0-ART libmemlayer a9a8005f41dec174adab9463f294c77f15b68e6038314565c8573113d7013945
+== tier0 lib: libdraw
+7c -FTVw alloc.c
+7c -FTVw allocimagemix.c
+7c -FTVw arith.c
+7c -FTVw bezier.c
+7c -FTVw border.c
+7c -FTVw buildfont.c
+7c -FTVw bytesperline.c
+7c -FTVw chan.c
+7c -FTVw cloadimage.c
+7c -FTVw computil.c
+7c -FTVw creadimage.c
+7c -FTVw debug.c
+7c -FTVw defont.c
+7c -FTVw draw.c
+7c -FTVw drawrepl.c
+7c -FTVw egetrect.c
+7c -FTVw ellipse.c
+7c -FTVw emenuhit.c
+7c -FTVw event.c
+7c -FTVw fmt.c
+7c -FTVw font.c
+7c -FTVw freesubfont.c
+7c -FTVw getdefont.c
+7c -FTVw getrect.c
+7c -FTVw getsubfont.c
+7c -FTVw icossin.c
+7c -FTVw icossin2.c
+7c -FTVw init.c
+7c -FTVw keyboard.c
+7c -FTVw line.c
+7c -FTVw menuhit.c
+7c -FTVw mkfont.c
+7c -FTVw mouse.c
+7c -FTVw newwindow.c
+7c -FTVw openfont.c
+7c -FTVw poly.c
+7c -FTVw loadimage.c
+7c -FTVw readcolmap.c
+7c -FTVw readimage.c
+7c -FTVw readsubfont.c
+7c -FTVw rectclip.c
+7c -FTVw replclipr.c
+7c -FTVw rgb.c
+7c -FTVw scroll.c
+7c -FTVw string.c
+7c -FTVw stringbg.c
+7c -FTVw stringsubfont.c
+7c -FTVw stringwidth.c
+7c -FTVw subfont.c
+7c -FTVw subfontcache.c
+7c -FTVw subfontname.c
+7c -FTVw unloadimage.c
+7c -FTVw window.c
+7c -FTVw writecolmap.c
+7c -FTVw writeimage.c
+7c -FTVw writesubfont.c
+ar vu /aarch64/lib/libdraw.a alloc.7 allocimagemix.7 arith.7 bezier.7 border.7 buildfont.7 bytesperline.7 chan.7 cloadimage.7 computil.7 creadimage.7 debug.7 defont.7 draw.7 drawrepl.7 egetrect.7 ellipse.7 emenuhit.7 event.7 fmt.7 font.7 freesubfont.7 getdefont.7 getrect.7 getsubfont.7 icossin.7 icossin2.7 init.7 keyboard.7 line.7 menuhit.7 mkfont.7 mouse.7 newwindow.7 openfont.7 poly.7 loadimage.7 readcolmap.7 readimage.7 readsubfont.7 rectclip.7 replclipr.7 rgb.7 scroll.7 string.7 stringbg.7 stringsubfont.7 stringwidth.7 subfont.7 subfontcache.7 subfontname.7 unloadimage.7 window.7 writecolmap.7 writeimage.7 writesubfont.7
+ar: creating /aarch64/lib/libdraw.a
+a - alloc.7
+a - allocimagemix.7
+a - arith.7
+a - bezier.7
+a - border.7
+a - buildfont.7
+a - bytesperline.7
+a - chan.7
+a - cloadimage.7
+a - computil.7
+a - creadimage.7
+a - debug.7
+a - defont.7
+a - draw.7
+a - drawrepl.7
+a - egetrect.7
+a - ellipse.7
+a - emenuhit.7
+a - event.7
+a - fmt.7
+a - font.7
+a - freesubfont.7
+a - getdefont.7
+a - getrect.7
+a - getsubfont.7
+a - icossin.7
+a - icossin2.7
+a - init.7
+a - keyboard.7
+a - line.7
+a - menuhit.7
+a - mkfont.7
+a - mouse.7
+a - newwindow.7
+a - openfont.7
+a - poly.7
+a - loadimage.7
+a - readcolmap.7
+a - readimage.7
+a - readsubfont.7
+a - rectclip.7
+a - replclipr.7
+a - rgb.7
+a - scroll.7
+a - string.7
+a - stringbg.7
+a - stringsubfont.7
+a - stringwidth.7
+a - subfont.7
+a - subfontcache.7
+a - subfontname.7
+a - unloadimage.7
+a - window.7
+a - writecolmap.7
+a - writeimage.7
+a - writesubfont.7
+T0-ART libdraw cd8e0a89ebb8b5db6c4bc8819d80468a0282b6d5a7840a4ddd7137118efc67ad
+== tier0 lib: libframe
+7c -FTVw frbox.c
+7c -FTVw frdraw.c
+7c -FTVw frdelete.c
+7c -FTVw frinit.c
+7c -FTVw frinsert.c
+7c -FTVw frptofchar.c
+7c -FTVw frselect.c
+7c -FTVw frstr.c
+7c -FTVw frutil.c
+ar vu /aarch64/lib/libframe.a frbox.7 frdraw.7 frdelete.7 frinit.7 frinsert.7 frptofchar.7 frselect.7 frstr.7 frutil.7
+ar: creating /aarch64/lib/libframe.a
+a - frbox.7
+a - frdraw.7
+a - frdelete.7
+a - frinit.7
+a - frinsert.7
+a - frptofchar.7
+a - frselect.7
+a - frstr.7
+a - frutil.7
+T0-ART libframe 6191501c054184352670f468a5fdc197ea516d3f2c7e539a2b103fba56a9cc70
+== tier0 lib: libcontrol
+7c -FTVw box.c
+7c -FTVw button.c
+7c -FTVw cache.c
+7c -FTVw control.c
+7c -FTVw entry.c
+7c -FTVw group.c
+7c -FTVw keyboard.c
+7c -FTVw label.c
+7c -FTVw menu.c
+7c -FTVw radiobutton.c
+7c -FTVw scribble.c
+7c -FTVw slider.c
+7c -FTVw tabs.c
+7c -FTVw text.c
+7c -FTVw textbutton.c
+7c -FTVw textbutton3.c
+ar vu /aarch64/lib/libcontrol.a box.7 button.7 cache.7 control.7 entry.7 group.7 keyboard.7 label.7 menu.7 radiobutton.7 scribble.7 slider.7 tabs.7 text.7 textbutton.7 textbutton3.7
+ar: creating /aarch64/lib/libcontrol.a
+a - box.7
+a - button.7
+a - cache.7
+a - control.7
+a - entry.7
+a - group.7
+a - keyboard.7
+a - label.7
+a - menu.7
+a - radiobutton.7
+a - scribble.7
+a - slider.7
+a - tabs.7
+a - text.7
+a - textbutton.7
+a - textbutton3.7
+T0-ART libcontrol 20b7d1e48bf0d696f7bdedbaebddf982c0caafdda5ed16cb40b52b34cfece015
+== tier0 lib: libhtml
+7c -FTVw build.c
+7c -FTVw lex.c
+7c -FTVw strinttab.c
+7c -FTVw utils.c
+ar vu /aarch64/lib/libhtml.a build.7 lex.7 strinttab.7 utils.7
+ar: creating /aarch64/lib/libhtml.a
+a - build.7
+a - lex.7
+a - strinttab.7
+a - utils.7
+T0-ART libhtml 101f5f627e7a2dcf2159e8c045cf772df557ac8c46a80c9e0e8881f29ef7e984
+== tier0 lib: libhttpd
+7c -FTVw alloc.c
+7c -FTVw checkcontent.c
+7c -FTVw date.c
+7c -FTVw fail.c
+7c -FTVw gethead.c
+7c -FTVw hio.c
+7c -FTVw httpfmt.c
+7c -FTVw httpunesc.c
+7c -FTVw lower.c
+7c -FTVw okheaders.c
+7c -FTVw parse.c
+7c -FTVw parsereq.c
+7c -FTVw query.c
+7c -FTVw redirected.c
+7c -FTVw unallowed.c
+7c -FTVw urlfmt.c
+7c -FTVw urlunesc.c
+ar vu /aarch64/lib/libhttpd.a alloc.7 checkcontent.7 date.7 fail.7 gethead.7 hio.7 httpfmt.7 httpunesc.7 lower.7 okheaders.7 parse.7 parsereq.7 query.7 redirected.7 unallowed.7 urlfmt.7 urlunesc.7
+ar: creating /aarch64/lib/libhttpd.a
+a - alloc.7
+a - checkcontent.7
+a - date.7
+a - fail.7
+a - gethead.7
+a - hio.7
+a - httpfmt.7
+a - httpunesc.7
+a - lower.7
+a - okheaders.7
+a - parse.7
+a - parsereq.7
+a - query.7
+a - redirected.7
+a - unallowed.7
+a - urlfmt.7
+a - urlunesc.7
+T0-ART libhttpd 1341e0f22900a7283fba8cd8e0cb1241d22386da4bb02fcf98e4f49800a5329c
+== tier0 lib: libsunrpc
+7c -FTVw authunix.c
+7c -FTVw client.c
+7c -FTVw emalloc.c
+7c -FTVw error.c
+7c -FTVw fd.c
+7c -FTVw fmt.c
+7c -FTVw net.c
+7c -FTVw prog.c
+7c -FTVw rpc.c
+7c -FTVw server.c
+7c -FTVw suncall.c
+7c -FTVw udp.c
+7c -FTVw mount3.c
+7c -FTVw nfs3.c
+7c -FTVw portmap.c
+ar vu /aarch64/lib/libsunrpc.a authunix.7 client.7 emalloc.7 error.7 fd.7 fmt.7 net.7 prog.7 rpc.7 server.7 suncall.7 udp.7 mount3.7 nfs3.7 portmap.7
+ar: creating /aarch64/lib/libsunrpc.a
+a - authunix.7
+a - client.7
+a - emalloc.7
+a - error.7
+a - fd.7
+a - fmt.7
+a - net.7
+a - prog.7
+a - rpc.7
+a - server.7
+a - suncall.7
+a - udp.7
+a - mount3.7
+a - nfs3.7
+a - portmap.7
+T0-ART libsunrpc 5a0575432db4002d086e08ff04b4c33db37d616d9fd43bbe0d3869a1c30b6b06
+== tier0 lib: libventi
+7c -FTVw -I. cache.c
+7c -FTVw -I. client.c
+7c -FTVw -I. conn.c
+7c -FTVw -I. dial.c
+7c -FTVw -I. debug.c
+7c -FTVw -I. dtype.c
+7c -FTVw -I. entry.c
+7c -FTVw -I. fcall.c
+7c -FTVw -I. fcallfmt.c
+7c -FTVw -I. file.c
+7c -FTVw -I. hangup.c
+7c -FTVw -I. log.c
+7c -FTVw -I. mem.c
+7c -FTVw -I. packet.c
+7c -FTVw -I. parsescore.c
+7c -FTVw -I. queue.c
+7c -FTVw -I. root.c
+7c -FTVw -I. rpc.c
+7c -FTVw -I. scorefmt.c
+7c -FTVw -I. send.c
+7c -FTVw -I. server.c
+7c -FTVw -I. sha1.c
+7c -FTVw -I. srvhello.c
+7c -FTVw -I. strdup.c
+7c -FTVw -I. string.c
+7c -FTVw -I. time.c
+7c -FTVw -I. version.c
+7c -FTVw -I. zero.c
+7c -FTVw -I. zeroscore.c
+ar vu /aarch64/lib/libventi.a cache.7 client.7 conn.7 dial.7 debug.7 dtype.7 entry.7 fcall.7 fcallfmt.7 file.7 hangup.7 log.7 mem.7 packet.7 parsescore.7 queue.7 root.7 rpc.7 scorefmt.7 send.7 server.7 sha1.7 srvhello.7 strdup.7 string.7 time.7 version.7 zero.7 zeroscore.7
+ar: creating /aarch64/lib/libventi.a
+a - cache.7
+a - client.7
+a - conn.7
+a - dial.7
+a - debug.7
+a - dtype.7
+a - entry.7
+a - fcall.7
+a - fcallfmt.7
+a - file.7
+a - hangup.7
+a - log.7
+a - mem.7
+a - packet.7
+a - parsescore.7
+a - queue.7
+a - root.7
+a - rpc.7
+a - scorefmt.7
+a - send.7
+a - server.7
+a - sha1.7
+a - srvhello.7
+a - strdup.7
+a - string.7
+a - time.7
+a - version.7
+a - zero.7
+a - zeroscore.7
+T0-ART libventi 4e038dfab32f79a26156a767485b60ba80bce0fa397acef4d59cf58e4bae5205
+== tier0 lib: liboventi
+7c -FTVw client.c
+7c -FTVw debug.c
+7c -FTVw errfmt.c
+7c -FTVw fatal.c
+7c -FTVw pack.c
+7c -FTVw packet.c
+7c -FTVw parsescore.c
+7c -FTVw readfully.c
+7c -FTVw rpc.c
+7c -FTVw scorefmt.c
+7c -FTVw server.c
+7c -FTVw strdup.c
+7c -FTVw zero.c
+7c -FTVw plan9-io.c
+7c -FTVw plan9-sha1.c
+7c -FTVw plan9-thread.c
+ar vu /aarch64/lib/liboventi.a client.7 debug.7 errfmt.7 fatal.7 pack.7 packet.7 parsescore.7 readfully.7 rpc.7 scorefmt.7 server.7 strdup.7 zero.7 plan9-io.7 plan9-sha1.7 plan9-thread.7
+ar: creating /aarch64/lib/liboventi.a
+a - client.7
+a - debug.7
+a - errfmt.7
+a - fatal.7
+a - pack.7
+a - packet.7
+a - parsescore.7
+a - readfully.7
+a - rpc.7
+a - scorefmt.7
+a - server.7
+a - strdup.7
+a - zero.7
+a - plan9-io.7
+a - plan9-sha1.7
+a - plan9-thread.7
+T0-ART liboventi 08e7f1e6997d80720e8477d68780b427b0c7343f38f344f572e77eb2eba17e47
+== tier0 lib: libmach
+7c -FTVw -I/sys/src/cmd executable.c
+7c -FTVw -I/sys/src/cmd map.c
+7c -FTVw -I/sys/src/cmd obj.c
+7c -FTVw -I/sys/src/cmd swap.c
+7c -FTVw -I/sys/src/cmd sym.c
+7c -FTVw -I/sys/src/cmd access.c
+7c -FTVw -I/sys/src/cmd machdata.c
+7c -FTVw -I/sys/src/cmd setmach.c
+7c -FTVw -I/sys/src/cmd v.c
+7c -FTVw -I/sys/src/cmd k.c
+7c -FTVw -I/sys/src/cmd sparc64.c
+7c -FTVw -I/sys/src/cmd q.c
+7c -FTVw -I/sys/src/cmd 4.c
+7c -FTVw -I/sys/src/cmd 68020.c
+7c -FTVw -I/sys/src/cmd 5.c
+7c -FTVw -I/sys/src/cmd 6.c
+7c -FTVw -I/sys/src/cmd 7.c
+7c -FTVw -I/sys/src/cmd 8.c
+7c -FTVw -I/sys/src/cmd 9.c
+7c -FTVw -I/sys/src/cmd i.c
+7c -FTVw -I/sys/src/cmd j.c
+7c -FTVw -I/sys/src/cmd vdb.c
+7c -FTVw -I/sys/src/cmd kdb.c
+7c -FTVw -I/sys/src/cmd sparc64db.c
+7c -FTVw -I/sys/src/cmd qdb.c
+7c -FTVw -I/sys/src/cmd 68020db.c
+7c -FTVw -I/sys/src/cmd 5db.c
+7c -FTVw -I/sys/src/cmd 7db.c
+7c -FTVw -I/sys/src/cmd 8db.c
+7c -FTVw -I/sys/src/cmd idb.c
+7c -FTVw -I/sys/src/cmd vobj.c
+7c -FTVw -I/sys/src/cmd kobj.c
+7c -FTVw -I/sys/src/cmd sparc64obj.c
+7c -FTVw -I/sys/src/cmd 68020obj.c
+7c -FTVw -I/sys/src/cmd 5obj.c
+7c -FTVw -I/sys/src/cmd 6obj.c
+7c -FTVw -I/sys/src/cmd 7obj.c
+7c -FTVw -I/sys/src/cmd 8obj.c
+7c -FTVw -I/sys/src/cmd 9obj.c
+7c -FTVw -I/sys/src/cmd qobj.c
+7c -FTVw -I/sys/src/cmd iobj.c
+7c -FTVw -I/sys/src/cmd 4obj.c
+7c -FTVw -I/sys/src/cmd vcodas.c
+ar vu /aarch64/lib/libmach.a executable.7 map.7 obj.7 swap.7 sym.7 access.7 machdata.7 setmach.7 v.7 k.7 sparc64.7 q.7 4.7 68020.7 5.7 6.7 7.7 8.7 9.7 i.7 j.7 vdb.7 kdb.7 sparc64db.7 qdb.7 68020db.7 5db.7 7db.7 8db.7 idb.7 vobj.7 kobj.7 sparc64obj.7 68020obj.7 5obj.7 6obj.7 7obj.7 8obj.7 9obj.7 qobj.7 iobj.7 4obj.7 vcodas.7
+ar: creating /aarch64/lib/libmach.a
+a - executable.7
+a - map.7
+a - obj.7
+a - swap.7
+a - sym.7
+a - access.7
+a - machdata.7
+a - setmach.7
+a - v.7
+a - k.7
+a - sparc64.7
+a - q.7
+a - 4.7
+a - 68020.7
+a - 5.7
+a - 6.7
+a - 7.7
+a - 8.7
+a - 9.7
+a - i.7
+a - j.7
+a - vdb.7
+a - kdb.7
+a - sparc64db.7
+a - qdb.7
+a - 68020db.7
+a - 5db.7
+a - 7db.7
+a - 8db.7
+a - idb.7
+a - vobj.7
+a - kobj.7
+a - sparc64obj.7
+a - 68020obj.7
+a - 5obj.7
+a - 6obj.7
+a - 7obj.7
+a - 8obj.7
+a - 9obj.7
+a - qobj.7
+a - iobj.7
+a - 4obj.7
+a - vcodas.7
+T0-ART libmach f3e0bf5900adfce66df51f6df3cc79760eccef557bb0542e5b1d47166f129125
+== tier0 lib: libaml
+7c -FTVw aml.c
+7c -FTVw amlmapio.c
+7c -FTVw amlunmapio.c
+7c -FTVw amlalloc.c
+7c -FTVw amldelay.c
+ar vu /aarch64/lib/libaml.a aml.7 amlmapio.7 amlunmapio.7 amlalloc.7 amldelay.7
+ar: creating /aarch64/lib/libaml.a
+a - aml.7
+a - amlmapio.7
+a - amlunmapio.7
+a - amlalloc.7
+a - amldelay.7
+T0-ART libaml 88548f13f06c6fa856e8a7a50bf99442d19dbda50caec256290732dd9e790c68
+== tier0 lib: libdynld
+7c -FTVw dynld-aarch64.c
+7c -FTVw dynloadfd.c
+7c -FTVw dynld.c
+warning: dynld.c:128 useless or misleading comparison: ULONG < 0
+ar vu /aarch64/lib/libdynld.a dynld-aarch64.7 dynloadfd.7 dynld.7
+ar: creating /aarch64/lib/libdynld.a
+a - dynld-aarch64.7
+a - dynloadfd.7
+a - dynld.7
+T0-ART libdynld 94b728e5b4b142a7d304a05140614b196db50c024243463a0fe5a4a8533ad656
+== tier1 entry: cmd/rc
+yacc -d syn.y
+cmp -s x.tab.h y.tab.h || cp y.tab.h x.tab.h
+7c -FTVw code.c
+7c -FTVw exec.c
+7c -FTVw glob.c
+7c -FTVw here.c
+7c -FTVw io.c
+7c -FTVw lex.c
+7c -FTVw pcmd.c
+7c -FTVw pfnc.c
+7c -FTVw simple.c
+7c -FTVw subr.c
+7c -FTVw trap.c
+7c -FTVw tree.c
+7c -FTVw var.c
+7c -FTVw havefork.c
+7c -FTVw plan9.c
+7c -FTVw y.tab.c
+7l  -o 7.out code.7 exec.7 glob.7 here.7 io.7 lex.7 pcmd.7 pfnc.7 simple.7 subr.7 trap.7 tree.7 var.7 havefork.7 plan9.7 y.tab.7
+cp 7.out /aarch64/bin/rc
+T1-ART rc 8112a427c088d5726838b46ff58ee74236be5e54af48077d160647447336d74c
+== tier1 entry: cmd/grep
+yacc -d grep.y
+7c -FTVw main.c
+7c -FTVw comp.c
+7c -FTVw sub.c
+7c -FTVw y.tab.c
+7l  -o 7.out y.tab.7 main.7 comp.7 sub.7
+cp 7.out /aarch64/bin/grep
+T1-ART grep ae7b509aadf73c43bae0cd155514b085fb80f74739e18ae6bfb6d24469523b56
+== tier1 entry: cmd/cat
+7^c -FTVw cat.c
+7^l  -o 7.cat cat.7
+cp /bin/cp o._cp
+o._cp 7.cat /aarch64/bin/cat
+T1-ART cat 910baf565311ad9efcd37591752d365e999781573a3819d6d921830fc6efc1c3
+== tier1 entry: cmd/cp
+7^c -FTVw cp.c
+7^l  -o 7.cp cp.7
+o._cp 7.cp /aarch64/bin/cp
+T1-ART cp 5edb0d44f45dca42472134cfb2e1170d12842a3315b3b0d6ccf5deac497875c6
+== tier1 entry: cmd/date
+7^c -FTVw date.c
+7^l  -o 7.date date.7
+o._cp 7.date /aarch64/bin/date
+T1-ART date bb663ef370d33d847f76aa6066ea55a378aaafee9d936379d1bb78f8160ae9e9
+== tier1 entry: cmd/echo
+7^c -FTVw echo.c
+7^l  -o 7.echo echo.7
+o._cp 7.echo /aarch64/bin/echo
+T1-ART echo a24c40af70ce222ac7d381e18658e4f0f12da04a008cdfb8f8e49006dd1784d0
+== tier1 entry: cmd/ls
+7^c -FTVw ls.c
+7^l  -o 7.ls ls.7
+o._cp 7.ls /aarch64/bin/ls
+T1-ART ls f6424d4bb5246f194ac44837004aa9056b97f28d2ce918c1d2e9302dabdad404
+== tier1 entry: cmd/mkdir
+7^c -FTVw mkdir.c
+7^l  -o 7.mkdir mkdir.7
+o._cp 7.mkdir /aarch64/bin/mkdir
+T1-ART mkdir f370a955a75b22effba43cb104a30131ae3e5a71db50ff73b1bf1fe9579c8e41
+== tier1 entry: cmd/mv
+7^c -FTVw mv.c
+7^l  -o 7.mv mv.7
+o._cp 7.mv /aarch64/bin/mv
+T1-ART mv f4f25f167253f69005e1c7cfb3c9073077d6ba5dced496505cc63d0703a7e7aa
+== tier1 entry: cmd/ps
+7^c -FTVw ps.c
+7^l  -o 7.ps ps.7
+o._cp 7.ps /aarch64/bin/ps
+T1-ART ps 0da1b49e80e8e62f85723840df0f406930ade101d3dc3cc16144cc4804ea4863
+== tier1 entry: cmd/rm
+7^c -FTVw rm.c
+7^l  -o 7.rm rm.7
+o._cp 7.rm /aarch64/bin/rm
+T1-ART rm cee33356196b1814de93c10a4c91ed3d2b2582bd76028a761976e98ca3f8520c
+== tier1 entry: cmd/sed
+7^c -FTVw sed.c
+7^l  -o 7.sed sed.7
+o._cp 7.sed /aarch64/bin/sed
+T1-ART sed 406ff7e23547f55a22c3955677098ffb623003ef5b2a2dd24deff691085fc197
+== tier1 entry: cmd/test
+7^c -FTVw test.c
+7^l  -o 7.test test.7
+o._cp 7.test /aarch64/bin/test
+T1-ART test e4a957cddb9d0de67204261fadd4e2da68d88849bdfec51eeb59fd6a73953bfb
+== tier1 entry: cmd/wc
+7^c -FTVw wc.c
+7^l  -o 7.wc wc.7
+o._cp 7.wc /aarch64/bin/wc
+T1-ART wc d7c524f5b925e5667c2f1ffb98870395a1d34f2adb2c07bf4dcc45015c202557
+== tier1 entry: cmd/ip/ipconfig
+7c -FTVw main.c
+7c -FTVw ipv6.c
+7c -FTVw ppp.c
+7l  -o 7.out main.7 ipv6.7 ppp.7
+cp 7.out /aarch64/bin/ip/ipconfig
+T1-ART ipconfig a3a71e5401cbfd5c6f00aeb7000af8f2549d3acac4d6872edbcb4e7693ac8cc0
+== tier1 entry: cmd/auth/factotum:factotum
+7c -FTVw apop.c
+7c -FTVw chap.c
+7c -FTVw httpdigest.c
+7c -FTVw p9any.c
+7c -FTVw p9cr.c
+7c -FTVw p9sk1.c
+7c -FTVw pass.c
+7c -FTVw rsa.c
+7c -FTVw wep.c
+7c -FTVw wpapsk.c
+7c -FTVw confirm.c
+7c -FTVw fs.c
+7c -FTVw log.c
+7c -FTVw rpc.c
+7c -FTVw util.c
+7c -FTVw secstore.c
+7l -o 7.factotum apop.7 chap.7 httpdigest.7 p9any.7 p9cr.7 p9sk1.7 pass.7 rsa.7 wep.7 wpapsk.7 confirm.7 fs.7 log.7 rpc.7 util.7 secstore.7
+cp 7.factotum /aarch64/bin/auth/factotum
+T1-ART factotum 55d2bcf5d91fb3f13c2cb5d31abc736cfe9b618aa880844d0d29966100cb7e8f
+== tier1 entry: 9k/boot
+libboot.a7 doesn't exist: assuming it will be an archive
+7c -I. -FTVw bootr9.c
+7c -I. -FTVw printstub.c
+7c -I. -FTVw bootauth.c
+7c -I. -FTVw aux.c
+7c -I. -FTVw boot.c
+7c -I. -FTVw bootcache.c
+7c -I. -FTVw bootip.c
+7c -I. -FTVw local.c
+7c -I. -FTVw embed.c
+7c -I. -FTVw settime.c
+7c -I. -FTVw parts.c
+7c -I. -FTVw usb.c
+names=`{membername $newprereq}
+ar vu libboot.a7 $names
+rm $names
+ar: creating libboot.a7
+a - bootauth.7
+a - aux.7
+a - boot.7
+a - bootcache.7
+a - bootip.7
+a - local.7
+a - embed.7
+a - settime.7
+a - parts.7
+a - usb.7
+7l -o boot bootr9.7 libboot.a7 printstub.7
+rm -f *.[568ijqv7] libboot.a7 boot
+T1-ART boot 0d89f91869b6b7d2ed21994488c455f71225973e403d22df42657363a3061014
+== tier1 entry: stage/init
+7^c -FTVw init.c
+7^l  -o 7.init init.7
+cp 7.init /$objtype/init
+T1-ART init ac0390eae813a104ea5ff87ec37fb552523ae2d7860bd0b6002264501d5e34bb
+== tier1 entry: stage/stacksmoke
+T1-ART stacksmoke 1f56a371e375475c29182ad47f3aa38c54984479957471815d76241a47caae76
+== tier1 entry: cmd/paqfs:paqfs
+7c -FTVw paqfs.c
+7l  -o 7.paqfs paqfs.7
+cp 7.paqfs /aarch64/bin/paqfs
+T1-ART paqfs 4f05023c64eb1c737af368848b84b57d6a8a91f7d2e4ef5e14e106aa0843bb13
+== tier1 entry: cmd/7a
+7c -FTVw y.tab.c
+7c -FTVw lex.c
+7l  -o 7.out y.tab.7 lex.7
+cp 7.out /aarch64/bin/7a
+T1-ART 7a c5b71ce4f59316a97ff815c921d30d22bffccfbe9cdb6b2efc32537c00fa2c9e
+== tier1 entry: cmd/7c
+7c -FTVw cgen.c
+7c -FTVw enam.c
+7c -FTVw list.c
+7c -FTVw sgen.c
+7c -FTVw swt.c
+7c -FTVw txt.c
+7c -FTVw reg.c
+7c -FTVw peep.c
+warning: peep.c:604 unreachable code SWITCH
+warning: peep.c:596 set and not used: a 
+warning: peep.c:1818 set and not used: p 
+7c -FTVw ../cc/pgen.c
+7c -FTVw ../cc/pswt.c
+7c -FTVw machcap.c
+7c -FTVw mul.c
+cd ../cc
+mk install
+mk clean
+cc.a7 doesn't exist: assuming it will be an archive
+7c -FTVw y.tab.c
+7c -FTVw lex.c
+7c -FTVw mac.c
+7c -FTVw dcl.c
+7c -FTVw acid.c
+7c -FTVw pickle.c
+7c -FTVw bits.c
+7c -FTVw com.c
+7c -FTVw scon.c
+7c -FTVw funct.c
+7c -FTVw sub.c
+7c -FTVw com64.c
+7c -FTVw compat.c
+7c -FTVw dpchk.c
+7c -FTVw omachcap.c
+ar vu cc.a7 y.tab.7 lex.7 mac.7 dcl.7 acid.7 pickle.7 bits.7 com.7 scon.7 funct.7 sub.7 com64.7 compat.7 dpchk.7 omachcap.7
+ar: creating cc.a7
+a - y.tab.7
+a - lex.7
+a - mac.7
+a - dcl.7
+a - acid.7
+a - pickle.7
+a - bits.7
+a - com.7
+a - scon.7
+a - funct.7
+a - sub.7
+a - com64.7
+a - compat.7
+a - dpchk.7
+a - omachcap.7
+date
+Wed Nov  4 22:09:24 EST 2026
+rm -f *.[568ijqv7] y.tab.? y.output y.error $CLEANFILES
+7l  -o 7.out cgen.7 enam.7 list.7 sgen.7 swt.7 txt.7 reg.7 peep.7 pgen.7 pswt.7 machcap.7 mul.7 ../cc/cc.a7
+cp 7.out /aarch64/bin/7c
+T1-ART 7c c2087339e14cb4ad50eb57fce36f85fccb448b33ba52e7461c408a64c6ca8557
+== tier1 entry: cmd/7l
+7c -FTVw -. -I. asm.c
+7c -FTVw -. -I. asmout.c
+7c -FTVw -. -I. bits.c
+7c -FTVw -. -I. cnam.c
+7c -FTVw -. -I. compat.c
+7c -FTVw -. -I. dynstub.c
+7c -FTVw -. -I. ../7c/enam.c
+7c -FTVw -. -I. list.c
+7c -FTVw -. -I. mod.c
+7c -FTVw -. -I. noop.c
+7c -FTVw -. -I. obj.c
+7c -FTVw -. -I. optab.c
+7c -FTVw -. -I. pass.c
+7c -FTVw -. -I. span.c
+7l  -o 7.out asm.7 asmout.7 bits.7 cnam.7 compat.7 dynstub.7 enam.7 list.7 mod.7 noop.7 obj.7 optab.7 pass.7 span.7
+cp 7.out /aarch64/bin/7l
+T1-ART 7l 9ac1334d197da6067ac5386f681e0066fbb54ef02acd121730b7ba063342bccc
+== tier1 entry: cmd/cc
+cc.a7 doesn't exist: assuming it will be an archive
+yacc -d cc.y
+
+conflicts: 3 shift/reduce
+7c -FTVw y.tab.c
+7c -FTVw lex.c
+7c -FTVw mac.c
+7c -FTVw dcl.c
+7c -FTVw acid.c
+7c -FTVw pickle.c
+7c -FTVw bits.c
+7c -FTVw com.c
+7c -FTVw scon.c
+7c -FTVw funct.c
+7c -FTVw sub.c
+7c -FTVw com64.c
+7c -FTVw compat.c
+7c -FTVw dpchk.c
+7c -FTVw omachcap.c
+ar vu cc.a7 y.tab.7 lex.7 mac.7 dcl.7 acid.7 pickle.7 bits.7 com.7 scon.7 funct.7 sub.7 com64.7 compat.7 dpchk.7 omachcap.7
+ar: creating cc.a7
+a - y.tab.7
+a - lex.7
+a - mac.7
+a - dcl.7
+a - acid.7
+a - pickle.7
+a - bits.7
+a - com.7
+a - scon.7
+a - funct.7
+a - sub.7
+a - com64.7
+a - compat.7
+a - dpchk.7
+a - omachcap.7
+date
+Wed Nov  4 22:09:24 EST 2026
+T1-ART cc.a7 fa140018c5d416519229c6b5edc6a2d86c9ae154c4dbd381db95d62a81f79722
+== tier1 entry: cmd/awk
+yacc -o awkgram.c -d awkgram.y
+
+conflicts: 42 shift/reduce, 83 reduce/reduce
+7c -FTVw re.c
+7c -FTVw lex.c
+7c -FTVw main.c
+7c -FTVw parse.c
+objtype=$cputype mk maketab.$cputype
+9c -FTVw maketab.c
+9l  -o $objtype.maketab maketab.o
+7c -FTVw popen.c
+7c -FTVw tran.c
+7c -FTVw lib.c
+7c -FTVw run.c
+7c -FTVw awkgram.c
+./$cputype.maketab >proctab.c
+7c -FTVw proctab.c
+7l  -o 7.out re.7 lex.7 main.7 parse.7 proctab.7 popen.7 tran.7 lib.7 run.7 awkgram.7
+cp 7.out /aarch64/bin/awk
+T1-ART awk d928774c895a3463293b78128a817545dea53b3cfbe560f4dcd100afcb51436d
+== tier1 entry: cmd/cpp
+7c -FTVw cpp.c
+7c -FTVw lex.c
+7c -FTVw nlist.c
+7c -FTVw tokens.c
+7c -FTVw macro.c
+7c -FTVw eval.c
+7c -FTVw include.c
+7c -FTVw hideset.c
+7l  -o 7.out cpp.7 lex.7 nlist.7 tokens.7 macro.7 eval.7 include.7 hideset.7
+cp 7.out /aarch64/bin/cpp
+T1-ART cpp 1475485314667a4615da134fa03ad728e6ea452e67e7d470487a9dc6f416bfc1
+== tier1 entry: cmd/mk
+7c -FTVw arc.c
+7c -FTVw archive.c
+7c -FTVw bufblock.c
+7c -FTVw env.c
+7c -FTVw file.c
+7c -FTVw graph.c
+7c -FTVw job.c
+7c -FTVw lex.c
+7c -FTVw main.c
+7c -FTVw match.c
+7c -FTVw mk.c
+7c -FTVw parse.c
+7c -FTVw rc.c
+7c -FTVw recipe.c
+7c -FTVw rule.c
+7c -FTVw run.c
+7c -FTVw shprint.c
+7c -FTVw symtab.c
+7c -FTVw var.c
+7c -FTVw varsub.c
+7c -FTVw word.c
+7c -FTVw plan9.c
+7l  -o 7.out arc.7 archive.7 bufblock.7 env.7 file.7 graph.7 job.7 lex.7 main.7 match.7 mk.7 parse.7 rc.7 recipe.7 rule.7 run.7 shprint.7 symtab.7 var.7 varsub.7 word.7 plan9.7
+cp 7.out /aarch64/bin/mk
+T1-ART mk e2042edbe1850bfb1ccfa4bc9be22cf0f5b86c5320e77898ad60efaf398595f6
+== tier1 entry: cmd/yacc
+7^c -FTVw yacc.c
+7^l  -o 7.yacc yacc.7
+o._cp 7.yacc /aarch64/bin/yacc
+T1-ART yacc 0d84354a7d6331e15950da5871724eb19e04d3c2efad8f8d1b09406ebf318f95
+== tier1 entry: cmd/lex
+7c -FTVw lmain.c
+yacc -d parser.y
+7c -FTVw sub1.c
+7c -FTVw sub2.c
+7c -FTVw header.c
+7c -FTVw y.tab.c
+7l  -o 7.out lmain.7 y.tab.7 sub1.7 sub2.7 header.7
+cp 7.out /aarch64/bin/lex
+T1-ART lex 28de8233ce5ae601cee8b7870f203cb184d88b5abeeec753f7a0319eb4992b91
+== tier1 entry: cmd/bc
+yacc -d -s bc bc.y
+mv bc.tab.c bc.c
+7^c -FTVw bc.c
+7^l  -o 7.bc bc.7
+o._cp 7.bc /aarch64/bin/bc
+T1-ART bc b415ff552d806641b6096f7d671bbbda1f2fe35a8bb688e8416a2cbe2a0bff71
+== tier1 entry: cmd/sort
+7^c -FTVw sort.c
+7^l  -o 7.sort sort.7
+o._cp 7.sort /aarch64/bin/sort
+T1-ART sort 70faa7facbccf03d59a22f5b3832742bddd25d0bcc943cc569de1b3d52963200
+== tier1 entry: cmd/tr
+7^c -FTVw tr.c
+7^l  -o 7.tr tr.7
+o._cp 7.tr /aarch64/bin/tr
+T1-ART tr 8fccad1fe2ca2d31f10f29469521869166c87f4c0b1d1229eca2a966fddf3264
+== tier1 entry: cmd/uniq
+7^c -FTVw uniq.c
+7^l  -o 7.uniq uniq.7
+o._cp 7.uniq /aarch64/bin/uniq
+T1-ART uniq 9ec4982929a4cb9fd4802b45cb0b4de30e4fb458375714436f072bd30aaf24b9
+== tier1 entry: cmd/tail
+7^c -FTVw tail.c
+7^l  -o 7.tail tail.7
+o._cp 7.tail /aarch64/bin/tail
+T1-ART tail 4a3f6b788fe3fb859f7416f9fe51c9c07c646afad0555ca9ad1e8423a45557be
+== tier1 entry: cmd/dd
+7^c -FTVw dd.c
+7^l  -o 7.dd dd.7
+o._cp 7.dd /aarch64/bin/dd
+T1-ART dd 764918de2822257ec6ae78f13b2f9abe36a7392cf2e2dbc9aa15844071dd6750
+== tier1 entry: cmd/tar
+7^c -FTVw tar.c
+7^l  -o 7.tar tar.7
+o._cp 7.tar /aarch64/bin/tar
+T1-ART tar ce169f871d1a76464ea730ebb99fa738b1e7b2a413d9ff738da38cb6d68a5514
+== tier1 entry: cmd/chmod
+7^c -FTVw chmod.c
+7^l  -o 7.chmod chmod.7
+o._cp 7.chmod /aarch64/bin/chmod
+T1-ART chmod f61771ae3f139741f7559d52638773c3ca6ae9703444cae74b3953095db9d08e
+== tier1 entry: cmd/tee
+7^c -FTVw tee.c
+7^l  -o 7.tee tee.7
+o._cp 7.tee /aarch64/bin/tee
+T1-ART tee 5aa3ed60cc47de5e0cb7b2d5ffd774e4f096bdd8eaf406b6e00373b975771d2f
+== tier1 entry: cmd/basename
+7^c -FTVw basename.c
+7^l  -o 7.basename basename.7
+o._cp 7.basename /aarch64/bin/basename
+T1-ART basename 5bb6382d377dbbdc30c382ef3350b755495a039d349f52018ea902336b2c23ce
+== tier1 entry: cmd/sleep
+7^c -FTVw sleep.c
+7^l  -o 7.sleep sleep.7
+o._cp 7.sleep /aarch64/bin/sleep
+T1-ART sleep 463aed1b2bce64c38d032131f111f34aaf5b7578125d91c1f37026d8b4a70264
+== tier1 entry: cmd/cmp
+7^c -FTVw cmp.c
+7^l  -o 7.cmp cmp.7
+o._cp 7.cmp /aarch64/bin/cmp
+T1-ART cmp 239a3465152fbe157b86caa3b5fed6c135d396e672aae9fb535ec3acf37acea7
+== tier1 entry: cmd/comm
+7^c -FTVw comm.c
+7^l  -o 7.comm comm.7
+o._cp 7.comm /aarch64/bin/comm
+T1-ART comm baef94165a153ce3e74ea3d9abf453ac59dbd0308e421218734c90a0d4f0c1f7
+== tier1 entry: cmd/fmt
+7^c -FTVw fmt.c
+7^l  -o 7.fmt fmt.7
+o._cp 7.fmt /aarch64/bin/fmt
+T1-ART fmt 1aea8e1369bd74caf92758b72f77fe800be821f451f8fa847b2c1bdfa61dd952
+== tier1 entry: cmd/join
+7^c -FTVw join.c
+7^l  -o 7.join join.7
+o._cp 7.join /aarch64/bin/join
+T1-ART join e7f73d3c47c58099433bad1ef71d4f1ec63d2a9444cf75279ae35256a57c7b12
+== tier1 entry: cmd/look
+7^c -FTVw look.c
+7^l  -o 7.look look.7
+o._cp 7.look /aarch64/bin/look
+T1-ART look 1de1aba26701c9e651afa86b2c8d94c491c7c221d6a975e9e17f098abbdf2ace
+== tier1 entry: cmd/pr
+7^c -FTVw pr.c
+7^l  -o 7.pr pr.7
+o._cp 7.pr /aarch64/bin/pr
+T1-ART pr 23ed3fce4e0eb7bcf76722cfeb2935599b3bbf2d7d9959a8dcf004c76d5c8283
+== tier1 entry: cmd/split
+7^c -FTVw split.c
+7^l  -o 7.split split.7
+o._cp 7.split /aarch64/bin/split
+T1-ART split 044bac0dda8a21eef4092a3bb185700350bd4a8aff0d40bf71a00de237069d93
+== tier1 entry: cmd/strings
+7^c -FTVw strings.c
+7^l  -o 7.strings strings.7
+o._cp 7.strings /aarch64/bin/strings
+T1-ART strings e85795dd79409f0a38fcfd6dcd3a9c6006dd1d7745bf540ecebc5748363b3b58
+== tier1 entry: cmd/sum
+7^c -FTVw sum.c
+7^l  -o 7.sum sum.7
+o._cp 7.sum /aarch64/bin/sum
+T1-ART sum 7caf4fb596bbc6dca59f4e46147c1d4ce50de14e475d36c1c577fd22b0221f29
+== tier1 entry: cmd/md5sum
+7^c -FTVw md5sum.c
+7^l  -o 7.md5sum md5sum.7
+o._cp 7.md5sum /aarch64/bin/md5sum
+T1-ART md5sum e74aee444bcb0c2b7d1f828ed16922eb97ea79e492d835659788b2df18eceabd
+== tier1 entry: cmd/sha1sum
+7^c -FTVw sha1sum.c
+7^l  -o 7.sha1sum sha1sum.7
+o._cp 7.sha1sum /aarch64/bin/sha1sum
+T1-ART sha1sum add984735c93f188fa3cc0b4aaa12caf4d04f440f8279e4a07e86e851864944b
+== tier1 entry: cmd/ed
+7^c -FTVw ed.c
+7^l  -o 7.ed ed.7
+o._cp 7.ed /aarch64/bin/ed
+T1-ART ed c68debd04c0f591b515f691152ae49bf95b7dacc0649cd044be9546873dbe098
+== tier1 entry: cmd/dc
+7^c -FTVw dc.c
+7^l  -o 7.dc dc.7
+o._cp 7.dc /aarch64/bin/dc
+T1-ART dc 0e6b0fd1293f4c8bb1879f91b6ebbbe0f539d3e91c0dbf158bd3fd48aeb5914a
+== tier1 entry: cmd/units
+yacc -d -s units units.y
+mv units.tab.c units.c
+7^c -FTVw units.c
+7^l  -o 7.units units.7
+o._cp 7.units /aarch64/bin/units
+T1-ART units 8812acfb9e6d6e1ffa5b01a144ef7ff81b5758c666874acaa46f3ed0e179c848
+== tier1 entry: cmd/cal
+7^c -FTVw cal.c
+7^l  -o 7.cal cal.7
+o._cp 7.cal /aarch64/bin/cal
+T1-ART cal ccbdd4966e391d86d47387c762922d801fe1901fb6461ea06c7a9be30026daea
+== tier1 entry: cmd/touch
+7^c -FTVw touch.c
+7^l  -o 7.touch touch.7
+o._cp 7.touch /aarch64/bin/touch
+T1-ART touch c1eba37656cc67af08277fc72295f1685306bbe69f66d4343709bcd50dca091b
+== tier1 entry: cmd/time
+7^c -FTVw time.c
+7^l  -o 7.time time.7
+o._cp 7.time /aarch64/bin/time
+T1-ART time c428bce9318c718ead2611ca0c0a2abd094f9cb73098b32f02d67f389cb7beef
+== tier1 entry: cmd/seq
+7^c -FTVw seq.c
+7^l  -o 7.seq seq.7
+o._cp 7.seq /aarch64/bin/seq
+T1-ART seq 303b6be1ca18e1dbefec91adfabb384dc13041e325bdbc5a9c2031c5b9513851
+== tier1 entry: cmd/read
+7^c -FTVw read.c
+7^l  -o 7.read read.7
+o._cp 7.read /aarch64/bin/read
+T1-ART read 768541fa714cdb0b333c380a9bd2c7bbd2f978900dec3ea7d3fdb2c67e0f7c4b
+== tier1 entry: cmd/du
+7^c -FTVw du.c
+7^l  -o 7.du du.7
+o._cp 7.du /aarch64/bin/du
+T1-ART du 342509b53e0178ad61546f452e5def72b325a18a51cf26c1bddb5eb0875462cc
+== tier1 entry: cmd/xd
+7^c -FTVw xd.c
+7^l  -o 7.xd xd.7
+o._cp 7.xd /aarch64/bin/xd
+T1-ART xd 0a066b53f3a8498afb6abea7b40c31dcda54fabc5a93c01729f9eab88d6b13ea
+== tier1 entry: cmd/nm
+7^c -FTVw nm.c
+7^l  -o 7.nm nm.7
+o._cp 7.nm /aarch64/bin/nm
+T1-ART nm 4ebe49e5feebe49643ae8daa75c7aa8a791f6e60e101fad18f8c29c9872b80f4
+== subset cmd: dd (per-target install, 07-04)
+7^l  -o 7.dd dd.7
+o._cp 7.dd /aarch64/bin/dd
+== subset cmd: bind (per-target install, 07-07)
+7^c -FTVw bind.c
+7^l  -o 7.bind bind.7
+o._cp 7.bind /aarch64/bin/bind
+== boot chain: netblast (07-04, D-08)
+== tier-0 lib test binaries (06-05, D-06)
+7c -FTVw drawtest.c
+ar vu /aarch64/lib/libmemdraw.a addr.7 alloc.7 arc.7 cload.7 cmap.7 cread.7 defont.7 draw.7 ellipse.7 fillpoly.7 hwdraw.7 iprint.7 line.7 load.7 memsetchan.7 openmemsubfont.7 poly.7 read.7 string.7 subfont.7 unload.7 write.7
+7c -FTVw arctest.c
+warning: arctest.c:32 set and not used: t0 
+warning: arctest.c:33 set and not used: t0 
+7l -o 7.drawtest drawtest.7 /aarch64/lib/libmemdraw.a
+
+7l -o 7.arctest arctest.7 draw.7 arc.7 /aarch64/lib/libmemdraw.a
+7c -FTVw test.c
+warning: test.c:8 param declared and not used: argc
+warning: test.c:7 set and not used: argc 
+ar vu /aarch64/lib/libdraw.a alloc.7 allocimagemix.7 arith.7 bezier.7 border.7 buildfont.7 bytesperline.7 chan.7 cloadimage.7 computil.7 creadimage.7 debug.7 defont.7 draw.7 drawrepl.7 egetrect.7 ellipse.7 emenuhit.7 event.7 fmt.7 font.7 freesubfont.7 getdefont.7 getrect.7 getsubfont.7 icossin.7 icossin2.7 init.7 keyboard.7 line.7 menuhit.7 mkfont.7 mouse.7 newwindow.7 openfont.7 poly.7 loadimage.7 readcolmap.7 readimage.7 readsubfont.7 rectclip.7 replclipr.7 rgb.7 scroll.7 string.7 stringbg.7 stringsubfont.7 stringwidth.7 subfont.7 subfontcache.7 subfontname.7 unloadimage.7 window.7 writecolmap.7 writeimage.7 writesubfont.7
+7l -o 7.test test.7 /aarch64/lib/libdraw.a
+7c -FTVw test.c
+ar vu /aarch64/lib/libdisk.a disk.7 proto.7 scsi.7
+7l -o 7.test test.7 /aarch64/lib/libdisk.a
+== tier tree (/aarch64/bin):
+/aarch64/bin/7a
+/aarch64/bin/7c
+/aarch64/bin/7l
+/aarch64/bin/ape
+/aarch64/bin/auth
+/aarch64/bin/aux
+/aarch64/bin/awk
+/aarch64/bin/basename
+/aarch64/bin/bc
+/aarch64/bin/bind
+/aarch64/bin/bitsy
+/aarch64/bin/cal
+/aarch64/bin/cat
+/aarch64/bin/chmod
+/aarch64/bin/cmp
+/aarch64/bin/comm
+/aarch64/bin/cp
+/aarch64/bin/cpp
+/aarch64/bin/date
+/aarch64/bin/dc
+/aarch64/bin/dd
+/aarch64/bin/dial
+/aarch64/bin/disk
+/aarch64/bin/du
+/aarch64/bin/echo
+/aarch64/bin/ed
+/aarch64/bin/fmt
+/aarch64/bin/fossil
+/aarch64/bin/fs
+/aarch64/bin/games
+/aarch64/bin/grep
+/aarch64/bin/ip
+/aarch64/bin/join
+/aarch64/bin/lex
+/aarch64/bin/look
+/aarch64/bin/ls
+/aarch64/bin/md5sum
+/aarch64/bin/mk
+/aarch64/bin/mkdir
+/aarch64/bin/mkpaqfs
+/aarch64/bin/mv
+/aarch64/bin/ndb
+/aarch64/bin/nm
+/aarch64/bin/paqfs
+/aarch64/bin/pr
+/aarch64/bin/ps
+/aarch64/bin/rc
+/aarch64/bin/read
+/aarch64/bin/replica
+/aarch64/bin/rm
+/aarch64/bin/sed
+/aarch64/bin/seq
+/aarch64/bin/sha1sum
+/aarch64/bin/sleep
+/aarch64/bin/sort
+/aarch64/bin/split
+/aarch64/bin/strings
+/aarch64/bin/sum
+/aarch64/bin/tail
+/aarch64/bin/tar
+/aarch64/bin/tee
+/aarch64/bin/test
+/aarch64/bin/time
+/aarch64/bin/touch
+/aarch64/bin/tr
+/aarch64/bin/uniq
+/aarch64/bin/units
+/aarch64/bin/upas
+/aarch64/bin/usb
+/aarch64/bin/venti
+/aarch64/bin/wc
+/aarch64/bin/xd
+/aarch64/bin/yacc
+-- ip:
+/aarch64/bin/ip/httpd
+/aarch64/bin/ip/ipconfig
+-- auth:
+/aarch64/bin/auth/disable
+/aarch64/bin/auth/enable
+/aarch64/bin/auth/factotum
+/aarch64/bin/auth/status
+TIER-BUILD-OK

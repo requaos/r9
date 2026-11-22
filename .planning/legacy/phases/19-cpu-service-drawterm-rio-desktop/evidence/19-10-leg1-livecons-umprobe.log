@@ -1,0 +1,27 @@
+spawn /nix/store/y8h5ana2drnzs2fdx6fxgr74bwmzi8y9-drawterm-19.06/bin/drawterm -G -s  -O cpu=tcp!127.0.0.1!17011,auth=tcp!127.0.0.1!5671,user=glenda
+glenda@requaos-harvey password: 
+cpu: failed to chdir to '/tmp/gsd-1910'
+cpu% echo UM-START
+UM-START
+cpu% cat /dev/livprobe
+cat: can't open /dev/livprobe: namec: does not exist
+cpu% unmount /dev
+unmount: namec: does not exist
+cpu% echo NIL-UNMOUNT-DONE
+NIL-UNMOUNT-DONE
+cpu% cat /dev/livprobe
+cat: can't open /dev/livprobe: namec: does not exist
+cpu% bind -b '#e' /dev
+cpu% cat /dev/livprobe
+cat: can't open /dev/livprobe: namec: does not exist
+cpu% unmount '#e' /dev
+unmount: namec: does not exist
+cpu% echo NAMED-UNMOUNT-DONE
+NAMED-UNMOUNT-DONE
+cpu% cat /dev/livprobe
+cat: can't open /dev/livprobe: namec: does not exist
+cpu% echo UM-END
+UM-END
+cpu% exit
+
+UM-COMPLETE

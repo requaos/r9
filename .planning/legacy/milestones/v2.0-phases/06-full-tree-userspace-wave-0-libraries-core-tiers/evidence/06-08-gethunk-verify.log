@@ -1,0 +1,1223 @@
+warning: Git tree '/Users/neilskinner/code/harvey' has uncommitted changes
+harvey devshell: HARVEY=/Users/neilskinner/code/harvey PLAN9=/nix/store/7rakg00y5ajwwgpzdy4zv3k1rxli9g6i-plan9port-0-unstable-2025-11-10/plan9
+  host bin: /Users/neilskinner/code/harvey/.build/hostbin-darwin-aarch64/bin
+  harness: /nix/store/va7gdkblpmyccag9pdpdxf171p59400b-harness-0.1.0/bin/harness
+apps: nix run .#setup -> .#toolchain -> .#build | .#iso
+(. #build runs the Linux namespace build inside a lima VM)
+== [archive] host-build pristine 6c from df4b1cb4ab5d7bc9f97bb7b4882933428336acda
+
+conflicts: 3 shift/reduce
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+../cc/lex.c:951:15: warning: overlapping comparisons always evaluate to true [-Wtautological-overlap-compare]
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+./../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+./../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+./../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+./../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+./../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+./../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+./../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+./../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+./../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+./../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+./../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+./../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+./../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+./../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+./../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+./../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+peep.c:773:13: warning: converting the enum constant to a boolean [-Wint-in-bool-context]
+peep.c:775:13: warning: converting the enum constant to a boolean [-Wint-in-bool-context]
+peep.c:788:13: warning: converting the enum constant to a boolean [-Wint-in-bool-context]
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+./../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+./../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+./../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+./../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+./../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+./../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+./../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+./../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+txt.c:225:12: warning: converting the enum constant to a boolean [-Wint-in-bool-context]
+== [archive] host-build pristine 7c from df4b1cb4ab5d7bc9f97bb7b4882933428336acda
+
+conflicts: 3 shift/reduce
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+../cc/lex.c:951:15: warning: overlapping comparisons always evaluate to true [-Wtautological-overlap-compare]
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+./../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+./../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+./../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+./../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+./../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+./../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+./../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+./../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+list.c:111:19: warning: adding 'int' to a string does not append to the string [-Wstring-plus-int]
+list.c:111:19: note: use array indexing to silence this warning
+list.c:35:14: warning: unused variable 'conds' [-Wunused-variable]
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+./../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+./../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+./../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+./../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+./../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+./../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+peep.c:189:6: warning: absolute value function 'abs' given an argument of type 'vlong' (aka 'long long') but has parameter of type 'int' which may cause truncation of value [-Wabsolute-value]
+peep.c:189:6: note: use function 'llabs' instead
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+./../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+./../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+./../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+./../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+./../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+./../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+swt.c:477:11: warning: implicit conversion from 'int' to 'char' changes value from 320 to 64 [-Wconstant-conversion]
+swt.c:489:11: warning: implicit conversion from 'int' to 'char' changes value from 313 to 57 [-Wconstant-conversion]
+warning: unknown warning option '-Wno-stringop-truncation'; did you mean '-Wno-format-truncation'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-stringop-overflow'; did you mean '-Wno-shift-overflow'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-builtin-declaration-mismatch'; did you mean '-Wno-missing-declarations'? [-Wunknown-warning-option]
+warning: unknown warning option '-Wno-maybe-uninitialized'; did you mean '-Wno-uninitialized'? [-Wunknown-warning-option]
+./../cc/cc.h:625:6: warning: incompatible redeclaration of library function 'round' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:625:6: note: 'round' is a builtin with type 'double (double)'
+./../cc/cc.h:702:5: warning: incompatible redeclaration of library function 'log2' [-Wincompatible-library-redeclaration]
+./../cc/cc.h:702:5: note: 'log2' is a builtin with type 'double (double)'
+archive: pristine 6c/7c built from df4b1cb4ab5d7bc9f97bb7b4882933428336acda into /Users/neilskinner/code/harvey/.build/gethunk-repro-cc/archive-bin
+== verify: pristine pair from archive(df4b1cb4ab5d7bc9f97bb7b4882933428336acda)
+TEETH-OK 6c (gethunk ENOMEM terminus)
+ok 1 - pristine 6c hang signature (teeth)
+TEETH-OK 7c (gethunk ENOMEM terminus)
+ok 2 - pristine 7c hang signature (teeth)
+GREEN 6c
+ok 3 - fixed 6c compiles within 60s
+GREEN 7c
+ok 4 - fixed 7c compiles within 60s
+# tests 4
+# pass 4
+# fail 0
+== pushing checkout to guest ~/harvey-build
+harvey host bin ready: /home/neilskinner.guest/harvey-build/.build/hostbin-linux-aarch64/bin
+6a
+6c
+6l
+7a
+7c
+7l
+8a
+8c
+8l
+ar
+awk
+basename
+cpp
+data2s
+date
+dd
+lex
+ls
+mklatinkbd
+nm
+pcc
+rm
+sed
+size
+yacc
++ set -e
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/6a
++ sh BUILD
+
+conflicts: 1 shift/reduce
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/6c
++ sh BUILD
+
+conflicts: 3 shift/reduce
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/6l
++ sh BUILD
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/8a
++ sh BUILD
+5 rules never reduced
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/8c
++ sh BUILD
+
+conflicts: 3 shift/reduce
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/8l
++ sh BUILD
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/7a
++ sh BUILD
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/7c
++ sh BUILD
+
+conflicts: 3 shift/reduce
+list.c:35:14: warning: ‘conds’ defined but not used [-Wunused-variable]
+   35 | static char *conds[] = {
+      |              ^~~~~
+swt.c:477:25: warning: overflow in conversion from ‘int’ to ‘char’ changes value from ‘320’ to ‘64’ [-Woverflow]
+  477 |                 bf[0] = ASIGNAME;
+      |                         ^~~~~~~~
+swt.c:489:25: warning: overflow in conversion from ‘int’ to ‘char’ changes value from ‘313’ to ‘57’ [-Woverflow]
+  489 |                 bf[0] = ANAME;
+      |                         ^~~~~
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/7l
++ sh BUILD
+asmout.c:37:17: warning: ‘oshrr’ declared ‘static’ but never defined [-Wunused-function]
+   37 | static long     oshrr(int, int, int);
+      |                 ^~~~~
+asmout.c:38:17: warning: ‘olhrr’ declared ‘static’ but never defined [-Wunused-function]
+   38 | static long     olhrr(int, int, int);
+      |                 ^~~~~
+obj.c:406:24: warning: unsigned conversion from ‘int’ to ‘uchar’ {aka ‘unsigned char’} changes value from ‘377’ to ‘121’ [-Woverflow]
+  406 |                 p[0] = ALAST+1;
+      |                        ^~~~~
+obj.c:417:24: warning: unsigned conversion from ‘int’ to ‘uchar’ {aka ‘unsigned char’} changes value from ‘377’ to ‘121’ [-Woverflow]
+  417 |                 p[0] = ALAST+1;
+      |                        ^~~~~
+obj.c:424:24: warning: unsigned conversion from ‘int’ to ‘uchar’ {aka ‘unsigned char’} changes value from ‘377’ to ‘121’ [-Woverflow]
+  424 |                 p[0] = ALAST+1;
+      |                        ^~~~~
+span.c:388:1: warning: ‘findmask64’ defined but not used [-Wunused-function]
+  388 | findmask64(Mask *m, uvlong v)
+      | ^~~~~~~~~~
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/cpp
++ sh BUILD
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/aux
++ sh BUILD
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd
++ sh nm.BUILD
+ar: creating /home/neilskinner.guest/harvey-build/sys/src/cmd/unix/9cc/obj.linux/lib9.a
+a - argv0.o
+a - charstod.o
+a - cistrcmp.o
+a - cistrncmp.o
+a - cistrstr.o
+a - cleanname.o
+a - convD2M.o
+a - convM2D.o
+a - convM2S.o
+a - convS2M.o
+a - create.o
+a - dirstat-posix.o
+a - dirwstat.o
+a - dofmt.o
+a - dorfmt.o
+a - errfmt.o
+a - errstr-posix.o
+a - exits.o
+a - fcallfmt.o
+a - fmt.o
+a - fmtfd.o
+a - fmtlock.o
+a - fmtprint.o
+a - fmtquote.o
+a - fmtrune.o
+a - fmtstr.o
+a - fmtvprint.o
+a - fprint.o
+a - getcallerpc.o
+a - getfields.o
+a - getuser-posix.o
+a - getwd-posix.o
+a - nulldir.o
+a - pow10.o
+a - print.o
+a - qsort.o
+a - readn.o
+a - rerrstr.o
+a - rune.o
+a - runeseprint.o
+a - runesmprint.o
+a - runesnprint.o
+a - runestrlen.o
+a - runevseprint.o
+a - sbrk-posix.o
+a - seek.o
+a - seprint.o
+a - smprint.o
+a - snprint.o
+a - sprint.o
+a - strdup.o
+a - strecpy.o
+a - strtoll.o
+a - sysfatal.o
+a - tokenize.o
+a - u16.o
+a - u32.o
+a - u64.o
+a - utfecpy.o
+a - utflen.o
+a - utfnlen.o
+a - utfrrune.o
+a - utfrune.o
+a - vfprint.o
+a - vseprint.o
+a - vsmprint.o
+a - vsnprint.o
+a - bbuffered.o
+a - bfildes.o
+a - bflush.o
+a - bgetc.o
+a - bgetd.o
+a - bgetrune.o
+a - binit.o
+a - boffset.o
+a - bprint.o
+a - bputc.o
+a - bputrune.o
+a - brdline.o
+a - brdstr.o
+a - bread.o
+a - bseek.o
+a - bvprint.o
+a - bwrite.o
+ar: creating /home/neilskinner.guest/harvey-build/sys/src/cmd/unix/9cc/obj.linux/libbio.a
+a - 4.o
+a - 5.o
+a - 5db.o
+a - 5obj.o
+a - 6.o
+a - 6obj.o
+a - 7.o
+a - 7obj.o
+a - 8.o
+a - 8db.o
+a - 8obj.o
+a - 9.o
+a - 9obj.o
+a - access.o
+a - executable.o
+a - k.o
+a - kdb.o
+a - kobj.o
+a - machdata.o
+a - map.o
+a - obj.o
+a - q.o
+a - qdb.o
+a - qobj.o
+a - setmach.o
+a - swap.o
+a - sym.o
+a - v.o
+a - vcodas.o
+a - vdb.o
+a - vobj.o
+ar: creating /home/neilskinner.guest/harvey-build/sys/src/cmd/unix/9cc/obj.linux/libmach.a
+/nix/store/bdzrp13aqp0nzbd4rwlidj5lyd87ii2y-binutils-2.46/bin/ld.bfd: /tmp/cccWZZIE.o: in function `page':
+ar.c:(.text+0xff4): warning: the use of `mktemp' is dangerous, better use `mkstemp' or `mkdtemp'
+r - argv0.o
+r - charstod.o
+r - cistrcmp.o
+r - cistrncmp.o
+r - cistrstr.o
+r - cleanname.o
+r - convD2M.o
+r - convM2D.o
+r - convM2S.o
+r - convS2M.o
+r - create.o
+r - dirstat-posix.o
+r - dirwstat.o
+r - dofmt.o
+r - dorfmt.o
+r - errfmt.o
+r - errstr-posix.o
+r - exits.o
+r - fcallfmt.o
+r - fmt.o
+r - fmtfd.o
+r - fmtlock.o
+r - fmtprint.o
+r - fmtquote.o
+r - fmtrune.o
+r - fmtstr.o
+r - fmtvprint.o
+r - fprint.o
+r - getcallerpc.o
+r - getfields.o
+r - getuser-posix.o
+r - getwd-posix.o
+r - nulldir.o
+r - pow10.o
+r - print.o
+r - qsort.o
+r - readn.o
+r - rerrstr.o
+r - rune.o
+r - runeseprint.o
+r - runesmprint.o
+r - runesnprint.o
+r - runestrlen.o
+r - runevseprint.o
+r - sbrk-posix.o
+r - seek.o
+r - seprint.o
+r - smprint.o
+r - snprint.o
+r - sprint.o
+r - strdup.o
+r - strecpy.o
+r - strtoll.o
+r - sysfatal.o
+r - tokenize.o
+r - u16.o
+r - u32.o
+r - u64.o
+r - utfecpy.o
+r - utflen.o
+r - utfnlen.o
+r - utfrrune.o
+r - utfrune.o
+r - vfprint.o
+r - vseprint.o
+r - vsmprint.o
+r - vsnprint.o
+r - bbuffered.o
+r - bfildes.o
+r - bflush.o
+r - bgetc.o
+r - bgetd.o
+r - bgetrune.o
+r - binit.o
+r - boffset.o
+r - bprint.o
+r - bputc.o
+r - bputrune.o
+r - brdline.o
+r - brdstr.o
+r - bread.o
+r - bseek.o
+r - bvprint.o
+r - bwrite.o
+r - 4.o
+r - 5.o
+r - 5db.o
+r - 5obj.o
+r - 6.o
+r - 6obj.o
+r - 7.o
+r - 7obj.o
+r - 8.o
+r - 8db.o
+r - 8obj.o
+r - 9.o
+r - 9obj.o
+r - access.o
+r - executable.o
+r - k.o
+r - kdb.o
+r - kobj.o
+r - machdata.o
+r - map.o
+r - obj.o
+r - q.o
+r - qdb.o
+r - qobj.o
+r - setmach.o
+r - swap.o
+r - sym.o
+r - v.o
+r - vcodas.o
+r - vdb.o
+r - vobj.o
+/nix/store/bdzrp13aqp0nzbd4rwlidj5lyd87ii2y-binutils-2.46/bin/ld.bfd: /tmp/cckRatFn.o: in function `page':
+ar.c:(.text+0xff4): warning: the use of `mktemp' is dangerous, better use `mkstemp' or `mkdtemp'
+harvey toolchain built into /home/neilskinner.guest/harvey-build/.build/hostbin-linux-aarch64/bin
+harvey devshell: HARVEY=/home/neilskinner.guest/harvey-build PLAN9=/nix/store/klv976s6vl3smvfcnz64lz523i9hwv70-plan9port-0-unstable-2025-11-10/plan9
+  host bin: /home/neilskinner.guest/harvey-build/.build/hostbin-linux-aarch64/bin
+  harness: /nix/store/ifv4j6lla45y0ybwv9f8s3mgvxp11c9w-harness-0.1.0/bin/harness
+apps: nix run .#setup -> .#toolchain -> .#build | .#iso
+(. #build uses sudo unshare; run from the repo root)
+== build 6c from /home/neilskinner.guest/harvey-build/.build/gethunk-repro-6l/archive-src -> /home/neilskinner.guest/harvey-build/.build/gethunk-repro-6l/archive-bin
+
+conflicts: 3 shift/reduce
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+== build 6l from /home/neilskinner.guest/harvey-build/.build/gethunk-repro-6l/archive-src -> /home/neilskinner.guest/harvey-build/.build/gethunk-repro-6l/archive-bin
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+/nix/store/2gh2kjj22acjw1354if79dgr6l73y3sl-glibc-2.44-57-dev/include/features.h:451:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+  451 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+      |    ^~~~~~~
+archive: pristine 6c/6l built from 2e3b37027efe1ee8ae0a7dc8c6fabbead1500a0a into /home/neilskinner.guest/harvey-build/.build/gethunk-repro-6l/archive-bin
+== pushing checkout to guest ~/harvey-build
+harvey host bin ready: /home/neilskinner.guest/harvey-build/.build/hostbin-linux-aarch64/bin
+6a
+6c
+6l
+7a
+7c
+7l
+8a
+8c
+8l
+ar
+awk
+basename
+cpp
+data2s
+date
+dd
+lex
+ls
+mklatinkbd
+nm
+pcc
+rm
+sed
+size
+yacc
++ set -e
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/6a
++ sh BUILD
+
+conflicts: 1 shift/reduce
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/6c
++ sh BUILD
+
+conflicts: 3 shift/reduce
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/6l
++ sh BUILD
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/8a
++ sh BUILD
+5 rules never reduced
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/8c
++ sh BUILD
+
+conflicts: 3 shift/reduce
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/8l
++ sh BUILD
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/7a
++ sh BUILD
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/7c
++ sh BUILD
+
+conflicts: 3 shift/reduce
+list.c:35:14: warning: ‘conds’ defined but not used [-Wunused-variable]
+   35 | static char *conds[] = {
+      |              ^~~~~
+swt.c:477:25: warning: overflow in conversion from ‘int’ to ‘char’ changes value from ‘320’ to ‘64’ [-Woverflow]
+  477 |                 bf[0] = ASIGNAME;
+      |                         ^~~~~~~~
+swt.c:489:25: warning: overflow in conversion from ‘int’ to ‘char’ changes value from ‘313’ to ‘57’ [-Woverflow]
+  489 |                 bf[0] = ANAME;
+      |                         ^~~~~
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/7l
++ sh BUILD
+asmout.c:37:17: warning: ‘oshrr’ declared ‘static’ but never defined [-Wunused-function]
+   37 | static long     oshrr(int, int, int);
+      |                 ^~~~~
+asmout.c:38:17: warning: ‘olhrr’ declared ‘static’ but never defined [-Wunused-function]
+   38 | static long     olhrr(int, int, int);
+      |                 ^~~~~
+obj.c:406:24: warning: unsigned conversion from ‘int’ to ‘uchar’ {aka ‘unsigned char’} changes value from ‘377’ to ‘121’ [-Woverflow]
+  406 |                 p[0] = ALAST+1;
+      |                        ^~~~~
+obj.c:417:24: warning: unsigned conversion from ‘int’ to ‘uchar’ {aka ‘unsigned char’} changes value from ‘377’ to ‘121’ [-Woverflow]
+  417 |                 p[0] = ALAST+1;
+      |                        ^~~~~
+obj.c:424:24: warning: unsigned conversion from ‘int’ to ‘uchar’ {aka ‘unsigned char’} changes value from ‘377’ to ‘121’ [-Woverflow]
+  424 |                 p[0] = ALAST+1;
+      |                        ^~~~~
+span.c:388:1: warning: ‘findmask64’ defined but not used [-Wunused-function]
+  388 | findmask64(Mask *m, uvlong v)
+      | ^~~~~~~~~~
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/cpp
++ sh BUILD
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd/aux
++ sh BUILD
++ cd /home/neilskinner.guest/harvey-build/sys/src/cmd
++ sh nm.BUILD
+ar: creating /home/neilskinner.guest/harvey-build/sys/src/cmd/unix/9cc/obj.linux/lib9.a
+a - argv0.o
+a - charstod.o
+a - cistrcmp.o
+a - cistrncmp.o
+a - cistrstr.o
+a - cleanname.o
+a - convD2M.o
+a - convM2D.o
+a - convM2S.o
+a - convS2M.o
+a - create.o
+a - dirstat-posix.o
+a - dirwstat.o
+a - dofmt.o
+a - dorfmt.o
+a - errfmt.o
+a - errstr-posix.o
+a - exits.o
+a - fcallfmt.o
+a - fmt.o
+a - fmtfd.o
+a - fmtlock.o
+a - fmtprint.o
+a - fmtquote.o
+a - fmtrune.o
+a - fmtstr.o
+a - fmtvprint.o
+a - fprint.o
+a - getcallerpc.o
+a - getfields.o
+a - getuser-posix.o
+a - getwd-posix.o
+a - nulldir.o
+a - pow10.o
+a - print.o
+a - qsort.o
+a - readn.o
+a - rerrstr.o
+a - rune.o
+a - runeseprint.o
+a - runesmprint.o
+a - runesnprint.o
+a - runestrlen.o
+a - runevseprint.o
+a - sbrk-posix.o
+a - seek.o
+a - seprint.o
+a - smprint.o
+a - snprint.o
+a - sprint.o
+a - strdup.o
+a - strecpy.o
+a - strtoll.o
+a - sysfatal.o
+a - tokenize.o
+a - u16.o
+a - u32.o
+a - u64.o
+a - utfecpy.o
+a - utflen.o
+a - utfnlen.o
+a - utfrrune.o
+a - utfrune.o
+a - vfprint.o
+a - vseprint.o
+a - vsmprint.o
+a - vsnprint.o
+a - bbuffered.o
+a - bfildes.o
+a - bflush.o
+a - bgetc.o
+a - bgetd.o
+a - bgetrune.o
+a - binit.o
+a - boffset.o
+a - bprint.o
+a - bputc.o
+a - bputrune.o
+a - brdline.o
+a - brdstr.o
+a - bread.o
+a - bseek.o
+a - bvprint.o
+a - bwrite.o
+ar: creating /home/neilskinner.guest/harvey-build/sys/src/cmd/unix/9cc/obj.linux/libbio.a
+ar: creating /home/neilskinner.guest/harvey-build/sys/src/cmd/unix/9cc/obj.linux/libmach.a
+a - 4.o
+a - 5.o
+a - 5db.o
+a - 5obj.o
+a - 6.o
+a - 6obj.o
+a - 7.o
+a - 7obj.o
+a - 8.o
+a - 8db.o
+a - 8obj.o
+a - 9.o
+a - 9obj.o
+a - access.o
+a - executable.o
+a - k.o
+a - kdb.o
+a - kobj.o
+a - machdata.o
+a - map.o
+a - obj.o
+a - q.o
+a - qdb.o
+a - qobj.o
+a - setmach.o
+a - swap.o
+a - sym.o
+a - v.o
+a - vcodas.o
+a - vdb.o
+a - vobj.o
+/nix/store/bdzrp13aqp0nzbd4rwlidj5lyd87ii2y-binutils-2.46/bin/ld.bfd: /tmp/ccydUZ7s.o: in function `page':
+ar.c:(.text+0xff4): warning: the use of `mktemp' is dangerous, better use `mkstemp' or `mkdtemp'
+r - argv0.o
+r - charstod.o
+r - cistrcmp.o
+r - cistrncmp.o
+r - cistrstr.o
+r - cleanname.o
+r - convD2M.o
+r - convM2D.o
+r - convM2S.o
+r - convS2M.o
+r - create.o
+r - dirstat-posix.o
+r - dirwstat.o
+r - dofmt.o
+r - dorfmt.o
+r - errfmt.o
+r - errstr-posix.o
+r - exits.o
+r - fcallfmt.o
+r - fmt.o
+r - fmtfd.o
+r - fmtlock.o
+r - fmtprint.o
+r - fmtquote.o
+r - fmtrune.o
+r - fmtstr.o
+r - fmtvprint.o
+r - fprint.o
+r - getcallerpc.o
+r - getfields.o
+r - getuser-posix.o
+r - getwd-posix.o
+r - nulldir.o
+r - pow10.o
+r - print.o
+r - qsort.o
+r - readn.o
+r - rerrstr.o
+r - rune.o
+r - runeseprint.o
+r - runesmprint.o
+r - runesnprint.o
+r - runestrlen.o
+r - runevseprint.o
+r - sbrk-posix.o
+r - seek.o
+r - seprint.o
+r - smprint.o
+r - snprint.o
+r - sprint.o
+r - strdup.o
+r - strecpy.o
+r - strtoll.o
+r - sysfatal.o
+r - tokenize.o
+r - u16.o
+r - u32.o
+r - u64.o
+r - utfecpy.o
+r - utflen.o
+r - utfnlen.o
+r - utfrrune.o
+r - utfrune.o
+r - vfprint.o
+r - vseprint.o
+r - vsmprint.o
+r - vsnprint.o
+r - bbuffered.o
+r - bfildes.o
+r - bflush.o
+r - bgetc.o
+r - bgetd.o
+r - bgetrune.o
+r - binit.o
+r - boffset.o
+r - bprint.o
+r - bputc.o
+r - bputrune.o
+r - brdline.o
+r - brdstr.o
+r - bread.o
+r - bseek.o
+r - bvprint.o
+r - bwrite.o
+r - 4.o
+r - 5.o
+r - 5db.o
+r - 5obj.o
+r - 6.o
+r - 6obj.o
+r - 7.o
+r - 7obj.o
+r - 8.o
+r - 8db.o
+r - 8obj.o
+r - 9.o
+r - 9obj.o
+r - access.o
+r - executable.o
+r - k.o
+r - kdb.o
+r - kobj.o
+r - machdata.o
+r - map.o
+r - obj.o
+r - q.o
+r - qdb.o
+r - qobj.o
+r - setmach.o
+r - swap.o
+r - sym.o
+r - v.o
+r - vcodas.o
+r - vdb.o
+r - vobj.o
+/nix/store/bdzrp13aqp0nzbd4rwlidj5lyd87ii2y-binutils-2.46/bin/ld.bfd: /tmp/ccoNo8QM.o: in function `page':
+ar.c:(.text+0xff4): warning: the use of `mktemp' is dangerous, better use `mkstemp' or `mkdtemp'
+harvey toolchain built into /home/neilskinner.guest/harvey-build/.build/hostbin-linux-aarch64/bin
+harvey devshell: HARVEY=/home/neilskinner.guest/harvey-build PLAN9=/nix/store/klv976s6vl3smvfcnz64lz523i9hwv70-plan9port-0-unstable-2025-11-10/plan9
+  host bin: /home/neilskinner.guest/harvey-build/.build/hostbin-linux-aarch64/bin
+  harness: /nix/store/ifv4j6lla45y0ybwv9f8s3mgvxp11c9w-harness-0.1.0/bin/harness
+apps: nix run .#setup -> .#toolchain -> .#build | .#iso
+(. #build uses sudo unshare; run from the repo root)
+== verify: pristine 6l from archive(2e3b37027efe1ee8ae0a7dc8c6fabbead1500a0a)
+TEETH-OK 6l (gethunk ENOMEM terminus)
+ok 1 - pristine 6l hang signature (teeth)
+GREEN 6l
+ok 2 - fixed 6l links 4MB-symtab archive within 120s
+# tests 2
+# pass 2
+# fail 0

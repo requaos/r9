@@ -1,0 +1,17 @@
+{
+  "command": "cd ../r9 && nix develop --command sh -c 'cargo test -p x86_64 --bins --target x86_64-unknown-linux-gnu acpi -- --nocapture'",
+  "exitCode": 101,
+  "targetTests": [
+    "platform::q35::acpi::tests::golden_mcfg_chain_parses_base_and_bus_range",
+    "platform::q35::acpi::tests::golden_madt_parses_ioapic_and_overrides",
+    "platform::q35::acpi::tests::bad_table_checksum_is_a_loud_named_error",
+    "platform::q35::acpi::tests::bad_signature_and_overrunning_length_are_loud",
+    "platform::q35::acpi::tests::truncated_madt_entry_is_loud_and_never_panics"
+  ],
+  "targetFile": "x86_64/src/platform/q35/acpi.rs",
+  "expected": "all five target tests fail on their planned assertions against the loud stub (discover returns Acpi::empty: mcfg None != golden Some; madt expect panics; error list empty where a named error is required)",
+  "actual": "5 failed / 1 passed (the pass is mb2's acpi_tags test, which the 'acpi' filter also matches — not a target); each failure is the planned assertion or expect (left: None/right: golden McfgEntry; 'golden MADT must parse'; 'the valid root walk is unaffected'; 'root signature failure is loud, got []'; 'truncated entry is loud, got []'); no compile, discovery, or fixture faults",
+  "output": "running 6 tests\n\nthread 'platform::q35::acpi::tests::bad_table_checksum_is_a_loud_named_error' panicked at x86_64/src/platform/q35/acpi.rs:527:9:\nthe valid root walk is unaffected\n\nthread 'platform::q35::acpi::tests::bad_signature_and_overrunning_length_are_loud' panicked at x86_64/src/platform/q35/acpi.rs:550:9:\nroot signature failure is loud, got []\n\nthread 'platform::q35::acpi::tests::golden_madt_parses_ioapic_and_overrides' panicked at x86_64/src/platform/q35/acpi.rs:504:30:\ngolden MADT must parse\n\nthread 'platform::q35::acpi::tests::truncated_madt_entry_is_loud_and_never_panics' panicked at x86_64/src/platform/q35/acpi.rs:593:9:\ntruncated entry is loud, got []\n\nthread 'platform::q35::acpi::tests::golden_mcfg_chain_parses_base_and_bus_range' panicked at x86_64/src/platform/q35/acpi.rs:459:9:\nassertion `left == right` failed: scan arm must parse the golden MCFG\n  left: None\n right: Some(McfgEntry { base: 2952790016, seg: 0, start_bus: 0, end_bus: 255 })\ntest platform::q35::acpi::tests::bad_table_checksum_is_a_loud_named_error ... FAILED\ntest platform::q35::acpi::tests::bad_signature_and_overrunning_length_are_loud ... FAILED\ntest platform::q35::acpi::tests::golden_madt_parses_ioapic_and_overrides ... FAILED\ntest platform::q35::acpi::tests::golden_mcfg_chain_parses_base_and_bus_range ... FAILED\ntest platform::q35::acpi::tests::truncated_madt_entry_is_loud_and_never_panics ... FAILED\n\ntest result: FAILED. 1 passed; 5 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s\n\nerror: test failed, to rerun pass `-p x86_64 --bin x86_64`",
+  "semanticAssessment": "VALID RED: every named target executed and failed on the planned assertion for the intended reason (the stub's discover returns Acpi::empty facts); zero TARGET tests passed; no syntax/import/fixture noise. Rust libtest console has no classifier adapter and workflow.tdd_mode is false in config — this record is on disk for review rather than machine-classified (the documented Rust gap, tdd.md #4379).",
+  "redEvidenceOk": true
+}

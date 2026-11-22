@@ -1,0 +1,214 @@
+c[?7l[2J[0mSeaBIOS (version rel-1.17.0-0-gb52ca86e094d-prebuilt.qemu.org)
+
+
+iPXE (http://ipxe.org) 00:02.0 CA00 PCI2.10 PnP PMM+3EFD1B50+3EF31B50 CA00
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from Hard Disk...
+Boot failed: could not read the boot disk
+
+Booting from DVD/CD...
+[0;30;47mWelcome to GRUB[H[J[1;1H  Booting `r9'
+
+!
+
+
+r9 from the Internet
+Machine information:
+q35: memory 0x0..0x9fc00 (0x9fc00) available
+q35: memory 0x9fc00..0xa0000 (0x400) reserved
+q35: memory 0xf0000..0x100000 (0x10000) reserved
+q35: memory 0x100000..0x3ffdf000 (0x3fedf000) available
+q35: memory 0x3ffdf000..0x40000000 (0x21000) reserved
+q35: memory 0xb0000000..0xc0000000 (0x10000000) reserved
+q35: memory 0xfed1c000..0xfed20000 (0x4000) reserved
+q35: memory 0xfeffc000..0xff000000 (0x4000) reserved
+q35: memory 0xfffc0000..0x100000000 (0x40000) reserved
+q35: acpi rsdt 0x3ffe2345 (mb2 RSDP tag — 13-04 walks it)
+q35: acpi rsdt 0x3ffe2345 via mb2 acpi tag (5 entries)
+q35: mcfg 0xb0000000 buses 0x0-0xff (seg 0)
+q35: lapic 0xfee00000 (madt local intc)
+q35: ioapic 0xfec00000 gsib 0 (id 0)
+q35: intsrc bus 0 source 0 -> gsi 2 flags 0x0
+q35: intsrc bus 0 source 5 -> gsi 5 flags 0xd
+q35: intsrc bus 0 source 9 -> gsi 9 flags 0xd
+q35: intsrc bus 0 source 10 -> gsi 10 flags 0xd
+q35: intsrc bus 0 source 11 -> gsi 11 flags 0xd
+q35: hpet 0xfed00000
+pciexbar: 0xb0000001 -> 0xb0000001
+pci: virtio-net 1af4:1041 at 00:02.0 rev 01 pin 1 (inta) bars 2
+pci: inta -> gsi 22 (q35 root slot 2, pirq G: 16+6)
+Memory usage:
+  Used:		0x00000001400000
+  Total:	0x0000003ffdf000
+lapic: cpuid leaf-1 ecx: x2apic=true tsc-deadline=true
+lapic: x2apic live (msr 0x800 map; lint0/1 masked, no pic)
+timer: 2496146000 Hz (pit 1193182 Hz reference), TscDeadline mode, armed
+ioapic: id 0 version 0x11 rtes 23 gsib 0 (madt 0xfec00000)
+pci: bar4 pa 0xfe000000 size 0x4000 (firmware) readback 0xfe000000
+pci: caps common@0x0+0x1000 notify@0x3000 isr@0x1000 device@0x2000 mult 4
+virtio-net: features offered 0x10130bf8024 negotiated 0x100010020
+virtio-net: rx pre-posted 128 buffers qsize 256
+ioapic: gsi 22 -> vector 0x21 (level)
+#l0: virtio: 1000Mbps: 52:54:00:12:34:56
+q35: module @0x1400000 +0x1bfc4d (mb2 tag 3, stashed)
+devenv: seeded cputype=amd64 nobootprompt=embed readparts=0
+q35: paqfs root mounted from module (1834061 bytes)
+devroot: /boot/boot open (159349 bytes)
+exec: entering ring 3 pc=0x2054fa sp=0x7fffffffef78 path=/boot/boot argv=[boot]
+paqfs...version...root-tier: Mon Nov  9 15:18:20 GMT 2026
+fingerprint: 81786024e586356f4d9768c111d81fa51c1875f6
+process 2 exited: ""
+syscall 10 unimplemented
+time...
+boot: opening #c/swap: namec: does not exist
+init: can't open #c/sysname: namec: does not exist
+syscall 10 unimplemented
+
+init: starting /bin/rc
+process 6 exited: ""
+T1-OK echo
+process 7 exited: ""
+process 8 exited: ""
+T1-OK ls
+process 9 exited: ""
+process 10 exited: ""
+T1-OK cat
+process 11 exited: ""
+process 13 exited: ""
+process 14 exited: ""
+process 12 exited: ""
+T1-OK grep
+process 15 exited: ""
+process 17 exited: ""
+process 18 exited: ""
+process 16 exited: ""
+T1-OK sed
+process 19 exited: ""
+process 21 exited: ""
+process 22 exited: ""
+process 20 exited: ""
+T1-OK wc
+process 23 exited: ""
+process 24 exited: ""
+T1-OK date
+process 25 exited: ""
+process 26 exited: ""
+T1-OK test
+process 27 exited: ""
+process 29 exited: ""
+process 30 exited: ""
+process 28 exited: ""
+T1-OK rc
+process 31 exited: ""
+process 32 exited: ""
+T1-OK ps
+process 33 exited: ""
+process 35 exited: ""
+process 36 exited: ""
+process 34 exited: ""
+T1-OK awk
+process 37 exited: ""
+process 38 exited: ""
+T1-OK float-d01
+process 39 exited: ""
+process 40 exited: ""
+T1-OK sort
+process 41 exited: ""
+process 43 exited: ""
+process 44 exited: ""
+process 42 exited: ""
+T1-OK tr
+process 45 exited: ""
+process 49 exited: ""
+process 50 exited: ""
+process 51 exited: ""
+process 47 exited: ""
+process 48 exited: ""
+process 46 exited: ""
+T1-OK uniq
+process 52 exited: ""
+process 54 exited: ""
+process 55 exited: ""
+process 53 exited: ""
+T1-OK tail
+process 56 exited: ""
+process 57 exited: ""
+T1-OK basename
+process 58 exited: ""
+process 59 exited: ""
+T1-OK sleep
+process 60 exited: ""
+process 61 exited: ""
+T1-OK cmp
+process 62 exited: ""
+process 63 exited: ""
+T1-OK sum
+process 64 exited: ""
+process 65 exited: ""
+T1-OK md5sum
+process 66 exited: ""
+process 67 exited: ""
+T1-OK sha1sum
+process 68 exited: ""
+process 70 exited: ""
+process 71 exited: ""
+process 69 exited: ""
+T1-OK dc
+process 72 exited: ""
+process 73 exited: "usage"
+T1-OK units
+process 74 exited: ""
+process 75 exited: ""
+T1-OK cal
+process 76 exited: ""
+process 78 exited: ""
+process 79 exited: ""
+process 77 exited: ""
+T1-OK fmt
+process 80 exited: ""
+process 81 exited: ""
+T1-OK seq
+process 82 exited: ""
+process 84 exited: ""
+0.00u 0.00s 0.00r 	 /bin/hecho __T1_TIME__
+process 83 exited: ""
+T1-OK time
+process 85 exited: ""
+process 87 exited: ""
+process 88 exited: ""
+process 86 exited: ""
+T1-OK read
+process 89 exited: ""
+process 90 exited: ""
+T1-OK pr
+process 91 exited: ""
+process 92 exited: ""
+T1-OK strings
+process 93 exited: ""
+process 94 exited: ""
+T1-XDOBS 0000000 616c7068 61206272 61766f20 63686172 0000010 6c69650a 5f5f5355 42534554 5f475245 0000020 505f4c49 4e455f5f 0a000000 0000029
+process 95 exited: ""
+T1-OK xd
+process 96 exited: ""
+process 97 exited: ""
+T1-OK du
+process 98 exited: ""
+process 99 exited: ""
+T1-OK comm
+process 100 exited: ""
+process 101 exited: ""
+T1-OK join
+process 102 exited: ""
+process 103 exited: ""
+T1-OK nm
+process 104 exited: ""
+T1-SKIP ipconfig
+process 105 exited: ""
+T1-SKIP factotum
+process 106 exited: ""
+T1-DONE
+process 107 exited: ""
+process 5 exited: ""
+% 

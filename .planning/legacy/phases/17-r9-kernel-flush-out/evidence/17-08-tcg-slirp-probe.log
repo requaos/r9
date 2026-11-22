@@ -1,0 +1,35 @@
+[series] begin 2026-11-13T14:17:32Z venue=slirp accel=tcg cpu=qemu64 shape=rounds=1,burstn=8,burstrounds=512 (the committed reduced shape; no R9_STRESS_* overrides) instrument='nix run .#boot-r9-stress-x64' env=R9_ACCEL=tcg,R9_NET=slirp (R9_SKIP_BUILD=1 from run 2 — one userland build, the 17-07 decision) runs=serialized (the hostfwd pair 127.0.0.1:17010/5670 forbids parallel q35 boots)
+[run 1] 2026-11-13T14:19:06Z venue=slirp accel=tcg cpu=qemu64 shape=1x8x512 result=green rc=0 dur=94s; serial retained (SeaBIOS x 1); no-cascade-found; scratch=/tmp/netstress-r9-x64.GdgltA (qemu -d cascade: qemu-int-*.log + hostecho.log) console=/tmp/17-08-probe0.console
+[run 2] 2026-11-13T14:20:13Z venue=slirp accel=tcg cpu=qemu64 shape=1x8x512 result=green rc=0 dur=65s; serial retained (SeaBIOS x 1); no-cascade-found; scratch=/tmp/netstress-r9-x64.ADk2is (qemu -d cascade: qemu-int-*.log + hostecho.log) console=/tmp/17-08-run02.console
+[run 3] 2026-11-13T14:21:21Z venue=slirp accel=tcg cpu=qemu64 shape=1x8x512 result=green rc=0 dur=66s; serial retained (SeaBIOS x 1); no-cascade-found; scratch=/tmp/netstress-r9-x64.xSUCwW (qemu -d cascade: qemu-int-*.log + hostecho.log) console=/tmp/17-08-run03.console
+[run 4] 2026-11-13T14:22:29Z venue=slirp accel=tcg cpu=qemu64 shape=1x8x512 result=green rc=0 dur=66s; serial retained (SeaBIOS x 1); no-cascade-found; scratch=/tmp/netstress-r9-x64.VBYwAW (qemu -d cascade: qemu-int-*.log + hostecho.log) console=/tmp/17-08-run04.console
+[run 5] 2026-11-13T14:23:37Z venue=slirp accel=tcg cpu=qemu64 shape=1x8x512 result=green rc=0 dur=65s; serial retained (SeaBIOS x 1); no-cascade-found; scratch=/tmp/netstress-r9-x64.z4aaU0 (qemu -d cascade: qemu-int-*.log + hostecho.log) console=/tmp/17-08-run05.console
+[run 6] 2026-11-13T14:24:43Z venue=slirp accel=tcg cpu=qemu64 shape=1x8x512 result=green rc=0 dur=64s; serial retained (SeaBIOS x 1); no-cascade-found; scratch=/tmp/netstress-r9-x64.L7a0k8 (qemu -d cascade: qemu-int-*.log + hostecho.log) console=/tmp/17-08-run06.console
+[run 7] 2026-11-13T14:25:49Z venue=slirp accel=tcg cpu=qemu64 shape=1x8x512 result=green rc=0 dur=64s; serial retained (SeaBIOS x 1); no-cascade-found; scratch=/tmp/netstress-r9-x64.7i9NJV (qemu -d cascade: qemu-int-*.log + hostecho.log) console=/tmp/17-08-run07.console
+[run 8] 2026-11-13T14:26:57Z venue=slirp accel=tcg cpu=qemu64 shape=1x8x512 result=green rc=0 dur=66s; serial retained (SeaBIOS x 1); no-cascade-found; scratch=/tmp/netstress-r9-x64.A0nLGP (qemu -d cascade: qemu-int-*.log + hostecho.log) console=/tmp/17-08-run08.console
+[run 9] 2026-11-13T14:28:03Z venue=slirp accel=tcg cpu=qemu64 shape=1x8x512 result=green rc=0 dur=64s; serial retained (SeaBIOS x 1); no-cascade-found; scratch=/tmp/netstress-r9-x64.LZ6nli (qemu -d cascade: qemu-int-*.log + hostecho.log) console=/tmp/17-08-run09.console
+[run 10] 2026-11-13T14:29:11Z venue=slirp accel=tcg cpu=qemu64 shape=1x8x512 result=green rc=0 dur=66s; serial retained (SeaBIOS x 1); no-cascade-found; scratch=/tmp/netstress-r9-x64.XRSiT1 (qemu -d cascade: qemu-int-*.log + hostecho.log) console=/tmp/17-08-run10.console
+[series] end 2026-11-13T14:29:13Z
+[post] run 1 no cascade present in scratch (/tmp/netstress-r9-x64.GdgltA)
+[post] run 2 no cascade present in scratch (/tmp/netstress-r9-x64.ADk2is)
+[post] run 3 no cascade present in scratch (/tmp/netstress-r9-x64.xSUCwW)
+[post] run 4 no cascade present in scratch (/tmp/netstress-r9-x64.VBYwAW)
+[post] run 5 no cascade present in scratch (/tmp/netstress-r9-x64.z4aaU0)
+[post] run 6 no cascade present in scratch (/tmp/netstress-r9-x64.L7a0k8)
+[post] run 7 no cascade present in scratch (/tmp/netstress-r9-x64.7i9NJV)
+[post] run 8 no cascade present in scratch (/tmp/netstress-r9-x64.A0nLGP)
+[post] run 9 no cascade present in scratch (/tmp/netstress-r9-x64.LZ6nli)
+[post] run 10 no cascade present in scratch (/tmp/netstress-r9-x64.XRSiT1)
+[post] supervisor defect disclosed: its find(1) call resolved to plan9port find (no -maxdepth) in the non-interactive shell, so per-run cascade handling no-opped during the series (the 'no-cascade-found' notes above are that defect, not absent cascades); disposition completed now per protocol — all 10 runs green, so every cascade deleted; a TCG -d int green-run cascade measured ~143-146MB / ~3.6k full-state event records (the capture is NOT blind under TCG — the KVM ceiling of section 2 does not apply)
+[post-corrected] run 1 cascade deleted (/tmp/netstress-r9-x64.GdgltA/qemu-int-r9x64stress-1431358-1794579453.log; was 143317518B — non-fired run)
+[post-corrected] run 2 cascade deleted (/tmp/netstress-r9-x64.ADk2is/qemu-int-r9x64stress-1450671-1794579549.log; was 146199072B — non-fired run)
+[post-corrected] run 3 cascade deleted (/tmp/netstress-r9-x64.xSUCwW/qemu-int-r9x64stress-1451475-1794579616.log; was 145730318B — non-fired run)
+[post-corrected] run 4 cascade deleted (/tmp/netstress-r9-x64.VBYwAW/qemu-int-r9x64stress-1452279-1794579684.log; was 143224750B — non-fired run)
+[post-corrected] run 5 cascade deleted (/tmp/netstress-r9-x64.z4aaU0/qemu-int-r9x64stress-1453119-1794579751.log; was 147022804B — non-fired run)
+[post-corrected] run 6 cascade deleted (/tmp/netstress-r9-x64.L7a0k8/qemu-int-r9x64stress-1453913-1794579819.log; was 145245446B — non-fired run)
+[post-corrected] run 7 cascade deleted (/tmp/netstress-r9-x64.7i9NJV/qemu-int-r9x64stress-1454708-1794579886.log; was 143822750B — non-fired run)
+[post-corrected] run 8 cascade deleted (/tmp/netstress-r9-x64.A0nLGP/qemu-int-r9x64stress-1455500-1794579952.log; was 146453521B — non-fired run)
+[post-corrected] run 9 cascade deleted (/tmp/netstress-r9-x64.LZ6nli/qemu-int-r9x64stress-1456293-1794580019.log; was 144382400B — non-fired run)
+[post-corrected] run 10 cascade deleted (/tmp/netstress-r9-x64.XRSiT1/qemu-int-r9x64stress-1457097-1794580086.log; was 144661302B — non-fired run)
+[verify-rerun] 2026-11-13T14:34:09Z the tracer feedback gate's end-to-end verify re-run (the gate's own live invocation, verbatim): venue=slirp accel=tcg shape=1x8x512 result=green rc=0 (SeaBIOS x 1, RESET-fast-fail=0); no; scratch=/tmp/netstress-r9-x64.OQH8aa (qemu -d cascade: qemu-int-*.log + hostecho.log) — the 10-run series outcome above is unchanged (NO-FIRE-IN-SERIES, now 11 invocations green total)
+[post] verify-rerun cascade deleted (/tmp/netstress-r9-x64.OQH8aa/qemu-int-r9x64stress-1458114-1794580345.log; was 146841129B — non-fired run; same scratch-extraction defect as above, root cause now identified: the scratch-dir sed captured the wrapper's trailing parenthetical along with the path — the [post-corrected] batch's re-extraction stopped at the first space and cleaned all ten series runs correctly)

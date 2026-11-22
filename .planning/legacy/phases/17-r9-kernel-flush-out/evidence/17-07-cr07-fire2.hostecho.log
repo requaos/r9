@@ -1,0 +1,19 @@
+hostecho: listening 192.168.122.1:7777
+hostecho: conn 1
+hostecho: closed 1 32768 32768
+hostecho: conn 2
+hostecho: conn 3
+hostecho: conn 4
+hostecho: conn 5
+hostecho: conn 6
+hostecho: conn 7
+hostecho: conn 8
+hostecho: conn 9
+hostecho: closed 9 0 0
+hostecho: closed 8 3508 3508
+hostecho: closed 7 31572 31572
+hostecho: closed 6 29524 29524
+hostecho: closed 5 36276 36276
+hostecho: closed 4 37736 37736
+hostecho: closed 3 39784 39784
+hostecho: closed 2 39784 39784

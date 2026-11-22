@@ -1,0 +1,39 @@
+r9 devshell: rustc 1.95.0-nightly (842bd5be2 2026-01-29)
+QEMU emulator version 11.1.2
+apps: nix run .#build | nix run .#boot-virt | nix run .#default
+{ "type": "suite", "event": "started", "test_count": 17 }
+{ "type": "test", "event": "started", "name": "devip_tests::iproute_longest_match_verbs_and_smoltcp_mirror" }
+{ "type": "test", "event": "started", "name": "devip_tests::tcp_accepted_connection_keeps_the_donor_shape_for_life" }
+{ "type": "test", "event": "started", "name": "devip_tests::tcp_announce_builds_contract_depth_pool_and_listen_pops_oldest" }
+{ "type": "test", "event": "started", "name": "devip_tests::tcp_announced_connection_bulk_write_round_trips" }
+{ "type": "test", "event": "started", "name": "devip_tests::tcp_checksum_and_porthog_are_accepted_and_recorded" }
+{ "type": "test", "event": "started", "name": "devip_tests::tcp_close_hangup_hangupxmit_wire_shapes" }
+{ "type": "test", "event": "started", "name": "devip_tests::tcp_connect_blocks_until_established_then_connected" }
+{ "type": "test", "event": "started", "name": "devip_tests::tcp_connect_deadline_expiry_maps_etimedout" }
+{ "type": "test", "event": "started", "name": "devip_tests::tcp_connect_rst_mid_syn_maps_econrefused" }
+{ "type": "test", "event": "started", "name": "devip_tests::tcp_conv_close_lingers_the_socket_until_closed" }
+{ "type": "test", "event": "started", "name": "devip_tests::tcp_full_exchange_moves_the_stats_counters" }
+{ "type": "test", "event": "started", "name": "devip_tests::tcp_gc_hangs_up_stale_convs_but_never_steals_an_in_use_slot" }
+{ "type": "test", "event": "started", "name": "devip_tests::tcp_generic_verbs_land_with_contract_errors" }
+{ "type": "test", "event": "started", "name": "devip_tests::tcp_listen_hangup_during_parked_wait_errors" }
+{ "type": "test", "event": "started", "name": "devip_tests::tcp_pool_members_carry_the_donor_tcp_shape" }
+{ "type": "test", "event": "started", "name": "devip_tests::tcp_state_rename_table_is_devip_exact" }
+{ "type": "test", "name": "devip_tests::iproute_longest_match_verbs_and_smoltcp_mirror", "event": "ok" }
+{ "type": "test", "event": "started", "name": "devip_tests::tcp_two_write_client_pattern_round_trips" }
+{ "type": "test", "name": "devip_tests::tcp_state_rename_table_is_devip_exact", "event": "ok" }
+{ "type": "test", "name": "devip_tests::tcp_announce_builds_contract_depth_pool_and_listen_pops_oldest", "event": "ok" }
+{ "type": "test", "name": "devip_tests::tcp_checksum_and_porthog_are_accepted_and_recorded", "event": "ok" }
+{ "type": "test", "name": "devip_tests::tcp_accepted_connection_keeps_the_donor_shape_for_life", "event": "failed", "stdout": "\nthread 'devip_tests::tcp_accepted_connection_keeps_the_donor_shape_for_life' (811395) panicked at port/src/devip_tests.rs:2261:5:\npin (accept-shape): the accepted connection carries Nagle OFF for life\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n" }
+{ "type": "test", "name": "devip_tests::tcp_connect_deadline_expiry_maps_etimedout", "event": "ok" }
+{ "type": "test", "name": "devip_tests::tcp_announced_connection_bulk_write_round_trips", "event": "failed", "stdout": "\nthread 'devip_tests::tcp_announced_connection_bulk_write_round_trips' (811397) panicked at port/src/devip_tests.rs:2319:9:\npin (wr04): a devip path PARKED mid bulk write — the >2048-byte write into the ANNOUNCED connection did not complete on the writes'/reads' own drives (the stock Nagle + 10 ms delayed-ACK hold on the accept-pool member: the tx-buffer drain waits on a post-deadline drive no parked proc can ever run — the CR-03 mechanism record)\n" }
+{ "type": "test", "name": "devip_tests::tcp_conv_close_lingers_the_socket_until_closed", "event": "ok" }
+{ "type": "test", "name": "devip_tests::tcp_close_hangup_hangupxmit_wire_shapes", "event": "ok" }
+{ "type": "test", "name": "devip_tests::tcp_connect_blocks_until_established_then_connected", "event": "ok" }
+{ "type": "test", "name": "devip_tests::tcp_connect_rst_mid_syn_maps_econrefused", "event": "ok" }
+{ "type": "test", "name": "devip_tests::tcp_gc_hangs_up_stale_convs_but_never_steals_an_in_use_slot", "event": "ok" }
+{ "type": "test", "name": "devip_tests::tcp_full_exchange_moves_the_stats_counters", "event": "ok" }
+{ "type": "test", "name": "devip_tests::tcp_generic_verbs_land_with_contract_errors", "event": "ok" }
+{ "type": "test", "name": "devip_tests::tcp_listen_hangup_during_parked_wait_errors", "event": "ok" }
+{ "type": "test", "name": "devip_tests::tcp_pool_members_carry_the_donor_tcp_shape", "event": "failed", "stdout": "\nthread 'devip_tests::tcp_pool_members_carry_the_donor_tcp_shape' (811408) panicked at port/src/devip_tests.rs:2217:9:\npin (pool-shape): Nagle OFF — the donor's shape at spawn (18-07 mirrored at the pool site)\n" }
+{ "type": "test", "name": "devip_tests::tcp_two_write_client_pattern_round_trips", "event": "ok" }
+{ "type": "suite", "event": "failed", "passed": 14, "failed": 3, "ignored": 0, "measured": 0, "filtered_out": 133, "exec_time": 0.005699805 }

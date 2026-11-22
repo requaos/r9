@@ -1,0 +1,28 @@
+
+Plan 9
+mmuinit: vmstart 0xfffffffff0000000 vmunused 0xfffffffff06d3000 vmunmapped 0xfffffffff0800000 vmend 0xfffffffffe000000
+sys->pd 0x108003 0x108023
+l 3 0xffffff7fbfdfeff8 107023
+l 2 0xffffff7fbfdffff8 108023
+l 1 0xffffff7fbffffc00 e3
+l 1 0xffffff7fbffffc00 e3
+kernel alloc space = -268,435,456
+base 0xfffffffff06d7000 ptr 0xfffffffff06d7000 nunits 14231808
+apic0: hz 1003595670 max 10035956 min 100359 div 2
+pcirouting: BIOS workaround: PCI.0.1.3 at pin 1 link 96 irq 10 -> 9
+igbe: p->cls 0x0, setting to 0x10
+#l0: i82543: 1Gbps port 0xfebc0000 irq 11: 525400123456
+1017M memory: 2020K+247M kernel, 767M user
+gspaq-stage: Tue Nov 10 20:50:57 GMT 2026
+fingerprint: ac8f98b5c2fd5a328c753a508245a0c1334d4c85
+FONT-CHANNEL-FAIL
+DRAW-SMOKE-OK
+KBINPROBE
+KBIN-OK
+MOUSEIN-OK
+GS-BIN-PRESENT
+GS-EXIT-OK
+GS-BITS 43269
+GS-RENDER-OK
+GS-SMOKE-DONE
+% 

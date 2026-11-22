@@ -1,0 +1,1 @@
+== PASS: baked /home/req/code/harvey/build/x86_64/out/bootfs-cpu.paq (22003360 bytes; chain + the auth suite + cmd/cpu + aux/listen + the real cpurc + tcp17010 + the font payload + the §15 p9sk1 domain + the 19-10 desktop suite (test/rio/plumber/plumb/ramfs/syscall/awd + glenda's home + the plumb rules); header 529ab12b trailer 6b46e688; KERNDATE 1794787052)

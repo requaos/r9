@@ -1,0 +1,1 @@
+{"content":"KVM arm64 supports vGICv2 including v2-on-v3, but is host-hardware dependent (GICv2 compat can be absent); TCG fallback needed","source":"web","provider":"websearch","confidence":"MEDIUM","fetched_at":"2026-11-01T20:37:24.089Z","ttl":86400000,"kind":"web"}
