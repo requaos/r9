@@ -204,9 +204,14 @@ pub unsafe extern "C" fn intr_stubs() {
 /// to decide whether to invoke `SWAPGS` by testing something
 /// more reliable than the code segment selector on the stack.
 /// Fortunately on R9, the Mach is at a fixed virtual address
-/// for each CPU, so we can look at `%GSBASE` itself (e.g., via
-/// `RDGSBASE`) to see if it is already pointing to our `Mach`,
-/// but is this safe?   There are two cases: if it is not equal
+/// for each CPU, so we can look at `%GSBASE` itself to see if
+/// it is already pointing to our `Mach` — through the
+/// IA32_GS_BASE MSR, never `RDGSBASE`: that instruction needs
+/// CR4.FSGSBASE, which the boot CPU never sets (l.S: TCG's
+/// qemu64 cannot), so it raised #UD inside this entry and every
+/// #DB, NMI, #BP and #DF ended in a kernel `trap UD` halt — a
+/// user single-step or int3 included.  Is the test safe?
+/// There are two cases: if it is not equal
 /// to our Mach, then we need to `SWAPGS`.  If it is pointing
 /// to our Mach, then one of two things has happened: either
 /// we have already executed `SWAPGS`, and whatever userspace
@@ -273,12 +278,20 @@ pub unsafe extern "C" fn intr_stubs() {
 #[unsafe(naked)]
 pub unsafe extern "C" fn intrspecial() {
     naked_asm!(r#"
+        // GS base = IA32_GS_BASE (rdmsr: EDX:EAX, upper halves
+        // zeroed); compare with this CPU's Mach.  The pops leave
+        // the flags alone for the je.
         pushq %rax;
-        pushq %rbx;
-        movabsq ${KMACH}, %rbx;
-        rdgsbase %rax;
-        cmpq %rbx, %rax;
-        popq %rbx;
+        pushq %rcx;
+        pushq %rdx;
+        movl ${MSR_GS_BASE}, %ecx;
+        rdmsr;
+        shlq $32, %rdx;
+        orq %rdx, %rax;
+        movabsq ${KMACH}, %rdx;
+        cmpq %rdx, %rax;
+        popq %rdx;
+        popq %rcx;
         popq %rax;
         je 1f;
         swapgs;
@@ -290,6 +303,7 @@ pub unsafe extern "C" fn intrspecial() {
         retq;
         "#,
         KMACH = const dat::KMACH,
+        MSR_GS_BASE = const cpu::MSR_GS_BASE,
         intrcommon = sym intrcommon,
         options(att_syntax))
 }
@@ -480,7 +494,7 @@ unsafe extern "C" fn intrcommon() {
 /// donor-exact):
 /// - SWAPGS unconditional — SYSCALL only fires from ring 3, no
 ///   CS-check witness (unlike the IDT path).  NMI-safe: intrspecial
-///   re-derives its swap from rdgsbase, so an NMI anywhere in the
+///   re-derives its swap from IA32_GS_BASE, so an NMI anywhere in the
 ///   entry window stays consistent either way.
 /// - the kernel-stack switch reads the TSS rsp0 gs-relative — the
 ///   donor walks `m->proc->kstack`; r9's Proc is the 14-03 substrate,
@@ -904,5 +918,35 @@ mod tests {
             body[..call].lines().any(|l| l.trim() == "cld;"),
             "intrcommon must execute cld before `callq {{trap}}`"
         );
+    }
+
+    /// The boot CPU never sets CR4.FSGSBASE (l.S), so an FSGSBASE
+    /// instruction in an entry path raises #UD there: intrspecial's
+    /// old `rdgsbase` turned every #DB, NMI, #BP and #DF — a user
+    /// single-step included — into a kernel `trap UD` halt.  Reads
+    /// this file's code lines (comments skipped; the needles are built
+    /// at run time so this test's own text cannot match).
+    #[test]
+    fn entry_asm_uses_no_fsgsbase_instruction() {
+        let src = include_str!("trap.rs");
+        let needles = [
+            ["rd", "gsbase"].concat(),
+            ["wr", "gsbase"].concat(),
+            ["rd", "fsbase"].concat(),
+            ["wr", "fsbase"].concat(),
+        ];
+        for (n, line) in src.lines().enumerate() {
+            let code = line.trim_start();
+            if code.starts_with("//") {
+                continue;
+            }
+            for needle in &needles {
+                assert!(
+                    !code.contains(needle.as_str()),
+                    "trap.rs:{}: {needle} needs CR4.FSGSBASE, which the boot CPU lacks",
+                    n + 1
+                );
+            }
+        }
     }
 }
