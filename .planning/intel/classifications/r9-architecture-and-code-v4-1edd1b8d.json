@@ -1,0 +1,13 @@
+{
+  "source_path": "/Users/neilskinner/code/r9/.planning/r9-architecture-and-code-v4.md",
+  "type": "SPEC",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "Plan r9 Architecture & Code Compendium (v2.2)",
+  "summary": "Compendium specifying r9 OS architecture: TPHT and Roaring data structures, 9P2000.aead wire fabric, and crypto memory isolation, porting from Harvey.",
+  "scope": ["r9", "Harvey", "requaos/r9", "requaos/harvey", "TPHT", "Roaring Bitmaps", "9P2000.aead", "FidTable", "union mounts", "crypto memory isolation", "VirtIO-GPU"],
+  "cross_refs": [],
+  "locked": false,
+  "precedence": 1,
+  "notes": ""
+}

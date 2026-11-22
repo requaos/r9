@@ -1,0 +1,13 @@
+{
+  "source_path": "/Users/neilskinner/code/r9/.planning/r9-implementation-guide-amended-v3.md",
+  "type": "SPEC",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "r9 Implementation Guide (Amended Specification v3)",
+  "summary": "Authoritative implementation spec for a pure-Rust port of Plan 9 and Harvey, with repo landing sites, reconciled decisions, audit corrections, and phases.",
+  "scope": ["r9 kernel", "Harvey", "Plan 9", "a.out binary format", "9P2000.aead", "port crate", "crypto HKDF", "TPHT hashing", "Roaring bitmaps", "x86_64 MMU", "VirtIO-GPU #G device", "cluster discovery beacons"],
+  "cross_refs": [],
+  "locked": false,
+  "precedence": 0,
+  "notes": "MANIFEST_TYPE SPEC applied without content override. Only the first 50 lines were read, so scope and summary reflect that section. The document cites repository commits, not other document paths, so cross_refs is empty."
+}

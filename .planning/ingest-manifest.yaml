@@ -1,0 +1,13 @@
+docs:
+  - path: .planning/r9-implementation-guide-amended-v3.md
+    type: SPEC
+    precedence: 0
+  - path: .planning/r9-architecture-and-code-v4.md
+    type: SPEC
+    precedence: 1
+  - path: .planning/rfc-9p2000-aead.md
+    type: SPEC
+    precedence: 2
+  - path: .planning/r9-permissions-and-test-plan.md
+    type: SPEC
+    precedence: 3

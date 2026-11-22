@@ -1,0 +1,13 @@
+{
+  "source_path": "/Users/neilskinner/code/r9/.planning/rfc-9p2000-aead.md",
+  "type": "SPEC",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "RFC: The 9P2000.aead Protocol Specification",
+  "summary": "Specifies the 9P2000.aead dialect: authenticated encryption envelope, hybrid file handles, new message opcodes, volatility classes, and legacy gateway rules.",
+  "scope": ["9P2000.aead", "wire framing", "AAD and MAC", "key derivation (HKDF-SHA256)", "FidHandle", "StatelessCap", "StatefulHandle", "deref_tiny", "Tcompound", "Tstream", "Tlease_revoke", "Treclaim", "volatility classes", "ClientSet", "UnionMountTable", "legacy translation gateway", "RFNOLEGACY", "IANA dialect string and ports"],
+  "cross_refs": [],
+  "locked": false,
+  "precedence": 2,
+  "notes": ""
+}

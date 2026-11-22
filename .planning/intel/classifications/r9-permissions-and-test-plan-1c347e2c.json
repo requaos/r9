@@ -1,0 +1,13 @@
+{
+  "source_path": "/Users/neilskinner/code/r9/.planning/r9-permissions-and-test-plan.md",
+  "type": "SPEC",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "Plan r9 Permissions, Cluster Topology & Automated Test Specification",
+  "summary": "Specifies r9 permissions hierarchy, minimega cluster topology, and automated test suites for Fossil VFS, 9P2000.aead, federation, and memory isolation.",
+  "scope": ["r9", "minimega", "Fossil", "Venti", "9P2000.aead", "/adm/users", "Factotum", "lab.r9", "archive.r9", "rfork", "PKEYs", "chat-rs", "rio", "cluster topology", "test suites"],
+  "cross_refs": [],
+  "locked": false,
+  "precedence": 3,
+  "notes": "MANIFEST_TYPE SPEC applied as authoritative. Content matches SPEC signals: protocol definitions (9P2000.aead, Tlease_revoke), configuration templates, user/group registry format, and test contracts. Output filename uses the placeholder suffix 'nohash' because no shell was available to compute the SHA-256 of the source path; the 8-hex-char source_hash required by the classifier contract is not present."
+}
