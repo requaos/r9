@@ -486,6 +486,10 @@ fn sys_noted(frame: &mut Ureg, proc: &mut Proc) -> u64 {
             // doc).  The saved `type` field stays
             // informational-only (ABI.md documents it as such).
             frame.force_user_return();
+            // The donor's fpunoted: the interrupted code's FPU/SSE state
+            // (recorded at delivery) replaces whatever the handler left.
+            let interrupted = proc.note_fpsave;
+            crate::fpu::replace(&mut proc.fpsave, &interrupted);
             // Allow the next note (the donor's up->notified = 0).
             proc.note_ureg = 0;
             0
@@ -2080,6 +2084,10 @@ pub(crate) fn deliver_notes(frame: &mut Ureg) {
     frame.pc = handler;
     // The donor's up->noteureg: NOTED's NCONT/NRSTR restore source.
     proc.note_ureg = nureg;
+    // ... and the donor's fpunotify: record the interrupted code's
+    // FPU/SSE state; the handler runs on a copy of it (the live
+    // registers stay as they are) and NOTED gives this one back.
+    proc.note_fpsave = crate::fpu::snapshot(&proc.fpsave);
 }
 
 #[cfg(test)]

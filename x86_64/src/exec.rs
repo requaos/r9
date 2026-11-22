@@ -279,41 +279,15 @@ fn install_image(
     // stack below it (14-06).
     let seeded = seed_user_pages(proc, args);
     if seeded.is_ok() {
-        // 14-08: every exec starts with the FP unit at power-on
-        // defaults — the donor's fpstate=FPinit equivalent (sysproc's
-        // exec clears the FP state; 9k's first-use trap loads the
-        // init template).  Without this, a new image inherits the
-        // previous FP user's x87/MXCSR state.
-        fp_reset_for_exec();
+        // Every exec starts with the FPU/SSE at the default state (the
+        // donor's fpstate=FPinit equivalent: FCW 0x037F, MXCSR 0x1F80,
+        // every x87/MMX/XMM register zero) — the saved copy, plus the
+        // live registers when this proc owns them (exec_replace: the
+        // exec'ing proc is on the CPU); a proc built by exec_into is not
+        // yet installed and gets it at install (fpu.rs).
+        crate::fpu::replace(&mut proc.fpsave, &crate::fpu::FpState::DEFAULT);
     }
     seeded
-}
-
-/// 14-08: reset the FP unit for the incoming image — fninit (x87
-/// env/stack) + ldmxcsr 0x1f80 (SSE: all exceptions masked, rounding
-/// nearest, the architecture's reset value).  CR4.OSFXSR/OSXMMEXCPT
-/// are armed at boot (l.S) so user SSE instructions execute; the
-/// KERNEL stays SSE-free (14-04's no-soft-float rule) so nothing
-/// clobbers this between the reset and the ring-3 handoff.  Era limit
-/// (recorded): no per-proc FXSAVE/XRSTOR on context switch — the FP
-/// registers survive switches in place, correct while the kernel
-/// never touches FP and FP-using images never interleave (the
-/// sequential sweep); the real FP context switch lands with the pager
-/// era.
-#[inline]
-fn fp_reset_for_exec() {
-    // ldmxcsr takes a MEMORY operand only (m32 — register form is
-    // invalid), so the reset value rides the stack and the asm
-    // dereferences it.
-    let mxcsr: u32 = 0x1f80;
-    unsafe {
-        core::arch::asm!(
-            "fninit",
-            "ldmxcsr ({mxcsr})",
-            mxcsr = in(reg) &mxcsr,
-            options(att_syntax),
-        );
-    }
 }
 
 /// Eager text mapping (the x86_64 policy deviation): every text page

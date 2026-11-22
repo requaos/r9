@@ -30,6 +30,8 @@ mod uart16550;
 #[allow(dead_code)]
 mod exec;
 #[allow(dead_code)]
+mod fpu;
+#[allow(dead_code)]
 mod proc;
 #[allow(dead_code)]
 mod usermem;
@@ -289,6 +291,18 @@ pub extern "C" fn main(mach: &mut dat::Mach, mbdata: u64) {
     // dev_churn BOOT-CHAIN config (the composed venue's kernel) keeps
     // the normal exec_bootstrap — its churn surface is the per-exit
     // heap marker, not the driver.
+    // The kernel-SIMD guard: before any process exists, prove a user
+    // FPU/SSE state survives a kernel SIMD section (parked at begin,
+    // restored at end) and that the example routine computes right.  A
+    // failure halts the boot by name, so every exec-profile gate runs it.
+    #[cfg(dev_exec)]
+    match fpu::selftest() {
+        Ok(sum) => println!(
+            "fpu: kernel-SIMD selftest ok (user state parked and restored across the section; xor_fold16 {sum:#034x})"
+        ),
+        Err(why) => panic!("fpu: kernel-SIMD selftest FAILED: {why}"),
+    }
+
     #[cfg(all(dev_exec, any(not(dev_churn), dev_bootchain)))]
     exec_bootstrap(facts);
 

@@ -255,9 +255,10 @@ mb2_header_end:
 	// (6c's libc memcpy.s movdqu tail and every double the fmt family
 	// prints; surfaced live by the first tier-1 sweep on r9-x86_64 as
 	// T1-FAIL awk/float-d01/seq, vector 6).  The kernel itself stays
-	// SSE-free (14-04's no-soft-float rule); these bits only unmask
-	// USER use, and exec resets the unit per image (exec.rs's
-	// fp_reset_for_exec) — the donor's fpstate=FPinit equivalent.
+	// SSE-free (14-04's no-soft-float rule); these bits unmask USER use
+	// (and fpu.rs's FXSAVE/FXRSTOR and kernel-SIMD sections), each proc
+	// keeps its own FXSAVE image across switches and exec loads the
+	// default state (fpu.rs) — the donor's fpstate=FPinit equivalent.
 	movl	%cr4, %eax
 	andl	$~Cr4PSE, %eax
 	orl	$(Cr4PGE|Cr4PAE|Cr4OSFXSR|Cr4OSXMMEXCPT), %eax

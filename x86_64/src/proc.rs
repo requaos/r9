@@ -1054,6 +1054,18 @@ pub struct Proc {
     /// via swtch; every other Ready proc resumes via trap_return on
     /// `frame`.
     pub blocked_in_kernel: bool,
+    /// The user FPU/SSE state (the FXSAVE image) while the proc does not
+    /// own the registers; stale while it does (fpu.rs's LIVE_OWNER
+    /// invariant).  Installed at every switch-in (activate_first,
+    /// pick_next), parked at every switch-out (sched, reschedule's park)
+    /// and by a kernel SIMD section; rfork seeds a child's from the
+    /// parent's current state, exec loads the default.
+    pub fpsave: crate::fpu::FpState,
+    /// The interrupted code's FPU/SSE state while a note handler runs
+    /// (the donor's notify-time fpsave): syscall.rs's deliver_notes
+    /// records it, NOTED's NCONT/NRSTR put it back.  Meaningful only
+    /// while note_ureg != 0.
+    pub note_fpsave: crate::fpu::FpState,
     /// The rfork parent — EXITS posts the wait record here.  Null for
     /// the staged init.
     pub parent: *mut Proc,
@@ -1150,6 +1162,8 @@ impl Proc {
             last_note: [0; ERRMAX],
             last_note_len: 0,
             blocked_in_kernel: false,
+            fpsave: crate::fpu::FpState::DEFAULT,
+            note_fpsave: crate::fpu::FpState::DEFAULT,
             parent: ptr::null_mut(),
             children_live: 0,
             nowait: false,
@@ -1777,6 +1791,9 @@ pub fn activate_first(p: &mut Proc) {
     set_current_proc(p);
     set_tss_rsp0(p.kstack_top as u64);
     write_curframe(p.frame);
+    // Install: the proc's user FPU/SSE state (exec loaded the default)
+    // goes live.
+    crate::fpu::install(&mut p.fpsave);
 }
 
 /// 17-02 (dev_churn): seed a freshly built proc's KERNEL entry — the
@@ -1888,6 +1905,10 @@ pub fn reschedule() {
         // swtch below lands mid-interrupt on this kstack — trap_return
         // would be wrong), so mark it like sched()'s blocked procs.
         curp.blocked_in_kernel = true;
+        // Leave: the live FPU/SSE registers are cur's user state (the
+        // kernel never touches them) — park them before the sched loop
+        // installs the next proc's.
+        crate::fpu::leave(&mut curp.fpsave);
     }
     // Park into the scheduler context.  The swtch saves this proc's
     // callee-saved state into its PROC_TABLE-resident context — never
@@ -1966,6 +1987,9 @@ pub fn sched() {
     let mut cur = current().expect("sched with no current process");
     cur.state = ProcState::Blocked;
     cur.blocked_in_kernel = true;
+    // Leave: park the user FPU/SSE state — the sched loop installs the
+    // next proc's (possibly this one again, from this save).
+    crate::fpu::leave(&mut cur.fpsave);
     // SAFETY: sched_context()'s seed-once discipline; cur's context
     // field is PROC_TABLE-resident (a stable address across the
     // switch).
@@ -2099,6 +2123,9 @@ fn pick_next() -> Option<*mut swtch::Context> {
         set_tss_rsp0(p.kstack_top as u64);
         write_curframe(p.frame);
         p.blocked_in_kernel = false;
+        // Install: the proc's saved user FPU/SSE state goes live (every
+        // path into the sched loop parked or dropped the previous one).
+        crate::fpu::install(&mut p.fpsave);
         // CR3 last (reschedule's ordering note): the frame pointer is
         // dereferenced only after the lock drops, under this table.
         switch_cr3(p.pml4_pa);
@@ -2120,6 +2147,8 @@ pub fn sched_from_moribund() -> ! {
     unsafe {
         let ctx = sched_context();
         if let Some(mut cur) = cur {
+            // The dead proc's live FPU/SSE state is dropped, unsaved.
+            crate::fpu::discard(&mut cur.fpsave);
             swtch::swtch(&mut cur.context, &*ctx);
         }
     }
@@ -2665,6 +2694,11 @@ pub fn rfork_clone(parent: &mut Proc, frame: &Ureg, flag: u64) -> Result<u64> {
     if flag & RFMEM != 0 {
         rfmem_join(parent, &mut child);
     }
+    // The child starts with the parent's user FPU/SSE state — the live
+    // registers when the parent owns them (it is on the CPU in its own
+    // rfork syscall), its fpsave otherwise; the child is off the CPU, so
+    // the copy lands in its fpsave, which its first install restores.
+    child.fpsave = crate::fpu::snapshot(&parent.fpsave);
     // An RFNOWAIT child posts no wait record at EXITS and is never
     // reaped by AWAIT, so it must not count toward the parent's AWAIT
     // block-vs-"no children" pivot.
