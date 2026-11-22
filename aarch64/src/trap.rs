@@ -181,13 +181,19 @@ impl TrapFrame {
         }
     }
 
-    /// NOTED's NCONT/NRSTR restore: overwrite the live frame with
-    /// the saved Ureg's 280 bytes (the frozen sizeof(Ureg), NOT r9's 288
-    /// stride — the frame's own stride is untouched).  Homed
-    /// here so syscall.rs carries no frame-reinterpretation unsafe; the
-    /// source is a usermem-validated resident slice.
+    /// NOTED's restore (NCONT, NRSTR, NSAVE): overwrite the live frame
+    /// with the saved Ureg's 280 bytes (the frozen sizeof(Ureg), NOT r9's
+    /// 288 stride — the frame's own stride is untouched).  Homed here so
+    /// syscall.rs carries no frame-reinterpretation unsafe; the source is
+    /// a usermem-validated resident slice.
+    ///
+    /// The saved Ureg is USER-WRITABLE (the notejmp contract lets a
+    /// handler edit it) and trap.S writes the frame's psr straight to
+    /// SPSR_EL1 before the eret, so the psr is rebuilt here, the one place
+    /// user bytes enter a frame: see user_return_psr.
     pub(crate) fn restore_from_saved(&mut self, src: &[u8]) {
         assert_eq!(src.len(), UREG_SIZE, "saved ureg size");
+        let live_psr = self.psr;
         // SAFETY: self is a live 288-byte TrapFrame (288 > 280 — the copy
         // writes exactly 280 bytes, never overflowing the frame); src is
         // validated + resident (usermem's constructor invariant) and read
@@ -200,7 +206,30 @@ impl TrapFrame {
                 UREG_SIZE,
             );
         }
+        self.psr = user_return_psr(self.psr, live_psr);
     }
+}
+
+/// SPSR bits a note handler may set through the saved Ureg: the
+/// condition flags N, Z, C, V (bits 31..28).
+const USER_PSR: u64 = 0xF000_0000;
+
+/// SPSR bits that must be clear on a return to EL0t, whatever their
+/// source: M[4:0] (AArch64, EL0t), D A I F (bits 9..6), IL (20), SS (21).
+const EL0T_RETURN_CLEAR: u64 = 0x1F | (0xF << 6) | (1 << 20) | (1 << 21);
+
+/// The SPSR NOTED returns to EL0 with: the condition flags from the
+/// user-writable saved Ureg (`saved`), every other bit from `live` — the
+/// SPSR the NOTED syscall itself entered with, captured by the hardware
+/// — and the privileged bits forced to a plain EL0t return.  The donor
+/// rule is "don't let user change system flags" (9k noted() keeps only
+/// the arithmetic flags of the user's Ureg and takes the rest from the
+/// kernel's frame).  A handler that set I or F would otherwise run its
+/// process at EL0 with interrupts masked, where the tick can never
+/// preempt it; M would steer the eret to EL1 or AArch32, and IL or SS
+/// would raise an illegal-state or single-step exception on return.
+fn user_return_psr(saved: u64, live: u64) -> u64 {
+    ((saved & USER_PSR) | (live & !USER_PSR)) & !EL0T_RETURN_CLEAR
 }
 
 /// Plan 9 note actions (Harvey sys/include/libc.h — frozen values).
@@ -281,19 +310,6 @@ impl TrapFrame {
     /// nibble (0 = EL0t), which the kernel-context-fault panic prints.
     pub fn psr(&self) -> u64 {
         self.psr
-    }
-
-    /// Force the frame's saved psr to EL0t (clear the M field, bits [3:0]).
-    /// NOTED's NCONT/NRSTR copies the saved Ureg over the live frame
-    /// from USER-WRITABLE memory — a note handler may legally edit it (the
-    /// documented notejmp contract) — and trap.S's restore writes the psr
-    /// straight to SPSR_EL1 before eret.  The privilege bits are kernel
-    /// state crossing the trust boundary: without this mask a handler that
-    /// set M = EL1h (0x5) would eret to EL1 at a (PXN-protected) user pc —
-    /// a user-triggerable kernel panic.  The donor's noted() validates
-    /// pc/sp; this closes the restore boundary.
-    pub(crate) fn force_psr_el0t(&mut self) {
-        self.psr &= !0xf;
     }
 }
 
@@ -641,7 +657,7 @@ fn trap(frame: &mut TrapFrame) {
 
 #[cfg(test)]
 mod tests {
-    use super::SyncRoute;
+    use super::{SyncRoute, TrapFrame, UREG_SIZE, user_return_psr};
 
     const EL0T: u64 = 0x8000_0000; // N set, M[3:0] = 0
     const EL1H: u64 = 0x3c5;
@@ -670,5 +686,49 @@ mod tests {
         }
         assert!(!SyncRoute::UserKill.returns());
         assert!(!SyncRoute::KernelHalt.returns());
+    }
+
+    const DAIF: u64 = 0xF << 6;
+    const IL: u64 = 1 << 20;
+    const SS: u64 = 1 << 21;
+    const SSBS: u64 = 1 << 12;
+    const DIT: u64 = 1 << 24;
+
+    #[test]
+    fn noted_psr_takes_only_the_condition_flags_from_the_saved_ureg() {
+        // Everything privileged a handler could write: DAIF, AArch32,
+        // EL1h, IL, SS — none of it may reach SPSR_EL1.
+        let hostile = 0xF000_0000 | DAIF | 0x10 | 0x5 | IL | SS;
+        assert_eq!(user_return_psr(hostile, 0), 0xF000_0000);
+        // The condition flags are the user's: cleared ones stay cleared.
+        assert_eq!(user_return_psr(DAIF, 0xF000_0000), 0);
+        assert_eq!(user_return_psr(0x6000_0000, 0x9000_0000), 0x6000_0000);
+    }
+
+    #[test]
+    fn noted_psr_keeps_the_live_frames_other_bits_but_never_a_mask() {
+        // Unprivileged PSTATE the process set itself (SSBS, DIT) rides
+        // the live frame; even a live frame's mask/mode bits are dropped.
+        assert_eq!(user_return_psr(0, SSBS | DIT), SSBS | DIT);
+        assert_eq!(user_return_psr(DAIF, SSBS | DAIF | 0x5 | IL | SS), SSBS);
+    }
+
+    #[test]
+    fn restore_from_saved_rebuilds_the_psr() {
+        let mut saved = TrapFrame::zeroed();
+        saved.x0 = 0x1234;
+        saved.pc = 0x20_0000;
+        saved.sp = 0x7fff_f000;
+        saved.psr = 0x8000_0000 | DAIF | 0x5 | IL;
+        let mut bytes = [0u8; UREG_SIZE];
+        saved.copy_to_saved(&mut bytes);
+
+        let mut live = TrapFrame::zeroed();
+        live.psr = 0x2000_0000 | SSBS;
+        live.restore_from_saved(&bytes);
+        assert_eq!(live.x0, 0x1234);
+        assert_eq!(live.pc, 0x20_0000);
+        assert_eq!(live.sp, 0x7fff_f000);
+        assert_eq!(live.psr, 0x8000_0000 | SSBS);
     }
 }

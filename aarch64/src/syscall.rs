@@ -611,14 +611,11 @@ fn sys_noted(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
                 let interrupted = proc.note_fpsave;
                 crate::fpu::replace(&mut proc.fpsave, &interrupted);
             }
+            // restore_from_saved rebuilds the psr from the user-writable
+            // copy (condition flags only — trap.rs user_return_psr).  The
+            // saved `type` field stays informational-only (aarch64/ABI.md
+            // documents it as such).
             frame.restore_from_saved(&ureg);
-            // The copied psr came from user-writable memory (the notejmp
-            // contract lets the handler edit the saved Ureg) — force the
-            // privilege bits to EL0t so a handler-edited M field can never
-            // steer trap.S's eret to EL1 (a user-triggerable kernel panic).
-            // The saved `type` field stays informational-only
-            // (aarch64/ABI.md documents it as such).
-            frame.force_psr_el0t();
             if let Some(arg) = plan.nsave_arg {
                 frame.sp = resume_sp;
                 frame.x0 = arg;
