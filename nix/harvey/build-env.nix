@@ -288,6 +288,13 @@ let
         fi
 
         # ---- the tree-shape assertions (T-01-44): run on the final layout ----
+        # An empty tree must fail loudly: the case checks below cannot see
+        # emptiness, and the first run of this venue exported one because
+        # a copy guard used plan9port's `ls` (no -A) — never again silent.
+        if [ -z "$(find "$out" -mindepth 1 -print -quit)" ]; then
+          echo "HARVEY-TREE-FAIL the install step produced an empty tree" >&2
+          exit 1
+        fi
         dupes=$(find "$out" | tr '[:upper:]' '[:lower:]' | sort | uniq -d | wc -l)
         if [ "$dupes" != "0" ]; then
           echo "HARVEY-TREE-FAIL case-fold duplicate names in the tree ($dupes):" >&2
