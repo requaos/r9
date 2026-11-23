@@ -610,8 +610,112 @@ a capture-path defect to confirm before calling it a boot regression.
    `HARVEY_NETADDR_SEAM` themselves.
 2. `step_full` must copy each app's actual `R9_GATE_OUT` directory (the
    short-name map above), and `step_equiv` must count the same path.
-3. The tier-1 `fpprobe` note-leg failure needs a kernel/note-delivery
-   investigation before the full run can be green.
+3. The tier-1 `fpprobe` note-leg failure is investigated and fixed below
+   (the q35 millisecond/tick conversion); the KVM stop-C2 rerun is the
+   proof that the real handlers now run.
+
+### fpprobe note-delivery — root cause, fix and next action (plan 01-34)
+
+**Finding: the interrupt-return note boundary is intact; the q35 port
+interpreted alarm/sleep MILLISECONDS as 100 Hz timer TICKS, so every
+alarm arrived ten times late.** `fpprobe`'s two ring-3 spin rounds
+(`note-spin`: 200M volatile adds; `note-regs`: `gprspin`'s 2^31 asm
+decrements) finish before that late alarm on a fast KVM host, so their
+handlers ran 0 times; the same rounds pass under the far slower TCG
+container where the 500 ms alarm always lands mid-spin.
+
+Evidence, and why it is this and not a missing boundary:
+
+- The failing lines are exactly the two legs that need delivery on the
+  INTERRUPT return:
+  `fpprobe: BAD note-spin handler ran 0 times`,
+  `fpprobe: BAD note-regs handler ran 0 times`, then
+  `fpprobe: BAD note child 129: bad`, `fpprobe: FAIL note`,
+  `T1-FAIL fpprobe` (full.log). `note-sync`, `note-sleep` and
+  `note-nsave` did not report BAD — those deliver at the SYSCALL return
+  (and `note-sleep` additionally proves the tick's timeout sweep posts
+  the alarm note and wakes the Blocked sleeper).
+- The `switch` and `preempt` legs passed: `preempt` runs the same
+  ring-3 integer spin for four rounds and requires the timer tick to
+  preempt it, so ticks fire and the IRQ path runs under KVM.
+- `user trap: unhandled vector 1 pc=0x2027d9 addr=0x0`, followed by
+  `process 138 exited: "sys: trap"`, is the flags-`tf` sub-leg's
+  DESIGNED outcome: TF is set across a syscall and the single-step #DB
+  must arrive in ring 3 and kill the child with `sys: trap` (fpprobe
+  requires exactly that string). It is not a note-delivery fault.
+- `x86_64/src/trap.rs`'s IRQ-return
+  `deliver_notes(trap_frame)` call (vectors >= 32, `cs & 3 == 3`) has
+  been present since `0ffcec6` (the 2026-11-22 x86_64 async-note fix,
+  part of `e9e5365`); no later commit touched that block. The same code
+  was verified green under TCG (`fpprobe: ok`, tier-1 39 T1-OK) on
+  2026-11-22. The prior session's "no IRQ-return delivery" mutant
+  produced these SAME two lines, which is why the serial evidence alone
+  was ambiguous; the code and venue timeline disambiguate it.
+- The defect: `TICKS_PER_SEC = 100` on q35 (`TICK_MS = 10`), while
+  `sys_alarm`/`sys_sleep` inherited aarch64's `now + ms` — harmless
+  there because the aarch64 tick is 1 ms, so a millisecond and a tick
+  are the same number; ten times late here. `alarm(50)` armed at
+  500 ms, and `alarm`'s "remaining ms" return was ten times small.
+  `gprspin` is sub-second on the witness's KVM host (`-cpu host`, 16
+  cores) and loses the race; under TCG it runs for many seconds and
+  wins. That is why stop C's KVM host is the first venue to see it.
+- WINDOWS #70 (aarch64 scheduler resume skips note delivery, deferred
+  to Phase 8/SMP-06) is a DIFFERENT defect on the other architecture;
+  the x86_64 async path was fixed in `e9e5365` and is present here.
+  Neither the arm64 deferral nor its acceptance covers this timing
+  bug, and nothing here re-scopes it.
+
+**Fix (in scope, small):** `x86_64/src/syscall.rs` converts
+milliseconds to ticks with a ceiling (`ms_to_ticks`, `TICK_MS = 10`)
+for `sleep` and `alarm`, and converts `alarm`'s remaining-tick return
+back to milliseconds; `x86_64/src/platform/q35/timer.rs` exposes
+`TICK_MS` `pub(crate)`. A host unit test pins the conversion
+(`sleep_and_alarm_convert_milliseconds_to_the_100hz_slice`: 1..9 ms = 1
+tick, 10 = 1, 11 = 2, 50 = 5, 1000 = 100). The aarch64 twin is
+unchanged (identity conversion there by construction).
+
+**Verification:** the conversion is pinned at COMPILE TIME in every
+x86_64 kernel build — `const` asserts beside `ms_to_ticks` are carried
+by `cargo xtask check`, `clippy` and `build`, so a tick-rate or formula
+change cannot silently restore the ten-times-late alarm — and repeated
+by a host unit test on the x86_64 leg
+(`sleep_and_alarm_convert_milliseconds_to_the_100hz_slice`).
+`cargo xtask test|clippy|check` pass on the Mac (the aarch64 host leg);
+the x86_64 host-test leg needs an x86_64 Linux host or an amd64
+container (a Docker attempt here is blocked by Docker's seccomp policy,
+`unable to load seccomp BPF`, so the owner's host carries that leg).
+The boot-level proof is stop C2: `boot-r9-tier1-x64` must print
+`fpprobe: ok` with all six legs, `note-spin` and `note-regs` included.
+Nothing about the gate changes: `T1-OK fpprobe` stays a required marker
+and stop C remains FAIL until that rerun is green.
+
+A TCG rerun **cannot discriminate this finding**: the pre-fix kernel was
+already green under TCG on 2026-11-22 (the same two rounds passed), and
+it will stay green after the fix — TCG's spin loops outlast the 500 ms
+late alarm, so the race never fires there. The KVM venue is the
+discriminator, and stop C2 runs there; spending a TCG cycle would
+re-measure the venue that never exposed the bug. (The x86_64 gate does
+run under the amd64 Docker + `nix develop` shape, so the command is
+available for any future TCG need; it is recorded below.)
+
+**If stop C2 still reports `handler ran 0 times`:** the next action is
+the trap.rs IRQ-boundary isolation (the 2026-11-22 no-IRQ-delivery
+mutant) — instrument `deliver_notes` at the vector>=32 return to print
+`pid`, `note_queue.len()` and `notified` per tick — not a gate
+reclassification. `note-sleep` passing while `note-spin`/`note-regs`
+fail would then implicate the tick's `preempt()` park/resume path
+(the proc resumes through `swtch` after the boundary ran), which is the
+only code between the tick and the boundary; the fix stays in the note
+path, never in the acceptance.
+
+**TCG-only reproduction command** (an x86_64 Linux host or the amd64
+container; the Mac has no x86_64 devshell):
+
+    nix develop -c env R9_ACCEL=tcg cargo xtask gate --arch x86-64 --full --accel tcg
+
+or the single app through the flake: `R9_ACCEL=tcg nix run
+.#boot-r9-tier1-x64` (x86_64-linux only; the app exports its own
+supply). The KVM rerun (stop C2) is the authoritative proof.
 
 ### The prepared Harvey review packet
 
