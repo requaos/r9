@@ -1,0 +1,190 @@
+# S2 builder evidence — lima VM `harvey` (aarch64-linux), 2026-11-23
+#
+# NIX_SSHOPTS="-F /Users/neilskinner/.lima/harvey/ssh.config -oControlPath=none"
+#
+# exact build commands:
+#   nix build path:$S/s2#packages.aarch64-linux.s2-casecheck-input \
+#     --store ssh-ng://lima-harvey --eval-store auto -L --print-out-paths
+#   nix build path:$S/s2#packages.aarch64-linux.s2-casecheck-fod \
+#     --store ssh-ng://lima-harvey --eval-store auto -L --print-out-paths
+# full logs (not in git): s2/work/build-input-lima.log, s2/work/build-fod-lima.log,
+#                         s2/work/copyback-lima.log
+#
+# outputs:
+#   input: /nix/store/b03ch0dk2gdc1wn2dx7lbva3k0niqb6l-s2-casecheck-input-0
+#   fod:   /nix/store/sydxc6ylbmgvml1y9hadk68vd8k5pdkv-s2-casecheck-fod-0
+
+== s2-casecheck-input — $out/report.txt (builder side)
+OK e8ea70ac673bc2ec11b0d82922ea6975cbfa005e rc/bin/Kill
+OK e8ea70ac673bc2ec11b0d82922ea6975cbfa005e rc/bin/kill
+OK 5183becca7853f3d86b4b8b0f70c8e2fc47269c4 sys/lib/postscript/troff/HX
+OK 3fd78fb2aca5489d80e320ad5f2053ba30038388 sys/lib/postscript/troff/Hx
+OK 95bbf74bf37fce2e76e04a5c3f3c079ae2b2b48a sys/lib/troff/font/devutf/HB
+OK 52b72034553d2fe31a5af5ab6ff6533075efda14 sys/lib/troff/font/devutf/HI
+OK 376c3ce51b0c07e56dafe4184ff50b4c30c46011 sys/lib/troff/font/devutf/HX
+OK adc7942206ac540a696d5148afb9383c0f2122d9 sys/lib/troff/font/devutf/Hb
+OK 6eefcf0fb79491ac2defdfcab71e6378352383f1 sys/lib/troff/font/devutf/Hi
+OK 6db273e80911557ac39c16f9d62e9280e50b9215 sys/lib/troff/font/devutf/Hx
+OK 315ddda5c785a7b87e2c91e6df4f23c7d855cc39 sys/lib/troff/font/devutf/charlib/LH
+OK bfb2af2f2be166536cf4fbf82f344a0177b2f8a5 sys/lib/troff/font/devutf/charlib/RC
+OK 4c651554a96d82b7f3204c1d4986de58e3cb2996 sys/lib/troff/font/devutf/charlib/lH
+OK 17c3c232d7409ed66ef6e051f60feacea5235485 sys/lib/troff/font/devutf/charlib/lh
+OK 798c114a20ef950016ce5cab11ecaf5593fa2c30 sys/lib/troff/font/devutf/charlib/rH
+OK 954e290dbfa304981784b9156345d3b44e861469 sys/lib/troff/font/devutf/charlib/rc
+OK 1e53e9a683d63a6c2be7aaa2c433bad0108afd14 sys/lib/troff/font/devutf/charlib/rh
+OK 19be6b2fdfa93c0ab2f5af78ed2e260173fbac7d sys/src/cmd/postscript/devpost.add/C1
+OK 359341a677a26eff0301003d817975d931e3d3b1 sys/src/cmd/postscript/devpost.add/C2
+OK eef7eef0963f716822479afa738486e47142b7cb sys/src/cmd/postscript/devpost.add/C3
+OK b9e1c021fa3cdf8c4dd5d93db3864bcdf5a0009c sys/src/cmd/postscript/devpost.add/c1
+OK 3fbafeb0972adab60d8fe9751e49b4c03ffd5c6d sys/src/cmd/postscript/devpost.add/c2
+OK 7e3cd8a29a7bcafa1834a222e717941ce86e44f7 sys/src/cmd/postscript/devpost.add/c3
+OK casehack-names 0 in source
+OK rc/bin kill and Kill present
+S2-CASECHECK-ALL-OK
+
+== s2-casecheck-fod — $out/report.txt (builder side)
+OK e8ea70ac673bc2ec11b0d82922ea6975cbfa005e rc/bin/Kill
+OK e8ea70ac673bc2ec11b0d82922ea6975cbfa005e rc/bin/kill
+OK 5183becca7853f3d86b4b8b0f70c8e2fc47269c4 sys/lib/postscript/troff/HX
+OK 3fd78fb2aca5489d80e320ad5f2053ba30038388 sys/lib/postscript/troff/Hx
+OK 95bbf74bf37fce2e76e04a5c3f3c079ae2b2b48a sys/lib/troff/font/devutf/HB
+OK 52b72034553d2fe31a5af5ab6ff6533075efda14 sys/lib/troff/font/devutf/HI
+OK 376c3ce51b0c07e56dafe4184ff50b4c30c46011 sys/lib/troff/font/devutf/HX
+OK adc7942206ac540a696d5148afb9383c0f2122d9 sys/lib/troff/font/devutf/Hb
+OK 6eefcf0fb79491ac2defdfcab71e6378352383f1 sys/lib/troff/font/devutf/Hi
+OK 6db273e80911557ac39c16f9d62e9280e50b9215 sys/lib/troff/font/devutf/Hx
+OK 315ddda5c785a7b87e2c91e6df4f23c7d855cc39 sys/lib/troff/font/devutf/charlib/LH
+OK bfb2af2f2be166536cf4fbf82f344a0177b2f8a5 sys/lib/troff/font/devutf/charlib/RC
+OK 4c651554a96d82b7f3204c1d4986de58e3cb2996 sys/lib/troff/font/devutf/charlib/lH
+OK 17c3c232d7409ed66ef6e051f60feacea5235485 sys/lib/troff/font/devutf/charlib/lh
+OK 798c114a20ef950016ce5cab11ecaf5593fa2c30 sys/lib/troff/font/devutf/charlib/rH
+OK 954e290dbfa304981784b9156345d3b44e861469 sys/lib/troff/font/devutf/charlib/rc
+OK 1e53e9a683d63a6c2be7aaa2c433bad0108afd14 sys/lib/troff/font/devutf/charlib/rh
+OK 19be6b2fdfa93c0ab2f5af78ed2e260173fbac7d sys/src/cmd/postscript/devpost.add/C1
+OK 359341a677a26eff0301003d817975d931e3d3b1 sys/src/cmd/postscript/devpost.add/C2
+OK eef7eef0963f716822479afa738486e47142b7cb sys/src/cmd/postscript/devpost.add/C3
+OK b9e1c021fa3cdf8c4dd5d93db3864bcdf5a0009c sys/src/cmd/postscript/devpost.add/c1
+OK 3fbafeb0972adab60d8fe9751e49b4c03ffd5c6d sys/src/cmd/postscript/devpost.add/c2
+OK 7e3cd8a29a7bcafa1834a222e717941ce86e44f7 sys/src/cmd/postscript/devpost.add/c3
+OK casehack-names 0 in source
+OK rc/bin kill and Kill present
+S2-CASECHECK-ALL-OK
+
+== copy-back into the Mac system store as the owner: refused (signature policy)
+== nix copy --from ssh-ng://lima-harvey /nix/store/b03ch0dk2gdc1wn2dx7lbva3k0niqb6l-s2-casecheck-input-0
+copying 1 paths...
+copying path '/nix/store/b03ch0dk2gdc1wn2dx7lbva3k0niqb6l-s2-casecheck-input-0' from 'ssh-ng://lima-harvey'...
+error: cannot add path '/nix/store/b03ch0dk2gdc1wn2dx7lbva3k0niqb6l-s2-casecheck-input-0' because it lacks a signature by a trusted key
+RC=1
+== nix copy --from ssh-ng://lima-harvey /nix/store/sydxc6ylbmgvml1y9hadk68vd8k5pdkv-s2-casecheck-fod-0
+copying 1 paths...
+copying path '/nix/store/sydxc6ylbmgvml1y9hadk68vd8k5pdkv-s2-casecheck-fod-0' from 'ssh-ng://lima-harvey'...
+error: cannot add path '/nix/store/sydxc6ylbmgvml1y9hadk68vd8k5pdkv-s2-casecheck-fod-0' because it lacks a signature by a trusted key
+RC=1
+== nix copy --from ssh-ng://lima-harvey --no-check-sigs /nix/store/b03ch0dk2gdc1wn2dx7lbva3k0niqb6l-s2-casecheck-input-0
+copying 1 paths...
+copying path '/nix/store/b03ch0dk2gdc1wn2dx7lbva3k0niqb6l-s2-casecheck-input-0' from 'ssh-ng://lima-harvey'...
+error: cannot add path '/nix/store/b03ch0dk2gdc1wn2dx7lbva3k0niqb6l-s2-casecheck-input-0' because it lacks a signature by a trusted key
+RC=1
+== nix copy --from ssh-ng://lima-harvey --no-check-sigs /nix/store/sydxc6ylbmgvml1y9hadk68vd8k5pdkv-s2-casecheck-fod-0
+copying 1 paths...
+copying path '/nix/store/sydxc6ylbmgvml1y9hadk68vd8k5pdkv-s2-casecheck-fod-0' from 'ssh-ng://lima-harvey'...
+error: cannot add path '/nix/store/sydxc6ylbmgvml1y9hadk68vd8k5pdkv-s2-casecheck-fod-0' because it lacks a signature by a trusted key
+RC=1
+
+== copy-back into a local chroot store on the Mac APFS data volume (require-sigs=false)
+== chroot store: /Users/neilskinner/code/r9/.planning/phases/01-stage-p0-cross-build-harness/spikes/s2/work/mac-store
+== nix copy --from ssh-ng://lima-harvey --to <chroot> --option require-sigs false /nix/store/b03ch0dk2gdc1wn2dx7lbva3k0niqb6l-s2-casecheck-input-0
+copying 1 paths...
+copying path '/nix/store/b03ch0dk2gdc1wn2dx7lbva3k0niqb6l-s2-casecheck-input-0' from 'ssh-ng://lima-harvey'...
+RC=0
+== nix copy --from ssh-ng://lima-harvey --to <chroot> --option require-sigs false /nix/store/sydxc6ylbmgvml1y9hadk68vd8k5pdkv-s2-casecheck-fod-0
+copying 1 paths...
+copying path '/nix/store/sydxc6ylbmgvml1y9hadk68vd8k5pdkv-s2-casecheck-fod-0' from 'ssh-ng://lima-harvey'...
+RC=0
+== nix store verify --no-trust --store <chroot> /nix/store/b03ch0dk2gdc1wn2dx7lbva3k0niqb6l-s2-casecheck-input-0
+checking '/nix/store/b03ch0dk2gdc1wn2dx7lbva3k0niqb6l-s2-casecheck-input-0'...
+RC=0
+== nix store verify --no-trust --store <chroot> /nix/store/sydxc6ylbmgvml1y9hadk68vd8k5pdkv-s2-casecheck-fod-0
+checking '/nix/store/sydxc6ylbmgvml1y9hadk68vd8k5pdkv-s2-casecheck-fod-0'...
+RC=0
+
+== case-hack names in the Mac-side chroot store
+== case-hack names in the Mac-side chroot store (input output)
+/nix/store/b03ch0dk2gdc1wn2dx7lbva3k0niqb6l-s2-casecheck-input-0/collide/rc/bin/kill~nix~case~hack~1
+/nix/store/b03ch0dk2gdc1wn2dx7lbva3k0niqb6l-s2-casecheck-input-0/collide/sys/lib/postscript/troff/Hx~nix~case~hack~1
+/nix/store/b03ch0dk2gdc1wn2dx7lbva3k0niqb6l-s2-casecheck-input-0/collide/sys/lib/troff/font/devutf/Hb~nix~case~hack~1
+/nix/store/b03ch0dk2gdc1wn2dx7lbva3k0niqb6l-s2-casecheck-input-0/collide/sys/lib/troff/font/devutf/Hi~nix~case~hack~1
+/nix/store/b03ch0dk2gdc1wn2dx7lbva3k0niqb6l-s2-casecheck-input-0/collide/sys/lib/troff/font/devutf/Hx~nix~case~hack~1
+/nix/store/b03ch0dk2gdc1wn2dx7lbva3k0niqb6l-s2-casecheck-input-0/collide/sys/lib/troff/font/devutf/charlib/lH~nix~case~hack~1
+/nix/store/b03ch0dk2gdc1wn2dx7lbva3k0niqb6l-s2-casecheck-input-0/collide/sys/lib/troff/font/devutf/charlib/lh~nix~case~hack~2
+/nix/store/b03ch0dk2gdc1wn2dx7lbva3k0niqb6l-s2-casecheck-input-0/collide/sys/lib/troff/font/devutf/charlib/rc~nix~case~hack~1
+/nix/store/b03ch0dk2gdc1wn2dx7lbva3k0niqb6l-s2-casecheck-input-0/collide/sys/lib/troff/font/devutf/charlib/rh~nix~case~hack~1
+/nix/store/b03ch0dk2gdc1wn2dx7lbva3k0niqb6l-s2-casecheck-input-0/collide/sys/src/cmd/postscript/devpost.add/c1~nix~case~hack~1
+/nix/store/b03ch0dk2gdc1wn2dx7lbva3k0niqb6l-s2-casecheck-input-0/collide/sys/src/cmd/postscript/devpost.add/c2~nix~case~hack~1
+/nix/store/b03ch0dk2gdc1wn2dx7lbva3k0niqb6l-s2-casecheck-input-0/collide/sys/src/cmd/postscript/devpost.add/c3~nix~case~hack~1
+== case-hack names (fod output)
+/nix/store/sydxc6ylbmgvml1y9hadk68vd8k5pdkv-s2-casecheck-fod-0/collide/rc/bin/kill~nix~case~hack~1
+/nix/store/sydxc6ylbmgvml1y9hadk68vd8k5pdkv-s2-casecheck-fod-0/collide/sys/lib/postscript/troff/Hx~nix~case~hack~1
+/nix/store/sydxc6ylbmgvml1y9hadk68vd8k5pdkv-s2-casecheck-fod-0/collide/sys/lib/troff/font/devutf/Hb~nix~case~hack~1
+/nix/store/sydxc6ylbmgvml1y9hadk68vd8k5pdkv-s2-casecheck-fod-0/collide/sys/lib/troff/font/devutf/Hi~nix~case~hack~1
+/nix/store/sydxc6ylbmgvml1y9hadk68vd8k5pdkv-s2-casecheck-fod-0/collide/sys/lib/troff/font/devutf/Hx~nix~case~hack~1
+/nix/store/sydxc6ylbmgvml1y9hadk68vd8k5pdkv-s2-casecheck-fod-0/collide/sys/lib/troff/font/devutf/charlib/lH~nix~case~hack~1
+/nix/store/sydxc6ylbmgvml1y9hadk68vd8k5pdkv-s2-casecheck-fod-0/collide/sys/lib/troff/font/devutf/charlib/lh~nix~case~hack~2
+/nix/store/sydxc6ylbmgvml1y9hadk68vd8k5pdkv-s2-casecheck-fod-0/collide/sys/lib/troff/font/devutf/charlib/rc~nix~case~hack~1
+/nix/store/sydxc6ylbmgvml1y9hadk68vd8k5pdkv-s2-casecheck-fod-0/collide/sys/lib/troff/font/devutf/charlib/rh~nix~case~hack~1
+/nix/store/sydxc6ylbmgvml1y9hadk68vd8k5pdkv-s2-casecheck-fod-0/collide/sys/src/cmd/postscript/devpost.add/c1~nix~case~hack~1
+/nix/store/sydxc6ylbmgvml1y9hadk68vd8k5pdkv-s2-casecheck-fod-0/collide/sys/src/cmd/postscript/devpost.add/c2~nix~case~hack~1
+/nix/store/sydxc6ylbmgvml1y9hadk68vd8k5pdkv-s2-casecheck-fod-0/collide/sys/src/cmd/postscript/devpost.add/c3~nix~case~hack~1
+
+== Mac-side blob re-check, exact-name enumeration (the naive -f lookup reads the case twin; see S2-FINDINGS.md)
+== Mac-side blob re-check (exact-name enumeration): input (/nix/store/b03ch0dk2gdc1wn2dx7lbva3k0niqb6l-s2-casecheck-input-0)
+OK e8ea70ac673bc2ec11b0d82922ea6975cbfa005e rc/bin/Kill
+OK e8ea70ac673bc2ec11b0d82922ea6975cbfa005e rc/bin/kill
+OK 5183becca7853f3d86b4b8b0f70c8e2fc47269c4 sys/lib/postscript/troff/HX
+OK 3fd78fb2aca5489d80e320ad5f2053ba30038388 sys/lib/postscript/troff/Hx
+OK 95bbf74bf37fce2e76e04a5c3f3c079ae2b2b48a sys/lib/troff/font/devutf/HB
+OK 52b72034553d2fe31a5af5ab6ff6533075efda14 sys/lib/troff/font/devutf/HI
+OK 376c3ce51b0c07e56dafe4184ff50b4c30c46011 sys/lib/troff/font/devutf/HX
+OK adc7942206ac540a696d5148afb9383c0f2122d9 sys/lib/troff/font/devutf/Hb
+OK 6eefcf0fb79491ac2defdfcab71e6378352383f1 sys/lib/troff/font/devutf/Hi
+OK 6db273e80911557ac39c16f9d62e9280e50b9215 sys/lib/troff/font/devutf/Hx
+OK 315ddda5c785a7b87e2c91e6df4f23c7d855cc39 sys/lib/troff/font/devutf/charlib/LH
+OK bfb2af2f2be166536cf4fbf82f344a0177b2f8a5 sys/lib/troff/font/devutf/charlib/RC
+OK 4c651554a96d82b7f3204c1d4986de58e3cb2996 sys/lib/troff/font/devutf/charlib/lH
+OK 17c3c232d7409ed66ef6e051f60feacea5235485 sys/lib/troff/font/devutf/charlib/lh
+OK 798c114a20ef950016ce5cab11ecaf5593fa2c30 sys/lib/troff/font/devutf/charlib/rH
+OK 954e290dbfa304981784b9156345d3b44e861469 sys/lib/troff/font/devutf/charlib/rc
+OK 1e53e9a683d63a6c2be7aaa2c433bad0108afd14 sys/lib/troff/font/devutf/charlib/rh
+OK 19be6b2fdfa93c0ab2f5af78ed2e260173fbac7d sys/src/cmd/postscript/devpost.add/C1
+OK 359341a677a26eff0301003d817975d931e3d3b1 sys/src/cmd/postscript/devpost.add/C2
+OK eef7eef0963f716822479afa738486e47142b7cb sys/src/cmd/postscript/devpost.add/C3
+OK b9e1c021fa3cdf8c4dd5d93db3864bcdf5a0009c sys/src/cmd/postscript/devpost.add/c1
+OK 3fbafeb0972adab60d8fe9751e49b4c03ffd5c6d sys/src/cmd/postscript/devpost.add/c2
+OK 7e3cd8a29a7bcafa1834a222e717941ce86e44f7 sys/src/cmd/postscript/devpost.add/c3
+S2-COPYBACK-input ok=23/23 bad=0
+== Mac-side blob re-check (exact-name enumeration): fod (/nix/store/sydxc6ylbmgvml1y9hadk68vd8k5pdkv-s2-casecheck-fod-0)
+OK e8ea70ac673bc2ec11b0d82922ea6975cbfa005e rc/bin/Kill
+OK e8ea70ac673bc2ec11b0d82922ea6975cbfa005e rc/bin/kill
+OK 5183becca7853f3d86b4b8b0f70c8e2fc47269c4 sys/lib/postscript/troff/HX
+OK 3fd78fb2aca5489d80e320ad5f2053ba30038388 sys/lib/postscript/troff/Hx
+OK 95bbf74bf37fce2e76e04a5c3f3c079ae2b2b48a sys/lib/troff/font/devutf/HB
+OK 52b72034553d2fe31a5af5ab6ff6533075efda14 sys/lib/troff/font/devutf/HI
+OK 376c3ce51b0c07e56dafe4184ff50b4c30c46011 sys/lib/troff/font/devutf/HX
+OK adc7942206ac540a696d5148afb9383c0f2122d9 sys/lib/troff/font/devutf/Hb
+OK 6eefcf0fb79491ac2defdfcab71e6378352383f1 sys/lib/troff/font/devutf/Hi
+OK 6db273e80911557ac39c16f9d62e9280e50b9215 sys/lib/troff/font/devutf/Hx
+OK 315ddda5c785a7b87e2c91e6df4f23c7d855cc39 sys/lib/troff/font/devutf/charlib/LH
+OK bfb2af2f2be166536cf4fbf82f344a0177b2f8a5 sys/lib/troff/font/devutf/charlib/RC
+OK 4c651554a96d82b7f3204c1d4986de58e3cb2996 sys/lib/troff/font/devutf/charlib/lH
+OK 17c3c232d7409ed66ef6e051f60feacea5235485 sys/lib/troff/font/devutf/charlib/lh
+OK 798c114a20ef950016ce5cab11ecaf5593fa2c30 sys/lib/troff/font/devutf/charlib/rH
+OK 954e290dbfa304981784b9156345d3b44e861469 sys/lib/troff/font/devutf/charlib/rc
+OK 1e53e9a683d63a6c2be7aaa2c433bad0108afd14 sys/lib/troff/font/devutf/charlib/rh
+OK 19be6b2fdfa93c0ab2f5af78ed2e260173fbac7d sys/src/cmd/postscript/devpost.add/C1
+OK 359341a677a26eff0301003d817975d931e3d3b1 sys/src/cmd/postscript/devpost.add/C2
+OK eef7eef0963f716822479afa738486e47142b7cb sys/src/cmd/postscript/devpost.add/C3
+OK b9e1c021fa3cdf8c4dd5d93db3864bcdf5a0009c sys/src/cmd/postscript/devpost.add/c1
+OK 3fbafeb0972adab60d8fe9751e49b4c03ffd5c6d sys/src/cmd/postscript/devpost.add/c2
+OK 7e3cd8a29a7bcafa1834a222e717941ce86e44f7 sys/src/cmd/postscript/devpost.add/c3
+S2-COPYBACK-fod ok=23/23 bad=0
