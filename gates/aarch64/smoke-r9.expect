@@ -1,0 +1,307 @@
+#!/usr/bin/expect -f
+# smoke-r9.expect — the PACKAGED smoke driver: the
+# expect-style smoke as a flake app, grown from drive-r9.expect
+# (the interactive dev-harness gate).  Same assertions, packaged for
+# one-command/CI use — this script spawns qemu DIRECTLY with serial on
+# stdio (-nographic, the build/build.bash heredoc-expect precedent)
+# instead of driving a launcher script:
+#
+#   staged boot (banner → paqfs... → stacksmoke → %  prompt) →
+#   echo r9shell7 round-trip → ls /bin subset (rc ls cat echo ps) →
+#   ps live-process lines incl rc → cat /lib/namespace's known line →
+#   DEL safety (the interrupt note re-prompts, rc survives; r9delok
+#   proves the partial line did not corrupt the fresh command) →
+#   exit → init's for(;;) restart to a fresh prompt →
+#   whole-capture post-passes: pid-warning-absent + the nic-bind line
+#   (D-10: the composed boot speaks Ethernet — the spawn argv below
+#   instantiates the always-on virtio-net NIC and the driver's
+#   `#l0: virtio: 1000Mbps: ` bind line must appear in the capture).
+#
+#   exit 0 only when EVERY stage passed; a failure exits 1 and names
+#   the failed stage on stderr (banner/paqfs/stacksmoke/prompt/echo/
+#   ls/ps/cat/DEL/restart/pid-warning-absent/nic-bind) — never a bare
+#   hang-to-timeout with no
+#   localization.
+#
+# Hygiene: the caller (nix/gates/smoke-r9.sh) rm -f's the
+# capture BEFORE launch and we rm -f + log_file it fresh below — the
+# file starts empty and only THIS run's boot writes it, so a pre-seeded
+# stale capture can never satisfy a marker wait.  Every exit path kills
+# qemu's process group (expect's spawn sets the child up as a
+# session/group leader on its pty, on darwin AND linux alike).
+#
+# Markers: PRESENCE assertions only, never interleaving order
+# (preemption and TCG make arrival order meaningless).  Patterns are
+# CRLF-tolerant substrings, never end-of-line anchored (the kernel
+# console cooks \n → \r\n; userland writes are byte-exact).
+# r9's devcons ECHOES cooked-mode typed input, so every typed command
+# appears on the wire BEFORE its
+# output — the marker discipline is load-bearing (never match
+# the ECHOED command instead of the output): response markers are staged
+# TWO-OCCURRENCE (typed echo, then output) and sweep captures strip
+# everything through the first newline before presence-asserting.
+# Timeouts are TCG-sized (600s per stage; the legacy
+# harness used 600-2400s).
+#
+# Env (exported by nix/gates/smoke-r9.sh — the flake app):
+#   R9_QEMU      default qemu-system-aarch64
+#   R9_KERNEL    REQUIRED — the r9 kernel-virt.elf (the flake input's
+#                store path)
+#   R9_DTB       REQUIRED — the fdtput-patched virt DTB copy (the
+#                caller's mktemp dir reclaims it after we exit)
+#   R9_INITRD    REQUIRED — target/images/aarch64/bootfs.paq (r9's assembler)
+#   R9_SMOKE_LOG REQUIRED — the serial capture (fresh per run; the
+#                caller retains a passing one as evidence)
+#
+# usage: env R9_KERNEL=… R9_DTB=… R9_INITRD=… R9_SMOKE_LOG=… \
+#          expect gates/aarch64/smoke-r9.expect
+# exit 0 on all-pass; exit 1 names the failed stage on stderr; exit 2
+# on a contract violation (missing env).
+
+set timeout 600                    ;# TCG-sized, PER STAGE
+match_max 65536
+# NOTE: log_user stays ON — expect 5.45 writes NOTHING to log_file when
+# log_user is 0 (measured: the capture file was created empty).
+# The wire echo on the driver's stdout is the app's visible progress;
+# the stage lines name it on stderr.
+
+# --- required env (loud, before any spawn) -------------------------------
+foreach v {R9_KERNEL R9_DTB R9_INITRD R9_SMOKE_LOG} {
+    if {![info exists env($v)]} {
+        puts stderr "smoke-r9: \$$v unset — run via the flake app (nix run .#boot-r9-smoke)"
+        exit 2
+    }
+}
+set QEMU [expr {[info exists env(R9_QEMU)] ? $env(R9_QEMU) : "qemu-system-aarch64"}]
+# The per-run unique tag in qemu's argv (-name) — the caller
+# (nix/gates/smoke-r9.sh) exports R9_RUN_TAG so its survivor sweep matches
+# THIS run's qemu only; standalone runs default to a unique tag here.
+set run_tag [expr {[info exists env(R9_RUN_TAG)] ? $env(R9_RUN_TAG) : "r9smoke-[pid]-[clock seconds]"}]
+
+# --- Hygiene: a fresh capture per run -----------------------------------
+# The caller already rm -f'd it; remove again here so the rule holds
+# however this script is invoked (a stale capture is dead evidence).
+exec rm -f $env(R9_SMOKE_LOG)
+
+# --- spawn qemu: the caller-selected virt shape (gicv3 everywhere;
+#     hvf -cpu host on darwin-aarch64, TCG cortex-a72 elsewhere — the
+#     r9 kernel dispatches its GIC driver on the DTB's compatible
+#     string; the caller already patched the DTB's /chosen cells) ------
+set R9_MACHINE [expr {[info exists env(R9_MACHINE)] ? $env(R9_MACHINE) : "virt,gic-version=3"}]
+set R9_CPU [expr {[info exists env(R9_CPU)] ? $env(R9_CPU) : "cortex-a72"}]
+set R9_ACCEL [expr {[info exists env(R9_ACCEL)] ? $env(R9_ACCEL) : "tcg"}]
+spawn $QEMU -M $R9_MACHINE -cpu $R9_CPU -smp 1 -m 1024M \
+    -accel $R9_ACCEL \
+    -kernel $env(R9_KERNEL) \
+    -dtb $env(R9_DTB) \
+    -device loader,file=$env(R9_INITRD),addr=0x48000000 \
+    -netdev user,id=n0 \
+    -device virtio-net-pci-non-transitional,netdev=n0 \
+    -nographic \
+    -name $run_tag
+set spawn_pid [exp_pid]
+log_file $env(R9_SMOKE_LOG)
+
+# --- teardown: kill qemu's process group ------------------------------
+# The spawned qemu is a session/group leader on both hosts (expect's
+# pty setup), so the group IS the qemu subtree; catch: already-dead is
+# fine.  The lone-pid second form is the no-group fallback.
+proc cleanup {} {
+    global spawn_pid
+    catch { exec kill -KILL -- -$spawn_pid 2>/dev/null }
+    catch { exec kill -KILL $spawn_pid 2>/dev/null }
+}
+
+# --- staged ordered assertions (each stage names its failure) ---------
+# NOTE: expect_out must be global here — expect sets it in the CURRENT
+# scope, and the sweep stages read the captured buffer AFTER stage
+# returns.
+proc stage {name re} {
+    global expect_out
+    expect {
+        -re $re { puts stderr "smoke-r9: stage ok — $name" }
+        timeout { puts stderr "smoke-r9: TIMEOUT at stage: $name"; cleanup; exit 1 }
+        eof { puts stderr "smoke-r9: qemu exited (EOF) at stage: $name"; cleanup; exit 1 }
+    }
+}
+
+# fast-fail on kernel panic markers anywhere in the boot (drive9.py's
+# PANIC_RE rule)
+expect_before {
+    -re {panic|Unhandled interrupt} {
+        puts stderr "smoke-r9: kernel panic marker on the wire — aborting"
+        cleanup
+        exit 1
+    }
+    # the rc argv-stack abort (`rc: pushword but no argv!`, the HVF
+    # fork-child defect, WINDOWS #49): fail at once with a named message
+    # instead of riding the stage timeout (20-01, D-01 groundwork).
+    -re {pushword but no argv} {
+        puts stderr "smoke-r9: rc argv-stack abort on the wire (pushword but no argv) — WINDOWS #49"
+        cleanup
+        exit 1
+    }
+}
+
+# 1. the staged boot sequence: banner → paqfs server → stacksmoke → prompt
+stage banner    {r9 from the Internet}
+stage paqfs     {paqfs\.\.\.}
+stage stacksmoke {stacksmoke: depth 64 ok}
+stage prompt    {% }
+
+# 2. the echo round-trip: typed input is READ, cooked, ECHOED, answered.
+#    The marker occurs TWICE on the wire — the typed
+#    command's echo first, then the echo binary's OUTPUT — so the
+#    round-trip is staged two-occurrence (each stage consumes one
+#    occurrence in order; a missing echo OR a missing output fails its
+#    own stage).
+send "echo r9shell7\r"
+stage echo-echoed   {r9shell7}
+stage echo-response {r9shell7}
+stage echo-prompt   {% }
+
+# 3. the command sweep — each command's output is captured up to
+#    the next prompt, then PRESENCE-asserted (never interleaving
+#    order).  The sweep rides the first rc generation; the state-
+#    resetting stages (DEL, exit) follow it.  With cooked
+#    echo on the wire, every capture begins with the ECHOED command
+#    line — strip everything through the first newline before asserting
+#    (never presence-match the echo instead of the output).
+
+# strip everything through the first newline (the echoed command line)
+proc strip_echoed_line {capture} {
+    set nl [string first "\n" $capture]
+    if {$nl < 0} { return $capture }
+    string range $capture [expr {$nl + 1}] end
+}
+
+# 3a. ls /bin — the subset binaries are present (the /bin union resolves
+#     to the image's arm64/bin through devmnt): five word-anchored
+#     presence assertions.
+send "ls /bin\r"
+stage ls-prompt {% }
+set lsout [strip_echoed_line $expect_out(buffer)]
+foreach name {rc ls cat echo ps} {
+    if {![regexp "\\m$name\\M" $lsout]} {
+        puts stderr "smoke-r9: ls /bin missing '$name'"
+        cleanup
+        exit 1
+    }
+}
+puts stderr "smoke-r9: stage ok — ls /bin subset (rc ls cat echo ps present)"
+
+# 3b. ps — one line per LIVE process (devproc's root listing + per-pid
+#     status/args): at least 3 lines matching the pid-and-name shape
+#     ("glenda <pid> … <name>"), one of them rc.
+send "ps\r"
+stage ps-prompt {% }
+set psout [strip_echoed_line $expect_out(buffer)]
+set pslines [regexp -all -inline {glenda +\d+[^\n]*} $psout]
+if {[llength $pslines] < 3} {
+    puts stderr "smoke-r9: ps printed [llength $pslines] process lines (< 3)"
+    cleanup
+    exit 1
+}
+set rcfound 0
+foreach l $pslines {
+    if {[regexp { rc$} [string trimright $l " \r"]]} { incr rcfound }
+}
+if {$rcfound < 1} {
+    puts stderr "smoke-r9: ps output has no rc line"
+    cleanup
+    exit 1
+}
+puts stderr "smoke-r9: stage ok — ps ([llength $pslines] process lines, rc present)"
+
+# 3c. cat /lib/namespace — the shipped file's known line rides the
+#     mounted tree's read path verbatim.
+send "cat /lib/namespace\r"
+stage cat-prompt {% }
+set catout [strip_echoed_line $expect_out(buffer)]
+if {![string match "*bind -c #e /env*" $catout]} {
+    puts stderr "smoke-r9: cat /lib/namespace missing 'bind -c #e /env'"
+    cleanup
+    exit 1
+}
+puts stderr "smoke-r9: stage ok — cat /lib/namespace (known line present)"
+
+# 4. DEL safety: a partial command with no
+#    newline sits in the line assembly; DEL (0x7f) posts the interrupt
+#    note to rc's note group, discards the partial, and fails rc's read
+#    "interrupted" — rc's Eintr path re-prompts.  rc MUST be alive.
+#    (The partial's typed bytes echo as typed; DEL itself is silent.)
+send "fnord"                       ;# partial, no newline (a non-command:
+                                   ;# a flush failure can never echo the
+                                   ;# stage marker through it)
+send "\x7f"                        ;# DEL
+stage del-reprompt {% }            ;# rc interrupted + re-prompted, not dead
+
+send "echo r9delok\r"
+stage del-echoed  {r9delok}        ;# occurrence 1: the typed echo
+stage del-answer  {r9delok}        ;# occurrence 2: the OUTPUT — the partial did NOT corrupt the fresh command
+stage del-prompt  {% }
+
+# 5. exit → init's for(;;) restart (sleep(1000), then fexec re-runs
+#    rc): a fresh prompt proves the restart loop end-to-end.
+send "exit\r"
+stage restart-print {init: starting /bin/rc}
+stage restart-prompt {% }
+
+# 6. pid-warning-absent: #c/pid resolved
+#    getpid() all boot, so init's pri-10 write named the REAL pid — the
+#    designed-degradation warning's pid-0 ctl path fragment
+#    must be ABSENT from the whole capture (its presence proves getpid()
+#    failed and the write targeted pid 0).
+log_file                           ;# stop + flush before the whole-file scan
+set fh [open $env(R9_SMOKE_LOG) r]
+set whole [read $fh]
+close $fh
+if {[string match "*#p/0/ctl*" $whole]} {
+    puts stderr "smoke-r9: pid-0 ctl path present in the capture — getpid() regressed"
+    cleanup
+    exit 1
+}
+puts stderr "smoke-r9: stage ok — pid-warning-absent (no #p/0/ctl in the capture)"
+
+# 7. nic-bind: D-10's end state — the composed boot bound the always-on
+#    virtio-net NIC.  The driver's bind line must be PRESENT in the
+#    whole capture (the pid-warning-absent whole-file scan, inverted:
+#    here ABSENCE fails).  On the default darwin leg (gicv3+hvf) this is
+#    also the first live NIC-on-GICv3 composed boot; R9_GICV2=1 remains
+#    the bisection hatch, never the gate default.
+if {![string match "*#l0: virtio: 1000Mbps: *" $whole]} {
+    puts stderr "smoke-r9: nic-bind FAILED — no '#l0: virtio: 1000Mbps: ' bind line in the capture (the composed boot did not bind the NIC)"
+    cleanup
+    exit 1
+}
+puts stderr "smoke-r9: stage ok — nic-bind (#l0: virtio: 1000Mbps: bind line present in the capture)"
+
+# user-hooks-registered / no-unknown-device / no-unsupported-era
+#    (20-01): whole-capture ABSENCE checks.  A devcons hook pair left
+#    unregistered prints `hooks not registered` on every serve (the
+#    #c/user regression); an `unknown device` or `unsupported this era`
+#    line names a kernel surface the boot reached but r9 does not
+#    serve.  All three were measured at 0 on this gate before the
+#    checks were added — any line is a regression.
+if {[string match "*hooks not registered*" $whole]} {
+    puts stderr "smoke-r9: user-hooks-registered FAILED — a 'hooks not registered' line is present in the capture"
+    cleanup
+    exit 1
+}
+puts stderr "smoke-r9: stage ok — user-hooks-registered (no 'hooks not registered' in the capture)"
+if {[string match "*unknown device*" $whole]} {
+    puts stderr "smoke-r9: no-unknown-device FAILED — an 'unknown device' line is present in the capture"
+    cleanup
+    exit 1
+}
+puts stderr "smoke-r9: stage ok — no-unknown-device (no 'unknown device' in the capture)"
+if {[string match "*unsupported this era*" $whole]} {
+    puts stderr "smoke-r9: no-unsupported-era FAILED — an 'unsupported this era' line is present in the capture"
+    cleanup
+    exit 1
+}
+puts stderr "smoke-r9: stage ok — no-unsupported-era (no 'unsupported this era' in the capture)"
+
+puts stderr "smoke-r9: ALL STAGES PASS — boot, echo (typed + answered), ls/ps/cat sweep, DEL safety, restart, pid-warning-absent, nic-bind, user-hooks-registered, no-unknown-device, no-unsupported-era"
+cleanup
+exit 0

@@ -1,0 +1,240 @@
+#!/usr/bin/expect -f
+# tier1-r9.expect — the r9-side tier-1 gate driver (06-07, D-12 /
+# USPACE-04's second venue): the SAME tier1-sweep.rc that gates the
+# donor runs on r9 against the measured-set dispatch.  Copies
+# smoke-r9.expect's machinery verbatim (env contract, fresh log_file,
+# spawn with the caller-selected shape + -name $run_tag, group-kill
+# cleanup, the named-stage proc, expect_before panic fast-fail);
+# smoke-r9.expect itself stays byte-untouched (the v1.0 gate).
+#
+#   staged boot (banner → paqfs... → stacksmoke → %  prompt) →
+#   ONE typed line `rc /lib/tier1-sweep.rc r9` (r9's devcons serves
+#   reads — the 05-03 finding; the donor's sourced-sweep accommodation
+#   does not carry) →
+#   staged marker waits (presence-only, TCG-sized 600s/stage): the float
+#   canary T1-OK float-d01 (D-01's gate holds on BOTH kernels), one
+#   coreutils marker per class, one SKIP-class marker, then T1-DONE →
+#   the whole-file post-pass: every expected T1-OK present, the T1-SKIP
+#   set EQUAL to the known write-flow/build-chain list (a SKIP is
+#   declared, never silent — USPACE-04), zero T1-FAIL, zero
+#   panic/Unhandled-interrupt.
+#
+#   exit 0 only when EVERY stage passed; a failure exits 1 and names
+#   the failed stage on stderr — never a bare hang-to-timeout with no
+#   localization.
+#
+# Hygiene: the caller (nix/gates/tier1-r9.sh) rm -f's the capture BEFORE
+# launch and we rm -f + log_file it fresh below — the file starts empty
+# and only THIS run's boot writes it.  Every exit path kills qemu's
+# process group (expect's spawn sets the child up as a session/group
+# leader on its pty, on darwin AND linux alike).
+#
+# Markers: PRESENCE assertions only, never interleaving order
+# (preemption and TCG make arrival order meaningless).  Patterns are
+# CRLF-tolerant substrings, never end-of-line anchored.  r9's devcons
+# ECHOES cooked-mode typed input, so the typed line appears on the wire
+# BEFORE the sweep's output — the marker stages key on T1-OK/T1-SKIP
+# lines, which the typed line never contains.
+#
+# Env (exported by nix/gates/tier1-r9.sh — the flake app):
+#   R9_QEMU       default qemu-system-aarch64
+#   R9_KERNEL     REQUIRED — the r9 kernel-virt.elf (the flake input's
+#                 store path)
+#   R9_DTB        REQUIRED — the fdtput-patched virt DTB copy (the
+#                 caller's mktemp dir reclaims it after we exit)
+#   R9_INITRD     REQUIRED — target/images/aarch64/bootfs.paq (r9's assembler)
+#   R9_TIER1_LOG  REQUIRED — the serial capture (fresh per run; the
+#                 caller retains a passing one as evidence)
+#   R9_EXPECT_OK  REQUIRED — the expected T1-OK marker names
+#                 (space-separated; computed from tier1-cmds.txt minus
+#                 the donor-guarded members, per subset-exec.sh's rule)
+#   R9_EXPECT_SKIP REQUIRED — the expected T1-SKIP marker names
+#                 (space-separated; extracted verbatim from
+#                 tier1-sweep.rc's r9-venue SKIP block)
+#
+# usage: env R9_KERNEL=… R9_DTB=… R9_INITRD=… R9_TIER1_LOG=… \
+#          R9_EXPECT_OK=… R9_EXPECT_SKIP=… expect gates/aarch64/tier1-r9.expect
+# exit 0 on all-pass; exit 1 names the failed stage on stderr; exit 2
+# on a contract violation (missing env).
+
+set timeout 600                    ;# TCG-sized, PER STAGE
+match_max 1048576                  ;# the full sweep's output rides one buffer window
+# NOTE: log_user stays ON — expect 5.45 writes NOTHING to log_file when
+# log_user is 0 (measured: the capture file was created empty).
+# The wire echo on the driver's stdout is the app's visible progress;
+# the stage lines name it on stderr.
+
+# --- required env (loud, before any spawn) -------------------------------
+foreach v {R9_KERNEL R9_DTB R9_INITRD R9_TIER1_LOG R9_EXPECT_OK R9_EXPECT_SKIP} {
+    if {![info exists env($v)]} {
+        puts stderr "tier1-r9: \$$v unset — run via the flake app (nix run .#boot-r9-tier1)"
+        exit 2
+    }
+}
+set QEMU [expr {[info exists env(R9_QEMU)] ? $env(R9_QEMU) : "qemu-system-aarch64"}]
+# The per-run unique tag in qemu's argv (-name) — the caller
+# (nix/gates/tier1-r9.sh) exports R9_RUN_TAG so its survivor sweep matches
+# THIS run's qemu only; standalone runs default to a unique tag here.
+set run_tag [expr {[info exists env(R9_RUN_TAG)] ? $env(R9_RUN_TAG) : "r9tier1-[pid]-[clock seconds]"}]
+
+# --- Hygiene: a fresh capture per run -----------------------------------
+# The caller already rm -f'd it; remove again here so the rule holds
+# however this script is invoked (a stale capture is dead evidence).
+exec rm -f $env(R9_TIER1_LOG)
+
+# --- spawn qemu: the caller-selected virt shape (same as smoke-r9) ------
+set R9_MACHINE [expr {[info exists env(R9_MACHINE)] ? $env(R9_MACHINE) : "virt,gic-version=3"}]
+set R9_CPU [expr {[info exists env(R9_CPU)] ? $env(R9_CPU) : "cortex-a72"}]
+set R9_ACCEL [expr {[info exists env(R9_ACCEL)] ? $env(R9_ACCEL) : "tcg"}]
+spawn $QEMU -M $R9_MACHINE -cpu $R9_CPU -smp 1 -m 1024M \
+    -accel $R9_ACCEL \
+    -kernel $env(R9_KERNEL) \
+    -dtb $env(R9_DTB) \
+    -device loader,file=$env(R9_INITRD),addr=0x48000000 \
+    -netdev user,id=n0 \
+    -device virtio-net-pci-non-transitional,netdev=n0 \
+    -nographic \
+    -name $run_tag
+set spawn_pid [exp_pid]
+log_file $env(R9_TIER1_LOG)
+
+# --- teardown: kill qemu's process group ------------------------------
+# The spawned qemu is a session/group leader on both hosts (expect's
+# pty setup), so the group IS the qemu subtree; catch: already-dead is
+# fine.  The lone-pid second form is the no-group fallback.
+proc cleanup {} {
+    global spawn_pid
+    catch { exec kill -KILL -- -$spawn_pid 2>/dev/null }
+    catch { exec kill -KILL $spawn_pid 2>/dev/null }
+}
+
+# --- staged ordered assertions (each stage names its failure) ---------
+# NOTE: expect_out must be global here — expect sets it in the CURRENT
+# scope, and the sweep stages read the captured buffer AFTER stage
+# returns.
+proc stage {name re} {
+    global expect_out
+    expect {
+        -re $re { puts stderr "tier1-r9: stage ok — $name" }
+        timeout { puts stderr "tier1-r9: TIMEOUT at stage: $name"; cleanup; exit 1 }
+        eof { puts stderr "tier1-r9: qemu exited (EOF) at stage: $name"; cleanup; exit 1 }
+    }
+}
+
+# fast-fail on kernel panic markers anywhere in the boot (drive9.py's
+# PANIC_RE rule)
+expect_before {
+    -re {panic|Unhandled interrupt} {
+        puts stderr "tier1-r9: kernel panic marker on the wire — aborting"
+        cleanup
+        exit 1
+    }
+    # the rc argv-stack abort (`rc: pushword but no argv!`, the HVF
+    # fork-child defect, WINDOWS #49): fail at once with a named message
+    # instead of riding the stage timeout (20-01, D-01 groundwork).
+    -re {pushword but no argv} {
+        puts stderr "tier1-r9: rc argv-stack abort on the wire (pushword but no argv) — WINDOWS #49"
+        cleanup
+        exit 1
+    }
+}
+
+# 1. the staged boot sequence: banner → paqfs server → stacksmoke → prompt
+#    (the smoke's stages; the tier-1 payload rides the same image)
+stage banner    {r9 from the Internet}
+stage paqfs     {paqfs\.\.\.}
+stage stacksmoke {stacksmoke: depth 64 ok}
+stage prompt    {% }
+
+# 2. the D-12 difference: ONE typed line runs the sweep (r9's devcons
+#    serves reads — never the donor's sourced accommodation here)
+send "rc /lib/tier1-sweep.rc r9\r"
+
+# 3. staged marker waits (presence-only): the float canary first (D-01's
+#    gate holds on BOTH kernels), one coreutils marker per class, one
+#    SKIP-class marker (the write-flow set is declared, never silent),
+#    then T1-DONE.
+stage float-canary {T1-OK float-d01}
+stage coreutils-sort {T1-OK sort}
+stage digest-sum {T1-OK sum}
+stage writeflow-skip {T1-SKIP tar}
+stage sweep-done {T1-DONE}
+
+# 4. the whole-file post-pass: stop the log, read the capture, and
+#    assert the marker set EXACTLY.
+log_file                           ;# stop + flush before the whole-file scan
+set fh [open $env(R9_TIER1_LOG) r]
+set whole [read $fh]
+close $fh
+
+# 4a. every expected T1-OK present (the computed r9-runnable set).
+#     Normalize the cooked CRLF once; the \n anchor means a marker name
+#     that is a prefix of another can never false-match.
+set flat [string map {"\r" ""} $whole]
+foreach name $env(R9_EXPECT_OK) {
+    if {![string match "*T1-OK $name\n*" $flat]} {
+        puts stderr "tier1-r9: post-pass FAILED — missing T1-OK $name"
+        cleanup
+        exit 1
+    }
+}
+puts stderr "tier1-r9: post-pass ok — every expected T1-OK present ([llength $env(R9_EXPECT_OK)] names)"
+
+# 4b. the T1-SKIP set EQUALS the known write-flow/build-chain list:
+#     every expected SKIP present, and no unexpected SKIP (set equality,
+#     not subset — a missing write-flow binary is as red as an extra one)
+set gotraw [regexp -all -inline {T1-SKIP ([A-Za-z0-9.-]+)} $flat]
+set got {}
+foreach {_ name} $gotraw { lappend got $name }
+set got [lsort -unique $got]
+set want [lsort -unique $env(R9_EXPECT_SKIP)]
+if {$got ne $want} {
+    puts stderr "tier1-r9: post-pass FAILED — T1-SKIP set mismatch:\n  got:  $got\n  want: $want"
+    cleanup
+    exit 1
+}
+puts stderr "tier1-r9: post-pass ok — T1-SKIP set equals the known list ([llength $want] names)"
+
+# 4c. zero T1-FAIL, zero panic/Unhandled-interrupt (the expect_before
+#     fast-fail already covers panic mid-run; this is the whole-file proof)
+if {[string match "*T1-FAIL*" $flat]} {
+    puts stderr "tier1-r9: post-pass FAILED — a T1-FAIL line is present"
+    cleanup
+    exit 1
+}
+if {[regexp -nocase {panic|Unhandled interrupt} $flat]} {
+    puts stderr "tier1-r9: post-pass FAILED — a kernel fault line is present"
+    cleanup
+    exit 1
+}
+puts stderr "tier1-r9: post-pass ok — zero T1-FAIL, zero panic"
+
+# user-hooks-registered / no-unknown-device / no-unsupported-era
+#    (20-01): whole-capture ABSENCE checks.  A devcons hook pair left
+#    unregistered prints `hooks not registered` on every serve (the
+#    #c/user regression); an `unknown device` or `unsupported this era`
+#    line names a kernel surface the boot reached but r9 does not
+#    serve.  All three were measured at 0 on this gate before the
+#    checks were added — any line is a regression.
+if {[string match "*hooks not registered*" $flat]} {
+    puts stderr "tier1-r9: user-hooks-registered FAILED — a 'hooks not registered' line is present in the capture"
+    cleanup
+    exit 1
+}
+puts stderr "tier1-r9: stage ok — user-hooks-registered (no 'hooks not registered' in the capture)"
+if {[string match "*unknown device*" $flat]} {
+    puts stderr "tier1-r9: no-unknown-device FAILED — an 'unknown device' line is present in the capture"
+    cleanup
+    exit 1
+}
+puts stderr "tier1-r9: stage ok — no-unknown-device (no 'unknown device' in the capture)"
+if {[string match "*unsupported this era*" $flat]} {
+    puts stderr "tier1-r9: no-unsupported-era FAILED — an 'unsupported this era' line is present in the capture"
+    cleanup
+    exit 1
+}
+puts stderr "tier1-r9: stage ok — no-unsupported-era (no 'unsupported this era' in the capture)"
+
+puts stderr "tier1-r9: ALL STAGES PASS — boot, one typed sweep line, float canary on r9, marker parity + exact SKIP set, T1-DONE, user-hooks-registered, no-unknown-device, no-unsupported-era"
+cleanup
+exit 0
