@@ -84,8 +84,9 @@ pcap = false
 
 [dist]
 format = "elf"
-# The staged bootfs (D-03): Harvey's 14-05 bake produces this under the
-# checkout R9_HARVEY_DIR names; the ISO builder stages it at
-# /boot/bootfs.paq and emits the grub.cfg module2 line IN.  Absence is
-# a loud pre-ISO error naming the Harvey-side producers.
-module = "harvey:build/x86_64/out/bootfs.paq"
+# The staged bootfs (D-03): the marker image, now r9-assembled.
+# `image:marker` names xtask/manifests/amd64/marker.toml; the assembler
+# bakes target/images/x86_64/marker.paq on demand (its member list
+# matches the reference bake's).  The ISO builder stages it at
+# /boot/bootfs.paq and emits the grub.cfg module2 line IN.
+module = "image:marker"
