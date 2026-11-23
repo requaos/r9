@@ -1,0 +1,122 @@
+# S4 builder evidence — lima VM `harvey` (aarch64-linux), 2026-11-23
+#
+# exact command:
+#   nix build path:$S/s4#packages.aarch64-linux.s4-tier-amd64 \
+#     --store ssh-ng://lima-harvey --eval-store auto -L --print-out-paths
+# NIX_SSHOPTS="-F /Users/neilskinner/.lima/harvey/ssh.config -oControlPath=none"
+# output: /nix/store/yzaxcr03rdcahakisyvkzx34kll84k9a-s4-tier-amd64-0
+# full log (not in git): s4/work/build-tier-lima.log
+
+== tier-report.txt — final run (venue ports applied)
+S4-TIER0-ENTRIES=27
+S4-TIER1-ENTRIES=40
+TIER0 libc BUILT sha256=5f5d06d3e1d984b7c187b68ea166263efee1e65a66813b3a3169cae6fd999f16
+TIER0 libbio BUILT sha256=38de66edf9576e480090575d812b54e75f43ac2d3c1cb989f07cfb6a6c3f2364
+TIER0 libregexp BUILT sha256=86cb7c9b633e2f3907cfc584d1247e757054a25df1a7168e64d0c59c255e87e5
+TIER0 libmach BUILT sha256=a96ce265825cebd17c81453e79f069695fd04bb7fd493d9adc3c5284a79575b0
+TIER0 libip BUILT sha256=99f98a4376eef6fa673027d2143f2060229f293c51e055faeb45092ec3dae0ed
+TIER0 libndb BUILT sha256=bf37598132f223f3a13066134dab869d56dc0b8c2f76bf03520745e6899da46c
+TIER0 libmp BUILT sha256=a7dbc9fc4e339cbcfef03d5c6c7963bb41cac0b5878e6dd3438c455401d05895
+TIER0 libsec BUILT sha256=dbe8d9c59ce33cc7de0ebe0a06cf0bd60d77cce517405de995aebc7e6e0a8b8b
+TIER0 libauth BUILT sha256=50c6b01f698eee12ac764475dc79d80382ee88efceb0e10cb6349fb96362e8de
+TIER0 libauthsrv BUILT sha256=c339fd493bbfc3cdee5513a2d4f7bb7fc69ea89c61afb6ba21d4f8591852dd2a
+TIER0 libflate BUILT sha256=95d9d7b3728f3827d81e25915fffcb9bcbca3656cc7fede839858f7c04d52ddc
+TIER0 libString BUILT sha256=72d33b3a903a5af18d8c7a7426e46cfcc48a666d649c48c0fec3cf88354762a2
+TIER0 libthread BUILT sha256=eeb1d499e2b3dae92d8526065d18ab03c1523a0e35755dd1ef2ee66a282d6dad
+TIER0 lib9p BUILT sha256=96942d7dfec07d196e7a3b9319c2abdb89b50f53cc045c19aa2592517ddcf32a
+TIER0 libdisk BUILT sha256=a44de3b39e72b153d1771068015e7e5260c79fc8d1ec9a92bf78c9b13e8875aa
+TIER0 libhttpd BUILT sha256=332246ede06d8bb4b95684b7e45a200ccb8ca11ec2dbace352340f1f2f6d2b52
+TIER0 libbin BUILT sha256=157a59f9200aceea975ca197f8187e4ad7f0f9150d82bab6271eb4510c8a5239
+TIER0 libmemlayer BUILT sha256=0f580dac1db511b53c417defed0fa9b231ee653f2ce0edd520fbda77dfaabd37
+TIER0 libmemdraw BUILT sha256=7a5fd6dc5b2a83791e32f783ea356225457dd4f263fb3614125e9f7bd84dd34d
+TIER0 libdraw BUILT sha256=6dae7bef1cd258c98ff6239cdb5935d833c05452bfbbdfac4b0eb347aec8865b
+TIER0 libframe BUILT sha256=6ee31bfe2d169847f654e00c46b2098fed2d58dc7b8e406bc383fb9702787cad
+TIER0 libplumb BUILT sha256=5ad88b89d63ad6a44bbcdc29e9f2927b2fabb0014cfcbb16a09289aa502abcaf
+TIER0 libcomplete BUILT sha256=34c7552f931f7181ed85e1f2513047bc726080ffd77087f851fbcc92fc6c4d50
+TIER0 libhtml BUILT sha256=3295baf3907b6569c7495b8c163ab55df63fd70a813c5fe92e870200071638a2
+TIER0 libventi BUILT sha256=0fe0a3f737ef4ff463a49c9589fe1f52f10cb4ad98469d2fbe08154dddc8dd3d
+TIER0 libstdio BUILT sha256=cf37b2a065efdf3cfd7af3c5a8697c39de6ae19c9d7d5f14fd8db2e588e7399c
+TIER0 libavl BUILT sha256=272e1f3dcccb735f814df77d4bc42e3a8b97810365944062f9f8c2ea8e7f4301
+TIER1 cmd/rc BUILT sha256=51f81de8e0a1f156f2cf8c205eada9ec64545ac01d6b147f7129dd93640fe365 magic=00008a97
+TIER1 cmd/grep BUILT sha256=fe88710235f60c7b1ed0147e3080fe659c4bbeed31d00d2e485ae0b9788bfe65 magic=00008a97
+TIER1 cmd/cat BUILT sha256=5a29214cde61906abbd829468e7f0ce7c6feaf74cfdb4a9a55610c76f96bd4d2 magic=00008a97
+TIER1 cmd/date BUILT sha256=345b085ee4477acd1591ecf428ee3b1728f6bc9ec7b4987b37b7b9c6e9a66dcb magic=00008a97
+TIER1 cmd/echo BUILT sha256=3bef6e2234f9910699355f0e898762d68ed5705eb7c9075c7502edc0b4b00bf7 magic=00008a97
+TIER1 cmd/ls BUILT sha256=b5e0931d04a5d29a2b8a04bb2b0212cfd8ff19339835641dcfc1c4e5813cc715 magic=00008a97
+TIER1 cmd/ps BUILT sha256=f029a723212b13c86fa66d25b5eb358c0ebf4f9523832cc936769b4f9a2651ea magic=00008a97
+TIER1 cmd/sed BUILT sha256=99869e13f09a4612ce197c17a56da79dc0f84bea8f7d245cf4b60317ac7451f1 magic=00008a97
+TIER1 cmd/test BUILT sha256=9c731a2c1f34ac2cea70ad0c77bd19e06cd9538ee1a658f865ccb037f42d7416 magic=00008a97
+TIER1 cmd/wc BUILT sha256=42ab40163599098a1601679aee1974c5aadfb827b2824e820a265368e456a127 magic=00008a97
+TIER1 cmd/awk BUILT sha256=72120f1ff2e09b86a3a43dde9417aeba4265c772b170a0015f927ca9e2c871f1 magic=00008a97
+TIER1 cmd/sort BUILT sha256=35f7841f10be00a200ad266a4983b82e35595f4a727c61ec0f3eb456e668d7a1 magic=00008a97
+TIER1 cmd/tr BUILT sha256=12fe0b0bb505578e2bf59a6963a93d93aafeb1a30b9fa4d688f66f251a1dc9bd magic=00008a97
+TIER1 cmd/uniq BUILT sha256=4f083aad0953e06e62b9889ad44cab7b285475046e4583343e670bab19aefc13 magic=00008a97
+TIER1 cmd/tail BUILT sha256=c68af7666269a33bb729857c518930e2cdb7fb708f40d0abae5be570f10883b7 magic=00008a97
+TIER1 cmd/basename BUILT sha256=10258b086e122a240546ea0434f42daee06f91dde51e1cc6a8a2af16cf5139c2 magic=00008a97
+TIER1 cmd/sleep BUILT sha256=146053f793a30747a4ce3c7edd7eb79249fd2901c3b80824715b870ef918d16e magic=00008a97
+TIER1 cmd/cmp BUILT sha256=9068ba83984421b06f2700520fbc27c069cffae75f6a314aab142ad8a0c5ddd6 magic=00008a97
+TIER1 cmd/sum BUILT sha256=2054b15e5395bcdf14762673a3f81f51464ab6474f95ef735f8e9fa2bbd8928f magic=00008a97
+TIER1 cmd/md5sum BUILT sha256=f29578675a28e5fe60012cc401a554a97899fa0d198d90e902bc5e7084277433 magic=00008a97
+TIER1 cmd/sha1sum BUILT sha256=83a720ab70d2d26adc4b6b387f215cb993f2f6bb1771ba30627d8b548dfd8911 magic=00008a97
+TIER1 cmd/dc BUILT sha256=3abb959e4b87fe1bf42eed11e8290c6569165e5b2aa5432ddbe6637e5debf22a magic=00008a97
+TIER1 cmd/units BUILT sha256=69378ec9f3e1372d89a2278c11b9c5f8bb3c94404ba80b6fef727e3c829fdbcc magic=00008a97
+TIER1 cmd/cal BUILT sha256=3f53a6c50c94e374a7c81983418eaf3d7659999b3ab3e9afdb4b4e6c656d47e1 magic=00008a97
+TIER1 cmd/fmt BUILT sha256=bd5ce22b19994db754bb08efa2ebbae9dcc15e53dafe173f28f650d44cd92f30 magic=00008a97
+TIER1 cmd/seq BUILT sha256=5ab88adf110304d5ee26e99750bea3a3f0ea2c652d5d28d3fd5f711520ff7891 magic=00008a97
+TIER1 cmd/time BUILT sha256=15223a6b8c0e79a1f423f1a087949a1a53eefd6849638974fdd8c73f7a150625 magic=00008a97
+TIER1 cmd/read BUILT sha256=8e5d33255217b371b9d750b70b2b4a5a262a2263264bfec7c87fd9f1e7dcda14 magic=00008a97
+TIER1 cmd/pr BUILT sha256=844dd3f8e7945f6c3dcad32cbf0183d928488da58f83ea4d4361fb62a50e3277 magic=00008a97
+TIER1 cmd/strings BUILT sha256=c7087d7c921d775a640f190a62db3887655c8092772187c938af0f476f17b0e5 magic=00008a97
+TIER1 cmd/xd BUILT sha256=1e9fa2c3fc274c4dd920e1366bd51a28b8aa204a8206c19c482e66ebcd3cbec1 magic=00008a97
+TIER1 cmd/du BUILT sha256=ec50c789a8ec0c9d60388ec57a4b302770398cc238361dcab3e405994997b1ce magic=00008a97
+TIER1 cmd/comm BUILT sha256=b933f2e53e259e4f2d368b42d7b535f4aede4662c40c2a9e37bba310bab7ba13 magic=00008a97
+TIER1 cmd/join BUILT sha256=aed4bf87ed2ca9ceed8d0fa4b58af8564d2030843345e967702243726aa3d07f magic=00008a97
+TIER1 cmd/nm BUILT sha256=37fba4c130b84d937c97271cdf5f33147ecb152a8b327c744b70469b415a5eb7 magic=00008a97
+TIER1 cmd/ip/ipconfig BUILT sha256=0226dbd795fcea1d2c3fd349961f4c384c6c9b273239eda4d92e04fe3dfd466e magic=00008a97
+TIER1 cmd/auth/factotum:factotum BUILT sha256=1d33b63a4ece6c391a0f9e8c76acee058c71f0478599145057471bb22dfd6df3 magic=00008a97
+TIER1 9k/boot BUILT sha256=9338fe39d6882de8e40612d9629242795b711a7c4b0a89d5ce4b616cbaee39e7 magic=00008a97
+TIER1 stage/init BUILT sha256=e6fc656f8731443e8754c610284ba96377a9a95635b473ed8b8f847e879746bb magic=00008a97
+TIER1 cmd/paqfs:paqfs BUILT sha256=c3327a2b268b030d558705ccf0b102383226a0ea3be6c7db3e97902c55351bc3 magic=00008a97
+S4-TIER0-SECONDS=6
+S4-TIER1-SECONDS=19
+S4-TIER0 built=27/27
+S4-TIER1 built=40/40
+
+== control run without the INCLUDE port (same tree, /rc/bin present): the 6c failures
+# work/build-tier-noinclude.log
+s4-tier-amd64-noinclude> TIER0 libhtml FAILED mk: 6c -FTVw build.c  : exit status=exit(1)
+s4-tier-amd64-noinclude> TIER1 cmd/dc FAILED mk: 6^c -FTVw dc.c  : exit status=exit(1)
+s4-tier-amd64-noinclude> S4-TIER0-SECONDS=5
+s4-tier-amd64-noinclude> S4-TIER1-SECONDS=19
+s4-tier-amd64-noinclude> S4-TIER0 built=26/27
+s4-tier-amd64-noinclude> S4-TIER1 built=39/40
+
+== venue cause, controlled A-F experiment inside the S1 proot venue
+# (work/debug-venue.log; A/E are the default include-code path, B/C/D/F differ only
+#  in how the same two include dirs reach 6c — see S4-FINDINGS.md)
+s4-debug-venue> === ulimit -a (venue) ===
+s4-debug-venue> === /proc/self/limits (venue) ===
+s4-debug-venue> === sbrk probe inside the venue ===
+s4-debug-venue> === A: venue style: cd /sys/src/libhtml; 6c -FTVw build.c ===
+s4-debug-venue> build.c:1821 out of memory
+s4-debug-venue> A rc=1
+s4-debug-venue> === B: work source, store includes (ccroot=/nix/store/v8djqydzaggdvl2w7v3z1svxj0p3zlla-source) ===
+s4-debug-venue> B rc=0
+s4-debug-venue> === C: store source, store includes, -o /tmp/build.6 ===
+s4-debug-venue> C rc=0
+s4-debug-venue> === D: work source, explicit INCLUDE ===
+s4-debug-venue> D rc=0
+s4-debug-venue> === E: dc.c venue style ===
+s4-debug-venue> dc.c:899 out of memory
+s4-debug-venue> E rc=1
+s4-debug-venue> === F: dc.c store includes ===
+s4-debug-venue> F rc=0
+
+== informational: built echo vs /Users/neilskinner/code/harvey/amd64/bin/echo (read only)
+3bef6e2234f9910699355f0e898762d68ed5705eb7c9075c7502edc0b4b00bf7  /nix/store/yzaxcr03rdcahakisyvkzx34kll84k9a-s4-tier-amd64-0/amd64/bin/echo
+bbc0b906fe154e90e9e331d8bf5a967a1d7697f735b384b3d56d523e7d7d322d  /Users/neilskinner/code/harvey/amd64/bin/echo
+S4-ECHO-COMPARE: different
+
+== artifact counts
+27
+40

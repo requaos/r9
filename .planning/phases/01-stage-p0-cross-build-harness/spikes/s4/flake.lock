@@ -1,0 +1,45 @@
+{
+  "nodes": {
+    "harvey": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1795382101,
+        "narHash": "sha256-N6VjnVI69pcxSCpQ9BUxrlpTqnp9LgjKfGcpO3F6Ma0=",
+        "owner": "requaos",
+        "repo": "harvey",
+        "rev": "bd7a6982a3e4f465f8ed3da5e0c7290521514ff0",
+        "type": "github"
+      },
+      "original": {
+        "owner": "requaos",
+        "repo": "harvey",
+        "rev": "bd7a6982a3e4f465f8ed3da5e0c7290521514ff0",
+        "type": "github"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1793341285,
+        "narHash": "sha256-Y1CiZ4SoBUjLQyQM/pY+rS2dXD3CHLPstF0lmOc73D4=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "1c89083e451e891152365b799595cf7790a43325",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "1c89083e451e891152365b799595cf7790a43325",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "harvey": "harvey",
+        "nixpkgs": "nixpkgs"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}
