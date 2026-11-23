@@ -119,7 +119,7 @@ coverage:
 3. **q35churnshell (Task 2).** The process-tagged line names the callers — `(pid 1 boot)` and `(pid 1 init)` — both Harvey's unchanged FAUTH probe (syscall 10, loud-None by design). `xtask` now routes q35churnshell through the q35shell chain stages and exempts only that line. Mac TCG run: PASS; stop-B2 KVM profiles: 9/9 PASS including q35churnshell.
 4. **Stop-B2 returned (Task 3).** `gate_neg`, `profiles` and `cpuauth_ref` PASS. The gate's positive leg passed every stage (both runs) but the final teardown killed the expect driver before `ALL STAGES PASS`; probe/flipback aborted in their historical clones' pre-01-33 driver; the kernel step reached the boot-iso fixed-output check and found a hash mismatch.
 5. **Teardown + rerun readiness (continuation).** The identity sweep excludes its own caller chain; cleanup guards every pid read, catches the sweep/redaction, and the final success cleanup is caught with a teardown warning. The probe/flipback steps overlay the fixed driver into their clones. Static guards pin both properties.
-6. **Verdicts recorded honestly (Task 4).** Seven `VERDICT` lines in WITNESS-LOG, trimmed redacted evidence under `evidence/stop-b2/`, credential scan clean; the boot-iso options are recorded as owner-pending.
+6. **Verdicts recorded honestly (Task 4).** Seven `VERDICT` lines in WITNESS-LOG, trimmed redacted evidence under `evidence/stop-b2/`, and the credential **value-shape** scan (`auth-creds|[Pp]assword=`) clean. The only word-level `password` matches are status prose (`DEMO password redacted`, `password value`), not a credential value; the broad word scan is therefore not the gate. The boot-iso options are recorded as owner-pending.
 
 ## Task Commits
 
