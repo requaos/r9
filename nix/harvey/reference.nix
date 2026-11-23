@@ -1,11 +1,19 @@
-# nix/harvey/reference.nix — the amd64 reference bake (D-29, HARN-03).
+# nix/harvey/reference.nix — the D-29 reference bakes (HARN-03).
 #
-# One fresh run of Harvey's own x86_64 `mkimage.sh` on a WRITABLE copy of
-# the flake-built amd64 tree (`nix/harvey/tree-amd64.nix`), recording the
-# exact mkpaqfs input of each of the nine image contracts as a member
-# list.  This is the D-29 reference the r9-assembled manifests are
-# compared against; byte differentials are not used (assumption A12 was
-# refuted).
+# TWO references, one per guest architecture:
+#
+#   amd64  one fresh run of Harvey's own x86_64 `mkimage.sh` on a
+#          WRITABLE copy of the flake-built amd64 tree
+#          (`nix/harvey/tree-amd64.nix`), recording the exact mkpaqfs
+#          input of each of the nine image contracts as a member list
+#          (plan 01-15).
+#   arm64  the same technique around a fresh run of the pinned aarch64
+#          `mkimage.sh` on a writable copy of the full arm64 tree
+#          (`nix/harvey/tree-arm64.nix`), recording the single
+#          `bootfs.members` list (plan 01-17).
+#
+# These are the D-29 references the r9-assembled manifests are compared
+# against; byte differentials are not used (assumption A12 was refuted).
 #
 # Venue: a plain `stdenvNoCC` derivation.  mkimage is a host shell bake;
 # its host-side 6c/6l builds (sections 11k/14i2/14i3) run without a Plan 9
@@ -46,6 +54,7 @@
 {
   pkgs,
   tree,
+  treeArm64,
   hostbin,
   mkpaqfs,
   rev,
@@ -143,8 +152,64 @@ let
 
     exec "$real" "$@"
   '';
+
+  # The arm64 shim: the aarch64 mkimage bakes ONE image (bootfs.paq), so
+  # the basename maps to the `bootfs` member list.  No auth material is
+  # staged by the aarch64 bake (no /boot/factotum: auth-stub-by-absence),
+  # so every entry carries a real sha256 and `opaque` never appears.
+  arm64Shim = pkgs.writeScript "harvey-reference-arm64-mkpaqfs-shim" ''
+    #!${bash}
+    set -euo pipefail
+    real=${realMkpaqfs}
+
+    image=
+    stage=
+    prev=
+    for a in "$@"; do
+      if [ "$prev" = "-o" ]; then image=$a; fi
+      prev=$a
+      stage=$a
+    done
+    [ -n "$image" ] || { echo "mkpaqfs-shim: no -o IMAGE argument" >&2; exit 2; }
+    [ -d "$stage" ] || { echo "mkpaqfs-shim: last argument is not a directory: $stage" >&2; exit 2; }
+
+    base=$(basename "$image")
+    [ "$base" = "bootfs.paq" ] || {
+      echo "mkpaqfs-shim: the aarch64 bake writes bootfs.paq only (got $base)" >&2
+      exit 2
+    }
+    name=bootfs
+
+    mkdir -p "$R9_REFERENCE_MEMBERS"
+    dest="$R9_REFERENCE_MEMBERS/$name.members"
+    tmp="$dest.tmp"
+
+    (
+      cd "$stage"
+      find . -mindepth 1 -print0 | LC_ALL=C sort -z | while IFS= read -r -d "" p; do
+        rel=''${p#./}
+        if [ -d "$p" ]; then
+          mode=$(stat -c "%a" "$p")
+          printf "%s dir %s - -\n" "$rel" "$mode"
+        else
+          mode=$(stat -c "%a" "$p")
+          size=$(stat -c "%s" "$p")
+          sha=$(sha256sum -- "$p" | cut -d" " -f1)
+          printf "%s file %s %s %s\n" "$rel" "$mode" "$size" "$sha"
+        fi
+      done
+    ) > "$tmp"
+    mv "$tmp" "$dest"
+    echo "mkpaqfs-record: $name members=$(wc -l < "$dest")" >&2
+
+    exec "$real" "$@"
+  '';
 in
-pkgs.stdenvNoCC.mkDerivation {
+{
+  # Plan 01-15's reference; the derivation body is unchanged by plan
+  # 01-17 (only the attribute name is new, so the amd64 output is not
+  # disturbed).
+  amd64 = pkgs.stdenvNoCC.mkDerivation {
   pname = "harvey-reference-amd64";
   version = "0";
 
@@ -278,4 +343,127 @@ pkgs.stdenvNoCC.mkDerivation {
     done
     echo "HARVEY-REFERENCE-OK images=$count"
   '';
+  };
+
+  # Plan 01-17's reference: one fresh run of the pin's aarch64 mkimage.sh
+  # on a writable copy of the full arm64 tree.  The bake stages pre-built
+  # binaries and the committed skeleton, then bakes ONE paq (bootfs.paq)
+  # through the member-recording shim; `$out/bootfs.members` is the D-29
+  # list the r9-assembled bootfs manifest is compared against.
+  arm64 = pkgs.stdenvNoCC.mkDerivation {
+    pname = "harvey-reference-arm64";
+    version = "0";
+
+    dontUnpack = true;
+    dontStrip = true;
+    dontPatchELF = true;
+    dontPatchShebangs = true;
+
+    nativeBuildInputs = [
+      pkgs.bash
+      pkgs.coreutils
+      pkgs.gnused
+      pkgs.gawk
+      pkgs.gnugrep
+      pkgs.findutils
+      pkgs.gnutar
+    ];
+
+    buildCommand = ''
+      set -euo pipefail
+      export TMPDIR="''${TMPDIR:-$NIX_BUILD_TOP}"
+
+      fail() {
+        echo "HARVEY-REFERENCE-ARM64-FAIL $*" >&2
+        exit 1
+      }
+
+      echo "HARVEY-REFERENCE-ARM64-BEGIN tree=${treeArm64} rev=${rev}"
+
+      # A writable copy of the flake-built tree: the store path is
+      # read-only and the bake writes build/aarch64/bootfs.paq, so the
+      # copy is mandatory.
+      work="$TMPDIR/harvey"
+      mkdir -p "$work"
+      cp -R "${treeArm64}/." "$work"
+      chmod -R u+w "$work"
+
+      # The reference is built from the same pinned tree the manifest
+      # draws on (T-01-56): the tree's own stamp must name the plan's
+      # Harvey rev and arch.
+      [ -f "$work/HARVEY-TREE" ] || fail "the tree has no HARVEY-TREE stamp"
+      grep -qx "rev=${rev}" "$work/HARVEY-TREE" \
+        || fail "the tree stamp rev does not equal ${rev}: $(grep '^rev=' "$work/HARVEY-TREE")"
+      grep -qx "arch=arm64" "$work/HARVEY-TREE" \
+        || fail "the tree stamp arch is not arm64"
+
+      # The aarch64 mkimage's own inputs (the pin's script asserts each;
+      # this preflight names a tree gap before the bake starts).
+      [ -f "$work/build/aarch64/mkimage.sh" ] \
+        || fail "the tree lacks build/aarch64/mkimage.sh"
+      [ -d "$work/build/aarch64/root-tree" ] \
+        || fail "the tree lacks build/aarch64/root-tree (the committed skeleton)"
+      [ -f "$work/rc/lib/rcmain" ] || fail "the tree lacks rc/lib/rcmain"
+      [ -f "$work/adm/timezone/local" ] || fail "the tree lacks adm/timezone/local"
+      [ -f "$work/build/aarch64/tier1-sweep.rc" ] \
+        || fail "the tree lacks build/aarch64/tier1-sweep.rc"
+      [ -f "$work/build/aarch64/netaddr.rc" ] \
+        || fail "the tree lacks build/aarch64/netaddr.rc"
+      for f in tiny.y tiny.l tiny.mk tiny.s nm-input.7 hello.c; do
+        [ -f "$work/build/aarch64/$f" ] \
+          || fail "the tree lacks build/aarch64/$f (the tier-1 fixed input)"
+      done
+
+      # mkimage's only use of sys/src is its "looks like the Harvey
+      # checkout" guard: the aarch64 bake stages pre-built binaries and
+      # never reads a file under it.  The tree carries no sys tree (D-19),
+      # so the writable copy gets the marker directory.
+      mkdir -p "$work/sys/src"
+
+      # The shim at mkimage's own mkpaqfs path: it records the staging
+      # tree and then runs the real Linux mkpaqfs (the byte-format owner).
+      mkdir -p "$work/.build/bin"
+      cp ${arm64Shim} "$work/.build/bin/mkpaqfs"
+      chmod 755 "$work/.build/bin/mkpaqfs"
+      grep -qF '${realMkpaqfs}' "$work/.build/bin/mkpaqfs" \
+        || fail "the mkpaqfs shim was not installed as expected"
+
+      export R9_REFERENCE_MEMBERS="$TMPDIR/members"
+      rm -rf "$R9_REFERENCE_MEMBERS"
+      mkdir -p "$R9_REFERENCE_MEMBERS"
+
+      log="$TMPDIR/mkimage.log"
+      echo "HARVEY-REFERENCE-ARM64-RUN HARVEY=$work venue=plain-stdenv"
+      if ! (
+        cd "$work"
+        HARVEY="$work" \
+          sh build/aarch64/mkimage.sh
+      ) > "$log" 2>&1; then
+        echo "HARVEY-REFERENCE-ARM64-FAIL the reference bake did not complete; tail of $log:" >&2
+        tail -n 80 "$log" >&2 || true
+        exit 1
+      fi
+
+      mkdir -p "$out"
+      [ -s "$R9_REFERENCE_MEMBERS/bootfs.members" ] \
+        || fail "the reference bake recorded no bootfs.members"
+      cp "$R9_REFERENCE_MEMBERS/bootfs.members" "$out/bootfs.members"
+      cp "$log" "$out/mkimage.log"
+      [ -s "$out/mkimage.log" ] || fail "the bake log is empty"
+
+      # The image contract's anchors: the boot chain, the real init, the
+      # v1.0 subset's ps, and the skeleton's termrc.  A member list that
+      # lacks any of them is not the image mkimage bakes.
+      for p in "boot/boot file " "boot/paqfs file " "arm64/init file " \
+               "arm64/bin/ps file " "rc/lib/rcmain file " "rc/bin/termrc file " \
+               "lib/namespace file " "adm/timezone/local file "; do
+        grep -q "^$p" "$out/bootfs.members" \
+          || fail "bootfs.members lacks the $p entry"
+      done
+
+      n=$(wc -l < "$out/bootfs.members" | tr -d ' ')
+      echo "HARVEY-REFERENCE-ARM64 bootfs members=$n"
+      echo "HARVEY-REFERENCE-ARM64-OK images=1"
+    '';
+  };
 }

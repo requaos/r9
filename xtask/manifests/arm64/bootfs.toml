@@ -1,0 +1,840 @@
+# The aarch64 bootfs image manifest (plan 01-17, D-15/D-16/D-29, HARN-03).
+#
+# One entry per member of the paq Harvey's own aarch64
+# build/aarch64/mkimage.sh bakes (bootfs.paq: the boot chain, the real
+# init, the v1.0 subset, the net tools, the image probes, the tier-1 h*
+# payload and the committed skeleton) at Harvey pin
+# bd7a6982a3e4f465f8ed3da5e0c7290521514ff0.  Derived from
+# harvey-reference-arm64's bootfs.members (one fresh run of the pinned
+# mkimage.sh) by `cargo xtask image --emit-manifest`; every file maps to
+# a tree file with the same sha256, including the tier-1 sentinel
+# (build/aarch64/tier1-sentinel.txt carries mkimage's own printf bytes).
+#
+# `cargo xtask image --arch aarch64 --image bootfs --compare-reference`
+# must pass before a profile points at it (HARN-06's prohibition).
+
+schema = 1
+arch = "arm64"
+image = "bootfs"
+
+[[dir]]
+path = "/adm"
+
+[[dir]]
+path = "/adm/timezone"
+
+[[file]]
+path = "/adm/timezone/local"
+source = "harvey"
+from = "adm/timezone/local"
+mode = "0644"
+
+[[dir]]
+path = "/arm64"
+
+[[dir]]
+path = "/arm64/bin"
+
+[[file]]
+path = "/arm64/bin/aan"
+source = "harvey"
+from = "arm64/bin/aan"
+mode = "0755"
+
+[[dir]]
+path = "/arm64/bin/auth"
+
+[[file]]
+path = "/arm64/bin/auth/factotum"
+source = "harvey"
+from = "arm64/bin/auth/factotum"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/bind"
+source = "harvey"
+from = "arm64/bin/bind"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/brkprobe"
+source = "harvey"
+from = "build/aarch64/out/brkprobe"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/cat"
+source = "harvey"
+from = "arm64/bin/cat"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/cexecprobe"
+source = "harvey"
+from = "build/aarch64/out/cexecprobe"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/cp"
+source = "harvey"
+from = "arm64/bin/cp"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/cpuprobe"
+source = "harvey"
+from = "build/aarch64/out/cpuprobe"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/date"
+source = "harvey"
+from = "arm64/bin/date"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/dd"
+source = "harvey"
+from = "arm64/bin/dd"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/echo"
+source = "harvey"
+from = "arm64/bin/echo"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/forkstress"
+source = "harvey"
+from = "build/aarch64/out/forkstress"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/fpprobe"
+source = "harvey"
+from = "build/aarch64/out/fpprobe"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/grep"
+source = "harvey"
+from = "arm64/bin/grep"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/h7a"
+source = "harvey"
+from = "arm64/bin/7a"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/h7c"
+source = "harvey"
+from = "arm64/bin/7c"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/h7l"
+source = "harvey"
+from = "arm64/bin/7l"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hawk"
+source = "harvey"
+from = "arm64/bin/awk"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hbasename"
+source = "harvey"
+from = "arm64/bin/basename"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hbc"
+source = "harvey"
+from = "arm64/bin/bc"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hcal"
+source = "harvey"
+from = "arm64/bin/cal"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hcat"
+source = "harvey"
+from = "arm64/bin/cat"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hchmod"
+source = "harvey"
+from = "arm64/bin/chmod"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hcmp"
+source = "harvey"
+from = "arm64/bin/cmp"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hcomm"
+source = "harvey"
+from = "arm64/bin/comm"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hcp"
+source = "harvey"
+from = "arm64/bin/cp"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hcpp"
+source = "harvey"
+from = "arm64/bin/cpp"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hdate"
+source = "harvey"
+from = "arm64/bin/date"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hdc"
+source = "harvey"
+from = "arm64/bin/dc"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hdd"
+source = "harvey"
+from = "arm64/bin/dd"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hdisktest"
+source = "harvey"
+from = "build/aarch64/out/hdisktest"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hdu"
+source = "harvey"
+from = "arm64/bin/du"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hecho"
+source = "harvey"
+from = "arm64/bin/echo"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hed"
+source = "harvey"
+from = "arm64/bin/ed"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hfactotum"
+source = "harvey"
+from = "arm64/bin/auth/factotum"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hfmt"
+source = "harvey"
+from = "arm64/bin/fmt"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hgrep"
+source = "harvey"
+from = "arm64/bin/grep"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hipconfig"
+source = "harvey"
+from = "arm64/bin/ip/ipconfig"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hjoin"
+source = "harvey"
+from = "arm64/bin/join"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hlex"
+source = "harvey"
+from = "arm64/bin/lex"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hlook"
+source = "harvey"
+from = "arm64/bin/look"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hls"
+source = "harvey"
+from = "arm64/bin/ls"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hmd5sum"
+source = "harvey"
+from = "arm64/bin/md5sum"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hmk"
+source = "harvey"
+from = "arm64/bin/mk"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hmkdir"
+source = "harvey"
+from = "arm64/bin/mkdir"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hmv"
+source = "harvey"
+from = "arm64/bin/mv"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hnm"
+source = "harvey"
+from = "arm64/bin/nm"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hpr"
+source = "harvey"
+from = "arm64/bin/pr"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hps"
+source = "harvey"
+from = "arm64/bin/ps"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hrc"
+source = "harvey"
+from = "arm64/bin/rc"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hread"
+source = "harvey"
+from = "arm64/bin/read"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hrm"
+source = "harvey"
+from = "arm64/bin/rm"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hsed"
+source = "harvey"
+from = "arm64/bin/sed"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hseq"
+source = "harvey"
+from = "arm64/bin/seq"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hsha1sum"
+source = "harvey"
+from = "arm64/bin/sha1sum"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hsleep"
+source = "harvey"
+from = "arm64/bin/sleep"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hsort"
+source = "harvey"
+from = "arm64/bin/sort"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hsplit"
+source = "harvey"
+from = "arm64/bin/split"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hstrings"
+source = "harvey"
+from = "arm64/bin/strings"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hsum"
+source = "harvey"
+from = "arm64/bin/sum"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/htail"
+source = "harvey"
+from = "arm64/bin/tail"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/htar"
+source = "harvey"
+from = "arm64/bin/tar"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/htdraw"
+source = "harvey"
+from = "build/aarch64/out/htdraw"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/htee"
+source = "harvey"
+from = "arm64/bin/tee"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/htest"
+source = "harvey"
+from = "arm64/bin/test"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/htime"
+source = "harvey"
+from = "arm64/bin/time"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/htouch"
+source = "harvey"
+from = "arm64/bin/touch"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/htr"
+source = "harvey"
+from = "arm64/bin/tr"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/huniq"
+source = "harvey"
+from = "arm64/bin/uniq"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hunits"
+source = "harvey"
+from = "arm64/bin/units"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hwc"
+source = "harvey"
+from = "arm64/bin/wc"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hxd"
+source = "harvey"
+from = "arm64/bin/xd"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/hyacc"
+source = "harvey"
+from = "arm64/bin/yacc"
+mode = "0755"
+
+[[dir]]
+path = "/arm64/bin/ip"
+
+[[file]]
+path = "/arm64/bin/ip/ipconfig"
+source = "harvey"
+from = "arm64/bin/ip/ipconfig"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/ip/ping"
+source = "harvey"
+from = "arm64/bin/ip/ping"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/ip/udpecho"
+source = "harvey"
+from = "arm64/bin/ip/udpecho"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/ls"
+source = "harvey"
+from = "arm64/bin/ls"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/mkdir"
+source = "harvey"
+from = "arm64/bin/mkdir"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/mv"
+source = "harvey"
+from = "arm64/bin/mv"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/netblast"
+source = "harvey"
+from = "build/aarch64/out/netblast"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/ps"
+source = "harvey"
+from = "arm64/bin/ps"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/ramfs"
+source = "harvey"
+from = "arm64/bin/ramfs"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/rc"
+source = "harvey"
+from = "arm64/bin/rc"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/rcloseprobe"
+source = "harvey"
+from = "build/aarch64/out/rcloseprobe"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/rfdprobe"
+source = "harvey"
+from = "build/aarch64/out/rfdprobe"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/rm"
+source = "harvey"
+from = "arm64/bin/rm"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/sed"
+source = "harvey"
+from = "arm64/bin/sed"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/sslprobe"
+source = "harvey"
+from = "build/aarch64/out/sslprobe"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/stacksmoke"
+source = "harvey"
+from = "build/aarch64/out/stacksmoke"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/tcpblast"
+source = "harvey"
+from = "build/aarch64/out/tcpblast"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/tcpecho"
+source = "harvey"
+from = "build/aarch64/out/tcpecho"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/test"
+source = "harvey"
+from = "arm64/bin/test"
+mode = "0755"
+
+[[file]]
+path = "/arm64/bin/wc"
+source = "harvey"
+from = "arm64/bin/wc"
+mode = "0755"
+
+[[file]]
+path = "/arm64/init"
+source = "harvey"
+from = "arm64/init"
+mode = "0755"
+
+[[dir]]
+path = "/bin"
+
+[[dir]]
+path = "/boot"
+
+[[file]]
+path = "/boot/boot"
+source = "harvey"
+from = "build/aarch64/out/boot"
+mode = "0755"
+
+[[file]]
+path = "/boot/paqfs"
+source = "harvey"
+from = "arm64/bin/paqfs"
+mode = "0755"
+
+[[dir]]
+path = "/dev"
+
+[[dir]]
+path = "/env"
+
+[[dir]]
+path = "/fd"
+
+[[dir]]
+path = "/lib"
+
+[[file]]
+path = "/lib/namespace"
+source = "harvey"
+from = "build/aarch64/root-tree/lib/namespace"
+mode = "0644"
+
+[[file]]
+path = "/lib/net-sweep.rc"
+source = "harvey"
+from = "build/aarch64/root-tree/lib/net-sweep.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netaddr.rc"
+source = "harvey"
+from = "build/aarch64/netaddr.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-aan-drop.rc"
+source = "harvey"
+from = "build/aarch64/root-tree/lib/netip-aan-drop.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-aan.rc"
+source = "harvey"
+from = "build/aarch64/root-tree/lib/netip-aan.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-dhcp.rc"
+source = "harvey"
+from = "build/aarch64/root-tree/lib/netip-dhcp.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-loopback.rc"
+source = "harvey"
+from = "build/aarch64/root-tree/lib/netip-loopback.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-soak.rc"
+source = "harvey"
+from = "build/aarch64/root-tree/lib/netip-soak.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-static.rc"
+source = "harvey"
+from = "build/aarch64/root-tree/lib/netip-static.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-tcp.rc"
+source = "harvey"
+from = "build/aarch64/root-tree/lib/netip-tcp.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-v6.rc"
+source = "harvey"
+from = "build/aarch64/root-tree/lib/netip-v6.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/shebangecho"
+source = "harvey"
+from = "build/aarch64/root-tree/lib/shebangecho"
+mode = "0755"
+
+[[dir]]
+path = "/lib/test"
+
+[[file]]
+path = "/lib/test/arp.req"
+source = "harvey"
+from = "build/aarch64/root-tree/lib/test/arp.req"
+mode = "0644"
+
+[[dir]]
+path = "/lib/tier1"
+
+[[file]]
+path = "/lib/tier1-sweep.rc"
+source = "harvey"
+from = "build/aarch64/tier1-sweep.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/tier1/hello.c"
+source = "harvey"
+from = "build/aarch64/hello.c"
+mode = "0644"
+
+[[file]]
+path = "/lib/tier1/nm-input.7"
+source = "harvey"
+from = "build/aarch64/nm-input.7"
+mode = "0644"
+
+[[file]]
+path = "/lib/tier1/sentinel.txt"
+source = "harvey"
+from = "build/aarch64/tier1-sentinel.txt"
+mode = "0644"
+
+[[file]]
+path = "/lib/tier1/tiny.l"
+source = "harvey"
+from = "build/aarch64/tiny.l"
+mode = "0644"
+
+[[file]]
+path = "/lib/tier1/tiny.mk"
+source = "harvey"
+from = "build/aarch64/tiny.mk"
+mode = "0644"
+
+[[file]]
+path = "/lib/tier1/tiny.s"
+source = "harvey"
+from = "build/aarch64/tiny.s"
+mode = "0644"
+
+[[file]]
+path = "/lib/tier1/tiny.y"
+source = "harvey"
+from = "build/aarch64/tiny.y"
+mode = "0644"
+
+[[file]]
+path = "/lib/writeprobe.rc"
+source = "harvey"
+from = "build/aarch64/root-tree/lib/writeprobe.rc"
+mode = "0644"
+
+[[dir]]
+path = "/mnt"
+
+[[dir]]
+path = "/n"
+
+[[dir]]
+path = "/n/wp"
+
+[[dir]]
+path = "/net"
+
+[[dir]]
+path = "/proc"
+
+[[dir]]
+path = "/rc"
+
+[[dir]]
+path = "/rc/bin"
+
+[[file]]
+path = "/rc/bin/cpurc"
+source = "harvey"
+from = "build/aarch64/root-tree/rc/bin/cpurc"
+mode = "0755"
+
+[[file]]
+path = "/rc/bin/termrc"
+source = "harvey"
+from = "build/aarch64/root-tree/rc/bin/termrc"
+mode = "0644"
+
+[[dir]]
+path = "/rc/lib"
+
+[[file]]
+path = "/rc/lib/rcmain"
+source = "harvey"
+from = "rc/lib/rcmain"
+mode = "0644"
+
+[[dir]]
+path = "/root"
+
+[[dir]]
+path = "/srv"
+
+[[dir]]
+path = "/tmp"
+
+[[dir]]
+path = "/usr"
+
+[[dir]]
+path = "/usr/glenda"
+
+[[dir]]
+path = "/usr/glenda/lib"
+
+[[file]]
+path = "/usr/glenda/lib/profile"
+source = "harvey"
+from = "build/aarch64/root-tree/usr/glenda/lib/profile"
+mode = "0644"
