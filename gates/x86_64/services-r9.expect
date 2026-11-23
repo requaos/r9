@@ -1,0 +1,241 @@
+#!/usr/bin/expect -f
+# services-r9.expect — the r9-x64 SERVICES gate driver (15-03,
+# USPACE-07's r9 leg): the composed services image (mkimage's services
+# bake as the ISO's bootfs module) boots the chain to the services
+# sweep — the services image's termrc (build/x86_64/services-termrc
+# staged as rc/bin/termrc) runs `rc /lib/services-sweep.rc r9' from the
+# boot flow (init.c's `. /rc/bin/termrc' — the donor venue's k10t1.rc
+# shape, no typed interaction; the sweep rides UNCHANGED from 15-02,
+# both venues' single source).  Copies tier1-r9.expect's machinery
+# verbatim in shape (env contract, fresh log_file, spawn with the
+# caller-selected q35 shape + -name $run_tag, group-kill cleanup, the
+# named-stage proc, expect_before panic fast-fail).
+#
+#   staged boot (banner → paqfs → version) → the net bring-up stage
+#   (the sweep's OWN loopback bring-up, asserted by its markers —
+#   SVC-LOOPBACK-UP on the green arm) → the per-probe verdict stages
+#   (every sweep subject, presence-only, CRLF-tolerant, never
+#   interleaving order) → SVC-DONE → the %  prompt (the interactive
+#   shell the sweep's termrc execs) → the whole-file post-pass: every
+#   computed subject earned SVC-OK OR its declared SVC-SKIP, every
+#   emitted SVC-SKIP is a declared name (the converse — a stale baked
+#   sweep reds here), zero SVC-FAIL, zero panic.
+#
+#   Verdict-stage matching: each probe stage matches the subject's
+#   VERDICT line (SVC-OK <name> or SVC-FAIL <name>) — presence of the
+#   verdict proves the probe RAN to classification; the post-pass is
+#   what demands the OK.  (Matching OK alone would turn every fix-loop
+#   iteration into a 600s stage timeout; the capture is the evidence
+#   either way.)
+#
+#   exit 0 only when EVERY stage + the post-pass passed; a failure
+#   exits 1 and names the failed stage on stderr — never a bare
+#   hang-to-timeout with no localization.
+#
+# Hygiene: the caller (nix/gates/services-r9-x64.sh) rm -f's the capture
+# BEFORE launch and we rm -f + log_file it fresh below — the file
+# starts empty and only THIS run's boot writes it.  Every exit path
+# kills qemu's process group (expect's spawn sets the child up as a
+# session/group leader on its pty).
+#
+# Markers: PRESENCE assertions only, never interleaving order
+# (preemption and TCG make arrival order meaningless).  Patterns are
+# CRLF-tolerant substrings, never end-of-line anchored.
+#
+# Env (exported by nix/gates/services-r9-x64.sh — the flake app):
+#   R9_ISO         REQUIRED — the composed services ISO (r9's
+#                  iso-builder over target/images/x86_64/services.paq)
+#   R9_SVC_LOG     REQUIRED — the serial capture (fresh per run; the
+#                  caller retains a passing one as evidence)
+#   R9_EXPECT_SVC_OK   REQUIRED — the expected SVC-OK subject names
+#                  (space-separated; computed from the tier data +
+#                  factotum's tier-1 line, minus SKIP-named members)
+#   R9_EXPECT_SVC_SKIP REQUIRED — the sweep's DECLARED conditional
+#                  SVC-SKIP names (space-separated; extracted verbatim
+#                  from the committed services-sweep.rc's own
+#                  `echo SVC-SKIP' lines — never a second hardcoded
+#                  list)
+#   R9_QEMU        default qemu-system-x86_64
+#   R9_MACHINE/R9_CPU/R9_ACCEL — the caller-selected q35 shape
+#                (defaults q35/host/kvm; TCG selects qemu64)
+#   R9_RUN_TAG     the per-run unique tag in qemu's argv (-name); the
+#                  caller's survivor sweep keys on it
+#
+# usage: env R9_ISO=… R9_SVC_LOG=… R9_EXPECT_SVC_OK=… \
+#          R9_EXPECT_SVC_SKIP=… expect gates/x86_64/services-r9.expect
+# exit 0 on all-pass; exit 1 names the failed stage on stderr; exit 2
+# on a contract violation (missing env).
+
+set timeout 900                    ;# per stage, TCG-sized (the sweep's bounded spins + daemon starts)
+match_max 1048576                  ;# the full sweep's output rides one buffer window
+# NOTE: log_user stays ON — expect 5.45 writes NOTHING to log_file when
+# log_user is 0 (measured on the aarch64 gate: the capture file would
+# be empty).  The wire echo on the driver's stdout is the app's visible
+# progress; the stage lines name it on stderr.
+
+# --- required env (loud, before any spawn) -------------------------------
+foreach v {R9_ISO R9_SVC_LOG R9_EXPECT_SVC_OK R9_EXPECT_SVC_SKIP} {
+    if {![info exists env($v)]} {
+        puts stderr "services-r9-x64: \$$v unset — run via the flake app (nix run .#boot-r9-services-x64)"
+        exit 2
+    }
+}
+set QEMU [expr {[info exists env(R9_QEMU)] ? $env(R9_QEMU) : "qemu-system-x86_64"}]
+set run_tag [expr {[info exists env(R9_RUN_TAG)] ? $env(R9_RUN_TAG) : "r9x64svc-[pid]-[clock seconds]"}]
+
+# --- Hygiene: a fresh capture per run -----------------------------------
+# The caller already rm -f'd it; remove again here so the rule holds
+# however this script is invoked (a stale capture is dead evidence).
+exec rm -f $env(R9_SVC_LOG)
+
+# --- spawn qemu: the composed services ISO on -cdrom (the q35 shape the
+#     caller selected — kvm/host by default, tcg/qemu64 explicitly; the
+#     NIC stanza is always on, D-10 carried) ----------------------------------
+set R9_MACHINE [expr {[info exists env(R9_MACHINE)] ? $env(R9_MACHINE) : "q35"}]
+set R9_CPU [expr {[info exists env(R9_CPU)] ? $env(R9_CPU) : "host"}]
+set R9_ACCEL [expr {[info exists env(R9_ACCEL)] ? $env(R9_ACCEL) : "kvm"}]
+spawn $QEMU -M $R9_MACHINE -cpu $R9_CPU -smp 1 -m 1024M \
+    -accel $R9_ACCEL \
+    -cdrom $env(R9_ISO) \
+    -netdev user,id=n0 \
+    -device virtio-net-pci-non-transitional,netdev=n0 \
+    -nographic \
+    -name $run_tag
+set spawn_pid [exp_pid]
+log_file $env(R9_SVC_LOG)
+
+# --- teardown: kill qemu's process group ------------------------------
+# The spawned qemu is a session/group leader (expect's pty setup), so
+# the group IS the qemu subtree; catch: already-dead is fine.  The
+# lone-pid second form is the no-group fallback.  The caller's EXIT
+# trap sweeps any survivor keyed on this run's unique tag.
+proc cleanup {} {
+    global spawn_pid
+    catch { exec kill -KILL -- -$spawn_pid 2>/dev/null }
+    catch { exec kill -KILL $spawn_pid 2>/dev/null }
+}
+
+# --- staged ordered assertions (each stage names its failure) ---------
+# NOTE: expect_out must be global here — expect sets it in the CURRENT
+# scope, and the sweep stages read the captured buffer AFTER stage
+# returns.
+proc stage {name re} {
+    global expect_out
+    expect {
+        -re $re { puts stderr "services-r9-x64: stage ok — $name" }
+        timeout { puts stderr "services-r9-x64: TIMEOUT at stage: $name"; cleanup; exit 1 }
+        eof { puts stderr "services-r9-x64: qemu exited (EOF) at stage: $name"; cleanup; exit 1 }
+    }
+}
+
+# fast-fail on kernel panic markers anywhere in the boot (the smoke
+# gate's rule)
+expect_before {
+    -re {panic|Unhandled interrupt} {
+        puts stderr "services-r9-x64: kernel panic marker on the wire — aborting"
+        cleanup
+        exit 1
+    }
+}
+
+# 1. the staged boot sequence: banner → paqfs server → boot(8)'s
+#    version print (the chain's stages; the services payload rides the
+#    same image — the sweep then runs from termrc BEFORE any prompt)
+stage banner    {r9 from the Internet}
+stage paqfs     {paqfs\.\.\.}
+stage version   {version\.\.\.}
+
+# 2. the sweep's stages, in the sweep's own emission order (the
+#    per-stage patterns are presence-only; each verdict stage accepts
+#    either arm — the post-pass below demands the OK).  mntgen first
+#    (the bootstrap), then the net bring-up (the sweep's own loopback
+#    bring-up — SVC-LOOPBACK-UP on the green arm; a failed #I bind
+#    degrades to the named skip-why line and the post-pass/classify
+#    reds on the missing probes), then the per-subject verdicts.
+#    EMISSION ORDER IS LOAD-BEARING for the stage SEQUENCE: expect
+#    consumes the buffer up to each match, so a stage whose marker
+#    already streamed by an EARLIER stage's match would wait for a
+#    second emission that never comes — the srv/exportfs pair is the
+#    measured case (the sweep echoes SVC-OK srv then SVC-OK exportfs
+#    from one if-arm; the first tracer run stalled exactly there).
+stage mntgen-verdict  {SVC-(OK|FAIL) mntgen}
+stage net-bringup     {SVC-LOOPBACK-UP|SVC-LOOPBACK-NOT-UP|SVC-SKIP-WHY no-netdev}
+stage cs-verdict      {SVC-CSOBS|SVC-FAIL cs}
+stage dns-verdict     {SVC-(OK|FAIL) dns}
+stage srv-verdict     {SVC-(OK|FAIL) srv}
+stage exportfs-verdict {SVC-(OK|FAIL) exportfs}
+stage listen-verdict  {SVC-(OK|FAIL) listen}
+stage factotum-verdict {SVC-(OK|FAIL) factotum}
+stage keyfs-verdict   {SVC-(OK|FAIL) keyfs}
+stage authsrv-verdict {SVC-(OK|FAIL) authsrv}
+stage sweep-done      {SVC-DONE}
+
+# 3. the interactive % prompt — the shell the sweep's termrc execs
+#    AFTER SVC-DONE (the sweep ran in a child; init's shell survives)
+stage prompt {% }
+
+# 4. the whole-file post-pass: stop the log, read the capture, and
+#    assert the marker contract (the 15-02 donor gate's classify
+#    semantics — the sweep's SKIPs are CONDITIONAL, so the check is
+#    per-subject OK-or-declared-SKIP-emitted plus the converse on
+#    every emitted SKIP; never unconditional set-equality).
+log_file                           ;# stop + flush before the whole-file scan
+set fh [open $env(R9_SVC_LOG) r]
+set whole [read $fh]
+close $fh
+
+# 4a. every computed subject earned SVC-OK, OR its name is a declared
+#     conditional skip AND the sweep emitted that skip (the honest
+#     landing for a venue-impossible probe — never a weaker pass).
+#     Normalize the cooked CRLF once; the \n anchor means a marker name
+#     that is a prefix of another can never false-match.
+set flat [string map {"\r" ""} $whole]
+set svcmiss {}
+foreach name $env(R9_EXPECT_SVC_OK) {
+    if {[string match "*SVC-OK $name\n*" $flat]} continue
+    if {[lsearch -exact $env(R9_EXPECT_SVC_SKIP) $name] >= 0 \
+        && [string match "*SVC-SKIP $name\n*" $flat]} continue
+    lappend svcmiss $name
+}
+if {[llength $svcmiss] > 0} {
+    puts stderr "services-r9-x64: post-pass FAILED — subjects without an earned SVC-OK or emitted declared SKIP: $svcmiss"
+    cleanup
+    exit 1
+}
+puts stderr "services-r9-x64: post-pass ok — every subject earned SVC-OK or its declared SKIP ([llength $env(R9_EXPECT_SVC_OK)] subjects)"
+
+# 4b. the CONVERSE: every emitted SVC-SKIP name must be a DECLARED
+#     name (extracted verbatim from the committed sweep's own echo
+#     lines — a stale baked sweep that drifted from the committed one
+#     reds here; the 14-08 rule carried)
+set gotraw [regexp -all -inline {SVC-SKIP ([A-Za-z0-9.-]+)} $flat]
+set badskip {}
+foreach {_ name} $gotraw {
+    if {[lsearch -exact $env(R9_EXPECT_SVC_SKIP) $name] < 0} {
+        if {[lsearch -exact $badskip $name] < 0} { lappend badskip $name }
+    }
+}
+if {[llength $badskip] > 0} {
+    puts stderr "services-r9-x64: post-pass FAILED — undeclared SVC-SKIP names emitted: $badskip"
+    cleanup
+    exit 1
+}
+puts stderr "services-r9-x64: post-pass ok — every emitted SVC-SKIP is a declared name ([llength $env(R9_EXPECT_SVC_SKIP)] declared)"
+
+# 4c. zero SVC-FAIL, zero panic/Unhandled-interrupt (the expect_before
+#     fast-fail already covers panic mid-run; this is the whole-file proof)
+if {[string match "*SVC-FAIL*" $flat]} {
+    puts stderr "services-r9-x64: post-pass FAILED — SVC-FAIL lines are present"
+    cleanup
+    exit 1
+}
+if {[regexp -nocase {panic|Unhandled interrupt} $flat]} {
+    puts stderr "services-r9-x64: post-pass FAILED — a kernel fault line is present"
+    cleanup
+    exit 1
+}
+puts stderr "services-r9-x64: post-pass ok — zero SVC-FAIL, zero panic"
+
+puts stderr "services-r9-x64: ALL STAGES PASS — boot, the services sweep from the boot flow, the net bring-up, every subject's verdict, SVC-DONE, the interactive prompt, the computed-expectation post-pass"
+cleanup
+exit 0

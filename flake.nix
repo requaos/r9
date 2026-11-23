@@ -1133,6 +1133,28 @@ WRAP
             pkgs.git
             pkgs.expect
           ];
+          # The moved x86_64 composed gate apps' runtime inputs (01-23):
+          # qemu and expect as Harvey's had, procps for the EXIT trap's
+          # survivor sweep and iproute2 for the smoke gate's hostfwd
+          # observation, plus the Rust toolchain for `cargo xtask image`
+          # and the text tools the computed tier/services marker sets
+          # use.  No dtc (nothing in the x64 pipeline touches a DTB);
+          # git stays as Harvey's had it (inert — the store tree has no
+          # .git).
+          bootR9X64RuntimeInputs = [
+            toolchain
+            pkgs.bash
+            pkgs.coreutils
+            pkgs.gawk
+            pkgs.gnugrep
+            pkgs.gnused
+            pkgs.findutils
+            pkgs.qemu
+            pkgs.expect
+            pkgs.procps
+            pkgs.iproute2
+            pkgs.git
+          ];
           # writeShellApplication embeds runtimeInputs on PATH, so the app
           # runs bare (no devshell) per D-08's zero-host-setup intent.
           r9-build = pkgs.writeShellApplication {
@@ -1248,6 +1270,58 @@ WRAP
               pkgs.grub2
               pkgs.xorriso
             ]}/bin/drawterm-gate-x64";
+          };
+        }
+        # 01-23 (D-07/D-09/HARN-08): the moved x86_64 composed gate apps
+        # — smoke (the chain leg + the cpu-chain leg), tier-1, churn and
+        # services.  Each header exports r9's own supply: the kernel-x64
+        # package, r9's iso-builder and (where Harvey's did) the netdev
+        # emitter, the read-only amd64 tree, the host mkpaqfs and
+        # authdomain generator (the image bake).  The runtimeInputs add
+        # the Rust toolchain for `cargo xtask image` and the host tools
+        # the drivers use.  x86_64-linux only: the BIOS ISO machinery
+        # (iso-builder) is the q35 channel's venue (X64-05).
+        // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
+          boot-r9-smoke-x64 = {
+            type = "app";
+            program = "${mkScriptApp pkgs "boot-r9-smoke-x64" ./nix/gates/smoke-r9-x64.sh ''
+              export R9_KERNEL_X64_PKG="${self.packages.${system}.kernel-x64}"
+              export R9_ISO_BUILDER="${self.packages.${system}.iso-builder}/bin/r9-iso-builder"
+              export R9_NETDEV_EMITTER="${self.packages.${system}.netdev-args}/bin/r9-netdev-args"
+              export R9_HARVEY_DIR_AMD64="${self.packages.${system}.harvey-tree-amd64}"
+              export R9_MKPAQFS="${self.packages.${system}.harvey-mkpaqfs}/bin/mkpaqfs"
+              export R9_AUTHDOMAIN_GEN="${self.packages.${system}.harvey-authdomain-gen}/bin/authdomain-gen"
+            '' bootR9X64RuntimeInputs}/bin/boot-r9-smoke-x64";
+          };
+          boot-r9-tier1-x64 = {
+            type = "app";
+            program = "${mkScriptApp pkgs "boot-r9-tier1-x64" ./nix/gates/tier1-r9-x64.sh ''
+              export R9_KERNEL_X64_PKG="${self.packages.${system}.kernel-x64}"
+              export R9_ISO_BUILDER="${self.packages.${system}.iso-builder}/bin/r9-iso-builder"
+              export R9_HARVEY_DIR_AMD64="${self.packages.${system}.harvey-tree-amd64}"
+              export R9_MKPAQFS="${self.packages.${system}.harvey-mkpaqfs}/bin/mkpaqfs"
+              export R9_AUTHDOMAIN_GEN="${self.packages.${system}.harvey-authdomain-gen}/bin/authdomain-gen"
+            '' bootR9X64RuntimeInputs}/bin/boot-r9-tier1-x64";
+          };
+          boot-r9-churn-x64 = {
+            type = "app";
+            program = "${mkScriptApp pkgs "boot-r9-churn-x64" ./nix/gates/churn-r9-x64.sh ''
+              export R9_KERNEL_X64_PKG="${self.packages.${system}.kernel-x64}"
+              export R9_ISO_BUILDER="${self.packages.${system}.iso-builder}/bin/r9-iso-builder"
+              export R9_HARVEY_DIR_AMD64="${self.packages.${system}.harvey-tree-amd64}"
+              export R9_MKPAQFS="${self.packages.${system}.harvey-mkpaqfs}/bin/mkpaqfs"
+              export R9_AUTHDOMAIN_GEN="${self.packages.${system}.harvey-authdomain-gen}/bin/authdomain-gen"
+            '' bootR9X64RuntimeInputs}/bin/boot-r9-churn-x64";
+          };
+          boot-r9-services-x64 = {
+            type = "app";
+            program = "${mkScriptApp pkgs "boot-r9-services-x64" ./nix/gates/services-r9-x64.sh ''
+              export R9_KERNEL_X64_PKG="${self.packages.${system}.kernel-x64}"
+              export R9_ISO_BUILDER="${self.packages.${system}.iso-builder}/bin/r9-iso-builder"
+              export R9_HARVEY_DIR_AMD64="${self.packages.${system}.harvey-tree-amd64}"
+              export R9_MKPAQFS="${self.packages.${system}.harvey-mkpaqfs}/bin/mkpaqfs"
+              export R9_AUTHDOMAIN_GEN="${self.packages.${system}.harvey-authdomain-gen}/bin/authdomain-gen"
+            '' bootR9X64RuntimeInputs}/bin/boot-r9-services-x64";
           };
         });
     };
