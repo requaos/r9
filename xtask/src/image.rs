@@ -61,6 +61,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
+use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
@@ -69,10 +70,11 @@ use serde::Deserialize;
 
 use crate::Result;
 
-/// The generator registry.  Plan 01-16 registers the real generators; this
-/// plan ships the registry and the named unknown-name error, so a manifest
-/// can never stage a generated file from a typo'd or unresolved name.
-const GENERATORS: &[&str] = &[];
+/// The generator registry.  A `generated` manifest entry names one of
+/// these; the engine runs it at bake time and stages its output.  An
+/// unknown name (including the emitter's reserved `UNRESOLVED`) is
+/// `IMAGE-GENERATOR`, so a typo can never stage a file from nothing.
+const GENERATORS: &[&str] = &["authdomain", "ndb-template"];
 
 /// One image's declarative manifest.
 #[derive(Debug, Clone, Deserialize)]
@@ -107,11 +109,13 @@ pub struct FileEntry {
     /// Where the bytes come from.
     pub source: Source,
     /// Source path: tree-relative for `harvey`, workspace-relative for
-    /// `rust`; absent for `generated` (the generator produces the bytes).
+    /// `rust`; for `generated` it names the produced artifact
+    /// (`authdomain`) or the tree-relative template (`ndb-template`).
     #[serde(default)]
     pub from: Option<String>,
-    /// Octal mode string, e.g. `"0755"`.  Required for `harvey` (the
-    /// staged binaries' own modes), optional elsewhere (default 0755).
+    /// Octal mode string, e.g. `"0755"`.  Required for `harvey` and
+    /// `generated` (the source's own mode); optional for `rust`
+    /// (default 0755).
     #[serde(default)]
     pub mode: Option<String>,
     /// For `source = "rust"`: the tree-relative Harvey artifact the r9
@@ -121,6 +125,20 @@ pub struct FileEntry {
     /// For `source = "generated"`: the registered generator name.
     #[serde(default)]
     pub generator: Option<String>,
+    /// For `generator = "ndb-template"`: the template tokens to
+    /// substitute.  A token the list omits is left in the output and
+    /// fails the bake (`@AUTHDOM@` and the netaddr seam keys are the
+    /// value sources).
+    #[serde(default)]
+    pub tokens: Option<Vec<String>>,
+    /// For `generator = "ndb-template"`: the tree-relative seam file the
+    /// token values are read from (the netaddr seam, D-16).
+    #[serde(default)]
+    pub seam: Option<String>,
+    /// For `generator = "ndb-template"`: rows appended after the
+    /// substitution (the auth image's `tcp=ticket` service row).
+    #[serde(default)]
+    pub append: Option<String>,
 }
 
 /// One `[[tree]]` entry: a source directory expanded to every file under it.
@@ -364,6 +382,7 @@ fn validate_file_entry(file: &FileEntry, image: &str) -> Result<()> {
             }
             reject_field(file, image, file.generator.as_deref(), "generator", "harvey")?;
             reject_field(file, image, file.replaces.as_deref(), "replaces", "harvey")?;
+            reject_generator_fields(file, image, "harvey")?;
         }
         Source::Rust => {
             let from = require_field(file, image, "from")?;
@@ -371,12 +390,86 @@ fn validate_file_entry(file: &FileEntry, image: &str) -> Result<()> {
             let replaces = require_field(file, image, "replaces")?;
             validate_relative(replaces, image, &format!("entry {} `replaces`", file.path))?;
             reject_field(file, image, file.generator.as_deref(), "generator", "rust")?;
+            reject_generator_fields(file, image, "rust")?;
         }
         Source::Generated => {
             let generator = require_field(file, image, "generator")?;
             known_generator(generator, image, &file.path)?;
-            reject_field(file, image, file.from.as_deref(), "from", "generated")?;
-            reject_field(file, image, file.replaces.as_deref(), "replaces", "generated")?;
+            if file.replaces.is_some() {
+                return Err(format!(
+                    "image manifest for \"{image}\": entry {} source = \"generated\" must not \
+                     carry `replaces`",
+                    file.path
+                )
+                .into());
+            }
+            match generator {
+                "authdomain" => {
+                    let from = require_field(file, image, "from")?;
+                    validate_relative(
+                        from,
+                        image,
+                        &format!("entry {} `from` (the produced artifact)", file.path),
+                    )?;
+                    if file.tokens.is_some() || file.seam.is_some() || file.append.is_some() {
+                        return Err(format!(
+                            "image manifest for \"{image}\": entry {} generator = \"authdomain\" \
+                             must not carry `tokens`, `seam` or `append` (it stages one produced \
+                             artifact, named by `from`)",
+                            file.path
+                        )
+                        .into());
+                    }
+                }
+                "ndb-template" => {
+                    let from = require_field(file, image, "from")?;
+                    validate_relative(
+                        from,
+                        image,
+                        &format!("entry {} `from` (the template)", file.path),
+                    )?;
+                    let seam = require_field(file, image, "seam")?;
+                    validate_relative(
+                        seam,
+                        image,
+                        &format!("entry {} `seam` (the substitution values)", file.path),
+                    )?;
+                    let tokens = file.tokens.as_deref().unwrap_or(&[]);
+                    if tokens.is_empty() {
+                        return Err(format!(
+                            "image manifest for \"{image}\": entry {} generator = \
+                             \"ndb-template\" requires a non-empty `tokens` list (the tokens it \
+                             substitutes)",
+                            file.path
+                        )
+                        .into());
+                    }
+                    if tokens.iter().any(|token| token.trim().is_empty()) {
+                        return Err(format!(
+                            "image manifest for \"{image}\": entry {} `tokens` carries an empty \
+                             token",
+                            file.path
+                        )
+                        .into());
+                    }
+                }
+                other => {
+                    return Err(format!(
+                        "IMAGE-GENERATOR: image \"{image}\" entry {} names generator {other:?}, \
+                         which has no validation rule",
+                        file.path
+                    )
+                    .into())
+                }
+            }
+            if file.mode.is_none() {
+                return Err(format!(
+                    "image manifest for \"{image}\": entry {} source = \"generated\" requires \
+                     `mode` (the produced file's octal mode, e.g. \"0600\")",
+                    file.path
+                )
+                .into());
+            }
         }
         Source::Tree => {
             return Err(format!(
@@ -389,6 +482,25 @@ fn validate_file_entry(file: &FileEntry, image: &str) -> Result<()> {
     }
     if let Some(mode) = &file.mode {
         parse_mode(mode, image, &file.path)?;
+    }
+    Ok(())
+}
+
+/// A generator-only field a plain source kind must not carry.
+fn reject_generator_fields(file: &FileEntry, image: &str, source: &str) -> Result<()> {
+    for (present, field) in [
+        (file.tokens.is_some(), "tokens"),
+        (file.seam.is_some(), "seam"),
+        (file.append.is_some(), "append"),
+    ] {
+        if present {
+            return Err(format!(
+                "image manifest for \"{image}\": entry {} source = \"{source}\" must not carry \
+                 `{field}` (a generator field)",
+                file.path
+            )
+            .into());
+        }
     }
     Ok(())
 }
@@ -409,6 +521,7 @@ fn file_from<'a>(file: &'a FileEntry, field: &str) -> Option<&'a str> {
         "from" => file.from.as_deref(),
         "replaces" => file.replaces.as_deref(),
         "generator" => file.generator.as_deref(),
+        "seam" => file.seam.as_deref(),
         _ => None,
     };
     value.filter(|v| !v.is_empty())
@@ -436,20 +549,21 @@ fn reject_field(
 
 /// The generator registry check (`IMAGE-GENERATOR`): `UNRESOLVED` is the
 /// emitter's reserved "no tree file matched" marker and is always rejected;
-/// every other name must be registered (none are, in this plan).
+/// every other name must be registered.
 fn known_generator(name: &str, image: &str, path: &str) -> Result<()> {
     if name == "UNRESOLVED" {
         return Err(format!(
             "IMAGE-GENERATOR: image \"{image}\" entry {path} names generator \"UNRESOLVED\" — the \
              manifest emitter writes that marker for a reference file it could not match to the \
-             tree; resolve it before the image can be assembled (plans 01-16/01-17)"
+             tree; resolve it before the image can be assembled"
         )
         .into());
     }
     if !GENERATORS.contains(&name) {
         return Err(format!(
             "IMAGE-GENERATOR: image \"{image}\" entry {path} names unknown generator {name:?} — \
-             the registry is empty in plan 01-11; plan 01-16 registers the real generators"
+             the registered generators are {}",
+            GENERATORS.join(", ")
         )
         .into());
     }
@@ -600,6 +714,20 @@ pub fn stage_full(
     workspace: &Path,
     stage_dir: &Path,
 ) -> Result<()> {
+    stage_full_with(manifest, manifest_dir, tree, workspace, stage_dir, None)
+}
+
+/// [`stage_full`] with the per-bake generator state: `generated` carries
+/// the authdomain directory and token when the bake ran the generator,
+/// and the `ndb-template` substitution reads it (plus the tree's seam).
+fn stage_full_with(
+    manifest: &Manifest,
+    manifest_dir: &Path,
+    tree: &Path,
+    workspace: &Path,
+    stage_dir: &Path,
+    generated: Option<&GeneratedBake>,
+) -> Result<()> {
     let canonical_tree = tree.canonicalize().map_err(|e| -> crate::DynError {
         format!("image manifest for \"{}\": Harvey tree {}: {e}", manifest.image, tree.display())
             .into()
@@ -690,14 +818,90 @@ pub fn stage_full(
                 )?;
             }
             Source::Generated => {
-                return Err(format!(
-                    "IMAGE-GENERATOR: image \"{}\" entry {} names generator {:?}, but this plan \
-                     registers none (plan 01-16 registers the real generators)",
-                    manifest.image,
-                    file.path,
-                    file.generator.as_deref().unwrap_or_default()
-                )
-                .into())
+                let generator = file.generator.as_deref().unwrap_or_default();
+                let mode = parse_mode(
+                    file.mode.as_deref().unwrap_or("0755"),
+                    &manifest.image,
+                    &file.path,
+                )?;
+                match generator {
+                    "authdomain" => {
+                        let bake = generated.ok_or_else(|| -> crate::DynError {
+                            format!(
+                                "IMAGE-GENERATOR authdomain: image \"{}\" entry {} needs the \
+                                 bake-time authdomain run, and this staging pass carries none",
+                                manifest.image, file.path
+                            )
+                            .into()
+                        })?;
+                        let dir = bake.authdomain_dir.as_ref().ok_or_else(|| -> crate::DynError {
+                            format!(
+                                "IMAGE-GENERATOR authdomain: image \"{}\" entry {} names the \
+                                 generator but no domain directory was produced",
+                                manifest.image, file.path
+                            )
+                            .into()
+                        })?;
+                        let member = file.from.as_deref().unwrap_or_default();
+                        let src = dir.join(member);
+                        if !src.is_file() {
+                            return Err(format!(
+                                "IMAGE-GENERATOR authdomain: image \"{}\" entry {} names produced \
+                                 artifact {member:?}, which the generator did not emit in {}",
+                                manifest.image,
+                                file.path,
+                                dir.display()
+                            )
+                            .into());
+                        }
+                        copy_with_mode(&src, &dest, mode)?;
+                    }
+                    "ndb-template" => {
+                        let from = file.from.as_deref().unwrap_or_default();
+                        let template_path = tree.join(from);
+                        let template = fs::read_to_string(&template_path).map_err(
+                            |e| -> crate::DynError {
+                                format!(
+                                    "IMAGE-GENERATOR ndb-template: image \"{}\" entry {} template \
+                                     {}: {e}",
+                                    manifest.image,
+                                    file.path,
+                                    template_path.display()
+                                )
+                                .into()
+                            },
+                        )?;
+                        let seam_path = tree.join(file.seam.as_deref().unwrap_or_default());
+                        let seam = read_seam(&seam_path, &manifest.image, &file.path)?;
+                        let tokens = file.tokens.as_deref().unwrap_or(&[]);
+                        let authdom = generated.and_then(|bake| bake.authdom.as_deref());
+                        let mut output = substitute_template(
+                            &template,
+                            tokens,
+                            &seam,
+                            authdom,
+                            &manifest.image,
+                            &file.path,
+                        )?;
+                        if let Some(append) = &file.append {
+                            if !output.ends_with('\n') {
+                                output.push('\n');
+                            }
+                            output.push_str(append.trim_end_matches('\n'));
+                            output.push('\n');
+                        }
+                        fs::write(&dest, output)?;
+                        fs::set_permissions(&dest, fs::Permissions::from_mode(mode))?;
+                    }
+                    other => {
+                        return Err(format!(
+                            "IMAGE-GENERATOR: image \"{}\" entry {} names generator {other:?}, \
+                             which has no staging rule",
+                            manifest.image, file.path
+                        )
+                        .into())
+                    }
+                }
             }
             Source::Tree => {
                 return Err(format!(
@@ -1167,7 +1371,429 @@ fn check_provenance(
     Ok(())
 }
 
-/// Assemble one image through the full enforcement chain: parse → stage →
+/// The per-bake generator state: the authdomain directory (deleted after
+/// staging) and the authdom token the ndb substitution needs.
+#[derive(Debug, Default)]
+struct GeneratedBake {
+    authdomain_dir: Option<PathBuf>,
+    authdom: Option<String>,
+}
+
+/// Parse the generator's `auth-creds` artifact: exactly two
+/// newline-terminated key=value lines, `user=` then `password=`, values in
+/// the `[A-Za-z0-9_.-]` class the gates parse.  The error text never
+/// carries a line's contents.
+fn parse_creds<'a>(text: &'a str, image: &str) -> Result<(&'a str, &'a str)> {
+    if !text.ends_with('\n') {
+        return Err(format!(
+            "IMAGE-GENERATOR authdomain: the auth-creds artifact for image \"{image}\" is not \
+             newline-terminated"
+        )
+        .into());
+    }
+    let mut lines = text.lines();
+    let user_line = lines
+        .next()
+        .ok_or_else(|| -> crate::DynError {
+            format!("IMAGE-GENERATOR authdomain: the auth-creds artifact for image \"{image}\" is empty")
+                .into()
+        })?;
+    let password_line = lines.next().ok_or_else(|| -> crate::DynError {
+        format!(
+            "IMAGE-GENERATOR authdomain: the auth-creds artifact for image \"{image}\" has one line \
+             — want `user=` then `password=`"
+        )
+        .into()
+    })?;
+    if lines.next().is_some() {
+        return Err(format!(
+            "IMAGE-GENERATOR authdomain: the auth-creds artifact for image \"{image}\" has more \
+             than two lines — want `user=` then `password=`"
+        )
+        .into());
+    }
+    let user = user_line.strip_prefix("user=").ok_or_else(|| -> crate::DynError {
+        format!("IMAGE-GENERATOR authdomain: the auth-creds artifact for image \"{image}\" does not start with `user=`")
+            .into()
+    })?;
+    let password =
+        password_line.strip_prefix("password=").ok_or_else(|| -> crate::DynError {
+            format!(
+                "IMAGE-GENERATOR authdomain: the auth-creds artifact for image \"{image}\" has no \
+                 `password=` second line"
+            )
+            .into()
+        })?;
+    if !valid_cred_value(user) || !valid_cred_value(password) {
+        return Err(format!(
+            "IMAGE-GENERATOR authdomain: the auth-creds artifact for image \"{image}\" carries a \
+             malformed user or password value (want [A-Za-z0-9_.-])"
+        )
+        .into());
+    }
+    Ok((user, password))
+}
+
+fn valid_cred_value(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '-')
+}
+
+/// Copy the generator's `auth-creds` to `<image>.creds` with mode 0600,
+/// overwriting a previous bake's copy (a second bake always gets fresh
+/// values).  Nothing about the file's contents is printed.
+fn write_creds(source: &Path, out: &Path, image: &str) -> Result<()> {
+    let text = fs::read_to_string(source).map_err(|e| -> crate::DynError {
+        format!(
+            "IMAGE-GENERATOR authdomain: the generator emitted no readable auth-creds for image \
+             \"{image}\" ({}): {e}",
+            source.display()
+        )
+        .into()
+    })?;
+    let _ = parse_creds(&text, image)?;
+    if let Some(parent) = out.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(out)?;
+    file.write_all(text.as_bytes())?;
+    fs::set_permissions(out, fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+/// Emit a child process's output to the bake log, withholding any line that
+/// carries the password (or a `password=` assignment).
+fn emit_filtered(log: &mut dyn Write, bytes: &[u8], password: Option<&str>) {
+    for line in String::from_utf8_lossy(bytes).lines() {
+        let leaks = password.is_some_and(|value| line.contains(value))
+            || line.to_ascii_lowercase().contains("password=");
+        if leaks {
+            let _ = writeln!(log, "image: generator output line withheld (credential material)");
+        } else {
+            let _ = writeln!(log, "{line}");
+        }
+    }
+}
+
+/// Read a netaddr seam file (`key=value` lines; `#` comments and blanks
+/// skipped) into a token-value map.
+fn read_seam(path: &Path, image: &str, entry: &str) -> Result<HashMap<String, String>> {
+    let text = fs::read_to_string(path).map_err(|e| -> crate::DynError {
+        format!(
+            "IMAGE-GENERATOR ndb-template: image \"{image}\" entry {entry} seam {}: {e}",
+            path.display()
+        )
+        .into()
+    })?;
+    let mut values = HashMap::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((key, value)) = line.split_once('=') {
+            values.insert(key.trim().to_string(), value.trim().to_string());
+        }
+    }
+    Ok(values)
+}
+
+/// Substitute the manifest-named tokens and fail on any token left in the
+/// output (the template and the manifest's list must agree).
+fn substitute_template(
+    template: &str,
+    tokens: &[String],
+    seam: &HashMap<String, String>,
+    authdom: Option<&str>,
+    image: &str,
+    entry: &str,
+) -> Result<String> {
+    let mut output = template.to_string();
+    for token in tokens {
+        let name = token.trim_matches('@');
+        let value = match name {
+            "AUTHDOM" => authdom.map(str::to_string).ok_or_else(|| -> crate::DynError {
+                format!(
+                    "IMAGE-GENERATOR ndb-template: image \"{image}\" entry {entry} names {token} \
+                     but this bake ran no authdomain generator (the per-bake domain is its only \
+                     source)"
+                )
+                .into()
+            })?,
+            "GUESTV4" => seam_value(seam, "slirp_guestv4", token, image, entry)?,
+            "MASKV4" => seam_value(seam, "slirp_maskv4", token, image, entry)?,
+            "GWV4" => seam_value(seam, "slirp_gwv4", token, image, entry)?,
+            "ETHER" => seam_value(seam, "ether", token, image, entry)?,
+            other => {
+                return Err(format!(
+                    "IMAGE-GENERATOR ndb-template: image \"{image}\" entry {entry} names token \
+                     @{other}@, which has no value source — known tokens are @GUESTV4@, \
+                     @MASKV4@, @GWV4@, @ETHER@, @AUTHDOM@"
+                )
+                .into())
+            }
+        };
+        output = output.replace(token, &value);
+    }
+    if let Some(token) = find_at_token(&output) {
+        return Err(format!(
+            "IMAGE-GENERATOR ndb-template: image \"{image}\" entry {entry} left an unsubstituted \
+             token {token} in the output — the manifest's `tokens` list must name it"
+        )
+        .into());
+    }
+    Ok(output)
+}
+
+fn seam_value(
+    seam: &HashMap<String, String>,
+    key: &str,
+    token: &str,
+    image: &str,
+    entry: &str,
+) -> Result<String> {
+    seam.get(key).cloned().ok_or_else(|| -> crate::DynError {
+        format!(
+            "IMAGE-GENERATOR ndb-template: image \"{image}\" entry {entry} needs {token} but the \
+             seam file carries no `{key}` key"
+        )
+        .into()
+    })
+}
+
+/// The first `@[A-Za-z0-9_]+@` token in `text`, if any.
+fn find_at_token(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'@' {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        let mut end = index + 1;
+        while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
+            end += 1;
+        }
+        if end > start + 1 && end < bytes.len() && bytes[end] == b'@' {
+            return Some(text[start..=end].to_string());
+        }
+        index = end;
+    }
+    None
+}
+
+/// The bake-time p9sk1 domain: a fresh generator run (`-o`), the authdom
+/// token (`-i`), and the password read from the same run's `auth-creds` for
+/// output filtering.  Each bake gets a new directory and a new domain; the
+/// generator runs from the Harvey tree (its `authdomain.local` default).
+fn generate_authdomain(
+    manifest: &Manifest,
+    tree: &Path,
+    out_dir: &Path,
+    generator: Option<&Path>,
+    log: &mut dyn Write,
+) -> Result<GeneratedBake> {
+    let has_entries = manifest
+        .file
+        .iter()
+        .any(|file| file.source == Source::Generated && file.generator.as_deref() == Some("authdomain"));
+    if !has_entries {
+        return Ok(GeneratedBake::default());
+    }
+    let generator = generator.ok_or_else(|| -> crate::DynError {
+        "R9_AUTHDOMAIN_GEN is not set — the manifest carries a generator = \"authdomain\" entry, \
+         and the host p9sk1 generator is the only source of the per-bake domain (the devshell \
+         exports it where the Linux-only authdomain-gen builds; the Mac devshell leaves it unset)"
+            .into()
+    })?;
+    if !generator.is_file() {
+        return Err(format!(
+            "R9_AUTHDOMAIN_GEN names {} but it is not a file — name the host authdomain-gen binary",
+            generator.display()
+        )
+        .into());
+    }
+    let dir = out_dir.join(format!("{}.authdom", manifest.image));
+    if dir.exists() {
+        fs::remove_dir_all(&dir)?;
+    }
+    fs::create_dir_all(&dir)?;
+    let output = Command::new(generator)
+        .arg("-o")
+        .arg(&dir)
+        .current_dir(tree)
+        .output()
+        .map_err(|e| -> crate::DynError {
+            format!(
+                "IMAGE-GENERATOR authdomain: spawn {} -o {}: {e}",
+                generator.display(),
+                dir.display()
+            )
+            .into()
+        })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let filtered: Vec<&str> = stderr
+            .lines()
+            .filter(|line| !line.to_ascii_lowercase().contains("password="))
+            .collect();
+        let _ = fs::remove_dir_all(&dir);
+        return Err(format!(
+            "IMAGE-GENERATOR authdomain: {} -o {} failed ({}); the bake needs a fresh p9sk1 \
+             domain for image \"{}\"{}",
+            generator.display(),
+            dir.display(),
+            output.status,
+            manifest.image,
+            if filtered.is_empty() {
+                String::new()
+            } else {
+                format!("\n{}", filtered.join("\n"))
+            }
+        )
+        .into());
+    }
+    let creds_path = dir.join("auth-creds");
+    let creds = fs::read_to_string(&creds_path).map_err(|e| -> crate::DynError {
+        format!(
+            "IMAGE-GENERATOR authdomain: {} -o {} emitted no readable auth-creds: {e}",
+            generator.display(),
+            dir.display()
+        )
+        .into()
+    })?;
+    let (_, password) = parse_creds(&creds, &manifest.image)?;
+    emit_filtered(log, &output.stdout, Some(password));
+    emit_filtered(log, &output.stderr, Some(password));
+    let info = Command::new(generator)
+        .arg("-i")
+        .arg(&dir)
+        .current_dir(tree)
+        .output()
+        .map_err(|e| -> crate::DynError {
+            format!(
+                "IMAGE-GENERATOR authdomain: spawn {} -i {}: {e}",
+                generator.display(),
+                dir.display()
+            )
+            .into()
+        })?;
+    if !info.status.success() {
+        let _ = fs::remove_dir_all(&dir);
+        return Err(format!(
+            "IMAGE-GENERATOR authdomain-pairing: {} -i {} failed ({}); the authdom token is the \
+             ndb substitution source",
+            generator.display(),
+            dir.display(),
+            info.status
+        )
+        .into());
+    }
+    let stdout = String::from_utf8_lossy(&info.stdout);
+    let authdom = stdout.lines().find_map(|line| {
+        line.strip_prefix("authdom:").map(str::trim).filter(|value| !value.is_empty())
+    });
+    let Some(authdom) = authdom else {
+        let _ = fs::remove_dir_all(&dir);
+        return Err(format!(
+            "IMAGE-GENERATOR authdomain-pairing: {} -i {} printed no authdom token — the per-bake \
+             domain did not report its authdom, so the ndb substitution cannot be paired",
+            generator.display(),
+            dir.display()
+        )
+        .into());
+    };
+    let _ = writeln!(
+        log,
+        "image: authdomain generated a fresh p9sk1 domain for \"{}\" at {} (authdom {})",
+        manifest.image,
+        dir.display(),
+        authdom
+    );
+    Ok(GeneratedBake { authdomain_dir: Some(dir), authdom: Some(authdom.to_string()) })
+}
+
+/// The D-02 pairing assert over the STAGED copies: a scratch twin named
+/// with the produced artifacts, then `authdomain-gen -V`.  Refusal is
+/// `IMAGE-GENERATOR authdomain-pairing` and the twin is removed.
+fn verify_authdomain_pairing(
+    manifest: &Manifest,
+    stage_dir: &Path,
+    tree: &Path,
+    generator: &Path,
+    out_dir: &Path,
+    log: &mut dyn Write,
+) -> Result<()> {
+    let entries: Vec<&FileEntry> = manifest
+        .file
+        .iter()
+        .filter(|file| {
+            file.source == Source::Generated && file.generator.as_deref() == Some("authdomain")
+        })
+        .collect();
+    if entries.is_empty() {
+        return Ok(());
+    }
+    let verify = out_dir.join(format!("{}.authdom-verify", manifest.image));
+    if verify.exists() {
+        fs::remove_dir_all(&verify)?;
+    }
+    fs::create_dir_all(&verify)?;
+    for entry in &entries {
+        let member = entry.from.as_deref().unwrap_or_default();
+        let staged = stage_dir.join(image_rel(&entry.path));
+        fs::copy(&staged, verify.join(member)).map_err(|e| -> crate::DynError {
+            format!(
+                "IMAGE-GENERATOR authdomain-pairing: image \"{}\" cannot stage {} for the pairing \
+                 assert: {e}",
+                manifest.image, member
+            )
+            .into()
+        })?;
+    }
+    let output = Command::new(generator)
+        .arg("-V")
+        .arg(&verify)
+        .current_dir(tree)
+        .output()
+        .map_err(|e| -> crate::DynError {
+            format!(
+                "IMAGE-GENERATOR authdomain-pairing: spawn {} -V {}: {e}",
+                generator.display(),
+                verify.display()
+            )
+            .into()
+        })?;
+    if !output.status.success() {
+        let _ = fs::remove_dir_all(&verify);
+        return Err(format!(
+            "IMAGE-GENERATOR authdomain-pairing: {} -V REFUSED the staged copies for image \"{}\" \
+             ({}); the bake refuses, never ships unpaired auth material",
+            generator.display(),
+            manifest.image,
+            output.status
+        )
+        .into());
+    }
+    let _ = writeln!(
+        log,
+        "image: authdomain pairing verified over the staged copies for \"{}\"",
+        manifest.image
+    );
+    fs::remove_dir_all(&verify)?;
+    Ok(())
+}
+
+
 /// generators → two-way drift → Rust provenance → bake → member list.
 ///
 /// `harvey_roots` names every Harvey tree root in play for the provenance
@@ -1216,7 +1842,6 @@ fn assemble_checked_with(
     authdomain_gen: Option<&Path>,
     log: &mut dyn std::io::Write,
 ) -> Result<Assembled> {
-    let _ = (authdomain_gen, log);
     let text = fs::read_to_string(manifest_path).map_err(|e| -> crate::DynError {
         format!("image manifest {}: {e}", manifest_path.display()).into()
     })?;
@@ -1225,10 +1850,22 @@ fn assemble_checked_with(
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(out_dir)?;
+    let generated = generate_authdomain(&manifest, tree, out_dir, authdomain_gen, log)?;
     let stage_dir = out_dir.join(format!("{}.stage", manifest.image));
-    stage_full(&manifest, manifest_dir, tree, workspace, &stage_dir)?;
-    // Generators: the registry is empty in this plan; `validate` already
-    // refused every generated entry, so this step is the registry's seat.
+    stage_full_with(&manifest, manifest_dir, tree, workspace, &stage_dir, Some(&generated))?;
+    if let Some(domain_dir) = &generated.authdomain_dir {
+        let generator = authdomain_gen.ok_or_else(|| -> crate::DynError {
+            "R9_AUTHDOMAIN_GEN disappeared between the generate and pairing steps".into()
+        })?;
+        verify_authdomain_pairing(&manifest, &stage_dir, tree, generator, out_dir, log)?;
+        let creds_out = out_dir.join(format!("{}.creds", manifest.image));
+        write_creds(&domain_dir.join("auth-creds"), &creds_out, &manifest.image)?;
+        let _ = writeln!(log, "image: creds {} (mode 0600)", creds_out.display());
+        // The per-bake domain is consumed: only the staged copies (inside
+        // the stage dir) and the 0600 creds file remain under target/.
+        fs::remove_dir_all(domain_dir)?;
+    }
     let expected = expected_members(&manifest, manifest_dir)?;
     check_drift(&manifest, &expected, &stage_dir)?;
     check_provenance(&manifest, tree, harvey_roots, workspace)?;
@@ -1300,7 +1937,17 @@ pub fn input_paths(
                     inputs.push(workspace.join(from));
                 }
             }
-            Source::Generated | Source::Tree => {}
+            Source::Generated => {
+                if file.generator.as_deref() == Some("ndb-template") {
+                    if let Some(from) = &file.from {
+                        inputs.push(tree.join(from));
+                    }
+                }
+                if let Some(seam) = &file.seam {
+                    inputs.push(tree.join(seam));
+                }
+            }
+            Source::Tree => {}
         }
     }
     for tree_entry in &manifest.tree {
