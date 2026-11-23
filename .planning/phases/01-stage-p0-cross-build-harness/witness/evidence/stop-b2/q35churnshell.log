@@ -1,0 +1,9 @@
+# trimmed from witness/return-01-33/profiles/q35churnshell.log (444 lines):
+# the KVM profile now PASSES — the 01-33 registration fix routes it through
+# the real boot(8)->init->rc chain and exempts only the designed fauth line.
+# The per-profile serial capture stays on the host at
+# target/boot-test-q35churnshell.log (the boot-test command log is the
+# returned evidence).
+boot-test: PASS -- SeaBIOS -> GRUB2 -> mb2 kernel + chain-module boot: banner, memory facts, discovery, the NIC bind, the module-tag/paqfs mount notes, the exec-entry note, then the REAL boot(8)→init→rc chain's own ring-3 prints (paqfs/version handoffs, the init rc handoff) through to the interactive `% ` prompt, observed in order — XEXEC-03 leg 2 (D-08's staged chain on the proven exec substrate; the composed Harvey-side gate is 14-07's)
+boot-test: serial log written to /home/req/code/r9/target/boot-test-q35churnshell.log
+boot-test: captured 2689 bytes

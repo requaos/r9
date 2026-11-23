@@ -221,3 +221,277 @@ failed on the missing member list.
   check did not run.
 
 No later plan (01-23 to 01-28, 01-31) was started.
+
+## Stop B2 — plan 01-33, x86_64 KVM
+
+> **Superseded:** the gate, probe, flipback and kernel FAILs below were resolved
+> by stop B3 (see "Stop B3" at the end). This section is kept as history; the
+> current verdicts are the stop-B3 ones.
+
+- **Return:** `witness-src/01-33` at `9ec1d7c2aac92735cb5c74644802130172c07e48`;
+  return directory `witness/return-01-33/` in that commit (the trimmed evidence is
+  copied under `evidence/stop-b2/`; the return branch is not merged).
+- **Source HEAD:** `9af05f8b71e57a422c36b3a23e168399bb1c88b6` (the Task 1/2 fix
+  commit this plan produced).
+- **Host:** `teeniebox`, x86_64-linux, nix 2.35.6, `DEV_KVM=writable`.
+- **Session:** 2026-11-23T16:17:30Z → 2026-11-23T16:29:51Z.
+- **Summary:** `gate_neg`, `profiles` and `cpuauth_ref` PASS. `gate`, `probe`,
+  `flipback` and `kernel` are non-zero (7 selected steps: 3 PASS, 4 non-zero).
+  The gate's positive rio leg itself passed every stage in both runs; the probe
+  and flipback failures are a DIFFERENT defect from the gate teardown (their
+  historical clones carry the pre-01-33 driver). The kernel step now reaches the
+  boot-iso fixed-output check and finds a hash mismatch. No KVM verdict is claimed
+  for HARN-01/HARN-04 in this pass; the stop-B requirement stays open and no later
+  plan started.
+
+### Per-step verdicts
+
+VERDICT gate-kvm: FAIL
+EVIDENCE gate-kvm: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-b2/gate.log
+
+VERDICT gate-neg-kvm: PASS
+EVIDENCE gate-neg-kvm: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-b2/gate-neg.log
+
+VERDICT probe-kvm: FAIL
+EVIDENCE probe-kvm: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-b2/probe.log
+
+VERDICT flipback-kvm: FAIL
+EVIDENCE flipback-kvm: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-b2/flipback.log
+
+VERDICT profiles-kvm: PASS
+EVIDENCE profiles-kvm: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-b2/profiles.log
+
+VERDICT cpuauth-ref-kvm: PASS
+EVIDENCE cpuauth-ref-kvm: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-b2/cpuauth-ref.log
+
+VERDICT kernel-kvm: FAIL
+EVIDENCE kernel-kvm: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-b2/kernel.log
+
+### Decisive lines and root causes
+
+**gate (FAIL) — teardown defect, assertions green.** Both runs printed the D-28
+pair and `GATE-PASS rio-serving`, then all three post-pass ok lines:
+
+```
+/srv/rio.glenda.74
+/srv/riowctl.glenda.74
+% GATE-PASS rio-serving
+drawterm-gate: post-pass ok — zero cpurc: FAIL in the capture
+drawterm-gate: post-pass ok — zero kernel panic markers (drawterm's own sysfatal exit pair excluded)
+drawterm-gate: post-pass ok — the per-bake DEMO password redacted from the retained capture (T-01-58)
+GATE-FAIL rio-leg-failed (leg rio; capture .../154850-1795450687/rio.log)
+GATE-RUN 1 exit=nonzero
+```
+
+No `ALL STAGES PASS` line appears in either run (grep count 0). The final
+`cleanup`'s identity sweep ran `pgrep -f 'qemu-system|Xvfb|drawterm'`: the
+driver's own argv (`drawterm-gate.expect`) and the run tag in its environment
+matched, so the sweep SIGTERMed the expect process before the PASS print. Fixed
+in this plan: the sweep excludes its own caller chain, cleanup guards every pid
+read and catches the sweep/redaction, and the final success cleanup is caught
+(a teardown warning cannot mask the verdict). A targeted rerun is pending.
+
+**gate_neg (PASS).** The failing direction reached its assertion:
+
+```
+drawterm-gate: GATE-FAIL rio-not-serving — no rio.<user>.<pid> + riowctl.<user>.<pid> pair ...
+GATE-NEG-EXPECTED-FAIL
+```
+
+**probe (FAIL) — historical clone's driver, not the teardown.** The probe build
+and image assembly succeeded, then the clone at `PROBE_FLIP_SHA` (064747f4)
+aborted in its own pre-01-33 driver:
+
+```
+probe: 96 flat bytes -> 136 a.out bytes .../ps.aout
+GATE-FAIL ... (leg rio ...)
+can't read "spawn_id": no such variable
+"expect_before -i $spawn_id { ... (file .../gates/x86_64/drawterm-gate.expect line 336)
+```
+
+The witness step now overlays this checkout's fixed driver into the throwaway
+clone; the image and the swapped `ps` stay at the exact SHA. A targeted rerun is
+pending.
+
+**flipback (FAIL) — same historical-clone driver defect.** The flip-back clone
+assembled the 4442-member cpu image, then hit the same line-336 abort at
+`PROBE_FLIPBACK_SHA` (af7df344). The fixed-driver overlay applies here too; a
+targeted rerun is pending.
+
+**profiles (PASS).** All nine profiles exited 0:
+
+```
+PROFILE q35 exit=0
+PROFILE q35lowmcfg exit=0
+PROFILE q35net exit=0
+PROFILE q35exec exit=0
+PROFILE q35churn exit=0
+PROFILE q35shell exit=0
+PROFILE q35churnshell exit=0
+PROFILE q35cpu exit=0
+PROFILE q35auth exit=0
+```
+
+`q35churnshell` PASS is the 01-33 registration fix working under KVM (the
+real-chain fauth line exempted; the chain stages asserted through the `% `
+prompt).
+
+**cpuauth_ref (PASS).** The realised reference path was used for both compares:
+
+```
+CPUAUTH-REF-REALISED /nix/store/mxx5qyijchxaff7cg61y4nwvjvjbbmi4-harvey-reference-amd64-0
+image: x86_64/cpu ... members 4442
+image: x86_64/cpu matches the reference member list (4442 members)
+CPUAUTH-REF cpu exit=0
+image: x86_64/auth ... members 95
+image: x86_64/auth matches the reference member list (95 members)
+CPUAUTH-REF auth exit=0
+```
+
+**kernel (FAIL) — stale boot-iso fixed-output hash.** The plain build now runs
+(the 01-33 precondition fix worked), and the fixed-output check found a mismatch:
+
+```
+KERNEL-STORE /nix/store/imb1n1k67mpiv0v2cn0wr0vj8nw1pcc0-r9-kernel-x64-9af05f8
+4228a1bf1408a7f06d942fa847b6ca25d7bfbd5a400ce9190b602d3b365f32e1  .../kernel-x64.elf
+error: hash mismatch in fixed-output derivation '...-r9-boot-iso-9af05f8.drv':
+         specified: sha256-TIzwBaHF0R4m31l6EbW2IU3rkUl73g6ljlNE0S5hGFY=
+            got:    sha256-xFt7GUshPv+CQNry48fBOAiCsCIuqGZfeC0eX11/8mc=
+KERNEL-BOOTISO-BUILD-FAIL
+```
+
+This is the long-owed Linux boot-iso kernel-byte check, not a harness defect.
+No option is chosen here; the decision is the owner's (below).
+
+### HARN status (stop B2)
+
+- **HARN-01** — not witnessed: gate is non-zero on its teardown (assertions
+  green; fix pending rerun); gate_neg PASSED.
+- **HARN-04** — not witnessed: probe/flipback aborted in their historical
+  clones' pre-01-33 driver (overlay fix pending rerun).
+- **HARN-06 (x86_64 half)** — PASS: 9/9 profiles, `q35churnshell` included.
+- **HARN-07** — both trees remained green at stop B; the boot-iso fixed-output
+  check is still red on the stale x86_64 hash.
+
+No later plan (01-26 and later) was started.
+
+### Boot-iso decision (owner, pending)
+
+The fixed-output hash must be resolved before the kernel step can pass; no option
+is chosen by this plan:
+
+- **(a)** Re-derive and commit the x86_64 `boot-iso` outputHash from the owner's
+  x86_64-linux host (the standing kernel-byte-change procedure), then rerun the
+  kernel step.
+- **(b)** Investigate the cross-builder reproducibility difference first.
+- **(c)** Re-scope the Linux boot-iso fixed-output check.
+
+## Stop B3 — plan 01-33, x86_64 KVM
+
+- **Return:** `witness-src/01-33` at `02b1b5d5b126901969b83cb47f7dcdc77a1b9831`;
+  return directory `witness/return-01-33/` in that commit (trimmed evidence copied
+  under `evidence/stop-b3/`).
+- **Source HEAD:** `4139fdf86ef3cd3f2455c5b1359e80c27d48d098` (the boot-iso
+  outputHash re-derivation commit).
+- **Host:** `teeniebox`, x86_64-linux, nix 2.35.6, `DEV_KVM=writable`.
+- **Session:** 2026-11-23T16:44:41Z → 2026-11-23T17:00:16Z.
+- **Summary:** every selected step PASS (kernel, gate, gate_neg, probe, flipback).
+  `profiles` (9/9, q35churnshell included) and `cpuauth_ref` (cpu 4442, auth 95)
+  are carried from stop B2. The only outstanding check is the amd64 TCG gate on
+  the owner's x86_64 host (PENDING below).
+
+### Per-step verdicts
+
+VERDICT gate-kvm: PASS
+EVIDENCE gate-kvm: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-b3/gate.log
+
+VERDICT gate-neg-kvm: PASS
+EVIDENCE gate-neg-kvm: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-b3/gate-neg.log
+
+VERDICT probe-kvm: PASS
+EVIDENCE probe-kvm: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-b3/probe.log
+
+VERDICT flipback-kvm: PASS
+EVIDENCE flipback-kvm: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-b3/flipback.log
+
+VERDICT kernel-kvm: PASS
+EVIDENCE kernel-kvm: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-b3/kernel.log
+
+VERDICT profiles-kvm: PASS
+EVIDENCE profiles-kvm: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-b2/profiles.log
+
+VERDICT cpuauth-ref-kvm: PASS
+EVIDENCE cpuauth-ref-kvm: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-b2/cpuauth-ref.log
+
+### Decisive lines
+
+**gate (PASS).** Both runs exited 0 and BOTH legs printed `ALL STAGES PASS`:
+
+```
+% GATE-PASS rio-serving
+drawterm-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, encrypted drawterm session, serial /srv shows rio + riowctl (GATE-PASS rio-serving)
+% GATE-PASS control-no-rio
+drawterm-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, -G control session, serial /srv shows neither rio entry (GATE-PASS control-no-rio)
+GATE-RUN 1 exit=0
+...
+GATE-RUN 2 exit=0
+```
+
+**gate_neg (PASS).** `GATE-FAIL rio-not-serving` then `GATE-NEG-EXPECTED-FAIL`.
+
+**probe (PASS).** The probe build produced the 136-byte a.out and the gate's
+serial check observed the marker after `/bin/ps`; both legs printed ALL STAGES PASS:
+
+```
+probe: 96 flat bytes -> 136 a.out bytes .../ps.aout
+% GATE-PASS rio-serving
+/bin/ps
+R9-RUST-AOUT-PROBE-OK
+drawterm-gate: stage ok — serial-check 'R9-RUST-AOUT-PROBE-OK' present after '/bin/ps'
+drawterm-gate: ALL STAGES PASS — ... rio-serving
+```
+
+**flipback (PASS).** The flip-back clone assembled the 4442-member cpu image;
+both legs printed `ALL STAGES PASS` and the wrapper exited 0.
+
+**kernel (PASS).** The re-derived boot-iso hash now matches and `--rebuild`
+succeeds:
+
+```
+KERNEL-STORE /nix/store/y56rpqda7cpglr41yyr0h5qqrm20ra8y-r9-kernel-x64-4139fdf
+4228a1bf1408a7f06d942fa847b6ca25d7bfbd5a400ce9190b602d3b365f32e1  .../kernel-x64.elf
+KERNEL-BOOTISO-STORE /nix/store/bx1bbayxf2y99xysqcn7p1kxzjrkifwb-r9-boot-iso-4139fdf
+KERNEL-BOOTISO-BUILD-OK
+KERNEL-BOOTISO-REBUILD-OK
+```
+
+**Boot-iso hash re-derivation.** Commit `4139fdf` re-derived the x86_64
+`boot-iso` outputHash from the owner's x86_64-linux host (option (a), the
+standing kernel-byte-change procedure). The stop-B2 mismatch
+(`specified TIzw…` vs `got xFt7…`) is resolved: the committed hash now names
+`sha256-xFt7GUshPv+CQNry48fBOAiCsCIuqGZfeC0eX11/8mc=`, and the kernel ELF sha
+stays `4228a1bf1408a7f06d942fa847b6ca25d7bfbd5a400ce9190b602d3b365f32e1`.
+
+### gate-tcg
+
+VERDICT gate-tcg: PASS
+EVIDENCE gate-tcg: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-b3/gate-tcg.txt
+The owner ran `cargo xtask gate --arch x86-64 --accel tcg` on the x86_64 host and
+reported `GATE-PASS control-no-rio`. The control leg runs only after the rio leg,
+so the TCG gate completed green; the amd64 TCG check in the standing kernel-byte
+procedure is satisfied.
+
+### HARN status (stop B3)
+
+- **HARN-01** — PASS: gate green twice (rio + control legs, ALL STAGES PASS) and
+  gate_neg reached the expected failing direction.
+- **HARN-04** — PASS: the probe's serial `/bin/ps` marker observed, and the
+  flipback leg green.
+- **HARN-06 (x86_64 half)** — PASS: 9/9 profiles, q35churnshell included.
+- **HARN-07** — PASS: both trees green at stop B and the boot-iso fixed-output
+  check now builds and re-checks (`KERNEL-BOOTISO-REBUILD-OK`).
+
+The amd64 TCG gate remains the one pending check before phase close-out; no
+later plan (01-26 and later) was started.
+
+

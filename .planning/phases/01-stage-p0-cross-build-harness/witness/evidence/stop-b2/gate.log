@@ -1,0 +1,34 @@
+# trimmed from witness/return-01-33/gate/gate.log (1025 lines): run boundaries
+# and the decisive teardown lines.  BOTH positive runs passed every stage and
+# printed GATE-PASS rio-serving with the D-28 pair on the serial /srv listing;
+# neither printed ALL STAGES PASS (grep count 0).  The driver's final identity
+# sweep matched its own argv/environment and SIGTERMed the expect process, so
+# the wrapper saw a non-zero exit and labelled the leg GATE-FAIL rio-leg-failed.
+# Fixed in 01-33 (sweep excludes its caller chain; final cleanup caught); a
+# targeted rerun is pending.
+
+== gate run 1/2 ==
+...
+/srv/rio.glenda.74
+/srv/riowctl.glenda.74
+process 80 exited: ""
+% GATE-PASS rio-serving
+...
+drawterm-gate: stage ok — serial /srv shows rio and riowctl (D-28 marker)
+drawterm-gate: post-pass ok — zero cpurc: FAIL in the capture
+drawterm-gate: post-pass ok — zero kernel panic markers (drawterm's own sysfatal exit pair excluded)
+drawterm-gate: post-pass ok — the per-bake DEMO password redacted from the retained capture (T-01-58)
+GATE-FAIL rio-leg-failed (leg rio; capture /home/req/code/r9/target/gate/154850-1795450687/rio.log)
+GATE-RUN 1 exit=nonzero
+== gate run 2/2 ==
+...
+/srv/rio.glenda.74
+/srv/riowctl.glenda.74
+process 80 exited: ""
+% GATE-PASS rio-serving
+...
+drawterm-gate: post-pass ok — zero cpurc: FAIL in the capture
+drawterm-gate: post-pass ok — zero kernel panic markers (drawterm's own sysfatal exit pair excluded)
+drawterm-gate: post-pass ok — the per-bake DEMO password redacted from the retained capture (T-01-58)
+GATE-FAIL rio-leg-failed (leg rio; capture /home/req/code/r9/target/gate/164734-1795450821/rio.log)
+GATE-RUN 2 exit=nonzero

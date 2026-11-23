@@ -140,20 +140,34 @@ if {$x11_leg} {
 }
 
 # --- teardown: recorded pids plus this run's identity ------------------
+# The identity sweep must never kill its OWN caller chain.  `pgrep -f`
+# matches this driver's argv ("drawterm-gate.expect") and the wrapper's,
+# and both carry the run tag in their environment — so an unguarded sweep
+# SIGTERMs the expect process itself before the PASS print, producing a
+# silent non-zero exit (stop B2's "GATE-FAIL rio-leg-failed" with every
+# stage green).  The sweep takes this driver's pid and excludes it plus
+# every ancestor up to init.
 proc sweep_identity {} {
 	global run_tag gate_dir
 	catch {
 		exec bash -c {
 			tag=$1
 			dir=$2
+			self=$3
+			excl=" "
+			p=$self
+			while [ -n "$p" ] && [ "$p" -gt 1 ] 2>/dev/null; do
+				excl="$excl$p "
+				p=$(sed -n 's/^PPid:[[:space:]]*//p' "/proc/$p/status" 2>/dev/null | head -1)
+			done
 			for p in $(pgrep -u "$(id -u)" -f 'qemu-system|Xvfb|drawterm' 2>/dev/null || true); do
-				[ "$p" = "$$" ] && continue
+				case "$excl" in *" $p "*) continue ;; esac
 				if tr '\0' '\n' <"/proc/$p/cmdline" 2>/dev/null | grep -qF -e "$tag" -e "$dir" || \
 				   tr '\0' '\n' <"/proc/$p/environ" 2>/dev/null | grep -qF -e "$tag" -e "$dir"; then
 					kill "$p" 2>/dev/null || true
 				fi
 			done
-		} sweep "$run_tag" "$gate_dir"
+		} sweep "$run_tag" "$gate_dir" [pid]
 	}
 }
 
@@ -190,17 +204,22 @@ proc redact_capture {} {
 
 proc cleanup {} {
 	global qemu_pid dt_pid xvfb_pid
-	catch { exec kill -KILL -- -$qemu_pid 2>/dev/null }
-	catch { exec kill -KILL $qemu_pid 2>/dev/null }
-	if {[info exists dt_pid]} {
+	# Every read is guarded (stop B2): cleanup runs on error paths too,
+	# and an unset pid must be a no-op, never a Tcl error that masks the
+	# leg's own verdict.
+	if {[info exists qemu_pid] && $qemu_pid ne ""} {
+		catch { exec kill -KILL -- -$qemu_pid 2>/dev/null }
+		catch { exec kill -KILL $qemu_pid 2>/dev/null }
+	}
+	if {[info exists dt_pid] && $dt_pid ne ""} {
 		catch { exec kill -KILL -- -$dt_pid 2>/dev/null }
 		catch { exec kill -KILL $dt_pid 2>/dev/null }
 	}
-	if {$xvfb_pid ne ""} {
+	if {[info exists xvfb_pid] && $xvfb_pid ne ""} {
 		catch { exec kill -KILL $xvfb_pid 2>/dev/null }
 	}
-	sweep_identity
-	redact_capture
+	catch { sweep_identity }
+	catch { redact_capture }
 }
 
 # --- staged ordered assertions (each stage names its failure) ---------
@@ -328,24 +347,6 @@ proc start_xvfb {} {
 	return $pid
 }
 
-# --- fast-fail on the SERIAL stream (the qemu pty only) ----------------
-# Registered against the qemu spawn id, so these arms can never
-# false-match the drawterm session's own output (its teardown prints
-# `panic: sysfatal', the client-side exit pair the whole-capture scan
-# excludes).
-expect_before -i $spawn_id {
-	-re {panic|Unhandled interrupt} {
-		puts stderr "drawterm-gate: kernel panic marker on the wire — aborting"
-		cleanup
-		exit 1
-	}
-	-re {cpurc: FAIL} {
-		puts stderr "drawterm-gate: cpurc printed a FAIL marker — aborting (the failing leg is named on the wire)"
-		cleanup
-		exit 1
-	}
-}
-
 # --- subtree 1: spawn qemu with the cpu ISO ----------------------------
 set R9_MACHINE [expr {[info exists env(R9_MACHINE)] ? $env(R9_MACHINE) : "q35"}]
 set R9_CPU [expr {[info exists env(R9_CPU)] ? $env(R9_CPU) : "host"}]
@@ -371,6 +372,28 @@ spawn $QEMU -M $R9_MACHINE -cpu $R9_CPU -smp 1 -m 1024M \
 set qemu_sid $spawn_id
 set qemu_pid [exp_pid]
 log_file $env(R9_SMOKE_LOG)
+
+# --- fast-fail on the SERIAL stream (the qemu pty only) ----------------
+# Registered AFTER the qemu spawn, against its recorded id: the id does
+# not exist before `spawn`, and registering there killed the driver with
+# `can't read "spawn_id": no such variable` (stop B).  Scoping to the
+# qemu id keeps these arms from false-matching the drawterm session's own
+# output (its teardown prints `panic: sysfatal', the client-side exit
+# pair the whole-capture scan excludes).  The static guard for the
+# ordering is the `driver_fast_fail_registers_after_the_qemu_spawn` test
+# in xtask/src/gate.rs.
+expect_before -i $qemu_sid {
+	-re {panic|Unhandled interrupt} {
+		puts stderr "drawterm-gate: kernel panic marker on the wire — aborting"
+		cleanup
+		exit 1
+	}
+	-re {cpurc: FAIL} {
+		puts stderr "drawterm-gate: cpurc printed a FAIL marker — aborting (the failing leg is named on the wire)"
+		cleanup
+		exit 1
+	}
+}
 
 # --- 1. the boot ladder (EMISSION order) ------------------------------
 stage banner	{r9 from the Internet}
@@ -559,7 +582,11 @@ if {$gate_mode eq "session"} {
 
 	puts stderr "drawterm-gate: ALL STAGES PASS — cpu boot through the cpurc ladder (PAIR-OK, ETHER-OK, KEYFS-OK, AUTHSRV-LISTEN, FACTOTUM-OK, LISTEN-17010, DONE), the hostfwd pair observed host-side (17010 + 5670), drawterm -G on a pty through the committed pair, the p9any -> p9sk1 password feedstage, the encrypted session, the remote shell prompt, the fed command's echo, the session teardown, the serial drain carrying tr-ok, zero FAIL, zero kernel panic, the capture redacted"
 
-	cleanup
+	# Same final-teardown contract as the rio family (stop B2): hygiene
+	# cannot turn a green leg into a non-zero exit.
+	if {[catch {cleanup} cleanup_err]} {
+		puts stderr "drawterm-gate: teardown warning — cleanup failed ($cleanup_err); the assertions above stand"
+	}
 	exit 0
 }
 
@@ -736,7 +763,12 @@ puts stderr "drawterm-gate: post-pass ok — zero kernel panic markers (drawterm
 redact_capture
 puts stderr "drawterm-gate: post-pass ok — the per-bake DEMO password redacted from the retained capture (T-01-58)"
 
-cleanup
+# The final teardown is a hygiene step, not an assertion (stop B2): a
+# cleanup failure is reported as a teardown warning and cannot mask the
+# green verdict above.  The error paths keep their `cleanup; exit 1`.
+if {[catch {cleanup} cleanup_err]} {
+	puts stderr "drawterm-gate: teardown warning — cleanup failed ($cleanup_err); the assertions above stand"
+}
 if {$rio_leg} {
 	puts stderr "drawterm-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, encrypted drawterm session, serial /srv shows rio + riowctl (GATE-PASS rio-serving)"
 } else {

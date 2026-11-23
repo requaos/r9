@@ -1286,13 +1286,14 @@ const NETIP_V6_SLIRP_NA: bool = true;
 /// the NIC's IRQ source, any `unhandled IRQ <n>` line is a bind-ordering
 /// bug, not a cosmetic — none of the pre-net profiles emit it today.
 ///
-/// Profile-aware: the Net profile rides the REAL Harvey boot chain, whose
-/// boot(8) auth handshake calls fauth — syscall 10 is loud-None by design
+/// Profile-aware: every profile that rides the REAL Harvey boot chain
+/// (net, netip, q35shell, q35churnshell, q35cpu) boots through boot(8)'s
+/// auth handshake, which calls fauth — syscall 10 is loud-None by design
 /// (D-02), printing `syscall 10 unimplemented` on every real-chain boot.
-/// For the net profile exactly that ONE line is exempt; any OTHER
+/// For those profiles exactly that ONE line is exempt; any OTHER
 /// unimplemented-syscall line (a traced-set miss) still fails the run,
 /// and every other pattern applies unchanged.
-fn negative_scan_hit_for(capture: &[u8], net_profile: bool) -> Option<&'static str> {
+fn negative_scan_hit_for(capture: &[u8], exempt_boot_fauth: bool) -> Option<&'static str> {
     let lower: Vec<u8> = capture.iter().map(|b| b.to_ascii_lowercase()).collect();
     if contains_marker(&lower, b"panic") {
         Some("panic")
@@ -1302,21 +1303,21 @@ fn negative_scan_hit_for(capture: &[u8], net_profile: bool) -> Option<&'static s
         Some("unhandled IRQ")
     } else if contains_marker(&lower, b"note-timeout") {
         Some("note-timeout")
-    } else if unimplemented_hit(&lower, net_profile) {
+    } else if unimplemented_hit(&lower, exempt_boot_fauth) {
         Some("unimplemented syscall")
     } else {
         None
     }
 }
 
-/// The `unimplemented` arm, line-wise so the Net profile can exempt the
-/// D-02 designed fauth line while still failing any other
+/// The `unimplemented` arm, line-wise so a real-chain profile can exempt
+/// the D-02 designed fauth line while still failing any other
 /// unimplemented-syscall hit.
-fn unimplemented_hit(lower: &[u8], net_profile: bool) -> bool {
+fn unimplemented_hit(lower: &[u8], exempt_boot_fauth: bool) -> bool {
     if !contains_marker(lower, b"unimplemented") {
         return false;
     }
-    if !net_profile {
+    if !exempt_boot_fauth {
         return true;
     }
     lower.split(|b| *b == b'\n').any(|line| {
@@ -2158,6 +2159,14 @@ impl BootTestStep {
         // CHAIN bake (bootfs-chain.paq — the marker bake stays
         // bootfs.paq for q35exec).
         let q35shell_profile = self.arch == Arch::X86_64 && self.config_name == "q35shell";
+        // The Q35CHURNSHELL profile ("q35churnshell", the composed venue's
+        // kernel: config_q35shell VERBATIM plus dev_churn) rides the SAME
+        // real Harvey boot chain as q35shell — dev_churn+dev_bootchain keeps
+        // the normal chain (the churn driver never runs), so every chain
+        // stage and the designed boot-chain fauth exemption apply here too
+        // (01-33; stop B failed it at the tick stage on syscall 10).
+        let q35churnshell_profile =
+            self.arch == Arch::X86_64 && self.config_name == "q35churnshell";
         // The Q35CPU profile ("q35cpu", 19-01's CPU-02 tracer) — the
         // bootconf seam's gate: dev = ["exec", "bootchain"] (the chain
         // without ether/ip — the tracer needs no net; the NIC stays
@@ -2183,7 +2192,7 @@ impl BootTestStep {
             // syscall — still fails the run.  The netip profile rides the
             // same real boot chain — the same single-line exemption, and
             // so does the q35cpu tracer (the same boot(8) fauth path).
-            if !panic_profile && let Some(hit) = negative_scan_hit_for(&capture, net_profile || netip_profile || q35shell_profile || q35cpu_profile) {
+            if !panic_profile && let Some(hit) = negative_scan_hit_for(&capture, net_profile || netip_profile || q35shell_profile || q35cpu_profile || q35churnshell_profile) {
                 return Err(self.fail(stage, &capture, &format!("negative scan hit {hit:?}")));
             }
             // The q35net fail-fast (13-05): the kernel netgate's own
@@ -2324,11 +2333,13 @@ impl BootTestStep {
                             .map(|p| pci_after + p)
                             .unwrap_or(capture.len());
                             stage = BootStage::X64Bind;
-                        } else if q35shell_profile {
+                        } else if q35shell_profile || q35churnshell_profile {
                             // 14-06: the chain profile carries ether (the
                             // virtshell membership) — assert the bind half
                             // first (the /net substrate 14-09 consumes),
-                            // the same positional-anchor discipline.
+                            // the same positional-anchor discipline.  01-33:
+                            // q35churnshell is the same chain (dev_churn
+                            // never routes to the driver under dev_bootchain).
                             bind_after = last_marker_line_end(
                                 &capture[pci_after..],
                                 PCI_NET_DEVICE_MARKER,
@@ -2410,7 +2421,7 @@ impl BootTestStep {
                         // instead — its exec bootstrap never runs the
                         // kernel-side netgate.
                         bind_after = capture.len();
-                        stage = if q35shell_profile {
+                        stage = if q35shell_profile || q35churnshell_profile {
                             BootStage::Q35ModulePaqfs
                         } else {
                             BootStage::X64PingPong
@@ -2493,7 +2504,7 @@ impl BootTestStep {
                         // cpu tracer (19-01) rides the chain profile's
                         // arm — its pid 1 is the same real boot(8).
                         bind_after = capture.len();
-                        stage = if q35shell_profile || q35cpu_profile {
+                        stage = if q35shell_profile || q35churnshell_profile || q35cpu_profile {
                             BootStage::Q35ChainBoot
                         } else if q35auth_profile {
                             BootStage::Q35SubstratePrints
@@ -5009,12 +5020,19 @@ mod tests {
         assert_eq!(negative_scan_hit_for(b"unhandled irq 36\r\n", true), Some("unhandled IRQ"));
     }
 
-    /// The Net profile exempts exactly the D-02 designed fauth line (the
-    /// real Harvey chain prints `syscall 10 unimplemented` twice a boot);
-    /// any OTHER unimplemented syscall still fails the run.
+    /// The real-boot-chain profiles (net, netip, q35shell, q35churnshell,
+    /// q35cpu) exempt exactly the D-02 designed fauth line (boot(8)'s
+    /// auth handshake prints `syscall 10 unimplemented`, now pid-tagged
+    /// by the kernel); any OTHER unimplemented syscall still fails the run.
     #[test]
-    fn negative_scan_net_exempts_fauth_only() {
+    fn negative_scan_exempts_boot_fauth_only() {
         assert_eq!(negative_scan_hit_for(b"syscall 10 unimplemented\r\n", true), None);
+        // 01-33: the kernel's line now names its caller; the exemption is
+        // a prefix match, so the pid/process suffix must not defeat it.
+        assert_eq!(
+            negative_scan_hit_for(b"syscall 10 unimplemented (pid 2 boot)\r\n", true),
+            None
+        );
         assert_eq!(
             negative_scan_hit_for(b"syscall 10 unimplemented\r\n", false),
             Some("unimplemented syscall")

@@ -1,0 +1,28 @@
+# trimmed from witness/return-01-33/probe/probe.log (847 lines): the probe
+# build succeeded and the gate's serial check observed the Rust a.out marker
+# after /bin/ps.  Both legs printed ALL STAGES PASS.
+probe: 96 flat bytes -> 136 a.out bytes at /home/req/r9-witness-work/r9-probe-flip/target/probe/x86_64/ps.aout
+probe: /home/req/r9-witness-work/r9-probe-flip/target/probe/x86_64/ps.aout (136 bytes)
+...
+Running `target/debug/xtask gate --arch x86-64 --accel kvm --serial-check /bin/ps=R9-RUST-AOUT-PROBE-OK`
+...
+/srv/rio.glenda.74
+/srv/riowctl.glenda.74
+process 80 exited: ""
+% GATE-PASS rio-serving
+/bin/ps
+R9-RUST-AOUT-PROBE-OK
+...
+drawterm-gate: stage ok — serial-check 'R9-RUST-AOUT-PROBE-OK' present after '/bin/ps'
+drawterm-gate: post-pass ok — zero cpurc: FAIL in the capture
+drawterm-gate: post-pass ok — zero kernel panic markers (drawterm's own sysfatal exit pair excluded)
+drawterm-gate: post-pass ok — the per-bake DEMO password redacted from the retained capture (T-01-58)
+drawterm-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, encrypted drawterm session, serial /srv shows rio + riowctl (GATE-PASS rio-serving)
+...
+% ls /srv
+/srv/boot
+/srv/factotum
+process 80 exited: ""
+% GATE-PASS control-no-rio
+...
+drawterm-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, -G control session, serial /srv shows neither rio entry (GATE-PASS control-no-rio)

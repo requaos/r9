@@ -704,6 +704,42 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// Stop B2: the positive rio leg passed every stage but died in the
+    /// final teardown — the identity sweep's `pgrep -f` matched the
+    /// driver's own argv and environment (both carry the run tag), so it
+    /// SIGTERMed the expect process before `ALL STAGES PASS`.  The final
+    /// cleanup is now caught (a teardown warning cannot mask the green
+    /// verdict), the sweep excludes its own caller chain, and cleanup
+    /// guards every pid read.
+    #[test]
+    fn driver_final_teardown_cannot_mask_a_passing_leg() {
+        const DRIVER: &str = include_str!("../../gates/x86_64/drawterm-gate.expect");
+        let cleanup = DRIVER
+            .rfind("if {[catch {cleanup} cleanup_err]}")
+            .expect("the final cleanup is caught");
+        let pass = DRIVER
+            .rfind("ALL STAGES PASS")
+            .expect("the green verdict prints");
+        assert!(
+            cleanup < pass,
+            "the final caught cleanup must precede the last ALL STAGES PASS print (cleanup at \
+             {cleanup}, PASS at {pass})"
+        );
+        assert!(
+            DRIVER.contains("catch { sweep_identity }")
+                && DRIVER.contains("catch { redact_capture }"),
+            "cleanup must catch the identity sweep and the capture redaction"
+        );
+        assert!(
+            DRIVER.contains("if {[info exists qemu_pid] && $qemu_pid ne \"\"}"),
+            "cleanup must guard its pid reads with info exists"
+        );
+        assert!(
+            DRIVER.contains("case \"$excl\" in *\" $p \"*) continue ;;"),
+            "the identity sweep must exclude its own caller chain (expect + ancestors)"
+        );
+    }
+
     #[test]
     fn full_tier_lists_are_complete() {
         let x86_64 = full_apps(Arch::X86_64);
@@ -728,5 +764,34 @@ mod tests {
         assert_eq!(aarch64.len(), 4);
 
         assert!(full_apps(Arch::Riscv64).is_empty());
+    }
+
+    /// The moved driver's fast-fail block registers against the qemu
+    /// spawn id AFTER the qemu `spawn` (01-33).  Stop B's failure was
+    /// `can't read "spawn_id": no such variable`: the block sat before
+    /// the spawn, so every gate/gate-neg/probe/flipback leg died with a
+    /// Tcl error before its real assertion.  The guard is static by
+    /// construction — the committed driver IS the literal the gate runs,
+    /// and `include_str!` keeps the check tied to it (no fixture copy to
+    /// drift).
+    #[test]
+    fn driver_fast_fail_registers_after_the_qemu_spawn() {
+        const DRIVER: &str = include_str!("../../gates/x86_64/drawterm-gate.expect");
+        let spawn = DRIVER
+            .find("spawn $QEMU")
+            .expect("the qemu spawn line is present");
+        let register = DRIVER
+            .find("expect_before -i $qemu_sid")
+            .expect("the fast-fail block registers against the qemu spawn id");
+        assert!(
+            register > spawn,
+            "the expect_before registration must follow the qemu spawn (spawn at {spawn}, \
+             registration at {register})"
+        );
+        assert!(
+            !DRIVER.contains("expect_before -i $spawn_id"),
+            "the fast-fail block must not register against the bare spawn_id — it is undefined \
+             before the spawn and aborts the driver"
+        );
     }
 }

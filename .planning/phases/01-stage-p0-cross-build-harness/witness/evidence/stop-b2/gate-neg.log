@@ -1,0 +1,5 @@
+# trimmed from witness/return-01-33/gate-neg/gate-neg.log (541 lines): the
+# failing direction reached its assertion and named the expected marker.
+drawterm-gate: GATE-FAIL rio-not-serving — no rio.<user>.<pid> + riowctl.<user>.<pid> pair in the serial /srv listing within the budget
+GATE-FAIL force-no-rio-leg-failed (leg force-no-rio; capture /home/req/code/r9/target/gate/174412-1795450955/force-no-rio.log)
+GATE-NEG-EXPECTED-FAIL

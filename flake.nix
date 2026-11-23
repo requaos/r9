@@ -972,7 +972,15 @@ WRAP
             # NAR sha256-0ahIuT..., three-way agreed with the FOD's
             # own measured got-value (the realization with this hash
             # wired built green).
-            outputHash = "sha256-TIzwBaHF0R4m31l6EbW2IU3rkUl73g6ljlNE0S5hGFY=";
+            # 2026-11-23 (stop B2 / plan 01-33, owner-approved): the
+            # owner's x86_64-linux host built boot-iso at 9af05f8 and
+            # measured NAR sha256-xFt7GUshPv+CQNry48fBOAiCsCIuqGZfeC0eX11/8mc=
+            # (the long-owed linux check). Re-derived through the
+            # owner's standing kernel-byte procedure; replaces the
+            # 06b94f8-era TIzw value. The native amd64 host is the TCG
+            # venue (the Docker container is not required when the
+            # owner's host is already amd64).
+            outputHash = "sha256-xFt7GUshPv+CQNry48fBOAiCsCIuqGZfeC0eX11/8mc=";
           };
         });
 

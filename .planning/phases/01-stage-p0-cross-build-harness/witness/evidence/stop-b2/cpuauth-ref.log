@@ -1,0 +1,12 @@
+# trimmed from witness/return-01-33/cpuauth-ref/cpuauth-ref.log (152 lines):
+# the fixed step realised the lazy reference FIRST, then both compares matched
+# the reference member lists.
+CPUAUTH-REF-REALISED /nix/store/mxx5qyijchxaff7cg61y4nwvjvjbbmi4-harvey-reference-amd64-0
+...
+image: x86_64/cpu /home/req/code/r9/target/images/x86_64/cpu.paq sha256 9ce2f6b01d1393123ba2ef04c10801864ce78185ce20daa292255473f23c17de members 4442
+image: x86_64/cpu matches the reference member list (4442 members)
+CPUAUTH-REF cpu exit=0
+...
+image: x86_64/auth /home/req/code/r9/target/images/x86_64/auth.paq sha256 adb7b108e1bd06a2838c11ad2361d440431ae83511b418e438b0f026d8b0f26f members 95
+image: x86_64/auth matches the reference member list (95 members)
+CPUAUTH-REF auth exit=0

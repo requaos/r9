@@ -1,0 +1,5 @@
+# Owner report — amd64 TCG gate (stop B3), 2026-11-23
+# Venue: owner's x86_64-linux host (native amd64; Docker not required).
+command: cargo xtask gate --arch x86-64 --accel tcg
+result: GATE-PASS control-no-rio
+note: the control leg runs only after the rio leg, so the gate completed green.
