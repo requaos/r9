@@ -46,9 +46,13 @@ sandbox); **x86_64 Linux witness** is the owner's KVM host used by Plan 06
 
 The five FAILs are findings with evidence: unshare is refused on both measured
 builders (S1, two legs); `nix copy --from` into the Mac system store is refused
-by signature policy as the owner's user (S2); the rio leg authenticated but
-timed out at the password-feed stage (S3); and the second `mkimage.sh` bake
-aborts at the auth bake, so no determinism comparison ran (S3).
+by signature policy as the owner's user (S2); the rio leg's headless drawterm
+never authenticated, because the generated DEMO password for glenda was not
+known, so the driver timed out at the password-feed stage (S3); and the second
+`mkimage.sh` bake aborts at the auth bake, so no determinism comparison ran
+(S3). The `tr-ok` line in the rio capture is the owner's manual graphical
+drawterm attempt, not the gate's headless session (owner clarification,
+2026-11-23; see DECISION 5).
 
 SPIKE S1: ANSWERED
 SPIKE S2: ANSWERED
@@ -69,7 +73,7 @@ ASSUMPTION A2: CONFIRMED - the lima NAR transport preserves the 23 case-collidin
 ASSUMPTION A3: CONFIRMED - the amd64 tier content is host-independent; all 27 libraries and 40 tier-1 entries built on the aarch64-linux builder with no x86_64 builder and no emulation (`S4-FINDINGS.md`).
 ASSUMPTION A4: CONFIRMED - Harvey's amd64 tier build runs on an aarch64-linux host with two venue ports (`/rc/bin` on PATH and an explicit `INCLUDE` list) (`S4-FINDINGS.md`).
 ASSUMPTION A5: CONFIRMED - r9's srv table is kernel-wide and the serial console's `ls /srv` reads it (`/srv/boot`, `/srv/factotum` in the `-G` control); the live rio posting was not reached because the rio leg timed out, so visibility is confirmed and a live rio session remains unproven (`S3-FINDINGS.md`).
-ASSUMPTION A6: CONFIRMED - Harvey's X11 drawterm starts under Xvfb and completes the cpu authentication (`tr-ok glenda@glenda(unknown) -> glenda@bootes`); the timeout is in the expect feed stage, not the display backend (`S3-FINDINGS.md`).
+ASSUMPTION A6: UNTESTED - the X11 backend is statically confirmed and the gate's headless drawterm starts under Xvfb, but no headless authentication completed: the owner did not know the generated DEMO password for glenda. The `tr-ok glenda@glenda(unknown) -> glenda@bootes` line was the owner's manual graphical drawterm attempt while the run appeared hung, not the gate's headless session; the driver timed out at the password stage (`S3-FINDINGS.md`, owner clarification 2026-11-23).
 ASSUMPTION A7: CONFIRMED - a flat rust-lld payload wrapped in the 40-byte Plan 9 header satisfies r9's `parse_aout` rules and loads and runs on the arm64 HVF and x86_64 KVM legs (`S6-FINDINGS.md`).
 ASSUMPTION A8: REFUTED - the amd64 library tier builds in 2 s (lima) and 4 s (witness); tier 0 plus tier 1 takes 25 s on the builder, not tens of minutes. That cost belongs to the full tiered userland build and the image bake (`S1-FINDINGS.md`, `S4-FINDINGS.md`).
 ASSUMPTION A9: CONFIRMED - a context-discarded aarch64-linux `outPath` exported by the darwin devshell is lazy (entering the shell builds nothing) and equals the later build path (`S2-FINDINGS.md`).
@@ -218,23 +222,31 @@ proof (D-18); the default image stays all-Harvey.
 binds `#s` at `/srv` and the serial console's namespace is that image's
 `/lib/namespace`. The `-G` control PASSed: the serial `ls /srv` showed only
 `/srv/boot` and `/srv/factotum`, with zero `cpurc: FAIL` and zero panic
-markers, so the discriminator is specific. The positive rio leg FAILed at the
-expect feed stage after drawterm authenticated (`tr-ok`), so
-`S3-RIO-SERVING` was never observed. The marker design itself was not
-invalidated; the driver's password-stage timing/anchor was.
+markers, so the discriminator is specific. The positive rio leg FAILed
+without ever observing `S3-RIO-SERVING`. Owner clarification (2026-11-23):
+the `tr-ok glenda@glenda(unknown) -> glenda@bootes` line in the capture came
+from the owner's own **graphical** drawterm login attempt while the run
+appeared hung, not from the gate's headless drawterm. The owner did not know
+the generated DEMO password for glenda, and believes the headless drawterm
+login attempt did not work at all. The positive leg is therefore unproven
+because headless authentication and the password feed never succeeded — not
+merely because of an expect prompt mismatch. The marker design itself is not
+invalidated; the headless credential path and feed are.
 
 **Options.** (a) Keep the two srv entries observed from the serial console,
-fix the expect feed stage and re-run the rio leg with `control-noG` unchanged;
-(b) take the research fallback now (a second drawterm session, or an
-`xwd -root` pixel check on Xvfb), which is weaker and more brittle.
+determine the generated DEMO password/credential path, fix the headless
+drawterm auth and password feed, and re-run the rio leg with `control-noG`
+unchanged; (b) take the research fallback now (a second drawterm session, or
+an `xwd -root` pixel check on Xvfb), which is weaker and more brittle.
 
 **Recommendation: (a), conditional on the re-run.** Keep the serial `/srv`
-marker as the primary design because A5 and the control support it, and fix
-the feed stage before the marker is trusted. If the re-run still cannot
-observe both entries, fall back to (b). Carry the gate-teardown finding into
-the pass-2 gate: reap drawterm by the scratch/dial identity or the pty child
-pid, not by the `r9s3riogate-dt-*` argv0 tag (PID 88800 survived and `ps`
-showed the store path).
+marker as the primary design because A5 and the control support it, and
+resolve the generated DEMO password/credential path and the headless drawterm
+auth before the marker is trusted. Do not treat the `tr-ok` line as gate
+evidence. If the re-run still cannot observe both entries, fall back to (b).
+Carry the gate-teardown finding into the pass-2 gate: reap drawterm by the
+scratch/dial identity or the pty child pid, not by the `r9s3riogate-dt-*`
+argv0 tag (PID 88800 survived and `ps` showed the store path).
 
 ### 6. D-16 assembler verification method
 
@@ -288,9 +300,18 @@ no Harvey checkout edit.
 | 5 | Owner's x86_64 Linux witness host: scratch tree, store paths and logs under `~/r9-spike-work` (default), written by the pull-only bundle | 2026-11-23 (Plan 06) | `rm -rf ~/r9-spike-work` (owner's action; state not observable from this Mac) |
 | 6 | Mac Nix authentication: none taken | pass 1 | not applicable; if a FlakeHub login is ever taken for the native builder, `determinate-nixd auth logout` is the owner's own action |
 
+**State after the closing checkpoint (2026-11-23): kept for pass 2.** The owner
+requested no revert, so no command from the Revert column was run. Change 1
+(the guest-only `trusted-users` line) and change 2 (the lima VM `harvey`)
+remain in place for pass 2, as do change 3's builder-side store paths and
+change 4's gitignored Mac scratch. Change 6 remains "none taken" — there is no
+Mac Nix authentication to log out of. The revert commands stay documented for
+a later owner decision.
+
 ## Prohibition audit
 
-Run from the r9 checkout at HEAD `671e1e7` before this plan's commit.
+Run from the r9 checkout at HEAD `671e1e7` before this plan's Task 1 commit,
+and re-run at HEAD `e03f760` before the Task 3 commit.
 
 - **Harvey untouched.** The guard command from this plan's verification section
   printed:
@@ -314,19 +335,26 @@ Run from the r9 checkout at HEAD `671e1e7` before this plan's commit.
   `116bcc2`: Plan 06's owner-approved pull-only commits were pushed so the
   Linux host could pull them (`01-06-SUMMARY.md`, "Plan verification drift";
   reflog shows the push at 2026-11-22 20:30:56 -0500). `116bcc2` is an
-  ancestor. At audit time the local commits `8ba927e` and `671e1e7` were
-  unpushed, and this plan has pushed nothing.
+  ancestor. At Task 3 time the local commits `8ba927e`, `671e1e7`, `2d5a2ce`
+  and `e03f760` were unpushed, and this plan has pushed nothing.
 - **Pass-1 prohibitions held.** Harvey checkout unchanged; r9 root flake,
   lock, `xtask/`, kernel crates, `.cargo`, Cargo files, toolchain file and CI
   unchanged; no push from this executor; no Mac configuration change beyond
   the guest-only line above.
+- **Task 3 re-run (HEAD `e03f760`).** The Harvey guard again printed
+  `HARVEY-UNTOUCHED` with the same HEAD and status hash; the protected-path
+  diff and status checks were again empty (0 lines, exit 0); r9
+  `refs/remotes/origin/main` remained `c92a3f4` and Harvey
+  `refs/remotes/origin/HEAD` remained `bd7a698`; this executor pushed
+  nothing and reverted nothing.
 
 ## Open items
 
 None. Every one of the 25 legs has a PASS or FAIL verdict with committed
 evidence, and no leg anywhere in S1 to S6 is left unanswered. The five FAILs
 are findings the pass-2 plan must handle (proot venue, remote-builder
-registration, expect feed stage, auth-suite resolver), not missing answers.
+registration, headless rio authentication/password feed, auth-suite resolver),
+not missing answers.
 
 ## Deferred to planning pass 2
 
@@ -381,4 +409,26 @@ flake pinning Harvey `bd7a6982a3e4f465f8ed3da5e0c7290521514ff0`.
 
 ## Owner decisions (closing checkpoint)
 
-Pending: Task 2
+**Owner reply received 2026-11-23** (recorded verbatim by Plan 01-07 Task 3):
+
+> D-04: both, lima primary.
+> Recommendations 2, 3, 4, 6, 7: accept as written.
+> Recommendation 5 (D-11 rio marker): keep the two `/srv/rio.*` and `/srv/riowctl.*` entries as the marker, but the owner clarifies the s3-rio failure evidence: the `tr-ok glenda@glenda(unknown) -> glenda@bootes` line came from the owner's own graphical drawterm login attempt while the run appeared hung, not from the gate's headless drawterm. The owner did not know the generated DEMO password for glenda. The owner believes the headless drawterm login attempt did not work at all. So the positive leg is unproven because headless authentication/password feed never succeeded, not merely because of an expect prompt mismatch. Next action: determine the generated DEMO password/credential path, fix the headless drawterm auth and password feed, then re-run the rio leg; do not treat the `tr-ok` line as gate evidence.
+> No revert requested: keep the lima VM and guest config for pass 2.
+
+DECISION 1 (D-04): both, lima primary - accepted recommendation (lima is the only measured venue, with case handling and amd64 tier builds, and needs no third-party login; the native builder is documented as the alternative)
+DECISION 2 (D-03): proot, with no dependency on unshare or a privileged builder - accepted recommendation
+DECISION 3 (D-20): Option A (build and boot to the "root is from" prompt); Option B is the next increment - accepted recommendation
+DECISION 4 (D-17): ps, with the S6 recipe - accepted recommendation
+DECISION 5 (D-11): keep the two `/srv/rio.*` and `/srv/riowctl.*` entries as the marker - owner override (the `tr-ok` line is not gate evidence; determine the generated DEMO password/credential path, fix the headless drawterm auth and password feed, re-run the rio leg, keep `control-noG` unchanged)
+DECISION 6 (D-16): member-list comparison for all images (option b) as the pass-2 plan; byte differential later - accepted recommendation
+DECISION 7 (D-22): keep the spike builder for pass 2; no revert - accepted recommendation
+
+PASS-2 READY: yes
+
+**Record notes.** Decision 7 is the pass-transition half of D-04/D-22 rather
+than a new CONTEXT decision: the builder the owner keeps is the lima venue
+chosen in Decision 1. The contemporaneous `01-06-SUMMARY.md` wording that the
+rio leg "authenticated (`tr-ok`)" is superseded by Decision 5's owner
+clarification; the verdict is unchanged (FAIL). No machine revert was
+requested or performed.

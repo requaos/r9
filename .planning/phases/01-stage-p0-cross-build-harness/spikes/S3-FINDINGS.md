@@ -55,12 +55,17 @@ EVIDENCE s3-determinism-kvm-linux: s3/evidence/determinism-kvm-linux.txt
 The witness ran both gates on the x86_64 host (Linux x86_64 NixOS
 7.4.0-rc3, 16 CPU, 30 GiB, `/dev/kvm` writable; env:
 `linux-witness/evidence/env.txt`). The cpurc ladder and the non `-G`
-drawterm under Xvfb are real: the gate reached `cpurc: DONE`, spawned
-drawterm, and authenticated as `tr-ok glenda@glenda(unknown) ->
-glenda@bootes`. It then timed out feeding the password stage
-(`rio-gate: TIMEOUT at feed stage: dt-password`), so `S3-RIO-SERVING` never
-appears (grep count 0) and the rio leg is a FAIL with evidence — not a
-venue failure. The `-G` control passed: the serial console's `ls /srv`
+drawterm under Xvfb are real: the gate reached `cpurc: DONE` and spawned its
+headless drawterm. **The headless session never authenticated**: the owner did
+not know the generated DEMO password for glenda, and believes the headless
+drawterm login attempt did not work at all. The `tr-ok glenda@glenda(unknown)
+-> glenda@bootes` line in the capture came from the owner's own manual
+**graphical** drawterm login attempt while the run appeared hung, NOT from the
+gate's headless drawterm (owner clarification, 2026-11-23;
+`s3/evidence/rio-kvm-linux.ATTRIBUTION-NOTE.md`). The driver timed out feeding
+the password stage (`rio-gate: TIMEOUT at feed stage: dt-password`), so
+`S3-RIO-SERVING` never appears (grep count 0) and the rio leg is a FAIL with
+evidence — not a venue failure. The `-G` control passed: the serial console's `ls /srv`
 shows only `/srv/boot` and `/srv/factotum`, zero cpurc: FAIL and zero
 kernel-panic markers, then `S3-CONTROL-NO-RIO`. The determinism check did
 not produce a comparison: bake 1 completed, but bake 2 aborted at the auth
@@ -127,7 +132,9 @@ scratch tree may be deleted after the run.
   `/usr/glenda/lib/profile` is staged, and DEMO gives all users one
   shared password, so the parsed password authenticates glenda.
   `S3_DT_USER` overrides the name; `rio-gate.expect` anchors the password
-  prompt on it.
+  prompt on it. The witness did not exercise this end to end: the owner did
+  not know the generated DEMO password, so the headless feed never succeeded.
+  Pass 2 must determine the generated credential path before relying on it.
 - **Mac-side static checking:** the flake app evaluates on
   aarch64-darwin (`nix eval ...#apps.x86_64-linux.s3-rio-gate.program`
   prints a store path) because the r9 package paths are resolved at run
@@ -160,20 +167,22 @@ scratch tree may be deleted after the run.
 
 ## Assumptions
 
-ASSUMPTION A5: CONFIRMED - the serial console in the `-G` control lists `/srv` from its own namespace (`/srv/boot`, `/srv/factotum`), confirming the console reads the kernel-wide srv table. The positive rio posting was not reached because the rio leg timed out at the password feed, so visibility is confirmed while a live rio session remains unproven. Evidence: s3/evidence/norio-control-kvm-linux.log.
-ASSUMPTION A6: CONFIRMED - Harvey's X11 drawterm starts under Xvfb and completes the cpu authentication (`tr-ok glenda@glenda(unknown) -> glenda@bootes`); the timeout is in the expect feed stage, not in drawterm's display backend. Evidence: s3/evidence/rio-kvm-linux.log.
+ASSUMPTION A5: CONFIRMED - the serial console in the `-G` control lists `/srv` from its own namespace (`/srv/boot`, `/srv/factotum`), confirming the console reads the kernel-wide srv table. The positive rio posting was not reached because the gate's headless drawterm never authenticated (the generated DEMO password was not known), so visibility is confirmed while a live rio session remains unproven. Evidence: s3/evidence/norio-control-kvm-linux.log.
+ASSUMPTION A6: UNTESTED - Harvey's drawterm is statically confirmed to link the X11 backend (static PASS) and the gate's headless drawterm starts under Xvfb, but no headless authentication completed because the generated DEMO password for glenda was not known; the `tr-ok glenda@glenda(unknown) -> glenda@bootes` line was the owner's manual graphical login attempt, not the gate's headless session. Evidence: s3/evidence/rio-kvm-linux.log and s3/evidence/rio-kvm-linux.ATTRIBUTION-NOTE.md (owner clarification 2026-11-23).
 ASSUMPTION A12: REFUTED - the two-bake check cannot pass on this tree: bake 1 completes, bake 2 aborts at the auth bake (`hsecstored missing from the computed auth-suite set`), so no image is compared. Byte-identity of the six non-auth images is therefore unproven and the second bake is not re-runnable as-is. Evidence: s3/evidence/determinism-kvm-linux.txt.
 
 ## What this means for planning pass 2
 
-- **The `-G` control is green; the rio leg needs its feed stage fixed
-  before D-11's marker can be trusted.** The control proves the
+- **The `-G` control is green; the rio leg needs its headless credential
+  path fixed before D-11's marker can be trusted.** The control proves the
   discriminator (serial `ls /srv` shows no rio entry in a `-G` session,
-  with zero cpurc: FAIL and zero panic markers). The rio leg authenticated
-  (`tr-ok`) but the driver timed out feeding the password stage, so no
-  `S3-RIO-SERVING` was observed. Pass 2 should fix the expect timing/prompt
-  anchor, re-run rio mode, and keep `control-noG` unchanged as the negative
-  control; the marker design itself is not invalidated by the timeout.
+  with zero cpurc: FAIL and zero panic markers). The gate's headless
+  drawterm never authenticated because the generated DEMO password for
+  glenda was not known; the `tr-ok` line was the owner's manual graphical
+  attempt and is not gate evidence. Pass 2 should determine the generated
+  DEMO password/credential path, fix the headless drawterm auth and the
+  password feed, re-run rio mode, and keep `control-noG` unchanged as the
+  negative control; the marker design itself is not invalidated.
 - **A12 must be resolved before the assembler differential test is
   written.** The second bake aborts at the auth bake with
   `hsecstored missing from the computed auth-suite set`, so the six-image

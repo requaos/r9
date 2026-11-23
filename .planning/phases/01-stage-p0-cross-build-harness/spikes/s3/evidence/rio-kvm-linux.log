@@ -3,9 +3,14 @@
 # mode: rio (non -G drawterm under Xvfb)
 # scratch Harvey: bd7a6982a3e4f465f8ed3da5e0c7290521514ff0 (no .git)
 # r9 kernel: 116bcc23c8052a1728992cdbc7b625143260d683, KERNDATE=1795382101
-# The gate reached the cpu session (tr-ok) and then timed out at the password (<redacted>: prose only)
-# feed stage; no credential value is present. S3-RIO-SERVING is absent from the whole capture (grep count 0).
+# CORRECTION (2026-11-23, owner clarification): the gate's headless drawterm never authenticated.
+# The `tr-ok glenda@glenda(unknown) -> glenda@bootes` line below came from the owner's own manual
+# graphical drawterm login attempt while the run appeared hung, NOT from the gate. The owner did not
+# know the generated DEMO password for glenda, so the password feed never succeeded; the driver timed
+# out at the password (<redacted>: prose only) feed stage. S3-RIO-SERVING is absent from the whole
+# capture (grep count 0). The verdict stays FAIL.
 # No credential value appears here; the stage name is marked <redacted>.
+# See rio-kvm-linux.ATTRIBUTION-NOTE.md.
 
 == S3 mode:        rio
 == scratch Harvey: /home/req/r9-spike-work/harvey
@@ -25,7 +30,7 @@ rio-gate: stage ok — listen-17010
 cpurc: DONE
 rio-gate: stage ok — ladder-done
 
-// the non -G drawterm under Xvfb starts and authenticates
+// the non -G drawterm under Xvfb starts; headless authentication did not complete (see the header correction)
 spawn bash -c exec -a r9s3riogate-dt-63949-1795400202 /nix/store/y8h5ana2drnzs2fdx6fxgr74bwmzi8y9-drawterm-19.06/bin/drawterm -s '' -O cpu=127.0.0.1,auth=tcp!127.0.0.1!5670,user=glenda
 rio-gate: spawned drawterm on a pty (mode rio, argv0 tag r9s3riogate-dt-63949-1795400202, user glenda)
 process 47 exited: ""
