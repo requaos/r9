@@ -5,16 +5,16 @@ milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
 current_phase: 01
 current_phase_name: Stage P0 - Cross-Build Harness
 status: executing
-stopped_at: Paused at 01-07 Task 2 (owner closing checkpoint)
-last_updated: "2026-11-23T02:48:43.090Z"
+stopped_at: Completed 01-07-PLAN.md; planning pass 1 closed, re-run /gsd-plan-phase 1 for pass 2
+last_updated: "2026-11-23T03:03:15.935Z"
 last_activity: 2026-11-23
-last_activity_desc: Phase 01 plan 07 Task 1 consolidated the spike results; owner decisions pending at Task 2
-state_head: 2d5a2cefb7cd5e1a04fbe033ff48edf16927e4b8
+last_activity_desc: Phase 01 plan 07 recorded the owner's decisions and closed planning pass 1; pass 2 planning is next
+state_head: fedd167744fb8ff77e9b9da1225fd8b409003c34
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 7
-  completed_plans: 6
+  completed_plans: 7
   percent: 0
 ---
 
@@ -30,22 +30,22 @@ See: .planning/PROJECT.md (updated 2026-11-22)
 ## Current Position
 
 Phase: 01 (Stage P0 - Cross-Build Harness) — EXECUTING
-Plan: 7 of 7
-Status: Awaiting owner decisions at Task 2 (closing checkpoint)
-Last activity: 2026-11-23 — Plan 07 Task 1 consolidated S1-S6 into SPIKE-RESULTS.md
+Plan: 7 of 7 (planning pass 1 complete)
+Status: Pass 1 closed (01-07); pass 2 planning pending — re-run /gsd-plan-phase 1
+Last activity: 2026-11-23 — Plan 07 recorded the owner's decisions and closed planning pass 1
 
 Progress: [░░░░░░░░░░] 0%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 2
+- Total plans completed: 7
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 01 | 2 | 7 | 5 min |
+| 01 | 7 | 7 | 19 min |
 
 *Updated after each plan completion*
 **Per-Plan Metrics:**
@@ -58,6 +58,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 01 P01 | 13 min | 3 tasks | 8 files |
 | Phase 01 P02 | 9min | 3 tasks | 15 files |
 | Phase 01 P06 | 80min | 3 tasks | 19 files |
+| Phase 01 P07 | 17min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -92,12 +93,17 @@ Full log is the PROJECT.md Key Decisions table. Recent:
 - [Phase 01]: A9: a context-discarded outPath in the darwin devshell is lazy (no build sent) and equals the later build path, so HARN-07's supply can meet D-05
 - [Phase 01]: S4: the amd64 tier 0 (27 libs, 6 s) and tier 1 (40 cmds, 19 s, all S_MAGIC 00008a97) build on the aarch64-linux builder with two venue ports: /rc/bin on PATH for membername and an explicit INCLUDE list for a latent 6c heap-layout failure under proot; A3/A4 CONFIRMED, A8 REFUTED
 - [Phase 01]: On APFS a bare [ -f ] lookup resolves the case twin; Mac-side re-checks must enumerate exact names, and tree outputs read by xtask must not contain colliding names
-- [Phase 01]: Plan 01-06 witness verdicts: PASS s1 rung2 (proot libc 601170 B/259 members), s3 control, s5 q35 KVM (kernel ecdcdad matched), s6 x86_64 (control/probe/flipback sha-equal=yes; probe db94057f matched); FAIL s1 rung1 (unshare /nix/store bind, exit 32), s3 rio (tr-ok then password-feed timeout, no S3-RIO-SERVING), s3 determinism (bake2 aborted, hsecstored missing).
+- [Phase 01]: Plan 01-06 witness verdicts: PASS s1 rung2 (proot libc 601170 B/259 members), s3 control, s5 q35 KVM (kernel ecdcdad matched), s6 x86_64 (control/probe/flipback sha-equal=yes; probe db94057f matched); FAIL s1 rung1 (unshare /nix/store bind, exit 32), s3 rio (headless drawterm never authenticated; password-feed timeout, no S3-RIO-SERVING; the tr-ok line was the owner's manual graphical attempt, corrected 2026-11-23), s3 determinism (bake2 aborted, hsecstored missing).
 - [Phase 01]: A1 scoped: unshare is REFUTED on both the lima aarch64 builder and the x86_64 witness, but proot rung 2 PASSes on both; pass 2's tree derivation must use proot and not assume unshare.
 - [Phase 01]: A12 REFUTED: the second mkimage bake aborts at the auth bake (hsecstored missing from the computed auth-suite set), so no image reached a determinism comparison; resolve the auth-suite resolver before planning byte-diff tests.
-- [Phase 01]: A5/A6/A7/A11 CONFIRMED: the -G control's serial ls /srv shows no rio entry, drawterm runs under Xvfb and authenticates, the amd64 a.out probe prints R9-RUST-AOUT-PROBE-OK, and Harvey's kernel reaches the q35 KVM prompt with no signature.
+- [Phase 01]: A5/A7/A11 CONFIRMED (A6 downgraded to UNTESTED on 2026-11-23): the -G control's serial ls /srv shows no rio entry, the headless drawterm starts under Xvfb but never authenticated (the generated DEMO password was unknown; the tr-ok line was the owner's manual graphical attempt), the amd64 a.out probe prints R9-RUST-AOUT-PROBE-OK, and Harvey's kernel reaches the q35 KVM prompt with no signature.
 - [Phase 01]: Gate teardown finding: drawterm PID 88800 survived the rio-gate timeout; ps shows the store path, not the r9s3riogate-dt-* argv0 tag, so pass 2 must reap by scratch/dial identity or the pty child pid.
 - [Phase 01]: HARN-01/04/07/08 stay pending in REQUIREMENTS.md: pass 1 is spikes only under the D-22 override; the 01-06 summary lists them for traceability but mark-complete was not run.
+- [Phase 01]: D-04: document both Mac builder mechanisms with lima primary. Lima is the only measured venue for case handling and amd64 tiers and needs no third-party login; the native Determinate builder is the documented alternative.
+- [Phase 01]: D-03: proot for the pass-2 tree derivations, with no unshare or privileged-builder dependency; both measured builders refused unshare.
+- [Phase 01]: D-20: option A, build and boot Harvey's own kernel to the root-is-from prompt; the rc prompt through u9fs is the next increment. D-17: ps with the S6 recipe. D-16: member lists now, byte differentials after the hsecstored resolver. Decision 7: keep the spike builder for pass 2; no revert.
+- [Phase 01]: D-11: keep the two /srv/rio.* and /srv/riowctl.* entries as the marker. Owner correction 2026-11-23: the tr-ok line was the owner's manual graphical drawterm attempt, not the gate; the headless drawterm never authenticated because the generated DEMO password was unknown. s3-rio stays FAIL; next action is the DEMO password/credential path, headless auth and feed, then re-run with control-noG unchanged.
+- [Phase 01]: A6 is UNTESTED, not CONFIRMED: the X11 backend is statically proven and the headless drawterm starts, but no headless login completed (generated DEMO password unknown). Pass 1 is closed with PASS-2 READY: yes; re-run /gsd-plan-phase 1 for pass 2.
 
 ### Open Questions (ten warnings, approved to be carried, not resolved)
 
@@ -159,6 +165,6 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 
 ## Session Continuity
 
-Last session: 2026-11-23T02:48:43.067Z
-Stopped at: Paused at 01-07 Task 2 (owner closing checkpoint)
-Resume file: .planning/phases/01-stage-p0-cross-build-harness/spikes/SPIKE-RESULTS.md
+Last session: 2026-11-23T03:03:15.912Z
+Stopped at: Completed 01-07-PLAN.md; planning pass 1 closed, re-run /gsd-plan-phase 1 for pass 2
+Resume file: None
