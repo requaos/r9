@@ -4,8 +4,20 @@
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
   inputs.rust-overlay.url = "github:oxalica/rust-overlay";
   inputs.rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
+  # 01-10 (D-09, D-23, D-06): Harvey as a normal flake input (never the
+  # spike flakes' non-flake input form), pinned by flake.lock to a pushed
+  # commit. The url carries no ref so a pin bump is a one-commit, lock-only
+  # change (`nix flake lock --override-input harvey github:requaos/harvey/<sha>`).
+  # The nixpkgs follow is the A13 probe: it keeps one nixpkgs in the lock
+  # graph and is confirmed by the harvey-harness / harvey-drawterm checks
+  # below. NB: no follow is set on Harvey's own `r9` input — Harvey's
+  # outputs function takes `r9`, so an emptied follow would break its
+  # evaluation (01-RESEARCH.md Pitfall 8); the nested harvey/r9 lock node
+  # (an older r9 revision) is expected until the D-10 flip's pin bump.
+  inputs.harvey.url = "github:requaos/harvey";
+  inputs.harvey.inputs.nixpkgs.follows = "nixpkgs";
 
-  outputs = { self, nixpkgs, rust-overlay }:
+  outputs = { self, nixpkgs, rust-overlay, harvey }:
     let
       # Intel-Mac tuple deliberately omitted — out of project scope (REQUIREMENTS.md)
       systems = [ "aarch64-darwin" "aarch64-linux" "x86_64-linux" ];
@@ -849,6 +861,26 @@ WRAP
             # wired built green).
             outputHash = "sha256-TIzwBaHF0R4m31l6EbW2IU3rkUl73g6ljlNE0S5hGFY=";
           };
+        });
+
+      # 01-10 (D-09, A13): the A13 probe. With
+      # `inputs.harvey.inputs.nixpkgs.follows = "nixpkgs"` above, Harvey's
+      # packages build against r9's nixpkgs pin instead of Harvey's own.
+      # harvey-harness must BUILD on the Mac (aarch64-darwin) and Harvey's
+      # drawterm (a Linux-only package) must EVALUATE for both Linux
+      # systems; checks.x86_64-linux.harvey-drawterm is also the stop-A
+      # witness's a13 leg (witness/run-witness.sh step_a13). If the follow
+      # breaks either, it is removed and A13 is recorded REFUTED in
+      # 01-10-SUMMARY.md.
+      checks = forAllSystems (system:
+        let
+          pkgs = pkgsFor system;
+        in
+        {
+          harvey-harness = harvey.packages.${system}.harness;
+        }
+        // nixpkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          harvey-drawterm = harvey.packages.${system}.drawterm;
         });
 
       devShells = forAllSystems (system:
