@@ -352,12 +352,15 @@ CAPTURE: the driver records the drawterm window identity, geometry and focus
 before typing and after Return (`xdotool search`, `getwindowgeometry`,
 `getwindowfocus`, `xprop -id`, `xwininfo -id -tree`) into
 `out/rio-diag/x11.txt`, plus `drawterm-before-typing.png` and
-`drawterm-after-return.png` (`xwd` piped through ImageMagick; `import` as the
-fallback). A missing capture tool is a named `RIO-FAIL diag-capture`; the
-diagnostic never runs without evidence. The password is never on screen:
-raw-mode `readcons` does not echo, no capture is taken between the first
-keystroke and Return, and no password is written to argv, an exported variable,
-a log, an x11.txt line or an image.
+`drawterm-after-return.png` (`xwd` piped through ImageMagick `magick`; `convert`
+is a deprecated IM7 shim, and `import` is the last fallback). A missing capture
+tool at startup is a named `RIO-FAIL diag-capture`. A runtime conversion
+failure is a `diag capture skipped` warning and does not abort the marker check:
+the serial `/srv` login marker is the authoritative diagnostic, and the PNG is
+supplementary. The password is never on screen: raw-mode `readcons` does not
+echo, no capture is taken between the first keystroke and Return, and no
+password is written to argv, an exported variable, a log, an x11.txt line or an
+image.
 
 NOT-A-GATE: the diagnostic cannot produce a PASS. The D-28 pair is still the
 only PASS condition, the `rio` and `control-noG` bakes are unchanged, and the

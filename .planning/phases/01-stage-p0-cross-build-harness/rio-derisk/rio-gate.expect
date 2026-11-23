@@ -319,10 +319,14 @@ proc capture_png {wid path} {
 		catch {file delete -force $tmp}
 		return -code error "xwd-failed: $out"
 	}
-	if {$have_convert} {
-		set conv convert
-	} elseif {$have_magick} {
+	# Prefer `magick`: ImageMagick 7 ships `convert` as a deprecated shim
+	# that exits non-zero after printing its deprecation warning on the
+	# stop-A2 host, which is exactly how the first diagnostic run lost its
+	# before-typing capture.
+	if {$have_magick} {
 		set conv magick
+	} elseif {$have_convert} {
+		set conv convert
 	} else {
 		set conv ""
 	}
@@ -405,12 +409,12 @@ if {$rio_mode} {
 		puts $diag_fh "# rio-diag X11 evidence — drawterm window $wid on $env(DISPLAY) (plan 01-32)"
 		diag_capture "before-typing" $wid $diag_fh
 		if {[catch {capture_png $wid [file join $env(RIO_OUT) drawterm-before-typing.png]} err]} {
-			close $diag_fh
-			puts stderr "RIO-FAIL diag-capture — the before-typing PNG capture failed ($err)"
-			cleanup
-			exit 1
+			# The PNG is supplementary; the /srv login marker is the
+			# authoritative diagnostic. Record the miss and keep going.
+			puts stderr "rio-gate: diag capture skipped — before-typing PNG failed ($err); the /srv login marker remains authoritative"
+		} else {
+			puts stderr "rio-gate: diag capture ok — before-typing x11 + PNG in $env(RIO_OUT)"
 		}
-		puts stderr "rio-gate: diag capture ok — before-typing x11 + PNG in $env(RIO_OUT)"
 	}
 	if {[catch {xfeed_type $wid $env(R9_DT_PWFILE) $feed_settle} err]} {
 		if {$diag_mode} {
@@ -428,13 +432,11 @@ if {$rio_mode} {
 		after 2000
 		diag_capture "after-return" $wid $diag_fh
 		if {[catch {capture_png $wid [file join $env(RIO_OUT) drawterm-after-return.png]} err]} {
-			close $diag_fh
-			puts stderr "RIO-FAIL diag-capture — the after-return PNG capture failed ($err)"
-			cleanup
-			exit 1
+			puts stderr "rio-gate: diag capture skipped — after-return PNG failed ($err); the /srv login marker remains authoritative"
+		} else {
+			puts stderr "rio-gate: diag capture ok — after-return x11 + PNG in $env(RIO_OUT)"
 		}
 		close $diag_fh
-		puts stderr "rio-gate: diag capture ok — after-return x11 + PNG in $env(RIO_OUT)"
 	}
 	puts stderr "rio-gate: feed ok — XTEST password entry into the drawterm window ($wid)"
 
