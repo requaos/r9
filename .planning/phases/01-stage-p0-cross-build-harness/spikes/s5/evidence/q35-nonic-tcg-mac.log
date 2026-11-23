@@ -1,0 +1,31 @@
+# S5 leg q35-nonic-tcg-mac - Harvey 9k10cpu.elf under QEMU -M q35, TCG, no NIC
+# host: macOS (aarch64), QEMU 11.1.2 from r9's nix devshell, -accel tcg -cpu qemu64
+# kernel: s5/work/9k10cpu.elf sha256 ecdcdaddea8d3759d74303b869ddfae8efeba1d4d160382577cfc52b9a32c45b
+# source serial capture: s5/work/raw-q35-nonic-tcg-mac.log (13 lines), below verbatim
+# ---- harness stdout (capture-before-start; S5-RESULT is the final line) ----
+r9 devshell: rustc 1.95.0-nightly (842bd5be2 2026-01-29)
+QEMU emulator version 11.1.2
+apps: nix run .#build | nix run .#boot-virt | nix run .#default
+S5-CMD: /nix/store/dzdki5sj5nfd4z7j8v5qg5a5gg6lkxgc-qemu-11.1.2/bin/qemu-system-x86_64 -M q35 -accel tcg -cpu qemu64 -m 512 -kernel /Users/neilskinner/code/r9/.planning/phases/01-stage-p0-cross-build-harness/spikes/s5/work/9k10cpu.elf -display none -no-reboot -serial file:/Users/neilskinner/code/r9/.planning/phases/01-stage-p0-cross-build-harness/spikes/s5/work/raw-q35-nonic-tcg-mac.log -nic none
+BANNER=yes
+PROMPT=root is from (tcp)[tcp]: 
+SIGS=none
+NIC=none
+BANNER_SECONDS=1
+PROMPT_SECONDS=1
+S5-RESULT machine=q35 accel=tcg net=none banner=yes prompt=yes sigs=none
+# ---- serial capture ----
+
+Plan 9
+mmuinit: vmstart 0xfffffffff0000000 vmunused 0xfffffffff02f6000 vmunmapped 0xfffffffff0400000 vmend 0xfffffffffe000000
+sys->pd 0x108003 0x108023
+l 3 0xffffff7fbfdfeff8 107023
+l 2 0xffffff7fbfdffff8 108023
+l 1 0xffffff7fbffffc00 e3
+l 1 0xffffff7fbffffc00 e3
+kernel alloc space = -268,435,456
+base 0xfffffffff02fa000 ptr 0xfffffffff02fa000 nunits 14484992
+apic0: hz 1015640000 max 10156400 min 101564 div 1
+pcirouting: ignoring south bridge PCI.0.1.0 1234/1111
+508M memory: 1944K+230M kernel, 276M user
+root is from (tcp)[tcp]: 

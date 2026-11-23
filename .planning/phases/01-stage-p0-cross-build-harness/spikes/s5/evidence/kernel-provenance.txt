@@ -1,0 +1,46 @@
+S5 kernel provenance — amd64/9k10cpu.elf copied out of the Harvey checkout
+=======================================================================
+
+Source (read-only; nothing was run or written inside the checkout):
+  /Users/neilskinner/code/harvey/amd64/9k10cpu.elf
+
+Copy used by boot-q35.sh:
+  .planning/phases/01-stage-p0-cross-build-harness/spikes/s5/work/9k10cpu.elf
+
+sha256 (both files, byte-identical copies):
+ecdcdaddea8d3759d74303b869ddfae8efeba1d4d160382577cfc52b9a32c45b
+
+Byte size:
+  2030226 bytes (source and copy)
+
+mtime:
+  source: 2026-11-18T12:34:43Z
+  copy:   2026-11-22T19:42:18Z  (plain cp, so the copy carries copy time)
+
+file(1):
+  9k10cpu.elf: ELF 32-bit LSB executable, Intel 80386, version 1 (SYSV),
+  statically linked, stripped
+
+Provenance hints from strings -a:
+  - "harvey-build" appears at offsets 0xace04, 0xfde61, 0x13fcc4, 0x1b4368.
+  - "/sys/src/9k/k10/k10cpu" is the kernel config name (not a filesystem path).
+  - "bootk10cpu.c", "k10cpu.c", "archk10.c", "k10cpu.root.s" are source names.
+  - No absolute build path, build date, version banner or git revision string
+    was found.  A search for /Users/, /home/, /nix/store, /tmp/<build dir>,
+    2025/2026 date text and 7-40 hex revision strings found nothing usable.
+    Harvey's REPRODUCIBILITY note says the 9k kernel embeds its absolute build
+    path; this binary does not, so it was likely built with a path-free or
+    post-processed configuration.
+
+HARVEY checkout state at capture (read-only):
+  HEAD = 25d97dc4d4976bfb7411f01970755acf6261c81b
+  ("docs(planning): freeze — planning has permanently relocated ...")
+  The Phase 1 pin is the pushed legacy-final commit bd7a6982a.
+
+Source commit of this kernel: UNKNOWN.
+  No string in the binary proves it.  The source mtime (2026-11-18) is later
+  than the last recorded Mac TCG pool-panic run (2026-11-05, Harvey commit
+  c8f5422, .build/poolpanic-verdict.txt), so this file may be a later rebuild
+  at an unrecorded commit.  Plan 06's KVM leg must use these exact bytes
+  (sha256 above); the owner may additionally supply a fresh build at bd7a6982a,
+  which must then be recorded with its own sha256.
