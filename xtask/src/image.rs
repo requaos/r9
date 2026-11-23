@@ -139,6 +139,14 @@ pub struct FileEntry {
     /// substitution (the auth image's `tcp=ticket` service row).
     #[serde(default)]
     pub append: Option<String>,
+    /// For `generator = "ndb-template"`: line literals removed before
+    /// the substitution (mkimage §11e2's `sed "/authdom=@AUTHDOM@/d"`:
+    /// the services image carries no auth domain, so the auth row is
+    /// stripped; the strip is asserted both ways — a literal that
+    /// matches no line is an error, so a template drift cannot silently
+    /// keep the row).
+    #[serde(default)]
+    pub strip: Option<Vec<String>>,
 }
 
 /// One `[[tree]]` entry: a source directory expanded to every file under it.
@@ -411,11 +419,13 @@ fn validate_file_entry(file: &FileEntry, image: &str) -> Result<()> {
                         image,
                         &format!("entry {} `from` (the produced artifact)", file.path),
                     )?;
-                    if file.tokens.is_some() || file.seam.is_some() || file.append.is_some() {
+                    if file.tokens.is_some() || file.seam.is_some() || file.append.is_some()
+                        || file.strip.is_some()
+                    {
                         return Err(format!(
                             "image manifest for \"{image}\": entry {} generator = \"authdomain\" \
-                             must not carry `tokens`, `seam` or `append` (it stages one produced \
-                             artifact, named by `from`)",
+                             must not carry `tokens`, `seam`, `append` or `strip` (it stages one \
+                             produced artifact, named by `from`)",
                             file.path
                         )
                         .into());
@@ -451,6 +461,17 @@ fn validate_file_entry(file: &FileEntry, image: &str) -> Result<()> {
                             file.path
                         )
                         .into());
+                    }
+                    if let Some(strip) = &file.strip {
+                        if strip.is_empty() || strip.iter().any(|literal| literal.trim().is_empty())
+                        {
+                            return Err(format!(
+                                "image manifest for \"{image}\": entry {} `strip` must be a \
+                                 non-empty list of non-empty line literals",
+                                file.path
+                            )
+                            .into());
+                        }
                     }
                 }
                 other => {
@@ -492,6 +513,7 @@ fn reject_generator_fields(file: &FileEntry, image: &str, source: &str) -> Resul
         (file.tokens.is_some(), "tokens"),
         (file.seam.is_some(), "seam"),
         (file.append.is_some(), "append"),
+        (file.strip.is_some(), "strip"),
     ] {
         if present {
             return Err(format!(
@@ -873,6 +895,12 @@ fn stage_full_with(
                         )?;
                         let seam_path = tree.join(file.seam.as_deref().unwrap_or_default());
                         let seam = read_seam(&seam_path, &manifest.image, &file.path)?;
+                        let template = strip_lines(
+                            &template,
+                            file.strip.as_deref().unwrap_or(&[]),
+                            &manifest.image,
+                            &file.path,
+                        )?;
                         let tokens = file.tokens.as_deref().unwrap_or(&[]);
                         let authdom = generated.and_then(|bake| bake.authdom.as_deref());
                         let mut output = substitute_template(
@@ -1504,6 +1532,41 @@ fn read_seam(path: &Path, image: &str, entry: &str) -> Result<HashMap<String, St
         }
     }
     Ok(values)
+}
+
+/// Remove every line containing one of `literals` (mkimage §11e2's
+/// `sed "/authdom=@AUTHDOM@/d"`), failing when a literal matches no line:
+/// the strip is asserted both ways, so a template drift that removes the
+/// row cannot silently leave the auth composition in an image with no
+/// domain (T-01-63).
+fn strip_lines(
+    template: &str,
+    literals: &[String],
+    image: &str,
+    entry: &str,
+) -> Result<String> {
+    let mut output = template.to_string();
+    for literal in literals {
+        let mut kept = String::new();
+        let mut matched = false;
+        for line in output.split_inclusive('\n') {
+            if line.contains(literal.as_str()) {
+                matched = true;
+            } else {
+                kept.push_str(line);
+            }
+        }
+        if !matched {
+            return Err(format!(
+                "IMAGE-GENERATOR ndb-template: image \"{image}\" entry {entry} names strip \
+                 literal {literal:?}, which matches no line of the template — the strip must be \
+                 asserted both ways"
+            )
+            .into());
+        }
+        output = kept;
+    }
+    Ok(output)
 }
 
 /// Substitute the manifest-named tokens and fail on any token left in the
