@@ -116,7 +116,7 @@ recorded: 2026-11-23T00:00:00.000Z
 
 | Finding | Severity | Disposition | Source |
 |---------|----------|-------------|--------|
-| CR-01 | critical | fixed | fixed in b36b633, pinned by 195709f: `validate_image_name` guards the manifest, `--image`, `image:`, and manifest/request equality; 4 tests incl. the no-deletion regression; `cargo xtask check` + 96 lib tests green |
+| CR-01 | critical | fixed | fixed in b36b633 with the no-deletion regression test: `validate_image_name` guards the manifest, `--image`, `image:`, and manifest/request equality; 4 tests; `cargo xtask check` + 96 lib tests green |
 | WR-01 | warning | open | owner disposition 2026-11-23: record open, no code change |
 | WR-02 | warning | open | owner disposition 2026-11-23: record open, no code change |
 | WR-03 | warning | open | owner disposition 2026-11-23: record open, no code change |
