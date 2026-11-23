@@ -111,6 +111,11 @@ x86_64 KVM legs:
 - uses KVM when `/dev/kvm` is writable, otherwise requires an explicit
   `HARVEY_Q35_ACCEL=tcg` and **never** downgrades silently (D-13).
 
+`HARVEY` defaults to the git toplevel of `PWD` (else `PWD`); run the app
+from the Harvey checkout root (`nix run .#q35`) or set `HARVEY` — invoked
+from inside another checkout it fails loudly (`not-a-checkout`) rather than
+booting the wrong tree.
+
 ### Deletions (the moved files, D-07/D-19)
 
 16 gate scripts, `nix/host-echo.c`, all 10 `build/x86_64` and all 5
@@ -191,7 +196,7 @@ read from the pinned tree.
 | 3 | `nix flake show --all-systems --json "path:$HF/harvey"` | exit 0. `jq … \| grep -cE '^(boot-r9\|drawterm-gate-x64$\|net-doctor$)'` → **0**. Apps: `aarch64-darwin` = build/default/iso/q35/setup/toolchain; `aarch64-linux` and `x86_64-linux` = +drawterm. |
 | 4 | `nix eval --raw "…#apps.<SYS>.{setup,toolchain,build,iso,q35}.program"` | EVAL-OK for all three systems; drawterm EVAL-OK for both Linux systems. |
 | 5 | `nix eval` of `packages.{aarch64-linux.drawterm,x86_64-linux.minimega,aarch64-darwin.harness}.drvPath` and both devshells | EVAL-OK. |
-| 6 | **Boot half:** copy the committed S5 kernel to `$HF/harvey/amd64/9k10cpu.elf` (sha256 `ecdcdadd…`, 2030226 bytes), then `HARVEY_Q35_ACCEL=tcg nix run "path:$HF/harvey#q35" -- --no-build` | exit 0. `Q35-RESULT machine=q35 accel=tcg banner=yes prompt=yes sigs=none`; prompt line `root is from (tcp)[tcp]:`; banner and prompt within 1 s. `grep -c 'root is from'` → 1. No qemu survivor (`pgrep -f 'qemu-system-x86_64.*9k10cpu'` → none). |
+| 6 | **Boot half:** copy the committed S5 kernel to `$HF/harvey/amd64/9k10cpu.elf` (sha256 `ecdcdadd…`, 2030226 bytes), then, **from `$HF/harvey`**, `HARVEY_Q35_ACCEL=tcg nix run "path:$HF/harvey#q35" -- --no-build` | exit 0. `Q35-RESULT machine=q35 accel=tcg banner=yes prompt=yes sigs=none`; prompt line `root is from (tcp)[tcp]:`; banner and prompt within 1 s. `grep -c 'root is from'` → 1. No qemu survivor (`pgrep -f 'qemu-system-x86_64.*9k10cpu'` → none). From any other cwd the app refuses loudly (`q35: error: not-a-checkout`) unless `HARVEY` names the checkout. |
 | 7 | No-accel refusal on this KVM-less host: `env -u HARVEY_Q35_ACCEL nix run "path:$HF/harvey#q35" -- --no-build` | exit 2, `q35: error: accel-unavailable: /dev/kvm is not writable…` — no silent TCG downgrade. |
 | 8 | `q35` app derivation build (`writeShellApplication`) | shellcheck clean; the derivation builds. |
 | 9 | HARVEY-UNTOUCHED guard | `HARVEY-UNTOUCHED` printed. |
