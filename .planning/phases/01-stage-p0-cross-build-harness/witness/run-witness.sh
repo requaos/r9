@@ -362,7 +362,7 @@ step_trees() {
 
 # --- kernel: the x86_64 kernel package and the boot-iso fixed output ---
 step_kernel() {
-	local start end rc out elf
+	local start end rc out elf iso
 	start=$(now)
 	rc=0
 	note "kernel: nix build .#kernel-x64 (native x86_64-linux)"
@@ -378,6 +378,28 @@ step_kernel() {
 		else
 			printf 'KERNEL-MISSING %s\n' "$elf" | tee -a "$OUT/kernel/kernel.log"
 			rc=1
+		fi
+	fi
+	if [ "$rc" -eq 0 ]; then
+		# The fixed-output check needs a built (or substitutable) output:
+		# `--rebuild` refuses a derivation that was never built ("some
+		# outputs ... are not valid, so checking is not possible"), which
+		# is what stop B tripped on.  Build it plainly first, verify the
+		# printed output exists, and only then re-run with --rebuild.
+		note "kernel: nix build .#boot-iso (the plain build --rebuild checks)"
+		iso=$(cd "$R9" || exit 1
+			nix build --no-link --print-out-paths .#boot-iso \
+				2>>"$OUT/kernel/kernel.log") || rc=1
+		if [ "$rc" -ne 0 ]; then
+			echo "KERNEL-BOOTISO-BUILD-FAIL" | tee -a "$OUT/kernel/kernel.log"
+		elif [ -z "$iso" ] || [ ! -e "$iso" ]; then
+			printf 'KERNEL-BOOTISO-MISSING %s\n' "${iso:-<no output path printed>}" |
+				tee -a "$OUT/kernel/kernel.log"
+			echo "KERNEL-BOOTISO-BUILD-FAIL" | tee -a "$OUT/kernel/kernel.log"
+			rc=1
+		else
+			printf 'KERNEL-BOOTISO-STORE %s\n' "$iso" | tee -a "$OUT/kernel/kernel.log"
+			echo "KERNEL-BOOTISO-BUILD-OK" | tee -a "$OUT/kernel/kernel.log"
 		fi
 	fi
 	if [ "$rc" -eq 0 ]; then
@@ -515,14 +537,33 @@ step_profiles() {
 # 01-16 recorded authdomain-gen as Linux-only, so its conditional holds:
 # stop B runs both compares natively on the witness host.
 step_cpuauth_ref() {
-	local start end rc img
+	local start end rc img ref
 	start=$(now)
 	rc=0
 	: >"$OUT/cpuauth-ref/cpuauth-ref.log"
+	# The devshell's R9_HARVEY_REFERENCE_AMD64 is a context-discarded,
+	# lazy path (01-15/A9): entering the shell builds nothing, and a
+	# compare read from it fails with "No such file or directory" until
+	# the reference is realised.  Realise it first and export the
+	# printed store path for both compares.
+	note "cpuauth_ref: nix build .#harvey-reference-amd64 (realise the reference before reading members)"
+	ref=$(cd "$R9" || exit 1
+		nix build --no-link --print-out-paths .#harvey-reference-amd64 \
+			2>>"$OUT/cpuauth-ref/cpuauth-ref.log") || rc=1
+	if [ "$rc" -ne 0 ] || [ -z "$ref" ]; then
+		printf 'CPUAUTH-REF-REALISE-FAIL (harvey-reference-amd64 did not build or printed no path)\n' |
+			tee -a "$OUT/cpuauth-ref/cpuauth-ref.log"
+		rc=1
+	else
+		printf 'CPUAUTH-REF-REALISED %s\n' "$ref" | tee -a "$OUT/cpuauth-ref/cpuauth-ref.log"
+	fi
 	for img in cpu auth; do
+		[ "$rc" -eq 0 ] || break
 		note "cpuauth_ref: $img --compare-reference (authdomain-gen is Linux-only)"
 		if (cd "$R9" || exit 1
-			nix develop -c env -u R9_HARVEY_DIR cargo xtask image --arch x86-64 \
+			nix develop -c env -u R9_HARVEY_DIR \
+				R9_HARVEY_REFERENCE_AMD64="$ref" \
+				cargo xtask image --arch x86-64 \
 				--image "$img" --compare-reference) 2>&1 |
 			tee -a "$OUT/cpuauth-ref/cpuauth-ref.log"; then
 			printf 'CPUAUTH-REF %s exit=0\n' "$img" | tee -a "$OUT/cpuauth-ref/cpuauth-ref.log"

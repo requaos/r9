@@ -729,4 +729,33 @@ mod tests {
 
         assert!(full_apps(Arch::Riscv64).is_empty());
     }
+
+    /// The moved driver's fast-fail block registers against the qemu
+    /// spawn id AFTER the qemu `spawn` (01-33).  Stop B's failure was
+    /// `can't read "spawn_id": no such variable`: the block sat before
+    /// the spawn, so every gate/gate-neg/probe/flipback leg died with a
+    /// Tcl error before its real assertion.  The guard is static by
+    /// construction — the committed driver IS the literal the gate runs,
+    /// and `include_str!` keeps the check tied to it (no fixture copy to
+    /// drift).
+    #[test]
+    fn driver_fast_fail_registers_after_the_qemu_spawn() {
+        const DRIVER: &str = include_str!("../../gates/x86_64/drawterm-gate.expect");
+        let spawn = DRIVER
+            .find("spawn $QEMU")
+            .expect("the qemu spawn line is present");
+        let register = DRIVER
+            .find("expect_before -i $qemu_sid")
+            .expect("the fast-fail block registers against the qemu spawn id");
+        assert!(
+            register > spawn,
+            "the expect_before registration must follow the qemu spawn (spawn at {spawn}, \
+             registration at {register})"
+        );
+        assert!(
+            !DRIVER.contains("expect_before -i $spawn_id"),
+            "the fast-fail block must not register against the bare spawn_id — it is undefined \
+             before the spawn and aborts the driver"
+        );
+    }
 }

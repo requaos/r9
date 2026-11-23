@@ -328,24 +328,6 @@ proc start_xvfb {} {
 	return $pid
 }
 
-# --- fast-fail on the SERIAL stream (the qemu pty only) ----------------
-# Registered against the qemu spawn id, so these arms can never
-# false-match the drawterm session's own output (its teardown prints
-# `panic: sysfatal', the client-side exit pair the whole-capture scan
-# excludes).
-expect_before -i $spawn_id {
-	-re {panic|Unhandled interrupt} {
-		puts stderr "drawterm-gate: kernel panic marker on the wire — aborting"
-		cleanup
-		exit 1
-	}
-	-re {cpurc: FAIL} {
-		puts stderr "drawterm-gate: cpurc printed a FAIL marker — aborting (the failing leg is named on the wire)"
-		cleanup
-		exit 1
-	}
-}
-
 # --- subtree 1: spawn qemu with the cpu ISO ----------------------------
 set R9_MACHINE [expr {[info exists env(R9_MACHINE)] ? $env(R9_MACHINE) : "q35"}]
 set R9_CPU [expr {[info exists env(R9_CPU)] ? $env(R9_CPU) : "host"}]
@@ -371,6 +353,28 @@ spawn $QEMU -M $R9_MACHINE -cpu $R9_CPU -smp 1 -m 1024M \
 set qemu_sid $spawn_id
 set qemu_pid [exp_pid]
 log_file $env(R9_SMOKE_LOG)
+
+# --- fast-fail on the SERIAL stream (the qemu pty only) ----------------
+# Registered AFTER the qemu spawn, against its recorded id: the id does
+# not exist before `spawn`, and registering there killed the driver with
+# `can't read "spawn_id": no such variable` (stop B).  Scoping to the
+# qemu id keeps these arms from false-matching the drawterm session's own
+# output (its teardown prints `panic: sysfatal', the client-side exit
+# pair the whole-capture scan excludes).  The static guard for the
+# ordering is the `driver_fast_fail_registers_after_the_qemu_spawn` test
+# in xtask/src/gate.rs.
+expect_before -i $qemu_sid {
+	-re {panic|Unhandled interrupt} {
+		puts stderr "drawterm-gate: kernel panic marker on the wire — aborting"
+		cleanup
+		exit 1
+	}
+	-re {cpurc: FAIL} {
+		puts stderr "drawterm-gate: cpurc printed a FAIL marker — aborting (the failing leg is named on the wire)"
+		cleanup
+		exit 1
+	}
+}
 
 # --- 1. the boot ladder (EMISSION order) ------------------------------
 stage banner	{r9 from the Internet}
