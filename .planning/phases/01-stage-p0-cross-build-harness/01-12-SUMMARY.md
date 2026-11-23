@@ -85,7 +85,8 @@ coverage:
 
 duration: ~1 min of continuation executor time (owner run ~14 min wall including the builder setup)
 completed: 2026-11-23
-status: halted
+status: complete
+phase_status: halted-on-harn-01-stop-rule
 ---
 
 # Phase 01 Plan 12: Owner stop A — builder, push, rio/control/a13 witness Summary
