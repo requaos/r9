@@ -1,0 +1,323 @@
+# The x86_64 NET image (build/x86_64/mkimage.sh §10 at bd7a698): the chain
+# tree + the net payload (the ip container's binaries, the three 6c
+# helpers, the utility set) + the /lib fixtures (netaddr.rc and the five
+# netip-*.rc sweeps) that ride the committed skeleton.
+#
+# Derived from the reference bake's net.members by `cargo xtask image
+# --emit-manifest`; every file maps to the tree file with the same
+# sha256, so every entry is source = "harvey".  No unresolved marker
+# remains.  The §10b single-seam discipline is the tree copy of
+# netaddr.rc; no venue literal lives outside it.
+
+schema = 1
+arch = "amd64"
+image = "net"
+
+[[file]]
+path = "/README.md"
+source = "harvey"
+from = "build/x86_64/root-tree/README.md"
+mode = "0644"
+
+[[dir]]
+path = "/adm"
+
+[[dir]]
+path = "/adm/timezone"
+
+[[file]]
+path = "/adm/timezone/local"
+source = "harvey"
+from = "adm/timezone/local"
+mode = "0644"
+
+[[dir]]
+path = "/amd64"
+
+[[dir]]
+path = "/amd64/bin"
+
+[[file]]
+path = "/amd64/bin/bind"
+source = "harvey"
+from = "amd64/bin/bind"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/cat"
+source = "harvey"
+from = "amd64/bin/cat"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/dc"
+source = "harvey"
+from = "amd64/bin/dc"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/dd"
+source = "harvey"
+from = "amd64/bin/dd"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/echo"
+source = "harvey"
+from = "amd64/bin/echo"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/grep"
+source = "harvey"
+from = "amd64/bin/grep"
+mode = "0755"
+
+[[dir]]
+path = "/amd64/bin/ip"
+
+[[file]]
+path = "/amd64/bin/ip/ipconfig"
+source = "harvey"
+from = "amd64/bin/ip/ipconfig"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/ip/ping"
+source = "harvey"
+from = "amd64/bin/ip/ping"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/ip/udpecho"
+source = "harvey"
+from = "amd64/bin/ip/udpecho"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/ls"
+source = "harvey"
+from = "amd64/bin/ls"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/netblast"
+source = "harvey"
+from = "build/x86_64/out/netblast"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/ps"
+source = "harvey"
+from = "amd64/bin/ps"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/rc"
+source = "harvey"
+from = "amd64/bin/rc"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/sed"
+source = "harvey"
+from = "amd64/bin/sed"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/sha1sum"
+source = "harvey"
+from = "amd64/bin/sha1sum"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/tcpblast"
+source = "harvey"
+from = "build/x86_64/out/tcpblast"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/tcpecho"
+source = "harvey"
+from = "build/x86_64/out/tcpecho"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/test"
+source = "harvey"
+from = "amd64/bin/test"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/wc"
+source = "harvey"
+from = "amd64/bin/wc"
+mode = "0755"
+
+[[file]]
+path = "/amd64/init"
+source = "harvey"
+from = "amd64/init"
+mode = "0755"
+
+[[dir]]
+path = "/bin"
+
+[[dir]]
+path = "/bin/service"
+
+[[file]]
+path = "/bin/service/tcp17010"
+source = "harvey"
+from = "build/x86_64/root-tree/bin/service/tcp17010"
+mode = "0755"
+
+[[dir]]
+path = "/boot"
+
+[[file]]
+path = "/boot/boot"
+source = "harvey"
+from = "build/x86_64/out/boot"
+mode = "0755"
+
+[[file]]
+path = "/boot/paqfs"
+source = "harvey"
+from = "amd64/bin/paqfs"
+mode = "0755"
+
+[[dir]]
+path = "/dev"
+
+[[dir]]
+path = "/env"
+
+[[dir]]
+path = "/fd"
+
+[[dir]]
+path = "/lib"
+
+[[file]]
+path = "/lib/churn-cats.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/churn-cats.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/namespace"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/namespace"
+mode = "0644"
+
+[[dir]]
+path = "/lib/ndb"
+
+[[file]]
+path = "/lib/ndb/local.template"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/ndb/local.template"
+mode = "0644"
+
+[[file]]
+path = "/lib/netaddr.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netaddr.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-dhcp.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netip-dhcp.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-loopback.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netip-loopback.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-static.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netip-static.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-tap.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netip-tap.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-tcp.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netip-tcp.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netstress.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netstress.rc"
+mode = "0644"
+
+[[dir]]
+path = "/mnt"
+
+[[dir]]
+path = "/net"
+
+[[dir]]
+path = "/proc"
+
+[[dir]]
+path = "/rc"
+
+[[dir]]
+path = "/rc/bin"
+
+[[file]]
+path = "/rc/bin/cpurc"
+source = "harvey"
+from = "build/x86_64/root-tree/rc/bin/cpurc"
+mode = "0755"
+
+[[file]]
+path = "/rc/bin/termrc"
+source = "harvey"
+from = "build/x86_64/root-tree/rc/bin/termrc"
+mode = "0644"
+
+[[dir]]
+path = "/rc/lib"
+
+[[file]]
+path = "/rc/lib/rcmain"
+source = "harvey"
+from = "rc/lib/rcmain"
+mode = "0644"
+
+[[dir]]
+path = "/root"
+
+[[dir]]
+path = "/srv"
+
+[[dir]]
+path = "/tmp"
+
+[[dir]]
+path = "/usr"
+
+[[dir]]
+path = "/usr/glenda"
+
+[[dir]]
+path = "/usr/glenda/lib"
+
+[[file]]
+path = "/usr/glenda/lib/profile"
+source = "harvey"
+from = "build/x86_64/root-tree/usr/glenda/lib/profile"
+mode = "0644"
