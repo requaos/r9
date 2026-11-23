@@ -1,0 +1,73 @@
+== S6 amd64 static evidence (D-17, Assumption A7 static half) ==
+Host: aarch64-darwin (this Mac), r9 checkout root as cwd.
+
+Build command (verbatim):
+  sh .planning/phases/01-stage-p0-cross-build-harness/spikes/s6/build-probe.sh amd64
+
+Build output (verbatim):
+  WRAP-OK amd64 text=96 entry=0x200028 file=136 out=.../s6/work/probe-amd64.aout
+  AOUT-OK amd64 text=96 entry=0x200028
+
+Toolchain: r9 devshell rustc 1.95.0-nightly (842bd5be2 2026-01-29),
+target x86_64-unknown-none, rust-lld (default for the target),
+flags: --edition 2021 --crate-type bin -C panic=abort -C opt-level=s
+       -C relocation-model=static -C link-arg=-T probe-amd64.ld
+       -C link-arg=--oformat=binary
+
+40 header bytes (hex; 8 BE u32 then the BE u64 entry):
+ 00 00 8a 97 00 00 00 60 00 00 00 00 00 00 00 00
+ 00 00 00 00 00 20 00 28 00 00 00 00 00 00 00 00
+ 00 00 00 00 00 20 00 28
+
+Decoded:
+  magic 0x8a97 (S_MAGIC amd64), text 96, data 0, bss 0, syms 0,
+  vestigial entry32 0x00200028, spsz 0, pcsz 0, entry u64 0x200028.
+
+sha256:
+db94057f04c751c59a648de5c8505f452bb225b6a276714e7ee5544396a5dcd5  .planning/phases/01-stage-p0-cross-build-harness/spikes/s6/work/probe-amd64.aout
+0c1d421e1558e7c54e9f0bc15a058c2fc315e9bb53f2c3f8509e428c341f4f36  .planning/phases/01-stage-p0-cross-build-harness/spikes/s6/work/probe-amd64.flat
+
+Disassembly of the flat payload at VMA 0x200028. llvm-objdump cannot
+read a raw binary, so the flat payload was wrapped byte-verbatim into
+an ELF first:
+  llvm-objcopy -I binary -O elf64-x86-64 --binary-architecture=i386:x86-64 \
+    --change-section-address .data=0x200028 work/probe-amd64.flat \
+    work/probe-amd64-disasm.elf
+  llvm-objdump -D work/probe-amd64-disasm.elf
+r9 devshell: rustc 1.95.0-nightly (842bd5be2 2026-01-29)
+QEMU emulator version 11.1.2
+apps: nix run .#build | nix run .#boot-virt | nix run .#default
+Disassembly of section .data:
+
+0000000000200028 <_binary__planning_phases_01_stage_p0_cross_build_harness_spikes_s6_work_probe_amd64_flat_start>:
+  200028: 48 83 ec 40                  	subq	$0x40, %rsp
+  20002c: 48 c7 44 24 08 01 00 00 00   	movq	$0x1, 0x8(%rsp)
+  200035: 48 8d 05 36 00 00 00         	leaq	0x36(%rip), %rax        # 0x200072 <_binary__planning_phases_01_stage_p0_cross_build_harness_spikes_s6_work_probe_amd64_flat_start+0x4a>
+  20003c: 48 89 44 24 10               	movq	%rax, 0x10(%rsp)
+  200041: 48 8d 0d 40 00 00 00         	leaq	0x40(%rip), %rcx        # 0x200088 <_binary__planning_phases_01_stage_p0_cross_build_harness_spikes_s6_work_probe_amd64_flat_end>
+  200048: 48 29 c1                     	subq	%rax, %rcx
+  20004b: 48 89 4c 24 18               	movq	%rcx, 0x18(%rsp)
+  200050: 48 c7 44 24 20 ff ff ff ff   	movq	$-0x1, 0x20(%rsp)
+  200059: bd 33 00 00 00               	movl	$0x33, %ebp
+  20005e: 0f 05                        	syscall
+  200060: 48 c7 44 24 08 00 00 00 00   	movq	$0x0, 0x8(%rsp)
+  200069: bd 08 00 00 00               	movl	$0x8, %ebp
+  20006e: 0f 05                        	syscall
+  200070: eb fe                        	jmp	0x200070 <_binary__planning_phases_01_stage_p0_cross_build_harness_spikes_s6_work_probe_amd64_flat_start+0x48>
+  200072: 52                           	pushq	%rdx
+  200073: 39 2d 52 55 53 54            	cmpl	%ebp, 0x54535552(%rip)  # 0x547355cb <_binary__planning_phases_01_stage_p0_cross_build_harness_spikes_s6_work_probe_amd64_flat_end+0x54535543>
+  200079: 2d 41 4f 55 54               	subl	$0x54554f41, %eax       # imm = 0x54554F41
+  20007e: 2d 50 52 4f 42               	subl	$0x424f5250, %eax       # imm = 0x424F5250
+  200083: 45 2d                        	<unknown>
+  200085: 4f 4b 0a                     	<unknown>
+
+Checks:
+  - _start is the first instruction at 0x200028 (the ENTRY and the
+    first disassembled byte).
+  - mov ebp, 0x33 (PWRITE=51) immediately followed by syscall.
+  - mov ebp, 0x8 (EXITS=8) immediately followed by syscall.
+  - the marker bytes R9-RUST-AOUT-PROBE-OK\n follow the loop in the
+    same text payload (0x200072..0x200087).
+  - AOUT-OK above is aout.py check --arch amd64, which asserts every
+    rule of x86_64/src/exec.rs parse_aout/read_aout.
+  - no relocation, data, bss or symbol table is present (flat text only).
