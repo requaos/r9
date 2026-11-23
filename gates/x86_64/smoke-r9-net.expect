@@ -1,0 +1,504 @@
+#!/usr/bin/expect -f
+# smoke-r9-net.expect — the composed NET smoke gate for x86_64 (14-09,
+# XEXEC-05, D-07/D-13): the aarch64 08-09 net gate re-keyed stage-for-
+# stage onto the composed GRUB ISO boot.  This script spawns qemu
+# DIRECTLY with the composed ISO on -cdrom (q35, the always-on user-net
+# NIC; no DTB argument, no qemu loader-device flag: the aarch64
+# delivery tokens are deliberately absent — GRUB delivers the NET bake
+# as an mb2 tag-3 module off the same ISO; the caller is
+# nix/gates/smoke-r9-net-x64.sh = the flake app boot-r9-net-smoke-x64):
+#
+#   chain boot (banner → the host-side hostfwd listener observations
+#   → paqfs... → version... → %  prompt) →
+#   `. /lib/netaddr.rc' (the D-11 seam sourced into the interactive
+#   shell so the typed legs take the seam's values) →
+#   `rc /lib/netip-static.rc' (the baked fixture: the REAL unmodified
+#   ipconfig assigns the seam static IPv4 + the default route; ping the
+#   gateway; the /net/arp view) →
+#   THE DUPLICATE-BINDING DEGENERATE LEG (the adjacency backstop edge):
+#   an equal-address ipconfig attempt against the STILL-BOUND ether —
+#   the singleton-medium rule must reject it VISIBLY (the devip error
+#   on the wire + the netgate: DUPBIND-REJECTED marker), never a
+#   silent merge or a route collision →
+#   the ether medium is unbound →
+#   `rc /lib/netip-dhcp.rc' (the baked fixture: the REAL ipconfig
+#   dhcpclient's DORA over /net/udp broadcast fidelity configures the
+#   guest) →
+#   the ether medium is unbound AGAIN (see the stage-order note: the
+#   loopback legs need the single-core fallback) →
+#   `rc /lib/netip-loopback.rc' (the baked fixture: the random leg +
+#   ping 127.0.0.1 + the udp echo round-trip — the fixture's own ok
+#   markers are the stage asserts) →
+#   THE NO-ADDRESS DEGENERATE LEG (the empty-input backstop edge): a
+#   ping with NO target address must fail with a named marker
+#   (netgate: NOADDR-REJECTED), never wedge or hang →
+#   the tcp/7 echo round-trip TYPED INLINE against the live loopback
+#   (the baked tcpecho server + the fixture's own fork-free port
+#   discovery + the fd-4-held conv client exchange, continuation-line
+#   form) →
+#   the NET-SMOKE: ALL STAGES PASS completion marker (typed echo, the
+#   two-occurrence discipline) →
+#   whole-capture post-passes: pid-warning-absent + the nic-bind line.
+#
+#   exit 0 only when EVERY stage passed; a failure exits 1 and names
+#   the failed stage on stderr — never a bare hang-to-timeout with no
+#   localization.  A fixture's own `netip: FAIL <stage>' line
+#   fast-aborts the run via expect_before.
+#
+# STAGE ORDER (load-bearing, carried VERBATIM from the aarch64 gate —
+# the measured findings hold on the shared port stack): the ETHER legs
+# run FIRST, while the only blocked devip waiter is the leg's own ping
+# reader — the exact waiter shape the xtask virtip gates prove.  The
+# RX-IRQ wake path with MULTIPLE registered devip waiters is a measured
+# r9 defect (aarch64 08-09, recorded in that phase's deferred-items +
+# WINDOWS): with the loopback servers (udpecho/tcpecho) blocked in
+# reads, the static leg's gateway ping wedged the guest fully idle (no
+# wake, no alarm).  Phase 16's tap legs WILL hit the multi-waiter path
+# — the record names it.
+#
+# And the ether medium is UNBOUND AGAIN before the loopback legs: the
+# two-core seam demuxes a wildcard announce to the ether core WHEN
+# BOUND, so with ether still bound the loopback fixture's backgrounded
+# udpecho/tcpecho servers would land on the ETHER core while their
+# loopback-bound clients wait on the loopback core — the echo never
+# crosses.  With ether unbound the wildcard announces fall back to the
+# loopback core (the single-core fallback).  Loopback delivery needs no
+# NIC RX (it is synchronous in the sender's own drive), so the servers
+# blocked on the loopback core are inert for the rest of the run.  Both
+# ether unbinds are orphan-free by construction: at each point every
+# ether conv's process has exited (ipconfig/ping are synchronous;
+# dhcpwatch only SLEEPS on an alarm — never a devip waiter; its ipifc
+# ctl hold is not a socket in the dropped core), so no live conv
+# references the dropped core's SocketSet.
+#
+# WHY THE TCP LEG IS INLINE (and why ether gets exactly one unbind per
+# bound window): the era's ipifc mediums are SINGLETONS — a second
+# `bind loopback' errors "interface already bound", and ipconfig's own
+# binddevice sysfatals the same way on an already-bound ether.  The
+# baked fixtures each do their own bind, so naive fixture sequencing
+# double-binds.  Unbind-and-rebind is NOT the answer for loopback: an
+# unbind drops the medium's seam core while the loopback fixture's
+# backgrounded udpecho still holds a conv with a socket handle INTO
+# that core, and the fresh core's SocketSet hands the same handle out
+# again — the orphan and the new owner collide.  So: loopback binds
+# EXACTLY ONCE (the loopback fixture) and the tcp leg rides it inline.
+# Ether's unbinds are orphan-free by construction (the header's hazard
+# analysis above).
+#
+# THE VENUE LABEL (Pitfall 10): this smoke runs on the slirp user
+# network (the emitter's argv) — hermetic, unprivileged, CI-able, and
+# explicitly NOT L2
+# truth.  The static + dhcp fixtures print `netip: NOT-L2-TRUTH slirp
+# venue' into the capture and this gate ASSERTS those labels (stage
+# presences), so the evidence can never be re-read as tap-venue proof;
+# the tap-leg truth verdict is Phase 16's NETIP-08 gate, out of scope
+# here.
+#
+# Hygiene: the caller (nix/gates/smoke-r9-net-x64.sh) rm -f's the capture
+# BEFORE launch and we rm -f + log_file it fresh below — the file
+# starts empty and only THIS run's boot writes it, so a pre-seeded
+# stale capture can never satisfy a marker wait.  Every exit path kills
+# qemu's process group (expect's spawn sets the child up as a
+# session/group leader on its pty).
+#
+# Markers: PRESENCE assertions only, never interleaving order
+# (preemption makes arrival order meaningless).  Patterns are
+# CRLF-tolerant substrings, never end-of-line anchored (the kernel
+# console cooks \n → \r\n; userland writes are byte-exact).  r9's
+# devcons ECHOES cooked-mode typed input, so every typed command
+# appears on the wire BEFORE its output — the marker discipline is
+# load-bearing: the fixtures' ok markers are OUTPUT-only (the typed
+# `rc /lib/...' line never contains them), so they stage
+# single-occurrence; markers a TYPED line can contain (the degenerate
+# legs' markers, the inline tcp leg's ok marker, the completion line)
+# stage TWO-OCCURRENCE (typed echo, then output).  The inline leg's
+# failure print quotes its FAIL token ('FAIL') so the ECHOED line never
+# carries the bare `netip: FAIL' substring — expect_before's abort
+# regex can only match the actual OUTPUT.  The degenerate legs'
+# netgate: markers never collide with the `netip: FAIL' fast-fail arm
+# by construction (a distinct prefix).  Timeouts are TCG-sized (600s
+# per stage; KVM boots in seconds).
+#
+# TYPED-INPUT DISCIPLINE (measured on the aarch64 gate, carried — the
+# x64 16550 RX ring is the same 256-byte shape): the console's input
+# path drops bytes under a host-side burst — a single expect send
+# longer than the ring arrives TRUNCATED.  Every typed line below is
+# kept SHORT (≤ ~120 chars): the tcp leg's fd-4-held client block is
+# typed as rc CONTINUATION LINES (rcmain's prompt=('% ' '\t') — the
+# second word is the continuation prompt), each line paced to its
+# echoed continuation prompt so the ring never bursts.
+#
+# Env (exported by nix/gates/smoke-r9-net-x64.sh — the flake app):
+#   R9_QEMU      default qemu-system-x86_64
+#   R9_ISO       REQUIRED — the COMPOSED ISO (the caller's iso-builder
+#                output: r9 kernel-x64 + the NET bake as
+#                /boot/bootfs.paq)
+#   R9_SMOKE_LOG REQUIRED — the serial capture (fresh per run; both
+#                gate runs retain theirs as evidence)
+#   R9_NETDEV_ARGV REQUIRED — the emitter's slirp argv as ONE
+#                space-separated line (the caller's capture of
+#                `r9-netdev-args --mode slirp'); the spawn block below
+#                splits it into the netdev+device tokens — NO netdev
+#                literal lives in this file (16-06, D-05's front-end
+#                widening: the gate's venue stays FIXED slirp per
+#                D-02, but the stanza now flows from the same pinned
+#                TOML data the boot app consumes, the D-04 hostfwd
+#                pair included)
+#   R9_MACHINE/R9_CPU/R9_ACCEL — the caller-selected q35 shape
+#                (defaults q35/host/kvm; TCG selects qemu64)
+#   R9_RUN_TAG   the per-run unique tag in qemu's argv (-name); the
+#                caller's survivor sweep keys on it
+#
+# usage: env R9_ISO=… R9_SMOKE_LOG=… expect gates/x86_64/smoke-r9-net.expect
+# exit 0 on all-pass; exit 1 names the failed stage on stderr; exit 2
+# on a contract violation (missing env).
+
+set timeout 600                    ;# per stage, TCG-sized
+match_max 65536
+# NOTE: log_user stays ON — expect 5.45 writes NOTHING to log_file when
+# log_user is 0 (measured on the aarch64 gate): the capture file would
+# be empty.  The wire echo on the driver's stdout is the app's visible
+# progress; the stage lines name it on stderr.
+
+# --- required env (loud, before any spawn) -------------------------------
+foreach v {R9_ISO R9_SMOKE_LOG R9_NETDEV_ARGV} {
+    if {![info exists env($v)]} {
+        puts stderr "smoke-r9-net-x64: \$$v unset — run via the flake app (nix run .#boot-r9-net-smoke-x64)"
+        exit 2
+    }
+}
+set QEMU [expr {[info exists env(R9_QEMU)] ? $env(R9_QEMU) : "qemu-system-x86_64"}]
+set run_tag [expr {[info exists env(R9_RUN_TAG)] ? $env(R9_RUN_TAG) : "r9x64net-[pid]-[clock seconds]"}]
+
+# --- Hygiene: a fresh capture per run -----------------------------------
+# The caller already rm -f'd it; remove again here so the rule holds
+# however this script is invoked (a stale capture is dead evidence).
+exec rm -f $env(R9_SMOKE_LOG)
+
+# --- spawn qemu: the composed ISO on -cdrom (the q35 shape the caller
+#     selected — kvm/host by default, tcg/qemu64 explicitly; the
+#     netdev+device tokens are the SPLIT R9_NETDEV_ARGV — the
+#     emitter's slirp argv with the D-04 hostfwd pair: the venue stays
+#     FIXED slirp (D-02) but the stanza now flows from the same pinned
+#     TOML data the boot app consumes, ONE emission path — 16-06) ----
+set R9_MACHINE [expr {[info exists env(R9_MACHINE)] ? $env(R9_MACHINE) : "q35"}]
+set R9_CPU [expr {[info exists env(R9_CPU)] ? $env(R9_CPU) : "host"}]
+set R9_ACCEL [expr {[info exists env(R9_ACCEL)] ? $env(R9_ACCEL) : "kvm"}]
+
+# split the emitter's one-line argv into spawn tokens (whitespace
+# split, empty tokens dropped; the emitter prints space-separated
+# tokens containing no spaces — its committed contract; the 16-05
+# soak driver's mechanism)
+set netdev_argv {}
+foreach tok [split $env(R9_NETDEV_ARGV)] {
+    if {$tok ne ""} {
+        lappend netdev_argv $tok
+    }
+}
+if {[llength $netdev_argv] == 0} {
+    puts stderr "smoke-r9-net-x64: R9_NETDEV_ARGV is empty — the caller's emitter capture failed (the slirp argv is required)"
+    exit 2
+}
+
+spawn $QEMU -M $R9_MACHINE -cpu $R9_CPU -smp 1 -m 1024M \
+    -accel $R9_ACCEL \
+    -cdrom $env(R9_ISO) \
+    {*}$netdev_argv \
+    -nographic \
+    -name $run_tag
+set spawn_pid [exp_pid]
+log_file $env(R9_SMOKE_LOG)
+
+# --- teardown: kill qemu's process group ------------------------------
+# The spawned qemu is a session/group leader (expect's pty setup), so
+# the group IS the qemu subtree; catch: already-dead is fine.  The
+# lone-pid second form is the no-group fallback.  The caller's EXIT
+# trap sweeps any survivor keyed on this run's unique tag.
+proc cleanup {} {
+    global spawn_pid
+    catch { exec kill -KILL -- -$spawn_pid 2>/dev/null }
+    catch { exec kill -KILL $spawn_pid 2>/dev/null }
+}
+
+# --- staged ordered assertions (each stage names its failure) ---------
+# NOTE: expect_out must be global here — expect sets it in the CURRENT
+# scope, and the sweep stages read the captured buffer AFTER stage
+# returns.
+proc stage {name re} {
+    global expect_out
+    expect {
+        -re $re { puts stderr "smoke-r9-net-x64: stage ok — $name" }
+        timeout { puts stderr "smoke-r9-net-x64: TIMEOUT at stage: $name"; cleanup; exit 1 }
+        eof { puts stderr "smoke-r9-net-x64: qemu exited (EOF) at stage: $name"; cleanup; exit 1 }
+    }
+}
+
+# --- the hostfwd listener observations (16-06, HNET-01) ------------------
+# The spawn's slirp argv carries the D-04 hostfwd pair, and qemu binds
+# both loopback listeners EAGERLY at netdev init — a failed bind aborts
+# qemu itself (the backstop).  These stages make the POSITIVE
+# observation explicit: read the HOST's listening table (exec ss -tln,
+# netstat fallback — a host-side exec, never the guest's pty) while
+# the booted guest runs and assert each loopback entry present; the
+# stage-ok lines are the evidence.  LOOPBACK ONLY: nothing here
+# asserts — or reaches toward — a non-loopback address (the runner's
+# listeners are job-internal).  exec does not touch the spawn's pty:
+# the boot output accumulates in expect's buffer and the next stage
+# consumes it.  The port token is anchored with a trailing
+# whitespace-or-EOL so 5670 can never match a longer port like 56702.
+proc host_listeners {} {
+    if {![catch {exec ss -tln} out]} { return $out }
+    if {![catch {exec netstat -tln} out]} { return $out }
+    return ""
+}
+proc hostfwd_stage {port} {
+    set listeners [host_listeners]
+    if {$listeners eq ""} {
+        puts stderr "smoke-r9-net-x64: FAILED at stage: hostfwd-$port-listening — no host listening-table tool produced output (ss/netstat both missing?)"
+        cleanup
+        exit 1
+    }
+    if {![regexp "127\\.0\\.0\\.1:${port}( |\$)" $listeners]} {
+        puts stderr "smoke-r9-net-x64: FAILED at stage: hostfwd-$port-listening — no 127.0.0.1:$port loopback entry in the host listening table (the slirp hostfwd bind is missing); table follows:"
+        puts stderr $listeners
+        cleanup
+        exit 1
+    }
+    puts stderr "smoke-r9-net-x64: stage ok — hostfwd-$port-listening (127.0.0.1:$port present in the host listening table)"
+}
+
+# fast-fail on kernel panic markers anywhere in the boot (the aarch64
+# gate's PANIC_RE rule; the real-chain "syscall 10 unimplemented" notes
+# are NOT panics — the 14-06 gate's documented exemption class) — and
+# on a fixture's own `netip: FAIL <stage>' OUTPUT line (the fixture
+# names its failing stage on the wire; waiting the full timeout for the
+# absent ok marker would only hide it).  The inline tcp leg's failure
+# print quotes its token ('FAIL') precisely so its ECHOED command line
+# cannot trip this regex; the degenerate legs' netgate: markers use a
+# distinct prefix for the same reason.
+expect_before {
+    -re {panic|Unhandled interrupt} {
+        puts stderr "smoke-r9-net-x64: kernel panic marker on the wire — aborting"
+        cleanup
+        exit 1
+    }
+    -re {netip: FAIL} {
+        puts stderr "smoke-r9-net-x64: a fixture printed netip: FAIL — aborting (the failing stage is named on the wire)"
+        cleanup
+        exit 1
+    }
+}
+
+# 1. the chain boot sequence: banner → boot(8)'s paqfs handoff → its
+#    9P version handshake → the % prompt (the composed smoke's stage
+#    vocabulary — the net gate boots the SAME chain, then types)
+stage banner    {r9 from the Internet}
+
+# 1b. the hostfwd listener observations, host-side while the guest
+#     boots (the emitter's slirp argv carries the D-04 pair; the
+#     procs' header has the reasoning — positive evidence, loopback
+#     only, qemu's eager-bind abort is the backstop)
+hostfwd_stage 17010
+hostfwd_stage 5670
+
+stage paqfs     {paqfs\.\.\.}
+stage version   {version\.\.\.}
+stage prompt    {% }
+
+# 2. source the D-11 seam into the interactive shell (the typed legs
+#    below take its values — NO venue address literal outside the seam,
+#    Pitfall 9/D-11's discipline).  Prints nothing; the prompt resyncs.
+send ". /lib/netaddr.rc\r"
+stage seam-prompt {% }
+
+# 3. the static ipconfig leg, FIRST of the flows (the header's
+#    waiter-shape discipline): the baked fixture runs the REAL
+#    unmodified ipconfig (`-g <gw> ether /net/ether0 add <guest>
+#    <mask>' — the seam's values), then asserts the address in
+#    /net/ipselftab, the default route in /net/iproute, the gateway
+#    ping replies, and the gateway's /net/arp entry.  The venue label
+#    is stage-asserted (never re-read slirp-green as L2 proof).
+send "rc /lib/netip-static.rc\r"
+stage static-ok   {netip: static ok}
+stage static-arp  {netip: arp view ok}
+stage static-l2   {netip: NOT-L2-TRUTH slirp venue}
+stage static-done {netip: NETIP-DONE}
+stage static-prompt {% }
+
+# 4. THE DUPLICATE-BINDING DEGENERATE LEG (the adjacency backstop
+#    edge): an EQUAL-ADDRESS ipconfig attempt against the still-bound
+#    ether.  The singleton-medium rule must reject it VISIBLY — the
+#    marker stages TWO-OCCURRENCE (the typed echo first, then the
+#    OUTPUT: ipconfig exits non-nil so rc's || arm prints it; a silent
+#    merge or an accepted duplicate would print nothing and the second
+#    occurrence stage fails loudly), and devip's own named error rides
+#    the wire between them (sysfatal's %r carries "interface already
+#    bound" from the medium's double-bind check — stage-ordered by
+#    wire arrival: the error prints when ipconfig EXITS, before rc's
+#    || arm runs).
+send "ip/ipconfig ether /net/ether0 add \$slirp_guestv4 \$slirp_maskv4 || echo netgate: DUPBIND-REJECTED\r"
+stage dupbind-echoed   {netgate: DUPBIND-REJECTED}
+stage dupbind-error    {interface already bound}
+stage dupbind-rejected {netgate: DUPBIND-REJECTED}
+stage dupbind-prompt   {% }
+
+# 5. unbind the ether medium (the dhcp fixture's ipconfig binddevice
+#    would otherwise sysfatal "interface already bound" — the same
+#    singleton rule the degenerate leg just proved).  The bound conv is
+#    found by its status file's `device ether' line (never a hardcoded
+#    conv number; an unbound conv's status is a bare newline, no
+#    match).  ORPHAN-FREE here by construction (the header's hazard
+#    analysis): no live conv references the ether core — the static
+#    leg's ipconfig and ping exited synchronously and the dup-bind
+#    attempt never bound.  Silent on success; a missed unbind reds the
+#    dhcp fixture loudly (netip: FAIL ipconfig) rather than hiding
+#    here.
+send {for (i in /net/ipifc/[0-9]*) if (grep 'device ether' $i/status > /dev/null) echo unbind > $i/ctl}
+send "\r"
+stage unbind-eth-prompt {% }
+
+# 6. the DHCP leg: the baked fixture runs the REAL ipconfig in its
+#    DEFAULT mode on the ether (the dhcpclient DORA over /net/udp
+#    broadcast fidelity), then asserts the lease in /net/ipselftab, the
+#    default route, the /net/ndb write, and the gateway ping.  The
+#    venue label is stage-asserted here too.  Still the single-waiter
+#    shape: dhcpwatch only SLEEPS (an alarm, never a devip waiter).
+send "rc /lib/netip-dhcp.rc\r"
+stage dhcp-ok    {netip: dhcp ok}
+stage dhcp-l2    {netip: NOT-L2-TRUTH slirp venue}
+stage dhcp-done  {netip: NETIP-DONE}
+stage dhcp-prompt {% }
+
+# 6b. unbind the ether medium AGAIN before the loopback legs (the
+#     header's two-core demux note): the loopback fixture's wildcard
+#     announces must land on the loopback core, and the demux sends
+#     wildcards to the ether core WHEN BOUND.  Same status-walk shape
+#     as the first unbind; same orphan-free argument (dhcpwatch sleeps
+#     on an alarm — never a devip waiter).
+send {for (i in /net/ipifc/[0-9]*) if (grep 'device ether' $i/status > /dev/null) echo unbind > $i/ctl}
+send "\r"
+stage unbind-eth2-prompt {% }
+
+# 7. the loopback legs, AFTER the ether legs (the header's
+#    waiter-shape discipline — loopback needs no NIC RX, so the servers
+#    it leaves blocked are inert for the rest of the run): the baked
+#    fixture does the #I attach, the ipifc loopback bind + address add,
+#    the random leg, `ping 127.0.0.1' (its own -n count and alarm
+#    discipline bound the leg), and the udp echo round-trip.  The ok
+#    markers are the fixture's OUTPUT (never the typed line), staged
+#    single-occurrence in print order.  The loopback medium stays bound
+#    for the rest of the boot.
+send "rc /lib/netip-loopback.rc\r"
+stage lo-random  {netip: random ok}
+stage ping       {netip: ping ok}
+stage udp-echo   {netip: udp echo ok}
+stage lo-done    {netip: NETIP-DONE}
+stage lo-prompt  {% }
+
+# 8. THE NO-ADDRESS DEGENERATE LEG (the empty-input backstop edge): a
+#    ping with NO target address ($noaddr is deliberately unset — rc
+#    expands it empty).  ping's argv check must reject it loudly
+#    (usage + non-nil exit → rc's || arm prints the marker), never
+#    wedge or hang on a resolution path.  TWO-OCCURRENCE staging (the
+#    typed echo carries the marker text, the output proves the
+#    rejection); a ping that ACCEPTED the empty target would print its
+#    own output instead and the second occurrence stage fails.
+send "ip/ping -n 1 \$noaddr || echo netgate: NOADDR-REJECTED\r"
+stage noaddr-echoed   {netgate: NOADDR-REJECTED}
+stage noaddr-rejected {netgate: NOADDR-REJECTED}
+stage noaddr-prompt   {% }
+
+# 9. the tcp/7 echo leg, TYPED INLINE against the live loopback core
+#    (the header's why): the baked tcpecho server (announce tcp!*!7)
+#    backgrounded; the fixture's own fork-free port discovery (a
+#    NONZERO matching local port proves the announce completed —
+#    single-CPU syscall atomicity); then the client exchange with the
+#    clone-opened ctl held on fd 4 across the whole exchange (the
+#    conv-lifetime discipline: a devip conv RESETS on its last close,
+#    so the conv survives the per-command data opens — rc's `<>[4]'
+#    read-write redirect, the man page's newconn precedent).  The
+#    connect BLOCKS until the loopback handshake resolves; dd's
+#    -bs/-count takes exactly one echo (a bare cat would block for
+#    more of the stream).  The ok marker prints only when the
+#    word-wise compare passes (the two-occurrence shape is consumed by
+#    the c-line stages first — see the NOTE below); on mismatch the
+#    quoted-FAIL print trips expect_before; a wedged read times the
+#    stage out loudly.  The block is typed as CONTINUATION LINES (rc's
+#    second prompt word is a tab) — the header's typed-input
+#    discipline.
+send "tcpecho &\r"
+stage tcp-server-prompt {% }
+send {sport=''; while (~ $sport '') { for (d in /net/tcp/[0-9]*) { loc=`{cat $d/local >[2]/dev/null}; if (~ $loc *!7) sport=7 } }}
+send "\r"
+stage tcp-announced-prompt {% }
+send "tcptag=netip-tcp-smoke-14-09\r"
+stage tcp-tag-prompt {% }
+# the held-fd client block, one short line per send; the open brace
+# makes rc read continuation lines (tab-prompted) until the close.
+send "{\r"
+stage tcp-c1 {\t}
+send {tconv=`{cat <[0=4]}; d=/net/tcp/$tconv/data}
+send "\r"
+stage tcp-c2 {\t}
+send {echo connect $lo_guestv4!7 >[1=4]}
+send "\r"
+stage tcp-c3 {\t}
+send {echo $tcptag > $d}
+send "\r"
+stage tcp-c4 {\t}
+send {reply=`{dd -if $d -bs 512 -count 1 >[2]/dev/null}}
+send "\r"
+stage tcp-c5 {\t}
+send {if (~ $reply $tcptag) echo netip: tcp echo ok}
+send "\r"
+stage tcp-c6 {\t}
+send {if (! ~ $reply $tcptag) echo netip: 'FAIL' tcpcompare}
+send "\r"
+stage tcp-c7 {\t}
+send "\} <>\[4\]/net/tcp/clone\r"
+# NOTE: no "echoed" stage here — the c-line continuation stages already
+# consumed the typed lines (including L6's echo, which carries the ok
+# marker's text), so the FIRST occurrence this stage can see IS the
+# block's output; a wedged read times out loudly, a failed compare
+# trips expect_before's netip: FAIL arm.
+stage tcp-echo-response {netip: tcp echo ok}
+stage tcp-prompt        {% }
+
+# 10. the completion marker: typed echo, two-occurrence (the typed
+#     command's echo first, then the echo builtin's OUTPUT — a missing
+#     echo OR a missing output fails its own stage).
+send "echo NET-SMOKE: ALL STAGES PASS\r"
+stage marker-echoed   {NET-SMOKE: ALL STAGES PASS}
+stage marker-response {NET-SMOKE: ALL STAGES PASS}
+stage marker-prompt   {% }
+
+# 11. pid-warning-absent: #c/pid resolved getpid() all boot, so init's
+#     pri-10 write named the REAL pid — the designed-degradation
+#     warning's pid-0 ctl path fragment must be ABSENT from the whole
+#     capture (its presence proves getpid() failed and the write
+#     targeted pid 0).  The composed smoke's post-pass, carried.
+log_file                           ;# stop + flush before the whole-file scan
+set fh [open $env(R9_SMOKE_LOG) r]
+set whole [read $fh]
+close $fh
+if {[string match "*#p/0/ctl*" $whole]} {
+    puts stderr "smoke-r9-net-x64: pid-0 ctl path present in the capture — getpid() regressed"
+    cleanup
+    exit 1
+}
+puts stderr "smoke-r9-net-x64: stage ok — pid-warning-absent (no #p/0/ctl in the capture)"
+
+# 12. nic-bind: the always-on NIC's end state — the composed boot bound
+#     the virtio-net NIC (the static + dhcp legs above drive it for
+#     real).  The driver's bind line must be PRESENT in the whole
+#     capture (the inverted whole-file scan: ABSENCE fails).
+if {![string match "*#l0: virtio: 1000Mbps: *" $whole]} {
+    puts stderr "smoke-r9-net-x64: nic-bind FAILED — no '#l0: virtio: 1000Mbps: ' bind line in the capture (the composed boot did not bind the NIC)"
+    cleanup
+    exit 1
+}
+puts stderr "smoke-r9-net-x64: stage ok — nic-bind (#l0: virtio: 1000Mbps: bind line present in the capture)"
+
+puts stderr "smoke-r9-net-x64: ALL STAGES PASS — chain boot, hostfwd loopback listeners observed host-side (emitter argv), ipconfig static (NOT-L2-TRUTH labeled), duplicate-binding rejected visibly, ipconfig dhcp (NOT-L2-TRUTH labeled), loopback ping + udp echo, no-address rejected loudly, tcp/7 echo inline, completion marker, pid-warning-absent, nic-bind"
+cleanup
+exit 0
