@@ -2490,6 +2490,41 @@ path = \"/proc\"
     }
 
     #[test]
+    fn assemble_refuses_an_escaping_image_name_before_any_deletion() {
+        let scratch = Scratch::new("image-name-escape");
+        let tree = tree_with(&scratch, &[]);
+        // The target `../escape.stage` would sit beside `out/`; make it a
+        // directory carrying a sentinel so a `remove_dir_all` is visible.
+        let escape = scratch.0.join("escape.stage");
+        fs::create_dir_all(&escape).unwrap();
+        fs::write(escape.join("keep"), b"sentinel").unwrap();
+
+        let manifest = "schema = 1\narch = \"arm64\"\nimage = \"../escape\"\n";
+        let manifest_path = scratch.0.join("escape.toml");
+        fs::write(&manifest_path, manifest).unwrap();
+        let mkpaqfs = fake_mkpaqfs(&scratch);
+        let mut log = Vec::new();
+        let err = assemble_checked_with(
+            &manifest_path,
+            &tree,
+            std::slice::from_ref(&tree.to_path_buf()),
+            &tree,
+            &scratch.0.join("out"),
+            &mkpaqfs,
+            None,
+            &mut log,
+        )
+        .expect_err("an escaping image name must be refused")
+        .to_string();
+        assert!(err.contains("single normal path component"), "{err}");
+        assert_eq!(
+            fs::read(escape.join("keep")).unwrap(),
+            b"sentinel",
+            "the escaping stage directory must not be deleted"
+        );
+    }
+
+    #[test]
     fn manifest_rejects_duplicate_image_paths() {
         let text = sample_manifest().replace("path = \"/hello\"", "path = \"/init\"");
         let err = parse_manifest(&text).unwrap_err().to_string();
