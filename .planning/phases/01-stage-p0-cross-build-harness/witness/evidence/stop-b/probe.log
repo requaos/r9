@@ -1,0 +1,12 @@
+# trimmed from .planning/phases/01-stage-p0-cross-build-harness/spikes/linux-witness/return-01-22/probe/probe.log (425 lines): probe build and the decisive gate failure lines
+92:     Running `target/debug/xtask probe --arch x86-64`
+93:probe: 96 flat bytes -> 136 a.out bytes at /home/req/r9-witness-work/r9-probe-flip/target/probe/x86_64/ps.aout
+94:probe: /home/req/r9-witness-work/r9-probe-flip/target/probe/x86_64/ps.aout (136 bytes)
+167:gate: image cpu /home/req/r9-witness-work/r9-probe-flip/target/images/x86_64/cpu.paq sha256 8c78f19e41438d1b68243bdfe513078098797f3e72092ce5ced0aecd66324dcd members 4442
+415:gate: iso /home/req/r9-witness-work/r9-probe-flip/target/boot-q35cpu.iso 
+416:gate: leg rio (capture /home/req/r9-witness-work/r9-probe-flip/target/gate/107501-1795447192/rio.log)
+417:can't read "spawn_id": no such variable
+418:    while executing
+419:"expect_before -i $spawn_id {
+424:    (file "/home/req/r9-witness-work/r9-probe-flip/gates/x86_64/drawterm-gate.expect" line 336)
+425:GATE-FAIL rio-leg-failed (leg rio; capture /home/req/r9-witness-work/r9-probe-flip/target/gate/107501-1795447192/rio.log)

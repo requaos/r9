@@ -1,0 +1,41 @@
+# trimmed from .planning/phases/01-stage-p0-cross-build-harness/spikes/linux-witness/return-01-22/profiles/q35churnshell.log (485 lines): the boot-test verdict and serial tail
+442:boot-test FAILED waiting for >= 3 lines beginning "tick" (negative scan hit "unimplemented syscall")
+# serial tail:
+q35: lapic 0xfee00000 (madt local intc)
+q35: ioapic 0xfec00000 gsib 0 (id 0)
+q35: intsrc bus 0 source 0 -> gsi 2 flags 0x0
+q35: intsrc bus 0 source 5 -> gsi 5 flags 0xd
+q35: intsrc bus 0 source 9 -> gsi 9 flags 0xd
+q35: intsrc bus 0 source 10 -> gsi 10 flags 0xd
+q35: intsrc bus 0 source 11 -> gsi 11 flags 0xd
+q35: hpet 0xfed00000
+pciexbar: 0xb0000001 -> 0xb0000001
+pci: virtio-net 1af4:1041 at 00:02.0 rev 01 pin 1 (inta) bars 2
+pci: inta -> gsi 22 (q35 root slot 2, pirq G: 16+6)
+Memory usage:
+  Used:		0x00000006c00000
+  Total:	0x0000003ffdf000
+random: source=rdrand
+lapic: cpuid leaf-1 ecx: x2apic=true tsc-deadline=true
+lapic: x2apic live (msr 0x800 map; lint0/1 masked, no pic)
+timer: 2496091280 Hz (pit 1193182 Hz reference), TscDeadline mode, armed
+ioapic: id 0 version 0x11 rtes 23 gsib 0 (madt 0xfec00000)
+pci: bar4 pa 0xfe000000 size 0x4000 (firmware) readback 0xfe000000
+pci: caps common@0x0+0x1000 notify@0x3000 isr@0x1000 device@0x2000 mult 4
+virtio-net: features offered 0x10130bf8024 negotiated 0x100010020
+virtio-net: rx pre-posted 128 buffers qsize 256
+ioapic: gsi 22 -> vector 0x21 (level)
+#l0: virtio: 1000Mbps: 52:54:00:12:34:56
+fpu: kernel-SIMD selftest ok (user state parked and restored across the section; xor_fold16 0x1983c6d50a18d707c9d74d9a42c59f27)
+q35: module @0x14c000 +0x5f1e7 (mb2 tag 3, stashed)
+devenv: seeded cputype=amd64 nobootprompt=embed readparts=0
+q35: paqfs root mounted from module (389607 bytes)
+devroot: /boot/boot open (159349 bytes)
+exec: entering ring 3 pc=0x2054fa sp=0x7fffffffef78 path=/boot/boot argv=[boot]
+paqfs...version...chain.stage: Mon Nov 23 15:22:57 GMT 2026
+fingerprint: 61e4919df9f20e803e13ef682bf1217d12df8500
+process 2 exited: ""
+churngate: heap exit 96512 33554432
+syscall 10 unimplemented
+--- end capture (2505 bytes) ---
+boot-test: >= 3 lines beginning "tick" not observed (negative scan hit "unimplemented syscall")

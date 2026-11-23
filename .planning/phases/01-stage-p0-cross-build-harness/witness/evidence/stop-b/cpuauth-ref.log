@@ -1,0 +1,18 @@
+# trimmed from .planning/phases/01-stage-p0-cross-build-harness/spikes/linux-witness/return-01-22/cpuauth-ref/cpuauth-ref.log (146 lines): the auth compare and its reference lookup
+65:authdomain-gen: generated /home/req/code/r9/target/images/x86_64/cpu.authdom: label=DEMO authdom=DEMO-harvey authid=bootes users=3
+66:authdomain-gen: DEMO material is throwaway — never reuse outside a gate image
+67:authdomain-gen: no authdomain.local — generating ephemeral DEMO material
+68:image: authdomain generated a fresh p9sk1 domain for "cpu" at /home/req/code/r9/target/images/x86_64/cpu.authdom (authdom DEMO-harvey)
+69:image: authdomain pairing verified over the staged copies for "cpu"
+70:image: creds /home/req/code/r9/target/images/x86_64/cpu.creds (mode 0600)
+72:reference member list /nix/store/mxx5qyijchxaff7cg61y4nwvjvjbbmi4-harvey-reference-amd64-0/cpu.members: No such file or directory (os error 2) — R9_HARVEY_REFERENCE_AMD64 names the reference bake's directory
+73:CPUAUTH-REF cpu exit=nonzero
+138:authdomain-gen: generated /home/req/code/r9/target/images/x86_64/auth.authdom: label=DEMO authdom=DEMO-harvey authid=bootes users=3
+139:authdomain-gen: DEMO material is throwaway — never reuse outside a gate image
+140:authdomain-gen: no authdomain.local — generating ephemeral DEMO material
+141:image: authdomain generated a fresh p9sk1 domain for "auth" at /home/req/code/r9/target/images/x86_64/auth.authdom (authdom DEMO-harvey)
+142:image: authdomain pairing verified over the staged copies for "auth"
+143:image: creds /home/req/code/r9/target/images/x86_64/auth.creds (mode 0600)
+144:image: x86_64/auth /home/req/code/r9/target/images/x86_64/auth.paq sha256 a60482fe4485feacda2a8afa3c8c1d8f7b30237d46df097d46aafffd6332aa25 members 95
+145:reference member list /nix/store/mxx5qyijchxaff7cg61y4nwvjvjbbmi4-harvey-reference-amd64-0/auth.members: No such file or directory (os error 2) — R9_HARVEY_REFERENCE_AMD64 names the reference bake's directory
+146:CPUAUTH-REF auth exit=nonzero

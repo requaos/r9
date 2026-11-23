@@ -1,0 +1,9 @@
+# trimmed from .planning/phases/01-stage-p0-cross-build-harness/spikes/linux-witness/return-01-22/flipback/flipback.log (359 lines): assembly and the decisive gate failure lines
+101:gate: image cpu /home/req/r9-witness-work/r9-probe-flipback/target/images/x86_64/cpu.paq sha256 32b4f1c6fa873ad2b70269db9ab58c3e931dc6a3a870e1e9a74d569733312ddd members 4442
+349:gate: iso /home/req/r9-witness-work/r9-probe-flipback/target/boot-q35cpu.iso 
+350:gate: leg rio (capture /home/req/r9-witness-work/r9-probe-flipback/target/gate/120659-1795447239/rio.log)
+351:can't read "spawn_id": no such variable
+352:    while executing
+353:"expect_before -i $spawn_id {
+358:    (file "/home/req/r9-witness-work/r9-probe-flipback/gates/x86_64/drawterm-gate.expect" line 336)
+359:GATE-FAIL rio-leg-failed (leg rio; capture /home/req/r9-witness-work/r9-probe-flipback/target/gate/120659-1795447239/rio.log)

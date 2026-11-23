@@ -38,6 +38,30 @@
 #            exit 0 still requires RIO-SERVING, and the marker alone
 #            records no PASS.
 #
+# Stop-B steps (plan 01-22, D-13):
+#   trees         native x86_64-linux builds of both Harvey trees,
+#                 `nix store verify --no-trust` on each, and each
+#                 HARVEY-TREE stamp.
+#   kernel        nix build .#kernel-x64 with the kernel-x64.elf sha256,
+#                 then nix build .#boot-iso --rebuild — the fixed-output
+#                 check that proves the x86_64 kernel bytes match the
+#                 committed outputHash.
+#   gate          cargo xtask gate --arch x86-64 --accel kvm, run twice;
+#                 both runs are required.
+#   gate_neg      the same gate with --force-no-rio; the step succeeds
+#                 only on a non-zero gate exit carrying
+#                 `GATE-FAIL rio-not-serving'.
+#   probe         a throwaway clone at PROBE-FLIP-SHA (plan 01-20):
+#                 cargo xtask probe --arch x86-64, then the gate with
+#                 --serial-check '/bin/ps=R9-RUST-AOUT-PROBE-OK'.
+#   flipback      a throwaway clone at PROBE-FLIPBACK-SHA with the plain
+#                 gate.
+#   profiles      all nine x86_64 boot-test profiles under KVM, each
+#                 logged with its exit.
+#   cpuauth_ref   the cpu and auth --compare-reference runs.  01-16
+#                 recorded authdomain-gen as Linux-only, so stop B runs
+#                 them natively on the witness host.
+#
 # Later plans add steps to this file.  Keep each step self-contained so
 # adding one never edits another.
 #
@@ -95,13 +119,23 @@ SUMMARY="$OUT/summary.tsv"
 R9_WITNESS_STEPS=${R9_WITNESS_STEPS:-"rio control a13"}
 HARVEY_PIN=bd7a6982a3e4f465f8ed3da5e0c7290521514ff0
 KERNDATE=${KERNDATE:-1795382101}
+# Plan 01-20's swap-proof commits (the stop-B KVM witness inputs):
+#   PROBE-FLIP-SHA     cpu.toml's /amd64/bin/ps is the S6 Rust a.out;
+#   PROBE-FLIPBACK-SHA Harvey's ps restored and the probe deleted.
+PROBE_FLIP_SHA=064747f42c7f3eff6cd677a8820e6b4b1fff95e3
+PROBE_FLIPBACK_SHA=af7df344b9c3702100d4408e85044a722e861a67
+PROFILE_LIST=(q35 q35lowmcfg q35net q35exec q35churn q35shell q35churnshell q35cpu q35auth)
 P="$P_REL"
 
 selected=0
 for step in $R9_WITNESS_STEPS; do
 	case "$step" in
-	rio-diag | rio | control | a13) selected=$((selected + 1)) ;;
-	*) die "bad-step '$step': R9_WITNESS_STEPS accepts only rio-diag rio control a13" ;;
+	rio-diag | rio | control | a13 | trees | kernel | gate | gate_neg | probe | flipback | profiles | cpuauth_ref)
+		selected=$((selected + 1))
+		;;
+	*)
+		die "bad-step '$step': R9_WITNESS_STEPS accepts only rio-diag rio control a13 trees kernel gate gate_neg probe flipback profiles cpuauth_ref"
+		;;
 	esac
 done
 [ "$selected" -gt 0 ] || die "empty-selection: R9_WITNESS_STEPS names no step"
@@ -118,7 +152,9 @@ command -v nix >/dev/null 2>&1 ||
 command -v tee >/dev/null 2>&1 ||
 	die "tee-missing: coreutils tee is required"
 
-mkdir -p "$WORK" "$OUT/rio" "$OUT/control" "$OUT/a13" "$OUT/rio-diag" ||
+mkdir -p "$WORK" "$OUT/rio" "$OUT/control" "$OUT/a13" "$OUT/rio-diag" \
+	"$OUT/trees" "$OUT/kernel" "$OUT/gate" "$OUT/gate-neg" "$OUT/probe" \
+	"$OUT/flipback" "$OUT/profiles" "$OUT/cpuauth-ref" ||
 	die "cannot-create-output: $OUT or $WORK is not writable"
 : >"$SUMMARY"
 
@@ -275,6 +311,228 @@ step_a13() {
 	fi
 	end=$(now)
 	record a13 "$rc" "$((end - start))"
+}
+
+# --- stop B (plan 01-22): the x86_64 KVM witness batch ------------------
+
+# clone_at_sha <sha> <dir>: a throwaway clone of this r9 checkout at <sha>.
+# The probe legs must run the committed tree at that exact revision, not
+# the witness checkout's working state, so each leg gets its own clone
+# under the work dir.
+clone_at_sha() {
+	local sha=$1 dir=$2
+	rm -rf -- "$dir" || return 1
+	git clone --quiet "$R9" "$dir" || return 1
+	git -C "$dir" checkout --quiet --detach "$sha"
+}
+
+# --- trees: both native x86_64-linux Harvey trees, verified ------------
+step_trees() {
+	local start end rc paths p
+	start=$(now)
+	rc=0
+	note "trees: nix build .#harvey-tree-amd64 .#harvey-tree-arm64 (native x86_64-linux)"
+	: >"$OUT/trees/trees.log"
+	paths=$(cd "$R9" || exit 1
+		nix build --no-link --print-out-paths .#harvey-tree-amd64 .#harvey-tree-arm64 \
+			2>>"$OUT/trees/trees.log") || rc=1
+	if [ "$rc" -ne 0 ]; then
+		echo "TREES-BUILD-FAILED" | tee -a "$OUT/trees/trees.log"
+	fi
+	while IFS= read -r p; do
+		[ -n "$p" ] || continue
+		printf 'TREES-STORE %s\n' "$p" | tee -a "$OUT/trees/trees.log"
+		if [ ! -f "$p/HARVEY-TREE" ]; then
+			printf 'TREES-MISSING-STAMP %s\n' "$p" | tee -a "$OUT/trees/trees.log"
+			rc=1
+		else
+			printf -- '--- %s/HARVEY-TREE ---\n' "$p" | tee -a "$OUT/trees/trees.log"
+			sed 's/^/  /' "$p/HARVEY-TREE" | tee -a "$OUT/trees/trees.log"
+		fi
+		if nix store verify --no-trust "$p" >>"$OUT/trees/trees.log" 2>&1; then
+			printf 'TREES-VERIFY-OK %s\n' "$p" | tee -a "$OUT/trees/trees.log"
+		else
+			printf 'TREES-VERIFY-FAIL %s\n' "$p" | tee -a "$OUT/trees/trees.log"
+			rc=1
+		fi
+	done <<<"$paths"
+	end=$(now)
+	record trees "$rc" "$((end - start))"
+}
+
+# --- kernel: the x86_64 kernel package and the boot-iso fixed output ---
+step_kernel() {
+	local start end rc out elf
+	start=$(now)
+	rc=0
+	note "kernel: nix build .#kernel-x64 (native x86_64-linux)"
+	: >"$OUT/kernel/kernel.log"
+	out=$(cd "$R9" || exit 1
+		nix build --no-link --print-out-paths .#kernel-x64 \
+			2>>"$OUT/kernel/kernel.log") || rc=1
+	if [ "$rc" -eq 0 ]; then
+		elf="$out/kernel-x64.elf"
+		printf 'KERNEL-STORE %s\n' "$out" | tee -a "$OUT/kernel/kernel.log"
+		if [ -f "$elf" ]; then
+			sha256sum "$elf" | tee -a "$OUT/kernel/kernel.log"
+		else
+			printf 'KERNEL-MISSING %s\n' "$elf" | tee -a "$OUT/kernel/kernel.log"
+			rc=1
+		fi
+	fi
+	if [ "$rc" -eq 0 ]; then
+		note "kernel: nix build .#boot-iso --rebuild (the fixed-output kernel-byte check)"
+		if (cd "$R9" || exit 1
+			nix build --no-link .#boot-iso --rebuild) 2>&1 |
+			tee -a "$OUT/kernel/kernel.log"; then
+			echo "KERNEL-BOOTISO-REBUILD-OK" | tee -a "$OUT/kernel/kernel.log"
+		else
+			echo "KERNEL-BOOTISO-REBUILD-FAIL" | tee -a "$OUT/kernel/kernel.log"
+			rc=1
+		fi
+	fi
+	end=$(now)
+	record kernel "$rc" "$((end - start))"
+}
+
+# --- gate: the quick gate twice (HARN-01, D-13) ------------------------
+step_gate() {
+	local start end rc run
+	start=$(now)
+	rc=0
+	: >"$OUT/gate/gate.log"
+	for run in 1 2; do
+		note "gate: run $run/2 cargo xtask gate --arch x86-64 --accel kvm"
+		printf '== gate run %s/2 ==\n' "$run" >>"$OUT/gate/gate.log"
+		if (cd "$R9" || exit 1
+			nix develop -c cargo xtask gate --arch x86-64 --accel kvm) 2>&1 |
+			tee -a "$OUT/gate/gate.log"; then
+			printf 'GATE-RUN %s exit=0\n' "$run" | tee -a "$OUT/gate/gate.log"
+		else
+			printf 'GATE-RUN %s exit=nonzero\n' "$run" | tee -a "$OUT/gate/gate.log"
+			rc=1
+		fi
+	done
+	end=$(now)
+	record gate "$rc" "$((end - start))"
+}
+
+# --- gate_neg: the failing direction (HARN-01) -------------------------
+step_gate_neg() {
+	local start end rc log
+	start=$(now)
+	rc=0
+	log="$OUT/gate-neg/gate-neg.log"
+	note "gate_neg: cargo xtask gate --arch x86-64 --accel kvm --force-no-rio (must fail with GATE-FAIL rio-not-serving)"
+	if (cd "$R9" || exit 1
+		nix develop -c cargo xtask gate --arch x86-64 --accel kvm --force-no-rio) \
+		2>&1 | tee "$log"; then
+		echo "GATE-NEG-UNEXPECTED-PASS" | tee -a "$log"
+		rc=1
+	elif grep -qF 'GATE-FAIL rio-not-serving' "$log"; then
+		echo "GATE-NEG-EXPECTED-FAIL" | tee -a "$log"
+	else
+		echo "GATE-NEG-WRONG-FAILURE (GATE-FAIL rio-not-serving absent)" | tee -a "$log"
+		rc=1
+	fi
+	end=$(now)
+	record gate_neg "$rc" "$((end - start))"
+}
+
+# --- probe: the gate at PROBE-FLIP-SHA with the ps marker --------------
+step_probe() {
+	local start end rc dir
+	start=$(now)
+	rc=0
+	dir="$WORK/r9-probe-flip"
+	: >"$OUT/probe/probe.log"
+	note "probe: clone at PROBE-FLIP-SHA $PROBE_FLIP_SHA"
+	if ! clone_at_sha "$PROBE_FLIP_SHA" "$dir" 2>&1 | tee -a "$OUT/probe/probe.log"; then
+		rc=1
+	fi
+	if [ "$rc" -eq 0 ]; then
+		note "probe: cargo xtask probe, then the gate with --serial-check /bin/ps=R9-RUST-AOUT-PROBE-OK"
+		if ! (cd "$dir" || exit 1
+			nix develop -c cargo xtask probe --arch x86-64 || exit 1
+			nix develop -c cargo xtask gate --arch x86-64 --accel kvm \
+				--serial-check '/bin/ps=R9-RUST-AOUT-PROBE-OK') 2>&1 |
+			tee -a "$OUT/probe/probe.log"; then
+			rc=1
+		fi
+	fi
+	end=$(now)
+	record probe "$rc" "$((end - start))"
+}
+
+# --- flipback: the gate at PROBE-FLIPBACK-SHA (HARN-04) ----------------
+step_flipback() {
+	local start end rc dir
+	start=$(now)
+	rc=0
+	dir="$WORK/r9-probe-flipback"
+	: >"$OUT/flipback/flipback.log"
+	note "flipback: clone at PROBE-FLIPBACK-SHA $PROBE_FLIPBACK_SHA"
+	if ! clone_at_sha "$PROBE_FLIPBACK_SHA" "$dir" 2>&1 |
+		tee -a "$OUT/flipback/flipback.log"; then
+		rc=1
+	fi
+	if [ "$rc" -eq 0 ]; then
+		note "flipback: cargo xtask gate --arch x86-64 --accel kvm (the plain gate)"
+		if ! (cd "$dir" || exit 1
+			nix develop -c cargo xtask gate --arch x86-64 --accel kvm) \
+			2>&1 | tee -a "$OUT/flipback/flipback.log"; then
+			rc=1
+		fi
+	fi
+	end=$(now)
+	record flipback "$rc" "$((end - start))"
+}
+
+# --- profiles: all nine x86_64 boot-test profiles under KVM ------------
+step_profiles() {
+	local start end rc c
+	start=$(now)
+	rc=0
+	: >"$OUT/profiles/profiles.log"
+	for c in "${PROFILE_LIST[@]}"; do
+		note "profiles: $c cargo xtask boot-test --arch x86-64 --config $c --accel kvm"
+		: >"$OUT/profiles/$c.log"
+		if (cd "$R9" || exit 1
+			nix develop -c cargo xtask boot-test --arch x86-64 \
+				--config "$c" --accel kvm) 2>&1 |
+			tee -a "$OUT/profiles/$c.log"; then
+			printf 'PROFILE %s exit=0\n' "$c" | tee -a "$OUT/profiles/profiles.log"
+		else
+			printf 'PROFILE %s exit=nonzero\n' "$c" | tee -a "$OUT/profiles/profiles.log"
+			rc=1
+		fi
+	done
+	end=$(now)
+	record profiles "$rc" "$((end - start))"
+}
+
+# --- cpuauth_ref: the native cpu/auth reference compares ---------------
+# 01-16 recorded authdomain-gen as Linux-only, so its conditional holds:
+# stop B runs both compares natively on the witness host.
+step_cpuauth_ref() {
+	local start end rc img
+	start=$(now)
+	rc=0
+	: >"$OUT/cpuauth-ref/cpuauth-ref.log"
+	for img in cpu auth; do
+		note "cpuauth_ref: $img --compare-reference (authdomain-gen is Linux-only)"
+		if (cd "$R9" || exit 1
+			nix develop -c env -u R9_HARVEY_DIR cargo xtask image --arch x86-64 \
+				--image "$img" --compare-reference) 2>&1 |
+			tee -a "$OUT/cpuauth-ref/cpuauth-ref.log"; then
+			printf 'CPUAUTH-REF %s exit=0\n' "$img" | tee -a "$OUT/cpuauth-ref/cpuauth-ref.log"
+		else
+			printf 'CPUAUTH-REF %s exit=nonzero\n' "$img" | tee -a "$OUT/cpuauth-ref/cpuauth-ref.log"
+			rc=1
+		fi
+	done
+	end=$(now)
+	record cpuauth_ref "$rc" "$((end - start))"
 }
 
 # --- run one step in a subshell; record an abort the step did not ------
