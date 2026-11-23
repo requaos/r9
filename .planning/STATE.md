@@ -4,12 +4,12 @@ milestone: v3.0
 milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
 current_phase: 01
 current_phase_name: Stage P0 - Cross-Build Harness
-status: executing
-stopped_at: Completed 01-11-PLAN.md; 01-12 awaits owner stop A
-last_updated: "2026-11-23T05:14:17.625Z"
+status: Blocked — HARN-01 decision needed (rio KVM FAIL)
+stopped_at: "01-12 returned decision checkpoint: rio-derisk-kvm FAIL; awaiting owner choice (a/b/c)"
+last_updated: "2026-11-23T05:41:49.244Z"
 last_activity: 2026-11-23
-last_activity_desc: plan 01-10 merged; wave 5 next
-state_head: 22edf1429d5a0fefc3450416f8e24adbcf7b9a26
+last_activity_desc: "stop A: builder PASS, control PASS, a13 PASS, rio FAIL; phase halted for owner decision"
+state_head: e13c73f6df67f934727180714ff1391506a0122f
 progress:
   total_phases: 4
   completed_phases: 0
@@ -31,8 +31,8 @@ See: .planning/PROJECT.md (updated 2026-11-22)
 
 Phase: 01 (Stage P0 - Cross-Build Harness) — EXECUTING
 Plan: 12 of 31
-Status: Ready to execute
-Last activity: 2026-11-23 — plan 01-10 merged; wave 5 next
+Status: Blocked — HARN-01 decision needed (rio KVM FAIL)
+Last activity: 2026-11-23 — stop A: builder PASS, control PASS, a13 PASS, rio FAIL; phase halted for owner decision
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -176,5 +176,5 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 ## Session Continuity
 
 Last session: 2026-11-23T04:57:34.842Z
-Stopped at: Completed 01-11-PLAN.md; 01-12 awaits owner stop A
+Stopped at: 01-12 returned decision checkpoint: rio-derisk-kvm FAIL; awaiting owner choice (a/b/c)
 Resume file: None
