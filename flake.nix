@@ -435,6 +435,41 @@ WRAP
             '';
           };
           builder = isoBuilderFor pkgs;
+          # 01-13 (HARN-07, D-03, D-24): the Harvey supply.  A Linux tree
+          # fetches the source on the builder ITSELF through a fixed-output
+          # derivation keyed on the locked rev + narHash, so the source never
+          # round-trips through the Mac's case-insensitive APFS store (S2's
+          # `s2-casecheck-fod` shape).  A session-only `--override-input
+          # harvey path:...` has no rev and uses its outPath instead (D-06).
+          harveyTreeSrc =
+            if harvey ? rev && harvey ? narHash then
+              pkgs.fetchFromGitHub {
+                owner = "requaos";
+                repo = "harvey";
+                rev = harvey.rev;
+                hash = harvey.narHash;
+              }
+            else
+              harvey.outPath;
+          # The one build environment every tree derivation rides: Harvey's
+          # host toolchain plus the proot venue (D-25; no unshare).  Its
+          # `mkTreeDerivation` takes { name, arch, guestScript, installScript }.
+          harveyEnv = import ./nix/harvey/build-env.nix {
+            inherit pkgs;
+            harveySrc = harveyTreeSrc;
+          };
+          harveyTreeArm64 = import ./nix/harvey/tree-arm64.nix {
+            inherit pkgs;
+            harveySrc = harveyTreeSrc;
+            rev = harvey.rev or "unknown";
+            narHash = harvey.narHash or "unknown";
+          };
+          # The host mkpaqfs builds locally on every system from the flake
+          # input path (it is a plan9port host tool, not a tree member).
+          harveyMkpaqfs = import ./nix/harvey/mkpaqfs.nix {
+            inherit pkgs;
+            harveySrc = harvey.outPath;
+          };
         in
         {
           kernel-virt = pkgs.stdenv.mkDerivation {
@@ -507,6 +542,15 @@ WRAP
         # consumer side, not here).
         // nixpkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           inherit kernel-x64 netdev-args;
+          # 01-13 (HARN-07): the Harvey build supply.  `harvey-hostbin` is
+          # the tree toolchain; `harvey-tree-arm64` the smoke slice of the
+          # arm64 tree (01-14/01-17 extend the same machinery).
+          harvey-hostbin = harveyEnv.hostbin;
+          harvey-tree-arm64 = harveyTreeArm64;
+        }
+        // {
+          # The host mkpaqfs on all three systems (01-08's R9_MKPAQFS).
+          harvey-mkpaqfs = harveyMkpaqfs;
         }
         // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
           inherit (builder) iso-builder;
@@ -887,6 +931,21 @@ WRAP
         let
           pkgs = pkgsFor system;
           toolchain = toolchainFor system;
+          # 01-13 (HARN-07, D-21): the lazy per-architecture Harvey tree.
+          # On the Mac the tree is the aarch64-linux package realised by the
+          # registered builder; R9_HARVEY_TREE_SYSTEM tells xtask's
+          # realise-on-first-use which attribute to ask for (D-05).
+          treeSystem =
+            if pkgs.stdenv.hostPlatform.isLinux then system else "aarch64-linux";
+          harveyTreeArm64 = self.packages.${treeSystem}.harvey-tree-arm64;
+          # A9: a context-discarded outPath is a plain string — entering the
+          # shell sends no build, and the later `nix build` prints the same
+          # path (S2's lazy-devshell proof).
+          harveyTreeArm64Path =
+            builtins.unsafeDiscardStringContext harveyTreeArm64.outPath;
+          # mkpaqfs is the one EAGER export: it is a small host tool, not a
+          # tree, and every image assembly needs it.
+          harveyMkpaqfs = self.packages.${system}.harvey-mkpaqfs;
         in
         {
           default = pkgs.mkShellNoCC {
@@ -898,9 +957,26 @@ WRAP
               ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.grub2 pkgs.xorriso ];
             shellHook = ''
               ${objcopyHook toolchain}
-              echo "r9 devshell: $(rustc --version)"
-              echo "$(qemu-system-aarch64 --version | head -1)"
-              echo "apps: nix run .#build | nix run .#boot-virt | nix run .#default"
+              # 01-13 (HARN-07, D-21): the Harvey supply.  Each export is
+              # guarded so a value the user already set is kept (D-05), and
+              # R9_HARVEY_DIR is deliberately NEVER exported — it is the
+              # manual override only (D-01).
+              if [ -z "''${R9_HARVEY_TREE_SYSTEM:-}" ]; then
+                export R9_HARVEY_TREE_SYSTEM="${treeSystem}"
+              fi
+              if [ -z "''${R9_HARVEY_DIR_ARM64:-}" ]; then
+                export R9_HARVEY_DIR_ARM64="${harveyTreeArm64Path}"
+              fi
+              if [ -z "''${R9_MKPAQFS:-}" ]; then
+                export R9_MKPAQFS="${harveyMkpaqfs}/bin/mkpaqfs"
+              fi
+              # The banner goes to stderr: `nix develop -c '<cmd>'` must not
+              # mingle hook output with the command's stdout (the plan's
+              # lazy-path check compares that stdout with `nix eval`).
+              echo "r9 devshell: $(rustc --version)" >&2
+              echo "$(qemu-system-aarch64 --version | head -1)" >&2
+              echo "apps: nix run .#build | nix run .#boot-virt | nix run .#default" >&2
+              echo "harvey supply: R9_HARVEY_DIR_ARM64=$R9_HARVEY_DIR_ARM64 (lazy; realised on first use)" >&2
             '';
           };
         });

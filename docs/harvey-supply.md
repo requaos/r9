@@ -16,16 +16,47 @@ construction; nothing in the harness ever writes into them.
   "github:requaos/harvey"`, locked by `flake.lock` to a pushed commit — the
   current pin is `bd7a6982a3e4f465f8ed3da5e0c7290521514ff0`, the pushed
   `legacy-final` commit, per D-23).
-- The devshell (`nix develop`) exports `R9_HARVEY_DIR_AMD64` and
-  `R9_HARVEY_DIR_ARM64`, each naming the complete tree for its architecture
-  (D-21; the attribute names the variables resolve to are filled in by the
-  tree-derivation plans 01-13/01-14). Each tree is built lazily, only when a
-  command for that architecture first needs it (D-05).
+- The devshell (`nix develop`) exports `R9_HARVEY_DIR_ARM64` and
+  `R9_HARVEY_DIR_AMD64`, each naming the complete tree for its architecture
+  (D-21). They resolve to the flake attributes `harvey-tree-arm64` and
+  `harvey-tree-amd64` (plan 01-13 ships `harvey-tree-arm64`; plan 01-14
+  ships `harvey-tree-amd64`). Each tree is built lazily, only when a command
+  for that architecture first needs it (D-05). `R9_HARVEY_TREE_SYSTEM` names
+  the nix system the realise-on-first-use builds for — `aarch64-linux` on
+  both aarch64-darwin and aarch64-linux hosts, `x86_64-linux` on
+  x86_64-linux — and `R9_MKPAQFS` names the host `mkpaqfs` (attribute
+  `harvey-mkpaqfs`, built on every system).
 - `R9_HARVEY_DIR` remains a manual override that wins over both per-arch
   variables when set (D-01, D-21).
 - xtask keeps no built-in default path (D-01): outside the devshell, with no
   variable set, the resolver fails with a named error that lists the variables
   it tried.
+
+### Attribute names and build commands per host
+
+The trees are `packages.<system>.harvey-tree-<arch>` on the Linux systems;
+the host `mkpaqfs` is `packages.<system>.harvey-mkpaqfs` everywhere. The
+devshell's `R9_HARVEY_TREE_SYSTEM` is the `<system>` in the tree attributes
+it names.
+
+| Host | Build command | Notes |
+|---|---|---|
+| aarch64-darwin (this Mac) | `nix build --no-link --print-out-paths .#packages.aarch64-linux.harvey-tree-arm64` | Dispatched to the registered `ssh-ng://r9-lima-builder`; the Mac cannot realise an aarch64-linux derivation locally. The amd64 tree is the same command with `harvey-tree-amd64` (the builder builds amd64 content on aarch64-linux, S4). |
+| aarch64-linux | `nix build --no-link --print-out-paths .#packages.aarch64-linux.harvey-tree-arm64` | Local build. |
+| x86_64-linux | `nix build --no-link --print-out-paths .#packages.x86_64-linux.harvey-tree-arm64` | Local build; the amd64 tree there is `.#packages.x86_64-linux.harvey-tree-amd64`. |
+| all hosts (host tool) | `nix build .#harvey-mkpaqfs` | plan9port `9c`/`9l`; builds locally on every system. The devshell's `R9_MKPAQFS` points at it. |
+
+Verify a tree after the build:
+
+```sh
+p=$(nix eval --raw .#packages.aarch64-linux.harvey-tree-arm64.outPath)
+nix store verify --no-trust "$p"
+grep -q '^arch=arm64$' "$p/HARVEY-TREE" && echo TREE-OK
+```
+
+The devshell's export is lazy: `nix develop` sends no tree build, and the
+path it prints equals the one the later `nix build` produces (S2's A9 proof;
+the plan 01-13 gate checks this equality).
 
 ## 2. Mac builder, primary: the lima VM `harvey` as an ssh-ng remote builder (D-24)
 
