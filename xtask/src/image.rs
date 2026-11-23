@@ -1168,12 +1168,16 @@ fn check_provenance(
 }
 
 /// Assemble one image through the full enforcement chain: parse → stage →
-/// generators (registry; none in this plan) → two-way drift → Rust
-/// provenance → bake → member list.
+/// generators → two-way drift → Rust provenance → bake → member list.
 ///
 /// `harvey_roots` names every Harvey tree root in play for the provenance
 /// prefix check; `out_dir` receives `<image>.stage/`, `<image>.paq` and
 /// `<image>.members`.  The tree is never written to (HARN-02).
+///
+/// A manifest that carries a `generator = "authdomain"` entry resolves the
+/// host generator from `R9_AUTHDOMAIN_GEN` (the devshell exports it where
+/// the Linux-only tool builds); the environmental lookup is a parameter on
+/// [`assemble_checked_with`] so tests never mutate the process environment.
 pub fn assemble_checked(
     manifest_path: &Path,
     tree: &Path,
@@ -1182,6 +1186,37 @@ pub fn assemble_checked(
     out_dir: &Path,
     mkpaqfs: &Path,
 ) -> Result<Assembled> {
+    let authdomain_gen = std::env::var("R9_AUTHDOMAIN_GEN")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from);
+    let mut log = std::io::stdout();
+    assemble_checked_with(
+        manifest_path,
+        tree,
+        harvey_roots,
+        workspace,
+        out_dir,
+        mkpaqfs,
+        authdomain_gen.as_deref(),
+        &mut log,
+    )
+}
+
+/// The testable seam of [`assemble_checked`]: the generator path and the
+/// log sink are explicit, so a unit test can drive a fake generator and
+/// scan every line the assembler emits for a password.
+fn assemble_checked_with(
+    manifest_path: &Path,
+    tree: &Path,
+    harvey_roots: &[PathBuf],
+    workspace: &Path,
+    out_dir: &Path,
+    mkpaqfs: &Path,
+    authdomain_gen: Option<&Path>,
+    log: &mut dyn std::io::Write,
+) -> Result<Assembled> {
+    let _ = (authdomain_gen, log);
     let text = fs::read_to_string(manifest_path).map_err(|e| -> crate::DynError {
         format!("image manifest {}: {e}", manifest_path.display()).into()
     })?;
@@ -2261,5 +2296,387 @@ members = \"../t.members\"
         assert!(emitted.text.contains("[[dir]]\npath = \"/proc\""), "{}", emitted.text);
         assert!(emitted.text.contains("no content sha256"), "{}", emitted.text);
         assert_eq!(emitted.unresolved, vec!["adm/auth".to_string()]);
+    }
+
+    /// Write an executable shell script (the fake generators and mkpaqfs).
+    fn write_script(path: &Path, text: &str) {
+        fs::write(path, text).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// The fake authdomain generator: `-o` writes reference-sized artifacts
+    /// and a per-script counter's password, `-i` prints (or omits) the
+    /// authdom token, `-V` accepts or refuses the pairing.
+    fn fake_authdomain_gen(scratch: &Scratch, info_authdom: bool, verify_ok: bool) -> PathBuf {
+        let info = if info_authdom {
+            "printf 'label: DEMO\\nauthid: bootes\\nauthdom: DEMO-harvey\\nusers: 3\\n'"
+        } else {
+            "printf 'label: DEMO\\nauthid: bootes\\nusers: 3\\n'"
+        };
+        let verify = if verify_ok {
+            "test -s \"$dir/nvram\" && test -s \"$dir/keys\" && test -s \"$dir/manifest\" && test -s \"$dir/ndb-auth\"\n    printf 'verify: OK dir=%s label=DEMO users=3\\n' \"$dir\""
+        } else {
+            "printf 'verify: REFUSED dir=%s\\n' \"$dir\" >&2\n    exit 1"
+        };
+        let path = scratch.0.join("fake-authdomain-gen");
+        let text = format!(
+            r#"#!/bin/sh
+set -eu
+mode=$1
+dir=$2
+fill() {{ n=$1; c=$2; f=$3; : > "$f"; i=0; while [ $i -lt $n ]; do printf '%s' "$c" >> "$f"; i=$((i+1)); done; }}
+case "$mode" in
+  -o)
+    mkdir -p "$dir"
+    n=$(cat "$(dirname "$0")/counter" 2>/dev/null || echo 0); n=$((n+1)); printf '%s\n' "$n" > "$(dirname "$0")/counter"
+    pw="FAKEPW12345$n"
+    fill 112 N "$dir/nvram"
+    fill 227 K "$dir/keys"
+    fill 165 M "$dir/manifest"
+    fill 86 D "$dir/ndb-auth"
+    printf '%s\n' "$pw" > "$dir/feed"
+    printf 'user=norbert\npassword=%s\n' "$pw" > "$dir/auth-creds"
+    printf 'user=bootes\npassword=%s\n' "$pw" > "$dir/authid-creds"
+    printf 'authdomain-gen: generated %s: label=DEMO authdom=DEMO-harvey authid=bootes users=3\n' "$dir"
+    ;;
+  -i)
+    {info}
+    ;;
+  -V)
+    {verify}
+    ;;
+  *) exit 2 ;;
+esac
+"#
+        );
+        write_script(&path, &text);
+        path
+    }
+
+    /// A fake mkpaqfs: records a small `.paq` so the bake step succeeds.
+    fn fake_mkpaqfs(scratch: &Scratch) -> PathBuf {
+        let path = scratch.0.join("fake-mkpaqfs");
+        write_script(
+            &path,
+            "#!/bin/sh\nset -eu\nout=\nstage=\nwhile [ $# -gt 0 ]; do case \"$1\" in -o) out=$2; shift 2;; *) stage=$1; shift;; esac; done\ntest -n \"$out\" && test -d \"$stage\"\nprintf 'fake-paq\\n' > \"$out\"\n",
+        );
+        path
+    }
+
+    /// A tree with the ndb template and the netaddr seam the ndb-template
+    /// generator reads.
+    fn generator_tree(scratch: &Scratch) -> PathBuf {
+        let tree = scratch.0.join("tree");
+        let template = tree.join("build/x86_64/root-tree/lib/ndb/local.template");
+        fs::create_dir_all(template.parent().unwrap()).unwrap();
+        fs::write(
+            &template,
+            "ip=@GUESTV4@ sys=harvey dom=harvey.local ether=@ETHER@\nipmask=@MASKV4@\nipgw=@GWV4@\nipnet=harveynet ipmask=@MASKV4@ ipgw=@GWV4@ authdom=@AUTHDOM@ auth=127.0.0.1\n",
+        )
+        .unwrap();
+        fs::write(
+            tree.join("build/x86_64/root-tree/lib/netaddr.rc"),
+            "slirp_guestv4=10.0.2.15\nslirp_maskv4=255.255.255.0\nslirp_gwv4=10.0.2.2\nether=52:54:00:12:34:56\n",
+        )
+        .unwrap();
+        tree
+    }
+
+    /// The cpu-shaped generator manifest: the five authdomain artifacts and
+    /// the composed ndb local.
+    fn generator_manifest(append: Option<&str>) -> String {
+        let append = match append {
+            Some(line) => format!("append = \"{line}\"\n"),
+            None => String::new(),
+        };
+        format!(
+            r#"schema = 1
+arch = "amd64"
+image = "cpu"
+
+[[file]]
+path = "/adm/nvram"
+source = "generated"
+generator = "authdomain"
+from = "nvram"
+mode = "0600"
+
+[[file]]
+path = "/adm/keys"
+source = "generated"
+generator = "authdomain"
+from = "keys"
+mode = "0600"
+
+[[file]]
+path = "/adm/domain.manifest"
+source = "generated"
+generator = "authdomain"
+from = "manifest"
+mode = "0644"
+
+[[file]]
+path = "/lib/ndb/auth"
+source = "generated"
+generator = "authdomain"
+from = "ndb-auth"
+mode = "0644"
+
+[[file]]
+path = "/boot/authid-creds.txt"
+source = "generated"
+generator = "authdomain"
+from = "authid-creds"
+mode = "0444"
+
+[[file]]
+path = "/lib/ndb/local"
+source = "generated"
+generator = "ndb-template"
+from = "build/x86_64/root-tree/lib/ndb/local.template"
+seam = "build/x86_64/root-tree/lib/netaddr.rc"
+tokens = ["@GUESTV4@", "@MASKV4@", "@GWV4@", "@ETHER@", "@AUTHDOM@"]
+{append}mode = "0644"
+"#
+        )
+    }
+
+    /// Assemble the generator manifest into `scratch/out`.
+    fn assemble_generator_image(
+        scratch: &Scratch,
+        tree: &Path,
+        manifest: &str,
+        generator: Option<&Path>,
+        log: &mut Vec<u8>,
+    ) -> Result<Assembled> {
+        let manifest_path = scratch.0.join("cpu.toml");
+        fs::write(&manifest_path, manifest).unwrap();
+        let mkpaqfs = fake_mkpaqfs(scratch);
+        assemble_checked_with(
+            &manifest_path,
+            tree,
+            std::slice::from_ref(&tree.to_path_buf()),
+            tree,
+            &scratch.0.join("out"),
+            &mkpaqfs,
+            generator,
+            log,
+        )
+    }
+
+    /// The composed cpu ndb local (all five tokens substituted, no row).
+    const COMPOSED_LOCAL: &str = "ip=10.0.2.15 sys=harvey dom=harvey.local ether=52:54:00:12:34:56\nipmask=255.255.255.0\nipgw=10.0.2.2\nipnet=harveynet ipmask=255.255.255.0 ipgw=10.0.2.2 authdom=DEMO-harvey auth=127.0.0.1\n";
+
+    #[test]
+    fn authdomain_stages_homes_writes_0600_creds_and_never_logs_the_password() {
+        let scratch = Scratch::new("authdomain-stage");
+        let tree = generator_tree(&scratch);
+        let generator = fake_authdomain_gen(&scratch, true, true);
+        let mut log = Vec::new();
+        assemble_generator_image(
+            &scratch,
+            &tree,
+            &generator_manifest(None),
+            Some(&generator),
+            &mut log,
+        )
+        .unwrap();
+
+        let stage = scratch.0.join("out/cpu.stage");
+        assert_eq!(fs::read(stage.join("adm/nvram")).unwrap(), vec![b'N'; 112]);
+        assert_eq!(fs::read(stage.join("adm/keys")).unwrap(), vec![b'K'; 227]);
+        assert_eq!(fs::read(stage.join("adm/domain.manifest")).unwrap(), vec![b'M'; 165]);
+        assert_eq!(fs::read(stage.join("lib/ndb/auth")).unwrap(), vec![b'D'; 86]);
+        assert_eq!(
+            fs::read(stage.join("boot/authid-creds.txt")).unwrap(),
+            b"user=bootes\npassword=FAKEPW123451\n"
+        );
+        for (rel, mode) in [
+            ("adm/nvram", 0o600),
+            ("adm/keys", 0o600),
+            ("adm/domain.manifest", 0o644),
+            ("lib/ndb/auth", 0o644),
+            ("boot/authid-creds.txt", 0o444),
+        ] {
+            assert_eq!(
+                fs::metadata(stage.join(rel)).unwrap().permissions().mode() & 0o777,
+                mode,
+                "{rel}"
+            );
+        }
+        assert_eq!(fs::read_to_string(stage.join("lib/ndb/local")).unwrap(), COMPOSED_LOCAL);
+
+        let creds_path = scratch.0.join("out/cpu.creds");
+        assert_eq!(
+            fs::read_to_string(&creds_path).unwrap(),
+            "user=norbert\npassword=FAKEPW123451\n"
+        );
+        assert_eq!(
+            fs::metadata(&creds_path).unwrap().permissions().mode() & 0o777,
+            0o600,
+            "the creds file must be 0600"
+        );
+
+        // The per-bake domain and its verify twin are deleted: only the
+        // staged copies and the creds file remain under target/.
+        assert!(!scratch.0.join("out/cpu.authdom").exists());
+        assert!(!scratch.0.join("out/cpu.authdom-verify").exists());
+
+        let log = String::from_utf8(log).unwrap();
+        assert!(!log.contains("FAKEPW123451"), "the password leaked into the assembler log: {log}");
+        assert!(log.contains("authdomain"), "{log}");
+    }
+
+    #[test]
+    fn a_second_bake_overwrites_the_creds_with_new_values() {
+        let scratch = Scratch::new("authdomain-refresh");
+        let tree = generator_tree(&scratch);
+        let generator = fake_authdomain_gen(&scratch, true, true);
+        let mut log = Vec::new();
+        assemble_generator_image(&scratch, &tree, &generator_manifest(None), Some(&generator), &mut log)
+            .unwrap();
+        let first = fs::read_to_string(scratch.0.join("out/cpu.creds")).unwrap();
+        assemble_generator_image(&scratch, &tree, &generator_manifest(None), Some(&generator), &mut log)
+            .unwrap();
+        let second = fs::read_to_string(scratch.0.join("out/cpu.creds")).unwrap();
+        assert!(first.contains("FAKEPW123451"), "{first}");
+        assert!(second.contains("FAKEPW123452"), "{second}");
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn a_refused_pairing_is_an_image_generator_authdomain_pairing_error() {
+        let scratch = Scratch::new("authdomain-refused");
+        let tree = generator_tree(&scratch);
+        let generator = fake_authdomain_gen(&scratch, true, false);
+        let mut log = Vec::new();
+        let err = assemble_generator_image(
+            &scratch,
+            &tree,
+            &generator_manifest(None),
+            Some(&generator),
+            &mut log,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("IMAGE-GENERATOR"), "{err}");
+        assert!(err.contains("authdomain-pairing"), "{err}");
+        assert!(err.contains("REFUSED"), "{err}");
+        assert!(
+            !scratch.0.join("out/cpu.creds").exists(),
+            "no creds file may exist when the pairing assert refuses"
+        );
+        let log = String::from_utf8(log).unwrap();
+        assert!(!log.contains("FAKEPW123451"), "{log}");
+    }
+
+    #[test]
+    fn an_info_run_without_an_authdom_token_fails_named() {
+        let scratch = Scratch::new("authdomain-no-token");
+        let tree = generator_tree(&scratch);
+        let generator = fake_authdomain_gen(&scratch, false, true);
+        let mut log = Vec::new();
+        let err = assemble_generator_image(
+            &scratch,
+            &tree,
+            &generator_manifest(None),
+            Some(&generator),
+            &mut log,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("IMAGE-GENERATOR"), "{err}");
+        assert!(err.contains("authdomain-pairing"), "{err}");
+        assert!(err.contains("authdom"), "{err}");
+    }
+
+    #[test]
+    fn a_generator_manifest_without_r9_authdomain_gen_is_a_named_error() {
+        let scratch = Scratch::new("authdomain-unset");
+        let tree = generator_tree(&scratch);
+        let mut log = Vec::new();
+        let err = assemble_generator_image(&scratch, &tree, &generator_manifest(None), None, &mut log)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("R9_AUTHDOMAIN_GEN"), "{err}");
+    }
+
+    #[test]
+    fn ndb_template_substitutes_the_named_tokens_and_appends_the_named_row() {
+        let scratch = Scratch::new("ndb-append");
+        let tree = generator_tree(&scratch);
+        let generator = fake_authdomain_gen(&scratch, true, true);
+        let mut log = Vec::new();
+        assemble_generator_image(
+            &scratch,
+            &tree,
+            &generator_manifest(Some("tcp=ticket port=567")),
+            Some(&generator),
+            &mut log,
+        )
+        .unwrap();
+        let local = fs::read_to_string(scratch.0.join("out/cpu.stage/lib/ndb/local")).unwrap();
+        assert_eq!(local, format!("{COMPOSED_LOCAL}tcp=ticket port=567\n"));
+    }
+
+    #[test]
+    fn ndb_template_rejects_an_unsubstituted_token() {
+        let scratch = Scratch::new("ndb-leftover");
+        let tree = generator_tree(&scratch);
+        let template = tree.join("build/x86_64/root-tree/lib/ndb/local.template");
+        let mut text = fs::read_to_string(&template).unwrap();
+        text.push_str("extra=@BOGUS@\n");
+        fs::write(&template, text).unwrap();
+        let generator = fake_authdomain_gen(&scratch, true, true);
+        let mut log = Vec::new();
+        let err = assemble_generator_image(
+            &scratch,
+            &tree,
+            &generator_manifest(None),
+            Some(&generator),
+            &mut log,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("unsubstituted"), "{err}");
+        assert!(err.contains("@BOGUS@"), "{err}");
+    }
+
+    #[test]
+    fn ndb_template_rejects_a_named_token_with_no_value_source() {
+        let scratch = Scratch::new("ndb-nosource");
+        let tree = generator_tree(&scratch);
+        let template = tree.join("build/x86_64/root-tree/lib/ndb/local.template");
+        let mut text = fs::read_to_string(&template).unwrap();
+        text.push_str("extra=@BOGUS@\n");
+        fs::write(&template, text).unwrap();
+        let manifest = generator_manifest(None)
+            .replace("\"@AUTHDOM@\"", "\"@AUTHDOM@\", \"@BOGUS@\"");
+        let generator = fake_authdomain_gen(&scratch, true, true);
+        let mut log = Vec::new();
+        let err = assemble_generator_image(&scratch, &tree, &manifest, Some(&generator), &mut log)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("@BOGUS@"), "{err}");
+        assert!(err.contains("no value source"), "{err}");
+    }
+
+    #[test]
+    fn generated_entries_require_their_per_generator_fields() {
+        let no_from = generator_manifest(None).replace("from = \"nvram\"\n", "");
+        let err = parse_manifest(&no_from).unwrap_err().to_string();
+        assert!(err.contains("requires `from`"), "{err}");
+
+        let no_tokens = generator_manifest(None).replace(
+            "tokens = [\"@GUESTV4@\", \"@MASKV4@\", \"@GWV4@\", \"@ETHER@\", \"@AUTHDOM@\"]\n",
+            "",
+        );
+        let err = parse_manifest(&no_tokens).unwrap_err().to_string();
+        assert!(err.contains("tokens"), "{err}");
+
+        let no_seam = generator_manifest(None)
+            .replace("seam = \"build/x86_64/root-tree/lib/netaddr.rc\"\n", "");
+        let err = parse_manifest(&no_seam).unwrap_err().to_string();
+        assert!(err.contains("seam"), "{err}");
     }
 }
