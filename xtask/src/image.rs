@@ -3088,6 +3088,35 @@ tokens = ["@GUESTV4@", "@MASKV4@", "@GWV4@", "@ETHER@", "@AUTHDOM@"]
         )
     }
 
+    /// The services-shaped ndb manifest: no authdomain, the seam's four
+    /// tokens, and mkimage §11e2's auth-row strip (`strip` a line literal).
+    fn services_ndb_manifest(strip: Option<&str>) -> String {
+        let strip = match strip {
+            Some(literal) => format!("strip = [\"{literal}\"]\n"),
+            None => String::new(),
+        };
+        format!(
+            r#"schema = 1
+arch = "amd64"
+image = "services"
+
+[[file]]
+path = "/lib/ndb/local"
+source = "generated"
+generator = "ndb-template"
+from = "build/x86_64/root-tree/lib/ndb/local.template"
+seam = "build/x86_64/root-tree/lib/netaddr.rc"
+tokens = ["@GUESTV4@", "@MASKV4@", "@GWV4@", "@ETHER@"]
+{strip}mode = "0644"
+"#
+        )
+    }
+
+    /// The services composed local: mkimage §11e2's
+    /// `sed "/authdom=@AUTHDOM@/d"` removes the WHOLE ipnet line (the auth
+    /// row shares it at the pin), and the four seam tokens substitute.
+    const SERVICES_LOCAL: &str = "ip=10.0.2.15 sys=harvey dom=harvey.local ether=52:54:00:12:34:56\nipmask=255.255.255.0\nipgw=10.0.2.2\n";
+
     /// Assemble the generator manifest into `scratch/out`.
     fn assemble_generator_image(
         scratch: &Scratch,
@@ -3306,6 +3335,71 @@ tokens = ["@GUESTV4@", "@MASKV4@", "@GWV4@", "@ETHER@", "@AUTHDOM@"]
             .to_string();
         assert!(err.contains("@BOGUS@"), "{err}");
         assert!(err.contains("no value source"), "{err}");
+    }
+
+    #[test]
+    fn ndb_template_strips_the_named_rows_and_substitutes_the_seam_values() {
+        let scratch = Scratch::new("ndb-strip");
+        let tree = generator_tree(&scratch);
+        let mut log = Vec::new();
+        assemble_generator_image(
+            &scratch,
+            &tree,
+            &services_ndb_manifest(Some("authdom=@AUTHDOM@")),
+            None,
+            &mut log,
+        )
+        .unwrap();
+        let local = fs::read_to_string(scratch.0.join("out/services.stage/lib/ndb/local")).unwrap();
+        assert_eq!(local, SERVICES_LOCAL);
+        assert!(!local.contains("authdom="), "{local}");
+        assert!(!local.contains('@'), "{local}");
+    }
+
+    #[test]
+    fn ndb_template_strip_that_matches_no_line_is_an_image_generator_error() {
+        let scratch = Scratch::new("ndb-strip-miss");
+        let tree = generator_tree(&scratch);
+        let mut log = Vec::new();
+        let err = assemble_generator_image(
+            &scratch,
+            &tree,
+            &services_ndb_manifest(Some("authdom=@NO-SUCH-ROW@")),
+            None,
+            &mut log,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("IMAGE-GENERATOR"), "{err}");
+        assert!(err.contains("strip"), "{err}");
+        assert!(err.contains("authdom=@NO-SUCH-ROW@"), "{err}");
+    }
+
+    #[test]
+    fn ndb_template_missing_seam_key_names_the_key() {
+        let scratch = Scratch::new("ndb-seam-miss");
+        let tree = generator_tree(&scratch);
+        let seam = tree.join("build/x86_64/root-tree/lib/netaddr.rc");
+        let text = fs::read_to_string(&seam)
+            .unwrap()
+            .lines()
+            .filter(|line| !line.starts_with("slirp_guestv4="))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&seam, format!("{text}\n")).unwrap();
+        let mut log = Vec::new();
+        let err = assemble_generator_image(
+            &scratch,
+            &tree,
+            &services_ndb_manifest(Some("authdom=@AUTHDOM@")),
+            None,
+            &mut log,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("IMAGE-GENERATOR"), "{err}");
+        assert!(err.contains("slirp_guestv4"), "{err}");
+        assert!(err.contains("@GUESTV4@"), "{err}");
     }
 
     #[test]
