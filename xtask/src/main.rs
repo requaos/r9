@@ -3974,6 +3974,7 @@ fn build_dir_name(arch: Arch) -> &'static str {
 
 /// `xtask/manifests/<objtype>/<image>.toml` in the workspace.
 fn image_manifest_path(arch: Arch, image_name: &str) -> Result<PathBuf> {
+    image::validate_image_name(image_name)?;
     Ok(workspace().join(format!(
         "xtask/manifests/{}/{image_name}.toml",
         objtype(arch)?
@@ -4011,6 +4012,20 @@ fn assemble_named_image(
         return Err(format!(
             "image manifest {} does not exist — commit the manifest first",
             manifest_path.display()
+        )
+        .into());
+    }
+    // The output files are named from the manifest's `image`, not from the
+    // CLI value. Require them to agree so a renamed/copied manifest cannot
+    // write an image under a name the caller did not ask for (CR-01).
+    let manifest = read_manifest(&manifest_path)?;
+    if manifest.image != image_name {
+        return Err(format!(
+            "image manifest {} declares image = {:?} but the request named {:?} — the output \
+             files are named from the manifest, so the two must agree",
+            manifest_path.display(),
+            manifest.image,
+            image_name
         )
         .into());
     }

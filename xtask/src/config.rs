@@ -267,6 +267,7 @@ impl Initrd {
                         .to_string(),
                 );
             }
+            crate::image::validate_image_name(name).map_err(|e| e.to_string())?;
             return Ok(crate::image::image_paq(arch, name));
         }
         Ok(PathBuf::from(&self.file))
@@ -995,6 +996,14 @@ mod tests {
         let bare = Initrd { file: "image:".to_string(), addr: 0 };
         let err = bare.resolved_file(crate::Arch::Aarch64).unwrap_err();
         assert!(err.contains("image:"), "{err}");
+        for name in ["image:../../escape", "image:a/b", "image:.."] {
+            let initrd = Initrd { file: name.to_string(), addr: 0 };
+            let err = initrd.resolved_file(crate::Arch::Aarch64).unwrap_err();
+            assert!(
+                err.contains("single normal path component"),
+                "{name}: {err}"
+            );
+        }
     }
 
     /// Backward compatibility: a [qemu] section with only today's machine/dtb

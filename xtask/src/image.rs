@@ -287,6 +287,7 @@ pub fn parse_manifest(text: &str) -> Result<Manifest> {
 /// The validation half of [`parse_manifest`] (also useful for a manifest
 /// built in code by a later plan).
 pub fn validate(manifest: &Manifest) -> Result<()> {
+    validate_image_name(&manifest.image)?;
     if manifest.schema != 1 {
         return Err(format!(
             "image manifest for \"{}\": schema = {} is not understood — only schema = 1 exists",
@@ -594,6 +595,31 @@ fn known_generator(name: &str, image: &str, path: &str) -> Result<()> {
 
 /// An image path is absolute inside the image and carries no `.` or `..`
 /// component (T-01-27: a manifest cannot escape the staging root).
+/// Require an image name to be one normal path component.
+///
+/// The name is joined into `<name>.stage`, `<name>.paq`, `<name>.members`,
+/// `<name>.creds` and `<name>.authdom*` under `target/images/<arch>/`, and
+/// the stage directory is passed to `fs::remove_dir_all`. A name carrying a
+/// separator or a `.`/`..` component would therefore escape the staging root
+/// and could delete an unrelated directory (CR-01), so it is refused before
+/// any path is built.
+pub fn validate_image_name(name: &str) -> Result<()> {
+    let mut components = Path::new(name).components();
+    let one_normal = matches!(components.next(), Some(Component::Normal(_)))
+        && components.next().is_none();
+    // `Path::components` drops a trailing separator, so `foo/` still yields
+    // one Normal component; reject the separator explicitly as well.
+    if one_normal && !name.contains('/') && !name.contains('\\') {
+        return Ok(());
+    }
+    Err(format!(
+        "image name {name:?} is not a single normal path component — it is joined into \
+         <name>.stage/.paq/.members/.creds/.authdom under target/images/<arch>/, so `/`, `\\`, \
+         `.` and `..` are refused"
+    )
+    .into())
+}
+
 fn validate_image_path(path: &str, image: &str, what: &str) -> Result<()> {
     let mut components = Path::new(path).components();
     if !matches!(components.next(), Some(Component::RootDir)) {
@@ -2426,6 +2452,41 @@ path = \"/proc\"
         let text = sample_manifest().replace("path = \"/init\"", "path = \"init\"");
         let err = parse_manifest(&text).unwrap_err().to_string();
         assert!(err.contains("must start with `/`"), "{err}");
+    }
+
+    #[test]
+    fn image_name_accepts_one_normal_component() {
+        for name in ["smoke", "cpu", "services", "a.b", "x86_64"] {
+            validate_image_name(name).unwrap_or_else(|e| panic!("{name:?}: {e}"));
+        }
+    }
+
+    #[test]
+    fn image_name_rejects_traversal_and_separators() {
+        for name in [
+            "",
+            ".",
+            "..",
+            "../escape",
+            "../../escape",
+            "a/b",
+            "a\\b",
+            "foo/",
+            "/abs",
+        ] {
+            let err = validate_image_name(name)
+                .expect_err(&format!("{name:?} must be refused"))
+                .to_string();
+            assert!(err.contains("single normal path component"), "{name:?}: {err}");
+        }
+    }
+
+    #[test]
+    fn manifest_rejects_image_name_escape() {
+        let text = sample_manifest().replace("image = \"smoke\"", "image = \"../../escape\"");
+        let err = parse_manifest(&text).unwrap_err().to_string();
+        assert!(err.contains("single normal path component"), "{err}");
+        assert!(err.contains("../../escape"), "{err}");
     }
 
     #[test]
