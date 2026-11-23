@@ -1,0 +1,206 @@
+== PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs.paq (106180 bytes; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
+chain manifest: /boot/boot staged
+chain manifest: /boot/paqfs staged
+chain manifest: /amd64/init staged
+chain manifest: /amd64/bin/rc staged
+chain manifest: /amd64/bin/ls staged
+chain manifest: /amd64/bin/cat staged
+chain manifest: /amd64/bin/echo staged
+chain manifest: /amd64/bin/ps staged
+chain manifest: /rc/lib/rcmain staged
+chain manifest: /rc/bin/termrc staged
+chain manifest: /lib/namespace staged
+chain manifest: /adm/timezone/local staged
+chain manifest: /usr/glenda/lib/profile staged
+== PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs-chain.paq (389549 bytes; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
+== witness manifest absent (build/mm/build-9k10t1.sh not run) — the tier bake proceeds; the both-venues witness is NOT structural this run
+tier manifest: /boot/boot staged
+tier manifest: /boot/paqfs staged
+tier manifest: /amd64/init staged
+tier manifest: /amd64/bin/rc staged
+tier manifest: /amd64/bin/ls staged
+tier manifest: /amd64/bin/cat staged
+tier manifest: /amd64/bin/echo staged
+tier manifest: /amd64/bin/ps staged
+tier manifest: /rc/lib/rcmain staged
+tier manifest: /rc/bin/termrc staged
+tier manifest: /lib/namespace staged
+tier manifest: /adm/timezone/local staged
+tier manifest: /usr/glenda/lib/profile staged
+tier manifest: /lib/tier1-sweep.rc staged
+tier manifest: /lib/tier1/sentinel.txt staged
+tier manifest: /lib/tier1/nm-input.6 staged
+tier manifest: /amd64/bin/fpprobe staged
+tier manifest: 37 h* sweep binaries staged (computed from tiers/tier1-cmds.txt)
+== PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs-tier.paq (1904158 bytes; 37 h* binaries; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
+net manifest: /boot/boot staged
+net manifest: /boot/paqfs staged
+net manifest: /amd64/init staged
+net manifest: /amd64/bin/rc staged
+net manifest: /amd64/bin/ls staged
+net manifest: /amd64/bin/cat staged
+net manifest: /amd64/bin/echo staged
+net manifest: /amd64/bin/ps staged
+net manifest: /amd64/bin/ip/ipconfig staged
+net manifest: /amd64/bin/ip/ping staged
+net manifest: /amd64/bin/ip/udpecho staged
+net manifest: /amd64/bin/tcpecho staged
+net manifest: /amd64/bin/tcpblast staged
+net manifest: /amd64/bin/netblast staged
+net manifest: /amd64/bin/grep staged
+net manifest: /amd64/bin/sed staged
+net manifest: /amd64/bin/dd staged
+net manifest: /amd64/bin/wc staged
+net manifest: /amd64/bin/sha1sum staged
+net manifest: /amd64/bin/test staged
+net manifest: /amd64/bin/bind staged
+net manifest: /amd64/bin/dc staged
+net manifest: /rc/lib/rcmain staged
+net manifest: /rc/bin/termrc staged
+net manifest: /lib/namespace staged
+net manifest: /adm/timezone/local staged
+net manifest: /usr/glenda/lib/profile staged
+net manifest: /lib/netaddr.rc staged
+net manifest: /lib/netip-loopback.rc staged
+net manifest: /lib/netip-static.rc staged
+net manifest: /lib/netip-dhcp.rc staged
+net manifest: /lib/netip-tcp.rc staged
+net manifest: /lib/netip-tap.rc staged
+== PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs-net.paq (907551 bytes; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
+payload manifest: /lib/ndb/local substituted from lib/ndb/local.template (the netaddr seam's slirp leg + ether; the 18-04 auth row stripped — no domain in this image) [services]
+payload manifest: /lib/font/bit staged (tree, 4303 files) [services]
+payload manifest: /usr/glenda/lib/profile staged [services]
+payload manifest: /lib/ndb/local staged [services]
+payload manifest: font /lib/font/bit/lucm/unicode.9.font staged [services]
+payload manifest: font /lib/font/bit/lucidasans/euro.8.font staged [services]
+payload manifest: font /lib/font/bit/pelm/latin1.8.font staged [services]
+payload manifest: font /lib/font/bit/pelm/euro.9.font staged [services]
+payload manifest: /lib/font/bit 4303 files 27676353 bytes (floors: 4303 files, 27000000 bytes) [services]
+payload manifest: /usr/glenda/lib/profile shape ok — terminal case rio-free, cpu case intact [services]
+services manifest: /boot/boot staged
+services manifest: /boot/paqfs staged
+services manifest: /boot/rcmain staged
+services manifest: /boot/sentinel.txt staged
+services manifest: /boot/tcp9901 staged
+services manifest: /boot/tcp9902 staged
+services manifest: /amd64/init staged
+services manifest: /amd64/bin/rc staged
+services manifest: /amd64/bin/ls staged
+services manifest: /amd64/bin/cat staged
+services manifest: /amd64/bin/echo staged
+services manifest: /amd64/bin/ps staged
+services manifest: /amd64/bin/ip/ipconfig staged
+services manifest: /amd64/bin/ip/ping staged
+services manifest: /amd64/bin/ip/udpecho staged
+services manifest: /amd64/bin/grep staged
+services manifest: /amd64/bin/sed staged
+services manifest: /amd64/bin/dd staged
+services manifest: /amd64/bin/wc staged
+services manifest: /amd64/bin/sha1sum staged
+services manifest: /amd64/bin/test staged
+services manifest: /amd64/bin/bind staged
+services manifest: /amd64/bin/hsvctcpecho staged
+services manifest: /amd64/bin/hmkdir staged
+services manifest: /rc/lib/rcmain staged
+services manifest: /rc/bin/termrc staged
+services manifest: /lib/namespace staged
+services manifest: /adm/timezone/local staged
+services manifest: /usr/glenda/lib/profile staged
+services manifest: /lib/netaddr.rc staged
+services manifest: /lib/netip-loopback.rc staged
+services manifest: /lib/netip-static.rc staged
+services manifest: /lib/netip-dhcp.rc staged
+services manifest: /lib/netip-tcp.rc staged
+services manifest: /lib/services-sweep.rc staged
+services manifest: 127 h* sweep binaries staged (tier-1 helpers + the tier-2 set computed from tiers/tier2-services.txt: 90 tier-2 members)
+== PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs-services.paq (26671016 bytes; 127 h* binaries; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
+== PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs-churn.paq (492105 bytes; chain + test/dc + churncats + /lib/churn-cats.rc; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
+== PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs-substrate.paq (43674 bytes; skeleton + randread as /amd64/init; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
+authdomain-gen: no authdomain.local — generating ephemeral DEMO material
+authdomain-gen: generated /tmp/mkimage-x64.D4lM2x/authdom-stage: label=DEMO authdom=DEMO-harvey authid=bootes users=3
+authdomain-gen: DEMO material is throwaway — never reuse outside a gate image
+verify: OK dir=/tmp/mkimage-x64.D4lM2x/auth-verify label=DEMO users=3
+== auth pairing verified over the staged copies (authdomain-gen -V over the bake's own scratch twin)
+== auth ndb: /lib/ndb/local composed from local.template (the seam's four tokens + @AUTHDOM@=DEMO-harvey from the generator run + the tcp=ticket service row for the probe dials)
+auth manifest: /boot/boot staged
+auth manifest: /boot/paqfs staged
+auth manifest: /amd64/init staged
+auth manifest: /amd64/bin/rc staged
+auth manifest: /amd64/bin/ls staged
+auth manifest: /amd64/bin/cat staged
+auth manifest: /amd64/bin/echo staged
+auth manifest: /amd64/bin/ps staged
+auth manifest: /amd64/bin/bind staged
+auth manifest: /amd64/bin/authsrv staged
+auth manifest: /amd64/bin/hsvctcpecho staged
+auth manifest: /amd64/bin/hauthprobe staged
+auth manifest: /rc/lib/rcmain staged
+auth manifest: /rc/bin/termrc staged
+auth manifest: /lib/namespace staged
+auth manifest: /adm/timezone/local staged
+auth manifest: /usr/glenda/lib/profile staged
+auth manifest: /adm/nvram staged
+auth manifest: /adm/keys staged
+auth manifest: /adm/domain.manifest staged
+auth manifest: /lib/ndb/auth staged
+auth manifest: /lib/ndb/local staged
+auth manifest: /lib/auth-sweep.rc staged
+auth manifest: /boot/authfeed.txt staged
+auth manifest: /boot/secstore-obj.txt staged
+auth manifest: 26 h* sweep binaries staged (the auth-suite set computed from tiers/tier2-services.txt + the tier-1 helpers: 26 tier-2 members)
+== PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs-auth.paq (2574163 bytes; chain + auth suite + the paired p9sk1 domain; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
+authdomain-gen: no authdomain.local — generating ephemeral DEMO material
+authdomain-gen: generated /tmp/mkimage-x64.D4lM2x/cpudom-stage: label=DEMO authdom=DEMO-harvey authid=bootes users=3
+authdomain-gen: DEMO material is throwaway — never reuse outside a gate image
+payload manifest: /lib/ndb/local substituted from lib/ndb/local.template (the seam's four tokens + authdom=DEMO-harvey from the caller's own generator run — the 19-07 auth arm, row KEPT) [cpu]
+payload manifest: /lib/font/bit staged (tree, 4303 files) [cpu]
+payload manifest: /usr/glenda/lib/profile staged [cpu]
+payload manifest: /lib/ndb/local staged [cpu]
+payload manifest: font /lib/font/bit/lucm/unicode.9.font staged [cpu]
+payload manifest: font /lib/font/bit/lucidasans/euro.8.font staged [cpu]
+payload manifest: font /lib/font/bit/pelm/latin1.8.font staged [cpu]
+payload manifest: font /lib/font/bit/pelm/euro.9.font staged [cpu]
+payload manifest: /lib/font/bit 4303 files 27676353 bytes (floors: 4303 files, 27000000 bytes) [cpu]
+payload manifest: /usr/glenda/lib/profile shape ok — terminal case rio-free, cpu case intact [cpu]
+verify: OK dir=/tmp/mkimage-x64.D4lM2x/cpu-auth-verify label=DEMO users=3
+== cpu pairing verified over the staged copies (authdomain-gen -V over the bake's own scratch twin)
+cpu manifest (§15): /boot/boot staged
+cpu manifest (§15): /boot/paqfs staged
+cpu manifest (§15): /amd64/init staged
+cpu manifest (§15): /amd64/bin/rc staged
+cpu manifest (§15): /amd64/bin/ls staged
+cpu manifest (§15): /amd64/bin/cat staged
+cpu manifest (§15): /amd64/bin/echo staged
+cpu manifest (§15): /amd64/bin/ps staged
+cpu manifest (§15): /amd64/bin/bind staged
+cpu manifest (§15): /amd64/bin/authsrv staged
+cpu manifest (§15): /amd64/bin/cpu staged
+cpu manifest (§15): /amd64/bin/aux/listen staged
+cpu manifest (§15): /amd64/bin/ip/ipconfig staged
+cpu manifest (§15): /amd64/bin/test staged
+cpu manifest (§15): /amd64/bin/rio staged
+cpu manifest (§15): /amd64/bin/plumber staged
+cpu manifest (§15): /amd64/bin/plumb staged
+cpu manifest (§15): /amd64/bin/ramfs staged
+cpu manifest (§15): /amd64/bin/syscall staged
+cpu manifest (§15): /amd64/bin/awd staged
+cpu manifest (§15): /rc/lib/rcmain staged
+cpu manifest (§15): /rc/bin/cpurc staged
+cpu manifest (§15): /rc/bin/service/tcp17010 staged
+cpu manifest (§15): /bin/service/tcp17010 staged
+cpu manifest (§15): /rc/bin/termrc staged
+cpu manifest (§15): /lib/namespace staged
+cpu manifest (§15): /lib/netaddr.rc staged
+cpu manifest (§15): /lib/ndb/auth staged
+cpu manifest (§15): /lib/ndb/local staged
+cpu manifest (§15): /adm/timezone/local staged
+cpu manifest (§15): /adm/nvram staged
+cpu manifest (§15): /adm/keys staged
+cpu manifest (§15): /adm/domain.manifest staged
+cpu manifest (§15): /boot/authid-creds.txt staged
+cpu manifest (§15): /usr/glenda/lib/profile staged
+cpu manifest (§15): /usr/glenda/lib/plumbing staged
+cpu manifest (§15): /sys/lib/plumb/basic staged
+cpu manifest (§15): /sys/lib/plumb/fileaddr staged
+cpu manifest (§15): 26 h* sweep binaries staged (§14's computed auth-suite set + the tier-1 helpers incl. hfactotum/hsed)
+== PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs-cpu.paq (22002476 bytes; chain + the auth suite + cmd/cpu + aux/listen + the real cpurc + tcp17010 + the font payload + the §15 p9sk1 domain + the 19-10 desktop suite (test/rio/plumber/plumb/ramfs/syscall/awd + glenda's home + the plumb rules); header 529ab12b trailer 6b46e688; KERNDATE 1795382101)

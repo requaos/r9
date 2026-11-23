@@ -1,0 +1,11 @@
+this derivation will be built:
+  /nix/store/7dvc4brcrqa2ak5mndqidrvz3304njgh-r9-kernel-x64-8417a84.drv
+building '/nix/store/7dvc4brcrqa2ak5mndqidrvz3304njgh-r9-kernel-x64-8417a84.drv'...
+KERNEL-STORE /nix/store/2279qlywyhk9zfya9qjaqn004vj95jl6-r9-kernel-x64-8417a84
+3535848bdab363f226360c172caf95dc699a493e2c7a9ebf6af68ad10cb77ad4  /nix/store/2279qlywyhk9zfya9qjaqn004vj95jl6-r9-kernel-x64-8417a84/kernel-x64.elf
+this derivation will be built:
+  /nix/store/832rq51gnqzbzawl7yhk3dxj0bq03302-r9-boot-iso-8417a84.drv
+error: some outputs of '/nix/store/832rq51gnqzbzawl7yhk3dxj0bq03302-r9-boot-iso-8417a84.drv' are not valid, so checking is not possible
+       Hint: --rebuild and --check error if the derivation was not previously built and cannot be substituted.
+             Remove it to perform a fresh build, or use --repair to rewrite missing or corrupted builds in the store.
+KERNEL-BOOTISO-REBUILD-FAIL
