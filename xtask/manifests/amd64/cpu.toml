@@ -338,16 +338,9 @@ from = "amd64/bin/plumber"
 mode = "0755"
 
 [[file]]
-# The swap probe (plan 01-20, D-17 settled by D-27): /amd64/bin/ps is the
-# one harmless, non-boot-path tool replaced by the throwaway Rust a.out
-# under target/probe/x86_64/.  S6 built and booted the recipe; this entry
-# proves the per-file swap and HARN-04's provenance rule (the artifact is
-# workspace-resident and its bytes differ from Harvey's ps), then the
-# flip-back commit restores this block byte-for-byte (D-18).
 path = "/amd64/bin/ps"
-source = "rust"
-from = "target/probe/x86_64/ps.aout"
-replaces = "amd64/bin/ps"
+source = "harvey"
+from = "amd64/bin/ps"
 mode = "0755"
 
 [[file]]

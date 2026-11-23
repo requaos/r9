@@ -33,11 +33,6 @@ mod pcap;
 // the dispatch arm and the step constructor touch this file).
 mod gate;
 
-// 01-20 (D-17/D-27): the throwaway amd64 ps swap probe builder.  D-18
-// deletes this module, its sources and the subcommand at the plan's
-// flip-back commit.
-mod probe;
-
 struct RustupState {
     installed_targets: Vec<Triple>,
     curr_toolchain: String,
@@ -277,15 +272,6 @@ fn main() {
                     clap::arg!(--verbose "Print commands"),
                 ]),
         )
-        .subcommand(
-            clap::Command::new("probe")
-                .about("Build the throwaway amd64 ps swap probe (plan 01-20, D-17/D-27): \
-                        plain rustc -> a flat rust-lld payload -> the 40-byte Plan 9 a.out \
-                        header, checked against parse_aout; x86-64 only")
-                .args(&[clap::arg!(--arch <arch> "Target architecture (the probe is x86-64 only)")
-                    .value_parser(clap::builder::EnumValueParser::<Arch>::new())
-                    .required(true)]),
-        )
         .subcommand(clap::Command::new("clean").about("Cargo clean"))
         .get_matches();
 
@@ -318,11 +304,6 @@ fn main() {
         Some(("initrd", m)) => InitrdStep::new(m).run(),
         Some(("image", m)) => ImageStep::new(m).run(),
         Some(("gate", m)) => gate::GateStep::new(m).run(),
-        Some(("probe", m)) => probe::build_probe(Arch::from(m)).and_then(|path| {
-            let len = std::fs::metadata(&path)?.len();
-            println!("probe: {} ({len} bytes)", path.display());
-            Ok(())
-        }),
         Some(("clean", _)) => CleanStep::new().run(),
         _ => Err("bad subcommand".into()),
     } {
