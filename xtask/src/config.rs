@@ -245,17 +245,31 @@ impl Initrd {
     /// This is the channel 07-05's virtnet profile uses to boot the
     /// Harvey-baked image.
     pub fn resolved_file(&self, arch: Arch) -> Result<PathBuf, String> {
-        match self.file.strip_prefix("harvey:") {
-            Some(rest) if !rest.is_empty() => {
-                let dir = harvey::harvey_dir(arch).map_err(|e| e.to_string())?;
-                Ok(dir.join(rest))
+        if let Some(rest) = self.file.strip_prefix("harvey:") {
+            if rest.is_empty() {
+                return Err(
+                    "qemu initrd: bare `harvey:` prefix names no file within the Harvey checkout"
+                        .to_string(),
+                );
             }
-            Some(_) => {
-                Err("qemu initrd: bare `harvey:` prefix names no file within the Harvey checkout"
-                    .to_string())
-            }
-            None => Ok(PathBuf::from(&self.file)),
+            let dir = harvey::harvey_dir(arch).map_err(|e| e.to_string())?;
+            return Ok(dir.join(rest));
         }
+        // D-16: `image:<name>` names an r9-assembled image, placed by the
+        // assembler at target/images/<arch>/<name>.paq.  The path stays
+        // workspace-relative like every other target/ path (the qemu steps
+        // run with the workspace as cwd); the assembler materialises it on
+        // demand (main.rs ensure_initrd_image).
+        if let Some(name) = self.file.strip_prefix("image:") {
+            if name.is_empty() {
+                return Err(
+                    "qemu initrd: bare `image:` prefix names no image (want image:<name>)"
+                        .to_string(),
+                );
+            }
+            return Ok(crate::image::image_paq(arch, name));
+        }
+        Ok(PathBuf::from(&self.file))
     }
 
     /// The `-device` argument placing the image in guest RAM: qemu's generic
@@ -880,7 +894,7 @@ pub fn apply_virt_netdev(cmd: &mut Command, config: &Configuration, pcap_path: &
 
 #[cfg(test)]
 mod tests {
-    use super::{Configuration, QemuOverrides, apply_to_qemu_step_with_overrides};
+    use super::{Configuration, Initrd, QemuOverrides, apply_to_qemu_step_with_overrides};
 
     /// Parse a TOML document and return the qemu argv it would emit.
     fn qemu_argv(toml_doc: &str) -> Vec<String> {
@@ -961,6 +975,26 @@ mod tests {
                 "loader,file=aarch64/lib/probe-initrd.txt,addr=0x48000000",
             ]
         );
+    }
+
+    /// D-16: `image:<name>` resolves to the assembled image under
+    /// target/images/<arch>/ — per the config's arch, workspace-relative,
+    /// and with no Harvey tree consulted (the scheme is a pure path
+    /// transform).  A bare `image:` prefix is a named error.
+    #[test]
+    fn initrd_image_scheme_resolves_under_target_images() {
+        let initrd = Initrd { file: "image:smoke".to_string(), addr: 0x48000000 };
+        assert_eq!(
+            initrd.resolved_file(crate::Arch::Aarch64).unwrap(),
+            std::path::PathBuf::from("target/images/aarch64/smoke.paq")
+        );
+        assert_eq!(
+            initrd.resolved_file(crate::Arch::X86_64).unwrap(),
+            std::path::PathBuf::from("target/images/x86_64/smoke.paq")
+        );
+        let bare = Initrd { file: "image:".to_string(), addr: 0 };
+        let err = bare.resolved_file(crate::Arch::Aarch64).unwrap_err();
+        assert!(err.contains("image:"), "{err}");
     }
 
     /// Backward compatibility: a [qemu] section with only today's machine/dtb

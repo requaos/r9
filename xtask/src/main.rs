@@ -214,6 +214,32 @@ fn main() {
                     clap::arg!(--verbose "Print commands"),
                 ]),
         )
+        .subcommand(
+            clap::Command::new("image")
+                .about("Assemble one image from xtask/manifests/<objtype>/<image>.toml through the \
+                        checked engine (D-15/D-16): two-way drift and Rust provenance enforcement, \
+                        bake, member list; --compare-reference compares to the reference bake \
+                        (D-29), --emit-manifest derives a manifest from that reference list, \
+                        --libraries checks the tier-0 library table (HARN-03)")
+                .args(&[
+                    clap::arg!(--arch <arch> "Target architecture")
+                        .value_parser(clap::builder::EnumValueParser::<Arch>::new())
+                        .required(true),
+                    clap::arg!(--image <name> "Image name (xtask/manifests/<objtype>/<name>.toml)")
+                        .value_parser(clap::builder::NonEmptyStringValueParser::new())
+                        .required(true),
+                    clap::arg!(--"compare-reference" "Compare the assembled member list to the \
+                                                      reference bake's \
+                                                      ($R9_HARVEY_REFERENCE_AMD64/_ARM64/<image>.members)"),
+                    clap::arg!(--"emit-manifest" <path> "Write a manifest derived from the \
+                                                          reference member list and the tree, then \
+                                                          exit non-zero when any entry is UNRESOLVED")
+                        .value_parser(clap::builder::NonEmptyStringValueParser::new()),
+                    clap::arg!(--libraries "Check the manifest's [[library]] table against the \
+                                            tree's tier-0 list"),
+                    clap::arg!(--verbose "Print commands"),
+                ]),
+        )
         .subcommand(clap::Command::new("clean").about("Cargo clean"))
         .get_matches();
 
@@ -244,6 +270,7 @@ fn main() {
         }
         Some(("ureg-check", _)) => UregCheckStep::new().run(),
         Some(("initrd", m)) => InitrdStep::new(m).run(),
+        Some(("image", m)) => ImageStep::new(m).run(),
         Some(("clean", _)) => CleanStep::new().run(),
         _ => Err("bad subcommand".into()),
     } {
@@ -3675,18 +3702,128 @@ impl CleanStep {
     }
 }
 
-/// `cargo xtask ureg-check`: standalone form of the
-/// cross-repo ureg.h drift gate (also a BootTestStep precondition).
+/// `cargo xtask image`: assemble one image from its per-file manifest
+/// (D-15/D-16) through the checked engine — two-way drift, Rust
+/// provenance, path validation — and optionally compare its member list to
+/// the reference bake (D-29), emit a manifest from that reference list, or
+/// check the `[[library]]` table against the tier-0 list (HARN-03).
+///
+/// Manifests live at `xtask/manifests/<amd64|arm64>/<image>.toml`; outputs
+/// at `target/images/<x86_64|aarch64>/<image>.{stage,paq,members}`.  The
+/// tree comes from the per-architecture resolver, the host `mkpaqfs` from
+/// `R9_MKPAQFS` — both with named errors, no derived defaults.
+struct ImageStep {
+    arch: Arch,
+    image_name: String,
+    compare_reference: bool,
+    emit_manifest: Option<PathBuf>,
+    libraries: bool,
+    verbose: bool,
+}
+
+impl ImageStep {
+    fn new(matches: &clap::ArgMatches) -> Self {
+        Self {
+            arch: Arch::from(matches),
+            image_name: matches.get_one::<String>("image").cloned().unwrap_or_default(),
+            compare_reference: matches.get_flag("compare-reference"),
+            emit_manifest: matches.get_one::<String>("emit-manifest").map(PathBuf::from),
+            libraries: matches.get_flag("libraries"),
+            verbose: verbose(matches),
+        }
+    }
+
+    fn run(self) -> Result<()> {
+        let arch_name = arch_dir_name(self.arch);
+        if let Some(path) = &self.emit_manifest {
+            return self.emit(path);
+        }
+        if self.libraries {
+            let manifest_path = image_manifest_path(self.arch, &self.image_name)?;
+            let manifest = read_manifest(&manifest_path)?;
+            let tree = harvey::harvey_dir(self.arch)?;
+            let tier_path = tree.join(format!(
+                "build/{}/tiers/tier0-libs.txt",
+                build_dir_name(self.arch)
+            ));
+            let tier_text = std::fs::read_to_string(&tier_path).map_err(|e| -> DynError {
+                format!(
+                    "tier-0 list {}: {e} — the resolved Harvey tree must carry \
+                     build/{{x86_64|aarch64}}/tiers/tier0-libs.txt (HARN-03)",
+                    tier_path.display()
+                )
+                .into()
+            })?;
+            image::check_libraries(&manifest, &tree, &tier_text)?;
+            println!("libraries: image {arch_name}/{} tier-0 list OK", self.image_name);
+        }
+        let assembled = assemble_named_image(self.arch, &self.image_name, self.verbose)?;
+        println!(
+            "image: {arch_name}/{} {} sha256 {} members {}",
+            self.image_name,
+            assembled.paq.display(),
+            assembled.sha256,
+            assembled.members.len()
+        );
+        if self.compare_reference {
+            let reference = reference_member_list(self.arch, &self.image_name)?;
+            image::compare_members(&assembled, &reference)?;
+            println!(
+                "image: {arch_name}/{} matches the reference member list ({} members)",
+                self.image_name,
+                reference.len()
+            );
+        }
+        Ok(())
+    }
+
+    /// `--emit-manifest`: derive a manifest from the reference member list
+    /// and the tree, write it, then fail non-zero when any entry is
+    /// UNRESOLVED (listing them) — a manifest can never silently omit a
+    /// file (T-01-39).
+    fn emit(&self, path: &Path) -> Result<()> {
+        let reference = reference_member_list(self.arch, &self.image_name)?;
+        let tree = harvey::harvey_dir(self.arch)?;
+        let emitted =
+            image::emit_manifest(&reference, &tree, objtype(self.arch)?, &self.image_name)?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, &emitted.text)
+            .map_err(|e| -> DynError { format!("write {}: {e}", path.display()).into() })?;
+        if emitted.unresolved.is_empty() {
+            println!(
+                "image: wrote {} from {} reference members",
+                path.display(),
+                reference.len()
+            );
+            Ok(())
+        } else {
+            eprintln!(
+                "image: {} has {} UNRESOLVED entr{} — no tree file carries the reference bytes:",
+                path.display(),
+                emitted.unresolved.len(),
+                if emitted.unresolved.len() == 1 { "y" } else { "ies" }
+            );
+            for unresolved in &emitted.unresolved {
+                eprintln!("  {unresolved}");
+            }
+            Err("the emitted manifest cannot be assembled until every UNRESOLVED entry is \
+                 resolved (HARN-03/T-01-39)"
+                .into())
+        }
+    }
+}
+
 /// `cargo xtask initrd`: assemble
 /// `target/bootfs.paq` from the per-file manifest
-/// `xtask/manifests/arm64/smoke.toml` (D-15/D-16): every member is staged
-/// from the resolved Harvey tree into `target/images/aarch64/` and baked
-/// with the host `mkpaqfs` named by `R9_MKPAQFS`, then the image's sha256
-/// is printed for the evidence log.  The image, the staging tree and the
+/// `xtask/manifests/arm64/smoke.toml` (D-15/D-16) through the checked
+/// engine: every member is staged from the resolved Harvey tree into
+/// `target/images/aarch64/`, drift-checked in both directions, baked with
+/// the host `mkpaqfs` named by `R9_MKPAQFS`, and the image's sha256 is
+/// printed for the evidence log.  The image, the staging tree and the
 /// member list are target/ build artifacts — never committed, and nothing
-/// is ever written into the Harvey tree (HARN-02).  `--arch`/`--config`
-/// are accepted for the Step idiom; the assembly is config-independent —
-/// one image serves every profile that names it.
+/// is ever written into the Harvey tree (HARN-02).
 struct InitrdStep {
     verbose: bool,
 }
@@ -3694,12 +3831,6 @@ struct InitrdStep {
 /// The initrd output image, relative to the workspace (config_virtexec
 /// names this path; unchanged by D-16).
 const BOOTFS_PAQ: &str = "target/bootfs.paq";
-/// The aarch64 smoke manifest: one entry per image member (D-15).
-const SMOKE_MANIFEST: &str = "xtask/manifests/arm64/smoke.toml";
-/// The staging tree the engine fills, under target/ only (HARN-02).
-const SMOKE_STAGE_DIR: &str = "target/images/aarch64/smoke.stage";
-/// The D-29 member list of the staged image.
-const SMOKE_MEMBERS: &str = "target/images/aarch64/smoke.members";
 
 impl InitrdStep {
     fn new(matches: &clap::ArgMatches) -> Self {
@@ -3736,54 +3867,104 @@ fn mkpaqfs_path() -> Result<PathBuf> {
     }
 }
 
-/// Load the aarch64 smoke manifest from the workspace.
-fn smoke_manifest() -> Result<image::Manifest> {
-    let path = workspace().join(SMOKE_MANIFEST);
-    let text = std::fs::read_to_string(&path)
-        .map_err(|e| -> DynError { format!("smoke initrd manifest {}: {e}", path.display()).into() })?;
+/// The xtask output-directory name of an arch (`target/images/<name>/`).
+fn arch_dir_name(arch: Arch) -> String {
+    image::arch_dir(arch)
+}
+
+/// The Plan 9 objtype directory of an arch's manifests (`arm64`/`amd64`).
+fn objtype(arch: Arch) -> Result<&'static str> {
+    match arch {
+        Arch::Aarch64 => Ok("arm64"),
+        Arch::X86_64 => Ok("amd64"),
+        Arch::Riscv64 => Err("a Harvey image manifest does not exist for riscv64 — the \
+                              manifests are per guest architecture (arm64, amd64)"
+            .into()),
+    }
+}
+
+/// The Harvey tree's build-directory name of an arch
+/// (`build/x86_64/...` / `build/aarch64/...` — the tree's own names, which
+/// differ from the Plan 9 objtype used for manifests).
+fn build_dir_name(arch: Arch) -> &'static str {
+    match arch {
+        Arch::Aarch64 => "aarch64",
+        Arch::X86_64 => "x86_64",
+        Arch::Riscv64 => "riscv64",
+    }
+}
+
+/// `xtask/manifests/<objtype>/<image>.toml` in the workspace.
+fn image_manifest_path(arch: Arch, image_name: &str) -> Result<PathBuf> {
+    Ok(workspace().join(format!(
+        "xtask/manifests/{}/{image_name}.toml",
+        objtype(arch)?
+    )))
+}
+
+/// `target/images/<arch>/<image>.paq` in the workspace.
+fn image_paq_path(arch: Arch, image_name: &str) -> PathBuf {
+    workspace().join(image::image_paq(arch, image_name))
+}
+
+/// Read and parse one image's manifest with a named error.
+fn read_manifest(path: &Path) -> Result<image::Manifest> {
+    let text = std::fs::read_to_string(path).map_err(|e| -> DynError {
+        format!(
+            "image manifest {}: {e} — commit xtask/manifests/<objtype>/<image>.toml",
+            path.display()
+        )
+        .into()
+    })?;
     image::parse_manifest(&text)
 }
 
-/// Assemble target/bootfs.paq from the per-file smoke manifest through the
-/// one stage-and-bake engine (D-16).  The staged init binds #p at /proc
-/// itself in the namespace era (the real chain's connectembed shape), so
-/// the manifest carries the empty `/proc` dir.  A missing R9_MKPAQFS or a
-/// missing manifest source is a loud build error naming the producer,
-/// never a silent boot.
-fn assemble_initrd(verbose: bool) -> Result<()> {
+/// Assemble `arch`'s named image through the checked engine into
+/// `target/images/<arch>/`.  The drift and provenance checks run first
+/// (HARN-05), so a bad manifest or swapped binary never reaches mkpaqfs.
+fn assemble_named_image(
+    arch: Arch,
+    image_name: &str,
+    verbose: bool,
+) -> Result<image::Assembled> {
     let ws = workspace();
-    let manifest = smoke_manifest()?;
-    // The per-architecture resolver: R9_HARVEY_DIR wins, then
-    // R9_HARVEY_DIR_ARM64 (D-21).  No built-in default path (D-01).
-    let harvey = harvey::harvey_dir(Arch::Aarch64)?;
-    let mkpaqfs = mkpaqfs_path()?;
-    let stage = ws.join(SMOKE_STAGE_DIR);
-    image::stage(&manifest, &harvey, &stage)?;
-    let paq = ws.join(BOOTFS_PAQ);
-    if verbose {
-        println!("Executing {} -o {} {}", mkpaqfs.display(), paq.display(), stage.display());
+    let manifest_path = image_manifest_path(arch, image_name)?;
+    if !manifest_path.is_file() {
+        return Err(format!(
+            "image manifest {} does not exist — commit the manifest first",
+            manifest_path.display()
+        )
+        .into());
     }
-    image::bake(&mkpaqfs, &stage, &paq)?;
-    let members = image::member_list(&stage)?;
-    image::write_members(&members, &ws.join(SMOKE_MEMBERS))?;
-    // Evidence: print the image's sha256 (mkpaqfs embeds a time field, so the
-    // digest is per-bake — the phase log records each evidence run's value).
-    let sha = image::sha256_file(&paq)?;
-    println!("initrd: {} sha256 {sha}", paq.display());
-    Ok(())
+    // The per-architecture resolver: R9_HARVEY_DIR wins, then
+    // R9_HARVEY_DIR_ARM64/_AMD64 (D-21).  No built-in default path (D-01).
+    let tree = harvey::harvey_dir(arch)?;
+    let mkpaqfs = mkpaqfs_path()?;
+    let out_dir = ws.join(format!("target/images/{}", arch_dir_name(arch)));
+    if verbose {
+        println!(
+            "Executing {} -o {} {}",
+            mkpaqfs.display(),
+            out_dir.join(format!("{image_name}.paq")).display(),
+            out_dir.join(format!("{image_name}.stage")).display()
+        );
+    }
+    image::assemble_checked(&manifest_path, &tree, std::slice::from_ref(&tree), &ws, &out_dir, &mkpaqfs)
 }
 
-/// Whether the assembled smoke image is missing or older than any of its
-/// manifest inputs (every `from` path plus the manifest file itself).
-fn smoke_initrd_stale(paq: &Path) -> Result<bool> {
+/// Whether `arch`'s named image is missing or older than its manifest or
+/// any of its sources (the staleness check the on-demand `image:` scheme
+/// reads).
+fn image_stale(arch: Arch, image_name: &str, paq: &Path) -> Result<bool> {
     let ws = workspace();
-    let manifest_path = ws.join(SMOKE_MANIFEST);
-    let manifest = smoke_manifest()?;
-    let harvey = harvey::harvey_dir(Arch::Aarch64)?;
+    let manifest_path = image_manifest_path(arch, image_name)?;
+    let manifest = read_manifest(&manifest_path)?;
+    let tree = harvey::harvey_dir(arch)?;
     let Some(paq_mtime) = std::fs::metadata(paq).and_then(|m| m.modified()).ok() else {
         return Ok(true);
     };
-    let mut inputs = image::input_paths(&manifest, &harvey);
+    let manifest_dir = manifest_path.parent().unwrap_or(&ws);
+    let mut inputs = image::input_paths(&manifest, manifest_dir, &tree, &ws);
     inputs.push(manifest_path);
     Ok(inputs.iter().any(|input| {
         std::fs::metadata(input)
@@ -3791,6 +3972,83 @@ fn smoke_initrd_stale(paq: &Path) -> Result<bool> {
             .ok()
             .is_some_and(|input_mtime| input_mtime > paq_mtime)
     }))
+}
+
+/// Resolve an image named by the `image:` scheme, assembling it when the
+/// `.paq` is missing or stale (D-16: profiles stop reading Harvey-baked
+/// images).  The printed line is the observable on-demand path.
+fn ensure_named_image(arch: Arch, image_name: &str, verbose: bool) -> Result<PathBuf> {
+    let paq = image_paq_path(arch, image_name);
+    if image_stale(arch, image_name, &paq)? {
+        println!(
+            "xtask: image {}/{} missing or stale — assembling",
+            arch_dir_name(arch),
+            image_name
+        );
+        let assembled = assemble_named_image(arch, image_name, verbose)?;
+        println!(
+            "image: {}/{} {} sha256 {} members {}",
+            arch_dir_name(arch),
+            image_name,
+            assembled.paq.display(),
+            assembled.sha256,
+            assembled.members.len()
+        );
+    }
+    Ok(paq)
+}
+
+/// The reference bake's member list for `arch`'s named image: plans 01-15
+/// and 01-17 export `R9_HARVEY_REFERENCE_AMD64` / `_ARM64`; unset is a
+/// named error, never a skipped comparison.
+fn reference_member_list(arch: Arch, image_name: &str) -> Result<Vec<image::Member>> {
+    let var = match arch {
+        Arch::Aarch64 => "R9_HARVEY_REFERENCE_ARM64",
+        Arch::X86_64 => "R9_HARVEY_REFERENCE_AMD64",
+        Arch::Riscv64 => {
+            return Err("a reference member list does not exist for riscv64 — the image \
+                        manifests are per guest architecture (arm64, amd64)"
+                .into())
+        }
+    };
+    let root = match env::var(var) {
+        Ok(value) if !value.trim().is_empty() => PathBuf::from(value),
+        _ => {
+            return Err(format!(
+                "{var} is not set — --compare-reference and --emit-manifest read \
+                 <{var}>/{image_name}.members (the reference bake's D-29 member list); plans \
+                 01-15 and 01-17 export it"
+            )
+            .into())
+        }
+    };
+    let path = root.join(format!("{image_name}.members"));
+    let text = std::fs::read_to_string(&path).map_err(|e| -> DynError {
+        format!(
+            "reference member list {}: {e} — {var} names the reference bake's directory",
+            path.display()
+        )
+        .into()
+    })?;
+    image::parse_reference_members(&text)
+}
+
+/// Assemble target/bootfs.paq from the per-file smoke manifest through the
+/// checked engine (D-16): the smoke image gets the two-way drift and Rust
+/// provenance checks too.  The staged init binds #p at /proc itself in the
+/// namespace era (the real chain's connectembed shape), so the manifest
+/// carries the empty `/proc` dir.  A missing R9_MKPAQFS, a missing
+/// manifest source or a manifest/image disagreement is a loud build error,
+/// never a silent boot.
+fn assemble_initrd(verbose: bool) -> Result<()> {
+    let ws = workspace();
+    let assembled = assemble_named_image(Arch::Aarch64, "smoke", verbose)?;
+    let paq = ws.join(BOOTFS_PAQ);
+    std::fs::copy(&assembled.paq, &paq)?;
+    // Evidence: print the image's sha256 (mkpaqfs embeds a time field, so the
+    // digest is per-bake — the phase log records each evidence run's value).
+    println!("initrd: {} sha256 {}", paq.display(), assembled.sha256);
+    Ok(())
 }
 
 /// One churn gate's marker vocabulary (17-02's q35churn set and its
@@ -3939,7 +4197,7 @@ fn churn_post_pass(capture: &[u8], m: &ChurnMarkers) -> Result<ChurnVerdict> {
     Ok(ChurnVerdict { iterations, want_marks, semgens, steady, measured, ceiling })
 }
 
-/// Build-if-missing/stale hook: see [`smoke_initrd_stale`].
+/// Build-if-missing/stale hook: see [`image_stale`].
 /// config carries an initrd image under target/ (the assembled bootfs.paq)
 /// reassemble it when absent or older than the staged inputs.  Configs with
 /// no initrd, or with a target/-external image (the committed probe fixture —
@@ -3947,6 +4205,18 @@ fn churn_post_pass(capture: &[u8], m: &ChurnMarkers) -> Result<ChurnVerdict> {
 fn ensure_initrd_image(config: &Configuration, arch: Arch, verbose: bool) -> Result<()> {
     let Some(qemu) = &config.qemu else { return Ok(()) };
     let Some(initrd) = &qemu.initrd else { return Ok(()) };
+    if let Some(name) = initrd.file.strip_prefix("image:") {
+        if name.is_empty() {
+            return Err("qemu initrd: bare `image:` prefix names no image (want image:<name>)"
+                .into());
+        }
+        // D-16: the named image is assembled on demand into
+        // target/images/<arch>/ when missing or stale.  The same engine
+        // ImageStep runs, so the smoke image and every later image carry
+        // the drift and provenance checks.
+        ensure_named_image(arch, name, verbose)?;
+        return Ok(());
+    }
     // A harvey:-prefixed image is produced by the Harvey checkout's own
     // pipeline and consumed as-is: it passes through the target/-resident
     // auto-bake untouched, but absence is a loud error naming the producers
@@ -3982,7 +4252,7 @@ fn ensure_initrd_image(config: &Configuration, arch: Arch, verbose: bool) -> Res
     let paq = workspace().join(&initrd.file);
     // The staleness check reads the manifest's inputs through the resolver;
     // the manifest file itself is an input too (an edited manifest rebakes).
-    if smoke_initrd_stale(&paq)? {
+    if image_stale(Arch::Aarch64, "smoke", &paq)? {
         // assemble_initrd fails loudly with the producing command named when
         // R9_MKPAQFS or a manifest source is absent.
         println!("xtask: initrd {} missing or stale — assembling", initrd.file);
@@ -4317,13 +4587,30 @@ fn emit_grub_cfg(template: &str, module_staged: bool, append: Option<&str>) -> s
     Ok(out)
 }
 
-/// Resolve a [dist] module path: a `harvey:`-prefixed value names a file
-/// under `arch`'s tree (harvey::harvey_dir — the 07-05 initrd channel's
-/// discipline; r9 never hardcodes a sibling layout); ordinary
-/// workspace-relative values pass through.  Absence is
-/// a LOUD error naming the Harvey-side producers — never a silent
+/// Resolve a [dist] module path: an `image:`-prefixed value names an r9
+/// image assembled on demand into `target/images/<arch>/<name>.paq` (D-16);
+/// a `harvey:`-prefixed value names a file under `arch`'s tree
+/// (harvey::harvey_dir — the 07-05 initrd channel's discipline; r9 never
+/// hardcodes a sibling layout); ordinary workspace-relative values pass
+/// through.  Absence is a LOUD error naming the producers — never a silent
 /// kernel-only ISO when the profile expects its bootfs.
 fn resolve_boot_module(spec: &str, arch: Arch) -> Result<PathBuf> {
+    if let Some(name) = spec.strip_prefix("image:") {
+        if name.is_empty() {
+            return Err(
+                "dist module: bare `image:` prefix names no image (want image:<name>)".into(),
+            );
+        }
+        let path = ensure_named_image(arch, name, false)?;
+        if !path.is_file() {
+            return Err(format!(
+                "boot module {spec} not found at {} — the image assembler did not produce it",
+                path.display()
+            )
+            .into());
+        }
+        return Ok(path);
+    }
     let path = match spec.strip_prefix("harvey:") {
         Some(rest) if !rest.is_empty() => {
             let dir = harvey::harvey_dir(arch).map_err(|e| e.to_string())?;
