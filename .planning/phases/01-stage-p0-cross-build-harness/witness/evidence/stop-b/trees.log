@@ -1,0 +1,26 @@
+these 3 derivations will be built:
+  /nix/store/iycgzwqgmsi85wm7x3qqhsqln7cj4h09-harvey-hostbin-0.drv
+  /nix/store/pmgg2zfrx68qdq9ds7h9940angvd0msa-harvey-tree-amd64-0.drv
+  /nix/store/w8a148l5wgz73fpz05kmzgqw6kx0c89q-harvey-tree-arm64-0.drv
+this path will be fetched (152.0 KiB download, 439.9 KiB unpacked):
+  /nix/store/pa0pzpgmzancbxqhxl6fr1k0ix1xd5y1-proot-5.5.0
+copying path '/nix/store/pa0pzpgmzancbxqhxl6fr1k0ix1xd5y1-proot-5.5.0' from 'https://cache.nixos.org'...
+building '/nix/store/iycgzwqgmsi85wm7x3qqhsqln7cj4h09-harvey-hostbin-0.drv'...
+building '/nix/store/pmgg2zfrx68qdq9ds7h9940angvd0msa-harvey-tree-amd64-0.drv'...
+building '/nix/store/w8a148l5wgz73fpz05kmzgqw6kx0c89q-harvey-tree-arm64-0.drv'...
+TREES-STORE /nix/store/arrvrysn8l6bagwv95nbzlng8s1y7wyf-harvey-tree-amd64-0
+--- /nix/store/arrvrysn8l6bagwv95nbzlng8s1y7wyf-harvey-tree-amd64-0/HARVEY-TREE ---
+  rev=bd7a6982a3e4f465f8ed3da5e0c7290521514ff0
+  narHash=sha256-N6VjnVI69pcxSCpQ9BUxrlpTqnp9LgjKfGcpO3F6Ma0=
+  arch=amd64
+  system=x86_64-linux
+checking '/nix/store/arrvrysn8l6bagwv95nbzlng8s1y7wyf-harvey-tree-amd64-0'...
+TREES-VERIFY-OK /nix/store/arrvrysn8l6bagwv95nbzlng8s1y7wyf-harvey-tree-amd64-0
+TREES-STORE /nix/store/5rq6h22qxhifg6v78q7pf4bbphc9mnjp-harvey-tree-arm64-0
+--- /nix/store/5rq6h22qxhifg6v78q7pf4bbphc9mnjp-harvey-tree-arm64-0/HARVEY-TREE ---
+  rev=bd7a6982a3e4f465f8ed3da5e0c7290521514ff0
+  narHash=sha256-N6VjnVI69pcxSCpQ9BUxrlpTqnp9LgjKfGcpO3F6Ma0=
+  arch=arm64
+  system=x86_64-linux
+checking '/nix/store/5rq6h22qxhifg6v78q7pf4bbphc9mnjp-harvey-tree-arm64-0'...
+TREES-VERIFY-OK /nix/store/5rq6h22qxhifg6v78q7pf4bbphc9mnjp-harvey-tree-arm64-0

@@ -1,0 +1,19 @@
+# trimmed from .planning/phases/01-stage-p0-cross-build-harness/spikes/linux-witness/return-01-22/gate/gate.log (666 lines): run boundaries and the decisive failure lines
+1:== gate run 1/2 ==
+330:gate: iso /home/req/code/r9/target/boot-q35cpu.iso 
+331:gate: leg rio (capture /home/req/code/r9/target/gate/77845-1795447074/rio.log)
+332:can't read "spawn_id": no such variable
+333:    while executing
+334:"expect_before -i $spawn_id {
+339:    (file "/home/req/code/r9/gates/x86_64/drawterm-gate.expect" line 336)
+340:GATE-FAIL rio-leg-failed (leg rio; capture /home/req/code/r9/target/gate/77845-1795447074/rio.log)
+341:GATE-RUN 1 exit=nonzero
+342:== gate run 2/2 ==
+655:gate: iso /home/req/code/r9/target/boot-q35cpu.iso 
+656:gate: leg rio (capture /home/req/code/r9/target/gate/88271-1795447108/rio.log)
+657:can't read "spawn_id": no such variable
+658:    while executing
+659:"expect_before -i $spawn_id {
+664:    (file "/home/req/code/r9/gates/x86_64/drawterm-gate.expect" line 336)
+665:GATE-FAIL rio-leg-failed (leg rio; capture /home/req/code/r9/target/gate/88271-1795447108/rio.log)
+666:GATE-RUN 2 exit=nonzero
