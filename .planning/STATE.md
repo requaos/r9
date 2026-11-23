@@ -2,19 +2,19 @@
 gsd_state_version: "1.0"
 milestone: v3.0
 milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
-current_phase: 1
+current_phase: 01
 current_phase_name: Stage P0 - Cross-Build Harness
 status: executing
-stopped_at: Phase 1 context gathered
-last_updated: "2026-11-23T00:26:50.001Z"
+stopped_at: Completed 01-03-PLAN.md
+last_updated: "2026-11-23T00:45:32.057Z"
 last_activity: 2026-11-22
-last_activity_desc: Roadmap created from ingest; W11 decided by the owner
-state_head: ce51503989b2d26efbf919e59e9748097f16f637
+last_activity_desc: Phase 01 execution started
+state_head: 905c5fb8c2adedc7d75383a52476ea9cfbf5c41c
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 7
-  completed_plans: 0
+  completed_plans: 1
   percent: 0
 ---
 
@@ -25,14 +25,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-22)
 
 **Core value:** The OS boots to rio on QEMU q35 at every commit.
-**Current focus:** Phase 1: Stage P0 - Cross-Build Harness
+**Current focus:** Phase 01 — Stage P0 - Cross-Build Harness
 
 ## Current Position
 
-Phase: 1 (Stage P0 - Cross-Build Harness) — READY TO EXECUTE
-Plan: 0 of TBD in current phase
+Phase: 01 (Stage P0 - Cross-Build Harness) — EXECUTING
+Plan: 2 of 7
 Status: Ready to execute
-Last activity: 2026-11-22 — Roadmap created from ingest; W11 decided by the owner
+Last activity: 2026-11-22 — Phase 01 execution started
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -48,6 +48,11 @@ Progress: [░░░░░░░░░░] 0%
 | - | - | - | - |
 
 *Updated after each plan completion*
+**Per-Plan Metrics:**
+
+| Plan | Duration | Tasks | Files |
+|------|----------|-------|-------|
+| Phase 01 P03 | 3 min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -61,6 +66,10 @@ Full log is the PROJECT.md Key Decisions table. Recent:
 - [Owner 2026-11-22] Phase 1 is planned in two passes (CONTEXT D-22). Pass 1 (plans 01-01 to 01-07) covers spikes S1 to S6 and an owner checkpoint only. Coverage gates overridden for pass 1 on that basis: HARN-05 and decisions D-02, D-06, D-07, D-09, D-10, D-12, D-14, D-15 are not yet in any plan, and no HARN requirement is implemented until pass 2. Re-run `/gsd-plan-phase 1` after the spike results to write pass 2.
 - [Roadmap] Phase order is the owner's migration plan; Stage P0 is Phase 1; "Milestone S" and "Milestone STD" are source labels for Phases 8 and 9.
 - [Ingest] Precedence IG > AC > RFC > PT. Nothing is locked; the guide's "non-negotiable" decisions are constraints pending confirmation in Phase 2.
+- [Phase 01]: S5 kernel provenance: the Mac copy of Harvey's 9k10cpu.elf has sha256 ecdcdad... and an unknown source commit; the KVM witness pins the sha256, not a commit.
+- [Phase 01]: S5 harness: one boot-q35.sh serves the Mac TCG matrix and the owner's KVM witness; KVM without a writable /dev/kvm exits S5-ERROR kvm-unavailable, never a silent TCG downgrade (D-13).
+- [Phase 01]: S5 D-20 minimum scope: the evidence supports a Harvey app that builds and boots to the root is from prompt; an rc prompt via Harvey's own u9fs on TCP 564 is the next increment.
+- [Phase 01]: S5 pc baseline reproduces the recorded 2026-11-05 behaviour, not the exact artifact; the kernel was rebuilt on 2026-11-18 and no string proves its commit.
 
 ### Open Questions (ten warnings, approved to be carried, not resolved)
 
@@ -120,6 +129,6 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 
 ## Session Continuity
 
-Last session: 2026-11-22T22:59:02.419Z
-Stopped at: Phase 1 context gathered
-Resume file: .planning/phases/01-stage-p0-cross-build-harness/01-CONTEXT.md
+Last session: 2026-11-23T00:45:32.038Z
+Stopped at: Completed 01-03-PLAN.md
+Resume file: None
