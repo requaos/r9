@@ -1,0 +1,336 @@
+#!/usr/bin/expect -f
+# netsoak-r9.expect — the NETIP-08 tap-leg soak gate for x86_64 (16-05,
+# D-11/D-12/D-13): smoke-r9-net.expect's discipline carried VERBATIM
+# (header hygiene, marker discipline, fast-fail arms, whole-capture
+# post-passes) and re-keyed onto the TAP venue — the L2-truth leg
+# where slirp evidence is refused outright (the CALLER aborts a slirp
+# run before any bake or boot with `slirp evidence not accepted'; this
+# driver only ever boots tap).  This script spawns qemu DIRECTLY with
+# the composed ISO on -cdrom (q35) and the SPLIT R9_NETDEV_ARGV tokens
+# — the pinned r9 emitter's tap output (netdev + device + the
+# filter-dump pcap object), word-split here because the caller passed
+# it as one space-separated line (tokens contain no spaces by the
+# emitter's contract).  The caller is nix/gates/soak-r9-net-x64.sh = the
+# flake app boot-r9-net-soak-x64:
+#
+#   chain boot (banner → paqfs... → version... → %  prompt) →
+#   ONE typed line: `rc /lib/netip-tap.rc 2048 8' (the 16-02 fixture,
+#   sourced-not-typed discipline — the gate data rides the fixture's
+#   own argv contract) →
+#   OUTPUT-ONLY stages for every fixture marker, in the fixture's
+#   emission order: static ok → the ARP L2-truth view → the L2-TRUTH
+#   tap venue label → (the baseline + burst tcpblast legs stream their
+#   per-round lines BETWEEN stages — never staged, never ordered) →
+#   `netsoak: burst wait returned' (the burst barrier) → soak stats ok
+#   → soak ok → netip: NETIP-DONE → the % prompt →
+#   whole-capture post-passes: the tcpblast: done COUNT (exactly
+#   1 + burst_count = 9 — D-11b's marker-count contract, owned
+#   host-side because rc cannot collect per-child statuses after a
+#   bare wait), zero netip: FAIL occurrences, the ARP marker + the
+#   venue label re-asserted on the whole file.
+#
+#   exit 0 only when EVERY stage + post-pass passed; a failure exits 1
+#   and names the failed stage on stderr WITH the capture tail — a
+#   stall IS the finding (the no-pacing posture), so the driver never
+#   hangs silently: per-stage timeouts plus an OVERALL wall-clock
+#   budget both fail loud.
+#
+# STAGE ORDER / THE MULTI-WAITER WARNING (carried VERBATIM from the
+# 14-09 gate — and this gate is where it bites): the RX-IRQ wake path
+# with MULTIPLE registered devip waiters is a measured r9 defect
+# (aarch64 08-09, recorded in that phase's deferred-items + WINDOWS).
+# The burst leg backgrounds EIGHT tcpblast clients against one host
+# peer — the exact multi-waiter load — so the first soak runs are
+# EXPECTED to have fix headroom, not to be green on attempt one; the
+# kernel-fix loop that owns them is 16-08 (the plan split exists for
+# exactly this).  A wedge surfaces as a loud stage timeout with the
+# capture tail, never a bare hang.
+#
+# Markers: PRESENCE assertions only, and among the burst legs NEVER an
+# interleaving order assertion — 8 concurrent tcpblasts interleave
+# freely on one serial console; the COUNT is the only honest assert
+# (the post-pass below).  Patterns are CRLF-tolerant substrings, never
+# end-of-line anchored (the kernel console cooks \n → \r\n; userland
+# writes are byte-exact).  r9's devcons ECHOES cooked-mode typed
+# input, so the typed launch line appears on the wire BEFORE the
+# fixture's output — the launch line carries NONE of the fixture
+# marker strings, so every fixture marker stages single-occurrence.
+# The `netsoak:' prefix is deliberately distinct from the fixtures'
+# `netip:' and the kernel's `netgate:' vocabularies (the carried
+# marker-prefix discipline).  The typed launch line is SHORT (≤ ~120
+# chars — the 16550 RX ring's measured burst-truncation limit).
+#
+# TYPED-INPUT + LOG DISCIPLINE (carried, measured): log_user stays ON
+# — expect 5.45 writes NOTHING to log_file when log_user is 0; the
+# wire echo on the driver's stdout is the app's visible progress, the
+# stage lines name it on stderr.  The capture is rm -f'd fresh below
+# (the caller does it too — a pre-seeded stale capture is dead
+# evidence).  Every exit path kills qemu's process group.
+#
+# Env (exported by nix/gates/soak-r9-net-x64.sh — the flake app):
+#   R9_QEMU         default qemu-system-x86_64
+#   R9_ISO          REQUIRED — the COMPOSED ISO (the caller's
+#                   iso-builder output: r9 kernel-x64 + the NET bake
+#                   as /boot/bootfs.paq)
+#   R9_SOAK_LOG     REQUIRED — the serial capture (fresh per run; the
+#                   green runs retain theirs as evidence)
+#   R9_NETDEV_ARGV  REQUIRED — the emitter's tap argv as ONE
+#                   space-separated line (-netdev tap,... -device
+#                   virtio-net-pci... -object filter-dump,...); split
+#                   and expanded into the spawn below — NO netdev
+#                   literal lives in this driver (D-05)
+#   R9_MACHINE/R9_CPU/R9_ACCEL — the caller-selected q35 shape
+#                   (defaults q35/host/kvm; TCG selects qemu64)
+#   R9_RUN_TAG      the per-run unique tag in qemu's argv (-name);
+#                   the caller's survivor sweep keys on it
+#
+# usage: env R9_ISO=… R9_SOAK_LOG=… R9_NETDEV_ARGV=… expect gates/x86_64/netsoak-r9.expect
+# exit 0 on all-pass; exit 1 names the failed stage on stderr (with
+# the capture tail); exit 2 on a contract violation (missing env).
+
+set stage_timeout 600                ;# per stage, TCG-sized (carried)
+set soak_stage_timeout 2700          ;# 16-08: the SOAK legs' stage budget
+					     ;# — burst-wait spans the whole
+					     ;# baseline (2048 rounds ≈ 800s at
+					     ;# the measured KVM pace) + the
+					     ;# 8x512 burst (≈ 800s more); the
+					     ;# carried 600s killed every
+					     ;# first-run MID-BASELINE (the
+					     ;# 16-08 root cause: the kill's
+					     ;# truncations — torn serial
+					     ;# lines, unacked final
+					     ;# segments — masqueraded as a
+					     ;# kernel wedge; the
+					     ;# instrumented autopsy
+					     ;# (debugcon) proved the guest
+					     ;# healthy at kill time)
+set overall_budget 3600              ;# whole-sequence wall clock; a
+					     ;# stall IS the finding — the
+					     ;# budget fails it loud
+match_max 65536
+
+# --- gate data (single-source-as-data, D-11) ----------------------------
+# The committed soak shape — planner-chosen data, tunable by later
+# demand in this ONE place; the ROUND SHAPE (baseline+burst+ARP+
+# wedge) is the contract.  baseline_rounds + burst_count ride the
+# typed fixture launch (the fixture's [rounds] [burstn] argv);
+# burst_rounds is the count-contract's data twin of the 512 each
+# burst tcpblast runs (committed in the 16-02 fixture's burst leg).
+set baseline_rounds 2048
+set burst_count 8
+set burst_rounds 512
+
+# --- required env (loud, before any spawn) -------------------------------
+foreach v {R9_ISO R9_SOAK_LOG R9_NETDEV_ARGV} {
+    if {![info exists env($v)]} {
+        puts stderr "netsoak-r9-x64: \$$v unset — run via the flake app (nix run .#boot-r9-net-soak-x64)"
+        exit 2
+    }
+}
+set QEMU [expr {[info exists env(R9_QEMU)] ? $env(R9_QEMU) : "qemu-system-x86_64"}]
+set run_tag [expr {[info exists env(R9_RUN_TAG)] ? $env(R9_RUN_TAG) : "r9x64soak-[pid]-[clock seconds]"}]
+set R9_MACHINE [expr {[info exists env(R9_MACHINE)] ? $env(R9_MACHINE) : "q35"}]
+set R9_CPU [expr {[info exists env(R9_CPU)] ? $env(R9_CPU) : "host"}]
+set R9_ACCEL [expr {[info exists env(R9_ACCEL)] ? $env(R9_ACCEL) : "kvm"}]
+
+# --- Hygiene: a fresh capture per run -----------------------------------
+# The caller already rm -f'd it; remove again here so the rule holds
+# however this script is invoked (a stale capture is dead evidence).
+exec rm -f $env(R9_SOAK_LOG)
+
+# split the emitter's one-line argv into spawn tokens (whitespace
+# split, empty tokens dropped; the emitter prints space-separated
+# tokens containing no spaces — its committed contract)
+set netdev_argv {}
+foreach tok [split $env(R9_NETDEV_ARGV)] {
+    if {$tok ne ""} {
+        lappend netdev_argv $tok
+    }
+}
+if {[llength $netdev_argv] == 0} {
+    puts stderr "netsoak-r9-x64: R9_NETDEV_ARGV is empty — the caller's emitter capture failed (tap argv is required; slirp is refused upstream)"
+    exit 2
+}
+
+# --- spawn qemu: the composed ISO on -cdrom, the emitter's tap tokens ----
+spawn $QEMU -M $R9_MACHINE -cpu $R9_CPU -smp 1 -m 1024M \
+    -accel $R9_ACCEL \
+    -cdrom $env(R9_ISO) \
+    {*}$netdev_argv \
+    -nographic \
+    -name $run_tag
+set spawn_pid [exp_pid]
+log_file $env(R9_SOAK_LOG)
+
+set deadline [expr {[clock seconds] + $overall_budget}]
+
+# --- teardown: kill qemu's process group ------------------------------
+# The spawned qemu is a session/group leader (expect's pty setup), so
+# the group IS the qemu subtree; catch: already-dead is fine.  The
+# lone-pid second form is the no-group fallback.  The caller's EXIT
+# trap sweeps any survivor keyed on this run's unique tag (and kills
+# the host echo peer — the peer is NOT in qemu's group).
+proc cleanup {} {
+    global spawn_pid
+    catch { exec kill -KILL -- -$spawn_pid 2>/dev/null }
+    catch { exec kill -KILL $spawn_pid 2>/dev/null }
+}
+
+# --- the capture tail: a failure prints WHERE on the wire it died -----
+# (stop + flush the log first so the tail is this run's own bytes)
+proc fail_tail {} {
+    global env
+    catch { log_file }
+    if {[catch {
+        set fh [open $env(R9_SOAK_LOG) r]
+        set whole [read $fh]
+        close $fh
+    }]} {
+        puts stderr "netsoak-r9-x64: (no capture to tail: $env(R9_SOAK_LOG))"
+        return
+    }
+    set lines [split $whole "\n"]
+    set tail [lrange $lines end-39 end]
+    puts stderr "netsoak-r9-x64: capture tail (last [llength $tail] lines of $env(R9_SOAK_LOG)):"
+    foreach l $tail {
+        puts stderr "  | $l"
+    }
+}
+
+# the one loud exit: message + tail + teardown + exit 1
+proc bail {msg} {
+    puts stderr "netsoak-r9-x64: $msg"
+    fail_tail
+    cleanup
+    exit 1
+}
+
+# --- staged ordered assertions (each stage names its failure) ---------
+# NOTE: expect_out must be global here — expect sets it in the CURRENT
+# scope.  The per-stage timeout SHRINKS against the overall deadline
+# (set into the GLOBAL `timeout' expect reads per call — the sibling
+# gates' mechanism; an `expect -timeout' option before a braced
+# pattern-action block breaks the block's parsing, measured) so the
+# whole-sequence budget holds within one stage's precision — the
+# no-pacing wedge posture (a stall IS the finding, and it fails loud
+# with the tail).
+proc stage {name re {tmo 0}} {
+    global expect_out deadline stage_timeout timeout
+    set remaining [expr {$deadline - [clock seconds]}]
+    if {$remaining <= 0} {
+        bail "OVERALL budget (${::overall_budget}s) exhausted before stage: $name — a stall is the finding; the tail names where"
+    }
+    # 16-08: an optional per-call timeout override — the soak legs
+    # (burst-wait) span the whole tiered blast and carry
+    # soak_stage_timeout; every other stage keeps the tight carried
+    # default (a stall stays loud everywhere).
+    set tm $stage_timeout
+    if {$tmo > $stage_timeout} {
+        set tm $tmo
+    }
+    if {$remaining < $tm} {
+        set tm $remaining
+    }
+    set timeout $tm
+    expect {
+        -re $re { puts stderr "netsoak-r9-x64: stage ok — $name" }
+        timeout { bail "TIMEOUT at stage: $name (per-stage ${tm}s, overall budget ${::overall_budget}s) — the tail names where the wire went quiet" }
+        eof { bail "qemu exited (EOF) at stage: $name" }
+    }
+}
+
+# fast-fail on kernel panic markers anywhere in the boot (carried from
+# the 14-09 gate; the real-chain "syscall N unimplemented" notes are
+# NOT panics — the documented exemption class) — and on a fixture's
+# own `netip: FAIL <stage>' OUTPUT line (the fixture names its failing
+# stage on the wire; waiting the full timeout for the absent ok marker
+# would only hide it).  The typed launch line carries neither pattern.
+expect_before {
+    -re {panic|Unhandled interrupt} {
+        bail "kernel panic marker on the wire — aborting"
+    }
+    -re {netip: FAIL} {
+        bail "a fixture printed netip: FAIL — aborting (the failing stage is named on the wire)"
+    }
+}
+
+# 1. the chain boot sequence: banner → boot(8)'s paqfs handoff → its
+#    9P version handshake → the % prompt (the net gate boots the SAME
+#    chain, then types)
+stage banner    {r9 from the Internet}
+stage paqfs     {paqfs\.\.\.}
+stage version   {version\.\.\.}
+stage prompt    {% }
+
+# 2. THE TYPED FIXTURE LAUNCH — one short line, the gate data riding
+#    the fixture's own argv contract ([rounds] [burstn]; the fixture
+#    validates them).  Everything after this is OUTPUT-ONLY staging:
+#    the typed echo carries none of the fixture markers, so each
+#    stages single-occurrence in the fixture's print order.  Between
+#    the venue stage and the burst barrier the baseline + burst
+#    tcpblast legs stream their per-round lines — consumed past, never
+#    staged, never ordered (the count post-pass owns them).
+send "rc /lib/netip-tap.rc $baseline_rounds $burst_count\r"
+stage soak-static   {netip: static ok}
+stage soak-arp      {netip: arp view ok}
+stage soak-venue    {netip: L2-TRUTH tap venue}
+stage burst-wait    {netsoak: burst wait returned} $soak_stage_timeout
+stage soak-stats    {netip: soak stats ok}
+stage soak-ok       {netip: soak ok}
+stage soak-done     {netip: NETIP-DONE}
+stage soak-prompt   {% }
+
+# --- whole-capture post-passes (the counting discipline) ---------------
+# (a) COUNT `tcpblast: done' — exactly 1 + burst_count = 9.  NEVER an
+#     order assertion: 8 concurrent tcpblasts interleave freely on one
+#     serial console; a short count names a lost/failed blast (the
+#     fixture's non-nil exit + FAIL marker fire host-side too), a long
+#     count names a duplicate.  (b) zero `netip: FAIL' occurrences —
+#     the fast-fail arm already aborts on the first, this is the
+#     whole-file belt-and-braces.  (c) the ARP L2-truth marker and
+#     (d) the tap venue label re-asserted on the whole capture — the
+#     NETIP-08 verdict evidence shape, on the leg where slirp is
+#     refused.
+catch { log_file }   ;# stop + flush before the whole-file scan
+set fh [open $env(R9_SOAK_LOG) r]
+set whole [read $fh]
+close $fh
+
+proc count_occurrences {haystack needle} {
+    set n 0
+    set pos 0
+    while {1} {
+        set idx [string first $needle $haystack $pos]
+        if {$idx < 0} {
+            break
+        }
+        incr n
+        set pos [expr {$idx + [string length $needle]}]
+    }
+    return $n
+}
+
+set done_count [count_occurrences $whole "tcpblast: done"]
+set want_done [expr {1 + $burst_count}]
+if {$done_count != $want_done} {
+    bail "tcpblast: done COUNT FAILED — got $done_count, want exactly $want_done (baseline 1 + burst $burst_count): short names a lost/failed blast, long names a duplicate"
+}
+puts stderr "netsoak-r9-x64: post-pass ok — tcpblast: done x $done_count (1 baseline + $burst_count burst)"
+
+set fail_count [count_occurrences $whole "netip: FAIL"]
+if {$fail_count != 0} {
+    bail "netip: FAIL COUNT FAILED — $fail_count occurrence(s) in the whole capture (the fast-fail arm should have caught the first; this is the whole-file backstop)"
+}
+puts stderr "netsoak-r9-x64: post-pass ok — zero netip: FAIL occurrences"
+
+if {![string match "*netip: arp view ok*" $whole]} {
+    bail "the ARP L2-truth marker (netip: arp view ok) is absent from the whole capture — the real host's ARP answer is the evidence NETIP-08 exists for"
+}
+if {![string match "*netip: L2-TRUTH tap venue*" $whole]} {
+    bail "the tap venue label (netip: L2-TRUTH tap venue) is absent from the whole capture — the verdict evidence must be venue-labeled"
+}
+puts stderr "netsoak-r9-x64: post-pass ok — ARP L2-truth marker + L2-TRUTH tap venue label present"
+
+puts stderr "netsoak-r9-x64: ALL STAGES PASS — chain boot, netip-tap fixture (static + ARP L2-truth + venue label), baseline $baseline_rounds rounds + burst $burst_count x $burst_rounds rounds (counted $want_done tcpblast: done), stats reconciliation, zero FAIL, completion"
+cleanup
+exit 0

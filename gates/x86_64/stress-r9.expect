@@ -1,0 +1,359 @@
+#!/usr/bin/env expect -f
+# stress-r9.expect — the CR-07 reduced-stress driver (17-07, D-03):
+# netsoak-r9.expect's discipline carried VERBATIM (header hygiene,
+# marker discipline, fast-fail arms, whole-capture post-passes,
+# no-pacing wedge posture) and re-keyed onto the 16-08 deferred
+# record's REDUCED shape: baseline_rounds 1 / burst_count 8 (the
+# burst depth stays the committed 512 — the #66 shape; the class
+# fired 1-in-5 on the full soak, ~2 burst rounds in, so the reduced
+# run puts the exposure window at the TOP of every run).  The burst
+# leg is the exact #66 load: EIGHT concurrent tcpblasts (eight
+# blocked devip readers on one RX-IRQ wake path) launched with the
+# dc backquote churn racing the connects — netip-tap.rc's leg,
+# re-keyed into the venue-aware netstress.rc fixture.
+#
+# VENUE (the 17-07 venue rule): tap is the preferred venue (#66's
+# own, doctor-gated UPSTREAM by the wrapper); slirp is the fallback,
+# explicitly labeled RACE-STRESS on the wire by the fixture — this
+# driver stages the venue-appropriate label and NEVER lets a slirp
+# capture read as L2 truth.  The wrapper exports R9_STRESS_VENUE.
+#
+# THE -d CAPTURE (the 16-08 toolkit): the wrapper's R9_QEMU carries
+# `-d int,guest_errors -D <per-run-file>' — pure host-side qemu
+# logging (the exception cascade; a triple fault shows as qemu's
+# check_exception/reset lines in the -D file while the SERIAL shows
+# the SeaBIOS/GRUB reboot chain).  #66's observer lesson is honored:
+# NO guest-visible instrumentation rides anywhere (a debugcon-printing
+# kernel is disqualified as evidence); this driver splits R9_QEMU
+# into tokens exactly like R9_NETDEV_ARGV (a multi-word qemu argv is
+# the wrapper's contract).
+#
+# The #66 SIGNATURE is a fast-fail arm, not a timeout wait: after the
+# initial boot completes, ANY reappearance of the boot chain on the
+# serial (SeaBIOS / GRUB / the r9 banner) means the guest RESET with
+# no trap dump — the driver names it, prints the capture tail, and
+# exits 1 immediately (a red stress run fails LOUD and FAST; the -D
+# file beside the capture holds the cascade for the record).
+#
+#   chain boot (banner → paqfs... → version... → %  prompt) →
+#   ONE typed line: `rc /lib/netstress.rc <venue> 1 8 512' (the gate
+#   data rides the fixture's argv contract) →
+#   OUTPUT-ONLY stages in the fixture's emission order: static ok →
+#   the venue label (venue-appropriate) → tap-only arp view ok →
+#   (baseline + burst legs stream per-round lines BETWEEN stages —
+#   never staged, never ordered) → `netstress: burst wait returned'
+#   (the burst barrier) → stats ok → `netstress: STRESS-DONE' → the
+#   % prompt → whole-capture post-passes: the tcpblast: done COUNT
+#   (exactly 1 + burst_count = 9 — rc cannot collect per-child
+#   statuses after a bare wait, so the count is owned host-side),
+#   zero netstress: FAIL occurrences, the venue label re-asserted on
+#   the whole file.
+#
+#   exit 0 only when EVERY stage + post-pass passed; a failure exits 1
+#   and names the failed stage on stderr WITH the capture tail — a
+#   stall IS the finding (the no-pacing posture), so the driver never
+#   hangs silently: per-stage timeouts plus an OVERALL wall-clock
+#   budget both fail loud.
+#
+# Markers: PRESENCE assertions only, and among the burst legs NEVER
+# an interleaving order assertion — 8 concurrent tcpblasts interleave
+# freely on one serial console; the COUNT is the only honest assert.
+# Patterns are CRLF-tolerant substrings, never end-of-line anchored
+# (the kernel console cooks \n → \r\n; userland writes are
+# byte-exact).  r9's devcons ECHOES cooked-mode typed input, so the
+# typed launch line appears on the wire BEFORE the fixture's output —
+# the launch line carries NONE of the fixture marker strings, so
+# every fixture marker stages single-occurrence.  The driver's own
+# stderr prefix is `stress-r9-x64:' (distinct from the fixtures'
+# `netstress:' and the kernel's `netgate:' vocabularies).  The typed
+# launch line is SHORT (≤ ~120 chars — the 16550 RX ring's measured
+# burst-truncation limit).
+#
+# TYPED-INPUT + LOG DISCIPLINE (carried, measured): log_user stays ON
+# — expect 5.45 writes NOTHING to log_file when log_user is 0.  The
+# capture is rm -f'd fresh below (the caller does it too — a
+# pre-seeded stale capture is dead evidence).  Every exit path kills
+# qemu's process group.
+#
+# Env (exported by nix/gates/stress-r9-net-x64.sh — the flake app):
+#   R9_QEMU         default qemu-system-x86_64; the wrapper passes
+#                   `qemu-system-x86_64 -d int,guest_errors -D
+#                   <per-run-file>' — split into spawn tokens below
+#                   (the netdev_argv discipline, applied to qemu)
+#   R9_ISO          REQUIRED — the COMPOSED ISO (the caller's
+#                   iso-builder output: r9 kernel-x64 + the NET bake
+#                   as /boot/bootfs.paq)
+#   R9_STRESS_LOG   REQUIRED — the serial capture (fresh per run;
+#                   green runs retain theirs as evidence)
+#   R9_NETDEV_ARGV  REQUIRED — the emitter's venue argv as ONE
+#                   space-separated line; split and expanded into the
+#                   spawn below — NO netdev literal lives in this
+#                   driver (D-05)
+#   R9_STRESS_VENUE tap (default) | slirp — the venue leg the
+#                   wrapper gated; picks the staged venue label
+#   R9_MACHINE/R9_CPU/R9_ACCEL — the caller-selected q35 shape
+#                   (defaults q35/host/kvm; TCG selects qemu64)
+#   R9_RUN_TAG      the per-run unique tag in qemu's argv (-name);
+#                   the caller's survivor sweep keys on it
+#
+# usage: env R9_ISO=… R9_STRESS_LOG=… R9_NETDEV_ARGV=… expect gates/x86_64/stress-r9.expect
+# exit 0 on all-pass; exit 1 names the failed stage on stderr (with
+# the capture tail); exit 2 on a contract violation (missing env).
+
+set stage_timeout 600                ;# per stage, TCG-sized (carried)
+set stress_stage_timeout 2700        ;# the burst-wait budget (the
+				     ;# 16-08 measurement: the 8x512
+				     ;# burst spans ~800s at the KVM
+				     ;# pace; the carried 600s would
+				     ;# kill it mid-burst — the 16-08
+				     ;# first-run lesson, not repeated)
+set overall_budget 3600              ;# whole-sequence wall clock; a
+				     ;# stall IS the finding — the
+				     ;# budget fails it loud
+match_max 65536
+
+# --- gate data (single-source-as-data; the committed reduced shape) ----
+# The 16-08 deferred recommendation VERBATIM: rounds=1/burstn=8 on
+# the uninstrumented pinned kernel; the burst depth stays the
+# committed 512 (the #66 shape — the exposure window is the burst
+# launch + first rounds, where the class historically fired).
+# R9_STRESS_ROUNDS/BURSTN/BURSTROUNDS are the DIAGNOSIS hatches
+# (17-07 Task 3's load-narrowing matrix: the launch storm isolated
+# from the sustained transfer, the burst width stepped down) —
+# env-overridable, defaulting to the committed shape above; the GATE
+# runs the defaults.
+set baseline_rounds [expr {[info exists env(R9_STRESS_ROUNDS)] ? $env(R9_STRESS_ROUNDS) : 1}]
+set burst_count [expr {[info exists env(R9_STRESS_BURSTN)] ? $env(R9_STRESS_BURSTN) : 8}]
+set burst_rounds [expr {[info exists env(R9_STRESS_BURSTROUNDS)] ? $env(R9_STRESS_BURSTROUNDS) : 512}]
+
+# --- required env (loud, before any spawn) -------------------------------
+foreach v {R9_ISO R9_STRESS_LOG R9_NETDEV_ARGV} {
+    if {![info exists env($v)]} {
+        puts stderr "stress-r9-x64: \$$v unset — run via the flake app (nix run .#boot-r9-stress-x64)"
+        exit 2
+    }
+}
+set run_tag [expr {[info exists env(R9_RUN_TAG)] ? $env(R9_RUN_TAG) : "r9x64stress-[pid]-[clock seconds]"}]
+set R9_MACHINE [expr {[info exists env(R9_MACHINE)] ? $env(R9_MACHINE) : "q35"}]
+set R9_CPU [expr {[info exists env(R9_CPU)] ? $env(R9_CPU) : "host"}]
+set R9_ACCEL [expr {[info exists env(R9_ACCEL)] ? $env(R9_ACCEL) : "kvm"}]
+set venue [expr {[info exists env(R9_STRESS_VENUE)] ? $env(R9_STRESS_VENUE) : "tap"}]
+if {$venue ne "tap" && $venue ne "slirp"} {
+    puts stderr "stress-r9-x64: R9_STRESS_VENUE='$venue' — want tap|slirp (the wrapper owns the venue gate)"
+    exit 2
+}
+
+# split the wrapper's qemu argv into spawn tokens (whitespace split,
+# empty tokens dropped — the R9_NETDEV_ARGV discipline applied to the
+# emulator itself: the wrapper's `-d int,guest_errors -D <file>' rides
+# here, so a multi-word R9_QEMU is the CONTRACT, never a surprise)
+set qemu_argv {}
+foreach tok [split [expr {[info exists env(R9_QEMU)] ? $env(R9_QEMU) : "qemu-system-x86_64"}]] {
+    if {$tok ne ""} {
+        lappend qemu_argv $tok
+    }
+}
+if {[llength $qemu_argv] == 0} {
+    puts stderr "stress-r9-x64: R9_QEMU split to zero tokens — the wrapper's qemu contract failed"
+    exit 2
+}
+
+# split the emitter's one-line argv into spawn tokens
+set netdev_argv {}
+foreach tok [split $env(R9_NETDEV_ARGV)] {
+    if {$tok ne ""} {
+        lappend netdev_argv $tok
+    }
+}
+if {[llength $netdev_argv] == 0} {
+    puts stderr "stress-r9-x64: R9_NETDEV_ARGV is empty — the caller's emitter capture failed"
+    exit 2
+}
+
+# --- Hygiene: a fresh capture per run -----------------------------------
+exec rm -f $env(R9_STRESS_LOG)
+
+# --- spawn qemu: the composed ISO on -cdrom, the wrapper's -d tokens -----
+spawn {*}$qemu_argv -M $R9_MACHINE -cpu $R9_CPU -smp 1 -m 1024M \
+    -accel $R9_ACCEL \
+    -cdrom $env(R9_ISO) \
+    {*}$netdev_argv \
+    -nographic \
+    -name $run_tag
+set spawn_pid [exp_pid]
+log_file $env(R9_STRESS_LOG)
+
+set deadline [expr {[clock seconds] + $overall_budget}]
+
+# --- teardown: kill qemu's process group ------------------------------
+proc cleanup {} {
+    global spawn_pid
+    catch { exec kill -KILL -- -$spawn_pid 2>/dev/null }
+    catch { exec kill -KILL $spawn_pid 2>/dev/null }
+}
+
+# --- the capture tail: a failure prints WHERE on the wire it died -----
+proc fail_tail {} {
+    global env
+    catch { log_file }
+    if {[catch {
+        set fh [open $env(R9_STRESS_LOG) r]
+        set whole [read $fh]
+        close $fh
+    }]} {
+        puts stderr "stress-r9-x64: (no capture to tail: $env(R9_STRESS_LOG))"
+        return
+    }
+    set lines [split $whole "\n"]
+    set tail [lrange $lines end-39 end]
+    puts stderr "stress-r9-x64: capture tail (last [llength $tail] lines of $env(R9_STRESS_LOG)):"
+    foreach l $tail {
+        puts stderr "  | $l"
+    }
+}
+
+# the one loud exit: message + tail + teardown + exit 1
+proc bail {msg} {
+    puts stderr "stress-r9-x64: $msg"
+    fail_tail
+    cleanup
+    exit 1
+}
+
+# --- staged ordered assertions (each stage names its failure) ---------
+proc stage {name re {tmo 0}} {
+    global expect_out deadline stage_timeout timeout
+    set remaining [expr {$deadline - [clock seconds]}]
+    if {$remaining <= 0} {
+        bail "OVERALL budget (${::overall_budget}s) exhausted before stage: $name — a stall is the finding; the tail names where"
+    }
+    set tm $stage_timeout
+    if {$tmo > $stage_timeout} {
+        set tm $tmo
+    }
+    if {$remaining < $tm} {
+        set tm $remaining
+    }
+    set timeout $tm
+    expect {
+        -re $re { puts stderr "stress-r9-x64: stage ok — $name" }
+        timeout { bail "TIMEOUT at stage: $name (per-stage ${tm}s, overall budget ${::overall_budget}s) — the tail names where the wire went quiet" }
+        eof { bail "qemu exited (EOF) at stage: $name" }
+    }
+}
+
+# fast-fail on kernel panic markers anywhere in the boot (carried from
+# the 14-09 gate) — and on the fixture's own `netstress: FAIL <stage>'
+# OUTPUT line (the fixture names its failing stage on the wire).  The
+# typed launch line carries neither pattern.
+expect_before {
+    -re {panic|Unhandled interrupt} {
+        bail "kernel panic marker on the wire — aborting"
+    }
+    -re {netstress: FAIL} {
+        bail "the fixture printed netstress: FAIL — aborting (the failing stage is named on the wire)"
+    }
+}
+
+# 1. the chain boot sequence: banner → boot(8)'s paqfs handoff → its
+#    9P version handshake → the % prompt
+stage banner    {r9 from the Internet}
+stage paqfs     {paqfs\.\.\.}
+stage version   {version\.\.\.}
+stage prompt    {% }
+
+# Re-arm the fast-fail set post-boot: from here on, ANY reappearance
+# of the boot chain on the serial is the #66 SIGNATURE — a guest
+# RESET with no kernel trap dump (the terminal-reset escape + SeaBIOS
+# + GRUB + a fresh r9 boot).  A healthy run never re-prints the
+# banner; a reset fails LOUD and FAST here instead of timing out
+# against a rebooting guest, and the wrapper's -D cascade file beside
+# this capture holds the qemu-side exception record.
+expect_before {
+    -re {panic|Unhandled interrupt} {
+        bail "kernel panic marker on the wire — aborting"
+    }
+    -re {netstress: FAIL} {
+        bail "the fixture printed netstress: FAIL — aborting (the failing stage is named on the wire)"
+    }
+    -re {SeaBIOS|GRUB|r9 from the Internet} {
+        bail "GUEST RESET mid-run — the #66 signature (boot chain reappearance post-prompt, no kernel trap dump); the -D cascade file beside this capture holds the qemu exception record"
+    }
+}
+
+# 2. THE TYPED FIXTURE LAUNCH — one short line, the gate data riding
+#    the fixture's own argv contract (<venue> rounds burstn
+#    burstrounds).  Everything after this is OUTPUT-ONLY staging: the
+#    typed echo carries none of the fixture markers, so each stages
+#    single-occurrence in the fixture's print order.  Between the
+#    venue stage and the burst barrier the baseline + burst legs
+#    stream their per-round lines — consumed past, never staged,
+#    never ordered (the count post-pass owns them).
+send "rc /lib/netstress.rc $venue $baseline_rounds $burst_count $burst_rounds\r"
+stage stress-static   {netstress: static ok}
+if {$venue eq "tap"} {
+    stage stress-venue    {netstress: venue tap}
+    stage stress-arp      {netstress: arp view ok}
+} else {
+    stage stress-venue    {netstress: RACE-STRESS slirp venue}
+}
+stage burst-wait    {netstress: burst wait returned} $stress_stage_timeout
+stage stress-stats  {netstress: stats ok}
+stage stress-done   {netstress: STRESS-DONE}
+stage stress-prompt {% }
+
+# --- whole-capture post-passes (the counting discipline) ---------------
+# (a) COUNT `tcpblast: done' — exactly 1 + burst_count = 9.  NEVER an
+#     order assertion: 8 concurrent tcpblasts interleave freely on
+#     one serial console.  (b) zero `netstress: FAIL' occurrences —
+#     the fast-fail arm already aborts on the first, this is the
+#     whole-file belt-and-braces.  (c) the venue label re-asserted
+#     on the whole capture — a tap capture reads as the L2-truth
+#     venue's race evidence; a slirp capture MUST carry the
+#     RACE-STRESS label (never an L2-truth claim).
+catch { log_file }   ;# stop + flush before the whole-file scan
+set fh [open $env(R9_STRESS_LOG) r]
+set whole [read $fh]
+close $fh
+
+proc count_occurrences {haystack needle} {
+    set n 0
+    set pos 0
+    while {1} {
+        set idx [string first $needle $haystack $pos]
+        if {$idx < 0} {
+            break
+        }
+        incr n
+        set pos [expr {$idx + [string length $needle]}]
+    }
+    return $n
+}
+
+set done_count [count_occurrences $whole "tcpblast: done"]
+set want_done [expr {1 + $burst_count}]
+if {$done_count != $want_done} {
+    bail "tcpblast: done COUNT FAILED — got $done_count, want exactly $want_done (baseline 1 + burst $burst_count): short names a lost/failed blast, long names a duplicate"
+}
+puts stderr "stress-r9-x64: post-pass ok — tcpblast: done x $done_count (1 baseline + $burst_count burst)"
+
+set fail_count [count_occurrences $whole "netstress: FAIL"]
+if {$fail_count != 0} {
+    bail "netstress: FAIL COUNT FAILED — $fail_count occurrence(s) in the whole capture (the fast-fail arm should have caught the first; this is the whole-file backstop)"
+}
+puts stderr "stress-r9-x64: post-pass ok — zero netstress: FAIL occurrences"
+
+if {$venue eq "tap"} {
+    if {![string match "*netstress: venue tap*" $whole]} {
+        bail "the tap venue label (netstress: venue tap...) is absent from the whole capture — the race evidence must be venue-labeled"
+    }
+} else {
+    if {![string match "*netstress: RACE-STRESS slirp venue*" $whole]} {
+        bail "the slirp venue label (netstress: RACE-STRESS slirp venue) is absent from the whole capture — a slirp capture must carry the RACE-STRESS label, never an L2-truth claim"
+    }
+}
+puts stderr "stress-r9-x64: post-pass ok — venue label present ($venue)"
+
+puts stderr "stress-r9-x64: ALL STAGES PASS — chain boot, netstress fixture ($venue: static + venue label + baseline $baseline_rounds + burst $burst_count x $burst_rounds, counted $want_done tcpblast: done), stats reconciliation, zero FAIL, completion"
+cleanup
+exit 0

@@ -1155,6 +1155,30 @@ WRAP
             pkgs.iproute2
             pkgs.git
           ];
+          # 01-24 (D-07/D-09/HARN-08): the moved net gates' two host
+          # helpers, built from r9's own committed sources.
+          # netDoctorPkg is 16-03's READ-ONLY host-state doctor
+          # (diagnose + print, never fix; one implementation consumed
+          # two ways — its own app and R9_NET_DOCTOR in the soak/stress
+          # headers) and takes no r9 attrs, so its app gate below is its
+          # own optionalAttrs.  hostEchoX64Pkg is 16-05's committed
+          # host-cc echo peer — a stdenv build of nix/gates/host-echo.c
+          # (no fetched binaries, T-01-79), run as the soak/stress
+          # gate's own child via HOST_ECHO_X64, never a daemon.
+          netDoctorPkg = mkScriptApp pkgs "r9-net-doctor" ./nix/gates/net-doctor.sh ""
+            [ pkgs.bash pkgs.qemu pkgs.iproute2 pkgs.iptables pkgs.procps
+              pkgs.coreutils pkgs.gnugrep pkgs.gnused ];
+          hostEchoX64Pkg = pkgs.stdenv.mkDerivation {
+            pname = "host-echo";
+            version = "16.05";
+            dontUnpack = true;
+            buildPhase = ''
+              cc -O2 -Wall -o host-echo ${./nix/gates/host-echo.c}
+            '';
+            installPhase = ''
+              install -Dm755 host-echo $out/bin/host-echo
+            '';
+          };
           # writeShellApplication embeds runtimeInputs on PATH, so the app
           # runs bare (no devshell) per D-08's zero-host-setup intent.
           r9-build = pkgs.writeShellApplication {
@@ -1322,6 +1346,69 @@ WRAP
               export R9_MKPAQFS="${self.packages.${system}.harvey-mkpaqfs}/bin/mkpaqfs"
               export R9_AUTHDOMAIN_GEN="${self.packages.${system}.harvey-authdomain-gen}/bin/authdomain-gen"
             '' bootR9X64RuntimeInputs}/bin/boot-r9-services-x64";
+          };
+        }
+        # 01-24 (D-07/D-09/HARN-08): the net-doctor preflight app —
+        # read-only host-state checks (qemu on PATH, ip/ss link+addr+port
+        # state, sysctl, the netfilter read, the setuid helper, the ACL
+        # file).  It consumes NO r9 attrs, so its own isLinux gate keeps
+        # evaluation lazy everywhere the checks are meaningless (the
+        # vmnet leg is HNET-04 documented-manual) — the 16-03 shape.
+        // nixpkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          net-doctor = {
+            type = "app";
+            program = "${netDoctorPkg}/bin/r9-net-doctor";
+          };
+        }
+        # 01-24 (D-07/D-09/HARN-08): the moved x86_64 NET gate apps.
+        # Each header exports r9's own supply: the kernel-x64 package,
+        # r9's iso-builder and netdev emitter, the read-only amd64 tree
+        # and the host mkpaqfs; the soak and stress headers add
+        # R9_NET_DOCTOR (the preflight's ONE implementation),
+        # HOST_ECHO_X64 (hostEchoX64Pkg's echo peer) and
+        # HARVEY_NETADDR_SEAM (the seam file INSIDE the read-only tree —
+        # D-19, never a path in Harvey's build source).  The
+        # runtimeInputs are bootR9X64RuntimeInputs (the Rust toolchain
+        # for `cargo xtask image`, qemu, expect, procps, iproute2 and
+        # the text tools).  x86_64-linux only: the BIOS ISO machinery
+        # (iso-builder) is the q35 channel's venue (X64-05) and the tap
+        # venue is Linux's.
+        // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
+          boot-r9-net-smoke-x64 = {
+            type = "app";
+            program = "${mkScriptApp pkgs "boot-r9-net-smoke-x64" ./nix/gates/smoke-r9-net-x64.sh ''
+              export R9_KERNEL_X64_PKG="${self.packages.${system}.kernel-x64}"
+              export R9_ISO_BUILDER="${self.packages.${system}.iso-builder}/bin/r9-iso-builder"
+              export R9_NETDEV_EMITTER="${self.packages.${system}.netdev-args}/bin/r9-netdev-args"
+              export R9_HARVEY_DIR_AMD64="${self.packages.${system}.harvey-tree-amd64}"
+              export R9_MKPAQFS="${self.packages.${system}.harvey-mkpaqfs}/bin/mkpaqfs"
+            '' bootR9X64RuntimeInputs}/bin/boot-r9-net-smoke-x64";
+          };
+          boot-r9-net-soak-x64 = {
+            type = "app";
+            program = "${mkScriptApp pkgs "boot-r9-net-soak-x64" ./nix/gates/soak-r9-net-x64.sh ''
+              export R9_KERNEL_X64_PKG="${self.packages.${system}.kernel-x64}"
+              export R9_ISO_BUILDER="${self.packages.${system}.iso-builder}/bin/r9-iso-builder"
+              export R9_NETDEV_EMITTER="${self.packages.${system}.netdev-args}/bin/r9-netdev-args"
+              export R9_HARVEY_DIR_AMD64="${self.packages.${system}.harvey-tree-amd64}"
+              export R9_MKPAQFS="${self.packages.${system}.harvey-mkpaqfs}/bin/mkpaqfs"
+              export R9_NET_DOCTOR="${netDoctorPkg}/bin/r9-net-doctor"
+              export HOST_ECHO_X64="${hostEchoX64Pkg}/bin/host-echo"
+              export HARVEY_NETADDR_SEAM="${self.packages.${system}.harvey-tree-amd64}/build/x86_64/root-tree/lib/netaddr.rc"
+            '' bootR9X64RuntimeInputs}/bin/boot-r9-net-soak-x64";
+          };
+          boot-r9-stress-x64 = {
+            type = "app";
+            program = "${mkScriptApp pkgs "boot-r9-stress-x64" ./nix/gates/stress-r9-net-x64.sh ''
+              export R9_KERNEL_X64_PKG="${self.packages.${system}.kernel-x64}"
+              export R9_ISO_BUILDER="${self.packages.${system}.iso-builder}/bin/r9-iso-builder"
+              export R9_NETDEV_EMITTER="${self.packages.${system}.netdev-args}/bin/r9-netdev-args"
+              export R9_HARVEY_DIR_AMD64="${self.packages.${system}.harvey-tree-amd64}"
+              export R9_MKPAQFS="${self.packages.${system}.harvey-mkpaqfs}/bin/mkpaqfs"
+              export R9_NET_DOCTOR="${netDoctorPkg}/bin/r9-net-doctor"
+              export HOST_ECHO_X64="${hostEchoX64Pkg}/bin/host-echo"
+              export HARVEY_NETADDR_SEAM="${self.packages.${system}.harvey-tree-amd64}/build/x86_64/root-tree/lib/netaddr.rc"
+            '' bootR9X64RuntimeInputs}/bin/boot-r9-stress-x64";
           };
         });
     };
