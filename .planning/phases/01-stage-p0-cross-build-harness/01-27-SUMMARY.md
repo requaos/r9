@@ -91,7 +91,7 @@ coverage:
 
 duration: 1h 32m
 completed: 2026-11-23
-status: halted
+status: complete
 phase_status: halted-stop-c-failures
 ---
 
