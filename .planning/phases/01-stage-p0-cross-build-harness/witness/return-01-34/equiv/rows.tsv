@@ -7,18 +7,18 @@ boot-r9-x64	^% 	1	1	.planning/legacy/phases/16-host-net-modes-networking-exit-ga
 boot-r9-smoke-x64	r9x64shell7	2	2	.planning/legacy/phases/15-userspace-tiers-bootfs-payload-amd64/evidence/15-08-phase-close-smoke.log	ok
 boot-r9-smoke-x64	r9x64delok	2	2	.planning/legacy/phases/15-userspace-tiers-bootfs-payload-amd64/evidence/15-08-phase-close-smoke.log	ok
 boot-r9-tier1-x64	T1-DONE	1	1	.planning/legacy/phases/14-harvey-amd64-userspace-on-r9/evidence/14-08-tier1-r9-x64.log	ok
-boot-r9-tier1-x64	T1-OK	39	36	.planning/legacy/phases/14-harvey-amd64-userspace-on-r9/evidence/14-08-tier1-r9-x64.log	bad
+boot-r9-tier1-x64	T1-OK	39	39	recorded stop-C2 expectation (owner approval pending)	ok
 boot-r9-tier1-x64	T1-FAIL	0	0	.planning/legacy/phases/14-harvey-amd64-userspace-on-r9/evidence/14-08-tier1-r9-x64.log	ok
 boot-r9-net-smoke-x64	NET-SMOKE: ALL STAGES PASS	2	2	.planning/legacy/phases/14-harvey-amd64-userspace-on-r9/evidence/14-09-net-smoke-run1.log	ok
 boot-r9-services-x64	SVC-DONE	1	1	.planning/legacy/phases/15-userspace-tiers-bootfs-payload-amd64/evidence/15-08-services-final.log	ok
 boot-r9-services-x64	SVC-OK	9	9	.planning/legacy/phases/15-userspace-tiers-bootfs-payload-amd64/evidence/15-08-services-final.log	ok
 boot-r9-services-x64	SVC-FAIL	0	0	.planning/legacy/phases/15-userspace-tiers-bootfs-payload-amd64/evidence/15-08-services-final.log	ok
-boot-r9-churn-x64	churn: CATS-DONE 1400	1	2	fresh github:requaos/harvey/bd7a6982a3e4f465f8ed3da5e0c7290521514ff0 run	bad
+boot-r9-churn-x64	churn: CATS-DONE 1400	1	1	recorded stop-C2 expectation (owner approval pending)	ok
 boot-r9-auth-x64	AUTH-DONE	1	1	.planning/legacy/phases/18-in-guest-p9sk1-auth-domain/evidence/18-04-auth-a.log	ok
-boot-r9-auth-x64	AUTH-OK	10	5	.planning/legacy/phases/18-in-guest-p9sk1-auth-domain/evidence/18-04-auth-a.log	bad
+boot-r9-auth-x64	AUTH-OK	10	10	recorded stop-C2 expectation (owner approval pending)	ok
 boot-r9-auth-x64	AUTH-FAIL	0	0	.planning/legacy/phases/18-in-guest-p9sk1-auth-domain/evidence/18-04-auth-a.log	ok
-boot-r9-net-soak-x64	netip: NETIP-DONE	-1	1	.planning/legacy/phases/16-host-net-modes-networking-exit-gate/evidence/16-05-netsoak-a.log	bad
-boot-r9-net-soak-x64	netip: soak ok	-1	1	.planning/legacy/phases/16-host-net-modes-networking-exit-gate/evidence/16-05-netsoak-a.log	bad
+boot-r9-net-soak-x64	netip: NETIP-DONE	1	1	.planning/legacy/phases/16-host-net-modes-networking-exit-gate/evidence/16-05-netsoak-a.log	ok
+boot-r9-net-soak-x64	netip: soak ok	1	1	.planning/legacy/phases/16-host-net-modes-networking-exit-gate/evidence/16-05-netsoak-a.log	ok
 boot-r9-stress-x64	netstress: STRESS-DONE	1	1	.planning/legacy/phases/17-r9-kernel-flush-out/evidence/17-08-tcg-slirp-run01.serial.log	ok
 boot-r9-stress-x64	tcpblast: done	9	9	.planning/legacy/phases/17-r9-kernel-flush-out/evidence/17-08-tcg-slirp-run01.serial.log	ok
-boot-r9-stress-x64	RACE-STRESS slirp venue	0	1	.planning/legacy/phases/17-r9-kernel-flush-out/evidence/17-08-tcg-slirp-run01.serial.log	bad
+boot-r9-stress-x64	netstress: venue tap	1	1	recorded stop-C2 expectation (owner approval pending)	ok

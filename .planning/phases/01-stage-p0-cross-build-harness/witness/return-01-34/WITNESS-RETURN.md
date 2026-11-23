@@ -1,49 +1,48 @@
 # r9 pass-2 witness return (plans 01-09 / 01-32)
 
-- date: 2026-11-23T19:31:20Z
-- git HEAD: 2a5cbedefeb2a95dc658f87aed09530e574af81e
+- date: 2026-11-23T19:44:52Z
+- git HEAD: 678a88cc0d180f77134379c991deea74298b4da5
 - r9 root: /home/req/code/r9
 - work root: /home/req/r9-witness-work
-- steps: full soak stress equiv store_verify
+- steps: soak kernel equiv store_verify
 
 ## out/env.txt
 
 ~~~
 # r9 pass-2 witness preflight
-date=2026-11-23T19:22:04Z
+date=2026-11-23T19:39:17Z
 user=req uid=1000
 r9_root=/home/req/code/r9
-git_head=2a5cbedefeb2a95dc658f87aed09530e574af81e
+git_head=678a88cc0d180f77134379c991deea74298b4da5
 work_dir=/home/req/r9-witness-work
-steps=full soak stress equiv store_verify
+steps=soak kernel equiv store_verify
 harvey_pin=bd7a6982a3e4f465f8ed3da5e0c7290521514ff0
 kerndate=1795382101
 uname=Linux teeniebox 7.4.0-rc3 #1-NixOS SMP PREEMPT_DYNAMIC @315532800 x86_64 GNU/Linux
 nproc=16
                total        used        free      shared  buff/cache   available
-Mem:            30Gi       3.0Gi        17Gi       713Mi        11Gi        27Gi
+Mem:            30Gi       3.1Gi        17Gi       774Mi        11Gi        27Gi
 Swap:          7.5Gi          0B       7.5Gi
 --- free disk under /home/req/r9-witness-work ---
 Filesystem        Size  Used Avail Use% Mounted on
-/dev/mapper/root  946G  578G  365G  62% /
+/dev/mapper/root  946G  578G  364G  62% /
 --- nix ---
 nix (Nix) 2.35.6
 experimental-features = dynamic-derivations fetch-closure fetch-tree flakes nix-command
 sandbox = true
 --- /dev/kvm ---
 DEV_KVM=writable
-crw-rw-rw- 1 root kvm 10, 232 Nov 23 13:32 /dev/kvm
+crw-rw-rw- 1 root kvm 10, 232 Nov 23 14:31 /dev/kvm
 
 ~~~
 
 ## out/summary.tsv
 
 ~~~
-full	1	532
-soak	1	9
-stress	0	13
-equiv	1	1
-store_verify	0	0
+soak	0	329
+kernel	0	5
+equiv	0	0
+store_verify	0	1
 
 ~~~
 
@@ -51,7 +50,7 @@ store_verify	0	0
 
 ~~~
 # surviving qemu/Xvfb/drawterm processes owned by req
-# at 2026-11-23T19:31:19Z
+# at 2026-11-23T19:44:52Z
 none
 
 ~~~
@@ -59,7 +58,7 @@ none
 ## out/secret-scan.txt
 
 ~~~
-# credential scan of out/ at 2026-11-23T19:31:19Z
+# credential scan of out/ at 2026-11-23T19:44:52Z
 scanned out/ for the password value of harvey/build/x86_64/out/auth-creds.txt
 clean: no credential artifact and no DEMO password value in out/
 
@@ -445,17 +444,14 @@ GATE-NEG-EXPECTED-FAIL
 ### out/kernel/kernel.log
 
 ~~~
+KERNEL-STORE /nix/store/5piglvr1s7br0q0f7v31gs5d9mnl46a9-r9-kernel-x64-678a88c
+2377dc2fb599a838425659ce7fe52f118ee4bfc9ac8f8a877091fab0cb111018  /nix/store/5piglvr1s7br0q0f7v31gs5d9mnl46a9-r9-kernel-x64-678a88c/kernel-x64.elf
 this derivation will be built:
-  /nix/store/mcrnfr62cry07m8v25ncr7kvsizb7r0f-r9-kernel-x64-4139fdf.drv
-building '/nix/store/mcrnfr62cry07m8v25ncr7kvsizb7r0f-r9-kernel-x64-4139fdf.drv'...
-KERNEL-STORE /nix/store/y56rpqda7cpglr41yyr0h5qqrm20ra8y-r9-kernel-x64-4139fdf
-4228a1bf1408a7f06d942fa847b6ca25d7bfbd5a400ce9190b602d3b365f32e1  /nix/store/y56rpqda7cpglr41yyr0h5qqrm20ra8y-r9-kernel-x64-4139fdf/kernel-x64.elf
-this derivation will be built:
-  /nix/store/85h9700j1419aj8phr517zrdkl4ks9vn-r9-boot-iso-4139fdf.drv
-building '/nix/store/85h9700j1419aj8phr517zrdkl4ks9vn-r9-boot-iso-4139fdf.drv'...
-KERNEL-BOOTISO-STORE /nix/store/bx1bbayxf2y99xysqcn7p1kxzjrkifwb-r9-boot-iso-4139fdf
+  /nix/store/gdgl01cdba06lc94xsb20n190s1nl4c8-r9-boot-iso-678a88c.drv
+building '/nix/store/gdgl01cdba06lc94xsb20n190s1nl4c8-r9-boot-iso-678a88c.drv'...
+KERNEL-BOOTISO-STORE /nix/store/s8dchz1vm7y7y8rrbb2rymkkd6zmd04w-r9-boot-iso-678a88c
 KERNEL-BOOTISO-BUILD-OK
-checking outputs of '/nix/store/85h9700j1419aj8phr517zrdkl4ks9vn-r9-boot-iso-4139fdf.drv'...
+checking outputs of '/nix/store/gdgl01cdba06lc94xsb20n190s1nl4c8-r9-boot-iso-678a88c.drv'...
 KERNEL-BOOTISO-REBUILD-OK
 
 ~~~
@@ -1214,31 +1210,52 @@ Errors from xkbcomp are not fatal to the X server
 ### out/soak/soak.log
 
 ~~~
-warning: Git tree '/home/req/code/r9' is dirty
-warning: Git tree '/home/req/code/r9' is dirty
-net-doctor: PASS bridge-exists: br0 present
-net-doctor: PASS bridge-up: br0 flags carry UP
-net-doctor: PASS bridge-addr: 192.168.122.1/24 present on br0 (the seam's tap_gwv4)
-net-doctor: PASS ip-forward: net.ipv4.ip_forward=1
-net-doctor: WARN masquerade: cannot read the netfilter ruleset unprivileged — verify with: sudo iptables-save | grep '192.168.122.0/24' (or: sudo nft list ruleset | grep '192.168.122.0/24'); want a MASQUERADE rule for 192.168.122.0/24 out the default route
-net-doctor: PASS helper-wrapper: /run/wrappers/bin/qemu-bridge-helper present + setuid (mode 4511)
-net-doctor: PASS bridge-conf-allow: /etc/qemu/bridge.conf carries the exact 'allow br0' line
-net-doctor: PASS blastport-free: port 7777 free (no LISTEN holder)
-net-doctor: DOCTOR-OK
-warning: Git tree '/home/req/code/r9' is dirty
-these 2 derivations will be built:
-  /nix/store/9m9f9f5kd9s5ydkm13yq7x4nnvsx8asa-host-echo-16.05.drv
-  /nix/store/5gfjx8i3czyh37mdwf1vdin81mc5fqbf-boot-r9-net-soak-x64.drv
-building '/nix/store/9m9f9f5kd9s5ydkm13yq7x4nnvsx8asa-host-echo-16.05.drv'...
-building '/nix/store/5gfjx8i3czyh37mdwf1vdin81mc5fqbf-boot-r9-net-soak-x64.drv'...
-error: slirp evidence not accepted — the NETIP-08 soak verdict is the tap leg's (slirp is not L2 truth by contract and its captures say so); want --net=tap / R9_NET=tap; refusing before any assembly or boot (D-11's venue-honesty control)
+RecoveryDone: 0
+RecoveryRTO: 0
+RecoveryNoSeq: 0
+RecoveryCwind: 0
+RecoveryPA: 0
+process 51 exited: ""
+churngate: heap exit 2704640 33554432
+process 53 exited: ""
+churngate: heap exit 2704640 33554432
+process 54 exited: ""
+churngate: heap exit 2704640 33554432
+process 52 exited: ""
+churngate: heap exit 2704640 33554432
+process 56 exited: ""
+churngate: heap exit 2704640 33554432
+process 57 exited: ""
+churngate: heap exit 2704640 33554432
+process 55 exited: ""
+churngate: heap exit 2704640 33554432
+netip: soak stats oknetsoak-r9-x64: stage ok — soak-stats
+
+process 58 exited: ""
+churngate: heap exit 2704640 33554432
+netip: soak ok
+netsoak-r9-x64: stage ok — soak-ok
+process 59 exited: ""
+churngate: heap exit 2704640 33554432
+netip: NETIP-DONE
+netsoak-r9-x64: stage ok — soak-done
+process 60 exited: ""
+churngate: heap exit 2704640 33554432
+process 5 exited: ""
+churngate: heap exit 2704640 33554432
+% netsoak-r9-x64: stage ok — soak-prompt
+netsoak-r9-x64: post-pass ok — tcpblast: done x 9 (1 baseline + 8 burst)
+netsoak-r9-x64: post-pass ok — zero netip: FAIL occurrences
+netsoak-r9-x64: post-pass ok — ARP L2-truth marker + L2-TRUTH tap venue label present
+netsoak-r9-x64: ALL STAGES PASS — chain boot, netip-tap fixture (static + ARP L2-truth + venue label), baseline 2048 rounds + burst 8 x 512 rounds (counted 9 tcpblast: done), stats reconciliation, zero FAIL, completion
+== soak gate PASS — capture retained at /home/req/code/r9/target/gates/soak-r9-net-x64/netsoak-r9.log; pcap + peer log at /home/req/code/r9/target/gates/soak-r9-net-x64/evidence.Yq19KC
+== soak evidence scratch retained: /home/req/code/r9/target/gates/soak-r9-net-x64/evidence.Yq19KC (netsoak.pcap + hostecho.log — this run's evidence)
 
 ~~~
 
 ### out/store-verify/store-verify.log
 
 ~~~
-warning: Git tree '/home/req/code/r9' is dirty
 STORE-VERIFY-PATH /nix/store/arrvrysn8l6bagwv95nbzlng8s1y7wyf-harvey-tree-amd64-0
 checking '/nix/store/arrvrysn8l6bagwv95nbzlng8s1y7wyf-harvey-tree-amd64-0'...
 STORE-VERIFY-OK /nix/store/arrvrysn8l6bagwv95nbzlng8s1y7wyf-harvey-tree-amd64-0

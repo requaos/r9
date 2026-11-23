@@ -1,12 +1,9 @@
+KERNEL-STORE /nix/store/5piglvr1s7br0q0f7v31gs5d9mnl46a9-r9-kernel-x64-678a88c
+2377dc2fb599a838425659ce7fe52f118ee4bfc9ac8f8a877091fab0cb111018  /nix/store/5piglvr1s7br0q0f7v31gs5d9mnl46a9-r9-kernel-x64-678a88c/kernel-x64.elf
 this derivation will be built:
-  /nix/store/mcrnfr62cry07m8v25ncr7kvsizb7r0f-r9-kernel-x64-4139fdf.drv
-building '/nix/store/mcrnfr62cry07m8v25ncr7kvsizb7r0f-r9-kernel-x64-4139fdf.drv'...
-KERNEL-STORE /nix/store/y56rpqda7cpglr41yyr0h5qqrm20ra8y-r9-kernel-x64-4139fdf
-4228a1bf1408a7f06d942fa847b6ca25d7bfbd5a400ce9190b602d3b365f32e1  /nix/store/y56rpqda7cpglr41yyr0h5qqrm20ra8y-r9-kernel-x64-4139fdf/kernel-x64.elf
-this derivation will be built:
-  /nix/store/85h9700j1419aj8phr517zrdkl4ks9vn-r9-boot-iso-4139fdf.drv
-building '/nix/store/85h9700j1419aj8phr517zrdkl4ks9vn-r9-boot-iso-4139fdf.drv'...
-KERNEL-BOOTISO-STORE /nix/store/bx1bbayxf2y99xysqcn7p1kxzjrkifwb-r9-boot-iso-4139fdf
+  /nix/store/gdgl01cdba06lc94xsb20n190s1nl4c8-r9-boot-iso-678a88c.drv
+building '/nix/store/gdgl01cdba06lc94xsb20n190s1nl4c8-r9-boot-iso-678a88c.drv'...
+KERNEL-BOOTISO-STORE /nix/store/s8dchz1vm7y7y8rrbb2rymkkd6zmd04w-r9-boot-iso-678a88c
 KERNEL-BOOTISO-BUILD-OK
-checking outputs of '/nix/store/85h9700j1419aj8phr517zrdkl4ks9vn-r9-boot-iso-4139fdf.drv'...
+checking outputs of '/nix/store/gdgl01cdba06lc94xsb20n190s1nl4c8-r9-boot-iso-678a88c.drv'...
 KERNEL-BOOTISO-REBUILD-OK

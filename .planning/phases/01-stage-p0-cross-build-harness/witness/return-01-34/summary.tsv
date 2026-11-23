@@ -1,5 +1,4 @@
-full	1	532
-soak	1	9
-stress	0	13
-equiv	1	1
-store_verify	0	0
+soak	0	329
+kernel	0	5
+equiv	0	0
+store_verify	0	1
