@@ -236,3 +236,66 @@ partial match never counts (D-28). On success the driver prints `RIO-SERVING`;
 otherwise `RIO-FAIL rio-not-serving`. The `control-noG` leg keeps its `-G` session
 and its `RIO-CONTROL-NO-RIO` / `RIO-FAIL control-saw-rio` outcomes unchanged; it is
 the discriminator that proves the positive assertion is not vacuous.
+
+## Witness verdict (stop A)
+
+Stop A ran the fixed pass-2 witness on the owner's x86_64 Linux host (D-13) with
+`R9_WITNESS_STEPS="rio control a13"` at r9
+`24c7c3a01649125b8c0151f6bba1a656139b6ace`; the return commit is
+`cf8541744195ae98469cc570c22b088c443f00f0` on `witness-src/01-12`. Each evidence
+path below is relative to the repository root, committed, and non-empty (each
+excerpt is trimmed to at most 200 decisive lines).
+
+VERDICT mac-builder: PASS
+EVIDENCE mac-builder: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-a/mac-builder-probe.txt
+A fresh never-substitutable derivation (`r9-builder-probe-1795412439`, system
+`aarch64-linux`) built through the registered `ssh-ng://r9-lima-builder`; the Mac
+printed `/nix/store/bjjjy4hvdidvkw84wfl6md246lsw00iq-r9-builder-probe-1795412439`,
+`nix path-info` exited 0, and the output contained `ok`. This host is
+aarch64-darwin and cannot realise an aarch64-linux derivation locally, so the
+result proves the daemon-side build-and-import path that fixes S2's copy-back FAIL.
+
+VERDICT rio-derisk-kvm: FAIL
+EVIDENCE rio-derisk-kvm: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-a/rio.log
+Step `rio` exited 1 after 242 s. The serial `ls /srv` listing never showed the
+D-28 pair, and the driver printed the decisive line:
+
+> `RIO-FAIL rio-not-serving — no rio.<user>.<pid> + riowctl.<user>.<pid> pair in the serial /srv listing within the budget`
+
+No `RIO-FAIL dt-feed-timeout` appears, so the named failure is the missing pair,
+not a named feed timeout; the returned log alone does not distinguish a login that
+did not complete from a login that completed without rio serving, and no finer
+evidence was returned. The marker stays unchanged.
+
+VERDICT control-noG-kvm: PASS
+EVIDENCE control-noG-kvm: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-a/control.log
+Step `control` exited 0 after 97 s; the serial listing showed only `/srv/boot` and
+`/srv/factotum`, and the driver printed `RIO-CONTROL-NO-RIO` (no
+`RIO-FAIL control-saw-rio`). The negative control still discriminates.
+
+VERDICT a13-x86_64-linux: PASS
+EVIDENCE a13-x86_64-linux: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-a/a13.log
+Step `a13` exited 0 and built
+`/nix/store/y8h5ana2drnzs2fdx6fxgr74bwmzi8y9-drawterm-19.06` through
+`checks.x86_64-linux.harvey-drawterm`; the nixpkgs follow holds on x86_64-linux.
+
+Return environment
+(`.planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-a/env.txt`):
+`DEV_KVM=writable`, nix sandbox enabled, nix 2.35.6, 16 CPUs, 361 GiB free.
+Per-step exit codes
+(`.planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-a/summary.tsv`):
+rio 1, control 0, a13 0.
+
+Teardown finding: the return's `out/survivors.txt` lists no surviving
+qemu/Xvfb/drawterm process, and `out/secret-scan.txt` reports a clean scan (no
+credential artifact and no occurrence of the per-bake DEMO value in `out/`). There
+is no teardown survivor to record.
+
+**STOP RULE (HARN-01) invoked.** With `rio-derisk-kvm` FAIL, no later plan
+(01-13 onward) starts and the two-entry pair marker is not weakened. HARN-01
+cannot be met with the D-28 marker until the headless leg passes. The owner is
+asked to choose among: (a) a further owner-directed investigation of the feed as a
+new de-risk iteration; (b) an owner decision to adopt the research fallback marker
+(a second drawterm session, or an Xvfb pixel check), recorded as a new CONTEXT
+decision before any gate work; (c) an owner re-scope of HARN-01. The executor
+chooses none of these and never edits the marker itself.
