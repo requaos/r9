@@ -325,14 +325,23 @@ from the kernel-wide table (`port/src/devsrv.rs:59`; `#s` bound at `/srv` by
 `build/x86_64/root-tree/lib/namespace:25`, A5). That is the point of the
 serial-visible marker: it crosses namespaces without touching the session.
 
-WHY UNCONDITIONAL: the stop-A2 screenshots show the login was **accepted** — the
-drawterm window moves from `glenda@DEMO-harvey password:` to
-`cpu: failed to chdir to '/home/req/code/r9'` and a `cpu%` shell. The profile
-ran, but its `test -e /mnt/term/dev/draw` guard skipped `exec rio` (the 19-10
-residual: "login-time desktop auto-start skip on app-baked venues — manual
-`plumber; rio` green"). A marker inserted before `exec rio` therefore reported
-`login-not-reached` as a false negative. At the top of the profile it answers
-only the login question; the pair still answers the rio question.
+CONFIRMED ROOT CAUSE (stop A2, from `x11.txt` and the two PNGs): the X11
+password feed was never the problem. The before shot shows
+`glenda@DEMO-harvey password:`; the after shot shows the accepted session —
+two `syscall: return 4, no error` marker creates and a `cpu%` shell. The
+`cpu: failed to chdir to '/home/req/code/r9'` line is benign: the guest's `/`
+fallback still sources `/usr/glenda/lib/profile`, which is exactly why the
+marker fired. The profile then hit its `test -e /mnt/term/dev/draw` guard and
+skipped `exec rio` (the 19-10 residual: "login-time desktop auto-start skip on
+app-baked venues — manual `plumber; rio` green"). A marker inserted before
+`exec rio` therefore reported `login-not-reached` as a false negative, so the
+marker now sits at the top of the profile and answers only the login question;
+the pair still answers the rio question. The driver's documented manual
+`plumber; rio` produced `/srv/rio.glenda.76` + `/srv/riowctl.glenda.76` and
+`RIO-SERVING`. The serial `ls /srv` on this image prints full paths
+(`/srv/rio.glenda.74`); the first manual-start run was missed by the bare-name
+regex, and the parser now normalizes every token with `file tail` before
+matching.
 
 Why not `echo login-ok >/srv/r9-login-ok`: r9's srv device is not a regular
 filesystem. `create` is OWRITE-only and returns an entry whose write side posts
@@ -399,3 +408,63 @@ STOP A2 RUN: on the x86_64 Linux host with writable `/dev/kvm`, from the pushed
 Return `witness-returns/01-32` with `witness/return-01-32/{out,WITNESS-RETURN.md}`
 (`witness/README.md`, "Return path A"), or paste the full `WITNESS-RETURN.md`
 (path B). Never return an auth-creds file or a password value.
+
+## Witness verdict (stop A2)
+
+Stop A2 reran the diagnostic and the rio leg on the owner's x86_64 Linux host
+(D-13) at r9 `46d0677ee4fcc7ef64b961dfdaf9d4bd1b793e9d`; the return commit is
+`c95ae4494056cafad66d3121951762590a796c3c` on `witness-src/01-32`. The
+returned `summary.tsv` is `rio-diag 0 161` and `rio 0 162`. `control` and
+`a13` were **not rerun** at stop A2: their stop-A rows (`control 0 97`,
+`a13 0 0`) remain valid and are carried from the stop-A evidence, not
+re-inferred (their old `out/control`/`out/a13` logs also ride the return).
+
+The stop-A `VERDICT rio-derisk-kvm: FAIL` above is the historical stop-A
+verdict; the stop-A2 PASS below supersedes it.
+
+VERDICT rio-login-kvm: PASS
+EVIDENCE rio-login-kvm: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-a2/rio-diag.log
+The diagnostic log prints `RIO-DIAG login-ok`; the serial `ls /srv` lists
+`/srv/r9-login-ok` and `/srv/r9-login-pid.51`, and
+`witness/evidence/stop-a2/x11.txt` records the drawterm window id, geometry,
+focus and WM properties before typing and after Return.
+
+VERDICT rio-derisk-kvm: PASS
+EVIDENCE rio-derisk-kvm: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-a2/serial-tail.log
+The serial listing carries `/srv/rio.glenda.76` + `/srv/riowctl.glenda.76`
+on the diag leg and `/srv/rio.glenda.74` + `/srv/riowctl.glenda.74` on the rio
+leg, and both drivers print `RIO-SERVING`. The D-28 pair is unchanged.
+
+VERDICT control-noG-kvm: PASS
+EVIDENCE control-noG-kvm: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-a/control.log
+Carried from stop A (not rerun at stop A2): step `control` exited 0, the
+serial listing showed only `/srv/boot` and `/srv/factotum`, and the driver
+printed `RIO-CONTROL-NO-RIO` (row `control 0 97` in
+`witness/evidence/stop-a/summary.tsv`).
+
+VERDICT a13-x86_64-linux: PASS
+EVIDENCE a13-x86_64-linux: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-a/a13.log
+Carried from stop A (not rerun at stop A2): step `a13` exited 0 and built
+`/nix/store/y8h5ana2drnzs2fdx6fxgr74bwmzi8y9-drawterm-19.06` (row `a13 0 0`
+in `witness/evidence/stop-a/summary.tsv`).
+
+VERDICT rio-start: LOGIN-OK-RIO-SERVING
+EVIDENCE rio-start: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-a2/rio-diag.log
+Marker present and pair present: the login reached the profile and rio served.
+The pair came from the documented manual `plumber; rio` fallback because the
+profile's draw guard skipped the login-time auto-start; the fallback is not a
+marker change.
+
+Evidence set: `witness/evidence/stop-a2/{rio-diag.log,serial-tail.log,x11.txt,env.txt,summary.tsv}`,
+each trimmed to at most 200 decisive lines and scanned for `auth-creds`,
+`password`, `passwd` and the DEMO value (the plan's scan prints 0). The two
+PNGs stay in the return rather than in this branch, at `c95ae44` under
+`.planning/phases/01-stage-p0-cross-build-harness/spikes/linux-witness/return-01-32/rio-diag/`:
+`drawterm-before-typing.png` (the typed prompt; 1432 bytes) and
+`drawterm-after-return.png` (the accepted `cpu%` session and the two marker
+creates; 2195 bytes).
+
+The D-28 pair marker was never weakened: it is still the only PASS condition,
+the `control-noG` leg is unchanged, and the pair is now **proven on the owner's
+x86_64 KVM host** (`rio` 0, `RIO-SERVING`, stop A2, 2026-11-23). HARN-01 is
+met for the rio leg; this iteration started no plan 01-13 or later.

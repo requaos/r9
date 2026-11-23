@@ -1,0 +1,40 @@
+# evidence: decisive serial-console lines from the stop A2 return
+# (witness-src/01-32 c95ae44). Full captures remain in the return tree:
+#   out/rio-diag/rio-gate-rio-diag.log and out/rio/rio-gate-rio.log
+
+== rio-diag — first listing after the rio budget (out/rio-diag/rio-gate-rio-diag.log)
+ls /srv
+
+/srv/boot
+/srv/factotum
+/srv/r9-login-ok
+/srv/r9-login-pid.51
+
+== rio-diag — after the documented manual start plumber; rio
+ls /srv
+
+/srv/boot
+/srv/factotum
+/srv/plumb.glenda.73
+/srv/r9-login-ok
+/srv/r9-login-pid.51
+/srv/rio.glenda.76
+/srv/riowctl.glenda.76
+RIO-DIAG login-ok
+RIO-SERVING
+
+== rio — after the documented manual start (out/rio/rio-gate-rio.log)
+ls /srv
+
+/srv/boot
+/srv/factotum
+/srv/plumb.glenda.71
+/srv/rio.glenda.74
+/srv/riowctl.glenda.74
+RIO-SERVING
+
+== driver verdict lines (out/rio-diag/rio-diag.log, out/rio/rio.log)
+% rio-gate: no pair after poll 1 — sent the documented manual start (plumber; rio)
+RIO-DIAG login-ok
+RIO-SERVING
+rio-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, encrypted drawterm session, serial /srv shows the rio-diag login marker and rio + riowctl (RIO-SERVING); diagnostic evidence in /home/req/r9-witness-work/out/rio-diag
