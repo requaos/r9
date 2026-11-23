@@ -1,10 +1,33 @@
 # The prepared Harvey change (D-10 step 4)
 
-Status: **prepared, not committed.** This is the single owner-approved Harvey
-change D-10 orders after r9's gates are green. It lives in a scratch clone
-outside both repositories; the owner reviews the full diff at stop C and
-commits it only after approval (D-02 is `costly`; D-07, D-10, D-19, D-20,
-D-26).
+Status: **BLOCKED — NOT APPROVED, not committed.** Stop C (plan 01-27) was
+not green and the owner did not approve the diff, so no Harvey change was
+made. This is the single owner-approved Harvey change D-10 orders after r9's
+gates are green. It lives in a scratch clone outside both repositories; the
+owner reviews the full diff at stop C and commits it only after approval
+(D-02 is `costly`; D-07, D-10, D-19, D-20, D-26).
+
+## Stop C outcome (plan 01-27)
+
+- **Return:** `witness-src/01-27` at
+  `6346c68cd67264f6a58fd72369c0dc8523cc9ffe` (source HEAD `3f717f7…`,
+  `teeniebox`, 2026-11-23T17:37:29Z → 18:32:12Z).
+- **Verdicts:** `stopc-full` FAIL (7/8; `boot-r9-tier1-x64` `T1-FAIL
+  fpprobe`), `stopc-soak` FAIL (tap precondition: the `HARVEY` seam was not
+  set), `stopc-stress` FAIL (same), `stopc-equiv` FAIL (capture gaps plus
+  `boot-r9-x64` markers 0/1), `stopc-store-verify` PASS.
+- **No Harvey commit:** the owner's checkout is untouched — HEAD
+  `25d97dc4d4976bfb7411f01970755acf6261c81b`, status-porcelain sha256
+  `041d2929…`; nothing was staged or committed.
+- **HARVEY-COMMIT: none** — not made (stop C not green; no owner approval).
+- **HARVEY-APPROVED: none** — the owner did not approve the diff.
+- **HARVEY-PUSHED: none** — the owner push (Task 3) was not reached.
+
+The diff remains at `$HOME/r9-harvey-flip/harvey-flip.diff` — 511797 bytes,
+sha256 `f7b0272d23bc6c131c2f63b37cde1330c0bebddd25b905c22040829232cd7f22` —
+awaiting a green stop-C rerun and the owner's explicit approval. See
+`witness/WITNESS-LOG.md` "Stop C" and `witness/evidence/stop-c/` for the
+failure record.
 
 ## Where the change lives
 
