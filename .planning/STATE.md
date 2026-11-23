@@ -4,16 +4,16 @@ milestone: v3.0
 milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
 current_phase: 1
 current_phase_name: Stage P0 - Cross-Build Harness
-status: planning
+status: executing
 stopped_at: Phase 1 context gathered
-last_updated: "2026-11-22T22:59:02.432Z"
+last_updated: "2026-11-23T00:26:50.001Z"
 last_activity: 2026-11-22
 last_activity_desc: Roadmap created from ingest; W11 decided by the owner
-state_head: b8d28ed4232fd48401e1126643e1d7c93de3cab6
+state_head: ce51503989b2d26efbf919e59e9748097f16f637
 progress:
   total_phases: 4
   completed_phases: 0
-  total_plans: 0
+  total_plans: 7
   completed_plans: 0
   percent: 0
 ---
@@ -29,9 +29,9 @@ See: .planning/PROJECT.md (updated 2026-11-22)
 
 ## Current Position
 
-Phase: 1 of 16 (Stage P0 - Cross-Build Harness); active milestone v3.0 covers Phases 1-4
+Phase: 1 (Stage P0 - Cross-Build Harness) — READY TO EXECUTE
 Plan: 0 of TBD in current phase
-Status: Ready to plan
+Status: Ready to execute
 Last activity: 2026-11-22 — Roadmap created from ingest; W11 decided by the owner
 
 Progress: [░░░░░░░░░░] 0%
@@ -58,6 +58,7 @@ Full log is the PROJECT.md Key Decisions table. Recent:
 - [Owner 2026-11-22] `RFNOLEGACY` is a fourth `rfork` flag, `1 << 21`, assigned in guide Phase 0 (GSD Phase 2) with `RFCKEY` 18, `RFROBASE` 19, `RFRANDMEM` 20. Resolves warning W11; the guide's "3 flag bits" wording is corrected to four. Reserved in r9 only (`x86_64/src/proc.rs`, `aarch64/src/syscall.rs`); Harvey is not edited. Recorded deviation from the guide's "reserve bits 18-20 in `libc.h`". Phase 6 implements the behaviour.
 - [Owner 2026-11-22] The r9 nix flake supplies the read-only Harvey tree to `cargo xtask` through the `nix develop` devshell (HARN-07, Phase 1); xtask keeps no built-in default path.
 - [Owner 2026-11-22] Phase 1 flips flake ownership (HARN-08): r9's flake imports Harvey and produces the composed outputs Harvey's flake owns today; Harvey's flake stops importing r9. Harvey's `flake.nix` is edited for this; the Harvey commit and pushes need owner approval.
+- [Owner 2026-11-22] Phase 1 is planned in two passes (CONTEXT D-22). Pass 1 (plans 01-01 to 01-07) covers spikes S1 to S6 and an owner checkpoint only. Coverage gates overridden for pass 1 on that basis: HARN-05 and decisions D-02, D-06, D-07, D-09, D-10, D-12, D-14, D-15 are not yet in any plan, and no HARN requirement is implemented until pass 2. Re-run `/gsd-plan-phase 1` after the spike results to write pass 2.
 - [Roadmap] Phase order is the owner's migration plan; Stage P0 is Phase 1; "Milestone S" and "Milestone STD" are source labels for Phases 8 and 9.
 - [Ingest] Precedence IG > AC > RFC > PT. Nothing is locked; the guide's "non-negotiable" decisions are constraints pending confirmation in Phase 2.
 
