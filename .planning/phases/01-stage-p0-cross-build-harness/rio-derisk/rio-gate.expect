@@ -584,6 +584,13 @@ for {set i 0} {$i < $srv_polls} {incr i} {
 			set chunk $expect_out(buffer)
 			foreach tok [split $chunk] {
 				set tok [string trim $tok "\r\n"]
+				# `ls /srv' prints each entry as the full path on this
+				# image (`/srv/rio.glenda.74').  Normalize to the entry
+				# name before matching; the stop-A2 pair WAS present and
+				# was missed by the bare-name regex.
+				if {[string index $tok 0] eq "/"} {
+					set tok [file tail $tok]
+				}
 				if {[regexp {^riowctl\.[^ ]+\.[0-9]+$} $tok]} {
 					set found_wctl 1
 					continue

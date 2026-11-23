@@ -363,6 +363,12 @@ polling. This is the 19-10 residual's documented fallback, not a marker change:
 the D-28 pair remains the only PASS condition, and the fallback never fires when
 the profile's auto-start already produced the pair.
 
+PARSER FIX: the stop-A2 manual-start run proved the fallback works — the serial
+log carried `/srv/rio.glenda.74` and `/srv/riowctl.glenda.74` — but the first
+driver parsed only bare entry names and missed the full `/srv/...` paths `ls`
+prints on this image. The driver now normalizes each listing token with
+`file tail` before matching, for the pair and for the diagnostic marker alike.
+
 CAPTURE: the driver records the drawterm window identity, geometry and focus
 before typing and after Return (`xdotool search`, `getwindowgeometry`,
 `getwindowfocus`, `xprop -id`, `xwininfo -id -tree`) into
