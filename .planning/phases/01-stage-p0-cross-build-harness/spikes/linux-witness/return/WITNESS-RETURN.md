@@ -1,7 +1,7 @@
 # r9 Linux witness return (Plan 01-06)
 
-- date: 2026-11-23T01:51:20Z
-- git HEAD: c92a3f4bddedc7ed299f72c5393866b15c7c2516
+- date: 2026-11-23T02:31:44Z
+- git HEAD: e53230ff6bbed847e6460b8fd745762aafbd9429
 - staging root: /home/req/r9-spike-work/witness-bundle
 - kernel sha256: ecdcdaddea8d3759d74303b869ddfae8efeba1d4d160382577cfc52b9a32c45b (2030226 bytes; matches s5/evidence/kernel-provenance.txt)
 - probe sha256: db94057f04c751c59a648de5c8505f452bb225b6a276714e7ee5544396a5dcd5
@@ -13,14 +13,14 @@
 
 ~~~
 # r9 Linux witness preflight
-date=2026-11-23T01:44:51Z
+date=2026-11-23T02:14:55Z
 user=req uid=1000
 bundle_root=/home/req/r9-spike-work/witness-bundle
 work_dir=/home/req/r9-spike-work
 uname=Linux teeniebox 7.4.0-rc3 #1-NixOS SMP PREEMPT_DYNAMIC @315532800 x86_64 GNU/Linux
 nproc=16
                total        used        free      shared  buff/cache   available
-Mem:            30Gi       2.0Gi        27Gi       267Mi       2.5Gi        28Gi
+Mem:            30Gi       1.8Gi        24Gi       284Mi       4.9Gi        29Gi
 Swap:          7.5Gi          0B       7.5Gi
 --- free disk under /home/req/r9-spike-work ---
 Filesystem        Size  Used Avail Use% Mounted on
@@ -31,7 +31,7 @@ experimental-features = dynamic-derivations fetch-closure fetch-tree flakes nix-
 sandbox = true
 --- /dev/kvm ---
 DEV_KVM=writable
-crw-rw-rw- 1 root kvm 10, 232 Nov 22 20:40 /dev/kvm
+crw-rw-rw- 1 root kvm 10, 232 Nov 22 21:14 /dev/kvm
 --- sysctls (unprivileged userns is what Harvey's x86_64 venue needs) ---
 user.max_user_namespaces=126494
 kernel.unprivileged_userns_clone=unavailable
@@ -42,143 +42,123 @@ kernel.apparmor_restrict_unprivileged_userns=unavailable
 ## out/summary.tsv
 
 ~~~
-s1	1	78
-s5	0	6
+s3	1	857
+s6	0	152
 
 ~~~
 
 ## out/survivors.txt
 
-(missing: /home/req/r9-spike-work/witness-bundle/out/survivors.txt)
+~~~
+# surviving qemu/Xvfb/drawterm processes owned by req
+# at 2026-11-23T02:31:44Z
+88800 /nix/store/y8h5ana2drnzs2fdx6fxgr74bwmzi8y9-drawterm-19.06/bin/drawterm -s  -O cpu=127.0.0.1,auth=tcp!127.0.0.1!5670,user=glenda
+
+~~~
 
 ## out/secret-scan.txt
 
-(missing: /home/req/r9-spike-work/witness-bundle/out/secret-scan.txt)
+~~~
+# credential scan of out/ at 2026-11-23T02:31:44Z
+scanned for the DEMO password value from the scratch tree's auth-creds.txt
+clean: no auth-creds artifact and no DEMO password value in out/
+
+~~~
 
 ## last 40 lines of each out/<step>/*.log
 
-### out/s1/libc-amd64.log
+### out/s3/control-noG.log
 
 ~~~
-s1-libc-amd64> 6a  rdpmc.s
-s1-libc-amd64> 6a  setjmp.s
-s1-libc-amd64> 6a  sqrt.s
-s1-libc-amd64> 6a  strcat.s
-s1-libc-amd64> 6a  strchr.s
-s1-libc-amd64> 6a  strcpy.s
-s1-libc-amd64> 6a  strlen.s
-s1-libc-amd64> 6a  tas.s
-s1-libc-amd64> ar vu /amd64/lib/libc.a _seek.6 getcallerpc.6 notejmp.6 argv0.6 atom.6 cycles.6 getfcr.6 main9.6 main9p.6 memccpy.6 memchr.6 memcmp.6 memcpy.6 memmove.6 memset.6 muldiv.6 rdpmc.6 setjmp.6 sqrt.6 strcat.6 strchr.6 strcpy.6 strlen.6 tas.6
-s1-libc-amd64> a - _seek.6
-s1-libc-amd64> a - getcallerpc.6
-s1-libc-amd64> a - notejmp.6
-s1-libc-amd64> a - argv0.6
-s1-libc-amd64> a - atom.6
-s1-libc-amd64> a - cycles.6
-s1-libc-amd64> a - getfcr.6
-s1-libc-amd64> a - main9.6
-s1-libc-amd64> a - main9p.6
-s1-libc-amd64> a - memccpy.6
-s1-libc-amd64> a - memchr.6
-s1-libc-amd64> a - memcmp.6
-s1-libc-amd64> a - memcpy.6
-s1-libc-amd64> a - memmove.6
-s1-libc-amd64> a - memset.6
-s1-libc-amd64> a - muldiv.6
-s1-libc-amd64> a - rdpmc.6
-s1-libc-amd64> a - setjmp.6
-s1-libc-amd64> a - sqrt.6
-s1-libc-amd64> a - strcat.6
-s1-libc-amd64> a - strchr.6
-s1-libc-amd64> a - strcpy.6
-s1-libc-amd64> a - strlen.6
-s1-libc-amd64> a - tas.6
-s1-libc-amd64> S1-RUNG2-LIBC-SECONDS=4
-s1-libc-amd64> --rw-r--r-- M 0 0 0 601170 Nov 23 01:46 /amd64/lib/libc.a
-s1-libc-amd64> S1-RUNG2-LIBC-MEMBERS=259
-s1-libc-amd64> S1-RUNG2-LIBC-OK
-s1-libc-amd64> S1-VENUE-RC=0
-s1-libc-amd64> S1-VENUE-OK
-/nix/store/mfvy2a00xf01p410i11q9lxya1pcvi37-s1-libc-amd64-0
+/srv/boot
+/srv/factotum
+process 74 exited: ""
+churngate: heap exit 4693504 33554432
+% ls /srv
+/srv/boot
+/srv/factotum
+process 75 exited: ""
+churngate: heap exit 4693504 33554432
+% ls /srv
+/srv/boot
+/srv/factotum
+process 76 exited: ""
+churngate: heap exit 4693504 33554432
+% ls /srv
+/srv/boot
+/srv/factotum
+process 77 exited: ""
+churngate: heap exit 4693504 33554432
+% ls /srv
+/srv/boot
+/srv/factotum
+process 78 exited: ""
+churngate: heap exit 4693504 33554432
+% ls /srv
+/srv/boot
+/srv/factotum
+process 79 exited: ""
+churngate: heap exit 4693504 33554432
+% ls /srv
+/srv/boot
+/srv/factotum
+process 80 exited: ""
+churngate: heap exit 4693504 33554432
+% S3-CONTROL-NO-RIO
+rio-gate: post-pass ok — zero cpurc: FAIL in the capture
+rio-gate: post-pass ok — zero kernel panic markers (drawterm's own sysfatal exit pair excluded)
+rio-gate: post-pass ok — the per-bake DEMO password redacted from the retained capture (0 occurrence(s) mapped)
+rio-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, -G control session, serial /srv shows no rio entry (S3-CONTROL-NO-RIO)
+== S3 control-noG gate PASS — capture retained at /home/req/r9-spike-work/witness-bundle/out/s3/control-noG/rio-gate-control-noG.log
 
 ~~~
 
-### out/s1/nsprobe.log
+### out/s3/determinism.log
 
 ~~~
-unpacking 'github:requaos/harvey/bd7a6982a3e4f465f8ed3da5e0c7290521514ff0?narHash=sha256-N6VjnVI69pcxSCpQ9BUxrlpTqnp9LgjKfGcpO3F6Ma0%3D' into the Git cache...
-this derivation will be built:
-  /nix/store/3sp3xvr6psh8swb49fpwj44mwy4dncny-s1-nsprobe-0.drv
-this path will be fetched (152.0 KiB download, 439.9 KiB unpacked):
-  /nix/store/pa0pzpgmzancbxqhxl6fr1k0ix1xd5y1-proot-5.5.0
-copying path '/nix/store/pa0pzpgmzancbxqhxl6fr1k0ix1xd5y1-proot-5.5.0' from 'https://cache.nixos.org'...
-building '/nix/store/3sp3xvr6psh8swb49fpwj44mwy4dncny-s1-nsprobe-0.drv'...
-s1-nsprobe> SANDBOX-EVIDENCE id-u=1000
-s1-nsprobe> SANDBOX-EVIDENCE uid-map=      1000      30001          1;
-s1-nsprobe> SANDBOX-EVIDENCE user-ns=user:[4026533080]
-s1-nsprobe> SANDBOX-EVIDENCE uname=Linux localhost 7.4.0-rc3 #1-NixOS SMP PREEMPT_DYNAMIC @315532800 x86_64 GNU/Linux
-s1-nsprobe> SANDBOX-EVIDENCE usr-bin-env=absent
-s1-nsprobe> S1-VENUE-BUILD-START mode=unshare
-s1-nsprobe> S1-VENUE-PATH=/nix/store/kwyi4bq5s2qgwbhz6cs4gjy57c2zdxws-bash-interactive-5.3p20/bin:/nix/store/cb987zkxvsv0490753ilrvn5yk7ylgxi-coreutils-9.12/bin:/nix/store/2lgg8jqyzjp60svh7kmp39kqwnig31p2-util-linux-2.42.4-bin/bin:/nix/store/dzvnbi2n1x9jkmzvmwxdly607bwaxsbv-plan9port-0-unstable-2025-11-10/bin:/nix/store/9wc73n5izv0m7ppjbibi4hbr68rba1lj-gnused-4.10/bin:/nix/store/h96s16mjssibkvk62pvmfm3lwfc3wnwp-gawk-5.4.1/bin:/nix/store/c3f45pxlb81gzz4w1nym7lpznfypva7s-gnugrep-3.12/bin:/nix/store/nzsflqrk0zdljly9jhx82l784hl5rmc4-diffutils-3.12/bin:/nix/store/dl38pix4jvabi5smb9wywhp6pimmpva6-patchelf-0.19.2/bin:/nix/store/cb987zkxvsv0490753ilrvn5yk7ylgxi-coreutils-9.12/bin:/nix/store/99v13ig4382mngi6ggf0csqi7rfa04j5-findutils-4.11.0/bin:/nix/store/9mpja553cbkr2rc37kzdg8zbbg2dyyvl-diffutils-3.12/bin:/nix/store/9wc73n5izv0m7ppjbibi4hbr68rba1lj-gnused-4.10/bin:/nix/store/c3f45pxlb81gzz4w1nym7lpznfypva7s-gnugrep-3.12/bin:/nix/store/h96s16mjssibkvk62pvmfm3lwfc3wnwp-gawk-5.4.1/bin:/nix/store/n318yf1q5vysgh2qn6fd1q8yjy9vmwvh-gnutar-1.35/bin:/nix/store/rpswfv0ff4wap9anx7k1224x2m94pfcc-gzip-1.15/bin:/nix/store/ai2km55ba8bxrn64xx7p9lgvrrzdzv43-bzip2-1.0.8-bin/bin:/nix/store/8xz4d9wp4jy49mhl306wyg55096wis3p-gnumake-4.4.1/bin:/nix/store/nnm9gdr70ihc6zc9298mzz8jpcgaciql-bash-5.3p20/bin:/nix/store/d5jz315vxbphknfawsrjs192ci9bc6df-patch-2.8/bin:/nix/store/nflpm51il93hxh2rba6dvz59kaff0i7v-xz-5.8.4-bin/bin:/nix/store/2qpmak7162vhqxjwfik4aqs9lff6sn7w-file-5.48/bin:/nix/store/dzvnbi2n1x9jkmzvmwxdly607bwaxsbv-plan9port-0-unstable-2025-11-10/plan9/bin
-s1-nsprobe> S1-VENUE-NSX=/build/nsroot.nHa578 (private tmpfs)
-s1-nsprobe> mount: /build/nsroot.nHa578/nix/store: wrong fs type, bad option, bad superblock on /nix/store, missing codepage or helper program, or other error.
-s1-nsprobe>        dmesg(1) may have more information after failed mount system call.
-s1-nsprobe> S1-VENUE-RC=32
-s1-nsprobe> S1-VENUE-FAIL the guest run exited 32
-error: Cannot build '/nix/store/3sp3xvr6psh8swb49fpwj44mwy4dncny-s1-nsprobe-0.drv'.
-       Reason: builder failed with exit code 32.
-       Output paths:
-         /nix/store/ii8pjgnqn7581g59g1icd36m9na5wnk2-s1-nsprobe-0
-       Last 12 log lines:
-       > SANDBOX-EVIDENCE id-u=1000
-       > SANDBOX-EVIDENCE uid-map=      1000      30001          1;
-       > SANDBOX-EVIDENCE user-ns=user:[4026533080]
-       > SANDBOX-EVIDENCE uname=Linux localhost 7.4.0-rc3 #1-NixOS SMP PREEMPT_DYNAMIC @315532800 x86_64 GNU/Linux
-       > SANDBOX-EVIDENCE usr-bin-env=absent
-       > S1-VENUE-BUILD-START mode=unshare
-       > S1-VENUE-PATH=/nix/store/kwyi4bq5s2qgwbhz6cs4gjy57c2zdxws-bash-interactive-5.3p20/bin:/nix/store/cb987zkxvsv0490753ilrvn5yk7ylgxi-coreutils-9.12/bin:/nix/store/2lgg8jqyzjp60svh7kmp39kqwnig31p2-util-linux-2.42.4-bin/bin:/nix/store/dzvnbi2n1x9jkmzvmwxdly607bwaxsbv-plan9port-0-unstable-2025-11-10/bin:/nix/store/9wc73n5izv0m7ppjbibi4hbr68rba1lj-gnused-4.10/bin:/nix/store/h96s16mjssibkvk62pvmfm3lwfc3wnwp-gawk-5.4.1/bin:/nix/store/c3f45pxlb81gzz4w1nym7lpznfypva7s-gnugrep-3.12/bin:/nix/store/nzsflqrk0zdljly9jhx82l784hl5rmc4-diffutils-3.12/bin:/nix/store/dl38pix4jvabi5smb9wywhp6pimmpva6-patchelf-0.19.2/bin:/nix/store/cb987zkxvsv0490753ilrvn5yk7ylgxi-coreutils-9.12/bin:/nix/store/99v13ig4382mngi6ggf0csqi7rfa04j5-findutils-4.11.0/bin:/nix/store/9mpja553cbkr2rc37kzdg8zbbg2dyyvl-diffutils-3.12/bin:/nix/store/9wc73n5izv0m7ppjbibi4hbr68rba1lj-gnused-4.10/bin:/nix/store/c3f45pxlb81gzz4w1nym7lpznfypva7s-gnugrep-3.12/bin:/nix/store/h96s16mjssibkvk62pvmfm3lwfc3wnwp-gawk-5.4.1/bin:/nix/store/n318yf1q5vysgh2qn6fd1q8yjy9vmwvh-gnutar-1.35/bin:/nix/store/rpswfv0ff4wap9anx7k1224x2m94pfcc-gzip-1.15/bin:/nix/store/ai2km55ba8bxrn64xx7p9lgvrrzdzv43-bzip2-1.0.8-bin/bin:/nix/store/8xz4d9wp4jy49mhl306wyg55096wis3p-gnumake-4.4.1/bin:/nix/store/nnm9gdr70ihc6zc9298mzz8jpcgaciql-bash-5.3p20/bin:/nix/store/d5jz315vxbphknfawsrjs192ci9bc6df-patch-2.8/bin:/nix/store/nflpm51il93hxh2rba6dvz59kaff0i7v-xz-5.8.4-bin/bin:/nix/store/2qpmak7162vhqxjwfik4aqs9lff6sn7w-file-5.48/bin:/nix/store/dzvnbi2n1x9jkmzvmwxdly607bwaxsbv-plan9port-0-unstable-2025-11-10/plan9/bin
-       > S1-VENUE-NSX=/build/nsroot.nHa578 (private tmpfs)
-       > mount: /build/nsroot.nHa578/nix/store: wrong fs type, bad option, bad superblock on /nix/store, missing codepage or helper program, or other error.
-       >        dmesg(1) may have more information after failed mount system call.
-       > S1-VENUE-RC=32
-       > S1-VENUE-FAIL the guest run exited 32
-       For full logs, run:
-         nix log /nix/store/3sp3xvr6psh8swb49fpwj44mwy4dncny-s1-nsprobe-0.drv
+building '/nix/store/bn3ms6pwv7sgisynphaylf46z63svn6y-harness-0.1.0.drv'...
+building '/nix/store/bsg061wyparnv6wcq1vy4jwa5rq9dvby-nix-shell-env.drv'...
+harvey devshell: HARVEY=/home/req/r9-spike-work/harvey PLAN9=/nix/store/dzvnbi2n1x9jkmzvmwxdly607bwaxsbv-plan9port-0-unstable-2025-11-10/plan9
+  host bin: /home/req/r9-spike-work/harvey/.build/hostbin-linux-x86_64/bin
+  harness: /nix/store/xjlym8x1fqqp6n8ai6nwn5q459sj95pz-harness-0.1.0/bin/harness
+apps: nix run .#setup -> .#toolchain -> .#build | .#iso
+(. #build uses sudo unshare; run from the repo root)
+== determinism: scratch=/home/req/r9-spike-work/harvey KERNDATE=1795382101
+== bake 1 hashes -> /home/req/r9-spike-work/witness-bundle/out/s3/determinism/bake1.sha256
+== bake 2: sh build/x86_64/mkimage.sh (log: /home/req/r9-spike-work/witness-bundle/out/s3/determinism/determinism-bake2.log)
+S3-ERROR: bake2-failed — the second bake did not complete; tail of /home/req/r9-spike-work/witness-bundle/out/s3/determinism/determinism-bake2.log follows
+services manifest: /amd64/bin/test staged
+services manifest: /amd64/bin/bind staged
+services manifest: /amd64/bin/hsvctcpecho staged
+services manifest: /amd64/bin/hmkdir staged
+services manifest: /rc/lib/rcmain staged
+services manifest: /rc/bin/termrc staged
+services manifest: /lib/namespace staged
+services manifest: /adm/timezone/local staged
+services manifest: /usr/glenda/lib/profile staged
+services manifest: /lib/netaddr.rc staged
+services manifest: /lib/netip-loopback.rc staged
+services manifest: /lib/netip-static.rc staged
+services manifest: /lib/netip-dhcp.rc staged
+services manifest: /lib/netip-tcp.rc staged
+services manifest: /lib/services-sweep.rc staged
+services manifest: 127 h* sweep binaries staged (tier-1 helpers + the tier-2 set computed from tiers/tier2-services.txt: 90 tier-2 members)
+== PASS: baked /home/req/r9-spike-work/harvey/build/x86_64/out/bootfs-services.paq (26671161 bytes; 127 h* binaries; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
+== PASS: baked /home/req/r9-spike-work/harvey/build/x86_64/out/bootfs-churn.paq (492105 bytes; chain + test/dc + churncats + /lib/churn-cats.rc; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
+== PASS: baked /home/req/r9-spike-work/harvey/build/x86_64/out/bootfs-substrate.paq (43674 bytes; skeleton + randread as /amd64/init; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
+error: auth bake: sweep subject hsecstored missing from the computed auth-suite set (the resolver lost it)
 
 ~~~
 
 ### out/s3/rio.log
 
 ~~~
-churngate: heap exit 3430528 33554432
-cpurc: FACTOTUM-OKrio-gate: stage ok — factotum-ok
-
-process 37 exited: ""
-churngate: heap exit 3430592 33554432
-devmnt: server error: file does not exist
-process 38 exited: ""
-churngate: heap exit 3430784 33554432
- Feb  7 01:28:16 started on tcp
-process 39 exited: ""
-churngate: heap exit 3440960 33554432
-devmnt: server error: file does not exist
-devmnt: server error: file does not exist
-process 41 exited: ""
-churngate: heap exit 4145152 33554432
-process 43 exited: ""
-churngate: heap exit 4145152 33554432
-process 44 exited: ""
-churngate: heap exit 4145216 33554432
-process 45 exited: ""
-churngate: heap exit 4145216 33554432
-cpurc: LISTEN-17010
-rio-gate: stage ok — listen-17010
 process 46 exited: ""
 churngate: heap exit 4149248 33554432
-cpurc: DONE
-rio-gate: stage ok — ladder-done
-spawn bash -c exec -a r9s3riogate-dt-8431-1795398552 /nix/store/y8h5ana2drnzs2fdx6fxgr74bwmzi8y9-drawterm-19.06/bin/drawterm -s '' -O cpu=127.0.0.1,auth=tcp!127.0.0.1!5670,user=glenda
-rio-gate: spawned drawterm on a pty (mode rio, argv0 tag r9s3riogate-dt-8431-1795398552, user glenda)
+cpurc: DONErio-gate: stage ok — ladder-done
+spawn bash -c exec -a r9s3riogate-dt-63949-1795400202 /nix/store/y8h5ana2drnzs2fdx6fxgr74bwmzi8y9-drawterm-19.06/bin/drawterm -s '' -O cpu=127.0.0.1,auth=tcp!127.0.0.1!5670,user=glenda
+rio-gate: spawned drawterm on a pty (mode rio, argv0 tag r9s3riogate-dt-63949-1795400202, user glenda)
+
 process 47 exited: ""
 churngate: heap exit 4149248 33554432
 process 5 exited: ""
@@ -190,42 +170,479 @@ init: starting /bin/rc
 % devmnt: server error: file does not exist
  Feb  7 01:28:16 tcp call for tcp17010 on chan /net/tcp/2 (10.0.2.2)
 devmnt: server error: file does not exist
+devmnt: server error: file does not exist
+ Feb  7 01:28:16 tcp call for tcp17010 on chan /net/tcp/3 (10.0.2.2)
+devmnt: server error: file does not exist
+devmnt: server error: not found
+devmnt: server error: not found
+ Feb  7 01:28:16 tr-ok glenda@glenda(unknown) -> glenda@bootes
+process 51 exited: ""
+churngate: heap exit 4569344 33554432
+rio-gate: TIMEOUT at feed stage: dt-password
+S3-ERROR: the S3 rio gate FAILED (rc=1 — the driver named the failure on stderr; capture: /home/req/r9-spike-work/witness-bundle/out/s3/rio/rio-gate-rio.log)
+The XKEYBOARD keymap compiler (xkbcomp) reports:
+> Warning:          Multiple symbols for level 1/group 1 on key <FK23>
+>                   Using F23, ignoring XF86TouchpadOff
+> Warning:          Symbol map for key <FK23> redefined
+>                   Using last definition for conflicting fields
+> Warning:          Symbol map for key <FK24> redefined
+>                   Using last definition for conflicting fields
+> Warning:          Could not resolve keysym XF86ElectronicPrivacyScreenOn
+> Warning:          Could not resolve keysym XF86ElectronicPrivacyScreenOff
+> Warning:          Could not resolve keysym XF86ActionOnSelection
+> Warning:          Could not resolve keysym XF86ContextualInsert
+> Warning:          Could not resolve keysym XF86ContextualQuery
+Errors from xkbcomp are not fatal to the X server
 
 ~~~
 
-### out/s5/q35-kvm.log
+### out/s6/bake-control.log
 
 ~~~
-
-Plan 9
-mmuinit: vmstart 0xfffffffff0000000 vmunused 0xfffffffff02f6000 vmunmapped 0xfffffffff0400000 vmend 0xfffffffffe000000
-sys->pd 0x108003 0x108023
-l 3 0xffffff7fbfdfeff8 107023
-l 2 0xffffff7fbfdffff8 108023
-l 1 0xffffff7fbffffc00 e3
-l 1 0xffffff7fbffffc00 e3
-kernel alloc space = -268,435,456
-base 0xfffffffff02fa000 ptr 0xfffffffff02fa000 nunits 14484992
-apic0: hz 997351810 max 9973518 min 99735 div 2
-pcirouting: ignoring south bridge PCI.0.1.0 1234/1111
-intrenable: nil handler for 11, tbdf 0xc001000 for ether0
-#l0: virtio: 1Gbps port 0xc040 irq 11: 525400123456
-508M memory: 1944K+230M kernel, 276M user
-root is from (tcp)[tcp]: 
+cpu manifest (§15): /boot/boot staged
+cpu manifest (§15): /boot/paqfs staged
+cpu manifest (§15): /amd64/init staged
+cpu manifest (§15): /amd64/bin/rc staged
+cpu manifest (§15): /amd64/bin/ls staged
+cpu manifest (§15): /amd64/bin/cat staged
+cpu manifest (§15): /amd64/bin/echo staged
+cpu manifest (§15): /amd64/bin/ps staged
+cpu manifest (§15): /amd64/bin/bind staged
+cpu manifest (§15): /amd64/bin/authsrv staged
+cpu manifest (§15): /amd64/bin/cpu staged
+cpu manifest (§15): /amd64/bin/aux/listen staged
+cpu manifest (§15): /amd64/bin/ip/ipconfig staged
+cpu manifest (§15): /amd64/bin/test staged
+cpu manifest (§15): /amd64/bin/rio staged
+cpu manifest (§15): /amd64/bin/plumber staged
+cpu manifest (§15): /amd64/bin/plumb staged
+cpu manifest (§15): /amd64/bin/ramfs staged
+cpu manifest (§15): /amd64/bin/syscall staged
+cpu manifest (§15): /amd64/bin/awd staged
+cpu manifest (§15): /rc/lib/rcmain staged
+cpu manifest (§15): /rc/bin/cpurc staged
+cpu manifest (§15): /rc/bin/service/tcp17010 staged
+cpu manifest (§15): /bin/service/tcp17010 staged
+cpu manifest (§15): /rc/bin/termrc staged
+cpu manifest (§15): /lib/namespace staged
+cpu manifest (§15): /lib/netaddr.rc staged
+cpu manifest (§15): /lib/ndb/auth staged
+cpu manifest (§15): /lib/ndb/local staged
+cpu manifest (§15): /adm/timezone/local staged
+cpu manifest (§15): /adm/nvram staged
+cpu manifest (§15): /adm/keys staged
+cpu manifest (§15): /adm/domain.manifest staged
+cpu manifest (§15): /boot/authid-creds.txt staged
+cpu manifest (§15): /usr/glenda/lib/profile staged
+cpu manifest (§15): /usr/glenda/lib/plumbing staged
+cpu manifest (§15): /sys/lib/plumb/basic staged
+cpu manifest (§15): /sys/lib/plumb/fileaddr staged
+cpu manifest (§15): 26 h* sweep binaries staged (§14's computed auth-suite set + the tier-1 helpers incl. hfactotum/hsed)
+== PASS: baked /home/req/r9-spike-work/harvey/build/x86_64/out/bootfs-cpu.paq (22002515 bytes; chain + the auth suite + cmd/cpu + aux/listen + the real cpurc + tcp17010 + the font payload + the §15 p9sk1 domain + the 19-10 desktop suite (test/rio/plumber/plumb/ramfs/syscall/awd + glenda's home + the plumb rules); header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
+
 ~~~
 
-### out/s5/q35-kvm-stdout.log
+### out/s6/bake-flipback.log
 
 ~~~
-S5-CMD: /nix/store/bp9li432ba8adp47dr9z9y0hx56wn8v2-qemu-11.1.2/bin/qemu-system-x86_64 -M q35 -accel kvm -cpu host -m 512 -kernel ./s5/9k10cpu.elf -display none -no-reboot -serial file:/home/req/r9-spike-work/witness-bundle/out/s5/q35-kvm.log -netdev user,id=n0 -device virtio-net-pci,netdev=n0
-qemu-system-x86_64: terminating on signal 15 from pid 8351 (sh)
-BANNER=yes
-PROMPT=root is from (tcp)[tcp]: 
-SIGS=none
-NIC=#l0: virtio: 1Gbps port 0xc040 irq 11: 525400123456
-BANNER_SECONDS=1
-PROMPT_SECONDS=1
-S5-RESULT machine=q35 accel=kvm net=virtio banner=yes prompt=yes sigs=none
+cpu manifest (§15): /boot/boot staged
+cpu manifest (§15): /boot/paqfs staged
+cpu manifest (§15): /amd64/init staged
+cpu manifest (§15): /amd64/bin/rc staged
+cpu manifest (§15): /amd64/bin/ls staged
+cpu manifest (§15): /amd64/bin/cat staged
+cpu manifest (§15): /amd64/bin/echo staged
+cpu manifest (§15): /amd64/bin/ps staged
+cpu manifest (§15): /amd64/bin/bind staged
+cpu manifest (§15): /amd64/bin/authsrv staged
+cpu manifest (§15): /amd64/bin/cpu staged
+cpu manifest (§15): /amd64/bin/aux/listen staged
+cpu manifest (§15): /amd64/bin/ip/ipconfig staged
+cpu manifest (§15): /amd64/bin/test staged
+cpu manifest (§15): /amd64/bin/rio staged
+cpu manifest (§15): /amd64/bin/plumber staged
+cpu manifest (§15): /amd64/bin/plumb staged
+cpu manifest (§15): /amd64/bin/ramfs staged
+cpu manifest (§15): /amd64/bin/syscall staged
+cpu manifest (§15): /amd64/bin/awd staged
+cpu manifest (§15): /rc/lib/rcmain staged
+cpu manifest (§15): /rc/bin/cpurc staged
+cpu manifest (§15): /rc/bin/service/tcp17010 staged
+cpu manifest (§15): /bin/service/tcp17010 staged
+cpu manifest (§15): /rc/bin/termrc staged
+cpu manifest (§15): /lib/namespace staged
+cpu manifest (§15): /lib/netaddr.rc staged
+cpu manifest (§15): /lib/ndb/auth staged
+cpu manifest (§15): /lib/ndb/local staged
+cpu manifest (§15): /adm/timezone/local staged
+cpu manifest (§15): /adm/nvram staged
+cpu manifest (§15): /adm/keys staged
+cpu manifest (§15): /adm/domain.manifest staged
+cpu manifest (§15): /boot/authid-creds.txt staged
+cpu manifest (§15): /usr/glenda/lib/profile staged
+cpu manifest (§15): /usr/glenda/lib/plumbing staged
+cpu manifest (§15): /sys/lib/plumb/basic staged
+cpu manifest (§15): /sys/lib/plumb/fileaddr staged
+cpu manifest (§15): 26 h* sweep binaries staged (§14's computed auth-suite set + the tier-1 helpers incl. hfactotum/hsed)
+== PASS: baked /home/req/r9-spike-work/harvey/build/x86_64/out/bootfs-cpu.paq (22002514 bytes; chain + the auth suite + cmd/cpu + aux/listen + the real cpurc + tcp17010 + the font payload + the §15 p9sk1 domain + the 19-10 desktop suite (test/rio/plumber/plumb/ramfs/syscall/awd + glenda's home + the plumb rules); header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
+
+~~~
+
+### out/s6/bake-probe.log
+
+~~~
+cpu manifest (§15): /boot/boot staged
+cpu manifest (§15): /boot/paqfs staged
+cpu manifest (§15): /amd64/init staged
+cpu manifest (§15): /amd64/bin/rc staged
+cpu manifest (§15): /amd64/bin/ls staged
+cpu manifest (§15): /amd64/bin/cat staged
+cpu manifest (§15): /amd64/bin/echo staged
+cpu manifest (§15): /amd64/bin/ps staged
+cpu manifest (§15): /amd64/bin/bind staged
+cpu manifest (§15): /amd64/bin/authsrv staged
+cpu manifest (§15): /amd64/bin/cpu staged
+cpu manifest (§15): /amd64/bin/aux/listen staged
+cpu manifest (§15): /amd64/bin/ip/ipconfig staged
+cpu manifest (§15): /amd64/bin/test staged
+cpu manifest (§15): /amd64/bin/rio staged
+cpu manifest (§15): /amd64/bin/plumber staged
+cpu manifest (§15): /amd64/bin/plumb staged
+cpu manifest (§15): /amd64/bin/ramfs staged
+cpu manifest (§15): /amd64/bin/syscall staged
+cpu manifest (§15): /amd64/bin/awd staged
+cpu manifest (§15): /rc/lib/rcmain staged
+cpu manifest (§15): /rc/bin/cpurc staged
+cpu manifest (§15): /rc/bin/service/tcp17010 staged
+cpu manifest (§15): /bin/service/tcp17010 staged
+cpu manifest (§15): /rc/bin/termrc staged
+cpu manifest (§15): /lib/namespace staged
+cpu manifest (§15): /lib/netaddr.rc staged
+cpu manifest (§15): /lib/ndb/auth staged
+cpu manifest (§15): /lib/ndb/local staged
+cpu manifest (§15): /adm/timezone/local staged
+cpu manifest (§15): /adm/nvram staged
+cpu manifest (§15): /adm/keys staged
+cpu manifest (§15): /adm/domain.manifest staged
+cpu manifest (§15): /boot/authid-creds.txt staged
+cpu manifest (§15): /usr/glenda/lib/profile staged
+cpu manifest (§15): /usr/glenda/lib/plumbing staged
+cpu manifest (§15): /sys/lib/plumb/basic staged
+cpu manifest (§15): /sys/lib/plumb/fileaddr staged
+cpu manifest (§15): 26 h* sweep binaries staged (§14's computed auth-suite set + the tier-1 helpers incl. hfactotum/hsed)
+== PASS: baked /home/req/r9-spike-work/harvey/build/x86_64/out/bootfs-cpu.paq (21974317 bytes; chain + the auth suite + cmd/cpu + aux/listen + the real cpurc + tcp17010 + the font payload + the §15 p9sk1 domain + the 19-10 desktop suite (test/rio/plumber/plumb/ramfs/syscall/awd + glenda's home + the plumb rules); header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
+
+~~~
+
+### out/s6/clone.log
+
+~~~
+Cloning into '/home/req/r9-spike-work/r9'...
+Updating files:   0% (1/1126)Updating files:   1% (12/1126)Updating files:   2% (23/1126)Updating files:   3% (34/1126)Updating files:   4% (46/1126)Updating files:   5% (57/1126)Updating files:   6% (68/1126)Updating files:   7% (79/1126)Updating files:   8% (91/1126)Updating files:   9% (102/1126)Updating files:  10% (113/1126)Updating files:  11% (124/1126)Updating files:  12% (136/1126)Updating files:  13% (147/1126)Updating files:  14% (158/1126)Updating files:  15% (169/1126)Updating files:  16% (181/1126)Updating files:  17% (192/1126)Updating files:  18% (203/1126)Updating files:  19% (214/1126)Updating files:  20% (226/1126)Updating files:  21% (237/1126)Updating files:  22% (248/1126)Updating files:  23% (259/1126)Updating files:  24% (271/1126)Updating files:  25% (282/1126)Updating files:  26% (293/1126)Updating files:  27% (305/1126)Updating files:  28% (316/1126)Updating files:  29% (327/1126)Updating files:  30% (338/1126)Updating files:  31% (350/1126)Updating files:  32% (361/1126)Updating files:  33% (372/1126)Updating files:  34% (383/1126)Updating files:  35% (395/1126)Updating files:  36% (406/1126)Updating files:  37% (417/1126)Updating files:  38% (428/1126)Updating files:  39% (440/1126)Updating files:  40% (451/1126)Updating files:  41% (462/1126)Updating files:  42% (473/1126)Updating files:  43% (485/1126)Updating files:  44% (496/1126)Updating files:  45% (507/1126)Updating files:  46% (518/1126)Updating files:  47% (530/1126)Updating files:  48% (541/1126)Updating files:  49% (552/1126)Updating files:  50% (563/1126)Updating files:  51% (575/1126)Updating files:  52% (586/1126)Updating files:  53% (597/1126)Updating files:  54% (609/1126)Updating files:  55% (620/1126)Updating files:  56% (631/1126)Updating files:  57% (642/1126)Updating files:  58% (654/1126)Updating files:  59% (665/1126)Updating files:  60% (676/1126)Updating files:  61% (687/1126)Updating files:  62% (699/1126)Updating files:  63% (710/1126)Updating files:  64% (721/1126)Updating files:  65% (732/1126)Updating files:  66% (744/1126)Updating files:  67% (755/1126)Updating files:  68% (766/1126)Updating files:  69% (777/1126)Updating files:  70% (789/1126)Updating files:  71% (800/1126)Updating files:  72% (811/1126)Updating files:  73% (822/1126)Updating files:  74% (834/1126)Updating files:  75% (845/1126)Updating files:  76% (856/1126)Updating files:  77% (868/1126)Updating files:  78% (879/1126)Updating files:  79% (890/1126)Updating files:  80% (901/1126)Updating files:  81% (913/1126)Updating files:  82% (924/1126)Updating files:  83% (935/1126)Updating files:  84% (946/1126)Updating files:  85% (958/1126)Updating files:  86% (969/1126)Updating files:  87% (980/1126)Updating files:  88% (991/1126)Updating files:  88% (1001/1126)Updating files:  89% (1003/1126)Updating files:  90% (1014/1126)Updating files:  91% (1025/1126)Updating files:  92% (1036/1126)Updating files:  93% (1048/1126)Updating files:  94% (1059/1126)Updating files:  95% (1070/1126)Updating files:  96% (1081/1126)Updating files:  97% (1093/1126)Updating files:  98% (1104/1126)Updating files:  99% (1115/1126)Updating files: 100% (1126/1126)Updating files: 100% (1126/1126), done.
+Note: switching to '116bcc23c8052a1728992cdbc7b625143260d683'.
+
+You are in 'detached HEAD' state. You can look around, make experimental
+changes and commit them, and you can discard any commits you make in this
+state without impacting any branches by switching back to a branch.
+
+If you want to create a new branch to retain commits you create, you may
+do so (now or later) by using -c with the switch command. Example:
+
+  git switch -c <new-branch-name>
+
+Or undo this operation with:
+
+  git switch -
+
+Turn off this advice by setting config variable advice.detachedHead to false
+
+HEAD is now at 116bcc2 bump boot-iso hash for the x86_64 entry-flags kernel changes
+
+~~~
+
+### out/s6/linux-x86_64.log
+
+~~~
+S6-X86: leg control
+S6-X86: control sha256=3ae4127abe1d8466617d22877f1171f4a30086f05e8ef7c1406c1d5dd8fa9de8
+S6-X86: leg probe
+S6-X86: probe sha256=7af2a8e07e4c969907727b3b31964bfddb3cad642fda643fc20766bda1d05f12
+S6-X86: leg flipback
+S6-X86: flipback sha256=3ae4127abe1d8466617d22877f1171f4a30086f05e8ef7c1406c1d5dd8fa9de8
+S6-X86 control=PASS probe=PASS flipback=PASS sha-equal=yes
+
+~~~
+
+### out/s6/x86-control.driver.log
+
+~~~
+q35: intsrc bus 0 source 11 -> gsi 11 flags 0xd
+q35: hpet 0xfed00000
+pciexbar: 0xb0000001 -> 0xb0000001
+pci: virtio-net 1af4:1041 at 00:02.0 rev 01 pin 1 (inta) bars 2
+pci: inta -> gsi 22 (q35 root slot 2, pirq G: 16+6)
+Memory usage:
+  Used:		0x00000006800000
+  Total:	0x0000003ffdf000
+random: source=rdrand
+lapic: cpuid leaf-1 ecx: x2apic=true tsc-deadline=true
+lapic: x2apic live (msr 0x800 map; lint0/1 masked, no pic)
+timer: 2496189480 Hz (pit 1193182 Hz reference), TscDeadline mode, armed
+ioapic: id 0 version 0x11 rtes 23 gsib 0 (madt 0xfec00000)
+pci: bar4 pa 0xfe000000 size 0x4000 (firmware) readback 0xfe000000
+pci: caps common@0x0+0x1000 notify@0x3000 isr@0x1000 device@0x2000 mult 4
+virtio-net: features offered 0x10130bf8024 negotiated 0x100010020
+virtio-net: rx pre-posted 128 buffers qsize 256
+ioapic: gsi 22 -> vector 0x21 (level)
+#l0: virtio: 1000Mbps: 52:54:00:12:34:56
+fpu: kernel-SIMD selftest ok (user state parked and restored across the section; xor_fold16 0x1983c6d50a18d707c9d74d9a42c59f27)
+q35: module @0x14c000 +0x5f1ad (mb2 tag 3, stashed)
+devenv: seeded cputype=amd64 nobootprompt=embed readparts=0
+q35: paqfs root mounted from module (389549 bytes)
+devroot: /boot/boot open (159349 bytes)
+exec: entering ring 3 pc=0x2054fa sp=0x7fffffffef78 path=/boot/boot argv=[boot]
+paqfs...version...root-chain: Sun Nov 22 21:15:01 GMT 2026
+fingerprint: e7e84ec22c9cf702c8c76fe5a777428b9aa4d0a7
+process 2 exited: ""
+syscall 10 unimplemented
+time...
+boot: opening #c/swap: namec: does not exist
+init: can't open #c/sysname: namec: does not exist
+syscall 10 unimplemented
+
+init: starting /bin/rc
+% /bin/echo R9-ECHO-CONTROL
+R9-ECHO-CONTROL
+process 5 exited: ""
+% QEMU: Terminated
+q35shell-probe: leg complete — /bin/echo R9-ECHO-CONTROL
+
+~~~
+
+### out/s6/x86-control.log
+
+~~~
+q35: intsrc bus 0 source 11 -> gsi 11 flags 0xd
+q35: hpet 0xfed00000
+pciexbar: 0xb0000001 -> 0xb0000001
+pci: virtio-net 1af4:1041 at 00:02.0 rev 01 pin 1 (inta) bars 2
+pci: inta -> gsi 22 (q35 root slot 2, pirq G: 16+6)
+Memory usage:
+  Used:		0x00000006800000
+  Total:	0x0000003ffdf000
+random: source=rdrand
+lapic: cpuid leaf-1 ecx: x2apic=true tsc-deadline=true
+lapic: x2apic live (msr 0x800 map; lint0/1 masked, no pic)
+timer: 2496189480 Hz (pit 1193182 Hz reference), TscDeadline mode, armed
+ioapic: id 0 version 0x11 rtes 23 gsib 0 (madt 0xfec00000)
+pci: bar4 pa 0xfe000000 size 0x4000 (firmware) readback 0xfe000000
+pci: caps common@0x0+0x1000 notify@0x3000 isr@0x1000 device@0x2000 mult 4
+virtio-net: features offered 0x10130bf8024 negotiated 0x100010020
+virtio-net: rx pre-posted 128 buffers qsize 256
+ioapic: gsi 22 -> vector 0x21 (level)
+#l0: virtio: 1000Mbps: 52:54:00:12:34:56
+fpu: kernel-SIMD selftest ok (user state parked and restored across the section; xor_fold16 0x1983c6d50a18d707c9d74d9a42c59f27)
+q35: module @0x14c000 +0x5f1ad (mb2 tag 3, stashed)
+devenv: seeded cputype=amd64 nobootprompt=embed readparts=0
+q35: paqfs root mounted from module (389549 bytes)
+devroot: /boot/boot open (159349 bytes)
+exec: entering ring 3 pc=0x2054fa sp=0x7fffffffef78 path=/boot/boot argv=[boot]
+paqfs...version...root-chain: Sun Nov 22 21:15:01 GMT 2026
+fingerprint: e7e84ec22c9cf702c8c76fe5a777428b9aa4d0a7
+process 2 exited: ""
+syscall 10 unimplemented
+time...
+boot: opening #c/swap: namec: does not exist
+init: can't open #c/sysname: namec: does not exist
+syscall 10 unimplemented
+
+init: starting /bin/rc
+% /bin/echo R9-ECHO-CONTROL
+R9-ECHO-CONTROL
+process 5 exited: ""
+% QEMU: Terminated
+
+~~~
+
+### out/s6/x86-flipback.driver.log
+
+~~~
+q35: intsrc bus 0 source 11 -> gsi 11 flags 0xd
+q35: hpet 0xfed00000
+pciexbar: 0xb0000001 -> 0xb0000001
+pci: virtio-net 1af4:1041 at 00:02.0 rev 01 pin 1 (inta) bars 2
+pci: inta -> gsi 22 (q35 root slot 2, pirq G: 16+6)
+Memory usage:
+  Used:		0x00000006800000
+  Total:	0x0000003ffdf000
+random: source=rdrand
+lapic: cpuid leaf-1 ecx: x2apic=true tsc-deadline=true
+lapic: x2apic live (msr 0x800 map; lint0/1 masked, no pic)
+timer: 2496401940 Hz (pit 1193182 Hz reference), TscDeadline mode, armed
+ioapic: id 0 version 0x11 rtes 23 gsib 0 (madt 0xfec00000)
+pci: bar4 pa 0xfe000000 size 0x4000 (firmware) readback 0xfe000000
+pci: caps common@0x0+0x1000 notify@0x3000 isr@0x1000 device@0x2000 mult 4
+virtio-net: features offered 0x10130bf8024 negotiated 0x100010020
+virtio-net: rx pre-posted 128 buffers qsize 256
+ioapic: gsi 22 -> vector 0x21 (level)
+#l0: virtio: 1000Mbps: 52:54:00:12:34:56
+fpu: kernel-SIMD selftest ok (user state parked and restored across the section; xor_fold16 0x1983c6d50a18d707c9d74d9a42c59f27)
+q35: module @0x14c000 +0x5f1ad (mb2 tag 3, stashed)
+devenv: seeded cputype=amd64 nobootprompt=embed readparts=0
+q35: paqfs root mounted from module (389549 bytes)
+devroot: /boot/boot open (159349 bytes)
+exec: entering ring 3 pc=0x2054fa sp=0x7fffffffef78 path=/boot/boot argv=[boot]
+paqfs...version...root-chain: Sun Nov 22 21:15:01 GMT 2026
+fingerprint: e7e84ec22c9cf702c8c76fe5a777428b9aa4d0a7
+process 2 exited: ""
+syscall 10 unimplemented
+time...
+boot: opening #c/swap: namec: does not exist
+init: can't open #c/sysname: namec: does not exist
+syscall 10 unimplemented
+
+init: starting /bin/rc
+% /bin/echo R9-ECHO-CONTROL
+R9-ECHO-CONTROL
+process 5 exited: ""
+% QEMU: Terminated
+q35shell-probe: leg complete — /bin/echo R9-ECHO-CONTROL
+
+~~~
+
+### out/s6/x86-flipback.log
+
+~~~
+q35: intsrc bus 0 source 11 -> gsi 11 flags 0xd
+q35: hpet 0xfed00000
+pciexbar: 0xb0000001 -> 0xb0000001
+pci: virtio-net 1af4:1041 at 00:02.0 rev 01 pin 1 (inta) bars 2
+pci: inta -> gsi 22 (q35 root slot 2, pirq G: 16+6)
+Memory usage:
+  Used:		0x00000006800000
+  Total:	0x0000003ffdf000
+random: source=rdrand
+lapic: cpuid leaf-1 ecx: x2apic=true tsc-deadline=true
+lapic: x2apic live (msr 0x800 map; lint0/1 masked, no pic)
+timer: 2496401940 Hz (pit 1193182 Hz reference), TscDeadline mode, armed
+ioapic: id 0 version 0x11 rtes 23 gsib 0 (madt 0xfec00000)
+pci: bar4 pa 0xfe000000 size 0x4000 (firmware) readback 0xfe000000
+pci: caps common@0x0+0x1000 notify@0x3000 isr@0x1000 device@0x2000 mult 4
+virtio-net: features offered 0x10130bf8024 negotiated 0x100010020
+virtio-net: rx pre-posted 128 buffers qsize 256
+ioapic: gsi 22 -> vector 0x21 (level)
+#l0: virtio: 1000Mbps: 52:54:00:12:34:56
+fpu: kernel-SIMD selftest ok (user state parked and restored across the section; xor_fold16 0x1983c6d50a18d707c9d74d9a42c59f27)
+q35: module @0x14c000 +0x5f1ad (mb2 tag 3, stashed)
+devenv: seeded cputype=amd64 nobootprompt=embed readparts=0
+q35: paqfs root mounted from module (389549 bytes)
+devroot: /boot/boot open (159349 bytes)
+exec: entering ring 3 pc=0x2054fa sp=0x7fffffffef78 path=/boot/boot argv=[boot]
+paqfs...version...root-chain: Sun Nov 22 21:15:01 GMT 2026
+fingerprint: e7e84ec22c9cf702c8c76fe5a777428b9aa4d0a7
+process 2 exited: ""
+syscall 10 unimplemented
+time...
+boot: opening #c/swap: namec: does not exist
+init: can't open #c/sysname: namec: does not exist
+syscall 10 unimplemented
+
+init: starting /bin/rc
+% /bin/echo R9-ECHO-CONTROL
+R9-ECHO-CONTROL
+process 5 exited: ""
+% QEMU: Terminated
+
+~~~
+
+### out/s6/x86-probe.driver.log
+
+~~~
+q35: intsrc bus 0 source 11 -> gsi 11 flags 0xd
+q35: hpet 0xfed00000
+pciexbar: 0xb0000001 -> 0xb0000001
+pci: virtio-net 1af4:1041 at 00:02.0 rev 01 pin 1 (inta) bars 2
+pci: inta -> gsi 22 (q35 root slot 2, pirq G: 16+6)
+Memory usage:
+  Used:		0x00000006800000
+  Total:	0x0000003ffdf000
+random: source=rdrand
+lapic: cpuid leaf-1 ecx: x2apic=true tsc-deadline=true
+lapic: x2apic live (msr 0x800 map; lint0/1 masked, no pic)
+timer: 2496216000 Hz (pit 1193182 Hz reference), TscDeadline mode, armed
+ioapic: id 0 version 0x11 rtes 23 gsib 0 (madt 0xfec00000)
+pci: bar4 pa 0xfe000000 size 0x4000 (firmware) readback 0xfe000000
+pci: caps common@0x0+0x1000 notify@0x3000 isr@0x1000 device@0x2000 mult 4
+virtio-net: features offered 0x10130bf8024 negotiated 0x100010020
+virtio-net: rx pre-posted 128 buffers qsize 256
+ioapic: gsi 22 -> vector 0x21 (level)
+#l0: virtio: 1000Mbps: 52:54:00:12:34:56
+fpu: kernel-SIMD selftest ok (user state parked and restored across the section; xor_fold16 0x1983c6d50a18d707c9d74d9a42c59f27)
+q35: module @0x14c000 +0x58371 (mb2 tag 3, stashed)
+devenv: seeded cputype=amd64 nobootprompt=embed readparts=0
+q35: paqfs root mounted from module (361329 bytes)
+devroot: /boot/boot open (159349 bytes)
+exec: entering ring 3 pc=0x2054fa sp=0x7fffffffef78 path=/boot/boot argv=[boot]
+paqfs...version...root-chain: Sun Nov 22 21:15:01 GMT 2026
+fingerprint: ec6b0005213377e925717a609b1700539836ffdf
+process 2 exited: ""
+syscall 10 unimplemented
+time...
+boot: opening #c/swap: namec: does not exist
+init: can't open #c/sysname: namec: does not exist
+syscall 10 unimplemented
+
+init: starting /bin/rc
+% /bin/echo x
+R9-RUST-AOUT-PROBE-OK
+process 5 exited: ""
+% QEMU: Terminated
+q35shell-probe: leg complete — /bin/echo x
+
+~~~
+
+### out/s6/x86-probe.log
+
+~~~
+q35: intsrc bus 0 source 11 -> gsi 11 flags 0xd
+q35: hpet 0xfed00000
+pciexbar: 0xb0000001 -> 0xb0000001
+pci: virtio-net 1af4:1041 at 00:02.0 rev 01 pin 1 (inta) bars 2
+pci: inta -> gsi 22 (q35 root slot 2, pirq G: 16+6)
+Memory usage:
+  Used:		0x00000006800000
+  Total:	0x0000003ffdf000
+random: source=rdrand
+lapic: cpuid leaf-1 ecx: x2apic=true tsc-deadline=true
+lapic: x2apic live (msr 0x800 map; lint0/1 masked, no pic)
+timer: 2496216000 Hz (pit 1193182 Hz reference), TscDeadline mode, armed
+ioapic: id 0 version 0x11 rtes 23 gsib 0 (madt 0xfec00000)
+pci: bar4 pa 0xfe000000 size 0x4000 (firmware) readback 0xfe000000
+pci: caps common@0x0+0x1000 notify@0x3000 isr@0x1000 device@0x2000 mult 4
+virtio-net: features offered 0x10130bf8024 negotiated 0x100010020
+virtio-net: rx pre-posted 128 buffers qsize 256
+ioapic: gsi 22 -> vector 0x21 (level)
+#l0: virtio: 1000Mbps: 52:54:00:12:34:56
+fpu: kernel-SIMD selftest ok (user state parked and restored across the section; xor_fold16 0x1983c6d50a18d707c9d74d9a42c59f27)
+q35: module @0x14c000 +0x58371 (mb2 tag 3, stashed)
+devenv: seeded cputype=amd64 nobootprompt=embed readparts=0
+q35: paqfs root mounted from module (361329 bytes)
+devroot: /boot/boot open (159349 bytes)
+exec: entering ring 3 pc=0x2054fa sp=0x7fffffffef78 path=/boot/boot argv=[boot]
+paqfs...version...root-chain: Sun Nov 22 21:15:01 GMT 2026
+fingerprint: ec6b0005213377e925717a609b1700539836ffdf
+process 2 exited: ""
+syscall 10 unimplemented
+time...
+boot: opening #c/swap: namec: does not exist
+init: can't open #c/sysname: namec: does not exist
+syscall 10 unimplemented
+
+init: starting /bin/rc
+% /bin/echo x
+R9-RUST-AOUT-PROBE-OK
+process 5 exited: ""
+% QEMU: Terminated
 
 ~~~
 
