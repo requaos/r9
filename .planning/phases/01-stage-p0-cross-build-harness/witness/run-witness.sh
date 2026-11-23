@@ -279,8 +279,17 @@ step_a13() {
 
 # --- run one step in a subshell; record an abort the step did not ------
 run_one() {
-	local step=$1 rc
-	( "step_${step}" )
+	local step=$1 rc fn
+	# Step names may carry a hyphen (rio-diag); shell function names may not.
+	# Map the separator before dispatch, and fail with a named error instead of
+	# a bare 127 if the function is missing (the stop-A2 defect).
+	fn="step_${step//-/_}"
+	if ! declare -F "$fn" >/dev/null 2>&1; then
+		echo "R9-WITNESS-ERROR dispatch: no function $fn for step $step" >&2
+		record "$step" 127 0
+		return
+	fi
+	( "$fn" )
 	rc=$?
 	if ! awk -F'\t' -v s="$step" '$1 == s { found = 1 } END { exit !found }' "$SUMMARY"; then
 		record "$step" "$rc" 0
