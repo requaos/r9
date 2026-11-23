@@ -28,6 +28,11 @@ use target_lexicon::Triple;
 // assertion (07-05) and exercised by its in-file unit suite.
 mod pcap;
 
+// 01-18 (D-11/D-12/D-14): the golden-invariant gate controller.  It
+// lives in its own module (the PATTERNS guidance: only the clap block,
+// the dispatch arm and the step constructor touch this file).
+mod gate;
+
 struct RustupState {
     installed_targets: Vec<Triple>,
     curr_toolchain: String,
@@ -241,6 +246,32 @@ fn main() {
                     clap::arg!(--verbose "Print commands"),
                 ]),
         )
+        .subcommand(
+            clap::Command::new("gate")
+                .about("The golden-invariant gate (HARN-01, D-11/D-12/D-14): assemble image:cpu, \
+                        build the q35cpu kernel, boot it on q35, prove rio is serving (the D-28 \
+                        pair) and that the unchanged control sees no rio, then check the Harvey \
+                        tree is unmodified; exits 0 only then.  --full runs the moved gate apps \
+                        in sequence.")
+                .args(&[
+                    clap::arg!(--arch <arch> "Target architecture (the quick tier is x86-64)")
+                        .value_parser(clap::builder::EnumValueParser::<Arch>::new()),
+                    clap::arg!(--full "Run the moved gate apps in sequence (the full tier, D-14)"),
+                    clap::arg!(--"force-no-rio" "Exercise the failing direction: the rio assertion \
+                                                 over a -G session, which must exit non-zero with \
+                                                 GATE-FAIL rio-not-serving"),
+                    clap::arg!(--"serial-check" <pair> "A serial-console probe `<cmd>=<marker>` \
+                                                          typed after a passing rio assertion; \
+                                                          every marker must appear (repeatable)")
+                        .value_parser(clap::builder::NonEmptyStringValueParser::new())
+                        .action(clap::ArgAction::Append),
+                    clap::arg!(--accel <accel> "Accelerator override (kvm/tcg); beats R9_ACCEL. \
+                                                kvm is the default and never silently downgrades \
+                                                (D-13)")
+                        .value_parser(clap::builder::NonEmptyStringValueParser::new()),
+                    clap::arg!(--verbose "Print commands"),
+                ]),
+        )
         .subcommand(clap::Command::new("clean").about("Cargo clean"))
         .get_matches();
 
@@ -272,6 +303,7 @@ fn main() {
         Some(("ureg-check", _)) => UregCheckStep::new().run(),
         Some(("initrd", m)) => InitrdStep::new(m).run(),
         Some(("image", m)) => ImageStep::new(m).run(),
+        Some(("gate", m)) => gate::GateStep::new(m).run(),
         Some(("clean", _)) => CleanStep::new().run(),
         _ => Err("bad subcommand".into()),
     } {
@@ -365,6 +397,18 @@ impl BuildStep {
         let verbose = verbose(matches);
 
         Self { arch, config, profile, verbose }
+    }
+
+    /// The gate's fixed-shape constructor (01-18): the quick gate always
+    /// builds the q35cpu kernel in the debug profile, so it names the
+    /// config directly instead of reading a `--config` arg.
+    pub(crate) fn for_gate(arch: Arch, config_name: &str, verbose: bool) -> Self {
+        Self {
+            arch,
+            config: load_named_config(arch, config_name),
+            profile: Profile::Debug,
+            verbose,
+        }
     }
 
     fn run(self) -> Result<()> {
