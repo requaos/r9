@@ -1,12 +1,12 @@
 this derivation will be built:
-  /nix/store/nyiky00zwfs8cbd9mv253n52y6bbj49j-r9-kernel-x64-9af05f8.drv
-building '/nix/store/nyiky00zwfs8cbd9mv253n52y6bbj49j-r9-kernel-x64-9af05f8.drv'...
-KERNEL-STORE /nix/store/imb1n1k67mpiv0v2cn0wr0vj8nw1pcc0-r9-kernel-x64-9af05f8
-4228a1bf1408a7f06d942fa847b6ca25d7bfbd5a400ce9190b602d3b365f32e1  /nix/store/imb1n1k67mpiv0v2cn0wr0vj8nw1pcc0-r9-kernel-x64-9af05f8/kernel-x64.elf
+  /nix/store/mcrnfr62cry07m8v25ncr7kvsizb7r0f-r9-kernel-x64-4139fdf.drv
+building '/nix/store/mcrnfr62cry07m8v25ncr7kvsizb7r0f-r9-kernel-x64-4139fdf.drv'...
+KERNEL-STORE /nix/store/y56rpqda7cpglr41yyr0h5qqrm20ra8y-r9-kernel-x64-4139fdf
+4228a1bf1408a7f06d942fa847b6ca25d7bfbd5a400ce9190b602d3b365f32e1  /nix/store/y56rpqda7cpglr41yyr0h5qqrm20ra8y-r9-kernel-x64-4139fdf/kernel-x64.elf
 this derivation will be built:
-  /nix/store/c09d6n0f2n5hlsmv65250i9mnjljpf5j-r9-boot-iso-9af05f8.drv
-building '/nix/store/c09d6n0f2n5hlsmv65250i9mnjljpf5j-r9-boot-iso-9af05f8.drv'...
-error: hash mismatch in fixed-output derivation '/nix/store/c09d6n0f2n5hlsmv65250i9mnjljpf5j-r9-boot-iso-9af05f8.drv':
-         specified: sha256-TIzwBaHF0R4m31l6EbW2IU3rkUl73g6ljlNE0S5hGFY=
-            got:    sha256-xFt7GUshPv+CQNry48fBOAiCsCIuqGZfeC0eX11/8mc=
-KERNEL-BOOTISO-BUILD-FAIL
+  /nix/store/85h9700j1419aj8phr517zrdkl4ks9vn-r9-boot-iso-4139fdf.drv
+building '/nix/store/85h9700j1419aj8phr517zrdkl4ks9vn-r9-boot-iso-4139fdf.drv'...
+KERNEL-BOOTISO-STORE /nix/store/bx1bbayxf2y99xysqcn7p1kxzjrkifwb-r9-boot-iso-4139fdf
+KERNEL-BOOTISO-BUILD-OK
+checking outputs of '/nix/store/85h9700j1419aj8phr517zrdkl4ks9vn-r9-boot-iso-4139fdf.drv'...
+KERNEL-BOOTISO-REBUILD-OK

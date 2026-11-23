@@ -1,27 +1,27 @@
 # r9 pass-2 witness return (plans 01-09 / 01-32)
 
-- date: 2026-11-23T16:29:51Z
-- git HEAD: 9af05f8b71e57a422c36b3a23e168399bb1c88b6
+- date: 2026-11-23T17:00:16Z
+- git HEAD: 4139fdf86ef3cd3f2455c5b1359e80c27d48d098
 - r9 root: /home/req/code/r9
 - work root: /home/req/r9-witness-work
-- steps: kernel gate gate_neg probe flipback profiles cpuauth_ref
+- steps: kernel gate gate_neg probe flipback
 
 ## out/env.txt
 
 ~~~
 # r9 pass-2 witness preflight
-date=2026-11-23T16:17:30Z
+date=2026-11-23T16:44:41Z
 user=req uid=1000
 r9_root=/home/req/code/r9
-git_head=9af05f8b71e57a422c36b3a23e168399bb1c88b6
+git_head=4139fdf86ef3cd3f2455c5b1359e80c27d48d098
 work_dir=/home/req/r9-witness-work
-steps=kernel gate gate_neg probe flipback profiles cpuauth_ref
+steps=kernel gate gate_neg probe flipback
 harvey_pin=bd7a6982a3e4f465f8ed3da5e0c7290521514ff0
 kerndate=1795382101
 uname=Linux teeniebox 7.4.0-rc3 #1-NixOS SMP PREEMPT_DYNAMIC @315532800 x86_64 GNU/Linux
 nproc=16
                total        used        free      shared  buff/cache   available
-Mem:            30Gi       1.8Gi        21Gi       441Mi       8.1Gi        29Gi
+Mem:            30Gi       1.8Gi        21Gi       442Mi       8.8Gi        29Gi
 Swap:          7.5Gi          0B       7.5Gi
 --- free disk under /home/req/r9-witness-work ---
 Filesystem        Size  Used Avail Use% Mounted on
@@ -32,20 +32,18 @@ experimental-features = dynamic-derivations fetch-closure fetch-tree flakes nix-
 sandbox = true
 --- /dev/kvm ---
 DEV_KVM=writable
-crw-rw-rw- 1 root kvm 10, 232 Nov 23 10:23 /dev/kvm
+crw-rw-rw- 1 root kvm 10, 232 Nov 23 11:28 /dev/kvm
 
 ~~~
 
 ## out/summary.tsv
 
 ~~~
-kernel	1	32
-gate	1	272
-gate_neg	0	95
-probe	1	46
-flipback	1	48
-profiles	0	150
-cpuauth_ref	0	98
+kernel	0	31
+gate	0	392
+gate_neg	0	94
+probe	0	210
+flipback	0	208
 
 ~~~
 
@@ -53,7 +51,7 @@ cpuauth_ref	0	98
 
 ~~~
 # surviving qemu/Xvfb/drawterm processes owned by req
-# at 2026-11-23T16:29:51Z
+# at 2026-11-23T17:00:16Z
 none
 
 ~~~
@@ -61,7 +59,7 @@ none
 ## out/secret-scan.txt
 
 ~~~
-# credential scan of out/ at 2026-11-23T16:29:51Z
+# credential scan of out/ at 2026-11-23T17:00:16Z
 scanned out/ for the password value of harvey/build/x86_64/out/auth-creds.txt
 clean: no credential artifact and no DEMO password value in out/
 
@@ -263,66 +261,22 @@ CPUAUTH-REF auth exit=0
 ### out/flipback/flipback.log
 
 ~~~
-    |        ^^^^^
-
-warning: function `splx` is never used
-   --> x86_64/src/trap.rs:790:8
-    |
-790 | pub fn splx(x: IntrStatus) -> IntrStatus {
-    |        ^^^^
-
-warning: `x86_64` (bin "x86_64") generated 25 warnings (run `cargo fix --bin "x86_64" -p x86_64` to apply 2 suggestions)
-    Finished `dev` profile [optimized + debuginfo] target(s) in 14.37s
-mb2: header at file offset 0x1008 validated on the stripped ISO kernel (magic/arch/length/checksum/end tag)
-iso: module /home/req/r9-witness-work/r9-probe-flipback/target/images/x86_64/cpu.paq staged at /boot/bootfs.paq
-iso: kernel cmdline append "init=/amd64/init -c" (mb2 tag 1, the bootconf carrier)
-xorriso 1.5.8.pl02 : RockRidge filesystem manipulator, libburnia project.
-
-xorriso : NOTE : Environment variable SOURCE_DATE_EPOCH encountered with value 315532800
-Drive current: -outdev 'stdio:target/boot-q35cpu.iso'
-Media current: stdio file, overwriteable
-Media status : is blank
-Media summary: 0 sessions, 0 data blocks, 0 data,  365g free
-Added to ISO image: directory '/'='/tmp/nix-shell.DumawO/grub.OboYh9'
-xorriso : UPDATE :     356 files added in 1 seconds
-Added to ISO image: directory '/'='/home/req/r9-witness-work/r9-probe-flipback/target/iso-q35cpu'
-xorriso : UPDATE :     361 files added in 1 seconds
-xorriso : NOTE : Copying to System Area: 512 bytes from file '/nix/store/jniwmlg4zv2r4baccllbizddnh1scfjr-grub-2.14/lib/grub/i386-pc/boot_hybrid.img'
-ISO image produced: 19721 sectors
-Written to medium : 19721 sectors at LBA 0
-Writing to 'stdio:target/boot-q35cpu.iso' completed successfully.
-
-gate: iso /home/req/r9-witness-work/r9-probe-flipback/target/boot-q35cpu.iso 
-gate: leg rio (capture /home/req/r9-witness-work/r9-probe-flipback/target/gate/197244-1795451108/rio.log)
-can't read "spawn_id": no such variable
-    while executing
-"expect_before -i $spawn_id {
-	-re {panic|Unhandled interrupt} {
-		puts stderr "drawterm-gate: kernel panic marker on the wire — aborting"
-		cleanup
-..."
-    (file "/home/req/r9-witness-work/r9-probe-flipback/gates/x86_64/drawterm-gate.expect" line 336)
-GATE-FAIL rio-leg-failed (leg rio; capture /home/req/r9-witness-work/r9-probe-flipback/target/gate/197244-1795451108/rio.log)
-
-~~~
-
-### out/gate/gate.log
-
-~~~
-/srv/factotum
-process 69 exited: ""
-% process 71 exited: ""
-process 70 exited: ""
-devmnt: server error: './dev/label' file does not exist
-devmnt: server error: './dev/winname' file does not exist
-ls /srv
 /srv/boot
 /srv/factotum
-/srv/plumb.glenda.71
-/srv/rio.glenda.74
-/srv/riowctl.glenda.74
+process 77 exited: ""
+% ls /srv
+/srv/boot
+/srv/factotum
+process 78 exited: ""
+% ls /srv
+/srv/boot
+/srv/factotum
+process 79 exited: ""
+% ls /srv
+/srv/boot
+/srv/factotum
 process 80 exited: ""
-% GATE-PASS rio-serving
+% GATE-PASS control-no-rio
 drawterm-gate: stage ok — banner
 drawterm-gate: stage ok — bootconf
 drawterm-gate: stage ok — paqfs
@@ -336,19 +290,63 @@ drawterm-gate: stage ok — authsrv-listen
 drawterm-gate: stage ok — factotum-ok
 drawterm-gate: stage ok — listen-17010
 drawterm-gate: stage ok — ladder-done
-drawterm-gate: Xvfb ready (DISPLAY=:0.0, -nolisten tcp)
-drawterm-gate: spawned drawterm on a pty (mode rio, argv0 tag r9x64dtgate-dt-164734-1795450821, user glenda)
-drawterm-gate: feed ok — XTEST password entry into the drawterm window (48234497)
-drawterm-gate: stage ok — session window quiet (rio draws; no pty text expected)
+drawterm-gate: spawned drawterm on a pty (mode control-noG, argv0 tag r9x64dtgate-dt-320886-1795453021, user glenda)
+drawterm-gate: feed ok — dt-password
+drawterm-gate: stage ok — session-prompt (the remote interactive shell)
 drawterm-gate: stage ok — serial console rc prompt (init's handoff after cpurc: DONE)
 drawterm-gate: stage ok — rio budget elapsed (60 s)
-drawterm-gate: no pair after poll 1 — sent the documented manual start (plumber; rio)
-drawterm-gate: stage ok — serial /srv shows rio and riowctl (D-28 marker)
+drawterm-gate: stage ok — serial /srv shows neither rio nor riowctl (the negative control)
 drawterm-gate: post-pass ok — zero cpurc: FAIL in the capture
 drawterm-gate: post-pass ok — zero kernel panic markers (drawterm's own sysfatal exit pair excluded)
 drawterm-gate: post-pass ok — the per-bake DEMO password redacted from the retained capture (T-01-58)
-GATE-FAIL rio-leg-failed (leg rio; capture /home/req/code/r9/target/gate/164734-1795450821/rio.log)
-GATE-RUN 2 exit=nonzero
+drawterm-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, -G control session, serial /srv shows neither rio entry (GATE-PASS control-no-rio)
+GATE PASS quick x86_64 run=320886-1795453021
+
+~~~
+
+### out/gate/gate.log
+
+~~~
+/srv/factotum
+process 77 exited: ""
+% ls /srv
+/srv/boot
+/srv/factotum
+process 78 exited: ""
+% ls /srv
+/srv/boot
+/srv/factotum
+process 79 exited: ""
+% ls /srv
+/srv/boot
+/srv/factotum
+process 80 exited: ""
+% GATE-PASS control-no-rio
+drawterm-gate: stage ok — banner
+drawterm-gate: stage ok — bootconf
+drawterm-gate: stage ok — paqfs
+drawterm-gate: stage ok — version
+drawterm-gate: stage ok — hostfwd-17010-listening (127.0.0.1:17010 present in the host listening table)
+drawterm-gate: stage ok — hostfwd-5670-listening (127.0.0.1:5670 present in the host listening table)
+drawterm-gate: stage ok — pairing-ok
+drawterm-gate: stage ok — ether-ok
+drawterm-gate: stage ok — keyfs-ok
+drawterm-gate: stage ok — authsrv-listen
+drawterm-gate: stage ok — factotum-ok
+drawterm-gate: stage ok — listen-17010
+drawterm-gate: stage ok — ladder-done
+drawterm-gate: spawned drawterm on a pty (mode control-noG, argv0 tag r9x64dtgate-dt-288095-1795452509, user glenda)
+drawterm-gate: feed ok — dt-password
+drawterm-gate: stage ok — session-prompt (the remote interactive shell)
+drawterm-gate: stage ok — serial console rc prompt (init's handoff after cpurc: DONE)
+drawterm-gate: stage ok — rio budget elapsed (60 s)
+drawterm-gate: stage ok — serial /srv shows neither rio nor riowctl (the negative control)
+drawterm-gate: post-pass ok — zero cpurc: FAIL in the capture
+drawterm-gate: post-pass ok — zero kernel panic markers (drawterm's own sysfatal exit pair excluded)
+drawterm-gate: post-pass ok — the per-bake DEMO password redacted from the retained capture (T-01-58)
+drawterm-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, -G control session, serial /srv shows neither rio entry (GATE-PASS control-no-rio)
+GATE PASS quick x86_64 run=288095-1795452509
+GATE-RUN 2 exit=0
 
 ~~~
 
@@ -387,13 +385,13 @@ drawterm-gate: stage ok — authsrv-listen
 drawterm-gate: stage ok — factotum-ok
 drawterm-gate: stage ok — listen-17010
 drawterm-gate: stage ok — ladder-done
-drawterm-gate: spawned drawterm on a pty (mode force-no-rio, argv0 tag r9x64dtgate-dt-174412-1795450955, user glenda)
+drawterm-gate: spawned drawterm on a pty (mode force-no-rio, argv0 tag r9x64dtgate-dt-297874-1795452704, user glenda)
 drawterm-gate: feed ok — dt-password
 drawterm-gate: stage ok — session-prompt (the remote interactive shell)
 drawterm-gate: stage ok — serial console rc prompt (init's handoff after cpurc: DONE)
 drawterm-gate: stage ok — rio budget elapsed (60 s)
 drawterm-gate: GATE-FAIL rio-not-serving — no rio.<user>.<pid> + riowctl.<user>.<pid> pair in the serial /srv listing within the budget
-GATE-FAIL force-no-rio-leg-failed (leg force-no-rio; capture /home/req/code/r9/target/gate/174412-1795450955/force-no-rio.log)
+GATE-FAIL force-no-rio-leg-failed (leg force-no-rio; capture /home/req/code/r9/target/gate/297874-1795452704/force-no-rio.log)
 GATE-NEG-EXPECTED-FAIL
 
 ~~~
@@ -402,63 +400,63 @@ GATE-NEG-EXPECTED-FAIL
 
 ~~~
 this derivation will be built:
-  /nix/store/nyiky00zwfs8cbd9mv253n52y6bbj49j-r9-kernel-x64-9af05f8.drv
-building '/nix/store/nyiky00zwfs8cbd9mv253n52y6bbj49j-r9-kernel-x64-9af05f8.drv'...
-KERNEL-STORE /nix/store/imb1n1k67mpiv0v2cn0wr0vj8nw1pcc0-r9-kernel-x64-9af05f8
-4228a1bf1408a7f06d942fa847b6ca25d7bfbd5a400ce9190b602d3b365f32e1  /nix/store/imb1n1k67mpiv0v2cn0wr0vj8nw1pcc0-r9-kernel-x64-9af05f8/kernel-x64.elf
+  /nix/store/mcrnfr62cry07m8v25ncr7kvsizb7r0f-r9-kernel-x64-4139fdf.drv
+building '/nix/store/mcrnfr62cry07m8v25ncr7kvsizb7r0f-r9-kernel-x64-4139fdf.drv'...
+KERNEL-STORE /nix/store/y56rpqda7cpglr41yyr0h5qqrm20ra8y-r9-kernel-x64-4139fdf
+4228a1bf1408a7f06d942fa847b6ca25d7bfbd5a400ce9190b602d3b365f32e1  /nix/store/y56rpqda7cpglr41yyr0h5qqrm20ra8y-r9-kernel-x64-4139fdf/kernel-x64.elf
 this derivation will be built:
-  /nix/store/c09d6n0f2n5hlsmv65250i9mnjljpf5j-r9-boot-iso-9af05f8.drv
-building '/nix/store/c09d6n0f2n5hlsmv65250i9mnjljpf5j-r9-boot-iso-9af05f8.drv'...
-error: hash mismatch in fixed-output derivation '/nix/store/c09d6n0f2n5hlsmv65250i9mnjljpf5j-r9-boot-iso-9af05f8.drv':
-         specified: sha256-TIzwBaHF0R4m31l6EbW2IU3rkUl73g6ljlNE0S5hGFY=
-            got:    sha256-xFt7GUshPv+CQNry48fBOAiCsCIuqGZfeC0eX11/8mc=
-KERNEL-BOOTISO-BUILD-FAIL
+  /nix/store/85h9700j1419aj8phr517zrdkl4ks9vn-r9-boot-iso-4139fdf.drv
+building '/nix/store/85h9700j1419aj8phr517zrdkl4ks9vn-r9-boot-iso-4139fdf.drv'...
+KERNEL-BOOTISO-STORE /nix/store/bx1bbayxf2y99xysqcn7p1kxzjrkifwb-r9-boot-iso-4139fdf
+KERNEL-BOOTISO-BUILD-OK
+checking outputs of '/nix/store/85h9700j1419aj8phr517zrdkl4ks9vn-r9-boot-iso-4139fdf.drv'...
+KERNEL-BOOTISO-REBUILD-OK
 
 ~~~
 
 ### out/probe/probe.log
 
 ~~~
-    |        ^^^^^
-
-warning: function `splx` is never used
-   --> x86_64/src/trap.rs:790:8
-    |
-790 | pub fn splx(x: IntrStatus) -> IntrStatus {
-    |        ^^^^
-
-warning: `x86_64` (bin "x86_64") generated 25 warnings (run `cargo fix --bin "x86_64" -p x86_64` to apply 2 suggestions)
-    Finished `dev` profile [optimized + debuginfo] target(s) in 14.67s
-mb2: header at file offset 0x1008 validated on the stripped ISO kernel (magic/arch/length/checksum/end tag)
-iso: module /home/req/r9-witness-work/r9-probe-flip/target/images/x86_64/cpu.paq staged at /boot/bootfs.paq
-iso: kernel cmdline append "init=/amd64/init -c" (mb2 tag 1, the bootconf carrier)
-xorriso 1.5.8.pl02 : RockRidge filesystem manipulator, libburnia project.
-
-xorriso : NOTE : Environment variable SOURCE_DATE_EPOCH encountered with value 315532800
-Drive current: -outdev 'stdio:target/boot-q35cpu.iso'
-Media current: stdio file, overwriteable
-Media status : is blank
-Media summary: 0 sessions, 0 data blocks, 0 data,  365g free
-Added to ISO image: directory '/'='/tmp/nix-shell.jOXxCJ/grub.eD7Q9O'
-xorriso : UPDATE :     356 files added in 1 seconds
-Added to ISO image: directory '/'='/home/req/r9-witness-work/r9-probe-flip/target/iso-q35cpu'
-xorriso : UPDATE :     361 files added in 1 seconds
-xorriso : NOTE : Copying to System Area: 512 bytes from file '/nix/store/jniwmlg4zv2r4baccllbizddnh1scfjr-grub-2.14/lib/grub/i386-pc/boot_hybrid.img'
-ISO image produced: 19704 sectors
-Written to medium : 19704 sectors at LBA 0
-Writing to 'stdio:target/boot-q35cpu.iso' completed successfully.
-
-gate: iso /home/req/r9-witness-work/r9-probe-flip/target/boot-q35cpu.iso 
-gate: leg rio (capture /home/req/r9-witness-work/r9-probe-flip/target/gate/184084-1795451060/rio.log)
-can't read "spawn_id": no such variable
-    while executing
-"expect_before -i $spawn_id {
-	-re {panic|Unhandled interrupt} {
-		puts stderr "drawterm-gate: kernel panic marker on the wire — aborting"
-		cleanup
-..."
-    (file "/home/req/r9-witness-work/r9-probe-flip/gates/x86_64/drawterm-gate.expect" line 336)
-GATE-FAIL rio-leg-failed (leg rio; capture /home/req/r9-witness-work/r9-probe-flip/target/gate/184084-1795451060/rio.log)
+/srv/boot
+/srv/factotum
+process 77 exited: ""
+% ls /srv
+/srv/boot
+/srv/factotum
+process 78 exited: ""
+% ls /srv
+/srv/boot
+/srv/factotum
+process 79 exited: ""
+% ls /srv
+/srv/boot
+/srv/factotum
+process 80 exited: ""
+% GATE-PASS control-no-rio
+drawterm-gate: stage ok — banner
+drawterm-gate: stage ok — bootconf
+drawterm-gate: stage ok — paqfs
+drawterm-gate: stage ok — version
+drawterm-gate: stage ok — hostfwd-17010-listening (127.0.0.1:17010 present in the host listening table)
+drawterm-gate: stage ok — hostfwd-5670-listening (127.0.0.1:5670 present in the host listening table)
+drawterm-gate: stage ok — pairing-ok
+drawterm-gate: stage ok — ether-ok
+drawterm-gate: stage ok — keyfs-ok
+drawterm-gate: stage ok — authsrv-listen
+drawterm-gate: stage ok — factotum-ok
+drawterm-gate: stage ok — listen-17010
+drawterm-gate: stage ok — ladder-done
+drawterm-gate: spawned drawterm on a pty (mode control-noG, argv0 tag r9x64dtgate-dt-307565-1795452813, user glenda)
+drawterm-gate: feed ok — dt-password
+drawterm-gate: stage ok — session-prompt (the remote interactive shell)
+drawterm-gate: stage ok — serial console rc prompt (init's handoff after cpurc: DONE)
+drawterm-gate: stage ok — rio budget elapsed (60 s)
+drawterm-gate: stage ok — serial /srv shows neither rio nor riowctl (the negative control)
+drawterm-gate: post-pass ok — zero cpurc: FAIL in the capture
+drawterm-gate: post-pass ok — zero kernel panic markers (drawterm's own sysfatal exit pair excluded)
+drawterm-gate: post-pass ok — the per-bake DEMO password redacted from the retained capture (T-01-58)
+drawterm-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, -G control session, serial /srv shows neither rio entry (GATE-PASS control-no-rio)
+GATE PASS quick x86_64 run=307565-1795452813
 
 ~~~
 

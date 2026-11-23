@@ -60,9 +60,9 @@ warning: fields `src_mac`, `dst_mac`, and `frame_len` are never read
     = note: `Tcpv4Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
 
 warning: `xtask` (bin "xtask") generated 4 warnings
-    Finished `dev` profile [optimized + debuginfo] target(s) in 0.02s
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.09s
      Running `target/debug/xtask gate --arch x86-64 --accel kvm --force-no-rio`
-gate: venue accel=kvm cpu=host run=174412-1795450955
+gate: venue accel=kvm cpu=host run=297874-1795452704
 gate: tree /nix/store/arrvrysn8l6bagwv95nbzlng8s1y7wyf-harvey-tree-amd64-0 (store path — nix store verify after the run)
 authdomain-gen: generated /home/req/code/r9/target/images/x86_64/cpu.authdom: label=DEMO authdom=DEMO-harvey authid=bootes users=3
 authdomain-gen: DEMO material is throwaway — never reuse outside a gate image
@@ -70,24 +70,24 @@ authdomain-gen: no authdomain.local — generating ephemeral DEMO material
 image: authdomain generated a fresh p9sk1 domain for "cpu" at /home/req/code/r9/target/images/x86_64/cpu.authdom (authdom DEMO-harvey)
 image: authdomain pairing verified over the staged copies for "cpu"
 image: creds /home/req/code/r9/target/images/x86_64/cpu.creds (mode 0600)
-gate: image cpu /home/req/code/r9/target/images/x86_64/cpu.paq sha256 42aac0d053c0480c39444d32d2fda36acc022af7d799af8f9420a05a96359edc members 4442
+gate: image cpu /home/req/code/r9/target/images/x86_64/cpu.paq sha256 b00599a76142fd938f1f787cab4cbd217d7994d2a15fe98176b8d6ec6f42fed2 members 4442
    Compiling compiler_builtins v0.1.160 (/nix/store/ypvsp48ial67d5frhk4y86crjsy764mp-rust-default-1.95.0-nightly-2026-01-30/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins)
    Compiling core v0.0.0 (/nix/store/ypvsp48ial67d5frhk4y86crjsy764mp-rust-default-1.95.0-nightly-2026-01-30/lib/rustlib/src/rust/library/core)
    Compiling heapless v0.9.3
    Compiling smoltcp v0.14.0
-   Compiling x86 v0.52.0
    Compiling zerocopy v0.8.27
+   Compiling x86 v0.52.0
    Compiling alloc v0.0.0 (/nix/store/ypvsp48ial67d5frhk4y86crjsy764mp-rust-default-1.95.0-nightly-2026-01-30/lib/rustlib/src/rust/library/alloc)
    Compiling byteorder v1.5.0
    Compiling bitflags v1.3.2
    Compiling stable_deref_trait v1.2.1
    Compiling adler2 v2.0.1
-   Compiling managed v0.8.0
    Compiling cfg-if v1.0.5
+   Compiling managed v0.8.0
    Compiling bit_field v0.10.3
    Compiling bitflags v2.9.4
-   Compiling bitstruct v0.1.1
    Compiling static_assertions v1.1.0
+   Compiling bitstruct v0.1.1
    Compiling raw-cpuid v10.7.0
    Compiling miniz_oxide v0.9.1
    Compiling hash32 v0.3.1
@@ -290,7 +290,7 @@ warning: function `splx` is never used
     |        ^^^^
 
 warning: `x86_64` (bin "x86_64") generated 25 warnings (run `cargo fix --bin "x86_64" -p x86_64` to apply 2 suggestions)
-    Finished `dev` profile [optimized + debuginfo] target(s) in 14.00s
+    Finished `dev` profile [optimized + debuginfo] target(s) in 13.69s
 mb2: header at file offset 0x1008 validated on the stripped ISO kernel (magic/arch/length/checksum/end tag)
 iso: module /home/req/code/r9/target/images/x86_64/cpu.paq staged at /boot/bootfs.paq
 iso: kernel cmdline append "init=/amd64/init -c" (mb2 tag 1, the bootconf carrier)
@@ -301,7 +301,7 @@ Drive current: -outdev 'stdio:target/boot-q35cpu.iso'
 Media current: stdio file, overwriteable
 Media status : is blank
 Media summary: 0 sessions, 0 data blocks, 0 data,  365g free
-Added to ISO image: directory '/'='/tmp/nix-shell.7jwrRT/grub.uOMajn'
+Added to ISO image: directory '/'='/tmp/nix-shell.7hGx82/grub.s4ATZO'
 xorriso : UPDATE :     356 files added in 1 seconds
 Added to ISO image: directory '/'='/home/req/code/r9/target/iso-q35cpu'
 xorriso : UPDATE :     361 files added in 1 seconds
@@ -311,8 +311,8 @@ Written to medium : 19720 sectors at LBA 0
 Writing to 'stdio:target/boot-q35cpu.iso' completed successfully.
 
 gate: iso /home/req/code/r9/target/boot-q35cpu.iso 
-gate: leg force-no-rio (capture /home/req/code/r9/target/gate/174412-1795450955/force-no-rio.log)
-spawn qemu-system-x86_64 -M q35 -cpu host -smp 1 -m 1024M -accel kvm -cdrom /home/req/code/r9/target/boot-q35cpu.iso -netdev user,id=n0,hostfwd=tcp:127.0.0.1:17010-:17010,hostfwd=tcp:127.0.0.1:5670-:567 -device virtio-net-pci-non-transitional,netdev=n0 -nographic -name r9x64dtgate-174412-1795450955
+gate: leg force-no-rio (capture /home/req/code/r9/target/gate/297874-1795452704/force-no-rio.log)
+spawn qemu-system-x86_64 -M q35 -cpu host -smp 1 -m 1024M -accel kvm -cdrom /home/req/code/r9/target/boot-q35cpu.iso -netdev user,id=n0,hostfwd=tcp:127.0.0.1:17010-:17010,hostfwd=tcp:127.0.0.1:5670-:567 -device virtio-net-pci-non-transitional,netdev=n0 -nographic -name r9x64dtgate-297874-1795452704
 c[?7l[2J[0mSeaBIOS (version rel-1.17.0-0-gb52ca86e094d-prebuilt.qemu.org)
 
 
@@ -360,7 +360,7 @@ Memory usage:
 random: source=rdrand
 lapic: cpuid leaf-1 ecx: x2apic=true tsc-deadline=true
 lapic: x2apic live (msr 0x800 map; lint0/1 masked, no pic)
-timer: 2496148740 Hz (pit 1193182 Hz reference), TscDeadline mode, armed
+timer: 2496076100 Hz (pit 1193182 Hz reference), TscDeadline mode, armed
 ioapic: id 0 version 0x11 rtes 23 gsib 0 (madt 0xfec00000)
 pci: bar4 pa 0xfe000000 size 0x4000 (firmware) readback 0xfe000000
 pci: caps common@0x0+0x1000 notify@0x3000 isr@0x1000 device@0x2000 mult 4
@@ -375,8 +375,8 @@ devenv: bootconf init=/amd64/init -c
 q35: paqfs root mounted from module (22003949 bytes)
 devroot: /boot/boot open (159349 bytes)
 exec: entering ring 3 pc=0x2054fa sp=0x7fffffffef78 path=/boot/boot argv=[boot]
-paqfs...version...cpu.stage: Mon Nov 23 16:22:45 GMT 2026
-fingerprint: 76a040890d4c4e998db40168366b725345b8b436
+paqfs...version...cpu.stage: Mon Nov 23 16:51:54 GMT 2026
+fingerprint: c98dbde6109cffbc920f2be4af610ab22e8674cc
 process 2 exited: ""
 syscall 10 unimplemented (pid 1 boot)
 time...
@@ -436,8 +436,8 @@ process 45 exited: ""
 cpurc: LISTEN-17010
 process 46 exited: ""
 cpurc: DONE
-process 47 exited: spawn bash -c R9_RUN_ID=r9x64dtgate-dt-174412-1795450955 exec -a r9x64dtgate-dt-174412-1795450955 /nix/store/y8h5ana2drnzs2fdx6fxgr74bwmzi8y9-drawterm-19.06/bin/drawterm -G -s '' -O cpu=127.0.0.1,auth=tcp!127.0.0.1!5670,user=glenda
-""
+processpawn bash -c R9_RUN_ID=r9x64dtgate-dt-297874-1795452704 exec -a r9x64dtgate-dt-297874-1795452704 /nix/store/y8h5ana2drnzs2fdx6fxgr74bwmzi8y9-drawterm-19.06/bin/drawterm -G -s '' -O cpu=127.0.0.1,auth=tcp!127.0.0.1!5670,user=glenda
+s 47 exited: ""
 process 5 exited: ""
 process 4 exited: ""
 
@@ -531,11 +531,11 @@ drawterm-gate: stage ok — authsrv-listen
 drawterm-gate: stage ok — factotum-ok
 drawterm-gate: stage ok — listen-17010
 drawterm-gate: stage ok — ladder-done
-drawterm-gate: spawned drawterm on a pty (mode force-no-rio, argv0 tag r9x64dtgate-dt-174412-1795450955, user glenda)
+drawterm-gate: spawned drawterm on a pty (mode force-no-rio, argv0 tag r9x64dtgate-dt-297874-1795452704, user glenda)
 drawterm-gate: feed ok — dt-password
 drawterm-gate: stage ok — session-prompt (the remote interactive shell)
 drawterm-gate: stage ok — serial console rc prompt (init's handoff after cpurc: DONE)
 drawterm-gate: stage ok — rio budget elapsed (60 s)
 drawterm-gate: GATE-FAIL rio-not-serving — no rio.<user>.<pid> + riowctl.<user>.<pid> pair in the serial /srv listing within the budget
-GATE-FAIL force-no-rio-leg-failed (leg force-no-rio; capture /home/req/code/r9/target/gate/174412-1795450955/force-no-rio.log)
+GATE-FAIL force-no-rio-leg-failed (leg force-no-rio; capture /home/req/code/r9/target/gate/297874-1795452704/force-no-rio.log)
 GATE-NEG-EXPECTED-FAIL

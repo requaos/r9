@@ -1,7 +1,5 @@
-kernel	1	32
-gate	1	272
-gate_neg	0	95
-probe	1	46
-flipback	1	48
-profiles	0	150
-cpuauth_ref	0	98
+kernel	0	31
+gate	0	392
+gate_neg	0	94
+probe	0	210
+flipback	0	208
