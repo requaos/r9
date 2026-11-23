@@ -1,9 +1,11 @@
 ---
 phase: 01-stage-p0-cross-build-harness
-verified: 2026-11-23T03:06:43Z
-status: gaps_found
-score: 35/42 must-haves verified
+verified: 2026-11-23T22:11:38Z
+status: passed
+score: 7/7 must-haves verified
 covered_files:
+  - .github/workflows/gates.yml
+  - .github/workflows/xtask.yml
   - .planning/phases/01-stage-p0-cross-build-harness/01-01-PLAN.md
   - .planning/phases/01-stage-p0-cross-build-harness/01-01-SUMMARY.md
   - .planning/phases/01-stage-p0-cross-build-harness/01-02-PLAN.md
@@ -18,372 +20,389 @@ covered_files:
   - .planning/phases/01-stage-p0-cross-build-harness/01-06-SUMMARY.md
   - .planning/phases/01-stage-p0-cross-build-harness/01-07-PLAN.md
   - .planning/phases/01-stage-p0-cross-build-harness/01-07-SUMMARY.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-08-PLAN.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-08-SUMMARY.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-09-PLAN.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-09-SUMMARY.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-10-PLAN.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-10-SUMMARY.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-11-PLAN.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-11-SUMMARY.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-12-PLAN.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-12-SUMMARY.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-13-PLAN.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-13-SUMMARY.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-14-PLAN.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-14-SUMMARY.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-15-PLAN.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-15-SUMMARY.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-16-PLAN.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-16-SUMMARY.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-17-PLAN.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-17-SUMMARY.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-18-PLAN.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-18-SUMMARY.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-19-PLAN.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-19-SUMMARY.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-20-PLAN.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-20-SUMMARY.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-21-PLAN.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-21-SUMMARY.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-22-PLAN.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-22-SUMMARY.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-23-PLAN.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-23-SUMMARY.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-24-PLAN.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-24-SUMMARY.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-25-PLAN.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-25-SUMMARY.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-26-PLAN.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-26-SUMMARY.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-27-PLAN.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-27-SUMMARY.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-28-PLAN.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-28-SUMMARY.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-29-PLAN.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-29-SUMMARY.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-30-PLAN.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-30-SUMMARY.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-31-PLAN.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-31-SUMMARY.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-32-PLAN.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-32-SUMMARY.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-33-PLAN.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-33-SUMMARY.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-34-PLAN.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-34-SUMMARY.md
   - .planning/phases/01-stage-p0-cross-build-harness/01-CONTEXT.md
-  - .planning/phases/01-stage-p0-cross-build-harness/01-DISCUSSION-LOG.md
-  - .planning/phases/01-stage-p0-cross-build-harness/01-RESEARCH.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-REVIEW-DISPOSITION.md
+  - .planning/phases/01-stage-p0-cross-build-harness/01-REVIEW.md
   - .planning/phases/01-stage-p0-cross-build-harness/01-SECURITY.md
   - .planning/phases/01-stage-p0-cross-build-harness/01-UI-REVIEW.md
   - .planning/phases/01-stage-p0-cross-build-harness/01-VALIDATION.md
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/S1-FINDINGS.md
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/S2-FINDINGS.md
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/S3-FINDINGS.md
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/S4-FINDINGS.md
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/S5-FINDINGS.md
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/S6-FINDINGS.md
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/SPIKE-RESULTS.md
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/linux-witness/.gitignore
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/linux-witness/README.md
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/linux-witness/evidence/env.txt
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/linux-witness/evidence/summary.tsv
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/linux-witness/make-bundle.sh
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/linux-witness/run-all.sh
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/linux-witness/run-from-repo.sh
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s1/.gitignore
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s1/evidence/builder-setup.txt
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s1/evidence/rung1-builder.log
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s1/evidence/rung2-builder.log
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s1/evidence/witness-x86_64-linux.log
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s1/flake.lock
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s1/flake.nix
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s1/hostbin.nix
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s1/venue.nix
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s2/.gitignore
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s2/collisions.txt
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s2/evidence/casecheck-builder.log
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s2/evidence/lazy-devshell.log
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s2/flake.lock
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s2/flake.nix
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s3/.gitignore
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s3/determinism.sh
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s3/evidence/determinism-kvm-linux.txt
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s3/evidence/norio-control-kvm-linux.log
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s3/evidence/rio-kvm-linux.ATTRIBUTION-NOTE.md
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s3/evidence/rio-kvm-linux.log
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s3/evidence/static-analysis.md
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s3/flake.lock
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s3/flake.nix
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s3/rio-gate.expect
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s3/rio-gate.sh
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s4/.gitignore
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s4/evidence/tier-builder.log
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s4/flake.lock
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s4/flake.nix
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s4/hostbin.nix
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s4/tier.nix
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s4/venue.nix
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s5/.gitignore
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s5/9k10cpu.elf
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s5/boot-q35.sh
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s5/evidence/build-path-analysis.md
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s5/evidence/kernel-provenance.txt
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s5/evidence/pc-baseline-tcg-mac.log
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s5/evidence/q35-kvm-linux.log
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s5/evidence/q35-nonic-tcg-mac.log
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s5/evidence/q35-virtio-tcg-mac.log
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s6/.gitignore
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s6/aout.py
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s6/build-probe.sh
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s6/evidence/amd64-static.txt
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s6/evidence/arm64-hvf-control.log
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s6/evidence/arm64-hvf-flipback.log
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s6/evidence/arm64-hvf-probe.log
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s6/evidence/x86_64-kvm-linux.log
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s6/linux-x86_64.sh
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s6/probe-amd64.ld
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s6/probe-amd64.rs
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s6/probe-arm64.ld
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s6/probe-arm64.rs
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s6/q35shell-probe.expect
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s6/run-arm64-hvf.sh
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s6/target-analysis.md
-  - .planning/phases/01-stage-p0-cross-build-harness/spikes/s6/virt-probe.expect
-covered_digest: "v4:sha256:25667821eb44ffc16146f8d724856c13e79758021ec67cd3735766983c950207"
+  - .planning/phases/01-stage-p0-cross-build-harness/harvey-flip/HARVEY-FLIP.md
+  - .planning/phases/01-stage-p0-cross-build-harness/witness/README.md
+  - .planning/phases/01-stage-p0-cross-build-harness/witness/WITNESS-LOG.md
+  - .planning/phases/01-stage-p0-cross-build-harness/witness/equivalence.tsv
+  - .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-b3/flipback.log
+  - .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-b3/gate-neg.log
+  - .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-b3/gate.log
+  - .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-b3/probe.log
+  - .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-b3/summary.tsv
+  - .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/ci.txt
+  - .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/cpuauth-ref.log
+  - .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/env.txt
+  - .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/equiv/report.tsv
+  - .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/full.log
+  - .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/full.tsv
+  - .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/gate-neg.log
+  - .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/gate.log
+  - .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/harvey-q35.log
+  - .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/kernel.log
+  - .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/profiles.log
+  - .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/secret-scan.txt
+  - .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/soak.log
+  - .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/store-verify.log
+  - .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/stress.log
+  - .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/summary.tsv
+  - .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/trees.log
+  - .planning/phases/01-stage-p0-cross-build-harness/witness/run-witness.sh
+  - docs/harvey-supply.md
+  - flake.lock
+  - flake.nix
+  - gates/aarch64/cpu-r9.expect
+  - gates/aarch64/drive-r9.expect
+  - gates/aarch64/smoke-r9-net.expect
+  - gates/aarch64/smoke-r9.expect
+  - gates/aarch64/tier1-r9.expect
+  - gates/x86_64/churn-r9.expect
+  - gates/x86_64/cpu-bringup.expect
+  - gates/x86_64/drawterm-gate.expect
+  - gates/x86_64/netsoak-r9.expect
+  - gates/x86_64/services-r9.expect
+  - gates/x86_64/smoke-r9-auth.expect
+  - gates/x86_64/smoke-r9-net.expect
+  - gates/x86_64/smoke-r9.expect
+  - gates/x86_64/stress-r9.expect
+  - gates/x86_64/tier1-r9.expect
+  - nix/gates/boot-r9-x64.sh
+  - nix/gates/boot-r9.sh
+  - nix/gates/churn-r9-x64.sh
+  - nix/gates/cpu-r9.sh
+  - nix/gates/drawterm-gate-x64.sh
+  - nix/gates/drawterm-x64.sh
+  - nix/gates/host-echo.c
+  - nix/gates/net-doctor.sh
+  - nix/gates/services-r9-x64.sh
+  - nix/gates/smoke-r9-auth-x64.sh
+  - nix/gates/smoke-r9-net-x64.sh
+  - nix/gates/smoke-r9-net.sh
+  - nix/gates/smoke-r9-x64.sh
+  - nix/gates/smoke-r9.sh
+  - nix/gates/soak-r9-net-x64.sh
+  - nix/gates/stress-r9-net-x64.sh
+  - nix/gates/tier1-r9-x64.sh
+  - nix/gates/tier1-r9.sh
+  - nix/harvey/authdomain-gen.nix
+  - nix/harvey/build-env.nix
+  - nix/harvey/mkpaqfs.nix
+  - nix/harvey/reference.nix
+  - nix/harvey/tree-amd64.nix
+  - nix/harvey/tree-arm64.nix
+  - x86_64/lib/config_q35.toml
+  - x86_64/lib/config_q35auth.toml
+  - x86_64/lib/config_q35churn.toml
+  - x86_64/lib/config_q35churnshell.toml
+  - x86_64/lib/config_q35cpu.toml
+  - x86_64/lib/config_q35exec.toml
+  - x86_64/lib/config_q35lowmcfg.toml
+  - x86_64/lib/config_q35net.toml
+  - x86_64/lib/config_q35shell.toml
+  - x86_64/src/platform/q35/timer.rs
+  - x86_64/src/syscall.rs
+  - xtask/manifests/amd64/auth.toml
+  - xtask/manifests/amd64/chain.toml
+  - xtask/manifests/amd64/churn.toml
+  - xtask/manifests/amd64/cpu.toml
+  - xtask/manifests/amd64/fonts-bit.members
+  - xtask/manifests/amd64/libraries.toml
+  - xtask/manifests/amd64/marker.toml
+  - xtask/manifests/amd64/net.toml
+  - xtask/manifests/amd64/services.toml
+  - xtask/manifests/amd64/substrate.toml
+  - xtask/manifests/amd64/tier.toml
+  - xtask/manifests/arm64/bootfs.toml
+  - xtask/manifests/arm64/libraries.toml
+  - xtask/manifests/arm64/smoke.toml
+  - xtask/src/bin/r9-netdev-args.rs
+  - xtask/src/config.rs
+  - xtask/src/gate.rs
+  - xtask/src/harvey.rs
+  - xtask/src/image.rs
+  - xtask/src/lib.rs
+  - xtask/src/main.rs
+  - xtask/src/pcap.rs
+  - xtask/src/uregcheck.rs
+covered_digest: "v4:sha256:7cbd5c0778637899f477de9cd14183a4e341961fa3a6d0cbfced8ebcd8d2a8db"
 behavior_unverified: 0
 overrides_applied: 0
-gaps:
-  - truth: "One documented `cargo xtask` command boots r9 on QEMU q35 x86_64 to a rio session using only the r9 kernel and the pre-built Harvey tree, and exits non-zero when rio is not reached."
-    status: failed
-    reason: "Pass-2 scope (CONTEXT D-22, owner-approved). Pass 1 implements no HARN requirement. xtask has no rio/gate subcommand and no rio assertion; boot-test asserts banner/ticks/probe markers only. There is also no pre-built Harvey tree supplied by the flake."
-    artifacts:
-      - path: "xtask/src/main.rs"
-        issue: "Subcommands are build, expand, kasm, boot-test, qemu, check, test, clippy, initrd, ureg-check, etc. No rio or golden-gate command; no rio assertion anywhere in xtask/src."
-      - path: "flake.nix"
-        issue: "No Harvey input or tree derivation to boot from."
-    missing:
-      - "The `cargo xtask` quick gate that boots to rio and exits non-zero without it, with its negative control (SPIKE-RESULTS pass-2 HARN-01 row)."
-      - "Resolve the generated DEMO password/credential path and the headless drawterm auth/feed before the rio marker is trusted (SPIKE-RESULTS Decision 5)."
-  - truth: "Harvey is located through one resolver that honours the existing `R9_HARVEY_DIR` and the approved alternatives (`HARVEY_SRC`, `vendor/harvey/`), a missing tree fails with a message naming the variable, and after a full gate run the Harvey tree is byte-for-byte unmodified."
-    status: failed
-    reason: "Partial pre-existing implementation only. `uregcheck::harvey_dir()` reads R9_HARVEY_DIR, errors with the variable name, and the in-tree consumers route through it; but `HARVEY_SRC` and `vendor/harvey/` have zero references, and no gate run proves the tree unmodified."
-    artifacts:
-      - path: "xtask/src/uregcheck.rs"
-        issue: "Only R9_HARVEY_DIR is read; no HARVEY_SRC or vendor/harvey precedence."
-      - path: ".github/workflows/xtask.yml"
-        issue: "CI still checks Harvey out manually and sets R9_HARVEY_DIR."
-    missing:
-      - "Resolver precedence over R9_HARVEY_DIR / HARVEY_SRC / vendor/harvey, per-architecture variables, and the after-gate byte-for-byte unmodified proof."
-  - truth: "The xtask Harvey fallback manifest lists every C library object and userland binary in the image per architecture, and the harness fails when the image and the manifest disagree in either direction."
-    status: failed
-    reason: "No manifest exists in xtask and no drift detection exists. HARN-05 (the two-way drift requirement) is claimed by no pass-1 plan and is explicitly deferred by name in SPIKE-RESULTS."
-    artifacts:
-      - path: "xtask/src/"
-        issue: "No manifest type, no per-arch manifest data, no xtask/src/image.rs, no drift errors."
-    missing:
-      - "Per-architecture manifests of every image file plus the tier-0 library table with a Harvey/Rust source per entry."
-      - "Named drift errors in both directions and the Rust-provenance rule (HARN-05)."
-  - truth: "Flipping one manifest entry to a Rust replacement swaps that single artifact into the image, the gate still passes, and flipping it back restores the Harvey artifact."
-    status: failed
-    reason: "The mechanism was proven as a spike (S6: arm64 HVF and x86_64 KVM, control/probe/flip-back, sha-equal=yes) but no in-tree manifest, assembler or swap exists in r9, so nothing exercises it in the build."
-    artifacts:
-      - path: ".planning/phases/01-stage-p0-cross-build-harness/spikes/s6/"
-        issue: "Proof only; probe and swap live under the spikes directory and are deliberately not wired into r9."
-      - path: "xtask/src/"
-        issue: "No image assembler or manifest swap."
-    missing:
-      - "The in-tree swap probe, flip and flip-back in the gate, then its removal after the proof (D-18)."
-  - truth: "The existing x86_64 q35 boot-test profiles and the aarch64 virt quick pass still pass through the reconciled mechanism."
-    status: failed
-    reason: "The profiles exist, but there is no reconciled mechanism (single resolver plus manifest-assembled images) and no pass-1 run of them through it. Pass 1 did not change the existing mechanism, so this is unimplemented rather than regressed."
-    artifacts:
-      - path: "x86_64/lib/config_q35*.toml"
-        issue: "Profiles exist; images still come from Harvey's baked tree via R9_HARVEY_DIR."
-      - path: "aarch64/lib/config_virt*.toml"
-        issue: "Quick-pass profiles exist; not routed through a reconciled mechanism."
-    missing:
-      - "Route the existing x86_64 q35 profiles and the aarch64 virt quick pass through the resolver/assembler and record their results."
-  - truth: "Inside `nix develop`, with nothing set by hand, `cargo xtask` commands find the Harvey tree: the r9 flake pins Harvey and the devshell exports its read-only location, and that tree contains the pre-built artifacts the harness needs."
-    status: failed
-    reason: "r9's flake has no Harvey input, no built-tree derivation, and its devshell exports no R9_HARVEY_DIR* variable (zero `R9_HARVEY` matches in flake.nix)."
-    artifacts:
-      - path: "flake.nix"
-        issue: "Inputs are nixpkgs and rust-overlay only; devShell shellHook exports only OBJCOPY and banner text."
-    missing:
-      - "`inputs.harvey`, the harvey-tree-amd64/arm64 and mkpaqfs derivations, devshell exports of R9_HARVEY_DIR_AMD64/ARM64, CI on the flake supply, and the documented Mac builder."
-  - truth: "Flake ownership is flipped: r9's flake imports Harvey and exposes the composed boot and gate outputs that Harvey's flake used to own, Harvey's flake has no `r9` input, and each moved gate passes when run from r9."
-    status: failed
-    reason: "The pre-flip arrangement is unchanged. Harvey's flake still declares `inputs.r9` and owns the boot-r9*/drawterm-gate/net-doctor outputs; r9's flake has no Harvey import and no composed boot/gate outputs."
-    artifacts:
-      - path: "flake.nix"
-        issue: "No Harvey input and no boot-r9*/drawterm-gate apps."
-      - path: "../harvey/flake.nix"
-        issue: "Still has `inputs.r9.url = \"github:requaos/r9\"` and 43 boot-r9/gate references."
-    missing:
-      - "Composed apps in r9, copied and rewired gate scripts and expect drivers, relocated CI legs, the owner-approved Harvey commit, and the lock-only pin bump."
+re_verification:
+  previous_status: gaps_found
+  previous_score: 35/42
+  gaps_closed:
+    - "SC1/HARN-01: one documented cargo xtask command boots q35 x86_64 to rio and exits non-zero without it"
+    - "SC2/HARN-02: one resolver honours R9_HARVEY_DIR/HARVEY_SRC/vendor-harvey, names the variable on a missing tree, and leaves the tree unmodified"
+    - "SC3/HARN-03/HARN-05: per-architecture fallback manifests enumerate the image's C artifacts and two-way drift/provenance fails fast"
+    - "SC4/HARN-04: one manifest entry flips to Rust, the gate passes, and flip-back restores the Harvey artifact"
+    - "SC5/HARN-06: x86_64 q35 profiles and the aarch64 quick pass pass through the reconciled mechanism"
+    - "SC6/HARN-07: nix develop supplies read-only per-architecture trees with no manual setup; xtask has no built-in default"
+    - "SC7/HARN-08: flake ownership is flipped to r9, Harvey has no r9 input, and the moved gates pass from r9"
+  gaps_remaining: []
+  regressions: []
 ---
 
-# Phase 1: Stage P0 - Cross-Build Harness Verification Report
+# Phase 01: Stage P0 — Cross-Build Harness Verification Report
 
 **Phase Goal:** The owner can build and boot r9 to rio on QEMU q35 from the r9 repo with `cargo xtask`, drawing every C library object and userland binary from a pre-built, read-only Harvey tree, and can replace those C artifacts with Rust ones one at a time without ever breaking the boot.
-**Verified:** 2026-11-23T03:06:43Z
-**Status:** gaps_found
-**Re-verification:** No — initial verification
-
-## Deliverable classification (read this first)
-
-Phase 1 was deliberately planned in two passes (CONTEXT **D-22**, owner-approved; STATE.md decision log; `01-07-SUMMARY.md` line 211). The classification below keeps the two questions separate:
-
-| Question | Answer | Evidence |
-|---|---|---|
-| Are the **pass-1 spike deliverables** complete? | **YES** | 6/6 spikes ANSWERED; 25/25 legs have a PASS/FAIL verdict with committed evidence; 35/35 pass-1 plan truths verified. |
-| Is the **full phase goal** achieved? | **NO** | 0/7 ROADMAP success criteria; 0/8 HARN requirements implemented. No rio gate, no manifest, no resolver extensions, no flake flip. |
-
-**Pass-2 prerequisite (plainly):** the phase is not finished. The documented next action is **`/gsd-plan-phase 1`** to write planning pass 2 (STATE.md: "re-run /gsd-plan-phase 1 for pass 2"), **not** a gap-closure cycle. The structured `gaps:` above are the pass-2 scope, not defects in pass-1 execution. Pass 2 must implement HARN-01 through HARN-08; the owner's seven closing-checkpoint decisions (SPIKE-RESULTS "Owner decisions") are the inputs.
+**Verified:** 2026-11-23T22:11:38Z
+**Status:** passed
+**Re-verification:** Yes — this report supersedes the stale pass-1 report (`gaps_found`, 35/42, 2026-11-23T03:06:43Z). Pass 1 executed only the seven spike plans and implemented no HARN requirement by design (D-22); the subject here is the completed 34-plan phase. Pass 1's seven gaps are the seven ROADMAP truths, all closed by pass 2. The old verdict is not carried forward.
 
 ## Goal Achievement
 
 ### Observable Truths
 
-#### A. ROADMAP contract (the full phase goal)
-
 | # | Truth | Status | Evidence |
 |---|-------|--------|----------|
-| R1 | One documented `cargo xtask` command boots r9 on QEMU q35 x86_64 to a rio session and exits non-zero when rio is not reached | ✗ FAILED | `xtask` subcommands contain no rio/gate command; zero rio assertions in `xtask/src`. Only the S3 spike gate exercises a rio marker, and its positive leg is FAIL. |
-| R2 | One resolver honours `R9_HARVEY_DIR`, `HARVEY_SRC`, `vendor/harvey/`; a missing tree names the variable; a full gate leaves the Harvey tree unmodified | ✗ FAILED | `xtask/src/uregcheck.rs:76-84` reads only `R9_HARVEY_DIR`; `HARVEY_SRC` and `vendor/harvey` have zero references in the repo. The named-error half exists; the alternatives and the after-gate proof do not. |
-| R3 | The xtask fallback manifest lists every C library object and userland binary per architecture, and the harness fails on two-way image/manifest drift | ✗ FAILED | No manifest symbols or files in `xtask/`; `xtask/src/image.rs` does not exist. HARN-05 has no plan claiming it. |
-| R4 | Flipping one manifest entry swaps that single Rust artifact into the image, the gate passes, and flipping back restores the Harvey artifact | ✗ FAILED | Proven only as an S6 spike (control/probe/flip-back, sha-equal=yes); no in-tree manifest/assembler/swap. |
-| R5 | The existing x86_64 q35 boot-test profiles and the aarch64 virt quick pass still pass through the reconciled mechanism | ✗ FAILED | Profiles exist (`x86_64/lib/config_q35*.toml`, `aarch64/lib/config_virt*.toml`), but no reconciled mechanism exists and no pass-1 run is recorded through it. |
-| R6 | Inside `nix develop`, with nothing set by hand, `cargo xtask` finds the Harvey tree; the flake pins Harvey and exports the read-only tree | ✗ FAILED | `flake.nix` has no Harvey input and no `R9_HARVEY*` export; grep count in `flake.nix` = 0. |
-| R7 | Flake ownership is flipped: r9 imports Harvey and owns the composed gates; Harvey has no `r9` input; each moved gate passes from r9 | ✗ FAILED | `flake.nix` has no Harvey import; `../harvey/flake.nix` still has `inputs.r9` and owns boot-r9*/drawterm-gate/net-doctor. |
+| 1 | **SC1 / HARN-01** — One documented `cargo xtask` command boots r9 on QEMU q35 x86_64 to a rio session using only the r9 kernel and the pre-built Harvey tree, and exits non-zero when rio is not reached. | ✓ VERIFIED | `xtask/src/gate.rs::run_quick` assembles `image:cpu` through the checked engine, builds `q35cpu`, boots the ISO, and runs `rio` + `control-noG`; the CLI `gate` subcommand documents "exits 0 only then". `witness/evidence/stop-e/gate.log` at `af46615`: two runs, `GATE-RUN 1 exit=0`, `GATE-RUN 2 exit=0`, `GATE-PASS rio-serving` + `GATE-PASS control-no-rio`. `gate-neg.log`: `GATE-FAIL rio-not-serving` → `GATE-NEG-EXPECTED-FAIL`. The driver asserts the D-28 pair `/srv/rio.<user>.<pid>` + `/srv/riowctl.<user>.<pid>` (`gates/x86_64/drawterm-gate.expect:656-702`). Owner-witnessed on KVM; the Mac correctly refuses with `GATE-VENUE not-linux` (exit 1, re-run live). |
+| 2 | **SC2 / HARN-02** — Harvey is located through one resolver honouring `R9_HARVEY_DIR`, `HARVEY_SRC` and `vendor/harvey/`; a missing tree fails naming the variable; after a full gate run the tree is byte-for-byte unmodified. | ✓ VERIFIED | `xtask/src/harvey.rs::resolve` implements precedence override > per-arch > alias, empty-is-unset, relative-against-workspace, no built-in default, and a named error listing every variable. The in-source invariant test `no_other_source_reads_a_harvey_tree_variable` (include_str! over every sibling) passes; all listed consumers (`ureg-check`, boot-test precondition, `harvey:` initrd/module, pcap netaddr) call `harvey::harvey_dir`. `stop-e/store-verify.log` and `trees.log`: both trees `STORE-VERIFY-OK` / `TREES-VERIFY-OK` after the eleven-step run; `gate.rs` repeats `nix store verify` (store tree) or a content digest (override) after the legs. Recorded warnings WR-01/WR-03/WR-09 below. |
+| 3 | **SC3 / HARN-03 + HARN-05** — The xtask fallback manifest lists every C library object and userland binary in the image per architecture, and the harness fails when the image and manifest disagree in either direction. | ✓ VERIFIED | `xtask/manifests/amd64/` (9 image manifests + `libraries.toml` + `fonts-bit.members`) and `arm64/` (`bootfs`, `smoke`, `libraries`). Live checks: `image --arch x86-64 --libraries` → tier-0 OK; `--arch aarch64 --libraries` → tier-0 OK; `--image marker --compare-reference` → 30 members match; `--image bootfs --compare-reference` → 151 members match. `stop-e/cpuauth-ref.log`: cpu 4442 / auth 95 match the reference. `image.rs` raises `IMAGE-DRIFT unlisted`, `IMAGE-DRIFT missing`, `IMAGE-DRIFT changed` and `IMAGE-PROVENANCE`; targeted tests for unlisted, missing and both provenance refusals pass. |
+| 4 | **SC4 / HARN-04** — Flipping one manifest entry to a Rust replacement swaps that single artifact into the image, the gate still passes, and flipping it back restores the Harvey artifact. | ✓ VERIFIED | Owner-witnessed swap: `PROBE-FLIP-SHA 064747f42c7f3eff6cd677a8820e6b4b1fff95e3`, `PROBE-FLIPBACK-SHA af7df344b9c3702100d4408e85044a722e861a67`. `stop-b3/probe.log`: the gate passes with `--serial-check /bin/ps=R9-RUST-AOUT-PROBE-OK` and the marker appears; `flipback.log`: the plain gate passes. Member-list proof (`01-20-SUMMARY.md`, stop-B3 rows both exit 0): the flip differs at exactly `amd64/bin/ps`; the flip-back `cmp`s identical (`FLIPBACK-IDENTICAL`, both `815b7910…`). `grep -rc 'source = "rust"' xtask/manifests` = 0: the throwaway probe and its sources are gone. |
+| 5 | **SC5 / HARN-06** — The existing x86_64 q35 boot-test profiles and the aarch64 virt quick pass still pass through the reconciled mechanism. | ✓ VERIFIED | `stop-e/profiles.log`: all nine x86_64 profiles exit 0 (`q35`, `q35lowmcfg`, `q35net`, `q35exec`, `q35churn`, `q35shell`, `q35churnshell`, `q35cpu`, `q35auth`). `stop-e/full.tsv`: 8/8 moved x86_64 apps PASS. aarch64: 01-30's Mac log records `AARCH64-QUICK-PASS` (tier-1 HVF + TCG, smoke, net-smoke, cpu); the validation re-run of 2026-11-23 records all five gates PASS live; the aarch64 devshell kernel still hashes `76e6e153…`, the 01-08 baseline. Residual W-5 below. |
+| 6 | **SC6 / HARN-07** — Inside `nix develop`, with nothing set by hand, `cargo xtask` finds the Harvey tree: the flake pins Harvey and the devshell exports its read-only location containing the pre-built artifacts. | ✓ VERIFIED | Live devshell probe: `R9_HARVEY_DIR_ARM64` and `R9_HARVEY_DIR_AMD64` resolve to store trees; `R9_HARVEY_DIR` is deliberately unset; `R9_MKPAQFS` is exported; `R9_HARVEY_TREE_SYSTEM=aarch64-linux`. The amd64 tree with `HARVEY-TREE` `rev=c697666…`, `arch=amd64`, is read-only (`touch` → Permission denied) and holds `amd64/`, `build/`, `lib/`, fixtures. `flake.lock`: Harvey `c697666…`, inputs `{nixpkgs}`, no `r9` node, zero `116bcc2`. `xtask` has no built-in default (resolver test + source invariant). CI's `boot-test-x86-64` builds both trees with `nix build` and runs inside `nix develop` (`.github/workflows/xtask.yml:140-145`). |
+| 7 | **SC7 / HARN-08** — Flake ownership is flipped: r9's flake imports Harvey and exposes the composed boot and gate outputs Harvey's flake used to own, Harvey's flake has no `r9` input, and each moved gate passes when run from r9. | ✓ VERIFIED | `nix eval .#apps.x86_64-linux` returns 20 apps, including all `boot-r9*`, `drawterm-gate-x64`, `net-doctor`, `drawterm` (live check). `inputs.harvey` is a normal flake input, pinned to `c697666`. The local Harvey checkout at `c697666` has only `inputs.nixpkgs`, no `r9` input, no `boot-r9*`/gate output. Stop E at `af46615`: full 8/8, soak and stress on the owner's tap venue, equivalence 10/10, both trees verify; `HARVEY-FLIP.md` records the approved, applied, pushed commit. No lock cycle. |
 
-#### B. Pass-1 plan must-haves (D-22 scope)
-
-| # | Truth (plan) | Status | Evidence |
-|---|--------------|--------|----------|
-| 01-01.1 | Owner chose the builder venue before any machine change; recorded on `BUILDER-VENUE`, and it does not settle D-04 | ✓ VERIFIED | `spikes/S1-FINDINGS.md:10` `BUILDER-VENUE: lima (owner, 2026-11-22)`; `s1/evidence/builder-setup.txt` shows pre-bring-up read-only state (FlakeHub logged-out); D-04 is settled only in SPIKE-RESULTS Decision 1. |
-| 01-01.2 | S1 rung 1 has a PASS/FAIL verdict on each chosen builder with the SANDBOX-EVIDENCE block | ✓ VERIFIED | `S1-FINDINGS.md:19` FAIL, `:42` PASS (proot); `:58-62` SANDBOX-EVIDENCE block. |
-| 01-01.3 | S1 rung 2 (host toolchain + amd64 libc, no sudo) has a verdict with artifact facts or failing lines | ✓ VERIFIED | `S1-FINDINGS.md:93` PASS; 601170-byte libc, 259 members, 2 s on lima and 4 s on the witness; `nix store verify` clean. |
-| 01-01.4 | The S1 flake evaluates for x86_64-linux and aarch64-linux | ✓ VERIFIED | `s1/flake.nix:22-23` lists both systems and exposes the probe packages; the witness built the same derivations. |
-| 01-01.5 | S1-FINDINGS says what each verdict means for the pass-2 tree derivation (D-03) and names any fallback rung | ✓ VERIFIED | `S1-FINDINGS.md:204-229` "What this means for planning pass 2"; proot fallback named and measured. |
-| 01-02.1 | S2 answers both source modes for the 23 case-colliding Harvey paths | ✓ VERIFIED | `S2-FINDINGS.md:21` PASS (Mac-fetched input), `:36` PASS (builder-side FOD); `s2/collisions.txt` is 23 lines, and an independent `git ls-tree` recomputation matched it exactly. |
-| 01-02.2 | S2 answers Mac store copy-back (accept, verify, re-check contents) | ✓ VERIFIED | `S2-FINDINGS.md:49` FAIL (`nix copy --from` system-store signature policy), `:68` PASS (same-volume chroot store, 23/23 blobs); decisive evidence in `casecheck-builder.log`. |
-| 01-02.3 | A9 answers whether a devshell can export a Linux `outPath` lazily and whether it matches the later build path | ✓ VERIFIED | `s2/evidence/lazy-devshell.log`: path invalid before and after the shell, printed path == evaluated path == built path. |
-| 01-02.4 | S4 answers tier 0 (27 libs) and tier 1 (40 commands) on aarch64-linux with counts, wall time and S_MAGIC | ✓ VERIFIED | `S4-FINDINGS.md:23,34` PASS; `s4/evidence/tier-builder.log:82-83` 27/27 and 40/40, 6 s and 19 s; tier files at the pin contain exactly 27 and 40 non-comment entries. |
-| 01-02.5 | S2/S4 findings carry verdicts with evidence and D-04/D-05/pass-2 implications | ✓ VERIFIED | Both findings files have VERDICT/EVIDENCE lines and "What this means for planning pass 2" sections. |
-| 01-03.1 | Harvey's own `9k10cpu.elf` boots under q35 TCG with virtio-net and with no NIC, with prompt or failure point | ✓ VERIFIED | `S5-FINDINGS.md:32,35` PASS; both logs end `S5-RESULT ... prompt=yes sigs=none` at `root is from (tcp)[tcp]:`. |
-| 01-03.2 | A `-M pc` baseline shows whether the Mac reproduces the recorded earlier TCG result | ✓ VERIFIED | `S5-FINDINGS.md:38` PASS; `pc-baseline-tcg-mac.log:16` prompt=yes, and the findings state the behaviour (not artifact) reproduction. |
-| 01-03.3 | `boot-q35.sh` runs the same classification on Mac (TCG) and Linux (KVM) and refuses to downgrade KVM silently | ✓ VERIFIED | `boot-q35.sh:58-60` exits `kvm-unavailable` rather than fall back; `q35-kvm-linux.log:19` PASS. |
-| 01-03.4 | `build-path-analysis.md` answers how Harvey builds 9k10cpu without r9, sudo/namespace needs, prompt needs, and D-20 options | ✓ VERIFIED | `s5/evidence/build-path-analysis.md` sections 1-5, 256 lines, file:line citations and Option A/B. |
-| 01-03.5 | S5-FINDINGS has PASS/FAIL for every Mac leg, a PENDING-OWNER verdict for KVM, and D-08/D-20 implications | ✓ VERIFIED | Three Mac PASS verdicts; the KVM leg was PENDING-OWNER at Plan 03 and is now PASS (designed Plan 06 progression); implications at `S5-FINDINGS.md:127`. |
-| 01-04.1 | A no_std amd64 a.out passes every parse_aout rule, with disassembly showing PWRITE(51) and EXITS(8) | ✓ VERIFIED | `s6/evidence/amd64-static.txt`: AOUT-OK, magic 0x8a97, text 96, entry 0x200028, `mov ebp,0x33`/`0x8` + syscall sequences, marker bytes present. |
-| 01-04.2 | The arm64 technique works end to end: probe replaces `echo`, r9 boots under HVF, `/bin/echo` prints the marker, flip-back restores bytes | ✓ VERIFIED | `S6-FINDINGS.md:42` PASS; control `R9-ECHO-CONTROL`, probe `R9-RUST-AOUT-PROBE-OK`, flip-back control marker; image sha 746f1dfe… equal on control/flip-back. |
-| 01-04.3 | `target-analysis.md` records boot/gate invocation of ls, cat, echo, ps, rm, test and recommends the D-17 target | ✓ VERIFIED | `s6/target-analysis.md` (251 lines) evaluates six candidates and recommends `ps`; echo disqualified with a source citation. |
-| 01-04.4 | The x86_64 KVM leg is scripted and statically checked, PENDING-OWNER for Plan 06 | ✓ VERIFIED | `s6/linux-x86_64.sh` exists; `bash -n`, shellcheck and Tcl checks recorded; the leg is now PASS on the witness (`S6-FINDINGS.md:99`), superseding PENDING-OWNER as designed. |
-| 01-04.5 | S6-FINDINGS has PASS/FAIL for both Mac legs and D-17/D-18 implications | ✓ VERIFIED | Two Mac PASS verdicts plus x86_64 PASS; implications at `S6-FINDINGS.md:161-196`. |
-| 01-05.1 | A runnable rewired drawterm gate drives non `-G` drawterm under Xvfb and asserts both rio srv entries with named failures | ✓ VERIFIED | `s3/rio-gate.sh` (323 lines) and `rio-gate.expect` (412 lines); `S3-FAIL rio-not-serving`, `drawterm-exited`, `no-session`, `control-saw-rio` present; serial `ls /srv` parser at `rio-gate.expect:321-358`. |
-| 01-05.2 | A `control-noG` mode must see no rio srv entry, proving the assertion discriminates | ✓ VERIFIED | `S3_MODE=control-noG` at `rio-gate.sh:110-112`, `S3-CONTROL-NO-RIO` at expect; the witness control PASSed with only `/srv/boot` and `/srv/factotum`. |
-| 01-05.3 | The scratch S3 flake evaluates on the Mac for x86_64-linux over Harvey bd7a698's locked r9 pin and drawterm package | ✓ VERIFIED | `s3/flake.nix` pins bd7a698, follows Harvey nixpkgs, resolves r9 packages at run time; `01-05-SUMMARY.md:78` records `nix eval --raw ...#apps.x86_64-linux.s3-rio-gate.program` returning a store path. |
-| 01-05.4 | `determinism.sh` can show per-image whether two bakes with pinned KERNDATE are byte-identical | ✓ VERIFIED | `s3/determinism.sh` (194 lines) bakes twice, hashes all nine images, records IDENTICAL/DIFFERENT, auth/cpu member-list split; witness run recorded the bake-2 FAIL with the decisive `hsecstored` error. |
-| 01-05.5 | Static A5/A6 answers have PASS/FAIL verdicts, and the three KVM legs are PENDING-OWNER | ✓ VERIFIED | `S3-FINDINGS.md:19,33` static PASS; the three KVM legs were PENDING-OWNER and are now FAIL/PASS/FAIL (designed Plan 06 progression). |
-| 01-06.1 | One self-contained checksummed bundle runs every Linux-only leg in one session with no sudo/root and no access to the owner's checkouts | ✓ VERIFIED | `linux-witness/make-bundle.sh` + `run-from-repo.sh` + `run-all.sh`; root refusal, no sudo calls (grep), `MANIFEST.sha256` verification; `summary.tsv` records all four steps. |
-| 01-06.2 | The owner has an exact copy-pasteable command sequence and an explicit list of outputs behind a blocking human checkpoint | ✓ VERIFIED | `linux-witness/README.md:40-84` command sequence, `:191-245` return paths and what not to send; `01-06-PLAN.md:169` is a `checkpoint:human-action` with `gate="blocking-human"`. |
-| 01-06.3 | Every PENDING-OWNER verdict is replaced by PASS/FAIL with committed evidence, and no credential appears | ✓ VERIFIED | 25/25 verdicts in SPIKE-RESULTS; redacted evidence; credential scan of committed logs found zero password values; `rio-kvm-linux.ATTRIBUTION-NOTE.md` corrects the tr-ok attribution. |
-| 01-06.4 | A step the owner did not run is never given a verdict | ✓ VERIFIED | `summary.tsv` has one row per executed step (s1/s5/s3/s6); `01-06-PLAN.md:213` requires a targeted rerun rather than a verdict for a missing step; no step is missing. |
-| 01-07.1 | Every spike has a PASS/FAIL verdict with committed evidence, and no leg is left PENDING-OWNER | ✓ VERIFIED | 25/25 matrix rows; all six findings files have verdicts; one stale prose mention remains in `s3/evidence/static-analysis.md:52` (warning below), but it is not a verdict line. |
-| 01-07.2 | SPIKE-RESULTS shows verdicts by venue, A1-A16 status, and decisions with options and evidence-based recommendations | ✓ VERIFIED | Verdict matrix (25 rows), 16 ASSUMPTION lines, seven decisions each with Evidence/Options/Recommendation. |
-| 01-07.3 | The owner chose D-04 and confirmed or overrode every recommendation, recorded for pass 2 | ✓ VERIFIED | SPIKE-RESULTS "Owner decisions (closing checkpoint)" quotes the reply verbatim and records DECISION 1-7 plus `PASS-2 READY: yes`. |
-| 01-07.4 | Every machine change is listed with its revert command, and any requested revert is done | ✓ VERIFIED | Six-row machine-change ledger with revert commands; "No revert requested"; the lima VM/guest config remain deliberately. |
-| 01-07.5 | Pass-1 prohibitions held: Harvey untouched, r9 protected paths unchanged, nothing pushed | ✓ VERIFIED (warning) | `HARVEY-UNTOUCHED` reproduced now (HEAD 25d97dc4d, status sha 041d2929…); protected-path diff and status vs the phase baseline are both 0 lines. One documented owner-approved push by Plan 06 (c92a3f4) is the exception to the blanket no-push wording; Plan 07 pushed nothing. |
-| 01-07.6 | Every unimplemented requirement ID and CONTEXT decision is listed in the deferred-to-pass-2 section | ✓ VERIFIED | All eight HARN IDs and D-01 through D-23 are listed; HARN-05 explicitly says "no spike bears on it". |
-
-**Score:** 35/42 truths verified (0 present-but-behavior-unverified; 7 failed = the ROADMAP contract).
+**Score:** 7/7 truths verified (0 present, behavior-unverified; 0 overrides)
 
 ### Deferred Items
 
-None. The seven failed truths are **not** deferred to a later milestone phase: Phase 2 and later depend on the harness but their roadmaps do not implement it. They are deferred to **planning pass 2 of this phase** (D-22), which is why they remain `gaps_found` rather than being filtered out here.
+None. Every ROADMAP truth and all eight HARN requirement IDs are in scope and verified. Step 9b found no gap to defer.
 
 ### Advisory (New Scope, Unevidenced)
 
-Not applicable — this is an initial verification, not a re-verification.
+None. No new-scope Step-7 finding was raised; the open items below are the owner's recorded review warnings and the validation ledger's residual risks, not verifier-invented blockers.
 
-### Required Artifacts
+## Required Artifacts
 
-All 23 artifacts declared in the pass-1 PLAN frontmatter exist, are substantive, and are wired to the findings/evidence they claim.
+| Artifact | Expected | Status | Details |
+|----------|----------|--------|---------|
+| `xtask/src/harvey.rs` (541 lines) | the one per-arch resolver, precedence, named error, realise-on-first-use | ✓ VERIFIED | Real implementation + 14 unit tests; source-invariant include_str! test passes live. |
+| `xtask/src/image.rs` (3,582 lines) | manifest schema, staging, two-way drift, provenance, generators, reference compare, library table | ✓ VERIFIED | `IMAGE-DRIFT`/`IMAGE-PROVENANCE` paths present; 46 tests; live marker/bootfs compare match; no compile-by-assembler path. |
+| `xtask/src/gate.rs` (971 lines) | quick gate (rio + control + negative), full tier, venue/accel discipline, tree verify | ✓ VERIFIED | `run_quick`/`run_full`; `GATE-VENUE` refusals; `FULL_APPS_*` + output-dir map; 10 tests. |
+| `xtask/manifests/amd64/*` | 9 image manifests, 28-row library table, font member list | ✓ VERIFIED | `--libraries` and reference compares pass; only `authdomain`/`ndb-template` generators, no compiled binary. |
+| `xtask/manifests/arm64/*` | bootfs/smoke manifests and 36-row library table | ✓ VERIFIED | bootfs 151 members match reference; libraries tier-0 OK. |
+| `flake.nix` (1,481 lines) | Harvey input, tree/reference derivations, devshell exports, 20 apps | ✓ VERIFIED | Live eval returns 20 apps; devshell exports verified. |
+| `flake.lock` | Harvey `c697666`, no nested `r9`, no `116bcc2` | ✓ VERIFIED | `harvey.locked.rev=c697666…`; `harvey.inputs={nixpkgs}`; `grep -c 116bcc2` = 0. |
+| `nix/harvey/{tree-amd64,tree-arm64,reference,build-env,authdomain-gen,mkpaqfs}.nix` | build the read-only trees and independent reference bakes | ✓ VERIFIED | Trees exist in the store with `HARVEY-TREE` stamps; reference member lists exist; trees are read-only. |
+| `nix/gates/*.sh` + `gates/{x86_64,aarch64}/*.expect` | moved gate scripts/drivers with the Harvey assertions | ✓ VERIFIED | 17 shell scripts + the `host-echo.c` helper, 15 expect drivers; full 8/8 and aarch64 pass; drawterm pair unchanged. |
+| `.github/workflows/{xtask,gates}.yml` | CI on the flake supply; relocated legs; TCG quick gate best effort | ✓ VERIFIED | `boot-test-x86-64` builds trees + `nix develop`; 6 relocated legs; actions pinned by sha. |
+| `witness/evidence/stop-e/*` | owner KVM evidence for 11 steps | ✓ VERIFIED | summary.tsv 11 rows exit 0; gate/gate-neg/profiles/full/equiv/kernel/trees/store-verify inspected. |
+| `witness/evidence/stop-b3/*` | swap proof | ✓ VERIFIED | probe/flipback/gate/gate-neg logs + summary all exit 0. |
+| `harvey-flip/HARVEY-FLIP.md` | approved/applied/pushed flip record | ✓ VERIFIED | `HARVEY-COMMIT`/`APPROVED`/`PUSHED` lines; 36 paths, +285/−9972, no font path. |
 
-| Plan | Artifact | Status | Details |
-|------|----------|--------|---------|
-| 01-01 | `spikes/S1-FINDINGS.md` | ✓ VERIFIED | 229 lines; BUILDER-VENUE, 6 verdicts, evidence lines, assumptions, pass-2 implications. |
-| 01-01 | `spikes/s1/flake.nix` | ✓ VERIFIED | Pins bd7a698; both Linux systems; imports venue/hostbin. |
-| 01-01 | `spikes/s1/venue.nix` | ✓ VERIFIED | 237 lines; unshare and proot venues; SANDBOX-EVIDENCE and `/usr/bin/env` guard. |
-| 01-01 | `spikes/s1/hostbin.nix` | ✓ VERIFIED | 120 lines; plan9port bootstrap with the four sandbox adjustments. |
-| 01-02 | `spikes/S2-FINDINGS.md` | ✓ VERIFIED | 203 lines; four verdicts + A9; D-04/D-05 implications. |
-| 01-02 | `spikes/S4-FINDINGS.md` | ✓ VERIFIED | 154 lines; tier 0/1 counts, timings, S_MAGIC, venue ports. |
-| 01-02 | `spikes/s2/collisions.txt` | ✓ VERIFIED | Exactly 23 `<blob> <path>` lines; independently recomputed from Harvey at bd7a698 and matched. |
-| 01-02 | `spikes/s4/tier.nix` | ✓ VERIFIED | 185 lines; per-entry build loops; references `tier1-cmds.txt`. |
-| 01-03 | `spikes/s5/boot-q35.sh` | ✓ VERIFIED | 219 lines; capture-before-start, classification, KVM refusal, kill/reap trap. |
-| 01-03 | `spikes/S5-FINDINGS.md` | ✓ VERIFIED | 153 lines; three Mac PASS + KVM PASS; A11; D-08/D-20 implications. |
-| 01-03 | `spikes/s5/evidence/build-path-analysis.md` | ✓ VERIFIED | 256 lines; build chain, sudo/namespace needs, prompt analysis, D-20 options. |
-| 01-04 | `spikes/s6/aout.py` | ✓ VERIFIED | 137 lines; wrap/check; `0x8A97` and `0x8C47`; parse_aout rules. |
-| 01-04 | `spikes/s6/probe-amd64.rs` | ✓ VERIFIED | no_std probe with PWRITE/EXITS and the marker. |
-| 01-04 | `spikes/s6/linux-x86_64.sh` | ✓ VERIFIED | 174 lines; q35shell control/probe/flip-back; refusals and trap. |
-| 01-04 | `spikes/S6-FINDINGS.md` | ✓ VERIFIED | 200 lines; three PASS verdicts, D-17/D-18 implications. |
-| 01-05 | `spikes/s3/rio-gate.sh` | ✓ VERIFIED | 323 lines; S3_MODE rio/control-noG; Xvfb `-nolisten tcp`; named failures. |
-| 01-05 | `spikes/s3/rio-gate.expect` | ✓ VERIFIED | 412 lines; serial `ls /srv` assertion for `rio.*` + `riowctl.*`; control negative. |
-| 01-05 | `spikes/s3/flake.nix` | ✓ VERIFIED | 64 lines; Harvey bd7a698, Mac-evaluable app, locked runtime packages. |
-| 01-05 | `spikes/S3-FINDINGS.md` | ✓ VERIFIED (superseded pattern) | 205 lines; five verdicts + A5/A6. The PLAN's `PENDING-OWNER` pattern no longer matches because Plan 06 replaced it with the stronger FAIL/PASS/FAIL record — the designed progression, not a stub. |
-| 01-06 | `spikes/linux-witness/run-all.sh` | ✓ VERIFIED | 382 lines; root refusal, `R9_SPIKES_ONLY`, per-step isolation, secret scan. |
-| 01-06 | `spikes/linux-witness/make-bundle.sh` | ✓ VERIFIED | 144 lines; `MANIFEST.sha256` over every file, verified from a fresh extraction. |
-| 01-06 | `spikes/linux-witness/evidence/summary.tsv` | ✓ VERIFIED | Four rows (s1/s5/s3/s6) with exit codes and durations from the owner's run. |
-| 01-07 | `spikes/SPIKE-RESULTS.md` | ✓ VERIFIED | 434 lines; verdict matrix, A1-A16, seven decisions, machine-change ledger, prohibition audit, deferred list, owner decisions. |
-
-Supporting evidence not in PLAN frontmatter (also verified): all S1-S6 evidence logs, the S6 arm64 control/probe/flip-back logs, the witness-return logs, the kernel copy (`s5/9k10cpu.elf`, sha256 ecdcdad…), and the witness bundle scripts/README.
-
-### Key Link Verification
-
-All nine declared plan key links are wired. One gsd-tool result is a literal-match false negative: it searched for the string `^EVIDENCE s1-rung1-` (with the caret) and missed the actual `EVIDENCE s1-rung1-lima-aarch64:` lines at `S1-FINDINGS.md:20,43`.
+## Key Link Verification
 
 | From | To | Via | Status | Details |
 |------|----|-----|--------|---------|
-| `s1/flake.nix` | `s1/venue.nix` | imports to build s1-nsprobe/s1-libc-amd64 | WIRED | `import ./venue.nix` present. |
-| `s1/flake.nix` | `s1/hostbin.nix` | hostbin first on PATH in the libc guest | WIRED | `import ./hostbin.nix` present. |
-| `S1-FINDINGS.md` | `s1/evidence/rung1-builder.log` | EVIDENCE line per rung-1 leg | WIRED | Lines 20 and 43; tool false negative on the caret. |
-| `s2/flake.nix` | `s2/collisions.txt` | casecheck derivations read the blob list | WIRED | Pattern present. |
-| `s4/tier.nix` | `s4/venue.nix` | tier build runs in a copy of the S1 venue | WIRED | Pattern present. |
-| `S5-FINDINGS.md` | `s5/evidence/kernel-provenance.txt` | kernel sha256 for the KVM leg | WIRED | Pattern present; sha256 matches the committed kernel. |
-| `s6/build-probe.sh` | `s6/aout.py` | wrap then check the flat payload | WIRED | Both subcommands invoked. |
-| `s6/run-arm64-hvf.sh` | `s6/virt-probe.expect` | each leg boots under HVF via expect | WIRED | Pattern present. |
-| `s3/flake.nix` | `s3/rio-gate.sh` | writeShellApplication wraps the gate | WIRED | `readFile ./rio-gate.sh` present. |
-| `s3/rio-gate.sh` | `s3/rio-gate.expect` | step 5 spawns the expect driver | WIRED | Pattern present. |
-| `linux-witness/run-all.sh` | `s1/flake.nix` | builds x86_64-linux S1 derivations | WIRED | `x86_64-linux.s1-` present. |
-| `linux-witness/run-all.sh` | `s3/flake.nix` | runs s3-rio-gate in rio then control-noG | WIRED | Pattern present. |
-| `linux-witness/run-all.sh` | `s6/linux-x86_64.sh` | reuses the S3 scratch Harvey copy | WIRED | Pattern present. |
-| `SPIKE-RESULTS.md` | `S2-FINDINGS.md` | D-04 recommendation cites S2 copy-back | WIRED | Pattern present. |
-| `SPIKE-RESULTS.md` | `S1-FINDINGS.md` | machine-change revert list comes from S1 | WIRED | Pattern present. |
+| `xtask gate` | Harvey tree | `gate.rs:331` → `harvey::harvey_dir(Arch::X86_64)` | WIRED | Gate uses the resolver; devshell supplies the same per-arch path. |
+| `xtask image` | Harvey tree | `main.rs` image step → `image::assemble_checked(..., &tree, ...)` | WIRED | Live marker/bootfs compares read real tree bytes and match the independent reference bake. |
+| `harvey:` config scheme | Harvey tree | `config.rs:255` → `harvey::harvey_dir(arch)` | WIRED | All x86_64 profiles now use `image:`; no `harvey:` module remains in any x86_64 config. |
+| devshell shellHook | resolver | `flake.nix:1071-1107` exports `R9_HARVEY_DIR_ARM64`/`_AMD64`, never `R9_HARVEY_DIR` | WIRED | Live `nix develop` probe confirms both values and the unset override. |
+| flake app | gate script | `program = mkScriptApp … nix/gates/<app>.sh …` | WIRED | `nix eval` resolves every `.program`; stop-E full runs them 8/8. |
+| gate script | expect driver | `R9_ISO`/`R9_DEMO_PWFILE`/`DRAWTERM_BIN`/`GATE_MODE` | WIRED | Driver reads the 0600 password file; `GATE-PASS rio-serving` in the log. |
+| `flake.lock` Harvey rev | supplied trees | `HARVEY-TREE` stamp | WIRED | Both stamps read `rev=c697666…`, matching the lock. |
+| gate | tree-unmodified proof | `store_verify` / `tree_digest` after the legs | WIRED | Code path + `store-verify.log` both trees OK. |
 
-**HARN harness links (expected by the full goal) — all absent:**
+## Data-Flow Trace (Level 4)
 
-| From | To | Via | Status |
-|------|----|-----|--------|
-| `xtask` | rio session | boot + drawterm/serial assertion + non-zero exit | ✗ NOT_WIRED — no rio code in `xtask/src` |
-| `xtask` manifest | image assembly | per-file Harvey/Rust source selection | ✗ NOT_WIRED — no manifest or assembler |
-| `flake.nix` | Harvey tree | `inputs.harvey` + tree derivation | ✗ NOT_WIRED — no Harvey input |
-| `flake.nix` devshell | `xtask` | `R9_HARVEY_DIR_AMD64/ARM64` exports | ✗ NOT_WIRED — zero exports |
-| `flake.nix` | Harvey's composed gates | moved `boot-r9*`/`drawterm-gate` apps | ✗ NOT_WIRED — ownership not flipped |
+| Artifact | Data Variable | Source | Produces Real Data | Status |
+|----------|--------------|--------|--------------------|--------|
+| `target/images/x86_64/marker.paq` | member list | 30 entries staged from the amd64 tree, compared to `harvey-reference-amd64` `marker.members` | Yes — live compare matched 30/30 | ✓ FLOWING |
+| `target/images/aarch64/bootfs.paq` | member list | 151 entries staged from the arm64 tree, compared to `harvey-reference-arm64` `bootfs.members` | Yes — live compare matched 151/151 | ✓ FLOWING |
+| `image:cpu` in the quick gate | assembled image | `cpu.toml` + amd64 tree; 4442 members at stop E | Yes — `stope-cpuauth-ref` cpu 4442/4442 | ✓ FLOWING |
+| devshell `R9_HARVEY_DIR_*` | tree path | `packages.<system>.harvey-tree-*` outPath | Yes — live store paths, stamped `c697666` | ✓ FLOWING |
+| `GATE-PASS rio-serving` | serial `/srv` listing | qemu guest serial console | Yes — owner log shows the rio/riowctl pair | ✓ FLOWING (owner-witnessed) |
 
-### Data-Flow Trace (Level 4)
+No static returns, hardcoded member lists or mocked image data feed the gate: the reference bakes are an independent Harvey `mkimage.sh` run (VALID provenance).
 
-Not applicable. Pass 1 produces documentation, spike flakes, shell/expect scripts and evidence logs; it renders no dynamic data and has no UI or data-source path. The pass-2 harness data flow (manifest → per-file source selection → `.paq` bake → boot) does not exist yet; it is part of gaps R3/R4.
-
-### Behavioral Spot-Checks
+## Behavioral Spot-Checks
 
 | Behavior | Command | Result | Status |
 |----------|---------|--------|--------|
-| S5 kernel copy is the recorded artifact | `shasum -a 256 spikes/s5/9k10cpu.elf` | `ecdcdaddea8…` matches `S5-FINDINGS.md` and `kernel-provenance.txt` | ✓ PASS |
-| S4 tier counts are the pinned Harvey data | `git show bd7a698:build/x86_64/tiers/{tier0-libs,tier1-cmds}.txt` filtered for non-comment lines | 27 and 40, matching `S4-FINDINGS.md` | ✓ PASS |
-| The 23 case collisions are the real set at the pin | independent `git ls-tree` + case-fold duplicate scan vs `s2/collisions.txt` | 23/23 exact match (`COLLISIONS-MATCH`) | ✓ PASS |
-| All committed shell scripts parse | `bash -n` over every non-work `*.sh` under `spikes/` | no syntax errors | ✓ PASS |
-| `aout.py` is importable/compilable | `python3 -m py_compile spikes/s6/aout.py` | success | ✓ PASS |
-| All three expect drivers are complete Tcl scripts | `tclsh` + `info complete` | `1` for rio-gate, virt-probe, q35shell-probe | ✓ PASS |
-| The amd64 probe contains the marker and syscall sequence | grep + disassembly evidence | marker present; `mov ebp,0x33` and `0x8` with syscall | ✓ PASS |
-| Harvey checkout is untouched by the phase | `git -C ../harvey rev-parse HEAD` + status-sha guard | `HARVEY-UNTOUCHED` (25d97dc4d, 041d2929…) | ✓ PASS |
-| No protected r9 path changed | `git diff --name-only ce51503..HEAD -- flake.nix flake.lock xtask x86_64 aarch64 riscv64 port lib .github .cargo Cargo.toml Cargo.lock rust-toolchain.toml` | 0 lines; `git status --porcelain` also 0 | ✓ PASS |
-| No credential value leaked into evidence | password/secret grep over committed logs | zero unredacted values; redaction markers present | ✓ PASS |
-| Every SUMMARY-cited commit exists | `git cat-file -t` over sampled Task/plan hashes | all commits | ✓ PASS |
-| The full-goal machinery is absent (negative check) | `xtask` subcommand list + `grep -n "manifest\|rio" xtask/src` + flake input/export grep | no rio/manifest command; no Harvey input; no `R9_HARVEY` export | ✓ CONFIRMS FAILED (R1-R7) |
+| Manifest drift (unlisted staged file) fails | `target/debug/deps/xtask-2c5a… image::tests::drift_reports_an_unlisted_staged_file --exact` | 1 passed | ✓ PASS |
+| Manifest drift (declared-but-missing) fails | `… image::tests::drift_reports_a_missing_entry --exact` | 1 passed | ✓ PASS |
+| Rust provenance refuses a Harvey-root source | `… image::tests::rust_provenance_rejects_a_source_under_a_harvey_root --exact` | 1 passed | ✓ PASS |
+| Resolver source invariant (only `harvey.rs` reads the vars) | `… harvey::tests::no_other_source_reads_a_harvey_tree_variable --exact` | 1 passed | ✓ PASS |
+| Named no-tree error lists every variable | `… harvey::tests::the_named_error_lists_every_variable_and_says_there_is_no_default --exact` | 1 passed | ✓ PASS |
+| Driver fast-fail registered after qemu spawn | `… gate::tests::driver_fast_fail_registers_after_the_qemu_spawn --exact` | 1 passed | ✓ PASS |
+| Full-tier capture dirs match scripts/witness map | `… gate::tests::full_tier_output_dirs_match_the_scripts_and_witness_map --exact` | 1 passed | ✓ PASS |
+| CR-01 image-name escape refused before deletion | `… image::tests::assemble_refuses_an_escaping_image_name_before_any_deletion --exact` | 1 passed | ✓ PASS |
+| Image name rejects traversal/separators | `… image::tests::image_name_rejects_traversal_and_separators --exact` | 1 passed | ✓ PASS |
+| Library tables satisfy the pinned tier-0 lists | `xtask image --arch x86-64 --libraries`; `--arch aarch64 --libraries` | `tier-0 list OK` both | ✓ PASS |
+| x86_64 image equals the independent reference | `R9_HARVEY_DIR_AMD64=… R9_HARVEY_REFERENCE_AMD64=… R9_MKPAQFS=… xtask image --arch x86-64 --image marker --compare-reference` | 30 members match | ✓ PASS |
+| aarch64 image equals the independent reference | same over the arm64 tree/reference, `--image bootfs` | 151 members match | ✓ PASS |
+| Devshell supplies both trees with no manual setup | `nix develop -c sh -c '…'` | ARM/AMD store paths set; `R9_HARVEY_DIR` unset; `R9_HARVEY_TREE_SYSTEM=aarch64-linux` | ✓ PASS |
+| Supplied tree is read-only | `touch "$R9_HARVEY_DIR_AMD64/probe-write"` | Permission denied | ✓ PASS |
+| Flake exposes all composed outputs | `nix eval --json .#apps.x86_64-linux --apply builtins.attrNames` | 20 apps | ✓ PASS |
+| Mac refuses the quick gate (venue discipline) | `xtask gate --arch x86-64` on the Mac | exit 1, `GATE-VENUE not-linux` | ✓ PASS |
+| Gate command is documented | `xtask gate --help` | exit 0; about + flags print | ✓ PASS |
 
-### Probe Execution
+**Full workspace test command:** not re-run (the orchestrator already recorded post-merge/post-CR-01 green: `nix develop -c cargo xtask check && cargo xtask test` exit 0; `cargo test -p xtask` 185 passed = 89 bin + 96 lib). The named tests above were run from the built test binaries.
 
-Not applicable. No `probe-*.sh` is declared by the phase, and the S6 "probe" is a Rust a.out artifact under `spikes/s6/`, not a Step-7c probe script. It is covered by the static and evidence checks above.
+## Probe Execution
 
-### Requirements Coverage
+No conventional `scripts/*/tests/probe-*.sh` probes exist in this phase. The phase's "probe" is the S6 Rust-a.out swap probe, exercised by the owner's stop-B3 KVM run:
 
-All eight HARN requirements are accounted for: seven appear in at least one pass-1 PLAN frontmatter, and **HARN-05 is ORPHANED** — no pass-1 plan claims it. It is nevertheless explicitly named in `SPIKE-RESULTS.md` "Deferred to planning pass 2" ("none; no spike bears on it, so it is planned from research alone") and in `01-VALIDATION.md` as deferred. No pass-1 requirement was implemented, by design (D-22); `REQUIREMENTS.md` correctly keeps all eight unchecked/Pending.
+| Probe | Command | Result | Status |
+|-------|---------|--------|--------|
+| ps → Rust a.out swap at `PROBE-FLIP-SHA` | `nix develop -c cargo xtask gate --arch x86-64 --accel kvm --serial-check /bin/ps=R9-RUST-AOUT-PROBE-OK` | `R9-RUST-AOUT-PROBE-OK` present after `/bin/ps`; gate PASS | PASS (owner KVM, `stop-b3/probe.log`) |
+| flip-back at `PROBE-FLIPBACK-SHA` | plain `cargo xtask gate` | gate PASS; member list identical to control | PASS (owner KVM, `stop-b3/flipback.log`) |
+
+## Test Quality Audit
+
+| Test File / Surface | Linked Req | Active | Skipped | Circular | Assertion Level | Verdict |
+|---------------------|-----------|--------|---------|----------|-----------------|---------|
+| `xtask/src/harvey.rs` in-module tests (14) | HARN-02, HARN-07 | 14 | 0 | No — injected lookup/realiser | Value/behavioral | PASS |
+| `xtask/src/image.rs` in-module tests (46) | HARN-03, HARN-04, HARN-05 | 46 | 0 | No — reference bake is an independent Harvey `mkimage.sh` oracle | Value/behavioral | PASS |
+| `xtask/src/gate.rs` in-module tests (10) | HARN-01, HARN-02, HARN-08 | 10 | 0 | No — static source assertions + digest behaviour | Behavioral/static | PASS |
+| `gates/**/*.expect` (15 drivers) | HARN-01, HARN-06, HARN-08 | 15 | 0 | No — drives the real guest | Behavioral | PASS |
+| stop-E/stop-B3 witness logs | HARN-01/04/06/08 | n/a | 0 | No — independent KVM host | Behavioral (end-to-end) | PASS |
+
+**Disabled tests on requirements:** 0 → no blocker.
+**Circular patterns detected:** 0 → no blocker. The reference bake is Harvey's own `mkimage.sh`, not r9's assembler, so `--compare-reference` is a genuine external-oracle comparison, not self-consistency.
+**Insufficient assertions:** 0 → no warning. Assertions are member-level (path/mode/size/sha256), exit codes and serial markers, not existence/type checks.
+
+### Decision Coverage
+
+All trackable CONTEXT.md decisions are honored by shipped artifacts. (handler: 30 total, 30 honored, 0 not honored)
+
+## Requirements Coverage
 
 | Requirement | Source Plan(s) | Description | Status | Evidence |
 |-------------|----------------|-------------|--------|----------|
-| HARN-01 | 01-05, 01-06, 01-07 | One `cargo xtask` command boots to rio and exits non-zero otherwise | ✗ BLOCKED | No rio command/assertion in `xtask/src`; S3 gate is a spike and its positive leg FAILed. |
-| HARN-02 | 01-01, 01-02, 01-06, 01-07 | Single read-only resolver over `R9_HARVEY_DIR`/`HARVEY_SRC`/`vendor/harvey/`, all consumers, named error, unmodified after gate | ✗ BLOCKED | `uregcheck::harvey_dir()` is a partial pre-existing base (R9_HARVEY_DIR + named error, consumers routed); no `HARVEY_SRC`/`vendor/harvey`, no after-gate proof. |
-| HARN-03 | 01-05, 01-07 | Fallback manifest of every C library object and userland binary per architecture | ✗ BLOCKED | No manifest in `xtask/`; no `xtask/src/image.rs`. |
-| HARN-04 | 01-04, 01-06, 01-07 | Swap one manifest entry to Rust, gate passes, swap back | ✗ BLOCKED | Mechanism proven only in S6; no in-tree manifest/assembler/swap. |
-| HARN-05 | **none (ORPHANED)** | Named fail-fast on two-way manifest/image drift | ✗ BLOCKED | No drift detection; explicitly deferred by name in SPIKE-RESULTS, no plan claims it. |
-| HARN-06 | 01-02 | Existing x86_64 q35 profiles and aarch64 virt quick pass through the reconciled mechanism | ✗ BLOCKED | Profiles exist; no reconciled mechanism and no recorded run through it. |
-| HARN-07 | 01-01, 01-02, 01-06, 01-07 | r9 flake pins Harvey and devshell exports per-arch read-only tree | ✗ BLOCKED | `flake.nix` has no Harvey input, no tree derivation, no `R9_HARVEY*` export; CI still checks Harvey out by hand. |
-| HARN-08 | 01-03, 01-06, 01-07 | Flake ownership flipped; r9 owns composed gates; Harvey has no r9 input | ✗ BLOCKED | `../harvey/flake.nix` still has `inputs.r9` and owns boot-r9*/drawterm-gate; r9 has no composed outputs. |
+| HARN-01 | 01-05, 01-18, 01-22, 01-32, 01-33, 01-28 | golden-invariant `cargo xtask gate` to rio, non-zero without rio | ✓ SATISFIED | `stop-e/gate.log` (2× exit 0, both directions) + `gate-neg.log`; `gate.rs`; CLI help. KVM only (owner witness). |
+| HARN-02 | 01-08, 01-11, 01-18, 01-28, 01-34 | single resolver, named error, tree unmodified | ✓ SATISFIED | `harvey.rs` + 14 tests + source invariant; `store-verify.log`/`trees.log`. Warnings WR-01/03/09 recorded. |
+| HARN-03 | 01-11, 01-14, 01-15, 01-17, 01-19 | per-arch fallback manifest of every C object/binary | ✓ SATISFIED | 9 amd64 + 3 arm64 manifests; 28/36 library rows; live tier-0 + reference compares; cpu 4442/auth 95. |
+| HARN-04 | 01-04, 01-20, 01-22 | one-entry Rust swap, gate passes, flip-back restores | ✓ SATISFIED | stop-B3 probe/flipback logs + identical member lists; no `source = "rust"` remains. |
+| HARN-05 | 01-11, 01-20 | named fast failure on two-way drift and Rust provenance | ✓ SATISFIED | drift/provenance code paths + 5 targeted tests pass live. |
+| HARN-06 | 01-08, 01-17, 01-21, 01-29, 01-30, 01-33, 01-28 | q35 profiles + aarch64 quick pass through the reconciled mechanism | ✓ SATISFIED | nine profiles exit 0; full 8/8; aarch64 five-gate quick pass at 01-30 + live validation re-run. W-5. |
+| HARN-07 | 01-10, 01-13, 01-14, 01-25, 01-28 | flake supplies the read-only tree; devshell exports; no xtask default | ✓ SATISFIED | live devshell probe; read-only stamped trees; CI `nix develop`; resolver test. |
+| HARN-08 | 01-21, 01-23, 01-24, 01-26, 01-27, 01-30, 01-31, 01-34, 01-28 | flake ownership flipped; moved gates pass from r9 | ✓ SATISFIED | 20 apps eval; Harvey `c697666` no r9 input; full 8/8 + equiv 10/10 + soak/stress; pushed flip recorded. |
 
-### Anti-Patterns Found
+**Orphaned requirements:** none. REQUIREMENTS.md maps exactly HARN-01…08 to Phase 1, and every ID appears in at least five plan frontmatters.
 
-No debt markers (`TBD`/`FIXME`/`XXX`), no `TODO`/`HACK`/`PLACEHOLDER`, no empty implementations and no hard-coded empty stubs were found in the phase's changed files. The `XXXXXX` hits are `mktemp` templates, not debt markers. The following are documentation-consistency warnings, not blockers.
+## Anti-Patterns Found
 
 | File | Line | Pattern | Severity | Impact |
 |------|------|---------|----------|--------|
-| `01-01-SUMMARY.md` | 52 | `requirements-completed: [HARN-07, HARN-02]` while the body says "Requirements checkboxes stay Pending" and REQUIREMENTS.md keeps them Pending | ⚠️ WARNING | A consumer reading only SUMMARY frontmatter could wrongly mark HARN-07/02 complete; pass 2 is the closing plan. |
-| `01-03-SUMMARY.md` | 53 | `requirements-completed: [HARN-08]` while the body records the work as a read-only feasibility spike | ⚠️ WARNING | Same risk for HARN-08. |
-| `01-06-SUMMARY.md` | 72 | `requirements-completed: [HARN-01, HARN-04, HARN-07, HARN-08]` while line 65/170 says the checkboxes stay Pending | ⚠️ WARNING | Same risk for four IDs; the plan's own body and STATE.md say none is implemented. |
-| `spikes/s3/evidence/static-analysis.md` | 52 | Stale prose "The runtime confirmation is the Plan 06 KVM leg (`PENDING-OWNER`)" after Plan 06 recorded the leg as FAIL | ⚠️ WARNING | Pass 2 could read this as an unrun leg; the authoritative verdict in S3-FINDINGS is FAIL. |
-| `spikes/SPIKE-RESULTS.md` | 333-339 | The pass-wide audit records that Plan 06's owner-approved commits were pushed (`c92a3f4`), while the plan prohibition said "MUST NOT push" | ⚠️ WARNING | The "nothing pushed" truth holds only with this documented owner-approved exception; no Harvey push and no protected-path change. |
+| `xtask/src/main.rs` | 730-731 | `FIXME` (unreferenced) | ℹ️ Info | Pre-existing riscv64-only dead code (`if false`), introduced 2023-12-03/2024-07-21 — years before this phase. `git blame` confirms neither line is phase work; it does not affect the q35/arm64 goal. No phase-added unreferenced `TBD`/`FIXME`/`XXX` exists. |
+| `xtask/src/main.rs` | 690 | `TODO` (cleanup comment) | ℹ️ Info | Pre-existing 2026-11-01, before the phase; not a debt-marker blocker. |
+| Open review warnings WR-01…WR-12 | — | Owner-recorded warnings | ⚠️ Warning | See "Known open warnings" below; none has a failing test and the owner disposition of 2026-11-23 is "record open, no code change". They do not falsify a must-have. |
+| Harness code | — | Stubs / empty implementations / hollow props | ℹ️ Info | None found. `return Ok(())` sites are legitimate early exits (already-compliant / no-op paths), not stubs; no placeholder render paths exist in this infrastructure phase. |
 
-### Human Verification Required
+### Known open warnings (owner disposition 2026-11-23)
 
-**None for pass-1.** The pass-1 deliverables are documentary and their evidence is committed; no visual, real-time or external-service behavior needs a human test to verify *this pass*. The owner already supplied the closing-checkpoint decisions, and no revert was requested.
+| ID | Warning | Relevance to this verification |
+|----|---------|--------------------------------|
+| WR-01 | `ureg-check` exits 0 when one architecture's tree is unresolvable (the named error is printed). Confirmed live with only `R9_HARVEY_DIR_AMD64` set: exit 0, arm64 named error on stderr. | HARN-02 edge; every per-arch consumer (boot-test, image, gate) still hard-fails. Recorded, owner-accepted. |
+| WR-02 | `cargo xtask gate --full` silently ignores `--accel`. | Gate ergonomics; stop-E used `R9_ACCEL=kvm` around the full run. No must-have failure. |
+| WR-03 | The quick gate's tree-unmodified proof is skipped on early error paths. | HARN-02 success path is proven; no code path writes the tree. |
+| WR-04 | Gate password file mode is applied only at creation. | Credential hygiene, not a must-have. |
+| WR-05 | Per-bake authdomain material is left under `target/` on error paths. | Credential hygiene, not a must-have; target is scratch. |
+| WR-06 | Drawterm identity sweep can match its own helper. | Operational robustness. |
+| WR-07 | `eval` of the netaddr seam in the doctor and tap gates. | Input-trust hardening. |
+| WR-08 | `host-echo` accepts out-of-range ports. | Test-helper robustness. |
+| WR-09 | Gate scripts and the image engine can resolve different Harvey trees. | In the normal devshell both use the same per-arch export; only a manual `R9_HARVEY_DIR` override can diverge. Recorded. |
+| WR-10 | Witness reuses the Harvey scratch tree and equivalence baselines without pin provenance. | Stop-E `trees.log` proves `rev=c697666` for both trees; baseline `bd7a698` is disclosed in `env.txt` as the legacy-final equivalence baseline. |
+| WR-11 | Full tier includes an interactive qemu boot with no timeout or driver. | Could hang, did not in stop-E. Recorded. |
+| WR-12 | Credential scans delete leaks but never fail the witness. | Process hardening. |
 
-For **pass 2** (not a verification item here): the owner's Linux KVM host is the required witness for the shipped quick gate (D-13), the generated DEMO password/headless-auth path must be resolved and the rio leg re-run with `control-noG` unchanged (Decision 5), and the Harvey commit plus both pushes need owner approval (HARN-08).
+### Validation-ledger residual risks (W-1…W-5)
 
-### Gaps Summary
+| ID | Risk | Disposition |
+|----|------|-------------|
+| W-1 | `cargo xtask test` does not run the xtask crate's own 185 tests (only `port` + `aarch64`). | The plans and the prompt run both halves; no coverage lost in this phase. |
+| W-2 | The x86_64 `sleep_and_alarm` host unit test is not runnable (the crate's default target is `x86_64-unknown-none`). | The 01-34 "host leg" wording is overstated; behaviour is covered end-to-end by `fpprobe` (`stop-c2/full.log`: `T1-OK fpprobe`, 39/0) and compile-time asserts. |
+| W-3 | The HARN-04 swap proof (stop B3) predates the 01-34 `gate.rs` change. | The 01-34 diff is additive (`app_out_dir` + two tests, 175 insertions / 1 deletion) and does not touch `run_quick`/`serial-check`; the swap assertion and member-list proof are unaffected. |
+| W-4 | Hosted `quick-gate-tcg` is red; other CI jobs green. | D-13 makes hosted CI best-effort; the owner's native amd64 TCG gate is `GATE-PASS` (stop-C3 owner report). |
+| W-5 | No bump-time aarch64 quick-pass log in the stop-E return. | 01-30's Mac log records the full five-gate pass; the validation re-run of 2026-11-23 records all five PASS live; aarch64 kernel bytes still match the 01-08 baseline. |
 
-Pass 1 did exactly what D-22 scoped it to do, and did it well: the six spikes are answered (25 legs, 20 PASS, 5 evidence-backed FAILs, 0 unanswered), the assumptions are classified, the owner's seven decisions are recorded verbatim, the machine-change ledger and prohibition audit are complete, and every pass-1 artifact is substantive. I independently reproduced the Harvey guard, the protected-path zero diff, the 23-case collision set, the 27/40 tier counts, the kernel sha256, shell/Python/Tcl syntax, and the credential scan; all agree with the summaries.
+## Human Verification Required
 
-But the **phase goal itself is not achieved**. The repository has no boot-to-rio gate, no fallback manifest, no assembler or swap, no `HARVEY_SRC`/`vendor/harvey` resolver, no flake-supplied Harvey tree, and no flake ownership flip. `REQUIREMENTS.md` correctly lists every HARN requirement as Pending, and `01-VALIDATION.md` itself records "8 gaps found … HARN-01..08 all unimplemented by design in pass 1". The next step is therefore to **write pass 2** with `/gsd-plan-phase 1`, using the owner's decisions and the pass-2 backlog in SPIKE-RESULTS as its inputs — not to close these gaps as if pass-1 execution had failed.
+N/A — infrastructure/foundation phase (cross-build harness, QEMU gate, flake wiring) with no user-facing UI. All acceptance criteria are verifiable programmatically or are already covered by the owner's committed KVM evidence.
+
+**Owner-witnessed evidence (already collected; not outstanding actions):**
+
+1. **Quick gate positive + negative** — `stop-e/gate.log`, `gate-neg.log` at `af46615` (KVM; cannot be re-run on this macOS host — no `/dev/kvm`).
+2. **Nine x86_64 profiles** — `stop-e/profiles.log`.
+3. **Full moved set, soak, stress, equivalence** — `stop-e/full.tsv`, `soak.log`, `stress.log`, `equiv/report.tsv`.
+4. **HARN-04 swap and flip-back** — `stop-b3/{probe,flipback,gate,gate-neg}.log`, member-list proof in `01-20-SUMMARY.md`.
+5. **Harvey's own q35 kernel and the flip push** — `stop-e/harvey-q35.log`; `HARVEY-FLIP.md`; remote branch `witness-returns/01-28` at `95af737`.
+
+## Gaps Summary
+
+No gaps. The phase goal is achieved in the codebase and in the committed witness evidence:
+
+- The r9-owned `cargo xtask gate` assembles the cpu image from the flake-supplied, read-only Harvey tree, builds the r9 q35cpu kernel, boots q35, proves the D-28 rio pair, proves the negative control, and re-verifies the tree. The owner's 11/11 stop-E run is green in both directions.
+- One resolver owns every xtask Harvey lookup, with the documented precedence, the named no-tree error, no built-in default, and a source-level invariant test.
+- Per-architecture manifests plus library tables enumerate the image contents; independent Harvey reference bakes agree; two-way drift and Rust-provenance failures are named and tested.
+- A one-entry Rust flip was exercised end-to-end on KVM, the gate passed at the flip commit, and flip-back restored the byte-identical member list.
+- The nine x86_64 profiles and the aarch64 quick pass are green; the devshell supplies both stamped read-only trees with no manual setup; r9 owns the 20 composed apps and Harvey has no r9 input.
+- CR-01 is fixed in `b36b633` + pinned by `083c58d`; the security register is `threats_open: 0`; the validation register is `validated`, `nyquist_compliant: true`, 0 requirement gaps; the UI review is correctly not-applicable.
+
+The residual items are the owner-accepted review warnings, the validation ledger's five caveats, and the documented plan-text supersessions. None has a failing test or leaves a requirement unverified, and none blocks Phase 2.
 
 ---
 
-_Verified: 2026-11-23T03:06:43Z_
+_Verified: 2026-11-23T22:11:38Z_
 _Verifier: the agent (gsd-verifier)_
