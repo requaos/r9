@@ -10,7 +10,7 @@
 # live under spikes/s6/work/ (gitignored).
 set -eu
 
-here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 arch=${1:-}
 
 case "$arch" in
