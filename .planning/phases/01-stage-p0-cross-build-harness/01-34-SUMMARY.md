@@ -3,8 +3,8 @@ phase: 01-stage-p0-cross-build-harness
 plan: 34
 subsystem: cross-build-harness
 status: complete
-phase_status: "Every witness step is green: stop C2's full 8/8 with fpprobe and tap stress, stop C3's soak/equiv/kernel/store_verify (equiv all 10 rows match with the four recorded expectations; the new boot-iso hash b6Oc is BUILD+REBUILD OK). Remaining before the Harvey flip: the standalone amd64 TCG gate result (not in either return), the owner's explicit HARN-08 equivalence approval, and the Harvey diff APPROVE/REJECT. The Harvey diff is UNAPPLIED."
-tags: [witness, stop-c2, stop-c3, x86_64, kvm, fpprobe, notes, timer, tap, equivalence, harn-02, harn-08]
+phase_status: "Every witness step is green and every owner approval is recorded: stop C2 full 8/8 with fpprobe and tap stress; stop C3 soak/equiv/kernel/store_verify; the standalone amd64 TCG gate GATE-PASS (owner report); the HARN-08 equivalence approved (tier1 39, auth 10, churn 1, stress tap venue); the Harvey diff approved and applied as Harvey c697666ba315f137ca2fd11768f835d04bd9f018 (36 paths, +285/−9972, zero font paths), UNPUSHED. The only remaining step is the owner's Harvey push."
+tags: [witness, stop-c2, stop-c3, x86_64, kvm, tcg, fpprobe, notes, timer, tap, equivalence, harvey-flip, harn-02, harn-08]
 
 requires:
   - phase: 01-stage-p0-cross-build-harness
@@ -13,17 +13,18 @@ provides:
   - "witness/run-witness.sh: the r9-tree tap seam (HARVEY + HARVEY_NETADDR_SEAM), R9_NET=tap for soak/stress, the full-only capture loop, and the `recorded` equivalence source"
   - "xtask/src/gate.rs: FULL_APP_OUT_DIRS_* + TAP_APP_OUT_DIRS_X86_64 + app_out_dir, with static guards tying the map to the gate scripts, the shell copy, and step_full's eight-app loop"
   - "x86_64/src/{syscall.rs,platform/q35/timer.rs}: the q35 millisecond-to-tick conversion for sleep/alarm (const-pinned), the fpprobe note-delivery root cause"
-  - "witness/WITNESS-LOG.md + evidence/stop-c2/ + evidence/stop-c3/: the stop-C2 and stop-C3 verdicts, the green fpprobe and tap-venue results, the kernel hash proof, and trimmed redacted evidence"
-  - "witness/equivalence.tsv: the recorded stop-C2 expectations (T1-OK 39, AUTH-OK 10, CATS-DONE 1, stress tap label) with per-row rationale; all four verified by stop C3 and pending owner approval"
+  - "witness/WITNESS-LOG.md + evidence/stop-c2/ + evidence/stop-c3/: the stop-C2/C3 verdicts, the TCG owner report, the green fpprobe and tap-venue results, the kernel hash proof, and trimmed redacted evidence"
+  - "witness/equivalence.tsv: the recorded HARN-08 expectations (T1-OK 39, AUTH-OK 10, CATS-DONE 1, stress tap label) with per-row rationale, verified by stop C3 and approved 2026-11-23"
+  - "harvey-flip/HARVEY-FLIP.md: APPROVED 2026-11-23; HARVEY-COMMIT c697666ba315f137ca2fd11768f835d04bd9f018; HARVEY-PUSHED none"
 affects: [01-28, HARN-02, HARN-08]
 
 actuals:
-  tokens: 18887
+  tokens: 18886
   tasks: 4
-  commits: 8
+  commits: 9
 
 plan_head_before: 4f9697d1af8c9894898f7950d7a83cd78f074d57
-plan_head_after: ff01d285f5a3b573380c2bc4078a54b80ca70eb9
+plan_head_after: 66189ff7207b3f312448942c029eeb105e969ae5
 
 tech-stack:
   added: []
@@ -33,7 +34,8 @@ tech-stack:
     - "A tap app refuses slirp by contract, so the witness preflight exports R9_NET=tap explicitly for both doctor and app"
     - "An equivalence row whose Harvey baseline predates the current marker set carries a `recorded` expectation plus a per-row rationale; the gate's committed expect file remains the acceptance"
     - "The same serial signature (note-spin/note-regs 0 times) can be a missing IRQ boundary or a ten-times-late alarm; the code timeline and the venue's spin duration disambiguate it"
-    - "A halted summary is a resume point: the C3 rerun proved the four red steps and the same summary closes as complete with only the external approvals outstanding"
+    - "A halted summary is a resume point: the C3 rerun proved the four red steps and the same summary closes as complete with only the approvals and the owner push outstanding"
+    - "A prepared Harvey diff is applied only after a green witness set and the explicit APPROVE; stage the diff's exact 36 paths, never sys/** (the 11 APFS font artifacts), and verify the commit stat against the diff"
 
 key-files:
   created:
@@ -56,11 +58,13 @@ key-files:
     - .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c3/store-verify.log
     - .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c3/summary.tsv
     - .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c3/env.txt
+    - .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c3/tcg-owner-report.txt
     - .planning/phases/01-stage-p0-cross-build-harness/01-34-SUMMARY.md
   modified:
     - .planning/phases/01-stage-p0-cross-build-harness/witness/run-witness.sh
     - .planning/phases/01-stage-p0-cross-build-harness/witness/WITNESS-LOG.md
     - .planning/phases/01-stage-p0-cross-build-harness/witness/equivalence.tsv
+    - .planning/phases/01-stage-p0-cross-build-harness/harvey-flip/HARVEY-FLIP.md
     - xtask/src/gate.rs
     - nix/gates/boot-r9-x64.sh
     - x86_64/src/syscall.rs
@@ -70,9 +74,10 @@ key-decisions:
   - "fpprobe's stop-C failure is the q35 millisecond/tick conversion, not a missing interrupt-return note boundary: sys_alarm/sys_sleep inherited aarch64's `now + ms` while q35 ticks at 100 Hz, so alarm(50) armed at 500 ms and the two ring-3 spin rounds finished first on KVM; TCG (where the same rounds were green on 2026-11-22) outlasts 500 ms. The fix is a ceiling ms→ticks conversion with compile-time asserts and a host unit test; the trap.rs boundary is intact (0ffcec6/e9e5365). Stop C2 confirms it: `fpprobe: ok`, `T1-OK fpprobe`, 39/0."
   - "A green `GATE PASS full` must exit 0: step_full iterates the eight FULL_APPS only, because the soak/stress map rows have no capture in a full run and produced two FULL-NO-CAPTURE lines after the gate had passed."
   - "Both tap steps export R9_NET=tap: the soak app refuses slirp by contract; the stress app's implicit tap default is now explicit. The seam precondition remains a named failure."
-  - "The four recorded equivalence expectations are verified by stop C3 (tier1 39/39, auth 10/10, churn 1/1, stress tap 1/1) and all 10 rows match; the owner's approval of the recorded rows remains the explicit HARN-08 decision."
+  - "The four recorded equivalence expectations are verified by stop C3 (tier1 39/39, auth 10/10, churn 1/1, stress tap 1/1), all 10 rows match, and the owner APPROVED them 2026-11-23 as part of HARN-08."
   - "The new boot-iso outputHash sha256-b6OcAb2pOufpr5AqJj2SqhXnrTYsIQRTgkh9FcgtNT0= (owner commit 2bc5478) is proven by stop C3: KERNEL-BOOTISO-BUILD-OK + REBUILD-OK, kernel ELF 2377dc2f…"
-  - "The standalone amd64 TCG gate is still outstanding: the GATE-PASS control-no-rio lines in the returns belong to the full/stress drawterm legs, not a standalone `cargo xtask gate --arch x86-64 --accel tcg` run. The Harvey diff stays unapplied until that result is green and the diff is explicitly approved."
+  - "The standalone amd64 TCG gate is PASS by owner report (GATE-PASS, 2026-11-23); the GATE-PASS control-no-rio lines in the full/stress captures are the drawterm legs, not the standalone run."
+  - "The owner approved the prepared Harvey diff and it was applied from base 25d97dc4d as Harvey c697666ba315f137ca2fd11768f835d04bd9f018 (36 paths, +285/−9972, zero font paths). The commit is unpushed; the owner push is the one remaining step."
 
 requirements-completed: []
 
@@ -117,7 +122,7 @@ coverage:
     description: "The stop-C2 and stop-C3 verdicts and trimmed evidence are recorded"
     verification:
       - kind: other
-        ref: "witness/WITNESS-LOG.md (six VERDICT stopc2-* + four VERDICT stopc3-* lines) + evidence/stop-c2/ + evidence/stop-c3/ (credential scan 0)"
+        ref: "witness/WITNESS-LOG.md (six VERDICT stopc2-* + five VERDICT stopc3-* lines) + evidence/stop-c2/ + evidence/stop-c3/ (credential scan 0)"
         status: pass
     human_judgment: false
   - id: D5
@@ -128,7 +133,7 @@ coverage:
         ref: ".planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c3/equiv/report.tsv (all 10 rows match, including the four recorded expectations)"
         status: pass
     human_judgment: true
-    rationale: "The expected counts are an owner acceptance decision (HARN-08), not an automated assertion; the gate's committed expect files are unchanged and the owner must approve the recorded rows."
+    rationale: "The expected counts are an owner acceptance decision (HARN-08), not an automated assertion; the owner APPROVED them 2026-11-23 and the gate's committed expect files are unchanged."
   - id: D6
     description: "The new boot-iso outputHash is built and --rebuild-checked"
     verification:
@@ -138,23 +143,32 @@ coverage:
     human_judgment: false
   - id: D7
     description: "The standalone amd64 TCG gate is green"
-    verification: []
-    human_judgment: true
-    rationale: "`cargo xtask gate --arch x86-64 --accel tcg` has not been reported in either return; the GATE-PASS control-no-rio lines in the full/stress captures are the drawterm legs, not the standalone TCG command. The owner's x86_64 host carries it."
+    verification:
+      - kind: manual_procedural
+        ref: "owner report 2026-11-23: nix develop -c cargo xtask gate --arch x86-64 --accel tcg -> GATE-PASS (WITNESS-LOG VERDICT stopc3-tcg; evidence/stop-c3/tcg-owner-report.txt)"
+        status: pass
+    human_judgment: false
+  - id: D8
+    description: "The approved Harvey diff is applied and committed with the exact path set and no font path"
+    verification:
+      - kind: other
+        ref: "Harvey c697666ba315f137ca2fd11768f835d04bd9f018: 36 files changed, +285/−9972; 0 sys/lib/(postscript|troff) or devpost.add paths; HARVEY-FLIP.md records the approval"
+        status: pass
+    human_judgment: false
 
 # Metrics
-duration: 52min
+duration: 54min
 completed: 2026-11-23
 ---
 
-# Phase 1 Plan 34: Stop-C2/C3 fixes — tap seam, capture paths, and the fpprobe note-delivery finding Summary
+# Phase 1 Plan 34: Stop-C2/C3 fixes — tap seam, capture paths, fpprobe, and the Harvey flip Summary
 
-The x86_64 witness set is green: stop C2's full tier 8/8 with
-`fpprobe: ok` and tap stress, then stop C3's soak, equivalence, kernel
-and store-verify — every witness step passes, all 10 equivalence rows
-match, and the new boot-iso hash builds and `--rebuild`s. Only the
-standalone amd64 TCG result and the owner's two approvals remain before
-the Harvey flip; the diff is unapplied.
+The x86_64 witness set is green end to end: stop C2's full tier 8/8 with
+`fpprobe: ok` and tap stress, stop C3's soak/equivalence/kernel/store-verify,
+and the owner's standalone TCG `GATE-PASS`. The four HARN-08 equivalence
+expectations are approved, and the approved Harvey diff is applied and
+committed at `c697666ba` (36 paths, +285/−9972, no font path) — unpushed;
+the owner's push is the one remaining step.
 
 ## Accomplishments
 
@@ -177,16 +191,24 @@ the Harvey flip; the diff is unapplied.
    Fixed with a ceiling ms→tick conversion for sleep/alarm and
    compile-time asserts; stop C2 printed `fpprobe: ok`, `T1-OK fpprobe`,
    39 expected T1-OK and zero T1-FAIL.
-4. **Stop-C2/C3 record.** Ten verdicts with trimmed, redacted evidence
+4. **Stop-C2/C3 record.** Eleven verdicts with trimmed, redacted evidence
    under `witness/evidence/stop-c2/` and `witness/evidence/stop-c3/`
    (credential scan 0): full PASS (8/8), soak FAIL→PASS, stress PASS,
    equiv FAIL→PASS (10/10), store_verify PASS twice, kernel
-   PENDING→PASS (build + rebuild on `b6Oc`).
-5. **Equivalence expectations.** `equivalence.tsv` records T1-OK 39,
+   PENDING→PASS (build + rebuild on `b6Oc`), TCG PASS (owner report).
+5. **HARN-08 equivalence.** `equivalence.tsv` records T1-OK 39,
    AUTH-OK 10, CATS-DONE 1400 = 1 and the stress tap venue label, each
    with a rationale; the `recorded` source tells the comparator the count
-   is an owner-approved expectation, not a stale capture. No gate or
-   expect file was changed.
+   is an owner-approved expectation, not a stale capture. The owner
+   approved the four on 2026-11-23; no gate or expect file changed.
+6. **The Harvey flip.** The prepared diff (sha256 `f7b0272d…`) was
+   applied from base `25d97dc4d` with `git apply` and an explicit 36-path
+   `git add --`. The commit `c697666ba315f137ca2fd11768f835d04bd9f018`
+   matches the prepared stat (36 files, +285/−9972), carries zero
+   `sys/lib/(postscript|troff)` or `devpost.add` paths, and leaves the 11
+   pre-modified font files unstaged. `HARVEY-FLIP.md` records
+   `HARVEY-COMMIT`, `HARVEY-APPROVED: 2026-11-23 owner`, and
+   `HARVEY-PUSHED: none`.
 
 ## Verdicts
 
@@ -198,6 +220,7 @@ the Harvey flip; the diff is unapplied.
 | equiv | PASS (all 10 rows match) | `evidence/stop-c3/equiv/{report,rows}.tsv` |
 | store_verify | PASS (both trees; C2 and C3) | `evidence/stop-c3/store-verify.log` |
 | kernel | PASS (BUILD + REBUILD OK on `b6Oc`) | `evidence/stop-c3/kernel.log` |
+| TCG | PASS (owner report, standalone amd64) | `evidence/stop-c3/tcg-owner-report.txt` |
 
 ## Deviations from Plan
 
@@ -214,20 +237,18 @@ hash; the C3 rerun proved the fixes. Applied under the deviation rules:
 3. **[Rule 2 — Missing critical] Equivalence baselines were stale.**
    `T1-OK 39/36`, `AUTH-OK 10/5`, `CATS-DONE 1/2` and the tap run's
    absent slirp label were expectation drift, not gate failures. Recorded
-   the stop-C2 expectations with per-row rationale; owner approval is the
-   explicit gate (HARN-08), and C3 verified all four.
+   the stop-C2 expectations with per-row rationale; owner approval was the
+   explicit gate (HARN-08) and C3 verified all four.
 4. **[Rule 1 — Bug] The boot-iso hash was unverified.** The owner's
    commit `2bc5478` carried the new `outputHash`; the C2 `kernel` step was
    stale. Stop C3 proves `KERNEL-BOOTISO-BUILD-OK` + `REBUILD-OK`.
 
 ## Issues Encountered
 
-- **Standalone amd64 TCG gate outstanding.** `cargo xtask gate --arch
-  x86-64 --accel tcg` has not been reported. The `GATE-PASS
-  control-no-rio` lines in the returns are the full/stress drawterm
-  legs, not the standalone command.
-- **Two owner approvals outstanding.** The four recorded equivalence
-  expectations (HARN-08) and the Harvey diff APPROVE/REJECT.
+- **The Harvey commit is unpushed.** `c697666ba` is one ahead of the
+  owner's `master`; the branch is `ahead 2` with the pre-existing
+  planning-freeze commit `25d97dc4d`. The owner push is the remaining
+  action; the executor does not push Harvey.
 - **x86_64 host unit test not run on the Mac.** `cargo xtask test`
   exercises the host arch (aarch64 here); the conversion is
   compile-time asserted in every kernel build, so `cargo xtask
@@ -239,38 +260,41 @@ None.
 
 ## Known Stubs
 
-None. The TCG result and the approvals are external gates, not stubs.
+None.
 
 ## Threat Flags
 
-None beyond the plan's threat model. No Harvey write, staging, commit or
-diff application; no STATE.md/ROADMAP.md change; no push beyond the
-owner-authorized fast-forward to `witness-src/01-34`.
+None beyond the plan's threat model. The one approved-write boundary was
+crossed exactly as planned: `git apply` + the explicit 36-path
+`git add --` in `/Users/neilskinner/code/harvey`, no `sys/**`, no font
+path, no push. No STATE.md/ROADMAP.md change.
 
 ## Next Phase Readiness
 
-- **The witness set is green.** No further witness step is pending.
-- **The owner's three asks:**
-  1. `equivalence approved` — the four recorded expectations
-     (tier1 39, auth 10, churn 1, stress tap venue), as HARN-08.
-  2. The standalone TCG result — `cargo xtask gate --arch x86-64 --accel
-     tcg` on the x86_64 host, if not already run.
-  3. `Harvey diff APPROVE` or `REJECT: <changes>`.
-- **The Harvey diff stays unapplied** until the TCG result is green and
-  the diff is explicitly approved.
-- **01-28 was not started.** No pin bump, no Harvey commit, no Harvey
-  push.
+- **The witness set and every approval are complete.** Only the owner's
+  Harvey push remains:
+
+      git -C /Users/neilskinner/code/harvey push origin HEAD:master
+
+  (the branch is the owner's current branch, `master`; the push publishes
+  the pre-existing `25d97dc4d` freeze commit too).
+
+- **01-28 was not started.** No pin bump and no further Harvey change.
+- **After the push:** reply `Harvey pushed: <branch> <sha>`; the next
+  continuation records `HARVEY-PUSHED` and proceeds to 01-28.
 
 ## Self-Check: PASSED
 
 - `cargo test -p xtask gate::` 10/10 PASS; `cargo xtask clippy` and
   `cargo xtask check` exit 0.
-- `witness/evidence/stop-c2/` has 12 files and `stop-c3/` 7; each
+- `witness/evidence/stop-c2/` has 12 files and `stop-c3/` 8; each
   ≤200 lines; `grep -acE 'auth-creds|[Pp]assword='` is 0 on every file.
-- `WITNESS-LOG.md` has six `VERDICT stopc2-*` and four `VERDICT
-  stopc3-*` lines.
-- Commits through `ff01d28` are ancestors of HEAD;
-  `git rev-list --count 4f9697d..HEAD` = 8 before this SUMMARY update.
+- `WITNESS-LOG.md` has six `VERDICT stopc2-*` and five `VERDICT
+  stopc3-*` lines (soak, equiv, kernel, store-verify, tcg).
+- Commits through `66189ff` are ancestors of HEAD;
+  `git rev-list --count 4f9697d..HEAD` = 9 before this records update.
+- Harvey: HEAD `c697666ba315f137ca2fd11768f835d04bd9f018`, parent
+  `25d97dc4d4976bfb7411f01970755acf6261c81b`, 36 files changed,
+  +285/−9972, zero font paths; the 11 font modifications remain
+  unstaged; `master` is ahead 2 and unpushed.
 - STATE.md and ROADMAP.md were not modified (worktree mode).
-- `/Users/neilskinner/code/harvey` is untouched; no staging, commit or
-  push; the diff is still at `$HOME/r9-harvey-flip/harvey-flip.diff`.

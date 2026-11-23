@@ -831,8 +831,9 @@ and the amd64 TCG leg:
 
 Expected: `soak` PASS on the tap venue; `equiv` all rows `match`;
 `kernel` `KERNEL-BOOTISO-BUILD-OK` + `KERNEL-BOOTISO-REBUILD-OK` on the
-new hash; `store_verify` PASS. The Harvey diff remains unapplied until
-a green run and an explicit APPROVE.
+new hash; `store_verify` PASS. The Harvey diff remained unapplied until
+the green C3 run and the explicit APPROVE — both are now recorded in the
+Stop C3 section.
 
 **Resolved by stop C3 — all four were green.** See the Stop C3 section
 below.
@@ -840,10 +841,12 @@ below.
 ## Stop C3 — plan 01-34, x86_64 KVM
 
 STATUS stopc3: PASS for the four selected steps. With stop C2's full
-8/8 and tap stress, every witness step is now green. Only three owner
-items remain before the Harvey flip: the standalone amd64 TCG gate
-result (not in this return), the explicit HARN-08 equivalence approval,
-and the Harvey diff APPROVE/REJECT. The diff remains unapplied.
+8/8 and tap stress, every witness step is now green, and the three
+owner items that followed are resolved: the standalone amd64 TCG gate
+is `GATE-PASS` (owner report), the HARN-08 equivalence expectations are
+APPROVED (2026-11-23 owner), and the Harvey diff is APPROVED and
+applied as Harvey `c697666ba` (unpushed; the owner push is the one
+remaining step). The diff is no longer unapplied-awaiting-approval.
 
 - **Return:** `witness-src/01-34` at
   `d6106dbfcdbfa16be02a14b1d40f95adcbc2226e` on our halted-summary tip
@@ -853,8 +856,8 @@ and the Harvey diff APPROVE/REJECT. The diff remains unapplied.
   19:44:52Z; survivors none; credential scan clean.
 - **Steps selected:** `soak kernel equiv store_verify` (the four red/
   unproven C2 steps; no full rerun).
-- **Harvey:** NOT APPROVED — no change, staging or commit; the prepared
-  diff remains unapplied.
+- **Harvey:** APPROVED 2026-11-23 by the owner and committed as
+  `c697666ba315f137ca2fd11768f835d04bd9f018`; not pushed.
 
 ### Per-step verdicts
 
@@ -870,6 +873,9 @@ EVIDENCE stopc3-kernel: .planning/phases/01-stage-p0-cross-build-harness/witness
 
 VERDICT stopc3-store-verify: PASS
 EVIDENCE stopc3-store-verify: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c3/store-verify.log
+
+VERDICT stopc3-tcg: PASS
+EVIDENCE stopc3-tcg: owner report 2026-11-23 — standalone `nix develop -c cargo xtask gate --arch x86-64 --accel tcg` on the x86_64 host printed `GATE-PASS` (no log file committed; the GATE-PASS control-no-rio lines in the full/stress captures are the drawterm legs, not this run)
 
 EVIDENCE stopc3-env: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c3/env.txt
 EVIDENCE stopc3-summary: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c3/summary.tsv
@@ -897,18 +903,31 @@ EVIDENCE stopc3-summary: .planning/phases/01-stage-p0-cross-build-harness/witnes
   `KERNEL-BOOTISO-REBUILD-OK` on the new
   `sha256-b6OcAb2pOufpr5AqJj2SqhXnrTYsIQRTgkh9FcgtNT0=`.
 
-### Still outstanding (owner)
+### Approvals and the Harvey commit (2026-11-23)
 
-1. **Standalone amd64 TCG gate** —
-   `cargo xtask gate --arch x86-64 --accel tcg` on the x86_64 host. The
-   `GATE-PASS control-no-rio` lines in the return belong to the
-   full/stress drawterm legs; they are NOT this run.
-2. **HARN-08 equivalence approval** — approve the four recorded
-   expectations (tier1 39, auth 10, churn 1, stress tap venue).
-3. **Harvey diff** — explicit APPROVE or REJECT: <changes>. The diff
-   stays unapplied until both this and the TCG result are green.
+1. **Standalone amd64 TCG gate — PASS (owner report).**
+   `nix develop -c cargo xtask gate --arch x86-64 --accel tcg` printed
+   `GATE-PASS` on the x86_64 host. The `GATE-PASS control-no-rio` lines
+   in the full/stress captures are the drawterm legs, not this run.
+2. **HARN-08 equivalence — APPROVED (owner, 2026-11-23).** The four
+   recorded expectations are accepted: tier1 `T1-OK` 39, auth `AUTH-OK`
+   10, churn `CATS-DONE 1400` 1, stress `netstress: venue tap` 1. Stop
+   C3 verified each 1:1 and all 10 equivalence rows match.
+3. **Harvey diff — APPROVED (owner, 2026-11-23) and APPLIED.** From base
+   `25d97dc4d4976bfb7411f01970755acf6261c81b`, `git apply` plus an
+   explicit 36-path `git add --` produced Harvey commit
+   `c697666ba315f137ca2fd11768f835d04bd9f018` on `master`:
+   36 files, +285/−9972, zero `sys/lib/(postscript|troff)` or
+   `devpost.add` paths; the 11 pre-modified font files were never
+   staged and remain unstaged. The commit is UNPUSHED.
+   The owner push is the one remaining step:
+   `git -C /Users/neilskinner/code/harvey push origin HEAD:master`.
 
 ### The prepared Harvey review packet
+
+**APPROVED 2026-11-23 and applied as Harvey
+`c697666ba315f137ca2fd11768f835d04bd9f018` (unpushed).** The packet
+below is the reviewed record; the owner push is the remaining step.
 
 - **Full diff:** `$HOME/r9-harvey-flip/harvey-flip.diff` — 511797 bytes,
   sha256 `f7b0272d23bc6c131c2f63b37cde1330c0bebddd25b905c22040829232cd7f22`.
