@@ -1212,9 +1212,9 @@ plan.
    green, no retained file); the stop-E set is x86_64 KVM. Disposition:
    accepted, recorded; the aarch64 kernel hash still matches the 01-08
    baseline.
-5. **The 01-08 x86_64 kernel baseline is superseded** by the approved 01-34
-   x86_64 tick fix; the audit compares at the bump (unchanged package ELF
-   from stop C3), not to the stale 01-08 literal. Disposition: documented
-   deviation from the plan's stale acceptance line.
+5. **The 01-08 x86_64 kernel baseline is superseded** by the approved
+   01-33/01-34 x86_64 fixes; the audit compares at the bump (unchanged
+   package ELF from stop C3), not to the stale 01-08 literal. Disposition:
+   documented deviation from the plan's stale acceptance line.
 
 
