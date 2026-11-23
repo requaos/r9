@@ -494,4 +494,121 @@ procedure is satisfied.
 The amd64 TCG gate remains the one pending check before phase close-out; no
 later plan (01-26 and later) was started.
 
+## Stop C — plan 01-27, x86_64 KVM (prepared, awaiting owner)
+
+STATUS stopc: PREPARED-AWAITING-OWNER
+
+No verdict is recorded yet. Plan 01-27 Task 2 records the verdicts after the
+owner's KVM return; the single Harvey commit is made only if every verdict is
+PASS and the owner replies APPROVE. Nothing in the owner's Harvey checkout was
+modified, staged or committed in preparation.
+
+### The prepared Harvey review packet
+
+- **Full diff:** `$HOME/r9-harvey-flip/harvey-flip.diff` — 511797 bytes,
+  sha256 `f7b0272d23bc6c131c2f63b37cde1330c0bebddd25b905c22040829232cd7f22`.
+- **Base:** Harvey `25d97dc4d4976bfb7411f01970755acf6261c81b` (the owner's
+  `master`; the unpushed planning-freeze commit is this commit's parent).
+- **Shape:** 36 paths, +285 / −9972 — 32 deletions, 1 new file
+  (`nix/q35.sh`), 3 modified (`flake.nix`, `flake.lock`,
+  `.github/workflows/phase6.yml`).
+- **Deletions:** 17 under `nix/` (16 moved gate scripts + `host-echo.c`),
+  9 under `build/x86_64/`, 5 under `build/aarch64/`, and
+  `.github/workflows/r9-shell.yml` (whole).
+- **Kept exception:** `build/x86_64/drawterm-gate.expect` stays — it is not
+  in the diff; the retained `nix/drawterm-x64.sh` names it as the source of
+  its `-s ''` pin (the plan's expected exception).
+- **Protected set:** `grep -cE 'sys/lib/(postscript|troff)|devpost\.add'`
+  over the diff → **0**; the 11 pre-modified font paths are not touched.
+- **D-19:** the deletion set's intersection with r9's tree/reference
+  read-set paths is empty (the recorded 102-path check → no output; an
+  independent re-extraction of the three `nix/harvey/*.nix` files →
+  0 intersecting path-like tokens). `grep -c '\.expect'` over the read set →
+  0; no `nix/*.sh` appears in any read set.
+- **Preparation checks (Mac, read-only):** the diff sha256 matches
+  HARVEY-FLIP.md; the scratch clone's
+  `git diff --stat HEAD -- . ':(exclude)sys/**'` reproduces 36 files /
+  +285 / −9972; `git -C /Users/neilskinner/code/harvey apply --check
+  "$HOME/r9-harvey-flip/harvey-flip.diff"` → APPLY-CHECK-OK; the owner's
+  checkout is unchanged (HEAD `25d97dc4d…`, status-porcelain sha256
+  `041d2929…`), and its 11 font paths still read ` M`.
+
+### What the owner runs (KVM host, two hours or more)
+
+Part 1, on the Mac — push the r9 source the witness runs from:
+
+```sh
+git -C /Users/neilskinner/code/r9 push origin HEAD:main
+# or, to leave main alone:
+git -C /Users/neilskinner/code/r9 push origin HEAD:refs/heads/witness-src/01-27
+```
+
+Part 2, on the x86_64 KVM host with the tap/bridge venue up:
+
+```sh
+git -C <r9> fetch origin
+git -C <r9> checkout <pushed commit>   # or FETCH_HEAD after fetching witness-src/01-27
+cd <r9>
+R9_WITNESS_STEPS="full soak stress equiv store_verify" \
+  bash .planning/phases/01-stage-p0-cross-build-harness/witness/run-witness.sh
+```
+
+`step_full` exports `R9_ACCEL=kvm` for every child app and keeps each app's
+capture set under `out/full/apps/`; `soak` and `stress` preflight
+`nix run .#net-doctor -- --mode tap` and refuse a slirp substitute; `equiv`
+writes `out/equiv/report.tsv` against `witness/equivalence.tsv`; `store_verify`
+runs last.
+
+Part 2b, return the results (never a creds file):
+
+- **Path A (preferred):** from the KVM host, push branch
+  `witness-returns/01-27` with the `out/` tree and `WITNESS-RETURN.md` under
+  `.planning/phases/01-stage-p0-cross-build-harness/witness/return-01-27/`.
+- **Path B:** paste the full `$HOME/r9-witness-work/WITNESS-RETURN.md`.
+
+Part 3, on the Mac — review the full diff:
+
+```sh
+HF=$HOME/r9-harvey-flip
+shasum -a 256 "$HF/harvey-flip.diff"
+git -C "$HF/harvey" status
+git -C "$HF/harvey" diff HEAD --stat -- . ':(exclude)sys/**'
+less "$HF/harvey-flip.diff"
+```
+
+### The approval wording
+
+**Harvey commit (reply together with the stop-C return):**
+
+> stop C: pushed <ref>, returned via A <sha> | B; Harvey diff APPROVE
+
+or
+
+> stop C: pushed <ref>, returned via A <sha> | B; Harvey diff REJECT: <changes you want>
+
+APPROVE authorises the executor to apply exactly
+`$HOME/r9-harvey-flip/harvey-flip.diff` (sha256 `f7b0272d…`) to
+`/Users/neilskinner/code/harvey` and make the single commit
+`refactor(flake): move r9 composition to the r9 repo; add the q35 own-kernel launcher`
+— no push, no AI attribution, and none of the 11 font files staged.
+
+**Owner push (Task 3, after the Harvey commit exists):**
+
+> Harvey pushed: <branch> <sha>
+
+after `git -C ~/code/harvey push origin HEAD:<branch>`. The new commit's parent
+is the unpushed `25d97dc4d`, so the push publishes both (D-23, recorded in
+HARVEY-FLIP.md).
+
+### Guard rails for the continuation
+
+- No Harvey write, staging or commit before **both** an all-PASS stop C and
+  the owner's explicit APPROVE.
+- Stage by explicit path from the diff's own list; never `git add -A`, never
+  `git commit -a`, never a directory argument covering `sys/**`.
+- No push from the executor to either repository; the owner pushes Harvey
+  (Task 3) and r9 (Part 1).
+- A REJECT or any FAIL ends the plan with no Harvey change; the scratch clone
+  can absorb requested changes before a re-run of this stop.
+
 
