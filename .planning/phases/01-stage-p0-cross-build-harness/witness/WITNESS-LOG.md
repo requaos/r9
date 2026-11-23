@@ -717,6 +717,123 @@ or the single app through the flake: `R9_ACCEL=tcg nix run
 .#boot-r9-tier1-x64` (x86_64-linux only; the app exports its own
 supply). The KVM rerun (stop C2) is the authoritative proof.
 
+**Stop-C2 result: CONFIRMED.** The KVM rerun printed `fpprobe: ok` and
+`T1-OK fpprobe`; the tier-1 post-pass reports all 39 expected T1-OK
+present, zero T1-FAIL, zero panic (evidence:
+`evidence/stop-c2/full.log`). The two ring-3 note rounds now deliver.
+
+## Stop C2 — plan 01-34, x86_64 KVM
+
+STATUS stopc2: HALTED — return `witness-src/01-34` at
+`2bc54786da3895e4c30f8ec8e7141b4ccd99b99f` on the fixed tree
+(`2a5cbed`). The moved gates themselves are green: the full set is 8/8
+including `fpprobe`, stress PASSes on the tap venue, and both trees
+verify. The run is not fully green: the `full` step exited 1 on a
+capture-check bug, `soak` refused slirp, `equiv` compares against stale
+baselines, and the `kernel` step has not verified the new boot-iso hash.
+
+- **Return:** `witness-src/01-34` at `2bc5478`; return directory
+  `witness/return-01-34/`; source HEAD `2a5cbed`; host `teeniebox`
+  (x86_64-linux, nproc 16, 30 GiB RAM, nix 2.35.6, `DEV_KVM=writable`);
+  session 2026-11-23T19:22:04Z → 19:31:19Z; survivors none; credential
+  scan clean.
+- **Steps selected:** `full soak stress equiv store_verify` (the owner
+  did not select `kernel`).
+- **Harvey:** NOT APPROVED — no change, staging or commit was made; the
+  prepared diff remains unapplied.
+
+### Per-step verdicts
+
+VERDICT stopc2-full: PASS
+EVIDENCE stopc2-full: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c2/full.tsv
+EVIDENCE stopc2-full: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c2/full.log
+
+VERDICT stopc2-soak: FAIL
+EVIDENCE stopc2-soak: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c2/soak.log
+
+VERDICT stopc2-stress: PASS
+EVIDENCE stopc2-stress: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c2/stress.log
+
+VERDICT stopc2-equiv: FAIL
+EVIDENCE stopc2-equiv: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c2/equiv/report.tsv
+EVIDENCE stopc2-equiv: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c2/equiv/rows.tsv
+
+VERDICT stopc2-store-verify: PASS
+EVIDENCE stopc2-store-verify: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c2/store-verify.log
+
+VERDICT stopc2-kernel: PENDING
+EVIDENCE stopc2-kernel: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c2/kernel.log
+
+EVIDENCE stopc2-env: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c2/env.txt
+EVIDENCE stopc2-summary: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c2/summary.tsv
+EVIDENCE stopc2-secret-scan: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c2/secret-scan.txt
+EVIDENCE stopc2-survivors: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c2/survivors.txt
+
+### What the run proves
+
+- **full — 8/8, `GATE PASS full x86_64-linux run=405781-1795461728`.**
+  `boot-r9-tier1-x64` PASS: `fpprobe: ok`, `T1-OK fpprobe`, every
+  expected T1-OK present (39 names), zero T1-FAIL. The fpprobe
+  ms→tick finding is confirmed on the KVM venue.
+- **The 01-34 capture fixes worked.** Every app's real `R9_GATE_OUT`
+  directory was copied (no `-1` from the full set), and
+  `boot-r9-x64` now has `boot-r9.log`: its three markers count 1/1.
+  `drawterm-gate-x64`, `boot-r9-smoke-x64`, `boot-r9-net-smoke-x64`,
+  `boot-r9-services-x64` and `boot-r9-x64` all `match`.
+- **stress — PASS on the tap venue.** `netstress: venue tap`,
+  `tcpblast: done x 9`, zero `netstress: FAIL`, ALL STAGES PASS.
+- **store_verify — PASS** on both tree paths.
+- **The tap preflight fix worked:** the doctor read
+  `…/harvey-tree-amd64-0/build/x86_64/root-tree/lib/netaddr.rc` and
+  PASSed all eight checks.
+
+### Why the run is halted (and the fixes committed after the return)
+
+1. **`full` step exit 1 was the capture check, not a gate.** The step
+   printed `GATE PASS full` and then `FULL-NO-CAPTURE
+   boot-r9-net-soak-x64` / `boot-r9-stress-x64`: the copy loop walked
+   the whole app→dir map, which carries the two tap-venue rows that
+   only the separate soak/stress steps produce. Fixed: `step_full`
+   iterates the eight `FULL_APPS` and resolves each dir through
+   `app_out_dir`; a static test
+   (`full_capture_loop_covers_only_the_full_tier`) pins it.
+2. **`soak` refused slirp.** The doctor PASSed, then the app exited in
+   the venue-honesty check: `slirp evidence not accepted … want
+   --net=tap / R9_NET=tap`. `venue_gate` exported `HARVEY` and the seam
+   but not `R9_NET`. Fixed: both the doctor preflight and the app run
+   now carry `R9_NET=tap` (the stress app's default happened to be tap;
+   it is explicit now too).
+3. **`equiv` compared against stale baselines.** No `-1` rows remain
+   from the capture gap; the four `differ` rows are expectation drift:
+   `T1-OK 39/36`, `AUTH-OK 10/5`, `CATS-DONE 1400 1/2` and the tap
+   run's absent `RACE-STRESS slirp venue` label (0/1). `equivalence.tsv`
+   now records the stop-C2 expectations with a per-row rationale and a
+   `recorded` source token; the comparator treats `recorded` as an
+   owner-approved expectation (no fresh baseline, no stale capture
+   count). The gates themselves are unchanged.
+4. **`kernel` is PENDING.** The return's `kernel.log` is the stale
+   4139fdf package. The branch's `flake.nix` (commit `2bc5478`) carries
+   the new boot-iso `outputHash`
+   `sha256-b6OcAb2pOufpr5AqJj2SqhXnrTYsIQRTgkh9FcgtNT0=`, but no
+   `kernel` step has built/`--rebuild`-checked it.
+
+### Remaining owner command
+
+On the x86_64 host, at the fixed commit, the four unproven/red steps
+only (the full and stress captures are already green — no full rerun):
+
+    R9_WITNESS_STEPS="soak equiv kernel store_verify" \
+      bash .planning/phases/01-stage-p0-cross-build-harness/witness/run-witness.sh
+
+and the amd64 TCG leg:
+
+    nix develop -c cargo xtask gate --arch x86-64 --accel tcg
+
+Expected: `soak` PASS on the tap venue; `equiv` all rows `match`;
+`kernel` `KERNEL-BOOTISO-BUILD-OK` + `KERNEL-BOOTISO-REBUILD-OK` on the
+new hash; `store_verify` PASS. The Harvey diff remains unapplied until
+a green run and an explicit APPROVE.
+
 ### The prepared Harvey review packet
 
 - **Full diff:** `$HOME/r9-harvey-flip/harvey-flip.diff` — 511797 bytes,

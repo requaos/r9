@@ -1,0 +1,24 @@
+# stop-C2 full.log — trimmed excerpt (plan 01-34 return, commit 2bc5478)
+# source: witness/return-01-34/full/full.log (6073 lines)
+# selection: every app header, the fpprobe verdict + tier1 post-pass, the auth
+#            ALL STAGES PASS line, the full gate verdict and the capture-check
+#            lines.  Control characters (a stray CR before the smoke header)
+#            are stripped; text is otherwise verbatim.
+gate: full app drawterm-gate-x64
+gate: full app boot-r9-x64
+gate: full app boot-r9-smoke-x64
+gate: full app boot-r9-tier1-x64
+fpprobe: ok
+T1-OK fpprobe
+tier1-r9-x64: post-pass ok — every expected T1-OK present (39 names)
+tier1-r9-x64: post-pass ok — T1-SKIP set equals the sweep's declared list (0 names)
+tier1-r9-x64: post-pass ok — zero T1-FAIL, zero panic
+gate: full app boot-r9-net-smoke-x64
+gate: full app boot-r9-services-x64
+gate: full app boot-r9-churn-x64
+gate: full app boot-r9-auth-x64
+smoke-r9-auth-x64: ALL STAGES PASS — chain boot, hostfwd-5670 observed host-side, D-02 boot pairing (DEMO label), non-interactive keyfs (N keys read), AUTH-OK keyfs, loopback up, the writable secstore venue (ramfs, live file probe), authsrv connect-accept on 567, secstored announced on 5356, cs answering authdom from the baked local, factotum carrying the p9sk1 key, auth/debug's p9sk1 success as norbert, hauthprobe's SPEAKSFOR-OK (bootes for norbert), the deny control (SPEAKSFOR-DENIED x1 + 'no speaks for'), console restored, secuser's account through the venue, the secstore round-trip EXERCISED and presence-demanded (secstore: saved + AUTH norbert + [norbert] PUT/GET syslog tokens + the bytes-back AUTH-SECOBS + the AUTH-OK secstore-roundtrip verdict — the 18-05 SKIP arm retired), AUTH-DONE, ANNOUNCE on serial, tr-ok present, nvram-prompt-absent, zero AUTH-FAIL, the capture redacted
+GATE PASS full x86_64-linux run=405781-1795461728
+FULL-NO-CAPTURE boot-r9-net-soak-x64 (expected target/gates/soak-r9-net-x64)
+FULL-NO-CAPTURE boot-r9-stress-x64 (expected target/gates/stress-r9-net-x64)
+FULL-RUN-DIR /home/req/code/r9/target/gate/405781-1795461728

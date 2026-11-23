@@ -1,0 +1,15 @@
+# stop-C2 stress.log — trimmed excerpt (plan 01-34 return, commit 2bc5478)
+# selection: the tap preflight, the seam/netdev provenance, the venue fixture's
+#            own label, the post-pass assertions and the ALL STAGES PASS line.
+#            Verbatim otherwise.
+== doctor preflight PASS (tap mode — the preferred stress venue, #66's own)
+== seam: tap_gwv4=192.168.122.1 blastport=7777 (/nix/store/arrvrysn8l6bagwv95nbzlng8s1y7wyf-harvey-tree-amd64-0/build/x86_64/root-tree/lib/netaddr.rc); peer binds 192.168.122.1 (venue tap)
+== netdev argv (emitter, tap): -netdev tap,id=n0,br=br0,helper=/run/wrappers/bin/qemu-bridge-helper -device virtio-net-pci-non-transitional,netdev=n0 -object filter-dump,id=f0,netdev=n0,file=/home/req/code/r9/target/gates/stress-r9-net-x64/evidence.VUcgqA/netstress.pcap
+rc /lib/netstress.rc tap 1 8 512
+netstress: venue tap L2-stress-r9-x64: stage ok — stress-venue
+netstress: STRESS-DONE
+stress-r9-x64: post-pass ok — tcpblast: done x 9 (1 baseline + 8 burst)
+stress-r9-x64: post-pass ok — zero netstress: FAIL occurrences
+stress-r9-x64: post-pass ok — venue label present (tap)
+stress-r9-x64: ALL STAGES PASS — chain boot, netstress fixture (tap: static + venue label + baseline 1 + burst 8 x 512, counted 9 tcpblast: done), stats reconciliation, zero FAIL, completion
+== stress gate PASS — capture retained at /home/req/code/r9/target/gates/stress-r9-net-x64/stress-r9.log; cascade + peer log at /home/req/code/r9/target/gates/stress-r9-net-x64/evidence.VUcgqA
