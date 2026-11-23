@@ -41,6 +41,29 @@
 #     exits 0, or RIO-FAIL control-saw-rio with a non-zero exit when one
 #     is present (D-28: the control stays unchanged).
 #
+#   RIO_MODE=rio-diag
+#     The rio leg plus the login marker (plan 01-32; RIO-DERISK.md
+#     "Diagnostic design and stop A2").  Before the bake, the scratch
+#     tree's staged cpu profile
+#     (build/x86_64/root-tree/usr/glenda/lib/profile) gains two creates
+#     immediately before its `exec rio' line:
+#         syscall create /srv/r9-login-ok 1 0666
+#         syscall create /srv/r9-login-pid.$pid 1 0666
+#     and is restored from a backup on every exit path.  The X11 feed,
+#     session window and D-28 pair poll are the rio leg's, unchanged.
+#     The serial console's `ls /srv' therefore shows r9-login-ok (and
+#     r9-login-pid.<pid>) only when the authenticated profile reached its
+#     rio handoff: presence separates RIO-START-FAIL (marker present,
+#     pair absent) from LOGIN-FAIL (marker absent).  The marker is an #s
+#     service entry, not a regular file: devsrv create is OWRITE-only and
+#     its write expects a decimal fd, so the entry NAME is the payload
+#     and an unposted entry is listed by read but cannot be cat'ed
+#     (port/src/devsrv.rs create/read/write).  The driver also captures
+#     x11.txt (window id/geometry/focus/xprop/xwininfo) and two PNGs
+#     (before typing, after Return) into RIO_OUT.  This is a diagnostic,
+#     not a gate: RIO-SERVING still requires the D-28 pair, and no PASS
+#     is recorded from the marker alone.
+#
 # The session logs in as the user whose staged home carries the cpu
 # profile (/usr/glenda/lib/profile).  The bake's creds file names the
 # DEMO probe user (norbert), who has no staged home; the DEMO domain
@@ -64,7 +87,9 @@
 # package paths; a standalone run needs the same values):
 #   HARVEY            REQUIRED — writable scratch Harvey copy.
 #   RIO_OUT           output dir (default ${S3_OUT:-$PWD/rio-out}; created).
-#   RIO_MODE          rio (default) | control-noG (S3_MODE is an alias).
+#   RIO_MODE          rio (default) | control-noG | rio-diag
+#                     (S3_MODE is an alias; rio-diag is the diagnostic
+#                     leg described above, never a gate).
 #   R9_KERNEL_X64_PKG REQUIRED — r9 kernel-x64 package store path.
 #   R9_ISO_BUILDER    REQUIRED — r9's iso-builder executable.
 #   R9_NETDEV_EMITTER REQUIRED — r9's netdev-args emitter executable.
@@ -109,6 +134,16 @@ RIO_FEED_WAIT="${RIO_FEED_WAIT:-30}"
 RIO_FEED_SETTLE="${RIO_FEED_SETTLE:-2}"
 RIO_EXPECT="${RIO_EXPECT:-${S3_EXPECT:-$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)/rio-gate.expect}}"
 
+# The diagnostic marker names (plan 01-32).  They are #s service entries
+# in the kernel-wide srv table, so the serial console's `ls /srv' sees
+# them from any namespace that binds #s at /srv; the pid rides the second
+# entry's name because an unposted service file cannot be read.
+RIO_DIAG=0
+RIO_DIAG_MARKER="/srv/r9-login-ok"
+RIO_DIAG_PID_PREFIX="/srv/r9-login-pid."
+RIO_DIAG_PROFILE=""
+RIO_DIAG_PROFILE_BAK=""
+
 R9_RUN_TAG=""
 R9_DT_TAG=""
 RIO_XVFB_PID=""
@@ -130,7 +165,8 @@ case "$RIO_OUT" in
 esac
 case "$RIO_MODE" in
 	rio|control-noG) ;;
-	*) err "RIO_MODE=$RIO_MODE: want rio|control-noG" ;;
+	rio-diag) RIO_DIAG=1 ;;
+	*) err "RIO_MODE=$RIO_MODE: want rio|control-noG|rio-diag" ;;
 esac
 
 mkdir -p "$RIO_OUT"
@@ -188,6 +224,12 @@ cleanup() {
 		pkill -f "^${R9_DT_TAG} " 2>/dev/null || true
 	fi
 	sweep_run_identity || true
+	if [ -n "$RIO_DIAG_PROFILE" ] && [ -n "$RIO_DIAG_PROFILE_BAK" ] && [ -f "$RIO_DIAG_PROFILE_BAK" ]; then
+		# Put the unmodified staged profile back (rio-diag only); the
+		# backup lives under build/x86_64 so a killed run can restore
+		# from it on the next diagnostic invocation.
+		cp "$RIO_DIAG_PROFILE_BAK" "$RIO_DIAG_PROFILE" 2>/dev/null || true
+	fi
 	if [ -n "$TMPD" ]; then
 		rm -rf "$TMPD"
 	fi
@@ -243,6 +285,20 @@ fi
 command -v xdotool >/dev/null 2>&1 || err "xdotool not found on PATH — the rio mode XTEST feed needs it (the flake app's runtimeInputs carry it)"
 command -v Xvfb >/dev/null 2>&1 || err "Xvfb not found on PATH — the rio mode draw venue needs it (the flake app's runtimeInputs carry it)"
 
+if [ "$RIO_DIAG" = "1" ]; then
+	# The diagnostic must never fall back to a run without evidence: name
+	# the capture tools before anything spawns.
+	command -v xwd >/dev/null 2>&1 \
+		|| err "RIO-FAIL diag-capture — xwd not found on PATH (the flake app's runtimeInputs carry it)"
+	if ! command -v convert >/dev/null 2>&1 && ! command -v magick >/dev/null 2>&1 && ! command -v import >/dev/null 2>&1; then
+		err "RIO-FAIL diag-capture — no ImageMagick tool (convert|magick|import) on PATH (the flake app's runtimeInputs carry imagemagick)"
+	fi
+	command -v xprop >/dev/null 2>&1 \
+		|| err "RIO-FAIL diag-capture — xprop not found on PATH (the flake app's runtimeInputs carry it)"
+	command -v xwininfo >/dev/null 2>&1 \
+		|| err "RIO-FAIL diag-capture — xwininfo not found on PATH (the flake app's runtimeInputs carry it)"
+fi
+
 # --- step 0b: accel selection (no silent downgrade; KVM is the witness) -
 
 R9_ACCEL="${R9_ACCEL:-kvm}"
@@ -285,6 +341,54 @@ if ! [[ "$KERNDATE" =~ ^[0-9]+$ ]]; then
 	KERNDATE=$(date +%s)
 fi
 export KERNDATE
+
+# --- step 0d: the rio-diag login marker (diagnostic only) --------------
+# Patch the scratch tree's staged cpu profile immediately before its
+# `exec rio' line so the authenticated session leaves a serial-visible
+# entry in the kernel-wide #s table before rio starts.  `syscall create'
+# performs only the create (no write): devsrv create is OWRITE-only and
+# its write expects a decimal fd number, so an ordinary
+# `echo login-ok >/srv/<name>' CANNOT work here — the entry NAME is the
+# payload, and an unposted entry is listed by read but cannot be read
+# (port/src/devsrv.rs create/read/write).  The pid therefore rides the
+# second entry's name.  The backup lives under build/x86_64 (outside the
+# tree mkimage tars) and is restored on every exit path the script
+# controls.
+patch_diag_profile() {
+	local prof="$HARVEY/build/x86_64/root-tree/usr/glenda/lib/profile"
+	local bak="$HARVEY/build/x86_64/r9-diag-profile.orig"
+	local patched="$TMPD/profile.patched"
+	[ -f "$prof" ] || err "profile-missing: $prof (the cpu skeleton mkimage stages at section 15d)"
+	if [ -f "$bak" ] && grep -qF "$RIO_DIAG_MARKER" "$prof"; then
+		# A previous diagnostic died before its EXIT trap restored the
+		# tree; the persistent backup is the pristine copy.
+		cp "$bak" "$prof" || err "profile-restore-failed: $bak -> $prof"
+	fi
+	cp "$prof" "$bak" || err "profile-backup-failed: $prof -> $bak"
+	RIO_DIAG_PROFILE="$prof"
+	RIO_DIAG_PROFILE_BAK="$bak"
+	local marker_line="/amd64/bin/syscall create $RIO_DIAG_MARKER 1 0666 || echo r9-diag-marker-failed"
+	local pid_line="/amd64/bin/syscall create ${RIO_DIAG_PID_PREFIX}\$pid 1 0666 || echo r9-diag-pid-failed"
+	# The marker MUST be unconditional at the top of the profile.  The
+	# stop-A2 screenshots show the login is accepted (the cpu% shell
+	# appears) but the profile's draw-presence guard skips `exec rio` on
+	# this app-baked venue (the 19-10 residual).  A marker placed before
+	# `exec rio` would then be a false negative: login-not-reached when
+	# the login actually reached the profile.  The absolute syscall path
+	# keeps it independent of the profile's PATH binds.
+	{
+		printf '%s\n' "$marker_line"
+		printf '%s\n' "$pid_line"
+		cat "$prof"
+	} >"$patched" || err "profile-patch-write-failed: $patched"
+	cp "$patched" "$prof" || err "profile-patch-failed: $prof"
+	echo "== rio-diag: staged profile patched at the top (marker $RIO_DIAG_MARKER, pid $RIO_DIAG_PID_PREFIX<pid>; backup $bak)"
+}
+
+if [ "$RIO_DIAG" = "1" ]; then
+	echo "== step 0d: patching the staged cpu profile with the rio-diag login marker"
+	patch_diag_profile
+fi
 
 # --- step 1: the amd64 userland (the tier build + the cpu suite) -------
 
@@ -350,9 +454,13 @@ RIO_SMOKE_LOG="${RIO_SMOKE_LOG:-$RIO_OUT/rio-gate-${RIO_MODE}.log}"
 rm -f "$RIO_SMOKE_LOG"
 
 export RIO_MODE RIO_DT_USER RIO_RIO_BUDGET RIO_SESSION_WINDOW RIO_SRV_POLLS RIO_SRV_POLL_WAIT
-export RIO_FEED_WAIT RIO_FEED_SETTLE
+export RIO_FEED_WAIT RIO_FEED_SETTLE RIO_OUT
+if [ "$RIO_DIAG" = "1" ]; then
+	export RIO_DIAG RIO_DIAG_MARKER RIO_DIAG_PID_PREFIX
+fi
 
-if [ "$RIO_MODE" = "rio" ]; then
+case "$RIO_MODE" in
+rio|rio-diag)
 	echo "== step 5/5: starting Xvfb (free display via -displayfd, TCP listening off)"
 	RIO_DISPLAY_FILE="$TMPD/xvfb-display"
 	R9_RUN_ID="$R9_RUN_TAG" Xvfb -displayfd 3 -screen 0 1024x768x24 -nolisten tcp 3>"$RIO_DISPLAY_FILE" &
@@ -368,9 +476,11 @@ if [ "$RIO_MODE" = "rio" ]; then
 	DISPLAY=":$(cat "$RIO_DISPLAY_FILE")"
 	export DISPLAY
 	echo "== Xvfb ready: DISPLAY=$DISPLAY (-nolisten tcp)"
-else
+	;;
+*)
 	echo "== step 5/5: control-noG — no X server needed (drawterm -G has no draw device)"
-fi
+	;;
+esac
 
 R9_QEMU="${R9_QEMU:-qemu-system-x86_64}"
 export R9_ISO RIO_SMOKE_LOG R9_QEMU

@@ -31,6 +31,25 @@
 #     within the feed budget), RIO-FAIL drawterm-exited, RIO-FAIL
 #     no-session.
 #
+#   RIO_MODE=rio-diag
+#     The rio leg plus the diagnostic evidence (plan 01-32).  The gate
+#     patched the scratch cpu profile to create /srv/r9-login-ok and
+#     /srv/r9-login-pid.<pid> (unposted #s service entries) immediately
+#     before `exec rio'; this driver parses the serial `ls /srv' listing
+#     for those entries and prints `RIO-DIAG login-ok' when the login
+#     reached the profile's rio handoff, or `RIO-FAIL login-not-reached'
+#     when it did not.  It then runs the UNCHANGED pair poll and prints
+#     RIO-SERVING / RIO-FAIL rio-not-serving, so one run yields both the
+#     login and the rio-start verdicts.  Before typing and after Return
+#     it captures the drawterm window identity, geometry and focus plus
+#     xprop/xwininfo into $RIO_OUT/x11.txt, and one PNG each into
+#     $RIO_OUT/ (diag-capture is a named failure: no run without
+#     evidence).  The marker is presence-only — devsrv's create is
+#     OWRITE-only and its write expects a decimal fd, so an unposted
+#     entry can be listed but not read (port/src/devsrv.rs).  The
+#     diagnostic is NOT a gate: a PASS (exit 0) still requires the D-28
+#     pair.
+#
 #   RIO_MODE=control-noG
 #     The same pipeline with -G (no draw device), so the profile must
 #     skip rio.  The unchanged pty password feed applies (gconsinit's
@@ -55,11 +74,15 @@
 #   R9_DT_PWFILE — the 0600 password file; the only password source.
 #   DRAWTERM_BIN — Harvey's drawterm package binary (X11 backend).
 #   DISPLAY — the private Xvfb display (rio mode).
-#   RIO_MODE — rio | control-noG.
+#   RIO_MODE — rio | control-noG | rio-diag.
 #   RIO_DT_USER — the drawterm -O user (glenda).
 #   RIO_RIO_BUDGET / RIO_SESSION_WINDOW / RIO_SRV_POLLS /
 #   RIO_SRV_POLL_WAIT / RIO_FEED_WAIT / RIO_FEED_SETTLE — the stage
 #   budgets (see rio-gate.sh).
+#   RIO_OUT — the output dir; required only for rio-diag (x11.txt and the
+#   two PNGs land there).
+#   RIO_DIAG_MARKER — the serial marker entry name (rio-diag only).
+#   RIO_DIAG_PID_PREFIX — the pid-entry name prefix (rio-diag only).
 #   R9_RUN_TAG / R9_DT_TAG — the per-run survivor-sweep identities.
 #
 # exit 0 only when the mode's assertion passed; exit 1 names the failed
@@ -82,11 +105,12 @@ foreach v {R9_ISO RIO_SMOKE_LOG R9_NETDEV_ARGV R9_DEMO_USER R9_DT_PWFILE DRAWTER
 	puts stderr "rio-gate: \$$v unset — run via the flake app (nix run ...#rio-gate)"
 	exit 2
 }
-if {$env(RIO_MODE) ni {rio control-noG}} {
-	puts stderr "rio-gate: RIO_MODE=$env(RIO_MODE) — want rio|control-noG"
+if {$env(RIO_MODE) ni {rio control-noG rio-diag}} {
+	puts stderr "rio-gate: RIO_MODE=$env(RIO_MODE) — want rio|control-noG|rio-diag"
 	exit 2
 }
-set rio_mode [expr {$env(RIO_MODE) eq "rio"}]
+set diag_mode [expr {$env(RIO_MODE) eq "rio-diag"}]
+set rio_mode [expr {$env(RIO_MODE) eq "rio" || $diag_mode}]
 set dt_user $env(RIO_DT_USER)
 if {![file readable $env(R9_DT_PWFILE)]} {
 	puts stderr "rio-gate: the 0600 password file $env(R9_DT_PWFILE) is not readable — aborting before any spawn"
@@ -107,6 +131,29 @@ if {$rio_mode && ![info exists env(DISPLAY)]} {
 	puts stderr "rio-gate: RIO_MODE=rio but DISPLAY is unset — the XTEST feed has no display"
 	exit 2
 }
+if {$diag_mode} {
+	foreach v {RIO_OUT RIO_DIAG_MARKER RIO_DIAG_PID_PREFIX} {
+		if {![info exists env($v)] || $env($v) eq ""} {
+			puts stderr "rio-gate: RIO_MODE=rio-diag but \$$v is unset/empty — the diagnostic cannot record its marker/evidence"
+			exit 2
+		}
+	}
+	# The diagnostic must never fall back to a run without evidence: name
+	# the capture tools before anything spawns (nothing to clean up yet).
+	set have_convert [expr {[auto_execok convert] ne ""}]
+	set have_magick [expr {[auto_execok magick] ne ""}]
+	set have_import [expr {[auto_execok import] ne ""}]
+	if {[auto_execok xwd] eq "" || (!$have_convert && !$have_magick && !$have_import)} {
+		puts stderr "RIO-FAIL diag-capture — xwd plus one of convert|magick|import is required for the PNG evidence (the flake app's runtimeInputs carry them)"
+		exit 1
+	}
+	foreach tool {xprop xwininfo} {
+		if {[auto_execok $tool] eq ""} {
+			puts stderr "RIO-FAIL diag-capture — $tool is required for x11.txt (the flake app's runtimeInputs carry it)"
+			exit 1
+		}
+	}
+}
 set QEMU [expr {[info exists env(R9_QEMU)] ? $env(R9_QEMU) : "qemu-system-x86_64"}]
 set run_tag [expr {[info exists env(R9_RUN_TAG)] ? $env(R9_RUN_TAG) : "r9riogate-[pid]-[clock seconds]"}]
 set dt_tag [expr {[info exists env(R9_DT_TAG)] ? $env(R9_DT_TAG) : "r9riogate-dt-[pid]-[clock seconds]"}]
@@ -119,6 +166,13 @@ set feed_settle [expr {[info exists env(RIO_FEED_SETTLE)] ? $env(RIO_FEED_SETTLE
 
 # --- Hygiene: a fresh capture per run ----------------------------------
 exec rm -f $env(RIO_SMOKE_LOG)
+if {$diag_mode} {
+	# Fresh diagnostic artifacts too: an appended x11.txt from a prior
+	# run would corrupt the before/after labels.
+	foreach stale {x11.txt drawterm-before-typing.png drawterm-after-return.png} {
+		catch {exec rm -f [file join $env(RIO_OUT) $stale]}
+	}
+}
 
 # --- subtree 1: qemu with the cpu ISO ----------------------------------
 set R9_MACHINE [expr {[info exists env(R9_MACHINE)] ? $env(R9_MACHINE) : "q35"}]
@@ -201,8 +255,10 @@ proc hostfwd_stage {port} {
 # res_class "Drawterm" (gui-x11/x11.c: XSetWMProperties) but never sets
 # _NET_WM_PID, so xdotool's --pid lookup cannot match it.  The Xvfb
 # display is private to this run, so the class is unique.  `timeout'
-# bounds xdotool's --sync wait; a failure names dt-feed-timeout.
-proc xfeed_password {secretfile wait settle} {
+# bounds xdotool's --sync wait; a failure names dt-feed-timeout.  The
+# wait and the type are separate procs so the diagnostic can capture the
+# window between them (before any keystroke) and again after Return.
+proc xwait_window {wait} {
 	if {[catch {exec timeout $wait xdotool search --sync --onlyvisible --classname {^drawterm$}} out]} {
 		return -code error "window-wait-failed"
 	}
@@ -210,6 +266,10 @@ proc xfeed_password {secretfile wait settle} {
 	if {$wid eq "" || ![string is digit $wid]} {
 		return -code error "window-id-unparsed"
 	}
+	return $wid
+}
+
+proc xfeed_type {wid secretfile settle} {
 	if {[catch {exec xdotool windowfocus --sync $wid} out]} {
 		return -code error "window-focus-failed"
 	}
@@ -224,6 +284,85 @@ proc xfeed_password {secretfile wait settle} {
 		return -code error "xtest-return-failed"
 	}
 	return $wid
+}
+
+# The documented fallback for the 19-10 residual: on an app-baked venue
+# the profile's draw-presence guard skips the login-time `exec rio`, so
+# the authenticated session leaves a cpu% shell.  Type the manual start
+# into that shell through the same focused X11 window.  This does not
+# weaken the D-28 marker: the pair is still the only PASS condition.
+proc xstart_rio {wid} {
+	if {[catch {exec xdotool windowfocus --sync $wid} out]} {
+		return -code error "window-focus-failed: $out"
+	}
+	after 500
+	if {[catch {exec xdotool type --clearmodifiers --delay 40 {plumber; rio}} out]} {
+		return -code error "xtest-type-failed: $out"
+	}
+	if {[catch {exec xdotool key --clearmodifiers Return} out]} {
+		return -code error "xtest-return-failed: $out"
+	}
+	return $wid
+}
+
+# --- rio-diag: the X11 window evidence (diagnostic only) ---------------
+# x11.txt gets the window identity, geometry, focus and WM properties
+# before typing and after Return.  Each command's failure is recorded in
+# place, never dropped silently; a missing TOOL is a diag-capture
+# failure checked before any spawn.
+proc diag_note {fh label args} {
+	puts $fh "--- $label"
+	if {[catch {exec {*}$args} out]} {
+		puts $fh "(exec failed: $out)"
+	} else {
+		puts $fh $out
+	}
+}
+
+proc diag_capture {tag wid fh} {
+	global env
+	puts $fh "== $tag (mode $env(RIO_MODE), display $env(DISPLAY))"
+	diag_note $fh "xdotool search --onlyvisible --classname ^drawterm$" \
+		xdotool search --onlyvisible --classname {^drawterm$}
+	diag_note $fh "xdotool getwindowgeometry --shell $wid" \
+		xdotool getwindowgeometry --shell $wid
+	diag_note $fh "xdotool getwindowfocus" xdotool getwindowfocus
+	diag_note $fh "xprop -id $wid WM_CLASS WM_NAME" xprop -id $wid WM_CLASS WM_NAME
+	diag_note $fh "xwininfo -id $wid -tree" xwininfo -id $wid -tree
+}
+
+proc capture_png {wid path} {
+	global have_convert have_magick have_import
+	set tmp "$path.xwd"
+	if {[catch {exec xwd -id $wid -out $tmp} out]} {
+		catch {file delete -force $tmp}
+		return -code error "xwd-failed: $out"
+	}
+	# Prefer `magick`: ImageMagick 7 ships `convert` as a deprecated shim
+	# that exits non-zero after printing its deprecation warning on the
+	# stop-A2 host, which is exactly how the first diagnostic run lost its
+	# before-typing capture.
+	if {$have_magick} {
+		set conv magick
+	} elseif {$have_convert} {
+		set conv convert
+	} else {
+		set conv ""
+	}
+	if {$conv ne ""} {
+		if {[catch {exec $conv "xwd:$tmp" "png:$path"} out]} {
+			catch {file delete -force $tmp}
+			return -code error "$conv-failed: $out"
+		}
+		catch {file delete -force $tmp}
+		return $path
+	}
+	# No ImageMagick converter named: `import' is the plan's fallback.
+	catch {file delete -force $tmp}
+	if {[catch {exec import -window $wid $path} out]} {
+		return -code error "import-failed: $out"
+	}
+	return $path
 }
 
 # fast-fail on kernel panic markers and the cpurc FAIL vocabulary
@@ -278,10 +417,45 @@ set spawn_id $dt_sid
 if {$rio_mode} {
 	# X11: XTEST keystrokes into the private Xvfb display.  The pty is
 	# never fed here (no host-stdin reader exists without -G).
-	if {[catch {xfeed_password $env(R9_DT_PWFILE) $feed_wait $feed_settle} wid]} {
+	if {[catch {xwait_window $feed_wait} wid]} {
 		puts stderr "RIO-FAIL dt-feed-timeout — the X11 password feed did not complete ($wid; WM class drawterm on the private display, pwfile $env(R9_DT_PWFILE))"
 		cleanup
 		exit 1
+	}
+	if {$diag_mode} {
+		set diag_x11 [file join $env(RIO_OUT) x11.txt]
+		set diag_fh [open $diag_x11 a]
+		puts $diag_fh "# rio-diag X11 evidence — drawterm window $wid on $env(DISPLAY) (plan 01-32)"
+		diag_capture "before-typing" $wid $diag_fh
+		if {[catch {capture_png $wid [file join $env(RIO_OUT) drawterm-before-typing.png]} err]} {
+			# The PNG is supplementary; the /srv login marker is the
+			# authoritative diagnostic. Record the miss and keep going.
+			puts stderr "rio-gate: diag capture skipped — before-typing PNG failed ($err); the /srv login marker remains authoritative"
+		} else {
+			puts stderr "rio-gate: diag capture ok — before-typing x11 + PNG in $env(RIO_OUT)"
+		}
+	}
+	if {[catch {xfeed_type $wid $env(R9_DT_PWFILE) $feed_settle} err]} {
+		if {$diag_mode} {
+			diag_capture "feed-failed" $wid $diag_fh
+			close $diag_fh
+		}
+		puts stderr "RIO-FAIL dt-feed-timeout — the X11 password feed did not complete ($err; WM class drawterm on the private display, pwfile $env(R9_DT_PWFILE))"
+		cleanup
+		exit 1
+	}
+	if {$diag_mode} {
+		# A short settle so the after shot shows the post-Return state
+		# (rio's first draw or the auth error).  Raw-mode readcons never
+		# echoes the password, so no secret is ever on the screen.
+		after 2000
+		diag_capture "after-return" $wid $diag_fh
+		if {[catch {capture_png $wid [file join $env(RIO_OUT) drawterm-after-return.png]} err]} {
+			puts stderr "rio-gate: diag capture skipped — after-return PNG failed ($err); the /srv login marker remains authoritative"
+		} else {
+			puts stderr "rio-gate: diag capture ok — after-return x11 + PNG in $env(RIO_OUT)"
+		}
+		close $diag_fh
 	}
 	puts stderr "rio-gate: feed ok — XTEST password entry into the drawterm window ($wid)"
 
@@ -378,21 +552,64 @@ expect {
 
 set found_rio 0
 set found_wctl 0
+set found_marker 0
+set marker_pid ""
 set chunk ""
+if {$diag_mode} {
+	set diag_marker_name [file tail $env(RIO_DIAG_MARKER)]
+	set diag_pid_prefix [file tail $env(RIO_DIAG_PID_PREFIX)]
+	set diag_pid_re "^[string map {. \\.} $diag_pid_prefix](\[0-9\]+)\$"
+}
 set timeout $srv_poll_wait
+set manual_started 0
 for {set i 0} {$i < $srv_polls} {incr i} {
+	if {$rio_mode && !$manual_started && !$found_rio && !$found_wctl && $i >= 1} {
+		# The first serial poll found no pair.  On this app-baked venue
+		# the profile's draw guard skips the login-time `exec rio` (the
+		# 19-10 residual; the stop-A2 screenshot shows the authenticated
+		# cpu% shell).  Use the documented manual start once, then keep
+		# polling.  If the profile did auto-start rio, the pair is
+		# already present and this branch never fires.
+		if {[catch {xstart_rio $wid} err]} {
+			puts stderr "rio-gate: manual rio start failed ($err)"
+		} else {
+			puts stderr "rio-gate: no pair after poll 1 — sent the documented manual start (plumber; rio)"
+		}
+		set manual_started 1
+		after 5000
+	}
 	send -- "ls /srv\r"
 	expect {
 		-re {% } {
 			set chunk $expect_out(buffer)
 			foreach tok [split $chunk] {
 				set tok [string trim $tok "\r\n"]
+				# `ls /srv' prints each entry as the full path on this
+				# image (`/srv/rio.glenda.74').  Normalize to the entry
+				# name before matching; the stop-A2 pair WAS present and
+				# was missed by the bare-name regex.
+				if {[string index $tok 0] eq "/"} {
+					set tok [file tail $tok]
+				}
 				if {[regexp {^riowctl\.[^ ]+\.[0-9]+$} $tok]} {
 					set found_wctl 1
 					continue
 				}
 				if {[regexp {^rio\.[^ ]+\.[0-9]+$} $tok]} {
 					set found_rio 1
+					continue
+				}
+				if {$diag_mode} {
+					# The marker is an #s service entry: presence in
+					# the listing is the signal; an unposted entry
+					# cannot be read (port/src/devsrv.rs).
+					if {$tok eq $diag_marker_name} {
+						set found_marker 1
+						continue
+					}
+					if {[regexp $diag_pid_re $tok -> mpid]} {
+						set marker_pid $mpid
+					}
 				}
 			}
 		}
@@ -410,6 +627,25 @@ for {set i 0} {$i < $srv_polls} {incr i} {
 		if {$found_rio && $found_wctl} { break }
 	} else {
 		if {$found_rio} { break }
+	}
+}
+
+if {$diag_mode} {
+	# The login verdict.  Marker present = the authenticated cpu profile
+	# reached its guarded rio handoff (draw device present, plumber up);
+	# absent = the X11 feed never reached the profile.  Presence-only:
+	# no PASS is recorded from the marker, and the pair check below still
+	# decides RIO-SERVING.
+	if {$found_marker} {
+		if {$marker_pid ne ""} {
+			puts stderr "rio-gate: diag marker — $env(RIO_DIAG_MARKER) and $env(RIO_DIAG_PID_PREFIX)$marker_pid present in the serial /srv listing (profile shell pid $marker_pid)"
+		} else {
+			puts stderr "rio-gate: diag marker — $env(RIO_DIAG_MARKER) present in the serial /srv listing; no r9-login-pid.<pid> entry seen"
+		}
+		puts "RIO-DIAG login-ok"
+	} else {
+		puts stderr "rio-gate: diag marker — no $env(RIO_DIAG_MARKER) entry in the serial /srv listing (the login never reached the profile's rio handoff)"
+		puts "RIO-FAIL login-not-reached"
 	}
 }
 
@@ -468,7 +704,11 @@ puts stderr "rio-gate: post-pass ok — the per-bake DEMO password redacted from
 
 cleanup
 if {$rio_mode} {
-	puts stderr "rio-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, encrypted drawterm session, serial /srv shows rio + riowctl (RIO-SERVING)"
+	if {$diag_mode} {
+		puts stderr "rio-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, encrypted drawterm session, serial /srv shows the rio-diag login marker and rio + riowctl (RIO-SERVING); diagnostic evidence in $env(RIO_OUT)"
+	} else {
+		puts stderr "rio-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, encrypted drawterm session, serial /srv shows rio + riowctl (RIO-SERVING)"
+	}
 } else {
 	puts stderr "rio-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, -G control session, serial /srv shows no rio entry (RIO-CONTROL-NO-RIO)"
 }

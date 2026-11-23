@@ -299,3 +299,172 @@ new de-risk iteration; (b) an owner decision to adopt the research fallback mark
 (a second drawterm session, or an Xvfb pixel check), recorded as a new CONTEXT
 decision before any gate work; (c) an owner re-scope of HARN-01. The executor
 chooses none of these and never edits the marker itself.
+
+D-30 records the owner's choice: **option (a)** — keep the D-28 marker unchanged
+and open this new rio de-risk iteration (plan 01-32). The design follows.
+
+## Diagnostic design and stop A2 (plan 01-32)
+
+Stop A proved the Mac builder and the `control-noG` discriminator, but its rio
+log could not say whether the X11 password feed authenticated. Plan 01-32 adds
+one diagnostic mode, `RIO_MODE=rio-diag`, that answers exactly that question
+without touching the D-28 marker.
+
+MARKER-CONTRACT: before the bake, rio-diag patches the scratch tree's staged cpu
+profile (`build/x86_64/root-tree/usr/glenda/lib/profile`) to create two entries
+**at the top of the profile** (unconditional; not before `exec rio`), and
+restores the original from `build/x86_64/r9-diag-profile.orig` on every exit path
+the gate controls (a SIGKILL can outrun the trap; the next rio-diag invocation,
+and the witness driver's scratch-tree reuse, restore from that backup first):
+
+    /amd64/bin/syscall create /srv/r9-login-ok 1 0666
+    /amd64/bin/syscall create /srv/r9-login-pid.$pid 1 0666
+
+Both are `#s` service entries, so the **serial console's** `ls /srv` lists them
+from the kernel-wide table (`port/src/devsrv.rs:59`; `#s` bound at `/srv` by
+`build/x86_64/root-tree/lib/namespace:25`, A5). That is the point of the
+serial-visible marker: it crosses namespaces without touching the session.
+
+CONFIRMED ROOT CAUSE (stop A2, from `x11.txt` and the two PNGs): the X11
+password feed was never the problem. The before shot shows
+`glenda@DEMO-harvey password:`; the after shot shows the accepted session —
+two `syscall: return 4, no error` marker creates and a `cpu%` shell. The
+`cpu: failed to chdir to '/home/req/code/r9'` line is benign: the guest's `/`
+fallback still sources `/usr/glenda/lib/profile`, which is exactly why the
+marker fired. The profile then hit its `test -e /mnt/term/dev/draw` guard and
+skipped `exec rio` (the 19-10 residual: "login-time desktop auto-start skip on
+app-baked venues — manual `plumber; rio` green"). A marker inserted before
+`exec rio` therefore reported `login-not-reached` as a false negative, so the
+marker now sits at the top of the profile and answers only the login question;
+the pair still answers the rio question. The driver's documented manual
+`plumber; rio` produced `/srv/rio.glenda.76` + `/srv/riowctl.glenda.76` and
+`RIO-SERVING`. The serial `ls /srv` on this image prints full paths
+(`/srv/rio.glenda.74`); the first manual-start run was missed by the bare-name
+regex, and the parser now normalizes every token with `file tail` before
+matching.
+
+Why not `echo login-ok >/srv/r9-login-ok`: r9's srv device is not a regular
+filesystem. `create` is OWRITE-only and returns an entry whose write side posts
+a channel by writing a **decimal fd number** (`devsrv.rs:121-145`, `:194-227`);
+a text write fails, and an unposted entry can be listed but never read
+(`:257-283`). The entry NAME is therefore the payload, and the pid rides the
+second name. `syscall create` — the tool the profile already uses for its
+`/tmp/xxx` probe — performs the create and exits without writing. The profile
+shell's pid is rc's `$pid` (`sys/src/cmd/rc/exec.c:211-212`). There is no
+`/tmp` marker: the serial console cannot see the session's ramfs `/tmp`, and a
+failing write before `exec rio` would abort the leg.
+
+INTERPRETATION (stop A2):
+
+- marker present + D-28 pair absent = **RIO-START-FAIL / LOGIN-OK-RIO-FAIL**:
+  the login reached the profile; rio did not serve (including the draw-guard
+  skip the manual start now covers).
+- marker absent = **LOGIN-FAIL**: the X11 feed never reached the profile
+  (focus/typing/timing or a rejected password). `x11.txt` and the PNGs separate
+  a window/focus problem from an auth rejection.
+- marker present + pair present = **RIO-SERVING** (the same run is also a
+  passing rio leg).
+
+MANUAL-START FALLBACK: in rio and rio-diag modes, if the first serial `/srv`
+poll finds no pair, the driver focuses the drawterm window and types the
+documented `plumber; rio` into the authenticated `cpu%` shell, then keeps
+polling. This is the 19-10 residual's documented fallback, not a marker change:
+the D-28 pair remains the only PASS condition, and the fallback never fires when
+the profile's auto-start already produced the pair.
+
+PARSER FIX: the stop-A2 manual-start run proved the fallback works — the serial
+log carried `/srv/rio.glenda.74` and `/srv/riowctl.glenda.74` — but the first
+driver parsed only bare entry names and missed the full `/srv/...` paths `ls`
+prints on this image. The driver now normalizes each listing token with
+`file tail` before matching, for the pair and for the diagnostic marker alike.
+
+CAPTURE: the driver records the drawterm window identity, geometry and focus
+before typing and after Return (`xdotool search`, `getwindowgeometry`,
+`getwindowfocus`, `xprop -id`, `xwininfo -id -tree`) into
+`out/rio-diag/x11.txt`, plus `drawterm-before-typing.png` and
+`drawterm-after-return.png` (`xwd` piped through ImageMagick `magick`; `convert`
+is a deprecated IM7 shim, and `import` is the last fallback). A missing capture
+tool at startup is a named `RIO-FAIL diag-capture`. A runtime conversion
+failure is a `diag capture skipped` warning and does not abort the marker check:
+the serial `/srv` login marker is the authoritative diagnostic, and the PNG is
+supplementary. The password is never on screen: raw-mode `readcons` does not
+echo, no capture is taken between the first keystroke and Return, and no
+password is written to argv, an exported variable, a log, an x11.txt line or an
+image.
+
+NOT-A-GATE: the diagnostic cannot produce a PASS. The D-28 pair is still the
+only PASS condition, the `rio` and `control-noG` bakes are unchanged, and the
+witness step's exit 0 still requires `RIO-SERVING`. A rio-diag run that prints
+`RIO-FAIL login-not-reached` or `RIO-FAIL rio-not-serving` is a complete
+answer, not a driver failure.
+
+STOP A2 RUN: on the x86_64 Linux host with writable `/dev/kvm`, from the pushed
+`witness-src/01-32` commit:
+
+    git fetch origin witness-src/01-32
+    git checkout FETCH_HEAD
+    R9_WITNESS_STEPS="rio-diag rio control a13" bash .planning/phases/01-stage-p0-cross-build-harness/witness/run-witness.sh
+
+Return `witness-returns/01-32` with `witness/return-01-32/{out,WITNESS-RETURN.md}`
+(`witness/README.md`, "Return path A"), or paste the full `WITNESS-RETURN.md`
+(path B). Never return an auth-creds file or a password value.
+
+## Witness verdict (stop A2)
+
+Stop A2 reran the diagnostic and the rio leg on the owner's x86_64 Linux host
+(D-13) at r9 `46d0677ee4fcc7ef64b961dfdaf9d4bd1b793e9d`; the return commit is
+`c95ae4494056cafad66d3121951762590a796c3c` on `witness-src/01-32`. The
+returned `summary.tsv` is `rio-diag 0 161` and `rio 0 162`. `control` and
+`a13` were **not rerun** at stop A2: their stop-A rows (`control 0 97`,
+`a13 0 0`) remain valid and are carried from the stop-A evidence, not
+re-inferred (their old `out/control`/`out/a13` logs also ride the return).
+
+The stop-A `VERDICT rio-derisk-kvm: FAIL` above is the historical stop-A
+verdict; the stop-A2 PASS below supersedes it.
+
+VERDICT rio-login-kvm: PASS
+EVIDENCE rio-login-kvm: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-a2/rio-diag.log
+The diagnostic log prints `RIO-DIAG login-ok`; the serial `ls /srv` lists
+`/srv/r9-login-ok` and `/srv/r9-login-pid.51`, and
+`witness/evidence/stop-a2/x11.txt` records the drawterm window id, geometry,
+focus and WM properties before typing and after Return.
+
+VERDICT rio-derisk-kvm: PASS
+EVIDENCE rio-derisk-kvm: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-a2/serial-tail.log
+The serial listing carries `/srv/rio.glenda.76` + `/srv/riowctl.glenda.76`
+on the diag leg and `/srv/rio.glenda.74` + `/srv/riowctl.glenda.74` on the rio
+leg, and both drivers print `RIO-SERVING`. The D-28 pair is unchanged.
+
+VERDICT control-noG-kvm: PASS
+EVIDENCE control-noG-kvm: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-a/control.log
+Carried from stop A (not rerun at stop A2): step `control` exited 0, the
+serial listing showed only `/srv/boot` and `/srv/factotum`, and the driver
+printed `RIO-CONTROL-NO-RIO` (row `control 0 97` in
+`witness/evidence/stop-a/summary.tsv`).
+
+VERDICT a13-x86_64-linux: PASS
+EVIDENCE a13-x86_64-linux: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-a/a13.log
+Carried from stop A (not rerun at stop A2): step `a13` exited 0 and built
+`/nix/store/y8h5ana2drnzs2fdx6fxgr74bwmzi8y9-drawterm-19.06` (row `a13 0 0`
+in `witness/evidence/stop-a/summary.tsv`).
+
+VERDICT rio-start: LOGIN-OK-RIO-SERVING
+EVIDENCE rio-start: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-a2/rio-diag.log
+Marker present and pair present: the login reached the profile and rio served.
+The pair came from the documented manual `plumber; rio` fallback because the
+profile's draw guard skipped the login-time auto-start; the fallback is not a
+marker change.
+
+Evidence set: `witness/evidence/stop-a2/{rio-diag.log,serial-tail.log,x11.txt,env.txt,summary.tsv}`,
+each trimmed to at most 200 decisive lines and scanned for `auth-creds`,
+`password`, `passwd` and the DEMO value (the plan's scan prints 0). The two
+PNGs stay in the return rather than in this branch, at `c95ae44` under
+`.planning/phases/01-stage-p0-cross-build-harness/spikes/linux-witness/return-01-32/rio-diag/`:
+`drawterm-before-typing.png` (the typed prompt; 1432 bytes) and
+`drawterm-after-return.png` (the accepted `cpu%` session and the two marker
+creates; 2195 bytes).
+
+The D-28 pair marker was never weakened: it is still the only PASS condition,
+the `control-noG` leg is unchanged, and the pair is now **proven on the owner's
+x86_64 KVM host** (`rio` 0, `RIO-SERVING`, stop A2, 2026-11-23). HARN-01 is
+met for the rio leg; this iteration started no plan 01-13 or later.
