@@ -727,6 +727,46 @@ env.mkTreeDerivation {
 
     build_auth_helpers
 
+    # ------------------------------------------------------------------
+    # The services image's host-side program (mkimage §11k; plan 01-19):
+    # the bake compiles hmkdir (sys/src/cmd/mkdir.c) with its HOST 6c/6l
+    # because mkdir is not a tier member on x64.  r9's assembler copies
+    # tree artifacts (it never compiles), so the tree builds it here with
+    # the same toolchain, flags and relative source path as the bake, in
+    # the reference's /build/harvey cwd and the
+    # /build/mkimage-x64.XXXXXX/root-svc staging shape (6c/6l output
+    # depends on the build's path strings; r9svc1 is the same
+    # six-character length as the bake's mktemp suffix, which is what
+    # reproduces the reference bytes — the auth helpers' r9auth prefix is
+    # the same discipline).
+    # ------------------------------------------------------------------
+    build_services_helpers() {
+      start=$SECONDS
+      echo "== services helper: mkdir"
+      [ -x "$HOSTBIN/6c" ] && [ -x "$HOSTBIN/6l" ] \
+        || fail "services helper mkdir: hostbin 6c/6l missing"
+      [ -f "${harveySrc}/sys/src/cmd/mkdir.c" ] \
+        || fail "services helper mkdir: sys/src/cmd/mkdir.c missing"
+      mkdir -p /build/harvey/sys/src/cmd
+      cp "${harveySrc}/sys/src/cmd/mkdir.c" /build/harvey/sys/src/cmd/mkdir.c \
+        || fail "services helper mkdir: source copy failed"
+      mkdir -p /build/mkimage-x64.r9svc1/root-svc/amd64/bin
+      ( cd /build/harvey && \
+        "$HOSTBIN/6c" -FTVw -o /build/mkimage-x64.r9svc1/root-svc/.mkdir.6 \
+          -Isys/include -Iamd64/include sys/src/cmd/mkdir.c && \
+        "$HOSTBIN/6l" -o /build/mkimage-x64.r9svc1/root-svc/amd64/bin/hmkdir \
+          -L /build/harvey/amd64/lib /build/mkimage-x64.r9svc1/root-svc/.mkdir.6 && \
+        rm -f /build/mkimage-x64.r9svc1/root-svc/.mkdir.6 ) > /tmp/services-mkdir.log 2>&1 \
+        || dump_fail "services helper mkdir" /tmp/services-mkdir.log
+      cp /build/mkimage-x64.r9svc1/root-svc/amd64/bin/hmkdir /out/build/x86_64/out/mkdir \
+        || fail "services helper mkdir: harvest failed"
+      check_magic /out/build/x86_64/out/mkdir "services helper mkdir"
+      echo "TREE-AMD64-SECONDS services-helpers=$((SECONDS-start))"
+      echo "TREE-AMD64 services-helpers built=1/1"
+    }
+
+    build_services_helpers
+
     echo "TREE-AMD64-BUILD-OK"
   '';
 
@@ -834,6 +874,15 @@ env.mkTreeDerivation {
       mkdir -p "$TREE/$(dirname "$f")"
       cp "${harveySrc}/$f" "$TREE/$f"
     done
+
+    # The tier and services bakes' generated sentinel (mkimage §9f/§11m):
+    # mkimage writes these exact bytes with printf; the assembler stages
+    # files and never generates, so the tree materialises the same bytes
+    # as a fixture (the aarch64 tree's build/aarch64/tier1-sentinel.txt
+    # precedent).  The reference lists lib/tier1/sentinel.txt (tier) and
+    # boot/sentinel.txt (services) as this sha256; the emitter maps both
+    # to this one tree file.
+    printf 'alpha bravo charlie\n__SUBSET_GREP_LINE__\n' > "$TREE/build/x86_64/tier1-sentinel.txt"
 
     # ---- the final-tree scan ------------------------------------------
     # Binaries are amd64 a.out; the long-tail tier's rc scripts (#!...) and

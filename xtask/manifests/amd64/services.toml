@@ -1,0 +1,1118 @@
+# The x86_64 SERVICES image (build/x86_64/mkimage.sh §11 at bd7a698): the
+# chain tree + the tier-1 h* helpers + the computed tier-2 services set +
+# the net/utility members + the §11k host-built hmkdir + the DESK-03
+# payload (the whole font tree; /lib/ndb/local composed from the tree's
+# local.template through the netaddr seam with the auth row stripped).
+#
+# Derived from the reference bake's services.members by `cargo xtask image
+# --emit-manifest`, then resolved: the 4303 font files are one [[tree]]
+# entry (fonts-bit.members), hmkdir and boot/sentinel.txt are tree
+# artifacts, /lib/ndb/local is the ndb-template composition (the §11e2
+# strip: this image has no auth domain, so the authdom row's whole line is
+# removed), and every other member is a plain harvey copy.  No unresolved
+# marker remains.
+
+schema = 1
+arch = "amd64"
+image = "services"
+
+[[file]]
+path = "/README.md"
+source = "harvey"
+from = "build/x86_64/root-tree/README.md"
+mode = "0644"
+
+[[dir]]
+path = "/adm"
+
+[[dir]]
+path = "/adm/timezone"
+
+[[file]]
+path = "/adm/timezone/local"
+source = "harvey"
+from = "adm/timezone/local"
+mode = "0644"
+
+[[dir]]
+path = "/amd64"
+
+[[dir]]
+path = "/amd64/bin"
+
+[[file]]
+path = "/amd64/bin/bind"
+source = "harvey"
+from = "amd64/bin/bind"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/cat"
+source = "harvey"
+from = "amd64/bin/cat"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/dd"
+source = "harvey"
+from = "amd64/bin/dd"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/echo"
+source = "harvey"
+from = "amd64/bin/echo"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/grep"
+source = "harvey"
+from = "amd64/bin/grep"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/h6in4"
+source = "harvey"
+from = "amd64/bin/ip/6in4"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/has"
+source = "harvey"
+from = "amd64/bin/auth/as"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hasn12dsa"
+source = "harvey"
+from = "amd64/bin/auth/asn12dsa"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hasn12rsa"
+source = "harvey"
+from = "amd64/bin/auth/asn12rsa"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hat"
+source = "harvey"
+from = "amd64/bin/dial/at"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hauthsrv"
+source = "harvey"
+from = "amd64/bin/auth/authsrv"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hawk"
+source = "harvey"
+from = "amd64/bin/awk"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hbasename"
+source = "harvey"
+from = "amd64/bin/basename"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hcal"
+source = "harvey"
+from = "amd64/bin/cal"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hcat"
+source = "harvey"
+from = "amd64/bin/cat"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hchangeuser"
+source = "harvey"
+from = "amd64/bin/auth/changeuser"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hcmp"
+source = "harvey"
+from = "amd64/bin/cmp"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hcomm"
+source = "harvey"
+from = "amd64/bin/comm"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hconvkeys"
+source = "harvey"
+from = "amd64/bin/auth/convkeys"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hconvkeys2"
+source = "harvey"
+from = "amd64/bin/auth/convkeys2"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hcpu"
+source = "harvey"
+from = "amd64/bin/cpu"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hcron"
+source = "harvey"
+from = "amd64/bin/auth/cron"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hcs"
+source = "harvey"
+from = "amd64/bin/ndb/cs"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hcsquery"
+source = "harvey"
+from = "amd64/bin/ndb/csquery"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hdate"
+source = "harvey"
+from = "amd64/bin/date"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hdc"
+source = "harvey"
+from = "amd64/bin/dc"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hdebug"
+source = "harvey"
+from = "amd64/bin/auth/debug"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hdhcpclient"
+source = "harvey"
+from = "amd64/bin/ip/dhcpclient"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hdhcpd"
+source = "harvey"
+from = "amd64/bin/ip/dhcpd"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hdns"
+source = "harvey"
+from = "amd64/bin/ndb/dns"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hdnsdebug"
+source = "harvey"
+from = "amd64/bin/ndb/dnsdebug"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hdnsquery"
+source = "harvey"
+from = "amd64/bin/ndb/dnsquery"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hdnstcp"
+source = "harvey"
+from = "amd64/bin/ndb/dnstcp"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hdrain"
+source = "harvey"
+from = "amd64/bin/dial/drain"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hdsa2pub"
+source = "harvey"
+from = "amd64/bin/auth/dsa2pub"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hdsa2ssh"
+source = "harvey"
+from = "amd64/bin/auth/dsa2ssh"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hdsagen"
+source = "harvey"
+from = "amd64/bin/auth/dsagen"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hdu"
+source = "harvey"
+from = "amd64/bin/du"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hecho"
+source = "harvey"
+from = "amd64/bin/echo"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hexpect"
+source = "harvey"
+from = "amd64/bin/dial/expect"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hexportfs"
+source = "harvey"
+from = "amd64/bin/exportfs"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hfactotum"
+source = "harvey"
+from = "amd64/bin/auth/factotum"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hfmt"
+source = "harvey"
+from = "amd64/bin/fmt"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hftpd"
+source = "harvey"
+from = "amd64/bin/ip/ftpd"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hftpfs"
+source = "harvey"
+from = "amd64/bin/ftpfs"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hgrep"
+source = "harvey"
+from = "amd64/bin/grep"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hguard.srv"
+source = "harvey"
+from = "amd64/bin/auth/guard.srv"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hhogports"
+source = "harvey"
+from = "amd64/bin/ip/hogports"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hhttpd"
+source = "harvey"
+from = "amd64/bin/ip/httpd/httpd"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hhttpfile"
+source = "harvey"
+from = "amd64/bin/ip/httpfile"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/himagemap"
+source = "harvey"
+from = "amd64/bin/ip/httpd/imagemap"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/himap4d"
+source = "harvey"
+from = "amd64/bin/ip/imap4d"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/himport"
+source = "harvey"
+from = "amd64/bin/import"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hinform"
+source = "harvey"
+from = "amd64/bin/ndb/inform"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hipconfig"
+source = "harvey"
+from = "amd64/bin/ip/ipconfig"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hipquery"
+source = "harvey"
+from = "amd64/bin/ndb/ipquery"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hiscsisrv"
+source = "harvey"
+from = "amd64/bin/ip/iscsisrv"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hjoin"
+source = "harvey"
+from = "amd64/bin/join"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hkeyfs"
+source = "harvey"
+from = "amd64/bin/auth/keyfs"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hlinklocal"
+source = "harvey"
+from = "amd64/bin/ip/linklocal"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hlisten"
+source = "harvey"
+from = "amd64/bin/listen"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hlisten1"
+source = "harvey"
+from = "amd64/bin/listen1"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hlogin"
+source = "harvey"
+from = "amd64/bin/auth/login"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hls"
+source = "harvey"
+from = "amd64/bin/ls"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hman2html"
+source = "harvey"
+from = "amd64/bin/ip/httpd/man2html"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hmd5sum"
+source = "harvey"
+from = "amd64/bin/md5sum"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hmkdb"
+source = "harvey"
+from = "amd64/bin/ndb/mkdb"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hmkdir"
+source = "harvey"
+from = "build/x86_64/out/mkdir"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hmkhash"
+source = "harvey"
+from = "amd64/bin/ndb/mkhash"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hmkhosts"
+source = "harvey"
+from = "amd64/bin/ndb/mkhosts"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hmntgen"
+source = "harvey"
+from = "amd64/bin/mntgen"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hnetkey"
+source = "harvey"
+from = "amd64/bin/auth/netkey"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hnetlib_find"
+source = "harvey"
+from = "amd64/bin/ip/httpd/netlib_find"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hnetlib_history"
+source = "harvey"
+from = "amd64/bin/ip/httpd/netlib_history"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hnewns"
+source = "harvey"
+from = "amd64/bin/auth/newns"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hnm"
+source = "harvey"
+from = "amd64/bin/nm"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hnone"
+source = "harvey"
+from = "amd64/bin/auth/none"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hpass"
+source = "harvey"
+from = "amd64/bin/dial/pass"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hpasswd"
+source = "harvey"
+from = "amd64/bin/auth/passwd"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hpemdecode"
+source = "harvey"
+from = "amd64/bin/auth/pemdecode"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hpemencode"
+source = "harvey"
+from = "amd64/bin/auth/pemencode"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hppp"
+source = "harvey"
+from = "amd64/bin/ip/ppp"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hpppoe"
+source = "harvey"
+from = "amd64/bin/ip/pppoe"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hpptp"
+source = "harvey"
+from = "amd64/bin/ip/pptp"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hpptpd"
+source = "harvey"
+from = "amd64/bin/ip/pptpd"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hpr"
+source = "harvey"
+from = "amd64/bin/pr"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hprintnetkey"
+source = "harvey"
+from = "amd64/bin/auth/printnetkey"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hps"
+source = "harvey"
+from = "amd64/bin/ps"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hquery"
+source = "harvey"
+from = "amd64/bin/ndb/query"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hramfs"
+source = "harvey"
+from = "amd64/bin/ramfs"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hrarpd"
+source = "harvey"
+from = "amd64/bin/ip/rarpd"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hrc"
+source = "harvey"
+from = "amd64/bin/rc"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hread"
+source = "harvey"
+from = "amd64/bin/read"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hreadnvram"
+source = "harvey"
+from = "amd64/bin/auth/readnvram"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hrexexec"
+source = "harvey"
+from = "amd64/bin/ip/rexexec"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hrip"
+source = "harvey"
+from = "amd64/bin/ip/rip"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hrlogind"
+source = "harvey"
+from = "amd64/bin/ip/rlogind"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hrsa2csr"
+source = "harvey"
+from = "amd64/bin/auth/rsa2csr"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hrsa2pub"
+source = "harvey"
+from = "amd64/bin/auth/rsa2pub"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hrsa2ssh"
+source = "harvey"
+from = "amd64/bin/auth/rsa2ssh"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hrsa2x509"
+source = "harvey"
+from = "amd64/bin/auth/rsa2x509"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hrsafill"
+source = "harvey"
+from = "amd64/bin/auth/rsafill"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hrsagen"
+source = "harvey"
+from = "amd64/bin/auth/rsagen"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hsave"
+source = "harvey"
+from = "amd64/bin/ip/httpd/save"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hsecstore"
+source = "harvey"
+from = "amd64/bin/auth/secstore"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hsed"
+source = "harvey"
+from = "amd64/bin/sed"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hseq"
+source = "harvey"
+from = "amd64/bin/seq"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hsha1sum"
+source = "harvey"
+from = "amd64/bin/sha1sum"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hsleep"
+source = "harvey"
+from = "amd64/bin/sleep"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hsnoopy"
+source = "harvey"
+from = "amd64/bin/snoopy"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hsort"
+source = "harvey"
+from = "amd64/bin/sort"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hsrv"
+source = "harvey"
+from = "amd64/bin/srv"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hstrings"
+source = "harvey"
+from = "amd64/bin/strings"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hsum"
+source = "harvey"
+from = "amd64/bin/sum"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hsvctcpecho"
+source = "harvey"
+from = "build/x86_64/out/svctcpecho"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/htail"
+source = "harvey"
+from = "amd64/bin/tail"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/htelnet"
+source = "harvey"
+from = "amd64/bin/ip/telnet"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/htelnetd"
+source = "harvey"
+from = "amd64/bin/ip/telnetd"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/htest"
+source = "harvey"
+from = "amd64/bin/test"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/htftpd"
+source = "harvey"
+from = "amd64/bin/ip/tftpd"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/htime"
+source = "harvey"
+from = "amd64/bin/time"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/htr"
+source = "harvey"
+from = "amd64/bin/tr"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/htraceroute"
+source = "harvey"
+from = "amd64/bin/ip/traceroute"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/huniq"
+source = "harvey"
+from = "amd64/bin/auth/uniq"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hunits"
+source = "harvey"
+from = "amd64/bin/units"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hwarning"
+source = "harvey"
+from = "amd64/bin/auth/warning"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hwc"
+source = "harvey"
+from = "amd64/bin/wc"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hwebls"
+source = "harvey"
+from = "amd64/bin/ip/httpd/webls"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hwebsocket"
+source = "harvey"
+from = "amd64/bin/ip/httpd/websocket"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hwikipost"
+source = "harvey"
+from = "amd64/bin/ip/httpd/wikipost"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hwol"
+source = "harvey"
+from = "amd64/bin/ip/wol"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hwrkey"
+source = "harvey"
+from = "amd64/bin/auth/wrkey"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hxd"
+source = "harvey"
+from = "amd64/bin/xd"
+mode = "0755"
+
+[[dir]]
+path = "/amd64/bin/ip"
+
+[[file]]
+path = "/amd64/bin/ip/ipconfig"
+source = "harvey"
+from = "amd64/bin/ip/ipconfig"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/ip/ping"
+source = "harvey"
+from = "amd64/bin/ip/ping"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/ip/udpecho"
+source = "harvey"
+from = "amd64/bin/ip/udpecho"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/ls"
+source = "harvey"
+from = "amd64/bin/ls"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/ps"
+source = "harvey"
+from = "amd64/bin/ps"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/rc"
+source = "harvey"
+from = "amd64/bin/rc"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/sed"
+source = "harvey"
+from = "amd64/bin/sed"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/sha1sum"
+source = "harvey"
+from = "amd64/bin/sha1sum"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/test"
+source = "harvey"
+from = "amd64/bin/test"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/wc"
+source = "harvey"
+from = "amd64/bin/wc"
+mode = "0755"
+
+[[file]]
+path = "/amd64/init"
+source = "harvey"
+from = "amd64/init"
+mode = "0755"
+
+[[dir]]
+path = "/bin"
+
+[[dir]]
+path = "/bin/service"
+
+[[file]]
+path = "/bin/service/tcp17010"
+source = "harvey"
+from = "build/x86_64/root-tree/bin/service/tcp17010"
+mode = "0755"
+
+[[dir]]
+path = "/boot"
+
+[[file]]
+path = "/boot/boot"
+source = "harvey"
+from = "build/x86_64/out/boot"
+mode = "0755"
+
+[[file]]
+path = "/boot/paqfs"
+source = "harvey"
+from = "amd64/bin/paqfs"
+mode = "0755"
+
+[[file]]
+path = "/boot/rcmain"
+source = "harvey"
+from = "rc/lib/rcmain"
+mode = "0644"
+
+[[file]]
+path = "/boot/sentinel.txt"
+source = "harvey"
+from = "build/x86_64/tier1-sentinel.txt"
+mode = "0644"
+
+[[file]]
+path = "/boot/tcp9901"
+source = "harvey"
+from = "amd64/bin/echo"
+mode = "0755"
+
+[[file]]
+path = "/boot/tcp9902"
+source = "harvey"
+from = "amd64/bin/auth/authsrv"
+mode = "0755"
+
+[[dir]]
+path = "/dev"
+
+[[dir]]
+path = "/env"
+
+[[dir]]
+path = "/fd"
+
+[[dir]]
+path = "/lib"
+
+[[file]]
+path = "/lib/churn-cats.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/churn-cats.rc"
+mode = "0644"
+
+[[dir]]
+path = "/lib/font"
+
+[[tree]]
+path = "/lib/font/bit"
+from = "lib/font/bit"
+members = "fonts-bit.members"
+
+[[file]]
+path = "/lib/namespace"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/namespace"
+mode = "0644"
+
+[[dir]]
+path = "/lib/ndb"
+
+[[file]]
+path = "/lib/ndb/local"
+source = "generated"
+generator = "ndb-template"
+from = "build/x86_64/root-tree/lib/ndb/local.template"
+seam = "build/x86_64/root-tree/lib/netaddr.rc"
+tokens = ["@GUESTV4@", "@MASKV4@", "@GWV4@", "@ETHER@"]
+strip = ["authdom=@AUTHDOM@"]
+mode = "0644"
+
+[[file]]
+path = "/lib/ndb/local.template"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/ndb/local.template"
+mode = "0644"
+
+[[file]]
+path = "/lib/netaddr.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netaddr.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-dhcp.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netip-dhcp.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-loopback.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netip-loopback.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-static.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netip-static.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-tap.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netip-tap.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-tcp.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netip-tcp.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netstress.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netstress.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/services-sweep.rc"
+source = "harvey"
+from = "build/x86_64/services-sweep.rc"
+mode = "0644"
+
+[[dir]]
+path = "/mnt"
+
+[[dir]]
+path = "/net"
+
+[[dir]]
+path = "/proc"
+
+[[dir]]
+path = "/rc"
+
+[[dir]]
+path = "/rc/bin"
+
+[[file]]
+path = "/rc/bin/cpurc"
+source = "harvey"
+from = "build/x86_64/root-tree/rc/bin/cpurc"
+mode = "0755"
+
+[[file]]
+path = "/rc/bin/termrc"
+source = "harvey"
+from = "build/x86_64/services-termrc"
+mode = "0644"
+
+[[dir]]
+path = "/rc/lib"
+
+[[file]]
+path = "/rc/lib/rcmain"
+source = "harvey"
+from = "rc/lib/rcmain"
+mode = "0644"
+
+[[dir]]
+path = "/root"
+
+[[dir]]
+path = "/srv"
+
+[[dir]]
+path = "/tmp"
+
+[[dir]]
+path = "/usr"
+
+[[dir]]
+path = "/usr/glenda"
+
+[[dir]]
+path = "/usr/glenda/lib"
+
+[[file]]
+path = "/usr/glenda/lib/profile"
+source = "harvey"
+from = "build/x86_64/root-tree/usr/glenda/lib/profile"
+mode = "0644"
