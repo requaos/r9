@@ -1,0 +1,277 @@
+#!/usr/bin/expect -f
+# cpu-bringup.expect — the §15 cpu image's bring-up probe (19-07,
+# CPU-02's composed half + CPU-03's letter + DESK-02's boot-side
+# proof): the smoke-r9-auth.expect chassis re-keyed onto the
+# boot-protocol cpu boot — the composed ISO carries the init override
+# append (19-01's seam: init=/amd64/init -c through the iso-builder's
+# --append=), boot(8)'s execinit honors it, init -c runs the REAL
+# cpurc, and the ladder climbs.  NOTHING is typed: every marker is
+# boot-flow output (the 16-05 direct-run discipline — the manual
+# driver is the flake-app shape minus the app; 19-08/19-09 own the
+# committed app surfaces).
+#
+#   staged boot (banner → paqfs → version) →
+#   the §15 bake manifest (the host-side exec-grep over the bake log —
+#   the bake log is the gate's evidence for what the image carries) →
+#   the hostfwd pair observed host-side while the guest boots (the
+#   committed TOML pair rides the emitter's slirp argv: 17010 the cpu
+#   listener's Phase-19 entry, 5670 the authsrv entry) →
+#   the bootconf seed line (the kernel's devenv: bootconf print — the
+#   append reached the seeded ROOT env group) →
+#   the cpurc ladder in EMISSION order:
+#       cpurc: PAIR-OK → cpurc: KEYFS-OK → cpurc: AUTHSRV-LISTEN →
+#       cpurc: FACTOTUM-OK → cpurc: LISTEN-17010 → cpurc: DONE
+#   (each stage consumes the buffer to its match, so the ordered
+#   stages ARE the emission-order assertion; a cpurc: FAIL marker
+#   anywhere fast-aborts via expect_before) →
+#   the post-cpurc % prompt (init's own loop after cpurc returns —
+#   normal post-cpurc behavior, the all-exited alternative) →
+#   the whole-capture post-passes:
+#     - zero cpurc: FAIL (the per-leg failure vocabulary)
+#     - zero panic markers (belt-and-braces beside the fast-fail)
+#     - ZERO occurrences of the in-session desktop font-line marker
+#       (latin1.8.font) — DESK-02's serial proof: the desktop starts
+#       ONLY in-session (the profile never runs at boot, and its
+#       window-manager exec is draw-guarded; an unguarded rio would
+#       print the font path in its failure and red HERE)
+#     - the bootconf line + DONE present whole-capture
+#   No redaction pass: no credentials are typed or echoed on this path
+#   (the feed is read in-guest from the paq; the factotum key write is
+#   a redirect, never serial).
+#
+#   exit 0 only when every stage + post-pass passed; a failure exits 1
+#   and names the failed stage on stderr.  Hygiene: fresh capture per
+#   run (rm -f + log_file), qemu's process group killed on every exit
+#   path; the caller's EXIT trap sweeps survivors keyed on the run tag.
+#
+# Env (exported by the manual driver — the flake-app shape minus the
+# app):
+#   R9_QEMU        default qemu-system-x86_64
+#   R9_ISO         REQUIRED — the COMPOSED cpu ISO (the iso-builder
+#                  output with --append=init=/amd64/init -c and
+#                  target/images/x86_64/cpu.paq staged as
+#                  /boot/bootfs.paq)
+#   R9_SMOKE_LOG   REQUIRED — the serial capture (fresh per run)
+#   R9_NETDEV_ARGV REQUIRED — the emitter's slirp argv as ONE line
+#                  (the D-04 hostfwd pair rides the pinned TOML data;
+#                  the spawn block splits it — NO netdev literal here)
+#   R9_BAKE_LOG    REQUIRED — the mkimage bake log (the §15 manifest
+#                  lines are asserted present host-side)
+#   R9_MACHINE/R9_CPU/R9_ACCEL — the caller-selected q35 shape
+#                  (defaults q35/host/kvm; TCG selects qemu64)
+#   R9_RUN_TAG     the per-run unique tag in qemu's argv (-name)
+#
+# usage: env R9_ISO=… R9_SMOKE_LOG=… R9_NETDEV_ARGV=… R9_BAKE_LOG=… \
+#          expect gates/x86_64/cpu-bringup.expect
+# exit 0 on all-pass; exit 1 names the failed stage on stderr; exit 2
+# on a contract violation (missing env).
+
+set timeout 600                    ;# per stage, TCG-sized
+match_max 1048576                  ;# the ladder + boot output ride one buffer window
+# log_user stays ON — expect 5.45 writes NOTHING to log_file when it
+# is 0 (measured on the aarch64 gate); the wire echo is the progress.
+
+# --- required env (loud, before any spawn) -------------------------------
+foreach v {R9_ISO R9_SMOKE_LOG R9_NETDEV_ARGV R9_BAKE_LOG} {
+    if {![info exists env($v)]} {
+        puts stderr "cpu-bringup: \$$v unset — the manual driver exports it (the flake-app shape minus the app)"
+        exit 2
+    }
+}
+set QEMU [expr {[info exists env(R9_QEMU)] ? $env(R9_QEMU) : "qemu-system-x86_64"}]
+set run_tag [expr {[info exists env(R9_RUN_TAG)] ? $env(R9_RUN_TAG) : "r9x64cpubringup-[pid]-[clock seconds]"}]
+
+# --- Hygiene: a fresh capture per run -----------------------------------
+exec rm -f $env(R9_SMOKE_LOG)
+
+# --- spawn qemu: the composed cpu ISO on -cdrom (the q35 shape the
+#     caller selected; the netdev+device tokens are the SPLIT
+#     R9_NETDEV_ARGV — the emitter's slirp argv carrying the D-04
+#     hostfwd pair 127.0.0.1:17010 + 127.0.0.1:5670) ----------------------
+set R9_MACHINE [expr {[info exists env(R9_MACHINE)] ? $env(R9_MACHINE) : "q35"}]
+set R9_CPU [expr {[info exists env(R9_CPU)] ? $env(R9_CPU) : "host"}]
+set R9_ACCEL [expr {[info exists env(R9_ACCEL)] ? $env(R9_ACCEL) : "kvm"}]
+
+set netdev_argv {}
+foreach tok [split $env(R9_NETDEV_ARGV)] {
+    if {$tok ne ""} {
+        lappend netdev_argv $tok
+    }
+}
+if {[llength $netdev_argv] == 0} {
+    puts stderr "cpu-bringup: R9_NETDEV_ARGV is empty — the caller's emitter capture failed (the slirp argv is required)"
+    exit 2
+}
+
+spawn $QEMU -M $R9_MACHINE -cpu $R9_CPU -smp 1 -m 1024M \
+    -accel $R9_ACCEL \
+    -cdrom $env(R9_ISO) \
+    {*}$netdev_argv \
+    -nographic \
+    -name $run_tag
+set spawn_pid [exp_pid]
+log_file $env(R9_SMOKE_LOG)
+
+# --- teardown: kill qemu's process group ------------------------------
+proc cleanup {} {
+    global spawn_pid
+    catch { exec kill -KILL -- -$spawn_pid 2>/dev/null }
+    catch { exec kill -KILL $spawn_pid 2>/dev/null }
+}
+
+# --- staged ordered assertions (each stage names its failure) ---------
+proc stage {name re} {
+    expect {
+        -re $re { puts stderr "cpu-bringup: stage ok — $name" }
+        timeout { puts stderr "cpu-bringup: TIMEOUT at stage: $name"; cleanup; exit 1 }
+        eof { puts stderr "cpu-bringup: qemu exited (EOF) at stage: $name"; cleanup; exit 1 }
+    }
+}
+
+# --- the hostfwd listener observation (the chassis's hostfwd_stage) ---
+proc host_listeners {} {
+    if {![catch {exec ss -tln} out]} { return $out }
+    if {![catch {exec netstat -tln} out]} { return $out }
+    return ""
+}
+proc hostfwd_stage {port} {
+    set listeners [host_listeners]
+    if {$listeners eq ""} {
+        puts stderr "cpu-bringup: FAILED at stage: hostfwd-$port-listening — no host listening-table tool produced output (ss/netstat both missing?)"
+        cleanup
+        exit 1
+    }
+    if {![regexp "127\\.0\\.0\\.1:${port}( |\$)" $listeners]} {
+        puts stderr "cpu-bringup: FAILED at stage: hostfwd-$port-listening — no 127.0.0.1:$port loopback entry in the host listening table (the slirp hostfwd bind is missing); table follows:"
+        puts stderr $listeners
+        cleanup
+        exit 1
+    }
+    puts stderr "cpu-bringup: stage ok — hostfwd-$port-listening (127.0.0.1:$port present in the host listening table)"
+}
+
+# --- the §15 bake-manifest assertion (host-side exec-grep over the
+#      bake log — the image's own content manifest; the probe is the
+#      bake's consumer, so the bake log is IN the env contract) ------
+proc bake_manifest_stage {needle name} {
+    global env
+    if {[catch {exec grep -c -- $needle $env(R9_BAKE_LOG)} n]} {
+        puts stderr "cpu-bringup: FAILED at stage: bake-manifest-$name — grep over the bake log failed: $n"
+        cleanup
+        exit 1
+    }
+    if {$n < 1} {
+        puts stderr "cpu-bringup: FAILED at stage: bake-manifest-$name — '$needle' absent from the bake log (the §15 bake did not stage it)"
+        cleanup
+        exit 1
+    }
+    puts stderr "cpu-bringup: stage ok — bake-manifest-$name ($n occurrence(s) of '$needle')"
+}
+
+# fast-fail on kernel panic markers and the cpurc FAIL vocabulary —
+# the ladder's failure legs name themselves on the wire; waiting the
+# full timeout for the absent ok marker would only hide them.
+expect_before {
+    -re {panic|Unhandled interrupt} {
+        puts stderr "cpu-bringup: kernel panic marker on the wire — aborting"
+        cleanup
+        exit 1
+    }
+    -re {cpurc: FAIL} {
+        puts stderr "cpu-bringup: cpurc printed a FAIL marker — aborting (the failing leg is named on the wire)"
+        cleanup
+        exit 1
+    }
+}
+
+# 1. the §15 bake manifest, host-side BEFORE any spawn spend is
+#    trusted: the cpu interpreter, the service file at BOTH staged
+#    homes, the real cpurc, the auth suite, and the bake's PASS line.
+#    The needles are §/paren-free substrings: a UTF-8 § inside a BRE
+#    \( \) group silently fails to match under expect's exec locale
+#    (measured — grep -c returned 0 for the parenthesized form while
+#    the plain-substring forms match), so every needle picks a phrase
+#    unique to its §15 manifest line without either.
+bake_manifest_stage {amd64/bin/cpu staged} cpu-binary
+bake_manifest_stage {bin/service/tcp17010 staged} service-file-staged
+bake_manifest_stage {rc/bin/service/tcp17010 staged} service-file-union-home
+bake_manifest_stage {rc/bin/cpurc staged} cpurc-staged
+bake_manifest_stage {computed auth-suite set} auth-suite-hset
+bake_manifest_stage {bootfs-cpu.paq} bake-pass
+
+# 2. the staged boot sequence in EMISSION order (the 15-03 lesson: a
+#    stage whose text already streamed by an earlier match would wait
+#    forever — the kernel prints the bootconf line between the banner
+#    and paqfs, so it is staged here, never after): banner → the
+#    bootconf seed line (the append seam reached the seeded ROOT env
+#    group, the kernel's own print, 19-01's tracer line) → paqfs →
+#    version
+stage banner    {r9 from the Internet}
+stage bootconf  {devenv: bootconf init=/amd64/init -c}
+stage paqfs     {paqfs\.\.\.}
+stage version   {version\.\.\.}
+
+# 3. the hostfwd pair observed host-side while the guest boots (the
+#    committed TOML pair rides the emitter's argv; qemu's eager bind
+#    aborts on failure — this makes BOTH loopback entries explicit;
+#    the exec does not consume the pty buffer)
+hostfwd_stage 17010
+hostfwd_stage 5670
+
+# 5. the cpurc ladder, EMISSION order (the ordered stages ARE the
+#    order assertion — expect consumes the buffer to each match):
+#    pairing → keyfs → the listen1 -t authsrv announce (the port
+#    spin's observable) → factotum's key write (the ctl read-back
+#    drove FACTOTUM-OK) → the aux/listen -t tcp17010 announce → DONE
+stage pairing-ok       {cpurc: PAIR-OK}
+stage keyfs-ok         {cpurc: KEYFS-OK}
+stage authsrv-listen   {cpurc: AUTHSRV-LISTEN}
+stage factotum-ok      {cpurc: FACTOTUM-OK}
+stage listen-17010     {cpurc: LISTEN-17010}
+stage ladder-done      {cpurc: DONE}
+
+# 6. the post-cpurc % prompt — init's own loop after cpurc returns
+#    (init was exec'd by boot; its for(;;) forks the interactive rc —
+#    normal post-cpurc behavior on this venue)
+stage prompt {% }
+
+# 7. the whole-file post-passes: stop the log, read the capture,
+#    assert the never-appears contracts + the whole-capture presences
+log_file                           ;# stop + flush before the whole-file scan
+set fh [open $env(R9_SMOKE_LOG) r]
+set whole [read $fh]
+close $fh
+if {[string first "cpurc: FAIL" $whole] >= 0} {
+    puts stderr "cpu-bringup: cpurc: FAIL present in the capture — a leg failed"
+    cleanup
+    exit 1
+}
+puts stderr "cpu-bringup: post-pass ok — zero cpurc: FAIL in the capture"
+if {[string first "panic" $whole] >= 0} {
+    puts stderr "cpu-bringup: a panic marker is present in the capture"
+    cleanup
+    exit 1
+}
+puts stderr "cpu-bringup: post-pass ok — zero panic markers in the capture"
+set font_hits [regexp -all {latin1\.8\.font} $whole]
+if {$font_hits != 0} {
+    puts stderr "cpu-bringup: DESK-02 VIOLATED — the in-session desktop font-line marker appears $font_hits time(s) in the boot capture (the desktop must start ONLY in-session; the profile never runs at boot and the window-manager exec is draw-guarded)"
+    cleanup
+    exit 1
+}
+puts stderr "cpu-bringup: post-pass ok — zero desktop font-line markers (DESK-02: the desktop is provably absent from boot)"
+if {[string first "devenv: bootconf init=/amd64/init -c" $whole] < 0} {
+    puts stderr "cpu-bringup: the bootconf seed line is absent whole-capture (the append seam never reached the seed)"
+    cleanup
+    exit 1
+}
+if {[string first "cpurc: DONE" $whole] < 0} {
+    puts stderr "cpu-bringup: cpurc: DONE absent whole-capture (an earned green went unobserved)"
+    cleanup
+    exit 1
+}
+puts stderr "cpu-bringup: post-pass ok — the bootconf line + DONE present whole-capture"
+
+puts stderr "cpu-bringup: ALL STAGES PASS — §15 manifest (cpu + tcp17010 both homes + cpurc + the auth suite), chain boot, the hostfwd pair observed host-side (17010 + 5670), the bootconf seed line, the cpurc ladder in order (PAIR-OK, KEYFS-OK, AUTHSRV-LISTEN, FACTOTUM-OK, LISTEN-17010, DONE), the post-cpurc prompt, zero FAIL, zero panic, zero desktop font-line markers"
+cleanup
+exit 0
