@@ -676,6 +676,57 @@ env.mkTreeDerivation {
 
     build_stage
 
+    # ------------------------------------------------------------------
+    # The auth image's host-side programs (mkimage §14i2/§14i3; plan
+    # 01-16): the bake builds hsvctcpecho and hauthprobe with its HOST
+    # 6c/6l from tree sources.  r9's assembler copies tree artifacts (it
+    # never compiles), so the tree builds them here with the same host
+    # toolchain and flags as the bake, after the chain libs — authprobe
+    # links libauthsrv via its header's autolib record.  The reference
+    # member list proves the bytes.
+    # ------------------------------------------------------------------
+    build_auth_helpers() {
+      start=$SECONDS
+      k=0
+      n=0
+      # The reference bake builds these in a writable tree copy at
+      # /build/harvey, and 6c/6l's output depends on the build's path
+      # strings: the reference's exact bytes need /build/harvey as cwd
+      # and the /build/mkimage-x64.XXXXXX/root-auth staging shape (probe:
+      # identical shas only with that shape).  Build in a copy at that
+      # path so the tree artifact equals the reference member list byte
+      # for byte.
+      mkdir -p /build/harvey/sys /build/harvey/amd64 /build/harvey/build/x86_64
+      cp -R /sys/include /build/harvey/sys/include
+      cp -R /amd64/include /build/harvey/amd64/include
+      cp -R /amd64/lib /build/harvey/amd64/lib
+      cp /build/x86_64/svctcpecho.c /build/x86_64/authprobe.c /build/harvey/build/x86_64/
+      for h in svctcpecho authprobe; do
+        n=$((n+1))
+        echo "== auth helper: $h"
+        [ -x "$HOSTBIN/6c" ] && [ -x "$HOSTBIN/6l" ] \
+          || fail "auth helper $h: hostbin 6c/6l missing"
+        [ -f "/build/harvey/build/x86_64/$h.c" ] || fail "auth helper $h: source missing"
+        mkdir -p "/build/mkimage-x64.r9auth/root-auth/amd64/bin"
+        ( cd /build/harvey && \
+          "$HOSTBIN/6c" -FTVw -o "/build/mkimage-x64.r9auth/root-auth/.$h.6" \
+            -Isys/include -Iamd64/include "build/x86_64/$h.c" && \
+          "$HOSTBIN/6l" -o "/build/mkimage-x64.r9auth/root-auth/amd64/bin/h$h" \
+            -L "/build/harvey/amd64/lib" "/build/mkimage-x64.r9auth/root-auth/.$h.6" && \
+          rm -f "/build/mkimage-x64.r9auth/root-auth/.$h.6" ) > "/tmp/auth-$h.log" 2>&1 \
+          || dump_fail "auth helper $h" "/tmp/auth-$h.log"
+        cp "/build/mkimage-x64.r9auth/root-auth/amd64/bin/h$h" "/out/build/x86_64/out/$h" \
+          || fail "auth helper $h: harvest failed"
+        check_magic "/out/build/x86_64/out/$h" "auth helper $h"
+        k=$((k+1))
+      done
+      echo "TREE-AMD64-SECONDS auth-helpers=$((SECONDS-start))"
+      echo "TREE-AMD64 auth-helpers built=$k/$n"
+      [ "$k" = "$n" ] || fail "auth helpers built $k of $n"
+    }
+
+    build_auth_helpers
+
     echo "TREE-AMD64-BUILD-OK"
   '';
 
