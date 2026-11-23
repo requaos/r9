@@ -1,0 +1,9 @@
+KERNEL-STORE /nix/store/wwm4a44fhyxhjvbzpwybyi53h8y6vdwd-r9-kernel-x64-af46615
+2377dc2fb599a838425659ce7fe52f118ee4bfc9ac8f8a877091fab0cb111018  /nix/store/wwm4a44fhyxhjvbzpwybyi53h8y6vdwd-r9-kernel-x64-af46615/kernel-x64.elf
+this derivation will be built:
+  /nix/store/8dpjymiwp76qqb6s0fyp6kkyylvlkv8y-r9-boot-iso-af46615.drv
+building '/nix/store/8dpjymiwp76qqb6s0fyp6kkyylvlkv8y-r9-boot-iso-af46615.drv'...
+KERNEL-BOOTISO-STORE /nix/store/793z5bgjllnnq16gwlfhc21dcb6wry26-r9-boot-iso-af46615
+KERNEL-BOOTISO-BUILD-OK
+checking outputs of '/nix/store/8dpjymiwp76qqb6s0fyp6kkyylvlkv8y-r9-boot-iso-af46615.drv'...
+KERNEL-BOOTISO-REBUILD-OK

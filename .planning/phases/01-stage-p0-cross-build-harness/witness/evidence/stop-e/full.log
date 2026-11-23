@@ -1,0 +1,116 @@
+r9 devshell: rustc 1.95.0-nightly (842bd5be2 2026-01-29)
+QEMU emulator version 11.1.2
+apps: nix run .#build | nix run .#boot-virt | nix run .#default
+harvey supply: R9_HARVEY_DIR_ARM64=/nix/store/b2i0hcbxxmyjlh7drl94s0lp3iq7n04a-harvey-tree-arm64-0 (lazy; realised on first use)
+harvey supply: R9_HARVEY_DIR_AMD64=/nix/store/002vay29nmgw2d81nvmi2i6adgz7h1md-harvey-tree-amd64-0 (lazy; realised on first use)
+harvey supply: R9_HARVEY_REFERENCE_AMD64=/nix/store/ydavfxqx6vhlcar7mmcxi1llhjg0n69x-harvey-reference-amd64-0 (lazy; realised on first use)
+harvey supply: R9_HARVEY_REFERENCE_ARM64=/nix/store/zps34qpcmsd0s2mkf251hhc9sjsnqvq5-harvey-reference-arm64-0 (lazy; realised on first use)
+harvey supply: R9_AUTHDOMAIN_GEN=/nix/store/gysm8xfgmlwkj6kcf6zdzkc9pzmi20ah-harvey-authdomain-gen-0/bin/authdomain-gen
+warning: field `frame_len` is never read
+   --> xtask/src/pcap.rs:228:9
+    |
+219 | pub struct Icmpv4Frame {
+    |            ----------- field in this struct
+...
+228 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    = note: `Icmpv4Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+   --> xtask/src/pcap.rs:375:9
+359 | pub struct BootpFrame {
+    |            ---------- field in this struct
+== r9 tree:      /nix/store/002vay29nmgw2d81nvmi2i6adgz7h1md-harvey-tree-amd64-0
+== r9 root:      /home/req/code/r9
+== gate mode:    session
+== gate output:  /home/req/code/r9/target/gates/drawterm-gate-x64
+== kernel:       /nix/store/wwm4a44fhyxhjvbzpwybyi53h8y6vdwd-r9-kernel-x64-af46615/kernel-x64.elf
+== iso-builder:  /nix/store/4wmj3a1gwklqiqbnlvkgdqznvrmnqlad-r9-iso-builder/bin/r9-iso-builder
+== netdev emitter: /nix/store/z1mchfrz90gid392a7vll93grilvs2sx-r9-netdev-args-af46615/bin/r9-netdev-args
+== drawterm:     /nix/store/y8h5ana2drnzs2fdx6fxgr74bwmzi8y9-drawterm-19.06/bin/drawterm
+== netdev argv (slirp): -netdev user,id=n0,hostfwd=tcp:127.0.0.1:17010-:17010,hostfwd=tcp:127.0.0.1:5670-:567 -device virtio-net-pci-non-transitional,netdev=n0
+== dial contract:  cpu=127.0.0.1 auth=tcp!127.0.0.1!5670 (the committed hostfwd pair's loopback side; never widened)
+== shape:        q35 accel=kvm cpu=host
+== step 1/4: assembling image cpu (cargo xtask image --arch x86-64 --image cpu)
+== image ok: /home/req/code/r9/target/images/x86_64/cpu.paq
+== step 2/4: creds read ok (user=norbert; the password is never printed and lives only in the 0600 file)
+== step 3/4: composing the ISO (kernel + cpu.paq as /boot/bootfs.paq + the init append)
+== step 4/4: the session gate (/home/req/code/r9/gates/x86_64/drawterm-gate.expect)
+== capture: /home/req/code/r9/target/gates/drawterm-gate-x64/drawterm-gate-session.log
+drawterm-gate: post-pass ok — zero cpurc: FAIL in the capture
+drawterm-gate: ALL STAGES PASS — cpu boot through the cpurc ladder (PAIR-OK, ETHER-OK, KEYFS-OK, AUTHSRV-LISTEN, FACTOTUM-OK, LISTEN-17010, DONE), the hostfwd pair observed host-side (17010 + 5670), drawterm -G on a pty through the committed pair, the p9any -> p9sk1 password feedstage, the encrypted session, the remote shell prompt, the fed command's echo, the session teardown, the serial drain carrying tr-ok, zero FAIL, zero kernel panic, the capture redacted
+== drawterm gate PASS (session) — capture retained at /home/req/code/r9/target/gates/drawterm-gate-x64/drawterm-gate-session.log
+== gate output:  /home/req/code/r9/target/gates/boot-r9-x64
+== r9 kernel package: /nix/store/wwm4a44fhyxhjvbzpwybyi53h8y6vdwd-r9-kernel-x64-af46615
+== step 1/3: assembling image chain (cargo xtask image --arch x86-64 --image chain)
+== image ok: /home/req/code/r9/target/images/x86_64/chain.paq
+== step 2/3: composing the ISO (r9's iso-builder: kernel + chain.paq as /boot/bootfs.paq)
+== step 3/3: launching qemu — system=terminal, interactive on stdio (ctrl-a x to quit)
+== qemu argv: qemu-system-x86_64 -M q35 -cpu host -smp 1 -m 1024M -accel kvm -cdrom /home/req/code/r9/target/gates/boot-r9-x64/run.fyJRdf/boot.iso -netdev user,id=n0,hostfwd=tcp:127.0.0.1:17010-:17010,hostfwd=tcp:127.0.0.1:5670-:567 -device virtio-net-pci-non-transitional,netdev=n0 -nographic
+== boot-r9 capture: /home/req/code/r9/target/gates/boot-r9-x64/boot-r9.log
+== gate output:  /home/req/code/r9/target/gates/smoke-r9-x64
+== step 1/4: assembling images chain and cpu (cargo xtask image --arch x86-64 --image chain; --image cpu)
+== images ok: /home/req/code/r9/target/images/x86_64/chain.paq + /home/req/code/r9/target/images/x86_64/cpu.paq
+== step 2/4: composing the CHAIN ISO (r9's iso-builder: kernel + chain.paq as /boot/bootfs.paq)
+== step 3/4: composing the CPU ISO (r9's iso-builder: kernel + cpu.paq as /boot/bootfs.paq + the bootconf append init=/amd64/init -c — 19-01's seam)
+== step 4/4: the composed smoke (/home/req/code/r9/gates/x86_64/smoke-r9.expect — the chain leg + the cpu-chain leg)
+== captures: /home/req/code/r9/target/gates/smoke-r9-x64/smoke-r9.log + /home/req/code/r9/target/gates/smoke-r9-x64/smoke-r9-cpu.log
+smoke-r9-x64: cpu post-pass ok — zero cpurc: FAIL in the capture
+smoke-r9-x64: ALL STAGES PASS — chain leg: boot, echo (typed + answered), empty-line safety, ls/ps/cat sweep, DEL safety, restart, pid-warning-absent, nic-bind; cpu-chain leg: §15 boot with the bootconf append, the hostfwd pair observed host-side (17010 + 5670), the cpurc ladder in order (PAIR-OK, ETHER-OK, KEYFS-OK, AUTHSRV-LISTEN, FACTOTUM-OK, LISTEN-17010, DONE), the post-cpurc prompt, zero FAIL, zero panic, zero desktop font-line markers
+== smoke PASS (chain leg + cpu-chain leg) — captures retained at /home/req/code/r9/target/gates/smoke-r9-x64/smoke-r9.log + /home/req/code/r9/target/gates/smoke-r9-x64/smoke-r9-cpu.log
+== gate output:  /home/req/code/r9/target/gates/tier1-r9-x64
+== step 1/4: assembling image tier (cargo xtask image --arch x86-64 --image tier)
+== image ok: /home/req/code/r9/target/images/x86_64/tier.paq
+== step 2/4: expected on r9: 39 T1-OK markers + 0 T1-SKIP markers (computed)
+== step 3/4: composing the ISO (r9's iso-builder: kernel + tier.paq as /boot/bootfs.paq)
+== step 4/4: the tier-1 gate on r9 (/home/req/code/r9/gates/x86_64/tier1-r9.expect)
+== capture: /home/req/code/r9/target/gates/tier1-r9-x64/tier1-r9.log
+tier1-r9-x64: post-pass ok — zero T1-FAIL, zero panic
+tier1-r9-x64: ALL STAGES PASS — boot, the tier sweep from the boot flow, float canary on r9, marker parity + exact SKIP set, T1-DONE, the interactive prompt
+== tier-1 r9-x64 gate PASS — capture retained at /home/req/code/r9/target/gates/tier1-r9-x64/tier1-r9.log
+== gate output:  /home/req/code/r9/target/gates/smoke-r9-net-x64
+== step 1/3: assembling image net (cargo xtask image --arch x86-64 --image net)
+== image ok: /home/req/code/r9/target/images/x86_64/net.paq
+== step 2/3: composing the ISO (r9's iso-builder: kernel + net.paq as /boot/bootfs.paq)
+== step 3/3: composed net gate (/home/req/code/r9/gates/x86_64/smoke-r9-net.expect)
+== capture: /home/req/code/r9/target/gates/smoke-r9-net-x64/smoke-r9-net.log
+if (! ~ $reply $tcptag) echo netip: 'FAIL' tcpcompare
+echo NET-SMOKE: ALL STAGES PASS
+NET-SMOKE: ALL STAGES PASS
+smoke-r9-net-x64: ALL STAGES PASS — chain boot, hostfwd loopback listeners observed host-side (emitter argv), ipconfig static (NOT-L2-TRUTH labeled), duplicate-binding rejected visibly, ipconfig dhcp (NOT-L2-TRUTH labeled), loopback ping + udp echo, no-address rejected loudly, tcp/7 echo inline, completion marker, pid-warning-absent, nic-bind
+== composed net gate PASS — capture retained at /home/req/code/r9/target/gates/smoke-r9-net-x64/smoke-r9-net.log
+== gate output:  /home/req/code/r9/target/gates/services-r9-x64
+== step 1/4: assembling image services (cargo xtask image --arch x86-64 --image services)
+== image ok: /home/req/code/r9/target/images/x86_64/services.paq
+== step 2/4: expected on r9: 5 SVC-OK subjects + 4 declared conditional SVC-SKIP names (computed)
+== step 3/4: composing the ISO (r9's iso-builder: kernel + services.paq as /boot/bootfs.paq)
+== step 4/4: the services gate on r9 (/home/req/code/r9/gates/x86_64/services-r9.expect)
+== capture: /home/req/code/r9/target/gates/services-r9-x64/services-r9.log
+services-r9-x64: post-pass ok — zero SVC-FAIL, zero panic
+services-r9-x64: ALL STAGES PASS — boot, the services sweep from the boot flow, the net bring-up, every subject's verdict, SVC-DONE, the interactive prompt, the computed-expectation post-pass
+== services r9-x64 gate PASS — capture retained at /home/req/code/r9/target/gates/services-r9-x64/services-r9.log
+== gate output:  /home/req/code/r9/target/gates/churn-r9-x64
+== step 1/3: assembling image churn (cargo xtask image --arch x86-64 --image churn)
+== image ok: /home/req/code/r9/target/images/x86_64/churn.paq
+== step 2/3: composing the ISO (r9's iso-builder: kernel + churn.paq as /boot/bootfs.paq)
+== step 3/3: the churn gate (/home/req/code/r9/gates/x86_64/churn-r9.expect — /bin/cat x 1400 via rc /lib/churn-cats.rc, the bounded-memory window)
+== capture: /home/req/code/r9/target/gates/churn-r9-x64/churn-r9.log
+churn-r9-x64: post-pass ok — zero churn: FAIL occurrences
+churn-r9-x64: ALL STAGES PASS — chain boot, the typed churn fixture (1400 cat iterations), the exact-count contract, zero FAIL, and the bounded-memory window (84 bytes/exit <= 1772, parsed from the kernel's own per-exit markers)
+== churn gate PASS — capture retained at /home/req/code/r9/target/gates/churn-r9-x64/churn-r9.log
+== gate output:  /home/req/code/r9/target/gates/smoke-r9-auth-x64
+== step 1/4: assembling image auth (cargo xtask image --arch x86-64 --image auth)
+== image ok: /home/req/code/r9/target/images/x86_64/auth.paq
+== step 2/4: creds read ok (the password is never printed and lives only in the 0600 file)
+== step 3/4: composing the ISO (r9's iso-builder: kernel + auth.paq as /boot/bootfs.paq)
+== step 4/4: composed auth gate (/home/req/code/r9/gates/x86_64/smoke-r9-auth.expect)
+== capture: /home/req/code/r9/target/gates/smoke-r9-auth-x64/smoke-r9-auth.log
+smoke-r9-auth-x64: stage ok — zero AUTH-FAIL in the capture
+smoke-r9-auth-x64: ALL STAGES PASS — chain boot, hostfwd-5670 observed host-side, D-02 boot pairing (DEMO label), non-interactive keyfs (N keys read), AUTH-OK keyfs, loopback up, the writable secstore venue (ramfs, live file probe), authsrv connect-accept on 567, secstored announced on 5356, cs answering authdom from the baked local, factotum carrying the p9sk1 key, auth/debug's p9sk1 success as norbert, hauthprobe's SPEAKSFOR-OK (bootes for norbert), the deny control (SPEAKSFOR-DENIED x1 + 'no speaks for'), console restored, secuser's account through the venue, the secstore round-trip EXERCISED and presence-demanded (secstore: saved + AUTH norbert + [norbert] PUT/GET syslog tokens + the bytes-back AUTH-SECOBS + the AUTH-OK secstore-roundtrip verdict — the 18-05 SKIP arm retired), AUTH-DONE, ANNOUNCE on serial, tr-ok present, nvram-prompt-absent, zero AUTH-FAIL, the capture redacted
+== composed auth gate PASS — capture retained at /home/req/code/r9/target/gates/smoke-r9-auth-x64/smoke-r9-auth.log
+GATE PASS full x86_64-linux run=623461-1795468943
+FULL-RUN-DIR /home/req/code/r9/target/gate/623461-1795468943
+smoke-r9-auth-x64: post-pass ok — tr-ok present (authsrv -d's per-exchange syslog line: AUTH-07's real-exchange evidence)
+smoke-r9-auth-x64: post-pass ok — the deny control's tr-fail 'no speaks for' line present (the fail-closed speaksfor gate proven)
+smoke-r9-auth-x64: post-pass ok — the secstore round-trip PRESENCE-demanded: saved + AUTH norbert + [norbert] PUT/GET syslog tokens + the bytes-back AUTH-SECOBS + the verdict all in the capture
+smoke-r9-auth-x64: post-pass ok — the per-bake DEMO password redacted from the retained capture (T-18-13; asserts ran over the true capture first)

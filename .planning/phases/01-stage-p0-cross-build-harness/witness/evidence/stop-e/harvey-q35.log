@@ -1,0 +1,7 @@
+# Harvey own-kernel command (D-26), owner paste 2026-11-23
+# cd ~/code/harvey && nix run .#q35 2>&1 | tee ~/harvey-q35.log
+# Harvey HEAD: c697666ba315f137ca2fd11768f835d04bd9f018 (the pushed flip commit)
+Q35-KERNEL /Users/neilskinner/code/harvey/amd64/9k10cpu.elf sha256=ecdcdaddea8d3759d74303b869ddfae8efeba1d4d160382577cfc52b9a32c45b bytes=2030226
+Q35-PROMPT root is from (tcp)[tcp]:
+Q35-SIGS none
+Q35-RESULT machine=q35 accel=tcg banner=yes prompt=yes sigs=none

@@ -1,0 +1,9 @@
+PROFILE q35 exit=0
+PROFILE q35lowmcfg exit=0
+PROFILE q35net exit=0
+PROFILE q35exec exit=0
+PROFILE q35churn exit=0
+PROFILE q35shell exit=0
+PROFILE q35churnshell exit=0
+PROFILE q35cpu exit=0
+PROFILE q35auth exit=0

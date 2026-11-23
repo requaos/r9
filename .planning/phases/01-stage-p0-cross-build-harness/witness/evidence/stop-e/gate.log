@@ -1,0 +1,60 @@
+== gate run 1/2 ==
+building '/nix/store/d93mjr1frky59k4xy9lfcys020cbqlq3-harvey-authdomain-gen-0.drv'...
+building '/nix/store/ny9c8byy8xnmm05yvkdal9gid35c20wx-nix-shell-env.drv'...
+r9 devshell: rustc 1.95.0-nightly (842bd5be2 2026-01-29)
+QEMU emulator version 11.1.2
+apps: nix run .#build | nix run .#boot-virt | nix run .#default
+harvey supply: R9_HARVEY_DIR_ARM64=/nix/store/b2i0hcbxxmyjlh7drl94s0lp3iq7n04a-harvey-tree-arm64-0 (lazy; realised on first use)
+harvey supply: R9_HARVEY_DIR_AMD64=/nix/store/002vay29nmgw2d81nvmi2i6adgz7h1md-harvey-tree-amd64-0 (lazy; realised on first use)
+harvey supply: R9_HARVEY_REFERENCE_AMD64=/nix/store/ydavfxqx6vhlcar7mmcxi1llhjg0n69x-harvey-reference-amd64-0 (lazy; realised on first use)
+harvey supply: R9_HARVEY_REFERENCE_ARM64=/nix/store/zps34qpcmsd0s2mkf251hhc9sjsnqvq5-harvey-reference-arm64-0 (lazy; realised on first use)
+harvey supply: R9_AUTHDOMAIN_GEN=/nix/store/gysm8xfgmlwkj6kcf6zdzkc9pzmi20ah-harvey-authdomain-gen-0/bin/authdomain-gen
+warning: field `frame_len` is never read
+== gate run 1/2 ==
+% devmnt: server error: file does not exist
+% process 71 exited: ""
+% GATE-PASS rio-serving
+drawterm-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, encrypted drawterm session, serial /srv shows rio + riowctl (GATE-PASS rio-serving)
+% devmnt: server error: file does not exist
+% ls /srv
+% ls /srv
+% ls /srv
+% ls /srv
+% ls /srv
+% ls /srv
+% ls /srv
+% ls /srv
+% ls /srv
+% ls /srv
+% ls /srv
+% GATE-PASS control-no-rio
+drawterm-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, -G control session, serial /srv shows neither rio entry (GATE-PASS control-no-rio)
+GATE-RUN 1 exit=0
+== gate run 2/2 ==
+% devmnt: server error: file does not exist
+% process 71 exited: ""
+% GATE-PASS rio-serving
+drawterm-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, encrypted drawterm session, serial /srv shows rio + riowctl (GATE-PASS rio-serving)
+% devmnt: server error: file does not exist
+% ls /srv
+% ls /srv
+% ls /srv
+% ls /srv
+% ls /srv
+% ls /srv
+% ls /srv
+% ls /srv
+% ls /srv
+% ls /srv
+% ls /srv
+% GATE-PASS control-no-rio
+drawterm-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, -G control session, serial /srv shows neither rio entry (GATE-PASS control-no-rio)
+GATE-RUN 2 exit=0
+drawterm-gate: stage ok — rio budget elapsed (60 s)
+drawterm-gate: stage ok — serial /srv shows neither rio nor riowctl (the negative control)
+drawterm-gate: post-pass ok — zero cpurc: FAIL in the capture
+drawterm-gate: post-pass ok — zero kernel panic markers (drawterm's own sysfatal exit pair excluded)
+drawterm-gate: post-pass ok — the per-bake DEMO password redacted from the retained capture (T-01-58)
+drawterm-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, -G control session, serial /srv shows neither rio entry (GATE-PASS control-no-rio)
+GATE PASS quick x86_64 run=540452-1795468407
+GATE-RUN 2 exit=0
