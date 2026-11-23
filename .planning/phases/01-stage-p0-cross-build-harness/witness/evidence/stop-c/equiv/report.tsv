@@ -1,0 +1,11 @@
+gate	verdict	details
+drawterm-gate-x64	match	cpurc: DONE=1/1; DTGATE-=2/2; drawterm-gate: redaction contract held=1/1
+boot-r9-x64	differ	q35: paqfs root mounted from module=0/1; init: starting /bin/rc=0/1; ^% =0/1
+boot-r9-smoke-x64	differ	r9x64shell7=-1/2; r9x64delok=-1/2
+boot-r9-tier1-x64	differ	T1-DONE=-1/1; T1-OK=-1/36; T1-FAIL=-1/0
+boot-r9-net-smoke-x64	differ	NET-SMOKE: ALL STAGES PASS=-1/2
+boot-r9-services-x64	differ	SVC-DONE=-1/1; SVC-OK=-1/9; SVC-FAIL=-1/0
+boot-r9-churn-x64	differ	churn: CATS-DONE 1400=-1/2
+boot-r9-auth-x64	differ	AUTH-DONE=-1/1; AUTH-OK=-1/5; AUTH-FAIL=-1/0
+boot-r9-net-soak-x64	differ	netip: NETIP-DONE=-1/1; netip: soak ok=-1/1
+boot-r9-stress-x64	differ	netstress: STRESS-DONE=-1/1; tcpblast: done=-1/9; RACE-STRESS slirp venue=-1/1

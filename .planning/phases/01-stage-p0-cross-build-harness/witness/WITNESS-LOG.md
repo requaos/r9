@@ -494,4 +494,233 @@ procedure is satisfied.
 The amd64 TCG gate remains the one pending check before phase close-out; no
 later plan (01-26 and later) was started.
 
+## Stop C — plan 01-27, x86_64 KVM
+
+STATUS stopc: FAILED — return `witness-src/01-27` at
+`6346c68cd67264f6a58fd72369c0dc8523cc9ffe`; the owner did not approve the
+Harvey diff and no Harvey commit was made.
+
+- **Return:** `witness-src/01-27` at `6346c68…`; return directory
+  `witness/return-01-27/`; source HEAD `3f717f7…`; host `teeniebox`
+  (x86_64-linux, nproc 16, 30 GiB RAM, nix 2.35.6, `DEV_KVM=writable`);
+  session 2026-11-23T17:37:29Z → 18:32:12Z.
+- **Summary:** 7/8 full apps PASS; `boot-r9-tier1-x64` FAIL (`T1-FAIL
+  fpprobe`); `soak` and `stress` FAIL on the tap precondition (the `HARVEY`
+  seam was not set); `equiv` FAIL (six app captures absent from the full
+  runner's copy, plus `boot-r9-x64` markers 0/1); `store_verify` PASS.
+- **Harvey:** NOT APPROVED — no change, staging or commit was made; HEAD is
+  still `25d97dc4d…` and the status hash still `041d2929…`.
+
+### Per-step verdicts
+
+VERDICT stopc-full: FAIL
+EVIDENCE stopc-full: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c/full.log
+EVIDENCE stopc-full: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c/full.tsv
+
+VERDICT stopc-app-drawterm-gate-x64: PASS
+VERDICT stopc-app-boot-r9-x64: PASS
+VERDICT stopc-app-boot-r9-smoke-x64: PASS
+VERDICT stopc-app-boot-r9-tier1-x64: FAIL
+VERDICT stopc-app-boot-r9-net-smoke-x64: PASS
+VERDICT stopc-app-boot-r9-services-x64: PASS
+VERDICT stopc-app-boot-r9-churn-x64: PASS
+VERDICT stopc-app-boot-r9-auth-x64: PASS
+EVIDENCE stopc-apps: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c/full.tsv
+
+VERDICT stopc-soak: FAIL
+EVIDENCE stopc-soak: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c/soak.log
+
+VERDICT stopc-stress: FAIL
+EVIDENCE stopc-stress: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c/stress.log
+
+VERDICT stopc-equiv: FAIL
+EVIDENCE stopc-equiv: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c/equiv/report.tsv
+EVIDENCE stopc-equiv: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c/equiv/rows.tsv
+
+VERDICT stopc-store-verify: PASS
+EVIDENCE stopc-store-verify: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c/store_verify.log
+
+EVIDENCE stopc-env: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c/env.txt
+EVIDENCE stopc-summary: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c/summary.tsv
+
+### Why stop C failed (decisive lines)
+
+**`full` — 7/8, `boot-r9-tier1-x64` FAIL.** `full.tsv` records PASS for
+`drawterm-gate-x64`, `boot-r9-x64`, `boot-r9-smoke-x64`,
+`boot-r9-net-smoke-x64`, `boot-r9-services-x64`, `boot-r9-churn-x64` and
+`boot-r9-auth-x64`, and FAIL for `boot-r9-tier1-x64`. The tier-1 driver's
+post-pass names the missing marker; the serial capture shows the FPU note
+leg never delivered its handlers:
+
+```
+fpprobe: BAD note-spin handler ran 0 times
+fpprobe: BAD note-regs handler ran 0 times
+fpprobe: BAD note child 129: bad
+user trap: unhandled vector 1 pc=0x2027d9 addr=0x0
+fpprobe: FAIL note
+T1-FAIL fpprobe
+T1-DONE
+tier1-r9-x64: post-pass FAILED — missing T1-OK fpprobe
+GATE-FAIL full-run — apps failed: boot-r9-tier1-x64 (results: target/gate/347497-1795455456/full.tsv)
+```
+
+The six `FULL-NO-CAPTURE` lines (`boot-r9-smoke-x64`, `boot-r9-tier1-x64`,
+`boot-r9-net-smoke-x64`, `boot-r9-services-x64`, `boot-r9-churn-x64`,
+`boot-r9-auth-x64`) are a **capture-copy gap in the new full runner**, not gate
+failures: those apps write to `target/gates/<short-name>/` (`smoke-r9-x64`,
+`tier1-r9-x64`, `smoke-r9-net-x64`, `services-r9-x64`, `churn-r9-x64`,
+`smoke-r9-auth-x64`) while `step_full` copies `target/gates/<app-name>/`.
+`drawterm-gate-x64` and `boot-r9-x64` are the two names where the two agree;
+only the drawterm capture contains a `.log`, which is why the copy loop did not
+name `boot-r9-x64` but the equivalence count still saw an empty directory.
+
+**`soak` / `stress` — precondition, not a measured venue.** Both stopped in
+2 s / 0 s before any bake or boot:
+
+```
+error: tap mode needs the netaddr seam: /home/req/code/r9/build/x86_64/root-tree/lib/netaddr.rc missing — run from the harvey repo root or set HARVEY (the tap checks key on its tap_gwv4/blastport)
+```
+
+`step_soak`/`step_stress` ran `nix run .#net-doctor -- --mode tap` from the r9
+root with no `HARVEY`, so net-doctor defaulted to `$PWD` and looked for the
+seam at `<r9>/build/…`. The tap venue itself was never exercised. The two
+flake apps already export the correct seam (`HARVEY_NETADDR_SEAM=…/harvey-tree-amd64/build/x86_64/root-tree/lib/netaddr.rc`,
+flake.nix:1405/1418), so the defect is the witness step's doctor invocation,
+not the gates.
+
+**`equiv` — capture gaps plus `boot-r9-x64` 0/1.** `report.tsv` has
+`drawterm-gate-x64 match`; every other row is `differ`. The `-1` rows are the
+six capture-copy gaps above. `boot-r9-x64` is `0/1` for
+`q35: paqfs root mounted from module`, `init: starting /bin/rc` and `^% `;
+note that those exact markers **do** appear in the full-run log (lines 552,
+565, 585: `q35: paqfs root mounted from module (389600 bytes)`,
+`init: starting /bin/rc`, `% `), while the terminal-mode boot app writes no
+`target/gates/boot-r9-x64/*.log` for `count_in_dir` to read. Treat this row as
+a capture-path defect to confirm before calling it a boot regression.
+
+**`store_verify` — PASS.** Both tree paths verify:
+`/nix/store/arrvrysn8l6bagwv95nbzlng8s1y7wyf-harvey-tree-amd64-0` and
+`/nix/store/5rq6h22qxhifg6v78q7pf4bbphc9mnjp-harvey-tree-arm64-0`.
+
+### What a green rerun needs
+
+1. `step_soak`/`step_stress` must point net-doctor's `HARVEY` at the r9-built
+   amd64 tree (the store path of `.#harvey-tree-amd64`) so the tap preflight
+   reads the real seam; the soak/stress apps already carry
+   `HARVEY_NETADDR_SEAM` themselves.
+2. `step_full` must copy each app's actual `R9_GATE_OUT` directory (the
+   short-name map above), and `step_equiv` must count the same path.
+3. The tier-1 `fpprobe` note-leg failure needs a kernel/note-delivery
+   investigation before the full run can be green.
+
+### The prepared Harvey review packet
+
+- **Full diff:** `$HOME/r9-harvey-flip/harvey-flip.diff` — 511797 bytes,
+  sha256 `f7b0272d23bc6c131c2f63b37cde1330c0bebddd25b905c22040829232cd7f22`.
+- **Base:** Harvey `25d97dc4d4976bfb7411f01970755acf6261c81b` (the owner's
+  `master`; the unpushed planning-freeze commit is this commit's parent).
+- **Shape:** 36 paths, +285 / −9972 — 32 deletions, 1 new file
+  (`nix/q35.sh`), 3 modified (`flake.nix`, `flake.lock`,
+  `.github/workflows/phase6.yml`).
+- **Deletions:** 17 under `nix/` (16 moved gate scripts + `host-echo.c`),
+  9 under `build/x86_64/`, 5 under `build/aarch64/`, and
+  `.github/workflows/r9-shell.yml` (whole).
+- **Kept exception:** `build/x86_64/drawterm-gate.expect` stays — it is not
+  in the diff; the retained `nix/drawterm-x64.sh` names it as the source of
+  its `-s ''` pin (the plan's expected exception).
+- **Protected set:** `grep -cE 'sys/lib/(postscript|troff)|devpost\.add'`
+  over the diff → **0**; the 11 pre-modified font paths are not touched.
+- **D-19:** the deletion set's intersection with r9's tree/reference
+  read-set paths is empty (the recorded 102-path check → no output; an
+  independent re-extraction of the three `nix/harvey/*.nix` files →
+  0 intersecting path-like tokens). `grep -c '\.expect'` over the read set →
+  0; no `nix/*.sh` appears in any read set.
+- **Preparation checks (Mac, read-only):** the diff sha256 matches
+  HARVEY-FLIP.md; the scratch clone's
+  `git diff --stat HEAD -- . ':(exclude)sys/**'` reproduces 36 files /
+  +285 / −9972; `git -C /Users/neilskinner/code/harvey apply --check
+  "$HOME/r9-harvey-flip/harvey-flip.diff"` → APPLY-CHECK-OK; the owner's
+  checkout is unchanged (HEAD `25d97dc4d…`, status-porcelain sha256
+  `041d2929…`), and its 11 font paths still read ` M`.
+
+### What the owner reruns (KVM host, two hours or more)
+
+Part 1, on the Mac — push the r9 source the witness runs from (after the
+harness fixes above land):
+
+```sh
+git -C /Users/neilskinner/code/r9 push origin HEAD:main
+# or, to leave main alone:
+git -C /Users/neilskinner/code/r9 push origin HEAD:refs/heads/witness-src/01-27
+```
+
+Part 2, on the x86_64 KVM host with the tap/bridge venue up:
+
+```sh
+git -C <r9> fetch origin
+git -C <r9> checkout <pushed commit>   # or FETCH_HEAD after fetching witness-src/01-27
+cd <r9>
+R9_WITNESS_STEPS="full soak stress equiv store_verify" \
+  bash .planning/phases/01-stage-p0-cross-build-harness/witness/run-witness.sh
+```
+
+`step_full` exports `R9_ACCEL=kvm` for every child app and keeps each app's
+capture set under `out/full/apps/`; `soak` and `stress` preflight
+`nix run .#net-doctor -- --mode tap` and refuse a slirp substitute; `equiv`
+writes `out/equiv/report.tsv` against `witness/equivalence.tsv`; `store_verify`
+runs last.
+
+Part 2b, return the results (never a creds file):
+
+- **Path A (preferred):** from the KVM host, push branch
+  `witness-returns/01-27` with the `out/` tree and `WITNESS-RETURN.md` under
+  `.planning/phases/01-stage-p0-cross-build-harness/witness/return-01-27/`.
+- **Path B:** paste the full `$HOME/r9-witness-work/WITNESS-RETURN.md`.
+
+Part 3, on the Mac — review the full diff:
+
+```sh
+HF=$HOME/r9-harvey-flip
+shasum -a 256 "$HF/harvey-flip.diff"
+git -C "$HF/harvey" status
+git -C "$HF/harvey" diff HEAD --stat -- . ':(exclude)sys/**'
+less "$HF/harvey-flip.diff"
+```
+
+### The approval wording
+
+**Harvey commit (reply together with the stop-C return):**
+
+> stop C: pushed <ref>, returned via A <sha> | B; Harvey diff APPROVE
+
+or
+
+> stop C: pushed <ref>, returned via A <sha> | B; Harvey diff REJECT: <changes you want>
+
+APPROVE authorises the executor to apply exactly
+`$HOME/r9-harvey-flip/harvey-flip.diff` (sha256 `f7b0272d…`) to
+`/Users/neilskinner/code/harvey` and make the single commit
+`refactor(flake): move r9 composition to the r9 repo; add the q35 own-kernel launcher`
+— no push, no AI attribution, and none of the 11 font files staged.
+
+**Owner push (Task 3, after the Harvey commit exists):**
+
+> Harvey pushed: <branch> <sha>
+
+after `git -C ~/code/harvey push origin HEAD:<branch>`. The new commit's parent
+is the unpushed `25d97dc4d`, so the push publishes both (D-23, recorded in
+HARVEY-FLIP.md).
+
+### Guard rails for the continuation
+
+- No Harvey write, staging or commit before **both** an all-PASS stop C and
+  the owner's explicit APPROVE.
+- Stage by explicit path from the diff's own list; never `git add -A`, never
+  `git commit -a`, never a directory argument covering `sys/**`.
+- No push from the executor to either repository; the owner pushes Harvey
+  (Task 3) and r9 (Part 1).
+- A REJECT or any FAIL ends the pass with no Harvey change; that is what
+  happened here. The scratch clone can absorb requested changes before a
+  green rerun of this stop.
+
 
