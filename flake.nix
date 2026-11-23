@@ -1191,6 +1191,29 @@ WRAP
               export R9_MKPAQFS="${self.packages.${system}.harvey-mkpaqfs}/bin/mkpaqfs"
             '' bootR9RuntimeInputs}/bin/boot-r9-tier1";
           };
+          # 01-30 (D-07/D-09/HARN-08): the last two moved aarch64 gate
+          # apps, in the 01-21 shape.  boot-r9-net-smoke runs the
+          # composed net smoke on the virtshell kernel; boot-r9-cpu runs
+          # the cpu fixture gate on the devcap-carrying virtcpu kernel
+          # (the same store-path contract: kernel-virt.elf + both DTBs).
+          # No hasAttr gating — both packages are r9's own attributes;
+          # no lima.
+          boot-r9-net-smoke = {
+            type = "app";
+            program = "${mkScriptApp pkgs "boot-r9-net-smoke" ./nix/gates/smoke-r9-net.sh ''
+              export R9_KERNEL_PKG="${self.packages.${system}.kernel-virt}"
+              export R9_HARVEY_DIR_ARM64="${harveyTreeArm64}"
+              export R9_MKPAQFS="${self.packages.${system}.harvey-mkpaqfs}/bin/mkpaqfs"
+            '' bootR9RuntimeInputs}/bin/boot-r9-net-smoke";
+          };
+          boot-r9-cpu = {
+            type = "app";
+            program = "${mkScriptApp pkgs "boot-r9-cpu" ./nix/gates/cpu-r9.sh ''
+              export R9_KERNEL_PKG="${self.packages.${system}.kernel-virt-cpu}"
+              export R9_HARVEY_DIR_ARM64="${harveyTreeArm64}"
+              export R9_MKPAQFS="${self.packages.${system}.harvey-mkpaqfs}/bin/mkpaqfs"
+            '' bootR9RuntimeInputs}/bin/boot-r9-cpu";
+          };
         }
         # 01-18 (D-07/D-09/HARN-08): the moved drawterm gate app.  The
         # header is Harvey's drawtermGateX64Pkg env contract re-keyed
