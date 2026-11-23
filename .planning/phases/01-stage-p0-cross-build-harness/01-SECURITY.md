@@ -111,3 +111,95 @@ created: "2026-11-23"
 | Threats found | 33 |
 | Closed | 33 |
 | Open | 0 |
+
+---
+
+## Pass 2 — plan threat models (plans 01-19 … 01-34)
+
+Pass-2 scope: the implementation plans build and move the gates, images, trees, witness driver and
+the Harvey flip. The register below records the 49 pass-2 threats (36 numbered + 13 supply-chain
+rows) verified against the implemented code and the stop-B/C/E evidence. Every high-severity threat
+is closed.
+
+| Threat ID | Plan | Category | Severity | Disposition | Evidence |
+|---|---|---|---|---|---|
+| T-01-63 | 01-19 | Tampering (ndb composition) | low | mitigate | `xtask/src/image.rs` strip + substitution; three ndb-template tests; `services.toml` reference match |
+| T-01-64 | 01-19 | Tampering (bake-time compile drift) | medium | mitigate | `nix/harvey/tree-amd64.nix` builds `hmkdir` with the bake's own `6c/6l`; harvested sha equals the reference |
+| T-01-SC | 01-19 | Tampering (package installs) | low | accept | No install commands; locked nixpkgs |
+| T-01-65 | 01-20 | Spoofing (relabelled Harvey file as Rust) | high | mitigate | `image.rs` `check_provenance` + tests; stop-B3 probe marker |
+| T-01-66 | 01-20 | Tampering (leftover probe code) | low | mitigate | Zero `source = "rust"` manifest entries; no probe subcommand remains |
+| T-01-SC | 01-20 | Tampering (package installs) | low | accept | Pinned rustc; no crate added |
+| T-01-67 | 01-21 | Tampering (shell injection) | medium | mitigate | `writeShellApplication` shellcheck; explicit shellcheck rc 0 |
+| T-01-68 | 01-21 | Tampering (writes into tree) | medium | mitigate | Outputs under `R9_GATE_OUT`; `TREE-UNMODIFIED` |
+| T-01-69 | 01-21 | Information disclosure (guest forwards) | low | mitigate | Loopback-only hostfwd; driver host-listener assertion |
+| T-01-SC | 01-21 | Tampering (nixpkgs tools) | low | mitigate | Locked nixpkgs |
+| T-01-70 | 01-22 | Information disclosure (returned logs) | high | mitigate | Driver secret scan; stop-B/C scans clean |
+| T-01-71 | 01-22 | Repudiation (verdict without run) | medium | mitigate | WITNESS-LOG verdict/evidence pairs; summary.tsv rows |
+| T-01-72 | 01-22 | Tampering (silent kernel-byte change) | high | mitigate | boot-iso FOD `outputHash`; stop-E build + `--rebuild` OK |
+| T-01-73 | 01-22 | Elevation of privilege (driver on host) | high | mitigate | Root refusal; no sudo; work dir constrained |
+| T-01-SC | 01-22 | Tampering (nix inputs) | low | mitigate | Locked flakes |
+| T-01-74 | 01-23 | Tampering (shell injection) | medium | mitigate | `writeShellApplication` shellcheck; quoted expansions |
+| T-01-75 | 01-23 | Tampering (writes into tree) | medium | mitigate | Outputs under `R9_GATE_OUT`; stop-E store verify |
+| T-01-76 | 01-23 | Information disclosure (guest forwards) | low | mitigate | Loopback-only hostfwd |
+| T-01-SC | 01-23 | Tampering (nixpkgs tools) | low | mitigate | Locked nixpkgs |
+| T-01-78 | 01-24 | Information disclosure (tap venue) | medium | mitigate | `net-doctor --mode tap` preflight; stop-E soak/stress L2-TRUTH tap |
+| T-01-79 | 01-24 | Tampering (host-echo source) | low | mitigate | `host-echo.c` byte-identical to the pin |
+| T-01-SC | 01-24 | Tampering (nixpkgs tools) | low | mitigate | Locked nixpkgs |
+| T-01-80 | 01-25 | Tampering (action supply chain) | medium | mitigate | Every `uses:` pinned to 40-hex; read-only permissions |
+| T-01-81 | 01-25 | Repudiation (TCG mistaken for witness) | low | mitigate | Workflow header names local KVM as the witness; TCG explicit |
+| T-01-SC | 01-25 | Tampering (package installs) | low | accept | No installs |
+| T-01-82 | 01-26 | Tampering (owner's Harvey checkout) | high | mitigate | Work in `$HOME/r9-harvey-flip`; commit only after green C + approval |
+| T-01-83 | 01-26 | Denial of service (deleting needed files) | medium | mitigate | D-19 read-set intersection empty; kept drawterm-gate exception; trees build |
+| T-01-84 | 01-26 | Elevation of privilege (Harvey build sudo) | medium | mitigate | `nix/q35.sh` has no sudo; owner ran the build |
+| T-01-85 | 01-26 | Tampering (equivalence baselines) | low | mitigate | `equivalence.tsv` paths/fresh runs; four recorded rows owner-approved |
+| T-01-SC | 01-26 | Tampering (nix inputs) | low | mitigate | Pinned revs/locks |
+| T-01-86 | 01-27 | Tampering (unapproved/wider Harvey commit) | high | mitigate | Commit path set identical to the approved diff; 36 paths, +285/−9972 |
+| T-01-87 | 01-27 | Tampering (staging 11 font files) | high | mitigate | Zero font paths in the commit; 11 remain unstaged |
+| T-01-88 | 01-27 | Repudiation (commit attribution) | low | mitigate | No AI attribution; subject matches the plan |
+| T-01-89 | 01-27 | Information disclosure (publishing `25d97dc4d`) | low | accept | Owner-owned push; recorded in HARVEY-FLIP |
+| T-01-SC | 01-27 | Tampering (package installs) | low | accept | No installs |
+| T-01-90 | 01-28 | Spoofing (unpushed/wrong rev locked) | medium | mitigate | ls-remote = lock rev = `c697666`; no nested r9 |
+| T-01-91 | 01-28 | Tampering (non-lock changes) | low | mitigate | Bump commit is `flake.lock` only |
+| T-01-92 | 01-28 | Information disclosure (final evidence) | high | mitigate | stop-E secret scan clean; repo-wide `password=` matches classified as contracts/fixtures/docs |
+| T-01-SC | 01-28 | Tampering (package installs) | low | accept | No installs |
+| T-01-93 | 01-29 | Tampering (profile on unverified image) | medium | mitigate | Six profiles use `image:*`; no `harvey:` module; reference compare before edits |
+| T-01-SC | 01-29 | Tampering (package installs) | low | accept | No installs |
+| T-01-94 | 01-30 | Tampering (shell injection) | medium | mitigate | `writeShellApplication` shellcheck |
+| T-01-95 | 01-30 | Tampering (writes into arm64 tree) | medium | mitigate | Outputs under `R9_GATE_OUT`; `TREE-UNMODIFIED` |
+| T-01-96 | 01-30 | Information disclosure (net-smoke forwards) | low | mitigate | No hostfwd in the aarch64 net-smoke/cpu drivers |
+| T-01-SC | 01-30 | Tampering (nixpkgs tools) | low | mitigate | Locked nixpkgs |
+| T-01-77 | 01-31 | Information disclosure (password in env/argv) | medium | mitigate | 0600 password file, unset, EXIT-trap removal; no by-value password |
+| T-01-97 | 01-31 | Information disclosure (drawterm developer password) | medium | mitigate | Presence-only creds check; `-s '' -O` only; no extraction |
+| T-01-98 | 01-31 | Information disclosure (boot tap forwards) | low | mitigate | net-doctor tap preflight; stop-C tap runs PASS |
+| T-01-SC | 01-31 | Tampering (nixpkgs tools) | low | mitigate | Locked nixpkgs |
+
+**Blocking count:** 8 high-severity threats (-65, -70, -72, -73, -82, -86, -87, -92) — all **CLOSED**.
+No open threat at any severity.
+
+### Pass-2 audit warnings (non-blocking; never counted in `threats_open`)
+
+| ID | Finding |
+|---|---|
+| W-1 | Plans 01-33 and 01-34 have no `<threat_model>` despite changing trusted-kernel code (`trap.rs`, `proc.rs`, `syscall.rs`, `timer.rs`, `churngate.rs`). Audit-trail gap, not evidence of a vulnerability; recommend a retroactive threat model or explicit owner risk acceptance before any future kernel change. |
+| W-2 | `01-25-SUMMARY.md` and `01-26-SUMMARY.md` omit `## Threat Flags`; their surfaces are covered by T-01-80/81 and T-01-82…85. Format-only. |
+| W-3 | `witness/evidence/stop-e/secret-scan.txt` records a placeholder pattern rather than the exact reproducible pattern; an independent repo-wide scan is clean. Strengthen the evidence record. |
+| W-4 | `flake.nix` still carries the pre-flip comment about a nested `harvey/r9` lock node; the lock has none. Documentation drift only. |
+| W-5 | The applied Harvey commit message carries the planned subject only, not the body bullets; no attribution, so T-01-88 remains closed. |
+| W-6 | Four `recorded` equivalence rows are owner-approved expectations rather than committed captures/fresh runs; documented in 01-34 with per-row rationale; the gate expect files remain the acceptance. Accepted risk AR-01-05. |
+
+### Pass-2 accepted risks
+
+| Risk ID | Threat Ref | Rationale | Accepted By | Date |
+|---|---|---|---|---|
+| AR-01-03 | T-01-89 | The owner's push published the pre-existing freeze commit `25d97dc4d` as the flip parent; owner-owned decision recorded in HARVEY-FLIP | owner | 2026-11-23 |
+| AR-01-04 | T-01-SC (01-19, 01-20, 01-25, 01-27, 01-28, 01-29) | No package installs and no crate added; toolchains/inputs are the locked nixpkgs and pinned rust toolchain | owner (plan dispositions) | 2026-11-23 |
+| AR-01-05 | T-01-85 | Four `recorded` equivalence expectations are owner-approved with per-row rationale; committed gate expect files remain the acceptance | owner | 2026-11-23 |
+
+### Pass-2 audit trail
+
+| Audit Date | Threats Total | Closed | Open | Run By |
+|---|---|---|---|---|
+| 2026-11-23 | 82 (33 pass-1 + 49 pass-2) | 82 | 0 | pass-2 restore audit / L1 |
+
+**Pass-2 approval:** verified 2026-11-23 — all 49 pass-2 threats closed; `threats_open: 0`; W-1 is the
+only open process item and is recorded, not a vulnerability.
