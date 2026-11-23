@@ -684,7 +684,7 @@ count_in_dir() {
 
 # --- full: the eight moved apps in sequence (D-14) ----------------------
 step_full() {
-	local start end rc app dir entry run_dir stamp
+	local start end rc app dir run_dir stamp
 	start=$(now)
 	rc=0
 	: >"$OUT/full/full.log"
@@ -700,13 +700,15 @@ step_full() {
 	fi
 	# Keep every app's own capture set: the moved apps write under
 	# target/gates/<R9_GATE_OUT dir>, which is NOT the flake attr name
-	# for six of the eight (01-34).  Each copy lands under the app name
-	# so the evidence tree reads like full.tsv.
+	# for six of the eight (01-34).  The loop is the EIGHT full apps
+	# only: soak/stress are separate steps and their dirs do not exist
+	# in a full run, so counting them here made a green `GATE PASS full'
+	# exit 1 (stop C2).  Each copy lands under the app name so the
+	# evidence tree reads like full.tsv.
 	rm -rf -- "$OUT/full/apps"
 	mkdir -p "$OUT/full/apps"
-	for entry in "${FULL_APP_OUT_DIRS[@]}"; do
-		app=${entry%%:*}
-		dir=${entry#*:}
+	for app in "${FULL_APPS[@]}"; do
+		dir=$(app_out_dir "$app")
 		if [ -d "$R9/target/gates/$dir" ]; then
 			cp -R -- "$R9/target/gates/$dir" "$OUT/full/apps/$app" || rc=1
 		else
@@ -737,9 +739,12 @@ step_full() {
 # apps get from the flake (HARVEY_NETADDR_SEAM).  Stop C ran the doctor
 # from the r9 root with no HARVEY, so it looked for <r9>/build/... and
 # reported a false venue failure; a seam that cannot be realised is now a
-# NAMED precondition failure of its own, never a venue verdict.  A
-# missing venue still fails the step before any bake or boot — never a
-# slirp substitute (slirp evidence is not L2 truth).
+# NAMED precondition failure of its own, never a venue verdict.  Both
+# apps also get R9_NET=tap explicitly: the soak app REFUSES slirp by
+# contract (D-11) and the stress app must not fall through to its
+# default, so stop C2's soak never ran the venue it had just PASSed
+# (01-34).  A missing venue still fails the step before any bake or
+# boot — never a slirp substitute (slirp evidence is not L2 truth).
 venue_gate() {
 	local step=$1 app=$2 out=$3 start end rc tree seam
 	start=$(now)
@@ -761,9 +766,9 @@ venue_gate() {
 		rc=1
 	fi
 	if [ "$rc" -eq 0 ]; then
-		note "$step: precondition nix run .#net-doctor -- --mode tap (HARVEY=$tree)"
+		note "$step: precondition nix run .#net-doctor -- --mode tap (HARVEY=$tree, R9_NET=tap)"
 		if ! (cd "$R9" || exit 1
-			HARVEY="$tree" HARVEY_NETADDR_SEAM="$seam" \
+			HARVEY="$tree" HARVEY_NETADDR_SEAM="$seam" R9_NET=tap \
 				nix run .#net-doctor -- --mode tap) 2>&1 |
 			tee -a "$out/$step.log"; then
 			printf '%s-PRECONDITION-UNMET: the tap/bridge venue is absent.  This step needs the owner host: a configured bridge, the setuid wrapper and the pinned seam (16-05/D-13); slirp is never accepted as evidence.\n' "$step" |
@@ -772,9 +777,9 @@ venue_gate() {
 		fi
 	fi
 	if [ "$rc" -eq 0 ]; then
-		note "$step: R9_ACCEL=kvm nix run .#$app (the owner's tap venue)"
+		note "$step: R9_ACCEL=kvm R9_NET=tap nix run .#$app (the owner's tap venue)"
 		if ! (cd "$R9" || exit 1
-			R9_ACCEL=kvm HARVEY="$tree" HARVEY_NETADDR_SEAM="$seam" \
+			R9_ACCEL=kvm R9_NET=tap HARVEY="$tree" HARVEY_NETADDR_SEAM="$seam" \
 				nix run ".#$app") 2>&1 | tee -a "$out/$step.log"; then
 			rc=1
 		fi
@@ -790,7 +795,11 @@ step_stress() { venue_gate stress boot-r9-stress-x64 "$OUT/stress"; }
 # A `none' row runs the pinned Harvey-hosted app in the same writable
 # scratch tree the rio steps use (ensure_harvey_scratch), with
 # R9_GATE_OUT pointed at out/equiv/baseline/<gate>/ so the fresh capture
-# and the app's stdout land together.
+# and the app's stdout land together.  A `recorded' row carries the
+# owner-approved stop-C2 expectation in its count column: the committed
+# Harvey baselines predate fpprobe's T1-OK, the auth secstore arm and the
+# tap venue's own label, and the gate's committed expect files (not the
+# stale capture counts) are the acceptance (01-34).
 ensure_equiv_baseline() {
 	local gate=$1 dir="$OUT/equiv/baseline/$1" scratch
 	if [ -d "$dir" ] && [ -n "$(find "$dir" -type f -name '*.log' -print -quit 2>/dev/null)" ]; then
@@ -835,6 +844,8 @@ step_equiv() {
 				want=-1
 				srclabel="baseline-run-failed"
 			fi
+		elif [ "$src" = recorded ]; then
+			srclabel="recorded stop-C2 expectation (owner approval pending)"
 		elif [ ! -f "$R9/$src" ]; then
 			printf 'EQUIV-SOURCE-MISSING %s -> %s\n' "$gate" "$src" >&2
 			want=-1

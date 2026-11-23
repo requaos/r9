@@ -532,7 +532,8 @@ impl GateStep {
         let mut failed = Vec::new();
         let mut tsv = String::from("app\tresult\n");
         for app in apps {
-            println!("gate: full app {app}");
+            let capture = app_out_dir(self.arch, app);
+            println!("gate: full app {app} (capture target/gates/{capture})");
             let ok = Command::new("nix")
                 .args(["run", &format!(".#{app}")])
                 .current_dir(workspace())
@@ -900,6 +901,42 @@ mod tests {
             shell.as_slice(),
             [FULL_APP_OUT_DIRS_X86_64, TAP_APP_OUT_DIRS_X86_64].concat().as_slice(),
             "run-witness.sh's FULL_APP_OUT_DIRS must equal the xtask map (full tier + tap rows)"
+        );
+    }
+
+    /// Stop C2: a green `GATE PASS full` still exited 1 because the
+    /// witness capture loop walked the whole app→dir map, which carries
+    /// the two tap-venue rows only the separate soak/stress steps
+    /// produce.  The copy loop must iterate the EIGHT full-tier apps and
+    /// resolve each dir through the map.
+    #[test]
+    fn full_capture_loop_covers_only_the_full_tier() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("the workspace root above xtask");
+        let witness = root.join(
+            ".planning/phases/01-stage-p0-cross-build-harness/witness/run-witness.sh",
+        );
+        let text =
+            fs::read_to_string(&witness).unwrap_or_else(|e| panic!("{}: {e}", witness.display()));
+        let body = text
+            .split("step_full() {")
+            .nth(1)
+            .expect("run-witness.sh carries step_full")
+            .split("record full")
+            .next()
+            .expect("step_full records its verdict");
+        assert!(
+            body.contains("for app in \"${FULL_APPS[@]}\"; do"),
+            "step_full must iterate FULL_APPS (the eight full-tier apps)"
+        );
+        assert!(
+            body.contains("dir=$(app_out_dir \"$app\")"),
+            "step_full must resolve each app's actual R9_GATE_OUT dir through app_out_dir"
+        );
+        assert!(
+            !body.contains("FULL_APP_OUT_DIRS"),
+            "step_full must not walk the whole app→dir map: its soak/stress rows are separate steps"
         );
     }
 
