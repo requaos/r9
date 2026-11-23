@@ -64,6 +64,56 @@ pub const FULL_APPS_X86_64: &[&str] = &[
 pub const FULL_APPS_AARCH64: &[&str] =
     &["boot-r9-smoke", "boot-r9-net-smoke", "boot-r9-tier1", "boot-r9-cpu"];
 
+/// Each moved gate app's ACTUAL `R9_GATE_OUT` directory (the default its
+/// `nix/gates/<dir>.sh` names), per architecture.  The flake app attr
+/// name and the output directory are NOT the same for six of the eight
+/// x86_64 apps: `boot-r9-smoke-x64` writes `smoke-r9-x64`, and so on.
+/// Stop C's full runner copied the attr name and produced six empty
+/// captures and six `-1` equivalence rows (01-34).
+/// `full_tier_output_dirs_match_the_scripts` pins every entry to its
+/// script's `R9_GATE_OUT` default AND to run-witness.sh's
+/// `FULL_APP_OUT_DIRS` copy, so a future rename cannot silently recreate
+/// the empty captures.
+pub const FULL_APP_OUT_DIRS_X86_64: &[(&str, &str)] = &[
+    ("drawterm-gate-x64", "drawterm-gate-x64"),
+    ("boot-r9-x64", "boot-r9-x64"),
+    ("boot-r9-smoke-x64", "smoke-r9-x64"),
+    ("boot-r9-tier1-x64", "tier1-r9-x64"),
+    ("boot-r9-net-smoke-x64", "smoke-r9-net-x64"),
+    ("boot-r9-services-x64", "services-r9-x64"),
+    ("boot-r9-churn-x64", "churn-r9-x64"),
+    ("boot-r9-auth-x64", "smoke-r9-auth-x64"),
+];
+
+/// The two tap-venue apps are NOT in the full tier (they need the owner's
+/// bridge), but equivalence.tsv carries their rows, so `step_equiv` needs
+/// the same real path map for them.
+pub const TAP_APP_OUT_DIRS_X86_64: &[(&str, &str)] = &[
+    ("boot-r9-net-soak-x64", "soak-r9-net-x64"),
+    ("boot-r9-stress-x64", "stress-r9-net-x64"),
+];
+
+pub const FULL_APP_OUT_DIRS_AARCH64: &[(&str, &str)] = &[
+    ("boot-r9-smoke", "smoke-r9"),
+    ("boot-r9-net-smoke", "smoke-r9-net"),
+    ("boot-r9-tier1", "tier1-r9"),
+    ("boot-r9-cpu", "cpu-r9"),
+];
+
+/// The app's actual `R9_GATE_OUT` directory name for `arch` (`app`
+/// itself when unmapped — the apps whose attr name IS the directory).
+pub fn app_out_dir(arch: Arch, app: &str) -> &str {
+    let tables: [&[(&str, &str)]; 2] = match arch {
+        Arch::X86_64 => [FULL_APP_OUT_DIRS_X86_64, TAP_APP_OUT_DIRS_X86_64],
+        Arch::Aarch64 => [FULL_APP_OUT_DIRS_AARCH64, &[]],
+        Arch::Riscv64 => [&[], &[]],
+    };
+    tables
+        .iter()
+        .find_map(|table| table.iter().find(|(name, _)| *name == app).map(|(_, dir)| *dir))
+        .unwrap_or(app)
+}
+
 /// The full tier's app list for `arch` (empty for riscv64: no moved gate).
 pub fn full_apps(arch: Arch) -> &'static [&'static str] {
     match arch {
@@ -764,6 +814,93 @@ mod tests {
         assert_eq!(aarch64.len(), 4);
 
         assert!(full_apps(Arch::Riscv64).is_empty());
+    }
+
+    /// 01-34: the short-name map is the fix for stop C's six empty
+    /// captures.  Pin it three ways so a rename cannot silently recreate
+    /// them: every full-tier app has exactly one entry, every entry's
+    /// directory is the `R9_GATE_OUT` default its gate script names, and
+    /// run-witness.sh's `FULL_APP_OUT_DIRS` copy is byte-for-byte the
+    /// same list (the shell cannot import the Rust const).
+    #[test]
+    fn full_tier_output_dirs_match_the_scripts_and_witness_map() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("the workspace root above xtask");
+
+        for (arch, apps) in [
+            (Arch::X86_64, FULL_APPS_X86_64),
+            (Arch::Aarch64, FULL_APPS_AARCH64),
+        ] {
+            let table = match arch {
+                Arch::X86_64 => FULL_APP_OUT_DIRS_X86_64,
+                Arch::Aarch64 => FULL_APP_OUT_DIRS_AARCH64,
+                Arch::Riscv64 => &[],
+            };
+            for app in apps {
+                assert!(
+                    table.iter().any(|(name, _)| name == app),
+                    "{}: the full tier lists {app} but the output-dir map does not",
+                    if arch == Arch::X86_64 { "x86_64" } else { "aarch64" }
+                );
+                let dir = app_out_dir(arch, app);
+                let script = root.join(format!("nix/gates/{dir}.sh"));
+                let text = fs::read_to_string(&script)
+                    .unwrap_or_else(|e| panic!("{}: {e}", script.display()));
+                let default = format!("R9_GATE_OUT=\"${{R9_GATE_OUT:-$R9_ROOT/target/gates/{dir}}}\"");
+                assert!(
+                    text.lines().any(|line| line.trim() == default),
+                    "{} must default R9_GATE_OUT to target/gates/{dir} (the map's entry for {app})",
+                    script.display()
+                );
+            }
+            for (app, _) in table {
+                assert!(
+                    apps.contains(app),
+                    "{}: the output-dir map carries {app}, which the full tier does not list",
+                    if arch == Arch::X86_64 { "x86_64" } else { "aarch64" }
+                );
+            }
+        }
+
+        for (app, _) in TAP_APP_OUT_DIRS_X86_64 {
+            assert!(
+                !FULL_APPS_X86_64.contains(app),
+                "{app}: the tap-venue apps are not full-tier apps"
+            );
+            let dir = app_out_dir(Arch::X86_64, app);
+            let script = root.join(format!("nix/gates/{dir}.sh"));
+            let text =
+                fs::read_to_string(&script).unwrap_or_else(|e| panic!("{}: {e}", script.display()));
+            let default = format!("R9_GATE_OUT=\"${{R9_GATE_OUT:-$R9_ROOT/target/gates/{dir}}}\"");
+            assert!(
+                text.lines().any(|line| line.trim() == default),
+                "{} must default R9_GATE_OUT to target/gates/{dir} (the map's entry for {app})",
+                script.display()
+            );
+        }
+
+        let witness = root.join(
+            ".planning/phases/01-stage-p0-cross-build-harness/witness/run-witness.sh",
+        );
+        let text =
+            fs::read_to_string(&witness).unwrap_or_else(|e| panic!("{}: {e}", witness.display()));
+        let start = text
+            .find("FULL_APP_OUT_DIRS=(")
+            .expect("run-witness.sh carries the FULL_APP_OUT_DIRS map")
+            + "FULL_APP_OUT_DIRS=(".len();
+        let end = start + text[start..].find("\n)").expect("the map array closes");
+        let shell: Vec<(&str, &str)> = text[start..end]
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(|line| line.split_once(':').expect("app:dir"))
+            .collect();
+        assert_eq!(
+            shell.as_slice(),
+            [FULL_APP_OUT_DIRS_X86_64, TAP_APP_OUT_DIRS_X86_64].concat().as_slice(),
+            "run-witness.sh's FULL_APP_OUT_DIRS must equal the xtask map (full tier + tap rows)"
+        );
     }
 
     /// The moved driver's fast-fail block registers against the qemu
