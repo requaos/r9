@@ -5,16 +5,16 @@ milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
 current_phase: 01
 current_phase_name: Stage P0 - Cross-Build Harness
 status: executing
-stopped_at: Completed 01-04-PLAN.md
-last_updated: "2026-11-23T00:52:50Z"
+stopped_at: Completed 01-05-PLAN.md
+last_updated: "2026-11-23T00:57:57.234Z"
 last_activity: 2026-11-23
-last_activity_desc: Phase 01 plan 04 (S6) completed
-state_head: 9f2ac3c8755b4945b3c20617ea4bd9e09e2ac516
+last_activity_desc: Phase 01 plan 05 (S3) completed
+state_head: 10325aa45b87825559f5d228e5bf38ec5ce9f3d6
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 7
-  completed_plans: 2
+  completed_plans: 3
   percent: 0
 ---
 
@@ -30,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-11-22)
 ## Current Position
 
 Phase: 01 (Stage P0 - Cross-Build Harness) — EXECUTING
-Plan: 3 of 7
+Plan: 4 of 7
 Status: Ready to execute
-Last activity: 2026-11-23 — Plan 04 (S6) completed
+Last activity: 2026-11-23 — Plan 05 (S3) completed
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -54,6 +54,7 @@ Progress: [░░░░░░░░░░] 0%
 |------|----------|-------|-------|
 | Phase 01 P03 | 3 min | 2 tasks | 8 files |
 | Phase 01 P04 | 6 min | 3 tasks | 17 files |
+| Phase 01 P05 | 5 min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -74,6 +75,11 @@ Full log is the PROJECT.md Key Decisions table. Recent:
 - [Phase 01]: S6 D-17 target is `ps`, not D-17's prose example `echo`: ps is staged in every chain-family x86_64 image, absent from the boot path, and has two gate sites; `echo` is not an rc builtin (`sys/src/cmd/rc/plan9.c:35-48`), so every bare echo in cpurc and the smoke gates would run the replacement.
 - [Phase 01]: S6 arm64 swap proven end to end under HVF: control, probe marker and flip-back all PASS, and the flip-back bootfs.paq is byte-identical to control (`746f1dfe...`). The x86_64 KVM leg is scripted and statically checked but PENDING-OWNER for Plan 06.
 - [Phase 01]: S6's aarch64 bakes needed a scratch-only mkpaqfs shim (pin mtimes, header time and trailer SHA1) because Harvey's aarch64 mkimage has no KERNDATE pin and the prebuilt darwin mkpaqfs predates it; Harvey stayed untouched.
+- [Phase 01]: S3 rio mode waits on the serial console rc prompt + a rio budget, not a drawterm shell prompt: the cpu profile ends in `exec rio`, so rc never prints one and rio writes nothing to the pty; the driver then types `ls /srv` on the serial console.
+- [Phase 01]: S3 dials as glenda (S3_DT_USER), not the creds-file probe user norbert: only /usr/glenda/lib/profile is staged, rcmain sources a profile only for a readable $home/lib/profile, and the DEMO domain shares one password so the parsed password authenticates glenda.
+- [Phase 01]: The S3 flake re-exports Harvey's locked r9 116bcc2 packages and resolves them at run time with `nix build path:$S3_FLAKE#<attr>`: r9's kernel derivation has an import-from-derivation (rust-src Cargo.lock) that cannot build on aarch64-darwin, so eval-time interpolation would fail the plan's Mac check.
+- [Phase 01]: determinism.sh refuses a first bake whose log records a KERNDATE other than the requested one; Plan 06 passes KERNDATE=1795382101 to both gate runs so an all-DIFFERENT result cannot be blamed on the clock.
+- [Phase 01]: S3 static verdicts: A5 PASS (kernel-wide static srv table at devsrv.rs:59; #s bound at /srv for init's console rc and the cpu session) and A6 PASS (drawterm.nix builds Make.unix GUI=x11); the three KVM legs and A12 stay PENDING-OWNER for Plan 06.
 
 ### Open Questions (ten warnings, approved to be carried, not resolved)
 
@@ -134,6 +140,6 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 
 ## Session Continuity
 
-Last session: 2026-11-23T00:52:50.000Z
-Stopped at: Completed 01-04-PLAN.md
+Last session: 2026-11-23T00:57:57.214Z
+Stopped at: Completed 01-05-PLAN.md
 Resume file: None
