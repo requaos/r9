@@ -5,16 +5,16 @@ milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
 current_phase: 01
 current_phase_name: Stage P0 - Cross-Build Harness
 status: executing
-stopped_at: Completed 01-01-PLAN.md
-last_updated: "2026-11-23T01:10:11.854Z"
+stopped_at: Completed 01-02-PLAN.md
+last_updated: "2026-11-23T01:22:17.674Z"
 last_activity: 2026-11-23
-last_activity_desc: Phase 01 plan 01 (S1) completed
-state_head: a26ba8cbb29ff6c3d97a8a704ca7ec4ef24441ed
+last_activity_desc: Phase 01 plan 02 (S2/A9/S4) completed
+state_head: d7c8ef80980f12589b4db04ad5ef71c2fd259a61
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 7
-  completed_plans: 4
+  completed_plans: 5
   percent: 0
 ---
 
@@ -30,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-11-22)
 ## Current Position
 
 Phase: 01 (Stage P0 - Cross-Build Harness) — EXECUTING
-Plan: 5 of 7
+Plan: 6 of 7
 Status: Ready to execute
-Last activity: 2026-11-23 — Plan 01 (S1) completed
+Last activity: 2026-11-23 — Plan 02 (S2/A9/S4) completed
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -56,6 +56,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 01 P04 | 6 min | 3 tasks | 17 files |
 | Phase 01 P05 | 5 min | 2 tasks | 8 files |
 | Phase 01 P01 | 13 min | 3 tasks | 8 files |
+| Phase 01 P02 | 9min | 3 tasks | 15 files |
 
 ## Accumulated Context
 
@@ -85,6 +86,11 @@ Full log is the PROJECT.md Key Decisions table. Recent:
 - [Phase 01]: S1 host toolchain: nix/setup.sh + nix/toolchain.sh port to a sandbox with four adjustments - store-bash shebang for the 9l shim, pkgs.ed (mkcname), plan9port last on PATH (its 9p mount must not shadow util-linux mount), and GNU sed shadowing for 7l/BUILD's malformed _SYSRM line at the pin.
 - [Phase 01]: S1 measurement: the amd64 libc tier builds in 2 s inside the sandbox (259 members, 601170 bytes) and nix store verify --no-trust is clean on the output; A8's tens-of-minutes belongs to the full tier build, not the library tier.
 - [Phase 01]: S1 flake: pins Harvey bd7a698 (flake = false) and r9's nixpkgs rev 1c89083e, exposes s1-nsprobe, s1-nsprobe-proot, s1-hostbin and s1-libc-amd64 for x86_64-linux and aarch64-linux; the x86_64 witness legs stay PENDING-OWNER for Plan 06.
+- [Phase 01]: S2: both source modes preserve the 23 case-colliding paths; the pass-2 tree derivation should fetch Harvey on the builder through a fixed-output fetch (rev + SRI) so the source never round-trips through APFS
+- [Phase 01]: S2 copy-back: the Mac system store refuses nix copy --from as the owner's user (require-sigs=true, trusted-users=root); the case mechanism itself is sound (same-volume chroot store verify clean, 23/23 blobs), so pass 2 needs a remote-builder config or an owner-approved store-policy change
+- [Phase 01]: A9: a context-discarded outPath in the darwin devshell is lazy (no build sent) and equals the later build path, so HARN-07's supply can meet D-05
+- [Phase 01]: S4: the amd64 tier 0 (27 libs, 6 s) and tier 1 (40 cmds, 19 s, all S_MAGIC 00008a97) build on the aarch64-linux builder with two venue ports: /rc/bin on PATH for membername and an explicit INCLUDE list for a latent 6c heap-layout failure under proot; A3/A4 CONFIRMED, A8 REFUTED
+- [Phase 01]: On APFS a bare [ -f ] lookup resolves the case twin; Mac-side re-checks must enumerate exact names, and tree outputs read by xtask must not contain colliding names
 
 ### Open Questions (ten warnings, approved to be carried, not resolved)
 
@@ -114,6 +120,7 @@ None yet.
 - Phase 20 of the Harvey-rooted work never ran `/gsd-secure-phase` (no SECURITY.md).
 - Docs pin r9 at `c787ce9`; HEAD is 60 commits later with no `crypto/`, `ds/`, `kern/`, `sys/`, `venti/`. Re-verify every landing-site path when its phase is planned.
 - S6 x86_64 KVM leg: scripted and statically checked, PENDING-OWNER. Plan 06 must run `spikes/s6/linux-x86_64.sh` on the x86_64 Linux host (writable `/dev/kvm`, the S3 scratch Harvey tree, the r9 clone at `116bcc2`) before the pass-1 checkpoint.
+- Mac store copy-back: nix copy --from ssh-ng://lima-harvey as the owner's user is refused (require-sigs=true, trusted-users=root). Pass 2 needs a remote-builder configuration or an owner-approved store-policy change; the case names themselves round-trip cleanly in a same-volume chroot store.
 
 ### Standing Owner Rules
 
@@ -145,6 +152,6 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 
 ## Session Continuity
 
-Last session: 2026-11-23T01:10:11.833Z
-Stopped at: Completed 01-01-PLAN.md
+Last session: 2026-11-23T01:22:17.335Z
+Stopped at: Completed 01-02-PLAN.md
 Resume file: None
