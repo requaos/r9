@@ -1410,6 +1410,64 @@ WRAP
               export HARVEY_NETADDR_SEAM="${self.packages.${system}.harvey-tree-amd64}/build/x86_64/root-tree/lib/netaddr.rc"
             '' bootR9X64RuntimeInputs}/bin/boot-r9-stress-x64";
           };
+        }
+        # 01-31 (D-07/D-09/HARN-08): the last two moved x86_64 composed
+        # apps — the plain boot (its tap mode gates on the 01-24
+        # net-doctor, hence R9_NET_DOCTOR) and the auth smoke.  Each
+        # header exports r9's own supply: the kernel-x64 package, r9's
+        # iso-builder and netdev emitter, the read-only amd64 tree, the
+        # host mkpaqfs and authdomain generator (the per-bake p9sk1
+        # domain the cpu/auth images carry).  bootR9X64RuntimeInputs
+        # carries the Rust toolchain (`cargo xtask image`), qemu,
+        # expect, procps (the auth gate's survivor sweep), iproute2
+        # (the auth driver's hostfwd observation) and the text tools;
+        # Harvey's plan9port and namespace-transport tools are no
+        # longer consumed (there is no in-checkout 9 build left) and
+        # stdenv.cc is not carried (the authdomain generator is r9's
+        # prebuilt store package).  x86_64-linux only: the BIOS ISO
+        # machinery (iso-builder) is the q35 channel's venue (X64-05).
+        // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
+          boot-r9-x64 = {
+            type = "app";
+            program = "${mkScriptApp pkgs "boot-r9-x64" ./nix/gates/boot-r9-x64.sh ''
+              export R9_KERNEL_X64_PKG="${self.packages.${system}.kernel-x64}"
+              export R9_ISO_BUILDER="${self.packages.${system}.iso-builder}/bin/r9-iso-builder"
+              export R9_NETDEV_EMITTER="${self.packages.${system}.netdev-args}/bin/r9-netdev-args"
+              export R9_NET_DOCTOR="${netDoctorPkg}/bin/r9-net-doctor"
+              export R9_HARVEY_DIR_AMD64="${self.packages.${system}.harvey-tree-amd64}"
+              export R9_MKPAQFS="${self.packages.${system}.harvey-mkpaqfs}/bin/mkpaqfs"
+              export R9_AUTHDOMAIN_GEN="${self.packages.${system}.harvey-authdomain-gen}/bin/authdomain-gen"
+            '' bootR9X64RuntimeInputs}/bin/boot-r9-x64";
+          };
+          boot-r9-auth-x64 = {
+            type = "app";
+            program = "${mkScriptApp pkgs "boot-r9-auth-x64" ./nix/gates/smoke-r9-auth-x64.sh ''
+              export R9_KERNEL_X64_PKG="${self.packages.${system}.kernel-x64}"
+              export R9_ISO_BUILDER="${self.packages.${system}.iso-builder}/bin/r9-iso-builder"
+              export R9_NETDEV_EMITTER="${self.packages.${system}.netdev-args}/bin/r9-netdev-args"
+              export R9_HARVEY_DIR_AMD64="${self.packages.${system}.harvey-tree-amd64}"
+              export R9_MKPAQFS="${self.packages.${system}.harvey-mkpaqfs}/bin/mkpaqfs"
+              export R9_AUTHDOMAIN_GEN="${self.packages.${system}.harvey-authdomain-gen}/bin/authdomain-gen"
+            '' bootR9X64RuntimeInputs}/bin/boot-r9-auth-x64";
+          };
+        }
+        # 01-31 (D-20/D-08/HARN-08): r9's own drawterm developer app —
+        # the moved wrapper (Harvey 19-06's) rewired onto r9's cpu
+        # image: DRAWTERM_BIN is Harvey's drawterm package (D-09), the
+        # connection is the committed hostfwd pair's loopback side
+        # (cpu=127.0.0.1, auth=tcp!127.0.0.1!5670, user=glenda), and
+        # the creds FILE is r9's target/images/x86_64/cpu.creds (read
+        # by path only — T-01-97).  Linux-only beside the package
+        # itself (the X11 backend is the package's Linux build); it
+        # consumes no other r9 attr, so it keeps its own isLinux gate
+        # (the net-doctor shape) rather than riding the x64 block.
+        // nixpkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          drawterm = {
+            type = "app";
+            program = "${mkScriptApp pkgs "r9-drawterm" ./nix/gates/drawterm-x64.sh ''
+              export DRAWTERM_BIN="${harvey.packages.${system}.drawterm}/bin/drawterm"
+            '' [ pkgs.bash ]}/bin/r9-drawterm";
+          };
         });
     };
 }
