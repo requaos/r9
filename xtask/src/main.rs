@@ -225,9 +225,10 @@ fn main() {
                     clap::arg!(--arch <arch> "Target architecture")
                         .value_parser(clap::builder::EnumValueParser::<Arch>::new())
                         .required(true),
-                    clap::arg!(--image <name> "Image name (xtask/manifests/<objtype>/<name>.toml)")
-                        .value_parser(clap::builder::NonEmptyStringValueParser::new())
-                        .required(true),
+                    clap::arg!(--image <name> "Image name (xtask/manifests/<objtype>/<name>.toml); \
+                                                   with --libraries and no --image, the `libraries` \
+                                                   manifest is used")
+                        .value_parser(clap::builder::NonEmptyStringValueParser::new()),
                     clap::arg!(--"compare-reference" "Compare the assembled member list to the \
                                                       reference bake's \
                                                       ($R9_HARVEY_REFERENCE_AMD64/_ARM64/<image>.members)"),
@@ -3736,10 +3737,24 @@ impl ImageStep {
     fn run(self) -> Result<()> {
         let arch_name = arch_dir_name(self.arch);
         if let Some(path) = &self.emit_manifest {
+            if self.image_name.is_empty() {
+                return Err(
+                    "image: --emit-manifest needs --image <name> (the reference list it mirrors)"
+                        .into(),
+                );
+            }
             return self.emit(path);
         }
         if self.libraries {
-            let manifest_path = image_manifest_path(self.arch, &self.image_name)?;
+            // The library table is an audit check, not an image assembly:
+            // `--libraries` alone reads the `libraries` manifest (the
+            // plan's `cargo xtask image --arch <a> --libraries` form).
+            let image_name = if self.image_name.is_empty() {
+                "libraries"
+            } else {
+                self.image_name.as_str()
+            };
+            let manifest_path = image_manifest_path(self.arch, image_name)?;
             let manifest = read_manifest(&manifest_path)?;
             let tree = harvey::harvey_dir(self.arch)?;
             let tier_path = tree.join(format!(
@@ -3755,7 +3770,15 @@ impl ImageStep {
                 .into()
             })?;
             image::check_libraries(&manifest, &tree, &tier_text)?;
-            println!("libraries: image {arch_name}/{} tier-0 list OK", self.image_name);
+            println!("libraries: image {arch_name}/{image_name} tier-0 list OK");
+            return Ok(());
+        }
+        if self.image_name.is_empty() {
+            return Err(
+                "image: --image <name> is required (except with --libraries, which defaults to \
+                 the `libraries` manifest)"
+                    .into(),
+            );
         }
         let assembled = assemble_named_image(self.arch, &self.image_name, self.verbose)?;
         println!(
