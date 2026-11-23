@@ -1,11 +1,13 @@
-gate	marker_regex	expected_count	source
-# Stop-C equivalence baselines (plan 01-26, HARN-08).
-# One row per marker that proves the gate, taken from the latest committed
-# Harvey-hosted capture of each x86_64 gate under .planning/legacy/.
-# marker_regex is POSIX ERE, counted with `grep -oE' (occurrences, not lines).
-# A gate with no committed capture carries `none' as its source: step_equiv
-# clones Harvey at the phase pin, runs that gate's Harvey-hosted app, and
-# compares the r9 markers with the fresh baseline instead.
+# Stop-C equivalence expectations (plan 01-26, HARN-08; stop-C2 update, 01-34).
+# One row per marker that proves the gate.  The r9 side is counted from each
+# app's ACTUAL R9_GATE_OUT directory (step_equiv's short-name map).  A
+# `recorded' source means the expected_count is the owner-approved stop-C2
+# expectation — used where the committed Harvey-hosted baseline predates the
+# current marker set; the gate's committed expect file is the acceptance and
+# the stop-C2 capture is the evidence.  A `none' source runs the pinned
+# Harvey-hosted app fresh and uses that baseline; a file path names a
+# committed baseline capture.  marker_regex is POSIX ERE, counted with
+# `grep -oE' (occurrences, not lines).
 drawterm-gate-x64	cpurc: DONE	1	.planning/legacy/phases/19-cpu-service-drawterm-rio-desktop/evidence/19-10-leg1-cont-gate.log
 drawterm-gate-x64	DTGATE-	2	.planning/legacy/phases/19-cpu-service-drawterm-rio-desktop/evidence/19-10-leg1-cont-gate.log
 drawterm-gate-x64	drawterm-gate: redaction contract held	1	.planning/legacy/phases/19-cpu-service-drawterm-rio-desktop/evidence/19-10-leg1-cont-gate.log
@@ -15,18 +17,38 @@ boot-r9-x64	^% 	1	.planning/legacy/phases/16-host-net-modes-networking-exit-gate
 boot-r9-smoke-x64	r9x64shell7	2	.planning/legacy/phases/15-userspace-tiers-bootfs-payload-amd64/evidence/15-08-phase-close-smoke.log
 boot-r9-smoke-x64	r9x64delok	2	.planning/legacy/phases/15-userspace-tiers-bootfs-payload-amd64/evidence/15-08-phase-close-smoke.log
 boot-r9-tier1-x64	T1-DONE	1	.planning/legacy/phases/14-harvey-amd64-userspace-on-r9/evidence/14-08-tier1-r9-x64.log
-boot-r9-tier1-x64	T1-OK	36	.planning/legacy/phases/14-harvey-amd64-userspace-on-r9/evidence/14-08-tier1-r9-x64.log
+# T1-OK 39 = the current sweep set: the 14-08 baseline's 36 plus fpprobe (the
+# stop-C2 fix) and the two probes that joined after it.  tier1-r9.expect
+# computes the same 39 names and its post-pass reports "every expected T1-OK
+# present (39 names)"; stop C2 printed 39 T1-OK / 0 T1-FAIL.
+boot-r9-tier1-x64	T1-OK	39	recorded
 boot-r9-tier1-x64	T1-FAIL	0	.planning/legacy/phases/14-harvey-amd64-userspace-on-r9/evidence/14-08-tier1-r9-x64.log
 boot-r9-net-smoke-x64	NET-SMOKE: ALL STAGES PASS	2	.planning/legacy/phases/14-harvey-amd64-userspace-on-r9/evidence/14-09-net-smoke-run1.log
 boot-r9-services-x64	SVC-DONE	1	.planning/legacy/phases/15-userspace-tiers-bootfs-payload-amd64/evidence/15-08-services-final.log
 boot-r9-services-x64	SVC-OK	9	.planning/legacy/phases/15-userspace-tiers-bootfs-payload-amd64/evidence/15-08-services-final.log
 boot-r9-services-x64	SVC-FAIL	0	.planning/legacy/phases/15-userspace-tiers-bootfs-payload-amd64/evidence/15-08-services-final.log
-boot-r9-churn-x64	churn: CATS-DONE 1400	1	none
+# exactly one by the gate's own contract — churn-r9.expect asserts the count is
+# 1 ("churn: CATS-DONE 1400 exactly once").  The fresh Harvey baseline's log
+# set reads 2 because its own post-pass line quotes the marker; the r9 capture
+# keeps the serial log only, so its count_in_dir is 1 (stop C2: 1/1).
+boot-r9-churn-x64	churn: CATS-DONE 1400	1	recorded
 boot-r9-auth-x64	AUTH-DONE	1	.planning/legacy/phases/18-in-guest-p9sk1-auth-domain/evidence/18-04-auth-a.log
-boot-r9-auth-x64	AUTH-OK	5	.planning/legacy/phases/18-in-guest-p9sk1-auth-domain/evidence/18-04-auth-a.log
+# AUTH-OK 10 = the current sweep's verdict set (keyfs, authsrv-listen,
+# secstored, cs, factotum, p9sk1-norbert, speaksfor, speaksfor-deny plus the
+# secstore round-trip arm, whose 18-05 SKIP arm is retired); the 18-04
+# baseline's 5 predates the round trip.  Stop C2 printed AUTH-OK 10 / 0 FAIL
+# with the round trip exercised and presence-demanded.
+boot-r9-auth-x64	AUTH-OK	10	recorded
 boot-r9-auth-x64	AUTH-FAIL	0	.planning/legacy/phases/18-in-guest-p9sk1-auth-domain/evidence/18-04-auth-a.log
+# 16-05 netsoak-a.log IS the tap-venue baseline (HNET-05).  Stop C2's soak
+# refused slirp before assembling anything — the driver now exports R9_NET=tap
+# (01-34) — so the tap run must print these two markers at 1 each.
 boot-r9-net-soak-x64	netip: NETIP-DONE	1	.planning/legacy/phases/16-host-net-modes-networking-exit-gate/evidence/16-05-netsoak-a.log
 boot-r9-net-soak-x64	netip: soak ok	1	.planning/legacy/phases/16-host-net-modes-networking-exit-gate/evidence/16-05-netsoak-a.log
 boot-r9-stress-x64	netstress: STRESS-DONE	1	.planning/legacy/phases/17-r9-kernel-flush-out/evidence/17-08-tcg-slirp-run01.serial.log
 boot-r9-stress-x64	tcpblast: done	9	.planning/legacy/phases/17-r9-kernel-flush-out/evidence/17-08-tcg-slirp-run01.serial.log
-boot-r9-stress-x64	RACE-STRESS slirp venue	1	.planning/legacy/phases/17-r9-kernel-flush-out/evidence/17-08-tcg-slirp-run01.serial.log
+# The tap run's OWN venue label (stop C2: 1 occurrence; the post-pass reports
+# "venue label present (tap)").  The legacy 17-08 slirp log's
+# `RACE-STRESS slirp venue' marker is the wrong evidence for a tap venue: the
+# gate correctly ran tap, so that label is absent by design.
+boot-r9-stress-x64	netstress: venue tap	1	recorded

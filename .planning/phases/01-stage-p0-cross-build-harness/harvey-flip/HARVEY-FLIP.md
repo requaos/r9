@@ -1,13 +1,44 @@
 # The prepared Harvey change (D-10 step 4)
 
-Status: **BLOCKED — NOT APPROVED, not committed.** Stop C (plan 01-27) was
-not green and the owner did not approve the diff, so no Harvey change was
-made. This is the single owner-approved Harvey change D-10 orders after r9's
-gates are green. It lives in a scratch clone outside both repositories; the
-owner reviews the full diff at stop C and commits it only after approval
-(D-02 is `costly`; D-07, D-10, D-19, D-20, D-26).
+**Status: APPROVED, APPLIED and PUSHED — committed as `c697666ba315f137ca2fd11768f835d04bd9f018` and pushed to `origin/master` (`master`) by the owner on 2026-11-23.**
+The owner approved the prepared diff and the four HARN-08 equivalence
+expectations on 2026-11-23, reported the standalone amd64 TCG gate
+`GATE-PASS`, and the diff was applied to `/Users/neilskinner/code/harvey`
+from base `25d97dc4d4976bfb7411f01970755acf6261c81b`. The owner push
+completed the flip: `origin/master` now carries `c697666ba` (and the
+pre-existing `25d97dc4d` freeze commit).
 
-## Stop C outcome (plan 01-27)
+## Stop C2/C3 outcome (plan 01-34) — APPROVED, APPLIED AND PUSHED
+
+- **Gates:** stop C2 full 8/8 with `fpprobe: ok` + tap stress PASS; stop
+  C3 soak / equiv (all 10 rows match) / kernel (the `b6Oc` boot-iso hash,
+  BUILD + REBUILD OK) / store_verify PASS; the standalone amd64 TCG gate
+  is `GATE-PASS` (owner report).
+- **HARN-08 equivalence:** APPROVED 2026-11-23 owner — tier1 `T1-OK` 39,
+  auth `AUTH-OK` 10, churn `CATS-DONE 1400` 1, stress `netstress: venue
+  tap` 1.
+- **Harvey diff:** APPROVED 2026-11-23 owner (sha256
+  `f7b0272d23bc6c131c2f63b37cde1330c0bebddd25b905c22040829232cd7f22`,
+  511797 bytes, 36 paths, +285/−9972).
+- **Applied and committed** from base `25d97dc4d4976bfb7411f01970755acf6261c81b`
+  with `git apply` + an explicit 36-path `git add --`; the 11 pre-modified
+  font paths were never staged. The commit's stat matches the prepared
+  diff (36 files, +285/−9972) and carries zero `sys/lib/(postscript|troff)`
+  or `devpost.add` paths.
+
+HARVEY-COMMIT: c697666ba315f137ca2fd11768f835d04bd9f018
+HARVEY-APPROVED: 2026-11-23 owner
+HARVEY-PUSHED: master c697666ba315f137ca2fd11768f835d04bd9f018
+HARVEY-PUSHED-REPORTED: 2026-11-23 owner (verified: `git ls-remote origin refs/heads/master` = c697666ba315f137ca2fd11768f835d04bd9f018)
+
+Owner push (branch `master`, completed by the owner on 2026-11-23):
+
+    git -C /Users/neilskinner/code/harvey push origin HEAD:master
+
+The push published the pre-existing planning-freeze commit `25d97dc4d`
+as well — the owner already owned that decision.
+
+## Stop C outcome (plan 01-27, historical)
 
 - **Return:** `witness-src/01-27` at
   `6346c68cd67264f6a58fd72369c0dc8523cc9ffe` (source HEAD `3f717f7…`,
@@ -19,15 +50,15 @@ owner reviews the full diff at stop C and commits it only after approval
 - **No Harvey commit:** the owner's checkout is untouched — HEAD
   `25d97dc4d4976bfb7411f01970755acf6261c81b`, status-porcelain sha256
   `041d2929…`; nothing was staged or committed.
-- **HARVEY-COMMIT: none** — not made (stop C not green; no owner approval).
-- **HARVEY-APPROVED: none** — the owner did not approve the diff.
-- **HARVEY-PUSHED: none** — the owner push (Task 3) was not reached.
+- **HARVEY-COMMIT (stop C, superseded by the C2/C3 section above): none** — not made (stop C not green; no owner approval).
+- **HARVEY-APPROVED (stop C, superseded): none** — the owner did not approve the diff then.
+- **HARVEY-PUSHED (stop C, superseded): none** — the owner push (Task 3) was not reached then.
 
 The diff remains at `$HOME/r9-harvey-flip/harvey-flip.diff` — 511797 bytes,
 sha256 `f7b0272d23bc6c131c2f63b37cde1330c0bebddd25b905c22040829232cd7f22` —
-awaiting a green stop-C rerun and the owner's explicit approval. See
-`witness/WITNESS-LOG.md` "Stop C" and `witness/evidence/stop-c/` for the
-failure record.
+as the reviewed record of the applied commit. See
+`witness/WITNESS-LOG.md` "Stop C2/C3" and `witness/evidence/stop-c2|stop-c3/`
+for the green verdicts and the approval record.
 
 ## Where the change lives
 
@@ -286,7 +317,9 @@ refactor(flake): move r9 composition to the r9 repo; add the q35 own-kernel laun
 
 ## Note on the owner's checkout
 
-The owner's `master` is **ahead 1**: `25d97dc4d docs(planning): freeze — …`
-is unpushed. The prepared commit would be a child of it; a push of the new
-commit therefore publishes `25d97dc4d` as well (D-23's rule is about r9
-never locking an unpushed Harvey commit — this plan does not push).
+The owner's `master` was **ahead 1** before this change: `25d97dc4d
+docs(planning): freeze — …` was unpushed. The applied commit `c697666ba`
+is a child of it; the owner pushed both on 2026-11-23, so `origin/master`
+now equals `c697666ba315f137ca2fd11768f835d04bd9f018`. D-23's rule is
+about r9 never locking an unpushed Harvey commit; the push was the
+owner's action after the approval.

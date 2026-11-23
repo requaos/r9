@@ -610,15 +610,341 @@ a capture-path defect to confirm before calling it a boot regression.
    `HARVEY_NETADDR_SEAM` themselves.
 2. `step_full` must copy each app's actual `R9_GATE_OUT` directory (the
    short-name map above), and `step_equiv` must count the same path.
-3. The tier-1 `fpprobe` note-leg failure needs a kernel/note-delivery
-   investigation before the full run can be green.
+3. The tier-1 `fpprobe` note-leg failure is investigated and fixed below
+   (the q35 millisecond/tick conversion); the KVM stop-C2 rerun is the
+   proof that the real handlers now run.
+
+### fpprobe note-delivery — root cause, fix and next action (plan 01-34)
+
+**Finding: the interrupt-return note boundary is intact; the q35 port
+interpreted alarm/sleep MILLISECONDS as 100 Hz timer TICKS, so every
+alarm arrived ten times late.** `fpprobe`'s two ring-3 spin rounds
+(`note-spin`: 200M volatile adds; `note-regs`: `gprspin`'s 2^31 asm
+decrements) finish before that late alarm on a fast KVM host, so their
+handlers ran 0 times; the same rounds pass under the far slower TCG
+container where the 500 ms alarm always lands mid-spin.
+
+Evidence, and why it is this and not a missing boundary:
+
+- The failing lines are exactly the two legs that need delivery on the
+  INTERRUPT return:
+  `fpprobe: BAD note-spin handler ran 0 times`,
+  `fpprobe: BAD note-regs handler ran 0 times`, then
+  `fpprobe: BAD note child 129: bad`, `fpprobe: FAIL note`,
+  `T1-FAIL fpprobe` (full.log). `note-sync`, `note-sleep` and
+  `note-nsave` did not report BAD — those deliver at the SYSCALL return
+  (and `note-sleep` additionally proves the tick's timeout sweep posts
+  the alarm note and wakes the Blocked sleeper).
+- The `switch` and `preempt` legs passed: `preempt` runs the same
+  ring-3 integer spin for four rounds and requires the timer tick to
+  preempt it, so ticks fire and the IRQ path runs under KVM.
+- `user trap: unhandled vector 1 pc=0x2027d9 addr=0x0`, followed by
+  `process 138 exited: "sys: trap"`, is the flags-`tf` sub-leg's
+  DESIGNED outcome: TF is set across a syscall and the single-step #DB
+  must arrive in ring 3 and kill the child with `sys: trap` (fpprobe
+  requires exactly that string). It is not a note-delivery fault.
+- `x86_64/src/trap.rs`'s IRQ-return
+  `deliver_notes(trap_frame)` call (vectors >= 32, `cs & 3 == 3`) has
+  been present since `0ffcec6` (the 2026-11-22 x86_64 async-note fix,
+  part of `e9e5365`); no later commit touched that block. The same code
+  was verified green under TCG (`fpprobe: ok`, tier-1 39 T1-OK) on
+  2026-11-22. The prior session's "no IRQ-return delivery" mutant
+  produced these SAME two lines, which is why the serial evidence alone
+  was ambiguous; the code and venue timeline disambiguate it.
+- The defect: `TICKS_PER_SEC = 100` on q35 (`TICK_MS = 10`), while
+  `sys_alarm`/`sys_sleep` inherited aarch64's `now + ms` — harmless
+  there because the aarch64 tick is 1 ms, so a millisecond and a tick
+  are the same number; ten times late here. `alarm(50)` armed at
+  500 ms, and `alarm`'s "remaining ms" return was ten times small.
+  `gprspin` is sub-second on the witness's KVM host (`-cpu host`, 16
+  cores) and loses the race; under TCG it runs for many seconds and
+  wins. That is why stop C's KVM host is the first venue to see it.
+- WINDOWS #70 (aarch64 scheduler resume skips note delivery, deferred
+  to Phase 8/SMP-06) is a DIFFERENT defect on the other architecture;
+  the x86_64 async path was fixed in `e9e5365` and is present here.
+  Neither the arm64 deferral nor its acceptance covers this timing
+  bug, and nothing here re-scopes it.
+
+**Fix (in scope, small):** `x86_64/src/syscall.rs` converts
+milliseconds to ticks with a ceiling (`ms_to_ticks`, `TICK_MS = 10`)
+for `sleep` and `alarm`, and converts `alarm`'s remaining-tick return
+back to milliseconds; `x86_64/src/platform/q35/timer.rs` exposes
+`TICK_MS` `pub(crate)`. A host unit test pins the conversion
+(`sleep_and_alarm_convert_milliseconds_to_the_100hz_slice`: 1..9 ms = 1
+tick, 10 = 1, 11 = 2, 50 = 5, 1000 = 100). The aarch64 twin is
+unchanged (identity conversion there by construction).
+
+**Verification:** the conversion is pinned at COMPILE TIME in every
+x86_64 kernel build — `const` asserts beside `ms_to_ticks` are carried
+by `cargo xtask check`, `clippy` and `build`, so a tick-rate or formula
+change cannot silently restore the ten-times-late alarm — and repeated
+by a host unit test on the x86_64 leg
+(`sleep_and_alarm_convert_milliseconds_to_the_100hz_slice`).
+`cargo xtask test|clippy|check` pass on the Mac (the aarch64 host leg);
+the x86_64 host-test leg needs an x86_64 Linux host or an amd64
+container (a Docker attempt here is blocked by Docker's seccomp policy,
+`unable to load seccomp BPF`, so the owner's host carries that leg).
+The boot-level proof is stop C2: `boot-r9-tier1-x64` must print
+`fpprobe: ok` with all six legs, `note-spin` and `note-regs` included.
+Nothing about the gate changes: `T1-OK fpprobe` stays a required marker
+and stop C remains FAIL until that rerun is green.
+
+A TCG rerun **cannot discriminate this finding**: the pre-fix kernel was
+already green under TCG on 2026-11-22 (the same two rounds passed), and
+it will stay green after the fix — TCG's spin loops outlast the 500 ms
+late alarm, so the race never fires there. The KVM venue is the
+discriminator, and stop C2 runs there; spending a TCG cycle would
+re-measure the venue that never exposed the bug. (The x86_64 gate does
+run under the amd64 Docker + `nix develop` shape, so the command is
+available for any future TCG need; it is recorded below.)
+
+**If stop C2 still reports `handler ran 0 times`:** the next action is
+the trap.rs IRQ-boundary isolation (the 2026-11-22 no-IRQ-delivery
+mutant) — instrument `deliver_notes` at the vector>=32 return to print
+`pid`, `note_queue.len()` and `notified` per tick — not a gate
+reclassification. `note-sleep` passing while `note-spin`/`note-regs`
+fail would then implicate the tick's `preempt()` park/resume path
+(the proc resumes through `swtch` after the boundary ran), which is the
+only code between the tick and the boundary; the fix stays in the note
+path, never in the acceptance.
+
+**TCG-only reproduction command** (an x86_64 Linux host or the amd64
+container; the Mac has no x86_64 devshell):
+
+    nix develop -c env R9_ACCEL=tcg cargo xtask gate --arch x86-64 --full --accel tcg
+
+or the single app through the flake: `R9_ACCEL=tcg nix run
+.#boot-r9-tier1-x64` (x86_64-linux only; the app exports its own
+supply). The KVM rerun (stop C2) is the authoritative proof.
+
+**Stop-C2 result: CONFIRMED.** The KVM rerun printed `fpprobe: ok` and
+`T1-OK fpprobe`; the tier-1 post-pass reports all 39 expected T1-OK
+present, zero T1-FAIL, zero panic (evidence:
+`evidence/stop-c2/full.log`). The two ring-3 note rounds now deliver.
+
+## Stop C2 — plan 01-34, x86_64 KVM
+
+STATUS stopc2: HALTED — return `witness-src/01-34` at
+`2bc54786da3895e4c30f8ec8e7141b4ccd99b99f` on the fixed tree
+(`2a5cbed`). The moved gates themselves are green: the full set is 8/8
+including `fpprobe`, stress PASSes on the tap venue, and both trees
+verify. The run is not fully green: the `full` step exited 1 on a
+capture-check bug, `soak` refused slirp, `equiv` compares against stale
+baselines, and the `kernel` step has not verified the new boot-iso hash.
+
+- **Return:** `witness-src/01-34` at `2bc5478`; return directory
+  `witness/return-01-34/`; source HEAD `2a5cbed`; host `teeniebox`
+  (x86_64-linux, nproc 16, 30 GiB RAM, nix 2.35.6, `DEV_KVM=writable`);
+  session 2026-11-23T19:22:04Z → 19:31:19Z; survivors none; credential
+  scan clean.
+- **Steps selected:** `full soak stress equiv store_verify` (the owner
+  did not select `kernel`).
+- **Harvey:** NOT APPROVED — no change, staging or commit was made; the
+  prepared diff remains unapplied.
+
+### Per-step verdicts
+
+VERDICT stopc2-full: PASS
+EVIDENCE stopc2-full: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c2/full.tsv
+EVIDENCE stopc2-full: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c2/full.log
+
+VERDICT stopc2-soak: FAIL
+EVIDENCE stopc2-soak: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c2/soak.log
+
+VERDICT stopc2-stress: PASS
+EVIDENCE stopc2-stress: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c2/stress.log
+
+VERDICT stopc2-equiv: FAIL
+EVIDENCE stopc2-equiv: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c2/equiv/report.tsv
+EVIDENCE stopc2-equiv: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c2/equiv/rows.tsv
+
+VERDICT stopc2-store-verify: PASS
+EVIDENCE stopc2-store-verify: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c2/store-verify.log
+
+VERDICT stopc2-kernel: PENDING
+EVIDENCE stopc2-kernel: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c2/kernel.log
+
+EVIDENCE stopc2-env: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c2/env.txt
+EVIDENCE stopc2-summary: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c2/summary.tsv
+EVIDENCE stopc2-secret-scan: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c2/secret-scan.txt
+EVIDENCE stopc2-survivors: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c2/survivors.txt
+
+### What the run proves
+
+- **full — 8/8, `GATE PASS full x86_64-linux run=405781-1795461728`.**
+  `boot-r9-tier1-x64` PASS: `fpprobe: ok`, `T1-OK fpprobe`, every
+  expected T1-OK present (39 names), zero T1-FAIL. The fpprobe
+  ms→tick finding is confirmed on the KVM venue.
+- **The 01-34 capture fixes worked.** Every app's real `R9_GATE_OUT`
+  directory was copied (no `-1` from the full set), and
+  `boot-r9-x64` now has `boot-r9.log`: its three markers count 1/1.
+  `drawterm-gate-x64`, `boot-r9-smoke-x64`, `boot-r9-net-smoke-x64`,
+  `boot-r9-services-x64` and `boot-r9-x64` all `match`.
+- **stress — PASS on the tap venue.** `netstress: venue tap`,
+  `tcpblast: done x 9`, zero `netstress: FAIL`, ALL STAGES PASS.
+- **store_verify — PASS** on both tree paths.
+- **The tap preflight fix worked:** the doctor read
+  `…/harvey-tree-amd64-0/build/x86_64/root-tree/lib/netaddr.rc` and
+  PASSed all eight checks.
+
+### Why the run is halted (and the fixes committed after the return)
+
+1. **`full` step exit 1 was the capture check, not a gate.** The step
+   printed `GATE PASS full` and then `FULL-NO-CAPTURE
+   boot-r9-net-soak-x64` / `boot-r9-stress-x64`: the copy loop walked
+   the whole app→dir map, which carries the two tap-venue rows that
+   only the separate soak/stress steps produce. Fixed: `step_full`
+   iterates the eight `FULL_APPS` and resolves each dir through
+   `app_out_dir`; a static test
+   (`full_capture_loop_covers_only_the_full_tier`) pins it.
+2. **`soak` refused slirp.** The doctor PASSed, then the app exited in
+   the venue-honesty check: `slirp evidence not accepted … want
+   --net=tap / R9_NET=tap`. `venue_gate` exported `HARVEY` and the seam
+   but not `R9_NET`. Fixed: both the doctor preflight and the app run
+   now carry `R9_NET=tap` (the stress app's default happened to be tap;
+   it is explicit now too).
+3. **`equiv` compared against stale baselines.** No `-1` rows remain
+   from the capture gap; the four `differ` rows are expectation drift:
+   `T1-OK 39/36`, `AUTH-OK 10/5`, `CATS-DONE 1400 1/2` and the tap
+   run's absent `RACE-STRESS slirp venue` label (0/1). `equivalence.tsv`
+   now records the stop-C2 expectations with a per-row rationale and a
+   `recorded` source token; the comparator treats `recorded` as an
+   owner-approved expectation (no fresh baseline, no stale capture
+   count). The gates themselves are unchanged.
+4. **`kernel` is PENDING.** The return's `kernel.log` is the stale
+   4139fdf package. The branch's `flake.nix` (commit `2bc5478`) carries
+   the new boot-iso `outputHash`
+   `sha256-b6OcAb2pOufpr5AqJj2SqhXnrTYsIQRTgkh9FcgtNT0=`, but no
+   `kernel` step has built/`--rebuild`-checked it.
+
+### Remaining owner command
+
+On the x86_64 host, at the fixed commit, the four unproven/red steps
+only (the full and stress captures are already green — no full rerun):
+
+    R9_WITNESS_STEPS="soak equiv kernel store_verify" \
+      bash .planning/phases/01-stage-p0-cross-build-harness/witness/run-witness.sh
+
+and the amd64 TCG leg:
+
+    nix develop -c cargo xtask gate --arch x86-64 --accel tcg
+
+Expected: `soak` PASS on the tap venue; `equiv` all rows `match`;
+`kernel` `KERNEL-BOOTISO-BUILD-OK` + `KERNEL-BOOTISO-REBUILD-OK` on the
+new hash; `store_verify` PASS. The Harvey diff remained unapplied until
+the green C3 run and the explicit APPROVE — both are now recorded in the
+Stop C3 section.
+
+**Resolved by stop C3 — all four were green.** See the Stop C3 section
+below.
+
+## Stop C3 — plan 01-34, x86_64 KVM
+
+STATUS stopc3: PASS for the four selected steps. With stop C2's full
+8/8 and tap stress, every witness step is now green, and the three
+owner items that followed are resolved: the standalone amd64 TCG gate
+is `GATE-PASS` (owner report), the HARN-08 equivalence expectations are
+APPROVED (2026-11-23 owner), and the Harvey diff is APPROVED, applied
+and PUSHED as Harvey `c697666ba` on `origin/master` (owner push
+2026-11-23, verified). The diff is no longer unapplied-awaiting-approval.
+
+- **Return:** `witness-src/01-34` at
+  `d6106dbfcdbfa16be02a14b1d40f95adcbc2226e` on our halted-summary tip
+  (`678a88c`); return directory `witness/return-01-34/`; source HEAD
+  `678a88c`; host `teeniebox` (x86_64-linux, nproc 16, 30 GiB RAM, nix
+  2.35.6, `DEV_KVM=writable`); session 2026-11-23T19:39:17Z →
+  19:44:52Z; survivors none; credential scan clean.
+- **Steps selected:** `soak kernel equiv store_verify` (the four red/
+  unproven C2 steps; no full rerun).
+- **Harvey:** APPROVED 2026-11-23 by the owner and committed as
+  `c697666ba315f137ca2fd11768f835d04bd9f018`; not pushed.
+
+### Per-step verdicts
+
+VERDICT stopc3-soak: PASS
+EVIDENCE stopc3-soak: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c3/soak.log
+
+VERDICT stopc3-equiv: PASS
+EVIDENCE stopc3-equiv: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c3/equiv/report.tsv
+EVIDENCE stopc3-equiv: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c3/equiv/rows.tsv
+
+VERDICT stopc3-kernel: PASS
+EVIDENCE stopc3-kernel: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c3/kernel.log
+
+VERDICT stopc3-store-verify: PASS
+EVIDENCE stopc3-store-verify: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c3/store-verify.log
+
+VERDICT stopc3-tcg: PASS
+EVIDENCE stopc3-tcg: owner report 2026-11-23 — standalone `nix develop -c cargo xtask gate --arch x86-64 --accel tcg` on the x86_64 host printed `GATE-PASS` (no log file committed; the GATE-PASS control-no-rio lines in the full/stress captures are the drawterm legs, not this run)
+
+EVIDENCE stopc3-env: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c3/env.txt
+EVIDENCE stopc3-summary: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c3/summary.tsv
+
+### The combined witness set is green
+
+- **full — 8/8** (stop C2, carried): `GATE PASS full`, `fpprobe: ok`,
+  `T1-OK fpprobe`, 39 expected T1-OK, zero T1-FAIL.
+- **stress — PASS** (stop C2, carried): tap venue label, 9 tcpblast,
+  zero FAIL.
+- **store_verify — PASS** (stop C2 carried and C3 repeated): both trees
+  `STORE-VERIFY-OK`.
+- **soak — PASS**: `netip: L2-TRUTH tap venue`,
+  `netsoak-r9-x64: ALL STAGES PASS` (static + ARP L2-truth + venue
+  label; baseline 2048 + burst 8x512; counted 9 tcpblast: done; zero
+  `netip: FAIL`).
+- **equiv — PASS**: all 10 gate rows `match`, including the four
+  recorded expectations — tier1 `T1-OK=39/39`, auth `AUTH-OK=10/10`,
+  churn `CATS-DONE 1400=1/1`, stress `netstress: venue tap=1/1` — plus
+  soak `NETIP-DONE=1/1; soak ok=1/1`. The `recorded stop-C2 expectation
+  (owner approval pending)` label is the run's own provenance; the
+  owner's approval is the remaining HARN-08 item.
+- **kernel — PASS**: `r9-kernel-x64-678a88c`, kernel ELF sha256
+  `2377dc2f…`, boot-iso `KERNEL-BOOTISO-BUILD-OK` and
+  `KERNEL-BOOTISO-REBUILD-OK` on the new
+  `sha256-b6OcAb2pOufpr5AqJj2SqhXnrTYsIQRTgkh9FcgtNT0=`.
+
+### Approvals and the Harvey commit (2026-11-23)
+
+1. **Standalone amd64 TCG gate — PASS (owner report).**
+   `nix develop -c cargo xtask gate --arch x86-64 --accel tcg` printed
+   `GATE-PASS` on the x86_64 host. The `GATE-PASS control-no-rio` lines
+   in the full/stress captures are the drawterm legs, not this run.
+2. **HARN-08 equivalence — APPROVED (owner, 2026-11-23).** The four
+   recorded expectations are accepted: tier1 `T1-OK` 39, auth `AUTH-OK`
+   10, churn `CATS-DONE 1400` 1, stress `netstress: venue tap` 1. Stop
+   C3 verified each 1:1 and all 10 equivalence rows match.
+3. **Harvey diff — APPROVED (owner, 2026-11-23), APPLIED and PUSHED.**
+   From base `25d97dc4d4976bfb7411f01970755acf6261c81b`, `git apply` plus
+   an explicit 36-path `git add --` produced Harvey commit
+   `c697666ba315f137ca2fd11768f835d04bd9f018` on `master`:
+   36 files, +285/−9972, zero `sys/lib/(postscript|troff)` or
+   `devpost.add` paths; the 11 pre-modified font files were never
+   staged. The owner pushed `master c697666ba315f137ca2fd11768f835d04bd9f018`
+   on 2026-11-23; `origin/master` carries it (and the pre-existing
+   `25d97dc4d` freeze commit), verified via `git ls-remote`.
+
+### Stop C closure
+
+All six witness steps are green (full 8/8 with `fpprobe: ok`, soak,
+stress, equiv 10/10, store_verify twice, kernel `b6Oc` build+rebuild),
+the standalone amd64 TCG gate is `GATE-PASS`, the four HARN-08
+equivalence expectations are approved, and the Harvey flip is applied
+and pushed at `c697666ba315f137ca2fd11768f835d04bd9f018`. Plan 01-34
+is complete; 01-28 is the orchestrator's next dispatch. Harvey received
+no further change; the 11 pre-modified font paths remain untouched and
+unstaged.
 
 ### The prepared Harvey review packet
+
+**APPROVED 2026-11-23, applied and pushed as Harvey
+`c697666ba315f137ca2fd11768f835d04bd9f018` to `origin/master`.** The
+packet below is the reviewed record; the owner push completed the flip.
 
 - **Full diff:** `$HOME/r9-harvey-flip/harvey-flip.diff` — 511797 bytes,
   sha256 `f7b0272d23bc6c131c2f63b37cde1330c0bebddd25b905c22040829232cd7f22`.
 - **Base:** Harvey `25d97dc4d4976bfb7411f01970755acf6261c81b` (the owner's
-  `master`; the unpushed planning-freeze commit is this commit's parent).
+  `master`; the planning-freeze commit is this commit's parent and was
+  published by the same owner push).
 - **Shape:** 36 paths, +285 / −9972 — 32 deletions, 1 new file
   (`nix/q35.sh`), 3 modified (`flake.nix`, `flake.lock`,
   `.github/workflows/phase6.yml`).
@@ -708,7 +1034,7 @@ APPROVE authorises the executor to apply exactly
 > Harvey pushed: <branch> <sha>
 
 after `git -C ~/code/harvey push origin HEAD:<branch>`. The new commit's parent
-is the unpushed `25d97dc4d`, so the push publishes both (D-23, recorded in
+is `25d97dc4d`; the owner's 2026-11-23 push published both (D-23, recorded in
 HARVEY-FLIP.md).
 
 ### Guard rails for the continuation

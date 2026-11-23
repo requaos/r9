@@ -1,0 +1,7 @@
+# stop-C3 standalone amd64 TCG gate — OWNER REPORT (2026-11-23)
+# command: nix develop -c cargo xtask gate --arch x86-64 --accel tcg
+# host: the owner's x86_64 Linux host (teeniebox)
+# result: GATE-PASS
+# note: no log file was committed for this run.  The GATE-PASS/control-no-rio
+# lines inside the stop-C2 full/stress captures belong to the drawterm legs,
+# not to this standalone TCG invocation.

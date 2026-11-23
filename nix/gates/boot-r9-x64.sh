@@ -366,7 +366,17 @@ echo "== step 3/3: launching qemu — system=$SYSTEM_MODE, interactive on stdio 
 echo "== qemu argv: $*"
 
 set +e
-"$@"
-RC=$?
+# The per-app capture (01-34): the terminal boot is the one full-tier app
+# whose output had nowhere to land — the witness full runner copied an
+# empty target/gates/boot-r9-x64/ and equivalence counted 0/1 for three
+# markers that DID print.  Tee qemu's stdio into the app's own log:
+# stdin stays the terminal (ctrl-a x still quits), stdout reaches the
+# terminal AND the capture, and qemu's exit status still decides the app
+# (PIPESTATUS[0], never tee's).
+BOOT_LOG="$R9_GATE_OUT/boot-r9.log"
+: >"$BOOT_LOG"
+printf '== boot-r9 capture: %s\n' "$BOOT_LOG" | tee -a "$BOOT_LOG"
+"$@" 2>&1 | tee -a "$BOOT_LOG"
+RC=${PIPESTATUS[0]}
 set -e
 exit "$RC"

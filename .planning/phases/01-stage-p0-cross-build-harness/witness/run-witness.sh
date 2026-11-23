@@ -152,7 +152,38 @@ PROFILE_LIST=(q35 q35lowmcfg q35net q35exec q35churn q35shell q35churnshell q35c
 # as their own steps.
 FULL_APPS=(drawterm-gate-x64 boot-r9-x64 boot-r9-smoke-x64 boot-r9-tier1-x64
 	boot-r9-net-smoke-x64 boot-r9-services-x64 boot-r9-churn-x64 boot-r9-auth-x64)
+# The moved apps' ACTUAL R9_GATE_OUT directories (app:dir).  The flake
+# app attr name and the output directory differ for six of the eight
+# full apps (boot-r9-smoke-x64 writes smoke-r9-x64, ...); stop C copied
+# the attr name and produced six empty captures and six -1 equivalence
+# rows (01-34).  xtask's FULL_APP_OUT_DIRS_X86_64 mirrors this list, and
+# its gate:: test fails if the two drift.
+FULL_APP_OUT_DIRS=(
+	drawterm-gate-x64:drawterm-gate-x64
+	boot-r9-x64:boot-r9-x64
+	boot-r9-smoke-x64:smoke-r9-x64
+	boot-r9-tier1-x64:tier1-r9-x64
+	boot-r9-net-smoke-x64:smoke-r9-net-x64
+	boot-r9-services-x64:services-r9-x64
+	boot-r9-churn-x64:churn-r9-x64
+	boot-r9-auth-x64:smoke-r9-auth-x64
+	boot-r9-net-soak-x64:soak-r9-net-x64
+	boot-r9-stress-x64:stress-r9-net-x64
+)
 P="$P_REL"
+
+# app_out_dir <app>: the app's actual R9_GATE_OUT short name from the
+# map above (the app name itself when unmapped).
+app_out_dir() {
+	local entry
+	for entry in "${FULL_APP_OUT_DIRS[@]}"; do
+		if [ "${entry%%:*}" = "$1" ]; then
+			printf '%s\n' "${entry#*:}"
+			return 0
+		fi
+	done
+	printf '%s\n' "$1"
+}
 
 selected=0
 for step in $R9_WITNESS_STEPS; do
@@ -653,7 +684,7 @@ count_in_dir() {
 
 # --- full: the eight moved apps in sequence (D-14) ----------------------
 step_full() {
-	local start end rc app run_dir stamp
+	local start end rc app dir run_dir stamp
 	start=$(now)
 	rc=0
 	: >"$OUT/full/full.log"
@@ -668,14 +699,21 @@ step_full() {
 		rc=1
 	fi
 	# Keep every app's own capture set: the moved apps write under
-	# target/gates/<app>/ (their R9_GATE_OUT default).
+	# target/gates/<R9_GATE_OUT dir>, which is NOT the flake attr name
+	# for six of the eight (01-34).  The loop is the EIGHT full apps
+	# only: soak/stress are separate steps and their dirs do not exist
+	# in a full run, so counting them here made a green `GATE PASS full'
+	# exit 1 (stop C2).  Each copy lands under the app name so the
+	# evidence tree reads like full.tsv.
 	rm -rf -- "$OUT/full/apps"
 	mkdir -p "$OUT/full/apps"
 	for app in "${FULL_APPS[@]}"; do
-		if [ -d "$R9/target/gates/$app" ]; then
-			cp -R -- "$R9/target/gates/$app" "$OUT/full/apps/" || rc=1
+		dir=$(app_out_dir "$app")
+		if [ -d "$R9/target/gates/$dir" ]; then
+			cp -R -- "$R9/target/gates/$dir" "$OUT/full/apps/$app" || rc=1
 		else
-			printf 'FULL-NO-CAPTURE %s\n' "$app" | tee -a "$OUT/full/full.log"
+			printf 'FULL-NO-CAPTURE %s (expected target/gates/%s)\n' "$app" "$dir" |
+				tee -a "$OUT/full/full.log"
 			rc=1
 		fi
 	done
@@ -695,25 +733,54 @@ step_full() {
 # --- soak / stress: the owner's tap venue (D-13) ------------------------
 # Both gates accept ONLY the tap/bridge venue.  net-doctor --mode tap is
 # the ONE read-only checker (D-03); its FAIL lines carry the remediation.
-# A missing venue fails the step before any bake or boot — never a slirp
-# substitute (slirp evidence is not L2 truth).
+# The tap checks read the netaddr seam under $HARVEY
+# (build/x86_64/root-tree/lib/netaddr.rc), so the preflight REALISES the
+# r9-built amd64 tree and hands the doctor the same seam the soak/stress
+# apps get from the flake (HARVEY_NETADDR_SEAM).  Stop C ran the doctor
+# from the r9 root with no HARVEY, so it looked for <r9>/build/... and
+# reported a false venue failure; a seam that cannot be realised is now a
+# NAMED precondition failure of its own, never a venue verdict.  Both
+# apps also get R9_NET=tap explicitly: the soak app REFUSES slirp by
+# contract (D-11) and the stress app must not fall through to its
+# default, so stop C2's soak never ran the venue it had just PASSed
+# (01-34).  A missing venue still fails the step before any bake or
+# boot — never a slirp substitute (slirp evidence is not L2 truth).
 venue_gate() {
-	local step=$1 app=$2 out=$3 start end rc
+	local step=$1 app=$2 out=$3 start end rc tree seam
 	start=$(now)
 	rc=0
 	mkdir -p "$out"
 	: >"$out/$step.log"
-	note "$step: precondition nix run .#net-doctor -- --mode tap (the owner's tap/bridge venue)"
-	if ! (cd "$R9" || exit 1
-		nix run .#net-doctor -- --mode tap) 2>&1 | tee -a "$out/$step.log"; then
-		printf '%s-PRECONDITION-UNMET: the tap/bridge venue is absent.  This step needs the owner host: a configured bridge, the setuid wrapper and the pinned seam (16-05/D-13); slirp is never accepted as evidence.\n' "$step" |
+	note "$step: precondition: realise .#harvey-tree-amd64 for the netaddr seam"
+	if ! tree=$(cd "$R9" || exit 1
+		nix build --no-link --print-out-paths .#harvey-tree-amd64 \
+			2>>"$out/$step.log"); then
+		printf '%s-PRECONDITION-UNMET seam-unavailable: .#harvey-tree-amd64 did not build; the tap checks need its lib/netaddr.rc (a seam precondition, not a venue verdict)\n' "$step" |
+			tee -a "$out/$step.log"
+		rc=1
+	fi
+	seam="${tree:-}/build/x86_64/root-tree/lib/netaddr.rc"
+	if [ "$rc" -eq 0 ] && { [ -z "${tree:-}" ] || [ ! -f "$seam" ]; }; then
+		printf '%s-PRECONDITION-UNMET seam-missing: %s (the r9-built amd64 tree carries no netaddr seam; the tap checks key on its tap_gwv4/blastport)\n' "$step" "$seam" |
 			tee -a "$out/$step.log"
 		rc=1
 	fi
 	if [ "$rc" -eq 0 ]; then
-		note "$step: R9_ACCEL=kvm nix run .#$app (the owner's tap venue)"
+		note "$step: precondition nix run .#net-doctor -- --mode tap (HARVEY=$tree, R9_NET=tap)"
 		if ! (cd "$R9" || exit 1
-			R9_ACCEL=kvm nix run ".#$app") 2>&1 | tee -a "$out/$step.log"; then
+			HARVEY="$tree" HARVEY_NETADDR_SEAM="$seam" R9_NET=tap \
+				nix run .#net-doctor -- --mode tap) 2>&1 |
+			tee -a "$out/$step.log"; then
+			printf '%s-PRECONDITION-UNMET: the tap/bridge venue is absent.  This step needs the owner host: a configured bridge, the setuid wrapper and the pinned seam (16-05/D-13); slirp is never accepted as evidence.\n' "$step" |
+				tee -a "$out/$step.log"
+			rc=1
+		fi
+	fi
+	if [ "$rc" -eq 0 ]; then
+		note "$step: R9_ACCEL=kvm R9_NET=tap nix run .#$app (the owner's tap venue)"
+		if ! (cd "$R9" || exit 1
+			R9_ACCEL=kvm R9_NET=tap HARVEY="$tree" HARVEY_NETADDR_SEAM="$seam" \
+				nix run ".#$app") 2>&1 | tee -a "$out/$step.log"; then
 			rc=1
 		fi
 	fi
@@ -728,7 +795,11 @@ step_stress() { venue_gate stress boot-r9-stress-x64 "$OUT/stress"; }
 # A `none' row runs the pinned Harvey-hosted app in the same writable
 # scratch tree the rio steps use (ensure_harvey_scratch), with
 # R9_GATE_OUT pointed at out/equiv/baseline/<gate>/ so the fresh capture
-# and the app's stdout land together.
+# and the app's stdout land together.  A `recorded' row carries the
+# owner-approved stop-C2 expectation in its count column: the committed
+# Harvey baselines predate fpprobe's T1-OK, the auth secstore arm and the
+# tap venue's own label, and the gate's committed expect files (not the
+# stale capture counts) are the acceptance (01-34).
 ensure_equiv_baseline() {
 	local gate=$1 dir="$OUT/equiv/baseline/$1" scratch
 	if [ -d "$dir" ] && [ -n "$(find "$dir" -type f -name '*.log' -print -quit 2>/dev/null)" ]; then
@@ -746,7 +817,7 @@ ensure_equiv_baseline() {
 }
 
 step_equiv() {
-	local start end rc gate regex want src got ok srclabel report details
+	local start end rc gate regex want src got ok srclabel report details dir
 	start=$(now)
 	rc=0
 	report="$OUT/equiv/report.tsv"
@@ -773,13 +844,16 @@ step_equiv() {
 				want=-1
 				srclabel="baseline-run-failed"
 			fi
+		elif [ "$src" = recorded ]; then
+			srclabel="recorded stop-C2 expectation (owner approval pending)"
 		elif [ ! -f "$R9/$src" ]; then
 			printf 'EQUIV-SOURCE-MISSING %s -> %s\n' "$gate" "$src" >&2
 			want=-1
 			srclabel="source-missing"
 		fi
-		if [ -d "$R9/target/gates/$gate" ]; then
-			got=$(count_in_dir "$R9/target/gates/$gate" "$regex")
+		dir=$(app_out_dir "$gate")
+		if [ -d "$R9/target/gates/$dir" ]; then
+			got=$(count_in_dir "$R9/target/gates/$dir" "$regex")
 		else
 			got=-1
 		fi

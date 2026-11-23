@@ -1831,7 +1831,11 @@ fn sys_sleep(frame: &mut Ureg, proc: &mut Proc) -> u64 {
         if !proc.note_queue.is_empty() {
             return err(proc, "interrupted");
         }
-        let deadline = crate::platform::q35::timer::ticks() + ms;
+        // MILLISECONDS → ticks through the ceiling conversion: q35's
+        // slice is 10 ms, so the inherited aarch64-shaped `ticks() + ms`
+        // slept ten times too long (and, symmetrically with sys_alarm,
+        // made a "50 ms" alarm a 500 ms one — 01-34's fpprobe finding).
+        let deadline = crate::platform::q35::timer::ticks() + ms_to_ticks(ms);
         proc.sleep_until = deadline;
         proc::sched();
         // An early wake is always a posted note this era; expiry
@@ -1851,6 +1855,17 @@ fn sys_sleep(frame: &mut Ureg, proc: &mut Proc) -> u64 {
 /// ALARM(6): millisecs (an int).  Arm a per-proc alarm whose expiry
 /// posts the "alarm" note; a zero arg clears it.  The return is the
 /// previously-REMAINING ms.
+///
+/// The deadline is TICKS, the argument is MILLISECONDS: q35's timer
+/// slice is `TICK_MS` = 10 ms (100 Hz), so `now + ms` armed every
+/// alarm ten times late.  The aarch64 twin inherited the same shape
+/// harmlessly (its tick is 1 ms — tick-identical), which is why the
+/// x86_64 port's copy was invisible until stop C's KVM run: fpprobe's
+/// two ring-3 spin rounds (`note-spin` 200M volatile adds,
+/// `note-regs` 2^31 asm decrements) are sub-second on a KVM host and
+/// finished before the 500 ms late alarm, while the same rounds passed
+/// under the far slower TCG container where 500 ms arrives mid-spin.
+/// `ms_to_ticks` is the ceiling conversion (01-34).
 fn sys_alarm(frame: &mut Ureg, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 1) else {
         return err(proc, "alarm: bad argument block");
@@ -1859,8 +1874,12 @@ fn sys_alarm(frame: &mut Ureg, proc: &mut Proc) -> u64 {
     #[cfg(dev_exec)]
     {
         let now = crate::platform::q35::timer::ticks();
-        let old = if proc.alarm_at != 0 { proc.alarm_at.saturating_sub(now) } else { 0 };
-        proc.alarm_at = if ms == 0 { 0 } else { now + ms };
+        let old = if proc.alarm_at != 0 {
+            proc.alarm_at.saturating_sub(now) * crate::platform::q35::timer::TICK_MS
+        } else {
+            0
+        };
+        proc.alarm_at = if ms == 0 { 0 } else { now + ms_to_ticks(ms) };
         old
     }
     #[cfg(not(dev_exec))]
@@ -1869,6 +1888,31 @@ fn sys_alarm(frame: &mut Ureg, proc: &mut Proc) -> u64 {
         err(proc, "alarm: no timer in this profile")
     }
 }
+
+/// Milliseconds → q35 timer ticks.  CEILING, so a sub-tick request still
+/// parks for one tick rather than degenerating into a zero-time yield
+/// (`sleep(1)` at 100 Hz is one 10 ms tick, the resolution the slice
+/// has).  The q35 slice's rate is `timer::TICK_MS`; the aarch64 twin is
+/// 1 kHz, where this conversion is the identity.
+const fn ms_to_ticks(ms: u64) -> u64 {
+    (ms + crate::platform::q35::timer::TICK_MS - 1) / crate::platform::q35::timer::TICK_MS
+}
+
+// Compile-time pin: every kernel build (`cargo xtask check`/`clippy`/
+// `build`) carries these asserts, so a tick-rate or formula change
+// cannot silently reintroduce the ten-times-late alarm even on a host
+// where the x86_64 host-test leg does not run (the Mac).  The unit test
+// below repeats them on the owner's x86_64 host.
+const _: () = {
+    assert!(crate::platform::q35::timer::TICK_MS == 10);
+    assert!(ms_to_ticks(0) == 0);
+    assert!(ms_to_ticks(1) == 1);
+    assert!(ms_to_ticks(9) == 1);
+    assert!(ms_to_ticks(10) == 1);
+    assert!(ms_to_ticks(11) == 2);
+    assert!(ms_to_ticks(50) == 5);
+    assert!(ms_to_ticks(1_000) == 100);
+};
 
 /// The %q quoting of a wait-record status (libc fmtquote's rule).
 fn quote_status(msg: &str) -> alloc::string::String {
@@ -2937,5 +2981,24 @@ mod tests {
             Some(&b"#s/x64-cexec-syscall-plain"[..]),
             "the plain created fd survives exec"
         );
+    }
+
+    /// 01-34: the q35 slice is 100 Hz (one tick = 10 ms), so the
+    /// sleep/alarm arguments — MILLISECONDS — need a conversion.  The
+    /// inherited aarch64-shaped `now + ms` armed a "50 ms" alarm at
+    /// 500 ms; fpprobe's two ring-3 spin rounds then finished before the
+    /// alarm on a KVM host and reported "handler ran 0 times".  The
+    /// ceiling keeps a sub-tick request from collapsing into a yield.
+    #[test]
+    fn sleep_and_alarm_convert_milliseconds_to_the_100hz_slice() {
+        use crate::platform::q35::timer::TICK_MS;
+        assert_eq!(TICK_MS, 10, "the q35 slice is 100 Hz; the conversion below depends on it");
+        assert_eq!(ms_to_ticks(0), 0);
+        assert_eq!(ms_to_ticks(1), 1, "a sub-tick sleep parks for one tick");
+        assert_eq!(ms_to_ticks(9), 1);
+        assert_eq!(ms_to_ticks(10), 1);
+        assert_eq!(ms_to_ticks(11), 2);
+        assert_eq!(ms_to_ticks(50), 5, "fpprobe's alarm(50) is 50 ms = 5 ticks, not 50");
+        assert_eq!(ms_to_ticks(1_000), 100);
     }
 }

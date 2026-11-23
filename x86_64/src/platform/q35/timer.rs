@@ -37,8 +37,11 @@ const MSR_IA32_TSC_DEADLINE: u32 = 0x6E0;
 /// slower tick paths still reach the gate's marker counts inside the
 /// overall budget; order, never timings, is what the gate asserts).
 const TICKS_PER_SEC: u64 = 100;
-/// The tick interval in milliseconds.
-const TICK_MS: u64 = 1000 / TICKS_PER_SEC;
+/// The tick interval in milliseconds (the syscall layer's ms→tick
+/// conversion consumes it: q35 ticks at 100 Hz, so ONE tick is 10 ms —
+/// the aarch64 twin ticks at 1 kHz where the two units are the same
+/// number, which is why the inherited `now + ms` was invisible there).
+pub(crate) const TICK_MS: u64 = 1000 / TICKS_PER_SEC;
 /// Print divider: one console line per second of ticks (the aarch64
 /// pacing).
 const PRINT_EVERY: u64 = TICKS_PER_SEC;
