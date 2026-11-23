@@ -844,9 +844,9 @@ STATUS stopc3: PASS for the four selected steps. With stop C2's full
 8/8 and tap stress, every witness step is now green, and the three
 owner items that followed are resolved: the standalone amd64 TCG gate
 is `GATE-PASS` (owner report), the HARN-08 equivalence expectations are
-APPROVED (2026-11-23 owner), and the Harvey diff is APPROVED and
-applied as Harvey `c697666ba` (unpushed; the owner push is the one
-remaining step). The diff is no longer unapplied-awaiting-approval.
+APPROVED (2026-11-23 owner), and the Harvey diff is APPROVED, applied
+and PUSHED as Harvey `c697666ba` on `origin/master` (owner push
+2026-11-23, verified). The diff is no longer unapplied-awaiting-approval.
 
 - **Return:** `witness-src/01-34` at
   `d6106dbfcdbfa16be02a14b1d40f95adcbc2226e` on our halted-summary tip
@@ -913,26 +913,38 @@ EVIDENCE stopc3-summary: .planning/phases/01-stage-p0-cross-build-harness/witnes
    recorded expectations are accepted: tier1 `T1-OK` 39, auth `AUTH-OK`
    10, churn `CATS-DONE 1400` 1, stress `netstress: venue tap` 1. Stop
    C3 verified each 1:1 and all 10 equivalence rows match.
-3. **Harvey diff — APPROVED (owner, 2026-11-23) and APPLIED.** From base
-   `25d97dc4d4976bfb7411f01970755acf6261c81b`, `git apply` plus an
-   explicit 36-path `git add --` produced Harvey commit
+3. **Harvey diff — APPROVED (owner, 2026-11-23), APPLIED and PUSHED.**
+   From base `25d97dc4d4976bfb7411f01970755acf6261c81b`, `git apply` plus
+   an explicit 36-path `git add --` produced Harvey commit
    `c697666ba315f137ca2fd11768f835d04bd9f018` on `master`:
    36 files, +285/−9972, zero `sys/lib/(postscript|troff)` or
    `devpost.add` paths; the 11 pre-modified font files were never
-   staged and remain unstaged. The commit is UNPUSHED.
-   The owner push is the one remaining step:
-   `git -C /Users/neilskinner/code/harvey push origin HEAD:master`.
+   staged. The owner pushed `master c697666ba315f137ca2fd11768f835d04bd9f018`
+   on 2026-11-23; `origin/master` carries it (and the pre-existing
+   `25d97dc4d` freeze commit), verified via `git ls-remote`.
+
+### Stop C closure
+
+All six witness steps are green (full 8/8 with `fpprobe: ok`, soak,
+stress, equiv 10/10, store_verify twice, kernel `b6Oc` build+rebuild),
+the standalone amd64 TCG gate is `GATE-PASS`, the four HARN-08
+equivalence expectations are approved, and the Harvey flip is applied
+and pushed at `c697666ba315f137ca2fd11768f835d04bd9f018`. Plan 01-34
+is complete; 01-28 is the orchestrator's next dispatch. Harvey received
+no further change; the 11 pre-modified font paths remain untouched and
+unstaged.
 
 ### The prepared Harvey review packet
 
-**APPROVED 2026-11-23 and applied as Harvey
-`c697666ba315f137ca2fd11768f835d04bd9f018` (unpushed).** The packet
-below is the reviewed record; the owner push is the remaining step.
+**APPROVED 2026-11-23, applied and pushed as Harvey
+`c697666ba315f137ca2fd11768f835d04bd9f018` to `origin/master`.** The
+packet below is the reviewed record; the owner push completed the flip.
 
 - **Full diff:** `$HOME/r9-harvey-flip/harvey-flip.diff` — 511797 bytes,
   sha256 `f7b0272d23bc6c131c2f63b37cde1330c0bebddd25b905c22040829232cd7f22`.
 - **Base:** Harvey `25d97dc4d4976bfb7411f01970755acf6261c81b` (the owner's
-  `master`; the unpushed planning-freeze commit is this commit's parent).
+  `master`; the planning-freeze commit is this commit's parent and was
+  published by the same owner push).
 - **Shape:** 36 paths, +285 / −9972 — 32 deletions, 1 new file
   (`nix/q35.sh`), 3 modified (`flake.nix`, `flake.lock`,
   `.github/workflows/phase6.yml`).
@@ -1022,7 +1034,7 @@ APPROVE authorises the executor to apply exactly
 > Harvey pushed: <branch> <sha>
 
 after `git -C ~/code/harvey push origin HEAD:<branch>`. The new commit's parent
-is the unpushed `25d97dc4d`, so the push publishes both (D-23, recorded in
+is `25d97dc4d`; the owner's 2026-11-23 push published both (D-23, recorded in
 HARVEY-FLIP.md).
 
 ### Guard rails for the continuation

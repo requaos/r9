@@ -3,7 +3,7 @@ phase: 01-stage-p0-cross-build-harness
 plan: 34
 subsystem: cross-build-harness
 status: complete
-phase_status: "Every witness step is green and every owner approval is recorded: stop C2 full 8/8 with fpprobe and tap stress; stop C3 soak/equiv/kernel/store_verify; the standalone amd64 TCG gate GATE-PASS (owner report); the HARN-08 equivalence approved (tier1 39, auth 10, churn 1, stress tap venue); the Harvey diff approved and applied as Harvey c697666ba315f137ca2fd11768f835d04bd9f018 (36 paths, +285/−9972, zero font paths), UNPUSHED. The only remaining step is the owner's Harvey push."
+phase_status: "Every witness step is green and every owner approval is recorded: stop C2 full 8/8 with fpprobe and tap stress; stop C3 soak/equiv/kernel/store_verify; the standalone amd64 TCG gate GATE-PASS (owner report); the HARN-08 equivalence approved (tier1 39, auth 10, churn 1, stress tap venue); the Harvey diff approved, applied and pushed as Harvey c697666ba315f137ca2fd11768f835d04bd9f018 on master (36 paths, +285/−9972, zero font paths; origin/master verified). Plan 01-34 is complete; 01-28 is the orchestrator's next dispatch."
 tags: [witness, stop-c2, stop-c3, x86_64, kvm, tcg, fpprobe, notes, timer, tap, equivalence, harvey-flip, harn-02, harn-08]
 
 requires:
@@ -15,16 +15,16 @@ provides:
   - "x86_64/src/{syscall.rs,platform/q35/timer.rs}: the q35 millisecond-to-tick conversion for sleep/alarm (const-pinned), the fpprobe note-delivery root cause"
   - "witness/WITNESS-LOG.md + evidence/stop-c2/ + evidence/stop-c3/: the stop-C2/C3 verdicts, the TCG owner report, the green fpprobe and tap-venue results, the kernel hash proof, and trimmed redacted evidence"
   - "witness/equivalence.tsv: the recorded HARN-08 expectations (T1-OK 39, AUTH-OK 10, CATS-DONE 1, stress tap label) with per-row rationale, verified by stop C3 and approved 2026-11-23"
-  - "harvey-flip/HARVEY-FLIP.md: APPROVED 2026-11-23; HARVEY-COMMIT c697666ba315f137ca2fd11768f835d04bd9f018; HARVEY-PUSHED none"
+  - "harvey-flip/HARVEY-FLIP.md: APPROVED 2026-11-23; HARVEY-COMMIT c697666ba315f137ca2fd11768f835d04bd9f018; HARVEY-PUSHED master c697666ba315f137ca2fd11768f835d04bd9f018"
 affects: [01-28, HARN-02, HARN-08]
 
 actuals:
-  tokens: 18886
+  tokens: 20734
   tasks: 4
-  commits: 9
+  commits: 10
 
 plan_head_before: 4f9697d1af8c9894898f7950d7a83cd78f074d57
-plan_head_after: 66189ff7207b3f312448942c029eeb105e969ae5
+plan_head_after: 83d00caec3cd8347a8c6213718fecca4d8eebc9e
 
 tech-stack:
   added: []
@@ -77,7 +77,7 @@ key-decisions:
   - "The four recorded equivalence expectations are verified by stop C3 (tier1 39/39, auth 10/10, churn 1/1, stress tap 1/1), all 10 rows match, and the owner APPROVED them 2026-11-23 as part of HARN-08."
   - "The new boot-iso outputHash sha256-b6OcAb2pOufpr5AqJj2SqhXnrTYsIQRTgkh9FcgtNT0= (owner commit 2bc5478) is proven by stop C3: KERNEL-BOOTISO-BUILD-OK + REBUILD-OK, kernel ELF 2377dc2f…"
   - "The standalone amd64 TCG gate is PASS by owner report (GATE-PASS, 2026-11-23); the GATE-PASS control-no-rio lines in the full/stress captures are the drawterm legs, not the standalone run."
-  - "The owner approved the prepared Harvey diff and it was applied from base 25d97dc4d as Harvey c697666ba315f137ca2fd11768f835d04bd9f018 (36 paths, +285/−9972, zero font paths). The commit is unpushed; the owner push is the one remaining step."
+  - "The owner approved the prepared Harvey diff and it was applied from base 25d97dc4d as Harvey c697666ba315f137ca2fd11768f835d04bd9f018 (36 paths, +285/−9972, zero font paths); the owner pushed it to origin/master on 2026-11-23 (verified via git ls-remote)."
 
 requirements-completed: []
 
@@ -167,8 +167,8 @@ The x86_64 witness set is green end to end: stop C2's full tier 8/8 with
 `fpprobe: ok` and tap stress, stop C3's soak/equivalence/kernel/store-verify,
 and the owner's standalone TCG `GATE-PASS`. The four HARN-08 equivalence
 expectations are approved, and the approved Harvey diff is applied and
-committed at `c697666ba` (36 paths, +285/−9972, no font path) — unpushed;
-the owner's push is the one remaining step.
+committed at `c697666ba` (36 paths, +285/−9972, no font path) and pushed
+to `origin/master` by the owner. Plan 01-34 is complete.
 
 ## Accomplishments
 
@@ -208,7 +208,8 @@ the owner's push is the one remaining step.
    `sys/lib/(postscript|troff)` or `devpost.add` paths, and leaves the 11
    pre-modified font files unstaged. `HARVEY-FLIP.md` records
    `HARVEY-COMMIT`, `HARVEY-APPROVED: 2026-11-23 owner`, and
-   `HARVEY-PUSHED: none`.
+   `HARVEY-PUSHED: master c697666ba315f137ca2fd11768f835d04bd9f018`
+   (owner-reported 2026-11-23; `git ls-remote` confirms `origin/master`).
 
 ## Verdicts
 
@@ -245,10 +246,10 @@ hash; the C3 rerun proved the fixes. Applied under the deviation rules:
 
 ## Issues Encountered
 
-- **The Harvey commit is unpushed.** `c697666ba` is one ahead of the
-  owner's `master`; the branch is `ahead 2` with the pre-existing
-  planning-freeze commit `25d97dc4d`. The owner push is the remaining
-  action; the executor does not push Harvey.
+- **The Harvey push is complete.** The owner pushed `master
+  c697666ba315f137ca2fd11768f835d04bd9f018` on 2026-11-23; `origin/master`
+  carries it and the pre-existing `25d97dc4d` freeze commit (verified via
+  `git ls-remote`). No issue remains.
 - **x86_64 host unit test not run on the Mac.** `cargo xtask test`
   exercises the host arch (aarch64 here); the conversion is
   compile-time asserted in every kernel build, so `cargo xtask
@@ -267,21 +268,18 @@ None.
 None beyond the plan's threat model. The one approved-write boundary was
 crossed exactly as planned: `git apply` + the explicit 36-path
 `git add --` in `/Users/neilskinner/code/harvey`, no `sys/**`, no font
-path, no push. No STATE.md/ROADMAP.md change.
+path, no push by the executor. The owner then pushed the approved
+commit (2026-11-23). No STATE.md/ROADMAP.md change.
 
 ## Next Phase Readiness
 
-- **The witness set and every approval are complete.** Only the owner's
-  Harvey push remains:
-
-      git -C /Users/neilskinner/code/harvey push origin HEAD:master
-
-  (the branch is the owner's current branch, `master`; the push publishes
-  the pre-existing `25d97dc4d` freeze commit too).
-
-- **01-28 was not started.** No pin bump and no further Harvey change.
-- **After the push:** reply `Harvey pushed: <branch> <sha>`; the next
-  continuation records `HARVEY-PUSHED` and proceeds to 01-28.
+- **Plan 01-34 is complete.** All witness steps are green, the TCG gate
+  is PASS, the HARN-08 equivalence expectations are approved, and the
+  Harvey flip is applied and pushed at
+  `c697666ba315f137ca2fd11768f835d04bd9f018` on `origin/master`.
+- **01-28 was not started.** The orchestrator merges this branch and
+  dispatches it (the pin bump and lock). No further Harvey change is
+  pending.
 
 ## Self-Check: PASSED
 
@@ -291,10 +289,11 @@ path, no push. No STATE.md/ROADMAP.md change.
   ≤200 lines; `grep -acE 'auth-creds|[Pp]assword='` is 0 on every file.
 - `WITNESS-LOG.md` has six `VERDICT stopc2-*` and five `VERDICT
   stopc3-*` lines (soak, equiv, kernel, store-verify, tcg).
-- Commits through `66189ff` are ancestors of HEAD;
-  `git rev-list --count 4f9697d..HEAD` = 9 before this records update.
+- Commits through `83d00ca` are ancestors of HEAD;
+  `git rev-list --count 4f9697d..HEAD` = 10 before this closure update.
 - Harvey: HEAD `c697666ba315f137ca2fd11768f835d04bd9f018`, parent
   `25d97dc4d4976bfb7411f01970755acf6261c81b`, 36 files changed,
   +285/−9972, zero font paths; the 11 font modifications remain
-  unstaged; `master` is ahead 2 and unpushed.
+  unstaged; `origin/master` = `c697666ba315f137ca2fd11768f835d04bd9f018`
+  (verified via `git ls-remote`).
 - STATE.md and ROADMAP.md were not modified (worktree mode).

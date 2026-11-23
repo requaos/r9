@@ -1,13 +1,14 @@
 # The prepared Harvey change (D-10 step 4)
 
-**Status: APPROVED and APPLIED — committed as `c697666ba315f137ca2fd11768f835d04bd9f018`, UNPUSHED.**
+**Status: APPROVED, APPLIED and PUSHED — committed as `c697666ba315f137ca2fd11768f835d04bd9f018` and pushed to `origin/master` (`master`) by the owner on 2026-11-23.**
 The owner approved the prepared diff and the four HARN-08 equivalence
 expectations on 2026-11-23, reported the standalone amd64 TCG gate
 `GATE-PASS`, and the diff was applied to `/Users/neilskinner/code/harvey`
-from base `25d97dc4d4976bfb7411f01970755acf6261c81b`. The owner push is
-the one remaining step (the executor does not push Harvey).
+from base `25d97dc4d4976bfb7411f01970755acf6261c81b`. The owner push
+completed the flip: `origin/master` now carries `c697666ba` (and the
+pre-existing `25d97dc4d` freeze commit).
 
-## Stop C2/C3 outcome (plan 01-34) — APPROVED AND APPLIED
+## Stop C2/C3 outcome (plan 01-34) — APPROVED, APPLIED AND PUSHED
 
 - **Gates:** stop C2 full 8/8 with `fpprobe: ok` + tap stress PASS; stop
   C3 soak / equiv (all 10 rows match) / kernel (the `b6Oc` boot-iso hash,
@@ -27,14 +28,15 @@ the one remaining step (the executor does not push Harvey).
 
 HARVEY-COMMIT: c697666ba315f137ca2fd11768f835d04bd9f018
 HARVEY-APPROVED: 2026-11-23 owner
-HARVEY-PUSHED: none
+HARVEY-PUSHED: master c697666ba315f137ca2fd11768f835d04bd9f018
+HARVEY-PUSHED-REPORTED: 2026-11-23 owner (verified: `git ls-remote origin refs/heads/master` = c697666ba315f137ca2fd11768f835d04bd9f018)
 
-Owner push (branch `master`, the owner's current branch):
+Owner push (branch `master`, completed by the owner on 2026-11-23):
 
     git -C /Users/neilskinner/code/harvey push origin HEAD:master
 
-The push publishes the pre-existing unpushed planning-freeze commit
-`25d97dc4d` as well — the owner already owns that decision.
+The push published the pre-existing planning-freeze commit `25d97dc4d`
+as well — the owner already owned that decision.
 
 ## Stop C outcome (plan 01-27, historical)
 
@@ -316,7 +318,8 @@ refactor(flake): move r9 composition to the r9 repo; add the q35 own-kernel laun
 ## Note on the owner's checkout
 
 The owner's `master` was **ahead 1** before this change: `25d97dc4d
-docs(planning): freeze — …` is unpushed. The applied commit `c697666ba`
-is a child of it, so `master` is now **ahead 2**; the owner push above
-publishes both. D-23's rule is about r9 never locking an unpushed Harvey
-commit — this plan does not push, and the push is the owner's action.
+docs(planning): freeze — …` was unpushed. The applied commit `c697666ba`
+is a child of it; the owner pushed both on 2026-11-23, so `origin/master`
+now equals `c697666ba315f137ca2fd11768f835d04bd9f018`. D-23's rule is
+about r9 never locking an unpushed Harvey commit; the push was the
+owner's action after the approval.
