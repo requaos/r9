@@ -86,12 +86,14 @@ pcap = false
 
 [dist]
 format = "elf"
-# The staged bootfs (the §15 cpu bake, 19-01 Task 3): Harvey's mkimage
-# §15 bakes out/bootfs-cpu.paq (the chain tree + the cpurc fixture at
-# /rc/bin/cpurc); the ISO builder stages it at /boot/bootfs.paq and
-# emits the grub.cfg module2 line IN.  Absence is a loud pre-ISO error
-# naming the Harvey-side producers (stage-build.sh + mkimage.sh).
-module = "harvey:build/x86_64/out/bootfs-cpu.paq"
+# The staged bootfs: the §15 cpu image, now r9-assembled.  `image:cpu`
+# names xtask/manifests/amd64/cpu.toml; the assembler runs the §15
+# bake-time p9sk1 domain, stages the auth suite + cmd/cpu + aux/listen +
+# the real cpurc + tcp17010 + the font payload, and bakes
+# target/images/x86_64/cpu.paq on demand (its member list matches the
+# reference bake's).  The ISO builder stages it at /boot/bootfs.paq and
+# emits the grub.cfg module2 line IN.
+module = "image:cpu"
 # THE SEAM (CPU-02): the append the grub.cfg @R9-APPEND@ token
 # substitutes on the multiboot2 line — GRUB delivers it as the mb2
 # tag-1 string, the kernel parses it into the ROOT env seed's bootconf
