@@ -1,0 +1,144 @@
+# gates.yml — the gate legs relocated from Harvey (D-10, HARN-08) and the
+# quick gate under explicit TCG (D-13).
+#
+# Harvey hosted these legs in .github/workflows/r9-shell.yml and phase6.yml
+# against its own checkout plus the flake.lock-pinned r9 input; after the
+# D-10 flip the legs run here, from r9's own flake supply.  Each relocated
+# leg keeps the runner class and timeout Harvey gave it.
+#
+# Venue discipline (D-13, HARN-01): the REQUIRED green witness is a local
+# x86_64 Linux run under KVM, recorded in the phase evidence.  Hosted
+# runners have no /dev/kvm, so every job below selects TCG explicitly and
+# every job is continue-on-error: a hosted result is the best-effort
+# SECOND witness and is NEVER recorded as the D-13 KVM witness.
+#
+# Supply chain (T-01-80): every action is pinned by full commit sha and no
+# secrets are passed to these jobs.  The legs realise the read-only Harvey
+# trees through the flake's proot venue, which also works on
+# AppArmor-restricted runners (A16).
+
+name: gates
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # r9-shell.yml's boot-smoke: the composed aarch64 smoke on the
+  # virtshell kernel (banner -> paqfs -> stacksmoke -> echo/ls/ps/cat ->
+  # DEL safety -> init restart).
+  boot-r9-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90 # TCG scale; the smoke's own per-stage 600 s timeouts localize failures
+    continue-on-error: true # best effort (D-13)
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install nix (flakes enabled)
+        uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+        with:
+          extra-conf: experimental-features = nix-command flakes
+      - name: composed aarch64 smoke
+        run: nix run .#boot-r9-smoke
+
+  # r9-shell.yml's net-smoke: the composed net smoke in one boot — ping
+  # 127.0.0.1, udp echo, tcp/7 echo, ipconfig static + dhcp.  The slirp
+  # markers are NOT-L2-TRUTH venue labels; the sustained soak stays a
+  # local gate.
+  boot-r9-net-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90 # TCG scale; the smoke's own per-stage 600 s timeouts localize failures
+    continue-on-error: true # best effort (D-13)
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install nix (flakes enabled)
+        uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+        with:
+          extra-conf: experimental-features = nix-command flakes
+      - name: composed aarch64 net smoke
+        run: nix run .#boot-r9-net-smoke
+
+  # r9-shell.yml's cpu-smoke: the arm64 cpu fixture gate on the
+  # devcap-carrying virtcpu kernel, one marker per leg.
+  boot-r9-cpu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90 # TCG scale; the gate's own per-stage timeouts localize failures
+    continue-on-error: true # best effort (D-13)
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install nix (flakes enabled)
+        uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+        with:
+          extra-conf: experimental-features = nix-command flakes
+      - name: arm64 cpu fixture gate
+        run: nix run .#boot-r9-cpu
+
+  # phase6.yml's tier-r9: the tier-1 sweep on the r9 kernel.  Explicit
+  # TCG (the arm64 guest is emulated on the x86_64 runner); the marker
+  # set is computed from the pinned tree, never hardcoded.
+  boot-r9-tier1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90 # TCG scale; the driver's per-stage 600 s timeouts localize failures
+    continue-on-error: true # best effort (D-13)
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install nix (flakes enabled)
+        uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+        with:
+          extra-conf: experimental-features = nix-command flakes
+      - name: aarch64 tier-1 sweep (explicit TCG)
+        run: env R9_ACCEL=tcg nix run .#boot-r9-tier1
+
+  # r9-shell.yml's net-smoke-x64: the x64 composed net gate — the emitter's
+  # slirp argv (the pinned hostfwd pair) with both loopback listeners
+  # observed host-side while the guest runs.  The venue is FIXED slirp;
+  # the tap/soak legs cannot run on an unprivileged hosted runner.
+  boot-r9-net-smoke-x64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90 # TCG scale; the smoke's own per-stage 600 s timeouts localize failures
+    continue-on-error: true # best effort (D-13)
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install nix (flakes enabled)
+        uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+        with:
+          extra-conf: experimental-features = nix-command flakes
+      - name: x64 composed net gate (explicit TCG)
+        run: env R9_ACCEL=tcg nix run .#boot-r9-net-smoke-x64
+
+  # r9-shell.yml's auth-smoke-x64: the composed AUTH gate — the p9sk1
+  # domain boot through both probe legs and the secstore PUT/GET round
+  # trip.  TCG is load-bearing here beyond the KVM-less-runner rule: the
+  # p9sk1 challenges consume /dev/random, so TCG exercises the jitter-mix
+  # seeding path; a TCG red after a KVM green is a substrate bug.
+  boot-r9-auth-x64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90 # TCG scale; the gate's own per-stage 600 s timeouts localize failures
+    continue-on-error: true # best effort (D-13)
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install nix (flakes enabled)
+        uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+        with:
+          extra-conf: experimental-features = nix-command flakes
+      - name: composed AUTH gate (explicit TCG)
+        run: env R9_ACCEL=tcg nix run .#boot-r9-auth-x64
+
+  # D-13's best-effort second witness for the quick gate: the same
+  # assembler + q35cpu kernel + rio assertion developers run locally,
+  # under explicit TCG because the runner is KVM-less.  120 min bounds the
+  # two driver legs (rio, then control-noG) at TCG scale.
+  quick-gate-tcg:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    continue-on-error: true # best effort (D-13)
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install nix (flakes enabled)
+        uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+        with:
+          extra-conf: experimental-features = nix-command flakes
+      - name: quick gate (explicit TCG)
+        run: nix develop -c cargo xtask gate --arch x86-64 --accel tcg

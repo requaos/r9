@@ -13,7 +13,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
     - name: Run tests
       run: |
         cargo xtask check --verbose
@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
     - name: Run tests
       run: cargo xtask test --verbose
 
@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
     - name: Build
       run: cargo xtask build --arch x86-64 --verbose
 
@@ -39,7 +39,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
     - name: Build
       run: cargo xtask build --arch aarch64 --verbose
 
@@ -51,7 +51,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
     - name: Build
       run: cargo xtask build --arch aarch64 --config virtshell --verbose
 
@@ -63,7 +63,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
     - name: Build
       run: cargo xtask build --arch aarch64 --config virtchurn --verbose
 
@@ -75,7 +75,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
     - name: Build
       run: cargo xtask build --arch aarch64 --config virtcpu --verbose
 
@@ -93,7 +93,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
     - name: Run tests
       run: cargo xtask test --verbose
 
@@ -101,7 +101,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
     - name: Build
       run: cargo xtask build --arch riscv64 --verbose
 
@@ -110,41 +110,36 @@ jobs:
   # --accel/--cpu selection the documented fallback documents, not a
   # downgrade (the no-silent-downgrade rule: accel comes only from the
   # flag > R9_ACCEL > TOML chain; the KVM-native default is exercised
-  # on the dev host).  The boot chain is self-provisioned in-job:
-  # grub-pc-bin (grub-mkrescue via its grub-common dependency, plus the
-  # i386-pc BIOS modules), xorriso, qemu-system-x86.
+  # on the dev host).
+  #
+  # 01-25 (HARN-07): the leg runs on the same flake supply as the
+  # devshell — install nix, build both read-only Harvey trees from the
+  # pinned flake input, then run boot-test inside `nix develop`, whose
+  # shellHook points the xtask resolver at those trees.  The tree
+  # derivation builds through the proot venue, which also works on
+  # AppArmor-restricted runners (A16).  The Linux devshell carries the
+  # boot chain (grub2, xorriso, qemu), so the job needs no apt step, and
+  # the ISO is BIOS-only (no EFI image), so it needs no mtools either.
+  # Nothing here checks another repository out.
   boot-test-x86-64:
     runs-on: ubuntu-latest
     # Three sequential TCG boot tests, each legitimately capped by
     # its own 1800 s overall budget (300 s x TCG_OVERALL_MULT 6),
-    # plus apt provisioning and three kernel+ISO builds: 120 min
+    # plus the two tree builds and three kernel+ISO builds: 120 min
     # bounds the worst legitimate case while keeping a wedged qemu
     # or grub-mkrescue stall far below GitHub's 360-min default.
     timeout-minutes: 120
 
     steps:
-    - uses: actions/checkout@v3
-    - name: Provision the boot chain (grub-mkrescue, xorriso, qemu)
-      run: sudo apt-get update && sudo apt-get install -y grub-pc-bin xorriso mtools qemu-system-x86
-    # 19-05: boot-test's ureg-check gate reads
-    # $R9_HARVEY_DIR/amd64/include/ureg.h (the cross-repo Ureg-table
-    # pin, 14-01 D-02b) BEFORE any boot — without a Harvey checkout
-    # every invocation aborts at that precondition, which is why this
-    # job had never been green (13-06..19-04: 35 consecutive red runs,
-    # each dying ~30s into the step).  The header is 2008-stable in
-    # the Harvey tree, so the default-branch checkout satisfies the
-    # pin.  mtools is insurance for the hybrid-ISO case: if the runner
-    # image carries grub-efi modules, grub-mkrescue builds an ESP via
-    # mformat and dies without it.
-    - name: Check out the Harvey tree (R9_HARVEY_DIR — the ureg-check gate)
-      uses: actions/checkout@v3
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+    - name: Install nix (flakes enabled)
+      uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
       with:
-        repository: requaos/harvey
-        path: harvey
+        extra-conf: experimental-features = nix-command flakes
+    - name: Build the read-only Harvey trees from the flake
+      run: nix build --no-link .#harvey-tree-amd64 .#harvey-tree-arm64
     - name: Boot-test the three q35 profiles (explicit TCG — hosted runners are KVM-less)
-      env:
-        R9_HARVEY_DIR: ${{ github.workspace }}/harvey
       run: |
-        cargo xtask boot-test --arch x86-64 --config q35 --accel tcg --cpu qemu64 --verbose
-        cargo xtask boot-test --arch x86-64 --config q35lowmcfg --accel tcg --cpu qemu64 --verbose
-        cargo xtask boot-test --arch x86-64 --config q35net --accel tcg --cpu qemu64 --verbose
+        nix develop -c cargo xtask boot-test --arch x86-64 --config q35 --accel tcg --cpu qemu64 --verbose
+        nix develop -c cargo xtask boot-test --arch x86-64 --config q35lowmcfg --accel tcg --cpu qemu64 --verbose
+        nix develop -c cargo xtask boot-test --arch x86-64 --config q35net --accel tcg --cpu qemu64 --verbose
