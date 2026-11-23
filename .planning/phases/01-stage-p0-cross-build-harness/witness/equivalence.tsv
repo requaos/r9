@@ -1,0 +1,32 @@
+gate	marker_regex	expected_count	source
+# Stop-C equivalence baselines (plan 01-26, HARN-08).
+# One row per marker that proves the gate, taken from the latest committed
+# Harvey-hosted capture of each x86_64 gate under .planning/legacy/.
+# marker_regex is POSIX ERE, counted with `grep -oE' (occurrences, not lines).
+# A gate with no committed capture carries `none' as its source: step_equiv
+# clones Harvey at the phase pin, runs that gate's Harvey-hosted app, and
+# compares the r9 markers with the fresh baseline instead.
+drawterm-gate-x64	cpurc: DONE	1	.planning/legacy/phases/19-cpu-service-drawterm-rio-desktop/evidence/19-10-leg1-cont-gate.log
+drawterm-gate-x64	DTGATE-	2	.planning/legacy/phases/19-cpu-service-drawterm-rio-desktop/evidence/19-10-leg1-cont-gate.log
+drawterm-gate-x64	drawterm-gate: redaction contract held	1	.planning/legacy/phases/19-cpu-service-drawterm-rio-desktop/evidence/19-10-leg1-cont-gate.log
+boot-r9-x64	q35: paqfs root mounted from module	1	.planning/legacy/phases/16-host-net-modes-networking-exit-gate/evidence/16-04-boot-slirp.log
+boot-r9-x64	init: starting /bin/rc	1	.planning/legacy/phases/16-host-net-modes-networking-exit-gate/evidence/16-04-boot-slirp.log
+boot-r9-x64	^% 	1	.planning/legacy/phases/16-host-net-modes-networking-exit-gate/evidence/16-04-boot-slirp.log
+boot-r9-smoke-x64	r9x64shell7	2	.planning/legacy/phases/15-userspace-tiers-bootfs-payload-amd64/evidence/15-08-phase-close-smoke.log
+boot-r9-smoke-x64	r9x64delok	2	.planning/legacy/phases/15-userspace-tiers-bootfs-payload-amd64/evidence/15-08-phase-close-smoke.log
+boot-r9-tier1-x64	T1-DONE	1	.planning/legacy/phases/14-harvey-amd64-userspace-on-r9/evidence/14-08-tier1-r9-x64.log
+boot-r9-tier1-x64	T1-OK	36	.planning/legacy/phases/14-harvey-amd64-userspace-on-r9/evidence/14-08-tier1-r9-x64.log
+boot-r9-tier1-x64	T1-FAIL	0	.planning/legacy/phases/14-harvey-amd64-userspace-on-r9/evidence/14-08-tier1-r9-x64.log
+boot-r9-net-smoke-x64	NET-SMOKE: ALL STAGES PASS	2	.planning/legacy/phases/14-harvey-amd64-userspace-on-r9/evidence/14-09-net-smoke-run1.log
+boot-r9-services-x64	SVC-DONE	1	.planning/legacy/phases/15-userspace-tiers-bootfs-payload-amd64/evidence/15-08-services-final.log
+boot-r9-services-x64	SVC-OK	9	.planning/legacy/phases/15-userspace-tiers-bootfs-payload-amd64/evidence/15-08-services-final.log
+boot-r9-services-x64	SVC-FAIL	0	.planning/legacy/phases/15-userspace-tiers-bootfs-payload-amd64/evidence/15-08-services-final.log
+boot-r9-churn-x64	churn: CATS-DONE 1400	1	none
+boot-r9-auth-x64	AUTH-DONE	1	.planning/legacy/phases/18-in-guest-p9sk1-auth-domain/evidence/18-04-auth-a.log
+boot-r9-auth-x64	AUTH-OK	5	.planning/legacy/phases/18-in-guest-p9sk1-auth-domain/evidence/18-04-auth-a.log
+boot-r9-auth-x64	AUTH-FAIL	0	.planning/legacy/phases/18-in-guest-p9sk1-auth-domain/evidence/18-04-auth-a.log
+boot-r9-net-soak-x64	netip: NETIP-DONE	1	.planning/legacy/phases/16-host-net-modes-networking-exit-gate/evidence/16-05-netsoak-a.log
+boot-r9-net-soak-x64	netip: soak ok	1	.planning/legacy/phases/16-host-net-modes-networking-exit-gate/evidence/16-05-netsoak-a.log
+boot-r9-stress-x64	netstress: STRESS-DONE	1	.planning/legacy/phases/17-r9-kernel-flush-out/evidence/17-08-tcg-slirp-run01.serial.log
+boot-r9-stress-x64	tcpblast: done	9	.planning/legacy/phases/17-r9-kernel-flush-out/evidence/17-08-tcg-slirp-run01.serial.log
+boot-r9-stress-x64	RACE-STRESS slirp venue	1	.planning/legacy/phases/17-r9-kernel-flush-out/evidence/17-08-tcg-slirp-run01.serial.log
