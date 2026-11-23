@@ -1,0 +1,537 @@
+#!/usr/bin/expect -f
+# smoke-r9-auth.expect — the AUTH gate driver for x86_64 (18-04,
+# AUTH-04/D-08 + AUTH-07's substrate): the smoke-r9-net.expect chassis
+# (env contract incl. the emitter's netdev argv — the D-04 hostfwd
+# pair rides the pinned TOML data, the 16-06 mechanism) re-keyed onto
+# the termrc-driven sweep boot (the services gate's stage vocabulary —
+# NO typed legs: init sources auth-termrc, which runs
+# `rc /lib/auth-sweep.rc r9' from the boot flow).  The caller is
+# nix/gates/smoke-r9-auth-x64.sh = the flake app boot-r9-auth-x64.
+#
+#   staged boot (banner → paqfs → version) →
+#   the D-02 boot pairing check's verdict (authdom: PAIRED on the
+#   green arm — the label prints per D-04; authdom: FAIL names the
+#   artifact) →
+#   keyfs's own load line (`N keys read' — the NON-interactive start's
+#   evidence, AUTH-04/D-03) →
+#   the sweep's verdicts (AUTH-OK/AUTH-FAIL keyfs) →
+#   (18-04 Task 2/3 append: the listener topology's verdicts +
+#   secstored's ANNOUNCE + the hostfwd-5670 host-side observation +
+#   the cs + factotum verdicts) ->
+#   (18-05 append: auth/debug's own p9sk1 success line as norbert
+#   (the filtered AUTH-DEBUGOBS echo) + hauthprobe's SPEAKSFOR-OK +
+#   the three probe verdicts + the console-restore observation +
+#   the secstore substrate — the venue verdict, secuser's console
+#   feeds, and the client round-trip; 18-08 RESTORES the round-trip
+#   legs after the 18-07 devip fix (r9 ab4cb66) and FLIPS the gate
+#   from the retired named-SKIP arm to PRESENCE demands: the PUT's
+#   own `secstore: saved', secstored's `AUTH norbert' + `[norbert]
+#   PUT'/`[norbert] GET' syslog tokens, the bytes-back AUTH-SECOBS,
+#   and the `AUTH-OK secstore-roundtrip' verdict are all staged and
+#   post-pass demanded) ->
+#   AUTH-DONE → the %  prompt (the interactive shell the sweep's
+#   termrc execs) →
+#   the whole-capture post-passes: zero AUTH-FAIL, the exact getpass
+#   string `can't read NVRAM, please enter machine key' NEVER present
+#   (the silent-wedge marker — T-18-08: the pairing check precedes
+#   keyfs and a valid five-sum nvram keeps the happy path prompt-free
+#   by construction; its presence means the boot is wedged behind an
+#   interactive prompt), the PAIRED banner with the DEMO label
+#   present, the deny control exactly once (SPEAKSFOR-DENIED x1),
+#   tr-ok present (AUTH-07's real-exchange evidence), the deny
+#   exchange's tr-fail 'no speaks for' line (the fail-closed path),
+#   and the secstore round-trip PRESENCE-demanded (18-08's flip: the
+#   saved line, the AUTH/PUT/GET syslog tokens, the bytes-back
+#   AUTH-SECOBS, and the verdict must ALL be in the capture — no
+#   unearned OK, and no earned-but-unobserved green either).
+#
+#   exit 0 only when EVERY stage + post-pass passed; a failure exits 1
+#   and names the failed stage on stderr — never a bare
+#   hang-to-timeout with no localization.  An AUTH-FAIL line anywhere
+#   fast-aborts via expect_before (the sweep names its failing leg on
+#   the wire; waiting the full timeout for the absent ok marker would
+#   only hide it).
+#
+# Hygiene: the caller rm -f's the capture BEFORE launch and we rm -f +
+# log_file it fresh below — the file starts empty and only THIS run's
+# boot writes it, so a pre-seeded stale capture can never satisfy a
+# marker wait.  Every exit path kills qemu's process group (expect's
+# spawn sets the child up as a session/group leader on its pty).
+#
+# Markers: PRESENCE assertions only, never interleaving order
+# (preemption and TCG make arrival order meaningless).  Patterns are
+# CRLF-tolerant substrings, never end-of-line anchored.  The sweep's
+# markers are its OUTPUT (the boot flow runs it; nothing is typed).
+# Timeouts are TCG-sized (600s per stage; KVM boots in seconds).
+#
+# Env (exported by nix/gates/smoke-r9-auth-x64.sh — the flake app):
+#   R9_QEMU      default qemu-system-x86_64
+#   R9_ISO       REQUIRED — the COMPOSED auth ISO (the caller's
+#                iso-builder output: r9 kernel-x64 + the auth image as
+#                /boot/bootfs.paq)
+#   R9_SMOKE_LOG REQUIRED — the serial capture (fresh per run; the
+#                green-twice gate runs retain both captures as
+#                evidence)
+#   R9_NETDEV_ARGV REQUIRED — the emitter's slirp argv as ONE
+#                space-separated line (the caller's capture of
+#                `r9-netdev-args --mode slirp'); the spawn block below
+#                splits it into the netdev+device tokens — NO netdev
+#                literal lives in this file (16-06, D-05; the D-04
+#                hostfwd pair 5670->567 rides the pinned TOML data —
+#                the hostfwd-5670 stage observes the host side of that
+#                seam while the guest runs, 18-04 Task 2 / D-09)
+#   R9_DEMO_PWFILE REQUIRED — the caller's 0600 file carrying the
+#                per-bake DEMO password (the caller parses it from
+#                r9's target/images/x86_64/auth.creds and exports only
+#                the PATH, T-01-77).  The value reaches ONLY the
+#                secuser console feeds below (raw-mode sends, never
+#                echoed to the wire) and the T-18-13 redaction pass at
+#                the end; it is never printed by this gate.
+#   R9_MACHINE/R9_CPU/R9_ACCEL — the caller-selected q35 shape
+#                (defaults q35/host/kvm; TCG selects qemu64)
+#   R9_RUN_TAG   the per-run unique tag in qemu's argv (-name); the
+#                caller's survivor sweep keys on it
+#
+# usage: env R9_ISO=… R9_SMOKE_LOG=… expect gates/x86_64/smoke-r9-auth.expect
+# exit 0 on all-pass; exit 1 names the failed stage on stderr; exit 2
+# on a contract violation (missing env).
+
+set timeout 600                    ;# per stage, TCG-sized
+match_max 1048576                  ;# the whole sweep's output rides one buffer window
+# NOTE: log_user stays ON — expect 5.45 writes NOTHING to log_file when
+# log_user is 0 (measured on the aarch64 gate): the capture file would
+# be empty.  The wire echo on the driver's stdout is the app's visible
+# progress; the stage lines name it on stderr.
+
+# --- required env (loud, before any spawn) -------------------------------
+foreach v {R9_ISO R9_SMOKE_LOG R9_NETDEV_ARGV R9_DEMO_PWFILE} {
+    if {![info exists env($v)]} {
+        puts stderr "smoke-r9-auth-x64: \$$v unset — run via the flake app (nix run .#boot-r9-auth-x64)"
+        exit 2
+    }
+}
+# R9_DEMO_PWFILE — the per-bake DEMO password's 0600 file (the
+# caller's parse of r9's target/images/x86_64/auth.creds,
+# T-01-77: the value is never in the environment or on argv).  It is
+# read only in the secuser feedstage leg below; it is never printed by
+# this gate.
+set QEMU [expr {[info exists env(R9_QEMU)] ? $env(R9_QEMU) : "qemu-system-x86_64"}]
+set run_tag [expr {[info exists env(R9_RUN_TAG)] ? $env(R9_RUN_TAG) : "r9x64auth-[pid]-[clock seconds]"}]
+
+# --- Hygiene: a fresh capture per run -----------------------------------
+# The caller already rm -f'd it; remove again here so the rule holds
+# however this script is invoked (a stale capture is dead evidence).
+exec rm -f $env(R9_SMOKE_LOG)
+
+# --- spawn qemu: the composed auth ISO on -cdrom (the q35 shape the
+#     caller selected — kvm/host by default, tcg/qemu64 explicitly;
+#     the netdev+device tokens are the SPLIT R9_NETDEV_ARGV — the
+#     emitter's slirp argv with the D-04 hostfwd pair; the NIC is
+#     inert for the loopback sweep legs but the hostfwd seam is the
+#     Phase-19 drawterm entry, observed host-side from Task 2 on) ----
+set R9_MACHINE [expr {[info exists env(R9_MACHINE)] ? $env(R9_MACHINE) : "q35"}]
+set R9_CPU [expr {[info exists env(R9_CPU)] ? $env(R9_CPU) : "host"}]
+set R9_ACCEL [expr {[info exists env(R9_ACCEL)] ? $env(R9_ACCEL) : "kvm"}]
+
+# split the emitter's one-line argv into spawn tokens (whitespace
+# split, empty tokens dropped; the emitter prints space-separated
+# tokens containing no spaces — its committed contract; the 16-05
+# soak driver's mechanism)
+set netdev_argv {}
+foreach tok [split $env(R9_NETDEV_ARGV)] {
+    if {$tok ne ""} {
+        lappend netdev_argv $tok
+    }
+}
+if {[llength $netdev_argv] == 0} {
+    puts stderr "smoke-r9-auth-x64: R9_NETDEV_ARGV is empty — the caller's emitter capture failed (the slirp argv is required)"
+    exit 2
+}
+
+spawn $QEMU -M $R9_MACHINE -cpu $R9_CPU -smp 1 -m 1024M \
+    -accel $R9_ACCEL \
+    -cdrom $env(R9_ISO) \
+    {*}$netdev_argv \
+    -nographic \
+    -name $run_tag
+set spawn_pid [exp_pid]
+log_file $env(R9_SMOKE_LOG)
+
+# --- teardown: kill qemu's process group ------------------------------
+# The spawned qemu is a session/group leader (expect's pty setup), so
+# the group IS the qemu subtree; catch: already-dead is fine.  The
+# lone-pid second form is the no-group fallback.  The caller's EXIT
+# trap sweeps any survivor keyed on this run's unique tag.
+proc cleanup {} {
+    global spawn_pid
+    catch { exec kill -KILL -- -$spawn_pid 2>/dev/null }
+    catch { exec kill -KILL $spawn_pid 2>/dev/null }
+}
+
+# --- staged ordered assertions (each stage names its failure) ---------
+# NOTE: expect_out must be global here — expect sets it in the CURRENT
+# scope, and the sweep stages read the captured buffer AFTER stage
+# returns.
+proc stage {name re} {
+    global expect_out
+    expect {
+        -re $re { puts stderr "smoke-r9-auth-x64: stage ok — $name" }
+        timeout { puts stderr "smoke-r9-auth-x64: TIMEOUT at stage: $name"; cleanup; exit 1 }
+        eof { puts stderr "smoke-r9-auth-x64: qemu exited (EOF) at stage: $name"; cleanup; exit 1 }
+    }
+}
+
+# feedstage — a console-feed stage (the 18-05 secstore leg's ONLY
+# typed-input surface): match the program's own prompt text on serial,
+# then send the answer.  The two getpassm password prompts run RAW
+# (getpassm's own rawon), so the sent password never echoes to the
+# wire — the capture carries no password bytes from this path (the
+# noise-leg syslog line is the redaction pass's business at the end).
+proc feedstage {name re sendstr} {
+    expect {
+        -re $re { send -- $sendstr; puts stderr "smoke-r9-auth-x64: feed ok — $name" }
+        timeout { puts stderr "smoke-r9-auth-x64: TIMEOUT at feed stage: $name"; cleanup; exit 1 }
+        eof { puts stderr "smoke-r9-auth-x64: qemu exited (EOF) at feed stage: $name"; cleanup; exit 1 }
+    }
+}
+
+# --- the hostfwd listener observation (18-04 Task 2, D-09) --------------
+# The spawn's slirp argv carries the D-04 hostfwd pair (host 5670 ->
+# guest 567 — Phase 19's drawterm entry), and qemu binds the loopback
+# listener EAGERLY at netdev init — a failed bind aborts qemu itself
+# (the backstop).  This stage makes the POSITIVE observation explicit
+# while the booted guest runs: read the HOST's listening table (exec
+# ss -tln, netstat fallback — a host-side exec, never the guest's
+# pty) and assert the 5670 entry present — the 16-D-04 pair landing
+# on a real listener day one (the authsrv listener announces the
+# guest side in the same boot).  LOOPBACK ONLY.  exec does not touch
+# the spawn's pty: the boot output accumulates in expect's buffer and
+# the next stage consumes it.  The port token is anchored with a
+# trailing whitespace-or-EOL so 5670 can never match a longer port.
+proc host_listeners {} {
+    if {![catch {exec ss -tln} out]} { return $out }
+    if {![catch {exec netstat -tln} out]} { return $out }
+    return ""
+}
+proc hostfwd_stage {port} {
+    set listeners [host_listeners]
+    if {$listeners eq ""} {
+        puts stderr "smoke-r9-auth-x64: FAILED at stage: hostfwd-$port-listening — no host listening-table tool produced output (ss/netstat both missing?)"
+        cleanup
+        exit 1
+    }
+    if {![regexp "127\\.0\\.0\\.1:${port}( |\$)" $listeners]} {
+        puts stderr "smoke-r9-auth-x64: FAILED at stage: hostfwd-$port-listening — no 127.0.0.1:$port loopback entry in the host listening table (the slirp hostfwd bind is missing); table follows:"
+        puts stderr $listeners
+        cleanup
+        exit 1
+    }
+    puts stderr "smoke-r9-auth-x64: stage ok — hostfwd-$port-listening (127.0.0.1:$port present in the host listening table)"
+}
+
+# fast-fail on kernel panic markers anywhere in the boot (the net
+# gate's rule; the real-chain "syscall 10 unimplemented" notes are NOT
+# panics — the 14-06 gate's documented exemption class) — and on the
+# sweep's own `AUTH-FAIL <leg>' OUTPUT line (the sweep names its
+# failing leg on the wire; waiting the full timeout for the absent ok
+# marker would only hide it).  The sweep's AUTH-FAIL markers are
+# boot-flow OUTPUT only (nothing is typed on this venue), so the
+# pattern can never false-match an echoed command line.
+expect_before {
+    -re {panic|Unhandled interrupt} {
+        puts stderr "smoke-r9-auth-x64: kernel panic marker on the wire — aborting"
+        cleanup
+        exit 1
+    }
+    -re {AUTH-FAIL} {
+        puts stderr "smoke-r9-auth-x64: the sweep printed AUTH-FAIL — aborting (the failing leg is named on the wire)"
+        cleanup
+        exit 1
+    }
+}
+
+# 1. the staged boot sequence: banner → paqfs server → boot(8)'s
+#    version print (the chain's stages; the auth payload rides the
+#    same image — the sweep then runs from termrc BEFORE any prompt)
+stage banner    {r9 from the Internet}
+stage paqfs     {paqfs\.\.\.}
+stage version   {version\.\.\.}
+
+# 1b. the hostfwd-5670 listener observation, host-side while the guest
+#     boots (the emitter's slirp argv carries the D-04 pair; qemu's
+#     eager-bind abort is the backstop — the procs above carry the
+#     reasoning; 17010 rides the same argv but is NOT this gate's
+#     seam, so it is not observed here)
+hostfwd_stage 5670
+
+# 2. the D-02 boot pairing check's verdict — either arm (the post-pass
+#    below demands the PAIRED banner with the DEMO label).  The
+#    verdict lines are the sweep's OUTPUT: `authdom: PAIRED <label>'
+#    (D-04 — the label parsed from the manifest's label row) or
+#    `authdom: FAIL <artifact>'.
+stage pairing-verdict {authdom: (PAIRED|FAIL)}
+
+# 3. keyfs's own load line — the NON-interactive start's evidence:
+#    keyfs prints `N keys read' when readnvram succeeded over the
+#    baked nvram (getauthkey's prompt path never fires — the post-pass
+#    asserts the exact getpass string stays absent).
+stage keysread {keys read}
+
+# 4. the keyfs leg's verdict (presence proves the probe RAN to
+#    classification; the AUTH-FAIL arm already fast-aborted above)
+stage keyfs-verdict {AUTH-OK keyfs}
+
+# 4b. the loopback bring-up's verdict (the listeners' prerequisite —
+#     AUTH-LOOPBACK-UP on the green arm; the AUTH-FAIL arm fast-aborts)
+stage loopback {AUTH-LOOPBACK-UP}
+
+# 4b2. the writable secstore venue's verdict (18-05 leg 3b: ramfs
+#      MREPL|MCREATE over /adm/secstore + the live file create/write/
+#      read probe — mounted BEFORE the listeners so the per-connection
+#      children see it by construction; the mntgen alternative was
+#      refused live this phase and rc's fatal redirect semantics
+#      decided the in-sweep probe shape)
+stage venue-verdict {AUTH-VENUEOBS ramfs-file-write-ok}
+
+# 5. the listener topology's verdicts, in the sweep's emission order:
+#    the connect-accept over 127.0.0.1!567 (hsvctcpecho -c through the
+#    staged listen1 -t tcp!*!567 /amd64/bin/authsrv -d listener), then
+#    secstored's 5356 announce (the sweep's port-spin observable).
+#    secstored's own ANNOUNCE syslog line lands on serial through the
+#    #c/cons fallback DURING these spins — timing-tolerant, so it is
+#    asserted in the whole-file post-pass below, never as a live stage
+#    (a stage whose text already streamed by an earlier match would
+#    wait forever — the 15-03 emission-order lesson).
+stage authsrv-listen-verdict {AUTH-OK authsrv-listen}
+stage secstored-verdict      {AUTH-OK secstored}
+
+# 5b. the cs + factotum verdicts (18-04 Task 3, AUTH-05's live proof +
+#     the 18-05 substrate): cs answers `!authdom=DEMO-harvey auth=*'
+#     from the baked /lib/ndb/local through /net/cs (the ANSWER
+#     carrying auth=127.0.0.1 — a real client interaction, never
+#     file-presence), and factotum's ctl read-back carries the p9sk1
+#     key written from the baked sentinel feed.
+stage cs-verdict       {AUTH-OK cs}
+stage factotum-verdict {AUTH-OK factotum}
+
+# 5c. the 18-05 probe legs (AUTH-06/D-13) — in the sweep's emission
+#     order: leg 1's OWN success line first (the filtered AUTH-DEBUGOBS
+#     echo of auth/debug's `ticket request using norbert@...' — the
+#     sweep captures auth/debug's output and echoes ONLY the matching
+#     line, T-18-13: the noise leg's prompt text never reaches the
+#     wire; the echo keeps auth/debug's leading TAB, so the pattern is
+#     whitespace-class tolerant), then leg 2's speaksfor marker
+#     (hauthprobe's own line — the hostid=bootes/uid=norbert request
+#     whose reply decrypts with the SPEAKER's key and carries
+#     suid=norbert), then the three verdicts + the console-restore
+#     observation (the '#c/cons' re-bind that clears the sentinel for
+#     the secstore leg's getpassm).  The deny arm's SPEAKSFOR-DENIED
+#     line is asserted EXACTLY ONCE in the post-pass below (zero = the
+#     control is gone, more = a failure loop — Pitfall 4).
+stage debug-success        {AUTH-DEBUGOBS[ \t]+ticket request using norbert@}
+stage speaksfor-ok         {authprobe: SPEAKSFOR-OK bootes for norbert}
+stage p9sk1-norbert-verdict {AUTH-OK p9sk1-norbert}
+stage speaksfor-verdict     {AUTH-OK speaksfor}
+stage speaksfor-deny-verdict {AUTH-OK speaksfor-deny}
+stage console-restored      {AUTH-CONSOLEOBS restored}
+
+# 5d. the 18-05 secstore substrate (AUTH-08/D-14; the venue verdict
+#     already staged at 4b2): secuser's console-fed prompts IN PROMPT
+#     ORDER (the two getpassm passwords — the R9_DEMO_PWFILE sends;
+#     then the four field prompts — userinput reads the cooked console
+#     line-by-line, so every answer is typed after its prompt
+#     matches: default expiry, E, N, empty comment), secuser's own
+#     success line and verdict.  (18-08: the 18-05 named-SKIP stages
+#     that stood here are RETIRED — the r9 devip two-write defect
+#     closed at ab4cb66, the 18-07 fix; no AUTH-SKIP stage remains.)
+# T-01-77: the password is read from the caller's 0600 file HERE, by
+# path only — it is never present in this process's environment.
+if {[catch {
+    set pwfh [open $env(R9_DEMO_PWFILE) r]
+    set pw [string trimright [read $pwfh] "\r\n"]
+    close $pwfh
+} pw_err]} {
+    puts stderr "smoke-r9-auth-x64: cannot read \$R9_DEMO_PWFILE: $pw_err"
+    cleanup
+    exit 2
+}
+if {$pw eq ""} {
+    puts stderr "smoke-r9-auth-x64: \$R9_DEMO_PWFILE is empty — the caller's 0600 creds file carried no password"
+    cleanup
+    exit 2
+}
+feedstage secuser-password1 {norbert password: } "$pw\r"
+feedstage secuser-password2 {retype password: } "$pw\r"
+feedstage secuser-expires   {expires .DDMMYYYY} "\r"
+feedstage secuser-enabled   {Enabled or Disabled} "E\r"
+feedstage secuser-sta       {require STA} "N\r"
+feedstage secuser-comments  {comments .default} "\r"
+stage secuser-written {change written}
+stage secuser-verdict {AUTH-OK secuser}
+
+# 5e. (18-08) the RESTORED secstore round-trip stages (AUTH-08's
+#     client half, D-14 test-delivery-not-counters) — in the sweep's
+#     emission order: secstored's PAK login syslog token, the PUT
+#     syslog token, the client PUT's own `secstore: saved' line, the
+#     GET connection's syslog token, the sweep's bytes-back
+#     observation (the -G GET's delivered payload line grepped back),
+#     and the verdict (printable ONLY on that bytes-back match).
+#     Message tokens only, never the syslog date prefix.  The
+#     brackets in the syslog tokens are regex-escaped (the stage
+#     patterns are -re).
+stage secstored-auth  {AUTH norbert}
+stage secstored-put   {\[norbert\] PUT}
+stage secstore-saved  {secstore: saved}
+stage secstored-get   {\[norbert\] GET}
+stage secstore-bytesback {AUTH-SECOBS}
+stage roundtrip-verdict {AUTH-OK secstore-roundtrip}
+
+# 6. the terminal sweep marker
+stage sweep-done {AUTH-DONE}
+
+# 6. the interactive % prompt — the shell the sweep's termrc execs
+#    AFTER AUTH-DONE (the sweep ran in a child; init's shell survives)
+stage prompt {% }
+
+# 7. the whole-file post-pass: stop the log, read the capture, assert
+#    the never-appears contracts (T-18-08: the interactive-wedge
+#    marker must be PROVABLY unreachable on the green path), the
+#    banner's label (D-04: the DEMO label prints — the gate is the
+#    DEMO path's by design, D-01: a developer's local authdomain.local
+#    re-keys the domain and this gate reds loudly, never silently),
+#    and secstored's ANNOUNCE syslog line (the message TOKEN, never
+#    the syslog date prefix — AUTH-07's day-one serial evidence).
+log_file                           ;# stop + flush before the whole-file scan
+set fh [open $env(R9_SMOKE_LOG) r]
+set whole [read $fh]
+close $fh
+if {[string match "*can't read NVRAM, please enter machine key*" $whole]} {
+    puts stderr "smoke-r9-auth-x64: nvram getpass prompt PRESENT in the capture — the boot wedged interactively (the pairing check must precede keyfs and a valid five-sum nvram never prompts)"
+    cleanup
+    exit 1
+}
+puts stderr "smoke-r9-auth-x64: stage ok — nvram-prompt-absent (the getpass string never appeared)"
+if {[string match "*AUTH-FAIL*" $whole]} {
+    puts stderr "smoke-r9-auth-x64: AUTH-FAIL present in the capture — a leg failed"
+    cleanup
+    exit 1
+}
+puts stderr "smoke-r9-auth-x64: stage ok — zero AUTH-FAIL in the capture"
+if {![string match "*authdom: PAIRED DEMO*" $whole]} {
+    puts stderr "smoke-r9-auth-x64: the PAIRED banner's DEMO label is absent (a local-file bake re-keyed the domain — the gate is the DEMO path's, D-01/D-04)"
+    cleanup
+    exit 1
+}
+puts stderr "smoke-r9-auth-x64: stage ok — pairing banner `authdom: PAIRED DEMO' present"
+if {![string match "*ANNOUNCE*" $whole]} {
+    puts stderr "smoke-r9-auth-x64: secstored's ANNOUNCE syslog line absent from the capture (the #c/cons fallback is AUTH-07's serial mechanism — Pitfall 6: no writable /sys/log may ever be staged)"
+    cleanup
+    exit 1
+}
+puts stderr "smoke-r9-auth-x64: stage ok — secstored ANNOUNCE line present (the syslog console fallback carrying AUTH-07)"
+
+# the 18-05 probe post-passes (AUTH-06/AUTH-07): the deny control's
+# count (exactly one — the netsoak count_occurrences shape), the
+# speaksfor marker, the debug success line, and AUTH-07's REAL
+# exchange evidence (at least one tr-ok syslog token from authsrv -d
+# through the #c/cons fallback, plus the deny exchange's own
+# `no speaks for' tr-fail line — the fail-closed path armed, Pitfall
+# 11).  Message tokens only, never the syslog date prefix.
+proc count_occurrences {haystack needle} {
+    set n 0
+    set pos 0
+    while {1} {
+        set idx [string first $needle $haystack $pos]
+        if {$idx < 0} {
+            break
+        }
+        incr n
+        set pos [expr {$idx + [string length $needle]}]
+    }
+    return $n
+}
+set deny_count [count_occurrences $whole "SPEAKSFOR-DENIED"]
+if {$deny_count != 1} {
+    puts stderr "smoke-r9-auth-x64: SPEAKSFOR-DENIED COUNT FAILED — got $deny_count, want exactly 1 (zero means the negative control is gone; more means a failure loop — Pitfall 4)"
+    cleanup
+    exit 1
+}
+puts stderr "smoke-r9-auth-x64: post-pass ok — SPEAKSFOR-DENIED x $deny_count (the deny control fired exactly once)"
+if {![string match "*tr-ok*" $whole]} {
+    puts stderr "smoke-r9-auth-x64: no tr-ok token in the capture — AUTH-07 needs REAL ticket exchanges on serial (authsrv -d's syslog line through the #c/cons fallback)"
+    cleanup
+    exit 1
+}
+puts stderr "smoke-r9-auth-x64: post-pass ok — tr-ok present (authsrv -d's per-exchange syslog line: AUTH-07's real-exchange evidence)"
+if {![string match "*no speaks for*" $whole]} {
+    puts stderr "smoke-r9-auth-x64: the deny exchange's tr-fail 'no speaks for' line absent — the fail-closed path is not armed (Pitfall 11: the /lib/ndb/auth uid=! row must bite)"
+    cleanup
+    exit 1
+}
+puts stderr "smoke-r9-auth-x64: post-pass ok — the deny control's tr-fail 'no speaks for' line present (the fail-closed speaksfor gate proven)"
+
+# the secstore round-trip post-pass (AUTH-08/D-14, FLIPPED 18-08 —
+# presence demands; the 18-05 named-SKIP arm is retired, not merely
+# silenced): the client PUT's own success line, secstored's login and
+# PUT/GET syslog tokens, the bytes-back observation, and the verdict
+# must ALL be present — the verdict is emittable ONLY from the
+# bytes-back grep over the -G GET's delivered payload line (the
+# sweep's 9d), so its presence IS the round-trip proof (no unearned
+# OK, and no earned-but-unobserved green either).  string first (exact
+# substring, no glob): the bracketed syslog tokens would be character
+# classes under string match.  A missing marker reds with a named
+# message; any AUTH-FAIL anywhere is already caught above.
+set rt_missing 0
+if {[string first "secstore: saved" $whole] < 0} {
+    puts stderr "smoke-r9-auth-x64: round-trip marker absent — `secstore: saved' (the client PUT's own success line) not in the capture"
+    incr rt_missing
+}
+if {[string first "AUTH norbert" $whole] < 0} {
+    puts stderr "smoke-r9-auth-x64: round-trip marker absent — secstored's `AUTH norbert' PAK login syslog token not in the capture"
+    incr rt_missing
+}
+if {[string first "\[norbert\] PUT" $whole] < 0} {
+    puts stderr "smoke-r9-auth-x64: round-trip marker absent — secstored's `\[norbert\] PUT' syslog token not in the capture"
+    incr rt_missing
+}
+if {[string first "\[norbert\] GET" $whole] < 0} {
+    puts stderr "smoke-r9-auth-x64: round-trip marker absent — secstored's `\[norbert\] GET' syslog token not in the capture"
+    incr rt_missing
+}
+if {[string first "AUTH-SECOBS" $whole] < 0} {
+    puts stderr "smoke-r9-auth-x64: round-trip marker absent — the bytes-back observation `AUTH-SECOBS' not in the capture (the -G GET never delivered the payload line)"
+    incr rt_missing
+}
+if {[string first "AUTH-OK secstore-roundtrip" $whole] < 0} {
+    puts stderr "smoke-r9-auth-x64: round-trip marker absent — the verdict `AUTH-OK secstore-roundtrip' not in the capture (the bytes-back grep never matched; an earned green is missing)"
+    incr rt_missing
+}
+if {$rt_missing > 0} {
+    cleanup
+    exit 1
+}
+puts stderr "smoke-r9-auth-x64: post-pass ok — the secstore round-trip PRESENCE-demanded: saved + AUTH norbert + \[norbert\] PUT/GET syslog tokens + the bytes-back AUTH-SECOBS + the verdict all in the capture"
+
+# the T-18-13 redaction (LAST, after every assert ran over the true
+# capture): auth/debug's noise leg answers its cpu-server-owner prompt
+# with the sentinel line, and authsrv -d's tr-ok for that exchange
+# logs tr->authid verbatim — so the per-bake DEMO password can sit in
+# ONE syslog line on the wire.  It is throwaway host-random material
+# (the image itself carries the feed in cleartext, D-01), but the
+# RETAINED capture must not carry it: rewrite the log with every
+# occurrence mapped to a fixed marker.  Mechanical, applied by THIS
+# committed gate — never by hand (the 15-07 evidence-discipline
+# family: the tool that asserts is the tool that redacts).
+if {[string first $pw $whole] >= 0} {
+    set redacted [string map [list $pw "<demo-pw-redacted>"] $whole]
+    set fh [open $env(R9_SMOKE_LOG) w]
+    puts -nonewline $fh $redacted
+    close $fh
+    puts stderr "smoke-r9-auth-x64: post-pass ok — the per-bake DEMO password redacted from the retained capture (T-18-13; asserts ran over the true capture first)"
+} else {
+    puts stderr "smoke-r9-auth-x64: post-pass ok — the capture carried no DEMO password bytes (nothing to redact)"
+}
+
+puts stderr "smoke-r9-auth-x64: ALL STAGES PASS — chain boot, hostfwd-5670 observed host-side, D-02 boot pairing (DEMO label), non-interactive keyfs (N keys read), AUTH-OK keyfs, loopback up, the writable secstore venue (ramfs, live file probe), authsrv connect-accept on 567, secstored announced on 5356, cs answering authdom from the baked local, factotum carrying the p9sk1 key, auth/debug's p9sk1 success as norbert, hauthprobe's SPEAKSFOR-OK (bootes for norbert), the deny control (SPEAKSFOR-DENIED x1 + 'no speaks for'), console restored, secuser's account through the venue, the secstore round-trip EXERCISED and presence-demanded (secstore: saved + AUTH norbert + \[norbert\] PUT/GET syslog tokens + the bytes-back AUTH-SECOBS + the AUTH-OK secstore-roundtrip verdict — the 18-05 SKIP arm retired), AUTH-DONE, ANNOUNCE on serial, tr-ok present, nvram-prompt-absent, zero AUTH-FAIL, the capture redacted"
+cleanup
+exit 0
