@@ -5,16 +5,16 @@ milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
 current_phase: 01
 current_phase_name: Stage P0 - Cross-Build Harness
 status: executing
-stopped_at: Completed 01-13-PLAN.md; 01-14 next
-last_updated: "2026-11-23T07:05:20.867Z"
+stopped_at: Completed 01-14-PLAN.md; 01-15 next
+last_updated: "2026-11-23T07:55:00.763Z"
 last_activity: 2026-11-23
-last_activity_desc: arm64 tree supply landed; 01-14 amd64 tree next
-state_head: 00da46fc4f5170d7e4ed16545e7cef9d7a7d0f02
+last_activity_desc: full amd64 tree landed; 01-15 reference bake next
+state_head: 202b67ac87d6542d6cd04cc761b81dfaacbcf754
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 32
-  completed_plans: 14
+  completed_plans: 15
   percent: 0
 ---
 
@@ -30,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-11-22)
 ## Current Position
 
 Phase: 01 (Stage P0 - Cross-Build Harness) — EXECUTING
-Plan: 14 of 32
+Plan: 15 of 32
 Status: Ready to execute
-Last activity: 2026-11-23 — arm64 tree supply landed; 01-14 amd64 tree next
+Last activity: 2026-11-23 — full amd64 tree landed; 01-15 reference bake next
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -176,5 +176,5 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 ## Session Continuity
 
 Last session: 2026-11-23T04:57:34.842Z
-Stopped at: Completed 01-13-PLAN.md; 01-14 next
+Stopped at: Completed 01-14-PLAN.md; 01-15 next
 Resume file: None
