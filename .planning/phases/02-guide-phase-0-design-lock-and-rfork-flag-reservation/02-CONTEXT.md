@@ -47,6 +47,11 @@ Requirements: DSGN-01 to DSGN-05. Not in this phase: any flag behaviour (`RFNOLE
 - **D-21:** The host test of DSGN-04 also pins the four values and proves they overlap no existing flag, with bit 14 covered through the real `RFNOMNT` constant.
 - **D-22:** Kernel bytes follow the standing rules: compare both kernels' sha256 before and after the move. Moving constants is expected to change nothing; if x86_64 bytes do change, the `boot-iso` `outputHash`, amd64-container TCG gates and owner linux check apply, and an aarch64 change gets the quick pass.
 
+### Decisions after research (owner, 2026-11-23; source: `02-RESEARCH.md`, "Kernel Bytes" and "Open Questions")
+- **D-23:** Supersedes the expectation in D-22. Research measured that shifting source lines changes x86_64 kernel bytes (panic line numbers in `.rodata`; `.text` identical in the experiment) and the aarch64 ELF (debug line tables). The owner chose to accept the change: edit the kernel sources naturally, with no line-count balancing, and run the full x86_64 byte-change procedure as planned work in this phase (re-derive and commit the `boot-iso` `outputHash` on the owner's x86_64 Linux host, the x64 TCG gates, the owner's linux boot-iso check). aarch64 gets the quick pass. The before/after sha256 of both kernels and of their `.text` sections is still recorded as evidence; a `.text` difference is a stop, because the phase must change no executable code.
+- **D-24:** The x86_64 host test that the reserved bits are outside x86_64's supported mask is witnessed on the owner's x86_64 Linux host, at the same stop as the KVM gate. If the devshell skips the x86_64 host tests there too, the plan includes the small xtask fix that makes them run. Hosted CI is not the witness and no push is required for verification.
+- **D-25:** The boot-to-rio gate (`cargo xtask gate`, owner's x86_64 Linux KVM host) runs once, at the end of the phase, after all work is committed. No per-commit or mid-phase gate run in this phase.
+
 ### Claude's Discretion
 - Name and file of the `port/` module that holds the flags.
 - How the generator reads the Rust constants (xtask depending on `port`, or another route) and the name of the xtask step and its staleness check; whether the check runs inside `cargo xtask check` or `test`.
