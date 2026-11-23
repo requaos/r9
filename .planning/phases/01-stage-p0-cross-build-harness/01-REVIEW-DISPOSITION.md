@@ -5,7 +5,7 @@ titles: json
 findings:
   - id: CR-01
     severity: critical
-    disposition: open
+    disposition: fixed
     title: "Unvalidated image name escapes the staging root (path traversal / directory deletion)"
   - id: WR-01
     severity: warning
@@ -107,7 +107,7 @@ findings:
     severity: info
     disposition: open
     title: "`aout.py` computes an unused `declared` length"
-open: 26
+open: 25
 total: 26
 recorded: 2026-11-23T00:00:00.000Z
 ---
@@ -116,32 +116,32 @@ recorded: 2026-11-23T00:00:00.000Z
 
 | Finding | Severity | Disposition | Source |
 |---------|----------|-------------|--------|
-| CR-01 | critical | open | code review 2026-11-23; owner disposition pending |
-| WR-01 | warning | open | code review 2026-11-23; owner disposition pending |
-| WR-02 | warning | open | code review 2026-11-23; owner disposition pending |
-| WR-03 | warning | open | code review 2026-11-23; owner disposition pending |
-| WR-04 | warning | open | code review 2026-11-23; owner disposition pending |
-| WR-05 | warning | open | code review 2026-11-23; owner disposition pending |
-| WR-06 | warning | open | code review 2026-11-23; owner disposition pending |
-| WR-07 | warning | open | code review 2026-11-23; owner disposition pending |
-| WR-08 | warning | open | code review 2026-11-23; owner disposition pending |
-| WR-09 | warning | open | code review 2026-11-23; owner disposition pending |
-| WR-10 | warning | open | code review 2026-11-23; owner disposition pending |
-| WR-11 | warning | open | code review 2026-11-23; owner disposition pending |
-| WR-12 | warning | open | code review 2026-11-23; owner disposition pending |
-| IN-01 | info | open | code review 2026-11-23; owner disposition pending |
-| IN-02 | info | open | code review 2026-11-23; owner disposition pending |
-| IN-03 | info | open | code review 2026-11-23; owner disposition pending |
-| IN-04 | info | open | code review 2026-11-23; owner disposition pending |
-| IN-05 | info | open | code review 2026-11-23; owner disposition pending |
-| IN-06 | info | open | code review 2026-11-23; owner disposition pending |
-| IN-07 | info | open | code review 2026-11-23; owner disposition pending |
-| IN-08 | info | open | code review 2026-11-23; owner disposition pending |
-| IN-09 | info | open | code review 2026-11-23; owner disposition pending |
-| IN-10 | info | open | code review 2026-11-23; owner disposition pending |
-| IN-11 | info | open | code review 2026-11-23; owner disposition pending |
-| IN-12 | info | open | code review 2026-11-23; owner disposition pending |
-| IN-13 | info | open | code review 2026-11-23; owner disposition pending |
+| CR-01 | critical | fixed | fixed in b36b633: `validate_image_name` guards manifest, `--image`, `image:` and the manifest/request equality; 3 tests; `cargo xtask check` + tests green |
+| WR-01 | warning | open | owner disposition 2026-11-23: record open, no code change |
+| WR-02 | warning | open | owner disposition 2026-11-23: record open, no code change |
+| WR-03 | warning | open | owner disposition 2026-11-23: record open, no code change |
+| WR-04 | warning | open | owner disposition 2026-11-23: record open, no code change |
+| WR-05 | warning | open | owner disposition 2026-11-23: record open, no code change |
+| WR-06 | warning | open | owner disposition 2026-11-23: record open, no code change |
+| WR-07 | warning | open | owner disposition 2026-11-23: record open, no code change |
+| WR-08 | warning | open | owner disposition 2026-11-23: record open, no code change |
+| WR-09 | warning | open | owner disposition 2026-11-23: record open, no code change |
+| WR-10 | warning | open | owner disposition 2026-11-23: record open, no code change |
+| WR-11 | warning | open | owner disposition 2026-11-23: record open, no code change |
+| WR-12 | warning | open | owner disposition 2026-11-23: record open, no code change |
+| IN-01 | info | open | owner disposition 2026-11-23: record open, no code change |
+| IN-02 | info | open | owner disposition 2026-11-23: record open, no code change |
+| IN-03 | info | open | owner disposition 2026-11-23: record open, no code change |
+| IN-04 | info | open | owner disposition 2026-11-23: record open, no code change |
+| IN-05 | info | open | owner disposition 2026-11-23: record open, no code change |
+| IN-06 | info | open | owner disposition 2026-11-23: record open, no code change |
+| IN-07 | info | open | owner disposition 2026-11-23: record open, no code change |
+| IN-08 | info | open | owner disposition 2026-11-23: record open, no code change |
+| IN-09 | info | open | owner disposition 2026-11-23: record open, no code change |
+| IN-10 | info | open | owner disposition 2026-11-23: record open, no code change |
+| IN-11 | info | open | owner disposition 2026-11-23: record open, no code change |
+| IN-12 | info | open | owner disposition 2026-11-23: record open, no code change |
+| IN-13 | info | open | owner disposition 2026-11-23: record open, no code change |
 
 Dispositions: `open` (recorded, not yet triaged), `fixed`, `skipped`, `deferred`.
 Set `deferred` by hand and put the reason in the Source cell; both are preserved. A `|` in the reason is kept as prose and escaped on the next run.
