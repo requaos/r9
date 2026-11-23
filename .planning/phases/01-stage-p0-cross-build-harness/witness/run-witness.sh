@@ -62,6 +62,28 @@
 #                 recorded authdomain-gen as Linux-only, so stop B runs
 #                 them natively on the witness host.
 #
+# Stop-C steps (plan 01-26, D-14/D-26/HARN-08):
+#   full          cargo xtask gate --arch x86-64 --full --accel kvm — the
+#                 eight moved apps in sequence (xtask/src/gate.rs's
+#                 FULL_APPS_X86_64); each app's capture set is copied
+#                 into out/full/apps/.
+#   soak          the owner's tap-venue soak (R9_ACCEL=kvm nix run
+#                 .#boot-r9-net-soak-x64).  The step preflights the venue
+#                 with `nix run .#net-doctor -- --mode tap' (the ONE
+#                 read-only checker, D-03) and fails loudly when it is
+#                 absent — the soak accepts no slirp substitute.
+#   stress        the owner's tap-venue reduced-stress gate
+#                 (R9_ACCEL=kvm nix run .#boot-r9-stress-x64), same
+#                 precondition and refusal.
+#   equiv         compares each r9 gate log (target/gates/<app>/) with
+#                 equivalence.tsv's committed Harvey-hosted baselines;
+#                 a `none' row runs the pinned Harvey-hosted app
+#                 (github:requaos/harvey/<HARVEY_PIN>#<app>) in the
+#                 writable scratch tree and uses that fresh baseline.
+#                 Writes out/equiv/report.tsv (gate, match|differ, details).
+#   store_verify  nix store verify --no-trust on both tree paths.  Run it
+#                 LAST — the run loop honours the selected order.
+#
 # Later plans add steps to this file.  Keep each step self-contained so
 # adding one never edits another.
 #
@@ -125,16 +147,21 @@ KERNDATE=${KERNDATE:-1795382101}
 PROBE_FLIP_SHA=064747f42c7f3eff6cd677a8820e6b4b1fff95e3
 PROBE_FLIPBACK_SHA=af7df344b9c3702100d4408e85044a722e861a67
 PROFILE_LIST=(q35 q35lowmcfg q35net q35exec q35churn q35shell q35churnshell q35cpu q35auth)
+# The D-14 full tier's x86_64 apps (xtask/src/gate.rs FULL_APPS_X86_64).
+# soak and stress are NOT in it: they need the owner's tap venue and run
+# as their own steps.
+FULL_APPS=(drawterm-gate-x64 boot-r9-x64 boot-r9-smoke-x64 boot-r9-tier1-x64
+	boot-r9-net-smoke-x64 boot-r9-services-x64 boot-r9-churn-x64 boot-r9-auth-x64)
 P="$P_REL"
 
 selected=0
 for step in $R9_WITNESS_STEPS; do
 	case "$step" in
-	rio-diag | rio | control | a13 | trees | kernel | gate | gate_neg | probe | flipback | profiles | cpuauth_ref)
+	rio-diag | rio | control | a13 | trees | kernel | gate | gate_neg | probe | flipback | profiles | cpuauth_ref | full | soak | stress | equiv | store_verify)
 		selected=$((selected + 1))
 		;;
 	*)
-		die "bad-step '$step': R9_WITNESS_STEPS accepts only rio-diag rio control a13 trees kernel gate gate_neg probe flipback profiles cpuauth_ref"
+		die "bad-step '$step': R9_WITNESS_STEPS accepts only rio-diag rio control a13 trees kernel gate gate_neg probe flipback profiles cpuauth_ref full soak stress equiv store_verify"
 		;;
 	esac
 done
@@ -154,7 +181,8 @@ command -v tee >/dev/null 2>&1 ||
 
 mkdir -p "$WORK" "$OUT/rio" "$OUT/control" "$OUT/a13" "$OUT/rio-diag" \
 	"$OUT/trees" "$OUT/kernel" "$OUT/gate" "$OUT/gate-neg" "$OUT/probe" \
-	"$OUT/flipback" "$OUT/profiles" "$OUT/cpuauth-ref" ||
+	"$OUT/flipback" "$OUT/profiles" "$OUT/cpuauth-ref" "$OUT/full" \
+	"$OUT/soak" "$OUT/stress" "$OUT/equiv" "$OUT/store-verify" ||
 	die "cannot-create-output: $OUT or $WORK is not writable"
 : >"$SUMMARY"
 
@@ -603,6 +631,212 @@ step_cpuauth_ref() {
 	done
 	end=$(now)
 	record cpuauth_ref "$rc" "$((end - start))"
+}
+
+# --- stop C (plan 01-26): the full moved set, soak/stress, equivalence ---
+
+# count_markers <file> <ERE>: occurrences (not lines) — equivalence.tsv's
+# counting contract.
+count_markers() {
+	grep -aoE -- "$2" "$1" 2>/dev/null | wc -l | tr -d ' '
+}
+
+# count_in_dir <dir> <ERE>: occurrences over every *.log under <dir>.
+count_in_dir() {
+	local f n total=0
+	while IFS= read -r f; do
+		n=$(count_markers "$f" "$2")
+		total=$((total + n))
+	done < <(find "$1" -type f -name '*.log' -print 2>/dev/null)
+	printf '%s\n' "$total"
+}
+
+# --- full: the eight moved apps in sequence (D-14) ----------------------
+step_full() {
+	local start end rc app run_dir stamp
+	start=$(now)
+	rc=0
+	: >"$OUT/full/full.log"
+	stamp="$OUT/full/start.stamp"
+	: >"$stamp"
+	note "full: cargo xtask gate --arch x86-64 --full --accel kvm (the eight moved apps)"
+	# The gate's --accel flag is not propagated to the apps the full tier
+	# drives; export it so every child app runs the KVM leg explicitly.
+	if ! (cd "$R9" || exit 1
+		R9_ACCEL=kvm nix develop -c cargo xtask gate --arch x86-64 --full --accel kvm) 2>&1 |
+		tee -a "$OUT/full/full.log"; then
+		rc=1
+	fi
+	# Keep every app's own capture set: the moved apps write under
+	# target/gates/<app>/ (their R9_GATE_OUT default).
+	rm -rf -- "$OUT/full/apps"
+	mkdir -p "$OUT/full/apps"
+	for app in "${FULL_APPS[@]}"; do
+		if [ -d "$R9/target/gates/$app" ]; then
+			cp -R -- "$R9/target/gates/$app" "$OUT/full/apps/" || rc=1
+		else
+			printf 'FULL-NO-CAPTURE %s\n' "$app" | tee -a "$OUT/full/full.log"
+			rc=1
+		fi
+	done
+	# The gate's own per-run verdict table (target/gate/<run-id>/full.tsv).
+	run_dir=$(find "$R9/target/gate" -mindepth 1 -maxdepth 1 -type d \
+		-newer "$stamp" -print -quit 2>/dev/null)
+	if [ -n "$run_dir" ] && [ -d "$run_dir" ]; then
+		printf 'FULL-RUN-DIR %s\n' "$run_dir" | tee -a "$OUT/full/full.log"
+		cp -R -- "$run_dir" "$OUT/full/" || rc=1
+	else
+		echo "FULL-NO-RUN-DIR (target/gate/<run-id> absent)" | tee -a "$OUT/full/full.log"
+	fi
+	end=$(now)
+	record full "$rc" "$((end - start))"
+}
+
+# --- soak / stress: the owner's tap venue (D-13) ------------------------
+# Both gates accept ONLY the tap/bridge venue.  net-doctor --mode tap is
+# the ONE read-only checker (D-03); its FAIL lines carry the remediation.
+# A missing venue fails the step before any bake or boot — never a slirp
+# substitute (slirp evidence is not L2 truth).
+venue_gate() {
+	local step=$1 app=$2 out=$3 start end rc
+	start=$(now)
+	rc=0
+	mkdir -p "$out"
+	: >"$out/$step.log"
+	note "$step: precondition nix run .#net-doctor -- --mode tap (the owner's tap/bridge venue)"
+	if ! (cd "$R9" || exit 1
+		nix run .#net-doctor -- --mode tap) 2>&1 | tee -a "$out/$step.log"; then
+		printf '%s-PRECONDITION-UNMET: the tap/bridge venue is absent.  This step needs the owner host: a configured bridge, the setuid wrapper and the pinned seam (16-05/D-13); slirp is never accepted as evidence.\n' "$step" |
+			tee -a "$out/$step.log"
+		rc=1
+	fi
+	if [ "$rc" -eq 0 ]; then
+		note "$step: R9_ACCEL=kvm nix run .#$app (the owner's tap venue)"
+		if ! (cd "$R9" || exit 1
+			R9_ACCEL=kvm nix run ".#$app") 2>&1 | tee -a "$out/$step.log"; then
+			rc=1
+		fi
+	fi
+	end=$(now)
+	record "$step" "$rc" "$((end - start))"
+}
+
+step_soak() { venue_gate soak boot-r9-net-soak-x64 "$OUT/soak"; }
+step_stress() { venue_gate stress boot-r9-stress-x64 "$OUT/stress"; }
+
+# --- equiv: the r9 logs against the Harvey-hosted baselines (HARN-08) --
+# A `none' row runs the pinned Harvey-hosted app in the same writable
+# scratch tree the rio steps use (ensure_harvey_scratch), with
+# R9_GATE_OUT pointed at out/equiv/baseline/<gate>/ so the fresh capture
+# and the app's stdout land together.
+ensure_equiv_baseline() {
+	local gate=$1 dir="$OUT/equiv/baseline/$1" scratch
+	if [ -d "$dir" ] && [ -n "$(find "$dir" -type f -name '*.log' -print -quit 2>/dev/null)" ]; then
+		return 0
+	fi
+	scratch=$(ensure_harvey_scratch) || return 1
+	mkdir -p "$dir"
+	note "equiv: $gate has no committed Harvey-hosted capture — running github:requaos/harvey/$HARVEY_PIN#$gate as the baseline" >&2
+	if ! (cd "$scratch" || exit 1
+		HARVEY="$scratch" R9_GATE_OUT="$dir" \
+			nix run "github:requaos/harvey/$HARVEY_PIN#$gate") >"$dir/baseline.log" 2>&1; then
+		printf 'EQUIV-BASELINE-FAIL %s (log: %s)\n' "$gate" "$dir/baseline.log" >&2
+		return 1
+	fi
+}
+
+step_equiv() {
+	local start end rc gate regex want src got ok srclabel report details
+	start=$(now)
+	rc=0
+	report="$OUT/equiv/report.tsv"
+	details="$OUT/equiv/rows.tsv"
+	if [ ! -f "$R9/$P/witness/equivalence.tsv" ]; then
+		echo "EQUIV-TSV-MISSING $R9/$P/witness/equivalence.tsv" >&2
+		printf 'gate\tverdict\tdetails\n' >"$report"
+		printf 'equivalence-tsv\tdiffer\tmissing %s\n' "$P/witness/equivalence.tsv" >>"$report"
+		end=$(now)
+		record equiv 1 "$((end - start))"
+		return
+	fi
+	: >"$details"
+	while IFS=$'\t' read -r gate regex want src; do
+		case "$gate" in
+		'' | '#'* | gate) continue ;;
+		esac
+		srclabel=$src
+		if [ "$src" = none ]; then
+			if ensure_equiv_baseline "$gate"; then
+				want=$(count_in_dir "$OUT/equiv/baseline/$gate" "$regex")
+				srclabel="fresh github:requaos/harvey/$HARVEY_PIN run"
+			else
+				want=-1
+				srclabel="baseline-run-failed"
+			fi
+		elif [ ! -f "$R9/$src" ]; then
+			printf 'EQUIV-SOURCE-MISSING %s -> %s\n' "$gate" "$src" >&2
+			want=-1
+			srclabel="source-missing"
+		fi
+		if [ -d "$R9/target/gates/$gate" ]; then
+			got=$(count_in_dir "$R9/target/gates/$gate" "$regex")
+		else
+			got=-1
+		fi
+		if [ "$want" != -1 ] && [ "$got" -eq "$want" ]; then ok=ok; else ok=bad; fi
+		printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+			"$gate" "$regex" "$got" "$want" "$srclabel" "$ok" >>"$details"
+	done <"$R9/$P/witness/equivalence.tsv"
+	awk -F'\t' '
+		BEGIN { OFS = "\t" }
+		{
+			g = $1
+			if (!(g in seen)) {
+				seen[g] = 1
+				order[++n] = g
+				verdict[g] = "match"
+				details[g] = ""
+			}
+			if ($6 != "ok") verdict[g] = "differ"
+			details[g] = details[g] (details[g] == "" ? "" : "; ") $2 "=" $3 "/" $4
+		}
+		END {
+			print "gate", "verdict", "details"
+			for (i = 1; i <= n; i++) print order[i], verdict[order[i]], details[order[i]]
+		}
+	' "$details" >"$report" || rc=1
+	if awk -F'\t' '$2 == "differ" { found = 1 } END { exit !found }' "$report"; then
+		rc=1
+	fi
+	end=$(now)
+	record equiv "$rc" "$((end - start))"
+}
+
+# --- store_verify: both tree paths after everything else ---------------
+step_store_verify() {
+	local start end rc paths p
+	start=$(now)
+	rc=0
+	: >"$OUT/store-verify/store-verify.log"
+	note "store_verify: nix build both trees, then nix store verify --no-trust (run this step LAST)"
+	paths=$(cd "$R9" || exit 1
+		nix build --no-link --print-out-paths .#harvey-tree-amd64 .#harvey-tree-arm64 \
+			2>>"$OUT/store-verify/store-verify.log") || rc=1
+	if [ "$rc" -ne 0 ]; then
+		echo "STORE-VERIFY-BUILD-FAILED" | tee -a "$OUT/store-verify/store-verify.log"
+	fi
+	while IFS= read -r p; do
+		[ -n "$p" ] || continue
+		printf 'STORE-VERIFY-PATH %s\n' "$p" | tee -a "$OUT/store-verify/store-verify.log"
+		if nix store verify --no-trust "$p" >>"$OUT/store-verify/store-verify.log" 2>&1; then
+			printf 'STORE-VERIFY-OK %s\n' "$p" | tee -a "$OUT/store-verify/store-verify.log"
+		else
+			printf 'STORE-VERIFY-FAIL %s\n' "$p" | tee -a "$OUT/store-verify/store-verify.log"
+			rc=1
+		fi
+	done <<<"$paths"
+	end=$(now)
+	record store_verify "$rc" "$((end - start))"
 }
 
 # --- run one step in a subshell; record an abort the step did not ------
