@@ -1,0 +1,462 @@
+#!/usr/bin/expect -f
+# smoke-r9.expect — the COMPOSED smoke gate for the x86_64 one-command
+# artifact (14-07, XEXEC-03): gates/aarch64/smoke-r9.expect's stage
+# vocabulary re-keyed stage-for-stage to the composed GRUB ISO boot —
+# this script spawns qemu DIRECTLY with the composed ISO on -cdrom
+# (no DTB argument, no qemu loader-device flag: GRUB delivers bootfs
+# as an mb2 tag-3
+# module off the same ISO, the 14-05 D-03 delivery):
+#
+#   staged boot (banner → paqfs... → version... → %  prompt) →
+#   echo r9x64shell7 round-trip (two-occurrence) →
+#   EMPTY-LINE safety (a bare newline at the prompt must return a
+#   fresh prompt without losing the marker anchor — the aarch64
+#   template lacked it; added per 14-07's flagged assumption) →
+#   ls /bin subset (rc ls cat echo ps — the binaries ship in the chain
+#   image since 14-07) → ps live-process lines incl rc →
+#   cat /lib/namespace's known line →
+#   DEL safety (the interrupt note re-prompts, rc survives; r9x64delok
+#   proves the partial line did not corrupt the fresh command) →
+#   exit → init's for(;;) restart to a fresh prompt →
+#   whole-capture post-passes: pid-warning-absent + the nic-bind line
+#   (D-10 carried: the composed boot speaks Ethernet — the spawn argv
+#   instantiates the always-on virtio-net NIC and the driver's
+#   `#l0: virtio: 1000Mbps: ` bind line must appear in the capture;
+#   presence only — the NET smoke is 14-09's, per the venue-honesty
+#   rule).
+#
+#   19-09 (INT-05): the gate gained the CPU-CHAIN LEG — a SECOND
+#   spawn, same run, asserting the FULL-SYSTEM bring-up off the §15
+#   image in the same composed gate.  The chain leg above is
+#   untouched; the cpu leg (carried from 19-07's cpu-bringup.expect
+#   vocabulary, one vocabulary two drivers) adds:
+#     the §15 boot with the bootconf append in EMISSION order
+#       (banner → devenv: bootconf init=/amd64/init -c → paqfs →
+#       version — the bootconf line streams between banner and paqfs,
+#       never staged after) →
+#     the hostfwd pair observed HOST-side while the guest boots
+#       (ss/netstat loopback entries 127.0.0.1:17010 + 127.0.0.1:5670 —
+#       the emitter's slirp argv carries the D-04 pair) →
+#     the cpurc ladder in EMISSION order through the END:
+#       cpurc: PAIR-OK → ETHER-OK → KEYFS-OK → AUTHSRV-LISTEN →
+#       FACTOTUM-OK → LISTEN-17010 → DONE →
+#     the post-cpurc % prompt →
+#     the whole-capture post-passes: zero cpurc: FAIL, zero panic,
+#     and ZERO desktop font-line markers (latin1.8.font — DESK-02's
+#     backstop living in the standing gate: the desktop starts ONLY
+#     in-session) + the bootconf and DONE lines present.
+#   HONEST SCOPE: the leg proves BRING-UP (the listeners standing),
+#   not an interactive session — the scripted login → shell-marker
+#   round-trip is 19-08's drawterm-gate-x64 (one gate one concern;
+#   the two compose).  expect_before fast-fails on the panic AND
+#   cpurc: FAIL vocabularies for the whole run.
+#
+#   The aarch64 gate's stacksmoke stage maps to boot(8)'s own
+#   "version..." print (the 14-06 x64 chain drops stacksmoke — no
+#   demand-paged stack this era; the stage vocabulary is kept, the
+#   expected string re-keyed to the chain's actual output).
+#
+#   exit 0 only when EVERY stage passed; a failure exits 1 and names
+#   the failed stage on stderr — never a bare hang-to-timeout.
+#
+# Hygiene: the caller (nix/gates/smoke-r9-x64.sh) rm -f's BOTH captures
+# BEFORE launch and we rm -f + log_file each fresh below — each file
+# starts empty and only ITS run's boot writes it, so a pre-seeded
+# stale capture can never satisfy a marker wait.  Every exit path
+# kills the live spawn's process group (the caller's EXIT trap sweeps
+# survivors keyed on the run tag both spawns carry).
+#
+# Markers: PRESENCE assertions only, never interleaving order
+# (preemption makes arrival order meaningless).  Patterns are
+# CRLF-tolerant substrings, never end-of-line anchored.  r9's devcons
+# ECHOES cooked-mode typed input, so every typed command appears on
+# the wire BEFORE its output — the marker discipline is load-bearing
+# (never match the ECHOED command instead of the output): response
+# markers are staged TWO-OCCURRENCE (typed echo, then output) and
+# sweep captures strip everything through the first newline before
+# presence-asserting.  Timeouts are generous per stage (KVM boots in
+# seconds; TCG runs longer).
+#
+# Env (exported by nix/gates/smoke-r9-x64.sh — the flake app):
+#   R9_QEMU      default qemu-system-x86_64
+#   R9_ISO       REQUIRED — the COMPOSED chain ISO (the caller's
+#                iso-builder output: r9 kernel-x64 + the chain bake as
+#                /boot/bootfs.paq)
+#   R9_CPU_ISO   REQUIRED (19-09) — the COMPOSED cpu ISO (the §15
+#                bake as /boot/bootfs.paq WITH the bootconf append
+#                init=/amd64/init -c)
+#   R9_SMOKE_LOG REQUIRED — the chain leg's serial capture (fresh per
+#                run; both gate runs retain theirs as evidence)
+#   R9_CPU_LOG   REQUIRED (19-09) — the cpu leg's serial capture
+#   R9_NETDEV_ARGV REQUIRED (19-09) — the emitter's slirp argv as ONE
+#                line (the D-04 hostfwd pair rides the pinned TOML
+#                data; the cpu leg's spawn splits it — NO netdev
+#                literal here)
+#   R9_MACHINE/R9_CPU/R9_ACCEL — the caller-selected q35 shape
+#                (defaults q35/host/kvm; TCG selects qemu64)
+#   R9_RUN_TAG   the per-run unique tag in qemu's argv (-name); the
+#                caller's survivor sweep keys on it
+#
+# usage: env R9_ISO=… R9_CPU_ISO=… R9_SMOKE_LOG=… R9_CPU_LOG=… \
+#          R9_NETDEV_ARGV=… expect gates/x86_64/smoke-r9.expect
+# exit 0 on all-pass; exit 1 names the failed stage on stderr; exit 2
+# on a contract violation (missing env).
+
+set timeout 600                    ;# per stage, TCG-sized
+match_max 1048576                  ;# the cpu ladder + boot output ride one buffer window (19-09)
+# NOTE: log_user stays ON — expect 5.45 writes NOTHING to log_file when
+# log_user is 0 (measured on the aarch64 gate): the capture file would
+# be empty.  The wire echo on the driver's stdout is the app's visible
+# progress; the stage lines name it on stderr.
+
+# --- required env (loud, before any spawn) -------------------------------
+foreach v {R9_ISO R9_CPU_ISO R9_SMOKE_LOG R9_CPU_LOG R9_NETDEV_ARGV} {
+    if {![info exists env($v)]} {
+        puts stderr "smoke-r9-x64: \$$v unset — run via the flake app (nix run .#boot-r9-smoke-x64)"
+        exit 2
+    }
+}
+set QEMU [expr {[info exists env(R9_QEMU)] ? $env(R9_QEMU) : "qemu-system-x86_64"}]
+set run_tag [expr {[info exists env(R9_RUN_TAG)] ? $env(R9_RUN_TAG) : "r9x64smoke-[pid]-[clock seconds]"}]
+
+# --- Hygiene: a fresh capture per run -----------------------------------
+# The caller already rm -f'd it; remove again here so the rule holds
+# however this script is invoked (a stale capture is dead evidence).
+exec rm -f $env(R9_SMOKE_LOG)
+
+# --- spawn qemu: the composed ISO on -cdrom (the q35 shape the caller
+#     selected — kvm/host by default, tcg/qemu64 explicitly; the NIC
+#     stanza is always on, D-10 carried) ----------------------------------
+set R9_MACHINE [expr {[info exists env(R9_MACHINE)] ? $env(R9_MACHINE) : "q35"}]
+set R9_CPU [expr {[info exists env(R9_CPU)] ? $env(R9_CPU) : "host"}]
+set R9_ACCEL [expr {[info exists env(R9_ACCEL)] ? $env(R9_ACCEL) : "kvm"}]
+spawn $QEMU -M $R9_MACHINE -cpu $R9_CPU -smp 1 -m 1024M \
+    -accel $R9_ACCEL \
+    -cdrom $env(R9_ISO) \
+    -netdev user,id=n0 \
+    -device virtio-net-pci-non-transitional,netdev=n0 \
+    -nographic \
+    -name $run_tag
+set spawn_pid [exp_pid]
+log_file $env(R9_SMOKE_LOG)
+
+# --- teardown: kill qemu's process group ------------------------------
+# The spawned qemu is a session/group leader (expect's pty setup), so
+# the group IS the qemu subtree; catch: already-dead is fine.  The
+# lone-pid second form is the no-group fallback.  The caller's EXIT
+# trap sweeps any survivor keyed on this run's unique tag.
+proc cleanup {} {
+    global spawn_pid
+    catch { exec kill -KILL -- -$spawn_pid 2>/dev/null }
+    catch { exec kill -KILL $spawn_pid 2>/dev/null }
+}
+
+# --- staged ordered assertions (each stage names its failure) ---------
+# NOTE: expect_out must be global here — expect sets it in the CURRENT
+# scope, and the sweep stages read the captured buffer AFTER stage
+# returns.
+proc stage {name re} {
+    global expect_out
+    expect {
+        -re $re { puts stderr "smoke-r9-x64: stage ok — $name" }
+        timeout { puts stderr "smoke-r9-x64: TIMEOUT at stage: $name"; cleanup; exit 1 }
+        eof { puts stderr "smoke-r9-x64: qemu exited (EOF) at stage: $name"; cleanup; exit 1 }
+    }
+}
+
+# fast-fail on kernel panic markers anywhere in the boot (the aarch64
+# gate's PANIC_RE rule; the real-chain "syscall 10 unimplemented" notes
+# are NOT panics — the 14-06 gate's documented exemption class) and,
+# since 19-09, on the cpurc FAIL vocabulary — the cpu leg's failure
+# legs name themselves on the wire; waiting the full timeout for the
+# absent ok marker would only hide them (the cpu-bringup rule)
+expect_before {
+    -re {panic|Unhandled interrupt} {
+        puts stderr "smoke-r9-x64: kernel panic marker on the wire — aborting"
+        cleanup
+        exit 1
+    }
+    -re {cpurc: FAIL} {
+        puts stderr "smoke-r9-x64: cpurc printed a FAIL marker — aborting (the failing leg is named on the wire)"
+        cleanup
+        exit 1
+    }
+}
+
+# --- the hostfwd listener observation (19-09, cpu-bringup's chassis) ---
+proc host_listeners {} {
+    if {![catch {exec ss -tln} out]} { return $out }
+    if {![catch {exec netstat -tln} out]} { return $out }
+    return ""
+}
+proc hostfwd_stage {port} {
+    set listeners [host_listeners]
+    if {$listeners eq ""} {
+        puts stderr "smoke-r9-x64: FAILED at stage: hostfwd-$port-listening — no host listening-table tool produced output (ss/netstat both missing?)"
+        cleanup
+        exit 1
+    }
+    if {![regexp "127\\.0\\.0\\.1:${port}( |\$)" $listeners]} {
+        puts stderr "smoke-r9-x64: FAILED at stage: hostfwd-$port-listening — no 127.0.0.1:$port loopback entry in the host listening table (the slirp hostfwd bind is missing); table follows:"
+        puts stderr $listeners
+        cleanup
+        exit 1
+    }
+    puts stderr "smoke-r9-x64: stage ok — hostfwd-$port-listening (127.0.0.1:$port present in the host listening table)"
+}
+
+# 1. the staged boot sequence: banner → boot(8)'s paqfs handoff → its
+#    9P version handshake (the aarch64 stacksmoke slot — x64 has no
+#    demand-paged stack this era; the chain's own print at the
+#    equivalent point) → prompt
+stage banner    {r9 from the Internet}
+stage paqfs     {paqfs\.\.\.}
+stage version   {version\.\.\.}
+stage prompt    {% }
+
+# 2. the echo round-trip: typed input is READ, cooked, ECHOED, answered.
+#    The marker occurs TWICE on the wire — the typed command's echo
+#    first, then the echo builtin's OUTPUT — so the round-trip is
+#    staged two-occurrence (a missing echo OR a missing output fails
+#    its own stage).
+send "echo r9x64shell7\r"
+stage echo-echoed   {r9x64shell7}
+stage echo-response {r9x64shell7}
+stage echo-prompt   {% }
+
+# 2b. EMPTY-LINE safety (14-07's flagged assumption, now a stage): a
+#     bare newline at the prompt is the degenerate command line — rc
+#     must return a FRESH prompt, and the marker anchor must survive
+#     it (the sweep stages below still match their prompts).
+send "\r"
+stage emptyline-prompt {% }
+
+# 3. the command sweep — each command's output is captured up to the
+#    next prompt, then PRESENCE-asserted.  With cooked echo on the
+#    wire, every capture begins with the ECHOED command line — strip
+#    everything through the first newline before asserting (never
+#    presence-match the echo instead of the output).
+
+# strip everything through the first newline (the echoed command line)
+proc strip_echoed_line {capture} {
+    set nl [string first "\n" $capture]
+    if {$nl < 0} { return $capture }
+    string range $capture [expr {$nl + 1}] end
+}
+
+# 3a. ls /bin — the sweep binaries are present (/bin binds
+#     /root/amd64/bin through the namespace): five word-anchored
+#     presence assertions.
+send "ls /bin\r"
+stage ls-prompt {% }
+set lsout [strip_echoed_line $expect_out(buffer)]
+foreach name {rc ls cat echo ps} {
+    if {![regexp "\\m$name\\M" $lsout]} {
+        puts stderr "smoke-r9-x64: ls /bin missing '$name'"
+        cleanup
+        exit 1
+    }
+}
+puts stderr "smoke-r9-x64: stage ok — ls /bin subset (rc ls cat echo ps present)"
+
+# 3b. ps — one line per LIVE process (devproc): at least 3 lines
+#     matching the pid-and-name shape ("glenda <pid> … <name>"), one
+#     of them rc.
+send "ps\r"
+stage ps-prompt {% }
+set psout [strip_echoed_line $expect_out(buffer)]
+set pslines [regexp -all -inline {glenda +\d+[^\n]*} $psout]
+if {[llength $pslines] < 3} {
+    puts stderr "smoke-r9-x64: ps printed [llength $pslines] process lines (< 3)"
+    cleanup
+    exit 1
+}
+set rcfound 0
+foreach l $pslines {
+    if {[regexp { rc$} [string trimright $l " \r"]]} { incr rcfound }
+}
+if {$rcfound < 1} {
+    puts stderr "smoke-r9-x64: ps output has no rc line"
+    cleanup
+    exit 1
+}
+puts stderr "smoke-r9-x64: stage ok — ps ([llength $pslines] process lines, rc present)"
+
+# 3c. cat /lib/namespace — the shipped file's known line rides the
+#     mounted tree's read path verbatim.
+send "cat /lib/namespace\r"
+stage cat-prompt {% }
+set catout [strip_echoed_line $expect_out(buffer)]
+if {![string match "*bind -c #e /env*" $catout]} {
+    puts stderr "smoke-r9-x64: cat /lib/namespace missing 'bind -c #e /env'"
+    cleanup
+    exit 1
+}
+puts stderr "smoke-r9-x64: stage ok — cat /lib/namespace (known line present)"
+
+# 4. DEL safety: a partial command with no newline sits in the line
+#    assembly; DEL (0x7f) posts the interrupt note to rc's note group,
+#    discards the partial, and fails rc's read "interrupted" — rc's
+#    Eintr path re-prompts.  rc MUST be alive.
+send "fnord"                       ;# partial, no newline (a non-command:
+                                   ;# a flush failure can never echo the
+                                   ;# stage marker through it)
+send "\x7f"                        ;# DEL
+stage del-reprompt {% }            ;# rc interrupted + re-prompted, not dead
+
+send "echo r9x64delok\r"
+stage del-echoed  {r9x64delok}     ;# occurrence 1: the typed echo
+stage del-answer  {r9x64delok}     ;# occurrence 2: the OUTPUT — the partial did NOT corrupt the fresh command
+stage del-prompt  {% }
+
+# 5. exit → init's for(;;) restart: a fresh prompt proves the restart
+#    loop end-to-end.
+send "exit\r"
+stage restart-print {init: starting /bin/rc}
+stage restart-prompt {% }
+
+# 6. pid-warning-absent: #c/pid resolved getpid() all boot, so init's
+#    pri-10 write named the REAL pid — the designed-degradation
+#    warning's pid-0 ctl path fragment must be ABSENT from the whole
+#    capture (its presence proves getpid() failed and the write
+#    targeted pid 0).
+log_file                           ;# stop + flush before the whole-file scan
+set fh [open $env(R9_SMOKE_LOG) r]
+set whole [read $fh]
+close $fh
+if {[string match "*#p/0/ctl*" $whole]} {
+    puts stderr "smoke-r9-x64: pid-0 ctl path present in the capture — getpid() regressed"
+    cleanup
+    exit 1
+}
+puts stderr "smoke-r9-x64: stage ok — pid-warning-absent (no #p/0/ctl in the capture)"
+
+# 7. nic-bind: D-10's end state — the composed boot bound the always-on
+#    virtio-net NIC.  The driver's bind line must be PRESENT in the
+#    whole capture (the inverted whole-file scan: ABSENCE fails).
+#    PRESENCE ONLY: the network smoke itself is 14-09's gate (the
+#    venue-honesty rule — this stage proves the driver bound, not that
+#    /net speaks).
+if {![string match "*#l0: virtio: 1000Mbps: *" $whole]} {
+    puts stderr "smoke-r9-x64: nic-bind FAILED — no '#l0: virtio: 1000Mbps: ' bind line in the capture (the composed boot did not bind the NIC)"
+    cleanup
+    exit 1
+}
+puts stderr "smoke-r9-x64: stage ok — nic-bind (#l0: virtio: 1000Mbps: bind line present in the capture)"
+
+# 8. THE CPU-CHAIN LEG (19-09, INT-05): the full-system bring-up in the
+#    same composed gate.  The chain leg is DONE — kill its qemu first
+#    (one live guest at a time; the cpu leg owns the wire from here).
+#    The spawn argv is the SPLIT R9_NETDEV_ARGV: the emitter's slirp
+#    tokens carrying the D-04 hostfwd pair (127.0.0.1:17010 cpu +
+#    127.0.0.1:5670 auth) — NO netdev literal here (the 16-06 rule).
+#    The ISO already carries the bootconf append (the caller composed
+#    it with --append=init=/amd64/init -c): NOTHING is typed on this
+#    leg — every marker is boot-flow output (the direct-run
+#    discipline; cpu-bringup.expect's vocabulary).
+cleanup
+
+set netdev_argv {}
+foreach tok [split $env(R9_NETDEV_ARGV)] {
+    if {$tok ne ""} {
+        lappend netdev_argv $tok
+    }
+}
+if {[llength $netdev_argv] == 0} {
+    puts stderr "smoke-r9-x64: R9_NETDEV_ARGV is empty — the caller's emitter capture failed (the slirp argv is required)"
+    exit 2
+}
+
+# fresh capture for THIS leg (rm -f + log_file; the chain leg's capture
+# is closed and already post-passed above)
+exec rm -f $env(R9_CPU_LOG)
+spawn $QEMU -M $R9_MACHINE -cpu $R9_CPU -smp 1 -m 1024M \
+    -accel $R9_ACCEL \
+    -cdrom $env(R9_CPU_ISO) \
+    {*}$netdev_argv \
+    -nographic \
+    -name $run_tag
+set spawn_pid [exp_pid]
+log_file $env(R9_CPU_LOG)
+
+# 8a. the staged cpu boot in EMISSION order (the 15-03 lesson, carried
+#     from cpu-bringup: the kernel prints the bootconf line between
+#     the banner and paqfs, so it is staged HERE, never after):
+#     banner → the bootconf seed line (the append seam reached the
+#     seeded ROOT env group — the kernel's own print, 19-01's tracer
+#     line) → paqfs → version
+stage cpu-banner   {r9 from the Internet}
+stage cpu-bootconf {devenv: bootconf init=/amd64/init -c}
+stage cpu-paqfs    {paqfs\.\.\.}
+stage cpu-version  {version\.\.\.}
+
+# 8b. the hostfwd pair observed host-side while the guest boots (the
+#     committed TOML pair rides the emitter's argv; qemu's eager bind
+#     aborts on failure — this makes BOTH loopback entries explicit;
+#     the exec does not consume the pty buffer)
+hostfwd_stage 17010
+hostfwd_stage 5670
+
+# 8c. the cpurc ladder in EMISSION order (the ordered stages ARE the
+#     order assertion — expect consumes the buffer to each match):
+#     pairing → the ether reception seam (the hostfwd pair's guest
+#     side, 19-08) → keyfs → the listen1 -t authsrv announce →
+#     factotum's key write → the aux/listen tcp17010 announce → DONE.
+#     A cpurc: FAIL marker anywhere fast-aborts via expect_before.
+stage cpu-pair-ok        {cpurc: PAIR-OK}
+stage cpu-ether-ok       {cpurc: ETHER-OK}
+stage cpu-keyfs-ok       {cpurc: KEYFS-OK}
+stage cpu-authsrv-listen {cpurc: AUTHSRV-LISTEN}
+stage cpu-factotum-ok    {cpurc: FACTOTUM-OK}
+stage cpu-listen-17010   {cpurc: LISTEN-17010}
+stage cpu-ladder-done    {cpurc: DONE}
+
+# 8d. the post-cpurc % prompt — init's own loop after cpurc returns
+#     (normal post-cpurc behavior on this venue; the all-exited
+#     alternative is 19-07's recorded finding)
+stage cpu-prompt {% }
+
+# 8e. the whole-capture post-passes: stop the log, read the capture,
+#     assert zero cpurc: FAIL, zero panic, ZERO desktop font-line
+#     markers (DESK-02's serial proof at the standing gate — the
+#     desktop starts ONLY in-session; an unguarded rio would print the
+#     font path in its startup failure and red HERE), and the bootconf
+#     + DONE lines present whole-capture
+log_file                           ;# stop + flush before the whole-file scan
+set cfh [open $env(R9_CPU_LOG) r]
+set cpuwhole [read $cfh]
+close $cfh
+if {[string first "cpurc: FAIL" $cpuwhole] >= 0} {
+    puts stderr "smoke-r9-x64: cpurc: FAIL present in the cpu capture — a leg failed"
+    cleanup
+    exit 1
+}
+puts stderr "smoke-r9-x64: cpu post-pass ok — zero cpurc: FAIL in the capture"
+if {[string first "panic" $cpuwhole] >= 0} {
+    puts stderr "smoke-r9-x64: a panic marker is present in the cpu capture"
+    cleanup
+    exit 1
+}
+puts stderr "smoke-r9-x64: cpu post-pass ok — zero panic markers in the capture"
+set cpu_font_hits [regexp -all {latin1\.8\.font} $cpuwhole]
+if {$cpu_font_hits != 0} {
+    puts stderr "smoke-r9-x64: DESK-02 VIOLATED — the desktop font-line marker appears $cpu_font_hits time(s) in the cpu capture (the desktop must start ONLY in-session; the profile never runs at boot and the window-manager exec is draw-guarded)"
+    cleanup
+    exit 1
+}
+puts stderr "smoke-r9-x64: cpu post-pass ok — zero desktop font-line markers (DESK-02: the desktop is provably absent from boot)"
+if {[string first "devenv: bootconf init=/amd64/init -c" $cpuwhole] < 0} {
+    puts stderr "smoke-r9-x64: the bootconf seed line is absent from the cpu capture (the append seam never reached the seed)"
+    cleanup
+    exit 1
+}
+if {[string first "cpurc: DONE" $cpuwhole] < 0} {
+    puts stderr "smoke-r9-x64: cpurc: DONE absent from the cpu capture (an earned green went unobserved)"
+    cleanup
+    exit 1
+}
+puts stderr "smoke-r9-x64: cpu post-pass ok — the bootconf line + DONE present whole-capture"
+
+puts stderr "smoke-r9-x64: ALL STAGES PASS — chain leg: boot, echo (typed + answered), empty-line safety, ls/ps/cat sweep, DEL safety, restart, pid-warning-absent, nic-bind; cpu-chain leg: §15 boot with the bootconf append, the hostfwd pair observed host-side (17010 + 5670), the cpurc ladder in order (PAIR-OK, ETHER-OK, KEYFS-OK, AUTHSRV-LISTEN, FACTOTUM-OK, LISTEN-17010, DONE), the post-cpurc prompt, zero FAIL, zero panic, zero desktop font-line markers"
+cleanup
+exit 0

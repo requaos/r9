@@ -1,0 +1,300 @@
+#!/usr/bin/expect -f
+# churn-r9.expect — the 17-02 composed churn gate for x86_64 (D-06
+# tier (b)): netsoak-r9.expect's discipline carried VERBATIM (header
+# hygiene, marker discipline, fast-fail arms, whole-capture
+# post-passes, every-exit-path qemu teardown) and re-keyed onto the
+# CHURN venue — net-free by design (no netdev argv, no doctor, no
+# peer: the churn load touches no net device), booting the COMPOSED
+# ISO (r9 kernel-x64 — the q35churnshell config, carrying the
+# per-exit churngate heap marker through the same dev_churn cfg gate
+# as the r9-side tier) with the CHURN bake (the chain tree + test/dc
+# + /lib/churn-cats.rc) as /boot/bootfs.paq.  This script spawns qemu
+# DIRECTLY:
+#
+#   chain boot (banner → paqfs... → version... → %  prompt) →
+#   ONE typed line: `/bin/churncats' (the staged C churn driver — the
+#   tcpblast lineage; the rc-fixture variant measured rc's own
+#   userland pool corrupting past ~428 iterations, a finding recorded
+#   with this plan) →
+#   OUTPUT-ONLY stages in the fixture's emission order: churn: BEFORE
+#   → churn: AFTER → churn: CATS-DONE 1400 → the % prompt again (the
+#   fixture's rc exited) →
+#   whole-capture post-passes: the exact-count contract (exactly one
+#   CATS-DONE 1400), zero churn: FAIL, and THE BOUNDED-MEMORY
+#   ASSERTION — the heap-marker window: the kernel's per-exit
+#   `churngate: heap exit <used> <total>' lines between the BEFORE and
+#   AFTER markers bound the churn window's per-EXIT cursor delta
+#   (delta over the window's exit count, every number parsed from the
+#   wire) against the committed bound (see the data block below for
+#   the derivation).
+#
+#   exit 0 only when EVERY stage + post-pass passed; a failure exits 1
+#   and names the failed stage on stderr WITH the capture tail — a
+#   stall IS the finding (the no-pacing posture), so the driver never
+#   hangs silently: per-stage timeouts plus an OVERALL wall-clock
+#   budget both fail loud.
+#
+# Markers: PRESENCE assertions only, never interleaving order among
+# concurrent producers.  Patterns are CRLF-tolerant substrings.  The
+# `churn:' prefix is deliberately distinct from the kernel's
+# `churngate:' and the fixtures' `netip:'/`netsoak:' vocabularies (the
+# carried marker-prefix discipline).  The typed launch line is SHORT
+# (≤ ~120 chars — the 16550 RX ring's measured burst-truncation
+# limit).
+#
+# TYPED-INPUT + LOG DISCIPLINE (carried, measured): log_user stays ON
+# — expect 5.45 writes NOTHING to log_file when log_user is 0; the
+# wire echo is the visible progress.  The capture is rm -f'd fresh
+# below (the caller does it too).  Every exit path kills qemu's
+# process group.
+#
+# Env (exported by nix/gates/churn-r9-x64.sh — the flake app):
+#   R9_QEMU          default qemu-system-x86_64
+#   R9_ISO           REQUIRED — the COMPOSED ISO (kernel-x64 at the
+#                    q35churnshell config + the CHURN bake)
+#   R9_CHURN_LOG     REQUIRED — the serial capture (fresh per run)
+#   R9_MACHINE/R9_CPU/R9_ACCEL — the caller-selected q35 shape
+#                    (defaults q35/host/kvm; TCG selects qemu64)
+#   R9_RUN_TAG       the per-run unique tag in qemu's argv (-name);
+#                    the caller's survivor sweep keys on it
+#
+# usage: env R9_ISO=… R9_CHURN_LOG=… expect gates/x86_64/churn-r9.expect
+# exit 0 on all-pass; exit 1 names the failed stage on stderr; exit 2
+# on a contract violation (missing env).
+
+set stage_timeout 2700             ;# per stage — the churn loop spans
+					     ;# ~1400 x (cat+dc) fork+exec
+					     ;# iterations at the measured
+					     ;# KVM pace (~0.28s/exec, the
+					     ;# 16-08 measurement) — the
+					     ;# carried 600s kills it
+					     ;# mid-loop; 2700s is the
+					     ;# soak budget shape
+set overall_budget 3600              ;# whole-sequence wall clock
+match_max 65536
+
+# --- gate data (single-source-as-data, the netsoak shape) -------------
+# The exact-count contract: the fixture's committed N (1400 — the #44
+# repro shape; the fixture prints it, this gate greps it verbatim).
+set churn_n 1400
+# The bounded-memory bound (bytes of bump-cursor growth per EXIT in
+# the churn window, host-side): the SAME derivation as the kernel-side
+# tier's ceiling — max(3 x steady, 1024) + 512 over 17-02's first
+# measured-green baseline (the kernel tier's early leg measured 420
+# bytes/exec steady; the post-#44-fix steady leg 60) = 1772.  The
+# kernel asserts its own ceiling on its own samples; this is the
+# composed venue's twin over the per-exit marker lines — one
+# committed derivation, two venues.
+set churn_bound 1772
+
+# --- required env (loud, before any spawn) -------------------------------
+foreach v {R9_ISO R9_CHURN_LOG} {
+    if {![info exists env($v)]} {
+        puts stderr "churn-r9-x64: \$$v unset — run via the flake app (nix run .#boot-r9-churn-x64)"
+        exit 2
+    }
+}
+set QEMU [expr {[info exists env(R9_QEMU)] ? $env(R9_QEMU) : "qemu-system-x86_64"}]
+set run_tag [expr {[info exists env(R9_RUN_TAG)] ? $env(R9_RUN_TAG) : "r9x64churn-[pid]-[clock seconds]"}]
+set R9_MACHINE [expr {[info exists env(R9_MACHINE)] ? $env(R9_MACHINE) : "q35"}]
+set R9_CPU [expr {[info exists env(R9_CPU)] ? $env(R9_CPU) : "host"}]
+set R9_ACCEL [expr {[info exists env(R9_ACCEL)] ? $env(R9_ACCEL) : "kvm"}]
+
+# --- Hygiene: a fresh capture per run -----------------------------------
+exec rm -f $env(R9_CHURN_LOG)
+
+# --- spawn qemu: the composed ISO on -cdrom, NET-FREE --------------------
+spawn $QEMU -M $R9_MACHINE -cpu $R9_CPU -smp 1 -m 1024M \
+    -accel $R9_ACCEL \
+    -cdrom $env(R9_ISO) \
+    -nographic \
+    -name $run_tag
+set spawn_pid [exp_pid]
+log_file $env(R9_CHURN_LOG)
+
+set deadline [expr {[clock seconds] + $overall_budget}]
+
+# --- teardown: kill qemu's process group ------------------------------
+proc cleanup {} {
+    global spawn_pid
+    catch { exec kill -KILL -- -$spawn_pid 2>/dev/null }
+    catch { exec kill -KILL $spawn_pid 2>/dev/null }
+}
+
+# --- the capture tail: a failure prints WHERE on the wire it died -----
+proc fail_tail {} {
+    global env
+    catch { log_file }
+    if {[catch {
+        set fh [open $env(R9_CHURN_LOG) r]
+        set whole [read $fh]
+        close $fh
+    }]} {
+        puts stderr "churn-r9-x64: (no capture to tail: $env(R9_CHURN_LOG))"
+        return
+    }
+    set lines [split $whole "\n"]
+    set tail [lrange $lines end-39 end]
+    puts stderr "churn-r9-x64: capture tail (last [llength $tail] lines of $env(R9_CHURN_LOG)):"
+    foreach l $tail {
+        puts stderr "  | $l"
+    }
+}
+
+# the one loud exit: message + tail + teardown + exit 1
+proc bail {msg} {
+    puts stderr "churn-r9-x64: $msg"
+    fail_tail
+    cleanup
+    exit 1
+}
+
+# --- staged ordered assertions (the netsoak stage proc, carried) -------
+proc stage {name re {tmo 0}} {
+    global expect_out deadline stage_timeout timeout
+    set remaining [expr {$deadline - [clock seconds]}]
+    if {$remaining <= 0} {
+        bail "OVERALL budget (${::overall_budget}s) exhausted before stage: $name — a stall is the finding; the tail names where"
+    }
+    set tm $stage_timeout
+    if {$tmo > $stage_timeout} {
+        set tm $tmo
+    }
+    if {$remaining < $tm} {
+        set tm $remaining
+    }
+    set timeout $tm
+    expect {
+        -re $re { puts stderr "churn-r9-x64: stage ok — $name" }
+        timeout { bail "TIMEOUT at stage: $name (per-stage ${tm}s, overall budget ${::overall_budget}s) — the tail names where the wire went quiet" }
+        eof { bail "qemu exited (EOF) at stage: $name" }
+    }
+}
+
+# fast-fail on kernel panic markers anywhere in the boot (carried) —
+# and on the fixture's own `churn: FAIL <what>' OUTPUT line (the
+# fixture names its failing precondition on the wire; waiting the full
+# timeout for the absent ok marker would only hide it).  The typed
+# launch line carries neither pattern.
+expect_before {
+    -re {panic|Unhandled interrupt|oom:} {
+        bail "kernel panic/oom marker on the wire — aborting"
+    }
+    -re {churn: FAIL} {
+        bail "the fixture printed churn: FAIL — aborting (the failing step is named on the wire)"
+    }
+}
+
+# 1. the chain boot sequence (the composed smoke's shape): banner →
+#    boot(8)'s paqfs handoff → its 9P version handshake → the % prompt
+stage banner    {r9 from the Internet}
+stage paqfs     {paqfs\.\.\.}
+stage version   {version\.\.\.}
+stage prompt    {% }
+
+# 2. THE TYPED DRIVER LAUNCH — one short line.  Everything after is
+#    OUTPUT-ONLY staging: the typed echo carries none of the driver's
+#    markers, so each stages single-occurrence in the driver's print
+#    order.  Between BEFORE and AFTER the serial streams one exit pair
+#    per iteration (the churncats fork + the exec'd cat) with their
+#    per-exit heap markers — consumed past, never staged, never
+#    ordered (the window post-pass owns them).
+send "/bin/churncats\r"
+stage before    {churn: BEFORE}
+stage after     {churn: AFTER} $stage_timeout
+stage catsdone  {churn: CATS-DONE 1400}
+stage reprompt  {% }
+
+# --- whole-capture post-passes (the counting discipline) ---------------
+# (a) the exact-count contract: exactly one CATS-DONE naming $churn_n.
+# (b) zero `churn: FAIL' occurrences (the fast-fail caught the first;
+#     this is the whole-file backstop).
+# (c) THE BOUNDED-MEMORY ASSERTION — the heap-marker window: the
+#     kernel's per-exit `churngate: heap exit <used> <total>' lines
+#     strictly between the BEFORE and AFTER markers bound the churn
+#     window's cursor delta per EXIT — every number parsed from the
+#     wire (first/last cursor, the window's exit count), never a
+#     kernel-side constant.
+catch { log_file }   ;# stop + flush before the whole-file scan
+set fh [open $env(R9_CHURN_LOG) r]
+set whole [read $fh]
+close $fh
+
+proc count_occurrences {haystack needle} {
+    set n 0
+    set pos 0
+    while {1} {
+        set idx [string first $needle $haystack $pos]
+        if {$idx < 0} {
+            break
+        }
+        incr n
+        set pos [expr {$idx + [string length $needle]}]
+    }
+    return $n
+}
+
+set done_count [count_occurrences $whole "churn: CATS-DONE 1400"]
+if {$done_count != 1} {
+    bail "churn: CATS-DONE 1400 COUNT FAILED — got $done_count, want exactly 1 (absent names a loop that never finished; >1 names a duplicate)"
+}
+puts stderr "churn-r9-x64: post-pass ok — churn: CATS-DONE 1400 exactly once"
+
+set fail_count [count_occurrences $whole "churn: FAIL"]
+if {$fail_count != 0} {
+    bail "churn: FAIL COUNT FAILED — $fail_count occurrence(s) in the whole capture (the fast-fail arm should have caught the first; this is the whole-file backstop)"
+}
+puts stderr "churn-r9-x64: post-pass ok — zero churn: FAIL occurrences"
+
+# (c) the window: heap lines strictly between the BEFORE and AFTER
+#     marker lines; the exit count = `process ... exited' lines in the
+#     same window (the cat AND the dc counter exec per iteration — the
+#     per-EXIT delta is the honest unit).
+set before_idx [string first "churn: BEFORE" $whole]
+set after_idx [string first "churn: AFTER" $whole]
+if {$before_idx < 0 || $after_idx < 0 || $after_idx <= $before_idx} {
+    bail "heap-window anchors absent or reversed (BEFORE at $before_idx, AFTER at $after_idx)"
+}
+set window_end [string first "\n" $whole $after_idx]
+if {$window_end < 0} {
+    set window_end [string length $whole]
+}
+# the window STARTS at the end of the BEFORE marker's line (exits
+# after it belong to the churn)
+set window_start [string first "\n" $whole $before_idx]
+if {$window_start < 0} {
+    bail "heap-window: no newline after the BEFORE marker"
+}
+set window [string range $whole $window_start $window_end]
+
+set win_lines [split $window "\n"]
+set first_used -1
+set last_used -1
+set exits 0
+foreach l $win_lines {
+    if {[regexp {^churngate: heap exit ([0-9]+) [0-9]+$} $l -> used]} {
+        if {$first_used < 0} {
+            set first_used $used
+        }
+        set last_used $used
+    }
+    if {[regexp {^process [0-9]+ exited:} $l]} {
+        incr exits
+    }
+}
+if {$first_used < 0 || $exits < 1} {
+    bail "heap-window empty — no per-exit heap markers or exits between BEFORE and AFTER (the composed kernel must carry the churn dev key)"
+}
+if {$last_used < $first_used} {
+    bail "heap-window cursor SHRANK ($first_used -> $last_used) — impossible by the slope doctrine"
+}
+set delta [expr {$last_used - $first_used}]
+set per_exit [expr {$delta / $exits}]
+if {$per_exit > $churn_bound} {
+    bail "heap bound FAILED — $per_exit bytes/exit over the window ($delta over $exits exits) exceeds the committed bound $churn_bound (the #44 shape: unbounded drain under real mounted-binary exec)"
+}
+puts stderr "churn-r9-x64: post-pass ok — heap bound held: $delta bytes over $exits exits = $per_exit bytes/exit <= $churn_bound"
+
+puts stderr "churn-r9-x64: ALL STAGES PASS — chain boot, the typed churn fixture ($churn_n cat iterations), the exact-count contract, zero FAIL, and the bounded-memory window ($per_exit bytes/exit <= $churn_bound, parsed from the kernel's own per-exit markers)"
+cleanup
+exit 0
