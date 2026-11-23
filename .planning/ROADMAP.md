@@ -57,7 +57,7 @@ Milestone numbering continues from the closed Harvey-rooted milestone v2.1.
   5. The existing x86_64 q35 boot-test profiles and the aarch64 virt quick pass still pass through the reconciled mechanism.
   6. Inside `nix develop`, with nothing set by hand, `cargo xtask` commands find the Harvey tree: the r9 flake pins Harvey and the devshell exports its read-only location, and that tree contains the pre-built artifacts the harness needs.
   7. Flake ownership is flipped: r9's flake imports Harvey and exposes the composed boot and gate outputs that Harvey's flake used to own, Harvey's flake has no `r9` input, and each moved gate passes when run from r9.
-**Plans**: 5/7 plans executed in planning pass 1 (research spikes S1-S6 and the owner checkpoint, D-22); pass-2 plans TBD after the spike results
+**Plans**: 6/7 plans executed in planning pass 1 (research spikes S1-S6 and the owner checkpoint, D-22); pass-2 plans TBD after the spike results
 
 Plans:
 **Wave 1**
@@ -68,7 +68,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [x] 01-02-PLAN.md — S2 case collisions through the builder, A9 lazy devshell, S4 amd64 tiers on aarch64-linux
-- [ ] 01-06-PLAN.md — Owner's Linux KVM witness session for S1, S3, S5, S6
+- [x] 01-06-PLAN.md — Owner's Linux KVM witness session for S1, S3, S5, S6
 
 **Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 01-07-PLAN.md — Pass-1 closing: consolidated results and the owner's decisions (D-04 after S2)
@@ -301,7 +301,7 @@ Phases execute in numeric order: 1 → 2 → 3 → … → 16 (decimal insertion
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 1. Stage P0 - Cross-Build Harness | v3.0 | 5/7 | In Progress | - |
+| 1. Stage P0 - Cross-Build Harness | v3.0 | 6/7 | In Progress | - |
 | 2. Guide Phase 0 - Design Lock and rfork Flag Reservation | v3.0 | 0/TBD | Not started | - |
 | 3. Guide Phase 1 - crypto/ and ds/ Foundations | v3.0 | 0/TBD | Not started | - |
 | 4. Guide Phase 2 - 9P2000.aead Transport and FidTable | v3.0 | 0/TBD | Not started | - |

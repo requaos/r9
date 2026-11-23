@@ -5,16 +5,16 @@ milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
 current_phase: 01
 current_phase_name: Stage P0 - Cross-Build Harness
 status: executing
-stopped_at: Completed 01-02-PLAN.md
-last_updated: "2026-11-23T01:22:17.674Z"
+stopped_at: Completed 01-06-PLAN.md
+last_updated: "2026-11-23T02:46:03.307Z"
 last_activity: 2026-11-23
-last_activity_desc: Phase 01 plan 02 (S2/A9/S4) completed
-state_head: d7c8ef80980f12589b4db04ad5ef71c2fd259a61
+last_activity_desc: Phase 01 plan 06 (Linux KVM witness) completed
+state_head: 8ba927ed5f6cc6baacb863bb1592e4f8e0d43c24
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 7
-  completed_plans: 5
+  completed_plans: 6
   percent: 0
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-11-22)
 ## Current Position
 
 Phase: 01 (Stage P0 - Cross-Build Harness) — EXECUTING
-Plan: 6 of 7
+Plan: 7 of 7
 Status: Ready to execute
 Last activity: 2026-11-23 — Plan 02 (S2/A9/S4) completed
 
@@ -57,6 +57,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 01 P05 | 5 min | 2 tasks | 8 files |
 | Phase 01 P01 | 13 min | 3 tasks | 8 files |
 | Phase 01 P02 | 9min | 3 tasks | 15 files |
+| Phase 01 P06 | 80min | 3 tasks | 19 files |
 
 ## Accumulated Context
 
@@ -91,6 +92,12 @@ Full log is the PROJECT.md Key Decisions table. Recent:
 - [Phase 01]: A9: a context-discarded outPath in the darwin devshell is lazy (no build sent) and equals the later build path, so HARN-07's supply can meet D-05
 - [Phase 01]: S4: the amd64 tier 0 (27 libs, 6 s) and tier 1 (40 cmds, 19 s, all S_MAGIC 00008a97) build on the aarch64-linux builder with two venue ports: /rc/bin on PATH for membername and an explicit INCLUDE list for a latent 6c heap-layout failure under proot; A3/A4 CONFIRMED, A8 REFUTED
 - [Phase 01]: On APFS a bare [ -f ] lookup resolves the case twin; Mac-side re-checks must enumerate exact names, and tree outputs read by xtask must not contain colliding names
+- [Phase 01]: Plan 01-06 witness verdicts: PASS s1 rung2 (proot libc 601170 B/259 members), s3 control, s5 q35 KVM (kernel ecdcdad matched), s6 x86_64 (control/probe/flipback sha-equal=yes; probe db94057f matched); FAIL s1 rung1 (unshare /nix/store bind, exit 32), s3 rio (tr-ok then password-feed timeout, no S3-RIO-SERVING), s3 determinism (bake2 aborted, hsecstored missing).
+- [Phase 01]: A1 scoped: unshare is REFUTED on both the lima aarch64 builder and the x86_64 witness, but proot rung 2 PASSes on both; pass 2's tree derivation must use proot and not assume unshare.
+- [Phase 01]: A12 REFUTED: the second mkimage bake aborts at the auth bake (hsecstored missing from the computed auth-suite set), so no image reached a determinism comparison; resolve the auth-suite resolver before planning byte-diff tests.
+- [Phase 01]: A5/A6/A7/A11 CONFIRMED: the -G control's serial ls /srv shows no rio entry, drawterm runs under Xvfb and authenticates, the amd64 a.out probe prints R9-RUST-AOUT-PROBE-OK, and Harvey's kernel reaches the q35 KVM prompt with no signature.
+- [Phase 01]: Gate teardown finding: drawterm PID 88800 survived the rio-gate timeout; ps shows the store path, not the r9s3riogate-dt-* argv0 tag, so pass 2 must reap by scratch/dial identity or the pty child pid.
+- [Phase 01]: HARN-01/04/07/08 stay pending in REQUIREMENTS.md: pass 1 is spikes only under the D-22 override; the 01-06 summary lists them for traceability but mark-complete was not run.
 
 ### Open Questions (ten warnings, approved to be carried, not resolved)
 
@@ -152,6 +159,6 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 
 ## Session Continuity
 
-Last session: 2026-11-23T01:22:17.335Z
-Stopped at: Completed 01-02-PLAN.md
+Last session: 2026-11-23T02:46:03.284Z
+Stopped at: Completed 01-06-PLAN.md
 Resume file: None
