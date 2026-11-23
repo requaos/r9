@@ -1,0 +1,122 @@
+S1 builder bring-up — lima VM `harvey` (owner reply: lima, 2026-11-22)
+
+No Mac configuration changed: no FlakeHub login, no determinate-nixd auth
+login, no edit under /etc/nix on the Mac. Everything below is either
+read-only inspection on the Mac or a change inside the guest VM.
+
+== Mac side (read-only) ==
+
+$ nix --version
+nix (Determinate Nix 3.21.0) 2.34.6
+
+$ determinate-nixd status
+Authentication: logged-out
+
+$ ls /nix/store | grep lima-2.2.0          (limactl is not on PATH)
+8szjcdjs279pd9h4d0s5dmyzjvi0lamh-lima-2.2.0
+
+$ /nix/store/8szjcdjs279pd9h4d0s5dmyzjvi0lamh-lima-2.2.0/bin/limactl start harvey
+level=info msg="Using the existing instance `harvey`"
+level=info msg="The instance `harvey` is already running. Run `limactl shell harvey` to open the shell."
+
+$ limactl list
+NAME      STATUS     SSH                VMTYPE    ARCH       CPUS    MEMORY    DISK     DIR
+harvey    Running    127.0.0.1:51721    vz        aarch64    4       8GiB      60GiB    ~/.lima/harvey
+
+== SSH path ==
+
+ssh -F /Users/neilskinner/.lima/harvey/ssh.config lima-harvey
+  (lima writes this Host block: User neilskinner, Hostname 127.0.0.1,
+  Port 51721, BatchMode yes. Its IdentityFile lines name lima's own
+  generated user key and the owner's ~/.ssh/id_ed25519; no key material is
+  reproduced here.)
+
+Every nix remote-store command ran with:
+  NIX_SSHOPTS="-F /Users/neilskinner/.lima/harvey/ssh.config -oControlPath=none"
+
+Why -oControlPath=none: lima's ssh.config sets `ControlMaster auto` and
+`ControlPath ~/.lima/harvey/ssh.sock`. Nix's ssh-ng store probes
+`ssh -O check lima-harvey` without its own -S first, so the probe finds
+lima's master socket and reports a master; nix then skips consuming the
+`-oLocalCommand=echo started` readiness line it relies on and the daemon
+handshake dies with:
+
+  error: cannot open connection to remote store 'ssh-ng://lima-harvey':
+    error: protocol mismatch, got 'started
+              oixd
+
+With ControlPath=none the probe fails, nix starts its own master on its own
+temporary socket, and the store works:
+
+$ nix store info --store ssh-ng://lima-harvey
+Store URL: ssh-ng://lima-harvey
+Version: 2.35.3
+Trusted: 1
+
+== Guest (Ubuntu 24.04 aarch64) ==
+
+$ ssh -F ~/.lima/harvey/ssh.config lima-harvey 'uname -a; id; nix --version; systemctl is-active nix-daemon'
+Linux lima-harvey 6.8.0-147-generic #147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:39:52 UTC 2026 aarch64 aarch64 aarch64 GNU/Linux
+uid=501(neilskinner) gid=1000(neilskinner) groups=1000(neilskinner),999(systemd-journal)
+nix (Determinate Nix 3.24.1) 2.35.3
+active
+
+== Guest-only config change (threat T-01-02) ==
+
+Appended one line to the GUEST's /etc/nix/nix.custom.conf:
+
+  trusted-users = root neilskinner
+
+then restarted the guest daemon (guest only):
+
+  sudo systemctl restart nix-daemon.service
+  $ nix config show trusted-users      (guest)
+  root neilskinner
+
+REVERT (guest only; never touches the Mac):
+
+  sudo sed -i '/^trusted-users = root neilskinner$/d' /etc/nix/nix.custom.conf
+  sudo systemctl restart nix-daemon.service
+
+== Namespace facts on the guest (A1 / A16) ==
+
+kernel                              6.8.0-147-generic
+user.max_user_namespaces            31405
+kernel.unprivileged_userns_clone    1
+kernel.apparmor_restrict_unprivileged_userns  1
+nix sandbox                         true
+nix build-users-group               (empty)
+nix auto-allocate-uids              setting not present in Determinate Nix 3.24.1
+
+$ unshare -Ur -m true        (as the ssh user, outside any nix build)
+unshare: write failed /proc/self/uid_map: Operation not permitted
+
+Inside the nix build sandbox (from the rung-1 evidence block):
+  id -u                1000
+  /proc/self/uid_map   1000 30001 1
+  /proc/self/ns/user   user:[4026532421]
+  /usr/bin/env         absent  (sandbox confirmed)
+
+Both facts are the Ubuntu 24.04 AppArmor restriction on unprivileged user
+namespaces (kernel.apparmor_restrict_unprivileged_userns=1). A nested
+`unshare -Ur` cannot write its uid_map: outside the sandbox the process has
+no CAP_SETUID over its own userns; inside the nix sandbox it is additionally
+uid 1000 in a userns it does not own. A16 is therefore live on this venue.
+
+== Builds through the store ==
+
+unshare venue (rung 1, leg s1-rung1-lima-aarch64):
+  nix build path:$S/s1#packages.aarch64-linux.s1-nsprobe \
+    --store ssh-ng://lima-harvey --eval-store auto -L --no-link --print-out-paths
+  -> unshare: write failed /proc/self/uid_map: Operation not permitted
+  -> builder failed with exit code 1  (exact log: s1/evidence/rung1-builder.log)
+
+proot venue (rung 1 fallback, leg s1-rung1-proot-lima-aarch64):
+  nix build path:$S/s1#packages.aarch64-linux.s1-nsprobe-proot \
+    --store ssh-ng://lima-harvey --eval-store auto -L --no-link --print-out-paths
+  -> /nix/store/i37wa62zgy4cwny5qpm026nv93nnbbkn-s1-nsprobe-proot-0
+  -> S1-VENUE-RC=0, S1-VENUE-OK
+
+x86_64-linux evaluation on the Mac (no build; Plan 06's witness run):
+  nix eval --raw path:$S/s1#packages.x86_64-linux.s1-nsprobe.drvPath
+  -> /nix/store/ny7zir5kilsg1sb88fx655fcp1dqs77a-s1-nsprobe-0.drv
