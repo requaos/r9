@@ -1,0 +1,19 @@
+# trimmed from witness/return-01-33/flipback/flipback.log (359 lines): the
+# flip-back clone assembled the 4442-member cpu image, then aborted in the
+# SAME pre-01-33 driver as the probe leg — PROBE_FLIPBACK_SHA (af7df344)
+# predates the 01-33 registration fix, so `expect_before -i $spawn_id` runs
+# before the qemu spawn (line 336).  The witness step now overlays this
+# checkout's fixed driver into the clone; the image and every other file stay
+# at the exact SHA.  A targeted rerun is pending.
+gate: image cpu /home/req/r9-witness-work/r9-probe-flipback/target/images/x86_64/cpu.paq sha256 a0ef53164d89e18a14a8c8198070629957327a6b45d7b9379413400dac3277cb members 4442
+gate: iso /home/req/r9-witness-work/r9-probe-flipback/target/boot-q35cpu.iso
+gate: leg rio (capture /home/req/r9-witness-work/r9-probe-flipback/target/gate/197244-1795451108/rio.log)
+can't read "spawn_id": no such variable
+    while executing
+"expect_before -i $spawn_id {
+	-re {panic|Unhandled interrupt} {
+		puts stderr "drawterm-gate: kernel panic marker on the wire — aborting"
+		cleanup
+..."
+    (file "/home/req/r9-witness-work/r9-probe-flipback/gates/x86_64/drawterm-gate.expect" line 336)
+GATE-FAIL rio-leg-failed (leg rio; capture /home/req/r9-witness-work/r9-probe-flipback/target/gate/197244-1795451108/rio.log)

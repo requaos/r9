@@ -1,0 +1,22 @@
+# trimmed from witness/return-01-33/probe/probe.log (425 lines): the probe
+# build succeeded, then the gate aborted in the CLONE's pre-01-33 driver —
+# gate/probe/flipback did NOT share one defect.  PROBE-FLIP_SHA (064747f4)
+# predates the 01-33 registration fix, so the clone still registers
+# `expect_before -i $spawn_id` before the qemu spawn (line 336) and dies with
+# a Tcl error before the serial /bin/ps marker can assert.  The witness step
+# now overlays this checkout's fixed driver into the clone; the probe image
+# and the swapped ps stay at the exact SHA.  A targeted rerun is pending.
+probe: 96 flat bytes -> 136 a.out bytes at /home/req/r9-witness-work/r9-probe-flip/target/probe/x86_64/ps.aout
+probe: /home/req/r9-witness-work/r9-probe-flip/target/probe/x86_64/ps.aout (136 bytes)
+gate: image cpu /home/req/r9-witness-work/r9-probe-flip/target/images/x86_64/cpu.paq sha256 457dec503a96f571e58904da46c0114fd8432f427b40c76592b52ca08d85b933 members 4442
+gate: iso /home/req/r9-witness-work/r9-probe-flip/target/boot-q35cpu.iso
+gate: leg rio (capture /home/req/r9-witness-work/r9-probe-flip/target/gate/184084-1795451060/rio.log)
+can't read "spawn_id": no such variable
+    while executing
+"expect_before -i $spawn_id {
+	-re {panic|Unhandled interrupt} {
+		puts stderr "drawterm-gate: kernel panic marker on the wire — aborting"
+		cleanup
+..."
+    (file "/home/req/r9-witness-work/r9-probe-flip/gates/x86_64/drawterm-gate.expect" line 336)
+GATE-FAIL rio-leg-failed (leg rio; capture /home/req/r9-witness-work/r9-probe-flip/target/gate/184084-1795451060/rio.log)
