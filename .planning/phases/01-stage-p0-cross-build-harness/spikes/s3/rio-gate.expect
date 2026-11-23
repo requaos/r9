@@ -1,0 +1,412 @@
+#!/usr/bin/expect -f
+# s3/rio-gate.expect — spike S3's headless rio proof (D-11).
+#
+# Rewired from Harvey bd7a6982a's `build/x86_64/drawterm-gate.expect`;
+# the chassis is kept (qemu under the emitter's slirp argv, the boot
+# ladder to cpurc: DONE, the hostfwd listener observation, the pty
+# password feedstage, the run-tag teardown, the redaction post-pass).
+# The terminal assertion changes:
+#
+#   S3_MODE=rio
+#     drawterm runs WITHOUT -G against the Xvfb DISPLAY exported by
+#     rio-gate.sh, so the cpu profile sees /mnt/term/dev/draw and runs
+#     `plumber; exec rio'.  The driver then owns the qemu serial
+#     console (init hands it an interactive rc after cpurc: DONE, so
+#     `init: starting /bin/rc' then a `% ' prompt), types `ls /srv'
+#     there, and requires BOTH `riowctl.<user>.<pid>` and
+#     `rio.<user>.<pid>' in the listing.  Success prints
+#     S3-RIO-SERVING.  Named failures: S3-FAIL rio-not-serving (no
+#     entries within the budget), S3-FAIL drawterm-exited (the client
+#     died, so rio died or never started), S3-FAIL no-session (the
+#     auth exchange was rejected or the console never reached rc).
+#
+#   S3_MODE=control-noG
+#     The same pipeline with -G (no draw device), so the profile must
+#     skip rio.  The driver waits for the cpu% shell prompt, types
+#     `ls /srv' on the serial console and requires NO `rio.' entry.
+#     Success prints S3-CONTROL-NO-RIO; a rio entry prints S3-FAIL
+#     control-saw-rio and exits non-zero.  This is the HARN-01
+#     non-zero-exit-when-rio-is-absent discrimination in the other
+#     direction: the control shows the assertion is not vacuous.
+#
+# The login name is S3_DT_USER (default glenda in rio-gate.sh): only
+# /usr/glenda/lib/profile is staged, and rcmain sources a profile only
+# when `rc -li' runs as a user whose $home/lib/profile is readable.  The
+# DEMO domain's users share one password, so the creds file's password
+# still authenticates glenda.  With the DEMO probe user (norbert) no
+# profile is sourced and rio can never start — the driver keeps the
+# password prompt anchored on the actual -O user.
+#
+# Env (rio-gate.sh exports all of it):
+#   R9_QEMU / R9_ISO / R9_SMOKE_LOG / R9_NETDEV_ARGV / R9_ACCEL /
+#   R9_MACHINE / R9_CPU — the chassis, unchanged.
+#   R9_DEMO_USER / R9_DEMO_PW — the bake creds (the password reaches
+#   only the pty feed and the redaction pass; it is never printed).
+#   DRAWTERM_BIN — Harvey's drawterm package binary (X11 backend).
+#   S3_MODE — rio | control-noG.
+#   S3_DT_USER — the drawterm -O user (glenda).
+#   S3_RIO_BUDGET / S3_SESSION_WINDOW / S3_SRV_POLLS /
+#   S3_SRV_POLL_WAIT — the stage budgets (see rio-gate.sh).
+#   R9_RUN_TAG / R9_DT_TAG — the per-run survivor-sweep tags.
+#
+# exit 0 only when the mode's assertion passed; exit 1 names the failed
+# stage on stderr; exit 2 on a contract violation (missing/empty env).
+
+set timeout 600                    ;# per boot stage, TCG-sized
+match_max 1048576
+# log_user stays ON — expect writes nothing to log_file when log_user is 0
+
+# --- required env (loud, BEFORE any spawn) -----------------------------
+set creds_file [expr {[info exists env(R9_CREDS_FILE)] ? $env(R9_CREDS_FILE) : "build/x86_64/out/auth-creds.txt"}]
+foreach v {R9_ISO R9_SMOKE_LOG R9_NETDEV_ARGV R9_DEMO_USER R9_DEMO_PW DRAWTERM_BIN S3_DT_USER S3_MODE} {
+	if {[info exists env($v)]} {
+		if {$env($v) eq ""} {
+			puts stderr "rio-gate: \$$v is EMPTY — aborting before any spawn; the creds read names the file: $creds_file"
+			exit 2
+		}
+		continue
+	}
+	puts stderr "rio-gate: \$$v unset — run via the flake app (nix run ...#s3-rio-gate)"
+	exit 2
+}
+if {$env(S3_MODE) ni {rio control-noG}} {
+	puts stderr "rio-gate: S3_MODE=$env(S3_MODE) — want rio|control-noG"
+	exit 2
+}
+set rio_mode [expr {$env(S3_MODE) eq "rio"}]
+set dt_user $env(S3_DT_USER)
+set dt_pw $env(R9_DEMO_PW)
+if {$dt_pw eq ""} {
+	puts stderr "rio-gate: the creds read produced an empty password — aborting before any spawn"
+	exit 2
+}
+if {![file executable $env(DRAWTERM_BIN)]} {
+	puts stderr "rio-gate: DRAWTERM_BIN $env(DRAWTERM_BIN) is not an executable file"
+	exit 2
+}
+set QEMU [expr {[info exists env(R9_QEMU)] ? $env(R9_QEMU) : "qemu-system-x86_64"}]
+set run_tag [expr {[info exists env(R9_RUN_TAG)] ? $env(R9_RUN_TAG) : "r9s3riogate-[pid]-[clock seconds]"}]
+set dt_tag [expr {[info exists env(R9_DT_TAG)] ? $env(R9_DT_TAG) : "r9s3riogate-dt-[pid]-[clock seconds]"}]
+set rio_budget [expr {[info exists env(S3_RIO_BUDGET)] ? $env(S3_RIO_BUDGET) : 60}]
+set session_window [expr {[info exists env(S3_SESSION_WINDOW)] ? $env(S3_SESSION_WINDOW) : 30}]
+set srv_polls [expr {[info exists env(S3_SRV_POLLS)] ? $env(S3_SRV_POLLS) : 12}]
+set srv_poll_wait [expr {[info exists env(S3_SRV_POLL_WAIT)] ? $env(S3_SRV_POLL_WAIT) : 5}]
+
+# --- Hygiene: a fresh capture per run ----------------------------------
+exec rm -f $env(R9_SMOKE_LOG)
+
+# --- subtree 1: qemu with the cpu ISO ----------------------------------
+set R9_MACHINE [expr {[info exists env(R9_MACHINE)] ? $env(R9_MACHINE) : "q35"}]
+set R9_CPU [expr {[info exists env(R9_CPU)] ? $env(R9_CPU) : "host"}]
+set R9_ACCEL [expr {[info exists env(R9_ACCEL)] ? $env(R9_ACCEL) : "kvm"}]
+
+set netdev_argv {}
+foreach tok [split $env(R9_NETDEV_ARGV)] {
+	if {$tok ne ""} {
+		lappend netdev_argv $tok
+	}
+}
+if {[llength $netdev_argv] == 0} {
+	puts stderr "rio-gate: R9_NETDEV_ARGV is empty — the caller's emitter capture failed"
+	exit 2
+}
+
+spawn $QEMU -M $R9_MACHINE -cpu $R9_CPU -smp 1 -m 1024M \
+	-accel $R9_ACCEL \
+	-cdrom $env(R9_ISO) \
+	{*}$netdev_argv \
+	-nographic \
+	-name $run_tag
+set qemu_sid $spawn_id
+set qemu_pid [exp_pid]
+log_file $env(R9_SMOKE_LOG)
+
+# --- teardown: kill BOTH process groups on every exit path --------------
+proc cleanup {} {
+	global qemu_pid
+	catch { exec kill -KILL -- -$qemu_pid 2>/dev/null }
+	catch { exec kill -KILL $qemu_pid 2>/dev/null }
+	if {[info exists ::dt_pid]} {
+		catch { exec kill -KILL -- -$::dt_pid 2>/dev/null }
+		catch { exec kill -KILL $::dt_pid 2>/dev/null }
+	}
+}
+
+# --- staged ordered assertions -----------------------------------------
+proc stage {name re} {
+	expect {
+		-re $re { puts stderr "rio-gate: stage ok — $name" }
+		timeout { puts stderr "rio-gate: TIMEOUT at stage: $name"; cleanup; exit 1 }
+		eof { puts stderr "rio-gate: process exited (EOF) at stage: $name"; cleanup; exit 1 }
+	}
+}
+
+proc feedstage {name re sendstr} {
+	expect {
+		-re $re { send -- $sendstr; puts stderr "rio-gate: feed ok — $name" }
+		timeout { puts stderr "rio-gate: TIMEOUT at feed stage: $name"; cleanup; exit 1 }
+		eof { puts stderr "rio-gate: process exited (EOF) at feed stage: $name"; cleanup; exit 1 }
+	}
+}
+
+# --- hostfwd listener observation (the chassis hostfwd_stage) ----------
+proc host_listeners {} {
+	if {![catch {exec ss -tln} out]} { return $out }
+	if {![catch {exec netstat -tln} out]} { return $out }
+	return ""
+}
+proc hostfwd_stage {port} {
+	set listeners [host_listeners]
+	if {$listeners eq ""} {
+		puts stderr "rio-gate: FAILED at stage: hostfwd-$port-listening — no host listening-table tool produced output"
+		cleanup
+		exit 1
+	}
+	if {![regexp "127\\.0\\.0\\.1:${port}( |\$)" $listeners]} {
+		puts stderr "rio-gate: FAILED at stage: hostfwd-$port-listening — no 127.0.0.1:$port loopback entry (the slirp hostfwd bind is missing); table follows:"
+		puts stderr $listeners
+		cleanup
+		exit 1
+	}
+	puts stderr "rio-gate: stage ok — hostfwd-$port-listening (127.0.0.1:$port present)"
+}
+
+# fast-fail on kernel panic markers and the cpurc FAIL vocabulary
+expect_before {
+	-re {panic|Unhandled interrupt} {
+		puts stderr "rio-gate: kernel panic marker on the wire — aborting"
+		cleanup
+		exit 1
+	}
+	-re {cpurc: FAIL} {
+		puts stderr "rio-gate: cpurc printed a FAIL marker — aborting (the failing leg is named on the wire)"
+		cleanup
+		exit 1
+	}
+}
+
+# --- 1. the boot ladder (EMISSION order) --------------------------------
+stage banner	{r9 from the Internet}
+stage bootconf	{devenv: bootconf init=/amd64/init -c}
+stage paqfs	{paqfs\.\.\.}
+stage version	{version\.\.\.}
+
+# --- 2. the hostfwd pair observed host-side ----------------------------
+hostfwd_stage 17010
+hostfwd_stage 5670
+
+# --- 3. the cpurc ladder in EMISSION order -----------------------------
+stage pairing-ok	{cpurc: PAIR-OK}
+stage ether-ok		{cpurc: ETHER-OK}
+stage keyfs-ok		{cpurc: KEYFS-OK}
+stage authsrv-listen	{cpurc: AUTHSRV-LISTEN}
+stage factotum-ok	{cpurc: FACTOTUM-OK}
+stage listen-17010	{cpurc: LISTEN-17010}
+stage ladder-done	{cpurc: DONE}
+
+# --- 4. subtree 2: drawterm on a pty ------------------------------------
+# rio mode drops -G so the client serves /dev/draw; the Xvfb DISPLAY is
+# exported by rio-gate.sh.  The -s '' flag stays load-bearing (secstore
+# probe avoidance, the 19-08 measured lesson).  The unique run tag rides
+# argv[0] via bash's `exec -a' (drawterm rejects extra argv operands).
+set dt_spec "cpu=127.0.0.1,auth=tcp!127.0.0.1!5670,user=$dt_user"
+set dt_flags [expr {$rio_mode ? "" : "-G "}]
+set dt_cmd "exec -a $dt_tag $env(DRAWTERM_BIN) $dt_flags-s '' -O $dt_spec"
+spawn bash -c $dt_cmd
+set dt_sid $spawn_id
+set ::dt_pid [exp_pid]
+puts stderr "rio-gate: spawned drawterm on a pty (mode $env(S3_MODE), argv0 tag $dt_tag, user $dt_user)"
+
+# --- 5. the password feedstage -----------------------------------------
+set spawn_id $dt_sid
+feedstage dt-password "${dt_user}@.* password: " "$dt_pw\r"
+
+if {$rio_mode} {
+	# --- 6r. rio draws; the pty is quiet on success.  Watch the window
+	#         for the two loud failures (a rejected password, a dead
+	#         client), then prove the session from the serial console.
+	set timeout $session_window
+	expect {
+		-re {password mismatch} {
+			puts stderr "S3-FAIL no-session — the auth exchange rejected the password (mismatch line on the pty; creds file: $creds_file)"
+			cleanup
+			exit 1
+		}
+		-re {goodbye} {
+			puts stderr "S3-FAIL drawterm-exited — drawterm exited before rio started (goodbye on the pty)"
+			cleanup
+			exit 1
+		}
+		eof {
+			puts stderr "S3-FAIL drawterm-exited — drawterm died during the auth/session start (pty EOF)"
+			cleanup
+			exit 1
+		}
+		timeout {
+			puts stderr "rio-gate: stage ok — session window quiet (rio draws; no pty text expected)"
+		}
+	}
+} else {
+	# --- 6c. control: the profile runs, sees no /dev/draw, and leaves a
+	#         cpu% shell.  No prompt = no session (named).
+	set timeout $session_window
+	expect {
+		-re {password mismatch} {
+			puts stderr "S3-FAIL no-session — the auth exchange rejected the password (mismatch line on the pty; creds file: $creds_file)"
+			cleanup
+			exit 1
+		}
+		-re {goodbye} {
+			puts stderr "S3-FAIL drawterm-exited — drawterm exited before a shell prompt (goodbye on the pty)"
+			cleanup
+			exit 1
+		}
+		-re {cpu% } {
+			puts stderr "rio-gate: stage ok — control session prompt (cpu% shell; the profile skipped rio)"
+		}
+		timeout {
+			puts stderr "S3-FAIL no-session — no cpu% shell prompt after the password feed"
+			cleanup
+			exit 1
+		}
+		eof {
+			puts stderr "S3-FAIL drawterm-exited — drawterm died during the auth/session start (pty EOF)"
+			cleanup
+			exit 1
+		}
+	}
+}
+
+# --- 7. the serial console: init's rc handoff after cpurc: DONE --------
+set spawn_id $qemu_sid
+set timeout 120
+expect {
+	-re {% } {
+		puts stderr "rio-gate: stage ok — serial console rc prompt (init's handoff after cpurc: DONE)"
+	}
+	timeout {
+		puts stderr "S3-FAIL no-session — the serial console never reached an rc prompt after cpurc: DONE"
+		cleanup
+		exit 1
+	}
+	eof {
+		puts stderr "S3-FAIL no-session — qemu exited before the serial console reached an rc prompt"
+		cleanup
+		exit 1
+	}
+}
+
+# --- 8. the rio stage budget, then `ls /srv` on the serial console -----
+# The console shell is a plain rc (init's rcexec without -l: no profile),
+# so its prompt is rcmain's default `% '.  rio's srv files land in the
+# kernel-wide #s table; this namespace has #s bound at /srv by
+# /lib/namespace (see s3/evidence/static-analysis.md, A5).
+set timeout $rio_budget
+expect {
+	timeout {
+		puts stderr "rio-gate: stage ok — rio budget elapsed ($rio_budget s)"
+	}
+	eof {
+		puts stderr "S3-FAIL no-session — qemu exited while rio was starting"
+		cleanup
+		exit 1
+	}
+}
+
+set found_rio 0
+set found_wctl 0
+set chunk ""
+set timeout $srv_poll_wait
+for {set i 0} {$i < $srv_polls} {incr i} {
+	send -- "ls /srv\r"
+	expect {
+		-re {% } {
+			set chunk $expect_out(buffer)
+			foreach tok [split $chunk] {
+				set tok [string trim $tok "\r\n"]
+				if {[regexp {^riowctl\.[^ ]+\.[0-9]+$} $tok]} {
+					set found_wctl 1
+					continue
+				}
+				if {[regexp {^rio\.[^ ]+\.[0-9]+$} $tok]} {
+					set found_rio 1
+				}
+			}
+		}
+		timeout {
+			set chunk ""
+			puts stderr "rio-gate: note — `ls /srv' poll [expr {$i + 1}] timed out; retrying"
+		}
+		eof {
+			puts stderr "S3-FAIL no-session — qemu exited during the /srv poll"
+			cleanup
+			exit 1
+		}
+	}
+	if {$rio_mode} {
+		if {$found_rio && $found_wctl} { break }
+	} else {
+		if {$found_rio} { break }
+	}
+}
+
+if {$rio_mode} {
+	if {$found_rio && $found_wctl} {
+		puts stderr "rio-gate: stage ok — serial /srv shows rio and riowctl (D-11 marker)"
+		puts "S3-RIO-SERVING"
+	} else {
+		puts stderr "S3-FAIL rio-not-serving — no rio.<user>.<pid> + riowctl.<user>.<pid> pair in the serial /srv listing within the budget"
+		cleanup
+		exit 1
+	}
+} else {
+	if {$found_rio} {
+		puts stderr "S3-FAIL control-saw-rio — a rio srv entry appeared in the -G control session, so the assertion does not discriminate"
+		cleanup
+		exit 1
+	}
+	puts "S3-CONTROL-NO-RIO"
+}
+
+# --- 9. the whole-file post-passes -------------------------------------
+log_file                           ;# stop + flush before the whole-file scan
+set fh [open $env(R9_SMOKE_LOG) r]
+set whole [read $fh]
+close $fh
+if {[string first "cpurc: FAIL" $whole] >= 0} {
+	puts stderr "rio-gate: cpurc: FAIL present in the capture — a ladder leg failed"
+	cleanup
+	exit 1
+}
+puts stderr "rio-gate: post-pass ok — zero cpurc: FAIL in the capture"
+regsub -all {panic: sysfatal} $whole "" whole_nopanic
+if {[string first "panic" $whole_nopanic] >= 0} {
+	puts stderr "rio-gate: a panic marker is present in the capture"
+	cleanup
+	exit 1
+}
+puts stderr "rio-gate: post-pass ok — zero kernel panic markers (drawterm's own sysfatal exit pair excluded)"
+
+# --- 10. the password redaction (LAST, after every assert ran) ----------
+set pw_count 0
+set pos 0
+while {1} {
+	set idx [string first $dt_pw $whole $pos]
+	if {$idx < 0} { break }
+	incr pw_count
+	set pos [expr {$idx + [string length $dt_pw]}]
+}
+set redacted [string map [list $dt_pw "<demo-pw-redacted>"] $whole]
+set fh [open $env(R9_SMOKE_LOG) w]
+puts -nonewline $fh $redacted
+puts $fh "\nrio-gate: redaction contract held — <demo-pw-redacted> ($pw_count occurrence(s) of the per-bake DEMO password mapped; T-01-17)"
+close $fh
+puts stderr "rio-gate: post-pass ok — the per-bake DEMO password redacted from the retained capture ($pw_count occurrence(s) mapped)"
+
+cleanup
+if {$rio_mode} {
+	puts stderr "rio-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, encrypted drawterm session, serial /srv shows rio + riowctl (S3-RIO-SERVING)"
+} else {
+	puts stderr "rio-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, -G control session, serial /srv shows no rio entry (S3-CONTROL-NO-RIO)"
+}
+exit 0
