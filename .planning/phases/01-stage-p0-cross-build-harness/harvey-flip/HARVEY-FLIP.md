@@ -31,6 +31,27 @@ HARVEY-APPROVED: 2026-11-23 owner
 HARVEY-PUSHED: master c697666ba315f137ca2fd11768f835d04bd9f018
 HARVEY-PUSHED-REPORTED: 2026-11-23 owner (verified: `git ls-remote origin refs/heads/master` = c697666ba315f137ca2fd11768f835d04bd9f018)
 
+## Stop E closure (plan 01-28) — the flip is complete
+
+- **Bump:** r9 locked the pushed flip commit `c697666ba315f137ca2fd11768f835d04bd9f018`
+  in the lock-only commit `626c80c` (merged as `af46615`). `flake.lock` has
+  `.nodes.harvey.locked.rev` = `c697666`, no `harvey/r9` node and no `116bcc2`.
+- **Witness:** the owner's stop E at `af46615` returned 11/11 steps green
+  (`witness-returns/01-28` at `95af737`): trees, soak, kernel, gate,
+  gate_neg, profiles, cpuauth_ref, full 8/8, stress, equiv 10/10 and
+  store_verify. See `witness/WITNESS-LOG.md` "## Stop E".
+- **Harvey's own kernel (D-26):** `nix run .#q35` at `c697666` printed
+  `Q35-PROMPT root is from (tcp)[tcp]:` and
+  `Q35-RESULT machine=q35 accel=tcg banner=yes prompt=yes sigs=none`,
+  with `Q35-KERNEL … sha256=ecdcdadd… bytes=2030226`.
+- **Hosted CI:** `xtask.yml` all green; `gates.yml` all green except
+  `quick-gate-tcg` (red). This is the best-effort second witness (D-13);
+  the owner's native amd64 TCG gate is `GATE-PASS` at stop C3.
+- **Phase-boundary audit:** R1-R7 all PASS with their evidence mapped; the
+  prohibition audit re-checks the pushed pin, the font set, the lock-only
+  bump, `port/src`, the gate and marker, the manifests, the trees and the
+  kernel bytes. See `witness/WITNESS-LOG.md` "## Phase boundary audit".
+
 Owner push (branch `master`, completed by the owner on 2026-11-23):
 
     git -C /Users/neilskinner/code/harvey push origin HEAD:master

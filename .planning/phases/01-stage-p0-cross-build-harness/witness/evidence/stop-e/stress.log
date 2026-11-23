@@ -1,0 +1,38 @@
+net-doctor: PASS bridge-exists: br0 present
+net-doctor: PASS bridge-up: br0 flags carry UP
+net-doctor: PASS bridge-addr: 192.168.122.1/24 present on br0 (the seam's tap_gwv4)
+net-doctor: PASS ip-forward: net.ipv4.ip_forward=1
+net-doctor: WARN masquerade: cannot read the netfilter ruleset unprivileged — verify with: sudo iptables-save | grep '192.168.122.0/24' (or: sudo nft list ruleset | grep '192.168.122.0/24'); want a MASQUERADE rule for 192.168.122.0/24 out the default route
+net-doctor: PASS helper-wrapper: /run/wrappers/bin/qemu-bridge-helper present + setuid (mode 4511)
+== doctor preflight PASS (tap mode — the preferred stress venue, #66's own)
+== seam: tap_gwv4=192.168.122.1 blastport=7777 (/nix/store/002vay29nmgw2d81nvmi2i6adgz7h1md-harvey-tree-amd64-0/build/x86_64/root-tree/lib/netaddr.rc); peer binds 192.168.122.1 (venue tap)
+== step 3/3: the stress gate (/home/req/code/r9/gates/x86_64/stress-r9.expect — venue tap, baseline 1 + burst 8x512 via rc /lib/netstress.rc, -d int,guest_errors cascade -> /home/req/code/r9/target/gates/stress-r9-net-x64/evidence.FbyMSC/qemu-int-r9x64stress-651880-1795469135.log)
+Machine informatistress-r9-x64: stage ok — banner
+paqfs...stress-r9-x64: stage ok — paqfs
+version...stress-r9-x64: stage ok — version
+% stress-r9-x64: stage ok — prompt
+stress-r9-x64: stage ok — stress-static
+netstress: venue tap L2-trstress-r9-x64: stage ok — stress-venue
+stress-r9-x64: stage ok — stress-arp
+procestress-r9-x64: stage ok — burst-wait
+pstress-r9-x64: stage ok — stress-stats
+netstress: STRESS-DONEstress-r9-x64: stage ok — stress-done
+% stress-r9-x64: stage ok — stress-prompt
+stress-r9-x64: post-pass ok — tcpblast: done x 9 (1 baseline + 8 burst)
+stress-r9-x64: post-pass ok — zero netstress: FAIL occurrences
+stress-r9-x64: post-pass ok — venue label present (tap)
+stress-r9-x64: ALL STAGES PASS — chain boot, netstress fixture (tap: static + venue label + baseline 1 + burst 8 x 512, counted 9 tcpblast: done), stats reconciliation, zero FAIL, completion
+churngate: heap exit 2835712 33554432
+process 51 exited: ""
+process 52 exited: ""
+process 50 exited: ""
+process 54 exited: ""
+process 55 exited: ""
+process 53 exited: ""
+netstress: stats ok
+rocess 56 exited: ""
+
+process 57 exited: ""
+process 5 exited: ""
+== stress gate PASS — capture retained at /home/req/code/r9/target/gates/stress-r9-net-x64/stress-r9.log; cascade + peer log at /home/req/code/r9/target/gates/stress-r9-net-x64/evidence.FbyMSC
+== stress evidence scratch retained: /home/req/code/r9/target/gates/stress-r9-net-x64/evidence.FbyMSC (qemu -d cascade: qemu-int-*.log + netstress.pcap + hostecho.log)

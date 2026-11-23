@@ -1,0 +1,7 @@
+# Hosted CI at the pushed r9 commit af4661596d3e259de990baef41a9cbdf0512ce77
+# Owner report, 2026-11-23. Best-effort second witness (D-12, D-13).
+xtask.yml: all jobs green
+gates.yml: all green except quick-gate-tcg (red)
+# Disposition: informational, not a phase gate. The owner's native amd64 TCG gate
+# passed at stop C3 (GATE-PASS, owner report); quick-gate-tcg is the hosted-runner
+# TCG leg and its red does not contradict the native KVM/TCG witness.

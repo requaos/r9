@@ -1,0 +1,37 @@
+net-doctor: PASS bridge-exists: br0 present
+net-doctor: PASS bridge-up: br0 flags carry UP
+net-doctor: PASS bridge-addr: 192.168.122.1/24 present on br0 (the seam's tap_gwv4)
+net-doctor: PASS ip-forward: net.ipv4.ip_forward=1
+net-doctor: WARN masquerade: cannot read the netfilter ruleset unprivileged — verify with: sudo iptables-save | grep '192.168.122.0/24' (or: sudo nft list ruleset | grep '192.168.122.0/24'); want a MASQUERADE rule for 192.168.122.0/24 out the default route
+net-doctor: PASS helper-wrapper: /run/wrappers/bin/qemu-bridge-helper present + setuid (mode 4511)
+q35: menetsoak-r9-x64: stage ok — banner
+paqfs...netsoak-r9-x64: stage ok — paqfs
+version...netsoak-r9-x64: stage ok — version
+% netsoak-r9-x64: stage ok — prompt
+process 11 exnetsoak-r9-x64: stage ok — soak-static
+netsoak-r9-x64: stage ok — soak-arp
+netip: L2-TRUTH tap venue
+netsoak-r9-x64: stage ok — soak-venue
+pnetsoak-r9-x64: stage ok — burst-wait
+netip: soak stats oknetsoak-r9-x64: stage ok — soak-stats
+netsoak-r9-x64: stage ok — soak-ok
+netsoak-r9-x64: stage ok — soak-done
+% netsoak-r9-x64: stage ok — soak-prompt
+netsoak-r9-x64: post-pass ok — tcpblast: done x 9 (1 baseline + 8 burst)
+netsoak-r9-x64: post-pass ok — zero netip: FAIL occurrences
+netsoak-r9-x64: post-pass ok — ARP L2-truth marker + L2-TRUTH tap venue label present
+netsoak-r9-x64: ALL STAGES PASS — chain boot, netip-tap fixture (static + ARP L2-truth + venue label), baseline 2048 rounds + burst 8 x 512 rounds (counted 9 tcpblast: done), stats reconciliation, zero FAIL, completion
+churngate: heap exit 2823424 33554432
+process 52 exited: ""
+process 56 exited: ""
+process 57 exited: ""
+process 55 exited: ""
+
+process 58 exited: ""
+netip: soak ok
+process 59 exited: ""
+netip: NETIP-DONE
+process 60 exited: ""
+process 5 exited: ""
+== soak gate PASS — capture retained at /home/req/code/r9/target/gates/soak-r9-net-x64/netsoak-r9.log; pcap + peer log at /home/req/code/r9/target/gates/soak-r9-net-x64/evidence.OH2DpW
+== soak evidence scratch retained: /home/req/code/r9/target/gates/soak-r9-net-x64/evidence.OH2DpW (netsoak.pcap + hostecho.log — this run's evidence)

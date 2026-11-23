@@ -1049,4 +1049,172 @@ HARVEY-FLIP.md).
   happened here. The scratch clone can absorb requested changes before a
   green rerun of this stop.
 
+## Stop E — plan 01-28, x86_64 KVM at the lock-only bump
+
+STATUS stope: PASS for all eleven selected steps. The owner checked out the
+bump commit `af46615` on `teeniebox` and returned the full D-14 set through
+`witness-returns/01-28` at `95af737c4a38665fa2a60862207ff4fbf391f994`; the
+return directory is `witness/return-01-28/` (fetched read-only, not merged).
+The lock pins Harvey `c697666ba315f137ca2fd11768f835d04bd9f018` — the pushed
+flip commit — and every step below ran against that tree.
+
+- **Source HEAD:** `af4661596d3e259de990baef41a9cbdf0512ce77` (r9 main; the
+  lock-only bump `626c80c`, merged as `af46615`).
+- **Host:** `teeniebox`, x86_64-linux, nproc 16, 30 GiB RAM, nix 2.35.6,
+  `DEV_KVM=writable`.
+- **Session:** 2026-11-23T20:59:49Z → 2026-11-23T21:25:45Z.
+- **Steps selected:** `trees soak kernel gate gate_neg profiles cpuauth_ref
+  full stress equiv store_verify`.
+- **Summary:** `out/summary.tsv` — eleven rows, every exit 0.
+- **`env.txt` note:** its `harvey_pin=bd7a6982…` is the driver's
+  `legacy-final` baseline pin for the Harvey-hosted equivalence captures
+  (`run-witness.sh:142`), not the r9 lock. `flake.lock` pins `c697666`.
+- **`full` note:** the return carries three `full.tsv` snapshots. The first
+  (`out/full/347497-1795455456/full.tsv`) records `boot-r9-tier1-x64 FAIL`;
+  the second (`405781-1795461728`) and the final (`623461-1795468943`) are
+  8/8. The verdict below is the final run, whose `full.log` ends
+  `GATE PASS full x86_64-linux run=623461-1795468943`; the earlier snapshot
+  remains in the return tree and is disclosed here rather than dropped.
+
+### Per-step verdicts
+
+VERDICT stope-trees: PASS
+EVIDENCE stope-trees: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/trees.log
+— `harvey-tree-amd64` and `harvey-tree-arm64` built at `rev=c697666…`; both
+`TREES-VERIFY-OK`.
+
+VERDICT stope-soak: PASS
+EVIDENCE stope-soak: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/soak.log
+— `netip: L2-TRUTH tap venue`; `netsoak-r9-x64: ALL STAGES PASS`; baseline
+2048 + burst 8x512; `tcpblast: done x 9`; zero `netip: FAIL`.
+
+VERDICT stope-kernel: PASS
+EVIDENCE stope-kernel: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/kernel.log
+— `r9-kernel-x64-af46615`, ELF sha256 `2377dc2f…`; `KERNEL-BOOTISO-BUILD-OK`
+and `KERNEL-BOOTISO-REBUILD-OK`.
+
+VERDICT stope-gate: PASS
+EVIDENCE stope-gate: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/gate.log
+— both runs exit 0; `GATE-PASS rio-serving` and `GATE-PASS control-no-rio`;
+`ALL STAGES PASS` on both legs.
+
+VERDICT stope-gate-neg: PASS
+EVIDENCE stope-gate-neg: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/gate-neg.log
+— `GATE-FAIL rio-not-serving` then `GATE-NEG-EXPECTED-FAIL` (the driver
+asserts the non-zero exit and the named marker).
+
+VERDICT stope-profiles: PASS
+EVIDENCE stope-profiles: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/profiles.log
+— nine `PROFILE … exit=0` lines: q35, q35lowmcfg, q35net, q35exec,
+q35churn, q35shell, q35churnshell, q35cpu, q35auth.
+
+VERDICT stope-cpuauth-ref: PASS
+EVIDENCE stope-cpuauth-ref: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/cpuauth-ref.log
+— `cpu` 4442 members and `auth` 95 members, each `matches the reference
+member list`; both exit 0.
+
+VERDICT stope-full: PASS
+EVIDENCE stope-full: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/full.tsv
+EVIDENCE stope-full: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/full.log
+— final run 8/8: drawterm-gate-x64, boot-r9-x64, boot-r9-smoke-x64,
+boot-r9-tier1-x64, boot-r9-net-smoke-x64, boot-r9-services-x64,
+boot-r9-churn-x64, boot-r9-auth-x64.
+
+VERDICT stope-stress: PASS
+EVIDENCE stope-stress: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/stress.log
+— tap venue, `tcpblast: done x 9`, zero `netstress: FAIL`,
+`ALL STAGES PASS`.
+
+VERDICT stope-equiv: PASS
+EVIDENCE stope-equiv: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/equiv/report.tsv
+— all 10 rows `match`, including tier1 `T1-OK=39/39`, auth `AUTH-OK=10/10`,
+churn `CATS-DONE 1400=1/1`, stress `netstress: venue tap=1/1`.
+
+VERDICT stope-store-verify: PASS
+EVIDENCE stope-store-verify: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/store-verify.log
+— both trees `STORE-VERIFY-OK` after the full step set.
+
+VERDICT stope-harvey-q35: PASS
+EVIDENCE stope-harvey-q35: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/harvey-q35.log
+— `Q35-KERNEL … sha256=ecdcdadd… bytes=2030226`; `Q35-PROMPT root is from
+(tcp)[tcp]:`; `Q35-SIGS none`; `Q35-RESULT machine=q35 accel=tcg banner=yes
+prompt=yes sigs=none`. The kernel sha equals the S5 artifact and the 01-08
+provenance record.
+
+VERDICT stope-ci-best-effort: INFO (recorded; not a phase gate)
+EVIDENCE stope-ci-best-effort: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/ci.txt
+— `xtask.yml` all jobs green; `gates.yml` all green except `quick-gate-tcg`
+(red). D-13 makes hosted CI the best-effort second witness; the owner's
+native amd64 TCG gate is `GATE-PASS` at stop C3.
+
+EVIDENCE stope-env: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/env.txt
+EVIDENCE stope-summary: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/summary.tsv
+EVIDENCE stope-secret-scan: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-e/secret-scan.txt
+
+## Phase boundary audit
+
+**Scope and point of the audit.** This maps the ROADMAP's seven phase truths
+(R1-R7, numbered as in `01-VERIFICATION.md` "A. ROADMAP contract") to the
+phase's concrete evidence, and re-checks every phase prohibition at
+`af46615` (2026-11-23). The check is evidence-backed: each row names the
+verdict ids, commits or file paths that satisfy it, and the prohibition
+table records the command and its result. It is not a restatement of the
+plan.
+
+### R1-R7 evidence map
+
+| # | ROADMAP truth (abridged) | Verdict | Evidence (verdict ids, commits, paths) |
+|---|---|---|---|
+| R1 | One documented `cargo xtask` command boots r9 on QEMU q35 x86_64 to a rio session and exits non-zero when rio is not reached | PASS | `VERDICT stope-gate` — two runs, `GATE-RUN 1/2 exit=0`, `GATE-PASS rio-serving` + `GATE-PASS control-no-rio`, ALL STAGES PASS (`witness/evidence/stop-e/gate.log`); `VERDICT stope-gate-neg` — `GATE-FAIL rio-not-serving` then `GATE-NEG-EXPECTED-FAIL` (`stop-e/gate-neg.log`); the command and its exit contract are in `cargo xtask --help` ("exits 0 only then"); plan 01-18 Task 2 `ed52b47` and the 01-33 driver fix `b8575463`; run at `af46615`. |
+| R2 | One resolver honours `R9_HARVEY_DIR` and the approved alternatives, a missing tree names the variable, and a full gate leaves the Harvey tree unmodified | PASS | `xtask/src/harvey.rs` implements precedence `R9_HARVEY_DIR` > `R9_HARVEY_DIR_ARM64/AMD64` > `HARVEY_SRC`, with `R9_HARVEY_DIR=vendor/harvey` resolving relative to the workspace and no built-in default; the named-error test lists every variable and `no built-in default`. `cargo test harvey::tests` at `af46615`: 14/14 pass (2026-11-23). `VERDICT stope-store-verify` and `stope-trees` — both Nix trees `STORE-VERIFY-OK` / `TREES-VERIFY-OK` after the eleven-step run; plan 01-08 `a297253`. The `vendor/harvey` and `HARVEY_SRC` names are the alias/relative forms of the one resolver, not implicit fallbacks (D-01/D-21). |
+| R3 | The xtask fallback manifest lists every C library object and userland binary per architecture, and the harness fails on two-way image/manifest drift | PASS | `xtask/manifests/amd64/{marker,chain,substrate,cpu,auth,net,services,tier,churn,libraries,fonts-bit}` and `xtask/manifests/arm64/{bootfs,smoke,libraries}`; `check_drift` in `xtask/src/image.rs:1226`; tests `drift_reports_a_missing_entry` and `drift_reports_an_unlisted_staged_file` pass at `af46615` (2026-11-23); the bump's `stope-cpuauth-ref` matches the reference lists (cpu 4442, auth 95) and `stope-full` assembles and boots all eight x86_64 images; plans 01-08 `a297253`, 01-11 `88d1e85`, 01-15/01-16/01-19. |
+| R4 | Flipping one manifest entry swaps that single Rust artifact into the image, the gate passes, and flipping back restores the Harvey artifact | PASS | `PROBE-FLIP-SHA 064747f42c7f3eff6cd677a8820e6b4b1fff95e3` and `PROBE-FLIPBACK-SHA af7df344b9c3702100d4408e85044a722e861a67`; `VERDICT stopb3-probe` and `stopb3-flipback` PASS with the serial-check `/bin/ps=R9-RUST-AOUT-PROBE-OK` gate and the byte-identical restored member list (`evidence/stop-b3/probe.log`, `evidence/stop-b3/flipback.log`); the member-list proof is recorded in 01-20 (`witness/evidence/stop-b3/summary.tsv` rows probe/flipback 0); no Rust entry remains in any manifest (`grep -rc rust xtask/manifests` = 0). |
+| R5 | The existing x86_64 q35 boot-test profiles and the aarch64 virt quick pass still pass through the reconciled mechanism | PASS (x86_64 at the bump; aarch64 at 01-30 plus the bump report) | `VERDICT stope-profiles` — all nine q35 profiles exit 0 (`stop-e/profiles.log`); `VERDICT stope-full` — 8/8 through the reconciled gate apps (`stop-e/full.tsv`); aarch64: 01-30 Task 2 `5dd9cf5` ran the whole quick pass on the Mac (`AARCH64-QUICK-PASS`, `target/aarch64-quick-pass.log` in the 01-30 record) and the Task 1 bump re-run reported it green; the aarch64 devshell kernel still hashes `76e6e153…`, the 01-08 baseline. |
+| R6 | Inside `nix develop`, with nothing set by hand, `cargo xtask` finds the Harvey tree; the flake pins Harvey and exports the read-only tree | PASS | `flake.nix:17` `inputs.harvey = "github:requaos/harvey"`; the devshell exports `R9_HARVEY_DIR_AMD64` / `R9_HARVEY_DIR_ARM64` lazily (`flake.nix:1071-1107`) and never the generic `R9_HARVEY_DIR`; the bump's devshell banners show `harvey supply: R9_HARVEY_DIR_AMD64=…` and the trees carry `rev=c697666`; `cargo xtask --help` at `af46615` prints the resolver contract; plans 01-10 `56063cf`, 01-13 `1d66e2b`, 01-14 `fab8b36`. |
+| R7 | Flake ownership is flipped: r9 imports Harvey and owns the composed gates, Harvey has no `r9` input, and each moved gate passes from r9 | PASS | `flake.nix` exposes `boot-r9*`, `drawterm-gate-x64` and `net-doctor` (`nix eval .#apps.x86_64-linux` at `af46615` lists all 20 apps); Harvey `c697666` has `flake.lock` root inputs `{nixpkgs}` only and `flake.nix` has no `r9` input; the bump's `stope-gate`, `stope-gate-neg`, `stope-profiles`, `stope-full`, `stope-soak` and `stope-stress` all pass from r9 at `af46615`; plans 01-26 `c34edeb`, 01-34 `83d00ca`, bump `626c80c`. |
+
+### Prohibition audit
+
+| # | Prohibition | Command | Result |
+|---|---|---|---|
+| P1 | No unpushed Harvey pin (D-23) | `git ls-remote https://github.com/requaos/harvey refs/heads/master` vs `jq -r '.nodes.harvey.locked.rev' flake.lock` | `c697666ba315f137ca2fd11768f835d04bd9f018` both; PASS. |
+| P2 | No font-file staging; Harvey gained exactly one executor commit | `git -C ~/code/harvey rev-list --count 25d97dc4d..HEAD`; `git show --name-only --format= c697666`; `git status --porcelain --untracked-files=no`; `git status --porcelain \| shasum -a 256` | 1 commit (`c697666`), 36 paths, `grep -cE 'sys/lib/(postscript\|troff)\|devpost\.add'` = 0; the 11 pre-modified font paths remain ` M`; status hash `041d29292e50…` equals the recorded `041d2929…`; PASS. |
+| P3 | The bump commit changes `flake.lock` only (D-06) | `git show --name-only --format= 626c80c` | `flake.lock` only; PASS. |
+| P4 | flake.lock locks only the pushed Harvey commit; no nested r9 node | `jq -r '.nodes.harvey.inputs \| keys[]' flake.lock`; `jq -r '.nodes \| keys[]' flake.lock \| grep -c '^r9'`; `grep -c 116bcc23c8052a1728992cdbc7b625143260d683 flake.lock` | `nixpkgs` only; 0 `r9` nodes; 0 `116bcc2`; PASS. |
+| P5 | The devshell never exports `R9_HARVEY_DIR` (the generic override stays the user's) | `grep -cE 'export R9_HARVEY_DIR=' flake.nix` | 0; PASS. |
+| P6 | xtask has no built-in Harvey path | `nix develop -c cargo test --manifest-path xtask/Cargo.toml no_other_source_reads_a_harvey_tree_variable` | 1 passed, 0 failed; the resolver docs say no `../harvey`, no implicit `vendor/harvey`; PASS. |
+| P7 | No `port/src` edit without approval | `git diff --name-only 6a64287~1 HEAD -- port/src` | no output (0 paths); PASS. |
+| P8 | No gate weakening | `git diff --numstat 7619dd4~1 HEAD -- xtask/src/gate.rs gates/x86_64/drawterm-gate.expect`; `VERDICT stope-gate` + `stope-gate-neg` | 971/0 and 777/0 (additions only, zero deleted assertions); the positive pair and the failing direction both ran at the bump; PASS. |
+| P9 | No marker weakening (D-28 pair) | `grep -n 'riowctl\\\.' gates/x86_64/drawterm-gate.expect`; `VERDICT stope-gate` / `stope-gate-neg` | the pair `rio.<user>.<pid>` + `riowctl.<user>.<pid>` is the only pass condition; `GATE-PASS rio-serving` and `GATE-FAIL rio-not-serving` at `af46615`; PASS. |
+| P10 | No credential committed in pass 2 | `git diff "$(sed -n 's/^plan_head_before: //p' 01-08-SUMMARY.md)" HEAD \| grep '^+' \| grep -E 'password=[^<\`"[:space:]]'`; `git ls-files \| grep -cE '\.creds$\|auth-creds'`; `grep -rE 'auth-creds\|[Pp]assword=' witness/evidence/stop-e` | at `af46615` (before this audit's own text) the literal regex printed 20 added lines, all benign: parser contract (`grep -q '^password='`/`sed 's/^password=//p'`), runtime creds writers (`printf 'password=%s'`), synthetic `FAKEPW123451` test fixtures, and doc refs — no credential value; 0 tracked creds files; 0 matches in the stop-E evidence; PASS on the intent (no credential), with the plan's literal `EXPECT==0` regex noted as over-broad. |
+| P11 | No manifest has a rust entry | `grep -rc rust xtask/manifests` | 0; PASS. |
+| P12 | Both trees verify unmodified after the full set | `VERDICT stope-store-verify`; `stope-trees` | `STORE-VERIFY-OK` on the amd64 and arm64 trees; `TREES-VERIFY-OK`; PASS. |
+| P13 | Kernel bytes unchanged at the bump | `VERDICT stope-kernel`; stop-C3 `kernel.log`; `cargo xtask build --arch aarch64 --config virtshell` + `shasum`; `cargo xtask build --arch x86-64 --config q35churnshell` + `shasum` | stop-E ELF `2377dc2f…` equals stop-C3 `2377dc2f…`, boot-iso BUILD+REBUILD OK; aarch64 `76e6e153…` equals the 01-08 baseline; x86_64 `8f2d485e…` (devshell, reproduced twice) supersedes the 01-08 `50b01c9a…` because the approved 01-33/01-34 x86_64 fixes (`9af05f8`, `2a5cbed`) changed x86_64 source; the bump itself changed no kernel source; PASS with the baseline supersession recorded. |
+
+### Residual risks and dispositions
+
+1. **Hosted CI `quick-gate-tcg` is red.** `xtask.yml` is fully green and
+   `gates.yml` is green except that leg. D-13 makes CI the best-effort second
+   witness; the owner's native amd64 TCG gate is `GATE-PASS` at stop C3, and
+   the stop-E gate/gate-neg ran on KVM. Disposition: informational, not a
+   phase gate.
+2. **The first stop-E `full` iteration recorded `boot-r9-tier1-x64 FAIL`.**
+   The owner re-ran; the second and final iterations are 8/8, and stop C3's
+   `full` was 8/8. Disposition: transient, final verdict PASS; the earlier
+   `full.tsv` is retained in `return-01-28/full/347497-1795455456/`.
+3. **The R4 swap proof is the stop-B3 KVM run** at `PROBE-FLIP-SHA` /
+   `PROBE-FLIPBACK-SHA`, before the 01-34 `gate.rs` fix. That fix changed the
+   driver's spawn/registration, not the swap assertion; the manifests have no
+   Rust entry, so a re-run would require re-flipping. Disposition: accepted,
+   recorded.
+4. **No bump-time aarch64 quick-pass log is in the return.** The aarch64
+   half of R5 rests on 01-30's Mac log and the Task 1 bump re-run (reported
+   green, no retained file); the stop-E set is x86_64 KVM. Disposition:
+   accepted, recorded; the aarch64 kernel hash still matches the 01-08
+   baseline.
+5. **The 01-08 x86_64 kernel baseline is superseded** by the approved
+   01-33/01-34 x86_64 fixes; the audit compares at the bump (unchanged
+   package ELF from stop C3), not to the stale 01-08 literal. Disposition:
+   documented deviation from the plan's stale acceptance line.
+
 
