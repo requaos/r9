@@ -57,7 +57,7 @@ Milestone numbering continues from the closed Harvey-rooted milestone v2.1.
   5. The existing x86_64 q35 boot-test profiles and the aarch64 virt quick pass still pass through the reconciled mechanism.
   6. Inside `nix develop`, with nothing set by hand, `cargo xtask` commands find the Harvey tree: the r9 flake pins Harvey and the devshell exports its read-only location, and that tree contains the pre-built artifacts the harness needs.
   7. Flake ownership is flipped: r9's flake imports Harvey and exposes the composed boot and gate outputs that Harvey's flake used to own, Harvey's flake has no `r9` input, and each moved gate passes when run from r9.
-**Plans**: 28/32 plans executed — 7/7 executed in planning pass 1 (research spikes S1-S6 and the owner checkpoint, D-22); 24 pass-2 plans (01-08 to 01-31) implement HARN-01 to HARN-08, with four owner stops (A 01-12, B 01-22, C 01-27, E 01-28); plan 01-32 is the owner-directed rio de-risk iteration after the stop-A FAIL (D-30)
+**Plans**: 28/33 plans executed — 7/7 executed in planning pass 1 (research spikes S1-S6 and the owner checkpoint, D-22); 24 pass-2 plans (01-08 to 01-31) implement HARN-01 to HARN-08, with four owner stops (A 01-12, B 01-22, C 01-27, E 01-28); plan 01-32 is the owner-directed rio de-risk iteration after the stop-A FAIL (D-30); plan 01-33 is the stop-B fix iteration after the driver/step/churn failures
 
 Plans:
 **Wave 1**
@@ -124,6 +124,9 @@ Plans:
 **Wave 15**
 - [ ] 01-26-PLAN.md — Harvey flip change prepared in a scratch clone (q35 own-kernel app, deletions); stop-C witness steps
 - [x] 01-31-PLAN.md — x86_64 plain boot, auth gate, cpu-bringup driver and drawterm developer app moved into r9; every composed output has an r9 home (split from 01-24)
+
+**Wave 15b — stop-B fixes**
+- [ ] 01-33-PLAN.md — Fix the moved driver's spawn_id registration, the kernel/reference step preconditions and the q35churnshell syscall-10 gap; OWNER STOP B2 rerun
 
 **Wave 16**
 - [ ] 01-27-PLAN.md — OWNER STOP C: full moved set from r9 on KVM, Harvey diff approval, the single Harvey commit, owner push
@@ -359,7 +362,7 @@ Phases execute in numeric order: 1 → 2 → 3 → … → 16 (decimal insertion
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 1. Stage P0 - Cross-Build Harness | v3.0 | 28/32 | In Progress | - |
+| 1. Stage P0 - Cross-Build Harness | v3.0 | 28/33 | In Progress | - |
 | 2. Guide Phase 0 - Design Lock and rfork Flag Reservation | v3.0 | 0/TBD | Not started | - |
 | 3. Guide Phase 1 - crypto/ and ds/ Foundations | v3.0 | 0/TBD | Not started | - |
 | 4. Guide Phase 2 - 9P2000.aead Transport and FidTable | v3.0 | 0/TBD | Not started | - |
