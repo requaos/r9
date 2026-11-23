@@ -5,16 +5,16 @@ milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
 current_phase: 01
 current_phase_name: Stage P0 - Cross-Build Harness
 status: executing
-stopped_at: Completed 01-03-PLAN.md
-last_updated: "2026-11-23T00:45:32.057Z"
-last_activity: 2026-11-22
-last_activity_desc: Phase 01 execution started
-state_head: 905c5fb8c2adedc7d75383a52476ea9cfbf5c41c
+stopped_at: Completed 01-04-PLAN.md
+last_updated: "2026-11-23T00:52:50Z"
+last_activity: 2026-11-23
+last_activity_desc: Phase 01 plan 04 (S6) completed
+state_head: 9f2ac3c8755b4945b3c20617ea4bd9e09e2ac516
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 7
-  completed_plans: 1
+  completed_plans: 2
   percent: 0
 ---
 
@@ -30,22 +30,22 @@ See: .planning/PROJECT.md (updated 2026-11-22)
 ## Current Position
 
 Phase: 01 (Stage P0 - Cross-Build Harness) — EXECUTING
-Plan: 2 of 7
+Plan: 3 of 7
 Status: Ready to execute
-Last activity: 2026-11-22 — Phase 01 execution started
+Last activity: 2026-11-23 — Plan 04 (S6) completed
 
 Progress: [░░░░░░░░░░] 0%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 0
+- Total plans completed: 2
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| - | - | - | - |
+| 01 | 2 | 7 | 5 min |
 
 *Updated after each plan completion*
 **Per-Plan Metrics:**
@@ -53,6 +53,7 @@ Progress: [░░░░░░░░░░] 0%
 | Plan | Duration | Tasks | Files |
 |------|----------|-------|-------|
 | Phase 01 P03 | 3 min | 2 tasks | 8 files |
+| Phase 01 P04 | 6 min | 3 tasks | 17 files |
 
 ## Accumulated Context
 
@@ -70,6 +71,9 @@ Full log is the PROJECT.md Key Decisions table. Recent:
 - [Phase 01]: S5 harness: one boot-q35.sh serves the Mac TCG matrix and the owner's KVM witness; KVM without a writable /dev/kvm exits S5-ERROR kvm-unavailable, never a silent TCG downgrade (D-13).
 - [Phase 01]: S5 D-20 minimum scope: the evidence supports a Harvey app that builds and boots to the root is from prompt; an rc prompt via Harvey's own u9fs on TCP 564 is the next increment.
 - [Phase 01]: S5 pc baseline reproduces the recorded 2026-11-05 behaviour, not the exact artifact; the kernel was rebuilt on 2026-11-18 and no string proves its commit.
+- [Phase 01]: S6 D-17 target is `ps`, not D-17's prose example `echo`: ps is staged in every chain-family x86_64 image, absent from the boot path, and has two gate sites; `echo` is not an rc builtin (`sys/src/cmd/rc/plan9.c:35-48`), so every bare echo in cpurc and the smoke gates would run the replacement.
+- [Phase 01]: S6 arm64 swap proven end to end under HVF: control, probe marker and flip-back all PASS, and the flip-back bootfs.paq is byte-identical to control (`746f1dfe...`). The x86_64 KVM leg is scripted and statically checked but PENDING-OWNER for Plan 06.
+- [Phase 01]: S6's aarch64 bakes needed a scratch-only mkpaqfs shim (pin mtimes, header time and trailer SHA1) because Harvey's aarch64 mkimage has no KERNDATE pin and the prebuilt darwin mkpaqfs predates it; Harvey stayed untouched.
 
 ### Open Questions (ten warnings, approved to be carried, not resolved)
 
@@ -98,6 +102,7 @@ None yet.
 - Owed checks at checkpoint r9 `116bcc2`: the owner's linux `nix build .#boot-iso --rebuild` (expected `sha256-TIzwBaHF0R4m31l6EbW2IU3rkUl73g6ljlNE0S5hGFY=`), and hosted CI on r9 `116bcc2` and Harvey `bd7a6982a`.
 - Phase 20 of the Harvey-rooted work never ran `/gsd-secure-phase` (no SECURITY.md).
 - Docs pin r9 at `c787ce9`; HEAD is 60 commits later with no `crypto/`, `ds/`, `kern/`, `sys/`, `venti/`. Re-verify every landing-site path when its phase is planned.
+- S6 x86_64 KVM leg: scripted and statically checked, PENDING-OWNER. Plan 06 must run `spikes/s6/linux-x86_64.sh` on the x86_64 Linux host (writable `/dev/kvm`, the S3 scratch Harvey tree, the r9 clone at `116bcc2`) before the pass-1 checkpoint.
 
 ### Standing Owner Rules
 
@@ -129,6 +134,6 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 
 ## Session Continuity
 
-Last session: 2026-11-23T00:45:32.038Z
-Stopped at: Completed 01-03-PLAN.md
+Last session: 2026-11-23T00:52:50.000Z
+Stopped at: Completed 01-04-PLAN.md
 Resume file: None
