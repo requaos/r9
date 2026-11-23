@@ -31,6 +31,24 @@
       # "bump rust" commits must not require dual-pin edits.
       toolchainFor = system:
         (pkgsFor system).rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+      # 01-18 (D-07/D-09/HARN-08): the moved gate-app wrapper, copied
+      # from Harvey bd7a698's flake (L26-39): a writeShellApplication
+      # carries its runtimeInputs on PATH (the app runs bare, no
+      # devshell) and prepends the plan9port bin LAST per BUILD_ON_UNIX.
+      mkScriptApp = pkgs: name: file: extraHeader: runtimeInputs:
+        pkgs.writeShellApplication {
+          inherit name runtimeInputs;
+          text = ''
+            set -euo pipefail
+            export PLAN9="${pkgs.plan9port}/plan9"
+            # plan9 bin LAST per BUILD_ON_UNIX — plan9port ships a 9p
+            # `mount` which must not shadow util-linux mount in the
+            # namespace build.
+            export PATH="$PATH:$PLAN9/bin"
+            ${extraHeader}
+            ${builtins.readFile file}
+          '';
+        };
       # llvm-tools lands in the toolchain's rustlib dir; xtask's objcopy()
       # already honors $OBJCOPY first (xtask/src/main.rs:246-271).
       # NB: nixpkgs' bintools wrapper (present even under mkShellNoCC —
@@ -1024,8 +1042,20 @@ WRAP
             # boot channel — permanently in the devshell so `nix develop`
             # builds the q35 ISO without a wrapping `nix shell`.  Linux-only
             # since 20-04: grub2 has no darwin hostPlatform.
+            # 01-18: the moved gate tools — expect + Xvfb + xdotool are
+            # the drawterm driver's feed/venue, and Harvey's drawterm is
+            # the gate binary (D-09); `cargo xtask gate` finds them here.
             packages = [ toolchain pkgs.qemu pkgs.dtc ]
-              ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.grub2 pkgs.xorriso ];
+              ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+                pkgs.grub2
+                pkgs.xorriso
+                pkgs.expect
+                pkgs.xorgserver
+                pkgs.xdotool
+                pkgs.procps
+                pkgs.iproute2
+                harvey.packages.${system}.drawterm
+              ];
             shellHook = ''
               ${objcopyHook toolchain}
               # 01-13 (HARN-07, D-21): the Harvey supply.  Each export is
@@ -1106,6 +1136,41 @@ WRAP
           build = { type = "app"; program = "${r9-build}/bin/r9-build"; };
           boot-virt = { type = "app"; program = "${r9-boot-virt}/bin/r9-boot-virt"; };
           default = { type = "app"; program = "${r9-build}/bin/r9-build"; };
+        }
+        # 01-18 (D-07/D-09/HARN-08): the moved drawterm gate app.  The
+        # header is Harvey's drawtermGateX64Pkg env contract re-keyed
+        # onto r9's supply: the kernel package, r9's iso-builder and
+        # netdev emitter, the read-only amd64 tree, the host mkpaqfs and
+        # authdomain generator (the image bake), and Harvey's drawterm
+        # package as the gate binary (D-09).  The runtimeInputs add the
+        # rust toolchain for `cargo xtask image`, the X11 feed tools and
+        # the host observation tools.  x86_64-linux only: the BIOS ISO
+        # machinery is the q35 channel's venue (X64-05).
+        // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
+          drawterm-gate-x64 = {
+            type = "app";
+            program = "${mkScriptApp pkgs "drawterm-gate-x64" ./nix/gates/drawterm-gate-x64.sh ''
+              export R9_KERNEL_X64_PKG="${self.packages.${system}.kernel-x64}"
+              export R9_ISO_BUILDER="${self.packages.${system}.iso-builder}/bin/r9-iso-builder"
+              export R9_NETDEV_EMITTER="${self.packages.${system}.netdev-args}/bin/r9-netdev-args"
+              export R9_HARVEY_DIR_AMD64="${self.packages.${system}.harvey-tree-amd64}"
+              export R9_MKPAQFS="${self.packages.${system}.harvey-mkpaqfs}/bin/mkpaqfs"
+              export R9_AUTHDOMAIN_GEN="${self.packages.${system}.harvey-authdomain-gen}/bin/authdomain-gen"
+              export DRAWTERM_BIN="${harvey.packages.${system}.drawterm}/bin/drawterm"
+            '' [
+              toolchain
+              pkgs.bash
+              pkgs.coreutils
+              pkgs.qemu
+              pkgs.expect
+              pkgs.xorgserver
+              pkgs.xdotool
+              pkgs.procps
+              pkgs.iproute2
+              pkgs.grub2
+              pkgs.xorriso
+            ]}/bin/drawterm-gate-x64";
+          };
         });
     };
 }
