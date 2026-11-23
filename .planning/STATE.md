@@ -5,16 +5,16 @@ milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
 current_phase: 01
 current_phase_name: Stage P0 - Cross-Build Harness
 status: executing
-stopped_at: 01-33 complete; stop B green (gate/probe/flipback/kernel/TCG); 01-26 next
-last_updated: "2026-11-23T17:21:27.719Z"
+stopped_at: 01-26 complete; owner stop C (01-27) next
+last_updated: "2026-11-23T17:28:57.669Z"
 last_activity: 2026-11-23
-last_activity_desc: stop B green, boot-iso hash re-derived; 01-26 Harvey flip preparation next
-state_head: b58fe7368bd807aafa0fbc562341145533a6ac66
+last_activity_desc: Harvey flip prepared; owner stop C next
+state_head: 8498902419de5f1e579726f2665f07531304b703
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 33
-  completed_plans: 30
+  completed_plans: 31
   percent: 0
 ---
 
@@ -30,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-11-22)
 ## Current Position
 
 Phase: 01 (Stage P0 - Cross-Build Harness) — EXECUTING
-Plan: 29 of 32
+Plan: 30 of 32
 Status: Ready to execute
-Last activity: 2026-11-23 — stop B green, boot-iso hash re-derived; 01-26 Harvey flip preparation next
+Last activity: 2026-11-23 — Harvey flip prepared; owner stop C next
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -176,5 +176,5 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 ## Session Continuity
 
 Last session: 2026-11-23T04:57:34.842Z
-Stopped at: 01-33 complete; stop B green (gate/probe/flipback/kernel/TCG); 01-26 next
+Stopped at: 01-26 complete; owner stop C (01-27) next
 Resume file: None
