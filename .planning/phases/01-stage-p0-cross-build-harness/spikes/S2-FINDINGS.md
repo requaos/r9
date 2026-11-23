@@ -91,6 +91,35 @@ check used `[ -f ]` and reported 12/23 BAD; the exact-name pass reports
 23/23 OK. Any pass-2 consumer that opens a colliding path by name on the Mac
 inherits this trap (which is why tree outputs must not contain them).
 
+## A9 — a context-discarded store path in the devshell
+
+Question: can a devshell export a Linux derivation's store path with the
+string context discarded without building it, and does that path match the
+path the later build produces? D-05 (per-arch trees, built on first use) and
+D-21 (`R9_HARVEY_DIR_AMD64` / `R9_HARVEY_DIR_ARM64`) depend on it.
+
+VERDICT s2-lazy-devshell: PASS
+EVIDENCE s2-lazy-devshell: s2/evidence/lazy-devshell.log
+
+`s2-lazy-target` is an aarch64-linux `runCommand` with a name unique to this
+spike. `devShells.aarch64-darwin.lazy` exports
+`S2_LAZY_PATH` from
+`builtins.unsafeDiscardStringContext s2-lazy-target.outPath`. The four
+recorded observations all hold:
+
+1. The evaluated outPath is
+   `/nix/store/wd8i5jwcaggdafpvpg8rv1ri15yrjajb-s2-lazy-target-a9-0`, and
+   `nix path-info` on the Mac exits 1 ("path … is not valid") before any
+   build.
+2. `nix develop -L path:$S/s2#lazy -c printenv S2_LAZY_PATH` prints that
+   path; only `nix-shell-env.drv` is built. Afterwards the path is still
+   invalid on the Mac **and** on the lima builder — no build was sent.
+3. The printed path equals the evaluated outPath
+   (`S2-LAZY-EVAL-MATCH=yes`).
+4. Building `packages.aarch64-linux.s2-lazy-target` through lima produces
+   the same path (`S2-LAZY-BUILD-MATCH=yes`) and it is valid on the builder
+   afterwards (`nix path-info --store ssh-ng://lima-harvey` exits 0).
+
 ## Exact commands
 
 ```
@@ -117,6 +146,16 @@ nix store verify --no-trust --store "$S/s2/work/mac-store" \
 nix store verify --no-trust --store "$S/s2/work/mac-store" \
   /nix/store/sydxc6ylbmgvml1y9hadk68vd8k5pdkv-s2-casecheck-fod-0
 # then exact-name enumeration + `git hash-object` per collisions.txt line
+
+# A9 (lazy devshell):
+nix eval --raw "path:$S/s2#packages.aarch64-linux.s2-lazy-target.outPath"
+nix path-info /nix/store/wd8i5jwcaggdafpvpg8rv1ri15yrjajb-s2-lazy-target-a9-0   # exit 1
+nix develop -L "path:$S/s2#lazy" -c printenv S2_LAZY_PATH
+nix path-info /nix/store/wd8i5jwcaggdafpvpg8rv1ri15yrjajb-s2-lazy-target-a9-0   # still exit 1
+nix build "path:$S/s2#packages.aarch64-linux.s2-lazy-target" \
+  --store ssh-ng://lima-harvey --eval-store auto -L --print-out-paths
+nix path-info --store ssh-ng://lima-harvey \
+  /nix/store/wd8i5jwcaggdafpvpg8rv1ri15yrjajb-s2-lazy-target-a9-0               # exit 0
 ```
 
 ## Assumption
@@ -128,6 +167,11 @@ and all 23 blob sha1s re-check on the Mac. The qualification is store
 policy, not case handling: importing into the **system** store as the
 owner's user needs a trusted user (or a remote-builder configuration where
 the local daemon itself imports the build result).
+ASSUMPTION A9: CONFIRMED - `builtins.unsafeDiscardStringContext` on an
+aarch64-linux derivation's outPath exports a plain string from an
+aarch64-darwin devshell; entering the shell builds nothing on the builder,
+and the later build produces exactly that path (all four A9 observations
+in `s2/evidence/lazy-devshell.log`).
 
 ## What this means for planning pass 2
 
@@ -150,3 +194,10 @@ the local daemon itself imports the build result).
   the images and ureg checks consume, and assert the installed set has no
   `~nix~case~hack~` name (S1-FINDINGS already requires this; S2 shows the
   failure mode is a silently wrong file, not an error).
+- **The HARN-07 devshell supply can be lazy as D-05 requires.** A
+  context-discarded `outPath` in the darwin `shellHook` is a plain string:
+  `nix develop` built only its env derivation, left the target invalid in
+  both stores, and the later `nix build` produced the identical path. The
+  pass-2 resolver can use the "exported path exists? use it : print and run
+  `nix build <flake>#harvey-tree-<arch>`" contract with no eager build; the
+  only open item is the Mac store import policy above, not laziness.

@@ -1,0 +1,40 @@
+# A9 lazy devshell — lima builder, Mac store (2026-11-23)
+== 1. nix eval --raw path:$S/s2#packages.aarch64-linux.s2-lazy-target.outPath
+/nix/store/wd8i5jwcaggdafpvpg8rv1ri15yrjajb-s2-lazy-target-a9-0
+S2-LAZY-EVAL-OUTPATH=/nix/store/wd8i5jwcaggdafpvpg8rv1ri15yrjajb-s2-lazy-target-a9-0
+== 1b. nix path-info on the Mac store (must be invalid before any build)
+don't know how to build these paths:
+  /nix/store/wd8i5jwcaggdafpvpg8rv1ri15yrjajb-s2-lazy-target-a9-0
+error: path '/nix/store/wd8i5jwcaggdafpvpg8rv1ri15yrjajb-s2-lazy-target-a9-0' is not valid
+RC=1
+== 2. nix develop -L path:$S/s2#lazy -c printenv S2_LAZY_PATH
+building '/nix/store/jqx6lk4jyp209xf5bm7nr7y1nisgymh8-nix-shell-env.drv'...
+/nix/store/wd8i5jwcaggdafpvpg8rv1ri15yrjajb-s2-lazy-target-a9-0
+RC=0
+== 2b. after the shell exits: nix path-info on the Mac store (must still be invalid)
+don't know how to build these paths:
+  /nix/store/wd8i5jwcaggdafpvpg8rv1ri15yrjajb-s2-lazy-target-a9-0
+error: path '/nix/store/wd8i5jwcaggdafpvpg8rv1ri15yrjajb-s2-lazy-target-a9-0' is not valid
+RC=1
+== 2c. after the shell exits: nix path-info on the builder store (must be invalid: no build was sent)
+don't know how to build these paths:
+  /nix/store/wd8i5jwcaggdafpvpg8rv1ri15yrjajb-s2-lazy-target-a9-0
+error: path '/nix/store/wd8i5jwcaggdafpvpg8rv1ri15yrjajb-s2-lazy-target-a9-0' is not valid
+RC=1
+== 3. printed == evaluated?
+S2-LAZY-PRINTED-PATH=/nix/store/wd8i5jwcaggdafpvpg8rv1ri15yrjajb-s2-lazy-target-a9-0
+S2-LAZY-EVAL-MATCH=yes
+== 4. nix build path:$S/s2#packages.aarch64-linux.s2-lazy-target --store ssh-ng://lima-harvey --eval-store auto -L --print-out-paths
+warning: ignoring the client-specified setting 'store', because it is a restricted setting and you are not a trusted user
+warning: ignoring the client-specified setting 'store', because it is a restricted setting and you are not a trusted user
+warning: ignoring the client-specified setting 'store', because it is a restricted setting and you are not a trusted user
+don't know how to build these paths:
+  /nix/store/zzafsnswq2nx3zgpqlrzhss4n7n9cyhx-s2-lazy-target-a9-0.drv
+copying 1 paths...
+copying path '/nix/store/zzafsnswq2nx3zgpqlrzhss4n7n9cyhx-s2-lazy-target-a9-0.drv' to 'ssh-ng://lima-harvey'...
+building '/nix/store/zzafsnswq2nx3zgpqlrzhss4n7n9cyhx-s2-lazy-target-a9-0.drv'...
+S2-LAZY-BUILT-PATH=/nix/store/wd8i5jwcaggdafpvpg8rv1ri15yrjajb-s2-lazy-target-a9-0
+S2-LAZY-BUILD-MATCH=yes
+== 4b. nix path-info on the builder store (must now be valid)
+/nix/store/wd8i5jwcaggdafpvpg8rv1ri15yrjajb-s2-lazy-target-a9-0
+RC=0

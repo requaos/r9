@@ -102,10 +102,22 @@
             [ "$fail" -eq 0 ]
           '';
         };
+
+      # A9 (01-RESEARCH.md Pattern 1): a target on the Mac's builder system
+      # (aarch64-linux) whose store path the aarch64-darwin devshell exports
+      # with its string context discarded, so `nix develop` never builds it.
+      # The name is unique to this spike so it cannot already be in a store.
+      linuxArm = nixpkgs.legacyPackages.aarch64-linux;
+      lazyTarget = linuxArm.runCommand "s2-lazy-target-a9-0" { } ''
+        mkdir -p "$out"
+        printf 'S2-LAZY-TARGET a9\n' > "$out/target.txt"
+      '';
+      lazyTargetPath = builtins.unsafeDiscardStringContext lazyTarget.outPath;
     in
     {
       packages = forAll (
-        system: pkgs: rec {
+        system: pkgs:
+        rec {
           # Source fetched at eval time on the Mac, into the case-hacked APFS
           # store, then shipped to the builder as a NAR.
           s2-casecheck-input = mkCasecheck pkgs "s2-casecheck-input" harvey;
@@ -121,6 +133,17 @@
             }
           );
         }
+        // nixpkgs.lib.optionalAttrs (system == "aarch64-linux") {
+          s2-lazy-target = lazyTarget;
+        }
       );
+
+      # The lazy devshell D-05/D-21 need: S2_LAZY_PATH is a plain string (no
+      # context), so entering the shell does not realise the Linux target.
+      devShells.aarch64-darwin.lazy = nixpkgs.legacyPackages.aarch64-darwin.mkShell {
+        shellHook = ''
+          export S2_LAZY_PATH="${lazyTargetPath}"
+        '';
+      };
     };
 }
