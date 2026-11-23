@@ -15,8 +15,8 @@ platform = "virt"
 # no dtb key here: virt's DTB is qemu-facing, passed via [qemu].dtb
 # The NETIP-03 loopback gate profile (08-04) — virtnet's shape (the real
 # Harvey boot chain via dev_exec + dev_bootchain: pid 1 is the real
-# Harvey boot(8) at /boot/boot; the Harvey-baked bootfs.paq via the 07-01
-# harvey: initrd channel) plus devip: dev = [..., "ip"] emits
+# Harvey boot(8) at /boot/boot; the r9-assembled bootfs image via the
+# r9 image: initrd channel) plus devip: dev = [..., "ip"] emits
 # cfg(dev_ip), wiring the #I device (hook/clock registration in
 # main.rs, the net-deadline sweep in timer.rs).  cfg(dev_ip) was
 # predeclared in the workspace check-cfg list in 08-01; this TOML is its
@@ -35,11 +35,11 @@ accel = "tcg"
 # Committed trimmed DTB: qemu loads it at 0x40000000 (the ELF-boot fix —
 # without -dtb, qemu 11.1.2 loads no DTB at all for ELF kernels and x0 is 0)
 dtb = "aarch64/lib/virt-gicv2.dtb"
-# The Harvey-baked boot-chain image (08-03's payloads: ping/udpecho baked;
-# 08-04's fixtures: /lib/netaddr.rc + /lib/netip-loopback.rc), resolved
-# through R9_HARVEY_DIR; absence is a loud pre-spawn error naming
-# `sh build/aarch64/subset-build.sh` then `sh build/aarch64/mkimage.sh`.
-initrd = { file = "harvey:build/aarch64/bootfs.paq", addr = 0x48000000 }
+# The r9-assembled boot-chain image (08-03's payloads: ping/udpecho baked;
+# 08-04's fixtures: /lib/netaddr.rc + /lib/netip-loopback.rc), assembled
+# on demand from xtask/manifests/arm64/bootfs.toml and D-29-verified
+# against the arm64 reference bake.
+initrd = { file = "image:bootfs", addr = 0x48000000 }
 
 [dist]
 # ELF is the boot image on virt; skip the objcopy+gzip flat-image pipeline
