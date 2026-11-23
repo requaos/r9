@@ -2,19 +2,19 @@
 gsd_state_version: "1.0"
 milestone: v3.0
 milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
-current_phase: 1
+current_phase: 01
 current_phase_name: Stage P0 - Cross-Build Harness
 status: executing
-stopped_at: Completed 01-07-PLAN.md; planning pass 1 closed, re-run /gsd-plan-phase 1 for pass 2
-last_updated: "2026-11-23T04:43:52.767Z"
+stopped_at: Completed 01-08-PLAN.md
+last_updated: "2026-11-23T04:52:04.145Z"
 last_activity: 2026-11-23
-last_activity_desc: Phase 01 plan 07 recorded the owner's decisions and closed planning pass 1; pass 2 planning is next
-state_head: 6f12711d384d25f529308374421606b0e747f9ea
+last_activity_desc: Phase 01 execution started
+state_head: a297253006d0a754c5d4a12e1259c483efebf7f5
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 31
-  completed_plans: 7
+  completed_plans: 8
   percent: 0
 ---
 
@@ -29,10 +29,10 @@ See: .planning/PROJECT.md (updated 2026-11-22)
 
 ## Current Position
 
-Phase: 1 (Stage P0 - Cross-Build Harness) — READY TO EXECUTE
-Plan: 7 of 31 (pass 1 executed; pass 2 plans 01-08 to 01-31 ready)
-Status: Ready to execute — pass 2 planned; next is /gsd-execute-phase 1
-Last activity: 2026-11-23 — Planning pass 2 written and verified (24 plans, waves 4 to 17)
+Phase: 01 (Stage P0 - Cross-Build Harness) — EXECUTING
+Plan: 9 of 31
+Status: Ready to execute
+Last activity: 2026-11-22 — Phase 01 execution started
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -59,6 +59,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 01 P02 | 9min | 3 tasks | 15 files |
 | Phase 01 P06 | 80min | 3 tasks | 19 files |
 | Phase 01 P07 | 17min | 3 tasks | 5 files |
+| Phase 01 P08 | 4min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -105,6 +106,10 @@ Full log is the PROJECT.md Key Decisions table. Recent:
 - [Phase 01]: D-20: option A, build and boot Harvey's own kernel to the root-is-from prompt; the rc prompt through u9fs is the next increment. D-17: ps with the S6 recipe. D-16: member lists now, byte differentials after the hsecstored resolver. Decision 7: keep the spike builder for pass 2; no revert.
 - [Phase 01]: D-11: keep the two /srv/rio.* and /srv/riowctl.* entries as the marker. Owner correction 2026-11-23: the tr-ok line was the owner's manual graphical drawterm attempt, not the gate; the headless drawterm never authenticated because the generated DEMO password was unknown. s3-rio stays FAIL; next action is the DEMO password/credential path, headless auth and feed, then re-run with control-noG unchanged.
 - [Phase 01]: A6 is UNTESTED, not CONFIRMED: the X11 backend is statically proven and the headless drawterm starts, but no headless login completed (generated DEMO password unknown). Pass 1 is closed with PASS-2 READY: yes; re-run /gsd-plan-phase 1 for pass 2.
+- [Phase 01]: Plan 01-08: the aarch64 smoke initrd is assembled by r9 from xtask/manifests/arm64/smoke.toml through the stage-and-bake engine; virtexec boots it green under HVF and the D-29 member list is byte-identical to the pre-D-16 assembler's.
+- [Phase 01]: Plan 01-08: manifest modes follow the staged binaries (0775, hello 0755) rather than a uniform 0755, because the member list records mode and D-29 requires an empty diff.
+- [Phase 01]: Plan 01-08: R9_MKPAQFS is an explicit input with no derived default; mkpaqfs is not part of the Harvey TREE contract.
+- [Phase 01]: Plan 01-08: all seven Harvey-tree consumer sites resolve through harvey::harvey_dir(arch); uregcheck's zero-argument resolver is deleted and an include_str! source invariant keeps it that way.
 
 ### Open Questions (ten warnings, approved to be carried, not resolved)
 
@@ -166,6 +171,6 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 
 ## Session Continuity
 
-Last session: 2026-11-23T03:03:15.912Z
-Stopped at: Completed 01-07-PLAN.md; planning pass 1 closed, re-run /gsd-plan-phase 1 for pass 2
+Last session: 2026-11-23T04:52:04.115Z
+Stopped at: Completed 01-08-PLAN.md
 Resume file: None
