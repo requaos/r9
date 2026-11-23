@@ -40,7 +40,7 @@ Milestone numbering continues from the closed Harvey-rooted milestone v2.1.
 
 **Milestone Goal:** The golden invariant is an r9-owned gate, Harvey is a read-only supply of C artifacts that Rust replaces one at a time, the design decisions are locked, and the `crypto/`, `ds/` and `9P2000.aead` wire foundations exist and are pinned by host tests.
 
-- [ ] **Phase 1: Stage P0 - Cross-Build Harness** - `cargo xtask` draws C artifacts from a read-only Harvey tree through a fallback manifest; the boot-to-rio gate runs per commit
+- [x] **Phase 1: Stage P0 - Cross-Build Harness** - `cargo xtask` draws C artifacts from a read-only Harvey tree through a fallback manifest; the boot-to-rio gate runs per commit (completed 2026-11-23)
 - [ ] **Phase 2: Guide Phase 0 - Design Lock and rfork Flag Reservation** - threat model, corrected C prototypes, four `rfork` flag bits reserved in r9, maintainer confirms decisions
 - [ ] **Phase 3: Guide Phase 1 - crypto/ and ds/ Foundations** - HKDF, ChaCha20, BLAKE3, TPHT, Roaring, `ClientSet`, with lint contracts
 - [ ] **Phase 4: Guide Phase 2 - 9P2000.aead Transport and FidTable** - wire envelope, monotonic nonces, hybrid `FidHandle`, `FidShard`, Factotum `Tauth`
@@ -57,7 +57,7 @@ Milestone numbering continues from the closed Harvey-rooted milestone v2.1.
   5. The existing x86_64 q35 boot-test profiles and the aarch64 virt quick pass still pass through the reconciled mechanism.
   6. Inside `nix develop`, with nothing set by hand, `cargo xtask` commands find the Harvey tree: the r9 flake pins Harvey and the devshell exports its read-only location, and that tree contains the pre-built artifacts the harness needs.
   7. Flake ownership is flipped: r9's flake imports Harvey and exposes the composed boot and gate outputs that Harvey's flake used to own, Harvey's flake has no `r9` input, and each moved gate passes when run from r9.
-**Plans**: 34/34 plans executed — 7/7 executed in planning pass 1 (research spikes S1-S6 and the owner checkpoint, D-22); 24 pass-2 plans (01-08 to 01-31) implement HARN-01 to HARN-08, with four owner stops (A 01-12, B 01-22, C 01-27, E 01-28); plan 01-32 is the owner-directed rio de-risk iteration after the stop-A FAIL (D-30); plan 01-33 is the stop-B fix iteration; plan 01-34 is the stop-C fix iteration after the tap/capture/fpprobe failures
+**Plans**: 34/34 plans complete — 7/7 executed in planning pass 1 (research spikes S1-S6 and the owner checkpoint, D-22); 24 pass-2 plans (01-08 to 01-31) implement HARN-01 to HARN-08, with four owner stops (A 01-12, B 01-22, C 01-27, E 01-28); plan 01-32 is the owner-directed rio de-risk iteration after the stop-A FAIL (D-30); plan 01-33 is the stop-B fix iteration; plan 01-34 is the stop-C fix iteration after the tap/capture/fpprobe failures
 
 Plans:
 **Wave 1**
@@ -365,7 +365,7 @@ Phases execute in numeric order: 1 → 2 → 3 → … → 16 (decimal insertion
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 1. Stage P0 - Cross-Build Harness | v3.0 | 34/34 | In Progress | - |
+| 1. Stage P0 - Cross-Build Harness | v3.0 | 34/34 | Complete | 2026-11-23 |
 | 2. Guide Phase 0 - Design Lock and rfork Flag Reservation | v3.0 | 0/TBD | Not started | - |
 | 3. Guide Phase 1 - crypto/ and ds/ Foundations | v3.0 | 0/TBD | Not started | - |
 | 4. Guide Phase 2 - 9P2000.aead Transport and FidTable | v3.0 | 0/TBD | Not started | - |

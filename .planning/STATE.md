@@ -2,20 +2,20 @@
 gsd_state_version: "1.0"
 milestone: v3.0
 milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
-current_phase: 01
-current_phase_name: Stage P0 - Cross-Build Harness
-status: verifying
-stopped_at: All 34 plans complete; phase verification
-last_updated: "2026-11-23T22:06:21.000Z"
+current_phase: 2
+current_phase_name: Guide Phase 0 - Design Lock and rfork Flag Reservation
+status: planning
+stopped_at: Phase 01 complete, ready to plan Phase 2
+last_updated: "2026-11-23T22:12:07.314Z"
 last_activity: 2026-11-23
-last_activity_desc: all 34 plans complete; phase verification (code review, Nyquist, verifier)
-state_head: 6f8472aa7041c2f02b59769ab562cc3620941f02
+last_activity_desc: Phase 01 complete, transitioned to Phase 2
+state_head: 405e2d81f4a11b409c09822f8cf0a8f5ac9e35cc
 progress:
   total_phases: 4
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 34
   completed_plans: 34
-  percent: 0
+  percent: 25
 ---
 
 # Project State
@@ -25,16 +25,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-22)
 
 **Core value:** The OS boots to rio on QEMU q35 at every commit.
-**Current focus:** Phase 01 — Stage P0 - Cross-Build Harness
+**Current focus:** Phase 02 — Guide Phase 0 - Design Lock and rfork Flag Reservation
 
 ## Current Position
 
-Phase: 01 (Stage P0 - Cross-Build Harness) — VERIFYING
-Plan: 34 of 34
-Status: Verifying
-Last activity: 2026-11-23 — all 34 plans complete; phase verification (code review, Nyquist, verifier)
+Phase: 2 — Guide Phase 0 - Design Lock and rfork Flag Reservation
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-11-23 — Phase 01 complete, transitioned to Phase 2
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [███░░░░░░░] 25%
 
 ## Performance Metrics
 
@@ -45,7 +45,7 @@ Progress: [░░░░░░░░░░] 0%
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 01 | 34 | 34 | - |
+| 01 | 34 | - | - |
 
 *Updated after each plan completion*
 **Per-Plan Metrics:**
@@ -176,5 +176,5 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 ## Session Continuity
 
 Last session: 2026-11-23T04:57:34.842Z
-Stopped at: All 34 plans complete; phase verification
+Stopped at: Phase 01 complete, ready to plan Phase 2
 Resume file: None

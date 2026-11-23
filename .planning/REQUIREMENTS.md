@@ -11,14 +11,14 @@ Standing constraint on every requirement below: the golden invariant (boots to r
 
 ### Cross-Build Harness (Stage P0)
 
-- [ ] **HARN-01**: One documented `cargo xtask` command boots r9 on QEMU q35 x86_64 to a rio session using only the r9 kernel and the pre-built Harvey tree, and exits non-zero if rio is not reached (the golden-invariant gate, runnable per commit) (owner direction; today only Harvey's flake gates exercise rio)
-- [ ] **HARN-02**: Harvey is consumed strictly read-only from one resolved location; a single resolver reconciles the existing `R9_HARVEY_DIR` contract with `HARVEY_SRC` and `vendor/harvey/`, every existing consumer (boot-test, ureg-check, initrd, pcap netaddr seam, `harvey:` module paths in configs) goes through it, a missing tree fails with a message naming the variable, and a gate run leaves the Harvey tree unmodified (owner direction; PROJECT.md note N4)
-- [ ] **HARN-03**: A Harvey fallback manifest in xtask enumerates every C library object and userland binary the image draws from Harvey, per architecture, with the source of each entry (Harvey or Rust) (owner direction)
-- [ ] **HARN-04**: Switching one manifest entry to its Rust replacement swaps that single artifact into the assembled image and removes it from the Harvey fallback set, and the golden gate passes at that commit; switching it back restores the Harvey artifact (owner direction; IG-V02 risk 4)
-- [ ] **HARN-05**: The harness fails fast with a named error when the image contains a Harvey artifact not in the manifest, or when an entry marked Rust still resolves to the Harvey artifact (the manifest and the image cannot drift)
-- [ ] **HARN-06**: Existing x86_64 q35 boot-test profiles and the aarch64 virt quick pass (tier-1 on HVF and TCG, smoke, net-smoke and cpu once on HVF) still pass through the reconciled mechanism
-- [ ] **HARN-07**: The r9 nix flake is the supplier of the read-only Harvey tree: the flake pins Harvey, and the default devshell (`nix develop`) exports the resolved tree locations per guest architecture (`R9_HARVEY_DIR_AMD64`, `R9_HARVEY_DIR_ARM64`; `R9_HARVEY_DIR` remains a manual override that wins when set) so every `cargo xtask` command run inside the devshell finds it with no manual setup; the tree it names is read-only and contains the pre-built artifacts the harness draws from; xtask itself keeps no built-in default path (outside the devshell an unset variable is still a named error); the flake apps and CI use the same supply (owner direction 2026-11-22)
-- [ ] **HARN-08**: Flake ownership is flipped: r9's flake imports Harvey and produces the composed outputs that Harvey's flake owns today (the `boot-r9*` apps for aarch64 and x86_64 including smoke, net-smoke, tier1, cpu, services, net-soak, churn, stress and auth, plus `drawterm-gate-x64` and the helpers they need such as `net-doctor` and `drawterm`); Harvey's flake no longer has an `r9` input or any `boot-r9*`/gate output and keeps only what builds Harvey itself; each moved gate passes from r9 at the flip commit with results equivalent to its Harvey-hosted run; no lock cycle remains between the two repos (owner direction 2026-11-22). This edits `flake.nix` in both repos; the Harvey commit and both pushes need owner approval
+- [x] **HARN-01**: One documented `cargo xtask` command boots r9 on QEMU q35 x86_64 to a rio session using only the r9 kernel and the pre-built Harvey tree, and exits non-zero if rio is not reached (the golden-invariant gate, runnable per commit) (owner direction; today only Harvey's flake gates exercise rio)
+- [x] **HARN-02**: Harvey is consumed strictly read-only from one resolved location; a single resolver reconciles the existing `R9_HARVEY_DIR` contract with `HARVEY_SRC` and `vendor/harvey/`, every existing consumer (boot-test, ureg-check, initrd, pcap netaddr seam, `harvey:` module paths in configs) goes through it, a missing tree fails with a message naming the variable, and a gate run leaves the Harvey tree unmodified (owner direction; PROJECT.md note N4)
+- [x] **HARN-03**: A Harvey fallback manifest in xtask enumerates every C library object and userland binary the image draws from Harvey, per architecture, with the source of each entry (Harvey or Rust) (owner direction)
+- [x] **HARN-04**: Switching one manifest entry to its Rust replacement swaps that single artifact into the assembled image and removes it from the Harvey fallback set, and the golden gate passes at that commit; switching it back restores the Harvey artifact (owner direction; IG-V02 risk 4)
+- [x] **HARN-05**: The harness fails fast with a named error when the image contains a Harvey artifact not in the manifest, or when an entry marked Rust still resolves to the Harvey artifact (the manifest and the image cannot drift)
+- [x] **HARN-06**: Existing x86_64 q35 boot-test profiles and the aarch64 virt quick pass (tier-1 on HVF and TCG, smoke, net-smoke and cpu once on HVF) still pass through the reconciled mechanism
+- [x] **HARN-07**: The r9 nix flake is the supplier of the read-only Harvey tree: the flake pins Harvey, and the default devshell (`nix develop`) exports the resolved tree locations per guest architecture (`R9_HARVEY_DIR_AMD64`, `R9_HARVEY_DIR_ARM64`; `R9_HARVEY_DIR` remains a manual override that wins when set) so every `cargo xtask` command run inside the devshell finds it with no manual setup; the tree it names is read-only and contains the pre-built artifacts the harness draws from; xtask itself keeps no built-in default path (outside the devshell an unset variable is still a named error); the flake apps and CI use the same supply (owner direction 2026-11-22)
+- [x] **HARN-08**: Flake ownership is flipped: r9's flake imports Harvey and produces the composed outputs that Harvey's flake owns today (the `boot-r9*` apps for aarch64 and x86_64 including smoke, net-smoke, tier1, cpu, services, net-soak, churn, stress and auth, plus `drawterm-gate-x64` and the helpers they need such as `net-doctor` and `drawterm`); Harvey's flake no longer has an `r9` input or any `boot-r9*`/gate output and keeps only what builds Harvey itself; each moved gate passes from r9 at the flip commit with results equivalent to its Harvey-hosted run; no lock cycle remains between the two repos (owner direction 2026-11-22). This edits `flake.nix` in both repos; the Harvey commit and both pushes need owner approval
 
 ### Design Lock and Flag Reservation (guide Phase 0)
 
@@ -226,14 +226,14 @@ Which phases cover which requirements. Each requirement maps to exactly one phas
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| HARN-01 | Phase 1 | Pending |
-| HARN-02 | Phase 1 | Pending |
-| HARN-03 | Phase 1 | Pending |
-| HARN-04 | Phase 1 | Pending |
-| HARN-05 | Phase 1 | Pending |
-| HARN-06 | Phase 1 | Pending |
-| HARN-07 | Phase 1 | Pending |
-| HARN-08 | Phase 1 | Pending |
+| HARN-01 | Phase 1 | Complete |
+| HARN-02 | Phase 1 | Complete |
+| HARN-03 | Phase 1 | Complete |
+| HARN-04 | Phase 1 | Complete |
+| HARN-05 | Phase 1 | Complete |
+| HARN-06 | Phase 1 | Complete |
+| HARN-07 | Phase 1 | Complete |
+| HARN-08 | Phase 1 | Complete |
 | DSGN-01 | Phase 2 | Pending |
 | DSGN-02 | Phase 2 | Pending |
 | DSGN-03 | Phase 2 | Pending |
