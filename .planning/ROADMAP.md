@@ -57,7 +57,7 @@ Milestone numbering continues from the closed Harvey-rooted milestone v2.1.
   5. The existing x86_64 q35 boot-test profiles and the aarch64 virt quick pass still pass through the reconciled mechanism.
   6. Inside `nix develop`, with nothing set by hand, `cargo xtask` commands find the Harvey tree: the r9 flake pins Harvey and the devshell exports its read-only location, and that tree contains the pre-built artifacts the harness needs.
   7. Flake ownership is flipped: r9's flake imports Harvey and exposes the composed boot and gate outputs that Harvey's flake used to own, Harvey's flake has no `r9` input, and each moved gate passes when run from r9.
-**Plans**: 7/7 plans executed in planning pass 1 (research spikes S1-S6 and the owner checkpoint, D-22); pass-2 plans TBD after the spike results
+**Plans**: 31 plans — 7/7 executed in planning pass 1 (research spikes S1-S6 and the owner checkpoint, D-22); 24 pass-2 plans (01-08 to 01-31) implement HARN-01 to HARN-08, with four owner stops (A 01-12, B 01-22, C 01-27, E 01-28)
 
 Plans:
 **Wave 1**
@@ -72,6 +72,63 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 - [x] 01-07-PLAN.md — Pass-1 closing: consolidated results and the owner's decisions (D-04 after S2)
+
+**Cross-cutting constraints:** <!-- gsd:generated -->
+- Each moved driver differs from Harvey's only in paths and env wiring (recorded diff), and its run's stage list and pass counts match the latest committed Harvey-hosted evidence where one exists (HARN-08 equivalence)
+
+*Planning pass 2 (implementation; waves continue after pass 1)*
+
+**Wave 4**
+- [ ] 01-08-PLAN.md — Tracer: per-arch resolver -> smoke manifest -> image engine -> virtexec boot (HVF); full HARN-02 resolver
+- [ ] 01-09-PLAN.md — Rio de-risk prep: DEMO credential path, drawterm X11 password path, fixed feed, reusable witness driver (D-28)
+- [ ] 01-10-PLAN.md — Harvey as a normal flake input at bd7a698, A13 checks, Mac builder and pin-bump docs
+
+**Wave 5**
+- [ ] 01-11-PLAN.md — Image engine hardening: two-way drift, Rust provenance, `cargo xtask image`, reference compare, `image:` scheme
+- [ ] 01-12-PLAN.md — OWNER STOP A: lima remote builder, rio leg re-run on KVM, x86_64 drawterm through the follow
+
+**Wave 6**
+- [ ] 01-13-PLAN.md — Flake supply for arm64: proot venue, hostbin, mkpaqfs, harvey-tree-arm64 (smoke slice), lazy devshell exports
+
+**Wave 7**
+- [ ] 01-14-PLAN.md — harvey-tree-amd64 (all tiers, stage programs, fixtures), host authdomain-gen, tier-0 library table
+
+**Wave 8**
+- [ ] 01-15-PLAN.md — amd64 reference bake (member lists) and the marker, chain, substrate manifests verified against it
+
+**Wave 9**
+- [ ] 01-16-PLAN.md — cpu and auth images with the bake-time auth domain in r9's assembler; q35cpu on `image:cpu`
+- [ ] 01-17-PLAN.md — Full arm64 tree, arm64 reference and the aarch64 bootfs image; virtnet/virtip on HVF
+
+**Wave 10**
+- [ ] 01-18-PLAN.md — Quick gate: `cargo xtask gate` with the rio leg and control; drawterm gate moved into r9
+- [ ] 01-19-PLAN.md — net, services, tier and churn images
+- [ ] 01-29-PLAN.md — Five x86_64 profiles (q35exec, q35churn, q35shell, q35churnshell, q35auth) on `image:`; no x86_64 profile reads a Harvey-baked image (split from 01-15)
+
+**Wave 11**
+- [ ] 01-20-PLAN.md — Swap probe: ps -> Rust a.out, flip, flip back, probe removed (D-17/D-18/D-27)
+- [ ] 01-21-PLAN.md — aarch64 boot, smoke and tier-1 gates moved into r9; tier-1 (HVF, TCG) and smoke on the Mac
+
+**Wave 12**
+- [ ] 01-22-PLAN.md — OWNER STOP B: quick gate x2 + failing direction, swap shas, nine x86_64 profiles, boot-iso FOD on KVM
+- [ ] 01-30-PLAN.md — aarch64 net-smoke and cpu gates moved into r9; whole aarch64 quick pass on the Mac (split from 01-21)
+
+**Wave 13**
+- [ ] 01-23-PLAN.md — x86_64 smoke, tier-1, churn, services gates moved into r9
+
+**Wave 14**
+- [ ] 01-24-PLAN.md — x86_64 net smoke, net soak and stress gates, net-doctor and host-echo moved into r9
+- [ ] 01-25-PLAN.md — CI on the flake supply; relocated Harvey-hosted r9 legs; TCG quick gate (best effort)
+
+**Wave 15**
+- [ ] 01-26-PLAN.md — Harvey flip change prepared in a scratch clone (q35 own-kernel app, deletions); stop-C witness steps
+- [ ] 01-31-PLAN.md — x86_64 plain boot, auth gate, cpu-bringup driver and drawterm developer app moved into r9; every composed output has an r9 home (split from 01-24)
+
+**Wave 16**
+- [ ] 01-27-PLAN.md — OWNER STOP C: full moved set from r9 on KVM, Harvey diff approval, the single Harvey commit, owner push
+
+**Wave 17**
+- [ ] 01-28-PLAN.md — Lock-only pin bump; OWNER STOP E at the bump; phase-boundary audit (R1-R7)
 **Open questions**: Note N4. At HEAD r9's xtask has no rio assertion (Harvey's flake proves rio through its drawterm gate), so the "reached rio" check is new work. Owner direction 2026-11-22: the nix flake supplies the read-only Harvey tree through the devshell (HARN-07), which settles the default-path question: the devshell exports the location and xtask keeps no built-in default. Findings at HEAD that the plan must solve: r9's `flake.nix` has no Harvey input and its devshell sets no `R9_HARVEY_DIR`; Harvey's flake takes r9 as an input (`inputs.r9`) and owns the composed outputs (about twenty apps: `boot-r9`, `boot-r9-smoke`, `boot-r9-net-smoke`, `boot-r9-tier1`, `boot-r9-cpu`, the `-x64` variants including services, net-soak, churn, stress and auth, `drawterm-gate-x64`, `net-doctor`, `drawterm`, driven by `nix/*.sh` and `build/*/*.expect` in Harvey); owner direction 2026-11-22 (HARN-08) flips this in Phase 1 so r9 imports Harvey and produces those outputs, and Harvey drops its `r9` input. The plan must order the flip so no commit leaves a lock cycle or a gate with no home, decide which scripts and expect files move to r9 and which stay in the Harvey tree and are read from it, and account for Harvey's `flake.lock` currently pinning r9 `116bcc2` (the `legacy-final` checkpoint keeps the old arrangement reproducible). Editing Harvey's `flake.nix` is the one approved Harvey change in this phase; the Harvey commit and push need owner approval; Harvey's flake exposes no package of the built tree (only `harness`, `minimega`, `drawterm`), and the built binaries (for example `amd64/bin`) are gitignored, so a plain source input is read-only but not pre-built. The plan must decide how the pre-built artifacts get into the read-only tree (a derivation in r9's flake that builds the Harvey userland from the pinned source, or another approved route), per system including aarch64-darwin, where the Harvey namespace build currently runs in the lima VM. The swap probe cannot be a port (no Rust userland exists yet); choose a throwaway stand-in. The expected edits are in `xtask/` (and possibly `flake.nix`), which need no owner approval and should change no kernel bytes; any `port/src` edit would need owner approval with the diff shown first.
 
 #### Phase 2: Guide Phase 0 - Design Lock and rfork Flag Reservation
@@ -301,7 +358,7 @@ Phases execute in numeric order: 1 → 2 → 3 → … → 16 (decimal insertion
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 1. Stage P0 - Cross-Build Harness | v3.0 | 7/7 | In Progress | - |
+| 1. Stage P0 - Cross-Build Harness | v3.0 | 7/28 | In Progress | - |
 | 2. Guide Phase 0 - Design Lock and rfork Flag Reservation | v3.0 | 0/TBD | Not started | - |
 | 3. Guide Phase 1 - crypto/ and ds/ Foundations | v3.0 | 0/TBD | Not started | - |
 | 4. Guide Phase 2 - 9P2000.aead Transport and FidTable | v3.0 | 0/TBD | Not started | - |

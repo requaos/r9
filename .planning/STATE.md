@@ -2,18 +2,18 @@
 gsd_state_version: "1.0"
 milestone: v3.0
 milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
-current_phase: 01
+current_phase: 1
 current_phase_name: Stage P0 - Cross-Build Harness
 status: executing
 stopped_at: Completed 01-07-PLAN.md; planning pass 1 closed, re-run /gsd-plan-phase 1 for pass 2
-last_updated: "2026-11-23T03:03:15.935Z"
+last_updated: "2026-11-23T04:43:52.767Z"
 last_activity: 2026-11-23
 last_activity_desc: Phase 01 plan 07 recorded the owner's decisions and closed planning pass 1; pass 2 planning is next
-state_head: fedd167744fb8ff77e9b9da1225fd8b409003c34
+state_head: 6f12711d384d25f529308374421606b0e747f9ea
 progress:
   total_phases: 4
   completed_phases: 0
-  total_plans: 7
+  total_plans: 31
   completed_plans: 7
   percent: 0
 ---
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-11-22)
 
 ## Current Position
 
-Phase: 01 (Stage P0 - Cross-Build Harness) — EXECUTING
+Phase: 1 (Stage P0 - Cross-Build Harness) — READY TO EXECUTE
 Plan: 7 of 7 (planning pass 1 complete)
 Status: Pass 1 closed (01-07); pass 2 planning pending — re-run /gsd-plan-phase 1
 Last activity: 2026-11-23 — Plan 07 recorded the owner's decisions and closed planning pass 1
@@ -70,6 +70,7 @@ Full log is the PROJECT.md Key Decisions table. Recent:
 - [Owner 2026-11-22] The r9 nix flake supplies the read-only Harvey tree to `cargo xtask` through the `nix develop` devshell (HARN-07, Phase 1); xtask keeps no built-in default path.
 - [Owner 2026-11-22] Phase 1 flips flake ownership (HARN-08): r9's flake imports Harvey and produces the composed outputs Harvey's flake owns today; Harvey's flake stops importing r9. Harvey's `flake.nix` is edited for this; the Harvey commit and pushes need owner approval.
 - [Owner 2026-11-22] Phase 1 is planned in two passes (CONTEXT D-22). Pass 1 (plans 01-01 to 01-07) covers spikes S1 to S6 and an owner checkpoint only. Coverage gates overridden for pass 1 on that basis: HARN-05 and decisions D-02, D-06, D-07, D-09, D-10, D-12, D-14, D-15 are not yet in any plan, and no HARN requirement is implemented until pass 2. Re-run `/gsd-plan-phase 1` after the spike results to write pass 2.
+- [2026-11-23] Phase 1 planning pass 2 written: plans 01-08 to 01-31 (waves 4 to 17) implement HARN-01 to HARN-08. Coverage gates now pass without override (decisions 29/29). Four owner stops: A (01-12, register the lima builder and re-run the rio leg on KVM), B (01-22, KVM witness), C (01-27, full gate set, Harvey diff approval, Harvey commit and push), E (01-28, lock-only pin bump).
 - [Roadmap] Phase order is the owner's migration plan; Stage P0 is Phase 1; "Milestone S" and "Milestone STD" are source labels for Phases 8 and 9.
 - [Ingest] Precedence IG > AC > RFC > PT. Nothing is locked; the guide's "non-negotiable" decisions are constraints pending confirmation in Phase 2.
 - [Phase 01]: S5 kernel provenance: the Mac copy of Harvey's 9k10cpu.elf has sha256 ecdcdad... and an unknown source commit; the KVM witness pins the sha256, not a commit.
