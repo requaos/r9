@@ -50,6 +50,14 @@ Requirements: HARN-01 to HARN-08. Not in this phase: porting any real tool (Trac
 - **D-22:** The phase is planned in two passes. Pass 1 plans and runs the research spikes S1 to S6 (`01-RESEARCH.md`, "Wave 0 Gaps") and ends at an owner checkpoint. The remaining plans are written after the spike results. The Mac builder mechanism (D-04) is chosen after spike S2.
 - **D-23:** The first Harvey pin is the pushed `legacy-final` commit (`bd7a698`); r9 never locks an unpushed Harvey commit.
 
+### Decisions after the spikes (owner, 2026-11-23; source: `spikes/SPIKE-RESULTS.md`, "Owner decisions (closing checkpoint)")
+- **D-24:** Settles D-04. Both Mac builder mechanisms are documented, with the lima VM `harvey` (registered as an `ssh-ng` remote builder) as the primary and the Determinate native builder as the documented alternative. The lima VM and its guest configuration from pass 1 are kept. The Harvey source is supplied by a builder-side fixed-output fetch, and tree outputs contain no case-colliding names.
+- **D-25:** Settles the D-03 venue. The tree derivations run Harvey's build under `proot`, with no dependency on `unshare` or a privileged builder (the `unshare` venue failed inside the nix sandbox on both the lima builder and the x86_64 Linux witness).
+- **D-26:** Settles the D-20 scope. The one Harvey command builds and boots Harvey's own kernel in q35 to the "root is from" prompt. Going further is a later increment.
+- **D-27:** Settles the D-17 target. The swap probe replaces `ps`, using the S6 recipe.
+- **D-28:** Refines D-11. The rio marker stays the two `/srv/rio.*` and `/srv/riowctl.*` entries. The spike's positive rio leg is unproven: the headless drawterm login never succeeded, and the `tr-ok` line in the evidence came from the owner's own graphical login, so it is not gate evidence. Pass 2 must first determine the generated demo password/credential path, fix the headless drawterm authentication and password feed, and re-run the rio leg. The `control-noG` leg stays unchanged.
+- **D-29:** Settles the D-16 verification method. The r9 assembler is verified by member-list comparison against the reference bake for all images. Byte-differential comparison comes later.
+
 ### Claude's Discretion
 - The exact marker used to show rio is serving (D-11) and how it is observed without a display.
 - Manifest file format and location inside `xtask/`.
@@ -68,6 +76,7 @@ Requirements: HARN-01 to HARN-08. Not in this phase: porting any real tool (Trac
 - `.planning/REQUIREMENTS.md` (HARN-01 to HARN-08) — the phase requirements
 - `.planning/PROJECT.md` (note N4, Key Decisions) — flake ownership and golden-invariant context
 - `.planning/phases/01-stage-p0-cross-build-harness/01-RESEARCH.md` — findings on each locked decision, the six spikes, commit ordering across the two repos, what cannot run on the Mac
+- `.planning/phases/01-stage-p0-cross-build-harness/spikes/SPIKE-RESULTS.md` — verdict matrix for the 25 spike legs, the five FAILs pass 2 must handle, the owner's closing decisions; per-spike detail and working recipes in `spikes/S1-FINDINGS.md` to `spikes/S6-FINDINGS.md`
 - `.planning/STATE.md` — owner standing rules (push approval, `port/src` diff approval, x86_64 kernel byte-change procedure)
 - `.planning/r9-implementation-guide-amended-v3.md` §8 — Track P, Stage P0 as specified by the guide
 
