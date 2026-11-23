@@ -143,6 +143,12 @@ pub struct LibraryEntry {
     pub name: String,
     /// Tree-relative `.a` path.
     pub from: String,
+    /// Provenance marker carried by the table rows (plan 01-14's row
+    /// shape: every library is a Harvey tree archive today).  Optional so
+    /// a hand-written row without it still parses; when present it must
+    /// be `harvey`.
+    #[serde(default)]
+    pub source: Option<Source>,
     /// Always `false` in this phase: libraries are not image members.
     pub in_image: bool,
 }
@@ -1534,6 +1540,13 @@ pub fn check_libraries(manifest: &Manifest, tree: &Path, tier0_list_text: &str) 
             Some(library) => {
                 if library.in_image {
                     problems.push(format!("{name}: in_image = true (libraries are not image members)"));
+                }
+                if let Some(source) = library.source {
+                    if source != Source::Harvey {
+                        problems.push(format!(
+                            "{name}: source must be harvey (the tree-relative archive)"
+                        ));
+                    }
                 }
                 let path = tree.join(&library.from);
                 if !path.is_file() {

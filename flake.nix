@@ -473,6 +473,19 @@ WRAP
             rev = harvey.rev or "unknown";
             narHash = harvey.narHash or "unknown";
           };
+          # 01-14 (D-16, T-01-48): the host p9sk1 domain generator r9's
+          # assembler runs at bake time (R9_AUTHDOMAIN_GEN).  Tool only —
+          # no domain is ever generated inside the derivation.
+          #
+          # Linux only: the vendored donor crypt.c declares
+          # `encrypt(void*, void*, int)`, which collides with macOS
+          # <unistd.h>'s `encrypt(char *, int)` under clang.  The plan's
+          # documented contingency: the cpu/auth images then assemble on
+          # Linux, and their Mac checks are parse/drift only.
+          harveyAuthdomainGen = import ./nix/harvey/authdomain-gen.nix {
+            inherit pkgs;
+            harveySrc = harvey.outPath;
+          };
           # The host mkpaqfs builds locally on every system from the flake
           # input path (it is a plan9port host tool, not a tree member).
           harveyMkpaqfs = import ./nix/harvey/mkpaqfs.nix {
@@ -558,6 +571,9 @@ WRAP
           harvey-tree-arm64 = harveyTreeArm64;
           # 01-14 (HARN-07): the full amd64 tree.
           harvey-tree-amd64 = harveyTreeAmd64;
+          # 01-14 (D-16): the host authdomain-gen (Linux only — the donor
+          # crypt.c's encrypt() clashes with macOS's unistd.h declaration).
+          harvey-authdomain-gen = harveyAuthdomainGen;
         }
         // {
           # The host mkpaqfs on all three systems (01-08's R9_MKPAQFS).
@@ -959,9 +975,16 @@ WRAP
             builtins.unsafeDiscardStringContext harveyTreeArm64.outPath;
           harveyTreeAmd64Path =
             builtins.unsafeDiscardStringContext harveyTreeAmd64.outPath;
-          # mkpaqfs is the one EAGER export: it is a small host tool, not
-          # a tree, and every image assembly needs it.
+          # mkpaqfs and authdomain-gen are the EAGER exports: small host
+          # tools, not trees, and every image assembly/bake needs them.
+          # authdomain-gen is Linux-only (the donor crypt.c/encrypt clash
+          # with macOS unistd.h); on the Mac the cpu/auth bakes stay on the
+          # Linux host per the plan's venue note.
           harveyMkpaqfs = self.packages.${system}.harvey-mkpaqfs;
+          harveyAuthdomainGen =
+            if pkgs.stdenv.hostPlatform.isLinux
+            then self.packages.${system}.harvey-authdomain-gen
+            else null;
         in
         {
           default = pkgs.mkShellNoCC {
@@ -989,6 +1012,11 @@ WRAP
               if [ -z "''${R9_MKPAQFS:-}" ]; then
                 export R9_MKPAQFS="${harveyMkpaqfs}/bin/mkpaqfs"
               fi
+              ${pkgs.lib.optionalString (harveyAuthdomainGen != null) ''
+              if [ -z "''${R9_AUTHDOMAIN_GEN:-}" ]; then
+                export R9_AUTHDOMAIN_GEN="${harveyAuthdomainGen}/bin/authdomain-gen"
+              fi
+              ''}
               # The banner goes to stderr: `nix develop -c '<cmd>'` must not
               # mingle hook output with the command's stdout (the plan's
               # lazy-path check compares that stdout with `nix eval`).
@@ -997,6 +1025,9 @@ WRAP
               echo "apps: nix run .#build | nix run .#boot-virt | nix run .#default" >&2
               echo "harvey supply: R9_HARVEY_DIR_ARM64=$R9_HARVEY_DIR_ARM64 (lazy; realised on first use)" >&2
               echo "harvey supply: R9_HARVEY_DIR_AMD64=$R9_HARVEY_DIR_AMD64 (lazy; realised on first use)" >&2
+              ${pkgs.lib.optionalString (harveyAuthdomainGen != null) ''
+              echo "harvey supply: R9_AUTHDOMAIN_GEN=$R9_AUTHDOMAIN_GEN" >&2
+              ''}
             '';
           };
         });
