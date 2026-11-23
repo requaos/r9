@@ -4,17 +4,17 @@ milestone: v3.0
 milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
 current_phase: 01
 current_phase_name: Stage P0 - Cross-Build Harness
-status: Blocked — owner stop B (01-22)
-stopped_at: 01-31 complete; 01-22 stop B awaiting owner; 01-26 next
-last_updated: "2026-11-23T14:27:45.851Z"
+status: executing
+stopped_at: 01-33 complete; stop B green (gate/probe/flipback/kernel/TCG); 01-26 next
+last_updated: "2026-11-23T17:21:27.719Z"
 last_activity: 2026-11-23
-last_activity_desc: aarch64 quick pass complete; stop B running; 01-23 next
-state_head: 752ca823aa37b28ae77af6d7153f8622da65a34f
+last_activity_desc: stop B green, boot-iso hash re-derived; 01-26 Harvey flip preparation next
+state_head: b58fe7368bd807aafa0fbc562341145533a6ac66
 progress:
   total_phases: 4
   completed_phases: 0
-  total_plans: 32
-  completed_plans: 23
+  total_plans: 33
+  completed_plans: 30
   percent: 0
 ---
 
@@ -30,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-11-22)
 ## Current Position
 
 Phase: 01 (Stage P0 - Cross-Build Harness) — EXECUTING
-Plan: 28 of 32
-Status: Blocked — owner stop B (01-22)
-Last activity: 2026-11-23 — aarch64 quick pass complete; stop B running; 01-23 next
+Plan: 29 of 32
+Status: Ready to execute
+Last activity: 2026-11-23 — stop B green, boot-iso hash re-derived; 01-26 Harvey flip preparation next
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -176,5 +176,5 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 ## Session Continuity
 
 Last session: 2026-11-23T04:57:34.842Z
-Stopped at: 01-31 complete; 01-22 stop B awaiting owner; 01-26 next
+Stopped at: 01-33 complete; stop B green (gate/probe/flipback/kernel/TCG); 01-26 next
 Resume file: None
