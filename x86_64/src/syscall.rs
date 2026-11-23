@@ -206,7 +206,14 @@ pub(crate) fn dispatch_proc(n: u64, frame: &mut Ureg, proc: &mut Proc) -> bool {
     let result = match DISPATCH.get(n as usize) {
         Some(Some(handler)) => handler(frame, proc),
         _ => {
-            println!("syscall {n} unimplemented");
+            // The loud-unimplemented line names the CALLER (01-33): the
+            // boot-chain fauth probe (syscall 10) is benign and designed,
+            // but without a process tag the line cannot be attributed
+            // from the serial capture.  Cheap and stable — the negative
+            // scan still keys on the `syscall <n> unimplemented` prefix.
+            let nlen = proc.name.iter().position(|&b| b == 0).unwrap_or(proc::KNAMELEN);
+            let pname = core::str::from_utf8(&proc.name[..nlen]).unwrap_or("?");
+            println!("syscall {n} unimplemented (pid {} {pname})", proc.pid);
             proc.set_errstr("syscall not implemented");
             -1i64 as u64
         }

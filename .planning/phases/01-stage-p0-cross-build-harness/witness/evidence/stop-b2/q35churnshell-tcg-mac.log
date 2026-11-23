@@ -1,0 +1,65 @@
+# q35churnshell under TCG on the Mac — plan 01-33 Task 2.
+# This is the Mac diagnosis/fix evidence, NOT the KVM witness. The owner's
+# stop-B2 rerun (Task 3) owns the KVM verdict; the profiles step will carry
+# the KVM q35churnshell log under its own name.
+
+# --- reproduction (pre-fix kernel; untagged line) ----------------------
+# `cargo xtask boot-test --arch x86-64 --config q35churnshell --accel tcg`
+# cannot complete on the Mac: the darwin devshell has no grub2, so the ISO
+# stage was bridged through a linux/amd64 container (identical staged
+# tree) and qemu ran natively under TCG. Trimmed serial tail:
+#
+#   exec: entering ring 3 pc=0x2054fa sp=0x7fffffffef78 path=/boot/boot argv=[boot]
+#   paqfs...version...chain.stage: ...
+#   fingerprint: 6cec08ace97940ea4fc10811acc441ec520044f1
+#   process 2 exited: ""
+#   churngate: heap exit 98560 33554432
+#   syscall 10 unimplemented
+#   time...
+#   boot: opening #c/swap: namec: does not exist
+#   init: can't open #c/sysname: namec: does not exist
+#   syscall 10 unimplemented
+#
+#   init: starting /bin/rc
+#   %
+#
+# The chain itself reaches the interactive prompt. The stop-B boot-test
+# failure was the harness's profile registration: q35churnshell was routed
+# to the tick stage (whose marker the dev_exec chain never prints) and was
+# not in the real-chain negative-scan exemption.
+
+# --- the decisive stop-B lines (KVM witness, return-01-22) -------------
+#   process 2 exited: ""
+#   churngate: heap exit 96512 33554432
+#   syscall 10 unimplemented
+#   boot-test: >= 3 lines beginning "tick" not observed (negative scan hit "unimplemented syscall")
+
+# --- caller evidence (post-fix kernel; the line names its caller) -----
+# The kernel's loud-unimplemented line now prints the current proc's pid
+# and name (x86_64/src/syscall.rs). Serial capture of the fixed TCG run:
+syscall 10 unimplemented (pid 1 boot)
+syscall 10 unimplemented (pid 1 init)
+
+# syscall 10 = FAUTH (Harvey sys/src/libc/9syscall/sys.h). The callers are
+# Harvey's UNCHANGED boot path: boot(8)'s nsinit calls fauth(fd, rp) on the
+# connected root fd and tolerates -1 (sys/src/9/boot/boot.c:148); init's
+# mount path calls fauth the same way. FAUTH is loud-None by design
+# (D-02's measured-set rule), so there is no new kernel gap to open here.
+# The narrow fix is the profile registration in xtask/src/main.rs:
+#   * q35churnshell rides the q35shell chain stages (PCI discovery ->
+#     NIC bind -> module/paqfs -> exec entry -> Q35ChainBoot -> init
+#     handoff -> `% ` prompt), because dev_churn + dev_bootchain keeps
+#     the normal boot chain (the churn driver never runs);
+#   * the negative scan exempts exactly `syscall 10 unimplemented` for
+#     that profile (the same one-line exemption net/netip/q35shell/q35cpu
+#     carry), and any other unimplemented syscall still fails
+#     (xtask test `negative_scan_exempts_boot_fauth_only`).
+
+# --- fixed run ---------------------------------------------------------
+# `cargo xtask boot-test --arch x86-64 --config q35churnshell --accel tcg
+#  --cpu qemu64`
+# (--cpu qemu64: the profile's TOML cpu is `host`, which QEMU TCG rejects;
+#  the Linux CI uses the same explicit qemu64. grub-mkrescue is bridged to
+#  a linux/amd64 container because the darwin devshell has no grub2.)
+boot-test: PASS -- SeaBIOS -> GRUB2 -> mb2 kernel + chain-module boot: banner, memory facts, discovery, the NIC bind, the module-tag/paqfs mount notes, the exec-entry note, then the REAL boot(8)→init→rc chain's own ring-3 prints (paqfs/version handoffs, the init rc handoff) through to the interactive `% ` prompt, observed in order — XEXEC-03 leg 2 (D-08's staged chain on the proven exec substrate; the composed Harvey-side gate is 14-07's)
+# exit 0; serial capture target/boot-test-q35churnshell.log (2705 bytes).
