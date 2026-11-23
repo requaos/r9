@@ -27,7 +27,7 @@
     {
       packages = forAll (
         system: pkgs:
-        {
+        rec {
           # Rung 1: the venue itself. Writes under /sys, runs plan9port rc,
           # runs plan9port mk on a two-line mkfile created on the private
           # tmpfs, and copies the transcript to $out/rung1.txt.
@@ -83,6 +83,52 @@
               printf 'all:V:\n\techo S1-RUNG1-MK-OK\n' > mkfile
               mk
               echo "S1-RUNG1-GUEST-DONE"
+            '';
+          };
+
+          # Rung 2's host toolchain: Harvey's nix/setup.sh + nix/toolchain.sh
+          # as a nix build (plan9port 9c/9l, the -static and nm shims, the
+          # vendored 9cc iar installed as ar). Needs no namespace, so it also
+          # builds even if every venue leg failed.
+          s1-hostbin = import ./hostbin.nix {
+            inherit pkgs;
+            harveySrc = harvey;
+          };
+
+          # Rung 2: build Harvey's amd64 libc the way its tier-0 step does,
+          # inside the proot venue (rung 1's unshare leg is refused by this
+          # builder), with the hostbin first on PATH.
+          s1-libc-amd64 = import ./venue.nix {
+            inherit pkgs;
+            harveySrc = harvey;
+            name = "s1-libc-amd64";
+            transcriptFile = "rung2.txt";
+            mode = "proot";
+            extraPath = [ s1-hostbin ];
+            guestScript = ''
+              set -e
+              DATE=${pkgs.coreutils}/bin/date
+              export PATH="${s1-hostbin}/bin:$PATH"
+              export objtype=amd64 cputype=unix FORCERCFORMK=1
+
+              echo "S1-RUNG2-BEGIN uid=$(id -u) cwd=$(pwd)"
+              echo "S1-RUNG2-TOOLS 6c=$(command -v 6c) 6l=$(command -v 6l) 6a=$(command -v 6a) ar=$(command -v ar) mk=$(command -v mk) rc=$(command -v rc)"
+
+              t0=$("$DATE" +%s)
+              cd /sys/src/libc && mk install
+              t1=$("$DATE" +%s)
+              echo "S1-RUNG2-LIBC-SECONDS=$((t1-t0))"
+
+              [ -s /amd64/lib/libc.a ] || { echo "S1-RUNG2-FAIL no /amd64/lib/libc.a"; exit 1; }
+              ls -l /amd64/lib/libc.a
+              if ar t /amd64/lib/libc.a > /tmp/members 2>/dev/null; then
+                echo "S1-RUNG2-LIBC-MEMBERS=$(wc -l < /tmp/members)"
+              else
+                echo "S1-RUNG2-LIBC-MEMBERS=ar-t-unavailable"
+                nm /amd64/lib/libc.a 2>&1 | head -3
+              fi
+              cp /amd64/lib/libc.a /out/libc.a
+              echo "S1-RUNG2-LIBC-OK"
             '';
           };
         }

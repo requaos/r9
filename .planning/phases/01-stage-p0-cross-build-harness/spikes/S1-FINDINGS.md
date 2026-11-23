@@ -62,23 +62,77 @@ SANDBOX-EVIDENCE uname=Linux localhost 6.8.0-147-generic … aarch64 GNU/Linux
 SANDBOX-EVIDENCE usr-bin-env=absent
 ```
 
+## Rung 2 — Harvey's host toolchain and the amd64 libc
+
+VERDICT s1-hostbin-lima-aarch64: PASS
+EVIDENCE s1-hostbin-lima-aarch64: s1/evidence/rung2-builder.log
+
+Harvey's `nix/setup.sh` + `nix/toolchain.sh` run unmodified in a nix build
+(no namespace needed). The tool set matches the Mac's hostbin listing:
+
+```
+6a 6c 6l 7a 7c 7l 8a 8c 8l cpp nm ar pcc
+(+ awk basename data2s date dd lex ls mklatinkbd pcc rm sed size yacc)
+```
+
+Four sandbox ports were needed, each measured:
+
+- `9l` shim script: shebang `/usr/bin/env bash` does not exist in the nix
+  sandbox; use the store's bash path.
+- `ed` is not in the sandbox (Harvey's devshell inherited the host's
+  `/usr/bin/ed`); `7l/mkcname` needs it, so `pkgs.ed` is an input.
+- plan9port goes **last** on PATH, as Harvey's own flake wrapper does
+  ("plan9 bin LAST per BUILD_ON_UNIX — plan9port ships a 9p `mount` which
+  must not shadow util-linux mount"); hostbin stays first.
+- `7l/BUILD`'s `_SYSRM` line is malformed at the pin (its sed script ends
+  `s/::*$` with no replacement), so the pinned plan9port sed answers
+  `Too much text`; GNU sed shadowing the bootstrap turns that into the real
+  syntax error the line tolerates via `|| echo rm`. The following `_HOSTNM`
+  line is well formed and needs GNU sed to work.
+
+VERDICT s1-rung2-lima-aarch64: PASS
+EVIDENCE s1-rung2-lima-aarch64: s1/evidence/rung2-builder.log
+
+`cd /sys/src/libc && objtype=amd64 mk install` inside the proot venue, with
+the hostbin first on PATH, produces:
+
+```
+S1-RUNG2-LIBC-SECONDS=2
+--rw-r--r-- M 0 0 0 601170 /amd64/lib/libc.a
+S1-RUNG2-LIBC-MEMBERS=259
+S1-RUNG2-LIBC-OK
+```
+
+and `nix store verify --no-trust` over the output (run on the builder) is
+clean — the HARN-02 "tree unmodified" proof method works on a tree-like
+output.
+
 ## Commands
 
 ```
 S=.planning/phases/01-stage-p0-cross-build-harness/spikes
 export NIX_SSHOPTS="-F /Users/neilskinner/.lima/harvey/ssh.config -oControlPath=none"
 
-# the venue, first try (fails: nested userns refused)
+# rung 1, the venue (fails: nested userns refused)
 nix build "path:$S/s1#packages.aarch64-linux.s1-nsprobe" \
   --store ssh-ng://lima-harvey --eval-store auto -L --no-link --print-out-paths
 
-# the same guest script through proot (passes)
+# rung 1, the same guest script through proot (passes)
 nix build "path:$S/s1#packages.aarch64-linux.s1-nsprobe-proot" \
   --store ssh-ng://lima-harvey --eval-store auto -L --no-link --print-out-paths
 
-# x86_64-linux attribute evaluates on the Mac (Plan 06's witness run builds it)
-nix eval --raw "path:$S/s1#packages.x86_64-linux.s1-nsprobe.drvPath"
-# -> /nix/store/ny7zir5kilsg1sb88fx655fcp1dqs77a-s1-nsprobe-0.drv
+# rung 2
+nix build "path:$S/s1#packages.aarch64-linux.s1-hostbin" \
+  --store ssh-ng://lima-harvey --eval-store auto -L --no-link --print-out-paths
+nix build "path:$S/s1#packages.aarch64-linux.s1-libc-amd64" \
+  --store ssh-ng://lima-harvey --eval-store auto -L --no-link --print-out-paths
+
+# store integrity of the libc output (HARN-02 method)
+nix store verify --no-trust --store ssh-ng://lima-harvey \
+  /nix/store/lkix2l2k7fcm9gv5cdwm47arg4l49fqw-s1-libc-amd64-0
+
+# x86_64-linux attributes evaluate on the Mac (Plan 06 builds them)
+nix eval --raw "path:$S/s1#packages.x86_64-linux.s1-libc-amd64.drvPath"
 ```
 
 `-oControlPath=none` is required with lima's `ssh.config`: it sets
@@ -101,9 +155,9 @@ master socket, skips its own master start, and the daemon handshake dies with
    `/tmp`, and the four `/dev` nodes one at a time. `<root>/bin` is a real
    directory of symlinks (`sh`/`bash` to the store's bash, `rc`/`mk` to
    plan9port). The guest script runs as `/bin/sh /guest.sh`.
-4. `PATH` carries plan9port's `plan9/bin` first: nix's `plan9port` package
-   puts only its `9` wrapper on `PATH`, and Harvey's mkfiles call `rc`, `mk`,
-   `sed`, `ls`, `rm` by name.
+4. `PATH` carries the hostbin first and plan9port's `plan9/bin` last, as
+   Harvey's flake wrapper does; nix's `plan9port` package otherwise puts only
+   its `9` wrapper on `PATH`.
 
 The unshare variant of the same file is kept (and is what the FAIL leg ran);
 switching venues is the single `mode` argument, so the guest script does not
@@ -115,6 +169,9 @@ ASSUMPTION A1: REFUTED - `unshare -Ur -m` cannot start inside this nix build
 sandbox (nested `uid_map` write is EPERM), and not even outside it on the
 Ubuntu 24.04 guest. The proot venue runs the same guest work with no
 capabilities, so D-03 is not blocked — but an unshare-based derivation is.
+ASSUMPTION A8: REFUTED - the amd64 libc alone builds in 2 s on the lima
+guest (259 members, 601170 bytes). "Tens of minutes per arch" belongs to the
+full tier build (hundreds of command links), not to the library tier.
 ASSUMPTION A16: UNTESTED - hosted CI itself was not run. The evidence is the
 same class of host: the lima Ubuntu 24.04 guest with
 `kernel.apparmor_restrict_unprivileged_userns=1` refuses unprivileged userns
@@ -134,10 +191,21 @@ run builds the identical derivations on the owner's KVM host.
 - **D-03's venue is viable, but not through `unshare`.** Pass 2's tree
   derivation must either (a) use the proot venue measured here, or (b) get a
   builder where the derivation itself runs with CAP_SETUID in a namespace it
-  owns. Option (a) costs proot's ptrace overhead (measured in rung 2); option
-  (b) is a D-04 machine decision (the native Linux builder's VM may have the
-  same AppArmor default) and is not assumed.
-- **The sandbox-evidence guard belongs in the real derivation.** The
-  `/usr/bin/env`-must-be-absent assertion plus the `uid_map`/`ns/user` lines
-  are how a future run proves it was sandboxed; without them a proot venue
-  silently proves nothing about the sandbox.
+  owns. Option (a) costs proot's ptrace overhead — negligible for libc
+  (2 s); the tier build's cost is dominated by the command links, not the
+  venue. Option (b) is a D-04 machine decision (the native Linux builder's VM
+  may have the same AppArmor default) and is not assumed.
+- **The measured number to plan against:** the amd64 library tier is seconds,
+  not minutes; A8's "tens of minutes" is the whole tiered userland build.
+  Pass 2 should keep `lib.fileset` filtering so pin bumps that do not touch
+  the build do not re-pay it.
+- **The host-toolchain port needs the four sandbox adjustments above** (`ed`,
+  the `9l` shebang, plan9port last on PATH, GNU sed for the bootstrap). They
+  belong in the real derivation, not just the spike; none of them is a sudo
+  path.
+- **Tree outputs must exclude the 23 case-colliding Harvey paths**
+  (Pitfall 3). The venue copies whole subtrees, so a pass-2 derivation that
+  installs `rc/`, `sys/lib/troff/` or `sys/lib/postscript/` wholesale would
+  ship the mangled `~nix~case~hack~1` names back to the Mac store. Copy only
+  what the images and ureg checks consume, and assert the installed set has
+  no `~nix~case~hack~` name.

@@ -203,9 +203,10 @@ pkgs.stdenvNoCC.mkDerivation {
 
     # plan9port's own bin (mk, rc, 9c, 9l, yacc, sed, ls, rm, ...) is not on
     # the nix PATH (only its `9` wrapper is); Harvey's build scripts assume
-    # the Plan 9 tools resolve by name, so put them first, exactly as the
-    # devshell/env they were written for does.
-    export PATH="$PLAN9_BIN:$PATH"
+    # the Plan 9 tools resolve by name. Harvey's own wrapper appends
+    # $PLAN9/bin LAST ("plan9 bin LAST per BUILD_ON_UNIX — plan9port ships a
+    # 9p `mount` which must not shadow util-linux mount"), so do the same.
+    export PATH="$PATH:$PLAN9_BIN"
 
     set +e
     {

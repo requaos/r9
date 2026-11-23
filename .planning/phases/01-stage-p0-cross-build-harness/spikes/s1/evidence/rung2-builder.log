@@ -1,0 +1,30 @@
+S1 rung 2 — builder: lima VM harvey (aarch64-linux), nix store ssh-ng://lima-harvey
+builder: nix sandbox=true; venue: proot (rung 1's unshare leg is refused on this builder)
+build: nix build path:$S/s1#packages.aarch64-linux.s1-hostbin --store ssh-ng://lima-harvey -L
+S1-HOSTBIN-SETUP-TOOLS=awk basename date dd lex ls pcc rm sed size yacc
+S1-HOSTBIN-SHIM nm=/nix/store/axf7w3k30q4n14mwxms3c2n8glz7lwvd-binutils-wrapper-2.46/bin/nm sed=/nix/store/03rgyjxclvhxnif2klf13nkr92rpxqqg-gnused-4.10/bin/sed
+S1-HOSTBIN-OK
+   hostbin output: /nix/store/hymb14118bla1nhbjm24wrwgbzyjdlz7-s1-hostbin-0
+   6a 6c 6l 7a 7c 7l 8a 8c 8l cpp nm ar pcc all present (S1-HOSTBIN-TOOLS line above)
+build: nix build path:$S/s1#packages.aarch64-linux.s1-libc-amd64 --store ssh-ng://lima-harvey -L
+SANDBOX-EVIDENCE id-u=1000
+SANDBOX-EVIDENCE uid-map=      1000      30001          1;
+SANDBOX-EVIDENCE user-ns=user:[4026532421]
+SANDBOX-EVIDENCE uname=Linux localhost 6.8.0-147-generic #147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:39:52 UTC 2026 aarch64 GNU/Linux
+SANDBOX-EVIDENCE usr-bin-env=absent
+S1-VENUE-BUILD-START mode=proot
+S1-VENUE-ENTER-PROOT
+S1-RUNG2-BEGIN uid=0 cwd=/
+S1-RUNG2-TOOLS 6c=/nix/store/hymb14118bla1nhbjm24wrwgbzyjdlz7-s1-hostbin-0/bin/6c 6l=/nix/store/hymb14118bla1nhbjm24wrwgbzyjdlz7-s1-hostbin-0/bin/6l 6a=/nix/store/hymb14118bla1nhbjm24wrwgbzyjdlz7-s1-hostbin-0/bin/6a ar=/nix/store/hymb14118bla1nhbjm24wrwgbzyjdlz7-s1-hostbin-0/bin/ar mk=/nix/store/klv976s6vl3smvfcnz64lz523i9hwv70-plan9port-0-unstable-2025-11-10/plan9/bin/mk rc=/nix/store/klv976s6vl3smvfcnz64lz523i9hwv70-plan9port-0-unstable-2025-11-10/plan9/bin/rc
+S1-RUNG2-LIBC-SECONDS=2
+S1-RUNG2-LIBC-MEMBERS=259
+S1-RUNG2-LIBC-OK
+S1-VENUE-RC=0
+S1-VENUE-OK
+   libc.a on the builder:
+   --r--r--r-- M 0 root root 601170 Dec 31  1969 /nix/store/lkix2l2k7fcm9gv5cdwm47arg4l49fqw-s1-libc-amd64-0/libc.a
+   member count (hostbin ar t | wc -l): 259
+store integrity (HARN-02 proof method):
+   $ nix store verify --no-trust --store ssh-ng://lima-harvey /nix/store/lkix2l2k7fcm9gv5cdwm47arg4l49fqw-s1-libc-amd64-0
+   checking '/nix/store/lkix2l2k7fcm9gv5cdwm47arg4l49fqw-s1-libc-amd64-0'...
+   exit 0
