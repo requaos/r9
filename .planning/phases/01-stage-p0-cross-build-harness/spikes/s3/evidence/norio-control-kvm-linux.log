@@ -1,0 +1,27 @@
+# S3 control-noG witness — x86_64-linux KVM on the owner's Linux KVM host (Plan 01-06 Task 2)
+# source return: witness-returns/01-06 commit 72a75c0 (run 2, 2026-11-23T02:31:44Z)
+# The -G discriminator: the identical pipeline with -G, where rio cannot post
+# the srv names. The serial console's `ls /srv` shows no rio entry.
+# No credential value appears here; password-named lines carry <redacted>.
+
+== s3: control-noG leg (the -G discriminator)
+== S3 mode:        control-noG
+== scratch Harvey: /home/req/r9-spike-work/harvey
+== S3 output:      /home/req/r9-spike-work/witness-bundle/out/s3/control-noG
+== r9 kernel:      /nix/store/83lpwkwibvwmds9aw1d8ywrrqz92xi2f-r9-kernel-x64-116bcc2/kernel-x64.elf
+== drawterm:       /nix/store/y8h5ana2drnzs2fdx6fxgr74bwmzi8y9-drawterm-19.06/bin/drawterm
+== shape:          q35 accel=kvm cpu=host
+== no passwordless sudo — running the stage build in an unprivileged user namespace (unshare -Ur -m chroot scaffold; <redacted>: sudo wording only, no credential value)
+
+// the serial console lists /srv in the -G session; only boot and factotum
+% ls /srv
+/srv/boot
+/srv/factotum
+process 80 exited: ""
+churngate: heap exit 4693504 33554432
+% S3-CONTROL-NO-RIO
+rio-gate: post-pass ok — zero cpurc: FAIL in the capture
+rio-gate: post-pass ok — zero kernel panic markers (drawterm's own sysfatal exit pair excluded)
+rio-gate: post-pass ok — the per-bake DEMO password redacted from the retained capture (0 occurrence(s) mapped; <redacted>: zero values present)
+rio-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, -G control session, serial /srv shows no rio entry (S3-CONTROL-NO-RIO)
+== S3 control-noG gate PASS — capture retained at /home/req/r9-spike-work/witness-bundle/out/s3/control-noG/rio-gate-control-noG.log

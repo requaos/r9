@@ -43,13 +43,34 @@ backend is the supported route.
 
 ## Runtime legs (owner's x86_64 Linux host, Plan 06)
 
-VERDICT s3-rio-kvm-linux: PENDING-OWNER
-VERDICT s3-norio-control-kvm-linux: PENDING-OWNER
-VERDICT s3-determinism-kvm-linux: PENDING-OWNER
+VERDICT s3-rio-kvm-linux: FAIL
+EVIDENCE s3-rio-kvm-linux: s3/evidence/rio-kvm-linux.log
+
+VERDICT s3-norio-control-kvm-linux: PASS
+EVIDENCE s3-norio-control-kvm-linux: s3/evidence/norio-control-kvm-linux.log
+
+VERDICT s3-determinism-kvm-linux: FAIL
+EVIDENCE s3-determinism-kvm-linux: s3/evidence/determinism-kvm-linux.txt
+
+The witness ran both gates on the x86_64 host (Linux x86_64 NixOS
+7.4.0-rc3, 16 CPU, 30 GiB, `/dev/kvm` writable; env:
+`linux-witness/evidence/env.txt`). The cpurc ladder and the non `-G`
+drawterm under Xvfb are real: the gate reached `cpurc: DONE`, spawned
+drawterm, and authenticated as `tr-ok glenda@glenda(unknown) ->
+glenda@bootes`. It then timed out feeding the password stage
+(`rio-gate: TIMEOUT at feed stage: dt-password`), so `S3-RIO-SERVING` never
+appears (grep count 0) and the rio leg is a FAIL with evidence — not a
+venue failure. The `-G` control passed: the serial console's `ls /srv`
+shows only `/srv/boot` and `/srv/factotum`, zero cpurc: FAIL and zero
+kernel-panic markers, then `S3-CONTROL-NO-RIO`. The determinism check did
+not produce a comparison: bake 1 completed, but bake 2 aborted at the auth
+bake with `error: auth bake: sweep subject hsecstored missing from the
+computed auth-suite set` (`S3-ERROR: bake2-failed`), so none of the nine
+images reached an IDENTICAL/DIFFERENT verdict.
 
 Prerequisite: a writable scratch copy of Harvey at the phase pin with no
-`.git` (the gate refuses a real checkout and any `/nix/store` path). On
-the owner's host:
+`.git` (the gate refuses a real checkout and any `/nix/store` path). The
+commands that produced the witness results, for a pass-2 rerun, are:
 
 ```
 HARVEY_TREE="$HOME/s3/harvey"
@@ -123,39 +144,51 @@ scratch tree may be deleted after the run.
   (`mkimage.sh:1290-1305`, `:1848-1856`), so `determinism.sh` compares
   their bake-log member lists and sizes instead.
 
+## Return hygiene and gate teardown
+
+- **Credential scan is clean.** The returned `out/secret-scan.txt` records
+  no `auth-creds` artifact and no DEMO password value in `out/`. The
+  committed excerpts were rescanned before commit; every password-named
+  line carries a `<redacted>` marker and no value.
+- **A drawterm survived the rio-gate timeout.** `out/survivors.txt` lists
+  PID 88800 (`.../drawterm -s '' -O cpu=127.0.0.1,auth=tcp!127.0.0.1!5670,user=glenda`)
+  alive after the gate returned FAIL. `ps` shows the store path as argv[0],
+  not the `r9s3riogate-dt-*` tag the gate sets with `exec -a`, so a
+  tag-only teardown sweep misses it. Pass 2's gate must reap by the
+  scratch/dial identity or the pty child pid, not by the argv0 tag alone.
+  This is a gate-teardown finding for pass 2.
+
 ## Assumptions
 
-ASSUMPTION A5: CONFIRMED STATICALLY — the srv table is kernel-wide and both the console rc and the cpu session bind `#s` at `/srv`; the KVM run is the remaining confirmation (Plan 06).
-ASSUMPTION A6: CONFIRMED STATICALLY — Harvey's drawterm package builds the X11 backend (`Make.unix` `GUI=x11`), so Xvfb is a valid display for a non `-G` session; the KVM run is the remaining confirmation (Plan 06).
-ASSUMPTION A12: UNTESTED - runs in Plan 06 (the six deterministic images must be byte-identical across two pinned-KERNDATE bakes; auth/cpu must differ only in the bake-time domain).
+ASSUMPTION A5: CONFIRMED - the serial console in the `-G` control lists `/srv` from its own namespace (`/srv/boot`, `/srv/factotum`), confirming the console reads the kernel-wide srv table. The positive rio posting was not reached because the rio leg timed out at the password feed, so visibility is confirmed while a live rio session remains unproven. Evidence: s3/evidence/norio-control-kvm-linux.log.
+ASSUMPTION A6: CONFIRMED - Harvey's X11 drawterm starts under Xvfb and completes the cpu authentication (`tr-ok glenda@glenda(unknown) -> glenda@bootes`); the timeout is in the expect feed stage, not in drawterm's display backend. Evidence: s3/evidence/rio-kvm-linux.log.
+ASSUMPTION A12: REFUTED - the two-bake check cannot pass on this tree: bake 1 completes, bake 2 aborts at the auth bake (`hsecstored missing from the computed auth-suite set`), so no image is compared. Byte-identity of the six non-auth images is therefore unproven and the second bake is not re-runnable as-is. Evidence: s3/evidence/determinism-kvm-linux.txt.
 
 ## What this means for planning pass 2
 
-- **D-11's marker design is settled pending one KVM run.** The quick
-  gate's rio assertion can be: non `-G` drawterm under Xvfb, then
-  `ls /srv` on the serial console for `rio.<user>.<pid>` **and**
-  `riowctl.<user>.<pid>`, with a `-G` control that must see neither
-  rio name. The marker is a text assertion, so the pass-2 gate needs no
-  pixel check and no second drawterm session.
-- **If A5 fails at runtime** (entries not visible despite the source
-  reading), the fallback ladder from the research is: (1) type
-  `ls /srv` in the *cpu session's* own rc before rio starts, from the
-  drawterm pty; (2) `echo RIO-SERVING > '#c/cons'` after a
-  `test -e /srv/rio.*` in the session; (3) as a last resort, an
-  `xwd -root` dominant-colour check on Xvfb. The first two keep the
-  marker textual.
-- **If A6 fails at runtime** (the package cannot serve draw under
-  Xvfb), there is no automated rio proof in this phase; the checkpoint
-  must record the weaker evidence and pass 2 must decide between a
-  packaged display server and accepting the human-accepted desktop
-  screenshot as the rio proof. That would be a locked-decision change
-  (D-11), not a plan detail.
-- **If A12 fails** for a non-auth image, pass 2's differential test
-  must compare member lists, sizes and per-member hashes instead of
-  whole-image bytes. The auth/cpu split already assumes that fallback;
-  a failure on a supposedly deterministic image would also mean the
-  `boot-iso` FOD cannot inherit the bake, so it must be resolved before
-  the assembler's byte-comparison plan is written.
+- **The `-G` control is green; the rio leg needs its feed stage fixed
+  before D-11's marker can be trusted.** The control proves the
+  discriminator (serial `ls /srv` shows no rio entry in a `-G` session,
+  with zero cpurc: FAIL and zero panic markers). The rio leg authenticated
+  (`tr-ok`) but the driver timed out feeding the password stage, so no
+  `S3-RIO-SERVING` was observed. Pass 2 should fix the expect timing/prompt
+  anchor, re-run rio mode, and keep `control-noG` unchanged as the negative
+  control; the marker design itself is not invalidated by the timeout.
+- **A12 must be resolved before the assembler differential test is
+  written.** The second bake aborts at the auth bake with
+  `hsecstored missing from the computed auth-suite set`, so the six-image
+  byte comparison never ran. Pass 2 cannot plan a whole-image byte
+  differential until `mkimage.sh` can re-bake the tree; investigate the
+  auth-suite resolver first. The auth/cpu member-list fallback stays the
+  design for those two images, but it is moot until bake 2 completes.
+- **Gate teardown must not rely on the argv0 tag.** PID 88800 drawterm
+  survived the timeout and `ps` showed the store path rather than the
+  `r9s3riogate-dt-*` tag; reap by the scratch/dial identity or the pty
+  child pid instead (see "Return hygiene and gate teardown").
+- **The `-G` control's no-sudo venue is worth keeping.** The control's
+  stage build ran in an unprivileged user namespace (`unshare -Ur -m`
+  chroot scaffold) outside the nix sandbox, which is the path pass 2 should
+  keep for the Linux bake when the host has no passwordless sudo.
 - **The gate's home after the flake flip:** the rewiring here is
   deliberately an `apps.x86_64-linux` app over Harvey's locked inputs,
   matching the shape the moved `drawterm-gate-x64` app will take. Pass 2

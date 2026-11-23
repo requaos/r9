@@ -1,0 +1,49 @@
+# S3 rio witness — x86_64-linux KVM on the owner's Linux KVM host (Plan 01-06 Task 2)
+# source return: witness-returns/01-06 commit 72a75c0 (run 2, 2026-11-23T02:31:44Z)
+# mode: rio (non -G drawterm under Xvfb)
+# scratch Harvey: bd7a6982a3e4f465f8ed3da5e0c7290521514ff0 (no .git)
+# r9 kernel: 116bcc23c8052a1728992cdbc7b625143260d683, KERNDATE=1795382101
+# The gate reached the cpu session (tr-ok) and then timed out at the password (<redacted>: prose only)
+# feed stage; no credential value is present. S3-RIO-SERVING is absent from the whole capture (grep count 0).
+# No credential value appears here; the stage name is marked <redacted>.
+
+== S3 mode:        rio
+== scratch Harvey: /home/req/r9-spike-work/harvey
+== S3 output:      /home/req/r9-spike-work/witness-bundle/out/s3/rio
+== r9 kernel:      /nix/store/83lpwkwibvwmds9aw1d8ywrrqz92xi2f-r9-kernel-x64-116bcc2/kernel-x64.elf
+== drawterm:       /nix/store/y8h5ana2drnzs2fdx6fxgr74bwmzi8y9-drawterm-19.06/bin/drawterm
+== netdev argv (slirp): -netdev user,id=n0,hostfwd=tcp:127.0.0.1:17010-:17010,hostfwd=tcp:127.0.0.1:5670-:567 -device virtio-net-pci-non-transitional,netdev=n0
+== dial contract:  user=glenda cpu=127.0.0.1 auth=tcp!127.0.0.1!5670 (the committed hostfwd pair's loopback side; never widened)
+== shape:          q35 accel=kvm cpu=host
+== step 1/5a: stage the mkimage inputs (build/x86_64/stage-build.sh)
+
+// guest console: cpurc marker ladder
+cpurc: FACTOTUM-OK
+rio-gate: stage ok — factotum-ok
+cpurc: LISTEN-17010
+rio-gate: stage ok — listen-17010
+cpurc: DONE
+rio-gate: stage ok — ladder-done
+
+// the non -G drawterm under Xvfb starts and authenticates
+spawn bash -c exec -a r9s3riogate-dt-63949-1795400202 /nix/store/y8h5ana2drnzs2fdx6fxgr74bwmzi8y9-drawterm-19.06/bin/drawterm -s '' -O cpu=127.0.0.1,auth=tcp!127.0.0.1!5670,user=glenda
+rio-gate: spawned drawterm on a pty (mode rio, argv0 tag r9s3riogate-dt-63949-1795400202, user glenda)
+process 47 exited: ""
+churngate: heap exit 4149248 33554432
+
+init: starting /bin/rc
+% devmnt: server error: file does not exist
+ Feb  7 01:28:16 tcp call for tcp17010 on chan /net/tcp/2 (10.0.2.2)
+devmnt: server error: file does not exist
+devmnt: server error: file does not exist
+ Feb  7 01:28:16 tcp call for tcp17010 on chan /net/tcp/3 (10.0.2.2)
+devmnt: server error: file does not exist
+devmnt: server error: not found
+devmnt: server error: not found
+ Feb  7 01:28:16 tr-ok glenda@glenda(unknown) -> glenda@bootes
+process 51 exited: ""
+churngate: heap exit 4569344 33554432
+
+// no rio srv names ever appear; the driver times out feeding the password stage (<redacted>: prose only)
+rio-gate: TIMEOUT at feed stage: dt-password   # <redacted>: expect-stage name only; no credential value in this line or file
+S3-ERROR: the S3 rio gate FAILED (rc=1 — the driver named the failure on stderr; capture: /home/req/r9-spike-work/witness-bundle/out/s3/rio/rio-gate-rio.log)

@@ -1,0 +1,39 @@
+# S1 witness — x86_64-linux on the owner's Linux KVM host (Plan 01-06 Task 2)
+# source return: witness-returns/01-06 commit e53230f (run 1, 2026-11-23T01:51:20Z)
+# bundle pin: Harvey bd7a6982a3e4f465f8ed3da5e0c7290521514ff0,
+#             r9 116bcc23c8052a1728992cdbc7b625143260d683
+# host: Linux x86_64 NixOS 7.4.0-rc3, 16 CPU, 30 GiB, /dev/kvm writable,
+#       nix 2.35.6 sandbox=true, user.max_user_namespaces=126494
+#       (linux-witness/evidence/env.txt)
+# commands:
+#   nix build -L --no-link --print-out-paths path:<bundle>/s1#packages.x86_64-linux.s1-nsprobe
+#   nix build -L --no-link --print-out-paths path:<bundle>/s1#packages.x86_64-linux.s1-libc-amd64
+# This excerpt holds the decisive lines; the full console is in the return's run-all.log.
+# No credential material appears in this excerpt.
+
+== rung 1: s1-nsprobe (mode=unshare) — FAIL ==
+s1-nsprobe> SANDBOX-EVIDENCE id-u=1000
+s1-nsprobe> SANDBOX-EVIDENCE uid-map=      1000      30001          1;
+s1-nsprobe> SANDBOX-EVIDENCE user-ns=user:[4026533080]
+s1-nsprobe> SANDBOX-EVIDENCE uname=Linux localhost 7.4.0-rc3 #1-NixOS SMP PREEMPT_DYNAMIC @315532800 x86_64 GNU/Linux
+s1-nsprobe> SANDBOX-EVIDENCE usr-bin-env=absent
+s1-nsprobe> S1-VENUE-BUILD-START mode=unshare
+s1-nsprobe> S1-VENUE-NSX=/build/nsroot.nHa578 (private tmpfs)
+s1-nsprobe> mount: /build/nsroot.nHa578/nix/store: wrong fs type, bad option, bad superblock on /nix/store, missing codepage or helper program, or other error.
+s1-nsprobe>        dmesg(1) may have more information after failed mount system call.
+s1-nsprobe> S1-VENUE-RC=32
+s1-nsprobe> S1-VENUE-FAIL the guest run exited 32
+error: Cannot build '/nix/store/3sp3xvr6psh8swb49fpwj44mwy4dncny-s1-nsprobe-0.drv'.
+       Reason: builder failed with exit code 32.
+
+== rung 2: s1-libc-amd64 (proot venue + hostbin + amd64 libc) — PASS ==
+s1-hostbin> S1-HOSTBIN-SETUP-TOOLS=awk basename date dd lex ls pcc rm sed size yacc
+s1-hostbin> S1-HOSTBIN-SHIM nm=/nix/store/fi98g122a3kzbschgvbvsqvpyxrmqvvl-binutils-wrapper-2.46/bin/nm sed=/nix/store/9wc73n5izv0m7ppjbibi4hbr68rba1lj-gnused-4.10/bin/sed
+s1-libc-amd64> S1-RUNG2-BEGIN uid=0 cwd=/
+s1-libc-amd64> S1-RUNG2-LIBC-SECONDS=4
+s1-libc-amd64> --rw-r--r-- M 0 0 0 601170 Nov 23 01:46 /amd64/lib/libc.a
+s1-libc-amd64> S1-RUNG2-LIBC-MEMBERS=259
+s1-libc-amd64> S1-RUNG2-LIBC-OK
+s1-libc-amd64> S1-VENUE-RC=0
+s1-libc-amd64> S1-VENUE-OK
+/nix/store/mfvy2a00xf01p410i11q9lxya1pcvi37-s1-libc-amd64-0

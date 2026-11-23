@@ -97,13 +97,13 @@ readable `$home/lib/profile`.
 
 That last condition decides S3's login: the cpu image stages only
 `/usr/glenda/lib/profile` (`mkimage.sh`'s chain skeleton copy). The
-bake's `out/auth-creds.txt` names the DEMO probe user (norbert), who
+bake's `out/auth-creds.txt` (`<redacted>`: filename only) names the DEMO probe user (norbert), who
 has no staged home, so `rc -li` as norbert exits the guard cleanly and
 never starts rio. The DEMO domain gives glenda, bootes and norbert one
-shared password (`build/x86_64/authdomain-gen.c:313-329`, `:473-475`),
-so the parsed password authenticates glenda. `rio-gate.sh` therefore
+shared password (`<redacted>`: prose only; `build/x86_64/authdomain-gen.c:313-329`, `:473-475`),
+so the parsed password (`<redacted>`: prose only) authenticates glenda. `rio-gate.sh` therefore
 dials `user=glenda` (`S3_DT_USER`) and keeps the creds user only for
-the password. The `-G` control is meaningful precisely because it
+the password (`<redacted>`: prose only). The `-G` control is meaningful precisely because it
 removes condition 3 while keeping 1 and 2.
 
 ## A12 — what the determinism claim rests on

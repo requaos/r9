@@ -94,14 +94,26 @@ real checkout stayed untouched: HEAD `25d97dc4d`, its `git status
 --porcelain` sha256 is `041d29292e...`, and no file under
 `build/aarch64` has an mtime newer than the plan's start.
 
-## x86_64 KVM leg — scripted and statically checked, PENDING-OWNER
+## x86_64 KVM leg (owner's Linux host, Plan 06)
 
-VERDICT s6-x86_64-kvm-linux: PENDING-OWNER
+VERDICT s6-x86_64-kvm-linux: PASS
+EVIDENCE s6-x86_64-kvm-linux: s6/evidence/x86_64-kvm-linux.log
 
-The leg is `s6/linux-x86_64.sh` plus `s6/q35shell-probe.expect`, written
-for Plan 06's run-all on the owner's x86_64 Linux host. It cannot run on
-this Mac: macOS has no `/dev/kvm`, and the q35shell profile needs the
-x86_64 Linux ISO path (grub2/xorriso are in r9's devshell on Linux only).
+The witness ran the leg on the x86_64 KVM host (Linux x86_64 NixOS
+7.4.0-rc3, `/dev/kvm` writable; env: `linux-witness/evidence/env.txt`).
+The probe rebuilt on the host matched the recorded sha256
+(`db94057f04c751c59a648de5c8505f452bb225b6a276714e7ee5544396a5dcd5`;
+probe match: yes). Control and flip-back booted the same chain image
+(`3ae4127abe1d...`), the probe image differed (`7af2a8e07e4c...`), and
+the terminal line was `S6-X86 control=PASS probe=PASS flipback=PASS
+sha-equal=yes`. The guest printed `R9-RUST-AOUT-PROBE-OK` for the typed
+`/bin/echo x`, and control/flip-back printed `R9-ECHO-CONTROL`. The
+q35shell boot fingerprints agree with that split (`e7e84ec2...` for
+control and flip-back; `ec6b0005...` for the probe).
+
+The leg cannot run on this Mac: macOS has no `/dev/kvm`, and the q35shell
+profile needs the x86_64 Linux ISO path (grub2/xorriso are in r9's
+devshell on Linux only).
 
 What the script does, per leg (control, probe, flip-back):
 
@@ -143,13 +155,12 @@ KERNDATE=1795382101 \
 bash .planning/phases/01-stage-p0-cross-build-harness/spikes/s6/linux-x86_64.sh
 ```
 
-Expected terminal line:
+Expected terminal line (seen on the witness):
 `S6-X86 control=PASS probe=PASS flipback=PASS sha-equal=yes`.
 
 ## What this means for planning pass 2
 
-- **D-17 probe recipe (proven on arm64 HVF; the amd64 build is
-  statically valid and awaits the KVM run):**
+- **D-17 probe recipe (proven on arm64 HVF and x86_64 KVM):**
   - source: `#![no_std] #![no_main]`, a panic handler that loops, and a
     `core::arch::global_asm!` `_start` that writes the marker with
     PWRITE(51) then calls EXITS(8);
@@ -175,8 +186,9 @@ Expected terminal line:
   flip-back (sha256 `746f1dfe0f3f96e46d6cf1e4f4b963dd5d3dad195b370b19c973d17394f6f5b4`),
   with the probe image differing only as expected
   (`242ea95aeb89c2ab968fbc71bdf78805e1f4443c32a205e128ee355bfe22f310`).
-  The pass-2 x86_64 flip-back must reproduce the same equality on
-  `bootfs-chain.paq`.
+  The x86_64 witness reproduced the same equality on the q35shell chain
+  image: control and flip-back `3ae4127abe1d8466617d22877f1171f4a30086f05e8ef7c1406c1d5dd8fa9de8`,
+  probe `7af2a8e07e4c969907727b3b31964bfddb3cad642fda643fc20766bda1d05f12`.
 - **D-18:** every S6 source lives only under
   `.planning/phases/01-stage-p0-cross-build-harness/spikes/`; the probe is
   not in the cargo workspace and is built with plain rustc. The pass-2
@@ -185,10 +197,4 @@ Expected terminal line:
 
 ## Assumption A7
 
-ASSUMPTION A7: UNTESTED — the static half passes (the flat rust-lld
-payload wrapped in the header satisfies every rule of r9's x86_64
-`parse_aout`, with the PWRITE/EXITS sequences in the disassembly); the
-arm64 running half is CONFIRMED above under HVF (probe, marker,
-flip-back, identical image bytes); the amd64 running half is the owner's
-x86_64 KVM leg in Plan 06, so A7 as written (0x200028 under r9's x86_64
-loader) stays untested until then.
+ASSUMPTION A7: CONFIRMED - the flat rust-lld payload wrapped in the 40-byte header satisfies every rule of r9's x86_64 `parse_aout` and now loads and runs under r9's x86_64 loader on the KVM witness: `/bin/echo x` printed `R9-RUST-AOUT-PROBE-OK`, control and flip-back printed `R9-ECHO-CONTROL`, and all three legs passed with `sha-equal=yes`. Evidence: s6/evidence/x86_64-kvm-linux.log.

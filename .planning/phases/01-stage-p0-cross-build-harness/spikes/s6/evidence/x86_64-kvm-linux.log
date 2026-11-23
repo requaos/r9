@@ -1,0 +1,45 @@
+# S6 x86_64 KVM witness — q35shell control / probe / flip-back
+# source return: witness-returns/01-06 commit 72a75c0 (run 2, 2026-11-23T02:31:44Z)
+# scratch r9 clone: 116bcc23c8052a1728992cdbc7b625143260d683 (blobless)
+# scratch Harvey: bd7a6982a3e4f465f8ed3da5e0c7290521514ff0 (built by the s3 step)
+# probe: s6/probe-amd64.aout rebuilt by run-from-repo.sh; sha256
+#        db94057f04c751c59a648de5c8505f452bb225b6a276714e7ee5544396a5dcd5,
+#        recorded sha256 the same — probe match: yes
+# KERNDATE=1795382101; all three legs under q35 KVM.
+# No credential material appears in this excerpt.
+
+// final classification: out/s6/linux-x86_64.log
+S6-X86: leg control
+S6-X86: control sha256=3ae4127abe1d8466617d22877f1171f4a30086f05e8ef7c1406c1d5dd8fa9de8
+S6-X86: leg probe
+S6-X86: probe sha256=7af2a8e07e4c969907727b3b31964bfddb3cad642fda643fc20766bda1d05f12
+S6-X86: leg flipback
+S6-X86: flipback sha256=3ae4127abe1d8466617d22877f1171f4a30086f05e8ef7c1406c1d5dd8fa9de8
+S6-X86 control=PASS probe=PASS flipback=PASS sha-equal=yes
+
+// control leg — original /bin/echo (out/s6/x86-control.log)
+q35: paqfs root mounted from module (389549 bytes)
+fingerprint: e7e84ec22c9cf702c8c76fe5a777428b9aa4d0a7
+init: starting /bin/rc
+% /bin/echo R9-ECHO-CONTROL
+R9-ECHO-CONTROL
+process 5 exited: ""
+% QEMU: Terminated
+
+// probe leg — /bin/echo replaced by the Rust a.out probe (out/s6/x86-probe.log)
+q35: paqfs root mounted from module (361329 bytes)
+fingerprint: ec6b0005213377e925717a609b1700539836ffdf
+init: starting /bin/rc
+% /bin/echo x
+R9-RUST-AOUT-PROBE-OK
+process 5 exited: ""
+% QEMU: Terminated
+
+// flip-back leg — original /bin/echo restored (out/s6/x86-flipback.log)
+q35: paqfs root mounted from module (389549 bytes)
+fingerprint: e7e84ec22c9cf702c8c76fe5a777428b9aa4d0a7
+init: starting /bin/rc
+% /bin/echo R9-ECHO-CONTROL
+R9-ECHO-CONTROL
+process 5 exited: ""
+% QEMU: Terminated

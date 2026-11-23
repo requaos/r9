@@ -1,0 +1,53 @@
+# S3 determinism witness — two mkimage.sh bakes at KERNDATE=1795382101
+# source return: witness-returns/01-06 commit 72a75c0 (run 2, 2026-11-23T02:31:44Z)
+# scratch Harvey: bd7a6982a3e4f465f8ed3da5e0c7290521514ff0 (no .git)
+# Bake 1 completed and its sha256 set was written to
+# out/s3/determinism/bake1.sha256. Bake 2 aborted at the auth bake, so
+# determinism.sh never reached its comparison stage and printed no
+# DETERMINISM <image> line. The bake1.sha256 file itself is not in the
+# returned WITNESS-RETURN/run-all.log, so its per-image hashes are not
+# reproduced here. No credential value appears in this excerpt.
+
+== s3: determinism (two bakes at KERNDATE=1795382101)
+building '/nix/store/bn3ms6pwv7sgisynphaylf46z63svn6y-harness-0.1.0.drv'...
+building '/nix/store/bsg061wyparnv6wcq1vy4jwa5rq9dvby-nix-shell-env.drv'...
+harvey devshell: HARVEY=/home/req/r9-spike-work/harvey PLAN9=/nix/store/dzvnbi2n1x9jkmzvmwxdly607bwaxsbv-plan9port-0-unstable-2025-11-10/plan9
+  host bin: /home/req/r9-spike-work/harvey/.build/hostbin-linux-x86_64/bin
+  harness: /nix/store/xjlym8x1fqqp6n8ai6nwn5q459sj95pz-harness-0.1.0/bin/harness
+== determinism: scratch=/home/req/r9-spike-work/harvey KERNDATE=1795382101
+== bake 1 hashes -> /home/req/r9-spike-work/witness-bundle/out/s3/determinism/bake1.sha256
+== bake 2: sh build/x86_64/mkimage.sh (log: /home/req/r9-spike-work/witness-bundle/out/s3/determinism/determinism-bake2.log)
+
+// tail of determinism-bake2.log (the 20 lines determinism.sh prints on failure)
+services manifest: /amd64/bin/test staged
+services manifest: /amd64/bin/bind staged
+services manifest: /amd64/bin/hsvctcpecho staged
+services manifest: /amd64/bin/hmkdir staged
+services manifest: /rc/lib/rcmain staged
+services manifest: /rc/bin/termrc staged
+services manifest: /lib/namespace staged
+services manifest: /adm/timezone/local staged
+services manifest: /usr/glenda/lib/profile staged
+services manifest: /lib/netaddr.rc staged
+services manifest: /lib/netip-loopback.rc staged
+services manifest: /lib/netip-static.rc staged
+services manifest: /lib/netip-dhcp.rc staged
+services manifest: /lib/netip-tcp.rc staged
+services manifest: /lib/services-sweep.rc staged
+services manifest: 127 h* sweep binaries staged (tier-1 helpers + the tier-2 set computed from tiers/tier2-services.txt: 90 tier-2 members)
+== PASS: baked /home/req/r9-spike-work/harvey/build/x86_64/out/bootfs-services.paq (26671161 bytes; 127 h* binaries; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
+== PASS: baked /home/req/r9-spike-work/harvey/build/x86_64/out/bootfs-churn.paq (492105 bytes; chain + test/dc + churncats + /lib/churn-cats.rc; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
+== PASS: baked /home/req/r9-spike-work/harvey/build/x86_64/out/bootfs-substrate.paq (43674 bytes; skeleton + randread as /amd64/init; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
+error: auth bake: sweep subject hsecstored missing from the computed auth-suite set (the resolver lost it)
+S3-ERROR: bake2-failed — the second bake did not complete; tail of /home/req/r9-spike-work/witness-bundle/out/s3/determinism/determinism-bake2.log follows
+
+// per-image result: no image reached a comparison.
+//   bootfs.paq              not compared — bake 2 aborted before the verdicts
+//   bootfs-chain.paq        not compared — bake 2 aborted before the verdicts
+//   bootfs-tier.paq         not compared — bake 2 aborted before the verdicts
+//   bootfs-net.paq          not compared — bake 2 aborted before the verdicts
+//   bootfs-services.paq     not compared — bake 2 re-baked it (26671161 B), no hash compare
+//   bootfs-churn.paq        not compared — bake 2 re-baked it (492105 B), no hash compare
+//   bootfs-substrate.paq    not compared — bake 2 re-baked it (43674 B), no hash compare
+//   bootfs-auth.paq         not compared — bake 2 aborted at this image
+//   bootfs-cpu.paq          not compared — bake 2 never reached it

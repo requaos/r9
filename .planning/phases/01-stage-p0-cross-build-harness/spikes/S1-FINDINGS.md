@@ -165,10 +165,14 @@ change.
 
 ## Assumptions
 
-ASSUMPTION A1: REFUTED - `unshare -Ur -m` cannot start inside this nix build
-sandbox (nested `uid_map` write is EPERM), and not even outside it on the
-Ubuntu 24.04 guest. The proot venue runs the same guest work with no
-capabilities, so D-03 is not blocked — but an unshare-based derivation is.
+ASSUMPTION A1: REFUTED - the unshare venue is refused on both builders:
+nested `uid_map` write is EPERM inside the lima nix sandbox and on its
+Ubuntu 24.04 guest, and on the x86_64 witness the private tmpfs comes up but
+the `/nix/store` bind fails (`wrong fs type, bad option, bad superblock`;
+guest exit 32). The proot venue runs the same guest work on both (lima
+aarch64 and the witness x86_64: 601170 bytes, 259 members, `S1-VENUE-OK`),
+so D-03 is not blocked — but an unshare-based derivation is. Evidence:
+s1/evidence/witness-x86_64-linux.log.
 ASSUMPTION A8: REFUTED - the amd64 libc alone builds in 2 s on the lima
 guest (259 members, 601170 bytes). "Tens of minutes per arch" belongs to the
 full tier build (hundreds of command links), not to the library tier.
@@ -180,21 +184,35 @@ too.
 
 ## Witness legs (owner's x86_64 Linux host, Plan 06)
 
-VERDICT s1-witness-rung1-x86_64-linux: PENDING-OWNER
-VERDICT s1-witness-rung2-x86_64-linux: PENDING-OWNER
+VERDICT s1-witness-rung1-x86_64-linux: FAIL
+EVIDENCE s1-witness-rung1-x86_64-linux: s1/evidence/witness-x86_64-linux.log
 
-The same flake evaluates for `x86_64-linux` on the Mac, so Plan 06's witness
-run builds the identical derivations on the owner's KVM host.
+VERDICT s1-witness-rung2-x86_64-linux: PASS
+EVIDENCE s1-witness-rung2-x86_64-linux: s1/evidence/witness-x86_64-linux.log
+
+The same flake evaluated for `x86_64-linux` and ran on the owner's witness
+(Linux x86_64 NixOS 7.4.0-rc3, 16 CPU, 30 GiB, `/dev/kvm` writable, nix
+2.35.6 with `sandbox = true`; `linux-witness/evidence/env.txt`). Rung 1
+failed at a different point than on lima: the private tmpfs
+(`S1-VENUE-NSX=/build/nsroot.nHa578`) was created, but the bind of
+`/nix/store` into it was refused (`wrong fs type, bad option, bad
+superblock`), so the guest exited 32 (`S1-VENUE-RC=32`) without running.
+Rung 2, through proot, built the same amd64 libc on x86_64: 601170 bytes,
+259 members, `S1-RUNG2-LIBC-OK`, `S1-VENUE-OK` (4 s). The sandbox guard
+held (`usr-bin-env=absent`).
 
 ## What this means for planning pass 2
 
-- **D-03's venue is viable, but not through `unshare`.** Pass 2's tree
-  derivation must either (a) use the proot venue measured here, or (b) get a
-  builder where the derivation itself runs with CAP_SETUID in a namespace it
-  owns. Option (a) costs proot's ptrace overhead — negligible for libc
-  (2 s); the tier build's cost is dominated by the command links, not the
-  venue. Option (b) is a D-04 machine decision (the native Linux builder's VM
-  may have the same AppArmor default) and is not assumed.
+- **D-03's venue is proot on both measured hosts, not `unshare`.** Rung 1
+  failed on lima (nested `uid_map` EPERM) and again on the x86_64 witness
+  (the private tmpfs starts but `/nix/store` will not bind into it). Rung 2
+  built the amd64 libc through proot on both (601170 bytes, 259 members), so
+  pass 2's tree derivation should use the proot venue and must not depend on
+  unshare or on a privileged builder. The witness run also rules out
+  "x86_64 native is different": the D-03 venue question is answered the same
+  way on both architectures. If pass 2 wants the unshare option, it needs a
+  builder where the derivation owns a user namespace with CAP_SETUID, which
+  neither measured venue provides.
 - **The measured number to plan against:** the amd64 library tier is seconds,
   not minutes; A8's "tens of minutes" is the whole tiered userland build.
   Pass 2 should keep `lib.fileset` filtering so pin bumps that do not touch

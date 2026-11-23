@@ -106,40 +106,32 @@ prompt via a host-served 9P root) for the closing checkpoint.
 
 ## KVM witness (owner's x86_64 Linux host, Plan 06)
 
-VERDICT s5-q35-kvm-linux: PENDING-OWNER
+VERDICT s5-q35-kvm-linux: PASS
+EVIDENCE s5-q35-kvm-linux: s5/evidence/q35-kvm-linux.log
 
-Plan 06 runs the same script against the same kernel bytes on the owner's
-host:
-
-```
-S5_KERNEL=<the s5/work/9k10cpu.elf copy, sha256 ecdcdaddea8d3759d74303b869ddfae8efeba1d4d160382577cfc52b9a32c45b> \
-S5_ACCEL=kvm S5_MACHINE=q35 S5_NET=virtio \
-S5_LOG=<host log> nix develop -c sh spikes/s5/boot-q35.sh
-```
-
-The kernel sha256 must match the one above. If the owner supplies a freshly
-built kernel at `bd7a6982a`, record its own sha256 and run the same command
-against it; the KVM leg then answers for both artifacts. No silent
-KVM-to-TCG downgrade: an unwritable `/dev/kvm` exits with
-`S5-ERROR kvm-unavailable`.
+The witness ran the same script against the same kernel bytes under
+`-accel kvm` on the x86_64 host (Linux x86_64 NixOS 7.4.0-rc3, `/dev/kvm`
+writable; env: `linux-witness/evidence/env.txt`). The kernel sha256
+`ecdcdaddea8d3759d74303b869ddfae8efeba1d4d160382577cfc52b9a32c45b`
+matched `s5/evidence/kernel-provenance.txt` (2030226 bytes). The harness
+classified banner and prompt within the first 1-second poll
+(`BANNER_SECONDS=1`, `PROMPT_SECONDS=1`), saw the virtio NIC and no 01-04
+signature: `S5-RESULT machine=q35 accel=kvm net=virtio banner=yes
+prompt=yes sigs=none`. No `S5_KERNEL_EXTRA` kernel was supplied, so this
+answers for the committed artifact only.
 
 ## Assumption A11
 
-ASSUMPTION A11: UNTESTED — the Mac TCG legs confirm that k10cpu launches
-under q35 and reaches the `root is from` prompt with virtio or no NIC, but
-they do not show a usable cpu service (no root source was connected, and
-D-20 no longer requires the cpu-service part). The KVM leg in Plan 06
-completes the launch half of the claim; the service half stays out of D-20
-scope.
+ASSUMPTION A11: CONFIRMED - the KVM witness launches the same kernel under q35 to the `root is from` prompt with virtio and no recorded signature; the Mac TCG legs and the x86_64 KVM leg now agree. The cpu-service half remains out of D-20 scope and is not claimed. Evidence: s5/evidence/q35-kvm-linux.log.
 
 ## What this means for planning pass 2
 
 - **D-08/D-20:** the evidence supports the smallest scope option — one
   Harvey app that builds and launches `amd64/9k10cpu.elf` under `-M q35`
-  and classifies the `root is from` prompt (Mac TCG already green; KVM
-  pending). The rc-prompt option is feasible without a Harvey source edit
-  by serving a root with Harvey's own `u9fs` on TCP 564, but it adds a
-  privileged/userns listener and prompt driving, so it is the next
+  and classifies the `root is from` prompt (Mac TCG and the x86_64 KVM
+  witness both green). The rc-prompt option is feasible without a Harvey
+  source edit by serving a root with Harvey's own `u9fs` on TCP 564, but it
+  adds a privileged/userns listener and prompt driving, so it is the next
   increment, not the minimum.
 - **Build path the Harvey app would wrap:** `nix run .#setup` →
   `nix run .#toolchain` → `nix run .#build` (native sudo+unshare on Linux,
