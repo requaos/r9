@@ -1,0 +1,215 @@
+r9 devshell: rustc 1.95.0-nightly (842bd5be2 2026-01-29)
+QEMU emulator version 11.1.2
+apps: nix run .#build | nix run .#boot-virt | nix run .#default
+harvey supply: R9_HARVEY_DIR_ARM64=/nix/store/b2i0hcbxxmyjlh7drl94s0lp3iq7n04a-harvey-tree-arm64-0 (lazy; realised on first use)
+harvey supply: R9_HARVEY_DIR_AMD64=/nix/store/002vay29nmgw2d81nvmi2i6adgz7h1md-harvey-tree-amd64-0 (lazy; realised on first use)
+harvey supply: R9_HARVEY_REFERENCE_AMD64=/nix/store/ydavfxqx6vhlcar7mmcxi1llhjg0n69x-harvey-reference-amd64-0 (lazy; realised on first use)
+harvey supply: R9_HARVEY_REFERENCE_ARM64=/nix/store/zps34qpcmsd0s2mkf251hhc9sjsnqvq5-harvey-reference-arm64-0 (lazy; realised on first use)
+harvey supply: R9_AUTHDOMAIN_GEN=/nix/store/gysm8xfgmlwkj6kcf6zdzkc9pzmi20ah-harvey-authdomain-gen-0/bin/authdomain-gen
+warning: field `frame_len` is never read
+   --> xtask/src/pcap.rs:228:9
+    |
+219 | pub struct Icmpv4Frame {
+    |            ----------- field in this struct
+...
+228 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Icmpv4Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `frame_len` is never read
+   --> xtask/src/pcap.rs:375:9
+    |
+359 | pub struct BootpFrame {
+    |            ---------- field in this struct
+...
+375 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `BootpFrame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `dst_mac` and `frame_len` are never read
+   --> xtask/src/pcap.rs:569:9
+    |
+566 | pub struct Icmpv6Frame {
+    |            ----------- fields in this struct
+...
+569 |     pub dst_mac: [u8; 6],
+    |         ^^^^^^^
+...
+579 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Icmpv6Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `src_mac`, `dst_mac`, and `frame_len` are never read
+   --> xtask/src/pcap.rs:723:9
+    |
+721 | pub struct Tcpv4Frame {
+    |            ---------- fields in this struct
+722 |     /// Ethernet source/destination MAC.
+723 |     pub src_mac: [u8; 6],
+    |         ^^^^^^^
+724 |     pub dst_mac: [u8; 6],
+    |         ^^^^^^^
+...
+737 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Tcpv4Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: `xtask` (bin "xtask") generated 4 warnings
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.02s
+     Running `target/debug/xtask boot-test --arch x86-64 --config q35net --accel kvm`
+   Compiling compiler_builtins v0.1.160 (/nix/store/ypvsp48ial67d5frhk4y86crjsy764mp-rust-default-1.95.0-nightly-2026-01-30/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins)
+   Compiling core v0.0.0 (/nix/store/ypvsp48ial67d5frhk4y86crjsy764mp-rust-default-1.95.0-nightly-2026-01-30/lib/rustlib/src/rust/library/core)
+   Compiling heapless v0.9.3
+   Compiling smoltcp v0.14.0
+   Compiling x86 v0.52.0
+   Compiling zerocopy v0.8.27
+   Compiling alloc v0.0.0 (/nix/store/ypvsp48ial67d5frhk4y86crjsy764mp-rust-default-1.95.0-nightly-2026-01-30/lib/rustlib/src/rust/library/alloc)
+   Compiling bitflags v1.3.2
+   Compiling byteorder v1.5.0
+   Compiling stable_deref_trait v1.2.1
+   Compiling cfg-if v1.0.5
+   Compiling managed v0.8.0
+   Compiling adler2 v2.0.1
+   Compiling bitflags v2.9.4
+   Compiling bit_field v0.10.3
+   Compiling bitstruct v0.1.1
+   Compiling static_assertions v1.1.0
+   Compiling raw-cpuid v10.7.0
+   Compiling miniz_oxide v0.9.1
+   Compiling hash32 v0.3.1
+   Compiling port v0.1.0 (/home/req/code/r9/port)
+warning: unused import: `alloc::string::String`
+  --> port/src/devip.rs:57:5
+   |
+57 | use alloc::string::String;
+   |     ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> port/src/allocator.rs:608:13
+    |
+608 |         let mut walk = |head: Option<Idx>, mark: &mut dyn FnMut(Idx)| {
+    |             ----^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `flags` is never used
+   --> port/src/devip/netlog.rs:103:15
+    |
+103 | pub(crate) fn flags() -> u32 {
+    |               ^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `TCPSTAT_MAX_CONN` is never used
+    --> port/src/devip/proto.rs:2010:18
+     |
+2010 | pub(crate) const TCPSTAT_MAX_CONN: usize = 0;
+     |                  ^^^^^^^^^^^^^^^^
+
+warning: constant `TCPSTAT_MAX_SEGMENT` is never used
+    --> port/src/devip/proto.rs:2011:18
+     |
+2011 | pub(crate) const TCPSTAT_MAX_SEGMENT: usize = 1;
+     |                  ^^^^^^^^^^^^^^^^^^^
+
+warning: `port` (lib) generated 5 warnings (run `cargo fix --lib -p port` to apply 2 suggestions)
+   Compiling x86_64 v0.1.0 (/home/req/code/r9/x86_64)
+warning: unused import: `heap_census`
+  --> x86_64/src/allocator.rs:51:25
+   |
+51 | pub(crate) use global::{heap_census, heap_stats};
+   |                         ^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `port::println`
+  --> x86_64/src/platform/q35/netgate.rs:38:5
+   |
+38 | use port::println;
+   |     ^^^^^^^^^^^^^
+
+warning: function `heap_census` is never used
+  --> x86_64/src/allocator.rs:36:19
+   |
+36 |     pub(crate) fn heap_census() -> (alloc::vec::Vec<(usize, usize)>, alloc::vec::Vec<(usize, usize)>) {
+   |                   ^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `flags` is never used
+  --> x86_64/src/cpu.rs:35:15
+   |
+35 | pub(crate) fn flags() -> Flags {
+   |               ^^^^^
+
+warning: associated function `new` is never used
+   --> x86_64/src/dat.rs:506:12
+    |
+497 | impl Flags {
+    | ---------- associated function in this implementation
+...
+506 |     pub fn new(raw: u64) -> Self {
+    |            ^^^
+
+warning: enum `IntrStatus` is never used
+   --> x86_64/src/trap.rs:680:10
+    |
+680 | pub enum IntrStatus {
+    |          ^^^^^^^^^^
+
+warning: function `intrstatus` is never used
+   --> x86_64/src/trap.rs:773:4
+    |
+773 | fn intrstatus() -> IntrStatus {
+    |    ^^^^^^^^^^
+
+warning: function `spllo` is never used
+   --> x86_64/src/trap.rs:778:8
+    |
+778 | pub fn spllo() -> IntrStatus {
+    |        ^^^^^
+
+warning: function `splhi` is never used
+   --> x86_64/src/trap.rs:784:8
+    |
+784 | pub fn splhi() -> IntrStatus {
+    |        ^^^^^
+
+warning: function `splx` is never used
+   --> x86_64/src/trap.rs:790:8
+    |
+790 | pub fn splx(x: IntrStatus) -> IntrStatus {
+    |        ^^^^
+
+warning: `x86_64` (bin "x86_64") generated 10 warnings (run `cargo fix --bin "x86_64" -p x86_64` to apply 2 suggestions)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 14.69s
+mb2: header at file offset 0x1008 validated on the stripped ISO kernel (magic/arch/length/checksum/end tag)
+xorriso 1.5.8.pl02 : RockRidge filesystem manipulator, libburnia project.
+
+xorriso : NOTE : Environment variable SOURCE_DATE_EPOCH encountered with value 315532800
+Drive current: -outdev 'stdio:target/boot-q35net.iso'
+Media current: stdio file, overwriteable
+Media status : is blank
+Media summary: 0 sessions, 0 data blocks, 0 data,  363g free
+Added to ISO image: directory '/'='/tmp/nix-shell.MuvYYb/grub.TEWxHF'
+xorriso : UPDATE :     356 files added in 1 seconds
+Added to ISO image: directory '/'='/home/req/code/r9/target/iso-q35net'
+xorriso : UPDATE :     360 files added in 1 seconds
+xorriso : NOTE : Copying to System Area: 512 bytes from file '/nix/store/jniwmlg4zv2r4baccllbizddnh1scfjr-grub-2.14/lib/grub/i386-pc/boot_hybrid.img'
+ISO image produced: 8971 sectors
+Written to medium : 8971 sectors at LBA 0
+Writing to 'stdio:target/boot-q35net.iso' completed successfully.
+
+qemu-system-x86_64: -chardev socket,id=cons,path=target/boot-test-q35net.sock,server=on,wait=on: info: QEMU waiting for connection on: disconnected:unix:target/boot-test-q35net.sock,server=on
+boot-test: PASS -- SeaBIOS -> GRUB2 -> mb2 kernel boot: banner, discovery markers, the bind markers (negotiation audit + #l0: + MAC), the kernel-side netgate ping-pong xN/tx-bulk stages and X64-NET-DONE in order; the pcap assertion holds (4352 ARP requests, 4352 gateway replies, 60-byte frames from the guest MAC) — X64-04 closed and X64-02's load proof landed
+boot-test: serial log written to /home/req/code/r9/target/boot-test-q35net.log
+boot-test: captured 2299 bytes

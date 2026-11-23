@@ -1,0 +1,26 @@
+unpacking 'github:requaos/harvey/c697666ba315f137ca2fd11768f835d04bd9f018?narHash=sha256-VhB2RKggOVWGNjiMHC0s6OMK7q3khwskByCyaTFbKwg%3D' into the Git cache...
+these 4 derivations will be built:
+  /nix/store/hgny4f6s6rznqy3sqkfzas1cr7mayd4g-source.drv
+  /nix/store/pw42zwrqg56072j12nlc1q43nji4padz-harvey-hostbin-0.drv
+  /nix/store/9p3i39hrvi6brykkzhb9jj356kvc69a7-harvey-tree-arm64-0.drv
+  /nix/store/dfiqi4g071n2v9sw80l7n9n9my6fkxrg-harvey-tree-amd64-0.drv
+building '/nix/store/hgny4f6s6rznqy3sqkfzas1cr7mayd4g-source.drv'...
+building '/nix/store/pw42zwrqg56072j12nlc1q43nji4padz-harvey-hostbin-0.drv'...
+building '/nix/store/dfiqi4g071n2v9sw80l7n9n9my6fkxrg-harvey-tree-amd64-0.drv'...
+building '/nix/store/9p3i39hrvi6brykkzhb9jj356kvc69a7-harvey-tree-arm64-0.drv'...
+TREES-STORE /nix/store/002vay29nmgw2d81nvmi2i6adgz7h1md-harvey-tree-amd64-0
+--- /nix/store/002vay29nmgw2d81nvmi2i6adgz7h1md-harvey-tree-amd64-0/HARVEY-TREE ---
+  rev=c697666ba315f137ca2fd11768f835d04bd9f018
+  narHash=sha256-VhB2RKggOVWGNjiMHC0s6OMK7q3khwskByCyaTFbKwg=
+  arch=amd64
+  system=x86_64-linux
+checking '/nix/store/002vay29nmgw2d81nvmi2i6adgz7h1md-harvey-tree-amd64-0'...
+TREES-VERIFY-OK /nix/store/002vay29nmgw2d81nvmi2i6adgz7h1md-harvey-tree-amd64-0
+TREES-STORE /nix/store/b2i0hcbxxmyjlh7drl94s0lp3iq7n04a-harvey-tree-arm64-0
+--- /nix/store/b2i0hcbxxmyjlh7drl94s0lp3iq7n04a-harvey-tree-arm64-0/HARVEY-TREE ---
+  rev=c697666ba315f137ca2fd11768f835d04bd9f018
+  narHash=sha256-VhB2RKggOVWGNjiMHC0s6OMK7q3khwskByCyaTFbKwg=
+  arch=arm64
+  system=x86_64-linux
+checking '/nix/store/b2i0hcbxxmyjlh7drl94s0lp3iq7n04a-harvey-tree-arm64-0'...
+TREES-VERIFY-OK /nix/store/b2i0hcbxxmyjlh7drl94s0lp3iq7n04a-harvey-tree-arm64-0
