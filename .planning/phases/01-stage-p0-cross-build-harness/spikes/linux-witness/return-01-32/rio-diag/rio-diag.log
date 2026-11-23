@@ -1,10 +1,10 @@
 this derivation will be built:
-  /nix/store/c0s8pbg5bvbflb05fmf01zfmnbszldgr-rio-gate.drv
-building '/nix/store/c0s8pbg5bvbflb05fmf01zfmnbszldgr-rio-gate.drv'...
+  /nix/store/1wigrq7xlxnfhd0zsbq3db4l9hg1qm47-rio-gate.drv
+building '/nix/store/1wigrq7xlxnfhd0zsbq3db4l9hg1qm47-rio-gate.drv'...
 == RIO mode:       rio-diag
 == scratch Harvey: /home/req/r9-witness-work/harvey
 == RIO output:     /home/req/r9-witness-work/out/rio-diag
-== run scratch:    /tmp/rio-gate.4eh5EB
+== run scratch:    /tmp/rio-gate.zhoZBI
 == r9 kernel:      /nix/store/83lpwkwibvwmds9aw1d8ywrrqz92xi2f-r9-kernel-x64-116bcc2/kernel-x64.elf
 == iso-builder:    /nix/store/4wmj3a1gwklqiqbnlvkgdqznvrmnqlad-r9-iso-builder/bin/r9-iso-builder
 == netdev emitter: /nix/store/r2dkr1v569bqpihqd00bpzwgbphcl7ym-r9-netdev-args-116bcc2/bin/r9-netdev-args
@@ -13,7 +13,7 @@ building '/nix/store/c0s8pbg5bvbflb05fmf01zfmnbszldgr-rio-gate.drv'...
 == dial contract:  user=glenda cpu=127.0.0.1 auth=tcp!127.0.0.1!5670 (the committed hostfwd pair's loopback side; never widened)
 == shape:          q35 accel=kvm cpu=host
 == step 0d: patching the staged cpu profile with the rio-diag login marker
-== rio-diag: staged profile patched (marker /srv/r9-login-ok, pid /srv/r9-login-pid.<pid>; backup /home/req/r9-witness-work/harvey/build/x86_64/r9-diag-profile.orig)
+== rio-diag: staged profile patched at the top (marker /srv/r9-login-ok, pid /srv/r9-login-pid.<pid>; backup /home/req/r9-witness-work/harvey/build/x86_64/r9-diag-profile.orig)
 == step 1/5a: stage the mkimage inputs (build/x86_64/stage-build.sh)
 == no passwordless sudo — running the stage build in an unprivileged user namespace (unshare -Ur -m chroot scaffold; log: /home/req/r9-witness-work/harvey/.build/stage-build-x64.log)
 == stage build provenance (Harvey's vendored toolchain):
@@ -410,38 +410,38 @@ rm -f [568ijqv7].init init.[568ijqv7]
 rm -f paqfs.[568ijqv7] [568ijqv7].paqfs paqfs.acid paqfs
 rm -f [568ijqv7].out *.[568ijqv7] [xy].tab.? y.debug rc
 == staged tree (/harvey/build/x86_64/smoke-out):
---rwxr-xr-x M 0 root root 38376 Nov 23 01:10 /harvey/build/x86_64/smoke-out/churncats
---rwxr-xr-x M 0 root root 34286 Nov 23 01:10 /harvey/build/x86_64/smoke-out/churnmark
---rwxr-xr-x M 0 root root 61501 Nov 23 01:10 /harvey/build/x86_64/smoke-out/churnsem
---rwxr-xr-x M 0 root root 82053 Nov 23 01:10 /harvey/build/x86_64/smoke-out/fpprobe
---rwxr-xr-x M 0 root root 35293 Nov 23 01:10 /harvey/build/x86_64/smoke-out/init
---rwxr-xr-x M 0 root root 38111 Nov 23 01:10 /harvey/build/x86_64/smoke-out/randread
---rwxr-xr-x M 0 root root 35293 Nov 23 01:10 /harvey/build/x86_64/smoke-out/smokesleep
+--rwxr-xr-x M 0 root root 38376 Nov 23 01:24 /harvey/build/x86_64/smoke-out/churncats
+--rwxr-xr-x M 0 root root 34286 Nov 23 01:24 /harvey/build/x86_64/smoke-out/churnmark
+--rwxr-xr-x M 0 root root 61501 Nov 23 01:24 /harvey/build/x86_64/smoke-out/churnsem
+--rwxr-xr-x M 0 root root 82053 Nov 23 01:24 /harvey/build/x86_64/smoke-out/fpprobe
+--rwxr-xr-x M 0 root root 35293 Nov 23 01:24 /harvey/build/x86_64/smoke-out/init
+--rwxr-xr-x M 0 root root 38111 Nov 23 01:24 /harvey/build/x86_64/smoke-out/randread
+--rwxr-xr-x M 0 root root 35293 Nov 23 01:24 /harvey/build/x86_64/smoke-out/smokesleep
 == chain tree (/harvey/build/x86_64/out):
---r--r--r-- M 0 root root       35 Nov 23 01:03 /harvey/build/x86_64/out/auth-creds.txt
---r--r--r-- M 0 root root       13 Nov 23 01:03 /harvey/build/x86_64/out/authfeed.txt
---rwxr-xr-x M 0 root root   159349 Nov 23 01:10 /harvey/build/x86_64/out/boot
---rw-r--r-- M 0 root root  2574231 Nov 23 01:03 /harvey/build/x86_64/out/bootfs-auth.paq
---rw-r--r-- M 0 root root   389606 Nov 23 01:03 /harvey/build/x86_64/out/bootfs-chain.paq
---rw-r--r-- M 0 root root   492150 Nov 23 01:03 /harvey/build/x86_64/out/bootfs-churn.paq
---rw-r--r-- M 0 root root 22002513 Nov 23 01:03 /harvey/build/x86_64/out/bootfs-cpu.paq
---rw-r--r-- M 0 root root   907607 Nov 23 01:03 /harvey/build/x86_64/out/bootfs-net.paq
---rw-r--r-- M 0 root root 26671018 Nov 23 01:03 /harvey/build/x86_64/out/bootfs-services.paq
---rw-r--r-- M 0 root root    43674 Nov 23 01:03 /harvey/build/x86_64/out/bootfs-substrate.paq
---rw-r--r-- M 0 root root  1904224 Nov 23 01:03 /harvey/build/x86_64/out/bootfs-tier.paq
---rw-r--r-- M 0 root root   106180 Nov 23 01:03 /harvey/build/x86_64/out/bootfs.paq
---rwxr-xr-x M 0 root root    35621 Nov 23 01:10 /harvey/build/x86_64/out/cat
---rwxr-xr-x M 0 root root    58896 Nov 23 01:10 /harvey/build/x86_64/out/echo
---rwxr-xr-x M 0 root root   141989 Nov 23 01:10 /harvey/build/x86_64/out/init
---rwxr-xr-x M 0 root root    84965 Nov 23 01:10 /harvey/build/x86_64/out/ls
---rwxr-xr-x M 0 root root    36081 Nov 23 01:03 /harvey/build/x86_64/out/netblast
---rwxr-xr-x M 0 root root   117524 Nov 23 01:10 /harvey/build/x86_64/out/paqfs
---rwxr-xr-x M 0 root root    72152 Nov 23 01:10 /harvey/build/x86_64/out/ps
---rwxr-xr-x M 0 root root   144391 Nov 23 01:10 /harvey/build/x86_64/out/rc
---rwxr-xr-x M 0 root root    63237 Nov 23 01:10 /harvey/build/x86_64/out/rm
---rwxr-xr-x M 0 root root   101678 Nov 23 01:03 /harvey/build/x86_64/out/tcpblast
---rwxr-xr-x M 0 root root    41261 Nov 23 01:03 /harvey/build/x86_64/out/tcpecho
---rwxr-xr-x M 0 root root    69709 Nov 23 01:10 /harvey/build/x86_64/out/test
+--r--r--r-- M 0 root root       35 Nov 23 01:11 /harvey/build/x86_64/out/auth-creds.txt
+--r--r--r-- M 0 root root       13 Nov 23 01:11 /harvey/build/x86_64/out/authfeed.txt
+--rwxr-xr-x M 0 root root   159349 Nov 23 01:24 /harvey/build/x86_64/out/boot
+--rw-r--r-- M 0 root root  2574231 Nov 23 01:11 /harvey/build/x86_64/out/bootfs-auth.paq
+--rw-r--r-- M 0 root root   389606 Nov 23 01:11 /harvey/build/x86_64/out/bootfs-chain.paq
+--rw-r--r-- M 0 root root   492150 Nov 23 01:11 /harvey/build/x86_64/out/bootfs-churn.paq
+--rw-r--r-- M 0 root root 22002534 Nov 23 01:11 /harvey/build/x86_64/out/bootfs-cpu.paq
+--rw-r--r-- M 0 root root   907607 Nov 23 01:11 /harvey/build/x86_64/out/bootfs-net.paq
+--rw-r--r-- M 0 root root 26671018 Nov 23 01:11 /harvey/build/x86_64/out/bootfs-services.paq
+--rw-r--r-- M 0 root root    43674 Nov 23 01:11 /harvey/build/x86_64/out/bootfs-substrate.paq
+--rw-r--r-- M 0 root root  1904224 Nov 23 01:11 /harvey/build/x86_64/out/bootfs-tier.paq
+--rw-r--r-- M 0 root root   106180 Nov 23 01:11 /harvey/build/x86_64/out/bootfs.paq
+--rwxr-xr-x M 0 root root    35621 Nov 23 01:24 /harvey/build/x86_64/out/cat
+--rwxr-xr-x M 0 root root    58896 Nov 23 01:24 /harvey/build/x86_64/out/echo
+--rwxr-xr-x M 0 root root   141989 Nov 23 01:24 /harvey/build/x86_64/out/init
+--rwxr-xr-x M 0 root root    84965 Nov 23 01:24 /harvey/build/x86_64/out/ls
+--rwxr-xr-x M 0 root root    36081 Nov 23 01:10 /harvey/build/x86_64/out/netblast
+--rwxr-xr-x M 0 root root   117524 Nov 23 01:24 /harvey/build/x86_64/out/paqfs
+--rwxr-xr-x M 0 root root    72152 Nov 23 01:24 /harvey/build/x86_64/out/ps
+--rwxr-xr-x M 0 root root   144391 Nov 23 01:24 /harvey/build/x86_64/out/rc
+--rwxr-xr-x M 0 root root    63237 Nov 23 01:24 /harvey/build/x86_64/out/rm
+--rwxr-xr-x M 0 root root   101678 Nov 23 01:10 /harvey/build/x86_64/out/tcpblast
+--rwxr-xr-x M 0 root root    41261 Nov 23 01:10 /harvey/build/x86_64/out/tcpecho
+--rwxr-xr-x M 0 root root    69709 Nov 23 01:24 /harvey/build/x86_64/out/test
 STAGE-BUILD-OK
 stage: smokesleep magic 00008a97 verified (amd64 S_MAGIC, A1 real-binary proof)
 stage: churnmark magic 00008a97 verified (amd64 S_MAGIC, A1 real-binary proof)
@@ -468,7 +468,7 @@ stage: chain ps magic 00008a97 verified (amd64 S_MAGIC, A1 real-binary proof)
    6l: /harvey/.build/hostbin-linux-x86_64/bin/6l
    ar: /harvey/.build/hostbin-linux-x86_64/bin/ar
    mk: /nix/store/dzvnbi2n1x9jkmzvmwxdly607bwaxsbv-plan9port-0-unstable-2025-11-10/plan9/bin/mk
-== nm shim: /tmp/tmp.CpbaDTjH5S/nm -> /nix/store/r5ri78axx1qggkjq3vawywlzglg70b5w-gcc-wrapper-16.2.0/bin/nm (9l autolib shadow)
+== nm shim: /tmp/tmp.iiwmMBeG5G/nm -> /nix/store/r5ri78axx1qggkjq3vawywlzglg70b5w-gcc-wrapper-16.2.0/bin/nm (9l autolib shadow)
 == tier0 lib: libc (explicit bootstrap, idempotent)
 for(i in 9sys 9syscall fmt port $objtype)@{
 	echo $i
@@ -941,7 +941,7 @@ a - strchr.6
 a - strcpy.6
 a - strlen.6
 a - tas.6
-T0-ART libc 089daa37c6338528f74182bedd358287b4e215df5ebad54a911f3c2826bd33d5
+T0-ART libc 6e3a8ac02a3df07b742f4d07b6e03e43e006c75dd273044413a327823b00ed72
 == tier0 lib: libc
 for(i in 9sys 9syscall fmt port $objtype)@{
 	echo $i
@@ -1414,7 +1414,7 @@ a - strchr.6
 a - strcpy.6
 a - strlen.6
 a - tas.6
-T0-ART libc 1be1d8815302cbf0770e3b1d297a193edae3fdb2fd4e7a13eb5b3cbea74f0459
+T0-ART libc d2efaaa0d1dd196bc3d1e95e006c0aa94a380bc291be332238621987a6994e2d
 == tier0 lib: libbio
 ar vu /amd64/lib/libbio.a bbuffered.6 bfildes.6 bflush.6 bgetrune.6 bgetc.6 bgetd.6 binit.6 boffset.6 bprint.6 bputrune.6 bputc.6 brdline.6 brdstr.6 bread.6 bseek.6 bwrite.6 bvprint.6
 ar: creating /amd64/lib/libbio.a
@@ -1435,7 +1435,7 @@ a - bread.6
 a - bseek.6
 a - bwrite.6
 a - bvprint.6
-T0-ART libbio b4183bc21792cb8920ad1b640026723a7d641ef63c9bb58dfdaa7fd254cd2da0
+T0-ART libbio 2103d880fecfd2fb3435e4b36ad32c3492ab48b0f94a4064942b48acb5f3257d
 == tier0 lib: libregexp
 ar vu /amd64/lib/libregexp.a regcomp.6 regerror.6 regexec.6 regsub.6 regaux.6 rregexec.6 rregsub.6
 ar: creating /amd64/lib/libregexp.a
@@ -1446,7 +1446,7 @@ a - regsub.6
 a - regaux.6
 a - rregexec.6
 a - rregsub.6
-T0-ART libregexp d0ad8cef2b4666a8752c6a5c10c6319f50cb0f631195f45c5b563e616a20777f
+T0-ART libregexp eaa9565ea318cbd5ca03a3a4cd75081df066bad89340262e7a19d66ea4269065
 == tier0 lib: libmach
 ar vu /amd64/lib/libmach.a executable.6 map.6 obj.6 swap.6 sym.6 access.6 machdata.6 setmach.6 v.6 k.6 sparc64.6 q.6 4.6 68020.6 5.6 6.6 7.6 8.6 9.6 i.6 j.6 vdb.6 kdb.6 sparc64db.6 qdb.6 68020db.6 5db.6 7db.6 8db.6 idb.6 vobj.6 kobj.6 sparc64obj.6 68020obj.6 5obj.6 6obj.6 7obj.6 8obj.6 9obj.6 qobj.6 iobj.6 4obj.6 vcodas.6
 ar: creating /amd64/lib/libmach.a
@@ -1493,7 +1493,7 @@ a - qobj.6
 a - iobj.6
 a - 4obj.6
 a - vcodas.6
-T0-ART libmach 874ab18233bdd9f7a4565027e6512ec9d40f343be50d8213622a50eb0bccb63e
+T0-ART libmach 6ed1118a905802934c2668ca166fa19d5c75367e648d3750e19d01352e414593
 == tier0 lib: libip
 ar vu /amd64/lib/libip.a eipfmt.6 equivip.6 parseip.6 parseether.6 myetheraddr.6 myipaddr.6 classmask.6 bo.6 readipifc.6 ipaux.6 ptclbsum.6
 ar: creating /amd64/lib/libip.a
@@ -1508,7 +1508,7 @@ a - bo.6
 a - readipifc.6
 a - ipaux.6
 a - ptclbsum.6
-T0-ART libip 3e1d32688af4fd02ef994bde05f69a11b7b1bf37c9b3b785c8c01505b603ee55
+T0-ART libip 9503d8afa0389164e61680aa8f2bf46ce5ab39411f8527a7afe157a40fb9648b
 == tier0 lib: libndb
 ar vu /amd64/lib/libndb.a csgetval.6 csipinfo.6 dnsquery.6 ipattr.6 ndbaux.6 ndbcache.6 ndbcat.6 ndbconcatenate.6 ndbdiscard.6 ndbfree.6 ndbgetipaddr.6 ndbgetval.6 ndbhash.6 ndbipinfo.6 ndblookval.6 ndbopen.6 ndbparse.6 ndbreorder.6 ndbsubstitute.6
 ar: creating /amd64/lib/libndb.a
@@ -1531,7 +1531,7 @@ a - ndbopen.6
 a - ndbparse.6
 a - ndbreorder.6
 a - ndbsubstitute.6
-T0-ART libndb 0660fab88c0391d84bbe5cd01f8139f18c53e870e0ca21ad6409b7cdb3d0bde0
+T0-ART libndb 0b8c6541aae738cc1275ae56c08ca01e334284ea5596e673c30afcd49e2a181d
 == tier0 lib: libmp
 for(i in port $objtype)@{
 	echo $i
@@ -1574,7 +1574,7 @@ a - mpvecadd.6
 a - mpvecdigmuladd.6
 a - mpvecdigmulsub.6
 a - mpvecsub.6
-T0-ART libmp cc943ba6fa048370793682fb52bfccb1c535c1a487d04fce223355436a26343b
+T0-ART libmp 8c09e97bc56016a435a2072e858c4ed2bd83d699fc2d2d713534330a51593f90
 == tier0 lib: libsec
 for(i in port $objtype)@{
 	echo $i
@@ -1642,7 +1642,7 @@ amd64
 ar vu /amd64/lib/libsec.a md5block.6 sha1block.6
 a - md5block.6
 a - sha1block.6
-T0-ART libsec 63c8cfc78f74458076836e4d448b6d17bc7e3ebca37fd69b56432b92f0edaa57
+T0-ART libsec f31e10d8f60b9f7ed839ca6c0130467a7ae07c1c166668231c16d148ff3d7f4e
 == tier0 lib: libauth
 ar vu /amd64/lib/libauth.a amount.6 amount_getkey.6 attr.6 auth_attr.6 auth_challenge.6 auth_chuid.6 auth_getkey.6 auth_getuserpasswd.6 auth_proxy.6 auth_respond.6 auth_rpc.6 auth_userpasswd.6 auth_wep.6 login.6 newns.6 noworld.6
 ar: creating /amd64/lib/libauth.a
@@ -1662,7 +1662,7 @@ a - auth_wep.6
 a - login.6
 a - newns.6
 a - noworld.6
-T0-ART libauth 79eb39bf1c713a4df6537493fcb27f645da760075919c4345936ca25ec60bebd
+T0-ART libauth d0ba17b834829117a14cd7bee7cb03460ed4bbe10382078b8f174abce2fb8928
 == tier0 lib: libauthsrv
 ar vu /amd64/lib/libauthsrv.a _asgetticket.6 _asrdresp.6 authdial.6 convA2M.6 convM2A.6 convM2PR.6 convM2T.6 convM2TR.6 convPR2M.6 convT2M.6 convTR2M.6 nvcsum.6 opasstokey.6 passtokey.6 readnvram.6
 ar: creating /amd64/lib/libauthsrv.a
@@ -1681,7 +1681,7 @@ a - nvcsum.6
 a - opasstokey.6
 a - passtokey.6
 a - readnvram.6
-T0-ART libauthsrv 31c74ed820d5ddd99c38c3aec4761bd2345f8f03067f207ecf0dc16293dd9d4a
+T0-ART libauthsrv f65f239accce76b6d6d627961bd8b63c31a1633a704e5174d28295aca46e3535
 == tier0 lib: libflate
 ar vu /amd64/lib/libflate.a deflate.6 deflatezlib.6 deflateblock.6 deflatezlibblock.6 inflate.6 inflatezlib.6 inflateblock.6 inflatezlibblock.6 flateerr.6 crc.6 adler.6
 ar: creating /amd64/lib/libflate.a
@@ -1696,7 +1696,7 @@ a - inflatezlibblock.6
 a - flateerr.6
 a - crc.6
 a - adler.6
-T0-ART libflate 007542048c6083e7d3a6062648a409b8748f573cc48fc154e842664c2c1bb555
+T0-ART libflate 9043e73fe1ae90b9d782416b802110274e02e3c1ea2b546db78bffcaf2d4e05e
 == tier0 lib: libString
 ar vu /amd64/lib/libString.a s_alloc.6 s_append.6 s_array.6 s_copy.6 s_getline.6 s_grow.6 s_memappend.6 s_nappend.6 s_parse.6 s_putc.6 s_rdinstack.6 s_read.6 s_read_line.6 s_reset.6 s_terminate.6 s_tolower.6 s_unique.6
 ar: creating /amd64/lib/libString.a
@@ -1717,7 +1717,7 @@ a - s_reset.6
 a - s_terminate.6
 a - s_tolower.6
 a - s_unique.6
-T0-ART libString efb4a5f1672148675ddfb6fbfeb6d3a1a9362e1bd55f239b07c8ffa0f94c67d6
+T0-ART libString c18a7c76c031f7ba0cc299bf52eb7262729b2619a55b807c611d84411e2fc5bd
 == tier0 lib: libthread
 ar vu /amd64/lib/libthread.a amd64.6 channel.6 chanprint.6 create.6 debug.6 dial.6 exec.6 exit.6 id.6 iocall.6 ioclose.6 iodial.6 ioopen.6 ioproc.6 ioread.6 ioreadn.6 iosleep.6 iowrite.6 kill.6 lib.6 main.6 note.6 ref.6 rendez.6 sched.6
 ar: creating /amd64/lib/libthread.a
@@ -1746,7 +1746,7 @@ a - note.6
 a - ref.6
 a - rendez.6
 a - sched.6
-T0-ART libthread 44f5998b5efd4f6d3d581f555f426325baa381e21079d1a2388a45e22f30db5b
+T0-ART libthread 85373cba90c584ed3618269568c96d9964c3f6544cb086d660b96d3c8625e6f4
 == tier0 lib: lib9p
 ar vu /amd64/lib/lib9p.a auth.6 dirread.6 fid.6 file.6 intmap.6 listen.6 mem.6 req.6 parse.6 post.6 rfork.6 srv.6 thread.6 uid.6 util.6
 ar: creating /amd64/lib/lib9p.a
@@ -1765,14 +1765,14 @@ a - srv.6
 a - thread.6
 a - uid.6
 a - util.6
-T0-ART lib9p 79b24f3e5542a7151ed6854474024e4dcc5edf10c837bc60db278b445b78ec08
+T0-ART lib9p d675f2c2cc1b3844af4bfb272f2d294d6ce5d4c3a6d2fe3932061583ab9e46fa
 == tier0 lib: libdisk
 ar vu /amd64/lib/libdisk.a disk.6 proto.6 scsi.6
 ar: creating /amd64/lib/libdisk.a
 a - disk.6
 a - proto.6
 a - scsi.6
-T0-ART libdisk 13146fd01ba42313412c136f1531d6b8a526b3c345446571b62b90b8b122dd7e
+T0-ART libdisk 83d30ef0f8c4033fb18d0c1b44494fe4dd9d46d7f7753cd3bd6ad5d71ac98aba
 == tier0 lib: libhttpd
 ar vu /amd64/lib/libhttpd.a alloc.6 checkcontent.6 date.6 fail.6 gethead.6 hio.6 httpfmt.6 httpunesc.6 lower.6 okheaders.6 parse.6 parsereq.6 query.6 redirected.6 unallowed.6 urlfmt.6 urlunesc.6
 ar: creating /amd64/lib/libhttpd.a
@@ -1793,12 +1793,12 @@ a - redirected.6
 a - unallowed.6
 a - urlfmt.6
 a - urlunesc.6
-T0-ART libhttpd e7e8db848d58dd653eaa40e367fb78a8b115f8b868fefec74f4b535859ccf084
+T0-ART libhttpd 5ab33140b1478a152a05720367c3a061567765314f09984819080c6a5e519cd5
 == tier0 lib: libbin
 ar vu /amd64/lib/libbin.a bin.6
 ar: creating /amd64/lib/libbin.a
 a - bin.6
-T0-ART libbin 5a77432446811a37e8e79041a9ab9191f76da80b4641437f3c7a281be65b0530
+T0-ART libbin 454fb80cfdb0edbccca8b830d7fe9960bc0af25ca8c58dba87b170f4d1455476
 == tier0 lib: libmemlayer
 ar vu /amd64/lib/libmemlayer.a draw.6 lalloc.6 layerop.6 ldelete.6 lhide.6 line.6 load.6 lorigin.6 lsetrefresh.6 ltofront.6 ltorear.6 unload.6
 ar: creating /amd64/lib/libmemlayer.a
@@ -1814,7 +1814,7 @@ a - lsetrefresh.6
 a - ltofront.6
 a - ltorear.6
 a - unload.6
-T0-ART libmemlayer ce33a6be7c80cbbb550140e28c2886c5cb3cd7c100a5993b0c3a713494dc395f
+T0-ART libmemlayer 2325b20675044c724c43dbc4d24c2a74ebb189288d4ed9dac9021ad4f2d59f87
 == tier0 lib: libmemdraw
 ar vu /amd64/lib/libmemdraw.a addr.6 alloc.6 arc.6 cload.6 cmap.6 cread.6 defont.6 draw.6 ellipse.6 fillpoly.6 hwdraw.6 iprint.6 line.6 load.6 memsetchan.6 openmemsubfont.6 poly.6 read.6 string.6 subfont.6 unload.6 write.6
 ar: creating /amd64/lib/libmemdraw.a
@@ -1840,7 +1840,7 @@ a - string.6
 a - subfont.6
 a - unload.6
 a - write.6
-T0-ART libmemdraw d7d3112c3606b498b70c578f25591e5f551952b852467681759129b552a3e5ed
+T0-ART libmemdraw 2f68c87f7c61a56630574fd6bf4a2169736b47a92c22e59477ed86f1343ec859
 == tier0 lib: libdraw
 ar vu /amd64/lib/libdraw.a alloc.6 allocimagemix.6 arith.6 bezier.6 border.6 buildfont.6 bytesperline.6 chan.6 cloadimage.6 computil.6 creadimage.6 debug.6 defont.6 draw.6 drawrepl.6 egetrect.6 ellipse.6 emenuhit.6 event.6 fmt.6 font.6 freesubfont.6 getdefont.6 getrect.6 getsubfont.6 icossin.6 icossin2.6 init.6 keyboard.6 line.6 menuhit.6 mkfont.6 mouse.6 newwindow.6 openfont.6 poly.6 loadimage.6 readcolmap.6 readimage.6 readsubfont.6 rectclip.6 replclipr.6 rgb.6 scroll.6 string.6 stringbg.6 stringsubfont.6 stringwidth.6 subfont.6 subfontcache.6 subfontname.6 unloadimage.6 window.6 writecolmap.6 writeimage.6 writesubfont.6
 ar: creating /amd64/lib/libdraw.a
@@ -1900,7 +1900,7 @@ a - window.6
 a - writecolmap.6
 a - writeimage.6
 a - writesubfont.6
-T0-ART libdraw 942cba4223431aee1a30172cfa8da01193eda3074ae9b8e5cd2373da091fc6d7
+T0-ART libdraw a8abbad71fd0d830b3d9dc1b891d52c7e138a1ca830b3c82f016c37296dbbcc2
 == tier0 lib: libframe
 ar vu /amd64/lib/libframe.a frbox.6 frdraw.6 frdelete.6 frinit.6 frinsert.6 frptofchar.6 frselect.6 frstr.6 frutil.6
 ar: creating /amd64/lib/libframe.a
@@ -1913,19 +1913,19 @@ a - frptofchar.6
 a - frselect.6
 a - frstr.6
 a - frutil.6
-T0-ART libframe d7b33873d196f2e35478dc7aad25f1024a518be8eb25a13442ea2bec0d2dafeb
+T0-ART libframe ad705a2c3038eff578d338054a53583ccfb06cf9715362c40a2af42bd393e75c
 == tier0 lib: libplumb
 ar vu /amd64/lib/libplumb.a event.6 mesg.6 plumbsendtext.6
 ar: creating /amd64/lib/libplumb.a
 a - event.6
 a - mesg.6
 a - plumbsendtext.6
-T0-ART libplumb 747ee997c3c3f2c0913eace2ad40ef6c224e16d799ec2c9789ca7b04e70a1038
+T0-ART libplumb fde5e7d6130d60c9fc1aa399c028f61c79d548f2844cce591c665b6e965213f3
 == tier0 lib: libcomplete
 ar vu /amd64/lib/libcomplete.a complete.6
 ar: creating /amd64/lib/libcomplete.a
 a - complete.6
-T0-ART libcomplete 14deba89af7a055ba3932bd59c6a802ce5b1718e978dd4ebde0f006c4e0c0055
+T0-ART libcomplete 548bc11bbb61f65b04384ffc0ed04e3817bbc876cda816ae88df1f2ac2db5f0b
 == tier0 lib: libhtml
 ar vu /amd64/lib/libhtml.a build.6 lex.6 strinttab.6 utils.6
 ar: creating /amd64/lib/libhtml.a
@@ -1933,7 +1933,7 @@ a - build.6
 a - lex.6
 a - strinttab.6
 a - utils.6
-T0-ART libhtml 682d1829f366d863b9b6d5e36d4c6191444bec48062859ead1745682290dbc93
+T0-ART libhtml dbdac1acd5cf95a8edfaa6e6bc66ce13b4ea6e61b5db1559e0e47b89dc598e27
 == tier0 lib: libventi
 ar vu /amd64/lib/libventi.a cache.6 client.6 conn.6 dial.6 debug.6 dtype.6 entry.6 fcall.6 fcallfmt.6 file.6 hangup.6 log.6 mem.6 packet.6 parsescore.6 queue.6 root.6 rpc.6 scorefmt.6 send.6 server.6 sha1.6 srvhello.6 strdup.6 string.6 time.6 version.6 zero.6 zeroscore.6
 ar: creating /amd64/lib/libventi.a
@@ -1966,7 +1966,7 @@ a - time.6
 a - version.6
 a - zero.6
 a - zeroscore.6
-T0-ART libventi 39267e9172c7d7f36c42c5d7e1a37ae828490a7d9dcf073652610348b3051604
+T0-ART libventi a8f0596e219f1feda92f78e377ec52000dd4026773633dbadefe3c1254c9cd4b
 == tier0 lib: libstdio
 ar vu /amd64/lib/libstdio.a _IO_getc.6 _IO_putc.6 clearerr.6 dtoa.6 fclose.6 fdopen.6 feof.6 ferror.6 fflush.6 fgetc.6 fgetpos.6 fgets.6 fileno.6 fopen.6 fprintf.6 fputc.6 fputs.6 fread.6 freopen.6 fscanf.6 fseek.6 fseeko.6 fsetpos.6 ftell.6 ftello.6 fwrite.6 getc.6 gets.6 printf.6 putc.6 puts.6 rewind.6 scanf.6 sclose.6 setbuf.6 setvbuf.6 snprintf.6 sopenr.6 sopenw.6 sprintf.6 sscanf.6 tmpfile.6 tmpnam.6 ungetc.6 vfprintf.6 vfscanf.6 vprintf.6 vsnprintf.6 vsprintf.6
 ar: creating /amd64/lib/libstdio.a
@@ -2019,12 +2019,12 @@ a - vfscanf.6
 a - vprintf.6
 a - vsnprintf.6
 a - vsprintf.6
-T0-ART libstdio db10c323c21d57e64f1652c8415bba5ce927398fba7eeffa7a320ef8fad6048f
+T0-ART libstdio d7c8556f6e9b9670b2c47b1d7b95fffa5144dfed1114104637d904844cdfe3af
 == tier0 lib: libavl
 ar vu /amd64/lib/libavl.a avl.6
 ar: creating /amd64/lib/libavl.a
 a - avl.6
-T0-ART libavl 92e94fe6dec688f0caf13c5403fd5fa383c78b2f8c1e242920bb05abc487fb7a
+T0-ART libavl ffcf457cdffcf93a2f4dec0c3cc66515f812632d6a6eb654d688b6528d320560
 == tier1 entry: cmd/rc
 yacc -d syn.y
 cmp -s x.tab.h y.tab.h || cp y.tab.h x.tab.h
@@ -3181,7 +3181,7 @@ chain manifest: /rc/bin/termrc staged
 chain manifest: /lib/namespace staged
 chain manifest: /adm/timezone/local staged
 chain manifest: /usr/glenda/lib/profile staged
-== PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs-chain.paq (389606 bytes; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
+== PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs-chain.paq (389607 bytes; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
 == witness manifest absent (build/mm/build-9k10t1.sh not run) — the tier bake proceeds; the both-venues witness is NOT structural this run
 tier manifest: /boot/boot staged
 tier manifest: /boot/paqfs staged
@@ -3235,7 +3235,7 @@ net manifest: /lib/netip-static.rc staged
 net manifest: /lib/netip-dhcp.rc staged
 net manifest: /lib/netip-tcp.rc staged
 net manifest: /lib/netip-tap.rc staged
-== PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs-net.paq (907607 bytes; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
+== PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs-net.paq (907601 bytes; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
 payload manifest: /lib/ndb/local substituted from lib/ndb/local.template (the netaddr seam's slirp leg + ether; the 18-04 auth row stripped — no domain in this image) [services]
 payload manifest: /lib/font/bit staged (tree, 4303 files) [services]
 payload manifest: /usr/glenda/lib/profile staged [services]
@@ -3282,13 +3282,13 @@ services manifest: /lib/netip-dhcp.rc staged
 services manifest: /lib/netip-tcp.rc staged
 services manifest: /lib/services-sweep.rc staged
 services manifest: 127 h* sweep binaries staged (tier-1 helpers + the tier-2 set computed from tiers/tier2-services.txt: 90 tier-2 members)
-== PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs-services.paq (26671018 bytes; 127 h* binaries; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
-== PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs-churn.paq (492150 bytes; chain + test/dc + churncats + /lib/churn-cats.rc; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
+== PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs-services.paq (26671019 bytes; 127 h* binaries; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
+== PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs-churn.paq (492148 bytes; chain + test/dc + churncats + /lib/churn-cats.rc; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
 == PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs-substrate.paq (43674 bytes; skeleton + randread as /amd64/init; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
 authdomain-gen: no authdomain.local — generating ephemeral DEMO material
-authdomain-gen: generated /tmp/mkimage-x64.353nzH/authdom-stage: label=DEMO authdom=DEMO-harvey authid=bootes users=3
+authdomain-gen: generated /tmp/mkimage-x64.SHuajY/authdom-stage: label=DEMO authdom=DEMO-harvey authid=bootes users=3
 authdomain-gen: DEMO material is throwaway — never reuse outside a gate image
-verify: OK dir=/tmp/mkimage-x64.353nzH/auth-verify label=DEMO users=3
+verify: OK dir=/tmp/mkimage-x64.SHuajY/auth-verify label=DEMO users=3
 == auth pairing verified over the staged copies (authdomain-gen -V over the bake's own scratch twin)
 == auth ndb: /lib/ndb/local composed from local.template (the seam's four tokens + @AUTHDOM@=DEMO-harvey from the generator run + the tcp=ticket service row for the probe dials)
 auth manifest: /boot/boot staged
@@ -3317,9 +3317,9 @@ auth manifest: /lib/auth-sweep.rc staged
 auth manifest: /boot/authfeed.txt staged
 auth manifest: /boot/secstore-obj.txt staged
 auth manifest: 26 h* sweep binaries staged (the auth-suite set computed from tiers/tier2-services.txt + the tier-1 helpers: 26 tier-2 members)
-== PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs-auth.paq (2574231 bytes; chain + auth suite + the paired p9sk1 domain; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
+== PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs-auth.paq (2574247 bytes; chain + auth suite + the paired p9sk1 domain; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
 authdomain-gen: no authdomain.local — generating ephemeral DEMO material
-authdomain-gen: generated /tmp/mkimage-x64.353nzH/cpudom-stage: label=DEMO authdom=DEMO-harvey authid=bootes users=3
+authdomain-gen: generated /tmp/mkimage-x64.SHuajY/cpudom-stage: label=DEMO authdom=DEMO-harvey authid=bootes users=3
 authdomain-gen: DEMO material is throwaway — never reuse outside a gate image
 payload manifest: /lib/ndb/local substituted from lib/ndb/local.template (the seam's four tokens + authdom=DEMO-harvey from the caller's own generator run — the 19-07 auth arm, row KEPT) [cpu]
 payload manifest: /lib/font/bit staged (tree, 4303 files) [cpu]
@@ -3331,7 +3331,7 @@ payload manifest: font /lib/font/bit/pelm/latin1.8.font staged [cpu]
 payload manifest: font /lib/font/bit/pelm/euro.9.font staged [cpu]
 payload manifest: /lib/font/bit 4303 files 27676353 bytes (floors: 4303 files, 27000000 bytes) [cpu]
 payload manifest: /usr/glenda/lib/profile shape ok — terminal case rio-free, cpu case intact [cpu]
-verify: OK dir=/tmp/mkimage-x64.353nzH/cpu-auth-verify label=DEMO users=3
+verify: OK dir=/tmp/mkimage-x64.SHuajY/cpu-auth-verify label=DEMO users=3
 == cpu pairing verified over the staged copies (authdomain-gen -V over the bake's own scratch twin)
 cpu manifest (§15): /boot/boot staged
 cpu manifest (§15): /boot/paqfs staged
@@ -3379,20 +3379,20 @@ cpu manifest (§15): 26 h* sweep binaries staged (§14's computed auth-suite set
 xorriso 1.5.8.pl02 : RockRidge filesystem manipulator, libburnia project.
 
 xorriso : NOTE : Environment variable SOURCE_DATE_EPOCH encountered with value 1735689600
-Drive current: -outdev 'stdio:/tmp/r9-iso-builder.WSr0vX/boot.iso'
+Drive current: -outdev 'stdio:/tmp/r9-iso-builder.LnE75g/boot.iso'
 Media current: stdio file, overwriteable
 Media status : is blank
 Media summary: 0 sessions, 0 data blocks, 0 data,  366g free
-Added to ISO image: directory '/'='/tmp/grub.BxL3zX'
+Added to ISO image: directory '/'='/tmp/grub.iaXcS3'
 xorriso : UPDATE :     356 files added in 1 seconds
-Added to ISO image: directory '/'='/tmp/r9-iso-builder.WSr0vX/stage'
+Added to ISO image: directory '/'='/tmp/r9-iso-builder.LnE75g/stage'
 xorriso : UPDATE :     361 files added in 1 seconds
-xorriso : NOTE : Copying to System Area: 512 bytes from file '/tmp/r9-iso-builder.WSr0vX/grub-i386-pc/boot_hybrid.img'
+xorriso : NOTE : Copying to System Area: 512 bytes from file '/tmp/r9-iso-builder.LnE75g/grub-i386-pc/boot_hybrid.img'
 ISO image produced: 21345 sectors
 Written to medium : 21345 sectors at LBA 0
-Writing to 'stdio:/tmp/r9-iso-builder.WSr0vX/boot.iso' completed successfully.
+Writing to 'stdio:/tmp/r9-iso-builder.LnE75g/boot.iso' completed successfully.
 
-r9-iso-builder: /tmp/rio-gate.4eh5EB/boot.iso fcae274fc7f92a6d03d639b218c4dd59a6c4a6051323f5b4b2471974a3363e8f (modules: bootfs.paq append=init=/amd64/init -c)
+r9-iso-builder: /tmp/rio-gate.zhoZBI/boot.iso 0343622a407af2930c9a6d647a0ad6156e80041df2446f920d25c2a4de3bc82d (modules: bootfs.paq append=init=/amd64/init -c)
 == step 5/5: starting Xvfb (free display via -displayfd, TCP listening off)
 _XSERVTransSocketUNIXCreateListener: ...SocketCreateListener() failed
 _XSERVTransMakeAllCOTSServerListeners: server already running
@@ -3411,7 +3411,7 @@ The XKEYBOARD keymap compiler (xkbcomp) reports:
 Errors from xkbcomp are not fatal to the X server
 == Xvfb ready: DISPLAY=:1 (-nolisten tcp)
 == the rio gate (rio-gate.expect); capture: /home/req/r9-witness-work/out/rio-diag/rio-gate-rio-diag.log
-spawn qemu-system-x86_64 -M q35 -cpu host -smp 1 -m 1024M -accel kvm -cdrom /tmp/rio-gate.4eh5EB/boot.iso -netdev user,id=n0,hostfwd=tcp:127.0.0.1:17010-:17010,hostfwd=tcp:127.0.0.1:5670-:567 -device virtio-net-pci-non-transitional,netdev=n0 -nographic -name r9riogate-121294-1795414235
+spawn qemu-system-x86_64 -M q35 -cpu host -smp 1 -m 1024M -accel kvm -cdrom /tmp/rio-gate.zhoZBI/boot.iso -netdev user,id=n0,hostfwd=tcp:127.0.0.1:17010-:17010,hostfwd=tcp:127.0.0.1:5670-:567 -device virtio-net-pci-non-transitional,netdev=n0 -nographic -name r9riogate-143387-1795415078
 c[?7l[2J[0mSeaBIOS (version rel-1.17.0-0-gb52ca86e094d-prebuilt.qemu.org)
 
 
@@ -3429,9 +3429,9 @@ Booting from DVD/CD...
 
 
 r9 from the Internet
-Macrio-gate: stage ok — banner
-hine information:
-q35: memory 0x0..0x9fc00 (0x9fc00) available
+Machine information:
+q35:rio-gate: stage ok — banner
+ memory 0x0..0x9fc00 (0x9fc00) available
 q35: memory 0x9fc00..0xa0000 (0x400) reserved
 q35: memory 0xf0000..0x100000 (0x10000) reserved
 q35: memory 0x100000..0x3ffdf000 (0x3fedf000) available
@@ -3460,7 +3460,7 @@ Memory usage:
 random: source=rdrand
 lapic: cpuid leaf-1 ecx: x2apic=true tsc-deadline=true
 lapic: x2apic live (msr 0x800 map; lint0/1 masked, no pic)
-timer: 2496106380 Hz (pit 1193182 Hz reference), TscDeadline mode, armed
+timer: 2496077060 Hz (pit 1193182 Hz reference), TscDeadline mode, armed
 ioapic: id 0 version 0x11 rtes 23 gsib 0 (madt 0xfec00000)
 pci: bar4 pa 0xfe000000 size 0x4000 (firmware) readback 0xfe000000
 pci: caps common@0x0+0x1000 notify@0x3000 isr@0x1000 device@0x2000 mult 4
@@ -3471,8 +3471,8 @@ ioapic: gsi 22 -> vector 0x21 (level)
 fpu: kernel-SIMD selftest ok (user state parked and restored across the section; xor_fold16 0x1983c6d50a18d707c9d74d9a42c59f27)
 q35: module @0x6c00000 +0x14fbb66 (mb2 tag 3, stashed)
 devenv: seeded cputype=amd64 nobootprompt=embed readparts=0
-devenv: bootconf init=/amd64/init -crio-gate: stage ok — bootconf
-
+devenv: bootconf init=/amd64/init -c
+rio-gate: stage ok — bootconf
 q35: paqfs root mounted from module (22002534 bytes)
 devroot: /boot/boot open (159349 bytes)
 exec: entering ring 3 pc=0x2054fa sp=0x7fffffffef78 path=/boot/boot argv=[boot]
@@ -3481,7 +3481,7 @@ version...rio-gate: stage ok — version
 rio-gate: stage ok — hostfwd-17010-listening (127.0.0.1:17010 present)
 rio-gate: stage ok — hostfwd-5670-listening (127.0.0.1:5670 present)
 root-cpu: Sun Nov 22 21:15:01 GMT 2026
-fingerprint: b8a2e63311e043046b25a3a5c9c7169477629c8c
+fingerprint: 37a3ea37591d67377ab19ec3a62d2005e92a54f9
 process 2 exited: ""
 churngate: heap exit 92672 33554432
 syscall 10 unimplemented
@@ -3497,8 +3497,8 @@ process 8 exited: ""
 churngate: heap exit 814336 33554432
 process 9 exited: ""
 churngate: heap exit 814336 33554432
-cpurc: PAIR-OKrio-gate: stage ok — pairing-ok
-
+cpurc: PAIR-OK
+rio-gate: stage ok — pairing-ok
 process 10 exited: ""
 churngate: heap exit 817152 33554432
 #I0: devip attached
@@ -3582,13 +3582,13 @@ cpurc: LISTEN-17010
 rio-gate: stage ok — listen-17010
 process 46 exited: ""
 churngate: heap exit 4149248 33554432
-cpurc: DONErio-gate: stage ok — ladder-done
-spawn bash -c R9_RUN_ID=r9riogate-dt-121294-1795414235 exec -a r9riogate-dt-121294-1795414235 /nix/store/y8h5ana2drnzs2fdx6fxgr74bwmzi8y9-drawterm-19.06/bin/drawterm -s '' -O cpu=127.0.0.1,auth=tcp!127.0.0.1!5670,user=glenda
-rio-gate: spawned drawterm on a pty (mode rio-diag, argv0 tag r9riogate-dt-121294-1795414235, user glenda)
+cpurc: DONE
+rio-gate: stage ok — ladder-done
+spawn bash -c R9_RUN_ID=r9riogate-dt-143387-1795415078 exec -a r9riogate-dt-143387-1795415078 /nix/store/y8h5ana2drnzs2fdx6fxgr74bwmzi8y9-drawterm-19.06/bin/drawterm -s '' -O cpu=127.0.0.1,auth=tcp!127.0.0.1!5670,user=glenda
+rio-gate: spawned drawterm on a pty (mode rio-diag, argv0 tag r9riogate-dt-143387-1795415078, user glenda)
 rio-gate: diag capture ok — before-typing x11 + PNG in /home/req/r9-witness-work/out/rio-diag
 rio-gate: diag capture ok — after-return x11 + PNG in /home/req/r9-witness-work/out/rio-diag
 rio-gate: feed ok — XTEST password entry into the drawterm window (4194305)
-
 process 47 exited: ""
 churngate: heap exit 4149248 33554432
 process 5 exited: ""
@@ -3609,112 +3609,167 @@ syscall 10 unimplemented
 process 53 exited: ""
 churngate: heap exit 4530176 33554432
 process 54 exited: ""
-churngate: heap exit 4530176 33554432
+churngate: heap exit 4554752 33554432
 process 55 exited: ""
-churngate: heap exit 4530176 33554432
+churngate: heap exit 4554752 33554432
 process 56 exited: ""
-churngate: heap exit 4530176 33554432
-process 57 exited: "namec: device has no create"
+churngate: heap exit 4554752 33554432
+process 57 exited: ""
 churngate: heap exit 4554752 33554432
 process 58 exited: ""
-churngate: heap exit 4556800 33554432
+churngate: heap exit 4554752 33554432
+process 59 exited: "namec: device has no create"
+churngate: heap exit 4558848 33554432
+process 60 exited: ""
+churngate: heap exit 4561152 33554432
 devmnt: server error: './mnt/wsys' does not exist
-process 60 exited: "false"
-churngate: heap exit 4562944 33554432
-process 61 exited: ""
-churngate: heap exit 4562944 33554432
-process 62 exited: ""
-churngate: heap exit 4562944 33554432
+process 62 exited: "false"
+churngate: heap exit 4571136 33554432
 process 63 exited: ""
-churngate: heap exit 4562944 33554432
+churngate: heap exit 4571136 33554432
+process 64 exited: ""
+churngate: heap exit 4571136 33554432
+process 65 exited: ""
+churngate: heap exit 4571136 33554432
 devmnt: server error: './mnt/wsys' does not exist
-process 64 exited: "false"
-churngate: heap exit 4693248 33554432
-process 65 exited: "false"
-churngate: heap exit 4693248 33554432
-process 66 exited: ""
-churngate: heap exit 4693248 33554432
-process 67 exited: ""
-churngate: heap exit 4693248 33554432
+process 66 exited: "false"
+churngate: heap exit 4701440 33554432
+process 67 exited: "false"
+churngate: heap exit 4701440 33554432
 process 68 exited: ""
-churngate: heap exit 4693504 33554432
+churngate: heap exit 4701440 33554432
+process 69 exited: ""
+churngate: heap exit 4701440 33554432
+process 70 exited: ""
+churngate: heap exit 4701440 33554432
 rio-gate: stage ok — session window quiet (rio draws; no pty text expected)
 rio-gate: stage ok — serial console rc prompt (init's handoff after cpurc: DONE)
 rio-gate: stage ok — rio budget elapsed (60 s)
 ls /srv
 /srv/boot
 /srv/factotum
-process 69 exited: ""
-churngate: heap exit 4693504 33554432
-% ls /srv
-/srv/boot
-/srv/factotum
-process 70 exited: ""
-churngate: heap exit 4693504 33554432
-% ls /srv
-/srv/boot
-/srv/factotum
+/srv/r9-login-ok
+/srv/r9-login-pid.51
 process 71 exited: ""
-churngate: heap exit 4693504 33554432
-% ls /srv
-/srv/boot
-/srv/factotum
-process 72 exited: ""
-churngate: heap exit 4693504 33554432
-% ls /srv
-/srv/boot
-/srv/factotum
+churngate: heap exit 4701440 33554432
+% rio-gate: no pair after poll 1 — sent the documented manual start (plumber; rio)
 process 73 exited: ""
-churngate: heap exit 4693504 33554432
+churngate: heap exit 5016384 33554432
+process 72 exited: ""
+churngate: heap exit 5016384 33554432
+devmnt: server error: './dev/label' file does not exist
+devmnt: server error: './dev/winname' file does not exist
+ls /srv
+/srv/boot
+/srv/factotum
+/srv/plumb.glenda.73
+/srv/r9-login-ok
+/srv/r9-login-pid.51
+/srv/rio.glenda.76
+/srv/riowctl.glenda.76
+process 82 exited: ""
+churngate: heap exit 5890944 33554432
 % ls /srv
 /srv/boot
 /srv/factotum
-process 74 exited: ""
-churngate: heap exit 4693504 33554432
+/srv/plumb.glenda.73
+/srv/r9-login-ok
+/srv/r9-login-pid.51
+/srv/rio.glenda.76
+/srv/riowctl.glenda.76
+process 83 exited: ""
+churngate: heap exit 5891008 33554432
 % ls /srv
 /srv/boot
 /srv/factotum
-process 75 exited: ""
-churngate: heap exit 4693504 33554432
+/srv/plumb.glenda.73
+/srv/r9-login-ok
+/srv/r9-login-pid.51
+/srv/rio.glenda.76
+/srv/riowctl.glenda.76
+process 84 exited: ""
+churngate: heap exit 5891072 33554432
 % ls /srv
 /srv/boot
 /srv/factotum
-process 76 exited: ""
-churngate: heap exit 4693504 33554432
+/srv/plumb.glenda.73
+/srv/r9-login-ok
+/srv/r9-login-pid.51
+/srv/rio.glenda.76
+/srv/riowctl.glenda.76
+process 85 exited: ""
+churngate: heap exit 5891136 33554432
 % ls /srv
 /srv/boot
 /srv/factotum
-process 77 exited: ""
-churngate: heap exit 4693504 33554432
+/srv/plumb.glenda.73
+/srv/r9-login-ok
+/srv/r9-login-pid.51
+/srv/rio.glenda.76
+/srv/riowctl.glenda.76
+process 86 exited: ""
+churngate: heap exit 5891200 33554432
 % ls /srv
 /srv/boot
 /srv/factotum
-process 78 exited: ""
-churngate: heap exit 4693504 33554432
+/srv/plumb.glenda.73
+/srv/r9-login-ok
+/srv/r9-login-pid.51
+/srv/rio.glenda.76
+/srv/riowctl.glenda.76
+process 87 exited: ""
+churngate: heap exit 5891264 33554432
 % ls /srv
 /srv/boot
 /srv/factotum
-process 79 exited: ""
-churngate: heap exit 4693504 33554432
+/srv/plumb.glenda.73
+/srv/r9-login-ok
+/srv/r9-login-pid.51
+/srv/rio.glenda.76
+/srv/riowctl.glenda.76
+process 88 exited: ""
+churngate: heap exit 5891328 33554432
 % ls /srv
 /srv/boot
 /srv/factotum
-process 80 exited: ""
-churngate: heap exit 4693504 33554432
+/srv/plumb.glenda.73
+/srv/r9-login-ok
+/srv/r9-login-pid.51
+/srv/rio.glenda.76
+/srv/riowctl.glenda.76
+process 89 exited: ""
+churngate: heap exit 5891392 33554432
+% ls /srv
+/srv/boot
+/srv/factotum
+/srv/plumb.glenda.73
+/srv/r9-login-ok
+/srv/r9-login-pid.51
+/srv/rio.glenda.76
+/srv/riowctl.glenda.76
+process 90 exited: ""
+churngate: heap exit 5891456 33554432
+% ls /srv
+/srv/boot
+/srv/factotum
+/srv/plumb.glenda.73
+/srv/r9-login-ok
+/srv/r9-login-pid.51
+/srv/rio.glenda.76
+/srv/riowctl.glenda.76
+process 91 exited: ""
+churngate: heap exit 5891520 33554432
+% ls /srv
+/srv/boot
+/srv/factotum
+/srv/plumb.glenda.73
+/srv/r9-login-ok
+/srv/r9-login-pid.51
+/srv/rio.glenda.76
+/srv/riowctl.glenda.76
+process 92 exited: ""
+churngate: heap exit 5891584 33554432
 % rio-gate: diag marker — no /srv/r9-login-ok entry in the serial /srv listing (the login never reached the profile's rio handoff)
 RIO-FAIL login-not-reached
 RIO-FAIL rio-not-serving — no rio.<user>.<pid> + riowctl.<user>.<pid> pair in the serial /srv listing within the budget
 RIO-ERROR: the rio-diag gate FAILED (rc=1 — the driver named the failure on stderr; capture: /home/req/r9-witness-work/out/rio-diag/rio-gate-rio-diag.log)
-The XKEYBOARD keymap compiler (xkbcomp) reports:
-> Warning:          Multiple symbols for level 1/group 1 on key <FK23>
->                   Using F23, ignoring XF86TouchpadOff
-> Warning:          Symbol map for key <FK23> redefined
->                   Using last definition for conflicting fields
-> Warning:          Symbol map for key <FK24> redefined
->                   Using last definition for conflicting fields
-> Warning:          Could not resolve keysym XF86ElectronicPrivacyScreenOn
-> Warning:          Could not resolve keysym XF86ElectronicPrivacyScreenOff
-> Warning:          Could not resolve keysym XF86ActionOnSelection
-> Warning:          Could not resolve keysym XF86ContextualInsert
-> Warning:          Could not resolve keysym XF86ContextualQuery
-Errors from xkbcomp are not fatal to the X server

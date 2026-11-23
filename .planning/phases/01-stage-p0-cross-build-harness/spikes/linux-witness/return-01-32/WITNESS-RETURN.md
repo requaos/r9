@@ -1,27 +1,27 @@
 # r9 pass-2 witness return (plans 01-09 / 01-32)
 
-- date: 2026-11-23T06:12:48Z
-- git HEAD: 8e1974c69d3ef49bffa3a0e6a1dc418ed1bbd962
+- date: 2026-11-23T06:29:14Z
+- git HEAD: 6fb6c601f15d6f88678190233df1e9c324512320
 - r9 root: /home/req/code/r9
 - work root: /home/req/r9-witness-work
-- steps: rio-diag
+- steps: rio-diag rio
 
 ## out/env.txt
 
 ~~~
 # r9 pass-2 witness preflight
-date=2026-11-23T06:10:33Z
+date=2026-11-23T06:24:35Z
 user=req uid=1000
 r9_root=/home/req/code/r9
-git_head=8e1974c69d3ef49bffa3a0e6a1dc418ed1bbd962
+git_head=6fb6c601f15d6f88678190233df1e9c324512320
 work_dir=/home/req/r9-witness-work
-steps=rio-diag
+steps=rio-diag rio
 harvey_pin=bd7a6982a3e4f465f8ed3da5e0c7290521514ff0
 kerndate=1795382101
 uname=Linux teeniebox 7.4.0-rc3 #1-NixOS SMP PREEMPT_DYNAMIC @315532800 x86_64 GNU/Linux
 nproc=16
                total        used        free      shared  buff/cache   available
-Mem:            30Gi       2.4Gi        10Gi       393Mi        18Gi        28Gi
+Mem:            30Gi       2.4Gi        10Gi       394Mi        18Gi        28Gi
 Swap:          7.5Gi          0B       7.5Gi
 --- free disk under /home/req/r9-witness-work ---
 Filesystem        Size  Used Avail Use% Mounted on
@@ -32,14 +32,15 @@ experimental-features = dynamic-derivations fetch-closure fetch-tree flakes nix-
 sandbox = true
 --- /dev/kvm ---
 DEV_KVM=writable
-crw-rw-rw- 1 root kvm 10, 232 Nov 23 01:03 /dev/kvm
+crw-rw-rw- 1 root kvm 10, 232 Nov 23 01:12 /dev/kvm
 
 ~~~
 
 ## out/summary.tsv
 
 ~~~
-rio-diag	1	135
+rio-diag	1	141
+rio	1	138
 
 ~~~
 
@@ -47,7 +48,7 @@ rio-diag	1	135
 
 ~~~
 # surviving qemu/Xvfb/drawterm processes owned by req
-# at 2026-11-23T06:12:48Z
+# at 2026-11-23T06:29:14Z
 none
 
 ~~~
@@ -55,7 +56,7 @@ none
 ## out/secret-scan.txt
 
 ~~~
-# credential scan of out/ at 2026-11-23T06:12:48Z
+# credential scan of out/ at 2026-11-23T06:29:14Z
 scanned out/ for the password value of harvey/build/x86_64/out/auth-creds.txt
 clean: no credential artifact and no DEMO password value in out/
 
@@ -250,7 +251,7 @@ cpu manifest (§15): /usr/glenda/lib/plumbing staged
 cpu manifest (§15): /sys/lib/plumb/basic staged
 cpu manifest (§15): /sys/lib/plumb/fileaddr staged
 cpu manifest (§15): 26 h* sweep binaries staged (§14's computed auth-suite set + the tier-1 helpers incl. hfactotum/hsed)
-== PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs-cpu.paq (22002476 bytes; chain + the auth suite + cmd/cpu + aux/listen + the real cpurc + tcp17010 + the font payload + the §15 p9sk1 domain + the 19-10 desktop suite (test/rio/plumber/plumb/ramfs/syscall/awd + glenda's home + the plumb rules); header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
+== PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs-cpu.paq (22002477 bytes; chain + the auth suite + cmd/cpu + aux/listen + the real cpurc + tcp17010 + the font payload + the §15 p9sk1 domain + the 19-10 desktop suite (test/rio/plumber/plumb/ramfs/syscall/awd + glenda's home + the plumb rules); header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
 
 ~~~
 
@@ -303,46 +304,46 @@ cpu manifest (§15): 26 h* sweep binaries staged (§14's computed auth-suite set
 ### out/rio-diag/rio-diag.log
 
 ~~~
-/srv/factotum
-process 76 exited: ""
-churngate: heap exit 4693504 33554432
+/srv/r9-login-ok
+/srv/r9-login-pid.51
+/srv/rio.glenda.76
+/srv/riowctl.glenda.76
+process 89 exited: ""
+churngate: heap exit 5891392 33554432
 % ls /srv
 /srv/boot
 /srv/factotum
-process 77 exited: ""
-churngate: heap exit 4693504 33554432
+/srv/plumb.glenda.73
+/srv/r9-login-ok
+/srv/r9-login-pid.51
+/srv/rio.glenda.76
+/srv/riowctl.glenda.76
+process 90 exited: ""
+churngate: heap exit 5891456 33554432
 % ls /srv
 /srv/boot
 /srv/factotum
-process 78 exited: ""
-churngate: heap exit 4693504 33554432
+/srv/plumb.glenda.73
+/srv/r9-login-ok
+/srv/r9-login-pid.51
+/srv/rio.glenda.76
+/srv/riowctl.glenda.76
+process 91 exited: ""
+churngate: heap exit 5891520 33554432
 % ls /srv
 /srv/boot
 /srv/factotum
-process 79 exited: ""
-churngate: heap exit 4693504 33554432
-% ls /srv
-/srv/boot
-/srv/factotum
-process 80 exited: ""
-churngate: heap exit 4693504 33554432
+/srv/plumb.glenda.73
+/srv/r9-login-ok
+/srv/r9-login-pid.51
+/srv/rio.glenda.76
+/srv/riowctl.glenda.76
+process 92 exited: ""
+churngate: heap exit 5891584 33554432
 % rio-gate: diag marker — no /srv/r9-login-ok entry in the serial /srv listing (the login never reached the profile's rio handoff)
 RIO-FAIL login-not-reached
 RIO-FAIL rio-not-serving — no rio.<user>.<pid> + riowctl.<user>.<pid> pair in the serial /srv listing within the budget
 RIO-ERROR: the rio-diag gate FAILED (rc=1 — the driver named the failure on stderr; capture: /home/req/r9-witness-work/out/rio-diag/rio-gate-rio-diag.log)
-The XKEYBOARD keymap compiler (xkbcomp) reports:
-> Warning:          Multiple symbols for level 1/group 1 on key <FK23>
->                   Using F23, ignoring XF86TouchpadOff
-> Warning:          Symbol map for key <FK23> redefined
->                   Using last definition for conflicting fields
-> Warning:          Symbol map for key <FK24> redefined
->                   Using last definition for conflicting fields
-> Warning:          Could not resolve keysym XF86ElectronicPrivacyScreenOn
-> Warning:          Could not resolve keysym XF86ElectronicPrivacyScreenOff
-> Warning:          Could not resolve keysym XF86ActionOnSelection
-> Warning:          Could not resolve keysym XF86ContextualInsert
-> Warning:          Could not resolve keysym XF86ContextualQuery
-Errors from xkbcomp are not fatal to the X server
 
 ~~~
 
@@ -351,43 +352,43 @@ Errors from xkbcomp are not fatal to the X server
 ~~~
 /srv/boot
 /srv/factotum
-process 73 exited: ""
-churngate: heap exit 4693504 33554432
+/srv/plumb.glenda.73
+/srv/r9-login-ok
+/srv/r9-login-pid.51
+/srv/rio.glenda.76
+/srv/riowctl.glenda.76
+process 89 exited: ""
+churngate: heap exit 5891392 33554432
 % ls /srv
 /srv/boot
 /srv/factotum
-process 74 exited: ""
-churngate: heap exit 4693504 33554432
+/srv/plumb.glenda.73
+/srv/r9-login-ok
+/srv/r9-login-pid.51
+/srv/rio.glenda.76
+/srv/riowctl.glenda.76
+process 90 exited: ""
+churngate: heap exit 5891456 33554432
 % ls /srv
 /srv/boot
 /srv/factotum
-process 75 exited: ""
-churngate: heap exit 4693504 33554432
+/srv/plumb.glenda.73
+/srv/r9-login-ok
+/srv/r9-login-pid.51
+/srv/rio.glenda.76
+/srv/riowctl.glenda.76
+process 91 exited: ""
+churngate: heap exit 5891520 33554432
 % ls /srv
 /srv/boot
 /srv/factotum
-process 76 exited: ""
-churngate: heap exit 4693504 33554432
-% ls /srv
-/srv/boot
-/srv/factotum
-process 77 exited: ""
-churngate: heap exit 4693504 33554432
-% ls /srv
-/srv/boot
-/srv/factotum
-process 78 exited: ""
-churngate: heap exit 4693504 33554432
-% ls /srv
-/srv/boot
-/srv/factotum
-process 79 exited: ""
-churngate: heap exit 4693504 33554432
-% ls /srv
-/srv/boot
-/srv/factotum
-process 80 exited: ""
-churngate: heap exit 4693504 33554432
+/srv/plumb.glenda.73
+/srv/r9-login-ok
+/srv/r9-login-pid.51
+/srv/rio.glenda.76
+/srv/riowctl.glenda.76
+process 92 exited: ""
+churngate: heap exit 5891584 33554432
 % 
 ~~~
 
@@ -396,43 +397,43 @@ churngate: heap exit 4693504 33554432
 ~~~
 /srv/boot
 /srv/factotum
-process 73 exited: ""
-churngate: heap exit 4693248 33554432
+/srv/plumb.glenda.71
+/srv/rio.glenda.74
+/srv/riowctl.glenda.74
+process 86 exited: ""
+churngate: heap exit 5883136 33554432
 % ls /srv
 /srv/boot
 /srv/factotum
-process 74 exited: ""
-churngate: heap exit 4693248 33554432
+/srv/plumb.glenda.71
+/srv/rio.glenda.74
+/srv/riowctl.glenda.74
+process 87 exited: ""
+churngate: heap exit 5883200 33554432
 % ls /srv
 /srv/boot
 /srv/factotum
-process 75 exited: ""
-churngate: heap exit 4693248 33554432
+/srv/plumb.glenda.71
+/srv/rio.glenda.74
+/srv/riowctl.glenda.74
+process 88 exited: ""
+churngate: heap exit 5883264 33554432
 % ls /srv
 /srv/boot
 /srv/factotum
-process 76 exited: ""
-churngate: heap exit 4693248 33554432
+/srv/plumb.glenda.71
+/srv/rio.glenda.74
+/srv/riowctl.glenda.74
+process 89 exited: ""
+churngate: heap exit 5883328 33554432
 % ls /srv
 /srv/boot
 /srv/factotum
-process 77 exited: ""
-churngate: heap exit 4693248 33554432
-% ls /srv
-/srv/boot
-/srv/factotum
-process 78 exited: ""
-churngate: heap exit 4693248 33554432
-% ls /srv
-/srv/boot
-/srv/factotum
-process 79 exited: ""
-churngate: heap exit 4693248 33554432
-% ls /srv
-/srv/boot
-/srv/factotum
-process 80 exited: ""
-churngate: heap exit 4693248 33554432
+/srv/plumb.glenda.71
+/srv/rio.glenda.74
+/srv/riowctl.glenda.74
+process 90 exited: ""
+churngate: heap exit 5883392 33554432
 % 
 ~~~
 
@@ -440,43 +441,43 @@ churngate: heap exit 4693248 33554432
 
 ~~~
 /srv/factotum
-process 73 exited: ""
-churngate: heap exit 4693248 33554432
+/srv/plumb.glenda.71
+/srv/rio.glenda.74
+/srv/riowctl.glenda.74
+process 86 exited: ""
+churngate: heap exit 5883136 33554432
 % ls /srv
 /srv/boot
 /srv/factotum
-process 74 exited: ""
-churngate: heap exit 4693248 33554432
+/srv/plumb.glenda.71
+/srv/rio.glenda.74
+/srv/riowctl.glenda.74
+process 87 exited: ""
+churngate: heap exit 5883200 33554432
 % ls /srv
 /srv/boot
 /srv/factotum
-process 75 exited: ""
-churngate: heap exit 4693248 33554432
+/srv/plumb.glenda.71
+/srv/rio.glenda.74
+/srv/riowctl.glenda.74
+process 88 exited: ""
+churngate: heap exit 5883264 33554432
 % ls /srv
 /srv/boot
 /srv/factotum
-process 76 exited: ""
-churngate: heap exit 4693248 33554432
+/srv/plumb.glenda.71
+/srv/rio.glenda.74
+/srv/riowctl.glenda.74
+process 89 exited: ""
+churngate: heap exit 5883328 33554432
 % ls /srv
 /srv/boot
 /srv/factotum
-process 77 exited: ""
-churngate: heap exit 4693248 33554432
-% ls /srv
-/srv/boot
-/srv/factotum
-process 78 exited: ""
-churngate: heap exit 4693248 33554432
-% ls /srv
-/srv/boot
-/srv/factotum
-process 79 exited: ""
-churngate: heap exit 4693248 33554432
-% ls /srv
-/srv/boot
-/srv/factotum
-process 80 exited: ""
-churngate: heap exit 4693248 33554432
+/srv/plumb.glenda.71
+/srv/rio.glenda.74
+/srv/riowctl.glenda.74
+process 90 exited: ""
+churngate: heap exit 5883392 33554432
 % RIO-FAIL rio-not-serving — no rio.<user>.<pid> + riowctl.<user>.<pid> pair in the serial /srv listing within the budget
 RIO-ERROR: the rio gate FAILED (rc=1 — the driver named the failure on stderr; capture: /home/req/r9-witness-work/out/rio/rio-gate-rio.log)
 

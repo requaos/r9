@@ -12,7 +12,7 @@ chain manifest: /rc/bin/termrc staged
 chain manifest: /lib/namespace staged
 chain manifest: /adm/timezone/local staged
 chain manifest: /usr/glenda/lib/profile staged
-== PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs-chain.paq (389606 bytes; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
+== PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs-chain.paq (389607 bytes; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
 == witness manifest absent (build/mm/build-9k10t1.sh not run) — the tier bake proceeds; the both-venues witness is NOT structural this run
 tier manifest: /boot/boot staged
 tier manifest: /boot/paqfs staged
@@ -66,7 +66,7 @@ net manifest: /lib/netip-static.rc staged
 net manifest: /lib/netip-dhcp.rc staged
 net manifest: /lib/netip-tcp.rc staged
 net manifest: /lib/netip-tap.rc staged
-== PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs-net.paq (907607 bytes; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
+== PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs-net.paq (907601 bytes; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
 payload manifest: /lib/ndb/local substituted from lib/ndb/local.template (the netaddr seam's slirp leg + ether; the 18-04 auth row stripped — no domain in this image) [services]
 payload manifest: /lib/font/bit staged (tree, 4303 files) [services]
 payload manifest: /usr/glenda/lib/profile staged [services]
@@ -113,13 +113,13 @@ services manifest: /lib/netip-dhcp.rc staged
 services manifest: /lib/netip-tcp.rc staged
 services manifest: /lib/services-sweep.rc staged
 services manifest: 127 h* sweep binaries staged (tier-1 helpers + the tier-2 set computed from tiers/tier2-services.txt: 90 tier-2 members)
-== PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs-services.paq (26671018 bytes; 127 h* binaries; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
-== PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs-churn.paq (492150 bytes; chain + test/dc + churncats + /lib/churn-cats.rc; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
+== PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs-services.paq (26671019 bytes; 127 h* binaries; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
+== PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs-churn.paq (492148 bytes; chain + test/dc + churncats + /lib/churn-cats.rc; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
 == PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs-substrate.paq (43674 bytes; skeleton + randread as /amd64/init; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
 authdomain-gen: no authdomain.local — generating ephemeral DEMO material
-authdomain-gen: generated /tmp/mkimage-x64.353nzH/authdom-stage: label=DEMO authdom=DEMO-harvey authid=bootes users=3
+authdomain-gen: generated /tmp/mkimage-x64.SHuajY/authdom-stage: label=DEMO authdom=DEMO-harvey authid=bootes users=3
 authdomain-gen: DEMO material is throwaway — never reuse outside a gate image
-verify: OK dir=/tmp/mkimage-x64.353nzH/auth-verify label=DEMO users=3
+verify: OK dir=/tmp/mkimage-x64.SHuajY/auth-verify label=DEMO users=3
 == auth pairing verified over the staged copies (authdomain-gen -V over the bake's own scratch twin)
 == auth ndb: /lib/ndb/local composed from local.template (the seam's four tokens + @AUTHDOM@=DEMO-harvey from the generator run + the tcp=ticket service row for the probe dials)
 auth manifest: /boot/boot staged
@@ -148,9 +148,9 @@ auth manifest: /lib/auth-sweep.rc staged
 auth manifest: /boot/authfeed.txt staged
 auth manifest: /boot/secstore-obj.txt staged
 auth manifest: 26 h* sweep binaries staged (the auth-suite set computed from tiers/tier2-services.txt + the tier-1 helpers: 26 tier-2 members)
-== PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs-auth.paq (2574231 bytes; chain + auth suite + the paired p9sk1 domain; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
+== PASS: baked /home/req/r9-witness-work/harvey/build/x86_64/out/bootfs-auth.paq (2574247 bytes; chain + auth suite + the paired p9sk1 domain; header 529ab12b trailer 6b46e688; KERNDATE 1795382101)
 authdomain-gen: no authdomain.local — generating ephemeral DEMO material
-authdomain-gen: generated /tmp/mkimage-x64.353nzH/cpudom-stage: label=DEMO authdom=DEMO-harvey authid=bootes users=3
+authdomain-gen: generated /tmp/mkimage-x64.SHuajY/cpudom-stage: label=DEMO authdom=DEMO-harvey authid=bootes users=3
 authdomain-gen: DEMO material is throwaway — never reuse outside a gate image
 payload manifest: /lib/ndb/local substituted from lib/ndb/local.template (the seam's four tokens + authdom=DEMO-harvey from the caller's own generator run — the 19-07 auth arm, row KEPT) [cpu]
 payload manifest: /lib/font/bit staged (tree, 4303 files) [cpu]
@@ -162,7 +162,7 @@ payload manifest: font /lib/font/bit/pelm/latin1.8.font staged [cpu]
 payload manifest: font /lib/font/bit/pelm/euro.9.font staged [cpu]
 payload manifest: /lib/font/bit 4303 files 27676353 bytes (floors: 4303 files, 27000000 bytes) [cpu]
 payload manifest: /usr/glenda/lib/profile shape ok — terminal case rio-free, cpu case intact [cpu]
-verify: OK dir=/tmp/mkimage-x64.353nzH/cpu-auth-verify label=DEMO users=3
+verify: OK dir=/tmp/mkimage-x64.SHuajY/cpu-auth-verify label=DEMO users=3
 == cpu pairing verified over the staged copies (authdomain-gen -V over the bake's own scratch twin)
 cpu manifest (§15): /boot/boot staged
 cpu manifest (§15): /boot/paqfs staged

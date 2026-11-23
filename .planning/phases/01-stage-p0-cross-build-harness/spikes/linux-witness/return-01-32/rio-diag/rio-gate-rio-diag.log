@@ -45,7 +45,7 @@ Memory usage:
 random: source=rdrand
 lapic: cpuid leaf-1 ecx: x2apic=true tsc-deadline=true
 lapic: x2apic live (msr 0x800 map; lint0/1 masked, no pic)
-timer: 2496106380 Hz (pit 1193182 Hz reference), TscDeadline mode, armed
+timer: 2496077060 Hz (pit 1193182 Hz reference), TscDeadline mode, armed
 ioapic: id 0 version 0x11 rtes 23 gsib 0 (madt 0xfec00000)
 pci: bar4 pa 0xfe000000 size 0x4000 (firmware) readback 0xfe000000
 pci: caps common@0x0+0x1000 notify@0x3000 isr@0x1000 device@0x2000 mult 4
@@ -61,7 +61,7 @@ q35: paqfs root mounted from module (22002534 bytes)
 devroot: /boot/boot open (159349 bytes)
 exec: entering ring 3 pc=0x2054fa sp=0x7fffffffef78 path=/boot/boot argv=[boot]
 paqfs...version...root-cpu: Sun Nov 22 21:15:01 GMT 2026
-fingerprint: b8a2e63311e043046b25a3a5c9c7169477629c8c
+fingerprint: 37a3ea37591d67377ab19ec3a62d2005e92a54f9
 process 2 exited: ""
 churngate: heap exit 92672 33554432
 syscall 10 unimplemented
@@ -156,8 +156,8 @@ churngate: heap exit 4145216 33554432
 cpurc: LISTEN-17010
 process 46 exited: ""
 churngate: heap exit 4149248 33554432
-cpurc: DONEspawn bash -c R9_RUN_ID=r9riogate-dt-121294-1795414235 exec -a r9riogate-dt-121294-1795414235 /nix/store/y8h5ana2drnzs2fdx6fxgr74bwmzi8y9-drawterm-19.06/bin/drawterm -s '' -O cpu=127.0.0.1,auth=tcp!127.0.0.1!5670,user=glenda
-
+cpurc: DONE
+spawn bash -c R9_RUN_ID=r9riogate-dt-143387-1795415078 exec -a r9riogate-dt-143387-1795415078 /nix/store/y8h5ana2drnzs2fdx6fxgr74bwmzi8y9-drawterm-19.06/bin/drawterm -s '' -O cpu=127.0.0.1,auth=tcp!127.0.0.1!5670,user=glenda
 process 47 exited: ""
 churngate: heap exit 4149248 33554432
 process 5 exited: ""
@@ -178,93 +178,160 @@ syscall 10 unimplemented
 process 53 exited: ""
 churngate: heap exit 4530176 33554432
 process 54 exited: ""
-churngate: heap exit 4530176 33554432
+churngate: heap exit 4554752 33554432
 process 55 exited: ""
-churngate: heap exit 4530176 33554432
+churngate: heap exit 4554752 33554432
 process 56 exited: ""
-churngate: heap exit 4530176 33554432
-process 57 exited: "namec: device has no create"
+churngate: heap exit 4554752 33554432
+process 57 exited: ""
 churngate: heap exit 4554752 33554432
 process 58 exited: ""
-churngate: heap exit 4556800 33554432
+churngate: heap exit 4554752 33554432
+process 59 exited: "namec: device has no create"
+churngate: heap exit 4558848 33554432
+process 60 exited: ""
+churngate: heap exit 4561152 33554432
 devmnt: server error: './mnt/wsys' does not exist
-process 60 exited: "false"
-churngate: heap exit 4562944 33554432
-process 61 exited: ""
-churngate: heap exit 4562944 33554432
-process 62 exited: ""
-churngate: heap exit 4562944 33554432
+process 62 exited: "false"
+churngate: heap exit 4571136 33554432
 process 63 exited: ""
-churngate: heap exit 4562944 33554432
+churngate: heap exit 4571136 33554432
+process 64 exited: ""
+churngate: heap exit 4571136 33554432
+process 65 exited: ""
+churngate: heap exit 4571136 33554432
 devmnt: server error: './mnt/wsys' does not exist
-process 64 exited: "false"
-churngate: heap exit 4693248 33554432
-process 65 exited: "false"
-churngate: heap exit 4693248 33554432
-process 66 exited: ""
-churngate: heap exit 4693248 33554432
-process 67 exited: ""
-churngate: heap exit 4693248 33554432
+process 66 exited: "false"
+churngate: heap exit 4701440 33554432
+process 67 exited: "false"
+churngate: heap exit 4701440 33554432
 process 68 exited: ""
-churngate: heap exit 4693504 33554432
+churngate: heap exit 4701440 33554432
+process 69 exited: ""
+churngate: heap exit 4701440 33554432
+process 70 exited: ""
+churngate: heap exit 4701440 33554432
 ls /srv
 /srv/boot
 /srv/factotum
-process 69 exited: ""
-churngate: heap exit 4693504 33554432
-% ls /srv
-/srv/boot
-/srv/factotum
-process 70 exited: ""
-churngate: heap exit 4693504 33554432
-% ls /srv
-/srv/boot
-/srv/factotum
+/srv/r9-login-ok
+/srv/r9-login-pid.51
 process 71 exited: ""
-churngate: heap exit 4693504 33554432
-% ls /srv
-/srv/boot
-/srv/factotum
+churngate: heap exit 4701440 33554432
+% process 73 exited: ""
+churngate: heap exit 5016384 33554432
 process 72 exited: ""
-churngate: heap exit 4693504 33554432
+churngate: heap exit 5016384 33554432
+devmnt: server error: './dev/label' file does not exist
+devmnt: server error: './dev/winname' file does not exist
+ls /srv
+/srv/boot
+/srv/factotum
+/srv/plumb.glenda.73
+/srv/r9-login-ok
+/srv/r9-login-pid.51
+/srv/rio.glenda.76
+/srv/riowctl.glenda.76
+process 82 exited: ""
+churngate: heap exit 5890944 33554432
 % ls /srv
 /srv/boot
 /srv/factotum
-process 73 exited: ""
-churngate: heap exit 4693504 33554432
+/srv/plumb.glenda.73
+/srv/r9-login-ok
+/srv/r9-login-pid.51
+/srv/rio.glenda.76
+/srv/riowctl.glenda.76
+process 83 exited: ""
+churngate: heap exit 5891008 33554432
 % ls /srv
 /srv/boot
 /srv/factotum
-process 74 exited: ""
-churngate: heap exit 4693504 33554432
+/srv/plumb.glenda.73
+/srv/r9-login-ok
+/srv/r9-login-pid.51
+/srv/rio.glenda.76
+/srv/riowctl.glenda.76
+process 84 exited: ""
+churngate: heap exit 5891072 33554432
 % ls /srv
 /srv/boot
 /srv/factotum
-process 75 exited: ""
-churngate: heap exit 4693504 33554432
+/srv/plumb.glenda.73
+/srv/r9-login-ok
+/srv/r9-login-pid.51
+/srv/rio.glenda.76
+/srv/riowctl.glenda.76
+process 85 exited: ""
+churngate: heap exit 5891136 33554432
 % ls /srv
 /srv/boot
 /srv/factotum
-process 76 exited: ""
-churngate: heap exit 4693504 33554432
+/srv/plumb.glenda.73
+/srv/r9-login-ok
+/srv/r9-login-pid.51
+/srv/rio.glenda.76
+/srv/riowctl.glenda.76
+process 86 exited: ""
+churngate: heap exit 5891200 33554432
 % ls /srv
 /srv/boot
 /srv/factotum
-process 77 exited: ""
-churngate: heap exit 4693504 33554432
+/srv/plumb.glenda.73
+/srv/r9-login-ok
+/srv/r9-login-pid.51
+/srv/rio.glenda.76
+/srv/riowctl.glenda.76
+process 87 exited: ""
+churngate: heap exit 5891264 33554432
 % ls /srv
 /srv/boot
 /srv/factotum
-process 78 exited: ""
-churngate: heap exit 4693504 33554432
+/srv/plumb.glenda.73
+/srv/r9-login-ok
+/srv/r9-login-pid.51
+/srv/rio.glenda.76
+/srv/riowctl.glenda.76
+process 88 exited: ""
+churngate: heap exit 5891328 33554432
 % ls /srv
 /srv/boot
 /srv/factotum
-process 79 exited: ""
-churngate: heap exit 4693504 33554432
+/srv/plumb.glenda.73
+/srv/r9-login-ok
+/srv/r9-login-pid.51
+/srv/rio.glenda.76
+/srv/riowctl.glenda.76
+process 89 exited: ""
+churngate: heap exit 5891392 33554432
 % ls /srv
 /srv/boot
 /srv/factotum
-process 80 exited: ""
-churngate: heap exit 4693504 33554432
+/srv/plumb.glenda.73
+/srv/r9-login-ok
+/srv/r9-login-pid.51
+/srv/rio.glenda.76
+/srv/riowctl.glenda.76
+process 90 exited: ""
+churngate: heap exit 5891456 33554432
+% ls /srv
+/srv/boot
+/srv/factotum
+/srv/plumb.glenda.73
+/srv/r9-login-ok
+/srv/r9-login-pid.51
+/srv/rio.glenda.76
+/srv/riowctl.glenda.76
+process 91 exited: ""
+churngate: heap exit 5891520 33554432
+% ls /srv
+/srv/boot
+/srv/factotum
+/srv/plumb.glenda.73
+/srv/r9-login-ok
+/srv/r9-login-pid.51
+/srv/rio.glenda.76
+/srv/riowctl.glenda.76
+process 92 exited: ""
+churngate: heap exit 5891584 33554432
 % 
