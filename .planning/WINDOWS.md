@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 2
+open_count: 3
 waived_count: 0
 fixed_count: 1
-total_count: 3
-last_updated: 2026-11-23T11:15:32.026Z
+total_count: 4
+last_updated: 2026-11-23T12:03:50.195Z
 ---
 
 # Broken Windows Ledger
@@ -18,6 +18,7 @@ last_updated: 2026-11-23T11:15:32.026Z
 | 1 | 01 | deviation | .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-a/mac-builder-probe.txt |  | Plan 01-12 added a sixth evidence file beyond files_modified so the mac-builder VERDICT has a real EVIDENCE path | fixed |  | 2026-11-23T05:41:27.470Z | 2026-11-23T05:41:31.253Z |
 | 2 | 01 | deviation | xtask/src/gate.rs |  | Task 2 (tdd=true) landed its behaviour tests with the implementation in one feat commit; no separate RED commit exists (recorded in 01-18-SUMMARY) | open |  | 2026-11-23T11:15:31.637Z |  |
 | 3 | 01 | unrun-verify | xtask/src/gate.rs |  | The quick gate's KVM witness runs (green twice, force-no-rio non-zero) are queued for stop B (plan 01-22) | open |  | 2026-11-23T11:15:32.026Z |  |
+| 4 | 01 | deviation | gates/aarch64/drive-r9.expect |  | Plan 01-21's unreferenced drive-r9 rewire needed two support lines beyond path/env tokens (the R9_GATE_OUT capture expression and its mkdir) because the Harvey launcher run-r9.sh was not moved; every assertion, marker, stage and timeout is unchanged (recorded in 01-21-SUMMARY) | open |  | 2026-11-23T12:03:50.195Z |  |
 
 ````json
 [
@@ -57,6 +58,19 @@ last_updated: 2026-11-23T11:15:32.026Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-11-23T11:15:32.026Z",
+    "resolved_at": null,
+    "milestone": "v3.0"
+  },
+  {
+    "id": 4,
+    "kind": "deviation",
+    "phase": "01",
+    "file": "gates/aarch64/drive-r9.expect",
+    "line": null,
+    "description": "Plan 01-21's unreferenced drive-r9 rewire needed two support lines beyond path/env tokens (the R9_GATE_OUT capture expression and its mkdir) because the Harvey launcher run-r9.sh was not moved; every assertion, marker, stage and timeout is unchanged (recorded in 01-21-SUMMARY)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-23T12:03:50.195Z",
     "resolved_at": null,
     "milestone": "v3.0"
   }

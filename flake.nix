@@ -1110,6 +1110,29 @@ WRAP
         let
           pkgs = pkgsFor system;
           toolchain = toolchainFor system;
+          # 01-21 (D-05/D-07): the arm64 tree is a Linux package; on the
+          # Mac it is realised by the registered builder — the same
+          # treeSystem rule as the devshell.
+          treeSystem =
+            if pkgs.stdenv.hostPlatform.isLinux then system else "aarch64-linux";
+          harveyTreeArm64 = self.packages.${treeSystem}.harvey-tree-arm64;
+          # The moved aarch64 gate apps' runtime inputs (01-21): qemu,
+          # dtc (fdtput), expect and git as Harvey's had, plus the Rust
+          # toolchain for `cargo xtask image` and the text tools the
+          # tier-1 marker computation uses.  No lima.
+          bootR9RuntimeInputs = [
+            toolchain
+            pkgs.bash
+            pkgs.coreutils
+            pkgs.gawk
+            pkgs.gnugrep
+            pkgs.gnused
+            pkgs.findutils
+            pkgs.qemu
+            pkgs.dtc
+            pkgs.git
+            pkgs.expect
+          ];
           # writeShellApplication embeds runtimeInputs on PATH, so the app
           # runs bare (no devshell) per D-08's zero-host-setup intent.
           r9-build = pkgs.writeShellApplication {
@@ -1136,6 +1159,38 @@ WRAP
           build = { type = "app"; program = "${r9-build}/bin/r9-build"; };
           boot-virt = { type = "app"; program = "${r9-boot-virt}/bin/r9-boot-virt"; };
           default = { type = "app"; program = "${r9-build}/bin/r9-build"; };
+        }
+        # 01-21 (D-07/D-09/HARN-08): the moved aarch64 boot, smoke and
+        # tier-1 gate apps, on all three systems.  Each header exports
+        # r9's own supply: the kernel-virt package, the read-only arm64
+        # tree, the host mkpaqfs, and the Rust toolchain on PATH (in the
+        # runtimeInputs).  No hasAttr gating — these are r9's own
+        # attributes; no lima.
+        // {
+          boot-r9 = {
+            type = "app";
+            program = "${mkScriptApp pkgs "boot-r9" ./nix/gates/boot-r9.sh ''
+              export R9_KERNEL_PKG="${self.packages.${system}.kernel-virt}"
+              export R9_HARVEY_DIR_ARM64="${harveyTreeArm64}"
+              export R9_MKPAQFS="${self.packages.${system}.harvey-mkpaqfs}/bin/mkpaqfs"
+            '' bootR9RuntimeInputs}/bin/boot-r9";
+          };
+          boot-r9-smoke = {
+            type = "app";
+            program = "${mkScriptApp pkgs "boot-r9-smoke" ./nix/gates/smoke-r9.sh ''
+              export R9_KERNEL_PKG="${self.packages.${system}.kernel-virt}"
+              export R9_HARVEY_DIR_ARM64="${harveyTreeArm64}"
+              export R9_MKPAQFS="${self.packages.${system}.harvey-mkpaqfs}/bin/mkpaqfs"
+            '' bootR9RuntimeInputs}/bin/boot-r9-smoke";
+          };
+          boot-r9-tier1 = {
+            type = "app";
+            program = "${mkScriptApp pkgs "boot-r9-tier1" ./nix/gates/tier1-r9.sh ''
+              export R9_KERNEL_PKG="${self.packages.${system}.kernel-virt}"
+              export R9_HARVEY_DIR_ARM64="${harveyTreeArm64}"
+              export R9_MKPAQFS="${self.packages.${system}.harvey-mkpaqfs}/bin/mkpaqfs"
+            '' bootR9RuntimeInputs}/bin/boot-r9-tier1";
+          };
         }
         # 01-18 (D-07/D-09/HARN-08): the moved drawterm gate app.  The
         # header is Harvey's drawtermGateX64Pkg env contract re-keyed
