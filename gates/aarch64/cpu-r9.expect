@@ -1,0 +1,172 @@
+#!/usr/bin/expect -f
+# cpu-r9.expect — the arm64 cpu fixture gate driver (20-16, ARM-11),
+# in smoke-r9.expect's shape.  nix/gates/cpu-r9.sh (the boot-r9-cpu flake
+# app) builds, bakes, writes the boot string init=/arm64/init -c into
+# the DTB copy and runs this script, which spawns qemu with serial on
+# stdio and asserts, in emission order:
+#
+#   banner -> the kernel's `devenv: bootconf init=/arm64/init -c' line
+#   (printed before paqfs) -> paqfs -> the baked /rc/bin/cpurc's
+#   markers: cpurc: RAN, SHEBANG-OK, STAT-OK, CAP-OK, REMOVE-OK,
+#   SSL-OK, cpurc: DONE -> what init does next on arm64 (measured in
+#   20-16 Task 1, AFTER-CPURC: prompt): `init: starting /bin/rc' and
+#   rc's `% ' prompt.
+#
+# Then whole-capture post-passes after log_file is closed: zero
+# `cpurc: FAIL', zero panic, the bootconf line present, each of the
+# seven markers present EXACTLY once, no `hooks not registered' (20-01)
+# and no `unknown device'.  A marker's absence is never a pass.
+#
+# Fast-fail (expect_before): kernel panic markers, rc's `pushword but
+# no argv' abort (WINDOWS #49, 20-01), and `cpurc: FAIL <leg>' (the
+# fixture names the failed leg; cpuprobe's own FAIL line with the
+# errstr precedes it on the wire).
+#
+# Patterns are CRLF-tolerant substrings (the kernel console cooks \n
+# to \r\n).  No input is typed before the final prompt, so no marker
+# can be matched on an echoed command.  Timeouts are TCG-sized (600 s
+# per stage).
+#
+# Env (exported by nix/gates/cpu-r9.sh):
+#   R9_KERNEL, R9_DTB, R9_INITRD, R9_CPU_LOG   REQUIRED
+#   R9_QEMU      default qemu-system-aarch64
+#   R9_MACHINE, R9_CPU, R9_ACCEL   the caller-selected shape
+#   R9_BOOTARGS  the boot string written to the DTB (default
+#                init=/arm64/init -c); the bootconf stage expects it
+#   R9_RUN_TAG   the per-run qemu -name tag
+#
+# exit 0 when every stage and post-pass held; exit 1 names the failed
+# stage on stderr; exit 2 on a missing env contract.
+
+set timeout 600
+match_max 65536
+
+foreach v {R9_KERNEL R9_DTB R9_INITRD R9_CPU_LOG} {
+    if {![info exists env($v)]} {
+        puts stderr "cpu-r9: \$$v unset — run via the flake app (nix run .#boot-r9-cpu)"
+        exit 2
+    }
+}
+set QEMU [expr {[info exists env(R9_QEMU)] ? $env(R9_QEMU) : "qemu-system-aarch64"}]
+set run_tag [expr {[info exists env(R9_RUN_TAG)] ? $env(R9_RUN_TAG) : "r9cpu-[pid]-[clock seconds]"}]
+set bootargs [expr {[info exists env(R9_BOOTARGS)] ? $env(R9_BOOTARGS) : "init=/arm64/init -c"}]
+set bootconf_line "devenv: bootconf $bootargs"
+
+exec rm -f $env(R9_CPU_LOG)
+
+set R9_MACHINE [expr {[info exists env(R9_MACHINE)] ? $env(R9_MACHINE) : "virt,gic-version=3"}]
+set R9_CPU [expr {[info exists env(R9_CPU)] ? $env(R9_CPU) : "cortex-a72"}]
+set R9_ACCEL [expr {[info exists env(R9_ACCEL)] ? $env(R9_ACCEL) : "tcg"}]
+spawn $QEMU -M $R9_MACHINE -cpu $R9_CPU -smp 1 -m 1024M \
+    -accel $R9_ACCEL \
+    -kernel $env(R9_KERNEL) \
+    -dtb $env(R9_DTB) \
+    -device loader,file=$env(R9_INITRD),addr=0x48000000 \
+    -netdev user,id=n0 \
+    -device virtio-net-pci-non-transitional,netdev=n0 \
+    -nographic \
+    -name $run_tag
+set spawn_pid [exp_pid]
+log_file $env(R9_CPU_LOG)
+
+proc cleanup {} {
+    global spawn_pid
+    catch { exec kill -KILL -- -$spawn_pid 2>/dev/null }
+    catch { exec kill -KILL $spawn_pid 2>/dev/null }
+}
+
+proc failnow {msg} {
+    puts stderr "cpu-r9: $msg"
+    cleanup
+    exit 1
+}
+
+# a regular-expression stage
+proc stage {name re} {
+    global expect_out
+    expect {
+        -re $re { puts stderr "cpu-r9: stage ok — $name" }
+        timeout { failnow "TIMEOUT at stage: $name" }
+        eof { failnow "qemu exited (EOF) at stage: $name" }
+    }
+}
+
+# an exact-substring stage (the bootconf line carries the caller's
+# boot string verbatim)
+proc stagex {name str} {
+    global expect_out
+    expect {
+        -ex $str { puts stderr "cpu-r9: stage ok — $name" }
+        timeout { failnow "TIMEOUT at stage: $name" }
+        eof { failnow "qemu exited (EOF) at stage: $name" }
+    }
+}
+
+expect_before {
+    -re {panic|Unhandled interrupt} {
+        failnow "kernel panic marker on the wire — aborting"
+    }
+    -re {pushword but no argv} {
+        failnow "rc argv-stack abort on the wire (pushword but no argv) — WINDOWS #49"
+    }
+    -re {cpurc: FAIL ([^\r\n]*)\r?\n} {
+        failnow "cpurc leg FAILED: $expect_out(1,string) (the cpuprobe/sslprobe line above names the errstr)"
+    }
+}
+
+# 1. boot: banner, the boot string reaching the env seed, the paqfs server
+stage banner {r9 from the Internet}
+stagex bootconf $bootconf_line
+stage paqfs {paqfs\.\.\.}
+
+# 2. the cpurc legs, in emission order
+stage cpurc-ran {cpurc: RAN}
+stage shebang {SHEBANG-OK}
+stage stat {STAT-OK}
+stage cap {CAP-OK}
+stage remove {REMOVE-OK}
+stage ssl {SSL-OK}
+stage cpurc-done {cpurc: DONE}
+
+# 3. what init does after cpurc returns (Task 1's AFTER-CPURC record):
+#    its for(;;) loop starts an interactive rc at once
+stage init-rc {init: starting /bin/rc}
+stage prompt {% }
+
+# 4. whole-capture post-passes
+log_file
+set fh [open $env(R9_CPU_LOG) r]
+set whole [read $fh]
+close $fh
+
+if {[string first "cpurc: FAIL" $whole] >= 0} {
+    failnow "no-cpurc-fail FAILED — a 'cpurc: FAIL' line is present in the capture"
+}
+puts stderr "cpu-r9: stage ok — no-cpurc-fail"
+if {[regexp {panic|Unhandled interrupt} $whole]} {
+    failnow "no-panic FAILED — a panic marker is present in the capture"
+}
+puts stderr "cpu-r9: stage ok — no-panic"
+if {[string first $bootconf_line $whole] < 0} {
+    failnow "bootconf-present FAILED — no '$bootconf_line' line in the capture"
+}
+puts stderr "cpu-r9: stage ok — bootconf-present"
+foreach m {{cpurc: RAN} SHEBANG-OK STAT-OK CAP-OK REMOVE-OK SSL-OK {cpurc: DONE}} {
+    set n [regexp -all -- $m $whole]
+    if {$n != 1} {
+        failnow "marker-once FAILED — '$m' appears $n times in the capture (want exactly 1)"
+    }
+}
+puts stderr "cpu-r9: stage ok — marker-once (each of the seven markers exactly once)"
+if {[string first "hooks not registered" $whole] >= 0} {
+    failnow "user-hooks-registered FAILED — a 'hooks not registered' line is present in the capture"
+}
+puts stderr "cpu-r9: stage ok — user-hooks-registered"
+if {[string first "unknown device" $whole] >= 0} {
+    failnow "no-unknown-device FAILED — an 'unknown device' line is present in the capture"
+}
+puts stderr "cpu-r9: stage ok — no-unknown-device"
+
+puts stderr "cpu-r9: ALL STAGES PASS — banner, bootconf, paqfs, cpurc-ran, shebang, stat, cap, remove, ssl, cpurc-done, init-rc, prompt, no-cpurc-fail, no-panic, bootconf-present, marker-once, user-hooks-registered, no-unknown-device"
+cleanup
+exit 0
