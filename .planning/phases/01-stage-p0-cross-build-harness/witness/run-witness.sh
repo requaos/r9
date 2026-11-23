@@ -326,6 +326,20 @@ clone_at_sha() {
 	git -C "$dir" checkout --quiet --detach "$sha"
 }
 
+# overlay_fixed_driver <dir>: PROBE_FLIP_SHA and PROBE_FLIPBACK_SHA predate
+# 01-33's driver fixes (the fast-fail registration and the final teardown),
+# so a bare clone at those revisions aborts at `expect_before -i $spawn_id`
+# before the probe marker leg can assert anything (stop B2's probe/flipback
+# FAILs).  The probe's subject is the ps swap and the gate's assertion, not
+# the driver's history: overlay THIS checkout's driver into the throwaway
+# clone, leaving the image, the swapped ps and every other file at the exact
+# SHA.
+overlay_fixed_driver() {
+	local dir=$1
+	cp "$R9/gates/x86_64/drawterm-gate.expect" \
+		"$dir/gates/x86_64/drawterm-gate.expect"
+}
+
 # --- trees: both native x86_64-linux Harvey trees, verified ------------
 step_trees() {
 	local start end rc paths p
@@ -473,6 +487,13 @@ step_probe() {
 		rc=1
 	fi
 	if [ "$rc" -eq 0 ]; then
+		note "probe: overlay the 01-33 fixed drawterm driver into the clone"
+		if ! overlay_fixed_driver "$dir"; then
+			printf 'PROBE-DRIVER-OVERLAY-FAIL\n' | tee -a "$OUT/probe/probe.log"
+			rc=1
+		fi
+	fi
+	if [ "$rc" -eq 0 ]; then
 		note "probe: cargo xtask probe, then the gate with --serial-check /bin/ps=R9-RUST-AOUT-PROBE-OK"
 		if ! (cd "$dir" || exit 1
 			nix develop -c cargo xtask probe --arch x86-64 || exit 1
@@ -497,6 +518,14 @@ step_flipback() {
 	if ! clone_at_sha "$PROBE_FLIPBACK_SHA" "$dir" 2>&1 |
 		tee -a "$OUT/flipback/flipback.log"; then
 		rc=1
+	fi
+	if [ "$rc" -eq 0 ]; then
+		note "flipback: overlay the 01-33 fixed drawterm driver into the clone"
+		if ! overlay_fixed_driver "$dir"; then
+			printf 'FLIPBACK-DRIVER-OVERLAY-FAIL\n' |
+				tee -a "$OUT/flipback/flipback.log"
+			rc=1
+		fi
 	fi
 	if [ "$rc" -eq 0 ]; then
 		note "flipback: cargo xtask gate --arch x86-64 --accel kvm (the plain gate)"

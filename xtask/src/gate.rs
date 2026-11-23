@@ -704,6 +704,42 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// Stop B2: the positive rio leg passed every stage but died in the
+    /// final teardown — the identity sweep's `pgrep -f` matched the
+    /// driver's own argv and environment (both carry the run tag), so it
+    /// SIGTERMed the expect process before `ALL STAGES PASS`.  The final
+    /// cleanup is now caught (a teardown warning cannot mask the green
+    /// verdict), the sweep excludes its own caller chain, and cleanup
+    /// guards every pid read.
+    #[test]
+    fn driver_final_teardown_cannot_mask_a_passing_leg() {
+        const DRIVER: &str = include_str!("../../gates/x86_64/drawterm-gate.expect");
+        let cleanup = DRIVER
+            .rfind("if {[catch {cleanup} cleanup_err]}")
+            .expect("the final cleanup is caught");
+        let pass = DRIVER
+            .rfind("ALL STAGES PASS")
+            .expect("the green verdict prints");
+        assert!(
+            cleanup < pass,
+            "the final caught cleanup must precede the last ALL STAGES PASS print (cleanup at \
+             {cleanup}, PASS at {pass})"
+        );
+        assert!(
+            DRIVER.contains("catch { sweep_identity }")
+                && DRIVER.contains("catch { redact_capture }"),
+            "cleanup must catch the identity sweep and the capture redaction"
+        );
+        assert!(
+            DRIVER.contains("if {[info exists qemu_pid] && $qemu_pid ne \"\"}"),
+            "cleanup must guard its pid reads with info exists"
+        );
+        assert!(
+            DRIVER.contains("case \"$excl\" in *\" $p \"*) continue ;;"),
+            "the identity sweep must exclude its own caller chain (expect + ancestors)"
+        );
+    }
+
     #[test]
     fn full_tier_lists_are_complete() {
         let x86_64 = full_apps(Arch::X86_64);
