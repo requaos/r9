@@ -1,0 +1,52 @@
+# rio-diag X11 evidence — drawterm window 4194305 on :1 (plan 01-32)
+== before-typing (mode rio-diag, display :1)
+--- xdotool search --onlyvisible --classname ^drawterm$
+4194305
+--- xdotool getwindowgeometry --shell 4194305
+WINDOW=4194305
+X=0
+Y=0
+WIDTH=768
+HEIGHT=576
+SCREEN=0
+--- xdotool getwindowfocus
+(exec failed: XGetInputFocus returned the focused window of 1. This is likely a bug in the X server.
+X Error of failed request:  BadWindow (invalid Window parameter)
+  Major opcode of failed request:  20 (X_GetProperty)
+  Resource id in failed request:  0x1
+  Serial number of failed request:  36
+  Current serial number in output stream:  36)
+--- xprop -id 4194305 WM_CLASS WM_NAME
+WM_CLASS(STRING) = "drawterm", "Drawterm"
+WM_NAME(STRING) = "drawterm"
+--- xwininfo -id 4194305 -tree
+
+xwininfo: Window id: 0x400001 "drawterm"
+
+  Root window id: 0x21f (the root window) (has no name)
+  Parent window id: 0x21f (the root window) (has no name)
+     0 children.
+
+== after-return (mode rio-diag, display :1)
+--- xdotool search --onlyvisible --classname ^drawterm$
+4194305
+--- xdotool getwindowgeometry --shell 4194305
+WINDOW=4194305
+X=0
+Y=0
+WIDTH=768
+HEIGHT=576
+SCREEN=0
+--- xdotool getwindowfocus
+4194305
+--- xprop -id 4194305 WM_CLASS WM_NAME
+WM_CLASS(STRING) = "drawterm", "Drawterm"
+WM_NAME(STRING) = "drawterm"
+--- xwininfo -id 4194305 -tree
+
+xwininfo: Window id: 0x400001 "drawterm"
+
+  Root window id: 0x21f (the root window) (has no name)
+  Parent window id: 0x21f (the root window) (has no name)
+     0 children.
+
