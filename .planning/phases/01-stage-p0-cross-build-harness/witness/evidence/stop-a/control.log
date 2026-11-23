@@ -1,0 +1,41 @@
+# evidence: out/control/control.log (driver output; last 40 lines as returned)
+/srv/boot
+/srv/factotum
+process 74 exited: ""
+churngate: heap exit 4825344 33554432
+% ls /srv
+/srv/boot
+/srv/factotum
+process 75 exited: ""
+churngate: heap exit 4825344 33554432
+% ls /srv
+/srv/boot
+/srv/factotum
+process 76 exited: ""
+churngate: heap exit 4825344 33554432
+% ls /srv
+/srv/boot
+/srv/factotum
+process 77 exited: ""
+churngate: heap exit 4825344 33554432
+% ls /srv
+/srv/boot
+/srv/factotum
+process 78 exited: ""
+churngate: heap exit 4825344 33554432
+% ls /srv
+/srv/boot
+/srv/factotum
+process 79 exited: ""
+churngate: heap exit 4825344 33554432
+% ls /srv
+/srv/boot
+/srv/factotum
+process 80 exited: ""
+churngate: heap exit 4825344 33554432
+% RIO-CONTROL-NO-RIO
+rio-gate: post-pass ok — zero cpurc: FAIL in the capture
+rio-gate: post-pass ok — zero kernel panic markers (drawterm's own sysfatal exit pair excluded)
+rio-gate: post-pass ok — the per-bake DEMO <redacted> redacted from the retained capture (0 occurrence(s) mapped)
+rio-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, -G control session, serial /srv shows no rio entry (RIO-CONTROL-NO-RIO)
+== rio control-noG gate PASS — capture retained at /home/req/r9-witness-work/out/control/rio-gate-control-noG.log

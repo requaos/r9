@@ -1,0 +1,11 @@
+# Task 2 step 1 — fresh never-substitutable Mac builder probe.
+# Executed on the Mac at 2026-11-23T05:40:39Z from this worktree.
+# command:
+nix build --no-link --print-out-paths --impure --expr 'derivation { name = "r9-builder-probe-1795412439"; system = "aarch64-linux"; builder = "/bin/sh"; args = [ "-c" "echo ok > $out" ]; }'
+# build exit: 0
+# printed path: /nix/store/bjjjy4hvdidvkw84wfl6md246lsw00iq-r9-builder-probe-1795412439
+# nix path-info: /nix/store/bjjjy4hvdidvkw84wfl6md246lsw00iq-r9-builder-probe-1795412439 (exit 0)
+# content of the output: ok
+# The host is aarch64-darwin and cannot realise an aarch64-linux derivation locally,
+# so the build went to the registered ssh-ng://r9-lima-builder and the Mac's own
+# daemon imported the result (the S2 copy-back fix).

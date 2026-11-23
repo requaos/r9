@@ -1,0 +1,70 @@
+# evidence: out/rio/rio.log (driver output; last 40 lines as returned, xkbcomp warnings trimmed as non-decisive)
+% ls /srv
+/srv/boot
+/srv/factotum
+process 76 exited: ""
+churngate: heap exit 4693248 33554432
+% ls /srv
+/srv/boot
+/srv/factotum
+process 77 exited: ""
+churngate: heap exit 4693248 33554432
+% ls /srv
+/srv/boot
+/srv/factotum
+process 78 exited: ""
+churngate: heap exit 4693248 33554432
+% ls /srv
+/srv/boot
+/srv/factotum
+process 79 exited: ""
+churngate: heap exit 4693248 33554432
+% ls /srv
+/srv/boot
+/srv/factotum
+process 80 exited: ""
+churngate: heap exit 4693248 33554432
+% RIO-FAIL rio-not-serving — no rio.<user>.<pid> + riowctl.<user>.<pid> pair in the serial /srv listing within the budget
+RIO-ERROR: the rio gate FAILED (rc=1 — the driver named the failure on stderr; capture: /home/req/r9-witness-work/out/rio/rio-gate-rio.log)
+
+# evidence: out/rio/rio-gate-rio.log (retained capture; last 40 lines as returned)
+/srv/boot
+/srv/factotum
+process 73 exited: ""
+churngate: heap exit 4693248 33554432
+% ls /srv
+/srv/boot
+/srv/factotum
+process 74 exited: ""
+churngate: heap exit 4693248 33554432
+% ls /srv
+/srv/boot
+/srv/factotum
+process 75 exited: ""
+churngate: heap exit 4693248 33554432
+% ls /srv
+/srv/boot
+/srv/factotum
+process 76 exited: ""
+churngate: heap exit 4693248 33554432
+% ls /srv
+/srv/boot
+/srv/factotum
+process 77 exited: ""
+churngate: heap exit 4693248 33554432
+% ls /srv
+/srv/boot
+/srv/factotum
+process 78 exited: ""
+churngate: heap exit 4693248 33554432
+% ls /srv
+/srv/boot
+/srv/factotum
+process 79 exited: ""
+churngate: heap exit 4693248 33554432
+% ls /srv
+/srv/boot
+/srv/factotum
+process 80 exited: ""
+churngate: heap exit 4693248 33554432
+% 
