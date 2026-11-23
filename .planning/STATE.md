@@ -5,16 +5,16 @@ milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
 current_phase: 01
 current_phase_name: Stage P0 - Cross-Build Harness
 status: executing
-stopped_at: Completed 01-18 + 01-19 + 01-29; wave 12 (01-20 + 01-21) next
-last_updated: "2026-11-23T11:57:12.955Z"
+stopped_at: Completed 01-20 + 01-21; wave 13 (01-22 stop B + 01-30) next
+last_updated: "2026-11-23T12:12:39.463Z"
 last_activity: 2026-11-23
-last_activity_desc: gates and manifests landed; parallel wave 12 next
-state_head: 323fb7ad4585b0e30cb8d23a9b137bd0c63561e9
+last_activity_desc: probe swap and arm64 gates landed; owner stop B preparation next
+state_head: 9dab83309fb531de95f9c57e9f5c527efe69c090
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 32
-  completed_plans: 21
+  completed_plans: 23
   percent: 0
 ---
 
@@ -30,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-11-22)
 ## Current Position
 
 Phase: 01 (Stage P0 - Cross-Build Harness) — EXECUTING
-Plan: 21 of 32
+Plan: 23 of 32
 Status: Ready to execute
-Last activity: 2026-11-23 — gates and manifests landed; parallel wave 12 next
+Last activity: 2026-11-23 — probe swap and arm64 gates landed; owner stop B preparation next
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -176,5 +176,5 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 ## Session Continuity
 
 Last session: 2026-11-23T04:57:34.842Z
-Stopped at: Completed 01-18 + 01-19 + 01-29; wave 12 (01-20 + 01-21) next
+Stopped at: Completed 01-20 + 01-21; wave 13 (01-22 stop B + 01-30) next
 Resume file: None
