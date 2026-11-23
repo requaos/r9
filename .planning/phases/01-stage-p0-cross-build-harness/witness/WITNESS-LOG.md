@@ -834,6 +834,80 @@ Expected: `soak` PASS on the tap venue; `equiv` all rows `match`;
 new hash; `store_verify` PASS. The Harvey diff remains unapplied until
 a green run and an explicit APPROVE.
 
+**Resolved by stop C3 — all four were green.** See the Stop C3 section
+below.
+
+## Stop C3 — plan 01-34, x86_64 KVM
+
+STATUS stopc3: PASS for the four selected steps. With stop C2's full
+8/8 and tap stress, every witness step is now green. Only three owner
+items remain before the Harvey flip: the standalone amd64 TCG gate
+result (not in this return), the explicit HARN-08 equivalence approval,
+and the Harvey diff APPROVE/REJECT. The diff remains unapplied.
+
+- **Return:** `witness-src/01-34` at
+  `d6106dbfcdbfa16be02a14b1d40f95adcbc2226e` on our halted-summary tip
+  (`678a88c`); return directory `witness/return-01-34/`; source HEAD
+  `678a88c`; host `teeniebox` (x86_64-linux, nproc 16, 30 GiB RAM, nix
+  2.35.6, `DEV_KVM=writable`); session 2026-11-23T19:39:17Z →
+  19:44:52Z; survivors none; credential scan clean.
+- **Steps selected:** `soak kernel equiv store_verify` (the four red/
+  unproven C2 steps; no full rerun).
+- **Harvey:** NOT APPROVED — no change, staging or commit; the prepared
+  diff remains unapplied.
+
+### Per-step verdicts
+
+VERDICT stopc3-soak: PASS
+EVIDENCE stopc3-soak: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c3/soak.log
+
+VERDICT stopc3-equiv: PASS
+EVIDENCE stopc3-equiv: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c3/equiv/report.tsv
+EVIDENCE stopc3-equiv: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c3/equiv/rows.tsv
+
+VERDICT stopc3-kernel: PASS
+EVIDENCE stopc3-kernel: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c3/kernel.log
+
+VERDICT stopc3-store-verify: PASS
+EVIDENCE stopc3-store-verify: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c3/store-verify.log
+
+EVIDENCE stopc3-env: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c3/env.txt
+EVIDENCE stopc3-summary: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-c3/summary.tsv
+
+### The combined witness set is green
+
+- **full — 8/8** (stop C2, carried): `GATE PASS full`, `fpprobe: ok`,
+  `T1-OK fpprobe`, 39 expected T1-OK, zero T1-FAIL.
+- **stress — PASS** (stop C2, carried): tap venue label, 9 tcpblast,
+  zero FAIL.
+- **store_verify — PASS** (stop C2 carried and C3 repeated): both trees
+  `STORE-VERIFY-OK`.
+- **soak — PASS**: `netip: L2-TRUTH tap venue`,
+  `netsoak-r9-x64: ALL STAGES PASS` (static + ARP L2-truth + venue
+  label; baseline 2048 + burst 8x512; counted 9 tcpblast: done; zero
+  `netip: FAIL`).
+- **equiv — PASS**: all 10 gate rows `match`, including the four
+  recorded expectations — tier1 `T1-OK=39/39`, auth `AUTH-OK=10/10`,
+  churn `CATS-DONE 1400=1/1`, stress `netstress: venue tap=1/1` — plus
+  soak `NETIP-DONE=1/1; soak ok=1/1`. The `recorded stop-C2 expectation
+  (owner approval pending)` label is the run's own provenance; the
+  owner's approval is the remaining HARN-08 item.
+- **kernel — PASS**: `r9-kernel-x64-678a88c`, kernel ELF sha256
+  `2377dc2f…`, boot-iso `KERNEL-BOOTISO-BUILD-OK` and
+  `KERNEL-BOOTISO-REBUILD-OK` on the new
+  `sha256-b6OcAb2pOufpr5AqJj2SqhXnrTYsIQRTgkh9FcgtNT0=`.
+
+### Still outstanding (owner)
+
+1. **Standalone amd64 TCG gate** —
+   `cargo xtask gate --arch x86-64 --accel tcg` on the x86_64 host. The
+   `GATE-PASS control-no-rio` lines in the return belong to the
+   full/stress drawterm legs; they are NOT this run.
+2. **HARN-08 equivalence approval** — approve the four recorded
+   expectations (tier1 39, auth 10, churn 1, stress tap venue).
+3. **Harvey diff** — explicit APPROVE or REJECT: <changes>. The diff
+   stays unapplied until both this and the TCG result are green.
+
 ### The prepared Harvey review packet
 
 - **Full diff:** `$HOME/r9-harvey-flip/harvey-flip.diff` — 511797 bytes,
