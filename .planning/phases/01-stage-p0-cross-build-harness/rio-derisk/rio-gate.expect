@@ -286,6 +286,25 @@ proc xfeed_type {wid secretfile settle} {
 	return $wid
 }
 
+# The documented fallback for the 19-10 residual: on an app-baked venue
+# the profile's draw-presence guard skips the login-time `exec rio`, so
+# the authenticated session leaves a cpu% shell.  Type the manual start
+# into that shell through the same focused X11 window.  This does not
+# weaken the D-28 marker: the pair is still the only PASS condition.
+proc xstart_rio {wid} {
+	if {[catch {exec xdotool windowfocus --sync $wid} out]} {
+		return -code error "window-focus-failed: $out"
+	}
+	after 500
+	if {[catch {exec xdotool type --clearmodifiers --delay 40 {plumber; rio}} out]} {
+		return -code error "xtest-type-failed: $out"
+	}
+	if {[catch {exec xdotool key --clearmodifiers Return} out]} {
+		return -code error "xtest-return-failed: $out"
+	}
+	return $wid
+}
+
 # --- rio-diag: the X11 window evidence (diagnostic only) ---------------
 # x11.txt gets the window identity, geometry, focus and WM properties
 # before typing and after Return.  Each command's failure is recorded in
@@ -542,7 +561,23 @@ if {$diag_mode} {
 	set diag_pid_re "^[string map {. \\.} $diag_pid_prefix](\[0-9\]+)\$"
 }
 set timeout $srv_poll_wait
+set manual_started 0
 for {set i 0} {$i < $srv_polls} {incr i} {
+	if {$rio_mode && !$manual_started && !$found_rio && !$found_wctl && $i >= 1} {
+		# The first serial poll found no pair.  On this app-baked venue
+		# the profile's draw guard skips the login-time `exec rio` (the
+		# 19-10 residual; the stop-A2 screenshot shows the authenticated
+		# cpu% shell).  Use the documented manual start once, then keep
+		# polling.  If the profile did auto-start rio, the pair is
+		# already present and this branch never fires.
+		if {[catch {xstart_rio $wid} err]} {
+			puts stderr "rio-gate: manual rio start failed ($err)"
+		} else {
+			puts stderr "rio-gate: no pair after poll 1 — sent the documented manual start (plumber; rio)"
+		}
+		set manual_started 1
+		after 5000
+	}
 	send -- "ls /srv\r"
 	expect {
 		-re {% } {

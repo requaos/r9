@@ -367,35 +367,22 @@ patch_diag_profile() {
 	cp "$prof" "$bak" || err "profile-backup-failed: $prof -> $bak"
 	RIO_DIAG_PROFILE="$prof"
 	RIO_DIAG_PROFILE_BAK="$bak"
-	local marker_line="syscall create $RIO_DIAG_MARKER 1 0666 || echo r9-diag-marker-failed"
-	local pid_line="syscall create ${RIO_DIAG_PID_PREFIX}\$pid 1 0666 || echo r9-diag-pid-failed"
-	if awk -v mline="$marker_line" -v pline="$pid_line" '
-		BEGIN { inserted = 0 }
-		{
-			if (!inserted && $0 ~ /^[[:space:]]*exec[[:space:]]+rio([[:space:]]|$)/) {
-				print "\t\t\t" mline
-				print "\t\t\t" pline
-				inserted = 1
-			}
-			print
-		}
-		END { exit (inserted ? 0 : 3) }
-	' "$prof" >"$patched"; then
-		cp "$patched" "$prof" || err "profile-patch-failed: $prof"
-		echo "== rio-diag: staged profile patched (marker $RIO_DIAG_MARKER, pid $RIO_DIAG_PID_PREFIX<pid>; backup $bak)"
-	else
-		# The profile shape moved: stage the markers at the top so the
-		# evidence still names the login, then refuse the run — a
-		# diagnostic that silently mis-reads an unknown profile is worse
-		# than no run.
-		{
-			printf '%s\n' "syscall create $RIO_DIAG_MARKER 1 0666 || echo r9-diag-marker-failed"
-			printf '%s\n' "syscall create ${RIO_DIAG_PID_PREFIX}\$pid 1 0666 || echo r9-diag-pid-failed"
-			cat "$prof"
-		} >"$patched"
-		cp "$patched" "$prof" || true
-		err "profile-unparsable: no \`exec rio' line in $prof (markers staged at the top for diagnosis; refusing a run that cannot mark the handoff)"
-	fi
+	local marker_line="/amd64/bin/syscall create $RIO_DIAG_MARKER 1 0666 || echo r9-diag-marker-failed"
+	local pid_line="/amd64/bin/syscall create ${RIO_DIAG_PID_PREFIX}\$pid 1 0666 || echo r9-diag-pid-failed"
+	# The marker MUST be unconditional at the top of the profile.  The
+	# stop-A2 screenshots show the login is accepted (the cpu% shell
+	# appears) but the profile's draw-presence guard skips `exec rio` on
+	# this app-baked venue (the 19-10 residual).  A marker placed before
+	# `exec rio` would then be a false negative: login-not-reached when
+	# the login actually reached the profile.  The absolute syscall path
+	# keeps it independent of the profile's PATH binds.
+	{
+		printf '%s\n' "$marker_line"
+		printf '%s\n' "$pid_line"
+		cat "$prof"
+	} >"$patched" || err "profile-patch-write-failed: $patched"
+	cp "$patched" "$prof" || err "profile-patch-failed: $prof"
+	echo "== rio-diag: staged profile patched at the top (marker $RIO_DIAG_MARKER, pid $RIO_DIAG_PID_PREFIX<pid>; backup $bak)"
 }
 
 if [ "$RIO_DIAG" = "1" ]; then

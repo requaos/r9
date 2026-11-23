@@ -311,19 +311,28 @@ one diagnostic mode, `RIO_MODE=rio-diag`, that answers exactly that question
 without touching the D-28 marker.
 
 MARKER-CONTRACT: before the bake, rio-diag patches the scratch tree's staged cpu
-profile (`build/x86_64/root-tree/usr/glenda/lib/profile:58-64`) to create two
-entries immediately before its `exec rio` line, and restores the original from
-`build/x86_64/r9-diag-profile.orig` on every exit path the gate controls (a
-SIGKILL can outrun the trap; the next rio-diag invocation, and the witness
-driver's scratch-tree reuse, restore from that backup first):
+profile (`build/x86_64/root-tree/usr/glenda/lib/profile`) to create two entries
+**at the top of the profile** (unconditional; not before `exec rio`), and
+restores the original from `build/x86_64/r9-diag-profile.orig` on every exit path
+the gate controls (a SIGKILL can outrun the trap; the next rio-diag invocation,
+and the witness driver's scratch-tree reuse, restore from that backup first):
 
-    syscall create /srv/r9-login-ok 1 0666
-    syscall create /srv/r9-login-pid.$pid 1 0666
+    /amd64/bin/syscall create /srv/r9-login-ok 1 0666
+    /amd64/bin/syscall create /srv/r9-login-pid.$pid 1 0666
 
 Both are `#s` service entries, so the **serial console's** `ls /srv` lists them
 from the kernel-wide table (`port/src/devsrv.rs:59`; `#s` bound at `/srv` by
 `build/x86_64/root-tree/lib/namespace:25`, A5). That is the point of the
 serial-visible marker: it crosses namespaces without touching the session.
+
+WHY UNCONDITIONAL: the stop-A2 screenshots show the login was **accepted** — the
+drawterm window moves from `glenda@DEMO-harvey password:` to
+`cpu: failed to chdir to '/home/req/code/r9'` and a `cpu%` shell. The profile
+ran, but its `test -e /mnt/term/dev/draw` guard skipped `exec rio` (the 19-10
+residual: "login-time desktop auto-start skip on app-baked venues — manual
+`plumber; rio` green"). A marker inserted before `exec rio` therefore reported
+`login-not-reached` as a false negative. At the top of the profile it answers
+only the login question; the pair still answers the rio question.
 
 Why not `echo login-ok >/srv/r9-login-ok`: r9's srv device is not a regular
 filesystem. `create` is OWRITE-only and returns an entry whose write side posts
@@ -339,14 +348,20 @@ failing write before `exec rio` would abort the leg.
 INTERPRETATION (stop A2):
 
 - marker present + D-28 pair absent = **RIO-START-FAIL / LOGIN-OK-RIO-FAIL**:
-  the login reached the profile's guarded rio handoff and rio failed to serve.
+  the login reached the profile; rio did not serve (including the draw-guard
+  skip the manual start now covers).
 - marker absent = **LOGIN-FAIL**: the X11 feed never reached the profile
-  (focus/typing/timing or a rejected password). The marker sits after the draw
-  test and `plumber`, so absence means "did not reach the handoff", not strictly
-  "password rejected"; `x11.txt` and the PNGs separate a window/focus problem
-  from an auth rejection.
+  (focus/typing/timing or a rejected password). `x11.txt` and the PNGs separate
+  a window/focus problem from an auth rejection.
 - marker present + pair present = **RIO-SERVING** (the same run is also a
   passing rio leg).
+
+MANUAL-START FALLBACK: in rio and rio-diag modes, if the first serial `/srv`
+poll finds no pair, the driver focuses the drawterm window and types the
+documented `plumber; rio` into the authenticated `cpu%` shell, then keeps
+polling. This is the 19-10 residual's documented fallback, not a marker change:
+the D-28 pair remains the only PASS condition, and the fallback never fires when
+the profile's auto-start already produced the pair.
 
 CAPTURE: the driver records the drawterm window identity, geometry and focus
 before typing and after Return (`xdotool search`, `getwindowgeometry`,
