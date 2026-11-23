@@ -1,0 +1,2 @@
+error: tap mode needs the netaddr seam: /home/req/code/r9/build/x86_64/root-tree/lib/netaddr.rc missing — run from the harvey repo root or set HARVEY (the tap checks key on its tap_gwv4/blastport)
+soak-PRECONDITION-UNMET: the tap/bridge venue is absent.  This step needs the owner host: a configured bridge, the setuid wrapper and the pinned seam (16-05/D-13); slirp is never accepted as evidence.

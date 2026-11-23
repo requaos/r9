@@ -1,0 +1,9 @@
+app	result
+drawterm-gate-x64	PASS
+boot-r9-x64	PASS
+boot-r9-smoke-x64	PASS
+boot-r9-tier1-x64	FAIL
+boot-r9-net-smoke-x64	PASS
+boot-r9-services-x64	PASS
+boot-r9-churn-x64	PASS
+boot-r9-auth-x64	PASS
