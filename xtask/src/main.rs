@@ -3783,7 +3783,12 @@ fn smoke_initrd_stale(paq: &Path) -> Result<bool> {
     let Some(paq_mtime) = std::fs::metadata(paq).and_then(|m| m.modified()).ok() else {
         return Ok(true);
     };
-    let mut inputs = image::input_paths(&manifest, &harvey);
+    let mut inputs = image::input_paths(
+        &manifest,
+        &ws.join("xtask/manifests/arm64"),
+        &harvey,
+        &ws,
+    );
     inputs.push(manifest_path);
     Ok(inputs.iter().any(|input| {
         std::fs::metadata(input)
