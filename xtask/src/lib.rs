@@ -17,6 +17,8 @@
 //! the island moves whole.
 
 pub mod config;
+pub mod harvey;
+pub mod image;
 pub mod uregcheck;
 
 use std::{env, fmt};

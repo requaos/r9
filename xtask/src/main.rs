@@ -3,7 +3,7 @@ use xtask::config::{
     apply_to_qemu_step_with_overrides, apply_to_test_step, apply_virt_netdev, prepare_initrd_dtb,
     virt_resolved,
 };
-use xtask::{Arch, DynError, Profile, Result, env_or, uregcheck};
+use xtask::{Arch, DynError, Profile, Result, env_or, harvey, image, uregcheck};
 use std::{
     env, fmt,
     io::{Read, Write},
@@ -3675,37 +3675,28 @@ impl CleanStep {
 /// `cargo xtask ureg-check`: standalone form of the
 /// cross-repo ureg.h drift gate (also a BootTestStep precondition).
 /// `cargo xtask initrd`: assemble
-/// `target/bootfs.paq` from the staged Harvey aarch64 binaries
-/// (`build/aarch64/smoke-out/{init,hello}`, produced by
-/// `build/aarch64/stage-build.sh`) with the Harvey checkout's host-built
-/// `mkpaqfs`, and print the image's sha256 for the
-/// evidence log.  The image and the staging tree are target/ build
-/// artifacts — never committed.  `--arch`/`--config` are accepted for the
-/// Step idiom; the assembly is
-/// config-independent — one image serves every profile that names it.
+/// `target/bootfs.paq` from the per-file manifest
+/// `xtask/manifests/arm64/smoke.toml` (D-15/D-16): every member is staged
+/// from the resolved Harvey tree into `target/images/aarch64/` and baked
+/// with the host `mkpaqfs` named by `R9_MKPAQFS`, then the image's sha256
+/// is printed for the evidence log.  The image, the staging tree and the
+/// member list are target/ build artifacts — never committed, and nothing
+/// is ever written into the Harvey tree (HARN-02).  `--arch`/`--config`
+/// are accepted for the Step idiom; the assembly is config-independent —
+/// one image serves every profile that names it.
 struct InitrdStep {
     verbose: bool,
 }
 
-/// The initrd staging tree + output image, relative to the workspace.
-const INITRD_TREE: &str = "target/initrd-tree";
+/// The initrd output image, relative to the workspace (config_virtexec
+/// names this path; unchanged by D-16).
 const BOOTFS_PAQ: &str = "target/bootfs.paq";
-/// The staged binaries the initrd carries (the staged
-/// init + the hello ABI-bisect binary + the rfork/fd-ops smoke +
-/// the notes smoke + the stack-growth smoke + the
-/// interruptible-sleep smoke) + the 20-09 churn pair (churnmark, the
-/// virtchurn driver's exec payload, and churnsem, its RFMEM contention
-/// generation — walked by name from the flat root).
-const INITRD_FILES: [&str; 8] = [
-    "init",
-    "hello",
-    "smokefork",
-    "smokenote",
-    "stacksmoke",
-    "smokesleep",
-    "churnmark",
-    "churnsem",
-];
+/// The aarch64 smoke manifest: one entry per image member (D-15).
+const SMOKE_MANIFEST: &str = "xtask/manifests/arm64/smoke.toml";
+/// The staging tree the engine fills, under target/ only (HARN-02).
+const SMOKE_STAGE_DIR: &str = "target/images/aarch64/smoke.stage";
+/// The D-29 member list of the staged image.
+const SMOKE_MEMBERS: &str = "target/images/aarch64/smoke.members";
 
 impl InitrdStep {
     fn new(matches: &clap::ArgMatches) -> Self {
@@ -3717,65 +3708,86 @@ impl InitrdStep {
     }
 }
 
-/// Assemble target/bootfs.paq from the Harvey SMOKE staging dir
-/// (`build/aarch64/smoke-out/` — the exec-family
-/// profiles need the smoke init's markers, and the boot chain's REAL init
-/// shares the old `out/` path under "last writer wins"; the smoke stage
-/// owns smoke-out/ exclusively, so the two gates can never clobber
-/// each other).  Both producers
-/// are named in the error text when absent — a missing mkpaqfs or a missing
-/// staged binary is a loud build error, never a silent boot.
-fn assemble_initrd(verbose: bool) -> Result<()> {
-    // R9_HARVEY_DIR required — there is no default checkout path.
-    let harvey = uregcheck::harvey_dir()?;
-    let mkpaqfs = harvey.join(".build/bin/mkpaqfs");
-    if !mkpaqfs.is_file() {
-        return Err(format!(
-            "mkpaqfs host binary missing at {} — build it in the Harvey checkout with \
-             `nix develop -c sh build/aarch64/mkpaqfs-host.sh` (the 04-01 recipe)",
-            mkpaqfs.display()
-        )
-        .into());
-    }
-    let ws = workspace();
-    let tree = ws.join(INITRD_TREE);
-    if tree.exists() {
-        std::fs::remove_dir_all(&tree)?;
-    }
-    std::fs::create_dir_all(&tree)?;
-    // The staged init binds #p at /proc itself in the
-    // namespace era (the real chain's connectembed shape) — the mount
-    // target must exist, so the tree ships the empty dir.
-    std::fs::create_dir_all(tree.join("proc"))?;
-    for name in INITRD_FILES {
-        let src = harvey.join(format!("build/aarch64/smoke-out/{name}"));
-        if !src.is_file() {
-            return Err(format!(
-                "staged binary {} missing — run `sh build/aarch64/stage-build.sh` in the Harvey \
-                 checkout (04-05) to compile the aarch64 userland smoke stage into \
-                 build/aarch64/smoke-out/",
-                src.display()
-            )
-            .into());
+/// The host `mkpaqfs` binary: `R9_MKPAQFS` names it explicitly (the nix
+/// devshell exports it from plan 01-13 onward; before that a checkout's
+/// `.build/bin/mkpaqfs` can be named).  There is no derived default —
+/// mkpaqfs is not part of the Harvey TREE contract.
+fn mkpaqfs_path() -> Result<PathBuf> {
+    match env::var("R9_MKPAQFS") {
+        Ok(value) if !value.trim().is_empty() => {
+            let path = PathBuf::from(value);
+            if !path.is_file() {
+                return Err(format!(
+                    "R9_MKPAQFS names {} but it is not a file — name the host mkpaqfs binary",
+                    path.display()
+                )
+                .into());
+            }
+            Ok(path)
         }
-        std::fs::copy(&src, tree.join(name))?;
+        _ => Err("R9_MKPAQFS is not set — name the host mkpaqfs binary explicitly (the nix \
+                  devshell exports it from plan 01-13 onward; before that a Harvey checkout's \
+                  .build/bin/mkpaqfs can be named, e.g. \
+                  R9_MKPAQFS=/path/to/harvey/.build/bin/mkpaqfs); xtask derives no default"
+            .into()),
     }
+}
+
+/// Load the aarch64 smoke manifest from the workspace.
+fn smoke_manifest() -> Result<image::Manifest> {
+    let path = workspace().join(SMOKE_MANIFEST);
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| -> DynError { format!("smoke initrd manifest {}: {e}", path.display()).into() })?;
+    image::parse_manifest(&text)
+}
+
+/// Assemble target/bootfs.paq from the per-file smoke manifest through the
+/// one stage-and-bake engine (D-16).  The staged init binds #p at /proc
+/// itself in the namespace era (the real chain's connectembed shape), so
+/// the manifest carries the empty `/proc` dir.  A missing R9_MKPAQFS or a
+/// missing manifest source is a loud build error naming the producer,
+/// never a silent boot.
+fn assemble_initrd(verbose: bool) -> Result<()> {
+    let ws = workspace();
+    let manifest = smoke_manifest()?;
+    // The per-architecture resolver: R9_HARVEY_DIR wins, then
+    // R9_HARVEY_DIR_ARM64 (D-21).  No built-in default path (D-01).
+    let harvey = harvey::harvey_dir(Arch::Aarch64)?;
+    let mkpaqfs = mkpaqfs_path()?;
+    let stage = ws.join(SMOKE_STAGE_DIR);
+    image::stage(&manifest, &harvey, &stage)?;
     let paq = ws.join(BOOTFS_PAQ);
-    let mut cmd = Command::new(&mkpaqfs);
-    cmd.arg("-o").arg(&paq).arg(&tree);
-    cmd.current_dir(&ws);
     if verbose {
-        println!("Executing {cmd:?}");
+        println!("Executing {} -o {} {}", mkpaqfs.display(), paq.display(), stage.display());
     }
-    let status = annotated_status(&mut cmd)?;
-    if !status.success() {
-        return Err("mkpaqfs failed".into());
-    }
+    image::bake(&mkpaqfs, &stage, &paq)?;
+    let members = image::member_list(&stage)?;
+    image::write_members(&members, &ws.join(SMOKE_MEMBERS))?;
     // Evidence: print the image's sha256 (mkpaqfs embeds a time field, so the
     // digest is per-bake — the phase log records each evidence run's value).
-    let sha = sha256_of(&paq)?;
+    let sha = image::sha256_file(&paq)?;
     println!("initrd: {} sha256 {sha}", paq.display());
     Ok(())
+}
+
+/// Whether the assembled smoke image is missing or older than any of its
+/// manifest inputs (every `from` path plus the manifest file itself).
+fn smoke_initrd_stale(paq: &Path) -> Result<bool> {
+    let ws = workspace();
+    let manifest_path = ws.join(SMOKE_MANIFEST);
+    let manifest = smoke_manifest()?;
+    let harvey = harvey::harvey_dir(Arch::Aarch64)?;
+    let Some(paq_mtime) = std::fs::metadata(paq).and_then(|m| m.modified()).ok() else {
+        return Ok(true);
+    };
+    let mut inputs = image::input_paths(&manifest, &harvey);
+    inputs.push(manifest_path);
+    Ok(inputs.iter().any(|input| {
+        std::fs::metadata(input)
+            .and_then(|m| m.modified())
+            .ok()
+            .is_some_and(|input_mtime| input_mtime > paq_mtime)
+    }))
 }
 
 /// One churn gate's marker vocabulary (17-02's q35churn set and its
@@ -3924,22 +3936,7 @@ fn churn_post_pass(capture: &[u8], m: &ChurnMarkers) -> Result<ChurnVerdict> {
     Ok(ChurnVerdict { iterations, want_marks, semgens, steady, measured, ceiling })
 }
 
-/// sha256 of a file via a host tool — no new crates.  coreutils
-/// `sha256sum` (nix devshell, linux) first, macOS `shasum` as fallback.
-fn sha256_of(path: &Path) -> Result<String> {
-    let out = Command::new("sha256sum")
-        .arg(path)
-        .output()
-        .or_else(|_| Command::new("shasum").arg("-a").arg("256").arg(path).output())
-        .map_err(|e| format!("no sha256 tool on PATH (tried sha256sum, shasum): {e}"))?;
-    if !out.status.success() {
-        return Err(format!("sha256 of {} failed: {}", path.display(), out.status).into());
-    }
-    let text = String::from_utf8(out.stdout)?;
-    Ok(text.split_whitespace().next().unwrap_or("").to_string())
-}
-
-/// Build-if-missing/stale hook: `qemu`/`boot-test` invocations whose
+/// Build-if-missing/stale hook: see [`smoke_initrd_stale`].
 /// config carries an initrd image under target/ (the assembled bootfs.paq)
 /// reassemble it when absent or older than the staged inputs.  Configs with
 /// no initrd, or with a target/-external image (the committed probe fixture —
@@ -3968,20 +3965,11 @@ fn ensure_initrd_image(config: &Configuration, verbose: bool) -> Result<()> {
         return Ok(());
     }
     let paq = workspace().join(&initrd.file);
-    // R9_HARVEY_DIR required — there is no default checkout path.
-    let harvey = uregcheck::harvey_dir()?;
-    let paq_mtime = std::fs::metadata(&paq).and_then(|m| m.modified()).ok();
-    let stale = paq_mtime.is_some_and(|paq_mtime| {
-        INITRD_FILES.iter().any(|name| {
-            std::fs::metadata(harvey.join(format!("build/aarch64/smoke-out/{name}")))
-                .and_then(|m| m.modified())
-                .ok()
-                .is_some_and(|input_mtime| input_mtime > paq_mtime)
-        })
-    });
-    if paq_mtime.is_none() || stale {
+    // The staleness check reads the manifest's inputs through the resolver;
+    // the manifest file itself is an input too (an edited manifest rebakes).
+    if smoke_initrd_stale(&paq)? {
         // assemble_initrd fails loudly with the producing command named when
-        // mkpaqfs or the staged inputs are absent.
+        // R9_MKPAQFS or a manifest source is absent.
         println!("xtask: initrd {} missing or stale — assembling", initrd.file);
         assemble_initrd(verbose)?;
     }

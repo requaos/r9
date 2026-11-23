@@ -1,0 +1,67 @@
+# The aarch64 smoke initrd (plan 01-08, D-15/D-16/D-29).
+#
+# One entry per image member: the flat root the virtexec family boots.  The
+# staged binaries come from the Harvey tree's build/aarch64/smoke-out/
+# (04-05's stage-build.sh); the init binds #p at /proc itself, so the image
+# ships the empty /proc dir.
+#
+# Modes are the staged binaries' own modes (0775, and hello's 0755): the
+# D-29 member-list comparison against the pre-D-16 hard-coded assembler
+# records the mode, and the old assembler preserved the source mode via
+# fs::copy.  A uniform 0755 would change seven members' mode bits and break
+# the empty-diff acceptance criterion.
+
+schema = 1
+arch = "arm64"
+image = "smoke"
+
+[[file]]
+path = "/init"
+source = "harvey"
+from = "build/aarch64/smoke-out/init"
+mode = "0775"
+
+[[file]]
+path = "/hello"
+source = "harvey"
+from = "build/aarch64/smoke-out/hello"
+mode = "0755"
+
+[[file]]
+path = "/smokefork"
+source = "harvey"
+from = "build/aarch64/smoke-out/smokefork"
+mode = "0775"
+
+[[file]]
+path = "/smokenote"
+source = "harvey"
+from = "build/aarch64/smoke-out/smokenote"
+mode = "0775"
+
+[[file]]
+path = "/stacksmoke"
+source = "harvey"
+from = "build/aarch64/smoke-out/stacksmoke"
+mode = "0775"
+
+[[file]]
+path = "/smokesleep"
+source = "harvey"
+from = "build/aarch64/smoke-out/smokesleep"
+mode = "0775"
+
+[[file]]
+path = "/churnmark"
+source = "harvey"
+from = "build/aarch64/smoke-out/churnmark"
+mode = "0775"
+
+[[file]]
+path = "/churnsem"
+source = "harvey"
+from = "build/aarch64/smoke-out/churnsem"
+mode = "0775"
+
+[[dir]]
+path = "/proc"
