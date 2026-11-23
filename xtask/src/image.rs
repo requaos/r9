@@ -461,9 +461,10 @@ fn validate_image_path(path: &str, image: &str, what: &str) -> Result<()> {
         )
         .into());
     }
+    let mut normals = 0usize;
     for component in components {
         match component {
-            Component::Normal(_) => {}
+            Component::Normal(_) => normals += 1,
             _ => {
                 return Err(format!(
                     "image manifest for \"{image}\": {what} {path:?} carries a `.` or `..` \
@@ -472,6 +473,13 @@ fn validate_image_path(path: &str, image: &str, what: &str) -> Result<()> {
                 .into())
             }
         }
+    }
+    if normals == 0 {
+        return Err(format!(
+            "image manifest for \"{image}\": {what} {path:?} names the image root — name a path \
+             inside it (e.g. \"/init\")"
+        )
+        .into());
     }
     Ok(())
 }
@@ -809,15 +817,28 @@ fn copy_with_mode(src: &Path, dest: &Path, mode: u32) -> Result<()> {
     Ok(())
 }
 
-/// The image path without its leading `/` (the staging-tree form).
+/// The image path without its leading or trailing `/` (the staging-tree
+/// form).
 fn image_rel(path: &str) -> String {
-    path.trim_start_matches('/').to_string()
+    path.trim_matches('/').to_string()
 }
 
 /// Join a `[[tree]]` image root and a member's relative path.
 fn join_image(base: &str, rel: &str) -> String {
     let base = base.trim_end_matches('/');
     if base.is_empty() { rel.to_string() } else { format!("{base}/{rel}") }
+}
+
+/// The xtask output-directory name of an arch (`aarch64` / `x86_64`).
+pub fn arch_dir(arch: crate::Arch) -> String {
+    arch.to_string().to_lowercase()
+}
+
+/// `target/images/<x86_64|aarch64>/<name>.paq` — where the image assembler
+/// and the `image:` config scheme place a named image (D-16).  Relative to
+/// the workspace, matching the other config-resolved paths.
+pub fn image_paq(arch: crate::Arch, name: &str) -> PathBuf {
+    PathBuf::from(format!("target/images/{}/{name}.paq", arch_dir(arch)))
 }
 
 /// Every file under `root`, recursively (sorted for deterministic walks).
