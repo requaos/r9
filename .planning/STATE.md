@@ -5,16 +5,16 @@ milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
 current_phase: 01
 current_phase_name: Stage P0 - Cross-Build Harness
 status: executing
-stopped_at: Completed 01-08-PLAN.md
-last_updated: "2026-11-23T04:52:04.145Z"
+stopped_at: Completed 01-09-PLAN.md
+last_updated: "2026-11-23T04:57:34.872Z"
 last_activity: 2026-11-23
 last_activity_desc: Phase 01 execution started
-state_head: a297253006d0a754c5d4a12e1259c483efebf7f5
+state_head: 15962835f3e648428b22f92824e0433a0ed536bb
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 31
-  completed_plans: 8
+  completed_plans: 9
   percent: 0
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-11-22)
 ## Current Position
 
 Phase: 01 (Stage P0 - Cross-Build Harness) — EXECUTING
-Plan: 9 of 31
+Plan: 10 of 31
 Status: Ready to execute
 Last activity: 2026-11-22 — Phase 01 execution started
 
@@ -60,6 +60,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 01 P06 | 80min | 3 tasks | 19 files |
 | Phase 01 P07 | 17min | 3 tasks | 5 files |
 | Phase 01 P08 | 4min | 2 tasks | 8 files |
+| Phase 01 P09 | 4min | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -110,6 +111,9 @@ Full log is the PROJECT.md Key Decisions table. Recent:
 - [Phase 01]: Plan 01-08: manifest modes follow the staged binaries (0775, hello 0755) rather than a uniform 0755, because the member list records mode and D-29 requires an empty diff.
 - [Phase 01]: Plan 01-08: R9_MKPAQFS is an explicit input with no derived default; mkpaqfs is not part of the Harvey TREE contract.
 - [Phase 01]: Plan 01-08: all seven Harvey-tree consumer sites resolve through harvey::harvey_dir(arch); uregcheck's zero-argument resolver is deleted and an include_str! source invariant keeps it that way.
+- [Phase 01]: Plan 01-09: the DEMO credential path is the bake-time p9sk1 generator's out/auth-creds.txt (user=norbert, the shared DEMO password also authenticates glenda); drawterm's X11 prompt reads /dev/cons -> kbdq fed only by X key events, never the pty (the host-stdin reader exists only with -G), so the pass-1 dt-password timeout had both a pty-path and an unknown-password cause
+- [Phase 01]: Plan 01-09: rio mode feeds the password through XTEST (xdotool) on the private Xvfb display, locating the window by WM class because drawterm never sets _NET_WM_PID; the password travels only through a 0600 scratch file whose path is exported, and a preloaded factotum key is the documented fallback if XTEST fails on the witness
+- [Phase 01]: Plan 01-09: teardown records qemu/drawterm exp_pid and Xvfb $! and sweeps /proc/<pid>/{cmdline,environ} for the run identity; the argv0 tag is never the only key (pass-1 PID 88800 showed the store path). The reusable witness driver runs rio, control and a13 at stop A (01-12)
 
 ### Open Questions (ten warnings, approved to be carried, not resolved)
 
@@ -171,6 +175,6 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 
 ## Session Continuity
 
-Last session: 2026-11-23T04:52:04.115Z
-Stopped at: Completed 01-08-PLAN.md
+Last session: 2026-11-23T04:57:34.842Z
+Stopped at: Completed 01-09-PLAN.md
 Resume file: None
