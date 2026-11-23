@@ -473,6 +473,22 @@ WRAP
             rev = harvey.rev or "unknown";
             narHash = harvey.narHash or "unknown";
           };
+          # 01-15 (D-29, HARN-03): the reference bake — Harvey's own
+          # x86_64 mkimage.sh run ONCE on a writable copy of the built
+          # amd64 tree, recording the nine image contracts' mkpaqfs inputs
+          # as member lists.  Plain stdenv venue (mkimage is a host shell
+          # bake; no Plan 9 namespace needed).  KERNDATE is the flake
+          # input's commit time (the pin's %ct); a rev-less session
+          # override falls back to bd7a698's commit time so a path input
+          # still bakes deterministically.
+          harveyReferenceAmd64 = import ./nix/harvey/reference.nix {
+            inherit pkgs;
+            tree = harveyTreeAmd64;
+            hostbin = harveyEnv.hostbin;
+            mkpaqfs = harveyMkpaqfs;
+            rev = harvey.rev or "unknown";
+            kerndate = harvey.lastModified or 1795382101;
+          };
           # 01-14 (D-16, T-01-48): the host p9sk1 domain generator r9's
           # assembler runs at bake time (R9_AUTHDOMAIN_GEN).  Tool only —
           # no domain is ever generated inside the derivation.
@@ -571,6 +587,8 @@ WRAP
           harvey-tree-arm64 = harveyTreeArm64;
           # 01-14 (HARN-07): the full amd64 tree.
           harvey-tree-amd64 = harveyTreeAmd64;
+          # 01-15 (D-29): the amd64 reference bake (nine member lists).
+          harvey-reference-amd64 = harveyReferenceAmd64;
           # 01-14 (D-16): the host authdomain-gen (Linux only — the donor
           # crypt.c's encrypt() clashes with macOS's unistd.h declaration).
           harvey-authdomain-gen = harveyAuthdomainGen;
@@ -968,6 +986,8 @@ WRAP
           # 01-14: the full amd64 tree, same lazy discipline (on the Mac it
           # is the aarch64-linux package realised by the registered builder).
           harveyTreeAmd64 = self.packages.${treeSystem}.harvey-tree-amd64;
+          # 01-15 (D-29): the reference bake, same lazy discipline.
+          harveyReferenceAmd64 = self.packages.${treeSystem}.harvey-reference-amd64;
           # A9: a context-discarded outPath is a plain string — entering the
           # shell sends no build, and the later `nix build` prints the same
           # path (S2's lazy-devshell proof).
@@ -975,6 +995,8 @@ WRAP
             builtins.unsafeDiscardStringContext harveyTreeArm64.outPath;
           harveyTreeAmd64Path =
             builtins.unsafeDiscardStringContext harveyTreeAmd64.outPath;
+          harveyReferenceAmd64Path =
+            builtins.unsafeDiscardStringContext harveyReferenceAmd64.outPath;
           # mkpaqfs and authdomain-gen are the EAGER exports: small host
           # tools, not trees, and every image assembly/bake needs them.
           # authdomain-gen is Linux-only (the donor crypt.c/encrypt clash
@@ -1009,6 +1031,12 @@ WRAP
               if [ -z "''${R9_HARVEY_DIR_AMD64:-}" ]; then
                 export R9_HARVEY_DIR_AMD64="${harveyTreeAmd64Path}"
               fi
+              # 01-15 (D-29): the amd64 reference bake (nine member lists).
+              # Lazy like the trees: entering the shell sends no build; the
+              # first --compare-reference/--emit-manifest realises it.
+              if [ -z "''${R9_HARVEY_REFERENCE_AMD64:-}" ]; then
+                export R9_HARVEY_REFERENCE_AMD64="${harveyReferenceAmd64Path}"
+              fi
               if [ -z "''${R9_MKPAQFS:-}" ]; then
                 export R9_MKPAQFS="${harveyMkpaqfs}/bin/mkpaqfs"
               fi
@@ -1025,6 +1053,7 @@ WRAP
               echo "apps: nix run .#build | nix run .#boot-virt | nix run .#default" >&2
               echo "harvey supply: R9_HARVEY_DIR_ARM64=$R9_HARVEY_DIR_ARM64 (lazy; realised on first use)" >&2
               echo "harvey supply: R9_HARVEY_DIR_AMD64=$R9_HARVEY_DIR_AMD64 (lazy; realised on first use)" >&2
+              echo "harvey supply: R9_HARVEY_REFERENCE_AMD64=$R9_HARVEY_REFERENCE_AMD64 (lazy; realised on first use)" >&2
               ${pkgs.lib.optionalString (harveyAuthdomainGen != null) ''
               echo "harvey supply: R9_AUTHDOMAIN_GEN=$R9_AUTHDOMAIN_GEN" >&2
               ''}

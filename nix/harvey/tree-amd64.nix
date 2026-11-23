@@ -717,6 +717,9 @@ env.mkTreeDerivation {
     #   build/x86_64/tiers/              mkimage §9b/11a/11b/14a/14b/15a/15b
     #                                    (the five tier lists the bakes compute from)
     #   build/x86_64/authdom-donors/     mkimage §14d (the vendored generator sources)
+    #   sys/include/                     mkimage §11k/§14i2/§14i3 (the host-side
+    #                                    6c builds' -Isys/include headers; the
+    #                                    reference bake is the first consumer)
     #   lib/font/bit/                    mkimage §P1/§11e2/§15e (the whole DESK-03 font tree)
     #   lib/ndb/                         the ndb data home (plan 01-14's named set)
     #   rc/lib/                          mkimage §8e/9g/10g/11n/12b/14j/15l (rcmain verbatim)
@@ -725,6 +728,7 @@ env.mkTreeDerivation {
     build/x86_64/root-tree
     build/x86_64/tiers
     build/x86_64/authdom-donors
+    sys/include
     lib/font/bit
     lib/ndb
     rc/lib
@@ -736,6 +740,8 @@ env.mkTreeDerivation {
     done
 
     # Single-file fixtures, each with the read site that names it.
+    #   mkimage.sh                          the reference bake itself (plan 01-15's
+    #                                       D-29 reference); the pin's own script
     #   tier1-sweep.rc / tier-termrc        mkimage §9f/§9g (the tier image's sweep + override)
     #   services-sweep.rc / services-termrc mkimage §11a/§11l (the services image)
     #   auth-sweep.rc / auth-termrc         mkimage §14a/§14j (the auth image)
@@ -745,9 +751,14 @@ env.mkTreeDerivation {
     #   authdomain-gen.c / authdomain.example  mkimage §14d (the host generator's source + interface shape)
     #   svctcpecho.c / authprobe.c          mkimage §11k/§14i2/§14i3 (host-side 6c/6l builds)
     #   sys/src/cmd/mkdir.c                 mkimage §11k (the hmkdir host-side build)
+    #   sys/src/cmd/auth/secstore/mkfile    mkimage §14b (the auth-suite resolver's
+    #                                       multi-word TARG authority: secstore
+    #                                       secstored secuser aescbc — without it
+    #                                       the computed set loses hsecstored)
     #   usr/glenda/lib/plumbing             mkimage §15l (plumber's default rules)
     #   sys/lib/plumb/basic, fileaddr       mkimage §15l (plumber's include targets)
     src_files="
+    build/x86_64/mkimage.sh
     build/x86_64/tier1-sweep.rc
     build/x86_64/tier-termrc
     build/x86_64/services-sweep.rc
@@ -762,6 +773,7 @@ env.mkTreeDerivation {
     build/x86_64/svctcpecho.c
     build/x86_64/authprobe.c
     sys/src/cmd/mkdir.c
+    sys/src/cmd/auth/secstore/mkfile
     usr/glenda/lib/plumbing
     sys/lib/plumb/basic
     sys/lib/plumb/fileaddr

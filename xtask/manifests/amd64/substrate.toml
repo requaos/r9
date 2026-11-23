@@ -1,0 +1,139 @@
+# The amd64 SUBSTRATE image (plan 01-15, D-15/D-16/D-29).
+#
+# Mirrors Harvey's build/x86_64/mkimage.sh §13 (the 18-01 substrate bake:
+# the marker-image shape — the committed skeleton minus rc+usr, the empty
+# mount points — with randread as this image's /amd64/init) at
+# bd7a6982a3e4f465f8ed3da5e0c7290521514ff0.
+#
+# Derived by `cargo xtask image --arch x86-64 --image substrate
+# --emit-manifest` from harvey-reference-amd64's substrate.members (the
+# D-29 reference bake).  The gate is `cargo xtask image --arch x86-64
+# --image substrate --compare-reference`.
+#
+# Every file maps to the tree file with the same sha256 (identical relative path
+# first, then identical basename, then the lexically first); an unmatched entry fails
+# parse_manifest, so a manifest can never silently omit a file.
+
+schema = 1
+arch = "amd64"
+image = "substrate"
+
+[[file]]
+path = "/README.md"
+source = "harvey"
+from = "build/x86_64/root-tree/README.md"
+mode = "0644"
+
+[[dir]]
+path = "/amd64"
+
+[[file]]
+path = "/amd64/init"
+source = "harvey"
+from = "build/x86_64/smoke-out/randread"
+mode = "0755"
+
+[[dir]]
+path = "/bin"
+
+[[dir]]
+path = "/bin/service"
+
+[[file]]
+path = "/bin/service/tcp17010"
+source = "harvey"
+from = "build/x86_64/root-tree/bin/service/tcp17010"
+mode = "0755"
+
+[[dir]]
+path = "/dev"
+
+[[dir]]
+path = "/env"
+
+[[dir]]
+path = "/fd"
+
+[[dir]]
+path = "/lib"
+
+[[file]]
+path = "/lib/churn-cats.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/churn-cats.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/namespace"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/namespace"
+mode = "0644"
+
+[[dir]]
+path = "/lib/ndb"
+
+[[file]]
+path = "/lib/ndb/local.template"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/ndb/local.template"
+mode = "0644"
+
+[[file]]
+path = "/lib/netaddr.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netaddr.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-dhcp.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netip-dhcp.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-loopback.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netip-loopback.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-static.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netip-static.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-tap.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netip-tap.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-tcp.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netip-tcp.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netstress.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netstress.rc"
+mode = "0644"
+
+[[dir]]
+path = "/mnt"
+
+[[dir]]
+path = "/net"
+
+[[dir]]
+path = "/proc"
+
+[[dir]]
+path = "/root"
+
+[[dir]]
+path = "/srv"
+
+[[dir]]
+path = "/tmp"
