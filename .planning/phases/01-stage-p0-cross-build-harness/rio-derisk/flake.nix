@@ -32,12 +32,15 @@
       # runtimeInputs are the Harvey gate's list (plan9port bash qemu git
       # expect iproute2 procps stdenv.cc + the Linux-only util-linux
       # gnused mount binutils) plus xvfb (the X11 venue) and xdotool (the
-      # XTEST password feeder selected by RIO-DERISK.md's FIX line).
+      # XTEST password feeder selected by RIO-DERISK.md's FIX line), plus
+      # the rio-diag capture set (xwd + imagemagick for the PNGs, xprop
+      # and xwininfo for x11.txt; plan 01-32).
       rioGate = pkgs.writeShellApplication {
         name = "rio-gate";
         runtimeInputs = with pkgs; [
           plan9port bash qemu git expect iproute2 procps stdenv.cc
           util-linux gnused gnugrep coreutils findutils mount binutils xvfb xdotool
+          xwd imagemagick xprop xwininfo
         ];
         text = ''
           set -euo pipefail

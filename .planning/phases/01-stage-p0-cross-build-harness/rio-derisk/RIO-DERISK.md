@@ -299,3 +299,79 @@ new de-risk iteration; (b) an owner decision to adopt the research fallback mark
 (a second drawterm session, or an Xvfb pixel check), recorded as a new CONTEXT
 decision before any gate work; (c) an owner re-scope of HARN-01. The executor
 chooses none of these and never edits the marker itself.
+
+D-30 records the owner's choice: **option (a)** — keep the D-28 marker unchanged
+and open this new rio de-risk iteration (plan 01-32). The design follows.
+
+## Diagnostic design and stop A2 (plan 01-32)
+
+Stop A proved the Mac builder and the `control-noG` discriminator, but its rio
+log could not say whether the X11 password feed authenticated. Plan 01-32 adds
+one diagnostic mode, `RIO_MODE=rio-diag`, that answers exactly that question
+without touching the D-28 marker.
+
+MARKER-CONTRACT: before the bake, rio-diag patches the scratch tree's staged cpu
+profile (`build/x86_64/root-tree/usr/glenda/lib/profile:58-64`) to create two
+entries immediately before its `exec rio` line, and restores the original from
+`build/x86_64/r9-diag-profile.orig` on every exit path the gate controls (a
+SIGKILL can outrun the trap; the next rio-diag invocation, and the witness
+driver's scratch-tree reuse, restore from that backup first):
+
+    syscall create /srv/r9-login-ok 1 0666
+    syscall create /srv/r9-login-pid.$pid 1 0666
+
+Both are `#s` service entries, so the **serial console's** `ls /srv` lists them
+from the kernel-wide table (`port/src/devsrv.rs:59`; `#s` bound at `/srv` by
+`build/x86_64/root-tree/lib/namespace:25`, A5). That is the point of the
+serial-visible marker: it crosses namespaces without touching the session.
+
+Why not `echo login-ok >/srv/r9-login-ok`: r9's srv device is not a regular
+filesystem. `create` is OWRITE-only and returns an entry whose write side posts
+a channel by writing a **decimal fd number** (`devsrv.rs:121-145`, `:194-227`);
+a text write fails, and an unposted entry can be listed but never read
+(`:257-283`). The entry NAME is therefore the payload, and the pid rides the
+second name. `syscall create` — the tool the profile already uses for its
+`/tmp/xxx` probe — performs the create and exits without writing. The profile
+shell's pid is rc's `$pid` (`sys/src/cmd/rc/exec.c:211-212`). There is no
+`/tmp` marker: the serial console cannot see the session's ramfs `/tmp`, and a
+failing write before `exec rio` would abort the leg.
+
+INTERPRETATION (stop A2):
+
+- marker present + D-28 pair absent = **RIO-START-FAIL / LOGIN-OK-RIO-FAIL**:
+  the login reached the profile's guarded rio handoff and rio failed to serve.
+- marker absent = **LOGIN-FAIL**: the X11 feed never reached the profile
+  (focus/typing/timing or a rejected password). The marker sits after the draw
+  test and `plumber`, so absence means "did not reach the handoff", not strictly
+  "password rejected"; `x11.txt` and the PNGs separate a window/focus problem
+  from an auth rejection.
+- marker present + pair present = **RIO-SERVING** (the same run is also a
+  passing rio leg).
+
+CAPTURE: the driver records the drawterm window identity, geometry and focus
+before typing and after Return (`xdotool search`, `getwindowgeometry`,
+`getwindowfocus`, `xprop -id`, `xwininfo -id -tree`) into
+`out/rio-diag/x11.txt`, plus `drawterm-before-typing.png` and
+`drawterm-after-return.png` (`xwd` piped through ImageMagick; `import` as the
+fallback). A missing capture tool is a named `RIO-FAIL diag-capture`; the
+diagnostic never runs without evidence. The password is never on screen:
+raw-mode `readcons` does not echo, no capture is taken between the first
+keystroke and Return, and no password is written to argv, an exported variable,
+a log, an x11.txt line or an image.
+
+NOT-A-GATE: the diagnostic cannot produce a PASS. The D-28 pair is still the
+only PASS condition, the `rio` and `control-noG` bakes are unchanged, and the
+witness step's exit 0 still requires `RIO-SERVING`. A rio-diag run that prints
+`RIO-FAIL login-not-reached` or `RIO-FAIL rio-not-serving` is a complete
+answer, not a driver failure.
+
+STOP A2 RUN: on the x86_64 Linux host with writable `/dev/kvm`, from the pushed
+`witness-src/01-32` commit:
+
+    git fetch origin witness-src/01-32
+    git checkout FETCH_HEAD
+    R9_WITNESS_STEPS="rio-diag rio control a13" bash .planning/phases/01-stage-p0-cross-build-harness/witness/run-witness.sh
+
+Return `witness-returns/01-32` with `witness/return-01-32/{out,WITNESS-RETURN.md}`
+(`witness/README.md`, "Return path A"), or paste the full `WITNESS-RETURN.md`
+(path B). Never return an auth-creds file or a password value.

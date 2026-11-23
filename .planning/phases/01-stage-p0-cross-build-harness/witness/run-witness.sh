@@ -29,6 +29,14 @@
 #   a13      nix build .#checks.x86_64-linux.harvey-drawterm from the
 #            r9 root (plan 01-10 adds that check; it is the drawterm
 #            build gate, not a KVM leg).
+#   rio-diag (plan 01-32) the same gate with RIO_MODE=rio-diag: the
+#            staged profile marks the rio handoff with a serial-visible
+#            #s entry (/srv/r9-login-ok + /srv/r9-login-pid.<pid>) and
+#            the driver captures x11.txt plus two PNGs.  Its log names
+#            `RIO-DIAG login-ok' or `RIO-FAIL login-not-reached' and then
+#            the unchanged pair verdict.  It is a diagnostic, NOT a gate:
+#            exit 0 still requires RIO-SERVING, and the marker alone
+#            records no PASS.
 #
 # Later plans add steps to this file.  Keep each step self-contained so
 # adding one never edits another.
@@ -92,8 +100,8 @@ P="$P_REL"
 selected=0
 for step in $R9_WITNESS_STEPS; do
 	case "$step" in
-	rio | control | a13) selected=$((selected + 1)) ;;
-	*) die "bad-step '$step': R9_WITNESS_STEPS accepts only rio control a13" ;;
+	rio-diag | rio | control | a13) selected=$((selected + 1)) ;;
+	*) die "bad-step '$step': R9_WITNESS_STEPS accepts only rio-diag rio control a13" ;;
 	esac
 done
 [ "$selected" -gt 0 ] || die "empty-selection: R9_WITNESS_STEPS names no step"
@@ -110,7 +118,7 @@ command -v nix >/dev/null 2>&1 ||
 command -v tee >/dev/null 2>&1 ||
 	die "tee-missing: coreutils tee is required"
 
-mkdir -p "$WORK" "$OUT/rio" "$OUT/control" "$OUT/a13" ||
+mkdir -p "$WORK" "$OUT/rio" "$OUT/control" "$OUT/a13" "$OUT/rio-diag" ||
 	die "cannot-create-output: $OUT or $WORK is not writable"
 : >"$SUMMARY"
 
@@ -154,7 +162,16 @@ preflight() {
 # refuses a real checkout or a store path, so this is the only shape it
 # accepts.  Reused by both gate steps when it already exists.
 ensure_harvey_scratch() {
-	local prefetch src
+	local prefetch src _prof _bak
+	# A previous rio-diag run killed before its EXIT trap can leave the
+	# staged profile patched; the gate's backup is the pristine copy.
+	# Restore it before any step reuses the tree.
+	_prof="$WORK/harvey/build/x86_64/root-tree/usr/glenda/lib/profile"
+	_bak="$WORK/harvey/build/x86_64/r9-diag-profile.orig"
+	if [ -f "$_bak" ] && [ -f "$_prof" ] && grep -qF '/srv/r9-login-ok' "$_prof" 2>/dev/null; then
+		cp "$_bak" "$_prof" || return 1
+		echo "== restored the staged profile from $_bak (a prior rio-diag run left it patched)" >&2
+	fi
 	if [ -d "$WORK/harvey/sys/src" ] && [ ! -e "$WORK/harvey/.git" ]; then
 		printf '%s\n' "$WORK/harvey"
 		return 0
@@ -194,6 +211,33 @@ step_rio() {
 	fi
 	end=$(now)
 	record rio "$rc" "$((end - start))"
+}
+
+# --- rio-diag: the login/rio-start diagnostic (plan 01-32) -------------
+# Same gate, RIO_MODE=rio-diag: the staged profile creates the serial-
+# visible #s entries /srv/r9-login-ok and /srv/r9-login-pid.<pid> before
+# `exec rio', and the driver captures x11.txt + two PNGs into
+# out/rio-diag/.  The step's exit is the gate's: 0 only on RIO-SERVING.
+# A non-zero exit with `RIO-DIAG login-ok' or `RIO-FAIL login-not-reached'
+# in the log is a complete diagnostic answer, not a driver failure.
+step_rio_diag() {
+	local start end rc scratch
+	start=$(now)
+	rc=0
+	if ! scratch=$(ensure_harvey_scratch); then
+		rc=1
+	fi
+	if [ "$rc" -eq 0 ]; then
+		note "rio-diag: nix run path:<r9>/$P/rio-derisk#rio-gate (RIO_MODE=rio-diag)"
+		if ! HARVEY="$scratch" RIO_OUT="$OUT/rio-diag" RIO_MODE=rio-diag \
+			R9_ACCEL=kvm KERNDATE="$KERNDATE" \
+			nix run "path:$R9/$P/rio-derisk#rio-gate" 2>&1 |
+			tee "$OUT/rio-diag/rio-diag.log"; then
+			rc=1
+		fi
+	fi
+	end=$(now)
+	record rio-diag "$rc" "$((end - start))"
 }
 
 # --- control: the unchanged -G discriminator --------------------------
@@ -305,7 +349,7 @@ finish() {
 
 	return_md="$WORK/WITNESS-RETURN.md"
 	{
-		echo "# r9 pass-2 witness return (plan 01-09)"
+		echo "# r9 pass-2 witness return (plans 01-09 / 01-32)"
 		echo
 		echo "- date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 		echo "- git HEAD: $HEAD_SHA"
