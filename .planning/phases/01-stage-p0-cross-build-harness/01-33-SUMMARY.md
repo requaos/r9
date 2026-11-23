@@ -3,7 +3,7 @@ phase: 01-stage-p0-cross-build-harness
 plan: 33
 subsystem: cross-build-harness
 status: complete
-phase_status: "Stop-B fixes proven for gate, gate_neg, probe, flipback, kernel, profiles and cpuauth_ref. Only the amd64 TCG gate (cargo xtask gate --arch x86-64 --accel tcg on the owner's x86_64 host) is PENDING owner confirmation; it is not claimed as PASS. No later plan (01-26 or later) was started."
+phase_status: "All stop-B checks are green: gate, gate_neg, probe, flipback, kernel, profiles, cpuauth_ref and the amd64 TCG gate (owner reported GATE-PASS control-no-rio after cargo xtask gate --arch x86-64 --accel tcg). The boot-iso outputHash is re-derived and both the plain build and --rebuild pass. No later plan (01-26 or later) was started by this plan."
 tags: [witness, kvm, stop-b2, stop-b3, gate, drawterm, expect, teardown, q35churnshell, boot-iso, boot-iso-hash, tcg-pending, harn-01, harn-04, harn-06, harn-07]
 
 requires:

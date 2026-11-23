@@ -472,11 +472,14 @@ standing kernel-byte-change procedure). The stop-B2 mismatch
 `sha256-xFt7GUshPv+CQNry48fBOAiCsCIuqGZfeC0eX11/8mc=`, and the kernel ELF sha
 stays `4228a1bf1408a7f06d942fa847b6ca25d7bfbd5a400ce9190b602d3b365f32e1`.
 
-### PENDING
+### gate-tcg
 
-PENDING gate-tcg: the amd64 TCG gate (`cargo xtask gate --arch x86-64 --accel
-tcg` on the owner's x86_64 host) has been requested; no PASS/FAIL line has been
-reported. It is NOT claimed as PASS.
+VERDICT gate-tcg: PASS
+EVIDENCE gate-tcg: .planning/phases/01-stage-p0-cross-build-harness/witness/evidence/stop-b3/gate-tcg.txt
+The owner ran `cargo xtask gate --arch x86-64 --accel tcg` on the x86_64 host and
+reported `GATE-PASS control-no-rio`. The control leg runs only after the rio leg,
+so the TCG gate completed green; the amd64 TCG check in the standing kernel-byte
+procedure is satisfied.
 
 ### HARN status (stop B3)
 
