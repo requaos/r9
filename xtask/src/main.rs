@@ -191,17 +191,20 @@ fn main() {
         )
         .subcommand(
             clap::Command::new("ureg-check").about(
-                "Verify the Harvey checkout's arm64/include/ureg.h and \
+                "Verify the Harvey trees' arm64/include/ureg.h and \
                  amd64/include/ureg.h match the pinned layouts (D-06/D-02b layer 2, \
-                 amd64 arm + negative control; R9_HARVEY_DIR names the checkout — \
-                 required since 05-10, 05-CONTEXT D-10)",
+                 amd64 arm + negative control; the per-architecture resolver names each \
+                 tree: R9_HARVEY_DIR override first, then R9_HARVEY_DIR_ARM64 / \
+                 R9_HARVEY_DIR_AMD64, then HARVEY_SRC — no built-in default, D-01/D-21)",
             ),
         )
         .subcommand(
             clap::Command::new("initrd")
-                .about("Assemble target/bootfs.paq from the staged Harvey aarch64 binaries \
-                        (04-05, D-01/D-02/D-03; R9_HARVEY_DIR names the checkout — required \
-                        since 05-10, 05-CONTEXT D-10)")
+                .about("Assemble target/bootfs.paq from xtask/manifests/arm64/smoke.toml \
+                        through the stage-and-bake engine (D-15/D-16): the Harvey aarch64 tree \
+                        comes from the per-architecture resolver (R9_HARVEY_DIR override, then \
+                        R9_HARVEY_DIR_ARM64, then HARVEY_SRC — no built-in default) and the host \
+                        mkpaqfs from R9_MKPAQFS")
                 .args(&[
                     clap::arg!(--arch <arch> "Target architecture")
                         .value_parser(clap::builder::EnumValueParser::<Arch>::new()),
@@ -563,11 +566,11 @@ impl QemuStep {
                 // (the assembled bootfs.paq) builds it when missing or stale
                 // — a missing producer is a loud error, never a silent boot
                 // without userland.
-                ensure_initrd_image(&config, self.verbose)?;
+                ensure_initrd_image(&config, self.arch, self.verbose)?;
                 // If the config carries an initrd, patch a target/ copy
                 // of the DTB with /chosen linux,initrd-start/end BEFORE qemu's
                 // argv is assembled (the apply path emits the patched path).
-                prepare_initrd_dtb(&config, workspace().to_str().unwrap())?;
+                prepare_initrd_dtb(&config, workspace().to_str().unwrap(), self.arch)?;
 
                 let mut cmd = Command::new(qemu_system);
 
@@ -576,7 +579,7 @@ impl QemuStep {
                     // > built-in default (tcg + cortex-a72); --accel hvf
                     // selects the gicv3 machine/DTB and -cpu host (see
                     // virt_resolved).
-                    apply_to_qemu_step_with_overrides(&mut cmd, &config, &overrides);
+                    apply_to_qemu_step_with_overrides(&mut cmd, &config, &overrides, self.arch);
 
                     // D-09/D-10: the idle virtio-net NIC + fresh per-run
                     // pcap capture ride every aarch64 virt boot (the same
@@ -610,7 +613,7 @@ impl QemuStep {
                     // raspi: flag/env overrides still beat the TOML value if
                     // supplied, but with none set nothing new is emitted — the
                     // existing invocation shape stays byte-identical.
-                    apply_to_qemu_step_with_overrides(&mut cmd, &config, &overrides);
+                    apply_to_qemu_step_with_overrides(&mut cmd, &config, &overrides, self.arch);
 
                     // TODO Choose UART at cmdline
                     // If using UART0 (PL011), this enables serial
@@ -695,7 +698,7 @@ impl QemuStep {
                 let iso = build_x86_64_iso(&kernel, &self.config_name, &self.config, self.verbose)?;
 
                 let mut cmd = Command::new(qemu_system);
-                apply_to_qemu_step_with_overrides(&mut cmd, &self.config, &overrides);
+                apply_to_qemu_step_with_overrides(&mut cmd, &self.config, &overrides, self.arch);
                 // D-01a: the idle NIC + per-run pcap ride every q35
                 // invocation from the [qemu] netdev table (data; the
                 // aarch64 apply_virt_netdev stays the frozen-at-pin
@@ -1797,10 +1800,10 @@ impl BootTestStep {
 
         // Build-if-missing/stale for target/-resident initrd images
         // (same hook as QemuStep).
-        ensure_initrd_image(&config, self.verbose)?;
+        ensure_initrd_image(&config, self.arch, self.verbose)?;
         // If the config carries an initrd, patch a target/ copy of the
         // DTB with /chosen linux,initrd-start/end (same apply path as QemuStep).
-        prepare_initrd_dtb(&config, workspace().to_str().unwrap())?;
+        prepare_initrd_dtb(&config, workspace().to_str().unwrap(), self.arch)?;
 
         let sock_rel = format!("target/boot-test-{}.sock", self.config_name);
         let log_rel = format!("target/boot-test-{}.log", self.config_name);
@@ -1838,7 +1841,7 @@ impl BootTestStep {
         // machine/cpu/smp/memory/accel/dtb plumbing is the resolved config's,
         // via the same apply path QemuStep uses.
         let mut cmd = Command::new(self.arch.qemu_system());
-        apply_to_qemu_step_with_overrides(&mut cmd, &config, &overrides);
+        apply_to_qemu_step_with_overrides(&mut cmd, &config, &overrides, self.arch);
         // D-09/D-10: every aarch64 virt boot carries the idle virtio-net NIC
         // + a fresh per-run pcap capture of its netdev (the gate evidence
         // channel; no kernel code probes the device this plan).
@@ -3941,15 +3944,16 @@ fn churn_post_pass(capture: &[u8], m: &ChurnMarkers) -> Result<ChurnVerdict> {
 /// reassemble it when absent or older than the staged inputs.  Configs with
 /// no initrd, or with a target/-external image (the committed probe fixture —
 /// pinned bytes), pass through untouched.
-fn ensure_initrd_image(config: &Configuration, verbose: bool) -> Result<()> {
+fn ensure_initrd_image(config: &Configuration, arch: Arch, verbose: bool) -> Result<()> {
     let Some(qemu) = &config.qemu else { return Ok(()) };
     let Some(initrd) = &qemu.initrd else { return Ok(()) };
     // A harvey:-prefixed image is produced by the Harvey checkout's own
     // pipeline and consumed as-is: it passes through the target/-resident
     // auto-bake untouched, but absence is a loud error naming the producers
-    // (07-05's virtnet profile boots the Harvey-baked bootfs.paq).
+    // (07-05's virtnet profile boots the Harvey-baked bootfs.paq).  The
+    // path resolves through the config arch's tree (D-21).
     if initrd.file.starts_with("harvey:") {
-        let path = initrd.resolved_file()?;
+        let path = initrd.resolved_file(arch)?;
         if !path.is_file() {
             return Err(format!(
                 "initrd image {} not found at {} — produce it in the Harvey checkout with \
@@ -3963,6 +3967,17 @@ fn ensure_initrd_image(config: &Configuration, verbose: bool) -> Result<()> {
     }
     if !initrd.file.starts_with("target/") {
         return Ok(());
+    }
+    // The target/-resident image is the aarch64 smoke bake (the only
+    // manifest this plan carries); an x86_64 profile naming one would
+    // silently receive the wrong architecture's userland.
+    if arch != Arch::Aarch64 {
+        return Err(format!(
+            "initrd image {} lives under target/ and is assembled from the aarch64 smoke \
+             manifest; no target/-resident image exists for {arch} yet",
+            initrd.file
+        )
+        .into());
     }
     let paq = workspace().join(&initrd.file);
     // The staleness check reads the manifest's inputs through the resolver;
@@ -4163,7 +4178,7 @@ fn build_x86_64_iso(
     let module_spec = config.dist.as_ref().and_then(|d| d.module.as_deref());
     let module_staged = match module_spec {
         Some(spec) => {
-            let path = resolve_boot_module(spec)?;
+            let path = resolve_boot_module(spec, Arch::X86_64)?;
             let dest = stage.join("boot/bootfs.paq");
             std::fs::copy(&path, &dest).map_err(|e| format!("stage module {path:?}: {e}"))?;
             println!("iso: module {} staged at /boot/bootfs.paq", path.display());
@@ -4303,15 +4318,15 @@ fn emit_grub_cfg(template: &str, module_staged: bool, append: Option<&str>) -> s
 }
 
 /// Resolve a [dist] module path: a `harvey:`-prefixed value names a file
-/// under the Harvey checkout (R9_HARVEY_DIR via uregcheck::harvey_dir —
-/// the 07-05 initrd channel's discipline; r9 never hardcodes a sibling
-/// layout); ordinary workspace-relative values pass through.  Absence is
+/// under `arch`'s tree (harvey::harvey_dir — the 07-05 initrd channel's
+/// discipline; r9 never hardcodes a sibling layout); ordinary
+/// workspace-relative values pass through.  Absence is
 /// a LOUD error naming the Harvey-side producers — never a silent
 /// kernel-only ISO when the profile expects its bootfs.
-fn resolve_boot_module(spec: &str) -> Result<PathBuf> {
+fn resolve_boot_module(spec: &str, arch: Arch) -> Result<PathBuf> {
     let path = match spec.strip_prefix("harvey:") {
         Some(rest) if !rest.is_empty() => {
-            let dir = uregcheck::harvey_dir().map_err(|e| e.to_string())?;
+            let dir = harvey::harvey_dir(arch).map_err(|e| e.to_string())?;
             dir.join(rest)
         }
         Some(_) => {

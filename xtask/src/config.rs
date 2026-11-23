@@ -1,6 +1,6 @@
 /// Test
 ///
-use crate::{DynError, Profile};
+use crate::{Arch, DynError, Profile, harvey};
 
 use serde::{Deserialize, Serialize};
 use std::{
@@ -239,15 +239,15 @@ impl Initrd {
     /// Resolve the initrd image path.  Ordinary values pass through
     /// unchanged (workspace-relative, as today — the qemu steps run with
     /// the workspace as cwd); a `harvey:`-prefixed value resolves the
-    /// remainder under the Harvey checkout named by R9_HARVEY_DIR via
-    /// uregcheck::harvey_dir — the established cross-repo channel (the
-    /// 05-10 D-10 inversion: r9 never hardcodes a sibling layout).  This
-    /// is the channel 07-05's virtnet profile uses to boot the
+    /// remainder under `arch`'s tree via [`harvey::harvey_dir`] — the
+    /// established cross-repo channel (D-01/D-21: r9 never hardcodes a
+    /// sibling layout, and the tree is chosen per guest architecture).
+    /// This is the channel 07-05's virtnet profile uses to boot the
     /// Harvey-baked image.
-    pub fn resolved_file(&self) -> Result<PathBuf, String> {
+    pub fn resolved_file(&self, arch: Arch) -> Result<PathBuf, String> {
         match self.file.strip_prefix("harvey:") {
             Some(rest) if !rest.is_empty() => {
-                let dir = crate::uregcheck::harvey_dir().map_err(|e| e.to_string())?;
+                let dir = harvey::harvey_dir(arch).map_err(|e| e.to_string())?;
                 Ok(dir.join(rest))
             }
             Some(_) => {
@@ -262,8 +262,8 @@ impl Initrd {
     /// loader is machine-agnostic and works for ELF kernels, unlike `-initrd`.
     /// A `harvey:`-prefixed file emits its resolved path; ordinary values
     /// emit byte-identically to the pre-resolution form.
-    pub fn loader_device_arg(&self) -> String {
-        let file = match self.resolved_file() {
+    pub fn loader_device_arg(&self, arch: Arch) -> String {
+        let file = match self.resolved_file(arch) {
             Ok(path) => path.display().to_string(),
             Err(e) => {
                 // Both qemu steps run prepare_initrd_dtb (a Result path)
@@ -510,7 +510,12 @@ pub struct QemuOverrides {
     pub cpu: Option<String>,
 }
 
-fn apply_qemu_config(cmd: &mut Command, config: &Configuration, overrides: &QemuOverrides) {
+fn apply_qemu_config(
+    cmd: &mut Command,
+    config: &Configuration,
+    overrides: &QemuOverrides,
+    arch: Arch,
+) {
     if let Some(config) = &config.qemu {
         if let Some(machine) = &config.machine {
             cmd.arg("-M");
@@ -545,7 +550,7 @@ fn apply_qemu_config(cmd: &mut Command, config: &Configuration, overrides: &Qemu
         }
         if let Some(initrd) = &config.initrd {
             cmd.arg("-device");
-            cmd.arg(initrd.loader_device_arg());
+            cmd.arg(initrd.loader_device_arg(arch));
         }
         // Verbatim extra tokens ride AFTER the structured keys — never
         // before them (an override of the same flag stays possible).
@@ -738,6 +743,7 @@ fn apply_rustflags(cmd: &mut Command, rustflags: &[String]) {
 pub fn prepare_initrd_dtb(
     config: &Configuration,
     workspace_path: &str,
+    arch: Arch,
 ) -> Result<Option<String>, DynError> {
     let Some(qemu) = &config.qemu else { return Ok(None) };
     let Some(initrd) = &qemu.initrd else { return Ok(None) };
@@ -746,10 +752,10 @@ pub fn prepare_initrd_dtb(
             .into());
     };
 
-    let resolved = initrd.resolved_file()?;
+    let resolved = initrd.resolved_file(arch)?;
     // Ordinary values are workspace-relative (as today); a harvey:-resolved
-    // path is used as-is, matching uregcheck's own R9_HARVEY_DIR semantics
-    // (the variable's value resolves against the xtask process cwd).
+    // path is used as-is — the resolver already joined a relative value onto
+    // the workspace root.
     let image = if initrd.file.starts_with("harvey:") {
         resolved
     } else {
@@ -838,8 +844,9 @@ pub fn apply_to_qemu_step_with_overrides(
     cmd: &mut Command,
     config: &Configuration,
     overrides: &QemuOverrides,
+    arch: Arch,
 ) {
-    apply_qemu_config(cmd, config, overrides);
+    apply_qemu_config(cmd, config, overrides, arch);
 }
 
 /// D-09/D-10: the aarch64-virt netdev stanza.  Every aarch64 virt qemu
@@ -879,7 +886,7 @@ mod tests {
     fn qemu_argv(toml_doc: &str) -> Vec<String> {
         let config: Configuration = toml::from_str(toml_doc).expect("test TOML must parse");
         let mut cmd = std::process::Command::new("qemu-system-aarch64");
-        apply_to_qemu_step_with_overrides(&mut cmd, &config, &QemuOverrides::default());
+        apply_to_qemu_step_with_overrides(&mut cmd, &config, &QemuOverrides::default(), crate::Arch::Aarch64);
         cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect()
     }
 
@@ -1326,7 +1333,7 @@ mod tests {
                 .expect("test TOML must parse");
         let mut cmd = std::process::Command::new("qemu-system-aarch64");
         let overrides = QemuOverrides { accel: Some("kvm".to_string()), cpu: None };
-        apply_to_qemu_step_with_overrides(&mut cmd, &config, &overrides);
+        apply_to_qemu_step_with_overrides(&mut cmd, &config, &overrides, crate::Arch::Aarch64);
         let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
         assert_eq!(args, vec!["-accel", "kvm", "-cpu", "cortex-a72"]);
     }

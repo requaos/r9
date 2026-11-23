@@ -1,6 +1,7 @@
 //! The cross-repo trap-frame drift gate, dual-arch (D-02b).  Parses
 //! the frozen `arm64/include/ureg.h` AND `amd64/include/ureg.h` in
-//! the Harvey checkout named by R9_HARVEY_DIR and asserts the Ureg
+//! the per-architecture Harvey tree resolved by
+//! [`crate::harvey::harvey_dir`] and asserts the Ureg
 //! field names/order/count match the pinned tables r9's TrapFrame and
 //! x86_64 Ureg are built against (aarch64/ABI.md and amd64/ABI.md
 //! kernel-side enforcement appendices).  The in-crate const asserts
@@ -8,10 +9,12 @@
 //! fails every boot-test profile on drift — an ABI mismatch is a
 //! build failure, not a runtime mystery.
 //!
-//! The implicit `../harvey`
-//! sibling-checkout default is REMOVED — every xtask path that touches the
-//! Harvey checkout requires R9_HARVEY_DIR explicitly, and an unset variable
-//! is a named error, never a silent relative-path guess.
+//! Each arm resolves ITS OWN tree through the one resolver: the aarch64
+//! header comes from `harvey_dir(Arch::Aarch64)`, the amd64 header from
+//! `harvey_dir(Arch::X86_64)` (D-21).  There is no built-in default path
+//! and no zero-argument resolver here any more (D-01): an unset
+//! environment is a named error from the resolver, never a silent
+//! relative-path guess.
 //!
 //! Plain text parsing — no crate.  The headers are frozen,
 //! hand-maintained files, so the parser is deliberately narrow, per
@@ -26,10 +29,9 @@
 //!     never skipped or wildcarded (Pitfall 9: a relaxed parser
 //!     certifies nothing).
 
-use std::path::PathBuf;
-use std::{env, fs};
+use std::fs;
 
-use crate::{Arch, DynError, Result};
+use crate::{harvey, Arch, DynError, Result};
 
 /// The pinned aarch64 Ureg field order r9's TrapFrame matches: 35
 /// slots, the r30/link union occupying one (aarch64/ABI.md's
@@ -67,86 +69,89 @@ pub enum CheckStatus {
     SkippedNoHarvey,
 }
 
-/// The Harvey checkout to check against: $R9_HARVEY_DIR — REQUIRED.
-/// The implicit `../harvey` default was removed
-/// here; an unset (or empty) variable is a named error, never a
-/// silent relative-path guess.  pub since 16-01's lib split: the
-/// config module (same lib), the xtask bin's initrd/pcap steps, and
-/// the emitter bin all resolve the same checkout.
-pub fn harvey_dir() -> Result<PathBuf> {
-    match env::var("R9_HARVEY_DIR") {
-        Ok(dir) if !dir.is_empty() => Ok(PathBuf::from(dir)),
-        _ => Err("R9_HARVEY_DIR is not set — point it at the Harvey checkout (it must contain \
-             arm64/include/ureg.h and amd64/include/ureg.h, and for the initrd bake \
-             build/aarch64/smoke-out/ plus .build/bin/mkpaqfs); r9's xtask no longer defaults \
-             to a sibling ../harvey checkout (05-CONTEXT D-10)"
-            .into()),
-    }
-}
-
-/// Run the check against the resolved Harvey checkout, both arms.
-/// Standalone (`cargo xtask ureg-check`) fails when R9_HARVEY_DIR is
-/// unset and tolerates a named-but-headerless checkout with a skip
-/// line per header (the const asserts still guard); drift is always a
-/// hard error with a named-field diff.  The amd64 arm is followed by
-/// the D-02b negative control (after the real check).
+/// Run the check against both per-architecture Harvey trees.
+/// Standalone (`cargo xtask ureg-check`) resolves each arm through the one
+/// resolver and reports each arm's resolution error instead of skipping it;
+/// with neither arch resolvable the combined error is returned, so an
+/// unset environment fails the standalone command with the named error.
+/// A named-but-headerless tree keeps the historical skip line per header
+/// (the const asserts still guard); drift is always a hard error with a
+/// named-field diff.  The amd64 arm is followed by the D-02b negative
+/// control (after the real check).
 pub fn run_check() -> Result<CheckStatus> {
-    let dir = harvey_dir()?;
+    let mut errors: Vec<String> = Vec::new();
 
     // Arm 1: aarch64 (frozen at the v2.0 pin — checked, not changed).
-    let header = dir.join("arm64/include/ureg.h");
     let mut aarch64 = CheckStatus::SkippedNoHarvey;
-    if !header.exists() {
-        println!(
-            "ureg-check: SKIP — {} not found (no Harvey checkout; the layer-1 const asserts still guard the layout)",
-            header.display()
-        );
-    } else {
-        let text = fs::read_to_string(&header)
-            .map_err(|e| format!("ureg-check: read {}: {e}", header.display()))?;
-        compare_to_pinned(&text).map_err(|diff| -> DynError {
-            format!("ureg-check: ureg.h drift detected in {}:\n{diff}", header.display()).into()
-        })?;
-        println!("ureg-check: 35 fields match arm64/include/ureg.h");
-        aarch64 = CheckStatus::Match;
+    match harvey::harvey_dir(Arch::Aarch64) {
+        Err(e) => {
+            eprintln!("ureg-check: arm64 tree: {e}");
+            errors.push(format!("arm64 tree: {e}"));
+        }
+        Ok(dir) => {
+            let header = dir.join("arm64/include/ureg.h");
+            if !header.exists() {
+                println!(
+                    "ureg-check: SKIP — {} not found (no Harvey checkout; the layer-1 const asserts still guard the layout)",
+                    header.display()
+                );
+            } else {
+                let text = fs::read_to_string(&header)
+                    .map_err(|e| format!("ureg-check: read {}: {e}", header.display()))?;
+                compare_to_pinned(&text).map_err(|diff| -> DynError {
+                    format!("ureg-check: ureg.h drift detected in {}:\n{diff}", header.display())
+                        .into()
+                })?;
+                println!("ureg-check: 35 fields match arm64/include/ureg.h");
+                aarch64 = CheckStatus::Match;
+            }
+        }
     }
 
     // Arm 2: amd64 (the Phase 14 XEXEC-01 frozen header).
-    let header = dir.join("amd64/include/ureg.h");
     let mut amd64 = CheckStatus::SkippedNoHarvey;
-    if !header.exists() {
-        println!(
-            "ureg-check: SKIP — {} not found (no Harvey checkout; the layer-1 const asserts still guard the layout)",
-            header.display()
-        );
-    } else {
-        let text = fs::read_to_string(&header)
-            .map_err(|e| format!("ureg-check: read {}: {e}", header.display()))?;
-        compare_to_pinned_amd64(&text).map_err(|diff| -> DynError {
-            format!("ureg-check: ureg.h drift detected in {}:\n{diff}", header.display()).into()
-        })?;
-        println!("ureg-check: 26 fields match amd64/include/ureg.h");
-        amd64 = CheckStatus::Match;
-        // D-02b: prove the gate can catch drift, not just parse the
-        // pristine header — the mutated copy MUST be rejected.
-        run_amd64_negative_control(&text)?;
+    match harvey::harvey_dir(Arch::X86_64) {
+        Err(e) => {
+            eprintln!("ureg-check: amd64 tree: {e}");
+            errors.push(format!("amd64 tree: {e}"));
+        }
+        Ok(dir) => {
+            let header = dir.join("amd64/include/ureg.h");
+            if !header.exists() {
+                println!(
+                    "ureg-check: SKIP — {} not found (no Harvey checkout; the layer-1 const asserts still guard the layout)",
+                    header.display()
+                );
+            } else {
+                let text = fs::read_to_string(&header)
+                    .map_err(|e| format!("ureg-check: read {}: {e}", header.display()))?;
+                compare_to_pinned_amd64(&text).map_err(|diff| -> DynError {
+                    format!("ureg-check: ureg.h drift detected in {}:\n{diff}", header.display())
+                        .into()
+                })?;
+                println!("ureg-check: 26 fields match amd64/include/ureg.h");
+                amd64 = CheckStatus::Match;
+                // D-02b: prove the gate can catch drift, not just parse the
+                // pristine header — the mutated copy MUST be rejected.
+                run_amd64_negative_control(&text)?;
+            }
+        }
     }
 
     match (aarch64, amd64) {
         (CheckStatus::Match, _) | (_, CheckStatus::Match) => Ok(CheckStatus::Match),
-        (CheckStatus::SkippedNoHarvey, CheckStatus::SkippedNoHarvey) => {
-            Ok(CheckStatus::SkippedNoHarvey)
-        }
+        _ if !errors.is_empty() => Err(errors.join("\n").into()),
+        _ => Ok(CheckStatus::SkippedNoHarvey),
     }
 }
 
 /// The boot-test precondition: drift fails the run, and so does an
-/// unset or headerless Harvey checkout — the cross-repo gate is the
-/// point of the harness.  Each arch requires ITS OWN frozen header:
-/// aarch64 profiles pin arm64/include/ureg.h, x86_64 profiles pin
-/// amd64/include/ureg.h.
+/// unset or headerless Harvey tree — the cross-repo gate is the
+/// point of the harness.  Each arch requires ITS OWN frozen header from
+/// that arch's tree: aarch64 profiles pin arm64/include/ureg.h, x86_64
+/// profiles pin amd64/include/ureg.h (D-21).
 pub fn check_for_boot_test(arch: Arch) -> Result<()> {
-    let dir = harvey_dir()?;
+    let dir = harvey::harvey_dir(arch)?;
     let (header, arm) = match arch {
         Arch::Aarch64 => (dir.join("arm64/include/ureg.h"), "arm64/include/ureg.h"),
         Arch::X86_64 => (dir.join("amd64/include/ureg.h"), "amd64/include/ureg.h"),
@@ -156,9 +161,10 @@ pub fn check_for_boot_test(arch: Arch) -> Result<()> {
     };
     if !header.exists() {
         return Err(format!(
-            "ureg-check: boot-test requires the Harvey checkout (R9_HARVEY_DIR must name it — \
-             it must contain {arm}; 05-CONTEXT D-10 removed the ../harvey default) — the \
-             cross-repo gate is the point of the harness"
+            "ureg-check: boot-test requires the Harvey tree (the per-architecture resolver \
+             names it — R9_HARVEY_DIR first, then R9_HARVEY_DIR_ARM64/_AMD64; it must contain \
+             {arm}; D-01 removed the ../harvey default) — the cross-repo gate is the point of \
+             the harness"
         )
         .into());
     }

@@ -98,11 +98,13 @@ const ETHERMINTU: usize = 60;
 
 // ---- The D-11 addressing seam reader (08-06) ---------------------------
 //
-// The netip static gate's assertions derive their addresses from
-// $R9_HARVEY_DIR/build/aarch64/netaddr.rc (the rc KEY=VALUE seam file the
-// fixture sources in-guest) — NO 10.0.2.x literal in the 08-06
-// assertions (the phase's transparency prohibition: the sweep, the baked
-// fragments, and these assertions all derive from the seam).
+// The netip static gate's assertions derive their addresses from the
+// resolved aarch64 Harvey tree's build/aarch64/netaddr.rc (the rc
+// KEY=VALUE seam file the fixture sources in-guest; the tree comes from
+// xtask::harvey::harvey_dir(Arch::Aarch64) — D-21) — NO 10.0.2.x literal
+// in the 08-06 assertions (the phase's transparency prohibition: the
+// sweep, the baked fragments, and these assertions all derive from the
+// seam).
 
 /// A dotted-quad parse ("10.0.2.15" → [10,0,2,15]).
 fn parse_ipv4_dotted(s: &str) -> Option<[u8; 4]> {
@@ -123,7 +125,7 @@ fn parse_ipv4_dotted(s: &str) -> Option<[u8; 4]> {
 /// 07-01 harvey:-channel precedent — a pre-spawn harness bug, never a
 /// silent default).
 pub fn netaddr_slirp() -> Result<([u8; 4], [u8; 4]), String> {
-    let path = xtask::uregcheck::harvey_dir()
+    let path = xtask::harvey::harvey_dir(xtask::Arch::Aarch64)
         .map_err(|e| format!("{e}"))?
         .join("build/aarch64/netaddr.rc");
     let text = std::fs::read_to_string(&path)
@@ -186,7 +188,7 @@ fn parse_ipv6(s: &str) -> Option<[u8; 16]> {
 /// `slirp_guestv6=` / `slirp_gwv6=` lines (08-07's NETIP-06 gate — same
 /// loud-error discipline as netaddr_slirp).
 pub fn netaddr_slirp_v6() -> Result<([u8; 16], [u8; 16]), String> {
-    let path = xtask::uregcheck::harvey_dir()
+    let path = xtask::harvey::harvey_dir(xtask::Arch::Aarch64)
         .map_err(|e| format!("{e}"))?
         .join("build/aarch64/netaddr.rc");
     let text = std::fs::read_to_string(&path)
@@ -845,7 +847,7 @@ pub fn assert_tcp_bidirectional(
 /// unreadable file or absent/malformed key is a loud pre-spawn harness
 /// error naming the file/key).
 pub fn netaddr_blastport() -> Result<u16, String> {
-    let path = xtask::uregcheck::harvey_dir()
+    let path = xtask::harvey::harvey_dir(xtask::Arch::Aarch64)
         .map_err(|e| format!("{e}"))?
         .join("build/aarch64/netaddr.rc");
     let text = std::fs::read_to_string(&path)

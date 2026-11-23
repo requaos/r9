@@ -11,10 +11,11 @@
 //! Profile, DynError/Result, env_or) move here verbatim from the old
 //! single-bin root; src/main.rs and the emitter bin are consumers of
 //! this lib.  uregcheck rides along because config's initrd
-//! resolution reaches through uregcheck::harvey_dir (the R9_HARVEY_DIR
-//! channel) and uregcheck's boot-test entry takes the root Arch —
-//! the three files were one dependency island in the old crate, and
-//! the island moves whole.
+//! resolution reaches through the Harvey-tree resolver (the
+//! R9_HARVEY_DIR channel) and uregcheck's boot-test entry takes the root
+//! Arch — the three files were one dependency island in the old crate, and
+//! the island moves whole.  The resolver itself lives in `harvey` (plan
+//! 01-08, D-01/D-21): it is the ONE reader of the tree variables.
 
 pub mod config;
 pub mod harvey;
