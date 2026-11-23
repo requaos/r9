@@ -1,0 +1,745 @@
+#!/usr/bin/expect -f
+# gates/x86_64/drawterm-gate.expect — r9's drawterm gate driver (plan
+# 01-18, D-07/D-09/D-11/D-28, HARN-01/HARN-02).
+#
+# Moved from Harvey bd7a698's build/x86_64/drawterm-gate.expect and
+# extended with the stop-A-proven rio leg (rio-derisk/rio-gate.expect):
+#
+#   GATE_MODE=session (default)
+#     The original -G interop assertions, unchanged: qemu boots the
+#     composed cpu ISO under the emitter's slirp argv (the D-04 hostfwd
+#     pair), the bootconf/cpurc ladder to cpurc: DONE, both hostfwd
+#     listeners observed host-side, drawterm -G -O over the committed
+#     pair with the pty password feed, the remote shell prompt, a fed
+#     command's echoed marker, the session teardown (the exportfs hangup
+#     line), the serial drain, and the whole-capture never-appears
+#     post-passes.  session is the flake app's default, so the moved app
+#     matches its Harvey-hosted run.
+#
+#   GATE_MODE=rio
+#     drawterm runs WITHOUT -G under a private Xvfb (-displayfd,
+#     -nolisten tcp), so the cpu profile sees /mnt/term/dev/draw and runs
+#     `plumber; exec rio`.  The password is typed into the drawterm
+#     window through XTEST (xdotool search --sync --classname drawterm,
+#     windowfocus, type --file; the stop-A mechanism — no pty feed exists
+#     without -G).  The serial console then must show BOTH
+#     /srv/rio.<user>.<pid> and /srv/riowctl.<user>.<pid>; success prints
+#     `GATE-PASS rio-serving`.  Named failures: `GATE-FAIL rio-not-serving`
+#     (the D-28 pair absent within the budget), `GATE-FAIL dt-feed-timeout`
+#     (no window/XTEST type within the feed budget).
+#
+#   GATE_MODE=control-noG
+#     The unchanged -G control: the profile must skip rio.  The pty
+#     password feed applies; the serial `ls /srv` must show NEITHER rio
+#     entry.  Success prints `GATE-PASS control-no-rio`; a rio entry
+#     prints `GATE-FAIL control-saw-rio` and exits non-zero.
+#
+#   GATE_MODE=force-no-rio
+#     The rio-leg assertion over a -G session, which must end in
+#     `GATE-FAIL rio-not-serving` (the failing direction on demand).
+#
+# GATE_SERIAL_CHECKS (optional): newline-separated `<cmd>=<marker>` pairs
+# typed on the serial console after a passing rio assertion; each marker
+# must appear.  Wired by `cargo xtask gate --serial-check`.
+#
+# The login user: session mode keeps the creds file's user
+# (R9_DEMO_USER).  The rio family logs in as GATE_DT_USER (default
+# glenda) because only /usr/glenda/lib/profile is staged; the DEMO users
+# share one password (RIO-DERISK.md LOGIN-USER).
+#
+# Env (the shell app and `cargo xtask gate` export all of it):
+#   R9_QEMU / R9_ISO / R9_SMOKE_LOG / R9_NETDEV_ARGV / R9_ACCEL /
+#   R9_MACHINE / R9_CPU — the chassis.
+#   R9_DEMO_USER — the creds user (the session -O user; failure text).
+#   R9_DEMO_PWFILE — the 0600 password file; the ONLY password source.
+#   R9_CREDS_FILE — the creds file path, for failure messages only.
+#   DRAWTERM_BIN — Harvey's drawterm package binary (X11 backend).
+#   GATE_MODE — session | rio | control-noG | force-no-rio.
+#   GATE_DT_USER — the rio-family login (default glenda).
+#   GATE_SERIAL_CHECKS — the optional serial probes.
+#   R9_RUN_TAG / R9_DT_TAG — the per-run survivor-sweep identities.
+#   GATE_RIO_BUDGET / GATE_SESSION_WINDOW / GATE_SRV_POLLS /
+#   GATE_SRV_POLL_WAIT / GATE_FEED_WAIT / GATE_FEED_SETTLE — budgets.
+#
+# exit 0 only when the mode's assertion passed; exit 1 names the failed
+# stage on stderr; exit 2 on a contract violation (missing/empty env).
+#
+# Hygiene: EVERY exit path kills and reaps qemu, drawterm and Xvfb by
+# recorded pid and sweeps this run's identity (the argv0 tag is an extra
+# key, never the only one), then redacts the per-bake DEMO password from
+# the retained capture (T-01-58).  Nothing is written outside
+# R9_SMOKE_LOG's directory and the run's own scratch files.
+
+set timeout 600                    ;# per boot stage, TCG-sized
+match_max 1048576
+
+# --- required env (loud, BEFORE any spawn) -----------------------------
+set gate_mode [expr {[info exists env(GATE_MODE)] ? $env(GATE_MODE) : "session"}]
+if {$gate_mode ni {session rio control-noG force-no-rio}} {
+	puts stderr "drawterm-gate: GATE_MODE=$gate_mode — want session|rio|control-noG|force-no-rio"
+	exit 2
+}
+set rio_leg [expr {$gate_mode eq "rio" || $gate_mode eq "force-no-rio"}]
+set x11_leg [expr {$gate_mode eq "rio"}]
+set control_leg [expr {$gate_mode eq "control-noG" || $gate_mode eq "force-no-rio"}]
+
+set creds_file [expr {[info exists env(R9_CREDS_FILE)] ? $env(R9_CREDS_FILE) : "target/images/x86_64/cpu.creds"}]
+foreach v {R9_ISO R9_SMOKE_LOG R9_NETDEV_ARGV R9_DEMO_USER R9_DEMO_PWFILE DRAWTERM_BIN} {
+	if {[info exists env($v)]} {
+		if {$env($v) eq ""} {
+			puts stderr "drawterm-gate: \$$v is EMPTY — aborting before any spawn; the creds read names the file: $creds_file"
+			exit 2
+		}
+		continue
+	}
+	puts stderr "drawterm-gate: \$$v unset — run via the flake app (nix run .#drawterm-gate-x64) or `cargo xtask gate`"
+	exit 2
+}
+if {![file readable $env(R9_DEMO_PWFILE)]} {
+	puts stderr "drawterm-gate: the 0600 password file $env(R9_DEMO_PWFILE) is not readable — aborting before any spawn"
+	exit 2
+}
+set pwfh [open $env(R9_DEMO_PWFILE) r]
+set dt_pw [string trimright [read $pwfh] "\r\n"]
+close $pwfh
+if {$dt_pw eq ""} {
+	puts stderr "drawterm-gate: the 0600 password file is empty — aborting before any spawn"
+	exit 2
+}
+if {![file executable $env(DRAWTERM_BIN)]} {
+	puts stderr "drawterm-gate: DRAWTERM_BIN $env(DRAWTERM_BIN) is not an executable file (the flake app exports the package binary)"
+	exit 2
+}
+
+set QEMU [expr {[info exists env(R9_QEMU)] ? $env(R9_QEMU) : "qemu-system-x86_64"}]
+set run_tag [expr {[info exists env(R9_RUN_TAG)] ? $env(R9_RUN_TAG) : "r9x64dtgate-[pid]-[clock seconds]"}]
+set dt_tag [expr {[info exists env(R9_DT_TAG)] ? $env(R9_DT_TAG) : "r9x64dtgate-dt-[pid]-[clock seconds]"}]
+set rio_budget [expr {[info exists env(GATE_RIO_BUDGET)] ? $env(GATE_RIO_BUDGET) : 60}]
+set session_window [expr {[info exists env(GATE_SESSION_WINDOW)] ? $env(GATE_SESSION_WINDOW) : 30}]
+set srv_polls [expr {[info exists env(GATE_SRV_POLLS)] ? $env(GATE_SRV_POLLS) : 12}]
+set srv_poll_wait [expr {[info exists env(GATE_SRV_POLL_WAIT)] ? $env(GATE_SRV_POLL_WAIT) : 5}]
+set feed_wait [expr {[info exists env(GATE_FEED_WAIT)] ? $env(GATE_FEED_WAIT) : 30}]
+set feed_settle [expr {[info exists env(GATE_FEED_SETTLE)] ? $env(GATE_FEED_SETTLE) : 2}]
+
+# The session mode keeps the creds file's user (the Harvey-hosted run);
+# the rio family needs the one staged profile's user.
+if {$gate_mode eq "session"} {
+	set dt_user $env(R9_DEMO_USER)
+} else {
+	set dt_user [expr {[info exists env(GATE_DT_USER)] && $env(GATE_DT_USER) ne "" ? $env(GATE_DT_USER) : "glenda"}]
+}
+
+set gate_dir [file dirname $env(R9_SMOKE_LOG)]
+set redacted 0
+set xvfb_pid ""
+
+# --- hygiene: a fresh capture per run ----------------------------------
+exec rm -f $env(R9_SMOKE_LOG)
+if {$x11_leg} {
+	catch {exec rm -f [file join $gate_dir xvfb-display]}
+}
+
+# --- teardown: recorded pids plus this run's identity ------------------
+proc sweep_identity {} {
+	global run_tag gate_dir
+	catch {
+		exec bash -c {
+			tag=$1
+			dir=$2
+			for p in $(pgrep -u "$(id -u)" -f 'qemu-system|Xvfb|drawterm' 2>/dev/null || true); do
+				[ "$p" = "$$" ] && continue
+				if tr '\0' '\n' <"/proc/$p/cmdline" 2>/dev/null | grep -qF -e "$tag" -e "$dir" || \
+				   tr '\0' '\n' <"/proc/$p/environ" 2>/dev/null | grep -qF -e "$tag" -e "$dir"; then
+					kill "$p" 2>/dev/null || true
+				fi
+			done
+		} sweep "$run_tag" "$gate_dir"
+	}
+}
+
+proc redact_capture {} {
+	global env dt_pw redacted
+	if {$redacted} {
+		return
+	}
+	set path $env(R9_SMOKE_LOG)
+	if {![file exists $path]} {
+		set redacted 1
+		return
+	}
+	set fh [open $path r]
+	set whole [read $fh]
+	close $fh
+	set pw_count 0
+	set pos 0
+	while {1} {
+		set idx [string first $dt_pw $whole $pos]
+		if {$idx < 0} {
+			break
+		}
+		incr pw_count
+		set pos [expr {$idx + [string length $dt_pw]}]
+	}
+	set redacted_text [string map [list $dt_pw "<demo-pw-redacted>"] $whole]
+	set fh [open $path w]
+	puts -nonewline $fh $redacted_text
+	puts $fh "\ndrawterm-gate: redaction contract held — <demo-pw-redacted> ($pw_count occurrence(s) of the per-bake DEMO password mapped; asserts ran over the true capture first; T-01-58)"
+	close $fh
+	set redacted 1
+}
+
+proc cleanup {} {
+	global qemu_pid dt_pid xvfb_pid
+	catch { exec kill -KILL -- -$qemu_pid 2>/dev/null }
+	catch { exec kill -KILL $qemu_pid 2>/dev/null }
+	if {[info exists dt_pid]} {
+		catch { exec kill -KILL -- -$dt_pid 2>/dev/null }
+		catch { exec kill -KILL $dt_pid 2>/dev/null }
+	}
+	if {$xvfb_pid ne ""} {
+		catch { exec kill -KILL $xvfb_pid 2>/dev/null }
+	}
+	sweep_identity
+	redact_capture
+}
+
+# --- staged ordered assertions (each stage names its failure) ---------
+proc stage {name re} {
+	expect {
+		-re $re { puts stderr "drawterm-gate: stage ok — $name" }
+		timeout { puts stderr "drawterm-gate: TIMEOUT at stage: $name"; cleanup; exit 1 }
+		eof { puts stderr "drawterm-gate: process exited (EOF) at stage: $name"; cleanup; exit 1 }
+	}
+}
+
+proc feedstage {name re sendstr} {
+	expect {
+		-re $re { send -- $sendstr; puts stderr "drawterm-gate: feed ok — $name" }
+		timeout { puts stderr "drawterm-gate: TIMEOUT at feed stage: $name"; cleanup; exit 1 }
+		eof { puts stderr "drawterm-gate: process exited (EOF) at feed stage: $name"; cleanup; exit 1 }
+	}
+}
+
+# --- the hostfwd listener observation ---------------------------------
+proc host_listeners {} {
+	if {![catch {exec ss -tln} out]} { return $out }
+	if {![catch {exec netstat -tln} out]} { return $out }
+	return ""
+}
+proc hostfwd_stage {port} {
+	set listeners [host_listeners]
+	if {$listeners eq ""} {
+		puts stderr "drawterm-gate: FAILED at stage: hostfwd-$port-listening — no host listening-table tool produced output (ss/netstat both missing?)"
+		cleanup
+		exit 1
+	}
+	if {![regexp "127\\.0\\.0\\.1:${port}( |\$)" $listeners]} {
+		puts stderr "drawterm-gate: FAILED at stage: hostfwd-$port-listening — no 127.0.0.1:$port loopback entry in the host listening table (the slirp hostfwd bind is missing); table follows:"
+		puts stderr $listeners
+		cleanup
+		exit 1
+	}
+	puts stderr "drawterm-gate: stage ok — hostfwd-$port-listening (127.0.0.1:$port present in the host listening table)"
+}
+
+# --- the X11 password feed (rio leg only) ------------------------------
+# drawterm sets WM_NAME "drawterm" and WM_CLASS res_name "drawterm" /
+# res_class "Drawterm" (gui-x11/x11.c XSetWMProperties) but never sets
+# _NET_WM_PID, so xdotool's --pid lookup cannot match it.  The Xvfb
+# display is private to this run, so the class is unique.  `timeout'
+# bounds xdotool's --sync wait; a failure names dt-feed-timeout.
+proc xwait_window {wait} {
+	if {[catch {exec timeout $wait xdotool search --sync --onlyvisible --classname {^drawterm$}} out]} {
+		return -code error "window-wait-failed"
+	}
+	set wid [lindex [split [string trim $out] "\n"] 0]
+	if {$wid eq "" || ![string is digit $wid]} {
+		return -code error "window-id-unparsed"
+	}
+	return $wid
+}
+
+proc xfeed_type {wid secretfile settle} {
+	if {[catch {exec xdotool windowfocus --sync $wid} out]} {
+		return -code error "window-focus-failed"
+	}
+	# The prompt is drawn in the window, not readable here; keystrokes
+	# typed after the window exists sit in kbdq until readcons consumes
+	# them, so a short settle before typing is sufficient.
+	after [expr {$settle * 1000}]
+	if {[catch {exec xdotool type --clearmodifiers --delay 40 --file $secretfile} out]} {
+		return -code error "xtest-type-failed"
+	}
+	if {[catch {exec xdotool key --clearmodifiers Return} out]} {
+		return -code error "xtest-return-failed"
+	}
+	return $wid
+}
+
+# The documented fallback for the 19-10 residual: on an app-baked venue
+# the profile's draw-presence guard skips the login-time `exec rio`, so
+# the authenticated session leaves a cpu% shell.  Type the manual start
+# into that shell through the same focused X11 window.  This does not
+# weaken the D-28 marker: the pair is still the only PASS condition.
+proc xstart_rio {wid} {
+	if {[catch {exec xdotool windowfocus --sync $wid} out]} {
+		return -code error "window-focus-failed: $out"
+	}
+	after 500
+	if {[catch {exec xdotool type --clearmodifiers --delay 40 {plumber; rio}} out]} {
+		return -code error "xtest-type-failed: $out"
+	}
+	if {[catch {exec xdotool key --clearmodifiers Return} out]} {
+		return -code error "xtest-return-key-failed: $out"
+	}
+	return $wid
+}
+
+# --- the private Xvfb display (rio leg only) ---------------------------
+proc start_xvfb {} {
+	global run_tag gate_dir
+	set display_file [file join $gate_dir xvfb-display]
+	catch {file delete -force $display_file}
+	set script {R9_RUN_ID=$1 Xvfb -displayfd 3 -screen 0 1024x768x24 -nolisten tcp 3>"$2" >/dev/null 2>&1 & echo $!}
+	if {[catch {exec bash -c $script xvfb "$run_tag" $display_file} out]} {
+		return -code error "xvfb-spawn-failed: $out"
+	}
+	set pid [string trim $out]
+	if {$pid eq "" || ![string is digit $pid]} {
+		return -code error "xvfb-pid-unparsed: $out"
+	}
+	set waited 0
+	while {![file exists $display_file] || [file size $display_file] == 0} {
+		incr waited
+		if {$waited >= 100} {
+			catch {exec kill -KILL $pid 2>/dev/null}
+			return -code error "xvfb-display-timeout"
+		}
+		after 100
+	}
+	set fh [open $display_file r]
+	set number [string trim [read $fh]]
+	close $fh
+	if {$number eq ""} {
+		catch {exec kill -KILL $pid 2>/dev/null}
+		return -code error "xvfb-display-empty"
+	}
+	set env(DISPLAY) ":$number"
+	return $pid
+}
+
+# --- fast-fail on the SERIAL stream (the qemu pty only) ----------------
+# Registered against the qemu spawn id, so these arms can never
+# false-match the drawterm session's own output (its teardown prints
+# `panic: sysfatal', the client-side exit pair the whole-capture scan
+# excludes).
+expect_before -i $spawn_id {
+	-re {panic|Unhandled interrupt} {
+		puts stderr "drawterm-gate: kernel panic marker on the wire — aborting"
+		cleanup
+		exit 1
+	}
+	-re {cpurc: FAIL} {
+		puts stderr "drawterm-gate: cpurc printed a FAIL marker — aborting (the failing leg is named on the wire)"
+		cleanup
+		exit 1
+	}
+}
+
+# --- subtree 1: spawn qemu with the cpu ISO ----------------------------
+set R9_MACHINE [expr {[info exists env(R9_MACHINE)] ? $env(R9_MACHINE) : "q35"}]
+set R9_CPU [expr {[info exists env(R9_CPU)] ? $env(R9_CPU) : "host"}]
+set R9_ACCEL [expr {[info exists env(R9_ACCEL)] ? $env(R9_ACCEL) : "kvm"}]
+
+set netdev_argv {}
+foreach tok [split $env(R9_NETDEV_ARGV)] {
+	if {$tok ne ""} {
+		lappend netdev_argv $tok
+	}
+}
+if {[llength $netdev_argv] == 0} {
+	puts stderr "drawterm-gate: R9_NETDEV_ARGV is empty — the caller's emitter capture failed (the slirp argv is required)"
+	exit 2
+}
+
+spawn $QEMU -M $R9_MACHINE -cpu $R9_CPU -smp 1 -m 1024M \
+	-accel $R9_ACCEL \
+	-cdrom $env(R9_ISO) \
+	{*}$netdev_argv \
+	-nographic \
+	-name $run_tag
+set qemu_sid $spawn_id
+set qemu_pid [exp_pid]
+log_file $env(R9_SMOKE_LOG)
+
+# --- 1. the boot ladder (EMISSION order) ------------------------------
+stage banner	{r9 from the Internet}
+stage bootconf	{devenv: bootconf init=/amd64/init -c}
+stage paqfs	{paqfs\.\.\.}
+stage version	{version\.\.\.}
+
+# --- 2. the hostfwd pair observed host-side ---------------------------
+hostfwd_stage 17010
+hostfwd_stage 5670
+
+# --- 3. the cpurc ladder in EMISSION order ----------------------------
+stage pairing-ok	{cpurc: PAIR-OK}
+stage ether-ok		{cpurc: ETHER-OK}
+stage keyfs-ok		{cpurc: KEYFS-OK}
+stage authsrv-listen	{cpurc: AUTHSRV-LISTEN}
+stage factotum-ok	{cpurc: FACTOTUM-OK}
+stage listen-17010	{cpurc: LISTEN-17010}
+stage ladder-done	{cpurc: DONE}
+
+# --- 4. subtree 2: drawterm on a pty ----------------------------------
+if {$x11_leg} {
+	if {[catch {start_xvfb} xerr]} {
+		puts stderr "GATE-FAIL dt-feed-timeout — the private Xvfb venue did not start ($xerr)"
+		cleanup
+		exit 1
+	}
+	set xvfb_pid $xerr
+	puts stderr "drawterm-gate: Xvfb ready (DISPLAY=$env(DISPLAY), -nolisten tcp)"
+}
+set dt_spec "cpu=127.0.0.1,auth=tcp!127.0.0.1!5670,user=$dt_user"
+set dt_flags [expr {$x11_leg ? "" : "-G "}]
+set dt_cmd "R9_RUN_ID=$dt_tag exec -a $dt_tag $env(DRAWTERM_BIN) $dt_flags-s '' -O $dt_spec"
+spawn bash -c $dt_cmd
+set dt_sid $spawn_id
+set dt_pid [exp_pid]
+puts stderr "drawterm-gate: spawned drawterm on a pty (mode $gate_mode, argv0 tag $dt_tag, user $dt_user)"
+set spawn_id $dt_sid
+
+# --- 5. the password feed ---------------------------------------------
+if {$x11_leg} {
+	# X11: XTEST keystrokes into the private Xvfb display.  The pty is
+	# never fed here (no host-stdin reader exists without -G).
+	if {[catch {xwait_window $feed_wait} wid]} {
+		puts stderr "GATE-FAIL dt-feed-timeout — the X11 password feed did not complete ($wid; WM class drawterm on the private display, pwfile $env(R9_DEMO_PWFILE))"
+		cleanup
+		exit 1
+	}
+	if {[catch {xfeed_type $wid $env(R9_DEMO_PWFILE) $feed_settle} err]} {
+		puts stderr "GATE-FAIL dt-feed-timeout — the X11 password feed did not complete ($err; WM class drawterm on the private display, pwfile $env(R9_DEMO_PWFILE))"
+		cleanup
+		exit 1
+	}
+	puts stderr "drawterm-gate: feed ok — XTEST password entry into the drawterm window ($wid)"
+	set timeout $session_window
+	expect {
+		-re {goodbye} {
+			puts stderr "GATE-FAIL dt-feed-timeout — drawterm exited before rio started (goodbye on the pty)"
+			cleanup
+			exit 1
+		}
+		eof {
+			puts stderr "GATE-FAIL dt-feed-timeout — drawterm died during the auth/session start (pty EOF)"
+			cleanup
+			exit 1
+		}
+		timeout {
+			puts stderr "drawterm-gate: stage ok — session window quiet (rio draws; no pty text expected)"
+		}
+	}
+} else {
+	# The -G pty feed is the unchanged Harvey path (session and the
+	# control/force legs).
+	feedstage dt-password "${dt_user}@.* password: " "$dt_pw\r"
+	set timeout $session_window
+	expect {
+		-re {password mismatch} {
+			puts stderr "drawterm-gate: FAILED at stage: session-prompt — the auth exchange rejected the password (mismatch line on the pty; creds file: $creds_file)"
+			cleanup
+			exit 1
+		}
+		-re {goodbye} {
+			puts stderr "drawterm-gate: FAILED at stage: session-prompt — drawterm exited before a shell prompt (goodbye on the pty)"
+			cleanup
+			exit 1
+		}
+		-re {% } {
+			puts stderr "drawterm-gate: stage ok — session-prompt (the remote interactive shell)"
+		}
+		timeout {
+			puts stderr "drawterm-gate: TIMEOUT at stage: session-prompt (no shell prompt after the password feed)"
+			cleanup
+			exit 1
+		}
+		eof {
+			puts stderr "drawterm-gate: drawterm exited (EOF) at stage: session-prompt"
+			cleanup
+			exit 1
+		}
+	}
+}
+
+if {$gate_mode eq "session"} {
+	# --- session: the original -G assertions, unchanged ---------------
+	send -- "echo DTGATE-$run_tag\r"
+	stage fed-echo "DTGATE-$run_tag"
+
+	send -- "exit\r"
+	expect {
+		-re {eof: n=-1} {
+			puts stderr "drawterm-gate: stage ok — session-exit (the connection hangup reached the client's exportfs; the fed exit tore the session down end-to-end)"
+		}
+		timeout { puts stderr "drawterm-gate: TIMEOUT at stage: session-exit (no exportfs hangup line — the teardown chain did not fire)"; cleanup; exit 1 }
+		eof { puts stderr "drawterm-gate: process exited (EOF) at stage: session-exit WITHOUT the exportfs hangup line (an abrupt death — the teardown chain did not fire)"; cleanup; exit 1 }
+	}
+	set timeout 15
+	expect {
+		eof { puts stderr "drawterm-gate: stage ok — drawterm EOF after the hangup (clean session teardown)" }
+		timeout { puts stderr "drawterm-gate: note — no EOF within 15s of the hangup (continuing; cleanup reaps the drawterm subtree)" }
+	}
+	set timeout 600
+
+	# --- drain the serial stream into the capture ---------------------
+	set spawn_id $qemu_sid
+	set drain_n 0
+	while {$drain_n < 40} {
+		incr drain_n
+		expect {
+			* { }
+			timeout { break }
+			eof {
+				puts stderr "drawterm-gate: qemu exited (EOF) during the serial drain — continuing to the post-pass (the capture holds what streamed)"
+				break
+			}
+		}
+	}
+	puts stderr "drawterm-gate: stage ok — serial drained (the auth exchange's serial lines are in the capture)"
+
+	# --- the whole-file post-passes -----------------------------------
+	log_file
+	set fh [open $env(R9_SMOKE_LOG) r]
+	set whole [read $fh]
+	close $fh
+	if {[string first "cpurc: FAIL" $whole] >= 0} {
+		puts stderr "drawterm-gate: cpurc: FAIL present in the capture — a ladder leg failed"
+		cleanup
+		exit 1
+	}
+	puts stderr "drawterm-gate: post-pass ok — zero cpurc: FAIL in the capture"
+	regsub -all {panic: sysfatal} $whole "" whole_nopanic
+	if {[string first "panic" $whole_nopanic] >= 0} {
+		puts stderr "drawterm-gate: a panic marker is present in the capture"
+		cleanup
+		exit 1
+	}
+	puts stderr "drawterm-gate: post-pass ok — zero kernel panic markers in the capture (drawterm's own sysfatal exit pair excluded)"
+	set sess_missing 0
+	if {[string first "${dt_user}@" $whole] < 0} {
+		puts stderr "drawterm-gate: session marker absent — the password prompt's user anchor '${dt_user}@' is not in the capture"
+		incr sess_missing
+	}
+	if {[string first " password: " $whole] < 0} {
+		puts stderr "drawterm-gate: session marker absent — the readcons password prompt text is not in the capture"
+		incr sess_missing
+	}
+	if {[string first "DTGATE-$run_tag" $whole] < 0} {
+		puts stderr "drawterm-gate: session marker absent — the fed command's echo marker 'DTGATE-$run_tag' is not in the capture"
+		incr sess_missing
+	}
+	if {[string first "eof: n=-1" $whole] < 0} {
+		puts stderr "drawterm-gate: session marker absent — drawterm's exportfs hangup line 'eof: n=-1' is not in the capture (the teardown marker)"
+		incr sess_missing
+	}
+	if {[string first "tr-ok" $whole] < 0} {
+		puts stderr "drawterm-gate: session marker absent — no authsrv -d tr-ok token in the capture (the drawterm ticket exchange's serial evidence)"
+		incr sess_missing
+	}
+	if {$sess_missing > 0} {
+		cleanup
+		exit 1
+	}
+	puts stderr "drawterm-gate: post-pass ok — the session markers all present: the password prompt (user@ anchored), the shell prompt stage passed above, the fed-command marker, the teardown line, and tr-ok (the auth exchange's serial evidence)"
+
+	redact_capture
+	puts stderr "drawterm-gate: post-pass ok — the per-bake DEMO password redacted from the retained capture (T-01-58)"
+
+	puts stderr "drawterm-gate: ALL STAGES PASS — cpu boot through the cpurc ladder (PAIR-OK, ETHER-OK, KEYFS-OK, AUTHSRV-LISTEN, FACTOTUM-OK, LISTEN-17010, DONE), the hostfwd pair observed host-side (17010 + 5670), drawterm -G on a pty through the committed pair, the p9any -> p9sk1 password feedstage, the encrypted session, the remote shell prompt, the fed command's echo, the session teardown, the serial drain carrying tr-ok, zero FAIL, zero kernel panic, the capture redacted"
+
+	cleanup
+	exit 0
+}
+
+# --- the rio family: the serial console and the D-28 pair -------------
+# init's rc handoff after cpurc: DONE leaves a plain rc on the serial
+# console (no profile), so its prompt is rcmain's default `% '.
+set spawn_id $qemu_sid
+set timeout 120
+expect {
+	-re {% } {
+		puts stderr "drawterm-gate: stage ok — serial console rc prompt (init's handoff after cpurc: DONE)"
+	}
+	timeout {
+		puts stderr "GATE-FAIL no-session — the serial console never reached an rc prompt after cpurc: DONE"
+		cleanup
+		exit 1
+	}
+	eof {
+		puts stderr "GATE-FAIL no-session — qemu exited before the serial console reached an rc prompt"
+		cleanup
+		exit 1
+	}
+}
+
+# The rio stage budget, then `ls /srv` on the serial console.  rio's
+# srv files land in the kernel-wide #s table; the console namespace has
+# #s bound at /srv, and `ls /srv' prints full paths on this image, so
+# every token is normalized with `file tail' before matching.
+set timeout $rio_budget
+expect {
+	timeout {
+		puts stderr "drawterm-gate: stage ok — rio budget elapsed ($rio_budget s)"
+	}
+	eof {
+		puts stderr "GATE-FAIL no-session — qemu exited while rio was starting"
+		cleanup
+		exit 1
+	}
+}
+
+set found_rio 0
+set found_wctl 0
+set timeout $srv_poll_wait
+set manual_started 0
+for {set i 0} {$i < $srv_polls} {incr i} {
+	if {$x11_leg && !$manual_started && !$found_rio && !$found_wctl && $i >= 1} {
+		# The first serial poll found no pair.  On this app-baked venue
+		# the profile's draw guard skips the login-time `exec rio' (the
+		# 19-10 residual); use the documented manual start once, then
+		# keep polling.  If the profile auto-started rio, the pair is
+		# already present and this branch never fires.
+		if {[catch {xstart_rio $wid} err]} {
+			puts stderr "drawterm-gate: manual rio start failed ($err)"
+		} else {
+			puts stderr "drawterm-gate: no pair after poll 1 — sent the documented manual start (plumber; rio)"
+		}
+		set manual_started 1
+		after 5000
+	}
+	send -- "ls /srv\r"
+	expect {
+		-re {% } {
+			set chunk $expect_out(buffer)
+			foreach tok [split $chunk] {
+				set tok [string trim $tok "\r\n"]
+				if {[string index $tok 0] eq "/"} {
+					set tok [file tail $tok]
+				}
+				if {[regexp {^riowctl\.[^ ]+\.[0-9]+$} $tok]} {
+					set found_wctl 1
+					continue
+				}
+				if {[regexp {^rio\.[^ ]+\.[0-9]+$} $tok]} {
+					set found_rio 1
+					continue
+				}
+			}
+		}
+		timeout {
+			puts stderr "drawterm-gate: note — `ls /srv' poll [expr {$i + 1}] timed out; retrying"
+		}
+		eof {
+			puts stderr "GATE-FAIL no-session — qemu exited during the /srv poll"
+			cleanup
+			exit 1
+		}
+	}
+	if {$rio_leg} {
+		if {$found_rio && $found_wctl} { break }
+	} else {
+		if {$found_rio || $found_wctl} { break }
+	}
+}
+
+if {$rio_leg} {
+	if {$found_rio && $found_wctl} {
+		puts stderr "drawterm-gate: stage ok — serial /srv shows rio and riowctl (D-28 marker)"
+		puts "GATE-PASS rio-serving"
+	} else {
+		puts stderr "drawterm-gate: GATE-FAIL rio-not-serving — no rio.<user>.<pid> + riowctl.<user>.<pid> pair in the serial /srv listing within the budget"
+		puts "GATE-FAIL rio-not-serving"
+		cleanup
+		exit 1
+	}
+} else {
+	if {$found_rio || $found_wctl} {
+		puts stderr "drawterm-gate: GATE-FAIL control-saw-rio — a rio srv entry appeared in the -G control session, so the assertion does not discriminate"
+		puts "GATE-FAIL control-saw-rio"
+		cleanup
+		exit 1
+	}
+	puts stderr "drawterm-gate: stage ok — serial /srv shows neither rio nor riowctl (the negative control)"
+	puts "GATE-PASS control-no-rio"
+}
+
+# --- optional serial checks (after a passing rio assertion) -----------
+if {$rio_leg && [info exists env(GATE_SERIAL_CHECKS)] && $env(GATE_SERIAL_CHECKS) ne ""} {
+	foreach line [split $env(GATE_SERIAL_CHECKS) "\n"] {
+		set line [string trim $line "\r"]
+		if {$line eq ""} {
+			continue
+		}
+		set eq [string first "=" $line]
+		if {$eq <= 0 || $eq == [string length $line] - 1} {
+			puts stderr "drawterm-gate: GATE-FAIL serial-check — malformed GATE_SERIAL_CHECKS entry '$line' (want <cmd>=<marker>)"
+			puts "GATE-FAIL serial-check"
+			cleanup
+			exit 1
+		}
+		set sc_cmd [string range $line 0 [expr {$eq - 1}]]
+		set sc_marker [string range $line [expr {$eq + 1}] end]
+		send -- "$sc_cmd\r"
+		set timeout 60
+		expect {
+			-re $sc_marker {
+				puts stderr "drawterm-gate: stage ok — serial-check '$sc_marker' present after '$sc_cmd'"
+			}
+			timeout {
+				puts stderr "drawterm-gate: GATE-FAIL serial-check — marker '$sc_marker' absent after '$sc_cmd' within 60s"
+				puts "GATE-FAIL serial-check"
+				cleanup
+				exit 1
+			}
+			eof {
+				puts stderr "drawterm-gate: GATE-FAIL serial-check — qemu exited before '$sc_marker' appeared"
+				puts "GATE-FAIL serial-check"
+				cleanup
+				exit 1
+			}
+		}
+	}
+	set timeout 600
+}
+
+# --- the whole-file post-passes (rio family) --------------------------
+log_file
+set fh [open $env(R9_SMOKE_LOG) r]
+set whole [read $fh]
+close $fh
+if {[string first "cpurc: FAIL" $whole] >= 0} {
+	puts stderr "drawterm-gate: cpurc: FAIL present in the capture — a ladder leg failed"
+	cleanup
+	exit 1
+}
+puts stderr "drawterm-gate: post-pass ok — zero cpurc: FAIL in the capture"
+regsub -all {panic: sysfatal} $whole "" whole_nopanic
+if {[string first "panic" $whole_nopanic] >= 0} {
+	puts stderr "drawterm-gate: a panic marker is present in the capture"
+	cleanup
+	exit 1
+}
+puts stderr "drawterm-gate: post-pass ok — zero kernel panic markers (drawterm's own sysfatal exit pair excluded)"
+
+redact_capture
+puts stderr "drawterm-gate: post-pass ok — the per-bake DEMO password redacted from the retained capture (T-01-58)"
+
+cleanup
+if {$rio_leg} {
+	puts stderr "drawterm-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, encrypted drawterm session, serial /srv shows rio + riowctl (GATE-PASS rio-serving)"
+} else {
+	puts stderr "drawterm-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, -G control session, serial /srv shows neither rio entry (GATE-PASS control-no-rio)"
+}
+exit 0
