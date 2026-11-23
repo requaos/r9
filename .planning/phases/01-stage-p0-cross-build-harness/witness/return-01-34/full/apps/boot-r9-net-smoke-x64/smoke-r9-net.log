@@ -1,0 +1,276 @@
+c[?7l[2J[0mSeaBIOS (version rel-1.17.0-0-gb52ca86e094d-prebuilt.qemu.org)
+
+
+iPXE (http://ipxe.org) 00:02.0 CA00 PCI2.10 PnP PMM+3EFD1B50+3EF31B50 CA00
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from Hard Disk...
+Boot failed: could not read the boot disk
+
+Booting from DVD/CD...
+[0;30;47mWelcome to GRUB[H[J[1;1H  Booting `r9'
+
+!
+
+
+r9 from the Internet
+Machine information:
+q35: memory 0x0..0x9fc00 (0x9fc00) available
+q35: memory 0x9fc00..0xa0000 (0x400) reserved
+q35: memory 0xf0000..0x100000 (0x10000) reserved
+q35: memory 0x100000..0x3ffdf000 (0x3fedf000) available
+q35: memory 0x3ffdf000..0x40000000 (0x21000) reserved
+q35: memory 0xb0000000..0xc0000000 (0x10000000) reserved
+q35: memory 0xfed1c000..0xfed20000 (0x4000) reserved
+q35: memory 0xfeffc000..0xff000000 (0x4000) reserved
+q35: memory 0xfffc0000..0x100000000 (0x40000) reserved
+q35: acpi rsdt 0x3ffe2345 (mb2 RSDP tag — 13-04 walks it)
+q35: acpi rsdt 0x3ffe2345 via mb2 acpi tag (5 entries)
+q35: mcfg 0xb0000000 buses 0x0-0xff (seg 0)
+q35: lapic 0xfee00000 (madt local intc)
+q35: ioapic 0xfec00000 gsib 0 (id 0)
+q35: intsrc bus 0 source 0 -> gsi 2 flags 0x0
+q35: intsrc bus 0 source 5 -> gsi 5 flags 0xd
+q35: intsrc bus 0 source 9 -> gsi 9 flags 0xd
+q35: intsrc bus 0 source 10 -> gsi 10 flags 0xd
+q35: intsrc bus 0 source 11 -> gsi 11 flags 0xd
+q35: hpet 0xfed00000
+pciexbar: 0xb0000001 -> 0xb0000001
+pci: virtio-net 1af4:1041 at 00:02.0 rev 01 pin 1 (inta) bars 2
+pci: inta -> gsi 22 (q35 root slot 2, pirq G: 16+6)
+Memory usage:
+  Used:		0x00000006c00000
+  Total:	0x0000003ffdf000
+random: source=rdrand
+lapic: cpuid leaf-1 ecx: x2apic=true tsc-deadline=true
+lapic: x2apic live (msr 0x800 map; lint0/1 masked, no pic)
+timer: 2496103240 Hz (pit 1193182 Hz reference), TscDeadline mode, armed
+ioapic: id 0 version 0x11 rtes 23 gsib 0 (madt 0xfec00000)
+pci: bar4 pa 0xfe000000 size 0x4000 (firmware) readback 0xfe000000
+pci: caps common@0x0+0x1000 notify@0x3000 isr@0x1000 device@0x2000 mult 4
+virtio-net: features offered 0x10130bf8024 negotiated 0x100010020
+virtio-net: rx pre-posted 128 buffers qsize 256
+ioapic: gsi 22 -> vector 0x21 (level)
+#l0: virtio: 1000Mbps: 52:54:00:12:34:56
+fpu: kernel-SIMD selftest ok (user state parked and restored across the section; xor_fold16 0x1983c6d50a18d707c9d74d9a42c59f27)
+q35: module @0x101000 +0xdd932 (mb2 tag 3, stashed)
+devenv: seeded cputype=amd64 nobootprompt=embed readparts=0
+q35: paqfs root mounted from module (907570 bytes)
+devroot: /boot/boot open (159349 bytes)
+exec: entering ring 3 pc=0x2054fa sp=0x7fffffffef78 path=/boot/boot argv=[boot]
+paqfs...version...net.stage: Mon Nov 23 19:30:08 GMT 2026
+fingerprint: 8fdbd19d482c36d4b46deb7f48d4f394ad607ff9
+process 2 exited: ""
+churngate: heap exit 96512 33554432
+syscall 10 unimplemented (pid 1 boot)
+time...
+boot: opening #c/swap: namec: does not exist
+init: can't open #c/sysname: namec: does not exist
+syscall 10 unimplemented (pid 1 init)
+
+init: starting /bin/rc
+% . /lib/netaddr.rc
+% rc /lib/netip-static.rc
+process 6 exited: ""
+churngate: heap exit 1205184 33554432
+#I0: devip attached
+process 7 exited: ""
+churngate: heap exit 1205312 33554432
+devcons: random seeded
+devip: medium ether bound #l0
+process 8 exited: ""
+churngate: heap exit 1277518 33554432
+process 9 exited: ""
+churngate: heap exit 1342670 33554432
+process 10 exited: ""
+churngate: heap exit 1343232 33554432
+netip: static ok
+process 11 exited: ""
+churngate: heap exit 1351680 33554432
+sending 3 64 byte messages 1000 ms apart to icmp!10.0.2.2!1
+0: rtt 0 µs, avg rtt 0 µs, ttl = 255
+1: rtt 0 µs, avg rtt 0 µs, ttl = 255
+2: rtt 0 µs, avg rtt 0 µs, ttl = 255
+process 13 exited: ""
+churngate: heap exit 1557312 33554432
+process 12 exited: ""
+churngate: heap exit 1557312 33554432
+process 14 exited: ""
+churngate: heap exit 1564672 33554432
+netip: arp view ok
+process 15 exited: ""
+churngate: heap exit 1564672 33554432
+netip: NOT-L2-TRUTH slirp venue
+process 16 exited: ""
+churngate: heap exit 1564672 33554432
+netip: NETIP-DONE
+process 17 exited: ""
+churngate: heap exit 1564672 33554432
+process 5 exited: ""
+churngate: heap exit 1564672 33554432
+% ip/ipconfig ether /net/ether0 add $slirp_guestv4 $slirp_maskv4 || echo netgate: DUPBIND-REJECTED
+ipconfig: /net/ipifc/clone: bind ether /net/ether0: interface already bound
+process 18 exited: "/net/ipifc/clone: bind ether /net/ether0: interface already bound"
+churngate: heap exit 1564672 33554432
+netgate: DUPBIND-REJECTED
+process 19 exited: ""
+churngate: heap exit 1564672 33554432
+% for (i in /net/ipifc/[0-9]*) if (grep 'device ether' $i/status > /dev/null) echo unbind > $i/ctl
+process 20 exited: ""
+churngate: heap exit 1564672 33554432
+process 21 exited: ""
+churngate: heap exit 1564672 33554432
+% rc /lib/netip-dhcp.rc
+process 23 exited: ""
+churngate: heap exit 1564672 33554432
+process 24 exited: ""
+churngate: heap exit 1564736 33554432
+devip: medium ether bound #l0
+process 25 exited: ""
+churngate: heap exit 1565824 33554432
+process 27 exited: ""
+churngate: heap exit 1572864 33554432
+process 28 exited: ""
+churngate: heap exit 1572864 33554432
+process 29 exited: ""
+churngate: heap exit 1572928 33554432
+sending 3 64 byte messages 1000 ms apart to icmp!10.0.2.2!1
+0: rtt 0 µs, avg rtt 0 µs, ttl = 255
+1: rtt 0 µs, avg rtt 0 µs, ttl = 255
+2: rtt 0 µs, avg rtt 0 µs, ttl = 255
+process 31 exited: ""
+churngate: heap exit 1843904 33554432
+process 30 exited: ""
+churngate: heap exit 1843904 33554432
+netip: dhcp ok
+process 32 exited: ""
+churngate: heap exit 1843904 33554432
+netip: NOT-L2-TRUTH slirp venue
+process 33 exited: ""
+churngate: heap exit 1843904 33554432
+netip: NETIP-DONE
+process 34 exited: ""
+churngate: heap exit 1843904 33554432
+process 22 exited: ""
+churngate: heap exit 1843904 33554432
+% for (i in /net/ipifc/[0-9]*) if (grep 'device ether' $i/status > /dev/null) echo unbind > $i/ctl
+process 35 exited: ""
+churngate: heap exit 1843904 33554432
+process 36 exited: ""
+churngate: heap exit 1843904 33554432
+% rc /lib/netip-loopback.rc
+process 38 exited: ""
+churngate: heap exit 1843904 33554432
+process 40 exited: ""
+churngate: heap exit 1861248 33554432
+process 41 exited: ""
+churngate: heap exit 1861248 33554432
+process 39 exited: ""
+churngate: heap exit 1861248 33554432
+process 43 exited: ""
+churngate: heap exit 1861504 33554432
+process 44 exited: ""
+churngate: heap exit 1861504 33554432
+process 42 exited: ""
+churngate: heap exit 1861504 33554432
+process 46 exited: ""
+churngate: heap exit 1861824 33554432
+process 47 exited: ""
+churngate: heap exit 1861824 33554432
+process 45 exited: ""
+churngate: heap exit 1861824 33554432
+netip: random ok
+process 48 exited: ""
+churngate: heap exit 1861824 33554432
+process 49 exited: ""
+churngate: heap exit 1861824 33554432
+process 50 exited: ""
+churngate: heap exit 1861824 33554432
+process 51 exited: ""
+churngate: heap exit 1861824 33554432
+devip: medium loopback bound
+process 52 exited: ""
+churngate: heap exit 1861824 33554432
+process 53 exited: ""
+churngate: heap exit 1861824 33554432
+process 54 exited: ""
+churngate: heap exit 1861824 33554432
+sending 3 64 byte messages 1000 ms apart to icmp!127.0.0.1!1
+bad type/code/sequence 8/0/32747 (want 0/0/32747)
+0: rtt 0 µs, avg rtt 0 µs, ttl = 255
+bad type/code/sequence 8/0/32748 (want 0/0/32748)
+1: rtt 0 µs, avg rtt 0 µs, ttl = 255
+bad type/code/sequence 8/0/32749 (want 0/0/32749)
+2: rtt 0 µs, avg rtt 0 µs, ttl = 255
+process 56 exited: ""
+churngate: heap exit 1861824 33554432
+process 55 exited: ""
+churngate: heap exit 1861824 33554432
+netip: ping ok
+process 57 exited: ""
+churngate: heap exit 1861824 33554432
+process 59 exited: ""
+churngate: heap exit 1927168 33554432
+process 61 exited: ""
+churngate: heap exit 1949696 33554432
+process 62 exited: ""
+churngate: heap exit 2080000 33554432
+process 60 exited: ""
+churngate: heap exit 2080000 33554432
+process 63 exited: ""
+churngate: heap exit 2080000 33554432
+process 64 exited: ""
+churngate: heap exit 2211072 33554432
+process 65 exited: ""
+churngate: heap exit 2211072 33554432
+process 66 exited: ""
+churngate: heap exit 2211072 33554432
+process 67 exited: ""
+churngate: heap exit 2211072 33554432
+netip: udp echo ok
+process 68 exited: ""
+churngate: heap exit 2211072 33554432
+netip: NETIP-DONE
+process 69 exited: ""
+churngate: heap exit 2211072 33554432
+process 37 exited: ""
+churngate: heap exit 2211072 33554432
+% ip/ping -n 1 $noaddr || echo netgate: NOADDR-REJECTED
+usage: ip/ping [-6alq] [-s msgsize] [-i millisecs] [-n #pings] dest
+process 70 exited: "usage"
+churngate: heap exit 2471680 33554432
+netgate: NOADDR-REJECTED
+process 71 exited: ""
+churngate: heap exit 2471680 33554432
+% tcpecho &
+% tcpecho: announced
+sport=''; while (~ $sport '') { for (d in /net/tcp/[0-9]*) { loc=`{cat $d/local >[2]/dev/null}; if (~ $loc *!7) sport=7 } }
+process 73 exited: ""
+churngate: heap exit 3254272 33554432
+% tcptag=netip-tcp-smoke-14-09
+% {
+	tconv=`{cat <[0=4]}; d=/net/tcp/$tconv/data
+	echo connect $lo_guestv4!7 >[1=4]
+	echo $tcptag > $d
+	reply=`{dd -if $d -bs 512 -count 1 >[2]/dev/null}
+	if (~ $reply $tcptag) echo netip: tcp echo ok
+	if (! ~ $reply $tcptag) echo netip: 'FAIL' tcpcompare
+	} <>[4]/net/tcp/clone
+process 74 exited: ""
+churngate: heap exit 3254272 33554432
+process 75 exited: ""
+churngate: heap exit 3258368 33554432
+tcpecho: conn
+process 76 exited: ""
+churngate: heap exit 3266560 33554432
+process 77 exited: ""
+churngate: heap exit 3266560 33554432
+netip: tcp echo ok
+process 78 exited: ""
+churngate: heap exit 3266560 33554432
+% echo NET-SMOKE: ALL STAGES PASS
+NET-SMOKE: ALL STAGES PASS
+process 79 exited: ""
+churngate: heap exit 3266560 33554432
+% 

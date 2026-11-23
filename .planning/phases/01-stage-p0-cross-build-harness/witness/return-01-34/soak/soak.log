@@ -1,0 +1,18 @@
+warning: Git tree '/home/req/code/r9' is dirty
+warning: Git tree '/home/req/code/r9' is dirty
+net-doctor: PASS bridge-exists: br0 present
+net-doctor: PASS bridge-up: br0 flags carry UP
+net-doctor: PASS bridge-addr: 192.168.122.1/24 present on br0 (the seam's tap_gwv4)
+net-doctor: PASS ip-forward: net.ipv4.ip_forward=1
+net-doctor: WARN masquerade: cannot read the netfilter ruleset unprivileged — verify with: sudo iptables-save | grep '192.168.122.0/24' (or: sudo nft list ruleset | grep '192.168.122.0/24'); want a MASQUERADE rule for 192.168.122.0/24 out the default route
+net-doctor: PASS helper-wrapper: /run/wrappers/bin/qemu-bridge-helper present + setuid (mode 4511)
+net-doctor: PASS bridge-conf-allow: /etc/qemu/bridge.conf carries the exact 'allow br0' line
+net-doctor: PASS blastport-free: port 7777 free (no LISTEN holder)
+net-doctor: DOCTOR-OK
+warning: Git tree '/home/req/code/r9' is dirty
+these 2 derivations will be built:
+  /nix/store/9m9f9f5kd9s5ydkm13yq7x4nnvsx8asa-host-echo-16.05.drv
+  /nix/store/5gfjx8i3czyh37mdwf1vdin81mc5fqbf-boot-r9-net-soak-x64.drv
+building '/nix/store/9m9f9f5kd9s5ydkm13yq7x4nnvsx8asa-host-echo-16.05.drv'...
+building '/nix/store/5gfjx8i3czyh37mdwf1vdin81mc5fqbf-boot-r9-net-soak-x64.drv'...
+error: slirp evidence not accepted — the NETIP-08 soak verdict is the tap leg's (slirp is not L2 truth by contract and its captures say so); want --net=tap / R9_NET=tap; refusing before any assembly or boot (D-11's venue-honesty control)
