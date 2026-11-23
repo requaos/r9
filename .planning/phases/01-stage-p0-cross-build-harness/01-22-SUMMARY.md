@@ -91,7 +91,8 @@ coverage:
 
 duration: 3h 21m
 completed: 2026-11-23
-status: halted
+status: complete
+phase_status: halted-stop-b-failures
 ---
 
 # Phase 01 Plan 22: Owner stop B — the x86_64 KVM witness batch Summary

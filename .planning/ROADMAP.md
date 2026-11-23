@@ -57,7 +57,7 @@ Milestone numbering continues from the closed Harvey-rooted milestone v2.1.
   5. The existing x86_64 q35 boot-test profiles and the aarch64 virt quick pass still pass through the reconciled mechanism.
   6. Inside `nix develop`, with nothing set by hand, `cargo xtask` commands find the Harvey tree: the r9 flake pins Harvey and the devshell exports its read-only location, and that tree contains the pre-built artifacts the harness needs.
   7. Flake ownership is flipped: r9's flake imports Harvey and exposes the composed boot and gate outputs that Harvey's flake used to own, Harvey's flake has no `r9` input, and each moved gate passes when run from r9.
-**Plans**: 28/33 plans executed — 7/7 executed in planning pass 1 (research spikes S1-S6 and the owner checkpoint, D-22); 24 pass-2 plans (01-08 to 01-31) implement HARN-01 to HARN-08, with four owner stops (A 01-12, B 01-22, C 01-27, E 01-28); plan 01-32 is the owner-directed rio de-risk iteration after the stop-A FAIL (D-30); plan 01-33 is the stop-B fix iteration after the driver/step/churn failures
+**Plans**: 29/33 plans executed — 7/7 executed in planning pass 1 (research spikes S1-S6 and the owner checkpoint, D-22); 24 pass-2 plans (01-08 to 01-31) implement HARN-01 to HARN-08, with four owner stops (A 01-12, B 01-22, C 01-27, E 01-28); plan 01-32 is the owner-directed rio de-risk iteration after the stop-A FAIL (D-30); plan 01-33 is the stop-B fix iteration after the driver/step/churn failures
 
 Plans:
 **Wave 1**
@@ -111,7 +111,7 @@ Plans:
 - [x] 01-21-PLAN.md — aarch64 boot, smoke and tier-1 gates moved into r9; tier-1 (HVF, TCG) and smoke on the Mac
 
 **Wave 12**
-- [ ] 01-22-PLAN.md — OWNER STOP B: quick gate x2 + failing direction, swap shas, nine x86_64 profiles, boot-iso FOD on KVM
+- [x] 01-22-PLAN.md — OWNER STOP B: quick gate x2 + failing direction, swap shas, nine x86_64 profiles, boot-iso FOD on KVM
 - [x] 01-30-PLAN.md — aarch64 net-smoke and cpu gates moved into r9; whole aarch64 quick pass on the Mac (split from 01-21)
 
 **Wave 13**
@@ -362,7 +362,7 @@ Phases execute in numeric order: 1 → 2 → 3 → … → 16 (decimal insertion
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 1. Stage P0 - Cross-Build Harness | v3.0 | 28/33 | In Progress | - |
+| 1. Stage P0 - Cross-Build Harness | v3.0 | 29/33 | In Progress | - |
 | 2. Guide Phase 0 - Design Lock and rfork Flag Reservation | v3.0 | 0/TBD | Not started | - |
 | 3. Guide Phase 1 - crypto/ and ds/ Foundations | v3.0 | 0/TBD | Not started | - |
 | 4. Guide Phase 2 - 9P2000.aead Transport and FidTable | v3.0 | 0/TBD | Not started | - |
