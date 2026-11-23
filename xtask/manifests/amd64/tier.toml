@@ -1,0 +1,485 @@
+# The x86_64 TIER image (build/x86_64/mkimage.sh §9 at bd7a698): the chain
+# tree + the tier-1 sweep payload (the h* renamed copies computed from
+# tiers/tier1-cmds.txt) + the sweep script, sentinel and nm fixture under
+# /lib/tier1 + the tier termrc override.
+#
+# Derived from the reference bake's tier.members by `cargo xtask image
+# --emit-manifest`; the h* entries are renamed copies of their tree
+# sources (one [[file]] each), lib/tier1/sentinel.txt is the tree's
+# printf fixture, and every other member is a plain harvey copy.  No
+# unresolved marker remains.
+
+schema = 1
+arch = "amd64"
+image = "tier"
+
+[[file]]
+path = "/README.md"
+source = "harvey"
+from = "build/x86_64/root-tree/README.md"
+mode = "0644"
+
+[[dir]]
+path = "/adm"
+
+[[dir]]
+path = "/adm/timezone"
+
+[[file]]
+path = "/adm/timezone/local"
+source = "harvey"
+from = "adm/timezone/local"
+mode = "0644"
+
+[[dir]]
+path = "/amd64"
+
+[[dir]]
+path = "/amd64/bin"
+
+[[file]]
+path = "/amd64/bin/cat"
+source = "harvey"
+from = "amd64/bin/cat"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/echo"
+source = "harvey"
+from = "amd64/bin/echo"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/fpprobe"
+source = "harvey"
+from = "build/x86_64/smoke-out/fpprobe"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hawk"
+source = "harvey"
+from = "amd64/bin/awk"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hbasename"
+source = "harvey"
+from = "amd64/bin/basename"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hcal"
+source = "harvey"
+from = "amd64/bin/cal"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hcat"
+source = "harvey"
+from = "amd64/bin/cat"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hcmp"
+source = "harvey"
+from = "amd64/bin/cmp"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hcomm"
+source = "harvey"
+from = "amd64/bin/comm"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hdate"
+source = "harvey"
+from = "amd64/bin/date"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hdc"
+source = "harvey"
+from = "amd64/bin/dc"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hdu"
+source = "harvey"
+from = "amd64/bin/du"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hecho"
+source = "harvey"
+from = "amd64/bin/echo"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hfactotum"
+source = "harvey"
+from = "amd64/bin/auth/factotum"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hfmt"
+source = "harvey"
+from = "amd64/bin/fmt"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hgrep"
+source = "harvey"
+from = "amd64/bin/grep"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hipconfig"
+source = "harvey"
+from = "amd64/bin/ip/ipconfig"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hjoin"
+source = "harvey"
+from = "amd64/bin/join"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hls"
+source = "harvey"
+from = "amd64/bin/ls"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hmd5sum"
+source = "harvey"
+from = "amd64/bin/md5sum"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hnm"
+source = "harvey"
+from = "amd64/bin/nm"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hpr"
+source = "harvey"
+from = "amd64/bin/pr"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hps"
+source = "harvey"
+from = "amd64/bin/ps"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hrc"
+source = "harvey"
+from = "amd64/bin/rc"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hread"
+source = "harvey"
+from = "amd64/bin/read"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hsed"
+source = "harvey"
+from = "amd64/bin/sed"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hseq"
+source = "harvey"
+from = "amd64/bin/seq"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hsha1sum"
+source = "harvey"
+from = "amd64/bin/sha1sum"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hsleep"
+source = "harvey"
+from = "amd64/bin/sleep"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hsort"
+source = "harvey"
+from = "amd64/bin/sort"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hstrings"
+source = "harvey"
+from = "amd64/bin/strings"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hsum"
+source = "harvey"
+from = "amd64/bin/sum"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/htail"
+source = "harvey"
+from = "amd64/bin/tail"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/htest"
+source = "harvey"
+from = "amd64/bin/test"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/htime"
+source = "harvey"
+from = "amd64/bin/time"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/htr"
+source = "harvey"
+from = "amd64/bin/tr"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/huniq"
+source = "harvey"
+from = "amd64/bin/uniq"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hunits"
+source = "harvey"
+from = "amd64/bin/units"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hwc"
+source = "harvey"
+from = "amd64/bin/wc"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hxd"
+source = "harvey"
+from = "amd64/bin/xd"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/ls"
+source = "harvey"
+from = "amd64/bin/ls"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/ps"
+source = "harvey"
+from = "amd64/bin/ps"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/rc"
+source = "harvey"
+from = "amd64/bin/rc"
+mode = "0755"
+
+[[file]]
+path = "/amd64/init"
+source = "harvey"
+from = "amd64/init"
+mode = "0755"
+
+[[dir]]
+path = "/bin"
+
+[[dir]]
+path = "/bin/service"
+
+[[file]]
+path = "/bin/service/tcp17010"
+source = "harvey"
+from = "build/x86_64/root-tree/bin/service/tcp17010"
+mode = "0755"
+
+[[dir]]
+path = "/boot"
+
+[[file]]
+path = "/boot/boot"
+source = "harvey"
+from = "build/x86_64/out/boot"
+mode = "0755"
+
+[[file]]
+path = "/boot/paqfs"
+source = "harvey"
+from = "amd64/bin/paqfs"
+mode = "0755"
+
+[[dir]]
+path = "/dev"
+
+[[dir]]
+path = "/env"
+
+[[dir]]
+path = "/fd"
+
+[[dir]]
+path = "/lib"
+
+[[file]]
+path = "/lib/churn-cats.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/churn-cats.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/namespace"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/namespace"
+mode = "0644"
+
+[[dir]]
+path = "/lib/ndb"
+
+[[file]]
+path = "/lib/ndb/local.template"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/ndb/local.template"
+mode = "0644"
+
+[[file]]
+path = "/lib/netaddr.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netaddr.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-dhcp.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netip-dhcp.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-loopback.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netip-loopback.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-static.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netip-static.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-tap.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netip-tap.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-tcp.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netip-tcp.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netstress.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netstress.rc"
+mode = "0644"
+
+[[dir]]
+path = "/lib/tier1"
+
+[[file]]
+path = "/lib/tier1-sweep.rc"
+source = "harvey"
+from = "build/x86_64/tier1-sweep.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/tier1/nm-input.6"
+source = "harvey"
+from = "build/x86_64/nm-input.6"
+mode = "0644"
+
+[[file]]
+path = "/lib/tier1/sentinel.txt"
+source = "harvey"
+from = "build/x86_64/tier1-sentinel.txt"
+mode = "0644"
+
+[[dir]]
+path = "/mnt"
+
+[[dir]]
+path = "/net"
+
+[[dir]]
+path = "/proc"
+
+[[dir]]
+path = "/rc"
+
+[[dir]]
+path = "/rc/bin"
+
+[[file]]
+path = "/rc/bin/cpurc"
+source = "harvey"
+from = "build/x86_64/root-tree/rc/bin/cpurc"
+mode = "0755"
+
+[[file]]
+path = "/rc/bin/termrc"
+source = "harvey"
+from = "build/x86_64/tier-termrc"
+mode = "0644"
+
+[[dir]]
+path = "/rc/lib"
+
+[[file]]
+path = "/rc/lib/rcmain"
+source = "harvey"
+from = "rc/lib/rcmain"
+mode = "0644"
+
+[[dir]]
+path = "/root"
+
+[[dir]]
+path = "/srv"
+
+[[dir]]
+path = "/tmp"
+
+[[dir]]
+path = "/usr"
+
+[[dir]]
+path = "/usr/glenda"
+
+[[dir]]
+path = "/usr/glenda/lib"
+
+[[file]]
+path = "/usr/glenda/lib/profile"
+source = "harvey"
+from = "build/x86_64/root-tree/usr/glenda/lib/profile"
+mode = "0644"
