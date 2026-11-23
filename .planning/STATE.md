@@ -5,16 +5,16 @@ milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
 current_phase: 01
 current_phase_name: Stage P0 - Cross-Build Harness
 status: executing
-stopped_at: Completed 01-05-PLAN.md
-last_updated: "2026-11-23T00:57:57.234Z"
+stopped_at: Completed 01-01-PLAN.md
+last_updated: "2026-11-23T01:10:11.854Z"
 last_activity: 2026-11-23
-last_activity_desc: Phase 01 plan 05 (S3) completed
-state_head: 10325aa45b87825559f5d228e5bf38ec5ce9f3d6
+last_activity_desc: Phase 01 plan 01 (S1) completed
+state_head: a26ba8cbb29ff6c3d97a8a704ca7ec4ef24441ed
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 7
-  completed_plans: 3
+  completed_plans: 4
   percent: 0
 ---
 
@@ -30,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-11-22)
 ## Current Position
 
 Phase: 01 (Stage P0 - Cross-Build Harness) — EXECUTING
-Plan: 4 of 7
+Plan: 5 of 7
 Status: Ready to execute
-Last activity: 2026-11-23 — Plan 05 (S3) completed
+Last activity: 2026-11-23 — Plan 01 (S1) completed
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -55,6 +55,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 01 P03 | 3 min | 2 tasks | 8 files |
 | Phase 01 P04 | 6 min | 3 tasks | 17 files |
 | Phase 01 P05 | 5 min | 2 tasks | 8 files |
+| Phase 01 P01 | 13 min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -80,6 +81,10 @@ Full log is the PROJECT.md Key Decisions table. Recent:
 - [Phase 01]: The S3 flake re-exports Harvey's locked r9 116bcc2 packages and resolves them at run time with `nix build path:$S3_FLAKE#<attr>`: r9's kernel derivation has an import-from-derivation (rust-src Cargo.lock) that cannot build on aarch64-darwin, so eval-time interpolation would fail the plan's Mac check.
 - [Phase 01]: determinism.sh refuses a first bake whose log records a KERNDATE other than the requested one; Plan 06 passes KERNDATE=1795382101 to both gate runs so an all-DIFFERENT result cannot be blamed on the clock.
 - [Phase 01]: S3 static verdicts: A5 PASS (kernel-wide static srv table at devsrv.rs:59; #s bound at /srv for init's console rc and the cpu session) and A6 PASS (drawterm.nix builds Make.unix GUI=x11); the three KVM legs and A12 stay PENDING-OWNER for Plan 06.
+- [Phase 01]: S1 venue: the owner chose the existing lima VM harvey; unshare -Ur -m is refused on it (nested uid_map EPERM inside the nix sandbox, Ubuntu 24.04 AppArmor userns restriction outside it) and the same guest script passes through proot, so A1 is REFUTED for unshare and D-03 stays viable on the proot venue.
+- [Phase 01]: S1 host toolchain: nix/setup.sh + nix/toolchain.sh port to a sandbox with four adjustments - store-bash shebang for the 9l shim, pkgs.ed (mkcname), plan9port last on PATH (its 9p mount must not shadow util-linux mount), and GNU sed shadowing for 7l/BUILD's malformed _SYSRM line at the pin.
+- [Phase 01]: S1 measurement: the amd64 libc tier builds in 2 s inside the sandbox (259 members, 601170 bytes) and nix store verify --no-trust is clean on the output; A8's tens-of-minutes belongs to the full tier build, not the library tier.
+- [Phase 01]: S1 flake: pins Harvey bd7a698 (flake = false) and r9's nixpkgs rev 1c89083e, exposes s1-nsprobe, s1-nsprobe-proot, s1-hostbin and s1-libc-amd64 for x86_64-linux and aarch64-linux; the x86_64 witness legs stay PENDING-OWNER for Plan 06.
 
 ### Open Questions (ten warnings, approved to be carried, not resolved)
 
@@ -140,6 +145,6 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 
 ## Session Continuity
 
-Last session: 2026-11-23T00:57:57.214Z
-Stopped at: Completed 01-05-PLAN.md
+Last session: 2026-11-23T01:10:11.833Z
+Stopped at: Completed 01-01-PLAN.md
 Resume file: None

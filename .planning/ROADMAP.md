@@ -57,11 +57,11 @@ Milestone numbering continues from the closed Harvey-rooted milestone v2.1.
   5. The existing x86_64 q35 boot-test profiles and the aarch64 virt quick pass still pass through the reconciled mechanism.
   6. Inside `nix develop`, with nothing set by hand, `cargo xtask` commands find the Harvey tree: the r9 flake pins Harvey and the devshell exports its read-only location, and that tree contains the pre-built artifacts the harness needs.
   7. Flake ownership is flipped: r9's flake imports Harvey and exposes the composed boot and gate outputs that Harvey's flake used to own, Harvey's flake has no `r9` input, and each moved gate passes when run from r9.
-**Plans**: 3/7 plans executed in planning pass 1 (research spikes S1-S6 and the owner checkpoint, D-22); pass-2 plans TBD after the spike results
+**Plans**: 4/7 plans executed in planning pass 1 (research spikes S1-S6 and the owner checkpoint, D-22); pass-2 plans TBD after the spike results
 
 Plans:
 **Wave 1**
-- [ ] 01-01-PLAN.md — S1 sandboxed build venue (tracer) on an owner-approved Mac builder
+- [x] 01-01-PLAN.md — S1 sandboxed build venue (tracer) on an owner-approved Mac builder
 - [x] 01-03-PLAN.md — S5 Harvey's own kernel under q35 (Mac TCG legs, build/prompt recipe)
 - [x] 01-04-PLAN.md — S6 Rust-to-a.out probe (amd64 static, arm64 HVF swap, x86_64 leg scripted)
 - [x] 01-05-PLAN.md — S3 headless rio gate and mkimage determinism check, authored for the KVM run
@@ -301,7 +301,7 @@ Phases execute in numeric order: 1 → 2 → 3 → … → 16 (decimal insertion
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 1. Stage P0 - Cross-Build Harness | v3.0 | 3/7 | In Progress | - |
+| 1. Stage P0 - Cross-Build Harness | v3.0 | 4/7 | In Progress | - |
 | 2. Guide Phase 0 - Design Lock and rfork Flag Reservation | v3.0 | 0/TBD | Not started | - |
 | 3. Guide Phase 1 - crypto/ and ds/ Foundations | v3.0 | 0/TBD | Not started | - |
 | 4. Guide Phase 2 - 9P2000.aead Transport and FidTable | v3.0 | 0/TBD | Not started | - |
