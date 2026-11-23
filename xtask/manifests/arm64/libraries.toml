@@ -1,0 +1,229 @@
+# The arm64 library table (plan 01-17, HARN-03).
+#
+# One [[library]] per entry of Harvey's pinned arm64 tier-0 allowlist,
+# build/aarch64/tiers/tier0-libs.txt at
+# bd7a6982a3e4f465f8ed3da5e0c7290521514ff0.  `cargo xtask image --arch
+# aarch64 --libraries` checks every listed name against this table and
+# the resolved tree: a missing row or a missing arm64/lib/<lib>.a is a
+# named failure.
+#
+# Libraries are an AUDIT table, never image members: in_image stays false,
+# and the assembler stages only [[file]]/[[dir]] entries.  `from` is
+# tree-relative; `source = "harvey"` records provenance.
+#
+# liblex's archive is libl.a — the lex runtime's historical name (the
+# pinned tier-0 loop's own special case), so its row carries that path.
+
+schema = 1
+arch = "arm64"
+image = "libraries"
+
+[[library]]
+name = "libc"
+from = "arm64/lib/libc.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "libbio"
+from = "arm64/lib/libbio.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "libregexp"
+from = "arm64/lib/libregexp.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "libip"
+from = "arm64/lib/libip.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "libndb"
+from = "arm64/lib/libndb.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "libmp"
+from = "arm64/lib/libmp.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "libsec"
+from = "arm64/lib/libsec.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "libString"
+from = "arm64/lib/libString.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "libthread"
+from = "arm64/lib/libthread.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "lib9p"
+from = "arm64/lib/lib9p.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "libauth"
+from = "arm64/lib/libauth.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "libauthsrv"
+from = "arm64/lib/libauthsrv.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "libflate"
+from = "arm64/lib/libflate.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "libavl"
+from = "arm64/lib/libavl.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "libbin"
+from = "arm64/lib/libbin.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "libcomplete"
+from = "arm64/lib/libcomplete.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "libgeometry"
+from = "arm64/lib/libgeometry.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "liblex"
+from = "arm64/lib/libl.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "libstdio"
+from = "arm64/lib/libstdio.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "libdisk"
+from = "arm64/lib/libdisk.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "libplumb"
+from = "arm64/lib/libplumb.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "libscribble"
+from = "arm64/lib/libscribble.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "libmemdraw"
+from = "arm64/lib/libmemdraw.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "libmemlayer"
+from = "arm64/lib/libmemlayer.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "libdraw"
+from = "arm64/lib/libdraw.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "libframe"
+from = "arm64/lib/libframe.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "libcontrol"
+from = "arm64/lib/libcontrol.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "libhtml"
+from = "arm64/lib/libhtml.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "libhttpd"
+from = "arm64/lib/libhttpd.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "libsunrpc"
+from = "arm64/lib/libsunrpc.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "libventi"
+from = "arm64/lib/libventi.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "liboventi"
+from = "arm64/lib/liboventi.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "libmach"
+from = "arm64/lib/libmach.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "libaml"
+from = "arm64/lib/libaml.a"
+source = "harvey"
+in_image = false
+
+[[library]]
+name = "libdynld"
+from = "arm64/lib/libdynld.a"
+source = "harvey"
+in_image = false
