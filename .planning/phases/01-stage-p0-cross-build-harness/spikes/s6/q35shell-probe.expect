@@ -1,0 +1,116 @@
+#!/usr/bin/env expect
+# S6 q35shell-probe.expect (D-17, x86_64 KVM leg — Plan 06).
+#
+# Drives ONE r9 q35shell boot on the owner's x86_64 Linux host: waits for
+# the chain's rc prompt, types the leg's command on COM1, requires the
+# expected marker the requested number of times, requires a fresh prompt
+# (the shell survived), then quits qemu through the -serial mon:stdio
+# multiplexer (Ctrl-A x).
+#
+# usage:
+#   expect q35shell-probe.expect <logfile> <guest-command> <marker> <count> <boot-command>
+#
+# <count> 1 = the marker is program output only; 2 = typed echo + program
+#             output (the control legs).  <boot-command> is one argument:
+#             a shell command line running cargo xtask qemu q35shell.
+
+set logfile [lindex $argv 0]
+set guestcmd [lindex $argv 1]
+set marker [lindex $argv 2]
+set count [lindex $argv 3]
+set bootcmd [lindex $argv 4]
+
+if {$logfile eq "" || $guestcmd eq "" || $marker eq "" || $count eq "" || $bootcmd eq ""} {
+    puts stderr "usage: expect q35shell-probe.expect <logfile> <guest-command> <marker> <count> <boot-command>"
+    exit 2
+}
+
+# The q35 boot rides SeaBIOS + GRUB + the chain, so the boot budget is
+# larger than the aarch64 virt direct-kernel one.
+set boot_timeout 420
+set cmd_timeout 90
+set spawn_pid 0
+
+proc cleanup {} {
+    global spawn_pid
+    if {$spawn_pid > 0} {
+        catch {exec kill -KILL -- -$spawn_pid 2>/dev/null}
+        catch {exec kill -KILL $spawn_pid 2>/dev/null}
+    }
+}
+
+log_file -a $logfile
+set timeout $boot_timeout
+spawn -noecho sh -c $bootcmd
+set spawn_pid [exp_pid]
+
+# Boot-failure vocabulary: fail fast with the exact line already in the log.
+expect_before {
+    -re {panic|Unhandled interrupt|bad a\.out|exec: bad|exec: short|exec: truncated} {
+        puts stderr "q35shell-probe: boot-failure marker on the wire"
+        cleanup
+        exit 1
+    }
+}
+
+# 1. the chain's rc prompt (rcmain's default '% ').
+expect {
+    -re {% } {}
+    timeout {
+        puts stderr "q35shell-probe: timeout waiting for the rc prompt"
+        cleanup
+        exit 1
+    }
+    eof {
+        puts stderr "q35shell-probe: qemu exited before the rc prompt"
+        cleanup
+        exit 1
+    }
+}
+
+# 2. the typed command and the requested marker occurrences.
+send -- "$guestcmd\r"
+set timeout $cmd_timeout
+for {set i 0} {$i < $count} {incr i} {
+    expect {
+        -exact $marker {}
+        timeout {
+            puts stderr "q35shell-probe: timeout waiting for marker '$marker' (occurrence [expr {$i + 1}] of $count)"
+            cleanup
+            exit 1
+        }
+        eof {
+            puts stderr "q35shell-probe: qemu exited while waiting for '$marker'"
+            cleanup
+            exit 1
+        }
+    }
+}
+
+# 3. a fresh prompt: the command returned and rc is still alive.
+expect {
+    -re {% } {}
+    timeout {
+        puts stderr "q35shell-probe: timeout waiting for the post-command prompt"
+        cleanup
+        exit 1
+    }
+    eof {
+        puts stderr "q35shell-probe: qemu exited after the command"
+        cleanup
+        exit 1
+    }
+}
+
+# 4. quit qemu (Ctrl-A x on the mon:stdio multiplexer), then reap.
+send -- "\001x"
+set timeout 30
+expect {
+    eof {}
+    timeout { cleanup }
+}
+catch {close -i $spawn_id}
+catch {wait -i $spawn_id}
+
+puts stderr "q35shell-probe: leg complete — $guestcmd"
+exit 0

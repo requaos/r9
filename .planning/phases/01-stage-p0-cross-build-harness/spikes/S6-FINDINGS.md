@@ -94,6 +94,95 @@ real checkout stayed untouched: HEAD `25d97dc4d`, its `git status
 --porcelain` sha256 is `041d29292e...`, and no file under
 `build/aarch64` has an mtime newer than the plan's start.
 
+## x86_64 KVM leg — scripted and statically checked, PENDING-OWNER
+
+VERDICT s6-x86_64-kvm-linux: PENDING-OWNER
+
+The leg is `s6/linux-x86_64.sh` plus `s6/q35shell-probe.expect`, written
+for Plan 06's run-all on the owner's x86_64 Linux host. It cannot run on
+this Mac: macOS has no `/dev/kvm`, and the q35shell profile needs the
+x86_64 Linux ISO path (grub2/xorriso are in r9's devshell on Linux only).
+
+What the script does, per leg (control, probe, flip-back):
+
+1. puts the right `echo` at the chain contract's source path,
+   `$S6_HARVEY/build/x86_64/out/echo` (harvested by
+   `build/x86_64/stage-build.sh:197-201`, staged by
+   `build/x86_64/mkimage.sh:308`);
+2. re-bakes with Harvey's own
+   `$S6_HARVEY/build/x86_64/mkimage.sh` under `HARVEY=$S6_HARVEY` and
+   `KERNDATE=1795382101`, and records the sha256 of
+   `build/x86_64/out/bootfs-chain.paq`;
+3. boots
+   `R9_HARVEY_DIR=$S6_HARVEY nix develop -c cargo xtask qemu --arch x86-64 --config q35shell --accel kvm`
+   inside the pinned scratch r9 clone, driven by `q35shell-probe.expect`
+   (wait for `% `, type `/bin/echo R9-ECHO-CONTROL` for control and
+   flip-back or `/bin/echo x` for the probe, match the marker, require a
+   fresh prompt, quit qemu with Ctrl-A x).
+
+Refusals: running as root, an unwritable `/dev/kvm` (no downgrade — D-13
+witness), a `S6_HARVEY` that is a real checkout (`.git` present), an
+`S6_R9` not at `116bcc23c8052a1728992cdbc7b625143260d683`, a malformed or
+wrong-architecture probe (the bundle's `aout.py check --arch amd64`), and
+a scratch tree missing the chain set. A trap restores the original echo
+and kills/reaps qemu on every exit path.
+
+Static checks run on this Mac: `bash -n` clean; shellcheck clean on
+`linux-x86_64.sh`, `run-arm64-hvf.sh` and `build-probe.sh`; the Tcl
+`info complete` check prints 1 for `q35shell-probe.expect`. The script
+contains no software-emulation fallback and no `sudo`.
+
+Plan 06 invocation (the S3 scratch tree and the pinned r9 clone):
+
+```
+S6_HARVEY=<S3-built scratch Harvey> \
+S6_R9=<scratch r9 clone at 116bcc23c8052a1728992cdbc7b625143260d683> \
+S6_PROBE=<this bundle's s6/work/probe-amd64.aout> \
+S6_OUT=<output dir> \
+KERNDATE=1795382101 \
+bash .planning/phases/01-stage-p0-cross-build-harness/spikes/s6/linux-x86_64.sh
+```
+
+Expected terminal line:
+`S6-X86 control=PASS probe=PASS flipback=PASS sha-equal=yes`.
+
+## What this means for planning pass 2
+
+- **D-17 probe recipe (proven on arm64 HVF; the amd64 build is
+  statically valid and awaits the KVM run):**
+  - source: `#![no_std] #![no_main]`, a panic handler that loops, and a
+    `core::arch::global_asm!` `_start` that writes the marker with
+    PWRITE(51) then calls EXITS(8);
+  - build: plain `rustc --edition 2021 --crate-type bin --target
+    <x86_64-unknown-none|aarch64-unknown-none> -C panic=abort
+    -C opt-level=s -C relocation-model=static
+    -C link-arg=-T<ld> -C link-arg=--oformat=binary`, from r9's devshell,
+    never added to the cargo workspace;
+  - linker script: one `. = 0x200028` (amd64) or `0x10028` (arm64) output
+    section, `KEEP(*(.text._start))` first, then text/rodata; discard
+    `.eh_frame*`, `.comment`, `.note*`; no data or bss output;
+  - header: 8 big-endian u32 (magic 0x8A97/0x8C47, text = flat length,
+    data/bss/syms 0, vestigial entry32, spsz/pcsz 0) plus the big-endian
+    u64 entry at 0x200028/0x10028, then the flat payload;
+  - validation: `aout.py check` mirrors r9's `parse_aout`/`read_aout`
+    (magic, text != 0, entry in text, exact file length, no data/bss/syms).
+- **Target tool: `ps`.** It is staged in every chain-family x86_64 image,
+  is absent from the boot path, and has only two gate sites; `echo` is
+  not an rc builtin and carries cpurc's whole marker ladder, so D-17's
+  prose example is the one tool not to pick. Details in
+  `s6/target-analysis.md`.
+- **Flip-back:** the arm64 image bytes are identical on control and
+  flip-back (sha256 `746f1dfe0f3f96e46d6cf1e4f4b963dd5d3dad195b370b19c973d17394f6f5b4`),
+  with the probe image differing only as expected
+  (`242ea95aeb89c2ab968fbc71bdf78805e1f4443c32a205e128ee355bfe22f310`).
+  The pass-2 x86_64 flip-back must reproduce the same equality on
+  `bootfs-chain.paq`.
+- **D-18:** every S6 source lives only under
+  `.planning/phases/01-stage-p0-cross-build-harness/spikes/`; the probe is
+  not in the cargo workspace and is built with plain rustc. The pass-2
+  in-tree probe (and its manifest entry) is removed once it has proven
+  the mechanism; the default image stays all-Harvey.
+
 ## Assumption A7
 
 ASSUMPTION A7: UNTESTED — the static half passes (the flat rust-lld
