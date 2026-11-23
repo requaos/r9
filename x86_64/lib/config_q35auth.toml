@@ -81,9 +81,10 @@ pcap = false
 
 [dist]
 format = "elf"
-# The staged bootfs (the 18-01 substrate bake): Harvey's mkimage §13
-# bakes out/bootfs-substrate.paq (randread as /amd64/init); the ISO
-# builder stages it at /boot/bootfs.paq and emits the grub.cfg module2
-# line IN.  Absence is a loud pre-ISO error naming the Harvey-side
-# producers (stage-build.sh + mkimage.sh).
-module = "harvey:build/x86_64/out/bootfs-substrate.paq"
+# The staged bootfs (the 18-01 substrate bake): the substrate image, now
+# r9-assembled.  `image:substrate` names
+# xtask/manifests/amd64/substrate.toml; the assembler bakes
+# target/images/x86_64/substrate.paq on demand (its member list matches
+# the reference bake's), with randread as /amd64/init.  The ISO builder
+# stages it at /boot/bootfs.paq and emits the grub.cfg module2 line IN.
+module = "image:substrate"

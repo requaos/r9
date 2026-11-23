@@ -66,5 +66,8 @@ pcap = false
 [dist]
 format = "elf"
 # The staged bootfs (the 17-02 marker bake: init/smokesleep PLUS
-# churnmark/churnsem — the churn driver walks the pair by name).
-module = "harvey:build/x86_64/out/bootfs.paq"
+# churnmark/churnsem — the churn driver walks the pair by name), now
+# r9-assembled: `image:marker` names xtask/manifests/amd64/marker.toml
+# and the assembler bakes target/images/x86_64/marker.paq on demand
+# (its member list matches the reference bake's).
+module = "image:marker"
