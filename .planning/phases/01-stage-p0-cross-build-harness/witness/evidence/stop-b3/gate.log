@@ -1,0 +1,41 @@
+# trimmed from witness/return-01-33/gate/gate.log (1487 lines): both runs and
+# both legs.  Each leg reached its assertion and printed ALL STAGES PASS; the
+# wrapper exited 0 on both runs.  The stop-B2 teardown defect is gone.
+
+== gate run 1/2 ==
+...
+/srv/rio.glenda.74
+/srv/riowctl.glenda.74
+process 80 exited: ""
+% GATE-PASS rio-serving
+...
+drawterm-gate: post-pass ok — zero cpurc: FAIL in the capture
+drawterm-gate: post-pass ok — zero kernel panic markers (drawterm's own sysfatal exit pair excluded)
+drawterm-gate: post-pass ok — the per-bake DEMO password redacted from the retained capture (T-01-58)
+drawterm-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, encrypted drawterm session, serial /srv shows rio + riowctl (GATE-PASS rio-serving)
+...
+% ls /srv
+/srv/boot
+/srv/factotum
+process 80 exited: ""
+% GATE-PASS control-no-rio
+...
+drawterm-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, -G control session, serial /srv shows neither rio entry (GATE-PASS control-no-rio)
+GATE-RUN 1 exit=0
+== gate run 2/2 ==
+...
+/srv/rio.glenda.74
+/srv/riowctl.glenda.74
+process 80 exited: ""
+% GATE-PASS rio-serving
+...
+drawterm-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, encrypted drawterm session, serial /srv shows rio + riowctl (GATE-PASS rio-serving)
+...
+% ls /srv
+/srv/boot
+/srv/factotum
+process 80 exited: ""
+% GATE-PASS control-no-rio
+...
+drawterm-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, -G control session, serial /srv shows neither rio entry (GATE-PASS control-no-rio)
+GATE-RUN 2 exit=0

@@ -1,0 +1,12 @@
+this derivation will be built:
+  /nix/store/mcrnfr62cry07m8v25ncr7kvsizb7r0f-r9-kernel-x64-4139fdf.drv
+building '/nix/store/mcrnfr62cry07m8v25ncr7kvsizb7r0f-r9-kernel-x64-4139fdf.drv'...
+KERNEL-STORE /nix/store/y56rpqda7cpglr41yyr0h5qqrm20ra8y-r9-kernel-x64-4139fdf
+4228a1bf1408a7f06d942fa847b6ca25d7bfbd5a400ce9190b602d3b365f32e1  /nix/store/y56rpqda7cpglr41yyr0h5qqrm20ra8y-r9-kernel-x64-4139fdf/kernel-x64.elf
+this derivation will be built:
+  /nix/store/85h9700j1419aj8phr517zrdkl4ks9vn-r9-boot-iso-4139fdf.drv
+building '/nix/store/85h9700j1419aj8phr517zrdkl4ks9vn-r9-boot-iso-4139fdf.drv'...
+KERNEL-BOOTISO-STORE /nix/store/bx1bbayxf2y99xysqcn7p1kxzjrkifwb-r9-boot-iso-4139fdf
+KERNEL-BOOTISO-BUILD-OK
+checking outputs of '/nix/store/85h9700j1419aj8phr517zrdkl4ks9vn-r9-boot-iso-4139fdf.drv'...
+KERNEL-BOOTISO-REBUILD-OK

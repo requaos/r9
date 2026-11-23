@@ -1,0 +1,24 @@
+# trimmed from witness/return-01-33/flipback/flipback.log (777 lines): the
+# flip-back clone assembled the 4442-member cpu image and both legs printed
+# ALL STAGES PASS with the wrapper exiting 0.
+gate: iso /home/req/r9-witness-work/r9-probe-flipback/target/boot-q35cpu.iso
+gate: leg rio (capture /home/req/r9-witness-work/r9-probe-flipback/target/gate/320886-1795453021/rio.log)
+...
+/srv/rio.glenda.74
+/srv/riowctl.glenda.74
+process 80 exited: ""
+% GATE-PASS rio-serving
+...
+drawterm-gate: post-pass ok — zero cpurc: FAIL in the capture
+drawterm-gate: post-pass ok — zero kernel panic markers (drawterm's own sysfatal exit pair excluded)
+drawterm-gate: post-pass ok — the per-bake DEMO password redacted from the retained capture (T-01-58)
+drawterm-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, encrypted drawterm session, serial /srv shows rio + riowctl (GATE-PASS rio-serving)
+gate: leg control-noG (capture /home/req/r9-witness-work/r9-probe-flipback/target/gate/320886-1795453021/control-noG.log)
+...
+% ls /srv
+/srv/boot
+/srv/factotum
+process 80 exited: ""
+% GATE-PASS control-no-rio
+...
+drawterm-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, -G control session, serial /srv shows neither rio entry (GATE-PASS control-no-rio)
