@@ -4,17 +4,17 @@ milestone: v3.0
 milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
 current_phase: 03
 current_phase_name: Guide Phase 1 - crypto/ and ds/ Foundations
-status: executing
-stopped_at: Completed 03-10-PLAN.md
-last_updated: "2026-11-24T17:11:46.446Z"
+status: verifying
+stopped_at: Completed 03-11-PLAN.md; Phase 3 ready for verification
+last_updated: "2026-11-24T18:44:58.072Z"
 last_activity: 2026-11-24
 last_activity_desc: Phase 03 execution started
-state_head: 7e42046268bc20935dc147a006b935487fbaf94f
+state_head: 5226d1131c86442f1ae4ba8596523e7eb3fdb6f4
 progress:
   total_phases: 4
   completed_phases: 2
   total_plans: 53
-  completed_plans: 52
+  completed_plans: 53
   percent: 50
 ---
 
@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-11-24)
 
 Phase: 03 (Guide Phase 1 - crypto/ and ds/ Foundations) — EXECUTING
 Plan: 13 of 13
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-11-24 — Phase 03 execution started
 
 Progress: [█████░░░░░] 50%
@@ -79,6 +79,7 @@ Progress: [█████░░░░░] 50%
 | Phase 03 P08 | 51 min | 2 tasks | 5 files |
 | Phase 03 P09 | 1 min | 2 tasks | 5 files |
 | Phase 03 P10 | 15 min | 3 tasks | 6 files |
+| Phase 03 P11 | 92 min | 3 tasks | 14 files |
 
 ## Accumulated Context
 
@@ -196,6 +197,9 @@ Full log is the PROJECT.md Key Decisions table. Recent:
 - [Phase 03]: Plan 03-10: Miri is over the 120-second budget at the end of the phase — MIRI-TIME closing-run-1 350 and closing-run-2 389 for 64 seeds over 29 tpht tests; the plan forbids source edits so nothing was resized, both runs exit 0 with no Undefined Behavior or Data race, and the number is carried to the phase-end review alongside the 03-07/03-08 overages
 - [Phase 03]: Plan 03-10: 03-OWNER-STOP.md is the ordered x86_64 Linux page plan 03-11 consumes — branch push approval, fetch, the two sandboxed kernel builds at the tip, the same two at the base commit in a second worktree (so their HEAD= lines carry the base), the four-hash comparison, boot-iso plus --rebuild, the four host suite commands and the report-back; every verdict command runs through run_logged so each log under ~/r9-p03-stop/ begins with HEAD= and ends with EXIT=
 - [Phase 03]: Plan 03-10: the owner stop puts the two open choices in front of the owner without blocking — zeroize =1.9.2 with =1.9.1 as the older alternative, and the ChaCha20 per-key-and-nonce limit of 2^32 - 1 blocks (274,877,906,880 bytes); COVERAGE.md records the reasoned no-external-API declaration in one line, and nothing was pushed (origin/main unchanged, the transport branch not yet created)
+- [Phase 03]: Plan 03-11: the owner stop closed 11 of 11 verdicts PASS from the returned logs - both sandboxed kernel derivations build at the tip 95fe66a with Phase 3's enlarged Cargo.lock (A8 retired), the tip and base bytes are equal on both architectures (kernel-x64 6a5f5a66...01cf6a5, kernel-virt 954e5110...30f4eee), the fixed-output boot-iso builds and rebuilds on its committed outputHash, and host-test/check/clippy/miri all exit 0 on the x86_64 host (miri 64 seeds, 29 passed each)
+- [Phase 03]: Plan 03-11: main is pushed to origin at a64352625efe9cb8a924d7941c6be09c4f738a11 on the owner's second ruling (push-main), after origin/main had been 3d01f07; the VERDICT stop-main-push: PASS line was committed as 5226d11 and stays local until a later approved push, so local main is one evidence commit ahead of origin/main
+- [Phase 03]: Plan 03-11: the transport branch phase-03/crypto-ds-foundations is on the remote at 5f565ec (Mac tip 95fe66a plus two owner return commits that add 12 files only under evidence/owner-stop/return/); no kernel byte changed on Linux, so the D-21 boot-iso outputHash procedure did not apply and the boot-to-rio gate keeps holding by identity with the Phase 2 gated state 4624ea2; no source file, flake.nix or outputHash was touched
 
 ### Open Questions (seven warnings, approved to be carried, not resolved)
 
@@ -217,7 +221,7 @@ None yet.
 
 ### Blockers/Concerns
 
-- Unpushed work, checked against the local remote-tracking refs on 2026-11-24: `origin/main` is `3d01f07` (the gated Phase 2 state), and local `main` is ahead by the phase-completion evidence, tracking, review, verification and UAT commits made after it; they stay local until the owner approves a push (CONTEXT D-26). The Phase 2 branch `phase-02/design-lock` is at `f8d077d` (gated commit `4624ea2` plus two return commits). Earlier unpushed work is published: r9 `5b8b70a` (planning documents plus `legacy/`, 53 MB) and `6ee45b5` are on `origin/main`, and Harvey `25d97dc4d` is on `origin/master`.
+- Unpushed work, checked against the local remote-tracking refs on 2026-11-24 after the plan 03-11 owner stop: `origin/main` is `a643526` — the owner approved pushing `main` after all eleven stop verdicts were green, and `git push origin main` published every unpushed commit (`3d01f07..a643526`, the Phase 2 phase-completion commits and all of Phase 3 up to the owner-stop results). Local `main` is one evidence commit ahead: `5226d11` (`evidence(03-11): main pushed after the owner stop`, the `VERDICT stop-main-push: PASS` line), held for a later approved push. The Phase 3 transport branch `phase-03/crypto-ds-foundations` is `5f565ec` (Mac tip `95fe66a` plus two return commits); the Phase 2 branch `phase-02/design-lock` is at `f8d077d` (gated commit `4624ea2` plus two return commits). Earlier unpushed work is published: r9 `5b8b70a` (planning documents plus `legacy/`, 53 MB) and `6ee45b5` are on `origin/main`, and Harvey `25d97dc4d` is on `origin/master`.
 - Owed checks at checkpoint r9 `116bcc2`: the owner's linux `nix build .#boot-iso --rebuild` (expected `sha256-TIzwBaHF0R4m31l6EbW2IU3rkUl73g6ljlNE0S5hGFY=`), and hosted CI on r9 `116bcc2` and Harvey `bd7a6982a`.
 - Phase 20 of the Harvey-rooted work never ran `/gsd-secure-phase` (no SECURITY.md).
 - Docs pin r9 at `c787ce9`; HEAD is far later, and `crypto/` and `ds/` now exist and are host-tested while `kern/`, `sys/` and `venti/` are still absent. Re-verify every landing-site path when its phase is planned.
@@ -256,6 +260,6 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 
 ## Session Continuity
 
-Last session: 2026-11-24T17:11:46.145Z
-Stopped at: Completed 03-10-PLAN.md
+Last session: 2026-11-24T18:44:53.904Z
+Stopped at: Completed 03-11-PLAN.md; Phase 3 ready for verification
 Resume file: None
