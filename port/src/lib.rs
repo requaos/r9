@@ -99,6 +99,8 @@ pub mod pgrp;
 #[forbid(unsafe_code)]
 pub mod rendez;
 #[forbid(unsafe_code)]
+pub mod rfork;
+#[forbid(unsafe_code)]
 pub mod virtio;
 
 // The allocator's tests live at the crate root (NOT under the
