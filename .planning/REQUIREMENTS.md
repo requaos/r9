@@ -30,7 +30,7 @@ Standing constraint on every requirement below: the golden invariant (boots to r
 
 ### Crypto Foundations (guide Phase 1)
 
-- [ ] **CRYP-01**: `crypto/` provides RFC 5869 HKDF-SHA256 built on HMAC-SHA256, passing RFC 5869 and RFC 4231 vectors, replacing the placeholder XOR fold (IG-A01 item 1)
+- [x] **CRYP-01**: `crypto/` provides RFC 5869 HKDF-SHA256 built on HMAC-SHA256, passing RFC 5869 and RFC 4231 vectors, replacing the placeholder XOR fold (IG-A01 item 1)
 - [ ] **CRYP-02**: `crypto/` provides a scalar ChaCha20 reference (`crypto/src/page.rs`) passing published vectors, with the counter and nonce construction fixed first (PROJECT.md note N1) (IG-A01 item 3, RFC-P01)
 - [ ] **CRYP-03**: `crypto/` provides BLAKE3 keyed hash and tree-hash modes with 32-byte output passing the official test vectors, applying the MAC-primitive answer to W3 (RFC-P01, IG-D11)
 - [ ] **CRYP-04**: The key hierarchy (`K_file = HKDF-Expand(K_user, Qid.path || Qid.vers, 32)`, transient and session keys) and the `KeyCapability` typestate exist: `ReadOnly { k_dec, blake3_verify }` cannot produce a valid integrity tag, `ReadWrite { k_dec, k_mac }` can, all key material is `Zeroizing<[u8; 32]>`, and siblings inheriting shared read-only base code keep the parent's `k_dec` (IG-M01, IG-A01 item 2, IG-P01)
@@ -239,7 +239,7 @@ Which phases cover which requirements. Each requirement maps to exactly one phas
 | DSGN-03 | Phase 2 | Complete |
 | DSGN-04 | Phase 2 | Complete |
 | DSGN-05 | Phase 2 | Complete |
-| CRYP-01 | Phase 3 | Pending |
+| CRYP-01 | Phase 3 | Complete |
 | CRYP-02 | Phase 3 | Pending |
 | CRYP-03 | Phase 3 | Pending |
 | CRYP-04 | Phase 3 | Pending |
