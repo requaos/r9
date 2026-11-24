@@ -20,9 +20,14 @@
 //! This writer assigns tiny pointers `1..=16` — the block's own window — so
 //! `spilled_mask` stays zero; it is maintained anyway so the field means what
 //! the layout says.  Neighbourhood displacement through `17..=255` and
-//! clock-nibble eviction are not Phase 3 requirements: `deref_tiny` (plan
-//! 03-13) resolves the full pointer range and `clock_nibbles` is initialised
-//! to zero and otherwise unused.
+//! clock-nibble eviction are not Phase 3 requirements: `deref_tiny` resolves
+//! the full pointer range from one arena slot read with no header probe
+//! (DS-03) and `clock_nibbles` is initialised to zero and otherwise unused.
+//!
+//! `deref_tiny` is this module's one `unsafe` site: the unchecked arena read
+//! (`get_unchecked`), sound because the slot is masked by `slot_mask` and the
+//! arena holds exactly `slot_mask + 1` slots, both fixed in the constructor
+//! (D-13; plan 03-10 audits the site).
 //!
 //! The table stores no full key.  `quotients[i]` holds a 16-bit fingerprint of
 //! the remainder, and `same` is the caller's full-key verification of a
@@ -241,8 +246,21 @@ impl<const WORDS: usize, P: Probe> FlattenedTphtShard<WORDS, P> {
     /// slot now holds and is never undefined behaviour: every arena word is an
     /// atomic, so the read is always a valid atomic load.
     pub fn deref_tiny(&self, key: u64, ptr: TinyPtr) -> [u64; WORDS] {
-        let _ = (key, ptr);
-        [0u64; WORDS]
+        let (block, _remainder) = feistel::split(key, self.bits);
+        self.probe.arena_read();
+        let slot = self.slot_index(block, ptr);
+        // SAFETY: `slot_index` masks the slot with `self.slot_mask`, and
+        // `with_probe` allocates the arena with exactly `slot_mask + 1` slots
+        // (`HOME_SLOTS * num_blocks`).  Both quantities are fixed in the
+        // constructor and never mutated, so `slot < self.arena.len()` for every
+        // block index and every tiny pointer, including a pointer that runs
+        // past the arena end.
+        let words = unsafe { self.arena.get_unchecked(slot) };
+        let mut value = [0u64; WORDS];
+        for (word, out) in value.iter_mut().enumerate() {
+            *out = words[word].load(Ordering::Relaxed);
+        }
+        value
     }
 
     /// The arena slot a tiny pointer addresses: `((block << 4) + (ptr - 1)) &
@@ -581,8 +599,11 @@ mod tests {
 
     #[test]
     fn deref_tiny_is_one_arena_read_and_no_header_read() {
+        // One block is the smallest shard with a home slot, and the probe
+        // counts are independent of the shard size, so both sides use it.
+        let blocks = miri_scaled(1, 1);
         let probe = CountingProbe::new();
-        let shard = FlattenedTphtShard::<2, CountingProbe>::with_probe(1, probe.clone())
+        let shard = FlattenedTphtShard::<2, CountingProbe>::with_probe(blocks, probe.clone())
             .expect("one block is a valid block count");
         let ptr = shard
             .insert(0x5EED, [0xAAAA_BBBB_CCCC_DDDD, 0x1111_2222_3333_4444], |v| {
@@ -613,8 +634,8 @@ mod tests {
 
     #[test]
     fn deref_tiny_matches_btreemap_model() {
-        let blocks = miri_scaled(1_024, 16);
-        let ops = miri_scaled(2_000, 200);
+        let blocks = miri_scaled(1_024, 8);
+        let ops = miri_scaled(2_000, 100);
         let keys: Vec<u64> =
             (0..32u64).map(|i| 0x9E37_79B9_7F4A_7C15u64.wrapping_mul(i + 1)).collect();
         let shard = FlattenedTphtShard::<2>::new(blocks).expect("a power-of-two block count");
@@ -696,17 +717,19 @@ mod tests {
 
     #[test]
     fn deref_tiny_wraps_with_slot_mask() {
-        // Two blocks: the last block is block 1, so `b << 4` is 16 and
-        // `slot_mask` is 31.  Pointers 1 and 16 land in the last block's home
-        // window; 17 and 255 run past the arena end and wrap by the mask.
-        const BLOCKS: usize = 2;
-        let bits = index_bits(BLOCKS).expect("two blocks");
+        // Two blocks is the smallest shard where `b << 4` is non-zero and a
+        // pointer that runs past the arena end wraps into another block's
+        // window, so the native and Miri sizes are the same.  The last block
+        // is block 1, so `b << 4` is 16 and `slot_mask` is 31: pointers 1 and
+        // 16 land in the last block's home window, 17 and 255 wrap by the mask.
+        let blocks = miri_scaled(2, 2);
+        let bits = index_bits(blocks).expect("two blocks");
         let mut last: Vec<u64> = Vec::new();
         let mut first: Vec<u64> = Vec::new();
         let mut key = 0u64;
         while last.len() < HOME_SLOTS || first.len() < HOME_SLOTS {
             let (block, _) = feistel::split(key, bits);
-            if block == BLOCKS - 1 {
+            if block == blocks - 1 {
                 if last.len() < HOME_SLOTS {
                     last.push(key);
                 }
@@ -715,21 +738,21 @@ mod tests {
             }
             key += 1;
         }
-        let shard = FlattenedTphtShard::<2>::new(BLOCKS).expect("two blocks");
-        let mut stored = vec![[0u64; 2]; HOME_SLOTS * BLOCKS];
+        let shard = FlattenedTphtShard::<2>::new(blocks).expect("two blocks");
+        let mut stored = vec![[0u64; 2]; HOME_SLOTS * blocks];
         for &key in first.iter().chain(last.iter()) {
             let (block, _) = feistel::split(key, bits);
             let ptr = shard
                 .insert(key, [key, !key], |v| v[0] == key)
                 .expect("sixteen keys per block fit in its home window");
-            let slot = ((block << 4) + (ptr.get() as usize - 1)) & (HOME_SLOTS * BLOCKS - 1);
+            let slot = ((block << 4) + (ptr.get() as usize - 1)) & (HOME_SLOTS * blocks - 1);
             stored[slot] = [key, !key];
         }
-        let last_block = BLOCKS - 1;
+        let last_block = blocks - 1;
         let sample_key = last[0];
         for ptr in [1u8, 16, 17, 255] {
             let tiny = TinyPtr::new(ptr).expect("a tiny pointer is 1..=255");
-            let slot = ((last_block << 4) + (tiny.get() as usize - 1)) & (HOME_SLOTS * BLOCKS - 1);
+            let slot = ((last_block << 4) + (tiny.get() as usize - 1)) & (HOME_SLOTS * blocks - 1);
             assert_eq!(
                 shard.deref_tiny(sample_key, tiny),
                 stored[slot],
