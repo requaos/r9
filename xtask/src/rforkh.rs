@@ -171,4 +171,105 @@ mod tests {
         let mutated = render().replace("(1<<21)", "(1<<22)");
         assert_ne!(mutated, render(), "the mutation must apply");
     }
+
+    /// The four arch files that must import every rfork flag from
+    /// `port::rfork` (D-18), with the path each failure message names.
+    const ARCH_SOURCES: [(&str, &str); 4] = [
+        ("x86_64/src/proc.rs", include_str!("../../x86_64/src/proc.rs")),
+        ("x86_64/src/syscall.rs", include_str!("../../x86_64/src/syscall.rs")),
+        ("aarch64/src/syscall.rs", include_str!("../../aarch64/src/syscall.rs")),
+        ("aarch64/src/proc.rs", include_str!("../../aarch64/src/proc.rs")),
+    ];
+
+    /// The one-definition invariant (DSGN-03, D-18): every rfork flag is
+    /// defined in `port::rfork` and nowhere else, and each arch
+    /// `syscall.rs` names its supported mask at module level (D-20) so
+    /// the mask test can read it.  The forbidden patterns are built from
+    /// separate pieces, so this test's own source never contains them.
+    #[test]
+    fn rfork_flags_have_one_definition() {
+        let mut problems: Vec<String> = Vec::new();
+
+        // 1. No arch source defines a flag constant again.
+        let const_kw = ["con", "st "].concat();
+        let rf_prefix = ["R", "F"].concat();
+        let shift_ty = ["u6", "4 = 1 <<"].concat();
+        for (file, text) in ARCH_SOURCES {
+            for (n, line) in text.lines().enumerate() {
+                let trimmed = line.trim_start();
+                let rest = trimmed
+                    .strip_prefix("pub(crate) ")
+                    .or_else(|| trimmed.strip_prefix("pub "))
+                    .unwrap_or(trimmed);
+                let Some(rest) = rest.strip_prefix(&const_kw) else { continue };
+                let Some((name, tail)) = rest.split_once(':') else { continue };
+                if name.starts_with(rf_prefix.as_str()) && tail.trim_start().starts_with(&shift_ty) {
+                    problems.push(format!(
+                        "{file}:{}: defines an rfork flag constant; the one definition is port::rfork",
+                        n + 1
+                    ));
+                }
+            }
+        }
+
+        // 2. aarch64/src/proc.rs reaches no flag through the crate's
+        // syscall module (a private import there is not visible to it).
+        let through_syscall = ["crate::", "syscall::RF"].concat();
+        for (file, text) in [ARCH_SOURCES[3]] {
+            for (n, line) in text.lines().enumerate() {
+                if line.contains(&through_syscall) {
+                    problems.push(format!(
+                        "{file}:{}: reaches a flag through the crate's syscall module; use port::rfork::",
+                        n + 1
+                    ));
+                }
+            }
+        }
+
+        // 3. Neither arch syscall.rs keeps a function-local mask.
+        let local_mask = ["const ", "SUPPORTED", ": u64"].concat();
+        for (file, text) in [ARCH_SOURCES[1], ARCH_SOURCES[2]] {
+            for (n, line) in text.lines().enumerate() {
+                if line.contains(&local_mask) {
+                    problems.push(format!(
+                        "{file}:{}: keeps a function-local supported mask; hoist it to RFORK_SUPPORTED",
+                        n + 1
+                    ));
+                }
+            }
+        }
+
+        // 4. Each arch syscall.rs declares the hoisted mask exactly once.
+        let declaration = ["pub(crate) ", "const ", "RFORK_SUPPORTED", ": u64"].concat();
+        for (file, text) in [ARCH_SOURCES[1], ARCH_SOURCES[2]] {
+            let count = text.lines().filter(|line| line.contains(&declaration)).count();
+            if count != 1 {
+                problems.push(format!(
+                    "{file}: expected exactly one `pub(crate) const RFORK_SUPPORTED: u64`, found {count}"
+                ));
+            }
+        }
+
+        // 5. No arch file re-exports a port::rfork name (D-18).
+        let re_exports = [
+            ["pub", " use port::rfork"].concat(),
+            ["pub(crate)", " use port::rfork"].concat(),
+        ];
+        for (file, text) in ARCH_SOURCES {
+            for (n, line) in text.lines().enumerate() {
+                if re_exports.iter().any(|pattern| line.contains(pattern)) {
+                    problems.push(format!(
+                        "{file}:{}: re-exports a port::rfork name; make the import private (D-18)",
+                        n + 1
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            problems.is_empty(),
+            "rfork flags must have one definition and each arch mask one name:\n{}",
+            problems.join("\n")
+        );
+    }
 }

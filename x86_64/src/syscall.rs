@@ -3002,3 +3002,25 @@ mod tests {
         assert_eq!(ms_to_ticks(1_000), 100);
     }
 }
+
+// D-20: the reserved flags stay outside the mask until Phases 6 and 7
+// make them live; those phases must change this test on purpose.
+#[cfg(test)]
+mod rfork_mask_tests {
+    use super::RFORK_SUPPORTED;
+    use port::rfork::{RFCKEY, RFNOLEGACY, RFNOMNT, RFRANDMEM, RFROBASE};
+
+    #[test]
+    fn rfork_reserved_bits_are_unsupported() {
+        for (name, bit) in [
+            ("RFNOMNT", RFNOMNT),
+            ("RFCKEY", RFCKEY),
+            ("RFROBASE", RFROBASE),
+            ("RFRANDMEM", RFRANDMEM),
+            ("RFNOLEGACY", RFNOLEGACY),
+        ] {
+            assert_eq!(RFORK_SUPPORTED & bit, 0, "{name} must stay outside RFORK_SUPPORTED");
+        }
+        assert_eq!(RFORK_SUPPORTED, 0x3c7f, "the implemented set is bits 0-6 and 10-13");
+    }
+}
