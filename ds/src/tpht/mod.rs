@@ -23,6 +23,27 @@ pub mod chained;
 pub mod feistel;
 pub mod flattened;
 
+/// The number of home slots in a bucket header: `occupied_mask` uses bits
+/// `0..15` and a home tiny pointer is `1..=16`.
+pub const HOME_SLOTS: usize = 16;
+
+/// A test seam for counting memory accesses (DS-03, plan 03-13): production
+/// uses [`NoProbe`]'s zero-sized no-ops; a test probe counts header and arena
+/// reads so `deref_tiny` can be shown to perform exactly one arena read.
+pub trait Probe {
+    /// Called once per reader attempt, before the sequence load.
+    fn header_read(&self) {}
+
+    /// Called once per arena slot read.
+    fn arena_read(&self) {}
+}
+
+/// The zero-sized production [`Probe`]: every call compiles to nothing.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoProbe;
+
+impl Probe for NoProbe {}
+
 /// Errors a TPHT operation can return.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TphtError {
