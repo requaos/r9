@@ -42,7 +42,7 @@ Milestone numbering continues from the closed Harvey-rooted milestone v2.1.
 
 - [x] **Phase 1: Stage P0 - Cross-Build Harness** - `cargo xtask` draws C artifacts from a read-only Harvey tree through a fallback manifest; the boot-to-rio gate runs per commit (completed 2026-11-23)
 - [x] **Phase 2: Guide Phase 0 - Design Lock and rfork Flag Reservation** - threat model, corrected C prototypes, four `rfork` flag bits reserved in r9, maintainer confirms decisions (completed 2026-11-24)
-- [ ] **Phase 3: Guide Phase 1 - crypto/ and ds/ Foundations** - HKDF, ChaCha20, BLAKE3, TPHT, Roaring, `ClientSet`, with lint contracts
+- [x] **Phase 3: Guide Phase 1 - crypto/ and ds/ Foundations** - HKDF, ChaCha20, BLAKE3, TPHT, Roaring, `ClientSet`, with lint contracts (completed 2026-11-24)
 - [ ] **Phase 4: Guide Phase 2 - 9P2000.aead Transport and FidTable** - wire envelope, monotonic nonces, hybrid `FidHandle`, `FidShard`, Factotum `Tauth`
 
 #### Phase 1: Stage P0 - Cross-Build Harness
@@ -175,7 +175,7 @@ Plans:
   2. TPHT single-line hit tests pass on the host: over 90% of lookups resolve in the home block, `deref_tiny` is exactly one memory access, the Feistel key reconstruction round-trips, and the chained overflow reaches over 95% fill with no allocation failure.
   3. Roaring union, intersection and difference match a reference model on randomized inputs, and `ClientSet` uses no heap for up to four clients and upgrades beyond that.
   4. `cargo xtask check` and clippy pass with the lint contract settled for `crypto/` and `ds/`, every unsafe site carries a `// SAFETY:` comment, and `UNSAFE-AUDIT.md` lists the new sites.
-**Plans**: 13/13 plans executed; 13 plans in 13 sequential waves, in this order: 03-01, 03-12, 03-02, 03-03, 03-04, 03-05, 03-06, 03-13, 03-07, 03-08, 03-09, 03-10, 03-11. One planned owner stop, the end-of-phase stop on the x86_64 Linux host in 03-11 (branch push approval, sandboxed kernel builds and byte comparison, then a second approval for `main`). Run with `workflow.use_worktrees` = `false`, so every plan runs in sequence on the main working tree.
+**Plans**: 13/13 plans complete; 13 plans in 13 sequential waves, in this order: 03-01, 03-12, 03-02, 03-03, 03-04, 03-05, 03-06, 03-13, 03-07, 03-08, 03-09, 03-10, 03-11. One planned owner stop, the end-of-phase stop on the x86_64 Linux host in 03-11 (branch push approval, sandboxed kernel builds and byte comparison, then a second approval for `main`). Run with `workflow.use_worktrees` = `false`, so every plan runs in sequence on the main working tree.
 - [x] 03-01-PLAN.md
 - [x] 03-02-PLAN.md
 - [x] 03-03-PLAN.md
@@ -395,7 +395,7 @@ Phases execute in numeric order: 1 → 2 → 3 → … → 16 (decimal insertion
 |-------|-----------|----------------|--------|-----------|
 | 1. Stage P0 - Cross-Build Harness | v3.0 | 34/34 | Complete | 2026-11-23 |
 | 2. Guide Phase 0 - Design Lock and rfork Flag Reservation | v3.0 | 6/6 | Complete | 2026-11-24 |
-| 3. Guide Phase 1 - crypto/ and ds/ Foundations | v3.0 | 13/13 | In Progress | - |
+| 3. Guide Phase 1 - crypto/ and ds/ Foundations | v3.0 | 13/13 | Complete | 2026-11-24 |
 | 4. Guide Phase 2 - 9P2000.aead Transport and FidTable | v3.0 | 0/TBD | Not started | - |
 | 5. Guide Phase 3 - Cryptographic Memory and Zero-Copy DMA Paging | v3.1 | 0/TBD | Not started | - |
 | 6. Guide Phase 4 - Distributed 9P Extensions and Service Discovery | v3.1 | 0/TBD | Not started | - |

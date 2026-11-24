@@ -2,20 +2,20 @@
 gsd_state_version: "1.0"
 milestone: v3.0
 milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
-current_phase: 03
-current_phase_name: Guide Phase 1 - crypto/ and ds/ Foundations
-status: verifying
-stopped_at: Completed 03-11-PLAN.md; Phase 3 ready for verification
-last_updated: "2026-11-24T18:44:58.072Z"
+current_phase: 4
+current_phase_name: Guide Phase 2 - 9P2000.aead Transport and FidTable
+status: planning
+stopped_at: Phase 03 complete, ready to plan Phase 4
+last_updated: "2026-11-24T18:57:58.690Z"
 last_activity: 2026-11-24
-last_activity_desc: Phase 03 execution started
-state_head: 5226d1131c86442f1ae4ba8596523e7eb3fdb6f4
+last_activity_desc: Phase 03 complete, transitioned to Phase 4
+state_head: 558ae235747303a6be42098765650dad057d204e
 progress:
   total_phases: 4
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 53
   completed_plans: 53
-  percent: 50
+  percent: 75
 ---
 
 # Project State
@@ -25,21 +25,21 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-24)
 
 **Core value:** The OS boots to rio on QEMU q35 at every commit.
-**Current focus:** Phase 03 — Guide Phase 1 - crypto/ and ds/ Foundations
+**Current focus:** Phase 4 — Guide Phase 2 - 9P2000.aead Transport and FidTable
 
 ## Current Position
 
-Phase: 03 (Guide Phase 1 - crypto/ and ds/ Foundations) — EXECUTING
-Plan: 13 of 13
-Status: Phase complete — ready for verification
-Last activity: 2026-11-24 — Phase 03 execution started
+Phase: 4 — Guide Phase 2 - 9P2000.aead Transport and FidTable
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-11-24 — Phase 03 complete, transitioned to Phase 4
 
-Progress: [█████░░░░░] 50%
+Progress: [███████░░░] 75%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 40
+- Total plans completed: 53
 
 **By Phase:**
 
@@ -47,6 +47,7 @@ Progress: [█████░░░░░] 50%
 |-------|-------|-------|----------|
 | 01 | 34 | - | - |
 | 02 | 6 | - | - |
+| 03 | 13 | - | - |
 
 *Updated after each plan completion*
 **Per-Plan Metrics:**
@@ -187,6 +188,7 @@ Full log is the PROJECT.md Key Decisions table. Recent:
 - [Orchestrator 2026-11-24]: Plan 03-08 Miri over-budget deviation ACCEPTED — both runs are rc 0 over 64 seeds with no Undefined Behavior or data race; only feedback latency is out of budget. Coverage, seeds and native sizes stay unchanged. Carry to phase-end review: the 120 s budget in 03-VALIDATION.md is not met by tpht-spill/tpht-hit-rate, so a later phase should recalibrate it or split the Miri step; no plan edit authorized now.
 - [Phase 03]: Plan 03-09: PROJECT.md records W3, N1, W5, W6 and N2 as settled and IG-D09 as locked amended 2026-11-24 (succinct TPHT primary, Funnel scratchpad only, ds/src/tpht/ unsafe-holding, 16 home slots, spill threshold outside the lock); the Open Questions table is down to W1, W2, W4, W7-W10.
 - [Phase 03]: Plan 03-09: the RFC text is amended in section 3.1 (ChaCha20 with the RFC 8439 32-bit counter and 96-bit nonce; Keyed BLAKE3 the only MAC; [RFC8439] cited for ChaCha20 only) with a dated note; the guide and compendium are byte-identical to baseline 4beb5c8.
+- [Owner 2026-11-24]: Phase 3 verification complete. The owner accepted the nine planning-level rows, `zeroize =1.9.2`, the ChaCha20 2^32-1 block limit, the DS-07 no-Funnel backstop, and the Miri latency deviation (230-402 s at 64 seeds, coverage unchanged). UAT 3/3 passed; `03-VERIFICATION.md` canonicalized to passed.
 - [Phase 03]: Plan 03-09: nine planning-level rows are recorded for owner review at Phase 3 verification (compendium 4.1 mixed-half correction, type-level ReadOnly, MurmurHash3 f(R), K_file info, parallel chain heads, Boehm seqlock, build/gate readings, ChaCha20 per-key limit, zeroize =1.9.2 with =1.9.1 as the older alternative).
 - [Phase 03]: Plan 03-09: STATE.md records the pre-existing aarch64 clippy failure (7 undocumented unsafe blocks) and the TPHT neighbourhood-displacement gap as deferred items.
 - [Phase 03]: Plan 03-10: UNSAFE-AUDIT.md names the four gated crates (aarch64, port, crypto, ds), records ds 1 lint-visible block (ds/src/tpht/flattened.rs:440, deref_tiny's unchecked arena read) and crypto 0, so SAFETY is 152 -> 153 (129 + 23 + 1 + 0); the aarch64 count of 129 is kept with the note that 7 pre-existing undocumented sites may make it stale (RESEARCH C5, outside Phase 3)
@@ -261,5 +263,5 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 ## Session Continuity
 
 Last session: 2026-11-24T18:44:53.904Z
-Stopped at: Completed 03-11-PLAN.md; Phase 3 ready for verification
+Stopped at: Phase 03 complete, ready to plan Phase 4
 Resume file: None
