@@ -90,8 +90,8 @@ pub fn index_bits(num_blocks: usize) -> Result<u32, TphtError> {
 /// The one sizing rule for every `tpht` test: return `under_miri` when the
 /// test binary is running under Miri and `native` otherwise.  One test body,
 /// two sizes; a size-dependent numeric bound is scaled with the size the test
-/// ran at.  Nothing is gated out of Miri with `cfg(not(miri))` or
-/// `#[ignore]` (D-13).
+/// ran at.  Nothing is gated out of Miri: there is no ignored test and no
+/// compile-time exclusion from the Miri run (D-13).
 #[cfg(test)]
 pub(crate) fn miri_scaled(native: usize, under_miri: usize) -> usize {
     if cfg!(miri) { under_miri } else { native }

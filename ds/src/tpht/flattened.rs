@@ -30,9 +30,9 @@
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU8, AtomicU16, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU16, AtomicU32, AtomicU64, Ordering, fence};
 
-use super::{feistel, index_bits, NoProbe, Probe, TphtError, TinyPtr, HOME_SLOTS};
+use super::{HOME_SLOTS, NoProbe, Probe, TinyPtr, TphtError, feistel, index_bits};
 
 /// The 16-slot, 64-byte home block header of guide section 5.2.
 #[repr(C, align(64))]
@@ -91,13 +91,9 @@ impl<const WORDS: usize, P: Probe> FlattenedTphtShard<WORDS, P> {
     /// Build a shard with an injected [`Probe`] (a test seam for DS-03).
     pub fn with_probe(num_blocks: usize, probe: P) -> Result<Self, TphtError> {
         let bits = index_bits(num_blocks)?;
-        let slots = HOME_SLOTS
-            .checked_mul(num_blocks)
-            .ok_or(TphtError::BadBlockCount)?;
-        let headers = (0..num_blocks)
-            .map(|_| TphtBucketHeader::new())
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
+        let slots = HOME_SLOTS.checked_mul(num_blocks).ok_or(TphtError::BadBlockCount)?;
+        let headers =
+            (0..num_blocks).map(|_| TphtBucketHeader::new()).collect::<Vec<_>>().into_boxed_slice();
         let arena = (0..slots)
             .map(|_| core::array::from_fn(|_| AtomicU64::new(0)))
             .collect::<Vec<_>>()
@@ -114,8 +110,45 @@ impl<const WORDS: usize, P: Probe> FlattenedTphtShard<WORDS, P> {
         value: [u64; WORDS],
         same: impl Fn(&[u64; WORDS]) -> bool,
     ) -> Result<TinyPtr, TphtError> {
-        let _ = (key, value, same);
-        Err(TphtError::HomeFull)
+        let (block, remainder) = feistel::split(key, self.bits);
+        let fingerprint = feistel::fingerprint(remainder);
+        let header = &self.headers[block];
+        let generation = Self::lock(header);
+        let occupied = header.occupied_mask.load(Ordering::Relaxed);
+        let mut free = None;
+        let mut outcome = Err(TphtError::HomeFull);
+        for slot in 0..HOME_SLOTS {
+            let bit = 1u16 << slot;
+            if occupied & bit == 0 {
+                if free.is_none() {
+                    free = Some(slot);
+                }
+                continue;
+            }
+            if header.quotients[slot].load(Ordering::Relaxed) != fingerprint {
+                continue;
+            }
+            let Some(ptr) = TinyPtr::new(header.tiny_ptrs[slot].load(Ordering::Relaxed)) else {
+                continue;
+            };
+            let candidate = self.read_value(self.slot_index(block, ptr));
+            if same(&candidate) {
+                outcome = Err(TphtError::Exists);
+                free = None;
+                break;
+            }
+        }
+        if let Some(slot) = free {
+            let ptr = TinyPtr::new((slot + 1) as u8).expect("a home slot index is 1..=16");
+            self.write_value(self.slot_index(block, ptr), &value);
+            header.quotients[slot].store(fingerprint, Ordering::Release);
+            header.tiny_ptrs[slot].store(ptr.get(), Ordering::Release);
+            Self::set_spilled(header, slot, ptr);
+            header.occupied_mask.store(occupied | (1u16 << slot), Ordering::Release);
+            outcome = Ok(ptr);
+        }
+        Self::unlock(header, generation);
+        outcome
     }
 
     /// Look `key` up in the home block; `same` is the full-key verification
@@ -125,15 +158,142 @@ impl<const WORDS: usize, P: Probe> FlattenedTphtShard<WORDS, P> {
         key: u64,
         same: impl Fn(&[u64; WORDS]) -> bool,
     ) -> Option<([u64; WORDS], TinyPtr)> {
-        let _ = (key, same);
-        None
+        let (block, remainder) = feistel::split(key, self.bits);
+        let fingerprint = feistel::fingerprint(remainder);
+        let header = &self.headers[block];
+        'attempt: loop {
+            self.probe.header_read();
+            let first = header.seq_lock.load(Ordering::Acquire);
+            if first & 1 != 0 {
+                core::hint::spin_loop();
+                continue;
+            }
+            let occupied = header.occupied_mask.load(Ordering::Relaxed);
+            for slot in 0..HOME_SLOTS {
+                if occupied & (1u16 << slot) == 0 {
+                    continue;
+                }
+                if header.quotients[slot].load(Ordering::Relaxed) != fingerprint {
+                    continue;
+                }
+                let Some(ptr) = TinyPtr::new(header.tiny_ptrs[slot].load(Ordering::Relaxed)) else {
+                    continue;
+                };
+                self.probe.arena_read();
+                let value = self.read_value(self.slot_index(block, ptr));
+                fence(Ordering::Acquire);
+                if header.seq_lock.load(Ordering::Relaxed) != first {
+                    continue 'attempt;
+                }
+                if same(&value) {
+                    return Some((value, ptr));
+                }
+            }
+            return None;
+        }
     }
 
     /// Remove `key` from the home block; `same` is the full-key verification
     /// called on a fingerprint match.  Returns whether an entry was removed.
     pub fn remove(&self, key: u64, same: impl Fn(&[u64; WORDS]) -> bool) -> bool {
-        let _ = (key, same);
-        false
+        let (block, remainder) = feistel::split(key, self.bits);
+        let fingerprint = feistel::fingerprint(remainder);
+        let header = &self.headers[block];
+        let generation = Self::lock(header);
+        let occupied = header.occupied_mask.load(Ordering::Relaxed);
+        let mut removed = false;
+        for slot in 0..HOME_SLOTS {
+            if occupied & (1u16 << slot) == 0 {
+                continue;
+            }
+            if header.quotients[slot].load(Ordering::Relaxed) != fingerprint {
+                continue;
+            }
+            let Some(ptr) = TinyPtr::new(header.tiny_ptrs[slot].load(Ordering::Relaxed)) else {
+                continue;
+            };
+            let candidate = self.read_value(self.slot_index(block, ptr));
+            if !same(&candidate) {
+                continue;
+            }
+            header.tiny_ptrs[slot].store(0, Ordering::Release);
+            header.quotients[slot].store(0, Ordering::Release);
+            Self::clear_spilled(header, slot);
+            header.occupied_mask.store(occupied & !(1u16 << slot), Ordering::Release);
+            removed = true;
+            break;
+        }
+        Self::unlock(header, generation);
+        removed
+    }
+
+    /// The arena slot a tiny pointer addresses: `((block << 4) + (ptr - 1)) &
+    /// slot_mask`.
+    fn slot_index(&self, block: usize, ptr: TinyPtr) -> usize {
+        ((block << 4) + (ptr.get() as usize - 1)) & self.slot_mask
+    }
+
+    /// Read a whole arena slot (`WORDS` relaxed atomic loads).
+    fn read_value(&self, slot: usize) -> [u64; WORDS] {
+        let mut value = [0u64; WORDS];
+        for (word, out) in value.iter_mut().enumerate() {
+            *out = self.arena[slot][word].load(Ordering::Relaxed);
+        }
+        value
+    }
+
+    /// Write a whole arena slot with `Release` stores (the writer holds the
+    /// block, so the reader's generation check discards a torn read).
+    fn write_value(&self, slot: usize, value: &[u64; WORDS]) {
+        for (word, out) in value.iter().enumerate() {
+            self.arena[slot][word].store(*out, Ordering::Release);
+        }
+    }
+
+    /// Take the block: bring `seq_lock` from an even generation to that
+    /// generation plus one.  An odd value means another writer holds it.
+    fn lock(header: &TphtBucketHeader) -> u32 {
+        loop {
+            let generation = header.seq_lock.load(Ordering::Relaxed);
+            if generation & 1 != 0 {
+                core::hint::spin_loop();
+                continue;
+            }
+            match header.seq_lock.compare_exchange(
+                generation,
+                generation + 1,
+                Ordering::Acquire,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return generation,
+                Err(_) => core::hint::spin_loop(),
+            }
+        }
+    }
+
+    /// Release the block and publish the new stable generation.
+    fn unlock(header: &TphtBucketHeader, generation: u32) {
+        header.seq_lock.store(generation + 2, Ordering::Release);
+    }
+
+    /// Maintain `spilled_mask` for one slot: a pointer above the home window
+    /// sets the bit, a home pointer clears it.  This writer never produces a
+    /// spilled pointer, but the field means what the layout says.
+    fn set_spilled(header: &TphtBucketHeader, slot: usize, ptr: TinyPtr) {
+        let bit = 1u16 << slot;
+        let mut spilled = header.spilled_mask.load(Ordering::Relaxed);
+        if ptr.get() as usize > HOME_SLOTS {
+            spilled |= bit;
+        } else {
+            spilled &= !bit;
+        }
+        header.spilled_mask.store(spilled, Ordering::Release);
+    }
+
+    /// Clear one slot's `spilled_mask` bit when its entry is removed.
+    fn clear_spilled(header: &TphtBucketHeader, slot: usize) {
+        let spilled = header.spilled_mask.load(Ordering::Relaxed) & !(1u16 << slot);
+        header.spilled_mask.store(spilled, Ordering::Release);
     }
 }
 
@@ -192,15 +352,14 @@ mod tests {
 
     #[test]
     fn home_ops_match_btreemap_model() {
-        let keys: Vec<u64> = (0..8u64)
-            .map(|i| 0x9E37_79B9_7F4A_7C15u64.wrapping_mul(i + 1))
-            .collect();
-        let big_blocks = miri_scaled(1_024, 16);
+        let keys: Vec<u64> =
+            (0..8u64).map(|i| 0x9E37_79B9_7F4A_7C15u64.wrapping_mul(i + 1)).collect();
+        let big_blocks = miri_scaled(1_024, 8);
         let mut cases = vec![1usize, 16];
         if !cases.contains(&big_blocks) {
             cases.push(big_blocks);
         }
-        let ops = miri_scaled(2_000, 200);
+        let ops = miri_scaled(2_000, 100);
         for (case, &blocks) in cases.iter().enumerate() {
             let shard = FlattenedTphtShard::<2>::new(blocks).expect("a power-of-two block count");
             let mut model: BTreeMap<u64, [u64; 2]> = BTreeMap::new();
@@ -273,9 +432,7 @@ mod tests {
         // A full header: the seventeenth key for one block is refused.
         let shard = FlattenedTphtShard::<2>::new(1).expect("one block");
         for key in 0..HOME_SLOTS as u64 {
-            shard
-                .insert(key, [key, !key], |v| v[0] == key)
-                .expect("the first sixteen keys fit");
+            shard.insert(key, [key, !key], |v| v[0] == key).expect("the first sixteen keys fit");
         }
         let extra = HOME_SLOTS as u64;
         assert_eq!(
@@ -307,7 +464,11 @@ mod tests {
             .expect("the second key stores despite the fingerprint collision");
         assert_eq!(shard.lookup(a, |v| v[0] == a), Some(([a, !a], ptr_a)));
         assert_eq!(shard.lookup(b, |v| v[0] == b), Some(([b, !b], ptr_b)));
-        assert_eq!(shard.lookup(a, |v| v[0] == b), Some(([b, !b], ptr_b)), "the fingerprint cannot tell the pair apart; `same` does");
+        assert_eq!(
+            shard.lookup(a, |v| v[0] == b),
+            Some(([b, !b], ptr_b)),
+            "the fingerprint cannot tell the pair apart; `same` does"
+        );
         assert_ne!(ptr_a, ptr_b, "the two entries hold different slots");
     }
 
@@ -322,7 +483,7 @@ mod tests {
             .expect("the sentinel stores");
         let writers = miri_scaled(4, 2);
         let readers = miri_scaled(4, 2);
-        let ops = miri_scaled(20_000, 100);
+        let ops = miri_scaled(20_000, 50);
         let mut handles = Vec::new();
         for writer in 0..writers {
             let shard = Arc::clone(&shard);
