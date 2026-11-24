@@ -155,22 +155,233 @@ impl RoaringBitmap {
     }
 
     /// Union with `other`.
-    pub fn union(&self, _other: &Self) -> Self {
-        Self::new()
+    pub fn union(&self, other: &Self) -> Self {
+        self.combine(other, SetOp::Union)
     }
 
     /// Intersection with `other`.
-    pub fn intersection(&self, _other: &Self) -> Self {
-        Self::new()
+    pub fn intersection(&self, other: &Self) -> Self {
+        self.combine(other, SetOp::Intersection)
     }
 
     /// Difference `self \ other`.
-    pub fn difference(&self, _other: &Self) -> Self {
-        Self::new()
+    pub fn difference(&self, other: &Self) -> Self {
+        self.combine(other, SetOp::Difference)
     }
 
     /// In place: `self` becomes `self \ other`.
-    pub fn andnot(&mut self, _other: &Self) {}
+    pub fn andnot(&mut self, other: &Self) {
+        *self = self.difference(other);
+    }
+
+    /// Chunk-wise merge of the two sorted chunk lists.
+    fn combine(&self, other: &Self, op: SetOp) -> Self {
+        let mut chunks = Vec::new();
+        let mut left = 0usize;
+        let mut right = 0usize;
+        while left < self.chunks.len() || right < other.chunks.len() {
+            let key = match (self.chunks.get(left), other.chunks.get(right)) {
+                (Some(a), Some(b)) => a.key.min(b.key),
+                (Some(a), None) => a.key,
+                (None, Some(b)) => b.key,
+                (None, None) => break,
+            };
+            let a = if self.chunks.get(left).is_some_and(|chunk| chunk.key == key) {
+                let chunk = &self.chunks[left];
+                left += 1;
+                Some(chunk)
+            } else {
+                None
+            };
+            let b = if other.chunks.get(right).is_some_and(|chunk| chunk.key == key) {
+                let chunk = &other.chunks[right];
+                right += 1;
+                Some(chunk)
+            } else {
+                None
+            };
+            let container = match (a, b) {
+                (Some(a), Some(b)) => combine_containers(&a.container, &b.container, op),
+                (Some(a), None) => match op {
+                    SetOp::Union | SetOp::Difference => Some(a.container.clone()),
+                    SetOp::Intersection => None,
+                },
+                (None, Some(b)) => match op {
+                    SetOp::Union => Some(b.container.clone()),
+                    SetOp::Intersection | SetOp::Difference => None,
+                },
+                (None, None) => None,
+            };
+            if let Some(container) = container {
+                chunks.push(Chunk { key, container });
+            }
+        }
+        Self { chunks }
+    }
+}
+
+/// The three results a pair of containers can produce.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SetOp {
+    Union,
+    Intersection,
+    Difference,
+}
+
+fn combine_containers(a: &Container, b: &Container, op: SetOp) -> Option<Container> {
+    match (a, b) {
+        (Container::Bitmap(a_words, _), Container::Bitmap(b_words, _)) => {
+            let mut out = zero_words();
+            let card = match op {
+                SetOp::Union => setops::bitmap_or(a_words, b_words, &mut out),
+                SetOp::Intersection => setops::bitmap_and(a_words, b_words, &mut out),
+                SetOp::Difference => setops::bitmap_andnot(a_words, b_words, &mut out),
+            };
+            Container::from_words(card, out)
+        }
+        (Container::Array(a_values), Container::Array(b_values)) => match op {
+            SetOp::Union => array_union(a_values, b_values),
+            SetOp::Intersection => {
+                let mut out = Vec::new();
+                setops::array_intersect(a_values, b_values, &mut out);
+                if out.is_empty() {
+                    None
+                } else {
+                    Some(Container::Array(out))
+                }
+            }
+            SetOp::Difference => array_difference(a_values, b_values),
+        },
+        (Container::Array(values), other) => combine_array_with(values, other, true, op),
+        (other, Container::Array(values)) => combine_array_with(values, other, false, op),
+        _ => {
+            let a_words = a.to_words();
+            let b_words = b.to_words();
+            let mut out = zero_words();
+            let card = match op {
+                SetOp::Union => setops::bitmap_or(&a_words, &b_words, &mut out),
+                SetOp::Intersection => setops::bitmap_and(&a_words, &b_words, &mut out),
+                SetOp::Difference => setops::bitmap_andnot(&a_words, &b_words, &mut out),
+            };
+            Container::from_words(card, out)
+        }
+    }
+}
+
+/// A mixed pairing: the sorted array probes or paints the other container,
+/// so no word loop over two bitmap containers is written here.
+fn combine_array_with(values: &[u16], other: &Container, array_is_left: bool, op: SetOp) -> Option<Container> {
+    match op {
+        SetOp::Union => {
+            let mut words = other.to_words();
+            let mut card = other.cardinality();
+            for &value in values {
+                let word = value as usize / 64;
+                let mask = 1u64 << (value as usize % 64);
+                if words[word] & mask == 0 {
+                    words[word] |= mask;
+                    card += 1;
+                }
+            }
+            Container::from_words(card, words)
+        }
+        SetOp::Intersection => {
+            let mut out = Vec::with_capacity(values.len());
+            for &value in values {
+                if other.contains_low(value) {
+                    out.push(value);
+                }
+            }
+            if out.is_empty() {
+                None
+            } else {
+                Some(Container::Array(out))
+            }
+        }
+        SetOp::Difference => {
+            if array_is_left {
+                let mut out = Vec::with_capacity(values.len());
+                for &value in values {
+                    if !other.contains_low(value) {
+                        out.push(value);
+                    }
+                }
+                if out.is_empty() {
+                    None
+                } else {
+                    Some(Container::Array(out))
+                }
+            } else {
+                let mut words = other.to_words();
+                let card = other.cardinality();
+                let mut removed = 0u32;
+                for &value in values {
+                    let word = value as usize / 64;
+                    let mask = 1u64 << (value as usize % 64);
+                    if words[word] & mask != 0 {
+                        words[word] &= !mask;
+                        removed += 1;
+                    }
+                }
+                Container::from_words(card - removed, words)
+            }
+        }
+    }
+}
+
+fn array_union(a: &[u16], b: &[u16]) -> Option<Container> {
+    let mut merged: Vec<u16> = Vec::with_capacity(a.len() + b.len());
+    let mut i = 0usize;
+    let mut j = 0usize;
+    while i < a.len() || j < b.len() {
+        let value = if j >= b.len() || (i < a.len() && a[i] < b[j]) {
+            let value = a[i];
+            i += 1;
+            value
+        } else if i >= a.len() || b[j] < a[i] {
+            let value = b[j];
+            j += 1;
+            value
+        } else {
+            let value = a[i];
+            i += 1;
+            j += 1;
+            value
+        };
+        merged.push(value);
+    }
+    if merged.is_empty() {
+        return None;
+    }
+    if merged.len() <= ARRAY_MAX {
+        Some(Container::Array(merged))
+    } else {
+        let card = merged.len() as u32;
+        let mut words = zero_words();
+        for value in merged {
+            words[value as usize / 64] |= 1u64 << (value as usize % 64);
+        }
+        Some(Container::Bitmap(words, card))
+    }
+}
+
+fn array_difference(a: &[u16], b: &[u16]) -> Option<Container> {
+    let mut out: Vec<u16> = Vec::with_capacity(a.len());
+    let mut j = 0usize;
+    for &value in a {
+        while j < b.len() && b[j] < value {
+            j += 1;
+        }
+        if j < b.len() && b[j] == value {
+            continue;
+        }
+        out.push(value);
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(Container::Array(out))
+    }
 }
 
 impl Default for RoaringBitmap {
@@ -589,11 +800,11 @@ fn run_insert(runs: &mut Vec<(u16, u16)>, low: u16) -> bool {
             return true;
         }
     }
-    if let Some(&(start, length)) = runs.get(at) {
-        if start as u32 == value + 1 {
-            runs[at] = (low, (start as u32 + length as u32 - value) as u16);
-            return true;
-        }
+    if let Some(&(start, length)) = runs.get(at)
+        && start as u32 == value + 1
+    {
+        runs[at] = (low, (start as u32 + length as u32 - value) as u16);
+        return true;
     }
     runs.insert(at, (low, 0));
     true
@@ -616,9 +827,9 @@ fn run_remove(runs: &mut Vec<(u16, u16)>, low: u16) -> bool {
     if length == 0 {
         runs.remove(at - 1);
     } else if value == start {
-        runs[at - 1] = ((start + 1) as u16, (length - 1) as u16);
+        runs[at - 1] = ((start + 1) as u16, length - 1);
     } else if value == end {
-        runs[at - 1] = (start as u16, (length - 1) as u16);
+        runs[at - 1] = (start as u16, length - 1);
     } else {
         runs[at - 1] = (start as u16, (value - start - 1) as u16);
         runs.insert(at, ((value + 1) as u16, (end - value - 1) as u16));
@@ -730,7 +941,7 @@ mod tests {
                 let steps = 400 + which * 25;
                 for step in 0..steps {
                     let value = value_for(&mut rng, which);
-                    if rng.next_u64() % 5 != 0 {
+                    if !rng.next_u64().is_multiple_of(5) {
                         assert_eq!(
                             bitmap.insert(value),
                             model.insert(value),
