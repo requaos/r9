@@ -157,11 +157,7 @@ mod tests {
         for _ in 0..count {
             let key = rng.next();
             let p = permute(key);
-            assert_eq!(
-                unpermute(p),
-                key,
-                "unpermute(permute(0x{key:016x})) must return the key"
-            );
+            assert_eq!(unpermute(p), key, "unpermute(permute(0x{key:016x})) must return the key");
         }
         for key in [0u64, 1, u32::MAX as u64, 1 << 32, (1 << 32) - 1, u64::MAX] {
             assert_eq!(
@@ -243,6 +239,9 @@ mod tests {
             1,
             "the compendium's low-bits-of-P index collapses i << 32 keys into one block"
         );
-        assert!(unmixed.contains(&0), "every i << 32 key lands on index 0 when the index is P's low bits");
+        assert!(
+            unmixed.contains(&0),
+            "every i << 32 key lands on index 0 when the index is P's low bits"
+        );
     }
 }
