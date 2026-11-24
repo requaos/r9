@@ -5,16 +5,16 @@ milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
 current_phase: 03
 current_phase_name: Guide Phase 1 - crypto/ and ds/ Foundations
 status: executing
-stopped_at: Completed 03-08-PLAN.md
-last_updated: "2026-11-24T16:52:41.368Z"
+stopped_at: Completed 03-09-PLAN.md
+last_updated: "2026-11-24T16:54:39.409Z"
 last_activity: 2026-11-24
 last_activity_desc: Phase 03 execution started
-state_head: c7b789337f9918c8f58dd0bc02b85eb4865b2367
+state_head: f0fc698a1a6d4911b243c43ff041fc4a0bf5ba22
 progress:
   total_phases: 4
   completed_phases: 2
   total_plans: 53
-  completed_plans: 50
+  completed_plans: 51
   percent: 50
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-11-24)
 ## Current Position
 
 Phase: 03 (Guide Phase 1 - crypto/ and ds/ Foundations) — EXECUTING
-Plan: 11 of 13
+Plan: 12 of 13
 Status: Ready to execute
 Last activity: 2026-11-24 — Phase 03 execution started
 
@@ -77,6 +77,7 @@ Progress: [█████░░░░░] 50%
 | Phase 03 P13 | 13 min | 1 tasks | 2 files |
 | Phase 03 P07 | 32 min | 2 tasks | 2 files |
 | Phase 03 P08 | 51 min | 2 tasks | 5 files |
+| Phase 03 P09 | 1 min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -182,6 +183,10 @@ Full log is the PROJECT.md Key Decisions table. Recent:
 - [Phase 03]: Plan 03-08: the six tests advanced by plans 03-06 and 03-13 were re-pinned on a home-only shard; only constructors, insert/lookup unwrapping and two placement assertions changed, each named by a REPIN ledger line
 - [Phase 03]: Plan 03-08: Miri is over the 120-second budget and reported, not fixed by cutting coverage: 981 s then 315/329 s at the floors for tpht-spill, 628 s then 402 s for tpht-hit-rate; seeds, tests and native sizes unchanged (plan 03-07 precedent)
 - [Orchestrator 2026-11-24]: Plan 03-08 Miri over-budget deviation ACCEPTED — both runs are rc 0 over 64 seeds with no Undefined Behavior or data race; only feedback latency is out of budget. Coverage, seeds and native sizes stay unchanged. Carry to phase-end review: the 120 s budget in 03-VALIDATION.md is not met by tpht-spill/tpht-hit-rate, so a later phase should recalibrate it or split the Miri step; no plan edit authorized now.
+- [Phase 03]: Plan 03-09: PROJECT.md records W3, N1, W5, W6 and N2 as settled and IG-D09 as locked amended 2026-11-24 (succinct TPHT primary, Funnel scratchpad only, ds/src/tpht/ unsafe-holding, 16 home slots, spill threshold outside the lock); the Open Questions table is down to W1, W2, W4, W7-W10.
+- [Phase 03]: Plan 03-09: the RFC text is amended in section 3.1 (ChaCha20 with the RFC 8439 32-bit counter and 96-bit nonce; Keyed BLAKE3 the only MAC; [RFC8439] cited for ChaCha20 only) with a dated note; the guide and compendium are byte-identical to baseline 4beb5c8.
+- [Phase 03]: Plan 03-09: nine planning-level rows are recorded for owner review at Phase 3 verification (compendium 4.1 mixed-half correction, type-level ReadOnly, MurmurHash3 f(R), K_file info, parallel chain heads, Boehm seqlock, build/gate readings, ChaCha20 per-key limit, zeroize =1.9.2 with =1.9.1 as the older alternative).
+- [Phase 03]: Plan 03-09: STATE.md records the pre-existing aarch64 clippy failure (7 undocumented unsafe blocks) and the TPHT neighbourhood-displacement gap as deferred items.
 
 ### Open Questions (seven warnings, approved to be carried, not resolved)
 
@@ -242,6 +247,6 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 
 ## Session Continuity
 
-Last session: 2026-11-24T16:52:35.454Z
-Stopped at: Completed 03-08-PLAN.md
+Last session: 2026-11-24T16:54:39.102Z
+Stopped at: Completed 03-09-PLAN.md
 Resume file: None
