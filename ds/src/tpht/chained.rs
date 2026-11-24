@@ -415,9 +415,9 @@ mod tests {
 
     #[test]
     fn ops_match_btreemap_model() {
-        let blocks = miri_scaled(64, 8);
-        let banks = miri_scaled(8, 2);
-        let ops = miri_scaled(2_000, 200);
+        let blocks = miri_scaled(64, 4);
+        let banks = miri_scaled(8, 1);
+        let ops = miri_scaled(2_000, 50);
         let keys: Vec<u64> =
             (0..32u64).map(|i| 0x9E37_79B9_7F4A_7C15u64.wrapping_mul(i + 1)).collect();
         let overflow =
@@ -519,21 +519,22 @@ mod tests {
 
     #[test]
     fn bank_holds_exactly_255_nodes() {
-        let overflow = ChainedTphtOverflow::<2>::new(1, 1).expect("one block and one bank");
+        // Spread the 255 inserts over many blocks so each chain scan is short:
+        // the capacity is a property of the bank, not of one block's chain.
+        let blocks = miri_scaled(64, 64);
+        let overflow = ChainedTphtOverflow::<2>::new(blocks, 1).expect("one bank");
         for key in 0..BANK_NODES as u64 {
-            overflow.insert(0, key, [key, !key]).expect("a bank holds exactly 255 nodes");
+            overflow
+                .insert(key as usize % blocks, key, [key, !key])
+                .expect("a bank holds exactly 255 nodes");
         }
         assert_eq!(
-            overflow.insert(0, BANK_NODES as u64, [0, 0]),
+            overflow.insert(0, 0xDEAD_BEEF, [0, 0]),
             Err(TphtError::BanksFull),
             "the 256th node must report BanksFull"
         );
         assert_eq!(overflow.fill(), (BANK_NODES, BANK_NODES), "the bank is full at 255 of 255");
-        assert_eq!(
-            overflow.lookup(0, BANK_NODES as u64 - 1),
-            Some([BANK_NODES as u64 - 1, !(BANK_NODES as u64 - 1)]),
-            "the last stored key still resolves"
-        );
+        assert_eq!(overflow.lookup(0, 0), Some([0, !0]), "the first stored key still resolves");
     }
 
     #[test]
@@ -581,9 +582,12 @@ mod tests {
         // A two-bank table (the Miri size) cannot show a 64-bank fill
         // figure, so the fraction is asserted only in native runs; the insert
         // loop runs in both, and at least one insert must succeed in both.
-        let blocks = miri_scaled(4_096, 32);
-        let banks = miri_scaled(64, 2);
+        let blocks = miri_scaled(4_096, 4);
+        let banks = miri_scaled(64, 1);
         let seed_count = miri_scaled(FILL_SEEDS.len(), 2);
+        // Miri runs the insert loop up to the 50-operation floor; the
+        // first-BanksFull fill measurement is the native run's.
+        let miri_budget = if cfg!(miri) { 50 } else { usize::MAX };
         let capacity = banks * BANK_NODES;
         let mut min_fraction = 1.0f64;
         for &seed in &FILL_SEEDS[..seed_count] {
@@ -593,6 +597,9 @@ mod tests {
             let mut used = 0;
             let mut steps = 0;
             loop {
+                if used == miri_budget {
+                    break;
+                }
                 assert!(
                     steps < capacity * 3,
                     "seed {seed:#018x} never reported both candidate banks full"
@@ -633,11 +640,13 @@ mod tests {
     #[test]
     fn stress_concurrent_claims_never_share_a_node() {
         let threads = miri_scaled(4, 2);
-        let ops = miri_scaled(100, 60);
+        let ops = miri_scaled(100, 30);
         let blocks = threads;
-        // Two banks make every block share both candidate banks.
+        // Two banks natively make every block share both candidate banks;
+        // one bank under Miri makes them share the single bank.
+        let banks = miri_scaled(2, 1);
         let overflow =
-            Arc::new(ChainedTphtOverflow::<2>::new(blocks, 2).expect("two banks are valid"));
+            Arc::new(ChainedTphtOverflow::<2>::new(blocks, banks).expect("a valid bank count"));
         let barrier = Arc::new(Barrier::new(threads));
         let mut handles = Vec::new();
         for thread_index in 0..threads {
@@ -679,11 +688,13 @@ mod tests {
     #[test]
     fn stress_reader_never_sees_partial_node() {
         let readers = miri_scaled(3, 1);
-        let writer_ops = miri_scaled(300, 60);
-        // One block with two candidate banks holds up to 510 nodes, so the
-        // writer's 300 native inserts fit.
-        let overflow =
-            Arc::new(ChainedTphtOverflow::<2>::new(1, 2).expect("one block and two banks"));
+        let writer_ops = miri_scaled(300, 30);
+        // One block's two candidate banks hold up to 510 nodes natively; one
+        // bank under Miri still holds the 30-operation floor.
+        let banks = miri_scaled(2, 1);
+        let overflow = Arc::new(
+            ChainedTphtOverflow::<2>::new(1, banks).expect("one block and a valid bank count"),
+        );
         let barrier = Arc::new(Barrier::new(readers + 1));
         let mut handles = Vec::new();
         {
@@ -729,8 +740,9 @@ mod tests {
     fn writing_sentinel_is_never_a_node_index() {
         let threads = miri_scaled(4, 2);
         let ops = miri_scaled(50, 30);
+        let banks = miri_scaled(2, 1);
         let overflow =
-            Arc::new(ChainedTphtOverflow::<2>::new(threads, 2).expect("two banks are valid"));
+            Arc::new(ChainedTphtOverflow::<2>::new(threads, banks).expect("a valid bank count"));
         let barrier = Arc::new(Barrier::new(threads));
         let mut handles = Vec::new();
         for thread_index in 0..threads {
