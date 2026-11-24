@@ -17,6 +17,7 @@
 //! and feature set, not enumerated site by site.
 
 pub mod kdf;
+pub mod key;
 pub mod mac;
 pub mod page;
 
