@@ -2,14 +2,14 @@
 gsd_state_version: "1.0"
 milestone: v3.0
 milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
-current_phase: 2
+current_phase: 02
 current_phase_name: Guide Phase 0 - Design Lock and rfork Flag Reservation
 status: executing
 stopped_at: Phase 2 plan 02-02 complete (threat model committed); 02-01, 02-03 to 02-06 not yet executed
-last_updated: "2026-11-24T02:21:21.096Z"
+last_updated: "2026-11-24T02:23:28.019Z"
 last_activity: 2026-11-23
-last_activity_desc: Phase 01 complete, transitioned to Phase 2
-state_head: 397baefeb089306588c9397d4cb04e2a8fdece2c
+last_activity_desc: Phase 02 execution started
+state_head: c002feb2379949ea50bf7e02248c0d21f4edf85e
 progress:
   total_phases: 4
   completed_phases: 1
@@ -29,10 +29,10 @@ See: .planning/PROJECT.md (updated 2026-11-22)
 
 ## Current Position
 
-Phase: 2 (Guide Phase 0 - Design Lock and rfork Flag Reservation) — READY TO EXECUTE
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-11-23 — Phase 01 complete, transitioned to Phase 2
+Phase: 02 (Guide Phase 0 - Design Lock and rfork Flag Reservation) — EXECUTING
+Plan: 1 of 6
+Status: Executing Phase 02
+Last activity: 2026-11-23 — Phase 02 execution started
 
 Progress: [███░░░░░░░] 25%
 
@@ -68,7 +68,7 @@ Progress: [███░░░░░░░] 25%
 
 Full log is the PROJECT.md Key Decisions table. Recent:
 
-- [Owner 2026-11-22] `RFNOLEGACY` is a fourth `rfork` flag, `1 << 21`, assigned in guide Phase 0 (GSD Phase 2) with `RFCKEY` 18, `RFROBASE` 19, `RFRANDMEM` 20. Resolves warning W11; the guide's "3 flag bits" wording is corrected to four. Reserved in r9 only (`x86_64/src/proc.rs`, `aarch64/src/syscall.rs`); Harvey is not edited. Recorded deviation from the guide's "reserve bits 18-20 in `libc.h`". Phase 6 implements the behaviour.
+- [Owner 2026-11-22] `RFNOLEGACY` is a fourth `rfork` flag, `1 << 21`, assigned in guide Phase 0 (GSD Phase 2) with `RFCKEY` 18, `RFROBASE` 19, `RFRANDMEM` 20. Resolves warning W11; the guide's "3 flag bits" wording is corrected to four. Reserved in r9 only, in one `port/` module (`port/src/rfork.rs`) that both arch crates import (owner amendment 2026-11-23, Phase 2 CONTEXT D-17); Harvey is not edited. Recorded deviation from the guide's "reserve bits 18-20 in `libc.h`". Phase 6 implements the behaviour.
 - [Owner 2026-11-22] The r9 nix flake supplies the read-only Harvey tree to `cargo xtask` through the `nix develop` devshell (HARN-07, Phase 1); xtask keeps no built-in default path.
 - [Owner 2026-11-22] Phase 1 flips flake ownership (HARN-08): r9's flake imports Harvey and produces the composed outputs Harvey's flake owns today; Harvey's flake stops importing r9. Harvey's `flake.nix` is edited for this; the Harvey commit and pushes need owner approval.
 - [Owner 2026-11-22] Phase 1 is planned in two passes (CONTEXT D-22). Pass 1 (plans 01-01 to 01-07) covers spikes S1 to S6 and an owner checkpoint only. Coverage gates overridden for pass 1 on that basis: HARN-05 and decisions D-02, D-06, D-07, D-09, D-10, D-12, D-14, D-15 are not yet in any plan, and no HARN requirement is implemented until pass 2. Re-run `/gsd-plan-phase 1` after the spike results to write pass 2.

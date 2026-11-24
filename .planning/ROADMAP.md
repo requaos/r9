@@ -144,7 +144,7 @@ Plans:
 **Requirements**: DSGN-01, DSGN-02, DSGN-03, DSGN-04, DSGN-05
 **Success Criteria** (what must be TRUE):
   1. A threat model document is committed and states the in-scope protections and the out-of-scope attacks (DRAM bus probing, cold boot, kernel-context code execution).
-  2. The four `rfork` flag bits are reserved as named constants in r9's rfork flag definitions (`x86_64/src/proc.rs` and `aarch64/src/syscall.rs`): `RFCKEY` 1<<18, `RFROBASE` 1<<19, `RFRANDMEM` 1<<20 and `RFNOLEGACY` 1<<21. The exit gate covers four flags, not three.
+  2. The four `rfork` flag bits are reserved as named constants in one `port/` module, `port/src/rfork.rs` (`port::rfork`), which defines every `rfork` flag once and is imported by both arch crates (owner amendment 2026-11-23, Phase 2 CONTEXT D-17): `RFCKEY` 1<<18, `RFROBASE` 1<<19, `RFRANDMEM` 1<<20 and `RFNOLEGACY` 1<<21. The exit gate covers four flags, not three.
   3. A host test pins the four values and proves they overlap no existing `rfork` flag (the highest bit in use today is 14), and `rfork` behaviour is unchanged.
   4. The corrected C prototypes are committed inside r9 with their landing location decided against the repository layout at HEAD.
   5. The maintainer has confirmed the guide's reconciled decisions and PROJECT.md Key Decisions records which are locked.
@@ -164,7 +164,7 @@ Plans:
 
 **Wave 4** *(blocked on 02-02, 02-03, 02-05)*
 - [ ] 02-06-PLAN.md — OWNER STOP (end of phase): branch push, x86_64 host tests, `boot-iso` `outputHash` commit, KVM quick gate once, TCG gate, full gate set; then `main` after a second approval
-**Open questions**: Warning W11 is decided, not open: owner decision 2026-11-22, `RFNOLEGACY` is a fourth `rfork` flag assigned `1 << 21` in this phase; its behaviour is implemented in Phase 6 against the reserved bit. Verified at roadmap time: bits 18-20 are not defined in Harvey `libc.h` or in r9 at HEAD, despite the architecture compendium saying they are already reserved. The reservation is r9-only; Harvey is not edited. This is a recorded deviation from the guide, which says "reserve bits 18-20 in `libc.h`" (owner decision 2026-11-22). Touching `x86_64/src/proc.rs` may or may not change kernel bytes; if it does, the x86_64 kernel byte-change procedure applies.
+**Open questions**: Warning W11 is decided, not open: owner decision 2026-11-22, `RFNOLEGACY` is a fourth `rfork` flag assigned `1 << 21` in this phase; its behaviour is implemented in Phase 6 against the reserved bit. Verified at roadmap time: bits 18-20 are not defined in Harvey `libc.h` or in r9 at HEAD, despite the architecture compendium saying they are already reserved. The reservation is r9-only; Harvey is not edited. This is a recorded deviation from the guide, which says "reserve bits 18-20 in `libc.h`" (owner decision 2026-11-22). Measured in Phase 2 research: moving the flag constants into `port/src/rfork.rs` changes kernel bytes on both architectures (panic line numbers only; `.text` is identical), so the x86_64 kernel byte-change procedure is planned work in this phase and aarch64 gets the quick pass (CONTEXT D-23).
 
 #### Phase 3: Guide Phase 1 - crypto/ and ds/ Foundations
 **Goal**: The cryptographic primitives and the concurrent data structures that the wire, memory and storage layers depend on exist as pinned, host-tested crates.
