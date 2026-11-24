@@ -1,6 +1,13 @@
 #![cfg_attr(not(any(test)), no_std)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 
+//! `ds/` — data-structure foundations for r9: succinct TPHT, Roaring bitmaps
+//! and `ClientSet`.
+//!
+//! Funnel Hashing is not built in this crate (DS-07; IG-D09, locked
+//! 2026-11-24).  Succinct TPHT is the primary concurrent hashing.  If Funnel
+//! Hashing is added later it serves write-once ephemeral scratchpads only and
+//! never the page cache, `FidTable` or a Venti index.
 extern crate alloc;
 
 // Every ds module carries #[forbid(unsafe_code)] EXCEPT the two named

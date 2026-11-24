@@ -3554,6 +3554,10 @@ impl TestStep {
         // D-12: a stale or missing generated header fails the project's
         // test command before any cargo leg runs.
         xtask::rforkh::check(&workspace())?;
+        // D-09, D-10, D-16, D-21: the static lint contract — where `unsafe`
+        // may live, who may depend on crypto/ and ds/, and the DS-07 Funnel
+        // absence — likewise fails before any leg compiles.
+        xtask::lintcontract::check(&workspace())?;
         // Each leg: the cargo args plus an optional profile whose cfg set
         // the leg compiles under (None = the crate's bare default cfg).
         let mut all_cmd_args: Vec<(Vec<String>, Option<Configuration>)> = Vec::new();

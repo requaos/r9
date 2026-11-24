@@ -28,14 +28,468 @@
 //! matches a scan.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::Result;
 
 /// Check the whole static contract against `workspace`.
 pub fn check(workspace: &Path) -> Result<()> {
-    let _ = workspace;
-    Ok(())
+    let mut problems: Vec<String> = Vec::new();
+
+    check_funnel(workspace, &mut problems);
+    check_crypto_token_rule(workspace, &mut problems);
+    check_ds_token_and_forbid_rules(workspace, &mut problems);
+    check_kernel_dependencies(workspace, &mut problems);
+    check_toolchain_and_cargo_config(workspace, &mut problems);
+    check_lints_and_roaring(workspace, &mut problems);
+
+    if problems.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "lint-contract: {} problem(s) — the rules are Phase 3 CONTEXT D-09, D-10, D-11, D-16, D-19 \
+         and D-21:\n{}",
+        problems.len(),
+        problems.join("\n")
+    )
+    .into())
+}
+
+/// A path relative to the workspace, in `file:line` message form.
+fn rel(workspace: &Path, path: &Path) -> String {
+    path.strip_prefix(workspace).unwrap_or(path).to_string_lossy().replace('\\', "/")
+}
+
+fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        match entry.file_type() {
+            Ok(kind) if kind.is_dir() => collect_files(&path, out),
+            Ok(kind) if kind.is_file() => out.push(path),
+            _ => {}
+        }
+    }
+}
+
+/// Every file below `dir`, in a deterministic order.
+fn sorted_files(dir: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    collect_files(dir, &mut files);
+    files.sort();
+    files
+}
+
+fn read_file(path: &Path, display: &str, problems: &mut Vec<String>) -> Option<String> {
+    match fs::read_to_string(path) {
+        Ok(text) => Some(text),
+        Err(e) => {
+            problems.push(format!("{display}: read: {e}"));
+            None
+        }
+    }
+}
+
+/// Everything from `//` to the end of the line.  A bare word in a comment
+/// must not fail the token rules; `//!` and `///` are line comments too.
+fn strip_line_comment(line: &str) -> &str {
+    match line.find("//") {
+        Some(i) => &line[..i],
+        None => line,
+    }
+}
+
+/// Everything from `#` to the end of the line (TOML comments).
+fn strip_hash_comment(line: &str) -> &str {
+    match line.find('#') {
+        Some(i) => &line[..i],
+        None => line,
+    }
+}
+
+/// Find `word` as a whole word: the characters on either side are not
+/// letters, digits or `_`, so `unsafe_code` and `unsafe_op_in_unsafe_fn`
+/// never match `unsafe`.
+fn find_whole_word(text: &str, word: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut start = 0;
+    while let Some(offset) = text[start..].find(word) {
+        let i = start + offset;
+        let before = i.checked_sub(1).map(|p| bytes[p] as char);
+        let after = bytes.get(i + word.len()).map(|&b| b as char);
+        let is_word_char =
+            |c: Option<char>| c.map(|c| c.is_alphanumeric() || c == '_').unwrap_or(false);
+        if !is_word_char(before) && !is_word_char(after) {
+            return Some(i);
+        }
+        start = i + word.len();
+    }
+    None
+}
+
+/// The module name a line declares, if any: `[pub[(...)]] mod name;` or
+/// `mod name {`, after any leading attributes.  Line comments are ignored,
+/// so the DS-07 note's prose never parses as a declaration.
+fn declared_module_name(line: &str) -> Option<String> {
+    let mut code = strip_line_comment(line).trim();
+    loop {
+        let Some(rest) = code.strip_prefix("#[") else { break };
+        match rest.find(']') {
+            Some(end) => code = rest[end + 1..].trim_start(),
+            None => return None,
+        }
+    }
+    if let Some(after) = code.strip_prefix("pub") {
+        let rest = after.trim_start();
+        if let Some(paren) = rest.strip_prefix('(') {
+            match paren.find(')') {
+                Some(end) => code = paren[end + 1..].trim_start(),
+                None => return None,
+            }
+        } else if after.is_empty() || after.starts_with(char::is_whitespace) {
+            code = rest;
+        }
+    }
+    let rest = code.strip_prefix("mod")?;
+    let rest = rest.strip_prefix(char::is_whitespace)?;
+    let end = rest
+        .find(|c: char| c == ';' || c == '{' || c.is_whitespace())
+        .unwrap_or(rest.len());
+    let name = rest[..end].trim().trim_start_matches("r#");
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
+    }
+}
+
+/// R1 (D-16, DS-07): no Funnel file or module under `ds/src`, and the crate
+/// documentation carries the restriction note.
+fn check_funnel(workspace: &Path, problems: &mut Vec<String>) {
+    let ds_src = workspace.join("ds/src");
+    for path in sorted_files(&ds_src) {
+        let display = rel(workspace, &path);
+        let under = path.strip_prefix(&ds_src).unwrap_or(&path);
+        let names_funnel = under
+            .components()
+            .any(|c| c.as_os_str().to_string_lossy().to_ascii_lowercase().contains("funnel"));
+        if names_funnel {
+            problems.push(format!(
+                "{display}: the path names Funnel Hashing; ds/ does not build it (D-16, DS-07): \
+                 write-once ephemeral scratchpads only, never the page cache, FidTable or a Venti \
+                 index"
+            ));
+        }
+        if display.ends_with(".rs") {
+            if let Some(text) = read_file(&path, &display, problems) {
+                for (n, line) in text.lines().enumerate() {
+                    if let Some(name) = declared_module_name(line) {
+                        if name.to_ascii_lowercase().contains("funnel") {
+                            problems.push(format!(
+                                "{display}:{}: declares module `{name}`; Funnel Hashing is not \
+                                 built in ds/ (D-16, DS-07)",
+                                n + 1
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let lib = "ds/src/lib.rs";
+    if let Some(text) = read_file(&workspace.join(lib), lib, problems) {
+        if !text.contains("Funnel Hashing") {
+            problems.push(format!(
+                "{lib}: missing the `Funnel Hashing` restriction note (D-16, DS-07): the crate \
+                 documentation must say Funnel Hashing is not built, and that a future \
+                 implementation serves write-once ephemeral scratchpads only — never the page \
+                 cache, `FidTable` or a Venti index"
+            ));
+        }
+        if !text.contains("scratchpad") {
+            problems.push(format!(
+                "{lib}: the Funnel Hashing note must say `scratchpad` (D-16, DS-07): write-once \
+                 ephemeral scratchpads only"
+            ));
+        }
+    }
+}
+
+fn scan_token(display: &str, text: &str, problems: &mut Vec<String>, rule: &str) {
+    for (n, line) in text.lines().enumerate() {
+        let code = strip_line_comment(line);
+        if find_whole_word(code, "unsafe").is_some() {
+            problems.push(format!(
+                "{display}:{}: `unsafe` token outside the approved places — {rule}",
+                n + 1
+            ));
+        }
+    }
+}
+
+/// R2 (D-10): `crypto/src` holds no `unsafe` token and the crate root
+/// carries `#![forbid(unsafe_code)]`.
+fn check_crypto_token_rule(workspace: &Path, problems: &mut Vec<String>) {
+    let src = workspace.join("crypto/src");
+    for path in sorted_files(&src) {
+        let display = rel(workspace, &path);
+        if let Some(text) = read_file(&path, &display, problems) {
+            scan_token(
+                &display,
+                &text,
+                problems,
+                "crypto/ is crate-level forbid(unsafe_code) and any unsafe there needs owner approval (D-10)",
+            );
+        }
+    }
+
+    let lib = "crypto/src/lib.rs";
+    if let Some(text) = read_file(&workspace.join(lib), lib, problems) {
+        if !text.contains("#![forbid(unsafe_code)]") {
+            problems.push(format!(
+                "{lib}: missing `#![forbid(unsafe_code)]` (D-10): crypto/ is crate-level forbid"
+            ));
+        }
+    }
+}
+
+/// R3 (D-09): the token rule for every `.rs` file under `ds/src` outside
+/// `ds/src/tpht/`, and the per-module forbid layout in `ds/src/lib.rs`.
+fn check_ds_token_and_forbid_rules(workspace: &Path, problems: &mut Vec<String>) {
+    let src = workspace.join("ds/src");
+    let tpht = src.join("tpht");
+    for path in sorted_files(&src) {
+        if path.starts_with(&tpht) {
+            continue;
+        }
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let display = rel(workspace, &path);
+        if let Some(text) = read_file(&path, &display, problems) {
+            scan_token(
+                &display,
+                &text,
+                problems,
+                "only ds/src/tpht/ may hold unsafe in ds/ (D-09)",
+            );
+        }
+    }
+
+    let lib = "ds/src/lib.rs";
+    if let Some(text) = read_file(&workspace.join(lib), lib, problems) {
+        let lines: Vec<&str> = text.lines().collect();
+        for (n, line) in lines.iter().enumerate() {
+            let Some(name) = declared_module_name(line) else { continue };
+            let same_line = strip_line_comment(line).contains("#[forbid(unsafe_code)]");
+            let previous_line =
+                n > 0 && strip_line_comment(lines[n - 1]).contains("#[forbid(unsafe_code)]");
+            if name == "tpht" {
+                if same_line || previous_line {
+                    problems.push(format!(
+                        "{lib}:{}: `tpht` carries `#[forbid(unsafe_code)]`; tpht is the one ds \
+                         module that may hold unsafe (D-09)",
+                        n + 1
+                    ));
+                }
+            } else if !same_line && !previous_line {
+                problems.push(format!(
+                    "{lib}:{}: module `{name}` lacks `#[forbid(unsafe_code)]` on the line before it \
+                     or the same line (D-09)",
+                    n + 1
+                ));
+            }
+        }
+    }
+}
+
+/// The dependency key a table header introduces, e.g. `crypto` for
+/// `[dependencies.crypto]` or `[target.'cfg(unix)'.dev-dependencies.crypto]`.
+fn dependency_key_in_table(table: &str) -> Option<&str> {
+    let segments: Vec<&str> = table.split('.').collect();
+    for (i, segment) in segments.iter().enumerate() {
+        if matches!(*segment, "dependencies" | "dev-dependencies" | "build-dependencies") {
+            return segments.get(i + 1).copied();
+        }
+    }
+    None
+}
+
+/// Is this header a dependency table (as opposed to a table that names one
+/// dependency, such as `[dependencies.crypto]`)?
+fn is_dependency_table(table: &str) -> bool {
+    table
+        .split('.')
+        .any(|segment| matches!(segment, "dependencies" | "dev-dependencies" | "build-dependencies"))
+        && dependency_key_in_table(table).is_none()
+}
+
+fn is_dev_dependency_table(table: &str) -> bool {
+    table.split('.').any(|segment| segment == "dev-dependencies")
+}
+
+/// R4 (D-21): no kernel crate depends on `crypto` or `ds` in any dependency
+/// table.
+fn check_kernel_dependencies(workspace: &Path, problems: &mut Vec<String>) {
+    for kernel in ["port", "aarch64", "x86_64", "riscv64"] {
+        let display = format!("{kernel}/Cargo.toml");
+        let Some(text) = read_file(&workspace.join(&display), &display, problems) else {
+            continue;
+        };
+        let mut table = String::new();
+        for (n, line) in text.lines().enumerate() {
+            let code = strip_hash_comment(line).trim();
+            if code.is_empty() {
+                continue;
+            }
+            if code.starts_with('[') && code.ends_with(']') {
+                table = code[1..code.len() - 1].trim().to_string();
+                if let Some(dep) = dependency_key_in_table(&table) {
+                    if dep == "crypto" || dep == "ds" {
+                        problems.push(format!(
+                            "{display}:{}: kernel crate dependency `{dep}`; no kernel crate may \
+                             depend on crypto/ or ds/ in Phase 3 (D-21). Phases 4 and 5 add this \
+                             dependency under the kernel byte-change procedure and must change \
+                             this rule then",
+                            n + 1
+                        ));
+                    }
+                }
+                continue;
+            }
+            if !is_dependency_table(&table) {
+                continue;
+            }
+            let key = code.split('=').next().unwrap_or("").trim().trim_matches('"');
+            if key == "crypto" || key == "ds" {
+                problems.push(format!(
+                    "{display}:{}: kernel crate dependency `{key}`; no kernel crate may depend on \
+                     crypto/ or ds/ in Phase 3 (D-21). Phases 4 and 5 add this dependency under \
+                     the kernel byte-change procedure and must change this rule then",
+                    n + 1
+                ));
+            }
+        }
+    }
+}
+
+/// R5 (RESEARCH C3, F3): the pinned toolchain lists no `miri` component and
+/// `.cargo/config.toml` names neither soft-backend cfg.
+fn check_toolchain_and_cargo_config(workspace: &Path, problems: &mut Vec<String>) {
+    let toolchain = "rust-toolchain.toml";
+    if let Some(text) = read_file(&workspace.join(toolchain), toolchain, problems) {
+        for (n, line) in text.lines().enumerate() {
+            let code = strip_hash_comment(line);
+            if code.contains("\"miri\"") || code.contains("'miri'") {
+                problems.push(format!(
+                    "{toolchain}:{}: lists the `miri` component; the kernel toolchain must not \
+                     change — Miri comes from the second derivation `toolchainMiri`, exported as \
+                     R9_MIRI_TOOLCHAIN (D-13, RESEARCH C3 and Pitfall 2)",
+                    n + 1
+                ));
+            }
+        }
+    }
+
+    let cargo_config = ".cargo/config.toml";
+    if let Some(text) = read_file(&workspace.join(cargo_config), cargo_config, problems) {
+        for (n, line) in text.lines().enumerate() {
+            let code = strip_hash_comment(line);
+            for cfg in ["sha2_backend", "chacha20_backend"] {
+                if code.contains(cfg) {
+                    problems.push(format!(
+                        "{cargo_config}:{}: names `{cfg}`; backend cfgs belong in the per-leg \
+                         `--config build.rustflags` argument, never .cargo/config.toml (a global \
+                         entry would reach the kernel builds, RESEARCH F3)",
+                        n + 1
+                    ));
+                }
+            }
+        }
+    }
+}
+
+fn has_lints_opt_in(text: &str) -> bool {
+    let mut in_lints = false;
+    for line in text.lines() {
+        let code = strip_hash_comment(line).trim();
+        if code.is_empty() {
+            continue;
+        }
+        if code.starts_with('[') && code.ends_with(']') {
+            in_lints = code == "[lints]";
+            continue;
+        }
+        if in_lints && code.replace(' ', "") == "workspace=true" {
+            return true;
+        }
+    }
+    false
+}
+
+/// R6 (D-11, D-19): both crates opt into the workspace lints; `roaring`
+/// lives only under `ds`'s `[dev-dependencies]` and never in `crypto`.
+fn check_lints_and_roaring(workspace: &Path, problems: &mut Vec<String>) {
+    for display in ["crypto/Cargo.toml", "ds/Cargo.toml"] {
+        let Some(text) = read_file(&workspace.join(display), display, problems) else {
+            continue;
+        };
+        if !has_lints_opt_in(&text) {
+            problems.push(format!(
+                "{display}: missing `[lints]` with `workspace = true` (D-11): both crates opt into \
+                 the workspace lints (undocumented_unsafe_blocks = deny)"
+            ));
+        }
+    }
+
+    let ds = "ds/Cargo.toml";
+    if let Some(text) = read_file(&workspace.join(ds), ds, problems) {
+        let mut table = String::new();
+        for (n, line) in text.lines().enumerate() {
+            let code = strip_hash_comment(line).trim();
+            if code.is_empty() {
+                continue;
+            }
+            if code.starts_with('[') && code.ends_with(']') {
+                table = code[1..code.len() - 1].trim().to_string();
+                if dependency_key_in_table(&table) == Some("roaring")
+                    && !is_dev_dependency_table(&table)
+                {
+                    problems.push(format!(
+                        "{ds}:{}: `roaring` in `[{table}]`; it is a host-only test oracle and lives \
+                         only under [dev-dependencies] (D-19)",
+                        n + 1
+                    ));
+                }
+                continue;
+            }
+            let key = code.split('=').next().unwrap_or("").trim().trim_matches('"');
+            if key == "roaring" && !is_dev_dependency_table(&table) {
+                problems.push(format!(
+                    "{ds}:{}: `roaring` outside [dev-dependencies]; it is a host-only test oracle \
+                     and never links into a kernel (D-19)",
+                    n + 1
+                ));
+            }
+        }
+    }
+
+    let crypto = "crypto/Cargo.toml";
+    if let Some(text) = read_file(&workspace.join(crypto), crypto, problems) {
+        for (n, line) in text.lines().enumerate() {
+            if strip_hash_comment(line).contains("roaring") {
+                problems.push(format!(
+                    "{crypto}:{}: names `roaring`; the oracle belongs only to ds's \
+                     [dev-dependencies] (D-19)",
+                    n + 1
+                ));
+            }
+        }
+    }
 }
 
 #[cfg(test)]
