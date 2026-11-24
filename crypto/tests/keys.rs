@@ -123,3 +123,85 @@ fn derive_labelled_concatenation_is_pinned() {
         "swapping label and context must change the key"
     );
 }
+
+// ---------------------------------------------------------------------------
+// KeyCapability: the read-write / read-only typestate (CRYP-04, D-22)
+// ---------------------------------------------------------------------------
+
+use crypto::Error;
+use crypto::key::KeyCapability;
+
+/// A fixed nonce for the keystream tests.
+const NONCE: [u8; 12] = [0x5a; 12];
+
+#[test]
+fn read_write_seals_and_verifies() {
+    let capability =
+        KeyCapability::new(Key::from_bytes([0x11; 32]), Key::from_bytes([0x22; 32]));
+    let tag = capability.seal(b"page 7");
+    assert_eq!(capability.verify(b"page 7", &tag), Ok(()), "the sealed tag verifies");
+
+    let mut flipped = tag;
+    flipped[0] ^= 1;
+    assert_eq!(
+        capability.verify(b"page 7", &flipped),
+        Err(Error::TagMismatch),
+        "one flipped tag bit must fail verification"
+    );
+}
+
+#[test]
+fn read_only_verifies_what_read_write_sealed() {
+    let capability =
+        KeyCapability::new(Key::from_bytes([0x11; 32]), Key::from_bytes([0x22; 32]));
+    let tag = capability.seal(b"page 7");
+    let sibling = capability.read_only();
+    assert_eq!(sibling.verify(b"page 7", &tag), Ok(()), "the sibling verifies the parent's tag");
+
+    let mut flipped = tag;
+    flipped[0] ^= 1;
+    assert_eq!(
+        sibling.verify(b"page 7", &flipped),
+        Err(Error::TagMismatch),
+        "the sibling rejects a flipped tag"
+    );
+}
+
+#[test]
+fn read_only_sibling_keeps_parent_k_dec() {
+    let capability =
+        KeyCapability::new(Key::from_bytes([0x33; 32]), Key::from_bytes([0x44; 32]));
+    let plaintext = *b"the page plaintext";
+    let mut buf = plaintext;
+    capability
+        .apply_keystream(&NONCE, 7, &mut buf)
+        .expect("the parent encrypts");
+    assert_ne!(buf, plaintext, "the parent's keystream changed the buffer");
+
+    let sibling = capability.read_only();
+    sibling
+        .apply_keystream(&NONCE, 7, &mut buf)
+        .expect("the sibling decrypts");
+    assert_eq!(
+        buf, plaintext,
+        "the read-only sibling inherits the parent's k_dec and restores the plaintext"
+    );
+}
+
+#[test]
+fn mac_key_is_separate_from_cipher_key() {
+    let k_dec = Key::from_bytes([0x55; 32]);
+    let k_mac = Key::from_bytes([0x66; 32]);
+    let sealing = KeyCapability::new(k_dec.clone(), k_mac);
+    let tag = sealing.seal(b"page 9");
+
+    // A capability whose MAC key is the first one's *cipher* key must not
+    // verify the tag: draining k_dec into k_mac would be a key reuse
+    // (T-03-18).
+    let other = KeyCapability::new(Key::from_bytes([0x77; 32]), k_dec);
+    assert_eq!(
+        other.verify(b"page 9", &tag),
+        Err(Error::TagMismatch),
+        "a tag sealed under k_mac must not verify under k_dec"
+    );
+}

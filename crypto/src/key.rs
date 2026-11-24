@@ -109,3 +109,93 @@ pub fn derive_labelled(parent: &Key, label: &[u8], context: &[u8]) -> Key {
         .expect("a 32-byte HKDF-SHA256 expand is within the 255 x 32 RFC 5869 limit");
     Key { bytes: out }
 }
+
+// ---------------------------------------------------------------------------
+// KeyCapability: a typestate over the two capability states (CRYP-04, D-22)
+// ---------------------------------------------------------------------------
+
+/// The read-write capability state: a decryption key and a separate MAC key
+/// (T-03-18).
+pub struct ReadWrite {
+    k_dec: Key,
+    k_mac: Key,
+}
+
+/// The read-only capability state: the parent's decryption key and the key
+/// used to verify tags.
+pub struct ReadOnly {
+    k_dec: Key,
+    blake3_verify: Key,
+}
+
+/// A capability over one state.
+///
+/// `KeyCapability<ReadWrite>` seals and verifies; `KeyCapability<ReadOnly>`
+/// verifies and has no sealing method.  Both decrypt.  The state values are
+/// private and no accessor returns a key.
+pub struct KeyCapability<S> {
+    state: S,
+}
+
+impl KeyCapability<ReadWrite> {
+    /// Build a read-write capability from a decryption key and a MAC key.
+    pub fn new(k_dec: Key, k_mac: Key) -> KeyCapability<ReadWrite> {
+        KeyCapability { state: ReadWrite { k_dec, k_mac } }
+    }
+
+    /// Seal `msg` under the MAC key: the 32-byte keyed BLAKE3 tag.
+    pub fn seal(&self, msg: &[u8]) -> [u8; crate::mac::BLAKE3_OUT_LEN] {
+        let _ = msg;
+        [0u8; crate::mac::BLAKE3_OUT_LEN]
+    }
+
+    /// The read-only sibling: the parent's `k_dec` unchanged, and `k_mac` as
+    /// the verification key (IG-P01: a sibling inheriting shared read-only
+    /// base code keeps the parent's `k_dec`).
+    pub fn read_only(&self) -> KeyCapability<ReadOnly> {
+        KeyCapability {
+            state: ReadOnly {
+                k_dec: self.state.k_dec.clone(),
+                blake3_verify: self.state.k_mac.clone(),
+            },
+        }
+    }
+
+    /// Verify a tag over `msg` under the MAC key.
+    pub fn verify(&self, msg: &[u8], tag: &[u8]) -> crate::Result<()> {
+        let _ = (msg, tag);
+        Ok(())
+    }
+
+    /// XOR the ChaCha20 keystream under `k_dec` into `buf`, from `counter`
+    /// with `nonce`.
+    pub fn apply_keystream(
+        &self,
+        nonce: &[u8; 12],
+        counter: u32,
+        buf: &mut [u8],
+    ) -> crate::Result<()> {
+        let _ = (nonce, counter, buf);
+        Ok(())
+    }
+}
+
+impl KeyCapability<ReadOnly> {
+    /// Verify a tag over `msg` under the verification key.
+    pub fn verify(&self, msg: &[u8], tag: &[u8]) -> crate::Result<()> {
+        let _ = (msg, tag);
+        Ok(())
+    }
+
+    /// XOR the ChaCha20 keystream under the inherited `k_dec` into `buf`,
+    /// from `counter` with `nonce`.
+    pub fn apply_keystream(
+        &self,
+        nonce: &[u8; 12],
+        counter: u32,
+        buf: &mut [u8],
+    ) -> crate::Result<()> {
+        let _ = (nonce, counter, buf);
+        Ok(())
+    }
+}
