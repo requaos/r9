@@ -1,0 +1,26 @@
+PUSHED-TIP 95fe66aaadde14cb8b8fa8197f6b0547ea7b7898
+SCRIPT-EXIT 1
+-- base-kernel-virt.log
+HEAD=4beb5c8eea27f2f7c586a9cedfbc3bc675c6bae1
+EXIT=0
+-- base-kernel-x64.log
+HEAD=4beb5c8eea27f2f7c586a9cedfbc3bc675c6bae1
+EXIT=0
+-- boot-iso-first.log
+HEAD=95fe66aaadde14cb8b8fa8197f6b0547ea7b7898
+EXIT=0
+-- boot-iso-rebuild.log
+HEAD=95fe66aaadde14cb8b8fa8197f6b0547ea7b7898
+EXIT=0
+-- host-test.log
+HEAD=95fe66aaadde14cb8b8fa8197f6b0547ea7b7898
+EXIT=1
+-- kernel-hashes.log
+HEAD=95fe66aaadde14cb8b8fa8197f6b0547ea7b7898
+EXIT=0
+-- tip-kernel-virt.log
+HEAD=95fe66aaadde14cb8b8fa8197f6b0547ea7b7898
+EXIT=0
+-- tip-kernel-x64.log
+HEAD=95fe66aaadde14cb8b8fa8197f6b0547ea7b7898
+EXIT=0

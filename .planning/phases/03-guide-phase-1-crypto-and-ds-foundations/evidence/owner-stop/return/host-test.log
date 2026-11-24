@@ -1,0 +1,604 @@
+HEAD=95fe66aaadde14cb8b8fa8197f6b0547ea7b7898
+building '/nix/store/vk9mzl0yq0hpy6wf3x39q208xv5m073s-miri-nightly-x86_64-unknown-linux-gnu.tar.xz.drv'...
+building '/nix/store/rk00s5d0vyan9wr3js3dxnn9md2p0wgk-miri-preview-1.95.0-nightly-2026-01-30-x86_64-unknown-linux-gnu.drv'...
+building '/nix/store/8fmjg031gff7pwyigkaha6mn1av6h2hf-rust-default-1.95.0-nightly-2026-01-30.drv'...
+building '/nix/store/lj3gacf5li0d6qjax0p1smc0b76w6blm-nix-shell-env.drv'...
+r9 devshell: rustc 1.95.0-nightly (842bd5be2 2026-01-29)
+QEMU emulator version 11.1.2
+apps: nix run .#build | nix run .#boot-virt | nix run .#default
+harvey supply: R9_HARVEY_DIR_ARM64=/nix/store/b2i0hcbxxmyjlh7drl94s0lp3iq7n04a-harvey-tree-arm64-0 (lazy; realised on first use)
+harvey supply: R9_HARVEY_DIR_AMD64=/nix/store/002vay29nmgw2d81nvmi2i6adgz7h1md-harvey-tree-amd64-0 (lazy; realised on first use)
+harvey supply: R9_HARVEY_REFERENCE_AMD64=/nix/store/ydavfxqx6vhlcar7mmcxi1llhjg0n69x-harvey-reference-amd64-0 (lazy; realised on first use)
+harvey supply: R9_HARVEY_REFERENCE_ARM64=/nix/store/zps34qpcmsd0s2mkf251hhc9sjsnqvq5-harvey-reference-arm64-0 (lazy; realised on first use)
+harvey supply: R9_AUTHDOMAIN_GEN=/nix/store/gysm8xfgmlwkj6kcf6zdzkc9pzmi20ah-harvey-authdomain-gen-0/bin/authdomain-gen
+    Updating crates.io index
+   Compiling proc-macro2 v1.0.101
+   Compiling unicode-ident v1.0.19
+   Compiling serde_core v1.0.225
+   Compiling utf8parse v0.2.2
+   Compiling colorchoice v1.0.4
+   Compiling anstyle v1.0.11
+   Compiling is_terminal_polyfill v1.70.1
+   Compiling anstyle-query v1.1.4
+   Compiling heck v0.5.0
+   Compiling strsim v0.11.1
+   Compiling clap_lex v0.7.5
+   Compiling winnow v0.7.13
+   Compiling serde v1.0.225
+   Compiling target-lexicon v0.13.3
+   Compiling toml_writer v1.0.3
+   Compiling anstyle-parse v0.2.7
+   Compiling anstream v0.6.20
+   Compiling clap_builder v4.5.48
+   Compiling quote v1.0.40
+   Compiling syn v2.0.106
+   Compiling toml_parser v1.0.3
+   Compiling serde_spanned v1.0.2
+   Compiling toml_datetime v0.7.2
+   Compiling toml v0.9.7
+   Compiling clap_derive v4.5.47
+   Compiling serde_derive v1.0.225
+   Compiling clap v4.5.48
+   Compiling xtask v0.1.0 (/home/req/code/r9/.git/r9-p03-stop/tip/xtask)
+warning: field `frame_len` is never read
+   --> xtask/src/pcap.rs:228:9
+    |
+219 | pub struct Icmpv4Frame {
+    |            ----------- field in this struct
+...
+228 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Icmpv4Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `frame_len` is never read
+   --> xtask/src/pcap.rs:375:9
+    |
+359 | pub struct BootpFrame {
+    |            ---------- field in this struct
+...
+375 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `BootpFrame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `dst_mac` and `frame_len` are never read
+   --> xtask/src/pcap.rs:569:9
+    |
+566 | pub struct Icmpv6Frame {
+    |            ----------- fields in this struct
+...
+569 |     pub dst_mac: [u8; 6],
+    |         ^^^^^^^
+...
+579 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Icmpv6Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `src_mac`, `dst_mac`, and `frame_len` are never read
+   --> xtask/src/pcap.rs:723:9
+    |
+721 | pub struct Tcpv4Frame {
+    |            ---------- fields in this struct
+722 |     /// Ethernet source/destination MAC.
+723 |     pub src_mac: [u8; 6],
+    |         ^^^^^^^
+724 |     pub dst_mac: [u8; 6],
+    |         ^^^^^^^
+...
+737 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Tcpv4Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: `xtask` (bin "xtask") generated 4 warnings
+    Finished `dev` profile [optimized + debuginfo] target(s) in 11.64s
+     Running `target/debug/xtask test`
+   Compiling byteorder v1.5.0
+   Compiling heapless v0.9.3
+   Compiling stable_deref_trait v1.2.1
+   Compiling smoltcp v0.14.0
+   Compiling managed v0.8.0
+   Compiling adler2 v2.0.1
+   Compiling cfg-if v1.0.5
+   Compiling bitflags v1.3.2
+   Compiling bitflags v2.9.4
+   Compiling miniz_oxide v0.9.1
+   Compiling hash32 v0.3.1
+   Compiling port v0.1.0 (/home/req/code/r9/.git/r9-p03-stop/tip/port)
+warning: unused import: `alloc::string::String`
+  --> port/src/devip.rs:57:5
+   |
+57 | use alloc::string::String;
+   |     ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> port/src/allocator.rs:608:13
+    |
+608 |         let mut walk = |head: Option<Idx>, mark: &mut dyn FnMut(Idx)| {
+    |             ----^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `flags` is never used
+   --> port/src/devip/netlog.rs:103:15
+    |
+103 | pub(crate) fn flags() -> u32 {
+    |               ^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `TCPSTAT_MAX_CONN` is never used
+    --> port/src/devip/proto.rs:2010:18
+     |
+2010 | pub(crate) const TCPSTAT_MAX_CONN: usize = 0;
+     |                  ^^^^^^^^^^^^^^^^
+
+warning: constant `TCPSTAT_MAX_SEGMENT` is never used
+    --> port/src/devip/proto.rs:2011:18
+     |
+2011 | pub(crate) const TCPSTAT_MAX_SEGMENT: usize = 1;
+     |                  ^^^^^^^^^^^^^^^^^^^
+
+warning: function `test_len` is never used
+   --> port/src/devip/arp.rs:373:15
+    |
+373 | pub(crate) fn test_len() -> usize {
+    |               ^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `flags` is never used
+   --> port/src/devip/netlog.rs:103:15
+    |
+103 | pub(crate) fn flags() -> u32 {
+    |               ^^^^^
+
+warning: function `wait_until` is never used
+   --> port/src/devip_tests.rs:148:4
+    |
+148 | fn wait_until(mut cond: impl FnMut() -> bool, what: &str) {
+    |    ^^^^^^^^^^
+
+warning: `port` (lib) generated 5 warnings (run `cargo fix --lib -p port` to apply 2 suggestions)
+warning: unused import: `Chan`
+  --> port/tests/devroot_rawimg_test.rs:19:17
+   |
+19 | use port::dat::{Chan, OEXEC, OREAD, OWRITE};
+   |                 ^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+  --> port/tests/devdup_devsrv_test.rs:59:9
+   |
+59 |     let mut root = devdup::attach();
+   |         ----^^^^
+   |         |
+   |         help: remove this `mut`
+   |
+   = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+  --> port/tests/devpipe_test.rs:73:18
+   |
+73 |     let (mut e0, mut e1) = pipe_pair();
+   |                  ----^^
+   |                  |
+   |                  help: remove this `mut`
+   |
+   = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> port/tests/devenv_test.rs:249:9
+    |
+249 |     let mut c = devenv::walk(&root, b"cputype").expect("walk cputype");
+    |         ----^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `port` (test "devdup_devsrv_test") generated 1 warning (run `cargo fix --test "devdup_devsrv_test" -p port` to apply 1 suggestion)
+warning: `port` (test "devenv_test") generated 1 warning (run `cargo fix --test "devenv_test" -p port` to apply 1 suggestion)
+warning: `port` (test "devroot_rawimg_test") generated 1 warning (run `cargo fix --test "devroot_rawimg_test" -p port` to apply 1 suggestion)
+warning: `port` (test "devpipe_test") generated 1 warning (run `cargo fix --test "devpipe_test" -p port` to apply 1 suggestion)
+warning: `port` (lib test) generated 7 warnings (4 duplicates)
+    Finished `test` profile [optimized + debuginfo] target(s) in 9.11s
+     Running unittests src/lib.rs (target/debug/deps/port-2b6e70aa0e418ad1)
+
+running 168 tests
+test bitmapalloc::tests::bitmap_new ... ok
+test bitmapalloc::tests::indices_as_physaddr ... ok
+test allocator_tests::realloc_growth_stress_preserves_contents ... ok
+test bitmapalloc::tests::bitmap_set ... ok
+test allocator_tests::misc_midlist_removal_preserves_the_list ... ok
+test bitmapalloc::tests::physaddr_as_indices ... ok
+test allocator_tests::churn_ladder_reaches_steady_pool ... ok
+test bitmapalloc::tests::iterate ... ok
+test bitmapalloc::tests::bitmappagealloc_deallocate_outside_byte_0 ... ok
+test bitmapalloc::tests::bitmappagealloc_allocate_and_deallocate ... ok
+test bitmapalloc::tests::bitmappagealloc_mark_allocated_and_free ... ok
+test allocator_tests::free_list_cycle_tripwire_panics_loudly - should panic ... ok
+test allocator_tests::tail_alloc_big_nonpow2_free_and_realloc ... ok
+test allocator_tests::header_table_exhaustion_panics_loudly - should panic ... ok
+test devcap_tests::devcap_fifo_trim_at_256_evicts_the_oldest ... ok
+test devcap_tests::devcap_from_to_form_must_match_the_current_user ... ok
+test devcap_tests::devcap_boot_fixture_hash_matches_the_module ... ok
+test devcons::tests::user_serve_is_the_current_users_bytes_no_newline ... ok
+test devcap_tests::devcap_eve_remove_hides_caphash_permanently ... ok
+test devether_tests::conv_close_last_close_reset_is_donor_intentional ... ok
+test devcap_tests::devcap_second_present_of_the_same_cap_is_rejected ... ok
+test devcap_tests::devcap_short_writes_error ... ok
+test devether_tests::netif_waitset_duplicate_and_zero_registrations_stay_idempotent ... ok
+test devcap_tests::devcap_round_trip_posts_consumes_and_mutates_the_user ... ok
+test devether_tests::readnum_content_max_ethertype_65535 ... ok
+test devether_tests::netif_waitset_513th_registration_is_loudly_dropped ... ok
+test devether_tests::readnum_content_neg1_matches_donor_truncation ... ok
+test devcap_tests::devcap_single_user_form_reinstalls_the_same_user ... ok
+test devether_tests::readnum_content_zero_pads_numsize ... ok
+test devcap_tests::devcap_wrong_hmac_key_is_rejected ... ok
+test devcons::tests::hostowner_write_length_bound_refused ... ok
+test devcons::tests::hostowner_write_refused_for_non_eve ... ok
+test devcap_tests::devcap_caphash_is_hostowner_only_on_open_and_write ... ok
+test devcons::tests::hostowner_write_stores_for_eve ... ok
+test devip_tests::accept_pool_demuxes_two_syns_to_two_members ... ok
+test devcons::tests::user_dir_listing_length_tracks_the_user ... ok
+test devcons::tests::user_eve_gate_default_and_hostowner_write ... ok
+test devcons::tests::user_serve_honors_offsets ... ok
+test devether_tests::netif_waitset_retains_the_whole_proc_table_and_take_returns_all ... ok
+test devip_tests::deadline_arms_from_poll_at_across_retransmit ... ok
+test devip_tests::arp_snoop_feeds_ok_and_wait_entries_both_directions ... ok
+test devip_tests::deregistered_waiter_is_absent_from_the_next_rx_wake ... ok
+test devip_tests::address_class_demux_loopback_vs_ether ... ok
+test devip_tests::conv_waitset_retains_the_whole_proc_table_and_take_returns_all ... ok
+test devip_tests::conv_waitset_duplicate_and_zero_registrations_stay_idempotent ... ok
+test devip_tests::conv_waitset_513th_registration_is_loudly_dropped ... ok
+test devip_tests::dhcp_broadcast_tx_shape_through_the_devip_file_surface ... ok
+test devip_tests::dhcp_shaped_exchange_sources_0_0_0_0_on_the_wire ... ok
+test devip_tests::etherdev_merges_the_three_conv_queues_in_arrival_order ... ok
+test devip_tests::icmpv6_headers_mode_prefix_shape ... ok
+test devip_tests::icmp6_write_oversized_errors_instead_of_wedging ... ok
+test devip_tests::icmp_write_oversized_or_unaddressable_errors_instead_of_wedging ... ok
+test devip_tests::icmpv6_full_packet_round_trip_through_the_bridge ... ok
+test devip_tests::gratuitous_arp_emission_content_on_add ... ok
+test devip_tests::ipifc_add_remove_boundary_values_follow_the_contract ... ok
+test devip_tests::ipifc_add_v4_multicast_and_broadcast_absorb_without_panic ... ok
+test devip_tests::seam_installs_and_drives_clean ... ok
+test devip_tests::ipifc_bind_rejects_a_conv_already_bound_to_another_medium ... ok
+test devip_tests::ipifc_dhcp_preconfig_absorbs_with_zero_iface_addresses_and_a_netlog_note ... ok
+test devip_tests::ipifc_remove_keeps_shared_selftab_entries_for_surviving_lifcs ... ok
+test devip_tests::stack_waitset_duplicate_and_zero_registrations_stay_idempotent ... ok
+test devip_tests::ipifc_unbind_orphans_convs_on_the_dying_core ... ok
+test devip_tests::stack_waitset_retains_the_whole_proc_table_and_take_returns_all ... ok
+test devip_tests::stack_waitset_513th_registration_is_loudly_dropped ... ok
+test devip_tests::ipifc_v6_verbs_add6_ra6_try ... ok
+test devip_tests::iproute_default_recorded_before_bind_lands_at_bind ... ok
+test devip_tests::tcp_checksum_and_porthog_are_accepted_and_recorded ... ok
+test devip_tests::multi_waiter_drain_wakes_every_registered_waiter_once ... ok
+test devip_tests::tcp_close_hangup_hangupxmit_wire_shapes ... ok
+test devip_tests::netlog_set_emit_wakes_blocked_reader ... ok
+test devip_tests::tcp_full_exchange_moves_the_stats_counters ... ok
+test devip_tests::register_wake_reregister_never_loses_a_wake ... ok
+test devip_tests::reregistered_waiter_is_woken_by_the_next_drain ... ok
+test devip_tests::stack_debt_drains_on_next_op ... ok
+test devip_tests::tcp_state_rename_table_is_devip_exact ... ok
+test devip_tests::tcp_accepted_connection_keeps_the_donor_shape_for_life ... ok
+test devip_tests::tcp_announce_builds_contract_depth_pool_and_listen_pops_oldest ... ok
+test devip_tests::tcp_announced_connection_bulk_write_round_trips ... ok
+test devip_tests::iproute_longest_match_verbs_and_smoltcp_mirror ... ok
+test devip_tests::ndb_offset_otrunc_eio_and_vers_bumps ... ok
+test devip_tests::tcp_connect_blocks_until_established_then_connected ... ok
+test devip_tests::tcp_connect_deadline_expiry_maps_etimedout ... ok
+test devip_tests::udp_spawned_conv_dataq_is_capped ... ok
+test devip_tests::tcp_conv_close_lingers_the_socket_until_closed ... ok
+test devip_tests::parked_socket_waiter_wakes_at_the_poll_at_deadline_via_tick_check ... ok
+test devssl_tests::ctl_verb_errors_carry_the_donor_strings ... ok
+test devssl_tests::loopback_round_trips_rc4_256_sha1_and_detects_corruption ... ok
+test devssl_tests::pushssl_protocol_walk_serves_the_verb_order_and_alg_clear ... ok
+test devssl_tests::registry_level_name_resolution_of_the_d_walk ... ok
+test devip_tests::tcp_gc_hangs_up_stale_convs_but_never_steals_an_in_use_slot ... ok
+test devip_tests::tcp_generic_verbs_land_with_contract_errors ... ok
+test devssl_tests::swapped_server_arm_secrets_round_trip_both_directions ... ok
+test fdt::tests::decode_terminates_on_a_partial_tail ... ok
+test fdt::tests::interrupt_map_decodes_all_16_entries ... ok
+test fdt::tests::loud_absence_returns_none_never_a_default ... ok
+test fdt::tests::lookup_applies_the_mask_not_an_exact_compare ... ok
+test fdt::tests::masked_lookup_routes_the_virtio_nic_inta_to_spi4 ... ok
+test hmacsha1::tests::hmac_sha1_pin_fips_abc_vector ... ok
+test hmacsha1::tests::hmac_sha1_pin_rfc2202_case1 ... ok
+test hmacsha1::tests::hmac_sha1_pin_rfc2202_case2 ... ok
+test hmacsha1::tests::hmac_sha1_pin_rfc2202_case3 ... ok
+test devip_tests::tcp_listen_hangup_during_parked_wait_errors ... ok
+test fdt::tests::swizzle_rotation_matches_the_decode_table ... ok
+test hmacsha1::tests::hmac_sha1_pin_rfc2202_case6_long_key ... ok
+test maths::tests::test_round_down2 ... ok
+test maths::tests::test_round_up2 ... ok
+test mem::tests::physaddr_step ... ok
+test mem::tests::physaddr_step_2m ... ok
+test mem::tests::physaddr_step_rounds_up_and_down ... ok
+test namec_tests::create_chan_union_nomount_never_consults_the_root_key ... ok
+test namec_tests::create_chan_union_refusal_propagates_not_falls_through ... ok
+test namec_tests::create_chan_union_reaches_accepting_member ... ok
+test namec_tests::create_chan_union_without_mounts_keeps_direct_dispatch ... ok
+test namec_tests::mount_points_with_equal_qids_but_distinct_devno_stay_distinct ... ok
+test namec_tests::final_redirect_must_not_hijack_union_head_resolution ... ok
+test namec_tests::open_chan_records_oceexec_as_fd_state ... ok
+test namec_tests::orclose_env_key_goes_at_the_last_close ... ok
+test namec_tests::orclose_remove_waits_for_an_in_flight_op_ref ... ok
+test namec_tests::orclose_srv_entry_goes_at_the_last_close_only ... ok
+test namec_tests::repl_bind_final_cross_still_fires_without_union_head ... ok
+test namec_tests::walk_one_union_finds_nonhead_member ... ok
+test namec_tests::walk_one_union_without_mounts_keeps_direct_dispatch ... ok
+test rc4::tests::dec64_decodes_mksecret_shapes_with_the_donor_tail_splits ... ok
+test rc4::tests::framing_max_maxpad_match_the_donor_formulas ... ok
+test rc4::tests::rc4_known_vector_and_32byte_key_round_trip ... ok
+test rc4::tests::rc4_states_are_independent_position_sensitive_copies ... ok
+test rendez::tests::park_take_exchange_and_remove ... ok
+test rendez::tests::remove_pid_sweeps_only_that_pid ... ok
+test rx_chain_tests::rx_chain_layout_is_hdr_descriptor_then_payload_descriptor ... ok
+test rx_chain_tests::rx_drain_slice_delivers_the_device_written_frame_byte_exact ... ok
+test devip_tests::tcp_pool_members_carry_the_donor_tcp_shape ... ok
+test rx_chain_tests::rx_drain_slice_of_a_max_size_frame_stays_within_the_payload_page ... ok
+test virtio_tests::avail_ring_prelinked_slots_permanently_name_chain_heads ... ok
+test virtio_tests::caps_parse_missing_list_errors_loudly ... ok
+test virtio_tests::caps_parse_rejects_misaligned_capability_pointers ... ok
+test virtio_tests::caps_parse_rejects_short_notify_capabilities ... ok
+test virtio_tests::caps_parse_truncated_list_errors_loudly ... ok
+test virtio_tests::caps_parse_yields_the_typed_triples_and_notify_multiplier ... ok
+test virtio_tests::chain_assembly_flags_rx_device_writable_tx_device_read ... ok
+test virtio_tests::descriptor_pool_alloc_free_by_index ... ok
+test virtio_tests::negotiate_accepts_exactly_mac_status_and_version1 ... ok
+test virtio_tests::negotiate_rejects_loudly_without_version1_and_marks_failed ... ok
+test virtio_tests::negotiate_rejects_when_features_ok_is_not_reflected ... ok
+test virtio_tests::negotiate_step_order_is_the_3_1_1_sequence_and_reset_waits_for_readback ... ok
+test virtio_tests::queue_setup_writes_addresses_then_enable_last_and_driver_ok ... ok
+test virtio_tests::ring_rejects_bad_queue_sizes ... ok
+test virtio_tests::rx_replenish_posts_until_caught_up_then_one_notify ... ok
+test virtio_tests::rx_replenish_reports_the_slot_and_suppression ... ok
+test devip_tests::tcp_two_write_client_pattern_round_trips ... ok
+test virtio_tests::tx_post_barrier_sandwich_is_the_2_7_13_order ... ok
+test devip_tests::tick_wake_twin_respects_the_deregister_contract ... ok
+test virtio_tests::tx_post_fills_payload_advances_idx_and_ring_full_is_loud ... ok
+test virtio_tests::tx_post_suppresses_notify_when_device_sets_no_notify ... ok
+test devip_tests::udp_advise_hangup_lands_in_errq_unless_ignoreadvice ... ok
+test virtio_tests::used_drain_is_acquire_ordered_and_recovers_the_slot ... ok
+test devip_tests::udp_conv_isolation_distinct_ids_and_ctl_isolation ... ok
+test virtio_tests::used_drain_rejects_lens_outside_the_queue_bounds ... ok
+test virtio_tests::used_drain_rejects_unposted_slot_ids ... ok
+test virtio_tests::used_drain_rejects_out_of_range_and_odd_ids ... ok
+test virtio_tests::virtio_net_hdr_is_12_bytes_with_a_zeroed_tx_form ... ok
+test devip_tests::udp_fsnewcall_spawns_on_new_remote_quad ... ok
+test devip_tests::udp_headers_mode_synthesizes_the_52_byte_prefix ... ok
+test devip_tests::tcp_connect_rst_mid_syn_maps_econrefused ... ok
+test devip_tests::udp_spawned_conv_writes_ride_the_announcers_socket ... ok
+test devip_tests::udp_wedged_reader_never_blocks_a_sibling_conv ... ok
+test devip_tests::udp_write_oversized_or_unaddressable_errors_instead_of_wedging ... ok
+test devip_tests::waker_bridge_fires_on_rx_close_and_buffer_space ... ok
+test virtio_tests::indices_wrap_at_u16_without_losing_slot_identity ... ok
+
+test result: ok. 168 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/devcons_test.rs (target/debug/deps/devcons_test-a65d9219d439751b)
+
+running 3 tests
+test pid_file_serves_the_callers_pid ... ok
+test stat_records_carry_four_strings ... ok
+test cons_read_path_cooked_raw_del_and_consctl ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/devdup_devsrv_test.rs (target/debug/deps/devdup_devsrv_test-3906a80fb1fcda4e)
+
+running 2 tests
+test devdup_walk_validation ... ok
+test devdup_devsrv_device_flow ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/devenv_test.rs (target/debug/deps/devenv_test-62631fa41c71924e)
+
+running 6 tests
+test devenv_device_flow_over_dynamic_groups ... ok
+test seeded_keys_read_back_and_unset_is_absent ... ok
+test env_bounds_and_name_validation ... ok
+test two_groups_hold_same_key_independently ... ok
+test write_replace_and_create_round_trip ... ok
+test rfork_env_semantics_share_copy_empty ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/devmnt_test.rs (target/debug/deps/devmnt_test-ec9eb4932074b1f6)
+
+running 18 tests
+test devmnt_read_all_exact_cap_and_over_cap ... ok
+test devmnt_rejects_oversized_reply ... ok
+test devmnt_dup_close_clunks_exactly_once ... ok
+test devmnt_rejects_server_msize_increase ... ok
+test devmnt_namec_walk_error_clunks_intermediates ... ok
+test devmnt_mount_crossing_walk_matrix ... ok
+test devmnt_version_accepts_servers_lower_answer ... ok
+test devmnt_namec_walk_sweeps_intermediate_fids ... ok
+test devmnt_remove_refused_is_loud_and_leaks_no_fid ... ok
+test devmnt_remove_rides_a_clone_and_close_clunks_the_walked_fid_once ... ok
+test devmnt_mount_redirect_clones_the_table_fid ... ok
+test devmnt_version_attach_walk_open_read_stat_clunk_round_trip ... ok
+test devmnt_rejects_tag_mismatch ... ok
+test devmnt_walk_not_found_is_a_loud_error ... ok
+test devmnt_walk_of_a_non_directory_errors ... ok
+test mux_foreign_reply_is_dropped_and_live_waiters_still_complete ... ok
+test zero_length_write_sends_the_zero_count_twrite ... ok
+test mux_parked_reader_routes_a_concurrent_rpcs_reply_before_its_own ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/devpipe_test.rs (target/debug/deps/devpipe_test-89fda9144caedd1a)
+
+running 7 tests
+test pipe_blocks_on_empty_and_write_wakes_with_bytes ... ok
+test pipe_full_write_blocks_until_a_reader_drains ... ok
+test pipe_pair_write_read_round_trip ... ok
+test pipe_reader_eof_after_drain_on_write_close ... ok
+test pipe_reopen_after_full_close ... ok
+test pipe_stat_records_carry_four_strings ... ok
+test pipe_write_on_closed_reader_end_errors ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/devproc_test.rs (target/debug/deps/devproc_test-b1db66e4876b2b68)
+
+running 1 test
+test devproc_root_status_args_ctl_and_note_surface ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/devroot_rawimg_test.rs (target/debug/deps/devroot_rawimg_test-ff0999611d9a2409)
+
+running 4 tests
+test rawimg_node_walk_stat_read_and_bounds ... ok
+test rawimg_node_refuses_write_and_exec_loudly ... ok
+test dir_reads_serve_the_four_string_listing ... ok
+test rawimg_name_collision_fails_mount_loudly ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/fdgroup_test.rs (target/debug/deps/fdgroup_test-c7d2e89c8f2ca409)
+
+running 4 tests
+test fd_group_drain_all_empties_every_slot ... ok
+test fd_group_copy_shares_the_pipe_queue ... ok
+test fd_group_matrix_share_copy_empty ... ok
+test fd_group_slot_mechanics ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/fdt_test.rs (target/debug/deps/fdt_test-acba2b83910fbf8c)
+
+running 9 tests
+test find_by_path ... ok
+test get_cells ... ok
+test get_ranges ... ok
+test traverse_tree ... ok
+test iterate_over_device_types ... ok
+test get_translated_reg ... ok
+test iterate_over_children ... ok
+test get_reg ... ok
+test find_compatible ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/namespace_test.rs (target/debug/deps/namespace_test-856b89e73251db5a)
+
+running 10 tests
+test bind_to_nonexistent_target_errors ... ok
+test bind_mbefore_then_resolution_prefers_mounted ... ok
+test bind_mafter_appends_after_underlying ... ok
+test namec_resolves_device_path_through_registry ... ok
+test namec_devroot_multi_component_walk ... ok
+test bind_mrepl_replaces_union ... ok
+test rfork_group_semantics_share_copy_wipe ... ok
+test take_mount_chans_empties_the_table_and_returns_every_chan ... ok
+test unmount_removes_and_errors_on_never_mounted ... ok
+test union_walk_order_mbefore_underlying_mafter ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/paqfs_test.rs (target/debug/deps/paqfs_test-75668cefeff026b8)
+
+running 5 tests
+test corrupt_inputs_error_no_panic ... ok
+test paqdir_size_overrun_terminates_scan ... ok
+test synthetic_noenc_walk_and_read ... ok
+test committed_fixture_root_listing ... ok
+test committed_fixture_walk_and_read ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/rfork_test.rs (target/debug/deps/rfork_test-b3a476cc5df0b783)
+
+running 3 tests
+test rfork_flags_do_not_overlap ... ok
+test rfork_harvey_values_are_pinned ... ok
+test rfork_reserved_values_are_pinned ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+ Downloading crates ...
+warning: spurious network error (3 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 217 ms: Could not connect to server)
+warning: spurious network error (3 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 217 ms: Could not connect to server)
+warning: spurious network error (3 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 217 ms: Could not connect to server)
+warning: spurious network error (3 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 217 ms: Could not connect to server)
+warning: spurious network error (3 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 217 ms: Could not connect to server)
+warning: spurious network error (3 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 217 ms: Could not connect to server)
+warning: spurious network error (3 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 217 ms: Could not connect to server)
+warning: spurious network error (3 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 216 ms: Could not connect to server)
+warning: spurious network error (3 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 216 ms: Could not connect to server)
+warning: spurious network error (3 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 216 ms: Could not connect to server)
+warning: spurious network error (3 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 216 ms: Could not connect to server)
+warning: spurious network error (3 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 216 ms: Could not connect to server)
+warning: spurious network error (3 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 216 ms: Could not connect to server)
+warning: spurious network error (3 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 216 ms: Could not connect to server)
+warning: spurious network error (3 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 216 ms: Could not connect to server)
+warning: spurious network error (3 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 215 ms: Could not connect to server)
+warning: spurious network error (3 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 215 ms: Could not connect to server)
+warning: spurious network error (3 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 215 ms: Could not connect to server)
+warning: spurious network error (3 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 215 ms: Could not connect to server)
+warning: spurious network error (3 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 215 ms: Could not connect to server)
+warning: spurious network error (3 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 215 ms: Could not connect to server)
+warning: spurious network error (3 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 214 ms: Could not connect to server)
+warning: spurious network error (2 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (2 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (2 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (2 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (2 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (2 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (2 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (2 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (2 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (2 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (2 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (2 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (2 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (2 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (2 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (2 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (2 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (2 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (2 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (2 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (2 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (2 tries remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (1 try remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (1 try remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (1 try remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (1 try remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (1 try remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (1 try remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (1 try remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (1 try remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (1 try remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (1 try remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (1 try remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (1 try remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (1 try remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (1 try remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (1 try remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (1 try remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (1 try remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (1 try remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (1 try remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (1 try remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (1 try remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+warning: spurious network error (1 try remaining): [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+error: failed to download from `https://static.crates.io/crates/find-msvc-tools/0.1.15/download`
+
+Caused by:
+  [7] Could not connect to server (Failed to connect to static.crates.io port 443 after 0 ms: Could not connect to server)
+test failed
+EXIT=1

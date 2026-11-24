@@ -1,0 +1,5 @@
+HEAD=95fe66aaadde14cb8b8fa8197f6b0547ea7b7898
+this derivation will be built:
+  /nix/store/5w4cylp93r2462x6ajaamrw41bxjvsdv-r9-kernel-virt-95fe66a.drv
+building '/nix/store/5w4cylp93r2462x6ajaamrw41bxjvsdv-r9-kernel-virt-95fe66a.drv'...
+EXIT=0

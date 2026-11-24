@@ -1,0 +1,6 @@
+HEAD=95fe66aaadde14cb8b8fa8197f6b0547ea7b7898
+6a5f5a66b6f1e35bdb8d36ad4346ce6fc7f106d28fa43c25ed74c4a3301cf6a5  /home/req/code/r9/.git/r9-p03-stop/tip-kernel-x64/kernel-x64.elf
+954e51102f2e3eeccb028b984fd32730375107d32e21c666aeeadff2030f4eee  /home/req/code/r9/.git/r9-p03-stop/tip-kernel-virt/kernel-virt.elf
+6a5f5a66b6f1e35bdb8d36ad4346ce6fc7f106d28fa43c25ed74c4a3301cf6a5  /home/req/code/r9/.git/r9-p03-stop/base-kernel-x64/kernel-x64.elf
+954e51102f2e3eeccb028b984fd32730375107d32e21c666aeeadff2030f4eee  /home/req/code/r9/.git/r9-p03-stop/base-kernel-virt/kernel-virt.elf
+EXIT=0
