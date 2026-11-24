@@ -56,6 +56,7 @@ enum Container {
 }
 
 /// A hand-written Roaring bitmap over the full `u32` range.
+#[derive(Clone)]
 pub struct RoaringBitmap {
     chunks: Vec<Chunk>,
 }
@@ -152,6 +153,24 @@ impl RoaringBitmap {
             chunk.container.compact();
         }
     }
+
+    /// Union with `other`.
+    pub fn union(&self, _other: &Self) -> Self {
+        Self::new()
+    }
+
+    /// Intersection with `other`.
+    pub fn intersection(&self, _other: &Self) -> Self {
+        Self::new()
+    }
+
+    /// Difference `self \ other`.
+    pub fn difference(&self, _other: &Self) -> Self {
+        Self::new()
+    }
+
+    /// In place: `self` becomes `self \ other`.
+    pub fn andnot(&mut self, _other: &Self) {}
 }
 
 impl Default for RoaringBitmap {
@@ -169,6 +188,12 @@ impl PartialEq for RoaringBitmap {
 }
 
 impl Eq for RoaringBitmap {}
+
+impl core::fmt::Debug for RoaringBitmap {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "RoaringBitmap {{ len: {} }}", self.len())
+    }
+}
 
 /// Ascending iterator over a [`RoaringBitmap`].
 pub struct Iter<'a> {
@@ -752,6 +777,338 @@ mod tests {
                 assert_eq!(bitmap.is_empty(), model.is_empty(), "is_empty (seed {seed:#018x}, distribution {which})");
             }
         }
+    }
+
+    /// A base set from one of the five distributions, reused across pairings
+    /// so each seed's sets are built once.
+    fn distribution(seed: u64, which: usize) -> RoaringBitmap {
+        let mut rng = SplitMix64::new(seed ^ (which as u64).wrapping_mul(0xA24B_AED4_963E_E407));
+        let mut bitmap = RoaringBitmap::new();
+        match which {
+            0 => {
+                for _ in 0..1500 {
+                    bitmap.insert(rng.next_u64() as u32);
+                }
+            }
+            1 => {
+                let base = 7u32 << 16;
+                for _ in 0..5000 {
+                    bitmap.insert(base | (rng.next_u64() as u32 & CHUNK_LOW_MASK));
+                }
+                bitmap.insert_range(base + 1000..=base + 2000);
+            }
+            2 => {
+                for _ in 0..40 {
+                    let start = rng.next_u64() as u32;
+                    let length = (rng.next_u64() % 300) as u32;
+                    bitmap.insert_range(start..=start.saturating_add(length));
+                }
+            }
+            3 => {
+                for value in [
+                    0u32,
+                    1,
+                    2,
+                    65_534,
+                    65_535,
+                    65_536,
+                    65_537,
+                    131_071,
+                    131_072,
+                    u32::MAX - 1,
+                    u32::MAX,
+                ] {
+                    bitmap.insert(value);
+                }
+            }
+            _ => {
+                for _ in 0..400 {
+                    bitmap.insert(rng.next_u64() as u32);
+                }
+                bitmap.insert_range((5u32 << 16)..=((5u32 << 16) + 9000));
+                let base = 9u32 << 16;
+                for _ in 0..3000 {
+                    bitmap.insert(base | (rng.next_u64() as u32 & CHUNK_LOW_MASK));
+                }
+                bitmap.insert(0);
+                bitmap.insert(u32::MAX);
+            }
+        }
+        bitmap
+    }
+
+    fn prepared(base: &RoaringBitmap, optimize: bool) -> RoaringBitmap {
+        let mut copy = base.clone();
+        if optimize {
+            copy.run_optimize();
+        }
+        copy
+    }
+
+    fn collected(bitmap: &RoaringBitmap) -> Vec<u32> {
+        bitmap.iter().collect()
+    }
+
+    fn check_operation(
+        label: &str,
+        name: &str,
+        ours: &RoaringBitmap,
+        model: &BTreeSet<u32>,
+        oracle: &::roaring::RoaringBitmap,
+    ) {
+        let our_values = collected(ours);
+        let model_values: Vec<u32> = model.iter().copied().collect();
+        let oracle_values: Vec<u32> = oracle.iter().collect();
+        assert_same_contents(&our_values, &model_values, label, name, "the BTreeSet model");
+        assert_eq!(
+            ours.len(),
+            model_values.len() as u64,
+            "{name} len vs the BTreeSet model ({label})"
+        );
+        assert_same_contents(&our_values, &oracle_values, label, name, "the roaring oracle");
+        assert_eq!(ours.len(), oracle.len(), "{name} len vs the roaring oracle ({label})");
+    }
+
+    /// Reports the first divergence instead of printing whole sets, so a
+    /// failing differential run stays readable and the seed identifies it.
+    fn assert_same_contents(ours: &[u32], reference: &[u32], label: &str, name: &str, against: &str) {
+        if ours == reference {
+            return;
+        }
+        let at = ours
+            .iter()
+            .zip(reference.iter())
+            .position(|(left, right)| left != right)
+            .unwrap_or(ours.len().min(reference.len()));
+        panic!(
+            "{name} contents differ from {against} at index {at}: ours {:?} vs {:?} (lengths {} and {}) ({label})",
+            ours.get(at),
+            reference.get(at),
+            ours.len(),
+            reference.len()
+        );
+    }
+
+    #[test]
+    fn set_algebra_matches_models() {
+        for seed in SEEDS {
+            let bases: Vec<RoaringBitmap> = (0..5).map(|which| distribution(seed, which)).collect();
+            let variants: Vec<RoaringBitmap> = (0..5)
+                .flat_map(|which| [prepared(&bases[which], false), prepared(&bases[which], true)])
+                .collect();
+            let models: Vec<BTreeSet<u32>> = variants.iter().map(|bitmap| bitmap.iter().collect()).collect();
+            let oracles: Vec<::roaring::RoaringBitmap> =
+                variants.iter().map(|bitmap| bitmap.iter().collect()).collect();
+            for left in 0..5usize {
+                for right in 0..5usize {
+                    for variant in 0..4usize {
+                        let left_index = left * 2 + (variant & 1);
+                        let right_index = right * 2 + ((variant >> 1) & 1);
+                        let a = &variants[left_index];
+                        let b = &variants[right_index];
+                        let model_a = &models[left_index];
+                        let model_b = &models[right_index];
+                        let oracle_a = &oracles[left_index];
+                        let oracle_b = &oracles[right_index];
+                        let label = format!(
+                            "seed {seed:#018x}, A=distribution {left}, B=distribution {right}, run_optimize variant {variant}"
+                        );
+
+                        let union = a.union(b);
+                        let model_union: BTreeSet<u32> = model_a.union(model_b).copied().collect();
+                        let oracle_union = oracle_a | oracle_b;
+                        check_operation(&label, "union", &union, &model_union, &oracle_union);
+
+                        let intersection = a.intersection(b);
+                        let model_intersection: BTreeSet<u32> =
+                            model_a.intersection(model_b).copied().collect();
+                        let oracle_intersection = oracle_a & oracle_b;
+                        check_operation(&label, "intersection", &intersection, &model_intersection, &oracle_intersection);
+
+                        let difference = a.difference(b);
+                        let model_difference: BTreeSet<u32> =
+                            model_a.difference(model_b).copied().collect();
+                        let oracle_difference = oracle_a - oracle_b;
+                        check_operation(&label, "difference", &difference, &model_difference, &oracle_difference);
+
+                        let mut andnot = a.clone();
+                        andnot.andnot(b);
+                        let mut oracle_andnot = oracle_a.clone();
+                        oracle_andnot -= oracle_b;
+                        check_operation(&label, "andnot", &andnot, &model_difference, &oracle_andnot);
+                        assert_eq!(andnot, difference, "andnot and difference agree ({label})");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn set_algebra_with_empty() {
+        let empty = RoaringBitmap::new();
+        let mut nonempty = RoaringBitmap::new();
+        nonempty.insert_range(10..=20);
+        nonempty.insert(0);
+        nonempty.insert(u32::MAX);
+
+        assert_eq!(nonempty.union(&empty), nonempty, "A union empty = A");
+        assert_eq!(empty.union(&nonempty), nonempty, "empty union A = A");
+        assert!(nonempty.intersection(&empty).is_empty(), "A intersection empty = empty");
+        assert!(empty.intersection(&nonempty).is_empty(), "empty intersection A = empty");
+        assert_eq!(nonempty.difference(&empty), nonempty, "A difference empty = A");
+        assert!(empty.difference(&nonempty).is_empty(), "empty difference A = empty");
+
+        let mut andnot = nonempty.clone();
+        andnot.andnot(&empty);
+        assert_eq!(andnot, nonempty, "A andnot empty = A");
+        let mut empty_andnot = empty.clone();
+        empty_andnot.andnot(&nonempty);
+        assert!(empty_andnot.is_empty(), "empty andnot A = empty");
+
+        for result in [empty.union(&empty), empty.intersection(&empty), empty.difference(&empty)] {
+            assert!(result.is_empty(), "an empty result has no values");
+            assert_eq!(result.len(), 0, "an empty result has len zero");
+            assert_eq!(result.iter().count(), 0, "iteration agrees with len on an empty result");
+            assert!(
+                result.container_kinds().is_empty(),
+                "an empty result leaves no empty container behind"
+            );
+        }
+        assert!(
+            nonempty.intersection(&empty).container_kinds().is_empty(),
+            "an empty intersection leaves no empty container behind"
+        );
+    }
+
+    #[test]
+    fn set_algebra_container_pairings() {
+        let mut array = RoaringBitmap::new();
+        for value in 0..10u32 {
+            array.insert(value * 3);
+        }
+        let mut bitmap = RoaringBitmap::new();
+        bitmap.insert_range(0..=4096);
+        assert_eq!(
+            bitmap.container_kinds(),
+            vec![ContainerKind::Bitmap],
+            "a contiguous 4097-value chunk is a bitmap before run_optimize"
+        );
+        let mut run = RoaringBitmap::new();
+        run.insert_range(0..=8191);
+        run.run_optimize();
+        assert_eq!(run.container_kinds(), vec![ContainerKind::Run], "run_optimize makes a run container");
+
+        fn expected_kind(name: &str) -> ContainerKind {
+            match name {
+                "array" => ContainerKind::Array,
+                "bitmap" => ContainerKind::Bitmap,
+                _ => ContainerKind::Run,
+            }
+        }
+
+        let operands: [(&str, &RoaringBitmap); 3] = [("array", &array), ("bitmap", &bitmap), ("run", &run)];
+        let mut pairings = 0usize;
+        for (name_a, a) in operands {
+            for (name_b, b) in operands {
+                pairings += 1;
+                assert_eq!(
+                    a.container_kinds(),
+                    vec![expected_kind(name_a)],
+                    "the left operand is a {name_a} container"
+                );
+                assert_eq!(
+                    b.container_kinds(),
+                    vec![expected_kind(name_b)],
+                    "the right operand is a {name_b} container"
+                );
+                let model_a: BTreeSet<u32> = a.iter().collect();
+                let model_b: BTreeSet<u32> = b.iter().collect();
+
+                let union = a.union(b);
+                assert_same_contents(
+                    &collected(&union),
+                    &model_a.union(&model_b).copied().collect::<Vec<u32>>(),
+                    &format!("pairing {name_a}/{name_b}"),
+                    "union",
+                    "the BTreeSet model",
+                );
+                let intersection = a.intersection(b);
+                assert_same_contents(
+                    &collected(&intersection),
+                    &model_a.intersection(&model_b).copied().collect::<Vec<u32>>(),
+                    &format!("pairing {name_a}/{name_b}"),
+                    "intersection",
+                    "the BTreeSet model",
+                );
+                let difference = a.difference(b);
+                assert_same_contents(
+                    &collected(&difference),
+                    &model_a.difference(&model_b).copied().collect::<Vec<u32>>(),
+                    &format!("pairing {name_a}/{name_b}"),
+                    "difference",
+                    "the BTreeSet model",
+                );
+                let mut andnot = a.clone();
+                andnot.andnot(b);
+                assert_eq!(andnot, difference, "andnot pairing {name_a}/{name_b}");
+            }
+        }
+        assert_eq!(pairings, 9, "every one of the nine operand pairings is exercised");
+    }
+
+    #[test]
+    fn chunk_boundary_values_survive() {
+        let mut a = RoaringBitmap::new();
+        for value in [65_535u32, 65_536, 70_000, 0] {
+            a.insert(value);
+        }
+        let mut b = RoaringBitmap::new();
+        for value in [65_535u32, 65_536, 1, 2] {
+            b.insert(value);
+        }
+        assert!(a.contains(65_535) && a.contains(65_536), "A holds both sides of the chunk boundary");
+        assert!(b.contains(65_535) && b.contains(65_536), "B holds both sides of the chunk boundary");
+
+        let union = a.union(&b);
+        assert!(
+            union.contains(65_535) && union.contains(65_536),
+            "both boundary values survive union"
+        );
+        let intersection = a.intersection(&b);
+        assert!(
+            intersection.contains(65_535) && intersection.contains(65_536),
+            "both boundary values survive intersection"
+        );
+
+        let mut disjoint = RoaringBitmap::new();
+        disjoint.insert(1);
+        disjoint.insert(2);
+        let difference = a.difference(&disjoint);
+        assert!(
+            difference.contains(65_535) && difference.contains(65_536),
+            "both boundary values survive difference"
+        );
+        let mut andnot = a.clone();
+        andnot.andnot(&disjoint);
+        assert!(
+            andnot.contains(65_535) && andnot.contains(65_536),
+            "both boundary values survive andnot"
+        );
+        assert_eq!(andnot, difference, "andnot and difference agree across the chunk boundary");
+
+        assert!(
+            union.container_kinds().len() >= 2,
+            "65_535 and 65_536 land in different chunks"
+        );
+        let model_a: BTreeSet<u32> = a.iter().collect();
+        let model_b: BTreeSet<u32> = b.iter().collect();
+        assert_same_contents(
+            &collected(&union),
+            &model_a.union(&model_b).copied().collect::<Vec<u32>>(),
+            "chunk boundary",
+            "union",
+            "the BTreeSet model",
+        );
     }
 
     #[test]
