@@ -31,6 +31,7 @@ use port::mcslock::LockNode;
 use port::namec::{self, NamecMode};
 use port::pgrp::{MAFTER, MBEFORE, MMASK, MORDER};
 use port::println;
+use port::rfork::{RFCENVG, RFCFDG, RFCNAMEG, RFENVG, RFFDG, RFMEM, RFNAMEG, RFNOTEG, RFNOWAIT, RFPROC, RFREND};
 
 use crate::exec;
 use crate::proc::{self, ByteBacking, ERRMAX, Proc, ProcState, MAX_FDS};
@@ -84,28 +85,19 @@ const PREAD: u64 = 50;
 const PWRITE: u64 = 51;
 const NSEC: u64 = 53;
 
-// rfork flags (Harvey sys/include/libc.h — frozen values).
-// pub(crate): proc.rs's rfork_clone reads RFNAMEG/RFCNAMEG
-// (the namespace group semantics) — one mirror, one provenance.
-// RFENVG/RFCENVG are likewise pub(crate) (the env groups);
-// RFFDG/RFCFDG (the fd-group arms).
-pub(crate) const RFNAMEG: u64 = 1 << 0;
-pub(crate) const RFENVG: u64 = 1 << 1;
-pub(crate) const RFFDG: u64 = 1 << 2;
-/// pub(crate): proc.rs's rfork_clone/rfork_noteg_split read it
-/// (the note groups — the console DEL target scoping).
-pub(crate) const RFNOTEG: u64 = 1 << 3;
-const RFPROC: u64 = 1 << 4;
-/// pub(crate): proc.rs's rfork_copy reads it (the RFMEM share arm —
-/// the Data/Bss page sharing per the donor dupseg shape).
-pub(crate) const RFMEM: u64 = 1 << 5;
-pub(crate) const RFNOWAIT: u64 = 1 << 6;
-pub(crate) const RFCNAMEG: u64 = 1 << 10;
-pub(crate) const RFCENVG: u64 = 1 << 11;
-pub(crate) const RFCFDG: u64 = 1 << 12;
-/// pub(crate): proc.rs's rfork_clone reads it (the rendezvous-group
-/// arm — the rgrp share/split semantics).
-pub(crate) const RFREND: u64 = 1 << 13;
+/// The rfork flags this kernel implements.  Any other bit is rejected
+/// with "rfork: unsupported flags".
+pub(crate) const RFORK_SUPPORTED: u64 = RFPROC
+    | RFMEM
+    | RFFDG
+    | RFNOWAIT
+    | RFREND
+    | RFNOTEG
+    | RFNAMEG
+    | RFCNAMEG
+    | RFENVG
+    | RFCENVG
+    | RFCFDG;
 
 /// Handler shape: the live trap
 /// frame (arg source + result sink) and the calling proc.
@@ -1964,18 +1956,7 @@ fn sys_rfork(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     {
         return err(proc, "rfork: bad flags");
     }
-    const SUPPORTED: u64 = RFPROC
-        | RFMEM
-        | RFFDG
-        | RFNOWAIT
-        | RFREND
-        | RFNOTEG
-        | RFNAMEG
-        | RFCNAMEG
-        | RFENVG
-        | RFCENVG
-        | RFCFDG;
-    if flag & !SUPPORTED != 0 {
+    if flag & !RFORK_SUPPORTED != 0 {
         return err(proc, "rfork: unsupported flags");
     }
     if flag & RFPROC == 0 {

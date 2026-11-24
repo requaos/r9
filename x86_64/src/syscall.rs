@@ -88,8 +88,21 @@ const PREAD: u64 = 50;
 const PWRITE: u64 = 51;
 const NSEC: u64 = 53;
 
-// rfork flags live in proc.rs (the process machinery owns them).
-use proc::{RFCFDG, RFCENVG, RFCNAMEG, RFENVG, RFMEM, RFNAMEG, RFNOTEG, RFNOWAIT, RFFDG, RFPROC, RFREND};
+use port::rfork::{RFCENVG, RFCFDG, RFCNAMEG, RFENVG, RFFDG, RFMEM, RFNAMEG, RFNOTEG, RFNOWAIT, RFPROC, RFREND};
+
+/// The rfork flags this kernel implements.  Any other bit is rejected
+/// with "rfork: unsupported flags".
+pub(crate) const RFORK_SUPPORTED: u64 = RFPROC
+    | RFMEM
+    | RFFDG
+    | RFNOWAIT
+    | RFREND
+    | RFNOTEG
+    | RFNAMEG
+    | RFCNAMEG
+    | RFENVG
+    | RFCENVG
+    | RFCFDG;
 
 /// Plan 9 note actions (Harvey sys/include/libc.h — frozen values).
 const NCONT: u64 = 0;
@@ -1656,18 +1669,7 @@ fn sys_rfork(frame: &mut Ureg, proc: &mut Proc) -> u64 {
     {
         return err(proc, "rfork: bad flags");
     }
-    const SUPPORTED: u64 = RFPROC
-        | RFMEM
-        | RFFDG
-        | RFNOWAIT
-        | RFREND
-        | RFNOTEG
-        | RFNAMEG
-        | RFCNAMEG
-        | RFENVG
-        | RFCENVG
-        | RFCFDG;
-    if flag & !SUPPORTED != 0 {
+    if flag & !RFORK_SUPPORTED != 0 {
         return err(proc, "rfork: unsupported flags");
     }
     if flag & RFPROC == 0 {

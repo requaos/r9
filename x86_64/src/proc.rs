@@ -53,6 +53,7 @@ use port::paqfs::PaqDir;
 use port::pgrp::Pgrp;
 use port::println;
 use port::rendez::RendezGroup;
+use port::rfork::{RFCENVG, RFCFDG, RFCNAMEG, RFENVG, RFFDG, RFMEM, RFNAMEG, RFNOTEG, RFNOWAIT, RFREND};
 
 use crate::dat::Ureg;
 #[cfg(not(test))]
@@ -163,22 +164,6 @@ pub(crate) const PTE_USER_TEXT: u64 = PTE_P | PTE_RW | PTE_US;
 /// A user leaf entry: present, r/w, user-accessible, NO-EXECUTE (the
 /// aarch64 `rw_user_data` — data/bss/stack/tos).
 pub(crate) const PTE_USER_DATA: u64 = PTE_P | PTE_RW | PTE_US | PTE_NX;
-
-// rfork flags (Harvey sys/include/libc.h — frozen values).  Homed here
-// (the aarch64 port's home is syscall.rs) so the process machinery —
-// rfork_clone/rfork_copy — compiles standalone; syscall.rs consumes
-// them from this module.
-pub(crate) const RFNAMEG: u64 = 1 << 0;
-pub(crate) const RFENVG: u64 = 1 << 1;
-pub(crate) const RFFDG: u64 = 1 << 2;
-pub(crate) const RFNOTEG: u64 = 1 << 3;
-pub(crate) const RFPROC: u64 = 1 << 4;
-pub(crate) const RFMEM: u64 = 1 << 5;
-pub(crate) const RFNOWAIT: u64 = 1 << 6;
-pub(crate) const RFCNAMEG: u64 = 1 << 10;
-pub(crate) const RFCENVG: u64 = 1 << 11;
-pub(crate) const RFCFDG: u64 = 1 << 12;
-pub(crate) const RFREND: u64 = 1 << 13;
 
 /// The note-group id allocator (the donor's `Ref noteidalloc` — 9k
 /// proc.c:13; fresh id per newproc, inherited or split per the rfork
@@ -2936,6 +2921,7 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &Ureg, flag: u64) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+    use port::rfork::RFPROC;
 
     /// A segments map over REAL host memory — the 14-03 mock doctrine:
     /// the segment IS the buffer's address range, so kernel-side

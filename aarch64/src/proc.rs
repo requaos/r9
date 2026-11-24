@@ -2533,7 +2533,7 @@ pub fn post_wait_record(parent: *mut Proc, pid: u64, msg: &[u8]) {
 /// COPY (pgrpcpy); RFCNAMEG gives the child a fresh EMPTY group (the
 /// newns wipe).  slash/dot are value-dup'd (donor incref shape).
 pub fn rfork_clone(parent: &mut Proc, frame: &TrapFrame, flag: u64) -> Result<u64> {
-    let nowait = flag & crate::syscall::RFNOWAIT != 0;
+    let nowait = flag & port::rfork::RFNOWAIT != 0;
     let name = {
         let n = parent.name.iter().position(|&b| b == 0).unwrap_or(KNAMELEN);
         core::str::from_utf8(&parent.name[..n]).unwrap_or("fork")
@@ -2569,7 +2569,7 @@ pub fn rfork_clone(parent: &mut Proc, frame: &TrapFrame, flag: u64) -> Result<u6
     // Data/Bss pages: record the family membership (the donor's shared
     // segment GROUP) so brk_'s family arm keeps the members' breaks and
     // mappings identical from here on.
-    if flag & crate::syscall::RFMEM != 0 {
+    if flag & port::rfork::RFMEM != 0 {
         rfmem_join(parent, &mut child);
     }
     // The child starts with the parent's user FP/SIMD state — the live
@@ -2595,8 +2595,8 @@ pub fn rfork_clone(parent: &mut Proc, frame: &TrapFrame, flag: u64) -> Result<u6
 /// segment records + paqfs byte source, and a copy of the parent's live
 /// trap frame on the child's kstack with x0 = 0 (donor forkchild).
 fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &TrapFrame, flag: u64) -> Result<()> {
-    let nowait = flag & crate::syscall::RFNOWAIT != 0;
-    let rfmem = flag & crate::syscall::RFMEM != 0;
+    let nowait = flag & port::rfork::RFNOWAIT != 0;
+    let rfmem = flag & port::rfork::RFMEM != 0;
     // The eager copy, with the donor dupseg shape (sys/src/9/port/
     // segment.c) under RFMEM: SG_STACK is ALWAYS a fresh copy (never
     // shared — note delivery and the libc Tos machinery write the
@@ -2824,9 +2824,9 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &TrapFrame, flag: u64)
     // queue); NEITHER = SHARE the parent's handle (Arc clone).  (fork(2)
     // + sysrfork + libc fork() = rfork(RFPROC|RFFDG|RFREND) = COPY
     // govern.)
-    child.fd_group = if flag & crate::syscall::RFCFDG != 0 {
+    child.fd_group = if flag & port::rfork::RFCFDG != 0 {
         Arc::new(Lock::new("fdgrp", FdGroup::new()))
-    } else if flag & crate::syscall::RFFDG != 0 {
+    } else if flag & port::rfork::RFFDG != 0 {
         let node = LockNode::new();
         Arc::new(Lock::new("fdgrp", parent.fd_group.lock(&node).deep_copy()))
     } else {
@@ -2837,9 +2837,9 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &TrapFrame, flag: u64)
     // semantics.  RFNAMEG = fresh COPY of the parent's group (pgrpcpy);
     // RFCNAMEG = fresh EMPTY group (the newns wipe); NEITHER = share the
     // parent's handle (Arc clone).
-    child.pgrp = if flag & crate::syscall::RFCNAMEG != 0 {
+    child.pgrp = if flag & port::rfork::RFCNAMEG != 0 {
         Arc::new(Lock::new("pgrp", Pgrp::new()))
-    } else if flag & crate::syscall::RFNAMEG != 0 {
+    } else if flag & port::rfork::RFNAMEG != 0 {
         let node = LockNode::new();
         Arc::new(Lock::new("pgrp", parent.pgrp.lock(&node).deep_copy()))
     } else {
@@ -2850,9 +2850,9 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &TrapFrame, flag: u64)
     // of the parent's group (envcpy); RFCENVG = fresh EMPTY group;
     // NEITHER = share the parent's handle (Arc clone).  (fork(2) +
     // sysproc.c + newns's rfork(RFENVG|RFCNAMEG) govern.)
-    child.env_group = if flag & crate::syscall::RFCENVG != 0 {
+    child.env_group = if flag & port::rfork::RFCENVG != 0 {
         Arc::new(Lock::new("env", EnvGroup::new()))
-    } else if flag & crate::syscall::RFENVG != 0 {
+    } else if flag & port::rfork::RFENVG != 0 {
         let node = LockNode::new();
         Arc::new(Lock::new("env", parent.env_group.lock(&node).deep_copy()))
     } else {
@@ -2885,7 +2885,7 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &TrapFrame, flag: u64)
     // The note group — 9k sysproc.c:183: WITHOUT RFNOTEG the
     // child INHERITS the parent's noteid; WITH it the child keeps the fresh
     // group id its construction assigned (the donor's newproc incref).
-    if flag & crate::syscall::RFNOTEG == 0 {
+    if flag & port::rfork::RFNOTEG == 0 {
         child.noteid = parent.noteid;
     }
     // The rendezvous group — 9k sysproc.c's RFPROC arm: WITH RFREND the
@@ -2893,7 +2893,7 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &TrapFrame, flag: u64)
     // parent's handle (Arc clone).  (libc fork() = rfork(RFPROC|RFFDG|
     // RFREND) therefore gives its child a FRESH group; libthread's
     // procs share one — the rendezvous exchange's whole point.)
-    child.rgrp = if flag & crate::syscall::RFREND != 0 {
+    child.rgrp = if flag & port::rfork::RFREND != 0 {
         Arc::new(Lock::new("rendez", RendezGroup::new()))
     } else {
         parent.rgrp.clone()
