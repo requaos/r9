@@ -980,7 +980,7 @@ WRAP
             # 06b94f8-era TIzw value. The native amd64 host is the TCG
             # venue (the Docker container is not required when the
             # owner's host is already amd64).
-            outputHash = "sha256-b6OcAb2pOufpr5AqJj2SqhXnrTYsIQRTgkh9FcgtNT0=";
+            outputHash = "sha256-x07uJKM8Y7j3uXNwqT8Txhd8zhkRV8YrBkKyT2sg490=";
           };
         });
 
