@@ -57,6 +57,7 @@ Requirements: DSGN-01 to DSGN-05. Not in this phase: any flag behaviour (`RFNOLE
 - **D-26:** Transport to the owner's x86_64 Linux host is a pushed branch, not `main`. At the end-of-phase stop the unpushed commits are shown to the owner, who approves pushing them to a branch; the Linux host pulls that branch. `main` is pushed only after the gates are green and the owner approves again. Nothing is pushed before that stop.
 - **D-27:** The end-of-phase stop includes the full gate set (`--full`), per Phase 1 D-14 (full set at phase boundaries), in addition to the single KVM quick gate to rio (D-25) and the TCG gate the byte-change rule requires. The quick gate is called directly once, not through the witness driver's `gate` step, which runs it twice.
 - **D-28:** The owner makes the `boot-iso` `outputHash` commit on the Linux host (as in `2bc5478`): build there, put the reported hash into `flake.nix`, commit it as its own commit before the gate run, and push it with the branch. The plan supplies the exact line to change and the commit message (no AI attribution).
+- **D-29:** Order inside the end-of-phase stop (owner confirmed 2026-11-23): the x86_64 host tests run before the `outputHash` build and commit. That test code compiles for the first time on the Linux host, so running it first keeps a compile fix from invalidating a hash commit the owner has already made. The committed hash must still be measured against the final kernel bytes of the gated commit.
 
 ### Claude's Discretion
 - Name and file of the `port/` module that holds the flags.

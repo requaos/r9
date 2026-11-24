@@ -4,16 +4,16 @@ milestone: v3.0
 milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
 current_phase: 2
 current_phase_name: Guide Phase 0 - Design Lock and rfork Flag Reservation
-status: planning
+status: executing
 stopped_at: Phase 2 context gathered
-last_updated: "2026-11-23T23:08:09.077Z"
+last_updated: "2026-11-24T02:00:03.147Z"
 last_activity: 2026-11-23
 last_activity_desc: Phase 01 complete, transitioned to Phase 2
-state_head: 911724fc34abf0fd0a5d53a3026ba761e137329e
+state_head: 5134211805ce0b86493b04abf3ed9c9582eb645c
 progress:
   total_phases: 4
   completed_phases: 1
-  total_plans: 34
+  total_plans: 40
   completed_plans: 34
   percent: 25
 ---
@@ -29,9 +29,9 @@ See: .planning/PROJECT.md (updated 2026-11-22)
 
 ## Current Position
 
-Phase: 2 — Guide Phase 0 - Design Lock and rfork Flag Reservation
+Phase: 2 (Guide Phase 0 - Design Lock and rfork Flag Reservation) — READY TO EXECUTE
 Plan: Not started
-Status: Ready to plan
+Status: Ready to execute
 Last activity: 2026-11-23 — Phase 01 complete, transitioned to Phase 2
 
 Progress: [███░░░░░░░] 25%
@@ -138,7 +138,7 @@ None yet.
 
 ### Blockers/Concerns
 
-- Three commits are unpushed by the owner's choice: r9 `5b8b70a` (planning documents plus `legacy/`, 53 MB) and `6ee45b5` (handoff note), and Harvey `25d97dc4d` (freeze note). Confirmed by git at roadmap time. The orchestrator's planning-bootstrap commit is also local until the owner approves a push. The owner has not decided whether `legacy/` stays in r9 history.
+- Unpushed work, checked against the local remote-tracking refs on 2026-11-23: r9 `main` is ahead of `origin/main` by the tail of Phase 1 (from `54b71a7` onward) and all Phase 2 planning commits; they stay local until the owner approves a push (Phase 2 pushes a branch at its end-of-phase stop, then `main` after a second approval, CONTEXT D-26). The three commits this note used to list as unpushed are published: r9 `5b8b70a` (planning documents plus `legacy/`, 53 MB) and `6ee45b5` (handoff note) are on `origin/main`, and Harvey `25d97dc4d` (freeze note) is on `origin/master`; Harvey has nothing unpushed. `legacy/` is therefore already in r9's published history.
 - Owed checks at checkpoint r9 `116bcc2`: the owner's linux `nix build .#boot-iso --rebuild` (expected `sha256-TIzwBaHF0R4m31l6EbW2IU3rkUl73g6ljlNE0S5hGFY=`), and hosted CI on r9 `116bcc2` and Harvey `bd7a6982a`.
 - Phase 20 of the Harvey-rooted work never ran `/gsd-secure-phase` (no SECURITY.md).
 - Docs pin r9 at `c787ce9`; HEAD is 60 commits later with no `crypto/`, `ds/`, `kern/`, `sys/`, `venti/`. Re-verify every landing-site path when its phase is planned.

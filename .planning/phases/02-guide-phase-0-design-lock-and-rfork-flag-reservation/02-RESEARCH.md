@@ -897,26 +897,33 @@ Wiring in `xtask/src/main.rs` (all three ran): a `rfork-header` subcommand with 
 | A5 | The Linux builder needed by `nix run .#boot-r9-*` on the Mac is up | Q4 | Quick pass waits on the owner starting the lima VM |
 | A6 | The owner reads "locked as written" as locking decisions, not the guide's landing-site paths | Q7 | A wording choice at the checkpoint; no rework |
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+**Status: RESOLVED 2026-11-23.** All five items are settled; none is open. Items 1 to 4 were decided by the owner after this research (`02-CONTEXT.md`, D-26 to D-28) and item 5 is Claude's discretion. Where a recommendation below differs from the decision, the decision governs and the recommendation is kept only as the record of what was considered. Plans follow the RESOLVED lines.
 
 1. **How the phase's commits reach the owner's x86_64 host.**
+   - **RESOLVED by D-26:** transport is a pushed branch, not `main`. The unpushed commits are shown to the owner at the end-of-phase stop, the owner approves pushing them to a branch, and the Linux host pulls that branch; `main` is pushed only after the gates are green and the owner approves again. The owner is not asked to choose a transport, and a bundle is not used.
    - Known: `run-witness.sh` states "Nothing is copied from the Mac: the host gets every script from GitHub with `git pull` (or a clone) and returns results through a pushed branch or a pasted file. The Mac cannot reach that host." Pushes need owner approval. D-24 says no push is required "for verification", meaning hosted CI is not needed.
    - Unclear: whether the owner will push a branch, or move the commits another way (a bundle, for example).
    - Recommendation: make transport an explicit first item of the owner stop and let the owner choose. Do not push without approval.
 
 2. **Whether the end-of-phase stop includes the full tier.**
+   - **RESOLVED by D-27:** yes. The stop includes the full gate set (`--full`) in addition to the single KVM quick gate (D-25) and the TCG gate. No yes/no line on `--full` is put to the owner.
    - Known: D-25 fixes one `cargo xtask gate` run. Phase 1 D-14 says the full set runs "at phase boundaries". The byte-change rule says "x64 TCG gates" and was last satisfied by one `cargo xtask gate --arch x86-64 --accel tcg`.
    - Recommendation: plan the stop as quick gate under KVM plus the quick gate under TCG, and put one yes/no line to the owner in the stop on `--full`. Do not add `--full` silently and do not drop it silently.
 
 3. **One gate run or the witness step's two.**
+   - **RESOLVED by D-27:** the quick gate is called directly, once, not through the witness driver's `gate` step. (The witness driver is used for the `kernel` step and, for the full set, the `full` step.)
    - Known: the `gate` witness step runs the quick gate twice; D-25 says once.
    - Recommendation: call `nix develop -c cargo xtask gate --arch x86-64 --accel kvm` directly, once, and use the witness driver only for the `kernel` step.
 
 4. **Who writes the `outputHash` commit.**
+   - **RESOLVED by D-28:** the owner makes the commit on the Linux host, as its own commit, before the gate run, and pushes it with the branch. The paste-back route is not used; the hash is never written from the Mac.
    - Known: the new value exists only on the Linux host. Last time the owner committed it (`2bc5478`).
    - Recommendation: the owner pastes the `got:` line back, or commits on the host; either way it is a separate commit with a comment paragraph, made before the gate run.
 
 5. **`rfork.h` banner wording about `RFNOMNT` and about not including the file beside `libc.h`.** Discretion; the owner sees the file in the diff.
+   - **RESOLVED (Claude's discretion, `02-CONTEXT.md`):** the banner wording is set in plan 02-01 and the owner sees the generated header at that plan's owner stop.
 
 ## Environment Availability
 
