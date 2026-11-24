@@ -74,7 +74,7 @@ The OS boots to rio on QEMU q35 at every commit. This golden invariant outranks 
 - **Runtime**: QEMU q35 x86_64 primary; aarch64 virt under HVF and TCG; the golden invariant is checked on q35
 - **Golden invariant**: boots to rio on QEMU q35 at every commit; Track P replacement is one binary per commit (IG-V02 risk 4)
 - **Compatibility**: `a.out` only; closed syscall list; crypto extensions add four `rfork` flag bits (`RFCKEY` 1<<18, `RFROBASE` 1<<19, `RFRANDMEM` 1<<20, `RFNOLEGACY` 1<<21) and zero syscalls — the guide's "3 flag bits" wording is superseded by the owner's 2026-11-22 decision
-- **Safety**: `port/` and `crypto/` forbid `unsafe`; low-level operations (`WRPKRU`, `MOVNTDQ`, `CLFLUSHOPT`, inline asm, raw atomics) stay in `x86_64/`, `aarch64/`, and `ds/src/tpht/` behind audited `// SAFETY:` blocks (IG-D07; the `ds/` wording is open question W5)
+- **Safety**: every `port/` module carries a per-module `forbid(unsafe_code)` except the three named modules `globalalloc`, `mcslock` and `devip_waker`, and no new such module is added without owner approval; `crypto/` forbids `unsafe`; low-level operations (`WRPKRU`, `MOVNTDQ`, `CLFLUSHOPT`, inline asm, raw atomics) stay in `x86_64/`, `aarch64/`, and `ds/src/tpht/` behind audited `// SAFETY:` blocks (IG-D07; the `ds/` wording is open question W5)
 - **Kernel FP/SIMD**: kernels are built without FP/SIMD; kernel SIMD goes through `fpu::kernel_begin()` / `with_simd()`; user FP state is per process; arm64 is the reference for x86_64 (owner rule)
 - **Verification discipline**: every phase follows committed RED pin, implementation, GREEN verification twice, pin advance (IG-V01)
 - **Audit ledger**: the guide's 17 corrections must stay permanently corrected in all later PRs (IG-A01)
@@ -114,7 +114,7 @@ Ten of the eleven ingest warnings remain open, approved by the owner to be carri
 
 ## Key Decisions
 
-No ADR exists and nothing is locked in this ingest. The guide's "non-negotiable" decisions (IG-D01 to IG-D13) are carried as constraints, not locked; whether to lock them is confirmed in Phase 2 (DSGN-05).
+No ADR exists. Phase 2 (owner confirmation 2026-11-23, DSGN-05) settled the status of the guide's thirteen reconciled decisions: eight are locked as written (IG-D01, IG-D02, IG-D04, IG-D05, IG-D06, IG-D08, IG-D10, IG-D12), two are locked amended (IG-D03 with four `rfork` flag bits, IG-D07 to the safety boundary at HEAD), and three are not locked: IG-D09 is deferred to Phase 3, IG-D11 to Phase 4 and IG-D13 to Phase 6. A lock is owner-only change: planning and execution treat a locked decision as fixed; if a later phase finds one wrong, work stops and the owner is asked; a change is recorded as a new dated row that supersedes the old one, never a silent edit. A lock covers the decision and not the guide's landing-site file paths, which are re-verified when each phase is planned.
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
@@ -122,13 +122,21 @@ No ADR exists and nothing is locked in this ingest. The guide's "non-negotiable"
 | Source precedence IG > AC > RFC > PT | Owner-approved manifest | Decided |
 | Golden invariant: boots to rio on QEMU q35 at every commit | Lets Track P replace ~1.2M lines of C one binary at a time without a flag day | Decided |
 | Phase order from the owner's migration plan: Stage P0 first, then guide Phases 0-5, Milestone S, Milestone STD, Track P (Stages P1-P3), guide Phases 6-8, Harvey retirement | Owner ordering overrides inferred ordering | Decided |
-| `libstd_r9` precedes Track P | Avoids rewriting Harvey userland twice (first `no_std`, then idiomatic) (IG section 9.1) | Carried from IG-D04; confirm in Phase 2 |
+| `libstd_r9` precedes Track P | IG-D04; avoids rewriting Harvey userland twice (first `no_std`, then idiomatic) (IG section 9.1) | Locked 2026-11-23 (owner) |
 | `RFNOLEGACY` is a fourth `rfork` flag, `1 << 21`; its bit is assigned in Phase 0 (GSD Phase 2) together with bits 18-20 (`RFCKEY` 1<<18, `RFROBASE` 1<<19, `RFRANDMEM` 1<<20) | Owner decision 2026-11-22, resolving warning W11; the exit gate "flag bits reserved" covers four flags; no conflict (highest bit in use is 14); the four bits are reserved in r9 only (in one `port/` module, `port/src/rfork.rs`, imported by both arch crates; owner amendment 2026-11-23) and Harvey is not changed, a recorded deviation from the guide's "reserve bits 18-20 in `libc.h`"; Phase 4 (GSD Phase 6) implements the behaviour against the reserved bit | Decided 2026-11-22 |
-| Succinct TPHT is primary concurrent hashing; Roaring is the set algebra; Funnel is scratchpad only | IG-D09, IG-D10 | Carried constraint; confirm in Phase 2 |
-| Native `9P2000.aead` is the distributed wire security | IG-D11; details open at W1-W4 | Carried constraint; confirm in Phase 2 |
-| Dual C runtime: classic APE via ported 6c, APEX via Clang, never mixed | IG-D06 | Carried constraint; confirm in Phase 2 |
-| Build priority: `ds/` and `9P2000.aead` upfront (guide Phases 1 and 2, which are GSD Phases 3 and 4) | IG-D01: Plan 9 is a network file fabric | Carried constraint; confirm in Phase 2 |
+| Succinct TPHT is the primary concurrent hashing; Funnel Hashing is scratchpad only | IG-D09; open at W5, W6 | Not locked; deferred to Phase 3 (W5, W6) |
+| Roaring bitmaps are the integer set algebra | IG-D10 | Locked 2026-11-23 (owner) |
+| Native `9P2000.aead` is the distributed wire security | IG-D11; details open at W1-W4 | Not locked; deferred to Phase 4 (W1-W4) |
+| Dual C runtime: classic APE via ported 6c, APEX via Clang, never mixed | IG-D06 | Locked 2026-11-23 (owner) |
+| Build priority: `ds/` and `9P2000.aead` upfront (guide Phases 1 and 2, which are GSD Phases 3 and 4) | IG-D01: Plan 9 is a network file fabric | Locked 2026-11-23 (owner) |
+| `a.out` is the sole executable format; the kernel loads no ELF | IG-D02: linker-emitted ELF is converted by in-tree tooling | Locked 2026-11-23 (owner) |
+| The system call list is closed: no POSIX emulation calls or `mmap` extensions; crypto extensions add four `rfork` flag bits (`RFCKEY` 1<<18, `RFROBASE` 1<<19, `RFRANDMEM` 1<<20, `RFNOLEGACY` 1<<21) and zero syscalls, the guide's "3 flag bits" corrected; software adapts to `rfork`, `bind`, `mount` and 9P | IG-D03 | Locked amended 2026-11-23 (owner) |
+| Plan 9 C compilers (`6c`, `6a`, `6l`) are ported to Rust in Track P Stage P3, with Harvey's C compilers as bootstrap tools until parity is proven | IG-D05 | Locked 2026-11-23 (owner) |
+| Kernel safety boundary as true at HEAD: per-module `forbid(unsafe_code)` in `port/`, with three named modules that hold `unsafe` (`globalalloc`, `mcslock`, `devip_waker`), and no new such module without owner approval | IG-D07; not part of the lock: the guide's crate-level forbid wording, note N2 for Phases 3 and 5, and W5 | Locked amended 2026-11-23 (owner) |
+| Sibling processes run under independent CR3 page-table roots plus intra-process PKEYs, which avoids PKEY capacity exhaustion and enforces read-only base permissions in about 20 cycles | IG-D08 | Locked 2026-11-23 (owner) |
+| A Plan 9 `#G` synthetic device carries VirtIO-GPU Venus over `/dev/gpu/` nodes (`clone`, `ctl`, `cmd`, `blob`, `fence`), with zero-copy window presentation via `draw(3)` host texture blits | IG-D12 | Locked 2026-11-23 (owner) |
+| Multicast beacons plus staged `/srv` registration discover services from `class:instance[+attrs]` descriptors over dual-stack IPv4/IPv6, with the 30s `unhealthy` / 5m `dead` lifecycle | IG-D13; open at W7 | Not locked; deferred to Phase 6 (W7) |
 | Eleven ingest warnings: ten carried as open questions, W11 decided | Owner approved carrying ten; decided W11 on 2026-11-22 | Ten pending |
 
 ---
-*Last updated: 2026-11-23 after Phase 1 completion (cross-build harness; HARN-01…08 validated)*
+*Last updated: 2026-11-23 after the Phase 2 design lock (IG-D01 to IG-D13 status recorded)*

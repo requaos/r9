@@ -28,4 +28,8 @@ Does "locked as written" lock the decision and not the guide's landing-site file
 
 ## Owner ruling
 
-PENDING
+2026-11-23
+
+confirm
+
+Landing-site question: yes
