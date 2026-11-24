@@ -12,8 +12,8 @@
 //!
 //! `feistel` is a safe submodule and carries its own
 //! `#![forbid(unsafe_code)]`; `flattened` holds the 64-byte bucket header and
-//! the home-path shard; `chained` will hold the dereference banks (plan
-//! 03-07).  `deref_tiny` lands in plan 03-13.
+//! the shard that spills into the dereference banks; `chained` holds the
+//! banks (plan 03-07); `deref_tiny` landed in plan 03-13.
 //!
 //! Every test under this module takes its sizes through [`miri_scaled`] so
 //! the same test body runs at full size natively and at a small size under
@@ -26,6 +26,17 @@ pub mod flattened;
 /// The number of home slots in a bucket header: `occupied_mask` uses bits
 /// `0..15` and a home tiny pointer is `1..=16`.
 pub const HOME_SLOTS: usize = 16;
+
+/// How many of a block's 16 home slots fill before further keys of that block
+/// spill into the dereference banks (`ChainedTphtOverflow`).
+///
+/// At this commit the value is `4`, the only number the sources give (guide
+/// section 5.3, "4-slot capacity"); it is **not yet measured**.  Task 2 of
+/// plan 03-08 replaces it with the value chosen by the pre-committed rule from
+/// the host measurement (D-15), and its doc comment then carries that result.
+/// The constant must lie in `1..=HOME_SLOTS` and is not part of the IG-D09
+/// lock (D-17): a change is a new measurement.
+pub const SPILL_THRESHOLD: usize = 4;
 
 /// A test seam for counting memory accesses (DS-03, plan 03-13): production
 /// uses [`NoProbe`]'s zero-sized no-ops; a test probe counts header and arena
@@ -51,7 +62,10 @@ pub enum TphtError {
     BadBlockCount,
     /// An entry for this full key is already present.
     Exists,
-    /// All 16 home slots of the key's block are in use.
+    /// Returned only by a home-only shard (`with_banks(n, 0)`) whose block has
+    /// all 16 header slots in use: it has nowhere to spill.  A shard with
+    /// banks never returns this; a spilling insert whose candidate banks are
+    /// full returns [`TphtError::BanksFull`] instead.
     HomeFull,
     /// The dereference banks have no free node (plan 03-07).
     BanksFull,

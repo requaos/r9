@@ -24,6 +24,19 @@
 //! the full pointer range from one arena slot read with no header probe
 //! (DS-03) and `clock_nibbles` is initialised to zero and otherwise unused.
 //!
+//! **Home block and spill.**  A key's home block is the low `index_bits` of
+//! the mixed Feistel half.  A block with banks places up to `SPILL_THRESHOLD`
+//! entries in its 16-slot header (`insert` returns `Ok(Some(ptr))`); a further
+//! key of the same block spills into the shard's `ChainedTphtOverflow`
+//! (`Ok(None)`), and `lookup` reports where it found the entry through
+//! [`Found::home`].  A spilled entry has no tiny pointer, cannot be passed to
+//! [`FlattenedTphtShard::deref_tiny`], and is reached through
+//! [`FlattenedTphtShard::lookup`].  A home-only shard
+//! (`with_banks(n, 0)`) applies no threshold: it fills all 16 slots and then
+//! returns [`TphtError::HomeFull`].  Every mutation of a block's chain happens
+//! under that block's seqlock, which is the serialisation contract
+//! `ChainedTphtOverflow` documents.
+//!
 //! `deref_tiny` is this module's one `unsafe` site: the unchecked arena read
 //! (`get_unchecked`), sound because the slot is masked by `slot_mask` and the
 //! arena holds exactly `slot_mask + 1` slots, both fixed in the constructor
@@ -37,7 +50,41 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU8, AtomicU16, AtomicU32, AtomicU64, Ordering, fence};
 
-use super::{HOME_SLOTS, NoProbe, Probe, TinyPtr, TphtError, feistel, index_bits};
+use super::chained::ChainedTphtOverflow;
+use super::{HOME_SLOTS, NoProbe, Probe, SPILL_THRESHOLD, TinyPtr, TphtError, feistel, index_bits};
+
+/// Where [`FlattenedTphtShard::lookup`] resolved an entry: `home` is
+/// `Some(ptr)` when it came from the home block and `None` when it was found
+/// in the block's overflow chain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Found<const WORDS: usize> {
+    /// The entry's value words.
+    pub value: [u64; WORDS],
+    /// The home tiny pointer, or `None` for a spilled entry.
+    pub home: Option<TinyPtr>,
+}
+
+/// The home-index variant a shard uses.  Production is always
+/// [`IndexChoice::MixedHalf`]; the test-only constructor selects the
+/// compendium's reading for the D-15 evidence (RESEARCH C4).
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IndexChoice {
+    /// The low bits of the mixed half `L'` (production; RESEARCH C4).
+    MixedHalf,
+    /// The low bits of `P` (compendium section 4.1 as written; test only).
+    UnmixedLowBits,
+}
+
+#[cfg(test)]
+impl IndexChoice {
+    fn split(self, key: u64, index_bits: u32) -> (usize, u64) {
+        match self {
+            Self::MixedHalf => feistel::split(key, index_bits),
+            Self::UnmixedLowBits => feistel::split_unmixed(key, index_bits),
+        }
+    }
+}
 
 /// The 16-slot, 64-byte home block header of guide section 5.2.
 #[repr(C, align(64))]
@@ -76,52 +123,143 @@ impl TphtBucketHeader {
 
 /// A shard of flattened TPHT blocks: one 64-byte header per block and an arena
 /// of `16 * num_blocks` slots of `WORDS` words each, addressed by
-/// `((block << 4) + (tiny_ptr - 1)) & slot_mask`.
+/// `((block << 4) + (tiny_ptr - 1)) & slot_mask`.  A shard with banks spills
+/// a block's entries past `SPILL_THRESHOLD` into its `ChainedTphtOverflow`;
+/// a home-only shard holds no overflow.
 pub struct FlattenedTphtShard<const WORDS: usize, P: Probe = NoProbe> {
     headers: Box<[TphtBucketHeader]>,
     arena: Box<[[AtomicU64; WORDS]]>,
+    /// The spill destination; `None` on a home-only shard (`with_banks(n, 0)`).
+    overflow: Option<ChainedTphtOverflow<WORDS>>,
     probe: P,
     bits: u32,
     slot_mask: usize,
+    /// Home slots a block may use before its next key spills; in production
+    /// this is the measured [`SPILL_THRESHOLD`] constant.
+    spill_threshold: usize,
+    #[cfg(test)]
+    index_choice: IndexChoice,
+}
+
+/// One overflow bank per 64 home blocks, with a minimum of two: 255 bank
+/// nodes per 1,024 home slots (Claude's discretion).  The D-15 measurement and
+/// the hit-rate pin size their banks explicitly with `measure::banks_for`; a
+/// caller that expects more spill uses [`FlattenedTphtShard::with_banks`].
+fn default_banks(num_blocks: usize) -> usize {
+    num_blocks.div_ceil(64).max(2)
 }
 
 impl<const WORDS: usize> FlattenedTphtShard<WORDS, NoProbe> {
-    /// Build a shard with the zero-sized [`NoProbe`].
+    /// Build a shard with the zero-sized [`NoProbe`] and the default overflow
+    /// size ([`default_banks`]).
     pub fn new(num_blocks: usize) -> Result<Self, TphtError> {
-        Self::with_probe(num_blocks, NoProbe)
+        Self::with_banks(num_blocks, default_banks(num_blocks))
+    }
+
+    /// Build a shard with `num_banks` overflow banks.  `num_banks == 0` is
+    /// valid and builds a home-only shard: it holds no overflow and applies no
+    /// spill threshold, taking entries until all 16 header slots of a block are
+    /// used and then returning [`TphtError::HomeFull`] (the behaviour plan
+    /// 03-06 built, kept under a constructor that names it).  A shard with
+    /// banks never returns `HomeFull`.
+    pub fn with_banks(num_blocks: usize, num_banks: usize) -> Result<Self, TphtError> {
+        Self::with_banks_and_probe(num_blocks, num_banks, NoProbe)
+    }
+
+    /// Build a shard for a test or the D-15 measurement, setting the spill
+    /// threshold and the home-index variant.  Never used in production.
+    #[cfg(test)]
+    pub(crate) fn with_test_config(
+        num_blocks: usize,
+        num_banks: usize,
+        threshold: usize,
+        index_choice: IndexChoice,
+    ) -> Result<Self, TphtError> {
+        assert!((1..=HOME_SLOTS).contains(&threshold), "a spill threshold is 1..=HOME_SLOTS");
+        let mut shard = Self::with_banks(num_blocks, num_banks)?;
+        shard.spill_threshold = threshold;
+        shard.index_choice = index_choice;
+        Ok(shard)
     }
 }
 
 impl<const WORDS: usize, P: Probe> FlattenedTphtShard<WORDS, P> {
-    /// Build a shard with an injected [`Probe`] (a test seam for DS-03).
+    /// Build a shard with an injected [`Probe`] (a test seam for DS-03) and
+    /// the default overflow size.
     pub fn with_probe(num_blocks: usize, probe: P) -> Result<Self, TphtError> {
+        Self::with_banks_and_probe(num_blocks, default_banks(num_blocks), probe)
+    }
+
+    /// The general constructor: `num_banks == 0` builds a home-only shard.
+    pub fn with_banks_and_probe(
+        num_blocks: usize,
+        num_banks: usize,
+        probe: P,
+    ) -> Result<Self, TphtError> {
         let bits = index_bits(num_blocks)?;
         let slots = HOME_SLOTS.checked_mul(num_blocks).ok_or(TphtError::BadBlockCount)?;
+        let overflow = if num_banks == 0 {
+            None
+        } else {
+            Some(ChainedTphtOverflow::new(num_blocks, num_banks)?)
+        };
         let headers =
             (0..num_blocks).map(|_| TphtBucketHeader::new()).collect::<Vec<_>>().into_boxed_slice();
         let arena = (0..slots)
             .map(|_| core::array::from_fn(|_| AtomicU64::new(0)))
             .collect::<Vec<_>>()
             .into_boxed_slice();
-        Ok(Self { headers, arena, probe, bits, slot_mask: slots - 1 })
+        Ok(Self {
+            headers,
+            arena,
+            overflow,
+            probe,
+            bits,
+            slot_mask: slots - 1,
+            spill_threshold: SPILL_THRESHOLD,
+            #[cfg(test)]
+            index_choice: IndexChoice::MixedHalf,
+        })
+    }
+
+    /// Split `key` with this shard's home-index variant.  Production always
+    /// uses the mixed half; the test-only constructor may select the
+    /// compendium's low-bits-of-`P` reading for the D-15 evidence.
+    fn split_key(&self, key: u64) -> (usize, u64) {
+        #[cfg(test)]
+        {
+            self.index_choice.split(key, self.bits)
+        }
+        #[cfg(not(test))]
+        {
+            feistel::split(key, self.bits)
+        }
     }
 
     /// Insert `value` under `key`; `same` is the full-key verification called
-    /// on a fingerprint match.  Returns the entry's tiny pointer, or
-    /// [`TphtError::Exists`] / [`TphtError::HomeFull`].
+    /// on a fingerprint match.
+    ///
+    /// Returns `Ok(Some(ptr))` when the entry was placed in the home block and
+    /// `Ok(None)` when it went to the dereference banks.  A spilled entry has
+    /// no tiny pointer, cannot be passed to [`Self::deref_tiny`], and is
+    /// reached through [`Self::lookup`].  Returns [`TphtError::Exists`] when
+    /// the full key is already present.  On a shard with banks a block spills
+    /// once it holds `SPILL_THRESHOLD` entries, and a spilling insert whose
+    /// candidate banks are full reports [`TphtError::BanksFull`]; only a
+    /// home-only shard reports [`TphtError::HomeFull`].
     pub fn insert(
         &self,
         key: u64,
         value: [u64; WORDS],
         same: impl Fn(&[u64; WORDS]) -> bool,
-    ) -> Result<TinyPtr, TphtError> {
-        let (block, remainder) = feistel::split(key, self.bits);
+    ) -> Result<Option<TinyPtr>, TphtError> {
+        let (block, remainder) = self.split_key(key);
         let fingerprint = feistel::fingerprint(remainder);
         let header = &self.headers[block];
         let generation = Self::lock(header);
         let occupied = header.occupied_mask.load(Ordering::Relaxed);
         let mut free = None;
-        let mut outcome = Err(TphtError::HomeFull);
+        let mut exists = false;
         for slot in 0..HOME_SLOTS {
             let bit = 1u16 << slot;
             if occupied & bit == 0 {
@@ -138,32 +276,40 @@ impl<const WORDS: usize, P: Probe> FlattenedTphtShard<WORDS, P> {
             };
             let candidate = self.read_value(self.slot_index(block, ptr));
             if same(&candidate) {
-                outcome = Err(TphtError::Exists);
-                free = None;
+                exists = true;
                 break;
             }
         }
-        if let Some(slot) = free {
-            let ptr = TinyPtr::new((slot + 1) as u8).expect("a home slot index is 1..=16");
-            self.write_value(self.slot_index(block, ptr), &value);
-            header.quotients[slot].store(fingerprint, Ordering::Release);
-            header.tiny_ptrs[slot].store(ptr.get(), Ordering::Release);
-            Self::set_spilled(header, slot, ptr);
-            header.occupied_mask.store(occupied | (1u16 << slot), Ordering::Release);
-            outcome = Ok(ptr);
-        }
+        let outcome = if exists {
+            Err(TphtError::Exists)
+        } else {
+            // RED (plan 03-08 Task 1): the spill itself is not implemented
+            // yet.  A shard with banks stops at the threshold with HomeFull;
+            // a home-only shard fills its 16 slots and then reports HomeFull.
+            let home_capacity =
+                if self.overflow.is_some() { self.spill_threshold } else { HOME_SLOTS };
+            match free {
+                Some(slot) if (occupied.count_ones() as usize) < home_capacity => {
+                    let ptr = TinyPtr::new((slot + 1) as u8).expect("a home slot index is 1..=16");
+                    self.write_value(self.slot_index(block, ptr), &value);
+                    header.quotients[slot].store(fingerprint, Ordering::Release);
+                    header.tiny_ptrs[slot].store(ptr.get(), Ordering::Release);
+                    Self::set_spilled(header, slot, ptr);
+                    header.occupied_mask.store(occupied | (1u16 << slot), Ordering::Release);
+                    Ok(Some(ptr))
+                }
+                _ => Err(TphtError::HomeFull),
+            }
+        };
         Self::unlock(header, generation);
         outcome
     }
 
-    /// Look `key` up in the home block; `same` is the full-key verification
-    /// called on a fingerprint match.
-    pub fn lookup(
-        &self,
-        key: u64,
-        same: impl Fn(&[u64; WORDS]) -> bool,
-    ) -> Option<([u64; WORDS], TinyPtr)> {
-        let (block, remainder) = feistel::split(key, self.bits);
+    /// Look `key` up; `same` is the full-key verification called on a
+    /// fingerprint match.  `Found::home` says whether the entry resolved in
+    /// the home block (`Some(ptr)`) or in the block's overflow chain (`None`).
+    pub fn lookup(&self, key: u64, same: impl Fn(&[u64; WORDS]) -> bool) -> Option<Found<WORDS>> {
+        let (block, remainder) = self.split_key(key);
         let fingerprint = feistel::fingerprint(remainder);
         let header = &self.headers[block];
         'attempt: loop {
@@ -191,17 +337,17 @@ impl<const WORDS: usize, P: Probe> FlattenedTphtShard<WORDS, P> {
                     continue 'attempt;
                 }
                 if same(&value) {
-                    return Some((value, ptr));
+                    return Some(Found { value, home: Some(ptr) });
                 }
             }
             return None;
         }
     }
 
-    /// Remove `key` from the home block; `same` is the full-key verification
-    /// called on a fingerprint match.  Returns whether an entry was removed.
+    /// Remove `key`; `same` is the full-key verification called on a
+    /// fingerprint match.  Returns whether an entry was removed.
     pub fn remove(&self, key: u64, same: impl Fn(&[u64; WORDS]) -> bool) -> bool {
-        let (block, remainder) = feistel::split(key, self.bits);
+        let (block, remainder) = self.split_key(key);
         let fingerprint = feistel::fingerprint(remainder);
         let header = &self.headers[block];
         let generation = Self::lock(header);
@@ -246,7 +392,7 @@ impl<const WORDS: usize, P: Probe> FlattenedTphtShard<WORDS, P> {
     /// slot now holds and is never undefined behaviour: every arena word is an
     /// atomic, so the read is always a valid atomic load.
     pub fn deref_tiny(&self, key: u64, ptr: TinyPtr) -> [u64; WORDS] {
-        let (block, _remainder) = feistel::split(key, self.bits);
+        let (block, _remainder) = self.split_key(key);
         self.probe.arena_read();
         let slot = self.slot_index(block, ptr);
         // SAFETY: `slot_index` masks the slot with `self.slot_mask`, and
@@ -437,14 +583,23 @@ mod tests {
         }
         let ops = miri_scaled(2_000, 100);
         for (case, &blocks) in cases.iter().enumerate() {
-            let shard = FlattenedTphtShard::<2>::new(blocks).expect("a power-of-two block count");
+            // Re-pinned from plan 03-06 on a home-only shard (plan 03-08
+            // Task 1): `insert` reports where the entry went and `lookup`
+            // returns `Found`; a home-only shard always answers "at home".
+            let shard =
+                FlattenedTphtShard::<2>::with_banks(blocks, 0).expect("a power-of-two block count");
+            let lookup = |key: u64| {
+                shard.lookup(key, |v| v[0] == key).map(|found| {
+                    assert!(
+                        found.home.is_some(),
+                        "a home-only shard resolves every entry at home (case {case}, key {key})"
+                    );
+                    found.value
+                })
+            };
             let mut model: BTreeMap<u64, [u64; 2]> = BTreeMap::new();
             for &key in &keys {
-                assert_eq!(
-                    shard.lookup(key, |v| v[0] == key),
-                    None,
-                    "the empty shard must not resolve key 0x{key:016x}"
-                );
+                assert_eq!(lookup(key), None, "the empty shard must not resolve key 0x{key:016x}");
             }
             let mut rng = SplitMix64::new(0x0000_0000_0000_00c3 ^ case as u64);
             for step in 0..ops {
@@ -460,15 +615,17 @@ mod tests {
                                 "a second insert must report Exists (case {case}, step {step}, key {key})"
                             );
                             assert_eq!(
-                                shard.lookup(key, |v| v[0] == key).map(|(v, _)| v),
+                                lookup(key),
                                 model.get(&key).copied(),
                                 "a refused insert must leave the first value (case {case}, step {step})"
                             );
                         } else {
-                            let ptr = result.expect("a table holding eight keys has room");
+                            let ptr = result
+                                .expect("a table holding eight keys has room")
+                                .expect("a home-only shard places every entry at home");
                             assert_eq!(
                                 shard.lookup(key, |v| v[0] == key),
-                                Some((value, ptr)),
+                                Some(Found { value, home: Some(ptr) }),
                                 "an inserted key must resolve to its value and pointer (case {case}, step {step})"
                             );
                             model.insert(key, value);
@@ -476,7 +633,7 @@ mod tests {
                     }
                     1 => {
                         assert_eq!(
-                            shard.lookup(key, |v| v[0] == key).map(|(v, _)| v),
+                            lookup(key),
                             model.get(&key).copied(),
                             "lookup disagrees with the model (case {case}, step {step}, key {key})"
                         );
@@ -489,7 +646,7 @@ mod tests {
                             "remove disagrees with the model (case {case}, step {step}, key {key})"
                         );
                         assert_eq!(
-                            shard.lookup(key, |v| v[0] == key).map(|(v, _)| v),
+                            lookup(key),
                             model.get(&key).copied(),
                             "a removed key must not resolve (case {case}, step {step})"
                         );
@@ -498,17 +655,21 @@ mod tests {
             }
             for &key in &keys {
                 assert_eq!(
-                    shard.lookup(key, |v| v[0] == key).map(|(v, _)| v),
+                    lookup(key),
                     model.get(&key).copied(),
                     "the final state disagrees with the model (case {case}, key {key})"
                 );
             }
         }
 
-        // A full header: the seventeenth key for one block is refused.
-        let shard = FlattenedTphtShard::<2>::new(1).expect("one block");
+        // A full header: the seventeenth key for one block is refused.  A
+        // home-only shard has nowhere to spill, whatever SPILL_THRESHOLD is.
+        let shard = FlattenedTphtShard::<2>::with_banks(1, 0).expect("one block");
         for key in 0..HOME_SLOTS as u64 {
-            shard.insert(key, [key, !key], |v| v[0] == key).expect("the first sixteen keys fit");
+            shard
+                .insert(key, [key, !key], |v| v[0] == key)
+                .expect("the first sixteen keys fit")
+                .expect("a home-only shard places every entry at home");
         }
         let extra = HOME_SLOTS as u64;
         assert_eq!(
@@ -533,16 +694,29 @@ mod tests {
             feistel::fingerprint(remainder_b),
             "the pair must share a 16-bit fingerprint in one block"
         );
-        let shard = FlattenedTphtShard::<2>::new(1).expect("one block");
-        let ptr_a = shard.insert(a, [a, !a], |v| v[0] == a).expect("the first key stores");
+        // Re-pinned from plan 03-06 on a home-only shard (plan 03-08 Task 1):
+        // the constructor and the `insert`/`lookup` unwrapping change; what
+        // the test asserts does not.
+        let shard = FlattenedTphtShard::<2>::with_banks(1, 0).expect("one block");
+        let ptr_a = shard
+            .insert(a, [a, !a], |v| v[0] == a)
+            .expect("the first key stores")
+            .expect("a home-only shard places the first key at home");
         let ptr_b = shard
             .insert(b, [b, !b], |v| v[0] == b)
-            .expect("the second key stores despite the fingerprint collision");
-        assert_eq!(shard.lookup(a, |v| v[0] == a), Some(([a, !a], ptr_a)));
-        assert_eq!(shard.lookup(b, |v| v[0] == b), Some(([b, !b], ptr_b)));
+            .expect("the second key stores despite the fingerprint collision")
+            .expect("a home-only shard places the second key at home");
+        assert_eq!(
+            shard.lookup(a, |v| v[0] == a),
+            Some(Found { value: [a, !a], home: Some(ptr_a) })
+        );
+        assert_eq!(
+            shard.lookup(b, |v| v[0] == b),
+            Some(Found { value: [b, !b], home: Some(ptr_b) })
+        );
         assert_eq!(
             shard.lookup(a, |v| v[0] == b),
-            Some(([b, !b], ptr_b)),
+            Some(Found { value: [b, !b], home: Some(ptr_b) }),
             "the fingerprint cannot tell the pair apart; `same` does"
         );
         assert_ne!(ptr_a, ptr_b, "the two entries hold different slots");
@@ -550,13 +724,17 @@ mod tests {
 
     #[test]
     fn stress_readers_never_see_torn_entry() {
-        let shard = Arc::new(FlattenedTphtShard::<2>::new(1).expect("one block"));
+        // Re-pinned from plan 03-06 on a home-only shard (plan 03-08 Task 1);
+        // the value returned by `insert` is now `Option<TinyPtr>` and `lookup`
+        // returns `Found`, but nothing the test asserts is loosened.
+        let shard = Arc::new(FlattenedTphtShard::<2>::with_banks(1, 0).expect("one block"));
         let keys: [u64; 8] = [0, 1, 2, 3, 4, 5, 6, 7];
         // Key 0 stays present for the whole run, so every reader has a
         // guaranteed hit whose value must never be torn.
         shard
             .insert(keys[0], [keys[0], !keys[0]], |v| v[0] == keys[0])
-            .expect("the sentinel stores");
+            .expect("the sentinel stores")
+            .expect("a home-only shard places the sentinel at home");
         let writers = miri_scaled(4, 2);
         let readers = miri_scaled(4, 2);
         let ops = miri_scaled(20_000, 50);
@@ -581,9 +759,332 @@ mod tests {
                 let mut rng = SplitMix64::new(0x0000_0000_0000_00e5 ^ reader as u64);
                 for _ in 0..ops {
                     let key = keys[(rng.next() as usize) % keys.len()];
-                    if let Some((value, _ptr)) = shard.lookup(key, |v| v[0] == key) {
-                        assert_eq!(value[0], key, "a reader got another key's value");
-                        assert_eq!(value[1], !key, "a reader got a torn value for key {key}");
+                    if let Some(found) = shard.lookup(key, |v| v[0] == key) {
+                        assert_eq!(found.value[0], key, "a reader got another key's value");
+                        assert_eq!(found.value[1], !key, "a reader got a torn value for key {key}");
+                        assert!(
+                            found.home.is_some(),
+                            "a home-only shard resolves every entry at home"
+                        );
+                    }
+                    assert!(
+                        shard.lookup(keys[0], |v| v[0] == keys[0]).is_some(),
+                        "the sentinel key is always present"
+                    );
+                }
+            }));
+        }
+        for handle in handles {
+            handle.join().expect("every stress thread completes");
+        }
+    }
+
+    #[test]
+    fn spill_past_threshold_goes_to_a_bank() {
+        // One block, two banks, test threshold 2: the first two entries land
+        // at home, the third spills and is found again through `lookup`.
+        let shard = FlattenedTphtShard::<2>::with_test_config(1, 2, 2, IndexChoice::MixedHalf)
+            .expect("one block and two banks");
+        let keys = [0xA1u64, 0xB2, 0xC3];
+        let first = shard
+            .insert(keys[0], [keys[0], !keys[0]], |v| v[0] == keys[0])
+            .expect("the first insert succeeds");
+        assert!(first.is_some(), "the first entry lands at home");
+        assert_eq!(
+            shard.lookup(keys[0], |v| v[0] == keys[0]),
+            Some(Found { value: [keys[0], !keys[0]], home: first }),
+            "the first entry resolves at home"
+        );
+        let second = shard
+            .insert(keys[1], [keys[1], !keys[1]], |v| v[0] == keys[1])
+            .expect("the second insert succeeds");
+        assert!(second.is_some(), "the second entry lands at home");
+        assert_eq!(
+            shard.lookup(keys[1], |v| v[0] == keys[1]),
+            Some(Found { value: [keys[1], !keys[1]], home: second }),
+            "the second entry resolves at home"
+        );
+        let third = shard
+            .insert(keys[2], [keys[2], !keys[2]], |v| v[0] == keys[2])
+            .expect("the third insert succeeds");
+        assert!(third.is_none(), "the third entry spills past the threshold of 2");
+        assert_eq!(
+            shard.lookup(keys[2], |v| v[0] == keys[2]),
+            Some(Found { value: [keys[2], !keys[2]], home: None }),
+            "the spilled entry is found again, with no home pointer"
+        );
+        for &key in &keys {
+            assert_eq!(
+                shard.lookup(key, |v| v[0] == key).map(|found| found.value),
+                Some([key, !key]),
+                "every inserted key returns its own value"
+            );
+        }
+    }
+
+    #[test]
+    fn home_only_shard_never_spills() {
+        // A home-only shard applies no threshold: sixteen keys fill its slots
+        // and the seventeenth is HomeFull, whatever SPILL_THRESHOLD is.
+        let shard = FlattenedTphtShard::<2>::with_banks(1, 0).expect("a home-only shard");
+        for key in 0..HOME_SLOTS as u64 {
+            let ptr = shard
+                .insert(key, [key, !key], |v| v[0] == key)
+                .expect("a home-only shard takes sixteen keys")
+                .expect("a home-only shard places every entry at home");
+            assert_eq!(
+                shard.lookup(key, |v| v[0] == key).map(|found| found.home),
+                Some(Some(ptr)),
+                "key {key} resolves at home"
+            );
+        }
+        let extra = HOME_SLOTS as u64;
+        assert_eq!(
+            shard.insert(extra, [extra, !extra], |v| v[0] == extra),
+            Err(TphtError::HomeFull),
+            "the seventeenth key must report HomeFull"
+        );
+        // A shard with banks never returns HomeFull: entries spill instead.
+        let shard = FlattenedTphtShard::<2>::new(1).expect("a shard with banks");
+        for key in 0..(HOME_SLOTS as u64 * 2) {
+            assert!(
+                shard.insert(key, [key, !key], |v| v[0] == key).is_ok(),
+                "a shard with banks never returns HomeFull (key {key})"
+            );
+        }
+    }
+
+    #[test]
+    fn composite_ops_match_btreemap_model() {
+        // Seeded inserts, lookups and removes over a table small enough that
+        // the test threshold of 2 forces spills; every operation agrees with
+        // a BTreeMap, and `insert`'s `Some`/`None` agrees with `lookup`'s
+        // `Found::home`.
+        let blocks = miri_scaled(16, 8);
+        let banks = miri_scaled(8, 2);
+        let ops = miri_scaled(2_000, 200);
+        let keys: Vec<u64> =
+            (0..64u64).map(|i| 0x9E37_79B9_7F4A_7C15u64.wrapping_mul(i + 1)).collect();
+        let shard =
+            FlattenedTphtShard::<2>::with_test_config(blocks, banks, 2, IndexChoice::MixedHalf)
+                .expect("a valid block and bank count");
+        let mut model: BTreeMap<u64, [u64; 2]> = BTreeMap::new();
+        let mut rng = SplitMix64::new(0x0000_0000_0000_0508);
+        for step in 0..ops {
+            let key = keys[(rng.next() as usize) % keys.len()];
+            let value = [key, !key];
+            match rng.next() % 3 {
+                0 => {
+                    let result = shard.insert(key, value, |v| v[0] == key);
+                    if model.contains_key(&key) {
+                        assert_eq!(
+                            result,
+                            Err(TphtError::Exists),
+                            "a second insert must report Exists (step {step}, key {key})"
+                        );
+                        assert_eq!(
+                            shard.lookup(key, |v| v[0] == key).map(|found| found.value),
+                            model.get(&key).copied(),
+                            "a refused insert must leave the first value (step {step})"
+                        );
+                    } else {
+                        let placed = result.unwrap_or_else(|err| {
+                            panic!("insert must succeed (step {step}): {err:?}")
+                        });
+                        let found = shard
+                            .lookup(key, |v| v[0] == key)
+                            .expect("an inserted key must resolve");
+                        assert_eq!(found.value, value, "lookup returns the inserted value");
+                        assert_eq!(
+                            found.home, placed,
+                            "insert must say where the entry went (step {step}, key {key})"
+                        );
+                        model.insert(key, value);
+                    }
+                }
+                1 => {
+                    assert_eq!(
+                        shard.lookup(key, |v| v[0] == key).map(|found| found.value),
+                        model.get(&key).copied(),
+                        "lookup disagrees with the model (step {step}, key {key})"
+                    );
+                }
+                _ => {
+                    let removed = shard.remove(key, |v| v[0] == key);
+                    assert_eq!(
+                        removed,
+                        model.remove(&key).is_some(),
+                        "remove disagrees with the model (step {step}, key {key})"
+                    );
+                    assert_eq!(
+                        shard.lookup(key, |v| v[0] == key).map(|found| found.value),
+                        model.get(&key).copied(),
+                        "a removed key must not resolve (step {step})"
+                    );
+                }
+            }
+        }
+        for (&key, &value) in &model {
+            assert_eq!(
+                shard.lookup(key, |v| v[0] == key).map(|found| found.value),
+                Some(value),
+                "the final state disagrees with the model (key {key})"
+            );
+        }
+
+        // Deterministic tail: a duplicate insert reports Exists whether the
+        // first copy is at home or in a bank, and removing either works.
+        let shard = FlattenedTphtShard::<2>::with_test_config(1, 2, 2, IndexChoice::MixedHalf)
+            .expect("one block and two banks");
+        let (k1, k2, k3) = (0x11u64, 0x22, 0x33);
+        assert!(
+            shard.insert(k1, [k1, !k1], |v| v[0] == k1).expect("the first key stores").is_some(),
+            "the first key lands at home"
+        );
+        assert!(
+            shard.insert(k2, [k2, !k2], |v| v[0] == k2).expect("the second key stores").is_some(),
+            "the second key lands at home"
+        );
+        assert!(
+            shard.insert(k3, [k3, !k3], |v| v[0] == k3).expect("the third key stores").is_none(),
+            "the third key spills"
+        );
+        assert_eq!(
+            shard.insert(k1, [k1, !k1], |v| v[0] == k1),
+            Err(TphtError::Exists),
+            "a duplicate insert whose first copy is at home reports Exists"
+        );
+        assert_eq!(
+            shard.insert(k3, [k3, !k3], |v| v[0] == k3),
+            Err(TphtError::Exists),
+            "a duplicate insert whose first copy is in a bank reports Exists"
+        );
+        assert!(shard.remove(k1, |v| v[0] == k1), "a home entry is removable");
+        assert!(shard.remove(k3, |v| v[0] == k3), "a bank entry is removable");
+        assert_eq!(shard.lookup(k1, |v| v[0] == k1), None, "the removed home entry is gone");
+        assert_eq!(shard.lookup(k3, |v| v[0] == k3), None, "the removed bank entry is gone");
+        assert_eq!(
+            shard.lookup(k2, |v| v[0] == k2).map(|found| found.value),
+            Some([k2, !k2]),
+            "the untouched key still resolves"
+        );
+    }
+
+    #[test]
+    fn banks_full_is_an_error() {
+        // One block and one bank, test threshold 2: two home entries plus the
+        // bank's 255 nodes fill the table; the next spilling insert reports
+        // BanksFull and stores nothing.
+        use crate::tpht::chained::BANK_NODES;
+        let spill_count = miri_scaled(BANK_NODES, BANK_NODES);
+        let shard = FlattenedTphtShard::<2>::with_test_config(1, 1, 2, IndexChoice::MixedHalf)
+            .expect("one block and one bank");
+        let home_keys = [0u64, 1];
+        let mut home_ptrs = Vec::new();
+        for &key in &home_keys {
+            let ptr = shard
+                .insert(key, [key, !key], |v| v[0] == key)
+                .expect("a home insert succeeds")
+                .expect("the home entries fit");
+            home_ptrs.push((key, ptr));
+        }
+        let mut spilled = Vec::new();
+        for i in 0..spill_count as u64 {
+            let key = 0x1000 + i;
+            let placed = shard
+                .insert(key, [key, !key], |v| v[0] == key)
+                .unwrap_or_else(|err| panic!("spill {i} must succeed: {err:?}"));
+            assert!(placed.is_none(), "every entry past the threshold spills");
+            spilled.push(key);
+        }
+        let failing = 0x1000 + spill_count as u64;
+        assert_eq!(
+            shard.insert(failing, [failing, !failing], |v| v[0] == failing),
+            Err(TphtError::BanksFull),
+            "a spilling insert into a full bank must report BanksFull"
+        );
+        assert_eq!(
+            shard.lookup(failing, |v| v[0] == failing),
+            None,
+            "the failed insert stored nothing"
+        );
+        for &(key, ptr) in &home_ptrs {
+            assert_eq!(
+                shard.lookup(key, |v| v[0] == key).map(|found| found.home),
+                Some(Some(ptr)),
+                "the home entries still resolve"
+            );
+        }
+        for &key in spilled.iter().take(4) {
+            assert_eq!(
+                shard.lookup(key, |v| v[0] == key).map(|found| found.home),
+                Some(None),
+                "the spilled entries still resolve in the bank"
+            );
+        }
+    }
+
+    #[test]
+    fn stress_readers_with_spill() {
+        // Writers insert and remove keys of one block past the threshold while
+        // readers look them up; every value a reader gets satisfies the
+        // self-check, and the sentinel key stays present.  Key 2 is spilled
+        // before the threads start, so the spill path is exercised from the
+        // first operation.
+        let blocks = miri_scaled(1, 1);
+        let banks = miri_scaled(2, 1);
+        let shard = Arc::new(
+            FlattenedTphtShard::<2>::with_test_config(blocks, banks, 2, IndexChoice::MixedHalf)
+                .expect("one block and a valid bank count"),
+        );
+        let keys: [u64; 8] = [0, 1, 2, 3, 4, 5, 6, 7];
+        shard
+            .insert(keys[0], [keys[0], !keys[0]], |v| v[0] == keys[0])
+            .expect("the sentinel stores")
+            .expect("the sentinel lands at home");
+        shard
+            .insert(keys[1], [keys[1], !keys[1]], |v| v[0] == keys[1])
+            .expect("the second key stores")
+            .expect("the second key lands at home");
+        let spilled = shard
+            .insert(keys[2], [keys[2], !keys[2]], |v| v[0] == keys[2])
+            .expect("the third key stores");
+        assert!(spilled.is_none(), "the third key spills past the threshold of 2");
+        assert_eq!(
+            shard.lookup(keys[2], |v| v[0] == keys[2]).map(|found| found.home),
+            Some(None),
+            "the spilled key resolves in the bank"
+        );
+        let writers = miri_scaled(4, 2);
+        let readers = miri_scaled(4, 2);
+        let ops = miri_scaled(20_000, 60);
+        let mut handles = Vec::new();
+        for writer in 0..writers {
+            let shard = Arc::clone(&shard);
+            handles.push(std::thread::spawn(move || {
+                let mut rng = SplitMix64::new(0x0000_0000_0000_0f08 ^ writer as u64);
+                for _ in 0..ops {
+                    let key = keys[1 + (rng.next() as usize) % (keys.len() - 1)];
+                    if rng.next() & 1 == 0 {
+                        let _ = shard.insert(key, [key, !key], |v| v[0] == key);
+                    } else {
+                        let _ = shard.remove(key, |v| v[0] == key);
+                    }
+                }
+            }));
+        }
+        for reader in 0..readers {
+            let shard = Arc::clone(&shard);
+            handles.push(std::thread::spawn(move || {
+                let mut rng = SplitMix64::new(0x0000_0000_0000_0f09 ^ reader as u64);
+                for _ in 0..ops {
+                    let key = keys[(rng.next() as usize) % keys.len()];
+                    if let Some(found) = shard.lookup(key, |v| v[0] == key) {
+                        assert_eq!(found.value[0], key, "a reader got another key's value");
+                        assert_eq!(
+                            found.value[1], !key,
+                            "a reader got a torn value for key {key} on the spill path"
+                        );
                     }
                     assert!(
                         shard.lookup(keys[0], |v| v[0] == keys[0]).is_some(),
@@ -601,15 +1102,20 @@ mod tests {
     fn deref_tiny_is_one_arena_read_and_no_header_read() {
         // One block is the smallest shard with a home slot, and the probe
         // counts are independent of the shard size, so both sides use it.
+        // Re-pinned from plan 03-13 on a home-only shard (plan 03-08 Task 1):
+        // the constructor, the `insert` unwrapping and the `lookup` result
+        // shape change; the probe counts asserted here do not.
         let blocks = miri_scaled(1, 1);
         let probe = CountingProbe::new();
-        let shard = FlattenedTphtShard::<2, CountingProbe>::with_probe(blocks, probe.clone())
-            .expect("one block is a valid block count");
+        let shard =
+            FlattenedTphtShard::<2, CountingProbe>::with_banks_and_probe(blocks, 0, probe.clone())
+                .expect("one block is a valid block count");
         let ptr = shard
             .insert(0x5EED, [0xAAAA_BBBB_CCCC_DDDD, 0x1111_2222_3333_4444], |v| {
                 v[0] == 0xAAAA_BBBB_CCCC_DDDD
             })
-            .expect("the first key fits in an empty block");
+            .expect("the first key fits in an empty block")
+            .expect("a home-only shard places the key at home");
         probe.reset();
         assert_eq!(
             shard.deref_tiny(0x5EED, ptr),
@@ -623,7 +1129,7 @@ mod tests {
         );
         assert_eq!(
             shard.lookup(0x5EED, |v| v[0] == 0xAAAA_BBBB_CCCC_DDDD),
-            Some(([0xAAAA_BBBB_CCCC_DDDD, 0x1111_2222_3333_4444], ptr)),
+            Some(Found { value: [0xAAAA_BBBB_CCCC_DDDD, 0x1111_2222_3333_4444], home: Some(ptr) }),
             "the key path still resolves the entry"
         );
         assert!(
@@ -638,7 +1144,8 @@ mod tests {
         let ops = miri_scaled(2_000, 100);
         let keys: Vec<u64> =
             (0..32u64).map(|i| 0x9E37_79B9_7F4A_7C15u64.wrapping_mul(i + 1)).collect();
-        let shard = FlattenedTphtShard::<2>::new(blocks).expect("a power-of-two block count");
+        let shard =
+            FlattenedTphtShard::<2>::with_banks(blocks, 0).expect("a power-of-two block count");
         let mut model: BTreeMap<u64, ([u64; 2], TinyPtr)> = BTreeMap::new();
         let mut rng = SplitMix64::new(0x0000_0000_0000_013d);
         for step in 0..ops {
@@ -659,8 +1166,13 @@ mod tests {
                             "a refused insert must leave the first value (step {step}, key {key})"
                         );
                     } else {
+                        // Re-pinned from plan 03-13 (plan 03-08 Task 1): the
+                        // pointer `insert` returned is now `Option`, and on a
+                        // home-only shard it is always `Some`, so this test
+                        // still dereferences every live key.
                         let ptr = result
-                            .expect("32 keys over at least 16 blocks leave a home slot each");
+                            .expect("32 keys over at least 16 blocks leave a home slot each")
+                            .expect("a home-only shard places every entry at home");
                         assert_eq!(
                             shard.deref_tiny(key, ptr),
                             value,
@@ -695,7 +1207,7 @@ mod tests {
                 "the final state disagrees with the model (key {key})"
             );
             assert_eq!(
-                shard.lookup(key, |v| v[0] == key).map(|(v, _)| v),
+                shard.lookup(key, |v| v[0] == key).map(|found| found.value),
                 Some(value),
                 "the key path agrees with the model (key {key})"
             );
@@ -703,10 +1215,16 @@ mod tests {
 
         // A stale pair is not undefined behaviour: it returns whatever the
         // slot now holds.  A one-block shard reuses slot 0 after a removal.
-        let shard = FlattenedTphtShard::<2>::new(1).expect("one block");
-        let stale = shard.insert(7, [7, !7], |v| v[0] == 7).expect("the first key fits");
+        let shard = FlattenedTphtShard::<2>::with_banks(1, 0).expect("one block");
+        let stale = shard
+            .insert(7, [7, !7], |v| v[0] == 7)
+            .expect("the first key fits")
+            .expect("a home-only shard places the key at home");
         assert!(shard.remove(7, |v| v[0] == 7), "the first key is present");
-        let fresh = shard.insert(8, [8, !8], |v| v[0] == 8).expect("the slot is free again");
+        let fresh = shard
+            .insert(8, [8, !8], |v| v[0] == 8)
+            .expect("the slot is free again")
+            .expect("a home-only shard places the key at home");
         assert_eq!(stale, fresh, "the freed slot is reassigned to the next key");
         assert_eq!(
             shard.deref_tiny(7, stale),
@@ -738,13 +1256,14 @@ mod tests {
             }
             key += 1;
         }
-        let shard = FlattenedTphtShard::<2>::new(blocks).expect("two blocks");
+        let shard = FlattenedTphtShard::<2>::with_banks(blocks, 0).expect("two blocks");
         let mut stored = vec![[0u64; 2]; HOME_SLOTS * blocks];
         for &key in first.iter().chain(last.iter()) {
             let (block, _) = feistel::split(key, bits);
             let ptr = shard
                 .insert(key, [key, !key], |v| v[0] == key)
-                .expect("sixteen keys per block fit in its home window");
+                .expect("sixteen keys per block fit in its home window")
+                .expect("a home-only shard places every entry at home");
             let slot = ((block << 4) + (ptr.get() as usize - 1)) & (HOME_SLOTS * blocks - 1);
             stored[slot] = [key, !key];
         }
