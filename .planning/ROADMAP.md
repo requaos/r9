@@ -381,7 +381,7 @@ Phases execute in numeric order: 1 → 2 → 3 → … → 16 (decimal insertion
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 1. Stage P0 - Cross-Build Harness | v3.0 | 34/34 | Complete | 2026-11-23 |
-| 2. Guide Phase 0 - Design Lock and rfork Flag Reservation | v3.0 | 6/6 | In Progress | - |
+| 2. Guide Phase 0 - Design Lock and rfork Flag Reservation | v3.0 | 6/6 | Complete | 2026-11-24 |
 | 3. Guide Phase 1 - crypto/ and ds/ Foundations | v3.0 | 0/TBD | Not started | - |
 | 4. Guide Phase 2 - 9P2000.aead Transport and FidTable | v3.0 | 0/TBD | Not started | - |
 | 5. Guide Phase 3 - Cryptographic Memory and Zero-Copy DMA Paging | v3.1 | 0/TBD | Not started | - |
