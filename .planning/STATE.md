@@ -5,16 +5,16 @@ milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
 current_phase: 03
 current_phase_name: Guide Phase 1 - crypto/ and ds/ Foundations
 status: executing
-stopped_at: Completed 03-09-PLAN.md
-last_updated: "2026-11-24T16:54:39.409Z"
+stopped_at: Completed 03-10-PLAN.md
+last_updated: "2026-11-24T17:11:46.446Z"
 last_activity: 2026-11-24
 last_activity_desc: Phase 03 execution started
-state_head: f0fc698a1a6d4911b243c43ff041fc4a0bf5ba22
+state_head: 7e42046268bc20935dc147a006b935487fbaf94f
 progress:
   total_phases: 4
   completed_phases: 2
   total_plans: 53
-  completed_plans: 51
+  completed_plans: 52
   percent: 50
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-11-24)
 ## Current Position
 
 Phase: 03 (Guide Phase 1 - crypto/ and ds/ Foundations) — EXECUTING
-Plan: 12 of 13
+Plan: 13 of 13
 Status: Ready to execute
 Last activity: 2026-11-24 — Phase 03 execution started
 
@@ -78,6 +78,7 @@ Progress: [█████░░░░░] 50%
 | Phase 03 P07 | 32 min | 2 tasks | 2 files |
 | Phase 03 P08 | 51 min | 2 tasks | 5 files |
 | Phase 03 P09 | 1 min | 2 tasks | 5 files |
+| Phase 03 P10 | 92 min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -187,6 +188,14 @@ Full log is the PROJECT.md Key Decisions table. Recent:
 - [Phase 03]: Plan 03-09: the RFC text is amended in section 3.1 (ChaCha20 with the RFC 8439 32-bit counter and 96-bit nonce; Keyed BLAKE3 the only MAC; [RFC8439] cited for ChaCha20 only) with a dated note; the guide and compendium are byte-identical to baseline 4beb5c8.
 - [Phase 03]: Plan 03-09: nine planning-level rows are recorded for owner review at Phase 3 verification (compendium 4.1 mixed-half correction, type-level ReadOnly, MurmurHash3 f(R), K_file info, parallel chain heads, Boehm seqlock, build/gate readings, ChaCha20 per-key limit, zeroize =1.9.2 with =1.9.1 as the older alternative).
 - [Phase 03]: Plan 03-09: STATE.md records the pre-existing aarch64 clippy failure (7 undocumented unsafe blocks) and the TPHT neighbourhood-displacement gap as deferred items.
+- [Phase 03]: Plan 03-10: UNSAFE-AUDIT.md names the four gated crates (aarch64, port, crypto, ds), records ds 1 lint-visible block (ds/src/tpht/flattened.rs:440, deref_tiny's unchecked arena read) and crypto 0, so SAFETY is 152 -> 153 (129 + 23 + 1 + 0); the aarch64 count of 129 is kept with the note that 7 pre-existing undocumented sites may make it stale (RESEARCH C5, outside Phase 3)
+- [Phase 03]: Plan 03-10: the clippy probe is evidence, not an assertion — deleting the six-line SAFETY comment above the arena read made the default 'nix develop -c cargo xtask clippy' exit 1 with 'unsafe block missing a safety comment' at flattened.rs:434; reverted with git checkout -- ds/src/tpht and 'git status --porcelain -- ds' printed nothing, so no probe reached a commit
+- [Phase 03]: Plan 03-10: the third-party dependency record gives one row per crate Cargo.lock shows reachable from crypto/ — the six direct pins with their exact feature sets and 17 transitive crates — with raw grep -ow unsafe counts over upstream src/ labelled as including backends r9 never selects; F10's figures are reproduced where F10 lists the crate and the five F10 omits (inout 31, libc 810, cc 36, shlex 7, find-msvc-tools 55) were counted the same way
+- [Phase 03]: Plan 03-10: both suite runs are green at 1be121c (the phase's last code commit) — suite-run-1 and suite-run-2 each have five exit codes 0, 30 'test result: ok' lines, the RFC 4231/5869/8439, BLAKE3 and keys pins on both the default and the soft-backend crypto legs, the doctest pair, and the ds leg (roaring:: 6, clientset:: 5, setops:: 2, tpht:: 30 with the D-15 generator ignored)
+- [Phase 03]: Plan 03-10: both kernels are byte-identical to the baseline at the end of the phase on one venue after a from-nothing rebuild — virtshell 9218b998...fa083e, q35churnshell c9dcef0b...8b78b (@03-10 IDENTICAL), a supplementary cmp against target/phase03-kernel-bytes/before/ also equal, and the protected-path diff against 4beb5c8 quiet; D-21's stop did not fire
+- [Phase 03]: Plan 03-10: Miri is over the 120-second budget at the end of the phase — MIRI-TIME closing-run-1 350 and closing-run-2 389 for 64 seeds over 29 tpht tests; the plan forbids source edits so nothing was resized, both runs exit 0 with no Undefined Behavior or Data race, and the number is carried to the phase-end review alongside the 03-07/03-08 overages
+- [Phase 03]: Plan 03-10: 03-OWNER-STOP.md is the ordered x86_64 Linux page plan 03-11 consumes — branch push approval, fetch, the two sandboxed kernel builds at the tip, the same two at the base commit in a second worktree (so their HEAD= lines carry the base), the four-hash comparison, boot-iso plus --rebuild, the four host suite commands and the report-back; every verdict command runs through run_logged so each log under ~/r9-p03-stop/ begins with HEAD= and ends with EXIT=
+- [Phase 03]: Plan 03-10: the owner stop puts the two open choices in front of the owner without blocking — zeroize =1.9.2 with =1.9.1 as the older alternative, and the ChaCha20 per-key-and-nonce limit of 2^32 - 1 blocks (274,877,906,880 bytes); COVERAGE.md records the reasoned no-external-API declaration in one line, and nothing was pushed (origin/main unchanged, the transport branch not yet created)
 
 ### Open Questions (seven warnings, approved to be carried, not resolved)
 
@@ -247,6 +256,6 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 
 ## Session Continuity
 
-Last session: 2026-11-24T16:54:39.102Z
-Stopped at: Completed 03-09-PLAN.md
+Last session: 2026-11-24T17:11:46.145Z
+Stopped at: Completed 03-10-PLAN.md
 Resume file: None
