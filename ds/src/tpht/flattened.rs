@@ -280,25 +280,40 @@ impl<const WORDS: usize, P: Probe> FlattenedTphtShard<WORDS, P> {
                 break;
             }
         }
+        let home_capacity = if self.overflow.is_some() { self.spill_threshold } else { HOME_SLOTS };
+        let in_use = occupied.count_ones() as usize;
         let outcome = if exists {
             Err(TphtError::Exists)
+        } else if in_use < home_capacity
+            && let Some(slot) = free
+        {
+            // A key that was spilled and whose home slot has since been freed
+            // must still report Exists, not be stored twice.
+            let in_chain = self
+                .overflow
+                .as_ref()
+                .is_some_and(|overflow| overflow.lookup(block, key).is_some());
+            if in_chain {
+                Err(TphtError::Exists)
+            } else {
+                let ptr = TinyPtr::new((slot + 1) as u8).expect("a home slot index is 1..=16");
+                self.write_value(self.slot_index(block, ptr), &value);
+                header.quotients[slot].store(fingerprint, Ordering::Release);
+                header.tiny_ptrs[slot].store(ptr.get(), Ordering::Release);
+                Self::set_spilled(header, slot, ptr);
+                header.occupied_mask.store(occupied | (1u16 << slot), Ordering::Release);
+                Ok(Some(ptr))
+            }
         } else {
-            // RED (plan 03-08 Task 1): the spill itself is not implemented
-            // yet.  A shard with banks stops at the threshold with HomeFull;
-            // a home-only shard fills its 16 slots and then reports HomeFull.
-            let home_capacity =
-                if self.overflow.is_some() { self.spill_threshold } else { HOME_SLOTS };
-            match free {
-                Some(slot) if (occupied.count_ones() as usize) < home_capacity => {
-                    let ptr = TinyPtr::new((slot + 1) as u8).expect("a home slot index is 1..=16");
-                    self.write_value(self.slot_index(block, ptr), &value);
-                    header.quotients[slot].store(fingerprint, Ordering::Release);
-                    header.tiny_ptrs[slot].store(ptr.get(), Ordering::Release);
-                    Self::set_spilled(header, slot, ptr);
-                    header.occupied_mask.store(occupied | (1u16 << slot), Ordering::Release);
-                    Ok(Some(ptr))
-                }
-                _ => Err(TphtError::HomeFull),
+            match &self.overflow {
+                // Past the threshold (or the 16 home slots): spill into the
+                // block's chain, which checks for a duplicate full key itself.
+                // This happens under the block's seqlock, which is the
+                // overflow's serialisation contract; a full pair of candidate
+                // banks is BanksFull.  A shard with banks never reports
+                // HomeFull.
+                Some(overflow) => overflow.insert(block, key, value).map(|()| None),
+                None => Err(TphtError::HomeFull),
             }
         };
         Self::unlock(header, generation);
@@ -340,6 +355,24 @@ impl<const WORDS: usize, P: Probe> FlattenedTphtShard<WORDS, P> {
                     return Some(Found { value, home: Some(ptr) });
                 }
             }
+            // The header scan found nothing: walk the block's chain inside the
+            // same attempt, then validate the generation after both.  Every
+            // mutation of the chain happens under this seqlock, so a changed
+            // generation means the chain may have moved and the attempt
+            // retries.
+            if let Some(overflow) = &self.overflow
+                && let Some(value) = overflow.lookup(block, key)
+            {
+                fence(Ordering::Acquire);
+                if header.seq_lock.load(Ordering::Relaxed) != first {
+                    continue 'attempt;
+                }
+                return Some(Found { value, home: None });
+            }
+            fence(Ordering::Acquire);
+            if header.seq_lock.load(Ordering::Relaxed) != first {
+                continue 'attempt;
+            }
             return None;
         }
     }
@@ -373,6 +406,9 @@ impl<const WORDS: usize, P: Probe> FlattenedTphtShard<WORDS, P> {
             header.occupied_mask.store(occupied & !(1u16 << slot), Ordering::Release);
             removed = true;
             break;
+        }
+        if !removed && let Some(overflow) = &self.overflow {
+            removed = overflow.remove(block, key);
         }
         Self::unlock(header, generation);
         removed
@@ -860,9 +896,9 @@ mod tests {
         // the test threshold of 2 forces spills; every operation agrees with
         // a BTreeMap, and `insert`'s `Some`/`None` agrees with `lookup`'s
         // `Found::home`.
-        let blocks = miri_scaled(16, 8);
+        let blocks = miri_scaled(16, 4);
         let banks = miri_scaled(8, 2);
-        let ops = miri_scaled(2_000, 200);
+        let ops = miri_scaled(2_000, 50);
         let keys: Vec<u64> =
             (0..64u64).map(|i| 0x9E37_79B9_7F4A_7C15u64.wrapping_mul(i + 1)).collect();
         let shard =
@@ -972,32 +1008,50 @@ mod tests {
 
     #[test]
     fn banks_full_is_an_error() {
-        // One block and one bank, test threshold 2: two home entries plus the
-        // bank's 255 nodes fill the table; the next spilling insert reports
-        // BanksFull and stores nothing.
+        // One bank shared by 64 blocks, test threshold 2: two home entries per
+        // block, then the bank's 255 nodes fill from spills spread across the
+        // blocks (so each chain stays short and the test stays cheap under
+        // Miri).  The next spilling insert reports BanksFull and stores
+        // nothing.
         use crate::tpht::chained::BANK_NODES;
+        let blocks = miri_scaled(64, 64);
         let spill_count = miri_scaled(BANK_NODES, BANK_NODES);
-        let shard = FlattenedTphtShard::<2>::with_test_config(1, 1, 2, IndexChoice::MixedHalf)
-            .expect("one block and one bank");
-        let home_keys = [0u64, 1];
+        let bits = index_bits(blocks).expect("64 blocks");
+        let shard = FlattenedTphtShard::<2>::with_test_config(blocks, 1, 2, IndexChoice::MixedHalf)
+            .expect("64 blocks and one bank");
+        // Find two home keys for every block; every block must hold its two
+        // home entries before the spill loop, so the failing insert spills.
+        let mut home_for: Vec<Vec<u64>> = vec![Vec::new(); blocks];
+        let mut key = 0u64;
+        while home_for.iter().any(|keys| keys.len() < 2) {
+            let (block, _) = feistel::split(key, bits);
+            if home_for[block].len() < 2 {
+                home_for[block].push(key);
+            }
+            key += 1;
+        }
         let mut home_ptrs = Vec::new();
-        for &key in &home_keys {
-            let ptr = shard
-                .insert(key, [key, !key], |v| v[0] == key)
-                .expect("a home insert succeeds")
-                .expect("the home entries fit");
-            home_ptrs.push((key, ptr));
+        for pair in &home_for {
+            for &home_key in pair {
+                let ptr = shard
+                    .insert(home_key, [home_key, !home_key], |v| v[0] == home_key)
+                    .expect("a home insert succeeds")
+                    .expect("the first two keys of a block land at home");
+                home_ptrs.push((home_key, ptr));
+            }
         }
         let mut spilled = Vec::new();
-        for i in 0..spill_count as u64 {
-            let key = 0x1000 + i;
+        while spilled.len() < spill_count {
+            let (block, _) = feistel::split(key, bits);
+            debug_assert!(home_for[block].len() == 2, "every block has its two home keys");
             let placed = shard
                 .insert(key, [key, !key], |v| v[0] == key)
-                .unwrap_or_else(|err| panic!("spill {i} must succeed: {err:?}"));
+                .unwrap_or_else(|err| panic!("spill {} must succeed: {err:?}", spilled.len()));
             assert!(placed.is_none(), "every entry past the threshold spills");
             spilled.push(key);
+            key += 1;
         }
-        let failing = 0x1000 + spill_count as u64;
+        let failing = key;
         assert_eq!(
             shard.insert(failing, [failing, !failing], |v| v[0] == failing),
             Err(TphtError::BanksFull),
@@ -1008,16 +1062,16 @@ mod tests {
             None,
             "the failed insert stored nothing"
         );
-        for &(key, ptr) in &home_ptrs {
+        for &(home_key, ptr) in &home_ptrs {
             assert_eq!(
-                shard.lookup(key, |v| v[0] == key).map(|found| found.home),
+                shard.lookup(home_key, |v| v[0] == home_key).map(|found| found.home),
                 Some(Some(ptr)),
                 "the home entries still resolve"
             );
         }
-        for &key in spilled.iter().take(4) {
+        for &spill_key in spilled.iter().take(4) {
             assert_eq!(
-                shard.lookup(key, |v| v[0] == key).map(|found| found.home),
+                shard.lookup(spill_key, |v| v[0] == spill_key).map(|found| found.home),
                 Some(None),
                 "the spilled entries still resolve in the bank"
             );
@@ -1057,7 +1111,7 @@ mod tests {
         );
         let writers = miri_scaled(4, 2);
         let readers = miri_scaled(4, 2);
-        let ops = miri_scaled(20_000, 60);
+        let ops = miri_scaled(20_000, 50);
         let mut handles = Vec::new();
         for writer in 0..writers {
             let shard = Arc::clone(&shard);
