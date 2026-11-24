@@ -173,6 +173,7 @@ Full log is the PROJECT.md Key Decisions table. Recent:
 - [Phase 03]: Plan 03-07: ChainedTphtOverflow is all-atomic (state, fingerprint, full key, value words, next link): a claim is a compare-exchange free to WRITING (0xFF), the payload is stored Relaxed, the state goes LIVE with Release, then the node is linked at the block head with Release; a reader treats a non-LIVE node as absent. ds/src/tpht/chained.rs holds no unsafe and does not copy listing 9.4.
 - [Phase 03]: Plan 03-07: a chain link is (candidate choice << 8) | node index with 0xFFFF as the end marker; the 255 bank indices are 0..=254, so no link or claimed index is 0xFF. fill() is used/(num_banks * 255) and the 8-seed pin measured 0.9920..0.9966 before the first BanksFull.
 - [Phase 03]: Plan 03-07: Miri-side sizes were taken to the plan's floors and the 22-test tpht suite still took 230 s (a second warm run 235 s) against the 120 s budget; MIRI-OVER chained 230 is recorded and reported to the orchestrator, with native sizes, the 64 seeds and the test list unchanged (cutting seeds or tests is not the executor's call).
+- [Orchestrator 2026-11-24]: Plan 03-07 Miri over-budget deviation ACCEPTED — the run is green over all 22 tests × 64 seeds with no Undefined Behavior or data race; 230 s exceeds the 120 s feedback-latency budget only. Coverage, seed count and native sizes stay unchanged. Revisit only if `cargo xtask miri` latency becomes a commit-workflow blocker; no plan edit authorized.
 
 ### Open Questions (ten warnings, approved to be carried, not resolved)
 
