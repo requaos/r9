@@ -181,6 +181,7 @@ Full log is the PROJECT.md Key Decisions table. Recent:
 - [Phase 03]: Plan 03-08: with_banks(n, 0) keeps plan 03-06's 16-slot home-only behaviour and HomeFull; a shard with banks never returns HomeFull (BanksFull instead). The default overflow is one bank per 64 blocks, minimum 2; the measurement and pin pass banks_for explicitly
 - [Phase 03]: Plan 03-08: the six tests advanced by plans 03-06 and 03-13 were re-pinned on a home-only shard; only constructors, insert/lookup unwrapping and two placement assertions changed, each named by a REPIN ledger line
 - [Phase 03]: Plan 03-08: Miri is over the 120-second budget and reported, not fixed by cutting coverage: 981 s then 315/329 s at the floors for tpht-spill, 628 s then 402 s for tpht-hit-rate; seeds, tests and native sizes unchanged (plan 03-07 precedent)
+- [Orchestrator 2026-11-24]: Plan 03-08 Miri over-budget deviation ACCEPTED — both runs are rc 0 over 64 seeds with no Undefined Behavior or data race; only feedback latency is out of budget. Coverage, seeds and native sizes stay unchanged. Carry to phase-end review: the 120 s budget in 03-VALIDATION.md is not met by tpht-spill/tpht-hit-rate, so a later phase should recalibrate it or split the Miri step; no plan edit authorized now.
 
 ### Open Questions (ten warnings, approved to be carried, not resolved)
 
