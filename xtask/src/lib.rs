@@ -21,6 +21,7 @@ pub mod config;
 pub mod harvey;
 pub mod image;
 pub mod lintcontract;
+pub mod miri;
 pub mod rforkh;
 pub mod uregcheck;
 
