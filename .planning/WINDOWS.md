@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 3
+open_count: 4
 waived_count: 0
 fixed_count: 1
-total_count: 4
-last_updated: 2026-11-23T12:03:50.195Z
+total_count: 5
+last_updated: 2026-11-24T02:35:39.402Z
 ---
 
 # Broken Windows Ledger
@@ -19,6 +19,7 @@ last_updated: 2026-11-23T12:03:50.195Z
 | 2 | 01 | deviation | xtask/src/gate.rs |  | Task 2 (tdd=true) landed its behaviour tests with the implementation in one feat commit; no separate RED commit exists (recorded in 01-18-SUMMARY) | open |  | 2026-11-23T11:15:31.637Z |  |
 | 3 | 01 | unrun-verify | xtask/src/gate.rs |  | The quick gate's KVM witness runs (green twice, force-no-rio non-zero) are queued for stop B (plan 01-22) | open |  | 2026-11-23T11:15:32.026Z |  |
 | 4 | 01 | deviation | gates/aarch64/drive-r9.expect |  | Plan 01-21's unreferenced drive-r9 rewire needed two support lines beyond path/env tokens (the R9_GATE_OUT capture expression and its mkdir) because the Harvey launcher run-r9.sh was not moved; every assertion, marker, stage and timeout is unchanged (recorded in 01-21-SUMMARY) | open |  | 2026-11-23T12:03:50.195Z |  |
+| 5 | 02 | unrun-verify | x86_64/src/syscall.rs |  | The x86_64 rfork_reserved_bits_are_unsupported mask test and the RFPROC import in x86_64/src/proc.rs mod tests were not compiled or run on the Mac; first witness is the owner's x86_64 Linux host at the end-of-phase stop (D-24, plan 02-06) | open |  | 2026-11-24T02:35:39.402Z |  |
 
 ````json
 [
@@ -71,6 +72,19 @@ last_updated: 2026-11-23T12:03:50.195Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-11-23T12:03:50.195Z",
+    "resolved_at": null,
+    "milestone": "v3.0"
+  },
+  {
+    "id": 5,
+    "kind": "unrun-verify",
+    "phase": "02",
+    "file": "x86_64/src/syscall.rs",
+    "line": null,
+    "description": "The x86_64 rfork_reserved_bits_are_unsupported mask test and the RFPROC import in x86_64/src/proc.rs mod tests were not compiled or run on the Mac; first witness is the owner's x86_64 Linux host at the end-of-phase stop (D-24, plan 02-06)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-24T02:35:39.402Z",
     "resolved_at": null,
     "milestone": "v3.0"
   }
