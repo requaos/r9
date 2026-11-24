@@ -15,3 +15,14 @@ PIN rfork-masks RED
 error[E0432]: unresolved import `super::RFORK_SUPPORTED` at aarch64/src/syscall.rs:2810 (no `RFORK_SUPPORTED` in `syscall`); x86_64 mask test is not compiled on this Mac (D-24)
 PIN rfork-single-definition RED
 x86_64/src/proc.rs:171: defines an rfork flag constant; the one definition is port::rfork | aarch64/src/syscall.rs:92: defines an rfork flag constant; the one definition is port::rfork (plus 9 more in each file; aarch64/src/proc.rs:2536 reaches a flag through crate::syscall; both syscall.rs masks are function-local)
+PIN rfork-masks GREEN-1
+test syscall::rfork_mask_tests::rfork_reserved_bits_are_unsupported ... ok (aarch64 default cfg) | test syscall::rfork_mask_tests::rfork_reserved_bits_are_unsupported ... ok (aarch64 virtshell cfg); nix develop -c cargo xtask test exit 0
+PIN rfork-masks GREEN-2
+test syscall::rfork_mask_tests::rfork_reserved_bits_are_unsupported ... ok (aarch64 default cfg) | test syscall::rfork_mask_tests::rfork_reserved_bits_are_unsupported ... ok (aarch64 virtshell cfg); nix develop -c cargo xtask test exit 0
+PIN rfork-single-definition GREEN-1
+test rforkh::tests::rfork_flags_have_one_definition ... ok; nix develop -c cargo test -p xtask exit 0
+PIN rfork-single-definition GREEN-2
+test rforkh::tests::rfork_flags_have_one_definition ... ok; nix develop -c cargo test -p xtask exit 0
+X86_64-HOST-TESTS not-run-on-mac witness=owner-stop
+PIN rfork-masks ADVANCED 53ceb12
+PIN rfork-single-definition ADVANCED 53ceb12
