@@ -82,3 +82,64 @@ its `roaring =0.11.5` dev-dependency are new entries only, and the six `crypto` 
 plan 03-01 are unchanged. `Cargo.lock` now has its final Phase 3 shape (no later plan adds
 a crate), so this is the state the optional early Linux build of RESEARCH A8 and the
 end-of-phase owner stop both vendor from.
+
+## End of the phase (plan 03-10)
+
+Plan 03-10 adds no code and no dependency: it is the audit, the closing evidence and the owner
+checklist. The comparison below is the last one the Mac can make before the owner stop, and it
+covers the whole phase — every commit from the baseline to the phase's last code commit.
+
+- Base commit (before, from `before.sha256`): `4beb5c8eea27f2f7c586a9cedfbc3bc675c6bae1`
+- After commit (`git rev-parse HEAD` when the after builds were made):
+  `1be121c11fc712648fe5876fb70e591eefde1a00` — the plan 03-10 Task 1 commit, which is the
+  phase's last commit that precedes this measurement (Task 2 and Task 3 change only evidence
+  and planning documents)
+- Venue: `Darwin arm64` (both the before and after builds were made on this one machine;
+  `uname -sm` was checked against the `venue` line of `before.sha256` before the builds)
+- The four-line record is `after-03-10.sha256`, in the baseline's format with the `after` line
+  first; its `venue` line equals the baseline's.
+
+Both kernels were rebuilt from nothing: `target/aarch64-unknown-none-elf` and
+`target/x86_64-unknown-none-elf` were moved aside to
+`target/phase03-kernel-bytes/pre-03-10-{aarch64,x86_64}-target/` before the after builds, then
+rebuilt with `nix develop -c cargo xtask build --arch aarch64 --config virtshell` and
+`nix develop -c cargo xtask build --arch x86-64 --config q35churnshell` (both exit 0).
+
+| Config | Before (`4beb5c8`) | After (`1be121c`) | Same or different |
+|--------|--------------------|-------------------|-------------------|
+| `virtshell` | `9218b998327c49b6ea06e79761d421328ad3451702719a0a0af8b79c59fa083e` | `9218b998327c49b6ea06e79761d421328ad3451702719a0a0af8b79c59fa083e` | same |
+| `q35churnshell` | `c9dcef0b32b77e13f30f8a6ba7b448948e684720dc794de003d06a1e4988b78b` | `c9dcef0b32b77e13f30f8a6ba7b448948e684720dc794de003d06a1e4988b78b` | same |
+
+### Verdicts (plan 03-10)
+
+VERDICT elf-virtshell@03-10: IDENTICAL
+VERDICT elf-q35churnshell@03-10: IDENTICAL
+
+A supplementary byte-for-byte `cmp` against the copies plan 03-12 kept under
+`target/phase03-kernel-bytes/before/` (`virtshell.elf`, `q35churnshell.elf`) also reports no
+difference (both exit 0).
+
+### Protected paths (plan 03-10)
+
+`git diff --stat 4beb5c8 HEAD -- rust-toolchain.toml port/src .cargo port/Cargo.toml
+aarch64/Cargo.toml x86_64/Cargo.toml riscv64/Cargo.toml` printed nothing: no protected path
+changed between the baseline and this measurement.
+
+One file outside that list did change in the phase and is recorded here so the owner stop can
+account for it: `flake.nix` changed in plan 03-02 (`bdb4f4b`), devshell only — a second
+toolchain derivation (`toolchainMiri`, `rust-toolchain.toml`'s four components plus `miri`)
+and two `shellHook` lines exporting `R9_MIRI_TOOLCHAIN` and appending its `bin` to `PATH`.
+The kernel package derivations still take `toolchainFor`, `rust-toolchain.toml` was not
+edited and `.cargo/` was not edited, so the kernels' inputs are unchanged; the devshell change
+cannot reach a `nix build` of a kernel package.
+
+### What this does not prove
+
+These hashes are one venue's devshell build of the working tree. They do not prove that the
+nix-sandboxed kernel derivations (`packages.x86_64-linux.kernel-x64` and
+`packages.<system>.kernel-virt`, which vendor from `Cargo.lock` through `importCargoLock`)
+build with the enlarged lock, and they are not comparable with a Linux-built kernel: the
+kernel `.rodata` carries toolchain store-path strings and the toolchain derivation differs per
+system. That check is the end-of-phase owner stop's, in `../03-OWNER-STOP.md` sections 3 to 5
+(RESEARCH A8).
+
