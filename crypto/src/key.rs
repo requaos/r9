@@ -25,6 +25,18 @@
 //! prints (`Debug` and `Display` are deliberately absent), and exposes no
 //! public accessor that returns its bytes (T-03-14).  Code inside this crate
 //! compares keys through [`Key::ct_eq`].
+//!
+//! # The read-only guarantee is type-level, not cryptographic
+//!
+//! Keyed BLAKE3 is a symmetric MAC: the key that verifies a tag is the same
+//! key that computes one.  `KeyCapability<ReadOnly>` therefore holds a
+//! `blake3_verify` key that can, mathematically, compute a tag as well as
+//! check one.  What stops a read-only holder from sealing is the type, not
+//! the cryptography: there is no sealing method on `KeyCapability<ReadOnly>`,
+//! its fields are private and no accessor returns key bytes.  Code that can
+//! read the key bytes could forge a tag; a cryptographic read-only guarantee
+//! would need a different verification value and is a design change
+//! (03-RESEARCH.md C6, assumption A5).
 
 use hkdf::Hkdf;
 use sha2::Sha256;
@@ -145,8 +157,7 @@ impl KeyCapability<ReadWrite> {
 
     /// Seal `msg` under the MAC key: the 32-byte keyed BLAKE3 tag.
     pub fn seal(&self, msg: &[u8]) -> [u8; crate::mac::BLAKE3_OUT_LEN] {
-        let _ = msg;
-        [0u8; crate::mac::BLAKE3_OUT_LEN]
+        crate::mac::blake3_keyed(self.state.k_mac.bytes(), msg)
     }
 
     /// The read-only sibling: the parent's `k_dec` unchanged, and `k_mac` as
@@ -163,8 +174,7 @@ impl KeyCapability<ReadWrite> {
 
     /// Verify a tag over `msg` under the MAC key.
     pub fn verify(&self, msg: &[u8], tag: &[u8]) -> crate::Result<()> {
-        let _ = (msg, tag);
-        Ok(())
+        crate::mac::verify_keyed(self.state.k_mac.bytes(), msg, tag)
     }
 
     /// XOR the ChaCha20 keystream under `k_dec` into `buf`, from `counter`
@@ -175,16 +185,42 @@ impl KeyCapability<ReadWrite> {
         counter: u32,
         buf: &mut [u8],
     ) -> crate::Result<()> {
-        let _ = (nonce, counter, buf);
-        Ok(())
+        crate::page::chacha20_xor(self.state.k_dec.bytes(), nonce, counter, buf)
     }
 }
 
+/// The read-only state's methods.  There is deliberately no `seal` here:
+/// the type is the read-only guarantee (see the module documentation), and
+/// the doctest pair below proves both that the rest of the example compiles
+/// and that `seal` does not.
+///
+/// # Verification example
+///
+/// A read-only holder can verify a tag the read-write parent sealed:
+///
+/// ```
+/// use crypto::key::{Key, KeyCapability};
+///
+/// let rw = KeyCapability::new(Key::from_bytes([0x11; 32]), Key::from_bytes([0x22; 32]));
+/// let tag = rw.seal(b"page");
+/// let ro = rw.read_only();
+/// assert!(ro.verify(b"page", &tag).is_ok());
+/// ```
+///
+/// The same example with the final call replaced by `seal` does not compile:
+///
+/// ```compile_fail
+/// use crypto::key::{Key, KeyCapability};
+///
+/// let rw = KeyCapability::new(Key::from_bytes([0x11; 32]), Key::from_bytes([0x22; 32]));
+/// let tag = rw.seal(b"page");
+/// let ro = rw.read_only();
+/// let _ = ro.seal(b"page");
+/// ```
 impl KeyCapability<ReadOnly> {
     /// Verify a tag over `msg` under the verification key.
     pub fn verify(&self, msg: &[u8], tag: &[u8]) -> crate::Result<()> {
-        let _ = (msg, tag);
-        Ok(())
+        crate::mac::verify_keyed(self.state.blake3_verify.bytes(), msg, tag)
     }
 
     /// XOR the ChaCha20 keystream under the inherited `k_dec` into `buf`,
@@ -195,7 +231,6 @@ impl KeyCapability<ReadOnly> {
         counter: u32,
         buf: &mut [u8],
     ) -> crate::Result<()> {
-        let _ = (nonce, counter, buf);
-        Ok(())
+        crate::page::chacha20_xor(self.state.k_dec.bytes(), nonce, counter, buf)
     }
 }
