@@ -16,14 +16,21 @@ io.rs 3, the rest ≤ 2).
 `unsafe fn`, `unsafe impl`, or `unsafe extern` token.  SAFETY comments sit
 one-per-site on every block/impl the lint can see; the lint
 (`clippy::undocumented_unsafe_blocks = "deny"`, workspace lints, opted into by
-the two gated crates only) enforces this mechanically — never the honor
+the four gated crates only) enforces this mechanically — never the honor
 system.  Sites the lint cannot see are documented per-file below (test-only
 blocks, unsafe fns, extern blocks).
 
-**Scope line (explicit, not silent):** elimination covers the aarch64 + port
-crates — the gated crates (boot-test is aarch64-only; `cargo test -p port` is
-port-only).  x86_64 + riscv64 are NEVER compiled by the gates: they are
-classified by per-file count only, get NO elimination and NO lint opt-in.
+**Scope line (explicit, not silent):** elimination covers the aarch64, port,
+crypto and ds crates — the four gated crates (boot-test is aarch64-only;
+`cargo test -p port` is port-only; `cargo test -p crypto` / `-p ds`, the
+soft-backend `crypto` leg and the two `lib/*-unknown-none-elf.json` cross legs
+cover the two new crates).  `crypto/` and `ds/` are host-tested and
+cross-checked only: no kernel crate depends on them in Phase 3, so neither is
+linked into a kernel yet (CONTEXT D-21).  x86_64 + riscv64 are NEVER compiled
+by the gates: they are classified by per-file count only, get NO elimination
+and NO lint opt-in.  Extending the lint and this audit to `x86_64` is Phase 5's
+question, when `shadow.rs` and `cryptpage.rs` land (CONTEXT D-11); it is not
+done here.
 
 ## Reconciliation (mechanical)
 
@@ -31,15 +38,121 @@ classified by per-file count only, get NO elimination and NO lint opt-in.
 |-----|-------|
 | aarch64 unsafe blocks+impls (lint-visible) | 129 |
 | port unsafe blocks+impls, non-test, production (lint-visible) | 23 |
-| **SAFETY annotations (comment immediately preceding a site)** | **152** |
+| crypto unsafe blocks+impls (lint-visible) | 0 |
+| ds unsafe blocks+impls, non-test, production (lint-visible) | 1 |
+| **SAFETY annotations (comment immediately preceding a site)** | **153** |
 | port test-only blocks (cfg(test) crate-root test module — the pin/stress arena scaffolding; not lint-gated, never shipped) | 10 |
 | unsafe fns (documented by `# Safety` / fn-level docs, not lint-checked) | 16 |
 | unsafe extern blocks (not lint-checked; items doc'd individually) | 6 |
 
-129 + 23 = 152: the site count reconciles with the SAFETY-annotation count
-exactly (measured by script: each unsafe block/impl immediately preceded by
+129 + 23 + 1 + 0 = 153: the site count reconciles with the SAFETY-annotation
+count exactly (measured by script: each unsafe block/impl immediately preceded by
 a SAFETY comment).  The 10 test-only blocks are the moved pin/stress tests'
 arena setups + raw write/read backs (`port/src/allocator_tests.rs`).
+
+The `aarch64` figure of 129 above is kept exactly as it was measured; Phase 3
+research found 7 undocumented blocks in `aarch64/` under `cargo xtask clippy
+--arch aarch64 --config virtshell` (`platform/virt/rtc.rs:75`, `proc.rs:439`,
+`470`, `1823`, `2753`, `textcopy.rs:158`, `172`), so that figure may be stale.
+It was not re-derived here because it is outside Phase 3.
+
+**Phase 3 delta (crypto/ and ds/ join, 2026-11-24):** two workspace crates join
+the contract (CONTEXT D-09, D-10, D-11, D-12).  `ds/` is per-module forbidden
+with `ds/src/tpht/` as its one unsafe-holding module; it adds **1** lint-visible
+block (`FlattenedTphtShard::deref_tiny`'s unchecked arena read,
+`ds/src/tpht/flattened.rs:440`), **0** unsafe impls, **0** unsafe fns, **0**
+unsafe extern blocks and **0** test-only blocks.  `crypto/` is crate-level
+`#![forbid(unsafe_code)]` and adds **0** sites of every kind.  SAFETY
+annotations 152 → 153; ds lint-visible 0 → 1, crypto 0 → 0; the reconciliation
+holds.  Neither crate is linked into a kernel in this phase, so the kernel-byte
+evidence is unchanged (D-21).
+
+## ds/ and crypto/ (Phase 3)
+
+Both crates take `[lints] workspace = true`, so
+`clippy::undocumented_unsafe_blocks = "deny"` applies to each (CONTEXT D-11);
+`cargo xtask clippy` (the default form hosted CI runs) rejects an undocumented
+`unsafe` block in either.  The probe that proves it is recorded in
+`.planning/phases/03-guide-phase-1-crypto-and-ds-foundations/evidence/closing-suite.md`
+(`VERDICT clippy-rejects-undocumented-unsafe`).
+
+### Module states (the regression locks)
+
+| Module | State |
+|---|---|
+| `ds/src/tpht/` | **the named unsafe-holding module this phase** — 1 block (`flattened.rs:440`, `deref_tiny`); `tpht/mod.rs` and `tpht/chained.rs` hold none |
+| `ds/src/tpht/feistel.rs` | unsafe-free, `#![forbid(unsafe_code)]` (the safe submodule inside `tpht`) |
+| `ds` reserved Roaring SIMD module | **approved by D-09 and D-20, NO CODE** until Phase 5; it will be mounted at the crate root with `#[path]` because the forbid on `roaring` reaches submodules |
+| `ds/src/roaring.rs` | unsafe-free, `#[forbid(unsafe_code)]` |
+| `ds/src/setops.rs` | unsafe-free, `#[forbid(unsafe_code)]` (the D-20 kernel seam) |
+| `ds/src/clientset.rs` | unsafe-free, `#[forbid(unsafe_code)]` |
+| `crypto/` | crate-level `#![forbid(unsafe_code)]`, **0 sites** |
+
+A third unsafe-holding module in `ds/` needs the owner's approval (D-09).  The
+`crypto/` forbid covers r9's own code, not the pinned crates it wraps (D-10).
+
+### Classification — `ds/src/tpht/`
+
+| File + identifier | Kind | Why it is needed | Invariant |
+|---|---|---|---|
+| `ds/src/tpht/flattened.rs:440` `FlattenedTphtShard::deref_tiny` | block ×1 (`get_unchecked` on the arena) | DS-03 requires one arena slot read with no header read; the bound check is elided on that path.  The equivalent safe index (`&self.arena[slot]`) is what every other reader uses (`read_value`) | `slot_index` masks the slot with `self.slot_mask`, and `with_probe` allocates the arena with exactly `slot_mask + 1` slots (`HOME_SLOTS * num_blocks`).  Both quantities are fixed in the constructor and never mutated, so `slot < self.arena.len()` for every block index and every tiny pointer, including a pointer that runs past the arena end |
+
+There is no `unsafe fn`, `unsafe impl`, `unsafe extern` block or test-only
+`unsafe` block anywhere in `ds/`, and no `unsafe` site at all in `crypto/`.
+
+### Third-party dependency record (D-10 discretion item)
+
+`crypto/` wraps six pinned crates.io crates and `ds/` takes one dev-dependency
+oracle; every one of them is compiled from upstream sources that contain
+`unsafe` of their own.  **Upstream sites are not enumerated or audited here**:
+the r9 contract governs r9's own code, and the pins, the committed `Cargo.lock`
+and the provenance comments are the supply-chain record (CONTEXT D-04, D-10).
+The `unsafe` counts below are raw `grep -ow unsafe` counts over each crate's
+upstream `src/` directory (`03-RESEARCH.md` F10; the counts for the crates F10
+does not list were taken the same way at audit time).  They include code for
+backends r9 never selects — SIMD, assembly and C paths that the `pure` and
+`no_*` features or the soft-float kernel specs switch off.
+
+Direct dependencies of `crypto/` (all `default-features = false`, exact `=`
+pins, one provenance comment each in `crypto/Cargo.toml`):
+
+| Crate | Version | Features r9 enables | Contains upstream `unsafe`? | Raw `unsafe` tokens |
+|---|---|---|---|---|
+| `sha2` | `=0.11.1` | none (no default features) | yes — software and hardware SHA paths | 39 |
+| `hmac` | `=0.13.0` | none | no | 0 |
+| `hkdf` | `=0.13.0` | none | no | 0 |
+| `chacha20` | `=0.10.2` | `cipher` | yes — NEON/AVX2/SSE2 backends | 66 |
+| `blake3` | `=1.8.7` | `pure`, `no_sse2`, `no_sse41`, `no_avx2`, `no_avx512`, `no_neon` | yes — SIMD intrinsics and C/assembly backends | 238 |
+| `zeroize` | `=1.9.2` | none | yes — the volatile-write primitive | 21 |
+
+Transitive crates the six above bring into `Cargo.lock` (version only; r9 sets
+no feature on any of them):
+
+| Crate | Version | Contains upstream `unsafe`? | Raw `unsafe` tokens |
+|---|---|---|---|
+| `digest` | `0.11.3` | no | 0 |
+| `cipher` | `0.5.2` | no | 0 |
+| `inout` | `0.2.6` | yes | 31 |
+| `crypto-common` | `0.2.2` | no | 0 |
+| `block-buffer` | `0.12.1` | yes | 22 |
+| `hybrid-array` | `0.4.15` | yes | 43 |
+| `typenum` | `1.20.1` | no | 0 |
+| `cpufeatures` | `0.3.1` | yes — CPUID / `mrs` feature detection | 11 |
+| `cfg-if` | `1.0.5` | no | 0 |
+| `arrayvec` | `0.7.8` | yes | 58 |
+| `constant_time_eq` | `0.4.2` | yes | 54 |
+| `ctutils` | `0.4.8` | yes | 1 |
+| `cmov` | `0.5.4` | yes | 28 |
+| `libc` | `0.2.191` | yes — pulled by `cpufeatures` on the hosts that use it | 810 |
+| `cc` | `1.11.3` | yes — `blake3`'s build dependency | 36 |
+| `shlex` | `2.0.1` | yes — `cc`'s dependency | 7 |
+| `find-msvc-tools` | `0.1.15` | yes — `cc`'s dependency | 55 |
+
+`roaring =0.11.5` is a **dev-dependency of `ds/` only**: it is a test oracle,
+it never links into a kernel, and it never reaches a `cargo build` or a
+bare-metal cross leg (CONTEXT D-19; `Cargo.lock` records it with no
+dependencies at this feature set).  It is not part of the audited surface and
+is listed here only so the record is complete.
 
 **08-02 delta (the phase-08 waker bridge):** `port/src/devip/waker.rs` — the
 smoltcp socket-waker → r9 wake bridge (D-05) — is the ONE named
@@ -128,6 +241,8 @@ uartpl011 (tree-wide: no driver touches io.rs directly anymore).  The
 | aarch64 `&'static mut` signatures: `root_page_table`, `kernel_pagetable`, `new_user_proc`, `allocate_virtpage`, `recursive_root_page_table`; port/devcons `Lock<Option<&'static mut dyn Uart>>` + the Uart factory | 'static-mut refs | guard newtypes (`RootTableGuard`, `ProcGuard`, `VirtPage4KGuard`), shared `&'static` refs |
 
 ## Remaining sites — classification (aarch64 + port)
+
+(The two Phase 3 crates are classified in `## ds/ and crypto/ (Phase 3)` above.)
 
 ### `encapsulated` — unsafe lives only inside a named safe-ish wrapper
 
