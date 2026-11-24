@@ -22,7 +22,7 @@ Standing constraint on every requirement below: the golden invariant (boots to r
 
 ### Design Lock and Flag Reservation (guide Phase 0)
 
-- [ ] **DSGN-01**: A threat model document is committed stating in-scope protections (pages at rest, stale-frame disclosure across KeyIDs, stray kernel reads, packet splicing, injection, replay) and out-of-scope attacks (DRAM bus probing, cold boot, kernel-context code execution; SEV-SNP or TDX named as the remedy) (AC-T01)
+- [x] **DSGN-01**: A threat model document is committed stating in-scope protections (pages at rest, stale-frame disclosure across KeyIDs, stray kernel reads, packet splicing, injection, replay) and out-of-scope attacks (DRAM bus probing, cold boot, kernel-context code execution; SEV-SNP or TDX named as the remedy) (AC-T01)
 - [ ] **DSGN-02**: The corrected C prototypes called for by the guide's Phase 0 are committed inside r9 (Harvey is not edited), with their landing location decided against the repository layout at HEAD (IG section 8)
 - [ ] **DSGN-03**: Four `rfork` flag bits are reserved as named constants — `RFCKEY` 1<<18, `RFROBASE` 1<<19, `RFRANDMEM` 1<<20, `RFNOLEGACY` 1<<21 — in r9's rfork flag definitions only (`x86_64/src/proc.rs` and `aarch64/src/syscall.rs`); Harvey is not changed, a recorded deviation from the guide's "reserve bits 18-20 in `libc.h`"; verified not defined anywhere at HEAD, despite AC section 1.1 (IG-D03; owner decisions 2026-11-22: W11 resolved, `RFNOLEGACY` = `1 << 21`, r9-only reservation)
 - [ ] **DSGN-04**: A host test pins the four reserved values and asserts they overlap no existing `rfork` flag (highest bit in use today is 14), and the reservation changes no `rfork` behaviour (behaviour arrives in Phase 6 for `RFNOLEGACY` and Phase 7 for the other three)
@@ -234,7 +234,7 @@ Which phases cover which requirements. Each requirement maps to exactly one phas
 | HARN-06 | Phase 1 | Complete |
 | HARN-07 | Phase 1 | Complete |
 | HARN-08 | Phase 1 | Complete |
-| DSGN-01 | Phase 2 | Pending |
+| DSGN-01 | Phase 2 | Complete |
 | DSGN-02 | Phase 2 | Pending |
 | DSGN-03 | Phase 2 | Pending |
 | DSGN-04 | Phase 2 | Pending |

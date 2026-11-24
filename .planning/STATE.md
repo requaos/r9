@@ -5,16 +5,16 @@ milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
 current_phase: 2
 current_phase_name: Guide Phase 0 - Design Lock and rfork Flag Reservation
 status: executing
-stopped_at: Phase 2 context gathered
-last_updated: "2026-11-24T02:00:03.147Z"
+stopped_at: Phase 2 plan 02-02 complete (threat model committed); 02-01, 02-03 to 02-06 not yet executed
+last_updated: "2026-11-24T02:21:21.096Z"
 last_activity: 2026-11-23
 last_activity_desc: Phase 01 complete, transitioned to Phase 2
-state_head: 5134211805ce0b86493b04abf3ed9c9582eb645c
+state_head: 397baefeb089306588c9397d4cb04e2a8fdece2c
 progress:
   total_phases: 4
   completed_phases: 1
   total_plans: 40
-  completed_plans: 34
+  completed_plans: 35
   percent: 25
 ---
 
@@ -175,6 +175,6 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 
 ## Session Continuity
 
-Last session: 2026-11-23T23:08:09.002Z
-Stopped at: Phase 2 context gathered
-Resume file: .planning/phases/02-guide-phase-0-design-lock-and-rfork-flag-reservation/02-CONTEXT.md
+Last session: 2026-11-24T02:21:21.015Z
+Stopped at: Phase 2 plan 02-02 complete (threat model committed); 02-01, 02-03 to 02-06 not yet executed
+Resume file: .planning/phases/02-guide-phase-0-design-lock-and-rfork-flag-reservation/02-02-SUMMARY.md
