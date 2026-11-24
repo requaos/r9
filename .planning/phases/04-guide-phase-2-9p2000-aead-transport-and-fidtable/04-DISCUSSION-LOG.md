@@ -15,7 +15,7 @@
 
 | Option | Description | Selected |
 |--------|-------------|----------|
-| Every byte before the MAC (Recommended) | Whole 24-byte header including Pad and ExtTLVs Length, then TLVs, then ciphertext, as one contiguous slice | ✓ |
+| Every byte before the MAC (Recommended) | Whole header (28 bytes; first written as 24 in error) including Pad and ExtTLVs Length, then TLVs, then ciphertext, as one contiguous slice | ✓ |
 | RFC formula as written | Only the seven listed fields; Pad and ExtTLVs Length unauthenticated | |
 | All fields, Pad must be zero | As the first, plus non-zero Pad rejected | |
 
@@ -222,6 +222,21 @@
 | Settle N11 fully now | Two checks under two keys | |
 
 **User's choice:** At receipt, before parsing; rest to Phase 5
+
+---
+
+## After research (2026-11-24)
+
+The researcher reported contradictions with CONTEXT.md. The owner first asked whether the header is the part that must fit a 12-byte nonce plus an 8-byte truncated per-connection MAC; Claude explained that the header carries only the 8-byte sequence counter, the 12-byte ChaCha20 nonce is built locally from a derived 4-byte prefix plus that counter, and the 8-byte truncated tag belongs to `StatelessCap` in its own TLV. The owner then ruled:
+
+| Question | Options | Owner's choice |
+|----------|---------|----------------|
+| Header size (CONTEXT said 24, fields sum to 28) | Field list stands, 28 bytes (Recommended) / Trim to 24 | Keep the field list, 28 bytes |
+| Qid volatility class collides with QTEXCL, QTAPPEND, QTDIR | Separate class byte (Recommended) / In qtype for aead only / Renumber | Its own byte |
+| Tauth exchange bytes | Standard afid reads and writes (Recommended) / Bytes inside Tauth and Rauth | Standard reads and writes on the auth fid |
+| TCG gate venue | Linux host as in Phase 2 (Recommended) / amd64 container | The x86_64 Linux host |
+
+Applied without asking, as plain corrections: the codec covers `Rerror` and `Tflush` / `Rflush`; the stream data field is on `Rstream`; Phase 2's ".text identical" stop rule is not reused.
 
 ---
 
