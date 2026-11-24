@@ -57,8 +57,8 @@ fn chacha20_pin_rfc8439_2_4_2() {
                     1639d624e65152ab8f530c359f0861d8\
                     07ca0dbf500d6a6156a38e088a22b65e\
                     52bc514d16ccf806818ce91ab7793736\
-                    5af90bbf74a35be6b40b8edf2785e428\
-                    744d";
+                    5af90bbf74a35be6b40b8eedf2785e42\
+                    874d";
 
     let mut buf = *plaintext;
     chacha20_xor(&RFC_KEY, &RFC_CIPHER_NONCE, 1, &mut buf).expect("counter 1 is in range");

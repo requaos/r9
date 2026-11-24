@@ -24,6 +24,8 @@
 //! counter can never wrap.  A call that would need block index `u32::MAX`
 //! returns `Err(Error::CounterOverflow)` and writes nothing.
 
+use chacha20::cipher::{KeyIvInit, StreamCipher, StreamCipherSeek};
+
 /// The ChaCha20 key length in bytes (RFC 8439 §2.3: 256 bits).
 pub const CHACHA20_KEY_LEN: usize = 32;
 
@@ -45,10 +47,11 @@ pub const CHACHA20_MAX_BLOCKS: u64 = u32::MAX as u64;
 /// Block index `u32::MAX` is never produced: that call returns
 /// `Err(Error::CounterOverflow)` and no block.
 pub fn chacha20_block(key: &[u8; 32], nonce: &[u8; 12], counter: u32) -> crate::Result<[u8; 64]> {
-    // RED skeleton (plan 03-03): the surface compiles and the pin fails on
-    // its assertion, not on a compile error.
-    let _ = (key, nonce, counter);
-    Ok([0u8; CHACHA20_BLOCK_LEN])
+    // The block function is the keystream applied to 64 zero bytes
+    // (RFC 8439 §2.3: the keystream block is the serialized state).
+    let mut block = [0u8; CHACHA20_BLOCK_LEN];
+    chacha20_xor(key, nonce, counter, &mut block)?;
+    Ok(block)
 }
 
 /// XOR the ChaCha20 keystream into `buf` (RFC 8439 §2.4), starting at block
@@ -65,7 +68,29 @@ pub fn chacha20_xor(
     counter: u32,
     buf: &mut [u8],
 ) -> crate::Result<()> {
-    // RED skeleton (plan 03-03): returns Ok without touching a byte.
-    let _ = (key, nonce, counter, buf);
-    Ok(())
+    // A zero-length buffer touches no block, so it is Ok for every counter
+    // value, u32::MAX included (RFC 8439 §2.4: no plaintext, no keystream).
+    if buf.is_empty() {
+        return Ok(());
+    }
+
+    // The last usable block index is u32::MAX - 1: the pinned crate's own
+    // rule (`remaining_blocks = u32::MAX - block_pos`) is restated here so
+    // the limit cannot move silently with a crate update, and it is enforced
+    // before any byte of `buf` is written (T-03-09).
+    let blocks = (buf.len() as u64).div_ceil(CHACHA20_BLOCK_LEN as u64);
+    if blocks > CHACHA20_MAX_BLOCKS - u64::from(counter) {
+        return Err(crate::Error::CounterOverflow);
+    }
+
+    // A thin wrapper (03-RESEARCH.md Pattern 1): the upstream cipher state
+    // never appears in this signature (D-18).  The counter is the block
+    // index; `try_seek` positions the cipher by byte.
+    let mut cipher = chacha20::ChaCha20::new(key.into(), nonce.into());
+    cipher
+        .try_seek(u64::from(counter) * CHACHA20_BLOCK_LEN as u64)
+        .map_err(|_| crate::Error::CounterOverflow)?;
+    cipher
+        .try_apply_keystream(buf)
+        .map_err(|_| crate::Error::CounterOverflow)
 }
