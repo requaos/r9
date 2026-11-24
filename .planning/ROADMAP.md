@@ -189,7 +189,7 @@ Plans:
 - [ ] 03-11-PLAN.md
 - [x] 03-12-PLAN.md
 - [x] 03-13-PLAN.md
-**Open questions**: W3 (MAC primitive; also read by Phase 4), W5 (`unsafe` in `ds/src/tpht/` versus `forbid(unsafe_code)` on `ds/`), W6 (TPHT home block 4 versus 16 slots). Notes N1 (ChaCha20 64-bit counter plus 96-bit nonce exceeds the 128-bit state) and N2 (HEAD's lint and unsafe layout differs from the guide). Landing sites `crypto/` and `ds/` do not exist at HEAD; add them to the workspace members.
+**Open questions**: Settled 2026-11-24 (see PROJECT.md Key Decisions): W3 (MAC primitive; also read by Phase 4), W5 (`unsafe` in `ds/src/tpht/` versus `forbid(unsafe_code)` on `ds/`), W6 (TPHT home block 4 versus 16 slots). Notes N1 (ChaCha20 64-bit counter plus 96-bit nonce exceeds the 128-bit state) and N2 (HEAD's lint and unsafe layout differs from the guide). Landing sites `crypto/` and `ds/` do not exist at HEAD; add them to the workspace members.
 
 #### Phase 4: Guide Phase 2 - 9P2000.aead Transport and FidTable
 **Goal**: r9 speaks the authenticated, encrypted `9P2000.aead` dialect with replay and splicing protection and a single-read fid table, while plain 9P2000 peers keep working.

@@ -3,7 +3,7 @@
 **Defined:** 2026-11-22
 **Core Value:** The OS boots to rio on QEMU q35 at every commit.
 
-Source tags in parentheses point at `.planning/intel/constraints.md` entries (IG = implementation guide, AC = architecture compendium, RFC, PT = permissions and test plan) or at owner direction. "Phase N" always means the GSD phase number in ROADMAP.md; where the source documents use their own label it is written "guide Phase N". Open questions (W1-W10) are not resolved here; each requirement that depends on one names it.
+Source tags in parentheses point at `.planning/intel/constraints.md` entries (IG = implementation guide, AC = architecture compendium, RFC, PT = permissions and test plan) or at owner direction. "Phase N" always means the GSD phase number in ROADMAP.md; where the source documents use their own label it is written "guide Phase N". Open questions W1, W2, W4 and W7 to W10 are not resolved here; each requirement that depends on one names it, and the Phase 3 items W3, W5 and W6 were settled on 2026-11-24 (PROJECT.md Key Decisions).
 
 Standing constraint on every requirement below: the golden invariant (boots to rio on QEMU q35) holds at every commit, and the verification discipline of IG-V01 applies (RED pin, implementation, GREEN twice, pin advance).
 
@@ -31,23 +31,23 @@ Standing constraint on every requirement below: the golden invariant (boots to r
 ### Crypto Foundations (guide Phase 1)
 
 - [x] **CRYP-01**: `crypto/` provides RFC 5869 HKDF-SHA256 built on HMAC-SHA256, passing RFC 5869 and RFC 4231 vectors, replacing the placeholder XOR fold (IG-A01 item 1)
-- [ ] **CRYP-02**: `crypto/` provides a scalar ChaCha20 reference (`crypto/src/page.rs`) passing published vectors, with the counter and nonce construction fixed first (PROJECT.md note N1) (IG-A01 item 3, RFC-P01)
-- [ ] **CRYP-03**: `crypto/` provides BLAKE3 keyed hash and tree-hash modes with 32-byte output passing the official test vectors, applying the MAC-primitive answer to W3 (RFC-P01, IG-D11)
-- [ ] **CRYP-04**: The key hierarchy (`K_file = HKDF-Expand(K_user, Qid.path || Qid.vers, 32)`, transient and session keys) and the `KeyCapability` typestate exist: `ReadOnly { k_dec, blake3_verify }` cannot produce a valid integrity tag, `ReadWrite { k_dec, k_mac }` can, all key material is `Zeroizing<[u8; 32]>`, and siblings inheriting shared read-only base code keep the parent's `k_dec` (IG-M01, IG-A01 item 2, IG-P01)
+- [ ] **CRYP-02**: `crypto/` provides a scalar ChaCha20 reference (`crypto/src/page.rs`) passing published vectors, with the RFC 8439 layout: a 32-bit block counter and a 96-bit nonce (N1 settled 2026-11-24, D-06) (IG-A01 item 3, RFC-P01)
+- [ ] **CRYP-03**: `crypto/` provides BLAKE3 keyed hash and tree-hash modes with 32-byte output passing the official test vectors; Keyed BLAKE3 is the only MAC (W3 settled 2026-11-24) (RFC-P01, IG-D11)
+- [ ] **CRYP-04**: The key hierarchy (`K_file = HKDF-Expand(K_user, Qid.path || Qid.vers, 32)`, transient and session keys) and the `KeyCapability` typestate exist in `crypto/` (D-22): `ReadOnly { k_dec, blake3_verify }` cannot produce a valid integrity tag (a type-level guarantee: keyed BLAKE3 is symmetric), `ReadWrite { k_dec, k_mac }` can, all key material is `Zeroizing<[u8; 32]>`, and siblings inheriting shared read-only base code keep the parent's `k_dec` (IG-M01, IG-A01 item 2, IG-P01)
 
 ### Data Structures (guide Phase 1)
 
-- [ ] **DS-01**: `ds/` provides `FlattenedTphtShard` with a 64-byte `#[repr(C, align(64))]` `TphtBucketHeader`, seqlock, quotiented slots at the capacity settled by W6, and a host test showing over 90% of lookups resolve in the home block at target occupancy (IG-M06, IG-D09)
+- [ ] **DS-01**: `ds/` provides `FlattenedTphtShard` with a 64-byte `#[repr(C, align(64))]` `TphtBucketHeader`, seqlock, quotiented slots in 16 header slots, with the measured spill threshold `SPILL_THRESHOLD` (W6 settled 2026-11-24), and a host test showing over 90% of lookups resolve in the home block at target occupancy (IG-M06, IG-D09)
 - [x] **DS-02**: Feistel quotienting is bijective: key reconstruction from home block index and remainder round-trips for all tested keys (IG-M05)
 - [x] **DS-03**: `deref_tiny(key, tiny_ptr)` performs exactly one memory access with zero header probes, shown by a model-based test (IG-M06)
 - [x] **DS-04**: `ChainedTphtOverflow` implements two-choice dereference banks of 255 overflow nodes with a two-phase `WRITING` (0xFF) publication, reaching over 95% fill without allocation failure and supporting full-key verification on candidate match (IG-M07, IG-A01 item 12)
 - [x] **DS-05**: `ds/src/roaring.rs` provides a Roaring bitmap (array, bitmap and run containers) whose union, intersection, difference and `andnot` match a reference model on randomized inputs (IG-D10)
 - [x] **DS-06**: `ClientSet` is `Empty | Single | Inline{count, ids[4]} | Roaring`, uses zero heap for up to four clients, upgrades beyond four, and collapses contiguous ids into run containers (IG-M08, RFC-P08)
-- [x] **DS-07**: Funnel Hashing, if present, serves only write-once ephemeral scratchpads; no page cache, FidTable, or Venti index uses it (IG-D09, IG-A01 item 11)
+- [x] **DS-07**: Funnel Hashing, if present, serves only write-once ephemeral scratchpads; no page cache, FidTable, or Venti index uses it. Funnel Hashing is not built in Phase 3; the restriction is recorded in the `ds/` crate documentation (D-16) (IG-D09, IG-A01 item 11)
 
 ### Lint and Audit (guide Phase 1)
 
-- [x] **LINT-01**: `crypto/` and `ds/` join the workspace under the lint contract settled by W5 and note N2; every unsafe site carries a `// SAFETY:` comment, `UNSAFE-AUDIT.md` lists the new sites, and `cargo xtask test`, `check` and `clippy` run both crates on the host toolchain (IG-D07, IG-V01)
+- [x] **LINT-01**: `crypto/` and `ds/` join the workspace under the lint contract settled on 2026-11-24: `crypto/` is crate-level `forbid(unsafe_code)`, `ds/` uses per-module forbids with `ds/src/tpht/` as the unsafe-holding module and one reserved Roaring SIMD module, and both are lint-opted-in; every unsafe site carries a `// SAFETY:` comment, `UNSAFE-AUDIT.md` lists the new sites, and `cargo xtask test`, `check` and `clippy` run both crates on the host toolchain (IG-D07, IG-V01)
 
 ### 9P2000.aead Wire and FidTable (guide Phase 2)
 

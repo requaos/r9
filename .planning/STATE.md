@@ -183,15 +183,12 @@ Full log is the PROJECT.md Key Decisions table. Recent:
 - [Phase 03]: Plan 03-08: Miri is over the 120-second budget and reported, not fixed by cutting coverage: 981 s then 315/329 s at the floors for tpht-spill, 628 s then 402 s for tpht-hit-rate; seeds, tests and native sizes unchanged (plan 03-07 precedent)
 - [Orchestrator 2026-11-24]: Plan 03-08 Miri over-budget deviation ACCEPTED — both runs are rc 0 over 64 seeds with no Undefined Behavior or data race; only feedback latency is out of budget. Coverage, seeds and native sizes stay unchanged. Carry to phase-end review: the 120 s budget in 03-VALIDATION.md is not met by tpht-spill/tpht-hit-rate, so a later phase should recalibrate it or split the Miri step; no plan edit authorized now.
 
-### Open Questions (ten warnings, approved to be carried, not resolved)
+### Open Questions (seven warnings, approved to be carried, not resolved)
 
 Settle each when its phase is planned. Detail: `.planning/INGEST-CONFLICTS.md`. Eleven notes (N1-N11) are in PROJECT.md; N9 to N11 are source contradictions the Phase 2 threat model found untracked (stale-frame mechanism, plaintext in legacy bounce frames, where the wire MAC is verified).
 
 | ID | Settle in | Question |
 |----|-----------|----------|
-| W3 | Phase 3 | MAC primitive: Keyed BLAKE3 only, or where Poly1305 applies (also read by Phase 4) |
-| W5 | Phase 3 | `unsafe` in `ds/src/tpht/` versus `forbid(unsafe_code)` on `ds/` |
-| W6 | Phase 3 | TPHT home block 4 versus 16 slots |
 | W1 | Phase 4 | Wire header layout and AAD contents (`Pad`, `ExtTLVs Length`) |
 | W2 | Phase 4 | 24-byte `StatelessCap` in an 8-byte `FidHandle` field |
 | W4 | Phase 4 | Session key scope: per FID versus per connection and direction |
@@ -209,7 +206,7 @@ None yet.
 - Unpushed work, checked against the local remote-tracking refs on 2026-11-24: `origin/main` is `3d01f07` (the gated Phase 2 state), and local `main` is ahead by the phase-completion evidence, tracking, review, verification and UAT commits made after it; they stay local until the owner approves a push (CONTEXT D-26). The Phase 2 branch `phase-02/design-lock` is at `f8d077d` (gated commit `4624ea2` plus two return commits). Earlier unpushed work is published: r9 `5b8b70a` (planning documents plus `legacy/`, 53 MB) and `6ee45b5` are on `origin/main`, and Harvey `25d97dc4d` is on `origin/master`.
 - Owed checks at checkpoint r9 `116bcc2`: the owner's linux `nix build .#boot-iso --rebuild` (expected `sha256-TIzwBaHF0R4m31l6EbW2IU3rkUl73g6ljlNE0S5hGFY=`), and hosted CI on r9 `116bcc2` and Harvey `bd7a6982a`.
 - Phase 20 of the Harvey-rooted work never ran `/gsd-secure-phase` (no SECURITY.md).
-- Docs pin r9 at `c787ce9`; HEAD is 60 commits later with no `crypto/`, `ds/`, `kern/`, `sys/`, `venti/`. Re-verify every landing-site path when its phase is planned.
+- Docs pin r9 at `c787ce9`; HEAD is far later, and `crypto/` and `ds/` now exist and are host-tested while `kern/`, `sys/` and `venti/` are still absent. Re-verify every landing-site path when its phase is planned.
 - S6 x86_64 KVM leg: scripted and statically checked, PENDING-OWNER. Plan 06 must run `spikes/s6/linux-x86_64.sh` on the x86_64 Linux host (writable `/dev/kvm`, the S3 scratch Harvey tree, the r9 clone at `116bcc2`) before the pass-1 checkpoint.
 - Mac store copy-back: nix copy --from ssh-ng://lima-harvey as the owner's user is refused (require-sigs=true, trusted-users=root). Pass 2 needs a remote-builder configuration or an owner-approved store-policy change; the case names themselves round-trip cleanly in a same-volume chroot store.
 
@@ -238,6 +235,8 @@ Items carried over from the legacy-final checkpoint (HANDOFF.md):
 | Defect | WINDOWS #66: x86_64 triple fault under 8-way soak | Fix on an x86_64 host venue (SMP-06) | legacy-final | v3.2 |
 | Test gap | `#!` recursion cap has no host or live test | Unscheduled; add a test when exec is next touched | legacy-final | - |
 | Prerequisite | SMP: aarch64 per-CPU current frame, kernel stack, proc pointers; x86_64 per-CPU `Mach` mapping (FP ownership already per-CPU) | Phase 8 (SMP-02) | legacy-final | v3.2 |
+| Lint | `cargo xtask clippy --arch aarch64 --config virtshell` fails at HEAD on 7 undocumented unsafe blocks in `aarch64/` (`platform/virt/rtc.rs:75`, `proc.rs:439`, `470`, `1823`, `2753`, `textcopy.rs:158`, `172`); `UNSAFE-AUDIT.md`'s aarch64 count of 129 may be stale | Pre-existing; found by Phase 3 research; outside Phase 3 | Phase 3 | - |
+| Design | TPHT writer assigns tiny pointers 1..=16 only; compendium 4.3 neighbourhood displacement (17..=255) and clock-nibble eviction are not built | Not a Phase 3 requirement; for owner review | Phase 3 | - |
 
 The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planning/legacy/WINDOWS.md`; re-home open entries to a live file before updating them.
 

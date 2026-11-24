@@ -64,8 +64,10 @@ The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHALL**, **SHALL NOT**, **
 
 The protocol mandates two core cryptographic primitives for data-plane traffic:
 
-1. **Confidentiality:** ChaCha20 stream cipher operating with 64-bit block counters and 96-bit nonces.
-2. **Integrity & Authenticity:** Keyed BLAKE3 operating in tree-hashing mode. BLAKE3 computes 1KB tree chunks across parallel vector lanes, achieving line-rate processing exceeding 10 GB/s per core and breaking the serial accumulation bottlenecks of legacy message authentication codes.
+1. **Confidentiality:** ChaCha20 stream cipher in the RFC 8439 layout, with a 32-bit block counter and a 96-bit nonce.
+2. **Integrity & Authenticity:** Keyed BLAKE3 operating in tree-hashing mode. BLAKE3 computes 1KB tree chunks across parallel vector lanes, achieving line-rate processing exceeding 10 GB/s per core and breaking the serial accumulation bottlenecks of legacy message authentication codes. Keyed BLAKE3 is the only MAC of this protocol; Poly1305 is not used, and [RFC8439] is cited for ChaCha20 only.
+
+Amended 2026-11-24 (r9 Phase 3, decisions D-05 to D-08): item 1 previously read "64-bit block counters and 96-bit nonces", which asks 160 bits of ChaCha20's 128 bits of counter and nonce state; the RFC 8439 layout above (a 32-bit block counter and a 96-bit nonce) is the operative reading. Where this document says "HMAC-BLAKE3" (section 5), it means BLAKE3's keyed mode with the output truncated, and no HMAC is built over BLAKE3. The rule that extends the 8-byte wire sequence nonce to the 12-byte cipher nonce is settled in r9 Phase 4.
 
 ### 3.2 Key Hierarchy & Derivation
 
@@ -570,7 +572,7 @@ This document specifies a formal protocol dialect name for use in 9P protocol ve
 * **[RFC2119]** Bradner, S., "Key words for use in RFCs to Indicate Requirement Levels", BCP 14, RFC 2119, March 1997.
 * **[RFC8174]** Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC 2119 Key Words", BCP 14, RFC 8174, May 2017.
 * **[RFC5869]** Krawczyk, H. and P. Eronen, "HMAC-based Extract-and-Expand Key Derivation Function (HKDF)", RFC 5869, May 2010.
-* **[RFC8439]** Nir, Y. and A. Langley, "ChaCha20 and Poly1305 for IETF Protocols", RFC 8439, June 2018.
+* **[RFC8439]** Nir, Y. and A. Langley, "ChaCha20 and Poly1305 for IETF Protocols", RFC 8439, June 2018 (cited for ChaCha20 only).
 
 ### 13.2 Informative References
 
