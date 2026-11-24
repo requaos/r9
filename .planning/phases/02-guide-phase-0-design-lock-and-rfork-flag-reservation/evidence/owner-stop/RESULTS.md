@@ -98,3 +98,4 @@ EVIDENCE stop-gate-full: `gate-full.log` `HEAD=4624ea2f0cb45c81870dcc881d544d7d3
 - `full/out/secret-scan.txt` reports a clean credential scan, `full/out/survivors.txt` reports
   no surviving qemu/Xvfb/drawterm processes, and no credential string appears in the round-2
   logs; nothing needed redaction.
+VERDICT stop-main-push: PASS 3d01f071efda9ed0720f1a07c4a6db0c7af8f4c5
