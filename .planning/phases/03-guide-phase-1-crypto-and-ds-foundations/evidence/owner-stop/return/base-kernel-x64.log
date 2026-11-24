@@ -1,5 +1,2 @@
 HEAD=4beb5c8eea27f2f7c586a9cedfbc3bc675c6bae1
-this derivation will be built:
-  /nix/store/p4fcms86xp6bq1qkgf4i9ld62b9kls8y-r9-kernel-x64-4beb5c8.drv
-building '/nix/store/p4fcms86xp6bq1qkgf4i9ld62b9kls8y-r9-kernel-x64-4beb5c8.drv'...
 EXIT=0

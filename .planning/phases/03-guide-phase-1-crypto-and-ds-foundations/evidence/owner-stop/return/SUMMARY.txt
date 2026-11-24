@@ -1,5 +1,5 @@
 PUSHED-TIP 95fe66aaadde14cb8b8fa8197f6b0547ea7b7898
-SCRIPT-EXIT 1
+SCRIPT-EXIT 0
 -- base-kernel-virt.log
 HEAD=4beb5c8eea27f2f7c586a9cedfbc3bc675c6bae1
 EXIT=0
@@ -12,9 +12,18 @@ EXIT=0
 -- boot-iso-rebuild.log
 HEAD=95fe66aaadde14cb8b8fa8197f6b0547ea7b7898
 EXIT=0
+-- host-check.log
+HEAD=95fe66aaadde14cb8b8fa8197f6b0547ea7b7898
+EXIT=0
+-- host-clippy.log
+HEAD=95fe66aaadde14cb8b8fa8197f6b0547ea7b7898
+EXIT=0
+-- host-miri.log
+HEAD=95fe66aaadde14cb8b8fa8197f6b0547ea7b7898
+EXIT=0
 -- host-test.log
 HEAD=95fe66aaadde14cb8b8fa8197f6b0547ea7b7898
-EXIT=1
+EXIT=0
 -- kernel-hashes.log
 HEAD=95fe66aaadde14cb8b8fa8197f6b0547ea7b7898
 EXIT=0

@@ -1,0 +1,2377 @@
+HEAD=95fe66aaadde14cb8b8fa8197f6b0547ea7b7898
+r9 devshell: rustc 1.95.0-nightly (842bd5be2 2026-01-29)
+QEMU emulator version 11.1.2
+apps: nix run .#build | nix run .#boot-virt | nix run .#default
+harvey supply: R9_HARVEY_DIR_ARM64=/nix/store/b2i0hcbxxmyjlh7drl94s0lp3iq7n04a-harvey-tree-arm64-0 (lazy; realised on first use)
+harvey supply: R9_HARVEY_DIR_AMD64=/nix/store/002vay29nmgw2d81nvmi2i6adgz7h1md-harvey-tree-amd64-0 (lazy; realised on first use)
+harvey supply: R9_HARVEY_REFERENCE_AMD64=/nix/store/ydavfxqx6vhlcar7mmcxi1llhjg0n69x-harvey-reference-amd64-0 (lazy; realised on first use)
+harvey supply: R9_HARVEY_REFERENCE_ARM64=/nix/store/zps34qpcmsd0s2mkf251hhc9sjsnqvq5-harvey-reference-arm64-0 (lazy; realised on first use)
+harvey supply: R9_AUTHDOMAIN_GEN=/nix/store/gysm8xfgmlwkj6kcf6zdzkc9pzmi20ah-harvey-authdomain-gen-0/bin/authdomain-gen
+warning: field `frame_len` is never read
+   --> xtask/src/pcap.rs:228:9
+    |
+219 | pub struct Icmpv4Frame {
+    |            ----------- field in this struct
+...
+228 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Icmpv4Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `frame_len` is never read
+   --> xtask/src/pcap.rs:375:9
+    |
+359 | pub struct BootpFrame {
+    |            ---------- field in this struct
+...
+375 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `BootpFrame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `dst_mac` and `frame_len` are never read
+   --> xtask/src/pcap.rs:569:9
+    |
+566 | pub struct Icmpv6Frame {
+    |            ----------- fields in this struct
+...
+569 |     pub dst_mac: [u8; 6],
+    |         ^^^^^^^
+...
+579 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Icmpv6Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `src_mac`, `dst_mac`, and `frame_len` are never read
+   --> xtask/src/pcap.rs:723:9
+    |
+721 | pub struct Tcpv4Frame {
+    |            ---------- fields in this struct
+722 |     /// Ethernet source/destination MAC.
+723 |     pub src_mac: [u8; 6],
+    |         ^^^^^^^
+724 |     pub dst_mac: [u8; 6],
+    |         ^^^^^^^
+...
+737 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Tcpv4Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: `xtask` (bin "xtask") generated 4 warnings
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.10s
+     Running `target/debug/xtask miri`
+Preparing a sysroot for Miri (target: x86_64-unknown-linux-gnu)... done
+   Compiling roaring v0.11.5
+   Compiling ds v0.1.0 (/home/req/code/r9/.git/r9-p03-stop/tip/ds)
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.68s
+     Running unittests src/lib.rs (target/miri/x86_64-unknown-linux-gnu/debug/deps/ds-99cbb4fee92451b4)
+warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+
+Trying seed: 0
+Trying seed: 4
+Trying seed: 32
+Trying seed: 16
+Trying seed: 40
+Trying seed: 48
+Trying seed: 8
+Trying seed: 6
+Trying seed: 24
+Trying seed: 56
+Trying seed: 1
+Trying seed: 2
+Trying seed: 36
+Trying seed: 28
+Trying seed: 5
+Trying seed: 44
+
+running 30 tests
+
+running 30 tests
+
+running 30 tests
+
+running 30 tests
+
+running 30 tests
+
+running 30 tests
+
+running 30 tests
+
+running 30 tests
+
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... test tpht::chained::tests::bank_holds_exactly_255_nodes ... test tpht::chained::tests::bank_holds_exactly_255_nodes ... test tpht::chained::tests::bank_holds_exactly_255_nodes ... test tpht::chained::tests::bank_holds_exactly_255_nodes ... 
+running 30 tests
+
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... 
+running 30 tests
+
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... test tpht::chained::tests::bank_holds_exactly_255_nodes ... 
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... 
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... test tpht::chained::tests::bank_holds_exactly_255_nodes ... test tpht::chained::tests::bank_holds_exactly_255_nodes ... test tpht::chained::tests::bank_holds_exactly_255_nodes ... test tpht::chained::tests::bank_holds_exactly_255_nodes ... test tpht::chained::tests::bank_holds_exactly_255_nodes ... 
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... okok
+ok
+
+ok
+oktest tpht::chained::tests::empty_overflow_reads_nothing ... test tpht::chained::tests::empty_overflow_reads_nothing ... 
+test tpht::chained::tests::empty_overflow_reads_nothing ... okok
+okok
+
+
+okokoktest tpht::chained::tests::empty_overflow_reads_nothing ... 
+
+
+okoktest tpht::chained::tests::empty_overflow_reads_nothing ... 
+ok
+ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... 
+test tpht::chained::tests::empty_overflow_reads_nothing ... oktest tpht::chained::tests::empty_overflow_reads_nothing ... test tpht::chained::tests::empty_overflow_reads_nothing ... 
+oktest tpht::chained::tests::empty_overflow_reads_nothing ... test tpht::chained::tests::empty_overflow_reads_nothing ... test tpht::chained::tests::empty_overflow_reads_nothing ... 
+test tpht::chained::tests::empty_overflow_reads_nothing ... test tpht::chained::tests::empty_overflow_reads_nothing ... test tpht::chained::tests::empty_overflow_reads_nothing ... test tpht::chained::tests::empty_overflow_reads_nothing ... test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+okokokok
+
+
+
+okoktest tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+oktest tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... 
+
+oktest tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... 
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... oktest tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... 
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+ok
+test tpht::chained::tests::ops_match_btreemap_model ... test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+ok
+ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... test tpht::chained::tests::ops_match_btreemap_model ... ok
+ok
+test tpht::chained::tests::ops_match_btreemap_model ... test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+ok
+okokok
+
+ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... 
+okokok
+oktest tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... 
+
+
+oktest tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... oktest tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... 
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... 
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... test tpht::chained::tests::ops_match_btreemap_model ... okok
+
+ok
+okok
+test tpht::chained::tests::ops_match_btreemap_model ... 
+test tpht::chained::tests::ops_match_btreemap_model ... test tpht::chained::tests::ops_match_btreemap_model ... ok
+oktest tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+
+test tpht::chained::tests::ops_match_btreemap_model ... test tpht::chained::tests::ops_match_btreemap_model ... test tpht::chained::tests::ops_match_btreemap_model ... test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+ok
+okok
+
+okok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... 
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... okok
+
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... oktest tpht::chained::tests::two_choice_fails_over_to_second_bank ... 
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+ok
+oktest tpht::chained::tests::two_choice_fails_over_to_second_bank ... 
+okoktest tpht::chained::tests::stress_reader_never_sees_partial_node ... 
+
+oktest tpht::chained::tests::stress_reader_never_sees_partial_node ... 
+oktest tpht::chained::tests::stress_reader_never_sees_partial_node ... 
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... test tpht::chained::tests::stress_reader_never_sees_partial_node ... test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+okok
+ok
+
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... okok
+
+ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... test tpht::chained::tests::two_choice_fails_over_to_second_bank ... test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... okok
+
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... test tpht::chained::tests::two_choice_fails_over_to_second_bank ... okok
+
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+oktest tpht::chained::tests::writing_sentinel_is_never_a_node_index ... 
+ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... okok
+
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+oktest tpht::feistel::tests::index_comes_from_the_mixed_half ... 
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::feistel::tests::permute_round_trips ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::feistel::tests::permute_round_trips ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+ok
+ok
+oktest tpht::feistel::tests::permute_round_trips ... 
+test tpht::feistel::tests::mix32_known_answers ... test tpht::feistel::tests::mix32_known_answers ... test tpht::feistel::tests::permute_round_trips ... okok
+
+oktest tpht::feistel::tests::permute_round_trips ... 
+test tpht::feistel::tests::permute_round_trips ... ok
+ok
+oktest tpht::feistel::tests::index_comes_from_the_mixed_half ... 
+test tpht::feistel::tests::mix32_known_answers ... test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+oktest tpht::feistel::tests::split_is_injective_on_structured_keys ... 
+okok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... okok
+
+ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... test tpht::feistel::tests::mix32_known_answers ... oktest tpht::feistel::tests::index_comes_from_the_mixed_half ... test tpht::feistel::tests::permute_round_trips ... 
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... oktest tpht::feistel::tests::index_comes_from_the_mixed_half ... 
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+oktest tpht::feistel::tests::permute_round_trips ... 
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::feistel::tests::permute_round_trips ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::feistel::tests::permute_round_trips ... ok
+oktest tpht::feistel::tests::mix32_known_answers ... 
+ok
+test tpht::feistel::tests::mix32_known_answers ... okok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... 
+oktest tpht::feistel::tests::permute_round_trips ... 
+test tpht::feistel::tests::mix32_known_answers ... ok
+okok
+
+test tpht::feistel::tests::mix32_known_answers ... test tpht::feistel::tests::mix32_known_answers ... test tpht::feistel::tests::mix32_known_answers ... test tpht::feistel::tests::permute_round_trips ... ok
+ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+test tpht::feistel::tests::permute_round_trips ... ok
+ok
+test tpht::feistel::tests::permute_round_trips ... test tpht::feistel::tests::permute_round_trips ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... test tpht::feistel::tests::permute_round_trips ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+ok
+test tpht::feistel::tests::split_join_round_trips ... test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::feistel::tests::split_join_round_trips ... okok
+
+test tpht::feistel::tests::split_join_round_trips ... test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+ok
+test tpht::flattened::tests::banks_full_is_an_error ... test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+ok
+test tpht::flattened::tests::banks_full_is_an_error ... test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+ok
+test tpht::feistel::tests::split_join_round_trips ... test tpht::flattened::tests::banks_full_is_an_error ... ok
+ok
+test tpht::feistel::tests::split_join_round_trips ... test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+okok
+
+test tpht::flattened::tests::banks_full_is_an_error ... test tpht::flattened::tests::banks_full_is_an_error ... test tpht::flattened::tests::banks_full_is_an_error ... okok
+
+test tpht::flattened::tests::banks_full_is_an_error ... test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+oktest tpht::flattened::tests::home_only_shard_never_spills ... 
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... okok
+ok
+
+oktest tpht::flattened::tests::composite_ops_match_btreemap_model ... 
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+ok
+oktest tpht::flattened::tests::deref_tiny_matches_btreemap_model ... 
+oktest tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... 
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+ok
+ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... oktest tpht::flattened::tests::deref_tiny_matches_btreemap_model ... 
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... okok
+
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... test tpht::flattened::tests::fingerprint_collisions_are_verified ... test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... okok
+
+okok
+oktest tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... 
+
+ok
+ok
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... oktest tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... 
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+okokokok
+
+
+
+okok
+
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... oktest tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... test tpht::flattened::tests::home_ops_match_btreemap_model ... test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... 
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... okok
+
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... okokok
+
+ok
+
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... oktest tpht::flattened::tests::deref_tiny_matches_btreemap_model ... 
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... okok
+
+ok
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... oktest tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... 
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+ok
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... test tpht::flattened::tests::home_only_shard_never_spills ... okok
+
+ok
+ok
+oktest tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... 
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... oktest tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... 
+ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... test tpht::flattened::tests::fingerprint_collisions_are_verified ... test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... okok
+ok
+ok
+
+ok
+okoktest tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... 
+
+okoktest tpht::flattened::tests::fingerprint_collisions_are_verified ... test tpht::flattened::tests::home_only_shard_never_spills ... 
+
+test tpht::flattened::tests::home_only_shard_never_spills ... oktest tpht::flattened::tests::fingerprint_collisions_are_verified ... 
+ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... test tpht::flattened::tests::rejects_bad_block_counts ... test tpht::flattened::tests::fingerprint_collisions_are_verified ... test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+test tpht::flattened::tests::home_only_shard_never_spills ... test tpht::flattened::tests::home_ops_match_btreemap_model ... test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... okok
+
+okok
+
+ok
+oktest tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... 
+oktest tpht::flattened::tests::home_only_shard_never_spills ... test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... 
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... oktest tpht::flattened::tests::home_ops_match_btreemap_model ... 
+ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... okok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... 
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+test tpht::flattened::tests::home_only_shard_never_spills ... ok
+ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+oktest tpht::flattened::tests::home_ops_match_btreemap_model ... 
+ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+ok
+test tpht::flattened::tests::home_only_shard_never_spills ... oktest tpht::flattened::tests::home_ops_match_btreemap_model ... 
+test tpht::flattened::tests::home_only_shard_never_spills ... test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... okok
+
+okok
+
+oktest tpht::flattened::tests::stress_readers_never_see_torn_entry ... 
+test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::flattened::tests::home_only_shard_never_spills ... test tpht::flattened::tests::home_only_shard_never_spills ... test tpht::flattened::tests::home_only_shard_never_spills ... test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+okok
+
+ok
+test tpht::flattened::tests::stress_readers_with_spill ... test tpht::flattened::tests::home_ops_match_btreemap_model ... test tpht::flattened::tests::home_ops_match_btreemap_model ... oktest tpht::flattened::tests::home_ops_match_btreemap_model ... 
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suiteokok
+
+
+ok
+test tpht::measure::tests::table_agrees_with_counting_model ... test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... test tpht::flattened::tests::rejects_bad_block_counts ... ok
+ok
+test tpht::flattened::tests::rejects_bad_block_counts ... test tpht::flattened::tests::rejects_bad_block_counts ... okok
+
+ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... oktest tpht::flattened::tests::stress_readers_never_see_torn_entry ... 
+okok
+
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... test tpht::flattened::tests::stress_readers_never_see_torn_entry ... test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+test tpht::measure::tests::measure_spill_threshold_table ... okok
+
+ok
+ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::flattened::tests::stress_readers_with_spill ... test tpht::flattened::tests::stress_readers_with_spill ... test tpht::flattened::tests::rejects_bad_block_counts ... test tpht::measure::tests::table_agrees_with_counting_model ... ok
+okok
+
+
+test result: oktest tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... test tpht::flattened::tests::rejects_bad_block_counts ... . 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.64s
+
+ok
+ok
+Trying seed: 46
+ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... test tpht::flattened::tests::stress_readers_never_see_torn_entry ... oktest tpht::flattened::tests::rejects_bad_block_counts ... 
+
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... test tpht::flattened::tests::rejects_bad_block_counts ... okok
+
+ok
+ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... oktest tpht::flattened::tests::rejects_bad_block_counts ... 
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... test tpht::flattened::tests::rejects_bad_block_counts ... test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+okok
+
+ok
+oktest tpht::flattened::tests::stress_readers_with_spill ... ok
+
+oktest tpht::flattened::tests::stress_readers_never_see_torn_entry ... test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... 
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... 
+test result: okoktest tpht::flattened::tests::stress_readers_never_see_torn_entry ... 
+ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out
+test tpht::flattened::tests::stress_readers_with_spill ... test tpht::flattened::tests::stress_readers_with_spill ... ; finished in 30.52s
+
+test tpht::flattened::tests::stress_readers_with_spill ... okok
+
+Trying seed: 60
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... test tpht::flattened::tests::stress_readers_never_see_torn_entry ... 
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... ok
+ok
+test tpht::flattened::tests::stress_readers_with_spill ... test tpht::measure::tests::measure_spill_threshold_table ... ok
+test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+ignored, generator run on demand for the D-15 evidence; not part of the pin suiteok
+
+test tpht::measure::tests::table_agrees_with_counting_model ... test tpht::measure::tests::table_agrees_with_counting_model ... test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+ok
+test tpht::flattened::tests::stress_readers_with_spill ... test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... ok
+ok
+ok
+
+test tpht::measure::tests::measure_spill_threshold_table ... 
+test result: test result: okokok
+ignored, generator run on demand for the D-15 evidence; not part of the pin suitetest tpht::measure::tests::measure_spill_threshold_table ... . 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out
+ok
+; finished in 30.47s; finished in 30.49s
+
+
+
+test tpht::measure::tests::table_agrees_with_counting_model ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::measure_spill_threshold_table ... Trying seed: 25
+Trying seed: 37
+oktest tpht::measure::tests::table_agrees_with_counting_model ... 
+ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::measure_spill_threshold_table ... test tpht::measure::tests::table_agrees_with_counting_model ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... ok
+test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... 
+running 30 tests
+
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... oktest tpht::chained::tests::bank_holds_exactly_255_nodes ... 
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.42s
+
+ok
+Trying seed: 9
+ok
+test tpht::measure::tests::measure_spill_threshold_table ... test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... test tpht::measure::tests::table_agrees_with_counting_model ... okok
+
+
+test result: test tpht::measure::tests::measure_spill_threshold_table ... okignored, generator run on demand for the D-15 evidence; not part of the pin suite
+. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered outok
+; finished in 30.54stest tpht::measure::tests::table_agrees_with_counting_model ... 
+
+
+test result: okok
+
+. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered outtest result: okok
+; finished in 30.44sok
+. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out
+
+test tpht::measure::tests::measure_spill_threshold_table ... 
+test result: ; finished in 30.42s
+
+okignored, generator run on demand for the D-15 evidence; not part of the pin suite
+Trying seed: 57
+Trying seed: 17
+. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered outtest tpht::measure::tests::table_agrees_with_counting_model ... ; finished in 30.80sok
+
+
+oktest tpht::measure::tests::measure_spill_threshold_table ... 
+Trying seed: 29
+
+test result: okignored, generator run on demand for the D-15 evidence; not part of the pin suite
+. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered outtest tpht::measure::tests::table_agrees_with_counting_model ... ; finished in 30.55s
+
+ok
+test tpht::measure::tests::measure_spill_threshold_table ... ok
+ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... test tpht::measure::tests::table_agrees_with_counting_model ... 
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.54s
+
+Trying seed: 49
+ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+
+test result: ok
+running 30 tests
+. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered outtest tpht::chained::tests::bank_holds_exactly_255_nodes ... ok
+
+running 30 tests
+; finished in 30.52s
+
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... test tpht::chained::tests::bank_holds_exactly_255_nodes ... 
+running 30 tests
+Trying seed: 41
+ok
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... 
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.94s
+
+Trying seed: 3
+ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.52s
+
+Trying seed: 7
+ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.56s
+
+Trying seed: 45
+
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... ok
+
+running 30 tests
+
+test result: test tpht::chained::tests::bank_holds_exactly_255_nodes ... ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.94s
+
+Trying seed: 33
+ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... 
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... 
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... 
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... 
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... okok
+
+test tpht::chained::tests::ops_match_btreemap_model ... test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+ok
+test tpht::chained::tests::ops_match_btreemap_model ... test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+ok
+ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... test tpht::chained::tests::two_choice_fails_over_to_second_bank ... test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+oktest tpht::chained::tests::ops_match_btreemap_model ... 
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::feistel::tests::permute_round_trips ... ok
+ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::feistel::tests::mix32_known_answers ... okok
+
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::feistel::tests::permute_round_trips ... ok
+ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... okok
+
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::feistel::tests::permute_round_trips ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+ok
+test tpht::feistel::tests::mix32_known_answers ... test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::feistel::tests::permute_round_trips ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+ok
+test tpht::flattened::tests::banks_full_is_an_error ... test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+ok
+test tpht::feistel::tests::mix32_known_answers ... test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+ok
+test tpht::feistel::tests::permute_round_trips ... test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+oktest tpht::feistel::tests::split_is_injective_on_structured_keys ... 
+test tpht::feistel::tests::permute_round_trips ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::feistel::tests::permute_round_trips ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::feistel::tests::permute_round_trips ... ok
+test tpht::feistel::tests::permute_round_trips ... ok
+ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::feistel::tests::permute_round_trips ... ok
+ok
+test tpht::feistel::tests::mix32_known_answers ... okok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... 
+test tpht::feistel::tests::mix32_known_answers ... test tpht::feistel::tests::mix32_known_answers ... ok
+okok
+test tpht::feistel::tests::permute_round_trips ... 
+test tpht::feistel::tests::permute_round_trips ... test tpht::feistel::tests::permute_round_trips ... okok
+
+ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... test tpht::feistel::tests::split_is_injective_on_structured_keys ... test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+test tpht::feistel::tests::permute_round_trips ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+ok
+test tpht::flattened::tests::banks_full_is_an_error ... test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+ok
+test tpht::feistel::tests::split_join_round_trips ... test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::feistel::tests::split_join_round_trips ... okok
+
+test tpht::feistel::tests::split_join_round_trips ... test tpht::flattened::tests::home_only_shard_never_spills ... okok
+
+test tpht::feistel::tests::split_join_round_trips ... test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... okok
+
+test tpht::flattened::tests::banks_full_is_an_error ... test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... 
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.44s
+
+ok
+Trying seed: 47
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+
+running 30 tests
+ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... test tpht::chained::tests::bank_holds_exactly_255_nodes ... test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+okoktest tpht::flattened::tests::composite_ops_match_btreemap_model ... 
+
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+okok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... 
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... okok
+
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+oktest tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... 
+ok
+test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::flattened::tests::home_only_shard_never_spills ... test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+ok
+okok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... 
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+ok
+ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... oktest tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... 
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+ok
+ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... oktest tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... 
+test tpht::measure::tests::measure_spill_threshold_table ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... test tpht::flattened::tests::fingerprint_collisions_are_verified ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... ok
+ok
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... oktest tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+
+ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... test tpht::flattened::tests::fingerprint_collisions_are_verified ... test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+ok
+oktest tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... 
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... oktest tpht::flattened::tests::fingerprint_collisions_are_verified ... 
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+test tpht::flattened::tests::home_only_shard_never_spills ... ok
+okok
+test result: 
+
+oktest tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered outok
+oktest tpht::flattened::tests::fingerprint_collisions_are_verified ... ; finished in 30.76sok
+
+
+ok
+
+test tpht::chained::tests::empty_overflow_reads_nothing ... Trying seed: 61
+okok
+
+test tpht::flattened::tests::home_only_shard_never_spills ... test tpht::flattened::tests::home_only_shard_never_spills ... test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+ok
+ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... 
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+ok
+test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+ok
+oktest tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... 
+test tpht::flattened::tests::rejects_bad_block_counts ... test tpht::flattened::tests::home_only_shard_never_spills ... ok
+ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... oktest tpht::flattened::tests::stress_readers_never_see_torn_entry ... 
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+oktest tpht::flattened::tests::rejects_bad_block_counts ... 
+test tpht::flattened::tests::rejects_bad_block_counts ... okok
+
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... oktest tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... 
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... oktest tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... 
+ok
+ok
+test tpht::flattened::tests::stress_readers_with_spill ... test tpht::flattened::tests::stress_readers_never_see_torn_entry ... test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... okok
+
+test tpht::flattened::tests::stress_readers_with_spill ... test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suiteok
+
+test tpht::measure::tests::table_agrees_with_counting_model ... test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... oktest tpht::flattened::tests::rejects_bad_block_counts ... 
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+test tpht::measure::tests::measure_spill_threshold_table ... okok
+
+ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+oktest tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... test tpht::flattened::tests::stress_readers_never_see_torn_entry ... 
+test tpht::measure::tests::table_agrees_with_counting_model ... test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+
+test result: okok
+. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered outok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ; finished in 30.46s
+
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... Trying seed: 26
+ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... 
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+ok
+test result: 
+oktest tpht::measure::tests::measure_spill_threshold_table ... . 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.79s
+
+ignored, generator run on demand for the D-15 evidence; not part of the pin suiteok
+
+Trying seed: 38
+test tpht::measure::tests::table_agrees_with_counting_model ... test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suiteok
+
+test tpht::measure::tests::table_agrees_with_counting_model ... test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... ok
+test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... ok
+ok
+test tpht::measure::tests::measure_spill_threshold_table ... test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... 
+running 30 tests
+ok
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.51s
+
+okTrying seed: 34
+Trying seed: 20
+
+okok
+
+test tpht::measure::tests::measure_spill_threshold_table ... 
+test result: 
+test result: okignored, generator run on demand for the D-15 evidence; not part of the pin suiteok
+. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered outtest tpht::measure::tests::table_agrees_with_counting_model ... ; finished in 30.54s
+
+; finished in 30.64s
+
+Trying seed: 10
+Trying seed: 42
+ok
+oktest tpht::measure::tests::measure_spill_threshold_table ... 
+
+test result: okignored, generator run on demand for the D-15 evidence; not part of the pin suite. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out
+; finished in 30.58s
+
+test tpht::measure::tests::table_agrees_with_counting_model ... Trying seed: 58
+ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.47s
+running 30 tests
+
+
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... 
+running 30 tests
+ok
+oktest tpht::chained::tests::bank_holds_exactly_255_nodes ... 
+running 30 tests
+
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... test tpht::measure::tests::measure_spill_threshold_table ... test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suiteignored, generator run on demand for the D-15 evidence; not part of the pin suite
+
+running 30 tests
+
+test tpht::measure::tests::table_agrees_with_counting_model ... oktest tpht::chained::tests::bank_holds_exactly_255_nodes ... test tpht::measure::tests::table_agrees_with_counting_model ... 
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered outok
+; finished in 30.78s
+
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... Trying seed: 18
+ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.56s
+
+
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... ok
+
+test result: 
+running 30 tests
+oktest tpht::chained::tests::bank_holds_exactly_255_nodes ... . 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.83s
+
+Trying seed: 30
+ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.53s
+
+Trying seed: 50
+ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.68s
+
+Trying seed: 12
+ok
+test tpht::feistel::tests::mix32_known_answers ... 
+running 30 tests
+ok
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... test tpht::feistel::tests::permute_round_trips ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... 
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... 
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::feistel::tests::permute_round_trips ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... okok
+
+test tpht::chained::tests::ops_match_btreemap_model ... test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+ok
+test tpht::chained::tests::ops_match_btreemap_model ... test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+ok
+test tpht::chained::tests::ops_match_btreemap_model ... test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+oktest tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... 
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+oktest tpht::chained::tests::two_choice_fails_over_to_second_bank ... 
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+oktest tpht::chained::tests::stress_reader_never_sees_partial_node ... 
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::feistel::tests::permute_round_trips ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::feistel::tests::permute_round_trips ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::feistel::tests::permute_round_trips ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... test tpht::feistel::tests::permute_round_trips ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::feistel::tests::permute_round_trips ... ok
+ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::feistel::tests::permute_round_trips ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+ok
+test tpht::feistel::tests::mix32_known_answers ... test tpht::feistel::tests::permute_round_trips ... ok
+ok
+test tpht::feistel::tests::permute_round_trips ... test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+okoktest tpht::feistel::tests::permute_round_trips ... 
+
+test tpht::feistel::tests::mix32_known_answers ... test tpht::feistel::tests::mix32_known_answers ... ok
+ok
+okok
+
+test tpht::feistel::tests::permute_round_trips ... test tpht::flattened::tests::fingerprint_collisions_are_verified ... test tpht::feistel::tests::permute_round_trips ... test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+oktest tpht::feistel::tests::split_is_injective_on_structured_keys ... 
+ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... ok
+test tpht::flattened::tests::home_only_shard_never_spills ... ok
+ok
+test tpht::flattened::tests::banks_full_is_an_error ... test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.35s
+
+Trying seed: 11
+Trying seed: 27
+ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+ok
+test tpht::feistel::tests::split_join_round_trips ... test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... 
+running 30 tests
+
+running 30 tests
+oktest tpht::chained::tests::bank_holds_exactly_255_nodes ... 
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::feistel::tests::split_join_round_trips ... okok
+
+test tpht::feistel::tests::split_join_round_trips ... test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+oktest tpht::chained::tests::empty_overflow_reads_nothing ... 
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered outok
+; finished in 30.70stest tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... 
+
+Trying seed: 62
+ok
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... 
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... ok
+test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... okok
+
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... okok
+
+test tpht::chained::tests::ops_match_btreemap_model ... test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+oktest tpht::flattened::tests::deref_tiny_matches_btreemap_model ... 
+ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... okok
+
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+ok
+test tpht::flattened::tests::rejects_bad_block_counts ... test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+ok
+ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... oktest tpht::flattened::tests::deref_tiny_matches_btreemap_model ... 
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+okok
+
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... oktest tpht::flattened::tests::deref_tiny_matches_btreemap_model ... 
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+ok
+ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... okok
+
+ok
+test tpht::flattened::tests::rejects_bad_block_counts ... oktest tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... test tpht::chained::tests::stress_reader_never_sees_partial_node ... 
+ok
+okok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... 
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... test tpht::flattened::tests::fingerprint_collisions_are_verified ... test tpht::chained::tests::stress_reader_never_sees_partial_node ... okok
+
+oktest tpht::flattened::tests::fingerprint_collisions_are_verified ... 
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+ok
+ok
+ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... oktest tpht::flattened::tests::home_only_shard_never_spills ... 
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... okok
+ok
+
+ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... test tpht::flattened::tests::fingerprint_collisions_are_verified ... test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... okoktest tpht::flattened::tests::home_ops_match_btreemap_model ... 
+
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+test tpht::flattened::tests::home_only_shard_never_spills ... test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+ok
+test tpht::flattened::tests::home_only_shard_never_spills ... test tpht::flattened::tests::home_only_shard_never_spills ... ok
+ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::measure::tests::measure_spill_threshold_table ... ok
+ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::measure::tests::table_agrees_with_counting_model ... test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... okok
+
+test tpht::chained::tests::ops_match_btreemap_model ... test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... test tpht::flattened::tests::rejects_bad_block_counts ... ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.53s
+
+ok
+test tpht::measure::tests::measure_spill_threshold_table ... ok
+ignored, generator run on demand for the D-15 evidence; not part of the pin suitetest tpht::flattened::tests::rejects_bad_block_counts ... 
+test tpht::measure::tests::table_agrees_with_counting_model ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... okok
+
+oktest tpht::flattened::tests::stress_readers_with_spill ... 
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... okok
+
+
+test result: oktest tpht::flattened::tests::rejects_bad_block_counts ... . 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.88s
+
+Trying seed: 39
+ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+test tpht::feistel::tests::permute_round_trips ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+ok
+ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... okok
+
+ok
+test tpht::flattened::tests::rejects_bad_block_counts ... test tpht::feistel::tests::mix32_known_answers ... test tpht::flattened::tests::stress_readers_with_spill ... ok
+oktest tpht::flattened::tests::rejects_bad_block_counts ... 
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+running 30 tests
+
+test tpht::feistel::tests::permute_round_trips ... test tpht::chained::tests::bank_holds_exactly_255_nodes ... ok
+oktest tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... 
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+ok
+test tpht::flattened::tests::stress_readers_with_spill ... test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+ok
+test tpht::measure::tests::table_agrees_with_counting_model ... test tpht::flattened::tests::rejects_bad_block_counts ... ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... okok
+
+test tpht::flattened::tests::stress_readers_with_spill ... oktest tpht::flattened::tests::stress_readers_with_spill ... 
+ok
+test tpht::flattened::tests::stress_readers_with_spill ... test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.50s
+
+Trying seed: 21
+ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... ok
+test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+
+running 30 tests
+test tpht::measure::tests::table_agrees_with_counting_model ... test tpht::chained::tests::bank_holds_exactly_255_nodes ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::measure::tests::measure_spill_threshold_table ... okignored, generator run on demand for the D-15 evidence; not part of the pin suite
+
+test tpht::measure::tests::table_agrees_with_counting_model ... test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... ok
+test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... ok
+ok
+test tpht::measure::tests::measure_spill_threshold_table ... 
+test result: okignored, generator run on demand for the D-15 evidence; not part of the pin suite. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out
+; finished in 30.73s
+
+test tpht::measure::tests::table_agrees_with_counting_model ... Trying seed: 19
+ok
+
+test result: okok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... . 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.61s
+
+Trying seed: 35
+ok
+test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... 
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... ok
+ok
+
+test result: okok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered outtest tpht::measure::tests::measure_spill_threshold_table ... 
+
+test result: ; finished in 30.52sok
+
+. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered outignored, generator run on demand for the D-15 evidence; not part of the pin suite
+Trying seed: 13
+; finished in 30.56s
+
+test tpht::measure::tests::table_agrees_with_counting_model ... ok
+
+test result: ok
+ok
+running 30 tests
+. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered outtest tpht::chained::tests::empty_overflow_reads_nothing ... ; finished in 30.63stest tpht::chained::tests::bank_holds_exactly_255_nodes ... 
+
+Trying seed: 59
+ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.31s
+
+Trying seed: 43
+
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.48s
+
+Trying seed: 31
+ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... 
+running 30 tests
+
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... test tpht::chained::tests::bank_holds_exactly_255_nodes ... ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.52s
+
+Trying seed: 51
+
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::feistel::tests::permute_round_trips ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... 
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... okok
+
+test tpht::chained::tests::empty_overflow_reads_nothing ... test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... okok
+
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+oktest tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... 
+test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::feistel::tests::permute_round_trips ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... okok
+
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+oktest tpht::chained::tests::writing_sentinel_is_never_a_node_index ... 
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+okok
+
+ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... test tpht::chained::tests::two_choice_fails_over_to_second_bank ... test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::feistel::tests::permute_round_trips ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... oktest tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... 
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+oktest tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... 
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::feistel::tests::permute_round_trips ... ok
+oktest tpht::feistel::tests::split_is_injective_on_structured_keys ... 
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+ok
+test tpht::flattened::tests::home_only_shard_never_spills ... test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+ok
+oktest tpht::feistel::tests::index_comes_from_the_mixed_half ... 
+test tpht::feistel::tests::permute_round_trips ... test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::feistel::tests::permute_round_trips ... ok
+oktest tpht::feistel::tests::split_is_injective_on_structured_keys ... 
+test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+oktest tpht::feistel::tests::permute_round_trips ... 
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+oktest tpht::feistel::tests::permute_round_trips ... 
+test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... test tpht::feistel::tests::permute_round_trips ... ok
+ok
+oktest tpht::flattened::tests::fingerprint_collisions_are_verified ... 
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... test tpht::feistel::tests::permute_round_trips ... okok
+
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+oktest tpht::flattened::tests::stress_readers_with_spill ... 
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+test tpht::flattened::tests::home_only_shard_never_spills ... ok
+ok
+test tpht::feistel::tests::split_join_round_trips ... test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.29s
+
+Trying seed: 52
+
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.58s
+
+Trying seed: 63
+ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... 
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... ok
+ok
+test tpht::feistel::tests::split_join_round_trips ... test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+
+test result: okok
+ok
+. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered outtest tpht::chained::tests::ops_match_btreemap_model ... ; finished in 30.36stest tpht::flattened::tests::composite_ops_match_btreemap_model ... 
+
+ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+oktest tpht::feistel::tests::split_join_round_trips ... 
+oktest tpht::feistel::tests::split_join_round_trips ... 
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+ok
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+oktest tpht::feistel::tests::permute_round_trips ... 
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... ok
+oktest tpht::flattened::tests::composite_ops_match_btreemap_model ... 
+test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+ok
+test tpht::flattened::tests::home_only_shard_never_spills ... test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.42s
+
+Trying seed: 22
+ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+oktest tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... 
+ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+test tpht::flattened::tests::home_only_shard_never_spills ... ok
+ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+
+running 30 tests
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... test tpht::chained::tests::bank_holds_exactly_255_nodes ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... okok
+
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... test tpht::feistel::tests::permute_round_trips ... ok
+ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+ok
+test tpht::measure::tests::measure_spill_threshold_table ... test tpht::chained::tests::empty_overflow_reads_nothing ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... okok
+
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+ok
+test tpht::flattened::tests::rejects_bad_block_counts ... test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... okok
+
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered outok
+; finished in 30.72s
+
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered outok; finished in 30.43s
+
+
+ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::measure::tests::measure_spill_threshold_table ... ok
+
+test result: okignored, generator run on demand for the D-15 evidence; not part of the pin suite
+. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered outok
+; finished in 30.49s
+
+test tpht::measure::tests::table_agrees_with_counting_model ... Trying seed: 14
+Trying seed: 54
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... 
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... 
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... ok
+test tpht::measure::tests::measure_spill_threshold_table ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.71sokignored, generator run on demand for the D-15 evidence; not part of the pin suite
+
+
+
+
+test result: test tpht::measure::tests::table_agrees_with_counting_model ... ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.78s
+
+ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered outok
+; finished in 30.75stest tpht::measure::tests::measure_spill_threshold_table ... 
+
+ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... ok
+ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.65s
+
+Trying seed: 53
+ok
+test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... 
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.49s
+
+Trying seed: 23
+ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... 
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::feistel::tests::permute_round_trips ... okok
+
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... okok
+
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+ok
+oktest tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... 
+test tpht::flattened::tests::rejects_bad_block_counts ... test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::feistel::tests::permute_round_trips ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::feistel::tests::permute_round_trips ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... okok
+
+
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.54s
+
+ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::feistel::tests::permute_round_trips ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::feistel::tests::permute_round_trips ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.58s
+
+Trying seed: 55
+Trying seed: 15
+
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... 
+running 30 tests
+test tpht::chained::tests::bank_holds_exactly_255_nodes ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+ok
+test tpht::feistel::tests::split_join_round_trips ... test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::chained::tests::empty_overflow_reads_nothing ... ok
+test tpht::chained::tests::fill_exceeds_95_percent_before_first_failure ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+ok
+test tpht::flattened::tests::banks_full_is_an_error ... test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::chained::tests::ops_match_btreemap_model ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+test tpht::chained::tests::fingerprint_collisions_are_verified_by_full_key ... ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+ok
+test tpht::chained::tests::ops_match_btreemap_model ... test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::chained::tests::stress_concurrent_claims_never_share_a_node ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+
+test result: okok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out
+; finished in 30.48s
+
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::chained::tests::stress_reader_never_sees_partial_node ... ok
+test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+test tpht::chained::tests::two_choice_fails_over_to_second_bank ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::home_only_shard_never_spills ... ok
+ok
+test tpht::chained::tests::writing_sentinel_is_never_a_node_index ... test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::feistel::tests::permute_round_trips ... ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::feistel::tests::index_comes_from_the_mixed_half ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... test tpht::feistel::tests::mix32_known_answers ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+ok
+ok
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... test tpht::feistel::tests::permute_round_trips ... ok
+ok
+test tpht::feistel::tests::split_is_injective_on_structured_keys ... test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+oktest tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... 
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... ok
+test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... ok
+ok
+
+test tpht::flattened::tests::rejects_bad_block_counts ... test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.49s
+
+ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered outok
+; finished in 30.68s
+
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... ok
+test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.43s
+
+ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.37s
+
+ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::feistel::tests::split_join_round_trips ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::flattened::tests::banks_full_is_an_error ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::composite_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::flattened::tests::deref_tiny_is_one_arena_read_and_no_header_read ... ok
+test tpht::flattened::tests::deref_tiny_matches_btreemap_model ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+test tpht::flattened::tests::deref_tiny_wraps_with_slot_mask ... ok
+test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... test tpht::flattened::tests::fingerprint_collisions_are_verified ... ok
+test tpht::flattened::tests::header_is_64_bytes_and_64_aligned ... ok
+test tpht::flattened::tests::hit_rate_home_block_exceeds_90_percent ... ok
+test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::flattened::tests::home_only_shard_never_spills ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::home_ops_match_btreemap_model ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+test tpht::flattened::tests::rejects_bad_block_counts ... ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+test tpht::flattened::tests::spill_past_threshold_goes_to_a_bank ... ok
+test tpht::flattened::tests::stress_readers_never_see_torn_entry ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::flattened::tests::stress_readers_with_spill ... ok
+test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... ok
+test tpht::measure::tests::measure_spill_threshold_table ... ignored, generator run on demand for the D-15 evidence; not part of the pin suite
+test tpht::measure::tests::table_agrees_with_counting_model ... ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.21s
+
+ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 13 filtered out; finished in 30.79s
+
+EXIT=0

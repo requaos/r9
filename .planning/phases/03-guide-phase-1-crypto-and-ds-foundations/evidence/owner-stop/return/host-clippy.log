@@ -1,0 +1,1232 @@
+HEAD=95fe66aaadde14cb8b8fa8197f6b0547ea7b7898
+r9 devshell: rustc 1.95.0-nightly (842bd5be2 2026-01-29)
+QEMU emulator version 11.1.2
+apps: nix run .#build | nix run .#boot-virt | nix run .#default
+harvey supply: R9_HARVEY_DIR_ARM64=/nix/store/b2i0hcbxxmyjlh7drl94s0lp3iq7n04a-harvey-tree-arm64-0 (lazy; realised on first use)
+harvey supply: R9_HARVEY_DIR_AMD64=/nix/store/002vay29nmgw2d81nvmi2i6adgz7h1md-harvey-tree-amd64-0 (lazy; realised on first use)
+harvey supply: R9_HARVEY_REFERENCE_AMD64=/nix/store/ydavfxqx6vhlcar7mmcxi1llhjg0n69x-harvey-reference-amd64-0 (lazy; realised on first use)
+harvey supply: R9_HARVEY_REFERENCE_ARM64=/nix/store/zps34qpcmsd0s2mkf251hhc9sjsnqvq5-harvey-reference-arm64-0 (lazy; realised on first use)
+harvey supply: R9_AUTHDOMAIN_GEN=/nix/store/gysm8xfgmlwkj6kcf6zdzkc9pzmi20ah-harvey-authdomain-gen-0/bin/authdomain-gen
+warning: field `frame_len` is never read
+   --> xtask/src/pcap.rs:228:9
+    |
+219 | pub struct Icmpv4Frame {
+    |            ----------- field in this struct
+...
+228 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Icmpv4Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `frame_len` is never read
+   --> xtask/src/pcap.rs:375:9
+    |
+359 | pub struct BootpFrame {
+    |            ---------- field in this struct
+...
+375 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `BootpFrame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `dst_mac` and `frame_len` are never read
+   --> xtask/src/pcap.rs:569:9
+    |
+566 | pub struct Icmpv6Frame {
+    |            ----------- fields in this struct
+...
+569 |     pub dst_mac: [u8; 6],
+    |         ^^^^^^^
+...
+579 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Icmpv6Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `src_mac`, `dst_mac`, and `frame_len` are never read
+   --> xtask/src/pcap.rs:723:9
+    |
+721 | pub struct Tcpv4Frame {
+    |            ---------- fields in this struct
+722 |     /// Ethernet source/destination MAC.
+723 |     pub src_mac: [u8; 6],
+    |         ^^^^^^^
+724 |     pub dst_mac: [u8; 6],
+    |         ^^^^^^^
+...
+737 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Tcpv4Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: `xtask` (bin "xtask") generated 4 warnings
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.02s
+     Running `target/debug/xtask clippy`
+    Checking serde_core v1.0.225
+    Checking utf8parse v0.2.2
+    Checking colorchoice v1.0.4
+    Checking is_terminal_polyfill v1.70.1
+    Checking anstyle-query v1.1.4
+    Checking anstyle v1.0.11
+    Checking strsim v0.11.1
+    Checking winnow v0.7.13
+    Checking clap_lex v0.7.5
+    Checking toml_writer v1.0.3
+    Checking target-lexicon v0.13.3
+    Checking bitflags v1.3.2
+    Checking port v0.1.0 (/home/req/code/r9/.git/r9-p03-stop/tip/port)
+    Checking crypto v0.1.0 (/home/req/code/r9/.git/r9-p03-stop/tip/crypto)
+    Checking ds v0.1.0 (/home/req/code/r9/.git/r9-p03-stop/tip/ds)
+    Checking anstyle-parse v0.2.7
+    Checking smoltcp v0.14.0
+    Checking anstream v0.6.20
+warning: you should consider adding a `Default` implementation for `Blake3`
+  --> crypto/src/mac.rs:54:5
+   |
+54 | /     pub fn new() -> Blake3 {
+55 | |         Blake3 { hasher: Hasher::new() }
+56 | |     }
+   | |_____^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#new_without_default
+   = note: `#[warn(clippy::new_without_default)]` on by default
+help: try adding this
+   |
+52 + impl Default for Blake3 {
+53 +     fn default() -> Self {
+54 +         Self::new()
+55 +     }
+56 + }
+   |
+
+warning: `crypto` (lib) generated 1 warning
+warning: duplicated attribute
+  --> port/src/devether.rs:79:11
+   |
+79 | #![forbid(unsafe_code)]
+   |           ^^^^^^^^^^^
+   |
+note: first defined here
+  --> port/src/lib.rs:32:10
+   |
+32 | #[forbid(unsafe_code)]
+   |          ^^^^^^^^^^^
+help: remove this attribute
+  --> port/src/devether.rs:79:11
+   |
+79 | #![forbid(unsafe_code)]
+   |           ^^^^^^^^^^^
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#duplicated_attributes
+   = note: `#[warn(clippy::duplicated_attributes)]` on by default
+
+warning: duplicated attribute
+  --> port/src/devip.rs:53:11
+   |
+53 | #![forbid(unsafe_code)]
+   |           ^^^^^^^^^^^
+   |
+note: first defined here
+  --> port/src/lib.rs:34:10
+   |
+34 | #[forbid(unsafe_code)]
+   |          ^^^^^^^^^^^
+help: remove this attribute
+  --> port/src/devip.rs:53:11
+   |
+53 | #![forbid(unsafe_code)]
+   |           ^^^^^^^^^^^
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#duplicated_attributes
+
+warning: unused import: `alloc::string::String`
+  --> port/src/devip.rs:57:5
+   |
+57 | use alloc::string::String;
+   |     ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: empty line after doc comment
+    --> port/src/devip/proto.rs:1696:1
+     |
+1696 | / /// destination's family).
+1697 | |
+     | |_^
+...
+1702 |   pub(crate) fn icmp6_write_data(id: usize, buf: &[u8]) -> Result<u64> {
+     |   ------------------------------ the comment documents this function
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#empty_line_after_doc_comments
+     = note: `#[warn(clippy::empty_line_after_doc_comments)]` on by default
+     = help: if the empty line is unintentional, remove it
+help: if the documentation should include the empty line include it in the comment
+     |
+1697 | ///
+     |
+
+warning: empty lines after doc comment
+    --> port/src/devip.rs:1277:1
+     |
+1277 | / /// EXISTS with its 0666 mode and the blocking semantic live.
+...    |
+1282 | |
+     | |_^
+...
+1287 |   pub fn write(c: &mut Chan, buf: &[u8], offset: u64) -> Result<u64> {
+     |   ------------ the comment documents this function
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#empty_line_after_doc_comments
+     = help: if the empty lines are unintentional, remove them
+help: if the doc comment should not document function `write` then comment it out
+     |
+1273 ~ // /// The netlog machinery lives in netlog.rs (08-05): the blocking /net/log
+1274 ~ // /// read over the bounded line queue, the set/clear/only ctl with the
+1275 ~ // /// DONOR's flag-bit vocabulary (ip.h:485-500), and the flag-gated emit
+1276 ~ // /// the proto modules note into (the OQ-4 verbs first).  The log file
+1277 ~ // /// EXISTS with its 0666 mode and the blocking semantic live.
+     |
+
+warning: empty line after doc comment
+    --> port/src/devip.rs:1324:1
+     |
+1324 | / /// default-route mirror).
+1325 | |
+     | |_^
+...
+1331 |   fn selftab_content() -> Vec<u8> {
+     |   ------------------ the comment documents this function
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#empty_line_after_doc_comments
+     = help: if the empty line is unintentional, remove it
+help: if the documentation should include the empty line include it in the comment
+     |
+1325 | ///
+     |
+
+    Checking clap_builder v4.5.48
+warning: duplicated attribute
+  --> port/src/netif.rs:71:11
+   |
+71 | #![forbid(unsafe_code)]
+   |           ^^^^^^^^^^^
+   |
+note: first defined here
+  --> port/src/lib.rs:91:10
+   |
+91 | #[forbid(unsafe_code)]
+   |          ^^^^^^^^^^^
+help: remove this attribute
+  --> port/src/netif.rs:71:11
+   |
+71 | #![forbid(unsafe_code)]
+   |           ^^^^^^^^^^^
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#duplicated_attributes
+
+warning: duplicated attribute
+   --> port/src/virtio.rs:54:11
+    |
+ 54 | #![forbid(unsafe_code)]
+    |           ^^^^^^^^^^^
+    |
+note: first defined here
+   --> port/src/lib.rs:103:10
+    |
+103 | #[forbid(unsafe_code)]
+    |          ^^^^^^^^^^^
+help: remove this attribute
+   --> port/src/virtio.rs:54:11
+    |
+ 54 | #![forbid(unsafe_code)]
+    |           ^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#duplicated_attributes
+
+    Checking toml_parser v1.0.3
+warning: variable does not need to be mutable
+   --> port/src/allocator.rs:608:13
+    |
+608 |         let mut walk = |head: Option<Idx>, mark: &mut dyn FnMut(Idx)| {
+    |             ----^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+    Checking toml_datetime v0.7.2
+    Checking serde_spanned v1.0.2
+    Checking serde v1.0.225
+    Checking toml v0.9.7
+warning: function `flags` is never used
+   --> port/src/devip/netlog.rs:103:15
+    |
+103 | pub(crate) fn flags() -> u32 {
+    |               ^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `TCPSTAT_MAX_CONN` is never used
+    --> port/src/devip/proto.rs:2010:18
+     |
+2010 | pub(crate) const TCPSTAT_MAX_CONN: usize = 0;
+     |                  ^^^^^^^^^^^^^^^^
+
+warning: constant `TCPSTAT_MAX_SEGMENT` is never used
+    --> port/src/devip/proto.rs:2011:18
+     |
+2011 | pub(crate) const TCPSTAT_MAX_SEGMENT: usize = 1;
+     |                  ^^^^^^^^^^^^^^^^^^^
+
+warning: very complex type used. Consider factoring parts into `type` definitions
+   --> port/src/allocator.rs:603:10
+    |
+603 |     ) -> (alloc::vec::Vec<(usize, usize)>, alloc::vec::Vec<(usize, usize)>) {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#type_complexity
+    = note: `#[warn(clippy::type_complexity)]` on by default
+
+warning: manually reimplementing `div_ceil`
+   --> port/src/allocator.rs:606:38
+    |
+606 |         let mut pooled_bits = [0u64; (HEADER_TOTAL + 63) / 64];
+    |                                      ^^^^^^^^^^^^^^^^^^^^^^^^ help: consider using `.div_ceil()`: `HEADER_TOTAL.div_ceil(64)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#manual_div_ceil
+    = note: `#[warn(clippy::manual_div_ceil)]` on by default
+
+warning: very complex type used. Consider factoring parts into `type` definitions
+   --> port/src/devether.rs:123:18
+    |
+123 |     pub ifstats: fn() -> [(u16, u16, u16, u32, u32); 2],
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#type_complexity
+
+    Checking clap v4.5.48
+warning: manual `!RangeInclusive::contains` implementation
+   --> port/src/devether.rs:702:16
+    |
+702 |             if typ < -1 || typ > 0xffff {
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^ help: use: `!(-1..=0xffff).contains(&typ)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#manual_range_contains
+    = note: `#[warn(clippy::manual_range_contains)]` on by default
+
+warning: doc list item without indentation
+  --> port/src/devip.rs:16:5
+   |
+16 | //! `crate::devip_waker` (the RawWaker bridge — the phase's ONE named
+   |     ^
+   |
+   = help: if this is supposed to be its own paragraph, add a blank line
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#doc_lazy_continuation
+   = note: `#[warn(clippy::doc_lazy_continuation)]` on by default
+help: indent this line
+   |
+16 | //!   `crate::devip_waker` (the RawWaker bridge — the phase's ONE named
+   |     ++
+
+warning: doc list item without indentation
+  --> port/src/devip.rs:17:5
+   |
+17 | //! unsafe site, mounted at the crate root because this file's forbid
+   |     ^
+   |
+   = help: if this is supposed to be its own paragraph, add a blank line
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#doc_lazy_continuation
+help: indent this line
+   |
+17 | //!   unsafe site, mounted at the crate root because this file's forbid
+   |     ++
+
+warning: doc list item without indentation
+  --> port/src/devip.rs:18:5
+   |
+18 | //! propagates to submodules).
+   |     ^
+   |
+   = help: if this is supposed to be its own paragraph, add a blank line
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#doc_lazy_continuation
+help: indent this line
+   |
+18 | //!   propagates to submodules).
+   |     ++
+
+warning: manual implementation of `.is_multiple_of()`
+   --> port/src/devip/ipifc.rs:753:8
+    |
+753 |     if args.len() % 2 != 0 {
+    |        ^^^^^^^^^^^^^^^^^^^ help: replace with: `!args.len().is_multiple_of(2)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#manual_is_multiple_of
+    = note: `#[warn(clippy::manual_is_multiple_of)]` on by default
+
+warning: this `if` statement can be collapsed
+   --> port/src/devip/phyadapt.rs:376:13
+    |
+376 | /             if let Some(seq) = crate::netif::head_seq(id) {
+377 | |                 if best.map_or(true, |(_, s)| seq < s) {
+378 | |                     best = Some((lane, seq));
+379 | |                 }
+380 | |             }
+    | |_____________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if
+    = note: `#[warn(clippy::collapsible_if)]` on by default
+help: collapse nested if block
+    |
+376 ~             if let Some(seq) = crate::netif::head_seq(id)
+377 ~                 && best.map_or(true, |(_, s)| seq < s) {
+378 |                     best = Some((lane, seq));
+379 ~                 }
+    |
+
+warning: this `map_or` can be simplified
+   --> port/src/devip/phyadapt.rs:377:20
+    |
+377 |                 if best.map_or(true, |(_, s)| seq < s) {
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#unnecessary_map_or
+    = note: `#[warn(clippy::unnecessary_map_or)]` on by default
+help: use `is_none_or` instead
+    |
+377 -                 if best.map_or(true, |(_, s)| seq < s) {
+377 +                 if best.is_none_or(|(_, s)| seq < s) {
+    |
+
+warning: this `if` statement can be collapsed
+    --> port/src/devip/proto.rs:1128:5
+     |
+1128 | /     if direct {
+1129 | |         if let Some(h) = sock {
+1130 | |             let mut g = stack::STACK.enter().expect("devip: stack contended");
+1131 | |             if let Some(core) = g.core_mut(sel) {
+...    |
+1148 | |     }
+     | |_____^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if
+help: collapse nested if block
+     |
+1128 ~     if direct
+1129 ~         && let Some(h) = sock {
+1130 |             let mut g = stack::STACK.enter().expect("devip: stack contended");
+ ...
+1146 |             }
+1147 ~         }
+     |
+
+warning: this `if` statement can be collapsed
+    --> port/src/devip/proto.rs:1133:17
+     |
+1133 | /                 if s.can_recv() {
+1134 | |                     if let Ok((pkt, meta)) = s.recv() {
+1135 | |                         let n = if headers {
+1136 | |                             synthesize_udphdr(pkt, &meta, laddr, lport, buf)
+...    |
+1145 | |                 }
+     | |_________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if
+help: collapse nested if block
+     |
+1133 ~                 if s.can_recv()
+1134 ~                     && let Ok((pkt, meta)) = s.recv() {
+1135 |                         let n = if headers {
+ ...
+1143 |                         return Ok(Some(n as u64));
+1144 ~                     }
+     |
+
+    Checking xtask v0.1.0 (/home/req/code/r9/.git/r9-p03-stop/tip/xtask)
+warning: this `if` statement can be collapsed
+   --> port/src/devmnt.rs:985:5
+    |
+985 | /     if chan.mnt.is_none() && chan.dev == DEV_PIPE && let Some(pipe) = &chan.pipe {
+986 | |         if let Some(mnt) = crate::devpipe::shared_mnt_session(pipe, chan.qid.path) {
+987 | |             chan.mnt = Some(mnt);
+988 | |         }
+989 | |     }
+    | |_____^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if
+help: collapse nested if block
+    |
+985 ~     if chan.mnt.is_none() && chan.dev == DEV_PIPE && let Some(pipe) = &chan.pipe
+986 ~         && let Some(mnt) = crate::devpipe::shared_mnt_session(pipe, chan.qid.path) {
+987 |             chan.mnt = Some(mnt);
+988 ~         }
+    |
+
+warning: this `if` statement can be collapsed
+  --> port/src/fdgrp.rs:86:13
+   |
+86 | /             if marked {
+87 | |                 if let Some(c) = slot.take() {
+88 | |                     out.push(c);
+89 | |                 }
+90 | |             }
+   | |_____________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if
+help: collapse nested if block
+   |
+86 ~             if marked
+87 ~                 && let Some(c) = slot.take() {
+88 |                     out.push(c);
+89 ~                 }
+   |
+
+warning: this expression creates a reference which is immediately dereferenced by the compiler
+   --> port/src/namec.rs:241:34
+    |
+241 |             guard.chain_snapshot(&c)
+    |                                  ^^ help: change this to: `c`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#needless_borrow
+    = note: `#[warn(clippy::needless_borrow)]` on by default
+
+warning: this expression creates a reference which is immediately dereferenced by the compiler
+   --> port/src/namec.rs:319:34
+    |
+319 |             guard.chain_snapshot(&c)
+    |                                  ^^ help: change this to: `c`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#needless_borrow
+
+warning: this expression creates a reference which is immediately dereferenced by the compiler
+   --> port/src/namec.rs:381:30
+    |
+381 |         guard.chain_snapshot(&c)
+    |                              ^^ help: change this to: `c`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#needless_borrow
+
+warning: this expression creates a reference which is immediately dereferenced by the compiler
+   --> port/src/namec.rs:574:30
+    |
+574 |         guard.chain_snapshot(&c)
+    |                              ^^ help: change this to: `c`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#needless_borrow
+
+warning: this `if` statement can be collapsed
+   --> port/src/netif.rs:727:5
+    |
+727 | /     if let Some(store) = slot.store.as_mut() {
+728 | |         if let Some(n) = store.pop(buf) {
+729 | |             return Pop::Frame(n);
+730 | |         }
+731 | |     }
+    | |_____^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if
+help: collapse nested if block
+    |
+727 ~     if let Some(store) = slot.store.as_mut()
+728 ~         && let Some(n) = store.pop(buf) {
+729 |             return Pop::Frame(n);
+730 ~         }
+    |
+
+warning: doc list item without indentation
+  --> port/src/virtio.rs:27:5
+   |
+27 | //! `fence(Release)` lowers to `dmb ish` and `fence(Acquire)` to `dmb ishld`
+   |     ^
+   |
+   = help: if this is supposed to be its own paragraph, add a blank line
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#doc_lazy_continuation
+help: indent this line
+   |
+27 | //!   `fence(Release)` lowers to `dmb ish` and `fence(Acquire)` to `dmb ishld`
+   |     ++
+
+warning: doc list item without indentation
+  --> port/src/virtio.rs:28:5
+   |
+28 | //! on the pinned aarch64 toolchain (RESEARCH-verified codegen) — fences are
+   |     ^
+   |
+   = help: if this is supposed to be its own paragraph, add a blank line
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#doc_lazy_continuation
+help: indent this line
+   |
+28 | //!   on the pinned aarch64 toolchain (RESEARCH-verified codegen) — fences are
+   |     ++
+
+warning: doc list item without indentation
+  --> port/src/virtio.rs:29:5
+   |
+29 | //! safe core intrinsics, so the module keeps zero unsafe and zero asm!.
+   |     ^
+   |
+   = help: if this is supposed to be its own paragraph, add a blank line
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#doc_lazy_continuation
+help: indent this line
+   |
+29 | //!   safe core intrinsics, so the module keeps zero unsafe and zero asm!.
+   |     ++
+
+warning: trait `PciCfg` has a `len` method but no (possibly inherited) `is_empty` method
+   --> port/src/virtio.rs:116:1
+    |
+116 | / pub trait PciCfg {
+117 | |     /// The config-space extent in bytes (for truncation checks).
+118 | |     fn len(&self) -> usize;
+119 | |     fn read_u8(&self, off: usize) -> u8;
+120 | |     fn read_u32(&self, off: usize) -> u32;
+121 | | }
+    | |_^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#len_without_is_empty
+    = note: `#[warn(clippy::len_without_is_empty)]` on by default
+
+warning: manual `!RangeInclusive::contains` implementation
+   --> port/src/virtio.rs:533:12
+    |
+533 |         if qsize < 2 || qsize > MAX_QSIZE || !qsize.is_power_of_two() {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: use: `!(2..=MAX_QSIZE).contains(&qsize)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#manual_range_contains
+
+warning: `port` (lib) generated 36 warnings (run `cargo clippy --fix --lib -p port` to apply 17 suggestions)
+    Checking x86_64 v0.1.0 (/home/req/code/r9/.git/r9-p03-stop/tip/x86_64)
+warning: unused import: `heap_census`
+  --> x86_64/src/allocator.rs:51:25
+   |
+51 | pub(crate) use global::{heap_census, heap_stats};
+   |                         ^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: empty line after doc comment
+   --> x86_64/src/proc.rs:414:1
+    |
+414 | / /// One entry of the table at `table_pa`.
+415 | |
+    | |_^
+...
+419 |   fn round_up_page(x: usize) -> usize {
+    |   ---------------- the comment documents this function
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#empty_line_after_doc_comments
+    = note: `#[warn(clippy::empty_line_after_doc_comments)]` on by default
+    = help: if the empty line is unintentional, remove it
+help: if the documentation should include the empty line include it in the comment
+    |
+415 | ///
+    |
+
+warning: this `if` statement can be collapsed
+   --> xtask/src/config.rs:654:5
+    |
+654 | /     if pcap {
+655 | |         if let Some(path) = pcap_path {
+656 | |             args.push("-object".to_string());
+657 | |             args.push(format!("filter-dump,id=f0,netdev=n0,file={path}"));
+658 | |         }
+659 | |     }
+    | |_____^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if
+    = note: `#[warn(clippy::collapsible_if)]` on by default
+help: collapse nested if block
+    |
+654 ~     if pcap
+655 ~         && let Some(path) = pcap_path {
+656 |             args.push("-object".to_string());
+657 |             args.push(format!("filter-dump,id=f0,netdev=n0,file={path}"));
+658 ~         }
+    |
+
+warning: this `if` statement can be collapsed
+   --> xtask/src/config.rs:848:5
+    |
+848 | /     if let Ok(top) = std::env::var("NIX_BUILD_TOP") {
+849 | |         if !top.is_empty() && !top.contains(char::is_whitespace) {
+850 | |             rustflags.push(format!("--remap-path-prefix={top}=/build"));
+851 | |         }
+852 | |     }
+    | |_____^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if
+help: collapse nested if block
+    |
+848 ~     if let Ok(top) = std::env::var("NIX_BUILD_TOP")
+849 ~         && !top.is_empty() && !top.contains(char::is_whitespace) {
+850 |             rustflags.push(format!("--remap-path-prefix={top}=/build"));
+851 ~         }
+    |
+
+warning: this `if` statement can be collapsed
+   --> xtask/src/image.rs:466:21
+    |
+466 | /                     if let Some(strip) = &file.strip {
+467 | |                         if strip.is_empty() || strip.iter().any(|literal| literal.trim().is_empty())
+468 | |                         {
+469 | |                             return Err(format!(
+...   |
+476 | |                     }
+    | |_____________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if
+help: collapse nested if block
+    |
+466 ~                     if let Some(strip) = &file.strip
+467 ~                         && (strip.is_empty() || strip.iter().any(|literal| literal.trim().is_empty()))
+468 |                         {
+...
+474 |                             .into());
+475 ~                         }
+    |
+
+warning: this function has too many arguments (8/7)
+    --> xtask/src/image.rs:1924:1
+     |
+1924 | / fn assemble_checked_with(
+1925 | |     manifest_path: &Path,
+1926 | |     tree: &Path,
+1927 | |     harvey_roots: &[PathBuf],
+...    |
+1932 | |     log: &mut dyn std::io::Write,
+1933 | | ) -> Result<Assembled> {
+     | |______________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#too_many_arguments
+     = note: `#[warn(clippy::too_many_arguments)]` on by default
+
+warning: this `if` statement can be collapsed
+    --> xtask/src/image.rs:2030:17
+     |
+2030 | /                 if file.generator.as_deref() == Some("ndb-template") {
+2031 | |                     if let Some(from) = &file.from {
+2032 | |                         inputs.push(tree.join(from));
+2033 | |                     }
+2034 | |                 }
+     | |_________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if
+help: collapse nested if block
+     |
+2030 ~                 if file.generator.as_deref() == Some("ndb-template")
+2031 ~                     && let Some(from) = &file.from {
+2032 |                         inputs.push(tree.join(from));
+2033 ~                     }
+     |
+
+warning: this `if` statement can be collapsed
+    --> xtask/src/image.rs:2315:17
+     |
+2315 | /                 if let Some(source) = library.source {
+2316 | |                     if source != Source::Harvey {
+2317 | |                         problems.push(format!(
+2318 | |                             "{name}: source must be harvey (the tree-relative archive)"
+...    |
+2321 | |                 }
+     | |_________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if
+help: collapse nested if block
+     |
+2315 ~                 if let Some(source) = library.source
+2316 ~                     && source != Source::Harvey {
+2317 |                         problems.push(format!(
+2318 |                             "{name}: source must be harvey (the tree-relative archive)"
+2319 |                         ));
+2320 ~                     }
+     |
+
+warning: this loop could be written as a `while let` loop
+   --> xtask/src/lintcontract.rs:138:5
+    |
+138 | /     loop {
+139 | |         let Some(rest) = code.strip_prefix("#[") else { break };
+140 | |         match rest.find(']') {
+141 | |             Some(end) => code = rest[end + 1..].trim_start(),
+...   |
+144 | |     }
+    | |_____^ help: try: `while let Some(rest) = code.strip_prefix("#[") { .. }`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#while_let_loop
+    = note: `#[warn(clippy::while_let_loop)]` on by default
+
+warning: this `if` statement can be collapsed
+   --> xtask/src/lintcontract.rs:186:9
+    |
+186 | /         if display.ends_with(".rs") {
+187 | |             if let Some(text) = read_file(&path, &display, problems) {
+188 | |                 for (n, line) in text.lines().enumerate() {
+189 | |                     if let Some(name) = declared_module_name(line) {
+...   |
+200 | |         }
+    | |_________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if
+help: collapse nested if block
+    |
+186 ~         if display.ends_with(".rs")
+187 ~             && let Some(text) = read_file(&path, &display, problems) {
+188 |                 for (n, line) in text.lines().enumerate() {
+...
+198 |                 }
+199 ~             }
+    |
+
+warning: this `if` statement can be collapsed
+   --> xtask/src/lintcontract.rs:189:21
+    |
+189 | /                     if let Some(name) = declared_module_name(line) {
+190 | |                         if name.to_ascii_lowercase().contains("funnel") {
+191 | |                             problems.push(format!(
+192 | |                                 "{display}:{}: declares module `{name}`; Funnel Hashing is not \
+...   |
+197 | |                     }
+    | |_____________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if
+help: collapse nested if block
+    |
+189 ~                     if let Some(name) = declared_module_name(line)
+190 ~                         && name.to_ascii_lowercase().contains("funnel") {
+191 |                             problems.push(format!(
+...
+195 |                             ));
+196 ~                         }
+    |
+
+warning: this `if` statement can be collapsed
+   --> xtask/src/lintcontract.rs:251:5
+    |
+251 | /     if let Some(text) = read_file(&workspace.join(lib), lib, problems) {
+252 | |         if !text.contains("#![forbid(unsafe_code)]") {
+253 | |             problems.push(format!(
+254 | |                 "{lib}: missing `#![forbid(unsafe_code)]` (D-10): crypto/ is crate-level forbid"
+...   |
+257 | |     }
+    | |_____^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if
+help: collapse nested if block
+    |
+251 ~     if let Some(text) = read_file(&workspace.join(lib), lib, problems)
+252 ~         && !text.contains("#![forbid(unsafe_code)]") {
+253 |             problems.push(format!(
+254 |                 "{lib}: missing `#![forbid(unsafe_code)]` (D-10): crypto/ is crate-level forbid"
+255 |             ));
+256 ~         }
+    |
+
+warning: this `if` statement can be collapsed
+   --> xtask/src/lintcontract.rs:351:17
+    |
+351 | /                 if let Some(dep) = dependency_key_in_table(&table) {
+352 | |                     if dep == "crypto" || dep == "ds" {
+353 | |                         problems.push(format!(
+354 | |                             "{display}:{}: kernel crate dependency `{dep}`; no kernel crate may \
+...   |
+361 | |                 }
+    | |_________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if
+help: collapse nested if block
+    |
+351 ~                 if let Some(dep) = dependency_key_in_table(&table)
+352 ~                     && (dep == "crypto" || dep == "ds") {
+353 |                         problems.push(format!(
+...
+359 |                         ));
+360 ~                     }
+    |
+
+warning: `xtask` (lib) generated 11 warnings (run `cargo clippy --fix --lib -p xtask` to apply 9 suggestions)
+warning: this `if` statement can be collapsed
+  --> xtask/src/bin/r9-netdev-args.rs:84:5
+   |
+84 | /     if let Some(p) = &pcap {
+85 | |         if !token_safe(p) {
+86 | |             usage_exit(&format!(
+87 | |                 "--pcap value {p:?} contains whitespace/is empty — tokens are split on spaces by every consumer"
+...  |
+90 | |     }
+   | |_____^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if
+   = note: `#[warn(clippy::collapsible_if)]` on by default
+help: collapse nested if block
+   |
+84 ~     if let Some(p) = &pcap
+85 ~         && !token_safe(p) {
+86 |             usage_exit(&format!(
+87 |                 "--pcap value {p:?} contains whitespace/is empty — tokens are split on spaces by every consumer"
+88 |             ));
+89 ~         }
+   |
+
+warning: `xtask` (bin "r9-netdev-args") generated 1 warning (run `cargo clippy --fix --bin "r9-netdev-args" -p xtask` to apply 1 suggestion)
+warning: function `heap_census` is never used
+  --> x86_64/src/allocator.rs:36:19
+   |
+36 |     pub(crate) fn heap_census() -> (alloc::vec::Vec<(usize, usize)>, alloc::vec::Vec<(usize, usize)>) {
+   |                   ^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `flags` is never used
+  --> x86_64/src/cpu.rs:35:15
+   |
+35 | pub(crate) fn flags() -> Flags {
+   |               ^^^^^
+
+warning: function `cli` is never used
+  --> x86_64/src/cpu.rs:87:15
+   |
+87 | pub(crate) fn cli() {
+   |               ^^^
+
+warning: associated function `new` is never used
+   --> x86_64/src/dat.rs:506:12
+    |
+497 | impl Flags {
+    | ---------- associated function in this implementation
+...
+506 |     pub fn new(raw: u64) -> Self {
+    |            ^^^
+
+warning: enum `IntrStatus` is never used
+   --> x86_64/src/trap.rs:680:10
+    |
+680 | pub enum IntrStatus {
+    |          ^^^^^^^^^^
+
+warning: function `intrstatus` is never used
+   --> x86_64/src/trap.rs:773:4
+    |
+773 | fn intrstatus() -> IntrStatus {
+    |    ^^^^^^^^^^
+
+warning: function `spllo` is never used
+   --> x86_64/src/trap.rs:778:8
+    |
+778 | pub fn spllo() -> IntrStatus {
+    |        ^^^^^
+
+warning: function `splhi` is never used
+   --> x86_64/src/trap.rs:784:8
+    |
+784 | pub fn splhi() -> IntrStatus {
+    |        ^^^^^
+
+warning: function `splx` is never used
+   --> x86_64/src/trap.rs:790:8
+    |
+790 | pub fn splx(x: IntrStatus) -> IntrStatus {
+    |        ^^^^
+
+warning: very complex type used. Consider factoring parts into `type` definitions
+  --> x86_64/src/allocator.rs:36:36
+   |
+36 |     pub(crate) fn heap_census() -> (alloc::vec::Vec<(usize, usize)>, alloc::vec::Vec<(usize, usize)>) {
+   |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#type_complexity
+   = note: `#[warn(clippy::type_complexity)]` on by default
+
+warning: `port` (lib) generated 36 warnings (36 duplicates)
+warning: manually reimplementing `div_ceil`
+    --> x86_64/src/syscall.rs:1900:5
+     |
+1900 |     (ms + crate::platform::q35::timer::TICK_MS - 1) / crate::platform::q35::timer::TICK_MS
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider using `.div_ceil()`: `ms.div_ceil(crate::platform::q35::timer::TICK_MS)`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#manual_div_ceil
+     = note: `#[warn(clippy::manual_div_ceil)]` on by default
+
+warning: this expression creates a reference which is immediately dereferenced by the compiler
+   --> x86_64/src/main.rs:138:27
+    |
+138 |         arm_syscall_entry(&mach);
+    |                           ^^^^^ help: change this to: `mach`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#needless_borrow
+    = note: `#[warn(clippy::needless_borrow)]` on by default
+
+warning: `x86_64` (bin "x86_64") generated 14 warnings (run `cargo clippy --fix --bin "x86_64" -p x86_64` to apply 3 suggestions)
+warning: field `frame_len` is never read
+   --> xtask/src/pcap.rs:228:9
+    |
+219 | pub struct Icmpv4Frame {
+    |            ----------- field in this struct
+...
+228 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Icmpv4Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `frame_len` is never read
+   --> xtask/src/pcap.rs:375:9
+    |
+359 | pub struct BootpFrame {
+    |            ---------- field in this struct
+...
+375 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `BootpFrame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `dst_mac` and `frame_len` are never read
+   --> xtask/src/pcap.rs:569:9
+    |
+566 | pub struct Icmpv6Frame {
+    |            ----------- fields in this struct
+...
+569 |     pub dst_mac: [u8; 6],
+    |         ^^^^^^^
+...
+579 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Icmpv6Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `src_mac`, `dst_mac`, and `frame_len` are never read
+   --> xtask/src/pcap.rs:723:9
+    |
+721 | pub struct Tcpv4Frame {
+    |            ---------- fields in this struct
+722 |     /// Ethernet source/destination MAC.
+723 |     pub src_mac: [u8; 6],
+    |         ^^^^^^^
+724 |     pub dst_mac: [u8; 6],
+    |         ^^^^^^^
+...
+737 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Tcpv4Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: this `repeat().take()` can be written more concisely
+   --> xtask/src/pcap.rs:179:32
+    |
+179 |     for g in head.iter().chain(std::iter::repeat(&0u16).take(zeros)).chain(tail.iter()) {
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider using `repeat_n()` instead: `std::iter::repeat_n(&0u16, zeros)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#manual_repeat_n
+    = note: `#[warn(clippy::manual_repeat_n)]` on by default
+
+warning: doc quote line without `>` marker
+    --> xtask/src/pcap.rs:1290:5
+     |
+1290 | /// RX==N/TX==N/ifstats reconciliation is the kernel netgate's own
+     |     ^
+     |
+     = help: if this not intended to be a quote at all, escape it with `\>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#doc_lazy_continuation
+     = note: `#[warn(clippy::doc_lazy_continuation)]` on by default
+help: add markers to start of line
+     |
+1290 | /// > RX==N/TX==N/ifstats reconciliation is the kernel netgate's own
+     |     +
+
+warning: doc quote line without `>` marker
+    --> xtask/src/pcap.rs:1291:5
+     |
+1291 | /// fail-closed check (its `netgate: FAIL` lines fail the serial stages
+     |     ^
+     |
+     = help: if this not intended to be a quote at all, escape it with `\>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#doc_lazy_continuation
+help: add markers to start of line
+     |
+1291 | /// > fail-closed check (its `netgate: FAIL` lines fail the serial stages
+     |     +
+
+warning: doc quote line without `>` marker
+    --> xtask/src/pcap.rs:1292:5
+     |
+1292 | /// fast, and a missing X64-NET-DONE never finishes); this is the
+     |     ^
+     |
+     = help: if this not intended to be a quote at all, escape it with `\>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#doc_lazy_continuation
+help: add markers to start of line
+     |
+1292 | /// > fast, and a missing X64-NET-DONE never finishes); this is the
+     |     +
+
+warning: doc quote line without `>` marker
+    --> xtask/src/pcap.rs:1293:5
+     |
+1293 | /// host-side wire proof over the filter-dump capture.  Returns
+     |     ^
+     |
+     = help: if this not intended to be a quote at all, escape it with `\>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#doc_lazy_continuation
+help: add markers to start of line
+     |
+1293 | /// > host-side wire proof over the filter-dump capture.  Returns
+     |     +
+
+warning: doc quote line without `>` marker
+    --> xtask/src/pcap.rs:1294:5
+     |
+1294 | /// (requests, replies) for the PASS line.
+     |     ^
+     |
+     = help: if this not intended to be a quote at all, escape it with `\>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#doc_lazy_continuation
+help: add markers to start of line
+     |
+1294 | /// > (requests, replies) for the PASS line.
+     |     +
+
+warning: doc list item without indentation
+    --> xtask/src/main.rs:1394:5
+     |
+1394 | /// NS/NA exchange + the guest's ICMPv6 echo leg pcap-proven), or `aan`
+     |     ^
+     |
+     = help: if this is supposed to be its own paragraph, add a blank line
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#doc_lazy_continuation
+help: indent this line
+     |
+1394 | ///   NS/NA exchange + the guest's ICMPv6 echo leg pcap-proven), or `aan`
+     |     ++
+
+warning: doc list item without indentation
+    --> xtask/src/main.rs:1395:5
+     |
+1395 | /// (the 08-08 NETIP-07 gate: the aan drop-and-resume over tcp loopback —
+     |     ^
+     |
+     = help: if this is supposed to be its own paragraph, add a blank line
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#doc_lazy_continuation
+help: indent this line
+     |
+1395 | ///   (the 08-08 NETIP-07 gate: the aan drop-and-resume over tcp loopback —
+     |     ++
+
+warning: doc list item without indentation
+    --> xtask/src/main.rs:1396:5
+     |
+1396 | /// D-14, NIC-free), or `soak` (the 08-08 NETIP-08 machinery gate: the
+     |     ^
+     |
+     = help: if this is supposed to be its own paragraph, add a blank line
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#doc_lazy_continuation
+help: indent this line
+     |
+1396 | ///   D-14, NIC-free), or `soak` (the 08-08 NETIP-08 machinery gate: the
+     |     ++
+
+warning: doc list item without indentation
+    --> xtask/src/main.rs:1397:5
+     |
+1397 | /// tcpblast bidirectional soak against the host echo endpoint on slirp,
+     |     ^
+     |
+     = help: if this is supposed to be its own paragraph, add a blank line
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#doc_lazy_continuation
+help: indent this line
+     |
+1397 | ///   tcpblast bidirectional soak against the host echo endpoint on slirp,
+     |     ++
+
+warning: doc list item without indentation
+    --> xtask/src/main.rs:1398:5
+     |
+1398 | /// pcap + guest-counter reconciled, labeled not-L2-truth).
+     |     ^
+     |
+     = help: if this is supposed to be its own paragraph, add a blank line
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#doc_lazy_continuation
+help: indent this line
+     |
+1398 | ///   pcap + guest-counter reconciled, labeled not-L2-truth).
+     |     ++
+
+warning: doc list item without indentation
+    --> xtask/src/main.rs:1399:5
+     |
+1399 | /// A typo'd value is a harness bug, not a gate failure — validated before
+     |     ^
+     |
+     = help: if this is supposed to be its own paragraph, add a blank line
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#doc_lazy_continuation
+help: indent this line
+     |
+1399 | ///   A typo'd value is a harness bug, not a gate failure — validated before
+     |     ++
+
+warning: doc list item without indentation
+    --> xtask/src/main.rs:1400:5
+     |
+1400 | /// qemu spawns, never after a wasted boot.
+     |     ^
+     |
+     = help: if this is supposed to be its own paragraph, add a blank line
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#doc_lazy_continuation
+help: indent this line
+     |
+1400 | ///   qemu spawns, never after a wasted boot.
+     |     ++
+
+warning: this `if` statement can be collapsed
+    --> xtask/src/main.rs:2511:21
+     |
+2511 | /                     if let Some(line) =
+2512 | |                         line_containing(&capture[bind_after..], Q35_CHURN_DONE_MARKER.as_bytes())
+2513 | |                     {
+2514 | |                         if line.contains("semgens=") {
+...    |
+2517 | |                     }
+     | |_____________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if
+     = note: `#[warn(clippy::collapsible_if)]` on by default
+help: collapse nested if block
+     |
+2512 ~                         line_containing(&capture[bind_after..], Q35_CHURN_DONE_MARKER.as_bytes())
+2513 ~                         && line.contains("semgens=") {
+2514 |                             return self.finish(log_abs, &capture, BootProfile::X64Churn);
+2515 ~                         }
+     |
+
+warning: this `if` statement can be collapsed
+    --> xtask/src/main.rs:2523:21
+     |
+2523 | /                     if let Some(line) =
+2524 | |                         line_containing(&capture, VIRT_CHURN_DONE_MARKER.as_bytes())
+2525 | |                     {
+2526 | |                         if line.contains("semgens=") {
+...    |
+2529 | |                     }
+     | |_____________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if
+help: collapse nested if block
+     |
+2524 ~                         line_containing(&capture, VIRT_CHURN_DONE_MARKER.as_bytes())
+2525 ~                         && line.contains("semgens=") {
+2526 |                             return self.finish(log_abs, &capture, BootProfile::VirtChurn);
+2527 ~                         }
+     |
+
+warning: calls to `push` immediately after creation
+    --> xtask/src/main.rs:3580:9
+     |
+3580 | /         let mut all_cmd_args: Vec<(Vec<String>, Option<Configuration>)> = Vec::new();
+3581 | |
+3582 | |         all_cmd_args.push((
+3583 | |             vec![
+...    |
+3640 | |             None,
+3641 | |         ));
+     | |___________^ help: consider using the `vec![]` macro: `let mut all_cmd_args: Vec<(Vec<String>, Option<Configuration>)> = vec![..];`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#vec_init_then_push
+     = note: `#[warn(clippy::vec_init_then_push)]` on by default
+
+warning: `xtask` (bin "xtask") generated 20 warnings (run `cargo clippy --fix --bin "xtask" -p xtask` to apply 8 suggestions)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 3.10s
+EXIT=0
