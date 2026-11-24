@@ -227,6 +227,24 @@ impl<const WORDS: usize, P: Probe> FlattenedTphtShard<WORDS, P> {
         removed
     }
 
+    /// Resolve a value from a `(key, tiny_ptr)` pair in **exactly one arena
+    /// slot read** and with **zero header reads** (DS-03).
+    ///
+    /// "One memory access" means one arena slot: a value may occupy several
+    /// `WORDS` words inside that slot.  The home block index comes from
+    /// [`feistel::split`] in register arithmetic and no header field is
+    /// loaded; the seqlock is never taken.
+    ///
+    /// The caller holds a `(key, tiny_ptr)` pair for a live entry (for
+    /// example a `StatefulHandle` in Phase 4) and is responsible for not using
+    /// the pair after the entry is removed.  A stale pair returns whatever the
+    /// slot now holds and is never undefined behaviour: every arena word is an
+    /// atomic, so the read is always a valid atomic load.
+    pub fn deref_tiny(&self, key: u64, ptr: TinyPtr) -> [u64; WORDS] {
+        let _ = (key, ptr);
+        [0u64; WORDS]
+    }
+
     /// The arena slot a tiny pointer addresses: `((block << 4) + (ptr - 1)) &
     /// slot_mask`.
     fn slot_index(&self, block: usize, ptr: TinyPtr) -> usize {
@@ -299,11 +317,51 @@ impl<const WORDS: usize, P: Probe> FlattenedTphtShard<WORDS, P> {
 
 #[cfg(test)]
 mod tests {
+    use core::sync::atomic::AtomicUsize;
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
     use super::*;
     use crate::tpht::miri_scaled;
+
+    /// A [`Probe`] that counts the reader's two kinds of memory access, so
+    /// `deref_tiny` can be shown to make exactly one arena read and no header
+    /// read (DS-03; RESEARCH Pattern 4).  The counters sit behind `Arc` so the
+    /// shard holds a clone and the test keeps a handle to read them.
+    #[derive(Clone, Default)]
+    struct CountingProbe {
+        header_reads: Arc<AtomicUsize>,
+        arena_reads: Arc<AtomicUsize>,
+    }
+
+    impl CountingProbe {
+        fn new() -> Self {
+            Self::default()
+        }
+
+        fn header_reads(&self) -> usize {
+            self.header_reads.load(Ordering::Relaxed)
+        }
+
+        fn arena_reads(&self) -> usize {
+            self.arena_reads.load(Ordering::Relaxed)
+        }
+
+        fn reset(&self) {
+            self.header_reads.store(0, Ordering::Relaxed);
+            self.arena_reads.store(0, Ordering::Relaxed);
+        }
+    }
+
+    impl Probe for CountingProbe {
+        fn header_read(&self) {
+            self.header_reads.fetch_add(1, Ordering::Relaxed);
+        }
+
+        fn arena_read(&self) {
+            self.arena_reads.fetch_add(1, Ordering::Relaxed);
+        }
+    }
 
     /// SplitMix64: a tiny seeded PRNG so every randomized test reproduces
     /// from its literal seed (no `rand`, no `proptest`).
@@ -519,5 +577,168 @@ mod tests {
         for handle in handles {
             handle.join().expect("every stress thread completes");
         }
+    }
+
+    #[test]
+    fn deref_tiny_is_one_arena_read_and_no_header_read() {
+        let probe = CountingProbe::new();
+        let shard = FlattenedTphtShard::<2, CountingProbe>::with_probe(1, probe.clone())
+            .expect("one block is a valid block count");
+        let ptr = shard
+            .insert(0x5EED, [0xAAAA_BBBB_CCCC_DDDD, 0x1111_2222_3333_4444], |v| {
+                v[0] == 0xAAAA_BBBB_CCCC_DDDD
+            })
+            .expect("the first key fits in an empty block");
+        probe.reset();
+        assert_eq!(
+            shard.deref_tiny(0x5EED, ptr),
+            [0xAAAA_BBBB_CCCC_DDDD, 0x1111_2222_3333_4444],
+            "deref_tiny must resolve the entry's value from the arena"
+        );
+        assert_eq!(
+            (probe.arena_reads(), probe.header_reads()),
+            (1, 0),
+            "deref_tiny must make exactly one arena read and zero header reads (DS-03)"
+        );
+        assert_eq!(
+            shard.lookup(0x5EED, |v| v[0] == 0xAAAA_BBBB_CCCC_DDDD),
+            Some(([0xAAAA_BBBB_CCCC_DDDD, 0x1111_2222_3333_4444], ptr)),
+            "the key path still resolves the entry"
+        );
+        assert!(
+            probe.header_reads() >= 1,
+            "lookup probes the header, so the counting probe is wired to the reader"
+        );
+    }
+
+    #[test]
+    fn deref_tiny_matches_btreemap_model() {
+        let blocks = miri_scaled(1_024, 16);
+        let ops = miri_scaled(2_000, 200);
+        let keys: Vec<u64> =
+            (0..32u64).map(|i| 0x9E37_79B9_7F4A_7C15u64.wrapping_mul(i + 1)).collect();
+        let shard = FlattenedTphtShard::<2>::new(blocks).expect("a power-of-two block count");
+        let mut model: BTreeMap<u64, ([u64; 2], TinyPtr)> = BTreeMap::new();
+        let mut rng = SplitMix64::new(0x0000_0000_0000_013d);
+        for step in 0..ops {
+            let key = keys[(rng.next() as usize) % keys.len()];
+            let value = [key, !key];
+            match rng.next() % 3 {
+                0 => {
+                    let result = shard.insert(key, value, |v| v[0] == key);
+                    if let Some(&(held, ptr)) = model.get(&key) {
+                        assert_eq!(
+                            result,
+                            Err(TphtError::Exists),
+                            "a second insert must report Exists (step {step}, key {key})"
+                        );
+                        assert_eq!(
+                            shard.deref_tiny(key, ptr),
+                            held,
+                            "a refused insert must leave the first value (step {step}, key {key})"
+                        );
+                    } else {
+                        let ptr = result
+                            .expect("32 keys over at least 16 blocks leave a home slot each");
+                        assert_eq!(
+                            shard.deref_tiny(key, ptr),
+                            value,
+                            "a fresh insert must resolve through its pointer (step {step}, key {key})"
+                        );
+                        model.insert(key, (value, ptr));
+                    }
+                }
+                1 => {
+                    if let Some(&(held, ptr)) = model.get(&key) {
+                        assert_eq!(
+                            shard.deref_tiny(key, ptr),
+                            held,
+                            "deref_tiny disagrees with the model (step {step}, key {key})"
+                        );
+                    }
+                }
+                _ => {
+                    let removed = shard.remove(key, |v| v[0] == key);
+                    assert_eq!(
+                        removed,
+                        model.remove(&key).is_some(),
+                        "remove disagrees with the model (step {step}, key {key})"
+                    );
+                }
+            }
+        }
+        for (&key, &(value, ptr)) in &model {
+            assert_eq!(
+                shard.deref_tiny(key, ptr),
+                value,
+                "the final state disagrees with the model (key {key})"
+            );
+            assert_eq!(
+                shard.lookup(key, |v| v[0] == key).map(|(v, _)| v),
+                Some(value),
+                "the key path agrees with the model (key {key})"
+            );
+        }
+
+        // A stale pair is not undefined behaviour: it returns whatever the
+        // slot now holds.  A one-block shard reuses slot 0 after a removal.
+        let shard = FlattenedTphtShard::<2>::new(1).expect("one block");
+        let stale = shard.insert(7, [7, !7], |v| v[0] == 7).expect("the first key fits");
+        assert!(shard.remove(7, |v| v[0] == 7), "the first key is present");
+        let fresh = shard.insert(8, [8, !8], |v| v[0] == 8).expect("the slot is free again");
+        assert_eq!(stale, fresh, "the freed slot is reassigned to the next key");
+        assert_eq!(
+            shard.deref_tiny(7, stale),
+            [8, !8],
+            "a stale pair returns the slot's current value and is never undefined behaviour"
+        );
+    }
+
+    #[test]
+    fn deref_tiny_wraps_with_slot_mask() {
+        // Two blocks: the last block is block 1, so `b << 4` is 16 and
+        // `slot_mask` is 31.  Pointers 1 and 16 land in the last block's home
+        // window; 17 and 255 run past the arena end and wrap by the mask.
+        const BLOCKS: usize = 2;
+        let bits = index_bits(BLOCKS).expect("two blocks");
+        let mut last: Vec<u64> = Vec::new();
+        let mut first: Vec<u64> = Vec::new();
+        let mut key = 0u64;
+        while last.len() < HOME_SLOTS || first.len() < HOME_SLOTS {
+            let (block, _) = feistel::split(key, bits);
+            if block == BLOCKS - 1 {
+                if last.len() < HOME_SLOTS {
+                    last.push(key);
+                }
+            } else if first.len() < HOME_SLOTS {
+                first.push(key);
+            }
+            key += 1;
+        }
+        let shard = FlattenedTphtShard::<2>::new(BLOCKS).expect("two blocks");
+        let mut stored = vec![[0u64; 2]; HOME_SLOTS * BLOCKS];
+        for &key in first.iter().chain(last.iter()) {
+            let (block, _) = feistel::split(key, bits);
+            let ptr = shard
+                .insert(key, [key, !key], |v| v[0] == key)
+                .expect("sixteen keys per block fit in its home window");
+            let slot = ((block << 4) + (ptr.get() as usize - 1)) & (HOME_SLOTS * BLOCKS - 1);
+            stored[slot] = [key, !key];
+        }
+        let last_block = BLOCKS - 1;
+        let sample_key = last[0];
+        for ptr in [1u8, 16, 17, 255] {
+            let tiny = TinyPtr::new(ptr).expect("a tiny pointer is 1..=255");
+            let slot = ((last_block << 4) + (tiny.get() as usize - 1)) & (HOME_SLOTS * BLOCKS - 1);
+            assert_eq!(
+                shard.deref_tiny(sample_key, tiny),
+                stored[slot],
+                "pointer {ptr} on the last block must read slot {slot} = ((b << 4) + (ptr - 1)) & slot_mask"
+            );
+        }
+        assert_ne!(
+            stored[16], stored[0],
+            "the wrap must be observable: the last block's first slot differs from slot 0"
+        );
     }
 }
