@@ -90,6 +90,11 @@ impl<const WORDS: usize> Bank<WORDS> {
             cursor: AtomicUsize::new(0),
         }
     }
+
+    /// The nodes not yet claimed (`BANK_NODES` minus the used counter).
+    fn free_count(&self) -> usize {
+        BANK_NODES - self.used.load(Ordering::Relaxed)
+    }
 }
 
 /// A test-only counter of nodes currently in the [`WRITING`] state, raised at
@@ -163,8 +168,14 @@ impl<const WORDS: usize> ChainedTphtOverflow<WORDS> {
     /// and `mix32(block ^ 0x9E37_79B9) % num_banks`; when they are equal and
     /// there is more than one bank, the second is the next bank.
     pub fn candidate_banks(&self, block: usize) -> (usize, usize) {
-        let _ = block;
-        (0, 0)
+        let num_banks = self.banks.len();
+        let mixed = block as u32;
+        let first = (feistel::mix32(mixed) as usize) % num_banks;
+        let mut second = (feistel::mix32(mixed ^ 0x9E37_79B9) as usize) % num_banks;
+        if first == second && num_banks > 1 {
+            second = (first + 1) % num_banks;
+        }
+        (first, second)
     }
 
     /// Insert `value` under `key` in `block`'s overflow chain.
@@ -173,28 +184,152 @@ impl<const WORDS: usize> ChainedTphtOverflow<WORDS> {
     /// the chain and [`TphtError::BanksFull`] when both candidate banks are
     /// full.  The caller serialises mutations of the block's chain.
     pub fn insert(&self, block: usize, key: u64, value: [u64; WORDS]) -> Result<(), TphtError> {
-        let _ = (block, key, value);
-        Err(TphtError::BanksFull)
+        let fingerprint = Self::fingerprint_of(key);
+        if self.find(block, key, fingerprint).is_some() {
+            return Err(TphtError::Exists);
+        }
+        let (first, second) = self.candidate_banks(block);
+        let chosen = if self.banks[second].free_count() > self.banks[first].free_count() {
+            second
+        } else {
+            first
+        };
+        let (bank, index) = match self.claim(chosen) {
+            Some(index) => (chosen, index),
+            None => {
+                let other = if chosen == first { second } else { first };
+                match self.claim(other) {
+                    Some(index) => (other, index),
+                    None => return Err(TphtError::BanksFull),
+                }
+            }
+        };
+        let choice = if bank == first { 0u16 } else { 1u16 };
+        let node = &self.banks[bank].nodes[index];
+        node.fingerprint.store(fingerprint, Ordering::Relaxed);
+        node.key.store(key, Ordering::Relaxed);
+        for (word, stored) in node.value.iter().zip(value.iter()) {
+            word.store(*stored, Ordering::Relaxed);
+        }
+        let head = self.heads[block].load(Ordering::Acquire);
+        node.next.store(head, Ordering::Relaxed);
+        // Publish: the Release store makes the payload and the chain link
+        // visible to a reader that observes `LIVE`.
+        node.state.store(LIVE, Ordering::Release);
+        #[cfg(test)]
+        self.hook.published();
+        self.heads[block].store((choice << 8) | index as u16, Ordering::Release);
+        Ok(())
     }
 
     /// Look `key` up in `block`'s overflow chain: the 16-bit fingerprint is
     /// the first check, the full 64-bit key stored in the node is the second.
     pub fn lookup(&self, block: usize, key: u64) -> Option<[u64; WORDS]> {
-        let _ = (block, key);
-        None
+        self.find(block, key, Self::fingerprint_of(key)).map(|(value, _link)| value)
     }
 
     /// Remove `key` from `block`'s overflow chain, returning whether an entry
     /// was removed.  The caller serialises mutations of the block's chain.
     pub fn remove(&self, block: usize, key: u64) -> bool {
-        let _ = (block, key);
+        let fingerprint = Self::fingerprint_of(key);
+        let (first, second) = self.candidate_banks(block);
+        let mut previous: Option<u16> = None;
+        let mut link = self.heads[block].load(Ordering::Acquire);
+        while link != END {
+            let (choice, index) = decode(link);
+            let bank = if choice == 0 { first } else { second };
+            let node = &self.banks[bank].nodes[index];
+            if node.state.load(Ordering::Acquire) != LIVE {
+                return false;
+            }
+            if node.fingerprint.load(Ordering::Relaxed) == fingerprint
+                && node.key.load(Ordering::Relaxed) == key
+            {
+                let next = node.next.load(Ordering::Acquire);
+                match previous {
+                    None => self.heads[block].store(next, Ordering::Release),
+                    Some(previous_link) => {
+                        let (previous_choice, previous_index) = decode(previous_link);
+                        let previous_bank = if previous_choice == 0 { first } else { second };
+                        self.banks[previous_bank].nodes[previous_index]
+                            .next
+                            .store(next, Ordering::Release);
+                    }
+                }
+                // Unlink first, free second: a reader still holding the old
+                // link sees a free node and treats it as absent.
+                node.state.store(FREE, Ordering::Release);
+                self.banks[bank].used.fetch_sub(1, Ordering::Release);
+                return true;
+            }
+            previous = Some(link);
+            link = node.next.load(Ordering::Acquire);
+        }
         false
     }
 
     /// The nodes in use and the capacity: `(sum of the banks' used counters,
     /// num_banks * 255)`.
     pub fn fill(&self) -> (usize, usize) {
-        (0, 0)
+        let used = self.banks.iter().map(|bank| bank.used.load(Ordering::Relaxed)).sum();
+        (used, self.banks.len() * BANK_NODES)
+    }
+
+    /// Walk one block's chain for `key`; returns the value and the node link
+    /// that names it.
+    fn find(&self, block: usize, key: u64, fingerprint: u16) -> Option<([u64; WORDS], u16)> {
+        let (first, second) = self.candidate_banks(block);
+        let mut link = self.heads[block].load(Ordering::Acquire);
+        while link != END {
+            let (choice, index) = decode(link);
+            let bank = if choice == 0 { first } else { second };
+            let node = &self.banks[bank].nodes[index];
+            // A node in WRITING or free is not published; treat it as absent.
+            if node.state.load(Ordering::Acquire) != LIVE {
+                return None;
+            }
+            if node.fingerprint.load(Ordering::Relaxed) == fingerprint
+                && node.key.load(Ordering::Relaxed) == key
+            {
+                let mut value = [0u64; WORDS];
+                for (word, out) in node.value.iter().zip(value.iter_mut()) {
+                    *out = word.load(Ordering::Relaxed);
+                }
+                return Some((value, link));
+            }
+            link = node.next.load(Ordering::Acquire);
+        }
+        None
+    }
+
+    /// Claim a free node of `bank` by a compare-exchange from free to
+    /// [`WRITING`].  A failed exchange means another claimer took that node,
+    /// so the scan moves on; a bank with no free node yields `None`.
+    fn claim(&self, bank: usize) -> Option<usize> {
+        let bank = &self.banks[bank];
+        let start = bank.cursor.fetch_add(1, Ordering::Relaxed) % BANK_NODES;
+        for offset in 0..BANK_NODES {
+            let index = (start + offset) % BANK_NODES;
+            let node = &bank.nodes[index];
+            if node
+                .state
+                .compare_exchange(FREE, WRITING, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+            {
+                bank.used.fetch_add(1, Ordering::Relaxed);
+                #[cfg(test)]
+                self.hook.claimed(index);
+                return Some(index);
+            }
+        }
+        None
+    }
+
+    /// The 16-bit filter stored in a node: `feistel::fingerprint` over the
+    /// full key, which is this standalone overflow's whole remainder.  A
+    /// match is always verified against the node's full key.
+    fn fingerprint_of(key: u64) -> u16 {
+        feistel::fingerprint(key)
     }
 
     /// Claim every free node of one bank for a test, leaving them in
@@ -202,16 +337,25 @@ impl<const WORDS: usize> ChainedTphtOverflow<WORDS> {
     /// two-choice placement exists to handle: a full first candidate bank.
     #[cfg(test)]
     fn claim_bank_for_test(&self, bank: usize) -> usize {
-        let _ = bank;
-        0
+        let mut claimed = 0;
+        while self.claim(bank).is_some() {
+            claimed += 1;
+        }
+        claimed
     }
 
     /// The raw chain-head link of a test block.
     #[cfg(test)]
     fn head_link_for_test(&self, block: usize) -> u16 {
-        let _ = block;
-        END
+        self.heads[block].load(Ordering::Relaxed)
     }
+}
+
+/// A link names a node as `(bank choice << 8) | node index`; [`END`] is the
+/// empty-chain marker.  A node index is `0..=254`, so a link's index byte is
+/// never `0xFF`.
+fn decode(link: u16) -> (usize, usize) {
+    ((link >> 8) as usize, (link & 0xFF) as usize)
 }
 
 #[cfg(test)]
