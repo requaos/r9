@@ -8,8 +8,14 @@ BRANCH="phase-03/crypto-ds-foundations"
 TIP_EXPECTED="95fe66aaadde14cb8b8fa8197f6b0547ea7b7898"
 BASE="4beb5c8eea27f2f7c586a9cedfbc3bc675c6bae1"
 PHASE=".planning/phases/03-guide-phase-1-crypto-and-ds-foundations"
-ROOT="${ROOT:-$HOME/r9-p03-stop}"
-SRC="$(cd "$(dirname "$0")" && pwd)"
+SRC="${SRC:-$(cd "$(dirname "$0")" && pwd)}"
+GIT_COMMON="$(git -C "$SRC" rev-parse --git-common-dir 2>/dev/null)"
+case "$GIT_COMMON" in
+  "") echo "NOT A GIT REPO: $SRC"; exit 1 ;;
+  /*) ;;
+  *) GIT_COMMON="$SRC/$GIT_COMMON" ;;
+esac
+ROOT="${ROOT:-$GIT_COMMON/r9-p03-stop}"
 
 echo "== Phase 3 owner stop =="
 echo "repo: $SRC"
