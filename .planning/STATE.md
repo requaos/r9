@@ -5,16 +5,16 @@ milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
 current_phase: 03
 current_phase_name: Guide Phase 1 - crypto/ and ds/ Foundations
 status: executing
-stopped_at: Completed 03-12-PLAN.md
-last_updated: "2026-11-24T14:28:01.134Z"
+stopped_at: Completed 03-02-PLAN.md
+last_updated: "2026-11-24T14:32:24.548Z"
 last_activity: 2026-11-24
 last_activity_desc: Phase 03 execution started
-state_head: 2224868c7135522acde4ddcfde05d9205d6f5b87
+state_head: 0522586bc83ddc76ed614129a5efcb5c93119047
 progress:
   total_phases: 4
   completed_phases: 2
   total_plans: 53
-  completed_plans: 42
+  completed_plans: 43
   percent: 50
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-11-24)
 ## Current Position
 
 Phase: 03 (Guide Phase 1 - crypto/ and ds/ Foundations) — EXECUTING
-Plan: 3 of 13
+Plan: 4 of 13
 Status: Ready to execute
 Last activity: 2026-11-24 — Phase 03 execution started
 
@@ -69,6 +69,7 @@ Progress: [█████░░░░░] 50%
 | Phase 02 P06 | 138 min | 3 tasks | 3 files |
 | Phase 03 P01 | 2 min | 2 tasks | 11 files |
 | Phase 03 P12 | 2min | 2 tasks | 12 files |
+| Phase 03 P02 | 3min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -132,6 +133,10 @@ Full log is the PROJECT.md Key Decisions table. Recent:
 - [Phase 03]: Plan 03-12: ds/ joins the workspace with the D-09 per-module forbid layout (tpht exempt; roaring, setops, clientset forbidden) and roaring =0.11.5 as its only external crate, under [dev-dependencies] with a provenance comment
 - [Phase 03]: Plan 03-12: the two lib/*-unknown-none-elf.json cross legs with -Z build-std=core,alloc are the no_std FP/SIMD-free proof; the built-in bare-metal legs are kept only to meet D-21's wording and the code says the built-in aarch64 target proves nothing
 - [Phase 03]: Plan 03-12: Cargo.lock gained 13 lines and removed none (ds and roaring only) and now has its final Phase 3 shape; both kernels are byte-identical (@03-12 IDENTICAL), so D-21's stop did not fire
+- [Phase 03]: Plan 03-02: the static lint contract is one xtask module (six rule groups, plain text scans) called in TestStep::run directly after rforkh::check; a violation stops cargo xtask test with a lint-contract: error naming file and line before any leg compiles
+- [Phase 03]: Plan 03-02: the unsafe token rule strips // comments and matches whole words so unsafe_code never fires; the DS-07 Funnel absence and the //! restriction note in ds/src/lib.rs are pinned by 12 fixture tests
+- [Phase 03]: Plan 03-02: Miri comes from toolchainMiri in flake.nix (the four pinned components plus miri) exported as R9_MIRI_TOOLCHAIN; rust-toolchain.toml and the devshell packages list are untouched, so the kernel toolchain store path does not move
+- [Phase 03]: Plan 03-02: cargo xtask miri runs <toolchain>/bin/cargo miri test --package ds --lib tpht with many seeds and refuses on zero tests; the devshell appends the Miri bin to PATH (append-only deviation) so cargo-miri resolves by absolute path
 
 ### Open Questions (ten warnings, approved to be carried, not resolved)
 
@@ -193,6 +198,6 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 
 ## Session Continuity
 
-Last session: 2026-11-24T14:28:00.853Z
-Stopped at: Completed 03-12-PLAN.md
+Last session: 2026-11-24T14:32:24.239Z
+Stopped at: Completed 03-02-PLAN.md
 Resume file: None

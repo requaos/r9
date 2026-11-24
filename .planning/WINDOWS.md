@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 8
+open_count: 9
 waived_count: 0
 fixed_count: 1
-total_count: 9
-last_updated: 2026-11-24T14:27:40.689Z
+total_count: 10
+last_updated: 2026-11-24T14:32:01.421Z
 ---
 
 # Broken Windows Ledger
@@ -24,6 +24,7 @@ last_updated: 2026-11-24T14:27:40.689Z
 | 7 | 03 | stub | ds/src/roaring.rs | 1 | roaring module is a doc-only skeleton; implementation lands in plan 03-05 (DS-06) | open |  | 2026-11-24T14:27:40.129Z |  |
 | 8 | 03 | stub | ds/src/setops.rs | 1 | setops seam is a doc-only skeleton; the four hot loops land in plan 03-05 (D-20) | open |  | 2026-11-24T14:27:40.406Z |  |
 | 9 | 03 | stub | ds/src/clientset.rs | 1 | clientset module is a doc-only skeleton; implementation lands in plan 03-05 (DS-06) | open |  | 2026-11-24T14:27:40.689Z |  |
+| 10 | 03 | deviation | flake.nix |  | Plan 03-02 Task 2 appends $R9_MIRI_TOOLCHAIN/bin to PATH in the devshell shellHook (never prepends, so the pinned cargo/rustc are not shadowed) so the plan's literal MIRI-VERSION verify finds cargo-miri; recorded in 03-02-SUMMARY deviations | open |  | 2026-11-24T14:32:01.421Z |  |
 
 ````json
 [
@@ -141,6 +142,19 @@ last_updated: 2026-11-24T14:27:40.689Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-11-24T14:27:40.689Z",
+    "resolved_at": null,
+    "milestone": "v3.0"
+  },
+  {
+    "id": 10,
+    "kind": "deviation",
+    "phase": "03",
+    "file": "flake.nix",
+    "line": null,
+    "description": "Plan 03-02 Task 2 appends $R9_MIRI_TOOLCHAIN/bin to PATH in the devshell shellHook (never prepends, so the pinned cargo/rustc are not shadowed) so the plan's literal MIRI-VERSION verify finds cargo-miri; recorded in 03-02-SUMMARY deviations",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-24T14:32:01.421Z",
     "resolved_at": null,
     "milestone": "v3.0"
   }

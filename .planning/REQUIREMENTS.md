@@ -43,7 +43,7 @@ Standing constraint on every requirement below: the golden invariant (boots to r
 - [ ] **DS-04**: `ChainedTphtOverflow` implements two-choice dereference banks of 255 overflow nodes with a two-phase `WRITING` (0xFF) publication, reaching over 95% fill without allocation failure and supporting full-key verification on candidate match (IG-M07, IG-A01 item 12)
 - [ ] **DS-05**: `ds/src/roaring.rs` provides a Roaring bitmap (array, bitmap and run containers) whose union, intersection, difference and `andnot` match a reference model on randomized inputs (IG-D10)
 - [ ] **DS-06**: `ClientSet` is `Empty | Single | Inline{count, ids[4]} | Roaring`, uses zero heap for up to four clients, upgrades beyond four, and collapses contiguous ids into run containers (IG-M08, RFC-P08)
-- [ ] **DS-07**: Funnel Hashing, if present, serves only write-once ephemeral scratchpads; no page cache, FidTable, or Venti index uses it (IG-D09, IG-A01 item 11)
+- [x] **DS-07**: Funnel Hashing, if present, serves only write-once ephemeral scratchpads; no page cache, FidTable, or Venti index uses it (IG-D09, IG-A01 item 11)
 
 ### Lint and Audit (guide Phase 1)
 
@@ -249,7 +249,7 @@ Which phases cover which requirements. Each requirement maps to exactly one phas
 | DS-04 | Phase 3 | Pending |
 | DS-05 | Phase 3 | Pending |
 | DS-06 | Phase 3 | Pending |
-| DS-07 | Phase 3 | Pending |
+| DS-07 | Phase 3 | Complete |
 | LINT-01 | Phase 3 | Complete |
 | WIRE-01 | Phase 4 | Pending |
 | WIRE-02 | Phase 4 | Pending |
