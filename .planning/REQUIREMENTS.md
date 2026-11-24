@@ -39,7 +39,7 @@ Standing constraint on every requirement below: the golden invariant (boots to r
 
 - [ ] **DS-01**: `ds/` provides `FlattenedTphtShard` with a 64-byte `#[repr(C, align(64))]` `TphtBucketHeader`, seqlock, quotiented slots at the capacity settled by W6, and a host test showing over 90% of lookups resolve in the home block at target occupancy (IG-M06, IG-D09)
 - [x] **DS-02**: Feistel quotienting is bijective: key reconstruction from home block index and remainder round-trips for all tested keys (IG-M05)
-- [ ] **DS-03**: `deref_tiny(key, tiny_ptr)` performs exactly one memory access with zero header probes, shown by a model-based test (IG-M06)
+- [x] **DS-03**: `deref_tiny(key, tiny_ptr)` performs exactly one memory access with zero header probes, shown by a model-based test (IG-M06)
 - [ ] **DS-04**: `ChainedTphtOverflow` implements two-choice dereference banks of 255 overflow nodes with a two-phase `WRITING` (0xFF) publication, reaching over 95% fill without allocation failure and supporting full-key verification on candidate match (IG-M07, IG-A01 item 12)
 - [x] **DS-05**: `ds/src/roaring.rs` provides a Roaring bitmap (array, bitmap and run containers) whose union, intersection, difference and `andnot` match a reference model on randomized inputs (IG-D10)
 - [x] **DS-06**: `ClientSet` is `Empty | Single | Inline{count, ids[4]} | Roaring`, uses zero heap for up to four clients, upgrades beyond four, and collapses contiguous ids into run containers (IG-M08, RFC-P08)
@@ -245,7 +245,7 @@ Which phases cover which requirements. Each requirement maps to exactly one phas
 | CRYP-04 | Phase 3 | Pending |
 | DS-01 | Phase 3 | Pending |
 | DS-02 | Phase 3 | Complete |
-| DS-03 | Phase 3 | Pending |
+| DS-03 | Phase 3 | Complete |
 | DS-04 | Phase 3 | Pending |
 | DS-05 | Phase 3 | Complete |
 | DS-06 | Phase 3 | Complete |

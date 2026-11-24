@@ -5,16 +5,16 @@ milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
 current_phase: 03
 current_phase_name: Guide Phase 1 - crypto/ and ds/ Foundations
 status: executing
-stopped_at: Completed 03-06-PLAN.md
-last_updated: "2026-11-24T15:12:14.157Z"
+stopped_at: Completed 03-13-PLAN.md
+last_updated: "2026-11-24T15:25:52.274Z"
 last_activity: 2026-11-24
 last_activity_desc: Phase 03 execution started
-state_head: 8143473abe854cb56025728964ff96c7579b0dd9
+state_head: 3c88fd242e131228044817da6810472bcf668a75
 progress:
   total_phases: 4
   completed_phases: 2
   total_plans: 53
-  completed_plans: 47
+  completed_plans: 48
   percent: 50
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-11-24)
 ## Current Position
 
 Phase: 03 (Guide Phase 1 - crypto/ and ds/ Foundations) — EXECUTING
-Plan: 8 of 13
+Plan: 9 of 13
 Status: Ready to execute
 Last activity: 2026-11-24 — Phase 03 execution started
 
@@ -74,6 +74,7 @@ Progress: [█████░░░░░] 50%
 | Phase 03 P04 | 2min | 3 tasks | 7 files |
 | Phase 03 P05 | 4 min | 3 tasks | 4 files |
 | Phase 03 P06 | 25 | 2 tasks | 5 files |
+| Phase 03 P13 | 13 min | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -165,6 +166,9 @@ Full log is the PROJECT.md Key Decisions table. Recent:
 - [Phase 03]: Plan 03-06: the 64-byte bucket header is all atomics with the Boehm seqlock (writer Release data stores and generation bump; reader Acquire seq load, Relaxed data loads, fence(Acquire), seq reload); listing 9.3's orderings and plain fields are not used; Miri over 64 seeds passes and ds/src/tpht/ still holds no unsafe site
 - [Phase 03]: Plan 03-06: Miri-side test sizes were halved once per task under the plan's 120-second latency rule (feistel 142 -> 73 s, tpht-shard 121 -> 104 s); native sizes, the 64 seeds and the test list are unchanged
 - [Phase 03]: Plan 03-06: DS-01 is only part-delivered here (structure and concurrency); its over-90% home-hit measurement stays plan 03-08's, so only DS-02 is marked complete (03-08's frontmatter also claims DS-01)
+- [Phase 03]: Plan 03-13: deref_tiny resolves a (key, tiny_ptr) pair from one arena slot read, with zero header reads and no seqlock; the counting probe asserts the exact pair (arena_reads, header_reads) == (1, 0) and lookup afterwards proves the probe is wired
+- [Phase 03]: Plan 03-13: deref_tiny's unchecked arena read (ds/src/tpht/flattened.rs:258, get_unchecked) is the only unsafe site in ds/src/tpht/, sound because slot_mask + 1 = HOME_SLOTS * num_blocks slots are fixed in the constructor; its SAFETY comment names that invariant for plan 03-10's audit (D-12, D-13)
+- [Phase 03]: Plan 03-13: the Miri-side model sizes were halved once under the 120-second latency rule (blocks 16 -> 8, operations 200 -> 100; first warm run 123 s, resized run 116 s); native sizes (1,024 blocks, 2,000 operations), the 64 seeds and the test list are unchanged, and the counting and wrap tests keep the size the property needs
 
 ### Open Questions (ten warnings, approved to be carried, not resolved)
 
@@ -226,6 +230,6 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 
 ## Session Continuity
 
-Last session: 2026-11-24T15:12:13.805Z
-Stopped at: Completed 03-06-PLAN.md
+Last session: 2026-11-24T15:25:51.928Z
+Stopped at: Completed 03-13-PLAN.md
 Resume file: None
