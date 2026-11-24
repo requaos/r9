@@ -1,13 +1,14 @@
 [workspace]
 resolver = "2"
-members = ["aarch64", "crypto", "x86_64", "port", "riscv64", "xtask"]
+members = ["aarch64", "x86_64", "port", "riscv64", "xtask", "crypto", "ds"]
 
 # The maximal unsafe-elimination contract: every remaining
 # unsafe block/fn/impl/extern in a lint-opted-in crate must carry a SAFETY
-# comment — lint-enforced, never the honor system.  Only the gated crates
-# (aarch64 + port) opt in via `[lints] workspace = true` in their own
-# Cargo.toml; x86_64/riscv64 are never compiled by the gates and stay opted
-# out.
+# comment — lint-enforced, never the honor system.  The four opted-in crates
+# are aarch64, port, crypto and ds, each via `[lints] workspace = true` in
+# its own Cargo.toml; x86_64/riscv64 are never compiled by the gates and
+# stay opted out.  Extending the lint and audit to x86_64 is Phase 5's
+# question (Phase 3 CONTEXT D-11).
 [workspace.lints.clippy]
 undocumented_unsafe_blocks = "deny"
 

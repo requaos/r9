@@ -3574,8 +3574,24 @@ impl TestStep {
                 "test".to_string(),
                 "--package".to_string(),
                 "crypto".to_string(),
+                "--package".to_string(),
+                "ds".to_string(),
                 "--lib".to_string(),
                 "--tests".to_string(),
+            ],
+            None,
+        ));
+
+        // `--lib --tests` does not run doctests: the `KeyCapability`
+        // typestate's `compile_fail` proof (CRYP-04, 03-RESEARCH.md
+        // Pitfall 8) lives in crypto's documentation, so it gets its own
+        // leg.
+        all_cmd_args.push((
+            vec![
+                "test".to_string(),
+                "--package".to_string(),
+                "crypto".to_string(),
+                "--doc".to_string(),
             ],
             None,
         ));
@@ -3747,6 +3763,77 @@ impl CheckStep {
                 "--lib".to_string(),
                 "--tests".to_string(),
                 "--benches".to_string(),
+            ],
+            // Phase 3 (D-21, 03-RESEARCH.md C1 and F5): the two r9
+            // kernel-spec cross legs are the proof that the pinned crates
+            // build `no_std` with no FP or SIMD code.  `lib/*-unknown-none-elf.json`
+            // disables SSE/MMX and NEON/FP (soft-float) and
+            // `-Z build-std=core,alloc` builds core and alloc for the same
+            // spec, exactly as the kernel builds do.  The built-in
+            // `x86_64-unknown-none` and `aarch64-unknown-none` legs are kept
+            // to meet D-21's wording; the built-in `aarch64-unknown-none`
+            // target has NEON on and proves nothing about an FP-free build
+            // (a probe linked for it carries 590 FP/SIMD instructions).  The
+            // aarch64 spec leg carries the two soft cfgs through this leg's
+            // own --config, which drops sha2 from the future-incompatibility
+            // list (03-RESEARCH.md F3).  Cross legs use `--lib` only:
+            // `--tests` would pull the `roaring` dev-dependency and `std`
+            // into a bare-metal target.
+            vec![
+                "check".to_string(),
+                "--package".to_string(),
+                "crypto".to_string(),
+                "--package".to_string(),
+                "ds".to_string(),
+                "--lib".to_string(),
+                "--tests".to_string(),
+            ],
+            vec![
+                "check".to_string(),
+                "--package".to_string(),
+                "crypto".to_string(),
+                "--package".to_string(),
+                "ds".to_string(),
+                "--lib".to_string(),
+                "-Z".to_string(),
+                "build-std=core,alloc".to_string(),
+                "--target".to_string(),
+                "lib/x86_64-unknown-none-elf.json".to_string(),
+            ],
+            vec![
+                "check".to_string(),
+                "--package".to_string(),
+                "crypto".to_string(),
+                "--package".to_string(),
+                "ds".to_string(),
+                "--lib".to_string(),
+                "-Z".to_string(),
+                "build-std=core,alloc".to_string(),
+                "--target".to_string(),
+                "lib/aarch64-unknown-none-elf.json".to_string(),
+                "--config".to_string(),
+                "build.rustflags=[\"--cfg\",\"chacha20_backend=\\\"soft\\\"\",\"--cfg\",\"sha2_backend=\\\"soft\\\"\"]"
+                    .to_string(),
+            ],
+            vec![
+                "check".to_string(),
+                "--package".to_string(),
+                "crypto".to_string(),
+                "--package".to_string(),
+                "ds".to_string(),
+                "--lib".to_string(),
+                "--target".to_string(),
+                "x86_64-unknown-none".to_string(),
+            ],
+            vec![
+                "check".to_string(),
+                "--package".to_string(),
+                "crypto".to_string(),
+                "--package".to_string(),
+                "ds".to_string(),
+                "--lib".to_string(),
+                "--target".to_string(),
+                "aarch64-unknown-none".to_string(),
             ],
         ];
 

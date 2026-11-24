@@ -327,6 +327,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ds"
+version = "0.1.0"
+dependencies = [
+ "roaring",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -513,6 +520,12 @@ dependencies = [
  "port",
  "sbi-rt",
 ]
+
+[[package]]
+name = "roaring"
+version = "0.11.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18bd8a37d17a58532776dcdf6041ce64929adca78e8489d5cacbafe99229d3e1"
 
 [[package]]
 name = "rustversion"

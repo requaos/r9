@@ -1,0 +1,24 @@
+[package]
+name = "ds"
+version = "0.1.0"
+edition = "2024"
+
+# The host-only test oracle for the hand-written Roaring bitmap (Phase 3
+# CONTEXT D-19): the differential tests compare `ds::roaring` against both a
+# `BTreeSet` model and this crate.  It lives under [dev-dependencies] only:
+# dev-dependencies are not built by `cargo build` or by `cargo check --lib`,
+# so the oracle never reaches a kernel build or a bare-metal cross leg.
+# 0.11.5 is chosen over 0.12.0 because 0.12.0 adds `fearless_simd`, a proc
+# macro and `libm` to Cargo.lock, while 0.11.5 needs only `bytemuck` and
+# `byteorder`; default-features = false keeps the oracle no_std.
+# Provenance: 0.11.5 (published 2026-08-12) checked against 03-RESEARCH.md's
+# Package Legitimacy Audit (crates.io, 11 years, 1.5M downloads/week, verdict
+# OK) and smoke-tested for union, intersection and difference on the pinned
+# nightly-2026-01-30.
+[dev-dependencies]
+roaring = { version = "=0.11.5", default-features = false }
+
+# Opt into the workspace clippy lints (undocumented_unsafe_blocks = deny) —
+# every remaining unsafe site in ds carries a SAFETY comment.
+[lints]
+workspace = true
