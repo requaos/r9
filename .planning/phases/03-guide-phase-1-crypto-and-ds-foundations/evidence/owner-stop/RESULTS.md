@@ -119,3 +119,4 @@ EVIDENCE stop-host-miri: `host-miri.log` `HEAD=95fe66aaadde14cb8b8fa8197f6b0547e
 - No `hash mismatch`, no `got:` value and no `cargo`/`nix` error line appears in any returned
   log. The clippy log's `xtask` warnings are pre-existing and do not fail the command.
 - No credential string appears in the returned logs; nothing needed redaction.
+VERDICT stop-main-push: PASS a64352625efe9cb8a924d7941c6be09c4f738a11
