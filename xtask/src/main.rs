@@ -390,6 +390,13 @@ fn host_triple() -> Option<String> {
         .map(|h| h.trim().to_string())
 }
 
+/// D-24: the arch-crate test leg falls back to the host triple on the
+/// two host arches the nix devshell ships std for.  The riscv64 leg
+/// keeps its rustup-only selection.
+fn uses_host_triple_fallback(arch: &str) -> bool {
+    matches!(arch, "aarch64" | "x86_64")
+}
+
 fn verbose(matches: &clap::ArgMatches) -> bool {
     matches.get_flag("verbose")
 }
@@ -3544,6 +3551,9 @@ impl TestStep {
     }
 
     fn run(self) -> Result<()> {
+        // D-12: a stale or missing generated header fails the project's
+        // test command before any cargo leg runs.
+        xtask::rforkh::check(&workspace())?;
         // Each leg: the cargo args plus an optional profile whose cfg set
         // the leg compiles under (None = the crate's bare default cfg).
         let mut all_cmd_args: Vec<(Vec<String>, Option<Configuration>)> = Vec::new();
@@ -3563,14 +3573,13 @@ impl TestStep {
 
         let arch = std::env::consts::ARCH;
         let mut target = rustup_state.std_supported_target(arch).map(|t| t.to_string());
-        // The aarch64 crate's host tests (HOST-TEST-ROUTE A, Harvey
+        // The arch crate's host tests (HOST-TEST-ROUTE A, Harvey
         // 20-12/20-17): the nix devshell has no rustup, so the rustup
         // probe above finds nothing and the leg used to be skipped
-        // silently.  On an aarch64 host the host triple itself carries
-        // std (the nix toolchain ships it), so fall back to it.  The
-        // fallback is aarch64-only: the x86_64 and riscv64 legs keep
-        // their rustup-only selection unchanged.
-        if target.is_none() && arch == "aarch64" {
+        // silently.  On an aarch64 or x86_64 host the host triple itself
+        // carries std (the nix toolchain ships it), so fall back to it
+        // (D-24).  The riscv64 leg keeps its rustup-only selection.
+        if target.is_none() && uses_host_triple_fallback(arch) {
             target = host_triple();
         }
         if let Some(target) = target {
@@ -4806,8 +4815,9 @@ mod tests {
     use super::{
         check_mb2_header, contains_marker, count_marker_lines, count_register_lines,
         emit_grub_cfg, last_marker_line_end, marker_position, negative_scan_hit_for,
-        validate_append, BOOT_ECHO_PROBE, BOOT_Q35_MEMORY_MARKER, BOOT_TICK_MARKER, BOOT_TICK_MIN,
-        MAX_CMDLINE_APPEND, PCI_NET_DEVICE_MARKER, Q35_MCFG_MARKER, Q35_PCIEXBAR_MARKER,
+        uses_host_triple_fallback, validate_append, BOOT_ECHO_PROBE, BOOT_Q35_MEMORY_MARKER,
+        BOOT_TICK_MARKER, BOOT_TICK_MIN, MAX_CMDLINE_APPEND, PCI_NET_DEVICE_MARKER,
+        Q35_MCFG_MARKER, Q35_PCIEXBAR_MARKER,
     };
 
     /// Build a synthetic image around one mb2 header (the fixture shape
@@ -5356,5 +5366,15 @@ mod tests {
             (q.heap, q.slope, q.done, q.fail, q.mark, q.semgen),
             (v.heap, v.slope, v.done, v.fail, v.mark, v.semgen)
         );
+    }
+
+    /// D-24: on both host arches the nix devshell ships std for, the
+    /// arch-crate leg must fall back to the host triple when rustup
+    /// reports no target; the riscv64 leg must not.
+    #[test]
+    fn host_triple_fallback_covers_aarch64_and_x86_64() {
+        assert!(uses_host_triple_fallback("aarch64"));
+        assert!(uses_host_triple_fallback("x86_64"));
+        assert!(!uses_host_triple_fallback("riscv64"));
     }
 }
