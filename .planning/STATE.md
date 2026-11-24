@@ -5,16 +5,16 @@ milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
 current_phase: 03
 current_phase_name: Guide Phase 1 - crypto/ and ds/ Foundations
 status: executing
-stopped_at: Completed 03-04-PLAN.md
-last_updated: "2026-11-24T14:39:40.414Z"
+stopped_at: Completed 03-05-PLAN.md
+last_updated: "2026-11-24T14:45:08.491Z"
 last_activity: 2026-11-24
 last_activity_desc: Phase 03 execution started
-state_head: c95e3aff044a0c207c924ce1a86d17032c54cbee
+state_head: 3842fbac8c0fbe2603677128464bd231eb84309b
 progress:
   total_phases: 4
   completed_phases: 2
   total_plans: 53
-  completed_plans: 45
+  completed_plans: 46
   percent: 50
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-11-24)
 ## Current Position
 
 Phase: 03 (Guide Phase 1 - crypto/ and ds/ Foundations) — EXECUTING
-Plan: 6 of 13
+Plan: 7 of 13
 Status: Ready to execute
 Last activity: 2026-11-24 — Phase 03 execution started
 
@@ -72,6 +72,7 @@ Progress: [█████░░░░░] 50%
 | Phase 03 P02 | 3min | 2 tasks | 7 files |
 | Phase 03 P03 | 2 min | 2 tasks | 7 files |
 | Phase 03 P04 | 2min | 3 tasks | 7 files |
+| Phase 03 P05 | 4 min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -149,6 +150,15 @@ Full log is the PROJECT.md Key Decisions table. Recent:
 - [Phase 03]: derive_labelled uses Hkdf::expand_multi_info(&[label, context]) because crypto/ is no_std with no allocator; the pinned ("ab","c")==("a","bc") test makes the unframed concatenation observable
 - [Phase 03]: KeyCapability's read-only guarantee is type-level: keyed BLAKE3 is symmetric, so the guarantee is no seal method, private fields and no key accessor, proven by a compile_fail doctest with a passing twin
 - [Phase 03]: read_only() keeps the parent's k_dec (IG-P01) and sets blake3_verify from k_mac, keeping cipher and MAC keys separate (T-03-18)
+- [Phase 03]: A run container stores (start, length) covering start..=start+length, sorted, non-overlapping and non-adjacent, as in Lemire et al.
+- [Phase 03]: Container conversion happens only at the four fixed sites (array to bitmap past ARRAY_MAX, bitmap to array at ARRAY_MAX on removal, run_optimize, insert_compact's single-container rewrite); set operations build new array/bitmap results and never convert an operand.
+- [Phase 03]: smallest_form compares payload bytes and breaks ties array, then run, then bitmap, so conversions are deterministic and a 4096-cardinality set stays an array.
+- [Phase 03]: Set-op dispatch: bitmap|bitmap through the setops kernels, array|array intersection through array_intersect, array union/difference by two-pointer merges, and mixed pairings by probe/paint so sparse chunk sets avoid 8 KiB scratch copies per chunk.
+- [Phase 03]: zero_words builds the boxed [u64; 1024] through Vec::into_boxed_slice and try_into, avoiding an 8 KiB stack temporary in the crate Phase 5 links into the kernel.
+- [Phase 03]: RoaringBitmap PartialEq compares contents and Debug prints only the length, so equal values in different container kinds are equal and a failing assert stays readable.
+- [Phase 03]: Claude's discretion: insert_compact rewrites the touched container in its smallest form after every insert; one container (at most 8 KiB) scanned per insert, accepted because the lease path reads far more often than it changes (T-03-21, revisit in Phase 6).
+- [Phase 03]: Claude's discretion: Roaring does not downgrade when ids are removed; a cohort that outgrew four clients stays a Roaring set, documented and pinned by removal_rules.
+- [Phase 03]: The ClientSet no-heap property is proved by variant and size_of <= 24, not by a counting allocator, which would need a third restricted-feature module outside ds/src/tpht/ (D-09).
 
 ### Open Questions (ten warnings, approved to be carried, not resolved)
 
@@ -210,6 +220,6 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 
 ## Session Continuity
 
-Last session: 2026-11-24T14:39:40.095Z
-Stopped at: Completed 03-04-PLAN.md
+Last session: 2026-11-24T14:45:08.163Z
+Stopped at: Completed 03-05-PLAN.md
 Resume file: None
