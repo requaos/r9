@@ -25,7 +25,7 @@ Standing constraint on every requirement below: the golden invariant (boots to r
 - [x] **DSGN-01**: A threat model document is committed stating in-scope protections (pages at rest, stale-frame disclosure across KeyIDs, stray kernel reads, packet splicing, injection, replay) and out-of-scope attacks (DRAM bus probing, cold boot, kernel-context code execution; SEV-SNP or TDX named as the remedy) (AC-T01)
 - [ ] **DSGN-02**: The corrected C prototypes called for by the guide's Phase 0 are committed inside r9 (Harvey is not edited), with their landing location decided against the repository layout at HEAD (IG section 8)
 - [ ] **DSGN-03**: Four `rfork` flag bits are reserved as named constants — `RFCKEY` 1<<18, `RFROBASE` 1<<19, `RFRANDMEM` 1<<20, `RFNOLEGACY` 1<<21 — in one `port/` module, `port/src/rfork.rs` (`port::rfork`), which defines every `rfork` flag once and is imported by both arch crates (owner amendment 2026-11-23, Phase 2 CONTEXT D-17); Harvey is not changed, a recorded deviation from the guide's "reserve bits 18-20 in `libc.h`"; verified not defined anywhere at HEAD, despite AC section 1.1 (IG-D03; owner decisions 2026-11-22: W11 resolved, `RFNOLEGACY` = `1 << 21`, r9-only reservation)
-- [ ] **DSGN-04**: A host test pins the four reserved values and asserts they overlap no existing `rfork` flag (highest bit in use today is 14), and the reservation changes no `rfork` behaviour (behaviour arrives in Phase 6 for `RFNOLEGACY` and Phase 7 for the other three)
+- [x] **DSGN-04**: A host test pins the four reserved values and asserts they overlap no existing `rfork` flag (highest bit in use today is 14), and the reservation changes no `rfork` behaviour (behaviour arrives in Phase 6 for `RFNOLEGACY` and Phase 7 for the other three)
 - [ ] **DSGN-05**: The maintainer confirms the guide's reconciled decisions (IG-D01 to IG-D13) and PROJECT.md Key Decisions records which are locked (IG section 8 gate)
 
 ### Crypto Foundations (guide Phase 1)
@@ -237,7 +237,7 @@ Which phases cover which requirements. Each requirement maps to exactly one phas
 | DSGN-01 | Phase 2 | Complete |
 | DSGN-02 | Phase 2 | Pending |
 | DSGN-03 | Phase 2 | Pending |
-| DSGN-04 | Phase 2 | Pending |
+| DSGN-04 | Phase 2 | Complete |
 | DSGN-05 | Phase 2 | Pending |
 | CRYP-01 | Phase 3 | Pending |
 | CRYP-02 | Phase 3 | Pending |
