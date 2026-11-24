@@ -18,6 +18,7 @@ The OS boots to rio on QEMU q35 at every commit. This golden invariant outranks 
 - ✓ aarch64 virt kernel boots Harvey userland under HVF and TCG with smoke, net-smoke, tier-1 and cpu series — pre-roadmap; full HVF series deferred to Milestone S (see STATE.md)
 - ✓ rio is exercised end to end by an r9-owned `cargo xtask gate` (HARN-01) as well as Harvey's composed gates — Phase 1: positive and negative rio legs on the Linux KVM witness, plus the nine x86_64 q35 profiles and the aarch64 quick pass through the reconciled mechanism
 - ✓ Cross-build harness (HARN-01…08) — Phase 1: one documented `cargo xtask gate` boots r9 to rio from a pre-built read-only Harvey tree; one resolver with named errors and per-arch devshell supply; per-arch fallback manifests with two-way drift and Rust-provenance checks; a one-at-a-time Rust swap proven at flip and flip-back; flake ownership flipped (r9 imports Harvey `c697666`, Harvey has no `r9` input) and every moved gate passes from r9
+- ✓ Design lock (IG-D01…IG-D13 status recorded) and four reserved `rfork` flag bits (`RFCKEY` 1<<18, `RFROBASE` 1<<19, `RFRANDMEM` 1<<20, `RFNOLEGACY` 1<<21) defined once in `port::rfork`, with generated `sys/include/rfork.h` and unchanged runtime behaviour — Phase 2: the `port/src` patch was owner-approved as shown; `.text`/`.text.boot` are byte-identical before/after on all four configs; the owner re-derived the `boot-iso` `outputHash` on x86_64 Linux and the x86_64 host tests, KVM, TCG and full gates passed at gated commit `4624ea2`
 - ✓ In-kernel devices implemented in Rust under `port/src/`: devcons, devdup, devenv, devether, devip (smoltcp), devmnt, devpipe, devproc, devroot, devsrv, devssl, devcap, plus paqfs and allocators — pre-roadmap
 - ✓ Per-CPU FP/SIMD ownership (`CpuFp`, `fpu::kernel_begin()` / `with_simd()`) and x86_64 entry hardening (DF cleared on entry, GS base read via IA32_GS_BASE) at checkpoint 116bcc2 — pre-roadmap
 
@@ -25,7 +26,6 @@ The OS boots to rio on QEMU q35 at every commit. This golden invariant outranks 
 
 <!-- Full list with IDs: .planning/REQUIREMENTS.md (127 v1 requirements, each mapped to exactly one phase). -->
 
-- [ ] Design lock and four reserved `rfork` flag bits (DSGN, Phase 2)
 - [ ] `crypto/` and `ds/` foundations: HKDF, ChaCha20, BLAKE3, TPHT, Roaring, ClientSet (CRYP, DS, LINT, Phase 3)
 - [ ] `9P2000.aead` transport and `FidTable` (WIRE, Phase 4)
 - [ ] Cryptographic memory and zero-copy DMA paging (MEM, Phase 5)
@@ -137,6 +137,7 @@ No ADR exists. Phase 2 (owner confirmation 2026-11-23, DSGN-05) settled the stat
 | A Plan 9 `#G` synthetic device carries VirtIO-GPU Venus over `/dev/gpu/` nodes (`clone`, `ctl`, `cmd`, `blob`, `fence`), with zero-copy window presentation via `draw(3)` host texture blits | IG-D12 | Locked 2026-11-23 (owner) |
 | Multicast beacons plus staged `/srv` registration discover services from `class:instance[+attrs]` descriptors over dual-stack IPv4/IPv6, with the 30s `unhealthy` / 5m `dead` lifecycle | IG-D13; open at W7 | Not locked; deferred to Phase 6 (W7) |
 | Eleven ingest warnings: ten carried as open questions, W11 decided | Owner approved carrying ten; decided W11 on 2026-11-22 | Ten pending |
+| `rfork` flags have one home: `port::rfork` defines all sixteen; `sys/include/rfork.h` is generated from it; both arch `RFORK_SUPPORTED` masks stay `0x3c7f`; the x86_64 kernel changed by panic line numbers only and `.text` is identical | Phase 2 implementation of DSGN-02/03/04; the owner approved the `port/src` patch as shown; the `boot-iso` `outputHash` was re-derived on the owner's x86_64 Linux host and the x86_64 host tests, KVM, TCG and full gates passed at gated commit `4624ea2` | Done 2026-11-24 (owner) |
 
 ---
-*Last updated: 2026-11-23 after the Phase 2 design lock (IG-D01 to IG-D13 status recorded)*
+*Last updated: 2026-11-24 after Phase 2 complete (design lock, rfork reservation, generated header)*

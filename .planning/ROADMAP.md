@@ -41,7 +41,7 @@ Milestone numbering continues from the closed Harvey-rooted milestone v2.1.
 **Milestone Goal:** The golden invariant is an r9-owned gate, Harvey is a read-only supply of C artifacts that Rust replaces one at a time, the design decisions are locked, and the `crypto/`, `ds/` and `9P2000.aead` wire foundations exist and are pinned by host tests.
 
 - [x] **Phase 1: Stage P0 - Cross-Build Harness** - `cargo xtask` draws C artifacts from a read-only Harvey tree through a fallback manifest; the boot-to-rio gate runs per commit (completed 2026-11-23)
-- [ ] **Phase 2: Guide Phase 0 - Design Lock and rfork Flag Reservation** - threat model, corrected C prototypes, four `rfork` flag bits reserved in r9, maintainer confirms decisions
+- [x] **Phase 2: Guide Phase 0 - Design Lock and rfork Flag Reservation** - threat model, corrected C prototypes, four `rfork` flag bits reserved in r9, maintainer confirms decisions (completed 2026-11-24)
 - [ ] **Phase 3: Guide Phase 1 - crypto/ and ds/ Foundations** - HKDF, ChaCha20, BLAKE3, TPHT, Roaring, `ClientSet`, with lint contracts
 - [ ] **Phase 4: Guide Phase 2 - 9P2000.aead Transport and FidTable** - wire envelope, monotonic nonces, hybrid `FidHandle`, `FidShard`, Factotum `Tauth`
 
@@ -148,7 +148,7 @@ Plans:
   3. A host test pins the four values and proves they overlap no existing `rfork` flag (the highest bit in use today is 14), and `rfork` behaviour is unchanged.
   4. The corrected C prototypes are committed inside r9 with their landing location decided against the repository layout at HEAD.
   5. The maintainer has confirmed the guide's reconciled decisions and PROJECT.md Key Decisions records which are locked.
-**Plans**: 6/6 plans executed in 4 waves; four owner stops (the `port/src` diff in 02-01, the threat-model draft in 02-02, the thirteen-decision table in 02-03, and the single end-of-phase stop on the x86_64 Linux host in 02-06). Required dispatch mode: run this phase with `workflow.use_worktrees` = `false` in `.planning/config.json` (`node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" query config-set workflow.use_worktrees false`, or set `"use_worktrees": false` under `"workflow"` in `.planning/config.json` by hand), so every plan runs in sequence on the main working tree. The key is unset and defaults to true; with worktrees on, plan 02-06 stops without merging or pushing, and the continuations of 02-01 and 02-02 can stop after their owner stops.
+**Plans**: 6/6 plans complete in 4 waves; four owner stops (the `port/src` diff in 02-01, the threat-model draft in 02-02, the thirteen-decision table in 02-03, and the single end-of-phase stop on the x86_64 Linux host in 02-06). Required dispatch mode: run this phase with `workflow.use_worktrees` = `false` in `.planning/config.json` (`node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" query config-set workflow.use_worktrees false`, or set `"use_worktrees": false` under `"workflow"` in `.planning/config.json` by hand), so every plan runs in sequence on the main working tree. The key is unset and defaults to true; with worktrees on, plan 02-06 stops without merging or pushing, and the continuations of 02-01 and 02-02 can stop after their owner stops.
 
 Plans:
 **Wave 1**

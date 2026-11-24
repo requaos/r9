@@ -2,14 +2,14 @@
 gsd_state_version: "1.0"
 milestone: v3.0
 milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
-current_phase: 02
-current_phase_name: Guide Phase 0 - Design Lock and rfork Flag Reservation
-status: executing
-stopped_at: Phase 2 all plans complete; verification pending
-last_updated: "2026-11-24T04:58:48.660Z"
-last_activity: 2026-11-23
-last_activity_desc: Phase 02 wave 3 complete; owner stop pending
-state_head: 43643a3d0f7f7e16c91da310b8e31b70e035b805
+current_phase: 3
+current_phase_name: Guide Phase 1 - crypto/ and ds/ Foundations
+status: planning
+stopped_at: Phase 02 complete, ready to plan Phase 3
+last_updated: "2026-11-24T05:19:49.074Z"
+last_activity: 2026-11-24
+last_activity_desc: Phase 02 complete, transitioned to Phase 3
+state_head: e9402a0a9188419076eab6c720ab5a72a07b4d67
 progress:
   total_phases: 4
   completed_phases: 1
@@ -22,30 +22,31 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-11-22)
+See: .planning/PROJECT.md (updated 2026-11-24)
 
 **Core value:** The OS boots to rio on QEMU q35 at every commit.
-**Current focus:** Phase 02 — Guide Phase 0 - Design Lock and rfork Flag Reservation
+**Current focus:** Phase 03 — Guide Phase 1 - crypto/ and ds/ Foundations
 
 ## Current Position
 
-Phase: 02 (Guide Phase 0 - Design Lock and rfork Flag Reservation) — EXECUTING
-Plan: 6 of 6
-Status: Ready to execute
-Last activity: 2026-11-23 — Phase 02 execution started
+Phase: 3 — Guide Phase 1 - crypto/ and ds/ Foundations
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-11-24 — Phase 02 complete, transitioned to Phase 3
 
 Progress: [███░░░░░░░] 25%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 34
+- Total plans completed: 40
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01 | 34 | - | - |
+| 02 | 6 | - | - |
 
 *Updated after each plan completion*
 **Per-Plan Metrics:**
@@ -119,6 +120,10 @@ Full log is the PROJECT.md Key Decisions table. Recent:
 - [Phase 01]: Plan 01-09: the DEMO credential path is the bake-time p9sk1 generator's out/auth-creds.txt (user=norbert, the shared DEMO password also authenticates glenda); drawterm's X11 prompt reads /dev/cons -> kbdq fed only by X key events, never the pty (the host-stdin reader exists only with -G), so the pass-1 dt-password timeout had both a pty-path and an unknown-password cause
 - [Phase 01]: Plan 01-09: rio mode feeds the password through XTEST (xdotool) on the private Xvfb display, locating the window by WM class because drawterm never sets _NET_WM_PID; the password travels only through a 0600 scratch file whose path is exported, and a preloaded factotum key is the documented fallback if XTEST fails on the witness
 - [Phase 01]: Plan 01-09: teardown records qemu/drawterm exp_pid and Xvfb $! and sweeps /proc/<pid>/{cmdline,environ} for the run identity; the argv0 tag is never the only key (pass-1 PID 88800 showed the store path). The reusable witness driver runs rio, control and a13 at stop A (01-12)
+- [Phase 02]: `port::rfork` is the single home of all sixteen `rfork` flags; `sys/include/rfork.h` is generated from it by `cargo xtask rfork-header` and drift-checked; both arch `RFORK_SUPPORTED` masks stay `0x3c7f`; the owner approved the `port/src` patch as shown and the committed change is byte-equal to it
+- [Phase 02]: the x86_64 kernel changed by panic line numbers only: six `.text`/`.text.boot` verdicts are IDENTICAL on four configs; the owner re-derived the `boot-iso` `outputHash` (`sha256-x07uJKM8Y7j3uXNwqT8Txhd8zhkRV8YrBkKyT2sg490=`) and all nine owner-stop verdicts PASS at gated commit `4624ea2`; `origin/main` is `3d01f07`, branch `phase-02/design-lock` is `f8d077d`
+- [Phase 02]: three of the guide's thirteen decisions are deferred (IG-D09 Phase 3, IG-D11 Phase 4, IG-D13 Phase 6); the ten locked/amended decisions are owner-only change and are recorded in PROJECT.md Key Decisions
+- [Phase 02]: code review recorded 0 Critical / 4 Warning / 4 Info; WR-01 (xtask tests not in `cargo xtask test`/CI), WR-02 (narrow one-definition scan) and WR-04 (threat-model section 7 wording) are open hardening follow-ups; WR-03 (no include guard) is skipped by design
 
 ### Open Questions (ten warnings, approved to be carried, not resolved)
 
@@ -143,7 +148,7 @@ None yet.
 
 ### Blockers/Concerns
 
-- Unpushed work, checked against the local remote-tracking refs on 2026-11-23: r9 `main` is ahead of `origin/main` by the tail of Phase 1 (from `54b71a7` onward) and all Phase 2 planning commits; they stay local until the owner approves a push (Phase 2 pushes a branch at its end-of-phase stop, then `main` after a second approval, CONTEXT D-26). The three commits this note used to list as unpushed are published: r9 `5b8b70a` (planning documents plus `legacy/`, 53 MB) and `6ee45b5` (handoff note) are on `origin/main`, and Harvey `25d97dc4d` (freeze note) is on `origin/master`; Harvey has nothing unpushed. `legacy/` is therefore already in r9's published history.
+- Unpushed work, checked against the local remote-tracking refs on 2026-11-24: `origin/main` is `3d01f07` (the gated Phase 2 state), and local `main` is ahead by the phase-completion evidence, tracking, review, verification and UAT commits made after it; they stay local until the owner approves a push (CONTEXT D-26). The Phase 2 branch `phase-02/design-lock` is at `f8d077d` (gated commit `4624ea2` plus two return commits). Earlier unpushed work is published: r9 `5b8b70a` (planning documents plus `legacy/`, 53 MB) and `6ee45b5` are on `origin/main`, and Harvey `25d97dc4d` is on `origin/master`.
 - Owed checks at checkpoint r9 `116bcc2`: the owner's linux `nix build .#boot-iso --rebuild` (expected `sha256-TIzwBaHF0R4m31l6EbW2IU3rkUl73g6ljlNE0S5hGFY=`), and hosted CI on r9 `116bcc2` and Harvey `bd7a6982a`.
 - Phase 20 of the Harvey-rooted work never ran `/gsd-secure-phase` (no SECURITY.md).
 - Docs pin r9 at `c787ce9`; HEAD is 60 commits later with no `crypto/`, `ds/`, `kern/`, `sys/`, `venti/`. Re-verify every landing-site path when its phase is planned.
@@ -180,6 +185,6 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 
 ## Session Continuity
 
-Last session: 2026-11-24T04:58:48.476Z
-Stopped at: Phase 2 all plans complete; verification pending
-Resume file: .planning/phases/02-guide-phase-0-design-lock-and-rfork-flag-reservation/02-06-SUMMARY.md
+Last session: 2026-11-24T05:20:00.000Z
+Stopped at: Phase 02 complete, ready to plan Phase 3
+Resume file: None
