@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 9
+open_count: 6
 waived_count: 0
-fixed_count: 1
+fixed_count: 4
 total_count: 10
-last_updated: 2026-11-24T14:32:01.421Z
+last_updated: 2026-11-24T14:45:25.044Z
 ---
 
 # Broken Windows Ledger
@@ -21,9 +21,9 @@ last_updated: 2026-11-24T14:32:01.421Z
 | 4 | 01 | deviation | gates/aarch64/drive-r9.expect |  | Plan 01-21's unreferenced drive-r9 rewire needed two support lines beyond path/env tokens (the R9_GATE_OUT capture expression and its mkdir) because the Harvey launcher run-r9.sh was not moved; every assertion, marker, stage and timeout is unchanged (recorded in 01-21-SUMMARY) | open |  | 2026-11-23T12:03:50.195Z |  |
 | 5 | 02 | unrun-verify | x86_64/src/syscall.rs |  | The x86_64 rfork_reserved_bits_are_unsupported mask test and the RFPROC import in x86_64/src/proc.rs mod tests were not compiled or run on the Mac; first witness is the owner's x86_64 Linux host at the end-of-phase stop (D-24, plan 02-06) | open |  | 2026-11-24T02:35:39.402Z |  |
 | 6 | 03 | stub | ds/src/tpht/mod.rs | 1 | tpht module is a doc-only skeleton; implementation lands in plan 03-06 (DS-01..DS-05) | open |  | 2026-11-24T14:27:39.839Z |  |
-| 7 | 03 | stub | ds/src/roaring.rs | 1 | roaring module is a doc-only skeleton; implementation lands in plan 03-05 (DS-06) | open |  | 2026-11-24T14:27:40.129Z |  |
-| 8 | 03 | stub | ds/src/setops.rs | 1 | setops seam is a doc-only skeleton; the four hot loops land in plan 03-05 (D-20) | open |  | 2026-11-24T14:27:40.406Z |  |
-| 9 | 03 | stub | ds/src/clientset.rs | 1 | clientset module is a doc-only skeleton; implementation lands in plan 03-05 (DS-06) | open |  | 2026-11-24T14:27:40.689Z |  |
+| 7 | 03 | stub | ds/src/roaring.rs | 1 | roaring module is a doc-only skeleton; implementation lands in plan 03-05 (DS-06) | fixed |  | 2026-11-24T14:27:40.129Z | 2026-11-24T14:45:24.496Z |
+| 8 | 03 | stub | ds/src/setops.rs | 1 | setops seam is a doc-only skeleton; the four hot loops land in plan 03-05 (D-20) | fixed |  | 2026-11-24T14:27:40.406Z | 2026-11-24T14:45:24.771Z |
+| 9 | 03 | stub | ds/src/clientset.rs | 1 | clientset module is a doc-only skeleton; implementation lands in plan 03-05 (DS-06) | fixed |  | 2026-11-24T14:27:40.689Z | 2026-11-24T14:45:25.044Z |
 | 10 | 03 | deviation | flake.nix |  | Plan 03-02 Task 2 appends $R9_MIRI_TOOLCHAIN/bin to PATH in the devshell shellHook (never prepends, so the pinned cargo/rustc are not shadowed) so the plan's literal MIRI-VERSION verify finds cargo-miri; recorded in 03-02-SUMMARY deviations | open |  | 2026-11-24T14:32:01.421Z |  |
 
 ````json
@@ -113,10 +113,10 @@ last_updated: 2026-11-24T14:32:01.421Z
     "file": "ds/src/roaring.rs",
     "line": 1,
     "description": "roaring module is a doc-only skeleton; implementation lands in plan 03-05 (DS-06)",
-    "status": "open",
+    "status": "fixed",
     "reason": "",
     "recorded_at": "2026-11-24T14:27:40.129Z",
-    "resolved_at": null,
+    "resolved_at": "2026-11-24T14:45:24.496Z",
     "milestone": "v3.0"
   },
   {
@@ -126,10 +126,10 @@ last_updated: 2026-11-24T14:32:01.421Z
     "file": "ds/src/setops.rs",
     "line": 1,
     "description": "setops seam is a doc-only skeleton; the four hot loops land in plan 03-05 (D-20)",
-    "status": "open",
+    "status": "fixed",
     "reason": "",
     "recorded_at": "2026-11-24T14:27:40.406Z",
-    "resolved_at": null,
+    "resolved_at": "2026-11-24T14:45:24.771Z",
     "milestone": "v3.0"
   },
   {
@@ -139,10 +139,10 @@ last_updated: 2026-11-24T14:32:01.421Z
     "file": "ds/src/clientset.rs",
     "line": 1,
     "description": "clientset module is a doc-only skeleton; implementation lands in plan 03-05 (DS-06)",
-    "status": "open",
+    "status": "fixed",
     "reason": "",
     "recorded_at": "2026-11-24T14:27:40.689Z",
-    "resolved_at": null,
+    "resolved_at": "2026-11-24T14:45:25.044Z",
     "milestone": "v3.0"
   },
   {
