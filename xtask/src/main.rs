@@ -215,6 +215,22 @@ fn main() {
                 )]),
         )
         .subcommand(
+            clap::Command::new("miri")
+                .about(
+                    "Run Miri over ds/src/tpht with the second toolchain derivation \
+                     (D-13): $R9_MIRI_TOOLCHAIN/bin/cargo miri test --package ds \
+                     --lib tpht with many seeds; refuses when ds/src/tpht holds no \
+                     #[test].  Not part of `cargo xtask test`: the ordinary run \
+                     stays fast",
+                )
+                .args(&[clap::Arg::new("seeds")
+                    .long("seeds")
+                    .value_name("N")
+                    .value_parser(clap::value_parser!(u32))
+                    .default_value("64")
+                    .help("Seed count for -Zmiri-many-seeds=0..N")]),
+        )
+        .subcommand(
             clap::Command::new("initrd")
                 .about("Assemble target/bootfs.paq from xtask/manifests/arm64/smoke.toml \
                         through the stage-and-bake engine (D-15/D-16): the Harvey aarch64 tree \
@@ -313,6 +329,7 @@ fn main() {
         }
         Some(("ureg-check", _)) => UregCheckStep::new().run(),
         Some(("rfork-header", m)) => RforkHeaderStep::new(m).run(),
+        Some(("miri", m)) => MiriStep::new(m).run(),
         Some(("initrd", m)) => InitrdStep::new(m).run(),
         Some(("image", m)) => ImageStep::new(m).run(),
         Some(("gate", m)) => gate::GateStep::new(m).run(),
@@ -4905,6 +4922,20 @@ impl RforkHeaderStep {
             println!("rfork-header: wrote sys/include/rfork.h");
         }
         Ok(())
+    }
+}
+
+struct MiriStep {
+    seeds: u32,
+}
+
+impl MiriStep {
+    fn new(matches: &clap::ArgMatches) -> Self {
+        Self { seeds: *matches.get_one::<u32>("seeds").unwrap_or(&64) }
+    }
+
+    fn run(self) -> Result<()> {
+        xtask::miri::run(&workspace(), self.seeds)
     }
 }
 

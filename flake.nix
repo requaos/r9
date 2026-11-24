@@ -1008,6 +1008,18 @@ WRAP
         let
           pkgs = pkgsFor system;
           toolchain = toolchainFor system;
+          # D-13 (RESEARCH C3, Pitfall 2): a second derivation for
+          # `cargo xtask miri` only.  The extension list repeats
+          # rust-toolchain.toml's four components plus `miri`, which the
+          # "never restate pins" rule above would otherwise forbid: adding
+          # `miri` to rust-toolchain.toml moves the toolchain store path that
+          # is embedded over a thousand times in each kernel, so the pinned
+          # kernel toolchain must not change.  The kernel package derivations
+          # keep `toolchainFor`; this binding is never added to `packages`
+          # (both toolchains provide `cargo` and `rustc`).
+          toolchainMiri = toolchain.override {
+            extensions = [ "rustfmt" "rust-src" "clippy" "llvm-tools" "miri" ];
+          };
           # 01-13 (HARN-07, D-21): the lazy per-architecture Harvey tree.
           # On the Mac the tree is the aarch64-linux package realised by the
           # registered builder; R9_HARVEY_TREE_SYSTEM tells xtask's
@@ -1092,6 +1104,16 @@ WRAP
               if [ -z "''${R9_MKPAQFS:-}" ]; then
                 export R9_MKPAQFS="${harveyMkpaqfs}/bin/mkpaqfs"
               fi
+              # D-13: Miri's own toolchain (RESEARCH C3).  The eager form,
+              # like R9_MKPAQFS; a value the user already set wins.
+              if [ -z "''${R9_MIRI_TOOLCHAIN:-}" ]; then
+                export R9_MIRI_TOOLCHAIN="${toolchainMiri}"
+              fi
+              # D-13: append the Miri toolchain's bin so `cargo miri` finds
+              # `cargo-miri` even when cargo is invoked by absolute path (the
+              # step itself prepends it).  Appending never shadows the pinned
+              # toolchain's cargo or rustc.
+              export PATH="$PATH:$R9_MIRI_TOOLCHAIN/bin"
               ${pkgs.lib.optionalString (harveyAuthdomainGen != null) ''
               if [ -z "''${R9_AUTHDOMAIN_GEN:-}" ]; then
                 export R9_AUTHDOMAIN_GEN="${harveyAuthdomainGen}/bin/authdomain-gen"

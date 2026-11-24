@@ -38,32 +38,79 @@ pub struct CommandSpec {
 
 /// Resolve `R9_MIRI_TOOLCHAIN` from an injected lookup.
 pub fn resolve_toolchain(lookup: &dyn Fn(&str) -> Option<String>) -> Result<PathBuf> {
-    let _ = lookup;
-    Ok(PathBuf::new())
+    let value = lookup(TOOLCHAIN_VAR).filter(|value| !value.trim().is_empty());
+    match value {
+        Some(value) => Ok(PathBuf::from(value.trim())),
+        None => Err(format!(
+            "miri: {TOOLCHAIN_VAR} is not set (empty and whitespace count as unset) — r9's xtask \
+             has no built-in default toolchain; `nix develop` exports it from the second toolchain \
+             derivation `toolchainMiri` (D-13, RESEARCH C3)"
+        )
+        .into()),
+    }
+}
+
+fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        match entry.file_type() {
+            Ok(kind) if kind.is_dir() => collect_rs_files(&path, out),
+            Ok(kind) if kind.is_file() => {
+                if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                    out.push(path);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Count the `#[test]` attributes under `ds/src/tpht/`.
 pub fn tpht_test_count(workspace: &Path) -> Result<usize> {
-    let _ = workspace;
-    Ok(0)
+    let mut files = Vec::new();
+    collect_rs_files(&workspace.join("ds/src/tpht"), &mut files);
+    files.sort();
+    let mut count = 0;
+    for path in files {
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| format!("miri: read {}: {e}", path.display()))?;
+        for line in text.lines() {
+            let code = match line.find("//") {
+                Some(i) => &line[..i],
+                None => line,
+            };
+            count += code.matches("#[test]").count();
+        }
+    }
+    Ok(count)
 }
 
 /// The command for one Miri run (a pure function: no environment, no spawn).
 pub fn command_spec(toolchain: &Path, seeds: u32) -> CommandSpec {
-    let _ = (toolchain, seeds);
+    let bin = toolchain.join("bin");
     CommandSpec {
-        program: PathBuf::new(),
-        args: Vec::new(),
-        path_prefix: PathBuf::new(),
-        miriflags: String::new(),
+        program: bin.join("cargo"),
+        args: vec![
+            "miri".to_string(),
+            "test".to_string(),
+            "--package".to_string(),
+            "ds".to_string(),
+            "--lib".to_string(),
+            "tpht".to_string(),
+        ],
+        path_prefix: bin,
+        miriflags: format!("-Zmiri-many-seeds=0..{seeds}"),
     }
 }
 
 /// Run Miri over the TPHT tests, refusing when the filter would match
 /// nothing.
 pub fn run(workspace: &Path, seeds: u32) -> Result<()> {
-    let _ = (workspace, seeds);
-    Ok(())
+    run_with_lookup(workspace, seeds, &|name| std::env::var(name).ok())
 }
 
 fn run_with_lookup(
@@ -71,7 +118,29 @@ fn run_with_lookup(
     seeds: u32,
     lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<()> {
-    let _ = (workspace, seeds, lookup);
+    let toolchain = resolve_toolchain(lookup)?;
+    let tests = tpht_test_count(workspace)?;
+    if tests == 0 {
+        return Err("miri: no tests under ds/src/tpht (the filter would match nothing)".into());
+    }
+
+    let spec = command_spec(&toolchain, seeds);
+    let mut path = std::ffi::OsString::from(spec.path_prefix.as_os_str());
+    if let Some(existing) = std::env::var_os("PATH") {
+        path.push(":");
+        path.push(existing);
+    }
+
+    let status = std::process::Command::new(&spec.program)
+        .args(&spec.args)
+        .current_dir(workspace)
+        .env("PATH", path)
+        .env("MIRIFLAGS", &spec.miriflags)
+        .status()
+        .map_err(|e| format!("miri: run {}: {e}", spec.program.display()))?;
+    if !status.success() {
+        return Err("miri: failed".into());
+    }
     Ok(())
 }
 
