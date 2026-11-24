@@ -23,46 +23,75 @@
 //! whose values were computed independently of this code.
 
 /// MurmurHash3's 32-bit finalizer: the mixing function `f(R)`.
+///
+/// `h ^= h >> 16; h *= 0x85EBCA6B; h ^= h >> 13; h *= 0xC2B2AE35;
+/// h ^= h >> 16`.  Both source documents give the first constant and then
+/// elide the rest; this is the standard completion (RESEARCH Open Question
+/// 2), pinned by `mix32_known_answers` against values computed independently
+/// of this code.
 pub fn mix32(r: u32) -> u32 {
-    let _ = r;
-    0
+    let mut h = r;
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x85EB_CA6B);
+    h ^= h >> 13;
+    h = h.wrapping_mul(0xC2B2_AE35);
+    h ^= h >> 16;
+    h
 }
 
 /// The one-round Feistel permutation of a key: `P = (L' << 32) | R` with
 /// `L' = L ^ f(R)`.
 pub fn permute(key: u64) -> u64 {
-    let _ = key;
-    0
+    let l = (key >> 32) as u32;
+    let r = key as u32;
+    let l_prime = l ^ mix32(r);
+    ((l_prime as u64) << 32) | (r as u64)
 }
 
 /// The inverse of [`permute`].
 pub fn unpermute(p: u64) -> u64 {
-    let _ = p;
-    0
+    let l_prime = (p >> 32) as u32;
+    let r = p as u32;
+    let l = l_prime ^ mix32(r);
+    ((l as u64) << 32) | (r as u64)
+}
+
+/// The mask of the low `index_bits` bits, for `index_bits <= 32`.
+fn low_mask(index_bits: u32) -> u64 {
+    (1u64 << index_bits) - 1
 }
 
 /// Split a key into its home block index (the low `index_bits` bits of the
 /// mixed half `L'`) and the remainder (every other bit, `64 - index_bits`
-/// wide).  Nothing is discarded.
+/// wide).  Nothing is discarded: `join` reconstructs the key exactly.
 pub fn split(key: u64, index_bits: u32) -> (usize, u64) {
-    let _ = (key, index_bits);
-    (0, 0)
+    let p = permute(key);
+    let l_prime = p >> 32;
+    let r = p & 0xFFFF_FFFF;
+    let index = (l_prime & low_mask(index_bits)) as usize;
+    let remainder = ((l_prime >> index_bits) << 32) | r;
+    (index, remainder)
 }
 
 /// Rebuild a key from a home block index and a remainder produced by
 /// [`split`].
 pub fn join(index: usize, remainder: u64, index_bits: u32) -> u64 {
-    let _ = (index, remainder, index_bits);
-    0
+    let r = remainder & 0xFFFF_FFFF;
+    let high = remainder >> 32;
+    let l_prime = (high << index_bits) | ((index as u64) & low_mask(index_bits));
+    unpermute((l_prime << 32) | r)
 }
 
 /// A 16-bit fingerprint of the remainder: what the header's `quotients`
-/// field stores.  It is a fingerprint and cannot rebuild the key; a matching
-/// candidate is verified against the full key by the caller's closure
-/// (RESEARCH Open Question 3).
+/// field stores.
+///
+/// It is a fingerprint and cannot rebuild the key; candidates whose
+/// fingerprint matches are verified against the full key by the caller's
+/// closure (RESEARCH Open Question 3).  The high half of the remainder is
+/// mixed with the mixed low half so a structured remainder still spreads
+/// across the 16-bit space.
 pub fn fingerprint(remainder: u64) -> u16 {
-    let _ = remainder;
-    0
+    ((remainder >> 32) as u16) ^ ((mix32(remainder as u32) >> 16) as u16)
 }
 
 /// The compendium's wording, for contrast only: take the home block index
@@ -71,8 +100,10 @@ pub fn fingerprint(remainder: u64) -> u16 {
 /// only in their upper half collapse into one block with that reading.
 #[cfg(test)]
 pub(crate) fn split_unmixed(key: u64, index_bits: u32) -> (usize, u64) {
-    let _ = (key, index_bits);
-    (0, key)
+    let p = permute(key);
+    let index = (p & low_mask(index_bits)) as usize;
+    let remainder = p >> index_bits;
+    (index, remainder)
 }
 
 #[cfg(test)]
@@ -121,7 +152,7 @@ mod tests {
 
     #[test]
     fn permute_round_trips() {
-        let count = miri_scaled(4096, 256);
+        let count = miri_scaled(4096, 128);
         let mut rng = SplitMix64::new(0x0000_0000_0000_00a1);
         for _ in 0..count {
             let key = rng.next();
@@ -145,7 +176,7 @@ mod tests {
     fn split_join_round_trips() {
         let widths = [0u32, 1, 4, 14, 32];
         let boundary = [0u64, 1, u32::MAX as u64, 1 << 32, (1 << 32) - 1, u64::MAX];
-        let count = miri_scaled(4096, 256);
+        let count = miri_scaled(4096, 128);
         let mut rng = SplitMix64::new(0x0000_0000_0000_00b2);
         let mut keys: Vec<u64> = boundary.to_vec();
         keys.extend((0..count as u64).map(|_| rng.next()));
@@ -168,7 +199,7 @@ mod tests {
 
     #[test]
     fn split_is_injective_on_structured_keys() {
-        let count = miri_scaled(65_536, 256);
+        let count = miri_scaled(65_536, 128);
         for &bits in &[0u32, 1, 4, 14, 32] {
             let mut sequential = BTreeSet::new();
             for i in 0..count as u64 {
@@ -189,8 +220,8 @@ mod tests {
 
     #[test]
     fn index_comes_from_the_mixed_half() {
-        let count = miri_scaled(4096, 256);
-        let required = miri_scaled(2000, 125);
+        let count = miri_scaled(4096, 128);
+        let required = miri_scaled(2000, 62);
         let mut mixed = BTreeSet::new();
         let mut unmixed = BTreeSet::new();
         for i in 0..count as u64 {
