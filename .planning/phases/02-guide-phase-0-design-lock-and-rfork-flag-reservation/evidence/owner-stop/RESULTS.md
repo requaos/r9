@@ -1,96 +1,100 @@
-# Phase 2 end-of-phase owner stop — results (round 1)
+# Phase 2 end-of-phase owner stop — results (round 2)
 
-Plan 02-06, Task 2. The owner took the branch route: the return arrived as commit
-`a0454ff` on `phase-02/design-lock`. Every verdict below is decided only from a line in that
-return (the 21 files under `evidence/owner-stop/return/`); no step was run on the Mac.
+Plan 02-06, Task 2, second round. Round 1 was voided because no returned log carried a
+`HEAD=` line; this file records round 2 only. The owner returned the round-2 logs on the
+branch as commit `f8d077d`, all under `evidence/owner-stop/return/round2/`. Every verdict
+below is decided only from a line in those logs; no step was run on the Mac.
 
 - branch: `phase-02/design-lock`
-- branch-tip: `a0454ffed4f80473866239c4164a1918bf0d216c`
-- hash-commit: `4624ea2f0cb45c81870dcc881d544d7d36a2e0bf` — message `boot-iso hash bump`,
-  `flake.nix` only, one line changed (the `outputHash` value)
-- return-commit: `a0454ffed4f80473866239c4164a1918bf0d216c` — message `witness evidence`,
-  files only under `evidence/owner-stop/return/`
-- host (return/env.txt): `Linux teeniebox 7.4.0-rc3 ... x86_64`, 16 cores, `/dev/kvm`
-  writable, Nix 2.35.6
-- returned steps (return/env.txt): `steps=full` — step 7 only. No host-tests, boot-iso,
-  kernel-step, gate-kvm or gate-tcg log was returned.
-- result: **8 of the 9 verdicts FAIL**. Task 3 does not start and `main` is not pushed.
+- branch-tip: `f8d077dd0912daec976a862c9d8689783d6fe81d` (`evidence(02-06): owner stop round 2 logs at the gated commit`)
+- hash-commit: `4624ea2f0cb45c81870dcc881d544d7d36a2e0bf` — `boot-iso hash bump`, `flake.nix` only, one line changed
+- return-commits: `a0454ffed4f80473866239c4164a1918bf0d216c` (round-1 files) and
+  `f8d077dd0912daec976a862c9d8689783d6fe81d` (round-2 files); both add files only under
+  `evidence/owner-stop/return/`
+- host (return/round2/venue.log): `venue: Linux x86_64`, `gated: 4624ea2…`, Nix 2.35.6
+- returned logs: `host-tests.log`, `boot-iso.log`, `kernel-step.log`, `gate-kvm.log`,
+  `gate-tcg.log`, `gate-full.log`, each `HEAD=4624ea2…` first and `EXIT=0` last, plus
+  `venue.log` and the `full/` artifacts
+- result: **9 of 9 verdicts PASS**
 
 gated-commit 4624ea2f0cb45c81870dcc881d544d7d36a2e0bf
 
-kernel-x64-elf-sha256 (Linux): not returned — the only `kernel-x64.elf` sha256 in the return
-is `2377dc2fb599a838425659ce7fe52f118ee4bfc9ac8f8a877091fab0cb111018` for
-`r9-kernel-x64-af46615` (pre-Phase-2 code), not the gated commit's kernel.
+hash-commit 4624ea2f0cb45c81870dcc881d544d7d36a2e0bf (not "no change")
+
+kernel-x64-elf-sha256 (Linux): 6a5f5a66b6f1e35bdb8d36ad4346ce6fc7f106d28fa43c25ed74c4a3301cf6a5
+(this is the Linux build that pairs with the committed `outputHash`; it is not comparable with
+the Mac hashes in `evidence/kernel-bytes/`)
 
 ## Verdicts
 
 VERDICT stop-branch-push: PASS
 EVIDENCE stop-branch-push: `git ls-remote origin refs/heads/phase-02/design-lock` ->
-`a0454ffed4f80473866239c4164a1918bf0d216c`; `git merge-base 2b415882aca30e3965ae3fb9612e91d05081879d
-origin/phase-02/design-lock` is `2b415882aca30e3965ae3fb9612e91d05081879d`, so the branch base is
-the last Mac commit, and the only two commits on top are the hash commit and the return commit.
+`f8d077dd0912daec976a862c9d8689783d6fe81d`; the branch base is the last Mac commit
+`2b415882aca30e3965ae3fb9612e91d05081879d`, and the three commits above it are the hash commit
+plus the two return commits.
 
-VERDICT stop-bootiso-hash-commit: FAIL
-EVIDENCE stop-bootiso-hash-commit: not returned — the commit has the allowed shape (own
-commit `4624ea2`, `flake.nix` only, `outputHash = "sha256-x07uJKM8Y7j3uXNwqT8Txhd8zhkRV8YrBkKyT2sg490="`),
-but the return holds no `got:` line (and no `hash mismatch`, no `b6OcAb`, no `x07uJKM8`) from
-the boot-iso build, so the committed value cannot be shown to equal a measured value.
+VERDICT stop-bootiso-hash-commit: PASS
+EVIDENCE stop-bootiso-hash-commit: own commit `4624ea2f0cb45c81870dcc881d544d7d36a2e0bf`,
+`git show --stat` lists `flake.nix | 2 +-` (one line):
+`- outputHash = "sha256-b6OcAb2pOufpr5AqJj2SqhXnrTYsIQRTgkh9FcgtNT0=";` ->
+`+ outputHash = "sha256-x07uJKM8Y7j3uXNwqT8Txhd8zhkRV8YrBkKyT2sg490=";`, and the build at the gated
+commit succeeded with that committed value — `boot-iso.log`: `HEAD=4624ea2f0cb45c81870dcc881d544d7d36a2e0bf`
+then `EXIT=0`, with `KERNEL-BOOTISO-BUILD-OK` and `KERNEL-BOOTISO-REBUILD-OK` under the same
+`HEAD=` in `kernel-step.log` (no hash mismatch and no `got:` line: the committed value matches).
 
-VERDICT stop-kernel-bootiso-build: FAIL
-EVIDENCE stop-kernel-bootiso-build: not measured at the gated commit — the only
-`KERNEL-BOOTISO-BUILD-OK` line is in `WITNESS-RETURN.md`'s last-40-lines excerpt of
-`out/kernel/kernel.log`, whose lines name `r9-kernel-x64-af46615` and
-`r9-boot-iso-af46615` (pre-Phase-2 code) and whose log carries no `HEAD=` line.
+VERDICT stop-kernel-bootiso-build: PASS
+EVIDENCE stop-kernel-bootiso-build: `kernel-step.log` `HEAD=4624ea2f0cb45c81870dcc881d544d7d36a2e0bf`:
+`KERNEL-STORE /nix/store/91m374sd8fgc8qhbgsh1jjdqp50xx0ch-r9-kernel-x64-4624ea2`,
+`KERNEL-BOOTISO-STORE /nix/store/sacvdr3h3gapqkbpi0j8kw93k7yfiycm-r9-boot-iso-4624ea2`,
+`KERNEL-BOOTISO-BUILD-OK`; log ends `EXIT=0`.
 
-VERDICT stop-kernel-bootiso-rebuild: FAIL
-EVIDENCE stop-kernel-bootiso-rebuild: not measured at the gated commit — the only
-`KERNEL-BOOTISO-REBUILD-OK` line follows
-`checking outputs of '/nix/store/8dpjymiwp76qqb6s0fyp6kkyylvlkv8y-r9-boot-iso-af46615.drv'...`
-in the same stale excerpt; no `HEAD=` line.
+VERDICT stop-kernel-bootiso-rebuild: PASS
+EVIDENCE stop-kernel-bootiso-rebuild: `kernel-step.log` `HEAD=4624ea2f0cb45c81870dcc881d544d7d36a2e0bf`:
+`checking outputs of '/nix/store/z9cdam743vfcjmm0h20bdmrr9xdbi7dx-r9-boot-iso-4624ea2.drv'...`
+then `KERNEL-BOOTISO-REBUILD-OK`; per-step summary `kernel 0 1` and log ends `EXIT=0`.
 
-VERDICT stop-x86-host-tests: FAIL
-EVIDENCE stop-x86-host-tests: not returned — no `Executing` line, no
-`x86_64-unknown-linux-gnu` line and no `cargo xtask test` line appears in any returned file.
+VERDICT stop-x86-host-tests: PASS
+EVIDENCE stop-x86-host-tests: `host-tests.log` `HEAD=4624ea2f0cb45c81870dcc881d544d7d36a2e0bf`:
+`Executing cd "/home/req/r9-p02-stop/run" && ".../cargo" "test" "--package" "x86_64" "--bins"
+"--target" "x86_64-unknown-linux-gnu"`, `test result: ok. 140 passed; 0 failed; 0 ignored;
+0 measured; 0 filtered out`; log ends `EXIT=0`.
 
-VERDICT stop-x86-rfork-mask-test: FAIL
-EVIDENCE stop-x86-rfork-mask-test: not returned — the string
-`rfork_reserved_bits_are_unsupported` appears in no returned file.
+VERDICT stop-x86-rfork-mask-test: PASS
+EVIDENCE stop-x86-rfork-mask-test: `host-tests.log` `HEAD=4624ea2f0cb45c81870dcc881d544d7d36a2e0bf`,
+x86_64 leg (the `--target x86_64-unknown-linux-gnu` command above):
+`test syscall::rfork_mask_tests::rfork_reserved_bits_are_unsupported ... ok` — from
+`cargo xtask test --verbose`.
 
-VERDICT stop-gate-kvm: FAIL
-EVIDENCE stop-gate-kvm: not measured at the gated commit — the only `GATE PASS quick` lines
-are three excerpts in `WITNESS-RETURN.md` (`run=320886-1795453021`, `run=540452-1795468407`,
-`run=307565-1795452813`) from the stale witness directories `out/probe`, `out/gate` and
-`out/flipback`, alongside `r9-kernel-x64-af46615`; no direct KVM quick-gate log was returned
-and none has a `HEAD=` line.
+VERDICT stop-gate-kvm: PASS
+EVIDENCE stop-gate-kvm: `gate-kvm.log` `HEAD=4624ea2f0cb45c81870dcc881d544d7d36a2e0bf`:
+`Running `target/debug/xtask gate --arch x86-64 --accel kvm``, one run, then
+`GATE PASS quick x86_64 run=765355-1795495125`; log ends `EXIT=0`.
 
-VERDICT stop-gate-tcg: FAIL
-EVIDENCE stop-gate-tcg: not returned — `--accel tcg` appears in no returned file.
+VERDICT stop-gate-tcg: PASS
+EVIDENCE stop-gate-tcg: `gate-tcg.log` `HEAD=4624ea2f0cb45c81870dcc881d544d7d36a2e0bf`:
+`Running `target/debug/xtask gate --arch x86-64 --accel tcg``, one run, then
+`GATE PASS quick x86_64 run=775293-1795495319`; log ends `EXIT=0`.
 
-VERDICT stop-gate-full: FAIL
-EVIDENCE stop-gate-full: not measured at the gated commit — `full/full.log` carries
-`GATE PASS full x86_64-linux run=685446-1795491574`, the store labels name `r9-kernel-x64-4624ea2`,
-but `grep -c '^HEAD=' full/full.log` is 0, so the log does not carry the plan's commit stamp.
+VERDICT stop-gate-full: PASS
+EVIDENCE stop-gate-full: `gate-full.log` `HEAD=4624ea2f0cb45c81870dcc881d544d7d36a2e0bf`:
+`Running `target/debug/xtask gate --arch x86-64 --full --accel kvm``, then
+`GATE PASS full x86_64-linux run=785121-1795495519`, all eight apps `PASS` in
+`full/out/full/785121-1795495519/full.tsv`, and the log closes
+`R9-WITNESS-RUN-OK: every selected step passed` with `EXIT=0`.
 
 ## Notes
 
-- No `HEAD=` line exists anywhere in the return: `grep -c '^HEAD='` over all 21 returned
-  files is 0. The checklist's `run_logged` wrapper writes that stamp; the committed `full/`
-  tree is the witness driver's own work directory, whose logs it never stamped.
-- The full set ran four times in this round: `347497-1795455456` (`boot-r9-tier1-x64 FAIL`),
-  then `405781-1795461728`, `623461-1795468943` and `685446-1795491574` (all eight apps PASS).
-  `full/full.log` is the last run.
-- `WITNESS-RETURN.md` is the pass-2 (Phase 1) witness bundle: its kernel and gate excerpts
-  name `r9-kernel-x64-af46615` and `r9-boot-iso-af46615`, so they are not this round's
-  evidence whatever their pass lines say.
-- `return/secret-scan.txt` reports a clean credential scan; no credential appeared in the
-  returned lines and nothing needed redaction.
-- The return commit is the allowed shape (files only under `evidence/owner-stop/return/`) and
-  is not the gated commit. Nothing on the branch touches code other than the hash commit.
-
-## Stop rule applied
-
-The STOP RULES branch for a missing or differing `HEAD=` line: the affected verdicts are FAIL
-and the owner is asked to run sections 3 to 7 again at the branch tip. Steps 3, 5 and 6 were
-not returned at all, and the boot-iso build's `got:` value was not returned, so the round
-cannot be carried. No code fix is needed on the Mac for this stop; the gate lines that were
-returned show no gate failure of their own.
+- Each of the six verdict logs starts with `HEAD=4624ea2f0cb45c81870dcc881d544d7d36a2e0bf` and
+  ends with `EXIT=0`; `grep -c '^HEAD='` and `grep -c '^EXIT='` are 1 on each.
+- `boot-iso.log` is two lines (`HEAD=…`, `EXIT=0`) because `nix build .#boot-iso` succeeded
+  with no output; the `kernel` step then did the plain build and the `--rebuild` check of
+  `r9-boot-iso-4624ea2`, which is the byte measurement.
+- No `got:` line and no `hash mismatch` appears in round 2: the committed hash built as
+  committed.
+- The gated commit is the branch tip with both return commits left out:
+  `git diff 4624ea2f0cb45c81870dcc881d544d7d36a2e0bf origin/phase-02/design-lock -- .
+  ':(exclude)…/owner-stop/return'` is empty.
+- Round 1's files remain under `return/` (commit `a0454ff`) and were not used for any verdict.
+- `full/out/secret-scan.txt` reports a clean credential scan, `full/out/survivors.txt` reports
+  no surviving qemu/Xvfb/drawterm processes, and no credential string appears in the round-2
+  logs; nothing needed redaction.
