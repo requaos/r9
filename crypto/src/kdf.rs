@@ -5,11 +5,16 @@
 //! under HKDF (D-07).  "HMAC-BLAKE3" in the source documents is read as
 //! BLAKE3's native keyed mode, so no HMAC construction is built over BLAKE3.
 //!
+//! Pinned standards: HMAC-SHA256 against RFC 4231 §4.2 to §4.8 (seven test
+//! cases), and HKDF-SHA256 against RFC 5869 §A.1 to §A.3 (three test cases)
+//! on both the host default backend and the scalar backend the kernels run.
 //! The known-answer pins live in `crypto/tests/rfc4231.rs` and
 //! `crypto/tests/rfc5869.rs`: the expected values are copied from the RFC
 //! text, never re-derived from this implementation (03-RESEARCH.md
-//! Pitfall 10).
+//! Pitfall 10).  The pin results are recorded in
+//! `evidence/PINS-03-03.md`.
 
+use hkdf::Hkdf;
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 
@@ -41,10 +46,10 @@ pub const HKDF_MAX_OUTPUT: usize = 255 * SHA256_LEN;
 /// is returned by value, and its argument order is part of the contract:
 /// `hkdf_extract(salt, ikm)`, never the reverse.
 pub fn hkdf_extract(salt: &[u8], ikm: &[u8]) -> [u8; SHA256_LEN] {
-    // RED skeleton (plan 03-03): the surface compiles and the pin fails on
-    // its assertion, not on a compile error.
-    let _ = (salt, ikm);
-    [0u8; SHA256_LEN]
+    // A thin wrapper (03-RESEARCH.md Pattern 1): the upstream `Hkdf` value is
+    // dropped; only the PRK bytes cross this API boundary (D-18).
+    let (prk, _) = Hkdf::<Sha256>::extract(Some(salt), ikm);
+    prk.into()
 }
 
 /// HKDF-Expand (RFC 5869 §2.3): fill `okm` from `prk` with `info` as the
@@ -57,7 +62,17 @@ pub fn hkdf_expand(
     info: &[u8],
     okm: &mut [u8],
 ) -> crate::Result<()> {
-    // RED skeleton (plan 03-03): returns Ok without writing a byte.
-    let _ = (prk, info, okm);
-    Ok(())
+    // The RFC 5869 §2.3 length rule is checked here, before `okm` is touched:
+    // an impossible request is an error, never a truncated or weaker output
+    // (T-03-11).  There is no fallback derivation on any path.
+    if okm.len() > HKDF_MAX_OUTPUT {
+        return Err(crate::Error::OutputTooLong);
+    }
+    // `from_prk` refuses a PRK shorter than the hash length; the array
+    // parameter makes that impossible, so this cannot fire.
+    let hkdf = Hkdf::<Sha256>::from_prk(prk)
+        .expect("a 32-byte PRK is exactly the SHA-256 HKDF length (RFC 5869 §2.2)");
+    // `expand`'s only error is the same length rule just enforced.
+    hkdf.expand(info, okm)
+        .map_err(|_| crate::Error::OutputTooLong)
 }
