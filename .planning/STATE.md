@@ -5,16 +5,16 @@ milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
 current_phase: 03
 current_phase_name: Guide Phase 1 - crypto/ and ds/ Foundations
 status: executing
-stopped_at: Completed 03-05-PLAN.md
-last_updated: "2026-11-24T14:45:08.491Z"
+stopped_at: Completed 03-06-PLAN.md
+last_updated: "2026-11-24T15:12:14.157Z"
 last_activity: 2026-11-24
 last_activity_desc: Phase 03 execution started
-state_head: 3842fbac8c0fbe2603677128464bd231eb84309b
+state_head: 8143473abe854cb56025728964ff96c7579b0dd9
 progress:
   total_phases: 4
   completed_phases: 2
   total_plans: 53
-  completed_plans: 46
+  completed_plans: 47
   percent: 50
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-11-24)
 ## Current Position
 
 Phase: 03 (Guide Phase 1 - crypto/ and ds/ Foundations) — EXECUTING
-Plan: 7 of 13
+Plan: 8 of 13
 Status: Ready to execute
 Last activity: 2026-11-24 — Phase 03 execution started
 
@@ -73,6 +73,7 @@ Progress: [█████░░░░░] 50%
 | Phase 03 P03 | 2 min | 2 tasks | 7 files |
 | Phase 03 P04 | 2min | 3 tasks | 7 files |
 | Phase 03 P05 | 4 min | 3 tasks | 4 files |
+| Phase 03 P06 | 25 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -159,6 +160,11 @@ Full log is the PROJECT.md Key Decisions table. Recent:
 - [Phase 03]: Claude's discretion: insert_compact rewrites the touched container in its smallest form after every insert; one container (at most 8 KiB) scanned per insert, accepted because the lease path reads far more often than it changes (T-03-21, revisit in Phase 6).
 - [Phase 03]: Claude's discretion: Roaring does not downgrade when ids are removed; a cohort that outgrew four clients stays a Roaring set, documented and pinned by removal_rules.
 - [Phase 03]: The ClientSet no-heap property is proved by variant and size_of <= 24, not by a counting allocator, which would need a third restricted-feature module outside ds/src/tpht/ (D-09).
+- [Phase 03]: Plan 03-06: the TPHT home block index is the low log2(num_blocks) bits of the mixed half L' ((key >> 32) ^ mix32(key as u32)), not P's low bits as compendium 4.1 words it; the test-only split_unmixed keeps the compendium reading for plan 03-08's evidence (RESEARCH C4, outside the IG-D09 lock)
+- [Phase 03]: Plan 03-06: mix32 is MurmurHash3's 32-bit finalizer pinned by independent Python and Node known answers; the header's quotients field holds a 16-bit fingerprint of the remainder and a caller closure verifies candidates against the full key (DS-02 at the function level)
+- [Phase 03]: Plan 03-06: the 64-byte bucket header is all atomics with the Boehm seqlock (writer Release data stores and generation bump; reader Acquire seq load, Relaxed data loads, fence(Acquire), seq reload); listing 9.3's orderings and plain fields are not used; Miri over 64 seeds passes and ds/src/tpht/ still holds no unsafe site
+- [Phase 03]: Plan 03-06: Miri-side test sizes were halved once per task under the plan's 120-second latency rule (feistel 142 -> 73 s, tpht-shard 121 -> 104 s); native sizes, the 64 seeds and the test list are unchanged
+- [Phase 03]: Plan 03-06: DS-01 is only part-delivered here (structure and concurrency); its over-90% home-hit measurement stays plan 03-08's, so only DS-02 is marked complete (03-08's frontmatter also claims DS-01)
 
 ### Open Questions (ten warnings, approved to be carried, not resolved)
 
@@ -220,6 +226,6 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 
 ## Session Continuity
 
-Last session: 2026-11-24T14:45:08.163Z
-Stopped at: Completed 03-05-PLAN.md
+Last session: 2026-11-24T15:12:13.805Z
+Stopped at: Completed 03-06-PLAN.md
 Resume file: None
