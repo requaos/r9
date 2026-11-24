@@ -5,16 +5,16 @@ milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
 current_phase: 03
 current_phase_name: Guide Phase 1 - crypto/ and ds/ Foundations
 status: executing
-stopped_at: Completed 03-07-PLAN.md
-last_updated: "2026-11-24T15:59:56.180Z"
+stopped_at: Completed 03-08-PLAN.md
+last_updated: "2026-11-24T16:52:41.368Z"
 last_activity: 2026-11-24
 last_activity_desc: Phase 03 execution started
-state_head: 0da79e1ecc58c332f40a154ea29c2a85b6c906ee
+state_head: c7b789337f9918c8f58dd0bc02b85eb4865b2367
 progress:
   total_phases: 4
   completed_phases: 2
   total_plans: 53
-  completed_plans: 49
+  completed_plans: 50
   percent: 50
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-11-24)
 ## Current Position
 
 Phase: 03 (Guide Phase 1 - crypto/ and ds/ Foundations) — EXECUTING
-Plan: 10 of 13
+Plan: 11 of 13
 Status: Ready to execute
 Last activity: 2026-11-24 — Phase 03 execution started
 
@@ -76,6 +76,7 @@ Progress: [█████░░░░░] 50%
 | Phase 03 P06 | 25 | 2 tasks | 5 files |
 | Phase 03 P13 | 13 min | 1 tasks | 2 files |
 | Phase 03 P07 | 32 min | 2 tasks | 2 files |
+| Phase 03 P08 | 51 min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -174,6 +175,12 @@ Full log is the PROJECT.md Key Decisions table. Recent:
 - [Phase 03]: Plan 03-07: a chain link is (candidate choice << 8) | node index with 0xFFFF as the end marker; the 255 bank indices are 0..=254, so no link or claimed index is 0xFF. fill() is used/(num_banks * 255) and the 8-seed pin measured 0.9920..0.9966 before the first BanksFull.
 - [Phase 03]: Plan 03-07: Miri-side sizes were taken to the plan's floors and the 22-test tpht suite still took 230 s (a second warm run 235 s) against the 120 s budget; MIRI-OVER chained 230 is recorded and reported to the orchestrator, with native sizes, the 64 seeds and the test list unchanged (cutting seeds or tests is not the executor's call).
 - [Orchestrator 2026-11-24]: Plan 03-07 Miri over-budget deviation ACCEPTED — the run is green over all 22 tests × 64 seeds with no Undefined Behavior or data race; 230 s exceeds the 120 s feedback-latency budget only. Coverage, seed count and native sizes stay unchanged. Revisit only if `cargo xtask miri` latency becomes a commit-workflow blocker; no plan edit authorized.
+- [Phase 03]: Plan 03-08: SPILL_THRESHOLD = 16 at HIT_RATE_OCCUPANCY = 1.00, chosen by the rule committed before the measurement (rule b479d28, tables 4150faf); at occupancy 1.00 T=16 is the only threshold over 0.90 for every distribution and seed, and the weakest of the fifteen runs is sequential 236,035/262,144 = 0.900402 (MARGIN)
+- [Phase 03]: Plan 03-08: the mixed-half index is what carries structured keys: at the chosen cell pagekey is 0.9036 mixed versus 0.2500 with the compendium's unmixed low bits of P, and upper32/upper32_or7 are 1.0000 versus about 0.0001; plan 03-09 records the correction (RESEARCH C4, outside the IG-D09 lock)
+- [Phase 03]: Plan 03-08: the shard spills a block's entries past the threshold into ChainedTphtOverflow under that block's seqlock; insert returns Ok(Some(ptr)) at home and Ok(None) in a bank, lookup returns Found { value, home }, and a spilled entry has no tiny pointer (reached by lookup only, never deref_tiny)
+- [Phase 03]: Plan 03-08: with_banks(n, 0) keeps plan 03-06's 16-slot home-only behaviour and HomeFull; a shard with banks never returns HomeFull (BanksFull instead). The default overflow is one bank per 64 blocks, minimum 2; the measurement and pin pass banks_for explicitly
+- [Phase 03]: Plan 03-08: the six tests advanced by plans 03-06 and 03-13 were re-pinned on a home-only shard; only constructors, insert/lookup unwrapping and two placement assertions changed, each named by a REPIN ledger line
+- [Phase 03]: Plan 03-08: Miri is over the 120-second budget and reported, not fixed by cutting coverage: 981 s then 315/329 s at the floors for tpht-spill, 628 s then 402 s for tpht-hit-rate; seeds, tests and native sizes unchanged (plan 03-07 precedent)
 
 ### Open Questions (ten warnings, approved to be carried, not resolved)
 
@@ -235,6 +242,6 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 
 ## Session Continuity
 
-Last session: 2026-11-24T15:59:55.904Z
-Stopped at: Completed 03-07-PLAN.md
+Last session: 2026-11-24T16:52:35.454Z
+Stopped at: Completed 03-08-PLAN.md
 Resume file: None
