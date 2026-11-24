@@ -26,6 +26,8 @@
 //! public accessor that returns its bytes (T-03-14).  Code inside this crate
 //! compares keys through [`Key::ct_eq`].
 
+use hkdf::Hkdf;
+use sha2::Sha256;
 use zeroize::Zeroizing;
 
 /// The key length in bytes: one SHA-256 HKDF output, 256 bits.
@@ -74,8 +76,16 @@ impl Key {
 /// little-endian order matches 9P's wire order.  The encoding is pinned by a
 /// known-answer vector in `crypto/tests/keys.rs`.
 pub fn k_file(k_user: &Key, qid_path: u64, qid_vers: u32) -> Key {
-    let _ = (k_user, qid_path, qid_vers);
-    Key { bytes: Zeroizing::new([0u8; KEY_LEN]) }
+    // The fixed-width `info` (T-03-17): 8 bytes little-endian path, then
+    // 4 bytes little-endian vers, exactly 12 bytes with no padding.
+    let mut info = [0u8; 12];
+    info[..8].copy_from_slice(&qid_path.to_le_bytes());
+    info[8..].copy_from_slice(&qid_vers.to_le_bytes());
+
+    let mut out = Zeroizing::new([0u8; KEY_LEN]);
+    crate::kdf::hkdf_expand(k_user.bytes(), &info, &mut out[..])
+        .expect("a 32-byte HKDF-SHA256 expand is within the 255 x 32 RFC 5869 limit");
+    Key { bytes: out }
 }
 
 /// Expand `parent` with `label` then `context` as the HKDF `info` (CRYP-04).
@@ -86,6 +96,16 @@ pub fn k_file(k_user: &Key, qid_path: u64, qid_vers: u32) -> Key {
 /// layout (per FID versus per connection and direction) is W4 in Phase 4;
 /// this function fixes none of it.
 pub fn derive_labelled(parent: &Key, label: &[u8], context: &[u8]) -> Key {
-    let _ = (parent, label, context);
-    Key { bytes: Zeroizing::new([0u8; KEY_LEN]) }
+    // `expand_multi_info` feeds the HKDF-Expand HMAC the components in
+    // sequence, which is exactly feeding it `label || context` (the RFC's
+    // `info` is one opaque string).  The multi-part form is used because
+    // `crypto/` is `no_std` with no allocator, so there is no buffer to
+    // concatenate the two caller slices into.
+    let hkdf = Hkdf::<Sha256>::from_prk(parent.bytes())
+        .expect("a 32-byte PRK is exactly the SHA-256 HKDF length (RFC 5869 §2.2)");
+
+    let mut out = Zeroizing::new([0u8; KEY_LEN]);
+    hkdf.expand_multi_info(&[label, context], &mut out[..])
+        .expect("a 32-byte HKDF-SHA256 expand is within the 255 x 32 RFC 5869 limit");
+    Key { bytes: out }
 }
