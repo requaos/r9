@@ -154,6 +154,20 @@ impl RoaringBitmap {
         }
     }
 
+    /// Inserts `v` and rewrites only the touched container in its smallest
+    /// form — the same rule [`Self::run_optimize`] applies to every one.
+    /// `ClientSet` uses this for every insert in its `Roaring` state, so
+    /// contiguous ids collapse into one run container (DS-06).
+    pub(crate) fn insert_compact(&mut self, v: u32) -> bool {
+        let inserted = self.insert_inner(v);
+        let key = (v >> CHUNK_BITS) as u16;
+        let at = self.chunks.partition_point(|chunk| chunk.key < key);
+        if at < self.chunks.len() && self.chunks[at].key == key {
+            self.chunks[at].container.compact();
+        }
+        inserted
+    }
+
     /// Union with `other`.
     pub fn union(&self, other: &Self) -> Self {
         self.combine(other, SetOp::Union)

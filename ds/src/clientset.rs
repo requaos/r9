@@ -44,33 +44,116 @@ impl ClientSet {
     }
 
     /// Inserts `id`; returns whether it was absent.
-    pub fn insert(&mut self, _id: u32) -> bool {
-        false
+    pub fn insert(&mut self, id: u32) -> bool {
+        match self {
+            Self::Empty => {
+                *self = Self::Single(id);
+                true
+            }
+            Self::Single(existing) => {
+                if *existing == id {
+                    return false;
+                }
+                let (low, high) = if *existing < id { (*existing, id) } else { (id, *existing) };
+                *self = Self::Inline {
+                    count: 2,
+                    ids: [low, high, 0, 0],
+                };
+                true
+            }
+            Self::Inline { count, ids } => {
+                let used = *count as usize;
+                if ids[..used].contains(&id) {
+                    return false;
+                }
+                if used < ids.len() {
+                    let at = ids[..used].partition_point(|&existing| existing < id);
+                    ids.copy_within(at..used, at + 1);
+                    ids[at] = id;
+                    *count += 1;
+                    true
+                } else {
+                    let existing = *ids;
+                    let mut bitmap = RoaringBitmap::new();
+                    for value in existing {
+                        bitmap.insert_compact(value);
+                    }
+                    bitmap.insert_compact(id);
+                    *self = Self::Roaring(Box::new(bitmap));
+                    true
+                }
+            }
+            Self::Roaring(bitmap) => bitmap.insert_compact(id),
+        }
     }
 
     /// Removes `id`; returns whether it was present.
-    pub fn remove(&mut self, _id: u32) -> bool {
-        false
+    pub fn remove(&mut self, id: u32) -> bool {
+        match self {
+            Self::Empty => false,
+            Self::Single(existing) => {
+                if *existing == id {
+                    *self = Self::Empty;
+                    true
+                } else {
+                    false
+                }
+            }
+            Self::Inline { count, ids } => {
+                let used = *count as usize;
+                let at = match ids[..used].binary_search(&id) {
+                    Ok(at) => at,
+                    Err(_) => return false,
+                };
+                for index in at..used - 1 {
+                    ids[index] = ids[index + 1];
+                }
+                ids[used - 1] = 0;
+                *count -= 1;
+                if *count == 1 {
+                    let only = ids[0];
+                    *self = Self::Single(only);
+                }
+                true
+            }
+            Self::Roaring(bitmap) => bitmap.remove(id),
+        }
     }
 
     /// Whether `id` is present.
-    pub fn contains(&self, _id: u32) -> bool {
-        false
+    pub fn contains(&self, id: u32) -> bool {
+        match self {
+            Self::Empty => false,
+            Self::Single(existing) => *existing == id,
+            Self::Inline { count, ids } => ids[..*count as usize].binary_search(&id).is_ok(),
+            Self::Roaring(bitmap) => bitmap.contains(id),
+        }
     }
 
     /// The number of distinct ids.
     pub fn len(&self) -> u64 {
-        0
+        match self {
+            Self::Empty => 0,
+            Self::Single(_) => 1,
+            Self::Inline { count, .. } => *count as u64,
+            Self::Roaring(bitmap) => bitmap.len(),
+        }
     }
 
     /// Whether the set holds no ids.
     pub fn is_empty(&self) -> bool {
-        true
+        self.len() == 0
     }
 
     /// Ascending iteration over the ids.
     pub fn iter(&self) -> Iter<'_> {
-        Iter { kind: IterKind::Empty }
+        let kind = match self {
+            Self::Empty => IterKind::Empty,
+            Self::Single(id) => IterKind::Single(core::iter::once(*id)),
+            Self::Inline { count, ids } => IterKind::Inline(ids[..*count as usize].iter()),
+            Self::Roaring(bitmap) => IterKind::Roaring(bitmap.iter()),
+        };
+        Iter { kind }
     }
 }
 
