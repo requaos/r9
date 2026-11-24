@@ -47,7 +47,7 @@ Standing constraint on every requirement below: the golden invariant (boots to r
 
 ### Lint and Audit (guide Phase 1)
 
-- [ ] **LINT-01**: `crypto/` and `ds/` join the workspace under the lint contract settled by W5 and note N2; every unsafe site carries a `// SAFETY:` comment, `UNSAFE-AUDIT.md` lists the new sites, and `cargo xtask test`, `check` and `clippy` run both crates on the host toolchain (IG-D07, IG-V01)
+- [x] **LINT-01**: `crypto/` and `ds/` join the workspace under the lint contract settled by W5 and note N2; every unsafe site carries a `// SAFETY:` comment, `UNSAFE-AUDIT.md` lists the new sites, and `cargo xtask test`, `check` and `clippy` run both crates on the host toolchain (IG-D07, IG-V01)
 
 ### 9P2000.aead Wire and FidTable (guide Phase 2)
 
@@ -250,7 +250,7 @@ Which phases cover which requirements. Each requirement maps to exactly one phas
 | DS-05 | Phase 3 | Pending |
 | DS-06 | Phase 3 | Pending |
 | DS-07 | Phase 3 | Pending |
-| LINT-01 | Phase 3 | Pending |
+| LINT-01 | Phase 3 | Complete |
 | WIRE-01 | Phase 4 | Pending |
 | WIRE-02 | Phase 4 | Pending |
 | WIRE-03 | Phase 4 | Pending |

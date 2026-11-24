@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 4
+open_count: 8
 waived_count: 0
 fixed_count: 1
-total_count: 5
-last_updated: 2026-11-24T02:35:39.402Z
+total_count: 9
+last_updated: 2026-11-24T14:27:40.689Z
 ---
 
 # Broken Windows Ledger
@@ -20,6 +20,10 @@ last_updated: 2026-11-24T02:35:39.402Z
 | 3 | 01 | unrun-verify | xtask/src/gate.rs |  | The quick gate's KVM witness runs (green twice, force-no-rio non-zero) are queued for stop B (plan 01-22) | open |  | 2026-11-23T11:15:32.026Z |  |
 | 4 | 01 | deviation | gates/aarch64/drive-r9.expect |  | Plan 01-21's unreferenced drive-r9 rewire needed two support lines beyond path/env tokens (the R9_GATE_OUT capture expression and its mkdir) because the Harvey launcher run-r9.sh was not moved; every assertion, marker, stage and timeout is unchanged (recorded in 01-21-SUMMARY) | open |  | 2026-11-23T12:03:50.195Z |  |
 | 5 | 02 | unrun-verify | x86_64/src/syscall.rs |  | The x86_64 rfork_reserved_bits_are_unsupported mask test and the RFPROC import in x86_64/src/proc.rs mod tests were not compiled or run on the Mac; first witness is the owner's x86_64 Linux host at the end-of-phase stop (D-24, plan 02-06) | open |  | 2026-11-24T02:35:39.402Z |  |
+| 6 | 03 | stub | ds/src/tpht/mod.rs | 1 | tpht module is a doc-only skeleton; implementation lands in plan 03-06 (DS-01..DS-05) | open |  | 2026-11-24T14:27:39.839Z |  |
+| 7 | 03 | stub | ds/src/roaring.rs | 1 | roaring module is a doc-only skeleton; implementation lands in plan 03-05 (DS-06) | open |  | 2026-11-24T14:27:40.129Z |  |
+| 8 | 03 | stub | ds/src/setops.rs | 1 | setops seam is a doc-only skeleton; the four hot loops land in plan 03-05 (D-20) | open |  | 2026-11-24T14:27:40.406Z |  |
+| 9 | 03 | stub | ds/src/clientset.rs | 1 | clientset module is a doc-only skeleton; implementation lands in plan 03-05 (DS-06) | open |  | 2026-11-24T14:27:40.689Z |  |
 
 ````json
 [
@@ -85,6 +89,58 @@ last_updated: 2026-11-24T02:35:39.402Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-11-24T02:35:39.402Z",
+    "resolved_at": null,
+    "milestone": "v3.0"
+  },
+  {
+    "id": 6,
+    "kind": "stub",
+    "phase": "03",
+    "file": "ds/src/tpht/mod.rs",
+    "line": 1,
+    "description": "tpht module is a doc-only skeleton; implementation lands in plan 03-06 (DS-01..DS-05)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-24T14:27:39.839Z",
+    "resolved_at": null,
+    "milestone": "v3.0"
+  },
+  {
+    "id": 7,
+    "kind": "stub",
+    "phase": "03",
+    "file": "ds/src/roaring.rs",
+    "line": 1,
+    "description": "roaring module is a doc-only skeleton; implementation lands in plan 03-05 (DS-06)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-24T14:27:40.129Z",
+    "resolved_at": null,
+    "milestone": "v3.0"
+  },
+  {
+    "id": 8,
+    "kind": "stub",
+    "phase": "03",
+    "file": "ds/src/setops.rs",
+    "line": 1,
+    "description": "setops seam is a doc-only skeleton; the four hot loops land in plan 03-05 (D-20)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-24T14:27:40.406Z",
+    "resolved_at": null,
+    "milestone": "v3.0"
+  },
+  {
+    "id": 9,
+    "kind": "stub",
+    "phase": "03",
+    "file": "ds/src/clientset.rs",
+    "line": 1,
+    "description": "clientset module is a doc-only skeleton; implementation lands in plan 03-05 (DS-06)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-24T14:27:40.689Z",
     "resolved_at": null,
     "milestone": "v3.0"
   }

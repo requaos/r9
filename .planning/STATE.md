@@ -5,16 +5,16 @@ milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
 current_phase: 03
 current_phase_name: Guide Phase 1 - crypto/ and ds/ Foundations
 status: executing
-stopped_at: Completed 03-01-PLAN.md
-last_updated: "2026-11-24T14:24:27.990Z"
+stopped_at: Completed 03-12-PLAN.md
+last_updated: "2026-11-24T14:28:01.134Z"
 last_activity: 2026-11-24
 last_activity_desc: Phase 03 execution started
-state_head: b40171118b2cc969dea8c26692d2eadcb56e7767
+state_head: 2224868c7135522acde4ddcfde05d9205d6f5b87
 progress:
   total_phases: 4
   completed_phases: 2
   total_plans: 53
-  completed_plans: 41
+  completed_plans: 42
   percent: 50
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-11-24)
 ## Current Position
 
 Phase: 03 (Guide Phase 1 - crypto/ and ds/ Foundations) — EXECUTING
-Plan: 2 of 13
+Plan: 3 of 13
 Status: Ready to execute
 Last activity: 2026-11-24 — Phase 03 execution started
 
@@ -68,6 +68,7 @@ Progress: [█████░░░░░] 50%
 | Phase 02 P05 | 10 min | 3 tasks | 4 files |
 | Phase 02 P06 | 138 min | 3 tasks | 3 files |
 | Phase 03 P01 | 2 min | 2 tasks | 11 files |
+| Phase 03 P12 | 2min | 2 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -128,6 +129,9 @@ Full log is the PROJECT.md Key Decisions table. Recent:
 - [Phase 03]: Plan 03-01: crypto/ joins the workspace with six exact pins (sha2 0.11.1, hmac 0.13.0, hkdf 0.13.0, chacha20 0.10.2, blake3 1.8.7, zeroize 1.9.2), all default-features = false and each with a provenance comment; Cargo.lock gained 176 lines and removed none.
 - [Phase 03]: Plan 03-01: hmac_sha256 wraps hmac::Hmac<sha2::Sha256> with no upstream type in a public signature (D-18); the RFC 4231 section 4.2 case 1 pin passes on the host default backend and on the scalar backend the kernels select.
 - [Phase 03]: Plan 03-01: the scalar-backend test leg carries its rustflags in its own argument vector; no --target-dir was needed (both variants coexist and the second run recompiled nothing). Both kernel ELF hashes are unchanged, so D-21's stop did not trigger.
+- [Phase 03]: Plan 03-12: ds/ joins the workspace with the D-09 per-module forbid layout (tpht exempt; roaring, setops, clientset forbidden) and roaring =0.11.5 as its only external crate, under [dev-dependencies] with a provenance comment
+- [Phase 03]: Plan 03-12: the two lib/*-unknown-none-elf.json cross legs with -Z build-std=core,alloc are the no_std FP/SIMD-free proof; the built-in bare-metal legs are kept only to meet D-21's wording and the code says the built-in aarch64 target proves nothing
+- [Phase 03]: Plan 03-12: Cargo.lock gained 13 lines and removed none (ds and roaring only) and now has its final Phase 3 shape; both kernels are byte-identical (@03-12 IDENTICAL), so D-21's stop did not fire
 
 ### Open Questions (ten warnings, approved to be carried, not resolved)
 
@@ -189,6 +193,6 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 
 ## Session Continuity
 
-Last session: 2026-11-24T14:24:22.593Z
-Stopped at: Completed 03-01-PLAN.md
+Last session: 2026-11-24T14:28:00.853Z
+Stopped at: Completed 03-12-PLAN.md
 Resume file: None
