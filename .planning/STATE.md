@@ -117,7 +117,7 @@ Full log is the PROJECT.md Key Decisions table. Recent:
 
 ### Open Questions (ten warnings, approved to be carried, not resolved)
 
-Settle each when its phase is planned. Detail: `.planning/INGEST-CONFLICTS.md`. Eight roadmapper notes (N1-N8) are in PROJECT.md.
+Settle each when its phase is planned. Detail: `.planning/INGEST-CONFLICTS.md`. Eleven notes (N1-N11) are in PROJECT.md; N9 to N11 are source contradictions the Phase 2 threat model found untracked (stale-frame mechanism, plaintext in legacy bounce frames, where the wire MAC is verified).
 
 | ID | Settle in | Question |
 |----|-----------|----------|
