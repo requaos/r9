@@ -129,6 +129,7 @@ Not in this phase: any wire format or `FidTable` (Phase 4), page sealing, the ve
 ## Deferred Ideas
 
 - **Roaring SIMD kernels** (AVX2, NEON) in the reserved isolated module: Phase 5, with the pager and `with_simd()`. The unsafe allowance is already approved (D-09, D-20).
+- **`fearless_simd` for the Roaring SIMD module** (owner, 2026-11-24, raised during planning): evaluate https://github.com/linebender/fearless_simd in Phase 5 as the way to address and isolate the SIMD `unsafe`, alongside `core::simd` on the pinned nightly. Its capability-token model fits "kernel SIMD only inside `with_simd()`". To check by probe then: that it builds `no_std` on r9's soft-float kernel specs, how a token is minted without `std` feature detection, whether array intersection and popcount still need raw intrinsics, and the supply-chain cost of a pre-1.0 crate with a proc macro. Phase 3 stays scalar and keeps the seam generic (D-20).
 - **Funnel Hashing** for write-once scratchpads: built in whichever phase first has a scratchpad consumer (D-16).
 - **Extending the deny lint and audit to `x86_64`**: Phase 5 (the rest of note N2).
 - **The 8-byte wire sequence nonce to 12-byte ChaCha20 nonce rule**: Phase 4, with W1 and W4.

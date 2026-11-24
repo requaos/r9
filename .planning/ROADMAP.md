@@ -175,7 +175,7 @@ Plans:
   2. TPHT single-line hit tests pass on the host: over 90% of lookups resolve in the home block, `deref_tiny` is exactly one memory access, the Feistel key reconstruction round-trips, and the chained overflow reaches over 95% fill with no allocation failure.
   3. Roaring union, intersection and difference match a reference model on randomized inputs, and `ClientSet` uses no heap for up to four clients and upgrades beyond that.
   4. `cargo xtask check` and clippy pass with the lint contract settled for `crypto/` and `ds/`, every unsafe site carries a `// SAFETY:` comment, and `UNSAFE-AUDIT.md` lists the new sites.
-**Plans**: TBD
+**Plans**: 0/13 plans complete; 13 plans in 13 sequential waves, in this order: 03-01, 03-12, 03-02, 03-03, 03-04, 03-05, 03-06, 03-13, 03-07, 03-08, 03-09, 03-10, 03-11. One planned owner stop, the end-of-phase stop on the x86_64 Linux host in 03-11 (branch push approval, sandboxed kernel builds and byte comparison, then a second approval for `main`). Run with `workflow.use_worktrees` = `false`, so every plan runs in sequence on the main working tree.
 **Open questions**: W3 (MAC primitive; also read by Phase 4), W5 (`unsafe` in `ds/src/tpht/` versus `forbid(unsafe_code)` on `ds/`), W6 (TPHT home block 4 versus 16 slots). Notes N1 (ChaCha20 64-bit counter plus 96-bit nonce exceeds the 128-bit state) and N2 (HEAD's lint and unsafe layout differs from the guide). Landing sites `crypto/` and `ds/` do not exist at HEAD; add them to the workspace members.
 
 #### Phase 4: Guide Phase 2 - 9P2000.aead Transport and FidTable

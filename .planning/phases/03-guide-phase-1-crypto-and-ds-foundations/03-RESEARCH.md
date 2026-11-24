@@ -523,7 +523,7 @@ pub fn blake3_keyed(key: &[u8; 32], msg: &[u8]) -> [u8; 32] {
     *blake3::keyed_hash(key, msg).as_bytes()
 }
 ```
-In the real crate use `try_seek` and `try_apply_keystream` and return an error: `seek` and `apply_keystream` panic when the 32-bit counter would wrap (256 GiB of keystream). [VERIFIED: both method pairs exist in `cipher-0.5.2/src/stream.rs`. ASSUMED: the panic-on-overflow wording, from the trait's naming convention]
+In the real crate use `try_seek` and `try_apply_keystream` and return an error: `seek` and `apply_keystream` panic when the 32-bit counter would wrap; the pinned crate stops one block short of 2^32, at 2^32 - 1 blocks (256 GiB less 64 bytes, 274,877,906,880 bytes from counter 0), because `remaining_blocks` is `u32::MAX - block_pos` (`chacha20-0.10.2/src/variants.rs:51`). [VERIFIED: both method pairs exist in `cipher-0.5.2/src/stream.rs`. ASSUMED: the panic-on-overflow wording, from the trait's naming convention]
 
 ### Pattern 2: Header of atomics with the Boehm seqlock ordering
 
@@ -716,34 +716,43 @@ shasum -a 256 target/aarch64-unknown-none-elf/debug/aarch64 target/x86_64-unknow
 | A9 | rustup on the CI runner installs the targets and `rust-src` that `rust-toolchain.toml` lists | F5 | Low |
 | A10 | RFC test vectors may be reproduced in the repo | F4 | Low |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Which bits of the Feistel output are the home block index?**
+All seven were decided at planning (2026-11-24). Each carries the plan that applies the decision; plan 03-09 records them in PROJECT.md as planning-level rows for owner review at Phase 3 verification.
+
+1. **Which bits of the Feistel output are the home block index?** (RESOLVED)
    - Known: the compendium says the lower bits of `P = (L' << 32) | R`; those are the key's own low bits. Structured keys collapse (C4, F9).
    - Unclear: whether the owner regards the compendium wording as binding. It is not part of the IG-D09 lock as D-17 states it.
    - Recommendation: index = low bits of `L'` (the mixed half); remainder = `R` and the remaining bits of `L'`. Record it as a correction to compendium 4.1 in PROJECT.md beside the D-08 and D-17 rows, and show both columns in the D-15 evidence. Surface it to the owner at phase verification with that evidence.
+   - RESOLVED: the recommendation is adopted (orchestrator decision 1). Plan 03-06 Task 1 takes the index from the low bits of `L'`; plan 03-08 Task 2 shows both variants in `evidence/SPILL-THRESHOLD.md`; plan 03-09 Task 1 row 9 records the correction to compendium 4.1.
 
-2. **What is the rest of `f(R)`?**
+2. **What is the rest of `f(R)`?** (RESOLVED)
    - Known: both sources give `f(R) = (R xor (R >> 16)) * 0x85EBCA6B xor ...` and stop.
    - Recommendation: MurmurHash3's 32-bit finalizer, whose first constant is `0x85EBCA6B` (`h ^= h >> 16; h *= 0x85EBCA6B; h ^= h >> 13; h *= 0xC2B2AE35; h ^= h >> 16`). Pin it with a known-answer test.
+   - RESOLVED: MurmurHash3's 32-bit finalizer, pinned by `mix32_known_answers` with independently computed values. Plan 03-06 Task 1; recorded by plan 03-09 Task 1 row 11.
 
-3. **How does DS-02's "reconstruct the key from index and remainder" square with a 16-bit `quotients` field?**
+3. **How does DS-02's "reconstruct the key from index and remainder" square with a 16-bit `quotients` field?** (RESOLVED)
    - Known: a 64-bit key minus `log2(blocks)` index bits leaves far more than 16 bits. The header's 16-bit value can only be a fingerprint; the sketch verifies candidates with a caller closure.
    - Recommendation: test DS-02 at the function level (index and full-width remainder round-trip to the key) and treat the header field as a fingerprint of that remainder. Say so in the module docs.
+   - RESOLVED: DS-02 is tested at the function level and the header field holds a fingerprint of the remainder. Plan 03-06 Task 1 (`split`, `join`, `fingerprint`) and Task 2 (the header); recorded by plan 03-09 Task 1 row 11.
 
-4. **Byte encoding of `Qid.path || Qid.vers` in `K_file`'s `info`.**
+4. **Byte encoding of `Qid.path || Qid.vers` in `K_file`'s `info`.** (RESOLVED)
    - Recommendation: 8 bytes little-endian then 4 bytes little-endian, matching 9P's wire order; pin with a known-answer vector computed once from the RFC-verified HKDF.
+   - RESOLVED: 8 bytes little-endian then 4 bytes little-endian, pinned by `k_file_known_answer`. Plan 03-04 Task 2; recorded by plan 03-09 Task 1 row 12.
 
-5. **How far do "transient and session keys" go in this phase?**
+5. **How far do "transient and session keys" go in this phase?** (RESOLVED)
    - Known: the RFC's formula is `HKDF-Expand(S_session, "9P-AEAD-FID" || fid, 32)`, but whether keys are per FID or per connection and direction is W4, settled in Phase 4.
    - Recommendation: provide a labelled expand (`label`, `context`, 32-byte output) and the `K_file` binding; do not fix the session `info` layout here.
+   - RESOLVED: a labelled expand (`derive_labelled`) and the `K_file` binding; the session `info` layout stays W4 in Phase 4. Plan 03-04 Task 2; recorded by plan 03-09 Task 1 row 12.
 
-6. **Where does a home block keep its overflow chain head?**
+6. **Where does a home block keep its overflow chain head?** (RESOLVED)
    - Known: the 64-byte header has no spare byte; listing 9.5 reads a `block.overflow_chain` field that the header in 9.3 does not have.
    - Recommendation: a parallel array of atomic chain heads indexed by block, touched only on the spill path. This keeps the header at the locked layout.
+   - RESOLVED: a parallel array of atomic chain heads owned by `ChainedTphtOverflow` (orchestrator decision 6). Plan 03-07 Task 1; used under the home block's seqlock by plan 03-08 Task 1; recorded by plan 03-09 Task 1 row 13.
 
-7. **What does "over 95% fill" in DS-04 measure?**
+7. **What does "over 95% fill" in DS-04 measure?** (RESOLVED)
    - Recommendation: nodes in use / (255 × banks) at the first insert that finds both candidate banks full, over several seeds; "allocation failure" means that event, not a heap failure.
+   - RESOLVED: that definition, over at least eight seeds, pinned by `fill_exceeds_95_percent_before_first_failure` (orchestrator decision 6). Plan 03-07 Task 1; recorded by plan 03-09 Task 1 row 13.
 
 ## Environment Availability
 
