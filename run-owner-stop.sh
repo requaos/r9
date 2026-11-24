@@ -55,7 +55,7 @@ finish() {
   done
   cd "$ROOT/tip" || exit "$rc"
   git fetch origin "$BRANCH" >/dev/null 2>&1 || true
-  git switch -C owner-stop-return "origin/$BRANCH" >/dev/null 2>&1 || true
+  git switch --detach "origin/$BRANCH" >/dev/null 2>&1 || true
   mkdir -p "$PHASE/evidence/owner-stop/return"
   cp "$ROOT"/*.log "$PHASE/evidence/owner-stop/return/" 2>/dev/null
   {
