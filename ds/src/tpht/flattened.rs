@@ -78,7 +78,7 @@ pub(crate) enum IndexChoice {
 
 #[cfg(test)]
 impl IndexChoice {
-    fn split(self, key: u64, index_bits: u32) -> (usize, u64) {
+    pub(crate) fn split(self, key: u64, index_bits: u32) -> (usize, u64) {
         match self {
             Self::MixedHalf => feistel::split(key, index_bits),
             Self::UnmixedLowBits => feistel::split_unmixed(key, index_bits),
@@ -522,7 +522,13 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::tpht::measure::{Distribution, GRID_BLOCKS, GRID_SEEDS};
     use crate::tpht::miri_scaled;
+
+    /// The occupancy the hit-rate pin asserts (D-15).  Plan 03-08 Task 2 Step D
+    /// replaces this starting value with the occupancy chosen by the rule from
+    /// the measurement; the bar itself is never raised.
+    const HIT_RATE_OCCUPANCY: f64 = 0.90;
 
     /// A [`Probe`] that counts the reader's two kinds of memory access, so
     /// `deref_tiny` can be shown to make exactly one arena read and no header
@@ -1336,5 +1342,81 @@ mod tests {
             stored[16], stored[0],
             "the wrap must be observable: the last block's first slot differs from slot 0"
         );
+    }
+
+    #[test]
+    fn hit_rate_home_block_exceeds_90_percent() {
+        // The chosen grid cell, re-run through the production constructor: the
+        // grid's 16,384 blocks, three seeds and five distributions (16 blocks,
+        // one seed and two distributions under Miri), `entries_at`, `banks_for`
+        // and the exact integer `exceeds_bar`.  The threshold in force is the
+        // production `SPILL_THRESHOLD`, so the counts equal the chosen cell's
+        // and a qualifying cell passes.  The 0.90 bar is asserted in native
+        // runs only: a 16-block table says nothing about the figure.
+        let blocks = miri_scaled(GRID_BLOCKS, 16);
+        let seed_count = miri_scaled(GRID_SEEDS.len(), 1);
+        let dist_count = miri_scaled(Distribution::ALL.len(), 2);
+        let percent = (HIT_RATE_OCCUPANCY * 100.0).round() as usize;
+        let entries = crate::tpht::measure::entries_at(blocks, percent);
+        let banks = crate::tpht::measure::banks_for(entries);
+        let mut weakest: Option<(usize, usize)> = None;
+        let mut failures: Vec<String> = Vec::new();
+        for distribution in Distribution::ALL.iter().take(dist_count) {
+            for &seed in GRID_SEEDS.iter().take(seed_count) {
+                let shard = FlattenedTphtShard::<2>::with_banks(blocks, banks)
+                    .expect("the grid's block and bank counts are valid");
+                for (i, key) in
+                    crate::tpht::measure::keys(*distribution, seed, 0).take(entries).enumerate()
+                {
+                    let result = shard.insert(key, [key, !key], |v| v[0] == key);
+                    assert!(
+                        result.is_ok(),
+                        "no insert may fail at the measured threshold ({:?}, seed {seed:#018x}, \
+                         insert {i}): {result:?}",
+                        distribution
+                    );
+                }
+                let mut hits = 0;
+                let mut lookups = 0;
+                for key in crate::tpht::measure::keys(*distribution, seed, 0).take(entries) {
+                    let found =
+                        shard.lookup(key, |v| v[0] == key).expect("a present key must resolve");
+                    assert_eq!(found.value, [key, !key], "lookup returns the inserted value");
+                    if found.home.is_some() {
+                        hits += 1;
+                    }
+                    lookups += 1;
+                }
+                let fraction = hits as f64 / lookups as f64;
+                println!(
+                    "CELL dist={} seed={seed:#018x} hits={hits} lookups={lookups} \
+                     fraction={fraction:.6}",
+                    distribution.name()
+                );
+                let weakest_run = weakest.get_or_insert((hits, lookups));
+                if hits * weakest_run.1 < weakest_run.0 * lookups {
+                    *weakest_run = (hits, lookups);
+                }
+                if !cfg!(miri) && !crate::tpht::measure::exceeds_bar(hits, lookups) {
+                    failures.push(format!(
+                        "{:?} seed {seed:#018x} resolves only {fraction:.4} of present keys at \
+                         home ({hits}/{lookups}); DS-01 requires over 0.90",
+                        distribution
+                    ));
+                }
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "the home-hit bar is not met in {} run(s):\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
+        if let Some((hits, lookups)) = weakest {
+            println!(
+                "PIN min fraction={:.6} hits={hits} lookups={lookups}",
+                hits as f64 / lookups as f64
+            );
+        }
     }
 }

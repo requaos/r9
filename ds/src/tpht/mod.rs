@@ -22,6 +22,8 @@
 pub mod chained;
 pub mod feistel;
 pub mod flattened;
+#[cfg(test)]
+mod measure;
 
 /// The number of home slots in a bucket header: `occupied_mask` uses bits
 /// `0..15` and a home tiny pointer is `1..=16`.
