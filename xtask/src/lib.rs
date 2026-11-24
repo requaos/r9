@@ -20,6 +20,7 @@
 pub mod config;
 pub mod harvey;
 pub mod image;
+pub mod rforkh;
 pub mod uregcheck;
 
 use std::{env, fmt};

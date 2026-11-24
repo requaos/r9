@@ -204,6 +204,17 @@ fn main() {
             ),
         )
         .subcommand(
+            clap::Command::new("rfork-header")
+                .about(
+                    "Write sys/include/rfork.h from the Rust constants in \
+                     port/src/rfork.rs (DSGN-02, D-12); --check fails instead when \
+                     the committed header is missing or stale",
+                )
+                .args(&[clap::arg!(
+                    --check "Fail when sys/include/rfork.h differs from the rendering instead of writing it"
+                )]),
+        )
+        .subcommand(
             clap::Command::new("initrd")
                 .about("Assemble target/bootfs.paq from xtask/manifests/arm64/smoke.toml \
                         through the stage-and-bake engine (D-15/D-16): the Harvey aarch64 tree \
@@ -301,6 +312,7 @@ fn main() {
             s1.run().and_then(|_| s2.run())
         }
         Some(("ureg-check", _)) => UregCheckStep::new().run(),
+        Some(("rfork-header", m)) => RforkHeaderStep::new(m).run(),
         Some(("initrd", m)) => InitrdStep::new(m).run(),
         Some(("image", m)) => ImageStep::new(m).run(),
         Some(("gate", m)) => gate::GateStep::new(m).run(),
@@ -4738,6 +4750,27 @@ impl UregCheckStep {
 
     fn run(self) -> Result<()> {
         uregcheck::run_check().map(|_| ())
+    }
+}
+
+struct RforkHeaderStep {
+    check: bool,
+}
+
+impl RforkHeaderStep {
+    fn new(matches: &clap::ArgMatches) -> Self {
+        Self { check: matches.get_flag("check") }
+    }
+
+    fn run(self) -> Result<()> {
+        if self.check {
+            xtask::rforkh::check(&workspace())?;
+            println!("rfork-header: sys/include/rfork.h matches port/src/rfork.rs");
+        } else {
+            xtask::rforkh::write(&workspace())?;
+            println!("rfork-header: wrote sys/include/rfork.h");
+        }
+        Ok(())
     }
 }
 
