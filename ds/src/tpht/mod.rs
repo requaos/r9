@@ -32,13 +32,19 @@ pub const HOME_SLOTS: usize = 16;
 /// How many of a block's 16 home slots fill before further keys of that block
 /// spill into the dereference banks (`ChainedTphtOverflow`).
 ///
-/// At this commit the value is `4`, the only number the sources give (guide
-/// section 5.3, "4-slot capacity"); it is **not yet measured**.  Task 2 of
-/// plan 03-08 replaces it with the value chosen by the pre-committed rule from
-/// the host measurement (D-15), and its doc comment then carries that result.
-/// The constant must lie in `1..=HOME_SLOTS` and is not part of the IG-D09
-/// lock (D-17): a change is a new measurement.
-pub const SPILL_THRESHOLD: usize = 4;
+/// **Measured value (D-15, plan 03-08 Task 2).**  `16` was chosen by the rule
+/// committed before the measurement ran:
+/// `.planning/phases/03-guide-phase-1-crypto-and-ds-foundations/evidence/SPILL-THRESHOLD.md`
+/// holds the grid and the fifteen chosen-cell counts.  The rule: a pair
+/// (`T`, occupancy) qualifies when over 0.90 of present-key lookups resolve in
+/// the home block for every distribution and seed; the choice is the highest
+/// qualifying occupancy and the smallest qualifying `T` there.  At the chosen
+/// occupancy of 1.00, `T = 16` is the only qualifying threshold, with the
+/// weakest run at 236,035 / 262,144 = 0.900402.
+///
+/// The threshold is **not** part of the IG-D09 lock (D-17); a change is a new
+/// measurement.  It lies in `1..=HOME_SLOTS`.
+pub const SPILL_THRESHOLD: usize = 16;
 
 /// A test seam for counting memory accesses (DS-03, plan 03-13): production
 /// uses [`NoProbe`]'s zero-sized no-ops; a test probe counts header and arena

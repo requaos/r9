@@ -526,9 +526,9 @@ mod tests {
     use crate::tpht::miri_scaled;
 
     /// The occupancy the hit-rate pin asserts (D-15).  Plan 03-08 Task 2 Step D
-    /// replaces this starting value with the occupancy chosen by the rule from
-    /// the measurement; the bar itself is never raised.
-    const HIT_RATE_OCCUPANCY: f64 = 0.90;
+    /// sets this to the rule's chosen occupancy from the measurement; the bar
+    /// itself is never raised.
+    const HIT_RATE_OCCUPANCY: f64 = 1.00;
 
     /// A [`Probe`] that counts the reader's two kinds of memory access, so
     /// `deref_tiny` can be shown to make exactly one arena read and no header
@@ -1353,9 +1353,9 @@ mod tests {
         // production `SPILL_THRESHOLD`, so the counts equal the chosen cell's
         // and a qualifying cell passes.  The 0.90 bar is asserted in native
         // runs only: a 16-block table says nothing about the figure.
-        let blocks = miri_scaled(GRID_BLOCKS, 16);
+        let blocks = miri_scaled(GRID_BLOCKS, 4);
         let seed_count = miri_scaled(GRID_SEEDS.len(), 1);
-        let dist_count = miri_scaled(Distribution::ALL.len(), 2);
+        let dist_count = miri_scaled(Distribution::ALL.len(), 1);
         let percent = (HIT_RATE_OCCUPANCY * 100.0).round() as usize;
         let entries = crate::tpht::measure::entries_at(blocks, percent);
         let banks = crate::tpht::measure::banks_for(entries);

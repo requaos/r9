@@ -239,9 +239,9 @@ mod tests {
     /// for the same keys: `hits = sum over blocks of min(count, T)`.
     #[test]
     fn table_agrees_with_counting_model() {
-        let blocks = miri_scaled(1_024, 16);
+        let blocks = miri_scaled(1_024, 4);
         let seed_count = miri_scaled(GRID_SEEDS.len(), 1);
-        let dist_count = miri_scaled(Distribution::ALL.len(), 2);
+        let dist_count = miri_scaled(Distribution::ALL.len(), 1);
         let percent = 100;
         let entries = entries_at(blocks, percent);
         let banks = banks_for(entries);

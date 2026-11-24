@@ -322,3 +322,48 @@ the measured tables agree to within a few thousandths across the grid (for
 example, uniform at `T = 14`, 0.85: model 0.906, measured 0.9063..0.9067), so
 the choice is unchanged.  `T = 12` falls below 0.90 already at 0.85 occupancy,
 as the model predicted.
+
+## Choice
+
+Checked by hand against the `qualifies=` flags above: at occupancy 1.00 only
+`T = 16` qualifies (`T = 15` reaches 0.914 for uniform at 0.90 but 0.868 at
+1.00, and every lower threshold fails at 1.00; the flags print `qualifies=no`
+for each of them).  `T = 16` qualifies at every occupancy in the grid, so the
+highest occupancy with a qualifying threshold is 1.00, and the smallest
+qualifying threshold there is 16.
+
+CHOSEN SPILL_THRESHOLD=16
+CHOSEN HIT_RATE_OCCUPANCY=1.00
+  justified by: T=16 qualifies at occupancy 1.00 (the only qualifying cell at
+  that occupancy), and T=16 qualifies at 0.50, 0.70, 0.80, 0.85, 0.90 and 0.95
+  as well; no threshold reaches the bar at 1.00 except T=16.
+
+For the owner: the weakest of the chosen cell's fifteen runs is sequential at
+236,035 / 262,144 = **0.900402**, only 0.000402 above the 0.90 bar, and the
+chosen occupancy is the top of the grid, so there is no occupancy one step
+higher to compare (`NEXT NONE` above).  The pin still passes because it is the
+same computation on the same inputs; the `MARGIN` line records how thin the
+margin is, as the no-margin rule requires.
+
+## Home index: compendium 4.1 as written versus the mixed half
+
+At the chosen threshold (`T = 16`) and occupancy (1.00), for each distribution,
+home-hit fraction over the three seeds (min/mean/max; the mixed column is
+measured through the real table, the unmixed column from the counting model):
+
+| Distribution | Mixed half `L'` (this design) | Unmixed low bits of `P` (compendium 4.1 as written) |
+|---|---|---|
+| `uniform` | 0.9010 / 0.9014 / 0.9021 | 0.9003 / 0.9010 / 0.9014 |
+| `sequential` | 0.9004 / 0.9004 / 0.9004 | 1.0000 / 1.0000 / 1.0000 |
+| `pagekey` | 0.9036 / 0.9036 / 0.9036 | **0.2500 / 0.2500 / 0.2500** |
+| `upper32` | 1.0000 / 1.0000 / 1.0000 | **0.0001 / 0.0001 / 0.0001** |
+| `upper32_or7` | 1.0000 / 1.0000 / 1.0000 | **0.0001 / 0.0001 / 0.0001** |
+
+The unmixed reading puts `pagekey` at 25% and both upper-half-only families at
+about 0.01%, because with one Feistel round the low bits of `P` are the key's
+own low bits and structured keys collapse into one block.  The mixed-half index
+keeps every distribution over the bar.  Plan 03-06 took the index from the low
+bits of `L'`; plan 03-09 records the correction to compendium section 4.1 in
+PROJECT.md beside the other Phase 3 planning-level corrections (RESEARCH C4,
+Open Question 1), for the owner's review at phase verification.  This choice is
+outside the IG-D09 lock (D-17).
