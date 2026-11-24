@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 6
+open_count: 7
 waived_count: 0
 fixed_count: 4
-total_count: 10
-last_updated: 2026-11-24T14:45:25.044Z
+total_count: 11
+last_updated: 2026-11-24T17:11:56.508Z
 ---
 
 # Broken Windows Ledger
@@ -25,6 +25,7 @@ last_updated: 2026-11-24T14:45:25.044Z
 | 8 | 03 | stub | ds/src/setops.rs | 1 | setops seam is a doc-only skeleton; the four hot loops land in plan 03-05 (D-20) | fixed |  | 2026-11-24T14:27:40.406Z | 2026-11-24T14:45:24.771Z |
 | 9 | 03 | stub | ds/src/clientset.rs | 1 | clientset module is a doc-only skeleton; implementation lands in plan 03-05 (DS-06) | fixed |  | 2026-11-24T14:27:40.689Z | 2026-11-24T14:45:25.044Z |
 | 10 | 03 | deviation | flake.nix |  | Plan 03-02 Task 2 appends $R9_MIRI_TOOLCHAIN/bin to PATH in the devshell shellHook (never prepends, so the pinned cargo/rustc are not shadowed) so the plan's literal MIRI-VERSION verify finds cargo-miri; recorded in 03-02-SUMMARY deviations | open |  | 2026-11-24T14:32:01.421Z |  |
+| 11 | 3 | deviation | .planning/phases/03-guide-phase-1-crypto-and-ds-foundations/evidence/closing-suite.md | 112 | Miri over the 120-second budget at phase end: MIRI-TIME closing-run-1 350 and closing-run-2 389 for 64 seeds over 29 tpht tests; no fix permitted in plan 03-10 (no source edits), reported for phase-end review | open |  | 2026-11-24T17:11:56.508Z |  |
 
 ````json
 [
@@ -155,6 +156,19 @@ last_updated: 2026-11-24T14:45:25.044Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-11-24T14:32:01.421Z",
+    "resolved_at": null,
+    "milestone": "v3.0"
+  },
+  {
+    "id": 11,
+    "kind": "deviation",
+    "phase": "3",
+    "file": ".planning/phases/03-guide-phase-1-crypto-and-ds-foundations/evidence/closing-suite.md",
+    "line": 112,
+    "description": "Miri over the 120-second budget at phase end: MIRI-TIME closing-run-1 350 and closing-run-2 389 for 64 seeds over 29 tpht tests; no fix permitted in plan 03-10 (no source edits), reported for phase-end review",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-24T17:11:56.508Z",
     "resolved_at": null,
     "milestone": "v3.0"
   }
