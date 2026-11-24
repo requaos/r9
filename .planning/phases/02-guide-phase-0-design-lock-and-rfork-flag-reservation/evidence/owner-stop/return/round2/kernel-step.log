@@ -1,0 +1,18 @@
+HEAD=4624ea2f0cb45c81870dcc881d544d7d36a2e0bf
+== kernel: nix build .#kernel-x64 (native x86_64-linux)
+KERNEL-STORE /nix/store/91m374sd8fgc8qhbgsh1jjdqp50xx0ch-r9-kernel-x64-4624ea2
+6a5f5a66b6f1e35bdb8d36ad4346ce6fc7f106d28fa43c25ed74c4a3301cf6a5  /nix/store/91m374sd8fgc8qhbgsh1jjdqp50xx0ch-r9-kernel-x64-4624ea2/kernel-x64.elf
+== kernel: nix build .#boot-iso (the plain build --rebuild checks)
+KERNEL-BOOTISO-STORE /nix/store/sacvdr3h3gapqkbpi0j8kw93k7yfiycm-r9-boot-iso-4624ea2
+KERNEL-BOOTISO-BUILD-OK
+== kernel: nix build .#boot-iso --rebuild (the fixed-output kernel-byte check)
+checking outputs of '/nix/store/z9cdam743vfcjmm0h20bdmrr9xdbi7dx-r9-boot-iso-4624ea2.drv'...
+KERNEL-BOOTISO-REBUILD-OK
+
+== per-step summary (step, exit, seconds):
+kernel	0	1
+
+== WITNESS-RETURN.md is at /home/req/r9-p02-stop/kernel/WITNESS-RETURN.md
+== full artifacts stay under /home/req/r9-p02-stop/kernel/out
+R9-WITNESS-RUN-OK: every selected step passed; WITNESS-RETURN.md is at /home/req/r9-p02-stop/kernel/WITNESS-RETURN.md
+EXIT=0

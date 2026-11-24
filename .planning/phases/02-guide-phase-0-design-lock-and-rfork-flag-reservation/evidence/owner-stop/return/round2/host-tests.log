@@ -1,0 +1,868 @@
+HEAD=4624ea2f0cb45c81870dcc881d544d7d36a2e0bf
+r9 devshell: rustc 1.95.0-nightly (842bd5be2 2026-01-29)
+QEMU emulator version 11.1.2
+apps: nix run .#build | nix run .#boot-virt | nix run .#default
+harvey supply: R9_HARVEY_DIR_ARM64=/nix/store/b2i0hcbxxmyjlh7drl94s0lp3iq7n04a-harvey-tree-arm64-0 (lazy; realised on first use)
+harvey supply: R9_HARVEY_DIR_AMD64=/nix/store/002vay29nmgw2d81nvmi2i6adgz7h1md-harvey-tree-amd64-0 (lazy; realised on first use)
+harvey supply: R9_HARVEY_REFERENCE_AMD64=/nix/store/ydavfxqx6vhlcar7mmcxi1llhjg0n69x-harvey-reference-amd64-0 (lazy; realised on first use)
+harvey supply: R9_HARVEY_REFERENCE_ARM64=/nix/store/zps34qpcmsd0s2mkf251hhc9sjsnqvq5-harvey-reference-arm64-0 (lazy; realised on first use)
+harvey supply: R9_AUTHDOMAIN_GEN=/nix/store/gysm8xfgmlwkj6kcf6zdzkc9pzmi20ah-harvey-authdomain-gen-0/bin/authdomain-gen
+   Compiling proc-macro2 v1.0.101
+   Compiling unicode-ident v1.0.19
+   Compiling serde_core v1.0.225
+   Compiling utf8parse v0.2.2
+   Compiling anstyle v1.0.11
+   Compiling anstyle-query v1.1.4
+   Compiling is_terminal_polyfill v1.70.1
+   Compiling colorchoice v1.0.4
+   Compiling target-lexicon v0.13.3
+   Compiling clap_lex v0.7.5
+   Compiling strsim v0.11.1
+   Compiling winnow v0.7.13
+   Compiling serde v1.0.225
+   Compiling heck v0.5.0
+   Compiling toml_writer v1.0.3
+   Compiling anstyle-parse v0.2.7
+   Compiling anstream v0.6.20
+   Compiling clap_builder v4.5.48
+   Compiling quote v1.0.40
+   Compiling syn v2.0.106
+   Compiling toml_parser v1.0.3
+   Compiling serde_spanned v1.0.2
+   Compiling toml_datetime v0.7.2
+   Compiling toml v0.9.7
+   Compiling serde_derive v1.0.225
+   Compiling clap_derive v4.5.47
+   Compiling clap v4.5.48
+   Compiling xtask v0.1.0 (/home/req/r9-p02-stop/run/xtask)
+warning: field `frame_len` is never read
+   --> xtask/src/pcap.rs:228:9
+    |
+219 | pub struct Icmpv4Frame {
+    |            ----------- field in this struct
+...
+228 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Icmpv4Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `frame_len` is never read
+   --> xtask/src/pcap.rs:375:9
+    |
+359 | pub struct BootpFrame {
+    |            ---------- field in this struct
+...
+375 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `BootpFrame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `dst_mac` and `frame_len` are never read
+   --> xtask/src/pcap.rs:569:9
+    |
+566 | pub struct Icmpv6Frame {
+    |            ----------- fields in this struct
+...
+569 |     pub dst_mac: [u8; 6],
+    |         ^^^^^^^
+...
+579 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Icmpv6Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `src_mac`, `dst_mac`, and `frame_len` are never read
+   --> xtask/src/pcap.rs:723:9
+    |
+721 | pub struct Tcpv4Frame {
+    |            ---------- fields in this struct
+722 |     /// Ethernet source/destination MAC.
+723 |     pub src_mac: [u8; 6],
+    |         ^^^^^^^
+724 |     pub dst_mac: [u8; 6],
+    |         ^^^^^^^
+...
+737 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Tcpv4Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: `xtask` (bin "xtask") generated 4 warnings
+    Finished `dev` profile [optimized + debuginfo] target(s) in 10.00s
+     Running `target/debug/xtask test --verbose`
+Executing cd "/home/req/r9-p02-stop/run" && "/nix/store/bbbr9hzjavpw924vq29aknsbh59cbk3a-cargo-1.95.0-nightly-2026-01-30-x86_64-unknown-linux-gnu/bin/cargo" "test" "--package" "port" "--lib" "--tests"
+   Compiling byteorder v1.5.0
+   Compiling heapless v0.9.3
+   Compiling smoltcp v0.14.0
+   Compiling stable_deref_trait v1.2.1
+   Compiling cfg-if v1.0.5
+   Compiling adler2 v2.0.1
+   Compiling bitflags v1.3.2
+   Compiling managed v0.8.0
+   Compiling bitflags v2.9.4
+   Compiling miniz_oxide v0.9.1
+   Compiling hash32 v0.3.1
+   Compiling port v0.1.0 (/home/req/r9-p02-stop/run/port)
+warning: unused import: `alloc::string::String`
+  --> port/src/devip.rs:57:5
+   |
+57 | use alloc::string::String;
+   |     ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> port/src/allocator.rs:608:13
+    |
+608 |         let mut walk = |head: Option<Idx>, mark: &mut dyn FnMut(Idx)| {
+    |             ----^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `flags` is never used
+   --> port/src/devip/netlog.rs:103:15
+    |
+103 | pub(crate) fn flags() -> u32 {
+    |               ^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `TCPSTAT_MAX_CONN` is never used
+    --> port/src/devip/proto.rs:2010:18
+     |
+2010 | pub(crate) const TCPSTAT_MAX_CONN: usize = 0;
+     |                  ^^^^^^^^^^^^^^^^
+
+warning: constant `TCPSTAT_MAX_SEGMENT` is never used
+    --> port/src/devip/proto.rs:2011:18
+     |
+2011 | pub(crate) const TCPSTAT_MAX_SEGMENT: usize = 1;
+     |                  ^^^^^^^^^^^^^^^^^^^
+
+warning: function `test_len` is never used
+   --> port/src/devip/arp.rs:373:15
+    |
+373 | pub(crate) fn test_len() -> usize {
+    |               ^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `flags` is never used
+   --> port/src/devip/netlog.rs:103:15
+    |
+103 | pub(crate) fn flags() -> u32 {
+    |               ^^^^^
+
+warning: function `wait_until` is never used
+   --> port/src/devip_tests.rs:148:4
+    |
+148 | fn wait_until(mut cond: impl FnMut() -> bool, what: &str) {
+    |    ^^^^^^^^^^
+
+warning: `port` (lib) generated 5 warnings (run `cargo fix --lib -p port` to apply 2 suggestions)
+warning: unused import: `Chan`
+  --> port/tests/devroot_rawimg_test.rs:19:17
+   |
+19 | use port::dat::{Chan, OEXEC, OREAD, OWRITE};
+   |                 ^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+  --> port/tests/devdup_devsrv_test.rs:59:9
+   |
+59 |     let mut root = devdup::attach();
+   |         ----^^^^
+   |         |
+   |         help: remove this `mut`
+   |
+   = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+  --> port/tests/devpipe_test.rs:73:18
+   |
+73 |     let (mut e0, mut e1) = pipe_pair();
+   |                  ----^^
+   |                  |
+   |                  help: remove this `mut`
+   |
+   = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> port/tests/devenv_test.rs:249:9
+    |
+249 |     let mut c = devenv::walk(&root, b"cputype").expect("walk cputype");
+    |         ----^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `port` (test "devenv_test") generated 1 warning (run `cargo fix --test "devenv_test" -p port` to apply 1 suggestion)
+warning: `port` (test "devdup_devsrv_test") generated 1 warning (run `cargo fix --test "devdup_devsrv_test" -p port` to apply 1 suggestion)
+warning: `port` (test "devpipe_test") generated 1 warning (run `cargo fix --test "devpipe_test" -p port` to apply 1 suggestion)
+warning: `port` (test "devroot_rawimg_test") generated 1 warning (run `cargo fix --test "devroot_rawimg_test" -p port` to apply 1 suggestion)
+warning: `port` (lib test) generated 7 warnings (4 duplicates)
+    Finished `test` profile [optimized + debuginfo] target(s) in 8.66s
+     Running unittests src/lib.rs (target/debug/deps/port-2b6e70aa0e418ad1)
+
+running 168 tests
+test bitmapalloc::tests::bitmap_set ... ok
+test bitmapalloc::tests::bitmappagealloc_mark_allocated_and_free ... ok
+test allocator_tests::churn_ladder_reaches_steady_pool ... ok
+test bitmapalloc::tests::indices_as_physaddr ... ok
+test bitmapalloc::tests::bitmappagealloc_allocate_and_deallocate ... ok
+test bitmapalloc::tests::iterate ... ok
+test bitmapalloc::tests::bitmap_new ... ok
+test bitmapalloc::tests::physaddr_as_indices ... ok
+test bitmapalloc::tests::bitmappagealloc_deallocate_outside_byte_0 ... ok
+test allocator_tests::realloc_growth_stress_preserves_contents ... ok
+test allocator_tests::misc_midlist_removal_preserves_the_list ... ok
+test devcap_tests::devcap_boot_fixture_hash_matches_the_module ... ok
+test devcap_tests::devcap_caphash_is_hostowner_only_on_open_and_write ... ok
+test devcap_tests::devcap_eve_remove_hides_caphash_permanently ... ok
+test allocator_tests::free_list_cycle_tripwire_panics_loudly - should panic ... ok
+test allocator_tests::header_table_exhaustion_panics_loudly - should panic ... ok
+test allocator_tests::tail_alloc_big_nonpow2_free_and_realloc ... ok
+test devether_tests::conv_close_last_close_reset_is_donor_intentional ... ok
+test devether_tests::netif_waitset_duplicate_and_zero_registrations_stay_idempotent ... ok
+test devether_tests::netif_waitset_513th_registration_is_loudly_dropped ... ok
+test devether_tests::netif_waitset_retains_the_whole_proc_table_and_take_returns_all ... ok
+test devether_tests::readnum_content_max_ethertype_65535 ... ok
+test devether_tests::readnum_content_neg1_matches_donor_truncation ... ok
+test devether_tests::readnum_content_zero_pads_numsize ... ok
+test devip_tests::accept_pool_demuxes_two_syns_to_two_members ... ok
+test devip_tests::address_class_demux_loopback_vs_ether ... ok
+test devcap_tests::devcap_fifo_trim_at_256_evicts_the_oldest ... ok
+test devcap_tests::devcap_from_to_form_must_match_the_current_user ... ok
+test devcap_tests::devcap_second_present_of_the_same_cap_is_rejected ... ok
+test devcap_tests::devcap_short_writes_error ... ok
+test devip_tests::arp_snoop_feeds_ok_and_wait_entries_both_directions ... ok
+test devip_tests::conv_waitset_duplicate_and_zero_registrations_stay_idempotent ... ok
+test devcap_tests::devcap_round_trip_posts_consumes_and_mutates_the_user ... ok
+test devcap_tests::devcap_single_user_form_reinstalls_the_same_user ... ok
+test devip_tests::deadline_arms_from_poll_at_across_retransmit ... ok
+test devip_tests::deregistered_waiter_is_absent_from_the_next_rx_wake ... ok
+test devip_tests::conv_waitset_513th_registration_is_loudly_dropped ... ok
+test devip_tests::dhcp_shaped_exchange_sources_0_0_0_0_on_the_wire ... ok
+test devcap_tests::devcap_wrong_hmac_key_is_rejected ... ok
+test devcons::tests::hostowner_write_refused_for_non_eve ... ok
+test devcons::tests::hostowner_write_stores_for_eve ... ok
+test devip_tests::dhcp_broadcast_tx_shape_through_the_devip_file_surface ... ok
+test devcons::tests::user_dir_listing_length_tracks_the_user ... ok
+test devip_tests::etherdev_merges_the_three_conv_queues_in_arrival_order ... ok
+test devcons::tests::user_serve_honors_offsets ... ok
+test devcons::tests::user_eve_gate_default_and_hostowner_write ... ok
+test devcons::tests::user_serve_is_the_current_users_bytes_no_newline ... ok
+test devip_tests::gratuitous_arp_emission_content_on_add ... ok
+test devip_tests::conv_waitset_retains_the_whole_proc_table_and_take_returns_all ... ok
+test devcons::tests::hostowner_write_length_bound_refused ... ok
+test devip_tests::icmp6_write_oversized_errors_instead_of_wedging ... ok
+test devip_tests::ipifc_unbind_orphans_convs_on_the_dying_core ... ok
+test devip_tests::icmpv6_full_packet_round_trip_through_the_bridge ... ok
+test devip_tests::icmpv6_headers_mode_prefix_shape ... ok
+test devip_tests::reregistered_waiter_is_woken_by_the_next_drain ... ok
+test devip_tests::ipifc_add_v4_multicast_and_broadcast_absorb_without_panic ... ok
+test devip_tests::ipifc_bind_rejects_a_conv_already_bound_to_another_medium ... ok
+test devip_tests::ipifc_dhcp_preconfig_absorbs_with_zero_iface_addresses_and_a_netlog_note ... ok
+test devip_tests::ipifc_remove_keeps_shared_selftab_entries_for_surviving_lifcs ... ok
+test devip_tests::stack_waitset_duplicate_and_zero_registrations_stay_idempotent ... ok
+test devip_tests::icmp_write_oversized_or_unaddressable_errors_instead_of_wedging ... ok
+test devip_tests::stack_waitset_513th_registration_is_loudly_dropped ... ok
+test devip_tests::ipifc_v6_verbs_add6_ra6_try ... ok
+test devip_tests::iproute_default_recorded_before_bind_lands_at_bind ... ok
+test devip_tests::stack_waitset_retains_the_whole_proc_table_and_take_returns_all ... ok
+test devip_tests::iproute_longest_match_verbs_and_smoltcp_mirror ... ok
+test devip_tests::multi_waiter_drain_wakes_every_registered_waiter_once ... ok
+test devip_tests::tcp_checksum_and_porthog_are_accepted_and_recorded ... ok
+test devip_tests::tcp_connect_blocks_until_established_then_connected ... ok
+test devip_tests::parked_socket_waiter_wakes_at_the_poll_at_deadline_via_tick_check ... ok
+test devip_tests::tcp_connect_deadline_expiry_maps_etimedout ... ok
+test devip_tests::tcp_connect_rst_mid_syn_maps_econrefused ... ok
+test devip_tests::seam_installs_and_drives_clean ... ok
+test devip_tests::stack_debt_drains_on_next_op ... ok
+test devip_tests::tcp_state_rename_table_is_devip_exact ... ok
+test devip_tests::tcp_accepted_connection_keeps_the_donor_shape_for_life ... ok
+test devip_tests::tcp_announce_builds_contract_depth_pool_and_listen_pops_oldest ... ok
+test devip_tests::tcp_announced_connection_bulk_write_round_trips ... ok
+test devip_tests::tcp_close_hangup_hangupxmit_wire_shapes ... ok
+test devip_tests::ndb_offset_otrunc_eio_and_vers_bumps ... ok
+test devip_tests::netlog_set_emit_wakes_blocked_reader ... ok
+test devip_tests::register_wake_reregister_never_loses_a_wake ... ok
+test devip_tests::ipifc_add_remove_boundary_values_follow_the_contract ... ok
+test devip_tests::tcp_conv_close_lingers_the_socket_until_closed ... ok
+test devip_tests::tcp_full_exchange_moves_the_stats_counters ... ok
+test devssl_tests::ctl_verb_errors_carry_the_donor_strings ... ok
+test devssl_tests::loopback_round_trips_rc4_256_sha1_and_detects_corruption ... ok
+test devssl_tests::pushssl_protocol_walk_serves_the_verb_order_and_alg_clear ... ok
+test devssl_tests::registry_level_name_resolution_of_the_d_walk ... ok
+test devip_tests::tcp_gc_hangs_up_stale_convs_but_never_steals_an_in_use_slot ... ok
+test devssl_tests::swapped_server_arm_secrets_round_trip_both_directions ... ok
+test devip_tests::tcp_generic_verbs_land_with_contract_errors ... ok
+test fdt::tests::decode_terminates_on_a_partial_tail ... ok
+test fdt::tests::interrupt_map_decodes_all_16_entries ... ok
+test fdt::tests::loud_absence_returns_none_never_a_default ... ok
+test fdt::tests::lookup_applies_the_mask_not_an_exact_compare ... ok
+test fdt::tests::masked_lookup_routes_the_virtio_nic_inta_to_spi4 ... ok
+test hmacsha1::tests::hmac_sha1_pin_fips_abc_vector ... ok
+test hmacsha1::tests::hmac_sha1_pin_rfc2202_case1 ... ok
+test hmacsha1::tests::hmac_sha1_pin_rfc2202_case2 ... ok
+test hmacsha1::tests::hmac_sha1_pin_rfc2202_case3 ... ok
+test hmacsha1::tests::hmac_sha1_pin_rfc2202_case6_long_key ... ok
+test maths::tests::test_round_down2 ... ok
+test maths::tests::test_round_up2 ... ok
+test fdt::tests::swizzle_rotation_matches_the_decode_table ... ok
+test mem::tests::physaddr_step ... ok
+test mem::tests::physaddr_step_2m ... ok
+test mem::tests::physaddr_step_rounds_up_and_down ... ok
+test devip_tests::tcp_listen_hangup_during_parked_wait_errors ... ok
+test namec_tests::create_chan_union_nomount_never_consults_the_root_key ... ok
+test namec_tests::create_chan_union_reaches_accepting_member ... ok
+test namec_tests::create_chan_union_without_mounts_keeps_direct_dispatch ... ok
+test namec_tests::create_chan_union_refusal_propagates_not_falls_through ... ok
+test namec_tests::mount_points_with_equal_qids_but_distinct_devno_stay_distinct ... ok
+test namec_tests::final_redirect_must_not_hijack_union_head_resolution ... ok
+test namec_tests::open_chan_records_oceexec_as_fd_state ... ok
+test namec_tests::orclose_env_key_goes_at_the_last_close ... ok
+test namec_tests::orclose_remove_waits_for_an_in_flight_op_ref ... ok
+test namec_tests::orclose_srv_entry_goes_at_the_last_close_only ... ok
+test namec_tests::repl_bind_final_cross_still_fires_without_union_head ... ok
+test namec_tests::walk_one_union_finds_nonhead_member ... ok
+test namec_tests::walk_one_union_without_mounts_keeps_direct_dispatch ... ok
+test rc4::tests::dec64_decodes_mksecret_shapes_with_the_donor_tail_splits ... ok
+test rc4::tests::framing_max_maxpad_match_the_donor_formulas ... ok
+test rc4::tests::rc4_known_vector_and_32byte_key_round_trip ... ok
+test rc4::tests::rc4_states_are_independent_position_sensitive_copies ... ok
+test rendez::tests::park_take_exchange_and_remove ... ok
+test rendez::tests::remove_pid_sweeps_only_that_pid ... ok
+test rx_chain_tests::rx_chain_layout_is_hdr_descriptor_then_payload_descriptor ... ok
+test rx_chain_tests::rx_drain_slice_delivers_the_device_written_frame_byte_exact ... ok
+test rx_chain_tests::rx_drain_slice_of_a_max_size_frame_stays_within_the_payload_page ... ok
+test virtio_tests::avail_ring_prelinked_slots_permanently_name_chain_heads ... ok
+test virtio_tests::caps_parse_missing_list_errors_loudly ... ok
+test virtio_tests::caps_parse_rejects_misaligned_capability_pointers ... ok
+test virtio_tests::caps_parse_rejects_short_notify_capabilities ... ok
+test virtio_tests::caps_parse_truncated_list_errors_loudly ... ok
+test virtio_tests::caps_parse_yields_the_typed_triples_and_notify_multiplier ... ok
+test virtio_tests::chain_assembly_flags_rx_device_writable_tx_device_read ... ok
+test virtio_tests::descriptor_pool_alloc_free_by_index ... ok
+test devip_tests::tcp_pool_members_carry_the_donor_tcp_shape ... ok
+test virtio_tests::negotiate_accepts_exactly_mac_status_and_version1 ... ok
+test virtio_tests::negotiate_rejects_loudly_without_version1_and_marks_failed ... ok
+test virtio_tests::negotiate_rejects_when_features_ok_is_not_reflected ... ok
+test virtio_tests::negotiate_step_order_is_the_3_1_1_sequence_and_reset_waits_for_readback ... ok
+test virtio_tests::queue_setup_writes_addresses_then_enable_last_and_driver_ok ... ok
+test virtio_tests::ring_rejects_bad_queue_sizes ... ok
+test virtio_tests::rx_replenish_posts_until_caught_up_then_one_notify ... ok
+test virtio_tests::rx_replenish_reports_the_slot_and_suppression ... ok
+test virtio_tests::tx_post_barrier_sandwich_is_the_2_7_13_order ... ok
+test virtio_tests::tx_post_fills_payload_advances_idx_and_ring_full_is_loud ... ok
+test virtio_tests::tx_post_suppresses_notify_when_device_sets_no_notify ... ok
+test virtio_tests::used_drain_is_acquire_ordered_and_recovers_the_slot ... ok
+test virtio_tests::used_drain_rejects_lens_outside_the_queue_bounds ... ok
+test virtio_tests::used_drain_rejects_out_of_range_and_odd_ids ... ok
+test virtio_tests::used_drain_rejects_unposted_slot_ids ... ok
+test virtio_tests::virtio_net_hdr_is_12_bytes_with_a_zeroed_tx_form ... ok
+test devip_tests::tcp_two_write_client_pattern_round_trips ... ok
+test devip_tests::tick_wake_twin_respects_the_deregister_contract ... ok
+test devip_tests::udp_advise_hangup_lands_in_errq_unless_ignoreadvice ... ok
+test devip_tests::udp_conv_isolation_distinct_ids_and_ctl_isolation ... ok
+test devip_tests::udp_fsnewcall_spawns_on_new_remote_quad ... ok
+test devip_tests::udp_headers_mode_synthesizes_the_52_byte_prefix ... ok
+test devip_tests::udp_spawned_conv_dataq_is_capped ... ok
+test devip_tests::udp_spawned_conv_writes_ride_the_announcers_socket ... ok
+test devip_tests::udp_wedged_reader_never_blocks_a_sibling_conv ... ok
+test devip_tests::udp_write_oversized_or_unaddressable_errors_instead_of_wedging ... ok
+test devip_tests::waker_bridge_fires_on_rx_close_and_buffer_space ... ok
+test virtio_tests::indices_wrap_at_u16_without_losing_slot_identity ... ok
+
+test result: ok. 168 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/devcons_test.rs (target/debug/deps/devcons_test-a65d9219d439751b)
+
+running 3 tests
+test pid_file_serves_the_callers_pid ... ok
+test stat_records_carry_four_strings ... ok
+test cons_read_path_cooked_raw_del_and_consctl ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/devdup_devsrv_test.rs (target/debug/deps/devdup_devsrv_test-3906a80fb1fcda4e)
+
+running 2 tests
+test devdup_walk_validation ... ok
+test devdup_devsrv_device_flow ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/devenv_test.rs (target/debug/deps/devenv_test-62631fa41c71924e)
+
+running 6 tests
+test devenv_device_flow_over_dynamic_groups ... ok
+test rfork_env_semantics_share_copy_empty ... ok
+test env_bounds_and_name_validation ... ok
+test seeded_keys_read_back_and_unset_is_absent ... ok
+test write_replace_and_create_round_trip ... ok
+test two_groups_hold_same_key_independently ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/devmnt_test.rs (target/debug/deps/devmnt_test-ec9eb4932074b1f6)
+
+running 18 tests
+test devmnt_dup_close_clunks_exactly_once ... ok
+test devmnt_read_all_exact_cap_and_over_cap ... ok
+test devmnt_rejects_server_msize_increase ... ok
+test devmnt_namec_walk_error_clunks_intermediates ... ok
+test devmnt_mount_redirect_clones_the_table_fid ... ok
+test devmnt_rejects_oversized_reply ... ok
+test devmnt_mount_crossing_walk_matrix ... ok
+test devmnt_remove_refused_is_loud_and_leaks_no_fid ... ok
+test devmnt_namec_walk_sweeps_intermediate_fids ... ok
+test devmnt_remove_rides_a_clone_and_close_clunks_the_walked_fid_once ... ok
+test devmnt_rejects_tag_mismatch ... ok
+test devmnt_version_accepts_servers_lower_answer ... ok
+test devmnt_walk_not_found_is_a_loud_error ... ok
+test devmnt_walk_of_a_non_directory_errors ... ok
+test mux_foreign_reply_is_dropped_and_live_waiters_still_complete ... ok
+test devmnt_version_attach_walk_open_read_stat_clunk_round_trip ... ok
+test zero_length_write_sends_the_zero_count_twrite ... ok
+test mux_parked_reader_routes_a_concurrent_rpcs_reply_before_its_own ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/devpipe_test.rs (target/debug/deps/devpipe_test-89fda9144caedd1a)
+
+running 7 tests
+test pipe_blocks_on_empty_and_write_wakes_with_bytes ... ok
+test pipe_pair_write_read_round_trip ... ok
+test pipe_reopen_after_full_close ... ok
+test pipe_reader_eof_after_drain_on_write_close ... ok
+test pipe_stat_records_carry_four_strings ... ok
+test pipe_write_on_closed_reader_end_errors ... ok
+test pipe_full_write_blocks_until_a_reader_drains ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/devproc_test.rs (target/debug/deps/devproc_test-b1db66e4876b2b68)
+
+running 1 test
+test devproc_root_status_args_ctl_and_note_surface ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/devroot_rawimg_test.rs (target/debug/deps/devroot_rawimg_test-ff0999611d9a2409)
+
+running 4 tests
+test rawimg_node_refuses_write_and_exec_loudly ... ok
+test rawimg_node_walk_stat_read_and_bounds ... ok
+test dir_reads_serve_the_four_string_listing ... ok
+test rawimg_name_collision_fails_mount_loudly ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/fdgroup_test.rs (target/debug/deps/fdgroup_test-c7d2e89c8f2ca409)
+
+running 4 tests
+test fd_group_drain_all_empties_every_slot ... ok
+test fd_group_slot_mechanics ... ok
+test fd_group_copy_shares_the_pipe_queue ... ok
+test fd_group_matrix_share_copy_empty ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/fdt_test.rs (target/debug/deps/fdt_test-acba2b83910fbf8c)
+
+running 9 tests
+test find_by_path ... ok
+test get_cells ... ok
+test iterate_over_children ... ok
+test traverse_tree ... ok
+test get_ranges ... ok
+test get_translated_reg ... ok
+test get_reg ... ok
+test iterate_over_device_types ... ok
+test find_compatible ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/namespace_test.rs (target/debug/deps/namespace_test-856b89e73251db5a)
+
+running 10 tests
+test bind_to_nonexistent_target_errors ... ok
+test bind_mbefore_then_resolution_prefers_mounted ... ok
+test bind_mafter_appends_after_underlying ... ok
+test bind_mrepl_replaces_union ... ok
+test namec_resolves_device_path_through_registry ... ok
+test take_mount_chans_empties_the_table_and_returns_every_chan ... ok
+test namec_devroot_multi_component_walk ... ok
+test union_walk_order_mbefore_underlying_mafter ... ok
+test rfork_group_semantics_share_copy_wipe ... ok
+test unmount_removes_and_errors_on_never_mounted ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/paqfs_test.rs (target/debug/deps/paqfs_test-75668cefeff026b8)
+
+running 5 tests
+test corrupt_inputs_error_no_panic ... ok
+test committed_fixture_root_listing ... ok
+test paqdir_size_overrun_terminates_scan ... ok
+test synthetic_noenc_walk_and_read ... ok
+test committed_fixture_walk_and_read ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/rfork_test.rs (target/debug/deps/rfork_test-b3a476cc5df0b783)
+
+running 3 tests
+test rfork_flags_do_not_overlap ... ok
+test rfork_reserved_values_are_pinned ... ok
+test rfork_harvey_values_are_pinned ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+Executing cd "/home/req/r9-p02-stop/run" && "/nix/store/bbbr9hzjavpw924vq29aknsbh59cbk3a-cargo-1.95.0-nightly-2026-01-30-x86_64-unknown-linux-gnu/bin/cargo" "test" "--package" "x86_64" "--bins" "--target" "x86_64-unknown-linux-gnu"
+   Compiling proc-macro2 v1.0.101
+   Compiling unicode-ident v1.0.19
+   Compiling heapless v0.9.3
+   Compiling syn v1.0.109
+   Compiling byteorder v1.5.0
+   Compiling bitflags v1.3.2
+   Compiling smoltcp v0.14.0
+   Compiling stable_deref_trait v1.2.1
+   Compiling adler2 v2.0.1
+   Compiling x86 v0.52.0
+   Compiling zerocopy v0.8.27
+   Compiling cfg-if v1.0.5
+   Compiling managed v0.8.0
+   Compiling bitflags v2.9.4
+   Compiling bit_field v0.10.3
+   Compiling seq-macro v0.3.6
+   Compiling raw-cpuid v10.7.0
+   Compiling static_assertions v1.1.0
+   Compiling miniz_oxide v0.9.1
+   Compiling hash32 v0.3.1
+   Compiling quote v1.0.40
+   Compiling syn v2.0.106
+   Compiling port v0.1.0 (/home/req/r9-p02-stop/run/port)
+warning: unused import: `alloc::string::String`
+  --> port/src/devip.rs:57:5
+   |
+57 | use alloc::string::String;
+   |     ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling zerocopy-derive v0.8.27
+warning: variable does not need to be mutable
+   --> port/src/allocator.rs:608:13
+    |
+608 |         let mut walk = |head: Option<Idx>, mark: &mut dyn FnMut(Idx)| {
+    |             ----^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling bitstruct_derive v0.1.0
+warning: function `flags` is never used
+   --> port/src/devip/netlog.rs:103:15
+    |
+103 | pub(crate) fn flags() -> u32 {
+    |               ^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `TCPSTAT_MAX_CONN` is never used
+    --> port/src/devip/proto.rs:2010:18
+     |
+2010 | pub(crate) const TCPSTAT_MAX_CONN: usize = 0;
+     |                  ^^^^^^^^^^^^^^^^
+
+warning: constant `TCPSTAT_MAX_SEGMENT` is never used
+    --> port/src/devip/proto.rs:2011:18
+     |
+2011 | pub(crate) const TCPSTAT_MAX_SEGMENT: usize = 1;
+     |                  ^^^^^^^^^^^^^^^^^^^
+
+   Compiling bitstruct v0.1.1
+warning: `port` (lib) generated 5 warnings (run `cargo fix --lib -p port` to apply 2 suggestions)
+   Compiling x86_64 v0.1.0 (/home/req/r9-p02-stop/run/x86_64)
+warning: unused import: `crate::cpu`
+  --> x86_64/src/platform/q35/netgate.rs:34:5
+   |
+34 | use crate::cpu;
+   |     ^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `crate::platform::q35::timer`
+  --> x86_64/src/platform/q35/netgate.rs:35:5
+   |
+35 | use crate::platform::q35::timer;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::platform::q35::timer`
+  --> x86_64/src/platform/q35/churngate.rs:57:5
+   |
+57 | use crate::platform::q35::timer;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `core::arch::naked_asm`
+  --> x86_64/src/swtch.rs:13:5
+   |
+13 | use core::arch::naked_asm;
+   |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: variable does not need to be mutable
+    --> x86_64/src/exec.rs:1140:13
+     |
+1140 |         let mut kstack = [0u8; 256];
+     |             ----^^^^^^
+     |             |
+     |             help: remove this `mut`
+     |
+     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `flags` is never used
+  --> x86_64/src/cpu.rs:35:15
+   |
+35 | pub(crate) fn flags() -> Flags {
+   |               ^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `cli` is never used
+  --> x86_64/src/cpu.rs:87:15
+   |
+87 | pub(crate) fn cli() {
+   |               ^^^
+
+warning: associated function `new` is never used
+   --> x86_64/src/dat.rs:506:12
+    |
+497 | impl Flags {
+    | ---------- associated function in this implementation
+...
+506 |     pub fn new(raw: u64) -> Self {
+    |            ^^^
+
+warning: function `allocate_physpage` is never used
+   --> x86_64/src/pagealloc.rs:110:8
+    |
+110 | pub fn allocate_physpage() -> Result<PhysAddr, PageAllocError> {
+    |        ^^^^^^^^^^^^^^^^^
+
+warning: function `deallocate_physpage` is never used
+   --> x86_64/src/pagealloc.rs:118:8
+    |
+118 | pub fn deallocate_physpage(pa: PhysAddr) -> Result<(), PageAllocError> {
+    |        ^^^^^^^^^^^^^^^^^^^
+
+warning: constant `PINGPONG_N` is never used
+  --> x86_64/src/platform/q35/netgate.rs:44:11
+   |
+44 | pub const PINGPONG_N: u32 = 256;
+   |           ^^^^^^^^^^
+
+warning: constant `TXBULK_N` is never used
+  --> x86_64/src/platform/q35/netgate.rs:48:11
+   |
+48 | pub const TXBULK_N: u32 = 4096;
+   |           ^^^^^^^^
+
+warning: constant `WAIT_TICKS` is never used
+  --> x86_64/src/platform/q35/netgate.rs:51:7
+   |
+51 | const WAIT_TICKS: u64 = 300;
+   |       ^^^^^^^^^^
+
+warning: constant `SEM_EVERY` is never used
+  --> x86_64/src/platform/q35/churngate.rs:79:11
+   |
+79 | pub const SEM_EVERY: u32 = 35;
+   |           ^^^^^^^^^
+
+warning: enum `IntrStatus` is never used
+   --> x86_64/src/trap.rs:680:10
+    |
+680 | pub enum IntrStatus {
+    |          ^^^^^^^^^^
+
+warning: function `intrstatus` is never used
+   --> x86_64/src/trap.rs:773:4
+    |
+773 | fn intrstatus() -> IntrStatus {
+    |    ^^^^^^^^^^
+
+warning: function `spllo` is never used
+   --> x86_64/src/trap.rs:778:8
+    |
+778 | pub fn spllo() -> IntrStatus {
+    |        ^^^^^
+
+warning: function `splhi` is never used
+   --> x86_64/src/trap.rs:784:8
+    |
+784 | pub fn splhi() -> IntrStatus {
+    |        ^^^^^
+
+warning: function `splx` is never used
+   --> x86_64/src/trap.rs:790:8
+    |
+790 | pub fn splx(x: IntrStatus) -> IntrStatus {
+    |        ^^^^
+
+warning: `x86_64` (bin "x86_64" test) generated 19 warnings (run `cargo fix --bin "x86_64" -p x86_64 --tests` to apply 5 suggestions)
+    Finished `test` profile [optimized + debuginfo] target(s) in 8.64s
+     Running unittests src/main.rs (target/x86_64-unknown-linux-gnu/debug/deps/x86_64-0f1c330256066607)
+
+running 140 tests
+test entropy::tests::entropy_classify_orders_rdseed_rdrand_jitter ... ok
+test cpu::tests::fmask_is_exactly_if_tf_df_nt_ac ... ok
+test cpu::tests::fmask_clears_the_flags_the_kernel_must_not_inherit ... ok
+test entropy::tests::entropy_drng_fill_bounded_retry_and_fallback ... ok
+test entropy::tests::entropy_has_rdrand_keys_off_leaf1_ecx_bit30 ... ok
+test entropy::tests::entropy_has_rdseed_keys_off_leaf7_ebx_bit18_maxleaf_first ... ok
+test entropy::tests::entropy_probe_arms_rdrand_from_leaf1_ecx ... ok
+test entropy::tests::entropy_probe_venue_shapes_stay_correct ... ok
+test exec::tests::data_bss_overflowing_ustop_is_a_named_err ... ok
+test entropy::tests::entropy_jitter_fold_reproduces_and_separates ... ok
+test exec::tests::adjacent_segments_at_the_2mib_boundary ... ok
+test entropy::tests::entropy_probe_ignores_leaf7_ecx_bit30 ... ok
+test exec::tests::empty_data_segment_maps_text_only ... ok
+test entropy::tests::entropy_rng_seed_fill_same_input_reproduces_differing_differs ... ok
+test exec::tests::entry_outside_text_is_a_named_err ... ok
+test exec::tests::plain_aout_head_is_not_a_script ... ok
+test exec::tests::empty_text_is_a_named_err ... ok
+test exec::tests::seed_exec_frame_plants_the_184_byte_ureg_entry_state ... ok
+test exec::tests::shebang_one_token_builds_the_donor_argv_order ... ok
+test exec::tests::truncated_header_is_a_loud_named_err ... ok
+test exec::tests::wrong_magic_is_a_named_err ... ok
+test exec::tests::shebang_flag_tokens_precede_the_script_path ... ok
+test exec::tests::shebang_negative_shapes_are_loud_rejects ... ok
+test fpu::tests::a_section_parks_the_owner_and_gives_the_changed_state_back ... ok
+test fpu::tests::a_section_without_an_owner_leaves_the_default_state ... ok
+test fpu::tests::default_is_the_fninit_state_with_zeroed_registers ... ok
+test exec::tests::shebang_argv_growth_respects_max_args ... ok
+test fpu::tests::each_cpu_keeps_its_own_owner_and_section ... ok
+test exec::tests::parse_aout_accepts_well_formed_s_magic ... ok
+test exec::tests::zero_length_input_is_a_loud_named_err ... ok
+test fpu::tests::xor_fold16_matches_the_scalar_fold ... ok
+test fpu::tests::xor_fold16_rejects_a_ragged_length - should panic ... ok
+test fpu::tests::installing_inside_a_section_panics_by_name - should panic ... ok
+test fpu::tests::kernel_target_spec_keeps_fpu_and_sse_out_of_kernel_code ... ok
+test fpu::tests::leave_parks_only_the_owner ... ok
+test fpu::tests::leaving_the_cpu_inside_a_section_panics_by_name - should panic ... ok
+test platform::q35::acpi::tests::golden_mcfg_chain_parses_base_and_bus_range ... ok
+test platform::q35::acpi::tests::truncated_madt_entry_is_loud_and_never_panics ... ok
+test platform::q35::acpi::tests::golden_madt_parses_ioapic_and_overrides ... ok
+test fpu::tests::snapshot_and_replace_follow_ownership ... ok
+test fpu::tests::restoring_a_reserved_mxcsr_bit_panics_instead_of_faulting - should panic ... ok
+test fpu::tests::this_cpu_is_stable ... ok
+test fpu::tests::a_nested_kernel_begin_panics_by_name - should panic ... ok
+test fpu::tests::restore_then_save_round_trips_the_user_visible_state ... ok
+test platform::q35::churngate::tests::derive_ceiling_covers_steady_and_jitter ... ok
+test platform::q35::acpi::tests::bad_table_checksum_is_a_loud_named_error ... ok
+test platform::q35::churngate::tests::marker_shapes_are_exact ... ok
+test platform::q35::churngate::tests::flat_delta_passes_ceiling ... ok
+test platform::q35::churngate::tests::over_ceiling_delta_fails ... ok
+test platform::q35::acpi::tests::bad_signature_and_overrunning_length_are_loud ... ok
+test platform::q35::ioapic::tests::override_fold_matches_the_live_q35_table ... ok
+test platform::q35::churngate::tests::terminal_marker_withheld_on_failure ... ok
+test platform::q35::ioapic::tests::rte_index_covers_the_live_route_and_refuses_out_of_range ... ok
+test platform::q35::ioapic::tests::rte_lo_composition_matches_the_82093aa_field_map ... ok
+test exec::tests::exec_with_shebang_installs_the_interpreter_image ... ok
+test platform::q35::lapic::tests::apic_mode_keys_off_cpuid_leaf1_ecx_bit21 ... ok
+test platform::q35::lapic::tests::x2apic_register_map_arithmetic ... ok
+test platform::q35::mb2::tests::acpi_tags_yield_root_table_and_absence_yields_none ... ok
+test platform::q35::mb2::tests::alignment_and_header_violations_are_loud ... ok
+test exec::tests::exec_replace_closes_cexec_fds_and_keeps_plain_fds ... ok
+test platform::q35::mb2::tests::cmdline_tag_parses_and_bootconf_pairs_merge ... ok
+test platform::q35::mb2::tests::cmdline_and_bootconf_violations_are_loud ... ok
+test platform::q35::mb2::tests::end_tag_stops_walk_and_cut_total_size_is_loud ... ok
+test platform::q35::mb2::tests::every_truncation_errors_loudly ... ok
+test platform::q35::mb2::tests::golden_memory_map_parses_ranges_with_types ... ok
+test platform::q35::mb2::tests::module_tag_violations_are_loud ... ok
+test exec::tests::shebang_recursion_is_capped_at_two_with_a_loud_reject ... ok
+test platform::q35::mb2::tests::module_tags_collect_ranges ... ok
+test platform::q35::netgate::tests::frame_is_the_committed_fixture_shape ... ok
+test platform::q35::netgate::tests::pingpong_reconcile_is_exact_and_fails_closed ... ok
+test platform::q35::netgate::tests::progress_is_wrap_safe ... ok
+test platform::q35::netgate::tests::txbulk_reconcile_bounds_and_reports_rx ... ok
+test platform::q35::pci::tests::bar_assignment_keeps_firmware_and_falls_back_to_the_window ... ok
+test platform::q35::pci::tests::bar_assignment_rejects_naturally_misaligned_window_bases ... ok
+test platform::q35::pci::tests::cap_extents_admit_the_live_q35_shape ... ok
+test platform::q35::pci::tests::cap_extents_reject_extents_past_the_bar_end ... ok
+test platform::q35::pci::tests::cap_extents_reject_undersized_common_and_device_configs ... ok
+test platform::q35::pci::tests::cap_extents_reject_zero_length_caps ... ok
+test platform::q35::pci::tests::mmio_window_spans_ecam_end_to_ioapic ... ok
+test platform::q35::pci::tests::notify_offsets_must_reach_inside_the_notify_cap ... ok
+test platform::q35::pci::tests::only_64bit_memory_nibbles_are_sizing_trusted ... ok
+test platform::q35::pci::tests::root_route_clamps_bogus_pins ... ok
+test platform::q35::pci::tests::root_route_matches_the_rotation_tables ... ok
+test platform::q35::timer::tests::mode_gate_keys_off_cpuid_leaf1_ecx_bit24 ... ok
+test platform::q35::timer::tests::tick_accounts_once_and_rearms ... ok
+test platform::q35::timer::tests::tsc_delta_converts_without_overflow_at_q35_scale ... ok
+test proc::fdgrp_release_tests::bare_rfcfdg_gets_a_private_fresh_table_and_releases_the_old_one ... ok
+test proc::fdgrp_release_tests::bare_rffdg_on_a_private_table_keeps_the_pipe_balanced ... ok
+test proc::fdgrp_release_tests::bare_rffdg_on_a_shared_table_closes_nothing_at_the_split ... ok
+test proc::fdgrp_release_tests::last_sharer_release_closes_the_shared_pipe_writer ... ok
+test proc::fdgrp_release_tests::unshared_group_release_closes_at_once ... ok
+test proc::fdgrp_release_tests::three_sharers_drain_only_at_the_third_release ... ok
+test proc::tests::classify_data_bss_shared_page ... ok
+test proc::tests::new_user_proc_constructs_the_address_space ... ok
+test proc::tests::rfmem_shared_pages_lifecycle ... ok
+test proc::tests::record_argv_truncation ... ok
+test proc::tests::free_user_mappings_unlinks_the_freed_tables_for_exec_reuse ... ok
+test proc::tests::sem_register_is_idempotent ... ok
+test proc::tests::sem_deregister_on_one_word_keeps_another_words_fifo ... ok
+test proc::tests::sem_wake_never_touches_other_words ... ok
+test proc::tests::sem_registry_consumes_and_reregisters ... ok
+test proc::tests::sem_reregistered_waiter_is_found_by_the_next_release ... ok
+test proc::tests::sem_wake_consumes_picked_registrations_in_order ... ok
+test proc::tests::user_page_map_unmap_round_trip ... ok
+test proc::tests::rfork_copies_the_parent_user ... ok
+test proc::tests::wait_record_bookkeeping ... ok
+test syscall::rfork_mask_tests::rfork_reserved_bits_are_unsupported ... ok
+test proc::tests::validate_user_range_membership ... ok
+test syscall::tests::cpu03_slots_carry_named_handlers ... ok
+test syscall::tests::create_records_ocexec_beside_the_other_create_bits ... ok
+test syscall::tests::arg_block_window_validates_before_copy ... ok
+test syscall::tests::created_ocexec_fd_is_taken_by_the_exec_sweep ... ok
+test syscall::tests::created_orclose_srv_post_goes_at_the_last_close ... ok
+test syscall::tests::create_syscall_ocexec_fd_is_closed_by_exec ... ok
+test syscall::tests::dispatch_routes_args_from_sp8_upward_into_ax ... ok
+test syscall::tests::exec_arg_staging_preserves_order ... ok
+test syscall::tests::noted_nsave_then_nrstr_runs_the_trampoline_and_returns ... ok
+test syscall::tests::noted_plan_follows_the_donor_rules ... ok
+test syscall::tests::other_loud_none_slots_stay_unarmed ... ok
+test syscall::tests::fwstat_syscall_over_an_open_fd_refuses_loudly ... ok
+test syscall::tests::notify_accepts_a_handler_at_an_odd_text_address ... ok
+test syscall::tests::remove_round_trips_through_the_devcap_arm_and_refuses_unported ... ok
+test syscall::tests::sleep_and_alarm_convert_milliseconds_to_the_100hz_slice ... ok
+test syscall::tests::nsec_reads_no_user_stack ... ok
+test syscall::tests::remove_syscall_dispatches_and_refuses_loudly ... ok
+test syscall::tests::valid_stat_wire_ports_the_donor_statcheck ... ok
+test syscall::tests::wstat_over_an_unported_device_refuses_loudly_never_zero ... ok
+test syscall::tests::unimplemented_number_is_loud ... ok
+test usermem::tests::fused_constructor_validates_and_forces_residency ... ok
+test usermem::tests::read_u64_bounds_are_option_checked ... ok
+test syscall::tests::wstat_syscall_validates_then_refuses ... ok
+test trap::tests::intrcommon_clears_df_before_calling_trap ... ok
+test usermem::tests::user_ptr_validated_read ... ok
+test syscall::tests::exec_replace_seeds_argv_order_verbatim ... ok
+test usermem::tests::user_slice_mut_writes_and_bounds ... ok
+test usermem::tests::user_string_copies_until_nul_excluding_it ... ok
+test usermem::tests::user_string_null_pointer_and_max_bound ... ok
+test usermem::tests::user_string_validates_each_byte_before_reading ... ok
+test trap::tests::entry_asm_uses_no_fsgsbase_instruction ... ok
+test usermem::tests::validated_only_validates_without_residency ... ok
+
+test result: ok. 140 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+EXIT=0
