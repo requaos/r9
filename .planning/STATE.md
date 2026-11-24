@@ -5,16 +5,16 @@ milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
 current_phase: 03
 current_phase_name: Guide Phase 1 - crypto/ and ds/ Foundations
 status: executing
-stopped_at: Completed 03-03-PLAN.md
-last_updated: "2026-11-24T14:35:53.563Z"
+stopped_at: Completed 03-04-PLAN.md
+last_updated: "2026-11-24T14:39:40.414Z"
 last_activity: 2026-11-24
 last_activity_desc: Phase 03 execution started
-state_head: 7feb35cac7434a2417080ad985664f6019e20e28
+state_head: c95e3aff044a0c207c924ce1a86d17032c54cbee
 progress:
   total_phases: 4
   completed_phases: 2
   total_plans: 53
-  completed_plans: 44
+  completed_plans: 45
   percent: 50
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-11-24)
 ## Current Position
 
 Phase: 03 (Guide Phase 1 - crypto/ and ds/ Foundations) — EXECUTING
-Plan: 5 of 13
+Plan: 6 of 13
 Status: Ready to execute
 Last activity: 2026-11-24 — Phase 03 execution started
 
@@ -71,6 +71,7 @@ Progress: [█████░░░░░] 50%
 | Phase 03 P12 | 2min | 2 tasks | 12 files |
 | Phase 03 P02 | 3min | 2 tasks | 7 files |
 | Phase 03 P03 | 2 min | 2 tasks | 7 files |
+| Phase 03 P04 | 2min | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -142,6 +143,12 @@ Full log is the PROJECT.md Key Decisions table. Recent:
 - [Phase 03]: Plan 03-03: chacha20_xor restates the pinned crate's remaining-blocks rule in r9 code before writing a byte, so block index u32::MAX is never produced; CHACHA20_MAX_BLOCKS is 2^32 - 1 blocks (274,877,906,880 bytes from counter 0), one block fewer than RFC 8439 (CRYP-02, T-03-09)
 - [Phase 03]: Plan 03-03: the crypto::page module doc states the per-key-and-nonce limit and the caller's explicit nonce/counter duty; the 8-byte wire nonce to 12-byte ChaCha20 nonce rule stays Phase 4's (D-06)
 - [Phase 03]: Plan 03-03: RFC 4231 cases 1 to 7 and RFC 5869 cases 1 to 3 pass on the default and scalar-backend legs; RFC 8439 2.3.2 and 2.4.2 pass on both legs, with the boundary measured into evidence/PINS-03-03.md
+- [Phase 03]: verify_keyed takes 1..=32-byte tags: 32-byte tags compare through blake3::Hash's constant-time equality; shorter tags fold every compared byte with no early exit and test the accumulator once
+- [Phase 03]: Blake3 wraps blake3::Hasher in a private field, so no public item in crypto::mac names an upstream type (D-18)
+- [Phase 03]: k_file builds a fixed 12-byte info (Qid.path 8 bytes little-endian, then Qid.vers 4 bytes little-endian) and is pinned by an independently computed Python hmac/hashlib KAT
+- [Phase 03]: derive_labelled uses Hkdf::expand_multi_info(&[label, context]) because crypto/ is no_std with no allocator; the pinned ("ab","c")==("a","bc") test makes the unframed concatenation observable
+- [Phase 03]: KeyCapability's read-only guarantee is type-level: keyed BLAKE3 is symmetric, so the guarantee is no seal method, private fields and no key accessor, proven by a compile_fail doctest with a passing twin
+- [Phase 03]: read_only() keeps the parent's k_dec (IG-P01) and sets blake3_verify from k_mac, keeping cipher and MAC keys separate (T-03-18)
 
 ### Open Questions (ten warnings, approved to be carried, not resolved)
 
@@ -203,6 +210,6 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 
 ## Session Continuity
 
-Last session: 2026-11-24T14:35:44.909Z
-Stopped at: Completed 03-03-PLAN.md
+Last session: 2026-11-24T14:39:40.095Z
+Stopped at: Completed 03-04-PLAN.md
 Resume file: None
