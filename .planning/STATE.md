@@ -5,16 +5,16 @@ milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
 current_phase: 03
 current_phase_name: Guide Phase 1 - crypto/ and ds/ Foundations
 status: executing
-stopped_at: Completed 03-13-PLAN.md
-last_updated: "2026-11-24T15:25:52.274Z"
+stopped_at: Completed 03-07-PLAN.md
+last_updated: "2026-11-24T15:59:56.180Z"
 last_activity: 2026-11-24
 last_activity_desc: Phase 03 execution started
-state_head: 3c88fd242e131228044817da6810472bcf668a75
+state_head: 0da79e1ecc58c332f40a154ea29c2a85b6c906ee
 progress:
   total_phases: 4
   completed_phases: 2
   total_plans: 53
-  completed_plans: 48
+  completed_plans: 49
   percent: 50
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-11-24)
 ## Current Position
 
 Phase: 03 (Guide Phase 1 - crypto/ and ds/ Foundations) — EXECUTING
-Plan: 9 of 13
+Plan: 10 of 13
 Status: Ready to execute
 Last activity: 2026-11-24 — Phase 03 execution started
 
@@ -75,6 +75,7 @@ Progress: [█████░░░░░] 50%
 | Phase 03 P05 | 4 min | 3 tasks | 4 files |
 | Phase 03 P06 | 25 | 2 tasks | 5 files |
 | Phase 03 P13 | 13 min | 1 tasks | 2 files |
+| Phase 03 P07 | 32 min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -169,6 +170,9 @@ Full log is the PROJECT.md Key Decisions table. Recent:
 - [Phase 03]: Plan 03-13: deref_tiny resolves a (key, tiny_ptr) pair from one arena slot read, with zero header reads and no seqlock; the counting probe asserts the exact pair (arena_reads, header_reads) == (1, 0) and lookup afterwards proves the probe is wired
 - [Phase 03]: Plan 03-13: deref_tiny's unchecked arena read (ds/src/tpht/flattened.rs:258, get_unchecked) is the only unsafe site in ds/src/tpht/, sound because slot_mask + 1 = HOME_SLOTS * num_blocks slots are fixed in the constructor; its SAFETY comment names that invariant for plan 03-10's audit (D-12, D-13)
 - [Phase 03]: Plan 03-13: the Miri-side model sizes were halved once under the 120-second latency rule (blocks 16 -> 8, operations 200 -> 100; first warm run 123 s, resized run 116 s); native sizes (1,024 blocks, 2,000 operations), the 64 seeds and the test list are unchanged, and the counting and wrap tests keep the size the property needs
+- [Phase 03]: Plan 03-07: ChainedTphtOverflow is all-atomic (state, fingerprint, full key, value words, next link): a claim is a compare-exchange free to WRITING (0xFF), the payload is stored Relaxed, the state goes LIVE with Release, then the node is linked at the block head with Release; a reader treats a non-LIVE node as absent. ds/src/tpht/chained.rs holds no unsafe and does not copy listing 9.4.
+- [Phase 03]: Plan 03-07: a chain link is (candidate choice << 8) | node index with 0xFFFF as the end marker; the 255 bank indices are 0..=254, so no link or claimed index is 0xFF. fill() is used/(num_banks * 255) and the 8-seed pin measured 0.9920..0.9966 before the first BanksFull.
+- [Phase 03]: Plan 03-07: Miri-side sizes were taken to the plan's floors and the 22-test tpht suite still took 230 s (a second warm run 235 s) against the 120 s budget; MIRI-OVER chained 230 is recorded and reported to the orchestrator, with native sizes, the 64 seeds and the test list unchanged (cutting seeds or tests is not the executor's call).
 
 ### Open Questions (ten warnings, approved to be carried, not resolved)
 
@@ -230,6 +234,6 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 
 ## Session Continuity
 
-Last session: 2026-11-24T15:25:51.928Z
-Stopped at: Completed 03-13-PLAN.md
+Last session: 2026-11-24T15:59:55.904Z
+Stopped at: Completed 03-07-PLAN.md
 Resume file: None
