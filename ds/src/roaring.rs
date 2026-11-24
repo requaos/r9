@@ -23,19 +23,24 @@
 //!
 //! The four hot loops live in the private [`crate::setops`] module and the
 //! containers call only those functions, so a Phase 5 SIMD module can replace
-//! the bodies with no caller change (D-20).  No SIMD code and no intrinsic
-//! lands here in this phase; the SIMD module is mounted at the crate root
-//! because a forbid reaches submodules.
+//! the bodies with no caller change (D-20).  No SIMD code lands here in this
+//! phase; the SIMD module is mounted at the crate root because a forbid
+//! reaches submodules.
 
 use alloc::boxed::Box;
+use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::RangeInclusive;
+
+use crate::setops;
 
 /// The cardinality at which an array container becomes a bitmap container.
 pub const ARRAY_MAX: usize = 4096;
 
 const CHUNK_BITS: u32 = 16;
 const CHUNK_LOW_MASK: u32 = 0xFFFF;
+const BITMAP_BITS: usize = 65_536;
+const BITMAP_BYTES: usize = 8_192;
 
 #[derive(Clone)]
 struct Chunk {
@@ -62,46 +67,538 @@ impl RoaringBitmap {
     }
 
     /// Inserts `v`; returns whether it was absent.
-    pub fn insert(&mut self, _v: u32) -> bool {
-        false
+    pub fn insert(&mut self, v: u32) -> bool {
+        self.insert_inner(v)
+    }
+
+    fn insert_inner(&mut self, v: u32) -> bool {
+        let key = (v >> CHUNK_BITS) as u16;
+        let low = (v & CHUNK_LOW_MASK) as u16;
+        let at = self.chunks.partition_point(|chunk| chunk.key < key);
+        if at < self.chunks.len() && self.chunks[at].key == key {
+            let container = &mut self.chunks[at].container;
+            let inserted = container.insert_low(low);
+            if inserted {
+                container.maybe_upgrade_array();
+            }
+            inserted
+        } else {
+            self.chunks.insert(
+                at,
+                Chunk {
+                    key,
+                    container: Container::Array(vec![low]),
+                },
+            );
+            true
+        }
     }
 
     /// Removes `v`; returns whether it was present.
-    pub fn remove(&mut self, _v: u32) -> bool {
-        false
+    pub fn remove(&mut self, v: u32) -> bool {
+        let key = (v >> CHUNK_BITS) as u16;
+        let low = (v & CHUNK_LOW_MASK) as u16;
+        let at = self.chunks.partition_point(|chunk| chunk.key < key);
+        if at >= self.chunks.len() || self.chunks[at].key != key {
+            return false;
+        }
+        if !self.chunks[at].container.remove_low(low) {
+            return false;
+        }
+        if self.chunks[at].container.is_empty() {
+            self.chunks.remove(at);
+        } else {
+            self.chunks[at].container.maybe_downgrade_bitmap();
+        }
+        true
     }
 
     /// Whether `v` is present.
-    pub fn contains(&self, _v: u32) -> bool {
-        false
+    pub fn contains(&self, v: u32) -> bool {
+        let key = (v >> CHUNK_BITS) as u16;
+        let low = (v & CHUNK_LOW_MASK) as u16;
+        let at = self.chunks.partition_point(|chunk| chunk.key < key);
+        at < self.chunks.len() && self.chunks[at].key == key && self.chunks[at].container.contains_low(low)
     }
 
     /// The number of distinct values.
     pub fn len(&self) -> u64 {
-        0
+        self.chunks.iter().map(|chunk| chunk.container.cardinality() as u64).sum()
     }
 
     /// Whether the bitmap holds no values.
     pub fn is_empty(&self) -> bool {
-        true
+        self.chunks.is_empty()
     }
 
     /// Ascending iteration over the values.
-    pub fn iter(&self) -> impl Iterator<Item = u32> + '_ {
-        core::iter::empty()
+    pub fn iter(&self) -> Iter<'_> {
+        Iter {
+            chunks: self.chunks.iter(),
+            current: None,
+        }
     }
 
     /// Inserts every value in `range`.
-    pub fn insert_range(&mut self, _range: RangeInclusive<u32>) {}
+    pub fn insert_range(&mut self, range: RangeInclusive<u32>) {
+        for value in range {
+            self.insert(value);
+        }
+    }
 
     /// Rewrites every container in the smallest of the three forms.
-    pub fn run_optimize(&mut self) {}
+    pub fn run_optimize(&mut self) {
+        for chunk in &mut self.chunks {
+            chunk.container.compact();
+        }
+    }
 }
 
 impl Default for RoaringBitmap {
     fn default() -> Self {
         Self::new()
     }
+}
+
+impl PartialEq for RoaringBitmap {
+    /// Equality is by contents: the same values in different container kinds
+    /// are equal.
+    fn eq(&self, other: &Self) -> bool {
+        self.len() == other.len() && self.iter().eq(other.iter())
+    }
+}
+
+impl Eq for RoaringBitmap {}
+
+/// Ascending iterator over a [`RoaringBitmap`].
+pub struct Iter<'a> {
+    chunks: core::slice::Iter<'a, Chunk>,
+    current: Option<(u16, ContainerValues<'a>)>,
+}
+
+impl Iterator for Iter<'_> {
+    type Item = u32;
+
+    fn next(&mut self) -> Option<u32> {
+        loop {
+            if let Some((key, values)) = self.current.as_mut() {
+                if let Some(low) = values.next() {
+                    return Some(((*key as u32) << CHUNK_BITS) | low as u32);
+                }
+                self.current = None;
+            }
+            let chunk = self.chunks.next()?;
+            self.current = Some((chunk.key, ContainerValues::new(chunk)));
+        }
+    }
+}
+
+enum ContainerValues<'a> {
+    Array(core::slice::Iter<'a, u16>),
+    Bitmap {
+        words: &'a [u64; 1024],
+        index: usize,
+        word: u64,
+    },
+    Run {
+        runs: core::slice::Iter<'a, (u16, u16)>,
+        next: u32,
+        end: u32,
+    },
+}
+
+impl<'a> ContainerValues<'a> {
+    fn new(chunk: &'a Chunk) -> Self {
+        match &chunk.container {
+            Container::Array(values) => Self::Array(values.iter()),
+            Container::Bitmap(words, _) => Self::Bitmap {
+                words,
+                index: 0,
+                word: 0,
+            },
+            Container::Run(runs) => Self::Run {
+                runs: runs.iter(),
+                next: 1,
+                end: 0,
+            },
+        }
+    }
+}
+
+impl Iterator for ContainerValues<'_> {
+    type Item = u16;
+
+    fn next(&mut self) -> Option<u16> {
+        match self {
+            Self::Array(values) => values.next().copied(),
+            Self::Bitmap { words, index, word } => loop {
+                if *word != 0 {
+                    let bit = word.trailing_zeros() as usize;
+                    *word &= *word - 1;
+                    return Some(((*index - 1) * 64 + bit) as u16);
+                }
+                if *index >= words.len() {
+                    return None;
+                }
+                *word = words[*index];
+                *index += 1;
+            },
+            Self::Run { runs, next, end } => loop {
+                if *next <= *end {
+                    let value = *next;
+                    *next += 1;
+                    return Some(value as u16);
+                }
+                let (start, length) = runs.next()?;
+                *next = *start as u32;
+                *end = *start as u32 + *length as u32;
+            },
+        }
+    }
+}
+
+impl Container {
+    fn cardinality(&self) -> u32 {
+        match self {
+            Self::Array(values) => values.len() as u32,
+            Self::Bitmap(_, card) => *card,
+            Self::Run(runs) => runs.iter().map(|&(_, length)| length as u32 + 1).sum(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.cardinality() == 0
+    }
+
+    fn contains_low(&self, low: u16) -> bool {
+        match self {
+            Self::Array(values) => values.binary_search(&low).is_ok(),
+            Self::Bitmap(words, _) => words[low as usize / 64] & (1u64 << (low as usize % 64)) != 0,
+            Self::Run(runs) => {
+                let at = runs.partition_point(|&(start, _)| start <= low);
+                if at == 0 {
+                    return false;
+                }
+                let (start, length) = runs[at - 1];
+                (low as u32) <= start as u32 + length as u32
+            }
+        }
+    }
+
+    fn insert_low(&mut self, low: u16) -> bool {
+        match self {
+            Self::Array(values) => match values.binary_search(&low) {
+                Ok(_) => false,
+                Err(at) => {
+                    values.insert(at, low);
+                    true
+                }
+            },
+            Self::Bitmap(words, card) => {
+                let word = low as usize / 64;
+                let mask = 1u64 << (low as usize % 64);
+                if words[word] & mask != 0 {
+                    false
+                } else {
+                    words[word] |= mask;
+                    *card += 1;
+                    true
+                }
+            }
+            Self::Run(runs) => run_insert(runs, low),
+        }
+    }
+
+    fn remove_low(&mut self, low: u16) -> bool {
+        match self {
+            Self::Array(values) => match values.binary_search(&low) {
+                Ok(at) => {
+                    values.remove(at);
+                    true
+                }
+                Err(_) => false,
+            },
+            Self::Bitmap(words, card) => {
+                let word = low as usize / 64;
+                let mask = 1u64 << (low as usize % 64);
+                if words[word] & mask == 0 {
+                    false
+                } else {
+                    words[word] &= !mask;
+                    *card -= 1;
+                    true
+                }
+            }
+            Self::Run(runs) => run_remove(runs, low),
+        }
+    }
+
+    /// Conversion site (1): an array past [`ARRAY_MAX`] becomes a bitmap.
+    fn maybe_upgrade_array(&mut self) {
+        let card = match self {
+            Self::Array(values) => values.len(),
+            _ => return,
+        };
+        if card <= ARRAY_MAX {
+            return;
+        }
+        let mut words = zero_words();
+        if let Self::Array(values) = self {
+            for &value in values.iter() {
+                words[value as usize / 64] |= 1u64 << (value as usize % 64);
+            }
+        }
+        *self = Self::Bitmap(words, card as u32);
+    }
+
+    /// Conversion site (2): a bitmap at [`ARRAY_MAX`] becomes an array.
+    fn maybe_downgrade_bitmap(&mut self) {
+        let card = match self {
+            Self::Bitmap(_, card) => *card,
+            _ => return,
+        };
+        if card as usize != ARRAY_MAX {
+            return;
+        }
+        let values = if let Self::Bitmap(words, _) = self {
+            array_of_words(words)
+        } else {
+            Vec::new()
+        };
+        *self = Self::Array(values);
+    }
+
+    /// Conversion site (3): rewrite this container in its smallest form.
+    fn compact(&mut self) {
+        let previous = core::mem::replace(self, Self::Array(Vec::new()));
+        *self = previous.smallest_form();
+    }
+
+    /// The smallest of the three forms, by payload bytes.  Ties prefer the
+    /// array, then the run, then the bitmap.
+    fn smallest_form(self) -> Self {
+        let card = self.cardinality() as usize;
+        if card == 0 {
+            return self;
+        }
+        let runs = self.runs();
+        let run_bytes = runs.len() * 4;
+        let array_bytes = card * 2;
+        if card <= ARRAY_MAX && array_bytes <= run_bytes && array_bytes <= BITMAP_BYTES {
+            Self::Array(self.into_array())
+        } else if run_bytes <= BITMAP_BYTES {
+            Self::Run(runs)
+        } else {
+            match self {
+                Self::Bitmap(words, card) => Self::Bitmap(words, card),
+                other => Self::Bitmap(other.to_words(), card as u32),
+            }
+        }
+    }
+
+    /// The run-compressed form, ascending.
+    fn runs(&self) -> Vec<(u16, u16)> {
+        match self {
+            Self::Run(runs) => runs.clone(),
+            Self::Array(values) => runs_of_values(values.iter().copied()),
+            Self::Bitmap(words, _) => runs_of_values(BitmapValues::new(words)),
+        }
+    }
+
+    fn into_array(self) -> Vec<u16> {
+        match self {
+            Self::Array(values) => values,
+            Self::Bitmap(words, _) => array_of_words(&words),
+            Self::Run(runs) => {
+                let capacity = runs.iter().map(|&(_, length)| length as usize + 1).sum();
+                let mut values = Vec::with_capacity(capacity);
+                for (start, length) in runs {
+                    for value in start as u32..=start as u32 + length as u32 {
+                        values.push(value as u16);
+                    }
+                }
+                values
+            }
+        }
+    }
+
+    /// This container as a bitmap container's words (the mixed-pairing path).
+    fn to_words(&self) -> Box<[u64; 1024]> {
+        match self {
+            Self::Bitmap(words, _) => words.clone(),
+            Self::Array(values) => {
+                let mut words = zero_words();
+                for &value in values.iter() {
+                    words[value as usize / 64] |= 1u64 << (value as usize % 64);
+                }
+                words
+            }
+            Self::Run(runs) => {
+                let mut words = zero_words();
+                for &(start, length) in runs.iter() {
+                    for value in start as u32..=start as u32 + length as u32 {
+                        words[value as usize / 64] |= 1u64 << (value as usize % 64);
+                    }
+                }
+                words
+            }
+        }
+    }
+
+    /// A result container from words: array at or below [`ARRAY_MAX`], else
+    /// bitmap; an empty result yields `None` so no empty container survives.
+    fn from_words(card: u32, words: Box<[u64; 1024]>) -> Option<Self> {
+        if card == 0 {
+            return None;
+        }
+        if card as usize <= ARRAY_MAX {
+            Some(Self::Array(array_of_words(&words)))
+        } else {
+            Some(Self::Bitmap(words, card))
+        }
+    }
+}
+
+/// A boxed all-zero bitmap container, built without an 8 KiB stack copy.
+fn zero_words() -> Box<[u64; 1024]> {
+    let words: Box<[u64]> = vec![0u64; 1024].into_boxed_slice();
+    match words.try_into() {
+        Ok(words) => words,
+        Err(_) => unreachable!("a 1024-word slice converts to a boxed 1024-word array"),
+    }
+}
+
+fn array_of_words(words: &[u64; 1024]) -> Vec<u16> {
+    let mut values = Vec::new();
+    for (index, &word) in words.iter().enumerate() {
+        let mut remaining = word;
+        while remaining != 0 {
+            let bit = remaining.trailing_zeros() as usize;
+            values.push((index * 64 + bit) as u16);
+            remaining &= remaining - 1;
+        }
+    }
+    values
+}
+
+/// Ascending iteration over a bitmap container's set bits.
+struct BitmapValues<'a> {
+    words: &'a [u64; 1024],
+    index: usize,
+    word: u64,
+}
+
+impl<'a> BitmapValues<'a> {
+    fn new(words: &'a [u64; 1024]) -> Self {
+        Self {
+            words,
+            index: 0,
+            word: 0,
+        }
+    }
+}
+
+impl Iterator for BitmapValues<'_> {
+    type Item = u16;
+
+    fn next(&mut self) -> Option<u16> {
+        loop {
+            if self.word != 0 {
+                let bit = self.word.trailing_zeros() as usize;
+                self.word &= self.word - 1;
+                return Some(((self.index - 1) * 64 + bit) as u16);
+            }
+            if self.index >= BITMAP_BITS / 64 {
+                return None;
+            }
+            self.word = self.words[self.index];
+            self.index += 1;
+        }
+    }
+}
+
+/// The ascending run-compressed form of an ascending value stream.
+fn runs_of_values<I: Iterator<Item = u16>>(values: I) -> Vec<(u16, u16)> {
+    let mut runs: Vec<(u16, u16)> = Vec::new();
+    let mut current: Option<(u16, u16)> = None;
+    for value in values {
+        match current {
+            None => current = Some((value, value)),
+            Some((start, last)) => {
+                if last as u32 + 1 == value as u32 {
+                    current = Some((start, value));
+                } else {
+                    runs.push((start, last - start));
+                    current = Some((value, value));
+                }
+            }
+        }
+    }
+    if let Some((start, last)) = current {
+        runs.push((start, last - start));
+    }
+    runs
+}
+
+/// Inserts `low` into an ascending, non-adjacent run list, extending or
+/// merging runs as needed.
+fn run_insert(runs: &mut Vec<(u16, u16)>, low: u16) -> bool {
+    let value = low as u32;
+    let at = runs.partition_point(|&(start, _)| (start as u32) <= value);
+    if at > 0 {
+        let (start, length) = runs[at - 1];
+        let end = start as u32 + length as u32;
+        if value <= end {
+            return false;
+        }
+        if value == end + 1 {
+            let next_starts_after_value = runs.get(at).is_some_and(|&(next, _)| next as u32 == value + 1);
+            if next_starts_after_value {
+                let (next_start, next_length) = runs[at];
+                let merged_end = next_start as u32 + next_length as u32;
+                runs[at - 1] = (start, (merged_end - start as u32) as u16);
+                runs.remove(at);
+            } else {
+                runs[at - 1] = (start, (value - start as u32) as u16);
+            }
+            return true;
+        }
+    }
+    if let Some(&(start, length)) = runs.get(at) {
+        if start as u32 == value + 1 {
+            runs[at] = (low, (start as u32 + length as u32 - value) as u16);
+            return true;
+        }
+    }
+    runs.insert(at, (low, 0));
+    true
+}
+
+/// Removes `low` from an ascending, non-adjacent run list, shrinking or
+/// splitting a run as needed.
+fn run_remove(runs: &mut Vec<(u16, u16)>, low: u16) -> bool {
+    let value = low as u32;
+    let at = runs.partition_point(|&(start, _)| (start as u32) <= value);
+    if at == 0 {
+        return false;
+    }
+    let (start, length) = runs[at - 1];
+    let start = start as u32;
+    let end = start + length as u32;
+    if value > end {
+        return false;
+    }
+    if length == 0 {
+        runs.remove(at - 1);
+    } else if value == start {
+        runs[at - 1] = ((start + 1) as u16, (length - 1) as u16);
+    } else if value == end {
+        runs[at - 1] = (start as u16, (length - 1) as u16);
+    } else {
+        runs[at - 1] = (start as u16, (value - start - 1) as u16);
+        runs.insert(at, ((value + 1) as u16, (end - value - 1) as u16));
+    }
+    true
 }
 
 /// The container kind a chunk currently holds (test inspection only).
@@ -117,12 +614,25 @@ pub(crate) enum ContainerKind {
 impl RoaringBitmap {
     /// The kind of each chunk's container, in chunk order.
     pub(crate) fn container_kinds(&self) -> Vec<ContainerKind> {
-        Vec::new()
+        self.chunks
+            .iter()
+            .map(|chunk| match chunk.container {
+                Container::Array(_) => ContainerKind::Array,
+                Container::Bitmap(_, _) => ContainerKind::Bitmap,
+                Container::Run(_) => ContainerKind::Run,
+            })
+            .collect()
     }
 
     /// The number of runs in each chunk's container, in chunk order.
     pub(crate) fn run_counts(&self) -> Vec<usize> {
-        Vec::new()
+        self.chunks
+            .iter()
+            .map(|chunk| match &chunk.container {
+                Container::Array(_) | Container::Bitmap(_, _) => chunk.container.runs().len(),
+                Container::Run(runs) => runs.len(),
+            })
+            .collect()
     }
 }
 

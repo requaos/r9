@@ -9,7 +9,7 @@
 //! and swaps these bodies behind `fpu::kernel_begin()` / `with_simd()`
 //! (D-20).
 //!
-//! No SIMD code and no intrinsic lands here in this phase (D-09, D-20).
+//! No SIMD code lands here in this phase (D-09, D-20).
 
 use alloc::vec::Vec;
 
@@ -18,33 +18,66 @@ pub(crate) const BITMAP_WORDS: usize = 1024;
 
 /// Word-wise `out = a & b`; returns the cardinality of the result.
 pub(crate) fn bitmap_and(
-    _a: &[u64; BITMAP_WORDS],
-    _b: &[u64; BITMAP_WORDS],
-    _out: &mut [u64; BITMAP_WORDS],
+    a: &[u64; BITMAP_WORDS],
+    b: &[u64; BITMAP_WORDS],
+    out: &mut [u64; BITMAP_WORDS],
 ) -> u32 {
-    0
+    let mut card = 0u32;
+    for word in 0..BITMAP_WORDS {
+        let both = a[word] & b[word];
+        out[word] = both;
+        card += both.count_ones();
+    }
+    card
 }
 
 /// Word-wise `out = a | b`; returns the cardinality of the result.
 pub(crate) fn bitmap_or(
-    _a: &[u64; BITMAP_WORDS],
-    _b: &[u64; BITMAP_WORDS],
-    _out: &mut [u64; BITMAP_WORDS],
+    a: &[u64; BITMAP_WORDS],
+    b: &[u64; BITMAP_WORDS],
+    out: &mut [u64; BITMAP_WORDS],
 ) -> u32 {
-    0
+    let mut card = 0u32;
+    for word in 0..BITMAP_WORDS {
+        let either = a[word] | b[word];
+        out[word] = either;
+        card += either.count_ones();
+    }
+    card
 }
 
 /// Word-wise `out = a & !b`; returns the cardinality of the result.
 pub(crate) fn bitmap_andnot(
-    _a: &[u64; BITMAP_WORDS],
-    _b: &[u64; BITMAP_WORDS],
-    _out: &mut [u64; BITMAP_WORDS],
+    a: &[u64; BITMAP_WORDS],
+    b: &[u64; BITMAP_WORDS],
+    out: &mut [u64; BITMAP_WORDS],
 ) -> u32 {
-    0
+    let mut card = 0u32;
+    for word in 0..BITMAP_WORDS {
+        let only_a = a[word] & !b[word];
+        out[word] = only_a;
+        card += only_a.count_ones();
+    }
+    card
 }
 
 /// Two-pointer intersection of two ascending arrays; `out` is replaced.
-pub(crate) fn array_intersect(_a: &[u16], _b: &[u16], _out: &mut Vec<u16>) {}
+pub(crate) fn array_intersect(a: &[u16], b: &[u16], out: &mut Vec<u16>) {
+    out.clear();
+    let mut i = 0usize;
+    let mut j = 0usize;
+    while i < a.len() && j < b.len() {
+        match a[i].cmp(&b[j]) {
+            core::cmp::Ordering::Less => i += 1,
+            core::cmp::Ordering::Greater => j += 1,
+            core::cmp::Ordering::Equal => {
+                out.push(a[i]);
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
