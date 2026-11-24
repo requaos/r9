@@ -1,0 +1,90 @@
+[package]
+name = "crypto"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# SHA-256, the hash under HMAC (RFC 2104) and HKDF (RFC 5869) (CRYP-01).
+# default-features = false keeps the build no_std and free of the std-only
+# conveniences; no feature is enabled by name.  The host build selects the
+# hardware SHA extension at run time, so the crypto soft-cfg test leg pins the
+# scalar sha256::soft backend the kernels actually run.
+# Provenance: 0.11.1 probed 2026-11-24 on this repo's pinned nightly-2026-01-30
+# for the host AND lib/x86_64-unknown-none-elf.json and
+# lib/aarch64-unknown-none-elf.json, #![no_std], with exactly this feature set
+# (03-RESEARCH.md Package Legitimacy Audit: all OK).
+# Deliberately off: the default "std" and "oid" features.
+sha2 = { version = "=0.11.1", default-features = false }
+
+# HMAC (RFC 2104) over SHA-256, pinned against RFC 4231 vectors (CRYP-01).
+# default-features = false keeps no_std; hmac has no feature this crate needs.
+# Provenance: 0.13.0 probed 2026-11-24 on this repo's pinned nightly-2026-01-30
+# for the host AND lib/x86_64-unknown-none-elf.json and
+# lib/aarch64-unknown-none-elf.json, #![no_std], with exactly this feature set
+# (03-RESEARCH.md Package Legitimacy Audit: all OK).
+# Deliberately off: the default "std" feature.
+hmac = { version = "=0.13.0", default-features = false }
+
+# HKDF-SHA256 extract/expand (RFC 5869), the K_file and session key
+# derivation substrate (CRYP-01, CRYP-04).  default-features = false keeps
+# no_std; hkdf has no feature this crate needs.
+# Provenance: 0.13.0 probed 2026-11-24 on this repo's pinned nightly-2026-01-30
+# for the host AND lib/x86_64-unknown-none-elf.json and
+# lib/aarch64-unknown-none-elf.json, #![no_std], with exactly this feature set
+# (03-RESEARCH.md Package Legitimacy Audit: all OK).
+# Deliberately off: the default "std" feature.
+hkdf = { version = "=0.13.0", default-features = false }
+
+# ChaCha20 in the RFC 8439 layout (32-bit block counter, 96-bit nonce) for
+# page sealing (CRYP-02, D-06).  default-features = false keeps no_std;
+# feature "cipher" is required because the crate exposes no cipher type
+# without it (03-RESEARCH.md C2).  The host build may link the NEON backend,
+# so the crypto soft-cfg test leg forces chacha20_backend="soft".
+# Provenance: 0.10.2 probed 2026-11-24 on this repo's pinned nightly-2026-01-30
+# for the host AND lib/x86_64-unknown-none-elf.json and
+# lib/aarch64-unknown-none-elf.json, #![no_std], with exactly this feature set
+# (03-RESEARCH.md Package Legitimacy Audit: all OK).
+# Deliberately off: the default "std" feature; 0.10.0 and 0.10.1 are yanked,
+# so 0.10.2 is the only non-yanked 0.10 release.
+chacha20 = { version = "=0.10.2", default-features = false, features = [
+    "cipher",
+] }
+
+# BLAKE3 keyed and tree modes, 32-byte output (CRYP-03): the one MAC in r9
+# (D-05, D-07).  default-features = false keeps no_std; "pure" selects the
+# Rust implementations, and the five no_* features disable every SIMD path
+# because kernels are built without FP/SIMD (D-18, 03-RESEARCH.md C2).
+# Provenance: 1.8.7 probed 2026-11-24 on this repo's pinned nightly-2026-01-30
+# for the host AND lib/x86_64-unknown-none-elf.json and
+# lib/aarch64-unknown-none-elf.json, #![no_std], with exactly this feature set
+# (03-RESEARCH.md Package Legitimacy Audit: all OK).
+# Deliberately off: the default "std" feature and the assembly/C SIMD
+# backends; the "rayon" and "mmap" features.
+blake3 = { version = "=1.8.7", default-features = false, features = [
+    "pure",
+    "no_sse2",
+    "no_sse41",
+    "no_avx2",
+    "no_avx512",
+    "no_neon",
+] }
+
+# Zeroizing key material — Zeroizing<[u8; 32]> for the key hierarchy
+# (CRYP-04).  default-features = false keeps no_std; zeroize has no feature
+# this crate needs.
+# Provenance: 1.9.2 probed 2026-11-24 on this repo's pinned nightly-2026-01-30
+# for the host AND lib/x86_64-unknown-none-elf.json and
+# lib/aarch64-unknown-none-elf.json, #![no_std], with exactly this feature set
+# (03-RESEARCH.md Package Legitimacy Audit: all OK).
+# Release note for the owner: 1.9.2 was published 2026-11-17, seven days
+# before the research; 1.9.1 (2026-10-06) has the same feature list and was
+# not built.  The choice of 1.9.2 is recorded for owner review (plan 03-09)
+# and can be changed by the owner at the end-of-phase stop (plan 03-10).
+# Deliberately off: the default "alloc", "std" and "zeroize_derive" features.
+zeroize = { version = "=1.9.2", default-features = false }
+
+# Opt into the workspace clippy lints (undocumented_unsafe_blocks
+# = deny).  crypto/ itself contains no unsafe (D-10); the opt-in keeps the
+# contract uniform with port/ and ds/.
+[lints]
+workspace = true

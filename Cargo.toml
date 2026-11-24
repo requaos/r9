@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["aarch64", "x86_64", "port", "riscv64", "xtask"]
+members = ["aarch64", "crypto", "x86_64", "port", "riscv64", "xtask"]
 
 # The maximal unsafe-elimination contract: every remaining
 # unsafe block/fn/impl/extern in a lint-opted-in crate must carry a SAFETY
