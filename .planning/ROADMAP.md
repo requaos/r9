@@ -148,7 +148,7 @@ Plans:
   3. A host test pins the four values and proves they overlap no existing `rfork` flag (the highest bit in use today is 14), and `rfork` behaviour is unchanged.
   4. The corrected C prototypes are committed inside r9 with their landing location decided against the repository layout at HEAD.
   5. The maintainer has confirmed the guide's reconciled decisions and PROJECT.md Key Decisions records which are locked.
-**Plans**: 3/6 plans executed in 4 waves; four owner stops (the `port/src` diff in 02-01, the threat-model draft in 02-02, the thirteen-decision table in 02-03, and the single end-of-phase stop on the x86_64 Linux host in 02-06). Required dispatch mode: run this phase with `workflow.use_worktrees` = `false` in `.planning/config.json` (`node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" query config-set workflow.use_worktrees false`, or set `"use_worktrees": false` under `"workflow"` in `.planning/config.json` by hand), so every plan runs in sequence on the main working tree. The key is unset and defaults to true; with worktrees on, plan 02-06 stops without merging or pushing, and the continuations of 02-01 and 02-02 can stop after their owner stops.
+**Plans**: 4/6 plans executed in 4 waves; four owner stops (the `port/src` diff in 02-01, the threat-model draft in 02-02, the thirteen-decision table in 02-03, and the single end-of-phase stop on the x86_64 Linux host in 02-06). Required dispatch mode: run this phase with `workflow.use_worktrees` = `false` in `.planning/config.json` (`node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" query config-set workflow.use_worktrees false`, or set `"use_worktrees": false` under `"workflow"` in `.planning/config.json` by hand), so every plan runs in sequence on the main working tree. The key is unset and defaults to true; with worktrees on, plan 02-06 stops without merging or pushing, and the continuations of 02-01 and 02-02 can stop after their owner stops.
 
 Plans:
 **Wave 1**
@@ -157,7 +157,7 @@ Plans:
 - [x] 02-03-PLAN.md — Design lock: D-17 wording at six sites, thirteen-decision table, OWNER STOP to confirm, Key Decisions rows
 
 **Wave 2** *(blocked on 02-01)*
-- [ ] 02-04-PLAN.md — Both arch crates import the flags from `port`; masks hoisted and pinned; header check and x86_64 host-triple fallback in `cargo xtask test`
+- [x] 02-04-PLAN.md — Both arch crates import the flags from `port`; masks hoisted and pinned; header check and x86_64 host-triple fallback in `cargo xtask test`
 
 **Wave 3** *(blocked on 02-04)*
 - [ ] 02-05-PLAN.md — Mac-side closing evidence: kernel bytes before/after (`.text` identical or stop), aarch64 quick pass, the owner's checklist
@@ -381,7 +381,7 @@ Phases execute in numeric order: 1 → 2 → 3 → … → 16 (decimal insertion
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 1. Stage P0 - Cross-Build Harness | v3.0 | 34/34 | Complete | 2026-11-23 |
-| 2. Guide Phase 0 - Design Lock and rfork Flag Reservation | v3.0 | 3/6 | In Progress | - |
+| 2. Guide Phase 0 - Design Lock and rfork Flag Reservation | v3.0 | 4/6 | In Progress | - |
 | 3. Guide Phase 1 - crypto/ and ds/ Foundations | v3.0 | 0/TBD | Not started | - |
 | 4. Guide Phase 2 - 9P2000.aead Transport and FidTable | v3.0 | 0/TBD | Not started | - |
 | 5. Guide Phase 3 - Cryptographic Memory and Zero-Copy DMA Paging | v3.1 | 0/TBD | Not started | - |
