@@ -9,6 +9,9 @@
 //! values are copied from the RFC text, never re-derived from this
 //! implementation (03-RESEARCH.md Pitfall 10).
 
+use hmac::{Hmac, KeyInit, Mac};
+use sha2::Sha256;
+
 /// The SHA-256 output length in bytes (FIPS 180-4).
 pub const SHA256_LEN: usize = 32;
 
@@ -18,9 +21,10 @@ pub const SHA256_LEN: usize = 32;
 /// block and zero-pads shorter ones.  The 32-byte tag is returned by value so
 /// no caller-visible allocation is needed.
 pub fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; SHA256_LEN] {
-    // RED skeleton (03-01): the API and the RFC 4231 pin land first; the body
-    // is wrong on behaviour until the GREEN commit implements it over
-    // `hmac::Hmac<sha2::Sha256>`.
-    let _ = (key, msg);
-    [0u8; SHA256_LEN]
+    // A thin wrapper (03-RESEARCH.md Pattern 1): `Hmac`'s keyed state is the
+    // upstream type and never appears in this signature (D-18).
+    let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(key)
+        .expect("HMAC accepts a key of any length (RFC 2104 §3)");
+    mac.update(msg);
+    mac.finalize().into_bytes().into()
 }

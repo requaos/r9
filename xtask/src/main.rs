@@ -3569,6 +3569,40 @@ impl TestStep {
             None,
         ));
 
+        all_cmd_args.push((
+            vec![
+                "test".to_string(),
+                "--package".to_string(),
+                "crypto".to_string(),
+                "--lib".to_string(),
+                "--tests".to_string(),
+            ],
+            None,
+        ));
+
+        // The scalar-backend leg (03-RESEARCH.md F3, T-03-02): the default
+        // host build links sha2's hardware SHA path and chacha20's NEON (or
+        // AVX2) backend, while the kernels run the scalar code selected by
+        // lib/*-unknown-none-elf.json.  The same vectors must pin the code
+        // the kernels execute, so this leg forces sha256::soft and chacha20's
+        // soft backend with the crates' own --cfg names.  The flags ride in
+        // THIS leg's argument vector and never in .cargo/config.toml: a
+        // global build.rustflags entry would reach the kernel builds, whose
+        // flags xtask sets through the same key.
+        all_cmd_args.push((
+            vec![
+                "test".to_string(),
+                "--package".to_string(),
+                "crypto".to_string(),
+                "--lib".to_string(),
+                "--tests".to_string(),
+                "--config".to_string(),
+                "build.rustflags=[\"--cfg\",\"chacha20_backend=\\\"soft\\\"\",\"--cfg\",\"sha2_backend=\\\"soft\\\"\"]"
+                    .to_string(),
+            ],
+            None,
+        ));
+
         let rustup_state = RustupState::new();
 
         let arch = std::env::consts::ARCH;
