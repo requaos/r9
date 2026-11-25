@@ -36,15 +36,21 @@
 //! it one contiguous slice; [`PacketMac::verify`] compares in constant time
 //! with an accumulator fold and no early exit (T-04-05).
 //!
-//! # What is zeroized, and what is not (P6)
+//! # What zeroize covers
 //!
-//! `Key` holds `Zeroizing<[u8; 32]>`, and the nonce prefix is held in
-//! `Zeroizing<[u8; 4]>`, so the long-lived session material is scrubbed on
-//! drop.  It is **not** a complete scrubbing guarantee: each per-packet
+//! [`DirectionKeys::zeroize`] (and [`SessionKeys::zeroize`], which calls it
+//! for both directions) overwrites the six derived secrets — the four keys
+//! and the two nonce prefixes — with zeros on connection teardown or any
+//! failure, not on `Tclunk` (D-15).  The scrubbed state is exactly those four
+//! keys and two prefixes.  [`DirectionKeys::is_zeroized`] and
+//! [`SessionKeys::is_zeroized`] let a caller confirm that happened without
+//! revealing key bytes: they answer only `true` or `false`.
+//!
+//! It is **not** a complete scrubbing guarantee: each per-packet
 //! `blake3::Hasher` and each `ChaCha20` cipher state holds a copy of its key
 //! on the stack and is dropped without scrubbing, because the pinned
-//! `blake3`'s `zeroize` feature is deliberately off (P6).  The limit is
-//! stated here rather than overclaimed.
+//! `blake3`'s `zeroize` feature is deliberately off (P6, DECISION P6
+//! accepted off).  The limit is stated here rather than overclaimed.
 //!
 //! # What this module does not decide
 //!
@@ -133,21 +139,41 @@ pub const CAP_BODY_LEN: usize = 16;
 /// (P8, D-14).
 pub const CAP_TAG_LEN: usize = 8;
 
+/// The capability tag label (P8, D-14): 16 bytes, followed by the body.
+const CAP_LABEL: &[u8; 16] = b"r9 StatelessCap1";
+/// The re-key confirm label (P3): 12 bytes, followed by the generation LE.
+const REKEY_LABEL: &[u8; 12] = b"r9 rekey ack";
+
 /// The 8-byte `StatelessCap` tag over the capability's first 16 bytes under
 /// the table's domain secret (P8, D-14).
+///
+/// Keyed BLAKE3 under `domain` over [`CAP_LABEL`] followed by `body`, the
+/// first [`CAP_TAG_LEN`] bytes.  The domain secret is a caller-supplied
+/// [`Key`]; `crypto/` holds no default domain secret.
 pub fn cap_tag(domain: &Key, body: &[u8; CAP_BODY_LEN]) -> [u8; CAP_TAG_LEN] {
-    let _ = (domain, body);
-    [0u8; CAP_TAG_LEN]
+    let mut hasher = crate::mac::Blake3::new_keyed(domain.bytes());
+    hasher.update(CAP_LABEL);
+    hasher.update(body);
+    let full = hasher.finalize();
+    let mut tag = [0u8; CAP_TAG_LEN];
+    tag.copy_from_slice(&full[..CAP_TAG_LEN]);
+    tag
 }
 
 /// Verify a `StatelessCap` tag in constant time (P8, D-14).
+///
+/// Builds `CAP_LABEL || body` in one fixed 32-byte buffer and defers the
+/// comparison to [`crate::mac::verify_keyed`], which folds every compared
+/// byte with no early exit (T-04-05).  A wrong tag is `Err(Error::TagMismatch)`.
 pub fn cap_verify(
     domain: &Key,
     body: &[u8; CAP_BODY_LEN],
     tag: &[u8; CAP_TAG_LEN],
 ) -> crate::Result<()> {
-    let _ = (domain, body, tag);
-    Ok(())
+    let mut message = [0u8; CAP_LABEL.len() + CAP_BODY_LEN];
+    message[..CAP_LABEL.len()].copy_from_slice(CAP_LABEL);
+    message[CAP_LABEL.len()..].copy_from_slice(body);
+    crate::mac::verify_keyed(domain.bytes(), &message, tag)
 }
 
 /// An unkeyed BLAKE3 transcript of the plain-framed handshake messages, in
@@ -268,31 +294,68 @@ impl DirectionKeys {
         PacketMac { h: crate::mac::Blake3::new_keyed(self.k_mac.bytes()) }
     }
 
-    /// Overwrite this direction's six secrets with zeros (D-15).
+    /// Overwrite this direction's cipher key, MAC key and nonce prefix with
+    /// zeros, on connection teardown or any failure (D-15).
+    ///
+    /// The value still type-checks after this call; the transport treats a
+    /// zeroized connection as closed.  Each replaced [`Key`] and prefix is
+    /// itself `Zeroizing`, so the previous bytes are scrubbed on the drop this
+    /// assignment performs.
     pub fn zeroize(&mut self) {
-        let _ = self;
+        self.k_enc = Key::from_bytes([0u8; 32]);
+        self.k_mac = Key::from_bytes([0u8; 32]);
+        self.prefix = Zeroizing::new([0u8; PREFIX_LEN]);
     }
 
-    /// Whether every byte this direction holds is zero.
+    /// Whether every cipher key byte, MAC key byte and prefix byte this
+    /// direction holds is zero.
+    ///
+    /// This exists so a caller can check that teardown really scrubbed the
+    /// keys: `port` cannot read key bytes (T-04-03).  It returns only a
+    /// `bool`, and the loops fold all 68 covered bytes into one accumulator
+    /// with no early exit.  A `true` answer on freshly derived keys cannot
+    /// occur except with negligible probability.
     pub fn is_zeroized(&self) -> bool {
-        let _ = self;
-        true
+        let mut acc = 0u8;
+        for byte in self.k_enc.bytes() {
+            acc |= *byte;
+        }
+        for byte in self.k_mac.bytes() {
+            acc |= *byte;
+        }
+        for byte in self.prefix.iter() {
+            acc |= *byte;
+        }
+        acc == 0
     }
 
     /// The re-key confirm value under this direction's MAC key (P3).
+    ///
+    /// Keyed BLAKE3 under the new MAC key of the direction being cut over,
+    /// over [`REKEY_LABEL`] followed by the generation little-endian.  Only
+    /// the holder of this direction's key can produce it, which is what
+    /// proves a cutover derived the same keys.
     pub fn rekey_confirm(&self, generation: u32) -> [u8; 32] {
-        let _ = (self, generation);
-        [0u8; 32]
+        let mut message = [0u8; REKEY_LABEL.len() + 4];
+        message[..REKEY_LABEL.len()].copy_from_slice(REKEY_LABEL);
+        message[REKEY_LABEL.len()..].copy_from_slice(&generation.to_le_bytes());
+        crate::mac::blake3_keyed(self.k_mac.bytes(), &message)
     }
 
     /// Verify a re-key confirm value in constant time (P3).
+    ///
+    /// A wrong value, another generation's value or one made under the other
+    /// direction's keys is `Err(Error::TagMismatch)`; the comparison has no
+    /// early exit.
     pub fn verify_rekey_confirm(
         &self,
         generation: u32,
         confirm: &[u8; 32],
     ) -> crate::Result<()> {
-        let _ = (self, generation, confirm);
-        Ok(())
+        let mut message = [0u8; REKEY_LABEL.len() + 4];
+        message[..REKEY_LABEL.len()].copy_from_slice(REKEY_LABEL);
+        message[REKEY_LABEL.len()..].copy_from_slice(&generation.to_le_bytes());
+        crate::mac::verify_keyed(self.k_mac.bytes(), &message, confirm)
     }
 
     /// XOR this direction's ChaCha20 keystream for sequence `seq`, starting
