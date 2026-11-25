@@ -31,7 +31,7 @@ use port::chan::wire;
 use port::chan::{HEADER_LEN, MAC_LEN, VERSION_AEAD};
 use port::dat::Qid;
 use port::devmnt::{Dialect, Mnt, MntIo, Negotiated};
-use port::fid::{FidEntry, FidTable};
+use port::fid::{FidEntry, FidHandle, FidTable, StatefulHandle};
 
 /// The client's opaque exchange bytes for the default handshake.
 pub const CLIENT_EXCHANGE: &[u8] = b"client exchange bytes";
@@ -987,10 +987,103 @@ impl E2eServer {
         result
     }
 
-    /// Open one sealed request and answer it (RED: every request is refused).
+    /// Open one sealed request, dispatch it and seal the reply.
+    ///
+    /// Every stateful request resolves its 8-byte header handle through
+    /// [`FidTable::resolve`]; a capability resolves through
+    /// [`FidTable::verify_cap`] and touches no FID memory (P4, P8, WIRE-08).
     pub fn handle_one(&mut self) -> core::result::Result<(), Stage> {
-        let E2eOpened { tag, .. } = self.recv_sealed()?;
-        self.rerror(tag)
+        let E2eOpened { msg, tag, handle, cap, .. } = self.recv_sealed()?;
+        match msg {
+            Msg::Tattach { fid, .. } => {
+                let entry = e2e_entry(fid, E2E_ROOT, QTDIR);
+                let new = self.table.insert(self.client_id, entry).map_err(|_| Stage::Decode)?;
+                self.reply(
+                    tag,
+                    new.to_wire(),
+                    &Exts::default(),
+                    &Msg::Rattach { qid: e2e_qid(E2E_ROOT) },
+                )
+            }
+            Msg::Twalk { newfid, wname, .. } => {
+                let entry = match self.stateful(&handle) {
+                    Ok(entry) => entry,
+                    Err(_) => return self.rerror(tag),
+                };
+                let next_path = if wname.is_empty() {
+                    entry.qid_path
+                } else if entry.qid_path == E2E_ROOT && wname[0].as_slice() == E2E_FILE_NAME {
+                    E2E_FILE
+                } else {
+                    return self.rerror(tag);
+                };
+                let qid_type = if next_path == E2E_ROOT { QTDIR } else { 0 };
+                let new = self
+                    .table
+                    .insert(self.client_id, e2e_entry(newfid, next_path, qid_type))
+                    .map_err(|_| Stage::Decode)?;
+                self.reply(
+                    tag,
+                    new.to_wire(),
+                    &Exts::default(),
+                    &Msg::Rwalk { wqid: vec![e2e_qid(next_path)] },
+                )
+            }
+            Msg::Topen { mode, .. } => {
+                let entry = match self.stateful(&handle) {
+                    Ok(entry) => entry,
+                    Err(_) => return self.rerror(tag),
+                };
+                let qid = e2e_qid(entry.qid_path);
+                let wire_cap = self.table.issue_cap(&qid, mode).to_wire();
+                let exts = Exts {
+                    stateless_cap: Some(&wire_cap),
+                    ..Exts::default()
+                };
+                // D-12: a packet carrying a capability has an all-zero handle.
+                self.reply(tag, [0u8; 8], &exts, &Msg::Ropen { qid, iounit: 0 })
+            }
+            Msg::Tread { offset, count, .. } => {
+                let path = match (&cap, FidHandle::from_wire(&handle, cap.as_ref())) {
+                    (Some(_), Ok(FidHandle::Stateless(capability))) => {
+                        if self.table.verify_cap(&capability).is_err() {
+                            // P8: a capability that fails verification closes
+                            // the connection; nothing is answered.
+                            self.teardown();
+                            return Ok(());
+                        }
+                        capability.qid_path
+                    }
+                    (None, Ok(FidHandle::Stateful(_))) => match self.stateful(&handle) {
+                        Ok(entry) => entry.qid_path,
+                        Err(_) => return self.rerror(tag),
+                    },
+                    _ => return self.rerror(tag),
+                };
+                let source: &[u8] = if path == E2E_FILE { E2E_FILE_BYTES } else { b"" };
+                let start = (offset as usize).min(source.len());
+                let end = (start + count as usize).min(source.len());
+                let data = source[start..end].to_vec();
+                let reply_handle = if cap.is_some() { [0u8; 8] } else { handle };
+                self.reply(tag, reply_handle, &Exts::default(), &Msg::Rread { data })
+            }
+            Msg::Tclunk { .. } => {
+                let parsed = match StatefulHandle::from_wire(&handle) {
+                    Ok(parsed) => parsed,
+                    Err(_) => return self.rerror(tag),
+                };
+                if self.table.clunk(self.client_id, &parsed).is_err() {
+                    return self.rerror(tag);
+                }
+                self.reply(tag, [0u8; 8], &Exts::default(), &Msg::Rclunk)
+            }
+            _ => self.rerror(tag),
+        }
+    }
+
+    fn stateful(&self, handle: &[u8; 8]) -> port::Result<FidEntry> {
+        let parsed = StatefulHandle::from_wire(handle)?;
+        self.table.resolve(self.client_id, &parsed)
     }
 
     /// Drive one re-key step and put the returned sealed packets on the wire.

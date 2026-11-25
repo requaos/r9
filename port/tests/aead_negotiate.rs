@@ -753,12 +753,12 @@ fn aead_negotiate_end_to_end_survives_a_rekey() {
         .expect("the server sends its marker");
     assert_eq!(marker.len(), 1, "the s2c marker is the last old-key packet");
     let msg = client.recv().expect("the client opens the s2c marker");
-    assert!(matches!(msg.msg, Msg::Trekey { .. }));
+    assert!(matches!(msg.msg, Msg::Rrekey { .. }), "the server's own marker is Rrekey");
     client
         .rekey(&mut client_exchange, Some(&msg.msg), now)
         .expect("the client cuts its receive direction over");
-    let ack = server.borrow_mut().recv_sealed().expect("the server opens the s2c ACK");
-    assert!(matches!(ack.msg, Msg::Rrekey { .. }));
+    let ack = server.borrow_mut().recv_sealed().expect("the server opens the c2s ACK");
+    assert!(matches!(ack.msg, Msg::Trekey { .. }), "the client's acknowledgement is Trekey");
     server
         .borrow_mut()
         .rekey(&mut server_exchange, Some(&ack.msg), now)
