@@ -171,17 +171,15 @@ impl Rekey {
         if let Some(keys) = &mut self.recv_superseded {
             keys.zeroize();
         }
-        for slot in &mut self.pending {
-            if let Some(keys) = slot {
-                keys.zeroize();
-            }
+        for keys in self.pending.iter_mut().flatten() {
+            keys.zeroize();
         }
     }
 
     /// Whether every key the re-key state holds is zero.
     fn keys_zeroized(&self) -> bool {
-        self.recv_superseded.as_ref().map_or(true, DirectionKeys::is_zeroized)
-            && self.pending.iter().all(|slot| slot.as_ref().map_or(true, DirectionKeys::is_zeroized))
+        self.recv_superseded.as_ref().is_none_or(DirectionKeys::is_zeroized)
+            && self.pending.iter().all(|slot| slot.as_ref().is_none_or(DirectionKeys::is_zeroized))
     }
 
     /// Begin an exchange: chain the previous transcript and reset the flags.
@@ -288,7 +286,7 @@ impl SendState {
 
     /// Whether this direction's keys and any superseded slot are zero.
     fn is_zeroized(&self) -> bool {
-        self.keys.is_zeroized() && self.superseded.as_ref().map_or(true, DirectionKeys::is_zeroized)
+        self.keys.is_zeroized() && self.superseded.as_ref().is_none_or(DirectionKeys::is_zeroized)
     }
 }
 
@@ -491,8 +489,12 @@ fn seal_into(
     if state.closed {
         return Err(Closed);
     }
-    // RED stub: `SEQ_HARD_LIMIT` is declared with its real value but `seal`
-    // does not consult it yet.
+    // The sender never sends sequence `u64::MAX`; with no new keys installed
+    // it closes rather than wrap (P3, D-19).
+    if seq == SEQ_HARD_LIMIT {
+        state.fail();
+        return Err(Closed);
+    }
     let tlv_len = exts.encoded_len();
     let Ok(ext_len) = u16::try_from(tlv_len) else {
         state.fail();
@@ -620,9 +622,9 @@ impl Handshake {
     /// code.  [`Handshake::finish`] is unchanged and always starts at 0.
     #[doc(hidden)]
     pub fn finish_with_send_seq(self, secret: Key, send_seq: u64) -> Session {
-        // RED stub: the chosen counter is ignored; the session starts at 0.
-        let _ = send_seq;
-        self.finish(secret)
+        let session = self.finish(secret);
+        session.send.set_seq(send_seq);
+        session
     }
 }
 
@@ -1091,9 +1093,10 @@ impl Session {
         generation: u32,
         packets: &mut Vec<Vec<u8>>,
     ) -> core::result::Result<(), Closed> {
-        // RED stub: the right generation, but the confirm is all zeros.
-        let confirm = [0u8; 32];
-        let _ = generation;
+        // The confirm is made under the new receive-direction MAC key: sealing
+        // the ACK under the other direction's keys proves nothing about the
+        // new ones (D-20 step 2, P3).
+        let confirm = self.recv_keys.rekey_confirm(generation);
         let ack = match self.send_direction {
             Direction::ClientToServer => msg::Msg::Trekey {
                 kind: msg::REKEY_ACK,
@@ -1116,9 +1119,18 @@ impl Session {
         generation: u32,
         confirm: &[u8; 32],
     ) -> core::result::Result<(), Closed> {
-        // RED stub: a verified ACK is accepted without checking the generation
-        // or the confirm value, and the superseded slot is left untouched.
-        let _ = (generation, confirm);
+        // A wrong generation, an ACK with no marker outstanding, or a failed
+        // confirm closes the connection; a valid one zeroizes the old keys
+        // (D-20 step 3, P3).
+        if generation != self.generation
+            || self.send.deadline().is_none()
+            || !self.send.verify_confirm(generation, confirm)
+        {
+            self.fail();
+            return Err(Closed);
+        }
+        self.send.zeroize_superseded();
+        self.send.clear_deadline();
         Ok(())
     }
 
@@ -1375,8 +1387,13 @@ impl Session {
     /// A deadline only fires when something calls in: whoever owns the
     /// connection must call [`Session::poll`] periodically (F4, D-20 step 4).
     pub fn poll(&mut self, now: u64) -> core::result::Result<(), Closed> {
-        // RED stub: the deadline is not checked yet.
-        let _ = now;
+        if !self.authenticated || self.send.is_closed() {
+            return Err(Closed);
+        }
+        if self.deadline_expired(now) {
+            self.fail();
+            return Err(Closed);
+        }
         Ok(())
     }
 }
