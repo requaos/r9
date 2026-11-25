@@ -84,13 +84,27 @@ pub struct StatefulHandle {
 impl StatefulHandle {
     /// The 8-byte wire form: `fid_key(4) ptr(1) shard_id(1) epoch(2)`.
     pub fn to_wire(&self) -> [u8; STATEFUL_HANDLE_LEN] {
-        [0u8; STATEFUL_HANDLE_LEN]
+        let mut out = [0u8; STATEFUL_HANDLE_LEN];
+        out[0..4].copy_from_slice(&self.fid_key.to_le_bytes());
+        out[4] = self.ptr.get();
+        out[5] = self.shard_id;
+        out[6..8].copy_from_slice(&self.epoch.to_le_bytes());
+        out
     }
 
     /// Decode the 8-byte wire form; a zero `ptr` byte is an error because a
     /// stateful handle is never all zero (D-12).
-    pub fn from_wire(_bytes: &[u8; STATEFUL_HANDLE_LEN]) -> crate::Result<StatefulHandle> {
-        Err("fid: RED stub")
+    pub fn from_wire(bytes: &[u8; STATEFUL_HANDLE_LEN]) -> crate::Result<StatefulHandle> {
+        let fid_key = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        let Some(ptr) = TinyPtr::new(bytes[4]) else {
+            return Err(
+                "fid: a StatefulHandle's ptr byte is zero (D-12: a stateful handle is never all \
+                 zero, so eight zero bytes are not one)",
+            );
+        };
+        let shard_id = bytes[5];
+        let epoch = u16::from_le_bytes([bytes[6], bytes[7]]);
+        Ok(StatefulHandle { fid_key, ptr, shard_id, epoch })
     }
 }
 
@@ -116,17 +130,36 @@ impl StatelessCap {
     /// The 24-byte wire form:
     /// `qid_path(8) qid_vers(4) qid_type(1) mode(1) epoch(2) mac_tag(8)`.
     pub fn to_wire(&self) -> [u8; STATELESS_CAP_LEN] {
-        [0u8; STATELESS_CAP_LEN]
+        let mut out = [0u8; STATELESS_CAP_LEN];
+        out[0..8].copy_from_slice(&self.qid_path.to_le_bytes());
+        out[8..12].copy_from_slice(&self.qid_vers.to_le_bytes());
+        out[12] = self.qid_type;
+        out[13] = self.mode;
+        out[14..16].copy_from_slice(&self.epoch.to_le_bytes());
+        out[16..24].copy_from_slice(&self.mac_tag);
+        out
     }
 
     /// Decode the 24-byte wire form.
-    pub fn from_wire(_bytes: &[u8; STATELESS_CAP_LEN]) -> StatelessCap {
-        StatelessCap { qid_path: 0, qid_vers: 0, qid_type: 0, mode: 0, epoch: 0, mac_tag: [0; 8] }
+    pub fn from_wire(bytes: &[u8; STATELESS_CAP_LEN]) -> StatelessCap {
+        StatelessCap {
+            qid_path: u64::from_le_bytes([
+                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+            ]),
+            qid_vers: u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]),
+            qid_type: bytes[12],
+            mode: bytes[13],
+            epoch: u16::from_le_bytes([bytes[14], bytes[15]]),
+            mac_tag: [bytes[16], bytes[17], bytes[18], bytes[19], bytes[20], bytes[21], bytes[22], bytes[23]],
+        }
     }
 
     /// The first 16 wire bytes: the part the `mac_tag` covers.
     pub fn body(&self) -> [u8; 16] {
-        [0u8; 16]
+        let wire = self.to_wire();
+        let mut out = [0u8; 16];
+        out.copy_from_slice(&wire[0..16]);
+        out
     }
 }
 
@@ -145,10 +178,22 @@ impl FidHandle {
     ///
     /// A capability with a non-zero header field is rejected (D-12).
     pub fn from_wire(
-        _header: &[u8; STATEFUL_HANDLE_LEN],
-        _cap: Option<&[u8; STATELESS_CAP_LEN]>,
+        header: &[u8; STATEFUL_HANDLE_LEN],
+        cap: Option<&[u8; STATELESS_CAP_LEN]>,
     ) -> crate::Result<FidHandle> {
-        Err("fid: RED stub")
+        match cap {
+            Some(cap_bytes) => {
+                if header.iter().any(|&byte| byte != 0) {
+                    return Err(
+                        "fid: a capability packet's 8-byte FidHandle field must be all zero \
+                         (D-12: the zero field is what makes the capability the discriminator, \
+                         and a stateful handle is never all zero)",
+                    );
+                }
+                Ok(FidHandle::Stateless(StatelessCap::from_wire(cap_bytes)))
+            }
+            None => Ok(FidHandle::Stateful(StatefulHandle::from_wire(header)?)),
+        }
     }
 }
 
@@ -200,30 +245,81 @@ const _: () = {
 
 impl FidEntry {
     /// Pack the entry into its eight-word arena form, field by field.
+    ///
+    /// The byte offsets are the `#[repr(C)]` offsets of the declaration above:
+    /// word 0 is `fid_key` then `client_id`, so the identity pair the resolve
+    /// compares is one atomic word (RESEARCH Pitfall 4).
     pub fn to_words(&self) -> [u64; 8] {
-        [0u64; 8]
+        let mut bytes = [0u8; 64];
+        bytes[0..4].copy_from_slice(&self.fid_key.to_le_bytes());
+        bytes[4..8].copy_from_slice(&self.client_id.to_le_bytes());
+        bytes[8..16].copy_from_slice(&self.qid_path.to_le_bytes());
+        bytes[16..24].copy_from_slice(&self.offset.to_le_bytes());
+        bytes[24..28].copy_from_slice(&self.qid_vers.to_le_bytes());
+        bytes[28..32].copy_from_slice(&self.iounit.to_le_bytes());
+        bytes[32..36].copy_from_slice(&self.lease_gen.to_le_bytes());
+        bytes[36..40].copy_from_slice(&self.ring_slot.to_le_bytes());
+        bytes[40..42].copy_from_slice(&self.dev_handler.to_le_bytes());
+        bytes[42..44].copy_from_slice(&self.epoch.to_le_bytes());
+        bytes[44] = self.qid_type;
+        bytes[45] = self.open_mode;
+        bytes[46..48].copy_from_slice(&self.flags.to_le_bytes());
+        bytes[48] = self.volatility;
+        bytes[49..64].copy_from_slice(&self._reserved);
+        words_from_bytes(&bytes)
     }
 
     /// Unpack the eight-word arena form into an entry.
-    pub fn from_words(_words: &[u64; 8]) -> FidEntry {
+    pub fn from_words(words: &[u64; 8]) -> FidEntry {
+        let bytes = bytes_from_words(words);
         FidEntry {
-            fid_key: 0,
-            client_id: 0,
-            qid_path: 0,
-            offset: 0,
-            qid_vers: 0,
-            iounit: 0,
-            lease_gen: 0,
-            ring_slot: 0,
-            dev_handler: 0,
-            epoch: 0,
-            qid_type: 0,
-            open_mode: 0,
-            flags: 0,
-            volatility: 0,
-            _reserved: [0; 15],
+            fid_key: u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+            client_id: u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
+            qid_path: u64::from_le_bytes([
+                bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14],
+                bytes[15],
+            ]),
+            offset: u64::from_le_bytes([
+                bytes[16], bytes[17], bytes[18], bytes[19], bytes[20], bytes[21], bytes[22],
+                bytes[23],
+            ]),
+            qid_vers: u32::from_le_bytes([bytes[24], bytes[25], bytes[26], bytes[27]]),
+            iounit: u32::from_le_bytes([bytes[28], bytes[29], bytes[30], bytes[31]]),
+            lease_gen: u32::from_le_bytes([bytes[32], bytes[33], bytes[34], bytes[35]]),
+            ring_slot: u32::from_le_bytes([bytes[36], bytes[37], bytes[38], bytes[39]]),
+            dev_handler: u16::from_le_bytes([bytes[40], bytes[41]]),
+            epoch: u16::from_le_bytes([bytes[42], bytes[43]]),
+            qid_type: bytes[44],
+            open_mode: bytes[45],
+            flags: u16::from_le_bytes([bytes[46], bytes[47]]),
+            volatility: bytes[48],
+            _reserved: {
+                let mut reserved = [0u8; 15];
+                reserved.copy_from_slice(&bytes[49..64]);
+                reserved
+            },
         }
     }
+}
+
+/// Split a 64-byte entry image into its eight little-endian words.
+fn words_from_bytes(bytes: &[u8; 64]) -> [u64; 8] {
+    let mut words = [0u64; 8];
+    for (word, chunk) in words.iter_mut().zip(bytes.chunks_exact(8)) {
+        *word = u64::from_le_bytes([
+            chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
+        ]);
+    }
+    words
+}
+
+/// The inverse of [`words_from_bytes`].
+fn bytes_from_words(words: &[u64; 8]) -> [u8; 64] {
+    let mut bytes = [0u8; 64];
+    for (chunk, word) in bytes.chunks_exact_mut(8).zip(words.iter()) {
+        chunk.copy_from_slice(&word.to_le_bytes());
+    }
+    bytes
 }
 
 /// The three volatility classes (WIRE-10, D-27).
@@ -243,29 +339,50 @@ pub enum VolatilityClass {
 
 impl VolatilityClass {
     /// The class a byte names, or an error for any other value.
-    pub fn from_byte(_byte: u8) -> crate::Result<VolatilityClass> {
-        Err("fid: RED stub")
+    pub fn from_byte(byte: u8) -> crate::Result<VolatilityClass> {
+        match byte {
+            0x20 => Ok(VolatilityClass::Immutable),
+            0x40 => Ok(VolatilityClass::Leased),
+            0x80 => Ok(VolatilityClass::Volatile),
+            _ => Err(
+                "fid: not a volatility class byte (D-27: exactly 0x20 immutable, 0x40 leased or \
+                 0x80 volatile)",
+            ),
+        }
     }
 
     /// The class as its one byte.
     pub fn as_byte(self) -> u8 {
-        0
+        self as u8
     }
 }
 
 /// Encode a [`crate::dat::Qid`] into its 13-byte wire form:
 /// `type[1] vers[4] path[8]` (the `convM2S` order `port::devmnt` reads).
-pub fn qid_encode(_qid: &crate::dat::Qid) -> [u8; 13] {
-    [0u8; 13]
+pub fn qid_encode(qid: &crate::dat::Qid) -> [u8; 13] {
+    let mut out = [0u8; 13];
+    out[0] = qid.typ;
+    out[1..5].copy_from_slice(&qid.vers.to_le_bytes());
+    out[5..13].copy_from_slice(&qid.path.to_le_bytes());
+    out
 }
 
 /// Decode the 13-byte wire form into a [`crate::dat::Qid`].
-pub fn qid_decode(_bytes: &[u8; 13]) -> crate::dat::Qid {
-    crate::dat::Qid { path: 0, vers: 0, typ: 0 }
+pub fn qid_decode(bytes: &[u8; 13]) -> crate::dat::Qid {
+    crate::dat::Qid {
+        path: u64::from_le_bytes([
+            bytes[5], bytes[6], bytes[7], bytes[8], bytes[9], bytes[10], bytes[11], bytes[12],
+        ]),
+        vers: u32::from_le_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]),
+        typ: bytes[0],
+    }
 }
 
 /// The `#G` qid path: `((ctx_id & 0xFFFFFF) << 8) | (node_type & 0xFF)`
 /// (WIRE-10).
-pub fn gpu_qid_path(_ctx_id: u32, _node_type: u8) -> u64 {
-    0
+pub fn gpu_qid_path(ctx_id: u32, node_type: u8) -> u64 {
+    // `node_type` is already a `u8`, so `node_type & 0xFF` from the published
+    // formula is an identity operation and is left off to keep clippy quiet;
+    // the wide mask on `ctx_id` is real and stays.
+    (((ctx_id & 0x00FF_FFFF) as u64) << 8) | node_type as u64
 }
