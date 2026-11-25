@@ -742,14 +742,22 @@ impl PacketMac {
 | A16 | smoltcp's `poll` takes a caller-supplied timestamp, as used in `port/src/devip` | F4 | None; the recommendation does not depend on it |
 | A17 | The engine's own code adds well under the 1 MB of x86_64 `.text` headroom | Pitfall 9 | If wrong, `.text` grows to 4 MiB; planned as a measured stop |
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+Every item below was resolved on 2026-11-24, by an owner decision in `04-CONTEXT.md`, by routing to an owner checkpoint in plan 04-01, or in its own text. CONTEXT.md wins where it differs from this file.
 
 1. **C1 to C5 above.** Owner checkpoint before the first wire pin.
+   RESOLVED: the owner decided all five after research; they are not asked again. C1 (header length) is D-06, 28 bytes. C2 (volatility class against the Plan 9 qid type bits) is D-27, the class travels in its own byte. C3 (`Rerror`, `Tflush`, `Rflush` missing from the registry) is D-28. C4 (which stream message carries data) is D-09, `Rstream`. C5 (where the exchange bytes travel) is D-16, `Tread` and `Twrite` on the auth fid.
 2. **IG-D11 lock.** Not decided (CONTEXT). The plan must ask; a natural place is the same checkpoint, or the D-10 documents plan. Recommendation to offer: lock amended, with the amendments named (MAC scope, key scope, capability TLV, nonce rule), and the still-open items listed as outside the lock (real key exchange N5, page-level check N11, qtype bits C2).
+   RESOLVED: routed to the owner checkpoint in plan 04-01 Task 3, which records `DECISION IG-D11: lock-amended` or `DECISION IG-D11: hold` in `04-WIRE-DECISIONS.md`; plan 04-13 writes the PROJECT.md row from that line. The owner's answer is not assumed here.
 3. **Does the owner want `blake3`'s `zeroize` feature on?** (Pitfall 6.) What we know: without it, per-packet hasher state is not scrubbed. Recommendation: ask at the checkpoint; default to off and state the limit.
+   RESOLVED: routed to the owner checkpoint in plan 04-01 Task 2 as proposal P6 (proposed value: off, with the limit stated in the `session.rs` module doc); plan 04-03 implements whichever value the `DECISION P6` line gives. The owner's answer is not assumed here.
 4. **Where does `client_id` come from?** `FidEntry.client_id` is "Authenticated client node ID". This phase has no authentication, so the test server assigns one per connection. Phase 6 defines the real source.
+   RESOLVED: for this phase the test server assigns one `client_id` per connection (plan 04-11); the authenticated source is Phase 6 work and outside this phase.
 5. **Who drives `poll(now)` in a kernel?** Nobody this phase (D-23). Recorded so Phase 6 does not assume the deadline fires by itself.
+   RESOLVED: nobody in this phase (D-23). The transport takes `now` from its caller, and plan 04-08's summary records for Phase 6 that no kernel code calls `poll(now)` yet.
 6. **Should `test-9p` also be a CI step?** `cargo xtask test` already runs the same files. Phase 2's review item WR-01 (xtask's own unit tests are not in `cargo xtask test` or CI) is still open and applies to the new `test9p.rs` and `lintcontract.rs` tests: run `cargo test -p xtask` in the validation set.
+   RESOLVED: no. `cargo xtask test-9p` stays a standalone xtask step in this phase and is not added to `cargo xtask test` or to CI (CONTEXT "Claude's Discretion", layout of `cargo xtask test-9p`); `cargo xtask test` already runs the same test files. Wiring it into CI can be revisited when the engine has a live consumer. `cargo test -p xtask` is run in the plans' verification and in the closing suite (plan 04-14), which covers the WR-01 gap for the new xtask tests.
 
 ## Environment Availability
 

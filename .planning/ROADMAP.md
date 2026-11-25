@@ -200,7 +200,46 @@ Plans:
   2. Altering any authenticated byte of a packet makes the receiver drop the connection and zero its channel state without parsing the packet; a replayed packet with a stale nonce is dropped; a payload spliced onto another channel fails MAC verification.
   3. `FidTable` dereference resolves a `FidEntry` in exactly one memory read, any replica holding the domain secret verifies a `StatelessCap` with zero server FID memory, and the failover sweep returns exactly `active \ reclaimed`.
   4. A `Tauth` then `Tattach` exchange derives per-connection, per-direction session keys that are zeroized on teardown, and a plain-9P2000 peer still works, so the system still boots to rio.
-**Plans**: TBD
+**Plans**: 17 plans in 11 waves. Five owner checkpoints: the one-way wire proposals P1 to P8 and the IG-D11 lock (both in 04-01), the phase-end review of the whole `port/src` change (04-14), and the branch-push stop on the x86_64 Linux host followed by `main` push approval (04-15). Plans 04-14 and 04-15 run on the main working tree, so `workflow.use_worktrees` must be off before wave 10.
+
+**Wave 1**
+- [ ] 04-01-PLAN.md — kernel byte baseline; owner decisions on wire proposals P1 to P8 and the IG-D11 lock
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 04-02-PLAN.md — tracer: `port` to `crypto`/`ds` dependency edge with the lint-rule change, session derivation, one sealed 28-byte-header packet
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 04-03-PLAN.md — `crypto::session` complete: known-answer vector, transcript hash, zeroization, capability tag, re-key confirm
+- [ ] 04-04-PLAN.md — `port::chan` submodules, pinned header offsets, framing bounds, verified-packet typestate, opcode registry
+- [ ] 04-09-PLAN.md — `ds` slot clearing on remove; handle, capability, entry, qid and volatility-class layouts in `port::fid`
+- [ ] 04-17-PLAN.md — `cargo xtask test-9p` subcommand
+
+**Wave 4** *(blocked on Wave 3 completion)*
+- [ ] 04-05-PLAN.md — message bodies for every opcode, page-aligned data bodies
+- [ ] 04-06-PLAN.md — six extension records over 64-bit aligned TLVs
+- [ ] 04-10-PLAN.md — `FidTable` / `FidShard`: one-read resolve, stateless capabilities, failover sweep
+
+**Wave 5** *(blocked on Wave 4 completion)*
+- [ ] 04-07-PLAN.md — transport engine: plain-framed handshake, exchange seam, fail-closed path that zeroizes
+
+**Wave 6** *(blocked on Wave 5 completion)*
+- [ ] 04-16-PLAN.md — strict sequence check, replay and splice pins, ordered send lock
+
+**Wave 7** *(blocked on Wave 6 completion)*
+- [ ] 04-08-PLAN.md — in-band re-key: threshold, marker, acknowledgement, deadline, no counter wrap
+
+**Wave 8** *(blocked on Wave 7 completion)*
+- [ ] 04-11-PLAN.md — `devmnt` negotiation branch with the plain path unchanged; one whole sealed session end to end
+
+**Wave 9** *(blocked on Wave 8 completion)*
+- [ ] 04-12-PLAN.md — `test-9p` complete; `UNSAFE-AUDIT.md` update
+- [ ] 04-13-PLAN.md — RFC amendments, compendium listing 9.9, PROJECT.md and REQUIREMENTS.md records
+
+**Wave 10** *(blocked on Wave 9 completion; main working tree)*
+- [ ] 04-14-PLAN.md — owner review of the `port/src` change, closing suites, kernel byte evidence, aarch64 quick pass
+
+**Wave 11** *(blocked on Wave 10 completion; main working tree)*
+- [ ] 04-15-PLAN.md — owner stop on the x86_64 Linux host, then `main`
 **Open questions**: W1 (header layout and AAD contents), W2 (24-byte `StatelessCap` in an 8-byte handle), W4 (session key scope); W3 also bears here. Notes N1 and N5 (`factotum` key exchange: Noise versus DP9IK, and `factotum` is read-only Harvey C until Phase 12). Landing sites `port/src/chan.rs` and `port/src/fid.rs` do not exist at HEAD (devmnt lives in `port/src/devmnt.rs`); edits under `port/src` need owner approval with the diff shown first. `cargo xtask test-9p` is new harness work.
 
 ### v3.1 Secure Memory and Cluster Fabric (Planned)
@@ -396,7 +435,7 @@ Phases execute in numeric order: 1 → 2 → 3 → … → 16 (decimal insertion
 | 1. Stage P0 - Cross-Build Harness | v3.0 | 34/34 | Complete | 2026-11-23 |
 | 2. Guide Phase 0 - Design Lock and rfork Flag Reservation | v3.0 | 6/6 | Complete | 2026-11-24 |
 | 3. Guide Phase 1 - crypto/ and ds/ Foundations | v3.0 | 13/13 | Complete | 2026-11-24 |
-| 4. Guide Phase 2 - 9P2000.aead Transport and FidTable | v3.0 | 0/TBD | Not started | - |
+| 4. Guide Phase 2 - 9P2000.aead Transport and FidTable | v3.0 | 0/17 | Planned | - |
 | 5. Guide Phase 3 - Cryptographic Memory and Zero-Copy DMA Paging | v3.1 | 0/TBD | Not started | - |
 | 6. Guide Phase 4 - Distributed 9P Extensions and Service Discovery | v3.1 | 0/TBD | Not started | - |
 | 7. Guide Phase 5 - Process Lifecycle and Notes | v3.1 | 0/TBD | Not started | - |
