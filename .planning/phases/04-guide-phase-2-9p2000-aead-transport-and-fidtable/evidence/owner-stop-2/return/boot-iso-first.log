@@ -1,0 +1,5 @@
+HEAD=611dbb435bf6ca6d725d97c07efe2b3bf5cac58c
+this derivation will be built:
+  /nix/store/52b4pshfhycrz61mp1mga6403my5fa3y-r9-boot-iso-611dbb4.drv
+building '/nix/store/52b4pshfhycrz61mp1mga6403my5fa3y-r9-boot-iso-611dbb4.drv'...
+EXIT=0

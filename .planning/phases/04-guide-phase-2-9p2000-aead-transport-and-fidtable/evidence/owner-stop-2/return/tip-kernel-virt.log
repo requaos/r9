@@ -1,0 +1,5 @@
+HEAD=611dbb435bf6ca6d725d97c07efe2b3bf5cac58c
+this derivation will be built:
+  /nix/store/pljrcsnk3l5g7lrc04pdl162p6j21jdp-r9-kernel-virt-611dbb4.drv
+building '/nix/store/pljrcsnk3l5g7lrc04pdl162p6j21jdp-r9-kernel-virt-611dbb4.drv'...
+EXIT=0

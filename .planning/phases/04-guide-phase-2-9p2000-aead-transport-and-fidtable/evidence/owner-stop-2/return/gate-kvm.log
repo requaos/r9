@@ -1,0 +1,763 @@
+HEAD=611dbb435bf6ca6d725d97c07efe2b3bf5cac58c
+r9 devshell: rustc 1.95.0-nightly (842bd5be2 2026-01-29)
+QEMU emulator version 11.1.2
+apps: nix run .#build | nix run .#boot-virt | nix run .#default
+harvey supply: R9_HARVEY_DIR_ARM64=/nix/store/b2i0hcbxxmyjlh7drl94s0lp3iq7n04a-harvey-tree-arm64-0 (lazy; realised on first use)
+harvey supply: R9_HARVEY_DIR_AMD64=/nix/store/002vay29nmgw2d81nvmi2i6adgz7h1md-harvey-tree-amd64-0 (lazy; realised on first use)
+harvey supply: R9_HARVEY_REFERENCE_AMD64=/nix/store/ydavfxqx6vhlcar7mmcxi1llhjg0n69x-harvey-reference-amd64-0 (lazy; realised on first use)
+harvey supply: R9_HARVEY_REFERENCE_ARM64=/nix/store/zps34qpcmsd0s2mkf251hhc9sjsnqvq5-harvey-reference-arm64-0 (lazy; realised on first use)
+harvey supply: R9_AUTHDOMAIN_GEN=/nix/store/gysm8xfgmlwkj6kcf6zdzkc9pzmi20ah-harvey-authdomain-gen-0/bin/authdomain-gen
+warning: field `frame_len` is never read
+   --> xtask/src/pcap.rs:228:9
+    |
+219 | pub struct Icmpv4Frame {
+    |            ----------- field in this struct
+...
+228 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Icmpv4Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `frame_len` is never read
+   --> xtask/src/pcap.rs:375:9
+    |
+359 | pub struct BootpFrame {
+    |            ---------- field in this struct
+...
+375 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `BootpFrame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `dst_mac` and `frame_len` are never read
+   --> xtask/src/pcap.rs:569:9
+    |
+566 | pub struct Icmpv6Frame {
+    |            ----------- fields in this struct
+...
+569 |     pub dst_mac: [u8; 6],
+    |         ^^^^^^^
+...
+579 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Icmpv6Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `src_mac`, `dst_mac`, and `frame_len` are never read
+   --> xtask/src/pcap.rs:723:9
+    |
+721 | pub struct Tcpv4Frame {
+    |            ---------- fields in this struct
+722 |     /// Ethernet source/destination MAC.
+723 |     pub src_mac: [u8; 6],
+    |         ^^^^^^^
+724 |     pub dst_mac: [u8; 6],
+    |         ^^^^^^^
+...
+737 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Tcpv4Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: `xtask` (bin "xtask") generated 4 warnings
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.02s
+     Running `target/debug/xtask gate --arch x86-64 --accel kvm`
+gate: venue accel=kvm cpu=host run=23987-1795619019
+gate: tree /nix/store/002vay29nmgw2d81nvmi2i6adgz7h1md-harvey-tree-amd64-0 (store path — nix store verify after the run)
+authdomain-gen: generated /home/req/code/r9/target/images/x86_64/cpu.authdom: label=DEMO authdom=DEMO-harvey authid=bootes users=3
+authdomain-gen: DEMO material is throwaway — never reuse outside a gate image
+authdomain-gen: no authdomain.local — generating ephemeral DEMO material
+image: authdomain generated a fresh p9sk1 domain for "cpu" at /home/req/code/r9/target/images/x86_64/cpu.authdom (authdom DEMO-harvey)
+image: authdomain pairing verified over the staged copies for "cpu"
+image: creds /home/req/code/r9/target/images/x86_64/cpu.creds (mode 0600)
+gate: image cpu /home/req/code/r9/target/images/x86_64/cpu.paq sha256 2a741f89b5830057028a484f3cc7df09f8c54a1d6d53eb04926ae2a3c16cc733 members 4442
+   Compiling compiler_builtins v0.1.160 (/nix/store/ypvsp48ial67d5frhk4y86crjsy764mp-rust-default-1.95.0-nightly-2026-01-30/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins)
+   Compiling core v0.0.0 (/nix/store/ypvsp48ial67d5frhk4y86crjsy764mp-rust-default-1.95.0-nightly-2026-01-30/lib/rustlib/src/rust/library/core)
+   Compiling blake3 v1.8.7
+   Compiling heapless v0.9.3
+   Compiling smoltcp v0.14.0
+   Compiling zerocopy v0.8.27
+   Compiling x86 v0.52.0
+   Compiling alloc v0.0.0 (/nix/store/ypvsp48ial67d5frhk4y86crjsy764mp-rust-default-1.95.0-nightly-2026-01-30/lib/rustlib/src/rust/library/alloc)
+   Compiling typenum v1.20.1
+   Compiling cmov v0.5.4
+   Compiling cfg-if v1.0.5
+   Compiling cpufeatures v0.3.1
+   Compiling byteorder v1.5.0
+   Compiling bitflags v1.3.2
+   Compiling constant_time_eq v0.4.2
+   Compiling stable_deref_trait v1.2.1
+   Compiling arrayvec v0.7.8
+   Compiling adler2 v2.0.1
+   Compiling managed v0.8.0
+   Compiling zeroize v1.9.2
+   Compiling ds v0.1.0 (/home/req/code/r9/ds)
+   Compiling bitflags v2.9.4
+   Compiling bit_field v0.10.3
+   Compiling bitstruct v0.1.1
+   Compiling raw-cpuid v10.7.0
+   Compiling static_assertions v1.1.0
+   Compiling miniz_oxide v0.9.1
+   Compiling hash32 v0.3.1
+   Compiling ctutils v0.4.8
+   Compiling hybrid-array v0.4.15
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling inout v0.2.6
+   Compiling digest v0.11.3
+   Compiling cipher v0.5.2
+   Compiling hmac v0.13.0
+   Compiling sha2 v0.11.1
+   Compiling hkdf v0.13.0
+   Compiling chacha20 v0.10.2
+   Compiling crypto v0.1.0 (/home/req/code/r9/crypto)
+   Compiling port v0.1.0 (/home/req/code/r9/port)
+warning: unused import: `alloc::string::String`
+  --> port/src/devip.rs:57:5
+   |
+57 | use alloc::string::String;
+   |     ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> port/src/allocator.rs:608:13
+    |
+608 |         let mut walk = |head: Option<Idx>, mark: &mut dyn FnMut(Idx)| {
+    |             ----^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `flags` is never used
+   --> port/src/devip/netlog.rs:103:15
+    |
+103 | pub(crate) fn flags() -> u32 {
+    |               ^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `TCPSTAT_MAX_CONN` is never used
+    --> port/src/devip/proto.rs:2010:18
+     |
+2010 | pub(crate) const TCPSTAT_MAX_CONN: usize = 0;
+     |                  ^^^^^^^^^^^^^^^^
+
+warning: constant `TCPSTAT_MAX_SEGMENT` is never used
+    --> port/src/devip/proto.rs:2011:18
+     |
+2011 | pub(crate) const TCPSTAT_MAX_SEGMENT: usize = 1;
+     |                  ^^^^^^^^^^^^^^^^^^^
+
+warning: `port` (lib) generated 5 warnings (run `cargo fix --lib -p port` to apply 2 suggestions)
+   Compiling x86_64 v0.1.0 (/home/req/code/r9/x86_64)
+warning: unused import: `heap_census`
+  --> x86_64/src/allocator.rs:51:25
+   |
+51 | pub(crate) use global::{heap_census, heap_stats};
+   |                         ^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `port::println`
+  --> x86_64/src/platform/q35/netgate.rs:38:5
+   |
+38 | use port::println;
+   |     ^^^^^^^^^^^^^
+
+warning: function `heap_census` is never used
+  --> x86_64/src/allocator.rs:36:19
+   |
+36 |     pub(crate) fn heap_census() -> (alloc::vec::Vec<(usize, usize)>, alloc::vec::Vec<(usize, usize)>) {
+   |                   ^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `flags` is never used
+  --> x86_64/src/cpu.rs:35:15
+   |
+35 | pub(crate) fn flags() -> Flags {
+   |               ^^^^^
+
+warning: function `sti` is never used
+  --> x86_64/src/cpu.rs:78:15
+   |
+78 | pub(crate) fn sti() {
+   |               ^^^
+
+warning: function `cli` is never used
+  --> x86_64/src/cpu.rs:87:15
+   |
+87 | pub(crate) fn cli() {
+   |               ^^^
+
+warning: associated function `new` is never used
+   --> x86_64/src/dat.rs:506:12
+    |
+497 | impl Flags {
+    | ---------- associated function in this implementation
+...
+506 |     pub fn new(raw: u64) -> Self {
+    |            ^^^
+
+warning: constant `PINGPONG_N` is never used
+  --> x86_64/src/platform/q35/netgate.rs:44:11
+   |
+44 | pub const PINGPONG_N: u32 = 256;
+   |           ^^^^^^^^^^
+
+warning: constant `TXBULK_N` is never used
+  --> x86_64/src/platform/q35/netgate.rs:48:11
+   |
+48 | pub const TXBULK_N: u32 = 4096;
+   |           ^^^^^^^^
+
+warning: constant `WAIT_TICKS` is never used
+  --> x86_64/src/platform/q35/netgate.rs:51:7
+   |
+51 | const WAIT_TICKS: u64 = 300;
+   |       ^^^^^^^^^^
+
+warning: constant `ARP_REQUEST` is never used
+  --> x86_64/src/platform/q35/netgate.rs:76:7
+   |
+76 | const ARP_REQUEST: [u8; 60] = [
+   |       ^^^^^^^^^^^
+
+warning: type alias `Stats` is never used
+  --> x86_64/src/platform/q35/netgate.rs:94:6
+   |
+94 | type Stats = [(u16, u16, u16, u32, u32); 2];
+   |      ^^^^^
+
+warning: function `progress` is never used
+   --> x86_64/src/platform/q35/netgate.rs:100:4
+    |
+100 | fn progress(now: u16, base: u16) -> u32 {
+    |    ^^^^^^^^
+
+warning: function `reconcile_pingpong` is never used
+   --> x86_64/src/platform/q35/netgate.rs:110:4
+    |
+110 | fn reconcile_pingpong(base: &Stats, now: &Stats, n: u32) -> Result<(), &'static str> {
+    |    ^^^^^^^^^^^^^^^^^^
+
+warning: function `reconcile_txbulk` is never used
+   --> x86_64/src/platform/q35/netgate.rs:139:4
+    |
+139 | fn reconcile_txbulk(base: &Stats, now: &Stats, n: u32) -> Result<u32, &'static str> {
+    |    ^^^^^^^^^^^^^^^^
+
+warning: function `run` is never used
+   --> x86_64/src/platform/q35/netgate.rs:161:8
+    |
+161 | pub fn run() {
+    |        ^^^
+
+warning: function `wait_rx_retired` is never used
+   --> x86_64/src/platform/q35/netgate.rs:270:4
+    |
+270 | fn wait_rx_retired(ops: &port::devether::EtherDriverOps, base: u16, n: u32) -> bool {
+    |    ^^^^^^^^^^^^^^^
+
+warning: function `wait_tx_retired` is never used
+   --> x86_64/src/platform/q35/netgate.rs:290:4
+    |
+290 | fn wait_tx_retired(ops: &port::devether::EtherDriverOps, base: u16, n: u32) -> bool {
+    |    ^^^^^^^^^^^^^^^
+
+warning: function `print_ifstats` is never used
+   --> x86_64/src/platform/q35/netgate.rs:308:4
+    |
+308 | fn print_ifstats(s: &Stats) {
+    |    ^^^^^^^^^^^^^
+
+warning: constant `PRINT_EVERY` is never used
+  --> x86_64/src/platform/q35/timer.rs:47:7
+   |
+47 | const PRINT_EVERY: u64 = TICKS_PER_SEC;
+   |       ^^^^^^^^^^^
+
+warning: enum `IntrStatus` is never used
+   --> x86_64/src/trap.rs:680:10
+    |
+680 | pub enum IntrStatus {
+    |          ^^^^^^^^^^
+
+warning: function `intrstatus` is never used
+   --> x86_64/src/trap.rs:773:4
+    |
+773 | fn intrstatus() -> IntrStatus {
+    |    ^^^^^^^^^^
+
+warning: function `spllo` is never used
+   --> x86_64/src/trap.rs:778:8
+    |
+778 | pub fn spllo() -> IntrStatus {
+    |        ^^^^^
+
+warning: function `splhi` is never used
+   --> x86_64/src/trap.rs:784:8
+    |
+784 | pub fn splhi() -> IntrStatus {
+    |        ^^^^^
+
+warning: function `splx` is never used
+   --> x86_64/src/trap.rs:790:8
+    |
+790 | pub fn splx(x: IntrStatus) -> IntrStatus {
+    |        ^^^^
+
+warning: `x86_64` (bin "x86_64") generated 25 warnings (run `cargo fix --bin "x86_64" -p x86_64` to apply 2 suggestions)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 15.15s
+mb2: header at file offset 0x1008 validated on the stripped ISO kernel (magic/arch/length/checksum/end tag)
+iso: module /home/req/code/r9/target/images/x86_64/cpu.paq staged at /boot/bootfs.paq
+iso: kernel cmdline append "init=/amd64/init -c" (mb2 tag 1, the bootconf carrier)
+xorriso 1.5.8.pl02 : RockRidge filesystem manipulator, libburnia project.
+
+xorriso : NOTE : Environment variable SOURCE_DATE_EPOCH encountered with value 315532800
+Drive current: -outdev 'stdio:target/boot-q35cpu.iso'
+Media current: stdio file, overwriteable
+Media status : is blank
+Media summary: 0 sessions, 0 data blocks, 0 data,  357g free
+Added to ISO image: directory '/'='/tmp/nix-shell.BuQDOw/grub.R8Sa5y'
+xorriso : UPDATE :     356 files added in 1 seconds
+Added to ISO image: directory '/'='/home/req/code/r9/target/iso-q35cpu'
+xorriso : UPDATE :     361 files added in 1 seconds
+xorriso : NOTE : Copying to System Area: 512 bytes from file '/nix/store/jniwmlg4zv2r4baccllbizddnh1scfjr-grub-2.14/lib/grub/i386-pc/boot_hybrid.img'
+ISO image produced: 19721 sectors
+Written to medium : 19721 sectors at LBA 0
+Writing to 'stdio:target/boot-q35cpu.iso' completed successfully.
+
+gate: iso /home/req/code/r9/target/boot-q35cpu.iso 
+gate: leg rio (capture /home/req/code/r9/target/gate/23987-1795619019/rio.log)
+spawn qemu-system-x86_64 -M q35 -cpu host -smp 1 -m 1024M -accel kvm -cdrom /home/req/code/r9/target/boot-q35cpu.iso -netdev user,id=n0,hostfwd=tcp:127.0.0.1:17010-:17010,hostfwd=tcp:127.0.0.1:5670-:567 -device virtio-net-pci-non-transitional,netdev=n0 -nographic -name r9x64dtgate-23987-1795619019
+c[?7l[2J[0mSeaBIOS (version rel-1.17.0-0-gb52ca86e094d-prebuilt.qemu.org)
+
+
+iPXE (http://ipxe.org) 00:02.0 CA00 PCI2.10 PnP PMM+3EFD1B50+3EF31B50 CA00
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from Hard Disk...
+Boot failed: could not read the boot disk
+
+Booting from DVD/CD...
+[0;30;47mWelcome to GRUB[H[J[1;1H  Booting `r9'
+
+!
+
+
+r9 from the Internet
+Machine information:
+q35: memory 0x0..0x9fc00 (0x9fc00) available
+q35: memory 0x9fc00..0xa0000 (0x400) reserved
+q35: memory 0xf0000..0x100000 (0x10000) reserved
+q35: memory 0x100000..0x3ffdf000 (0x3fedf000) available
+q35: memory 0x3ffdf000..0x40000000 (0x21000) reserved
+q35: memory 0xb0000000..0xc0000000 (0x10000000) reserved
+q35: memory 0xfed1c000..0xfed20000 (0x4000) reserved
+q35: memory 0xfeffc000..0xff000000 (0x4000) reserved
+q35: memory 0xfffc0000..0x100000000 (0x40000) reserved
+q35: acpi rsdt 0x3ffe2345 (mb2 RSDP tag — 13-04 walks it)
+q35: acpi rsdt 0x3ffe2345 via mb2 acpi tag (5 entries)
+q35: mcfg 0xb0000000 buses 0x0-0xff (seg 0)
+q35: lapic 0xfee00000 (madt local intc)
+q35: ioapic 0xfec00000 gsib 0 (id 0)
+q35: intsrc bus 0 source 0 -> gsi 2 flags 0x0
+q35: intsrc bus 0 source 5 -> gsi 5 flags 0xd
+q35: intsrc bus 0 source 9 -> gsi 9 flags 0xd
+q35: intsrc bus 0 source 10 -> gsi 10 flags 0xd
+q35: intsrc bus 0 source 11 -> gsi 11 flags 0xd
+q35: hpet 0xfed00000
+pciexbar: 0xb0000001 -> 0xb0000001
+pci: virtio-net 1af4:1041 at 00:02.0 rev 01 pin 1 (inta) bars 2
+pci: inta -> gsi 22 (q35 root slot 2, pirq G: 16+6)
+Memory usage:
+  Used:		0x00000006800000
+  Total:	0x0000003ffdf000
+random: source=rdrand
+lapic: cpuid leaf-1 ecx: x2apic=true tsc-deadline=true
+lapic: x2apic live (msr 0x800 map; lint0/1 masked, no pic)
+timer: 2495874420 Hz (pit 1193182 Hz reference), TscDeadline mode, armed
+ioapic: id 0 version 0x11 rtes 23 gsib 0 (madt 0xfec00000)
+pci: bar4 pa 0xfe000000 size 0x4000 (firmware) readback 0xfe000000
+pci: caps common@0x0+0x1000 notify@0x3000 isr@0x1000 device@0x2000 mult 4
+virtio-net: features offered 0x10130bf8024 negotiated 0x100010020
+virtio-net: rx pre-posted 128 buffers qsize 256
+ioapic: gsi 22 -> vector 0x21 (level)
+#l0: virtio: 1000Mbps: 52:54:00:12:34:56
+fpu: kernel-SIMD selftest ok (user state parked and restored across the section; xor_fold16 0x1983c6d50a18d707c9d74d9a42c59f27)
+q35: module @0x6800000 +0x14fc102 (mb2 tag 3, stashed)
+devenv: seeded cputype=amd64 nobootprompt=embed readparts=0
+devenv: bootconf init=/amd64/init -c
+q35: paqfs root mounted from module (22003970 bytes)
+devroot: /boot/boot open (159349 bytes)
+exec: entering ring 3 pc=0x2054fa sp=0x7fffffffef78 path=/boot/boot argv=[boot]
+paqfs...version...cpu.stage: Wed Nov 25 15:03:49 GMT 2026
+fingerprint: b8fddf9b18c6eca19a9c58ecaf1bf2cb540e6cce
+process 2 exited: ""
+syscall 10 unimplemented (pid 1 boot)
+time...
+boot: opening #c/swap: namec: does not exist
+init: can't open #c/sysname: namec: does not exist
+syscall 10 unimplemented (pid 1 init)
+process 6 exited: ""
+process 7 exited: ""
+process 8 exited: ""
+process 9 exited: ""
+cpurc: PAIR-OK
+process 10 exited: ""
+#I0: devip attached
+process 11 exited: ""
+process 12 exited: ""
+process 13 exited: ""
+devcons: random seeded
+devip: medium ether bound #l0
+process 14 exited: ""
+cpurc: ETHER-OK
+process 15 exited: ""
+syscall 10 unimplemented (pid 16 hmntgen)
+process 16 exited: ""
+3 keys read
+process 18 exited: ""
+process 20 exited: ""
+process 21 exited: ""
+cpurc: KEYFS-OK
+process 22 exited: ""
+process 24 exited: ""
+process 25 exited: ""
+process 26 exited: ""
+cpurc: AUTHSRV-LISTEN
+process 27 exited: ""
+process 28 exited: ""
+process 29 exited: ""
+process 30 exited: ""
+syscall 10 unimplemented (pid 31 hfactotum)
+factotum warning: cannot chmod 666 /srv/factotum: wstat: device does not implement wstat
+process 31 exited: ""
+process 33 exited: ""
+process 34 exited: ""
+process 35 exited: ""
+process 36 exited: ""
+cpurc: FACTOTUM-OK
+process 37 exited: ""
+devmnt: server error: file does not exist
+process 38 exited: ""
+ Feb  7 01:28:16 started on tcp
+process 39 exited: ""
+devmnt: server error: file does not exist
+devmnt: server error: file does not exist
+process 41 exited: ""
+process 43 exited: ""
+process 44 exited: ""
+process 45 exited: ""
+cpurc: LISTEN-17010
+process 46 exited: ""
+cpurc: DONE
+process 47 exited: ""spawn bash -c R9_RUN_ID=r9x64dtgate-dt-23987-1795619019 exec -a r9x64dtgate-dt-23987-1795619019 /nix/store/y8h5ana2drnzs2fdx6fxgr74bwmzi8y9-drawterm-19.06/bin/drawterm -s '' -O cpu=127.0.0.1,auth=tcp!127.0.0.1!5670,user=glenda
+
+process 5 exited: ""
+process 4 exited: ""
+
+init: starting /bin/rc
+% devmnt: server error: file does not exist
+ Feb  7 01:28:16 tcp call for tcp17010 on chan /net/tcp/2 (10.0.2.2)
+devmnt: server error: file does not exist
+devmnt: server error: not found
+devmnt: server error: not found
+ Feb  7 01:28:16 tr-ok glenda@glenda(unknown) -> glenda@bootes
+process 50 exited: ""
+syscall 10 unimplemented (pid 49 tcp17010)
+process 53 exited: ""
+process 54 exited: ""
+process 55 exited: ""
+process 56 exited: ""
+process 57 exited: "namec: device has no create"
+process 58 exited: ""
+devmnt: server error: './mnt/wsys' does not exist
+process 60 exited: "false"
+process 61 exited: ""
+process 62 exited: ""
+process 63 exited: ""
+devmnt: server error: './mnt/wsys' does not exist
+process 64 exited: "false"
+process 65 exited: "false"
+process 66 exited: ""
+process 67 exited: ""
+process 68 exited: ""
+ls /srv
+/srv/boot
+/srv/factotum
+process 69 exited: ""
+% process 71 exited: ""
+process 70 exited: ""
+devmnt: server error: './dev/label' file does not exist
+devmnt: server error: './dev/winname' file does not exist
+ls /srv
+/srv/boot
+/srv/factotum
+/srv/plumb.glenda.71
+/srv/rio.glenda.74
+/srv/riowctl.glenda.74
+process 80 exited: ""
+% GATE-PASS rio-serving
+drawterm-gate: stage ok — banner
+drawterm-gate: stage ok — bootconf
+drawterm-gate: stage ok — paqfs
+drawterm-gate: stage ok — version
+drawterm-gate: stage ok — hostfwd-17010-listening (127.0.0.1:17010 present in the host listening table)
+drawterm-gate: stage ok — hostfwd-5670-listening (127.0.0.1:5670 present in the host listening table)
+drawterm-gate: stage ok — pairing-ok
+drawterm-gate: stage ok — ether-ok
+drawterm-gate: stage ok — keyfs-ok
+drawterm-gate: stage ok — authsrv-listen
+drawterm-gate: stage ok — factotum-ok
+drawterm-gate: stage ok — listen-17010
+drawterm-gate: stage ok — ladder-done
+drawterm-gate: Xvfb ready (DISPLAY=:0.0, -nolisten tcp)
+drawterm-gate: spawned drawterm on a pty (mode rio, argv0 tag r9x64dtgate-dt-23987-1795619019, user glenda)
+drawterm-gate: feed ok — XTEST password entry into the drawterm window (48234497)
+drawterm-gate: stage ok — session window quiet (rio draws; no pty text expected)
+drawterm-gate: stage ok — serial console rc prompt (init's handoff after cpurc: DONE)
+drawterm-gate: stage ok — rio budget elapsed (60 s)
+drawterm-gate: no pair after poll 1 — sent the documented manual start (plumber; rio)
+drawterm-gate: stage ok — serial /srv shows rio and riowctl (D-28 marker)
+drawterm-gate: post-pass ok — zero cpurc: FAIL in the capture
+drawterm-gate: post-pass ok — zero kernel panic markers (drawterm's own sysfatal exit pair excluded)
+drawterm-gate: post-pass ok — the per-bake DEMO password redacted from the retained capture (T-01-58)
+drawterm-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, encrypted drawterm session, serial /srv shows rio + riowctl (GATE-PASS rio-serving)
+gate: leg control-noG (capture /home/req/code/r9/target/gate/23987-1795619019/control-noG.log)
+spawn qemu-system-x86_64 -M q35 -cpu host -smp 1 -m 1024M -accel kvm -cdrom /home/req/code/r9/target/boot-q35cpu.iso -netdev user,id=n0,hostfwd=tcp:127.0.0.1:17010-:17010,hostfwd=tcp:127.0.0.1:5670-:567 -device virtio-net-pci-non-transitional,netdev=n0 -nographic -name r9x64dtgate-23987-1795619019
+c[?7l[2J[0mSeaBIOS (version rel-1.17.0-0-gb52ca86e094d-prebuilt.qemu.org)
+
+
+iPXE (http://ipxe.org) 00:02.0 CA00 PCI2.10 PnP PMM+3EFD1B50+3EF31B50 CA00
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from Hard Disk...
+Boot failed: could not read the boot disk
+
+Booting from DVD/CD...
+[0;30;47mWelcome to GRUB[H[J[1;1H  Booting `r9'
+
+!
+
+
+r9 from the Internet
+Machine information:
+q35: memory 0x0..0x9fc00 (0x9fc00) available
+q35: memory 0x9fc00..0xa0000 (0x400) reserved
+q35: memory 0xf0000..0x100000 (0x10000) reserved
+q35: memory 0x100000..0x3ffdf000 (0x3fedf000) available
+q35: memory 0x3ffdf000..0x40000000 (0x21000) reserved
+q35: memory 0xb0000000..0xc0000000 (0x10000000) reserved
+q35: memory 0xfed1c000..0xfed20000 (0x4000) reserved
+q35: memory 0xfeffc000..0xff000000 (0x4000) reserved
+q35: memory 0xfffc0000..0x100000000 (0x40000) reserved
+q35: acpi rsdt 0x3ffe2345 (mb2 RSDP tag — 13-04 walks it)
+q35: acpi rsdt 0x3ffe2345 via mb2 acpi tag (5 entries)
+q35: mcfg 0xb0000000 buses 0x0-0xff (seg 0)
+q35: lapic 0xfee00000 (madt local intc)
+q35: ioapic 0xfec00000 gsib 0 (id 0)
+q35: intsrc bus 0 source 0 -> gsi 2 flags 0x0
+q35: intsrc bus 0 source 5 -> gsi 5 flags 0xd
+q35: intsrc bus 0 source 9 -> gsi 9 flags 0xd
+q35: intsrc bus 0 source 10 -> gsi 10 flags 0xd
+q35: intsrc bus 0 source 11 -> gsi 11 flags 0xd
+q35: hpet 0xfed00000
+pciexbar: 0xb0000001 -> 0xb0000001
+pci: virtio-net 1af4:1041 at 00:02.0 rev 01 pin 1 (inta) bars 2
+pci: inta -> gsi 22 (q35 root slot 2, pirq G: 16+6)
+Memory usage:
+  Used:		0x00000006800000
+  Total:	0x0000003ffdf000
+random: source=rdrand
+lapic: cpuid leaf-1 ecx: x2apic=true tsc-deadline=true
+lapic: x2apic live (msr 0x800 map; lint0/1 masked, no pic)
+timer: 2496149060 Hz (pit 1193182 Hz reference), TscDeadline mode, armed
+ioapic: id 0 version 0x11 rtes 23 gsib 0 (madt 0xfec00000)
+pci: bar4 pa 0xfe000000 size 0x4000 (firmware) readback 0xfe000000
+pci: caps common@0x0+0x1000 notify@0x3000 isr@0x1000 device@0x2000 mult 4
+virtio-net: features offered 0x10130bf8024 negotiated 0x100010020
+virtio-net: rx pre-posted 128 buffers qsize 256
+ioapic: gsi 22 -> vector 0x21 (level)
+#l0: virtio: 1000Mbps: 52:54:00:12:34:56
+fpu: kernel-SIMD selftest ok (user state parked and restored across the section; xor_fold16 0x1983c6d50a18d707c9d74d9a42c59f27)
+q35: module @0x6800000 +0x14fc102 (mb2 tag 3, stashed)
+devenv: seeded cputype=amd64 nobootprompt=embed readparts=0
+devenv: bootconf init=/amd64/init -c
+q35: paqfs root mounted from module (22003970 bytes)
+devroot: /boot/boot open (159349 bytes)
+exec: entering ring 3 pc=0x2054fa sp=0x7fffffffef78 path=/boot/boot argv=[boot]
+paqfs...version...cpu.stage: Wed Nov 25 15:03:49 GMT 2026
+fingerprint: b8fddf9b18c6eca19a9c58ecaf1bf2cb540e6cce
+process 2 exited: ""
+syscall 10 unimplemented (pid 1 boot)
+time...
+boot: opening #c/swap: namec: does not exist
+init: can't open #c/sysname: namec: does not exist
+syscall 10 unimplemented (pid 1 init)
+process 6 exited: ""
+process 7 exited: ""
+process 8 exited: ""
+process 9 exited: ""
+cpurc: PAIR-OK
+process 10 exited: ""
+#I0: devip attached
+process 11 exited: ""
+process 12 exited: ""
+process 13 exited: ""
+devcons: random seeded
+devip: medium ether bound #l0
+process 14 exited: ""
+cpurc: ETHER-OK
+process 15 exited: ""
+syscall 10 unimplemented (pid 16 hmntgen)
+process 16 exited: ""
+3 keys read
+process 18 exited: ""
+process 20 exited: ""
+process 21 exited: ""
+cpurc: KEYFS-OK
+process 22 exited: ""
+process 24 exited: ""
+process 25 exited: ""
+process 26 exited: ""
+cpurc: AUTHSRV-LISTEN
+process 27 exited: ""
+process 28 exited: ""
+process 29 exited: ""
+process 30 exited: ""
+syscall 10 unimplemented (pid 31 hfactotum)
+factotum warning: cannot chmod 666 /srv/factotum: wstat: device does not implement wstat
+process 31 exited: ""
+process 33 exited: ""
+process 34 exited: ""
+process 35 exited: ""
+process 36 exited: ""
+cpurc: FACTOTUM-OK
+process 37 exited: ""
+devmnt: server error: file does not exist
+process 38 exited: ""
+ Feb  7 01:28:16 started on tcp
+process 39 exited: ""
+devmnt: server error: file does not exist
+devmnt: server error: file does not exist
+process 41 exited: ""
+process 43 exited: ""
+process 44 exited: ""
+process 45 exited: ""
+cpurc: LISTEN-17010
+process 46 exited: ""
+cpurc: DONEspawn bash -c R9_RUN_ID=r9x64dtgate-dt-23987-1795619019 exec -a r9x64dtgate-dt-23987-1795619019 /nix/store/y8h5ana2drnzs2fdx6fxgr74bwmzi8y9-drawterm-19.06/bin/drawterm -G -s '' -O cpu=127.0.0.1,auth=tcp!127.0.0.1!5670,user=glenda
+
+process 47 exited: ""
+process 5 exited: ""
+process 4 exited: ""
+
+init: starting /bin/rc
+% devmnt: server error: file does not exist
+ Feb  7 01:28:16 tcp call for tcp17010 on chan /net/tcp/2 (10.0.2.2)
+devmnt: server error: file does not exist
+glenda@DEMO-harvey password: 
+devmnt: server error: not found
+devmnt: server error: not found
+ Feb  7 01:28:16 tr-ok glenda@glenda(unknown) -> glenda@bootes
+process 50 exited: ""
+syscall 10 unimplemented (pid 49 tcp17010)
+cpu: failed to chdir to '/home/req/code/r9'
+process 53 exited: ""
+process 54 exited: ""
+process 55 exited: ""
+process 56 exited: ""
+process 57 exited: "namec: device has no create"
+process 58 exited: ""
+devmnt: server error: './mnt/wsys' does not exist
+process 60 exited: "false"
+process 61 exited: ""
+process 62 exited: ""
+process 63 exited: ""
+devmnt: server error: './mnt/wsys' does not exist
+process 64 exited: "false"
+process 65 exited: "false"
+process 66 exited: ""
+process 67 exited: ""
+process 68 exited: ""
+cpu% ls /srv
+/srv/boot
+/srv/factotum
+process 69 exited: ""
+% ls /srv
+/srv/boot
+/srv/factotum
+process 70 exited: ""
+% ls /srv
+/srv/boot
+/srv/factotum
+process 71 exited: ""
+% ls /srv
+/srv/boot
+/srv/factotum
+process 72 exited: ""
+% ls /srv
+/srv/boot
+/srv/factotum
+process 73 exited: ""
+% ls /srv
+/srv/boot
+/srv/factotum
+process 74 exited: ""
+% ls /srv
+/srv/boot
+/srv/factotum
+process 75 exited: ""
+% ls /srv
+/srv/boot
+/srv/factotum
+process 76 exited: ""
+% ls /srv
+/srv/boot
+/srv/factotum
+process 77 exited: ""
+% ls /srv
+/srv/boot
+/srv/factotum
+process 78 exited: ""
+% ls /srv
+/srv/boot
+/srv/factotum
+process 79 exited: ""
+% ls /srv
+/srv/boot
+/srv/factotum
+process 80 exited: ""
+% GATE-PASS control-no-rio
+drawterm-gate: stage ok — banner
+drawterm-gate: stage ok — bootconf
+drawterm-gate: stage ok — paqfs
+drawterm-gate: stage ok — version
+drawterm-gate: stage ok — hostfwd-17010-listening (127.0.0.1:17010 present in the host listening table)
+drawterm-gate: stage ok — hostfwd-5670-listening (127.0.0.1:5670 present in the host listening table)
+drawterm-gate: stage ok — pairing-ok
+drawterm-gate: stage ok — ether-ok
+drawterm-gate: stage ok — keyfs-ok
+drawterm-gate: stage ok — authsrv-listen
+drawterm-gate: stage ok — factotum-ok
+drawterm-gate: stage ok — listen-17010
+drawterm-gate: stage ok — ladder-done
+drawterm-gate: spawned drawterm on a pty (mode control-noG, argv0 tag r9x64dtgate-dt-23987-1795619019, user glenda)
+drawterm-gate: feed ok — dt-password
+drawterm-gate: stage ok — session-prompt (the remote interactive shell)
+drawterm-gate: stage ok — serial console rc prompt (init's handoff after cpurc: DONE)
+drawterm-gate: stage ok — rio budget elapsed (60 s)
+drawterm-gate: stage ok — serial /srv shows neither rio nor riowctl (the negative control)
+drawterm-gate: post-pass ok — zero cpurc: FAIL in the capture
+drawterm-gate: post-pass ok — zero kernel panic markers (drawterm's own sysfatal exit pair excluded)
+drawterm-gate: post-pass ok — the per-bake DEMO password redacted from the retained capture (T-01-58)
+drawterm-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, -G control session, serial /srv shows neither rio entry (GATE-PASS control-no-rio)
+GATE PASS quick x86_64 run=23987-1795619019
+EXIT=0

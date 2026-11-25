@@ -1,0 +1,50 @@
+pushed-tip:           611dbb435bf6ca6d725d97c07efe2b3bf5cac58c
+host-tip:             611dbb435bf6ca6d725d97c07efe2b3bf5cac58c
+rerun: no
+boot-iso-first built green: no hash commit is needed.
+gated-commit: 611dbb435bf6ca6d725d97c07efe2b3bf5cac58c
+PHASE 4 OWNER STOP 2 RETURN
+pushed-tip: 611dbb435bf6ca6d725d97c07efe2b3bf5cac58c
+host-tip: 611dbb435bf6ca6d725d97c07efe2b3bf5cac58c
+hash-commit: none (first build succeeded; no flake.nix change)
+gated-commit: 611dbb435bf6ca6d725d97c07efe2b3bf5cac58c
+new-outputHash: unchanged
+origin/main: 5d1549af07de7220d6f48aac0d0db221aa7c541c
+
+[host-tests]
+HEAD=611dbb435bf6ca6d725d97c07efe2b3bf5cac58c
+EXIT=0
+
+[host-test-9p]
+HEAD=611dbb435bf6ca6d725d97c07efe2b3bf5cac58c
+EXIT=0
+
+[tip-kernel-x64]
+HEAD=611dbb435bf6ca6d725d97c07efe2b3bf5cac58c
+EXIT=0
+
+[tip-kernel-virt]
+HEAD=611dbb435bf6ca6d725d97c07efe2b3bf5cac58c
+EXIT=0
+
+[boot-iso-first]
+HEAD=611dbb435bf6ca6d725d97c07efe2b3bf5cac58c
+EXIT=0
+
+[gate-kvm]
+HEAD=611dbb435bf6ca6d725d97c07efe2b3bf5cac58c
+EXIT=0
+drawterm-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, -G control session, serial /srv shows neither rio entry (GATE-PASS control-no-rio)
+GATE PASS quick x86_64 run=23987-1795619019
+
+[gate-tcg]
+HEAD=611dbb435bf6ca6d725d97c07efe2b3bf5cac58c
+EXIT=0
+drawterm-gate: ALL STAGES PASS — cpu boot to cpurc: DONE, -G control session, serial /srv shows neither rio entry (GATE-PASS control-no-rio)
+GATE PASS quick x86_64 run=34119-1795619215
+
+[gate-full]
+HEAD=611dbb435bf6ca6d725d97c07efe2b3bf5cac58c
+EXIT=0
+smoke-r9-auth-x64: ALL STAGES PASS — chain boot, hostfwd-5670 observed host-side, D-02 boot pairing (DEMO label), non-interactive keyfs (N keys read), AUTH-OK keyfs, loopback up, the writable secstore venue (ramfs, live file probe), authsrv connect-accept on 567, secstored announced on 5356, cs answering authdom from the baked local, factotum carrying the p9sk1 key, auth/debug's p9sk1 success as norbert, hauthprobe's SPEAKSFOR-OK (bootes for norbert), the deny control (SPEAKSFOR-DENIED x1 + 'no speaks for'), console restored, secuser's account through the venue, the secstore round-trip EXERCISED and presence-demanded (secstore: saved + AUTH norbert + [norbert] PUT/GET syslog tokens + the bytes-back AUTH-SECOBS + the AUTH-OK secstore-roundtrip verdict — the 18-05 SKIP arm retired), AUTH-DONE, ANNOUNCE on serial, tr-ok present, nvram-prompt-absent, zero AUTH-FAIL, the capture redacted
+GATE PASS full x86_64-linux run=44235-1795619421
