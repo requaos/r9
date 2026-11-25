@@ -23,6 +23,7 @@ pub mod image;
 pub mod lintcontract;
 pub mod miri;
 pub mod rforkh;
+pub mod test9p;
 pub mod uregcheck;
 
 use std::{env, fmt};
