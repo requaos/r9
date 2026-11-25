@@ -1,0 +1,49 @@
+pushed-tip: 0dd1037dfe2067778fe4f731f5b30ea3d355d348
+host-tip:   0dd1037dfe2067778fe4f731f5b30ea3d355d348
+hash-commit: none (--rebuild reproduced the committed hash)
+new-outputHash: unchanged
+PHASE 4 OWNER STOP 2 - ROUND 2 RETURN
+pushed-tip: 0dd1037dfe2067778fe4f731f5b30ea3d355d348
+gated-commit: 0dd1037dfe2067778fe4f731f5b30ea3d355d348
+hash-commit: none
+new-outputHash: unchanged
+origin/main: 5d1549af07de7220d6f48aac0d0db221aa7c541c
+
+[host-tests]
+HEAD=0dd1037dfe2067778fe4f731f5b30ea3d355d348
+EXIT=0
+
+[host-test-9p]
+HEAD=0dd1037dfe2067778fe4f731f5b30ea3d355d348
+EXIT=0
+
+[tip-kernel-x64]
+HEAD=0dd1037dfe2067778fe4f731f5b30ea3d355d348
+EXIT=0
+
+[tip-kernel-virt]
+HEAD=0dd1037dfe2067778fe4f731f5b30ea3d355d348
+EXIT=0
+
+[boot-iso-first]
+HEAD=0dd1037dfe2067778fe4f731f5b30ea3d355d348
+EXIT=0
+
+[boot-iso-rebuild]
+HEAD=0dd1037dfe2067778fe4f731f5b30ea3d355d348
+EXIT=0
+
+[gate-kvm]
+HEAD=0dd1037dfe2067778fe4f731f5b30ea3d355d348
+EXIT=0
+GATE PASS quick x86_64 run=88132-1795622365
+
+[gate-tcg]
+HEAD=0dd1037dfe2067778fe4f731f5b30ea3d355d348
+EXIT=0
+GATE PASS quick x86_64 run=98267-1795622561
+
+[gate-full]
+HEAD=0dd1037dfe2067778fe4f731f5b30ea3d355d348
+EXIT=0
+GATE PASS full x86_64-linux run=108390-1795622765

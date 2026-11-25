@@ -1,0 +1,5 @@
+HEAD=0dd1037dfe2067778fe4f731f5b30ea3d355d348
+this derivation will be built:
+  /nix/store/dypvcs2cl4rsq865hbiwi3gxl7czbb0s-r9-kernel-virt-0dd1037.drv
+building '/nix/store/dypvcs2cl4rsq865hbiwi3gxl7czbb0s-r9-kernel-virt-0dd1037.drv'...
+EXIT=0
