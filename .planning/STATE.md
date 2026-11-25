@@ -21,10 +21,10 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-11-24)
+See: .planning/PROJECT.md (updated 2026-11-25)
 
 **Core value:** The OS boots to rio on QEMU q35 at every commit.
-**Current focus:** Phase 04 — Guide Phase 2 - 9P2000.aead Transport and FidTable
+**Current focus:** Milestone v3.0 complete — the four phases are done; next is milestone close (v3.0) and the v3.1 roadmap
 
 ## Current Position
 
@@ -276,5 +276,5 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 ## Session Continuity
 
 Last session: 2026-11-25T16:18:52.564Z
-Stopped at: Phase 04 complete — all phases complete
+Stopped at: Phase 04 complete and verified (109/109); milestone v3.0 execution finished
 Resume file: None
