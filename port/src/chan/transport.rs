@@ -874,8 +874,11 @@ impl Session {
     /// Whether a re-key is due: the send counter has reached the configured
     /// threshold and none is running or waiting to be acknowledged (D-19).
     pub fn rekey_due(&self) -> bool {
-        // RED stub: the threshold and the in-band exchange are not implemented.
-        false
+        !self.send.is_closed()
+            && !self.rekey.active
+            && !self.rekey.ready
+            && !self.rekey.request_sent
+            && self.send.seq_reached(self.config.rekey_after_packets)
     }
 
     /// The state of a direction's superseded (old-generation) key slot.
@@ -884,9 +887,15 @@ impl Session {
     /// cutover that skipped its `zeroize` call reports `Held` (D-20 steps 2,
     /// 3 and 4).
     pub fn superseded_keys(&self, direction: Direction) -> Superseded {
-        // RED stub: no direction cuts over yet, so no slot is ever populated.
-        let _ = direction;
-        Superseded::None
+        if direction == self.send_direction {
+            self.send.superseded_state()
+        } else {
+            match &self.rekey.recv_superseded {
+                None => Superseded::None,
+                Some(keys) if keys.is_zeroized() => Superseded::Zeroized,
+                Some(_) => Superseded::Held,
+            }
+        }
     }
 
     /// The deadline check without the close: shared by `poll`, `seal` and `open`.
@@ -916,13 +925,6 @@ impl Session {
             self.fail();
             return Err(Closed);
         }
-        // RED stub: the in-band exchange and the marker cutover are not
-        // implemented yet; every step answers with nothing to send.
-        if incoming.is_some() || now == u64::MAX {
-            return Ok(Vec::new());
-        }
-        return Ok(Vec::new());
-        #[allow(unreachable_code)]
         let mut packets = Vec::new();
 
         if let Some(message) = incoming {
