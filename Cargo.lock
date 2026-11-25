@@ -482,6 +482,8 @@ version = "0.1.0"
 dependencies = [
  "adler2",
  "bitflags 2.9.4",
+ "crypto",
+ "ds",
  "miniz_oxide",
  "smoltcp",
 ]

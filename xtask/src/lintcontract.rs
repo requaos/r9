@@ -15,8 +15,9 @@
 //!   that is not under `ds/src/tpht/`; every non-`tpht` module declared in
 //!   `ds/src/lib.rs` carries `#[forbid(unsafe_code)]`, and the `tpht` line
 //!   carries none.
-//! - R4 (D-21): no kernel crate (`port`, `aarch64`, `x86_64`, `riscv64`)
-//!   depends on `crypto` or `ds`.
+//! - R4 (D-22, D-25): only `port` may depend on `crypto` or `ds`, in any
+//!   dependency table; the three arch crates (`aarch64`, `x86_64`, `riscv64`)
+//!   may not name either key and reach them through `port`.
 //! - R5 (RESEARCH C3, F3): `rust-toolchain.toml` lists no `miri`
 //!   component, and `.cargo/config.toml` names neither soft-backend cfg.
 //! - R6 (D-11, D-19): both crates opt into the workspace lints; `roaring`
@@ -48,7 +49,7 @@ pub fn check(workspace: &Path) -> Result<()> {
     }
     Err(format!(
         "lint-contract: {} problem(s) — the rules are Phase 3 CONTEXT D-09, D-10, D-11, D-16, D-19 \
-         and D-21:\n{}",
+         and D-21, and Phase 4 CONTEXT D-22 and D-25:\n{}",
         problems.len(),
         problems.join("\n")
     )
@@ -332,10 +333,16 @@ fn is_dev_dependency_table(table: &str) -> bool {
     table.split('.').any(|segment| segment == "dev-dependencies")
 }
 
-/// R4 (D-21): no kernel crate depends on `crypto` or `ds` in any dependency
-/// table.
+/// R4 (D-22, D-25): only `port` may depend on `crypto` or `ds`, in any
+/// dependency table; the three arch crates may not name either key and reach
+/// them through `port`.
 fn check_kernel_dependencies(workspace: &Path, problems: &mut Vec<String>) {
     for kernel in ["port", "aarch64", "x86_64", "riscv64"] {
+        // `port` is the one kernel crate the edge belongs to (D-22); every
+        // arch crate reaches crypto/ and ds/ through it.
+        if kernel == "port" {
+            continue;
+        }
         let display = format!("{kernel}/Cargo.toml");
         let Some(text) = read_file(&workspace.join(&display), &display, problems) else {
             continue;
@@ -351,10 +358,9 @@ fn check_kernel_dependencies(workspace: &Path, problems: &mut Vec<String>) {
                 if let Some(dep) = dependency_key_in_table(&table) {
                     if dep == "crypto" || dep == "ds" {
                         problems.push(format!(
-                            "{display}:{}: kernel crate dependency `{dep}`; no kernel crate may \
-                             depend on crypto/ or ds/ in Phase 3 (D-21). Phases 4 and 5 add this \
-                             dependency under the kernel byte-change procedure and must change \
-                             this rule then",
+                            "{display}:{}: arch crate dependency `{dep}`; only `port` may depend \
+                             on crypto/ or ds/ (Phase 4 D-22); arch crates reach them through \
+                             `port`",
                             n + 1
                         ));
                     }
@@ -367,9 +373,8 @@ fn check_kernel_dependencies(workspace: &Path, problems: &mut Vec<String>) {
             let key = code.split('=').next().unwrap_or("").trim().trim_matches('"');
             if key == "crypto" || key == "ds" {
                 problems.push(format!(
-                    "{display}:{}: kernel crate dependency `{key}`; no kernel crate may depend on \
-                     crypto/ or ds/ in Phase 3 (D-21). Phases 4 and 5 add this dependency under \
-                     the kernel byte-change procedure and must change this rule then",
+                    "{display}:{}: arch crate dependency `{key}`; only `port` may depend on \
+                     crypto/ or ds/ (Phase 4 D-22); arch crates reach them through `port`",
                     n + 1
                 ));
             }
@@ -732,7 +737,9 @@ mod tests {
 
     #[test]
     fn lintcontract_rejects_kernel_dependency() {
-        for kernel in ["port", "aarch64", "x86_64", "riscv64"] {
+        // Only the three arch crates are rejected under R4 (D-22); `port` is
+        // the crate the edge belongs to and is covered by the accepting test.
+        for kernel in ["aarch64", "x86_64", "riscv64"] {
             for dep in ["crypto", "ds"] {
                 let dir = fixture(&format!("kernel-dep-{kernel}-{dep}"));
                 write(
@@ -743,7 +750,7 @@ mod tests {
                     ),
                 );
                 let text = check(&dir)
-                    .expect_err("a kernel crate depending on crypto or ds must be rejected")
+                    .expect_err("an arch crate depending on crypto or ds must be rejected")
                     .to_string();
                 assert!(
                     text.contains(&format!("{kernel}/Cargo.toml")),
@@ -753,16 +760,72 @@ mod tests {
             }
         }
 
+        // The dev-dependency table is a dependency table too, for an arch
+        // crate just as for `port` under Phase 3's rule (D-22 keeps it so).
         let dir = fixture("kernel-dep-dev");
+        write(
+            &dir,
+            "aarch64/Cargo.toml",
+            "[package]\nname = \"aarch64\"\n\n[dev-dependencies]\nds = { path = \"../ds\" }\n",
+        );
+        let text = check(&dir)
+            .expect_err("an arch crate's dev-dependency table is a dependency table")
+            .to_string();
+        assert!(text.contains("aarch64/Cargo.toml"), "names the manifest: {text}");
+        let _ = fs::remove_dir_all(&dir);
+
+        // The same crate naming `crypto` under `[dependencies]` and `ds` under
+        // `[dev-dependencies]` is rejected on both lines.
+        let dir = fixture("kernel-dep-mixed-tables");
+        write(
+            &dir,
+            "aarch64/Cargo.toml",
+            "[package]\nname = \"aarch64\"\n\n[dependencies]\ncrypto = { path = \"../crypto\" }\n\n\
+             [dev-dependencies]\nds = { path = \"../ds\" }\n",
+        );
+        let text = check(&dir)
+            .expect_err("an arch crate naming crypto and ds in two tables is rejected")
+            .to_string();
+        assert!(
+            text.contains("aarch64/Cargo.toml:5:") && text.contains("aarch64/Cargo.toml:8:"),
+            "both dependency lines are named: {text}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lintcontract_accepts_port_depending_on_crypto_and_ds() {
+        // `port` gains the edge in Phase 4 (D-22, D-25), in every dependency
+        // table: plain, dev and the `[dependencies.<key>]` table form.
+        for dep in ["crypto", "ds"] {
+            let dir = fixture(&format!("port-dep-{dep}"));
+            write(
+                &dir,
+                "port/Cargo.toml",
+                &format!(
+                    "[package]\nname = \"port\"\n\n[dependencies]\n{dep} = {{ path = \"../{dep}\" }}\n"
+                ),
+            );
+            check(&dir).expect("port may depend on crypto and ds (Phase 4 D-22)");
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        let dir = fixture("port-dep-dev");
         write(
             &dir,
             "port/Cargo.toml",
             "[package]\nname = \"port\"\n\n[dev-dependencies]\nds = { path = \"../ds\" }\n",
         );
-        let text = check(&dir)
-            .expect_err("a dev-dependency table is a dependency table")
-            .to_string();
-        assert!(text.contains("port/Cargo.toml"), "names the manifest: {text}");
+        check(&dir).expect("port may carry crypto or ds in a dev-dependency table (Phase 4 D-22)");
+        let _ = fs::remove_dir_all(&dir);
+
+        let dir = fixture("port-dep-table");
+        write(
+            &dir,
+            "port/Cargo.toml",
+            "[package]\nname = \"port\"\n\n[dependencies.crypto]\npath = \"../crypto\"\n",
+        );
+        check(&dir).expect("port may carry crypto in the named-table form (Phase 4 D-22)");
         let _ = fs::remove_dir_all(&dir);
     }
 

@@ -39,6 +39,15 @@ smoltcp = { version = "0.14.0", default-features = false, features = [
     "async",
 ] }
 
+# crypto/ and ds/ (Phase 4, D-22, D-25): port is the one kernel crate that
+# links the crypto and ds foundations, so both kernel images reach them
+# through port alone.  The lint contract's rule R4 changed in the same commit
+# to permit this edge for port and keep rejecting it for the three arch
+# crates.  Adding the edge changes the kernel bytes with no behaviour change
+# (D-25); nothing is pushed before the owner's byte-change stop.
+crypto = { path = "../crypto" }
+ds = { path = "../ds" }
+
 # Opt into the workspace clippy lints (undocumented_unsafe_blocks
 # = deny) — every remaining unsafe site in port carries a SAFETY comment.
 [lints]
