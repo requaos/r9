@@ -91,5 +91,8 @@ scalar-backend twin); the `test result: ok` count stays 14 because each leg runs
 
 ## Owner review of the gap-closure `port/src` change (Task 2)
 
-Pending — Task 2 appends one line, `VERDICT port-src-review-gaps: APPROVED HEAD=<sha>` or
-`VERDICT port-src-review-gaps: CHANGES-REQUESTED`, after the owner answers with the diff shown.
+The owner answered: approve with the lock. The insert-lock amendment (`6fd201c`) was required
+first and is the range end; every pre-review leg above was re-run at it. The verdict line, as the
+plan requires:
+
+VERDICT port-src-review-gaps: APPROVED HEAD=6fd201c072d9c42f4de6e6d617c0ac35cf20d013
