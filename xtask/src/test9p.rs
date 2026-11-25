@@ -253,26 +253,61 @@ mod tests {
     fn test9p_command_specs_name_every_listed_file() {
         let cargo = Path::new("/usr/bin/cargo");
         let specs = command_specs(cargo);
-        assert_eq!(specs.len(), 6, "three legs, each with a scalar twin: {specs:?}");
+        assert_eq!(specs.len(), 14, "seven legs, each with a scalar twin: {specs:?}");
 
         // Order: `crypto --lib session`, its twin, `crypto --test session`,
-        // its twin, the `port` leg, its twin.
+        // its twin, then one leg per `PORT_TESTS` entry, each with its twin.
         assert_eq!(specs[0].args, ["test", "--package", "crypto", "--lib", "session"]);
         assert_eq!(specs[2].args, ["test", "--package", "crypto", "--test", "session"]);
 
-        let port = &specs[4];
-        assert_eq!(port.args[0], "test");
-        assert_eq!(port.args[1], "--package");
-        assert_eq!(port.args[2], "port");
         for name in PORT_TESTS {
-            assert!(
-                port.args.windows(2).any(|pair| pair[0] == "--test" && pair[1] == *name),
-                "the port leg carries `--test {name}`: {:?}",
-                port.args
+            let default_legs: Vec<&CommandSpec> = specs
+                .iter()
+                .step_by(2)
+                .filter(|spec| {
+                    spec.args.windows(2).any(|pair| pair[0] == "--test" && pair[1] == *name)
+                })
+                .collect();
+            assert_eq!(
+                default_legs.len(),
+                1,
+                "exactly one default leg carries `--test {name}`: {specs:?}"
             );
         }
         for spec in &specs {
             assert_eq!(spec.program, PathBuf::from(cargo), "every spec runs the cargo it is given");
+        }
+    }
+
+    #[test]
+    fn test9p_runs_one_leg_per_listed_port_file() {
+        let cargo = Path::new("/usr/bin/cargo");
+        let specs = command_specs(cargo);
+        assert_eq!(specs.len(), 14, "seven legs, each with a scalar twin: {specs:?}");
+
+        // The default legs are every other spec, starting at the first.
+        let defaults: Vec<&CommandSpec> = specs.iter().step_by(2).collect();
+        assert_eq!(defaults.len(), 7, "one leg per listed file, plus the two crypto pins");
+
+        assert_eq!(defaults[0].args, ["test", "--package", "crypto", "--lib", "session"]);
+        assert_eq!(defaults[1].args, ["test", "--package", "crypto", "--test", "session"]);
+
+        for (offset, name) in PORT_TESTS.iter().enumerate() {
+            let spec = defaults[2 + offset];
+            assert_eq!(
+                spec.args,
+                ["test", "--package", "port", "--test", *name],
+                "the leg for `{name}` names exactly that file"
+            );
+        }
+
+        for spec in &specs {
+            let test_flags = spec.args.iter().filter(|arg| *arg == "--test").count();
+            assert!(
+                test_flags <= 1,
+                "no spec carries more than one `--test` pair: {:?}",
+                spec.args
+            );
         }
     }
 
@@ -306,6 +341,7 @@ mod tests {
         let specs = command_specs(cargo);
         assert!(!specs.is_empty(), "the step has legs to run");
         assert_eq!(specs.len() % 2, 0, "legs come in default/twin pairs: {specs:?}");
+        assert_eq!(specs.len() / 2, 7, "seven default/twin pairs: {specs:?}");
 
         for pair in specs.chunks(2) {
             let default = &pair[0];
@@ -380,6 +416,50 @@ mod tests {
     }
 
     #[test]
+    fn test9p_rejects_a_leg_with_one_zero_test_result_line() {
+        let cargo = Path::new("/usr/bin/cargo");
+        let specs = command_specs(cargo);
+        let spec = specs.last().expect("the step has at least one leg");
+        let leg = spec.args.join(" ");
+
+        // Two positive result lines and one zero-passed line: the leg fails,
+        // because one listed file lost every test even though the rest ran.
+        let mixed = "running 5 tests\n\
+                     \n\
+                     test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\n\
+                     \n\
+                     running 2 tests\n\
+                     \n\
+                     test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\n\
+                     \n\
+                     running 0 tests\n\
+                     \n\
+                     test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out\n";
+        let err = check_leg_output(spec, mixed)
+            .expect_err("one zero-passed result line fails the whole leg")
+            .to_string();
+        assert!(err.starts_with("test-9p:"), "carries the test-9p prefix: {err}");
+        assert!(err.contains(&leg), "names the leg `{leg}`: {err}");
+
+        // Every result line reports passed tests: the leg is fine.
+        let positive = "running 5 tests\n\
+                        \n\
+                        test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\n\
+                        \n\
+                        running 2 tests\n\
+                        \n\
+                        test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\n";
+        check_leg_output(spec, positive).expect("every result line reporting tests is fine");
+
+        // No result line at all is still an error.
+        let empty = "running 0 tests\n\nnothing ran here\n";
+        let err = check_leg_output(spec, empty)
+            .expect_err("a leg with no result line must be an error")
+            .to_string();
+        assert!(err.starts_with("test-9p:"), "carries the test-9p prefix: {err}");
+    }
+
+    #[test]
     fn test9p_reports_the_first_failing_leg() {
         let cargo = Path::new("/usr/bin/cargo");
         let specs = command_specs(cargo);
@@ -409,7 +489,7 @@ mod tests {
     fn test9p_uses_the_program_it_is_given() {
         let cargo = PathBuf::from("/nix/store/abc-cargo/bin/cargo");
         let specs = command_specs(&cargo);
-        assert!(!specs.is_empty(), "the step has legs to run");
+        assert_eq!(specs.len(), 14, "checks all fourteen specs: {specs:?}");
         for spec in specs {
             assert_eq!(spec.program, cargo, "every spec runs the cargo it is given");
         }
