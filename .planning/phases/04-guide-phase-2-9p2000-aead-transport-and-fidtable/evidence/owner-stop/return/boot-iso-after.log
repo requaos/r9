@@ -1,0 +1,7 @@
+HEAD=ca2b5abff238f00f5c024d76091e5c9e1fbd816f
+these 2 derivations will be built:
+  /nix/store/3g3w1mj1lc3p0szhmd40l252gysg224g-r9-kernel-x64-ca2b5ab.drv
+  /nix/store/rrgw80rjcfm2q73adnlwz2ysnnjsnp0j-r9-boot-iso-ca2b5ab.drv
+building '/nix/store/3g3w1mj1lc3p0szhmd40l252gysg224g-r9-kernel-x64-ca2b5ab.drv'...
+building '/nix/store/rrgw80rjcfm2q73adnlwz2ysnnjsnp0j-r9-boot-iso-ca2b5ab.drv'...
+EXIT=0

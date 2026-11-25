@@ -1,0 +1,5 @@
+HEAD=89ba121ebe1c15abd0ad207dcd87a73a274e894c
+this derivation will be built:
+  /nix/store/zz01cmszbf7kvf5arhhv0r1jfmzw1kjl-r9-kernel-x64-89ba121.drv
+building '/nix/store/zz01cmszbf7kvf5arhhv0r1jfmzw1kjl-r9-kernel-x64-89ba121.drv'...
+EXIT=0

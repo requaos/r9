@@ -1,0 +1,466 @@
+HEAD=89ba121ebe1c15abd0ad207dcd87a73a274e894c
+r9 devshell: rustc 1.95.0-nightly (842bd5be2 2026-01-29)
+QEMU emulator version 11.1.2
+apps: nix run .#build | nix run .#boot-virt | nix run .#default
+harvey supply: R9_HARVEY_DIR_ARM64=/nix/store/b2i0hcbxxmyjlh7drl94s0lp3iq7n04a-harvey-tree-arm64-0 (lazy; realised on first use)
+harvey supply: R9_HARVEY_DIR_AMD64=/nix/store/002vay29nmgw2d81nvmi2i6adgz7h1md-harvey-tree-amd64-0 (lazy; realised on first use)
+harvey supply: R9_HARVEY_REFERENCE_AMD64=/nix/store/ydavfxqx6vhlcar7mmcxi1llhjg0n69x-harvey-reference-amd64-0 (lazy; realised on first use)
+harvey supply: R9_HARVEY_REFERENCE_ARM64=/nix/store/zps34qpcmsd0s2mkf251hhc9sjsnqvq5-harvey-reference-arm64-0 (lazy; realised on first use)
+harvey supply: R9_AUTHDOMAIN_GEN=/nix/store/gysm8xfgmlwkj6kcf6zdzkc9pzmi20ah-harvey-authdomain-gen-0/bin/authdomain-gen
+warning: field `frame_len` is never read
+   --> xtask/src/pcap.rs:228:9
+    |
+219 | pub struct Icmpv4Frame {
+    |            ----------- field in this struct
+...
+228 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Icmpv4Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `frame_len` is never read
+   --> xtask/src/pcap.rs:375:9
+    |
+359 | pub struct BootpFrame {
+    |            ---------- field in this struct
+...
+375 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `BootpFrame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `dst_mac` and `frame_len` are never read
+   --> xtask/src/pcap.rs:569:9
+    |
+566 | pub struct Icmpv6Frame {
+    |            ----------- fields in this struct
+...
+569 |     pub dst_mac: [u8; 6],
+    |         ^^^^^^^
+...
+579 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Icmpv6Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `src_mac`, `dst_mac`, and `frame_len` are never read
+   --> xtask/src/pcap.rs:723:9
+    |
+721 | pub struct Tcpv4Frame {
+    |            ---------- fields in this struct
+722 |     /// Ethernet source/destination MAC.
+723 |     pub src_mac: [u8; 6],
+    |         ^^^^^^^
+724 |     pub dst_mac: [u8; 6],
+    |         ^^^^^^^
+...
+737 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Tcpv4Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: `xtask` (bin "xtask") generated 4 warnings
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.02s
+     Running `target/debug/xtask test-9p`
+
+running 6 tests
+test session::tests::session_is_zeroized_agrees_with_the_bytes ... ok
+test session::tests::session_packet_mac_is_keyed_blake3_under_the_mac_key ... ok
+test session::tests::session_rekey_confirm_is_keyed_blake3_of_label_and_generation ... ok
+test session::tests::session_derive_known_answer ... ok
+test session::tests::session_zeroize_clears_every_key_byte_and_prefix ... ok
+test session::tests::session_nonce_is_prefix_then_sequence_le ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.02s
+     Running unittests src/lib.rs (target/debug/deps/crypto-4161b3aadeb5df48)
+
+running 6 tests
+test session::tests::session_derive_known_answer ... ok
+test session::tests::session_nonce_is_prefix_then_sequence_le ... ok
+test session::tests::session_is_zeroized_agrees_with_the_bytes ... ok
+test session::tests::session_packet_mac_is_keyed_blake3_under_the_mac_key ... ok
+test session::tests::session_zeroize_clears_every_key_byte_and_prefix ... ok
+test session::tests::session_rekey_confirm_is_keyed_blake3_of_label_and_generation ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.02s
+     Running unittests src/lib.rs (target/debug/deps/crypto-5085cebe8a21af39)
+
+running 11 tests
+test session_cap_tag_roundtrip_and_reject ... ok
+test session_generation_changes_every_key ... ok
+test session_is_zeroized_through_the_public_api ... ok
+test session_cap_tag_is_truncated_keyed_blake3_of_label_and_body ... ok
+test session_packet_mac_verify_rejects_each_flipped_tag_byte ... ok
+test session_directions_differ ... ok
+test session_transcript_chains_across_rekeys ... ok
+test session_packet_mac_split_updates_equal_one_shot ... ok
+test session_rekey_confirm_binds_key_and_generation ... ok
+test session_transcript_is_blake3_of_messages_in_order ... ok
+test session_transcript_bit_changes_keys ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.02s
+     Running tests/session.rs (target/debug/deps/session-3786408201be2fea)
+
+running 11 tests
+test session_cap_tag_is_truncated_keyed_blake3_of_label_and_body ... ok
+test session_packet_mac_verify_rejects_each_flipped_tag_byte ... ok
+test session_transcript_chains_across_rekeys ... ok
+test session_transcript_is_blake3_of_messages_in_order ... ok
+test session_rekey_confirm_binds_key_and_generation ... ok
+test session_packet_mac_split_updates_equal_one_shot ... ok
+test session_is_zeroized_through_the_public_api ... ok
+test session_generation_changes_every_key ... ok
+test session_cap_tag_roundtrip_and_reject ... ok
+test session_directions_differ ... ok
+test session_transcript_bit_changes_keys ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.02s
+     Running tests/session.rs (target/debug/deps/session-5f163f8264c50677)
+
+running 24 tests
+test aead_fid_qid_class_values_collide_with_plan9_type_bits ... ok
+test aead_fid_layout_sizes_and_alignment ... ok
+test aead_fid_layout_wire_forms_roundtrip ... ok
+test aead_fid_layout_identity_is_word_zero ... ok
+test aead_fid_resolve_clunked_handle_does_not_resolve ... ok
+test aead_fid_resolve_falls_over_to_the_next_shard_when_home_is_full ... ok
+test aead_fid_resolve_is_one_arena_read ... ok
+test aead_fid_qid_gpu_path_formula ... ok
+test aead_fid_stateless_different_key_rejects ... ok
+test aead_fid_stateless_every_flipped_byte_rejects ... ok
+test aead_fid_stateless_tag_is_keyed_blake3_of_label_and_wire_body ... ok
+test aead_fid_stateless_two_tables_one_key_verify_each_other ... ok
+test aead_fid_stateless_uses_zero_fid_memory ... ok
+test aead_fid_stateless_wrong_epoch_rejects ... ok
+test aead_fid_sweep_edges ... ok
+test aead_fid_sweep_resets_the_reclaim_window ... ok
+test aead_fid_resolve_rejects_wrong_client_epoch_and_shard ... ok
+test aead_fid_qid_volatility_class_values ... ok
+test aead_fid_layout_stateful_handle_is_never_zero ... ok
+test aead_fid_resolve_two_clients_same_fid_number ... ok
+test aead_fid_layout_capability_requires_zero_header_handle ... ok
+test aead_fid_sweep_survivors_resolve_and_orphans_do_not ... ok
+test aead_fid_qid_13_bytes_roundtrip ... ok
+test aead_fid_sweep_matches_set_model_on_random_inputs ... ok
+
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 10 tests
+test aead_negotiate_aead_offer_reaches_the_engine ... ok
+test aead_negotiate_msize_rules_hold_on_the_aead_branch ... ok
+test aead_negotiate_plain_offer_sends_the_plain_version_string ... ok
+test aead_negotiate_unknown_version_is_an_error ... ok
+test aead_negotiate_end_to_end_handle_from_another_connection_is_refused ... ok
+test aead_negotiate_end_to_end_stateless_capability ... ok
+test aead_negotiate_plain_answer_to_aead_offer_is_an_error ... ok
+test aead_negotiate_end_to_end_session ... ok
+test aead_negotiate_plain_offer_yields_a_working_mnt ... ok
+test aead_negotiate_end_to_end_survives_a_rekey ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 11 tests
+test aead_tlv_all_64_masks_roundtrip ... ok
+test aead_tlv_parse_allocates_nothing ... ok
+test aead_tlv_each_extension_roundtrips ... ok
+test aead_tlv_mask_zero_is_empty_area ... ok
+test aead_tlv_record_ending_at_area_end_is_accepted ... ok
+test aead_tlv_rejects_bad_len_reserved_and_padding ... ok
+test aead_tlv_rejects_bad_volatility_class ... ok
+test aead_tlv_rejects_mask_area_mismatch ... ok
+test aead_tlv_rejects_unknown_bit ... ok
+test aead_tlv_rejects_wrong_order_and_duplicates ... ok
+test aead_tlv_stream_prio_is_two_plus_thirty ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 35 tests
+test aead_transport_handshake_altered_rversion_fails_first_packet ... ok
+test aead_transport_handshake_with_empty_exchange ... ok
+test aead_transport_handshake_derives_matching_keys ... ok
+test aead_transport_handshake_keys_are_per_connection ... ok
+test aead_transport_handshake_refuses_attach_before_auth ... ok
+test aead_transport_mac_failure_closes_both_directions ... ok
+test aead_transport_mac_failure_zeroizes ... ok
+test aead_transport_rekey_counter_never_wraps ... ok
+test aead_transport_malformed_after_mac_closes ... ok
+test aead_transport_rekey_ack_for_wrong_generation_closes ... ok
+test aead_transport_rekey_fires_at_threshold ... ok
+test aead_transport_rekey_ack_timeout_closes ... ok
+test aead_transport_rekey_marker_then_ack ... ok
+test aead_transport_rekey_directions_cut_over_independently ... ok
+test aead_transport_rekey_server_requests ... ok
+test aead_transport_rekey_outstanding_requests_complete ... ok
+test aead_transport_rekey_same_secret_still_changes_keys ... ok
+test aead_transport_send_order_closed_session_refuses ... ok
+test aead_transport_rekey_marker_then_new_keys_at_zero ... ok
+test aead_transport_sequence_rejects_repeat_skip_and_earlier ... ok
+test aead_transport_tracer_one_sealed_packet ... ok
+test aead_transport_sequence_starts_at_zero_and_increments ... ok
+test aead_transport_tracer_rejects_tampering ... ok
+test aead_transport_send_order_shares_the_session_counter ... ok
+test aead_transport_teardown_zeroizes ... ok
+test aead_transport_splice_replayed_twrite_is_dropped ... ok
+test aead_transport_wire_tag_is_packet_mac_of_all_bytes_before_it ... ok
+test aead_transport_wire_data_pages_decrypt_alone_at_their_block_counter ... ok
+test aead_transport_splice_cross_connection_and_reflection_fail ... ok
+test aead_transport_rekey_wrong_confirm_closes ... ok
+test aead_transport_rekey_wire_keys_and_confirm_equal_test_side_derivation ... ok
+test aead_transport_send_order_under_contention ... ok
+test aead_transport_rekey_no_old_key_packet_after_marker ... ok
+test aead_transport_splice_edited_fidhandle_fails_mac ... ok
+test aead_transport_mac_failure_every_byte ... ok
+
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+
+running 19 tests
+test aead_wire_messages_rekey_body ... ok
+test aead_wire_messages_base_set_covers_the_registry ... ok
+test aead_wire_messages_reject_truncated_and_trailing ... ok
+test aead_wire_messages_data_bodies_are_whole_pages ... ok
+test aead_wire_header_offsets_and_length ... ok
+test aead_wire_header_empty_tlv_and_body ... ok
+test aead_wire_header_encode_refuses_oversize ... ok
+test aead_wire_registry_rejects_terror_and_gaps ... ok
+test aead_wire_registry_table_is_pinned ... ok
+test aead_wire_messages_new_pairs_roundtrip ... ok
+test aead_wire_messages_data_bounds ... ok
+test aead_wire_messages_walk_order_and_limits ... ok
+test aead_wire_header_roundtrip ... ok
+test aead_wire_header_rules_after_verification ... ok
+test aead_wire_messages_base_set_roundtrip ... ok
+test aead_wire_header_hand_vector_decodes ... ok
+test aead_wire_header_size_bounds ... ok
+test aead_wire_messages_data_split_matches_layout ... ok
+test aead_wire_messages_strings_are_raw_bytes ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+warning: unused import: `alloc::string::String`
+  --> port/src/devip.rs:57:5
+   |
+57 | use alloc::string::String;
+   |     ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> port/src/allocator.rs:608:13
+    |
+608 |         let mut walk = |head: Option<Idx>, mark: &mut dyn FnMut(Idx)| {
+    |             ----^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `flags` is never used
+   --> port/src/devip/netlog.rs:103:15
+    |
+103 | pub(crate) fn flags() -> u32 {
+    |               ^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `TCPSTAT_MAX_CONN` is never used
+    --> port/src/devip/proto.rs:2010:18
+     |
+2010 | pub(crate) const TCPSTAT_MAX_CONN: usize = 0;
+     |                  ^^^^^^^^^^^^^^^^
+
+warning: constant `TCPSTAT_MAX_SEGMENT` is never used
+    --> port/src/devip/proto.rs:2011:18
+     |
+2011 | pub(crate) const TCPSTAT_MAX_SEGMENT: usize = 1;
+     |                  ^^^^^^^^^^^^^^^^^^^
+
+warning: `port` (lib) generated 5 warnings (run `cargo fix --lib -p port` to apply 2 suggestions)
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.02s
+     Running tests/aead_fid.rs (target/debug/deps/aead_fid-3233a0d3fc7f0327)
+     Running tests/aead_negotiate.rs (target/debug/deps/aead_negotiate-e68c1bf937c9c8cd)
+     Running tests/aead_tlv.rs (target/debug/deps/aead_tlv-766fe77e72da964b)
+     Running tests/aead_transport.rs (target/debug/deps/aead_transport-40ece89043e09b4c)
+     Running tests/aead_wire.rs (target/debug/deps/aead_wire-30e788a67634e057)
+
+running 24 tests
+test aead_fid_layout_wire_forms_roundtrip ... ok
+test aead_fid_qid_13_bytes_roundtrip ... ok
+test aead_fid_layout_sizes_and_alignment ... ok
+test aead_fid_layout_stateful_handle_is_never_zero ... ok
+test aead_fid_layout_identity_is_word_zero ... ok
+test aead_fid_layout_capability_requires_zero_header_handle ... ok
+test aead_fid_qid_class_values_collide_with_plan9_type_bits ... ok
+test aead_fid_qid_gpu_path_formula ... ok
+test aead_fid_qid_volatility_class_values ... ok
+test aead_fid_resolve_clunked_handle_does_not_resolve ... ok
+test aead_fid_resolve_falls_over_to_the_next_shard_when_home_is_full ... ok
+test aead_fid_resolve_is_one_arena_read ... ok
+test aead_fid_resolve_rejects_wrong_client_epoch_and_shard ... ok
+test aead_fid_resolve_two_clients_same_fid_number ... ok
+test aead_fid_stateless_different_key_rejects ... ok
+test aead_fid_stateless_every_flipped_byte_rejects ... ok
+test aead_fid_stateless_tag_is_keyed_blake3_of_label_and_wire_body ... ok
+test aead_fid_stateless_two_tables_one_key_verify_each_other ... ok
+test aead_fid_stateless_uses_zero_fid_memory ... ok
+test aead_fid_stateless_wrong_epoch_rejects ... ok
+test aead_fid_sweep_edges ... ok
+test aead_fid_sweep_resets_the_reclaim_window ... ok
+test aead_fid_sweep_survivors_resolve_and_orphans_do_not ... ok
+test aead_fid_sweep_matches_set_model_on_random_inputs ... ok
+
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 10 tests
+test aead_negotiate_aead_offer_reaches_the_engine ... ok
+test aead_negotiate_msize_rules_hold_on_the_aead_branch ... ok
+test aead_negotiate_unknown_version_is_an_error ... ok
+test aead_negotiate_plain_answer_to_aead_offer_is_an_error ... ok
+test aead_negotiate_plain_offer_sends_the_plain_version_string ... ok
+test aead_negotiate_end_to_end_handle_from_another_connection_is_refused ... ok
+test aead_negotiate_plain_offer_yields_a_working_mnt ... ok
+test aead_negotiate_end_to_end_session ... ok
+test aead_negotiate_end_to_end_stateless_capability ... ok
+test aead_negotiate_end_to_end_survives_a_rekey ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 11 tests
+test aead_tlv_all_64_masks_roundtrip ... ok
+test aead_tlv_each_extension_roundtrips ... ok
+test aead_tlv_mask_zero_is_empty_area ... ok
+test aead_tlv_parse_allocates_nothing ... ok
+test aead_tlv_rejects_bad_len_reserved_and_padding ... ok
+test aead_tlv_record_ending_at_area_end_is_accepted ... ok
+test aead_tlv_rejects_bad_volatility_class ... ok
+test aead_tlv_rejects_unknown_bit ... ok
+test aead_tlv_rejects_mask_area_mismatch ... ok
+test aead_tlv_rejects_wrong_order_and_duplicates ... ok
+test aead_tlv_stream_prio_is_two_plus_thirty ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 35 tests
+test aead_transport_handshake_derives_matching_keys ... ok
+test aead_transport_handshake_altered_rversion_fails_first_packet ... ok
+test aead_transport_handshake_refuses_attach_before_auth ... ok
+test aead_transport_handshake_keys_are_per_connection ... ok
+test aead_transport_rekey_counter_never_wraps ... ok
+test aead_transport_mac_failure_zeroizes ... ok
+test aead_transport_malformed_after_mac_closes ... ok
+test aead_transport_handshake_with_empty_exchange ... ok
+test aead_transport_send_order_closed_session_refuses ... ok
+test aead_transport_mac_failure_closes_both_directions ... ok
+test aead_transport_rekey_directions_cut_over_independently ... ok
+test aead_transport_rekey_marker_then_new_keys_at_zero ... ok
+test aead_transport_rekey_marker_then_ack ... ok
+test aead_transport_rekey_same_secret_still_changes_keys ... ok
+test aead_transport_rekey_ack_timeout_closes ... ok
+test aead_transport_rekey_fires_at_threshold ... ok
+test aead_transport_rekey_wrong_confirm_closes ... ok
+test aead_transport_rekey_ack_for_wrong_generation_closes ... ok
+test aead_transport_rekey_wire_keys_and_confirm_equal_test_side_derivation ... ok
+test aead_transport_rekey_outstanding_requests_complete ... ok
+test aead_transport_rekey_server_requests ... ok
+test aead_transport_send_order_shares_the_session_counter ... ok
+test aead_transport_sequence_starts_at_zero_and_increments ... ok
+test aead_transport_sequence_rejects_repeat_skip_and_earlier ... ok
+test aead_transport_rekey_no_old_key_packet_after_marker ... ok
+test aead_transport_tracer_one_sealed_packet ... ok
+test aead_transport_teardown_zeroizes ... ok
+test aead_transport_tracer_rejects_tampering ... ok
+test aead_transport_wire_tag_is_packet_mac_of_all_bytes_before_it ... ok
+test aead_transport_splice_replayed_twrite_is_dropped ... ok
+test aead_transport_splice_cross_connection_and_reflection_fail ... ok
+test aead_transport_wire_data_pages_decrypt_alone_at_their_block_counter ... ok
+test aead_transport_send_order_under_contention ... ok
+test aead_transport_splice_edited_fidhandle_fails_mac ... ok
+test aead_transport_mac_failure_every_byte ... ok
+
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+
+running 19 tests
+test aead_wire_header_empty_tlv_and_body ... ok
+test aead_wire_header_hand_vector_decodes ... ok
+test aead_wire_header_roundtrip ... ok
+test aead_wire_messages_base_set_roundtrip ... ok
+test aead_wire_header_encode_refuses_oversize ... ok
+test aead_wire_header_rules_after_verification ... ok
+test aead_wire_header_offsets_and_length ... ok
+test aead_wire_header_size_bounds ... ok
+test aead_wire_messages_base_set_covers_the_registry ... ok
+test aead_wire_messages_data_bounds ... ok
+test aead_wire_messages_data_split_matches_layout ... ok
+test aead_wire_messages_new_pairs_roundtrip ... ok
+test aead_wire_messages_reject_truncated_and_trailing ... ok
+test aead_wire_messages_data_bodies_are_whole_pages ... ok
+test aead_wire_messages_rekey_body ... ok
+test aead_wire_messages_walk_order_and_limits ... ok
+test aead_wire_registry_rejects_terror_and_gaps ... ok
+test aead_wire_registry_table_is_pinned ... ok
+test aead_wire_messages_strings_are_raw_bytes ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+warning: unused import: `alloc::string::String`
+  --> port/src/devip.rs:57:5
+   |
+57 | use alloc::string::String;
+   |     ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> port/src/allocator.rs:608:13
+    |
+608 |         let mut walk = |head: Option<Idx>, mark: &mut dyn FnMut(Idx)| {
+    |             ----^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `flags` is never used
+   --> port/src/devip/netlog.rs:103:15
+    |
+103 | pub(crate) fn flags() -> u32 {
+    |               ^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `TCPSTAT_MAX_CONN` is never used
+    --> port/src/devip/proto.rs:2010:18
+     |
+2010 | pub(crate) const TCPSTAT_MAX_CONN: usize = 0;
+     |                  ^^^^^^^^^^^^^^^^
+
+warning: constant `TCPSTAT_MAX_SEGMENT` is never used
+    --> port/src/devip/proto.rs:2011:18
+     |
+2011 | pub(crate) const TCPSTAT_MAX_SEGMENT: usize = 1;
+     |                  ^^^^^^^^^^^^^^^^^^^
+
+warning: `port` (lib) generated 5 warnings (run `cargo fix --lib -p port` to apply 2 suggestions)
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.02s
+     Running tests/aead_fid.rs (target/debug/deps/aead_fid-dc4f37009459da57)
+     Running tests/aead_negotiate.rs (target/debug/deps/aead_negotiate-f57b1c9a8f304d85)
+     Running tests/aead_tlv.rs (target/debug/deps/aead_tlv-43f9f8c5552d5e5f)
+     Running tests/aead_transport.rs (target/debug/deps/aead_transport-5e4fa286fe63115a)
+     Running tests/aead_wire.rs (target/debug/deps/aead_wire-59f5386a304c575d)
+EXIT=0
