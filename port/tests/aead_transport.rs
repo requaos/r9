@@ -34,15 +34,6 @@ fn secret() -> Key {
     Key::from_bytes(bytes)
 }
 
-/// The server's fixed secret: bytes 0x40..=0x5f.
-fn server_secret() -> Key {
-    let mut bytes = [0u8; 32];
-    for (i, b) in bytes.iter_mut().enumerate() {
-        *b = 0x40 + i as u8;
-    }
-    Key::from_bytes(bytes)
-}
-
 /// A third fixed secret, for the cross-connection pin: bytes 0x80..=0x9f.
 fn other_secret() -> Key {
     let mut bytes = [0u8; 32];
@@ -81,7 +72,7 @@ fn tattach_body() -> Vec<u8> {
 #[test]
 fn aead_transport_handshake_derives_matching_keys() {
     let link = AeadLink::new();
-    let (mut client, mut server) = connect(link, secret(), server_secret());
+    let (mut client, mut server) = connect(link, secret(), secret());
 
     let handle = [0x11u8; 8];
     client
@@ -122,7 +113,7 @@ fn aead_transport_handshake_with_empty_exchange() {
     let (mut client, mut server) = connect_with(
         link.clone(),
         TestExchange::new(vec![secret()]),
-        TestExchange::new(vec![server_secret()]),
+        TestExchange::new(vec![secret()]),
     );
 
     {
@@ -142,6 +133,29 @@ fn aead_transport_handshake_with_empty_exchange() {
         assert!(
             plain.iter().any(|frame| frame.get(4) == Some(&wire::TREAD)),
             "the exchange still rides a Tread on the auth fid"
+        );
+
+        // Tauth and Rauth keep the standard 9P2000 bodies, compared with
+        // test-side bytes written out here.
+        let tauth = plain
+            .iter()
+            .find(|frame| frame.get(4) == Some(&wire::TAUTH))
+            .expect("Tauth is on the wire");
+        let mut want_tauth = Vec::new();
+        want_tauth.extend_from_slice(&common::aead_link::AFID.to_le_bytes());
+        want_tauth.extend_from_slice(&4u16.to_le_bytes());
+        want_tauth.extend_from_slice(b"none");
+        want_tauth.extend_from_slice(&0u16.to_le_bytes());
+        assert_eq!(&tauth[7..], &want_tauth[..], "Tauth has the standard 9P2000 body");
+
+        let rauth = plain
+            .iter()
+            .find(|frame| frame.get(4) == Some(&wire::RAUTH))
+            .expect("Rauth is on the wire");
+        assert_eq!(
+            &rauth[7..],
+            &[0u8; 13][..],
+            "Rauth has the standard 9P2000 qid body (typ, vers, path, all zero)"
         );
     }
 
@@ -168,8 +182,8 @@ fn aead_transport_handshake_refuses_attach_before_auth() {
     // A sealed packet arriving at a server still in the handshake is an error,
     // and nothing is decoded.
     let link = AeadLink::new();
-    let (mut client, _authenticated_server) = connect(link.clone(), secret(), server_secret());
-    let mut server = ServerEnd::new(unauthenticated_session(Role::Server, server_secret()), link.clone());
+    let (mut client, _authenticated_server) = connect(link.clone(), secret(), secret());
+    let mut server = ServerEnd::new(unauthenticated_session(Role::Server, secret()), link.clone());
     client
         .send(wire::TATTACH, 12, [0u8; 8], &Exts::default(), &tattach_body())
         .expect("the authenticated client seals a Tattach");
@@ -195,7 +209,7 @@ fn aead_transport_handshake_altered_rversion_fails_first_packet() {
                 _ => guard.alter_rversion_version = Some(b"9P2000".to_vec()),
             }
         }
-        let (mut client, mut server) = connect(link, secret(), server_secret());
+        let (mut client, mut server) = connect(link, secret(), secret());
         client
             .send(wire::TATTACH, 13, [0u8; 8], &Exts::default(), &tattach_body())
             .expect("the client seals its first Tattach");
@@ -209,7 +223,7 @@ fn aead_transport_handshake_altered_rversion_fails_first_packet() {
 #[test]
 fn aead_transport_handshake_keys_are_per_connection() {
     let a = AeadLink::new();
-    let (mut client_a, _server_a) = connect(a.clone(), secret(), server_secret());
+    let (mut client_a, _server_a) = connect(a.clone(), secret(), secret());
     let b = AeadLink::new();
     let (_client_b, mut server_b) = connect(b.clone(), other_secret(), other_secret());
 
@@ -459,3 +473,4 @@ fn aead_transport_tracer_rejects_tampering() {
         "a packet whose sequence is not the expected next value is refused"
     );
 }
+

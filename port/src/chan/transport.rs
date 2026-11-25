@@ -156,10 +156,7 @@ impl Handshake {
     /// material, and generation 0 is the initial generation (P2).
     pub fn finish(self, secret: Key) -> Session {
         let transcript = self.transcript.hash();
-        // RED stub: the derived keys are zeroed, so every sealed byte this
-        // session would produce is wrong.  GREEN derives them for real.
-        let mut keys = session::derive(&secret, &transcript, 0);
-        keys.zeroize();
+        let keys = session::derive(&secret, &transcript, 0);
         Session {
             role: self.role,
             config: self.config,
@@ -202,16 +199,69 @@ impl Session {
     /// signature can return is [`Closed`].
     pub fn seal(
         &mut self,
-        _typ: u8,
-        _tag: u16,
-        _fid_handle: [u8; 8],
-        _exts: &Exts<'_>,
-        _body: &[u8],
-        _now: u64,
+        typ: u8,
+        tag: u16,
+        fid_handle: [u8; 8],
+        exts: &Exts<'_>,
+        body: &[u8],
+        now: u64,
     ) -> core::result::Result<Vec<u8>, Closed> {
-        // RED stub: sealing is not implemented yet, so the handshake and wire
-        // pins fail on a behavioural assertion rather than a compile error.
-        Err(Closed)
+        // Re-key timing (D-19) is plan 04-08's; this plan threads `now` only.
+        let _ = now;
+        if self.closed || !self.authenticated {
+            return Err(Closed);
+        }
+        let tlv_len = exts.encoded_len();
+        let Ok(ext_len) = u16::try_from(tlv_len) else {
+            self.fail();
+            return Err(Closed);
+        };
+        let Ok(size) = packet_len(tlv_len, body.len(), self.config.msize) else {
+            // A packet this session cannot produce closes it: `seal` has no
+            // other error type, and a caller that keeps asking must not keep
+            // a half-usable connection open.
+            self.fail();
+            return Err(Closed);
+        };
+        let size = size as usize;
+        let seq = self.send_seq;
+        let header = Header {
+            size: size as u32,
+            typ,
+            tag,
+            pad: 0,
+            fid_handle,
+            seq,
+            ext_mask: exts.mask(),
+            ext_len,
+        };
+        let mut packet = Vec::with_capacity(size);
+        let mut encoded = [0u8; HEADER_LEN];
+        header.encode(&mut encoded);
+        packet.extend_from_slice(&encoded);
+        tlv::encode(exts, &mut packet);
+        packet.extend_from_slice(body);
+        packet.resize(size, 0);
+
+        let body_start = HEADER_LEN + tlv_len;
+        let body_end = size - MAC_LEN;
+        if crypt_body(
+            send_direction(&self.keys, self.role),
+            seq,
+            typ,
+            &mut packet[body_start..body_end],
+        )
+        .is_err()
+        {
+            self.fail();
+            return Err(Closed);
+        }
+
+        let mut mac = send_direction(&self.keys, self.role).mac();
+        mac.update(&packet[..size - MAC_LEN]);
+        packet[size - MAC_LEN..].copy_from_slice(&mac.finalize());
+        self.send_seq = seq.wrapping_add(1);
+        Ok(packet)
     }
 
     /// Open one packet: MAC first, then the header fields, TLVs and body
@@ -221,11 +271,85 @@ impl Session {
     /// the strict next-in-sequence comparison at the step that reads `SeqNonce`.
     pub fn open<'a>(
         &mut self,
-        _packet: Unverified<'a>,
-        _now: u64,
+        packet: Unverified<'a>,
+        now: u64,
     ) -> core::result::Result<Verified<'a>, Closed> {
-        // RED stub: opening is not implemented yet.
-        Err(Closed)
+        let _ = now;
+        if self.closed || !self.authenticated {
+            return Err(Closed);
+        }
+        let buf = packet.take();
+        let size = buf.len();
+        if size < HEADER_LEN + MAC_LEN {
+            self.fail();
+            return Err(Closed);
+        }
+
+        // Verify before acting on any field but Size (D-07).
+        let mut mac = recv_direction(&self.keys, self.role).mac();
+        mac.update(&buf[..size - MAC_LEN]);
+        let Ok(tag) = <[u8; MAC_LEN]>::try_from(&buf[size - MAC_LEN..]) else {
+            self.fail();
+            return Err(Closed);
+        };
+        if mac.verify(&tag).is_err() {
+            self.fail();
+            return Err(Closed);
+        }
+
+        // Only now read the header.  Plan 04-16 adds the strict comparison
+        // with the expected sequence number at exactly this step; here the
+        // number selects the nonce and advances the receive counter.
+        let Ok(header_bytes) = <&[u8; HEADER_LEN]>::try_from(&buf[..HEADER_LEN]) else {
+            self.fail();
+            return Err(Closed);
+        };
+        let header = Header::decode(header_bytes);
+        let seq = header.seq;
+        if check_header(&header, size).is_err() {
+            self.fail();
+            return Err(Closed);
+        }
+
+        let Some(tlv_end) = HEADER_LEN.checked_add(header.ext_len as usize) else {
+            self.fail();
+            return Err(Closed);
+        };
+        let Some(tlv_area) = buf.get(HEADER_LEN..tlv_end) else {
+            self.fail();
+            return Err(Closed);
+        };
+        if tlv::parse(header.ext_mask, tlv_area).is_err() {
+            self.fail();
+            return Err(Closed);
+        }
+
+        let body_end = size - MAC_LEN;
+        if tlv_end > body_end {
+            self.fail();
+            return Err(Closed);
+        }
+        if crypt_body(
+            recv_direction(&self.keys, self.role),
+            seq,
+            header.typ,
+            &mut buf[tlv_end..body_end],
+        )
+        .is_err()
+        {
+            self.fail();
+            return Err(Closed);
+        }
+
+        let verified = match Verified::new_verified(header, buf) {
+            Ok(verified) => verified,
+            Err(_) => {
+                self.fail();
+                return Err(Closed);
+            }
+        };
+        self.recv_seq = seq.wrapping_add(1);
+        Ok(verified)
     }
 
     /// Frame a received packet from its 4-byte `Size` prefix (WIRE-03).
@@ -253,8 +377,19 @@ impl Session {
         }
         match Unverified::new(packet, self.config.msize) {
             Ok(unverified) => self.open(unverified, now),
-            Err(_) => Err(Closed),
+            Err(_) => {
+                self.fail();
+                Err(Closed)
+            }
         }
+    }
+
+    /// The single failure path: close the session.
+    ///
+    /// Plan 04-07 Task 2 extends this to zeroize both directions' keys and
+    /// both counters; here it is the one place that sets the closed flag.
+    fn fail(&mut self) {
+        self.closed = true;
     }
 }
 

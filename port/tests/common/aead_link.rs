@@ -513,7 +513,7 @@ impl ClientEnd {
             (link.now, Rc::clone(&link.decode_count))
         };
         let mut link = self.link.borrow_mut();
-        recv_one(&mut self.session, &mut link.c2s, now, &count)
+        recv_one(&mut self.session, &mut link.s2c, now, &count)
     }
 }
 
