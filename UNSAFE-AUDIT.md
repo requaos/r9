@@ -26,7 +26,10 @@ crypto and ds crates — the four gated crates (boot-test is aarch64-only;
 soft-backend `crypto` leg and the two `lib/*-unknown-none-elf.json` cross legs
 cover the two new crates).  `crypto/` and `ds/` are host-tested and
 cross-checked only: no kernel crate depends on them in Phase 3, so neither is
-linked into a kernel yet (CONTEXT D-21).  x86_64 + riscv64 are NEVER compiled
+linked into a kernel yet (CONTEXT D-21).  **Phase 4 update (2026-11-24):** that
+Phase 3 statement is kept as history; `port` now depends on `crypto/` and
+`ds/` (CONTEXT D-22), so both crates' unsafe code is linked into the kernel
+images.  x86_64 + riscv64 are NEVER compiled
 by the gates: they are classified by per-file count only, get NO elimination
 and NO lint opt-in.  Extending the lint and this audit to `x86_64` is Phase 5's
 question, when `shadow.rs` and `cryptpage.rs` land (CONTEXT D-11); it is not
@@ -60,12 +63,33 @@ It was not re-derived here because it is outside Phase 3.
 the contract (CONTEXT D-09, D-10, D-11, D-12).  `ds/` is per-module forbidden
 with `ds/src/tpht/` as its one unsafe-holding module; it adds **1** lint-visible
 block (`FlattenedTphtShard::deref_tiny`'s unchecked arena read,
-`ds/src/tpht/flattened.rs:440`), **0** unsafe impls, **0** unsafe fns, **0**
+`ds/src/tpht/flattened.rs:440`; re-measured `ds/src/tpht/flattened.rs:473` on
+2026-11-24), **0** unsafe impls, **0** unsafe fns, **0**
 unsafe extern blocks and **0** test-only blocks.  `crypto/` is crate-level
 `#![forbid(unsafe_code)]` and adds **0** sites of every kind.  SAFETY
 annotations 152 → 153; ds lint-visible 0 → 1, crypto 0 → 0; the reconciliation
 holds.  Neither crate is linked into a kernel in this phase, so the kernel-byte
 evidence is unchanged (D-21).
+
+**Phase 4 delta (port links crypto/ and ds/, 2026-11-24):** `port` gains its
+dependency on the two crates and the engine lands in the guide's sites
+(CONTEXT D-22, D-25).  `port::chan` (with its submodules) and `port::fid` join
+`port` as `#[forbid(unsafe_code)]` modules, so nothing in the new wire code can
+hold unsafe; no new unsafe-holding module exists, so no IG-D07 approval was
+needed.  Re-measured at this commit with the Phase 3 method (lint-visible
+unsafe blocks + impls, non-test production): `port` **22** (14 blocks + 8
+impls; the module breakdown is `globalalloc` 8, `mcslock` 12, `devip_waker` 2 =
+22, one below the 23 the reconciliation table carries from Phase 3, whose own
+module breakdown also sums to 22 — the current measured value is 22), `crypto`
+**0** (crate-level `#![forbid(unsafe_code)]`), and `ds` **1**
+(`FlattenedTphtShard::deref_tiny`'s unchecked arena read, re-measured at
+`ds/src/tpht/flattened.rs:473`; the Phase 3 delta's `flattened.rs:440` above is
+the old line).  The reversed link is now the fact: `port` depends on `crypto/`
+and `ds/`, so the pinned upstream crates' unsafe code is reachable from both
+kernel images, including the BLAKE3 SSE2, SSE4.1 and AVX2 routines that are
+compiled as scalar code for the soft-float target and never selected.  No new
+unsafe site of any kind was added in this phase, and the third-party record is
+unchanged.
 
 ## ds/ and crypto/ (Phase 3)
 
@@ -194,7 +218,7 @@ entry global_asm! only).  fault.rs/proc.rs/syscall.rs/exec.rs carry no asm!.
 | `globalalloc` | the named floor (the GlobalAlloc shim) — 8 blocks + 7 fns, all SAFETY/doc'd |
 | `mcslock` | the named floor (Lock + BusyCell primitives + the MntCore proof) — 12 blocks |
 | `devip_waker` (`devip/waker.rs`) | the named 08-02 bridge (the smoltcp waker RawWaker vtable) — 2 blocks + 4 fns, all SAFETY/doc'd; mounted via `#[path]` so the `devip` parent's forbid cannot reach it |
-| every other port module | unsafe-free, `#[forbid(unsafe_code)]` (the devip subtree carries per-module forbids: `devip.rs` shell + `stack`/`phyadapt`) |
+| every other port module | unsafe-free, `#[forbid(unsafe_code)]` (the devip subtree carries per-module forbids: `devip.rs` shell + `stack`/`phyadapt`; Phase 4 adds the wire modules `chan` and its submodules, and `fid`, all forbidden) |
 
 The `#[forbid(unsafe_code)]` attributes are the regression locks: a new
 unsafe site in a forbidden module fails the build — the honesty rule is
