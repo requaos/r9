@@ -120,7 +120,9 @@ Each row is a protection a source specifies, the attacker class from section 3 i
 the phase of `.planning/ROADMAP.md` that is planned to deliver it.  The phase column and the pairing
 of protection with attacker are **[new]**; the sources give neither.  The rows are worded in the
 present tense for brevity; each describes what a source specifies, not something r9 does.  Every
-status is `not implemented`.  Where sources disagree about a mechanism, the row points to section 7.
+status is `not implemented` except the six Phase 4 wire protections, which are implemented and
+host-tested but not yet used by a booted kernel.  Where sources disagree about a mechanism, the row
+points to section 7.
 
 | Protection, as specified | Attacker addressed | Source | Delivering phase | Status |
 |------------|--------------------|--------|------------------|--------|
@@ -132,12 +134,12 @@ status is `not implemented`.  Where sources disagree about a mechanism, the row 
 | A stray kernel read through a wrong mapping reaches ciphertext, because only the shadow frame holds plaintext.  This guards against a kernel defect, not an attacker (section 7, item 4 for the exception) | None; a kernel defect | [AC 2.2] | Phase 5 | not implemented |
 | Frames pinned for DMA or for cryptography are never chosen for eviction, so they are not re-encrypted or reused mid-flight | None; a kernel defect | [IG 3 row 9] [IG 11] | Phase 5 | not implemented |
 | Vector registers used in the fault path are zeroed with `VPXOR` before return to user mode, and AVX-512 state is disabled in XCR0 | Local attacker using side channels | [IG 4.3] [AC 3.3] [RFC 11] | Phase 5 | not implemented |
-| 9P payloads in transit are encrypted with ChaCha20 | On-path network adversary | [RFC 3.1] [AC 5.3] | Phase 4 | not implemented |
-| Splicing, injection and replay are rejected: size, type, tag, `FidHandle`, sequence nonce, `ExtMask` and TLVs are authenticated as associated data, and the receiver accepts only the next sequence number | On-path network adversary | [RFC 4.2] [RFC 4.3] [AC 5.3] [PT Test 2.3] | Phase 4 | not implemented |
-| On a MAC failure the receiver ends the connection and zeroes the channel state without processing any enclosed byte | On-path network adversary | [RFC 4.3] [RFC 11] | Phase 4 | not implemented |
-| Channel keys are dropped and zeroized when a channel is closed, so captured packets stay unreadable | Attacker who records traffic and later obtains endpoint state | [RFC 3.2] | Phase 4 | not implemented |
-| A channel re-keys before its sequence counter reaches 2^64 - 1, so a nonce is never reused under one key | On-path network adversary | [RFC 11] | Phase 4 | not implemented |
-| A `StatelessCap` is accepted only if its MAC verifies under the cluster secret | Client that forges or alters a file handle | [AC 5.2] [RFC 5.2] | Phase 4 | not implemented |
+| 9P payloads in transit are encrypted with ChaCha20 | On-path network adversary | [RFC 3.1] [AC 5.3] | Phase 4 | implemented and host-tested in Phase 4; not used by a booted kernel (D-23) |
+| Splicing, injection and replay are rejected: size, type, tag, `FidHandle`, sequence nonce, `ExtMask` and TLVs are authenticated as associated data, and the receiver accepts only the next sequence number | On-path network adversary | [RFC 4.2] [RFC 4.3] [AC 5.3] [PT Test 2.3] | Phase 4 | implemented and host-tested in Phase 4; not used by a booted kernel (D-23) |
+| On a MAC failure the receiver ends the connection and zeroes the channel state without processing any enclosed byte | On-path network adversary | [RFC 4.3] [RFC 11] | Phase 4 | implemented and host-tested in Phase 4; not used by a booted kernel (D-23) |
+| Channel keys are dropped and zeroized when a channel is closed, so captured packets stay unreadable | Attacker who records traffic and later obtains endpoint state | [RFC 3.2] | Phase 4 | implemented and host-tested in Phase 4; not used by a booted kernel (D-23) |
+| A channel re-keys before its sequence counter reaches 2^64 - 1, so a nonce is never reused under one key | On-path network adversary | [RFC 11] | Phase 4 | implemented and host-tested in Phase 4; not used by a booted kernel (D-23) |
+| A `StatelessCap` is accepted only if its MAC verifies under the cluster secret | Client that forges or alters a file handle | [AC 5.2] [RFC 5.2] | Phase 4 | implemented and host-tested in Phase 4; not used by a booted kernel (D-23) |
 | A capability token on a pooled connection is validated against a revocation list | Process on a shared connection using a revoked or forged token | [RFC 4.4] [AC 5.3] | Phase 4 | not implemented |
 | After failover, a reclaimed handle is restored only when the client's capability token validates; unreclaimed handles are freed and their keys zeroized | Client replaying a stale handle | [RFC 6.2.4] [AC 5.2] | Phase 4 and Phase 6 | not implemented |
 | Legacy traffic exists as plaintext only in pre-pinned, non-pageable bounce frames that are scrubbed after each use | Cleartext legacy peer; local process hoping to find leftovers | [AC 5.8] [RFC 10.2] [IG 6.3] | Phase 6 | not implemented |
@@ -149,6 +151,8 @@ status is `not implemented`.  Where sources disagree about a mechanism, the row 
 | A note is delivered only onto a real stack segment, with checked arithmetic inside the stack bounds | Malicious local process aiming its stack pointer | [IG 3 row 16] [AC 2.1] | Phase 7 | not implemented |
 | The kernel builds every VirtIO header for the `#G` device itself; user bytes never become a kernel header | Malicious local process writing crafted bytes | [IG 3 row 15] [AC 2.1] | Phase 14 | not implemented |
 | File access follows owner and group permissions, only a group leader can change a group's membership, and a user with no local record is attenuated to `none` | Authenticated user without permission; user from another domain | [PT Test 1.1] [PT Test 1.3] [PT Test 3.2] | Phase 13 | not implemented |
+
+The six Phase 4 wire protections above are host-tested by `cargo xtask test-9p` over an in-memory link and are not used by a booted kernel: `devmnt` still offers plain `9P2000` by default (D-23). Peer authentication is not provided in Phase 4 (D-16): the session secret is supplied behind a test seam, the real authenticated exchange is undecided, and no live authenticated connection between two real machines comes out of this phase. The capability-revocation and failover-reclaim rows remain unimplemented.
 
 ---
 
@@ -169,7 +173,7 @@ The first eight items are places where the sources contradict each other or the 
 is settled here; where the project already tracks the question, its warning or note is named.
 
 - **MAC primitive.** The RFC names keyed BLAKE3 for integrity `[RFC 3.1]`; the guide and the compendium label the wire MAC "BLAKE3 / Poly1305" `[IG 6.3]` `[AC 1.2]`.  Open as warning W3. Not settled here.
-- **Session key scope.** The RFC's prose binds the transient key to the connection and direction, while its formula binds it to the `fid` `[RFC 3.2]`; the guide says per connection and per direction `[IG 3 row 13]`.  Open as warning W4.  Not settled here.
+- **Session key scope.** The RFC's prose binds the transient key to the connection and direction, while its formula binds it to the `fid` `[RFC 3.2]`; the guide says per connection and per direction `[IG 3 row 13]`.  Settled in Phase 4 on 2026-11-24 (Phase 4 CONTEXT D-15): keys are per connection and per direction, not per FID, and the RFC text was amended.
 - **Stale-frame mechanism.** The guide says frames are taken from free pools with no scrubbing and relies on the unmapped page-table entry and a full overwrite `[IG 4.4]`; the compendium says a frame reassigned across domains is "scrubbed with `CLFLUSHOPT`" `[AC 3.4]`; the RFC says such frames must undergo zeroization and cache-line flushing `[RFC 11]`.  A cache-line flush does not zero memory, so these are three different mechanisms for one in-scope item.  Tracked as note N9.  Not settled here.
 - **"Only the shadow frame contains plaintext."** The boundary says so `[AC 2.2]`, but in the legacy gateway plaintext sits in kernel bounce frames `[AC 5.8]` `[RFC 10.2]`.  Tracked as note N10.  Not settled here.
 - **`StatelessCap` contents and tag length.** The compendium lists `qid_path`, `qid_vers`, `mode`, `epoch` and an 8-byte MAC `[AC 5.2]`; the RFC lists the file's hash, its permissions and an 8-byte tag `[RFC 5.2]`.  Both give a 64-bit tag, while the packet MAC and the capability token are 32 bytes `[RFC 4.2]` `[RFC 4.4]`.  The token's on-wire form is open as warning W2.  Not settled here.
