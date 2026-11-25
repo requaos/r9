@@ -5,7 +5,52 @@ This file starts with the five pre-review legs Task 1 runs; Task 2 appends the o
 verdict. Every verdict below comes from the run recorded beside it, and no verdict is carried
 over from an earlier HEAD.
 
-## HEAD under review
+## Amendment: the WR-09 insert lock (owner request)
+
+The owner read the gap-closure diff and required one change before approving: the racing inserts
+the bundle listed as an open question had to be resolved first. `FidTable::insert` now holds a
+table-level `insert_lock` across the all-shard duplicate probe **and** the placement walk, so two
+concurrent inserts of one `(client_id, fid_key)` cannot both pass the probe; `resolve` is untouched
+and still lock-free with one arena read. That changed `port/src/fid.rs` and
+`port/tests/aead_fid.rs`, so every verdict in this section was re-run at the new HEAD. The
+`a669317` block below is history: it is kept as recorded and marked superseded.
+
+HEAD 6fd201c072d9c42f4de6e6d617c0ac35cf20d013
+(`fix(04-23): serialise FidTable inserts so a racing pair cannot both land (WR-09)`)
+
+Venue: `Darwin arm64` (the same venue line as `evidence/closing-suite.md`).
+Logs: `target/phase04-gaps/pre-review-amendment/NAME.log` (gitignored); each leg's log is the
+whole command output.
+
+Run in the order the amendment names, at HEAD `6fd201c`, so that the review is not offered on a
+red tree.
+
+| # | Command | Log | Exit | Result |
+|---|---------|-----|------|--------|
+| 0 | `nix develop -c cargo test -p port --test aead_fid` | `aead-fid.log` | 0 | 36 tests, one `test result: ok` line, 0 failed — the new racing-insert pin lives in this binary and passes |
+| 1 | `nix develop -c cargo xtask test` | `xtask-test.log` | 0 | 37 `test result: ok` lines, 0 `test result: FAILED` |
+| 2 | `nix develop -c cargo test -p xtask` | `xtask-tests.log` | 0 | 5 `test result: ok` lines (unit, integration, doctests), 0 failures |
+| 3 | `nix develop -c cargo xtask check` | `check.log` | 0 | clean |
+| 4 | `nix develop -c cargo xtask clippy` | `clippy.log` | 0 | clean (the workspace's pre-existing `warn`-level lints stay warnings; nothing is reported against `port/src/fid.rs` or `port/tests/aead_fid.rs`) |
+| 5 | `nix develop -c cargo xtask test-9p` | `test-9p.log` | 0 | 14 legs (seven targets, each with its scalar-backend twin), 14 `test result: ok` lines, 0 `test-9p:` lines |
+
+VERDICT pre-review-test: PASS exit=0
+VERDICT pre-review-xtask-tests: PASS exit=0
+VERDICT pre-review-check: PASS exit=0
+VERDICT pre-review-clippy: PASS exit=0
+VERDICT pre-review-test-9p: PASS exit=0
+
+The new pin is a real pin, not a shape that passes either way. With the `insert_lock` acquisition
+removed from `insert` (locally, not committed) `aead_fid_insert_racing_pair_lands_exactly_one_entry`
+fails with two winners in two shards — rounds 1, 3, 5, 9, 13 and 20 observed across runs — and with
+the lock in place the binary is green over repeated runs (`36 passed; 0 failed`). The window the
+test drives is the fallover one: the key's home block is full, one racer walks it and falls over to
+the next shard, a home slot is freed mid-race, and a racer that probed earlier lands at home.
+
+## HEAD under review — a669317 (SUPERSEDED)
+
+**Superseded** by the amendment section above: the insert lock changed `port/src/fid.rs` after this
+run, so these verdicts are history and are not the tree the owner is reviewing. Kept as recorded.
 
 HEAD a6693171aeac7675eea01af434f0adb75e57b4e5
 
@@ -20,7 +65,9 @@ Venue: `Darwin arm64` (the same venue line as `evidence/closing-suite.md`).
 Logs: `target/phase04-gaps/pre-review/NAME.log` (gitignored); each leg's log is the whole
 command output, and `NAME.exit` holds its exit code.
 
-## Pre-review legs
+## Pre-review legs — at a669317 (SUPERSEDED)
+
+Superseded by the amendment section above; kept as recorded.
 
 Run in the order the plan names, at HEAD `a669317`, so that the review is not offered on a red
 tree.
@@ -33,11 +80,11 @@ tree.
 | 4 | `nix develop -c cargo xtask clippy` | `clippy.log` | 0 | clean (the workspace's pre-existing `warn`-level lints stay warnings) |
 | 5 | `nix develop -c cargo xtask test-9p` | `test-9p.log` | 0 | 14 legs (seven test files, each with its scalar-backend twin), 14 `test result: ok` lines, 0 `test-9p:` lines |
 
-VERDICT pre-review-test: PASS exit=0
-VERDICT pre-review-xtask-tests: PASS exit=0
-VERDICT pre-review-check: PASS exit=0
-VERDICT pre-review-clippy: PASS exit=0
-VERDICT pre-review-test-9p: PASS exit=0
+SUPERSEDED (a669317): VERDICT pre-review-test: PASS exit=0
+SUPERSEDED (a669317): VERDICT pre-review-xtask-tests: PASS exit=0
+SUPERSEDED (a669317): VERDICT pre-review-check: PASS exit=0
+SUPERSEDED (a669317): VERDICT pre-review-clippy: PASS exit=0
+SUPERSEDED (a669317): VERDICT pre-review-test-9p: PASS exit=0
 
 The `test-9p` leg count of 14 is plan 04-20's per-file shape (seven legs, each with its
 scalar-backend twin); the `test result: ok` count stays 14 because each leg runs one test binary.

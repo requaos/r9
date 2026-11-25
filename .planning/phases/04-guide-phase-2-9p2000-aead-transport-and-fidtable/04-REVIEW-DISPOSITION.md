@@ -99,7 +99,7 @@ recorded: 2026-11-25T03:16:25.575Z
 | WR-06 | warning | fixed | 04-19 a9be163 |
 | WR-07 | warning | fixed | 04-21 bb7e83c |
 | WR-08 | warning | fixed | 04-20 18ff8e5 |
-| WR-09 | warning | fixed | 04-19 e0f7427 |
+| WR-09 | warning | fixed | 04-19 e0f7427; the racing-insert case was resolved on the owner's request (04-23 6fd201c) |
 | IN-01 | info | open | - |
 | IN-02 | info | open | - |
 | IN-03 | info | open | - |

@@ -7,11 +7,20 @@ so this review comes before plan 04-24's kernel byte evidence and plan 04-25's p
 follows, run the commands in "How to read the change", and answer **approve** or **changes: …**.
 Nothing is pushed by this plan.
 
+The range end is the **insert-lock amendment commit** the owner asked for after reading the first
+cut of this diff: the two racing inserts this bundle listed as an open question are resolved at it
+(point 12 below), and all five pre-review legs were re-run at it — `evidence/closing-suite-gaps.md`
+holds those verdicts and marks the earlier `a669317` block superseded. `port/src` still holds
+exactly two changed files.
+
 ## The range
 
 - GAPBASE `5d1549af07de7220d6f48aac0d0db221aa7c541c` — the commit `origin/main` holds, the source
   the owner approved and gated in plans 04-14 and 04-15.
-- HEAD `a6693171aeac7675eea01af434f0adb75e57b4e5` — this plan's findings-record commit. Task 1's
+- HEAD `6fd201c072d9c42f4de6e6d617c0ac35cf20d013` — the insert-lock amendment commit the
+  owner asked for after reading this diff
+  (`fix(04-23): serialise FidTable inserts so a racing pair cannot both land (WR-09)`), which
+  is the last source change in the range. Task 1's
   base check proved the first gap-closure source commit `38acbb5` has a parent (`3041ded`) with
   no source difference from `GAPBASE`, so everything below is the gap closure and nothing else.
 
@@ -20,10 +29,10 @@ Everything below is `GAPBASE..HEAD`.
 ## What changed, by the numbers
 
 ```
-$ git diff --stat 5d1549af07de7220d6f48aac0d0db221aa7c541c a6693171aeac7675eea01af434f0adb75e57b4e5 -- port/src
+$ git diff --stat 5d1549af07de7220d6f48aac0d0db221aa7c541c 6fd201c072d9c42f4de6e6d617c0ac35cf20d013 -- port/src
  port/src/chan/transport.rs | 483 +++++++++++++++++++++++++++++++++++++++++----------
- port/src/fid.rs            | 245 ++++++++++++++++++-----
- 2 files changed, 582 insertions(+), 146 deletions(-)
+ port/src/fid.rs            | 291 ++++++++++++++++++++++-----
+ 2 files changed, 626 insertions(+), 148 deletions(-)
 ```
 
 `git diff --name-only GAPBASE HEAD -- port/src` prints exactly these two files:
@@ -31,9 +40,11 @@ $ git diff --stat 5d1549af07de7220d6f48aac0d0db221aa7c541c a6693171aeac7675eea01
 
 ## The gap findings and where each was fixed
 
-One row per gap finding. Every pin named here was RED against the pre-gap-closure code (or is a
-recorded guard) and GREEN now, and each pin's ledger line names the `ADVANCED` commit recorded in
-`04-REVIEW-DISPOSITION.md`.
+One row per gap finding, plus one row for the insert-lock amendment the owner asked for. Every
+ledger pin named here was RED against the pre-gap-closure code (or is a recorded guard) and GREEN
+now, and each pin's ledger line names the `ADVANCED` commit recorded in `04-REVIEW-DISPOSITION.md`;
+the amendment row names a test rather than a ledger pin, and its record is point 12 below plus
+`evidence/closing-suite-gaps.md`.
 
 | Finding | File | Function or item changed | Pin that proves it | Plan |
 |---|---|---|---|---|
@@ -49,6 +60,7 @@ recorded guard) and GREEN now, and each pin's ledger line names the `ADVANCED` c
 | WR-07 | `port/src/chan/transport.rs` | `REKEY_TAG` is `NOTAG` on `Trekey`/`Rrekey` and on every exchange control message | `gap-cr02-wr07-routing` | 04-21 |
 | WR-08 | `xtask/src/test9p.rs` | `command_specs` one leg per listed `port/tests` file; `check_leg_output` every result line must report tests | `gap-wr08-per-file-legs` | 04-20 |
 | WR-09 | `port/src/fid.rs` | `insert` probes every shard for `(client_id, fid_key)` before the placement walk | `gap-wr09-fallover-duplicate` | 04-19 |
+| WR-09 (racing inserts, owner request) | `port/src/fid.rs` | `FidTable::insert_lock` (`"fid-insert"`): `insert` holds a **table-level** lock from before the all-shard probe until it returns, so the probe and the placement walk are one indivisible step and two concurrent inserts of one key cannot both pass the probe; lock order `insert_lock` → `active` → `reclaimed`; `resolve` still takes no lock | `aead_fid_insert_racing_pair_lands_exactly_one_entry` (32 scoped threads, 64 rounds: two winners in two shards without the lock, exactly one with it) | 04-23 |
 
 `xtask/src/test9p.rs` is outside `port/src` (the host-only xtask crate, linked into neither kernel
 image), so it needs no approval under the standing rule; it is listed because WR-08 is a gap
@@ -59,20 +71,20 @@ finding and the closing evidence re-runs it.
 Run from the repository root; each is read-only.
 
 ```
-git diff 5d1549af07de7220d6f48aac0d0db221aa7c541c a6693171aeac7675eea01af434f0adb75e57b4e5 -- port/src
-git diff 5d1549af07de7220d6f48aac0d0db221aa7c541c a6693171aeac7675eea01af434f0adb75e57b4e5 -- port/tests
-git diff 5d1549af07de7220d6f48aac0d0db221aa7c541c a6693171aeac7675eea01af434f0adb75e57b4e5 -- xtask/src
-git diff 5d1549af07de7220d6f48aac0d0db221aa7c541c a6693171aeac7675eea01af434f0adb75e57b4e5 -- .planning/rfc-9p2000-aead.md .planning/PROJECT.md .planning/phases/04-guide-phase-2-9p2000-aead-transport-and-fidtable/04-WIRE-DECISIONS.md
+git diff 5d1549af07de7220d6f48aac0d0db221aa7c541c 6fd201c072d9c42f4de6e6d617c0ac35cf20d013 -- port/src
+git diff 5d1549af07de7220d6f48aac0d0db221aa7c541c 6fd201c072d9c42f4de6e6d617c0ac35cf20d013 -- port/tests
+git diff 5d1549af07de7220d6f48aac0d0db221aa7c541c 6fd201c072d9c42f4de6e6d617c0ac35cf20d013 -- xtask/src
+git diff 5d1549af07de7220d6f48aac0d0db221aa7c541c 6fd201c072d9c42f4de6e6d617c0ac35cf20d013 -- .planning/rfc-9p2000-aead.md .planning/PROJECT.md .planning/phases/04-guide-phase-2-9p2000-aead-transport-and-fidtable/04-WIRE-DECISIONS.md
 ```
 
-The supporting ranges outside `port/src`: `port/tests` +2,193/−25 (`aead_fid.rs` +623/−3,
+The supporting ranges outside `port/src`: `port/tests` +2,365/−25 (`aead_fid.rs` +795/−3,
 `aead_negotiate.rs` +169/−2, `aead_transport.rs` +1,295/−7, `common/aead_link.rs` +106/−13),
 `xtask/src/test9p.rs` +133/−26, and the three planning documents plan 04-21 edited
 (`rfc-9p2000-aead.md` +4, `PROJECT.md` +3/−1, `04-WIRE-DECISIONS.md` +5/−3).
 
 ## The points worth your eye
 
-Every line number is at HEAD `a669317`.
+Every line number is at HEAD `6fd201c`.
 
 1. **The scrub in `Rekey::fail`, and what `keys_zeroized` now covers — `port/src/chan/transport.rs:994`, `:1024`, `:1036`.** `Session::fail` (`:987`) calls `self.rekey.fail()`; the re-key state drops the exchange secret (`Key` is `Zeroizing`), zero-fills and clears `out`, and drops the transcript. `keys_zeroized` (`:1024`) is `send.keys_zeroized() && recv_keys.is_zeroized() && rekey.keys_zeroized()`; `exchange_secret_zeroized` (`:1036`) is `secret.is_none() && out.iter().all(== 0)`. Both read storage, never a flag, so a failure path that skipped the scrub answers `false`. The `Rekey::keys_zeroized` body (`:562`) covers the pending and superseded slots plus those same two conditions.
 2. **The idle reset in `handle_ack` and the two new conditions of `rekey_due` — `transport.rs:1350` (reset at `:1370-1375`), `:1047` (conditions at `:1051-1053`).** A verified ACK zeroizes the superseded keys, clears the deadline, and sets `ready`, `own_marker_sent`, `request_sent`, `active` false with `phase = ExPhase::Idle`, so a later threshold crossing starts another exchange. `rekey_due` also requires both `pending` slots empty and no outstanding deadline, which is what stops a new exchange overlapping the previous generation.
@@ -81,10 +93,11 @@ Every line number is at HEAD `a669317`.
 5. **The tag and afid constants against `DECISION P9` and P3 — `transport.rs:70` (`REKEY_AFID = 0xFFFF_FFFE`), `:81` (`REKEY_TAG = crate::devmnt::NOTAG`), afid checks at `:122` and `:126`, all six exchange messages tagged `REKEY_TAG` (`:1390`, `:1501`, `:1512`, `:1528`).** `is_rekey_traffic` also puts `Tstream`/`Rstream` (`:128-135`) and `Tcompound`/`Rcompound` (`:135`) in exchange space only under `NOTAG` (the owner's two P9 amendments).
 6. **`exchange_frame` against P2 — `transport.rs:1687`.** It writes `size[4] type[1] tag[2]` then the standard body, with `Twrite`, `Rread` and `Rstream` writing the true count and exactly that many data bytes, unpadded, so a 21-byte `Twrite` is absorbed as 44 bytes and an empty one as 23. The sealed body still comes from `msg::encode_body` (P4, page-padded), so only what is hashed changed.
 7. **The helpers through `crypt_body` — `seal_packet` at `transport.rs:1773` (`:1798`), `open_packet` at `:1815` (`:1849`), `crypt_body` at `:1736`.** Parameters and non-data bodies from ChaCha20 block counter 0, data page `i` from `1 + 64 * i`, the same placement `Session` uses (`:624`, `:926`).
-8. **`FidEntry::matches` and the reserved client id 0 — `port/src/fid.rs:335`, `:646` (insert), `:722` (resolve).** Client id 0 is the cleared arena slot's identity, so refusing it makes every live entry's identity word non-zero; a torn or cleared image (word 0 zero, epoch and `FID_LIVE` still set) matches nobody. Fid number 0 stays usable by every nonzero client.
-9. **The home-window pointer check — `fid.rs:731`.** `resolve` refuses `handle.ptr` above `HOME_SLOTS` (16) after the shard-range check and before the one `deref_tiny`, because the table's shards are home-only and `ds` folds a wider pointer onto another slot; `clunk` and `mark_reclaimed` resolve first, so neither computes a slot id from an unvalidated pointer. `resolve` still takes no lock and stays one arena read.
-10. **The all-shard duplicate probe — `fid.rs:668-680`.** `insert` calls `shard.tpht.lookup(key, same)` on every shard before the placement walk, so a key inserted before a fallover cannot gain a second live entry; a hit returns the existing "already present" error and changes no shard and no bitmap.
-11. **`ActiveSlots`, the lock order and the sweep by recorded key — `fid.rs:498`, insert `:684-690`, clunk `:770` (active then reclaimed), sweep `:864` (locks `:871`/`:873`, removal `:884-895`).** The live set is the dense slot ids plus the TPHT key recorded at insert. `sweep` takes each collected id's **recorded** key and removes that key's entry; the slot's current contents are never read, so a slot clunked and reused during a sweep keeps the live newcomer, and a slot that reads as zeros can never name key `(0, 0)`. Every mutator takes `active` before `reclaimed`; `resolve` takes neither.
+8. **`FidEntry::matches` and the reserved client id 0 — `port/src/fid.rs:350`, `:681` (insert), `:763` (resolve).** Client id 0 is the cleared arena slot's identity, so refusing it makes every live entry's identity word non-zero; a torn or cleared image (word 0 zero, epoch and `FID_LIVE` still set) matches nobody. Fid number 0 stays usable by every nonzero client.
+9. **The home-window pointer check — `fid.rs:773`.** `resolve` refuses `handle.ptr` above `HOME_SLOTS` (16) after the shard-range check and before the one `deref_tiny`, because the table's shards are home-only and `ds` folds a wider pointer onto another slot; `clunk` and `mark_reclaimed` resolve first, so neither computes a slot id from an unvalidated pointer. `resolve` still takes no lock and stays one arena read.
+10. **The all-shard duplicate probe — `fid.rs:710-716`.** `insert` calls `shard.tpht.lookup(key, same)` on every shard before the placement walk, so a key inserted before a fallover cannot gain a second live entry; a hit returns the existing "already present" error and changes no shard and no bitmap. The probe and the walk it licenses are one critical section of the table's `insert_lock` (point 12).
+11. **`ActiveSlots`, the lock order and the sweep by recorded key — `fid.rs:513`, insert `:724-730`, clunk `:804` (active then reclaimed), sweep `:906` (locks `:910`/`:912`, removal `:926-934`).** The live set is the dense slot ids plus the TPHT key recorded at insert. `sweep` takes each collected id's **recorded** key and removes that key's entry; the slot's current contents are never read, so a slot clunked and reused during a sweep keeps the live newcomer, and a slot that reads as zeros can never name key `(0, 0)`. Every mutator takes `active` before `reclaimed`; `resolve` takes neither.
+12. **The table-level insert lock — `fid.rs:581` (the field), `:693` (taken), module note at `:70-84`.** `insert` takes `insert_lock` (a `Lock<()>` named `"fid-insert"`) after the client-id-0 refusal and holds it across the whole all-shard probe **and** the placement walk, so the absence the probe proves cannot be invalidated before the placement it licenses. This is the case WR-09's probe alone left open and the owner asked for: with the probe's read and the walk indivisible, two concurrent inserts of one `(client_id, fid_key)` cannot both pass the probe and land in different shards. The order is `insert_lock` → `active` → `reclaimed` and only that way; `clunk`, `mark_reclaimed`, `sweep` and `bitmap_lens` take no `insert_lock`, so it never nests inside a shard lock, and `resolve` is untouched — no lock, one arena read. The pin is `aead_fid_insert_racing_pair_lands_exactly_one_entry` in `port/tests/aead_fid.rs`: 32 scoped threads insert one key for 64 rounds while another thread frees a slot in that key's home block, and it asserts one `Ok`, every other insert the "already present" error, one live resolvable entry and a sweep that leaves nothing stale. Without the lock it reports two winners in two shards within a few rounds.
 
 ## The owner's `DECISION P9` line, quoted
 
@@ -112,7 +125,22 @@ No deviation changes a wire byte or a public signature. The plan 04-21 compound 
 
 ### Open questions the summaries carry for the owner
 
-- **Two racing inserts of one `(client_id, fid_key)` are not serialised by the WR-09 probe (04-19).** The probe covers a *repeated* insert after a fallover, which is WR-09's truth; two inserts racing at the same instant could both pass the probe and land in different shards. Plan 04-22's single-lock rule covers mutation and bookkeeping per shard, not two shards at once. Whether a table-level rule is wanted is left to the owner.
+- **RESOLVED — the two racing inserts of one `(client_id, fid_key)` (WR-09, 04-19, resolved on the
+  owner's request at `6fd201c`).** This was an open question in the first cut of this bundle: the
+  WR-09 probe covered a *repeated* insert after a fallover, and plan 04-22's single-lock rule
+  covered mutation and bookkeeping per shard, so two inserts racing at the same instant could both
+  pass the probe and land in different shards. The owner read this diff and required it fixed
+  before approving. `FidTable` now carries a table-level `insert_lock` (`"fid-insert"`) that
+  `insert` takes before the probe and holds until it returns, so the probe's read and the placement
+  it licenses are one indivisible step (lock order `insert_lock` → `active` → `reclaimed`; `resolve`
+  unchanged, still lock-free and one arena read). The pin is
+  `aead_fid_insert_racing_pair_lands_exactly_one_entry` in `port/tests/aead_fid.rs`: 32 scoped
+  threads insert one key over 64 rounds while another thread frees a slot in that key's home block;
+  it asserts exactly one `Ok`, the rest the "already present" error, one live resolvable entry, and
+  a sweep that leaves nothing stale. With the lock removed it reports two winners in two shards
+  within a few rounds (rounds 1, 3, 5, 9, 13 and 20 observed across runs); with the lock it is
+  green over repeated runs. Point 12 above is the line-by-line reading, and
+  `evidence/closing-suite-gaps.md` records the re-run of all five pre-review legs at `6fd201c`.
 - **The msize a re-key needs under P4 (04-21).** `DECISION P4` is unchanged and P9 says so: the sealed exchange `Twrite` is 4172 bytes (28-byte header + 4112-byte P4 body + 32-byte MAC) and the sealed exchange `Rread` is 4160. A session whose negotiated msize is below 4172 cannot re-key — `packet_len` refuses the packet, `seal_into` fails and the one `fail()` path closes. Changing that would amend P4 and is not proposed here; what this closure changed is only what the transcript hashes (44 bytes for the `Twrite`, not 4119).
 - Plans 04-18, 04-20 and 04-22 record no open question for the owner.
 
