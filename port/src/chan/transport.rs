@@ -1577,11 +1577,14 @@ fn crypt_body(keys: &DirectionKeys, seq: u64, typ: u8, body: &mut [u8]) -> crate
 // compile and pass unchanged (the session engine above is their successor).
 // ---------------------------------------------------------------------------
 
-/// Seal one packet: header, encrypted body, MAC (D-06, D-07).
+/// Seal one packet: header, encrypted body, MAC (D-06, D-07, P5).
 ///
 /// The header is written field by field at the pinned offsets, the body is
-/// encrypted in place from block counter 0, and the MAC covers the one
-/// contiguous slice `[0, size - MAC_LEN)` and is appended last.
+/// encrypted in place through [`crypt_body`] — parameters from ChaCha20 block
+/// counter 0 and data page `i` from `1 + 64 * i`, the same placement
+/// [`Session::seal`] uses — and the MAC covers the one contiguous slice
+/// `[0, size - MAC_LEN)` and is appended last.  It is the tracer's thin path
+/// beside `Session` (WR-03).
 pub fn seal_packet(
     keys: &DirectionKeys,
     seq: u64,
@@ -1607,8 +1610,7 @@ pub fn seal_packet(
     header.encode((&mut packet[..HEADER_LEN]).try_into().expect("the header slice is 28 bytes"));
     packet[HEADER_LEN..HEADER_LEN + body.len()].copy_from_slice(body);
 
-    keys.keystream(seq, 0, &mut packet[HEADER_LEN..HEADER_LEN + body.len()])
-        .map_err(|_| "chan: keystream counter overflow")?;
+    crypt_body(keys, seq, typ, &mut packet[HEADER_LEN..HEADER_LEN + body.len()])?;
 
     let mut mac = keys.mac();
     mac.update(&packet[..size - MAC_LEN]);
@@ -1618,11 +1620,13 @@ pub fn seal_packet(
 }
 
 /// Open one packet: bounds, MAC, sequence, header rules, then decrypt
-/// (D-07, WIRE-03).
+/// (D-07, WIRE-03, P5).
 ///
 /// `Size` is the only field read before the MAC verifies, and only to bound
 /// the packet; every other field is acted on only after verification
-/// (T-04-11, T-04-12).  The returned body is the decrypted plaintext.
+/// (T-04-11, T-04-12).  The body is decrypted through [`crypt_body`], the same
+/// P5 placement [`Session::open`] uses, and the returned body is the decrypted
+/// plaintext.  It is the tracer's thin path beside `Session` (WR-03).
 pub fn open_packet(
     keys: &DirectionKeys,
     expected_seq: u64,
@@ -1657,8 +1661,7 @@ pub fn open_packet(
     // Decrypt the body only: the TLV area travels cleartext and is covered by
     // the MAC.  Then hand the split packet to the decoder (WIRE-03).
     let body_start = HEADER_LEN + header.ext_len as usize;
-    keys.keystream(header.seq, 0, &mut buf[body_start..size - MAC_LEN])
-        .map_err(|_| "chan: keystream counter overflow")?;
+    crypt_body(keys, header.seq, header.typ, &mut buf[body_start..size - MAC_LEN])?;
     let verified = Verified::new_verified(header, &buf)?;
     Ok((header.typ, header.tag, header.fid_handle, verified.body().to_vec()))
 }
