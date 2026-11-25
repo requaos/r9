@@ -15,3 +15,12 @@ PROPOSAL P5: keystream placement: parameters and non-data bodies from ChaCha20 b
 PROPOSAL P6: `blake3` `zeroize` feature: off; the limit (a per-packet hasher holds a key copy that is dropped unscrubbed) is stated in the `session.rs` module doc (Pitfall 6).
 PROPOSAL P7: sequence violation: a packet whose sequence number is not the expected next value is dropped and the connection is closed and zeroized, not dropped alone (Pattern 2, A6).
 PROPOSAL P8: `StatelessCap` tag: first 8 bytes of keyed BLAKE3 under the domain secret over the label `r9 StatelessCap1` then the capability's first 16 bytes; `epoch` is the table's current epoch; a capability that fails verification closes the connection (Pattern 7, A11).
+
+DECISION P1: accepted (2026-11-25)
+DECISION P2: accepted (2026-11-25)
+DECISION P3: accepted (2026-11-25)
+DECISION P4: accepted (2026-11-25)
+DECISION P5: accepted (2026-11-25)
+DECISION P6: accepted (2026-11-25)
+DECISION P7: accepted (2026-11-25)
+DECISION P8: accepted (2026-11-25)
