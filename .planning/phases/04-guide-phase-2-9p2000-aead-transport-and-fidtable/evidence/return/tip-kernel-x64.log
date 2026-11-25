@@ -1,0 +1,9 @@
+HEAD=a2ff50d2e7c0dbab90cf8061d15e240f8a6d8c04
+these 3 derivations will be built:
+  /nix/store/y8qza63h818fbcv1bz9hsvi7m4vi2vw2-cargo-vendor-dir.drv
+  /nix/store/c37sc86mkd8z5llc8rm619i74allxbsq-cargo-vendor-dir.drv
+  /nix/store/kv8vav7z2k6rfijigbqdw0yi3c5zj7vv-r9-kernel-x64-a2ff50d.drv
+building '/nix/store/y8qza63h818fbcv1bz9hsvi7m4vi2vw2-cargo-vendor-dir.drv'...
+building '/nix/store/c37sc86mkd8z5llc8rm619i74allxbsq-cargo-vendor-dir.drv'...
+building '/nix/store/kv8vav7z2k6rfijigbqdw0yi3c5zj7vv-r9-kernel-x64-a2ff50d.drv'...
+EXIT=0

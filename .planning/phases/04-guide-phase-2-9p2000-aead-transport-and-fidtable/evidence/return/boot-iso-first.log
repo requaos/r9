@@ -1,0 +1,8 @@
+HEAD=a2ff50d2e7c0dbab90cf8061d15e240f8a6d8c04
+this derivation will be built:
+  /nix/store/6q9g14hb9c3n1cz2fv69rd3mdg1nz54h-r9-boot-iso-a2ff50d.drv
+building '/nix/store/6q9g14hb9c3n1cz2fv69rd3mdg1nz54h-r9-boot-iso-a2ff50d.drv'...
+error: hash mismatch in fixed-output derivation '/nix/store/6q9g14hb9c3n1cz2fv69rd3mdg1nz54h-r9-boot-iso-a2ff50d.drv':
+         specified: sha256-x07uJKM8Y7j3uXNwqT8Txhd8zhkRV8YrBkKyT2sg490=
+            got:    sha256-5A6QdJdWz7uWyUrfUAc3jAO+ZQcG/TowydbTLoF+u9I=
+EXIT=1
