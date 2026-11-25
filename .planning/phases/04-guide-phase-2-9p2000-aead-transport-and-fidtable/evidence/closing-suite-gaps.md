@@ -138,3 +138,31 @@ VERDICT test-9p-run-1: PASS exit=0
 VERDICT test-9p-run-2: PASS exit=0
 VERDICT miri: PASS exit=0
 MIRI-TIME closing 357
+
+## aarch64 quick pass (plan 04-24, Task 2)
+
+HEAD caff8d4d7190cbede8a21600e7fc4cd37b04adc7
+(`evidence(04-24): closing suite and kernel byte evidence for the gap closure` — a `.planning`-only
+commit. No source file differs from the reviewed sha `6fd201c072d9c42f4de6e6d617c0ac35cf20d013`,
+and the kernels booted here are the ones recorded in `after-04-24.sha256` at `8df21a3`.)
+
+Venue: `Darwin arm64`.
+Logs: `target/phase04-closing2/quick/NAME.log` (gitignored); each log begins `HEAD=` and `CMD=` and
+ends `EXIT=`.
+
+D-25: the quick pass is the aarch64 evidence for this phase; the full HVF series is not run
+(deferred to Phase 8). Each leg passes on exit 0 with an `ALL STAGES PASS` line.
+
+| Leg | Command | Exit | Decisive line |
+|-----|---------|------|---------------|
+| `quick-tier1-hvf` | `nix run .#boot-r9-tier1` | 0 | `tier1-r9: ALL STAGES PASS — boot, one typed sweep line, float canary on r9, marker parity + exact SKIP set, T1-DONE, user-hooks-registered, no-unknown-device, no-unsupported-era` |
+| `quick-tier1-tcg` | `R9_ACCEL=tcg nix run .#boot-r9-tier1` | 0 | `tier1-r9: ALL STAGES PASS — boot, one typed sweep line, float canary on r9, marker parity + exact SKIP set, T1-DONE, user-hooks-registered, no-unknown-device, no-unsupported-era` |
+| `quick-smoke` | `nix run .#boot-r9-smoke` | 0 | `smoke-r9: ALL STAGES PASS — boot, echo (typed + answered), ls/ps/cat sweep, DEL safety, restart, pid-warning-absent, nic-bind, user-hooks-registered, no-unknown-device, no-unsupported-era` |
+| `quick-net-smoke` | `nix run .#boot-r9-net-smoke` | 0 | `smoke-r9-net: ALL STAGES PASS — boot, ping 127.0.0.1, udp echo, tcp/7 echo, ipconfig static, ipconfig dhcp (both NOT-L2-TRUTH labeled), completion marker, pid-warning-absent, nic-bind, user-hooks-registered, no-unknown-device, no-unsupported-era` |
+| `quick-cpu` | `nix run .#boot-r9-cpu` | 0 | `cpu-r9: ALL STAGES PASS — banner, bootconf, paqfs, cpurc-ran, shebang, stat, cap, remove, ssl, cpurc-done, init-rc, prompt, no-cpurc-fail, no-panic, bootconf-present, marker-once, user-hooks-registered, no-unknown-device` |
+
+VERDICT quick-tier1-hvf: PASS exit=0 — `tier1-r9: ALL STAGES PASS — boot, one typed sweep line, float canary on r9, marker parity + exact SKIP set, T1-DONE, user-hooks-registered, no-unknown-device, no-unsupported-era`
+VERDICT quick-tier1-tcg: PASS exit=0 — `tier1-r9: ALL STAGES PASS — boot, one typed sweep line, float canary on r9, marker parity + exact SKIP set, T1-DONE, user-hooks-registered, no-unknown-device, no-unsupported-era`
+VERDICT quick-smoke: PASS exit=0 — `smoke-r9: ALL STAGES PASS — boot, echo (typed + answered), ls/ps/cat sweep, DEL safety, restart, pid-warning-absent, nic-bind, user-hooks-registered, no-unknown-device, no-unsupported-era`
+VERDICT quick-net-smoke: PASS exit=0 — `smoke-r9-net: ALL STAGES PASS — boot, ping 127.0.0.1, udp echo, tcp/7 echo, ipconfig static, ipconfig dhcp (both NOT-L2-TRUTH labeled), completion marker, pid-warning-absent, nic-bind, user-hooks-registered, no-unknown-device, no-unsupported-era`
+VERDICT quick-cpu: PASS exit=0 — `cpu-r9: ALL STAGES PASS — banner, bootconf, paqfs, cpurc-ran, shebang, stat, cap, remove, ssl, cpurc-done, init-rc, prompt, no-cpurc-fail, no-panic, bootconf-present, marker-once, user-hooks-registered, no-unknown-device`
