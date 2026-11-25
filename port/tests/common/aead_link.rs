@@ -24,7 +24,8 @@ use crypto::key::Key;
 use crypto::session::Direction;
 use port::chan::msg::{self, Msg};
 use port::chan::transport::{
-    Closed, ExchangeStep, Handshake, Role, Session, SessionExchange, TransportConfig,
+    Closed, ExchangeStep, Handshake, RekeyIncoming, Role, Session, SessionExchange,
+    TransportConfig, is_rekey_traffic,
 };
 use port::chan::tlv::{self, Exts};
 use port::chan::wire;
@@ -571,8 +572,14 @@ impl ClientEnd {
         Ok(())
     }
 
-    /// Receive and decode one sealed message.
+    /// Receive and decode one sealed message, dropping its header tag.
     pub fn recv(&mut self) -> core::result::Result<Msg, Stage> {
+        self.recv_tagged().map(|(_, message)| message)
+    }
+
+    /// Receive and decode one sealed message, returning its header tag beside
+    /// the message (DECISION P9: the tag is the exchange discriminator).
+    pub fn recv_tagged(&mut self) -> core::result::Result<(u16, Msg), Stage> {
         let (now, count) = {
             let link = self.link.borrow();
             (link.now, Rc::clone(&link.decode_count))
@@ -581,13 +588,30 @@ impl ClientEnd {
         recv_one(&mut self.session, &mut link.s2c, now, &count)
     }
 
-    /// Drive one re-key step and put the returned sealed packets on the wire.
+    /// Drive one re-key step with the reserved exchange tag and put the
+    /// returned sealed packets on the wire.
+    ///
+    /// Convenience for the many pins whose exchange and control messages all
+    /// carry `NOTAG`; [`ClientEnd::rekey_tagged`] passes any other tag.
     pub fn rekey(
         &mut self,
         exchange: &mut dyn SessionExchange,
         incoming: Option<&Msg>,
         now: u64,
     ) -> core::result::Result<Vec<Vec<u8>>, Closed> {
+        let incoming = incoming.map(|message| (port::devmnt::NOTAG, message));
+        self.rekey_tagged(exchange, incoming, now)
+    }
+
+    /// Drive one re-key step with an explicit incoming tag and put the returned
+    /// sealed packets on the wire.
+    pub fn rekey_tagged(
+        &mut self,
+        exchange: &mut dyn SessionExchange,
+        incoming: Option<(u16, &Msg)>,
+        now: u64,
+    ) -> core::result::Result<Vec<Vec<u8>>, Closed> {
+        let incoming = incoming.map(|(tag, message)| RekeyIncoming { tag, message });
         let packets = self.session.rekey_step(exchange, incoming, now)?;
         let mut link = self.link.borrow_mut();
         for packet in &packets {
@@ -642,8 +666,14 @@ impl ServerEnd {
         Ok(())
     }
 
-    /// Receive and decode one sealed message.
+    /// Receive and decode one sealed message, dropping its header tag.
     pub fn recv(&mut self) -> core::result::Result<Msg, Stage> {
+        self.recv_tagged().map(|(_, message)| message)
+    }
+
+    /// Receive and decode one sealed message, returning its header tag beside
+    /// the message (DECISION P9).
+    pub fn recv_tagged(&mut self) -> core::result::Result<(u16, Msg), Stage> {
         let (now, count) = {
             let link = self.link.borrow();
             (link.now, Rc::clone(&link.decode_count))
@@ -652,13 +682,28 @@ impl ServerEnd {
         recv_one(&mut self.session, &mut link.c2s, now, &count)
     }
 
-    /// Drive one re-key step and put the returned sealed packets on the wire.
+    /// Drive one re-key step with the reserved exchange tag and put the
+    /// returned sealed packets on the wire ([`ServerEnd::rekey_tagged`] passes
+    /// any other tag).
     pub fn rekey(
         &mut self,
         exchange: &mut dyn SessionExchange,
         incoming: Option<&Msg>,
         now: u64,
     ) -> core::result::Result<Vec<Vec<u8>>, Closed> {
+        let incoming = incoming.map(|message| (port::devmnt::NOTAG, message));
+        self.rekey_tagged(exchange, incoming, now)
+    }
+
+    /// Drive one re-key step with an explicit incoming tag and put the returned
+    /// sealed packets on the wire.
+    pub fn rekey_tagged(
+        &mut self,
+        exchange: &mut dyn SessionExchange,
+        incoming: Option<(u16, &Msg)>,
+        now: u64,
+    ) -> core::result::Result<Vec<Vec<u8>>, Closed> {
+        let incoming = incoming.map(|(tag, message)| RekeyIncoming { tag, message });
         let packets = self.session.rekey_step(exchange, incoming, now)?;
         let mut link = self.link.borrow_mut();
         for packet in &packets {
@@ -682,7 +727,7 @@ fn recv_one(
     queue: &mut VecDeque<u8>,
     now: u64,
     decode_count: &Rc<RefCell<usize>>,
-) -> core::result::Result<Msg, Stage> {
+) -> core::result::Result<(u16, Msg), Stage> {
     if queue.len() < 4 {
         return Err(Stage::Empty);
     }
@@ -699,9 +744,10 @@ fn recv_one(
         .receive(&mut buf, now)
         .map_err(|_| Stage::Receive)?;
     let typ = verified.header().typ;
+    let tag = verified.header().tag;
     let message = msg::decode_body(typ, verified.body()).map_err(|_| Stage::Decode)?;
     *decode_count.borrow_mut() += 1;
-    Ok(message)
+    Ok((tag, message))
 }
 
 /// Build a packet with a valid MAC and arbitrary header and TLV bytes.
@@ -987,13 +1033,46 @@ impl E2eServer {
         result
     }
 
-    /// Open one sealed request, dispatch it and seal the reply.
+    /// Open one sealed request, route it, and answer it.
     ///
-    /// Every stateful request resolves its 8-byte header handle through
-    /// [`FidTable::resolve`]; a capability resolves through
-    /// [`FidTable::verify_cap`] and touches no FID memory (P4, P8, WIRE-08).
-    pub fn handle_one(&mut self) -> core::result::Result<(), Stage> {
-        let E2eOpened { msg, tag, handle, cap, .. } = self.recv_sealed()?;
+    /// Every opened message is classified with [`is_rekey_traffic`] first
+    /// (DECISION P9): exchange and control traffic goes to the session's re-key
+    /// state machine, whose sealed packets this end puts on the wire; anything
+    /// else is an ordinary request and is served from the file tree.  A message
+    /// the router rejects never reaches the second path and never closes the
+    /// connection because an exchange is in flight (CR-02).
+    pub fn handle_one(
+        &mut self,
+        exchange: &mut dyn SessionExchange,
+        now: u64,
+    ) -> core::result::Result<(), Stage> {
+        let opened = self.recv_sealed()?;
+        if is_rekey_traffic(opened.tag, &opened.msg) {
+            let incoming = RekeyIncoming {
+                tag: opened.tag,
+                message: &opened.msg,
+            };
+            let packets = {
+                let Some(session) = self.session.as_mut() else {
+                    return Err(Stage::Receive);
+                };
+                session
+                    .rekey_step(exchange, Some(incoming), now)
+                    .map_err(|_| Stage::Receive)?
+            };
+            let mut link = self.link.borrow_mut();
+            for packet in &packets {
+                link.wire_log.push((Direction::ServerToClient, packet.clone()));
+                link.s2c.extend(packet.iter().copied());
+            }
+            return Ok(());
+        }
+        self.serve(opened)
+    }
+
+    /// Answer one already-opened ordinary request from the canned tree.
+    fn serve(&mut self, opened: E2eOpened) -> core::result::Result<(), Stage> {
+        let E2eOpened { msg, tag, handle, cap, .. } = opened;
         match msg {
             Msg::Tattach { fid, .. } => {
                 let entry = e2e_entry(fid, E2E_ROOT, QTDIR);
@@ -1087,6 +1166,10 @@ impl E2eServer {
     }
 
     /// Drive one re-key step and put the returned sealed packets on the wire.
+    ///
+    /// The exchange's messages all carry the reserved tag (DECISION P9), so
+    /// this convenience forwards `NOTAG`; a pin that passes another tag calls
+    /// [`Session::rekey_step`] directly.
     pub fn rekey(
         &mut self,
         exchange: &mut dyn SessionExchange,
@@ -1096,6 +1179,10 @@ impl E2eServer {
         let Some(session) = self.session.as_mut() else {
             return Err(Closed);
         };
+        let incoming = incoming.map(|message| RekeyIncoming {
+            tag: port::devmnt::NOTAG,
+            message,
+        });
         let packets = session.rekey_step(exchange, incoming, now)?;
         let mut link = self.link.borrow_mut();
         for packet in &packets {
@@ -1205,12 +1292,18 @@ impl E2eClient {
     }
 
     /// Drive one re-key step and put the returned sealed packets on the wire.
+    ///
+    /// The exchange's messages all carry the reserved tag (DECISION P9).
     pub fn rekey(
         &mut self,
         exchange: &mut dyn SessionExchange,
         incoming: Option<&Msg>,
         now: u64,
     ) -> core::result::Result<Vec<Vec<u8>>, Closed> {
+        let incoming = incoming.map(|message| RekeyIncoming {
+            tag: port::devmnt::NOTAG,
+            message,
+        });
         let packets = self.session.rekey_step(exchange, incoming, now)?;
         let mut link = self.link.borrow_mut();
         for packet in &packets {

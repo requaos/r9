@@ -63,25 +63,87 @@ use super::tlv::{self, Exts};
 use super::wire::{self, Header, Unverified, Verified, check_header, frame_size, packet_len};
 use super::{HEADER_LEN, MAC_LEN, PAGE_LEN};
 
-/// The auth fid the in-band re-key exchange rides (P3, D-18).
-const REKEY_AFID: u32 = 7;
-
-/// The standard-frame tags the in-band exchange messages carry (P3, D-18).
+/// The auth fid the in-band re-key exchange rides (P9, D-18).
 ///
-/// The same constants rebuild the frame both ends absorb into the re-key
-/// transcript, so the two transcripts agree byte for byte.
-const REKEY_AUTH_TAG: u16 = 1;
-const REKEY_WRITE_TAG: u16 = 2;
-const REKEY_READ_TAG: u16 = 3;
+/// `0xFFFFFFFE` is one below `devmnt::NOFID`, which the allocator never issues,
+/// and it is the afid the in-band `Tauth`, `Twrite` and `Tread` name.
+const REKEY_AFID: u32 = 0xFFFF_FFFE;
 
-/// The tag the re-key control messages (`Trekey` / `Rrekey`) carry (P3).
-const REKEY_TAG: u16 = 0;
+/// The reserved tag every in-band exchange message carries (P9).
+///
+/// `devmnt` issues tags 1 to `0xFFFE` and never `NOTAG`, so a sealed message
+/// with this tag is exchange or control traffic and never an ordinary request.
+/// The same constant rebuilds the frame both ends absorb into the re-key
+/// transcript, so the two transcripts agree byte for byte.
+const REKEY_EXCHANGE_TAG: u16 = crate::devmnt::NOTAG;
+
+/// The tag the re-key control messages (`Trekey` / `Rrekey`) carry (P3, P9).
+const REKEY_TAG: u16 = crate::devmnt::NOTAG;
 
 /// The sequence number that is never sent (P3, D-19).
 ///
 /// A sender whose counter reaches this value with no new keys installed closes
 /// the connection rather than wrap.
 pub const SEQ_HARD_LIMIT: u64 = u64::MAX;
+
+/// One message handed to the re-key router: its wire tag beside its decoded
+/// body (DECISION P9).
+///
+/// The tag is the discriminator: a sealed message is in-band exchange traffic
+/// only when its tag is [`crate::devmnt::NOTAG`] and its type is one of the
+/// exchange or control types.  The caller opens the packet, decodes the body
+/// and passes both here; a message [`is_rekey_traffic`] rejects belongs to the
+/// caller's 9P layer and must never reach the re-key state machine.
+pub struct RekeyIncoming<'a> {
+    /// The packet header `Tag`.
+    pub tag: u16,
+    /// The decoded message body.
+    pub message: &'a msg::Msg,
+}
+
+/// Whether a sealed message is in-band re-key traffic (DECISION P9).
+///
+/// True only under the reserved tag `NOTAG` (P9): for the control messages
+/// `Trekey`/`Rrekey` (P3), and for the six exchange messages, where `Tauth`,
+/// `Twrite` and `Tread` must additionally name the reserved afid.  The owner's
+/// P9 amendment extends the same rule to `Tstream` (reserved tag and the
+/// exchange afid in its 8-byte `FidHandle`) and `Rstream` (reserved tag; it
+/// carries no fid), and its second amendment adds `Tcompound`/`Rcompound`
+/// (reserved tag; neither carries a top-level fid, so the tag alone identifies
+/// them).  A message this function rejects belongs to the caller's 9P
+/// layer: it is never absorbed, never advances the exchange and never closes
+/// the connection because an exchange is in flight.
+pub fn is_rekey_traffic(tag: u16, message: &msg::Msg) -> bool {
+    if tag != REKEY_EXCHANGE_TAG {
+        return false;
+    }
+    match message {
+        msg::Msg::Trekey { .. } | msg::Msg::Rrekey { .. } => true,
+        msg::Msg::Tauth { afid, .. } => *afid == REKEY_AFID,
+        // `Rauth` carries only a qid; `Rwrite` and `Rread` carry no fid, so the
+        // reserved tag identifies all three.
+        msg::Msg::Rauth { .. } => true,
+        msg::Msg::Twrite { fid, .. } | msg::Msg::Tread { fid, .. } => *fid == REKEY_AFID,
+        msg::Msg::Rwrite { .. } | msg::Msg::Rread { .. } => true,
+        msg::Msg::Tstream { fid_handle, .. } => *fid_handle == exchange_stream_handle(),
+        msg::Msg::Rstream { .. } => true,
+        // Neither compound message carries a top-level fid, so the reserved tag
+        // alone puts it in exchange space (P9 second amendment). The exchange
+        // does not dispatch these types today, so `rekey_handle` closes on one
+        // rather than absorb it; classifying it here keeps that decision
+        // explicit instead of leaving it to the catch-all.
+        msg::Msg::Tcompound { .. } | msg::Msg::Rcompound { .. } => true,
+        _ => false,
+    }
+}
+
+/// The P9 afid as the 8-byte `FidHandle` a `Tstream` body names: the afid
+/// little-endian in the first four bytes, the remaining four zero (P9).
+fn exchange_stream_handle() -> [u8; 8] {
+    let mut handle = [0u8; 8];
+    handle[..4].copy_from_slice(&REKEY_AFID.to_le_bytes());
+    handle
+}
 
 /// The state of a direction's superseded (old-generation) key slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1018,16 +1080,18 @@ impl Session {
     /// Drive the in-band re-key state machine one step and return the sealed
     /// packets to send next (D-18 to D-20, RESEARCH Pattern 4).
     ///
-    /// `incoming` is one decoded message just received (an exchange message, a
-    /// marker, an acknowledgement or a request); `None` lets this end emit
-    /// whatever it has to send next (a `Tauth`, a `REQUEST` or its own marker).
-    /// The exchange travels sealed: this method seals each message under the
-    /// session's current keys and the caller puts the returned packets on the
-    /// wire.  Every deadline comparison uses only `now` (F4).
+    /// `incoming` is one decoded message just received, with its header tag
+    /// ([`RekeyIncoming`]); `None` lets this end emit whatever it has to send
+    /// next (a `Tauth`, a `REQUEST` or its own marker).  The caller routes every
+    /// opened message with [`is_rekey_traffic`] and hands ordinary messages to
+    /// its 9P layer; the message that arrives here is exchange or control
+    /// traffic.  The exchange travels sealed: this method seals each message
+    /// under the session's current keys and the caller puts the returned
+    /// packets on the wire.  Every deadline comparison uses only `now` (F4).
     pub fn rekey_step(
         &mut self,
         exchange: &mut dyn SessionExchange,
-        incoming: Option<&msg::Msg>,
+        incoming: Option<RekeyIncoming<'_>>,
         now: u64,
     ) -> core::result::Result<Vec<Vec<u8>>, Closed> {
         if !self.authenticated {
@@ -1044,15 +1108,17 @@ impl Session {
             return Err(Closed);
         }
         let mut packets = Vec::new();
+        let emit = incoming.is_none();
 
-        if let Some(message) = incoming {
-            self.rekey_handle(message, exchange, now, &mut packets)?;
+
+        if let Some(incoming) = incoming {
+            self.rekey_handle(incoming, exchange, now, &mut packets)?;
         }
 
         // With nothing to answer, emit a marker once the exchange finished, or
         // start an exchange when this end's threshold (or the peer's request)
         // asked for one.
-        if incoming.is_none() {
+        if emit {
             if self.rekey.ready && !self.rekey.own_marker_sent {
                 self.send_own_marker(now, &mut packets)?;
             } else if !self.rekey.active && !self.rekey.ready && self.rekey_due() {
@@ -1068,13 +1134,20 @@ impl Session {
     }
 
     /// Dispatch one decoded message into the re-key state machine.
+    ///
+    /// The tag is the discriminator (P9): control traffic must carry `NOTAG`
+    /// (P3), exchange traffic is what [`is_rekey_traffic`] accepts, and any
+    /// other message is ordinary traffic - it leaves every field of the re-key
+    /// state as it was and returns no packet.  A message carrying the reserved
+    /// tag that does not fit the route is a protocol violation and closes.
     fn rekey_handle(
         &mut self,
-        message: &msg::Msg,
+        incoming: RekeyIncoming<'_>,
         exchange: &mut dyn SessionExchange,
         now: u64,
         packets: &mut Vec<Vec<u8>>,
     ) -> core::result::Result<(), Closed> {
+        let RekeyIncoming { tag, message } = incoming;
         match message {
             msg::Msg::Trekey {
                 kind,
@@ -1085,32 +1158,72 @@ impl Session {
                 kind,
                 generation,
                 confirm,
-            } => match *kind {
-                msg::REKEY_REQUEST => {
-                    // Only the client drives the exchange; a server already
-                    // waiting ignores a stray request.
-                    if self.send_direction == Direction::ClientToServer
-                        && !self.rekey.active
-                        && !self.rekey.ready
-                    {
-                        self.begin_client_exchange(packets)?;
-                    }
-                    Ok(())
-                }
-                msg::REKEY_MARKER => self.handle_marker(*generation, packets),
-                msg::REKEY_ACK => self.handle_ack(*generation, confirm),
-                _ => {
+            } => {
+                // P3 pins NOTAG for every control message; any other tag is a
+                // violation, whatever the kind.
+                if tag != REKEY_TAG {
                     self.fail();
-                    Err(Closed)
+                    return Err(Closed);
                 }
-            },
+                match *kind {
+                    msg::REKEY_REQUEST => {
+                        // Only the client drives the exchange; a server already
+                        // waiting ignores a stray request.
+                        if self.send_direction == Direction::ClientToServer
+                            && !self.rekey.active
+                            && !self.rekey.ready
+                        {
+                            self.begin_client_exchange(packets)?;
+                        }
+                        Ok(())
+                    }
+                    msg::REKEY_MARKER => self.handle_marker(*generation, packets),
+                    msg::REKEY_ACK => self.handle_ack(*generation, confirm),
+                    _ => {
+                        self.fail();
+                        Err(Closed)
+                    }
+                }
+            }
             msg::Msg::Tauth { .. }
             | msg::Msg::Rauth { .. }
             | msg::Msg::Twrite { .. }
             | msg::Msg::Rwrite { .. }
             | msg::Msg::Tread { .. }
-            | msg::Msg::Rread { .. } => self.exchange_incoming(message, exchange, now, packets),
-            _ => Ok(()),
+            | msg::Msg::Rread { .. }
+            | msg::Msg::Tstream { .. }
+            | msg::Msg::Rstream { .. } => {
+                if !is_rekey_traffic(tag, message) {
+                    // A reserved-tag message that does not fit the exchange
+                    // route (a wrong fid, say) reopens CR-02; any other tag is
+                    // ordinary traffic and is never consumed (P9).
+                    if tag == crate::devmnt::NOTAG {
+                        self.fail();
+                        return Err(Closed);
+                    }
+                    return Ok(());
+                }
+                self.exchange_incoming(message, exchange, now, packets)
+            }
+            msg::Msg::Tcompound { .. } | msg::Msg::Rcompound { .. } => {
+                // The second P9 amendment puts a NOTAG compound in exchange
+                // space, but the exchange dispatches neither type, so a NOTAG
+                // compound must fail closed (and zeroize). Any other tag is
+                // ordinary traffic and leaves the state machine untouched.
+                if is_rekey_traffic(tag, message) {
+                    self.fail();
+                    return Err(Closed);
+                }
+                Ok(())
+            }
+            _ => {
+                // No other message type may carry the reserved tag.
+                if tag == crate::devmnt::NOTAG {
+                    self.fail();
+                    return Err(Closed);
+                }
+                Ok(())
+            }
         }
     }
 
@@ -1125,7 +1238,7 @@ impl Session {
             uname: b"none".to_vec(),
             aname: Vec::new(),
         };
-        self.send_exchange(wire::TAUTH, REKEY_AUTH_TAG, &tauth, packets)?;
+        self.send_exchange(wire::TAUTH, REKEY_EXCHANGE_TAG, &tauth, packets)?;
         self.rekey.phase = ExPhase::AwaitingRauth;
         Ok(())
     }
@@ -1280,6 +1393,10 @@ impl Session {
     }
 
     /// Encode, absorb and seal one exchange message, appending its packet.
+    ///
+    /// The absorbed frame is [`exchange_frame`] - the unpadded standard 9P2000
+    /// form DECISION P2 hashes - while the sealed body stays the P4 body from
+    /// `msg::encode_body`, whole 4096-byte pages included.
     fn send_exchange(
         &mut self,
         typ: u8,
@@ -1292,7 +1409,14 @@ impl Session {
             self.fail();
             return Err(Closed);
         }
-        self.absorb_exchange(typ, tag, &body);
+        let frame = match exchange_frame(typ, tag, message) {
+            Ok(frame) => frame,
+            Err(_) => {
+                self.fail();
+                return Err(Closed);
+            }
+        };
+        self.absorb_frame(&frame);
         let packet = self.send.seal_single(typ, tag, [0u8; 8], &Exts::default(), &body)?;
         packets.push(packet);
         Ok(())
@@ -1315,31 +1439,28 @@ impl Session {
         Ok(())
     }
 
-    /// Absorb one exchange message in its standard 9P2000 form.
-    fn absorb_exchange(&mut self, typ: u8, tag: u16, body: &[u8]) {
-        let mut frame = Vec::with_capacity(7 + body.len());
-        frame.extend_from_slice(&((7 + body.len()) as u32).to_le_bytes());
-        frame.push(typ);
-        frame.extend_from_slice(&tag.to_le_bytes());
-        frame.extend_from_slice(body);
+    /// Absorb one frame into the running re-key transcript.
+    fn absorb_frame(&mut self, frame: &[u8]) {
         if let Some(transcript) = &mut self.rekey.transcript {
-            transcript.absorb(&frame);
+            transcript.absorb(frame);
         }
     }
 
-    /// Absorb a received exchange message by re-encoding its body.
+    /// Absorb a received exchange message in its unpadded standard form (P2).
     fn absorb_exchange_incoming(
         &mut self,
         typ: u8,
         tag: u16,
         message: &msg::Msg,
     ) -> core::result::Result<(), Closed> {
-        let mut body = Vec::new();
-        if msg::encode_body(message, &mut body).is_err() {
-            self.fail();
-            return Err(Closed);
-        }
-        self.absorb_exchange(typ, tag, &body);
+        let frame = match exchange_frame(typ, tag, message) {
+            Ok(frame) => frame,
+            Err(_) => {
+                self.fail();
+                return Err(Closed);
+            }
+        };
+        self.absorb_frame(&frame);
         Ok(())
     }
 
@@ -1366,7 +1487,7 @@ impl Session {
     ) -> core::result::Result<(), Closed> {
         match (self.rekey.phase, message) {
             (ExPhase::AwaitingRauth, msg::Msg::Rauth { .. }) => {
-                self.absorb_exchange_incoming(wire::RAUTH, REKEY_AUTH_TAG, message)?;
+                self.absorb_exchange_incoming(wire::RAUTH, REKEY_EXCHANGE_TAG, message)?;
                 let mut out = Vec::new();
                 match exchange.step(&[], &mut out) {
                     Ok(ExchangeStep::Done(secret)) => self.rekey.secret = Some(secret),
@@ -1381,23 +1502,23 @@ impl Session {
                     offset: 0,
                     data: out,
                 };
-                self.send_exchange(wire::TWRITE, REKEY_WRITE_TAG, &twrite, packets)?;
+                self.send_exchange(wire::TWRITE, REKEY_EXCHANGE_TAG, &twrite, packets)?;
                 self.rekey.phase = ExPhase::AwaitingRwrite;
                 Ok(())
             }
             (ExPhase::AwaitingRwrite, msg::Msg::Rwrite { .. }) => {
-                self.absorb_exchange_incoming(wire::RWRITE, REKEY_WRITE_TAG, message)?;
+                self.absorb_exchange_incoming(wire::RWRITE, REKEY_EXCHANGE_TAG, message)?;
                 let tread = msg::Msg::Tread {
                     fid: REKEY_AFID,
                     offset: 0,
                     count: 65536,
                 };
-                self.send_exchange(wire::TREAD, REKEY_READ_TAG, &tread, packets)?;
+                self.send_exchange(wire::TREAD, REKEY_EXCHANGE_TAG, &tread, packets)?;
                 self.rekey.phase = ExPhase::AwaitingRread;
                 Ok(())
             }
             (ExPhase::AwaitingRread, msg::Msg::Rread { data }) => {
-                self.absorb_exchange_incoming(wire::RREAD, REKEY_READ_TAG, message)?;
+                self.absorb_exchange_incoming(wire::RREAD, REKEY_EXCHANGE_TAG, message)?;
                 if self.rekey.secret.is_none() {
                     let mut out = Vec::new();
                     match exchange.step(data, &mut out) {
@@ -1408,7 +1529,7 @@ impl Session {
                                 offset: 0,
                                 data: out,
                             };
-                            self.send_exchange(wire::TWRITE, REKEY_WRITE_TAG, &twrite, packets)?;
+                            self.send_exchange(wire::TWRITE, REKEY_EXCHANGE_TAG, &twrite, packets)?;
                             self.rekey.phase = ExPhase::AwaitingRwrite;
                             return Ok(());
                         }
@@ -1435,7 +1556,14 @@ impl Session {
         packets: &mut Vec<Vec<u8>>,
     ) -> core::result::Result<(), Closed> {
         match (self.rekey.phase, message) {
-            (ExPhase::Idle, msg::Msg::Tauth { .. }) => {
+            (ExPhase::Idle, msg::Msg::Tauth { afid, .. }) => {
+                // P9: the in-band Tauth names the reserved afid.  The router
+                // already checked it; the arm checks again so the exchange
+                // cannot advance on a wrong fid whatever the caller passed.
+                if *afid != REKEY_AFID {
+                    self.fail();
+                    return Err(Closed);
+                }
                 // A previous generation's pending keys must be fully taken
                 // before another exchange starts: two generations in flight for
                 // one direction is the overlap D-20 forbids (WR-01).
@@ -1444,7 +1572,7 @@ impl Session {
                     return Err(Closed);
                 }
                 self.rekey.start(&self.transcript);
-                self.absorb_exchange_incoming(wire::TAUTH, REKEY_AUTH_TAG, message)?;
+                self.absorb_exchange_incoming(wire::TAUTH, REKEY_EXCHANGE_TAG, message)?;
                 let rauth = msg::Msg::Rauth {
                     aqid: Qid {
                         path: 0,
@@ -1452,12 +1580,16 @@ impl Session {
                         typ: 0,
                     },
                 };
-                self.send_exchange(wire::RAUTH, REKEY_AUTH_TAG, &rauth, packets)?;
+                self.send_exchange(wire::RAUTH, REKEY_EXCHANGE_TAG, &rauth, packets)?;
                 self.rekey.phase = ExPhase::AwaitingTwrite;
                 Ok(())
             }
-            (ExPhase::AwaitingTwrite, msg::Msg::Twrite { data, .. }) => {
-                self.absorb_exchange_incoming(wire::TWRITE, REKEY_WRITE_TAG, message)?;
+            (ExPhase::AwaitingTwrite, msg::Msg::Twrite { fid, data, .. }) => {
+                if *fid != REKEY_AFID {
+                    self.fail();
+                    return Err(Closed);
+                }
+                self.absorb_exchange_incoming(wire::TWRITE, REKEY_EXCHANGE_TAG, message)?;
                 let mut out = Vec::new();
                 let step = match exchange.step(data, &mut out) {
                     Ok(step) => step,
@@ -1473,17 +1605,21 @@ impl Session {
                 let rwrite = msg::Msg::Rwrite {
                     count: data.len() as u32,
                 };
-                self.send_exchange(wire::RWRITE, REKEY_WRITE_TAG, &rwrite, packets)?;
+                self.send_exchange(wire::RWRITE, REKEY_EXCHANGE_TAG, &rwrite, packets)?;
                 if self.rekey.secret.is_some() {
                     self.rekey.phase = ExPhase::AwaitingTread;
                 }
                 Ok(())
             }
-            (ExPhase::AwaitingTread, msg::Msg::Tread { .. }) => {
-                self.absorb_exchange_incoming(wire::TREAD, REKEY_READ_TAG, message)?;
+            (ExPhase::AwaitingTread, msg::Msg::Tread { fid, .. }) => {
+                if *fid != REKEY_AFID {
+                    self.fail();
+                    return Err(Closed);
+                }
+                self.absorb_exchange_incoming(wire::TREAD, REKEY_EXCHANGE_TAG, message)?;
                 let data = core::mem::take(&mut self.rekey.out);
                 let rread = msg::Msg::Rread { data };
-                self.send_exchange(wire::RREAD, REKEY_READ_TAG, &rread, packets)?;
+                self.send_exchange(wire::RREAD, REKEY_EXCHANGE_TAG, &rread, packets)?;
                 self.finish_exchange()
             }
             _ => {
@@ -1538,6 +1674,55 @@ impl Session {
         }
         Ok(())
     }
+}
+
+/// The standard 9P2000 frame the re-key transcript absorbs (DECISION P2).
+///
+/// `size[4] type[1] tag[2]` then the standard body, `size` counting all of those
+/// bytes.  For the data messages `Twrite`, `Rread` and `Rstream` the body is
+/// written field by field little-endian with the true `count` and exactly that
+/// many data bytes, unpadded: the page padding P4 puts on the wire is never
+/// hashed.  The other exchange messages have no data field, so their body is
+/// what `msg::encode_body` already gives (the standard body).
+fn exchange_frame(typ: u8, tag: u16, message: &msg::Msg) -> crate::Result<Vec<u8>> {
+    let mut body = Vec::new();
+    match message {
+        msg::Msg::Twrite { fid, offset, data } => {
+            body.extend_from_slice(&fid.to_le_bytes());
+            body.extend_from_slice(&offset.to_le_bytes());
+            body.extend_from_slice(&data_len(data.len())?.to_le_bytes());
+            body.extend_from_slice(data);
+        }
+        msg::Msg::Rread { data } => {
+            body.extend_from_slice(&data_len(data.len())?.to_le_bytes());
+            body.extend_from_slice(data);
+        }
+        msg::Msg::Rstream {
+            stream_id,
+            chunk_seq,
+            data,
+        } => {
+            body.extend_from_slice(&stream_id.to_le_bytes());
+            body.extend_from_slice(&chunk_seq.to_le_bytes());
+            body.extend_from_slice(&data_len(data.len())?.to_le_bytes());
+            body.extend_from_slice(data);
+        }
+        other => msg::encode_body(other, &mut body)?,
+    }
+    let total = 7 + body.len();
+    let size =
+        u32::try_from(total).map_err(|_| "chan: exchange frame exceeds the 32-bit size field")?;
+    let mut frame = Vec::with_capacity(total);
+    frame.extend_from_slice(&size.to_le_bytes());
+    frame.push(typ);
+    frame.extend_from_slice(&tag.to_le_bytes());
+    frame.extend_from_slice(&body);
+    Ok(frame)
+}
+
+/// A data length as the wire's 32-bit count, checked, never narrowed.
+fn data_len(n: usize) -> crate::Result<u32> {
+    u32::try_from(n).map_err(|_| "chan: data length exceeds 32 bits")
 }
 
 /// One data page is `PAGE_LEN` bytes, which is exactly this many ChaCha20
