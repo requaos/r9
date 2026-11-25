@@ -57,9 +57,55 @@ at; Task 3's precondition re-checks this and stops if it does not hold.
 
 VERDICT port-src-review: APPROVED HEAD=f72cc2ad421600f2a727f25a9708e30867729461
 
-## Closing runs
+## Closing runs (Task 3, at the reviewed commit)
 
-Task 3 appends `VERDICT suite-run-1`, `suite-run-2`, `test-9p-run-1`, `test-9p-run-2`, `miri`,
-the kernel-byte verdicts' companions and the aarch64 quick-pass verdicts at the reviewed
-commit, after the owner's `VERDICT port-src-review` line.  Nothing in this section may be
-written before the review returns `APPROVED`.
+All runs were made at HEAD `3398df49499d1b877fcf0ac92fa54c0872df9c71` — the Task 2 approval
+commit — with no source change since the reviewed sha `f72cc2a` (Task 3 precondition checked
+`git diff --quiet f72cc2a HEAD -- port crypto ds xtask aarch64 x86_64 Cargo.lock`, which was
+clean). Logs are under `target/phase04-closing/closing/NAME.log` (gitignored); each log's first
+line is its `HEAD=` and its last is `EXIT=`.
+
+| Run | Command | Log | Exit | Seconds |
+|-----|---------|-----|------|---------|
+| 1 | `nix develop -c cargo xtask test` | `test-run-1.log` | 0 | 4 |
+| 1 | `nix develop -c cargo test -p xtask` | `xtask-tests-run-1.log` | 0 | 4 |
+| 1 | `nix develop -c cargo xtask check` | `check-run-1.log` | 0 | 3 |
+| 1 | `nix develop -c cargo xtask clippy` | `clippy-run-1.log` | 0 | 2 |
+| 1 | `nix develop -c cargo xtask test-9p` | `test-9p-run-1.log` | 0 | 3 |
+| 2 | `nix develop -c cargo xtask test` | `test-run-2.log` | 0 | 5 |
+| 2 | `nix develop -c cargo test -p xtask` | `xtask-tests-run-2.log` | 0 | 4 |
+| 2 | `nix develop -c cargo xtask check` | `check-run-2.log` | 0 | 3 |
+| 2 | `nix develop -c cargo xtask clippy` | `clippy-run-2.log` | 0 | 2 |
+| 2 | `nix develop -c cargo xtask test-9p` | `test-9p-run-2.log` | 0 | 3 |
+| — | `nix develop -c cargo xtask miri` | `miri.log` | 0 | 348 |
+
+The four suite commands (`test`, `test -p xtask`, `check`, `clippy`) passed twice; `test-9p`
+passed twice; `miri` passed once. `miri` took 348 seconds — over the 120-second band, which is
+the accepted Phase 3 deviation: it is reported here, not cut for time.
+
+VERDICT suite-run-1: PASS exit=0
+VERDICT suite-run-2: PASS exit=0
+VERDICT test-9p-run-1: PASS exit=0
+VERDICT test-9p-run-2: PASS exit=0
+VERDICT miri: PASS exit=0
+MIRI-TIME closing 348
+
+## Aarch64 quick pass (Task 3, at the reviewed commit)
+
+Run on the Mac (`Darwin arm64`) at HEAD `3398df4`; logs under `target/phase04-closing/quick/`
+(gitignored), each beginning `HEAD=` and ending `EXIT=`. Each passes on exit 0 with its decisive
+line containing `ALL STAGES PASS`.
+
+| Verdict id | Command | Log | Exit | Seconds | Decisive line |
+|------------|---------|-----|------|---------|---------------|
+| `quick-tier1-hvf` | `nix run .#boot-r9-tier1` | `quick-tier1-hvf.log` | 0 | 47 | `tier1-r9: ALL STAGES PASS` — boot, typed sweep, float canary, marker parity + exact SKIP set, T1-DONE, user-hooks-registered, no-unknown-device, no-unsupported-era |
+| `quick-tier1-tcg` | `R9_ACCEL=tcg nix run .#boot-r9-tier1` | `quick-tier1-tcg.log` | 0 | 13 | same tier-1 stage set, under TCG |
+| `quick-smoke` | `nix run .#boot-r9-smoke` | `quick-smoke.log` | 0 | 11 | `smoke-r9: ALL STAGES PASS` — boot, echo, ls/ps/cat sweep, DEL safety, restart, pid-warning-absent, nic-bind, hooks, no-unknown-device |
+| `quick-net-smoke` | `nix run .#boot-r9-net-smoke` | `quick-net-smoke.log` | 0 | 17 | `echo NET-SMOKE: ALL STAGES PASS` |
+| `quick-cpu` | `nix run .#boot-r9-cpu` | `quick-cpu.log` | 0 | 46 | `cpu-r9: ALL STAGES PASS` — banner, bootconf, paqfs, cpurc-ran, shebang, stat, cap, remove, ssl, cpurc-done, init-rc, prompt, no-panic, marker-once, hooks, no-unknown-device |
+
+VERDICT quick-tier1-hvf: PASS exit=0
+VERDICT quick-tier1-tcg: PASS exit=0
+VERDICT quick-smoke: PASS exit=0
+VERDICT quick-net-smoke: PASS exit=0
+VERDICT quick-cpu: PASS exit=0

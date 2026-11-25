@@ -1,0 +1,10 @@
+virtshell text-symbol-bytes 755220
+virtshell fpsimd-lines 309
+q35churnshell text-symbol-bytes 760137
+q35churnshell fpsimd-lines 6
+METRIC-COMMAND virtshell text-symbol-bytes: nm --print-size --defined-only --radix=d target/aarch64-unknown-none-elf/debug/aarch64 | awk '$3=="T"||$3=="t"{s+=$2} END{print s+0}'
+METRIC-COMMAND virtshell fpsimd-lines: objdump -d target/aarch64-unknown-none-elf/debug/aarch64 | grep -cE '\b(v[0-9]+|q[0-9]+)\b'
+METRIC-COMMAND q35churnshell text-symbol-bytes: nm --print-size --defined-only --radix=d target/x86_64-unknown-none-elf/debug/x86_64 | awk '$3=="T"||$3=="t"{s+=$2} END{print s+0}'
+METRIC-COMMAND q35churnshell fpsimd-lines: objdump -d target/x86_64-unknown-none-elf/debug/x86_64 | grep -cE '%xmm|%ymm|%zmm|%st\(|%mm'
+MEASURED virtshell 0ae5d5745632065371f99c0db1cae2bfe2c88d58b043b9e160f991035a43dd6a target/aarch64-unknown-none-elf/debug/aarch64
+MEASURED q35churnshell c850fb6408261299713894af9917c3b55c776ee26130295239bea9cd20748957 target/x86_64-unknown-none-elf/debug/x86_64
