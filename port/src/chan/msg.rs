@@ -378,7 +378,10 @@ pub fn encode_body(msg: &Msg, out: &mut Vec<u8>) -> crate::Result<()> {
             }
             p32(out, *fid);
             p32(out, *newfid);
-            p16(out, wname.len() as u16);
+            p16(
+                out,
+                u16::try_from(wname.len()).map_err(|_| "chan: too many walk names")?,
+            );
             for name in wname {
                 pstr(out, name)?;
             }
@@ -387,7 +390,10 @@ pub fn encode_body(msg: &Msg, out: &mut Vec<u8>) -> crate::Result<()> {
             if wqid.len() > MAXWELEM {
                 return Err("chan: Rwalk with more than 16 qids");
             }
-            p16(out, wqid.len() as u16);
+            p16(
+                out,
+                u16::try_from(wqid.len()).map_err(|_| "chan: too many walk qids")?,
+            );
             for q in wqid {
                 pqid(out, q);
             }
