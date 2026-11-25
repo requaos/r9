@@ -4,13 +4,30 @@
 
 r9 is a faithful pure-Rust port of Bell Labs' Plan 9 and Harvey (the 64-bit Plan 9 4th Edition derivative). The Rust kernel already boots Harvey's C userland on QEMU q35 x86_64 (primary) and aarch64 virt (HVF/TCG). The work ahead replaces Harvey's C userland with Rust one binary at a time, adds a native encrypted 9P wire protocol (`9P2000.aead`) and cryptographic memory, then makes r9 self-hosting so Harvey can be archived. The owner is the sole product owner and works with a single implementer.
 
+As of v3.0 (2026-11-25) the cross-build harness, the design lock, `crypto/`, `ds/` and the `9P2000.aead` wire foundation exist and are pinned by host tests. The booted kernel still speaks plain 9P2000; the authenticated engine is selected only at mount negotiation by a peer that offers `9P2000.aead` (D-16/D-23).
+
+## Current State
+
+**Shipped:** v3.0 Cross-Build Harness and Wire Foundations (2026-11-25) — 4 phases, 78 plans, 180 tasks, 38/38 requirements.
+**Milestone archive:** `.planning/milestones/v3.0-ROADMAP.md`, `v3.0-REQUIREMENTS.md`, `v3.0-MILESTONE-AUDIT.md`.
+**Golden invariant:** green — boots to rio on QEMU q35 at `bb68d98` under KVM, native TCG and the full gate set.
+**Next:** v3.1 Secure Memory and Cluster Fabric (Phases 5-7).
+
+## Next Milestone Goals
+
+- **Phase 5 — Cryptographic Memory and Zero-Copy DMA Paging:** shadow frames, dual-path decrypt stores, the restricted vector ABI, and a 9P data packet DMA-ing straight into the destination backing store with no kernel copy.
+- **Phase 6 — Distributed 9P Extensions and Service Discovery:** compound and stream messages, leases, union mounts, the legacy gateway, and beacon/discover with the 30 s unhealthy / 5 m dead lifecycle.
+- **Phase 7 — Process Lifecycle and Notes:** make `RFCKEY`, `RFROBASE` and `RFRANDMEM` live, and secure note delivery.
+
+Carried into the v3.1 backlog at the v3.0 close: wire `cargo xtask test-9p` and `cargo test -p xtask` into CI, reconcile `04-VALIDATION.md`, correct the boot-iso evidence claim, and settle the TPHT bank-sizing precondition before a default-bank FidShard exists.
+
 ## Core Value
 
 The OS boots to rio on QEMU q35 at every commit. This golden invariant outranks every feature: a change that breaks it is wrong, however good the feature.
 
 ## Requirements
 
-### Validated
+### Validated (shipped through v3.0)
 
 <!-- Inferred from the repository at HEAD 6ee45b5 and from HANDOFF.md (legacy-final checkpoint 116bcc2). The roadmapper did not re-run these. -->
 
@@ -54,11 +71,11 @@ The OS boots to rio on QEMU q35 at every commit. This golden invariant outranks 
 
 ## Context
 
-**Pinned versus current.** The four source documents (dated 2026-11-20) pin `requaos/r9` at `c787ce9` and `requaos/harvey` at `a6b7e6a9`. r9 HEAD is `6ee45b5`, 60 commits later. The last traditional-Plan-9 state is the annotated `legacy-final` tag (r9 `116bcc2`, Harvey `bd7a6982a`).
+**Pinned versus current.** The four source documents (dated 2026-11-20) pin `requaos/r9` at `c787ce9` and `requaos/harvey` at `a6b7e6a9`. r9 is far ahead of the pin: v3.0 alone shipped 585 commits. The last traditional-Plan-9 state is the annotated `legacy-final` tag (r9 `116bcc2`, Harvey `bd7a6982a`).
 
-**Repository layout at HEAD (verified at roadmap time).** Cargo workspace members `aarch64`, `x86_64`, `port`, `riscv64`, `xtask`; other top-level items `lib/` (target JSON specs), `docs/`, `flake.nix`, `UNSAFE-AUDIT.md`, `HowItWorks.md`, toolchain `nightly-2026-01-30`. There is no `crypto/`, `ds/`, `kern/`, `sys/`, or `venti/` directory, and no `vendor/`. Landing-site paths in the source documents (`port/src/chan.rs`, `port/src/fid.rs`, `x86_64/src/mmu.rs`, `kern/src/gpu.rs`, `kern/src/notes.rs`, `sys/src/...`, `venti/src/index.rs`) are therefore new files or crates and must be re-verified when each phase is planned. Kernel code lives in `x86_64/`, `aarch64/` and `port/`.
+**Repository layout at HEAD (verified at the v3.0 close).** Cargo workspace members `aarch64`, `crypto`, `ds`, `port`, `riscv64`, `x86_64`, `xtask`; other top-level items `lib/` (target JSON specs), `docs/`, `sys/include/` (the generated rfork header), `gates/`, `nix/`, `flake.nix`, `UNSAFE-AUDIT.md`, `HowItWorks.md`, toolchain `nightly-2026-01-30`. `crypto/` and `ds/` exist and are host-tested; `kern/` and `venti/` do not exist and there is no `vendor/`. Landing-site paths in the source documents (`x86_64/src/mmu.rs`, `kern/src/gpu.rs`, `kern/src/notes.rs`, `sys/src/...`, `venti/src/index.rs`) are therefore new files or crates and must be re-verified when each phase is planned. Kernel code lives in `x86_64/`, `aarch64/` and `port/`.
 
-**xtask at HEAD.** `xtask/src/{main,config,lib,pcap,uregcheck}.rs` plus `bin/r9-netdev-args.rs`; subcommands `build`, `expand`, `kasm`, `dist`, `test`, `clippy`, `check`, `qemu`, `boot-test`, `ureg-check`, `initrd`, `clean`. No `test-9p`, no `elf2aout`, and no `q35lowmem` or `q35crypt` profile (the existing `q35lowmcfg` is a moved-MCFG machine, unrelated). Nothing in r9's xtask or x86_64 configs asserts `rio`.
+**xtask at HEAD.** The v3.0 harness added `gate`, `image`, `test-9p`, `rfork-header` and `miri` alongside `build`, `expand`, `kasm`, `dist`, `test`, `clippy`, `check`, `qemu`, `boot-test`, `ureg-check`, `initrd` and `clean`. `elf2aout` and the `q35lowmem`/`q35crypt` profiles remain future work (the existing `q35lowmcfg` is a moved-MCFG machine, unrelated). The quick gate asserts rio and exits non-zero without it.
 
 **The Harvey seam today.** `R9_HARVEY_DIR` is required by `boot-test`, `ureg-check`, `initrd` and the pcap netaddr seam; unset or empty is a named hard error, with no `../harvey` default (a deliberate earlier decision, "Phase 5 D-10"). The q35shell config pulls its root image from `module = "harvey:build/x86_64/out/bootfs-chain.paq"`, which Harvey's bake produces. Harvey's own flake owns the composed gates (`boot-r9-x64` smokes, net, auth, drawterm gate, rio replay) and consumes r9's `kernel-x64`, `iso-builder` and `netdev-args` packages. The sibling checkout is `/Users/neilskinner/code/harvey`.
 
@@ -169,4 +186,4 @@ No ADR exists. Phase 2 (owner confirmation 2026-11-23, DSGN-05) settled the stat
 | The in-band re-key exchange is self-identifying: every exchange message (the in-band `Tauth`/`Rauth`, the afid `Twrite`/`Rwrite`/`Tread`/`Rread`, and a `Tstream`/`Rstream`/`Tcompound`/`Rcompound` if one ever crosses it) carries tag `NOTAG` (`0xFFFF`) and, on the T-messages and a `Tstream`, the reserved afid `0xFFFFFFFE`; `Rstream`, `Tcompound` and `Rcompound` carry no fid, so `NOTAG` plus the type alone identifies them; `Trekey`/`Rrekey` carry `NOTAG` too. A sealed message is exchange traffic only by that tag (with the six exchange types or the control pair), so an ordinary request or reply that crosses an exchange is delivered to its owner unchanged and never consumed; a reserved-tag message on a wrong fid, or a reserved-tag message the exchange does not expect, closes. The standard-form frames the re-key transcript absorbs carry these values and the data unpadded (P2). Costly to reverse: the tag and afid are on the wire and inside every re-keyed generation's keys. | `04-WIRE-DECISIONS.md` `DECISION P9`, amended by the owner on 2026-11-25 to cover `Tstream`/`Rstream` and again to cover `Tcompound`/`Rcompound` (identified by `NOTAG` alone); CR-02 and WR-07 of the Phase 4 review | Decided 2026-11-25 (owner) |
 
 ---
-*Last updated: 2026-11-25 after Phase 4 UAT passed 112/112 (91 automated, 21 owner judgements): milestone v3.0's four phases are complete, `04-SECURITY.md` records zero open threats, and the next step is the milestone close*
+*Last updated: 2026-11-25 after the v3.0 milestone close: 38/38 requirements shipped, UAT 112/112 on Phase 4, audit `tech_debt` with no blockers, and the v3.1 backlog seeded from the audit follow-ups*

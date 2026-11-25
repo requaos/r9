@@ -21,8 +21,8 @@ Structure note: the standard granularity band (4-6 phases) would compress this, 
 
 ## Milestones
 
-- **v3.0 Cross-Build Harness and Wire Foundations** - Phases 1-4 (in progress)
-- **v3.1 Secure Memory and Cluster Fabric** - Phases 5-7 (planned)
+- ✅ **v3.0 Cross-Build Harness and Wire Foundations** - Phases 1-4 (shipped 2026-11-25)
+- **v3.1 Secure Memory and Cluster Fabric** - Phases 5-7 (planned, next)
 - **v3.2 SMP and Native std** - Phases 8-9 (planned)
 - **v3.3 Harvey Userland Port (Track P)** - Phases 10-12 (planned)
 - **v3.4 Storage and Graphics** - Phases 13-14 (planned)
@@ -36,231 +36,21 @@ Milestone numbering continues from the closed Harvey-rooted milestone v2.1.
 - Integer phases (1, 2, 3): planned milestone work
 - Decimal phases (2.1, 2.2): urgent insertions (marked INSERTED)
 
-### v3.0 Cross-Build Harness and Wire Foundations (In Progress)
+<details>
+<summary>✅ v3.0 Cross-Build Harness and Wire Foundations (Phases 1-4) — SHIPPED 2026-11-25</summary>
 
 **Milestone Goal:** The golden invariant is an r9-owned gate, Harvey is a read-only supply of C artifacts that Rust replaces one at a time, the design decisions are locked, and the `crypto/`, `ds/` and `9P2000.aead` wire foundations exist and are pinned by host tests.
 
-- [x] **Phase 1: Stage P0 - Cross-Build Harness** - `cargo xtask` draws C artifacts from a read-only Harvey tree through a fallback manifest; the boot-to-rio gate runs per commit (completed 2026-11-23)
-- [x] **Phase 2: Guide Phase 0 - Design Lock and rfork Flag Reservation** - threat model, corrected C prototypes, four `rfork` flag bits reserved in r9, maintainer confirms decisions (completed 2026-11-24)
-- [x] **Phase 3: Guide Phase 1 - crypto/ and ds/ Foundations** - HKDF, ChaCha20, BLAKE3, TPHT, Roaring, `ClientSet`, with lint contracts (completed 2026-11-24)
-- [x] **Phase 4: Guide Phase 2 - 9P2000.aead Transport and FidTable** - wire envelope, monotonic nonces, hybrid `FidHandle`, `FidShard`, Factotum `Tauth` (completed 2026-11-25)
+- [x] **Phase 1: Stage P0 - Cross-Build Harness** - 34/34 plans — completed 2026-11-23
+- [x] **Phase 2: Guide Phase 0 - Design Lock and rfork Flag Reservation** - 6/6 plans — completed 2026-11-24
+- [x] **Phase 3: Guide Phase 1 - crypto/ and ds/ Foundations** - 13/13 plans — completed 2026-11-24
+- [x] **Phase 4: Guide Phase 2 - 9P2000.aead Transport and FidTable** - 25/25 plans — completed 2026-11-25
 
-#### Phase 1: Stage P0 - Cross-Build Harness
-**Goal**: The owner can build and boot r9 to rio on QEMU q35 from the r9 repo with `cargo xtask`, drawing every C library object and userland binary from a pre-built, read-only Harvey tree, and can replace those C artifacts with Rust ones one at a time without ever breaking the boot.
-**Depends on**: Nothing (first phase). The planning-artifact migration is already done and is not a phase.
-**Requirements**: HARN-01, HARN-02, HARN-03, HARN-04, HARN-05, HARN-06, HARN-07, HARN-08
-**Success Criteria** (what must be TRUE):
-  1. One documented `cargo xtask` command boots r9 on QEMU q35 x86_64 to a rio session using only the r9 kernel and the pre-built Harvey tree, and exits non-zero when rio is not reached.
-  2. Harvey is located through one resolver that honours the existing `R9_HARVEY_DIR` and the approved alternatives (`HARVEY_SRC`, `vendor/harvey/`), a missing tree fails with a message naming the variable, and after a full gate run the Harvey tree is byte-for-byte unmodified.
-  3. The xtask Harvey fallback manifest lists every C library object and userland binary in the image per architecture, and the harness fails when the image and the manifest disagree in either direction.
-  4. Flipping one manifest entry to a Rust replacement swaps that single artifact into the image, the gate still passes, and flipping it back restores the Harvey artifact.
-  5. The existing x86_64 q35 boot-test profiles and the aarch64 virt quick pass still pass through the reconciled mechanism.
-  6. Inside `nix develop`, with nothing set by hand, `cargo xtask` commands find the Harvey tree: the r9 flake pins Harvey and the devshell exports its read-only location, and that tree contains the pre-built artifacts the harness needs.
-  7. Flake ownership is flipped: r9's flake imports Harvey and exposes the composed boot and gate outputs that Harvey's flake used to own, Harvey's flake has no `r9` input, and each moved gate passes when run from r9.
-**Plans**: 34/34 plans complete — 7/7 executed in planning pass 1 (research spikes S1-S6 and the owner checkpoint, D-22); 24 pass-2 plans (01-08 to 01-31) implement HARN-01 to HARN-08, with four owner stops (A 01-12, B 01-22, C 01-27, E 01-28); plan 01-32 is the owner-directed rio de-risk iteration after the stop-A FAIL (D-30); plan 01-33 is the stop-B fix iteration; plan 01-34 is the stop-C fix iteration after the tap/capture/fpprobe failures
+**Archive:** [ROADMAP](milestones/v3.0-ROADMAP.md) · [REQUIREMENTS](milestones/v3.0-REQUIREMENTS.md) · [AUDIT](milestones/v3.0-MILESTONE-AUDIT.md)
 
-Plans:
-**Wave 1**
-- [x] 01-01-PLAN.md — S1 sandboxed build venue (tracer) on an owner-approved Mac builder
-- [x] 01-03-PLAN.md — S5 Harvey's own kernel under q35 (Mac TCG legs, build/prompt recipe)
-- [x] 01-04-PLAN.md — S6 Rust-to-a.out probe (amd64 static, arm64 HVF swap, x86_64 leg scripted)
-- [x] 01-05-PLAN.md — S3 headless rio gate and mkimage determinism check, authored for the KVM run
+78 plans, 180 tasks, 38/38 requirements complete. UAT: 112/112 on Phase 4, 3/3 on Phases 2 and 3. Phase 1 was verified by its own report and the owner witness stops (infrastructure phase, no UAT).
 
-**Wave 2** *(blocked on Wave 1 completion)*
-- [x] 01-02-PLAN.md — S2 case collisions through the builder, A9 lazy devshell, S4 amd64 tiers on aarch64-linux
-- [x] 01-06-PLAN.md — Owner's Linux KVM witness session for S1, S3, S5, S6
-
-**Wave 3** *(blocked on Wave 2 completion)*
-- [x] 01-07-PLAN.md — Pass-1 closing: consolidated results and the owner's decisions (D-04 after S2)
-
-**Cross-cutting constraints:** <!-- gsd:generated -->
-- Each moved driver differs from Harvey's only in paths and env wiring (recorded diff), and its run's stage list and pass counts match the latest committed Harvey-hosted evidence where one exists (HARN-08 equivalence)
-
-*Planning pass 2 (implementation; waves continue after pass 1)*
-
-**Wave 4**
-- [x] 01-08-PLAN.md — Tracer: per-arch resolver -> smoke manifest -> image engine -> virtexec boot (HVF); full HARN-02 resolver
-- [x] 01-09-PLAN.md — Rio de-risk prep: DEMO credential path, drawterm X11 password path, fixed feed, reusable witness driver (D-28)
-- [x] 01-10-PLAN.md — Harvey as a normal flake input at bd7a698, A13 checks, Mac builder and pin-bump docs
-
-**Wave 5**
-- [x] 01-11-PLAN.md — Image engine hardening: two-way drift, Rust provenance, `cargo xtask image`, reference compare, `image:` scheme
-- [x] 01-12-PLAN.md — OWNER STOP A: lima remote builder, rio leg re-run on KVM, x86_64 drawterm through the follow
-
-**Wave 6**
-- [x] 01-32-PLAN.md — Rio de-risk iteration 2: separate the X11 login from rio startup (OWNER STOP A2)
-- [x] 01-13-PLAN.md — Flake supply for arm64: proot venue, hostbin, mkpaqfs, harvey-tree-arm64 (smoke slice), lazy devshell exports
-
-**Wave 7**
-- [x] 01-14-PLAN.md — harvey-tree-amd64 (all tiers, stage programs, fixtures), host authdomain-gen, tier-0 library table
-
-**Wave 8**
-- [x] 01-15-PLAN.md — amd64 reference bake (member lists) and the marker, chain, substrate manifests verified against it
-
-**Wave 9**
-- [x] 01-16-PLAN.md — cpu and auth images with the bake-time auth domain in r9's assembler; q35cpu on `image:cpu`
-- [x] 01-17-PLAN.md — Full arm64 tree, arm64 reference and the aarch64 bootfs image; virtnet/virtip on HVF
-
-**Wave 10**
-- [x] 01-18-PLAN.md — Quick gate: `cargo xtask gate` with the rio leg and control; drawterm gate moved into r9
-- [x] 01-19-PLAN.md — net, services, tier and churn images
-- [x] 01-29-PLAN.md — Five x86_64 profiles (q35exec, q35churn, q35shell, q35churnshell, q35auth) on `image:`; no x86_64 profile reads a Harvey-baked image (split from 01-15)
-
-**Wave 11**
-- [x] 01-20-PLAN.md — Swap probe: ps -> Rust a.out, flip, flip back, probe removed (D-17/D-18/D-27)
-- [x] 01-21-PLAN.md — aarch64 boot, smoke and tier-1 gates moved into r9; tier-1 (HVF, TCG) and smoke on the Mac
-
-**Wave 12**
-- [x] 01-22-PLAN.md — OWNER STOP B: quick gate x2 + failing direction, swap shas, nine x86_64 profiles, boot-iso FOD on KVM
-- [x] 01-30-PLAN.md — aarch64 net-smoke and cpu gates moved into r9; whole aarch64 quick pass on the Mac (split from 01-21)
-
-**Wave 13**
-- [x] 01-23-PLAN.md — x86_64 smoke, tier-1, churn, services gates moved into r9
-
-**Wave 14**
-- [x] 01-24-PLAN.md — x86_64 net smoke, net soak and stress gates, net-doctor and host-echo moved into r9
-- [x] 01-25-PLAN.md — CI on the flake supply; relocated Harvey-hosted r9 legs; TCG quick gate (best effort)
-
-**Wave 15**
-- [x] 01-26-PLAN.md — Harvey flip change prepared in a scratch clone (q35 own-kernel app, deletions); stop-C witness steps
-- [x] 01-31-PLAN.md — x86_64 plain boot, auth gate, cpu-bringup driver and drawterm developer app moved into r9; every composed output has an r9 home (split from 01-24)
-
-**Wave 15b — stop-B fixes**
-- [x] 01-33-PLAN.md — Fix the moved driver's spawn_id registration, the kernel/reference step preconditions and the q35churnshell syscall-10 gap; OWNER STOP B2 rerun
-
-**Wave 16**
-- [x] 01-27-PLAN.md — OWNER STOP C: full moved set from r9 on KVM, Harvey diff approval, the single Harvey commit, owner push
-
-**Wave 17b — stop-C fixes**
-- [x] 01-34-PLAN.md — Fix the tap seam and full/equiv capture paths; investigate the fpprobe note-delivery failure; OWNER STOP C2 rerun
-
-**Wave 17**
-- [x] 01-28-PLAN.md — Lock-only pin bump; OWNER STOP E at the bump; phase-boundary audit (R1-R7)
-**Open questions**: Note N4. At HEAD r9's xtask has no rio assertion (Harvey's flake proves rio through its drawterm gate), so the "reached rio" check is new work. Owner direction 2026-11-22: the nix flake supplies the read-only Harvey tree through the devshell (HARN-07), which settles the default-path question: the devshell exports the location and xtask keeps no built-in default. Findings at HEAD that the plan must solve: r9's `flake.nix` has no Harvey input and its devshell sets no `R9_HARVEY_DIR`; Harvey's flake takes r9 as an input (`inputs.r9`) and owns the composed outputs (about twenty apps: `boot-r9`, `boot-r9-smoke`, `boot-r9-net-smoke`, `boot-r9-tier1`, `boot-r9-cpu`, the `-x64` variants including services, net-soak, churn, stress and auth, `drawterm-gate-x64`, `net-doctor`, `drawterm`, driven by `nix/*.sh` and `build/*/*.expect` in Harvey); owner direction 2026-11-22 (HARN-08) flips this in Phase 1 so r9 imports Harvey and produces those outputs, and Harvey drops its `r9` input. The plan must order the flip so no commit leaves a lock cycle or a gate with no home, decide which scripts and expect files move to r9 and which stay in the Harvey tree and are read from it, and account for Harvey's `flake.lock` currently pinning r9 `116bcc2` (the `legacy-final` checkpoint keeps the old arrangement reproducible). Editing Harvey's `flake.nix` is the one approved Harvey change in this phase; the Harvey commit and push need owner approval; Harvey's flake exposes no package of the built tree (only `harness`, `minimega`, `drawterm`), and the built binaries (for example `amd64/bin`) are gitignored, so a plain source input is read-only but not pre-built. The plan must decide how the pre-built artifacts get into the read-only tree (a derivation in r9's flake that builds the Harvey userland from the pinned source, or another approved route), per system including aarch64-darwin, where the Harvey namespace build currently runs in the lima VM. The swap probe cannot be a port (no Rust userland exists yet); choose a throwaway stand-in. The expected edits are in `xtask/` (and possibly `flake.nix`), which need no owner approval and should change no kernel bytes; any `port/src` edit would need owner approval with the diff shown first.
-
-#### Phase 2: Guide Phase 0 - Design Lock and rfork Flag Reservation
-**Goal**: The design decisions that Phases 3 to 7 build on are confirmed by the maintainer, and the four `rfork` flag bits the crypto work needs are reserved in r9, with no change to runtime behaviour.
-**Depends on**: Phase 1 (the harness gates every later commit). The guide's own dependency, "Milestone v2.1 closed", is satisfied by the `legacy-final` checkpoint.
-**Requirements**: DSGN-01, DSGN-02, DSGN-03, DSGN-04, DSGN-05
-**Success Criteria** (what must be TRUE):
-  1. A threat model document is committed and states the in-scope protections and the out-of-scope attacks (DRAM bus probing, cold boot, kernel-context code execution).
-  2. The four `rfork` flag bits are reserved as named constants in one `port/` module, `port/src/rfork.rs` (`port::rfork`), which defines every `rfork` flag once and is imported by both arch crates (owner amendment 2026-11-23, Phase 2 CONTEXT D-17): `RFCKEY` 1<<18, `RFROBASE` 1<<19, `RFRANDMEM` 1<<20 and `RFNOLEGACY` 1<<21. The exit gate covers four flags, not three.
-  3. A host test pins the four values and proves they overlap no existing `rfork` flag (the highest bit in use today is 14), and `rfork` behaviour is unchanged.
-  4. The corrected C prototypes are committed inside r9 with their landing location decided against the repository layout at HEAD.
-  5. The maintainer has confirmed the guide's reconciled decisions and PROJECT.md Key Decisions records which are locked.
-**Plans**: 6/6 plans complete in 4 waves; four owner stops (the `port/src` diff in 02-01, the threat-model draft in 02-02, the thirteen-decision table in 02-03, and the single end-of-phase stop on the x86_64 Linux host in 02-06). Required dispatch mode: run this phase with `workflow.use_worktrees` = `false` in `.planning/config.json` (`node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" query config-set workflow.use_worktrees false`, or set `"use_worktrees": false` under `"workflow"` in `.planning/config.json` by hand), so every plan runs in sequence on the main working tree. The key is unset and defaults to true; with worktrees on, plan 02-06 stops without merging or pushing, and the continuations of 02-01 and 02-02 can stop after their owner stops.
-
-Plans:
-**Wave 1**
-- [x] 02-01-PLAN.md — Tracer: one rfork flag definition in `port`, generated `sys/include/rfork.h`, value pins; OWNER STOP on the `port/src` diff
-- [x] 02-02-PLAN.md — Threat model document: RED document test, draft, OWNER STOP on the draft, commit
-- [x] 02-03-PLAN.md — Design lock: D-17 wording at six sites, thirteen-decision table, OWNER STOP to confirm, Key Decisions rows
-
-**Wave 2** *(blocked on 02-01)*
-- [x] 02-04-PLAN.md — Both arch crates import the flags from `port`; masks hoisted and pinned; header check and x86_64 host-triple fallback in `cargo xtask test`
-
-**Wave 3** *(blocked on 02-04)*
-- [x] 02-05-PLAN.md — Mac-side closing evidence: kernel bytes before/after (`.text` identical or stop), aarch64 quick pass, the owner's checklist
-
-**Wave 4** *(blocked on 02-02, 02-03, 02-05)*
-- [x] 02-06-PLAN.md — OWNER STOP (end of phase): branch push, x86_64 host tests, `boot-iso` `outputHash` commit, KVM quick gate once, TCG gate, full gate set; then `main` after a second approval
-**Open questions**: Warning W11 is decided, not open: owner decision 2026-11-22, `RFNOLEGACY` is a fourth `rfork` flag assigned `1 << 21` in this phase; its behaviour is implemented in Phase 6 against the reserved bit. Verified at roadmap time: bits 18-20 are not defined in Harvey `libc.h` or in r9 at HEAD, despite the architecture compendium saying they are already reserved. The reservation is r9-only; Harvey is not edited. This is a recorded deviation from the guide, which says "reserve bits 18-20 in `libc.h`" (owner decision 2026-11-22). Measured in Phase 2 research: moving the flag constants into `port/src/rfork.rs` changes kernel bytes on both architectures (panic line numbers only; `.text` is identical), so the x86_64 kernel byte-change procedure is planned work in this phase and aarch64 gets the quick pass (CONTEXT D-23).
-
-#### Phase 3: Guide Phase 1 - crypto/ and ds/ Foundations
-**Goal**: The cryptographic primitives and the concurrent data structures that the wire, memory and storage layers depend on exist as pinned, host-tested crates.
-**Depends on**: Phase 2
-**Requirements**: CRYP-01, CRYP-02, CRYP-03, CRYP-04, DS-01, DS-02, DS-03, DS-04, DS-05, DS-06, DS-07, LINT-01
-**Success Criteria** (what must be TRUE):
-  1. `cargo xtask test` runs the `crypto/` pins and they pass: HKDF-SHA256 against RFC 5869 and RFC 4231 vectors, ChaCha20 against published vectors, and BLAKE3 keyed and tree modes against the official vectors.
-  2. TPHT single-line hit tests pass on the host: over 90% of lookups resolve in the home block, `deref_tiny` is exactly one memory access, the Feistel key reconstruction round-trips, and the chained overflow reaches over 95% fill with no allocation failure.
-  3. Roaring union, intersection and difference match a reference model on randomized inputs, and `ClientSet` uses no heap for up to four clients and upgrades beyond that.
-  4. `cargo xtask check` and clippy pass with the lint contract settled for `crypto/` and `ds/`, every unsafe site carries a `// SAFETY:` comment, and `UNSAFE-AUDIT.md` lists the new sites.
-**Plans**: 13/13 plans complete; 13 plans in 13 sequential waves, in this order: 03-01, 03-12, 03-02, 03-03, 03-04, 03-05, 03-06, 03-13, 03-07, 03-08, 03-09, 03-10, 03-11. One planned owner stop, the end-of-phase stop on the x86_64 Linux host in 03-11 (branch push approval, sandboxed kernel builds and byte comparison, then a second approval for `main`). Run with `workflow.use_worktrees` = `false`, so every plan runs in sequence on the main working tree.
-- [x] 03-01-PLAN.md
-- [x] 03-02-PLAN.md
-- [x] 03-03-PLAN.md
-- [x] 03-04-PLAN.md
-- [x] 03-05-PLAN.md
-- [x] 03-06-PLAN.md
-- [x] 03-07-PLAN.md
-- [x] 03-08-PLAN.md
-- [x] 03-09-PLAN.md
-- [x] 03-10-PLAN.md
-- [x] 03-11-PLAN.md
-- [x] 03-12-PLAN.md
-- [x] 03-13-PLAN.md
-**Open questions**: Settled 2026-11-24 (see PROJECT.md Key Decisions): W3 (MAC primitive; also read by Phase 4), W5 (`unsafe` in `ds/src/tpht/` versus `forbid(unsafe_code)` on `ds/`), W6 (TPHT home block 4 versus 16 slots). Notes N1 (ChaCha20 64-bit counter plus 96-bit nonce exceeds the 128-bit state) and N2 (HEAD's lint and unsafe layout differs from the guide). Landing sites `crypto/` and `ds/` do not exist at HEAD; add them to the workspace members.
-
-#### Phase 4: Guide Phase 2 - 9P2000.aead Transport and FidTable
-**Goal**: r9 speaks the authenticated, encrypted `9P2000.aead` dialect with replay and splicing protection and a single-read fid table, while plain 9P2000 peers keep working.
-**Depends on**: Phase 3
-**Requirements**: WIRE-01, WIRE-02, WIRE-03, WIRE-04, WIRE-05, WIRE-06, WIRE-07, WIRE-08, WIRE-09, WIRE-10, WIRE-11, WIRE-12, WIRE-13
-**Success Criteria** (what must be TRUE):
-  1. `cargo xtask test-9p` passes wire round trips for every base and new message type, `ExtMask` and TLV parsing, and the opcode registry.
-  2. Altering any authenticated byte of a packet makes the receiver drop the connection and zero its channel state without parsing the packet; a replayed packet with a stale nonce is dropped; a payload spliced onto another channel fails MAC verification.
-  3. `FidTable` dereference resolves a `FidEntry` in exactly one memory read, any replica holding the domain secret verifies a `StatelessCap` with zero server FID memory, and the failover sweep returns exactly `active \ reclaimed`.
-  4. A `Tauth` then `Tattach` exchange derives per-connection, per-direction session keys that are zeroized on teardown, and a plain-9P2000 peer still works, so the system still boots to rio.
-**Plans**: 25/25 plans complete; 17 in 11 waves, then 8 gap-closure plans (04-18 to 04-25) planned and not yet run. Five owner checkpoints in the first 17: the one-way wire proposals P1 to P8 and the IG-D11 lock (both in 04-01), the phase-end review of the whole `port/src` change (04-14), and the branch-push stop on the x86_64 Linux host followed by `main` push approval (04-15). Plans 04-14 and 04-15 run on the main working tree, so `workflow.use_worktrees` must be off before wave 10.
-
-**Wave 1**
-- [x] 04-01-PLAN.md
-
-**Wave 2** *(blocked on Wave 1 completion)*
-- [x] 04-02-PLAN.md
-
-**Wave 3** *(blocked on Wave 2 completion)*
-- [x] 04-03-PLAN.md
-- [x] 04-04-PLAN.md
-- [x] 04-09-PLAN.md
-- [x] 04-17-PLAN.md
-
-**Wave 4** *(blocked on Wave 3 completion)*
-- [x] 04-05-PLAN.md
-- [x] 04-06-PLAN.md
-- [x] 04-10-PLAN.md
-
-**Wave 5** *(blocked on Wave 4 completion)*
-- [x] 04-07-PLAN.md
-
-**Wave 6** *(blocked on Wave 5 completion)*
-- [x] 04-16-PLAN.md
-
-**Wave 7** *(blocked on Wave 6 completion)*
-- [x] 04-08-PLAN.md
-
-**Wave 8** *(blocked on Wave 7 completion)*
-- [x] 04-11-PLAN.md
-
-**Wave 9** *(blocked on Wave 8 completion)*
-- [x] 04-12-PLAN.md
-- [x] 04-13-PLAN.md
-
-**Wave 10** *(blocked on Wave 9 completion; main working tree)*
-- [x] 04-14-PLAN.md
-
-**Wave 11** *(blocked on Wave 10 completion; main working tree)*
-- [x] 04-15-PLAN.md
-
-**Gap closure** (planned 2026-11-25 from `04-VERIFICATION.md`, `gaps_found` 101/109; run with `/gsd-execute-phase 4 --gaps-only`). Eight plans in five waves of their own. Owner checkpoints: the one-way wire decision P9, exchange tag and afid (04-21), the review of the whole `port/src` gap diff (04-23), and the second branch-push stop on the x86_64 Linux host followed by `main` push approval (04-25). Plans 04-23, 04-24 and 04-25 run on the main working tree, so `workflow.use_worktrees` must be off before gap wave 3.
-
-**Gap wave 1**
-- [x] 04-18-PLAN.md
-- [x] 04-19-PLAN.md
-- [x] 04-20-PLAN.md
-
-**Gap wave 2** *(blocked on gap wave 1 completion)*
-- [x] 04-21-PLAN.md
-- [x] 04-22-PLAN.md
-
-**Gap wave 3** *(blocked on gap wave 2 completion; main working tree)*
-- [x] 04-23-PLAN.md
-
-**Gap wave 4** *(blocked on gap wave 3 completion; main working tree)*
-- [x] 04-24-PLAN.md
-
-**Gap wave 5** *(blocked on gap wave 4 completion; main working tree)*
-- [x] 04-25-PLAN.md
-**Open questions**: W1 (header layout and AAD contents), W2 (24-byte `StatelessCap` in an 8-byte handle), W4 (session key scope); W3 also bears here. Notes N1 and N5 (`factotum` key exchange: Noise versus DP9IK, and `factotum` is read-only Harvey C until Phase 12). Landing sites `port/src/chan.rs` and `port/src/fid.rs` do not exist at HEAD (devmnt lives in `port/src/devmnt.rs`); edits under `port/src` need owner approval with the diff shown first. `cargo xtask test-9p` is new harness work.
+</details>
 
 ### v3.1 Secure Memory and Cluster Fabric (Planned)
 

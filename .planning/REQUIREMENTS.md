@@ -3,67 +3,18 @@
 **Defined:** 2026-11-22
 **Core Value:** The OS boots to rio on QEMU q35 at every commit.
 
-Source tags in parentheses point at `.planning/intel/constraints.md` entries (IG = implementation guide, AC = architecture compendium, RFC, PT = permissions and test plan) or at owner direction. "Phase N" always means the GSD phase number in ROADMAP.md; where the source documents use their own label it is written "guide Phase N". Open questions W1, W2, W4 and W7 to W10 are not resolved here; each requirement that depends on one names it, and the Phase 3 items W3, W5 and W6 were settled on 2026-11-24 (PROJECT.md Key Decisions).
+Source tags in parentheses point at `.planning/intel/constraints.md` entries (IG = implementation guide, AC = architecture compendium, RFC, PT = permissions and test plan) or at owner direction. "Phase N" always means the GSD phase number in ROADMAP.md; where the source documents use their own label it is written "guide Phase N". Open questions W1, W2, W4 and W7 to W10 were settled as recorded in PROJECT.md Key Decisions; the Phase 4 wire set (W1, W2, W4) closed on 2026-11-24.
 
 Standing constraint on every requirement below: the golden invariant (boots to rio on QEMU q35) holds at every commit, and the verification discipline of IG-V01 applies (RED pin, implementation, GREEN twice, pin advance).
 
+## Carried forward
+
+**Carried forward:** 2026-11-25, after milestone v3.0 closed with 38 of 38 requirements
+complete. The shipped set (HARN, DSGN, CRYP, DS, LINT, WIRE) is archived at
+`.planning/milestones/v3.0-REQUIREMENTS.md`. This file carries the 89 remaining requirements
+for Phases 5-16, the deferred v2 set, and the out-of-scope table.
+
 ## v1 Requirements
-
-### Cross-Build Harness (Stage P0)
-
-- [x] **HARN-01**: One documented `cargo xtask` command boots r9 on QEMU q35 x86_64 to a rio session using only the r9 kernel and the pre-built Harvey tree, and exits non-zero if rio is not reached (the golden-invariant gate, runnable per commit) (owner direction; today only Harvey's flake gates exercise rio)
-- [x] **HARN-02**: Harvey is consumed strictly read-only from one resolved location; a single resolver reconciles the existing `R9_HARVEY_DIR` contract with `HARVEY_SRC` and `vendor/harvey/`, every existing consumer (boot-test, ureg-check, initrd, pcap netaddr seam, `harvey:` module paths in configs) goes through it, a missing tree fails with a message naming the variable, and a gate run leaves the Harvey tree unmodified (owner direction; PROJECT.md note N4)
-- [x] **HARN-03**: A Harvey fallback manifest in xtask enumerates every C library object and userland binary the image draws from Harvey, per architecture, with the source of each entry (Harvey or Rust) (owner direction)
-- [x] **HARN-04**: Switching one manifest entry to its Rust replacement swaps that single artifact into the assembled image and removes it from the Harvey fallback set, and the golden gate passes at that commit; switching it back restores the Harvey artifact (owner direction; IG-V02 risk 4)
-- [x] **HARN-05**: The harness fails fast with a named error when the image contains a Harvey artifact not in the manifest, or when an entry marked Rust still resolves to the Harvey artifact (the manifest and the image cannot drift)
-- [x] **HARN-06**: Existing x86_64 q35 boot-test profiles and the aarch64 virt quick pass (tier-1 on HVF and TCG, smoke, net-smoke and cpu once on HVF) still pass through the reconciled mechanism
-- [x] **HARN-07**: The r9 nix flake is the supplier of the read-only Harvey tree: the flake pins Harvey, and the default devshell (`nix develop`) exports the resolved tree locations per guest architecture (`R9_HARVEY_DIR_AMD64`, `R9_HARVEY_DIR_ARM64`; `R9_HARVEY_DIR` remains a manual override that wins when set) so every `cargo xtask` command run inside the devshell finds it with no manual setup; the tree it names is read-only and contains the pre-built artifacts the harness draws from; xtask itself keeps no built-in default path (outside the devshell an unset variable is still a named error); the flake apps and CI use the same supply (owner direction 2026-11-22)
-- [x] **HARN-08**: Flake ownership is flipped: r9's flake imports Harvey and produces the composed outputs that Harvey's flake owns today (the `boot-r9*` apps for aarch64 and x86_64 including smoke, net-smoke, tier1, cpu, services, net-soak, churn, stress and auth, plus `drawterm-gate-x64` and the helpers they need such as `net-doctor` and `drawterm`); Harvey's flake no longer has an `r9` input or any `boot-r9*`/gate output and keeps only what builds Harvey itself; each moved gate passes from r9 at the flip commit with results equivalent to its Harvey-hosted run; no lock cycle remains between the two repos (owner direction 2026-11-22). This edits `flake.nix` in both repos; the Harvey commit and both pushes need owner approval
-
-### Design Lock and Flag Reservation (guide Phase 0)
-
-- [x] **DSGN-01**: A threat model document is committed stating in-scope protections (pages at rest, stale-frame disclosure across KeyIDs, stray kernel reads, packet splicing, injection, replay) and out-of-scope attacks (DRAM bus probing, cold boot, kernel-context code execution; SEV-SNP or TDX named as the remedy) (AC-T01)
-- [x] **DSGN-02**: The corrected C prototypes called for by the guide's Phase 0 are committed inside r9 (Harvey is not edited), with their landing location decided against the repository layout at HEAD (IG section 8)
-- [x] **DSGN-03**: Four `rfork` flag bits are reserved as named constants — `RFCKEY` 1<<18, `RFROBASE` 1<<19, `RFRANDMEM` 1<<20, `RFNOLEGACY` 1<<21 — in one `port/` module, `port/src/rfork.rs` (`port::rfork`), which defines every `rfork` flag once and is imported by both arch crates (owner amendment 2026-11-23, Phase 2 CONTEXT D-17); Harvey is not changed, a recorded deviation from the guide's "reserve bits 18-20 in `libc.h`"; verified not defined anywhere at HEAD, despite AC section 1.1 (IG-D03; owner decisions 2026-11-22: W11 resolved, `RFNOLEGACY` = `1 << 21`, r9-only reservation)
-- [x] **DSGN-04**: A host test pins the four reserved values and asserts they overlap no existing `rfork` flag (highest bit in use today is 14), and the reservation changes no `rfork` behaviour (behaviour arrives in Phase 6 for `RFNOLEGACY` and Phase 7 for the other three)
-- [x] **DSGN-05**: The maintainer confirms the guide's reconciled decisions (IG-D01 to IG-D13) and PROJECT.md Key Decisions records which are locked (IG section 8 gate)
-
-### Crypto Foundations (guide Phase 1)
-
-- [x] **CRYP-01**: `crypto/` provides RFC 5869 HKDF-SHA256 built on HMAC-SHA256, passing RFC 5869 and RFC 4231 vectors, replacing the placeholder XOR fold (IG-A01 item 1)
-- [x] **CRYP-02**: `crypto/` provides a scalar ChaCha20 reference (`crypto/src/page.rs`) passing published vectors, with the RFC 8439 layout: a 32-bit block counter and a 96-bit nonce (N1 settled 2026-11-24, D-06) (IG-A01 item 3, RFC-P01)
-- [x] **CRYP-03**: `crypto/` provides BLAKE3 keyed hash and tree-hash modes with 32-byte output passing the official test vectors; Keyed BLAKE3 is the only MAC (W3 settled 2026-11-24) (RFC-P01, IG-D11)
-- [x] **CRYP-04**: The key hierarchy (`K_file = HKDF-Expand(K_user, Qid.path || Qid.vers, 32)`, transient and session keys) and the `KeyCapability` typestate exist in `crypto/` (D-22): `ReadOnly { k_dec, blake3_verify }` cannot produce a valid integrity tag (a type-level guarantee: keyed BLAKE3 is symmetric), `ReadWrite { k_dec, k_mac }` can, all key material is `Zeroizing<[u8; 32]>`, and siblings inheriting shared read-only base code keep the parent's `k_dec` (IG-M01, IG-A01 item 2, IG-P01)
-
-### Data Structures (guide Phase 1)
-
-- [x] **DS-01**: `ds/` provides `FlattenedTphtShard` with a 64-byte `#[repr(C, align(64))]` `TphtBucketHeader`, seqlock, quotiented slots in 16 header slots, with the measured spill threshold `SPILL_THRESHOLD` (W6 settled 2026-11-24), and a host test showing over 90% of lookups resolve in the home block at target occupancy (IG-M06, IG-D09)
-- [x] **DS-02**: Feistel quotienting is bijective: key reconstruction from home block index and remainder round-trips for all tested keys (IG-M05)
-- [x] **DS-03**: `deref_tiny(key, tiny_ptr)` performs exactly one memory access with zero header probes, shown by a model-based test (IG-M06)
-- [x] **DS-04**: `ChainedTphtOverflow` implements two-choice dereference banks of 255 overflow nodes with a two-phase `WRITING` (0xFF) publication, reaching over 95% fill without allocation failure and supporting full-key verification on candidate match (IG-M07, IG-A01 item 12)
-- [x] **DS-05**: `ds/src/roaring.rs` provides a Roaring bitmap (array, bitmap and run containers) whose union, intersection, difference and `andnot` match a reference model on randomized inputs (IG-D10)
-- [x] **DS-06**: `ClientSet` is `Empty | Single | Inline{count, ids[4]} | Roaring`, uses zero heap for up to four clients, upgrades beyond four, and collapses contiguous ids into run containers (IG-M08, RFC-P08)
-- [x] **DS-07**: Funnel Hashing, if present, serves only write-once ephemeral scratchpads; no page cache, FidTable, or Venti index uses it. Funnel Hashing is not built in Phase 3; the restriction is recorded in the `ds/` crate documentation (D-16) (IG-D09, IG-A01 item 11)
-
-### Lint and Audit (guide Phase 1)
-
-- [x] **LINT-01**: `crypto/` and `ds/` join the workspace under the lint contract settled on 2026-11-24: `crypto/` is crate-level `forbid(unsafe_code)`, `ds/` uses per-module forbids with `ds/src/tpht/` as the unsafe-holding module and one reserved Roaring SIMD module, and both are lint-opted-in; every unsafe site carries a `// SAFETY:` comment, `UNSAFE-AUDIT.md` lists the new sites, and `cargo xtask test`, `check` and `clippy` run both crates on the host toolchain (IG-D07, IG-V01)
-
-### 9P2000.aead Wire and FidTable (guide Phase 2)
-
-- [x] **WIRE-01**: One canonical wire header byte layout is fixed (resolving W1, including whether `Pad` and `ExtTLVs Length` are in the AAD), implemented, and round-trip tested; AC listing 9.9 is corrected (RFC-P03, IG-P03)
-- [x] **WIRE-02**: `ExtMask` and TLV parsing handle all six extension bits (`EXT_DEADLINE`, `EXT_CAP_TOKEN`, `EXT_QID_VOLATILITY`, `EXT_STREAM_PRIO`, `EXT_OBINARY`, `EXT_STATELESS_CAP`) zero-copy over 64-bit aligned records, with `ExtTLVs Length` zero when `ExtMask` is zero (RFC-P03, RFC-P04). *Amended 2026-11-24 (r9 Phase 4, D-11): the list was five bits; the sixth, `EXT_STATELESS_CAP = 1 << 5`, carries the `StatelessCap` of W2, and `EXT_CAP_TOKEN` keeps its single meaning.*
-- [x] **WIRE-03**: On MAC failure the receiver terminates the connection and zeroes channel state without parsing any byte of the packet (RFC-P03)
-- [x] **WIRE-04**: Sequence nonces are strictly monotonic 64-bit counters per connection and direction, a packet that is not the expected next value is rejected, and the channel re-keys in band before 2^64 - 1 (RFC-P03, RFC-P10)
-- [x] **WIRE-05**: `Tauth` precedes `Tattach` and yields per-connection per-direction session keys (scope settled by W4; key-exchange sourcing per note N5), keys are zeroized on teardown (IG-A01 item 13, RFC-P02)
-- [x] **WIRE-06**: Encode and decode round-trip every base 9P2000 message and the opcode registry including reserved 130-137, with ChaCha20 ciphertext 4KB-aligned in `Twrite`, `Rread` and `Tstream` and the MAC per W3 (RFC-P06, RFC-P03). *Amended 2026-11-24 (r9 Phase 4, D-09): the messages whose ciphertext carries whole 4096-byte pages are `Twrite`, `Rread` and `Rstream`; `Tstream` has no data field in the RFC section 6.2 format.*
-- [x] **WIRE-07**: `FidHandle` supports `StatefulHandle` (8 bytes) and `StatelessCap` (24 bytes) with the on-wire form of the capability settled by W2, and `FidEntry` is 64 bytes `align(64)` (IG-P02, RFC-P05)
-- [x] **WIRE-08**: `FidTable` and `FidShard` use TPHT; `deref_tiny` resolves a `FidEntry` in exactly one memory read; `StatelessCap` files use zero server FID memory and any replica holding the domain secret verifies in O(1) (IG-P02, IG-D01)
-- [x] **WIRE-09**: The `FidShard` failover sweep yields exactly `active_fids \ reclaimed_fids` in one bitmap and-not (IG-P02, RFC-P07)
-- [x] **WIRE-10**: `Qid` is 13 bytes and carries the three volatility classes `QTIMMUTABLE` 0x20, `QTLEASED` 0x40, `QTVOLATILE` 0x80 in their own byte, never as `qtype` bits, with the `#G` path formula `((ctx_id & 0xFFFFFF) << 8) | (node_type & 0xFF)` (IG-P01). *Amended 2026-11-24 (r9 Phase 4, D-27): the classes were described as mutually exclusive `qtype` bits; they travel in their own byte because 0x20, 0x40 and 0x80 are Plan 9's `QTEXCL`, `QTAPPEND` and `QTDIR` in a qid type byte.*
-- [x] **WIRE-11**: Anti-splicing pins pass: a replayed `Twrite` with a stale nonce is dropped, and a payload moved to another channel by editing the cleartext FID fails the AAD MAC (RFC-P10, PT-T02 test 2.3)
-- [x] **WIRE-12**: `Tversion "9P2000.aead"` selects the native engine while peers offering plain 9P2000 keep using the existing devmnt path unchanged, so the golden invariant holds (RFC-P09, owner invariant)
-- [x] **WIRE-13**: `cargo xtask test-9p` exists and runs the wire pins (round trips, `ExtMask` parsing, `StatelessCap` MAC verification, `FidShard` sweep) on the host toolchain (IG-V01)
 
 ### Cryptographic Memory and Zero-Copy DMA Paging (guide Phase 3)
 
@@ -193,6 +144,7 @@ Standing constraint on every requirement below: the golden invariant (boots to r
 - [ ] **RETIRE-04**: Every composed gate previously hosted in Harvey's flake (boot-r9-x64 smokes, net smoke, auth, drawterm, rio) runs from the r9 repo without Harvey, and the golden-invariant gate is green (derived; the gates themselves move to r9's flake in Phase 1 under HARN-08, so what remains here is running them with no Harvey tree at all; note N4)
 - [ ] **RETIRE-05**: `vendor/harvey/` is removed, the Harvey repository is archived read-only, and the r9 README carries the banner (owner deprecation checklist)
 
+
 ## v2 Requirements
 
 Deferred. Tracked but not in the current roadmap.
@@ -205,6 +157,7 @@ Deferred. Tracked but not in the current roadmap.
 ### Storage
 
 - **TELE-01**: `telescope`, batch-built immutable full-text indexes over Venti snapshots using Elastic Hashing (IG-M08)
+
 
 ## Out of Scope
 
@@ -220,50 +173,13 @@ Deferred. Tracked but not in the current roadmap.
 | riscv64 and Raspberry Pi hardware | No phase targets them |
 | Editing the Harvey tree | Read-only reference; the Phase 2 flag reservation is r9-only (owner decision 2026-11-22) |
 
+
 ## Traceability
 
 Which phases cover which requirements. Each requirement maps to exactly one phase.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| HARN-01 | Phase 1 | Complete |
-| HARN-02 | Phase 1 | Complete |
-| HARN-03 | Phase 1 | Complete |
-| HARN-04 | Phase 1 | Complete |
-| HARN-05 | Phase 1 | Complete |
-| HARN-06 | Phase 1 | Complete |
-| HARN-07 | Phase 1 | Complete |
-| HARN-08 | Phase 1 | Complete |
-| DSGN-01 | Phase 2 | Complete |
-| DSGN-02 | Phase 2 | Complete |
-| DSGN-03 | Phase 2 | Complete |
-| DSGN-04 | Phase 2 | Complete |
-| DSGN-05 | Phase 2 | Complete |
-| CRYP-01 | Phase 3 | Complete |
-| CRYP-02 | Phase 3 | Complete |
-| CRYP-03 | Phase 3 | Complete |
-| CRYP-04 | Phase 3 | Complete |
-| DS-01 | Phase 3 | Complete |
-| DS-02 | Phase 3 | Complete |
-| DS-03 | Phase 3 | Complete |
-| DS-04 | Phase 3 | Complete |
-| DS-05 | Phase 3 | Complete |
-| DS-06 | Phase 3 | Complete |
-| DS-07 | Phase 3 | Complete |
-| LINT-01 | Phase 3 | Complete |
-| WIRE-01 | Phase 4 | Complete |
-| WIRE-02 | Phase 4 | Complete |
-| WIRE-03 | Phase 4 | Complete |
-| WIRE-04 | Phase 4 | Complete |
-| WIRE-05 | Phase 4 | Complete |
-| WIRE-06 | Phase 4 | Complete |
-| WIRE-07 | Phase 4 | Complete |
-| WIRE-08 | Phase 4 | Complete |
-| WIRE-09 | Phase 4 | Complete |
-| WIRE-10 | Phase 4 | Complete |
-| WIRE-11 | Phase 4 | Complete |
-| WIRE-12 | Phase 4 | Complete |
-| WIRE-13 | Phase 4 | Complete |
 | MEM-01 | Phase 5 | Pending |
 | MEM-02 | Phase 5 | Pending |
 | MEM-03 | Phase 5 | Pending |
@@ -353,12 +269,3 @@ Which phases cover which requirements. Each requirement maps to exactly one phas
 | RETIRE-03 | Phase 16 | Pending |
 | RETIRE-04 | Phase 16 | Pending |
 | RETIRE-05 | Phase 16 | Pending |
-
-**Coverage:**
-- v1 requirements: 127 total
-- Mapped to phases: 127
-- Unmapped: 0
-
----
-*Requirements defined: 2026-11-22*
-*Last updated: 2026-11-22 after roadmap creation*
