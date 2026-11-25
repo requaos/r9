@@ -5,9 +5,9 @@ milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
 current_phase: 04
 status: completed
 stopped_at: Milestone v3.0 execution complete — awaiting milestone audit/close
-last_updated: "2026-11-25T16:22:50.823Z"
+last_updated: "2026-11-25T17:29:21.363Z"
 last_activity: 2026-11-25
-last_activity_desc: Phase 04 complete
+last_activity_desc: Phase 04 UAT complete (112/112)
 state_head: fe74661df8067e39de5dee0edfa3466dffe3a029
 progress:
   total_phases: 4
@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 Phase: 04
 Plan: 25 of 25
 Status: All phases complete — milestone v3.0 execution finished
-Last activity: 2026-11-25 — Phase 04 verified passed (109/109) and marked complete
+Last activity: 2026-11-25 — Phase 04 UAT passed 112/112 and the milestone v3.0 close is next
 
 Progress: [██████████] 100%
 
@@ -93,6 +93,7 @@ Progress: [██████████] 100%
 
 Full log is the PROJECT.md Key Decisions table. Recent:
 
+- [Owner 2026-11-25] Phase 4 UAT passed 112/112 after the gap closure: 91 checkpoints are auto-covered by passing tests and the 21 owner judgements (the P1-P8 decisions, the module-doc guarantees, the RFC/compendium/PROJECT amendments, the two owner approvals, the two owner stops and the second owner-stop page) all passed. Verification is `passed`, `04-SECURITY.md` has zero open threats, and milestone v3.0 is ready for its close.
 - [Owner 2026-11-25] Phase 4 verification `gaps_found` (101/109) and the owner chose to STOP AND DEFER the fixes: the three re-key criticals (CR-01 un-zeroized exchange secret, CR-02 no exchange traffic discriminator, CR-03 padded transcript contradicting DECISION P2) and the five blocking warnings stay `open` in `04-REVIEW-DISPOSITION.md`. Phase 4 is not marked complete; resume with `/gsd-plan-phase 4 --gaps` then `/gsd-execute-phase 4 --gaps-only`, and expect a second owner stop because the fixes change kernel bytes.
 
 - [Owner 2026-11-22] `RFNOLEGACY` is a fourth `rfork` flag, `1 << 21`, assigned in guide Phase 0 (GSD Phase 2) with `RFCKEY` 18, `RFROBASE` 19, `RFRANDMEM` 20. Resolves warning W11; the guide's "3 flag bits" wording is corrected to four. Reserved in r9 only, in one `port/` module (`port/src/rfork.rs`) that both arch crates import (owner amendment 2026-11-23, Phase 2 CONTEXT D-17); Harvey is not edited. Recorded deviation from the guide's "reserve bits 18-20 in `libc.h`". Phase 6 implements the behaviour.
@@ -233,9 +234,8 @@ None yet.
 
 ### Blockers/Concerns
 
-- **Phase 4 verification `gaps_found` (101/109), owner deferred the fixes on 2026-11-25.** The code review (`04-REVIEW.md`, 3 critical / 9 warning / 7 info) and the verifier (`04-VERIFICATION.md`) independently confirmed the same blocking gaps, all in the in-band re-key path and two fid-table guards: CR-01 exchange secret + `Rekey::out` survive `fail()` while `keys_zeroized()` returns true; CR-02 exchange traffic carries no tag/fid discriminator so ordinary `Twrite`/`Rwrite`/`Tread`/`Rread` are absorbed or close the connection; CR-03 the re-key transcript absorbs the page-padded body, contradicting the accepted DECISION P2; WR-01 re-key never returns to idle (one re-key per connection); WR-02 `SendHalf::send` ignores the ACK deadline; WR-04 a torn clunk can resolve an all-zero identity; WR-05 `sweep` can delete a live entry that reused a swept slot; WR-07 control messages use tag 0, not `NOTAG`. Partial: WR-03, WR-06, WR-08, WR-09. All 19 findings are `open` in `04-REVIEW-DISPOSITION.md`. **Any fix changes kernel bytes**, so it voids `04-14`'s byte evidence and the `boot-iso` `outputHash` commit (`sha256-5A6QdJdWz7uWyUrfUAc3jAO+ZQcG/TowydbTLoF+u9I=`) and needs a second owner stop. Resume with `/gsd-plan-phase 4 --gaps`, then `/gsd-execute-phase 4 --gaps-only`. **RESOLVED by plans 04-18 to 04-25 (2026-11-25):** every fix landed and was reviewed in 04-23 (`04-REVIEW-DISPOSITION.md` has twelve `fixed` rows), the closing evidence was re-taken in 04-24, and the second owner stop (04-25) returned eleven PASS verdicts at `0dd1037` — the kernel still boots to rio under KVM, natively under TCG and through the full gate set, and the committed `outputHash` reproduces under `--rebuild`. `main` is published at `bb68d98`. What remains is re-running `/gsd-verify-work 4` against the fixed state.
-- **Phase 4 push state (after plan 04-25):** `origin/main` = `bb68d988752ccb616a980b943ea86aecca8f25be` — the owner's second approved push, `5d1549a..bb68d98`, which published 68 commits (the gap-closure code, its planning and evidence commits, and the commits held back since the first stop). Local `main` is ahead of `origin/main` only by this plan's close-out commits — the `stop2-main-push: PASS` verdict commit `4d420c9`, the 04-25 SUMMARY, and tracking corrections — all docs/evidence only, held local until a later approved push. `origin/phase-04/aead-wire-gaps` = `194c71d` (Mac tip `0dd1037` + the round-2 return commit); `origin/phase-04/aead-wire` = `405984d`. Both transport branches can be deleted by the owner.
-- **Phase 4 capability steps not run:** `04-SECURITY.md` does not exist (`/gsd-secure-phase 4`), the Nyquist audit for the re-key path was not run (`/gsd-validate-phase 4`), and UI review does not apply. The verify:post contract routes security as a next step rather than auto-running it.
+- **Phase 4 is closed (2026-11-25).** The gap closure landed as plans 04-18 to 04-25, `04-REVIEW-DISPOSITION.md` has twelve `fixed` rows, the closing evidence was re-taken in 04-24, the second owner stop (04-25) returned eleven PASS verdicts at `0dd1037`, `04-SECURITY.md` records `threats_open: 0`, `04-VALIDATION.md` is present, and `/gsd-verify-work 4` passed 112/112 UAT checks (91 automated, 21 owner judgements). UI review does not apply to this Rust kernel phase.
+- **Phase 4 push state (after plan 04-25 + UAT):** `origin/main` = `bb68d988752ccb616a980b943ea86aecca8f25be` — the owner's second approved push, `5d1549a..bb68d98`, which published 68 commits. Local `main` is ahead of `origin/main` only by close-out commits — the `stop2-main-push: PASS` verdict commit `4d420c9`, the 04-25 SUMMARY, the `04-UAT.md` report, this transition, and tracking corrections — all docs/evidence only, held local until a later approved push. `origin/phase-04/aead-wire-gaps` = `194c71d`; `origin/phase-04/aead-wire` = `405984d`. Both transport branches can be deleted by the owner.
 - Unpushed work, checked against the local remote-tracking refs on 2026-11-24 after the plan 03-11 owner stop: `origin/main` was `a643526` and `git push origin main` published every unpushed commit up to it. The Phase 3 transport branch `phase-03/crypto-ds-foundations` is `5f565ec` (Mac tip `95fe66a` plus two return commits); the Phase 2 branch `phase-02/design-lock` is at `f8d077d` (gated commit `4624ea2` plus two return commits). Earlier unpushed work is published: r9 `5b8b70a` (planning documents plus `legacy/`, 53 MB) and `6ee45b5` are on `origin/main`, and Harvey `25d97dc4d` is on `origin/master`.
 - Owed checks at checkpoint r9 `116bcc2`: the owner's linux `nix build .#boot-iso --rebuild` (expected `sha256-TIzwBaHF0R4m31l6EbW2IU3rkUl73g6ljlNE0S5hGFY=`), and hosted CI on r9 `116bcc2` and Harvey `bd7a6982a`.
 - Phase 20 of the Harvey-rooted work never ran `/gsd-secure-phase` (no SECURITY.md).
@@ -275,6 +275,6 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 
 ## Session Continuity
 
-Last session: 2026-11-25T16:18:52.564Z
-Stopped at: Phase 04 complete and verified (109/109); milestone v3.0 execution finished
+Last session: 2026-11-25T17:29:21.362Z
+Stopped at: Phase 04 UAT complete (112/112) — milestone v3.0 ready to close
 Resume file: None
