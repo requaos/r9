@@ -2480,3 +2480,71 @@ fn aead_transport_tracer_rejects_tampering() {
     );
 }
 
+#[test]
+fn aead_transport_tracer_data_body_uses_session_keystream_placement() {
+    let keys = session::derive(&secret(), &transcript(), 0);
+
+    // A Twrite body: 16 parameter bytes then one 4096-byte page of known
+    // plaintext (P5).
+    let fid: u32 = 0x0102_0304;
+    let offset: u64 = 0x0506_0708_090A_0B0C;
+    let page: Vec<u8> = (0..PAGE_LEN).map(|i| (i % 251) as u8).collect();
+    let mut body = Vec::new();
+    body.extend_from_slice(&fid.to_le_bytes());
+    body.extend_from_slice(&offset.to_le_bytes());
+    body.extend_from_slice(&(PAGE_LEN as u32).to_le_bytes());
+    body.extend_from_slice(&page);
+
+    let packet = port::chan::seal_packet(&keys.c2s, 0, wire::TWRITE, 0x4001, [0u8; 8], &body)
+        .expect("the client seals a one-page Twrite body");
+
+    // The page's ciphertext on the wire, at its literal block counter 1.
+    let page_start = port::chan::HEADER_LEN + 16;
+    let page_end = packet.len() - port::chan::MAC_LEN;
+    assert_eq!(page_end - page_start, PAGE_LEN, "one data page follows the parameters");
+    let mut got = packet[page_start..page_end].to_vec();
+    keys.c2s
+        .keystream(0, 1, &mut got)
+        .expect("the page's counter is in range");
+    assert_eq!(got, page, "the data page decrypts alone at block counter 1");
+
+    // The same bytes are not the continuation of a counter-0 stream.
+    let mut wrong = packet[page_start..page_end].to_vec();
+    keys.c2s
+        .keystream(0, 0, &mut wrong)
+        .expect("counter 0 is in range");
+    assert_ne!(
+        wrong, page,
+        "the data page is not the continuation of a counter-0 keystream"
+    );
+
+    let (typ, tag, handle, opened) =
+        port::chan::open_packet(&keys.c2s, 0, 8192, &packet).expect("the helper opens its packet");
+    assert_eq!(typ, wire::TWRITE, "the opened type is the sealed type");
+    assert_eq!(tag, 0x4001, "the opened tag is the sealed tag");
+    assert_eq!(handle, [0u8; 8], "the opened handle is the sealed handle");
+    assert_eq!(opened, body, "open_packet returns the original body");
+}
+
+#[test]
+fn aead_transport_tracer_non_data_body_is_one_stream_from_counter_zero() {
+    let keys = session::derive(&secret(), &transcript(), 0);
+
+    for len in [64usize, 65] {
+        let body: Vec<u8> = (0..len).map(|i| (i % 197) as u8).collect();
+        let packet = port::chan::seal_packet(&keys.c2s, 0, wire::TCLUNK, 0x4002, [0u8; 8], &body)
+            .expect("the client seals a non-data body");
+
+        // One continuous keystream from block counter 0 over the whole body.
+        let mut got = packet[port::chan::HEADER_LEN..packet.len() - port::chan::MAC_LEN].to_vec();
+        keys.c2s
+            .keystream(0, 0, &mut got)
+            .expect("the non-data body is within the counter limit");
+        assert_eq!(got, body, "a {len}-byte non-data body is one counter-0 stream");
+
+        let (_, _, _, opened) =
+            port::chan::open_packet(&keys.c2s, 0, 8192, &packet).expect("the helper opens its packet");
+        assert_eq!(opened, body, "open_packet returns the {len}-byte body");
+    }
+}
+
