@@ -30,11 +30,19 @@
 //! report no passed tests is an error, so a filter that matches nothing
 //! cannot pass (T-04-39).
 //!
+//! Each listed `port/tests` file is **its own leg**, on both backends, so a
+//! file that lost every test fails by name (WR-08).  A `test result:` line
+//! carries no file name, so a leg that ran several files at once could not
+//! tie a zero count to the file it came from; one leg per file is what makes
+//! the zero-test guard precise.
+//!
 //! Every default leg has a **scalar-backend twin**: the host build links
 //! sha2's hardware SHA path and chacha20's NEON (or AVX2) backend, while the
 //! kernels run the scalar code, so the same wire pins must run on both.  The
 //! twin carries the crates' own soft-backend `--config` flags in its argument
-//! vector, never in `.cargo/config.toml` (lint rule R5).
+//! vector, never in `.cargo/config.toml` (lint rule R5).  Seven legs and
+//! their seven twins make fourteen commands, and the step is still not part
+//! of `cargo xtask test`.
 
 use std::path::{Path, PathBuf};
 
@@ -62,7 +70,7 @@ const SOFT_BACKEND_CONFIG: &str =
 pub struct CommandSpec {
     /// The cargo program the step was handed.
     pub program: PathBuf,
-    /// `test --package ...` and the filter or `--test` pairs.
+    /// `test --package ...` and one `--test` pair or filter.
     pub args: Vec<String>,
 }
 
@@ -77,9 +85,10 @@ pub struct LegOutcome {
 
 /// The commands the step runs (a pure function: no environment, no spawn).
 ///
-/// Three legs in order — the crypto library `session` pins, the crypto
-/// `session` integration pins and the `port` wire pins — each immediately
-/// followed by its scalar-backend twin.
+/// Seven legs in order — the crypto library `session` pins, the crypto
+/// `session` integration pins, then one leg per `PORT_TESTS` entry — each
+/// immediately followed by its scalar-backend twin, so the run is fourteen
+/// commands.
 pub fn command_specs(cargo: &Path) -> Vec<CommandSpec> {
     let mut bases: Vec<Vec<String>> = Vec::new();
 
@@ -100,13 +109,18 @@ pub fn command_specs(cargo: &Path) -> Vec<CommandSpec> {
     }
     bases.push(crypto_tests);
 
-    // Leg 3: the `port/tests` wire pins.
-    let mut port_args = vec!["test".to_string(), "--package".to_string(), "port".to_string()];
+    // Legs 3 to 7: one leg per `port/tests` wire pin file.  A result line
+    // carries no file name, so only a leg per file can tie a zero count to
+    // the file that lost its tests (T-04-39, WR-08).
     for name in PORT_TESTS {
-        port_args.push("--test".to_string());
-        port_args.push((*name).to_string());
+        bases.push(vec![
+            "test".to_string(),
+            "--package".to_string(),
+            "port".to_string(),
+            "--test".to_string(),
+            (*name).to_string(),
+        ]);
     }
-    bases.push(port_args);
 
     let mut specs = Vec::with_capacity(bases.len() * 2);
     for args in bases {
@@ -166,21 +180,34 @@ pub fn run_specs(
     Ok(())
 }
 
-/// Reject a leg that reports no passed tests, which would be a silent pass
-/// (T-04-39).
+/// Reject a leg whose result lines report no passed tests, which would be a
+/// silent pass (T-04-39).
+///
+/// A leg runs exactly one test binary, but cargo may print more than one
+/// `test result: ok.` line for it.  The leg is `Ok` only when there is at
+/// least one such line and **every** one reports a passed count above zero:
+/// one zero-passed line means a listed file lost every test, and it must not
+/// hide behind a sibling's positive line (WR-08).
 pub fn check_leg_output(spec: &CommandSpec, stdout: &str) -> Result<()> {
+    let mut result_lines = 0usize;
+    let mut positive_lines = 0usize;
     for line in stdout.lines() {
         let Some(rest) = line.split_once("test result: ok.").map(|(_, rest)| rest) else {
             continue;
         };
-        let passed = rest
+        result_lines += 1;
+        let positive = rest
             .split_whitespace()
             .next()
             .and_then(|count| count.parse::<u64>().ok())
             .is_some_and(|count| count > 0);
-        if passed {
-            return Ok(());
+        if positive {
+            positive_lines += 1;
         }
+    }
+
+    if result_lines > 0 && positive_lines == result_lines {
+        return Ok(());
     }
 
     Err(format!(
