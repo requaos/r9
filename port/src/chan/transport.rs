@@ -332,7 +332,10 @@ impl SendHalf {
     ///
     /// A closed session writes nothing and returns [`Closed`].  A write that
     /// does not land whole closes the direction: a sequence number consumed by
-    /// a packet the peer never saw would desynchronise the stream.
+    /// a packet the peer never saw would desynchronise the stream.  When a
+    /// re-key acknowledgement deadline is outstanding and `now` has reached
+    /// it, this closes the direction without writing; like [`Session::poll`],
+    /// a deadline only fires when something calls in (F4, WR-02).
     #[allow(clippy::too_many_arguments)]
     pub fn send(
         &self,
@@ -344,13 +347,20 @@ impl SendHalf {
         body: &[u8],
         now: u64,
     ) -> core::result::Result<(), Closed> {
-        // Re-key timing (D-19) is plan 04-08's; this plan threads `now` only.
-        let _ = now;
         if !self.authenticated {
             return Err(Closed);
         }
         let node = LockNode::new();
         let mut state = self.state.lock(&node);
+        // The deadline check sits inside the send lock, before sealing, so a
+        // withheld acknowledgement writes nothing (D-20 step 4, WR-02).
+        if state.closed {
+            return Err(Closed);
+        }
+        if state.deadline.is_some_and(|deadline| now >= deadline) {
+            state.fail();
+            return Err(Closed);
+        }
         let seq = state.seq;
         let packet = seal_into(&mut state, self.msize, seq, typ, tag, fid_handle, exts, body)?;
         // The seal, the write and the advance all sit inside this one lock
@@ -736,7 +746,13 @@ impl Session {
         body: &[u8],
         now: u64,
     ) -> core::result::Result<Vec<u8>, Closed> {
-        if !self.authenticated || self.send.is_closed() {
+        if !self.authenticated {
+            return Err(Closed);
+        }
+        if self.send.is_closed() {
+            // The send half can close on its own (a deadline, a failed write),
+            // so the session finishes the zeroization it cannot do (WR-02).
+            self.fail();
             return Err(Closed);
         }
         // A re-key acknowledgement that never arrived closes the connection on
@@ -775,7 +791,13 @@ impl Session {
         packet: Unverified<'a>,
         now: u64,
     ) -> core::result::Result<Verified<'a>, Closed> {
-        if !self.authenticated || self.send.is_closed() {
+        if !self.authenticated {
+            return Err(Closed);
+        }
+        if self.send.is_closed() {
+            // The session finishes the zeroization of a self-closed send half
+            // (WR-02).
+            self.fail();
             return Err(Closed);
         }
         // A missing acknowledgement closes the connection on the next receive
@@ -955,11 +977,19 @@ impl Session {
 
     /// Whether a re-key is due: the send counter has reached the configured
     /// threshold and none is running or waiting to be acknowledged (D-19).
+    ///
+    /// The state is idle exactly when no exchange is running, no derived keys
+    /// are waiting for a marker, no request is outstanding, both pending slots
+    /// are empty and no acknowledgement deadline is outstanding; a later
+    /// threshold crossing then starts another exchange (WR-01).
     pub fn rekey_due(&self) -> bool {
         !self.send.is_closed()
             && !self.rekey.active
             && !self.rekey.ready
             && !self.rekey.request_sent
+            && self.rekey.pending[0].is_none()
+            && self.rekey.pending[1].is_none()
+            && self.send.deadline().is_none()
             && self.send.seq_reached(self.config.rekey_after_packets)
     }
 
@@ -1000,7 +1030,13 @@ impl Session {
         incoming: Option<&msg::Msg>,
         now: u64,
     ) -> core::result::Result<Vec<Vec<u8>>, Closed> {
-        if !self.authenticated || self.send.is_closed() {
+        if !self.authenticated {
+            return Err(Closed);
+        }
+        if self.send.is_closed() {
+            // The session finishes the zeroization of a self-closed send half
+            // (WR-02).
+            self.fail();
             return Err(Closed);
         }
         if self.deadline_expired(now) {
@@ -1196,7 +1232,8 @@ impl Session {
     }
 
     /// Verify an acknowledgement: generation, then the confirm value under the
-    /// new send keys; a valid one zeroizes the old keys (D-20 step 3).
+    /// new send keys; a valid one zeroizes the old keys and returns this end's
+    /// own-direction state to idle (D-20 step 3, WR-01).
     fn handle_ack(
         &mut self,
         generation: u32,
@@ -1214,6 +1251,15 @@ impl Session {
         }
         self.send.zeroize_superseded();
         self.send.clear_deadline();
+        // This direction's cutover is complete: return to idle so a later
+        // threshold crossing starts another exchange (WR-01). A pending slot
+        // of the other direction may still be held until the peer's marker
+        // arrives; `rekey_due` and the `Tauth` arm guard against overlapping.
+        self.rekey.ready = false;
+        self.rekey.own_marker_sent = false;
+        self.rekey.request_sent = false;
+        self.rekey.active = false;
+        self.rekey.phase = ExPhase::Idle;
         Ok(())
     }
 
@@ -1390,6 +1436,13 @@ impl Session {
     ) -> core::result::Result<(), Closed> {
         match (self.rekey.phase, message) {
             (ExPhase::Idle, msg::Msg::Tauth { .. }) => {
+                // A previous generation's pending keys must be fully taken
+                // before another exchange starts: two generations in flight for
+                // one direction is the overlap D-20 forbids (WR-01).
+                if self.rekey.pending[0].is_some() || self.rekey.pending[1].is_some() {
+                    self.fail();
+                    return Err(Closed);
+                }
                 self.rekey.start(&self.transcript);
                 self.absorb_exchange_incoming(wire::TAUTH, REKEY_AUTH_TAG, message)?;
                 let rauth = msg::Msg::Rauth {
@@ -1470,7 +1523,13 @@ impl Session {
     /// A deadline only fires when something calls in: whoever owns the
     /// connection must call [`Session::poll`] periodically (F4, D-20 step 4).
     pub fn poll(&mut self, now: u64) -> core::result::Result<(), Closed> {
-        if !self.authenticated || self.send.is_closed() {
+        if !self.authenticated {
+            return Err(Closed);
+        }
+        if self.send.is_closed() {
+            // The session finishes the zeroization of a self-closed send half
+            // (WR-02).
+            self.fail();
             return Err(Closed);
         }
         if self.deadline_expired(now) {
