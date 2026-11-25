@@ -30,14 +30,21 @@
 //! `fail` takes `&mut self`, the closed state is one change no other caller
 //! can observe half-made (WIRE-03/concurrency).
 //!
+//! # The strict sequence check (WIRE-04)
+//!
+//! After the MAC verifies and before any other header field is used,
+//! `Session::open` compares the packet's `SeqNonce` with the one value that
+//! direction expects next.  A repeat, a skip or an earlier value is a
+//! protocol error: under the owner's P7 decision the connection is closed
+//! through the one `fail()` path and every key is zeroized, and the packet is
+//! never handed to the handler.
+//!
 //! # What is not here yet
 //!
-//! The strict next-in-sequence comparison is deliberately absent from
-//! `Session::open`: plan 04-16 adds it at exactly the step where the sequence
-//! number is read.  Re-keying is plan 04-08; its timing needs `now`, and this
-//! plan threads that argument through without reading it.  A connection owner
-//! must call a periodic `poll(now)` once one exists; nothing in the kernel
-//! drives a session this phase (D-22).
+//! Re-keying is plan 04-08; its timing needs `now`, and this plan threads that
+//! argument through without reading it.  A connection owner must call a
+//! periodic `poll(now)` once one exists; nothing in the kernel drives a
+//! session this phase (D-22).
 
 use alloc::vec::Vec;
 
@@ -264,11 +271,13 @@ impl Session {
         Ok(packet)
     }
 
-    /// Open one packet: MAC first, then the header fields, TLVs and body
-    /// (D-07, D-26).
+    /// Open one packet: MAC first, then the sequence, the header fields, TLVs
+    /// and body (D-07, D-26, WIRE-04).
     ///
-    /// `Size` is the only field read before the MAC verifies; plan 04-16 adds
-    /// the strict next-in-sequence comparison at the step that reads `SeqNonce`.
+    /// `Size` is the only field read before the MAC verifies.  Immediately
+    /// after it does, the sequence number must be the value this direction
+    /// expects next; a repeat, a skip or an earlier value closes the
+    /// connection through `fail()` (P7, WIRE-04).
     pub fn open<'a>(
         &mut self,
         packet: Unverified<'a>,
@@ -297,15 +306,19 @@ impl Session {
             return Err(Closed);
         }
 
-        // Only now read the header.  Plan 04-16 adds the strict comparison
-        // with the expected sequence number at exactly this step; here the
-        // number selects the nonce and advances the receive counter.
+        // Only now read the header, and check the sequence number before any
+        // other field is used: a repeat, a skip or an earlier value is a
+        // protocol error, and P7 says it closes the connection (WIRE-04).
         let Ok(header_bytes) = <&[u8; HEADER_LEN]>::try_from(&buf[..HEADER_LEN]) else {
             self.fail();
             return Err(Closed);
         };
         let header = Header::decode(header_bytes);
         let seq = header.seq;
+        if seq != self.recv_seq {
+            self.fail();
+            return Err(Closed);
+        }
         if check_header(&header, size).is_err() {
             self.fail();
             return Err(Closed);
