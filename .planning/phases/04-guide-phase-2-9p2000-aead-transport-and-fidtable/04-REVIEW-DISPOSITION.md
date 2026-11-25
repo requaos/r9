@@ -99,7 +99,7 @@ recorded: 2026-11-25T03:16:25.575Z
 | WR-06 | warning | fixed | 04-19 a9be163 |
 | WR-07 | warning | fixed | 04-21 bb7e83c |
 | WR-08 | warning | fixed | 04-20 18ff8e5 |
-| WR-09 | warning | fixed | 04-19 e0f7427; the racing-insert case was resolved on the owner's request (04-23 6fd201c) |
+| WR-09 | warning | fixed | 04-19 e0f7427 |
 | IN-01 | info | open | - |
 | IN-02 | info | open | - |
 | IN-03 | info | open | - |
@@ -107,6 +107,8 @@ recorded: 2026-11-25T03:16:25.575Z
 | IN-05 | info | open | - |
 | IN-06 | info | open | - |
 | IN-07 | info | open | - |
+
+> WR-09 amendment (owner request, 04-23): the fallover-window racing-insert case is closed by the table-level insert lock in 6fd201c; pin aead_fid_insert_racing_pair_lands_exactly_one_entry.
 
 Dispositions: `open` (recorded, not yet triaged), `fixed`, `skipped`, `deferred`.
 Set `deferred` by hand and put the reason in the Source cell; both are preserved. A `|` in the reason is kept as prose and escaped on the next run.
