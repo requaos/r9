@@ -650,4 +650,28 @@ impl<P: Probe + Clone> FidTable<P> {
     pub fn set_epoch(&mut self, epoch: u16) {
         self.epoch = epoch;
     }
+
+    /// Issue a stateless capability for `qid` opened with `mode`, signed under
+    /// the table's domain secret at the table's epoch (WIRE-07, P8).
+    pub fn issue_cap(&self, qid: &crate::dat::Qid, mode: u8) -> StatelessCap {
+        // RED stub: the fields are filled but the tag is zero, so the
+        // independent tag test fails on its tag equality (D-03, Pitfall 11).
+        StatelessCap {
+            qid_path: qid.path,
+            qid_vers: qid.vers,
+            qid_type: qid.typ,
+            mode,
+            epoch: self.epoch,
+            mac_tag: [0u8; 8],
+        }
+    }
+
+    /// Verify a capability with the domain secret and **zero FID memory**: no
+    /// shard and no bitmap is touched (WIRE-07, WIRE-08, P8).
+    pub fn verify_cap(&self, cap: &StatelessCap) -> crate::Result<()> {
+        // RED stub: always Ok; the independent tag test fails on the issue
+        // side (D-03, Pitfall 11).
+        let _ = cap;
+        Ok(())
+    }
 }

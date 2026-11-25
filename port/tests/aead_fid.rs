@@ -461,3 +461,123 @@ fn aead_fid_resolve_falls_over_to_the_next_shard_when_home_is_full() {
     );
 }
 
+/// A fixed qid for the capability pins: a non-zero path and version and the
+/// directory type bit, so every field of the 16-byte tagged body is non-zero.
+fn fixed_qid() -> Qid {
+    Qid { path: 0x0102_0304_0506_0708, vers: 0xAABB_CCDD, typ: 0x80 }
+}
+
+#[test]
+fn aead_fid_stateless_two_tables_one_key_verify_each_other() {
+    let table_a = FidTable::new(1, 1, domain_key(0x50), 9).expect("a one-shard table forms");
+    let table_b = FidTable::new(1, 1, domain_key(0x50), 9).expect("a second table with the same key");
+    let cap_a = table_a.issue_cap(&fixed_qid(), 0x02);
+    assert!(
+        table_b.verify_cap(&cap_a).is_ok(),
+        "a second table built from the same domain key verifies the capability (D-13)"
+    );
+    let cap_b = table_b.issue_cap(&fixed_qid(), 0x02);
+    assert!(
+        table_a.verify_cap(&cap_b).is_ok(),
+        "and the first table verifies the second's capability too (D-13)"
+    );
+}
+
+#[test]
+fn aead_fid_stateless_uses_zero_fid_memory() {
+    let probe = CountingProbe::new();
+    let table = FidTable::with_probe(2, 1, domain_key(0x51), 4, probe.clone())
+        .expect("two one-block shards form a table");
+    probe.reset();
+    let cap = table.issue_cap(&fixed_qid(), 0x01);
+    assert!(table.verify_cap(&cap).is_ok(), "a freshly issued capability verifies");
+    assert_eq!(
+        (probe.arena_reads(), probe.header_reads()),
+        (0, 0),
+        "issue and verify touch no shard at all: zero FID memory (WIRE-08)"
+    );
+    for shard in 0..2u8 {
+        assert_eq!(
+            table.bitmap_lens(shard),
+            Some((0, 0)),
+            "shard {shard}'s active and reclaimed bitmaps stay empty across issue and verify"
+        );
+    }
+}
+
+#[test]
+fn aead_fid_stateless_different_key_rejects() {
+    let table_a = FidTable::new(1, 1, domain_key(0x52), 0).expect("a one-shard table forms");
+    let table_b = FidTable::new(1, 1, domain_key(0x53), 0).expect("a table with another key forms");
+    let cap = table_a.issue_cap(&fixed_qid(), 0x01);
+    assert!(
+        table_b.verify_cap(&cap).is_err(),
+        "a table with a different domain key rejects the capability (D-13)"
+    );
+}
+
+#[test]
+fn aead_fid_stateless_every_flipped_byte_rejects() {
+    let table = FidTable::new(1, 1, domain_key(0x54), 2).expect("a one-shard table forms");
+    let cap = table.issue_cap(&fixed_qid(), 0x03);
+    let wire = cap.to_wire();
+    for index in 0..STATELESS_CAP_LEN {
+        let mut flipped = wire;
+        flipped[index] ^= 0x01;
+        let tampered = StatelessCap::from_wire(&flipped);
+        assert!(
+            table.verify_cap(&tampered).is_err(),
+            "flipping wire byte {index} must fail verification (T-04-34)"
+        );
+    }
+}
+
+#[test]
+fn aead_fid_stateless_wrong_epoch_rejects() {
+    let issuer = FidTable::new(1, 1, domain_key(0x55), 5).expect("a one-shard table forms");
+    let mut other = FidTable::new(1, 1, domain_key(0x55), 5).expect("a table with the same key forms");
+    let cap = issuer.issue_cap(&fixed_qid(), 0x01);
+    assert!(other.verify_cap(&cap).is_ok(), "the same epoch verifies the capability");
+    other.set_epoch(6);
+    assert!(
+        other.verify_cap(&cap).is_err(),
+        "a table at epoch e+1 rejects a capability issued at epoch e (WIRE-08)"
+    );
+}
+
+#[test]
+fn aead_fid_stateless_tag_is_keyed_blake3_of_label_and_wire_body() {
+    // The domain key is bytes 0x40..=0x5f and the label is a literal in the
+    // test, so nothing on the expected side goes through issue_cap,
+    // verify_cap, cap_tag or StatelessCap::body (WIRE-07, D-14, P8).
+    let key_bytes: [u8; 32] = core::array::from_fn(|i| 0x40 + i as u8);
+    let table = FidTable::new(1, 1, Key::from_bytes(key_bytes), 0x1357)
+        .expect("a one-shard table forms");
+    let cap = table.issue_cap(&fixed_qid(), 0x02);
+
+    // The 24-byte wire form of the plan 04-09 layout, written by hand:
+    // qid_path(8) qid_vers(4) qid_type(1) mode(1) epoch(2) then the tag.
+    const BODY: [u8; 16] = [
+        0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, // qid_path LE
+        0xDD, 0xCC, 0xBB, 0xAA, // qid_vers LE
+        0x80, // qid_type
+        0x02, // mode
+        0x57, 0x13, // epoch LE
+    ];
+    let wire = cap.to_wire();
+    assert_eq!(&wire[0..16], &BODY[..], "the capability's first 16 bytes are the field layout");
+
+    // The tag is the first 8 bytes of keyed BLAKE3 under the domain key over
+    // the literal label followed by those 16 bytes.
+    let mut message = [0u8; 32];
+    message[..16].copy_from_slice(b"r9 StatelessCap1");
+    message[16..].copy_from_slice(&BODY);
+    let expected = crypto::mac::blake3_keyed(&key_bytes, &message);
+    assert_eq!(
+        &wire[16..24],
+        &expected[..8],
+        "the 8-byte tag is the truncation of keyed BLAKE3 over the label and the wire body (P8)"
+    );
+}
+
+
