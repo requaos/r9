@@ -230,6 +230,13 @@ fn main() {
                     .default_value("64")
                     .help("Seed count for -Zmiri-many-seeds=0..N")]),
         )
+        .subcommand(clap::Command::new("test-9p").about(
+            "Run the 9P2000.aead wire pins on the host (WIRE-13): the `session` \
+             pins in the crypto library and every file listed in \
+             xtask::test9p::PORT_TESTS under port/tests.  Refuses when a listed \
+             test file is missing.  Not part of `cargo xtask test`: the ordinary \
+             run already covers the same files",
+        ))
         .subcommand(
             clap::Command::new("initrd")
                 .about("Assemble target/bootfs.paq from xtask/manifests/arm64/smoke.toml \
@@ -330,6 +337,7 @@ fn main() {
         Some(("ureg-check", _)) => UregCheckStep::new().run(),
         Some(("rfork-header", m)) => RforkHeaderStep::new(m).run(),
         Some(("miri", m)) => MiriStep::new(m).run(),
+        Some(("test-9p", m)) => Test9pStep::new(m).run(),
         Some(("initrd", m)) => InitrdStep::new(m).run(),
         Some(("image", m)) => ImageStep::new(m).run(),
         Some(("gate", m)) => gate::GateStep::new(m).run(),
@@ -4936,6 +4944,18 @@ impl MiriStep {
 
     fn run(self) -> Result<()> {
         xtask::miri::run(&workspace(), self.seeds)
+    }
+}
+
+struct Test9pStep;
+
+impl Test9pStep {
+    fn new(_matches: &clap::ArgMatches) -> Self {
+        Self
+    }
+
+    fn run(self) -> Result<()> {
+        xtask::test9p::run(&workspace(), Path::new(&cargo()))
     }
 }
 
