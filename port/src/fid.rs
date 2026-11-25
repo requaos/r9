@@ -67,6 +67,21 @@
 //! agree with the live entries.  A [`FidTable::resolve`] takes no lock and is
 //! never serialised with them.
 //!
+//! # One insert at a time, table-wide (WR-09)
+//!
+//! The all-shard duplicate probe and the placement walk that follows it are one
+//! critical section of a **table-level** `insert_lock`, held from before the
+//! probe until the insert returns.  Without it two inserts of the same
+//! `(client_id, fid_key)` running at the same instant could both read every
+//! shard as clear before either placed its entry, and then land in different
+//! shards: the probe proves a key absent only as of the moment it reads, so the
+//! read and the placement have to be indivisible for the uniqueness claim to
+//! hold.  The lock order is `insert_lock` then a shard's `active` then that
+//! shard's `reclaimed`, and only ever that way; `clunk`, `mark_reclaimed`,
+//! `sweep` and `bitmap_lens` take no `insert_lock`, so it never nests inside a
+//! shard lock.  [`FidTable::resolve`] still takes no lock at all and stays one
+//! arena read: the insert path is the only one serialised.
+//!
 //! # The capability is a bearer token within the domain (WIRE-07, D-13, P8)
 //!
 //! A [`StatelessCap`] is a **bearer token** within the domain: it is not bound
@@ -539,9 +554,11 @@ impl ActiveSlots {
 /// The `active` lock covers both the live bitmap and the keys recorded for it,
 /// and every mutator holds it across its TPHT mutation and its bookkeeping
 /// update (`insert`, `clunk` and `sweep`), so a shard's bitmaps can never name
-/// a slot other than the one its live entries hold (WR-05, T-04-67).  The lock
-/// order is the same everywhere and only ever one way: a shard's `active` lock,
-/// then its `reclaimed` lock.  [`FidTable::resolve`] takes neither.
+/// a slot other than the one its live entries hold (WR-05, T-04-67).  Among the
+/// shard locks the order is the same everywhere and only ever one way: a
+/// shard's `active` lock, then its `reclaimed` lock.  [`FidTable::insert`] takes
+/// the table's `insert_lock` before either (WR-09), and no path takes them in
+/// the other order.  [`FidTable::resolve`] takes neither.
 pub struct FidShard<P: Probe = NoProbe> {
     tpht: FlattenedTphtShard<FID_ENTRY_WORDS, P>,
     active: Lock<ActiveSlots>,
@@ -549,11 +566,19 @@ pub struct FidShard<P: Probe = NoProbe> {
 }
 
 /// The server's FID table: at most 256 [`FidShard`]s, the domain secret a
-/// capability is signed under (D-13), and the server generation epoch.
+/// capability is signed under (D-13), the server generation epoch, and the
+/// table-wide lock that makes an insert's duplicate probe and placement one
+/// indivisible step (WR-09).
 pub struct FidTable<P: Probe = NoProbe> {
     shards: Box<[FidShard<P>]>,
     domain_secret: Key,
     epoch: u16,
+    /// Serialises [`FidTable::insert`] across the whole table: the all-shard
+    /// probe and the placement walk are one critical section, so two inserts
+    /// of one `(client_id, fid_key)` cannot both pass the probe and land in
+    /// different shards (WR-09).  Lock order: this lock, then a shard's
+    /// `active`, then that shard's `reclaimed`.
+    insert_lock: Lock<()>,
 }
 
 impl FidTable<NoProbe> {
@@ -605,7 +630,12 @@ impl<P: Probe + Clone> FidTable<P> {
                 reclaimed: Lock::new("fid-reclaimed", RoaringBitmap::new()),
             });
         }
-        Ok(FidTable { shards: built.into_boxed_slice(), domain_secret, epoch })
+        Ok(FidTable {
+            shards: built.into_boxed_slice(),
+            domain_secret,
+            epoch,
+            insert_lock: Lock::new("fid-insert", ()),
+        })
     }
 
     /// The shard a key's insertion starts at: a mix of the TPHT key modulo the
@@ -633,15 +663,20 @@ impl<P: Probe + Clone> FidTable<P> {
     ///
     /// The entry's `client_id`, `epoch` and [`FID_LIVE`] flag are set here; the
     /// key is `(client_id, fid_key)`.  Client id 0 is reserved for the cleared
-    /// arena slot and is refused before any shard is touched (WR-04).  The key
-    /// is unique across the whole table: every shard is probed for it before
-    /// the placement walk, because an earlier insert of the same key may have
-    /// fallen over to any of them (WR-09).  The insert then starts at the key's
-    /// home shard ([`Self::home_shard`]) and walks forward on `HomeFull`, so a
-    /// key whose home block is full lands in the next shard and its handle
-    /// records that shard's index.  Every shard full is an error.  On the shard
-    /// the entry lands in, the TPHT insert and the recording of its slot id and
-    /// key happen under one hold of that shard's `active` lock (WR-05, T-04-67).
+    /// arena slot and is refused before any shard is touched (WR-04).  The whole
+    /// body runs under the table's `insert_lock`, so a duplicate probe and the
+    /// placement it licenses are one indivisible step and two concurrent inserts
+    /// of one key cannot both pass the probe (WR-09).  The key is unique across
+    /// the whole table: every shard is probed for it before the placement walk,
+    /// because an earlier insert of the same key may have fallen over to any of
+    /// them (WR-09).  The insert then starts at the key's home shard
+    /// ([`Self::home_shard`]) and walks forward on `HomeFull`, so a key whose
+    /// home block is full lands in the next shard and its handle records that
+    /// shard's index.  Every shard full is an error.  On the shard the entry
+    /// lands in, the TPHT insert and the recording of its slot id and key happen
+    /// under one hold of that shard's `active` lock (WR-05, T-04-67).  The lock
+    /// order is `insert_lock`, then `active`, then `reclaimed`, and only that
+    /// way.
     pub fn insert(&self, client_id: u32, mut entry: FidEntry) -> crate::Result<StatefulHandle> {
         if client_id == 0 {
             return Err(
@@ -649,6 +684,13 @@ impl<P: Probe + Clone> FidTable<P> {
                  entry (WIRE-08, WR-04)",
             );
         }
+        // The probe below proves the key absent as of the moment it reads, so
+        // the read and the placement it licenses must be indivisible: without
+        // this lock two inserts of one key could both read every shard clear
+        // and then land in different shards (WR-09).  Held until the insert
+        // returns, across the whole probe and the placement walk.
+        let node = LockNode::new();
+        let _insert = self.insert_lock.lock(&node);
         entry.client_id = client_id;
         entry.epoch = self.epoch;
         entry.flags |= FID_LIVE;

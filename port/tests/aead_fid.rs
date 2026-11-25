@@ -542,6 +542,178 @@ fn aead_fid_insert_same_key_twice_in_one_shard_is_refused() {
     assert!(table.resolve(1, &first).is_ok(), "the first handle still resolves");
 }
 
+/// The racing pair the WR-09 probe alone could not stop (owner request,
+/// amendment to plan 04-23): N threads insert the SAME `(client_id, fid_key)`
+/// into one shared table at the same instant, while one more thread frees a slot
+/// in that key's home block.
+///
+/// Why the clunk is part of the pin: the probe proves the key absent only as of
+/// the moment it reads, so the read and the placement it licenses have to be one
+/// indivisible step.  A same-shard collision alone is still caught — `ds` checks
+/// the key again inside the block under its seqlock — so the window that actually
+/// splits an insert is the *fallover* one: the key's home block is full, one
+/// racer walks it and falls over to the next shard, the home block then gains a
+/// free slot, and another racer that probed before the first one placed lands at
+/// home.  Two live entries for one key, in two shards.  That is the state this
+/// test drives, over many rounds.
+///
+/// With the table-level insert lock the probe and the walk are one critical
+/// section, so exactly one insert wins every round and the rest see the earlier
+/// entry; without it this test reports two winners within a few rounds.
+#[test]
+fn aead_fid_insert_racing_pair_lands_exactly_one_entry() {
+    const THREADS: usize = 32;
+    const ROUNDS: u32 = 64;
+    // The raced key's home shard 0, plus two neighbours, one home block of 16
+    // slots each: a racer that fell over from a full home always has room to
+    // land, so a wrong outcome is an observable second entry rather than an
+    // "every shard is full".
+    const SHARDS: usize = 3;
+    const SLOTS: usize = 16;
+
+    for round in 0..ROUNDS {
+        let table = FidTable::new(SHARDS, 1, domain_key(0x6E), 1)
+            .expect("three one-block shards form a table");
+
+        // Fill the key's home block completely, so the first insert to walk it
+        // has to fall over to shard 1.
+        let mut fid = 1u32;
+        let mut fillers = Vec::new();
+        while fillers.len() < SLOTS {
+            if table.home_shard(1, fid) == 0 {
+                let handle = table
+                    .insert(1, entry_for(fid))
+                    .expect("the home block has room for sixteen fillers");
+                assert_eq!(handle.shard_id, 0, "round {round}: a filler stays at its home shard");
+                fillers.push(handle);
+            }
+            fid += 1;
+        }
+        // The raced key homes to shard 0 too, so it is the key that falls over.
+        let mut raced = fid;
+        while table.home_shard(1, raced) != 0 {
+            raced += 1;
+        }
+
+        // A spin gate, not `std::sync::Barrier`: a condvar release wakes the
+        // other threads through the scheduler, which is slow enough that the
+        // first thread finishes its whole insert before the rest begin.  Here
+        // every thread is already hot and spinning, so the release is the same
+        // instant for all of them.
+        let ready = AtomicUsize::new(0);
+        let go = AtomicBool::new(false);
+        let ready_ref = &ready;
+        let go_ref = &go;
+        let table_ref = &table;
+        // One filler is freed mid-race: the home block goes from full to having
+        // exactly one free slot while the inserts are in flight.
+        let victim = fillers[0];
+        let outcomes: Vec<port::Result<StatefulHandle>> = std::thread::scope(|scope| {
+            let opener = scope.spawn(move || {
+                ready_ref.fetch_add(1, Ordering::SeqCst);
+                while !go_ref.load(Ordering::SeqCst) {
+                    core::hint::spin_loop();
+                }
+                table_ref.clunk(1, &victim)
+            });
+            let workers: Vec<_> = (0..THREADS)
+                .map(|_| {
+                    scope.spawn(move || {
+                        ready_ref.fetch_add(1, Ordering::SeqCst);
+                        while !go_ref.load(Ordering::SeqCst) {
+                            core::hint::spin_loop();
+                        }
+                        table_ref.insert(1, entry_for(raced))
+                    })
+                })
+                .collect();
+            while ready_ref.load(Ordering::SeqCst) < THREADS + 1 {
+                core::hint::spin_loop();
+            }
+            go_ref.store(true, Ordering::SeqCst);
+            let collected: Vec<port::Result<StatefulHandle>> = workers
+                .into_iter()
+                .map(|worker| worker.join().expect("a racer thread joins"))
+                .collect();
+            opener.join().expect("the opener thread joins").expect("the filler clunks");
+            collected
+        });
+
+        let wins: Vec<StatefulHandle> =
+            outcomes.iter().filter_map(|outcome| outcome.as_ref().ok().copied()).collect();
+        assert_eq!(
+            wins.len(),
+            1,
+            "round {round} (fid {raced}): exactly one of {THREADS} racing inserts may win, got {} \
+             on shard(s) {:?}",
+            wins.len(),
+            wins.iter().map(|handle| handle.shard_id).collect::<Vec<_>>()
+        );
+        for outcome in &outcomes {
+            if let Err(error) = outcome {
+                assert!(
+                    error.starts_with("fid: an entry for this client and fid is already present"),
+                    "round {round}: a losing insert must be the already-present error, got {error:?}"
+                );
+            }
+        }
+
+        // Exactly one live entry for the raced key, and it is the winner's.
+        let winner = wins[0];
+        let resolved = table.resolve(1, &winner);
+        assert!(
+            resolved.is_ok(),
+            "round {round}: the winning handle resolves, got {:?}",
+            resolved.as_ref().err()
+        );
+        let resolved = resolved.expect("the assertion above guarantees a resolved entry");
+        assert_eq!(resolved.fid_key, raced, "round {round}: the live entry is the raced key");
+        assert_eq!(
+            resolved.qid_path,
+            entry_for(raced).qid_path,
+            "round {round}: the live entry is the entry that was inserted"
+        );
+
+        // The bitmaps name the fifteen surviving fillers plus exactly one raced
+        // entry: a second live entry for the raced key would read as seventeen.
+        let total_active: u64 = (0..SHARDS as u8)
+            .map(|shard| table.bitmap_lens(shard).expect("the shard index is in range").0)
+            .sum();
+        assert_eq!(
+            total_active as usize, SLOTS,
+            "round {round}: fifteen surviving fillers plus exactly one raced entry are live"
+        );
+
+        // One sweep collects every live slot and leaves nothing stale behind, so
+        // a duplicate parked in another shard is collected here too.
+        let swept: BTreeSet<(u8, u32)> = table.sweep().into_iter().collect();
+        assert_eq!(
+            swept.len(),
+            SLOTS,
+            "round {round}: the sweep collects the fifteen survivors and the one raced entry"
+        );
+        assert!(
+            swept.contains(&(winner.shard_id, winner.ptr.get() as u32 - 1)),
+            "round {round}: the sweep collects the winning slot"
+        );
+        // The clunked filler's own slot may legitimately be reused by the winner
+        // (it is the free home slot), so it is not asserted absent from the
+        // sweep: the sweep reports slot ids, not keys.
+        assert!(table.sweep().is_empty(), "round {round}: a second sweep finds nothing stale");
+        for shard in 0..SHARDS as u8 {
+            assert_eq!(
+                table.bitmap_lens(shard),
+                Some((0, 0)),
+                "round {round}: shard {shard} holds no live or reclaimed slot after the sweep"
+            );
+        }
+        assert!(
+            table.resolve(1, &winner).is_err(),
+            "round {round}: the one raced entry was the one the sweep collected"
+        );
+    }
+}
+
 #[test]
 fn aead_fid_resolve_out_of_window_ptr_is_rejected() {
     let probe = CountingProbe::new();
