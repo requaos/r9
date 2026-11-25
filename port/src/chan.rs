@@ -36,8 +36,8 @@ pub mod transport;
 pub mod wire;
 
 pub use transport::{
-    Closed, ExchangeStep, Handshake, REKEY_ACK_TIMEOUT_MS, REKEY_AFTER_PACKETS, Role, Session,
-    SessionExchange, TransportConfig, open_packet, seal_packet,
+    Closed, ExchangeStep, Handshake, REKEY_ACK_TIMEOUT_MS, REKEY_AFTER_PACKETS, Role, SendHalf,
+    Session, SessionExchange, TransportConfig, open_packet, seal_packet,
 };
 
 /// The fixed envelope header length (D-06).

@@ -17,6 +17,8 @@ use common::aead_link::{
     fresh_server, handshake_frames, rauth_frame, seal_bypass, session as fixture_session,
     tauth_frame, unauthenticated_session,
 };
+use std::sync::{Arc, Mutex};
+
 use crypto::key::Key;
 use crypto::session::{self, Transcript};
 use port::chan::msg::{self, Msg};
@@ -25,6 +27,7 @@ use port::chan::transport::{Handshake, Role};
 use port::chan::wire;
 use port::chan::PAGE_LEN;
 use port::dat::Qid;
+use port::devmnt::MntIo;
 
 /// The fixed 32-byte session secret: bytes 0x00..=0x1f.
 fn secret() -> Key {
@@ -894,6 +897,168 @@ fn aead_transport_splice_cross_connection_and_reflection_fail() {
     assert!(client.session.is_closed(), "the reflected packet closes the client");
     assert_eq!(link.borrow().decoded(), 0, "the reflection decodes nothing");
     drop(server);
+}
+
+// ---------------------------------------------------------------------------
+// Ordered sending under one per-direction lock (WIRE-04, D-21).
+// ---------------------------------------------------------------------------
+
+/// A sink that appends every whole packet it is handed, shared across threads.
+struct SinkIo(Arc<Mutex<Vec<u8>>>);
+
+impl MntIo for SinkIo {
+    fn write_msg(&mut self, buf: &[u8]) -> port::Result<u64> {
+        self.0
+            .lock()
+            .expect("the sink is not poisoned")
+            .extend_from_slice(buf);
+        Ok(buf.len() as u64)
+    }
+
+    fn read_some(&mut self, _buf: &mut [u8]) -> port::Result<u64> {
+        Ok(0)
+    }
+}
+
+#[test]
+fn aead_transport_send_order_under_contention() {
+    let session = fixture_session(Role::Client, secret());
+    let half = session.send_half();
+    let sink = Arc::new(Mutex::new(Vec::new()));
+    let body = body_of(&Msg::Tclunk { fid: 9 });
+
+    std::thread::scope(|scope| {
+        for _ in 0..2 {
+            let sink = Arc::clone(&sink);
+            let body = body.as_slice();
+            scope.spawn(move || {
+                let mut io = SinkIo(sink);
+                for _ in 0..200 {
+                    half.send(
+                        &mut io,
+                        wire::TCLUNK,
+                        1,
+                        [0u8; 8],
+                        &Exts::default(),
+                        body,
+                        0,
+                    )
+                    .expect("the shared send half puts a packet on the wire");
+                }
+            });
+        }
+    });
+
+    let bytes = sink.lock().expect("the sink is not poisoned").clone();
+    let mut seqs = Vec::new();
+    let mut offset = 0usize;
+    while offset < bytes.len() {
+        let size =
+            u32::from_le_bytes(bytes[offset..offset + 4].try_into().expect("Size is 4 bytes"))
+                as usize;
+        assert!(
+            size >= port::chan::MIN_PACKET_LEN && offset + size <= bytes.len(),
+            "every frame in the sink is whole"
+        );
+        seqs.push(u64::from_le_bytes(
+            bytes[offset + 16..offset + 24]
+                .try_into()
+                .expect("SeqNonce is 8 bytes"),
+        ));
+        offset += size;
+    }
+    let expected: Vec<u64> = (0..400).collect();
+    assert_eq!(
+        seqs, expected,
+        "wire order is 0 to 399 with no gap and no repeat"
+    );
+}
+
+#[test]
+fn aead_transport_send_order_shares_the_session_counter() {
+    let mut client = fixture_session(Role::Client, secret());
+    let mut server = fixture_session(Role::Server, secret());
+    let body = body_of(&Msg::Tclunk { fid: 9 });
+
+    let first = client
+        .seal(wire::TCLUNK, 1, [0u8; 8], &Exts::default(), &body, 0)
+        .expect("Session::seal seals the first packet");
+    assert_eq!(seq_of(&first), 0, "Session::seal seals sequence 0");
+
+    let sink = Arc::new(Mutex::new(Vec::new()));
+    {
+        let mut io = SinkIo(Arc::clone(&sink));
+        client
+            .send_half()
+            .send(
+                &mut io,
+                wire::TCLUNK,
+                2,
+                [0u8; 8],
+                &Exts::default(),
+                &body,
+                0,
+            )
+            .expect("SendHalf::send seals the next packet");
+    }
+    let second = sink.lock().expect("the sink is not poisoned").clone();
+    assert_eq!(
+        seq_of(&second),
+        1,
+        "SendHalf::send shares Session::seal's counter"
+    );
+
+    let mut first = first;
+    assert!(
+        server.receive(&mut first, 0).is_ok(),
+        "the peer opens sequence 0"
+    );
+    let mut second = second;
+    assert!(
+        server.receive(&mut second, 0).is_ok(),
+        "the peer opens sequence 1"
+    );
+}
+
+#[test]
+fn aead_transport_send_order_closed_session_refuses() {
+    let mut client = fixture_session(Role::Client, secret());
+    let mut server = fixture_session(Role::Server, secret());
+    let body = body_of(&Msg::Tclunk { fid: 9 });
+
+    let mut packet = client
+        .seal(wire::TCLUNK, 1, [0u8; 8], &Exts::default(), &body, 0)
+        .expect("the client seals a packet to tamper with");
+    let last = packet.len() - 1;
+    packet[last] ^= 0xFF;
+    assert!(
+        server.receive(&mut packet, 0).is_err(),
+        "the failed open closes the session"
+    );
+    assert!(server.keys_zeroized(), "the failed open zeroizes the keys");
+
+    let sink = Arc::new(Mutex::new(Vec::new()));
+    let mut io = SinkIo(Arc::clone(&sink));
+    assert!(
+        server
+            .send_half()
+            .send(
+                &mut io,
+                wire::RWRITE,
+                3,
+                [0u8; 8],
+                &Exts::default(),
+                &[0u8; 4],
+                0
+            )
+            .is_err(),
+        "a closed session's SendHalf::send returns Err(Closed)"
+    );
+    assert!(
+        sink.lock().expect("the sink is not poisoned").is_empty(),
+        "a closed session writes nothing to the sink"
+    );
+    assert!(server.keys_zeroized(), "the keys stay zeroized");
 }
 
 // ---------------------------------------------------------------------------

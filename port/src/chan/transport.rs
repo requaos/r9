@@ -51,6 +51,8 @@ use alloc::vec::Vec;
 use crypto::key::Key;
 use crypto::session::{self, DirectionKeys, SessionKeys, Transcript};
 
+use crate::mcslock::{Lock, LockNode};
+
 use super::msg;
 use super::tlv::{self, Exts};
 use super::wire::{self, Header, Unverified, Verified, check_header, frame_size, packet_len};
@@ -119,6 +121,201 @@ pub trait SessionExchange {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Closed;
 
+/// The mutable sending side one direction owns: the direction's keys and the
+/// next sequence number (D-21).
+struct SendState {
+    keys: DirectionKeys,
+    seq: u64,
+    closed: bool,
+}
+
+impl SendState {
+    /// Zeroize this direction's keys, reset the counter and close.
+    fn fail(&mut self) {
+        self.keys.zeroize();
+        self.seq = 0;
+        self.closed = true;
+    }
+
+    /// Whether this direction's keys are zero.
+    fn is_zeroized(&self) -> bool {
+        self.keys.is_zeroized()
+    }
+}
+
+/// The sending half of a connection: sealing and writing happen under one
+/// per-direction lock, so packets leave in counter order (D-21, WIRE-04).
+///
+/// The lock is held across the seal, the write and the counter advance, so two
+/// callers sharing one `SendHalf` cannot put packets on the wire out of
+/// sequence.  [`Session::seal`] takes the same lock for single-owner use.
+pub struct SendHalf {
+    role: Role,
+    msize: u32,
+    authenticated: bool,
+    state: Lock<SendState>,
+}
+
+impl SendHalf {
+    /// Seal one message and write the whole packet through `io`, all under the
+    /// one per-direction lock (D-21).
+    ///
+    /// A closed session writes nothing and returns [`Closed`].  A write that
+    /// does not land whole closes the direction: a sequence number consumed by
+    /// a packet the peer never saw would desynchronise the stream.
+    pub fn send(
+        &self,
+        io: &mut dyn crate::devmnt::MntIo,
+        typ: u8,
+        tag: u16,
+        fid_handle: [u8; 8],
+        exts: &Exts<'_>,
+        body: &[u8],
+        now: u64,
+    ) -> core::result::Result<(), Closed> {
+        // Re-key timing (D-19) is plan 04-08's; this plan threads `now` only.
+        let _ = now;
+        if !self.authenticated {
+            return Err(Closed);
+        }
+        let node = LockNode::new();
+        let mut state = self.state.lock(&node);
+        // RED: the shared send counter is not wired in yet; this seals at a
+        // fixed sequence and advances nothing.  GREEN reads and advances
+        // `state.seq` inside this same lock scope.
+        let seq = 0u64;
+        let packet = match seal_into(
+            &mut state,
+            self.role,
+            self.msize,
+            seq,
+            typ,
+            tag,
+            fid_handle,
+            exts,
+            body,
+        ) {
+            Ok(packet) => packet,
+            Err(closed) => return Err(closed),
+        };
+        match io.write_msg(&packet) {
+            Ok(written) if written as usize == packet.len() => Ok(()),
+            _ => {
+                state.fail();
+                Err(Closed)
+            }
+        }
+    }
+
+    /// Seal one message into a `Vec`, used by [`Session::seal`] for
+    /// single-owner sending through the same lock and counter.
+    fn seal_single(
+        &self,
+        typ: u8,
+        tag: u16,
+        fid_handle: [u8; 8],
+        exts: &Exts<'_>,
+        body: &[u8],
+    ) -> core::result::Result<Vec<u8>, Closed> {
+        let node = LockNode::new();
+        let mut state = self.state.lock(&node);
+        let seq = state.seq;
+        let packet = seal_into(
+            &mut state,
+            self.role,
+            self.msize,
+            seq,
+            typ,
+            tag,
+            fid_handle,
+            exts,
+            body,
+        )?;
+        state.seq = seq.wrapping_add(1);
+        Ok(packet)
+    }
+
+    /// Zeroize the sending keys and close this direction.
+    fn fail(&self) {
+        let node = LockNode::new();
+        self.state.lock(&node).fail();
+    }
+
+    /// Whether this direction has closed.
+    fn is_closed(&self) -> bool {
+        let node = LockNode::new();
+        self.state.lock(&node).closed
+    }
+
+    /// Whether this direction's keys are zero.
+    fn keys_zeroized(&self) -> bool {
+        let node = LockNode::new();
+        self.state.lock(&node).is_zeroized()
+    }
+}
+
+/// Seal one packet into a fresh `Vec`, writing the fields at their pinned
+/// offsets (D-06, D-07, P5).
+///
+/// `seq` is the sequence number the caller chose; the caller advances its own
+/// counter under the same lock.  Every failure zeroizes the direction's keys
+/// and closes it.
+fn seal_into(
+    state: &mut SendState,
+    role: Role,
+    msize: u32,
+    seq: u64,
+    typ: u8,
+    tag: u16,
+    fid_handle: [u8; 8],
+    exts: &Exts<'_>,
+    body: &[u8],
+) -> core::result::Result<Vec<u8>, Closed> {
+    let _ = role;
+    if state.closed {
+        return Err(Closed);
+    }
+    let tlv_len = exts.encoded_len();
+    let Ok(ext_len) = u16::try_from(tlv_len) else {
+        state.fail();
+        return Err(Closed);
+    };
+    let Ok(size) = packet_len(tlv_len, body.len(), msize) else {
+        state.fail();
+        return Err(Closed);
+    };
+    let size = size as usize;
+    let header = Header {
+        size: size as u32,
+        typ,
+        tag,
+        pad: 0,
+        fid_handle,
+        seq,
+        ext_mask: exts.mask(),
+        ext_len,
+    };
+    let mut packet = Vec::with_capacity(size);
+    let mut encoded = [0u8; HEADER_LEN];
+    header.encode(&mut encoded);
+    packet.extend_from_slice(&encoded);
+    tlv::encode(exts, &mut packet);
+    packet.extend_from_slice(body);
+    packet.resize(size, 0);
+
+    let body_start = HEADER_LEN + tlv_len;
+    let body_end = size - MAC_LEN;
+    if crypt_body(&state.keys, seq, typ, &mut packet[body_start..body_end]).is_err() {
+        state.fail();
+        return Err(Closed);
+    }
+
+    let mut mac = state.keys.mac();
+    mac.update(&packet[..size - MAC_LEN]);
+    packet[size - MAC_LEN..].copy_from_slice(&mac.finalize());
+    Ok(packet)
+}
+
 /// Collects the plain-framed handshake messages and finishes into a [`Session`]
 /// (D-17).
 pub struct Handshake {
@@ -164,16 +361,34 @@ impl Handshake {
     pub fn finish(self, secret: Key) -> Session {
         let transcript = self.transcript.hash();
         let keys = session::derive(&secret, &transcript, 0);
+        let authenticated = self.seen_auth && self.seen_rauth;
+        let SessionKeys { c2s, s2c } = keys;
+        let (send_keys, recv_keys) = match self.role {
+            Role::Client => (c2s, s2c),
+            Role::Server => (s2c, c2s),
+        };
+        let send = SendHalf {
+            role: self.role,
+            msize: self.config.msize,
+            authenticated,
+            state: Lock::new(
+                "chan-send",
+                SendState {
+                    keys: send_keys,
+                    seq: 0,
+                    closed: false,
+                },
+            ),
+        };
         Session {
             role: self.role,
             config: self.config,
             generation: 0,
             transcript,
-            keys,
-            send_seq: 0,
+            send,
+            recv_keys,
             recv_seq: 0,
-            closed: false,
-            authenticated: self.seen_auth && self.seen_rauth,
+            authenticated,
         }
     }
 }
@@ -188,10 +403,12 @@ pub struct Session {
     /// The handshake transcript hash; plan 04-08 chains the re-key from it.
     #[allow(dead_code)]
     transcript: [u8; 32],
-    keys: SessionKeys,
-    send_seq: u64,
+    /// The sending direction: its keys, sequence counter and closed state,
+    /// behind one lock so concurrent senders stay in counter order (D-21).
+    send: SendHalf,
+    /// The receiving direction's keys; the receive side is single-reader.
+    recv_keys: DirectionKeys,
     recv_seq: u64,
-    closed: bool,
     /// Whether `Tauth` and `Rauth` were both absorbed (D-16, D-17).
     authenticated: bool,
 }
@@ -215,60 +432,24 @@ impl Session {
     ) -> core::result::Result<Vec<u8>, Closed> {
         // Re-key timing (D-19) is plan 04-08's; this plan threads `now` only.
         let _ = now;
-        if self.closed || !self.authenticated {
+        if !self.authenticated || self.send.is_closed() {
             return Err(Closed);
         }
-        let tlv_len = exts.encoded_len();
-        let Ok(ext_len) = u16::try_from(tlv_len) else {
-            self.fail();
-            return Err(Closed);
-        };
-        let Ok(size) = packet_len(tlv_len, body.len(), self.config.msize) else {
-            // A packet this session cannot produce closes it: `seal` has no
-            // other error type, and a caller that keeps asking must not keep
-            // a half-usable connection open.
-            self.fail();
-            return Err(Closed);
-        };
-        let size = size as usize;
-        let seq = self.send_seq;
-        let header = Header {
-            size: size as u32,
-            typ,
-            tag,
-            pad: 0,
-            fid_handle,
-            seq,
-            ext_mask: exts.mask(),
-            ext_len,
-        };
-        let mut packet = Vec::with_capacity(size);
-        let mut encoded = [0u8; HEADER_LEN];
-        header.encode(&mut encoded);
-        packet.extend_from_slice(&encoded);
-        tlv::encode(exts, &mut packet);
-        packet.extend_from_slice(body);
-        packet.resize(size, 0);
-
-        let body_start = HEADER_LEN + tlv_len;
-        let body_end = size - MAC_LEN;
-        if crypt_body(
-            send_direction(&self.keys, self.role),
-            seq,
-            typ,
-            &mut packet[body_start..body_end],
-        )
-        .is_err()
-        {
-            self.fail();
-            return Err(Closed);
+        // Single-owner sending takes the same per-direction lock and advances
+        // the same counter a shared `SendHalf` would (D-21).
+        match self.send.seal_single(typ, tag, fid_handle, exts, body) {
+            Ok(packet) => Ok(packet),
+            Err(closed) => {
+                self.fail();
+                Err(closed)
+            }
         }
+    }
 
-        let mut mac = send_direction(&self.keys, self.role).mac();
-        mac.update(&packet[..size - MAC_LEN]);
-        packet[size - MAC_LEN..].copy_from_slice(&mac.finalize());
-        self.send_seq = seq.wrapping_add(1);
-        Ok(packet)
+    /// The sending half, shareable across threads: every `send` seals, writes
+    /// and advances under the one per-direction lock (D-21).
+    pub fn send_half(&self) -> &SendHalf {
+        &self.send
     }
 
     /// Open one packet: MAC first, then the sequence, the header fields, TLVs
@@ -284,7 +465,7 @@ impl Session {
         now: u64,
     ) -> core::result::Result<Verified<'a>, Closed> {
         let _ = now;
-        if self.closed || !self.authenticated {
+        if !self.authenticated || self.send.is_closed() {
             return Err(Closed);
         }
         let buf = packet.take();
@@ -295,7 +476,7 @@ impl Session {
         }
 
         // Verify before acting on any field but Size (D-07).
-        let mut mac = recv_direction(&self.keys, self.role).mac();
+        let mut mac = self.recv_keys.mac();
         mac.update(&buf[..size - MAC_LEN]);
         let Ok(tag) = <[u8; MAC_LEN]>::try_from(&buf[size - MAC_LEN..]) else {
             self.fail();
@@ -343,7 +524,7 @@ impl Session {
             return Err(Closed);
         }
         if crypt_body(
-            recv_direction(&self.keys, self.role),
+            &self.recv_keys,
             seq,
             header.typ,
             &mut buf[tlv_end..body_end],
@@ -370,7 +551,7 @@ impl Session {
     /// Applies `wire::frame_size` with this session's negotiated msize and
     /// returns the whole packet length.  Only `Size` is read.
     pub fn frame_len(&mut self, prefix: &[u8; 4]) -> core::result::Result<usize, Closed> {
-        if self.closed || !self.authenticated {
+        if !self.authenticated || self.send.is_closed() {
             return Err(Closed);
         }
         match frame_size(prefix, self.config.msize) {
@@ -411,10 +592,12 @@ impl Session {
     /// to read.  Plan 04-08's pending and superseded key slots join this call;
     /// they do not exist yet.
     fn fail(&mut self) {
-        self.keys.zeroize();
-        self.send_seq = 0;
+        // The send keys sit behind the per-direction lock, so this reaches
+        // them through it; the receive keys are single-reader and are
+        // zeroized directly (D-15, D-21).
+        self.send.fail();
+        self.recv_keys.zeroize();
         self.recv_seq = 0;
-        self.closed = true;
     }
 
     /// The orderly close: the same zeroize-and-close path as a failure (D-15).
@@ -424,7 +607,7 @@ impl Session {
 
     /// Whether this session has closed.
     pub fn is_closed(&self) -> bool {
-        self.closed
+        self.send.is_closed()
     }
 
     /// Whether every key this session holds is zero.
@@ -432,25 +615,10 @@ impl Session {
     /// Computed from the key storage, never from the closed flag, so a
     /// `fail()` or `teardown()` that set the flag without zeroizing answers
     /// `false`.  It reveals no key material, only `true` or `false`, and
-    /// exists so an orderly teardown can be checked (D-15).
+    /// exists so an orderly teardown can be checked (D-15).  The send keys are
+    /// read through the per-direction lock (D-21).
     pub fn keys_zeroized(&self) -> bool {
-        self.keys.is_zeroized()
-    }
-}
-
-/// The direction a session seals with.
-fn send_direction(keys: &SessionKeys, role: Role) -> &DirectionKeys {
-    match role {
-        Role::Client => &keys.c2s,
-        Role::Server => &keys.s2c,
-    }
-}
-
-/// The direction a session opens with.
-fn recv_direction(keys: &SessionKeys, role: Role) -> &DirectionKeys {
-    match role {
-        Role::Client => &keys.s2c,
-        Role::Server => &keys.c2s,
+        self.send.keys_zeroized() && self.recv_keys.is_zeroized()
     }
 }
 
