@@ -15,7 +15,7 @@ use port::fid::{
 };
 use std::collections::BTreeSet;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// A boundary-value entry: every field at its maximum, plus the volatile class
 /// byte (D-27).
@@ -976,6 +976,204 @@ fn aead_fid_sweep_resets_the_reclaim_window() {
             "active holds exactly the survivors after a sweep (shard {shard})"
         );
     }
+}
+
+/// A [`Probe`] that opens a window inside the failover sweep: once armed, the
+/// first `arena_read` the sweeping thread makes releases the two helper
+/// threads and holds the sweep there for a bounded time.  When the sweep makes
+/// no arena read (the recorded-key sweep) the hook never fires, and the test
+/// releases the helpers itself once the sweep has returned.
+#[derive(Clone)]
+struct SweepWindowProbe {
+    shared: Arc<SweepWindow>,
+}
+
+struct SweepWindow {
+    armed: AtomicBool,
+    fired: AtomicBool,
+    release: AtomicBool,
+    sweep_thread: std::thread::ThreadId,
+}
+
+impl SweepWindowProbe {
+    fn new() -> SweepWindowProbe {
+        SweepWindowProbe {
+            shared: Arc::new(SweepWindow {
+                armed: AtomicBool::new(false),
+                fired: AtomicBool::new(false),
+                release: AtomicBool::new(false),
+                sweep_thread: std::thread::current().id(),
+            }),
+        }
+    }
+}
+
+impl Probe for SweepWindowProbe {
+    fn arena_read(&self) {
+        let window = &*self.shared;
+        if !window.armed.load(Ordering::SeqCst) {
+            return;
+        }
+        if std::thread::current().id() != window.sweep_thread {
+            return;
+        }
+        if window.fired.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        // The sweep has taken its snapshot and is about to collect the slot it
+        // named.  Release the helpers, then hold here until they have clunked A
+        // and placed B in A's freed slot — or a bounded time passes.
+        window.release.store(true, Ordering::SeqCst);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+        while std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+    }
+}
+
+#[test]
+fn aead_fid_sweep_concurrent_clunk_and_reinsert_keeps_the_newcomer() {
+    let probe = SweepWindowProbe::new();
+    let table = FidTable::with_probe(1, 1, domain_key(0x6C), 1, probe.clone())
+        .expect("one one-block shard forms a table");
+    let table_ref = &table;
+
+    // A is the first insert, so it takes home slot 0 (ptr 1).  The other
+    // entries are marked reclaimed, so the sweep keeps them.
+    let a = table.insert(1, entry_for(1)).expect("A inserts");
+    assert_eq!(a.ptr.get(), 1, "A takes the first home slot (ptr 1, slot 0)");
+    let mut reclaimed_handles = Vec::new();
+    for fid in 2..=5u32 {
+        let handle = table.insert(1, entry_for(fid)).expect("a reclaimed entry inserts");
+        table.mark_reclaimed(1, &handle).expect("a live handle marks reclaimed");
+        reclaimed_handles.push(handle);
+    }
+    assert_eq!(
+        table.bitmap_lens(0),
+        Some((5, 4)),
+        "five live slots, four of them reclaimed before the sweep"
+    );
+
+    // The newcomer B reuses A's freed slot: same client, same one-block shard,
+    // and slot 0 is the only free home slot once A's slot is cleared.
+    let b_fid = 6u32;
+    probe.shared.armed.store(true, Ordering::SeqCst);
+
+    let b_handle = std::thread::scope(|scope| {
+        let shared = Arc::clone(&probe.shared);
+        let clunk = scope.spawn(move || {
+            while !shared.release.load(Ordering::SeqCst) {
+                std::thread::yield_now();
+            }
+            // A is clunked while the sweep is in flight; when the serialised
+            // sweep already collected A, this is refused and marks nothing.
+            let _ = table_ref.clunk(1, &a);
+        });
+        let shared = Arc::clone(&probe.shared);
+        let insert = scope.spawn(move || {
+            while !shared.release.load(Ordering::SeqCst) {
+                std::thread::yield_now();
+            }
+            // B must take A's freed slot, so wait until A no longer resolves
+            // (its TPHT words are cleared) before inserting.
+            while table_ref.resolve(1, &a).is_ok() {
+                std::thread::yield_now();
+            }
+            table_ref.insert(1, entry_for(b_fid))
+        });
+
+        let _swept = table.sweep();
+        // When the sweep made no arena read the hook never fired; release the
+        // helpers now that the sweep is done, so the pin also runs on the
+        // recorded-key sweep.
+        probe.shared.release.store(true, Ordering::SeqCst);
+        let _ = clunk.join();
+        insert.join().expect("B's insert thread did not panic").expect("B's insert succeeds")
+    });
+    probe.shared.armed.store(false, Ordering::SeqCst);
+
+    assert_eq!(b_handle.shard_id, a.shard_id, "B lands in A's shard");
+    assert_eq!(b_handle.ptr.get(), 1, "B reuses A's freed home slot (ptr 1)");
+    let resolved_b = table.resolve(1, &b_handle);
+    assert!(
+        resolved_b.is_ok(),
+        "B resolves to B's entry after the sweep, got {:?}",
+        resolved_b.as_ref().err()
+    );
+    assert_eq!(
+        resolved_b.expect("the assertion above guarantees a resolved entry").qid_path,
+        entry_for(b_fid).qid_path,
+        "B resolves to the entry B inserted"
+    );
+    assert!(table.resolve(1, &a).is_err(), "A no longer resolves after the clunk and sweep");
+    for handle in &reclaimed_handles {
+        assert!(table.resolve(1, handle).is_ok(), "a reclaimed fid survives the sweep");
+    }
+
+    let resolving = 1_u64
+        + reclaimed_handles.iter().filter(|handle| table.resolve(1, handle).is_ok()).count() as u64;
+    let (active, _reclaimed) = table.bitmap_lens(0).expect("shard 0 is in range");
+    assert_eq!(
+        active, resolving,
+        "the active bitmap names exactly the handles that resolve"
+    );
+}
+
+#[test]
+fn aead_fid_sweep_bookkeeping_matches_live_entries_under_churn() {
+    let table =
+        FidTable::new(1, 8, domain_key(0x6D), 1).expect("one eight-block shard forms a table");
+    let table_ref = &table;
+    let stop = AtomicBool::new(false);
+    let stop_ref = &stop;
+
+    let inserted: Vec<(u32, StatefulHandle)> = std::thread::scope(|scope| {
+        let sweeper = scope.spawn(move || {
+            while !stop_ref.load(Ordering::SeqCst) {
+                let _ = table_ref.sweep();
+                std::thread::yield_now();
+            }
+        });
+        let mut churn = Vec::new();
+        for client in 1..=4u32 {
+            churn.push(scope.spawn(move || {
+                let mut live: Vec<StatefulHandle> = Vec::new();
+                for fid in 1..=12u32 {
+                    if let Ok(handle) = table_ref.insert(client, entry_for(fid)) {
+                        live.push(handle);
+                    }
+                    if fid % 3 == 0
+                        && let Some(handle) = live.pop()
+                    {
+                        // A concurrent sweep may already have collected it.
+                        let _ = table_ref.clunk(client, &handle);
+                    }
+                }
+                live
+            }));
+        }
+        let mut collected = Vec::new();
+        for handle_thread in churn {
+            collected.push(handle_thread.join().expect("a churn thread joins"));
+        }
+        stop_ref.store(true, Ordering::SeqCst);
+        sweeper.join().expect("the sweeper thread joins");
+        collected
+            .into_iter()
+            .enumerate()
+            .flat_map(|(index, lives)| lives.into_iter().map(move |handle| (index as u32 + 1, handle)))
+            .collect()
+    });
+
+    let resolving: u64 =
+        inserted.iter().filter(|(client, handle)| table.resolve(*client, handle).is_ok()).count()
+            as u64;
+    let active: u64 =
+        (0..1u8).map(|shard| table.bitmap_lens(shard).expect("shard in range").0).sum();
+    assert_eq!(
+        active, resolving,
+        "after churn the shard's active bitmap names exactly the live entries"
+    );
 }
 
 
