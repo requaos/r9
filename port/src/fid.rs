@@ -600,9 +600,27 @@ impl<P: Probe + Clone> FidTable<P> {
     /// another client or another epoch, and a clunked handle whose slot was
     /// zeroed, all fail here (T-04-32, T-04-33).
     pub fn resolve(&self, client_id: u32, handle: &StatefulHandle) -> crate::Result<FidEntry> {
-        // RED stub: the real body lands in the GREEN commit (D-03, Pitfall 11).
-        let _ = (client_id, handle);
-        Err("fid: resolve is not implemented yet")
+        let Some(shard) = self.shards.get(handle.shard_id as usize) else {
+            return Err("fid: the handle's shard id is outside the table");
+        };
+        let key = tpht_key(client_id, handle.fid_key);
+        // Exactly one arena read, zero header reads (WIRE-08, DS-03).  Every
+        // comparison below is register arithmetic on the words just read and
+        // the handle.
+        let words = shard.tpht.deref_tiny(key, handle.ptr);
+        let entry = FidEntry::from_words(&words);
+        if entry.fid_key != handle.fid_key
+            || entry.client_id != client_id
+            || entry.epoch != handle.epoch
+            || handle.epoch != self.epoch
+            || entry.flags & FID_LIVE == 0
+        {
+            return Err(
+                "fid: the handle does not name a live entry for this client and epoch \
+                 (T-04-32, T-04-33)",
+            );
+        }
+        Ok(entry)
     }
 
     /// Clunk `handle` for `client_id`: resolve it, remove it from its shard
