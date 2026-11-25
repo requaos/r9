@@ -203,15 +203,12 @@ Full log is the PROJECT.md Key Decisions table. Recent:
 - [Phase 03]: Plan 03-11: main is pushed to origin at a64352625efe9cb8a924d7941c6be09c4f738a11 on the owner's second ruling (push-main), after origin/main had been 3d01f07; the VERDICT stop-main-push: PASS line was committed as 5226d11 and stays local until a later approved push, so local main is one evidence commit ahead of origin/main
 - [Phase 03]: Plan 03-11: the transport branch phase-03/crypto-ds-foundations is on the remote at 5f565ec (Mac tip 95fe66a plus two owner return commits that add 12 files only under evidence/owner-stop/return/); no kernel byte changed on Linux, so the D-21 boot-iso outputHash procedure did not apply and the boot-to-rio gate keeps holding by identity with the Phase 2 gated state 4624ea2; no source file, flake.nix or outputHash was touched
 
-### Open Questions (seven warnings, approved to be carried, not resolved)
+### Open Questions (four warnings, approved to be carried, not resolved)
 
 Settle each when its phase is planned. Detail: `.planning/INGEST-CONFLICTS.md`. Eleven notes (N1-N11) are in PROJECT.md; N9 to N11 are source contradictions the Phase 2 threat model found untracked (stale-frame mechanism, plaintext in legacy bounce frames, where the wire MAC is verified).
 
 | ID | Settle in | Question |
 |----|-----------|----------|
-| W1 | Phase 4 | Wire header layout and AAD contents (`Pad`, `ExtTLVs Length`) |
-| W2 | Phase 4 | 24-byte `StatelessCap` in an 8-byte `FidHandle` field |
-| W4 | Phase 4 | Session key scope: per FID versus per connection and direction |
 | W7 | Phase 6 | `DiscoveryBeaconV2` 192 versus 202 bytes |
 | W8 | Phase 13 | `/adm/users` UID 0 `adm` versus persona `glenda` |
 | W9 | Phase 13 | Test 3.2 needs `alice` absent from `/adm/users` |
