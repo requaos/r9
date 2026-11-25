@@ -13,7 +13,8 @@
 mod common;
 
 use common::aead_link::{
-    AeadLink, ServerEnd, TestExchange, config_with_msize, connect, connect_with, rauth_frame,
+    AeadLink, ServerEnd, Stage, TestExchange, config_with_msize, connect, connect_with,
+    fresh_server, handshake_frames, rauth_frame, seal_bypass, session as fixture_session,
     tauth_frame, unauthenticated_session,
 };
 use crypto::key::Key;
@@ -217,6 +218,10 @@ fn aead_transport_handshake_altered_rversion_fails_first_packet() {
             server.recv().is_err(),
             "an altered Rversion ({variant}) makes the first sealed packet's MAC fail"
         );
+        assert!(
+            server.session.is_closed(),
+            "an altered Rversion ({variant}) closes the receiver"
+        );
     }
 }
 
@@ -384,6 +389,270 @@ fn aead_transport_wire_tag_is_packet_mac_of_all_bytes_before_it() {
         "the TLV packet's tag is the MAC over all bytes before it"
     );
 }
+
+
+// ---------------------------------------------------------------------------
+// Failing closed on any authenticated byte (WIRE-03, D-07, D-26).
+// ---------------------------------------------------------------------------
+
+/// Deliver one altered packet to a pristine receiver and check it closed.
+fn deliver_and_check(altered: &[u8], filler: &[u8], secret: &Key, what: &str) -> Stage {
+    let link = AeadLink::new();
+    let mut server = fresh_server(link.clone(), secret.clone());
+    {
+        let mut guard = link.borrow_mut();
+        guard.c2s.extend(altered.iter().copied());
+        guard.c2s.extend(filler.iter().copied());
+    }
+    let stage = match server.recv() {
+        Err(stage) => stage,
+        Ok(_) => panic!("{what}: the receiver accepted an altered packet"),
+    };
+    assert!(server.session.is_closed(), "{what}: the receiver is closed");
+    assert!(server.session.keys_zeroized(), "{what}: the keys are zeroized");
+    assert_eq!(link.borrow().decoded(), 0, "{what}: nothing is decoded");
+    stage
+}
+
+#[test]
+fn aead_transport_mac_failure_every_byte() {
+    let secret = secret();
+    let exts = Exts {
+        deadline: Some(1_234_567),
+        ..Exts::default()
+    };
+    let data: Vec<u8> = (0..PAGE_LEN).map(|i| (i % 253) as u8).collect();
+    let body = body_of(&Msg::Twrite {
+        fid: 9,
+        offset: 0,
+        data,
+    });
+    let mut client = fixture_session(Role::Client, secret.clone());
+    let packet = client
+        .seal(wire::TWRITE, 0x30, [0u8; 8], &exts, &body, 0)
+        .expect("the client seals one TLV-bearing one-page Twrite");
+
+    // Further validly sealed packets so every frame length the receiver
+    // accepts can be filled.
+    let filler_body = body_of(&Msg::Twrite {
+        fid: 9,
+        offset: 0,
+        data: vec![0u8; PAGE_LEN],
+    });
+    let mut filler = Vec::new();
+    for _ in 0..3 {
+        filler.extend(
+            client
+                .seal(wire::TWRITE, 0x31, [0u8; 8], &Exts::default(), &filler_body, 0)
+                .expect("the client seals a filler packet"),
+        );
+    }
+    assert!(
+        filler.len() >= common::aead_link::MSIZE as usize,
+        "the filler covers every frame length the receiver accepts"
+    );
+
+    // The four Size bytes, one bit each (32 cases).  Byte 1 is walked first:
+    // its high bits grow Size past msize, which is the shape that closes in
+    // `frame_len`, and the test asserts both close paths are reached.
+    let mut frame_len_closes = 0;
+    let mut receive_closes = 0;
+    for offset in [1usize, 2, 3, 0] {
+        for bit in (0..8).rev() {
+            let mut altered = packet.clone();
+            altered[offset] ^= 1 << bit;
+            let what = format!("Size byte {offset} bit {bit}");
+            match deliver_and_check(&altered, &filler, &secret, &what) {
+                Stage::FrameLen => frame_len_closes += 1,
+                Stage::Receive => receive_closes += 1,
+                other => panic!("{what}: unexpected stage {other:?}"),
+            }
+        }
+    }
+    assert!(frame_len_closes > 0, "some Size case must close in frame_len");
+    assert!(receive_closes > 0, "some Size case must close at the MAC");
+
+    // Every other byte, 4 up to size - 1: header, TLVs, ciphertext and MAC.
+    for offset in 4..packet.len() {
+        let mut altered = packet.clone();
+        altered[offset] ^= 0xFF;
+        let what = format!("byte offset {offset}");
+        deliver_and_check(&altered, &filler, &secret, &what);
+    }
+
+    // One direct `Session::receive` with a slice one byte shorter than its
+    // Size field: the length-disagreement close the fixture never reaches.
+    let link = AeadLink::new();
+    let mut server = fresh_server(link.clone(), secret.clone());
+    let mut short = packet[..packet.len() - 1].to_vec();
+    assert!(
+        server.session.receive(&mut short, 0).is_err(),
+        "a slice shorter than its Size field is refused"
+    );
+    assert!(server.session.is_closed(), "the short slice closes the session");
+    assert!(
+        server.session.keys_zeroized(),
+        "the short slice zeroizes the keys"
+    );
+    assert_eq!(link.borrow().decoded(), 0, "the short slice decodes nothing");
+}
+
+#[test]
+fn aead_transport_mac_failure_closes_both_directions() {
+    let link = AeadLink::new();
+    let (mut client, mut server) = connect(link.clone(), secret(), secret());
+    client
+        .send(wire::TATTACH, 20, [0u8; 8], &Exts::default(), &tattach_body())
+        .expect("the client seals a valid packet");
+    let valid: Vec<u8> = link.borrow_mut().c2s.drain(..).collect();
+
+    let mut tampered = valid.clone();
+    let last = tampered.len() - 1;
+    tampered[last] ^= 0xFF;
+    link.borrow_mut().c2s.extend(tampered);
+    assert!(server.recv().is_err(), "the tampered packet is refused");
+    assert!(server.session.is_closed(), "one failure closes the session");
+
+    assert!(
+        server
+            .session
+            .seal(wire::RWRITE, 21, [0u8; 8], &Exts::default(), &[0u8; 4], 0)
+            .is_err(),
+        "seal after a failure returns Err(Closed)"
+    );
+    link.borrow_mut().c2s.extend(valid);
+    assert!(
+        server.recv().is_err(),
+        "a packet that was valid before the failure no longer opens"
+    );
+}
+
+#[test]
+fn aead_transport_mac_failure_zeroizes() {
+    let link = AeadLink::new();
+    let (mut client, mut server) = connect(link.clone(), secret(), secret());
+    assert!(
+        !client.session.keys_zeroized() && !server.session.keys_zeroized(),
+        "a live session's keys are not zeroized"
+    );
+
+    client
+        .send(wire::TATTACH, 22, [0u8; 8], &Exts::default(), &tattach_body())
+        .expect("the client seals a packet to tamper with");
+    {
+        let mut guard = link.borrow_mut();
+        let last = guard.c2s.len() - 1;
+        guard.c2s[last] ^= 0xFF;
+    }
+    assert!(server.recv().is_err(), "the tampered packet is refused");
+    assert!(server.session.is_closed(), "the receiver is closed");
+    assert!(server.session.keys_zeroized(), "the receiver's keys are zeroized");
+    assert!(
+        !client.session.keys_zeroized(),
+        "the peer, which saw no failure, still holds its keys"
+    );
+
+    // A packet sealed by the peer under the old keys no longer opens.
+    client
+        .send(wire::TATTACH, 23, [0u8; 8], &Exts::default(), &tattach_body())
+        .expect("the live client still seals");
+    assert!(
+        server.recv().is_err(),
+        "a packet sealed after the peer's failure does not open the closed side"
+    );
+}
+
+#[test]
+fn aead_transport_teardown_zeroizes() {
+    let link = AeadLink::new();
+    let (mut client, mut server) = connect(link.clone(), secret(), secret());
+
+    // A sealed Tclunk round trip neither closes nor scrubs anything (D-15).
+    client
+        .send(
+            wire::TCLUNK,
+            24,
+            [0u8; 8],
+            &Exts::default(),
+            &body_of(&Msg::Tclunk { fid: 9 }),
+        )
+        .expect("the client seals a Tclunk");
+    assert!(server.recv().is_ok(), "the sealed Tclunk decodes");
+    assert!(!server.session.is_closed(), "Tclunk alone does not close the session");
+    assert!(
+        !server.session.keys_zeroized(),
+        "Tclunk alone does not scrub the keys"
+    );
+
+    server.session.teardown();
+    assert!(server.session.is_closed(), "teardown closes the session");
+    assert!(server.session.keys_zeroized(), "teardown zeroizes the keys");
+}
+
+/// Deliver one raw packet to a pristine receiver and check it closed.
+fn deliver_raw(packet: &[u8], secret: &Key, what: &str) {
+    let link = AeadLink::new();
+    let mut server = fresh_server(link.clone(), secret.clone());
+    link.borrow_mut().c2s.extend(packet.iter().copied());
+    assert!(server.recv().is_err(), "{what}: the receiver refuses the packet");
+    assert!(server.session.is_closed(), "{what}: the receiver is closed");
+    assert!(server.session.keys_zeroized(), "{what}: the keys are zeroized");
+    assert_eq!(link.borrow().decoded(), 0, "{what}: nothing is decoded");
+}
+
+#[test]
+fn aead_transport_malformed_after_mac_closes() {
+    let secret = secret();
+    let mut own = Transcript::new();
+    for frame in handshake_frames() {
+        own.absorb(&frame);
+    }
+    let keys = session::derive(&secret, &own.hash(), 0);
+    let clunk_body = body_of(&Msg::Tclunk { fid: 9 });
+
+    // A valid MAC over a non-zero Pad.
+    let packet = seal_bypass(
+        &keys.c2s,
+        0,
+        wire::TCLUNK,
+        30,
+        1,
+        [0u8; 8],
+        0,
+        &[],
+        &clunk_body,
+    );
+    deliver_raw(&packet, &secret, "nonzero Pad");
+
+    // A valid MAC over an ExtMask bit outside EXT_KNOWN.
+    let packet = seal_bypass(
+        &keys.c2s,
+        0,
+        wire::TCLUNK,
+        31,
+        0,
+        [0u8; 8],
+        0x0080,
+        &[0u8; 8],
+        &clunk_body,
+    );
+    deliver_raw(&packet, &secret, "unknown ExtMask bit");
+
+    // A valid MAC over a TLV record whose type is not in its mask.
+    let packet = seal_bypass(
+        &keys.c2s,
+        0,
+        wire::TCLUNK,
+        32,
+        0,
+        [0u8; 8],
+        port::chan::EXT_OBINARY,
+        &[5, 0, 0, 0, 0, 0, 0, 0],
+        &clunk_body,
+    );
+    deliver_raw(&packet, &secret, "broken TLV record");
+}
+
 
 // ---------------------------------------------------------------------------
 // The plan 04-02 tracer pins, unchanged.

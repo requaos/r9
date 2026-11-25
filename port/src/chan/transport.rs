@@ -376,20 +376,41 @@ impl Session {
             return Err(Closed);
         }
         match Unverified::new(packet, self.config.msize) {
+            // RED: a framing rejection does not yet close the session; GREEN
+            // routes it through `fail()`.
             Ok(unverified) => self.open(unverified, now),
-            Err(_) => {
-                self.fail();
-                Err(Closed)
-            }
+            Err(_) => Err(Closed),
         }
     }
 
     /// The single failure path: close the session.
     ///
-    /// Plan 04-07 Task 2 extends this to zeroize both directions' keys and
-    /// both counters; here it is the one place that sets the closed flag.
+    /// RED lands the closed flag only; GREEN also zeroizes both directions'
+    /// keys and both counters.
     fn fail(&mut self) {
         self.closed = true;
+    }
+
+    /// The orderly close: the same path as a failure (D-15).
+    ///
+    /// RED lands the closed flag only; GREEN zeroizes through `fail()`.
+    pub fn teardown(&mut self) {
+        self.closed = true;
+    }
+
+    /// Whether this session has closed.
+    pub fn is_closed(&self) -> bool {
+        self.closed
+    }
+
+    /// Whether every key this session holds is zero.
+    ///
+    /// Computed from the key storage, never from the closed flag, so a
+    /// `fail()` or `teardown()` that set the flag without zeroizing answers
+    /// `false`.  It reveals no key material, only `true` or `false`, and
+    /// exists so an orderly teardown can be checked (D-15).
+    pub fn keys_zeroized(&self) -> bool {
+        self.keys.is_zeroized()
     }
 }
 
