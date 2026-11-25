@@ -445,6 +445,27 @@ impl<const WORDS: usize, P: Probe> FlattenedTphtShard<WORDS, P> {
         value
     }
 
+    /// The arena slot id a `(key, tiny_ptr)` pair addresses: `(block << 4) |
+    /// (ptr - 1)`, where `block` is the pair's home block.  The id is dense and
+    /// unique within the shard (`0..16 * num_blocks`), which is what makes it a
+    /// usable key for a bitmap of live entries (WIRE-09).
+    ///
+    /// The id names a slot; it is not a faster read.  The single-read fast path
+    /// is [`Self::deref_tiny`], which takes the pair directly.
+    pub fn slot_id(&self, _key: u64, _ptr: TinyPtr) -> u32 {
+        0
+    }
+
+    /// Read a whole arena slot by its [`Self::slot_id`], or `None` when the id
+    /// is outside `0..16 * num_blocks`.
+    ///
+    /// This is the failover sweep's read path (WIRE-09): bounds-checked and
+    /// safe on every id, so an id rebuilt from a corrupt or stale bitmap can
+    /// never index past the arena.  It is **not** the single-read fast path.
+    pub fn read_slot(&self, _slot_id: u32) -> Option<[u64; WORDS]> {
+        None
+    }
+
     /// The arena slot a tiny pointer addresses: `((block << 4) + (ptr - 1)) &
     /// slot_mask`.
     fn slot_index(&self, block: usize, ptr: TinyPtr) -> usize {
@@ -1418,5 +1439,144 @@ mod tests {
                 hits as f64 / lookups as f64
             );
         }
+    }
+
+    #[test]
+    fn tpht_remove_clears_the_arena_slot() {
+        // Removing an entry clears its header fields; without also zeroing the
+        // arena slot, `deref_tiny` — which never reads the header — would keep
+        // answering the old words, and a clunked `StatefulHandle` would still
+        // resolve (RESEARCH Pitfall 2, T-04-29).
+        let blocks = miri_scaled(16, 4);
+        let shard =
+            FlattenedTphtShard::<2>::with_banks(blocks, 0).expect("a power-of-two block count");
+        let key = 0x5EED_1234u64;
+        let value = [0xAAAA_BBBB_CCCC_DDDDu64, 0x1111_2222_3333_4444];
+        let ptr = shard
+            .insert(key, value, |v| v[0] == value[0])
+            .expect("an empty shard takes the key")
+            .expect("a home-only shard places the key at home");
+        assert_eq!(shard.deref_tiny(key, ptr), value, "the live entry resolves its words");
+        assert!(shard.remove(key, |v| v[0] == value[0]), "the key is present and removable");
+        assert_eq!(
+            shard.deref_tiny(key, ptr),
+            [0u64; 2],
+            "a removed pair must resolve to zero words, not the old value (T-04-29)"
+        );
+        assert_eq!(shard.lookup(key, |v| v[0] == value[0]), None, "the removed key no longer resolves");
+
+        // A second key inserted afterwards into the same block is unaffected.
+        let bits = index_bits(blocks).expect("a power-of-two block count");
+        let (block, _) = feistel::split(key, bits);
+        let mut other = key + 1;
+        while feistel::split(other, bits).0 != block {
+            other += 1;
+        }
+        let other_value = [0xDEAD_BEEF_0000_0001u64, 0xFEED_FACE_0000_0002];
+        let other_ptr = shard
+            .insert(other, other_value, |v| v[0] == other_value[0])
+            .expect("the freed slot takes another key")
+            .expect("a home-only shard places the key at home");
+        assert_eq!(
+            shard.deref_tiny(other, other_ptr),
+            other_value,
+            "the second key in the same block reads its own words"
+        );
+        assert_eq!(
+            shard.lookup(other, |v| v[0] == other_value[0]).map(|found| found.value),
+            Some(other_value),
+            "the second key resolves through the header path too"
+        );
+    }
+
+    #[test]
+    fn tpht_slot_id_is_block_times_sixteen_plus_ptr_minus_one() {
+        // The sweep's id is the dense arena index `(block << 4) | (ptr - 1)`
+        // (WIRE-09): below `16 * num_blocks`, distinct for distinct live
+        // entries, and `read_slot` of it returns the entry's words.
+        let blocks = miri_scaled(16, 4);
+        let shard =
+            FlattenedTphtShard::<2>::with_banks(blocks, 0).expect("a power-of-two block count");
+        let bits = index_bits(blocks).expect("a power-of-two block count");
+        let keys: Vec<u64> =
+            (0..8u64).map(|i| 0x9E37_79B9_7F4A_7C15u64.wrapping_mul(i + 1)).collect();
+        let mut ids = Vec::new();
+        for &key in &keys {
+            let value = [key, !key];
+            let ptr = shard
+                .insert(key, value, |v| v[0] == key)
+                .expect("the shard takes the key")
+                .expect("a home-only shard places the key at home");
+            let id = shard.slot_id(key, ptr);
+            let (block, _) = feistel::split(key, bits);
+            assert_eq!(
+                id,
+                ((block as u32) << 4) | (ptr.get() as u32 - 1),
+                "the id is (block << 4) | (ptr - 1) (key {key:#x})"
+            );
+            assert!(
+                (id as usize) < HOME_SLOTS * blocks,
+                "a slot id is below 16 * num_blocks (key {key:#x}, id {id})"
+            );
+            assert_eq!(
+                shard.read_slot(id),
+                Some(value),
+                "read_slot of a live id returns the inserted words (key {key:#x})"
+            );
+            ids.push(id);
+        }
+        let mut distinct = ids.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        assert_eq!(distinct.len(), ids.len(), "distinct live entries have distinct slot ids");
+    }
+
+    #[test]
+    fn tpht_read_slot_is_bounds_checked() {
+        // An id outside the arena is `None`, never an out-of-bounds index: the
+        // sweep may rebuild an id from a stale bitmap (T-04-31).
+        let blocks = miri_scaled(16, 4);
+        let shard =
+            FlattenedTphtShard::<2>::with_banks(blocks, 0).expect("a power-of-two block count");
+        let end = (HOME_SLOTS * blocks) as u32;
+        assert_eq!(shard.read_slot(end), None, "one past the last slot is None");
+        assert_eq!(shard.read_slot(u32::MAX), None, "u32::MAX is None");
+        assert_eq!(
+            shard.read_slot(end - 1),
+            Some([0u64; 2]),
+            "the last slot of the arena is in bounds and still zero"
+        );
+    }
+
+    #[test]
+    fn tpht_deref_tiny_still_one_arena_read() {
+        // `remove` gained a clearing write; clearing is a write, never a read,
+        // so the DS-03 probe pair (1, 0) is unchanged — before and after a
+        // removal.
+        let blocks = miri_scaled(1, 1);
+        let probe = CountingProbe::new();
+        let shard =
+            FlattenedTphtShard::<2, CountingProbe>::with_banks_and_probe(blocks, 0, probe.clone())
+                .expect("one block is a valid block count");
+        let value = [0xAAAA_BBBB_CCCC_DDDDu64, 0x1111_2222_3333_4444];
+        let ptr = shard
+            .insert(0x5EED, value, |v| v[0] == value[0])
+            .expect("the first key fits in an empty block")
+            .expect("a home-only shard places the key at home");
+        probe.reset();
+        assert_eq!(shard.deref_tiny(0x5EED, ptr), value, "the live entry resolves its words");
+        assert_eq!(
+            (probe.arena_reads(), probe.header_reads()),
+            (1, 0),
+            "deref_tiny is exactly one arena read and zero header reads (DS-03)"
+        );
+        assert!(shard.remove(0x5EED, |v| v[0] == value[0]), "the key is removable");
+        probe.reset();
+        assert_eq!(shard.deref_tiny(0x5EED, ptr), [0u64; 2], "the removed slot reads zero");
+        assert_eq!(
+            (probe.arena_reads(), probe.header_reads()),
+            (1, 0),
+            "remove's clearing write is not an arena read; the fast path is still (1, 0) (DS-03)"
+        );
     }
 }
