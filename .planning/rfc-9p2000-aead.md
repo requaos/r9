@@ -89,6 +89,8 @@ A process MUST NEVER transmit its master identity seed ($S_{\text{root}}$) or de
 4. **Forward Secrecy & Channel Teardown:**  
    When a channel is closed via `Tclunk`, both endpoints drop $K_{\text{transient}}$ from their memory tables and execute deterministic memory scrubbing via zeroization routines (`Zeroizing<[u8; 32]>`), rendering captured wire packets permanently unrecoverable.
 
+Amended 2026-11-24 (r9 Phase 4, decisions D-15 to D-17): items 2 and 4 above are superseded. The transient keys are per connection and per direction, not per FID: the formula `HKDF-Expand(S_session, "9P-AEAD-FID" || fid, 32)` and its `fid` binding no longer apply. One `Tauth` yields, for each direction, a 32-byte cipher key, a 32-byte MAC key and a 4-byte ChaCha20 nonce prefix, and the FID is bound by the packet MAC over the header rather than by a key. The derivation as implemented is one HKDF-Extract with the handshake transcript as salt and the 32-byte session secret (`S_session`) as input keying material, then one HKDF-Expand of 32 bytes per direction and purpose. Each `info` is the fixed 18-byte form `"9P2000.aead"` (11 bytes), `0x00`, direction (`0x01` client to server, `0x02` server to client), purpose (`0x01` cipher key, `0x02` MAC key, `0x03` nonce prefix), generation as 4 bytes little-endian. The transcript is unkeyed BLAKE3 over every plain-framed handshake message whole, in wire order: `Tversion`/`Rversion`, `Tauth`/`Rauth` and the auth-fid `Twrite`/`Rwrite`/`Tread`/`Rread`. For a re-key the next transcript chains: unkeyed BLAKE3 of the previous generation's 32-byte transcript hash followed by the exchange messages of that re-key only — the in-band `Tauth`, `Rauth` and every afid `Twrite`, `Rwrite`, `Tread` and `Rread` — each re-framed in its standard 9P2000 form `size[4] type[1] tag[2]` then the standard body, whole, in the order they cross the wire (the exchange rides auth fid 7 with tags 1, 2 and 3). The sealed bytes, the 28-byte header, the TLVs, the page padding and the MAC are not hashed, and neither is `Trekey` or `Rrekey` of any kind nor any other traffic sealed during the exchange. Keys are zeroized on connection teardown, not on `Tclunk`, so item 4's teardown rule is superseded too. Pinned by: `session_derive_known_answer` and `aead_transport_rekey_wire_keys_and_confirm_equal_test_side_derivation`.
+
 ---
 
 ## 4. Wire Framing & Packet Structure
@@ -135,6 +137,8 @@ The packet layout is structured as follows:
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ```
 
+Amended 2026-11-24 (r9 Phase 4, decision D-06): the header is 28 bytes, and an earlier note of this layout in the phase's context gave 24, an arithmetic slip; the field list above is the decision. The eight fields and their offsets from byte 0 of the packet are `Size` at 0 (4 bytes), `Type` at 4 (1), `Tag` at 5 (2), `Pad` at 7 (1), `FidHandle` at 8 (8), `SeqNonce` at 16 (8), `ExtMask` at 24 (2) and `ExtTLVs Length` at 26 (2), a total of 28 bytes, followed by the TLVs, the ciphertext and the 32-byte MAC. Every multi-byte field is little-endian. `Pad` must be zero; a non-zero `Pad` is a protocol error once the MAC verifies.
+
 ### 4.2 Field Definitions
 
 * **Size (32 bits, little-endian):**  
@@ -165,6 +169,8 @@ The AAD input to the Keyed BLAKE3 MAC is defined as:
 $$\mathtt{AAD} = \mathtt{Size} \parallel \mathtt{Type} \parallel \mathtt{Tag} \parallel \mathtt{FidHandle} \parallel \mathtt{SeqNonce} \parallel \mathtt{ExtMask} \parallel \mathtt{ExtTLVs}$$
 
 Because the FID, message tag, packet size, and monotonic sequence counter are explicitly committed to the BLAKE3 MAC, network adversaries cannot execute **splicing attacks** (transplanting valid encrypted payloads from one file handle or stream context to another) or **replay attacks** (re-injecting previously captured transactions). If MAC verification fails at the transport boundary, the receiver MUST immediately terminate the connection and zero all associated channel state without processing any enclosed bytes.
+
+Amended 2026-11-24 (r9 Phase 4, decisions D-07, D-08 and D-26): the AAD field list above is superseded. The MAC covers every byte of the packet before the MAC as one contiguous slice, from byte 0 of `Size` to the last ciphertext byte (the half-open range `[0, size - 32)`), so `Pad` and `ExtTLVs Length` are authenticated as well; the field list `Size || Type || Tag || FidHandle || SeqNonce || ExtMask || ExtTLVs` no longer describes the input. The receiver verifies that MAC over the whole packet before it acts on any field but `Size`, which it reads only to bound the packet. The 12-byte ChaCha20 nonce is the 4-byte derived prefix of section 3.2 followed by the 8-byte wire sequence number, little-endian; the prefix is never sent on the wire. The same AAD formula in guide section 6.3 and compendium section 5.3 is superseded by this paragraph. Pinned by: `session_packet_mac_is_keyed_blake3_under_the_mac_key` and `aead_transport_wire_tag_is_packet_mac_of_all_bytes_before_it`.
 
 ### 4.4 Extension Bitmask (`ExtMask`) & TLVs
 
@@ -199,6 +205,8 @@ pub const EXT_OBINARY: u16        = 1 << 4;
 
 5. **`EXT_OBINARY` (`0x0010`):**  
    Negotiates structured binary serialization over synthetic kernel file devices (`/proc`, `#G`, `/net`, `telescope`). When asserted, the server returns aligned, zero-copy binary data structures directly from memory rather than serializing data into ASCII text strings.
+
+Amended 2026-11-24 (r9 Phase 4, decisions D-11, D-12, D-27 and P1): there are six extension bits, not five. The sixth is `EXT_STATELESS_CAP = 1 << 5` (`0x0020`), and the mask's known bits are `0x003F`. Each record is `type[1] reserved[1] len[2] value[len] padding`, all multi-byte fields little-endian: `type` is the bit index 0 to 5, `reserved` is zero, `len` is the value length unpadded, and zero padding rounds the record up to a multiple of 8 bytes measured from the start of the TLV area. Records appear in ascending type order, each type at most once, the set of types equals the set bits of `ExtMask` exactly, and `len` is the fixed value length for its type: `EXT_DEADLINE` 8, `EXT_CAP_TOKEN` 32, `EXT_QID_VOLATILITY` 10, `EXT_STREAM_PRIO` 4, `EXT_OBINARY` 0 and `EXT_STATELESS_CAP` 24. `EXT_CAP_TOKEN` keeps its single meaning, the 32-byte per-user token above; the capability of section 5 travels under `EXT_STATELESS_CAP`, not here. Any bit outside the six, or any rule above broken, is a protocol error found after the MAC verifies and closes the connection; there is no skip path for an unknown bit. The `EXT_QID_VOLATILITY` class byte (`0x20`, `0x40`, `0x80`) is its own byte and is never written into a qid type byte, where those three values are Plan 9's `QTEXCL`, `QTAPPEND` and `QTDIR` (D-27).
 
 ---
 
@@ -279,6 +287,8 @@ pub struct FidEntry {
 } // Total: 64 bytes exact (1 CPU cache line)
 ```
 
+Amended 2026-11-24 (r9 Phase 4, decisions D-11 to D-14 and P8): the 8-byte `FidHandle` field above is right, but a `StatelessCap` is not carried in it. The header's `FidHandle` field stays 8 bytes in every packet; a `StatelessCap` travels in its own `EXT_STATELESS_CAP` TLV of section 4.4 (24 bytes), and when that TLV is present the header field must be all zero, otherwise the packet is rejected. That is the discriminator between the two handle kinds, and it is safe because a `StatefulHandle` can never be all zero. The capability stays 24 bytes: the first 16 bytes are `qid_path(8) qid_vers(4) qid_type(1) mode(1) epoch(2)` and the last 8 are the tag. The tag is the first 8 bytes of keyed BLAKE3 under the domain secret over the label `r9 StatelessCap1` followed by those first 16 bytes; a failed verification closes the connection. `epoch` is the issuing table's current epoch, and a table at a later epoch rejects a capability issued at an earlier one. The capability is a bearer token within the domain: it is not bound to a client or a connection, and any replica holding the domain secret verifies it in O(1) with zero server FID memory. Pinned by: `session_cap_tag_is_truncated_keyed_blake3_of_label_and_body` and `aead_fid_stateless_tag_is_keyed_blake3_of_label_and_wire_body`.
+
 ---
 
 ## 6. Protocol Message Set & Operations
@@ -305,6 +315,8 @@ pub struct FidEntry {
 | **`132`** | **`Tstream`** | **`133`** | **`Rstream`** | **Bidirectional streaming and server push** |
 | **`134`** | **`Tlease_revoke`** | **`135`** | **`Rlease_ack`** | **Asynchronous cache lease revocation** |
 | **`136`** | **`Treclaim`** | **`137`** | **`Rreclaim`** | **Post-failover handle recovery** |
+
+Amended 2026-11-24 (r9 Phase 4, decisions D-28 and P3): the registry above omits three base 9P2000 messages that the codec carries, and gains one more pair. `Rerror` is 107, `Tflush` is 108 and `Rflush` is 109; opcode 106 is not a 9P2000 message and is illegal. The in-band re-key pair of section 11 is `Trekey` 138 (client to server) and `Rrekey` 139 (server to client), with tag `NOTAG` (0), a zero `FidHandle` and the body `kind[1] generation[4] confirm[32]`, where `kind` is 0 `REQUEST`, 1 `MARKER` or 2 `ACK`. All ten message pairs 130 to 139 are encoded and decoded in Phase 4; their distributed semantics beyond the re-key pair are later phases' work.
 
 ---
 
@@ -374,6 +386,8 @@ Provides idempotent state recovery following the restart or failover of a server
   $$\mathtt{OrphanedHandles} = \mathtt{active\_fids} \setminus \mathtt{reclaimed\_fids}$$
 
   All un-reclaimed descriptors are immediately freed, and their cryptographic keys are zeroized without memory leaks.
+
+Amended 2026-11-24 (r9 Phase 4, decisions D-09, P4 and P5): the data messages above name the wrong message for the data field. The messages whose ciphertext carries whole 4096-byte pages are `Twrite`, `Rread` and `Rstream`; `Tstream` has no data field (its format above carries only `stream_id`, `flags` and `offset`). In those three, the encrypted body is two parts: a small parameter block, then file data padded with zeros to a whole number of 4096-byte pages, with the true byte count in the parameters. `Twrite`'s parameters are `fid[4] offset[8] count[4]` (16 bytes) and `Rread`'s are `count[4]` (4 bytes). Parameters encrypt from ChaCha20 block counter 0 and every parameter block fits one 64-byte block; data page `i` (0-based) encrypts from block counter `1 + 64 * i`, so each page decrypts on its own at its counter. The base message bodies keep their 9P2000 bodies byte for byte, and the header's `FidHandle` carries the primary fid's server-issued handle. The four new pairs and the re-key pair are encoded and decoded only in Phase 4; nothing here says their distributed behaviour works. Pinned by: `aead_transport_wire_data_pages_decrypt_alone_at_their_block_counter`.
 
 ---
 
@@ -550,6 +564,8 @@ To prevent accidental data leakage from cryptographically protected processes to
    Transport frames MUST authenticate all header fields, FIDs, tags, and sequence numbers as AAD. Implementations MUST reject packets failing BLAKE3 MAC verification without attempting partial parsing.
 4. **Denial of Service via Lease Retention:**  
    Malicious or unresponsive clients holding read leases could attempt to stall server write operations. Servers MUST enforce strict lease revocation timeouts (default: 5 seconds). If a client fails to emit `Rlease_ack` within the timeout window, the server revokes the lease unilaterally and drops the offending client channel.
+
+Amended 2026-11-24 (r9 Phase 4, decisions D-18 to D-21 and P7): item 1's re-keying rule is settled as follows. Re-keying is a fresh `Tauth` exchange run in band inside the sealed channel, deriving new keys from a new session secret; there is no hash ratchet. Either side starts it when its send counter reaches `REKEY_AFTER_PACKETS = 1 << 48`, a fixed threshold well below `2^64 - 1` and settable low in tests. Cutover is per direction, strict, with acknowledgement and timeout: the sender's last packet under its old send keys is a sealed `Trekey` MARKER, and its next packet uses the new keys with the counter back at 0; the receiver, on the marker, switches its receive keys that way and answers with an `Rrekey` ACK carrying a confirm value; the receiver zeroizes the old receive keys on the marker and the sender zeroizes its old send keys when the ACK arrives. The confirm is keyed BLAKE3 under the new MAC key of the direction cut over, over the label `r9 rekey ack` followed by the new generation as 4 bytes little-endian (generation `g + 1` when the cutover is from `g`), and it proves the receiver derived the same keys. If the ACK does not arrive within `REKEY_ACK_TIMEOUT_MS = 5000` milliseconds the sender drops the connection and zeroizes everything. An old-key packet is never accepted after the marker, with or without the ACK: there is no overlap window, and outstanding requests and replies continue across the cutover. The sequence number `u64::MAX` is never sent; a sender that would reach it with no new keys closes the connection rather than wrap, and a packet whose sequence number is not the expected next value is dropped and the connection closed and zeroized, not merely dropped. Item 3's anti-splicing rule stands. The stated limit of this phase (D-16): the exchange is a seam that is handed a 32-byte session secret, the real authenticated key exchange and the Noise versus DP9IK choice are undecided, and no live authenticated connection between two real machines comes out of this phase. Pinned by: `session_rekey_confirm_is_keyed_blake3_of_label_and_generation` and `aead_transport_rekey_wire_keys_and_confirm_equal_test_side_derivation`.
 
 ---
 
