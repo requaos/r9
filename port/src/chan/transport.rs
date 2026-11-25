@@ -1374,6 +1374,10 @@ impl Session {
     }
 
     /// Encode, absorb and seal one exchange message, appending its packet.
+    ///
+    /// The absorbed frame is [`exchange_frame`] - the unpadded standard 9P2000
+    /// form DECISION P2 hashes - while the sealed body stays the P4 body from
+    /// `msg::encode_body`, whole 4096-byte pages included.
     fn send_exchange(
         &mut self,
         typ: u8,
@@ -1386,7 +1390,14 @@ impl Session {
             self.fail();
             return Err(Closed);
         }
-        self.absorb_exchange(typ, tag, &body);
+        let frame = match exchange_frame(typ, tag, message) {
+            Ok(frame) => frame,
+            Err(_) => {
+                self.fail();
+                return Err(Closed);
+            }
+        };
+        self.absorb_frame(&frame);
         let packet = self.send.seal_single(typ, tag, [0u8; 8], &Exts::default(), &body)?;
         packets.push(packet);
         Ok(())
@@ -1409,31 +1420,28 @@ impl Session {
         Ok(())
     }
 
-    /// Absorb one exchange message in its standard 9P2000 form.
-    fn absorb_exchange(&mut self, typ: u8, tag: u16, body: &[u8]) {
-        let mut frame = Vec::with_capacity(7 + body.len());
-        frame.extend_from_slice(&((7 + body.len()) as u32).to_le_bytes());
-        frame.push(typ);
-        frame.extend_from_slice(&tag.to_le_bytes());
-        frame.extend_from_slice(body);
+    /// Absorb one frame into the running re-key transcript.
+    fn absorb_frame(&mut self, frame: &[u8]) {
         if let Some(transcript) = &mut self.rekey.transcript {
-            transcript.absorb(&frame);
+            transcript.absorb(frame);
         }
     }
 
-    /// Absorb a received exchange message by re-encoding its body.
+    /// Absorb a received exchange message in its unpadded standard form (P2).
     fn absorb_exchange_incoming(
         &mut self,
         typ: u8,
         tag: u16,
         message: &msg::Msg,
     ) -> core::result::Result<(), Closed> {
-        let mut body = Vec::new();
-        if msg::encode_body(message, &mut body).is_err() {
-            self.fail();
-            return Err(Closed);
-        }
-        self.absorb_exchange(typ, tag, &body);
+        let frame = match exchange_frame(typ, tag, message) {
+            Ok(frame) => frame,
+            Err(_) => {
+                self.fail();
+                return Err(Closed);
+            }
+        };
+        self.absorb_frame(&frame);
         Ok(())
     }
 
@@ -1647,6 +1655,55 @@ impl Session {
         }
         Ok(())
     }
+}
+
+/// The standard 9P2000 frame the re-key transcript absorbs (DECISION P2).
+///
+/// `size[4] type[1] tag[2]` then the standard body, `size` counting all of those
+/// bytes.  For the data messages `Twrite`, `Rread` and `Rstream` the body is
+/// written field by field little-endian with the true `count` and exactly that
+/// many data bytes, unpadded: the page padding P4 puts on the wire is never
+/// hashed.  The other exchange messages have no data field, so their body is
+/// what `msg::encode_body` already gives (the standard body).
+fn exchange_frame(typ: u8, tag: u16, message: &msg::Msg) -> crate::Result<Vec<u8>> {
+    let mut body = Vec::new();
+    match message {
+        msg::Msg::Twrite { fid, offset, data } => {
+            body.extend_from_slice(&fid.to_le_bytes());
+            body.extend_from_slice(&offset.to_le_bytes());
+            body.extend_from_slice(&data_len(data.len())?.to_le_bytes());
+            body.extend_from_slice(data);
+        }
+        msg::Msg::Rread { data } => {
+            body.extend_from_slice(&data_len(data.len())?.to_le_bytes());
+            body.extend_from_slice(data);
+        }
+        msg::Msg::Rstream {
+            stream_id,
+            chunk_seq,
+            data,
+        } => {
+            body.extend_from_slice(&stream_id.to_le_bytes());
+            body.extend_from_slice(&chunk_seq.to_le_bytes());
+            body.extend_from_slice(&data_len(data.len())?.to_le_bytes());
+            body.extend_from_slice(data);
+        }
+        other => msg::encode_body(other, &mut body)?,
+    }
+    let total = 7 + body.len();
+    let size =
+        u32::try_from(total).map_err(|_| "chan: exchange frame exceeds the 32-bit size field")?;
+    let mut frame = Vec::with_capacity(total);
+    frame.extend_from_slice(&size.to_le_bytes());
+    frame.push(typ);
+    frame.extend_from_slice(&tag.to_le_bytes());
+    frame.extend_from_slice(&body);
+    Ok(frame)
+}
+
+/// A data length as the wire's 32-bit count, checked, never narrowed.
+fn data_len(n: usize) -> crate::Result<u32> {
+    u32::try_from(n).map_err(|_| "chan: data length exceeds 32 bits")
 }
 
 /// One data page is `PAGE_LEN` bytes, which is exactly this many ChaCha20
