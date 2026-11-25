@@ -5,51 +5,51 @@ titles: json
 findings:
   - id: CR-01
     severity: critical
-    disposition: open
+    disposition: fixed
     title: "The re-key exchange secret survives `fail()` — `keys_zeroized()` reports a lie"
   - id: CR-02
     severity: critical
-    disposition: open
+    disposition: fixed
     title: "In-band exchange messages are indistinguishable from ordinary 9P traffic"
   - id: CR-03
     severity: critical
-    disposition: open
+    disposition: fixed
     title: "The re-key transcript absorbs the page-padded body, contradicting DECISION P2"
   - id: WR-01
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "The re-key state never returns to idle — at most one re-key per connection"
   - id: WR-02
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "`SendHalf::send` ignores the re-key acknowledgement deadline"
   - id: WR-03
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "`seal_packet`/`open_packet` use a different keystream layout from `Session`"
   - id: WR-04
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "`FidTable::resolve` can accept a torn read of a clunked slot for fid 0 / client 0"
   - id: WR-05
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "`sweep` removes whatever the slot now holds — a reused slot's live entry is destroyed"
   - id: WR-06
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "An out-of-window `ptr` in a handle aliases another slot; the bitmaps then name the wrong id"
   - id: WR-07
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "Re-key control messages carry tag 0, not the pinned `NOTAG`"
   - id: WR-08
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "`cargo xtask test-9p` cannot detect a listed test file that lost all its tests"
   - id: WR-09
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "`insert` can create two live entries for one `(client_id, fid_key)` after a fallover"
   - id: IN-01
     severity: info
@@ -79,7 +79,7 @@ findings:
     severity: info
     disposition: open
     title: "The `ds` removal test's \"the freed slot takes another key\" is not asserted"
-open: 19
+open: 7
 total: 19
 recorded: 2026-11-25T03:16:25.575Z
 ---
@@ -88,18 +88,18 @@ recorded: 2026-11-25T03:16:25.575Z
 
 | Finding | Severity | Disposition | Source |
 |---------|----------|-------------|--------|
-| CR-01 | critical | open | - |
-| CR-02 | critical | open | - |
-| CR-03 | critical | open | - |
-| WR-01 | warning | open | - |
-| WR-02 | warning | open | - |
-| WR-03 | warning | open | - |
-| WR-04 | warning | open | - |
-| WR-05 | warning | open | - |
-| WR-06 | warning | open | - |
-| WR-07 | warning | open | - |
-| WR-08 | warning | open | - |
-| WR-09 | warning | open | - |
+| CR-01 | critical | fixed | 04-18 a5dca03 |
+| CR-02 | critical | fixed | 04-21 bb7e83c |
+| CR-03 | critical | fixed | 04-21 62f14e7 |
+| WR-01 | warning | fixed | 04-18 6b8b043 |
+| WR-02 | warning | fixed | 04-18 6b8b043 |
+| WR-03 | warning | fixed | 04-18 6530fca |
+| WR-04 | warning | fixed | 04-19 a9be163 |
+| WR-05 | warning | fixed | 04-22 fcc01dc |
+| WR-06 | warning | fixed | 04-19 a9be163 |
+| WR-07 | warning | fixed | 04-21 bb7e83c |
+| WR-08 | warning | fixed | 04-20 18ff8e5 |
+| WR-09 | warning | fixed | 04-19 e0f7427 |
 | IN-01 | info | open | - |
 | IN-02 | info | open | - |
 | IN-03 | info | open | - |
