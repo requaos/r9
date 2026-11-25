@@ -1,22 +1,315 @@
-//! transport — sealing and opening one packet (WIRE-01, WIRE-03, WIRE-05;
-//! D-06, D-07, D-08).
+//! transport — the connection engine: the plain-framed handshake, the
+//! session, sealing and opening, and the single fail-closed path
+//! (WIRE-03, WIRE-05, WIRE-11; D-07, D-15 to D-21, D-26).
 //!
-//! The tracer's two functions from plan 04-02 live here, re-exported by
-//! `port::chan`, so `port/tests/aead_transport.rs` compiles unchanged.  They
-//! are expressed through the canonical codec in [`super::wire`]: `seal_packet`
-//! writes the header with `Header::encode` and sizes the packet with
-//! `packet_len`; `open_packet` bounds the packet with `frame_size` and reads
-//! the header with `Header::decode` only after the MAC verifies.
+//! # The handshake (D-16, D-17)
 //!
-//! The transport state machine, strict sequencing, re-keying and teardown are
-//! later plans in this phase (D-22).
+//! `Tversion` / `Rversion`, `Tauth` / `Rauth` and the auth-fid `Twrite` /
+//! `Rwrite` and `Tread` / `Rread` exchange round travel in plain 9P2000
+//! framing.  Every one of those messages, whole, sent or received, in wire
+//! order, is absorbed by [`Handshake::absorb_plain`] into the unkeyed BLAKE3
+//! transcript; [`Handshake::finish`] mixes that transcript into the key
+//! derivation.  The handshake is strictly serial — one request outstanding at
+//! a time — so both ends absorb the same bytes in the same order, and an
+//! altered version string or msize gives the two ends different keys.
+//!
+//! The session secret is injected behind [`SessionExchange`]: the transport is
+//! handed 32 bytes and never learns where they came from (D-16).  The real
+//! authenticated exchange is later phases' work; no live connection between
+//! two real machines comes out of this phase.
+//!
+//! # The receive order (D-07, D-26)
+//!
+//! A received packet is bounded by `Size` alone (`Session::frame_len`), the
+//! packet MAC is verified over `[0, size - MAC_LEN)` (`Session::receive` uses
+//! `Unverified::new` and then `Session::open`), and only after the MAC
+//! verifies is any other header field read, the TLV area parsed and the body
+//! decrypted.  Any rejection at any step goes through one private `fail()`:
+//! both directions' keys are zeroized, both counters are zeroed, the session
+//! is closed, and every later `seal` and `open` returns `Err(Closed)`.  Because
+//! `fail` takes `&mut self`, the closed state is one change no other caller
+//! can observe half-made (WIRE-03/concurrency).
+//!
+//! # What is not here yet
+//!
+//! The strict next-in-sequence comparison is deliberately absent from
+//! `Session::open`: plan 04-16 adds it at exactly the step where the sequence
+//! number is read.  Re-keying is plan 04-08; its timing needs `now`, and this
+//! plan threads that argument through without reading it.  A connection owner
+//! must call a periodic `poll(now)` once one exists; nothing in the kernel
+//! drives a session this phase (D-22).
 
 use alloc::vec::Vec;
 
-use crypto::session::DirectionKeys;
+use crypto::key::Key;
+use crypto::session::{self, DirectionKeys, SessionKeys, Transcript};
 
-use super::wire::{Header, Unverified, Verified, check_header, packet_len};
-use super::{HEADER_LEN, MAC_LEN};
+use super::msg;
+use super::tlv::{self, Exts};
+use super::wire::{self, Header, Unverified, Verified, check_header, frame_size, packet_len};
+use super::{HEADER_LEN, MAC_LEN, PAGE_LEN};
+
+/// One end of a connection (D-15).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    /// The client: seals with the `c2s` keys, opens with the `s2c` keys.
+    Client,
+    /// The server: seals with the `s2c` keys, opens with the `c2s` keys.
+    Server,
+}
+
+/// The default packet threshold that triggers an in-band re-key (P3, D-19).
+pub const REKEY_AFTER_PACKETS: u64 = 1 << 48;
+
+/// The default milliseconds to wait for a re-key acknowledgement (P3, D-19).
+pub const REKEY_ACK_TIMEOUT_MS: u64 = 5_000;
+
+/// The session parameters both ends agree on before the first sealed packet.
+#[derive(Clone, Copy, Debug)]
+pub struct TransportConfig {
+    /// The negotiated maximum message unit (msize).
+    pub msize: u32,
+    /// Send this many packets before starting an in-band re-key (plan 04-08).
+    pub rekey_after_packets: u64,
+    /// How long to wait for a re-key acknowledgement (plan 04-08).
+    pub rekey_ack_timeout_ms: u64,
+}
+
+impl Default for TransportConfig {
+    fn default() -> TransportConfig {
+        TransportConfig {
+            msize: 8192,
+            rekey_after_packets: REKEY_AFTER_PACKETS,
+            rekey_ack_timeout_ms: REKEY_ACK_TIMEOUT_MS,
+        }
+    }
+}
+
+/// One step of the session exchange seam (D-16).
+pub enum ExchangeStep {
+    /// The exchange is not finished; the peer must supply more bytes.
+    Continue,
+    /// The exchange finished and produced the 32-byte session secret.
+    Done(Key),
+}
+
+/// The seam that hands the transport its 32-byte session secret (D-16).
+///
+/// The transport never learns where the secret came from.  Tests implement
+/// this with a fixed value; the real authenticated exchange is later phases'
+/// work.  No implementation that returns a fixed or derivable secret may live
+/// under `port/src` (WIRE-05 prohibition).
+pub trait SessionExchange {
+    /// Consume the peer's opaque exchange bytes, append this end's reply to
+    /// `out`, and report whether the exchange finished.
+    fn step(&mut self, incoming: &[u8], out: &mut Vec<u8>) -> crate::Result<ExchangeStep>;
+}
+
+/// The connection closed: a failed receive, or an orderly teardown.
+///
+/// The type carries no packet bytes, no plaintext and no key-derived value
+/// (WIRE-03 prohibition).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Closed;
+
+/// Collects the plain-framed handshake messages and finishes into a [`Session`]
+/// (D-17).
+pub struct Handshake {
+    role: Role,
+    config: TransportConfig,
+    transcript: Transcript,
+    seen_auth: bool,
+    seen_rauth: bool,
+}
+
+impl Handshake {
+    /// Start a handshake for one end of a connection.
+    pub fn new(role: Role, config: TransportConfig) -> Handshake {
+        Handshake {
+            role,
+            config,
+            transcript: Transcript::new(),
+            seen_auth: false,
+            seen_rauth: false,
+        }
+    }
+
+    /// Absorb one whole plain-framed message, sent or received, in wire order.
+    ///
+    /// The type byte sits at offset 4 of the 9P2000 frame; `Tauth` and `Rauth`
+    /// are what mark the exchange as authenticated, so a session that never
+    /// saw them refuses to seal or open (D-16, D-17).
+    pub fn absorb_plain(&mut self, message: &[u8]) {
+        self.transcript.absorb(message);
+        if let Some(&typ) = message.get(4) {
+            match typ {
+                wire::TAUTH => self.seen_auth = true,
+                wire::RAUTH => self.seen_rauth = true,
+                _ => {}
+            }
+        }
+    }
+
+    /// Derive the session keys and hand back the ready [`Session`].
+    ///
+    /// The transcript hash is the HKDF salt, the secret is the input keying
+    /// material, and generation 0 is the initial generation (P2).
+    pub fn finish(self, secret: Key) -> Session {
+        let transcript = self.transcript.hash();
+        // RED stub: the derived keys are zeroed, so every sealed byte this
+        // session would produce is wrong.  GREEN derives them for real.
+        let mut keys = session::derive(&secret, &transcript, 0);
+        keys.zeroize();
+        Session {
+            role: self.role,
+            config: self.config,
+            generation: 0,
+            transcript,
+            keys,
+            send_seq: 0,
+            recv_seq: 0,
+            closed: false,
+            authenticated: self.seen_auth && self.seen_rauth,
+        }
+    }
+}
+
+/// One end of an established connection (D-15).
+pub struct Session {
+    role: Role,
+    config: TransportConfig,
+    /// The derivation generation; plan 04-08's re-key reads it.
+    #[allow(dead_code)]
+    generation: u32,
+    /// The handshake transcript hash; plan 04-08 chains the re-key from it.
+    #[allow(dead_code)]
+    transcript: [u8; 32],
+    keys: SessionKeys,
+    send_seq: u64,
+    recv_seq: u64,
+    closed: bool,
+    /// Whether `Tauth` and `Rauth` were both absorbed (D-16, D-17).
+    authenticated: bool,
+}
+
+impl Session {
+    /// Seal one message and return the whole packet.
+    ///
+    /// The header is written field by field, the TLV area appended cleartext,
+    /// the body encrypted — parameters from block counter 0 and data page `i`
+    /// from `1 + 64 * i` (P5) — and the MAC over `[0, size - MAC_LEN)` appended
+    /// last (D-07).  Every failure closes the connection: the only error this
+    /// signature can return is [`Closed`].
+    pub fn seal(
+        &mut self,
+        _typ: u8,
+        _tag: u16,
+        _fid_handle: [u8; 8],
+        _exts: &Exts<'_>,
+        _body: &[u8],
+        _now: u64,
+    ) -> core::result::Result<Vec<u8>, Closed> {
+        // RED stub: sealing is not implemented yet, so the handshake and wire
+        // pins fail on a behavioural assertion rather than a compile error.
+        Err(Closed)
+    }
+
+    /// Open one packet: MAC first, then the header fields, TLVs and body
+    /// (D-07, D-26).
+    ///
+    /// `Size` is the only field read before the MAC verifies; plan 04-16 adds
+    /// the strict next-in-sequence comparison at the step that reads `SeqNonce`.
+    pub fn open<'a>(
+        &mut self,
+        _packet: Unverified<'a>,
+        _now: u64,
+    ) -> core::result::Result<Verified<'a>, Closed> {
+        // RED stub: opening is not implemented yet.
+        Err(Closed)
+    }
+
+    /// Frame a received packet from its 4-byte `Size` prefix (WIRE-03).
+    ///
+    /// Applies `wire::frame_size` with this session's negotiated msize and
+    /// returns the whole packet length.  Only `Size` is read.
+    pub fn frame_len(&mut self, prefix: &[u8; 4]) -> core::result::Result<usize, Closed> {
+        if !self.authenticated {
+            return Err(Closed);
+        }
+        frame_size(prefix, self.config.msize).map_err(|_| Closed)
+    }
+
+    /// Open a received packet from its raw bytes (WIRE-03).
+    ///
+    /// Builds the bounded `Unverified` with this session's msize and hands it
+    /// to [`Session::open`].
+    pub fn receive<'a>(
+        &mut self,
+        packet: &'a mut [u8],
+        now: u64,
+    ) -> core::result::Result<Verified<'a>, Closed> {
+        if !self.authenticated {
+            return Err(Closed);
+        }
+        match Unverified::new(packet, self.config.msize) {
+            Ok(unverified) => self.open(unverified, now),
+            Err(_) => Err(Closed),
+        }
+    }
+}
+
+/// The direction a session seals with.
+fn send_direction(keys: &SessionKeys, role: Role) -> &DirectionKeys {
+    match role {
+        Role::Client => &keys.c2s,
+        Role::Server => &keys.s2c,
+    }
+}
+
+/// The direction a session opens with.
+fn recv_direction(keys: &SessionKeys, role: Role) -> &DirectionKeys {
+    match role {
+        Role::Client => &keys.s2c,
+        Role::Server => &keys.c2s,
+    }
+}
+
+/// One data page is `PAGE_LEN` bytes, which is exactly this many ChaCha20
+/// 64-byte blocks (P5).
+const PAGE_BLOCKS: usize = PAGE_LEN / 64;
+
+/// Encrypt (or decrypt) one body under `keys` at sequence `seq` (P5).
+///
+/// Parameters encrypt from block counter 0; data page `i` from `1 + 64 * i`,
+/// so one page decrypts on its own.  Decryption is the same XOR.
+fn crypt_body(keys: &DirectionKeys, seq: u64, typ: u8, body: &mut [u8]) -> crate::Result<()> {
+    let Some(layout) = msg::data_layout(typ, body) else {
+        return keys
+            .keystream(seq, 0, body)
+            .map_err(|_| "chan: keystream counter overflow");
+    };
+    let params_len = layout.params_len.min(body.len());
+    if params_len > 0 {
+        keys.keystream(seq, 0, &mut body[..params_len])
+            .map_err(|_| "chan: keystream counter overflow")?;
+    }
+    let mut offset = params_len;
+    let mut page = 0usize;
+    while offset < body.len() {
+        let end = offset.saturating_add(PAGE_LEN).min(body.len());
+        let counter = 1 + (PAGE_BLOCKS * page) as u32;
+        keys.keystream(seq, counter, &mut body[offset..end])
+            .map_err(|_| "chan: keystream counter overflow")?;
+        offset = end;
+        page += 1;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// The plan 04-02 tracer functions, kept as thin wrappers so the tracer tests
+// compile and pass unchanged (the session engine above is their successor).
+// ---------------------------------------------------------------------------
 
 /// Seal one packet: header, encrypted body, MAC (D-06, D-07).
 ///
