@@ -357,10 +357,16 @@ impl Session {
     /// Applies `wire::frame_size` with this session's negotiated msize and
     /// returns the whole packet length.  Only `Size` is read.
     pub fn frame_len(&mut self, prefix: &[u8; 4]) -> core::result::Result<usize, Closed> {
-        if !self.authenticated {
+        if self.closed || !self.authenticated {
             return Err(Closed);
         }
-        frame_size(prefix, self.config.msize).map_err(|_| Closed)
+        match frame_size(prefix, self.config.msize) {
+            Ok(size) => Ok(size),
+            Err(_) => {
+                self.fail();
+                Err(Closed)
+            }
+        }
     }
 
     /// Open a received packet from its raw bytes (WIRE-03).
@@ -376,26 +382,31 @@ impl Session {
             return Err(Closed);
         }
         match Unverified::new(packet, self.config.msize) {
-            // RED: a framing rejection does not yet close the session; GREEN
-            // routes it through `fail()`.
             Ok(unverified) => self.open(unverified, now),
-            Err(_) => Err(Closed),
+            Err(_) => {
+                self.fail();
+                Err(Closed)
+            }
         }
     }
 
-    /// The single failure path: close the session.
+    /// The single failure path: zeroize and close.
     ///
-    /// RED lands the closed flag only; GREEN also zeroizes both directions'
-    /// keys and both counters.
+    /// Both directions' keys (the send and receive slots) are overwritten with
+    /// zeros, both counters are zeroed, and the closed flag is set.  The
+    /// zeroized values stay in their slots, so `keys_zeroized` has something
+    /// to read.  Plan 04-08's pending and superseded key slots join this call;
+    /// they do not exist yet.
     fn fail(&mut self) {
+        self.keys.zeroize();
+        self.send_seq = 0;
+        self.recv_seq = 0;
         self.closed = true;
     }
 
-    /// The orderly close: the same path as a failure (D-15).
-    ///
-    /// RED lands the closed flag only; GREEN zeroizes through `fail()`.
+    /// The orderly close: the same zeroize-and-close path as a failure (D-15).
     pub fn teardown(&mut self) {
-        self.closed = true;
+        self.fail();
     }
 
     /// Whether this session has closed.
