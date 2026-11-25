@@ -11,24 +11,29 @@ Standing constraint on every requirement below: the golden invariant (boots to r
 
 **Carried forward:** 2026-11-25, after milestone v3.0 closed with 38 of 38 requirements
 complete. The shipped set (HARN, DSGN, CRYP, DS, LINT, WIRE) is archived at
-`.planning/milestones/v3.0-REQUIREMENTS.md`. This file carries the 89 remaining requirements
+`.planning/milestones/v3.0-REQUIREMENTS.md`. This file carries the 89 remaining requirements (94 with the five DEBT follow-ups added for v3.1)
 for Phases 5-16, the deferred v2 set, and the out-of-scope table.
+
+**Milestone v3.1 (started 2026-11-25):** Secure Memory and Cluster Fabric covers MEM-01 to MEM-13,
+DIST-01 to DIST-12, PROC-01 to PROC-05 and DEBT-01 to DEBT-05 (35 requirements). Seven MEM
+requirements were amended on 2026-11-25 from the Phase 5 discussion; the decisions are in
+`.planning/phases/05-guide-phase-3-cryptographic-memory-and-zero-copy-dma-paging/05-CONTEXT.md`.
 
 ## v1 Requirements
 
 ### Cryptographic Memory and Zero-Copy DMA Paging (guide Phase 3)
 
-- [ ] **MEM-01**: `UninitializedFrame` is popped without scrubbing, its PTE stays unmapped (`PROT_NONE`), ChaCha20 overwrites all 4,096 bytes, and only after BLAKE3 verification is it wrapped as an immutable `ShadowFrame` and published (IG-M04)
-- [ ] **MEM-02**: Page sealing is Encrypt-then-MAC: ciphertext is verified in cache before decrypting into a shadow frame, with dedicated MAC keys (IG-A01 item 5)
+- [ ] **MEM-01**: `UninitializedFrame` is popped from the free pools with its PTE unmapped (`PROT_NONE`); a frame reused within the same KeyID is not scrubbed, and a frame reused across key domains is zeroed and flushed first (MEM-06). ChaCha20 overwrites all 4,096 bytes, and only after BLAKE3 verification is it wrapped as an immutable `ShadowFrame` and published (IG-M04; amended 2026-11-25 by Phase 5 CONTEXT D-11)
+- [ ] **MEM-02**: Page sealing is Encrypt-then-MAC with dedicated MAC keys: the MAC is computed over the ciphertext, and the frame is published only after it verifies; on failure the frame is zeroed and the process is killed. No plaintext is read back from DRAM to compute the MAC (IG-A01 item 5; amended 2026-11-25 by Phase 5 CONTEXT D-15)
 - [ ] **MEM-03**: On `#PF` decrypt the 64-byte faulting line uses cached stores and the remaining 4,032 bytes use non-temporal stores, with `SFENCE` issued after the loop and overlapped with the scalar tree-MAC root and register restore (IG-M02)
-- [ ] **MEM-04**: The vector fast path in `x86_64/src/cryptpage.rs` uses only `ymm0`-`ymm5` in one `global_asm!` routine, AVX-512 is disabled in XCR0, registers are scrubbed with `VPXOR` before returning to user mode, scalar and vector paths produce identical output, and the design is reconciled with `fpu::kernel_begin()` / `with_simd()` (note N7) (IG-M03, IG-A01 items 3-4, RFC-P10)
+- [ ] **MEM-04**: The vector fast path in `x86_64/src/cryptpage.rs` uses only `ymm0`-`ymm5` in one `global_asm!` routine. It runs in a restricted `fpu` section that spills those six registers to the kernel stack, scrubs them with `VPXOR` and restores them (about 30 cycles); no `XSAVE`/`XRSTOR` runs on the fault path or the eviction seal path. AVX-512 is disabled in XCR0. Scalar and vector paths produce identical output. Enabling AVX moves per-process FP state from FXSAVE to XSAVE at process switch only, using `XSAVEOPT` where available. aarch64 has a scalar path and a NEON path under its own restricted section (IG-M03, IG-A01 items 3-4, RFC-P10; note N7 settled; amended 2026-11-25 by Phase 5 CONTEXT D-12, D-13, D-23)
 - [ ] **MEM-05**: `StrideTracker` evaluates a chronological stride ring buffer comparing oldest, middle and newest entries (IG-A01 item 6)
-- [ ] **MEM-06**: Frame recycling skips zero and flush for same-KeyID reuse (`recycle_within`) and scrubs cross-domain reassignment with `CLFLUSHOPT`, gated on CPUID leaf 7 EBX bit 23 (IG-A01 item 7, IG-M04)
-- [ ] **MEM-07**: The page allocator keeps clean, dirty and pinned Roaring pools over 256MB chunks with the address expression `(((chunk as usize) << 16) | (offset as usize)) * 4096`, full-container materialization in `fallback_difference`, pinned frames excluded from eviction, `Evictable = Dirty \ (Pinned | Active)`, and a High-Water Pager holding about 15% pre-cleared frames (IG-A01 items 8-9, IG-D10, IG-V02)
+- [ ] **MEM-06**: Frame recycling skips zero and flush for same-KeyID reuse (`recycle_within`). Cross-domain reassignment zeroes the frame and then flushes it with `CLFLUSHOPT`, gated on CPUID leaf 7 EBX bit 23. A key domain is one process, with shared text under a per-image read-only key (IG-A01 item 7, RFC section 11; note N9 settled; amended 2026-11-25 by Phase 5 CONTEXT D-10, D-11)
+- [ ] **MEM-07**: The page allocator keeps clean, dirty and pinned Roaring pools over 256MB chunks with the address expression `(((chunk as usize) << 16) | (offset as usize)) * 4096`, full-container materialization in `fallback_difference`, pinned frames excluded from eviction, `Evictable = Dirty \ (Pinned | Active)`, and a High-Water Pager holding about 15% pre-cleared frames; the Roaring set kernels have AVX2 and NEON implementations behind the `setops` seam, reached through `with_simd()` (IG-A01 items 8-9, IG-D10, IG-V02; amended 2026-11-25 by Phase 5 CONTEXT D-16)
 - [ ] **MEM-08**: `SuperpageResidency` is exactly 64 bytes and supports bit clearing and atomic counter reset on large-page demotion (IG-A01 item 10)
-- [ ] **MEM-09**: A 9P2000.aead data packet DMAs directly into an `UninitializedFrame` in the destination segment's `BackingStore` with no kernel copy or decrypt on receive; demand `#PF` decrypts it correctly with zero memory amplification (IG section 8 gate, AC-P01)
+- [ ] **MEM-09**: A `9P2000.aead` data page is read from the transport straight into an `UninitializedFrame` in the destination segment's `BackingStore`, with no intermediate kernel buffer and no decrypt on receive. A keyed BLAKE3 page tag is computed at receipt, and the demand fault verifies it and decrypts correctly with one frame per page. Copies inside the TCP stack remain and are stated as the limit. The path serves exec image reads and page-aligned whole-page `read(2)` (IG section 8 gate, AC-P01; amended 2026-11-25 by Phase 5 CONTEXT D-17, D-19, D-21)
 - [ ] **MEM-10**: `UserSlice` / `UserSliceMut` enforce residency on demand behind `UserAddressSpace`, and kernel code that holds user memory across sleep points (for example devmnt reads) pins those frames against the evictor (IG-A01 item 17, IG-V02 risk 2)
-- [ ] **MEM-11**: Boot profiles `q35lowmem` (forces eviction) and `q35crypt` (tamper kill and vector-register preservation probes) exist in `cargo xtask boot-test` and pass; `x86_64` is lint-opted-in and `UNSAFE-AUDIT.md` reconciles `shadow.rs` and `cryptpage.rs` (IG-V01, note N2)
+- [ ] **MEM-11**: Boot profiles `q35lowmem` (forces eviction) and `q35crypt` (tamper kill and vector-register preservation probes), with aarch64 counterparts, exist in `cargo xtask boot-test` and pass. Sealed paging runs only in these profiles. `x86_64` is lint-opted-in as a whole crate and `UNSAFE-AUDIT.md` reconciles every site, including the new pager and vector modules on both architectures (IG-V01, note N2; amended 2026-11-25 by Phase 5 CONTEXT D-08, D-23, D-25)
 - [ ] **MEM-12**: Concurrent faults on shared Block A code are de-duplicated through a write-once Funnel scratchpad (`port/src/inflight.rs`) (IG-M08)
 - [ ] **MEM-13**: A KVM benchmark records cycles per cold fault (scalar versus vector) and eviction cost, against the guide's expectation of about 4.4 microseconds per cold fault (IG-V01, IG-V02 risk 1)
 
@@ -54,6 +59,14 @@ for Phases 5-16, the deferred v2 set, and the out-of-scope table.
 - [ ] **PROC-03**: `rfork(RFRANDMEM)` is live with semantics specified at planning time (note N8) (IG section 8)
 - [ ] **PROC-04**: Note delivery requires `SegKind::Stack` and uses checked arithmetic that keeps the frame strictly within stack bounds; forged non-stack frames are refused (IG-A01 item 16)
 - [ ] **PROC-05**: PT Suite 4 passes: a sibling dereferencing another sibling's private heap takes an MMU trap, direct-frame reads fail the BLAKE3 MAC check, and the kernel kills it with the note `sys: crypto integrity violation`; `q35crypt` covers sibling isolation and note spoofing (PT-T04, IG-V01)
+
+### v3.0 Audit Follow-ups (v3.1 backlog)
+
+- [ ] **DEBT-01**: `cargo xtask test-9p` and `cargo test -p xtask` run in CI and as part of `cargo xtask test` (v3.0 audit INT-03, INT-04)
+- [ ] **DEBT-02**: `04-VALIDATION.md` is reconciled from `draft` to a completed validation record (v3.0 audit)
+- [ ] **DEBT-03**: The Phase 4 boot-iso evidence text no longer claims the fixes moved the linked kernel bytes (v3.0 audit INT-02)
+- [ ] **DEBT-04**: The TPHT home-hit property is measured at production bank sizes, and the bank-sizing precondition is settled before any default-bank `FidShard` exists (v3.0 audit INT-05)
+- [ ] **DEBT-05**: `docs/threat-model.md` states that `rfork` bits 18-21 are reserved (v3.0 review WR-04)
 
 ### Multi-CPU SMP (Milestone S)
 
@@ -210,6 +223,11 @@ Which phases cover which requirements. Each requirement maps to exactly one phas
 | PROC-03 | Phase 7 | Pending |
 | PROC-04 | Phase 7 | Pending |
 | PROC-05 | Phase 7 | Pending |
+| DEBT-01 | TBD | Pending |
+| DEBT-02 | TBD | Pending |
+| DEBT-03 | TBD | Pending |
+| DEBT-04 | TBD | Pending |
+| DEBT-05 | TBD | Pending |
 | SMP-01 | Phase 8 | Pending |
 | SMP-02 | Phase 8 | Pending |
 | SMP-03 | Phase 8 | Pending |
