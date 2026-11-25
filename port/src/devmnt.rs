@@ -448,6 +448,24 @@ pub fn set_contention_hook_for_test(f: fn()) {
     *guard = Some(f);
 }
 
+/// Which 9P dialect a negotiation asks the server to speak (WIRE-12, D-23).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Dialect {
+    /// Plain `9P2000`: the session is an ordinary [`Mnt`].
+    Plain,
+    /// `9P2000.aead`: an agreed session is handed to the sealed engine.
+    Aead,
+}
+
+/// What a dialect negotiation produced (WIRE-12, D-23).
+pub enum Negotiated {
+    /// A plain `9P2000` session, unchanged from [`Mnt::negotiate`].
+    Plain(Mnt),
+    /// An agreed `9P2000.aead` session handed to the sealed engine with the
+    /// two io halves, the negotiated msize and the exact handshake bytes.
+    Aead(crate::chan::transport::Handoff),
+}
+
 impl Mnt {
     fn alloc_fid(&self) -> Result<u32> {
         let node = LockNode::new();
@@ -718,6 +736,20 @@ impl Mnt {
     /// The negotiated msize (a frozen set-once field — no guard).
     pub fn msize(&self) -> u32 {
         self.msize
+    }
+
+    /// The dialect selection point (WIRE-12, D-23): stub at RED.
+    ///
+    /// The real body lands in the GREEN commit; the signature is final so the
+    /// RED pin compiles and fails on a behavioural assertion.
+    pub fn negotiate_dialect(
+        io_r: Box<dyn MntIo>,
+        io_w: Box<dyn MntIo>,
+        offer: u32,
+        want: Dialect,
+    ) -> Result<Negotiated> {
+        let _ = (io_r, io_w, offer, want);
+        Err("devmnt: negotiate_dialect is not implemented yet")
     }
 
     /// The negotiated version string (the re-version replay's answer) —

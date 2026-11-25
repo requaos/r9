@@ -628,6 +628,25 @@ impl Handshake {
     }
 }
 
+/// The agreed `9P2000.aead` session `devmnt` hands to the engine (WIRE-12, D-23).
+///
+/// Carries the two io halves out of the plain negotiation, the negotiated
+/// msize and the exact `Tversion` and `Rversion` bytes, so the engine's
+/// handshake transcript starts from the same cleartext bytes both ends saw
+/// (D-17).
+pub struct Handoff {
+    /// The read half of the connection.
+    pub io_r: alloc::boxed::Box<dyn crate::devmnt::MntIo>,
+    /// The write half of the connection.
+    pub io_w: alloc::boxed::Box<dyn crate::devmnt::MntIo>,
+    /// The msize the server agreed to.
+    pub msize: u32,
+    /// The exact `Tversion` message this end sent, whole.
+    pub tversion: Vec<u8>,
+    /// The exact `Rversion` reply this end received, whole.
+    pub rversion: Vec<u8>,
+}
+
 /// One end of an established connection (D-15).
 pub struct Session {
     config: TransportConfig,
