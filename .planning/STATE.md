@@ -5,16 +5,16 @@ milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
 current_phase: 04
 current_phase_name: Guide Phase 2 - 9P2000.aead Transport and FidTable
 status: executing
-stopped_at: Completed 04-23-PLAN.md
-last_updated: "2026-11-25T14:18:13.744Z"
+stopped_at: Completed 04-24-PLAN.md
+last_updated: "2026-11-25T14:29:46.418Z"
 last_activity: 2026-11-25
 last_activity_desc: Phase 04 execution started
-state_head: 65554cd14ea4c15fb056125f4931b08320219fc4
+state_head: ea0e0ab7fda3877937fed7227e61cd38c808a3cd
 progress:
   total_phases: 4
   completed_phases: 3
   total_plans: 78
-  completed_plans: 76
+  completed_plans: 77
   percent: 75
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-11-24)
 ## Current Position
 
 Phase: 04 (Guide Phase 2 - 9P2000.aead Transport and FidTable) — EXECUTING
-Plan: 19 of 25
+Plan: 20 of 25
 Status: Ready to execute
 Last activity: 2026-11-24 — Phase 04 execution started
 
@@ -84,6 +84,7 @@ Progress: [████████░░] 75%
 | Phase 04 P14 | 23 min | 3 tasks | 8 files |
 | Phase 04 P15 | 1h 6m | 3 tasks | 2 files |
 | Phase 04 P23 | 48 min | 2 tasks | 3 files |
+| Phase 04 P24 | 11 min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -210,6 +211,8 @@ Full log is the PROJECT.md Key Decisions table. Recent:
 - [Phase 04]: Owner approved the cumulative port/src change at f72cc2a; Task 3 measured at 3398df4 with no source diff since.
 - [Phase 04]: Both whole-ELF hashes differ from the baseline; Phase 2's .text-identical rule is not used (D-29). x86_64 text 760137/2097152, 1337015 bytes headroom.
 - [Phase 04]: FP/SIMD counts EQUAL both kernels (309 aarch64, 6 x86_64); Miri 348s reported as the accepted deviation.
+- [Phase 04]: Plan 04-24: the gap closure's kernel bytes are a second evidence set (@04-24) written beside plan 04-14's; KERNEL-BYTES-GAPS.md marks the @04-14 set superseded and the old files are untouched.
+- [Phase 04]: Plan 04-24: both ELF hashes differ from @04-14 while the defined text symbol totals are unchanged (755220 aarch64, 760137 x86_64); the evidence page records that as measured and rests the fixes-are-linked claim on the ELF verdict at a commit with no source diff against 6fd201c. Miri 357 s reported as the accepted Phase 3 over-budget deviation.
 
 ### Open Questions (four warnings, approved to be carried, not resolved)
 
@@ -270,6 +273,6 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 
 ## Session Continuity
 
-Last session: 2026-11-25T14:18:13.166Z
-Stopped at: Completed 04-23-PLAN.md
+Last session: 2026-11-25T14:29:45.720Z
+Stopped at: Completed 04-24-PLAN.md
 Resume file: None
