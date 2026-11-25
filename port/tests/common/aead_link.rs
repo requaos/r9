@@ -52,6 +52,15 @@ pub fn config_with_msize(msize: u32) -> TransportConfig {
     }
 }
 
+/// The session parameters with a chosen re-key threshold and ack timeout.
+pub fn config_with_rekey(rekey_after_packets: u64, rekey_ack_timeout_ms: u64) -> TransportConfig {
+    TransportConfig {
+        rekey_after_packets,
+        rekey_ack_timeout_ms,
+        ..TransportConfig::default()
+    }
+}
+
 /// Which call rejected a received packet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stage {
@@ -163,6 +172,12 @@ impl TestExchange {
             index: 0,
             payload,
         }
+    }
+
+    /// How many times the seam was stepped (the handshake is run one; a
+    /// re-key is the second).
+    pub fn runs(&self) -> usize {
+        self.index
     }
 }
 
@@ -354,8 +369,28 @@ pub fn connect_with<C: SessionExchange, S: SessionExchange>(
     mut client_exchange: C,
     mut server_exchange: S,
 ) -> (ClientEnd, ServerEnd) {
-    let mut client = Handshake::new(Role::Client, config());
-    let mut server = Handshake::new(Role::Server, config());
+    connect_with_kept(link, &mut client_exchange, &mut server_exchange)
+}
+
+/// Drive the handshake with borrowed seams, so the caller keeps them for the
+/// in-band re-key (the same seam object serves the second exchange).
+pub fn connect_with_kept<C: SessionExchange, S: SessionExchange>(
+    link: Rc<RefCell<AeadLink>>,
+    client_exchange: &mut C,
+    server_exchange: &mut S,
+) -> (ClientEnd, ServerEnd) {
+    connect_with_kept_config(link, client_exchange, server_exchange, config())
+}
+
+/// Drive the handshake with borrowed seams and a chosen transport config.
+pub fn connect_with_kept_config<C: SessionExchange, S: SessionExchange>(
+    link: Rc<RefCell<AeadLink>>,
+    client_exchange: &mut C,
+    server_exchange: &mut S,
+    transport: TransportConfig,
+) -> (ClientEnd, ServerEnd) {
+    let mut client = Handshake::new(Role::Client, transport);
+    let mut server = Handshake::new(Role::Server, transport);
 
     // Tversion: client to server.
     let tversion = plain_frame(
@@ -527,6 +562,21 @@ impl ClientEnd {
         let mut link = self.link.borrow_mut();
         recv_one(&mut self.session, &mut link.s2c, now, &count)
     }
+
+    /// Drive one re-key step and put the returned sealed packets on the wire.
+    pub fn rekey(
+        &mut self,
+        exchange: &mut dyn SessionExchange,
+        incoming: Option<&Msg>,
+        now: u64,
+    ) -> core::result::Result<Vec<Vec<u8>>, Closed> {
+        let packets = self.session.rekey_step(exchange, incoming, now)?;
+        let mut link = self.link.borrow_mut();
+        for packet in &packets {
+            link.c2s.extend(packet.iter().copied());
+        }
+        Ok(packets)
+    }
 }
 
 /// The server end of a connection.
@@ -580,6 +630,21 @@ impl ServerEnd {
         };
         let mut link = self.link.borrow_mut();
         recv_one(&mut self.session, &mut link.c2s, now, &count)
+    }
+
+    /// Drive one re-key step and put the returned sealed packets on the wire.
+    pub fn rekey(
+        &mut self,
+        exchange: &mut dyn SessionExchange,
+        incoming: Option<&Msg>,
+        now: u64,
+    ) -> core::result::Result<Vec<Vec<u8>>, Closed> {
+        let packets = self.session.rekey_step(exchange, incoming, now)?;
+        let mut link = self.link.borrow_mut();
+        for packet in &packets {
+            link.s2c.extend(packet.iter().copied());
+        }
+        Ok(packets)
     }
 }
 

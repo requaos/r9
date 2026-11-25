@@ -13,17 +13,18 @@
 mod common;
 
 use common::aead_link::{
-    AeadLink, ServerEnd, Stage, TestExchange, config_with_msize, connect, connect_with,
+    AeadLink, ClientEnd, ServerEnd, Stage, TestExchange, CLIENT_EXCHANGE, SERVER_EXCHANGE,
+    config_with_msize, config_with_rekey, connect, connect_with, connect_with_kept_config,
     fresh_server, handshake_frames, rauth_frame, seal_bypass, session as fixture_session,
     tauth_frame, unauthenticated_session,
 };
 use std::sync::{Arc, Mutex};
 
 use crypto::key::Key;
-use crypto::session::{self, Transcript};
+use crypto::session::{self, Direction, DirectionKeys, SessionKeys, Transcript};
 use port::chan::msg::{self, Msg};
 use port::chan::tlv::Exts;
-use port::chan::transport::{Handshake, Role};
+use port::chan::transport::{Handshake, Role, Superseded};
 use port::chan::wire;
 use port::chan::PAGE_LEN;
 use port::dat::Qid;
@@ -43,6 +44,15 @@ fn other_secret() -> Key {
     let mut bytes = [0u8; 32];
     for (i, b) in bytes.iter_mut().enumerate() {
         *b = 0x80 + i as u8;
+    }
+    Key::from_bytes(bytes)
+}
+
+/// The second exchange secret, used for the in-band re-key: bytes 0x40..=0x5f.
+fn second_secret() -> Key {
+    let mut bytes = [0u8; 32];
+    for (i, b) in bytes.iter_mut().enumerate() {
+        *b = 0x40 + i as u8;
     }
     Key::from_bytes(bytes)
 }
@@ -1059,6 +1069,397 @@ fn aead_transport_send_order_closed_session_refuses() {
         "a closed session writes nothing to the sink"
     );
     assert!(server.keys_zeroized(), "the keys stay zeroized");
+}
+
+// ---------------------------------------------------------------------------
+// In-band re-keying: threshold, exchange, marker and per-direction cutover
+// (WIRE-04, D-18 to D-21).
+// ---------------------------------------------------------------------------
+
+/// A `Tclunk` body with a distinctive fid.
+fn clunk_body() -> Vec<u8> {
+    body_of(&Msg::Tclunk { fid: 9 })
+}
+
+/// The test's own generation 0 keys, derived from the canonical handshake
+/// frames without the transport (the same derivation both ends ran).
+fn gen0_keys(secret: &Key) -> SessionKeys {
+    let mut own = Transcript::new();
+    for frame in handshake_frames() {
+        own.absorb(&frame);
+    }
+    session::derive(secret, &own.hash(), 0)
+}
+
+/// The packet's trailing MAC, recomputed under `keys`.
+fn mac_of(keys: &DirectionKeys, packet: &[u8]) -> [u8; 32] {
+    let end = packet.len() - port::chan::MAC_LEN;
+    let mut mac = keys.mac();
+    mac.update(&packet[..end]);
+    mac.finalize()
+}
+
+/// Whether the packet's trailing tag is the MAC under `keys`.
+fn mac_verifies(keys: &DirectionKeys, packet: &[u8]) -> bool {
+    let end = packet.len() - port::chan::MAC_LEN;
+    mac_of(keys, packet) == packet[end..]
+}
+
+/// Run the in-band exchange to the point where both ends have derived the next
+/// generation's keys, without sending either marker.  The client has reached
+/// its threshold.
+fn drive_exchange(
+    link: &std::rc::Rc<std::cell::RefCell<AeadLink>>,
+    client: &mut ClientEnd,
+    server: &mut ServerEnd,
+    ce: &mut dyn port::chan::transport::SessionExchange,
+    se: &mut dyn port::chan::transport::SessionExchange,
+    now: u64,
+) {
+    let started = client.rekey(ce, None, now).expect("the client starts the exchange");
+    assert_eq!(started.len(), 1, "the client sends Tauth sealed");
+
+    let msg = server.recv().expect("the server opens the sealed Tauth");
+    assert!(matches!(msg, Msg::Tauth { .. }), "the exchange starts with Tauth");
+    let rauth = server.rekey(se, Some(&msg), now).expect("the server answers Rauth");
+    assert_eq!(rauth.len(), 1);
+
+    let msg = client.recv().expect("the client opens the sealed Rauth");
+    assert!(matches!(msg, Msg::Rauth { .. }));
+    let twrite = client.rekey(ce, Some(&msg), now).expect("the client sends Twrite");
+    assert_eq!(twrite.len(), 1);
+
+    let msg = server.recv().expect("the server opens the sealed Twrite");
+    assert!(matches!(msg, Msg::Twrite { .. }));
+    let rwrite = server.rekey(se, Some(&msg), now).expect("the server answers Rwrite");
+    assert_eq!(rwrite.len(), 1);
+
+    let msg = client.recv().expect("the client opens the sealed Rwrite");
+    assert!(matches!(msg, Msg::Rwrite { .. }));
+    let tread = client.rekey(ce, Some(&msg), now).expect("the client sends Tread");
+    assert_eq!(tread.len(), 1);
+
+    let msg = server.recv().expect("the server opens the sealed Tread");
+    assert!(matches!(msg, Msg::Tread { .. }));
+    let rread = server.rekey(se, Some(&msg), now).expect("the server answers Rread");
+    assert_eq!(rread.len(), 1);
+
+    let msg = client.recv().expect("the client opens the sealed Rread");
+    assert!(matches!(msg, Msg::Rread { .. }));
+    let done = client.rekey(ce, Some(&msg), now).expect("the client derives the next keys");
+    assert!(done.is_empty(), "deriving keys sends nothing by itself");
+    let _ = link;
+}
+
+/// An exchange pair with the handshake secret first and the re-key secret
+/// second, sharing the default handshake payloads.
+fn rekey_seams(
+    first: Key,
+    second: Key,
+) -> (TestExchange, TestExchange) {
+    (
+        TestExchange::with_payload(vec![first.clone(), second.clone()], CLIENT_EXCHANGE.to_vec()),
+        TestExchange::with_payload(vec![first, second], SERVER_EXCHANGE.to_vec()),
+    )
+}
+
+#[test]
+fn aead_transport_rekey_fires_at_threshold() {
+    let link = AeadLink::new();
+    let (mut ce, mut se) = rekey_seams(secret(), second_secret());
+    let (mut client, mut server) = connect_with_kept_config(
+        link.clone(),
+        &mut ce,
+        &mut se,
+        config_with_rekey(4, 5000),
+    );
+    let plain_before = link.borrow().plain_wire.len();
+
+    for i in 0..4u16 {
+        client
+            .send(wire::TCLUNK, i, [0u8; 8], &Exts::default(), &clunk_body())
+            .expect("the client seals a threshold packet");
+        assert!(server.recv().is_ok(), "the server opens threshold packet {i}");
+    }
+    assert!(client.session.rekey_due(), "the fourth sealed packet makes a re-key due");
+
+    drive_exchange(&link, &mut client, &mut server, &mut ce, &mut se, 0);
+
+    assert_eq!(
+        link.borrow().plain_wire.len(),
+        plain_before,
+        "no plain-framed message appears on the link after the handshake"
+    );
+    assert_eq!(ce.runs(), 2, "the exchange seam ran a second time for the re-key");
+    assert_eq!(se.runs(), 2, "the exchange seam ran a second time at the server");
+}
+
+#[test]
+fn aead_transport_rekey_server_requests() {
+    let link = AeadLink::new();
+    let (mut ce, mut se) = rekey_seams(secret(), second_secret());
+    let (mut client, mut server) = connect_with_kept_config(
+        link.clone(),
+        &mut ce,
+        &mut se,
+        config_with_rekey(4, 5000),
+    );
+
+    for i in 0..4u16 {
+        server
+            .send(wire::RCLUNK, i, [0u8; 8], &Exts::default(), &[])
+            .expect("the server seals a threshold packet");
+        assert!(client.recv().is_ok(), "the client opens threshold packet {i}");
+    }
+    assert!(server.session.rekey_due(), "the server reaches the threshold first");
+
+    let request = server.rekey(&mut se, None, 0).expect("the server asks for a re-key");
+    assert_eq!(request.len(), 1, "the server sends one REQUEST packet");
+    let msg = client.recv().expect("the client opens the REQUEST");
+    match msg {
+        Msg::Rrekey { kind, .. } => assert_eq!(kind, msg::REKEY_REQUEST, "the kind is REQUEST"),
+        other => panic!("the server sent {other:?}, not a REQUEST"),
+    }
+
+    let tauth = client.rekey(&mut ce, Some(&msg), 0).expect("the client starts the exchange");
+    assert_eq!(tauth.len(), 1, "the client answers the REQUEST with Tauth");
+}
+
+#[test]
+fn aead_transport_rekey_marker_then_new_keys_at_zero() {
+    let link = AeadLink::new();
+    let (mut ce, mut se) = rekey_seams(secret(), second_secret());
+    let (mut client, mut server) = connect_with_kept_config(
+        link.clone(),
+        &mut ce,
+        &mut se,
+        config_with_rekey(4, 5000),
+    );
+    for i in 0..4u16 {
+        client
+            .send(wire::TCLUNK, i, [0u8; 8], &Exts::default(), &clunk_body())
+            .expect("the client seals a threshold packet");
+        assert!(server.recv().is_ok());
+    }
+
+    assert_eq!(client.session.superseded_keys(Direction::ClientToServer), Superseded::None);
+    assert_eq!(client.session.superseded_keys(Direction::ServerToClient), Superseded::None);
+    assert_eq!(server.session.superseded_keys(Direction::ClientToServer), Superseded::None);
+    assert_eq!(server.session.superseded_keys(Direction::ServerToClient), Superseded::None);
+
+    drive_exchange(&link, &mut client, &mut server, &mut ce, &mut se, 0);
+
+    let marker = client.rekey(&mut ce, None, 0).expect("the client sends its marker");
+    assert_eq!(marker.len(), 1, "one marker packet");
+    assert_eq!(
+        client.session.superseded_keys(Direction::ClientToServer),
+        Superseded::Held,
+        "the sender holds its old c2s keys until an acknowledgement"
+    );
+
+    let msg = server.recv().expect("the server opens the marker");
+    match msg {
+        Msg::Trekey { kind, generation, .. } => {
+            assert_eq!(kind, msg::REKEY_MARKER, "the client's marker is a MARKER");
+            assert_eq!(generation, 1, "the marker names generation g + 1");
+        }
+        other => panic!("expected a Trekey marker, got {other:?}"),
+    }
+    server.rekey(&mut se, Some(&msg), 0).expect("the server cuts its receive direction over");
+    assert_eq!(
+        server.session.superseded_keys(Direction::ClientToServer),
+        Superseded::Zeroized,
+        "the receiver zeroizes the old c2s keys at the marker"
+    );
+    assert_eq!(
+        client.session.superseded_keys(Direction::ClientToServer),
+        Superseded::Held,
+        "the sender still holds its old c2s keys"
+    );
+
+    // The next packet uses the new keys at sequence 0 and opens at the server.
+    client
+        .send(wire::TCLUNK, 9, [0u8; 8], &Exts::default(), &clunk_body())
+        .expect("the client seals its first new-generation packet");
+    let raw: Vec<u8> = link.borrow_mut().c2s.drain(..).collect();
+    assert_eq!(seq_of(&raw), 0, "the first packet after the marker carries sequence 0");
+    link.borrow_mut().c2s.extend(raw.iter().copied());
+    assert!(server.recv().is_ok(), "the server opens the new-generation packet");
+}
+
+#[test]
+fn aead_transport_rekey_directions_cut_over_independently() {
+    let link = AeadLink::new();
+    let (mut ce, mut se) = rekey_seams(secret(), second_secret());
+    let (mut client, mut server) = connect_with_kept_config(
+        link.clone(),
+        &mut ce,
+        &mut se,
+        config_with_rekey(4, 5000),
+    );
+    for i in 0..4u16 {
+        client
+            .send(wire::TCLUNK, i, [0u8; 8], &Exts::default(), &clunk_body())
+            .expect("the client seals a threshold packet");
+        assert!(server.recv().is_ok());
+    }
+    drive_exchange(&link, &mut client, &mut server, &mut ce, &mut se, 0);
+    let keys0 = gen0_keys(&secret());
+
+    // The client cuts its send direction over.
+    let marker = client.rekey(&mut ce, None, 0).expect("the client sends its c2s marker");
+    assert_eq!(marker.len(), 1);
+    let msg = server.recv().expect("the server opens the c2s marker");
+    server.rekey(&mut se, Some(&msg), 0).expect("the server cuts its receive direction over");
+
+    // A server-to-client packet still uses generation 0: its tag verifies under
+    // the test's own generation 0 s2c keys.
+    server
+        .send(wire::RCLUNK, 20, [0u8; 8], &Exts::default(), &[])
+        .expect("the server seals an s2c packet");
+    let raw: Vec<u8> = link.borrow_mut().s2c.drain(..).collect();
+    assert!(
+        mac_verifies(&keys0.s2c, &raw),
+        "before its own marker, the server's s2c packet is still generation 0"
+    );
+    link.borrow_mut().s2c.extend(raw.iter().copied());
+    assert!(client.recv().is_ok(), "the client opens the generation 0 s2c packet");
+
+    // Now the server cuts its own send direction over.
+    let marker = server.rekey(&mut se, None, 0).expect("the server sends its s2c marker");
+    assert_eq!(marker.len(), 1);
+    let msg = client.recv().expect("the client opens the s2c marker");
+    client.rekey(&mut ce, Some(&msg), 0).expect("the client cuts its receive direction over");
+
+    // The next s2c packet uses generation 1 and opens at the client, but its
+    // tag does not verify under the generation 0 s2c keys.
+    server
+        .send(wire::RCLUNK, 21, [0u8; 8], &Exts::default(), &[])
+        .expect("the server seals a new-generation s2c packet");
+    let raw: Vec<u8> = link.borrow_mut().s2c.drain(..).collect();
+    assert!(
+        !mac_verifies(&keys0.s2c, &raw),
+        "after the server's marker, an s2c packet is no longer generation 0"
+    );
+    link.borrow_mut().s2c.extend(raw.iter().copied());
+    assert!(client.recv().is_ok(), "the client opens the new-generation s2c packet");
+}
+
+#[test]
+fn aead_transport_rekey_same_secret_still_changes_keys() {
+    let link = AeadLink::new();
+    // The same secret for the handshake and for the re-key: generation in the
+    // derivation still separates the two key sets (Pitfall 5).
+    let (mut ce, mut se) = rekey_seams(secret(), secret());
+    let (mut client, mut server) = connect_with_kept_config(
+        link.clone(),
+        &mut ce,
+        &mut se,
+        config_with_rekey(4, 5000),
+    );
+
+    // One packet sealed under the old c2s keys before any re-key.
+    client
+        .send(wire::TCLUNK, 30, [0u8; 8], &Exts::default(), &clunk_body())
+        .expect("the client seals an old-generation packet");
+    let old_packet: Vec<u8> = link.borrow_mut().c2s.drain(..).collect();
+    assert!(mac_verifies(&gen0_keys(&secret()).c2s, &old_packet), "the old packet is generation 0");
+    link.borrow_mut().c2s.extend(old_packet.iter().copied());
+    assert!(server.recv().is_ok(), "the server reads the old-generation packet");
+
+    for i in 0..3u16 {
+        client
+            .send(wire::TCLUNK, 31 + i, [0u8; 8], &Exts::default(), &clunk_body())
+            .expect("the client seals a threshold packet");
+        assert!(server.recv().is_ok());
+    }
+    assert!(client.session.rekey_due());
+    drive_exchange(&link, &mut client, &mut server, &mut ce, &mut se, 0);
+    let marker = client.rekey(&mut ce, None, 0).expect("the client sends its marker");
+    assert_eq!(marker.len(), 1);
+    let msg = server.recv().expect("the server opens the marker");
+    server.rekey(&mut se, Some(&msg), 0).expect("the server cuts over");
+
+    // The first new-generation packet does not verify under the old keys even
+    // though the seam returned the same secret.
+    client
+        .send(wire::TCLUNK, 40, [0u8; 8], &Exts::default(), &clunk_body())
+        .expect("the client seals a new-generation packet");
+    let raw: Vec<u8> = link.borrow_mut().c2s.drain(..).collect();
+    assert!(
+        !mac_verifies(&gen0_keys(&secret()).c2s, &raw),
+        "the same secret still yields keys an old-generation MAC does not match"
+    );
+    link.borrow_mut().c2s.extend(raw.iter().copied());
+    assert!(server.recv().is_ok(), "the new-generation packet opens at the server");
+}
+
+#[test]
+fn aead_transport_rekey_outstanding_requests_complete() {
+    let link = AeadLink::new();
+    let (mut ce, mut se) = rekey_seams(secret(), second_secret());
+    let (mut client, mut server) = connect_with_kept_config(
+        link.clone(),
+        &mut ce,
+        &mut se,
+        config_with_rekey(4, 5000),
+    );
+
+    // A Tread sent before the marker, with a distinctive tag.
+    client
+        .send(
+            wire::TREAD,
+            42,
+            [0u8; 8],
+            &Exts::default(),
+            &body_of(&Msg::Tread {
+                fid: 9,
+                offset: 0,
+                count: 64,
+            }),
+        )
+        .expect("the client seals a Tread");
+    assert!(
+        matches!(server.recv(), Ok(Msg::Tread { .. })),
+        "the server reads the outstanding Tread"
+    );
+
+    for i in 0..3u16 {
+        client
+            .send(wire::TCLUNK, 43 + i, [0u8; 8], &Exts::default(), &clunk_body())
+            .expect("the client seals a threshold packet");
+        assert!(server.recv().is_ok());
+    }
+    assert!(client.session.rekey_due());
+    drive_exchange(&link, &mut client, &mut server, &mut ce, &mut se, 0);
+
+    // Client-to-server cutover, then the server answers the outstanding Tread.
+    let marker = client.rekey(&mut ce, None, 0).expect("the client sends its marker");
+    assert_eq!(marker.len(), 1);
+    let msg = server.recv().expect("the server opens the marker");
+    server.rekey(&mut se, Some(&msg), 0).expect("the server cuts over");
+
+    server
+        .send(
+            wire::RREAD,
+            42,
+            [0u8; 8],
+            &Exts::default(),
+            &body_of(&Msg::Rread {
+                data: b"after the cutover".to_vec(),
+            }),
+        )
+        .expect("the server seals the outstanding Rread after the cutover");
+    match client.recv() {
+        Ok(Msg::Rread { data }) => {
+            assert_eq!(
+                &data[..],
+                &b"after the cutover"[..],
+                "the Rread body survives the cutover"
+            );
+        }
+        other => panic!("expected the outstanding Rread, got {other:?}"),
+    }
 }
 
 // ---------------------------------------------------------------------------
