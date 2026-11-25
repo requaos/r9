@@ -221,8 +221,30 @@ fn threat_model_rows_and_bullets_are_cited_or_marked() {
     );
 }
 
+/// The one status a section 5 row may carry instead of `not implemented`: the
+/// Phase 4 wire protections, which are built and host-tested but reached by no
+/// kernel (D-23).
+const PHASE4_STATUS: &str = "implemented and host-tested in Phase 4; not used by a booted kernel";
+const NOT_IMPLEMENTED: &str = "not implemented";
+const USED_CLAIM: &str = "used by a booted kernel";
+const NEGATION: &str = "not ";
+
+/// True when `row` claims something is `used by a booted kernel` anywhere the
+/// claim is not negated.  Section 5 may say the Phase 4 code exists; it may not
+/// say a booted kernel runs it.
+fn has_unnegated_use_claim(row: &str) -> bool {
+    let mut rest = row;
+    while let Some(at) = rest.find(USED_CLAIM) {
+        if !rest[..at].ends_with(NEGATION) {
+            return true;
+        }
+        rest = &rest[at + USED_CLAIM.len()..];
+    }
+    false
+}
+
 #[test]
-fn threat_model_protections_are_not_implemented() {
+fn threat_model_protections_are_not_overclaimed() {
     let doc = doc();
     let section = between(&doc, "## 5. Protections", "## 6. Out of scope and the remedy");
     let rows = table_body_rows(&section);
@@ -231,12 +253,32 @@ fn threat_model_protections_are_not_implemented() {
         "section 5 of docs/threat-model.md has {} protection row(s); at least 10 are required",
         rows.len()
     );
-    let wrong: Vec<&str> = rows.iter().copied().filter(|r| !r.contains("not implemented")).collect();
+    let wrong: Vec<&str> = rows
+        .iter()
+        .copied()
+        .filter(|r| !r.contains(NOT_IMPLEMENTED) && !r.contains(PHASE4_STATUS))
+        .collect();
     assert!(
         wrong.is_empty(),
-        "{} protection row(s) in section 5 do not carry the status `not implemented`:\n{}",
+        "{} protection row(s) in section 5 carry neither the status `not implemented` nor the \
+         Phase 4 status `{PHASE4_STATUS}`:\n{}",
         wrong.len(),
         wrong.join("\n")
+    );
+
+    // D-23: the six Phase 4 rows say the wire protections are host-tested and
+    // reached by no kernel.  A row that says otherwise overstates what ships.
+    let overclaimed: Vec<&str> = rows
+        .iter()
+        .copied()
+        .filter(|r| r.contains(PHASE4_STATUS) && has_unnegated_use_claim(r))
+        .collect();
+    assert!(
+        overclaimed.is_empty(),
+        "{} protection row(s) carry the Phase 4 status but claim the code is used by a booted \
+         kernel; D-23 says the six Phase 4 wire protections are not linked into a booted kernel:\n{}",
+        overclaimed.len(),
+        overclaimed.join("\n")
     );
 }
 
