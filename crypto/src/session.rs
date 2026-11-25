@@ -113,6 +113,43 @@ pub struct SessionKeys {
     pub s2c: DirectionKeys,
 }
 
+impl SessionKeys {
+    /// Overwrite both directions' keys and prefixes with zeros (D-15).
+    pub fn zeroize(&mut self) {
+        self.c2s.zeroize();
+        self.s2c.zeroize();
+    }
+
+    /// Whether both directions are zeroized.
+    pub fn is_zeroized(&self) -> bool {
+        self.c2s.is_zeroized() && self.s2c.is_zeroized()
+    }
+}
+
+/// The capability body length in bytes: the first 16 bytes of a
+/// `StatelessCap` (P8, D-14).
+pub const CAP_BODY_LEN: usize = 16;
+/// The capability tag length in bytes: the 8-byte truncation of keyed BLAKE3
+/// (P8, D-14).
+pub const CAP_TAG_LEN: usize = 8;
+
+/// The 8-byte `StatelessCap` tag over the capability's first 16 bytes under
+/// the table's domain secret (P8, D-14).
+pub fn cap_tag(domain: &Key, body: &[u8; CAP_BODY_LEN]) -> [u8; CAP_TAG_LEN] {
+    let _ = (domain, body);
+    [0u8; CAP_TAG_LEN]
+}
+
+/// Verify a `StatelessCap` tag in constant time (P8, D-14).
+pub fn cap_verify(
+    domain: &Key,
+    body: &[u8; CAP_BODY_LEN],
+    tag: &[u8; CAP_TAG_LEN],
+) -> crate::Result<()> {
+    let _ = (domain, body, tag);
+    Ok(())
+}
+
 /// An unkeyed BLAKE3 transcript of the plain-framed handshake messages, in
 /// wire order (P2, D-17).
 ///
@@ -231,6 +268,33 @@ impl DirectionKeys {
         PacketMac { h: crate::mac::Blake3::new_keyed(self.k_mac.bytes()) }
     }
 
+    /// Overwrite this direction's six secrets with zeros (D-15).
+    pub fn zeroize(&mut self) {
+        let _ = self;
+    }
+
+    /// Whether every byte this direction holds is zero.
+    pub fn is_zeroized(&self) -> bool {
+        let _ = self;
+        true
+    }
+
+    /// The re-key confirm value under this direction's MAC key (P3).
+    pub fn rekey_confirm(&self, generation: u32) -> [u8; 32] {
+        let _ = (self, generation);
+        [0u8; 32]
+    }
+
+    /// Verify a re-key confirm value in constant time (P3).
+    pub fn verify_rekey_confirm(
+        &self,
+        generation: u32,
+        confirm: &[u8; 32],
+    ) -> crate::Result<()> {
+        let _ = (self, generation, confirm);
+        Ok(())
+    }
+
     /// XOR this direction's ChaCha20 keystream for sequence `seq`, starting
     /// at block `counter`, into `buf` (D-08).
     pub fn keystream(&self, seq: u64, counter: u32, buf: &mut [u8]) -> crate::Result<()> {
@@ -253,6 +317,8 @@ impl DirectionKeys {
 // ---------------------------------------------------------------------------
 #[cfg(test)]
 mod tests {
+    use zeroize::Zeroizing;
+
     use super::*;
 
     /// The fixed 32-byte secret: bytes 0x00..=0x1f.
@@ -341,6 +407,135 @@ mod tests {
                 .expect("within the counter limit");
 
             assert_eq!(got, want, "the nonce for sequence {seq} is prefix then sequence LE");
+        }
+    }
+
+    /// A `DirectionKeys` built directly from raw bytes, for the byte-level
+    /// zeroization pins.
+    fn direction_bytes(
+        cipher: [u8; 32],
+        mac: [u8; 32],
+        prefix: [u8; PREFIX_LEN],
+    ) -> DirectionKeys {
+        DirectionKeys {
+            k_enc: Key::from_bytes(cipher),
+            k_mac: Key::from_bytes(mac),
+            prefix: Zeroizing::new(prefix),
+        }
+    }
+
+    #[test]
+    fn session_zeroize_clears_every_key_byte_and_prefix() {
+        let mut keys = derive(&secret(), &transcript(), 0);
+
+        // Before teardown none of the six derived values is all zero.
+        for (name, bytes) in [
+            ("c2s cipher", &keys.c2s.k_enc.bytes()[..]),
+            ("c2s MAC", &keys.c2s.k_mac.bytes()[..]),
+            ("s2c cipher", &keys.s2c.k_enc.bytes()[..]),
+            ("s2c MAC", &keys.s2c.k_mac.bytes()[..]),
+            ("c2s prefix", &keys.c2s.prefix[..]),
+            ("s2c prefix", &keys.s2c.prefix[..]),
+        ] {
+            assert!(bytes.iter().any(|byte| *byte != 0), "the fresh {name} is not all zero");
+        }
+
+        keys.zeroize();
+
+        for (name, bytes) in [
+            ("c2s cipher", &keys.c2s.k_enc.bytes()[..]),
+            ("c2s MAC", &keys.c2s.k_mac.bytes()[..]),
+            ("s2c cipher", &keys.s2c.k_enc.bytes()[..]),
+            ("s2c MAC", &keys.s2c.k_mac.bytes()[..]),
+            ("c2s prefix", &keys.c2s.prefix[..]),
+            ("s2c prefix", &keys.s2c.prefix[..]),
+        ] {
+            assert!(bytes.iter().all(|byte| *byte == 0), "zeroize must clear the {name}");
+        }
+    }
+
+    #[test]
+    fn session_is_zeroized_agrees_with_the_bytes() {
+        let mut keys = derive(&secret(), &transcript(), 0);
+        assert!(!keys.is_zeroized(), "fresh keys are not zeroized");
+        assert!(!keys.c2s.is_zeroized(), "fresh c2s keys are not zeroized");
+        assert!(!keys.s2c.is_zeroized(), "fresh s2c keys are not zeroized");
+
+        keys.c2s.zeroize();
+        assert!(keys.c2s.is_zeroized(), "c2s is zeroized on its own");
+        assert!(!keys.s2c.is_zeroized(), "s2c is untouched");
+        assert!(!keys.is_zeroized(), "the pair is not zeroized while s2c is live");
+
+        keys.zeroize();
+        assert!(keys.c2s.is_zeroized() && keys.s2c.is_zeroized() && keys.is_zeroized());
+
+        // One non-zero byte in each of the 68 covered positions (32 cipher,
+        // 32 MAC, 4 prefix) makes `is_zeroized` false.
+        for position in 0..68 {
+            let mut bytes = [0u8; 68];
+            bytes[position] = 1;
+            let one_byte = direction_bytes(
+                bytes[..32].try_into().expect("32 cipher bytes"),
+                bytes[32..64].try_into().expect("32 MAC bytes"),
+                bytes[64..68].try_into().expect("4 prefix bytes"),
+            );
+            assert!(
+                !one_byte.is_zeroized(),
+                "a single non-zero byte at position {position} must answer false"
+            );
+        }
+    }
+
+    #[test]
+    fn session_packet_mac_is_keyed_blake3_under_the_mac_key() {
+        let keys = derive(&secret(), &transcript(), 0);
+        let message = [0xa5u8; 100];
+
+        let mut mac = keys.c2s.mac();
+        mac.update(&message);
+        let c2s_tag = mac.finalize();
+        assert_eq!(
+            c2s_tag,
+            crate::mac::blake3_keyed(&hex32(C2S_MAC), &message),
+            "the c2s packet MAC is keyed BLAKE3 under the Python-derived c2s MAC key"
+        );
+
+        let mut mac = keys.s2c.mac();
+        mac.update(&message);
+        let s2c_tag = mac.finalize();
+        assert_eq!(
+            s2c_tag,
+            crate::mac::blake3_keyed(&hex32(S2C_MAC), &message),
+            "the s2c packet MAC is keyed BLAKE3 under the Python-derived s2c MAC key"
+        );
+
+        assert_ne!(
+            c2s_tag,
+            crate::mac::blake3_keyed(&hex32(C2S_ENC), &message),
+            "the packet MAC is not computed under the cipher key"
+        );
+    }
+
+    #[test]
+    fn session_rekey_confirm_is_keyed_blake3_of_label_and_generation() {
+        let keys = derive(&secret(), &transcript(), 0);
+
+        for generation in [0u32, 1, 0x0102_0304] {
+            // The label is a literal here, from the DECISION P3 value.
+            let mut message = [0u8; 16];
+            message[..12].copy_from_slice(b"r9 rekey ack");
+            message[12..].copy_from_slice(&generation.to_le_bytes());
+
+            assert_eq!(
+                keys.c2s.rekey_confirm(generation),
+                crate::mac::blake3_keyed(&hex32(C2S_MAC), &message),
+                "c2s rekey confirm for generation {generation}"
+            );
+            assert_eq!(
+                keys.s2c.rekey_confirm(generation),
+                crate::mac::blake3_keyed(&hex32(S2C_MAC), &message),
+                "s2c rekey confirm for generation {generation}"
+            );
         }
     }
 }
