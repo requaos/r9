@@ -308,6 +308,181 @@ fn aead_tlv_stream_prio_is_two_plus_thirty() {
     assert_eq!(tlv::stream_prio_parts(0xffff_ffff), (3, 0x3fff_ffff), "top tier and credit");
 }
 
+// ---------------------------------------------------------------------------
+// Task 2: every malformed area is rejected (WIRE-02, D-27).
+// ---------------------------------------------------------------------------
+
+/// Build an `EXT_QID_VOLATILITY` record with the given class byte.
+fn qid_record(class: u8) -> Vec<u8> {
+    let mut value = [0u8; LEN_QID_VOLATILITY];
+    value[0] = class;
+    value[1..9].copy_from_slice(&0x0102_0304_0506_0708u64.to_le_bytes());
+    value[9] = 0x02;
+    build_record(2, &value)
+}
+
+#[test]
+fn aead_tlv_rejects_unknown_bit() {
+    assert_eq!(
+        tlv::parse(0x0040, &[]).err(),
+        Some("chan: tlv unknown extension bit"),
+        "bit 6 is outside EXT_KNOWN"
+    );
+    assert_eq!(
+        tlv::parse(0x8000, &DEADLINE_RECORD).err(),
+        Some("chan: tlv unknown extension bit"),
+        "the top bit is outside EXT_KNOWN whatever the area holds"
+    );
+    assert_eq!(
+        tlv::parse(EXT_DEADLINE | 0x0040, &DEADLINE_RECORD).err(),
+        Some("chan: tlv unknown extension bit"),
+        "one unknown bit rejects the whole mask"
+    );
+}
+
+#[test]
+fn aead_tlv_rejects_wrong_order_and_duplicates() {
+    let mut swapped = CAP_TOKEN_RECORD.to_vec();
+    swapped.extend_from_slice(&DEADLINE_RECORD);
+    assert_eq!(
+        tlv::parse(EXT_DEADLINE | EXT_CAP_TOKEN, &swapped).err(),
+        Some("chan: tlv record type out of order"),
+        "a cap token before a deadline is out of order"
+    );
+
+    let mut duplicate = DEADLINE_RECORD.to_vec();
+    duplicate.extend_from_slice(&DEADLINE_RECORD);
+    assert_eq!(
+        tlv::parse(EXT_DEADLINE | EXT_CAP_TOKEN, &duplicate).err(),
+        Some("chan: tlv duplicate record type"),
+        "two deadline records under two mask bits is a duplicate"
+    );
+}
+
+#[test]
+fn aead_tlv_rejects_bad_len_reserved_and_padding() {
+    let cases: [(u16, Vec<u8>, usize, usize); 6] = [
+        (EXT_DEADLINE, DEADLINE_RECORD.to_vec(), LEN_DEADLINE, 16),
+        (EXT_CAP_TOKEN, CAP_TOKEN_RECORD.to_vec(), LEN_CAP_TOKEN, 40),
+        (EXT_QID_VOLATILITY, QID_VOLATILITY_RECORD.to_vec(), LEN_QID_VOLATILITY, 16),
+        (EXT_STREAM_PRIO, STREAM_PRIO_RECORD.to_vec(), LEN_STREAM_PRIO, 8),
+        (EXT_OBINARY, OBINARY_RECORD.to_vec(), LEN_OBINARY, 8),
+        (EXT_STATELESS_CAP, STATELESS_CAP_RECORD.to_vec(), LEN_STATELESS_CAP, 32),
+    ];
+
+    for (bit, record, fixed_len, padded_len) in cases {
+        let mut bad = record.clone();
+        bad[2..4].copy_from_slice(&((fixed_len + 1) as u16).to_le_bytes());
+        assert_eq!(
+            tlv::parse(bit, &bad).err(),
+            Some("chan: tlv wrong value length"),
+            "a len one more than the fixed length is rejected"
+        );
+
+        if fixed_len > 0 {
+            let mut bad = record.clone();
+            bad[2..4].copy_from_slice(&((fixed_len - 1) as u16).to_le_bytes());
+            assert_eq!(
+                tlv::parse(bit, &bad).err(),
+                Some("chan: tlv wrong value length"),
+                "a len one less than the fixed length is rejected"
+            );
+        }
+
+        let mut bad = record.clone();
+        bad[1] = 0x01;
+        assert_eq!(
+            tlv::parse(bit, &bad).err(),
+            Some("chan: tlv nonzero reserved byte"),
+            "a nonzero reserved byte is rejected"
+        );
+
+        if padded_len > TLV_HEADER_LEN + fixed_len {
+            let mut bad = record.clone();
+            let last = bad.len() - 1;
+            bad[last] = 0x01;
+            assert_eq!(
+                tlv::parse(bit, &bad).err(),
+                Some("chan: tlv nonzero padding byte"),
+                "a nonzero padding byte is rejected"
+            );
+        }
+    }
+}
+
+#[test]
+fn aead_tlv_rejects_mask_area_mismatch() {
+    assert_eq!(
+        tlv::parse(EXT_DEADLINE, &[]).err(),
+        Some("chan: tlv set bit has no record"),
+        "a set bit with no record is rejected"
+    );
+
+    assert_eq!(
+        tlv::parse(EXT_CAP_TOKEN, &DEADLINE_RECORD).err(),
+        Some("chan: tlv record type not in mask"),
+        "a record whose type bit is clear is rejected"
+    );
+
+    let mut one = DEADLINE_RECORD.to_vec();
+    one.push(0x00);
+    assert_eq!(
+        tlv::parse(EXT_DEADLINE, &one).err(),
+        Some("chan: tlv trailing bytes"),
+        "one trailing byte is rejected"
+    );
+
+    let mut eight = DEADLINE_RECORD.to_vec();
+    eight.extend_from_slice(&[0u8; 8]);
+    assert_eq!(
+        tlv::parse(EXT_DEADLINE, &eight).err(),
+        Some("chan: tlv trailing bytes"),
+        "eight trailing bytes are rejected"
+    );
+
+    let truncated = &DEADLINE_RECORD[..TLV_HEADER_LEN + 6];
+    assert_eq!(
+        tlv::parse(EXT_DEADLINE, truncated).err(),
+        Some("chan: tlv record value truncated"),
+        "an area truncated inside a record is rejected"
+    );
+}
+
+#[test]
+fn aead_tlv_rejects_bad_volatility_class() {
+    for bad in [0x00u8, 0x60, 0xa0, 0xe0] {
+        let record = qid_record(bad);
+        assert_eq!(
+            tlv::parse(EXT_QID_VOLATILITY, &record).err(),
+            Some("chan: tlv invalid volatility class"),
+            "class {bad:#04x} is rejected"
+        );
+    }
+    for good in [0x20u8, 0x40, 0x80] {
+        let record = qid_record(good);
+        assert!(
+            tlv::parse(EXT_QID_VOLATILITY, &record).is_ok(),
+            "class {good:#04x} is accepted"
+        );
+    }
+}
+
+#[test]
+fn aead_tlv_record_ending_at_area_end_is_accepted() {
+    let cases: [(u16, Vec<u8>, &str); 6] = [
+        (EXT_DEADLINE, DEADLINE_RECORD.to_vec(), "deadline"),
+        (EXT_CAP_TOKEN, CAP_TOKEN_RECORD.to_vec(), "cap token"),
+        (EXT_QID_VOLATILITY, QID_VOLATILITY_RECORD.to_vec(), "volatility"),
+        (EXT_STREAM_PRIO, STREAM_PRIO_RECORD.to_vec(), "stream priority"),
+        (EXT_OBINARY, OBINARY_RECORD.to_vec(), "obinary"),
+        (EXT_STATELESS_CAP, STATELESS_CAP_RECORD.to_vec(), "stateless cap"),
+    ];
+    for (bit, record, name) in cases {
+        let exts = tlv::parse(bit, &record).unwrap_or_else(|e| panic!("{name} record alone parses: {e}"));
+        assert_eq!(exts.mask(), bit, "the {name} record alone sets exactly its bit");
+    }
+}
+
 // Silence the unused-constant lint for the fixed value lengths: the round-trip
 // test above asserts the padded lengths, and these keep the contract named.
 #[allow(dead_code)]
