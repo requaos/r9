@@ -33,7 +33,7 @@ Plan: 25 of 25
 Status: All phases complete — milestone v3.0 execution finished
 Last activity: 2026-11-25 — Phase 04 UAT passed 112/112 and the milestone v3.0 close is next
 
-Progress: [██████████] 100%
+Progress: [████████████████████] 78/78 plans (100%)
 
 ## Performance Metrics
 
