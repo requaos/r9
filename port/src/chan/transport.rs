@@ -628,6 +628,51 @@ impl Handshake {
     }
 }
 
+/// The agreed `9P2000.aead` session `devmnt` hands to the engine (WIRE-12, D-23).
+///
+/// Carries the two io halves out of the plain negotiation, the negotiated
+/// msize and the exact `Tversion` and `Rversion` bytes, so the engine's
+/// handshake transcript starts from the same cleartext bytes both ends saw
+/// (D-17).
+pub struct Handoff {
+    /// The read half of the connection.
+    pub io_r: alloc::boxed::Box<dyn crate::devmnt::MntIo>,
+    /// The write half of the connection.
+    pub io_w: alloc::boxed::Box<dyn crate::devmnt::MntIo>,
+    /// The msize the server agreed to.
+    pub msize: u32,
+    /// The exact `Tversion` message this end sent, whole.
+    pub tversion: Vec<u8>,
+    /// The exact `Rversion` reply this end received, whole.
+    pub rversion: Vec<u8>,
+}
+
+impl Handoff {
+    /// Start the engine's handshake from the agreed negotiation (D-17).
+    ///
+    /// The exact `Tversion` and `Rversion` bytes are absorbed first, in wire
+    /// order, so the transcript covers the same cleartext prefix both ends
+    /// saw; the negotiated msize becomes the session's packet bound.  The rest
+    /// of the plain handshake (`Tauth` / `Rauth` and the afid exchange) is
+    /// absorbed by the caller through [`Handshake::absorb_plain`] before
+    /// [`Handshake::finish`].
+    pub fn into_handshake(
+        self,
+        role: Role,
+        mut config: TransportConfig,
+    ) -> (
+        Handshake,
+        alloc::boxed::Box<dyn crate::devmnt::MntIo>,
+        alloc::boxed::Box<dyn crate::devmnt::MntIo>,
+    ) {
+        config.msize = self.msize;
+        let mut handshake = Handshake::new(role, config);
+        handshake.absorb_plain(&self.tversion);
+        handshake.absorb_plain(&self.rversion);
+        (handshake, self.io_r, self.io_w)
+    }
+}
+
 /// One end of an established connection (D-15).
 pub struct Session {
     config: TransportConfig,

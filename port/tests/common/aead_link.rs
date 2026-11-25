@@ -13,6 +13,9 @@
 //! never turns a framing failure into `Closed` itself.  `Stage` records which
 //! call rejected the bytes, and `decode_count` counts only bodies that decoded.
 
+// A shared fixture: each test binary uses a different subset of these helpers.
+#![allow(dead_code)]
+
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
@@ -23,10 +26,12 @@ use port::chan::msg::{self, Msg};
 use port::chan::transport::{
     Closed, ExchangeStep, Handshake, Role, Session, SessionExchange, TransportConfig,
 };
-use port::chan::tlv::Exts;
+use port::chan::tlv::{self, Exts};
 use port::chan::wire;
 use port::chan::{HEADER_LEN, MAC_LEN, VERSION_AEAD};
 use port::dat::Qid;
+use port::devmnt::{Dialect, Mnt, MntIo, Negotiated};
+use port::fid::{FidEntry, FidHandle, FidTable, StatefulHandle};
 
 /// The client's opaque exchange bytes for the default handshake.
 pub const CLIENT_EXCHANGE: &[u8] = b"client exchange bytes";
@@ -212,7 +217,7 @@ pub fn plain_frame(typ: u8, tag: u16, body: &[u8]) -> Vec<u8> {
 }
 
 /// Encode one message body with the crate's own encoder.
-fn body_of(message: &Msg) -> Vec<u8> {
+pub fn body_of(message: &Msg) -> Vec<u8> {
     let mut out = Vec::new();
     msg::encode_body(message, &mut out).expect("the fixture's body encodes");
     out
@@ -740,4 +745,593 @@ pub fn seal_bypass(
     mac.update(&packet[..size - MAC_LEN]);
     packet[size - MAC_LEN..].copy_from_slice(&mac.finalize());
     packet
+}
+
+// ---------------------------------------------------------------------------
+// One whole sealed session from the real `devmnt` negotiation (plan 04-11)
+// ---------------------------------------------------------------------------
+
+/// The canned tree's root qid path.
+pub const E2E_ROOT: u64 = 0x1000;
+/// The canned tree's one file qid path.
+pub const E2E_FILE: u64 = 0x1001;
+/// The canned file's bytes.
+pub const E2E_FILE_BYTES: &[u8] = b"sealed session file bytes\n";
+/// Plan 9's directory type bit (`QTDIR`).
+pub const QTDIR: u8 = 0x80;
+/// The canned tree's one file name.
+pub const E2E_FILE_NAME: &[u8] = b"file";
+
+/// One decoded sealed packet, with the header fields the server dispatch needs.
+pub struct E2eOpened {
+    /// The decoded message.
+    pub msg: Msg,
+    /// The request or reply tag.
+    pub tag: u16,
+    /// The 8-byte header handle, always carried (D-11).
+    pub handle: [u8; 8],
+    /// The capability TLV, when the packet carried one.
+    pub cap: Option<[u8; 24]>,
+    /// The decrypted body length (the padded page for a data message).
+    pub body_len: usize,
+}
+
+fn e2e_domain_key() -> Key {
+    let mut bytes = [0u8; 32];
+    for (i, byte) in bytes.iter_mut().enumerate() {
+        *byte = 0xD0u8.wrapping_add(i as u8);
+    }
+    Key::from_bytes(bytes)
+}
+
+fn e2e_entry(fid_key: u32, qid_path: u64, qid_type: u8) -> FidEntry {
+    FidEntry {
+        fid_key,
+        client_id: 0,
+        qid_path,
+        offset: 0,
+        qid_vers: 0,
+        iounit: 0,
+        lease_gen: 0,
+        ring_slot: 0,
+        dev_handler: 0,
+        epoch: 0,
+        qid_type,
+        open_mode: 0,
+        flags: 0,
+        volatility: 0,
+        _reserved: [0u8; 15],
+    }
+}
+
+fn e2e_qid(path: u64) -> Qid {
+    Qid {
+        path,
+        vers: 0,
+        typ: if path == E2E_ROOT { QTDIR } else { 0 },
+    }
+}
+
+/// One `MntIo` half of the client over the link.
+///
+/// The write half also drives the server's plain handshake, so
+/// `Mnt::negotiate_dialect` sees a synchronous peer exactly as the kernel's
+/// pipe transport does (one whole message per write).
+struct ClientLinkIo {
+    link: Rc<RefCell<AeadLink>>,
+    server: Option<Rc<RefCell<E2eServer>>>,
+}
+
+impl MntIo for ClientLinkIo {
+    fn write_msg(&mut self, buf: &[u8]) -> port::Result<u64> {
+        if let Some(server) = &self.server {
+            server.borrow_mut().receive_plain(buf)?;
+        }
+        Ok(buf.len() as u64)
+    }
+
+    fn read_some(&mut self, buf: &mut [u8]) -> port::Result<u64> {
+        let mut link = self.link.borrow_mut();
+        let n = link.s2c.len().min(buf.len());
+        for byte in buf.iter_mut().take(n) {
+            *byte = link.s2c.pop_front().expect("the counted byte is queued");
+        }
+        Ok(n as u64)
+    }
+}
+
+fn read_exact(io: &mut dyn MntIo, buf: &mut [u8]) {
+    let mut got = 0usize;
+    while got < buf.len() {
+        let n = io
+            .read_some(&mut buf[got..])
+            .expect("the fixture's plain reply is available") as usize;
+        assert!(n > 0, "the plain reply ended early");
+        got += n;
+    }
+}
+
+fn read_plain_reply(io_r: &mut dyn MntIo) -> Vec<u8> {
+    let mut hdr = [0u8; 4];
+    read_exact(io_r, &mut hdr);
+    let size = u32::from_le_bytes(hdr) as usize;
+    let mut msg = hdr.to_vec();
+    let mut body = vec![0u8; size - 4];
+    read_exact(io_r, &mut body);
+    msg.extend_from_slice(&body);
+    msg
+}
+
+/// One plain-framed send and its whole reply, absorbed on both sides of the
+/// client's handshake in wire order.
+fn plain_step(io_w: &mut dyn MntIo, io_r: &mut dyn MntIo, handshake: &mut Handshake, frame: &[u8]) {
+    handshake.absorb_plain(frame);
+    let n = io_w.write_msg(frame).expect("the plain frame is written") as usize;
+    assert_eq!(n, frame.len(), "the plain write lands whole");
+    let reply = read_plain_reply(io_r);
+    handshake.absorb_plain(&reply);
+}
+
+/// The server end of one whole sealed session.
+///
+/// It owns a [`FidTable`] (two home-only shards, one test domain key, epoch 1),
+/// assigns one `client_id` per connection, keeps a canned tree, answers the
+/// plain handshake and then resolves every sealed request through the table.
+pub struct E2eServer {
+    link: Rc<RefCell<AeadLink>>,
+    handshake: Option<Handshake>,
+    session: Option<Session>,
+    secret: Key,
+    config: TransportConfig,
+    table: FidTable,
+    client_id: u32,
+}
+
+impl E2eServer {
+    /// Build a server end over `link` with `client_id` and `config`.
+    pub fn new(
+        link: Rc<RefCell<AeadLink>>,
+        secret: Key,
+        client_id: u32,
+        config: TransportConfig,
+    ) -> Rc<RefCell<E2eServer>> {
+        let table = FidTable::new(2, 1, e2e_domain_key(), 1).expect("a two-shard fid table forms");
+        Rc::new(RefCell::new(E2eServer {
+            link,
+            handshake: Some(Handshake::new(Role::Server, config)),
+            session: None,
+            secret,
+            config,
+            table,
+            client_id,
+        }))
+    }
+
+    fn absorb(&mut self, frame: &[u8]) {
+        if let Some(handshake) = &mut self.handshake {
+            handshake.absorb_plain(frame);
+        }
+    }
+
+    /// Answer one plain-framed client message: `Tversion`, `Tauth`, the afid
+    /// `Twrite` or the afid `Tread` (the last finishes the server's handshake).
+    pub fn receive_plain(&mut self, frame: &[u8]) -> port::Result<()> {
+        let typ = frame[4];
+        let tag = u16::from_le_bytes([frame[5], frame[6]]);
+        if typ == wire::TVERSION {
+            let Msg::Tversion { msize: offer, .. } = msg::decode_body(typ, &frame[7..])? else {
+                return Err("e2e server: malformed Tversion");
+            };
+            let answer = offer.min(MSIZE);
+            self.config.msize = answer;
+            self.handshake = Some(Handshake::new(Role::Server, self.config));
+            self.absorb(frame);
+            let reply = plain_frame(
+                wire::RVERSION,
+                tag,
+                &body_of(&Msg::Rversion {
+                    msize: answer,
+                    version: VERSION_AEAD.to_vec(),
+                }),
+            );
+            self.absorb(&reply);
+            self.link.borrow_mut().s2c.extend(reply.iter().copied());
+            return Ok(());
+        }
+        self.absorb(frame);
+        let reply = match typ {
+            wire::TAUTH => plain_frame(
+                wire::RAUTH,
+                tag,
+                &body_of(&Msg::Rauth {
+                    aqid: Qid { path: 0, vers: 0, typ: 0 },
+                }),
+            ),
+            wire::TWRITE => {
+                let Msg::Twrite { data, .. } = msg::decode_body(typ, &frame[7..])? else {
+                    return Err("e2e server: malformed Twrite");
+                };
+                plain_frame(
+                    wire::RWRITE,
+                    tag,
+                    &body_of(&Msg::Rwrite {
+                        count: data.len() as u32,
+                    }),
+                )
+            }
+            wire::TREAD => plain_frame(
+                wire::RREAD,
+                tag,
+                &body_of(&Msg::Rread {
+                    data: SERVER_EXCHANGE.to_vec(),
+                }),
+            ),
+            _ => return Err("e2e server: unexpected plain message"),
+        };
+        self.absorb(&reply);
+        self.link.borrow_mut().s2c.extend(reply.iter().copied());
+        if typ == wire::TREAD {
+            let handshake = self.handshake.take().expect("the plain handshake is running");
+            self.session = Some(handshake.finish(self.secret.clone()));
+        }
+        Ok(())
+    }
+
+    /// Open one sealed client packet without answering it (the re-key driver).
+    pub fn recv_sealed(&mut self) -> core::result::Result<E2eOpened, Stage> {
+        let Some(mut session) = self.session.take() else {
+            return Err(Stage::Receive);
+        };
+        let result = recv_sealed_frame(&mut session, &self.link, true);
+        self.session = Some(session);
+        result
+    }
+
+    /// Open one sealed request, dispatch it and seal the reply.
+    ///
+    /// Every stateful request resolves its 8-byte header handle through
+    /// [`FidTable::resolve`]; a capability resolves through
+    /// [`FidTable::verify_cap`] and touches no FID memory (P4, P8, WIRE-08).
+    pub fn handle_one(&mut self) -> core::result::Result<(), Stage> {
+        let E2eOpened { msg, tag, handle, cap, .. } = self.recv_sealed()?;
+        match msg {
+            Msg::Tattach { fid, .. } => {
+                let entry = e2e_entry(fid, E2E_ROOT, QTDIR);
+                let new = self.table.insert(self.client_id, entry).map_err(|_| Stage::Decode)?;
+                self.reply(
+                    tag,
+                    new.to_wire(),
+                    &Exts::default(),
+                    &Msg::Rattach { qid: e2e_qid(E2E_ROOT) },
+                )
+            }
+            Msg::Twalk { newfid, wname, .. } => {
+                let entry = match self.stateful(&handle) {
+                    Ok(entry) => entry,
+                    Err(_) => return self.rerror(tag),
+                };
+                let next_path = if wname.is_empty() {
+                    entry.qid_path
+                } else if entry.qid_path == E2E_ROOT && wname[0].as_slice() == E2E_FILE_NAME {
+                    E2E_FILE
+                } else {
+                    return self.rerror(tag);
+                };
+                let qid_type = if next_path == E2E_ROOT { QTDIR } else { 0 };
+                let new = self
+                    .table
+                    .insert(self.client_id, e2e_entry(newfid, next_path, qid_type))
+                    .map_err(|_| Stage::Decode)?;
+                self.reply(
+                    tag,
+                    new.to_wire(),
+                    &Exts::default(),
+                    &Msg::Rwalk { wqid: vec![e2e_qid(next_path)] },
+                )
+            }
+            Msg::Topen { mode, .. } => {
+                let entry = match self.stateful(&handle) {
+                    Ok(entry) => entry,
+                    Err(_) => return self.rerror(tag),
+                };
+                let qid = e2e_qid(entry.qid_path);
+                let wire_cap = self.table.issue_cap(&qid, mode).to_wire();
+                let exts = Exts {
+                    stateless_cap: Some(&wire_cap),
+                    ..Exts::default()
+                };
+                // D-12: a packet carrying a capability has an all-zero handle.
+                self.reply(tag, [0u8; 8], &exts, &Msg::Ropen { qid, iounit: 0 })
+            }
+            Msg::Tread { offset, count, .. } => {
+                let path = match (&cap, FidHandle::from_wire(&handle, cap.as_ref())) {
+                    (Some(_), Ok(FidHandle::Stateless(capability))) => {
+                        if self.table.verify_cap(&capability).is_err() {
+                            // P8: a capability that fails verification closes
+                            // the connection; nothing is answered.
+                            self.teardown();
+                            return Ok(());
+                        }
+                        capability.qid_path
+                    }
+                    (None, Ok(FidHandle::Stateful(_))) => match self.stateful(&handle) {
+                        Ok(entry) => entry.qid_path,
+                        Err(_) => return self.rerror(tag),
+                    },
+                    _ => return self.rerror(tag),
+                };
+                let source: &[u8] = if path == E2E_FILE { E2E_FILE_BYTES } else { b"" };
+                let start = (offset as usize).min(source.len());
+                let end = (start + count as usize).min(source.len());
+                let data = source[start..end].to_vec();
+                let reply_handle = if cap.is_some() { [0u8; 8] } else { handle };
+                self.reply(tag, reply_handle, &Exts::default(), &Msg::Rread { data })
+            }
+            Msg::Tclunk { .. } => {
+                let parsed = match StatefulHandle::from_wire(&handle) {
+                    Ok(parsed) => parsed,
+                    Err(_) => return self.rerror(tag),
+                };
+                if self.table.clunk(self.client_id, &parsed).is_err() {
+                    return self.rerror(tag);
+                }
+                self.reply(tag, [0u8; 8], &Exts::default(), &Msg::Rclunk)
+            }
+            _ => self.rerror(tag),
+        }
+    }
+
+    fn stateful(&self, handle: &[u8; 8]) -> port::Result<FidEntry> {
+        let parsed = StatefulHandle::from_wire(handle)?;
+        self.table.resolve(self.client_id, &parsed)
+    }
+
+    /// Drive one re-key step and put the returned sealed packets on the wire.
+    pub fn rekey(
+        &mut self,
+        exchange: &mut dyn SessionExchange,
+        incoming: Option<&Msg>,
+        now: u64,
+    ) -> core::result::Result<Vec<Vec<u8>>, Closed> {
+        let Some(session) = self.session.as_mut() else {
+            return Err(Closed);
+        };
+        let packets = session.rekey_step(exchange, incoming, now)?;
+        let mut link = self.link.borrow_mut();
+        for packet in &packets {
+            link.wire_log.push((Direction::ServerToClient, packet.clone()));
+            link.s2c.extend(packet.iter().copied());
+        }
+        Ok(packets)
+    }
+
+    /// Whether this end's send counter has reached the re-key threshold.
+    pub fn rekey_due(&self) -> bool {
+        self.session.as_ref().is_some_and(|session| session.rekey_due())
+    }
+
+    /// The live and reclaimed slot counts of every shard, in shard order.
+    pub fn fid_memory(&self) -> Vec<(u64, u64)> {
+        (0..2)
+            .filter_map(|shard| self.table.bitmap_lens(shard))
+            .collect()
+    }
+
+    /// Zeroize and close this end.
+    pub fn teardown(&mut self) {
+        if let Some(session) = self.session.as_mut() {
+            session.teardown();
+        }
+    }
+
+    /// Whether this end has closed.
+    pub fn is_closed(&self) -> bool {
+        self.session.as_ref().is_none_or(|session| session.is_closed())
+    }
+
+    fn rerror(&mut self, tag: u16) -> core::result::Result<(), Stage> {
+        self.reply(
+            tag,
+            [0u8; 8],
+            &Exts::default(),
+            &Msg::Rerror {
+                ename: b"e2e server: request refused".to_vec(),
+            },
+        )
+    }
+
+    fn reply(
+        &mut self,
+        tag: u16,
+        handle: [u8; 8],
+        exts: &Exts<'_>,
+        message: &Msg,
+    ) -> core::result::Result<(), Stage> {
+        let mut body = Vec::new();
+        if msg::encode_body(message, &mut body).is_err() {
+            self.teardown();
+            return Err(Stage::Decode);
+        }
+        let now = self.link.borrow().now;
+        let typ = msg::opcode(message);
+        let Some(session) = self.session.as_mut() else {
+            return Err(Stage::Receive);
+        };
+        match session.seal(typ, tag, handle, exts, &body, now) {
+            Err(_) => Err(Stage::Receive),
+            Ok(packet) => {
+                let mut link = self.link.borrow_mut();
+                link.wire_log.push((Direction::ServerToClient, packet.clone()));
+                link.s2c.extend(packet.iter().copied());
+                Ok(())
+            }
+        }
+    }
+}
+
+/// The client end of one whole sealed session.
+pub struct E2eClient {
+    /// The client's session (negotiated through the real `devmnt` code).
+    pub session: Session,
+    link: Rc<RefCell<AeadLink>>,
+}
+
+impl E2eClient {
+    /// Wrap a finished session and the link it rides.
+    pub fn new(session: Session, link: Rc<RefCell<AeadLink>>) -> E2eClient {
+        E2eClient { session, link }
+    }
+
+    /// Seal one message and put it on the wire.
+    pub fn send(
+        &mut self,
+        typ: u8,
+        tag: u16,
+        handle: [u8; 8],
+        exts: &Exts<'_>,
+        body: &[u8],
+    ) -> core::result::Result<(), Closed> {
+        let now = self.link.borrow().now;
+        let packet = self.session.seal(typ, tag, handle, exts, body, now)?;
+        let mut link = self.link.borrow_mut();
+        link.wire_log.push((Direction::ClientToServer, packet.clone()));
+        link.c2s.extend(packet.iter().copied());
+        Ok(())
+    }
+
+    /// Open one sealed reply without answering it.
+    pub fn recv(&mut self) -> core::result::Result<E2eOpened, Stage> {
+        recv_sealed_frame(&mut self.session, &self.link, false)
+    }
+
+    /// Drive one re-key step and put the returned sealed packets on the wire.
+    pub fn rekey(
+        &mut self,
+        exchange: &mut dyn SessionExchange,
+        incoming: Option<&Msg>,
+        now: u64,
+    ) -> core::result::Result<Vec<Vec<u8>>, Closed> {
+        let packets = self.session.rekey_step(exchange, incoming, now)?;
+        let mut link = self.link.borrow_mut();
+        for packet in &packets {
+            link.wire_log.push((Direction::ClientToServer, packet.clone()));
+            link.c2s.extend(packet.iter().copied());
+        }
+        Ok(packets)
+    }
+}
+
+/// Open one whole sealed frame from `link` (`from_client` chooses the queue).
+fn recv_sealed_frame(
+    session: &mut Session,
+    link: &Rc<RefCell<AeadLink>>,
+    from_client: bool,
+) -> core::result::Result<E2eOpened, Stage> {
+    let now = link.borrow().now;
+    let mut guard = link.borrow_mut();
+    let queue = if from_client { &mut guard.c2s } else { &mut guard.s2c };
+    if queue.len() < 4 {
+        return Err(Stage::Empty);
+    }
+    let mut prefix = [0u8; 4];
+    for (dst, src) in prefix.iter_mut().zip(queue.iter()) {
+        *dst = *src;
+    }
+    let len = session.frame_len(&prefix).map_err(|_| Stage::FrameLen)?;
+    if queue.len() < len {
+        return Err(Stage::Empty);
+    }
+    let mut buf: Vec<u8> = queue.drain(..len).collect();
+    drop(guard);
+    match session.receive(&mut buf, now) {
+        Err(_) => Err(Stage::Receive),
+        Ok(verified) => {
+            let header = *verified.header();
+            let exts = match tlv::parse(header.ext_mask, verified.tlvs()) {
+                Ok(exts) => exts,
+                Err(_) => return Err(Stage::Receive),
+            };
+            let cap = exts.stateless_cap.copied();
+            let body_len = verified.body().len();
+            match msg::decode_body(header.typ, verified.body()) {
+                Err(_) => Err(Stage::Decode),
+                Ok(message) => Ok(E2eOpened {
+                    msg: message,
+                    tag: header.tag,
+                    handle: header.fid_handle,
+                    cap,
+                    body_len,
+                }),
+            }
+        }
+    }
+}
+
+/// Negotiate `9P2000.aead` through the real `devmnt` code and finish both
+/// ends' handshakes, returning the ready client, server and link.
+pub fn connect_aead(
+    secret: Key,
+    client_id: u32,
+) -> (E2eClient, Rc<RefCell<E2eServer>>, Rc<RefCell<AeadLink>>) {
+    connect_aead_with(secret, client_id, config())
+}
+
+/// `connect_aead` with chosen session parameters (the re-key pin's low
+/// threshold).
+pub fn connect_aead_with(
+    secret: Key,
+    client_id: u32,
+    transport: TransportConfig,
+) -> (E2eClient, Rc<RefCell<E2eServer>>, Rc<RefCell<AeadLink>>) {
+    let link = AeadLink::new();
+    let server = E2eServer::new(Rc::clone(&link), secret.clone(), client_id, transport);
+    let io_r: Box<dyn MntIo> = Box::new(ClientLinkIo {
+        link: Rc::clone(&link),
+        server: None,
+    });
+    let io_w: Box<dyn MntIo> = Box::new(ClientLinkIo {
+        link: Rc::clone(&link),
+        server: Some(Rc::clone(&server)),
+    });
+    let negotiated =
+        Mnt::negotiate_dialect(io_r, io_w, 0, Dialect::Aead).expect("the aead offer reaches the engine");
+    let Negotiated::Aead(handoff) = negotiated else {
+        panic!("an aead answer must hand the session to the engine");
+    };
+    let (mut handshake, mut io_r, mut io_w) = handoff.into_handshake(Role::Client, transport);
+
+    // The rest of the plain handshake: Tauth/Rauth, then one afid write/read
+    // round carrying the two ends' opaque exchange bytes (D-16, D-17).
+    plain_step(&mut *io_w, &mut *io_r, &mut handshake, &tauth_frame());
+    plain_step(
+        &mut *io_w,
+        &mut *io_r,
+        &mut handshake,
+        &plain_frame(
+            wire::TWRITE,
+            2,
+            &body_of(&Msg::Twrite {
+                fid: AFID,
+                offset: 0,
+                data: CLIENT_EXCHANGE.to_vec(),
+            }),
+        ),
+    );
+    plain_step(
+        &mut *io_w,
+        &mut *io_r,
+        &mut handshake,
+        &plain_frame(
+            wire::TREAD,
+            3,
+            &body_of(&Msg::Tread {
+                fid: AFID,
+                offset: 0,
+                count: 65536,
+            }),
+        ),
+    );
+
+    let session = handshake.finish(secret);
+    (E2eClient::new(session, Rc::clone(&link)), server, link)
 }
