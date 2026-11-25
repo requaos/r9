@@ -24,3 +24,4 @@ DECISION P5: accepted (2026-11-25)
 DECISION P6: accepted (2026-11-25)
 DECISION P7: accepted (2026-11-25)
 DECISION P8: accepted (2026-11-25)
+DECISION IG-D11: lock-amended (2026-11-25) — locked with the proposed amended wording, no wording changes
