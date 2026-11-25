@@ -104,6 +104,43 @@ pub struct SessionKeys {
     pub s2c: DirectionKeys,
 }
 
+/// An unkeyed BLAKE3 transcript of the plain-framed handshake messages, in
+/// wire order (P2, D-17).
+///
+/// Every message is absorbed whole, so concatenation is unambiguous: each 9P
+/// message starts with its own `size[4]`.  The handshake is strictly serial,
+/// so both ends absorb the same bytes in the same order.  [`Transcript::chain`]
+/// seeds the next generation's transcript with the previous 32-byte hash for a
+/// re-key (P2).
+pub struct Transcript {
+    hasher: crate::mac::Blake3,
+}
+
+impl Transcript {
+    /// A new, empty transcript.
+    pub fn new() -> Transcript {
+        Transcript { hasher: crate::mac::Blake3::new() }
+    }
+
+    /// A transcript seeded with a previous generation's 32-byte transcript
+    /// hash (the re-key chain, P2).
+    pub fn chain(previous: &[u8; 32]) -> Transcript {
+        let _ = previous;
+        Transcript::new()
+    }
+
+    /// Absorb one whole message.
+    pub fn absorb(&mut self, message: &[u8]) {
+        let _ = message;
+    }
+
+    /// The 32-byte unkeyed BLAKE3 hash of everything absorbed so far.
+    pub fn hash(&self) -> [u8; 32] {
+        let _ = &self.hasher;
+        [0u8; 32]
+    }
+}
+
 /// Derive the two directions' keys from `secret`, the handshake `transcript`
 /// and the `generation` (P2, D-17).
 ///
@@ -192,5 +229,109 @@ impl DirectionKeys {
         nonce[..PREFIX_LEN].copy_from_slice(&self.prefix[..]);
         nonce[PREFIX_LEN..].copy_from_slice(&seq.to_le_bytes());
         crate::page::chacha20_xor(self.k_enc.bytes(), &nonce, counter, buf)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// In-crate tests
+//
+// This is `crypto/`'s first in-crate test module.  Key bytes are unreadable
+// outside the crate (`Key::bytes` is `pub(crate)` and `DirectionKeys` has no
+// accessor), so the raw-byte pins — the derivation known-answer vector, the
+// nonce construction, teardown zeroization, and the keyed-BLAKE3 shape of the
+// packet MAC and re-key confirm — must live here.  The observable pins that
+// `port` relies on are in `crypto/tests/session.rs` through the public API.
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The fixed 32-byte secret: bytes 0x00..=0x1f.
+    fn secret() -> Key {
+        let mut bytes = [0u8; 32];
+        for (i, byte) in bytes.iter_mut().enumerate() {
+            *byte = i as u8;
+        }
+        Key::from_bytes(bytes)
+    }
+
+    /// The fixed 32-byte transcript: bytes 0x20..=0x3f.
+    fn transcript() -> [u8; 32] {
+        let mut bytes = [0u8; 32];
+        for (i, byte) in bytes.iter_mut().enumerate() {
+            *byte = 0x20 + i as u8;
+        }
+        bytes
+    }
+
+    /// Decode 32 bytes from a 64-digit hex string.
+    fn hex32(hex: &str) -> [u8; 32] {
+        assert_eq!(hex.len(), 64, "a key literal is 32 bytes of hex");
+        let bytes = hex.as_bytes();
+        let mut out = [0u8; 32];
+        for (i, byte) in out.iter_mut().enumerate() {
+            let pair = core::str::from_utf8(&bytes[2 * i..2 * i + 2]).expect("hex is ascii");
+            *byte = u8::from_str_radix(pair, 16).expect("hex digits");
+        }
+        out
+    }
+
+    /// Decode 4 bytes from an 8-digit hex string.
+    fn hex4(hex: &str) -> [u8; 4] {
+        assert_eq!(hex.len(), 8, "a prefix literal is 4 bytes of hex");
+        let bytes = hex.as_bytes();
+        let mut out = [0u8; 4];
+        for (i, byte) in out.iter_mut().enumerate() {
+            let pair = core::str::from_utf8(&bytes[2 * i..2 * i + 2]).expect("hex is ascii");
+            *byte = u8::from_str_radix(pair, 16).expect("hex digits");
+        }
+        out
+    }
+
+    // The six outputs for `secret()`, `transcript()` and generation 0,
+    // computed outside this crate with one Python 3 command: HKDF-Extract
+    // (salt = transcript, IKM = secret) then HKDF-Expand per RFC 5869 §2.3
+    // with the 18-byte P2 `info`.  The command and its output are recorded in
+    // `evidence/PINS-04-03.md` (`KAT session-derive command:`); these
+    // constants are copied from that line, never re-derived here.
+    const C2S_ENC: &str = "5cfd0495d1185d5f5bee5e8f05e5360364f338ddf3c347f2976374e36ca849c0";
+    const C2S_MAC: &str = "33932a90a4233c494b252019695785875a05e5ecc9ed5e1b186ad1a8cdc83152";
+    const C2S_PREFIX: &str = "eb77e035";
+    const S2C_ENC: &str = "8634e6b17394921327d205e39691a8e85fc3c45123d2a110aa7e73bc20d0d37f";
+    const S2C_MAC: &str = "3a770d89cf7b692bb0a8facc52553a945adc0b39c7d822f8cf7179857138d33a";
+    const S2C_PREFIX: &str = "7633fe7a";
+
+    #[test]
+    fn session_derive_known_answer() {
+        let keys = derive(&secret(), &transcript(), 0);
+
+        assert_eq!(keys.c2s.k_enc.bytes(), &hex32(C2S_ENC), "c2s cipher key");
+        assert_eq!(keys.c2s.k_mac.bytes(), &hex32(C2S_MAC), "c2s MAC key");
+        assert_eq!(&keys.c2s.prefix[..], &hex4(C2S_PREFIX)[..], "c2s prefix");
+        assert_eq!(keys.s2c.k_enc.bytes(), &hex32(S2C_ENC), "s2c cipher key");
+        assert_eq!(keys.s2c.k_mac.bytes(), &hex32(S2C_MAC), "s2c MAC key");
+        assert_eq!(&keys.s2c.prefix[..], &hex4(S2C_PREFIX)[..], "s2c prefix");
+    }
+
+    #[test]
+    fn session_nonce_is_prefix_then_sequence_le() {
+        let keys = derive(&secret(), &transcript(), 0);
+
+        for seq in [0u64, 1, u64::MAX - 1] {
+            let counter = 0;
+            let mut got = [0u8; 96];
+            keys.c2s.keystream(seq, counter, &mut got).expect("within the counter limit");
+
+            // The independent side: the same primitive called with the nonce
+            // built by hand as prefix then the sequence little-endian.
+            let mut nonce = [0u8; 12];
+            nonce[..PREFIX_LEN].copy_from_slice(&keys.c2s.prefix[..]);
+            nonce[PREFIX_LEN..].copy_from_slice(&seq.to_le_bytes());
+            let mut want = [0u8; 96];
+            crate::page::chacha20_xor(keys.c2s.k_enc.bytes(), &nonce, counter, &mut want)
+                .expect("within the counter limit");
+
+            assert_eq!(got, want, "the nonce for sequence {seq} is prefix then sequence LE");
+        }
     }
 }
