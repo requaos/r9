@@ -580,11 +580,13 @@ impl<P: Probe + Clone> FidTable<P> {
     ///
     /// The entry's `client_id`, `epoch` and [`FID_LIVE`] flag are set here; the
     /// key is `(client_id, fid_key)`.  Client id 0 is reserved for the cleared
-    /// arena slot and is refused before any shard is touched (WR-04).  The
-    /// insert starts at the key's home shard ([`Self::home_shard`]) and walks
-    /// forward on `HomeFull`, so a key whose home block is full lands in the
-    /// next shard and its handle records that shard's index.  Every shard full
-    /// is an error.
+    /// arena slot and is refused before any shard is touched (WR-04).  The key
+    /// is unique across the whole table: every shard is probed for it before
+    /// the placement walk, because an earlier insert of the same key may have
+    /// fallen over to any of them (WR-09).  The insert then starts at the key's
+    /// home shard ([`Self::home_shard`]) and walks forward on `HomeFull`, so a
+    /// key whose home block is full lands in the next shard and its handle
+    /// records that shard's index.  Every shard full is an error.
     pub fn insert(&self, client_id: u32, mut entry: FidEntry) -> crate::Result<StatefulHandle> {
         if client_id == 0 {
             return Err(
@@ -600,13 +602,24 @@ impl<P: Probe + Clone> FidTable<P> {
         let words = entry.to_words();
         let shard_count = self.shards.len();
         let start = self.home_shard(client_id, fid_key) as usize;
+        let same = |value: &[u64; FID_ENTRY_WORDS]| {
+            let existing = FidEntry::from_words(value);
+            existing.fid_key == fid_key && existing.client_id == client_id
+        };
+        // The key is unique across the whole table: probe every shard before
+        // placing, because an earlier insert may have fallen over to any of
+        // them (WR-09).  This costs one lookup per shard on the insert path
+        // only; `resolve` is not touched.
+        for shard in self.shards.iter() {
+            if shard.tpht.lookup(key, same).is_some() {
+                return Err(
+                    "fid: an entry for this client and fid is already present in the table",
+                );
+            }
+        }
         for offset in 0..shard_count {
             let index = (start + offset) % shard_count;
             let shard = &self.shards[index];
-            let same = |value: &[u64; FID_ENTRY_WORDS]| {
-                let existing = FidEntry::from_words(value);
-                existing.fid_key == fid_key && existing.client_id == client_id
-            };
             match shard.tpht.insert(key, words, same) {
                 Ok(Some(ptr)) => {
                     let slot = shard.tpht.slot_id(key, ptr);
