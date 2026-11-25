@@ -156,7 +156,7 @@ The gap fixes did move the Mac debug ELFs — `q35churnshell` went `c850fb64…7
 
 ## What is still unpushed
 
-- Local `main` is exactly **one commit** ahead of `origin/main`: `4d420c9` (the `stop2-main-push` verdict commit). Nothing else.
+- Local `main` is ahead of `origin/main` only by this plan's close-out commits — the `stop2-main-push: PASS` verdict commit `4d420c9`, this SUMMARY, and the tracking commits that follow it. All are docs/evidence only; no source and no `flake.nix` change.
 - `origin/phase-04/aead-wire-gaps` (`194c71d`) and `origin/phase-04/aead-wire` (`405984d`) are on the remote. The owner can delete the transport branches now that `main` carries the gated state.
 
 ## Task Commits
