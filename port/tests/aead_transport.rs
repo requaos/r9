@@ -1151,6 +1151,87 @@ fn drive_exchange(
     let _ = link;
 }
 
+/// Run the in-band exchange only as far as the client's `Twrite`: the client
+/// has taken `Rauth`, its seam has returned `Done` (it holds the exchange
+/// secret), `finish_exchange` has not run, and its sealed `Twrite` is on the
+/// wire (plan 04-18's mid-exchange fixture).
+fn drive_exchange_to_client_twrite(
+    link: &std::rc::Rc<std::cell::RefCell<AeadLink>>,
+    client: &mut ClientEnd,
+    server: &mut ServerEnd,
+    ce: &mut dyn port::chan::transport::SessionExchange,
+    se: &mut dyn port::chan::transport::SessionExchange,
+    now: u64,
+) {
+    let started = client.rekey(ce, None, now).expect("the client starts the exchange");
+    assert_eq!(started.len(), 1, "the client sends Tauth sealed");
+
+    let msg = server.recv().expect("the server opens the sealed Tauth");
+    assert!(matches!(msg, Msg::Tauth { .. }), "the exchange starts with Tauth");
+    let rauth = server.rekey(se, Some(&msg), now).expect("the server answers Rauth");
+    assert_eq!(rauth.len(), 1);
+
+    let msg = client.recv().expect("the client opens the sealed Rauth");
+    assert!(matches!(msg, Msg::Rauth { .. }));
+    let twrite = client.rekey(ce, Some(&msg), now).expect("the client sends Twrite");
+    assert_eq!(twrite.len(), 1);
+    let _ = link;
+}
+
+/// Run the in-band exchange to the point where the server has taken the
+/// client's `Twrite` and answered `Rwrite`: the server holds the exchange
+/// secret and the seam's output bytes for the coming `Rread` (plan 04-18).
+fn drive_exchange_to_server_rwrite(
+    link: &std::rc::Rc<std::cell::RefCell<AeadLink>>,
+    client: &mut ClientEnd,
+    server: &mut ServerEnd,
+    ce: &mut dyn port::chan::transport::SessionExchange,
+    se: &mut dyn port::chan::transport::SessionExchange,
+    now: u64,
+) {
+    drive_exchange_to_client_twrite(link, client, server, ce, se, now);
+    let msg = server.recv().expect("the server opens the sealed Twrite");
+    assert!(matches!(msg, Msg::Twrite { .. }));
+    let rwrite = server.rekey(se, Some(&msg), now).expect("the server answers Rwrite");
+    assert_eq!(rwrite.len(), 1);
+}
+
+/// One client-to-server D-20 cutover: the client sends its marker, the server
+/// cuts its receive direction over and answers, and the client accepts the ACK
+/// (plan 04-18).
+fn client_cutover(
+    client: &mut ClientEnd,
+    server: &mut ServerEnd,
+    ce: &mut dyn port::chan::transport::SessionExchange,
+    se: &mut dyn port::chan::transport::SessionExchange,
+    now: u64,
+) {
+    let marker = client.rekey(ce, None, now).expect("the client sends its c2s marker");
+    assert_eq!(marker.len(), 1, "one c2s marker packet");
+    let msg = server.recv().expect("the server opens the c2s marker");
+    let ack = server.rekey(se, Some(&msg), now).expect("the server cuts its receive direction over");
+    assert_eq!(ack.len(), 1, "the server answers the c2s marker with one ACK");
+    let ack = client.recv().expect("the client opens the c2s ACK");
+    client.rekey(ce, Some(&ack), now).expect("the client accepts the c2s ACK");
+}
+
+/// One server-to-client D-20 cutover, the mirror of [`client_cutover`].
+fn server_cutover(
+    client: &mut ClientEnd,
+    server: &mut ServerEnd,
+    ce: &mut dyn port::chan::transport::SessionExchange,
+    se: &mut dyn port::chan::transport::SessionExchange,
+    now: u64,
+) {
+    let marker = server.rekey(se, None, now).expect("the server sends its s2c marker");
+    assert_eq!(marker.len(), 1, "one s2c marker packet");
+    let msg = client.recv().expect("the client opens the s2c marker");
+    let ack = client.rekey(ce, Some(&msg), now).expect("the client cuts its receive direction over");
+    assert_eq!(ack.len(), 1, "the client answers the s2c marker with one ACK");
+    let ack = server.recv().expect("the server opens the s2c ACK");
+    server.rekey(se, Some(&ack), now).expect("the server accepts the s2c ACK");
+}
+
 /// An exchange pair with the handshake secret first and the re-key secret
 /// second, sharing the default handshake payloads.
 fn rekey_seams(
@@ -1192,6 +1273,315 @@ fn aead_transport_rekey_fires_at_threshold() {
     );
     assert_eq!(ce.runs(), 2, "the exchange seam ran a second time for the re-key");
     assert_eq!(se.runs(), 2, "the exchange seam ran a second time at the server");
+}
+
+#[test]
+fn aead_transport_rekey_failure_mid_exchange_zeroizes_exchange_secret() {
+    let link = AeadLink::new();
+    let (mut ce, mut se) = rekey_seams(secret(), second_secret());
+    let (mut client, mut server) = connect_with_kept_config(
+        link.clone(),
+        &mut ce,
+        &mut se,
+        config_with_rekey(4, 5000),
+    );
+    assert!(
+        client.session.exchange_secret_zeroized(),
+        "a session with no exchange in progress holds no exchange secret"
+    );
+
+    for i in 0..4u16 {
+        client
+            .send(wire::TCLUNK, i, [0u8; 8], &Exts::default(), &clunk_body())
+            .expect("the client seals a threshold packet");
+        assert!(server.recv().is_ok());
+    }
+    assert!(client.session.rekey_due(), "the fourth sealed packet makes a re-key due");
+
+    // Stop between the seam returning `Done` and `finish_exchange`.
+    drive_exchange_to_client_twrite(&link, &mut client, &mut server, &mut ce, &mut se, 0);
+    assert!(
+        !client.session.exchange_secret_zeroized(),
+        "the client holds the exchange secret between Done and finish_exchange"
+    );
+
+    // A packet with one flipped byte: its open fails at the client.
+    server
+        .send(wire::RCLUNK, 90, [0u8; 8], &Exts::default(), &[])
+        .expect("the server seals a packet to tamper with");
+    {
+        let mut guard = link.borrow_mut();
+        let last = guard.s2c.len() - 1;
+        guard.s2c[last] ^= 0xFF;
+    }
+    assert!(client.recv().is_err(), "the tampered packet is refused");
+    assert!(client.session.is_closed(), "the failed open closes the client");
+    assert!(client.session.keys_zeroized(), "the failed open zeroizes every key");
+    assert!(
+        client.session.exchange_secret_zeroized(),
+        "the failed open scrubs the exchange secret"
+    );
+}
+
+#[test]
+fn aead_transport_rekey_teardown_mid_exchange_zeroizes_exchange_secret() {
+    let link = AeadLink::new();
+    // `rekey_seams` gives both seams a non-empty payload, so the server's seam
+    // output buffer holds bytes when it answers `Rwrite`.
+    let (mut ce, mut se) = rekey_seams(secret(), second_secret());
+    let (mut client, mut server) = connect_with_kept_config(
+        link.clone(),
+        &mut ce,
+        &mut se,
+        config_with_rekey(4, 5000),
+    );
+    for i in 0..4u16 {
+        client
+            .send(wire::TCLUNK, i, [0u8; 8], &Exts::default(), &clunk_body())
+            .expect("the client seals a threshold packet");
+        assert!(server.recv().is_ok());
+    }
+
+    drive_exchange_to_server_rwrite(&link, &mut client, &mut server, &mut ce, &mut se, 0);
+    assert!(
+        !server.session.exchange_secret_zeroized(),
+        "the server holds the exchange secret and the seam's output"
+    );
+
+    server.session.teardown();
+    assert!(server.session.is_closed(), "teardown closes the server");
+    assert!(server.session.keys_zeroized(), "teardown zeroizes every key");
+    assert!(
+        server.session.exchange_secret_zeroized(),
+        "teardown scrubs the exchange secret and the seam's output"
+    );
+}
+
+#[test]
+fn aead_transport_rekey_second_threshold_starts_a_second_exchange() {
+    let link = AeadLink::new();
+    let (mut ce, mut se) = rekey_seams(secret(), second_secret());
+    let (mut client, mut server) = connect_with_kept_config(
+        link.clone(),
+        &mut ce,
+        &mut se,
+        config_with_rekey(4, 5000),
+    );
+    for i in 0..4u16 {
+        client
+            .send(wire::TCLUNK, i, [0u8; 8], &Exts::default(), &clunk_body())
+            .expect("the client seals a threshold packet");
+        assert!(server.recv().is_ok());
+    }
+
+    // One complete re-key: the exchange, both markers and both acknowledgements.
+    drive_exchange(&link, &mut client, &mut server, &mut ce, &mut se, 0);
+    client_cutover(&mut client, &mut server, &mut ce, &mut se, 0);
+    server_cutover(&mut client, &mut server, &mut ce, &mut se, 0);
+
+    assert!(!client.session.rekey_due(), "the client is idle after the first complete re-key");
+    assert!(!server.session.rekey_due(), "the server is idle after the first complete re-key");
+
+    for i in 0..4u16 {
+        client
+            .send(wire::TCLUNK, 100 + i, [0u8; 8], &Exts::default(), &clunk_body())
+            .expect("the client seals another threshold packet");
+        assert!(server.recv().is_ok());
+    }
+    assert!(client.session.rekey_due(), "the counter reaches the threshold once more");
+
+    drive_exchange(&link, &mut client, &mut server, &mut ce, &mut se, 0);
+    assert_eq!(ce.runs(), 3, "the client's seam ran the handshake and two re-keys");
+
+    client_cutover(&mut client, &mut server, &mut ce, &mut se, 0);
+    server_cutover(&mut client, &mut server, &mut ce, &mut se, 0);
+
+    client
+        .send(wire::TCLUNK, 200, [0u8; 8], &Exts::default(), &clunk_body())
+        .expect("the client seals a packet after the second cutover");
+    assert!(server.recv().is_ok(), "the packet after the second cutover opens at the server");
+}
+
+#[test]
+fn aead_transport_rekey_server_requests_again_after_first_rekey() {
+    let link = AeadLink::new();
+    let (mut ce, mut se) = rekey_seams(secret(), second_secret());
+    let (mut client, mut server) = connect_with_kept_config(
+        link.clone(),
+        &mut ce,
+        &mut se,
+        config_with_rekey(4, 5000),
+    );
+
+    // The server reaches the threshold first and asks for an exchange.
+    for i in 0..4u16 {
+        server
+            .send(wire::RCLUNK, i, [0u8; 8], &Exts::default(), &[])
+            .expect("the server seals a threshold packet");
+        assert!(client.recv().is_ok());
+    }
+    assert!(server.session.rekey_due(), "the server reaches the threshold first");
+    let request = server.rekey(&mut se, None, 0).expect("the server asks for a re-key");
+    assert_eq!(request.len(), 1, "the server sends one REQUEST packet");
+    let msg = client.recv().expect("the client opens the REQUEST");
+    let tauth = client.rekey(&mut ce, Some(&msg), 0).expect("the client starts the exchange");
+    assert_eq!(tauth.len(), 1, "the client answers the REQUEST with Tauth");
+
+    // Finish that exchange by hand, then both markers and acknowledgements.
+    let msg = server.recv().expect("the server opens the Tauth");
+    let rauth = server.rekey(&mut se, Some(&msg), 0).expect("the server answers Rauth");
+    assert_eq!(rauth.len(), 1);
+    let msg = client.recv().expect("the client opens the Rauth");
+    let twrite = client.rekey(&mut ce, Some(&msg), 0).expect("the client sends Twrite");
+    assert_eq!(twrite.len(), 1);
+    let msg = server.recv().expect("the server opens the Twrite");
+    let rwrite = server.rekey(&mut se, Some(&msg), 0).expect("the server answers Rwrite");
+    assert_eq!(rwrite.len(), 1);
+    let msg = client.recv().expect("the client opens the Rwrite");
+    let tread = client.rekey(&mut ce, Some(&msg), 0).expect("the client sends Tread");
+    assert_eq!(tread.len(), 1);
+    let msg = server.recv().expect("the server opens the Tread");
+    let rread = server.rekey(&mut se, Some(&msg), 0).expect("the server answers Rread");
+    assert_eq!(rread.len(), 1);
+    let msg = client.recv().expect("the client opens the Rread");
+    let done = client.rekey(&mut ce, Some(&msg), 0).expect("the client derives the next keys");
+    assert!(done.is_empty(), "deriving keys sends nothing by itself");
+
+    client_cutover(&mut client, &mut server, &mut ce, &mut se, 0);
+    server_cutover(&mut client, &mut server, &mut ce, &mut se, 0);
+
+    // The server's counter reaches the threshold again: it asks again.
+    for i in 0..4u16 {
+        server
+            .send(wire::RCLUNK, 50 + i, [0u8; 8], &Exts::default(), &[])
+            .expect("the server seals another threshold packet");
+        assert!(client.recv().is_ok());
+    }
+    assert!(server.session.rekey_due(), "the server reaches the threshold once more");
+    let request = server.rekey(&mut se, None, 0).expect("the server asks for a second re-key");
+    assert_eq!(request.len(), 1, "the server sends a second REQUEST");
+    let second_request = client.recv().expect("the client opens the second REQUEST");
+    match &second_request {
+        Msg::Rrekey { kind, .. } => assert_eq!(*kind, msg::REKEY_REQUEST, "the kind is REQUEST"),
+        other => panic!("the server sent {other:?}, not a REQUEST"),
+    }
+    let tauth = client
+        .rekey(&mut ce, Some(&second_request), 0)
+        .expect("the client starts a second exchange");
+    assert_eq!(tauth.len(), 1, "the client answers the second REQUEST with Tauth");
+}
+
+#[test]
+fn aead_transport_rekey_exchange_start_with_pending_keys_closes() {
+    let link = AeadLink::new();
+    let (mut ce, mut se) = rekey_seams(secret(), second_secret());
+    let (mut client, mut server) = connect_with_kept_config(
+        link.clone(),
+        &mut ce,
+        &mut se,
+        config_with_rekey(4, 5000),
+    );
+    for i in 0..4u16 {
+        client
+            .send(wire::TCLUNK, i, [0u8; 8], &Exts::default(), &clunk_body())
+            .expect("the client seals a threshold packet");
+        assert!(server.recv().is_ok());
+    }
+    drive_exchange(&link, &mut client, &mut server, &mut ce, &mut se, 0);
+
+    // The server's own direction cuts over first; the client's marker has not
+    // arrived, so the server still holds the c2s pending keys when it accepts
+    // the s2c acknowledgement and returns to idle.
+    server_cutover(&mut client, &mut server, &mut ce, &mut se, 0);
+
+    // A second exchange `Tauth` arriving while those pending keys are held
+    // must close the server, not be absorbed.
+    client
+        .send(
+            wire::TAUTH,
+            300,
+            [0u8; 8],
+            &Exts::default(),
+            &body_of(&Msg::Tauth {
+                afid: common::aead_link::AFID,
+                uname: b"none".to_vec(),
+                aname: Vec::new(),
+            }),
+        )
+        .expect("the client seals a Tauth for the pending-keys case");
+    let msg = server.recv().expect("the server opens the stray Tauth");
+    assert!(
+        server.rekey(&mut se, Some(&msg), 0).is_err(),
+        "a Tauth while the previous generation's pending keys are held closes the server"
+    );
+    assert!(server.session.is_closed(), "the server is closed");
+    assert!(server.session.keys_zeroized(), "the server's keys are zeroized");
+}
+
+#[test]
+fn aead_transport_send_order_ack_deadline_closes() {
+    let link = AeadLink::new();
+    let (mut client, mut server, mut ce, mut se) = connected_after_exchange(&link);
+    link.borrow_mut().withhold_rekey_ack = true;
+
+    // The marker goes out at now = T; the server builds the ACK, the link
+    // withholds it.
+    let t = 1_000u64;
+    let marker = client.rekey(&mut ce, None, t).expect("the client sends its marker");
+    assert_eq!(marker.len(), 1);
+    let msg = server.recv().expect("the server opens the marker");
+    let withheld = server.rekey(&mut se, Some(&msg), t).expect("the server builds its ACK");
+    assert_eq!(withheld.len(), 1);
+
+    let sink = Arc::new(Mutex::new(Vec::new()));
+    let mut io = SinkIo(Arc::clone(&sink));
+    client
+        .session
+        .send_half()
+        .send(
+            &mut io,
+            wire::TCLUNK,
+            301,
+            [0u8; 8],
+            &Exts::default(),
+            &clunk_body(),
+            t + 5000 - 1,
+        )
+        .expect("one millisecond before the deadline the send half writes a packet");
+    let written = sink.lock().expect("the sink is not poisoned").len();
+    assert!(written > 0, "one whole packet reached the sink");
+
+    assert!(
+        client
+            .session
+            .send_half()
+            .send(
+                &mut io,
+                wire::TCLUNK,
+                302,
+                [0u8; 8],
+                &Exts::default(),
+                &clunk_body(),
+                t + 5000,
+            )
+            .is_err(),
+        "at the deadline the send half returns Err(Closed)"
+    );
+    assert_eq!(
+        sink.lock().expect("the sink is not poisoned").len(),
+        written,
+        "nothing more reaches the sink at the deadline"
+    );
+    assert!(client.session.is_closed(), "the send half's deadline closes the session");
+
+    assert!(
+        client.session.poll(t + 5000).is_err(),
+        "the next poll at the deadline returns Err(Closed)"
+    );
+    assert!(
+        client.session.keys_zeroized(),
+        "the session completes the zeroization of a self-closed half"
+    );
 }
 
 #[test]
@@ -2088,5 +2478,73 @@ fn aead_transport_tracer_rejects_tampering() {
         port::chan::open_packet(&keys.c2s, 1, 8192, &packet).is_err(),
         "a packet whose sequence is not the expected next value is refused"
     );
+}
+
+#[test]
+fn aead_transport_tracer_data_body_uses_session_keystream_placement() {
+    let keys = session::derive(&secret(), &transcript(), 0);
+
+    // A Twrite body: 16 parameter bytes then one 4096-byte page of known
+    // plaintext (P5).
+    let fid: u32 = 0x0102_0304;
+    let offset: u64 = 0x0506_0708_090A_0B0C;
+    let page: Vec<u8> = (0..PAGE_LEN).map(|i| (i % 251) as u8).collect();
+    let mut body = Vec::new();
+    body.extend_from_slice(&fid.to_le_bytes());
+    body.extend_from_slice(&offset.to_le_bytes());
+    body.extend_from_slice(&(PAGE_LEN as u32).to_le_bytes());
+    body.extend_from_slice(&page);
+
+    let packet = port::chan::seal_packet(&keys.c2s, 0, wire::TWRITE, 0x4001, [0u8; 8], &body)
+        .expect("the client seals a one-page Twrite body");
+
+    // The page's ciphertext on the wire, at its literal block counter 1.
+    let page_start = port::chan::HEADER_LEN + 16;
+    let page_end = packet.len() - port::chan::MAC_LEN;
+    assert_eq!(page_end - page_start, PAGE_LEN, "one data page follows the parameters");
+    let mut got = packet[page_start..page_end].to_vec();
+    keys.c2s
+        .keystream(0, 1, &mut got)
+        .expect("the page's counter is in range");
+    assert_eq!(got, page, "the data page decrypts alone at block counter 1");
+
+    // The same bytes are not the continuation of a counter-0 stream.
+    let mut wrong = packet[page_start..page_end].to_vec();
+    keys.c2s
+        .keystream(0, 0, &mut wrong)
+        .expect("counter 0 is in range");
+    assert_ne!(
+        wrong, page,
+        "the data page is not the continuation of a counter-0 keystream"
+    );
+
+    let (typ, tag, handle, opened) =
+        port::chan::open_packet(&keys.c2s, 0, 8192, &packet).expect("the helper opens its packet");
+    assert_eq!(typ, wire::TWRITE, "the opened type is the sealed type");
+    assert_eq!(tag, 0x4001, "the opened tag is the sealed tag");
+    assert_eq!(handle, [0u8; 8], "the opened handle is the sealed handle");
+    assert_eq!(opened, body, "open_packet returns the original body");
+}
+
+#[test]
+fn aead_transport_tracer_non_data_body_is_one_stream_from_counter_zero() {
+    let keys = session::derive(&secret(), &transcript(), 0);
+
+    for len in [64usize, 65] {
+        let body: Vec<u8> = (0..len).map(|i| (i % 197) as u8).collect();
+        let packet = port::chan::seal_packet(&keys.c2s, 0, wire::TCLUNK, 0x4002, [0u8; 8], &body)
+            .expect("the client seals a non-data body");
+
+        // One continuous keystream from block counter 0 over the whole body.
+        let mut got = packet[port::chan::HEADER_LEN..packet.len() - port::chan::MAC_LEN].to_vec();
+        keys.c2s
+            .keystream(0, 0, &mut got)
+            .expect("the non-data body is within the counter limit");
+        assert_eq!(got, body, "a {len}-byte non-data body is one counter-0 stream");
+
+        let (_, _, _, opened) =
+            port::chan::open_packet(&keys.c2s, 0, 8192, &packet).expect("the helper opens its packet");
+        assert_eq!(opened, body, "open_packet returns the {len}-byte body");
+    }
 }
 

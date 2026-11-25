@@ -39,12 +39,16 @@
 //! through the one `fail()` path and every key is zeroized, and the packet is
 //! never handed to the handler.
 //!
-//! # What is not here yet
+//! # In-band re-keying (WIRE-04, D-18 to D-21)
 //!
-//! Re-keying is plan 04-08; its timing needs `now`, and this plan threads that
-//! argument through without reading it.  A connection owner must call a
-//! periodic `poll(now)` once one exists; nothing in the kernel drives a
-//! session this phase (D-22).
+//! Either end starts a fresh `Tauth` exchange in band when its send counter
+//! reaches `rekey_after_packets`; the exchange derives generation `g + 1` and
+//! each direction cuts over under its own marker and acknowledgement, with an
+//! acknowledgement deadline the caller's `now` drives.  A sender that would
+//! reach `SEQ_HARD_LIMIT` with no new keys closes instead of wrapping.  A
+//! connection owner must call `poll(now)` periodically so a withheld
+//! acknowledgement closes the session; nothing in the kernel drives a session
+//! this phase (D-22).
 
 use alloc::vec::Vec;
 
@@ -165,9 +169,23 @@ impl Rekey {
         }
     }
 
-    /// Zeroize every key the re-key state holds, leaving the values in place
-    /// so `keys_zeroized` can read them.
+    /// Zeroize every key the re-key state holds: the exchange secret, the
+    /// seam's output buffer, the in-progress transcript and the superseded and
+    /// pending key slots.
+    ///
+    /// The values that stay in their slots are zeroed in place so
+    /// `keys_zeroized` can read them; the exchange secret is dropped (its
+    /// `Key` is `Zeroizing`) and the seam's buffer is zero-filled and cleared
+    /// (CR-01).
     fn fail(&mut self) {
+        // Drop (not just overwrite) the exchange secret: `Key` is
+        // `Zeroizing`, so assigning `None` zeroes it on drop.
+        self.secret = None;
+        for byte in self.out.iter_mut() {
+            *byte = 0;
+        }
+        self.out.clear();
+        self.transcript = None;
         if let Some(keys) = &mut self.recv_superseded {
             keys.zeroize();
         }
@@ -177,8 +195,14 @@ impl Rekey {
     }
 
     /// Whether every key the re-key state holds is zero.
+    ///
+    /// Covers the exchange secret (absent, not merely overwritten) and every
+    /// byte of the seam's output buffer, beside the superseded and pending key
+    /// slots (CR-01).
     fn keys_zeroized(&self) -> bool {
-        self.recv_superseded.as_ref().is_none_or(DirectionKeys::is_zeroized)
+        self.secret.is_none()
+            && self.out.iter().all(|&byte| byte == 0)
+            && self.recv_superseded.as_ref().is_none_or(DirectionKeys::is_zeroized)
             && self.pending.iter().all(|slot| slot.as_ref().is_none_or(DirectionKeys::is_zeroized))
     }
 
@@ -308,7 +332,10 @@ impl SendHalf {
     ///
     /// A closed session writes nothing and returns [`Closed`].  A write that
     /// does not land whole closes the direction: a sequence number consumed by
-    /// a packet the peer never saw would desynchronise the stream.
+    /// a packet the peer never saw would desynchronise the stream.  When a
+    /// re-key acknowledgement deadline is outstanding and `now` has reached
+    /// it, this closes the direction without writing; like [`Session::poll`],
+    /// a deadline only fires when something calls in (F4, WR-02).
     #[allow(clippy::too_many_arguments)]
     pub fn send(
         &self,
@@ -320,13 +347,20 @@ impl SendHalf {
         body: &[u8],
         now: u64,
     ) -> core::result::Result<(), Closed> {
-        // Re-key timing (D-19) is plan 04-08's; this plan threads `now` only.
-        let _ = now;
         if !self.authenticated {
             return Err(Closed);
         }
         let node = LockNode::new();
         let mut state = self.state.lock(&node);
+        // The deadline check sits inside the send lock, before sealing, so a
+        // withheld acknowledgement writes nothing (D-20 step 4, WR-02).
+        if state.closed {
+            return Err(Closed);
+        }
+        if state.deadline.is_some_and(|deadline| now >= deadline) {
+            state.fail();
+            return Err(Closed);
+        }
         let seq = state.seq;
         let packet = seal_into(&mut state, self.msize, seq, typ, tag, fid_handle, exts, body)?;
         // The seal, the write and the advance all sit inside this one lock
@@ -712,7 +746,13 @@ impl Session {
         body: &[u8],
         now: u64,
     ) -> core::result::Result<Vec<u8>, Closed> {
-        if !self.authenticated || self.send.is_closed() {
+        if !self.authenticated {
+            return Err(Closed);
+        }
+        if self.send.is_closed() {
+            // The send half can close on its own (a deadline, a failed write),
+            // so the session finishes the zeroization it cannot do (WR-02).
+            self.fail();
             return Err(Closed);
         }
         // A re-key acknowledgement that never arrived closes the connection on
@@ -751,7 +791,13 @@ impl Session {
         packet: Unverified<'a>,
         now: u64,
     ) -> core::result::Result<Verified<'a>, Closed> {
-        if !self.authenticated || self.send.is_closed() {
+        if !self.authenticated {
+            return Err(Closed);
+        }
+        if self.send.is_closed() {
+            // The session finishes the zeroization of a self-closed send half
+            // (WR-02).
+            self.fail();
             return Err(Closed);
         }
         // A missing acknowledgement closes the connection on the next receive
@@ -880,9 +926,9 @@ impl Session {
     ///
     /// Both directions' keys (the send and receive slots) are overwritten with
     /// zeros, both counters are zeroed, and the closed flag is set.  The
-    /// zeroized values stay in their slots, so `keys_zeroized` has something
-    /// to read.  Plan 04-08's pending and superseded key slots join this call;
-    /// they do not exist yet.
+    /// re-key state's pending and superseded keys, the exchange secret and the
+    /// seam's output buffer join the same call.  The zeroized values stay in
+    /// their slots, so `keys_zeroized` has something to read.
     fn fail(&mut self) {
         // The send keys sit behind the per-direction lock, so this reaches
         // them through it; the receive keys are single-reader and are
@@ -906,6 +952,8 @@ impl Session {
 
     /// Whether every key this session holds is zero.
     ///
+    /// Covers both directions' keys, the re-key state's pending and
+    /// superseded slots, the exchange secret and the seam's output buffer.
     /// Computed from the key storage, never from the closed flag, so a
     /// `fail()` or `teardown()` that set the flag without zeroizing answers
     /// `false`.  It reveals no key material, only `true` or `false`, and
@@ -915,13 +963,33 @@ impl Session {
         self.send.keys_zeroized() && self.recv_keys.is_zeroized() && self.rekey.keys_zeroized()
     }
 
+    /// Whether the in-band exchange secret and the seam's output buffer are
+    /// zero.
+    ///
+    /// True exactly when the re-key state holds no exchange secret and every
+    /// byte of the seam's output buffer is zero. Computed from that storage,
+    /// never from a flag, so a failure path that skipped the scrub answers
+    /// `false` (CR-01, WIRE-03). It reveals no key material, only `true` or
+    /// `false` (WIRE-05 prohibition).
+    pub fn exchange_secret_zeroized(&self) -> bool {
+        self.rekey.secret.is_none() && self.rekey.out.iter().all(|&byte| byte == 0)
+    }
+
     /// Whether a re-key is due: the send counter has reached the configured
     /// threshold and none is running or waiting to be acknowledged (D-19).
+    ///
+    /// The state is idle exactly when no exchange is running, no derived keys
+    /// are waiting for a marker, no request is outstanding, both pending slots
+    /// are empty and no acknowledgement deadline is outstanding; a later
+    /// threshold crossing then starts another exchange (WR-01).
     pub fn rekey_due(&self) -> bool {
         !self.send.is_closed()
             && !self.rekey.active
             && !self.rekey.ready
             && !self.rekey.request_sent
+            && self.rekey.pending[0].is_none()
+            && self.rekey.pending[1].is_none()
+            && self.send.deadline().is_none()
             && self.send.seq_reached(self.config.rekey_after_packets)
     }
 
@@ -962,7 +1030,13 @@ impl Session {
         incoming: Option<&msg::Msg>,
         now: u64,
     ) -> core::result::Result<Vec<Vec<u8>>, Closed> {
-        if !self.authenticated || self.send.is_closed() {
+        if !self.authenticated {
+            return Err(Closed);
+        }
+        if self.send.is_closed() {
+            // The session finishes the zeroization of a self-closed send half
+            // (WR-02).
+            self.fail();
             return Err(Closed);
         }
         if self.deadline_expired(now) {
@@ -1158,7 +1232,8 @@ impl Session {
     }
 
     /// Verify an acknowledgement: generation, then the confirm value under the
-    /// new send keys; a valid one zeroizes the old keys (D-20 step 3).
+    /// new send keys; a valid one zeroizes the old keys and returns this end's
+    /// own-direction state to idle (D-20 step 3, WR-01).
     fn handle_ack(
         &mut self,
         generation: u32,
@@ -1176,6 +1251,15 @@ impl Session {
         }
         self.send.zeroize_superseded();
         self.send.clear_deadline();
+        // This direction's cutover is complete: return to idle so a later
+        // threshold crossing starts another exchange (WR-01). A pending slot
+        // of the other direction may still be held until the peer's marker
+        // arrives; `rekey_due` and the `Tauth` arm guard against overlapping.
+        self.rekey.ready = false;
+        self.rekey.own_marker_sent = false;
+        self.rekey.request_sent = false;
+        self.rekey.active = false;
+        self.rekey.phase = ExPhase::Idle;
         Ok(())
     }
 
@@ -1352,6 +1436,13 @@ impl Session {
     ) -> core::result::Result<(), Closed> {
         match (self.rekey.phase, message) {
             (ExPhase::Idle, msg::Msg::Tauth { .. }) => {
+                // A previous generation's pending keys must be fully taken
+                // before another exchange starts: two generations in flight for
+                // one direction is the overlap D-20 forbids (WR-01).
+                if self.rekey.pending[0].is_some() || self.rekey.pending[1].is_some() {
+                    self.fail();
+                    return Err(Closed);
+                }
                 self.rekey.start(&self.transcript);
                 self.absorb_exchange_incoming(wire::TAUTH, REKEY_AUTH_TAG, message)?;
                 let rauth = msg::Msg::Rauth {
@@ -1432,7 +1523,13 @@ impl Session {
     /// A deadline only fires when something calls in: whoever owns the
     /// connection must call [`Session::poll`] periodically (F4, D-20 step 4).
     pub fn poll(&mut self, now: u64) -> core::result::Result<(), Closed> {
-        if !self.authenticated || self.send.is_closed() {
+        if !self.authenticated {
+            return Err(Closed);
+        }
+        if self.send.is_closed() {
+            // The session finishes the zeroization of a self-closed send half
+            // (WR-02).
+            self.fail();
             return Err(Closed);
         }
         if self.deadline_expired(now) {
@@ -1480,11 +1577,14 @@ fn crypt_body(keys: &DirectionKeys, seq: u64, typ: u8, body: &mut [u8]) -> crate
 // compile and pass unchanged (the session engine above is their successor).
 // ---------------------------------------------------------------------------
 
-/// Seal one packet: header, encrypted body, MAC (D-06, D-07).
+/// Seal one packet: header, encrypted body, MAC (D-06, D-07, P5).
 ///
 /// The header is written field by field at the pinned offsets, the body is
-/// encrypted in place from block counter 0, and the MAC covers the one
-/// contiguous slice `[0, size - MAC_LEN)` and is appended last.
+/// encrypted in place through [`crypt_body`] — parameters from ChaCha20 block
+/// counter 0 and data page `i` from `1 + 64 * i`, the same placement
+/// [`Session::seal`] uses — and the MAC covers the one contiguous slice
+/// `[0, size - MAC_LEN)` and is appended last.  It is the tracer's thin path
+/// beside `Session` (WR-03).
 pub fn seal_packet(
     keys: &DirectionKeys,
     seq: u64,
@@ -1510,8 +1610,7 @@ pub fn seal_packet(
     header.encode((&mut packet[..HEADER_LEN]).try_into().expect("the header slice is 28 bytes"));
     packet[HEADER_LEN..HEADER_LEN + body.len()].copy_from_slice(body);
 
-    keys.keystream(seq, 0, &mut packet[HEADER_LEN..HEADER_LEN + body.len()])
-        .map_err(|_| "chan: keystream counter overflow")?;
+    crypt_body(keys, seq, typ, &mut packet[HEADER_LEN..HEADER_LEN + body.len()])?;
 
     let mut mac = keys.mac();
     mac.update(&packet[..size - MAC_LEN]);
@@ -1521,11 +1620,13 @@ pub fn seal_packet(
 }
 
 /// Open one packet: bounds, MAC, sequence, header rules, then decrypt
-/// (D-07, WIRE-03).
+/// (D-07, WIRE-03, P5).
 ///
 /// `Size` is the only field read before the MAC verifies, and only to bound
 /// the packet; every other field is acted on only after verification
-/// (T-04-11, T-04-12).  The returned body is the decrypted plaintext.
+/// (T-04-11, T-04-12).  The body is decrypted through [`crypt_body`], the same
+/// P5 placement [`Session::open`] uses, and the returned body is the decrypted
+/// plaintext.  It is the tracer's thin path beside `Session` (WR-03).
 pub fn open_packet(
     keys: &DirectionKeys,
     expected_seq: u64,
@@ -1560,8 +1661,7 @@ pub fn open_packet(
     // Decrypt the body only: the TLV area travels cleartext and is covered by
     // the MAC.  Then hand the split packet to the decoder (WIRE-03).
     let body_start = HEADER_LEN + header.ext_len as usize;
-    keys.keystream(header.seq, 0, &mut buf[body_start..size - MAC_LEN])
-        .map_err(|_| "chan: keystream counter overflow")?;
+    crypt_body(keys, header.seq, header.typ, &mut buf[body_start..size - MAC_LEN])?;
     let verified = Verified::new_verified(header, &buf)?;
     Ok((header.typ, header.tag, header.fid_handle, verified.body().to_vec()))
 }
