@@ -14,6 +14,7 @@ use port::fid::{
     FID_LIVE, STATEFUL_HANDLE_LEN, STATELESS_CAP_LEN, FidEntry, FidHandle, FidTable, StatelessCap,
     StatefulHandle, VolatilityClass, gpu_qid_path, qid_decode, qid_encode,
 };
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -579,5 +580,192 @@ fn aead_fid_stateless_tag_is_keyed_blake3_of_label_and_wire_body() {
         "the 8-byte tag is the truncation of keyed BLAKE3 over the label and the wire body (P8)"
     );
 }
+
+/// xorshift64: a tiny seeded PRNG so the randomized sweep pin reproduces from
+/// its literal seed (no `rand`, no `proptest`).
+struct XorShift64(u64);
+
+impl XorShift64 {
+    fn new(seed: u64) -> XorShift64 {
+        // A zero state would stay zero forever.
+        XorShift64(seed | 1)
+    }
+
+    fn next(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.0 = x;
+        x
+    }
+}
+
+/// The dense slot id a handle names: with one block per shard the block index
+/// is always 0, so `slot_id == ptr - 1` (plan 04-09's `(block << 4) | (ptr - 1)`).
+fn handle_slot(handle: &StatefulHandle) -> (u8, u32) {
+    (handle.shard_id, handle.ptr.get() as u32 - 1)
+}
+
+#[test]
+fn aead_fid_sweep_matches_set_model_on_random_inputs() {
+    for seed in 0..64u64 {
+        // Eight one-block shards: 128 slots, a block index that is always 0,
+        // and therefore `slot_id == ptr - 1` for the model.
+        let table =
+            FidTable::new(8, 1, domain_key(0x60), 0).expect("eight one-block shards form a table");
+        let mut rng = XorShift64::new(0x9E37_79B9_7F4A_7C15 ^ seed);
+
+        let mut fids: BTreeSet<u32> = BTreeSet::new();
+        while fids.len() < 40 {
+            fids.insert((rng.next() % 4096) as u32 + 1);
+        }
+        let mut handles: Vec<StatefulHandle> = Vec::new();
+        let mut model_active: BTreeSet<(u8, u32)> = BTreeSet::new();
+        for &fid in &fids {
+            let handle = table.insert(1, entry_for(fid)).expect("a fresh table has room for 40 fids");
+            model_active.insert(handle_slot(&handle));
+            handles.push(handle);
+        }
+
+        let mut model_reclaimed: BTreeSet<(u8, u32)> = BTreeSet::new();
+        for handle in &handles {
+            if rng.next() % 3 == 0 {
+                table.mark_reclaimed(1, handle).expect("a live handle can be marked reclaimed");
+                model_reclaimed.insert(handle_slot(handle));
+            }
+        }
+
+        let swept: BTreeSet<(u8, u32)> = table.sweep().into_iter().collect();
+        let expected: BTreeSet<(u8, u32)> =
+            model_active.difference(&model_reclaimed).copied().collect();
+        assert_eq!(
+            swept, expected,
+            "the sweep returns exactly the active set minus the reclaimed set (seed {seed})"
+        );
+    }
+}
+
+#[test]
+fn aead_fid_sweep_survivors_resolve_and_orphans_do_not() {
+    let table = FidTable::new(4, 1, domain_key(0x61), 0).expect("four one-block shards form a table");
+    let mut handles = Vec::new();
+    for fid in 1..=12u32 {
+        handles.push(table.insert(1, entry_for(fid)).expect("a fresh table has room for 12 fids"));
+    }
+    // Mark the first six reclaimed; the other six are swept.
+    for handle in handles.iter().take(6) {
+        table.mark_reclaimed(1, handle).expect("a live handle can be marked reclaimed");
+    }
+    let swept: BTreeSet<(u8, u32)> = table.sweep().into_iter().collect();
+    for (index, handle) in handles.iter().enumerate() {
+        if index < 6 {
+            assert!(
+                !swept.contains(&handle_slot(handle)),
+                "a reclaimed fid is not swept (handle {index})"
+            );
+            assert!(
+                table.resolve(1, handle).is_ok(),
+                "a reclaimed fid still resolves to its entry after the sweep (handle {index})"
+            );
+        } else {
+            assert!(
+                swept.contains(&handle_slot(handle)),
+                "a non-reclaimed active fid is swept (handle {index})"
+            );
+            assert!(
+                table.resolve(1, handle).is_err(),
+                "a swept fid no longer resolves (handle {index})"
+            );
+        }
+    }
+}
+
+#[test]
+fn aead_fid_sweep_edges() {
+    // An empty table sweeps to nothing.
+    let empty = FidTable::new(2, 1, domain_key(0x62), 0).expect("two one-block shards form a table");
+    assert!(empty.sweep().is_empty(), "an empty table sweeps to nothing");
+
+    // With nothing reclaimed, every active fid is swept.
+    let all_live = FidTable::new(2, 1, domain_key(0x63), 0).expect("two one-block shards form a table");
+    let live: Vec<StatefulHandle> =
+        (1..=5u32).map(|fid| all_live.insert(1, entry_for(fid)).expect("room for five fids")).collect();
+    assert_eq!(all_live.sweep().len(), 5, "with nothing reclaimed every active fid is swept");
+    for handle in &live {
+        assert!(all_live.resolve(1, handle).is_err(), "a swept fid no longer resolves");
+    }
+
+    // With everything reclaimed, nothing is swept.
+    let all_reclaimed = FidTable::new(2, 1, domain_key(0x64), 0).expect("two one-block shards form a table");
+    let kept: Vec<StatefulHandle> =
+        (1..=5u32).map(|fid| all_reclaimed.insert(1, entry_for(fid)).expect("room for five fids")).collect();
+    for handle in &kept {
+        all_reclaimed.mark_reclaimed(1, handle).expect("a live handle can be marked reclaimed");
+    }
+    assert!(
+        all_reclaimed.sweep().is_empty(),
+        "with everything reclaimed nothing is swept"
+    );
+    for handle in &kept {
+        assert!(all_reclaimed.resolve(1, handle).is_ok(), "a reclaimed fid survives the sweep");
+    }
+
+    // Marking a slot id that was never active changes nothing: the handle
+    // names the next slot, which no insert has used, so resolve refuses it.
+    let never = FidTable::new(2, 1, domain_key(0x65), 0).expect("two one-block shards form a table");
+    let handle = never.insert(1, entry_for(1)).expect("room for one fid");
+    let mut ghost = handle;
+    ghost.ptr = TinyPtr::new(handle.ptr.get() + 1).expect("a non-zero tiny pointer");
+    assert!(
+        never.mark_reclaimed(1, &ghost).is_err(),
+        "a handle to a slot that was never active cannot be marked reclaimed"
+    );
+    assert_eq!(
+        never.bitmap_lens(handle.shard_id),
+        Some((1, 0)),
+        "the refused mark leaves the live set unchanged and the reclaim window empty"
+    );
+
+    // A second sweep straight after the first returns nothing.
+    let twice = FidTable::new(2, 1, domain_key(0x66), 0).expect("two one-block shards form a table");
+    twice.insert(1, entry_for(1)).expect("room for one fid");
+    twice.insert(1, entry_for(2)).expect("room for two fids");
+    assert_eq!(twice.sweep().len(), 2, "the first sweep returns the live set");
+    assert!(twice.sweep().is_empty(), "a second sweep straight after the first returns nothing");
+}
+
+#[test]
+fn aead_fid_sweep_resets_the_reclaim_window() {
+    let table = FidTable::new(4, 1, domain_key(0x67), 0).expect("four one-block shards form a table");
+    let mut handles = Vec::new();
+    for fid in 1..=8u32 {
+        handles.push(table.insert(1, entry_for(fid)).expect("a fresh table has room for 8 fids"));
+    }
+    for (index, handle) in handles.iter().enumerate() {
+        if index % 2 == 0 {
+            table.mark_reclaimed(1, handle).expect("a live handle can be marked reclaimed");
+        }
+    }
+    let swept: BTreeSet<(u8, u32)> = table.sweep().into_iter().collect();
+    assert!(!swept.is_empty(), "there is something to sweep");
+
+    let mut survivors = [0u64; 4];
+    for handle in &handles {
+        if !swept.contains(&handle_slot(handle)) {
+            survivors[handle.shard_id as usize] += 1;
+        }
+    }
+    for shard in 0..4u8 {
+        let (active, reclaimed) =
+            table.bitmap_lens(shard).expect("the shard index is in range");
+        assert_eq!(reclaimed, 0, "the reclaim window is empty after a sweep (shard {shard})");
+        assert_eq!(
+            active, survivors[shard as usize],
+            "active holds exactly the survivors after a sweep (shard {shard})"
+        );
+    }
+}
+
 
 

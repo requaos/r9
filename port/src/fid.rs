@@ -684,4 +684,32 @@ impl<P: Probe + Clone> FidTable<P> {
             |_| "fid: the capability tag does not verify under this table's domain secret",
         )
     }
+
+    /// Mark `handle`'s arena slot reclaimed, so the next [`Self::sweep`] keeps
+    /// it and collects every other live slot instead (WIRE-09).
+    ///
+    /// The handle is resolved first, so a stale, foreign or clunked handle is
+    /// refused and marks nothing.
+    pub fn mark_reclaimed(&self, client_id: u32, handle: &StatefulHandle) -> crate::Result<()> {
+        let _entry = self.resolve(client_id, handle)?;
+        let shard = &self.shards[handle.shard_id as usize];
+        let key = tpht_key(client_id, handle.fid_key);
+        let slot = shard.tpht.slot_id(key, handle.ptr);
+        let node = LockNode::new();
+        shard.reclaimed.lock(&node).insert(slot);
+        Ok(())
+    }
+
+    /// The failover sweep: remove every active slot that was not marked
+    /// reclaimed, returning the swept `(shard index, slot id)` pairs (WIRE-09).
+    ///
+    /// Membership of the result is one bitmap `difference` per shard
+    /// (`active \ reclaimed`) and nothing else; reclaimed entries keep
+    /// resolving afterwards and swept entries do not.  After a sweep the
+    /// reclaim window is empty and `active` holds exactly the survivors.
+    pub fn sweep(&self) -> Vec<(u8, u32)> {
+        // RED stub: returns nothing; the real body lands in the GREEN commit
+        // (D-03, Pitfall 11).
+        Vec::new()
+    }
 }
