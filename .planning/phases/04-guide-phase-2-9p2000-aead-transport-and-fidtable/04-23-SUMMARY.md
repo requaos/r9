@@ -238,7 +238,7 @@ None - no external service configuration required.
 - **Plan 04-25** (owner-stop / push offer) may start after 04-24; the `APPROVED` verdict is the gate those plans require.
 - Nothing was pushed by this plan, and no file under `evidence/kernel-bytes/` was written.
 
-## Self-Check
+## Self-Check: PASSED
 
 - `04-REVIEW-DISPOSITION.md` anchored grep prints 12; IN rows print 7; amendment note below the table — PASSED
 - `evidence/closing-suite-gaps.md` has five pre-review PASS verdicts and `VERDICT port-src-review-gaps: APPROVED HEAD=6fd201c...` — PASSED
