@@ -108,7 +108,9 @@ pub struct RekeyIncoming<'a> {
 /// `Twrite` and `Tread` must additionally name the reserved afid.  The owner's
 /// P9 amendment extends the same rule to `Tstream` (reserved tag and the
 /// exchange afid in its 8-byte `FidHandle`) and `Rstream` (reserved tag; it
-/// carries no fid).  A message this function rejects belongs to the caller's 9P
+/// carries no fid), and its second amendment adds `Tcompound`/`Rcompound`
+/// (reserved tag; neither carries a top-level fid, so the tag alone identifies
+/// them).  A message this function rejects belongs to the caller's 9P
 /// layer: it is never absorbed, never advances the exchange and never closes
 /// the connection because an exchange is in flight.
 pub fn is_rekey_traffic(tag: u16, message: &msg::Msg) -> bool {
@@ -125,6 +127,12 @@ pub fn is_rekey_traffic(tag: u16, message: &msg::Msg) -> bool {
         msg::Msg::Rwrite { .. } | msg::Msg::Rread { .. } => true,
         msg::Msg::Tstream { fid_handle, .. } => *fid_handle == exchange_stream_handle(),
         msg::Msg::Rstream { .. } => true,
+        // Neither compound message carries a top-level fid, so the reserved tag
+        // alone puts it in exchange space (P9 second amendment). The exchange
+        // does not dispatch these types today, so `rekey_handle` closes on one
+        // rather than absorb it; classifying it here keeps that decision
+        // explicit instead of leaving it to the catch-all.
+        msg::Msg::Tcompound { .. } | msg::Msg::Rcompound { .. } => true,
         _ => false,
     }
 }
@@ -1196,6 +1204,17 @@ impl Session {
                     return Ok(());
                 }
                 self.exchange_incoming(message, exchange, now, packets)
+            }
+            msg::Msg::Tcompound { .. } | msg::Msg::Rcompound { .. } => {
+                // The second P9 amendment puts a NOTAG compound in exchange
+                // space, but the exchange dispatches neither type, so a NOTAG
+                // compound must fail closed (and zeroize). Any other tag is
+                // ordinary traffic and leaves the state machine untouched.
+                if is_rekey_traffic(tag, message) {
+                    self.fail();
+                    return Err(Closed);
+                }
+                Ok(())
             }
             _ => {
                 // No other message type may carry the reserved tag.

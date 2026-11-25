@@ -2843,6 +2843,135 @@ fn aead_transport_rekey_stream_notag_afid_is_exchange() {
     assert!(!is_rekey_traffic(4, &rstream));
 }
 
+#[test]
+fn aead_transport_rekey_compound_ordinary_is_not_consumed() {
+    let link = AeadLink::new();
+    let (mut client, mut server) = connect(link.clone(), secret(), secret());
+    let mut se = TestExchange::new(Vec::new());
+
+    // An ordinary Tcompound: any tag but NOTAG. It carries no top-level fid,
+    // so its tag alone decides (P9 second amendment).
+    client
+        .send(
+            wire::TCOMPOUND,
+            5,
+            [0u8; 8],
+            &Exts::default(),
+            &body_of(&Msg::Tcompound {
+                num_ops: 1,
+                op_stream: vec![0xAA, 0xBB],
+            }),
+        )
+        .expect("the client seals an ordinary Tcompound");
+    let (tag, msg) = server.recv_tagged().expect("the server opens the ordinary Tcompound");
+    assert_eq!(tag, 5);
+    assert!(
+        !is_rekey_traffic(tag, &msg),
+        "an ordinary Tcompound is never exchange traffic (P9 second amendment)"
+    );
+    let packets = server
+        .rekey_tagged(&mut se, Some((tag, &msg)), 0)
+        .expect("handing ordinary traffic to the router is a no-op");
+    assert!(packets.is_empty(), "the router sends nothing for an ordinary Tcompound");
+    assert!(!server.session.is_closed(), "an ordinary Tcompound does not close the session");
+
+    // An ordinary Rcompound, likewise identified by its tag alone.
+    client
+        .send(
+            wire::RCOMPOUND,
+            6,
+            [0u8; 8],
+            &Exts::default(),
+            &body_of(&Msg::Rcompound {
+                num_completed: 1,
+                status: 0,
+                result_stream: vec![0xCC],
+            }),
+        )
+        .expect("the client seals an ordinary Rcompound");
+    let (tag, msg) = server.recv_tagged().expect("the server opens the ordinary Rcompound");
+    assert_eq!(tag, 6);
+    assert!(
+        !is_rekey_traffic(tag, &msg),
+        "an ordinary Rcompound is never exchange traffic (P9 second amendment)"
+    );
+    let packets = server
+        .rekey_tagged(&mut se, Some((tag, &msg)), 0)
+        .expect("handing ordinary traffic to the router is a no-op");
+    assert!(packets.is_empty());
+    assert!(!server.session.is_closed());
+}
+
+#[test]
+fn aead_transport_rekey_compound_notag_closes() {
+    // A NOTAG Tcompound is exchange-space (NOTAG plus the type identifies it),
+    // but the exchange never dispatches it, so the router fails closed instead
+    // of delivering it as ordinary traffic.
+    let link = AeadLink::new();
+    let (mut client, mut server) = connect(link.clone(), secret(), secret());
+    let mut se = TestExchange::new(Vec::new());
+
+    client
+        .send(
+            wire::TCOMPOUND,
+            port::devmnt::NOTAG,
+            [0u8; 8],
+            &Exts::default(),
+            &body_of(&Msg::Tcompound {
+                num_ops: 1,
+                op_stream: vec![0xAA, 0xBB],
+            }),
+        )
+        .expect("the client seals a reserved-tag Tcompound");
+    let (tag, msg) = server.recv_tagged().expect("the server opens the reserved-tag Tcompound");
+    assert_eq!(tag, port::devmnt::NOTAG);
+    assert!(
+        is_rekey_traffic(tag, &msg),
+        "NOTAG plus the type makes a Tcompound exchange traffic (P9 second amendment)"
+    );
+    assert!(
+        !is_rekey_traffic(4, &msg),
+        "the same Tcompound under an ordinary tag is ordinary traffic"
+    );
+    assert!(
+        server.rekey_tagged(&mut se, Some((tag, &msg)), 0).is_err(),
+        "a reserved-tag Tcompound the exchange does not dispatch closes the receiver"
+    );
+    assert!(server.session.is_closed(), "the server is closed");
+    assert!(server.session.keys_zeroized(), "the server's keys are zeroized");
+
+    // A NOTAG Rcompound takes the same path.
+    let link = AeadLink::new();
+    let (mut client, mut server) = connect(link.clone(), secret(), secret());
+    let mut se = TestExchange::new(Vec::new());
+
+    client
+        .send(
+            wire::RCOMPOUND,
+            port::devmnt::NOTAG,
+            [0u8; 8],
+            &Exts::default(),
+            &body_of(&Msg::Rcompound {
+                num_completed: 1,
+                status: 0,
+                result_stream: vec![0xCC],
+            }),
+        )
+        .expect("the client seals a reserved-tag Rcompound");
+    let (tag, msg) = server.recv_tagged().expect("the server opens the reserved-tag Rcompound");
+    assert_eq!(tag, port::devmnt::NOTAG);
+    assert!(
+        is_rekey_traffic(tag, &msg),
+        "NOTAG plus the type makes an Rcompound exchange traffic (P9 second amendment)"
+    );
+    assert!(
+        server.rekey_tagged(&mut se, Some((tag, &msg)), 0).is_err(),
+        "a reserved-tag Rcompound the exchange does not dispatch closes the receiver"
+    );
+    assert!(server.session.is_closed(), "the server is closed");
+    assert!(server.session.keys_zeroized(), "the server's keys are zeroized");
+}
+
 // ---------------------------------------------------------------------------
 // In-band re-keying: the transcript absorbs the unpadded standard frames
 // (CR-03, DECISION P2).
