@@ -57,6 +57,16 @@
 //! what "zero FID memory" means.  The failover sweep is one bitmap
 //! `difference` per shard.
 //!
+//! The sweep removes each collected id by the key recorded when that entry was
+//! inserted, never by whatever the slot now holds, so a slot clunked and reused
+//! during a sweep keeps its live newcomer, and a slot that reads as zeros can
+//! never name the entry of key `(0, 0)` (WR-05).  Every shard mutator
+//! (`insert`, `clunk`, `mark_reclaimed` and `sweep`) holds that shard's
+//! `active` lock across its TPHT mutation and its bookkeeping, in that order
+//! before the `reclaimed` lock, so the two bitmaps and the recorded keys always
+//! agree with the live entries.  A [`FidTable::resolve`] takes no lock and is
+//! never serialised with them.
+//!
 //! # The capability is a bearer token within the domain (WIRE-07, D-13, P8)
 //!
 //! A [`StatelessCap`] is a **bearer token** within the domain: it is not bound
@@ -94,6 +104,7 @@
 //! per connection; Phase 6 defines the real source.
 
 use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use crypto::key::Key;
@@ -481,17 +492,59 @@ fn mix64(mut z: u64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// One shard of a [`FidTable`]: a home-only TPHT shard and the two bitmaps that
-/// name its live and reclaimed arena slots (WIRE-08, WIRE-09).
+/// The bookkeeping one shard's `active` lock guards: the live slot ids and the
+/// TPHT key recorded for each, so the sweep removes by the key an entry was
+/// inserted with, never by whatever the slot now holds (WIRE-09, WR-05).
+struct ActiveSlots {
+    /// The dense slot ids every live entry holds — the set the sweep's one
+    /// and-not runs over.
+    ids: RoaringBitmap,
+    /// Slot id to the TPHT key (`(client_id << 32) | fid_key`) recorded when
+    /// the entry was inserted.
+    keys: BTreeMap<u32, u64>,
+}
+
+impl ActiveSlots {
+    fn new() -> ActiveSlots {
+        ActiveSlots { ids: RoaringBitmap::new(), keys: BTreeMap::new() }
+    }
+
+    /// Record `slot` and the key it was inserted with.
+    fn insert(&mut self, slot: u32, key: u64) {
+        self.ids.insert(slot);
+        self.keys.insert(slot, key);
+    }
+
+    /// Drop `slot` from the live set and its recorded key.
+    fn remove(&mut self, slot: u32) {
+        self.ids.remove(slot);
+        self.keys.remove(&slot);
+    }
+
+    /// The number of live slot ids.
+    fn len(&self) -> u64 {
+        self.ids.len()
+    }
+}
+
+/// One shard of a [`FidTable`]: a home-only TPHT shard, the live set (slot ids
+/// and their recorded keys) and the reclaimed slot ids (WIRE-08, WIRE-09).
 ///
 /// The TPHT shard is built with zero banks, so every entry has a
 /// [`TinyPtr`] and can become a [`StatefulHandle`]; a full home block reports
 /// `TphtError::HomeFull` and the table falls over to the next shard
 /// (RESEARCH Pitfall 3).  The bitmaps hold dense arena slot ids from
 /// `FlattenedTphtShard::slot_id`.
+///
+/// The `active` lock covers both the live bitmap and the keys recorded for it,
+/// and every mutator holds it across its TPHT mutation and its bookkeeping
+/// update (`insert`, `clunk` and `sweep`), so a shard's bitmaps can never name
+/// a slot other than the one its live entries hold (WR-05, T-04-67).  The lock
+/// order is the same everywhere and only ever one way: a shard's `active` lock,
+/// then its `reclaimed` lock.  [`FidTable::resolve`] takes neither.
 pub struct FidShard<P: Probe = NoProbe> {
     tpht: FlattenedTphtShard<FID_ENTRY_WORDS, P>,
-    active: Lock<RoaringBitmap>,
+    active: Lock<ActiveSlots>,
     reclaimed: Lock<RoaringBitmap>,
 }
 
@@ -548,7 +601,7 @@ impl<P: Probe + Clone> FidTable<P> {
                 })?;
             built.push(FidShard {
                 tpht,
-                active: Lock::new("fid-active", RoaringBitmap::new()),
+                active: Lock::new("fid-active", ActiveSlots::new()),
                 reclaimed: Lock::new("fid-reclaimed", RoaringBitmap::new()),
             });
         }
@@ -586,7 +639,9 @@ impl<P: Probe + Clone> FidTable<P> {
     /// fallen over to any of them (WR-09).  The insert then starts at the key's
     /// home shard ([`Self::home_shard`]) and walks forward on `HomeFull`, so a
     /// key whose home block is full lands in the next shard and its handle
-    /// records that shard's index.  Every shard full is an error.
+    /// records that shard's index.  Every shard full is an error.  On the shard
+    /// the entry lands in, the TPHT insert and the recording of its slot id and
+    /// key happen under one hold of that shard's `active` lock (WR-05, T-04-67).
     pub fn insert(&self, client_id: u32, mut entry: FidEntry) -> crate::Result<StatefulHandle> {
         if client_id == 0 {
             return Err(
@@ -620,11 +675,15 @@ impl<P: Probe + Clone> FidTable<P> {
         for offset in 0..shard_count {
             let index = (start + offset) % shard_count;
             let shard = &self.shards[index];
+            // Hold the shard's `active` lock across the TPHT insert and the
+            // bookkeeping update: the mutation and the slot/key record are one
+            // critical section (WR-05, T-04-67).
+            let node = LockNode::new();
+            let mut active = shard.active.lock(&node);
             match shard.tpht.insert(key, words, same) {
                 Ok(Some(ptr)) => {
                     let slot = shard.tpht.slot_id(key, ptr);
-                    let node = LockNode::new();
-                    shard.active.lock(&node).insert(slot);
+                    active.insert(slot, key);
                     return Ok(StatefulHandle {
                         fid_key,
                         ptr,
@@ -696,7 +755,10 @@ impl<P: Probe + Clone> FidTable<P> {
     ///
     /// The handle is resolved first, so a `ptr` outside the home window is
     /// refused there and no slot id is ever computed from an unvalidated
-    /// pointer (WR-06).
+    /// pointer (WR-06).  The TPHT removal, the `active` update and the
+    /// `reclaimed` update then happen under one hold of the shard's `active`
+    /// lock and then its `reclaimed` lock, so a late clunk can never drop the id
+    /// of a newcomer that reused the slot (WR-05, T-04-67).
     pub fn clunk(&self, client_id: u32, handle: &StatefulHandle) -> crate::Result<()> {
         let _entry = self.resolve(client_id, handle)?;
         let shard = &self.shards[handle.shard_id as usize];
@@ -705,12 +767,13 @@ impl<P: Probe + Clone> FidTable<P> {
             let existing = FidEntry::from_words(value);
             existing.fid_key == handle.fid_key && existing.client_id == client_id
         };
+        let node = LockNode::new();
+        let mut active = shard.active.lock(&node);
         if !shard.tpht.remove(key, same) {
             return Err("fid: the entry vanished before it could be clunked");
         }
         let slot = shard.tpht.slot_id(key, handle.ptr);
-        let node = LockNode::new();
-        shard.active.lock(&node).remove(slot);
+        active.remove(slot);
         let node = LockNode::new();
         shard.reclaimed.lock(&node).remove(slot);
         Ok(())
@@ -761,11 +824,23 @@ impl<P: Probe + Clone> FidTable<P> {
     ///
     /// The handle is resolved first, so a stale, foreign or clunked handle, and
     /// a `ptr` outside the home window, are refused and mark nothing (WR-06).
+    /// Under the shard's `active` lock the slot id must still be recorded for
+    /// this handle's key; a handle whose slot is no longer recorded marks
+    /// nothing and is an error.  The mark is then inserted under the shard's
+    /// `reclaimed` lock (WR-05, T-04-67).
     pub fn mark_reclaimed(&self, client_id: u32, handle: &StatefulHandle) -> crate::Result<()> {
         let _entry = self.resolve(client_id, handle)?;
         let shard = &self.shards[handle.shard_id as usize];
         let key = tpht_key(client_id, handle.fid_key);
         let slot = shard.tpht.slot_id(key, handle.ptr);
+        let node = LockNode::new();
+        let active = shard.active.lock(&node);
+        if !active.ids.contains(slot) || active.keys.get(&slot) != Some(&key) {
+            return Err(
+                "fid: the handle's slot is not recorded for its key, so it marks nothing \
+                 reclaimed (WIRE-09)",
+            );
+        }
         let node = LockNode::new();
         shard.reclaimed.lock(&node).insert(slot);
         Ok(())
@@ -776,8 +851,16 @@ impl<P: Probe + Clone> FidTable<P> {
     ///
     /// Membership of the result is one bitmap `difference` per shard
     /// (`active \ reclaimed`) and nothing else; reclaimed entries keep
-    /// resolving afterwards and swept entries do not.  After a sweep the
-    /// reclaim window is empty and `active` holds exactly the survivors.
+    /// resolving afterwards and swept entries do not.  Each collected id is
+    /// removed by the key recorded in [`ActiveSlots`] when its entry was
+    /// inserted — never by reading the slot — so a slot clunked and reused by a
+    /// live newcomer during the sweep keeps the newcomer, and a slot that reads
+    /// as zeros can never make the sweep remove the entry of key `(0, 0)`
+    /// (WR-05, T-04-66).  The shard's `active` and `reclaimed` locks are held
+    /// across the whole shard, so the snapshot cannot go stale inside a sweep;
+    /// [`Self::resolve`] takes neither and is not serialised with it.  After a
+    /// sweep the reclaim window is empty and `active` holds exactly the
+    /// survivors.
     pub fn sweep(&self) -> Vec<(u8, u32)> {
         let mut swept = Vec::new();
         for (index, shard) in self.shards.iter().enumerate() {
@@ -789,22 +872,19 @@ impl<P: Probe + Clone> FidTable<P> {
             // The one and-not WIRE-09 names.  Membership of the result is this
             // bitmap difference and nothing else: there is no per-id
             // membership test below.
-            let orphans = active.difference(&reclaimed);
+            let orphans = active.ids.difference(&reclaimed);
             for slot in orphans.iter() {
-                // `read_slot` is the sweep's bounds-checked read; a corrupt
-                // bitmap id can name no slot and is still reported as swept so
-                // the caller can account for it.
-                if let Some(words) = shard.tpht.read_slot(slot) {
-                    let entry = FidEntry::from_words(&words);
-                    let key = tpht_key(entry.client_id, entry.fid_key);
-                    let same = |value: &[u64; FID_ENTRY_WORDS]| {
-                        let candidate = FidEntry::from_words(value);
-                        candidate.fid_key == entry.fid_key
-                            && candidate.client_id == entry.client_id
-                    };
+                // Remove by the key recorded at insert time.  The slot's
+                // current contents are never consulted, so a reused slot's
+                // live newcomer is not the sweep's to collect (WR-05).  Word 0
+                // of a FidEntry is exactly the TPHT key (`client_id` high half,
+                // `fid_key` low half), so the full-key check is one word
+                // comparison with no unpacking.
+                if let Some(&key) = active.keys.get(&slot) {
+                    let same = |value: &[u64; FID_ENTRY_WORDS]| value[0] == key;
                     shard.tpht.remove(key, same);
                 }
-                // Drop the swept id from the live set as it is collected, so
+                // Drop the swept id and its key record as it is collected, so
                 // the survivors need no second bitmap operation.
                 active.remove(slot);
                 swept.push((index as u8, slot));
