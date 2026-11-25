@@ -24,7 +24,7 @@ use crypto::key::Key;
 use crypto::session::{self, Direction, DirectionKeys, SessionKeys, Transcript};
 use port::chan::msg::{self, Msg};
 use port::chan::tlv::Exts;
-use port::chan::transport::{Handshake, Role, Superseded};
+use port::chan::transport::{Handshake, Role, Superseded, is_rekey_traffic};
 use port::chan::wire;
 use port::chan::PAGE_LEN;
 use port::dat::Qid;
@@ -2389,6 +2389,429 @@ fn rekey_transcript_hash(wire: &[(Direction, Vec<u8>)]) -> [u8; 32] {
         t1.absorb(&standard_frame(typ, tag, &body));
     }
     t1.hash()
+}
+
+// ---------------------------------------------------------------------------
+// In-band re-keying: exchange routing by the P9 tag and afid, the NOTAG
+// control tag, and ordinary traffic that crosses an exchange (CR-02, WR-07).
+// ---------------------------------------------------------------------------
+
+/// The P9 afid as the 8-byte `FidHandle` a `Tstream` body names: the afid
+/// little-endian in the first four bytes, the remaining four zero.
+const EXCHANGE_STREAM_HANDLE: [u8; 8] = [0xFE, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0];
+
+#[test]
+fn aead_transport_rekey_control_messages_carry_notag() {
+    let link = AeadLink::new();
+    let (mut client, mut server, mut ce, mut se) = connected_after_exchange(&link);
+
+    // The MARKER is the last old-key packet; its header Tag is NOTAG and its
+    // FidHandle is zero (P3).
+    let marker = client.rekey(&mut ce, None, 0).expect("the client sends its marker");
+    assert_eq!(marker.len(), 1);
+    assert_eq!(
+        &marker[0][5..7],
+        &[0xFF, 0xFF],
+        "the marker's header Tag is NOTAG (0xFFFF), not 0"
+    );
+    assert_eq!(&marker[0][8..16], &[0u8; 8], "the marker's FidHandle is zero");
+    let msg = server.recv().expect("the server opens the marker");
+    let ack = server.rekey(&mut se, Some(&msg), 0).expect("the server answers the marker");
+    assert_eq!(ack.len(), 1);
+    assert_eq!(&ack[0][5..7], &[0xFF, 0xFF], "the ACK's header Tag is NOTAG (0xFFFF)");
+    assert_eq!(&ack[0][8..16], &[0u8; 8], "the ACK's FidHandle is zero");
+
+    // A server at its threshold sends a REQUEST with the same tag.
+    let link = AeadLink::new();
+    let (mut ce, mut se) = rekey_seams(secret(), second_secret());
+    let (_client, mut server) = connect_with_kept_config(
+        link.clone(),
+        &mut ce,
+        &mut se,
+        config_with_rekey(4, 5000),
+    );
+    for i in 0..4u16 {
+        server
+            .send(wire::RCLUNK, i, [0u8; 8], &Exts::default(), &[])
+            .expect("the server seals a threshold packet");
+    }
+    assert!(server.session.rekey_due(), "the server reaches its threshold");
+    let request = server.rekey(&mut se, None, 0).expect("the server sends a REQUEST");
+    assert_eq!(request.len(), 1);
+    assert_eq!(&request[0][5..7], &[0xFF, 0xFF], "the REQUEST's header Tag is NOTAG");
+    assert_eq!(&request[0][8..16], &[0u8; 8], "the REQUEST's FidHandle is zero");
+}
+
+#[test]
+fn aead_transport_rekey_exchange_messages_carry_reserved_tag_and_afid() {
+    let link = AeadLink::new();
+    let (_client, _server, _ce, _se) = connected_after_exchange(&link);
+
+    // The six exchange messages crossed the link after the plain handshake and
+    // the four threshold packets.
+    let wire = link.borrow().wire_log.clone();
+    let exchange: Vec<(Direction, Vec<u8>)> = wire
+        .iter()
+        .skip(8)
+        .filter(|(_, packet)| is_exchange_type(packet[4]))
+        .take(6)
+        .cloned()
+        .collect();
+    assert_eq!(exchange.len(), 6, "six exchange messages crossed the link");
+    assert_eq!(
+        exchange.iter().map(|(_, packet)| packet[4]).collect::<Vec<u8>>(),
+        vec![
+            wire::TAUTH,
+            wire::RAUTH,
+            wire::TWRITE,
+            wire::RWRITE,
+            wire::TREAD,
+            wire::RREAD,
+        ],
+        "the exchange crosses as Tauth, Rauth, Twrite, Rwrite, Tread, Rread"
+    );
+
+    let keys0 = gen0_keys(&secret());
+    for (direction, packet) in &exchange {
+        assert_eq!(
+            u16::from_le_bytes(packet[5..7].try_into().expect("Tag is 2 bytes")),
+            port::devmnt::NOTAG,
+            "every exchange message carries the P9 tag NOTAG"
+        );
+        let keys = match direction {
+            Direction::ClientToServer => &keys0.c2s,
+            Direction::ServerToClient => &keys0.s2c,
+        };
+        let body = decrypt_packet_body(keys, packet);
+        match packet[4] {
+            wire::TAUTH | wire::TWRITE | wire::TREAD => assert_eq!(
+                u32::from_le_bytes(body[..4].try_into().expect("the fid is 4 bytes")),
+                port::devmnt::NOFID - 1,
+                "the Tauth, Twrite and Tread bodies name the P9 afid 0xFFFFFFFE"
+            ),
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn aead_transport_rekey_ordinary_read_during_exchange_is_delivered() {
+    let link = AeadLink::new();
+    let (mut ce, mut se) = rekey_seams(secret(), second_secret());
+    let (mut client, mut server) = connect_with_kept_config(
+        link.clone(),
+        &mut ce,
+        &mut se,
+        config_with_rekey(4, 5000),
+    );
+    for i in 0..4u16 {
+        client
+            .send(wire::TCLUNK, i, [0u8; 8], &Exts::default(), &clunk_body())
+            .expect("the client seals a threshold packet");
+        assert!(server.recv().is_ok());
+    }
+
+    // Tauth / Rauth and the client's Twrite: the exchange is in flight.
+    let _ = client.rekey(&mut ce, None, 0).expect("the client starts the exchange");
+    let (tag, msg) = server.recv_tagged().expect("the server opens Tauth");
+    assert_eq!(tag, port::devmnt::NOTAG);
+    assert!(matches!(msg, Msg::Tauth { .. }));
+    let _ = server.rekey(&mut se, Some(&msg), 0).expect("the server answers Rauth");
+    let (tag, msg) = client.recv_tagged().expect("the client opens Rauth");
+    assert_eq!(tag, port::devmnt::NOTAG);
+    let _ = client.rekey(&mut ce, Some(&msg), 0).expect("the client sends Twrite");
+
+    // An ordinary read, tag 1, crosses the exchange in the same direction.
+    let ordinary = b"ordinary read data".to_vec();
+    client
+        .send(
+            wire::TREAD,
+            1,
+            [0u8; 8],
+            &Exts::default(),
+            &body_of(&Msg::Tread {
+                fid: 9,
+                offset: 0,
+                count: 64,
+            }),
+        )
+        .expect("the client seals the ordinary Tread");
+
+    // The server takes the exchange's Twrite, then the ordinary read.
+    let (tag, msg) = server.recv_tagged().expect("the server opens Twrite");
+    assert_eq!(tag, port::devmnt::NOTAG);
+    let _ = server.rekey(&mut se, Some(&msg), 0).expect("the server answers Rwrite");
+
+    let (tag, msg) = server.recv_tagged().expect("the server opens the ordinary Tread");
+    assert_eq!(tag, 1, "the ordinary request keeps its own tag");
+    assert!(!is_rekey_traffic(tag, &msg), "an ordinary Tread is never exchange traffic");
+    let packets = server
+        .rekey_tagged(&mut se, Some((tag, &msg)), 0)
+        .expect("handing ordinary traffic to the router is a no-op");
+    assert!(packets.is_empty(), "the router sends nothing for ordinary traffic");
+    assert!(!server.session.is_closed(), "ordinary traffic does not close the session");
+    server
+        .send(
+            wire::RREAD,
+            1,
+            [0u8; 8],
+            &Exts::default(),
+            &body_of(&Msg::Rread {
+                data: ordinary.clone(),
+            }),
+        )
+        .expect("the server seals the ordinary Rread");
+
+    // The client takes Rwrite, sends the exchange's Tread, then receives the
+    // ordinary reply while it waits for the exchange's Rread.
+    let (tag, msg) = client.recv_tagged().expect("the client opens Rwrite");
+    assert_eq!(tag, port::devmnt::NOTAG);
+    let _ = client.rekey(&mut ce, Some(&msg), 0).expect("the client sends Tread");
+
+    let (tag, msg) = client.recv_tagged().expect("the client opens the ordinary Rread");
+    assert_eq!(tag, 1);
+    assert!(!is_rekey_traffic(tag, &msg), "an ordinary Rread is never exchange traffic");
+    let packets = client
+        .rekey_tagged(&mut ce, Some((tag, &msg)), 0)
+        .expect("handing ordinary traffic to the router is a no-op");
+    assert!(packets.is_empty());
+    match msg {
+        Msg::Rread { data } => assert_eq!(
+            data, ordinary,
+            "the ordinary reply reaches its owner with the data it carried"
+        ),
+        other => panic!("expected the ordinary Rread, got {other:?}"),
+    }
+
+    // The exchange finishes, both directions cut over, and generation 1 works.
+    let (tag, msg) = server.recv_tagged().expect("the server opens the exchange Tread");
+    assert_eq!(tag, port::devmnt::NOTAG);
+    let _ = server.rekey(&mut se, Some(&msg), 0).expect("the server answers Rread");
+    let (tag, msg) = client.recv_tagged().expect("the client opens the exchange Rread");
+    assert_eq!(tag, port::devmnt::NOTAG);
+    let _ = client.rekey(&mut ce, Some(&msg), 0).expect("the client derives generation 1");
+    client_cutover(&mut client, &mut server, &mut ce, &mut se, 0);
+    server_cutover(&mut client, &mut server, &mut ce, &mut se, 0);
+
+    client
+        .send(wire::TCLUNK, 200, [0u8; 8], &Exts::default(), &clunk_body())
+        .expect("the client seals a generation 1 packet");
+    assert!(server.recv().is_ok(), "the generation 1 packet opens at the server");
+}
+
+#[test]
+fn aead_transport_rekey_ordinary_write_at_server_is_not_consumed() {
+    let link = AeadLink::new();
+    let (mut ce, mut se) = rekey_seams(secret(), second_secret());
+    let (mut client, mut server) = connect_with_kept_config(
+        link.clone(),
+        &mut ce,
+        &mut se,
+        config_with_rekey(4, 5000),
+    );
+    for i in 0..4u16 {
+        client
+            .send(wire::TCLUNK, i, [0u8; 8], &Exts::default(), &clunk_body())
+            .expect("the client seals a threshold packet");
+        assert!(server.recv().is_ok());
+    }
+
+    // Tauth / Rauth: the server waits for the exchange's Twrite.
+    let _ = client.rekey(&mut ce, None, 0).expect("the client starts the exchange");
+    let (tag, msg) = server.recv_tagged().expect("the server opens Tauth");
+    assert_eq!(tag, port::devmnt::NOTAG);
+    let _ = server.rekey(&mut se, Some(&msg), 0).expect("the server answers Rauth");
+    assert_eq!(se.runs(), 2, "the seam ran once for the handshake and once here");
+
+    // An ordinary write, tag 2, on fid 9.
+    client
+        .send(
+            wire::TWRITE,
+            2,
+            [0u8; 8],
+            &Exts::default(),
+            &body_of(&Msg::Twrite {
+                fid: 9,
+                offset: 0,
+                data: b"ordinary write".to_vec(),
+            }),
+        )
+        .expect("the client seals the ordinary Twrite");
+    let (tag, msg) = server.recv_tagged().expect("the server opens the ordinary Twrite");
+    assert_eq!(tag, 2);
+    assert!(!is_rekey_traffic(tag, &msg), "an ordinary Twrite is never exchange traffic");
+    let packets = server
+        .rekey_tagged(&mut se, Some((tag, &msg)), 0)
+        .expect("handing ordinary traffic to the router is a no-op");
+    assert!(packets.is_empty(), "the router sends nothing for ordinary traffic");
+    assert_eq!(se.runs(), 2, "the seam did not run for an ordinary write");
+    assert!(!server.session.is_closed(), "ordinary traffic does not close the session");
+
+    // The exchange's own Twrite is then taken normally.
+    let (_tag, msg) = client.recv_tagged().expect("the client opens Rauth");
+    let _ = client.rekey(&mut ce, Some(&msg), 0).expect("the client sends Twrite");
+    let (tag, msg) = server.recv_tagged().expect("the server opens the exchange Twrite");
+    assert_eq!(tag, port::devmnt::NOTAG);
+    let rwrite = server.rekey(&mut se, Some(&msg), 0).expect("the server answers Rwrite");
+    assert_eq!(rwrite.len(), 1, "the exchange advances past the ordinary write");
+    assert_eq!(se.runs(), 3, "the seam ran for the exchange's own Twrite");
+}
+
+#[test]
+fn aead_transport_rekey_exchange_tag_with_wrong_fid_closes() {
+    let link = AeadLink::new();
+    let (mut client, mut server, _ce, mut se) = connected_after_exchange(&link);
+
+    client
+        .send(
+            wire::TWRITE,
+            port::devmnt::NOTAG,
+            [0u8; 8],
+            &Exts::default(),
+            &body_of(&Msg::Twrite {
+                fid: 9,
+                offset: 0,
+                data: b"wrong fid".to_vec(),
+            }),
+        )
+        .expect("the client seals a reserved-tag Twrite on another fid");
+    let (tag, msg) = server.recv_tagged().expect("the server opens the reserved-tag Twrite");
+    assert_eq!(tag, port::devmnt::NOTAG);
+    assert!(
+        !is_rekey_traffic(tag, &msg),
+        "a Twrite on another fid is not exchange traffic"
+    );
+    assert!(
+        server.rekey_tagged(&mut se, Some((tag, &msg)), 0).is_err(),
+        "a reserved-tag message on the wrong fid closes the receiver"
+    );
+    assert!(server.session.is_closed(), "the server is closed");
+    assert!(server.session.keys_zeroized(), "the server's keys are zeroized");
+}
+
+#[test]
+fn aead_transport_rekey_control_with_wrong_tag_closes() {
+    let link = AeadLink::new();
+    let (mut client, mut server, _ce, mut se) = connected_after_exchange(&link);
+
+    // A correctly sealed MARKER whose header tag is 0, not the P3 NOTAG.
+    let body = body_of(&Msg::Trekey {
+        kind: msg::REKEY_MARKER,
+        generation: 1,
+        confirm: [0u8; 32],
+    });
+    client
+        .send(wire::TREKEY, 0, [0u8; 8], &Exts::default(), &body)
+        .expect("the client seals a MARKER with tag 0");
+    let (tag, msg) = server.recv_tagged().expect("the server opens the marker");
+    assert_eq!(tag, 0);
+    assert!(!is_rekey_traffic(tag, &msg), "P3 pins NOTAG, not 0, for a control message");
+    assert!(
+        server.rekey_tagged(&mut se, Some((tag, &msg)), 0).is_err(),
+        "a control message with any other tag closes the receiver"
+    );
+    assert!(server.session.is_closed(), "the server is closed");
+    assert!(server.session.keys_zeroized(), "the server's keys are zeroized");
+}
+
+#[test]
+fn aead_transport_rekey_stream_ordinary_is_not_consumed() {
+    let link = AeadLink::new();
+    let (mut client, mut server) = connect(link.clone(), secret(), secret());
+    let mut se = TestExchange::new(Vec::new());
+
+    // An ordinary Tstream: any tag but NOTAG, any FidHandle.
+    client
+        .send(
+            wire::TSTREAM,
+            5,
+            [0u8; 8],
+            &Exts::default(),
+            &body_of(&Msg::Tstream {
+                fid_handle: [0x11; 8],
+                stream_id: 7,
+                flags: 0,
+                offset: 0,
+            }),
+        )
+        .expect("the client seals an ordinary Tstream");
+    let (tag, msg) = server.recv_tagged().expect("the server opens the ordinary Tstream");
+    assert_eq!(tag, 5);
+    assert!(
+        !is_rekey_traffic(tag, &msg),
+        "an ordinary Tstream is never exchange traffic (P9 amendment)"
+    );
+    let packets = server
+        .rekey_tagged(&mut se, Some((tag, &msg)), 0)
+        .expect("handing ordinary traffic to the router is a no-op");
+    assert!(packets.is_empty(), "the router sends nothing for an ordinary Tstream");
+    assert!(!server.session.is_closed(), "an ordinary Tstream does not close the session");
+
+    // An ordinary Rstream: it carries no fid, so its tag alone decides.
+    client
+        .send(
+            wire::RSTREAM,
+            6,
+            [0u8; 8],
+            &Exts::default(),
+            &body_of(&Msg::Rstream {
+                stream_id: 7,
+                chunk_seq: 0,
+                data: b"chunk".to_vec(),
+            }),
+        )
+        .expect("the client seals an ordinary Rstream");
+    let (tag, msg) = server.recv_tagged().expect("the server opens the ordinary Rstream");
+    assert_eq!(tag, 6);
+    assert!(
+        !is_rekey_traffic(tag, &msg),
+        "an ordinary Rstream is never exchange traffic (P9 amendment)"
+    );
+    let packets = server
+        .rekey_tagged(&mut se, Some((tag, &msg)), 0)
+        .expect("handing ordinary traffic to the router is a no-op");
+    assert!(packets.is_empty());
+    assert!(!server.session.is_closed());
+}
+
+#[test]
+fn aead_transport_rekey_stream_notag_afid_is_exchange() {
+    let link = AeadLink::new();
+    let (mut client, mut server) = connect(link.clone(), secret(), secret());
+
+    client
+        .send(
+            wire::TSTREAM,
+            port::devmnt::NOTAG,
+            [0u8; 8],
+            &Exts::default(),
+            &body_of(&Msg::Tstream {
+                fid_handle: EXCHANGE_STREAM_HANDLE,
+                stream_id: 7,
+                flags: 0,
+                offset: 0,
+            }),
+        )
+        .expect("the client seals a reserved-tag Tstream on the exchange afid");
+    let (tag, msg) = server.recv_tagged().expect("the server opens the reserved-tag Tstream");
+    assert_eq!(tag, port::devmnt::NOTAG);
+    assert!(
+        is_rekey_traffic(tag, &msg),
+        "NOTAG plus the exchange afid makes a Tstream exchange traffic (P9 amendment)"
+    );
+    assert!(
+        !is_rekey_traffic(4, &msg),
+        "the same Tstream under an ordinary tag is ordinary traffic"
+    );
+
+    // Rstream carries no fid, so NOTAG plus its type identifies it.
+    let rstream = Msg::Rstream {
+        stream_id: 7,
+        chunk_seq: 0,
+        data: Vec::new(),
+    };
+    assert!(is_rekey_traffic(port::devmnt::NOTAG, &rstream));
+    assert!(!is_rekey_traffic(4, &rstream));
 }
 
 // ---------------------------------------------------------------------------

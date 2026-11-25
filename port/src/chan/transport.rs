@@ -83,6 +83,39 @@ const REKEY_TAG: u16 = 0;
 /// the connection rather than wrap.
 pub const SEQ_HARD_LIMIT: u64 = u64::MAX;
 
+/// One message handed to the re-key router: its wire tag beside its decoded
+/// body (DECISION P9).
+///
+/// The tag is the discriminator: a sealed message is in-band exchange traffic
+/// only when its tag is [`crate::devmnt::NOTAG`] and its type is one of the
+/// exchange or control types.  The caller opens the packet, decodes the body
+/// and passes both here; a message [`is_rekey_traffic`] rejects belongs to the
+/// caller's 9P layer and must never reach the re-key state machine.
+pub struct RekeyIncoming<'a> {
+    /// The packet header `Tag`.
+    pub tag: u16,
+    /// The decoded message body.
+    pub message: &'a msg::Msg,
+}
+
+/// Whether a sealed message is in-band re-key traffic (DECISION P9).
+///
+/// STUB for the RED commit: the rule the code ships today, which dispatches on
+/// the message type alone and ignores `tag`.
+pub fn is_rekey_traffic(_tag: u16, message: &msg::Msg) -> bool {
+    matches!(
+        message,
+        msg::Msg::Trekey { .. }
+            | msg::Msg::Rrekey { .. }
+            | msg::Msg::Tauth { .. }
+            | msg::Msg::Rauth { .. }
+            | msg::Msg::Twrite { .. }
+            | msg::Msg::Rwrite { .. }
+            | msg::Msg::Tread { .. }
+            | msg::Msg::Rread { .. }
+    )
+}
+
 /// The state of a direction's superseded (old-generation) key slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Superseded {
@@ -1018,16 +1051,18 @@ impl Session {
     /// Drive the in-band re-key state machine one step and return the sealed
     /// packets to send next (D-18 to D-20, RESEARCH Pattern 4).
     ///
-    /// `incoming` is one decoded message just received (an exchange message, a
-    /// marker, an acknowledgement or a request); `None` lets this end emit
-    /// whatever it has to send next (a `Tauth`, a `REQUEST` or its own marker).
-    /// The exchange travels sealed: this method seals each message under the
-    /// session's current keys and the caller puts the returned packets on the
-    /// wire.  Every deadline comparison uses only `now` (F4).
+    /// `incoming` is one decoded message just received, with its header tag
+    /// ([`RekeyIncoming`]); `None` lets this end emit whatever it has to send
+    /// next (a `Tauth`, a `REQUEST` or its own marker).  The caller routes every
+    /// opened message with [`is_rekey_traffic`] and hands ordinary messages to
+    /// its 9P layer; the message that arrives here is exchange or control
+    /// traffic.  The exchange travels sealed: this method seals each message
+    /// under the session's current keys and the caller puts the returned
+    /// packets on the wire.  Every deadline comparison uses only `now` (F4).
     pub fn rekey_step(
         &mut self,
         exchange: &mut dyn SessionExchange,
-        incoming: Option<&msg::Msg>,
+        incoming: Option<RekeyIncoming<'_>>,
         now: u64,
     ) -> core::result::Result<Vec<Vec<u8>>, Closed> {
         if !self.authenticated {
@@ -1044,15 +1079,16 @@ impl Session {
             return Err(Closed);
         }
         let mut packets = Vec::new();
+        let emit = incoming.is_none();
 
-        if let Some(message) = incoming {
-            self.rekey_handle(message, exchange, now, &mut packets)?;
+        if let Some(incoming) = incoming {
+            self.rekey_handle(incoming.message, exchange, now, &mut packets)?;
         }
 
         // With nothing to answer, emit a marker once the exchange finished, or
         // start an exchange when this end's threshold (or the peer's request)
         // asked for one.
-        if incoming.is_none() {
+        if emit {
             if self.rekey.ready && !self.rekey.own_marker_sent {
                 self.send_own_marker(now, &mut packets)?;
             } else if !self.rekey.active && !self.rekey.ready && self.rekey_due() {

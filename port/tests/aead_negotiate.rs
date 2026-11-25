@@ -429,6 +429,7 @@ use common::aead_link::{
 use port::chan::PAGE_LEN;
 use port::chan::msg::Msg;
 use port::chan::tlv::Exts;
+use port::chan::transport::{RekeyIncoming, is_rekey_traffic};
 use port::chan::wire;
 use port::devmnt::NOFID;
 use port::fid::StatefulHandle;
@@ -465,9 +466,10 @@ fn request(
     client
         .send(typ, tag, handle, exts, &fixture_body(message))
         .expect("the client seals the request");
+    let mut exchange = TestExchange::new(Vec::new());
     server
         .borrow_mut()
-        .handle_one()
+        .handle_one(&mut exchange, 0)
         .expect("the server handles the request");
     client.recv().expect("the client opens the reply")
 }
@@ -628,9 +630,10 @@ fn aead_negotiate_end_to_end_stateless_capability() {
             }),
         )
         .expect("the bad capability packet is sealed");
+    let mut exchange = TestExchange::new(Vec::new());
     server
         .borrow_mut()
-        .handle_one()
+        .handle_one(&mut exchange, 0)
         .expect("the server consumes the bad packet");
     assert!(server.borrow().is_closed(), "a capability that fails verification closes (P8)");
     assert!(
@@ -839,4 +842,168 @@ fn aead_negotiate_end_to_end_handle_from_another_connection_is_refused() {
         matches!(reply.msg, Msg::Rerror { .. }),
         "a handle issued on another connection does not resolve"
     );
+}
+
+#[test]
+fn aead_negotiate_end_to_end_read_during_rekey_is_served() {
+    let (mut client, server, _link) = connect_aead_with(secret(), 1, config_with_rekey(6, 5000));
+    let file_handle = open_the_file(&mut client, &server);
+
+    // Four requests so far (attach, walk, open, read); two more reach the
+    // threshold of 6 on both sides.
+    for _ in 0..2 {
+        let reply = request(
+            &mut client,
+            &server,
+            wire::TREAD,
+            file_handle.to_wire(),
+            &Exts::default(),
+            &Msg::Tread {
+                fid: 2,
+                offset: 0,
+                count: 4096,
+            },
+        );
+        assert!(matches!(reply.msg, Msg::Rread { .. }));
+    }
+    assert!(client.session.rekey_due(), "the client's send counter reached the threshold");
+    assert!(server.borrow().rekey_due(), "the server's send counter reached the threshold");
+
+    let mut client_exchange =
+        TestExchange::with_payload(vec![second_secret()], CLIENT_EXCHANGE.to_vec());
+    let mut server_exchange =
+        TestExchange::with_payload(vec![second_secret()], SERVER_EXCHANGE.to_vec());
+    let now = 0;
+
+    // Tauth, routed by the server fixture through `is_rekey_traffic` (P9).
+    let started = client
+        .rekey(&mut client_exchange, None, now)
+        .expect("the client starts the exchange");
+    assert_eq!(started.len(), 1, "the client sends Tauth sealed");
+    server
+        .borrow_mut()
+        .handle_one(&mut server_exchange, now)
+        .expect("the server routes the Tauth to its re-key state");
+
+    let msg = client.recv().expect("the client opens Rauth");
+    assert!(matches!(msg.msg, Msg::Rauth { .. }));
+    client
+        .rekey(&mut client_exchange, Some(&msg.msg), now)
+        .expect("the client sends Twrite");
+
+    // An ordinary file read crosses the exchange in the same direction.
+    client
+        .send(
+            wire::TREAD,
+            1,
+            file_handle.to_wire(),
+            &Exts::default(),
+            &fixture_body(&Msg::Tread {
+                fid: 2,
+                offset: 0,
+                count: 4096,
+            }),
+        )
+        .expect("the client seals the ordinary read");
+
+    // The server routes the exchange's Twrite, then serves the ordinary read
+    // instead of consuming it.
+    server
+        .borrow_mut()
+        .handle_one(&mut server_exchange, now)
+        .expect("the server routes the exchange Twrite");
+    server
+        .borrow_mut()
+        .handle_one(&mut server_exchange, now)
+        .expect("the server serves the ordinary read");
+
+    let msg = client.recv().expect("the client opens Rwrite");
+    assert!(matches!(msg.msg, Msg::Rwrite { .. }));
+    client
+        .rekey(&mut client_exchange, Some(&msg.msg), now)
+        .expect("the client sends Tread");
+
+    // The ordinary reply reaches the client while it waits for the exchange's
+    // Rread, and the router leaves it alone.
+    let ordinary = client.recv().expect("the client opens the ordinary Rread");
+    assert_eq!(ordinary.tag, 1, "the ordinary reply keeps its own tag");
+    assert!(
+        !is_rekey_traffic(ordinary.tag, &ordinary.msg),
+        "an ordinary reply is never exchange traffic"
+    );
+    let packets = client
+        .session
+        .rekey_step(
+            &mut client_exchange,
+            Some(RekeyIncoming {
+                tag: ordinary.tag,
+                message: &ordinary.msg,
+            }),
+            now,
+        )
+        .expect("the router ignores ordinary traffic");
+    assert!(packets.is_empty(), "the router sends nothing for an ordinary reply");
+    match ordinary.msg {
+        Msg::Rread { data } => assert_eq!(
+            data, E2E_FILE_BYTES,
+            "the file read is served while the in-band exchange is in flight"
+        ),
+        other => panic!("expected the ordinary Rread, got {other:?}"),
+    }
+
+    // The exchange finishes and both directions cut over.
+    server
+        .borrow_mut()
+        .handle_one(&mut server_exchange, now)
+        .expect("the server routes the exchange Tread");
+    let msg = client.recv().expect("the client opens the exchange Rread");
+    assert!(matches!(msg.msg, Msg::Rread { .. }));
+    client
+        .rekey(&mut client_exchange, Some(&msg.msg), now)
+        .expect("the client derives generation 1");
+
+    let marker = client
+        .rekey(&mut client_exchange, None, now)
+        .expect("the client sends its marker");
+    assert_eq!(marker.len(), 1);
+    server
+        .borrow_mut()
+        .handle_one(&mut server_exchange, now)
+        .expect("the server routes the c2s marker");
+    let ack = client.recv().expect("the client opens the c2s acknowledgement");
+    client
+        .rekey(&mut client_exchange, Some(&ack.msg), now)
+        .expect("the client verifies the acknowledgement");
+
+    let marker = server
+        .borrow_mut()
+        .rekey(&mut server_exchange, None, now)
+        .expect("the server sends its own marker");
+    assert_eq!(marker.len(), 1);
+    let msg = client.recv().expect("the client opens the s2c marker");
+    client
+        .rekey(&mut client_exchange, Some(&msg.msg), now)
+        .expect("the client cuts its receive direction over");
+    server
+        .borrow_mut()
+        .handle_one(&mut server_exchange, now)
+        .expect("the server routes the s2c acknowledgement");
+
+    // The session survives the re-key and answers under generation 1.
+    let after = request(
+        &mut client,
+        &server,
+        wire::TREAD,
+        file_handle.to_wire(),
+        &Exts::default(),
+        &Msg::Tread {
+            fid: 2,
+            offset: 0,
+            count: 4096,
+        },
+    );
+    match after.msg {
+        Msg::Rread { data } => assert_eq!(data, E2E_FILE_BYTES, "the read after the re-key succeeds"),
+        other => panic!("expected the post-re-key Rread, got {other:?}"),
+    }
 }
