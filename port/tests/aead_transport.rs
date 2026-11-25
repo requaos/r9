@@ -1151,6 +1151,51 @@ fn drive_exchange(
     let _ = link;
 }
 
+/// Run the in-band exchange only as far as the client's `Twrite`: the client
+/// has taken `Rauth`, its seam has returned `Done` (it holds the exchange
+/// secret), `finish_exchange` has not run, and its sealed `Twrite` is on the
+/// wire (plan 04-18's mid-exchange fixture).
+fn drive_exchange_to_client_twrite(
+    link: &std::rc::Rc<std::cell::RefCell<AeadLink>>,
+    client: &mut ClientEnd,
+    server: &mut ServerEnd,
+    ce: &mut dyn port::chan::transport::SessionExchange,
+    se: &mut dyn port::chan::transport::SessionExchange,
+    now: u64,
+) {
+    let started = client.rekey(ce, None, now).expect("the client starts the exchange");
+    assert_eq!(started.len(), 1, "the client sends Tauth sealed");
+
+    let msg = server.recv().expect("the server opens the sealed Tauth");
+    assert!(matches!(msg, Msg::Tauth { .. }), "the exchange starts with Tauth");
+    let rauth = server.rekey(se, Some(&msg), now).expect("the server answers Rauth");
+    assert_eq!(rauth.len(), 1);
+
+    let msg = client.recv().expect("the client opens the sealed Rauth");
+    assert!(matches!(msg, Msg::Rauth { .. }));
+    let twrite = client.rekey(ce, Some(&msg), now).expect("the client sends Twrite");
+    assert_eq!(twrite.len(), 1);
+    let _ = link;
+}
+
+/// Run the in-band exchange to the point where the server has taken the
+/// client's `Twrite` and answered `Rwrite`: the server holds the exchange
+/// secret and the seam's output bytes for the coming `Rread` (plan 04-18).
+fn drive_exchange_to_server_rwrite(
+    link: &std::rc::Rc<std::cell::RefCell<AeadLink>>,
+    client: &mut ClientEnd,
+    server: &mut ServerEnd,
+    ce: &mut dyn port::chan::transport::SessionExchange,
+    se: &mut dyn port::chan::transport::SessionExchange,
+    now: u64,
+) {
+    drive_exchange_to_client_twrite(link, client, server, ce, se, now);
+    let msg = server.recv().expect("the server opens the sealed Twrite");
+    assert!(matches!(msg, Msg::Twrite { .. }));
+    let rwrite = server.rekey(se, Some(&msg), now).expect("the server answers Rwrite");
+    assert_eq!(rwrite.len(), 1);
+}
+
 /// An exchange pair with the handshake secret first and the re-key secret
 /// second, sharing the default handshake payloads.
 fn rekey_seams(
@@ -1192,6 +1237,88 @@ fn aead_transport_rekey_fires_at_threshold() {
     );
     assert_eq!(ce.runs(), 2, "the exchange seam ran a second time for the re-key");
     assert_eq!(se.runs(), 2, "the exchange seam ran a second time at the server");
+}
+
+#[test]
+fn aead_transport_rekey_failure_mid_exchange_zeroizes_exchange_secret() {
+    let link = AeadLink::new();
+    let (mut ce, mut se) = rekey_seams(secret(), second_secret());
+    let (mut client, mut server) = connect_with_kept_config(
+        link.clone(),
+        &mut ce,
+        &mut se,
+        config_with_rekey(4, 5000),
+    );
+    assert!(
+        client.session.exchange_secret_zeroized(),
+        "a session with no exchange in progress holds no exchange secret"
+    );
+
+    for i in 0..4u16 {
+        client
+            .send(wire::TCLUNK, i, [0u8; 8], &Exts::default(), &clunk_body())
+            .expect("the client seals a threshold packet");
+        assert!(server.recv().is_ok());
+    }
+    assert!(client.session.rekey_due(), "the fourth sealed packet makes a re-key due");
+
+    // Stop between the seam returning `Done` and `finish_exchange`.
+    drive_exchange_to_client_twrite(&link, &mut client, &mut server, &mut ce, &mut se, 0);
+    assert!(
+        !client.session.exchange_secret_zeroized(),
+        "the client holds the exchange secret between Done and finish_exchange"
+    );
+
+    // A packet with one flipped byte: its open fails at the client.
+    server
+        .send(wire::RCLUNK, 90, [0u8; 8], &Exts::default(), &[])
+        .expect("the server seals a packet to tamper with");
+    {
+        let mut guard = link.borrow_mut();
+        let last = guard.s2c.len() - 1;
+        guard.s2c[last] ^= 0xFF;
+    }
+    assert!(client.recv().is_err(), "the tampered packet is refused");
+    assert!(client.session.is_closed(), "the failed open closes the client");
+    assert!(client.session.keys_zeroized(), "the failed open zeroizes every key");
+    assert!(
+        client.session.exchange_secret_zeroized(),
+        "the failed open scrubs the exchange secret"
+    );
+}
+
+#[test]
+fn aead_transport_rekey_teardown_mid_exchange_zeroizes_exchange_secret() {
+    let link = AeadLink::new();
+    // `rekey_seams` gives both seams a non-empty payload, so the server's seam
+    // output buffer holds bytes when it answers `Rwrite`.
+    let (mut ce, mut se) = rekey_seams(secret(), second_secret());
+    let (mut client, mut server) = connect_with_kept_config(
+        link.clone(),
+        &mut ce,
+        &mut se,
+        config_with_rekey(4, 5000),
+    );
+    for i in 0..4u16 {
+        client
+            .send(wire::TCLUNK, i, [0u8; 8], &Exts::default(), &clunk_body())
+            .expect("the client seals a threshold packet");
+        assert!(server.recv().is_ok());
+    }
+
+    drive_exchange_to_server_rwrite(&link, &mut client, &mut server, &mut ce, &mut se, 0);
+    assert!(
+        !server.session.exchange_secret_zeroized(),
+        "the server holds the exchange secret and the seam's output"
+    );
+
+    server.session.teardown();
+    assert!(server.session.is_closed(), "teardown closes the server");
+    assert!(server.session.keys_zeroized(), "teardown zeroizes every key");
+    assert!(
+        server.session.exchange_secret_zeroized(),
+        "teardown scrubs the exchange secret and the seam's output"
+    );
 }
 
 #[test]

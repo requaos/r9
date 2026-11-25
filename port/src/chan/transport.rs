@@ -177,8 +177,14 @@ impl Rekey {
     }
 
     /// Whether every key the re-key state holds is zero.
+    ///
+    /// Covers the exchange secret (absent, not merely overwritten) and every
+    /// byte of the seam's output buffer, beside the superseded and pending key
+    /// slots (CR-01).
     fn keys_zeroized(&self) -> bool {
-        self.recv_superseded.as_ref().is_none_or(DirectionKeys::is_zeroized)
+        self.secret.is_none()
+            && self.out.iter().all(|&byte| byte == 0)
+            && self.recv_superseded.as_ref().is_none_or(DirectionKeys::is_zeroized)
             && self.pending.iter().all(|slot| slot.as_ref().is_none_or(DirectionKeys::is_zeroized))
     }
 
@@ -913,6 +919,18 @@ impl Session {
     /// read through the per-direction lock (D-21).
     pub fn keys_zeroized(&self) -> bool {
         self.send.keys_zeroized() && self.recv_keys.is_zeroized() && self.rekey.keys_zeroized()
+    }
+
+    /// Whether the in-band exchange secret and the seam's output buffer are
+    /// zero.
+    ///
+    /// True exactly when the re-key state holds no exchange secret and every
+    /// byte of the seam's output buffer is zero. Computed from that storage,
+    /// never from a flag, so a failure path that skipped the scrub answers
+    /// `false` (CR-01, WIRE-03). It reveals no key material, only `true` or
+    /// `false` (WIRE-05 prohibition).
+    pub fn exchange_secret_zeroized(&self) -> bool {
+        self.rekey.secret.is_none() && self.rekey.out.iter().all(|&byte| byte == 0)
     }
 
     /// Whether a re-key is due: the send counter has reached the configured
