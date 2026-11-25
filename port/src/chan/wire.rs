@@ -294,6 +294,16 @@ impl<'a> Unverified<'a> {
     pub fn len(&self) -> usize {
         self.packet.len()
     }
+
+    /// Take the bounded bytes so `chan::transport` can verify the MAC and
+    /// decrypt in place (crate-private).
+    ///
+    /// Only `Session::open` calls this, and only after `new` has bounded the
+    /// packet; the public surface still exposes nothing but `len`, so no
+    /// decode can run on unauthenticated bytes outside this crate.
+    pub(crate) fn take(self) -> &'a mut [u8] {
+        self.packet
+    }
 }
 
 /// A packet whose MAC has verified: its header, TLV area and plaintext body
