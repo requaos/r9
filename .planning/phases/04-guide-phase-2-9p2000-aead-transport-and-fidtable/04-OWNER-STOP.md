@@ -5,6 +5,24 @@ end-of-phase stop for Phase 4 (the 9P2000.aead transport and the fid table), and
 things the Mac cannot check: the sandboxed x86_64 kernel derivations, the boot-to-rio gates,
 and the `boot-iso` fixed-output hash for the new kernel bytes (D-25).
 
+## One-command runner
+
+The whole page (sections 2 to 9) is scripted in `04-OWNER-STOP-RUNNER.sh` beside this file. It
+runs the steps in order, fails fast on the first red step, wraps every command in `run_logged`
+(so each log under `~/r9-p04-stop/` starts `HEAD=` and ends `EXIT=`), performs the one
+`flake.nix` `outputHash` re-derivation this page assigns to the owner, commits `flake.nix`
+alone, pushes the hash commit, and then enforces the one-commit rule before each gate.
+
+```bash
+git fetch origin
+git switch -C phase-04/aead-wire origin/phase-04/aead-wire
+bash .planning/phases/04-guide-phase-2-9p2000-aead-transport-and-fidtable/04-OWNER-STOP-RUNNER.sh
+```
+
+Add `PUSH_LOGS=1` in front of the `bash` to commit the logs under
+`evidence/owner-stop/return/` and push them instead of pasting. The sections below remain the
+authoritative description of what the script does and what each failure means.
+
 ## 0. What this stop is, and why it is here
 
 - **Branch:** `phase-04/aead-wire`. Nothing else is pushed at this stop.
