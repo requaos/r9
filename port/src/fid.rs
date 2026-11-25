@@ -708,8 +708,39 @@ impl<P: Probe + Clone> FidTable<P> {
     /// resolving afterwards and swept entries do not.  After a sweep the
     /// reclaim window is empty and `active` holds exactly the survivors.
     pub fn sweep(&self) -> Vec<(u8, u32)> {
-        // RED stub: returns nothing; the real body lands in the GREEN commit
-        // (D-03, Pitfall 11).
-        Vec::new()
+        let mut swept = Vec::new();
+        for (index, shard) in self.shards.iter().enumerate() {
+            let node = LockNode::new();
+            let mut active = shard.active.lock(&node);
+            let node = LockNode::new();
+            let mut reclaimed = shard.reclaimed.lock(&node);
+
+            // The one and-not WIRE-09 names.  Membership of the result is this
+            // bitmap difference and nothing else: there is no per-id
+            // membership test below.
+            let orphans = active.difference(&reclaimed);
+            for slot in orphans.iter() {
+                // `read_slot` is the sweep's bounds-checked read; a corrupt
+                // bitmap id can name no slot and is still reported as swept so
+                // the caller can account for it.
+                if let Some(words) = shard.tpht.read_slot(slot) {
+                    let entry = FidEntry::from_words(&words);
+                    let key = tpht_key(entry.client_id, entry.fid_key);
+                    let same = |value: &[u64; FID_ENTRY_WORDS]| {
+                        let candidate = FidEntry::from_words(value);
+                        candidate.fid_key == entry.fid_key
+                            && candidate.client_id == entry.client_id
+                    };
+                    shard.tpht.remove(key, same);
+                }
+                // Drop the swept id from the live set as it is collected, so
+                // the survivors need no second bitmap operation.
+                active.remove(slot);
+                swept.push((index as u8, slot));
+            }
+            // The reclaim window resets for the next failover round.
+            *reclaimed = RoaringBitmap::new();
+        }
+        swept
     }
 }
