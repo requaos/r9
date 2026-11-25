@@ -39,12 +39,16 @@
 //! through the one `fail()` path and every key is zeroized, and the packet is
 //! never handed to the handler.
 //!
-//! # What is not here yet
+//! # In-band re-keying (WIRE-04, D-18 to D-21)
 //!
-//! Re-keying is plan 04-08; its timing needs `now`, and this plan threads that
-//! argument through without reading it.  A connection owner must call a
-//! periodic `poll(now)` once one exists; nothing in the kernel drives a
-//! session this phase (D-22).
+//! Either end starts a fresh `Tauth` exchange in band when its send counter
+//! reaches `rekey_after_packets`; the exchange derives generation `g + 1` and
+//! each direction cuts over under its own marker and acknowledgement, with an
+//! acknowledgement deadline the caller's `now` drives.  A sender that would
+//! reach `SEQ_HARD_LIMIT` with no new keys closes instead of wrapping.  A
+//! connection owner must call `poll(now)` periodically so a withheld
+//! acknowledgement closes the session; nothing in the kernel drives a session
+//! this phase (D-22).
 
 use alloc::vec::Vec;
 
@@ -165,9 +169,23 @@ impl Rekey {
         }
     }
 
-    /// Zeroize every key the re-key state holds, leaving the values in place
-    /// so `keys_zeroized` can read them.
+    /// Zeroize every key the re-key state holds: the exchange secret, the
+    /// seam's output buffer, the in-progress transcript and the superseded and
+    /// pending key slots.
+    ///
+    /// The values that stay in their slots are zeroed in place so
+    /// `keys_zeroized` can read them; the exchange secret is dropped (its
+    /// `Key` is `Zeroizing`) and the seam's buffer is zero-filled and cleared
+    /// (CR-01).
     fn fail(&mut self) {
+        // Drop (not just overwrite) the exchange secret: `Key` is
+        // `Zeroizing`, so assigning `None` zeroes it on drop.
+        self.secret = None;
+        for byte in self.out.iter_mut() {
+            *byte = 0;
+        }
+        self.out.clear();
+        self.transcript = None;
         if let Some(keys) = &mut self.recv_superseded {
             keys.zeroize();
         }
@@ -886,9 +904,9 @@ impl Session {
     ///
     /// Both directions' keys (the send and receive slots) are overwritten with
     /// zeros, both counters are zeroed, and the closed flag is set.  The
-    /// zeroized values stay in their slots, so `keys_zeroized` has something
-    /// to read.  Plan 04-08's pending and superseded key slots join this call;
-    /// they do not exist yet.
+    /// re-key state's pending and superseded keys, the exchange secret and the
+    /// seam's output buffer join the same call.  The zeroized values stay in
+    /// their slots, so `keys_zeroized` has something to read.
     fn fail(&mut self) {
         // The send keys sit behind the per-direction lock, so this reaches
         // them through it; the receive keys are single-reader and are
@@ -912,6 +930,8 @@ impl Session {
 
     /// Whether every key this session holds is zero.
     ///
+    /// Covers both directions' keys, the re-key state's pending and
+    /// superseded slots, the exchange secret and the seam's output buffer.
     /// Computed from the key storage, never from the closed flag, so a
     /// `fail()` or `teardown()` that set the flag without zeroizing answers
     /// `false`.  It reveals no key material, only `true` or `false`, and
