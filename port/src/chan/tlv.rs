@@ -33,11 +33,23 @@
 //! - `EXT_STREAM_PRIO`: 4 bytes, `tier << 30 | credit` ([`stream_prio_parts`]).
 //! - `EXT_OBINARY`: 0 bytes; the record's presence is the marker.
 //! - `EXT_STATELESS_CAP`: 24 bytes (D-11, D-12).
+//!
+//! # The rules (P1)
+//!
+//! Records appear in ascending `type` order, each type at most once, and the
+//! set of record types equals the set bits of `ExtMask` exactly.  `len` is the
+//! fixed value length for its type (8, 32, 10, 4, 0, 24).  `reserved` and every
+//! padding byte are zero, and the area is consumed exactly.
+//!
+//! Any bit outside `EXT_KNOWN`, or any rule broken, is a protocol error found
+//! after the MAC verifies.  There is no skip path for an unknown extension bit
+//! and no tolerance for a malformed record: both ends agreed the exact dialect
+//! string, so the caller (the transport, plan 04-07) closes the connection.
 
 use alloc::vec::Vec;
 
 use super::{
-    EXT_CAP_TOKEN, EXT_DEADLINE, EXT_OBINARY, EXT_QID_VOLATILITY, EXT_STATELESS_CAP,
+    EXT_CAP_TOKEN, EXT_DEADLINE, EXT_KNOWN, EXT_OBINARY, EXT_QID_VOLATILITY, EXT_STATELESS_CAP,
     EXT_STREAM_PRIO,
 };
 
@@ -144,8 +156,28 @@ const fn record_len(value_len: usize) -> usize {
     (TLV_HEADER_LEN + value_len).next_multiple_of(8)
 }
 
+/// The fixed value length for an `ExtMask` bit, or `None` for an unknown bit.
+const fn fixed_value_len(bit: u16) -> Option<usize> {
+    match bit {
+        EXT_DEADLINE => Some(LEN_DEADLINE),
+        EXT_CAP_TOKEN => Some(LEN_CAP_TOKEN),
+        EXT_QID_VOLATILITY => Some(LEN_QID_VOLATILITY),
+        EXT_STREAM_PRIO => Some(LEN_STREAM_PRIO),
+        EXT_OBINARY => Some(LEN_OBINARY),
+        EXT_STATELESS_CAP => Some(LEN_STATELESS_CAP),
+        _ => None,
+    }
+}
+
 /// Parse the `ExtTLVs` area named by `mask` (WIRE-02, P1).
+///
+/// The parser borrows `area`: the capability values are references into it, so
+/// nothing is allocated.  Every malformed area is a distinct error naming the
+/// rule broken; the caller closes the connection on any of them.
 pub fn parse(mask: u16, area: &[u8]) -> crate::Result<Exts<'_>> {
+    if mask & !EXT_KNOWN != 0 {
+        return Err("chan: tlv unknown extension bit");
+    }
     let mut exts = Exts::default();
     let mut pos = 0usize;
     for bit_index in 0..6u8 {
@@ -156,34 +188,64 @@ pub fn parse(mask: u16, area: &[u8]) -> crate::Result<Exts<'_>> {
         let Some(header) = area.get(pos..pos + TLV_HEADER_LEN) else {
             return Err("chan: tlv set bit has no record");
         };
+        let rec_type = header[0];
+        let reserved = header[1];
         let len = u16::from_le_bytes([header[2], header[3]]) as usize;
-        let padded = record_len(len);
+
+        if rec_type > 5 {
+            return Err("chan: tlv record type outside EXT_KNOWN");
+        }
+        let rec_bit = 1u16 << rec_type;
+        if rec_bit & mask == 0 {
+            return Err("chan: tlv record type not in mask");
+        }
+        if rec_type < bit_index {
+            return Err("chan: tlv duplicate record type");
+        }
+        if rec_type > bit_index {
+            return Err("chan: tlv record type out of order");
+        }
+        if reserved != 0 {
+            return Err("chan: tlv nonzero reserved byte");
+        }
+        let Some(expected_len) = fixed_value_len(bit) else {
+            return Err("chan: tlv unknown extension bit");
+        };
+        if len != expected_len {
+            return Err("chan: tlv wrong value length");
+        }
+
+        let padded = record_len(expected_len);
         let Some(rec_end) = pos.checked_add(padded) else {
             return Err("chan: tlv record length overflow");
         };
         let Some(record) = area.get(pos..rec_end) else {
             return Err("chan: tlv record value truncated");
         };
-        let value = &record[TLV_HEADER_LEN..TLV_HEADER_LEN + len];
+        let value = &record[TLV_HEADER_LEN..TLV_HEADER_LEN + expected_len];
+        if record[TLV_HEADER_LEN + expected_len..].iter().any(|&b| b != 0) {
+            return Err("chan: tlv nonzero padding byte");
+        }
+
         match bit {
             EXT_DEADLINE => {
                 let bytes: [u8; LEN_DEADLINE] = value
                     .try_into()
-                    .map_err(|_| "chan: tlv record value truncated")?;
+                    .map_err(|_| "chan: tlv wrong value length")?;
                 exts.deadline = Some(u64::from_le_bytes(bytes));
             }
             EXT_CAP_TOKEN => {
-                let bytes: &[u8; LEN_CAP_TOKEN] = value
-                    .try_into()
-                    .map_err(|_| "chan: tlv record value truncated")?;
+                let bytes: &[u8; LEN_CAP_TOKEN] =
+                    value.try_into().map_err(|_| "chan: tlv wrong value length")?;
                 exts.cap_token = Some(bytes);
             }
             EXT_QID_VOLATILITY => {
-                if value.len() != LEN_QID_VOLATILITY {
-                    return Err("chan: tlv record value truncated");
+                let class = value[0];
+                if !matches!(class, 0x20 | 0x40 | 0x80) {
+                    return Err("chan: tlv invalid volatility class");
                 }
                 exts.qid_volatility = Some(QidVolatility {
-                    class: value[0],
+                    class,
                     lease_gen: u64::from_le_bytes(
                         value[1..9].try_into().expect("the lease generation is 8 bytes"),
                     ),
@@ -193,19 +255,21 @@ pub fn parse(mask: u16, area: &[u8]) -> crate::Result<Exts<'_>> {
             EXT_STREAM_PRIO => {
                 let bytes: [u8; LEN_STREAM_PRIO] = value
                     .try_into()
-                    .map_err(|_| "chan: tlv record value truncated")?;
+                    .map_err(|_| "chan: tlv wrong value length")?;
                 exts.stream_prio = Some(u32::from_le_bytes(bytes));
             }
             EXT_OBINARY => exts.obinary = true,
             EXT_STATELESS_CAP => {
-                let bytes: &[u8; LEN_STATELESS_CAP] = value
-                    .try_into()
-                    .map_err(|_| "chan: tlv record value truncated")?;
+                let bytes: &[u8; LEN_STATELESS_CAP] =
+                    value.try_into().map_err(|_| "chan: tlv wrong value length")?;
                 exts.stateless_cap = Some(bytes);
             }
             _ => return Err("chan: tlv unknown extension bit"),
         }
         pos = rec_end;
+    }
+    if pos != area.len() {
+        return Err("chan: tlv trailing bytes");
     }
     Ok(exts)
 }
