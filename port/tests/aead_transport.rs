@@ -24,7 +24,9 @@ use crypto::key::Key;
 use crypto::session::{self, Direction, DirectionKeys, SessionKeys, Transcript};
 use port::chan::msg::{self, Msg};
 use port::chan::tlv::Exts;
-use port::chan::transport::{Handshake, Role, Superseded, is_rekey_traffic};
+use port::chan::transport::{
+    ExchangeStep, Handshake, Role, SessionExchange, Superseded, is_rekey_traffic,
+};
 use port::chan::wire;
 use port::chan::PAGE_LEN;
 use port::dat::Qid;
@@ -1875,6 +1877,33 @@ fn standard_frame(typ: u8, tag: u16, body: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Re-frame one decrypted P4 body in the unpadded standard form DECISION P2
+/// absorbs: a `Twrite` carries `fid[4] offset[8] count[4]` and the first
+/// `count` data bytes, an `Rread` `count[4]` and that many data bytes.
+///
+/// The page padding P4 puts on the wire is dropped here, so this is the frame a
+/// second implementation written to P2 derives its keys from.
+fn unpadded_exchange_frame(typ: u8, tag: u16, body: &[u8]) -> Vec<u8> {
+    let standard: Vec<u8> = match typ {
+        wire::TWRITE => {
+            let count =
+                u32::from_le_bytes(body[12..16].try_into().expect("count is 4 bytes")) as usize;
+            let mut out = body[..16].to_vec();
+            out.extend_from_slice(&body[16..16 + count]);
+            out
+        }
+        wire::RREAD => {
+            let count =
+                u32::from_le_bytes(body[..4].try_into().expect("count is 4 bytes")) as usize;
+            let mut out = body[..4].to_vec();
+            out.extend_from_slice(&body[4..4 + count]);
+            out
+        }
+        _ => body.to_vec(),
+    };
+    standard_frame(typ, tag, &standard)
+}
+
 /// Decrypt one sealed packet's body with the test's own keys, applying the P5
 /// placement with literals (parameters at block counter 0, data page `i` at
 /// `1 + 64 * i`, a 4096-byte page).  Never calls the transport's own opener.
@@ -1942,7 +1971,7 @@ fn test_generations(wire: &[(Direction, Vec<u8>)]) -> (SessionKeys, SessionKeys)
         };
         let body = decrypt_packet_body(keys, packet);
         let tag = u16::from_le_bytes(packet[5..7].try_into().expect("Tag is 2 bytes"));
-        t1.absorb(&standard_frame(typ, tag, &body));
+        t1.absorb(&unpadded_exchange_frame(typ, tag, &body));
     }
     let keys1 = session::derive(&second_secret(), &t1.hash(), 1);
     (keys0, keys1)
@@ -2386,7 +2415,7 @@ fn rekey_transcript_hash(wire: &[(Direction, Vec<u8>)]) -> [u8; 32] {
         };
         let body = decrypt_packet_body(keys, packet);
         let tag = u16::from_le_bytes(packet[5..7].try_into().expect("Tag is 2 bytes"));
-        t1.absorb(&standard_frame(typ, tag, &body));
+        t1.absorb(&unpadded_exchange_frame(typ, tag, &body));
     }
     t1.hash()
 }
@@ -2812,6 +2841,255 @@ fn aead_transport_rekey_stream_notag_afid_is_exchange() {
     };
     assert!(is_rekey_traffic(port::devmnt::NOTAG, &rstream));
     assert!(!is_rekey_traffic(4, &rstream));
+}
+
+// ---------------------------------------------------------------------------
+// In-band re-keying: the transcript absorbs the unpadded standard frames
+// (CR-03, DECISION P2).
+// ---------------------------------------------------------------------------
+
+/// The in-band `Tauth` frame in its standard 9P2000 form, written by hand.
+fn literal_tauth_frame() -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(&0xFFFF_FFFEu32.to_le_bytes());
+    body.extend_from_slice(&[0x04, 0x00, b'n', b'o', b'n', b'e']);
+    body.extend_from_slice(&[0x00, 0x00]);
+    standard_frame(wire::TAUTH, port::devmnt::NOTAG, &body)
+}
+
+/// The in-band `Rauth` frame (a zero qid), written by hand.
+fn literal_rauth_frame() -> Vec<u8> {
+    let mut body = vec![0u8];
+    body.extend_from_slice(&0u32.to_le_bytes());
+    body.extend_from_slice(&0u64.to_le_bytes());
+    standard_frame(wire::RAUTH, port::devmnt::NOTAG, &body)
+}
+
+/// The hand-written `Twrite` frame for `payload`, with the true count and no
+/// page padding (DECISION P2).
+fn literal_twrite_frame(payload: &[u8]) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(&0xFFFF_FFFEu32.to_le_bytes());
+    body.extend_from_slice(&0u64.to_le_bytes());
+    body.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    body.extend_from_slice(payload);
+    standard_frame(wire::TWRITE, port::devmnt::NOTAG, &body)
+}
+
+/// The `Rwrite` frame acknowledging a write of `count` bytes.
+fn literal_rwrite_frame(count: u32) -> Vec<u8> {
+    standard_frame(wire::RWRITE, port::devmnt::NOTAG, &count.to_le_bytes())
+}
+
+/// The `Tread` frame the exchange sends.
+fn literal_tread_frame() -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(&0xFFFF_FFFEu32.to_le_bytes());
+    body.extend_from_slice(&0u64.to_le_bytes());
+    body.extend_from_slice(&65536u32.to_le_bytes());
+    standard_frame(wire::TREAD, port::devmnt::NOTAG, &body)
+}
+
+/// The `Rread` frame for `payload`, unpadded.
+fn literal_rread_frame(payload: &[u8]) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    body.extend_from_slice(payload);
+    standard_frame(wire::RREAD, port::devmnt::NOTAG, &body)
+}
+
+/// All six exchange frames, hand-written, in wire order.
+fn hand_written_exchange_frames(client_payload: &[u8], server_payload: &[u8]) -> Vec<Vec<u8>> {
+    vec![
+        literal_tauth_frame(),
+        literal_rauth_frame(),
+        literal_twrite_frame(client_payload),
+        literal_rwrite_frame(client_payload.len() as u32),
+        literal_tread_frame(),
+        literal_rread_frame(server_payload),
+    ]
+}
+
+/// Chain the canonical generation 0 transcript with `frames` and derive
+/// generation 1 with the second secret (P2, D-17, D-18).
+fn derive_from_frames(frames: &[Vec<u8>]) -> SessionKeys {
+    let mut t0 = Transcript::new();
+    for frame in handshake_frames() {
+        t0.absorb(&frame);
+    }
+    let mut t1 = Transcript::chain(&t0.hash());
+    for frame in frames {
+        t1.absorb(frame);
+    }
+    session::derive(&second_secret(), &t1.hash(), 1)
+}
+
+/// The first client-to-server packet the client sent under generation 1, after
+/// its marker, with the test's own generation 0 keys to find the marker.
+fn first_packet_after_marker(link: &std::rc::Rc<std::cell::RefCell<AeadLink>>) -> Vec<u8> {
+    let wire = link.borrow().wire_log.clone();
+    let keys0 = gen0_keys(&secret());
+    let marker_index = wire
+        .iter()
+        .position(|(direction, packet)| {
+            *direction == Direction::ClientToServer
+                && packet[4] == wire::TREKEY
+                && decrypt_packet_body(&keys0.c2s, packet)[0] == msg::REKEY_MARKER
+        })
+        .expect("the client's marker is in the record");
+    wire[marker_index + 1..]
+        .iter()
+        .find(|(direction, _)| *direction == Direction::ClientToServer)
+        .map(|(_, packet)| packet.clone())
+        .expect("the first generation 1 packet is in the record")
+}
+
+/// A seam that contributes `CLIENT_EXCHANGE` to the handshake and nothing to
+/// the re-key, so the in-band `Twrite` carries an empty payload.
+struct EmptyRekeyPayload {
+    secrets: Vec<Key>,
+    index: usize,
+}
+
+impl EmptyRekeyPayload {
+    fn new(secrets: Vec<Key>) -> EmptyRekeyPayload {
+        EmptyRekeyPayload { secrets, index: 0 }
+    }
+}
+
+impl SessionExchange for EmptyRekeyPayload {
+    fn step(&mut self, _incoming: &[u8], out: &mut Vec<u8>) -> port::Result<ExchangeStep> {
+        let secret = self
+            .secrets
+            .get(self.index)
+            .or_else(|| self.secrets.last())
+            .expect("the seam was given at least one secret")
+            .clone();
+        if self.index == 0 {
+            out.extend_from_slice(CLIENT_EXCHANGE);
+        }
+        self.index += 1;
+        Ok(ExchangeStep::Done(secret))
+    }
+}
+
+#[test]
+fn aead_transport_rekey_transcript_twrite_frame_is_44_bytes_unpadded() {
+    let link = AeadLink::new();
+    // `connected_after_exchange` runs the handshake and the in-band exchange
+    // with CLIENT_EXCHANGE (21 bytes) and SERVER_EXCHANGE (21 bytes).
+    let (mut client, mut server, mut ce, mut se) = connected_after_exchange(&link);
+
+    // The client's marker is its last old-key packet; the next packet travels
+    // under generation 1 at sequence 0.
+    let marker = client.rekey(&mut ce, None, 0).expect("the client sends its marker");
+    assert_eq!(marker.len(), 1);
+    client
+        .send(wire::TCLUNK, 99, [0u8; 8], &Exts::default(), &clunk_body())
+        .expect("the client seals a generation 1 packet");
+    let _ = &mut server;
+    let _ = &mut se;
+
+    let first_after = first_packet_after_marker(&link);
+    let frames = hand_written_exchange_frames(CLIENT_EXCHANGE, SERVER_EXCHANGE);
+    assert_eq!(
+        frames[2].len(),
+        44,
+        "a 21-byte Twrite is absorbed as exactly 44 bytes, not the 4119-byte page-padded form"
+    );
+    assert_eq!(
+        u32::from_le_bytes(frames[2][..4].try_into().expect("Size is 4 bytes")),
+        44,
+        "the frame's Size counts its own four bytes"
+    );
+
+    let keys1 = derive_from_frames(&frames);
+    let end = first_after.len() - 32;
+    assert_eq!(
+        &first_after[end..],
+        &mac_of(&keys1.c2s, &first_after)[..],
+        "the packet's tag is the test's own generation 1 c2s MAC over the unpadded transcript"
+    );
+
+    // The page-padded 4119-byte form gives a different generation 1 key, so the
+    // packet's tag does not match it.
+    let mut padded_body = Vec::new();
+    padded_body.extend_from_slice(&0xFFFF_FFFEu32.to_le_bytes());
+    padded_body.extend_from_slice(&0u64.to_le_bytes());
+    padded_body.extend_from_slice(&(CLIENT_EXCHANGE.len() as u32).to_le_bytes());
+    padded_body.extend_from_slice(CLIENT_EXCHANGE);
+    padded_body.resize(16 + PAGE_LEN, 0);
+    let mut padded_frames = frames.clone();
+    padded_frames[2] = standard_frame(wire::TWRITE, port::devmnt::NOTAG, &padded_body);
+    assert_eq!(
+        padded_frames[2].len(),
+        7 + 16 + PAGE_LEN,
+        "the page-padded form is 4119 bytes"
+    );
+    let padded_keys = derive_from_frames(&padded_frames);
+    assert_ne!(
+        &first_after[end..],
+        &mac_of(&padded_keys.c2s, &first_after)[..],
+        "page padding is not hashed into the generation 1 keys"
+    );
+
+    // Two frames in the wrong order give a different key as well.
+    let mut swapped = frames.clone();
+    swapped.swap(2, 3);
+    let swapped_keys = derive_from_frames(&swapped);
+    assert_ne!(
+        &first_after[end..],
+        &mac_of(&swapped_keys.c2s, &first_after)[..],
+        "the exchange frames are absorbed in wire order"
+    );
+}
+
+#[test]
+fn aead_transport_rekey_transcript_empty_twrite_frame_is_23_bytes() {
+    let link = AeadLink::new();
+    let mut ce = EmptyRekeyPayload::new(vec![secret(), second_secret()]);
+    let mut se =
+        TestExchange::with_payload(vec![secret(), second_secret()], SERVER_EXCHANGE.to_vec());
+    let (mut client, mut server) = connect_with_kept_config(
+        link.clone(),
+        &mut ce,
+        &mut se,
+        config_with_rekey(4, 5000),
+    );
+    for i in 0..4u16 {
+        client
+            .send(wire::TCLUNK, i, [0u8; 8], &Exts::default(), &clunk_body())
+            .expect("the client seals a threshold packet");
+        assert!(server.recv().is_ok());
+    }
+    drive_exchange(&link, &mut client, &mut server, &mut ce, &mut se, 0);
+
+    let marker = client.rekey(&mut ce, None, 0).expect("the client sends its marker");
+    assert_eq!(marker.len(), 1);
+    client
+        .send(wire::TCLUNK, 99, [0u8; 8], &Exts::default(), &clunk_body())
+        .expect("the client seals a generation 1 packet");
+
+    let first_after = first_packet_after_marker(&link);
+    let frames = hand_written_exchange_frames(&[], SERVER_EXCHANGE);
+    assert_eq!(
+        frames[2].len(),
+        23,
+        "an empty Twrite is absorbed as the 23-byte frame with count 0 and no data byte"
+    );
+    assert_eq!(
+        u32::from_le_bytes(frames[2][12 + 4..12 + 8].try_into().expect("Count is 4 bytes")),
+        0,
+        "the empty frame's count is 0"
+    );
+
+    let keys1 = derive_from_frames(&frames);
+    let end = first_after.len() - 32;
+    assert_eq!(
+        &first_after[end..],
+        &mac_of(&keys1.c2s, &first_after)[..],
+        "the empty-payload exchange derives the same generation 1 keys test-side"
+    );
 }
 
 // ---------------------------------------------------------------------------
