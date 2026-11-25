@@ -46,13 +46,45 @@
 //! makes the identity check a single atomic word.  Do not claim a consistent
 //! snapshot anywhere in this module.
 //!
-//! # What is not here yet
+//! # The table on TPHT (WIRE-08, WIRE-09; D-05, D-13)
 //!
-//! The table, the shards, capability issue and verify, the sweep and the
-//! single-read resolve are WIRE-08's and WIRE-09's, in later plans of this
-//! phase (D-22).  This module is the layout half only.
+//! [`FidShard`] wraps one home-only
+//! `ds::tpht::flattened::FlattenedTphtShard<8, _>` and the two bitmaps that
+//! name its live and reclaimed arena slots; [`FidTable`] boxes at most 256 of
+//! them.  A resolve makes exactly one arena read and zero header reads
+//! (`deref_tiny`), then compares the identity pair in registers.  A capability
+//! is issued and verified without touching a shard or a bitmap at all, which is
+//! what "zero FID memory" means.  The failover sweep is one bitmap
+//! `difference` per shard.
+//!
+//! # The capability is a bearer token within the domain (WIRE-07, D-13, P8)
+//!
+//! A [`StatelessCap`] is a **bearer token** within the domain: it is not bound
+//! to a client or a connection, by design, so any replica holding the domain
+//! secret verifies it in O(1) with no session memory.  With an 8-byte tag a
+//! forgery succeeds with probability 2^-64 per attempt, and an attempt needs an
+//! authenticated connection.  A caller treats a failed capability as
+//! connection-fatal (the transport does), so guesses are not free.  The domain
+//! secret is a constructor parameter ([`FidTable::new`]); this module holds no
+//! default secret, no `static` and no constant key material, and provisioning
+//! the secret to nodes is Phase 6 (D-13).  Bumping the table's epoch revokes
+//! every handle and capability issued before it.
+//!
+//! # `client_id` has no authenticated source yet
+//!
+//! [`FidTable::insert`] takes the `client_id` the caller's connection assigned.
+//! This phase has no authentication, so the test server assigns one per
+//! connection; Phase 6 defines the real source.
 
-use ds::tpht::TinyPtr;
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+
+use crypto::key::Key;
+use ds::roaring::RoaringBitmap;
+use ds::tpht::flattened::FlattenedTphtShard;
+use ds::tpht::{NoProbe, Probe, TinyPtr, TphtError};
+
+use crate::mcslock::{Lock, LockNode};
 
 /// The `StatefulHandle` wire length in bytes (WIRE-07).
 pub const STATEFUL_HANDLE_LEN: usize = 8;
@@ -385,4 +417,219 @@ pub fn gpu_qid_path(ctx_id: u32, node_type: u8) -> u64 {
     // formula is an identity operation and is left off to keep clippy quiet;
     // the wide mask on `ctx_id` is real and stays.
     (((ctx_id & 0x00FF_FFFF) as u64) << 8) | node_type as u64
+}
+
+// ---------------------------------------------------------------------------
+// The table on TPHT (WIRE-08, WIRE-09)
+// ---------------------------------------------------------------------------
+
+/// The number of 64-bit words a [`FidEntry`] occupies in a shard's arena.
+const FID_ENTRY_WORDS: usize = 8;
+
+/// The most shards a table may hold: a handle's `shard_id` is one byte (D-12).
+const MAX_SHARDS: usize = 256;
+
+/// The TPHT key for one client's fid: `client_id` in the high half and
+/// `fid_key` in the low half, so two clients' identical fid numbers never
+/// collide (RESEARCH Pattern 7, A10).
+fn tpht_key(client_id: u32, fid_key: u32) -> u64 {
+    ((client_id as u64) << 32) | fid_key as u64
+}
+
+/// A 64-bit avalanche mix of the TPHT key, used only to choose a key's home
+/// shard.  It is the SplitMix64 finalizer: deterministic, cheap and spread
+/// across every shard count.
+fn mix64(mut z: u64) -> u64 {
+    z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// One shard of a [`FidTable`]: a home-only TPHT shard and the two bitmaps that
+/// name its live and reclaimed arena slots (WIRE-08, WIRE-09).
+///
+/// The TPHT shard is built with zero banks, so every entry has a
+/// [`TinyPtr`] and can become a [`StatefulHandle`]; a full home block reports
+/// `TphtError::HomeFull` and the table falls over to the next shard
+/// (RESEARCH Pitfall 3).  The bitmaps hold dense arena slot ids from
+/// `FlattenedTphtShard::slot_id`.
+pub struct FidShard<P: Probe = NoProbe> {
+    tpht: FlattenedTphtShard<FID_ENTRY_WORDS, P>,
+    active: Lock<RoaringBitmap>,
+    reclaimed: Lock<RoaringBitmap>,
+}
+
+/// The server's FID table: at most 256 [`FidShard`]s, the domain secret a
+/// capability is signed under (D-13), and the server generation epoch.
+pub struct FidTable<P: Probe = NoProbe> {
+    shards: Box<[FidShard<P>]>,
+    domain_secret: Key,
+    epoch: u16,
+}
+
+impl FidTable<NoProbe> {
+    /// Build a table with `shards` home-only shards of `blocks_per_shard`
+    /// home blocks each, the caller-supplied capability domain secret (D-13)
+    /// and the server epoch.
+    ///
+    /// `shards` is `1..=256` (the handle's `shard_id` is one byte);
+    /// `blocks_per_shard` must be a power of two, as `ds` requires.
+    pub fn new(
+        shards: usize,
+        blocks_per_shard: usize,
+        domain_secret: Key,
+        epoch: u16,
+    ) -> crate::Result<FidTable> {
+        FidTable::<NoProbe>::with_probe(shards, blocks_per_shard, domain_secret, epoch, NoProbe)
+    }
+}
+
+impl<P: Probe + Clone> FidTable<P> {
+    /// Build a table sharing one cloneable [`Probe`] with every shard, so a
+    /// test can count the memory accesses a resolve makes (DS-03, WIRE-08).
+    pub fn with_probe(
+        shards: usize,
+        blocks_per_shard: usize,
+        domain_secret: Key,
+        epoch: u16,
+        probe: P,
+    ) -> crate::Result<FidTable<P>> {
+        if shards == 0 || shards > MAX_SHARDS {
+            return Err(
+                "fid: a table holds 1 to 256 shards (the handle's shard_id is one byte, D-12)",
+            );
+        }
+        let mut built = Vec::with_capacity(shards);
+        for _ in 0..shards {
+            let tpht =
+                FlattenedTphtShard::<FID_ENTRY_WORDS, P>::with_banks_and_probe(
+                    blocks_per_shard,
+                    0,
+                    probe.clone(),
+                )
+                .map_err(|_| {
+                    "fid: the shard's block count is zero or not a power of two of at most 1 << 32"
+                })?;
+            built.push(FidShard {
+                tpht,
+                active: Lock::new("fid-active", RoaringBitmap::new()),
+                reclaimed: Lock::new("fid-reclaimed", RoaringBitmap::new()),
+            });
+        }
+        Ok(FidTable { shards: built.into_boxed_slice(), domain_secret, epoch })
+    }
+
+    /// The shard a key's insertion starts at: a mix of the TPHT key modulo the
+    /// shard count.  On a full home shard the insert walks forward from here.
+    pub fn home_shard(&self, client_id: u32, fid_key: u32) -> u8 {
+        (mix64(tpht_key(client_id, fid_key)) as usize % self.shards.len()) as u8
+    }
+
+    /// The number of live and reclaimed slot ids `shard_id`'s two bitmaps
+    /// hold, or `None` when the shard id is out of range.
+    ///
+    /// This is an observability accessor for tests and metrics; the capability
+    /// issue and verify path never calls it and touches no bitmap.
+    pub fn bitmap_lens(&self, shard_id: u8) -> Option<(u64, u64)> {
+        let shard = self.shards.get(shard_id as usize)?;
+        let node = LockNode::new();
+        let active = shard.active.lock(&node).len();
+        let node = LockNode::new();
+        let reclaimed = shard.reclaimed.lock(&node).len();
+        Some((active, reclaimed))
+    }
+
+    /// Insert `entry` for `client_id` and return the handle that resolves it
+    /// (WIRE-08).
+    ///
+    /// The entry's `client_id`, `epoch` and [`FID_LIVE`] flag are set here; the
+    /// key is `(client_id, fid_key)`.  The insert starts at the key's home
+    /// shard ([`Self::home_shard`]) and walks forward on `HomeFull`, so a key
+    /// whose home block is full lands in the next shard and its handle records
+    /// that shard's index.  Every shard full is an error.
+    pub fn insert(&self, client_id: u32, mut entry: FidEntry) -> crate::Result<StatefulHandle> {
+        entry.client_id = client_id;
+        entry.epoch = self.epoch;
+        entry.flags |= FID_LIVE;
+        let fid_key = entry.fid_key;
+        let key = tpht_key(client_id, fid_key);
+        let words = entry.to_words();
+        let shard_count = self.shards.len();
+        let start = self.home_shard(client_id, fid_key) as usize;
+        for offset in 0..shard_count {
+            let index = (start + offset) % shard_count;
+            let shard = &self.shards[index];
+            let same = |value: &[u64; FID_ENTRY_WORDS]| {
+                let existing = FidEntry::from_words(value);
+                existing.fid_key == fid_key && existing.client_id == client_id
+            };
+            match shard.tpht.insert(key, words, same) {
+                Ok(Some(ptr)) => {
+                    let slot = shard.tpht.slot_id(key, ptr);
+                    let node = LockNode::new();
+                    shard.active.lock(&node).insert(slot);
+                    return Ok(StatefulHandle {
+                        fid_key,
+                        ptr,
+                        shard_id: index as u8,
+                        epoch: self.epoch,
+                    });
+                }
+                Ok(None) => {
+                    return Err(
+                        "fid: a home-only shard returned a spilled pointer (it has no banks)",
+                    );
+                }
+                Err(TphtError::HomeFull) => continue,
+                Err(TphtError::Exists) => {
+                    return Err("fid: an entry for this client and fid is already present");
+                }
+                Err(_) => return Err("fid: the shard rejected the insert"),
+            }
+        }
+        Err("fid: every shard is full")
+    }
+
+    /// Resolve `handle` for `client_id` in one arena read and zero header
+    /// reads (WIRE-08, DS-03).
+    ///
+    /// An out-of-range `shard_id` is rejected before any read (T-04-35).  The
+    /// one `deref_tiny` call is the only memory access; the identity pair,
+    /// epoch and live flag are then compared in registers.  A handle from
+    /// another client or another epoch, and a clunked handle whose slot was
+    /// zeroed, all fail here (T-04-32, T-04-33).
+    pub fn resolve(&self, client_id: u32, handle: &StatefulHandle) -> crate::Result<FidEntry> {
+        // RED stub: the real body lands in the GREEN commit (D-03, Pitfall 11).
+        let _ = (client_id, handle);
+        Err("fid: resolve is not implemented yet")
+    }
+
+    /// Clunk `handle` for `client_id`: resolve it, remove it from its shard
+    /// (which zeroes the arena slot, plan 04-09) and drop its slot id from both
+    /// bitmaps (WIRE-08).
+    pub fn clunk(&self, client_id: u32, handle: &StatefulHandle) -> crate::Result<()> {
+        let _entry = self.resolve(client_id, handle)?;
+        let shard = &self.shards[handle.shard_id as usize];
+        let key = tpht_key(client_id, handle.fid_key);
+        let same = |value: &[u64; FID_ENTRY_WORDS]| {
+            let existing = FidEntry::from_words(value);
+            existing.fid_key == handle.fid_key && existing.client_id == client_id
+        };
+        if !shard.tpht.remove(key, same) {
+            return Err("fid: the entry vanished before it could be clunked");
+        }
+        let slot = shard.tpht.slot_id(key, handle.ptr);
+        let node = LockNode::new();
+        shard.active.lock(&node).remove(slot);
+        let node = LockNode::new();
+        shard.reclaimed.lock(&node).remove(slot);
+        Ok(())
+    }
+
+    /// Set the server epoch.  Bumping it revokes every handle and capability
+    /// issued before by making their epoch check fail (RESEARCH Pattern 7).
+    pub fn set_epoch(&mut self, epoch: u16) {
+        self.epoch = epoch;
+    }
 }

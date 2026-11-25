@@ -6,12 +6,16 @@
 //! volatility-class bytes are checked against Harvey `sys/include/libc.h`
 //! (`QTDIR 0x80`, `QTAPPEND 0x40`, `QTEXCL 0x20`).
 
+use crypto::key::Key;
 use ds::tpht::TinyPtr;
+use ds::tpht::Probe;
 use port::dat::Qid;
 use port::fid::{
-    FID_LIVE, STATEFUL_HANDLE_LEN, STATELESS_CAP_LEN, FidEntry, FidHandle, StatelessCap,
+    FID_LIVE, STATEFUL_HANDLE_LEN, STATELESS_CAP_LEN, FidEntry, FidHandle, FidTable, StatelessCap,
     StatefulHandle, VolatilityClass, gpu_qid_path, qid_decode, qid_encode,
 };
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// A boundary-value entry: every field at its maximum, plus the volatile class
 /// byte (D-27).
@@ -222,3 +226,238 @@ fn aead_fid_qid_gpu_path_formula() {
         "ctx_id above 24 bits is masked to its low 24 bits"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The table pins (WIRE-08, WIRE-09)
+// ---------------------------------------------------------------------------
+
+/// A [`Probe`] that counts the reader's two memory accesses, so a resolve can
+/// be shown to make exactly one arena read and zero header reads (DS-03,
+/// WIRE-08).  The counters sit behind `Arc` so every shard holds a clone and
+/// the test keeps a handle to read them; `ds`'s own `CountingProbe` is private
+/// to its test module, so this one is defined against the public `Probe` trait.
+#[derive(Clone, Default)]
+struct CountingProbe {
+    header_reads: Arc<AtomicUsize>,
+    arena_reads: Arc<AtomicUsize>,
+}
+
+impl CountingProbe {
+    fn new() -> CountingProbe {
+        CountingProbe::default()
+    }
+
+    fn header_reads(&self) -> usize {
+        self.header_reads.load(Ordering::Relaxed)
+    }
+
+    fn arena_reads(&self) -> usize {
+        self.arena_reads.load(Ordering::Relaxed)
+    }
+
+    fn reset(&self) {
+        self.header_reads.store(0, Ordering::Relaxed);
+        self.arena_reads.store(0, Ordering::Relaxed);
+    }
+}
+
+impl Probe for CountingProbe {
+    fn header_read(&self) {
+        self.header_reads.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn arena_read(&self) {
+        self.arena_reads.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// A fixed 32-byte domain key: `seed` then `seed + 1`, ... so two calls with
+/// the same seed give the same key and two different seeds give different keys.
+fn domain_key(seed: u8) -> Key {
+    let mut bytes = [0u8; 32];
+    for (i, byte) in bytes.iter_mut().enumerate() {
+        *byte = seed.wrapping_add(i as u8);
+    }
+    Key::from_bytes(bytes)
+}
+
+/// A valid entry for one fid number; every field is distinct enough to notice a
+/// mix-up, and `flags` starts at zero so `insert` sets [`FID_LIVE`] itself.
+fn entry_for(fid_key: u32) -> FidEntry {
+    FidEntry {
+        fid_key,
+        client_id: 0,
+        qid_path: 0x1000 + fid_key as u64,
+        offset: 0,
+        qid_vers: 1,
+        iounit: 8192,
+        lease_gen: 0,
+        ring_slot: 0,
+        dev_handler: 0,
+        epoch: 0,
+        qid_type: 0,
+        open_mode: 0x02,
+        flags: 0,
+        volatility: 0,
+        _reserved: [0u8; 15],
+    }
+}
+
+#[test]
+fn aead_fid_resolve_is_one_arena_read() {
+    let probe = CountingProbe::new();
+    let table = FidTable::with_probe(8, 1, domain_key(0x11), 7, probe.clone())
+        .expect("eight one-block shards form a table");
+    let mut handles = Vec::new();
+    for fid in 1..=32u32 {
+        handles.push(table.insert(1, entry_for(fid)).expect("a fresh table has room for 32 fids"));
+    }
+
+    probe.reset();
+    let handle = handles[0];
+    let resolved = table.resolve(1, &handle);
+    assert!(resolved.is_ok(), "a live handle must resolve, got {:?}", resolved.as_ref().err());
+    let resolved = resolved.expect("the assertion above guarantees a resolved entry");
+    assert_eq!(resolved.fid_key, handle.fid_key, "the resolved entry is the inserted fid");
+    assert_eq!(resolved.qid_path, entry_for(1).qid_path, "the resolved entry is the inserted entry");
+    assert_eq!(
+        (probe.arena_reads(), probe.header_reads()),
+        (1, 0),
+        "a resolve makes exactly one arena read and zero header reads (WIRE-08, DS-03)"
+    );
+}
+
+#[test]
+fn aead_fid_resolve_rejects_wrong_client_epoch_and_shard() {
+    let probe = CountingProbe::new();
+    let mut table = FidTable::with_probe(2, 1, domain_key(0x22), 7, probe.clone())
+        .expect("two one-block shards form a table");
+    let handle = table.insert(1, entry_for(9)).expect("a fresh table has room for one fid");
+    assert!(
+        table.resolve(1, &handle).is_ok(),
+        "the handle resolves for the client that inserted it"
+    );
+    assert!(
+        table.resolve(2, &handle).is_err(),
+        "another client's id does not resolve it, even with the same fid number (T-04-32)"
+    );
+
+    let mut wrong_epoch = handle;
+    wrong_epoch.epoch = handle.epoch.wrapping_add(1);
+    assert!(
+        table.resolve(1, &wrong_epoch).is_err(),
+        "a handle from another epoch does not resolve (WIRE-08)"
+    );
+
+    let mut bad_shard = handle;
+    bad_shard.shard_id = 2; // the shard count, so one past the end
+    probe.reset();
+    assert!(
+        table.resolve(1, &bad_shard).is_err(),
+        "a handle whose shard id is out of range is rejected (T-04-35)"
+    );
+    assert_eq!(
+        (probe.arena_reads(), probe.header_reads()),
+        (0, 0),
+        "an out-of-range shard id is rejected before any arena or header read (T-04-35)"
+    );
+
+    table.set_epoch(handle.epoch.wrapping_add(1));
+    assert!(
+        table.resolve(1, &handle).is_err(),
+        "bumping the table's epoch revokes every handle issued before it"
+    );
+}
+
+#[test]
+fn aead_fid_resolve_clunked_handle_does_not_resolve() {
+    let table = FidTable::with_probe(1, 1, domain_key(0x33), 3, CountingProbe::new())
+        .expect("one one-block shard forms a table");
+    let handle = table.insert(1, entry_for(4)).expect("a fresh table has room for one fid");
+    assert!(table.resolve(1, &handle).is_ok(), "the live handle resolves before the clunk");
+
+    table.clunk(1, &handle).expect("clunking a live handle succeeds");
+    assert!(
+        table.resolve(1, &handle).is_err(),
+        "a clunked handle no longer resolves: its arena slot was zeroed (T-04-33)"
+    );
+
+    let other = table.insert(1, entry_for(5)).expect("the shard has room for another fid");
+    assert!(table.resolve(1, &other).is_ok(), "the new fid resolves");
+    assert!(
+        table.resolve(1, &handle).is_err(),
+        "the stale handle stays refused even after the slot may have been reused"
+    );
+}
+
+#[test]
+fn aead_fid_resolve_two_clients_same_fid_number() {
+    let table = FidTable::with_probe(1, 1, domain_key(0x34), 1, CountingProbe::new())
+        .expect("one one-block shard forms a table");
+    let client_one = table.insert(1, entry_for(7)).expect("client 1 stores fid 7");
+    let client_two = table.insert(2, entry_for(7)).expect("client 2 stores its own fid 7");
+
+    assert!(table.resolve(1, &client_one).is_ok(), "client 1 resolves its own handle");
+    assert!(table.resolve(2, &client_two).is_ok(), "client 2 resolves its own handle");
+    assert!(
+        table.resolve(2, &client_one).is_err(),
+        "client 2 cannot resolve client 1's handle for the same fid number"
+    );
+    assert!(
+        table.resolve(1, &client_two).is_err(),
+        "client 1 cannot resolve client 2's handle for the same fid number"
+    );
+}
+
+#[test]
+fn aead_fid_resolve_falls_over_to_the_next_shard_when_home_is_full() {
+    let table = FidTable::with_probe(2, 1, domain_key(0x44), 1, CountingProbe::new())
+        .expect("two one-block shards form a table");
+
+    // Sixteen distinct keys whose home shard is 0 fill its one 16-slot block.
+    let mut home_zero = Vec::new();
+    let mut fid = 1u32;
+    while home_zero.len() < 16 {
+        if table.home_shard(1, fid) == 0 {
+            home_zero.push(fid);
+        }
+        fid += 1;
+    }
+    for &key in &home_zero {
+        let handle = table.insert(1, entry_for(key)).expect("home shard 0 has room for 16 fids");
+        assert_eq!(handle.shard_id, 0, "a key lands in its home shard while the block has room");
+    }
+
+    // The next key that would home to shard 0 must fall over to shard 1.
+    let mut overflow_key = fid;
+    while table.home_shard(1, overflow_key) != 0 {
+        overflow_key += 1;
+    }
+    let fell = table
+        .insert(1, entry_for(overflow_key))
+        .expect("a full home shard falls over instead of failing");
+    assert_eq!(fell.shard_id, 1, "the fallen-over handle records the shard it landed in (WIRE-08)");
+    assert!(table.resolve(1, &fell).is_ok(), "a fallen-over handle resolves");
+
+    // Fill shard 1 to its 16 slots too, then a further home-1 key must fail.
+    let mut shard_one = Vec::new();
+    let mut key = overflow_key + 1;
+    while shard_one.len() < 15 {
+        if table.home_shard(1, key) == 1 {
+            shard_one.push(key);
+        }
+        key += 1;
+    }
+    for &home_one in &shard_one {
+        table.insert(1, entry_for(home_one)).expect("shard 1 has room for 15 more fids");
+    }
+    let mut doomed = key;
+    while table.home_shard(1, doomed) != 1 {
+        doomed += 1;
+    }
+    assert!(
+        table.insert(1, entry_for(doomed)).is_err(),
+        "with every shard full an insert is an error, never a silent drop"
+    );
+}
+
