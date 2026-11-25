@@ -46,6 +46,17 @@ The `xtask test` and `test-9p` legs exercise the repaired pin: `cargo test -p xt
 `threat_model_protections_are_not_implemented`), which now accepts the D-23 status and rejects
 a Phase 4 row that claims the code is used by a booted kernel.
 
+## Owner review (D-24)
+
+The owner reviewed the whole cumulative `port/src` change of Phase 4 in one phase-end code
+review and replied "approve". The reviewed commit is
+`f72cc2ad421600f2a727f25a9708e30867729461` — the evidence commit carrying
+`evidence/PORT-SRC-REVIEW.md`, whose only change after the reviewed source tree (`39d1a29`) is
+planning evidence. No source file differs between the reviewed sha and the HEAD Task 3 measures
+at; Task 3's precondition re-checks this and stops if it does not hold.
+
+VERDICT port-src-review: APPROVED HEAD=f72cc2ad421600f2a727f25a9708e30867729461
+
 ## Closing runs
 
 Task 3 appends `VERDICT suite-run-1`, `suite-run-2`, `test-9p-run-1`, `test-9p-run-2`, `miri`,
