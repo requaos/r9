@@ -21,6 +21,16 @@ use super::wire;
 /// (`fcall.h` `MAXWELEM`).
 pub const MAXWELEM: usize = 16;
 
+/// The largest parameter block of a D-09 data body: one ChaCha20 block (P5).
+pub const MAX_PARAMS_LEN: usize = 64;
+
+/// Re-key request kind (P3).
+pub const REKEY_REQUEST: u8 = 0;
+/// Re-key cutover marker kind (P3).
+pub const REKEY_MARKER: u8 = 1;
+/// Re-key acknowledgement kind (P3).
+pub const REKEY_ACK: u8 = 2;
+
 /// One 9P message body, in the `fcall.h` field order.
 ///
 /// `Qid` is `crate::dat::Qid`; equality is implemented by hand because that
@@ -122,6 +132,63 @@ pub enum Msg {
         stat: Vec<u8>,
     },
     Rwstat,
+
+    // ---- new pairs 130 to 139 (WIRE-06; RFC section 6.2, P3) -------------
+    //
+    // These are encode and decode only: their semantics are Phase 6 and
+    // nothing here may imply they work.  The leading `size[4] type tag[2]` is
+    // the envelope's; a `fid_handle[8]` field stays in the body as written.
+    Tcompound {
+        num_ops: u16,
+        op_stream: Vec<u8>,
+    },
+    Rcompound {
+        num_completed: u16,
+        status: u16,
+        result_stream: Vec<u8>,
+    },
+    Tstream {
+        fid_handle: [u8; 8],
+        stream_id: u32,
+        flags: u16,
+        offset: u64,
+    },
+    Rstream {
+        stream_id: u32,
+        chunk_seq: u64,
+        data: Vec<u8>,
+    },
+    Tlease_revoke {
+        qid_path: u64,
+        lease_gen: u64,
+        target_mode: u8,
+        num_blocks: u32,
+        block_ranges: Vec<u8>,
+    },
+    Rlease_ack {
+        qid_path: u64,
+        lease_gen: u64,
+        client_status: u8,
+    },
+    Treclaim {
+        old_handle: [u8; 8],
+        target_epoch: u16,
+        client_token: [u8; 32],
+    },
+    Rreclaim {
+        new_handle: [u8; 8],
+        recovery_status: u16,
+    },
+    Trekey {
+        kind: u8,
+        generation: u32,
+        confirm: [u8; 32],
+    },
+    Rrekey {
+        kind: u8,
+        generation: u32,
+        confirm: [u8; 32],
+    },
 }
 
 impl PartialEq for Msg {
@@ -268,6 +335,128 @@ impl PartialEq for Msg {
                 Msg::Twstat { fid: bf, stat: bs },
             ) => af == bf && as_ == bs,
             (Msg::Rwstat, Msg::Rwstat) => true,
+            (
+                Msg::Tcompound {
+                    num_ops: an,
+                    op_stream: ao,
+                },
+                Msg::Tcompound {
+                    num_ops: bn,
+                    op_stream: bo,
+                },
+            ) => an == bn && ao == bo,
+            (
+                Msg::Rcompound {
+                    num_completed: ac,
+                    status: as_,
+                    result_stream: ar,
+                },
+                Msg::Rcompound {
+                    num_completed: bc,
+                    status: bs,
+                    result_stream: br,
+                },
+            ) => ac == bc && as_ == bs && ar == br,
+            (
+                Msg::Tstream {
+                    fid_handle: ah,
+                    stream_id: ai,
+                    flags: af,
+                    offset: ao,
+                },
+                Msg::Tstream {
+                    fid_handle: bh,
+                    stream_id: bi,
+                    flags: bf,
+                    offset: bo,
+                },
+            ) => ah == bh && ai == bi && af == bf && ao == bo,
+            (
+                Msg::Rstream {
+                    stream_id: ai,
+                    chunk_seq: ac,
+                    data: ad,
+                },
+                Msg::Rstream {
+                    stream_id: bi,
+                    chunk_seq: bc,
+                    data: bd,
+                },
+            ) => ai == bi && ac == bc && ad == bd,
+            (
+                Msg::Tlease_revoke {
+                    qid_path: aq,
+                    lease_gen: ag,
+                    target_mode: am,
+                    num_blocks: an,
+                    block_ranges: ar,
+                },
+                Msg::Tlease_revoke {
+                    qid_path: bq,
+                    lease_gen: bg,
+                    target_mode: bm,
+                    num_blocks: bn,
+                    block_ranges: br,
+                },
+            ) => aq == bq && ag == bg && am == bm && an == bn && ar == br,
+            (
+                Msg::Rlease_ack {
+                    qid_path: aq,
+                    lease_gen: ag,
+                    client_status: ac,
+                },
+                Msg::Rlease_ack {
+                    qid_path: bq,
+                    lease_gen: bg,
+                    client_status: bc,
+                },
+            ) => aq == bq && ag == bg && ac == bc,
+            (
+                Msg::Treclaim {
+                    old_handle: ah,
+                    target_epoch: ae,
+                    client_token: at,
+                },
+                Msg::Treclaim {
+                    old_handle: bh,
+                    target_epoch: be,
+                    client_token: bt,
+                },
+            ) => ah == bh && ae == be && at == bt,
+            (
+                Msg::Rreclaim {
+                    new_handle: ah,
+                    recovery_status: ar,
+                },
+                Msg::Rreclaim {
+                    new_handle: bh,
+                    recovery_status: br,
+                },
+            ) => ah == bh && ar == br,
+            (
+                Msg::Trekey {
+                    kind: ak,
+                    generation: ag,
+                    confirm: ac,
+                },
+                Msg::Trekey {
+                    kind: bk,
+                    generation: bg,
+                    confirm: bc,
+                },
+            ) => ak == bk && ag == bg && ac == bc,
+            (
+                Msg::Rrekey {
+                    kind: ak,
+                    generation: ag,
+                    confirm: ac,
+                },
+                Msg::Rrekey {
+                    kind: bk,
+                    generation: bg,
+                    confirm: bc,
+                },
+            ) => ak == bk && ag == bg && ac == bc,
             _ => false,
         }
     }
@@ -278,6 +467,21 @@ impl Eq for Msg {}
 /// `dat::Qid` does not derive `PartialEq`; compare its three fields.
 fn qid_eq(a: &Qid, b: &Qid) -> bool {
     a.path == b.path && a.vers == b.vers && a.typ == b.typ
+}
+
+/// The parameter/data split of a D-09 data-message body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DataLayout {
+    /// The number of leading parameter bytes before the page-aligned data.
+    pub params_len: usize,
+    /// The number of whole [`PAGE_LEN`](super::PAGE_LEN)-byte data pages.
+    pub pages: usize,
+}
+
+/// The parameter/data split of a data-message body, or `None` for a
+/// non-data opcode (D-09, P5).
+pub fn data_layout(_typ: u8, _body: &[u8]) -> Option<DataLayout> {
+    None
 }
 
 /// The registry opcode for a message.
@@ -310,6 +514,16 @@ pub fn opcode(msg: &Msg) -> u8 {
         Msg::Rstat { .. } => wire::RSTAT,
         Msg::Twstat { .. } => wire::TWSTAT,
         Msg::Rwstat => wire::RWSTAT,
+        Msg::Tcompound { .. } => wire::TCOMPOUND,
+        Msg::Rcompound { .. } => wire::RCOMPOUND,
+        Msg::Tstream { .. } => wire::TSTREAM,
+        Msg::Rstream { .. } => wire::RSTREAM,
+        Msg::Tlease_revoke { .. } => wire::TLEASE_REVOKE,
+        Msg::Rlease_ack { .. } => wire::RLEASE_ACK,
+        Msg::Treclaim { .. } => wire::TRECLAIM,
+        Msg::Rreclaim { .. } => wire::RRECLAIM,
+        Msg::Trekey { .. } => wire::TREKEY,
+        Msg::Rrekey { .. } => wire::RREKEY,
     }
 }
 
@@ -448,6 +662,16 @@ pub fn encode_body(msg: &Msg, out: &mut Vec<u8>) -> crate::Result<()> {
             pstr(out, stat)?;
         }
         Msg::Rwstat => {}
+        Msg::Tcompound { .. } => {}
+        Msg::Rcompound { .. } => {}
+        Msg::Tstream { .. } => {}
+        Msg::Rstream { .. } => {}
+        Msg::Tlease_revoke { .. } => {}
+        Msg::Rlease_ack { .. } => {}
+        Msg::Treclaim { .. } => {}
+        Msg::Rreclaim { .. } => {}
+        Msg::Trekey { .. } => {}
+        Msg::Rrekey { .. } => {}
     }
     Ok(())
 }
