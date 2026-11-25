@@ -471,6 +471,78 @@ fn aead_fid_insert_refuses_client_id_zero() {
 }
 
 #[test]
+fn aead_fid_insert_duplicate_after_fallover_is_refused() {
+    let table = FidTable::with_probe(2, 1, domain_key(0x6A), 1, CountingProbe::new())
+        .expect("two one-block shards form a table");
+
+    // Sixteen distinct keys of client 1 whose home shard is 0 fill its block.
+    let mut home_zero = Vec::new();
+    let mut fid = 1u32;
+    while home_zero.len() < 16 {
+        if table.home_shard(1, fid) == 0 {
+            home_zero.push(fid);
+        }
+        fid += 1;
+    }
+    let mut home_handles = Vec::new();
+    for &key in &home_zero {
+        home_handles.push(table.insert(1, entry_for(key)).expect("shard 0 has room for 16 fids"));
+    }
+
+    // K homes to shard 0 too, so with its block full it falls over to shard 1.
+    let mut k = fid;
+    while table.home_shard(1, k) != 0 {
+        k += 1;
+    }
+    let first = table.insert(1, entry_for(k)).expect("a full home shard falls over");
+    assert_eq!(first.shard_id, 1, "K fell over to shard 1");
+
+    // Free a slot in K's home shard, so a repeat insert of K would land at home.
+    table.clunk(1, &home_handles[0]).expect("clunking a live handle succeeds");
+
+    let active_before: u64 =
+        (0..2u8).map(|shard| table.bitmap_lens(shard).expect("shard in range").0).sum();
+    assert!(
+        table.insert(1, entry_for(k)).is_err(),
+        "a repeated insert of K is refused even though its home slot is free (WR-09)"
+    );
+    let active_after: u64 =
+        (0..2u8).map(|shard| table.bitmap_lens(shard).expect("shard in range").0).sum();
+    assert_eq!(
+        active_after, active_before,
+        "the refused duplicate changes no shard's active count (WR-09)"
+    );
+    let original = table.resolve(1, &first).expect("K's first handle still resolves");
+    assert_eq!(
+        original.qid_path,
+        entry_for(k).qid_path,
+        "the first handle still names the original entry, not a second one"
+    );
+
+    // After K is clunked, K can be inserted again and resolves.
+    table.clunk(1, &first).expect("clunking K succeeds");
+    let again = table.insert(1, entry_for(k)).expect("K can be inserted again after its clunk");
+    assert!(table.resolve(1, &again).is_ok(), "the re-inserted K resolves");
+}
+
+#[test]
+fn aead_fid_insert_same_key_twice_in_one_shard_is_refused() {
+    let table = FidTable::new(2, 1, domain_key(0x6B), 1).expect("two one-block shards form a table");
+    let first = table.insert(1, entry_for(3)).expect("a fresh table has room for one fid");
+    let before = table.bitmap_lens(first.shard_id).expect("the shard index is in range");
+    assert!(
+        table.insert(1, entry_for(3)).is_err(),
+        "the same key twice in one shard is refused (WR-09)"
+    );
+    assert_eq!(
+        table.bitmap_lens(first.shard_id),
+        Some(before),
+        "the refused duplicate changes no bitmap"
+    );
+    assert!(table.resolve(1, &first).is_ok(), "the first handle still resolves");
+}
+
+#[test]
 fn aead_fid_resolve_out_of_window_ptr_is_rejected() {
     let probe = CountingProbe::new();
     let table = FidTable::with_probe(2, 4, domain_key(0x69), 5, probe.clone())
