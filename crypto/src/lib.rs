@@ -20,6 +20,7 @@ pub mod kdf;
 pub mod key;
 pub mod mac;
 pub mod page;
+pub mod session;
 
 /// Errors returned by crypto's fallible operations.
 ///

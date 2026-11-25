@@ -21,6 +21,11 @@ extern crate alloc;
 pub mod allocator;
 #[forbid(unsafe_code)]
 pub mod bitmapalloc;
+// chan (Phase 4, D-22): the `9P2000.aead` envelope — the 28-byte header, the
+// keyed BLAKE3 packet MAC and the per-direction session keys.  The `fid`
+// module and its declaration land in plan 04-09 (Phase 4 D-22).
+#[forbid(unsafe_code)]
+pub mod chan;
 #[forbid(unsafe_code)]
 pub mod dat;
 #[forbid(unsafe_code)]
