@@ -203,43 +203,43 @@ Plans:
 **Plans**: 17 plans in 11 waves. Five owner checkpoints: the one-way wire proposals P1 to P8 and the IG-D11 lock (both in 04-01), the phase-end review of the whole `port/src` change (04-14), and the branch-push stop on the x86_64 Linux host followed by `main` push approval (04-15). Plans 04-14 and 04-15 run on the main working tree, so `workflow.use_worktrees` must be off before wave 10.
 
 **Wave 1**
-- [ ] 04-01-PLAN.md — kernel byte baseline; owner decisions on wire proposals P1 to P8 and the IG-D11 lock
+- [ ] 04-01-PLAN.md
 
 **Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 04-02-PLAN.md — tracer: `port` to `crypto`/`ds` dependency edge with the lint-rule change, session derivation, one sealed 28-byte-header packet
+- [ ] 04-02-PLAN.md
 
 **Wave 3** *(blocked on Wave 2 completion)*
-- [ ] 04-03-PLAN.md — `crypto::session` complete: known-answer vector, transcript hash, zeroization, capability tag, re-key confirm
-- [ ] 04-04-PLAN.md — `port::chan` submodules, pinned header offsets, framing bounds, verified-packet typestate, opcode registry
-- [ ] 04-09-PLAN.md — `ds` slot clearing on remove; handle, capability, entry, qid and volatility-class layouts in `port::fid`
-- [ ] 04-17-PLAN.md — `cargo xtask test-9p` subcommand
+- [ ] 04-03-PLAN.md
+- [ ] 04-04-PLAN.md
+- [ ] 04-09-PLAN.md
+- [ ] 04-17-PLAN.md
 
 **Wave 4** *(blocked on Wave 3 completion)*
-- [ ] 04-05-PLAN.md — message bodies for every opcode, page-aligned data bodies
-- [ ] 04-06-PLAN.md — six extension records over 64-bit aligned TLVs
-- [ ] 04-10-PLAN.md — `FidTable` / `FidShard`: one-read resolve, stateless capabilities, failover sweep
+- [ ] 04-05-PLAN.md
+- [ ] 04-06-PLAN.md
+- [ ] 04-10-PLAN.md
 
 **Wave 5** *(blocked on Wave 4 completion)*
-- [ ] 04-07-PLAN.md — transport engine: plain-framed handshake, exchange seam, fail-closed path that zeroizes
+- [ ] 04-07-PLAN.md
 
 **Wave 6** *(blocked on Wave 5 completion)*
-- [ ] 04-16-PLAN.md — strict sequence check, replay and splice pins, ordered send lock
+- [ ] 04-16-PLAN.md
 
 **Wave 7** *(blocked on Wave 6 completion)*
-- [ ] 04-08-PLAN.md — in-band re-key: threshold, marker, acknowledgement, deadline, no counter wrap
+- [ ] 04-08-PLAN.md
 
 **Wave 8** *(blocked on Wave 7 completion)*
-- [ ] 04-11-PLAN.md — `devmnt` negotiation branch with the plain path unchanged; one whole sealed session end to end
+- [ ] 04-11-PLAN.md
 
 **Wave 9** *(blocked on Wave 8 completion)*
-- [ ] 04-12-PLAN.md — `test-9p` complete; `UNSAFE-AUDIT.md` update
-- [ ] 04-13-PLAN.md — RFC amendments, compendium listing 9.9, PROJECT.md and REQUIREMENTS.md records
+- [ ] 04-12-PLAN.md
+- [ ] 04-13-PLAN.md
 
 **Wave 10** *(blocked on Wave 9 completion; main working tree)*
-- [ ] 04-14-PLAN.md — owner review of the `port/src` change, closing suites, kernel byte evidence, aarch64 quick pass
+- [ ] 04-14-PLAN.md
 
 **Wave 11** *(blocked on Wave 10 completion; main working tree)*
-- [ ] 04-15-PLAN.md — owner stop on the x86_64 Linux host, then `main`
+- [ ] 04-15-PLAN.md
 **Open questions**: W1 (header layout and AAD contents), W2 (24-byte `StatelessCap` in an 8-byte handle), W4 (session key scope); W3 also bears here. Notes N1 and N5 (`factotum` key exchange: Noise versus DP9IK, and `factotum` is read-only Harvey C until Phase 12). Landing sites `port/src/chan.rs` and `port/src/fid.rs` do not exist at HEAD (devmnt lives in `port/src/devmnt.rs`); edits under `port/src` need owner approval with the diff shown first. `cargo xtask test-9p` is new harness work.
 
 ### v3.1 Secure Memory and Cluster Fabric (Planned)
