@@ -200,7 +200,7 @@ Plans:
   2. Altering any authenticated byte of a packet makes the receiver drop the connection and zero its channel state without parsing the packet; a replayed packet with a stale nonce is dropped; a payload spliced onto another channel fails MAC verification.
   3. `FidTable` dereference resolves a `FidEntry` in exactly one memory read, any replica holding the domain secret verifies a `StatelessCap` with zero server FID memory, and the failover sweep returns exactly `active \ reclaimed`.
   4. A `Tauth` then `Tattach` exchange derives per-connection, per-direction session keys that are zeroized on teardown, and a plain-9P2000 peer still works, so the system still boots to rio.
-**Plans**: 24/25 plans executed; 17 in 11 waves, then 8 gap-closure plans (04-18 to 04-25) planned and not yet run. Five owner checkpoints in the first 17: the one-way wire proposals P1 to P8 and the IG-D11 lock (both in 04-01), the phase-end review of the whole `port/src` change (04-14), and the branch-push stop on the x86_64 Linux host followed by `main` push approval (04-15). Plans 04-14 and 04-15 run on the main working tree, so `workflow.use_worktrees` must be off before wave 10.
+**Plans**: 25/25 plans executed; 17 in 11 waves, then 8 gap-closure plans (04-18 to 04-25) planned and not yet run. Five owner checkpoints in the first 17: the one-way wire proposals P1 to P8 and the IG-D11 lock (both in 04-01), the phase-end review of the whole `port/src` change (04-14), and the branch-push stop on the x86_64 Linux host followed by `main` push approval (04-15). Plans 04-14 and 04-15 run on the main working tree, so `workflow.use_worktrees` must be off before wave 10.
 
 **Wave 1**
 - [x] 04-01-PLAN.md
@@ -259,7 +259,7 @@ Plans:
 - [x] 04-24-PLAN.md
 
 **Gap wave 5** *(blocked on gap wave 4 completion; main working tree)*
-- [ ] 04-25-PLAN.md
+- [x] 04-25-PLAN.md
 **Open questions**: W1 (header layout and AAD contents), W2 (24-byte `StatelessCap` in an 8-byte handle), W4 (session key scope); W3 also bears here. Notes N1 and N5 (`factotum` key exchange: Noise versus DP9IK, and `factotum` is read-only Harvey C until Phase 12). Landing sites `port/src/chan.rs` and `port/src/fid.rs` do not exist at HEAD (devmnt lives in `port/src/devmnt.rs`); edits under `port/src` need owner approval with the diff shown first. `cargo xtask test-9p` is new harness work.
 
 ### v3.1 Secure Memory and Cluster Fabric (Planned)
@@ -455,7 +455,7 @@ Phases execute in numeric order: 1 → 2 → 3 → … → 16 (decimal insertion
 | 1. Stage P0 - Cross-Build Harness | v3.0 | 34/34 | Complete | 2026-11-23 |
 | 2. Guide Phase 0 - Design Lock and rfork Flag Reservation | v3.0 | 6/6 | Complete | 2026-11-24 |
 | 3. Guide Phase 1 - crypto/ and ds/ Foundations | v3.0 | 13/13 | Complete | 2026-11-24 |
-| 4. Guide Phase 2 - 9P2000.aead Transport and FidTable | v3.0 | 24/25 | In Progress | - |
+| 4. Guide Phase 2 - 9P2000.aead Transport and FidTable | v3.0 | 25/25 | In Progress | - |
 | 5. Guide Phase 3 - Cryptographic Memory and Zero-Copy DMA Paging | v3.1 | 0/TBD | Not started | - |
 | 6. Guide Phase 4 - Distributed 9P Extensions and Service Discovery | v3.1 | 0/TBD | Not started | - |
 | 7. Guide Phase 5 - Process Lifecycle and Notes | v3.1 | 0/TBD | Not started | - |

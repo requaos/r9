@@ -5,16 +5,16 @@ milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
 current_phase: 04
 current_phase_name: Guide Phase 2 - 9P2000.aead Transport and FidTable
 status: executing
-stopped_at: Completed 04-24-PLAN.md
-last_updated: "2026-11-25T14:29:46.418Z"
+stopped_at: Completed 04-25-PLAN.md
+last_updated: "2026-11-25T16:19:01.685Z"
 last_activity: 2026-11-25
 last_activity_desc: Phase 04 execution started
-state_head: ea0e0ab7fda3877937fed7227e61cd38c808a3cd
+state_head: 594da3344318012ccc9295d2e8908ec50b17aa50
 progress:
   total_phases: 4
   completed_phases: 3
   total_plans: 78
-  completed_plans: 77
+  completed_plans: 78
   percent: 75
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-11-24)
 ## Current Position
 
 Phase: 04 (Guide Phase 2 - 9P2000.aead Transport and FidTable) — EXECUTING
-Plan: 20 of 25
+Plan: 21 of 25
 Status: Ready to execute
 Last activity: 2026-11-24 — Phase 04 execution started
 
@@ -85,6 +85,7 @@ Progress: [████████░░] 75%
 | Phase 04 P15 | 1h 6m | 3 tasks | 2 files |
 | Phase 04 P23 | 48 min | 2 tasks | 3 files |
 | Phase 04 P24 | 11 min | 2 tasks | 6 files |
+| Phase 04 P25 | 1h 4m | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -213,6 +214,7 @@ Full log is the PROJECT.md Key Decisions table. Recent:
 - [Phase 04]: FP/SIMD counts EQUAL both kernels (309 aarch64, 6 x86_64); Miri 348s reported as the accepted deviation.
 - [Phase 04]: Plan 04-24: the gap closure's kernel bytes are a second evidence set (@04-24) written beside plan 04-14's; KERNEL-BYTES-GAPS.md marks the @04-14 set superseded and the old files are untouched.
 - [Phase 04]: Plan 04-24: both ELF hashes differ from @04-14 while the defined text symbol totals are unchanged (755220 aarch64, 760137 x86_64); the evidence page records that as measured and rests the fixes-are-linked claim on the ELF verdict at a commit with no source diff against 6fd201c. Miri 357 s reported as the accepted Phase 3 over-budget deviation.
+- [Phase 04]: Plan 04-25: the second owner stop returned eleven PASS verdicts at 0dd1037 (host tests, both sandboxed kernels, boot-iso build and --rebuild on the unchanged outputHash sha256-5A6QdJdWz7uWyUrfUAc3jAO+ZQcG/TowydbTLoF+u9I=, and the KVM, native-TCG and full gates). The owner then approved pushing main; 5d1549a..bb68d98 published 68 commits and the stop2-main-push verdict commit 4d420c9 stays local.
 
 ### Open Questions (four warnings, approved to be carried, not resolved)
 
@@ -231,8 +233,8 @@ None yet.
 
 ### Blockers/Concerns
 
-- **Phase 4 verification `gaps_found` (101/109), owner deferred the fixes on 2026-11-25.** The code review (`04-REVIEW.md`, 3 critical / 9 warning / 7 info) and the verifier (`04-VERIFICATION.md`) independently confirmed the same blocking gaps, all in the in-band re-key path and two fid-table guards: CR-01 exchange secret + `Rekey::out` survive `fail()` while `keys_zeroized()` returns true; CR-02 exchange traffic carries no tag/fid discriminator so ordinary `Twrite`/`Rwrite`/`Tread`/`Rread` are absorbed or close the connection; CR-03 the re-key transcript absorbs the page-padded body, contradicting the accepted DECISION P2; WR-01 re-key never returns to idle (one re-key per connection); WR-02 `SendHalf::send` ignores the ACK deadline; WR-04 a torn clunk can resolve an all-zero identity; WR-05 `sweep` can delete a live entry that reused a swept slot; WR-07 control messages use tag 0, not `NOTAG`. Partial: WR-03, WR-06, WR-08, WR-09. All 19 findings are `open` in `04-REVIEW-DISPOSITION.md`. **Any fix changes kernel bytes**, so it voids `04-14`'s byte evidence and the `boot-iso` `outputHash` commit (`sha256-5A6QdJdWz7uWyUrfUAc3jAO+ZQcG/TowydbTLoF+u9I=`) and needs a second owner stop. Resume with `/gsd-plan-phase 4 --gaps`, then `/gsd-execute-phase 4 --gaps-only`.
-- **Phase 4 push state:** `origin/main` = `5d1549a` (the owner-approved push of 142 commits). Local `main` is ahead with `2bc5e09` (`stop-main-push: PASS`), `59c855a` (04-15 SUMMARY), `6ad61d3` (tracking), `e00d42d` (review disposition), `b944127` (review + verification) and the gap-deferral commit — held for a later approved push. `origin/phase-04/aead-wire` = `405984d`.
+- **Phase 4 verification `gaps_found` (101/109), owner deferred the fixes on 2026-11-25.** The code review (`04-REVIEW.md`, 3 critical / 9 warning / 7 info) and the verifier (`04-VERIFICATION.md`) independently confirmed the same blocking gaps, all in the in-band re-key path and two fid-table guards: CR-01 exchange secret + `Rekey::out` survive `fail()` while `keys_zeroized()` returns true; CR-02 exchange traffic carries no tag/fid discriminator so ordinary `Twrite`/`Rwrite`/`Tread`/`Rread` are absorbed or close the connection; CR-03 the re-key transcript absorbs the page-padded body, contradicting the accepted DECISION P2; WR-01 re-key never returns to idle (one re-key per connection); WR-02 `SendHalf::send` ignores the ACK deadline; WR-04 a torn clunk can resolve an all-zero identity; WR-05 `sweep` can delete a live entry that reused a swept slot; WR-07 control messages use tag 0, not `NOTAG`. Partial: WR-03, WR-06, WR-08, WR-09. All 19 findings are `open` in `04-REVIEW-DISPOSITION.md`. **Any fix changes kernel bytes**, so it voids `04-14`'s byte evidence and the `boot-iso` `outputHash` commit (`sha256-5A6QdJdWz7uWyUrfUAc3jAO+ZQcG/TowydbTLoF+u9I=`) and needs a second owner stop. Resume with `/gsd-plan-phase 4 --gaps`, then `/gsd-execute-phase 4 --gaps-only`. **RESOLVED by plans 04-18 to 04-25 (2026-11-25):** every fix landed and was reviewed in 04-23 (`04-REVIEW-DISPOSITION.md` has twelve `fixed` rows), the closing evidence was re-taken in 04-24, and the second owner stop (04-25) returned eleven PASS verdicts at `0dd1037` — the kernel still boots to rio under KVM, natively under TCG and through the full gate set, and the committed `outputHash` reproduces under `--rebuild`. `main` is published at `bb68d98`. What remains is re-running `/gsd-verify-work 4` against the fixed state.
+- **Phase 4 push state (after plan 04-25):** `origin/main` = `bb68d988752ccb616a980b943ea86aecca8f25be` — the owner's second approved push, `5d1549a..bb68d98`, which published 68 commits (the gap-closure code, its planning and evidence commits, and the commits held back since the first stop). Local `main` is exactly one commit ahead: `4d420c9` (the `stop2-main-push: PASS` verdict commit, held local until a later approved push). `origin/phase-04/aead-wire-gaps` = `194c71d` (Mac tip `0dd1037` + the round-2 return commit); `origin/phase-04/aead-wire` = `405984d`. Both transport branches can be deleted by the owner.
 - **Phase 4 capability steps not run:** `04-SECURITY.md` does not exist (`/gsd-secure-phase 4`), the Nyquist audit for the re-key path was not run (`/gsd-validate-phase 4`), and UI review does not apply. The verify:post contract routes security as a next step rather than auto-running it.
 - Unpushed work, checked against the local remote-tracking refs on 2026-11-24 after the plan 03-11 owner stop: `origin/main` was `a643526` and `git push origin main` published every unpushed commit up to it. The Phase 3 transport branch `phase-03/crypto-ds-foundations` is `5f565ec` (Mac tip `95fe66a` plus two return commits); the Phase 2 branch `phase-02/design-lock` is at `f8d077d` (gated commit `4624ea2` plus two return commits). Earlier unpushed work is published: r9 `5b8b70a` (planning documents plus `legacy/`, 53 MB) and `6ee45b5` are on `origin/main`, and Harvey `25d97dc4d` is on `origin/master`.
 - Owed checks at checkpoint r9 `116bcc2`: the owner's linux `nix build .#boot-iso --rebuild` (expected `sha256-TIzwBaHF0R4m31l6EbW2IU3rkUl73g6ljlNE0S5hGFY=`), and hosted CI on r9 `116bcc2` and Harvey `bd7a6982a`.
@@ -273,6 +275,6 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 
 ## Session Continuity
 
-Last session: 2026-11-25T14:29:45.720Z
-Stopped at: Completed 04-24-PLAN.md
+Last session: 2026-11-25T16:18:52.564Z
+Stopped at: Completed 04-25-PLAN.md
 Resume file: None
