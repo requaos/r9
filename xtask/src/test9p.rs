@@ -80,6 +80,29 @@ pub fn preflight(workspace: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Run every leg in `workspace`, returning at the first spawn error or
+/// non-zero status so no leg's status is dropped or masked by a later one
+/// (T-04-52).
+pub fn run(workspace: &Path, cargo: &Path) -> Result<()> {
+    preflight(workspace)?;
+    for spec in command_specs(cargo) {
+        let status = std::process::Command::new(&spec.program)
+            .args(&spec.args)
+            .current_dir(workspace)
+            .status()
+            .map_err(|e| format!("test-9p: run {}: {e}", spec.program.display()))?;
+        if !status.success() {
+            return Err(format!(
+                "test-9p: leg failed: {} {}",
+                spec.program.display(),
+                spec.args.join(" ")
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::env;
