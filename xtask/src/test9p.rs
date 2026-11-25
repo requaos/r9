@@ -8,28 +8,44 @@
 //! `cargo xtask test` (the ordinary run already covers the same files, and
 //! stays as it is).
 //!
+//! Each listed file pins one part of the dialect:
+//!
+//! - `crypto/src/session.rs`, `crypto/tests/session.rs` — WIRE-05, the
+//!   per-connection per-direction session keys.
+//! - `port/tests/aead_wire.rs` — WIRE-01, the header byte layout, and
+//!   WIRE-06, the opcode registry.
+//! - `port/tests/aead_tlv.rs` — WIRE-02, `ExtMask` and the TLV records.
+//! - `port/tests/aead_transport.rs` — WIRE-03, WIRE-05 and WIRE-11, the
+//!   sealed transport, the handshake and the anti-splicing pins.
+//! - `port/tests/aead_fid.rs` — WIRE-07 to WIRE-10, the handles, the
+//!   `FidTable`, the `FidShard` sweep and the qid.
+//! - `port/tests/aead_negotiate.rs` — WIRE-12 and WIRE-05, the `devmnt`
+//!   version selection and one whole sealed session.
+//!
 //! Refusing when a listed test file is absent is the point of listing the
 //! files here rather than globbing: a renamed or deleted file must fail the
 //! step loudly instead of shrinking it into a silent pass (T-04-51).  For
 //! the same reason a failing leg returns immediately, so no leg's status is
-//! dropped or masked by a later one (T-04-52).
+//! dropped or masked by a later one (T-04-52), and a leg whose result lines
+//! report no passed tests is an error, so a filter that matches nothing
+//! cannot pass (T-04-39).
 //!
-//! Plan 04-12 completes the file list and adds the scalar-backend legs and
-//! the guard against a leg that ran zero tests.  None of that is here yet:
-//! this module lists what exists today (`aead_transport`) and runs it.
+//! Every default leg has a **scalar-backend twin**: the host build links
+//! sha2's hardware SHA path and chacha20's NEON (or AVX2) backend, while the
+//! kernels run the scalar code, so the same wire pins must run on both.  The
+//! twin carries the crates' own soft-backend `--config` flags in its argument
+//! vector, never in `.cargo/config.toml` (lint rule R5).
 
 use std::path::{Path, PathBuf};
 
 use crate::Result;
 
 /// The `port/tests/` files the step runs, one `--test NAME` per entry.
-pub const PORT_TESTS: &[&str] = &["aead_transport"];
+pub const PORT_TESTS: &[&str] =
+    &["aead_wire", "aead_tlv", "aead_transport", "aead_fid", "aead_negotiate"];
 
 /// The `crypto` test targets the step runs, one `--test NAME` per entry.
-pub const CRYPTO_TESTS: &[&str] = &[];
-
-/// The `crypto` library test filter the step runs.
-pub const CRYPTO_LIB_FILTER: &str = "session";
+pub const CRYPTO_TESTS: &[&str] = &["session"];
 
 /// The soft-backend `--config` value the scalar-backend twins carry.
 ///
@@ -38,7 +54,6 @@ pub const CRYPTO_LIB_FILTER: &str = "session";
 /// run on both, so each default leg has a twin that forces the crates' soft
 /// backends.  The flags ride in the leg's own argument vector, never in
 /// `.cargo/config.toml` (lint rule R5).
-#[allow(dead_code)]
 const SOFT_BACKEND_CONFIG: &str =
     "build.rustflags=[\"--cfg\",\"chacha20_backend=\\\"soft\\\"\",\"--cfg\",\"sha2_backend=\\\"soft\\\"\"]";
 
@@ -61,26 +76,49 @@ pub struct LegOutcome {
 }
 
 /// The commands the step runs (a pure function: no environment, no spawn).
+///
+/// Three legs in order — the crypto library `session` pins, the crypto
+/// `session` integration pins and the `port` wire pins — each immediately
+/// followed by its scalar-backend twin.
 pub fn command_specs(cargo: &Path) -> Vec<CommandSpec> {
-    let crypto = CommandSpec {
-        program: cargo.to_path_buf(),
-        args: vec![
-            "test".to_string(),
-            "--package".to_string(),
-            "crypto".to_string(),
-            "--lib".to_string(),
-            CRYPTO_LIB_FILTER.to_string(),
-        ],
-    };
+    let mut bases: Vec<Vec<String>> = Vec::new();
 
+    // Leg 1: the crypto library `session` pins.
+    let mut crypto_lib =
+        vec!["test".to_string(), "--package".to_string(), "crypto".to_string(), "--lib".to_string()];
+    for name in CRYPTO_TESTS {
+        crypto_lib.push((*name).to_string());
+    }
+    bases.push(crypto_lib);
+
+    // Leg 2: the crypto `session` integration pins.
+    let mut crypto_tests =
+        vec!["test".to_string(), "--package".to_string(), "crypto".to_string()];
+    for name in CRYPTO_TESTS {
+        crypto_tests.push("--test".to_string());
+        crypto_tests.push((*name).to_string());
+    }
+    bases.push(crypto_tests);
+
+    // Leg 3: the `port/tests` wire pins.
     let mut port_args = vec!["test".to_string(), "--package".to_string(), "port".to_string()];
     for name in PORT_TESTS {
         port_args.push("--test".to_string());
         port_args.push((*name).to_string());
     }
-    let port = CommandSpec { program: cargo.to_path_buf(), args: port_args };
+    bases.push(port_args);
 
-    vec![crypto, port]
+    let mut specs = Vec::with_capacity(bases.len() * 2);
+    for args in bases {
+        let default = CommandSpec { program: cargo.to_path_buf(), args: args.clone() };
+        let mut twin_args = args;
+        twin_args.push("--config".to_string());
+        twin_args.push(SOFT_BACKEND_CONFIG.to_string());
+        let twin = CommandSpec { program: cargo.to_path_buf(), args: twin_args };
+        specs.push(default);
+        specs.push(twin);
+    }
+    specs
 }
 
 /// Refuse before anything runs when a listed test file is missing.
@@ -89,11 +127,14 @@ pub fn command_specs(cargo: &Path) -> Vec<CommandSpec> {
 /// pass, so this names the first missing path and returns before any leg
 /// runs (T-04-51).
 pub fn preflight(workspace: &Path) -> Result<()> {
-    let mut listed: Vec<PathBuf> = PORT_TESTS
-        .iter()
-        .map(|name| workspace.join("port/tests").join(format!("{name}.rs")))
-        .collect();
-    listed.push(workspace.join("crypto/src/session.rs"));
+    let mut listed: Vec<PathBuf> = Vec::new();
+    for name in CRYPTO_TESTS {
+        listed.push(workspace.join("crypto/src").join(format!("{name}.rs")));
+        listed.push(workspace.join("crypto/tests").join(format!("{name}.rs")));
+    }
+    for name in PORT_TESTS {
+        listed.push(workspace.join("port/tests").join(format!("{name}.rs")));
+    }
 
     for path in listed {
         if !path.exists() {
@@ -103,32 +144,16 @@ pub fn preflight(workspace: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Run every leg, stopping at the first spawn error, non-zero status or
-/// zero-test leg so no leg's status is dropped or masked by a later one
-/// (T-04-52, T-04-39).
+/// Run every leg through `runner`, stopping at the first spawn error,
+/// non-zero status or zero-test leg so no leg's status is dropped or masked
+/// by a later one (T-04-52, T-04-39).
 pub fn run_specs(
-    _specs: &[CommandSpec],
-    _runner: &mut dyn FnMut(&CommandSpec) -> Result<LegOutcome>,
+    specs: &[CommandSpec],
+    runner: &mut dyn FnMut(&CommandSpec) -> Result<LegOutcome>,
 ) -> Result<()> {
-    Ok(())
-}
-
-/// Reject a leg that reports no passed tests, which would be a silent pass
-/// (T-04-39).
-pub fn check_leg_output(_spec: &CommandSpec, _stdout: &str) -> Result<()> {
-    Ok(())
-}
-
-/// Run every leg in `workspace`.
-pub fn run(workspace: &Path, cargo: &Path) -> Result<()> {
-    preflight(workspace)?;
-    for spec in command_specs(cargo) {
-        let status = std::process::Command::new(&spec.program)
-            .args(&spec.args)
-            .current_dir(workspace)
-            .status()
-            .map_err(|e| format!("test-9p: run {}: {e}", spec.program.display()))?;
-        if !status.success() {
+    for spec in specs {
+        let outcome = runner(spec)?;
+        if !outcome.status_ok {
             return Err(format!(
                 "test-9p: leg failed: {} {}",
                 spec.program.display(),
@@ -136,8 +161,59 @@ pub fn run(workspace: &Path, cargo: &Path) -> Result<()> {
             )
             .into());
         }
+        check_leg_output(spec, &outcome.stdout)?;
     }
     Ok(())
+}
+
+/// Reject a leg that reports no passed tests, which would be a silent pass
+/// (T-04-39).
+pub fn check_leg_output(spec: &CommandSpec, stdout: &str) -> Result<()> {
+    for line in stdout.lines() {
+        let Some(rest) = line.split_once("test result: ok.").map(|(_, rest)| rest) else {
+            continue;
+        };
+        let passed = rest
+            .split_whitespace()
+            .next()
+            .and_then(|count| count.parse::<u64>().ok())
+            .is_some_and(|count| count > 0);
+        if passed {
+            return Ok(());
+        }
+    }
+
+    Err(format!(
+        "test-9p: leg ran no tests: {} {}",
+        spec.program.display(),
+        spec.args.join(" ")
+    )
+    .into())
+}
+
+/// Run every leg in `workspace`, capturing and echoing each leg's output.
+pub fn run(workspace: &Path, cargo: &Path) -> Result<()> {
+    preflight(workspace)?;
+    let specs = command_specs(cargo);
+
+    run_specs(&specs, &mut |spec| {
+        let output = std::process::Command::new(&spec.program)
+            .args(&spec.args)
+            .current_dir(workspace)
+            .output()
+            .map_err(|e| format!("test-9p: run {}: {e}", spec.program.display()))?;
+
+        use std::io::Write as _;
+        let mut out = std::io::stdout();
+        let _ = out.write_all(&output.stdout);
+        let _ = out.flush();
+        let _ = std::io::stderr().write_all(&output.stderr);
+
+        Ok(LegOutcome {
+            status_ok: output.status.success(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        })
+    })
 }
 
 #[cfg(test)]
