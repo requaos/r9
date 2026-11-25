@@ -11,15 +11,19 @@ As of v3.0 (2026-11-25) the cross-build harness, the design lock, `crypto/`, `ds
 **Shipped:** v3.0 Cross-Build Harness and Wire Foundations (2026-11-25) — 4 phases, 78 plans, 180 tasks, 38/38 requirements.
 **Milestone archive:** `.planning/milestones/v3.0-ROADMAP.md`, `v3.0-REQUIREMENTS.md`, `v3.0-MILESTONE-AUDIT.md`.
 **Golden invariant:** green — boots to rio on QEMU q35 at `bb68d98` under KVM, native TCG and the full gate set.
-**Next:** v3.1 Secure Memory and Cluster Fabric (Phases 5-7).
+**Current:** v3.1 Secure Memory and Cluster Fabric (Phases 5-7), started 2026-11-25.
 
-## Next Milestone Goals
+## Current Milestone: v3.1 Secure Memory and Cluster Fabric
 
-- **Phase 5 — Cryptographic Memory and Zero-Copy DMA Paging:** shadow frames, dual-path decrypt stores, the restricted vector ABI, and a 9P data packet DMA-ing straight into the destination backing store with no kernel copy.
-- **Phase 6 — Distributed 9P Extensions and Service Discovery:** compound and stream messages, leases, union mounts, the legacy gateway, and beacon/discover with the 30 s unhealthy / 5 m dead lifecycle.
-- **Phase 7 — Process Lifecycle and Notes:** make `RFCKEY`, `RFROBASE` and `RFRANDMEM` live, and secure note delivery.
+**Goal:** Memory is cryptographically protected and demand-decrypted, the cluster can share leased state and discover its own services, and the `rfork` crypto flags are live.
 
-Carried into the v3.1 backlog at the v3.0 close: wire `cargo xtask test-9p` and `cargo test -p xtask` into CI, reconcile `04-VALIDATION.md`, correct the boot-iso evidence claim, and settle the TPHT bank-sizing precondition before a default-bank FidShard exists.
+**Target features:**
+- **Phase 5 — Cryptographic Memory and Zero-Copy DMA Paging (MEM):** sealed demand paging on both architectures in new boot profiles, the restricted vector section in `fpu`, AVX with XSAVE user state, the Roaring-pool allocator, and `9P2000.aead` data pages read straight into destination frames. Decisions: `.planning/phases/05-guide-phase-3-cryptographic-memory-and-zero-copy-dma-paging/05-CONTEXT.md`.
+- **Phase 6 — Distributed 9P Extensions and Service Discovery (DIST):** compound and stream messages, leases, union mounts, the legacy gateway, and beacon/discover with the 30 s unhealthy / 5 m dead lifecycle.
+- **Phase 7 — Process Lifecycle and Notes (PROC):** make `RFCKEY`, `RFROBASE` and `RFRANDMEM` live, and secure note delivery.
+- **v3.0 audit backlog (DEBT):** wire `cargo xtask test-9p` and `cargo test -p xtask` into CI and `cargo xtask test`, reconcile `04-VALIDATION.md`, correct the boot-iso evidence claim, settle the TPHT bank-sizing precondition before a default-bank FidShard exists, and fix the stale threat-model line on `rfork` bits 18-20.
+
+Phase 5 stays one phase (owner, 2026-11-25); the planner raises a split only if the plan count calls for it.
 
 ## Core Value
 
@@ -48,6 +52,7 @@ The OS boots to rio on QEMU q35 at every commit. This golden invariant outranks 
 - [ ] Cryptographic memory and zero-copy DMA paging (MEM, Phase 5)
 - [ ] Distributed 9P extensions, leases, legacy gateway, cluster service discovery with 30s unhealthy / 5m dead lifecycle (DIST, Phase 6)
 - [ ] Process lifecycle, `rfork` crypto flags live, secure note delivery (PROC, Phase 7)
+- [ ] v3.0 audit follow-ups: CI wiring of `test-9p` and xtask tests, `04-VALIDATION.md`, boot-iso evidence claim, TPHT bank sizing, threat-model rfork line (DEBT, v3.1)
 - [ ] Multi-CPU SMP scheduler and memory locking (SMP, Phase 8)
 - [ ] `libstd_r9` native Rust `std` (STD, Phase 9)
 - [ ] Track P: Harvey kernel devices, base CLI, complex userland and compilers in idiomatic Rust (KDEV, CLI, USER, Phases 10-12)
@@ -185,5 +190,22 @@ No ADR exists. Phase 2 (owner confirmation 2026-11-23, DSGN-05) settled the stat
 | Native `9P2000.aead` is the distributed wire security, amended by the MAC scope of D-07, the key scope of D-15, the capability TLV of D-11, the nonce rule of D-08 and the class byte of D-27. Outside the lock stay the real key exchange (N5), the page-level check at fault time (N11, second half) and how a qid carries both a class and `QTDIR` (Phase 6). | IG-D11; answer given in plan 04-01's checkpoint (`DECISION IG-D11: lock-amended`, 2026-11-25, no wording changes) | Locked amended 2026-11-25 (owner) |
 | The in-band re-key exchange is self-identifying: every exchange message (the in-band `Tauth`/`Rauth`, the afid `Twrite`/`Rwrite`/`Tread`/`Rread`, and a `Tstream`/`Rstream`/`Tcompound`/`Rcompound` if one ever crosses it) carries tag `NOTAG` (`0xFFFF`) and, on the T-messages and a `Tstream`, the reserved afid `0xFFFFFFFE`; `Rstream`, `Tcompound` and `Rcompound` carry no fid, so `NOTAG` plus the type alone identifies them; `Trekey`/`Rrekey` carry `NOTAG` too. A sealed message is exchange traffic only by that tag (with the six exchange types or the control pair), so an ordinary request or reply that crosses an exchange is delivered to its owner unchanged and never consumed; a reserved-tag message on a wrong fid, or a reserved-tag message the exchange does not expect, closes. The standard-form frames the re-key transcript absorbs carry these values and the data unpadded (P2). Costly to reverse: the tag and afid are on the wire and inside every re-keyed generation's keys. | `04-WIRE-DECISIONS.md` `DECISION P9`, amended by the owner on 2026-11-25 to cover `Tstream`/`Rstream` and again to cover `Tcompound`/`Rcompound` (identified by `NOTAG` alone); CR-02 and WR-07 of the Phase 4 review | Decided 2026-11-25 (owner) |
 
+## Evolution
+
+This document evolves at phase transitions and milestone boundaries.
+
+**After each phase transition** (via `/gsd-transition`):
+1. Requirements invalidated? → Move to Out of Scope with reason
+2. Requirements validated? → Move to Validated with phase reference
+3. New requirements emerged? → Add to Active
+4. Decisions to log? → Add to Key Decisions
+5. "What This Is" still accurate? → Update if drifted
+
+**After each milestone** (via `/gsd-complete-milestone`):
+1. Full review of all sections
+2. Core Value check — still the right priority?
+3. Audit Out of Scope — reasons still valid?
+4. Update Context with current state
+
 ---
-*Last updated: 2026-11-25 after the v3.0 milestone close: 38/38 requirements shipped, UAT 112/112 on Phase 4, audit `tech_debt` with no blockers, and the v3.1 backlog seeded from the audit follow-ups*
+*Last updated: 2026-11-25 after starting milestone v3.1 Secure Memory and Cluster Fabric (Phases 5-7 plus the v3.0 audit backlog)*
