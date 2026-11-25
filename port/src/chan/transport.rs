@@ -49,14 +49,151 @@
 use alloc::vec::Vec;
 
 use crypto::key::Key;
-use crypto::session::{self, DirectionKeys, SessionKeys, Transcript};
+use crypto::session::{self, Direction, DirectionKeys, SessionKeys, Transcript};
 
+use crate::dat::Qid;
 use crate::mcslock::{Lock, LockNode};
 
 use super::msg;
 use super::tlv::{self, Exts};
 use super::wire::{self, Header, Unverified, Verified, check_header, frame_size, packet_len};
 use super::{HEADER_LEN, MAC_LEN, PAGE_LEN};
+
+/// The auth fid the in-band re-key exchange rides (P3, D-18).
+const REKEY_AFID: u32 = 7;
+
+/// The standard-frame tags the in-band exchange messages carry (P3, D-18).
+///
+/// The same constants rebuild the frame both ends absorb into the re-key
+/// transcript, so the two transcripts agree byte for byte.
+const REKEY_AUTH_TAG: u16 = 1;
+const REKEY_WRITE_TAG: u16 = 2;
+const REKEY_READ_TAG: u16 = 3;
+
+/// The tag the re-key control messages (`Trekey` / `Rrekey`) carry (P3).
+const REKEY_TAG: u16 = 0;
+
+/// The sequence number that is never sent (P3, D-19).
+///
+/// A sender whose counter reaches this value with no new keys installed closes
+/// the connection rather than wrap.
+pub const SEQ_HARD_LIMIT: u64 = u64::MAX;
+
+/// The state of a direction's superseded (old-generation) key slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Superseded {
+    /// The direction has not cut over; no old keys are held.
+    None,
+    /// The old keys are still live: the sender between its marker and the ack.
+    Held,
+    /// The old keys were zeroized: the receiver at the marker, or the sender
+    /// after a valid acknowledgement.
+    Zeroized,
+}
+
+/// The index of a direction in the pending-key array.
+fn dir_index(direction: Direction) -> usize {
+    match direction {
+        Direction::ClientToServer => 0,
+        Direction::ServerToClient => 1,
+    }
+}
+
+/// The direction a `Role` sends in.
+fn send_direction_of(role: Role) -> Direction {
+    match role {
+        Role::Client => Direction::ClientToServer,
+        Role::Server => Direction::ServerToClient,
+    }
+}
+
+/// Where the in-band re-key exchange stands at this end (D-18, RESEARCH Pattern 4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExPhase {
+    Idle,
+    /// Client sent `Tauth`, awaiting `Rauth`.
+    AwaitingRauth,
+    /// Client sent `Twrite`, awaiting `Rwrite`.
+    AwaitingRwrite,
+    /// Client sent `Tread`, awaiting `Rread`.
+    AwaitingRread,
+    /// Server sent `Rauth`, awaiting `Twrite`.
+    AwaitingTwrite,
+    /// Server sent `Rwrite`, awaiting `Tread`.
+    AwaitingTread,
+    /// The exchange finished and the pending keys were derived.
+    Done,
+}
+
+/// The re-key state: the running exchange, the pending keys, the superseded
+/// receive slot and the flags that decide when the next marker goes out.
+struct Rekey {
+    /// The derived generation `g + 1` keys, one slot per direction.
+    pending: [Option<DirectionKeys>; 2],
+    /// The chained transcript of the exchange in progress.
+    transcript: Option<Transcript>,
+    /// Our secret from the seam, once it returned `Done`.
+    secret: Option<Key>,
+    /// The bytes this end's seam most recently produced (the server's `Rread`).
+    out: Vec<u8>,
+    phase: ExPhase,
+    /// An exchange is running at this end.
+    active: bool,
+    /// This end asked the peer to start an exchange (server threshold).
+    request_sent: bool,
+    /// The exchange finished and the pending keys are set.
+    ready: bool,
+    /// This end has sent its own direction's marker for this generation.
+    own_marker_sent: bool,
+    /// The old receive keys of the direction that was cut over.
+    recv_superseded: Option<DirectionKeys>,
+}
+
+impl Rekey {
+    fn new() -> Rekey {
+        Rekey {
+            pending: [None, None],
+            transcript: None,
+            secret: None,
+            out: Vec::new(),
+            phase: ExPhase::Idle,
+            active: false,
+            request_sent: false,
+            ready: false,
+            own_marker_sent: false,
+            recv_superseded: None,
+        }
+    }
+
+    /// Zeroize every key the re-key state holds, leaving the values in place
+    /// so `keys_zeroized` can read them.
+    fn fail(&mut self) {
+        if let Some(keys) = &mut self.recv_superseded {
+            keys.zeroize();
+        }
+        for keys in self.pending.iter_mut().flatten() {
+            keys.zeroize();
+        }
+    }
+
+    /// Whether every key the re-key state holds is zero.
+    fn keys_zeroized(&self) -> bool {
+        self.recv_superseded.as_ref().is_none_or(DirectionKeys::is_zeroized)
+            && self.pending.iter().all(|slot| slot.as_ref().is_none_or(DirectionKeys::is_zeroized))
+    }
+
+    /// Begin an exchange: chain the previous transcript and reset the flags.
+    fn start(&mut self, previous: &[u8; 32]) {
+        self.transcript = Some(Transcript::chain(previous));
+        self.secret = None;
+        self.out.clear();
+        self.phase = ExPhase::Idle;
+        self.active = true;
+        self.request_sent = false;
+        self.ready = false;
+        self.own_marker_sent = false;
+    }
+}
 
 /// One end of a connection (D-15).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -127,19 +264,29 @@ struct SendState {
     keys: DirectionKeys,
     seq: u64,
     closed: bool,
+    /// The old keys of this direction after a cutover; `Held` until the ack,
+    /// then zeroized, or zeroized at once if this end is the receiver side.
+    superseded: Option<DirectionKeys>,
+    /// The re-key ack deadline, in the caller's `now` milliseconds (D-20, F4).
+    deadline: Option<u64>,
 }
 
 impl SendState {
-    /// Zeroize this direction's keys, reset the counter and close.
+    /// Zeroize this direction's keys (and any superseded slot), reset the
+    /// counter and close.
     fn fail(&mut self) {
         self.keys.zeroize();
+        if let Some(keys) = &mut self.superseded {
+            keys.zeroize();
+        }
         self.seq = 0;
+        self.deadline = None;
         self.closed = true;
     }
 
-    /// Whether this direction's keys are zero.
+    /// Whether this direction's keys and any superseded slot are zero.
     fn is_zeroized(&self) -> bool {
-        self.keys.is_zeroized()
+        self.keys.is_zeroized() && self.superseded.as_ref().is_none_or(DirectionKeys::is_zeroized)
     }
 }
 
@@ -187,7 +334,12 @@ impl SendHalf {
         // (D-21).  A write that does not land whole closes the direction.
         match io.write_msg(&packet) {
             Ok(written) if written as usize == packet.len() => {
-                state.seq = seq.wrapping_add(1);
+                if let Some(next) = seq.checked_add(1) {
+                    state.seq = next;
+                } else {
+                    state.fail();
+                    return Err(Closed);
+                }
                 Ok(())
             }
             _ => {
@@ -211,8 +363,91 @@ impl SendHalf {
         let mut state = self.state.lock(&node);
         let seq = state.seq;
         let packet = seal_into(&mut state, self.msize, seq, typ, tag, fid_handle, exts, body)?;
-        state.seq = seq.wrapping_add(1);
+        state.seq = seq.checked_add(1).ok_or(Closed)?;
         Ok(packet)
+    }
+
+    /// The marker send, the key switch and the counter reset in one lock scope
+    /// (D-20, D-21, acceptance criteria).
+    ///
+    /// Seals the marker as the last packet under the old keys, moves those
+    /// keys into the superseded slot (`Held`), installs `new_keys`, resets the
+    /// counter to 0 and stores the acknowledgement deadline.
+    fn marker_and_switch(
+        &self,
+        typ: u8,
+        tag: u16,
+        body: &[u8],
+        new_keys: DirectionKeys,
+        deadline: u64,
+    ) -> core::result::Result<Vec<u8>, Closed> {
+        let node = LockNode::new();
+        let mut state = self.state.lock(&node);
+        let seq = state.seq;
+        let packet =
+            seal_into(&mut state, self.msize, seq, typ, tag, [0u8; 8], &Exts::default(), body)?;
+        let old = core::mem::replace(&mut state.keys, new_keys);
+        state.superseded = Some(old);
+        state.seq = 0;
+        state.deadline = Some(deadline);
+        Ok(packet)
+    }
+
+    /// Whether the send counter has reached `threshold` (plan 04-08).
+    fn seq_reached(&self, threshold: u64) -> bool {
+        let node = LockNode::new();
+        self.state.lock(&node).seq >= threshold
+    }
+
+    /// The state of this direction's superseded key slot.
+    fn superseded_state(&self) -> Superseded {
+        let node = LockNode::new();
+        let state = self.state.lock(&node);
+        match &state.superseded {
+            None => Superseded::None,
+            Some(keys) if keys.is_zeroized() => Superseded::Zeroized,
+            Some(_) => Superseded::Held,
+        }
+    }
+
+    /// Verify a re-key confirm under this direction's current (new) MAC key.
+    fn verify_confirm(&self, generation: u32, confirm: &[u8; 32]) -> bool {
+        let node = LockNode::new();
+        let state = self.state.lock(&node);
+        state.keys.verify_rekey_confirm(generation, confirm).is_ok()
+    }
+
+    /// Zeroize the superseded slot after a valid acknowledgement (D-20 step 3).
+    fn zeroize_superseded(&self) {
+        let node = LockNode::new();
+        let mut state = self.state.lock(&node);
+        if let Some(keys) = &mut state.superseded {
+            keys.zeroize();
+        }
+    }
+
+    /// The stored acknowledgement deadline, if a marker is outstanding.
+    fn deadline(&self) -> Option<u64> {
+        let node = LockNode::new();
+        self.state.lock(&node).deadline
+    }
+
+    /// Clear the acknowledgement deadline after a valid acknowledgement.
+    fn clear_deadline(&self) {
+        let node = LockNode::new();
+        self.state.lock(&node).deadline = None;
+    }
+
+    /// Whether `now` has reached the stored acknowledgement deadline (F4).
+    fn deadline_passed(&self, now: u64) -> bool {
+        self.deadline().is_some_and(|deadline| now >= deadline)
+    }
+
+    /// Set the send counter, for the hidden host counter-limit constructor only.
+    #[allow(dead_code)]
+    fn set_seq(&self, seq: u64) {
+        let node = LockNode::new();
+        self.state.lock(&node).seq = seq;
     }
 
     /// Zeroize the sending keys and close this direction.
@@ -252,6 +487,12 @@ fn seal_into(
     body: &[u8],
 ) -> core::result::Result<Vec<u8>, Closed> {
     if state.closed {
+        return Err(Closed);
+    }
+    // The sender never sends sequence `u64::MAX`; with no new keys installed
+    // it closes rather than wrap (P3, D-19).
+    if seq == SEQ_HARD_LIMIT {
+        state.fail();
         return Err(Closed);
     }
     let tlv_len = exts.encoded_len();
@@ -355,6 +596,8 @@ impl Handshake {
                     keys: send_keys,
                     seq: 0,
                     closed: false,
+                    superseded: None,
+                    deadline: None,
                 },
             ),
         };
@@ -362,23 +605,38 @@ impl Handshake {
             config: self.config,
             generation: 0,
             transcript,
+            send_direction: send_direction_of(self.role),
             send,
             recv_keys,
             recv_seq: 0,
             authenticated,
+            rekey: Rekey::new(),
         }
+    }
+
+    /// Finish the handshake with a chosen send counter.
+    ///
+    /// Exists for the host counter-limit test only (D-17): no production path
+    /// may start a session at a non-zero sequence number, and
+    /// [`TransportConfig`] has no field for one.  Do not call this from kernel
+    /// code.  [`Handshake::finish`] is unchanged and always starts at 0.
+    #[doc(hidden)]
+    pub fn finish_with_send_seq(self, secret: Key, send_seq: u64) -> Session {
+        let session = self.finish(secret);
+        session.send.set_seq(send_seq);
+        session
     }
 }
 
 /// One end of an established connection (D-15).
 pub struct Session {
     config: TransportConfig,
-    /// The derivation generation; plan 04-08's re-key reads it.
-    #[allow(dead_code)]
+    /// The current derivation generation (P2, D-18).
     generation: u32,
-    /// The handshake transcript hash; plan 04-08 chains the re-key from it.
-    #[allow(dead_code)]
+    /// The current generation's transcript hash; a re-key chains from it.
     transcript: [u8; 32],
+    /// The direction this end seals in.
+    send_direction: Direction,
     /// The sending direction: its keys, sequence counter and closed state,
     /// behind one lock so concurrent senders stay in counter order (D-21).
     send: SendHalf,
@@ -387,6 +645,9 @@ pub struct Session {
     recv_seq: u64,
     /// Whether `Tauth` and `Rauth` were both absorbed (D-16, D-17).
     authenticated: bool,
+    /// The re-key state: pending keys, the running exchange and the received
+    /// direction's superseded slot (D-18 to D-20).
+    rekey: Rekey,
 }
 
 impl Session {
@@ -406,9 +667,14 @@ impl Session {
         body: &[u8],
         now: u64,
     ) -> core::result::Result<Vec<u8>, Closed> {
-        // Re-key timing (D-19) is plan 04-08's; this plan threads `now` only.
-        let _ = now;
         if !self.authenticated || self.send.is_closed() {
+            return Err(Closed);
+        }
+        // A re-key acknowledgement that never arrived closes the connection on
+        // the next send (D-20 step 4).  A deadline only fires when something
+        // calls in (F4).
+        if self.send.deadline_passed(now) {
+            self.fail();
             return Err(Closed);
         }
         // Single-owner sending takes the same per-direction lock and advances
@@ -440,8 +706,13 @@ impl Session {
         packet: Unverified<'a>,
         now: u64,
     ) -> core::result::Result<Verified<'a>, Closed> {
-        let _ = now;
         if !self.authenticated || self.send.is_closed() {
+            return Err(Closed);
+        }
+        // A missing acknowledgement closes the connection on the next receive
+        // too (D-20 step 4); the deadline uses only the caller's `now` (F4).
+        if self.send.deadline_passed(now) {
+            self.fail();
             return Err(Closed);
         }
         let buf = packet.take();
@@ -570,10 +841,12 @@ impl Session {
     fn fail(&mut self) {
         // The send keys sit behind the per-direction lock, so this reaches
         // them through it; the receive keys are single-reader and are
-        // zeroized directly (D-15, D-21).
+        // zeroized directly (D-15, D-21).  The re-key state's pending and
+        // superseded keys join the same path.
         self.send.fail();
         self.recv_keys.zeroize();
         self.recv_seq = 0;
+        self.rekey.fail();
     }
 
     /// The orderly close: the same zeroize-and-close path as a failure (D-15).
@@ -594,7 +867,534 @@ impl Session {
     /// exists so an orderly teardown can be checked (D-15).  The send keys are
     /// read through the per-direction lock (D-21).
     pub fn keys_zeroized(&self) -> bool {
-        self.send.keys_zeroized() && self.recv_keys.is_zeroized()
+        self.send.keys_zeroized() && self.recv_keys.is_zeroized() && self.rekey.keys_zeroized()
+    }
+
+    /// Whether a re-key is due: the send counter has reached the configured
+    /// threshold and none is running or waiting to be acknowledged (D-19).
+    pub fn rekey_due(&self) -> bool {
+        !self.send.is_closed()
+            && !self.rekey.active
+            && !self.rekey.ready
+            && !self.rekey.request_sent
+            && self.send.seq_reached(self.config.rekey_after_packets)
+    }
+
+    /// The state of a direction's superseded (old-generation) key slot.
+    ///
+    /// Computed from `is_zeroized()` on the slot, never from a flag, so a
+    /// cutover that skipped its `zeroize` call reports `Held` (D-20 steps 2,
+    /// 3 and 4).
+    pub fn superseded_keys(&self, direction: Direction) -> Superseded {
+        if direction == self.send_direction {
+            self.send.superseded_state()
+        } else {
+            match &self.rekey.recv_superseded {
+                None => Superseded::None,
+                Some(keys) if keys.is_zeroized() => Superseded::Zeroized,
+                Some(_) => Superseded::Held,
+            }
+        }
+    }
+
+    /// The deadline check without the close: shared by `poll`, `seal` and `open`.
+    fn deadline_expired(&self, now: u64) -> bool {
+        self.send.deadline_passed(now)
+    }
+
+    /// Drive the in-band re-key state machine one step and return the sealed
+    /// packets to send next (D-18 to D-20, RESEARCH Pattern 4).
+    ///
+    /// `incoming` is one decoded message just received (an exchange message, a
+    /// marker, an acknowledgement or a request); `None` lets this end emit
+    /// whatever it has to send next (a `Tauth`, a `REQUEST` or its own marker).
+    /// The exchange travels sealed: this method seals each message under the
+    /// session's current keys and the caller puts the returned packets on the
+    /// wire.  Every deadline comparison uses only `now` (F4).
+    pub fn rekey_step(
+        &mut self,
+        exchange: &mut dyn SessionExchange,
+        incoming: Option<&msg::Msg>,
+        now: u64,
+    ) -> core::result::Result<Vec<Vec<u8>>, Closed> {
+        if !self.authenticated || self.send.is_closed() {
+            return Err(Closed);
+        }
+        if self.deadline_expired(now) {
+            self.fail();
+            return Err(Closed);
+        }
+        let mut packets = Vec::new();
+
+        if let Some(message) = incoming {
+            self.rekey_handle(message, exchange, now, &mut packets)?;
+        }
+
+        // With nothing to answer, emit a marker once the exchange finished, or
+        // start an exchange when this end's threshold (or the peer's request)
+        // asked for one.
+        if incoming.is_none() {
+            if self.rekey.ready && !self.rekey.own_marker_sent {
+                self.send_own_marker(now, &mut packets)?;
+            } else if !self.rekey.active && !self.rekey.ready && self.rekey_due() {
+                if self.send_direction == Direction::ClientToServer {
+                    self.begin_client_exchange(&mut packets)?;
+                } else {
+                    self.send_request(&mut packets)?;
+                }
+            }
+        }
+
+        Ok(packets)
+    }
+
+    /// Dispatch one decoded message into the re-key state machine.
+    fn rekey_handle(
+        &mut self,
+        message: &msg::Msg,
+        exchange: &mut dyn SessionExchange,
+        now: u64,
+        packets: &mut Vec<Vec<u8>>,
+    ) -> core::result::Result<(), Closed> {
+        match message {
+            msg::Msg::Trekey {
+                kind,
+                generation,
+                confirm,
+            }
+            | msg::Msg::Rrekey {
+                kind,
+                generation,
+                confirm,
+            } => match *kind {
+                msg::REKEY_REQUEST => {
+                    // Only the client drives the exchange; a server already
+                    // waiting ignores a stray request.
+                    if self.send_direction == Direction::ClientToServer
+                        && !self.rekey.active
+                        && !self.rekey.ready
+                    {
+                        self.begin_client_exchange(packets)?;
+                    }
+                    Ok(())
+                }
+                msg::REKEY_MARKER => self.handle_marker(*generation, packets),
+                msg::REKEY_ACK => self.handle_ack(*generation, confirm),
+                _ => {
+                    self.fail();
+                    Err(Closed)
+                }
+            },
+            msg::Msg::Tauth { .. }
+            | msg::Msg::Rauth { .. }
+            | msg::Msg::Twrite { .. }
+            | msg::Msg::Rwrite { .. }
+            | msg::Msg::Tread { .. }
+            | msg::Msg::Rread { .. } => self.exchange_incoming(message, exchange, now, packets),
+            _ => Ok(()),
+        }
+    }
+
+    /// Begin an exchange as the client: chain the transcript, send `Tauth`.
+    fn begin_client_exchange(
+        &mut self,
+        packets: &mut Vec<Vec<u8>>,
+    ) -> core::result::Result<(), Closed> {
+        self.rekey.start(&self.transcript);
+        let tauth = msg::Msg::Tauth {
+            afid: REKEY_AFID,
+            uname: b"none".to_vec(),
+            aname: Vec::new(),
+        };
+        self.send_exchange(wire::TAUTH, REKEY_AUTH_TAG, &tauth, packets)?;
+        self.rekey.phase = ExPhase::AwaitingRauth;
+        Ok(())
+    }
+
+    /// Ask the peer to start an exchange (a server that reached the threshold
+    /// first): send `Rrekey` kind `REQUEST` (D-18, RESEARCH Pattern 4 step 1).
+    fn send_request(&mut self, packets: &mut Vec<Vec<u8>>) -> core::result::Result<(), Closed> {
+        let request = msg::Msg::Rrekey {
+            kind: msg::REKEY_REQUEST,
+            generation: self.generation.saturating_add(1),
+            confirm: [0u8; 32],
+        };
+        self.send_control(&request, packets)?;
+        self.rekey.request_sent = true;
+        Ok(())
+    }
+
+    /// Send this end's own direction's marker, then cut that direction over.
+    fn send_own_marker(
+        &mut self,
+        now: u64,
+        packets: &mut Vec<Vec<u8>>,
+    ) -> core::result::Result<(), Closed> {
+        let index = dir_index(self.send_direction);
+        let Some(new_keys) = self.rekey.pending[index].take() else {
+            self.fail();
+            return Err(Closed);
+        };
+        let generation = self.generation;
+        let marker = match self.send_direction {
+            Direction::ClientToServer => msg::Msg::Trekey {
+                kind: msg::REKEY_MARKER,
+                generation,
+                confirm: [0u8; 32],
+            },
+            Direction::ServerToClient => msg::Msg::Rrekey {
+                kind: msg::REKEY_MARKER,
+                generation,
+                confirm: [0u8; 32],
+            },
+        };
+        let mut body = Vec::new();
+        if msg::encode_body(&marker, &mut body).is_err() {
+            self.fail();
+            return Err(Closed);
+        }
+        let (typ, tag) = self.control_type_tag();
+        let deadline = now.saturating_add(self.config.rekey_ack_timeout_ms);
+        let packet = self.send.marker_and_switch(typ, tag, &body, new_keys, deadline)?;
+        packets.push(packet);
+        self.rekey.own_marker_sent = true;
+        Ok(())
+    }
+
+    /// The receive side of a marker: switch keys, zeroize the old ones and (in
+    /// Task 2) answer with an acknowledgement.
+    fn handle_marker(
+        &mut self,
+        generation: u32,
+        packets: &mut Vec<Vec<u8>>,
+    ) -> core::result::Result<(), Closed> {
+        let index = dir_index(self.recv_direction());
+        if generation != self.generation || self.rekey.pending[index].is_none() {
+            self.fail();
+            return Err(Closed);
+        }
+        let Some(new_keys) = self.rekey.pending[index].take() else {
+            self.fail();
+            return Err(Closed);
+        };
+        let old = core::mem::replace(&mut self.recv_keys, new_keys);
+        self.rekey.recv_superseded = Some(old);
+        if let Some(keys) = &mut self.rekey.recv_superseded {
+            keys.zeroize();
+        }
+        self.recv_seq = 0;
+        self.send_ack(generation, packets)
+    }
+
+    /// Answer a marker with the acknowledgement carrying the confirm value
+    /// under the new receive-direction MAC key (D-20 step 2, P3).
+    fn send_ack(
+        &mut self,
+        generation: u32,
+        packets: &mut Vec<Vec<u8>>,
+    ) -> core::result::Result<(), Closed> {
+        // The confirm is made under the new receive-direction MAC key: sealing
+        // the ACK under the other direction's keys proves nothing about the
+        // new ones (D-20 step 2, P3).
+        let confirm = self.recv_keys.rekey_confirm(generation);
+        let ack = match self.send_direction {
+            Direction::ClientToServer => msg::Msg::Trekey {
+                kind: msg::REKEY_ACK,
+                generation,
+                confirm,
+            },
+            Direction::ServerToClient => msg::Msg::Rrekey {
+                kind: msg::REKEY_ACK,
+                generation,
+                confirm,
+            },
+        };
+        self.send_control(&ack, packets)
+    }
+
+    /// Verify an acknowledgement: generation, then the confirm value under the
+    /// new send keys; a valid one zeroizes the old keys (D-20 step 3).
+    fn handle_ack(
+        &mut self,
+        generation: u32,
+        confirm: &[u8; 32],
+    ) -> core::result::Result<(), Closed> {
+        // A wrong generation, an ACK with no marker outstanding, or a failed
+        // confirm closes the connection; a valid one zeroizes the old keys
+        // (D-20 step 3, P3).
+        if generation != self.generation
+            || self.send.deadline().is_none()
+            || !self.send.verify_confirm(generation, confirm)
+        {
+            self.fail();
+            return Err(Closed);
+        }
+        self.send.zeroize_superseded();
+        self.send.clear_deadline();
+        Ok(())
+    }
+
+    /// The direction this end receives in.
+    fn recv_direction(&self) -> Direction {
+        match self.send_direction {
+            Direction::ClientToServer => Direction::ServerToClient,
+            Direction::ServerToClient => Direction::ClientToServer,
+        }
+    }
+
+    /// The type and tag a control message from this end carries.
+    fn control_type_tag(&self) -> (u8, u16) {
+        match self.send_direction {
+            Direction::ClientToServer => (wire::TREKEY, REKEY_TAG),
+            Direction::ServerToClient => (wire::RREKEY, REKEY_TAG),
+        }
+    }
+
+    /// Encode, absorb and seal one exchange message, appending its packet.
+    fn send_exchange(
+        &mut self,
+        typ: u8,
+        tag: u16,
+        message: &msg::Msg,
+        packets: &mut Vec<Vec<u8>>,
+    ) -> core::result::Result<(), Closed> {
+        let mut body = Vec::new();
+        if msg::encode_body(message, &mut body).is_err() {
+            self.fail();
+            return Err(Closed);
+        }
+        self.absorb_exchange(typ, tag, &body);
+        let packet = self.send.seal_single(typ, tag, [0u8; 8], &Exts::default(), &body)?;
+        packets.push(packet);
+        Ok(())
+    }
+
+    /// Encode and seal one control message (`REQUEST`, `MARKER` or `ACK`).
+    fn send_control(
+        &mut self,
+        message: &msg::Msg,
+        packets: &mut Vec<Vec<u8>>,
+    ) -> core::result::Result<(), Closed> {
+        let mut body = Vec::new();
+        if msg::encode_body(message, &mut body).is_err() {
+            self.fail();
+            return Err(Closed);
+        }
+        let (typ, tag) = self.control_type_tag();
+        let packet = self.send.seal_single(typ, tag, [0u8; 8], &Exts::default(), &body)?;
+        packets.push(packet);
+        Ok(())
+    }
+
+    /// Absorb one exchange message in its standard 9P2000 form.
+    fn absorb_exchange(&mut self, typ: u8, tag: u16, body: &[u8]) {
+        let mut frame = Vec::with_capacity(7 + body.len());
+        frame.extend_from_slice(&((7 + body.len()) as u32).to_le_bytes());
+        frame.push(typ);
+        frame.extend_from_slice(&tag.to_le_bytes());
+        frame.extend_from_slice(body);
+        if let Some(transcript) = &mut self.rekey.transcript {
+            transcript.absorb(&frame);
+        }
+    }
+
+    /// Absorb a received exchange message by re-encoding its body.
+    fn absorb_exchange_incoming(
+        &mut self,
+        typ: u8,
+        tag: u16,
+        message: &msg::Msg,
+    ) -> core::result::Result<(), Closed> {
+        let mut body = Vec::new();
+        if msg::encode_body(message, &mut body).is_err() {
+            self.fail();
+            return Err(Closed);
+        }
+        self.absorb_exchange(typ, tag, &body);
+        Ok(())
+    }
+
+    /// Run one step of the in-band exchange on whichever side this end is.
+    fn exchange_incoming(
+        &mut self,
+        message: &msg::Msg,
+        exchange: &mut dyn SessionExchange,
+        _now: u64,
+        packets: &mut Vec<Vec<u8>>,
+    ) -> core::result::Result<(), Closed> {
+        match self.send_direction {
+            Direction::ClientToServer => self.client_exchange_incoming(message, exchange, packets),
+            Direction::ServerToClient => self.server_exchange_incoming(message, exchange, packets),
+        }
+    }
+
+    /// The client half of the in-band exchange (D-18, Pattern 4).
+    fn client_exchange_incoming(
+        &mut self,
+        message: &msg::Msg,
+        exchange: &mut dyn SessionExchange,
+        packets: &mut Vec<Vec<u8>>,
+    ) -> core::result::Result<(), Closed> {
+        match (self.rekey.phase, message) {
+            (ExPhase::AwaitingRauth, msg::Msg::Rauth { .. }) => {
+                self.absorb_exchange_incoming(wire::RAUTH, REKEY_AUTH_TAG, message)?;
+                let mut out = Vec::new();
+                match exchange.step(&[], &mut out) {
+                    Ok(ExchangeStep::Done(secret)) => self.rekey.secret = Some(secret),
+                    Ok(ExchangeStep::Continue) => {}
+                    Err(_) => {
+                        self.fail();
+                        return Err(Closed);
+                    }
+                }
+                let twrite = msg::Msg::Twrite {
+                    fid: REKEY_AFID,
+                    offset: 0,
+                    data: out,
+                };
+                self.send_exchange(wire::TWRITE, REKEY_WRITE_TAG, &twrite, packets)?;
+                self.rekey.phase = ExPhase::AwaitingRwrite;
+                Ok(())
+            }
+            (ExPhase::AwaitingRwrite, msg::Msg::Rwrite { .. }) => {
+                self.absorb_exchange_incoming(wire::RWRITE, REKEY_WRITE_TAG, message)?;
+                let tread = msg::Msg::Tread {
+                    fid: REKEY_AFID,
+                    offset: 0,
+                    count: 65536,
+                };
+                self.send_exchange(wire::TREAD, REKEY_READ_TAG, &tread, packets)?;
+                self.rekey.phase = ExPhase::AwaitingRread;
+                Ok(())
+            }
+            (ExPhase::AwaitingRread, msg::Msg::Rread { data }) => {
+                self.absorb_exchange_incoming(wire::RREAD, REKEY_READ_TAG, message)?;
+                if self.rekey.secret.is_none() {
+                    let mut out = Vec::new();
+                    match exchange.step(data, &mut out) {
+                        Ok(ExchangeStep::Done(secret)) => self.rekey.secret = Some(secret),
+                        Ok(ExchangeStep::Continue) => {
+                            let twrite = msg::Msg::Twrite {
+                                fid: REKEY_AFID,
+                                offset: 0,
+                                data: out,
+                            };
+                            self.send_exchange(wire::TWRITE, REKEY_WRITE_TAG, &twrite, packets)?;
+                            self.rekey.phase = ExPhase::AwaitingRwrite;
+                            return Ok(());
+                        }
+                        Err(_) => {
+                            self.fail();
+                            return Err(Closed);
+                        }
+                    }
+                }
+                self.finish_exchange()
+            }
+            _ => {
+                self.fail();
+                Err(Closed)
+            }
+        }
+    }
+
+    /// The server half of the in-band exchange (D-18, Pattern 4).
+    fn server_exchange_incoming(
+        &mut self,
+        message: &msg::Msg,
+        exchange: &mut dyn SessionExchange,
+        packets: &mut Vec<Vec<u8>>,
+    ) -> core::result::Result<(), Closed> {
+        match (self.rekey.phase, message) {
+            (ExPhase::Idle, msg::Msg::Tauth { .. }) => {
+                self.rekey.start(&self.transcript);
+                self.absorb_exchange_incoming(wire::TAUTH, REKEY_AUTH_TAG, message)?;
+                let rauth = msg::Msg::Rauth {
+                    aqid: Qid {
+                        path: 0,
+                        vers: 0,
+                        typ: 0,
+                    },
+                };
+                self.send_exchange(wire::RAUTH, REKEY_AUTH_TAG, &rauth, packets)?;
+                self.rekey.phase = ExPhase::AwaitingTwrite;
+                Ok(())
+            }
+            (ExPhase::AwaitingTwrite, msg::Msg::Twrite { data, .. }) => {
+                self.absorb_exchange_incoming(wire::TWRITE, REKEY_WRITE_TAG, message)?;
+                let mut out = Vec::new();
+                let step = match exchange.step(data, &mut out) {
+                    Ok(step) => step,
+                    Err(_) => {
+                        self.fail();
+                        return Err(Closed);
+                    }
+                };
+                self.rekey.out = out;
+                if let ExchangeStep::Done(secret) = step {
+                    self.rekey.secret = Some(secret);
+                }
+                let rwrite = msg::Msg::Rwrite {
+                    count: data.len() as u32,
+                };
+                self.send_exchange(wire::RWRITE, REKEY_WRITE_TAG, &rwrite, packets)?;
+                if self.rekey.secret.is_some() {
+                    self.rekey.phase = ExPhase::AwaitingTread;
+                }
+                Ok(())
+            }
+            (ExPhase::AwaitingTread, msg::Msg::Tread { .. }) => {
+                self.absorb_exchange_incoming(wire::TREAD, REKEY_READ_TAG, message)?;
+                let data = core::mem::take(&mut self.rekey.out);
+                let rread = msg::Msg::Rread { data };
+                self.send_exchange(wire::RREAD, REKEY_READ_TAG, &rread, packets)?;
+                self.finish_exchange()
+            }
+            _ => {
+                self.fail();
+                Err(Closed)
+            }
+        }
+    }
+
+    /// Derive generation `g + 1` from the seam's secret and the chained
+    /// transcript, and hold the keys as pending (D-18, Pattern 4 step 2).
+    fn finish_exchange(&mut self) -> core::result::Result<(), Closed> {
+        let Some(secret) = self.rekey.secret.take() else {
+            self.fail();
+            return Err(Closed);
+        };
+        let Some(transcript) = self.rekey.transcript.take() else {
+            self.fail();
+            return Err(Closed);
+        };
+        let hash = transcript.hash();
+        let next = self.generation.saturating_add(1);
+        let keys = session::derive(&secret, &hash, next);
+        self.rekey.pending[0] = Some(keys.c2s);
+        self.rekey.pending[1] = Some(keys.s2c);
+        self.generation = next;
+        self.transcript = hash;
+        self.rekey.ready = true;
+        self.rekey.own_marker_sent = false;
+        self.rekey.active = false;
+        self.rekey.phase = ExPhase::Done;
+        Ok(())
+    }
+
+    /// Check a stored acknowledgement deadline and close if it passed.
+    ///
+    /// A deadline only fires when something calls in: whoever owns the
+    /// connection must call [`Session::poll`] periodically (F4, D-20 step 4).
+    pub fn poll(&mut self, now: u64) -> core::result::Result<(), Closed> {
+        if !self.authenticated || self.send.is_closed() {
+            return Err(Closed);
+        }
+        if self.deadline_expired(now) {
+            self.fail();
+            return Err(Closed);
+        }
+        Ok(())
     }
 }
 
