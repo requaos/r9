@@ -70,11 +70,28 @@
 //! the secret to nodes is Phase 6 (D-13).  Bumping the table's epoch revokes
 //! every handle and capability issued before it.
 //!
+//! # Client id 0 is reserved
+//!
+//! Client id 0 is the identity a cleared arena slot reads as:
+//! [`FidEntry::from_words`] of an all-zero image has `fid_key == 0` and
+//! `client_id == 0`.  `ds` clears a removed entry's eight words one at a time,
+//! so a [`FidTable::resolve`] racing a `clunk` can read word 0 already zero
+//! while the epoch word and [`FID_LIVE`] are not yet cleared.  Reserving client
+//! id 0 rules that image out: [`FidTable::insert`] and [`FidTable::resolve`]
+//! refuse client id 0, so every live entry's identity word is non-zero whatever
+//! its fid number, and [`FidEntry::matches`] rejects a zero identity word
+//! outright.  Fid number 0 stays usable by every other client.  This is not a
+//! consistent-snapshot claim — the read is still eight independent loads (see
+//! above) — and it is narrower than "no torn read ever resolves": it says only
+//! that a read whose identity word is already zero matches no client and no
+//! handle.
+//!
 //! # `client_id` has no authenticated source yet
 //!
 //! [`FidTable::insert`] takes the `client_id` the caller's connection assigned.
-//! This phase has no authentication, so the test server assigns one per
-//! connection; Phase 6 defines the real source.
+//! Ids start at 1; 0 is reserved for the cleared arena slot (`# Client id 0 is
+//! reserved`).  This phase has no authentication, so the test server assigns one
+//! per connection; Phase 6 defines the real source.
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
@@ -82,7 +99,7 @@ use alloc::vec::Vec;
 use crypto::key::Key;
 use ds::roaring::RoaringBitmap;
 use ds::tpht::flattened::FlattenedTphtShard;
-use ds::tpht::{NoProbe, Probe, TinyPtr, TphtError};
+use ds::tpht::{HOME_SLOTS, NoProbe, Probe, TinyPtr, TphtError};
 
 use crate::mcslock::{Lock, LockNode};
 
@@ -299,6 +316,24 @@ impl FidEntry {
         bytes[48] = self.volatility;
         bytes[49..64].copy_from_slice(&self._reserved);
         words_from_bytes(&bytes)
+    }
+
+    /// Whether these words are the live entry `handle` names for `client_id`
+    /// at `table_epoch`: the register comparisons [`FidTable::resolve`] makes
+    /// on the eight words it read.
+    pub fn matches(&self, client_id: u32, handle: &StatefulHandle, table_epoch: u16) -> bool {
+        // Client id 0 is the cleared-slot identity and an all-zero identity word
+        // is a cleared (or torn) slot, so neither can name a live entry.  With
+        // those two rules every live entry's word 0 is non-zero whatever its fid
+        // number, and a read that sees word 0 already cleared matches nobody
+        // (WIRE-08, WR-04).
+        client_id != 0
+            && (self.fid_key != 0 || self.client_id != 0)
+            && self.fid_key == handle.fid_key
+            && self.client_id == client_id
+            && self.epoch == handle.epoch
+            && handle.epoch == table_epoch
+            && self.flags & FID_LIVE != 0
     }
 
     /// Unpack the eight-word arena form into an entry.
@@ -544,11 +579,21 @@ impl<P: Probe + Clone> FidTable<P> {
     /// (WIRE-08).
     ///
     /// The entry's `client_id`, `epoch` and [`FID_LIVE`] flag are set here; the
-    /// key is `(client_id, fid_key)`.  The insert starts at the key's home
-    /// shard ([`Self::home_shard`]) and walks forward on `HomeFull`, so a key
-    /// whose home block is full lands in the next shard and its handle records
-    /// that shard's index.  Every shard full is an error.
+    /// key is `(client_id, fid_key)`.  Client id 0 is reserved for the cleared
+    /// arena slot and is refused before any shard is touched (WR-04).  The key
+    /// is unique across the whole table: every shard is probed for it before
+    /// the placement walk, because an earlier insert of the same key may have
+    /// fallen over to any of them (WR-09).  The insert then starts at the key's
+    /// home shard ([`Self::home_shard`]) and walks forward on `HomeFull`, so a
+    /// key whose home block is full lands in the next shard and its handle
+    /// records that shard's index.  Every shard full is an error.
     pub fn insert(&self, client_id: u32, mut entry: FidEntry) -> crate::Result<StatefulHandle> {
+        if client_id == 0 {
+            return Err(
+                "fid: client id 0 is reserved for the cleared arena slot, so it cannot own an \
+                 entry (WIRE-08, WR-04)",
+            );
+        }
         entry.client_id = client_id;
         entry.epoch = self.epoch;
         entry.flags |= FID_LIVE;
@@ -557,13 +602,24 @@ impl<P: Probe + Clone> FidTable<P> {
         let words = entry.to_words();
         let shard_count = self.shards.len();
         let start = self.home_shard(client_id, fid_key) as usize;
+        let same = |value: &[u64; FID_ENTRY_WORDS]| {
+            let existing = FidEntry::from_words(value);
+            existing.fid_key == fid_key && existing.client_id == client_id
+        };
+        // The key is unique across the whole table: probe every shard before
+        // placing, because an earlier insert may have fallen over to any of
+        // them (WR-09).  This costs one lookup per shard on the insert path
+        // only; `resolve` is not touched.
+        for shard in self.shards.iter() {
+            if shard.tpht.lookup(key, same).is_some() {
+                return Err(
+                    "fid: an entry for this client and fid is already present in the table",
+                );
+            }
+        }
         for offset in 0..shard_count {
             let index = (start + offset) % shard_count;
             let shard = &self.shards[index];
-            let same = |value: &[u64; FID_ENTRY_WORDS]| {
-                let existing = FidEntry::from_words(value);
-                existing.fid_key == fid_key && existing.client_id == client_id
-            };
             match shard.tpht.insert(key, words, same) {
                 Ok(Some(ptr)) => {
                     let slot = shard.tpht.slot_id(key, ptr);
@@ -594,27 +650,38 @@ impl<P: Probe + Clone> FidTable<P> {
     /// Resolve `handle` for `client_id` in one arena read and zero header
     /// reads (WIRE-08, DS-03).
     ///
-    /// An out-of-range `shard_id` is rejected before any read (T-04-35).  The
-    /// one `deref_tiny` call is the only memory access; the identity pair,
-    /// epoch and live flag are then compared in registers.  A handle from
-    /// another client or another epoch, and a clunked handle whose slot was
-    /// zeroed, all fail here (T-04-32, T-04-33).
+    /// Client id 0 is refused, and so is an out-of-range `shard_id`, before any
+    /// read (T-04-35, WR-04).  A `ptr` above [`HOME_SLOTS`] is refused too: the
+    /// table's shards are home-only, so no handle this table issued has such a
+    /// pointer, and `ds` folds a pointer that wide onto another slot (WR-06).
+    /// The one `deref_tiny` call is the only memory access; the identity pair,
+    /// epoch and live flag are then compared in registers by
+    /// [`FidEntry::matches`].  A handle from another client or another epoch,
+    /// and a clunked handle whose slot was zeroed, all fail here (T-04-32,
+    /// T-04-33).
     pub fn resolve(&self, client_id: u32, handle: &StatefulHandle) -> crate::Result<FidEntry> {
+        if client_id == 0 {
+            return Err(
+                "fid: client id 0 is reserved for the cleared arena slot and never resolves an \
+                 entry (WIRE-08, WR-04)",
+            );
+        }
         let Some(shard) = self.shards.get(handle.shard_id as usize) else {
             return Err("fid: the handle's shard id is outside the table");
         };
+        if handle.ptr.get() as usize > HOME_SLOTS {
+            return Err(
+                "fid: the handle's ptr is outside the home window this table's shards can have \
+                 issued (WIRE-08, WR-06)",
+            );
+        }
         let key = tpht_key(client_id, handle.fid_key);
         // Exactly one arena read, zero header reads (WIRE-08, DS-03).  Every
         // comparison below is register arithmetic on the words just read and
         // the handle.
         let words = shard.tpht.deref_tiny(key, handle.ptr);
         let entry = FidEntry::from_words(&words);
-        if entry.fid_key != handle.fid_key
-            || entry.client_id != client_id
-            || entry.epoch != handle.epoch
-            || handle.epoch != self.epoch
-            || entry.flags & FID_LIVE == 0
-        {
+        if !entry.matches(client_id, handle, self.epoch) {
             return Err(
                 "fid: the handle does not name a live entry for this client and epoch \
                  (T-04-32, T-04-33)",
@@ -626,6 +693,10 @@ impl<P: Probe + Clone> FidTable<P> {
     /// Clunk `handle` for `client_id`: resolve it, remove it from its shard
     /// (which zeroes the arena slot, plan 04-09) and drop its slot id from both
     /// bitmaps (WIRE-08).
+    ///
+    /// The handle is resolved first, so a `ptr` outside the home window is
+    /// refused there and no slot id is ever computed from an unvalidated
+    /// pointer (WR-06).
     pub fn clunk(&self, client_id: u32, handle: &StatefulHandle) -> crate::Result<()> {
         let _entry = self.resolve(client_id, handle)?;
         let shard = &self.shards[handle.shard_id as usize];
@@ -688,8 +759,8 @@ impl<P: Probe + Clone> FidTable<P> {
     /// Mark `handle`'s arena slot reclaimed, so the next [`Self::sweep`] keeps
     /// it and collects every other live slot instead (WIRE-09).
     ///
-    /// The handle is resolved first, so a stale, foreign or clunked handle is
-    /// refused and marks nothing.
+    /// The handle is resolved first, so a stale, foreign or clunked handle, and
+    /// a `ptr` outside the home window, are refused and mark nothing (WR-06).
     pub fn mark_reclaimed(&self, client_id: u32, handle: &StatefulHandle) -> crate::Result<()> {
         let _entry = self.resolve(client_id, handle)?;
         let shard = &self.shards[handle.shard_id as usize];
