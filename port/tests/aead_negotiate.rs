@@ -416,3 +416,427 @@ fn aead_negotiate_msize_rules_hold_on_the_aead_branch() {
         assert!(err.contains("msize"), "a nonsense msize is rejected: {err}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// One whole sealed session, from the real negotiation to teardown (WIRE-05)
+// ---------------------------------------------------------------------------
+
+use crypto::key::Key;
+use common::aead_link::{
+    CLIENT_EXCHANGE, E2E_FILE_BYTES, E2E_FILE_NAME, E2eClient, E2eOpened, E2eServer, SERVER_EXCHANGE,
+    Stage, TestExchange, body_of as fixture_body, config_with_rekey, connect_aead, connect_aead_with,
+};
+use port::chan::PAGE_LEN;
+use port::chan::msg::Msg;
+use port::chan::tlv::Exts;
+use port::chan::wire;
+use port::devmnt::NOFID;
+use port::fid::StatefulHandle;
+
+/// The fixed 32-byte session secret both ends are handed by the test seam
+/// (D-16: no real exchange exists in this phase).
+fn secret() -> Key {
+    let mut bytes = [0u8; 32];
+    for (i, byte) in bytes.iter_mut().enumerate() {
+        *byte = i as u8;
+    }
+    Key::from_bytes(bytes)
+}
+
+/// The re-key's second secret (a fresh exchange derives generation 1).
+fn second_secret() -> Key {
+    let mut bytes = [0u8; 32];
+    for (i, byte) in bytes.iter_mut().enumerate() {
+        *byte = 0x40 + i as u8;
+    }
+    Key::from_bytes(bytes)
+}
+
+/// Seal one request, let the server handle it and open the reply.
+fn request(
+    client: &mut E2eClient,
+    server: &Rc<RefCell<E2eServer>>,
+    typ: u8,
+    handle: [u8; 8],
+    exts: &Exts<'_>,
+    message: &Msg,
+) -> E2eOpened {
+    let tag = 1;
+    client
+        .send(typ, tag, handle, exts, &fixture_body(message))
+        .expect("the client seals the request");
+    server
+        .borrow_mut()
+        .handle_one()
+        .expect("the server handles the request");
+    client.recv().expect("the client opens the reply")
+}
+
+/// Attach, walk the one file and open it; returns the file's handle.
+fn open_the_file(client: &mut E2eClient, server: &Rc<RefCell<E2eServer>>) -> StatefulHandle {
+    let root = request(
+        client,
+        server,
+        wire::TATTACH,
+        [0u8; 8],
+        &Exts::default(),
+        &Msg::Tattach {
+            fid: 1,
+            afid: NOFID,
+            uname: b"glenda".to_vec(),
+            aname: Vec::new(),
+        },
+    );
+    assert!(matches!(root.msg, Msg::Rattach { .. }), "the attach reply is Rattach");
+    let root_handle =
+        StatefulHandle::from_wire(&root.handle).expect("the attach reply carries a stateful handle");
+
+    let walked = request(
+        client,
+        server,
+        wire::TWALK,
+        root_handle.to_wire(),
+        &Exts::default(),
+        &Msg::Twalk {
+            fid: 1,
+            newfid: 2,
+            wname: vec![E2E_FILE_NAME.to_vec()],
+        },
+    );
+    assert!(matches!(walked.msg, Msg::Rwalk { .. }), "the walk reply is Rwalk");
+    let file_handle =
+        StatefulHandle::from_wire(&walked.handle).expect("the walk reply carries the new handle");
+    request(
+        client,
+        server,
+        wire::TOPEN,
+        file_handle.to_wire(),
+        &Exts::default(),
+        &Msg::Topen { fid: 2, mode: 0 },
+    );
+    file_handle
+}
+
+#[test]
+fn aead_negotiate_end_to_end_session() {
+    let (mut client, server, _link) = connect_aead(secret(), 1);
+    let file_handle = open_the_file(&mut client, &server);
+
+    let read = request(
+        &mut client,
+        &server,
+        wire::TREAD,
+        file_handle.to_wire(),
+        &Exts::default(),
+        &Msg::Tread {
+            fid: 2,
+            offset: 0,
+            count: 4096,
+        },
+    );
+    let Msg::Rread { data } = read.msg else {
+        panic!("the read reply is Rread");
+    };
+    assert_eq!(data, E2E_FILE_BYTES, "the sealed read returns the canned file's bytes");
+    assert_eq!(
+        read.body_len,
+        4 + PAGE_LEN,
+        "Rread is one padded page with the true count in its parameters (D-09, P5)"
+    );
+
+    let clunked = request(
+        &mut client,
+        &server,
+        wire::TCLUNK,
+        file_handle.to_wire(),
+        &Exts::default(),
+        &Msg::Tclunk { fid: 2 },
+    );
+    assert!(matches!(clunked.msg, Msg::Rclunk), "the clunk reply is Rclunk");
+
+    client.session.teardown();
+    server.borrow_mut().teardown();
+    assert!(client.session.is_closed(), "the client end closes on teardown");
+    assert!(server.borrow().is_closed(), "the server end closes on teardown");
+    assert!(client.session.keys_zeroized(), "the orderly teardown zeroizes the client's keys");
+}
+
+#[test]
+fn aead_negotiate_end_to_end_stateless_capability() {
+    let (mut client, server, _link) = connect_aead(secret(), 1);
+    let file_handle = open_the_file(&mut client, &server);
+
+    // The open reply carried a capability in EXT_STATELESS_CAP with an all-zero
+    // header handle (D-11, D-12).
+    let opened = request(
+        &mut client,
+        &server,
+        wire::TOPEN,
+        file_handle.to_wire(),
+        &Exts::default(),
+        &Msg::Topen { fid: 2, mode: 0 },
+    );
+    assert!(matches!(opened.msg, Msg::Ropen { .. }), "the open reply is Ropen");
+    let cap = opened.cap.expect("the open reply carries a capability");
+    assert_eq!(opened.handle, [0u8; 8], "a capability packet's header handle is all zero (D-12)");
+    let before = server.borrow().fid_memory();
+
+    let exts = Exts {
+        stateless_cap: Some(&cap),
+        ..Exts::default()
+    };
+    let read = request(
+        &mut client,
+        &server,
+        wire::TREAD,
+        [0u8; 8],
+        &exts,
+        &Msg::Tread {
+            fid: 0,
+            offset: 0,
+            count: 4096,
+        },
+    );
+    let Msg::Rread { data } = read.msg else {
+        panic!("the stateless read reply is Rread");
+    };
+    assert_eq!(data, E2E_FILE_BYTES, "the capability names the canned file");
+    assert_eq!(
+        server.borrow().fid_memory(),
+        before,
+        "a capability is verified with zero FID memory (WIRE-08, P8)"
+    );
+
+    // One flipped byte fails verification, and P8 closes the connection: no
+    // reply is sealed for the bad packet.
+    let mut bad = cap;
+    bad[4] ^= 0xFF;
+    let exts = Exts {
+        stateless_cap: Some(&bad),
+        ..Exts::default()
+    };
+    client
+        .send(
+            wire::TREAD,
+            2,
+            [0u8; 8],
+            &exts,
+            &fixture_body(&Msg::Tread {
+                fid: 0,
+                offset: 0,
+                count: 4096,
+            }),
+        )
+        .expect("the bad capability packet is sealed");
+    server
+        .borrow_mut()
+        .handle_one()
+        .expect("the server consumes the bad packet");
+    assert!(server.borrow().is_closed(), "a capability that fails verification closes (P8)");
+    assert!(
+        matches!(client.recv(), Err(Stage::Empty)),
+        "no reply is sealed for the failed capability"
+    );
+}
+
+#[test]
+fn aead_negotiate_end_to_end_survives_a_rekey() {
+    let (mut client, server, _link) = connect_aead_with(secret(), 1, config_with_rekey(6, 5000));
+    let file_handle = open_the_file(&mut client, &server);
+    let before = request(
+        &mut client,
+        &server,
+        wire::TREAD,
+        file_handle.to_wire(),
+        &Exts::default(),
+        &Msg::Tread {
+            fid: 2,
+            offset: 0,
+            count: 4096,
+        },
+    );
+    let Msg::Rread { data: before_bytes } = before.msg else {
+        panic!("the read reply is Rread");
+    };
+    assert_eq!(before_bytes, E2E_FILE_BYTES);
+
+    // Four packets so far (attach, walk, open, read); two more reach the
+    // threshold of 6 on both sides.
+    for _ in 0..2 {
+        request(
+            &mut client,
+            &server,
+            wire::TREAD,
+            file_handle.to_wire(),
+            &Exts::default(),
+            &Msg::Tread {
+                fid: 2,
+                offset: 0,
+                count: 4096,
+            },
+        );
+    }
+    assert!(client.session.rekey_due(), "the client's send counter reached the threshold");
+    assert!(server.borrow().rekey_due(), "the server's send counter reached the threshold");
+
+    let mut client_exchange =
+        TestExchange::with_payload(vec![second_secret()], CLIENT_EXCHANGE.to_vec());
+    let mut server_exchange =
+        TestExchange::with_payload(vec![second_secret()], SERVER_EXCHANGE.to_vec());
+    let now = 0;
+
+    // The in-band exchange: Tauth/Rauth, then the afid write/read round.
+    let started = client
+        .rekey(&mut client_exchange, None, now)
+        .expect("the client starts the exchange");
+    assert_eq!(started.len(), 1, "the client sends Tauth sealed");
+    let msg = server.borrow_mut().recv_sealed().expect("the server opens Tauth");
+    assert!(matches!(msg.msg, Msg::Tauth { .. }));
+    server
+        .borrow_mut()
+        .rekey(&mut server_exchange, Some(&msg.msg), now)
+        .expect("the server answers Rauth");
+
+    let msg = client.recv().expect("the client opens Rauth");
+    assert!(matches!(msg.msg, Msg::Rauth { .. }));
+    client
+        .rekey(&mut client_exchange, Some(&msg.msg), now)
+        .expect("the client sends Twrite");
+
+    let msg = server.borrow_mut().recv_sealed().expect("the server opens Twrite");
+    assert!(matches!(msg.msg, Msg::Twrite { .. }));
+    server
+        .borrow_mut()
+        .rekey(&mut server_exchange, Some(&msg.msg), now)
+        .expect("the server answers Rwrite");
+
+    let msg = client.recv().expect("the client opens Rwrite");
+    assert!(matches!(msg.msg, Msg::Rwrite { .. }));
+    client
+        .rekey(&mut client_exchange, Some(&msg.msg), now)
+        .expect("the client sends Tread");
+
+    let msg = server.borrow_mut().recv_sealed().expect("the server opens Tread");
+    assert!(matches!(msg.msg, Msg::Tread { .. }));
+    server
+        .borrow_mut()
+        .rekey(&mut server_exchange, Some(&msg.msg), now)
+        .expect("the server answers Rread");
+
+    let msg = client.recv().expect("the client opens Rread");
+    assert!(matches!(msg.msg, Msg::Rread { .. }));
+    client
+        .rekey(&mut client_exchange, Some(&msg.msg), now)
+        .expect("the client derives generation 1");
+
+    // The client cuts its send direction over: its marker, the server's ACK.
+    let marker = client
+        .rekey(&mut client_exchange, None, now)
+        .expect("the client sends its marker");
+    assert_eq!(marker.len(), 1, "the c2s marker is the last old-key packet");
+    let msg = server.borrow_mut().recv_sealed().expect("the server opens the marker");
+    assert!(matches!(msg.msg, Msg::Trekey { .. }));
+    server
+        .borrow_mut()
+        .rekey(&mut server_exchange, Some(&msg.msg), now)
+        .expect("the server cuts its receive direction over");
+    let ack = client.recv().expect("the client opens the c2s acknowledgement");
+    assert!(matches!(ack.msg, Msg::Rrekey { .. }));
+    client
+        .rekey(&mut client_exchange, Some(&ack.msg), now)
+        .expect("the client verifies the acknowledgement");
+
+    // The server cuts its own send direction over.
+    let marker = server
+        .borrow_mut()
+        .rekey(&mut server_exchange, None, now)
+        .expect("the server sends its marker");
+    assert_eq!(marker.len(), 1, "the s2c marker is the last old-key packet");
+    let msg = client.recv().expect("the client opens the s2c marker");
+    assert!(matches!(msg.msg, Msg::Trekey { .. }));
+    client
+        .rekey(&mut client_exchange, Some(&msg.msg), now)
+        .expect("the client cuts its receive direction over");
+    let ack = server.borrow_mut().recv_sealed().expect("the server opens the s2c ACK");
+    assert!(matches!(ack.msg, Msg::Rrekey { .. }));
+    server
+        .borrow_mut()
+        .rekey(&mut server_exchange, Some(&ack.msg), now)
+        .expect("the server verifies the acknowledgement");
+
+    // The same session reads the same bytes under the new keys.
+    let after = request(
+        &mut client,
+        &server,
+        wire::TREAD,
+        file_handle.to_wire(),
+        &Exts::default(),
+        &Msg::Tread {
+            fid: 2,
+            offset: 0,
+            count: 4096,
+        },
+    );
+    let Msg::Rread { data: after_bytes } = after.msg else {
+        panic!("the post-re-key read reply is Rread");
+    };
+    assert_eq!(after_bytes, before_bytes, "the reads before and after the re-key agree");
+}
+
+#[test]
+fn aead_negotiate_end_to_end_handle_from_another_connection_is_refused() {
+    // Connection A: one client_id, one entry for fid 1.
+    let (mut client_a, server_a, _link_a) = connect_aead(secret(), 1);
+    let attach_a = request(
+        &mut client_a,
+        &server_a,
+        wire::TATTACH,
+        [0u8; 8],
+        &Exts::default(),
+        &Msg::Tattach {
+            fid: 1,
+            afid: NOFID,
+            uname: b"glenda".to_vec(),
+            aname: Vec::new(),
+        },
+    );
+    assert!(matches!(attach_a.msg, Msg::Rattach { .. }));
+    let foreign =
+        StatefulHandle::from_wire(&attach_a.handle).expect("the attach reply carries a handle");
+
+    // Connection B: another client_id and a table with no entry for fid 1.
+    let (mut client_b, server_b, _link_b) = connect_aead(secret(), 2);
+    let attach_b = request(
+        &mut client_b,
+        &server_b,
+        wire::TATTACH,
+        [0u8; 8],
+        &Exts::default(),
+        &Msg::Tattach {
+            fid: 7,
+            afid: NOFID,
+            uname: b"glenda".to_vec(),
+            aname: Vec::new(),
+        },
+    );
+    assert!(matches!(attach_b.msg, Msg::Rattach { .. }));
+
+    // A's handle, in a validly sealed packet on B: resolve finds no live entry
+    // for B's client_id, so the server answers Rerror.
+    let reply = request(
+        &mut client_b,
+        &server_b,
+        wire::TREAD,
+        foreign.to_wire(),
+        &Exts::default(),
+        &Msg::Tread {
+            fid: 1,
+            offset: 0,
+            count: 64,
+        },
+    );
+    assert!(
+        matches!(reply.msg, Msg::Rerror { .. }),
+        "a handle issued on another connection does not resolve"
+    );
+}
