@@ -502,7 +502,19 @@ impl ClientEnd {
                 packet[offset] ^= 0xFF;
             }
         }
-        link.c2s.extend(packet);
+        // A tap that duplicates the packet: the same sealed bytes go on the
+        // wire twice, which a strict receiver must refuse the second time
+        // (plan 04-16, WIRE-11).
+        if link.replay_last {
+            link.c2s.extend(packet.iter().copied());
+        }
+        // A tap that reflects the packet back to its sender, which holds the
+        // other direction's keys and so fails the MAC (plan 04-16, WIRE-11).
+        if link.reflect {
+            link.s2c.extend(packet);
+        } else {
+            link.c2s.extend(packet);
+        }
         Ok(())
     }
 
@@ -549,7 +561,14 @@ impl ServerEnd {
                 packet[offset] ^= 0xFF;
             }
         }
-        link.s2c.extend(packet);
+        if link.replay_last {
+            link.s2c.extend(packet.iter().copied());
+        }
+        if link.reflect {
+            link.c2s.extend(packet);
+        } else {
+            link.s2c.extend(packet);
+        }
         Ok(())
     }
 

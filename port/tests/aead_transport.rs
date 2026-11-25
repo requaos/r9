@@ -655,6 +655,248 @@ fn aead_transport_malformed_after_mac_closes() {
 
 
 // ---------------------------------------------------------------------------
+// Strict sequence numbers and the splice cases (WIRE-04, WIRE-11; D-15, D-21).
+// ---------------------------------------------------------------------------
+
+/// The sequence number at header offset 16.
+fn seq_of(packet: &[u8]) -> u64 {
+    u64::from_le_bytes(
+        packet[16..24]
+            .try_into()
+            .expect("SeqNonce is 8 bytes at offset 16"),
+    )
+}
+
+#[test]
+fn aead_transport_sequence_starts_at_zero_and_increments() {
+    let body = body_of(&Msg::Tclunk { fid: 9 });
+    for role in [Role::Client, Role::Server] {
+        let mut session = fixture_session(role, secret());
+        for expected in 0..3u64 {
+            let packet = session
+                .seal(wire::TCLUNK, 1, [0u8; 8], &Exts::default(), &body, 0)
+                .expect("the session seals a packet");
+            assert_eq!(
+                seq_of(&packet),
+                expected,
+                "{role:?} packet {expected} carries its sequence at packet offset 16"
+            );
+        }
+    }
+}
+
+#[test]
+fn aead_transport_sequence_rejects_repeat_skip_and_earlier() {
+    let body = body_of(&Msg::Tclunk { fid: 9 });
+    let mut client = fixture_session(Role::Client, secret());
+    let packets: Vec<Vec<u8>> = (0..3)
+        .map(|i| {
+            client
+                .seal(wire::TCLUNK, i as u16, [0u8; 8], &Exts::default(), &body, 0)
+                .expect("the client seals packets 0, 1 and 2")
+        })
+        .collect();
+
+    // A repeated packet: packet 0 delivers, the same bytes deliver again.
+    {
+        let link = AeadLink::new();
+        let mut server = fresh_server(link.clone(), secret());
+        link.borrow_mut().c2s.extend(packets[0].iter().copied());
+        assert!(
+            server.recv().is_ok(),
+            "the first delivery of packet 0 decodes"
+        );
+        link.borrow_mut().c2s.extend(packets[0].iter().copied());
+        assert!(
+            server.recv().is_err(),
+            "a repeated packet 0 is rejected by the sequence check"
+        );
+        assert!(server.session.is_closed(), "P7: the repeat closes the connection");
+        assert!(server.session.keys_zeroized(), "P7: the repeat zeroizes the keys");
+        assert_eq!(
+            link.borrow().decoded(),
+            1,
+            "the repeated packet is not handed to the handler"
+        );
+    }
+
+    // A skipped packet: packet 1 arrives before packet 0.
+    {
+        let link = AeadLink::new();
+        let mut server = fresh_server(link.clone(), secret());
+        link.borrow_mut().c2s.extend(packets[1].iter().copied());
+        assert!(
+            server.recv().is_err(),
+            "packet 1 delivered before packet 0 is rejected"
+        );
+        assert!(server.session.is_closed(), "P7: the skip closes the connection");
+        assert!(server.session.keys_zeroized(), "P7: the skip zeroizes the keys");
+        assert_eq!(link.borrow().decoded(), 0, "the skipped packet decodes nothing");
+    }
+
+    // An earlier packet: 0 and 1 deliver, then packet 0 arrives again.
+    {
+        let link = AeadLink::new();
+        let mut server = fresh_server(link.clone(), secret());
+        link.borrow_mut().c2s.extend(packets[0].iter().copied());
+        assert!(server.recv().is_ok(), "packet 0 decodes first");
+        link.borrow_mut().c2s.extend(packets[1].iter().copied());
+        assert!(server.recv().is_ok(), "packet 1 decodes second");
+        link.borrow_mut().c2s.extend(packets[0].iter().copied());
+        assert!(
+            server.recv().is_err(),
+            "packet 0 delivered after packet 1 is rejected"
+        );
+        assert!(
+            server.session.is_closed(),
+            "P7: the earlier packet closes the connection"
+        );
+        assert!(
+            server.session.keys_zeroized(),
+            "P7: the earlier packet zeroizes the keys"
+        );
+        assert_eq!(
+            link.borrow().decoded(),
+            2,
+            "the earlier packet is not handed to the handler"
+        );
+    }
+}
+
+#[test]
+fn aead_transport_splice_replayed_twrite_is_dropped() {
+    let link = AeadLink::new();
+    link.borrow_mut().replay_last = true;
+    let (mut client, mut server) = connect(link.clone(), secret(), secret());
+
+    client
+        .send(
+            wire::TWRITE,
+            40,
+            [0u8; 8],
+            &Exts::default(),
+            &body_of(&Msg::Twrite {
+                fid: 9,
+                offset: 0,
+                data: b"captured once".to_vec(),
+            }),
+        )
+        .expect("the client seals its Twrite");
+    assert!(
+        server.recv().is_ok(),
+        "the first delivery of the captured Twrite decodes"
+    );
+    let before = link.borrow().decoded();
+    assert_eq!(before, 1, "exactly one Twrite decoded before the replay");
+
+    assert!(
+        server.recv().is_err(),
+        "the replayed Twrite is refused by the sequence check"
+    );
+    assert_eq!(
+        link.borrow().decoded(),
+        before,
+        "the replayed Twrite is not handed to the handler (decode counter unchanged)"
+    );
+    assert!(server.session.is_closed(), "the replay closes the connection (P7)");
+    assert!(server.session.keys_zeroized(), "the replay zeroizes the keys (P7)");
+}
+
+#[test]
+fn aead_transport_splice_edited_fidhandle_fails_mac() {
+    for offset in 8..16usize {
+        let link = AeadLink::new();
+        link.borrow_mut().flip_byte = Some(offset);
+        let (mut client, mut server) = connect(link.clone(), secret(), secret());
+        client
+            .send(
+                wire::TWRITE,
+                41,
+                [0x11u8; 8],
+                &Exts::default(),
+                &body_of(&Msg::Twrite {
+                    fid: 9,
+                    offset: 0,
+                    data: b"payload".to_vec(),
+                }),
+            )
+            .expect("the client seals its Twrite");
+        assert!(
+            server.recv().is_err(),
+            "an edited cleartext FidHandle byte {offset} fails the packet MAC"
+        );
+        assert!(server.session.is_closed(), "offset {offset}: the receiver is closed");
+        assert!(
+            server.session.keys_zeroized(),
+            "offset {offset}: the keys are zeroized"
+        );
+        assert_eq!(
+            link.borrow().decoded(),
+            0,
+            "offset {offset}: nothing is decoded"
+        );
+    }
+}
+
+#[test]
+fn aead_transport_splice_cross_connection_and_reflection_fail() {
+    // Two connections with different session secrets.
+    let link_a = AeadLink::new();
+    let link_b = AeadLink::new();
+    let (mut client_a, server_a) = connect(link_a.clone(), secret(), secret());
+    let (_client_b, mut server_b) = connect(link_b.clone(), other_secret(), other_secret());
+
+    client_a
+        .send(
+            wire::TWRITE,
+            42,
+            [0u8; 8],
+            &Exts::default(),
+            &body_of(&Msg::Twrite {
+                fid: 9,
+                offset: 0,
+                data: b"connection A".to_vec(),
+            }),
+        )
+        .expect("connection A's client seals a Twrite");
+    let captured: Vec<u8> = link_a.borrow().c2s.iter().copied().collect();
+    assert!(!captured.is_empty(), "connection A put its packet on the wire");
+    link_b.borrow_mut().c2s.extend(captured);
+    assert!(
+        server_b.recv().is_err(),
+        "connection A's packet delivered to connection B's server fails the MAC"
+    );
+    assert!(server_b.session.is_closed(), "the cross-connection packet closes B");
+    assert_eq!(link_b.borrow().decoded(), 0, "B decodes nothing");
+    drop(server_a);
+
+    // A reflected client-to-server packet delivered back to the client.
+    let link = AeadLink::new();
+    link.borrow_mut().reflect = true;
+    let (mut client, server) = connect(link.clone(), secret(), secret());
+    client
+        .send(
+            wire::TWRITE,
+            43,
+            [0u8; 8],
+            &Exts::default(),
+            &body_of(&Msg::Twrite {
+                fid: 9,
+                offset: 0,
+                data: b"reflect me".to_vec(),
+            }),
+        )
+        .expect("the client seals its Twrite");
+    assert!(
+        client.recv().is_err(),
+        "a client-to-server packet reflected to the client fails the MAC"
+    );
+    assert!(client.session.is_closed(), "the reflected packet closes the client");
+    assert_eq!(link.borrow().decoded(), 0, "the reflection decodes nothing");
+    drop(server);
+}
+
+// ---------------------------------------------------------------------------
 // The plan 04-02 tracer pins, unchanged.
 // ---------------------------------------------------------------------------
 
