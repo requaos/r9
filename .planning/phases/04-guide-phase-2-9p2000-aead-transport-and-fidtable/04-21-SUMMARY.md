@@ -8,7 +8,7 @@ requires:
   - phase: 04-guide-phase-2-9p2000-aead-transport-and-fidtable
     provides: the in-band re-key state machine, Session/SendHalf and the P2/P3/P4 wire decisions (plans 04-07, 04-08, 04-13, 04-18)
 provides:
-  - "DECISION P9: the reserved exchange tag NOTAG (0xFFFF) and afid 0xFFFFFFFE, with the owner's Tstream/Rstream amendment"
+  - "DECISION P9: the reserved exchange tag NOTAG (0xFFFF) and afid 0xFFFFFFFE, with the owner's Tstream/Rstream amendment and the second amendment covering Tcompound/Rcompound"
   - "transport::RekeyIncoming, transport::is_rekey_traffic and the tag-carrying Session::rekey_step (CR-02)"
   - "NOTAG on every Trekey/Rrekey and every in-band exchange message (WR-07, P3)"
   - "transport::exchange_frame: the unpadded standard 9P2000 frame the re-key transcript absorbs (CR-03, P2)"
@@ -44,6 +44,7 @@ key-files:
 key-decisions:
   - "The exchange is self-identifying: tag NOTAG (0xFFFF) on all six exchange messages and on Trekey/Rrekey, afid 0xFFFFFFFE on Tauth, Twrite and Tread; Rwrite, Rread and Rauth carry no fid and are identified by tag plus type"
   - "The owner's P9 amendment: a Tstream is exchange traffic only under NOTAG with the afid as its 8-byte FidHandle (afid little-endian in the low four bytes, high four zero); an Rstream under NOTAG (it carries no fid); with any other tag both are ordinary traffic"
+  - "The owner's second P9 amendment: Tcompound and Rcompound are exchange-space only under NOTAG; neither carries a top-level fid, so NOTAG plus the type alone identifies them; the exchange dispatches neither today, so a NOTAG compound fails closed (fail() + Err(Closed)) and is never delivered as ordinary traffic"
   - "is_rekey_traffic(tag, message) is the single router predicate; rekey_step treats a reserved-tag message that fails it as a protocol violation (close) and any other tag as ordinary traffic (no packet, no state change)"
   - "exchange_frame builds the absorbed standard frame with the true count and exactly that many data bytes; the sealed body stays the P4 page-padded body, so the wire size of an exchange packet is unchanged"
   - "The fixture keeps rekey(exchange, Option<&Msg>) as a NOTAG-forwarding convenience and adds rekey_tagged for explicit tags; receive helpers gained recv_tagged"
@@ -91,6 +92,12 @@ coverage:
       - kind: unit
         ref: "port/tests/aead_transport.rs#aead_transport_rekey_stream_ordinary_is_not_consumed"
         status: pass
+      - kind: unit
+        ref: "port/tests/aead_transport.rs#aead_transport_rekey_compound_ordinary_is_not_consumed"
+        status: pass
+      - kind: unit
+        ref: "port/tests/aead_transport.rs#aead_transport_rekey_compound_notag_closes"
+        status: pass
     human_judgment: false
   - id: D3
     description: "CR-03: the re-key transcript absorbs the unpadded standard frames; a 21-byte Twrite is 44 bytes and an empty one is 23"
@@ -136,9 +143,20 @@ status: complete
 
 ## The owner's decision, quoted
 
-> DECISION P9: amended (2026-11-25) — accepted as proposed (tag NOTAG 0xFFFF on all six exchange messages, afid 0xFFFFFFFE), with the owner's addition that Tstream and Rstream are covered by the same reserved routing: a sealed Tstream or Rstream is exchange traffic only when its tag is NOTAG, and for Tstream its FidHandle names the exchange afid 0xFFFFFFFE; Rstream carries no fid, so NOTAG plus its type identifies it; with any other tag they are ordinary traffic and the re-key state machine never consumes them. If the exchange ever carries either, it enters the P2 transcript in the same standard 9P2000 body form with the data unpadded. P4 is unchanged.
+> DECISION P9: amended (2026-11-25) — accepted as proposed (tag NOTAG 0xFFFF on all six exchange messages, afid 0xFFFFFFFE), with the owner's addition that Tstream, Rstream, Tcompound and Rcompound are covered by the same reserved routing: a sealed Tstream or Rstream is exchange traffic only when its tag is NOTAG, and for Tstream its FidHandle names the exchange afid 0xFFFFFFFE; Rstream carries no fid, so NOTAG plus its type identifies it; Tcompound and Rcompound carry no top-level fid, so NOTAG plus the type alone identifies them as exchange-space; any message in this family with any other tag is ordinary traffic and the re-key state machine never consumes it, and a NOTAG message the exchange does not expect closes the connection fail-closed rather than being delivered as ordinary traffic. If the exchange ever carries one of these types, it enters the P2 transcript in the same standard 9P2000 body form with the data unpadded. P4 is unchanged.
 
-The amendment is implemented in `is_rekey_traffic`: a `Tstream` is exchange traffic only when the tag is `NOTAG` and its 8-byte `FidHandle` is `0xFFFFFFFE` little-endian in the low four bytes with the high four zero; an `Rstream` is exchange traffic when the tag is `NOTAG`. The exchange never sends either type: this is routing and recognition only. The value in the `DECISION` line is the value in the code and its pins.
+Both amendments are implemented in `is_rekey_traffic`, and the safe failure is in `rekey_handle`. A `Tstream` is exchange traffic only when the tag is `NOTAG` and its 8-byte `FidHandle` is `0xFFFFFFFE` little-endian in the low four bytes with the high four zero; an `Rstream` is exchange traffic when the tag is `NOTAG`. A `Tcompound` or `Rcompound` is exchange-space when the tag is `NOTAG` — neither carries a top-level fid, so no afid comparison applies — and ordinary traffic under any other tag. The exchange never sends any of these four types: this is routing and recognition only. Because it dispatches neither compound, `rekey_handle` now has an explicit `Tcompound`/`Rcompound` arm that fails closed (`fail()` and `Err(Closed)`, which zeroizes) on a `NOTAG` compound rather than letting the catch-all ignore it or delivering it as ordinary traffic. The value in the `DECISION` line is the value in the code and its pins.
+
+## Second amendment (2026-11-25): Tcompound/Rcompound
+
+The owner added `Tcompound`/`Rcompound` to the same reserved routing after the first amendment shipped. What changed:
+
+- `04-WIRE-DECISIONS.md`: the single `DECISION P9:` line now carries both amendments; `PROPOSAL P9:` is untouched.
+- `port/src/chan/transport.rs`: `is_rekey_traffic` classifies a `NOTAG` `Tcompound`/`Rcompound` as exchange traffic (no fid, so the tag alone decides), and `rekey_handle` gained an explicit compound arm that calls `fail()` and returns `Err(Closed)` for a `NOTAG` compound; an ordinary-tag compound is an `Ok(())` no-op.
+- `port/tests/aead_transport.rs`: `aead_transport_rekey_compound_ordinary_is_not_consumed` (ordinary `Tcompound` and `Rcompound` are delivered unchanged and do not close) and `aead_transport_rekey_compound_notag_closes` (a `NOTAG` `Tcompound`/`Rcompound` classifies as exchange traffic, closes the session and zeroizes the keys).
+- `.planning/rfc-9p2000-aead.md` and `.planning/PROJECT.md`: both exchange-family enumerations now name `Tcompound`/`Rcompound`, with the same "`NOTAG` plus the type alone identifies them" wording and the fail-closed rule.
+
+New pins: `aead_transport_rekey_compound_ordinary_is_not_consumed`, `aead_transport_rekey_compound_notag_closes`. Verification after the change: `nix develop -c cargo xtask test` twice, `cargo xtask check`, `cargo xtask clippy` and `cargo xtask test-9p` all exit 0. No other wire value changed.
 
 ## Accomplishments
 
@@ -170,9 +188,9 @@ Each task was committed atomically (RED -> GREEN -> pin advance, D-03):
 ## Files Created/Modified
 
 - `.planning/phases/04-guide-phase-2-9p2000-aead-transport-and-fidtable/04-WIRE-DECISIONS.md` - `PROPOSAL P9` and the owner's `DECISION P9: amended`, plus the header corrected from eight to nine proposals.
-- `port/src/chan/transport.rs` - `RekeyIncoming`, `is_rekey_traffic`, the tag-carrying `rekey_step`/`rekey_handle`, `exchange_frame`, the reserved constants and afid checks on the `Tauth`/`Twrite`/`Tread` arms.
+- `port/src/chan/transport.rs` - `RekeyIncoming`, `is_rekey_traffic` (including the `Tstream`/`Rstream` and `Tcompound`/`Rcompound` arms), the tag-carrying `rekey_step`/`rekey_handle` (and its fail-closed compound arm), `exchange_frame`, the reserved constants and afid checks on the `Tauth`/`Twrite`/`Tread` arms.
 - `port/tests/common/aead_link.rs` - `recv_tagged`, `rekey_tagged`, and `E2eServer::handle_one` routing every opened message through `is_rekey_traffic`.
-- `port/tests/aead_transport.rs` - eight routing/control/stream pins, two unpadded-transcript pins, the hand-written frame helpers and the rewritten `test_generations`.
+- `port/tests/aead_transport.rs` - ten routing/control/stream/compound pins, two unpadded-transcript pins, the hand-written frame helpers and the rewritten `test_generations`.
 - `port/tests/aead_negotiate.rs` - `aead_negotiate_end_to_end_read_during_rekey_is_served` and the routed `handle_one` call sites.
 - `.planning/rfc-9p2000-aead.md` - two dated gap-closure notes (sections 3.2 and 6.1).
 - `.planning/PROJECT.md` - one dated Key Decisions row for P9 and the footer date.
@@ -253,3 +271,4 @@ Plans 04-23, 04-24 and 04-25 run only on the main working tree. Set `workflow.us
 - `cargo xtask test` twice, `check`, `clippy` and `test-9p` all exit 0; `aead_transport` has 53 passing tests, `aead_negotiate` 11, `devmnt_test` 18.
 - The RFC has two `r9 Phase 4 gap closure` notes and two copies of the section 4.2 Tag sentence; `PROJECT.md` contains `DECISION P9`.
 - The pin ledger has exactly eight `PIN` lines for the two pins.
+- After the second amendment: `nix develop -c cargo xtask test` twice, `check`, `clippy` and `test-9p` all exit 0; `aead_transport` has 55 passing tests. `04-WIRE-DECISIONS.md` still has one `PROPOSAL P9:` and one `DECISION P9:` line; `PROPOSAL P9:` is unchanged.
