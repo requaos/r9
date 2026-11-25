@@ -4,12 +4,12 @@ milestone: v3.0
 milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
 current_phase: 04
 current_phase_name: Guide Phase 2 - 9P2000.aead Transport and FidTable
-status: executing
-stopped_at: Completed 04-15-PLAN.md
-last_updated: "2026-11-25T03:11:08.501Z"
-last_activity: 2026-11-24
-last_activity_desc: Phase 04 execution started
-state_head: 59c855a2f00c442dd1df5de074e7ef7437c71a6f
+status: paused
+stopped_at: Phase 4 verification gaps_found; fixes deferred by the owner
+last_updated: "2026-11-25T03:25:00.000Z"
+last_activity: 2026-11-25
+last_activity_desc: Phase 4 code review and verification complete — gaps_found, fixes deferred
+state_head: b944127
 progress:
   total_phases: 4
   completed_phases: 3
@@ -31,8 +31,8 @@ See: .planning/PROJECT.md (updated 2026-11-24)
 
 Phase: 04 (Guide Phase 2 - 9P2000.aead Transport and FidTable) — EXECUTING
 Plan: 17 of 17
-Status: All 17 plans complete, awaiting phase verification
-Last activity: 2026-11-24 — 04-15 owner stop recorded; origin/main fast-forwarded to 5d1549a on the owner's approval
+Status: 17/17 plans complete; verification `gaps_found` (101/109) — fixes deferred by the owner
+Last activity: 2026-11-25 — code review and verification recorded; 8 blocking gaps deferred
 
 Progress: [████████░░] 75%
 
@@ -89,6 +89,8 @@ Progress: [████████░░] 75%
 ### Decisions
 
 Full log is the PROJECT.md Key Decisions table. Recent:
+
+- [Owner 2026-11-25] Phase 4 verification `gaps_found` (101/109) and the owner chose to STOP AND DEFER the fixes: the three re-key criticals (CR-01 un-zeroized exchange secret, CR-02 no exchange traffic discriminator, CR-03 padded transcript contradicting DECISION P2) and the five blocking warnings stay `open` in `04-REVIEW-DISPOSITION.md`. Phase 4 is not marked complete; resume with `/gsd-plan-phase 4 --gaps` then `/gsd-execute-phase 4 --gaps-only`, and expect a second owner stop because the fixes change kernel bytes.
 
 - [Owner 2026-11-22] `RFNOLEGACY` is a fourth `rfork` flag, `1 << 21`, assigned in guide Phase 0 (GSD Phase 2) with `RFCKEY` 18, `RFROBASE` 19, `RFRANDMEM` 20. Resolves warning W11; the guide's "3 flag bits" wording is corrected to four. Reserved in r9 only, in one `port/` module (`port/src/rfork.rs`) that both arch crates import (owner amendment 2026-11-23, Phase 2 CONTEXT D-17); Harvey is not edited. Recorded deviation from the guide's "reserve bits 18-20 in `libc.h`". Phase 6 implements the behaviour.
 - [Owner 2026-11-22] The r9 nix flake supplies the read-only Harvey tree to `cargo xtask` through the `nix develop` devshell (HARN-07, Phase 1); xtask keeps no built-in default path.
@@ -225,7 +227,10 @@ None yet.
 
 ### Blockers/Concerns
 
-- Unpushed work, checked against the local remote-tracking refs on 2026-11-24 after the plan 03-11 owner stop: `origin/main` is `a643526` — the owner approved pushing `main` after all eleven stop verdicts were green, and `git push origin main` published every unpushed commit (`3d01f07..a643526`, the Phase 2 phase-completion commits and all of Phase 3 up to the owner-stop results). Local `main` is one evidence commit ahead: `5226d11` (`evidence(03-11): main pushed after the owner stop`, the `VERDICT stop-main-push: PASS` line), held for a later approved push. The Phase 3 transport branch `phase-03/crypto-ds-foundations` is `5f565ec` (Mac tip `95fe66a` plus two return commits); the Phase 2 branch `phase-02/design-lock` is at `f8d077d` (gated commit `4624ea2` plus two return commits). Earlier unpushed work is published: r9 `5b8b70a` (planning documents plus `legacy/`, 53 MB) and `6ee45b5` are on `origin/main`, and Harvey `25d97dc4d` is on `origin/master`.
+- **Phase 4 verification `gaps_found` (101/109), owner deferred the fixes on 2026-11-25.** The code review (`04-REVIEW.md`, 3 critical / 9 warning / 7 info) and the verifier (`04-VERIFICATION.md`) independently confirmed the same blocking gaps, all in the in-band re-key path and two fid-table guards: CR-01 exchange secret + `Rekey::out` survive `fail()` while `keys_zeroized()` returns true; CR-02 exchange traffic carries no tag/fid discriminator so ordinary `Twrite`/`Rwrite`/`Tread`/`Rread` are absorbed or close the connection; CR-03 the re-key transcript absorbs the page-padded body, contradicting the accepted DECISION P2; WR-01 re-key never returns to idle (one re-key per connection); WR-02 `SendHalf::send` ignores the ACK deadline; WR-04 a torn clunk can resolve an all-zero identity; WR-05 `sweep` can delete a live entry that reused a swept slot; WR-07 control messages use tag 0, not `NOTAG`. Partial: WR-03, WR-06, WR-08, WR-09. All 19 findings are `open` in `04-REVIEW-DISPOSITION.md`. **Any fix changes kernel bytes**, so it voids `04-14`'s byte evidence and the `boot-iso` `outputHash` commit (`sha256-5A6QdJdWz7uWyUrfUAc3jAO+ZQcG/TowydbTLoF+u9I=`) and needs a second owner stop. Resume with `/gsd-plan-phase 4 --gaps`, then `/gsd-execute-phase 4 --gaps-only`.
+- **Phase 4 push state:** `origin/main` = `5d1549a` (the owner-approved push of 142 commits). Local `main` is ahead with `2bc5e09` (`stop-main-push: PASS`), `59c855a` (04-15 SUMMARY), `6ad61d3` (tracking), `e00d42d` (review disposition), `b944127` (review + verification) and the gap-deferral commit — held for a later approved push. `origin/phase-04/aead-wire` = `405984d`.
+- **Phase 4 capability steps not run:** `04-SECURITY.md` does not exist (`/gsd-secure-phase 4`), the Nyquist audit for the re-key path was not run (`/gsd-validate-phase 4`), and UI review does not apply. The verify:post contract routes security as a next step rather than auto-running it.
+- Unpushed work, checked against the local remote-tracking refs on 2026-11-24 after the plan 03-11 owner stop: `origin/main` was `a643526` and `git push origin main` published every unpushed commit up to it. The Phase 3 transport branch `phase-03/crypto-ds-foundations` is `5f565ec` (Mac tip `95fe66a` plus two return commits); the Phase 2 branch `phase-02/design-lock` is at `f8d077d` (gated commit `4624ea2` plus two return commits). Earlier unpushed work is published: r9 `5b8b70a` (planning documents plus `legacy/`, 53 MB) and `6ee45b5` are on `origin/main`, and Harvey `25d97dc4d` is on `origin/master`.
 - Owed checks at checkpoint r9 `116bcc2`: the owner's linux `nix build .#boot-iso --rebuild` (expected `sha256-TIzwBaHF0R4m31l6EbW2IU3rkUl73g6ljlNE0S5hGFY=`), and hosted CI on r9 `116bcc2` and Harvey `bd7a6982a`.
 - Phase 20 of the Harvey-rooted work never ran `/gsd-secure-phase` (no SECURITY.md).
 - Docs pin r9 at `c787ce9`; HEAD is far later, and `crypto/` and `ds/` now exist and are host-tested while `kern/`, `sys/` and `venti/` are still absent. Re-verify every landing-site path when its phase is planned.
