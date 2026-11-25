@@ -150,7 +150,6 @@ impl SendState {
 /// callers sharing one `SendHalf` cannot put packets on the wire out of
 /// sequence.  [`Session::seal`] takes the same lock for single-owner use.
 pub struct SendHalf {
-    role: Role,
     msize: u32,
     authenticated: bool,
     state: Lock<SendState>,
@@ -163,6 +162,7 @@ impl SendHalf {
     /// A closed session writes nothing and returns [`Closed`].  A write that
     /// does not land whole closes the direction: a sequence number consumed by
     /// a packet the peer never saw would desynchronise the stream.
+    #[allow(clippy::too_many_arguments)]
     pub fn send(
         &self,
         io: &mut dyn crate::devmnt::MntIo,
@@ -180,26 +180,16 @@ impl SendHalf {
         }
         let node = LockNode::new();
         let mut state = self.state.lock(&node);
-        // RED: the shared send counter is not wired in yet; this seals at a
-        // fixed sequence and advances nothing.  GREEN reads and advances
-        // `state.seq` inside this same lock scope.
-        let seq = 0u64;
-        let packet = match seal_into(
-            &mut state,
-            self.role,
-            self.msize,
-            seq,
-            typ,
-            tag,
-            fid_handle,
-            exts,
-            body,
-        ) {
-            Ok(packet) => packet,
-            Err(closed) => return Err(closed),
-        };
+        let seq = state.seq;
+        let packet = seal_into(&mut state, self.msize, seq, typ, tag, fid_handle, exts, body)?;
+        // The seal, the write and the advance all sit inside this one lock
+        // scope, so two senders cannot put packets on the wire out of order
+        // (D-21).  A write that does not land whole closes the direction.
         match io.write_msg(&packet) {
-            Ok(written) if written as usize == packet.len() => Ok(()),
+            Ok(written) if written as usize == packet.len() => {
+                state.seq = seq.wrapping_add(1);
+                Ok(())
+            }
             _ => {
                 state.fail();
                 Err(Closed)
@@ -220,17 +210,7 @@ impl SendHalf {
         let node = LockNode::new();
         let mut state = self.state.lock(&node);
         let seq = state.seq;
-        let packet = seal_into(
-            &mut state,
-            self.role,
-            self.msize,
-            seq,
-            typ,
-            tag,
-            fid_handle,
-            exts,
-            body,
-        )?;
+        let packet = seal_into(&mut state, self.msize, seq, typ, tag, fid_handle, exts, body)?;
         state.seq = seq.wrapping_add(1);
         Ok(packet)
     }
@@ -260,9 +240,9 @@ impl SendHalf {
 /// `seq` is the sequence number the caller chose; the caller advances its own
 /// counter under the same lock.  Every failure zeroizes the direction's keys
 /// and closes it.
+#[allow(clippy::too_many_arguments)]
 fn seal_into(
     state: &mut SendState,
-    role: Role,
     msize: u32,
     seq: u64,
     typ: u8,
@@ -271,7 +251,6 @@ fn seal_into(
     exts: &Exts<'_>,
     body: &[u8],
 ) -> core::result::Result<Vec<u8>, Closed> {
-    let _ = role;
     if state.closed {
         return Err(Closed);
     }
@@ -368,7 +347,6 @@ impl Handshake {
             Role::Server => (s2c, c2s),
         };
         let send = SendHalf {
-            role: self.role,
             msize: self.config.msize,
             authenticated,
             state: Lock::new(
@@ -381,7 +359,6 @@ impl Handshake {
             ),
         };
         Session {
-            role: self.role,
             config: self.config,
             generation: 0,
             transcript,
@@ -395,7 +372,6 @@ impl Handshake {
 
 /// One end of an established connection (D-15).
 pub struct Session {
-    role: Role,
     config: TransportConfig,
     /// The derivation generation; plan 04-08's re-key reads it.
     #[allow(dead_code)]
