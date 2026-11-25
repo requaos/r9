@@ -301,6 +301,17 @@ impl FidEntry {
         words_from_bytes(&bytes)
     }
 
+    /// Whether these words are the live entry `handle` names for `client_id`
+    /// at `table_epoch`: the register comparisons [`FidTable::resolve`] makes
+    /// on the eight words it read.
+    pub fn matches(&self, client_id: u32, handle: &StatefulHandle, table_epoch: u16) -> bool {
+        self.fid_key == handle.fid_key
+            && self.client_id == client_id
+            && self.epoch == handle.epoch
+            && handle.epoch == table_epoch
+            && self.flags & FID_LIVE != 0
+    }
+
     /// Unpack the eight-word arena form into an entry.
     pub fn from_words(words: &[u64; 8]) -> FidEntry {
         let bytes = bytes_from_words(words);
@@ -609,12 +620,7 @@ impl<P: Probe + Clone> FidTable<P> {
         // the handle.
         let words = shard.tpht.deref_tiny(key, handle.ptr);
         let entry = FidEntry::from_words(&words);
-        if entry.fid_key != handle.fid_key
-            || entry.client_id != client_id
-            || entry.epoch != handle.epoch
-            || handle.epoch != self.epoch
-            || entry.flags & FID_LIVE == 0
-        {
+        if !entry.matches(client_id, handle, self.epoch) {
             return Err(
                 "fid: the handle does not name a live entry for this client and epoch \
                  (T-04-32, T-04-33)",

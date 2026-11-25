@@ -7,8 +7,7 @@
 //! (`QTDIR 0x80`, `QTAPPEND 0x40`, `QTEXCL 0x20`).
 
 use crypto::key::Key;
-use ds::tpht::TinyPtr;
-use ds::tpht::Probe;
+use ds::tpht::{HOME_SLOTS, Probe, TinyPtr};
 use port::dat::Qid;
 use port::fid::{
     FID_LIVE, STATEFUL_HANDLE_LEN, STATELESS_CAP_LEN, FidEntry, FidHandle, FidTable, StatelessCap,
@@ -389,6 +388,146 @@ fn aead_fid_resolve_clunked_handle_does_not_resolve() {
         table.resolve(1, &handle).is_err(),
         "the stale handle stays refused even after the slot may have been reused"
     );
+}
+
+#[test]
+fn aead_fid_resolve_torn_clunk_image_never_matches() {
+    // `ds` zeroes a removed entry's arena words one at a time (flattened.rs
+    // `remove`), so a resolve racing a clunk can read word 0 (`fid_key` and
+    // `client_id`) already cleared while word 5 still holds the epoch and
+    // `FID_LIVE`.  The pin is that image, hand-built; it is not a race.
+    let table_epoch = 7u16;
+    let mut torn = FidEntry::from_words(&[0u64; 8]);
+    torn.epoch = table_epoch;
+    torn.flags = FID_LIVE;
+    let words = torn.to_words();
+    assert_eq!(words[0], 0, "the torn image's identity word is already zero");
+    let torn = FidEntry::from_words(&words);
+
+    let handle = StatefulHandle {
+        fid_key: 0,
+        ptr: TinyPtr::new(1).expect("a non-zero tiny pointer"),
+        shard_id: 0,
+        epoch: table_epoch,
+    };
+    assert!(
+        !torn.matches(0, &handle, table_epoch),
+        "the torn image must not match client id 0, the cleared-slot identity (WIRE-08, WR-04)"
+    );
+    for client_id in [1u32, 2, 0x00FF_FFFF, u32::MAX] {
+        assert!(
+            !torn.matches(client_id, &handle, table_epoch),
+            "the torn image must not match client {client_id} either"
+        );
+    }
+
+    // A fully zero image (every word cleared) never matches.
+    let zero = FidEntry::from_words(&[0u64; 8]);
+    assert!(!zero.matches(0, &handle, table_epoch), "an all-zero image never matches client 0");
+    assert!(!zero.matches(1, &handle, table_epoch), "an all-zero image never matches client 1");
+}
+
+#[test]
+fn aead_fid_insert_refuses_client_id_zero() {
+    let probe = CountingProbe::new();
+    let table = FidTable::with_probe(2, 1, domain_key(0x68), 3, probe.clone())
+        .expect("two one-block shards form a table");
+    assert!(
+        table.insert(0, entry_for(1)).is_err(),
+        "client id 0 is the cleared-slot identity, so insert refuses it (WIRE-08, WR-04)"
+    );
+    for shard in 0..2u8 {
+        assert_eq!(
+            table.bitmap_lens(shard),
+            Some((0, 0)),
+            "the refused insert leaves shard {shard}'s bitmaps empty"
+        );
+    }
+
+    let handle = StatefulHandle {
+        fid_key: 1,
+        ptr: TinyPtr::new(1).expect("a non-zero tiny pointer"),
+        shard_id: 0,
+        epoch: 3,
+    };
+    probe.reset();
+    assert!(table.resolve(0, &handle).is_err(), "resolve refuses client id 0 (WR-04)");
+    assert!(table.clunk(0, &handle).is_err(), "clunk refuses client id 0 (WR-04)");
+    assert!(
+        table.mark_reclaimed(0, &handle).is_err(),
+        "mark_reclaimed refuses client id 0 (WR-04)"
+    );
+    assert_eq!(
+        (probe.arena_reads(), probe.header_reads()),
+        (0, 0),
+        "client id 0 is refused before any arena or header read"
+    );
+
+    // Fid number 0 stays usable by every other client.
+    let zero_fid = table.insert(1, entry_for(0)).expect("client 1 may use fid number 0");
+    assert_eq!(zero_fid.fid_key, 0, "the handle carries fid number 0");
+    let resolved = table.resolve(1, &zero_fid).expect("fid number 0 for client 1 resolves");
+    assert_eq!(resolved.fid_key, 0, "the resolved entry is fid number 0");
+}
+
+#[test]
+fn aead_fid_resolve_out_of_window_ptr_is_rejected() {
+    let probe = CountingProbe::new();
+    let table = FidTable::with_probe(2, 4, domain_key(0x69), 5, probe.clone())
+        .expect("two four-block shards form a table");
+    let mut handles = Vec::new();
+    for fid in 1..=6u32 {
+        handles.push(table.insert(1, entry_for(fid)).expect("a fresh table has room for six fids"));
+    }
+    let original = handles[0];
+    let issued = original.ptr.get();
+    assert!((1..=16).contains(&issued), "ds issues a home tiny pointer in 1..=16, got {issued}");
+    // `ds` folds a pointer as `((block << 4) + (ptr - 1)) & slot_mask`.  With
+    // four blocks per shard the mask is 63, so the issued pointer plus 64 (16
+    // times the four blocks) names the handle's own slot again.
+    let folded = issued as usize + 64;
+    assert!(
+        folded > HOME_SLOTS,
+        "the folded pointer {folded} must be above the home window ({HOME_SLOTS})"
+    );
+
+    let before: Vec<(u64, u64)> = (0..2u8)
+        .map(|shard| table.bitmap_lens(shard).expect("the shard index is in range"))
+        .collect();
+
+    for (label, ptr) in [("folded", folded as u8), ("17", 17u8), ("255", 255u8)] {
+        let mut copy = original;
+        copy.ptr = TinyPtr::new(ptr).expect("a non-zero tiny pointer");
+        probe.reset();
+        let resolved = table.resolve(1, &copy);
+        assert!(
+            resolved.is_err(),
+            "resolve must refuse the {label} ptr {ptr}: it is outside the home window (WR-06)"
+        );
+        assert!(
+            table.mark_reclaimed(1, &copy).is_err(),
+            "mark_reclaimed must refuse the {label} ptr {ptr} (WR-06)"
+        );
+        assert!(
+            table.clunk(1, &copy).is_err(),
+            "clunk must refuse the {label} ptr {ptr} (WR-06)"
+        );
+        assert_eq!(
+            (probe.arena_reads(), probe.header_reads()),
+            (0, 0),
+            "the {label} ptr {ptr} is refused before any arena or header read"
+        );
+    }
+
+    let after: Vec<(u64, u64)> = (0..2u8)
+        .map(|shard| table.bitmap_lens(shard).expect("the shard index is in range"))
+        .collect();
+    assert_eq!(after, before, "the nine refusals change no shard's bitmaps");
+
+    assert!(table.resolve(1, &original).is_ok(), "the original handle still resolves");
+    for handle in &handles[1..] {
+        assert!(table.resolve(1, handle).is_ok(), "every other live handle still resolves");
+    }
 }
 
 #[test]
