@@ -136,3 +136,16 @@ not move between the gated commit and the tip the gates measured.
 - The only `got:` line in the return is run 1's `boot-iso-first`, which is the expected
   first-round mismatch named in section 5 of the checklist.
 - No credential string appears in the returned logs; nothing needed redaction.
+
+## Task 3: the `main` push ruling
+
+The owner replied "push-main" at the checkpoint that showed `git log --oneline
+origin/main..main` and the eleven verdict lines above. The sha shown to the owner was
+`5d1549af07de7220d6f48aac0d0db221aa7c541c` (`git rev-parse HEAD` before the push), and the
+executor ran exactly `git push origin main` once — no force, no other ref. `origin/main` moved
+`a64352625efe9cb8a924d7941c6be09c4f738a11` -> `5d1549af07de7220d6f48aac0d0db221aa7c541c`, which
+equals the sha shown. The branch `phase-04/aead-wire` is unchanged at
+`405984d2c2bd391900c987668d14c78c23c23005`. This evidence commit stays local until a later
+approved push.
+
+VERDICT stop-main-push: PASS 5d1549af07de7220d6f48aac0d0db221aa7c541c
