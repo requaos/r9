@@ -85,6 +85,15 @@ pub mod devroot;
 pub mod fdgrp;
 #[forbid(unsafe_code)]
 pub mod fdt;
+// fid (Phase 4, 04-09, D-22): the `9P2000.aead` hybrid handle layouts —
+// `StatefulHandle`, `StatelessCap`, `FidHandle`, the 64-byte `FidEntry`, the
+// volatility class and the qid codec (WIRE-07, WIRE-10).  Safe code only: the
+// 64-byte entry is packed field by field with `to_le_bytes`, never transmuted,
+// so the module keeps the forbid (COMPENDIUM listing 9.6's `PodSlot` +
+// `transmute` is not copied).  The table, the shards and the single-read
+// resolve land in later plans of this phase.
+#[forbid(unsafe_code)]
+pub mod fid;
 pub mod globalalloc;
 #[forbid(unsafe_code)]
 pub mod maths;
