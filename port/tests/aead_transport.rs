@@ -2621,7 +2621,7 @@ fn aead_transport_rekey_ordinary_write_at_server_is_not_consumed() {
     let (tag, msg) = server.recv_tagged().expect("the server opens Tauth");
     assert_eq!(tag, port::devmnt::NOTAG);
     let _ = server.rekey(&mut se, Some(&msg), 0).expect("the server answers Rauth");
-    assert_eq!(se.runs(), 2, "the seam ran once for the handshake and once here");
+    assert_eq!(se.runs(), 1, "the server's seam has run only for the handshake so far");
 
     // An ordinary write, tag 2, on fid 9.
     client
@@ -2644,7 +2644,7 @@ fn aead_transport_rekey_ordinary_write_at_server_is_not_consumed() {
         .rekey_tagged(&mut se, Some((tag, &msg)), 0)
         .expect("handing ordinary traffic to the router is a no-op");
     assert!(packets.is_empty(), "the router sends nothing for ordinary traffic");
-    assert_eq!(se.runs(), 2, "the seam did not run for an ordinary write");
+    assert_eq!(se.runs(), 1, "the seam did not run for an ordinary write");
     assert!(!server.session.is_closed(), "ordinary traffic does not close the session");
 
     // The exchange's own Twrite is then taken normally.
@@ -2654,7 +2654,7 @@ fn aead_transport_rekey_ordinary_write_at_server_is_not_consumed() {
     assert_eq!(tag, port::devmnt::NOTAG);
     let rwrite = server.rekey(&mut se, Some(&msg), 0).expect("the server answers Rwrite");
     assert_eq!(rwrite.len(), 1, "the exchange advances past the ordinary write");
-    assert_eq!(se.runs(), 3, "the seam ran for the exchange's own Twrite");
+    assert_eq!(se.runs(), 2, "the seam ran for the exchange's own Twrite");
 }
 
 #[test]

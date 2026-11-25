@@ -849,9 +849,9 @@ fn aead_negotiate_end_to_end_read_during_rekey_is_served() {
     let (mut client, server, _link) = connect_aead_with(secret(), 1, config_with_rekey(6, 5000));
     let file_handle = open_the_file(&mut client, &server);
 
-    // Four requests so far (attach, walk, open, read); two more reach the
+    // Three requests so far (attach, walk, open); three more reach the
     // threshold of 6 on both sides.
-    for _ in 0..2 {
+    for _ in 0..3 {
         let reply = request(
             &mut client,
             &server,
