@@ -42,6 +42,15 @@
 //! arena holds exactly `slot_mask + 1` slots, both fixed in the constructor
 //! (D-13; plan 03-10 audits the site).
 //!
+//! **Removal clears the slot.**  `remove` zeroes the removed entry's arena
+//! words inside the block's seqlock section, before the occupied bit is
+//! cleared, so `deref_tiny` of a removed pair returns all-zero words until the
+//! slot is reused (Phase 4 plan 04-09; RESEARCH Pitfall 2, T-04-29).  Two
+//! methods name a slot by id for the failover sweep (WIRE-09): `slot_id` is the
+//! dense index `(block << 4) | (ptr - 1)`, and `read_slot` is the sweep's
+//! **bounds-checked** read path — it is not the single-read fast path, which is
+//! `deref_tiny`.
+//!
 //! The table stores no full key.  `quotients[i]` holds a 16-bit fingerprint of
 //! the remainder, and `same` is the caller's full-key verification of a
 //! fingerprint match (RESEARCH Open Question 3).
@@ -379,6 +388,12 @@ impl<const WORDS: usize, P: Probe> FlattenedTphtShard<WORDS, P> {
 
     /// Remove `key`; `same` is the full-key verification called on a
     /// fingerprint match.  Returns whether an entry was removed.
+    ///
+    /// A removed entry's arena slot is zeroed under the block's seqlock,
+    /// before the occupied bit is cleared, so `deref_tiny` of the removed pair
+    /// returns all-zero words until the slot is reused — a clunked
+    /// `StatefulHandle` can no longer resolve to its old `FidEntry`
+    /// (RESEARCH Pitfall 2, T-04-29).
     pub fn remove(&self, key: u64, same: impl Fn(&[u64; WORDS]) -> bool) -> bool {
         let (block, remainder) = self.split_key(key);
         let fingerprint = feistel::fingerprint(remainder);
@@ -400,6 +415,13 @@ impl<const WORDS: usize, P: Probe> FlattenedTphtShard<WORDS, P> {
             if !same(&candidate) {
                 continue;
             }
+            // Zero the arena words before the occupied bit is cleared.  A
+            // clunked `StatefulHandle` still names this pair, and `deref_tiny`
+            // reads the arena without looking at the header, so leaving the
+            // words behind would let the handle keep resolving to its old
+            // entry (RESEARCH Pitfall 2, T-04-29).  Safe `Release` stores,
+            // inside this block's seqlock section.
+            self.write_value(self.slot_index(block, ptr), &[0u64; WORDS]);
             header.tiny_ptrs[slot].store(0, Ordering::Release);
             header.quotients[slot].store(0, Ordering::Release);
             Self::clear_spilled(header, slot);
@@ -424,9 +446,20 @@ impl<const WORDS: usize, P: Probe> FlattenedTphtShard<WORDS, P> {
     ///
     /// The caller holds a `(key, tiny_ptr)` pair for a live entry (for
     /// example a `StatefulHandle` in Phase 4) and is responsible for not using
-    /// the pair after the entry is removed.  A stale pair returns whatever the
-    /// slot now holds and is never undefined behaviour: every arena word is an
-    /// atomic, so the read is always a valid atomic load.
+    /// the pair after the entry is removed.  [`Self::remove`] zeroes the
+    /// removed entry's arena words under the block's seqlock, so a pair whose
+    /// entry was removed **and whose slot has not been reused** resolves to all
+    /// zero words rather than the stale value.  Once the slot is reused the
+    /// pair returns the new occupant's words.  Neither case is undefined
+    /// behaviour: every arena word is an atomic, so the read is always a valid
+    /// atomic load.
+    ///
+    /// This is a single word-atomic read, not a consistent snapshot of a
+    /// whole entry: an eight-word load racing an insert into the same slot can
+    /// mix two entries (RESEARCH Pitfall 4).  That is tolerable because the
+    /// server hands a handle out only after `insert` returns, the race needs a
+    /// client to reuse a stale handle for the same fid number, and `fid_key`
+    /// and `client_id` share word 0 so the identity check is one atomic word.
     pub fn deref_tiny(&self, key: u64, ptr: TinyPtr) -> [u64; WORDS] {
         let (block, _remainder) = self.split_key(key);
         self.probe.arena_read();
@@ -452,8 +485,12 @@ impl<const WORDS: usize, P: Probe> FlattenedTphtShard<WORDS, P> {
     ///
     /// The id names a slot; it is not a faster read.  The single-read fast path
     /// is [`Self::deref_tiny`], which takes the pair directly.
-    pub fn slot_id(&self, _key: u64, _ptr: TinyPtr) -> u32 {
-        0
+    pub fn slot_id(&self, key: u64, ptr: TinyPtr) -> u32 {
+        let (block, _remainder) = self.split_key(key);
+        // `slot_index` masks by `slot_mask`, which is `16 * num_blocks - 1`:
+        // for a real block and a home pointer the mask is the identity, so the
+        // id is exactly `(block << 4) | (ptr - 1)`.
+        self.slot_index(block, ptr) as u32
     }
 
     /// Read a whole arena slot by its [`Self::slot_id`], or `None` when the id
@@ -462,8 +499,13 @@ impl<const WORDS: usize, P: Probe> FlattenedTphtShard<WORDS, P> {
     /// This is the failover sweep's read path (WIRE-09): bounds-checked and
     /// safe on every id, so an id rebuilt from a corrupt or stale bitmap can
     /// never index past the arena.  It is **not** the single-read fast path.
-    pub fn read_slot(&self, _slot_id: u32) -> Option<[u64; WORDS]> {
-        None
+    pub fn read_slot(&self, slot_id: u32) -> Option<[u64; WORDS]> {
+        let slot = slot_id as usize;
+        if slot >= self.arena.len() {
+            return None;
+        }
+        self.probe.arena_read();
+        Some(self.read_value(slot))
     }
 
     /// The arena slot a tiny pointer addresses: `((block << 4) + (ptr - 1)) &
