@@ -13,6 +13,9 @@
 //! never turns a framing failure into `Closed` itself.  `Stage` records which
 //! call rejected the bytes, and `decode_count` counts only bodies that decoded.
 
+// A shared fixture: each test binary uses a different subset of these helpers.
+#![allow(dead_code)]
+
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;

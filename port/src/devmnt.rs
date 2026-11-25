@@ -686,17 +686,22 @@ impl Mnt {
     /// token's cell — a pipe/ssl dup each, so a parked reader and an
     /// active writer never share one Chan).
     pub fn negotiate(io_r: Box<dyn MntIo>, io_w: Box<dyn MntIo>, offer: u32) -> Result<Mnt> {
-        let offer = if offer == 0 { DEFAULT_MSIZE } else { offer };
-        if !(MSIZE_MIN..=MSIZE_MAX).contains(&offer) {
-            return Err("devmnt: nonsense msize in fversion");
+        match Self::negotiate_dialect(io_r, io_w, offer, Dialect::Plain)? {
+            Negotiated::Plain(mnt) => Ok(mnt),
+            Negotiated::Aead(_) => Err("devmnt: a plain negotiation returned an aead session"),
         }
-        let mut mnt = Mnt {
-            io_r: BusyCell::new(MntIoBox(io_r)),
-            io_w: BusyCell::new(MntIoBox(io_w)),
+    }
+
+    /// Build the negotiated plain session: the two io halves, the allocators,
+    /// the negotiated msize and version, and a fresh session id.
+    fn plain_session(io_r: MntIoBox, io_w: MntIoBox, msize: u32, version: Vec<u8>) -> Mnt {
+        Mnt {
+            io_r: BusyCell::new(io_r),
+            io_w: BusyCell::new(io_w),
             alloc: Lock::new("mntalloc", MntAlloc { next_fid: 1, next_tag: 1 }),
             queue: Lock::new("mntqueue", VecDeque::new()),
-            msize: offer, // the handshake's bound is the offer itself
-            version: Vec::new(),
+            msize,
+            version,
             id: {
                 let node = LockNode::new();
                 let mut g = NEXT_MNT_ID.lock(&node);
@@ -704,16 +709,61 @@ impl Mnt {
                 *g += 1;
                 id
             },
+        }
+    }
+
+    /// The negotiated msize (a frozen set-once field — no guard).
+    pub fn msize(&self) -> u32 {
+        self.msize
+    }
+
+    /// The dialect selection point (WIRE-12, D-23).
+    ///
+    /// This is where a booted kernel would choose the dialect, and nothing in
+    /// the kernel passes [`Dialect::Aead`] in this phase: `fversion` still
+    /// calls [`Mnt::negotiate`], which is this function with
+    /// [`Dialect::Plain`].  `Rversion` travels in cleartext, so a plain answer
+    /// to an aead offer fails closed: there is no silent downgrade (the legacy
+    /// fallback is Phase 6's gateway).
+    ///
+    /// A [`Dialect::Aead`] offer that the server answers with
+    /// `"9P2000.aead"` hands the two io halves, the negotiated msize and the
+    /// exact `Tversion` and `Rversion` bytes to the sealed engine through
+    /// [`crate::chan::transport::Handoff`]; the transcript starts from the
+    /// same cleartext prefix both ends saw (D-17).  The msize rules are the
+    /// same three the plain path has always enforced.
+    pub fn negotiate_dialect(
+        io_r: Box<dyn MntIo>,
+        io_w: Box<dyn MntIo>,
+        offer: u32,
+        want: Dialect,
+    ) -> Result<Negotiated> {
+        let offer = if offer == 0 { DEFAULT_MSIZE } else { offer };
+        if !(MSIZE_MIN..=MSIZE_MAX).contains(&offer) {
+            return Err("devmnt: nonsense msize in fversion");
+        }
+        let offered: &[u8] = match want {
+            Dialect::Plain => VERSION9P,
+            Dialect::Aead => crate::chan::VERSION_AEAD,
         };
+        // The Mnt does not exist yet, so the version exchange runs directly on
+        // the two halves: one synchronous write and one framed reply, exactly
+        // the uncontended path `rpc` took here before (the token is free and
+        // the queue would hold only this rpc).
+        let mut io_r = MntIoBox(io_r);
+        let mut io_w = MntIoBox(io_w);
         let mut body = Vec::new();
         pw32(&mut body, offer);
-        pwstr(&mut body, VERSION9P);
-        let msg = tmsg(TVERSION, NOTAG, &body);
-        // The Mnt is a not-yet-shared local: the token is free and the
-        // queue holds only this rpc, so rpc() runs uncontended.
-        let reply = mnt.rpc(&msg, RVERSION, NOTAG)?;
+        pwstr(&mut body, offered);
+        let tversion = tmsg(TVERSION, NOTAG, &body);
+        let w = io_w.0.write_msg(&tversion)? as usize;
+        if w != tversion.len() {
+            return Err("devmnt: short write on the 9P connection");
+        }
+        let rversion = Self::frame_one(&mut io_r, offer)?;
+        Self::check_reply(&rversion, RVERSION, NOTAG)?;
         let (msize, version) = {
-            let mut cur = RepCur::new(&reply[7..]);
+            let mut cur = RepCur::new(&rversion[7..]);
             let msize = cur.u32()?;
             let version = cur.string()?;
             cur.done()?;
@@ -725,31 +775,29 @@ impl Mnt {
         if !(MSIZE_MIN..=MSIZE_MAX).contains(&msize) {
             return Err("devmnt: nonsense msize in fversion");
         }
-        if version != VERSION9P {
-            return Err("devmnt: bad 9P version returned from server");
+        match want {
+            Dialect::Plain => {
+                if version != VERSION9P {
+                    return Err("devmnt: bad 9P version returned from server");
+                }
+                Ok(Negotiated::Plain(Self::plain_session(io_r, io_w, msize, version)))
+            }
+            Dialect::Aead => {
+                if version == VERSION9P {
+                    return Err("devmnt: server answered plain 9P2000 to a 9P2000.aead offer");
+                }
+                if version != crate::chan::VERSION_AEAD {
+                    return Err("devmnt: bad 9P version returned from server");
+                }
+                Ok(Negotiated::Aead(crate::chan::transport::Handoff {
+                    io_r: io_r.0,
+                    io_w: io_w.0,
+                    msize,
+                    tversion,
+                    rversion,
+                }))
+            }
         }
-        mnt.msize = msize;
-        mnt.version = version;
-        Ok(mnt)
-    }
-
-    /// The negotiated msize (a frozen set-once field — no guard).
-    pub fn msize(&self) -> u32 {
-        self.msize
-    }
-
-    /// The dialect selection point (WIRE-12, D-23): stub at RED.
-    ///
-    /// The real body lands in the GREEN commit; the signature is final so the
-    /// RED pin compiles and fails on a behavioural assertion.
-    pub fn negotiate_dialect(
-        io_r: Box<dyn MntIo>,
-        io_w: Box<dyn MntIo>,
-        offer: u32,
-        want: Dialect,
-    ) -> Result<Negotiated> {
-        let _ = (io_r, io_w, offer, want);
-        Err("devmnt: negotiate_dialect is not implemented yet")
     }
 
     /// The negotiated version string (the re-version replay's answer) —
