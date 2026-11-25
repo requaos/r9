@@ -22,20 +22,35 @@
 //! derived 4-byte prefix and the 8-byte wire sequence number, little-endian
 //! (D-08).  The prefix is derived, never sent on the wire.
 //!
+//! [`Transcript`] is the unkeyed BLAKE3 hash of the plain-framed handshake
+//! messages in wire order (D-17): every message is absorbed whole, and each
+//! begins with its own `size[4]`, so concatenation is unambiguous.  The
+//! handshake is strictly serial (one request outstanding), so both ends
+//! absorb the same bytes in the same order; an altered version string or
+//! msize gives the two ends different keys and the first sealed packet
+//! fails.  [`Transcript::chain`] seeds a re-key's transcript with the
+//! previous generation's 32-byte hash (P2).
+//!
 //! [`PacketMac`] wraps a keyed BLAKE3 hasher created inside this crate.  The
 //! packet MAC covers every byte before the MAC (D-07), so the transport feeds
 //! it one contiguous slice; [`PacketMac::verify`] compares in constant time
 //! with an accumulator fold and no early exit (T-04-05).
 //!
-//! # What is zeroized, and what is not (P6)
+//! # What zeroize covers
 //!
-//! `Key` holds `Zeroizing<[u8; 32]>`, and the nonce prefix is held in
-//! `Zeroizing<[u8; 4]>`, so the long-lived session material is scrubbed on
-//! drop.  It is **not** a complete scrubbing guarantee: each per-packet
+//! [`DirectionKeys::zeroize`] (and [`SessionKeys::zeroize`], which calls it
+//! for both directions) overwrites the six derived secrets — the four keys
+//! and the two nonce prefixes — with zeros on connection teardown or any
+//! failure, not on `Tclunk` (D-15).  The scrubbed state is exactly those four
+//! keys and two prefixes.  [`DirectionKeys::is_zeroized`] and
+//! [`SessionKeys::is_zeroized`] let a caller confirm that happened without
+//! revealing key bytes: they answer only `true` or `false`.
+//!
+//! It is **not** a complete scrubbing guarantee: each per-packet
 //! `blake3::Hasher` and each `ChaCha20` cipher state holds a copy of its key
 //! on the stack and is dropped without scrubbing, because the pinned
-//! `blake3`'s `zeroize` feature is deliberately off (P6).  The limit is
-//! stated here rather than overclaimed.
+//! `blake3`'s `zeroize` feature is deliberately off (P6, DECISION P6
+//! accepted off).  The limit is stated here rather than overclaimed.
 //!
 //! # What this module does not decide
 //!
@@ -102,6 +117,100 @@ pub struct SessionKeys {
     pub c2s: DirectionKeys,
     /// Server to client.
     pub s2c: DirectionKeys,
+}
+
+impl SessionKeys {
+    /// Overwrite both directions' keys and prefixes with zeros (D-15).
+    pub fn zeroize(&mut self) {
+        self.c2s.zeroize();
+        self.s2c.zeroize();
+    }
+
+    /// Whether both directions are zeroized.
+    pub fn is_zeroized(&self) -> bool {
+        self.c2s.is_zeroized() && self.s2c.is_zeroized()
+    }
+}
+
+/// The capability body length in bytes: the first 16 bytes of a
+/// `StatelessCap` (P8, D-14).
+pub const CAP_BODY_LEN: usize = 16;
+/// The capability tag length in bytes: the 8-byte truncation of keyed BLAKE3
+/// (P8, D-14).
+pub const CAP_TAG_LEN: usize = 8;
+
+/// The capability tag label (P8, D-14): 16 bytes, followed by the body.
+const CAP_LABEL: &[u8; 16] = b"r9 StatelessCap1";
+/// The re-key confirm label (P3): 12 bytes, followed by the generation LE.
+const REKEY_LABEL: &[u8; 12] = b"r9 rekey ack";
+
+/// The 8-byte `StatelessCap` tag over the capability's first 16 bytes under
+/// the table's domain secret (P8, D-14).
+///
+/// Keyed BLAKE3 under `domain` over [`CAP_LABEL`] followed by `body`, the
+/// first [`CAP_TAG_LEN`] bytes.  The domain secret is a caller-supplied
+/// [`Key`]; `crypto/` holds no default domain secret.
+pub fn cap_tag(domain: &Key, body: &[u8; CAP_BODY_LEN]) -> [u8; CAP_TAG_LEN] {
+    let mut hasher = crate::mac::Blake3::new_keyed(domain.bytes());
+    hasher.update(CAP_LABEL);
+    hasher.update(body);
+    let full = hasher.finalize();
+    let mut tag = [0u8; CAP_TAG_LEN];
+    tag.copy_from_slice(&full[..CAP_TAG_LEN]);
+    tag
+}
+
+/// Verify a `StatelessCap` tag in constant time (P8, D-14).
+///
+/// Builds `CAP_LABEL || body` in one fixed 32-byte buffer and defers the
+/// comparison to [`crate::mac::verify_keyed`], which folds every compared
+/// byte with no early exit (T-04-05).  A wrong tag is `Err(Error::TagMismatch)`.
+pub fn cap_verify(
+    domain: &Key,
+    body: &[u8; CAP_BODY_LEN],
+    tag: &[u8; CAP_TAG_LEN],
+) -> crate::Result<()> {
+    let mut message = [0u8; CAP_LABEL.len() + CAP_BODY_LEN];
+    message[..CAP_LABEL.len()].copy_from_slice(CAP_LABEL);
+    message[CAP_LABEL.len()..].copy_from_slice(body);
+    crate::mac::verify_keyed(domain.bytes(), &message, tag)
+}
+
+/// An unkeyed BLAKE3 transcript of the plain-framed handshake messages, in
+/// wire order (P2, D-17).
+///
+/// Every message is absorbed whole, so concatenation is unambiguous: each 9P
+/// message starts with its own `size[4]`.  The handshake is strictly serial,
+/// so both ends absorb the same bytes in the same order.  [`Transcript::chain`]
+/// seeds the next generation's transcript with the previous 32-byte hash for a
+/// re-key (P2).
+pub struct Transcript {
+    hasher: crate::mac::Blake3,
+}
+
+impl Transcript {
+    /// A new, empty transcript.
+    pub fn new() -> Transcript {
+        Transcript { hasher: crate::mac::Blake3::new() }
+    }
+
+    /// A transcript seeded with a previous generation's 32-byte transcript
+    /// hash (the re-key chain, P2).
+    pub fn chain(previous: &[u8; 32]) -> Transcript {
+        let mut transcript = Transcript::new();
+        transcript.absorb(previous);
+        transcript
+    }
+
+    /// Absorb one whole message.
+    pub fn absorb(&mut self, message: &[u8]) {
+        self.hasher.update(message);
+    }
+
+    /// The 32-byte unkeyed BLAKE3 hash of everything absorbed so far.
+    pub fn hash(&self) -> [u8; 32] {
+        self.hasher.finalize()
+    }
 }
 
 /// Derive the two directions' keys from `secret`, the handshake `transcript`
@@ -185,6 +294,70 @@ impl DirectionKeys {
         PacketMac { h: crate::mac::Blake3::new_keyed(self.k_mac.bytes()) }
     }
 
+    /// Overwrite this direction's cipher key, MAC key and nonce prefix with
+    /// zeros, on connection teardown or any failure (D-15).
+    ///
+    /// The value still type-checks after this call; the transport treats a
+    /// zeroized connection as closed.  Each replaced [`Key`] and prefix is
+    /// itself `Zeroizing`, so the previous bytes are scrubbed on the drop this
+    /// assignment performs.
+    pub fn zeroize(&mut self) {
+        self.k_enc = Key::from_bytes([0u8; 32]);
+        self.k_mac = Key::from_bytes([0u8; 32]);
+        self.prefix = Zeroizing::new([0u8; PREFIX_LEN]);
+    }
+
+    /// Whether every cipher key byte, MAC key byte and prefix byte this
+    /// direction holds is zero.
+    ///
+    /// This exists so a caller can check that teardown really scrubbed the
+    /// keys: `port` cannot read key bytes (T-04-03).  It returns only a
+    /// `bool`, and the loops fold all 68 covered bytes into one accumulator
+    /// with no early exit.  A `true` answer on freshly derived keys cannot
+    /// occur except with negligible probability.
+    pub fn is_zeroized(&self) -> bool {
+        let mut acc = 0u8;
+        for byte in self.k_enc.bytes() {
+            acc |= *byte;
+        }
+        for byte in self.k_mac.bytes() {
+            acc |= *byte;
+        }
+        for byte in self.prefix.iter() {
+            acc |= *byte;
+        }
+        acc == 0
+    }
+
+    /// The re-key confirm value under this direction's MAC key (P3).
+    ///
+    /// Keyed BLAKE3 under the new MAC key of the direction being cut over,
+    /// over [`REKEY_LABEL`] followed by the generation little-endian.  Only
+    /// the holder of this direction's key can produce it, which is what
+    /// proves a cutover derived the same keys.
+    pub fn rekey_confirm(&self, generation: u32) -> [u8; 32] {
+        let mut message = [0u8; REKEY_LABEL.len() + 4];
+        message[..REKEY_LABEL.len()].copy_from_slice(REKEY_LABEL);
+        message[REKEY_LABEL.len()..].copy_from_slice(&generation.to_le_bytes());
+        crate::mac::blake3_keyed(self.k_mac.bytes(), &message)
+    }
+
+    /// Verify a re-key confirm value in constant time (P3).
+    ///
+    /// A wrong value, another generation's value or one made under the other
+    /// direction's keys is `Err(Error::TagMismatch)`; the comparison has no
+    /// early exit.
+    pub fn verify_rekey_confirm(
+        &self,
+        generation: u32,
+        confirm: &[u8; 32],
+    ) -> crate::Result<()> {
+        let mut message = [0u8; REKEY_LABEL.len() + 4];
+        message[..REKEY_LABEL.len()].copy_from_slice(REKEY_LABEL);
+        message[REKEY_LABEL.len()..].copy_from_slice(&generation.to_le_bytes());
+        crate::mac::verify_keyed(self.k_mac.bytes(), &message, confirm)
+    }
+
     /// XOR this direction's ChaCha20 keystream for sequence `seq`, starting
     /// at block `counter`, into `buf` (D-08).
     pub fn keystream(&self, seq: u64, counter: u32, buf: &mut [u8]) -> crate::Result<()> {
@@ -192,5 +365,240 @@ impl DirectionKeys {
         nonce[..PREFIX_LEN].copy_from_slice(&self.prefix[..]);
         nonce[PREFIX_LEN..].copy_from_slice(&seq.to_le_bytes());
         crate::page::chacha20_xor(self.k_enc.bytes(), &nonce, counter, buf)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// In-crate tests
+//
+// This is `crypto/`'s first in-crate test module.  Key bytes are unreadable
+// outside the crate (`Key::bytes` is `pub(crate)` and `DirectionKeys` has no
+// accessor), so the raw-byte pins — the derivation known-answer vector, the
+// nonce construction, teardown zeroization, and the keyed-BLAKE3 shape of the
+// packet MAC and re-key confirm — must live here.  The observable pins that
+// `port` relies on are in `crypto/tests/session.rs` through the public API.
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use zeroize::Zeroizing;
+
+    use super::*;
+
+    /// The fixed 32-byte secret: bytes 0x00..=0x1f.
+    fn secret() -> Key {
+        let mut bytes = [0u8; 32];
+        for (i, byte) in bytes.iter_mut().enumerate() {
+            *byte = i as u8;
+        }
+        Key::from_bytes(bytes)
+    }
+
+    /// The fixed 32-byte transcript: bytes 0x20..=0x3f.
+    fn transcript() -> [u8; 32] {
+        let mut bytes = [0u8; 32];
+        for (i, byte) in bytes.iter_mut().enumerate() {
+            *byte = 0x20 + i as u8;
+        }
+        bytes
+    }
+
+    /// Decode 32 bytes from a 64-digit hex string.
+    fn hex32(hex: &str) -> [u8; 32] {
+        assert_eq!(hex.len(), 64, "a key literal is 32 bytes of hex");
+        let bytes = hex.as_bytes();
+        let mut out = [0u8; 32];
+        for (i, byte) in out.iter_mut().enumerate() {
+            let pair = core::str::from_utf8(&bytes[2 * i..2 * i + 2]).expect("hex is ascii");
+            *byte = u8::from_str_radix(pair, 16).expect("hex digits");
+        }
+        out
+    }
+
+    /// Decode 4 bytes from an 8-digit hex string.
+    fn hex4(hex: &str) -> [u8; 4] {
+        assert_eq!(hex.len(), 8, "a prefix literal is 4 bytes of hex");
+        let bytes = hex.as_bytes();
+        let mut out = [0u8; 4];
+        for (i, byte) in out.iter_mut().enumerate() {
+            let pair = core::str::from_utf8(&bytes[2 * i..2 * i + 2]).expect("hex is ascii");
+            *byte = u8::from_str_radix(pair, 16).expect("hex digits");
+        }
+        out
+    }
+
+    // The six outputs for `secret()`, `transcript()` and generation 0,
+    // computed outside this crate with one Python 3 command: HKDF-Extract
+    // (salt = transcript, IKM = secret) then HKDF-Expand per RFC 5869 §2.3
+    // with the 18-byte P2 `info`.  The command and its output are recorded in
+    // `evidence/PINS-04-03.md` (`KAT session-derive command:`); these
+    // constants are copied from that line, never re-derived here.
+    const C2S_ENC: &str = "5cfd0495d1185d5f5bee5e8f05e5360364f338ddf3c347f2976374e36ca849c0";
+    const C2S_MAC: &str = "33932a90a4233c494b252019695785875a05e5ecc9ed5e1b186ad1a8cdc83152";
+    const C2S_PREFIX: &str = "eb77e035";
+    const S2C_ENC: &str = "8634e6b17394921327d205e39691a8e85fc3c45123d2a110aa7e73bc20d0d37f";
+    const S2C_MAC: &str = "3a770d89cf7b692bb0a8facc52553a945adc0b39c7d822f8cf7179857138d33a";
+    const S2C_PREFIX: &str = "7633fe7a";
+
+    #[test]
+    fn session_derive_known_answer() {
+        let keys = derive(&secret(), &transcript(), 0);
+
+        assert_eq!(keys.c2s.k_enc.bytes(), &hex32(C2S_ENC), "c2s cipher key");
+        assert_eq!(keys.c2s.k_mac.bytes(), &hex32(C2S_MAC), "c2s MAC key");
+        assert_eq!(&keys.c2s.prefix[..], &hex4(C2S_PREFIX)[..], "c2s prefix");
+        assert_eq!(keys.s2c.k_enc.bytes(), &hex32(S2C_ENC), "s2c cipher key");
+        assert_eq!(keys.s2c.k_mac.bytes(), &hex32(S2C_MAC), "s2c MAC key");
+        assert_eq!(&keys.s2c.prefix[..], &hex4(S2C_PREFIX)[..], "s2c prefix");
+    }
+
+    #[test]
+    fn session_nonce_is_prefix_then_sequence_le() {
+        let keys = derive(&secret(), &transcript(), 0);
+
+        for seq in [0u64, 1, u64::MAX - 1] {
+            let counter = 0;
+            let mut got = [0u8; 96];
+            keys.c2s.keystream(seq, counter, &mut got).expect("within the counter limit");
+
+            // The independent side: the same primitive called with the nonce
+            // built by hand as prefix then the sequence little-endian.
+            let mut nonce = [0u8; 12];
+            nonce[..PREFIX_LEN].copy_from_slice(&keys.c2s.prefix[..]);
+            nonce[PREFIX_LEN..].copy_from_slice(&seq.to_le_bytes());
+            let mut want = [0u8; 96];
+            crate::page::chacha20_xor(keys.c2s.k_enc.bytes(), &nonce, counter, &mut want)
+                .expect("within the counter limit");
+
+            assert_eq!(got, want, "the nonce for sequence {seq} is prefix then sequence LE");
+        }
+    }
+
+    /// A `DirectionKeys` built directly from raw bytes, for the byte-level
+    /// zeroization pins.
+    fn direction_bytes(
+        cipher: [u8; 32],
+        mac: [u8; 32],
+        prefix: [u8; PREFIX_LEN],
+    ) -> DirectionKeys {
+        DirectionKeys {
+            k_enc: Key::from_bytes(cipher),
+            k_mac: Key::from_bytes(mac),
+            prefix: Zeroizing::new(prefix),
+        }
+    }
+
+    #[test]
+    fn session_zeroize_clears_every_key_byte_and_prefix() {
+        let mut keys = derive(&secret(), &transcript(), 0);
+
+        // Before teardown none of the six derived values is all zero.
+        for (name, bytes) in [
+            ("c2s cipher", &keys.c2s.k_enc.bytes()[..]),
+            ("c2s MAC", &keys.c2s.k_mac.bytes()[..]),
+            ("s2c cipher", &keys.s2c.k_enc.bytes()[..]),
+            ("s2c MAC", &keys.s2c.k_mac.bytes()[..]),
+            ("c2s prefix", &keys.c2s.prefix[..]),
+            ("s2c prefix", &keys.s2c.prefix[..]),
+        ] {
+            assert!(bytes.iter().any(|byte| *byte != 0), "the fresh {name} is not all zero");
+        }
+
+        keys.zeroize();
+
+        for (name, bytes) in [
+            ("c2s cipher", &keys.c2s.k_enc.bytes()[..]),
+            ("c2s MAC", &keys.c2s.k_mac.bytes()[..]),
+            ("s2c cipher", &keys.s2c.k_enc.bytes()[..]),
+            ("s2c MAC", &keys.s2c.k_mac.bytes()[..]),
+            ("c2s prefix", &keys.c2s.prefix[..]),
+            ("s2c prefix", &keys.s2c.prefix[..]),
+        ] {
+            assert!(bytes.iter().all(|byte| *byte == 0), "zeroize must clear the {name}");
+        }
+    }
+
+    #[test]
+    fn session_is_zeroized_agrees_with_the_bytes() {
+        let mut keys = derive(&secret(), &transcript(), 0);
+        assert!(!keys.is_zeroized(), "fresh keys are not zeroized");
+        assert!(!keys.c2s.is_zeroized(), "fresh c2s keys are not zeroized");
+        assert!(!keys.s2c.is_zeroized(), "fresh s2c keys are not zeroized");
+
+        keys.c2s.zeroize();
+        assert!(keys.c2s.is_zeroized(), "c2s is zeroized on its own");
+        assert!(!keys.s2c.is_zeroized(), "s2c is untouched");
+        assert!(!keys.is_zeroized(), "the pair is not zeroized while s2c is live");
+
+        keys.zeroize();
+        assert!(keys.c2s.is_zeroized() && keys.s2c.is_zeroized() && keys.is_zeroized());
+
+        // One non-zero byte in each of the 68 covered positions (32 cipher,
+        // 32 MAC, 4 prefix) makes `is_zeroized` false.
+        for position in 0..68 {
+            let mut bytes = [0u8; 68];
+            bytes[position] = 1;
+            let one_byte = direction_bytes(
+                bytes[..32].try_into().expect("32 cipher bytes"),
+                bytes[32..64].try_into().expect("32 MAC bytes"),
+                bytes[64..68].try_into().expect("4 prefix bytes"),
+            );
+            assert!(
+                !one_byte.is_zeroized(),
+                "a single non-zero byte at position {position} must answer false"
+            );
+        }
+    }
+
+    #[test]
+    fn session_packet_mac_is_keyed_blake3_under_the_mac_key() {
+        let keys = derive(&secret(), &transcript(), 0);
+        let message = [0xa5u8; 100];
+
+        let mut mac = keys.c2s.mac();
+        mac.update(&message);
+        let c2s_tag = mac.finalize();
+        assert_eq!(
+            c2s_tag,
+            crate::mac::blake3_keyed(&hex32(C2S_MAC), &message),
+            "the c2s packet MAC is keyed BLAKE3 under the Python-derived c2s MAC key"
+        );
+
+        let mut mac = keys.s2c.mac();
+        mac.update(&message);
+        let s2c_tag = mac.finalize();
+        assert_eq!(
+            s2c_tag,
+            crate::mac::blake3_keyed(&hex32(S2C_MAC), &message),
+            "the s2c packet MAC is keyed BLAKE3 under the Python-derived s2c MAC key"
+        );
+
+        assert_ne!(
+            c2s_tag,
+            crate::mac::blake3_keyed(&hex32(C2S_ENC), &message),
+            "the packet MAC is not computed under the cipher key"
+        );
+    }
+
+    #[test]
+    fn session_rekey_confirm_is_keyed_blake3_of_label_and_generation() {
+        let keys = derive(&secret(), &transcript(), 0);
+
+        for generation in [0u32, 1, 0x0102_0304] {
+            // The label is a literal here, from the DECISION P3 value.
+            let mut message = [0u8; 16];
+            message[..12].copy_from_slice(b"r9 rekey ack");
+            message[12..].copy_from_slice(&generation.to_le_bytes());
+
+            assert_eq!(
+                keys.c2s.rekey_confirm(generation),
+                crate::mac::blake3_keyed(&hex32(C2S_MAC), &message),
+                "c2s rekey confirm for generation {generation}"
+            );
+            assert_eq!(
+                keys.s2c.rekey_confirm(generation),
+                crate::mac::blake3_keyed(&hex32(S2C_MAC), &message),
+                "s2c rekey confirm for generation {generation}"
+            );
+        }
     }
 }
