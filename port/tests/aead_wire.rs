@@ -8,8 +8,9 @@
 
 use port::chan::wire::{self, Header};
 use port::chan::{
-    HEADER_LEN, MAC_LEN, MIN_PACKET_LEN, OFF_EXTLEN, OFF_EXTMASK, OFF_FIDHANDLE, OFF_PAD,
-    OFF_SEQ, OFF_SIZE, OFF_TAG, OFF_TYPE,
+    EXT_CAP_TOKEN, EXT_DEADLINE, EXT_KNOWN, EXT_OBINARY, EXT_QID_VOLATILITY, EXT_STATELESS_CAP,
+    EXT_STREAM_PRIO, HEADER_LEN, MAC_LEN, MIN_PACKET_LEN, OFF_EXTLEN, OFF_EXTMASK, OFF_FIDHANDLE,
+    OFF_PAD, OFF_SEQ, OFF_SIZE, OFF_TAG, OFF_TYPE,
 };
 
 #[test]
@@ -160,4 +161,142 @@ fn aead_wire_header_encode_refuses_oversize() {
     let snapshot = out;
     assert!(wire::packet_len(0, over, msize).is_err());
     assert_eq!(out, snapshot, "no output is written when the packet length is refused");
+}
+
+// ---------------------------------------------------------------------------
+// Task 2 pins: the opcode registry and the post-verification header rules
+// ---------------------------------------------------------------------------
+
+/// The registry written by hand from fcall.h (100 to 127, `Terror` 106
+/// illegal) and RFC section 6.1 (130 to 137), plus P3's re-key pair.
+const REGISTRY: [(u8, &str); 37] = [
+    (100, "Tversion"),
+    (101, "Rversion"),
+    (102, "Tauth"),
+    (103, "Rauth"),
+    (104, "Tattach"),
+    (105, "Rattach"),
+    (107, "Rerror"),
+    (108, "Tflush"),
+    (109, "Rflush"),
+    (110, "Twalk"),
+    (111, "Rwalk"),
+    (112, "Topen"),
+    (113, "Ropen"),
+    (114, "Tcreate"),
+    (115, "Rcreate"),
+    (116, "Tread"),
+    (117, "Rread"),
+    (118, "Twrite"),
+    (119, "Rwrite"),
+    (120, "Tclunk"),
+    (121, "Rclunk"),
+    (122, "Tremove"),
+    (123, "Rremove"),
+    (124, "Tstat"),
+    (125, "Rstat"),
+    (126, "Twstat"),
+    (127, "Rwstat"),
+    (130, "Tcompound"),
+    (131, "Rcompound"),
+    (132, "Tstream"),
+    (133, "Rstream"),
+    (134, "Tlease_revoke"),
+    (135, "Rlease_ack"),
+    (136, "Treclaim"),
+    (137, "Rreclaim"),
+    (138, "Trekey"),
+    (139, "Rrekey"),
+];
+
+#[test]
+fn aead_wire_registry_table_is_pinned() {
+    for &(value, name) in REGISTRY.iter() {
+        assert_eq!(wire::opcode_name(value), Some(name), "opcode {value} names {name}");
+    }
+    for value in 0u8..=u8::MAX {
+        if REGISTRY.iter().all(|&(known, _)| known != value) {
+            assert_eq!(wire::opcode_name(value), None, "opcode {value} is not in the registry");
+        }
+    }
+    assert_eq!(
+        EXT_KNOWN,
+        EXT_DEADLINE | EXT_CAP_TOKEN | EXT_QID_VOLATILITY | EXT_STREAM_PRIO | EXT_OBINARY
+            | EXT_STATELESS_CAP,
+        "EXT_KNOWN is exactly the OR of the six mask constants (P1)"
+    );
+}
+
+#[test]
+fn aead_wire_registry_rejects_terror_and_gaps() {
+    for value in [106u8, 128, 129, 140] {
+        assert_eq!(wire::opcode_name(value), None, "opcode {value} must be unknown");
+    }
+    assert!(wire::opcode_name(107).is_some(), "Rerror (107) is in the base set (D-28)");
+    assert!(
+        wire::opcode_name(108).is_some() && wire::opcode_name(109).is_some(),
+        "Tflush and Rflush (108/109) are in the base set (D-28)"
+    );
+    for value in 0u8..=u8::MAX {
+        let known = wire::opcode_name(value).is_some();
+        assert_eq!(
+            wire::is_t_message(value),
+            known && value % 2 == 0,
+            "is_t_message is true exactly for the even T opcodes (opcode {value})"
+        );
+    }
+}
+
+#[test]
+fn aead_wire_header_rules_after_verification() {
+    fn h(typ: u8, pad: u8, ext_mask: u16, ext_len: u16, fid_handle: [u8; 8]) -> Header {
+        Header { size: 60, typ, tag: 7, pad, fid_handle, seq: 3, ext_mask, ext_len }
+    }
+
+    // Accepted: a plain header (a non-zero handle with no capability bit is
+    // legal), and the capability bit with an all-zero handle (D-12).
+    assert!(wire::check_header(&h(118, 0, 0, 0, [9; 8]), 60).is_ok(), "a plain Twrite header is accepted");
+    assert!(
+        wire::check_header(&h(118, 0, EXT_DEADLINE, 16, [9; 8]), 76).is_ok(),
+        "a deadline TLV of its padded 16 bytes is accepted"
+    );
+    assert!(
+        wire::check_header(&h(118, 0, EXT_STATELESS_CAP, 32, [0; 8]), 92).is_ok(),
+        "the capability bit with an all-zero handle is accepted"
+    );
+
+    // Rejected: a non-zero Pad.
+    assert!(wire::check_header(&h(118, 1, 0, 0, [0; 8]), 60).is_err(), "a non-zero Pad is rejected");
+    // Rejected: an unknown or illegal opcode.
+    assert!(wire::check_header(&h(106, 0, 0, 0, [0; 8]), 60).is_err(), "Terror (106) is rejected");
+    assert!(wire::check_header(&h(140, 0, 0, 0, [0; 8]), 60).is_err(), "opcode 140 is rejected");
+    // Rejected: a mask bit outside EXT_KNOWN.
+    assert!(
+        wire::check_header(&h(118, 0, EXT_DEADLINE | 0x0040, 8, [0; 8]), 68).is_err(),
+        "an ExtMask bit outside EXT_KNOWN is rejected"
+    );
+    // Rejected: a TLV length inconsistent with the mask.
+    assert!(
+        wire::check_header(&h(118, 0, 0, 8, [0; 8]), 68).is_err(),
+        "a non-zero TLV length with a zero mask is rejected"
+    );
+    assert!(
+        wire::check_header(&h(118, 0, EXT_DEADLINE, 0, [0; 8]), 60).is_err(),
+        "a zero TLV length with a non-zero mask is rejected"
+    );
+    // Rejected: a TLV area that is not a multiple of 8, or that runs past the
+    // packet.
+    assert!(
+        wire::check_header(&h(118, 0, EXT_STREAM_PRIO, 4, [0; 8]), 64).is_err(),
+        "a TLV area length that is not a multiple of 8 is rejected"
+    );
+    assert!(
+        wire::check_header(&h(118, 0, EXT_DEADLINE, 8, [0; 8]), 60).is_err(),
+        "a TLV area that runs past the packet is rejected"
+    );
+    // Rejected: the capability bit with a non-zero header handle (D-12).
+    assert!(
+        wire::check_header(&h(118, 0, EXT_STATELESS_CAP, 32, [1, 0, 0, 0, 0, 0, 0, 0]), 92).is_err(),
+        "the capability bit with a non-zero header handle is rejected"
+    );
 }

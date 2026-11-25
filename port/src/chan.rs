@@ -68,3 +68,18 @@ pub const PAGE_LEN: usize = 4096;
 
 /// The smallest complete packet: the header and the MAC, with an empty body.
 pub const MIN_PACKET_LEN: usize = HEADER_LEN + MAC_LEN;
+
+/// `EXT_DEADLINE` (P1): the deadline extension bit; value 8 bytes.
+pub const EXT_DEADLINE: u16 = 1 << 0;
+/// `EXT_CAP_TOKEN` (P1): the per-user capability token; value 32 bytes.
+pub const EXT_CAP_TOKEN: u16 = 1 << 1;
+/// `EXT_QID_VOLATILITY` (P1): the volatility class record.
+pub const EXT_QID_VOLATILITY: u16 = 1 << 2;
+/// `EXT_STREAM_PRIO` (P1): the stream priority record; value 4 bytes.
+pub const EXT_STREAM_PRIO: u16 = 1 << 3;
+/// `EXT_OBINARY` (P1): the binary-open marker; value 0 bytes.
+pub const EXT_OBINARY: u16 = 1 << 4;
+/// `EXT_STATELESS_CAP` (P1, D-11): the capability TLV bit; value 24 bytes.
+pub const EXT_STATELESS_CAP: u16 = 1 << 5;
+/// Every `ExtMask` bit this dialect knows (P1): the OR of the six above.
+pub const EXT_KNOWN: u16 = 0x003F;

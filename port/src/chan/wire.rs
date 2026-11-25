@@ -15,8 +15,8 @@
 //! module stays inside `port`'s per-module forbid.
 
 use super::{
-    HEADER_LEN, MAC_LEN, MIN_PACKET_LEN, OFF_EXTLEN, OFF_EXTMASK, OFF_FIDHANDLE, OFF_PAD,
-    OFF_SEQ, OFF_SIZE, OFF_TAG, OFF_TYPE,
+    EXT_KNOWN, EXT_STATELESS_CAP, HEADER_LEN, MAC_LEN, MIN_PACKET_LEN, OFF_EXTLEN, OFF_EXTMASK,
+    OFF_FIDHANDLE, OFF_PAD, OFF_SEQ, OFF_SIZE, OFF_TAG, OFF_TYPE,
 };
 
 /// The fixed 28-byte envelope header (D-06).
@@ -124,4 +124,159 @@ pub fn packet_len(tlv_len: usize, body_len: usize, msize: u32) -> crate::Result<
         return Err("chan: packet exceeds negotiated msize");
     }
     Ok(size)
+}
+
+// ---------------------------------------------------------------------------
+// The opcode registry (WIRE-06, D-28; fcall.h and RFC section 6.1)
+// ---------------------------------------------------------------------------
+
+/// fcall.h `Tversion`: negotiate the dialect and message unit.
+pub const TVERSION: u8 = 100;
+/// fcall.h `Rversion`.
+pub const RVERSION: u8 = 101;
+/// fcall.h `Tauth`.
+pub const TAUTH: u8 = 102;
+/// fcall.h `Rauth`.
+pub const RAUTH: u8 = 103;
+/// fcall.h `Tattach`.
+pub const TATTACH: u8 = 104;
+/// fcall.h `Rattach`.
+pub const RATTACH: u8 = 105;
+/// fcall.h `Rerror`.  106 (`Terror`) is illegal and deliberately absent.
+pub const RERROR: u8 = 107;
+/// fcall.h `Tflush`.
+pub const TFLUSH: u8 = 108;
+/// fcall.h `Rflush`.
+pub const RFLUSH: u8 = 109;
+/// fcall.h `Twalk`.
+pub const TWALK: u8 = 110;
+/// fcall.h `Rwalk`.
+pub const RWALK: u8 = 111;
+/// fcall.h `Topen`.
+pub const TOPEN: u8 = 112;
+/// fcall.h `Ropen`.
+pub const ROPEN: u8 = 113;
+/// fcall.h `Tcreate`.
+pub const TCREATE: u8 = 114;
+/// fcall.h `Rcreate`.
+pub const RCREATE: u8 = 115;
+/// fcall.h `Tread`.
+pub const TREAD: u8 = 116;
+/// fcall.h `Rread`.
+pub const RREAD: u8 = 117;
+/// fcall.h `Twrite`.
+pub const TWRITE: u8 = 118;
+/// fcall.h `Rwrite`.
+pub const RWRITE: u8 = 119;
+/// fcall.h `Tclunk`.
+pub const TCLUNK: u8 = 120;
+/// fcall.h `Rclunk`.
+pub const RCLUNK: u8 = 121;
+/// fcall.h `Tremove`.
+pub const TREMOVE: u8 = 122;
+/// fcall.h `Rremove`.
+pub const RREMOVE: u8 = 123;
+/// fcall.h `Tstat`.
+pub const TSTAT: u8 = 124;
+/// fcall.h `Rstat`.
+pub const RSTAT: u8 = 125;
+/// fcall.h `Twstat`.
+pub const TWSTAT: u8 = 126;
+/// fcall.h `Rwstat`.
+pub const RWSTAT: u8 = 127;
+
+/// RFC section 6.1 `Tcompound`: an atomic multi-operation pipeline.
+pub const TCOMPOUND: u8 = 130;
+/// RFC section 6.1 `Rcompound`.
+pub const RCOMPOUND: u8 = 131;
+/// RFC section 6.1 `Tstream`.
+pub const TSTREAM: u8 = 132;
+/// RFC section 6.1 `Rstream`.
+pub const RSTREAM: u8 = 133;
+/// RFC section 6.1 `Tlease_revoke`.
+pub const TLEASE_REVOKE: u8 = 134;
+/// RFC section 6.1 `Rlease_ack`.
+pub const RLEASE_ACK: u8 = 135;
+/// RFC section 6.1 `Treclaim`.
+pub const TRECLAIM: u8 = 136;
+/// RFC section 6.1 `Rreclaim`.
+pub const RRECLAIM: u8 = 137;
+/// P3 `Trekey`: the in-band re-key request.
+pub const TREKEY: u8 = 138;
+/// P3 `Rrekey`: the in-band re-key answer.
+pub const RREKEY: u8 = 139;
+
+/// The canonical name of a registry opcode, or `None` when the value is not
+/// in the dialect's registry (WIRE-06, D-28).
+pub fn opcode_name(_typ: u8) -> Option<&'static str> {
+    None
+}
+
+/// Whether `typ` names a T-message (an even, known opcode).
+pub fn is_t_message(_typ: u8) -> bool {
+    false
+}
+
+// ---------------------------------------------------------------------------
+// Unverified and Verified (WIRE-03, T-04-12)
+// ---------------------------------------------------------------------------
+
+/// A packet whose `Size` has been bounded but whose MAC has not checked.
+///
+/// Only [`Unverified::len`] is readable, so no decode can run on
+/// unauthenticated bytes (WIRE-03).
+pub struct Unverified<'a> {
+    packet: &'a mut [u8],
+}
+
+impl<'a> Unverified<'a> {
+    /// Bound `packet` by its claimed `Size` (T-04-11).
+    pub fn new(packet: &'a mut [u8], _msize: u32) -> crate::Result<Unverified<'a>> {
+        Ok(Unverified { packet })
+    }
+
+    /// The whole packet length.
+    pub fn len(&self) -> usize {
+        0
+    }
+}
+
+/// A packet whose MAC has verified: its header, TLV area and plaintext body
+/// are readable (WIRE-03, T-04-12).
+pub struct Verified<'a> {
+    header: Header,
+    tlvs: &'a [u8],
+    body: &'a [u8],
+}
+
+impl<'a> Verified<'a> {
+    /// The only constructor: crate-private, called by `chan::transport` after
+    /// the packet MAC verifies.
+    pub(crate) fn new_verified(
+        header: Header,
+        _packet: &'a [u8],
+    ) -> crate::Result<Verified<'a>> {
+        Ok(Verified { header, tlvs: &[], body: &[] })
+    }
+
+    /// The verified header.
+    pub fn header(&self) -> &Header {
+        &self.header
+    }
+
+    /// The cleartext, authenticated TLV area.
+    pub fn tlvs(&self) -> &'a [u8] {
+        self.tlvs
+    }
+
+    /// The decrypted message body.
+    pub fn body(&self) -> &'a [u8] {
+        self.body
+    }
+}
+
+/// Check every header field that is only meaningful after the MAC verifies
+/// (RESEARCH Pattern 2 step 4; D-12).
+pub fn check_header(_header: &Header, _packet_len: usize) -> crate::Result<()> {
+    Ok(())
 }
