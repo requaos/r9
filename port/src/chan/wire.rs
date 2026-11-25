@@ -208,13 +208,55 @@ pub const RREKEY: u8 = 139;
 
 /// The canonical name of a registry opcode, or `None` when the value is not
 /// in the dialect's registry (WIRE-06, D-28).
-pub fn opcode_name(_typ: u8) -> Option<&'static str> {
-    None
+///
+/// `Terror` (106) is illegal and absent; 128 and 129 are the gap before the
+/// new pair set; every value above 139 is unknown.
+pub fn opcode_name(typ: u8) -> Option<&'static str> {
+    Some(match typ {
+        TVERSION => "Tversion",
+        RVERSION => "Rversion",
+        TAUTH => "Tauth",
+        RAUTH => "Rauth",
+        TATTACH => "Tattach",
+        RATTACH => "Rattach",
+        RERROR => "Rerror",
+        TFLUSH => "Tflush",
+        RFLUSH => "Rflush",
+        TWALK => "Twalk",
+        RWALK => "Rwalk",
+        TOPEN => "Topen",
+        ROPEN => "Ropen",
+        TCREATE => "Tcreate",
+        RCREATE => "Rcreate",
+        TREAD => "Tread",
+        RREAD => "Rread",
+        TWRITE => "Twrite",
+        RWRITE => "Rwrite",
+        TCLUNK => "Tclunk",
+        RCLUNK => "Rclunk",
+        TREMOVE => "Tremove",
+        RREMOVE => "Rremove",
+        TSTAT => "Tstat",
+        RSTAT => "Rstat",
+        TWSTAT => "Twstat",
+        RWSTAT => "Rwstat",
+        TCOMPOUND => "Tcompound",
+        RCOMPOUND => "Rcompound",
+        TSTREAM => "Tstream",
+        RSTREAM => "Rstream",
+        TLEASE_REVOKE => "Tlease_revoke",
+        RLEASE_ACK => "Rlease_ack",
+        TRECLAIM => "Treclaim",
+        RRECLAIM => "Rreclaim",
+        TREKEY => "Trekey",
+        RREKEY => "Rrekey",
+        _ => return None,
+    })
 }
 
-/// Whether `typ` names a T-message (an even, known opcode).
-pub fn is_t_message(_typ: u8) -> bool {
-    false
+/// Whether `typ` names a T-message: a known, even opcode.
+pub fn is_t_message(typ: u8) -> bool {
+    opcode_name(typ).is_some() && typ.is_multiple_of(2)
 }
 
 // ---------------------------------------------------------------------------
@@ -229,15 +271,28 @@ pub struct Unverified<'a> {
     packet: &'a mut [u8],
 }
 
+#[allow(clippy::len_without_is_empty)] // the plan's only accessor is `len`
 impl<'a> Unverified<'a> {
     /// Bound `packet` by its claimed `Size` (T-04-11).
-    pub fn new(packet: &'a mut [u8], _msize: u32) -> crate::Result<Unverified<'a>> {
+    ///
+    /// `frame_size` applies both bounds — at least [`MIN_PACKET_LEN`] and at
+    /// most the negotiated msize — before any body byte is read, and the
+    /// slice length must equal the claimed `Size`.
+    pub fn new(packet: &'a mut [u8], msize: u32) -> crate::Result<Unverified<'a>> {
+        if packet.len() < 4 {
+            return Err("chan: runt packet");
+        }
+        let prefix: [u8; 4] = packet[..4].try_into().expect("the Size slice is 4 bytes");
+        let size = frame_size(&prefix, msize)?;
+        if size != packet.len() {
+            return Err("chan: packet length disagrees with its size field");
+        }
         Ok(Unverified { packet })
     }
 
-    /// The whole packet length.
+    /// The whole packet length, already bounded against `msize`.
     pub fn len(&self) -> usize {
-        0
+        self.packet.len()
     }
 }
 
@@ -252,11 +307,26 @@ pub struct Verified<'a> {
 impl<'a> Verified<'a> {
     /// The only constructor: crate-private, called by `chan::transport` after
     /// the packet MAC verifies.
-    pub(crate) fn new_verified(
-        header: Header,
-        _packet: &'a [u8],
-    ) -> crate::Result<Verified<'a>> {
-        Ok(Verified { header, tlvs: &[], body: &[] })
+    ///
+    /// The header's `ext_len` splits the cleartext TLV area from the
+    /// decrypted body; both slices are bounds-checked, never indexed on a
+    /// value that came off the wire.
+    pub(crate) fn new_verified(header: Header, packet: &'a [u8]) -> crate::Result<Verified<'a>> {
+        let size = header.size as usize;
+        if size < MAC_LEN {
+            return Err("chan: verified packet length below the MAC length");
+        }
+        let tlv_end = HEADER_LEN
+            .checked_add(header.ext_len as usize)
+            .ok_or("chan: TLV area length overflows usize")?;
+        let body_end = size - MAC_LEN;
+        let Some(tlvs) = packet.get(HEADER_LEN..tlv_end) else {
+            return Err("chan: TLV area runs past the packet");
+        };
+        let Some(body) = packet.get(tlv_end..body_end) else {
+            return Err("chan: TLV area runs past the packet");
+        };
+        Ok(Verified { header, tlvs, body })
     }
 
     /// The verified header.
@@ -277,6 +347,38 @@ impl<'a> Verified<'a> {
 
 /// Check every header field that is only meaningful after the MAC verifies
 /// (RESEARCH Pattern 2 step 4; D-12).
-pub fn check_header(_header: &Header, _packet_len: usize) -> crate::Result<()> {
+///
+/// `packet_len` is the whole packet length, so the TLV area must end before
+/// the MAC.  Any failure here is a protocol error: both ends agreed the exact
+/// dialect string, so there is nothing to skip gracefully.
+pub fn check_header(header: &Header, packet_len: usize) -> crate::Result<()> {
+    if header.pad != 0 {
+        return Err("chan: nonzero Pad");
+    }
+    if opcode_name(header.typ).is_none() {
+        return Err("chan: unknown opcode");
+    }
+    if header.ext_mask & !EXT_KNOWN != 0 {
+        return Err("chan: ExtMask bit outside EXT_KNOWN");
+    }
+    let ext_len = header.ext_len as usize;
+    if header.ext_mask == 0 && ext_len != 0 {
+        return Err("chan: nonzero TLV area length with a zero ExtMask");
+    }
+    if header.ext_mask != 0 && ext_len == 0 {
+        return Err("chan: zero TLV area length with a nonzero ExtMask");
+    }
+    if !ext_len.is_multiple_of(8) {
+        return Err("chan: TLV area length is not a multiple of 8");
+    }
+    let tlv_end = HEADER_LEN + ext_len;
+    if packet_len < MAC_LEN || tlv_end > packet_len - MAC_LEN {
+        return Err("chan: TLV area runs past the packet");
+    }
+    // D-12: the capability bit is the discriminator between the two handle
+    // kinds, and a stateful handle's TinyPtr byte is never zero.
+    if header.ext_mask & EXT_STATELESS_CAP != 0 && header.fid_handle != [0u8; 8] {
+        return Err("chan: capability bit with a nonzero header handle");
+    }
     Ok(())
 }

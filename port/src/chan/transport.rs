@@ -15,7 +15,7 @@ use alloc::vec::Vec;
 
 use crypto::session::DirectionKeys;
 
-use super::wire::{Header, frame_size, packet_len};
+use super::wire::{Header, Unverified, Verified, check_header, packet_len};
 use super::{HEADER_LEN, MAC_LEN};
 
 /// Seal one packet: header, encrypted body, MAC (D-06, D-07).
@@ -58,7 +58,8 @@ pub fn seal_packet(
     Ok(packet)
 }
 
-/// Open one packet: bounds, MAC, sequence, then decrypt (D-07, WIRE-03).
+/// Open one packet: bounds, MAC, sequence, header rules, then decrypt
+/// (D-07, WIRE-03).
 ///
 /// `Size` is the only field read before the MAC verifies, and only to bound
 /// the packet; every other field is acted on only after verification
@@ -69,33 +70,36 @@ pub fn open_packet(
     msize: u32,
     packet: &[u8],
 ) -> crate::Result<(u8, u16, [u8; 8], Vec<u8>)> {
-    if packet.len() < HEADER_LEN + MAC_LEN {
-        return Err("chan: runt packet");
-    }
-    let prefix: [u8; 4] = packet[..4].try_into().expect("the Size slice is 4 bytes");
-    let size = frame_size(&prefix, msize)?;
-    if size != packet.len() {
-        return Err("chan: packet length disagrees with its size field");
-    }
+    // The receive path decrypts in place and the public signature is
+    // read-only (the tracer passes a shared slice), so one copy is made
+    // here.  It is not a second parse: `Unverified::new` applies the bounds
+    // to the copy first, exactly as `frame_one` does for plain 9P.
+    let mut buf = packet.to_vec();
+    let unverified = Unverified::new(&mut buf, msize)?;
+    let size = unverified.len();
 
     // Verify before acting on any field but Size (D-07).
     let mut mac = keys.mac();
-    mac.update(&packet[..size - MAC_LEN]);
+    mac.update(&buf[..size - MAC_LEN]);
     let tag: [u8; MAC_LEN] =
-        packet[size - MAC_LEN..].try_into().expect("the tag slice is exactly MAC_LEN bytes");
+        buf[size - MAC_LEN..].try_into().expect("the tag slice is exactly MAC_LEN bytes");
     mac.verify(&tag).map_err(|_| "chan: packet MAC does not verify")?;
 
-    // Only now read the header, and then compare the sequence number
-    // (WIRE-04).
+    // Only now read the header, check every field, and compare the sequence
+    // number (RESEARCH Pattern 2 steps 3 and 4; WIRE-04).
     let header = Header::decode(
-        (&packet[..HEADER_LEN]).try_into().expect("the header slice is exactly HEADER_LEN bytes"),
+        (&buf[..HEADER_LEN]).try_into().expect("the header slice is exactly HEADER_LEN bytes"),
     );
     if header.seq != expected_seq {
         return Err("chan: unexpected sequence number");
     }
+    check_header(&header, size)?;
 
-    let mut body = packet[HEADER_LEN..size - MAC_LEN].to_vec();
-    keys.keystream(header.seq, 0, &mut body)
+    // Decrypt the body only: the TLV area travels cleartext and is covered by
+    // the MAC.  Then hand the split packet to the decoder (WIRE-03).
+    let body_start = HEADER_LEN + header.ext_len as usize;
+    keys.keystream(header.seq, 0, &mut buf[body_start..size - MAC_LEN])
         .map_err(|_| "chan: keystream counter overflow")?;
-    Ok((header.typ, header.tag, header.fid_handle, body))
+    let verified = Verified::new_verified(header, &buf)?;
+    Ok((header.typ, header.tag, header.fid_handle, verified.body().to_vec()))
 }
