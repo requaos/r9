@@ -1176,5 +1176,216 @@ fn aead_fid_sweep_bookkeeping_matches_live_entries_under_churn() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// The fid table on multi-block shards (WR-05 fixture; closes the
+// coincidental-reliance item: block indices above 0 exercised end to end)
+// ---------------------------------------------------------------------------
+
+/// MurmurHash3's 32-bit finalizer, re-derived in the test with its own literals
+/// so nothing here calls `ds` or `port` (`ds::tpht::feistel::mix32`).
+fn fmix32(mut h: u32) -> u32 {
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x85EB_CA6B);
+    h ^= h >> 13;
+    h = h.wrapping_mul(0xC2B2_AE35);
+    h ^= h >> 16;
+    h
+}
+
+/// The dense slot id a fid entry occupies in a shard with `blocks` home blocks:
+/// `(block << 4) | (ptr - 1)`, where the home block index is the low
+/// `log2(blocks)` bits of `client_id ^ fmix32(fid_key)`
+/// (`ds::tpht::feistel::split`).  The constants and shifts are literal here, so
+/// the model is independent of `ds` and `port`.
+fn model_slot(client_id: u32, fid_key: u32, ptr: u8, blocks: usize) -> u32 {
+    let l_prime = client_id ^ fmix32(fid_key);
+    let block = (l_prime as usize) & (blocks - 1);
+    ((block << 4) | (ptr as usize - 1)) as u32
+}
+
+#[test]
+fn aead_fid_sweep_matches_set_model_on_multi_block_shards() {
+    const BLOCKS: usize = 4;
+    for seed in 0..64u64 {
+        let table = FidTable::new(4, 4, domain_key(0x70), 0)
+            .expect("four four-block shards form a table");
+        let mut rng = XorShift64::new(0xC2B2_AE35_85EB_CA6B ^ seed);
+
+        // 120 distinct (client, fid) keys from four clients.  Four shards of
+        // four blocks hold 256 slots, so no insert runs out of room.
+        let mut seen: BTreeSet<(u32, u32)> = BTreeSet::new();
+        let mut inserted: Vec<(u32, StatefulHandle)> = Vec::new();
+        while inserted.len() < 120 {
+            let client_id = (rng.next() % 4) as u32 + 1;
+            let fid_key = (rng.next() % 4096) as u32 + 1;
+            if !seen.insert((client_id, fid_key)) {
+                continue;
+            }
+            let handle = table
+                .insert(client_id, entry_for(fid_key))
+                .expect("a fresh table has room for 120 fids");
+            inserted.push((client_id, handle));
+        }
+
+        let mut model_active: BTreeSet<(u8, u32)> = BTreeSet::new();
+        for (client_id, handle) in &inserted {
+            model_active.insert((
+                handle.shard_id,
+                model_slot(*client_id, handle.fid_key, handle.ptr.get(), BLOCKS),
+            ));
+        }
+        assert!(
+            model_active.iter().any(|&(_, slot)| slot >> 4 > 0),
+            "seed {seed}: at least one modelled entry must sit in a block above 0"
+        );
+
+        let mut model_reclaimed: BTreeSet<(u8, u32)> = BTreeSet::new();
+        for (client_id, handle) in &inserted {
+            if rng.next() % 3 == 0 {
+                table.mark_reclaimed(*client_id, handle).expect("a live handle marks reclaimed");
+                model_reclaimed.insert((
+                    handle.shard_id,
+                    model_slot(*client_id, handle.fid_key, handle.ptr.get(), BLOCKS),
+                ));
+            }
+        }
+
+        let swept: BTreeSet<(u8, u32)> = table.sweep().into_iter().collect();
+        let expected: BTreeSet<(u8, u32)> =
+            model_active.difference(&model_reclaimed).copied().collect();
+        assert_eq!(
+            swept, expected,
+            "the sweep equals active minus reclaimed on multi-block shards (seed {seed})"
+        );
+    }
+}
+
+#[test]
+fn aead_fid_resolve_is_one_arena_read_on_multi_block_shards() {
+    const BLOCKS: usize = 8;
+    let probe = CountingProbe::new();
+    let table = FidTable::with_probe(2, 8, domain_key(0x71), 5, probe.clone())
+        .expect("two eight-block shards form a table");
+
+    // Pick a fid whose home block index is above 0.
+    let fid = (1..=256u32)
+        .find(|&fid| (1u32 ^ fmix32(fid)) as usize & (BLOCKS - 1) > 0)
+        .expect("some fid homes to a block above 0");
+    let handle = table.insert(1, entry_for(fid)).expect("the shard has room for one fid");
+
+    probe.reset();
+    let resolved = table.resolve(1, &handle).expect("a live handle resolves");
+    assert_eq!(
+        (probe.arena_reads(), probe.header_reads()),
+        (1, 0),
+        "a resolve on a multi-block shard is one arena read and zero header reads (WIRE-08)"
+    );
+    assert_eq!(resolved.fid_key, fid, "the resolved entry is the inserted fid");
+    assert_eq!(
+        resolved.qid_path,
+        entry_for(fid).qid_path,
+        "the resolved entry is the inserted entry"
+    );
+    let slot = model_slot(1, handle.fid_key, handle.ptr.get(), BLOCKS);
+    assert!(slot >> 4 > 0, "the resolved entry sits in a block above 0 (slot {slot})");
+}
+
+#[test]
+fn aead_fid_clunk_on_multi_block_shards_clears_only_its_slot() {
+    const BLOCKS: usize = 4;
+    let table =
+        FidTable::new(2, 4, domain_key(0x72), 3).expect("two four-block shards form a table");
+
+    let mut handles = Vec::new();
+    for fid in 1..=32u32 {
+        handles.push((fid, table.insert(1, entry_for(fid)).expect("the table has room")));
+    }
+    let victim_index = handles
+        .iter()
+        .position(|(_, handle)| model_slot(1, handle.fid_key, handle.ptr.get(), BLOCKS) >> 4 > 0)
+        .expect("at least one handle sits in a block above 0");
+    let (victim_fid, victim) = handles[victim_index];
+
+    let shard = victim.shard_id;
+    let (active_before, _) = table.bitmap_lens(shard).expect("the shard is in range");
+
+    table.clunk(1, &victim).expect("clunking a live handle succeeds");
+
+    assert!(
+        table.resolve(1, &victim).is_err(),
+        "the clunked handle in a block above 0 no longer resolves"
+    );
+    for (index, (fid, handle)) in handles.iter().enumerate() {
+        if index != victim_index {
+            assert!(
+                table.resolve(1, handle).is_ok(),
+                "every other handle still resolves (fid {fid})"
+            );
+        }
+    }
+    let (active_after, _) = table.bitmap_lens(shard).expect("the shard is in range");
+    assert_eq!(
+        active_after + 1,
+        active_before,
+        "the clunk lowers the shard's active count by exactly one (victim fid {victim_fid})"
+    );
+}
+
+#[test]
+fn aead_fid_sweep_survivors_on_multi_block_shards() {
+    const BLOCKS: usize = 4;
+    let table =
+        FidTable::new(2, 4, domain_key(0x73), 0).expect("two four-block shards form a table");
+
+    let mut handles = Vec::new();
+    for fid in 1..=32u32 {
+        handles.push((fid, table.insert(1, entry_for(fid)).expect("the table has room")));
+    }
+    // Mark every other entry reclaimed, so survivors and sweep targets are
+    // interleaved across blocks.
+    let mut reclaimed = Vec::new();
+    for (index, (fid, handle)) in handles.iter().enumerate() {
+        if index % 2 == 0 {
+            table.mark_reclaimed(1, handle).expect("a live handle marks reclaimed");
+            reclaimed.push((*fid, *handle));
+        }
+    }
+    assert!(
+        reclaimed
+            .iter()
+            .any(|(_, handle)| model_slot(1, handle.fid_key, handle.ptr.get(), BLOCKS) >> 4 > 0),
+        "at least one reclaimed entry sits in a block above 0"
+    );
+
+    let swept: BTreeSet<(u8, u32)> = table.sweep().into_iter().collect();
+    let mut swept_above_zero = false;
+    for (index, (fid, handle)) in handles.iter().enumerate() {
+        let slot = model_slot(1, handle.fid_key, handle.ptr.get(), BLOCKS);
+        if index % 2 == 0 {
+            assert!(
+                table.resolve(1, handle).is_ok(),
+                "a reclaimed fid in a possibly-above-0 block survives the sweep (fid {fid})"
+            );
+            assert!(
+                !swept.contains(&(handle.shard_id, slot)),
+                "a reclaimed fid is not swept (fid {fid})"
+            );
+        } else {
+            assert!(
+                swept.contains(&(handle.shard_id, slot)),
+                "a non-reclaimed active fid is swept (fid {fid})"
+            );
+            assert!(
+                table.resolve(1, handle).is_err(),
+                "a swept fid no longer resolves (fid {fid})"
+            );
+            if slot >> 4 > 0 {
+                swept_above_zero = true;
+            }
+        }
+    }
+    assert!(swept_above_zero, "at least one swept entry sat in a block above 0");
+}
+
 
 
