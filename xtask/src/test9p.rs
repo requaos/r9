@@ -38,12 +38,45 @@ pub struct CommandSpec {
 }
 
 /// The commands the step runs (a pure function: no environment, no spawn).
-pub fn command_specs(_cargo: &Path) -> Vec<CommandSpec> {
-    Vec::new()
+pub fn command_specs(cargo: &Path) -> Vec<CommandSpec> {
+    let crypto = CommandSpec {
+        program: cargo.to_path_buf(),
+        args: vec![
+            "test".to_string(),
+            "--package".to_string(),
+            "crypto".to_string(),
+            "--lib".to_string(),
+            CRYPTO_LIB_FILTER.to_string(),
+        ],
+    };
+
+    let mut port_args = vec!["test".to_string(), "--package".to_string(), "port".to_string()];
+    for name in PORT_TESTS {
+        port_args.push("--test".to_string());
+        port_args.push((*name).to_string());
+    }
+    let port = CommandSpec { program: cargo.to_path_buf(), args: port_args };
+
+    vec![crypto, port]
 }
 
 /// Refuse before anything runs when a listed test file is missing.
-pub fn preflight(_workspace: &Path) -> Result<()> {
+///
+/// A listed-but-absent file would otherwise shrink the step into a silent
+/// pass, so this names the first missing path and returns before any leg
+/// runs (T-04-51).
+pub fn preflight(workspace: &Path) -> Result<()> {
+    let mut listed: Vec<PathBuf> = PORT_TESTS
+        .iter()
+        .map(|name| workspace.join("port/tests").join(format!("{name}.rs")))
+        .collect();
+    listed.push(workspace.join("crypto/src/session.rs"));
+
+    for path in listed {
+        if !path.exists() {
+            return Err(format!("test-9p: listed test file {} is missing", path.display()).into());
+        }
+    }
     Ok(())
 }
 
@@ -112,14 +145,9 @@ mod tests {
         let missing = PORT_TESTS[0];
         let missing_path = dir.join("port/tests").join(format!("{missing}.rs"));
         fs::remove_file(&missing_path).unwrap();
-        let err = preflight(&dir)
-            .expect_err("a missing listed file must be refused")
-            .to_string();
+        let err = preflight(&dir).expect_err("a missing listed file must be refused").to_string();
         assert!(err.starts_with("test-9p:"), "carries the test-9p prefix: {err}");
-        assert!(
-            err.contains(&missing_path.display().to_string()),
-            "names the missing path: {err}"
-        );
+        assert!(err.contains(&missing_path.display().to_string()), "names the missing path: {err}");
         let _ = fs::remove_dir_all(&dir);
     }
 
