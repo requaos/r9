@@ -2,28 +2,30 @@
 
 ## Overview
 
-r9 is already a Rust kernel that boots Harvey's C userland to a shell, CPU server and rio on QEMU q35. This roadmap takes it from there to a self-hosting system with Harvey archived. It starts with a cross-build harness (Stage P0) so that every later change keeps the golden invariant: the OS boots to rio on QEMU q35 at every commit. It then builds the guide's foundations (design lock, `crypto/` and `ds/`, the `9P2000.aead` wire, cryptographic memory, distributed extensions and discovery, process lifecycle), moves to multi-CPU SMP, then the native `std` (`libstd_r9`) so that the Harvey userland port (Track P, Stages P1 to P3) is written once, in idiomatic Rust. Storage, graphics and the self-hosting toolchain follow, and the last phase archives Harvey against the owner's deprecation checklist.
+r9 is already a Rust kernel that boots Harvey's C userland to a shell, CPU server and rio on QEMU q35. This roadmap takes it from there to a self-hosting system with Harvey archived. v3.0 built the cross-build harness (Stage P0), the design lock, `crypto/` and `ds/`, and the `9P2000.aead` wire. From here the order follows the owner's v3.0 documents of 2026-11-25: a minimal two-CPU SMP bring-up first (opened by five course-correction tasks), then the distributed 9P extensions and discovery, process lifecycle and the riscv64 sync, SMP scale-out, the native `std` (`libstd_r9`), the Harvey userland port (Track P), storage, graphics and the self-hosting toolchain, and a last phase that archives Harvey.
 
-Phase order is the owner's migration plan and overrides any order inferred from the guide. GSD phase numbers are sequential integers; each phase title keeps the source document's own label ("Stage P0", "Guide Phase N", "Milestone S", "Milestone STD", "Stage P1" to "Stage P3") so it traces back. In this file "Milestone S" and "Milestone STD" are source labels for Phases 8 and 9, not roadmap milestones; roadmap milestones are the versioned groups below.
+**Rescope of 2026-11-25.** The owner's documents `docs/plan_r9_architecture_code_compendium_v3_0.md` and `docs/r9_implementation_guide_for_agentic_developers_v3_0.md` supersede the earlier guide and compendium. Software cryptographic memory is dropped (hardware MMU isolation only); `FidTable` moves to a sharded generational slab; SMP is pulled forward; Harvey's C compilers and classic APE are not ported to Rust. No phase may reintroduce software RAM encryption, `PKEY`/`WRPKRU` page-fault hooks, or Rust rewrites of `6c`/`6a`/`6l`; a proposed deviation needs a recorded owner decision first. The planning written for the old Phase 5 is archived under `.planning/milestones/superseded/`.
 
-| GSD phase | Source label | | GSD phase | Source label |
-|-----------|--------------|-|-----------|--------------|
+Phase order is the owner's plan and overrides any order inferred from the source documents. GSD phase numbers are sequential integers and keep their slots across the rescope; each phase title keeps a source label so it traces back. "Guide Phase N" now means the v3.0 guide's numbering.
+
+| GSD phase | Source label (v3.0 guide) | | GSD phase | Source label |
+|-----------|---------------------------|-|-----------|--------------|
 | 1 | Stage P0 | | 9 | Milestone STD |
-| 2 | Guide Phase 0 | | 10 | Stage P1 |
-| 3 | Guide Phase 1 | | 11 | Stage P2 |
-| 4 | Guide Phase 2 | | 12 | Stage P3 |
-| 5 | Guide Phase 3 | | 13 | Guide Phase 6 |
+| 2 | Guide Phase 0 | | 10 | Track P, Stage P1 |
+| 3 | Guide Phase 1 | | 11 | Track P, Stage P2 |
+| 4 | Guide Phase 2 | | 12 | Track P, Stage P3 |
+| 5 | Guide Phase 3 (Early SMP) and the Phase 0-2 delta | | 13 | Guide Phase 6 |
 | 6 | Guide Phase 4 | | 14 | Guide Phase 7 |
 | 7 | Guide Phase 5 | | 15 | Guide Phase 8 |
-| 8 | Milestone S | | 16 | Final (Harvey retirement) |
+| 8 | SMP scale-out (owner, 2026-11-25) | | 16 | Final (Harvey retirement) |
 
-Structure note: the standard granularity band (4-6 phases) would compress this, but the owner's plan fixes the 16-phase structure. Phases 10 to 12 (Track P, roughly 1.2 million lines of C) are expected to split into many plans, and Stage P3 may need to be subdivided at planning time.
+Structure note: the standard granularity band (4-6 phases) would compress this, but the owner's plan fixes the 16-phase structure. Phase 10 (Track P kernel devices) may run concurrently with Phases 6 and 7; Phases 11 and 12 wait for `libstd_r9`. Phases 10 to 12 are expected to split into many plans.
 
 ## Milestones
 
 - ✅ **v3.0 Cross-Build Harness and Wire Foundations** - Phases 1-4 (shipped 2026-11-25)
-- 🚧 **v3.1 Secure Memory and Cluster Fabric** - Phases 5-7 (in progress, started 2026-11-25)
-- **v3.2 SMP and Native std** - Phases 8-9 (planned)
+- 🚧 **v3.1 Early SMP and Cluster Fabric** - Phases 5-7 (in progress, started 2026-11-25; rescoped the same day)
+- **v3.2 SMP Scale-Out and Native std** - Phases 8-9 (planned)
 - **v3.3 Harvey Userland Port (Track P)** - Phases 10-12 (planned)
 - **v3.4 Storage and Graphics** - Phases 13-14 (planned)
 - **v4.0 Self-Hosting and Harvey Retirement** - Phases 15-16 (planned)
@@ -52,26 +54,26 @@ Milestone numbering continues from the closed Harvey-rooted milestone v2.1.
 
 </details>
 
-### 🚧 v3.1 Secure Memory and Cluster Fabric (In Progress)
+### 🚧 v3.1 Early SMP and Cluster Fabric (In Progress)
 
-**Milestone Goal:** Memory is cryptographically protected and demand-decrypted, the cluster can share leased state and discover its own services, and the `rfork` crypto flags are live.
+**Milestone Goal:** `main` is green and aligned with the v3.0 documents, the kernel schedules on two CPUs on both architectures with its shared structures proven under real concurrency, the cluster can share leased state and discover its own services, and note delivery is stack-safe with riscv64 brought back in step.
 
-- [ ] **Phase 5: Guide Phase 3 - Cryptographic Memory and Zero-Copy DMA Paging** - v3.0 audit follow-ups first, then sealed demand paging on both architectures in new profiles, restricted vector section, Roaring-pool allocator, `9P2000.aead` pages read straight into destination frames
+- [ ] **Phase 5: Guide Phase 3 - Early SMP, Course Correction and Memory Pools** - five course-correction tasks and the audit follow-ups first, then two-CPU bring-up on q35 and virt, SMP-safe locking, TLB shootdown, the Roaring page pools, and the 2-CPU stress gate
 - [ ] **Phase 6: Guide Phase 4 - Distributed 9P Extensions and Service Discovery** - compound, streams, leases, union mounts, legacy gateway, beacon and discover with 30s/5m lifecycle
-- [ ] **Phase 7: Guide Phase 5 - Process Lifecycle and Notes** - `RFCKEY`, `RFROBASE`, `RFRANDMEM` live, secure note delivery
+- [ ] **Phase 7: Guide Phase 5 - Process Lifecycle, Stack-Safe Notes and riscv64 Sync** - checked stack-bound note delivery, riscv64 at parity with `port::rfork` and the SMP traits
 
-#### Phase 5: Guide Phase 3 - Cryptographic Memory and Zero-Copy DMA Paging
-**Goal**: Evicted pages are stored encrypted and authenticated and come back correctly on demand on both architectures, and `9P2000.aead` data pages are read from the transport straight into their destination frames with no intermediate kernel buffer and no decrypt on receive. The phase opens by closing the v3.0 audit follow-ups.
+#### Phase 5: Guide Phase 3 - Early SMP, Course Correction and Memory Pools
+**Goal**: `main` is green and matches the v3.0 documents, and r9 schedules on two CPUs on x86_64 q35 and aarch64 virt with per-CPU state, interrupt-safe locking and TLB shootdown, so that every concurrent structure is exercised under real multi-core interrupts before the distributed and storage work is built on it.
 **Depends on**: Phase 4
-**Requirements**: MEM-01, MEM-02, MEM-03, MEM-04, MEM-05, MEM-06, MEM-07, MEM-08, MEM-09, MEM-10, MEM-11, MEM-12, MEM-13, DEBT-01, DEBT-02, DEBT-03, DEBT-04, DEBT-05
+**Requirements**: CORR-01, CORR-02, CORR-03, CORR-04, CORR-05, DEBT-01, DEBT-02, DEBT-03, DEBT-04, DEBT-05, SMP-01, SMP-02, SMP-03, SMP-04, SMP-07, SMP-08, SMP-09, MEM-07, MEM-08, MEM-10
 **Success Criteria** (what must be TRUE):
-  1. On both x86_64 and aarch64, in the sealed-paging profiles only (`q35lowmem`, which forces eviction, `q35crypt`, and their aarch64 counterparts), a demand page fault on an evicted page decrypts into a shadow frame with correct contents, and under `q35crypt` a corrupted page in the backing store is detected and the process killed. Default boots do not use sealed paging.
-  2. A `9P2000.aead` data page is read from the transport straight into its destination frame with no intermediate kernel buffer and no decrypt on receive, is tagged at receipt and verified at fault, and the faulting process reads correct contents with one frame per page. This is proven by `cargo xtask test-9p` on the host plus an in-kernel loopback probe under `q35crypt`; copies inside the TCP stack remain and are the stated limit.
-  3. The restricted vector section restores `ymm0`-`ymm5` on x86_64 and the NEON registers its vector path uses on aarch64 for the interrupted context, and scrubs them before return to user mode; the scalar and vector paths produce identical output on both architectures. No `XSAVE`/`XRSTOR` runs on the fault path or the eviction seal path. With AVX enabled in every x86_64 boot, user `ymm` state is saved and restored across a process switch and note delivery, copied on `rfork` and reset on exec.
-  4. A KVM benchmark records cycles per cold fault (scalar versus vector) and eviction cost, and the boot-to-rio gate stays green.
-  5. The v3.0 audit follow-ups are closed in the phase's first plans, before any pager work: `cargo xtask test` and CI run `cargo xtask test-9p` and `cargo test -p xtask` and fail if either fails; `04-VALIDATION.md` is a completed validation record; the Phase 4 boot-iso evidence no longer claims the fixes moved the linked kernel bytes; `docs/threat-model.md` states that `rfork` bits 18-21 are reserved; and the TPHT >90% home-hit property is measured at the production bank count with the bank-sizing rule for a default-bank `FidShard` written down.
+  1. CI on `main` is green; `boot-iso` builds as a pure derivation with no `outputHash` to maintain; `cargo xtask test` runs `test-9p` and the xtask tests; and the policy documents, the lint contract and `UNSAFE-AUDIT.md` describe the unsafe boundary as it is in the tree, with `x86_64` under the deny lint.
+  2. `FidTable` is a sharded generational slab in safe Rust with an 8-byte `StatefulHandle`; no `FlattenedTphtShard` and no serialized-insert workaround remain in it; every `cargo xtask test-9p` leg is green; `ds/src/tpht/` is untouched. `RFCKEY`, `RFROBASE` and `RFRANDMEM` no longer exist and `RFNOLEGACY` is bit 18 in `port::rfork` and the generated header.
+  3. Under `-smp 2`, both CPUs reach the scheduler loop on QEMU q35 (x86_64) and virt (aarch64), each with its own per-CPU state, and the boot-to-rio gate stays green.
+  4. A two-CPU stress gate runs concurrent `FidTable` and `FlattenedTphtShard` workloads with timer interrupts across both CPUs and finishes with no deadlock; a TLB shootdown reaches the other CPU; every new kernel boot gate runs with `-smp 2` on both architectures.
+  5. The page allocator keeps Roaring clean, dirty and pinned pools in which a pinned frame is never an eviction candidate, `SuperpageResidency` is exactly 64 bytes, and kernel code that holds user memory across a sleep pins its frames; all of it safe under two CPUs and none of it cryptographic.
 **Plans**: TBD
-**Open questions**: Settled by `.planning/phases/05-guide-phase-3-cryptographic-memory-and-zero-copy-dma-paging/05-CONTEXT.md` (2026-11-25): N2 for `x86_64` (D-25: the crate takes the workspace lints and `UNSAFE-AUDIT.md` covers every site, including `shadow.rs` and `cryptpage.rs`), N7 (D-12: a second, narrower `fpu` section kind for the six vector registers), N9 (D-11: zero and flush across key domains), N10 for this phase (D-22: `docs/threat-model.md` is amended; the legacy gateway's bounce frames wait for Phase 6) and the second half of N11 (D-19: the packet MAC at receipt, a keyed BLAKE3 page tag at fault). The goal and success criteria above follow those decisions. The owner decided on 2026-11-25 that this phase stays one phase although it is large (two pagers, AVX with XSAVE, Roaring SIMD on both architectures, page-aligned `read(2)`); the planner raises a split only if the plan count calls for it. Landing sites `x86_64/src/mmu.rs`, `shadow.rs`, `cryptpage.rs` and `port/src/palloc.rs`, `segcrypt.rs`, `inflight.rs`, `superpage.rs` do not exist at HEAD. `q35lowmem` and `q35crypt` are new profiles (HEAD's `q35lowmcfg` is a moved-MCFG machine, unrelated). An x86_64 kernel byte change triggers the `boot-iso` hash, amd64 Docker TCG, and owner linux check procedure; for this phase it runs at two owner stops (D-26), the first after the AVX/XSAVE change (D-13) and the second at phase end. The `port/src` diff-first stop is waived to a phase-end review of the cumulative `port/src` change, before any push (D-28). The v3.0 audit follow-ups (DEBT-01 to DEBT-05) were folded into this phase by the owner on 2026-11-25 as its initial steps (D-29); no separate phase was inserted. The Phase 4 directory was archived with v3.0, so `04-VALIDATION.md` and the boot-iso evidence sit under `.planning/milestones/v3.0-phases/04-guide-phase-2-9p2000-aead-transport-and-fidtable/`; DEBT-02 and DEBT-03 edit those archived copies, and `/gsd-validate-phase 4` may not resolve that path. Phase 4's `FidShard` uses 0 banks and the production default is 256; if DEBT-04 changes a `ds/` default, kernel bytes may move and the byte-change procedure applies.
+**Open questions**: The course-correction tasks and the audit follow-ups are this phase's first plans (owner, 2026-11-25). Before planning the CI fix, check what is actually red at `900f58b`; it has not been verified. `boot-iso` becoming a pure derivation changes the owner's byte-change rule: once it lands, green CI on the commit is the check for an x86_64 kernel byte change and no hash is committed (owner, 2026-11-25); the old rule holds until then. The slab refactor edits `port/src`, so the diff-first rule applies unless the owner waives it at discussion. The slab `StatefulHandle` replaces the Phase 4 `TinyPtr` handle: the rule that a stateful handle is never all zero (Phase 4 D-12) must be re-proven for the new layout, and the amended wording of the archived WIRE-07 to WIRE-09 is planning work. The memory pools were moved here by the owner on 2026-11-25 without their cryptographic parts; what eviction means with no backing store, whether a TPHT page cache is built now or with its first consumer, and whether the Roaring set kernels get SIMD are for this phase's discussion. From the superseded Phase 5 research: `x86_64/` has 32 undocumented `unsafe` blocks in 9 files and aarch64 has 7; the x86_64 table in `UNSAFE-AUDIT.md` names files that no longer exist; `xtask/src/test9p.rs` pins the leg count; neither architecture tracks dirty pages; the page-in paths panic on allocation failure; `UserSlice` holds nothing that could release a pin. SMP prerequisites: x86_64 per-CPU `Mach` mapping; aarch64 per-CPU current frame, kernel stack and proc pointers; FP ownership is already per-CPU. More than two CPUs, the full arm64 HVF series and the WINDOWS items are Phase 8. An aarch64 kernel byte change gets the quick pass.
 
 #### Phase 6: Guide Phase 4 - Distributed 9P Extensions and Service Discovery
 **Goal**: Cluster nodes can run atomic compound operations, stream data with flow control, cache shared files under leases, mount unions in parallel, interoperate with legacy 9P peers, and find each other's services dynamically.
@@ -79,47 +81,45 @@ Milestone numbering continues from the closed Harvey-rooted milestone v2.1.
 **Requirements**: DIST-01, DIST-02, DIST-03, DIST-04, DIST-05, DIST-06, DIST-07, DIST-08, DIST-09, DIST-10, DIST-11, DIST-12
 **Success Criteria** (what must be TRUE):
   1. A `Tcompound` script (walk, open, read) runs atomically and stops at the first error with the correct completed count; a `Tstream` sender never exceeds its granted credit.
-  2. Three readers cache a leased file with no heap-allocated client set and generate zero network packets on repeat reads; a writer causes `Tlease_revoke` to exactly the other readers, the server blocks until acknowledgements or the 5-second timeout, and the next read sees the write.
-  3. A 9front client mounts through the legacy bounce gateway, and a process created with `rfork(RFNOLEGACY)` (bit 21, reserved in Phase 2) cannot bind, mount or walk legacy-gateway channels.
+  2. Three readers cache a leased file with no heap-allocated client set and generate zero network packets on repeat reads; a writer causes `Tlease_revoke` to exactly the other readers, the server blocks until acknowledgements or the 5-second timeout, and the next read sees the write; the revocation test passes under two CPUs.
+  3. A 9front client mounts through the legacy bounce gateway, and a process created with `rfork(RFNOLEGACY)` (bit 18) cannot bind, mount or walk legacy-gateway channels.
   4. A beacon on one node populates `/srv/{hostname}_{class}_{instance}` on another over both IPv4 and IPv6.
   5. After 30 seconds of silence the peer's `.status` reads `unhealthy`, its `healthy_replicas` bit clears and its socket stays open; a heartbeat restores it; beyond 330 seconds its `/srv` entries are removed.
 **Plans**: TBD
-**Open questions**: W7 (`DiscoveryBeaconV2` stated 192 bytes, fields sum to 202); W11 is decided (the `RFNOLEGACY` bit exists, this phase implements its behaviour). Note N5 (`cmd/discover` authenticates via Factotum). Ring bypass (DIST-08) is placed here by the roadmapper because the guide's Phase 4 row does not name it. Landing sites `sys/src/cmd/beacon/`, `sys/src/cmd/discover/`, `port/src/union.rs`, `port/src/legacy_9p.rs` do not exist at HEAD. Edits under `port/src` need owner approval.
+**Open questions**: W7 (`DiscoveryBeaconV2` stated 192 bytes, fields sum to 202). Discovery stays in this phase although the v3.0 guide's row does not name it (owner, 2026-11-25). Note N5 (`cmd/discover` authenticates via Factotum). Ring bypass (DIST-08) is placed here by the roadmapper. The v3.0 compendium says received `9P2000.aead` frames are verified and decrypted on receive into ordinary page-cache frames or `#M` ring buffers; there is no fault-time decrypt. Landing sites `sys/src/cmd/beacon/`, `sys/src/cmd/discover/`, `port/src/union.rs`, `port/src/legacy_9p.rs` do not exist at HEAD. Edits under `port/src` need owner approval.
 
-#### Phase 7: Guide Phase 5 - Process Lifecycle and Notes
-**Goal**: Processes can isolate their private memory cryptographically, lock their shared code read-only in hardware, and receive notes only on a genuine stack.
+#### Phase 7: Guide Phase 5 - Process Lifecycle, Stack-Safe Notes and riscv64 Sync
+**Goal**: Notes are delivered only onto a genuine stack, and the riscv64 kernel is back in step with the portable layer.
 **Depends on**: Phase 6
-**Requirements**: PROC-01, PROC-02, PROC-03, PROC-04, PROC-05
+**Requirements**: PROC-04, RV-01, RV-02
 **Success Criteria** (what must be TRUE):
-  1. Two `rfork(RFPROC | RFMEM | RFCKEY)` siblings are isolated: the second process touching the first's private heap takes an MMU trap, a direct read of the frame fails the MAC check, and the kernel kills it with the note `sys: crypto integrity violation`.
-  2. After `rfork(RFROBASE)`, a write into the shared base code (`SG_TEXT`) faults through the hardware protection key in about 20 cycles without touching DRAM.
-  3. A note aimed at a frame that is not on a stack is refused, and stack-spoofing probes trap while frames stay within stack bounds.
-  4. `RFRANDMEM` behaves according to a specification written during planning.
+  1. A note aimed at a frame that is not on a stack is refused, and stack-spoofing probes trap while frames stay within stack bounds.
+  2. The riscv64 kernel uses `port::rfork` and implements the SMP traits the other two architectures implement, with no architecture-specific assumption leaking into `port/`.
+  3. The riscv64 kernel builds and passes a boot smoke on QEMU.
 **Plans**: TBD
-**Open questions**: Note N8 (`RFRANDMEM` semantics are defined nowhere in the sources). The PT Suite 4 assertions (4.1, 4.2) are this phase's acceptance tests. Landing site `kern/src/notes.rs` does not exist at HEAD. Edits under `port/src` need owner approval.
+**Open questions**: `RFNOLEGACY` enforcement is DIST-07 in Phase 6; the v3.0 guide lists it under both phases, and it is not repeated here. The `rfork` crypto flags and sibling key isolation (old PROC-01, PROC-02, PROC-03, PROC-05 and PT Suite 4) are retired with software cryptographic memory. Which riscv64 machine and gate the smoke uses, and whether riscv64 joins the deny lint and `UNSAFE-AUDIT.md` here, are planning decisions. Landing site `kern/src/notes.rs` does not exist at HEAD. Edits under `port/src` need owner approval.
 
-### v3.2 SMP and Native std (Planned)
+### v3.2 SMP Scale-Out and Native std (Planned)
 
-**Milestone Goal:** The kernel runs on multiple CPUs on both architectures, and Rust programs written with ordinary `std` run on r9.
+**Milestone Goal:** The kernel scales past two CPUs with the deferred verification closed, and Rust programs written with ordinary `std` run on r9.
 
-- [ ] **Phase 8: Milestone S - Multi-CPU SMP and Memory Locking** - multi-CPU scheduler, single-CPU invariants retired, deferred arm64 series and WINDOWS items closed
+- [ ] **Phase 8: SMP Scale-Out and Deferred Verification** - more than two CPUs under soak, the full arm64 HVF series, WINDOWS items closed
 - [ ] **Phase 9: Milestone STD - libstd_r9 Native Standard Library** - `std` fs, net, thread, sync, process, alloc, time, env over Plan 9 syscalls
 
-#### Phase 8: Milestone S - Multi-CPU SMP and Memory Locking
-**Goal**: r9 schedules across multiple CPUs on x86_64 q35 and aarch64 virt with all kernel memory structures safe under concurrency, and the work the owner deferred to this milestone is closed.
-**Depends on**: Phase 5, Phase 7 (the guide lists Phase 3 and Phase 5)
-**Requirements**: SMP-01, SMP-02, SMP-03, SMP-04, SMP-05, SMP-06
+#### Phase 8: SMP Scale-Out and Deferred Verification
+**Goal**: r9 runs on more than two CPUs without deadlock or fault, and the verification the owner deferred to the SMP work is closed.
+**Depends on**: Phase 5, Phase 7
+**Requirements**: SMP-05, SMP-06, SMP-10
 **Success Criteria** (what must be TRUE):
-  1. r9 boots on QEMU q35 x86_64 with multiple CPUs, all online and scheduling, reaches rio repeatedly, and an 8-way soak shows no deadlock and no triple fault.
-  2. aarch64 virt boots multi-CPU under HVF and TCG, and the full arm64 HVF series passes (smoke 1753, net-smoke 36, tier-1 10, cpu 36, plus 3 TCG each).
-  3. Every single-CPU spinlock invariant in the kernel has been audited and replaced with SMP-safe locking, including the allocator, page tables and segment and page-cache structures.
-  4. WINDOWS #70 and #66 are fixed and #49 is closed, with the open-entry ledger kept in a live file.
+  1. r9 boots on QEMU q35 x86_64 with more than two CPUs, all online and scheduling, reaches rio repeatedly, and an 8-way soak shows no deadlock and no triple fault.
+  2. The full arm64 HVF series passes (smoke 1753, net-smoke 36, tier-1 10, cpu 36, plus 3 TCG each).
+  3. WINDOWS #70 and #66 are fixed and #49 is closed, with the open-entry ledger kept in a live file.
 **Plans**: TBD
-**Open questions**: The WINDOWS ledger is frozen under `.planning/legacy/WINDOWS.md` (51 open, 4 waived, 17 fixed, 72 total); re-home open entries to a live file before updating. SMP prerequisites: x86_64 per-CPU `Mach` mapping; aarch64 per-CPU current frame, kernel stack and proc pointers; FP ownership is already per-CPU. The ~4.4 hour full HVF series is owner-run venue time. Edits under `port/src` need owner approval.
+**Open questions**: Two-CPU bring-up, per-CPU state and the lock audit moved to Phase 5 on 2026-11-25; this phase keeps what needs more CPUs or long venue time. The WINDOWS ledger is frozen under `.planning/legacy/WINDOWS.md` (51 open, 4 waived, 17 fixed, 72 total); re-home open entries to a live file before updating. The ~4.4 hour full HVF series is owner-run venue time. Edits under `port/src` need owner approval.
 
 #### Phase 9: Milestone STD - libstd_r9 Native Standard Library
 **Goal**: A Rust program using ordinary `std` builds for r9, runs as an `a.out` without `#![no_std]`, and uses files, networking, threads, processes, time and environment through Plan 9 primitives.
-**Depends on**: Phase 8
+**Depends on**: Phase 5
 **Requirements**: STD-01, STD-02, STD-03, STD-04, STD-05, STD-06, STD-07
 **Success Criteria** (what must be TRUE):
   1. A Rust binary written with `std` builds for an r9 userland target, is converted to `a.out` by `xtask/src/elf2aout.rs`, and runs on r9 under q35.
@@ -131,15 +131,15 @@ Milestone numbering continues from the closed Harvey-rooted milestone v2.1.
 
 ### v3.3 Harvey Userland Port - Track P (Planned)
 
-**Milestone Goal:** The Harvey kernel devices, base CLI, complex userland and compilers run as idiomatic Rust, and the system boots to rio with zero Harvey C binaries.
+**Milestone Goal:** The Harvey kernel devices, base CLI and complex userland run as idiomatic Rust, and the system boots to rio with Harvey C binaries present only as the named bootstrap set (the C compilers and classic APE).
 
 - [ ] **Phase 10: Stage P1 - Track P Kernel Devices** - `#c #d #e #s #| #I #p` at Harvey parity, safe Rust
 - [ ] **Phase 11: Stage P2 - Track P Base CLI** - `rc`, `bind`, `mount`, `cat`, `echo`, `ls` in Rust, removed from the fallback manifest
-- [ ] **Phase 12: Stage P3 - Track P Complex Userland and Compilers** - `sam`, `rio`, `upas`, `factotum`, `6c`/`6a`/`6l` and the remaining userland and libraries
+- [ ] **Phase 12: Stage P3 - Track P Complex Userland** - `sam`, `rio`, `upas`, `factotum` and the remaining userland and libraries; no compiler port
 
 #### Phase 10: Stage P1 - Track P Kernel Devices
 **Goal**: The kernel devices `#c`, `#d`, `#e`, `#s`, `#|`, `#I` and `#p` are complete, safe Rust at parity with Harvey, so Harvey userland needs nothing from a C device.
-**Depends on**: Phase 8, Phase 9 (also the Phase 1 harness)
+**Depends on**: Phase 5 (also the Phase 1 harness); may run concurrently with Phases 6 and 7
 **Requirements**: KDEV-01, KDEV-02, KDEV-03, KDEV-04, KDEV-05
 **Success Criteria** (what must be TRUE):
   1. A committed parity inventory compares Harvey's devtab with r9's devices for the seven devices, with no open gaps.
@@ -151,7 +151,7 @@ Milestone numbering continues from the closed Harvey-rooted milestone v2.1.
 
 #### Phase 11: Stage P2 - Track P Base CLI
 **Goal**: The everyday command line (`rc`, `bind`, `mount`, `cat`, `echo`, `ls`) runs as Rust binaries and the Harvey versions leave the image.
-**Depends on**: Phase 10
+**Depends on**: Phase 9, Phase 10
 **Requirements**: CLI-01, CLI-02, CLI-03, CLI-04, CLI-05, CLI-06, CLI-07
 **Success Criteria** (what must be TRUE):
   1. The system boots to rio with `rc`, `bind`, `mount`, `cat`, `echo` and `ls` running as Rust binaries from the image and no Harvey copies of them present.
@@ -160,17 +160,16 @@ Milestone numbering continues from the closed Harvey-rooted milestone v2.1.
 **Plans**: TBD
 **Open questions**: None recorded.
 
-#### Phase 12: Stage P3 - Track P Complex Userland and Compilers
-**Goal**: The remaining Harvey userland, including `sam`, `rio`, `upas`, `factotum` and the `6c`, `6a`, `6l` toolchain, runs as Rust and the system boots to rio with no Harvey C binary in the image.
+#### Phase 12: Stage P3 - Track P Complex Userland
+**Goal**: The remaining Harvey userland, including `sam`, `rio`, `upas` and `factotum`, runs as Rust, and the system boots to rio with no Harvey C binary in the image other than the named bootstrap set.
 **Depends on**: Phase 11
-**Requirements**: USER-01, USER-02, USER-03, USER-04, USER-05, USER-06
+**Requirements**: USER-01, USER-02, USER-03, USER-05, USER-06
 **Success Criteria** (what must be TRUE):
   1. `sam`, `rio`, `upas` and `factotum` run as Rust binaries and the golden gate reaches a rio session on q35 with the Rust `rio`.
-  2. The Rust `6c`, `6a` and `6l` compile and link a defined reference C corpus into `a.out` binaries that run on r9 and match Harvey's compilers on that corpus.
-  3. The fallback manifest holds no C userland binary and no library object, and the root image boots to rio with zero Harvey C binaries.
-  4. Every Harvey command or library that was not ported has a recorded retirement reason.
+  2. The fallback manifest holds no C userland binary and no library object except the named bootstrap set (Harvey's `6c`, `6a`, `6l` and classic APE), and the root image boots to rio.
+  3. Every Harvey command or library that was not ported has a recorded retirement reason.
 **Plans**: TBD
-**Open questions**: Stage P3 is large and is likely to need subdividing when planned. The method for proving compiler parity is set at planning time. If `factotum` is pulled forward for Phase 4 (note N5), this phase inherits its completion.
+**Open questions**: The Rust port of `6c`/`6a`/`6l` (old USER-04) is out of scope by the v3.0 documents; Harvey's C compilers and classic APE stay as bootstrap and compatibility binaries. The exact contents of the bootstrap set are fixed at planning. Stage P3 is large and is likely to need subdividing when planned. If `factotum` is pulled forward for Phase 6 (note N5), this phase inherits its completion.
 
 ### v3.4 Storage and Graphics (Planned)
 
@@ -181,7 +180,7 @@ Milestone numbering continues from the closed Harvey-rooted milestone v2.1.
 
 #### Phase 13: Guide Phase 6 - Storage Engine and Cluster Permission Suites
 **Goal**: Storage is content-addressed by BLAKE3 with deduplication, snapshots and garbage collection, and the cluster's permission, lease and federation behaviour is verified on a 12-node testbed.
-**Depends on**: Phase 4, Phase 6, Phase 12
+**Depends on**: Phase 5, Phase 6, Phase 12
 **Requirements**: STOR-01, STOR-02, STOR-03, STOR-04, STOR-05, STOR-06, STOR-07, PERM-01, PERM-02, PERM-03, PERM-04, PERM-05
 **Success Criteria** (what must be TRUE):
   1. Writing identical content twice stores one block and reads back by score, the score is the same before and after compression, and round trips across compression tiers return identical bytes.
@@ -190,7 +189,7 @@ Milestone numbering continues from the closed Harvey-rooted milestone v2.1.
   4. PT Suites 1, 2 and 3 pass on the minimega testbed: pair and team file sharing with group leadership, lease coherence with anti-splicing, and two-domain federation with unregistered users mapped to UID 9999.
   5. PT Suite 5 (mail and chat visibility) passes, or has been explicitly deferred.
 **Plans**: TBD
-**Open questions**: W8 (UID 0 `adm` versus `glenda`), W9 (`alice` present but test needs her absent), W10 (Suite 3 mounts `venti03` across VLANs with no route; `archive.r9` server unnamed). Note N6 (`chat-rs` is defined in no document, so Suite 5 needs a definition or deferral). PT Suite 4 is covered in Phase 7. The `TagEntry` nonce field (AC superset) is decided at planning. Landing site `venti/` does not exist at HEAD.
+**Open questions**: W8 (UID 0 `adm` versus `glenda`), W9 (`alice` present but test needs her absent), W10 (Suite 3 mounts `venti03` across VLANs with no route; `archive.r9` server unnamed). Note N6 (`chat-rs` is defined in no document, so Suite 5 needs a definition or deferral). PT Suite 4 (crypto sibling isolation) is retired with software cryptographic memory. Snapshot GC is verified under SMP. The `TagEntry` nonce field (AC superset) is decided at planning. Landing site `venti/` does not exist at HEAD.
 
 #### Phase 14: Guide Phase 7 - Graphics (#G Venus and draw(3) Host Blit)
 **Goal**: rio draws natively on q35 and a Vulkan program renders on the host GPU into a rio window without CPU copies.
@@ -208,7 +207,7 @@ Milestone numbering continues from the closed Harvey-rooted milestone v2.1.
 
 **Milestone Goal:** r9 compiles itself and Harvey is archived.
 
-- [ ] **Phase 15: Guide Phase 8 - Self-Hosting Toolchain** - rustc, rust-lld, APEX, Clang, classic APE, r9 builds r9
+- [ ] **Phase 15: Guide Phase 8 - Self-Hosting Toolchain** - rustc, rust-lld, vendored APEX, Clang, elf2aout, r9 builds r9
 - [ ] **Phase 16: Final - Harvey Retirement** - deprecation checklist passes with Harvey absent, then Harvey is archived
 
 #### Phase 15: Guide Phase 8 - Self-Hosting Toolchain
@@ -218,7 +217,7 @@ Milestone numbering continues from the closed Harvey-rooted milestone v2.1.
 **Success Criteria** (what must be TRUE):
   1. `rustc` compiles a Rust program on r9, `rust-lld` links it to a static ELF, the in-tree tool wraps it into `a.out`, and it runs.
   2. Modern C++/LLVM tooling builds with Clang against the vendored `vendor/apex/` runtime and runs on r9.
-  3. Native Plan 9 C software (Ghostscript as the demonstration) builds with the ported `6c`/`6a`/`6l` over classic APE, and the two C runtimes are never mixed in one binary.
+  3. Harvey's `6c`/`6a`/`6l` and classic APE run on r9 as carried bootstrap binaries and still build native Plan 9 C software, and the two C runtimes are never mixed in one binary.
   4. r9 compiles its own kernel and userland on r9, and the resulting system boots to rio.
 **Plans**: TBD
 **Open questions**: `vendor/apex/` does not exist at HEAD. The APEX syscall stubs are generated from `sys/src/libc/9syscall/sys.h`, a Harvey path, so the source of that header is settled at planning time.
@@ -229,12 +228,12 @@ Milestone numbering continues from the closed Harvey-rooted milestone v2.1.
 **Requirements**: RETIRE-01, RETIRE-02, RETIRE-03, RETIRE-04, RETIRE-05
 **Success Criteria** (what must be TRUE):
   1. Every device in the devtab is safe Rust, confirmed by an inventory scan that covers more than the seven Stage P1 devices.
-  2. The root image contains zero Harvey C binaries, confirmed by an empty fallback manifest and an image scan.
-  3. With the Harvey tree absent, native Plan 9 C software builds with ported 6c/6l over classic APE, modern C++/LLVM builds via Clang against `vendor/apex/`, and `rustc` and `rust-lld` run natively.
+  2. The root image contains no Harvey C binary other than the named bootstrap set (`6c`, `6a`, `6l` and classic APE), confirmed by the fallback manifest and an image scan.
+  3. With the Harvey tree absent, `rustc` and `rust-lld` run natively, modern C++/LLVM builds via Clang against `vendor/apex/`, and the bootstrap set r9 carries (Harvey's C compilers and classic APE, as binaries) still builds native Plan 9 C software.
   4. Every composed gate that Harvey's flake hosted (boot-r9-x64 smokes, net smoke, auth, drawterm, rio) runs from the r9 repo without Harvey, and the golden-invariant gate is green.
   5. `vendor/harvey/` is removed, the Harvey repository is archived read-only, and the r9 README carries the deprecation banner.
 **Plans**: TBD
-**Open questions**: Note N4 (the composed gates are the main hidden dependency). Archiving the Harvey repository and any push need explicit owner approval.
+**Open questions**: The checklist was amended on 2026-11-25: the C compilers and classic APE are not ported, so they remain as carried bootstrap binaries and "zero Harvey C binaries" no longer applies to them; where r9 keeps those binaries once `vendor/harvey/` is removed is settled at planning. Note N4 (the composed gates are the main hidden dependency). Archiving the Harvey repository and any push need explicit owner approval.
 
 ## Progress
 
@@ -247,14 +246,14 @@ Phases execute in numeric order: 1 → 2 → 3 → … → 16 (decimal insertion
 | 2. Guide Phase 0 - Design Lock and rfork Flag Reservation | v3.0 | 6/6 | Complete | 2026-11-24 |
 | 3. Guide Phase 1 - crypto/ and ds/ Foundations | v3.0 | 13/13 | Complete | 2026-11-24 |
 | 4. Guide Phase 2 - 9P2000.aead Transport and FidTable | v3.0 | 25/25 | Complete | 2026-11-25 |
-| 5. Guide Phase 3 - Cryptographic Memory and Zero-Copy DMA Paging | v3.1 | 0/TBD | Not started | - |
+| 5. Guide Phase 3 - Early SMP, Course Correction and Memory Pools | v3.1 | 0/TBD | Not started | - |
 | 6. Guide Phase 4 - Distributed 9P Extensions and Service Discovery | v3.1 | 0/TBD | Not started | - |
-| 7. Guide Phase 5 - Process Lifecycle and Notes | v3.1 | 0/TBD | Not started | - |
-| 8. Milestone S - Multi-CPU SMP and Memory Locking | v3.2 | 0/TBD | Not started | - |
+| 7. Guide Phase 5 - Process Lifecycle, Stack-Safe Notes and riscv64 Sync | v3.1 | 0/TBD | Not started | - |
+| 8. SMP Scale-Out and Deferred Verification | v3.2 | 0/TBD | Not started | - |
 | 9. Milestone STD - libstd_r9 Native Standard Library | v3.2 | 0/TBD | Not started | - |
 | 10. Stage P1 - Track P Kernel Devices | v3.3 | 0/TBD | Not started | - |
 | 11. Stage P2 - Track P Base CLI | v3.3 | 0/TBD | Not started | - |
-| 12. Stage P3 - Track P Complex Userland and Compilers | v3.3 | 0/TBD | Not started | - |
+| 12. Stage P3 - Track P Complex Userland | v3.3 | 0/TBD | Not started | - |
 | 13. Guide Phase 6 - Storage Engine and Cluster Permission Suites | v3.4 | 0/TBD | Not started | - |
 | 14. Guide Phase 7 - Graphics (#G Venus and draw(3) Host Blit) | v3.4 | 0/TBD | Not started | - |
 | 15. Guide Phase 8 - Self-Hosting Toolchain | v4.0 | 0/TBD | Not started | - |

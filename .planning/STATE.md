@@ -1,7 +1,7 @@
 ---
 gsd_state_version: "1.0"
 milestone: v3.1
-milestone_name: Secure Memory and Cluster Fabric
+milestone_name: Early SMP and Cluster Fabric
 status: planning
 last_updated: "2026-11-25T19:44:58.192Z"
 last_activity: 2026-11-25
@@ -20,14 +20,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-25)
 
 **Core value:** The OS boots to rio on QEMU q35 at every commit.
-**Current focus:** v3.1 Secure Memory and Cluster Fabric (Phases 5-7) — Phase 5 context is gathered; plan it with `/gsd-plan-phase 5` (its first plans close the v3.0 audit follow-ups, DEBT-01 to DEBT-05)
+**Current focus:** v3.1 Early SMP and Cluster Fabric (Phases 5-7), rescoped on 2026-11-25 by the owner's v3.0 documents in `docs/`. Next: discuss the new Phase 5 with `/gsd-discuss-phase 5`
 
 ## Current Position
 
-Phase: 5 (Guide Phase 3 - Cryptographic Memory and Zero-Copy DMA Paging) — context gathered, not planned
+Phase: 5 (Guide Phase 3 - Early SMP, Course Correction and Memory Pools) — not discussed, not planned
 Plan: —
-Status: Roadmap defined; ready to plan Phase 5
-Last activity: 2026-11-25 — v3.1 roadmap updated (audit follow-ups folded into Phase 5; Phase 5 aligned with 05-CONTEXT.md)
+Status: Roadmap rescoped; ready to discuss Phase 5
+Last activity: 2026-11-25 — roadmap rescoped to the v3.0 documents; old Phase 5 planning archived as superseded
 
 
 ## Performance Metrics
@@ -103,13 +103,18 @@ Full log is the PROJECT.md Key Decisions table and the archived phase summaries 
   CI, reconcile `04-VALIDATION.md`, correct the boot-iso evidence claim, settle the TPHT
   bank-sizing precondition.
 
+### Rescope of 2026-11-25
+
+The owner's `docs/plan_r9_architecture_code_compendium_v3_0.md` and `docs/r9_implementation_guide_for_agentic_developers_v3_0.md` supersede the earlier guide and compendium where they differ: software cryptographic memory is dropped, `FidTable` becomes a sharded generational slab, two-CPU SMP is Phase 5, and the C compilers are not ported. The planning written earlier that day for the old Phase 5 (context D-01 to D-38, research, pattern map) is archived under `.planning/milestones/superseded/`; no plan was written or executed from it. The new Phase 5 opens with the guide's five course-correction tasks and the audit follow-ups. Whether CI is red at `900f58b` has not been checked.
+
 ### Open Questions (four warnings, approved to be carried, not resolved)
 
-Settle each when its phase is planned. Detail: `.planning/INGEST-CONFLICTS.md`. Eleven notes (N1-N11) are in PROJECT.md; N9 to N11 are source contradictions the Phase 2 threat model found untracked (stale-frame mechanism, plaintext in legacy bounce frames, where the wire MAC is verified).
+Settle each when its phase is planned. Detail: `.planning/INGEST-CONFLICTS.md`. Eleven notes (N1-N11) are in PROJECT.md; N7 to N11 are void or reduced since the 2026-11-25 rescope (see PROJECT.md); N9 to N11 were source contradictions the Phase 2 threat model found untracked (stale-frame mechanism, plaintext in legacy bounce frames, where the wire MAC is verified).
 
 | ID | Settle in | Question |
 |----|-----------|----------|
 | W7 | Phase 6 | `DiscoveryBeaconV2` 192 versus 202 bytes |
+| - | Phase 5 | What eviction means with no backing store; TPHT page cache now or later; SIMD for the Roaring set kernels; the non-zero rule for the slab `StatefulHandle` |
 | W8 | Phase 13 | `/adm/users` UID 0 `adm` versus persona `glenda` |
 | W9 | Phase 13 | Test 3.2 needs `alice` absent from `/adm/users` |
 | W10 | Phase 13 | Suite 3 cross-VLAN mounts with no route |
@@ -144,7 +149,9 @@ None yet.
 
 - Pushes in either repo need explicit owner approval; check what is unpushed and push only the approved commits.
 - Edits under r9 `port/src` need owner approval (show the diff first). `aarch64/`, `x86_64/`, `xtask/` edits do not.
-- x86_64 kernel byte change: re-derive and commit the `boot-iso` `outputHash`, run the x64 TCG gates in an amd64 Docker container (clean up afterwards), and get the owner's linux boot-iso check.
+- x86_64 kernel byte change, until `boot-iso` is a pure derivation (CORR-02): re-derive and commit the `boot-iso` `outputHash`, run the x64 TCG gates in an amd64 Docker container (clean up afterwards), and get the owner's linux boot-iso check.
+- x86_64 kernel byte change, once CORR-02 has landed: green CI on the commit is the check; no hash, no owner boot-iso check (owner, 2026-11-25).
+- No phase reintroduces software RAM encryption, `PKEY`/`WRPKRU` page-fault hooks, or Rust rewrites of `6c`/`6a`/`6l` without a recorded owner decision first (v3.0 guide rule 4).
 - aarch64 kernel byte change: quick pass now (tier-1 on HVF and TCG; smoke, net-smoke, cpu once on HVF); full HVF series at Phase 8. Kernel builds are reproducible, so compare kernel sha256 to prove a pin move changes nothing.
 - Kernels are built without FP/SIMD; kernel SIMD goes through `fpu::kernel_begin()` / `with_simd()`; user FP state is per process (save at switch, copy on fork, reset on exec); arm64 is the reference for x86_64.
 - No AI attribution in commits or PRs. Never stage the 11 pre-modified troff/postscript font files in Harvey (a darwin case-collision artifact).
@@ -164,7 +171,7 @@ Items carried over from the legacy-final checkpoint (HANDOFF.md):
 | Defect | WINDOWS #49: I-cache, root-caused and fixed | Left open until the full series runs (SMP-06) | legacy-final | v3.2 |
 | Defect | WINDOWS #66: x86_64 triple fault under 8-way soak | Fix on an x86_64 host venue (SMP-06) | legacy-final | v3.2 |
 | Test gap | `#!` recursion cap has no host or live test | Unscheduled; add a test when exec is next touched | legacy-final | - |
-| Prerequisite | SMP: aarch64 per-CPU current frame, kernel stack, proc pointers; x86_64 per-CPU `Mach` mapping (FP ownership already per-CPU) | Phase 8 (SMP-02) | legacy-final | v3.2 |
+| Prerequisite | SMP: aarch64 per-CPU current frame, kernel stack, proc pointers; x86_64 per-CPU `Mach` mapping (FP ownership already per-CPU) | Phase 5 (SMP-02) | legacy-final | v3.2 |
 | Lint | `cargo xtask clippy --arch aarch64 --config virtshell` fails at HEAD on 7 undocumented unsafe blocks in `aarch64/` (`platform/virt/rtc.rs:75`, `proc.rs:439`, `470`, `1823`, `2753`, `textcopy.rs:158`, `172`); `UNSAFE-AUDIT.md`'s aarch64 count of 129 may be stale | Pre-existing; found by Phase 3 research; outside Phase 3 | Phase 3 | - |
 | Design | TPHT writer assigns tiny pointers 1..=16 only; compendium 4.3 neighbourhood displacement (17..=255) and clock-nibble eviction are not built | Not a Phase 3 requirement; for owner review | Phase 3 | - |
 | Deferred item | 03/deferred-items.md: repo-wide `cargo fmt --all -- --check` is red (pre-existing formatting drift) | acknowledged | 2026-11-25 | v3.0 |
@@ -174,9 +181,9 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 ## Session Continuity
 
 Last session: 2026-11-25T19:39:02.087Z
-Stopped at: Phase 5 context gathered
-Resume file: .planning/phases/05-guide-phase-3-cryptographic-memory-and-zero-copy-dma-paging/05-CONTEXT.md
+Stopped at: Roadmap rescoped to the owner's v3.0 documents; old Phase 5 planning superseded
+Resume file: docs/r9_implementation_guide_for_agentic_developers_v3_0.md
 
 ## Operator Next Steps
 
-- Plan Phase 5 with /gsd-plan-phase 5
+- Discuss the new Phase 5 with /gsd-discuss-phase 5
