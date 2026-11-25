@@ -6,7 +6,7 @@ status: planning
 last_updated: "2026-11-25T19:44:58.192Z"
 last_activity: 2026-11-25
 progress:
-  total_phases: 0
+  total_phases: 3
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -20,14 +20,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-25)
 
 **Core value:** The OS boots to rio on QEMU q35 at every commit.
-**Current focus:** v3.1 Secure Memory and Cluster Fabric (Phases 5-7) — start with `/gsd-new-milestone`
+**Current focus:** v3.1 Secure Memory and Cluster Fabric (Phases 5-7) — Phase 5 context is gathered; plan it with `/gsd-plan-phase 5` (its first plans close the v3.0 audit follow-ups, DEBT-01 to DEBT-05)
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 5 (Guide Phase 3 - Cryptographic Memory and Zero-Copy DMA Paging) — context gathered, not planned
 Plan: —
-Status: Defining requirements
-Last activity: 2026-11-25 — Milestone v3.1 started
+Status: Roadmap defined; ready to plan Phase 5
+Last activity: 2026-11-25 — v3.1 roadmap updated (audit follow-ups folded into Phase 5; Phase 5 aligned with 05-CONTEXT.md)
 
 
 ## Performance Metrics
@@ -179,4 +179,4 @@ Resume file: .planning/phases/05-guide-phase-3-cryptographic-memory-and-zero-cop
 
 ## Operator Next Steps
 
-- Start the next milestone with /gsd-new-milestone
+- Plan Phase 5 with /gsd-plan-phase 5

@@ -23,7 +23,7 @@ As of v3.0 (2026-11-25) the cross-build harness, the design lock, `crypto/`, `ds
 - **Phase 7 — Process Lifecycle and Notes (PROC):** make `RFCKEY`, `RFROBASE` and `RFRANDMEM` live, and secure note delivery.
 - **v3.0 audit backlog (DEBT):** wire `cargo xtask test-9p` and `cargo test -p xtask` into CI and `cargo xtask test`, reconcile `04-VALIDATION.md`, correct the boot-iso evidence claim, settle the TPHT bank-sizing precondition before a default-bank FidShard exists, and fix the stale threat-model line on `rfork` bits 18-20.
 
-Phase 5 stays one phase (owner, 2026-11-25); the planner raises a split only if the plan count calls for it.
+Phase 5 stays one phase (owner, 2026-11-25); the planner raises a split only if the plan count calls for it. The audit backlog (DEBT-01 to DEBT-05) is folded into Phase 5 as its initial steps (owner, 2026-11-25).
 
 ## Core Value
 
@@ -52,7 +52,7 @@ The OS boots to rio on QEMU q35 at every commit. This golden invariant outranks 
 - [ ] Cryptographic memory and zero-copy DMA paging (MEM, Phase 5)
 - [ ] Distributed 9P extensions, leases, legacy gateway, cluster service discovery with 30s unhealthy / 5m dead lifecycle (DIST, Phase 6)
 - [ ] Process lifecycle, `rfork` crypto flags live, secure note delivery (PROC, Phase 7)
-- [ ] v3.0 audit follow-ups: CI wiring of `test-9p` and xtask tests, `04-VALIDATION.md`, boot-iso evidence claim, TPHT bank sizing, threat-model rfork line (DEBT, v3.1)
+- [ ] v3.0 audit follow-ups: CI wiring of `test-9p` and xtask tests, `04-VALIDATION.md`, boot-iso evidence claim, TPHT bank sizing, threat-model rfork line (DEBT, Phase 5 initial steps)
 - [ ] Multi-CPU SMP scheduler and memory locking (SMP, Phase 8)
 - [ ] `libstd_r9` native Rust `std` (STD, Phase 9)
 - [ ] Track P: Harvey kernel devices, base CLI, complex userland and compilers in idiomatic Rust (KDEV, CLI, USER, Phases 10-12)

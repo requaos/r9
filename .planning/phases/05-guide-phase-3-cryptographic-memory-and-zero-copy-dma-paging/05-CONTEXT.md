@@ -8,7 +8,7 @@
 
 r9 gains sealed demand paging: user pages are stored as ChaCha20 ciphertext with a keyed BLAKE3 tag in an in-RAM backing store, decrypt on fault into a shadow frame, are re-sealed on eviction, and a tampered page kills the process. A Roaring-pool page allocator with a High-Water Pager, the stride tracker, the superpage residency record, in-flight fault de-duplication and user-frame pinning come with it. `9P2000.aead` data pages are read from the transport straight into destination frames with no decrypt on receive. Both architectures get the pager, each with a scalar and a vector decrypt path. Sealed paging runs only in new boot profiles; default boots do not use it.
 
-Requirements: MEM-01 to MEM-13. Open items settled here: N7, N9, N10 (for this phase), the second half of N11, and N2 for `x86_64`. Several requirements are amended by the decisions below (MEM-01, MEM-02, MEM-06, MEM-09, MEM-11; success criteria 2 and 3 wording).
+Requirements: MEM-01 to MEM-13, and DEBT-01 to DEBT-05 (the v3.0 audit follow-ups, done first; D-29). Open items settled here: N7, N9, N10 (for this phase), the second half of N11, and N2 for `x86_64`. Several requirements are amended by the decisions below (MEM-01, MEM-02, MEM-06, MEM-09, MEM-11; success criteria 2 and 3 wording).
 
 Not in this phase: an out-of-RAM backing store (swap file, Venti); sealed paging on by default; a live sealed mount over the network, a real `Tauth` exchange or any factotum work; true NIC placement of data pages and the `#M` ring bypass (Phase 6); the legacy gateway and its bounce frames (Phase 6); `RFCKEY`, `RFROBASE`, `RFRANDMEM` behaviour and sibling isolation (Phase 7); SMP locking of the new structures (Phase 8); any Harvey edit.
 
@@ -54,6 +54,8 @@ Not in this phase: an out-of-RAM backing store (swap file, Venti); sealed paging
 - **D-26:** The x86_64 byte-change procedure runs at two owner stops. The first follows the AVX/XSAVE change (D-13), which lands as its own small group of plans because it alters default-boot behaviour. The second is at phase end and covers everything else. Each stop is the full procedure: `boot-iso` `outputHash` re-derived and committed on the owner's x86_64 Linux host, the x64 TCG gates, and the owner's boot-iso check. Phase 4 D-25 and Phase 2 D-23 to D-29 are the model.
 - **D-27:** The byte-change evidence follows Phase 4 D-29: `.text` identity is not the test, since the changes are intended.
 - **D-28:** The `port/src` diff-first stop is waived for this phase, as in Phase 4 D-24. Plans commit once their tests are green; the owner reviews the cumulative `port/src` change at the phase-end stop, before any push. The standing rule is unchanged for other phases.
+
+- **D-29 (owner, 2026-11-25, at the v3.1 roadmap):** The v3.0 audit follow-ups, DEBT-01 to DEBT-05, are part of this phase and are its initial steps: they are planned and executed before any pager, FP or allocator work. The owner chose this over a separate inserted phase, knowing the phase is already large. DEBT-02 and DEBT-03 edit files archived under `.planning/milestones/v3.0-phases/04-guide-phase-2-9p2000-aead-transport-and-fidtable/`.
 
 ### Not decided in discussion
 - **Phase size.** The decisions above make this phase much larger than its roadmap entry (two pagers, XSAVE, Roaring SIMD on two architectures, page-flipping `read(2)`). Whether to split it in the roadmap was not discussed. The planner should raise it with the owner if the plan count or wave structure calls for it; it must not split or drop scope by assumption.
@@ -180,7 +182,6 @@ Not in this phase: an out-of-RAM backing store (swap file, Venti); sealed paging
 - **True NIC placement of 9P data pages** (mergeable receive buffers, a TCP path without socket-buffer copies) and the `#M` ring bypass: Phase 6 (DIST-08).
 - **A live sealed mount over virtio-net with a host-side `9P2000.aead` test server:** the phase that has a real key exchange, or Phase 6.
 - **The legacy gateway's bounce frames in the threat model** (rest of N10): Phase 6.
-- **TPHT bank-sizing precondition and the other v3.0 audit follow-ups** (CI wiring of `test-9p`, `04-VALIDATION.md`, the boot-iso evidence claim): v3.1 backlog, not folded into this phase.
 
 </deferred>
 

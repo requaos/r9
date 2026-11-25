@@ -223,11 +223,11 @@ Which phases cover which requirements. Each requirement maps to exactly one phas
 | PROC-03 | Phase 7 | Pending |
 | PROC-04 | Phase 7 | Pending |
 | PROC-05 | Phase 7 | Pending |
-| DEBT-01 | TBD | Pending |
-| DEBT-02 | TBD | Pending |
-| DEBT-03 | TBD | Pending |
-| DEBT-04 | TBD | Pending |
-| DEBT-05 | TBD | Pending |
+| DEBT-01 | Phase 5 | Pending |
+| DEBT-02 | Phase 5 | Pending |
+| DEBT-03 | Phase 5 | Pending |
+| DEBT-04 | Phase 5 | Pending |
+| DEBT-05 | Phase 5 | Pending |
 | SMP-01 | Phase 8 | Pending |
 | SMP-02 | Phase 8 | Pending |
 | SMP-03 | Phase 8 | Pending |

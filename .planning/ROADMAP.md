@@ -22,7 +22,7 @@ Structure note: the standard granularity band (4-6 phases) would compress this, 
 ## Milestones
 
 - ✅ **v3.0 Cross-Build Harness and Wire Foundations** - Phases 1-4 (shipped 2026-11-25)
-- **v3.1 Secure Memory and Cluster Fabric** - Phases 5-7 (planned, next)
+- 🚧 **v3.1 Secure Memory and Cluster Fabric** - Phases 5-7 (in progress, started 2026-11-25)
 - **v3.2 SMP and Native std** - Phases 8-9 (planned)
 - **v3.3 Harvey Userland Port (Track P)** - Phases 10-12 (planned)
 - **v3.4 Storage and Graphics** - Phases 13-14 (planned)
@@ -52,25 +52,26 @@ Milestone numbering continues from the closed Harvey-rooted milestone v2.1.
 
 </details>
 
-### v3.1 Secure Memory and Cluster Fabric (Planned)
+### 🚧 v3.1 Secure Memory and Cluster Fabric (In Progress)
 
 **Milestone Goal:** Memory is cryptographically protected and demand-decrypted, the cluster can share leased state and discover its own services, and the `rfork` crypto flags are live.
 
-- [ ] **Phase 5: Guide Phase 3 - Cryptographic Memory and Zero-Copy DMA Paging** - shadow frames, dual-path stores, restricted vector ABI, DMA straight into the backing store
+- [ ] **Phase 5: Guide Phase 3 - Cryptographic Memory and Zero-Copy DMA Paging** - v3.0 audit follow-ups first, then sealed demand paging on both architectures in new profiles, restricted vector section, Roaring-pool allocator, `9P2000.aead` pages read straight into destination frames
 - [ ] **Phase 6: Guide Phase 4 - Distributed 9P Extensions and Service Discovery** - compound, streams, leases, union mounts, legacy gateway, beacon and discover with 30s/5m lifecycle
 - [ ] **Phase 7: Guide Phase 5 - Process Lifecycle and Notes** - `RFCKEY`, `RFROBASE`, `RFRANDMEM` live, secure note delivery
 
 #### Phase 5: Guide Phase 3 - Cryptographic Memory and Zero-Copy DMA Paging
-**Goal**: Evicted pages are stored encrypted and authenticated and come back correctly on demand, and network 9P packets land in page frames without a kernel copy.
+**Goal**: Evicted pages are stored encrypted and authenticated and come back correctly on demand on both architectures, and `9P2000.aead` data pages are read from the transport straight into their destination frames with no intermediate kernel buffer and no decrypt on receive. The phase opens by closing the v3.0 audit follow-ups.
 **Depends on**: Phase 4
-**Requirements**: MEM-01, MEM-02, MEM-03, MEM-04, MEM-05, MEM-06, MEM-07, MEM-08, MEM-09, MEM-10, MEM-11, MEM-12, MEM-13
+**Requirements**: MEM-01, MEM-02, MEM-03, MEM-04, MEM-05, MEM-06, MEM-07, MEM-08, MEM-09, MEM-10, MEM-11, MEM-12, MEM-13, DEBT-01, DEBT-02, DEBT-03, DEBT-04, DEBT-05
 **Success Criteria** (what must be TRUE):
-  1. Under the `q35lowmem` profile, which forces eviction, a demand page fault on an evicted page decrypts into a shadow frame with correct contents, and a corrupted page in the backing store is detected and the process killed under `q35crypt`.
-  2. A `9P2000.aead` data packet is DMA'd straight into an uninitialized frame in the destination segment's backing store, with no kernel copy or decrypt on receive and zero memory amplification.
-  3. `ymm0`-`ymm5` are restored for the interrupted context and scrubbed before return to user mode, and the scalar and vector paths produce identical output.
+  1. On both x86_64 and aarch64, in the sealed-paging profiles only (`q35lowmem`, which forces eviction, `q35crypt`, and their aarch64 counterparts), a demand page fault on an evicted page decrypts into a shadow frame with correct contents, and under `q35crypt` a corrupted page in the backing store is detected and the process killed. Default boots do not use sealed paging.
+  2. A `9P2000.aead` data page is read from the transport straight into its destination frame with no intermediate kernel buffer and no decrypt on receive, is tagged at receipt and verified at fault, and the faulting process reads correct contents with one frame per page. This is proven by `cargo xtask test-9p` on the host plus an in-kernel loopback probe under `q35crypt`; copies inside the TCP stack remain and are the stated limit.
+  3. The restricted vector section restores `ymm0`-`ymm5` on x86_64 and the NEON registers its vector path uses on aarch64 for the interrupted context, and scrubs them before return to user mode; the scalar and vector paths produce identical output on both architectures. No `XSAVE`/`XRSTOR` runs on the fault path or the eviction seal path. With AVX enabled in every x86_64 boot, user `ymm` state is saved and restored across a process switch and note delivery, copied on `rfork` and reset on exec.
   4. A KVM benchmark records cycles per cold fault (scalar versus vector) and eviction cost, and the boot-to-rio gate stays green.
+  5. The v3.0 audit follow-ups are closed in the phase's first plans, before any pager work: `cargo xtask test` and CI run `cargo xtask test-9p` and `cargo test -p xtask` and fail if either fails; `04-VALIDATION.md` is a completed validation record; the Phase 4 boot-iso evidence no longer claims the fixes moved the linked kernel bytes; `docs/threat-model.md` states that `rfork` bits 18-21 are reserved; and the TPHT >90% home-hit property is measured at the production bank count with the bank-sizing rule for a default-bank `FidShard` written down.
 **Plans**: TBD
-**Open questions**: Notes N2 (x86_64 is not lint-opted-in at HEAD; extend the lint and `UNSAFE-AUDIT.md` to `shadow.rs` and `cryptpage.rs`) and N7 (reconcile the restricted vector ABI with the owner's `fpu::kernel_begin()` / `with_simd()` rule). Landing sites `x86_64/src/mmu.rs`, `shadow.rs`, `cryptpage.rs` and `port/src/palloc.rs`, `segcrypt.rs` do not exist at HEAD. `q35lowmem` and `q35crypt` are new profiles (HEAD's `q35lowmcfg` is a moved-MCFG machine, unrelated). An x86_64 kernel byte change triggers the `boot-iso` hash, amd64 Docker TCG, and owner linux check procedure.
+**Open questions**: Settled by `.planning/phases/05-guide-phase-3-cryptographic-memory-and-zero-copy-dma-paging/05-CONTEXT.md` (2026-11-25): N2 for `x86_64` (D-25: the crate takes the workspace lints and `UNSAFE-AUDIT.md` covers every site, including `shadow.rs` and `cryptpage.rs`), N7 (D-12: a second, narrower `fpu` section kind for the six vector registers), N9 (D-11: zero and flush across key domains), N10 for this phase (D-22: `docs/threat-model.md` is amended; the legacy gateway's bounce frames wait for Phase 6) and the second half of N11 (D-19: the packet MAC at receipt, a keyed BLAKE3 page tag at fault). The goal and success criteria above follow those decisions. The owner decided on 2026-11-25 that this phase stays one phase although it is large (two pagers, AVX with XSAVE, Roaring SIMD on both architectures, page-aligned `read(2)`); the planner raises a split only if the plan count calls for it. Landing sites `x86_64/src/mmu.rs`, `shadow.rs`, `cryptpage.rs` and `port/src/palloc.rs`, `segcrypt.rs`, `inflight.rs`, `superpage.rs` do not exist at HEAD. `q35lowmem` and `q35crypt` are new profiles (HEAD's `q35lowmcfg` is a moved-MCFG machine, unrelated). An x86_64 kernel byte change triggers the `boot-iso` hash, amd64 Docker TCG, and owner linux check procedure; for this phase it runs at two owner stops (D-26), the first after the AVX/XSAVE change (D-13) and the second at phase end. The `port/src` diff-first stop is waived to a phase-end review of the cumulative `port/src` change, before any push (D-28). The v3.0 audit follow-ups (DEBT-01 to DEBT-05) were folded into this phase by the owner on 2026-11-25 as its initial steps (D-29); no separate phase was inserted. The Phase 4 directory was archived with v3.0, so `04-VALIDATION.md` and the boot-iso evidence sit under `.planning/milestones/v3.0-phases/04-guide-phase-2-9p2000-aead-transport-and-fidtable/`; DEBT-02 and DEBT-03 edit those archived copies, and `/gsd-validate-phase 4` may not resolve that path. Phase 4's `FidShard` uses 0 banks and the production default is 256; if DEBT-04 changes a `ds/` default, kernel bytes may move and the byte-change procedure applies.
 
 #### Phase 6: Guide Phase 4 - Distributed 9P Extensions and Service Discovery
 **Goal**: Cluster nodes can run atomic compound operations, stream data with flow control, cache shared files under leases, mount unions in parallel, interoperate with legacy 9P peers, and find each other's services dynamically.
