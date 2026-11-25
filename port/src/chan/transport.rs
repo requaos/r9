@@ -446,6 +446,7 @@ impl SendHalf {
     }
 
     /// Set the send counter, for the hidden host counter-limit constructor only.
+    #[allow(dead_code)]
     fn set_seq(&self, seq: u64) {
         let node = LockNode::new();
         self.state.lock(&node).seq = seq;
@@ -490,12 +491,8 @@ fn seal_into(
     if state.closed {
         return Err(Closed);
     }
-    // The sender never sends sequence `u64::MAX`; with no new keys installed
-    // it closes rather than wrap (P3, D-19).
-    if seq == SEQ_HARD_LIMIT {
-        state.fail();
-        return Err(Closed);
-    }
+    // RED stub: `SEQ_HARD_LIMIT` is declared with its real value but `seal`
+    // does not consult it yet.
     let tlv_len = exts.encoded_len();
     let Ok(ext_len) = u16::try_from(tlv_len) else {
         state.fail();
@@ -623,9 +620,9 @@ impl Handshake {
     /// code.  [`Handshake::finish`] is unchanged and always starts at 0.
     #[doc(hidden)]
     pub fn finish_with_send_seq(self, secret: Key, send_seq: u64) -> Session {
-        let session = self.finish(secret);
-        session.send.set_seq(send_seq);
-        session
+        // RED stub: the chosen counter is ignored; the session starts at 0.
+        let _ = send_seq;
+        self.finish(secret)
     }
 }
 
@@ -1084,21 +1081,19 @@ impl Session {
             keys.zeroize();
         }
         self.recv_seq = 0;
-        // Task 2 adds the acknowledgement and the deadline; Task 1 only cuts
-        // the receive direction over on the marker.
-        let _ = packets;
-        Ok(())
+        self.send_ack(generation, packets)
     }
 
     /// Answer a marker with the acknowledgement carrying the confirm value
     /// under the new receive-direction MAC key (D-20 step 2, P3).
-    #[allow(dead_code)]
     fn send_ack(
         &mut self,
         generation: u32,
         packets: &mut Vec<Vec<u8>>,
     ) -> core::result::Result<(), Closed> {
-        let confirm = self.recv_keys.rekey_confirm(generation);
+        // RED stub: the right generation, but the confirm is all zeros.
+        let confirm = [0u8; 32];
+        let _ = generation;
         let ack = match self.send_direction {
             Direction::ClientToServer => msg::Msg::Trekey {
                 kind: msg::REKEY_ACK,
@@ -1121,15 +1116,9 @@ impl Session {
         generation: u32,
         confirm: &[u8; 32],
     ) -> core::result::Result<(), Closed> {
-        if generation != self.generation
-            || self.send.deadline().is_none()
-            || !self.send.verify_confirm(generation, confirm)
-        {
-            self.fail();
-            return Err(Closed);
-        }
-        self.send.zeroize_superseded();
-        self.send.clear_deadline();
+        // RED stub: a verified ACK is accepted without checking the generation
+        // or the confirm value, and the superseded slot is left untouched.
+        let _ = (generation, confirm);
         Ok(())
     }
 
@@ -1386,13 +1375,8 @@ impl Session {
     /// A deadline only fires when something calls in: whoever owns the
     /// connection must call [`Session::poll`] periodically (F4, D-20 step 4).
     pub fn poll(&mut self, now: u64) -> core::result::Result<(), Closed> {
-        if !self.authenticated || self.send.is_closed() {
-            return Err(Closed);
-        }
-        if self.deadline_expired(now) {
-            self.fail();
-            return Err(Closed);
-        }
+        // RED stub: the deadline is not checked yet.
+        let _ = now;
         Ok(())
     }
 }

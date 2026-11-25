@@ -18,6 +18,7 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 
 use crypto::key::Key;
+use crypto::session::Direction;
 use port::chan::msg::{self, Msg};
 use port::chan::transport::{
     Closed, ExchangeStep, Handshake, Role, Session, SessionExchange, TransportConfig,
@@ -99,6 +100,9 @@ pub struct AeadLink {
     pub decode_count: Rc<RefCell<usize>>,
     /// Every plain-framed handshake message, whole, in wire order.
     pub plain_wire: Vec<Vec<u8>>,
+    /// Every frame put on the link, with its direction, plain and sealed alike,
+    /// in wire order (plan 04-08's independent wire pin).
+    pub wire_log: Vec<(Direction, Vec<u8>)>,
 }
 
 impl AeadLink {
@@ -116,6 +120,7 @@ impl AeadLink {
             now: 0,
             decode_count: Rc::new(RefCell::new(0)),
             plain_wire: Vec::new(),
+            wire_log: Vec::new(),
         }))
     }
 
@@ -144,6 +149,7 @@ impl Default for AeadLink {
             now: 0,
             decode_count: Rc::new(RefCell::new(0)),
             plain_wire: Vec::new(),
+            wire_log: Vec::new(),
         }
     }
 }
@@ -401,7 +407,7 @@ pub fn connect_with_kept_config<C: SessionExchange, S: SessionExchange>(
             version: VERSION_AEAD.to_vec(),
         }),
     );
-    absorb(&link, &mut client, &mut server, &tversion);
+    absorb(&link, &mut client, &mut server, &tversion, Direction::ClientToServer);
 
     // Rversion: the server absorbs the correct bytes; the client absorbs what
     // arrives, which the knobs may have altered.
@@ -416,14 +422,16 @@ pub fn connect_with_kept_config<C: SessionExchange, S: SessionExchange>(
     server.absorb_plain(&rversion);
     let delivered = alter_rversion(&link, rversion);
     client.absorb_plain(&delivered);
-    link.borrow_mut().plain_wire.push(delivered);
+    link.borrow_mut().plain_wire.push(delivered.clone());
+    link.borrow_mut().wire_log.push((Direction::ServerToClient, delivered));
 
     // Tauth / Rauth with their standard bodies.
-    absorb(&link, &mut client, &mut server, &tauth_frame());
+    absorb(&link, &mut client, &mut server, &tauth_frame(), Direction::ClientToServer);
     let rauth = rauth_frame();
     server.absorb_plain(&rauth);
     client.absorb_plain(&rauth);
-    link.borrow_mut().plain_wire.push(rauth);
+    link.borrow_mut().plain_wire.push(rauth.clone());
+    link.borrow_mut().wire_log.push((Direction::ServerToClient, rauth));
 
     // Exchange round: the client's bytes ride Twrite, the server's ride Rread.
     let mut client_out = Vec::new();
@@ -442,7 +450,7 @@ pub fn connect_with_kept_config<C: SessionExchange, S: SessionExchange>(
             data: client_out.clone(),
         }),
     );
-    absorb(&link, &mut client, &mut server, &twrite);
+    absorb(&link, &mut client, &mut server, &twrite, Direction::ClientToServer);
     let rwrite = plain_frame(
         wire::RWRITE,
         2,
@@ -452,7 +460,8 @@ pub fn connect_with_kept_config<C: SessionExchange, S: SessionExchange>(
     );
     server.absorb_plain(&rwrite);
     client.absorb_plain(&rwrite);
-    link.borrow_mut().plain_wire.push(rwrite);
+    link.borrow_mut().plain_wire.push(rwrite.clone());
+    link.borrow_mut().wire_log.push((Direction::ServerToClient, rwrite));
 
     let mut server_out = Vec::new();
     let server_step = server_exchange
@@ -470,7 +479,7 @@ pub fn connect_with_kept_config<C: SessionExchange, S: SessionExchange>(
             count: 65536,
         }),
     );
-    absorb(&link, &mut client, &mut server, &tread);
+    absorb(&link, &mut client, &mut server, &tread, Direction::ClientToServer);
     let rread = plain_frame(
         wire::RREAD,
         3,
@@ -478,7 +487,8 @@ pub fn connect_with_kept_config<C: SessionExchange, S: SessionExchange>(
     );
     server.absorb_plain(&rread);
     client.absorb_plain(&rread);
-    link.borrow_mut().plain_wire.push(rread);
+    link.borrow_mut().plain_wire.push(rread.clone());
+    link.borrow_mut().wire_log.push((Direction::ServerToClient, rread));
 
     let client_session = client.finish(client_secret);
     let server_session = server.finish(server_secret);
@@ -494,10 +504,12 @@ fn absorb(
     client: &mut Handshake,
     server: &mut Handshake,
     frame: &[u8],
+    direction: Direction,
 ) {
     client.absorb_plain(frame);
     server.absorb_plain(frame);
     link.borrow_mut().plain_wire.push(frame.to_vec());
+    link.borrow_mut().wire_log.push((direction, frame.to_vec()));
 }
 
 /// A pristine server end over the canonical handshake (one per altered byte).
@@ -537,6 +549,7 @@ impl ClientEnd {
                 packet[offset] ^= 0xFF;
             }
         }
+        link.wire_log.push((Direction::ClientToServer, packet.clone()));
         // A tap that duplicates the packet: the same sealed bytes go on the
         // wire twice, which a strict receiver must refuse the second time
         // (plan 04-16, WIRE-11).
@@ -573,6 +586,7 @@ impl ClientEnd {
         let packets = self.session.rekey_step(exchange, incoming, now)?;
         let mut link = self.link.borrow_mut();
         for packet in &packets {
+            link.wire_log.push((Direction::ClientToServer, packet.clone()));
             link.c2s.extend(packet.iter().copied());
         }
         Ok(packets)
@@ -611,6 +625,7 @@ impl ServerEnd {
                 packet[offset] ^= 0xFF;
             }
         }
+        link.wire_log.push((Direction::ServerToClient, packet.clone()));
         if link.replay_last {
             link.s2c.extend(packet.iter().copied());
         }
@@ -642,6 +657,10 @@ impl ServerEnd {
         let packets = self.session.rekey_step(exchange, incoming, now)?;
         let mut link = self.link.borrow_mut();
         for packet in &packets {
+            link.wire_log.push((Direction::ServerToClient, packet.clone()));
+            if link.withhold_rekey_ack && packet.get(4) == Some(&wire::RREKEY) {
+                continue;
+            }
             link.s2c.extend(packet.iter().copied());
         }
         Ok(packets)

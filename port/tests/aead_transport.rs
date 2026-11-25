@@ -1311,6 +1311,10 @@ fn aead_transport_rekey_directions_cut_over_independently() {
     assert_eq!(marker.len(), 1);
     let msg = server.recv().expect("the server opens the c2s marker");
     server.rekey(&mut se, Some(&msg), 0).expect("the server cuts its receive direction over");
+    // The receiver answered the marker with the c2s acknowledgement; the
+    // client accepts it before anything else is exchanged.
+    let ack = client.recv().expect("the client opens the c2s ACK");
+    client.rekey(&mut ce, Some(&ack), 0).expect("the client accepts the c2s ACK");
 
     // A server-to-client packet still uses generation 0: its tag verifies under
     // the test's own generation 0 s2c keys.
@@ -1438,6 +1442,10 @@ fn aead_transport_rekey_outstanding_requests_complete() {
     assert_eq!(marker.len(), 1);
     let msg = server.recv().expect("the server opens the marker");
     server.rekey(&mut se, Some(&msg), 0).expect("the server cuts over");
+    // The receiver answered the marker with the c2s acknowledgement; the
+    // client accepts it before the outstanding reply.
+    let ack = client.recv().expect("the client opens the c2s ACK");
+    client.rekey(&mut ce, Some(&ack), 0).expect("the client accepts the c2s ACK");
 
     server
         .send(
@@ -1460,6 +1468,537 @@ fn aead_transport_rekey_outstanding_requests_complete() {
         }
         other => panic!("expected the outstanding Rread, got {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// In-band re-keying: acknowledgement, deadline, old-key refusal and the hard
+// counter limit (WIRE-04, D-19, D-20).
+// ---------------------------------------------------------------------------
+
+/// Frame one standard 9P2000 message: `size[4] type[1] tag[2] body`.
+fn standard_frame(typ: u8, tag: u16, body: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(7 + body.len());
+    out.extend_from_slice(&((7 + body.len()) as u32).to_le_bytes());
+    out.push(typ);
+    out.extend_from_slice(&tag.to_le_bytes());
+    out.extend_from_slice(body);
+    out
+}
+
+/// Decrypt one sealed packet's body with the test's own keys, applying the P5
+/// placement with literals (parameters at block counter 0, data page `i` at
+/// `1 + 64 * i`, a 4096-byte page).  Never calls the transport's own opener.
+fn decrypt_packet_body(keys: &DirectionKeys, packet: &[u8]) -> Vec<u8> {
+    let size = packet.len();
+    let typ = packet[4];
+    let seq = u64::from_le_bytes(packet[16..24].try_into().expect("SeqNonce is 8 bytes"));
+    let ext_len = u16::from_le_bytes(packet[26..28].try_into().expect("ExtTLVs Length is 2 bytes"))
+        as usize;
+    let body_end = size - 32;
+    let mut body = packet[28 + ext_len..body_end].to_vec();
+    let params = match typ {
+        wire::TWRITE => 16usize,
+        wire::RREAD => 4,
+        _ => 0,
+    };
+    if params > 0 {
+        let params = params.min(body.len());
+        keys.keystream(seq, 0, &mut body[..params])
+            .expect("the parameter block is within the counter limit");
+        let mut offset = params;
+        let mut page = 0u32;
+        while offset < body.len() {
+            let end = (offset + 4096).min(body.len());
+            keys.keystream(seq, 1 + 64 * page, &mut body[offset..end])
+                .expect("the data page is within the counter limit");
+            offset = end;
+            page += 1;
+        }
+    } else {
+        keys.keystream(seq, 0, &mut body)
+            .expect("the non-data body is within the counter limit");
+    }
+    body
+}
+
+/// Whether `packet` is one of the six in-band exchange messages.
+fn is_exchange_type(typ: u8) -> bool {
+    matches!(
+        typ,
+        wire::TAUTH | wire::RAUTH | wire::TWRITE | wire::RWRITE | wire::TREAD | wire::RREAD
+    )
+}
+
+/// The test's own generation 0 and generation 1 keys, from the recorded plain
+/// handshake frames, the first secret, the sealed exchange frames and the
+/// second secret.  Uses `Transcript`, `derive`, `keystream` and `mac` only.
+fn test_generations(wire: &[(Direction, Vec<u8>)]) -> (SessionKeys, SessionKeys) {
+    let plain: Vec<Vec<u8>> = wire[..8].iter().map(|(_, frame)| frame.clone()).collect();
+    let mut t0 = Transcript::new();
+    for frame in &plain {
+        t0.absorb(frame);
+    }
+    let keys0 = session::derive(&secret(), &t0.hash(), 0);
+
+    let mut t1 = Transcript::chain(&t0.hash());
+    for (direction, packet) in &wire[8..] {
+        let typ = packet[4];
+        if !is_exchange_type(typ) {
+            continue;
+        }
+        let keys = match direction {
+            Direction::ClientToServer => &keys0.c2s,
+            Direction::ServerToClient => &keys0.s2c,
+        };
+        let body = decrypt_packet_body(keys, packet);
+        let tag = u16::from_le_bytes(packet[5..7].try_into().expect("Tag is 2 bytes"));
+        t1.absorb(&standard_frame(typ, tag, &body));
+    }
+    let keys1 = session::derive(&second_secret(), &t1.hash(), 1);
+    (keys0, keys1)
+}
+
+/// A connected pair with the client at its re-key threshold and the exchange
+/// already run, ready for the markers and acknowledgements.
+fn connected_after_exchange(
+    link: &std::rc::Rc<std::cell::RefCell<AeadLink>>,
+) -> (ClientEnd, ServerEnd, TestExchange, TestExchange) {
+    let (mut ce, mut se) = rekey_seams(secret(), second_secret());
+    let (mut client, mut server) = connect_with_kept_config(
+        link.clone(),
+        &mut ce,
+        &mut se,
+        config_with_rekey(4, 5000),
+    );
+    for i in 0..4u16 {
+        client
+            .send(wire::TCLUNK, i, [0u8; 8], &Exts::default(), &clunk_body())
+            .expect("the client seals a threshold packet");
+        assert!(server.recv().is_ok());
+    }
+    drive_exchange(link, &mut client, &mut server, &mut ce, &mut se, 0);
+    (client, server, ce, se)
+}
+
+#[test]
+fn aead_transport_rekey_marker_then_ack() {
+    let link = AeadLink::new();
+    let (mut client, mut server, mut ce, mut se) = connected_after_exchange(&link);
+
+    let marker = client.rekey(&mut ce, None, 0).expect("the client sends its marker");
+    assert_eq!(marker.len(), 1);
+    assert_eq!(client.session.superseded_keys(Direction::ClientToServer), Superseded::Held);
+    let msg = server.recv().expect("the server opens the marker");
+    let ack_packets = server.rekey(&mut se, Some(&msg), 0).expect("the server answers the marker");
+    assert_eq!(ack_packets.len(), 1, "the receiver answers the marker with one ACK");
+
+    let ack = client.recv().expect("the client opens the ACK");
+    match &ack {
+        Msg::Rrekey { kind, generation, .. } => {
+            assert_eq!(*kind, msg::REKEY_ACK, "the receiver answers with the ACK kind");
+            assert_eq!(*generation, 1, "the ACK names generation g + 1");
+        }
+        other => panic!("expected an Rrekey ack, got {other:?}"),
+    }
+    assert_eq!(
+        client.session.superseded_keys(Direction::ClientToServer),
+        Superseded::Held,
+        "immediately before the ACK is processed the sender still holds its old keys"
+    );
+    client.rekey(&mut ce, Some(&ack), 0).expect("the sender accepts the ACK");
+    assert_eq!(
+        client.session.superseded_keys(Direction::ClientToServer),
+        Superseded::Zeroized,
+        "a valid ACK zeroizes the sender's old keys"
+    );
+}
+
+#[test]
+fn aead_transport_rekey_wrong_confirm_closes() {
+    let link = AeadLink::new();
+    let (mut client, mut server, mut ce, mut se) = connected_after_exchange(&link);
+    link.borrow_mut().withhold_rekey_ack = true;
+
+    let marker = client.rekey(&mut ce, None, 0).expect("the client sends its marker");
+    assert_eq!(marker.len(), 1);
+    let msg = server.recv().expect("the server opens the marker");
+    let withheld = server.rekey(&mut se, Some(&msg), 0).expect("the server builds its ACK");
+    assert_eq!(withheld.len(), 1, "the ACK was built but withheld by the link");
+
+    // Craft an ACK whose confirm has one byte flipped, sealed correctly.
+    let wire: Vec<(Direction, Vec<u8>)> = link.borrow().wire_log.clone();
+    let (keys0, keys1) = test_generations(&wire);
+    let seq = u64::from_le_bytes(
+        wire.iter()
+            .rev()
+            .find(|(direction, packet)| {
+                *direction == Direction::ServerToClient && packet[4] == wire::RREKEY
+            })
+            .expect("the withheld ACK is in the wire log")
+            .1[16..24]
+            .try_into()
+            .expect("SeqNonce is 8 bytes"),
+    );
+    let mut confirm = keys1.c2s.rekey_confirm(1);
+    confirm[0] ^= 0xFF;
+    let body = body_of(&Msg::Rrekey {
+        kind: msg::REKEY_ACK,
+        generation: 1,
+        confirm,
+    });
+    let bad = seal_bypass(&keys0.s2c, seq, wire::RREKEY, 0, 0, [0u8; 8], 0, &[], &body);
+    link.borrow_mut().s2c.extend(bad.iter().copied());
+
+    let ack = client.recv().expect("the client opens the crafted ACK");
+    assert!(
+        client.rekey(&mut ce, Some(&ack), 0).is_err(),
+        "a wrong confirm value closes the sender"
+    );
+    assert!(client.session.is_closed(), "the sender is closed after a wrong confirm");
+    assert!(client.session.keys_zeroized(), "the sender's keys are zeroized");
+}
+
+#[test]
+fn aead_transport_rekey_ack_timeout_closes() {
+    let link = AeadLink::new();
+    let (mut client, mut server, mut ce, mut se) = connected_after_exchange(&link);
+    link.borrow_mut().withhold_rekey_ack = true;
+
+    let marker = client.rekey(&mut ce, None, 0).expect("the client sends its marker");
+    assert_eq!(marker.len(), 1);
+    let msg = server.recv().expect("the server opens the marker");
+    let withheld = server.rekey(&mut se, Some(&msg), 0).expect("the server builds its ACK");
+    assert_eq!(withheld.len(), 1);
+    assert!(!client.session.is_closed(), "the sender is still live before the deadline");
+
+    // The marker was sent with now = 0 and the timeout is 5000 ms.
+    client.session.poll(4999).expect("one millisecond before the deadline changes nothing");
+    assert!(!client.session.is_closed(), "the sender is still live one millisecond early");
+
+    assert!(
+        client.session.poll(5000).is_err(),
+        "poll at the deadline closes the sender of the marker"
+    );
+    assert!(client.session.is_closed(), "the waiting sender is closed");
+    assert!(client.session.keys_zeroized(), "the closed sender's keys are zeroized");
+    assert!(
+        !server.session.is_closed(),
+        "the receiver of the marker has no deadline of its own"
+    );
+
+    // Nothing the closed sender held can still be used: a packet the receiver
+    // seals afterwards is refused by the sender.
+    server
+        .send(wire::RCLUNK, 61, [0u8; 8], &Exts::default(), &[])
+        .expect("the receiver still seals");
+    assert!(
+        client.recv().is_err(),
+        "the closed sender refuses a packet the receiver seals afterwards"
+    );
+    assert!(
+        client
+            .session
+            .seal(wire::TCLUNK, 62, [0u8; 8], &Exts::default(), &clunk_body(), 0)
+            .is_err(),
+        "the closed sender's later seals return closed"
+    );
+}
+
+#[test]
+fn aead_transport_rekey_no_old_key_packet_after_marker() {
+    for complete_ack in [false, true] {
+        let link = AeadLink::new();
+        let (mut client, mut server, mut ce, mut se) = connected_after_exchange(&link);
+        let keys0 = test_generations(&link.borrow().wire_log.clone()).0;
+
+        let marker = client.rekey(&mut ce, None, 0).expect("the client sends its marker");
+        assert_eq!(marker.len(), 1);
+        let msg = server.recv().expect("the server opens the marker");
+        server.rekey(&mut se, Some(&msg), 0).expect("the server cuts over");
+
+        if complete_ack {
+            let ack = client.recv().expect("the client opens the ACK");
+            client.rekey(&mut ce, Some(&ack), 0).expect("the ACK is accepted");
+            assert_eq!(
+                client.session.superseded_keys(Direction::ClientToServer),
+                Superseded::Zeroized,
+                "after the ACK the sender holds no live old keys"
+            );
+        } else {
+            assert_eq!(
+                client.session.superseded_keys(Direction::ClientToServer),
+                Superseded::Held,
+                "before the ACK the sender still holds its old keys"
+            );
+        }
+
+        // A packet sealed under the old c2s keys, delivered after the marker.
+        let old = seal_bypass(&keys0.c2s, 0, wire::TCLUNK, 70, 0, [0u8; 8], 0, &[], &clunk_body());
+        link.borrow_mut().c2s.extend(old.iter().copied());
+        assert!(
+            server.recv().is_err(),
+            "an old-key packet is rejected after the marker (complete_ack = {complete_ack})"
+        );
+        assert!(
+            server.session.is_closed(),
+            "the old-key packet closes the receiver (complete_ack = {complete_ack})"
+        );
+    }
+}
+
+#[test]
+fn aead_transport_rekey_counter_never_wraps() {
+    let mut handshake = Handshake::new(Role::Client, config_with_rekey(1 << 48, 5000));
+    for frame in handshake_frames() {
+        handshake.absorb_plain(&frame);
+    }
+    let mut session = handshake.finish_with_send_seq(secret(), u64::MAX - 1);
+
+    let first = session
+        .seal(wire::TCLUNK, 80, [0u8; 8], &Exts::default(), &clunk_body(), 0)
+        .expect("one more packet fits below the hard limit");
+    assert_eq!(seq_of(&first), u64::MAX - 1, "the first packet carries u64::MAX - 1");
+
+    assert!(
+        session
+            .seal(wire::TCLUNK, 81, [0u8; 8], &Exts::default(), &clunk_body(), 0)
+            .is_err(),
+        "a sender that would reach the limit with no new keys closes"
+    );
+    assert!(session.is_closed(), "the session is closed at the hard limit");
+    assert!(session.keys_zeroized(), "the closed session's keys are zeroized");
+    assert_ne!(
+        seq_of(&first),
+        u64::MAX,
+        "no packet with sequence u64::MAX is produced"
+    );
+}
+
+#[test]
+fn aead_transport_rekey_ack_for_wrong_generation_closes() {
+    let link = AeadLink::new();
+    let (mut client, mut server, mut ce, mut se) = connected_after_exchange(&link);
+    link.borrow_mut().withhold_rekey_ack = true;
+
+    let marker = client.rekey(&mut ce, None, 0).expect("the client sends its marker");
+    assert_eq!(marker.len(), 1);
+    let msg = server.recv().expect("the server opens the marker");
+    let withheld = server.rekey(&mut se, Some(&msg), 0).expect("the server builds its ACK");
+    assert_eq!(withheld.len(), 1);
+
+    let wire: Vec<(Direction, Vec<u8>)> = link.borrow().wire_log.clone();
+    let (keys0, keys1) = test_generations(&wire);
+    let seq = u64::from_le_bytes(
+        wire.iter()
+            .rev()
+            .find(|(direction, packet)| {
+                *direction == Direction::ServerToClient && packet[4] == wire::RREKEY
+            })
+            .expect("the withheld ACK is in the wire log")
+            .1[16..24]
+            .try_into()
+            .expect("SeqNonce is 8 bytes"),
+    );
+    // A correct confirm, but for generation 2 rather than the one in flight.
+    let body = body_of(&Msg::Rrekey {
+        kind: msg::REKEY_ACK,
+        generation: 2,
+        confirm: keys1.c2s.rekey_confirm(2),
+    });
+    let bad = seal_bypass(&keys0.s2c, seq, wire::RREKEY, 0, 0, [0u8; 8], 0, &[], &body);
+    link.borrow_mut().s2c.extend(bad.iter().copied());
+
+    let ack = client.recv().expect("the client opens the crafted ACK");
+    assert!(
+        client.rekey(&mut ce, Some(&ack), 0).is_err(),
+        "an ACK naming another generation closes the sender"
+    );
+    assert!(client.session.is_closed(), "the sender is closed");
+    assert!(client.session.keys_zeroized(), "the sender's keys are zeroized");
+}
+
+#[test]
+fn aead_transport_rekey_wire_keys_and_confirm_equal_test_side_derivation() {
+    let link = AeadLink::new();
+    let (mut client, mut server, mut ce, mut se) = connected_after_exchange(&link);
+
+    // Client c2s cutover, then the server's ACK for it.
+    let marker = client.rekey(&mut ce, None, 0).expect("the client sends its c2s marker");
+    assert_eq!(marker.len(), 1);
+    let msg = server.recv().expect("the server opens the c2s marker");
+    let ack_packets = server.rekey(&mut se, Some(&msg), 0).expect("the server answers the marking");
+    assert_eq!(ack_packets.len(), 1);
+    let ack = client.recv().expect("the client opens the c2s ACK");
+    client.rekey(&mut ce, Some(&ack), 0).expect("the client accepts the c2s ACK");
+
+    // Server s2c cutover, then the client's ACK for it.
+    let marker = server.rekey(&mut se, None, 0).expect("the server sends its s2c marker");
+    assert_eq!(marker.len(), 1);
+    let msg = client.recv().expect("the client opens the s2c marker");
+    let c_ack_packets = client.rekey(&mut ce, Some(&msg), 0).expect("the client answers the marking");
+    assert_eq!(c_ack_packets.len(), 1);
+    let ack = server.recv().expect("the server opens the s2c ACK");
+    server.rekey(&mut se, Some(&ack), 0).expect("the server accepts the s2c ACK");
+
+    // One packet in each direction now travels under generation 1.
+    let wire: Vec<(Direction, Vec<u8>)> = link.borrow().wire_log.clone();
+    let (keys0, keys1) = test_generations(&wire);
+    let gen2_transcript = rekey_transcript_hash(&wire);
+    let keys2 = session::derive(&second_secret(), &gen2_transcript, 2);
+
+    // (4) The first client-to-server packet after the client's MARKER is at
+    // sequence 0 and its tag is the MAC under generation 1 c2s keys.
+    let marker_index = wire
+        .iter()
+        .position(|(direction, packet)| {
+            *direction == Direction::ClientToServer
+                && packet[4] == wire::TREKEY
+                && decrypt_packet_body(&keys0.c2s, packet)[0] == msg::REKEY_MARKER
+        })
+        .expect("the client's c2s marker is in the record");
+    let (_, first_after) = wire[marker_index + 1..]
+        .iter()
+        .find(|(direction, _)| *direction == Direction::ClientToServer)
+        .expect("the client's next c2s packet is in the record");
+    assert_eq!(
+        u64::from_le_bytes(first_after[16..24].try_into().expect("SeqNonce is 8 bytes")),
+        0,
+        "the first packet after the marker carries sequence 0"
+    );
+    let end = first_after.len() - 32;
+    assert_eq!(
+        &first_after[end..],
+        &mac_of(&keys1.c2s, first_after)[..],
+        "the new packet's tag is packet MAC under the test's generation 1 c2s keys"
+    );
+    assert_ne!(
+        &first_after[end..],
+        &mac_of(&keys0.c2s, first_after)[..],
+        "the same packet does not match generation 0"
+    );
+    assert_ne!(
+        &first_after[end..],
+        &mac_of(&keys2.c2s, first_after)[..],
+        "the same packet does not match a generation 2 derivation over the same transcript"
+    );
+    assert_ne!(
+        &first_after[end..],
+        &mac_of(&keys1.s2c, first_after)[..],
+        "the same packet does not match the other direction"
+    );
+
+    // (5) The server's ACK for the c2s cutover: kind ACK, generation 1, and a
+    // confirm under the new c2s MAC key only.
+    let server_rrekeys: Vec<&(Direction, Vec<u8>)> = wire
+        .iter()
+        .filter(|(direction, packet)| {
+            *direction == Direction::ServerToClient && packet[4] == wire::RREKEY
+        })
+        .collect();
+    let c_ack = server_rrekeys
+        .iter()
+        .find(|(_, packet)| decrypt_packet_body(&keys0.s2c, packet)[0] == msg::REKEY_ACK)
+        .expect("the server's c2s ACK is in the record")
+        .1
+        .clone();
+    let ack_body = decrypt_packet_body(&keys0.s2c, &c_ack);
+    assert_eq!(ack_body[0], msg::REKEY_ACK, "the kind byte is ACK");
+    assert_eq!(
+        u32::from_le_bytes(ack_body[1..5].try_into().expect("generation is 4 bytes")),
+        1,
+        "the ACK names generation 1 little-endian"
+    );
+    let confirm: [u8; 32] = ack_body[5..37].try_into().expect("the confirm is 32 bytes");
+    assert_eq!(
+        confirm,
+        keys1.c2s.rekey_confirm(1),
+        "the ACK's confirm is the test's own generation 1 c2s rekey_confirm"
+    );
+    assert_ne!(confirm, keys1.s2c.rekey_confirm(1), "not the other direction's confirm");
+    assert_ne!(confirm, keys0.c2s.rekey_confirm(0), "not generation 0's confirm");
+
+    // (6) The other direction: the first s2c packet after the server's MARKER,
+    // and the client's ACK carrying the s2c confirm.
+    let s2c_marker_index = wire
+        .iter()
+        .position(|(direction, packet)| {
+            *direction == Direction::ServerToClient
+                && packet[4] == wire::RREKEY
+                && decrypt_packet_body(&keys0.s2c, packet)[0] == msg::REKEY_MARKER
+        })
+        .expect("the server's s2c marker is in the record");
+    // The first s2c packet after the marker is the server's own next packet,
+    // so seal one and record it.
+    server
+        .send(wire::RCLUNK, 90, [0u8; 8], &Exts::default(), &[])
+        .expect("the server seals a post-marker s2c packet");
+    let wire_after_send: Vec<(Direction, Vec<u8>)> = link.borrow().wire_log.clone();
+    let (_, s_after) = wire_after_send
+        .into_iter()
+        .skip(s2c_marker_index + 1)
+        .find(|(direction, _)| *direction == Direction::ServerToClient)
+        .expect("the post-marker s2c packet is in the record");
+    let end = s_after.len() - 32;
+    assert_eq!(
+        &s_after[end..],
+        &mac_of(&keys1.s2c, &s_after)[..],
+        "the new s2c packet's tag is packet MAC under the test's generation 1 s2c keys"
+    );
+    assert_ne!(
+        &s_after[end..],
+        &mac_of(&keys0.s2c, &s_after)[..],
+        "the same s2c packet does not match generation 0"
+    );
+
+    let c_ack = wire
+        .iter()
+        .skip(marker_index + 1)
+        .find(|(direction, packet)| {
+            *direction == Direction::ClientToServer && packet[4] == wire::TREKEY
+        })
+        .expect("the client's s2c ACK is in the record")
+        .1
+        .clone();
+    let c_ack_body = decrypt_packet_body(&keys1.c2s, &c_ack);
+    assert_eq!(c_ack_body[0], msg::REKEY_ACK, "the client answers the s2c marker with ACK");
+    assert_eq!(
+        u32::from_le_bytes(c_ack_body[1..5].try_into().expect("generation is 4 bytes")),
+        1
+    );
+    let s_confirm: [u8; 32] = c_ack_body[5..37].try_into().expect("the confirm is 32 bytes");
+    assert_eq!(
+        s_confirm,
+        keys1.s2c.rekey_confirm(1),
+        "the client's ACK carries the test's own generation 1 s2c confirm"
+    );
+    assert_ne!(s_confirm, keys1.c2s.rekey_confirm(1));
+}
+
+/// The chained re-key transcript hash, recomputed test-side from the recorded
+/// plain handshake frames and the sealed exchange frames (P2, D-17, D-18).
+fn rekey_transcript_hash(wire: &[(Direction, Vec<u8>)]) -> [u8; 32] {
+    let mut t0 = Transcript::new();
+    for (_, frame) in &wire[..8] {
+        t0.absorb(frame);
+    }
+    let t0_hash = t0.hash();
+    let keys0 = session::derive(&secret(), &t0_hash, 0);
+
+    let mut t1 = Transcript::chain(&t0_hash);
+    for (direction, packet) in &wire[8..] {
+        let typ = packet[4];
+        if !is_exchange_type(typ) {
+            continue;
+        }
+        let keys = match direction {
+            Direction::ClientToServer => &keys0.c2s,
+            Direction::ServerToClient => &keys0.s2c,
+        };
+        let body = decrypt_packet_body(keys, packet);
+        let tag = u16::from_le_bytes(packet[5..7].try_into().expect("Tag is 2 bytes"));
+        t1.absorb(&standard_frame(typ, tag, &body));
+    }
+    t1.hash()
 }
 
 // ---------------------------------------------------------------------------
