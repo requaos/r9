@@ -7,13 +7,17 @@
 //! packet MAC verifies, and only to bound the packet (D-07); plan 04-04 Task
 //! 2 makes that ordering a type discipline.
 //!
-//! # Why no `repr(C, packed)` (Pitfall 1, D-04)
+//! # Why a field-by-field codec (Pitfall 1, D-04)
 //!
 //! The header is written and read field by field with `to_le_bytes` and
-//! `from_le_bytes`.  There is no `unsafe`, no `transmute` and no packed
-//! struct: the wire bytes are the type's contract, not its memory layout.
+//! `from_le_bytes`.  The wire bytes are the type's contract, not its memory
+//! layout, so the compiler's layout rules never enter the envelope and the
+//! module stays inside `port`'s per-module forbid.
 
-use super::HEADER_LEN;
+use super::{
+    HEADER_LEN, MAC_LEN, MIN_PACKET_LEN, OFF_EXTLEN, OFF_EXTMASK, OFF_FIDHANDLE, OFF_PAD,
+    OFF_SEQ, OFF_SIZE, OFF_TAG, OFF_TYPE,
+};
 
 /// The fixed 28-byte envelope header (D-06).
 ///
@@ -45,30 +49,79 @@ pub struct Header {
 
 impl Header {
     /// Write every field at its pinned offset, little-endian.
-    pub fn encode(&self, _out: &mut [u8; HEADER_LEN]) {}
+    pub fn encode(&self, out: &mut [u8; HEADER_LEN]) {
+        out[OFF_SIZE..OFF_SIZE + 4].copy_from_slice(&self.size.to_le_bytes());
+        out[OFF_TYPE] = self.typ;
+        out[OFF_TAG..OFF_TAG + 2].copy_from_slice(&self.tag.to_le_bytes());
+        out[OFF_PAD] = self.pad;
+        out[OFF_FIDHANDLE..OFF_FIDHANDLE + 8].copy_from_slice(&self.fid_handle);
+        out[OFF_SEQ..OFF_SEQ + 8].copy_from_slice(&self.seq.to_le_bytes());
+        out[OFF_EXTMASK..OFF_EXTMASK + 2].copy_from_slice(&self.ext_mask.to_le_bytes());
+        out[OFF_EXTLEN..OFF_EXTLEN + 2].copy_from_slice(&self.ext_len.to_le_bytes());
+    }
 
     /// Read every field from its pinned offset.  This checks nothing: the
     /// caller runs `check_header` after the MAC verifies.
-    pub fn decode(_bytes: &[u8; HEADER_LEN]) -> Header {
+    pub fn decode(bytes: &[u8; HEADER_LEN]) -> Header {
         Header {
-            size: 0,
-            typ: 0,
-            tag: 0,
-            pad: 0,
-            fid_handle: [0u8; 8],
-            seq: 0,
-            ext_mask: 0,
-            ext_len: 0,
+            size: u32::from_le_bytes(
+                bytes[OFF_SIZE..OFF_SIZE + 4].try_into().expect("the Size slice is 4 bytes"),
+            ),
+            typ: bytes[OFF_TYPE],
+            tag: u16::from_le_bytes(
+                bytes[OFF_TAG..OFF_TAG + 2].try_into().expect("the Tag slice is 2 bytes"),
+            ),
+            pad: bytes[OFF_PAD],
+            fid_handle: bytes[OFF_FIDHANDLE..OFF_FIDHANDLE + 8]
+                .try_into()
+                .expect("the FidHandle slice is 8 bytes"),
+            seq: u64::from_le_bytes(
+                bytes[OFF_SEQ..OFF_SEQ + 8].try_into().expect("the SeqNonce slice is 8 bytes"),
+            ),
+            ext_mask: u16::from_le_bytes(
+                bytes[OFF_EXTMASK..OFF_EXTMASK + 2].try_into().expect("the ExtMask slice is 2 bytes"),
+            ),
+            ext_len: u16::from_le_bytes(
+                bytes[OFF_EXTLEN..OFF_EXTLEN + 2].try_into().expect("the ExtTLVs Length slice is 2 bytes"),
+            ),
         }
     }
 }
 
 /// Bound a claimed `Size` before any body byte is read (T-04-11).
-pub fn frame_size(_prefix: &[u8; 4], _msize: u32) -> crate::Result<usize> {
-    Ok(0)
+///
+/// The lower bound is [`MIN_PACKET_LEN`] (60) — the header plus the MAC with
+/// an empty body — and the upper bound is the negotiated msize.  `frame_one`
+/// in `devmnt` applies the same discipline with its plain-9P lower bound.
+pub fn frame_size(prefix: &[u8; 4], msize: u32) -> crate::Result<usize> {
+    if msize < MIN_PACKET_LEN as u32 {
+        return Err("chan: negotiated msize below the minimum packet");
+    }
+    let size = u32::from_le_bytes(*prefix);
+    if (size as usize) < MIN_PACKET_LEN {
+        return Err("chan: runt packet");
+    }
+    if size > msize {
+        return Err("chan: packet exceeds negotiated msize");
+    }
+    Ok(size as usize)
 }
 
 /// The checked whole-packet length the encoder writes into `Size`.
-pub fn packet_len(_tlv_len: usize, _body_len: usize, _msize: u32) -> crate::Result<u32> {
-    Ok(0)
+///
+/// Every length on the wire counts bytes: the header, the TLV area, the body
+/// and the 32-byte MAC.  The arithmetic is checked, and the result must fit
+/// the `u32` `Size` field and the negotiated msize — no length is narrowed
+/// with a silent cast.
+pub fn packet_len(tlv_len: usize, body_len: usize, msize: u32) -> crate::Result<u32> {
+    let total = HEADER_LEN
+        .checked_add(tlv_len)
+        .and_then(|n| n.checked_add(body_len))
+        .and_then(|n| n.checked_add(MAC_LEN))
+        .ok_or("chan: packet length overflows usize")?;
+    let size = u32::try_from(total).map_err(|_| "chan: packet exceeds the 32-bit size field")?;
+    if size > msize {
+        return Err("chan: packet exceeds negotiated msize");
+    }
+    Ok(size)
 }
