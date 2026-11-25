@@ -106,15 +106,47 @@ pub struct SessionKeys {
 
 /// Derive the two directions' keys from `secret`, the handshake `transcript`
 /// and the `generation` (P2, D-17).
+///
+/// The extract step uses the transcript as the HKDF salt and the secret as
+/// the input keying material.  Each of the six 18-byte `info` strings then
+/// differs in its direction and purpose byte, so no two outputs can collide.
 pub fn derive(secret: &Key, transcript: &[u8; 32], generation: u32) -> SessionKeys {
-    // RED: the bodies compile and are wrong — every key is zero.
-    let _ = (secret, transcript, generation);
-    let zero = || DirectionKeys {
-        k_enc: Key::from_bytes([0u8; 32]),
-        k_mac: Key::from_bytes([0u8; 32]),
-        prefix: Zeroizing::new([0u8; PREFIX_LEN]),
-    };
-    SessionKeys { c2s: zero(), s2c: zero() }
+    let prk = crate::kdf::hkdf_extract(transcript, secret.bytes());
+    SessionKeys {
+        c2s: derive_direction(&prk, Direction::ClientToServer, generation),
+        s2c: derive_direction(&prk, Direction::ServerToClient, generation),
+    }
+}
+
+/// Build the 18-byte derivation `info` (P2) and expand `out` from `prk`.
+fn expand(prk: &[u8; crate::kdf::SHA256_LEN], direction: Direction, purpose: u8, generation: u32, out: &mut [u8]) {
+    let mut info = [0u8; INFO_LEN];
+    info[..SESSION_LABEL.len()].copy_from_slice(SESSION_LABEL);
+    // info[11] is the 0x00 separator, already zero.
+    info[12] = direction.byte();
+    info[13] = purpose;
+    info[14..].copy_from_slice(&generation.to_le_bytes());
+    crate::kdf::hkdf_expand(prk, &info, out)
+        .expect("a 32-byte HKDF-SHA256 expand is within the 255 x 32 RFC 5869 limit");
+}
+
+/// Derive one direction's cipher key, MAC key and nonce prefix.
+fn derive_direction(
+    prk: &[u8; crate::kdf::SHA256_LEN],
+    direction: Direction,
+    generation: u32,
+) -> DirectionKeys {
+    let mut k_enc = [0u8; 32];
+    let mut k_mac = [0u8; 32];
+    let mut prefix = [0u8; PREFIX_LEN];
+    expand(prk, direction, PURPOSE_CIPHER, generation, &mut k_enc[..]);
+    expand(prk, direction, PURPOSE_MAC, generation, &mut k_mac[..]);
+    expand(prk, direction, PURPOSE_PREFIX, generation, &mut prefix[..]);
+    DirectionKeys {
+        k_enc: Key::from_bytes(k_enc),
+        k_mac: Key::from_bytes(k_mac),
+        prefix: Zeroizing::new(prefix),
+    }
 }
 
 /// An incremental keyed BLAKE3 packet MAC (D-07, T-04-05).
@@ -133,11 +165,17 @@ impl PacketMac {
         self.h.finalize()
     }
 
-    /// Verify the tag in constant time.
+    /// Verify the tag in constant time (T-04-05).
     pub fn verify(self, tag: &[u8; 32]) -> crate::Result<()> {
-        // RED: the body compiles and is wrong — verification always passes.
-        let _ = tag;
-        Ok(())
+        let computed = self.h.finalize();
+        // Accumulator fold with no early exit: `acc` is zero exactly when
+        // every byte matched, and the loop's running time does not depend on
+        // where two tags first differ.
+        let mut acc = 0u8;
+        for (computed_byte, tag_byte) in computed.iter().zip(tag.iter()) {
+            acc |= computed_byte ^ tag_byte;
+        }
+        if acc == 0 { Ok(()) } else { Err(crate::Error::TagMismatch) }
     }
 }
 
