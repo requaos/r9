@@ -8,14 +8,21 @@
 //!
 //! The decoder uses a private checked cursor and requires exact consumption;
 //! every error is a static `"chan: ..."` string and no wire length is trusted
-//! (T-04-14).  Task 2 adds the new message pairs 130 to 139 and the D-09
-//! two-part data body.
+//! (T-04-14).
+//!
+//! The new pairs 130 to 139 are encode and decode only: their semantics are
+//! Phase 6 and nothing here may imply they work.  The three data messages
+//! (`Twrite`, `Rread`, `Rstream`) carry the D-09 two-part body: a parameter
+//! block, then file data padded with zeros to a whole number of
+//! [`PAGE_LEN`](super::PAGE_LEN)-byte pages, with the true length in the
+//! parameters.  Parameters encrypt from ChaCha20 block counter 0 and data page
+//! `i` from `1 + 64 * i` (P5); every parameter block fits one 64-byte block.
 
 use alloc::vec::Vec;
 
 use crate::dat::Qid;
 
-use super::wire;
+use super::{PAGE_LEN, wire};
 
 /// The 9P2000 maximum number of path elements in a `Twalk` / `Rwalk`
 /// (`fcall.h` `MAXWELEM`).
@@ -158,14 +165,14 @@ pub enum Msg {
         chunk_seq: u64,
         data: Vec<u8>,
     },
-    Tlease_revoke {
+    TleaseRevoke {
         qid_path: u64,
         lease_gen: u64,
         target_mode: u8,
         num_blocks: u32,
         block_ranges: Vec<u8>,
     },
-    Rlease_ack {
+    RleaseAck {
         qid_path: u64,
         lease_gen: u64,
         client_status: u8,
@@ -384,14 +391,14 @@ impl PartialEq for Msg {
                 },
             ) => ai == bi && ac == bc && ad == bd,
             (
-                Msg::Tlease_revoke {
+                Msg::TleaseRevoke {
                     qid_path: aq,
                     lease_gen: ag,
                     target_mode: am,
                     num_blocks: an,
                     block_ranges: ar,
                 },
-                Msg::Tlease_revoke {
+                Msg::TleaseRevoke {
                     qid_path: bq,
                     lease_gen: bg,
                     target_mode: bm,
@@ -400,12 +407,12 @@ impl PartialEq for Msg {
                 },
             ) => aq == bq && ag == bg && am == bm && an == bn && ar == br,
             (
-                Msg::Rlease_ack {
+                Msg::RleaseAck {
                     qid_path: aq,
                     lease_gen: ag,
                     client_status: ac,
                 },
-                Msg::Rlease_ack {
+                Msg::RleaseAck {
                     qid_path: bq,
                     lease_gen: bg,
                     client_status: bc,
@@ -480,8 +487,22 @@ pub struct DataLayout {
 
 /// The parameter/data split of a data-message body, or `None` for a
 /// non-data opcode (D-09, P5).
-pub fn data_layout(_typ: u8, _body: &[u8]) -> Option<DataLayout> {
-    None
+///
+/// The transport uses this to place the keystream (parameters from block
+/// counter 0, page `i` from `1 + 64 * i`); Phase 5 uses it to split control
+/// bytes from whole pages.
+pub fn data_layout(typ: u8, body: &[u8]) -> Option<DataLayout> {
+    let params_len = match typ {
+        wire::TWRITE => 16,
+        wire::RREAD => 4,
+        wire::RSTREAM => 16,
+        _ => return None,
+    };
+    let data_len = body.len().saturating_sub(params_len);
+    Some(DataLayout {
+        params_len,
+        pages: data_len / PAGE_LEN,
+    })
 }
 
 /// The registry opcode for a message.
@@ -518,8 +539,8 @@ pub fn opcode(msg: &Msg) -> u8 {
         Msg::Rcompound { .. } => wire::RCOMPOUND,
         Msg::Tstream { .. } => wire::TSTREAM,
         Msg::Rstream { .. } => wire::RSTREAM,
-        Msg::Tlease_revoke { .. } => wire::TLEASE_REVOKE,
-        Msg::Rlease_ack { .. } => wire::RLEASE_ACK,
+        Msg::TleaseRevoke { .. } => wire::TLEASE_REVOKE,
+        Msg::RleaseAck { .. } => wire::RLEASE_ACK,
         Msg::Treclaim { .. } => wire::TRECLAIM,
         Msg::Rreclaim { .. } => wire::RRECLAIM,
         Msg::Trekey { .. } => wire::TREKEY,
@@ -642,13 +663,13 @@ pub fn encode_body(msg: &Msg, out: &mut Vec<u8>) -> crate::Result<()> {
         }
         Msg::Rread { data } => {
             p32(out, data_count(data.len())?);
-            out.extend_from_slice(data);
+            write_padded(out, data);
         }
         Msg::Twrite { fid, offset, data } => {
             p32(out, *fid);
             p64(out, *offset);
             p32(out, data_count(data.len())?);
-            out.extend_from_slice(data);
+            write_padded(out, data);
         }
         Msg::Rwrite { count } => p32(out, *count),
         Msg::Tclunk { fid } => p32(out, *fid),
@@ -662,17 +683,117 @@ pub fn encode_body(msg: &Msg, out: &mut Vec<u8>) -> crate::Result<()> {
             pstr(out, stat)?;
         }
         Msg::Rwstat => {}
-        Msg::Tcompound { .. } => {}
-        Msg::Rcompound { .. } => {}
-        Msg::Tstream { .. } => {}
-        Msg::Rstream { .. } => {}
-        Msg::Tlease_revoke { .. } => {}
-        Msg::Rlease_ack { .. } => {}
-        Msg::Treclaim { .. } => {}
-        Msg::Rreclaim { .. } => {}
-        Msg::Trekey { .. } => {}
-        Msg::Rrekey { .. } => {}
+        Msg::Tcompound { num_ops, op_stream } => {
+            p16(out, *num_ops);
+            out.extend_from_slice(op_stream);
+        }
+        Msg::Rcompound {
+            num_completed,
+            status,
+            result_stream,
+        } => {
+            p16(out, *num_completed);
+            p16(out, *status);
+            out.extend_from_slice(result_stream);
+        }
+        Msg::Tstream {
+            fid_handle,
+            stream_id,
+            flags,
+            offset,
+        } => {
+            out.extend_from_slice(fid_handle);
+            p32(out, *stream_id);
+            p16(out, *flags);
+            p64(out, *offset);
+        }
+        Msg::Rstream {
+            stream_id,
+            chunk_seq,
+            data,
+        } => {
+            p32(out, *stream_id);
+            p64(out, *chunk_seq);
+            p32(out, data_count(data.len())?);
+            write_padded(out, data);
+        }
+        Msg::TleaseRevoke {
+            qid_path,
+            lease_gen,
+            target_mode,
+            num_blocks,
+            block_ranges,
+        } => {
+            p64(out, *qid_path);
+            p64(out, *lease_gen);
+            out.push(*target_mode);
+            p32(out, *num_blocks);
+            out.extend_from_slice(block_ranges);
+        }
+        Msg::RleaseAck {
+            qid_path,
+            lease_gen,
+            client_status,
+        } => {
+            p64(out, *qid_path);
+            p64(out, *lease_gen);
+            out.push(*client_status);
+        }
+        Msg::Treclaim {
+            old_handle,
+            target_epoch,
+            client_token,
+        } => {
+            out.extend_from_slice(old_handle);
+            p16(out, *target_epoch);
+            out.extend_from_slice(client_token);
+        }
+        Msg::Rreclaim {
+            new_handle,
+            recovery_status,
+        } => {
+            out.extend_from_slice(new_handle);
+            p16(out, *recovery_status);
+        }
+        Msg::Trekey {
+            kind,
+            generation,
+            confirm,
+        } => encode_rekey(out, *kind, *generation, confirm)?,
+        Msg::Rrekey {
+            kind,
+            generation,
+            confirm,
+        } => encode_rekey(out, *kind, *generation, confirm)?,
     }
+    Ok(())
+}
+
+/// Append zero padding so the data area is a whole number of 4096-byte pages.
+///
+/// The padding is written as zeros before encryption, never left stale
+/// (T-04-15).
+fn write_padded(out: &mut Vec<u8>, data: &[u8]) {
+    out.extend_from_slice(data);
+    let rem = data.len() % PAGE_LEN;
+    if rem != 0 {
+        out.resize(out.len() + (PAGE_LEN - rem), 0);
+    }
+}
+
+/// The 37-byte re-key body: `kind[1] generation[4] confirm[32]` (P3).
+fn encode_rekey(
+    out: &mut Vec<u8>,
+    kind: u8,
+    generation: u32,
+    confirm: &[u8; 32],
+) -> crate::Result<()> {
+    if kind > REKEY_ACK {
+        return Err("chan: unknown re-key kind");
+    }
+    out.push(kind);
+    p32(out, generation);
+    out.extend_from_slice(confirm);
     Ok(())
 }
 
@@ -737,6 +858,18 @@ impl<'a> Cur<'a> {
         Ok(Qid { path, vers, typ })
     }
 
+    /// A fixed-size byte array (a token or a key confirmation).
+    fn array<const N: usize>(&mut self) -> crate::Result<[u8; N]> {
+        self.bytes(N)?.try_into().map_err(|_| "chan: truncated body")
+    }
+
+    /// Everything left in the body, consuming it (the variable opaque tail).
+    fn rest(&mut self) -> Vec<u8> {
+        let out = self.b.get(self.p..).unwrap_or(&[]).to_vec();
+        self.p = self.b.len();
+        out
+    }
+
     fn done(&self) -> crate::Result<()> {
         if self.p == self.b.len() {
             Ok(())
@@ -746,10 +879,30 @@ impl<'a> Cur<'a> {
     }
 }
 
-/// `count[4] data[count]` — the plain 9P2000 data body (Task 1).
-fn take_data_plain(cur: &mut Cur<'_>) -> crate::Result<Vec<u8>> {
-    let n = usize::try_from(cur.u32()?).map_err(|_| "chan: data count too large")?;
-    Ok(cur.bytes(n)?.to_vec())
+/// `count[4]`, then the D-09 page-aligned data area.
+///
+/// The receiver requires `data_len` to be a whole number of pages,
+/// `count <= data_len < count + PAGE_LEN`, and every padding byte to be zero
+/// (T-04-15, T-04-16).  The true bytes are returned; the padding is dropped.
+fn take_data(cur: &mut Cur<'_>) -> crate::Result<Vec<u8>> {
+    let count = usize::try_from(cur.u32()?).map_err(|_| "chan: data count too large")?;
+    let data = cur.rest();
+    if !data.len().is_multiple_of(PAGE_LEN) {
+        return Err("chan: data area is not a whole number of pages");
+    }
+    if count > data.len() {
+        return Err("chan: count exceeds the data area");
+    }
+    let bound = count
+        .checked_add(PAGE_LEN)
+        .ok_or("chan: data count overflows")?;
+    if data.len() >= bound {
+        return Err("chan: data area is more than one page beyond the count");
+    }
+    if data[count..].iter().any(|&b| b != 0) {
+        return Err("chan: nonzero data padding");
+    }
+    Ok(data[..count].to_vec())
 }
 
 /// Decode one message body of type `typ` (no `size[4] type tag[2]`).
@@ -832,12 +985,12 @@ pub fn decode_body(typ: u8, body: &[u8]) -> crate::Result<Msg> {
             count: cur.u32()?,
         },
         wire::RREAD => Msg::Rread {
-            data: take_data_plain(&mut cur)?,
+            data: take_data(&mut cur)?,
         },
         wire::TWRITE => {
             let fid = cur.u32()?;
             let offset = cur.u64()?;
-            let data = take_data_plain(&mut cur)?;
+            let data = take_data(&mut cur)?;
             Msg::Twrite { fid, offset, data }
         }
         wire::RWRITE => Msg::Rwrite { count: cur.u32()? },
@@ -854,6 +1007,69 @@ pub fn decode_body(typ: u8, body: &[u8]) -> crate::Result<Msg> {
             stat: cur.string()?,
         },
         wire::RWSTAT => Msg::Rwstat,
+        wire::TCOMPOUND => Msg::Tcompound {
+            num_ops: cur.u16()?,
+            op_stream: cur.rest(),
+        },
+        wire::RCOMPOUND => Msg::Rcompound {
+            num_completed: cur.u16()?,
+            status: cur.u16()?,
+            result_stream: cur.rest(),
+        },
+        wire::TSTREAM => Msg::Tstream {
+            fid_handle: cur.array()?,
+            stream_id: cur.u32()?,
+            flags: cur.u16()?,
+            offset: cur.u64()?,
+        },
+        wire::RSTREAM => Msg::Rstream {
+            stream_id: cur.u32()?,
+            chunk_seq: cur.u64()?,
+            data: take_data(&mut cur)?,
+        },
+        wire::TLEASE_REVOKE => Msg::TleaseRevoke {
+            qid_path: cur.u64()?,
+            lease_gen: cur.u64()?,
+            target_mode: cur.u8()?,
+            num_blocks: cur.u32()?,
+            block_ranges: cur.rest(),
+        },
+        wire::RLEASE_ACK => Msg::RleaseAck {
+            qid_path: cur.u64()?,
+            lease_gen: cur.u64()?,
+            client_status: cur.u8()?,
+        },
+        wire::TRECLAIM => Msg::Treclaim {
+            old_handle: cur.array()?,
+            target_epoch: cur.u16()?,
+            client_token: cur.array()?,
+        },
+        wire::RRECLAIM => Msg::Rreclaim {
+            new_handle: cur.array()?,
+            recovery_status: cur.u16()?,
+        },
+        wire::TREKEY => {
+            let kind = cur.u8()?;
+            if kind > REKEY_ACK {
+                return Err("chan: unknown re-key kind");
+            }
+            Msg::Trekey {
+                kind,
+                generation: cur.u32()?,
+                confirm: cur.array()?,
+            }
+        }
+        wire::RREKEY => {
+            let kind = cur.u8()?;
+            if kind > REKEY_ACK {
+                return Err("chan: unknown re-key kind");
+            }
+            Msg::Rrekey {
+                kind,
+                generation: cur.u32()?,
+                confirm: cur.array()?,
+            }
+        }
         _ => return Err("chan: unknown opcode"),
     };
     cur.done()?;

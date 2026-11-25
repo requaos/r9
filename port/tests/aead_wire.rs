@@ -353,22 +353,21 @@ fn round_trip(msg: &Msg) -> Msg {
     msg::decode_body(msg::opcode(msg), &body).expect("the message decodes")
 }
 
-/// The plain 9P2000 `Rread` body: `count[4] data[count]` (Task 2 replaces this
-/// with the D-09 page-aligned helper).
-fn rread_plain(data: &[u8]) -> Vec<u8> {
+/// The D-09 `Rread` body: `count[4]` then the page-aligned data area.
+fn rread_body(data: &[u8]) -> Vec<u8> {
     let mut v = Vec::new();
     pu32(&mut v, data.len() as u32);
-    v.extend_from_slice(data);
+    v.extend_from_slice(&padded(data));
     v
 }
 
-/// The plain 9P2000 `Twrite` body: `fid[4] offset[8] count[4] data[count]`.
-fn twrite_plain(fid: u32, offset: u64, data: &[u8]) -> Vec<u8> {
+/// The D-09 `Twrite` body: `fid[4] offset[8] count[4]` then the data area.
+fn twrite_body(fid: u32, offset: u64, data: &[u8]) -> Vec<u8> {
     let mut v = Vec::new();
     pu32(&mut v, fid);
     pu64(&mut v, offset);
     pu32(&mut v, data.len() as u32);
-    v.extend_from_slice(data);
+    v.extend_from_slice(&padded(data));
     v
 }
 
@@ -553,12 +552,12 @@ fn base_cases() -> Vec<(u8, Msg, Vec<u8>)> {
             b,
         ));
     }
-    // Rread 117 (plain, Task 1)
+    // Rread 117 (D-09 page-aligned data)
     {
         let data = b"hello".to_vec();
-        cases.push((wire::RREAD, Msg::Rread { data: data.clone() }, rread_plain(&data)));
+        cases.push((wire::RREAD, Msg::Rread { data: data.clone() }, rread_body(&data)));
     }
-    // Twrite 118 (plain, Task 1)
+    // Twrite 118 (D-09 page-aligned data)
     {
         let data = b"hello".to_vec();
         cases.push((
@@ -568,7 +567,7 @@ fn base_cases() -> Vec<(u8, Msg, Vec<u8>)> {
                 offset: 0,
                 data: data.clone(),
             },
-            twrite_plain(1, 0, &data),
+            twrite_body(1, 0, &data),
         ));
     }
     // Rwrite 119
@@ -907,14 +906,14 @@ fn sample_message(typ: u8) -> Msg {
             chunk_seq: 5,
             data: b"abc".to_vec(),
         },
-        wire::TLEASE_REVOKE => Msg::Tlease_revoke {
+        wire::TLEASE_REVOKE => Msg::TleaseRevoke {
             qid_path: 1,
             lease_gen: 2,
             target_mode: 0x01,
             num_blocks: 1,
             block_ranges: vec![1, 0],
         },
-        wire::RLEASE_ACK => Msg::Rlease_ack {
+        wire::RLEASE_ACK => Msg::RleaseAck {
             qid_path: 1,
             lease_gen: 2,
             client_status: 0,
@@ -1066,7 +1065,7 @@ fn aead_wire_messages_new_pairs_roundtrip() {
             b,
         ));
     }
-    // Tlease_revoke 134
+    // TleaseRevoke 134
     {
         let block_ranges = vec![0x01, 0x00, 0x02, 0x00];
         let mut b = Vec::new();
@@ -1077,7 +1076,7 @@ fn aead_wire_messages_new_pairs_roundtrip() {
         b.extend_from_slice(&block_ranges);
         cases.push((
             wire::TLEASE_REVOKE,
-            Msg::Tlease_revoke {
+            Msg::TleaseRevoke {
                 qid_path: 0x0102_0304_0506_0708,
                 lease_gen: 0x1112_1314_1516_1718,
                 target_mode: 0x02,
@@ -1087,7 +1086,7 @@ fn aead_wire_messages_new_pairs_roundtrip() {
             b,
         ));
     }
-    // Rlease_ack 135
+    // RleaseAck 135
     {
         let mut b = Vec::new();
         pu64(&mut b, 0x0102_0304_0506_0708);
@@ -1095,7 +1094,7 @@ fn aead_wire_messages_new_pairs_roundtrip() {
         pu8(&mut b, 0x00);
         cases.push((
             wire::RLEASE_ACK,
-            Msg::Rlease_ack {
+            Msg::RleaseAck {
                 qid_path: 0x0102_0304_0506_0708,
                 lease_gen: 0x1112_1314_1516_1718,
                 client_status: 0x00,
