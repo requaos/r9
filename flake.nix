@@ -980,7 +980,8 @@ WRAP
             # 06b94f8-era TIzw value. The native amd64 host is the TCG
             # venue (the Docker container is not required when the
             # owner's host is already amd64).
-            outputHash = "sha256-x07uJKM8Y7j3uXNwqT8Txhd8zhkRV8YrBkKyT2sg490=";
+            # 2026-11-25 (Phase 4 owner stop, plan 04-15): re-derived on the x86_64 Linux host for the Phase 4 kernel (port links crypto and ds).
+            outputHash = "sha256-5A6QdJdWz7uWyUrfUAc3jAO+ZQcG/TowydbTLoF+u9I=";
           };
         });
 
