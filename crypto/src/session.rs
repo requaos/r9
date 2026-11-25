@@ -22,6 +22,15 @@
 //! derived 4-byte prefix and the 8-byte wire sequence number, little-endian
 //! (D-08).  The prefix is derived, never sent on the wire.
 //!
+//! [`Transcript`] is the unkeyed BLAKE3 hash of the plain-framed handshake
+//! messages in wire order (D-17): every message is absorbed whole, and each
+//! begins with its own `size[4]`, so concatenation is unambiguous.  The
+//! handshake is strictly serial (one request outstanding), so both ends
+//! absorb the same bytes in the same order; an altered version string or
+//! msize gives the two ends different keys and the first sealed packet
+//! fails.  [`Transcript::chain`] seeds a re-key's transcript with the
+//! previous generation's 32-byte hash (P2).
+//!
 //! [`PacketMac`] wraps a keyed BLAKE3 hasher created inside this crate.  The
 //! packet MAC covers every byte before the MAC (D-07), so the transport feeds
 //! it one contiguous slice; [`PacketMac::verify`] compares in constant time
@@ -125,19 +134,19 @@ impl Transcript {
     /// A transcript seeded with a previous generation's 32-byte transcript
     /// hash (the re-key chain, P2).
     pub fn chain(previous: &[u8; 32]) -> Transcript {
-        let _ = previous;
-        Transcript::new()
+        let mut transcript = Transcript::new();
+        transcript.absorb(previous);
+        transcript
     }
 
     /// Absorb one whole message.
     pub fn absorb(&mut self, message: &[u8]) {
-        let _ = message;
+        self.hasher.update(message);
     }
 
     /// The 32-byte unkeyed BLAKE3 hash of everything absorbed so far.
     pub fn hash(&self) -> [u8; 32] {
-        let _ = &self.hasher;
-        [0u8; 32]
+        self.hasher.finalize()
     }
 }
 
