@@ -654,24 +654,34 @@ impl<P: Probe + Clone> FidTable<P> {
     /// Issue a stateless capability for `qid` opened with `mode`, signed under
     /// the table's domain secret at the table's epoch (WIRE-07, P8).
     pub fn issue_cap(&self, qid: &crate::dat::Qid, mode: u8) -> StatelessCap {
-        // RED stub: the fields are filled but the tag is zero, so the
-        // independent tag test fails on its tag equality (D-03, Pitfall 11).
-        StatelessCap {
+        let mut cap = StatelessCap {
             qid_path: qid.path,
             qid_vers: qid.vers,
             qid_type: qid.typ,
             mode,
             epoch: self.epoch,
             mac_tag: [0u8; 8],
-        }
+        };
+        // The tag computation and the key bytes stay in `crypto/`: `port` never
+        // sees either (T-04-03, P8).
+        cap.mac_tag = crypto::session::cap_tag(&self.domain_secret, &cap.body());
+        cap
     }
 
     /// Verify a capability with the domain secret and **zero FID memory**: no
     /// shard and no bitmap is touched (WIRE-07, WIRE-08, P8).
+    ///
+    /// The epoch is checked against the table's current epoch, so bumping the
+    /// epoch revokes every capability issued before it.  The tag comparison is
+    /// constant-time inside `crypto::session::cap_verify`.  A failure here is
+    /// connection-fatal for the caller (P8): the capability is a bearer token,
+    /// so a guess must not be free.
     pub fn verify_cap(&self, cap: &StatelessCap) -> crate::Result<()> {
-        // RED stub: always Ok; the independent tag test fails on the issue
-        // side (D-03, Pitfall 11).
-        let _ = cap;
-        Ok(())
+        if cap.epoch != self.epoch {
+            return Err("fid: the capability's epoch is not the table's current epoch");
+        }
+        crypto::session::cap_verify(&self.domain_secret, &cap.body(), &cap.mac_tag).map_err(
+            |_| "fid: the capability tag does not verify under this table's domain secret",
+        )
     }
 }
