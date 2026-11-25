@@ -1,0 +1,8 @@
+virtshell text-symbol-bytes 754232
+virtshell fpsimd-lines 309
+q35churnshell text-symbol-bytes 759072
+q35churnshell fpsimd-lines 6
+METRIC-COMMAND virtshell text-symbol-bytes: nm --print-size --defined-only --radix=d target/aarch64-unknown-none-elf/debug/aarch64 | awk '$3=="T"||$3=="t"{s+=$2} END{print s+0}'
+METRIC-COMMAND virtshell fpsimd-lines: objdump -d target/aarch64-unknown-none-elf/debug/aarch64 | grep -cE '\b(v[0-9]+|q[0-9]+)\b'
+METRIC-COMMAND q35churnshell text-symbol-bytes: nm --print-size --defined-only --radix=d target/x86_64-unknown-none-elf/debug/x86_64 | awk '$3=="T"||$3=="t"{s+=$2} END{print s+0}'
+METRIC-COMMAND q35churnshell fpsimd-lines: objdump -d target/x86_64-unknown-none-elf/debug/x86_64 | grep -cE '%xmm|%ymm|%zmm|%st\(|%mm'
