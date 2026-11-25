@@ -51,17 +51,17 @@ Standing constraint on every requirement below: the golden invariant (boots to r
 
 ### 9P2000.aead Wire and FidTable (guide Phase 2)
 
-- [ ] **WIRE-01**: One canonical wire header byte layout is fixed (resolving W1, including whether `Pad` and `ExtTLVs Length` are in the AAD), implemented, and round-trip tested; AC listing 9.9 is corrected (RFC-P03, IG-P03)
-- [ ] **WIRE-02**: `ExtMask` and TLV parsing handle all six extension bits (`EXT_DEADLINE`, `EXT_CAP_TOKEN`, `EXT_QID_VOLATILITY`, `EXT_STREAM_PRIO`, `EXT_OBINARY`, `EXT_STATELESS_CAP`) zero-copy over 64-bit aligned records, with `ExtTLVs Length` zero when `ExtMask` is zero (RFC-P03, RFC-P04). *Amended 2026-11-24 (r9 Phase 4, D-11): the list was five bits; the sixth, `EXT_STATELESS_CAP = 1 << 5`, carries the `StatelessCap` of W2, and `EXT_CAP_TOKEN` keeps its single meaning.*
+- [x] **WIRE-01**: One canonical wire header byte layout is fixed (resolving W1, including whether `Pad` and `ExtTLVs Length` are in the AAD), implemented, and round-trip tested; AC listing 9.9 is corrected (RFC-P03, IG-P03)
+- [x] **WIRE-02**: `ExtMask` and TLV parsing handle all six extension bits (`EXT_DEADLINE`, `EXT_CAP_TOKEN`, `EXT_QID_VOLATILITY`, `EXT_STREAM_PRIO`, `EXT_OBINARY`, `EXT_STATELESS_CAP`) zero-copy over 64-bit aligned records, with `ExtTLVs Length` zero when `ExtMask` is zero (RFC-P03, RFC-P04). *Amended 2026-11-24 (r9 Phase 4, D-11): the list was five bits; the sixth, `EXT_STATELESS_CAP = 1 << 5`, carries the `StatelessCap` of W2, and `EXT_CAP_TOKEN` keeps its single meaning.*
 - [x] **WIRE-03**: On MAC failure the receiver terminates the connection and zeroes channel state without parsing any byte of the packet (RFC-P03)
 - [x] **WIRE-04**: Sequence nonces are strictly monotonic 64-bit counters per connection and direction, a packet that is not the expected next value is rejected, and the channel re-keys in band before 2^64 - 1 (RFC-P03, RFC-P10)
 - [x] **WIRE-05**: `Tauth` precedes `Tattach` and yields per-connection per-direction session keys (scope settled by W4; key-exchange sourcing per note N5), keys are zeroized on teardown (IG-A01 item 13, RFC-P02)
 - [x] **WIRE-06**: Encode and decode round-trip every base 9P2000 message and the opcode registry including reserved 130-137, with ChaCha20 ciphertext 4KB-aligned in `Twrite`, `Rread` and `Tstream` and the MAC per W3 (RFC-P06, RFC-P03). *Amended 2026-11-24 (r9 Phase 4, D-09): the messages whose ciphertext carries whole 4096-byte pages are `Twrite`, `Rread` and `Rstream`; `Tstream` has no data field in the RFC section 6.2 format.*
-- [ ] **WIRE-07**: `FidHandle` supports `StatefulHandle` (8 bytes) and `StatelessCap` (24 bytes) with the on-wire form of the capability settled by W2, and `FidEntry` is 64 bytes `align(64)` (IG-P02, RFC-P05)
+- [x] **WIRE-07**: `FidHandle` supports `StatefulHandle` (8 bytes) and `StatelessCap` (24 bytes) with the on-wire form of the capability settled by W2, and `FidEntry` is 64 bytes `align(64)` (IG-P02, RFC-P05)
 - [x] **WIRE-08**: `FidTable` and `FidShard` use TPHT; `deref_tiny` resolves a `FidEntry` in exactly one memory read; `StatelessCap` files use zero server FID memory and any replica holding the domain secret verifies in O(1) (IG-P02, IG-D01)
 - [x] **WIRE-09**: The `FidShard` failover sweep yields exactly `active_fids \ reclaimed_fids` in one bitmap and-not (IG-P02, RFC-P07)
-- [ ] **WIRE-10**: `Qid` is 13 bytes and carries the three volatility classes `QTIMMUTABLE` 0x20, `QTLEASED` 0x40, `QTVOLATILE` 0x80 in their own byte, never as `qtype` bits, with the `#G` path formula `((ctx_id & 0xFFFFFF) << 8) | (node_type & 0xFF)` (IG-P01). *Amended 2026-11-24 (r9 Phase 4, D-27): the classes were described as mutually exclusive `qtype` bits; they travel in their own byte because 0x20, 0x40 and 0x80 are Plan 9's `QTEXCL`, `QTAPPEND` and `QTDIR` in a qid type byte.*
-- [ ] **WIRE-11**: Anti-splicing pins pass: a replayed `Twrite` with a stale nonce is dropped, and a payload moved to another channel by editing the cleartext FID fails the AAD MAC (RFC-P10, PT-T02 test 2.3)
+- [x] **WIRE-10**: `Qid` is 13 bytes and carries the three volatility classes `QTIMMUTABLE` 0x20, `QTLEASED` 0x40, `QTVOLATILE` 0x80 in their own byte, never as `qtype` bits, with the `#G` path formula `((ctx_id & 0xFFFFFF) << 8) | (node_type & 0xFF)` (IG-P01). *Amended 2026-11-24 (r9 Phase 4, D-27): the classes were described as mutually exclusive `qtype` bits; they travel in their own byte because 0x20, 0x40 and 0x80 are Plan 9's `QTEXCL`, `QTAPPEND` and `QTDIR` in a qid type byte.*
+- [x] **WIRE-11**: Anti-splicing pins pass: a replayed `Twrite` with a stale nonce is dropped, and a payload moved to another channel by editing the cleartext FID fails the AAD MAC (RFC-P10, PT-T02 test 2.3)
 - [x] **WIRE-12**: `Tversion "9P2000.aead"` selects the native engine while peers offering plain 9P2000 keep using the existing devmnt path unchanged, so the golden invariant holds (RFC-P09, owner invariant)
 - [x] **WIRE-13**: `cargo xtask test-9p` exists and runs the wire pins (round trips, `ExtMask` parsing, `StatelessCap` MAC verification, `FidShard` sweep) on the host toolchain (IG-V01)
 
@@ -251,17 +251,17 @@ Which phases cover which requirements. Each requirement maps to exactly one phas
 | DS-06 | Phase 3 | Complete |
 | DS-07 | Phase 3 | Complete |
 | LINT-01 | Phase 3 | Complete |
-| WIRE-01 | Phase 4 | Pending |
-| WIRE-02 | Phase 4 | Pending |
+| WIRE-01 | Phase 4 | Complete |
+| WIRE-02 | Phase 4 | Complete |
 | WIRE-03 | Phase 4 | Complete |
 | WIRE-04 | Phase 4 | Complete |
 | WIRE-05 | Phase 4 | Complete |
 | WIRE-06 | Phase 4 | Complete |
-| WIRE-07 | Phase 4 | Pending |
+| WIRE-07 | Phase 4 | Complete |
 | WIRE-08 | Phase 4 | Complete |
 | WIRE-09 | Phase 4 | Complete |
-| WIRE-10 | Phase 4 | Pending |
-| WIRE-11 | Phase 4 | Pending |
+| WIRE-10 | Phase 4 | Complete |
+| WIRE-11 | Phase 4 | Complete |
 | WIRE-12 | Phase 4 | Complete |
 | WIRE-13 | Phase 4 | Complete |
 | MEM-01 | Phase 5 | Pending |

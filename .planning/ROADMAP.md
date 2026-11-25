@@ -43,7 +43,7 @@ Milestone numbering continues from the closed Harvey-rooted milestone v2.1.
 - [x] **Phase 1: Stage P0 - Cross-Build Harness** - `cargo xtask` draws C artifacts from a read-only Harvey tree through a fallback manifest; the boot-to-rio gate runs per commit (completed 2026-11-23)
 - [x] **Phase 2: Guide Phase 0 - Design Lock and rfork Flag Reservation** - threat model, corrected C prototypes, four `rfork` flag bits reserved in r9, maintainer confirms decisions (completed 2026-11-24)
 - [x] **Phase 3: Guide Phase 1 - crypto/ and ds/ Foundations** - HKDF, ChaCha20, BLAKE3, TPHT, Roaring, `ClientSet`, with lint contracts (completed 2026-11-24)
-- [ ] **Phase 4: Guide Phase 2 - 9P2000.aead Transport and FidTable** - wire envelope, monotonic nonces, hybrid `FidHandle`, `FidShard`, Factotum `Tauth`
+- [x] **Phase 4: Guide Phase 2 - 9P2000.aead Transport and FidTable** - wire envelope, monotonic nonces, hybrid `FidHandle`, `FidShard`, Factotum `Tauth` (completed 2026-11-25)
 
 #### Phase 1: Stage P0 - Cross-Build Harness
 **Goal**: The owner can build and boot r9 to rio on QEMU q35 from the r9 repo with `cargo xtask`, drawing every C library object and userland binary from a pre-built, read-only Harvey tree, and can replace those C artifacts with Rust ones one at a time without ever breaking the boot.
@@ -200,7 +200,7 @@ Plans:
   2. Altering any authenticated byte of a packet makes the receiver drop the connection and zero its channel state without parsing the packet; a replayed packet with a stale nonce is dropped; a payload spliced onto another channel fails MAC verification.
   3. `FidTable` dereference resolves a `FidEntry` in exactly one memory read, any replica holding the domain secret verifies a `StatelessCap` with zero server FID memory, and the failover sweep returns exactly `active \ reclaimed`.
   4. A `Tauth` then `Tattach` exchange derives per-connection, per-direction session keys that are zeroized on teardown, and a plain-9P2000 peer still works, so the system still boots to rio.
-**Plans**: 25/25 plans executed; 17 in 11 waves, then 8 gap-closure plans (04-18 to 04-25) planned and not yet run. Five owner checkpoints in the first 17: the one-way wire proposals P1 to P8 and the IG-D11 lock (both in 04-01), the phase-end review of the whole `port/src` change (04-14), and the branch-push stop on the x86_64 Linux host followed by `main` push approval (04-15). Plans 04-14 and 04-15 run on the main working tree, so `workflow.use_worktrees` must be off before wave 10.
+**Plans**: 25/25 plans complete; 17 in 11 waves, then 8 gap-closure plans (04-18 to 04-25) planned and not yet run. Five owner checkpoints in the first 17: the one-way wire proposals P1 to P8 and the IG-D11 lock (both in 04-01), the phase-end review of the whole `port/src` change (04-14), and the branch-push stop on the x86_64 Linux host followed by `main` push approval (04-15). Plans 04-14 and 04-15 run on the main working tree, so `workflow.use_worktrees` must be off before wave 10.
 
 **Wave 1**
 - [x] 04-01-PLAN.md
