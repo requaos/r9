@@ -258,6 +258,8 @@ In classical Plan 9, every open file handle consumes an entry in the server's fi
 The upgraded wire envelope binds cleartext transport control fields as Authenticated Associated Data (AAD) ahead of a 4KB-aligned ChaCha20 payload and a 32-byte Keyed BLAKE3 MAC:
 $$\text{Packet} = \underbrace{\text{Size (4B)} \parallel \text{Type (1B)} \parallel \text{Tag (2B)} \parallel \text{FidHandle (8B)} \parallel \text{SeqNonce (8B)} \parallel \text{ExtMask (2B)} \parallel \text{ExtTLVs}}_{\text{Authenticated Associated Data (AAD — Keyed BLAKE3)}} \parallel \underbrace{\text{Ciphertext (ChaCha20)}}_{\text{4KB Aligned}} \parallel \underbrace{\text{MAC (32B)}}_{\text{BLAKE3}}$$
 
+Amended 2026-11-24 (r9 Phase 4, decision D-07): the AAD formula above is superseded; the MAC covers every byte before it, from byte 0 of `Size` to the last ciphertext byte (the range `[0, size - 32)`), so `Pad` and `ExtTLVs Length` are authenticated too, and RFC section 4.3 as amended is the normative statement.
+
 #### Extension Bitmask (`ExtMask`: `u16`)
 * **`EXT_DEADLINE` (`1 << 0`):** 8-byte monotonic cluster deadline. Propagates across chained exportfs mounts; expired requests drop automatically without `Tflush` round-trips.
 * **`EXT_CAP_TOKEN` (`1 << 1`):** 32-byte signed capability token, allowing multiple processes on a node to multiplex over a single pooled connection without per-user `Tauth` storms. Checked in $O(1)$ against a cache-resident Roaring Bitmap Certificate Revocation List (CRL).
@@ -1292,45 +1294,61 @@ impl UnionMountTable {
 
 ### 9.9 Upgraded 9P2000.aead Channel Framing & Extensions (`port/src/chan.rs`)
 
-```rust
-// port/src/chan.rs - Upgraded 9P2000.aead wire framing with ExtMask and compound ops
-#![no_std]
+Rewritten 2026-11-24 (r9 Phase 4, D-06, D-07, D-10, D-11, D-28): the listing below is a non-normative sketch; the normative source is the RFC as amended and the code in `port/src/chan/`. The previous listing was wrong in three ways: it put the handle in a packed struct (`AeadHeader`) holding the `FidHandle` enum, whose layout the compiler, not the wire, would have decided; it had no `Pad` field and no `ExtTLVs Length`, so the header was neither the 28-byte form nor seven fieldless; and it omitted eight base opcodes (`Tcreate`/`Rcreate`, `Tremove`/`Rremove`, `Tstat`/`Rstat`, `Twstat`/`Rwstat`). The header below is written and read field by field at the pinned offsets (D-06), never through a struct's memory layout.
 
-use crate::port::fid::FidHandle;
+```rust
+// port/src/chan.rs + port/src/chan/wire.rs - non-normative sketch of the shipped codec
+pub const HEADER_LEN: usize = 28;
+pub const MAC_LEN: usize = 32;
+
+// The eight header fields at their byte offsets (D-06), all multi-byte little-endian:
+//   Size u32 @ 0, Type u8 @ 4, Tag u16 @ 5, Pad u8 @ 7 (must be zero),
+//   FidHandle [u8; 8] @ 8, SeqNonce u64 @ 16, ExtMask u16 @ 24,
+//   ExtTLVs Length u16 @ 26; then the TLVs, the ciphertext and the 32-byte MAC.
+pub const OFF_SIZE: usize = 0;
+pub const OFF_TYPE: usize = 4;
+pub const OFF_TAG: usize = 5;
+pub const OFF_PAD: usize = 7;
+pub const OFF_FIDHANDLE: usize = 8;
+pub const OFF_SEQ: usize = 16;
+pub const OFF_EXTMASK: usize = 24;
+pub const OFF_EXTLEN: usize = 26;
 
 pub const EXT_DEADLINE: u16       = 1 << 0;
 pub const EXT_CAP_TOKEN: u16      = 1 << 1;
 pub const EXT_QID_VOLATILITY: u16 = 1 << 2;
 pub const EXT_STREAM_PRIO: u16    = 1 << 3;
 pub const EXT_OBINARY: u16        = 1 << 4;
+pub const EXT_STATELESS_CAP: u16  = 1 << 5;
+pub const EXT_KNOWN: u16          = 0x003F;
 
-#[repr(u8)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum MsgType {
-    Tversion = 100, Rversion = 101,
-    Tauth    = 102, Rauth    = 103,
-    Tattach  = 104, Rattach  = 105,
-    Twalk    = 110, Rwalk    = 111,
-    Topen    = 112, Ropen    = 113,
-    Tread    = 116, Rread    = 117,
-    Twrite   = 118, Rwrite   = 119,
-    Tclunk   = 120, Rclunk   = 121,
-    // Upgraded 9P2000.aead Operations
-    Tcompound     = 130, Rcompound     = 131,
-    Tstream       = 132, Rstream       = 133,
-    Tlease_revoke = 134, Rlease_ack    = 135,
-    Treclaim      = 136, Rreclaim      = 137,
-}
+// The full opcode registry (D-28): 100 to 139, with 106 illegal.
+pub const TVERSION: u8 = 100;      pub const RVERSION: u8 = 101;
+pub const TAUTH: u8 = 102;         pub const RAUTH: u8 = 103;
+pub const TATTACH: u8 = 104;       pub const RATTACH: u8 = 105;
+pub const RERROR: u8 = 107;
+pub const TFLUSH: u8 = 108;        pub const RFLUSH: u8 = 109;
+pub const TWALK: u8 = 110;         pub const RWALK: u8 = 111;
+pub const TOPEN: u8 = 112;         pub const ROPEN: u8 = 113;
+pub const TCREATE: u8 = 114;       pub const RCREATE: u8 = 115;
+pub const TREAD: u8 = 116;         pub const RREAD: u8 = 117;
+pub const TWRITE: u8 = 118;        pub const RWRITE: u8 = 119;
+pub const TCLUNK: u8 = 120;        pub const RCLUNK: u8 = 121;
+pub const TREMOVE: u8 = 122;       pub const RREMOVE: u8 = 123;
+pub const TSTAT: u8 = 124;         pub const RSTAT: u8 = 125;
+pub const TWSTAT: u8 = 126;        pub const RWSTAT: u8 = 127;
+pub const TCOMPOUND: u8 = 130;     pub const RCOMPOUND: u8 = 131;
+pub const TSTREAM: u8 = 132;       pub const RSTREAM: u8 = 133;
+pub const TLEASE_REVOKE: u8 = 134; pub const RLEASE_ACK: u8 = 135;
+pub const TRECLAIM: u8 = 136;      pub const RRECLAIM: u8 = 137;
+pub const TREKEY: u8 = 138;        pub const RREKEY: u8 = 139;
 
-#[repr(C, packed)]
-pub struct AeadHeader {
-    pub size: u32,
-    pub msg_type: u8,
-    pub tag: u16,
-    pub fid_handle: FidHandle,
-    pub seq_nonce: u64,
-    pub ext_mask: u16,
-}
+// The two packet types. Only `Size` may be read before the MAC verifies, so
+// the codec makes that a type: an `Unverified` packet exposes its claimed
+// length and nothing else, and a `Verified` packet (with the header and TLV
+// accessors) is constructible only after the MAC verifies.
+pub struct Unverified<'a> { /* len() only */ }
+pub struct Verified<'a> { /* private: built only after the MAC verifies */ }
 ```
 
 ### 9.10 Venti Archival Index via Chained-TPHT (`venti/src/index.rs`)
