@@ -147,3 +147,5 @@ by a real build and rebuild that agree.
 - The gates ran at `0dd1037dfe2067778fe4f731f5b30ea3d355d348`, the same commit the kernel and
   ISO builds measured, so the one-commit rule holds for this round: no commit reached the
   branch between section 5 and section 8.
+
+VERDICT stop2-main-push: PASS bb68d988752ccb616a980b943ea86aecca8f25be
