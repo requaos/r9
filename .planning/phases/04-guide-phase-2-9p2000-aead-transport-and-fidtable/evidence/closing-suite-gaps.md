@@ -96,3 +96,45 @@ first and is the range end; every pre-review leg above was re-run at it. The ver
 plan requires:
 
 VERDICT port-src-review-gaps: APPROVED HEAD=6fd201c072d9c42f4de6e6d617c0ac35cf20d013
+
+## Closing suites at the reviewed commit (plan 04-24, Task 1)
+
+HEAD 8df21a37dc15f637337057453aa470a7d407aede
+(`docs(04-23): mark the plan summary self-check passed`)
+
+No source file differs between that commit and the reviewed sha
+`6fd201c072d9c42f4de6e6d617c0ac35cf20d013`: `git diff --quiet 6fd201c HEAD -- port crypto ds
+xtask aarch64 x86_64 riscv64 Cargo.lock flake.nix` exits 0 (and the same check including
+`rust-toolchain.toml` and `.cargo` exits 0), so the tree measured below is the tree the owner
+approved in plan 04-23.
+
+Venue: `Darwin arm64`.
+Logs: `target/phase04-closing2/NAME.log` (gitignored); each log begins `HEAD=` and `CMD=` and ends
+`EXIT=`, and is the whole command output.
+
+Both suite runs and both `test-9p` runs were made at this one commit, in the order recorded.
+
+| Run | Command | Log | Exit | Result |
+|-----|---------|-----|------|--------|
+| `suite-run-1` | `nix develop -c cargo xtask test` | `suite-run-1-test.log` | 0 | 37 `test result: ok` lines, 0 failed |
+| `suite-run-1` | `nix develop -c cargo test -p xtask` | `suite-run-1-xtask-tests.log` | 0 | 5 `test result: ok` lines (unit, integration, doctests), 0 failed |
+| `suite-run-1` | `nix develop -c cargo xtask check` | `suite-run-1-check.log` | 0 | clean |
+| `suite-run-1` | `nix develop -c cargo xtask clippy` | `suite-run-1-clippy.log` | 0 | clean (the workspace's pre-existing `warn`-level lints stay warnings) |
+| `test-9p-run-1` | `nix develop -c cargo xtask test-9p` | `test-9p-run-1.log` | 0 | 14 `test result: ok` lines (seven targets, each with its scalar-backend twin), 0 `test-9p:` lines |
+| `suite-run-2` | `nix develop -c cargo xtask test` | `suite-run-2-test.log` | 0 | 37 `test result: ok` lines, 0 failed |
+| `suite-run-2` | `nix develop -c cargo test -p xtask` | `suite-run-2-xtask-tests.log` | 0 | 5 `test result: ok` lines, 0 failed |
+| `suite-run-2` | `nix develop -c cargo xtask check` | `suite-run-2-check.log` | 0 | clean |
+| `suite-run-2` | `nix develop -c cargo xtask clippy` | `suite-run-2-clippy.log` | 0 | clean |
+| `test-9p-run-2` | `nix develop -c cargo xtask test-9p` | `test-9p-run-2.log` | 0 | 14 `test result: ok` lines, 0 `test-9p:` lines |
+| `miri` | `nix develop -c cargo xtask miri` | `miri.log` | 0 | tpht suite green (33 passed, 0 failed, 1 ignored by the D-15 generator), 64 seeds, no Undefined Behavior and no data race |
+
+Miri is over the 120-second feedback-latency budget: `MIRI-TIME closing 357`. This is the
+accepted Phase 3 deviation, reported and not fixed; `ds/` is unchanged by the gap closure, and
+this is the same closing check plan 04-14 made.
+
+VERDICT suite-run-1: PASS exit=0
+VERDICT suite-run-2: PASS exit=0
+VERDICT test-9p-run-1: PASS exit=0
+VERDICT test-9p-run-2: PASS exit=0
+VERDICT miri: PASS exit=0
+MIRI-TIME closing 357
