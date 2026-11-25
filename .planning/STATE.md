@@ -4,16 +4,16 @@ milestone: v3.0
 milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
 current_phase: 04
 current_phase_name: Guide Phase 2 - 9P2000.aead Transport and FidTable
-status: paused
-stopped_at: Phase 4 verification gaps_found; fixes deferred by the owner
-last_updated: "2026-11-25T03:25:00.000Z"
+status: ready_to_execute
+stopped_at: Phase 4 gap-closure plans 04-18 to 04-25 planned and checked; not yet executed
+last_updated: "2026-11-25T04:37:14.749Z"
 last_activity: 2026-11-25
-last_activity_desc: Phase 4 code review and verification complete — gaps_found, fixes deferred
-state_head: b944127
+last_activity_desc: Phase 4 gap closure planned — 8 plans in 5 waves, plan check passed
+state_head: 2941d36b69e8b249b75724077b438fb069bf5114
 progress:
   total_phases: 4
   completed_phases: 3
-  total_plans: 70
+  total_plans: 78
   completed_plans: 70
   percent: 75
 ---
@@ -29,10 +29,10 @@ See: .planning/PROJECT.md (updated 2026-11-24)
 
 ## Current Position
 
-Phase: 04 (Guide Phase 2 - 9P2000.aead Transport and FidTable) — EXECUTING
-Plan: 17 of 17
-Status: 17/17 plans complete; verification `gaps_found` (101/109) — fixes deferred by the owner
-Last activity: 2026-11-25 — code review and verification recorded; 8 blocking gaps deferred
+Phase: 04 (Guide Phase 2 - 9P2000.aead Transport and FidTable) — READY TO EXECUTE
+Plan: 17 of 25
+Status: 17/25 plans complete; verification `gaps_found` (101/109); gap-closure plans 04-18 to 04-25 are planned and checked, run with `/gsd-execute-phase 4 --gaps-only`
+Last activity: 2026-11-25 — gap closure planned (`421bd09`, revised `2941d36`); plan check passed with 0 blockers and 0 warnings
 
 Progress: [████████░░] 75%
 

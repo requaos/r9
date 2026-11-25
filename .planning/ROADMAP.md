@@ -200,7 +200,7 @@ Plans:
   2. Altering any authenticated byte of a packet makes the receiver drop the connection and zero its channel state without parsing the packet; a replayed packet with a stale nonce is dropped; a payload spliced onto another channel fails MAC verification.
   3. `FidTable` dereference resolves a `FidEntry` in exactly one memory read, any replica holding the domain secret verifies a `StatelessCap` with zero server FID memory, and the failover sweep returns exactly `active \ reclaimed`.
   4. A `Tauth` then `Tattach` exchange derives per-connection, per-direction session keys that are zeroized on teardown, and a plain-9P2000 peer still works, so the system still boots to rio.
-**Plans**: 17/17 plans executed in 11 waves. Five owner checkpoints: the one-way wire proposals P1 to P8 and the IG-D11 lock (both in 04-01), the phase-end review of the whole `port/src` change (04-14), and the branch-push stop on the x86_64 Linux host followed by `main` push approval (04-15). Plans 04-14 and 04-15 run on the main working tree, so `workflow.use_worktrees` must be off before wave 10.
+**Plans**: 17/25 plans executed; 17 in 11 waves, then 8 gap-closure plans (04-18 to 04-25) planned and not yet run. Five owner checkpoints in the first 17: the one-way wire proposals P1 to P8 and the IG-D11 lock (both in 04-01), the phase-end review of the whole `port/src` change (04-14), and the branch-push stop on the x86_64 Linux host followed by `main` push approval (04-15). Plans 04-14 and 04-15 run on the main working tree, so `workflow.use_worktrees` must be off before wave 10.
 
 **Wave 1**
 - [x] 04-01-PLAN.md
@@ -240,6 +240,26 @@ Plans:
 
 **Wave 11** *(blocked on Wave 10 completion; main working tree)*
 - [x] 04-15-PLAN.md
+
+**Gap closure** (planned 2026-11-25 from `04-VERIFICATION.md`, `gaps_found` 101/109; run with `/gsd-execute-phase 4 --gaps-only`). Eight plans in five waves of their own. Owner checkpoints: the one-way wire decision P9, exchange tag and afid (04-21), the review of the whole `port/src` gap diff (04-23), and the second branch-push stop on the x86_64 Linux host followed by `main` push approval (04-25). Plans 04-23, 04-24 and 04-25 run on the main working tree, so `workflow.use_worktrees` must be off before gap wave 3.
+
+**Gap wave 1**
+- [ ] 04-18-PLAN.md
+- [ ] 04-19-PLAN.md
+- [ ] 04-20-PLAN.md
+
+**Gap wave 2** *(blocked on gap wave 1 completion)*
+- [ ] 04-21-PLAN.md
+- [ ] 04-22-PLAN.md
+
+**Gap wave 3** *(blocked on gap wave 2 completion; main working tree)*
+- [ ] 04-23-PLAN.md
+
+**Gap wave 4** *(blocked on gap wave 3 completion; main working tree)*
+- [ ] 04-24-PLAN.md
+
+**Gap wave 5** *(blocked on gap wave 4 completion; main working tree)*
+- [ ] 04-25-PLAN.md
 **Open questions**: W1 (header layout and AAD contents), W2 (24-byte `StatelessCap` in an 8-byte handle), W4 (session key scope); W3 also bears here. Notes N1 and N5 (`factotum` key exchange: Noise versus DP9IK, and `factotum` is read-only Harvey C until Phase 12). Landing sites `port/src/chan.rs` and `port/src/fid.rs` do not exist at HEAD (devmnt lives in `port/src/devmnt.rs`); edits under `port/src` need owner approval with the diff shown first. `cargo xtask test-9p` is new harness work.
 
 ### v3.1 Secure Memory and Cluster Fabric (Planned)
