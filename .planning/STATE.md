@@ -5,16 +5,16 @@ milestone_name: Cross-Build Harness and Wire Foundations (In Progress)
 current_phase: 04
 current_phase_name: Guide Phase 2 - 9P2000.aead Transport and FidTable
 status: executing
-stopped_at: Phase 4 context gathered
-last_updated: "2026-11-25T00:13:46.448Z"
+stopped_at: Completed 04-14-PLAN.md
+last_updated: "2026-11-25T01:46:01.671Z"
 last_activity: 2026-11-24
 last_activity_desc: Phase 04 execution started
-state_head: 3ce5ed8c4e309710e2157ab5b63a03a40797d185
+state_head: 5e1a62b4a4334143147ceabe4ccca000b5836e79
 progress:
   total_phases: 4
   completed_phases: 3
   total_plans: 70
-  completed_plans: 53
+  completed_plans: 69
   percent: 75
 ---
 
@@ -30,8 +30,8 @@ See: .planning/PROJECT.md (updated 2026-11-24)
 ## Current Position
 
 Phase: 04 (Guide Phase 2 - 9P2000.aead Transport and FidTable) — EXECUTING
-Plan: 1 of 17
-Status: Executing Phase 04
+Plan: 2 of 17
+Status: Ready to execute
 Last activity: 2026-11-24 — Phase 04 execution started
 
 Progress: [████████░░] 75%
@@ -81,6 +81,7 @@ Progress: [████████░░] 75%
 | Phase 03 P09 | 1 min | 2 tasks | 5 files |
 | Phase 03 P10 | 15 min | 3 tasks | 6 files |
 | Phase 03 P11 | 92 min | 3 tasks | 14 files |
+| Phase 04 P14 | 23 min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -202,6 +203,9 @@ Full log is the PROJECT.md Key Decisions table. Recent:
 - [Phase 03]: Plan 03-11: the owner stop closed 11 of 11 verdicts PASS from the returned logs - both sandboxed kernel derivations build at the tip 95fe66a with Phase 3's enlarged Cargo.lock (A8 retired), the tip and base bytes are equal on both architectures (kernel-x64 6a5f5a66...01cf6a5, kernel-virt 954e5110...30f4eee), the fixed-output boot-iso builds and rebuilds on its committed outputHash, and host-test/check/clippy/miri all exit 0 on the x86_64 host (miri 64 seeds, 29 passed each)
 - [Phase 03]: Plan 03-11: main is pushed to origin at a64352625efe9cb8a924d7941c6be09c4f738a11 on the owner's second ruling (push-main), after origin/main had been 3d01f07; the VERDICT stop-main-push: PASS line was committed as 5226d11 and stays local until a later approved push, so local main is one evidence commit ahead of origin/main
 - [Phase 03]: Plan 03-11: the transport branch phase-03/crypto-ds-foundations is on the remote at 5f565ec (Mac tip 95fe66a plus two owner return commits that add 12 files only under evidence/owner-stop/return/); no kernel byte changed on Linux, so the D-21 boot-iso outputHash procedure did not apply and the boot-to-rio gate keeps holding by identity with the Phase 2 gated state 4624ea2; no source file, flake.nix or outputHash was touched
+- [Phase 04]: Owner approved the cumulative port/src change at f72cc2a; Task 3 measured at 3398df4 with no source diff since.
+- [Phase 04]: Both whole-ELF hashes differ from the baseline; Phase 2's .text-identical rule is not used (D-29). x86_64 text 760137/2097152, 1337015 bytes headroom.
+- [Phase 04]: FP/SIMD counts EQUAL both kernels (309 aarch64, 6 x86_64); Miri 348s reported as the accepted deviation.
 
 ### Open Questions (four warnings, approved to be carried, not resolved)
 
@@ -259,6 +263,6 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 
 ## Session Continuity
 
-Last session: 2026-11-24T20:28:32.246Z
-Stopped at: Phase 4 context gathered
-Resume file: .planning/phases/04-guide-phase-2-9p2000-aead-transport-and-fidtable/04-CONTEXT.md
+Last session: 2026-11-25T01:45:57.286Z
+Stopped at: Completed 04-14-PLAN.md
+Resume file: None

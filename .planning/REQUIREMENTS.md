@@ -63,7 +63,7 @@ Standing constraint on every requirement below: the golden invariant (boots to r
 - [ ] **WIRE-10**: `Qid` is 13 bytes and carries the three volatility classes `QTIMMUTABLE` 0x20, `QTLEASED` 0x40, `QTVOLATILE` 0x80 in their own byte, never as `qtype` bits, with the `#G` path formula `((ctx_id & 0xFFFFFF) << 8) | (node_type & 0xFF)` (IG-P01). *Amended 2026-11-24 (r9 Phase 4, D-27): the classes were described as mutually exclusive `qtype` bits; they travel in their own byte because 0x20, 0x40 and 0x80 are Plan 9's `QTEXCL`, `QTAPPEND` and `QTDIR` in a qid type byte.*
 - [ ] **WIRE-11**: Anti-splicing pins pass: a replayed `Twrite` with a stale nonce is dropped, and a payload moved to another channel by editing the cleartext FID fails the AAD MAC (RFC-P10, PT-T02 test 2.3)
 - [ ] **WIRE-12**: `Tversion "9P2000.aead"` selects the native engine while peers offering plain 9P2000 keep using the existing devmnt path unchanged, so the golden invariant holds (RFC-P09, owner invariant)
-- [ ] **WIRE-13**: `cargo xtask test-9p` exists and runs the wire pins (round trips, `ExtMask` parsing, `StatelessCap` MAC verification, `FidShard` sweep) on the host toolchain (IG-V01)
+- [x] **WIRE-13**: `cargo xtask test-9p` exists and runs the wire pins (round trips, `ExtMask` parsing, `StatelessCap` MAC verification, `FidShard` sweep) on the host toolchain (IG-V01)
 
 ### Cryptographic Memory and Zero-Copy DMA Paging (guide Phase 3)
 
@@ -263,7 +263,7 @@ Which phases cover which requirements. Each requirement maps to exactly one phas
 | WIRE-10 | Phase 4 | Pending |
 | WIRE-11 | Phase 4 | Pending |
 | WIRE-12 | Phase 4 | Pending |
-| WIRE-13 | Phase 4 | Pending |
+| WIRE-13 | Phase 4 | Complete |
 | MEM-01 | Phase 5 | Pending |
 | MEM-02 | Phase 5 | Pending |
 | MEM-03 | Phase 5 | Pending |
