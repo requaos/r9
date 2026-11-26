@@ -370,6 +370,25 @@ exercise the FxSave path permanently.  x86_64 175 → 184 blocks, fns
 call wiring and proc.rs/exec.rs/syscall.rs's doc updates are safe code —
 counts unchanged.)
 
+**Plan 05-17 delta (MEM-17, D-19, 2026-11-26):** the reserved Roaring SIMD
+module lands.  `ds/src/setops_simd.rs` (mounted at the crate root; the module
+carries no `#[forbid(unsafe_code)]` so its inline asm can exist) adds the
+AVX2 (`x86_64`) and NEON (`aarch64`) `bitmap_and_simd` / `bitmap_or_simd` /
+`bitmap_andnot_simd` kernels — three `unsafe fn`, each with one
+`core::arch::asm!` block and a concrete `// SAFETY:` contract — plus one
+`unsafe` `transmute` block in `run_guarded` that restores the registered
+`fn(&mut dyn FnMut())` bracket from its stored address.  Per compiled arch
+config that is **4 lint-visible blocks + 3 unsafe fns**; the three
+`#[cfg(not(any(x86_64, aarch64)))]` scalar fallbacks add three more unsafe
+fns (no blocks) and the `#[cfg(test)]` direct entry points add three
+test-only blocks (not lint-gated in a clippy leg).  All SIMD execution is
+strictly inside the registered bracket (the arch boot passes
+`fpu::with_simd`; `ds/src/setops.rs` stays `#[forbid(unsafe_code)]` and only
+dispatches), the x86_64 kernels issue `vzeroupper` on exit, and `qemu64`
+(`avx2=off`) keeps the scalar path.  `ds` unsafe blocks, non-test,
+production 1 → 5 and unsafe fns 0 → 3 on a compiled config; SAFETY 431 → 435
+plus the test-only sites; the reconciliation holds.
+
 **Plan 05-11 Task 1 delta (SMP-01/07, 2026-11-26):** the x86_64 dual
 xAPIC/x2APIC IPI delivery and AP LAPIC init land.  `acpi.rs`: the MADT
 walk records enabled/online-capable processors (type-0 LAPIC and type-9
@@ -542,9 +561,9 @@ Both crates take `[lints] workspace = true`, so
 |---|---|
 | `ds/src/tpht/` | **the named unsafe-holding module this phase** — 1 block (`flattened.rs:440`, `deref_tiny`); `tpht/mod.rs` and `tpht/chained.rs` hold none |
 | `ds/src/tpht/feistel.rs` | unsafe-free, `#![forbid(unsafe_code)]` (the safe submodule inside `tpht`) |
-| `ds` reserved Roaring SIMD module | **approved by D-09 and D-20, NO CODE** until Phase 5; it will be mounted at the crate root with `#[path]` because the forbid on `roaring` reaches submodules |
+| `ds/src/setops_simd.rs` | **the reserved audited Roaring SIMD module** (D-09, D-19; MEM-17) — 4 production blocks per compiled arch config (the `GUARD` transmute + the three inline-asm kernel blocks) and 3 unsafe fns; mounted at the crate root because the forbid on `roaring`/`setops` reaches submodules |
 | `ds/src/roaring.rs` | unsafe-free, `#[forbid(unsafe_code)]` |
-| `ds/src/setops.rs` | unsafe-free, `#[forbid(unsafe_code)]` (the D-20 kernel seam) |
+| `ds/src/setops.rs` | unsafe-free, `#[forbid(unsafe_code)]` (the D-20 kernel seam; dispatches to `setops_simd`) |
 | `ds/src/clientset.rs` | unsafe-free, `#[forbid(unsafe_code)]` |
 | `crypto/` | crate-level `#![forbid(unsafe_code)]`, **0 sites** |
 

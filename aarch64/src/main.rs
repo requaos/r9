@@ -489,6 +489,19 @@ pub extern "C" fn main9(dtb_va: usize) {
             ),
             Err(why) => panic!("fpu: kernel-SIMD selftest FAILED: {why}"),
         }
+        // MEM-17: register the kernel-SIMD bracket, enable the ARMv8 NEON
+        // path (mandatory on ARMv8), and prove the scalar and NEON set
+        // kernels agree word-for-word and cardinality-for-cardinality
+        // before any process exists.  A failure halts the boot by name.
+        #[cfg(dev_exec)]
+        {
+            port::setops::register_simd_guard(|f| fpu::with_simd(|_| f()));
+            port::setops::enable_simd(true);
+            if !port::setops::selftest_simd_matches_scalar() {
+                panic!("setops: NEON kernel disagrees with the scalar reference (MEM-17)");
+            }
+            println!("setops: simd=neon selftest=ok");
+        }
         #[cfg(all(dev_exec, any(not(dev_churn), dev_bootchain)))]
         exec_bootstrap(&dt, initrd_img, platform::bootconf::read_bootargs(&dt));
         #[cfg(all(dev_exec, dev_churn, not(dev_bootchain)))]

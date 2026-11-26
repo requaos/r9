@@ -352,6 +352,25 @@ pub extern "C" fn main(mach: &mut dat::Mach, mbdata: u64) {
         Err(why) => panic!("fpu: kernel-SIMD selftest FAILED: {why}"),
     }
 
+    // MEM-17: register the kernel-SIMD bracket, enable AVX2 only when the
+    // BSP's CPUID decision armed it (qemu64 stays on the scalar path), and
+    // prove the scalar and AVX2 set kernels agree before any process exists.
+    // A failure halts the boot by name.
+    #[cfg(dev_exec)]
+    {
+        port::setops::register_simd_guard(|f| fpu::with_simd(|_| f()));
+        let avx2 = fpu::avx2_enabled();
+        port::setops::enable_simd(avx2);
+        if !port::setops::selftest_simd_matches_scalar() {
+            panic!("setops: AVX2 kernel disagrees with the scalar reference (MEM-17)");
+        }
+        if avx2 {
+            println!("setops: simd=avx2 selftest=ok");
+        } else {
+            println!("setops: simd=scalar selftest=ok");
+        }
+    }
+
     #[cfg(all(dev_exec, any(not(dev_churn), dev_bootchain)))]
     exec_bootstrap(facts);
 

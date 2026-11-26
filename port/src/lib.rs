@@ -140,6 +140,15 @@ pub mod rfork;
 // 05-09..12).
 #[forbid(unsafe_code)]
 pub mod sched;
+// setops (Phase 5, MEM-17, D-19): the Roaring SIMD dispatch seam re-exported
+// across the R4 crate boundary.  The one reserved audited unsafe module stays
+// in `ds/src/setops_simd.rs`; the arch crates reach the runtime dispatch and
+// boot self-test strictly through `port::setops` without depending on `ds`
+// (lintcontract R4).  Safe code only here.
+#[forbid(unsafe_code)]
+pub mod setops {
+    pub use ds::setops::{enable_simd, register_simd_guard, selftest_simd_matches_scalar};
+}
 // smp (Phase 5, 05-07, SMP-02/SMP-07/SMP-12, D-25/D-26): the portable SMP
 // core — the SmpArch per-CPU hook boundary (registered once by the arch
 // crate before CPU 1 starts), the documented LockRank table with
