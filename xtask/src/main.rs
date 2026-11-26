@@ -3648,6 +3648,19 @@ impl TestStep {
             None,
         ));
 
+        // DEBT-01: the xtask crate's own unit tests (the gate map, the lint
+        // contract, the rfork header check and the test-9p spec assertions)
+        // run as a leg too, so `cargo xtask test` — and CI's tests job —
+        // fails when they go red.
+        all_cmd_args.push((
+            vec![
+                "test".to_string(),
+                "--package".to_string(),
+                "xtask".to_string(),
+            ],
+            None,
+        ));
+
         let rustup_state = RustupState::new();
 
         let arch = std::env::consts::ARCH;
@@ -3702,6 +3715,12 @@ impl TestStep {
                 return Err("test failed".into());
             }
         }
+
+        // DEBT-01: the 9P2000.aead wire pins (test-9p's per-file legs and
+        // their scalar-backend twins) run as part of `cargo xtask test`, so
+        // the CI tests job covers them on every push.  A failing or
+        // zero-test leg returns a named error (T-04-52, T-04-39).
+        xtask::test9p::run(&workspace(), Path::new(&cargo()))?;
         Ok(())
     }
 }

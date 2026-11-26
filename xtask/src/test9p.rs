@@ -1,12 +1,13 @@
 //! `cargo xtask test-9p`: run the 9P2000.aead wire pins on the host
 //! (WIRE-13, D-23).
 //!
-//! The step is a **named subset of what `cargo xtask test` already runs**:
-//! the `session` pins in the `crypto` crate and every file listed in
-//! `PORT_TESTS` under `port/tests/`.  The guide's verification matrix names
-//! one command that runs the wire pins; this is it, and it is not added to
-//! `cargo xtask test` (the ordinary run already covers the same files, and
-//! stays as it is).
+//! The step runs the `session` pins in the `crypto` crate and every file
+//! listed in `PORT_TESTS` under `port/tests/`, one leg per file with a
+//! scalar-backend twin each.  The guide's verification matrix names one
+//! command that runs the wire pins; this is it, and since DEBT-01 it is
+//! also the closing leg of `cargo xtask test` — the ordinary run's
+//! per-package legs cover the same files but not the per-file zero-test
+//! guard or the port scalar-backend twins, so both run.
 //!
 //! Each listed file pins one part of the dialect:
 //!
@@ -41,8 +42,8 @@
 //! kernels run the scalar code, so the same wire pins must run on both.  The
 //! twin carries the crates' own soft-backend `--config` flags in its argument
 //! vector, never in `.cargo/config.toml` (lint rule R5).  Seven legs and
-//! their seven twins make fourteen commands, and the step is still not part
-//! of `cargo xtask test`.
+//! their seven twins make fourteen commands, and since DEBT-01 the step is
+//! the closing leg of `cargo xtask test`.
 
 use std::path::{Path, PathBuf};
 
