@@ -23,7 +23,7 @@
 #      pinned-date xorriso pipeline, strip-all staging, the templated
 #      module2 emission) builds the ISO from the kernel + the selected
 #      image, then:
-#        qemu-system-x86_64 -M q35 -accel kvm -cpu host -smp 1 -m 1024M
+#        qemu-system-x86_64 -M q35 -accel kvm -cpu host -smp "${R9_SMP:-2}" -m 1024M
 #          -cdrom <composed ISO>
 #          <the emitter's netdev+device argv for NET_MODE — the
 #           R9_NETDEV_EMITTER's output, D-05: no netdev literal here>
@@ -105,6 +105,8 @@
 #                       downgrade (see above).
 #   R9_CPU              override the cpu model (default: host under kvm,
 #                       qemu64 under tcg).
+#   R9_SMP              the -smp CPU count (default 2; SMP-01/SMP-09,
+#                       D-24).  =1 keeps the retained single-CPU smoke leg.
 #   R9_NET              default net mode when no --net flag:
 #                       slirp|tap|vmnet (default slirp).  The flag wins
 #                       over the env; venue-validated at parse.
@@ -354,7 +356,7 @@ ISO="$TMPD/boot.iso"
 # tokens containing no spaces; NO netdev literal lives in this script.
 # shellcheck disable=SC2086  # the word-split IS the argv
 set -- qemu-system-x86_64 \
-	-M q35 -cpu "$R9_CPU" -smp 1 -m 1024M -accel "$R9_ACCEL" \
+	-M q35 -cpu "$R9_CPU" -smp "${R9_SMP:-2}" -m 1024M -accel "$R9_ACCEL" \
 	-cdrom "$ISO" \
 	$NETDEV_ARGV \
 	-nographic

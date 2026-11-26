@@ -200,7 +200,7 @@ if {[llength $netdev_argv] == 0} {
     exit 2
 }
 
-spawn $QEMU -M $R9_MACHINE -cpu $R9_CPU -smp 1 -m 1024M \
+spawn $QEMU -M $R9_MACHINE -cpu $R9_CPU -smp 2 -m 1024M \
     -accel $R9_ACCEL \
     -cdrom $env(R9_ISO) \
     {*}$netdev_argv \

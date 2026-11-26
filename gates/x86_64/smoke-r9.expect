@@ -94,6 +94,9 @@
 #                literal here)
 #   R9_MACHINE/R9_CPU/R9_ACCEL — the caller-selected q35 shape
 #                (defaults q35/host/kvm; TCG selects qemu64)
+#   R9_SMP       default 2 — the -smp CPU count on both spawn legs
+#                (SMP-01/SMP-09, D-24); >= 2 adds the smp-online marker
+#                stage, =1 keeps the retained single-CPU smoke leg
 #   R9_RUN_TAG   the per-run unique tag in qemu's argv (-name); the
 #                caller's survivor sweep keys on it
 #
@@ -118,6 +121,12 @@ foreach v {R9_ISO R9_CPU_ISO R9_SMOKE_LOG R9_CPU_LOG R9_NETDEV_ARGV} {
 }
 set QEMU [expr {[info exists env(R9_QEMU)] ? $env(R9_QEMU) : "qemu-system-x86_64"}]
 set run_tag [expr {[info exists env(R9_RUN_TAG)] ? $env(R9_RUN_TAG) : "r9x64smoke-[pid]-[clock seconds]"}]
+# The CPU count on both spawn legs (SMP-01/SMP-09, D-24): default 2 — the
+# two-CPU bring-up is the golden shape and this gate proves it (the
+# smp-online stage below asserts the marker when $r9_smp >= 2).  R9_SMP=1
+# keeps the retained single-CPU smoke leg alive: the MADT declares the BSP
+# alone, start_aps skips cleanly, and the leg stays marker-free.
+set r9_smp [expr {[info exists env(R9_SMP)] ? $env(R9_SMP) : 2}]
 
 # --- Hygiene: a fresh capture per run -----------------------------------
 # The caller already rm -f'd it; remove again here so the rule holds
@@ -130,7 +139,7 @@ exec rm -f $env(R9_SMOKE_LOG)
 set R9_MACHINE [expr {[info exists env(R9_MACHINE)] ? $env(R9_MACHINE) : "q35"}]
 set R9_CPU [expr {[info exists env(R9_CPU)] ? $env(R9_CPU) : "host"}]
 set R9_ACCEL [expr {[info exists env(R9_ACCEL)] ? $env(R9_ACCEL) : "kvm"}]
-spawn $QEMU -M $R9_MACHINE -cpu $R9_CPU -smp 1 -m 1024M \
+spawn $QEMU -M $R9_MACHINE -cpu $R9_CPU -smp $r9_smp -m 1024M \
     -accel $R9_ACCEL \
     -cdrom $env(R9_ISO) \
     -netdev user,id=n0 \
@@ -210,6 +219,19 @@ proc hostfwd_stage {port} {
 #    demand-paged stack this era; the chain's own print at the
 #    equivalent point) → prompt
 stage banner    {r9 from the Internet}
+
+# 1b. the SMP bring-up marker (SMP-01/SMP-07, proven through SMP-09's
+#     R9_SMP): with 2+ CPUs the kernel logs CPU 1's online marker at the
+#     END of exec_bootstrap (after the bootstrap proc is claimed Running —
+#     the 05-22 claim-then-start ordering, carried by 05-12) — BEFORE
+#     userland starts, so BEFORE the paqfs server's line.  The stage sits
+#     here in the order the marker arrives (a presence assertion, never
+#     interleaving order).  The R9_SMP=1 leg starts no secondary and stays
+#     marker-free.
+if {$r9_smp >= 2} {
+    stage smp-online    {smp: cpu 1 online}
+}
+
 stage paqfs     {paqfs\.\.\.}
 stage version   {version\.\.\.}
 stage prompt    {% }
@@ -370,7 +392,7 @@ if {[llength $netdev_argv] == 0} {
 # fresh capture for THIS leg (rm -f + log_file; the chain leg's capture
 # is closed and already post-passed above)
 exec rm -f $env(R9_CPU_LOG)
-spawn $QEMU -M $R9_MACHINE -cpu $R9_CPU -smp 1 -m 1024M \
+spawn $QEMU -M $R9_MACHINE -cpu $R9_CPU -smp $r9_smp -m 1024M \
     -accel $R9_ACCEL \
     -cdrom $env(R9_CPU_ISO) \
     {*}$netdev_argv \
