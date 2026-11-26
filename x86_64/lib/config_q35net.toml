@@ -29,7 +29,7 @@ dev = ["ether"]
 machine = "q35"
 accel = "kvm"
 cpu = "host"
-smp = 1
+smp = 2
 memory = "1024M"
 
 # The 07-01 D-10 netdev stanza, bound leg: the same slirp user net the

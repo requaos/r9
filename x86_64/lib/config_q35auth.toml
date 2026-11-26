@@ -47,7 +47,7 @@ dev = ["exec", "cap"]
 machine = "q35"
 accel = "kvm"
 cpu = "host"
-smp = 1
+smp = 2
 memory = "1024M"
 
 # The netdev stanza is CARRIED (the q35churn shape) for the discovery
