@@ -235,26 +235,6 @@ pub fn cons_rx_poll() {
     }
 }
 
-/// Panic-path byte write: LOCK-FREE and POLLING.
-///
-/// The normal console path is interrupt-driven and needs the CONSOLE lock, so
-/// it cannot be used from a panic (IRQs are masked and the interrupted context
-/// may hold the lock). This polls TXFF and writes DR directly on the published
-/// kernel-mapped PL011 range. Before that range is published (pre-MMU/early
-/// boot) it falls back to the fixed early-UART alias.
-pub fn panic_putc(b: u8) {
-    // SAFETY: PL011_RANGE is write-once before IRQ unmask; the panic path
-    // only reads the published RegBlock, exactly like rx_irq_echo.
-    let range = unsafe { &*PL011_RANGE.get() };
-    match range.as_ref() {
-        Some(range) => {
-            while range.read(UART0_FR) & (1 << 5) != 0 {}
-            range.write(UART0_DR, b as u32);
-        }
-        None => crate::pre_mmu::util::init_early_uart_putc(b),
-    }
-}
-
 /// INTID 33 handler: drain the RX FIFO and echo every byte verbatim via raw
 /// DR writes.  LOCK-FREE by construction (research P8): no println!, no
 /// Console access -- the Console mcslock may be held by the interrupted
