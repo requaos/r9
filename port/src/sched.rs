@@ -75,7 +75,12 @@ impl<const MAX_CPUS: usize> RunQueues<MAX_CPUS> {
     /// target itself when it is idle, else the lowest-numbered idle cpu
     /// below `num_cpus`, else None.  The caller (arch sched code) sends
     /// the IPI; a spurious IPI is benign (the target re-idles when it
-    /// finds nothing).
+    /// finds nothing).  The push (under the queue lock, Release on drop)
+    /// happens-before this Acquire mask read, pairing the idle
+    /// publication in [`Self::pop_or_steal`] — an enqueue that races an
+    /// about-to-sleep cpu either sees its idle bit here (and wakes it)
+    /// or is seen by that cpu's post-publish re-check, so a wake is
+    /// never lost.
     pub fn enqueue(&self, target_cpu: usize, pid: u64, num_cpus: usize) -> Option<usize> {
         debug_assert!(num_cpus > 0 && num_cpus <= MAX_CPUS);
         let target = target_cpu % num_cpus;
@@ -83,9 +88,15 @@ impl<const MAX_CPUS: usize> RunQueues<MAX_CPUS> {
             let node = LockNode::new();
             self.queues[target].q.lock(&node).push_back(pid);
         }
-        // RED-SCAFFOLD: the idle-mask consult (the Some(idle_cpu) wake
-        // report) lands in GREEN; RED never reports a cpu to wake.
-        let _ = &self.idle_mask;
+        let mask = self.idle_mask.load(Ordering::Acquire);
+        if mask & (1u64 << target) != 0 {
+            return Some(target);
+        }
+        for cpu in 0..num_cpus {
+            if mask & (1u64 << cpu) != 0 {
+                return Some(cpu);
+            }
+        }
         None
     }
 
@@ -98,13 +109,57 @@ impl<const MAX_CPUS: usize> RunQueues<MAX_CPUS> {
     /// (SMP-11 empty).
     pub fn pop_or_steal(&self, my_cpu: usize, num_cpus: usize) -> Option<u64> {
         debug_assert!(my_cpu < num_cpus && num_cpus <= MAX_CPUS);
-        let node = LockNode::new();
-        let mut q = self.queues[my_cpu].q.lock(&node);
-        // RED-SCAFFOLD: local pop only.  GREEN adds: idle-bit clear on
-        // success, the try_lock victim scan (pop_back), the idle-bit
-        // publish on all-empty, and the post-publish re-check that
-        // closes the enqueue-vs-idle-publication race.
-        q.pop_front()
+        // 1. Local pop (FIFO per cpu).  The guard is scoped to drop
+        //    BEFORE any steal probe: a cpu never holds two RunQueue
+        //    locks (equal-rank nesting is a rank violation, D-26).
+        {
+            let node = LockNode::new();
+            let mut q = self.queues[my_cpu].q.lock(&node);
+            if let Some(pid) = q.pop_front() {
+                self.idle_mask.fetch_and(!(1u64 << my_cpu), Ordering::AcqRel);
+                return Some(pid);
+            }
+        }
+        // 2. Steal the BACK of a neighbor's queue (the local FIFO is
+        //    untouched by thieves).  try_lock only: a contended victim
+        //    is skipped, never waited on.
+        if let Some(pid) = self.steal_scan(my_cpu, num_cpus) {
+            return Some(pid);
+        }
+        // 3. All empty: publish idle, then RE-CHECK once.  An enqueue
+        //    whose push preceded its mask read (which saw us not-idle)
+        //    lands in this re-check — the flag/data pairing that keeps
+        //    a racing wakeup from being lost (the Plan 9 / Linux idle
+        //    loop shape; SMP-11 empty).
+        self.idle_mask.fetch_or(1u64 << my_cpu, Ordering::AcqRel);
+        {
+            let node = LockNode::new();
+            let mut q = self.queues[my_cpu].q.lock(&node);
+            if let Some(pid) = q.pop_front() {
+                self.idle_mask.fetch_and(!(1u64 << my_cpu), Ordering::AcqRel);
+                return Some(pid);
+            }
+        }
+        self.steal_scan(my_cpu, num_cpus)
+    }
+
+    /// The steal scan shared by the hot path and the post-idle-publish
+    /// re-check: neighbors in round-robin order starting at
+    /// `my_cpu + 1`, victim lock via `try_lock`, victim pop from the
+    /// BACK.  A successful steal clears `my_cpu`'s idle bit.
+    fn steal_scan(&self, my_cpu: usize, num_cpus: usize) -> Option<u64> {
+        for offset in 1..num_cpus {
+            let victim = (my_cpu + offset) % num_cpus;
+            let node = LockNode::new();
+            let Some(mut q) = self.queues[victim].q.try_lock(&node) else {
+                continue;
+            };
+            if let Some(pid) = q.pop_back() {
+                self.idle_mask.fetch_and(!(1u64 << my_cpu), Ordering::AcqRel);
+                return Some(pid);
+            }
+        }
+        None
     }
 
     /// Mark `cpu` idle explicitly (the arch idle loop's explicit arm —
