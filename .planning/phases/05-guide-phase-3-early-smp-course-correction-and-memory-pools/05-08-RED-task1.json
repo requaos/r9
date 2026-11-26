@@ -1,0 +1,15 @@
+{
+  "command": "nix develop -c cargo test -p port sched",
+  "exitCode": 101,
+  "targetTest": "sched::tests::runqueues_steal_pops_victim_back_with_try_lock",
+  "targetFile": "port/src/sched.rs",
+  "output": "TAP version 13\n1..4\nok 1 - sched::tests::runqueues_local_pop_is_fifo\nnot ok 2 - sched::tests::runqueues_steal_pops_victim_back_with_try_lock\nnot ok 3 - sched::tests::runqueues_enqueue_wakes_an_idle_cpu\nnot ok 4 - sched::tests::runqueues_four_cpu_steal_conserves_10k_pids\n# tests 4\n# pass 1\n# fail 3\n",
+  "expected": "SMP-11/D-23 behavior: pop_or_steal on an empty local queue steals from the BACK of a neighbor's queue via try_lock (victim FIFO preserved; never two RunQueue locks held); enqueue reports Some(idle_cpu) after an all-empty pop transitions the cpu into idle tracking (preferring the target when it is idle); 4 threads (num_cpus = 4) with all 10,000 pids produced onto cpu 0's queue collectively pop every pid exactly once (zero stranded/lost/duplicated) with each consumer stealing at least one",
+  "actual": "RED scaffolding implements the queue array, local FIFO push/pop, len_for_cpu/total_len and the mark_idle/mark_busy/take_idle_cpu bitmask plumbing, but omits the planned behavior (the RED-SCAFFOLD comments name both sites): pop_or_steal never steals (returns None on an empty local queue) and never publishes idle, enqueue never consults idle_mask (always returns None). runqueues_steal_pops_victim_back_with_try_lock fails at port/src/sched.rs:213 ('left: None, right: Some(102)'), runqueues_enqueue_wakes_an_idle_cpu fails at port/src/sched.rs:236 ('left: None, right: Some(2)'), runqueues_four_cpu_steal_conserves_10k_pids fails at port/src/sched.rs:320 ('left: 0, right: 10000' — consumers cannot steal, all pids stranded on cpu 0). runqueues_local_pop_is_fifo passes in the same binary (local FIFO + len plumbing + rank-stack balance) — no compile errors, no zero-test discovery, no fixture crashes",
+  "output_format_note": "cargo test does not emit TAP; the output field is a faithful TAP transcription of the cargo run (exit 101, 'test result: FAILED. 1 passed; 3 failed; 0 ignored; 0 measured; 179 filtered out'), names matching the log's ok/FAILED lines. Transcribed per the 05-06/05-07 precedent because gsd_run check tdd-red-evidence parses TAP/Surefire summaries only.",
+  "recorded_at": "2026-11-26T07:02Z",
+  "plan": "05-08",
+  "task": 1,
+  "phase": "05-guide-phase-3-early-smp-course-correction-and-memory-pools",
+  "notes": "Task 1 of 05-08 is tdd=true. The RED commit is test(05-08) with the port/src/sched.rs scaffolding (CpuQueue align(64) + IrqSpinLock<VecDeque<u64>> at LockRank::RunQueue, RunQueues<MAX_CPUS=64> with idle_mask AtomicU64, local FIFO enqueue/pop, len_for_cpu/total_len, mark_idle/mark_busy/take_idle_cpu) plus the #[forbid(unsafe_code)] pub mod sched; mount in port/src/lib.rs. The GREEN commit adds the try_lock victim steal (pop_back), the idle-mask publish/clear with the post-publish re-check (the enqueue-vs-idle race close), and the enqueue idle-cpu wake report."
+}
