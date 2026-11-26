@@ -1,5 +1,6 @@
-//! The layout pins for the `9P2000.aead` hybrid file handle (WIRE-07,
-//! WIRE-10; D-11, D-12, D-14, D-27).
+//! The layout pins for the `9P2000.aead` hybrid file handle and the sharded
+//! generational slab `FidTable` (WIRE-07 to WIRE-10 as amended by Phase 5
+//! decisions D-07 to D-13; CORR-03).
 //!
 //! Every wire vector below is a literal byte array written out by hand,
 //! independently of the codec under test.  The 13-byte qid order and the three
@@ -7,15 +8,15 @@
 //! (`QTDIR 0x80`, `QTAPPEND 0x40`, `QTEXCL 0x20`).
 
 use crypto::key::Key;
-use ds::tpht::{HOME_SLOTS, Probe, TinyPtr};
+use ds::slab::SlabProbe;
 use port::dat::Qid;
 use port::fid::{
-    FID_LIVE, STATEFUL_HANDLE_LEN, STATELESS_CAP_LEN, FidEntry, FidHandle, FidTable, StatelessCap,
+    FidEntry, FidHandle, FidTable, STATEFUL_HANDLE_LEN, STATELESS_CAP_LEN, StatelessCap,
     StatefulHandle, VolatilityClass, gpu_qid_path, qid_decode, qid_encode,
 };
 use std::collections::BTreeSet;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Barrier};
 
 /// A boundary-value entry: every field at its maximum, plus the volatile class
 /// byte (D-27).
@@ -35,7 +36,7 @@ fn boundary_entry() -> FidEntry {
         open_mode: 0xFF,
         flags: u16::MAX,
         volatility: 0x80,
-        _reserved: [0xFF; 15],
+        _reserved: [0xFF; 7],
     }
 }
 
@@ -43,25 +44,29 @@ fn boundary_entry() -> FidEntry {
 fn aead_fid_layout_sizes_and_alignment() {
     assert_eq!(STATEFUL_HANDLE_LEN, 8, "a stateful handle is 8 bytes on the wire");
     assert_eq!(STATELESS_CAP_LEN, 24, "a stateless capability is 24 bytes on the wire (D-14)");
-    assert_eq!(core::mem::size_of::<FidEntry>(), 64, "a FidEntry is one 64-byte cache line");
-    assert_eq!(core::mem::align_of::<FidEntry>(), 64, "a FidEntry is 64-byte aligned");
+    assert_eq!(
+        core::mem::size_of::<FidEntry>(),
+        56,
+        "a FidEntry is the seven payload words of one 64-byte slab slot (D-11)"
+    );
     assert_eq!(
         core::mem::size_of::<StatefulHandle>(),
         STATEFUL_HANDLE_LEN,
         "the in-memory handle is exactly its wire form"
     );
-    assert_eq!(FID_LIVE, 1, "the live bit is flags bit 0");
 }
 
 #[test]
 fn aead_fid_layout_wire_forms_roundtrip() {
-    // fid_key 0x11223344, ptr 0x2A, shard_id 0x07, epoch 0x1234 — LE fields.
+    // slot_idx 0x2233, gen 0x1144, shard_id 0x07, flags 0xA5, epoch 0x1234 —
+    // LE fields in the D-10 order.
     let handle_bytes: [u8; STATEFUL_HANDLE_LEN] =
-        [0x44, 0x33, 0x22, 0x11, 0x2A, 0x07, 0x34, 0x12];
+        [0x33, 0x22, 0x44, 0x11, 0x07, 0xA5, 0x34, 0x12];
     let handle = StatefulHandle::from_wire(&handle_bytes).expect("a hand-written handle decodes");
-    assert_eq!(handle.fid_key, 0x1122_3344, "fid_key is little-endian at offset 0");
-    assert_eq!(handle.ptr.get(), 0x2A, "ptr is one byte at offset 4");
-    assert_eq!(handle.shard_id, 0x07, "shard_id is one byte at offset 5");
+    assert_eq!(handle.slot_idx, 0x2233, "slot_idx is little-endian at offset 0");
+    assert_eq!(handle.r#gen, 0x1144, "gen is little-endian at offset 2");
+    assert_eq!(handle.shard_id, 0x07, "shard_id is one byte at offset 4");
+    assert_eq!(handle.flags, 0xA5, "flags is one byte at offset 5");
     assert_eq!(handle.epoch, 0x1234, "epoch is little-endian at offset 6");
     assert_eq!(handle.to_wire(), handle_bytes, "a handle encodes back to the same bytes");
 
@@ -98,9 +103,9 @@ fn aead_fid_layout_wire_forms_roundtrip() {
     assert_eq!(
         FidEntry::from_words(&entry.to_words()),
         entry,
-        "a FidEntry round-trips through its eight words at boundary values"
+        "a FidEntry round-trips through its seven words at boundary values"
     );
-    let zero = FidEntry::from_words(&[0u64; 8]);
+    let zero = FidEntry::from_words(&[0u64; 7]);
     assert_eq!(FidEntry::from_words(&zero.to_words()), zero, "the zero entry round-trips too");
 }
 
@@ -108,13 +113,24 @@ fn aead_fid_layout_wire_forms_roundtrip() {
 fn aead_fid_layout_stateful_handle_is_never_zero() {
     assert!(
         StatefulHandle::from_wire(&[0u8; STATEFUL_HANDLE_LEN]).is_err(),
-        "eight zero bytes are never a stateful handle (D-12)"
+        "eight zero bytes are never a stateful handle (D-10: gen is never 0)"
     );
-    // Every encodable handle carries a non-zero byte at offset 4 (the TinyPtr).
-    for raw in [0x01u8, 0x2A, 0x10, 0xFF] {
-        let ptr = TinyPtr::new(raw).expect("a non-zero byte is a tiny pointer");
-        let handle = StatefulHandle { fid_key: 0, ptr, shard_id: 0, epoch: 0 };
-        assert_ne!(handle.to_wire()[4], 0, "ptr {raw:#04x} must be non-zero at offset 4");
+    // A zero generation is rejected however the other bytes read: here
+    // slot_idx 1, shard 7, epoch 0x1234 with gen 0.
+    assert!(
+        StatefulHandle::from_wire(&[0x01, 0x00, 0x00, 0x00, 0x07, 0x00, 0x34, 0x12]).is_err(),
+        "a handle with gen == 0 is rejected even when other bytes are non-zero (D-10)"
+    );
+    // Every encodable handle carries a non-zero generation at offset 2..4, so
+    // no stateful handle is ever all zero.
+    for generation in [0x0001u16, 0x0100, 0xFFFF] {
+        let handle =
+            StatefulHandle { slot_idx: 0, r#gen: generation, shard_id: 0, flags: 0, epoch: 0 };
+        assert_ne!(
+            handle.to_wire()[2..4],
+            [0u8; 2],
+            "gen {generation:#06x} must be non-zero at offset 2"
+        );
     }
 }
 
@@ -132,7 +148,7 @@ fn aead_fid_layout_capability_requires_zero_header_handle() {
         "a capability with a zero header field is Stateless"
     );
     assert!(
-        matches!(FidHandle::from_wire(&[0x44, 0x33, 0x22, 0x11, 0x2A, 0x07, 0x34, 0x12], None), Ok(FidHandle::Stateful(_))),
+        matches!(FidHandle::from_wire(&[0x33, 0x22, 0x44, 0x11, 0x07, 0xA5, 0x34, 0x12], None), Ok(FidHandle::Stateful(_))),
         "no capability is Stateful"
     );
     assert!(
@@ -146,7 +162,7 @@ fn aead_fid_layout_identity_is_word_zero() {
     let entry = FidEntry {
         fid_key: 0x1122_3344,
         client_id: 0x5566_7788,
-        ..FidEntry::from_words(&[0u64; 8])
+        ..FidEntry::from_words(&[0u64; 7])
     };
     assert_eq!(
         entry.to_words()[0],
@@ -228,46 +244,37 @@ fn aead_fid_qid_gpu_path_formula() {
 }
 
 // ---------------------------------------------------------------------------
-// The table pins (WIRE-08, WIRE-09)
+// The table pins (CORR-03; Phase 5 D-07 to D-12)
 // ---------------------------------------------------------------------------
 
-/// A [`Probe`] that counts the reader's two memory accesses, so a resolve can
-/// be shown to make exactly one arena read and zero header reads (DS-03,
-/// WIRE-08).  The counters sit behind `Arc` so every shard holds a clone and
-/// the test keeps a handle to read them; `ds`'s own `CountingProbe` is private
-/// to its test module, so this one is defined against the public `Probe` trait.
+/// A [`SlabProbe`] that counts `resolve` attempts, so a resolve can be shown
+/// to perform exactly one cache-line slot read and zero metadata touches
+/// (CORR-03's restatement of the WIRE-08 pin).  The counter sits behind `Arc`
+/// so every shard holds a clone and the test keeps a handle to read it;
+/// `ds`'s own `CountingSlabProbe` is private to its test module, so this one
+/// is defined against the public `SlabProbe` trait.
 #[derive(Clone, Default)]
-struct CountingProbe {
-    header_reads: Arc<AtomicUsize>,
-    arena_reads: Arc<AtomicUsize>,
+struct CountingSlabProbe {
+    reads: Arc<AtomicUsize>,
 }
 
-impl CountingProbe {
-    fn new() -> CountingProbe {
-        CountingProbe::default()
+impl CountingSlabProbe {
+    fn new() -> CountingSlabProbe {
+        CountingSlabProbe::default()
     }
 
-    fn header_reads(&self) -> usize {
-        self.header_reads.load(Ordering::Relaxed)
-    }
-
-    fn arena_reads(&self) -> usize {
-        self.arena_reads.load(Ordering::Relaxed)
+    fn reads(&self) -> usize {
+        self.reads.load(Ordering::Relaxed)
     }
 
     fn reset(&self) {
-        self.header_reads.store(0, Ordering::Relaxed);
-        self.arena_reads.store(0, Ordering::Relaxed);
+        self.reads.store(0, Ordering::Relaxed);
     }
 }
 
-impl Probe for CountingProbe {
-    fn header_read(&self) {
-        self.header_reads.fetch_add(1, Ordering::Relaxed);
-    }
-
-    fn arena_read(&self) {
-        self.arena_reads.fetch_add(1, Ordering::Relaxed);
+impl SlabProbe for CountingSlabProbe {
+    fn slot_read(&self) {
+        self.reads.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -281,8 +288,8 @@ fn domain_key(seed: u8) -> Key {
     Key::from_bytes(bytes)
 }
 
-/// A valid entry for one fid number; every field is distinct enough to notice a
-/// mix-up, and `flags` starts at zero so `insert` sets [`FID_LIVE`] itself.
+/// A valid entry for one fid number; every field is distinct enough to notice
+/// a mix-up, and `client_id`/`epoch` start at zero so `alloc` sets them.
 fn entry_for(fid_key: u32) -> FidEntry {
     FidEntry {
         fid_key,
@@ -299,67 +306,177 @@ fn entry_for(fid_key: u32) -> FidEntry {
         open_mode: 0x02,
         flags: 0,
         volatility: 0,
-        _reserved: [0u8; 15],
+        _reserved: [0u8; 7],
     }
 }
 
 #[test]
-fn aead_fid_resolve_is_one_arena_read() {
-    let probe = CountingProbe::new();
-    let table = FidTable::with_probe(8, 1, domain_key(0x11), 7, probe.clone())
-        .expect("eight one-block shards form a table");
+fn aead_fid_alloc_returns_a_server_assigned_handle() {
+    let table = FidTable::with_probe(4, 8, domain_key(0x10), 7, CountingSlabProbe::new())
+        .expect("four 8-slot shards form a table");
+    let handle = table.alloc(1, entry_for(9)).expect("a fresh table has room for one fid");
+    assert!(handle.r#gen >= 1, "the server-assigned generation is never zero (D-10)");
+    assert_eq!(handle.shard_id, 0, "alloc routes from CPU 0's shard until port::smp lands (D-12)");
+    assert_eq!(handle.epoch, 7, "the handle carries the table's epoch");
+    assert_eq!(handle.flags, 0, "a fresh handle carries no flags");
+
+    let resolved = table.resolve(1, &handle).expect("the live handle resolves");
+    assert_eq!(resolved.fid_key, 9, "the resolved entry records the client's fid number (D-07)");
+    assert_eq!(resolved.client_id, 1, "the resolved entry records its owning client (D-08)");
+    assert_eq!(resolved.qid_path, entry_for(9).qid_path, "the resolved entry is the inserted entry");
+
+    // Server-assigned handles mean no duplicate-fid check exists (D-07): the
+    // same fid number allocs again into its own slot and both resolve.
+    let second = table.alloc(1, entry_for(9)).expect("the same fid number allocs again (D-07)");
+    assert_ne!(
+        (second.shard_id, second.slot_idx),
+        (handle.shard_id, handle.slot_idx),
+        "two allocs of one fid number get distinct server-assigned slots (D-07)"
+    );
+    assert!(table.resolve(1, &handle).is_ok(), "the first handle still resolves");
+    assert!(table.resolve(1, &second).is_ok(), "the second handle resolves too");
+}
+
+#[test]
+fn aead_fid_alloc_routes_cpu_zero_and_spills_over_round_robin() {
+    let table = FidTable::with_probe(4, 8, domain_key(0x11), 1, CountingSlabProbe::new())
+        .expect("four 8-slot shards form a table");
+    assert_eq!(table.shard_count(), 4);
+    assert_eq!(table.slots_per_shard(), 8);
+
+    // CPU 0's shard is 0 (`current_cpu_hint() & shard_mask` until port::smp
+    // lands, D-12): the first eight allocs fill shard 0 ...
     let mut handles = Vec::new();
-    for fid in 1..=32u32 {
-        handles.push(table.insert(1, entry_for(fid)).expect("a fresh table has room for 32 fids"));
+    for fid in 1..=8u32 {
+        let handle = table.alloc(1, entry_for(fid)).expect("shard 0 has room for eight fids");
+        assert_eq!(handle.shard_id, 0, "alloc {fid} routes to CPU 0's shard");
+        handles.push(handle);
     }
+    // ... and a full shard falls over round-robin — never a hash-clustering
+    // failure, because there is no hash (D-07, D-12).
+    for fid in 9..=16u32 {
+        let handle = table.alloc(1, entry_for(fid)).expect("a full shard falls over to the next");
+        assert_eq!(handle.shard_id, 1, "alloc {fid} fell over to shard 1");
+        handles.push(handle);
+    }
+    for fid in 17..=24u32 {
+        let handle = table.alloc(1, entry_for(fid)).expect("shard 2 has room");
+        assert_eq!(handle.shard_id, 2, "alloc {fid} fell over to shard 2");
+        handles.push(handle);
+    }
+    for fid in 25..=32u32 {
+        let handle = table.alloc(1, entry_for(fid)).expect("shard 3 has room");
+        assert_eq!(handle.shard_id, 3, "alloc {fid} fell over to shard 3");
+        handles.push(handle);
+    }
+    assert!(
+        table.alloc(1, entry_for(33)).is_err(),
+        "with every shard full an alloc is an error, never a silent drop"
+    );
+    for handle in &handles {
+        assert!(table.resolve(1, handle).is_ok(), "every spilled-over handle resolves");
+    }
+}
+
+#[test]
+fn aead_fid_sizing_tiers_and_shard_count_for_cpus() {
+    let synthetic = FidTable::synthetic(domain_key(0x12), 1);
+    assert_eq!(synthetic.shard_count(), 4, "the synthetic tier is 4 shards (D-12)");
+    assert_eq!(synthetic.slots_per_shard(), 256, "the synthetic tier is 256 slots (D-12)");
+
+    let workstation = FidTable::default_workstation(domain_key(0x12), 1);
+    assert_eq!(workstation.shard_count(), 8, "the workstation tier is 8 shards (D-12)");
+    assert_eq!(workstation.slots_per_shard(), 1024, "the workstation tier is 1,024 slots (D-12)");
+
+    let cluster = FidTable::with_tier(4096, 16, domain_key(0x12), 1).expect("the cluster floor tier");
+    assert_eq!(cluster.shard_count(), 16);
+    assert_eq!(cluster.slots_per_shard(), 4096);
+    let cluster_top = FidTable::with_tier(16384, 32, domain_key(0x12), 1).expect("the cluster top tier");
+    assert_eq!(cluster_top.shard_count(), 32);
+    assert_eq!(cluster_top.slots_per_shard(), 16384);
+    assert!(FidTable::with_tier(2048, 16, domain_key(0x12), 1).is_err(), "below the cluster slot floor");
+    assert!(FidTable::with_tier(4096, 8, domain_key(0x12), 1).is_err(), "below the cluster shard floor");
+    assert!(FidTable::with_tier(4096, 24, domain_key(0x12), 1).is_err(), "shard count must route by mask");
+
+    // `(num_cpus * 2).next_power_of_two().clamp(4, 256)` (D-12).
+    assert_eq!(FidTable::shard_count_for_cpus(1), 4);
+    assert_eq!(FidTable::shard_count_for_cpus(2), 4);
+    assert_eq!(FidTable::shard_count_for_cpus(3), 8);
+    assert_eq!(FidTable::shard_count_for_cpus(4), 8);
+    assert_eq!(FidTable::shard_count_for_cpus(7), 16);
+    assert_eq!(FidTable::shard_count_for_cpus(64), 128);
+    assert_eq!(FidTable::shard_count_for_cpus(128), 256, "the clamp's top end");
+    assert_eq!(FidTable::shard_count_for_cpus(1000), 256, "clamped to 256 shards");
+
+    // The general constructor validates the power-of-two shapes.
+    assert!(FidTable::new(0, 8, domain_key(0x12), 1).is_err(), "zero shards is no table");
+    assert!(FidTable::new(3, 8, domain_key(0x12), 1).is_err(), "shards route by mask");
+    assert!(FidTable::new(257, 8, domain_key(0x12), 1).is_err(), "shard_id is one byte");
+    assert!(FidTable::new(2, 7, domain_key(0x12), 1).is_err(), "slots are a power of two (D-12)");
+    assert!(FidTable::new(2, 0, domain_key(0x12), 1).is_err(), "zero slots is no shard");
+}
+
+#[test]
+fn aead_fid_resolve_is_one_slot_read_and_zero_locks() {
+    let probe = CountingSlabProbe::new();
+    let table = FidTable::with_probe(2, 8, domain_key(0x13), 5, probe.clone())
+        .expect("two 8-slot shards form a table");
+    let handle = table.alloc(1, entry_for(1)).expect("a fresh table has room for one fid");
 
     probe.reset();
-    let handle = handles[0];
-    let resolved = table.resolve(1, &handle);
-    assert!(resolved.is_ok(), "a live handle must resolve, got {:?}", resolved.as_ref().err());
-    let resolved = resolved.expect("the assertion above guarantees a resolved entry");
-    assert_eq!(resolved.fid_key, handle.fid_key, "the resolved entry is the inserted fid");
-    assert_eq!(resolved.qid_path, entry_for(1).qid_path, "the resolved entry is the inserted entry");
+    let resolved = table.resolve(1, &handle).expect("a live handle resolves");
+    assert_eq!(resolved.fid_key, 1, "the resolved entry is the inserted fid");
     assert_eq!(
-        (probe.arena_reads(), probe.header_reads()),
-        (1, 0),
-        "a resolve makes exactly one arena read and zero header reads (WIRE-08, DS-03)"
+        probe.reads(),
+        1,
+        "a resolve performs exactly one cache-line slot read and acquires no metadata lock \
+         (CORR-03's restatement of WIRE-08, DS-03)"
     );
+
+    // Rejections that never reach the slot: out-of-range shard id and
+    // out-of-range slot index read nothing.
+    let mut bad_shard = handle;
+    bad_shard.shard_id = 2; // the shard count, so one past the end
+    probe.reset();
+    assert!(table.resolve(1, &bad_shard).is_err(), "an out-of-range shard id is rejected");
+    assert_eq!(probe.reads(), 0, "an out-of-range shard id is rejected before any slot read");
+
+    let mut bad_slot = handle;
+    bad_slot.slot_idx = 8; // the shard's slot count, so one past the end
+    probe.reset();
+    assert!(table.resolve(1, &bad_slot).is_err(), "an out-of-range slot index is rejected");
+    assert_eq!(probe.reads(), 0, "an out-of-range slot index reads no slot");
+
+    // A stale generation reads the slot once and is rejected by the slab.
+    table.clunk(1, &handle).expect("clunking a live handle succeeds");
+    probe.reset();
+    assert!(table.resolve(1, &handle).is_err(), "a clunked handle's generation is stale");
+    assert_eq!(probe.reads(), 1, "a stale generation is rejected after one slot read");
 }
 
 #[test]
 fn aead_fid_resolve_rejects_wrong_client_epoch_and_shard() {
-    let probe = CountingProbe::new();
-    let mut table = FidTable::with_probe(2, 1, domain_key(0x22), 7, probe.clone())
-        .expect("two one-block shards form a table");
-    let handle = table.insert(1, entry_for(9)).expect("a fresh table has room for one fid");
+    let mut table = FidTable::with_probe(2, 8, domain_key(0x22), 7, CountingSlabProbe::new())
+        .expect("two 8-slot shards form a table");
+    let handle = table.alloc(1, entry_for(9)).expect("a fresh table has room for one fid");
     assert!(
         table.resolve(1, &handle).is_ok(),
-        "the handle resolves for the client that inserted it"
+        "the handle resolves for the client that allocated it"
     );
     assert!(
         table.resolve(2, &handle).is_err(),
-        "another client's id does not resolve it, even with the same fid number (T-04-32)"
+        "another client's id does not resolve it, even with the same fid number (D-08, T-05-09)"
+    );
+    assert!(
+        table.resolve(0, &handle).is_err(),
+        "client id 0 is reserved and never resolves an entry (D-08)"
     );
 
     let mut wrong_epoch = handle;
     wrong_epoch.epoch = handle.epoch.wrapping_add(1);
     assert!(
         table.resolve(1, &wrong_epoch).is_err(),
-        "a handle from another epoch does not resolve (WIRE-08)"
-    );
-
-    let mut bad_shard = handle;
-    bad_shard.shard_id = 2; // the shard count, so one past the end
-    probe.reset();
-    assert!(
-        table.resolve(1, &bad_shard).is_err(),
-        "a handle whose shard id is out of range is rejected (T-04-35)"
-    );
-    assert_eq!(
-        (probe.arena_reads(), probe.header_reads()),
-        (0, 0),
-        "an out-of-range shard id is rejected before any arena or header read (T-04-35)"
+        "a handle from another epoch does not resolve"
     );
 
     table.set_epoch(handle.epoch.wrapping_add(1));
@@ -370,598 +487,246 @@ fn aead_fid_resolve_rejects_wrong_client_epoch_and_shard() {
 }
 
 #[test]
-fn aead_fid_resolve_clunked_handle_does_not_resolve() {
-    let table = FidTable::with_probe(1, 1, domain_key(0x33), 3, CountingProbe::new())
-        .expect("one one-block shard forms a table");
-    let handle = table.insert(1, entry_for(4)).expect("a fresh table has room for one fid");
-    assert!(table.resolve(1, &handle).is_ok(), "the live handle resolves before the clunk");
-
-    table.clunk(1, &handle).expect("clunking a live handle succeeds");
+fn aead_fid_alloc_refuses_client_id_zero() {
+    let probe = CountingSlabProbe::new();
+    let table = FidTable::with_probe(2, 8, domain_key(0x68), 3, probe.clone())
+        .expect("two 8-slot shards form a table");
     assert!(
-        table.resolve(1, &handle).is_err(),
-        "a clunked handle no longer resolves: its arena slot was zeroed (T-04-33)"
-    );
-
-    let other = table.insert(1, entry_for(5)).expect("the shard has room for another fid");
-    assert!(table.resolve(1, &other).is_ok(), "the new fid resolves");
-    assert!(
-        table.resolve(1, &handle).is_err(),
-        "the stale handle stays refused even after the slot may have been reused"
-    );
-}
-
-#[test]
-fn aead_fid_resolve_torn_clunk_image_never_matches() {
-    // `ds` zeroes a removed entry's arena words one at a time (flattened.rs
-    // `remove`), so a resolve racing a clunk can read word 0 (`fid_key` and
-    // `client_id`) already cleared while word 5 still holds the epoch and
-    // `FID_LIVE`.  The pin is that image, hand-built; it is not a race.
-    let table_epoch = 7u16;
-    let mut torn = FidEntry::from_words(&[0u64; 8]);
-    torn.epoch = table_epoch;
-    torn.flags = FID_LIVE;
-    let words = torn.to_words();
-    assert_eq!(words[0], 0, "the torn image's identity word is already zero");
-    let torn = FidEntry::from_words(&words);
-
-    let handle = StatefulHandle {
-        fid_key: 0,
-        ptr: TinyPtr::new(1).expect("a non-zero tiny pointer"),
-        shard_id: 0,
-        epoch: table_epoch,
-    };
-    assert!(
-        !torn.matches(0, &handle, table_epoch),
-        "the torn image must not match client id 0, the cleared-slot identity (WIRE-08, WR-04)"
-    );
-    for client_id in [1u32, 2, 0x00FF_FFFF, u32::MAX] {
-        assert!(
-            !torn.matches(client_id, &handle, table_epoch),
-            "the torn image must not match client {client_id} either"
-        );
-    }
-
-    // A fully zero image (every word cleared) never matches.
-    let zero = FidEntry::from_words(&[0u64; 8]);
-    assert!(!zero.matches(0, &handle, table_epoch), "an all-zero image never matches client 0");
-    assert!(!zero.matches(1, &handle, table_epoch), "an all-zero image never matches client 1");
-}
-
-#[test]
-fn aead_fid_insert_refuses_client_id_zero() {
-    let probe = CountingProbe::new();
-    let table = FidTable::with_probe(2, 1, domain_key(0x68), 3, probe.clone())
-        .expect("two one-block shards form a table");
-    assert!(
-        table.insert(0, entry_for(1)).is_err(),
-        "client id 0 is the cleared-slot identity, so insert refuses it (WIRE-08, WR-04)"
+        table.alloc(0, entry_for(1)).is_err(),
+        "client id 0 is reserved, so alloc refuses it (D-08)"
     );
     for shard in 0..2u8 {
         assert_eq!(
             table.bitmap_lens(shard),
             Some((0, 0)),
-            "the refused insert leaves shard {shard}'s bitmaps empty"
+            "the refused alloc leaves shard {shard}'s sets empty"
         );
     }
 
-    let handle = StatefulHandle {
-        fid_key: 1,
-        ptr: TinyPtr::new(1).expect("a non-zero tiny pointer"),
-        shard_id: 0,
-        epoch: 3,
-    };
+    let handle = table.alloc(1, entry_for(1)).expect("client 1 allocates fid 1");
     probe.reset();
-    assert!(table.resolve(0, &handle).is_err(), "resolve refuses client id 0 (WR-04)");
-    assert!(table.clunk(0, &handle).is_err(), "clunk refuses client id 0 (WR-04)");
+    assert!(table.resolve(0, &handle).is_err(), "resolve refuses client id 0 (D-08)");
+    assert!(table.update(0, &handle, |_| {}).is_err(), "update refuses client id 0 (D-08)");
+    assert!(table.clunk(0, &handle).is_err(), "clunk refuses client id 0 (D-08)");
     assert!(
         table.mark_reclaimed(0, &handle).is_err(),
-        "mark_reclaimed refuses client id 0 (WR-04)"
+        "mark_reclaimed refuses client id 0 (D-08)"
     );
-    assert_eq!(
-        (probe.arena_reads(), probe.header_reads()),
-        (0, 0),
-        "client id 0 is refused before any arena or header read"
-    );
+    assert_eq!(probe.reads(), 0, "client id 0 is refused before any slot read");
 
-    // Fid number 0 stays usable by every other client.
-    let zero_fid = table.insert(1, entry_for(0)).expect("client 1 may use fid number 0");
-    assert_eq!(zero_fid.fid_key, 0, "the handle carries fid number 0");
+    // Fid number 0 stays usable by every client.
+    let zero_fid = table.alloc(1, entry_for(0)).expect("client 1 may use fid number 0");
+    assert_eq!(zero_fid.r#gen >= 1, true, "the server-assigned generation is non-zero");
     let resolved = table.resolve(1, &zero_fid).expect("fid number 0 for client 1 resolves");
-    assert_eq!(resolved.fid_key, 0, "the resolved entry is fid number 0");
-}
-
-#[test]
-fn aead_fid_insert_duplicate_after_fallover_is_refused() {
-    let table = FidTable::with_probe(2, 1, domain_key(0x6A), 1, CountingProbe::new())
-        .expect("two one-block shards form a table");
-
-    // Sixteen distinct keys of client 1 whose home shard is 0 fill its block.
-    let mut home_zero = Vec::new();
-    let mut fid = 1u32;
-    while home_zero.len() < 16 {
-        if table.home_shard(1, fid) == 0 {
-            home_zero.push(fid);
-        }
-        fid += 1;
-    }
-    let mut home_handles = Vec::new();
-    for &key in &home_zero {
-        home_handles.push(table.insert(1, entry_for(key)).expect("shard 0 has room for 16 fids"));
-    }
-
-    // K homes to shard 0 too, so with its block full it falls over to shard 1.
-    let mut k = fid;
-    while table.home_shard(1, k) != 0 {
-        k += 1;
-    }
-    let first = table.insert(1, entry_for(k)).expect("a full home shard falls over");
-    assert_eq!(first.shard_id, 1, "K fell over to shard 1");
-
-    // Free a slot in K's home shard, so a repeat insert of K would land at home.
-    table.clunk(1, &home_handles[0]).expect("clunking a live handle succeeds");
-
-    let active_before: u64 =
-        (0..2u8).map(|shard| table.bitmap_lens(shard).expect("shard in range").0).sum();
-    assert!(
-        table.insert(1, entry_for(k)).is_err(),
-        "a repeated insert of K is refused even though its home slot is free (WR-09)"
-    );
-    let active_after: u64 =
-        (0..2u8).map(|shard| table.bitmap_lens(shard).expect("shard in range").0).sum();
-    assert_eq!(
-        active_after, active_before,
-        "the refused duplicate changes no shard's active count (WR-09)"
-    );
-    let original = table.resolve(1, &first).expect("K's first handle still resolves");
-    assert_eq!(
-        original.qid_path,
-        entry_for(k).qid_path,
-        "the first handle still names the original entry, not a second one"
-    );
-
-    // After K is clunked, K can be inserted again and resolves.
-    table.clunk(1, &first).expect("clunking K succeeds");
-    let again = table.insert(1, entry_for(k)).expect("K can be inserted again after its clunk");
-    assert!(table.resolve(1, &again).is_ok(), "the re-inserted K resolves");
-}
-
-#[test]
-fn aead_fid_insert_same_key_twice_in_one_shard_is_refused() {
-    let table = FidTable::new(2, 1, domain_key(0x6B), 1).expect("two one-block shards form a table");
-    let first = table.insert(1, entry_for(3)).expect("a fresh table has room for one fid");
-    let before = table.bitmap_lens(first.shard_id).expect("the shard index is in range");
-    assert!(
-        table.insert(1, entry_for(3)).is_err(),
-        "the same key twice in one shard is refused (WR-09)"
-    );
-    assert_eq!(
-        table.bitmap_lens(first.shard_id),
-        Some(before),
-        "the refused duplicate changes no bitmap"
-    );
-    assert!(table.resolve(1, &first).is_ok(), "the first handle still resolves");
-}
-
-/// The racing pair the WR-09 probe alone could not stop (owner request,
-/// amendment to plan 04-23): N threads insert the SAME `(client_id, fid_key)`
-/// into one shared table at the same instant, while one more thread frees a slot
-/// in that key's home block.
-///
-/// Why the clunk is part of the pin: the probe proves the key absent only as of
-/// the moment it reads, so the read and the placement it licenses have to be one
-/// indivisible step.  A same-shard collision alone is still caught — `ds` checks
-/// the key again inside the block under its seqlock — so the window that actually
-/// splits an insert is the *fallover* one: the key's home block is full, one
-/// racer walks it and falls over to the next shard, the home block then gains a
-/// free slot, and another racer that probed before the first one placed lands at
-/// home.  Two live entries for one key, in two shards.  That is the state this
-/// test drives, over many rounds.
-///
-/// With the table-level insert lock the probe and the walk are one critical
-/// section, so exactly one insert wins every round and the rest see the earlier
-/// entry; without it this test reports two winners within a few rounds.
-#[test]
-fn aead_fid_insert_racing_pair_lands_exactly_one_entry() {
-    const THREADS: usize = 32;
-    const ROUNDS: u32 = 64;
-    // The raced key's home shard 0, plus two neighbours, one home block of 16
-    // slots each: a racer that fell over from a full home always has room to
-    // land, so a wrong outcome is an observable second entry rather than an
-    // "every shard is full".
-    const SHARDS: usize = 3;
-    const SLOTS: usize = 16;
-
-    for round in 0..ROUNDS {
-        let table = FidTable::new(SHARDS, 1, domain_key(0x6E), 1)
-            .expect("three one-block shards form a table");
-
-        // Fill the key's home block completely, so the first insert to walk it
-        // has to fall over to shard 1.
-        let mut fid = 1u32;
-        let mut fillers = Vec::new();
-        while fillers.len() < SLOTS {
-            if table.home_shard(1, fid) == 0 {
-                let handle = table
-                    .insert(1, entry_for(fid))
-                    .expect("the home block has room for sixteen fillers");
-                assert_eq!(handle.shard_id, 0, "round {round}: a filler stays at its home shard");
-                fillers.push(handle);
-            }
-            fid += 1;
-        }
-        // The raced key homes to shard 0 too, so it is the key that falls over.
-        let mut raced = fid;
-        while table.home_shard(1, raced) != 0 {
-            raced += 1;
-        }
-
-        // A spin gate, not `std::sync::Barrier`: a condvar release wakes the
-        // other threads through the scheduler, which is slow enough that the
-        // first thread finishes its whole insert before the rest begin.  Here
-        // every thread is already hot and spinning, so the release is the same
-        // instant for all of them.
-        let ready = AtomicUsize::new(0);
-        let go = AtomicBool::new(false);
-        let ready_ref = &ready;
-        let go_ref = &go;
-        let table_ref = &table;
-        // One filler is freed mid-race: the home block goes from full to having
-        // exactly one free slot while the inserts are in flight.
-        let victim = fillers[0];
-        let outcomes: Vec<port::Result<StatefulHandle>> = std::thread::scope(|scope| {
-            let opener = scope.spawn(move || {
-                ready_ref.fetch_add(1, Ordering::SeqCst);
-                while !go_ref.load(Ordering::SeqCst) {
-                    core::hint::spin_loop();
-                }
-                table_ref.clunk(1, &victim)
-            });
-            let workers: Vec<_> = (0..THREADS)
-                .map(|_| {
-                    scope.spawn(move || {
-                        ready_ref.fetch_add(1, Ordering::SeqCst);
-                        while !go_ref.load(Ordering::SeqCst) {
-                            core::hint::spin_loop();
-                        }
-                        table_ref.insert(1, entry_for(raced))
-                    })
-                })
-                .collect();
-            while ready_ref.load(Ordering::SeqCst) < THREADS + 1 {
-                core::hint::spin_loop();
-            }
-            go_ref.store(true, Ordering::SeqCst);
-            let collected: Vec<port::Result<StatefulHandle>> = workers
-                .into_iter()
-                .map(|worker| worker.join().expect("a racer thread joins"))
-                .collect();
-            opener.join().expect("the opener thread joins").expect("the filler clunks");
-            collected
-        });
-
-        let wins: Vec<StatefulHandle> =
-            outcomes.iter().filter_map(|outcome| outcome.as_ref().ok().copied()).collect();
-        assert_eq!(
-            wins.len(),
-            1,
-            "round {round} (fid {raced}): exactly one of {THREADS} racing inserts may win, got {} \
-             on shard(s) {:?}",
-            wins.len(),
-            wins.iter().map(|handle| handle.shard_id).collect::<Vec<_>>()
-        );
-        for outcome in &outcomes {
-            if let Err(error) = outcome {
-                assert!(
-                    error.starts_with("fid: an entry for this client and fid is already present"),
-                    "round {round}: a losing insert must be the already-present error, got {error:?}"
-                );
-            }
-        }
-
-        // Exactly one live entry for the raced key, and it is the winner's.
-        let winner = wins[0];
-        let resolved = table.resolve(1, &winner);
-        assert!(
-            resolved.is_ok(),
-            "round {round}: the winning handle resolves, got {:?}",
-            resolved.as_ref().err()
-        );
-        let resolved = resolved.expect("the assertion above guarantees a resolved entry");
-        assert_eq!(resolved.fid_key, raced, "round {round}: the live entry is the raced key");
-        assert_eq!(
-            resolved.qid_path,
-            entry_for(raced).qid_path,
-            "round {round}: the live entry is the entry that was inserted"
-        );
-
-        // The bitmaps name the fifteen surviving fillers plus exactly one raced
-        // entry: a second live entry for the raced key would read as seventeen.
-        let total_active: u64 = (0..SHARDS as u8)
-            .map(|shard| table.bitmap_lens(shard).expect("the shard index is in range").0)
-            .sum();
-        assert_eq!(
-            total_active as usize, SLOTS,
-            "round {round}: fifteen surviving fillers plus exactly one raced entry are live"
-        );
-
-        // One sweep collects every live slot and leaves nothing stale behind, so
-        // a duplicate parked in another shard is collected here too.
-        let swept: BTreeSet<(u8, u32)> = table.sweep().into_iter().collect();
-        assert_eq!(
-            swept.len(),
-            SLOTS,
-            "round {round}: the sweep collects the fifteen survivors and the one raced entry"
-        );
-        assert!(
-            swept.contains(&(winner.shard_id, winner.ptr.get() as u32 - 1)),
-            "round {round}: the sweep collects the winning slot"
-        );
-        // The clunked filler's own slot may legitimately be reused by the winner
-        // (it is the free home slot), so it is not asserted absent from the
-        // sweep: the sweep reports slot ids, not keys.
-        assert!(table.sweep().is_empty(), "round {round}: a second sweep finds nothing stale");
-        for shard in 0..SHARDS as u8 {
-            assert_eq!(
-                table.bitmap_lens(shard),
-                Some((0, 0)),
-                "round {round}: shard {shard} holds no live or reclaimed slot after the sweep"
-            );
-        }
-        assert!(
-            table.resolve(1, &winner).is_err(),
-            "round {round}: the one raced entry was the one the sweep collected"
-        );
-    }
-}
-
-#[test]
-fn aead_fid_resolve_out_of_window_ptr_is_rejected() {
-    let probe = CountingProbe::new();
-    let table = FidTable::with_probe(2, 4, domain_key(0x69), 5, probe.clone())
-        .expect("two four-block shards form a table");
-    let mut handles = Vec::new();
-    for fid in 1..=6u32 {
-        handles.push(table.insert(1, entry_for(fid)).expect("a fresh table has room for six fids"));
-    }
-    let original = handles[0];
-    let issued = original.ptr.get();
-    assert!((1..=16).contains(&issued), "ds issues a home tiny pointer in 1..=16, got {issued}");
-    // `ds` folds a pointer as `((block << 4) + (ptr - 1)) & slot_mask`.  With
-    // four blocks per shard the mask is 63, so the issued pointer plus 64 (16
-    // times the four blocks) names the handle's own slot again.
-    let folded = issued as usize + 64;
-    assert!(
-        folded > HOME_SLOTS,
-        "the folded pointer {folded} must be above the home window ({HOME_SLOTS})"
-    );
-
-    let before: Vec<(u64, u64)> = (0..2u8)
-        .map(|shard| table.bitmap_lens(shard).expect("the shard index is in range"))
-        .collect();
-
-    for (label, ptr) in [("folded", folded as u8), ("17", 17u8), ("255", 255u8)] {
-        let mut copy = original;
-        copy.ptr = TinyPtr::new(ptr).expect("a non-zero tiny pointer");
-        probe.reset();
-        let resolved = table.resolve(1, &copy);
-        assert!(
-            resolved.is_err(),
-            "resolve must refuse the {label} ptr {ptr}: it is outside the home window (WR-06)"
-        );
-        assert!(
-            table.mark_reclaimed(1, &copy).is_err(),
-            "mark_reclaimed must refuse the {label} ptr {ptr} (WR-06)"
-        );
-        assert!(
-            table.clunk(1, &copy).is_err(),
-            "clunk must refuse the {label} ptr {ptr} (WR-06)"
-        );
-        assert_eq!(
-            (probe.arena_reads(), probe.header_reads()),
-            (0, 0),
-            "the {label} ptr {ptr} is refused before any arena or header read"
-        );
-    }
-
-    let after: Vec<(u64, u64)> = (0..2u8)
-        .map(|shard| table.bitmap_lens(shard).expect("the shard index is in range"))
-        .collect();
-    assert_eq!(after, before, "the nine refusals change no shard's bitmaps");
-
-    assert!(table.resolve(1, &original).is_ok(), "the original handle still resolves");
-    for handle in &handles[1..] {
-        assert!(table.resolve(1, handle).is_ok(), "every other live handle still resolves");
-    }
+    assert_eq!(resolved.fid_key, 0, "the resolved entry records fid number 0");
 }
 
 #[test]
 fn aead_fid_resolve_two_clients_same_fid_number() {
-    let table = FidTable::with_probe(1, 1, domain_key(0x34), 1, CountingProbe::new())
-        .expect("one one-block shard forms a table");
-    let client_one = table.insert(1, entry_for(7)).expect("client 1 stores fid 7");
-    let client_two = table.insert(2, entry_for(7)).expect("client 2 stores its own fid 7");
+    let table = FidTable::with_probe(1, 8, domain_key(0x34), 1, CountingSlabProbe::new())
+        .expect("one 8-slot shard forms a table");
+    let client_one = table.alloc(1, entry_for(7)).expect("client 1 stores fid 7");
+    let client_two = table.alloc(2, entry_for(7)).expect("client 2 stores its own fid 7");
 
     assert!(table.resolve(1, &client_one).is_ok(), "client 1 resolves its own handle");
     assert!(table.resolve(2, &client_two).is_ok(), "client 2 resolves its own handle");
     assert!(
         table.resolve(2, &client_one).is_err(),
-        "client 2 cannot resolve client 1's handle for the same fid number"
+        "client 2 cannot resolve client 1's handle for the same fid number (D-08)"
     );
     assert!(
         table.resolve(1, &client_two).is_err(),
-        "client 1 cannot resolve client 2's handle for the same fid number"
+        "client 1 cannot resolve client 2's handle for the same fid number (D-08)"
     );
 }
 
 #[test]
-fn aead_fid_resolve_falls_over_to_the_next_shard_when_home_is_full() {
-    let table = FidTable::with_probe(2, 1, domain_key(0x44), 1, CountingProbe::new())
-        .expect("two one-block shards form a table");
+fn aead_fid_update_keeps_the_wire_handle_and_enforces_the_owner() {
+    let table = FidTable::with_probe(2, 8, domain_key(0x40), 9, CountingSlabProbe::new())
+        .expect("two 8-slot shards form a table");
+    let handle = table.alloc(1, entry_for(4)).expect("a fresh table has room for one fid");
 
-    // Sixteen distinct keys whose home shard is 0 fill its one 16-slot block.
-    let mut home_zero = Vec::new();
-    let mut fid = 1u32;
-    while home_zero.len() < 16 {
-        if table.home_shard(1, fid) == 0 {
-            home_zero.push(fid);
-        }
-        fid += 1;
-    }
-    for &key in &home_zero {
-        let handle = table.insert(1, entry_for(key)).expect("home shard 0 has room for 16 fids");
-        assert_eq!(handle.shard_id, 0, "a key lands in its home shard while the block has room");
-    }
+    // An in-place update (the file cursor, the lease generation) keeps the
+    // generation, so the client's wire handle stays valid (D-11).
+    table
+        .update(1, &handle, |entry| {
+            entry.offset = 4096;
+            entry.lease_gen = 77;
+        })
+        .expect("the owner updates its live entry");
+    let resolved = table.resolve(1, &handle).expect("the same handle still resolves");
+    assert_eq!(resolved.offset, 4096, "the update landed");
+    assert_eq!(resolved.lease_gen, 77, "the lease generation updated");
+    assert_eq!(resolved.fid_key, 4, "the fid record is unchanged");
 
-    // The next key that would home to shard 0 must fall over to shard 1.
-    let mut overflow_key = fid;
-    while table.home_shard(1, overflow_key) != 0 {
-        overflow_key += 1;
-    }
-    let fell = table
-        .insert(1, entry_for(overflow_key))
-        .expect("a full home shard falls over instead of failing");
-    assert_eq!(fell.shard_id, 1, "the fallen-over handle records the shard it landed in (WIRE-08)");
-    assert!(table.resolve(1, &fell).is_ok(), "a fallen-over handle resolves");
+    // The closure cannot move the entry to another owner or epoch: the table
+    // forces the identity back (D-08).
+    table
+        .update(1, &handle, |entry| {
+            entry.client_id = 999;
+            entry.epoch = 0;
+            entry.offset = 8192;
+        })
+        .expect("the owner updates its live entry");
+    let resolved = table.resolve(1, &handle).expect("the handle still resolves for its owner");
+    assert_eq!(resolved.client_id, 1, "the owner cannot be reassigned through update (D-08)");
+    assert_eq!(resolved.epoch, 9, "the epoch stays the table's");
+    assert_eq!(resolved.offset, 8192, "the payload update still landed");
 
-    // Fill shard 1 to its 16 slots too, then a further home-1 key must fail.
-    let mut shard_one = Vec::new();
-    let mut key = overflow_key + 1;
-    while shard_one.len() < 15 {
-        if table.home_shard(1, key) == 1 {
-            shard_one.push(key);
-        }
-        key += 1;
-    }
-    for &home_one in &shard_one {
-        table.insert(1, entry_for(home_one)).expect("shard 1 has room for 15 more fids");
-    }
-    let mut doomed = key;
-    while table.home_shard(1, doomed) != 1 {
-        doomed += 1;
-    }
+    // A foreign client cannot update the entry, and the entry is unchanged.
     assert!(
-        table.insert(1, entry_for(doomed)).is_err(),
-        "with every shard full an insert is an error, never a silent drop"
+        table.update(2, &handle, |entry| entry.offset = 1).is_err(),
+        "another client cannot update the entry (D-08)"
     );
-}
-
-/// A fixed qid for the capability pins: a non-zero path and version and the
-/// directory type bit, so every field of the 16-byte tagged body is non-zero.
-fn fixed_qid() -> Qid {
-    Qid { path: 0x0102_0304_0506_0708, vers: 0xAABB_CCDD, typ: 0x80 }
-}
-
-#[test]
-fn aead_fid_stateless_two_tables_one_key_verify_each_other() {
-    let table_a = FidTable::new(1, 1, domain_key(0x50), 9).expect("a one-shard table forms");
-    let table_b = FidTable::new(1, 1, domain_key(0x50), 9).expect("a second table with the same key");
-    let cap_a = table_a.issue_cap(&fixed_qid(), 0x02);
-    assert!(
-        table_b.verify_cap(&cap_a).is_ok(),
-        "a second table built from the same domain key verifies the capability (D-13)"
-    );
-    let cap_b = table_b.issue_cap(&fixed_qid(), 0x02);
-    assert!(
-        table_a.verify_cap(&cap_b).is_ok(),
-        "and the first table verifies the second's capability too (D-13)"
-    );
-}
-
-#[test]
-fn aead_fid_stateless_uses_zero_fid_memory() {
-    let probe = CountingProbe::new();
-    let table = FidTable::with_probe(2, 1, domain_key(0x51), 4, probe.clone())
-        .expect("two one-block shards form a table");
-    probe.reset();
-    let cap = table.issue_cap(&fixed_qid(), 0x01);
-    assert!(table.verify_cap(&cap).is_ok(), "a freshly issued capability verifies");
     assert_eq!(
-        (probe.arena_reads(), probe.header_reads()),
-        (0, 0),
-        "issue and verify touch no shard at all: zero FID memory (WIRE-08)"
+        table.resolve(1, &handle).expect("the owner's handle resolves").offset,
+        8192,
+        "the refused update changed nothing"
     );
-    for shard in 0..2u8 {
-        assert_eq!(
-            table.bitmap_lens(shard),
-            Some((0, 0)),
-            "shard {shard}'s active and reclaimed bitmaps stay empty across issue and verify"
-        );
+
+    // After the clunk the stale generation rejects the update.
+    table.clunk(1, &handle).expect("clunking a live handle succeeds");
+    assert!(
+        table.update(1, &handle, |entry| entry.offset = 2).is_err(),
+        "a clunked handle rejects the update (stale generation)"
+    );
+}
+
+/// An entry whose every field derives from `fill`, so two fills differ in
+/// every payload word after word 0 and a torn snapshot can pass for neither.
+fn filled_entry(fid_key: u32, fill: u64) -> FidEntry {
+    FidEntry {
+        fid_key,
+        client_id: 0,
+        qid_path: fill,
+        offset: fill.rotate_left(13),
+        qid_vers: fill as u32,
+        iounit: (fill >> 32) as u32 | 1,
+        lease_gen: fill.wrapping_add(1) as u32,
+        ring_slot: fill.wrapping_add(2) as u32,
+        dev_handler: fill as u16,
+        epoch: 0,
+        qid_type: (fill >> 8) as u8,
+        open_mode: fill as u8,
+        flags: (fill >> 16) as u16,
+        volatility: fill as u8,
+        _reserved: [fill as u8; 7],
     }
 }
 
 #[test]
-fn aead_fid_stateless_different_key_rejects() {
-    let table_a = FidTable::new(1, 1, domain_key(0x52), 0).expect("a one-shard table forms");
-    let table_b = FidTable::new(1, 1, domain_key(0x53), 0).expect("a table with another key forms");
-    let cap = table_a.issue_cap(&fixed_qid(), 0x01);
+fn aead_fid_update_in_place_never_resolves_a_torn_snapshot() {
+    // One writer flips a live entry between two whole-payload images while
+    // readers resolve the handle lock-free; every snapshot must be exactly one
+    // image or the other (D-11: the seqlock retries, never tears).  The raw
+    // word-level stress lives in `ds::slab`; this pins the property through
+    // the FidEntry codec and the table's update path.
+    const WRITES: usize = 5_000;
+    const READS: usize = 2_000;
+    let table = FidTable::new(1, 8, domain_key(0x41), 3).expect("one 8-slot shard forms a table");
+    let handle = table.alloc(1, filled_entry(7, 0xAAAA_0000_5555_0001)).expect("room for one fid");
+    let epoch = handle.epoch;
+    let image_a = FidEntry { client_id: 1, epoch, ..filled_entry(7, 0xAAAA_0000_5555_0001) };
+    let image_b = FidEntry { client_id: 1, epoch, ..filled_entry(7, 0xBBBB_1111_4444_0002) };
+    assert_ne!(image_a, image_b, "the two images differ");
+
+    let barrier = Barrier::new(5);
+    std::thread::scope(|scope| {
+        let barrier = &barrier;
+        let table = &table;
+        let writer = scope.spawn(move || {
+            barrier.wait();
+            for round in 0..WRITES {
+                let image = if round % 2 == 0 { image_a } else { image_b };
+                table
+                    .update(1, &handle, |entry| *entry = image)
+                    .expect("the writer owns the live entry");
+            }
+        });
+        let mut readers = Vec::new();
+        for _ in 0..4 {
+            readers.push(scope.spawn(move || {
+                barrier.wait();
+                for _ in 0..READS {
+                    let resolved = table.resolve(1, &handle).expect("the live handle resolves");
+                    assert!(
+                        resolved == image_a || resolved == image_b,
+                        "a snapshot is one whole image or the other — never torn (D-11)"
+                    );
+                }
+            }));
+        }
+        writer.join().expect("the writer completes");
+        for reader in readers {
+            reader.join().expect("every reader completes");
+        }
+    });
+}
+
+#[test]
+fn aead_fid_clunk_scrubs_recycles_and_enforces_the_owner() {
+    let table = FidTable::with_probe(1, 8, domain_key(0x33), 3, CountingSlabProbe::new())
+        .expect("one 8-slot shard forms a table");
+    table.alloc(2, entry_for(8)).expect("client 2 has a live entry");
+    let handle = table.alloc(1, entry_for(4)).expect("client 1 has a live entry");
+    assert!(table.resolve(1, &handle).is_ok(), "the live handle resolves before the clunk");
+
+    // A foreign clunk is refused and the entry survives (D-08).
     assert!(
-        table_b.verify_cap(&cap).is_err(),
-        "a table with a different domain key rejects the capability (D-13)"
+        table.clunk(2, &handle).is_err(),
+        "another client cannot clunk the entry (D-08, T-05-09)"
     );
-}
+    assert!(table.resolve(1, &handle).is_ok(), "the refused clunk changed nothing");
 
-#[test]
-fn aead_fid_stateless_every_flipped_byte_rejects() {
-    let table = FidTable::new(1, 1, domain_key(0x54), 2).expect("a one-shard table forms");
-    let cap = table.issue_cap(&fixed_qid(), 0x03);
-    let wire = cap.to_wire();
-    for index in 0..STATELESS_CAP_LEN {
-        let mut flipped = wire;
-        flipped[index] ^= 0x01;
-        let tampered = StatelessCap::from_wire(&flipped);
-        assert!(
-            table.verify_cap(&tampered).is_err(),
-            "flipping wire byte {index} must fail verification (T-04-34)"
-        );
-    }
-}
-
-#[test]
-fn aead_fid_stateless_wrong_epoch_rejects() {
-    let issuer = FidTable::new(1, 1, domain_key(0x55), 5).expect("a one-shard table forms");
-    let mut other = FidTable::new(1, 1, domain_key(0x55), 5).expect("a table with the same key forms");
-    let cap = issuer.issue_cap(&fixed_qid(), 0x01);
-    assert!(other.verify_cap(&cap).is_ok(), "the same epoch verifies the capability");
-    other.set_epoch(6);
+    table.clunk(1, &handle).expect("the owner clunks its live handle");
     assert!(
-        other.verify_cap(&cap).is_err(),
-        "a table at epoch e+1 rejects a capability issued at epoch e (WIRE-08)"
+        table.resolve(1, &handle).is_err(),
+        "a clunked handle no longer resolves: its slot was scrubbed and its generation bumped (D-11)"
     );
-}
+    assert!(
+        table.clunk(1, &handle).is_err(),
+        "a duplicate clunk of an already-clunked handle is rejected cleanly"
+    );
 
-#[test]
-fn aead_fid_stateless_tag_is_keyed_blake3_of_label_and_wire_body() {
-    // The domain key is bytes 0x40..=0x5f and the label is a literal in the
-    // test, so nothing on the expected side goes through issue_cap,
-    // verify_cap, cap_tag or StatelessCap::body (WIRE-07, D-14, P8).
-    let key_bytes: [u8; 32] = core::array::from_fn(|i| 0x40 + i as u8);
-    let table = FidTable::new(1, 1, Key::from_bytes(key_bytes), 0x1357)
-        .expect("a one-shard table forms");
-    let cap = table.issue_cap(&fixed_qid(), 0x02);
-
-    // The 24-byte wire form of the plan 04-09 layout, written by hand:
-    // qid_path(8) qid_vers(4) qid_type(1) mode(1) epoch(2) then the tag.
-    const BODY: [u8; 16] = [
-        0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, // qid_path LE
-        0xDD, 0xCC, 0xBB, 0xAA, // qid_vers LE
-        0x80, // qid_type
-        0x02, // mode
-        0x57, 0x13, // epoch LE
-    ];
-    let wire = cap.to_wire();
-    assert_eq!(&wire[0..16], &BODY[..], "the capability's first 16 bytes are the field layout");
-
-    // The tag is the first 8 bytes of keyed BLAKE3 under the domain key over
-    // the literal label followed by those 16 bytes.
-    let mut message = [0u8; 32];
-    message[..16].copy_from_slice(b"r9 StatelessCap1");
-    message[16..].copy_from_slice(&BODY);
-    let expected = crypto::mac::blake3_keyed(&key_bytes, &message);
+    // The freed slot is the next to allocate, at the bumped generation, and
+    // the stale handle stays refused forever.
+    let recycled = table.alloc(1, entry_for(5)).expect("the freed slot allocates again");
     assert_eq!(
-        &wire[16..24],
-        &expected[..8],
-        "the 8-byte tag is the truncation of keyed BLAKE3 over the label and the wire body (P8)"
+        (recycled.shard_id, recycled.slot_idx),
+        (handle.shard_id, handle.slot_idx),
+        "the clunked slot is the one reused"
     );
+    assert_eq!(recycled.r#gen, handle.r#gen + 1, "the recycled slot carries the bumped generation (D-10)");
+    assert!(table.resolve(1, &recycled).is_ok(), "the recycled handle resolves");
+    assert!(
+        table.resolve(1, &handle).is_err(),
+        "the stale handle stays refused even though the slot is live again (D-10)"
+    );
+}
+
+#[test]
+fn aead_fid_mark_reclaimed_enforces_the_owner() {
+    let table = FidTable::with_probe(1, 8, domain_key(0x42), 2, CountingSlabProbe::new())
+        .expect("one 8-slot shard forms a table");
+    let handle = table.alloc(1, entry_for(6)).expect("client 1 has a live entry");
+
+    assert!(
+        table.mark_reclaimed(2, &handle).is_err(),
+        "another client cannot mark the entry reclaimed (D-08)"
+    );
+    assert_eq!(
+        table.bitmap_lens(handle.shard_id),
+        Some((1, 0)),
+        "the refused mark leaves the reclaim window empty"
+    );
+    table.mark_reclaimed(1, &handle).expect("the owner marks its live entry reclaimed");
+    assert_eq!(
+        table.bitmap_lens(handle.shard_id),
+        Some((1, 1)),
+        "the owner's mark lands in the reclaim window"
+    );
+    assert!(table.sweep_unreclaimed().is_empty(), "the marked entry survives the sweep");
+    assert!(table.resolve(1, &handle).is_ok(), "the reclaimed entry still resolves");
 }
 
 /// xorshift64: a tiny seeded PRNG so the randomized sweep pin reproduces from
@@ -984,43 +749,44 @@ impl XorShift64 {
     }
 }
 
-/// The dense slot id a handle names: with one block per shard the block index
-/// is always 0, so `slot_id == ptr - 1` (plan 04-09's `(block << 4) | (ptr - 1)`).
-fn handle_slot(handle: &StatefulHandle) -> (u8, u32) {
-    (handle.shard_id, handle.ptr.get() as u32 - 1)
+/// The `(shard, slot)` a handle names: the sweep model's element.
+fn handle_slot(handle: &StatefulHandle) -> (u8, u16) {
+    (handle.shard_id, handle.slot_idx)
 }
 
 #[test]
 fn aead_fid_sweep_matches_set_model_on_random_inputs() {
     for seed in 0..64u64 {
-        // Eight one-block shards: 128 slots, a block index that is always 0,
-        // and therefore `slot_id == ptr - 1` for the model.
+        // Four 16-slot shards: 64 slots, so 40 fids across four clients fit
+        // with room for the round-robin spillover.
         let table =
-            FidTable::new(8, 1, domain_key(0x60), 0).expect("eight one-block shards form a table");
+            FidTable::new(4, 16, domain_key(0x60), 0).expect("four 16-slot shards form a table");
         let mut rng = XorShift64::new(0x9E37_79B9_7F4A_7C15 ^ seed);
 
         let mut fids: BTreeSet<u32> = BTreeSet::new();
         while fids.len() < 40 {
             fids.insert((rng.next() % 4096) as u32 + 1);
         }
-        let mut handles: Vec<StatefulHandle> = Vec::new();
-        let mut model_active: BTreeSet<(u8, u32)> = BTreeSet::new();
+        let mut handles: Vec<(u32, StatefulHandle)> = Vec::new();
+        let mut model_active: BTreeSet<(u8, u16)> = BTreeSet::new();
         for &fid in &fids {
-            let handle = table.insert(1, entry_for(fid)).expect("a fresh table has room for 40 fids");
+            let client_id = (rng.next() % 4) as u32 + 1;
+            let handle =
+                table.alloc(client_id, entry_for(fid)).expect("a fresh table has room for 40 fids");
             model_active.insert(handle_slot(&handle));
-            handles.push(handle);
+            handles.push((client_id, handle));
         }
 
-        let mut model_reclaimed: BTreeSet<(u8, u32)> = BTreeSet::new();
-        for handle in &handles {
+        let mut model_reclaimed: BTreeSet<(u8, u16)> = BTreeSet::new();
+        for (client_id, handle) in &handles {
             if rng.next() % 3 == 0 {
-                table.mark_reclaimed(1, handle).expect("a live handle can be marked reclaimed");
+                table.mark_reclaimed(*client_id, handle).expect("a live handle can be marked reclaimed");
                 model_reclaimed.insert(handle_slot(handle));
             }
         }
 
-        let swept: BTreeSet<(u8, u32)> = table.sweep().into_iter().collect();
-        let expected: BTreeSet<(u8, u32)> =
+        let swept: BTreeSet<(u8, u16)> = table.sweep_unreclaimed().into_iter().collect();
+        let expected: BTreeSet<(u8, u16)> =
             model_active.difference(&model_reclaimed).copied().collect();
         assert_eq!(
             swept, expected,
@@ -1031,16 +797,16 @@ fn aead_fid_sweep_matches_set_model_on_random_inputs() {
 
 #[test]
 fn aead_fid_sweep_survivors_resolve_and_orphans_do_not() {
-    let table = FidTable::new(4, 1, domain_key(0x61), 0).expect("four one-block shards form a table");
+    let table = FidTable::new(4, 16, domain_key(0x61), 0).expect("four 16-slot shards form a table");
     let mut handles = Vec::new();
     for fid in 1..=12u32 {
-        handles.push(table.insert(1, entry_for(fid)).expect("a fresh table has room for 12 fids"));
+        handles.push(table.alloc(1, entry_for(fid)).expect("a fresh table has room for 12 fids"));
     }
     // Mark the first six reclaimed; the other six are swept.
     for handle in handles.iter().take(6) {
         table.mark_reclaimed(1, handle).expect("a live handle can be marked reclaimed");
     }
-    let swept: BTreeSet<(u8, u32)> = table.sweep().into_iter().collect();
+    let swept: BTreeSet<(u8, u16)> = table.sweep_unreclaimed().into_iter().collect();
     for (index, handle) in handles.iter().enumerate() {
         if index < 6 {
             assert!(
@@ -1067,39 +833,39 @@ fn aead_fid_sweep_survivors_resolve_and_orphans_do_not() {
 #[test]
 fn aead_fid_sweep_edges() {
     // An empty table sweeps to nothing.
-    let empty = FidTable::new(2, 1, domain_key(0x62), 0).expect("two one-block shards form a table");
-    assert!(empty.sweep().is_empty(), "an empty table sweeps to nothing");
+    let empty = FidTable::new(2, 8, domain_key(0x62), 0).expect("two 8-slot shards form a table");
+    assert!(empty.sweep_unreclaimed().is_empty(), "an empty table sweeps to nothing");
 
     // With nothing reclaimed, every active fid is swept.
-    let all_live = FidTable::new(2, 1, domain_key(0x63), 0).expect("two one-block shards form a table");
+    let all_live = FidTable::new(2, 8, domain_key(0x63), 0).expect("two 8-slot shards form a table");
     let live: Vec<StatefulHandle> =
-        (1..=5u32).map(|fid| all_live.insert(1, entry_for(fid)).expect("room for five fids")).collect();
-    assert_eq!(all_live.sweep().len(), 5, "with nothing reclaimed every active fid is swept");
+        (1..=5u32).map(|fid| all_live.alloc(1, entry_for(fid)).expect("room for five fids")).collect();
+    assert_eq!(all_live.sweep_unreclaimed().len(), 5, "with nothing reclaimed every active fid is swept");
     for handle in &live {
         assert!(all_live.resolve(1, handle).is_err(), "a swept fid no longer resolves");
     }
 
     // With everything reclaimed, nothing is swept.
-    let all_reclaimed = FidTable::new(2, 1, domain_key(0x64), 0).expect("two one-block shards form a table");
+    let all_reclaimed = FidTable::new(2, 8, domain_key(0x64), 0).expect("two 8-slot shards form a table");
     let kept: Vec<StatefulHandle> =
-        (1..=5u32).map(|fid| all_reclaimed.insert(1, entry_for(fid)).expect("room for five fids")).collect();
+        (1..=5u32).map(|fid| all_reclaimed.alloc(1, entry_for(fid)).expect("room for five fids")).collect();
     for handle in &kept {
         all_reclaimed.mark_reclaimed(1, handle).expect("a live handle can be marked reclaimed");
     }
     assert!(
-        all_reclaimed.sweep().is_empty(),
+        all_reclaimed.sweep_unreclaimed().is_empty(),
         "with everything reclaimed nothing is swept"
     );
     for handle in &kept {
         assert!(all_reclaimed.resolve(1, handle).is_ok(), "a reclaimed fid survives the sweep");
     }
 
-    // Marking a slot id that was never active changes nothing: the handle
-    // names the next slot, which no insert has used, so resolve refuses it.
-    let never = FidTable::new(2, 1, domain_key(0x65), 0).expect("two one-block shards form a table");
-    let handle = never.insert(1, entry_for(1)).expect("room for one fid");
+    // Marking a slot that was never active changes nothing: the handle names
+    // the next slot, which no alloc has used, so resolve refuses it.
+    let never = FidTable::new(2, 8, domain_key(0x65), 0).expect("two 8-slot shards form a table");
+    let handle = never.alloc(1, entry_for(1)).expect("room for one fid");
     let mut ghost = handle;
-    ghost.ptr = TinyPtr::new(handle.ptr.get() + 1).expect("a non-zero tiny pointer");
+    ghost.slot_idx = handle.slot_idx + 1;
     assert!(
         never.mark_reclaimed(1, &ghost).is_err(),
         "a handle to a slot that was never active cannot be marked reclaimed"
@@ -1111,26 +877,26 @@ fn aead_fid_sweep_edges() {
     );
 
     // A second sweep straight after the first returns nothing.
-    let twice = FidTable::new(2, 1, domain_key(0x66), 0).expect("two one-block shards form a table");
-    twice.insert(1, entry_for(1)).expect("room for one fid");
-    twice.insert(1, entry_for(2)).expect("room for two fids");
-    assert_eq!(twice.sweep().len(), 2, "the first sweep returns the live set");
-    assert!(twice.sweep().is_empty(), "a second sweep straight after the first returns nothing");
+    let twice = FidTable::new(2, 8, domain_key(0x66), 0).expect("two 8-slot shards form a table");
+    twice.alloc(1, entry_for(1)).expect("room for one fid");
+    twice.alloc(1, entry_for(2)).expect("room for two fids");
+    assert_eq!(twice.sweep_unreclaimed().len(), 2, "the first sweep returns the live set");
+    assert!(twice.sweep_unreclaimed().is_empty(), "a second sweep straight after the first returns nothing");
 }
 
 #[test]
 fn aead_fid_sweep_resets_the_reclaim_window() {
-    let table = FidTable::new(4, 1, domain_key(0x67), 0).expect("four one-block shards form a table");
+    let table = FidTable::new(4, 16, domain_key(0x67), 0).expect("four 16-slot shards form a table");
     let mut handles = Vec::new();
     for fid in 1..=8u32 {
-        handles.push(table.insert(1, entry_for(fid)).expect("a fresh table has room for 8 fids"));
+        handles.push(table.alloc(1, entry_for(fid)).expect("a fresh table has room for 8 fids"));
     }
     for (index, handle) in handles.iter().enumerate() {
         if index % 2 == 0 {
             table.mark_reclaimed(1, handle).expect("a live handle can be marked reclaimed");
         }
     }
-    let swept: BTreeSet<(u8, u32)> = table.sweep().into_iter().collect();
+    let swept: BTreeSet<(u8, u16)> = table.sweep_unreclaimed().into_iter().collect();
     assert!(!swept.is_empty(), "there is something to sweep");
 
     let mut survivors = [0u64; 4];
@@ -1150,159 +916,18 @@ fn aead_fid_sweep_resets_the_reclaim_window() {
     }
 }
 
-/// A [`Probe`] that opens a window inside the failover sweep: once armed, the
-/// first `arena_read` the sweeping thread makes releases the two helper
-/// threads and holds the sweep there for a bounded time.  When the sweep makes
-/// no arena read (the recorded-key sweep) the hook never fires, and the test
-/// releases the helpers itself once the sweep has returned.
-#[derive(Clone)]
-struct SweepWindowProbe {
-    shared: Arc<SweepWindow>,
-}
-
-struct SweepWindow {
-    armed: AtomicBool,
-    fired: AtomicBool,
-    release: AtomicBool,
-    sweep_thread: std::thread::ThreadId,
-}
-
-impl SweepWindowProbe {
-    fn new() -> SweepWindowProbe {
-        SweepWindowProbe {
-            shared: Arc::new(SweepWindow {
-                armed: AtomicBool::new(false),
-                fired: AtomicBool::new(false),
-                release: AtomicBool::new(false),
-                sweep_thread: std::thread::current().id(),
-            }),
-        }
-    }
-}
-
-impl Probe for SweepWindowProbe {
-    fn arena_read(&self) {
-        let window = &*self.shared;
-        if !window.armed.load(Ordering::SeqCst) {
-            return;
-        }
-        if std::thread::current().id() != window.sweep_thread {
-            return;
-        }
-        if window.fired.swap(true, Ordering::SeqCst) {
-            return;
-        }
-        // The sweep has taken its snapshot and is about to collect the slot it
-        // named.  Release the helpers, then hold here until they have clunked A
-        // and placed B in A's freed slot — or a bounded time passes.
-        window.release.store(true, Ordering::SeqCst);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
-        while std::time::Instant::now() < deadline {
-            std::thread::yield_now();
-        }
-    }
-}
-
-#[test]
-fn aead_fid_sweep_concurrent_clunk_and_reinsert_keeps_the_newcomer() {
-    let probe = SweepWindowProbe::new();
-    let table = FidTable::with_probe(1, 1, domain_key(0x6C), 1, probe.clone())
-        .expect("one one-block shard forms a table");
-    let table_ref = &table;
-
-    // A is the first insert, so it takes home slot 0 (ptr 1).  The other
-    // entries are marked reclaimed, so the sweep keeps them.
-    let a = table.insert(1, entry_for(1)).expect("A inserts");
-    assert_eq!(a.ptr.get(), 1, "A takes the first home slot (ptr 1, slot 0)");
-    let mut reclaimed_handles = Vec::new();
-    for fid in 2..=5u32 {
-        let handle = table.insert(1, entry_for(fid)).expect("a reclaimed entry inserts");
-        table.mark_reclaimed(1, &handle).expect("a live handle marks reclaimed");
-        reclaimed_handles.push(handle);
-    }
-    assert_eq!(
-        table.bitmap_lens(0),
-        Some((5, 4)),
-        "five live slots, four of them reclaimed before the sweep"
-    );
-
-    // The newcomer B reuses A's freed slot: same client, same one-block shard,
-    // and slot 0 is the only free home slot once A's slot is cleared.
-    let b_fid = 6u32;
-    probe.shared.armed.store(true, Ordering::SeqCst);
-
-    let b_handle = std::thread::scope(|scope| {
-        let shared = Arc::clone(&probe.shared);
-        let clunk = scope.spawn(move || {
-            while !shared.release.load(Ordering::SeqCst) {
-                std::thread::yield_now();
-            }
-            // A is clunked while the sweep is in flight; when the serialised
-            // sweep already collected A, this is refused and marks nothing.
-            let _ = table_ref.clunk(1, &a);
-        });
-        let shared = Arc::clone(&probe.shared);
-        let insert = scope.spawn(move || {
-            while !shared.release.load(Ordering::SeqCst) {
-                std::thread::yield_now();
-            }
-            // B must take A's freed slot, so wait until A no longer resolves
-            // (its TPHT words are cleared) before inserting.
-            while table_ref.resolve(1, &a).is_ok() {
-                std::thread::yield_now();
-            }
-            table_ref.insert(1, entry_for(b_fid))
-        });
-
-        let _swept = table.sweep();
-        // When the sweep made no arena read the hook never fired; release the
-        // helpers now that the sweep is done, so the pin also runs on the
-        // recorded-key sweep.
-        probe.shared.release.store(true, Ordering::SeqCst);
-        let _ = clunk.join();
-        insert.join().expect("B's insert thread did not panic").expect("B's insert succeeds")
-    });
-    probe.shared.armed.store(false, Ordering::SeqCst);
-
-    assert_eq!(b_handle.shard_id, a.shard_id, "B lands in A's shard");
-    assert_eq!(b_handle.ptr.get(), 1, "B reuses A's freed home slot (ptr 1)");
-    let resolved_b = table.resolve(1, &b_handle);
-    assert!(
-        resolved_b.is_ok(),
-        "B resolves to B's entry after the sweep, got {:?}",
-        resolved_b.as_ref().err()
-    );
-    assert_eq!(
-        resolved_b.expect("the assertion above guarantees a resolved entry").qid_path,
-        entry_for(b_fid).qid_path,
-        "B resolves to the entry B inserted"
-    );
-    assert!(table.resolve(1, &a).is_err(), "A no longer resolves after the clunk and sweep");
-    for handle in &reclaimed_handles {
-        assert!(table.resolve(1, handle).is_ok(), "a reclaimed fid survives the sweep");
-    }
-
-    let resolving = 1_u64
-        + reclaimed_handles.iter().filter(|handle| table.resolve(1, handle).is_ok()).count() as u64;
-    let (active, _reclaimed) = table.bitmap_lens(0).expect("shard 0 is in range");
-    assert_eq!(
-        active, resolving,
-        "the active bitmap names exactly the handles that resolve"
-    );
-}
-
 #[test]
 fn aead_fid_sweep_bookkeeping_matches_live_entries_under_churn() {
     let table =
-        FidTable::new(1, 8, domain_key(0x6D), 1).expect("one eight-block shard forms a table");
+        FidTable::new(4, 32, domain_key(0x6D), 1).expect("four 32-slot shards form a table");
     let table_ref = &table;
-    let stop = AtomicBool::new(false);
+    let stop = AtomicUsize::new(0);
     let stop_ref = &stop;
 
     let inserted: Vec<(u32, StatefulHandle)> = std::thread::scope(|scope| {
         let sweeper = scope.spawn(move || {
-            while !stop_ref.load(Ordering::SeqCst) {
-                let _ = table_ref.sweep();
+            while stop_ref.load(Ordering::SeqCst) == 0 {
+                let _ = table_ref.sweep_unreclaimed();
                 std::thread::yield_now();
             }
         });
@@ -1311,7 +936,7 @@ fn aead_fid_sweep_bookkeeping_matches_live_entries_under_churn() {
             churn.push(scope.spawn(move || {
                 let mut live: Vec<StatefulHandle> = Vec::new();
                 for fid in 1..=12u32 {
-                    if let Ok(handle) = table_ref.insert(client, entry_for(fid)) {
+                    if let Ok(handle) = table_ref.alloc(client, entry_for(fid)) {
                         live.push(handle);
                     }
                     if fid % 3 == 0
@@ -1328,7 +953,7 @@ fn aead_fid_sweep_bookkeeping_matches_live_entries_under_churn() {
         for handle_thread in churn {
             collected.push(handle_thread.join().expect("a churn thread joins"));
         }
-        stop_ref.store(true, Ordering::SeqCst);
+        stop_ref.store(1, Ordering::SeqCst);
         sweeper.join().expect("the sweeper thread joins");
         collected
             .into_iter()
@@ -1341,223 +966,132 @@ fn aead_fid_sweep_bookkeeping_matches_live_entries_under_churn() {
         inserted.iter().filter(|(client, handle)| table.resolve(*client, handle).is_ok()).count()
             as u64;
     let active: u64 =
-        (0..1u8).map(|shard| table.bitmap_lens(shard).expect("shard in range").0).sum();
+        (0..4u8).map(|shard| table.bitmap_lens(shard).expect("shard in range").0).sum();
     assert_eq!(
         active, resolving,
-        "after churn the shard's active bitmap names exactly the live entries"
+        "after churn the shards' active sets name exactly the live entries"
     );
 }
 
 // ---------------------------------------------------------------------------
-// The fid table on multi-block shards (WR-05 fixture; closes the
-// coincidental-reliance item: block indices above 0 exercised end to end)
+// The capability pins (WIRE-07, D-13, D-14; P8)
 // ---------------------------------------------------------------------------
 
-/// MurmurHash3's 32-bit finalizer, re-derived in the test with its own literals
-/// so nothing here calls `ds` or `port` (`ds::tpht::feistel::mix32`).
-fn fmix32(mut h: u32) -> u32 {
-    h ^= h >> 16;
-    h = h.wrapping_mul(0x85EB_CA6B);
-    h ^= h >> 13;
-    h = h.wrapping_mul(0xC2B2_AE35);
-    h ^= h >> 16;
-    h
-}
-
-/// The dense slot id a fid entry occupies in a shard with `blocks` home blocks:
-/// `(block << 4) | (ptr - 1)`, where the home block index is the low
-/// `log2(blocks)` bits of `client_id ^ fmix32(fid_key)`
-/// (`ds::tpht::feistel::split`).  The constants and shifts are literal here, so
-/// the model is independent of `ds` and `port`.
-fn model_slot(client_id: u32, fid_key: u32, ptr: u8, blocks: usize) -> u32 {
-    let l_prime = client_id ^ fmix32(fid_key);
-    let block = (l_prime as usize) & (blocks - 1);
-    ((block << 4) | (ptr as usize - 1)) as u32
+/// A fixed qid for the capability pins: a non-zero path and version and the
+/// directory type bit, so every field of the 16-byte tagged body is non-zero.
+fn fixed_qid() -> Qid {
+    Qid { path: 0x0102_0304_0506_0708, vers: 0xAABB_CCDD, typ: 0x80 }
 }
 
 #[test]
-fn aead_fid_sweep_matches_set_model_on_multi_block_shards() {
-    const BLOCKS: usize = 4;
-    for seed in 0..64u64 {
-        let table = FidTable::new(4, 4, domain_key(0x70), 0)
-            .expect("four four-block shards form a table");
-        let mut rng = XorShift64::new(0xC2B2_AE35_85EB_CA6B ^ seed);
-
-        // 120 distinct (client, fid) keys from four clients.  Four shards of
-        // four blocks hold 256 slots, so no insert runs out of room.
-        let mut seen: BTreeSet<(u32, u32)> = BTreeSet::new();
-        let mut inserted: Vec<(u32, StatefulHandle)> = Vec::new();
-        while inserted.len() < 120 {
-            let client_id = (rng.next() % 4) as u32 + 1;
-            let fid_key = (rng.next() % 4096) as u32 + 1;
-            if !seen.insert((client_id, fid_key)) {
-                continue;
-            }
-            let handle = table
-                .insert(client_id, entry_for(fid_key))
-                .expect("a fresh table has room for 120 fids");
-            inserted.push((client_id, handle));
-        }
-
-        let mut model_active: BTreeSet<(u8, u32)> = BTreeSet::new();
-        for (client_id, handle) in &inserted {
-            model_active.insert((
-                handle.shard_id,
-                model_slot(*client_id, handle.fid_key, handle.ptr.get(), BLOCKS),
-            ));
-        }
-        assert!(
-            model_active.iter().any(|&(_, slot)| slot >> 4 > 0),
-            "seed {seed}: at least one modelled entry must sit in a block above 0"
-        );
-
-        let mut model_reclaimed: BTreeSet<(u8, u32)> = BTreeSet::new();
-        for (client_id, handle) in &inserted {
-            if rng.next() % 3 == 0 {
-                table.mark_reclaimed(*client_id, handle).expect("a live handle marks reclaimed");
-                model_reclaimed.insert((
-                    handle.shard_id,
-                    model_slot(*client_id, handle.fid_key, handle.ptr.get(), BLOCKS),
-                ));
-            }
-        }
-
-        let swept: BTreeSet<(u8, u32)> = table.sweep().into_iter().collect();
-        let expected: BTreeSet<(u8, u32)> =
-            model_active.difference(&model_reclaimed).copied().collect();
-        assert_eq!(
-            swept, expected,
-            "the sweep equals active minus reclaimed on multi-block shards (seed {seed})"
-        );
-    }
+fn aead_fid_stateless_two_tables_one_key_verify_each_other() {
+    let table_a = FidTable::new(1, 8, domain_key(0x50), 9).expect("a one-shard table forms");
+    let table_b = FidTable::new(1, 8, domain_key(0x50), 9).expect("a second table with the same key");
+    let cap_a = table_a.issue_cap(&fixed_qid(), 0x02);
+    assert!(
+        table_b.verify_cap(&cap_a).is_ok(),
+        "a second table built from the same domain key verifies the capability (D-13)"
+    );
+    let cap_b = table_b.issue_cap(&fixed_qid(), 0x02);
+    assert!(
+        table_a.verify_cap(&cap_b).is_ok(),
+        "and the first table verifies the second's capability too (D-13)"
+    );
 }
 
 #[test]
-fn aead_fid_resolve_is_one_arena_read_on_multi_block_shards() {
-    const BLOCKS: usize = 8;
-    let probe = CountingProbe::new();
-    let table = FidTable::with_probe(2, 8, domain_key(0x71), 5, probe.clone())
-        .expect("two eight-block shards form a table");
-
-    // Pick a fid whose home block index is above 0.
-    let fid = (1..=256u32)
-        .find(|&fid| (1u32 ^ fmix32(fid)) as usize & (BLOCKS - 1) > 0)
-        .expect("some fid homes to a block above 0");
-    let handle = table.insert(1, entry_for(fid)).expect("the shard has room for one fid");
-
+fn aead_fid_stateless_uses_zero_fid_memory() {
+    let probe = CountingSlabProbe::new();
+    let table = FidTable::with_probe(2, 8, domain_key(0x51), 4, probe.clone())
+        .expect("two 8-slot shards form a table");
     probe.reset();
-    let resolved = table.resolve(1, &handle).expect("a live handle resolves");
+    let cap = table.issue_cap(&fixed_qid(), 0x01);
+    assert!(table.verify_cap(&cap).is_ok(), "a freshly issued capability verifies");
     assert_eq!(
-        (probe.arena_reads(), probe.header_reads()),
-        (1, 0),
-        "a resolve on a multi-block shard is one arena read and zero header reads (WIRE-08)"
+        probe.reads(),
+        0,
+        "issue and verify touch no slot at all: zero FID memory (WIRE-08)"
     );
-    assert_eq!(resolved.fid_key, fid, "the resolved entry is the inserted fid");
-    assert_eq!(
-        resolved.qid_path,
-        entry_for(fid).qid_path,
-        "the resolved entry is the inserted entry"
-    );
-    let slot = model_slot(1, handle.fid_key, handle.ptr.get(), BLOCKS);
-    assert!(slot >> 4 > 0, "the resolved entry sits in a block above 0 (slot {slot})");
+    for shard in 0..2u8 {
+        assert_eq!(
+            table.bitmap_lens(shard),
+            Some((0, 0)),
+            "shard {shard}'s active and reclaimed sets stay empty across issue and verify"
+        );
+    }
 }
 
 #[test]
-fn aead_fid_clunk_on_multi_block_shards_clears_only_its_slot() {
-    const BLOCKS: usize = 4;
-    let table =
-        FidTable::new(2, 4, domain_key(0x72), 3).expect("two four-block shards form a table");
-
-    let mut handles = Vec::new();
-    for fid in 1..=32u32 {
-        handles.push((fid, table.insert(1, entry_for(fid)).expect("the table has room")));
-    }
-    let victim_index = handles
-        .iter()
-        .position(|(_, handle)| model_slot(1, handle.fid_key, handle.ptr.get(), BLOCKS) >> 4 > 0)
-        .expect("at least one handle sits in a block above 0");
-    let (victim_fid, victim) = handles[victim_index];
-
-    let shard = victim.shard_id;
-    let (active_before, _) = table.bitmap_lens(shard).expect("the shard is in range");
-
-    table.clunk(1, &victim).expect("clunking a live handle succeeds");
-
+fn aead_fid_stateless_different_key_rejects() {
+    let table_a = FidTable::new(1, 8, domain_key(0x52), 0).expect("a one-shard table forms");
+    let table_b = FidTable::new(1, 8, domain_key(0x53), 0).expect("a table with another key forms");
+    let cap = table_a.issue_cap(&fixed_qid(), 0x01);
     assert!(
-        table.resolve(1, &victim).is_err(),
-        "the clunked handle in a block above 0 no longer resolves"
-    );
-    for (index, (fid, handle)) in handles.iter().enumerate() {
-        if index != victim_index {
-            assert!(
-                table.resolve(1, handle).is_ok(),
-                "every other handle still resolves (fid {fid})"
-            );
-        }
-    }
-    let (active_after, _) = table.bitmap_lens(shard).expect("the shard is in range");
-    assert_eq!(
-        active_after + 1,
-        active_before,
-        "the clunk lowers the shard's active count by exactly one (victim fid {victim_fid})"
+        table_b.verify_cap(&cap).is_err(),
+        "a table with a different domain key rejects the capability (D-13)"
     );
 }
 
 #[test]
-fn aead_fid_sweep_survivors_on_multi_block_shards() {
-    const BLOCKS: usize = 4;
-    let table =
-        FidTable::new(2, 4, domain_key(0x73), 0).expect("two four-block shards form a table");
-
-    let mut handles = Vec::new();
-    for fid in 1..=32u32 {
-        handles.push((fid, table.insert(1, entry_for(fid)).expect("the table has room")));
+fn aead_fid_stateless_every_flipped_byte_rejects() {
+    let table = FidTable::new(1, 8, domain_key(0x54), 2).expect("a one-shard table forms");
+    let cap = table.issue_cap(&fixed_qid(), 0x03);
+    let wire = cap.to_wire();
+    for index in 0..STATELESS_CAP_LEN {
+        let mut flipped = wire;
+        flipped[index] ^= 0x01;
+        let tampered = StatelessCap::from_wire(&flipped);
+        assert!(
+            table.verify_cap(&tampered).is_err(),
+            "flipping wire byte {index} must fail verification (T-04-34)"
+        );
     }
-    // Mark every other entry reclaimed, so survivors and sweep targets are
-    // interleaved across blocks.
-    let mut reclaimed = Vec::new();
-    for (index, (fid, handle)) in handles.iter().enumerate() {
-        if index % 2 == 0 {
-            table.mark_reclaimed(1, handle).expect("a live handle marks reclaimed");
-            reclaimed.push((*fid, *handle));
-        }
-    }
-    assert!(
-        reclaimed
-            .iter()
-            .any(|(_, handle)| model_slot(1, handle.fid_key, handle.ptr.get(), BLOCKS) >> 4 > 0),
-        "at least one reclaimed entry sits in a block above 0"
-    );
-
-    let swept: BTreeSet<(u8, u32)> = table.sweep().into_iter().collect();
-    let mut swept_above_zero = false;
-    for (index, (fid, handle)) in handles.iter().enumerate() {
-        let slot = model_slot(1, handle.fid_key, handle.ptr.get(), BLOCKS);
-        if index % 2 == 0 {
-            assert!(
-                table.resolve(1, handle).is_ok(),
-                "a reclaimed fid in a possibly-above-0 block survives the sweep (fid {fid})"
-            );
-            assert!(
-                !swept.contains(&(handle.shard_id, slot)),
-                "a reclaimed fid is not swept (fid {fid})"
-            );
-        } else {
-            assert!(
-                swept.contains(&(handle.shard_id, slot)),
-                "a non-reclaimed active fid is swept (fid {fid})"
-            );
-            assert!(
-                table.resolve(1, handle).is_err(),
-                "a swept fid no longer resolves (fid {fid})"
-            );
-            if slot >> 4 > 0 {
-                swept_above_zero = true;
-            }
-        }
-    }
-    assert!(swept_above_zero, "at least one swept entry sat in a block above 0");
 }
 
+#[test]
+fn aead_fid_stateless_wrong_epoch_rejects() {
+    let issuer = FidTable::new(1, 8, domain_key(0x55), 5).expect("a one-shard table forms");
+    let mut other = FidTable::new(1, 8, domain_key(0x55), 5).expect("a table with the same key forms");
+    let cap = issuer.issue_cap(&fixed_qid(), 0x01);
+    assert!(other.verify_cap(&cap).is_ok(), "the same epoch verifies the capability");
+    other.set_epoch(6);
+    assert!(
+        other.verify_cap(&cap).is_err(),
+        "a table at epoch e+1 rejects a capability issued at epoch e (WIRE-08)"
+    );
+}
 
+#[test]
+fn aead_fid_stateless_tag_is_keyed_blake3_of_label_and_wire_body() {
+    // The domain key is bytes 0x40..=0x5f and the label is a literal in the
+    // test, so nothing on the expected side goes through issue_cap,
+    // verify_cap, cap_tag or StatelessCap::body (WIRE-07, D-14, P8).
+    let key_bytes: [u8; 32] = core::array::from_fn(|i| 0x40 + i as u8);
+    let table = FidTable::new(1, 8, Key::from_bytes(key_bytes), 0x1357)
+        .expect("a one-shard table forms");
+    let cap = table.issue_cap(&fixed_qid(), 0x02);
 
+    // The 24-byte wire form of the layout, written by hand:
+    // qid_path(8) qid_vers(4) qid_type(1) mode(1) epoch(2) then the tag.
+    const BODY: [u8; 16] = [
+        0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, // qid_path LE
+        0xDD, 0xCC, 0xBB, 0xAA, // qid_vers LE
+        0x80, // qid_type
+        0x02, // mode
+        0x57, 0x13, // epoch LE
+    ];
+    let wire = cap.to_wire();
+    assert_eq!(&wire[0..16], &BODY[..], "the capability's first 16 bytes are the field layout");
+
+    // The tag is the first 8 bytes of keyed BLAKE3 under the domain key over
+    // the literal label followed by those 16 bytes.
+    let mut message = [0u8; 32];
+    message[..16].copy_from_slice(b"r9 StatelessCap1");
+    message[16..].copy_from_slice(&BODY);
+    let expected = crypto::mac::blake3_keyed(&key_bytes, &message);
+    assert_eq!(
+        &wire[16..24],
+        &expected[..8],
+        "the 8-byte tag is the truncation of keyed BLAKE3 over the label and the wire body (P8)"
+    );
+}

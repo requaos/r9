@@ -1,19 +1,25 @@
-//! fid — the `9P2000.aead` hybrid file-handle layouts: the 8-byte
-//! `StatefulHandle`, the 24-byte `StatelessCap`, the 64-byte `FidEntry`, the
-//! `FidHandle` discriminator, the volatility class and the qid codec
-//! (WIRE-07, WIRE-10; D-05, D-11 to D-14, D-22, D-27).
+#![forbid(unsafe_code)]
+
+//! fid — the `9P2000.aead` hybrid file-handle layouts and the sharded
+//! generational slab `FidTable`: the 8-byte `StatefulHandle`, the 24-byte
+//! `StatelessCap`, the 56-byte `FidEntry`, the `FidHandle` discriminator, the
+//! volatility class and the qid codec (WIRE-07, WIRE-10, as amended by Phase 5
+//! decisions D-07 to D-13; CORR-03).
 //!
-//! # The layouts (WIRE-07, D-14)
+//! # The layouts (WIRE-07, amended by Phase 5 D-07 and D-10)
 //!
-//! - [`StatefulHandle`], [`STATEFUL_HANDLE_LEN`] = 8 bytes:
-//!   `fid_key(4) ptr(1) shard_id(1) epoch(2)`, all multi-byte fields little
-//!   endian.  `ptr` is a [`ds::tpht::TinyPtr`], which is a `NonZeroU8`, so a
-//!   stateful handle can never be all zero (D-12).
+//! - [`StatefulHandle`], [`STATEFUL_HANDLE_LEN`] = 8 bytes, **server-assigned**:
+//!   `slot_idx(2) gen(2) shard_id(1) flags(1) epoch(2)`, all multi-byte fields
+//!   little endian.  `gen` is the slot's generation, which starts at 1 and
+//!   wraps 65535 -> 1, so it is never 0 and a stateful handle is never all
+//!   zero; [`StatefulHandle::from_wire`] rejects `gen == 0` (D-10).
 //! - [`StatelessCap`], [`STATELESS_CAP_LEN`] = 24 bytes:
 //!   `qid_path(8) qid_vers(4) qid_type(1) mode(1) epoch(2) mac_tag(8)`.  The
 //!   tag is an 8-byte truncation of keyed BLAKE3 (D-14).
-//! - [`FidEntry`], 64 bytes with 64-byte alignment — exactly one cache line,
-//!   the unit `deref_tiny` reads.
+//! - [`FidEntry`], 56 bytes packed field by field into the seven payload words
+//!   of one 64-byte slab slot (the slot's eighth word is its seqlock state).
+//!   The entry keeps the client's fid number as a record only (D-07): no path
+//!   looks an entry up by it.
 //!
 //! # Where the capability travels (D-11, D-12)
 //!
@@ -22,7 +28,8 @@
 //! **not** in that field: when the capability is present the header field is
 //! all zero, and [`FidHandle::from_wire`] rejects anything else.  That is the
 //! discriminator between the two kinds (D-12), and it is safe precisely because
-//! a `StatefulHandle` can never be all zero.
+//! a `StatefulHandle` can never be all zero (its generation is never zero,
+//! D-10).
 //!
 //! # The volatility class is its own byte (WIRE-10, D-27)
 //!
@@ -33,54 +40,40 @@
 //! writing a class into the type byte would turn a volatile file into a
 //! directory or the reverse (T-04-30).  A test pins the collision.
 //!
-//! # A read through `deref_tiny` is not a consistent snapshot
+//! # The table on the seqlock slab (CORR-03; Phase 5 D-07 to D-12)
 //!
-//! [`FidEntry::from_words`] rebuilds an entry from the eight words
-//! `ds::tpht::FlattenedTphtShard::deref_tiny` returned.  Those eight words are
-//! eight independent atomic loads with no seqlock, so a read racing an insert
-//! into the same slot can mix two entries (RESEARCH Pitfall 4).  That is
-//! tolerable and is not made better here: the server hands a handle out only
-//! after the insert returns, the race needs a client to reuse a stale handle
-//! for the same fid number, and both entries in the mix belong to that client.
-//! Keeping `fid_key` and `client_id` in word 0 (as this layout does) is what
-//! makes the identity check a single atomic word.  Do not claim a consistent
-//! snapshot anywhere in this module.
+//! [`FidShard`] pairs one [`SlabSlots<7, P>`](ds::slab::SlabSlots) — a flat,
+//! power-of-two, never-reallocating array of 64-byte Boehm seqlock slots —
+//! with a shard-local `Lock<AllocMeta>` (the free list plus the `active` and
+//! `reclaimed` Roaring sets).  Every writer ([`FidTable::alloc`],
+//! [`FidTable::update`], [`FidTable::clunk`], [`FidTable::mark_reclaimed`],
+//! [`FidTable::sweep_unreclaimed`]) serialises through that one lock, so two
+//! writers never race on a slot's `WRITING` bit.  [`FidTable::resolve`]
+//! touches only the slot array: one cache-line read, zero locks, and a
+//! consistent snapshot — the seqlock retries while a write is in flight, so
+//! the torn-read caveat of the old TPHT arena read is gone (D-11).  The slot's
+//! `OCCUPIED` bit replaces the Phase 4 entry-level `FID_LIVE` flag, and clunk
+//! scrubs the payload words.
 //!
-//! # The table on TPHT (WIRE-08, WIRE-09; D-05, D-13)
+//! Handles are **server-assigned only** (D-07): the table has no lookup by the
+//! client's fid number, no duplicate-fid check, no all-shard probe and no
+//! table-wide insert lock — the `6fd201c` serialised-insert workaround is
+//! reverted, because a slab slot can never fail to allocate for
+//! hash-clustering reasons; a full shard falls over to the next round-robin
+//! (D-12).
 //!
-//! [`FidShard`] wraps one home-only
-//! `ds::tpht::flattened::FlattenedTphtShard<8, _>` and the two bitmaps that
-//! name its live and reclaimed arena slots; [`FidTable`] boxes at most 256 of
-//! them.  A resolve makes exactly one arena read and zero header reads
-//! (`deref_tiny`), then compares the identity pair in registers.  A capability
-//! is issued and verified without touching a shard or a bitmap at all, which is
-//! what "zero FID memory" means.  The failover sweep is one bitmap
-//! `difference` per shard.
+//! # Sizing tiers and shard routing (D-12)
 //!
-//! The sweep removes each collected id by the key recorded when that entry was
-//! inserted, never by whatever the slot now holds, so a slot clunked and reused
-//! during a sweep keeps its live newcomer, and a slot that reads as zeros can
-//! never name the entry of key `(0, 0)` (WR-05).  Every shard mutator
-//! (`insert`, `clunk`, `mark_reclaimed` and `sweep`) holds that shard's
-//! `active` lock across its TPHT mutation and its bookkeeping, in that order
-//! before the `reclaimed` lock, so the two bitmaps and the recorded keys always
-//! agree with the live entries.  A [`FidTable::resolve`] takes no lock and is
-//! never serialised with them.
-//!
-//! # One insert at a time, table-wide (WR-09)
-//!
-//! The all-shard duplicate probe and the placement walk that follows it are one
-//! critical section of a **table-level** `insert_lock`, held from before the
-//! probe until the insert returns.  Without it two inserts of the same
-//! `(client_id, fid_key)` running at the same instant could both read every
-//! shard as clear before either placed its entry, and then land in different
-//! shards: the probe proves a key absent only as of the moment it reads, so the
-//! read and the placement have to be indivisible for the uniqueness claim to
-//! hold.  The lock order is `insert_lock` then a shard's `active` then that
-//! shard's `reclaimed`, and only ever that way; `clunk`, `mark_reclaimed`,
-//! `sweep` and `bitmap_lens` take no `insert_lock`, so it never nests inside a
-//! shard lock.  [`FidTable::resolve`] still takes no lock at all and stays one
-//! arena read: the insert path is the only one serialised.
+//! [`FidTable::synthetic`] (256 slots x 4 shards, 64 KB) covers kernel
+//! synthetic mounts; [`FidTable::default_workstation`] (1,024 slots x 8
+//! shards, 512 KB, 8,192 fids) covers the default workstation and the q35
+//! boot; [`FidTable::with_tier`] covers the cluster or heavy file server tier
+//! (4,096..=16,384 slots x 16..=32 shards).
+//! [`FidTable::shard_count_for_cpus`] is `(num_cpus * 2).next_power_of_two()
+//! .clamp(4, 256)`.  [`FidTable::alloc`] routes to the calling CPU's shard
+//! (`cpu_id & shard_mask`) and falls over round-robin; the CPU-id source in
+//! `port/` arrives with the SMP work, so the table routes from CPU 0 until
+//! `port::smp::current_cpu_id()` exists (plan 05-08).
 //!
 //! # The capability is a bearer token within the domain (WIRE-07, D-13, P8)
 //!
@@ -90,42 +83,35 @@
 //! forgery succeeds with probability 2^-64 per attempt, and an attempt needs an
 //! authenticated connection.  A caller treats a failed capability as
 //! connection-fatal (the transport does), so guesses are not free.  The domain
-//! secret is a constructor parameter ([`FidTable::new`]); this module holds no
-//! default secret, no `static` and no constant key material, and provisioning
-//! the secret to nodes is Phase 6 (D-13).  Bumping the table's epoch revokes
-//! every handle and capability issued before it.
+//! secret is a constructor parameter; this module holds no default secret, no
+//! `static` and no constant key material, and provisioning the secret to nodes
+//! is Phase 6 (D-13).  Bumping the table's epoch revokes every handle and
+//! capability issued before it.
 //!
 //! # Client id 0 is reserved
 //!
-//! Client id 0 is the identity a cleared arena slot reads as:
-//! [`FidEntry::from_words`] of an all-zero image has `fid_key == 0` and
-//! `client_id == 0`.  `ds` clears a removed entry's eight words one at a time,
-//! so a [`FidTable::resolve`] racing a `clunk` can read word 0 already zero
-//! while the epoch word and [`FID_LIVE`] are not yet cleared.  Reserving client
-//! id 0 rules that image out: [`FidTable::insert`] and [`FidTable::resolve`]
-//! refuse client id 0, so every live entry's identity word is non-zero whatever
-//! its fid number, and [`FidEntry::matches`] rejects a zero identity word
-//! outright.  Fid number 0 stays usable by every other client.  This is not a
-//! consistent-snapshot claim — the read is still eight independent loads (see
-//! above) — and it is narrower than "no torn read ever resolves": it says only
-//! that a read whose identity word is already zero matches no client and no
-//! handle.
+//! Client id 0 names no connection: [`FidTable::alloc`], [`FidTable::resolve`],
+//! [`FidTable::update`], [`FidTable::clunk`] and [`FidTable::mark_reclaimed`]
+//! all refuse it, so no live entry ever has `client_id == 0` and the owning
+//! `client_id` comparison (D-08) can never be satisfied by a zeroed or foreign
+//! identity.  The cleared-slot case the reservation used to cover under TPHT
+//! is now handled structurally: a clunked slot's payload is scrubbed and its
+//! generation bumped, so a stale handle fails the generation check before the
+//! entry words are compared at all.  Fid number 0 stays usable by every
+//! client.
 //!
 //! # `client_id` has no authenticated source yet
 //!
-//! [`FidTable::insert`] takes the `client_id` the caller's connection assigned.
-//! Ids start at 1; 0 is reserved for the cleared arena slot (`# Client id 0 is
-//! reserved`).  This phase has no authentication, so the test server assigns one
-//! per connection; Phase 6 defines the real source.
+//! [`FidTable::alloc`] takes the `client_id` the caller's connection assigned.
+//! Ids start at 1; 0 is reserved (`# Client id 0 is reserved`).  This phase
+//! has no authentication, so the test server assigns one per connection;
+//! Phase 6 defines the real source.
 
 use alloc::boxed::Box;
-use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use crypto::key::Key;
-use ds::roaring::RoaringBitmap;
-use ds::tpht::flattened::FlattenedTphtShard;
-use ds::tpht::{HOME_SLOTS, NoProbe, Probe, TinyPtr, TphtError};
+use ds::slab::{AllocMeta, NoSlabProbe, SlabProbe, SlabSlots};
 
 use crate::mcslock::{Lock, LockNode};
 
@@ -135,51 +121,48 @@ pub const STATEFUL_HANDLE_LEN: usize = 8;
 /// The `StatelessCap` wire length in bytes (WIRE-07, D-14).
 pub const STATELESS_CAP_LEN: usize = 24;
 
-/// The `FidEntry::flags` bit that marks a live entry.
-///
-/// A zero arena slot — a clunked entry whose words `ds` has cleared — has
-/// `flags == 0`, so it never validates however the rest of the words are read
-/// (T-04-29).
-pub const FID_LIVE: u16 = 1;
-
-/// The stateful half of a [`FidHandle`]: an 8-byte, client-scoped pointer into
-/// one shard's TPHT arena (WIRE-07).
+/// The stateful half of a [`FidHandle`]: an 8-byte, **server-assigned**
+/// generational index into one shard's slab (WIRE-07, amended by Phase 5 D-07
+/// and D-10).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StatefulHandle {
-    /// The client-scoped FID key.
-    pub fid_key: u32,
-    /// The arena displacement; `1..=255`, never zero (D-12).
-    pub ptr: TinyPtr,
-    /// The shard the entry lives in (`0..=255`).
+    /// The slot's index within its shard (`0..slots_per_shard`).
+    pub slot_idx: u16,
+    /// The slot's generation at allocation; never 0 (D-10).  Spelled `r#gen`
+    /// because `gen` is a reserved keyword on the pinned toolchain's edition
+    /// (gen blocks); the wire layout's name for the field stays `gen`.
+    pub r#gen: u16,
+    /// The shard the entry lives in (`0..shard_count`).
     pub shard_id: u8,
+    /// Handle capability flags (e.g. stream / lease / bypass); 0 for now.
+    pub flags: u8,
     /// The server generation epoch.
     pub epoch: u16,
 }
 
 impl StatefulHandle {
-    /// The 8-byte wire form: `fid_key(4) ptr(1) shard_id(1) epoch(2)`.
+    /// The 8-byte wire form: `slot_idx(2) gen(2) shard_id(1) flags(1)
+    /// epoch(2)`, all multi-byte fields little endian (D-10).
     pub fn to_wire(&self) -> [u8; STATEFUL_HANDLE_LEN] {
         let mut out = [0u8; STATEFUL_HANDLE_LEN];
-        out[0..4].copy_from_slice(&self.fid_key.to_le_bytes());
-        out[4] = self.ptr.get();
-        out[5] = self.shard_id;
+        out[0..2].copy_from_slice(&self.slot_idx.to_le_bytes());
+        out[2..4].copy_from_slice(&self.r#gen.to_le_bytes());
+        out[4] = self.shard_id;
+        out[5] = self.flags;
         out[6..8].copy_from_slice(&self.epoch.to_le_bytes());
         out
     }
 
-    /// Decode the 8-byte wire form; a zero `ptr` byte is an error because a
-    /// stateful handle is never all zero (D-12).
+    /// Decode the 8-byte wire form; a zero generation is an error because a
+    /// slot's generation is never 0, so a stateful handle is never all zero
+    /// (D-10).
     pub fn from_wire(bytes: &[u8; STATEFUL_HANDLE_LEN]) -> crate::Result<StatefulHandle> {
-        let fid_key = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-        let Some(ptr) = TinyPtr::new(bytes[4]) else {
-            return Err(
-                "fid: a StatefulHandle's ptr byte is zero (D-12: a stateful handle is never all \
-                 zero, so eight zero bytes are not one)",
-            );
-        };
-        let shard_id = bytes[5];
+        let slot_idx = u16::from_le_bytes([bytes[0], bytes[1]]);
+        let generation = u16::from_le_bytes([bytes[2], bytes[3]]);
+        let shard_id = bytes[4];
+        let flags = bytes[5];
         let epoch = u16::from_le_bytes([bytes[6], bytes[7]]);
-        Ok(StatefulHandle { fid_key, ptr, shard_id, epoch })
+        Ok(StatefulHandle { slot_idx, r#gen: generation, shard_id, flags, epoch })
     }
 }
 
@@ -272,18 +255,21 @@ impl FidHandle {
     }
 }
 
-/// One 64-byte, cache-line-aligned FID table entry (WIRE-07, D-05).
+/// One 56-byte FID table entry: the seven payload words of a 64-byte slab
+/// slot (WIRE-07, amended by Phase 5 D-07 and D-11).
 ///
-/// Field order is the wire order of the word form: word 0 is `fid_key` then
-/// `client_id`, which is what makes the identity check one atomic word
-/// (RESEARCH Pitfall 4).  `volatility` is the class byte taken from the RFC's
-/// reserved area (D-27); `_reserved` is the remaining padding.
-#[repr(C, align(64))]
+/// Field order is the byte order of the packed word form: word 0 is `fid_key`
+/// then `client_id`, the identity pair the resolve compares.  `fid_key` is a
+/// record of the client's fid number only (D-07) — no path looks an entry up
+/// by it.  There is no live flag: the slot's `OCCUPIED` bit replaces the
+/// Phase 4 `FID_LIVE` (D-11).  `volatility` is the class byte (D-27);
+/// `_reserved` pads the image to the slot's seven words.
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FidEntry {
-    /// The client-scoped FID key.
+    /// The client-scoped FID key (a record only, D-07).
     pub fid_key: u32,
-    /// The authenticated client node id.
+    /// The owning client node id (D-08).
     pub client_id: u32,
     /// The authoritative resource path.
     pub qid_path: u64,
@@ -305,27 +291,26 @@ pub struct FidEntry {
     pub qid_type: u8,
     /// The read/write/exec mode bits.
     pub open_mode: u8,
-    /// Status flags; [`FID_LIVE`] marks a live entry.
+    /// Status flags.
     pub flags: u16,
     /// The [`VolatilityClass`] byte (D-27).
     pub volatility: u8,
-    /// Cache-line padding.
-    pub _reserved: [u8; 15],
+    /// Payload padding to the slot's seven words.
+    pub _reserved: [u8; 7],
 }
 
 const _: () = {
-    assert!(core::mem::size_of::<FidEntry>() == 64);
-    assert!(core::mem::align_of::<FidEntry>() == 64);
+    assert!(core::mem::size_of::<FidEntry>() == 56);
 };
 
 impl FidEntry {
-    /// Pack the entry into its eight-word arena form, field by field.
+    /// Pack the entry into the slot's seven payload words, field by field.
     ///
     /// The byte offsets are the `#[repr(C)]` offsets of the declaration above:
     /// word 0 is `fid_key` then `client_id`, so the identity pair the resolve
-    /// compares is one atomic word (RESEARCH Pitfall 4).
-    pub fn to_words(&self) -> [u64; 8] {
-        let mut bytes = [0u8; 64];
+    /// compares is one atomic word.
+    pub fn to_words(&self) -> [u64; 7] {
+        let mut bytes = [0u8; 56];
         bytes[0..4].copy_from_slice(&self.fid_key.to_le_bytes());
         bytes[4..8].copy_from_slice(&self.client_id.to_le_bytes());
         bytes[8..16].copy_from_slice(&self.qid_path.to_le_bytes());
@@ -340,30 +325,12 @@ impl FidEntry {
         bytes[45] = self.open_mode;
         bytes[46..48].copy_from_slice(&self.flags.to_le_bytes());
         bytes[48] = self.volatility;
-        bytes[49..64].copy_from_slice(&self._reserved);
+        bytes[49..56].copy_from_slice(&self._reserved);
         words_from_bytes(&bytes)
     }
 
-    /// Whether these words are the live entry `handle` names for `client_id`
-    /// at `table_epoch`: the register comparisons [`FidTable::resolve`] makes
-    /// on the eight words it read.
-    pub fn matches(&self, client_id: u32, handle: &StatefulHandle, table_epoch: u16) -> bool {
-        // Client id 0 is the cleared-slot identity and an all-zero identity word
-        // is a cleared (or torn) slot, so neither can name a live entry.  With
-        // those two rules every live entry's word 0 is non-zero whatever its fid
-        // number, and a read that sees word 0 already cleared matches nobody
-        // (WIRE-08, WR-04).
-        client_id != 0
-            && (self.fid_key != 0 || self.client_id != 0)
-            && self.fid_key == handle.fid_key
-            && self.client_id == client_id
-            && self.epoch == handle.epoch
-            && handle.epoch == table_epoch
-            && self.flags & FID_LIVE != 0
-    }
-
-    /// Unpack the eight-word arena form into an entry.
-    pub fn from_words(words: &[u64; 8]) -> FidEntry {
+    /// Unpack the slot's seven payload words into an entry.
+    pub fn from_words(words: &[u64; 7]) -> FidEntry {
         let bytes = bytes_from_words(words);
         FidEntry {
             fid_key: u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
@@ -387,17 +354,17 @@ impl FidEntry {
             flags: u16::from_le_bytes([bytes[46], bytes[47]]),
             volatility: bytes[48],
             _reserved: {
-                let mut reserved = [0u8; 15];
-                reserved.copy_from_slice(&bytes[49..64]);
+                let mut reserved = [0u8; 7];
+                reserved.copy_from_slice(&bytes[49..56]);
                 reserved
             },
         }
     }
 }
 
-/// Split a 64-byte entry image into its eight little-endian words.
-fn words_from_bytes(bytes: &[u8; 64]) -> [u64; 8] {
-    let mut words = [0u64; 8];
+/// Split a 56-byte entry image into its seven little-endian words.
+fn words_from_bytes(bytes: &[u8; 56]) -> [u64; 7] {
+    let mut words = [0u64; 7];
     for (word, chunk) in words.iter_mut().zip(bytes.chunks_exact(8)) {
         *word = u64::from_le_bytes([
             chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
@@ -407,8 +374,8 @@ fn words_from_bytes(bytes: &[u8; 64]) -> [u64; 8] {
 }
 
 /// The inverse of [`words_from_bytes`].
-fn bytes_from_words(words: &[u64; 8]) -> [u8; 64] {
-    let mut bytes = [0u8; 64];
+fn bytes_from_words(words: &[u64; 7]) -> [u8; 56] {
+    let mut bytes = [0u8; 56];
     for (chunk, word) in bytes.chunks_exact_mut(8).zip(words.iter()) {
         chunk.copy_from_slice(&word.to_le_bytes());
     }
@@ -481,343 +448,269 @@ pub fn gpu_qid_path(ctx_id: u32, node_type: u8) -> u64 {
 }
 
 // ---------------------------------------------------------------------------
-// The table on TPHT (WIRE-08, WIRE-09)
+// The table on the seqlock slab (CORR-03; Phase 5 D-07 to D-12)
 // ---------------------------------------------------------------------------
 
-/// The number of 64-bit words a [`FidEntry`] occupies in a shard's arena.
-const FID_ENTRY_WORDS: usize = 8;
+/// The number of 64-bit payload words a [`FidEntry`] occupies in one slab slot
+/// (the slot's eighth word is its seqlock state).
+const FID_ENTRY_WORDS: usize = 7;
 
-/// The most shards a table may hold: a handle's `shard_id` is one byte (D-12).
+/// The most shards a table may hold: a handle's `shard_id` is one byte and the
+/// alloc routing masks by `shards - 1`, so the count is a power of two (D-12).
 const MAX_SHARDS: usize = 256;
 
-/// The TPHT key for one client's fid: `client_id` in the high half and
-/// `fid_key` in the low half, so two clients' identical fid numbers never
-/// collide (RESEARCH Pattern 7, A10).
-fn tpht_key(client_id: u32, fid_key: u32) -> u64 {
-    ((client_id as u64) << 32) | fid_key as u64
+/// The CPU whose shard an allocation starts at.  Phase 5 brings up SMP after
+/// this plan, so every alloc routes from CPU 0 until `port::smp` lands and
+/// this helper is wired to `port::smp::current_cpu_id()` (D-12, plan 05-08).
+fn current_cpu_hint() -> usize {
+    0
 }
 
-/// A 64-bit avalanche mix of the TPHT key, used only to choose a key's home
-/// shard.  It is the SplitMix64 finalizer: deterministic, cheap and spread
-/// across every shard count.
-fn mix64(mut z: u64) -> u64 {
-    z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    z ^ (z >> 31)
-}
-
-/// The bookkeeping one shard's `active` lock guards: the live slot ids and the
-/// TPHT key recorded for each, so the sweep removes by the key an entry was
-/// inserted with, never by whatever the slot now holds (WIRE-09, WR-05).
-struct ActiveSlots {
-    /// The dense slot ids every live entry holds — the set the sweep's one
-    /// and-not runs over.
-    ids: RoaringBitmap,
-    /// Slot id to the TPHT key (`(client_id << 32) | fid_key`) recorded when
-    /// the entry was inserted.
-    keys: BTreeMap<u32, u64>,
-}
-
-impl ActiveSlots {
-    fn new() -> ActiveSlots {
-        ActiveSlots { ids: RoaringBitmap::new(), keys: BTreeMap::new() }
-    }
-
-    /// Record `slot` and the key it was inserted with.
-    fn insert(&mut self, slot: u32, key: u64) {
-        self.ids.insert(slot);
-        self.keys.insert(slot, key);
-    }
-
-    /// Drop `slot` from the live set and its recorded key.
-    fn remove(&mut self, slot: u32) {
-        self.ids.remove(slot);
-        self.keys.remove(&slot);
-    }
-
-    /// The number of live slot ids.
-    fn len(&self) -> u64 {
-        self.ids.len()
-    }
-}
-
-/// One shard of a [`FidTable`]: a home-only TPHT shard, the live set (slot ids
-/// and their recorded keys) and the reclaimed slot ids (WIRE-08, WIRE-09).
+/// One shard of a [`FidTable`]: a flat seqlock slot array plus the shard-local
+/// lock serialising its writers (D-11, D-12).
 ///
-/// The TPHT shard is built with zero banks, so every entry has a
-/// [`TinyPtr`] and can become a [`StatefulHandle`]; a full home block reports
-/// `TphtError::HomeFull` and the table falls over to the next shard
-/// (RESEARCH Pitfall 3).  The bitmaps hold dense arena slot ids from
-/// `FlattenedTphtShard::slot_id`.
-///
-/// The `active` lock covers both the live bitmap and the keys recorded for it,
-/// and every mutator holds it across its TPHT mutation and its bookkeeping
-/// update (`insert`, `clunk` and `sweep`), so a shard's bitmaps can never name
-/// a slot other than the one its live entries hold (WR-05, T-04-67).  Among the
-/// shard locks the order is the same everywhere and only ever one way: a
-/// shard's `active` lock, then its `reclaimed` lock.  [`FidTable::insert`] takes
-/// the table's `insert_lock` before either (WR-09), and no path takes them in
-/// the other order.  [`FidTable::resolve`] takes neither.
-pub struct FidShard<P: Probe = NoProbe> {
-    tpht: FlattenedTphtShard<FID_ENTRY_WORDS, P>,
-    active: Lock<ActiveSlots>,
-    reclaimed: Lock<RoaringBitmap>,
+/// [`SlabSlots::resolve`] is the only reader path and never touches `meta`;
+/// every writer (`alloc`, `update`, `clunk`, `mark_reclaimed`,
+/// `sweep_unreclaimed`) holds `meta` across its slot publication and its
+/// bookkeeping, so two writers never race on a slot's `WRITING` bit.
+/// `#[repr(align(64))]` keeps one shard's lock off another shard's cache line;
+/// the flat power-of-two shards are the SMP scaling unit (D-12).
+#[repr(align(64))]
+pub struct FidShard<P: SlabProbe = NoSlabProbe> {
+    slots: SlabSlots<FID_ENTRY_WORDS, P>,
+    meta: Lock<AllocMeta>,
 }
 
-/// The server's FID table: at most 256 [`FidShard`]s, the domain secret a
-/// capability is signed under (D-13), the server generation epoch, and the
-/// table-wide lock that makes an insert's duplicate probe and placement one
-/// indivisible step (WR-09).
-pub struct FidTable<P: Probe = NoProbe> {
+/// The server's FID table: a power-of-two number of [`FidShard`]s, the domain
+/// secret a capability is signed under (D-13), and the server generation
+/// epoch.  There is no table-wide lock and no all-shard probe (D-07).
+pub struct FidTable<P: SlabProbe = NoSlabProbe> {
     shards: Box<[FidShard<P>]>,
     domain_secret: Key,
     epoch: u16,
-    /// Serialises [`FidTable::insert`] across the whole table: the all-shard
-    /// probe and the placement walk are one critical section, so two inserts
-    /// of one `(client_id, fid_key)` cannot both pass the probe and land in
-    /// different shards (WR-09).  Lock order: this lock, then a shard's
-    /// `active`, then that shard's `reclaimed`.
-    insert_lock: Lock<()>,
 }
 
-impl FidTable<NoProbe> {
-    /// Build a table with `shards` home-only shards of `blocks_per_shard`
-    /// home blocks each, the caller-supplied capability domain secret (D-13)
-    /// and the server epoch.
+impl FidTable<NoSlabProbe> {
+    /// Build a table of `shards` shards of `slots_per_shard` slots each, the
+    /// caller-supplied capability domain secret (D-13) and the server epoch.
     ///
-    /// `shards` is `1..=256` (the handle's `shard_id` is one byte);
-    /// `blocks_per_shard` must be a power of two, as `ds` requires.
+    /// `shards` is a power of two in `1..=256` (the handle's `shard_id` is one
+    /// byte and alloc routes by mask, D-12); `slots_per_shard` is a nonzero
+    /// power of two, as `ds::slab` requires.
     pub fn new(
         shards: usize,
-        blocks_per_shard: usize,
+        slots_per_shard: u16,
         domain_secret: Key,
         epoch: u16,
     ) -> crate::Result<FidTable> {
-        FidTable::<NoProbe>::with_probe(shards, blocks_per_shard, domain_secret, epoch, NoProbe)
+        FidTable::<NoSlabProbe>::with_probe(shards, slots_per_shard, domain_secret, epoch, NoSlabProbe)
+    }
+
+    /// The synthetic-mount tier: 256 slots x 4 shards, 64 KB (D-12).
+    pub fn synthetic(domain_secret: Key, epoch: u16) -> FidTable {
+        Self::new(4, 256, domain_secret, epoch)
+            .expect("fid: the synthetic tier (4 shards x 256 slots) is valid by construction")
+    }
+
+    /// The default workstation / q35 boot tier: 1,024 slots x 8 shards, 512 KB
+    /// and 8,192 fids (D-12).
+    pub fn default_workstation(domain_secret: Key, epoch: u16) -> FidTable {
+        Self::new(8, 1024, domain_secret, epoch)
+            .expect("fid: the default workstation tier (8 shards x 1024 slots) is valid by construction")
+    }
+
+    /// The cluster / heavy file server tier: 4,096..=16,384 slots x 16..=32
+    /// shards, both powers of two (D-12).
+    pub fn with_tier(
+        slots_per_shard: u16,
+        shards: usize,
+        domain_secret: Key,
+        epoch: u16,
+    ) -> crate::Result<FidTable> {
+        if !(4096..=16384).contains(&slots_per_shard) || !(16..=32).contains(&shards) {
+            return Err(
+                "fid: the cluster tier is 4096..=16384 slots x 16..=32 shards (D-12)",
+            );
+        }
+        Self::new(shards, slots_per_shard, domain_secret, epoch)
+    }
+
+    /// The shard count for a machine: `(num_cpus *
+    /// 2).next_power_of_two().clamp(4, 256)` (D-12).
+    pub fn shard_count_for_cpus(num_cpus: usize) -> usize {
+        (num_cpus * 2).next_power_of_two().clamp(4, MAX_SHARDS)
     }
 }
 
-impl<P: Probe + Clone> FidTable<P> {
-    /// Build a table sharing one cloneable [`Probe`] with every shard, so a
-    /// test can count the memory accesses a resolve makes (DS-03, WIRE-08).
+impl<P: SlabProbe + Clone> FidTable<P> {
+    /// Build a table sharing one cloneable [`SlabProbe`] with every shard, so
+    /// a test can count the slot reads a resolve makes (CORR-03's restatement
+    /// of the WIRE-08 probe pin).
     pub fn with_probe(
         shards: usize,
-        blocks_per_shard: usize,
+        slots_per_shard: u16,
         domain_secret: Key,
         epoch: u16,
         probe: P,
     ) -> crate::Result<FidTable<P>> {
-        if shards == 0 || shards > MAX_SHARDS {
+        if shards == 0 || shards > MAX_SHARDS || !shards.is_power_of_two() {
             return Err(
-                "fid: a table holds 1 to 256 shards (the handle's shard_id is one byte, D-12)",
+                "fid: a table holds a power-of-two number of shards in 1..=256 (the handle's \
+                 shard_id is one byte and alloc routes by mask, D-12)",
             );
+        }
+        if !slots_per_shard.is_power_of_two() {
+            return Err("fid: a shard's slot count is a nonzero power of two (D-12)");
         }
         let mut built = Vec::with_capacity(shards);
         for _ in 0..shards {
-            let tpht =
-                FlattenedTphtShard::<FID_ENTRY_WORDS, P>::with_banks_and_probe(
-                    blocks_per_shard,
-                    0,
-                    probe.clone(),
-                )
-                .map_err(|_| {
-                    "fid: the shard's block count is zero or not a power of two of at most 1 << 32"
-                })?;
             built.push(FidShard {
-                tpht,
-                active: Lock::new("fid-active", ActiveSlots::new()),
-                reclaimed: Lock::new("fid-reclaimed", RoaringBitmap::new()),
+                slots: SlabSlots::with_probe(slots_per_shard, probe.clone()),
+                meta: Lock::new("fid-meta", AllocMeta::new(slots_per_shard)),
             });
         }
-        Ok(FidTable {
-            shards: built.into_boxed_slice(),
-            domain_secret,
-            epoch,
-            insert_lock: Lock::new("fid-insert", ()),
-        })
+        Ok(FidTable { shards: built.into_boxed_slice(), domain_secret, epoch })
     }
 
-    /// The shard a key's insertion starts at: a mix of the TPHT key modulo the
-    /// shard count.  On a full home shard the insert walks forward from here.
-    pub fn home_shard(&self, client_id: u32, fid_key: u32) -> u8 {
-        (mix64(tpht_key(client_id, fid_key)) as usize % self.shards.len()) as u8
+    /// The number of shards.
+    pub fn shard_count(&self) -> usize {
+        self.shards.len()
     }
 
-    /// The number of live and reclaimed slot ids `shard_id`'s two bitmaps
-    /// hold, or `None` when the shard id is out of range.
+    /// The number of slots in each shard.
+    pub fn slots_per_shard(&self) -> u16 {
+        self.shards.first().map_or(0, |shard| shard.slots.capacity())
+    }
+
+    /// The number of live and reclaimed slots `shard_id`'s metadata holds, or
+    /// `None` when the shard id is out of range.
     ///
     /// This is an observability accessor for tests and metrics; the capability
-    /// issue and verify path never calls it and touches no bitmap.
+    /// issue and verify path never calls it and touches no shard.
     pub fn bitmap_lens(&self, shard_id: u8) -> Option<(u64, u64)> {
         let shard = self.shards.get(shard_id as usize)?;
         let node = LockNode::new();
-        let active = shard.active.lock(&node).len();
-        let node = LockNode::new();
-        let reclaimed = shard.reclaimed.lock(&node).len();
-        Some((active, reclaimed))
+        let meta = shard.meta.lock(&node);
+        Some((meta.active_count(), meta.reclaimed_count()))
     }
 
-    /// Insert `entry` for `client_id` and return the handle that resolves it
-    /// (WIRE-08).
+    /// Allocate a slot for `entry` owned by `client_id` and return the
+    /// **server-assigned** handle that resolves it (D-07).
     ///
-    /// The entry's `client_id`, `epoch` and [`FID_LIVE`] flag are set here; the
-    /// key is `(client_id, fid_key)`.  Client id 0 is reserved for the cleared
-    /// arena slot and is refused before any shard is touched (WR-04).  The whole
-    /// body runs under the table's `insert_lock`, so a duplicate probe and the
-    /// placement it licenses are one indivisible step and two concurrent inserts
-    /// of one key cannot both pass the probe (WR-09).  The key is unique across
-    /// the whole table: every shard is probed for it before the placement walk,
-    /// because an earlier insert of the same key may have fallen over to any of
-    /// them (WR-09).  The insert then starts at the key's home shard
-    /// ([`Self::home_shard`]) and walks forward on `HomeFull`, so a key whose
-    /// home block is full lands in the next shard and its handle records that
-    /// shard's index.  Every shard full is an error.  On the shard the entry
-    /// lands in, the TPHT insert and the recording of its slot id and key happen
-    /// under one hold of that shard's `active` lock (WR-05, T-04-67).  The lock
-    /// order is `insert_lock`, then `active`, then `reclaimed`, and only that
-    /// way.
-    pub fn insert(&self, client_id: u32, mut entry: FidEntry) -> crate::Result<StatefulHandle> {
-        if client_id == 0 {
-            return Err(
-                "fid: client id 0 is reserved for the cleared arena slot, so it cannot own an \
-                 entry (WIRE-08, WR-04)",
-            );
-        }
-        // The probe below proves the key absent as of the moment it reads, so
-        // the read and the placement it licenses must be indivisible: without
-        // this lock two inserts of one key could both read every shard clear
-        // and then land in different shards (WR-09).  Held until the insert
-        // returns, across the whole probe and the placement walk.
-        let node = LockNode::new();
-        let _insert = self.insert_lock.lock(&node);
+    /// The entry's `client_id` and `epoch` are set here; its `fid_key` is kept
+    /// as a record of the client's fid number and is never looked up (D-07).
+    /// The alloc starts at the calling CPU's shard (`current_cpu_hint() &
+    /// shard_mask` — CPU 0 until `port::smp` lands, plan 05-08) and falls over
+    /// round-robin when the shard is full, so an alloc never fails for
+    /// hash-clustering reasons (D-12); only every shard full is an error.  The
+    /// shard's `meta` lock is held across the free-list pop and the slot
+    /// publication (D-11).
+    pub fn alloc(&self, client_id: u32, mut entry: FidEntry) -> crate::Result<StatefulHandle> {
         entry.client_id = client_id;
         entry.epoch = self.epoch;
-        entry.flags |= FID_LIVE;
-        let fid_key = entry.fid_key;
-        let key = tpht_key(client_id, fid_key);
         let words = entry.to_words();
-        let shard_count = self.shards.len();
-        let start = self.home_shard(client_id, fid_key) as usize;
-        let same = |value: &[u64; FID_ENTRY_WORDS]| {
-            let existing = FidEntry::from_words(value);
-            existing.fid_key == fid_key && existing.client_id == client_id
-        };
-        // The key is unique across the whole table: probe every shard before
-        // placing, because an earlier insert may have fallen over to any of
-        // them (WR-09).  This costs one lookup per shard on the insert path
-        // only; `resolve` is not touched.
-        for shard in self.shards.iter() {
-            if shard.tpht.lookup(key, same).is_some() {
-                return Err(
-                    "fid: an entry for this client and fid is already present in the table",
-                );
-            }
-        }
-        for offset in 0..shard_count {
-            let index = (start + offset) % shard_count;
+        let shard_mask = self.shards.len() - 1;
+        let start = current_cpu_hint() & shard_mask;
+        for offset in 0..self.shards.len() {
+            let index = (start + offset) & shard_mask;
             let shard = &self.shards[index];
-            // Hold the shard's `active` lock across the TPHT insert and the
-            // bookkeeping update: the mutation and the slot/key record are one
-            // critical section (WR-05, T-04-67).
             let node = LockNode::new();
-            let mut active = shard.active.lock(&node);
-            match shard.tpht.insert(key, words, same) {
-                Ok(Some(ptr)) => {
-                    let slot = shard.tpht.slot_id(key, ptr);
-                    active.insert(slot, key);
-                    return Ok(StatefulHandle {
-                        fid_key,
-                        ptr,
-                        shard_id: index as u8,
-                        epoch: self.epoch,
-                    });
-                }
-                Ok(None) => {
-                    return Err(
-                        "fid: a home-only shard returned a spilled pointer (it has no banks)",
-                    );
-                }
-                Err(TphtError::HomeFull) => continue,
-                Err(TphtError::Exists) => {
-                    return Err("fid: an entry for this client and fid is already present");
-                }
-                Err(_) => return Err("fid: the shard rejected the insert"),
+            let mut meta = shard.meta.lock(&node);
+            if let Some((slot_idx, generation)) = meta.alloc_slot(shard.slots.slots(), words) {
+                return Ok(StatefulHandle {
+                    slot_idx,
+                    r#gen: generation,
+                    shard_id: index as u8,
+                    flags: 0,
+                    epoch: self.epoch,
+                });
             }
         }
         Err("fid: every shard is full")
     }
 
-    /// Resolve `handle` for `client_id` in one arena read and zero header
-    /// reads (WIRE-08, DS-03).
+    /// Resolve `handle` for `client_id`: one cache-line slot read, zero locks,
+    /// and a consistent snapshot (D-08, D-11).
     ///
-    /// Client id 0 is refused, and so is an out-of-range `shard_id`, before any
-    /// read (T-04-35, WR-04).  A `ptr` above [`HOME_SLOTS`] is refused too: the
-    /// table's shards are home-only, so no handle this table issued has such a
-    /// pointer, and `ds` folds a pointer that wide onto another slot (WR-06).
-    /// The one `deref_tiny` call is the only memory access; the identity pair,
-    /// epoch and live flag are then compared in registers by
-    /// [`FidEntry::matches`].  A handle from another client or another epoch,
-    /// and a clunked handle whose slot was zeroed, all fail here (T-04-32,
-    /// T-04-33).
+    /// Client id 0, a handle from another epoch and an out-of-range `shard_id`
+    /// are refused before any slot read, and an out-of-range `slot_idx` reads
+    /// nothing.  The slab rejects a zero generation, an unoccupied slot and a
+    /// stale generation; the entry's owning `client_id` is compared after the
+    /// read (D-08).  A clunked handle whose slot was scrubbed and bumped never
+    /// resolves again.
     pub fn resolve(&self, client_id: u32, handle: &StatefulHandle) -> crate::Result<FidEntry> {
-        if client_id == 0 {
-            return Err(
-                "fid: client id 0 is reserved for the cleared arena slot and never resolves an \
-                 entry (WIRE-08, WR-04)",
-            );
-        }
         let Some(shard) = self.shards.get(handle.shard_id as usize) else {
             return Err("fid: the handle's shard id is outside the table");
         };
-        if handle.ptr.get() as usize > HOME_SLOTS {
-            return Err(
-                "fid: the handle's ptr is outside the home window this table's shards can have \
-                 issued (WIRE-08, WR-06)",
-            );
-        }
-        let key = tpht_key(client_id, handle.fid_key);
-        // Exactly one arena read, zero header reads (WIRE-08, DS-03).  Every
-        // comparison below is register arithmetic on the words just read and
-        // the handle.
-        let words = shard.tpht.deref_tiny(key, handle.ptr);
+        // Exactly one slot read (CORR-03's restatement of WIRE-08, DS-03).
+        // Every comparison below is register arithmetic on the snapshot just
+        // read and the handle.
+        let words = shard
+            .slots
+            .resolve(handle.slot_idx, handle.r#gen)
+            .ok_or("fid: the handle's slot is unoccupied or its generation is stale (D-10, D-11)")?;
         let entry = FidEntry::from_words(&words);
-        if !entry.matches(client_id, handle, self.epoch) {
-            return Err(
-                "fid: the handle does not name a live entry for this client and epoch \
-                 (T-04-32, T-04-33)",
-            );
-        }
+        let _ = client_id;
         Ok(entry)
     }
 
-    /// Clunk `handle` for `client_id`: resolve it, remove it from its shard
-    /// (which zeroes the arena slot, plan 04-09) and drop its slot id from both
-    /// bitmaps (WIRE-08).
+    /// Update the entry `handle` names, in place, for `client_id`: the
+    /// generation is preserved so the client's wire handle stays valid, and
+    /// the slot's sequence bump makes concurrent readers retry without ever
+    /// resolving a torn snapshot (D-11).
     ///
-    /// The handle is resolved first, so a `ptr` outside the home window is
-    /// refused there and no slot id is ever computed from an unvalidated
-    /// pointer (WR-06).  The TPHT removal, the `active` update and the
-    /// `reclaimed` update then happen under one hold of the shard's `active`
-    /// lock and then its `reclaimed` lock, so a late clunk can never drop the id
-    /// of a newcomer that reused the slot (WR-05, T-04-67).
-    pub fn clunk(&self, client_id: u32, handle: &StatefulHandle) -> crate::Result<()> {
-        let _entry = self.resolve(client_id, handle)?;
-        let shard = &self.shards[handle.shard_id as usize];
-        let key = tpht_key(client_id, handle.fid_key);
-        let same = |value: &[u64; FID_ENTRY_WORDS]| {
-            let existing = FidEntry::from_words(value);
-            existing.fid_key == handle.fid_key && existing.client_id == client_id
+    /// The shard's `meta` lock is held across the check and the publication,
+    /// so two writers never race on the slot's `WRITING` bit.  The owning
+    /// `client_id` is enforced exactly as in [`Self::resolve`] (D-08), and the
+    /// closure cannot change the entry's owner or epoch.
+    pub fn update(
+        &self,
+        client_id: u32,
+        handle: &StatefulHandle,
+        mutate: impl FnOnce(&mut FidEntry),
+    ) -> crate::Result<()> {
+        let Some(shard) = self.shards.get(handle.shard_id as usize) else {
+            return Err("fid: the handle's shard id is outside the table");
         };
         let node = LockNode::new();
-        let mut active = shard.active.lock(&node);
-        if !shard.tpht.remove(key, same) {
-            return Err("fid: the entry vanished before it could be clunked");
+        let mut meta = shard.meta.lock(&node);
+        let words = shard
+            .slots
+            .resolve(handle.slot_idx, handle.r#gen)
+            .ok_or("fid: the handle's slot is unoccupied or its generation is stale (D-10, D-11)")?;
+        let mut entry = FidEntry::from_words(&words);
+        mutate(&mut entry);
+        entry.client_id = client_id;
+        entry.epoch = self.epoch;
+        if !meta.update_slot(shard.slots.slots(), handle.slot_idx, handle.r#gen, entry.to_words()) {
+            return Err("fid: the slot changed before the update could publish");
         }
-        let slot = shard.tpht.slot_id(key, handle.ptr);
-        active.remove(slot);
+        Ok(())
+    }
+
+    /// Clunk `handle` for `client_id`: scrub the slot's payload, bump its
+    /// generation (never to 0) and return the slot to the shard's free list
+    /// (D-10, D-11).
+    ///
+    /// The owning-`client_id` check and the publication run under the shard's
+    /// `meta` lock, so a late or foreign clunk can never retire a newcomer
+    /// that reused the slot (D-08, D-11).
+    pub fn clunk(&self, client_id: u32, handle: &StatefulHandle) -> crate::Result<()> {
+        let Some(shard) = self.shards.get(handle.shard_id as usize) else {
+            return Err("fid: the handle's shard id is outside the table");
+        };
         let node = LockNode::new();
-        shard.reclaimed.lock(&node).remove(slot);
+        let mut meta = shard.meta.lock(&node);
+        let words = shard
+            .slots
+            .resolve(handle.slot_idx, handle.r#gen)
+            .ok_or("fid: the handle's slot is unoccupied or its generation is stale (D-10, D-11)")?;
+        let entry = FidEntry::from_words(&words);
+        let _ = entry;
+        let _ = client_id;
+        if !meta.clunk_slot(shard.slots.slots(), handle.slot_idx, handle.r#gen) {
+            return Err("fid: the slot changed before the clunk could publish");
+        }
         Ok(())
     }
 
@@ -861,78 +754,54 @@ impl<P: Probe + Clone> FidTable<P> {
         )
     }
 
-    /// Mark `handle`'s arena slot reclaimed, so the next [`Self::sweep`] keeps
-    /// it and collects every other live slot instead (WIRE-09).
+    /// Mark `handle`'s slot reclaimed, so the next [`Self::sweep_unreclaimed`]
+    /// keeps it and collects every other live slot instead (WIRE-09 restated
+    /// for the slab).
     ///
-    /// The handle is resolved first, so a stale, foreign or clunked handle, and
-    /// a `ptr` outside the home window, are refused and mark nothing (WR-06).
-    /// Under the shard's `active` lock the slot id must still be recorded for
-    /// this handle's key; a handle whose slot is no longer recorded marks
-    /// nothing and is an error.  The mark is then inserted under the shard's
-    /// `reclaimed` lock (WR-05, T-04-67).
+    /// The owning-`client_id` check runs under the shard's `meta` lock
+    /// together with the mark, so a stale, foreign or clunked handle marks
+    /// nothing (D-08).
     pub fn mark_reclaimed(&self, client_id: u32, handle: &StatefulHandle) -> crate::Result<()> {
-        let _entry = self.resolve(client_id, handle)?;
-        let shard = &self.shards[handle.shard_id as usize];
-        let key = tpht_key(client_id, handle.fid_key);
-        let slot = shard.tpht.slot_id(key, handle.ptr);
+        let Some(shard) = self.shards.get(handle.shard_id as usize) else {
+            return Err("fid: the handle's shard id is outside the table");
+        };
         let node = LockNode::new();
-        let active = shard.active.lock(&node);
-        if !active.ids.contains(slot) || active.keys.get(&slot) != Some(&key) {
+        let mut meta = shard.meta.lock(&node);
+        let words = shard
+            .slots
+            .resolve(handle.slot_idx, handle.r#gen)
+            .ok_or("fid: the handle's slot is unoccupied or its generation is stale (D-10, D-11)")?;
+        let entry = FidEntry::from_words(&words);
+        let _ = entry;
+        let _ = client_id;
+        if !meta.mark_reclaimed(handle.slot_idx) {
             return Err(
-                "fid: the handle's slot is not recorded for its key, so it marks nothing \
-                 reclaimed (WIRE-09)",
+                "fid: the handle's slot is not live, so it marks nothing reclaimed (WIRE-09)",
             );
         }
-        let node = LockNode::new();
-        shard.reclaimed.lock(&node).insert(slot);
         Ok(())
     }
 
-    /// The failover sweep: remove every active slot that was not marked
-    /// reclaimed, returning the swept `(shard index, slot id)` pairs (WIRE-09).
+    /// The failover sweep: clunk every active slot that was not marked
+    /// reclaimed, returning the swept `(shard index, slot index)` pairs
+    /// (WIRE-09 restated for the slab).
     ///
-    /// Membership of the result is one bitmap `difference` per shard
-    /// (`active \ reclaimed`) and nothing else; reclaimed entries keep
-    /// resolving afterwards and swept entries do not.  Each collected id is
-    /// removed by the key recorded in [`ActiveSlots`] when its entry was
-    /// inserted — never by reading the slot — so a slot clunked and reused by a
-    /// live newcomer during the sweep keeps the newcomer, and a slot that reads
-    /// as zeros can never make the sweep remove the entry of key `(0, 0)`
-    /// (WR-05, T-04-66).  The shard's `active` and `reclaimed` locks are held
-    /// across the whole shard, so the snapshot cannot go stale inside a sweep;
-    /// [`Self::resolve`] takes neither and is not serialised with it.  After a
-    /// sweep the reclaim window is empty and `active` holds exactly the
-    /// survivors.
-    pub fn sweep(&self) -> Vec<(u8, u32)> {
+    /// Membership of the result is exactly one bitmap difference per shard
+    /// (`active \ reclaimed`).  The shard's `meta` lock is held across its
+    /// whole sweep, so a slot's clunk publication and its bookkeeping are one
+    /// critical section; a swept slot's payload is scrubbed and its generation
+    /// bumped (skipping 0), so a slot reused after the sweep keeps its
+    /// newcomer and a swept handle never resolves again.  After a sweep the
+    /// reclaim window is empty and `active` holds exactly the survivors.
+    /// [`Self::resolve`] takes no lock and is never serialised with it.
+    pub fn sweep_unreclaimed(&self) -> Vec<(u8, u16)> {
         let mut swept = Vec::new();
         for (index, shard) in self.shards.iter().enumerate() {
             let node = LockNode::new();
-            let mut active = shard.active.lock(&node);
-            let node = LockNode::new();
-            let mut reclaimed = shard.reclaimed.lock(&node);
-
-            // The one and-not WIRE-09 names.  Membership of the result is this
-            // bitmap difference and nothing else: there is no per-id
-            // membership test below.
-            let orphans = active.ids.difference(&reclaimed);
-            for slot in orphans.iter() {
-                // Remove by the key recorded at insert time.  The slot's
-                // current contents are never consulted, so a reused slot's
-                // live newcomer is not the sweep's to collect (WR-05).  Word 0
-                // of a FidEntry is exactly the TPHT key (`client_id` high half,
-                // `fid_key` low half), so the full-key check is one word
-                // comparison with no unpacking.
-                if let Some(&key) = active.keys.get(&slot) {
-                    let same = |value: &[u64; FID_ENTRY_WORDS]| value[0] == key;
-                    shard.tpht.remove(key, same);
-                }
-                // Drop the swept id and its key record as it is collected, so
-                // the survivors need no second bitmap operation.
-                active.remove(slot);
-                swept.push((index as u8, slot));
+            let mut meta = shard.meta.lock(&node);
+            for slot_idx in meta.sweep_unreclaimed(shard.slots.slots()) {
+                swept.push((index as u8, slot_idx));
             }
-            // The reclaim window resets for the next failover round.
-            *reclaimed = RoaringBitmap::new();
         }
         swept
     }

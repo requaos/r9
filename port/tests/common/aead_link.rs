@@ -846,7 +846,7 @@ fn e2e_entry(fid_key: u32, qid_path: u64, qid_type: u8) -> FidEntry {
         open_mode: 0,
         flags: 0,
         volatility: 0,
-        _reserved: [0u8; 15],
+        _reserved: [0u8; 7],
     }
 }
 
@@ -920,9 +920,10 @@ fn plain_step(io_w: &mut dyn MntIo, io_r: &mut dyn MntIo, handshake: &mut Handsh
 
 /// The server end of one whole sealed session.
 ///
-/// It owns a [`FidTable`] (two home-only shards, one test domain key, epoch 1),
-/// assigns one `client_id` per connection, keeps a canned tree, answers the
-/// plain handshake and then resolves every sealed request through the table.
+/// It owns a [`FidTable`] (the synthetic slab tier, one test domain key, epoch
+/// 1), assigns one `client_id` per connection, keeps a canned tree, answers
+/// the plain handshake and then resolves every sealed request through the
+/// table.
 pub struct E2eServer {
     link: Rc<RefCell<AeadLink>>,
     handshake: Option<Handshake>,
@@ -941,7 +942,7 @@ impl E2eServer {
         client_id: u32,
         config: TransportConfig,
     ) -> Rc<RefCell<E2eServer>> {
-        let table = FidTable::new(2, 1, e2e_domain_key(), 1).expect("a two-shard fid table forms");
+        let table = FidTable::synthetic(e2e_domain_key(), 1);
         Rc::new(RefCell::new(E2eServer {
             link,
             handshake: Some(Handshake::new(Role::Server, config)),
@@ -1076,7 +1077,7 @@ impl E2eServer {
         match msg {
             Msg::Tattach { fid, .. } => {
                 let entry = e2e_entry(fid, E2E_ROOT, QTDIR);
-                let new = self.table.insert(self.client_id, entry).map_err(|_| Stage::Decode)?;
+                let new = self.table.alloc(self.client_id, entry).map_err(|_| Stage::Decode)?;
                 self.reply(
                     tag,
                     new.to_wire(),
@@ -1099,7 +1100,7 @@ impl E2eServer {
                 let qid_type = if next_path == E2E_ROOT { QTDIR } else { 0 };
                 let new = self
                     .table
-                    .insert(self.client_id, e2e_entry(newfid, next_path, qid_type))
+                    .alloc(self.client_id, e2e_entry(newfid, next_path, qid_type))
                     .map_err(|_| Stage::Decode)?;
                 self.reply(
                     tag,
@@ -1199,7 +1200,7 @@ impl E2eServer {
 
     /// The live and reclaimed slot counts of every shard, in shard order.
     pub fn fid_memory(&self) -> Vec<(u64, u64)> {
-        (0..2)
+        (0..self.table.shard_count() as u8)
             .filter_map(|shard| self.table.bitmap_lens(shard))
             .collect()
     }
