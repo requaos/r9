@@ -39,7 +39,7 @@ dev = ["exec", "churn"]
 machine = "q35"
 accel = "kvm"
 cpu = "host"
-smp = 1
+smp = 2
 memory = "1024M"
 
 # The netdev stanza is CARRIED (q35exec's shape) even though the churn

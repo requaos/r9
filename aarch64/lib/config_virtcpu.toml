@@ -37,7 +37,7 @@ machine = "virt,gic-version=2"
 # TCG reference CPU.  For hvf on darwin pass --accel hvf (or R9_ACCEL=hvf):
 # xtask swaps in the gicv3 machine/DTB and -cpu host itself.
 cpu = "cortex-a72"
-smp = 1
+smp = 2
 memory = "1024M"
 accel = "tcg"
 # Committed trimmed DTB: qemu loads it at 0x40000000 (the ELF-boot fix —
