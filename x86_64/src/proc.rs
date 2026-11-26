@@ -1129,17 +1129,19 @@ pub struct Proc {
     /// via swtch; every other Ready proc resumes via trap_return on
     /// `frame`.
     pub blocked_in_kernel: bool,
-    /// The user FPU/SSE state (the FXSAVE image) while the proc does not
-    /// own the registers; stale while it does (fpu.rs's LIVE_OWNER
-    /// invariant).  Installed at every switch-in (activate_first,
-    /// pick_next), parked at every switch-out (sched, reschedule's park)
-    /// and by a kernel SIMD section; rfork seeds a child's from the
-    /// parent's current state, exec loads the default.
+    /// The user FPU/SSE/AVX state (the 832-byte image in the boot's
+    /// selected format — MEM-18, D-20: XSAVE/XSAVEOPT with ymm where
+    /// CPUID reports it, the FXSAVE legacy region elsewhere) while the
+    /// proc does not own the registers; stale while it does (fpu.rs's
+    /// LIVE_OWNER invariant).  Installed at every switch-in
+    /// (activate_first, pick_next), parked at every switch-out (sched,
+    /// reschedule's park) and by a kernel SIMD section; rfork seeds a
+    /// child's from the parent's current state, exec loads the default.
     pub fpsave: crate::fpu::FpState,
-    /// The interrupted code's FPU/SSE state while a note handler runs
-    /// (the donor's notify-time fpsave): syscall.rs's deliver_notes
-    /// records it, NOTED's NCONT/NRSTR put it back.  Meaningful only
-    /// while note_ureg != 0.
+    /// The interrupted code's FPU/SSE/AVX state while a note handler
+    /// runs (the donor's notify-time fpsave): syscall.rs's
+    /// deliver_notes records it (all 832 bytes), NOTED's NCONT/NRSTR put
+    /// it back.  Meaningful only while note_ureg != 0.
     pub note_fpsave: crate::fpu::FpState,
     /// The rfork parent — EXITS posts the wait record here.  Null for
     /// the staged init.

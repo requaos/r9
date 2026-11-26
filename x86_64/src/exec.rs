@@ -279,12 +279,14 @@ fn install_image(
     // stack below it (14-06).
     let seeded = seed_user_pages(proc, args);
     if seeded.is_ok() {
-        // Every exec starts with the FPU/SSE at the default state (the
-        // donor's fpstate=FPinit equivalent: FCW 0x037F, MXCSR 0x1F80,
-        // every x87/MMX/XMM register zero) — the saved copy, plus the
-        // live registers when this proc owns them (exec_replace: the
-        // exec'ing proc is on the CPU); a proc built by exec_into is not
-        // yet installed and gets it at install (fpu.rs).
+        // Every exec starts with the FPU/SSE/AVX at the default state
+        // (the donor's fpstate=FPinit equivalent: FCW 0x037F, MXCSR
+        // 0x1F80, every x87/MMX/XMM register zero, and — MEM-18 —
+        // xstate_bv = 0 so XRSTOR64 zeroes ymm0..15 too) — the saved
+        // copy, plus the live registers when this proc owns them
+        // (exec_replace: the exec'ing proc is on the CPU); a proc built
+        // by exec_into is not yet installed and gets it at install
+        // (fpu.rs).
         crate::fpu::replace(&mut proc.fpsave, &crate::fpu::FpState::DEFAULT);
     }
     seeded
