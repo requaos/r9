@@ -23,7 +23,7 @@
 # (one-image-per-gate; 19-07 expands the fixture into the real cpurc).
 #
 # Venue (the q35auth shape): KVM-native (the TCG leg rides R9_ACCEL=tcg
-# R9_CPU=qemu64 — the 13-06 no-silent-downgrade chain), smp 1, 1 GiB.
+# R9_CPU=qemu64 — the 13-06 no-silent-downgrade chain), smp 2, 1 GiB.
 # Parallel-boot constraint (carried): two simultaneous q35 boots bind
 # the two loopback hostfwd ports (127.0.0.1:17010/5670) — run the
 # x86_64 gates sequentially.
@@ -54,7 +54,7 @@ dev = ["exec", "bootchain", "cap", "ether", "ip"]
 machine = "q35"
 accel = "kvm"
 cpu = "host"
-smp = 1
+smp = 2
 memory = "1024M"
 
 # The netdev stanza is CARRIED (the q35auth shape) for the discovery

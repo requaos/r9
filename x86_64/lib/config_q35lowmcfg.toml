@@ -53,7 +53,7 @@ dev = []
 machine = "q35"
 accel = "kvm"
 cpu = "host"
-smp = 1
+smp = 2
 memory = "1024M"
 # The moved window (data, the X64-03 proof): the injected MCFG names
 # 0xe0000000 while SeaBIOS's register still says 0xb0000001.

@@ -22,12 +22,13 @@ dev = []
 
 [qemu]
 # D-01: KVM-native gate default (-accel kvm -cpu host), q35 machine,
-# -smp 1 (SMP stays a Future item), 1024M guest RAM.  TCG fallback runs
-# per-invocation with --accel tcg --cpu qemu64 (X64-05 documents it).
+# -smp 2 (05-24, SMP-01/SMP-09/D-24: two CPUs by default now that both
+# schedule), 1024M guest RAM.  TCG fallback runs per-invocation with
+# --accel tcg --cpu qemu64 (X64-05 documents it).
 machine = "q35"
 accel = "kvm"
 cpu = "host"
-smp = 1
+smp = 2
 memory = "1024M"
 
 # D-01a: the idle NIC staged as data (the 07-01 D-10 shape, x86 leg) —

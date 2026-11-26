@@ -43,7 +43,7 @@ dev = ["exec", "bootchain", "ether", "ip"]
 machine = "q35"
 accel = "kvm"
 cpu = "host"
-smp = 1
+smp = 2
 memory = "1024M"
 
 # 16-01 (D-05): the mode tables — ONE shared builder (xtask
