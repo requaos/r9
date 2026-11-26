@@ -88,32 +88,33 @@ coverage:
     requirement: SMP-04
     verification:
       - kind: automated
-        ref: "nix run .#boot-r9-net-smoke FAILED (kernel panic during bss page-in); R9_SMP=1 nix run .#boot-r9-net-smoke FAILED identically — pre-existing, not SMP-related; logged to deferred-items.md"
-        status: fail
-    human_judgment: true
-    rationale: "Pre-existing failure (occurs at both -smp 1 and -smp 2); not caused by this plan's changes. Owner must decide whether this blocks Owner Stop 2."
+        ref: "R9_ACCEL=tcg nix run .#boot-r9-net-smoke PASS; R9_ACCEL=tcg R9_SMP=1 PASS; nix run .#boot-r9-net-smoke (HVF) PASS — after c42a66f removed heap allocation from under the NetIrq-ranked INGRESS lock"
+        status: pass
+    human_judgment: false
   - id: D5
     description: "Owner Stop 2: cumulative port/src diff review, CI push approval, and Linux KVM -smp 2 verification (D-30, D-32, D-33)"
-    verification: []
+    verification:
+      - kind: human
+        ref: "Owner approved the cumulative port/src diff (4ff046e..HEAD: 20 files, +2678/-248) and the Part 2 push on 2026-11-26; pushed as 4ff046e..60d7477. The Linux KVM -smp 2 verdict was not supplied at approval time and remains an open owner item (recorded in STATE.md concerns)."
+        status: pass
     human_judgment: true
-    rationale: "Owner Stop 2 is a blocking checkpoint requiring owner review of the cumulative diff, CI push approval, and a live KVM run on the owner's x86_64 Linux host."
 
 # Metrics
 duration: 11min
 completed: 2026-11-26
-status: halted
+status: complete
 ---
 
 # Phase 05 Plan 14: Gate Migration Completion + Owner Stop 2 Summary
 
-**All 15 x86_64 gate scripts now run at `-smp 2` (7 migrated here), CI runs every gate at `-smp 2` plus one dedicated `R9_SMP=1` smoke leg per architecture, and the aarch64 `-smp 2` quick pass is green on smoke, cpu, and tier-1 (HVF + TCG) — with a pre-existing net-smoke panic logged. Plan halted at Owner Stop 2 checkpoint awaiting owner review and Linux KVM verification (SMP-01, SMP-04, SMP-09, D-24, D-30, D-32, D-33).**
+**All 15 x86_64 gate scripts now run at `-smp 2` (7 migrated here), CI runs every gate at `-smp 2` plus one dedicated `R9_SMP=1` smoke leg per architecture, and the aarch64 `-smp 2` quick pass is green on smoke, cpu, tier-1 and net-smoke (HVF + TCG). The net-smoke panic was root-caused to a ranked-lock violation (heap allocation under NetIrq INGRESS) and fixed in `c42a66f`. Owner Stop 2 approved on 2026-11-26 and Part 2 pushed as `4ff046e..60d7477`; the owner's Linux KVM `-smp 2` verdict remains an open owner item (SMP-01, SMP-04, SMP-09, D-24, D-30, D-32, D-33).**
 
 ## Performance
 
 - **Duration:** 11 min (plus ~25 min of QEMU boot test time)
 - **Started:** 2026-11-26T18:39:22Z
-- **Completed:** 2026-11-26T18:51:21Z (Tasks 1-2; Task 3 is a pending checkpoint)
-- **Tasks:** 2 of 3 executed (Task 3 is a blocking Owner Stop 2 checkpoint)
+- **Completed:** 2026-11-26T18:51:21Z (Tasks 1-2) + 2026-11-26 (Owner Stop 2 approved)
+- **Tasks:** 3 of 3 executed (Task 3 Owner Stop 2 approved by the owner)
 - **Files modified:** 9
 
 ## Accomplishments
@@ -175,9 +176,10 @@ None new. The plan's threat register is implemented as written: T-05-25 (repudia
 
 ## Next Phase Readiness
 
-- **Owner Stop 2 (Task 3, pending):** The owner must review the cumulative `port/src` diff (22 files, +2999/-708), the `UNSAFE-AUDIT.md` diff (+530/-47), approve pushing Part 2 commits for CI verification of x86_64 q35 `-smp 2` TCG gates, and run the x86_64 `-smp 2` gates under real 2-core KVM on their Linux host (D-33).
-- **Plan 05-15 (AVX/XSAVE):** Blocked on Owner Stop 2 approval (D-32).
-- **Pre-existing net-smoke panic:** Needs a debug session to capture the full panic message; may need resolution before or during Owner Stop 2 review.
+- **Owner Stop 2 (Task 3): approved by the owner on 2026-11-26.** The cumulative `port/src` diff (`4ff046e..HEAD`: 20 files, +2678/-248), the `UNSAFE-AUDIT.md` diff (+412/-37) and the Part 2 push were approved; Part 2 pushed as `4ff046e..60d7477` so CI proves the x86_64 q35 `-smp 2` TCG gates and the `-smp 1` smoke legs. **Open owner item (D-33):** the x86_64 `-smp 2` Linux KVM verdict was not supplied at approval time; it stays a STATE.md concern until the owner runs `cargo xtask gate --arch x86-64` (+ `R9_SMP=1`) on their x86_64 host.
+- **Plan 05-15 (AVX/XSAVE):** unblocked by Owner Stop 2 approval (D-32).
+- **net-smoke panic (was "pre-existing"):** corrected — it was a Part 2 regression (heap allocation under the NetIrq-ranked INGRESS lock in `port/src/netif.rs`, latent since 05-08 and made fatal when `66a3548` activated the rank checker). Fixed in `c42a66f`; verified TCG ×3, `R9_SMP=1`, genuine `-smp 1`, and HVF. Debug session archived at `.planning/debug/resolved/aarch64-net-smoke-regression.md`.
+- **Gate follow-up:** the net-smoke gate's `expect_before` kills QEMU on the first `panic` chunk, truncating the panic text; worth fixing separately so future panics are readable.
 
 ## Self-Check: PASSED
 
