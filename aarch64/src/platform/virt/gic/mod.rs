@@ -92,3 +92,16 @@ pub fn send_sgi(target_cpu: usize, sgi_id: u8) {
         None => {}
     }
 }
+
+/// Initialise the calling (secondary) CPU's GIC interface (SMP-04).
+/// GICv2: banked GICC + ISENABLER0/IPRIORITYR0.  GICv3: per-CPU GICR
+/// wake + SGI frame + ICC_*_EL1 system registers.
+pub fn init_secondary_cpu() {
+    // SAFETY: GIC's write-once discipline — published at BSP init;
+    // the secondary reads lock-free.
+    match unsafe { &*GIC.get() }.as_ref() {
+        Some(Gic::V2(g)) => g.init_secondary_cpu(),
+        Some(Gic::V3(g)) => g.init_secondary_cpu(),
+        None => {}
+    }
+}

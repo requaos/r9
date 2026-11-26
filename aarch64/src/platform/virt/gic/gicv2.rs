@@ -148,4 +148,24 @@ impl Gicv2 {
         unsafe { core::arch::asm!("dsb ishst", options(nostack, preserves_flags)) };
         self.gicd.write(GICD_SGIR, val);
     }
+
+    /// Initialise this (secondary) CPU's GIC interface (SMP-04).
+    /// GICv2's banked registers give each CPU its own GICC and its own
+    /// ISENABLER0/IPRIORITYR0 bank for intids 0-31: the secondary writes
+    /// the same offsets as the BSP but sees its own copies.  PPI 30 is
+    /// the generic timer (CNTP); SGI 0 is the reschedule IPI; SGI 1 is
+    /// the TLB shootdown IPI.
+    pub fn init_secondary_cpu(&self) {
+        // Accept all priorities on this CPU.
+        self.gicc.write(GICC_PMR, 0xff);
+        // Enable this CPU's CPU interface.
+        self.gicc.write(GICC_CTLR, 1);
+        // Enable + prioritize the per-CPU interrupts: SGI 0 (resched),
+        // SGI 1 (shootdown), PPI 30 (timer).  The banked ISENABLER0 /
+        // IPRIORITYR0 / ICFGR0 writes are per-CPU on GICv2 (the enable()
+        // path skips ITARGETSR for intid < 32 — PPIs are hardwired).
+        self.enable(0, 0xA0);
+        self.enable(1, 0xA0);
+        self.enable(30, 0xA0);
+    }
 }
