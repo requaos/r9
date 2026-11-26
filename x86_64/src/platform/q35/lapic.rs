@@ -260,8 +260,6 @@ impl Lapic {
                 println!(
                     "lapic: ICR delivery-status stuck (dest {apic_id:#x}, word {delivery:#x})"
                 );
-                #[cfg(test)]
-                let _ = (apic_id, delivery);
             }
             ApicMode::X2Apic => {
                 let icr = icr_x2apic_value(apic_id, delivery);
@@ -372,7 +370,6 @@ pub fn eoi() {
 /// Send an INIT IPI to `apic_id` (SMP-01) — the first beat of the
 /// INIT-SIPI-SIPI AP startup (SDM Vol 3A §8.4.4): delivery mode INIT,
 /// level assert, physical destination, edge-triggered.
-#[allow(dead_code)] // consumed by smp.rs's start_aps (05-11 Task 2)
 pub fn send_init(apic_id: u32) {
     with(|l| l.send_icr(apic_id, ICR_DM_INIT | ICR_LEVEL_ASSERT));
 }
@@ -380,14 +377,12 @@ pub fn send_init(apic_id: u32) {
 /// Send a Startup IPI to `apic_id` (SMP-01): the AP begins executing at
 /// `vector << 12` (the SIPI page).  Delivery mode SIPI with the vector
 /// in the low byte — the shape QEMU's and KVM's APIC models deliver.
-#[allow(dead_code)] // consumed by smp.rs's start_aps (05-11 Task 2)
 pub fn send_sipi(apic_id: u32, vector: u8) {
     with(|l| l.send_icr(apic_id, ICR_DM_SIPI | u32::from(vector)));
 }
 
 /// Send a fixed IPI to `apic_id` on `vector` (SMP-07) — the TLB
 /// shootdown (0xF0) and reschedule (0xF1) IPIs' delivery path.
-#[allow(dead_code)] // consumed by smp.rs's SmpArch IPI hooks (05-11 Task 2)
 pub fn send_ipi(apic_id: u32, vector: u8) {
     with(|l| l.send_icr(apic_id, ICR_DM_FIXED | u32::from(vector)));
 }
@@ -397,7 +392,6 @@ pub fn send_ipi(apic_id: u32, vector: u8) {
 /// register's top byte.  Hardware-derived (never the published cell),
 /// so it reads correctly on an AP before its `init_ap` and on the BSP
 /// after `init`.
-#[allow(dead_code)] // consumed by 05-12's BSP/AP init (mach.apic_id)
 pub fn current_apic_id() -> u32 {
     // SAFETY: IA32_APIC_BASE (0x1B) is architectural and always valid
     // to read at CPL 0; rdmsr touches no memory.
@@ -502,8 +496,6 @@ pub fn init_ap() {
     }
     #[cfg(not(test))]
     println!("lapic: ap {} online-ready (mode {:?})", current_apic_id(), lapic.mode);
-    #[cfg(test)]
-    let _ = lapic;
 }
 
 /// Program the timer LVT: vector | mode/mask bits.  timer.rs owns the

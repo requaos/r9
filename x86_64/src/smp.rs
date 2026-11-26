@@ -1,0 +1,421 @@
+//! x86_64 SMP bring-up (SMP-01, SMP-02, SMP-07; D-25): the
+//! INIT-SIPI-SIPI AP startup from the ACPI MADT, per-CPU `Mach`
+//! allocation on distinct kernel-half VAs, the LAPIC IPI senders, and
+//! the `SmpArch` registration feeding `port/src/smp.rs`.
+//!
+//! # The SIPI trampoline (SMP-01)
+//!
+//! [`start_aps`] copies `ap_trampoline.S`'s position-independent
+//! 16→32→64-bit entry to physical page [`AP_TRAMPOLINE_PA`] (SIPI vector
+//! 0x08 — the AP starts executing at `vector << 12` in real mode) and
+//! publishes the handoff mailbox at [`AP_MAILBOX_PA`] (inside the same
+//! page): the BSP's `bootpml4` PA (which identity-maps the first 4 GiB,
+//! so the trampoline executes at PA == VA through the mode switches), the
+//! AP's 64 KiB boot stack top (its own Mach's `KStack`), the AP's Mach
+//! VA, its cpu id, and `ap_main`'s high-half VA.  Per AP: `INIT` IPI →
+//! 10 ms → `SIPI(0x08)` → 200 µs → one retry `SIPI` → poll `mach.online`
+//! (SDM Vol 3A §8.4.4's MP initialization sequence).
+//!
+//! # Per-CPU Mach allocation (SMP-02)
+//!
+//! Each AP's Mach is a zeroed, 64 KiB-aligned heap block (the global
+//! heap arena is a `.bss` static inside the shared kernel half, so the
+//! block is mapped under every CR3 with NO PML4 cloning — the RFMEM
+//! hazard 05-RESEARCH Pattern 3.5 names).  CPU 0's Mach stays at
+//! `dat::KMACH` (l.S's mapping); every kernel Mach access on any CPU
+//! reads `%gs:0` ([`crate::dat::mach_ptr`]) instead of hardcoding it.
+//!
+//! # IPIs (SMP-07)
+//!
+//! [`TLB_SHOOTDOWN_VECTOR`] (`0xF0`) and [`RESCHED_VECTOR`] (`0xF1`) are
+//! delivered by `lapic::send_ipi` (dual xAPIC/x2APIC); the trap
+//! dispatch (trap.rs) services them.
+
+use core::alloc::Layout;
+use core::sync::atomic::{AtomicU64, Ordering, fence};
+
+use port::smp::{self, SmpArch};
+#[cfg(not(test))]
+use port::println;
+
+use crate::cpu;
+use crate::dat::{self, Mach, Stack};
+use crate::platform::q35::{acpi, lapic};
+
+// The SIPI AP bring-up trampoline (SMP-01) — assembled into .rodata (it
+// is copied to PA 0x8000 for execution; the kernel's own copy is never
+// jumped into).  Matching main.rs's l.S include discipline.
+#[cfg(not(test))]
+core::arch::global_asm!(include_str!("ap_trampoline.S"), options(att_syntax));
+
+/// The TLB-shootdown IPI vector (SMP-07) — trap.rs's dispatch services
+/// `port::smp::service_shootdown_ipi()` on it.
+pub const TLB_SHOOTDOWN_VECTOR: u8 = 0xF0;
+/// The reschedule IPI vector (SMP-07) — `port::sched`'s idle-cpu kick.
+pub const RESCHED_VECTOR: u8 = 0xF1;
+
+/// The SIPI trampoline's physical page (SIPI vector 0x08).  Well inside
+/// q35's low RAM (0x0..0x9FC00, verified against live boot maps) and
+/// below the Mach mebibyte (0x100000+) and kernel image — and the page
+/// allocator marks everything below the kernel image used, so the page
+/// is never handed out.
+#[cfg(not(test))]
+pub const AP_TRAMPOLINE_PA: u64 = 0x8000;
+/// The BSP→AP mailbox inside the trampoline page.  The code occupies
+/// 0x8000..0x8F00 (the compile-time assert in ap_trampoline.S and
+/// install_trampoline's runtime assert both pin the non-overlap).
+#[cfg(not(test))]
+pub const AP_MAILBOX_PA: u64 = 0x8F00;
+
+// Mailbox word offsets (u64 words).
+#[cfg(not(test))]
+const MB_PML4_PA: usize = 0x00; // BSP's bootpml4 PA
+#[cfg(not(test))]
+const MB_STACK_TOP: usize = 0x08; // the AP's boot stack top (a VA)
+#[cfg(not(test))]
+const MB_MACH_VA: usize = 0x10; // the AP's Mach VA
+#[cfg(not(test))]
+const MB_CPU_ID: usize = 0x18; // the AP's logical cpu id
+#[cfg(not(test))]
+const MB_ENTRY_VA: usize = 0x20; // ap_main's high-half VA
+
+/// The SIPI vector naming the trampoline page (`0x8000 >> 12`).
+#[cfg(not(test))]
+const SIPI_VECTOR: u8 = (AP_TRAMPOLINE_PA >> 12) as u8;
+
+/// The most CPUs this bring-up supports (D-23: never hard-code 2) — the
+/// portable core's bound, so its per-cpu tables cover every cpu here.
+pub const MAX_CPUS: usize = smp::MAX_CPUS;
+
+/// The per-CPU Mach registry: slot `cpu_id` holds that CPU's Mach VA
+/// (0 = not registered).  Slot 0 is the BSP's Mach at `dat::KMACH`,
+/// registered by [`register_port_smp`]; `start_aps` fills the rest.
+/// Read by the IPI senders (cpu id → APIC id) and the online counter.
+static AP_MACH_VAS: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
+
+// ---------------------------------------------------------------------------
+// The SIPI trampoline install + INIT-SIPI-SIPI startup (SMP-01).
+// ---------------------------------------------------------------------------
+
+#[cfg(not(test))]
+unsafe extern "C" {
+    /// The SIPI trampoline's byte span (ap_trampoline.S) — only the
+    /// ADDRESSES are read (the link-sym class, kmem.rs's convention):
+    /// the bytes they bracket are copied to AP_TRAMPOLINE_PA for the
+    /// real-mode AP entry.
+    static ap_trampoline_start: u8;
+    static ap_trampoline_end: u8;
+}
+
+/// Copy the trampoline into its physical page (SMP-01).  Idempotent —
+/// the bytes are read-only constants.
+#[cfg(not(test))]
+fn install_trampoline() {
+    // SAFETY: ap_trampoline_start/end are the link symbols bracketing
+    // ap_trampoline.S's emitted bytes — only their addresses are read
+    // here (the link-sym class).
+    let (start, end) = unsafe {
+        (
+            &raw const ap_trampoline_start as usize,
+            &raw const ap_trampoline_end as usize,
+        )
+    };
+    let len = end - start;
+    // The ap_trampoline.S .if assert is the compile-time half; this is
+    // the runtime half — the code must never overlap the 0x8F00 mailbox.
+    assert!(len < 0xF00, "smp: ap trampoline {len:#x} overlaps the 0x8F00 mailbox");
+    let dst = crate::proc::phys_ptr_mut(AP_TRAMPOLINE_PA);
+    // SAFETY: dst names physical page 0x8000 through the KZERO alias
+    // (phys_ptr_mut's contract — in-window, writable, kernel-owned);
+    // src names the trampoline's `len` linked bytes; the regions cannot
+    // overlap (kernel image vs a low page).  x86 instruction fetch is
+    // coherent with these WB data writes, so no cache maintenance is
+    // needed before the AP executes the copy.
+    unsafe { core::ptr::copy_nonoverlapping(start as *const u8, dst, len) };
+}
+
+/// Spin for `tsc_ticks` TSC cycles (the INIT/SIPI delays, SMP-01).
+/// Invariant TSC under q35 makes the wrap-safe subtraction monotonic
+/// for these millisecond-class waits.
+#[cfg(not(test))]
+fn busy_wait_tsc(tsc_ticks: u64) {
+    let start = cpu::rdtsc();
+    while cpu::rdtsc().wrapping_sub(start) < tsc_ticks {
+        core::hint::spin_loop();
+    }
+}
+
+/// Start one AP (SMP-01): allocate its Mach (zeroed, 64 KiB-aligned,
+/// shared kernel half), publish the mailbox, and run INIT → 10 ms →
+/// SIPI(0x08) → 200 µs → optional second SIPI → poll `mach.online`
+/// with a ~100 ms timeout.  The 10 ms/200 µs delays derive from the
+/// BSP's published timer calibration (TICK_MS = 10 ms, so tsc_delta is
+/// exactly 10 ms of TSC ticks) — the AP bring-up never re-calibrates.
+#[cfg(not(test))]
+fn start_one_ap(cpu_id: usize, apic_id: u32, bootpml4_pa: u64) -> Result<(), &'static str> {
+    let Some(timer) = crate::platform::q35::timer::state() else {
+        return Err("no BSP timer calibration (the delays need the TSC rate)");
+    };
+    let ten_ms = timer.tsc_delta.max(1);
+    let two_hundred_us = (timer.tsc_delta / 50).max(1);
+    let online_timeout = timer.tsc_delta.saturating_mul(10).max(1_000_000);
+
+    // The AP's Mach — a zeroed heap block in the shared kernel half.
+    let layout = Layout::new::<Mach>();
+    // SAFETY: layout names Mach's size/align (64 KiB); the global
+    // allocator honors both (QuickFit's align_offset discipline).  On
+    // success the block is zeroed (alloc_zeroed), page-aligned beyond
+    // requirement, and never freed — a CPU's Mach is kernel-lifetime
+    // state.  Mach's fields are all zero-valid by construction (atomics,
+    // raw pointers, integer arrays), so the zeroed block is a valid Mach.
+    let mach_va = unsafe { alloc::alloc::alloc_zeroed(layout) } as usize;
+    if mach_va == 0 {
+        return Err("ap Mach allocation failed");
+    }
+    // SAFETY: mach_va names the live, zeroed, exclusively owned Mach
+    // allocated above (Mach is zero-valid by construction).
+    let mach = unsafe { &mut *(mach_va as *mut Mach) };
+    mach.init_ap_identity(cpu_id as u32, apic_id);
+    let stack_top = mach.stack.top() as usize;
+
+    // Publish the mailbox (the AP reads it from real/protected mode,
+    // outside Rust's memory model — the volatile-write discipline of
+    // the mb2 stash).
+    let mb = crate::proc::phys_ptr_mut(AP_MAILBOX_PA) as *mut u64;
+    // SAFETY: mb names the mailbox words inside physical page 0x8000
+    // (phys_ptr_mut's in-window contract); the five u64 words written
+    // are the documented mailbox layout, fully overwritten per start.
+    unsafe {
+        mb.add(MB_PML4_PA / 8).write_volatile(bootpml4_pa);
+        mb.add(MB_STACK_TOP / 8).write_volatile(stack_top as u64);
+        mb.add(MB_MACH_VA / 8).write_volatile(mach_va as u64);
+        mb.add(MB_CPU_ID / 8).write_volatile(cpu_id as u64);
+        mb.add(MB_ENTRY_VA / 8).write_volatile(crate::ap_main as usize as u64);
+    }
+    // The mailbox stores happen-before the INIT IPI (the AP's read side
+    // is ordered by the INIT reset itself).
+    fence(Ordering::Release);
+
+    lapic::send_init(apic_id);
+    busy_wait_tsc(ten_ms);
+    lapic::send_sipi(apic_id, SIPI_VECTOR);
+    busy_wait_tsc(two_hundred_us);
+    if !mach.online.load(Ordering::Acquire) {
+        // The SDM's second SIPI (a AP that missed the first while still
+        // in the INIT shadow).
+        lapic::send_sipi(apic_id, SIPI_VECTOR);
+    }
+    let start = cpu::rdtsc();
+    while !mach.online.load(Ordering::Acquire) {
+        if cpu::rdtsc().wrapping_sub(start) > online_timeout {
+            return Err("AP did not come online (online flag timeout)");
+        }
+        core::hint::spin_loop();
+    }
+    // Register the Mach BEFORE announcing the start, so the IPI senders
+    // can name this CPU immediately.
+    AP_MACH_VAS[cpu_id].store(mach_va as u64, Ordering::Release);
+    println!("smp: cpu {cpu_id} online (apic {apic_id:#x})");
+    Ok(())
+}
+
+/// Start every non-BSP enabled CPU the MADT declares (SMP-01), up to
+/// MAX_CPUS, returning the number started.  The BSP is identified by
+/// APIC ID (the MADT's table order is NOT a cpu index), never started
+/// twice.  All publish-once boot state must be complete before the call
+/// (05-12's main.rs sequences it: the APs read the shared kernel half
+/// the moment they run).
+#[cfg(not(test))]
+pub fn start_aps(madt: &acpi::Madt, bootpml4_pa: u64) -> usize {
+    install_trampoline();
+    let bsp_apic = lapic::current_apic_id();
+    let mut started = 0;
+    for i in 0..madt.ncpus {
+        let cpu = madt.cpus[i];
+        if cpu.apic_id == bsp_apic {
+            continue; // the BSP itself
+        }
+        if started >= MAX_CPUS - 1 {
+            println!("smp: more enabled CPUs than MAX_CPUS ({MAX_CPUS}); skipping the rest");
+            break;
+        }
+        let cpu_id = started + 1;
+        match start_one_ap(cpu_id, cpu.apic_id, bootpml4_pa) {
+            Ok(()) => started += 1,
+            Err(e) => println!("smp: cpu {cpu_id} (apic {:#x}): {e}", cpu.apic_id),
+        }
+    }
+    if madt.dropped_cpus > 0 {
+        println!("smp: {} enabled CPUs dropped by the MAX_CPUS cap", madt.dropped_cpus);
+    }
+    started
+}
+
+// ---------------------------------------------------------------------------
+// The SmpArch hooks + registration (SMP-02, SMP-07; D-25).
+// ---------------------------------------------------------------------------
+
+/// The calling cpu's index via `%gs:0` (`Mach.cpu_id`, written once at
+/// the CPU's bring-up before the online flag publishes it).
+fn current_cpu_id() -> usize {
+    dat::this_mach().cpu_id as usize
+}
+
+/// The number of cpus currently online: the registered Mach slots whose
+/// online flag is set.
+fn num_online_cpus() -> usize {
+    let mut n = 0;
+    for slot in &AP_MACH_VAS {
+        let va = slot.load(Ordering::Acquire);
+        if va != 0 {
+            // SAFETY: a non-zero slot names a live, kernel-lifetime Mach
+            // (registered by register_port_smp / start_aps, never
+            // removed).
+            let online = unsafe { &*(va as *const Mach) }.online.load(Ordering::Acquire);
+            if online {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+/// Save RFLAGS and mask IRQs (`pushfq; pop; cli`) — IrqSpinLock's entry
+/// half (SMP-07).  The returned value pairs with [`irq_restore`].
+fn irq_save_disable() -> usize {
+    let flags: u64;
+    // SAFETY: pushfq/popq move RFLAGS through the stack (so NOT
+    // nostack); cli masks interrupts at CPL 0.  No flags claim:
+    // cli itself modifies EFLAGS.IF.
+    unsafe {
+        core::arch::asm!(
+            "pushfq",
+            "popq {flags}",
+            "cli",
+            flags = out(reg) flags,
+            options(att_syntax),
+        );
+    }
+    flags as usize
+}
+
+/// Restore the IRQ state saved by [`irq_save_disable`]: `sti` only when
+/// the saved IF (bit 9, 0x200) was set — the exact inverse of the
+/// save/cli pair, never unmasking a context that entered masked.
+fn irq_restore(saved: usize) {
+    // SAFETY: test/sti at CPL 0, no memory operands; the saved flags
+    // value is the only input.
+    unsafe {
+        core::arch::asm!(
+            "testq ${IF_BIT}, {saved}",
+            "jz 1f",
+            "sti",
+            "1:",
+            IF_BIT = const 0x200u64,
+            saved = in(reg) saved as u64,
+            options(att_syntax, nostack),
+        );
+    }
+}
+
+/// A registered cpu's APIC ID (None: unknown slot — the IPI is then
+/// skipped loudly rather than misrouted).
+fn apic_id_of(cpu: usize) -> Option<u32> {
+    let va = AP_MACH_VAS.get(cpu)?.load(Ordering::Acquire);
+    if va == 0 {
+        return None;
+    }
+    // SAFETY: a non-zero slot names a live, kernel-lifetime Mach
+    // (register_port_smp / start_aps registered it; never removed).
+    Some(unsafe { &*(va as *const Mach) }.apic_id)
+}
+
+/// The reschedule IPI sender (SMP-07): LAPIC vector 0xF1 to the target
+/// cpu's APIC ID.
+fn send_resched_ipi(cpu: usize) {
+    match apic_id_of(cpu) {
+        Some(id) => lapic::send_ipi(id, RESCHED_VECTOR),
+        None => {
+            #[cfg(not(test))]
+            println!("smp: resched ipi to unregistered cpu {cpu} skipped")
+        }
+    }
+}
+
+/// The TLB-shootdown IPI sender (SMP-07): LAPIC vector 0xF0.
+fn send_shootdown_ipi(cpu: usize) {
+    match apic_id_of(cpu) {
+        Some(id) => lapic::send_ipi(id, TLB_SHOOTDOWN_VECTOR),
+        None => {
+            #[cfg(not(test))]
+            println!("smp: shootdown ipi to unregistered cpu {cpu} skipped")
+        }
+    }
+}
+
+/// Flush the calling cpu's TLB (SMP-07): `Some(va)` invalidates the one
+/// page (`invlpg`), `None` reloads CR3 (a full flush of non-global
+/// entries — the boot tables carry no global pages).
+fn local_tlb_flush(va: Option<usize>) {
+    match va {
+        Some(va) => {
+            // SAFETY: invlpg invalidates the TLB entry for the page
+            // containing the operand's effective address on the calling
+            // CPU; the memory contents at va are neither read nor
+            // written.  No `nomem`: a TLB flush must not let the
+            // compiler move memory accesses across it.
+            unsafe {
+                core::arch::asm!(
+                    "invlpg ({va})",
+                    va = in(reg) va as u64,
+                    options(att_syntax, nostack),
+                );
+            }
+        }
+        None => {
+            // SAFETY: reading CR3 and writing it back at CPL 0 flushes
+            // the calling CPU's non-global TLB entries; no memory
+            // contents change.  No `nomem` (same ordering discipline).
+            unsafe {
+                core::arch::asm!(
+                    "movq %cr3, {tmp}",
+                    "movq {tmp}, %cr3",
+                    tmp = out(reg) _,
+                    options(att_syntax, nostack),
+                );
+            }
+        }
+    }
+}
+
+/// The arch timer's tick count (the watchdog's clock) — the q35 timer's
+/// 100 Hz TICKS.
+fn arch_ticks() -> u64 {
+    crate::platform::q35::timer::ticks()
+}
+
+/// The SMP-03 lost-wakeup seam.  A no-op until 05-12's proc.rs wires
+/// `wake_pending` onto `Mach` (the port-side `prepare_block` call sites
+/// are already armed; the arch hook joins when the proc machinery's
+/// per-CPU migration lands).
+fn prepare_block() {}
+
+/// Register the x86_64 `SmpArch` hooks with `port::smp` (SMP-02, SMP-07,
+/// D-25).  Called once from main.rs after the BSP's Mach is initialized
+/// and before CPU 1 is started (05-12 wires the call).
+pub fn register_port_smp() {
+    // Slot 0 is the BSP's Mach at dat::KMACH (l.S's mapping contract).
+    AP_MACH_VAS[0].store(dat::KMACH as u64, Ordering::Release);
+    static ARCH: SmpArch = SmpArch {
+        current_cpu_id,
+        num_online_cpus,
+        irq_save_disable,
+        irq_restore,
+        send_resched_ipi,
+        send_shootdown_ipi,
+        local_tlb_flush,
+        ticks: arch_ticks,
+        prepare_block,
+    };
+    smp::register_arch(&ARCH);
+}
