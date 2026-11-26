@@ -86,7 +86,7 @@ exec rm -f $env(R9_TIER1_LOG)
 set R9_MACHINE [expr {[info exists env(R9_MACHINE)] ? $env(R9_MACHINE) : "virt,gic-version=3"}]
 set R9_CPU [expr {[info exists env(R9_CPU)] ? $env(R9_CPU) : "cortex-a72"}]
 set R9_ACCEL [expr {[info exists env(R9_ACCEL)] ? $env(R9_ACCEL) : "tcg"}]
-spawn $QEMU -M $R9_MACHINE -cpu $R9_CPU -smp 1 -m 1024M \
+spawn $QEMU -M $R9_MACHINE -cpu $R9_CPU -smp 2 -m 1024M \
     -accel $R9_ACCEL \
     -kernel $env(R9_KERNEL) \
     -dtb $env(R9_DTB) \
