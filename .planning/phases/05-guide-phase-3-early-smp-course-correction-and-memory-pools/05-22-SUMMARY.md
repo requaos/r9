@@ -59,7 +59,7 @@ key-files:
 key-decisions:
   - "The .bootdata RO fault (silent pre-banner wedge on EVERY boot, latent since 05-09) was found by early-uart milestone markers and fixed in kernel.ld, not by a code workaround"
   - "exec_bootstrap's secondary start moved after activate_first: the Ready⟺enqueued contract makes a started-but-unclaimed pid 1 stealable — the start must wait for the claim"
-  - "The remaining HVF-only fork-sweep flake is recorded as a deferred item rather than chased past the fix-attempt limit; it is the WINDOWS #49 class amplified by 2-CPU fork concurrency, and TCG is the project's declared truth venue for that class"
+  - "The HVF-only fork-sweep residual was root-caused and fixed in a follow-up debug session (owner chose debug-now over the TCG-truth-venue doctrine): it was not the pagealloc/TextCopy class, but two kernel-stack ownership violations — a publish-before-swtch handoff and an IRQ-unmasked sched entry (see Post-Halt Closure)"
 
 patterns-established:
   - "SMP defect forensics by early-uart milestone markers + qemu hvf_data_abort tracing (the identity alias dies at the TTBR0 teardown — early-uart probes must not run past it)"
@@ -94,24 +94,31 @@ coverage:
         status: pass
     human_judgment: false
   - id: D4
-    description: "FULL smoke determinism at -smp 2 on both accels: TCG gicv2 green twice consecutively; HVF gicv3 passes ~45% (6/13 clean canonical runs) — the residual fork/exec-sweep corruption (wire garbage at the rc restart, or a mid-sweep stall) is the residual defect recorded in deferred-items.md"
+    description: "FULL smoke determinism at -smp 2 on both accels: TCG gicv2 green twice consecutively; HVF gicv3 now green twice consecutively on the final tree (8/8 post-fix total, up from 6/13) after the kernel-stack-ownership fix; the R9_SMP=1 leg stays green and marker-free"
     requirement: SMP-04
     verification:
       - kind: e2e
-        ref: "TCG: R9_GICV2=1 nix run .#boot-r9-smoke PASS x2; HVF: nix run .#boot-r9-smoke PASS 6/13"
-        status: fail
-    human_judgment: true
-    rationale: "The HVF leg is not deterministically green — a residual SMP-concurrency defect remains (see Issues). A human must decide whether the plan closes on the TCG-truth-venue doctrine or the phase continues debugging first."
+        ref: "TCG: R9_GICV2=1 nix run .#boot-r9-smoke PASS x2; HVF: nix run .#boot-r9-smoke PASS x2 consecutively on HEAD 665c94e (8/8 post-fix); R9_SMP=1 PASS x2"
+        status: pass
+    human_judgment: false
 
 # Metrics
 duration: ~6.5h wall (includes a provider-outage interruption mid-verification and the long defect chain)
 completed: 2026-11-26
-status: halted
+status: complete
 ---
 
 # Phase 5 Plan 22: aarch64 Two-CPU Bring-Up and the R9_SMP Smoke Gate Summary
 
-**aarch64 CPU 1 PSCI bring-up, per-CPU timers, SGI 0/1 dispatch and the boot TLB-shootdown self-check are live and gate-proven on TCG (twice-consecutive green) and at -smp 1; the HVF -smp 2 leg boots and passes the full smoke ~45% of runs — a residual HVF-only fork-sweep corruption remains open (deferred-items.md).**
+**aarch64 CPU 1 PSCI bring-up, per-CPU timers, SGI 0/1 dispatch and the boot TLB-shootdown self-check are live and gate-proven at `-smp 2` on BOTH accels: TCG gicv2 and HVF gicv3 each pass the full smoke twice consecutively on the final tree, and the `R9_SMP=1` leg stays green and marker-free. The HVF residual that halted the first pass was root-caused in a follow-up debug session and fixed (kernel-stack ownership), not carried.**
+
+## Post-Halt Closure (owner decision: debug now)
+
+The first pass halted at a residual HVF-only fork/exec-sweep corruption (~45%, 6/13). The owner rejected the TCG-truth-venue shortcut because Waves 12/13 migrate the aarch64 gates to `-smp 2`, and chose a dedicated debug session instead. Outcome:
+
+- **Root cause (confirmed, both executor guesses eliminated):** two kernel-stack ownership violations exposed only by real HVF interrupt timing on two CPUs. (1) `reschedule()` published a preempted proc Ready + enqueued while the CPU still ran on its 16 KiB kernel stack, then spent the long `sched: switch` console print there (every UART byte is an MMIO exit on HVF), so a sibling CPU could `trap_return` into the same stack; the overlapping frames corrupted the console MCS queue's stack-resident `LockNode`s and both CPUs spun forever in the CONS lock. `block()` had the same publish-before-`swtch` shape. (2) `secondary_main` unmasked IRQs before entering the sched loop, so an IRQ in the `pick_next`→`trap_return` handoff overwrote `PerCpu.cur_frame` with an EL1h scheduler-stack frame.
+- **Fix:** explicit `Proc::on_cpu` kstack-ownership token; `reschedule()` only parks and the sched loop releases the proc after leaving its stack; `pick_next` refuses/requeues `on_cpu` procs with a debug tripwire; sched loop IRQ-masked; `dispatch_irq` EOIs before preempt. Commits `339036f` (fix), `665c94e` (module contract), `11be789` (WINDOWS #12 + deferred-items closed), `bdcc644` (resolved debug session + knowledge base).
+- **Verification:** HVF gicv3 `-smp 2` 8/8 post-fix (vs 6/13 pre-fix), independently re-confirmed twice consecutively by the orchestrator; TCG gicv2 `-smp 2` PASS; `R9_SMP=1` PASS; `cargo xtask boot-test --arch aarch64 --config virtmulti --accel hvf` PASS; `cargo xtask check`/`test`/`clippy` green. Debug session archived at `.planning/debug/resolved/aarch64-smp2-hvf-corruption.md`.
 
 ## Performance
 
@@ -125,7 +132,7 @@ status: halted
 - CPU 1 PSCI bring-up is real: full `secondary_main` (GIC secondary interface, per-CPU timer arm, online publish, sched_loop entry) replaces the 05-09 wfi stub; `smp: cpu 1 online` and `smp: tlb shootdown ok` print on both accels.
 - The `R9_SMP`-aware smoke gate defaults to `-smp 2`, asserts the two SMP markers when `R9_SMP >= 2`, and keeps the `-smp 1` leg marker-free and green (2/2).
 - The `-smp 2` boot proof surfaced and fixed a chain of nine latent defects — including one (the `.bootdata` read-only-mapping fault, latent since 05-09) that wedged EVERY aarch64 boot before the banner.
-- TCG gicv2 `-smp 2` is twice-consecutive ALL STAGES PASS; R9_SMP=1 is 2/2; HVF gicv3 `-smp 2` reaches the shell and passes the full sweep in ~45% of runs.
+- TCG gicv2 `-smp 2` is twice-consecutive ALL STAGES PASS; R9_SMP=1 is 2/2; HVF gicv3 `-smp 2` is now 8/8 post-fix and twice-consecutive on the final tree after the Post-Halt Closure fix.
 
 ## Task Commits
 
@@ -157,7 +164,7 @@ Each task was committed atomically:
 - The secondary's CPACR fix lives in `secondary_main` (Rust), mirroring `init_vm`'s documented precedent, not in l.S.
 - The rescheduler now treats the run queues as the only readiness publication (SMP-11's `Ready ⟺ enqueued`), ending the raw table scan that could pick a half-built child.
 - Exit's last frees are deferred to the exiting CPU's sched loop; the rfork unwind path keeps the direct free (a never-run child's pages are nobody's live state).
-- Stopped at the fix-attempt limit on the residual HVF flake and recorded it with a full forensic trail instead of shipping a weak assertion.
+- Stopped at the fix-attempt limit on the residual HVF flake and recorded it with a full forensic trail; the owner then chose debug-now, and the follow-up session root-caused and fixed it (see Post-Halt Closure) rather than shipping a weak assertion.
 
 ## Deviations from Plan
 
