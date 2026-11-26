@@ -16,10 +16,17 @@
 //! block/wakeup machinery: the arch-side hook marks Blocked + swtch'es;
 //! a write or close wakes the registered waiters).  The block/wake is
 //! dependency-injected (the devproc set_post_hook idiom) because port
-//! cannot see the arch's proc table.  Invariant (load-bearing): syscalls
-//! are serialized (single CPU, IRQ-masked syscall context), so
-//! register-waiter (under the Pipe lock) → drop-lock → block() cannot
-//! lose a wakeup — the waker can only run after block() swtch'es.
+//! cannot see the arch's proc table.  Invariant (load-bearing, SMP-03,
+//! D-22): while holding the Pipe lock the reader/writer calls
+//! `crate::smp::prepare_block()` (clearing the current proc's
+//! `wake_pending` with Release) BEFORE inserting its pid into the waiter
+//! list, then drops the lock and calls `block()` — any concurrent
+//! `wake(pid)` from the other CPU that runs after the insertion sets
+//! `wake_pending`, and the arch `block()` (plans 05-10/05-12) consumes
+//! that flag and returns immediately instead of parking.  Register-under-
+//! lock alone could lose a wake the moment a second CPU scheduled (the
+//! waker no longer waits for our block() swtch); prepare_block closes
+//! the window.
 //!
 //! Close semantics (donor pipeclose): the last close of end i hangs up
 //! q[1-i] (its readers see EOF after draining) and closes q[i] (writers
@@ -334,10 +341,13 @@ pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
     };
     // The blocking loop (donor qread): drain if bytes; EOF if hungup;
     // otherwise register as a waiter and block — the lock is DROPPED
-    // before block() (a writer must take it to wake us), and the
-    // register-under-lock + syscall-serialization invariant (see the
-    // module header) makes the wakeup un-losable.  The hooks are fetched
-    // lazily: a read that never blocks never requires registration.
+    // before block() (a writer must take it to wake us).  The 2-CPU
+    // lost-wakeup discipline (SMP-03, D-22; the module header):
+    // `crate::smp::prepare_block()` runs under the lock BEFORE the pid
+    // enters `waiters`, so a wake from the other CPU landing any time
+    // after the insertion sets `wake_pending` and the arch `block()`
+    // consumes it instead of parking.  The hooks are fetched lazily: a
+    // read that never blocks never requires registration.
     let mut h: Option<PipeHooks> = None;
     loop {
         let node = LockNode::new();
@@ -378,6 +388,10 @@ pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
                 return Err("interrupted");
             }
             let pid = (h.unwrap().current)();
+            // SMP-03 (D-22): clear wake_pending BEFORE the pid becomes
+            // wake-targetable; a concurrent wake after the push sets it
+            // and block() consumes it instead of sleeping.
+            crate::smp::prepare_block();
             if !q.waiters.contains(&pid) {
                 q.waiters.push(pid);
             }
@@ -433,6 +447,10 @@ pub fn write(c: &mut Chan, buf: &[u8], _offset: u64) -> Result<u64> {
                     return Err("interrupted");
                 }
                 let pid = (h.as_ref().unwrap().current)();
+                // SMP-03 (D-22): prepare_block before the pid enters
+                // wwaiters — the same 2-CPU lost-wakeup invariant as the
+                // read loop (see the module header).
+                crate::smp::prepare_block();
                 if !q.wwaiters.contains(&pid) {
                     q.wwaiters.push(pid);
                 }
@@ -445,8 +463,8 @@ pub fn write(c: &mut Chan, buf: &[u8], _offset: u64) -> Result<u64> {
             }
             return Ok(n as u64);
         }
-        // Park until a reader drains (register-under-lock + drop +
-        // block — the wakeup-loss-free discipline).
+        // Park until a reader drains (prepare_block + register-under-lock
+        // + drop + block — the 2-CPU wakeup-loss-free discipline, SMP-03).
         (h.as_ref().unwrap().block)();
     }
 }

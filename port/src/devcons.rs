@@ -702,9 +702,13 @@ pub fn write(c: &mut crate::dat::Chan, buf: &[u8]) -> crate::Result<u64> {
 // by the TICK (timer.rs's cons_rx_pending check → proc::cons_input_wake)
 // — the tick's PROC_TABLE take from trap context is the reschedule()
 // precedent; the reader then resumes, drains, and processes in ITS OWN
-// syscall context.  register-waiter → drop-lock → block cannot lose a
-// wake: syscalls are serialized (single CPU, IRQ-masked), so the tick can
-// only fire after block() swtch'es (devpipe's documented invariant).
+// syscall context.  The 2-CPU lost-wakeup discipline (SMP-03, D-22):
+// `crate::smp::prepare_block()` runs under the INPUT lock BEFORE the pid
+// enters `waiters`, clearing the current proc's `wake_pending`; a tick or
+// DEL wake from the other CPU landing any time after the insertion sets
+// the flag, and the arch `block()` (plans 05-10/05-12) consumes it and
+// returns immediately instead of parking.  (The old invariant — "the tick
+// can only fire after block() swtch'es" — died with the second CPU.)
 //
 // DoS bound: the input queue is bounded at 4 KiB; on overrun the
 // OLDEST bytes are dropped with a one-line console warning — the IRQ
@@ -1015,9 +1019,14 @@ fn cons_read(buf: &mut [u8]) -> crate::Result<u64> {
             return Ok(n);
         }
         // 3. Nothing to return — register as a waiter and block until
-        //    the tick readies us (input pending).
+        //    the tick readies us (input pending).  SMP-03 (D-22):
+        //    prepare_block clears wake_pending under the INPUT lock
+        //    BEFORE the pid enters waiters, so a concurrent tick/DEL
+        //    wake after the insertion is consumed by the arch block()
+        //    instead of being lost (the LOCKING rule above).
         {
             let mut inq = INPUT.lock(&node);
+            crate::smp::prepare_block();
             if !inq.waiters.contains(&pid) {
                 inq.waiters.push(pid);
             }
