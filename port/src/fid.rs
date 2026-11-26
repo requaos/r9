@@ -71,9 +71,9 @@
 //! (4,096..=16,384 slots x 16..=32 shards).
 //! [`FidTable::shard_count_for_cpus`] is `(num_cpus * 2).next_power_of_two()
 //! .clamp(4, 256)`.  [`FidTable::alloc`] routes to the calling CPU's shard
-//! (`cpu_id & shard_mask`) and falls over round-robin; the CPU-id source in
-//! `port/` arrives with the SMP work, so the table routes from CPU 0 until
-//! `port::smp::current_cpu_id()` exists (plan 05-08).
+//! (`crate::smp::current_cpu_id() & shard_mask` — the portable SMP hook of
+//! plan 05-07, wired in plan 05-08 per D-12; CPU 0 until an arch registers)
+//! and falls over round-robin.
 //!
 //! # The capability is a bearer token within the domain (WIRE-07, D-13, P8)
 //!
@@ -114,6 +114,7 @@ use crypto::key::Key;
 use ds::slab::{AllocMeta, NoSlabProbe, SlabProbe, SlabSlots};
 
 use crate::mcslock::{Lock, LockNode};
+use crate::smp::LockRank;
 
 /// The `StatefulHandle` wire length in bytes (WIRE-07).
 pub const STATEFUL_HANDLE_LEN: usize = 8;
@@ -465,11 +466,11 @@ const FID_ENTRY_WORDS: usize = 7;
 /// alloc routing masks by `shards - 1`, so the count is a power of two (D-12).
 const MAX_SHARDS: usize = 256;
 
-/// The CPU whose shard an allocation starts at.  Phase 5 brings up SMP after
-/// this plan, so every alloc routes from CPU 0 until `port::smp` lands and
-/// this helper is wired to `port::smp::current_cpu_id()` (D-12, plan 05-08).
+/// The CPU whose shard an allocation starts at: the calling CPU's id from
+/// the portable SMP hook (D-12, plan 05-08) — CPU 0 until an arch registers
+/// its `SmpArch` (plans 05-09/05-11), so single-CPU behavior is unchanged.
 fn current_cpu_hint() -> usize {
-    0
+    crate::smp::current_cpu_id()
 }
 
 /// One shard of a [`FidTable`]: a flat seqlock slot array plus the shard-local
@@ -572,7 +573,7 @@ impl<P: SlabProbe + Clone> FidTable<P> {
         for _ in 0..shards {
             built.push(FidShard {
                 slots: SlabSlots::with_probe(slots_per_shard, probe.clone()),
-                meta: Lock::new("fid-meta", AllocMeta::new(slots_per_shard)),
+                meta: Lock::new_ranked("fid_shard", LockRank::FidShard, AllocMeta::new(slots_per_shard)),
             });
         }
         Ok(FidTable { shards: built.into_boxed_slice(), domain_secret, epoch })
@@ -605,8 +606,9 @@ impl<P: SlabProbe + Clone> FidTable<P> {
     ///
     /// The entry's `client_id` and `epoch` are set here; its `fid_key` is kept
     /// as a record of the client's fid number and is never looked up (D-07).
-    /// The alloc starts at the calling CPU's shard (`current_cpu_hint() &
-    /// shard_mask` — CPU 0 until `port::smp` lands, plan 05-08) and falls over
+    /// The alloc starts at the calling CPU's shard
+    /// (`crate::smp::current_cpu_id() & shard_mask`, D-12 — CPU 0 until an
+    /// arch registers its `SmpArch`) and falls over
     /// round-robin when the shard is full, so an alloc never fails for
     /// hash-clustering reasons (D-12); only every shard full is an error.  The
     /// shard's `meta` lock is held across the free-list pop and the slot

@@ -565,11 +565,45 @@ mod rank_watch {
     }
 }
 
+/// Whether the calling context's per-cpu debug identity is real.  The
+/// rank/watchdog machinery is per-cpu state, so it only works where the
+/// cpu identity is real:
+///
+/// - unit tests (`cfg(test)`): every thread simulates its own cpu (the
+///   `thread_local!` overrides) — always real;
+/// - the kernel after [`register_arch`]: per-cpu ids come from
+///   TPIDR_EL1 / GS base — real;
+/// - host INTEGRATION tests (`port/tests/*.rs` link port as a plain
+///   dependency, so `cfg(test)` is unset): every thread falls through to
+///   the default hooks and reports cpu 0, so ALL threads would share one
+///   `CPUS[0]` rank stack — one thread's push looks like another's held
+///   lock (spurious equal-rank violation panics and release-without-hold
+///   panics under parallel `cargo test`).  Not real: the checks are
+///   skipped there.  The MCS discipline itself is still fully exercised;
+///   the rank/watchdog assertions keep their teeth in unit tests and in
+///   debug/gate kernel builds (D-26), which is where the two-cpu gate
+///   runs.
+#[cfg(debug_assertions)]
+#[inline(always)]
+fn cpu_debug_identity_is_real() -> bool {
+    #[cfg(test)]
+    {
+        true
+    }
+    #[cfg(not(test))]
+    {
+        ARCH.get().is_some()
+    }
+}
+
 /// A lock acquisition of `rank`/`name` begins on this cpu: panics naming
 /// BOTH the held and the requested lock when the order is violated
 /// (`rank <= ` the top held rank), then records the hold.
 #[cfg(debug_assertions)]
 pub fn rank_before_acquire(rank: LockRank, name: &'static str) {
+    if !cpu_debug_identity_is_real() {
+        return;
+    }
     rank_watch::acquire(rank, name);
 }
 /// Release builds carry no rank stack (D-26): a zero-cost no-op.
@@ -581,6 +615,9 @@ pub fn rank_before_acquire(_rank: LockRank, _name: &'static str) {}
 /// set (LIFO or not); releasing a lock not held panics by name.
 #[cfg(debug_assertions)]
 pub fn rank_after_release(rank: LockRank, name: &'static str) {
+    if !cpu_debug_identity_is_real() {
+        return;
+    }
     rank_watch::release(rank, name);
 }
 /// Release builds carry no rank stack (D-26): a zero-cost no-op.
@@ -591,6 +628,9 @@ pub fn rank_after_release(_rank: LockRank, _name: &'static str) {}
 /// The calling cpu made progress (the arch timer tick calls this).
 #[cfg(debug_assertions)]
 pub fn watchdog_heartbeat() {
+    if !cpu_debug_identity_is_real() {
+        return;
+    }
     rank_watch::heartbeat();
 }
 /// Release builds carry no watchdog (D-26): a zero-cost no-op.
@@ -601,6 +641,9 @@ pub fn watchdog_heartbeat() {}
 /// The calling cpu begins waiting on `name` (held by `owner_cpu`).
 #[cfg(debug_assertions)]
 pub fn watchdog_begin_wait(name: &'static str, owner_cpu: u32) {
+    if !cpu_debug_identity_is_real() {
+        return;
+    }
     rank_watch::begin_wait(name, owner_cpu);
 }
 /// Release builds carry no watchdog (D-26): a zero-cost no-op.
@@ -611,6 +654,9 @@ pub fn watchdog_begin_wait(_name: &'static str, _owner_cpu: u32) {}
 /// The calling cpu's wait ended.
 #[cfg(debug_assertions)]
 pub fn watchdog_end_wait() {
+    if !cpu_debug_identity_is_real() {
+        return;
+    }
     rank_watch::end_wait();
 }
 /// Release builds carry no watchdog (D-26): a zero-cost no-op.
@@ -625,6 +671,9 @@ pub fn watchdog_end_wait() {}
 /// the wait) never trip it.
 #[cfg(debug_assertions)]
 pub fn watchdog_check_all(threshold_ticks: u64) {
+    if !cpu_debug_identity_is_real() {
+        return;
+    }
     rank_watch::check_all(threshold_ticks);
 }
 /// Release builds carry no watchdog (D-26): a zero-cost no-op.

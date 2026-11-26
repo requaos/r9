@@ -813,7 +813,8 @@ fn listen_open(c: &Chan, p: Proto, id: usize, mode: u32) -> Result<Chan> {
                 && let Some(pool) = cv.pool.as_ref()
             {
                 let sel = cv.sel;
-                let mut g = stack::STACK.enter().expect("devip: stack contended");
+                let node = LockNode::new();
+                let mut g = stack::STACK.lock(&node);
                 if let Some(core) = g.core_mut(sel) {
                     for &h in pool.members() {
                         TCP_RX_SLOTS[id].arm(pid);
@@ -871,7 +872,8 @@ fn tcp_listen_pop(c: &Chan, id: usize, mode: u32) -> Result<Option<Chan>> {
             let t = conv::TABLES.lock(&node);
             t.table(Proto::Tcp)[id].sel
         };
-        let g = stack::STACK.enter().expect("devip: stack contended");
+        let node = LockNode::new();
+        let g = stack::STACK.lock(&node);
         let Some(core) = g.core_ref(sel) else {
             return Err("devip: no bound medium");
         };
@@ -893,7 +895,8 @@ fn tcp_listen_pop(c: &Chan, id: usize, mode: u32) -> Result<Option<Chan>> {
             // (the donor drops on a full incall); the listen errors
             // Enodev (the clone-exhaustion string, contract §3).
             let sel = t.table(Proto::Tcp)[id].sel;
-            let mut g = stack::STACK.enter().expect("devip: stack contended");
+            let node = LockNode::new();
+            let mut g = stack::STACK.lock(&node);
             if let Some(core) = g.core_mut(sel) {
                 core.sockets.get_mut::<smoltcp::socket::tcp::Socket>(h).abort();
                 core.sockets.remove(h);
@@ -990,7 +993,8 @@ fn conv_file_mode(p: Proto, id: usize, tag: u64) -> (u32, u64) {
             let n = match c.sock {
                 Some(h) => {
                     let sel = c.sel;
-                    let g = stack::STACK.enter().expect("devip: stack contended");
+                    let node = LockNode::new();
+                    let g = stack::STACK.lock(&node);
                     match g.core_ref(sel) {
                         Some(core) => match p {
                             Proto::Icmp => core.sockets.get::<smoltcp::socket::icmp::Socket>(h).recv_queue() as u64,

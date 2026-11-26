@@ -127,7 +127,8 @@ fn mirror_default_add(nexthop: &[u8; 16]) -> Result<()> {
     if nexthop.iter().all(|&b| b == 0) {
         return Ok(());
     }
-    let mut g = stack::STACK.enter().expect("devip: stack contended");
+    let node = LockNode::new();
+    let mut g = stack::STACK.lock(&node);
     // The default route serves the real network — the ETHER core when
     // bound (08-06), else the loopback core (the loopback-era gates never
     // add one; the fallback keeps the mirror well-defined).
@@ -153,7 +154,8 @@ fn mirror_default_add(nexthop: &[u8; 16]) -> Result<()> {
 
 /// Mirror a default-route removal out of smoltcp's Routes.
 fn mirror_default_remove(v4: bool) {
-    let mut g = stack::STACK.enter().expect("devip: stack contended");
+    let node = LockNode::new();
+    let mut g = stack::STACK.lock(&node);
     let core = if g.ether.is_some() { g.ether.as_mut() } else { g.core.as_mut() };
     let Some(core) = core else { return };
     if v4 {

@@ -324,7 +324,8 @@ pub(crate) fn unbind(id: usize) -> Result<()> {
     // construction OUTSIDE the stack cell" discipline, mirrored to the
     // teardown).
     let taken = {
-        let mut g = stack::STACK.enter().expect("devip: stack contended");
+        let node = LockNode::new();
+        let mut g = stack::STACK.lock(&node);
         match kind {
             medium::MediumKind::Loopback => g.core.take(),
             medium::MediumKind::Ether => g.ether.take(),
@@ -399,7 +400,8 @@ pub(crate) fn add(id: usize, args: &[&[u8]], tentative: bool) -> Result<()> {
             if pushed >= IFACE_MAX_ADDR_COUNT {
                 return Err("devip: too many addresses");
             }
-            let mut g = stack::STACK.enter().expect("devip: stack contended");
+            let node = LockNode::new();
+            let mut g = stack::STACK.lock(&node);
             if let Some(core) = g.core_mut(sel) {
                 let v6 = smoltcp::wire::Ipv6Address::from(ip);
                 core.iface.update_ip_addrs(|addrs| {
@@ -460,7 +462,8 @@ pub(crate) fn add(id: usize, args: &[&[u8]], tentative: bool) -> Result<()> {
     if !lifc.absorbed && !lifc.tentative {
         // smoltcp learns the unicast, DAD-confirmed address — on the
         // ifc's OWN core (the two-core seam, 08-06); v6 joined in 08-07.
-        let mut g = stack::STACK.enter().expect("devip: stack contended");
+        let node = LockNode::new();
+        let mut g = stack::STACK.lock(&node);
         let core = g.core_mut(sel).ok_or("devip: no bound medium")?;
         if is_v4(&ip) {
             let v4 = v4_of(&ip).unwrap();
@@ -493,7 +496,8 @@ pub(crate) fn add(id: usize, args: &[&[u8]], tentative: bool) -> Result<()> {
     if pushed && sel == stack::CoreSel::Ether
         && let Some(v4) = v4_of(&ip)
     {
-        let mut g = stack::STACK.enter().expect("devip: stack contended");
+        let node = LockNode::new();
+        let mut g = stack::STACK.lock(&node);
         if let Some(core) = g.core_mut(stack::CoreSel::Ether) {
             core.dev.send_gratuitous_arp(v4);
         }
@@ -525,7 +529,8 @@ pub(crate) fn remove(id: usize, args: &[&[u8]]) -> Result<()> {
     // PUSHED — an absorbed or tentative lifc never reached smoltcp) —
     // on the ifc's OWN core (the two-core seam, 08-06); v6 joined 08-07.
     if !lifc.absorbed && !lifc.tentative {
-        let mut g = stack::STACK.enter().expect("devip: stack contended");
+        let node = LockNode::new();
+        let mut g = stack::STACK.lock(&node);
         if let Some(core) = g.core_mut(sel) {
             if is_v4(&lifc.local) {
                 let v4 = v4_of(&lifc.local).unwrap();
@@ -627,7 +632,8 @@ fn add6(id: usize, args: &[&[u8]]) -> Result<()> {
             return Err("ipifc not yet bound to device");
         };
         let sel = sel_of(ifc.medium);
-        let g = stack::STACK.enter().expect("devip: stack contended");
+        let node = LockNode::new();
+        let g = stack::STACK.lock(&node);
         g.core_ref(sel).and_then(|core| core.dev.mac())
     };
     let Some(mac) = mac else {
@@ -686,7 +692,8 @@ fn add6_record(
                 if pushed >= IFACE_MAX_ADDR_COUNT {
                     return Err("devip: too many addresses");
                 }
-                let mut g = stack::STACK.enter().expect("devip: stack contended");
+                let node = LockNode::new();
+                let mut g = stack::STACK.lock(&node);
                 if let Some(core) = g.core_mut(sel) {
                     core.iface.update_ip_addrs(|addrs| {
                         let _ = addrs.push(IpCidr::Ipv6(smoltcp::wire::Ipv6Cidr::new(
@@ -725,7 +732,8 @@ fn add6_record(
             origint: 0,
         };
         if !lifc.absorbed {
-            let mut g = stack::STACK.enter().expect("devip: stack contended");
+            let node = LockNode::new();
+            let mut g = stack::STACK.lock(&node);
             let core = g.core_mut(sel).ok_or("devip: no bound medium")?;
             core.iface.update_ip_addrs(|addrs| {
                 let _ = addrs.push(IpCidr::Ipv6(smoltcp::wire::Ipv6Cidr::new(

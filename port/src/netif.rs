@@ -48,25 +48,26 @@
 //!   canonical record and its IRQ-side mirror in one critical section);
 //!   INGRESS → NETIF never happens, and the IRQ side never touches
 //!   NETIF, so the nesting cannot deadlock.
-//! - `INGRESS` is a `BusyCell` (mcslock.rs's non-spinning sibling) —
-//!   the plan's sanctioned "small lock-free handoff": the IRQ retire
-//!   (the only producer) and the data-file read (the only consumer)
-//!   both `enter()` it.  On this kernel the two contexts are mutually
-//!   exclusive in TIME (syscalls run IRQ-masked; the handler runs only
-//!   from EL0 or the sched idle wfi — the Phase-4 invariant), so
-//!   `enter()` is provably uncontended; the BusyCell makes a violation
-//!   of that invariant a fail-fast None (accounted as a soverflow drop)
-//!   instead of a spin-deadlock.  INGRESS is never held across
+//! - `INGRESS` is an [`IrqSpinLock`] ranked [`LockRank::NetIrq`] (90)
+//!   (SMP-03, D-22, D-26): the IRQ retire (the only producer) and the
+//!   data-file read (the only consumer) both lock it, and the lock's own
+//!   IRQ mask/restore closes the same-CPU IRQ re-entry window — so the
+//!   discipline holds when a second CPU runs an IRQ handler concurrently
+//!   with a syscall (the old single-CPU `BusyCell`'s "provably
+//!   uncontended in TIME" invariant is gone with two CPUs; the ranked
+//!   spin replaces the fail-fast None).  INGRESS is never held across
 //!   block()/sched() either (the read path enters, checks, registers a
 //!   waiter, DROPS, then blocks — devpipe's register-under-lock →
-//!   drop-lock → block() shape, with the BusyCell in the lock's place).
+//!   drop-lock → block() shape, with the `prepare_block`/`wake_pending`
+//!   2-CPU lost-wakeup invariant of devip/conv.rs's WaitPids::register).
 //!   The IRQ-side wake call happens AFTER the guard drops (INGRESS is
 //!   never held while the wake hook takes PROC_TABLE).
 //! - No allocation happens in IRQ context: each conversation's frame
 //!   store is preallocated at clone-open (syscall context) — the
 //!   allocator's lock is a syscall-context lock too.
 //!
-//! smp=1 this era — there is no cross-CPU sharing to model.
+//! Two CPUs schedule this era (SMP-03): the cross-CPU sharing above is
+//! the model.
 
 #![forbid(unsafe_code)]
 
@@ -75,7 +76,8 @@ extern crate alloc;
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
-use crate::mcslock::{BusyCell, Lock, LockNode};
+use crate::mcslock::{IrqSpinLock, Lock, LockNode};
+use crate::smp::LockRank;
 use crate::{MAX_WAITERS, Result};
 
 // ---------------------------------------------------------------------------
@@ -192,13 +194,14 @@ pub(crate) fn publish(mac: [u8; 6]) {
     });
     // The IRQ-side demux reads the addresses from INGRESS (never the
     // NETIF lock) — mirror them now, before any frame can arrive.
-    let mut ig = INGRESS.enter().expect("netif: publish with INGRESS contended (boot bug)");
+    let ig_node = LockNode::new();
+    let mut ig = INGRESS.lock(&ig_node);
     ig.addr = mac;
     ig.bcast = [0xff; 6];
 }
 
 // ---------------------------------------------------------------------------
-// The IRQ↔syscall handoff (INGRESS — the BusyCell discipline above).
+// The IRQ↔syscall handoff (INGRESS — the IrqSpinLock discipline above).
 // ---------------------------------------------------------------------------
 
 /// ETHERMINTU / ETHERMAXTU (9k's etherif.h:4-5) — the write path's
@@ -290,8 +293,8 @@ impl ConvSlot {
 
 /// The handoff state the IRQ retire touches (plus the counters — the
 /// stats file reads them here, live).  All plain data under the
-/// BusyCell: no atomics needed because the cell's enter() IS the
-/// synchronization, and the kernel invariant makes it uncontended.
+/// IrqSpinLock: no atomics needed because the lock IS the
+/// synchronization — on two CPUs included (D-22).
 pub(crate) struct IngressState {
     convs: [ConvSlot; NFILE],
     /// Pids blocked on a data read (any conversation) — a GLOBAL wake
@@ -384,19 +387,28 @@ impl WaitSet {
     }
 }
 
-pub(crate) static INGRESS: BusyCell<IngressState> = BusyCell::new(IngressState {
-    convs: [const { ConvSlot::new() }; NFILE],
-    rx_waiters: WaitSet::new(),
-    tx_waiters: WaitSet::new(),
-    inpackets: 0,
-    outpackets: 0,
-    soverflows: 0,
-    misses: 0,
-    addr: [0; 6],
-    bcast: [0xff; 6],
-    prom: 0,
-    next_seq: 1,
-});
+/// The IRQ↔syscall handoff state (SMP-03, D-22, D-26): an IrqSpinLock at
+/// NetIrq (90) — the IRQ retire and the syscall-side readers/writers
+/// serialize through the ranked lock on both CPUs, and the lock's IRQ
+/// mask closes the same-CPU IRQ re-entry window the single-CPU BusyCell
+/// relied on the global invariant for.
+pub(crate) static INGRESS: IrqSpinLock<IngressState> = IrqSpinLock::new(
+    "netif_ingress",
+    LockRank::NetIrq,
+    IngressState {
+        convs: [const { ConvSlot::new() }; NFILE],
+        rx_waiters: WaitSet::new(),
+        tx_waiters: WaitSet::new(),
+        inpackets: 0,
+        outpackets: 0,
+        soverflows: 0,
+        misses: 0,
+        addr: [0; 6],
+        bcast: [0xff; 6],
+        prom: 0,
+        next_seq: 1,
+    },
+);
 
 // ---------------------------------------------------------------------------
 // The block/wake hooks (the devpipe idiom — dependency-injected because
@@ -448,7 +460,8 @@ pub(crate) fn conv_alloc() -> Result<usize> {
     // The INGRESS mirror is taken UNDER the Netif lock (the documented
     // NETIF → INGRESS order) — the canonical record and the mirror move
     // in one syscall critical section.
-    let mut ig = INGRESS.enter().ok_or("devether: ingress contended (invariant violation)")?;
+    let ig_node = LockNode::new();
+    let mut ig = INGRESS.lock(&ig_node);
     for id in 0..NFILE {
         if nif.convs[id].inuse == 0 {
             if ig.convs[id].store.is_none() {
@@ -477,7 +490,8 @@ pub(crate) fn conv_open(id: usize) -> Result<()> {
     if id >= NFILE {
         return Err("devether: no such conversation");
     }
-    let mut ig = INGRESS.enter().ok_or("devether: ingress contended (invariant violation)")?;
+    let ig_node = LockNode::new();
+    let mut ig = INGRESS.lock(&ig_node);
     if ig.convs[id].store.is_none() {
         return Err("devether: no such conversation");
     }
@@ -518,7 +532,8 @@ pub(crate) fn conv_close(id: usize) {
     {
         let node = LockNode::new();
         let mut ng = NETIF.lock(&node);
-        let mut ig = INGRESS.enter().expect("netif: close with INGRESS contended (boot bug)");
+        let ig_node = LockNode::new();
+        let mut ig = INGRESS.lock(&ig_node);
         let Some(nif) = ng.as_mut() else { return };
         let book = &mut nif.convs[id];
         if book.inuse > 0 {
@@ -571,7 +586,8 @@ pub(crate) fn conv_connect(id: usize, typ: i32) -> Result<()> {
         }
     }
     nif.convs[id].typ = typ;
-    let mut ig = INGRESS.enter().ok_or("devether: ingress contended (invariant violation)")?;
+    let ig_node = LockNode::new();
+    let mut ig = INGRESS.lock(&ig_node);
     ig.convs[id].typ = typ;
     Ok(())
 }
@@ -591,7 +607,8 @@ pub(crate) fn conv_promiscuous(id: usize) -> Result<()> {
     if !nif.convs[id].prom {
         nif.convs[id].prom = true;
         nif.prom += 1;
-        let mut ig = INGRESS.enter().ok_or("devether: ingress contended (invariant violation)")?;
+        let ig_node = LockNode::new();
+        let mut ig = INGRESS.lock(&ig_node);
         ig.convs[id].prom = true;
         ig.prom += 1;
     }
@@ -600,7 +617,7 @@ pub(crate) fn conv_promiscuous(id: usize) -> Result<()> {
 
 // ---------------------------------------------------------------------------
 // The IRQ retire's entries (IRQ context — the handler calls these; the
-// BusyCell discipline above is what makes them safe there).
+// IrqSpinLock discipline above is what makes them safe there).
 // ---------------------------------------------------------------------------
 
 /// RX ingress (devether.c's etheriq): count EVERY inbound frame, demux
@@ -612,12 +629,8 @@ pub(crate) fn conv_promiscuous(id: usize) -> Result<()> {
 /// Called from the virtio-net IRQ handler with the 12-byte header
 /// already stripped (the raw 14-byte-header Ethernet frame).
 pub fn rx_ingress(frame: &[u8]) {
-    let Some(mut ig) = INGRESS.enter() else {
-        // Provably unreachable (the BusyCell discipline + the kernel's
-        // IRQ-masked-syscall invariant); a violation drops the frame and
-        // would surface as a stats/pcap mismatch, never a silent wedge.
-        return;
-    };
+    let node = LockNode::new();
+    let mut ig = INGRESS.lock(&node);
     ig.inpackets += 1;
     if frame.len() < 14 {
         return; // runt — counted as inbound, undeliverable
@@ -682,10 +695,8 @@ pub fn rx_ingress(frame: &[u8]) {
 pub fn tx_retired() {
     let mut pids = [0u64; MAX_WAITERS];
     let nwake = {
-        let mut ig = match INGRESS.enter() {
-            Some(g) => g,
-            None => return, // the rx_ingress None arm's discipline
-        };
+        let node = LockNode::new();
+        let mut ig = INGRESS.lock(&node);
         ig.tx_waiters.take(&mut pids)
     };
     if nwake > 0 && let Ok(h) = hooks() {
@@ -696,16 +707,21 @@ pub fn tx_retired() {
 /// outpackets++ — the write path's per-frame-posted count (the donor's
 /// etheroq arm: counted at post time, not at retire).
 pub(crate) fn tx_posted() {
-    let mut ig = INGRESS.enter().expect("netif: tx_posted with INGRESS contended (invariant violation)");
+    let node = LockNode::new();
+    let mut ig = INGRESS.lock(&node);
     ig.outpackets += 1;
 }
 
 /// Register the calling pid as blocked on a TX-full write (the write
-/// path's full-ring arm).  Registration is IRQ-atomic with respect to
-/// the retire: syscalls run IRQ-masked, so no retire can interleave
-/// between the caller's full-ring observation and this registration.
+/// path's full-ring arm).  SMP-03's 2-CPU lost-wakeup discipline is the
+/// caller's: `crate::smp::prepare_block()` must run BEFORE this
+/// registration (and before the predicate re-test it gates), so a wake
+/// landing between the full-ring observation and the arch `block()`'s
+/// `wake_pending` check is never lost (devip/conv.rs's
+/// `WaitPids::register` carries the same invariant).
 pub(crate) fn register_tx_waiter(pid: u64) {
-    let mut ig = INGRESS.enter().expect("netif: register with INGRESS contended (invariant violation)");
+    let node = LockNode::new();
+    let mut ig = INGRESS.lock(&node);
     ig.tx_waiters.register(pid);
 }
 
@@ -719,7 +735,8 @@ pub(crate) enum Pop {
 }
 
 pub(crate) fn pop_frame(id: usize, buf: &mut [u8]) -> Pop {
-    let mut ig = INGRESS.enter().expect("netif: read with INGRESS contended (invariant violation)");
+    let node = LockNode::new();
+    let mut ig = INGRESS.lock(&node);
     if id >= NFILE {
         return Pop::Closed;
     }
@@ -737,7 +754,8 @@ pub(crate) fn pop_frame(id: usize, buf: &mut [u8]) -> Pop {
 /// popping (08-06).  Syscall context (the adapter's receive runs inside
 /// the seam's drive).
 pub(crate) fn head_seq(id: usize) -> Option<u64> {
-    let ig = INGRESS.enter().expect("netif: head_seq with INGRESS contended (invariant violation)");
+    let node = LockNode::new();
+    let ig = INGRESS.lock(&node);
     if id >= NFILE {
         return None;
     }
@@ -745,9 +763,12 @@ pub(crate) fn head_seq(id: usize) -> Option<u64> {
 }
 
 /// Register the calling pid as blocked on a data read (the read path's
-/// register → drop → block shape — see the module header).
+/// register → drop → block shape — see the module header; the caller runs
+/// `crate::smp::prepare_block()` BEFORE registering, per the 2-CPU
+/// `wake_pending` invariant of devip/conv.rs's `WaitPids::register`).
 pub(crate) fn register_rx_waiter(pid: u64) {
-    let mut ig = INGRESS.enter().expect("netif: register with INGRESS contended (invariant violation)");
+    let node = LockNode::new();
+    let mut ig = INGRESS.lock(&node);
     ig.rx_waiters.register(pid);
 }
 
@@ -792,7 +813,8 @@ pub(crate) fn stats_content() -> Result<Vec<u8>> {
         (nif.link, nif.mbps, nif.prom, nif.addr, nif.alen)
     };
     let (inp, outp, sov) = {
-        let ig = INGRESS.enter().ok_or("devether: ingress contended (invariant violation)")?;
+        let ig_node = LockNode::new();
+        let ig = INGRESS.lock(&ig_node);
         (ig.inpackets, ig.outpackets, ig.soverflows)
     };
     let mut out = Vec::new();
@@ -862,10 +884,8 @@ pub(crate) fn ifname() -> Result<&'static [u8]> {
 /// netifgen's `nif->f[i] != 0`) plus their owner-set flags (the level-3
 /// listing's perms).
 pub(crate) fn conv_allocated() -> [bool; NFILE] {
-    let ig = match INGRESS.enter() {
-        Some(g) => g,
-        None => return [false; NFILE],
-    };
+    let node = LockNode::new();
+    let ig = INGRESS.lock(&node);
     let mut out = [false; NFILE];
     for (i, s) in ig.convs.iter().enumerate() {
         out[i] = s.store.is_some();

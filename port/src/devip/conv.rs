@@ -646,7 +646,8 @@ pub(crate) fn conv_close(p: Proto, id: usize) {
         // reaches State::Closed.  udp/icmp have no close handshake —
         // their sockets remove immediately.
         if let Some(h) = sock {
-            let mut g = super::stack::STACK.enter().expect("devip: stack contended");
+            let node = LockNode::new();
+            let mut g = super::stack::STACK.lock(&node);
             if let Some(core) = g.core_mut(sel) {
                 if p == Proto::Tcp {
                     let s = core.sockets.get_mut::<smoltcp::socket::tcp::Socket>(h);
