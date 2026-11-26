@@ -117,3 +117,21 @@ Out-of-scope discoveries made during plan 05-08, not fixed by it:
   (the crate harness is x86_64-host-only — the WINDOWS #13/#14
   constraint; their logic passed a standalone extraction run here).
   The live -smp 2 boot proof remains 05-14's (CI TCG + owner KVM).
+
+# Plan 05-14 (2026-11-26) — pre-existing net-smoke failure found during
+# the aarch64 quick pass:
+
+- **aarch64 net-smoke panics during bss page-in, at both -smp 1 and
+  -smp 2.**  `nix run .#boot-r9-net-smoke` (HVF, default -smp 2) and
+  `R9_SMP=1 nix run .#boot-r9-net-smoke` both fail with an identical
+  truncated panic (`panicked at` — the PL011 console buffer caps the
+  message) after the bss page-in sweep.  The panic is NOT SMP-related
+  (identical at both CPU counts) and NOT caused by 05-14's changes
+  (x86_64 gate scripts + CI YAML only).  The network stack files
+  (devip/*, netif.rs) were converted to SMP-safe locking in 05-08;
+  this may be a regression from that conversion or a pre-existing
+  issue that predates Phase 5.  All other aarch64 quick pass items
+  (smoke, cpu, tier-1 HVF+TCG, xtask test, all clippy legs) pass green.
+  Owner: needs a debug session to capture the full panic message (the
+  truncated console output hides the source location).
+  status: open
