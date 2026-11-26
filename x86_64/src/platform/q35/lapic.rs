@@ -91,6 +91,18 @@ const APIC_BASE_EXTD: u64 = 1 << 10;
 /// driver does not emit IPIs yet.
 const X2APIC_MSR_BASE: u32 = 0x800;
 
+/// Pack an x2APIC ICR value for `wrmsr(0x830)` (SMP-01): the 32-bit
+/// destination APIC ID in the upper half, the delivery word in the
+/// lower (the ICR is the one full 64-bit register in the x2APIC map —
+/// SDM Vol 3A §10.12.2/§10.12.9).  Pure arithmetic, host-pinned.
+///
+/// RED-SCAFFOLD (05-11 Task 1): the helper exists so the host pin
+/// compiles; the GREEN half performs the real pack.
+pub fn icr_x2apic_value(apic_id: u32, delivery_word: u32) -> u64 {
+    let _ = (apic_id, delivery_word);
+    0
+}
+
 /// The architectural LAPIC MMIO base — a fixed-function fact of the q35
 /// machine model, like COM1 for the console.
 const LAPIC_BASE: usize = 0xFEE0_0000;
@@ -376,6 +388,18 @@ mod tests {
         assert_eq!(Lapic::x2apic_msr(TIMER_ICR), 0x838);
         assert_eq!(Lapic::x2apic_msr(TIMER_CCR), 0x839);
         assert_eq!(Lapic::x2apic_msr(TIMER_DCR), 0x83E);
+    }
+
+    /// The x2APIC ICR pack (SMP-01): the destination APIC ID occupies
+    /// the upper 32 bits and the delivery word the lower (the ICR's
+    /// 64-bit layout, SDM Vol 3A §10.12.2) — zero-extension both ways
+    /// pinned, so an 8-bit-era ID and a full 32-bit ID both land right.
+    #[test]
+    fn icr_x2apic_value_packs_destination_in_upper_half() {
+        assert_eq!(icr_x2apic_value(0x1234_5678, 0x0000_4500), 0x1234_5678_0000_4500);
+        assert_eq!(icr_x2apic_value(0, 0x4608), 0x4608);
+        assert_eq!(icr_x2apic_value(1, 0), 0x1_0000_0000);
+        assert_eq!(icr_x2apic_value(0xFFFF_FFFF, 0xFFFF_FFFF), 0xFFFF_FFFF_FFFF_FFFF);
     }
 }
 
