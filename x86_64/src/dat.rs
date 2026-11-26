@@ -343,8 +343,9 @@ impl Label {
 /// the online flag the BSP polls during INIT-SIPI-SIPI bring-up, the
 /// shootdown flag, and the trap/scheduler slots (cur_frame/
 /// current_proc/sched_context/sched_seeded — proc.rs's single-CPU
-/// statics migrate to these in 05-12) ride beside it, before the
-/// stacks.
+/// statics migrate to these in 05-12; 05-24 adds the kstack-ownership
+/// triple: cur_kstack/sched_from/moribund_reap) ride beside it, before
+/// the stacks.
 ///
 /// The small stacks, for specific exceptions, come next.  These have
 /// guard pages immediately _after_ their data areas, which serve as
@@ -401,6 +402,37 @@ pub struct Mach {
     /// context swtch'es OUT of it into the seeded scheduler context and
     /// never resumes — the save is write-once, never read.
     pub(crate) park_context: SyncUnsafeCell<Label>,
+    /// The kstack-ownership record (05-24, the aarch64
+    /// `PerCpu.cur_kstack` port): the kernel-stack top of the proc this
+    /// CPU currently owns — written beside every TSS rsp0 re-point in
+    /// the switch paths (activate_first/pick_next), cleared by this
+    /// CPU's sched-loop `release_left_proc` when the CPU leaves the
+    /// proc's kstack.  pick_next's debug tripwire reads it cross-CPU to
+    /// prove no two CPUs name one proc's kstack; the TSS rsp0 itself
+    /// can never serve (it is not retracted on the park into the
+    /// scheduler, so it would stale-name a released proc).  0 = this
+    /// CPU owns no proc kstack.
+    pub(crate) cur_kstack: AtomicU64,
+    /// The pid `pick_next`'s `sched: switch` marker reports as the
+    /// switch source (05-24, the aarch64 `PerCpu.sched_from` port):
+    /// `release_left_proc` (the sched loop's publish step) stores the
+    /// preempted proc's pid here when it re-enqueues it; pick_next
+    /// consumes it for the one marker line.  Owned by this CPU (written
+    /// and swapped only from its own sched loop, IRQ-masked).  0 = no
+    /// pending preemption.
+    pub(crate) sched_from: AtomicU64,
+    /// Deferred reap slot (05-24, the aarch64 05-22 `PerCpu.moribund_reap`
+    /// port): an exiting proc's PML4 PA + kstack PAs + kstack table PAs
+    /// sit here from exit_tail (`defer_root_kstack_reap`) until THIS
+    /// CPU's sched loop frees them after the moribund hand-off swtch.
+    /// The exit path's old "nothing allocates until the hand-off"
+    /// invariant was single-CPU: with a sibling allocating concurrently,
+    /// a kstack page freed at exit can be re-handed-out and written
+    /// while this CPU still runs on it up to the swtch (and CR3 still
+    /// names the dead PML4 until the next pick).  Owned by this CPU:
+    /// written in exit_tail and drained in sched_loop, both IRQ-masked
+    /// contexts on the owning CPU.
+    pub(crate) moribund_reap: SyncUnsafeCell<Option<crate::proc::MoribundReap>>,
 
     pub debug_stack: ExStack, // Stack for debug exceptions
     pub bp_stack: ExStack,    // Stack for breakpoint exceptions
@@ -467,6 +499,16 @@ impl Mach {
         // page's prior contents are not assumed).
         // SAFETY: `fpu` is a field of this exclusively borrowed Mach.
         unsafe { core::ptr::write(&mut self.fpu, crate::fpu::CpuFp::new()) };
+        // The deferred moribund reap slot starts empty (05-24).  Written
+        // whole, never read first: an Option's zeroed-bytes encoding is
+        // not a contract this struct relies on (the l.S-zeroed BSS /
+        // alloc_zeroed AP blocks make the atomics fine, but the Option
+        // gets the explicit write the same way `fpu` does).
+        // SAFETY: `moribund_reap` is a field of this exclusively
+        // borrowed Mach.
+        unsafe {
+            core::ptr::write(&mut self.moribund_reap, SyncUnsafeCell::new(None));
+        }
         self.tss.init(&mut [
             (0, &mut self.stack),
             (trap::NMI_TRAPNO, &mut self.nmi_stack),

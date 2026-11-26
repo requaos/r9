@@ -310,6 +310,40 @@ loses its preempt call (safe code).  `port/src/sched.rs`: the new
 aarch64 194 → 196 blocks, SAFETY 400 → 402 (proc.rs 28 → 29, trap.rs
 9 → 10); the reconciliation holds.
 
+**05-24 follow-up delta (2026-11-26, the x86_64 port of the 05-23
+kstack-ownership hardening — 339036f + 665c94e re-keyed, closing the
+"Plan 05-12 residuals" deferred item before 05-14's live `-smp 2`
+proof):** the same explicit kernel-stack handoff lands on x86_64.
+`Proc` gains `on_cpu` (a safe AtomicBool: the kstack-ownership token);
+`reschedule` drops its PROC_TABLE publish (state-mark + enqueue) and
+only PARKS with `swtch` — its one unsafe block (the swtch) is 1:1 with
+the pre-port shape — while the sched loop's new `release_left_proc`
+derefs the per-CPU `Mach.current_proc` pointer to read its pid (+1
+block: a PROC_TABLE-resident Proc, slots never freed this era, read on
+the owning CPU under the table lock); `pick_next` refuses an `on_cpu`
+proc (requeue + cycle guard, the pure `owned_pick_give_up` host-pinned)
+and carries the debug-build tripwire panicking when another CPU's
+`Mach.cur_kstack` still names the candidate's stack (the record rides
+beside the TSS rsp0 re-point — rsp0 itself is never the witness: it is
+not retracted on the park).  The deferred moribund reap lands:
+`Proc::defer_root_kstack_reap` writes the exiting proc's PML4/kstack/
+table PAs into the CPU's new `Mach.moribund_reap` slot (+1 block, the
+exit_tail contract) and the loop-top `reap_moribund` takes it (+1
+block), so `sched_from_moribund` no longer runs after an in-place free
+(syscall.rs's call swap is safe code).  `Mach` gains `cur_kstack`,
+`sched_from` and `moribund_reap` (safe fields; +1 block for `Mach::init`'s
+explicit Option write, the `fpu` pattern); `smp.rs` gains
+`cur_kstack_of` (+1 block, debug-only: the tripwire's cross-CPU Mach
+deref); `trap.rs` gains `mask_irq` (a safe `cpu::cli()` wrapper, the
+sched-loop entry discipline — the dev_churn boot context reaches it
+with IF=1) and `dispatch_irq` defers `preempt` until after the LAPIC
+EOI (safe reordering; the timer/IPI lines are edge-triggered, so the
+Pitfall 5 level-line caveat does not move).  `port/src` is untouched
+(`RunQueues::any_enqueued` already served x86_64's fast path).
+x86_64 170 → 175 blocks, SAFETY 417 → 422 (proc.rs 27 → 30, dat.rs
+6 → 7, smp.rs 10 → 11); the reconciliation holds.  aarch64 counts
+unchanged (no aarch64 source touched).
+
 **Plan 05-11 Task 1 delta (SMP-01/07, 2026-11-26):** the x86_64 dual
 xAPIC/x2APIC IPI delivery and AP LAPIC init land.  `acpi.rs`: the MADT
 walk records enabled/online-capable processors (type-0 LAPIC and type-9
@@ -728,13 +762,13 @@ cfg-gated code as well.
 | `vm.rs` | 16 | 3 | 0 | page-table machinery: TTBR/TLB/barrier asm, entry writes, recursive-mapping resolution |
 | `vmdebug.rs` | 2 | 0 | 0 | read-only recursive-mapping walk (print path) |
 
-### x86_64/src — 170 blocks, 30 unsafe fns, 4 extern blocks (test-only: 8 blocks, 2 fns)
+### x86_64/src — 175 blocks, 30 unsafe fns, 4 extern blocks (test-only: 8 blocks, 2 fns)
 
 | File | Blocks | fns | ext | Surface |
 |---|---|---|---|---|
 | `allocator.rs` | 1 | 0 | 0 | the global-allocator arena's one-time static construction (05-07: `static mut` HEAP/ALLOC became SyncUnsafeCell, and the unlocked diagnostic reads moved under the IrqSpinLock guard) |
 | `cpu.rs` | 13 | 6 | 0 | CPL-0 instruction primitives: `ltr`/`lgdt`/`lidt`, `_rdmsr`/`wrmsr`, `wrgsbase` (the fns); flags/sti/cli/cpuid/rdtsc/rdrand/rdseed blocks |
-| `dat.rs` | 6 | 1 | 0 | Ureg↔saved-frame copies, the Mach's CpuFp cell write, `Mach::init`'s GDT/IDT/TSS load, `mach_ptr`'s `%gs:0` read + `this_mach`'s deref (05-11); 05-12: the Mach gains `park_context` (the per-CPU one-way boot park slot — safe field, count unchanged) |
+| `dat.rs` | 7 | 1 | 0 | Ureg↔saved-frame copies, the Mach's CpuFp cell write, `Mach::init`'s GDT/IDT/TSS load, `mach_ptr`'s `%gs:0` read + `this_mach`'s deref (05-11); 05-12: the Mach gains `park_context` (the per-CPU one-way boot park slot — safe field, count unchanged); 05-24: the Mach gains the kstack-ownership triple (`cur_kstack`/`sched_from`/`moribund_reap` — safe fields) and `Mach::init` writes the Option explicitly (+1, the `fpu` pattern) |
 | `exec.rs` | 5 | 0 | 0 | KZERO-alias writes into just-mapped image pages and the seed page (+2 test-only blocks) |
 | `fpu.rs` | 10 | 2 | 0 | FXSAVE64/FXRSTOR64 save/restore asm (`save_raw`/`restore_raw`), per-CPU `CpuFp` in the Mach slot (`%gs:0`, 05-12 — the hardcoded `KMACH` deref is gone), `with_simd` (+1 test-only block) |
 | `main.rs` | 14 | 1 | 1 | boot descriptor arming, the mb2 stash slice, `arm_syscall_entry`'s MSR program, `halt`'s cli/hlt, the BSP's Mach identity + LAPIC online publish (05-12); `ap_main`'s full AP bring-up (05-12, replacing the 05-11 stub in place: the Mach reborrow, the GS-base MSR writes, the GDT/IDT/TSS init, the SYSCALL MSR call); extern: the l.S link-syms.  (The row read 9 at CORR-05 — measured 10 at the 05-11 base; the +1 is a stale-row correction, not new code.) |
@@ -748,12 +782,12 @@ cfg-gated code as well.
 | `platform/q35/netgate.rs` | 2 | 0 | 0 | the net gate driver's `hlt` park loops |
 | `platform/q35/pci.rs` | 25 | 0 | 0 | MCFG/ECAM MMIO walks, the 0xCF8/0xCFC config mechanism (05-12: serialized across CPUs under `PCI_CFG_PORTS` at `LockRank::DevTop` 10, T-05-22), publish-once discovery/bind cells, virtio-net IRQ path (05-12: `VIRTIO_NET` is an `IrqSpinLock` at `LockRank::NetIrq` 90 — the three raw cell derefs are gone; the handler runs in locked phases with the port callbacks after each guard drop) |
 | `platform/q35/timer.rs` | 6 | 0 | 0 | TSC-deadline/CPUID check, publish-once timer state cells (05-11: +1 for `state()`'s cell read — the AP LAPIC-timer arming input) |
-| `proc.rs` | 27 | 1 | 2 | the process machinery floor: `first_entry` ABI, pml4 map/unmap through the KZERO alias, brk/rfork unwind, link-syms (+3 test-only blocks, 1 fn).  05-12 (SMP-02/03): the CURFRAME accessor pair and `scheduler_stack_top`'s hardcoded `KMACH` deref are gone (the live-frame record and the stack top read the calling CPU's `Mach` via `%gs:0`); `PROC_TABLE` is an `IrqSpinLock` at `LockRank::ProcTable` (50), `SHARED_PAGES`/`RFMEM_FAMILIES`/`SEM_WAITERS` at `VmShared` (30); `Proc::wake_pending` + `wake_locked` + `sched()`'s flag-consume close Pitfall 4; `RUN_QUEUES` (`port::sched::RunQueues`) drives `pick_next`'s `pop_or_steal`; `set_tss_rsp0` writes the calling CPU's own `Mach.tss`; `boot_pml4_pa` declares the `bootpml4` link-sym beside `kernel_half_entries`' (the AP trampoline's CR3 input) |
+| `proc.rs` | 30 | 1 | 2 | the process machinery floor: `first_entry` ABI, pml4 map/unmap through the KZERO alias, brk/rfork unwind, link-syms (+3 test-only blocks, 1 fn).  05-12 (SMP-02/03): the CURFRAME accessor pair and `scheduler_stack_top`'s hardcoded `KMACH` deref are gone (the live-frame record and the stack top read the calling CPU's `Mach` via `%gs:0`); `PROC_TABLE` is an `IrqSpinLock` at `LockRank::ProcTable` (50), `SHARED_PAGES`/`RFMEM_FAMILIES`/`SEM_WAITERS` at `VmShared` (30); `Proc::wake_pending` + `wake_locked` + `sched()`'s flag-consume close Pitfall 4; `RUN_QUEUES` (`port::sched::RunQueues`) drives `pick_next`'s `pop_or_steal`; `set_tss_rsp0` writes the calling CPU's own `Mach.tss`; `boot_pml4_pa` declares the `bootpml4` link-sym beside `kernel_half_entries`' (the AP trampoline's CR3 input); 05-24: `release_left_proc`'s current-proc pid read, `defer_root_kstack_reap`'s slot write and `reap_moribund`'s slot take — the kstack-ownership release + deferred moribund reap (the aarch64 339036f port) |
 | `seg.rs` | 3 | 3 | 0 | GDT/IDT/TSS `load` (the fns) on architecturally valid tables |
-| `smp.rs` | 10 | 0 | 1 | the SIPI trampoline copy into PA 0x8000, the AP Mach `alloc_zeroed` + mailbox volatile writes, the IRQ save/restore asm pair, `invlpg`/CR3-reload flush, the Mach-registry reads (05-11); 05-12: `num_online_cpus` reads the plain `ONLINE_CPUS` atomic (its per-slot Mach deref is gone), and the AP self-publishes its slot (`publish_ap_mach`, safe code); extern: the trampoline link-syms |
+| `smp.rs` | 11 | 0 | 1 | the SIPI trampoline copy into PA 0x8000, the AP Mach `alloc_zeroed` + mailbox volatile writes, the IRQ save/restore asm pair, `invlpg`/CR3-reload flush, the Mach-registry reads (05-11); 05-12: `num_online_cpus` reads the plain `ONLINE_CPUS` atomic (its per-slot Mach deref is gone), and the AP self-publishes its slot (`publish_ap_mach`, safe code); 05-24: `cur_kstack_of`'s cross-CPU Mach deref (debug-only — the pick_next tripwire's witness read); extern: the trampoline link-syms |
 | `swtch.rs` | 0 | 1 | 0 | `swtch` context-switch ABI (+1 host-test twin fn) |
 | `syscall.rs` | 1 | 0 | 0 | the `trap_return` tail call on the seeded frame (+2 test-only blocks) |
-| `trap.rs` | 6 | 9 | 0 | the trap-vector interface: `intr_stubs` emitter, `as_thunk`, `intrspecial` (canonical bit-63 GS test, 05-11)/`intrregular`/`intrcommon`, `syscallentry`/`syscallreturn`, `trap_return`; IPI dispatch for LAPIC 0xF0/0xF1 (05-11); 05-12: `dispatch_irq` threads the ring-3-origin `user_interrupted` gate into `proc::preempt` (SMP-03, the 05-22 double-run-tear gate — count-neutral) |
+| `trap.rs` | 6 | 9 | 0 | the trap-vector interface: `intr_stubs` emitter, `as_thunk`, `intrspecial` (canonical bit-63 GS test, 05-11)/`intrregular`/`intrcommon`, `syscallentry`/`syscallreturn`, `trap_return`; IPI dispatch for LAPIC 0xF0/0xF1 (05-11); 05-12: `dispatch_irq` threads the ring-3-origin `user_interrupted` gate into `proc::preempt` (SMP-03, the 05-22 double-run-tear gate — count-neutral); 05-24: `mask_irq` (a safe `cpu::cli()` wrapper — the sched loop's entry discipline) and `dispatch_irq` defers `preempt` until after the LAPIC EOI (safe reordering — count-neutral) |
 | `uart16550.rs` | 2 | 0 | 0 | COM1 port I/O (putb/getb).  05-12 (SMP-03): the dev_exec `cons_rx` ring is an `IrqSpinLock` at `LockRank::Console` (100) — its three raw `SyncUnsafeCell` derefs are gone — and the not(dev_exec) `rx_echo` sweep serializes under `SERIAL` (same rank) against per-CPU ticks |
 | `usermem.rs` | 7 | 0 | 0 | the single validated user-memory entry point (UserSlice/UserSliceMut) |
 

@@ -347,6 +347,26 @@ fn apic_id_of(cpu: usize) -> Option<u32> {
     Some(unsafe { &*(va as *const Mach) }.apic_id)
 }
 
+/// A registered cpu's kstack-ownership record (05-24, the aarch64
+/// `PER_CPU[c].cur_kstack` tripwire read re-keyed): the Mach's
+/// `cur_kstack` slot — 0 when that cpu owns no proc kstack; None when
+/// the slot was never registered.  proc.rs's pick_next debug tripwire
+/// reads it for every OTHER cpu before starting a proc; debug builds
+/// only (the tripwire compiles out in release, and so does this).
+#[cfg(debug_assertions)]
+pub(crate) fn cur_kstack_of(cpu: usize) -> Option<u64> {
+    let va = AP_MACH_VAS.get(cpu)?.load(Ordering::Acquire);
+    if va == 0 {
+        return None;
+    }
+    // SAFETY: a non-zero slot names a live, kernel-lifetime Mach
+    // (register_port_smp / publish_ap_mach registered it; never
+    // removed).  The field is an AtomicU64, so the cross-CPU read is
+    // race-free; the caller holds PROC_TABLE, pairing with the owning
+    // CPU's locked write.
+    Some(unsafe { &*(va as *const Mach) }.cur_kstack.load(Ordering::Acquire))
+}
+
 /// The reschedule IPI sender (SMP-07): LAPIC vector 0xF1 to the target
 /// cpu's APIC ID.
 fn send_resched_ipi(cpu: usize) {

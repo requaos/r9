@@ -778,6 +778,21 @@ pub fn idle_wait() {
     unsafe { core::arch::asm!("sti", "hlt", "cli", options(nostack)) };
 }
 
+/// Mask IRQs (`cli`) — the scheduler loop's entry discipline (05-24,
+/// the aarch64 `trap::mask_irq` port): the loop's `pick_next`→swtch
+/// handoff republishes the per-CPU Mach records (current, cur_kstack,
+/// cur_frame) and then resumes the picked proc, so an IRQ taken inside
+/// that window would run on the Mach scheduler stack with a stale
+/// `current_proc`.  Entry points are normally already masked (a trap
+/// entry, sched()'s IRQ-masked syscall context, the AP trampoline's
+/// cli); this makes the contract hold for a boot context that arrived
+/// with IF=1 (the dev_churn `enter_sched_loop_from_boot` — main's sti
+/// precedes the churn bootstrap).  The idle arm's `idle_wait` is the
+/// one deliberate unmask window.
+pub fn mask_irq() {
+    cpu::cli();
+}
+
 /// Park the CPU forever (the clean-halt stop — the aarch64
 /// park_forever role: syscall's all-exited halt, trap()'s dump-and-halt
 /// and the fault paths all converge here).  IF stays masked: only an
@@ -912,16 +927,28 @@ extern "C" fn trap(vector: u8, trap_frame: &mut Ureg) -> u32 {
 /// KERNEL context on this CPU (the sched loop's idle hlt) must not
 /// reschedule — this CPU's `current_proc` is stale there and can name
 /// a proc now Running on a sibling (the 05-22 double-run tear class).
+///
+/// 05-24 (the aarch64 339036f port): preemption is deferred until
+/// AFTER the EOI.  `reschedule()` now PARKS this CPU into its sched
+/// loop (swtch) instead of returning to the interrupted frame, so the
+/// interrupt must already be retired — an active LAPIC in-service line
+/// would gate this CPU's interrupt delivery (the next tick included)
+/// for as long as the preempted proc stays off-CPU.  The LAPIC timer
+/// and both IPIs are edge-triggered, so the Pitfall 5 level-line
+/// caveat does not apply to them; the preemption check is the only
+/// work that moves past the EOI.
 fn dispatch_irq(vector: u8, user_interrupted: bool) {
     if vector == crate::platform::q35::lapic::SPURIOUS_VECTOR {
         return;
     }
+    // Set by the tick/resched arms; serviced after the EOI below.
+    let mut resched = false;
     match vector {
         TIMER_VECTOR => {
             crate::platform::q35::timer::tick();
-            // preempt() gates internally on the flag (SMP-03): the tick
-            // keeps re-arming and sweeping on both CPUs either way.
-            crate::proc::preempt(user_interrupted);
+            // The tick keeps re-arming and sweeping on both CPUs either
+            // way; the preemption check runs post-EOI.
+            resched = true;
         }
         // 0xF0 (smp::TLB_SHOOTDOWN_VECTOR, SMP-07): the TLB shootdown
         // IPI — service the pending request (the local flush + the
@@ -933,9 +960,8 @@ fn dispatch_irq(vector: u8, user_interrupted: bool) {
         // sat in the sched loop's idle hlt).  preempt() re-considers a
         // Running proc when the IPI interrupted ring 3 on this CPU; an
         // idle CPU's current is stale (the gate), so the arm is a no-op
-        // there and its loop re-scans after the return.  The shared
-        // tail's EOI retires the line.
-        crate::smp::RESCHED_VECTOR => crate::proc::preempt(user_interrupted),
+        // there and its loop re-scans after the return.
+        crate::smp::RESCHED_VECTOR => resched = true,
         // The virtio-net device line (dev_ether builds): guarded on the
         // vector the bind published — zero hardcoded vectors (the
         // aarch64 virtio_irq_intid guard re-keyed; the discovery cell
@@ -949,6 +975,11 @@ fn dispatch_irq(vector: u8, user_interrupted: bool) {
         _ => crate::println!("unhandled IRQ {vector}"),
     }
     crate::platform::q35::lapic::eoi();
+    if resched {
+        // preempt() gates internally on the flag (SMP-03): only a
+        // ring-3 interruption on THIS CPU reschedules.
+        crate::proc::preempt(user_interrupted);
+    }
 }
 
 #[cfg(test)]

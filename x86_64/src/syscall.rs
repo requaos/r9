@@ -2106,9 +2106,10 @@ fn sys_exits(frame: &mut Ureg, proc: &mut Proc) -> u64 {
 /// machinery's kernel-message kills (the no-handler kill, NOTED's
 /// NDFLT, the post-free exec kill) converge here.  Frees the user
 /// mappings, marks Moribund, prints the exit line, posts + wakes the
-/// parent, frees the PML4 and the kstack pages LAST (the handler is
-/// still running on it — safe because the swtch save writes only the
-/// PROC_TABLE-resident context), then the all-exited halt or the
+/// parent, DEFERS the PML4/kstack frees to this CPU's sched loop
+/// (`defer_root_kstack_reap`, 05-24 — the handler still runs on that
+/// kstack, and a sibling CPU's allocator would recycle the pages
+/// mid-exit otherwise), then the all-exited halt or the
 /// sched-loop hand-off.  Diverges.
 ///
 /// The FIRST step is the fd-group sweep (the donor pexit's closefgrp):
@@ -2155,11 +2156,15 @@ pub(crate) fn exit_tail(proc: &mut Proc, msg: &[u8]) -> ! {
     if !proc.nowait {
         proc::post_wait_record(proc.parent, pid, msg);
     }
-    // Last frees: the PML4 and the kstack pages.  The handler is STILL
-    // running on the kstack and CR3 still names the PML4 — safe
-    // because nothing allocates until the hand-off below and the
-    // swtch save writes only the PROC_TABLE-resident context struct.
-    proc.free_root_table_and_kstack();
+    // Last frees — the PML4, the kstack pages, and their tables — are
+    // DEFERRED to this CPU's sched loop (defer_root_kstack_reap, 05-24,
+    // the aarch64 05-22 port): the handler is STILL running on the
+    // kstack and CR3 still names the PML4, and under a second CPU the
+    // old single-CPU invariant ("nothing allocates until the hand-off")
+    // is gone — a sibling CPU reallocates a just-freed kstack page and
+    // writes it while this CPU still runs on it up to the hand-off
+    // swtch below (the aarch64 exit-mid-free corruption class).
+    proc.defer_root_kstack_reap();
 
     if !proc::any_active_procs() {
         println!("all user processes exited");

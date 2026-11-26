@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 9
+open_count: 10
 waived_count: 0
 fixed_count: 5
-total_count: 14
-last_updated: 2026-11-26T17:59:03.744Z
+total_count: 15
+last_updated: 2026-11-26T18:30:37.477Z
 ---
 
 # Broken Windows Ledger
@@ -29,6 +29,7 @@ last_updated: 2026-11-26T17:59:03.744Z
 | 12 | 05 | unmet-truth | aarch64/src/proc.rs |  | 05-22: aarch64 -smp 2 smoke under HVF (gicv3) passes only ~50% — fork/exec-sweep corruption (wire garbage / mid-sweep stall); TCG gicv2 -smp 2 twice-consecutive green, R9_SMP=1 solid. FIXED by 339036f (the HVF kstack-handoff debug session): reschedule published a preempted proc Ready+enqueued while the CPU still ran on its kernel stack (a sibling could take traps on the same stack), and the secondary's sched loop ran IRQ-unmasked so an IRQ in the pick_next→trap_return handoff restored a scheduler-stack EL1h frame. Proc::on_cpu + the sched-loop release handoff close both; HVF -smp 2 smoke 8/8 consecutive after the fix (was 6/13), tripwire in pick_next guards the invariant | fixed |  | 2026-11-26T14:44:09.375Z | 2026-11-26T16:05:00.000Z |
 | 13 | 05 | unrun-verify | x86_64/src/platform/q35/acpi.rs |  | 05-11: MADT/lapic host pins compile-proven by error-diff on aarch64 dev host (x86_64 crate test harness is x86_64-host-only); assertion-level run lands on CI x86_64 runners | open |  | 2026-11-26T16:57:27.518Z |  |
 | 14 | 05 | unrun-verify | x86_64/src/platform/q35/timer.rs |  | 05-12: tick_plan/tick_rearm host pin unchanged in behavior but the x86_64 crate test harness is x86_64-host-only (aarch64 dev host cannot compile it — 05-11's recorded constraint); assertion-level run lands on CI x86_64 runners | open |  | 2026-11-26T17:59:03.744Z |  |
+| 15 | 05 | unrun-verify | x86_64/src/proc.rs |  | 05-24 follow-up (c9d43c8): the on_cpu owner-scoped release + owned_pick_give_up cycle-guard host pins are compile-pinned on the aarch64 dev host and their logic passed a standalone extraction run, but the x86_64 crate test harness is x86_64-host-only (05-11's recorded constraint); assertion-level run lands on CI x86_64 runners | open |  | 2026-11-26T18:30:37.477Z |  |
 
 ````json
 [
@@ -211,6 +212,19 @@ last_updated: 2026-11-26T17:59:03.744Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-11-26T17:59:03.744Z",
+    "resolved_at": null,
+    "milestone": "v3.1"
+  },
+  {
+    "id": 15,
+    "kind": "unrun-verify",
+    "phase": "05",
+    "file": "x86_64/src/proc.rs",
+    "line": null,
+    "description": "05-24 follow-up (c9d43c8): the on_cpu owner-scoped release + owned_pick_give_up cycle-guard host pins are compile-pinned on the aarch64 dev host and their logic passed a standalone extraction run, but the x86_64 crate test harness is x86_64-host-only (05-11's recorded constraint); assertion-level run lands on CI x86_64 runners",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-26T18:30:37.477Z",
     "resolved_at": null,
     "milestone": "v3.1"
   }

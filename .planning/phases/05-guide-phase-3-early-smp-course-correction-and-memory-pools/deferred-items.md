@@ -96,4 +96,24 @@ Out-of-scope discoveries made during plan 05-08, not fixed by it:
   is closed from the start).  Owner: Plan 05-14 (the x86_64 -smp 2 boot
   proof) — enter with `on_cpu` + `release_left_proc` + the deferred
   reap queued from 05-22's fix list (ceb6ecc) before the stress legs.
-  status: open
+  status: fixed (2026-11-26, follow-up commit c9d43c8 — the 339036f +
+  665c94e port): x86_64 now has `Proc::on_cpu` set by
+  pick_next/activate_first and cleared only by the owning CPU's
+  sched-loop `release_left_proc` (owner-scoped via the
+  `Mach.current_proc` consume), the park-only `reschedule`, the
+  pick_next refusal + `owned_pick_give_up` cycle guard + the
+  debug-build tripwire reading `Mach.cur_kstack` cross-CPU (the TSS
+  rsp0 is never the witness — it is not retracted on the park), the
+  deferred moribund reap (`Mach.moribund_reap` +
+  `defer_root_kstack_reap`/`reap_moribund`), the IRQ-masked sched-loop
+  entry (`trap::mask_irq` — the dev_churn boot path reached it with
+  IF=1), and the EOI-before-preempt `dispatch_irq`.  The
+  `sched: switch` marker is emitted from pick_next via
+  `Mach.sched_from`.  Verified by compile/clippy/host-test/build only
+  (no x86_64 boot on this host): `cargo xtask check`, clippy
+  x86-64/q35cpu + aarch64/virtshell, `cargo xtask test`,
+  `cargo test -p xtask lintcontract`, all nine q35* config builds — all
+  exit 0.  The two new x86_64 host pins run on CI's x86_64 runners
+  (the crate harness is x86_64-host-only — the WINDOWS #13/#14
+  constraint; their logic passed a standalone extraction run here).
+  The live -smp 2 boot proof remains 05-14's (CI TCG + owner KVM).
