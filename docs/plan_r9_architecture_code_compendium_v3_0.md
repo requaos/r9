@@ -16,7 +16,7 @@
 | **9P `FidTable`** | `FlattenedTphtShard<u32, FidEntry>` with `TinyPtr` | **Sharded Generational Slab** (`FidShard` with direct slot indexing + `RoaringBitmap` active/reclaimed sets). Zero bucket clustering; deterministic allocation. |
 | **SMP Bring-Up** | Deferred to `Milestone S` (after Phase 3 & Track P) | **Pulled forward to Phase 3.** Minimal 2-CPU SMP (`q35 -smp 2`, `virt -smp 2`) lands *before* distributed 9P extensions and storage. |
 | **Native Toolchain** | Port `6c`/`6a`/`6l` to Rust + dual Classic APE / APEX | **`rustc` + `rust-lld` + vendored APEX + `elf2aout`** as primary native toolchain. Harvey C compilers remain a bootstrap/compatibility layer only (no Rust rewrite). |
-| **`ds/` Unsafe Policy** | Contradictory (`forbid` vs. `tpht` exception) | **Per-module `#![forbid(unsafe_code)]` layout** matching commit `25af196`. Only `ds/src/tpht/` permits audited `unsafe`. `crypto/` and `port/` are crate-wide `#![forbid(unsafe_code)]`. |
+| **`ds/` Unsafe Policy** | Contradictory (`forbid` vs. `tpht` exception) | **Per-module `#![forbid(unsafe_code)]` layout** matching commit `25af196`. Only `ds/src/tpht/` (and one reserved Roaring SIMD module) permits audited `unsafe`. `crypto/` is crate-wide `#![forbid(unsafe_code)]`; `port/` is per-module forbid with the three named floor modules `globalalloc`, `mcslock` and `devip_waker` (corrected 2026-11-25, Phase 5 CORR-05 / owner D-02 — this row's earlier wording named `port/` crate-wide). |
 
 ### Impact Summary: Dropping Software Cryptographic Memory
 
@@ -40,20 +40,26 @@
 
 ```text
 r9/
-├── crypto/         # #![forbid(unsafe_code)] — HKDF-SHA256, ChaCha20, Keyed BLAKE3, 9P session/cap tokens
-├── ds/             # Per-module #![forbid(unsafe_code)]:
+├── crypto/         # Crate-wide #![forbid(unsafe_code)] over r9's own code (not the pinned crates it
+│                   # wraps) — HKDF-SHA256, ChaCha20, Keyed BLAKE3, 9P session/cap tokens
+├── ds/             # Per-module #![forbid(unsafe_code)]: exactly two places may hold unsafe —
+│   │               # src/tpht/ and one reserved Roaring SIMD module; a third needs owner approval
 │   ├── src/roaring.rs      # #![forbid(unsafe_code)] — RoaringBitmap, SuperpageResidency, ClientSet
 │   ├── src/slab.rs         # #![forbid(unsafe_code)] — Sharded generational slab for authoritative tables
 │   └── src/tpht/           # Audited unsafe (deny undocumented_unsafe_blocks) — Flattened & Chained TPHT
-├── port/           # #![forbid(unsafe_code)] — Portable kernel: 9P2000.aead, FidTable, leases, union, SMP traits, devgpu
-├── x86_64/         # Audited unsafe — AP startup (SIPI), LAPIC/IPI, MMU, traps, VirtIO drivers
-├── aarch64/        # Audited unsafe — PSCI CPU_ON, GICv2/v3 IPI, MMU, traps
+├── port/           # Per-module #![forbid(unsafe_code)] with three named floor modules
+│                   # (globalalloc, mcslock, devip_waker; no fourth without owner approval) —
+│                   # Portable kernel: 9P2000.aead, FidTable, leases, union, SMP traits, devgpu
+├── x86_64/         # Audited unsafe (deny undocumented_unsafe_blocks) — AP startup (SIPI), LAPIC/IPI, MMU, traps, VirtIO drivers
+├── aarch64/        # Audited unsafe (deny undocumented_unsafe_blocks) — PSCI CPU_ON, GICv2/v3 IPI, MMU, traps
 ├── riscv64/        # Audited unsafe — SBI HSM, PLIC/CLINT, MMU, typed MMIO
 ├── sys/include/    # Generated ABI headers (e.g., rfork.h from port::rfork)
 ├── xtask/          # Build, host tests, test-9p, boot-test, ureg-check, elf2aout
 ├── gates/ & nix/   # Relocated Harvey-composed boot/net/auth/rio gate legs
 └── UNSAFE-AUDIT.md # Mandatory ledger for every unsafe block in ds/src/tpht/ and arch crates
 ```
+
+*Corrected 2026-11-25 (Phase 5 CORR-05, owner decision D-02):* the `port/` line previously read crate-wide `#![forbid(unsafe_code)]`; `port/` is and stays per-module forbid with the three named floor modules `globalalloc`, `mcslock` and `devip_waker` (they hold irreducibly unsafe allocator, MCS-lock and smoltcp-waker code), and no fourth module without owner approval. The same policy sentence — `crypto/` crate-wide, `ds/` per-module with `ds/src/tpht/` and one reserved Roaring SIMD module, `port/` per-module with the three floor modules, `undocumented_unsafe_blocks = deny` on `ds/src/tpht/`, `aarch64` and `x86_64` — is stated identically in the v3.0 guide section 3, the workspace `Cargo.toml` header comment and `UNSAFE-AUDIT.md`.
 
 ---
 
@@ -265,6 +271,8 @@ impl FidShard {
     }
 }
 ```
+
+**Amended 2026-11-25 — Phase 5 D-08, D-11, D-13:** the listing above is the reference shape, with two deliberate divergences as built in `ds/src/slab.rs` and `port/src/fid.rs` (both `#![forbid(unsafe_code)]`). **(a) The slot is a 64-byte lock-free Boehm seqlock slot** — one `AtomicU64` state word (bit 0 `WRITING`, bit 1 `OCCUPIED`, bits 2..=17 the 16-bit generation, bits 18..=63 a 46-bit sequence) plus a `[AtomicU64; 7]` payload — instead of the listing's `RwLock<ShardInner>`: `resolve()` takes no lock, reads one cache line and returns a consistent snapshot, retrying while a write is in flight, while writers serialise through a shard-local mutex over the free list and the active/reclaimed Roaring sets. The generation bumps only on clunk and never equals 0 (wraps 65535 → 1); an in-place update bumps the sequence so readers retry without the client's wire handle going stale. **(b) The owning-`client_id` check the listing drops is retained:** `resolve`, `clunk` and `mark_reclaimed` verify `client_id != 0` and `entry.client_id == client_id`. The entry keeps the client's fid number as a record only (`fid_key` stays in the 56-byte packed entry image; no lookup uses it), and the slot's `OCCUPIED` bit replaces the listing's per-slot `occupied` flag and the Phase 4 `FID_LIVE` entry flag. Shards are flat power-of-two slot arrays sized at construction — synthetic 256×4, default workstation 1,024×8, cluster 4,096..16,384×16..32 — with `(num_cpus * 2).next_power_of_two().clamp(4, 256)` shards and round-robin fallover from the calling CPU's shard.
 
 ---
 

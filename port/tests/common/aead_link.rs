@@ -846,7 +846,7 @@ fn e2e_entry(fid_key: u32, qid_path: u64, qid_type: u8) -> FidEntry {
         open_mode: 0,
         flags: 0,
         volatility: 0,
-        _reserved: [0u8; 15],
+        _reserved: [0u8; 7],
     }
 }
 
@@ -920,7 +920,8 @@ fn plain_step(io_w: &mut dyn MntIo, io_r: &mut dyn MntIo, handshake: &mut Handsh
 
 /// The server end of one whole sealed session.
 ///
-/// It owns a [`FidTable`] (two home-only shards, one test domain key, epoch 1),
+/// It owns a share in a [`FidTable`] (the synthetic slab tier, one test domain
+/// key, epoch 1 — one table per server, shared by every connection, D-12),
 /// assigns one `client_id` per connection, keeps a canned tree, answers the
 /// plain handshake and then resolves every sealed request through the table.
 pub struct E2eServer {
@@ -929,19 +930,34 @@ pub struct E2eServer {
     session: Option<Session>,
     secret: Key,
     config: TransportConfig,
-    table: FidTable,
+    table: Rc<RefCell<FidTable>>,
     client_id: u32,
 }
 
 impl E2eServer {
-    /// Build a server end over `link` with `client_id` and `config`.
+    /// Build a server end over `link` with `client_id` and `config`, backed by
+    /// its own private slab `FidTable`.
     pub fn new(
         link: Rc<RefCell<AeadLink>>,
         secret: Key,
         client_id: u32,
         config: TransportConfig,
     ) -> Rc<RefCell<E2eServer>> {
-        let table = FidTable::new(2, 1, e2e_domain_key(), 1).expect("a two-shard fid table forms");
+        let table = Rc::new(RefCell::new(FidTable::synthetic(e2e_domain_key(), 1)));
+        Self::new_shared(link, secret, client_id, config, table)
+    }
+
+    /// Build a server end over `link` backed by the shared `table` — the
+    /// one-table-per-server shape the slab design sizes (D-12), so two server
+    /// ends on one table model two connections of one server and the owning
+    /// `client_id` check (D-08) decides whose handle resolves.
+    pub fn new_shared(
+        link: Rc<RefCell<AeadLink>>,
+        secret: Key,
+        client_id: u32,
+        config: TransportConfig,
+        table: Rc<RefCell<FidTable>>,
+    ) -> Rc<RefCell<E2eServer>> {
         Rc::new(RefCell::new(E2eServer {
             link,
             handshake: Some(Handshake::new(Role::Server, config)),
@@ -1076,7 +1092,8 @@ impl E2eServer {
         match msg {
             Msg::Tattach { fid, .. } => {
                 let entry = e2e_entry(fid, E2E_ROOT, QTDIR);
-                let new = self.table.insert(self.client_id, entry).map_err(|_| Stage::Decode)?;
+                let new =
+                    self.table.borrow().alloc(self.client_id, entry).map_err(|_| Stage::Decode)?;
                 self.reply(
                     tag,
                     new.to_wire(),
@@ -1099,7 +1116,8 @@ impl E2eServer {
                 let qid_type = if next_path == E2E_ROOT { QTDIR } else { 0 };
                 let new = self
                     .table
-                    .insert(self.client_id, e2e_entry(newfid, next_path, qid_type))
+                    .borrow()
+                    .alloc(self.client_id, e2e_entry(newfid, next_path, qid_type))
                     .map_err(|_| Stage::Decode)?;
                 self.reply(
                     tag,
@@ -1114,7 +1132,7 @@ impl E2eServer {
                     Err(_) => return self.rerror(tag),
                 };
                 let qid = e2e_qid(entry.qid_path);
-                let wire_cap = self.table.issue_cap(&qid, mode).to_wire();
+                let wire_cap = self.table.borrow().issue_cap(&qid, mode).to_wire();
                 let exts = Exts {
                     stateless_cap: Some(&wire_cap),
                     ..Exts::default()
@@ -1125,7 +1143,7 @@ impl E2eServer {
             Msg::Tread { offset, count, .. } => {
                 let path = match (&cap, FidHandle::from_wire(&handle, cap.as_ref())) {
                     (Some(_), Ok(FidHandle::Stateless(capability))) => {
-                        if self.table.verify_cap(&capability).is_err() {
+                        if self.table.borrow().verify_cap(&capability).is_err() {
                             // P8: a capability that fails verification closes
                             // the connection; nothing is answered.
                             self.teardown();
@@ -1151,7 +1169,7 @@ impl E2eServer {
                     Ok(parsed) => parsed,
                     Err(_) => return self.rerror(tag),
                 };
-                if self.table.clunk(self.client_id, &parsed).is_err() {
+                if self.table.borrow().clunk(self.client_id, &parsed).is_err() {
                     return self.rerror(tag);
                 }
                 self.reply(tag, [0u8; 8], &Exts::default(), &Msg::Rclunk)
@@ -1162,7 +1180,7 @@ impl E2eServer {
 
     fn stateful(&self, handle: &[u8; 8]) -> port::Result<FidEntry> {
         let parsed = StatefulHandle::from_wire(handle)?;
-        self.table.resolve(self.client_id, &parsed)
+        self.table.borrow().resolve(self.client_id, &parsed)
     }
 
     /// Drive one re-key step and put the returned sealed packets on the wire.
@@ -1199,9 +1217,8 @@ impl E2eServer {
 
     /// The live and reclaimed slot counts of every shard, in shard order.
     pub fn fid_memory(&self) -> Vec<(u64, u64)> {
-        (0..2)
-            .filter_map(|shard| self.table.bitmap_lens(shard))
-            .collect()
+        let table = self.table.borrow();
+        (0..table.shard_count() as u8).filter_map(|shard| table.bitmap_lens(shard)).collect()
     }
 
     /// Zeroize and close this end.
@@ -1369,6 +1386,30 @@ pub fn connect_aead(
     connect_aead_with(secret, client_id, config())
 }
 
+/// `connect_aead` over one **shared** `FidTable`: two of these on one table
+/// model two connections of one server (the slab's one-table-per-server
+/// shape, D-12), so a handle one connection was issued names that connection's
+/// entry and the owning `client_id` check (D-08) refuses it to the other.
+pub fn connect_aead_shared(
+    secret: Key,
+    client_id: u32,
+    table: Rc<RefCell<FidTable>>,
+) -> (E2eClient, Rc<RefCell<E2eServer>>, Rc<RefCell<AeadLink>>) {
+    connect_aead_shared_with(secret, client_id, config(), table)
+}
+
+/// `connect_aead_shared` with chosen session parameters.
+pub fn connect_aead_shared_with(
+    secret: Key,
+    client_id: u32,
+    transport: TransportConfig,
+    table: Rc<RefCell<FidTable>>,
+) -> (E2eClient, Rc<RefCell<E2eServer>>, Rc<RefCell<AeadLink>>) {
+    let link = AeadLink::new();
+    let server = E2eServer::new_shared(Rc::clone(&link), secret.clone(), client_id, transport, table);
+    connect_aead_over(link, server, secret, transport)
+}
+
 /// `connect_aead` with chosen session parameters (the re-key pin's low
 /// threshold).
 pub fn connect_aead_with(
@@ -1378,6 +1419,17 @@ pub fn connect_aead_with(
 ) -> (E2eClient, Rc<RefCell<E2eServer>>, Rc<RefCell<AeadLink>>) {
     let link = AeadLink::new();
     let server = E2eServer::new(Rc::clone(&link), secret.clone(), client_id, transport);
+    connect_aead_over(link, server, secret, transport)
+}
+
+/// The shared body of the connect helpers: drive the client-side negotiation
+/// and the plain handshake over `link` against `server`.
+fn connect_aead_over(
+    link: Rc<RefCell<AeadLink>>,
+    server: Rc<RefCell<E2eServer>>,
+    secret: Key,
+    transport: TransportConfig,
+) -> (E2eClient, Rc<RefCell<E2eServer>>, Rc<RefCell<AeadLink>>) {
     let io_r: Box<dyn MntIo> = Box::new(ClientLinkIo {
         link: Rc::clone(&link),
         server: None,

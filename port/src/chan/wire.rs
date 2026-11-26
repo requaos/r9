@@ -386,7 +386,8 @@ pub fn check_header(header: &Header, packet_len: usize) -> crate::Result<()> {
         return Err("chan: TLV area runs past the packet");
     }
     // D-12: the capability bit is the discriminator between the two handle
-    // kinds, and a stateful handle's TinyPtr byte is never zero.
+    // kinds, and a stateful handle is never all zero because its generation
+    // is never zero (Phase 5 D-10).
     if header.ext_mask & EXT_STATELESS_CAP != 0 && header.fid_handle != [0u8; 8] {
         return Err("chan: capability bit with a nonzero header handle");
     }
