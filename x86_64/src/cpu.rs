@@ -235,6 +235,63 @@ pub fn cpuid(leaf: u32, subleaf: u32) -> (u32, u32, u32, u32) {
     (a, rbx_val as u32, c, d)
 }
 
+/// CR4 bit 18 — OSXSAVE: enables XGETBV/XSETBV and the XSAVE instruction
+/// family (XSAVE/XSAVEOPT/XRSTOR).  Gated on CPUID reporting both XSAVE
+/// (leaf 1 ECX[26]) and AVX (leaf 1 ECX[28]) — an ungated write is a
+/// boot `#GP(0)` on CPUs without XSAVE (TCG's qemu64; MEM-18 Pitfall 8).
+pub const CR4_OSXSAVE: u64 = 1 << 18;
+
+/// Reads CR4 — fpu.rs's MEM-18 OSXSAVE arm is the one caller (a
+/// read-modify-write preserving every l.S/trampoline-armed bit).
+pub(crate) fn cr4() -> u64 {
+    let val: u64;
+    // SAFETY: mov-from-CR4 is CPL 0-only and the kernel runs at CPL 0;
+    // it takes no operands, returns through the named out register
+    // (fully initializing val), and touches no memory.
+    unsafe {
+        asm!("mov %cr4, {}", out(reg) val, options(att_syntax));
+    }
+    val
+}
+
+/// Writes CR4 — fpu.rs's MEM-18 OSXSAVE arm is the one caller.
+///
+/// # Safety
+/// The value must keep every bit the loader/kernel armed (PAE, PGE,
+/// OSFXSR, OSXMMEXCPT — l.S and ap_trampoline.S) set; callers
+/// read-modify-write from [`cr4`].  Setting OSXSAVE is legal only when
+/// CPUID reports XSAVE + AVX (the caller's gate).
+pub(crate) unsafe fn write_cr4(val: u64) {
+    // SAFETY: the caller's contract above.  mov-to-CR4 is CPL 0-only,
+    // takes its operand in a register, and touches no memory.
+    unsafe {
+        asm!("mov {}, %cr4", in(reg) val, options(att_syntax));
+    }
+}
+
+/// Executes XSETBV — write the extended-control register `xcr` (only
+/// XCR0 exists) — fpu.rs's MEM-18 XCR0 = 0x7 arm (x87|SSE|AVX; AVX-512
+/// bits stay off).
+///
+/// # Safety
+/// CR4.OSXSAVE must be set first (XSETBV #UDs without it) and `val` must
+/// name only bits CPUID leaf 0xD.0 EAX reports as settable plus bit 0
+/// (x87, always required) — an unsupported bit or a cleared bit 0 #GPs.
+/// The caller (fpu's arm path) checks exactly that.
+pub(crate) unsafe fn xsetbv(xcr: u32, val: u64) {
+    // SAFETY: the caller's contract above.  xsetbv is CPL 0-only, takes
+    // the XCR number in ecx and the value split across edx:eax through
+    // named in operands, and touches no memory.
+    unsafe {
+        asm!(
+            "xsetbv",
+            in("ecx") xcr,
+            in("eax") val as u32,
+            in("edx") (val >> 32) as u32,
+            options(att_syntax));
+    }
+}
+
 /// Reads the 64-bit time-stamp counter (the TSC-deadline arm and the
 /// frequency calibration both read it).
 ///

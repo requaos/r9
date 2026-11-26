@@ -2265,8 +2265,9 @@ pub(crate) fn deliver_notes(frame: &mut Ureg) {
     proc.note_ureg = nureg;
     proc.notified = true;
     // ... and the donor's fpunotify: record the interrupted code's
-    // FPU/SSE state; the handler runs on a copy of it (the live
-    // registers stay as they are) and NOTED gives this one back.
+    // FPU/SSE/AVX state (all 832 bytes — MEM-18); the handler runs on a
+    // copy of it (the live registers stay as they are) and NOTED gives
+    // this one back.
     proc.note_fpsave = crate::fpu::snapshot(&proc.fpsave);
 }
 

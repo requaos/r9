@@ -344,6 +344,32 @@ x86_64 170 → 175 blocks, SAFETY 417 → 422 (proc.rs 27 → 30, dat.rs
 6 → 7, smp.rs 10 → 11); the reconciliation holds.  aarch64 counts
 unchanged (no aarch64 source touched).
 
+**Plan 05-15 Task 1 delta (MEM-18, D-20, 2026-11-26):** the CPUID-gated
+AVX/XSAVE enable lands on x86_64.  `cpu.rs`: gains `cr4` (+1 block: the
+mov-from-CR4 read), `write_cr4` (+1 block, +1 fn: the mov-to-CR4 write,
+contract: preserve every l.S/trampoline-armed bit) and `xsetbv` (+1
+block, +1 fn: XCR0 = 0x7, contract: OSXSAVE first + CPUID-settable bits
+only), plus the `CR4_OSXSAVE` constant — the fpu.rs arm path's
+primitives.  `fpu.rs`: `FpState` grows to 832 bytes at 64-byte alignment
+(the XSAVE header + YMM_Hi128 region; `FpState::DEFAULT`'s xstate_bv = 0
+is the XRSTOR64 all-init exec reset); `save_raw` splits into the
+format-dispatched FXSAVE64/XSAVE64/XSAVEOPT64 arms (1 → 3 blocks),
+`restore_raw` into FXRSTOR64/XRSTOR64 (1 → 2 blocks); `arm_xsave` is the
+shared BSP/AP CR4.OSXSAVE + XCR0 arm (+1 block); `init_bsp` carries the
+defensive over-832 back-out arm (+1 block: xsetbv(0,1) + OSXSAVE clear —
+never taken on conforming hardware, T-05-26); `KernelSimd::drop` gains
+the format-gated `vzeroupper` (+1 block: clears kernel AVX residue before
+the parked user state restores, AVX-only so gated off the FxSave path).
+`init_ap` applies the BSP's published format per-AP with its own CPUID
+leaf-1 re-verified (a heterogeneous CPU is a named panic, not a silent
+#GP).  All dispatch is on the BSP-published `FP_FORMAT` cell; the
+host-test build never arms XSAVE (XSETBV is CPL 0-only), so the tests
+exercise the FxSave path permanently.  x86_64 175 → 184 blocks, fns
+30 → 32, SAFETY 422 → 431 (fpu.rs 10 → 16, cpu.rs 13 → 16 blocks /
+6 → 8 fns); the reconciliation holds.  (main.rs's `init_bsp`/`init_ap`
+call wiring and proc.rs/exec.rs/syscall.rs's doc updates are safe code —
+counts unchanged.)
+
 **Plan 05-11 Task 1 delta (SMP-01/07, 2026-11-26):** the x86_64 dual
 xAPIC/x2APIC IPI delivery and AP LAPIC init land.  `acpi.rs`: the MADT
 walk records enabled/online-capable processors (type-0 LAPIC and type-9
@@ -762,15 +788,15 @@ cfg-gated code as well.
 | `vm.rs` | 16 | 3 | 0 | page-table machinery: TTBR/TLB/barrier asm, entry writes, recursive-mapping resolution |
 | `vmdebug.rs` | 2 | 0 | 0 | read-only recursive-mapping walk (print path) |
 
-### x86_64/src — 175 blocks, 30 unsafe fns, 4 extern blocks (test-only: 8 blocks, 2 fns)
+### x86_64/src — 184 blocks, 32 unsafe fns, 4 extern blocks (test-only: 8 blocks, 2 fns)
 
 | File | Blocks | fns | ext | Surface |
 |---|---|---|---|---|
 | `allocator.rs` | 1 | 0 | 0 | the global-allocator arena's one-time static construction (05-07: `static mut` HEAP/ALLOC became SyncUnsafeCell, and the unlocked diagnostic reads moved under the IrqSpinLock guard) |
-| `cpu.rs` | 13 | 6 | 0 | CPL-0 instruction primitives: `ltr`/`lgdt`/`lidt`, `_rdmsr`/`wrmsr`, `wrgsbase` (the fns); flags/sti/cli/cpuid/rdtsc/rdrand/rdseed blocks |
+| `cpu.rs` | 16 | 8 | 0 | CPL-0 instruction primitives: `ltr`/`lgdt`/`lidt`, `_rdmsr`/`wrmsr`, `wrgsbase`, `write_cr4`/`xsetbv` (the fns); flags/sti/cli/cpuid/rdtsc/rdrand/rdseed/cr4 blocks (05-15: `cr4`/`write_cr4`/`xsetbv` + `CR4_OSXSAVE` — the MEM-18 OSXSAVE/XCR0 arm's primitives) |
 | `dat.rs` | 7 | 1 | 0 | Ureg↔saved-frame copies, the Mach's CpuFp cell write, `Mach::init`'s GDT/IDT/TSS load, `mach_ptr`'s `%gs:0` read + `this_mach`'s deref (05-11); 05-12: the Mach gains `park_context` (the per-CPU one-way boot park slot — safe field, count unchanged); 05-24: the Mach gains the kstack-ownership triple (`cur_kstack`/`sched_from`/`moribund_reap` — safe fields) and `Mach::init` writes the Option explicitly (+1, the `fpu` pattern) |
 | `exec.rs` | 5 | 0 | 0 | KZERO-alias writes into just-mapped image pages and the seed page (+2 test-only blocks) |
-| `fpu.rs` | 10 | 2 | 0 | FXSAVE64/FXRSTOR64 save/restore asm (`save_raw`/`restore_raw`), per-CPU `CpuFp` in the Mach slot (`%gs:0`, 05-12 — the hardcoded `KMACH` deref is gone), `with_simd` (+1 test-only block) |
+| `fpu.rs` | 16 | 2 | 0 | format-dispatched FXSAVE64/XSAVE64/XSAVEOPT64 + FXRSTOR64/XRSTOR64 save/restore asm (`save_raw`/`restore_raw`, 05-15 MEM-18: the CPUID-gated AVX/XSAVE switch — 832-byte align-64 `FpState`, `arm_xsave`'s CR4.OSXSAVE + XCR0 = 0x7 arm, `init_bsp`'s back-out arm, `KernelSimd::drop`'s gated `vzeroupper`), per-CPU `CpuFp` in the Mach slot (`%gs:0`, 05-12 — the hardcoded `KMACH` deref is gone), `with_simd` (+1 test-only block) |
 | `main.rs` | 14 | 1 | 1 | boot descriptor arming, the mb2 stash slice, `arm_syscall_entry`'s MSR program, `halt`'s cli/hlt, the BSP's Mach identity + LAPIC online publish (05-12); `ap_main`'s full AP bring-up (05-12, replacing the 05-11 stub in place: the Mach reborrow, the GS-base MSR writes, the GDT/IDT/TSS init, the SYSCALL MSR call); extern: the l.S link-syms.  (The row read 9 at CORR-05 — measured 10 at the 05-11 base; the +1 is a stale-row correction, not new code.) |
 | `pio.rs` | 6 | 6 | 0 | the port-I/O primitives (`inb`/`inw`/`inl`/`outb`/`outw`/`outl`, CPL 0) |
 | `platform/q35/acpi.rs` | 1 | 0 | 0 | bounds-checked volatile byte reads of firmware tables |

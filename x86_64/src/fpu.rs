@@ -1,5 +1,7 @@
-//! User FPU/SSE context (x87, MMX, XMM0-15, MXCSR) and the kernel-SIMD
-//! API — the x86_64 port of aarch64/src/fpu.rs, the reference design.
+//! User FPU/SSE/AVX context (x87, MMX, XMM0-15, MXCSR, and — where
+//! CPUID reports XSAVE+AVX — YMM0-15's upper halves) and the
+//! kernel-SIMD API — the x86_64 port of aarch64/src/fpu.rs, the
+//! reference design.
 //!
 //! # User state
 //!
@@ -7,10 +9,24 @@
 //! "-mmx,-sse,+soft-float", rustc-abi x86-softfloat — 14-04's rule), so a
 //! user proc's FPU/SSE state stays live in the registers across every
 //! syscall, trap and interrupt it takes, and only a change of the proc
-//! on the CPU needs a save and a restore.  The state is the 512-byte
-//! FXSAVE image: CR4.OSXSAVE is never set, so AVX and later state is
-//! unusable at CPL3 and FXSAVE covers everything a user can touch.  The
-//! invariant, kept by the CPU's owner (`CpuFp`):
+//! on the CPU needs a save and a restore.  MEM-18 (D-20): the state is
+//! the 832-byte image selected by CPUID at boot ([`FpFormat`]):
+//!
+//! - where CPUID reports XSAVE (leaf 1 ECX[26]) && AVX (leaf 1 ECX[28])
+//!   with XCR0 covering x87|SSE|AVX and the save area fitting 832 bytes
+//!   (KVM `-cpu host`, TCG `qemu64,+avx,+avx2,+xsave,+xsaveopt`), the
+//!   BSP and every AP set CR4.OSXSAVE and arm XCR0 = 0x7 (AVX-512 bits
+//!   stay OFF), and save/restore run XSAVEOPT64/XSAVE64 + XRSTOR64 —
+//!   user ymm state survives every switch, rfork, exec reset and note;
+//! - elsewhere (TCG's default qemu64 — the CI and quick-gate CPU) CR4
+//!   is left untouched (an ungated OSXSAVE write is a boot #GP(0) —
+//!   Pitfall 8) and the unchanged FXSAVE64/FXRSTOR64 path covers
+//!   everything a user can touch.
+//!
+//! One deterministic boot line names the choice for the gates:
+//! `fpu: format=<fxsave|xsave|xsaveopt> avx2=<on|off>`.
+//!
+//! The invariant, kept by the CPU's owner (`CpuFp`):
 //!
 //! - the registers hold the user state of exactly the `Proc::fpsave` slot
 //!   the CPU's owner (`CpuFp`) names (null: nobody's — the registers are scratch);
@@ -55,65 +71,86 @@
 
 use core::marker::PhantomData;
 use core::ptr;
-use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, Ordering};
 
-/// One proc's saved user FPU/SSE state: the FXSAVE64 image (16-byte
-/// aligned, 512 bytes).  Layout (SDM Vol 1, 10.5.1): FCW @0, FSW @2,
-/// abridged FTW @4, FOP @6, FIP @8, FDP @16, MXCSR @24, MXCSR_MASK @28,
-/// ST0-7/MM0-7 @32 (16-byte slots, 10 bytes used), XMM0-15 @160,
-/// reserved/available @416.
+use crate::cpu;
+
+/// One proc's saved user FPU/SSE/AVX state: 832 bytes, 64-byte aligned
+/// (MEM-18, D-20).  Layout: the FXSAVE64 legacy image at bytes 0..512
+/// (FCW @0, FSW @2, abridged FTW @4, FOP @6, FIP @8, FDP @16, MXCSR @24,
+/// MXCSR_MASK @28, ST0-7/MM0-7 @32 in 16-byte slots, XMM0-15 @160,
+/// reserved/available @416 — SDM Vol 1, 10.5.1), then the XSAVE header
+/// at 512..576 (xstate_bv @512 — the component-present bitmap XRSTOR64
+/// reads; xcomp_bv @520 — always 0 here, the compacted/supervisor format
+/// is never used), then the XSAVE extended region at 576..832: YMM0-15's
+/// upper 128 bits (the AVX component at its architectural offset for
+/// XCR0 = 0x7).  64-byte alignment is XSAVE64/XRSTOR64's requirement and
+/// subsumes FXSAVE64's 16-byte one; on the FxSave path only the first
+/// 512 bytes are hardware-touched.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(C, align(16))]
+#[repr(C, align(64))]
 pub struct FpState {
-    pub fx: [u8; 512],
+    pub area: [u8; 832],
 }
 
-const _: () = assert!(core::mem::size_of::<FpState>() == 512);
-const _: () = assert!(core::mem::align_of::<FpState>() == 16);
+const _: () = assert!(core::mem::size_of::<FpState>() == 832);
+const _: () = assert!(core::mem::align_of::<FpState>() == 64);
 
 const FCW: usize = 0;
 const MXCSR: usize = 24;
+/// The XSAVE header's xstate_bv (bytes 512..520).
+const XSTATE_BV: usize = 512;
+/// The YMM_Hi128 extended region (bytes 576..832).
+const YMM_HI128: usize = 576;
 
 impl FpState {
     /// The state a new image starts with: FCW 0x037F (fninit: every x87
     /// exception masked, 64-bit precision, round to nearest), MXCSR
     /// 0x1F80 (every SSE exception masked, round to nearest), every
-    /// x87/MMX/XMM register, FSW and the tag word zero.
+    /// x87/MMX/XMM register, FSW and the tag word zero — and xstate_bv =
+    /// 0, so XRSTOR64 takes every component to its architectural init
+    /// state (ymm0..15 zeroed) while FXRSTOR64 reads the identical
+    /// legacy bytes: one DEFAULT serves both formats with no previous
+    /// image's contents leaking.
     pub const DEFAULT: FpState = {
-        let mut fx = [0u8; 512];
-        fx[FCW] = 0x7f;
-        fx[FCW + 1] = 0x03;
-        fx[MXCSR] = 0x80;
-        fx[MXCSR + 1] = 0x1f;
-        FpState { fx }
+        let mut area = [0u8; 832];
+        area[FCW] = 0x7f;
+        area[FCW + 1] = 0x03;
+        area[MXCSR] = 0x80;
+        area[MXCSR + 1] = 0x1f;
+        FpState { area }
     };
 
     /// The image's MXCSR.
     pub fn mxcsr(&self) -> u32 {
         u32::from_le_bytes([
-            self.fx[MXCSR],
-            self.fx[MXCSR + 1],
-            self.fx[MXCSR + 2],
-            self.fx[MXCSR + 3],
+            self.area[MXCSR],
+            self.area[MXCSR + 1],
+            self.area[MXCSR + 2],
+            self.area[MXCSR + 3],
         ])
     }
 
     /// Set the image's MXCSR (bits above 15 must stay clear: FXRSTOR
     /// faults on reserved MXCSR bits).
     pub fn set_mxcsr(&mut self, v: u32) {
-        self.fx[MXCSR..MXCSR + 4].copy_from_slice(&v.to_le_bytes());
+        self.area[MXCSR..MXCSR + 4].copy_from_slice(&v.to_le_bytes());
     }
 
     /// The user-visible state two images agree on: FCW, FSW, the
-    /// abridged tag word, MXCSR, the 80 bits of each ST/MM register and
-    /// XMM0-15.  FOP/FIP/FDP are excluded (some CPUs store them only with
-    /// an exception pending), as are the reserved and MXCSR_MASK bytes.
+    /// abridged tag word, MXCSR, the 80 bits of each ST/MM register,
+    /// XMM0-15 and — the MEM-18 half — YMM0-15's upper halves.
+    /// FOP/FIP/FDP are excluded (some CPUs store them only with an
+    /// exception pending), as are the reserved bytes, MXCSR_MASK and
+    /// the XSAVE header (xstate_bv is the hardware's xstate_inuse note,
+    /// not user state).
     pub fn same_user_state(&self, other: &FpState) -> bool {
-        let (a, b) = (&self.fx, &other.fx);
+        let (a, b) = (&self.area, &other.area);
         a[0..5] == b[0..5]
             && a[24..28] == b[24..28]
             && (0..8).all(|i| a[32 + 16 * i..42 + 16 * i] == b[32 + 16 * i..42 + 16 * i])
             && a[160..416] == b[160..416]
+            && a[YMM_HI128..] == b[YMM_HI128..]
     }
 }
 
@@ -129,10 +166,9 @@ impl FpState {
 /// - [`FpFormat::XSaveOpt`]: XSAVEOPT64/XRSTOR64 — the XSAVE path with
 ///   the init-state write elision (CPUID.0DH.1:EAX[0]).
 ///
-/// The discriminants are the on-the-wire values of the `FP_FORMAT`
-/// publish cell (GREEN commit); FxSave = 0 is the zero-init default, so
-/// host tests (which can never arm XSAVE — XSETBV is CPL 0-only) always
-/// observe the fallback.
+/// The discriminants are the values stored in the `FP_FORMAT` publish
+/// cell; FxSave = 0 is the zero-init default, so host tests (which can
+/// never arm XSAVE — XSETBV is CPL 0-only) always observe the fallback.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FpFormat {
     FxSave = 0,
@@ -152,17 +188,68 @@ pub enum FpFormat {
 ///   XSAVE area size for x87|SSE|AVX, which must fit FpState (832; the
 ///   pre-arm read mirrors XCR0 = 1 and proves nothing about AVX).
 /// * `leafd1_eax`: CPUID.0DH.1:EAX (XSAVEOPT = bit 0).
-///
-/// RED-SCAFFOLD (05-15 Task 1): the decision table lands in the GREEN
-/// commit; the scaffold always selects the FXSAVE fallback.
 pub fn select_fp_config(
-    _leaf1_ecx: u32,
-    _leaf7_ebx: u32,
-    _leafd0_eax: u32,
-    _leafd0_ebx: u32,
-    _leafd1_eax: u32,
+    leaf1_ecx: u32,
+    leaf7_ebx: u32,
+    leafd0_eax: u32,
+    leafd0_ebx: u32,
+    leafd1_eax: u32,
 ) -> (FpFormat, bool) {
-    (FpFormat::FxSave, false)
+    const CPUID1_ECX_XSAVE: u32 = 1 << 26;
+    const CPUID1_ECX_AVX: u32 = 1 << 28;
+    const CPUID7_EBX_AVX2: u32 = 1 << 5;
+    const CPUIDD1_EAX_XSAVEOPT: u32 = 1;
+    const XCR0_USER_BITS: u32 = 0x7;
+    const FP_STATE_SIZE: u32 = core::mem::size_of::<FpState>() as u32;
+
+    let xsave_path = leaf1_ecx & CPUID1_ECX_XSAVE != 0
+        && leaf1_ecx & CPUID1_ECX_AVX != 0
+        && leafd0_eax & XCR0_USER_BITS == XCR0_USER_BITS
+        && leafd0_ebx <= FP_STATE_SIZE;
+    if !xsave_path {
+        // qemu64's shape (no XSAVE/AVX), an XCR0 that cannot cover
+        // x87|SSE|AVX, or a save area larger than FpState: CR4.OSXSAVE
+        // stays clear and the FXSAVE path runs unchanged — an ungated
+        // OSXSAVE write is a boot #GP(0) (Pitfall 8) and an oversized
+        // area would silently truncate user state (T-05-26).
+        return (FpFormat::FxSave, false);
+    }
+    // AVX2 is usable (CPL3 user code, and MEM-17's set kernels) only on
+    // the XSAVE path — the ymm upper halves survive a switch only there.
+    let avx2 = leaf7_ebx & CPUID7_EBX_AVX2 != 0;
+    if leafd1_eax & CPUIDD1_EAX_XSAVEOPT != 0 {
+        (FpFormat::XSaveOpt, avx2)
+    } else {
+        (FpFormat::XSave, avx2)
+    }
+}
+
+/// The active save/restore format, published ONCE by [`init_bsp`] (the
+/// BSP's CPUID decision) before the first AP starts; [`init_ap`] applies
+/// it identically per AP.  FxSave until then — the qemu64 default, and
+/// the host tests' permanent shape (XSETBV is CPL 0-only, so no host
+/// test ever arms XSAVE).
+static FP_FORMAT: AtomicU8 = AtomicU8::new(FpFormat::FxSave as u8);
+
+/// AVX2 usable at CPL3 and inside kernel SIMD sections (the MEM-17 set
+/// kernels' dispatch input).  True only on the XSAVE path with the
+/// CPUID leaf-7 AVX2 bit — the ymm upper halves survive a switch only
+/// there.
+static AVX2_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// The published format (FxSave until [`init_bsp`] runs at boot; always
+/// FxSave in host tests).
+pub fn fp_format() -> FpFormat {
+    match FP_FORMAT.load(Ordering::Relaxed) {
+        1 => FpFormat::XSave,
+        2 => FpFormat::XSaveOpt,
+        _ => FpFormat::FxSave,
+    }
+}
+
+/// True when AVX2 is usable (the XSAVE path plus the CPUID leaf-7 bit).
+pub fn avx2_enabled() -> bool {
+    AVX2_ENABLED.load(Ordering::Relaxed)
 }
 
 /// One CPU's FP bookkeeping: which `fpsave` slot's user state is live
@@ -221,41 +308,105 @@ fn this_cpu() -> &'static CpuFp {
     CPU.with(|c| *c)
 }
 
-/// Store the live FPU/SSE registers into `*dst`.
+/// Store the live FPU/SSE registers (and the AVX ymm upper halves on the
+/// XSAVE path) into `*dst`, in the format the BSP selected at boot.
 ///
 /// # Safety
-/// `dst` names a live, writable, 16-byte-aligned FpState that no
-/// reference aliases for the duration of the call.
+/// `dst` names a live, writable FpState that no reference aliases for
+/// the duration of the call.  (FpState's 64-byte alignment and 832-byte
+/// size serve every format: FXSAVE64 needs 16/512, the XSAVE family
+/// 64/≤832 — the size gate is select_fp_config's.)
 unsafe fn save_raw(dst: *mut FpState) {
-    // SAFETY: the caller's contract — FXSAVE64 writes at most the 512
-    // bytes at dst (16-byte aligned, as FXSAVE requires).  CR4.OSFXSR is
-    // set at boot (l.S), so FXSAVE saves the XMM state too.
-    unsafe {
-        core::arch::asm!(
-            "fxsave64 ({dst})",
-            dst = in(reg) dst,
-            options(att_syntax, nostack, preserves_flags),
-        );
+    match fp_format() {
+        FpFormat::FxSave => {
+            // SAFETY: the caller's contract — FXSAVE64 writes at most
+            // the 512 bytes at dst.  CR4.OSFXSR is set at boot (l.S),
+            // so FXSAVE saves the XMM state too.
+            unsafe {
+                core::arch::asm!(
+                    "fxsave64 ({dst})",
+                    dst = in(reg) dst,
+                    options(att_syntax, nostack, preserves_flags),
+                );
+            }
+        }
+        FpFormat::XSave => {
+            // SAFETY: the caller's contract plus the format's: this CPU
+            // armed CR4.OSXSAVE + XCR0 = 0x7 (init_bsp/init_ap), so
+            // XSAVE64 is enabled and writes at most the 832 bytes at
+            // dst (leaf 0xD.0 EBX <= 832 gated the selection) with RFBM
+            // eax = 0x7, edx = 0 matching XCR0 exactly.
+            unsafe {
+                core::arch::asm!(
+                    "xsave64 ({dst})",
+                    dst = in(reg) dst,
+                    in("eax") 0x7u32,
+                    in("edx") 0u32,
+                    options(att_syntax, nostack, preserves_flags),
+                );
+            }
+        }
+        FpFormat::XSaveOpt => {
+            // SAFETY: as the XSave arm, plus the XSAVEOPT CPUID bit
+            // (leaf 0xD.1 EAX[0]) gated the selection.  XSAVEOPT64 may
+            // elide writing a component in its init state — every save
+            // buffer is pre-scrubbed (DEFAULT or a prior full save), so
+            // an elided byte holds its correct value.
+            unsafe {
+                core::arch::asm!(
+                    "xsaveopt64 ({dst})",
+                    dst = in(reg) dst,
+                    in("eax") 0x7u32,
+                    in("edx") 0u32,
+                    options(att_syntax, nostack, preserves_flags),
+                );
+            }
+        }
     }
 }
 
-/// Load `*src` into the live FPU/SSE registers.
+/// Load `*src` into the live FPU/SSE registers (and the AVX ymm upper
+/// halves on the XSAVE path), in the format the BSP selected at boot.
 ///
 /// # Safety
-/// `src` names a live, 16-byte-aligned FpState whose MXCSR has no
-/// reserved bits set (FXRSTOR raises #GP otherwise).
+/// `src` names a live FpState whose MXCSR has no reserved bits set
+/// (FXRSTOR/XRSTOR raise #GP otherwise) and — on the XSAVE path — whose
+/// xcomp_bv is 0 (the compacted/supervisor format is never used).
 unsafe fn restore_raw(src: *const FpState) {
-    // SAFETY: the caller's contract — FXRSTOR64 reads the 512 bytes at
-    // src.  The kernel target has no FPU/SSE registers to clobber (no
-    // kernel code names one); host builds (the tests) do, and
-    // clobber_abi("C") names them there.
-    unsafe {
-        core::arch::asm!(
-            "fxrstor64 ({src})",
-            src = in(reg) src,
-            clobber_abi("C"),
-            options(att_syntax, nostack, preserves_flags, readonly),
-        );
+    match fp_format() {
+        FpFormat::FxSave => {
+            // SAFETY: the caller's contract — FXRSTOR64 reads the 512
+            // bytes at src.  The kernel target has no FPU/SSE registers
+            // to clobber (no kernel code names one); host builds (the
+            // tests) do, and clobber_abi("C") names them there.
+            unsafe {
+                core::arch::asm!(
+                    "fxrstor64 ({src})",
+                    src = in(reg) src,
+                    clobber_abi("C"),
+                    options(att_syntax, nostack, preserves_flags, readonly),
+                );
+            }
+        }
+        _ => {
+            // SAFETY: the caller's contract plus the format's: this CPU
+            // armed CR4.OSXSAVE + XCR0 = 0x7 (init_bsp/init_ap), so
+            // XRSTOR64 is enabled and reads at most the 832 bytes at
+            // src with RFBM eax = 0x7, edx = 0 matching XCR0 exactly; a
+            // component clear in the image's xstate_bv is set to its
+            // init state (FpState::DEFAULT's all-zero header is the
+            // clean exec reset).  clobber_abi as the FXRSTOR arm.
+            unsafe {
+                core::arch::asm!(
+                    "xrstor64 ({src})",
+                    src = in(reg) src,
+                    in("eax") 0x7u32,
+                    in("edx") 0u32,
+                    clobber_abi("C"),
+                    options(att_syntax, nostack, preserves_flags, readonly),
+                );
+            }
+        }
     }
 }
 
@@ -388,15 +539,113 @@ pub fn kernel_begin() -> KernelSimd {
     kernel_begin_on(this_cpu())
 }
 
+/// The user-state XCR0 value: x87 | SSE | AVX (bits 0..2).  AVX-512
+/// (bits 5..7) stays OFF (D-20) — the 832-byte FpState carries no
+/// opmask/ZMM area.
+const XCR0_USER: u64 = 0x7;
+
+/// Arm CR4.OSXSAVE + XCR0 = [`XCR0_USER`] on THIS CPU — the shared half
+/// of [`init_bsp`] and [`init_ap`].  The caller has verified CPUID
+/// (leaf 1 ECX[26] XSAVE && ECX[28] AVX && leaf 0xD.0 EAX covers 0x7).
+fn arm_xsave() {
+    // SAFETY: the caller's CPUID gate above — OSXSAVE is writable
+    // (XSAVE reported), XSETBV is enabled by it, and bits 0..2 are
+    // settable on this CPU (leaf 0xD.0 EAX) with bit 0 kept (x87).
+    // write_cr4 is a read-modify-write preserving every l.S /
+    // ap_trampoline.S-armed bit (PAE, PGE, OSFXSR, OSXMMEXCPT).
+    unsafe {
+        cpu::write_cr4(cpu::cr4() | cpu::CR4_OSXSAVE);
+        cpu::xsetbv(0, XCR0_USER);
+    }
+}
+
+/// BSP FP bring-up (MEM-18, D-20): select the FP save format from CPUID,
+/// arm CR4.OSXSAVE + XCR0 = 0x7 when XSAVE+AVX report (left untouched on
+/// qemu64 — Pitfall 8), publish the format for the APs ([`init_ap`]) and
+/// the save/restore dispatch, and print the ONE deterministic boot line
+/// (`fpu: format=... avx2=...` — the D-20 gate vocabulary).  main() runs
+/// this BEFORE start_aps (the APs apply the published format) and BEFORE
+/// [`selftest`] (the selftest exercises the live format).
+pub fn init_bsp() {
+    const XSAVE: u32 = 1 << 26;
+    const AVX: u32 = 1 << 28;
+    let (max_leaf, _, _, _) = cpu::cpuid(0, 0);
+    let (_, _, leaf1_ecx, _) = cpu::cpuid(1, 0);
+    // Pre-arm reads: the XCR0-settable bits (leaf 0xD.0 EAX) and the
+    // XSAVEOPT flag (leaf 0xD.1 EAX — meaningful only with XSAVE, and
+    // leaf 0xD itself exists only then; an absent leaf returns the
+    // max-leaf values, which the XSAVE/AVX gate below rejects first).
+    let (leafd0_eax, _, _, _) = cpu::cpuid(0xD, 0);
+    let (leafd1_eax, _, _, _) = cpu::cpuid(0xD, 1);
+    // Leaf 7 exists only when the max basic leaf covers it (the
+    // recycled-register guard — cpu::has_rdseed's pattern).
+    let leaf7_ebx = if max_leaf >= 7 { cpu::cpuid(7, 0).1 } else { 0 };
+
+    // The save-area size gate runs POST-arm: leaf 0xD.0 EBX mirrors the
+    // enabled XCR0, so the pre-arm read (XCR0 = 1, x87 only) proves
+    // nothing about the AVX area.  Arm first when the bits allow, then
+    // measure (05-RESEARCH Pattern 4's step order).
+    let mut leafd0_ebx = 0;
+    let mut armed = false;
+    if leaf1_ecx & XSAVE != 0 && leaf1_ecx & AVX != 0 && leafd0_eax & 0x7 == 0x7 {
+        arm_xsave();
+        armed = true;
+        leafd0_ebx = cpu::cpuid(0xD, 0).1;
+    }
+    let (format, avx2) =
+        select_fp_config(leaf1_ecx, leaf7_ebx, leafd0_eax, leafd0_ebx, leafd1_eax);
+    if armed && format == FpFormat::FxSave {
+        // The armed XCR0 = 0x7 area overran FpState (832 exactly on
+        // conforming hardware — this is the defensive arm): back out to
+        // the qemu64 shape rather than truncate user state (T-05-26).
+        // SAFETY: symmetric with arm_xsave (this CPU, the same
+        // CPUID-verified XSETBV/CR4 contract).
+        unsafe {
+            cpu::xsetbv(0, 1);
+            cpu::write_cr4(cpu::cr4() & !cpu::CR4_OSXSAVE);
+        }
+    }
+    FP_FORMAT.store(format as u8, Ordering::Relaxed);
+    AVX2_ENABLED.store(avx2, Ordering::Relaxed);
+    let fmt = match format {
+        FpFormat::FxSave => "fxsave",
+        FpFormat::XSave => "xsave",
+        FpFormat::XSaveOpt => "xsaveopt",
+    };
+    port::println!("fpu: format={fmt} avx2={}", if avx2 { "on" } else { "off" });
+}
+
+/// AP FP bring-up (MEM-18, D-20): apply the BSP's published format to
+/// THIS CPU — CR4.OSXSAVE + XCR0 = 0x7 when the format is XSAVE/XSAVEOPT
+/// (the trampoline arms only the l.S parity bits) — then start this
+/// CPU's `CpuFp` bookkeeping clean.
+///
+/// The AP's own CPUID leaf-1 bits are re-verified before the arm: a BSP
+/// XSAVE decision meeting an AP without the bits is a heterogeneous-CPU
+/// bring-up bug, and the arm would #GP mid-boot — loud by name instead.
+pub fn init_ap() {
+    let format = fp_format();
+    if format != FpFormat::FxSave {
+        let (_, _, leaf1_ecx, _) = cpu::cpuid(1, 0);
+        assert!(
+            leaf1_ecx & (1 << 26) != 0 && leaf1_ecx & (1 << 28) != 0,
+            "fpu: init_ap: the BSP selected {format:?} but this AP lacks XSAVE/AVX \
+             (heterogeneous CPU bring-up)"
+        );
+        arm_xsave();
+    }
+    init_cpu();
+}
+
 /// Initialize THIS CPU's FP bookkeeping (SMP-01: the AP's `ap_main`
-/// bring-up).  The register file itself needs no init: the AP's
-/// trampoline armed CR4.OSFXSR/OSXMMEXCPT at BSP parity, and the first
-/// proc install FXRSTORs its seeded state (`FpState::DEFAULT` for a
-/// fresh image), so any reset-state leftovers in the registers are dead
-/// before they are read.  What must start clean is this CPU's `CpuFp`
-/// bookkeeping — zeroed at the AP Mach's allocation and re-affirmed
-/// here by name, so the bring-up contract is explicit (and MEM-18's
-/// XSAVE switch has its per-CPU seam).
+/// bring-up, via [`init_ap`]).  The register file itself needs no init:
+/// the AP's trampoline armed CR4.OSFXSR/OSXMMEXCPT at BSP parity
+/// ([`init_ap`] adds OSXSAVE/XCR0 when the format calls for it), and the
+/// first proc install restores its seeded state (`FpState::DEFAULT` for
+/// a fresh image), so any reset-state leftovers in the registers are
+/// dead before they are read.  What must start clean is this CPU's
+/// `CpuFp` bookkeeping — zeroed at the AP Mach's allocation and
+/// re-affirmed here by name, so the bring-up contract is explicit.
 pub fn init_cpu() {
     let cpu = this_cpu();
     cpu.set_owner(ptr::null_mut());
@@ -431,13 +680,31 @@ fn kernel_begin_on(cpu: &'static CpuFp) -> KernelSimd {
 
 impl Drop for KernelSimd {
     fn drop(&mut self) {
+        // MEM-18: on the XSAVE path, AVX instructions the section ran
+        // (or the restored state itself, when a parked owner had ymm
+        // live) leave the upper halves non-init; vzeroupper clears them
+        // BEFORE the parked state is restored — after the restore it
+        // would destroy user ymm data — and frees the user from the
+        // AVX→SSE transition penalty on its next SSE op.  The
+        // instruction is AVX-only, so it runs exactly when the format
+        // is not FxSave (OSXSAVE + XCR0.AVX armed on this CPU).
+        if fp_format() != FpFormat::FxSave {
+            // SAFETY: the format gate proves CR4.OSXSAVE and XCR0 = 0x7
+            // are armed on this CPU (init_bsp/init_ap), so vzeroupper
+            // is enabled; it writes only the ymm upper halves (zeroed)
+            // and touches no memory.
+            unsafe {
+                core::arch::asm!("vzeroupper", options(att_syntax, nostack, preserves_flags));
+            }
+        }
         if self.parked.is_null() {
             // Nothing to give back: load the default state, so no kernel
             // data lingers in the registers for whoever is installed next.
             reset();
         } else {
             // SAFETY: kernel_begin's contract on the parked slot (its
-            // image came from FXSAVE, so its MXCSR is valid).
+            // image came from the active format's save, so its MXCSR is
+            // valid and its xcomp_bv is 0).
             unsafe { restore_raw(self.parked) };
             self.cpu.set_owner(self.parked);
         }
@@ -499,32 +766,40 @@ pub fn xor_fold16_scalar(data: &[u8]) -> u128 {
     data.chunks_exact(16).fold(0, |acc, b| acc ^ u128::from_le_bytes(b.try_into().unwrap()))
 }
 
-/// A valid FXSAVE image unique to `seed`: FCW with every exception
+/// A valid image unique to `seed`: FCW with every exception
 /// masked, reserved bit 6 set (as FINIT sets it — some implementations
 /// force it) and the precision/rounding fields from the seed, MXCSR with
 /// every exception masked plus rounding, FZ and sticky flags from the
 /// seed (never DAZ, which old CPUs fault on), all eight ST registers
-/// tagged valid with distinct 80-bit contents, distinct XMM0-15.
+/// tagged valid with distinct 80-bit contents, distinct XMM0-15 — and
+/// xstate_bv = 0x7, so an XRSTOR64 on the XSAVE path LOADS the seeded
+/// legacy state (and zeroes the ymm upper halves from the zeroed
+/// extended region) instead of taking every component to init (MEM-18:
+/// with xstate_bv = 0 the seed would be lost; FXRSTOR64 ignores the
+/// header, so the FXSAVE path is unchanged).
 fn image(seed: u64) -> FpState {
     let mut st = FpState::DEFAULT;
     let fcw: u16 = 0x007f | (((seed as u16) & 3) << 8) | ((((seed as u16) >> 2) & 3) << 10);
-    st.fx[0..2].copy_from_slice(&fcw.to_le_bytes());
-    st.fx[4] = 0xff; // abridged FTW: ST0-7 valid
+    st.area[0..2].copy_from_slice(&fcw.to_le_bytes());
+    st.area[4] = 0xff; // abridged FTW: ST0-7 valid
     let mxcsr: u32 = 0x1f80
         | (((seed as u32) & 3) << 13)
         | ((((seed as u32) >> 2) & 1) << 15)
         | ((seed as u32) & 0x3f);
     st.set_mxcsr(mxcsr);
+    // xstate_bv = 0x7: x87|SSE|AVX all present-in-image (the ymm upper
+    // region stays zero — ymm0..15's upper halves land zeroed).
+    st.area[XSTATE_BV] = 0x7;
     let mut x = seed ^ 0x9e37_79b9_7f4a_7c15;
     for i in 0..8 {
         x = x.wrapping_mul(0x5851_f42d_4c95_7f2d).wrapping_add(0x1405_7b7e_f767_814f);
-        st.fx[32 + 16 * i..40 + 16 * i].copy_from_slice(&x.to_le_bytes());
-        st.fx[40 + 16 * i..42 + 16 * i].copy_from_slice(&((x >> 48) as u16 | 1).to_le_bytes());
+        st.area[32 + 16 * i..40 + 16 * i].copy_from_slice(&x.to_le_bytes());
+        st.area[40 + 16 * i..42 + 16 * i].copy_from_slice(&((x >> 48) as u16 | 1).to_le_bytes());
     }
     for i in 0..16 {
         x = x.wrapping_mul(0x5851_f42d_4c95_7f2d).wrapping_add(0x1405_7b7e_f767_814f);
-        st.fx[160 + 16 * i..168 + 16 * i].copy_from_slice(&x.to_le_bytes());
-        st.fx[168 + 16 * i..176 + 16 * i].copy_from_slice(&x.rotate_left(29).to_le_bytes());
+        st.area[160 + 16 * i..168 + 16 * i].copy_from_slice(&x.to_le_bytes());
+        st.area[168 + 16 * i..176 + 16 * i].copy_from_slice(&x.rotate_left(29).to_le_bytes());
     }
     st
 }
@@ -634,15 +909,15 @@ mod tests {
     #[test]
     fn default_state_carries_the_xsave_contract() {
         let d = FpState::DEFAULT;
-        assert_eq!(&d.fx[0..2], &[0x7f, 0x03], "FCW = the fninit 0x037F");
+        assert_eq!(&d.area[0..2], &[0x7f, 0x03], "FCW = the fninit 0x037F");
         assert_eq!(d.mxcsr(), 0x1f80, "MXCSR = 0x1F80");
-        assert_eq!(d.fx.len(), 832, "the XSAVE header + YMM_Hi128 region must exist");
+        assert_eq!(d.area.len(), 832, "the XSAVE header + YMM_Hi128 region must exist");
         assert!(
-            d.fx[512..520].iter().all(|&b| b == 0),
+            d.area[512..520].iter().all(|&b| b == 0),
             "xstate_bv = 0 (XRSTOR64 takes every component to its init state)"
         );
         assert!(
-            d.fx[520..].iter().all(|&b| b == 0),
+            d.area[520..].iter().all(|&b| b == 0),
             "xcomp_bv, the header reserved tail and YMM_Hi128 are all zero"
         );
     }
@@ -717,9 +992,9 @@ mod tests {
     #[test]
     fn default_is_the_fninit_state_with_zeroed_registers() {
         let d = FpState::DEFAULT;
-        assert_eq!(&d.fx[0..2], &[0x7f, 0x03]);
+        assert_eq!(&d.area[0..2], &[0x7f, 0x03]);
         assert_eq!(d.mxcsr(), 0x1f80);
-        assert!(d.fx[2..24].iter().all(|&b| b == 0) && d.fx[28..].iter().all(|&b| b == 0));
+        assert!(d.area[2..24].iter().all(|&b| b == 0) && d.area[28..].iter().all(|&b| b == 0));
         let mut got = image(3);
         restore_then_save(&FpState::DEFAULT, &mut got);
         assert!(got.same_user_state(&FpState::DEFAULT));

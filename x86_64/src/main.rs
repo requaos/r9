@@ -221,6 +221,15 @@ pub extern "C" fn main(mach: &mut dat::Mach, mbdata: u64) {
     platform::print_machine_info(facts);
     print_memory_info();
 
+    // MEM-18 (D-20): the BSP's FP save-format selection — CPUID-gated
+    // CR4.OSXSAVE + XCR0 = 0x7 (x87|SSE|AVX; AVX-512 off) where XSAVE+AVX
+    // report, the untouched FXSAVE fallback on qemu64, and the ONE
+    // deterministic boot line (`fpu: format=... avx2=...`).  Runs BEFORE
+    // start_aps (each AP's fpu::init_ap applies the published format)
+    // and BEFORE fpu::selftest (the selftest exercises the live format),
+    // in every config — kernel-only, exec and churn boots alike.
+    fpu::init_bsp();
+
     // devcons's random-device hooks (D-05, AUTH-02, 18-01): the x86_64
     // entropy gather — CPUID-gated RDSEED/RDRAND with the two-sample
     // TSC fold fallback.  The aarch64 main.rs registration re-keyed:
@@ -530,10 +539,14 @@ pub extern "C" fn ap_main(mach_va: usize, cpu_id: usize) -> ! {
     // seg::GdtData).
     unsafe { arm_syscall_entry(mach) };
 
-    // 4. This CPU's FPU bookkeeping (the register file itself needs no
-    //    init — the trampoline armed CR4.OSFXSR/OSXMMEXCPT at BSP
-    //    parity, and the first proc install FXRSTORs its seeded state).
-    fpu::init_cpu();
+    // 4. This CPU's FPU bring-up (MEM-18, D-20): apply the BSP's
+    //    published format — CR4.OSXSAVE + XCR0 = 0x7 identically to the
+    //    BSP when XSAVE is selected (the trampoline armed only
+    //    CR4.OSFXSR/OSXMMEXCPT at BSP parity), with this AP's own CPUID
+    //    leaf-1 bits re-verified — then start the CpuFp bookkeeping
+    //    clean (05-12's init_cpu; the first proc install restores its
+    //    seeded state).
+    fpu::init_ap();
 
     // 5. This CPU's LAPIC + LAPIC timer — armed from the BSP's
     //    published calibration (never a re-run of the PIT/TSC
