@@ -73,7 +73,30 @@ Milestone numbering continues from the closed Harvey-rooted milestone v2.1.
   4. A two-CPU stress gate runs a user workload on both CPUs through a `9P2000.aead` mount served by the real `FidTable` (an in-kernel loopback server started only by a boot switch) plus exec churn through the TPHT page cache, with timer interrupts across both CPUs, and finishes with no deadlock; a watchdog would name a stuck CPU and lock; a TLB shootdown reaches the other CPU; every new kernel boot gate runs with `-smp 2` on both architectures.
   5. The page allocator keeps Roaring clean, dirty and pinned pools in which a pinned frame is never an eviction candidate, `SuperpageResidency` is exactly 64 bytes, and every `port/` path that holds user memory across a sleep pins its frames through a guard; all of it safe under two CPUs and none of it cryptographic.
   6. Both architectures load image pages on demand, map user text read-only and track dirty pages; the evictor, live in every boot, drops text and unwritten initialised-data pages under pressure and they fault back intact through the TPHT page cache, shown by a small-memory `-smp 2` gate on both architectures; the Roaring set kernels run AVX2 or NEON where the CPU has it with outputs identical to the scalar path; and x86_64 saves user FP state with XSAVE where AVX is enabled and with FXSAVE elsewhere.
-**Plans**: TBD
+**Plans:** 21 plans
+
+Plans:
+- [ ] 05-01-PLAN.md — Repair CI (`drawterm-gate.expect` `global env`), pure `boot-iso` derivation, and `cargo xtask test` wiring (`CORR-01`, `CORR-02`, `DEBT-01`)
+- [ ] 05-02-PLAN.md — `rfork` bit cleanup (`RFNOLEGACY = 1<<18`), v3.0 threat model sync, and Phase 4 validation/evidence closure (`CORR-04`, `DEBT-02`, `DEBT-03`, `DEBT-05`)
+- [ ] 05-03-PLAN.md — Document all 7 `aarch64` and first 23 `x86_64` undocumented `unsafe` sites (`CORR-05` Part A)
+- [ ] 05-04-PLAN.md — Complete `x86_64` workspace deny-lint opt-in, `UNSAFE-AUDIT.md` reconciliation, `lintcontract` R6, and CI clippy legs (`CORR-05` Part B)
+- [ ] 05-05-PLAN.md — Generic `#![forbid(unsafe_code)]` Boehm seqlock slab in `ds/src/slab.rs` and `DEBT-04` TPHT production bank sizing (`CORR-03`, `DEBT-04`)
+- [ ] 05-06-PLAN.md — Refactor `port/src/fid.rs` onto `ds::slab`, D-13 three-place amendments, `CORR-05` policy doc sync, and **Owner Stop 1** (`CORR-03`, `CORR-05`)
+- [ ] 05-07-PLAN.md — Portable SMP primitives (`port/src/smp.rs` & `mcslock.rs`): `IrqSpinLock`, `LockRank` table, watchdog, and spin-poll `ShootdownCoordinator` (`SMP-02`, `SMP-07`, `SMP-12`)
+- [ ] 05-08-PLAN.md — Per-CPU work-stealing `RunQueues` (`port/src/sched.rs`), `FidTable` CPU-ID routing, and `port/` `BusyCell` & lost-wakeup fixes (`SMP-03`, `SMP-11`)
+- [ ] 05-09-PLAN.md — `aarch64` 2-CPU hardware bring-up: `TPIDR_EL1` `PerCpu`, `l.S` `secondary_start`, `trap.S` migration, PSCI `CPU_ON`, and GICv2/v3 SGIs (`SMP-02`, `SMP-04`, `SMP-07`)
+- [ ] 05-10-PLAN.md — `aarch64` single-CPU static audit, `RunQueues` + `wake_pending` wiring, per-CPU timers, and `-smp 2` HVF+TCG boot (`SMP-02`, `SMP-03`, `SMP-04`, `SMP-07`, `SMP-11`, `SMP-12`)
+- [ ] 05-11-PLAN.md — `x86_64` 2-CPU hardware bring-up: ACPI MADT type-0/9, dual xAPIC/x2APIC ICR (`mfence; lfence`), `ap_trampoline.S`, `%gs:0` `Mach`, and canonical `intrspecial` (`SMP-01`, `SMP-02`, `SMP-07`)
+- [ ] 05-12-PLAN.md — `x86_64` single-CPU static audit, `RunQueues` + `wake_pending` wiring, `ap_main` init, per-CPU LAPIC timer, and boot shootdown self-check (`SMP-01`, `SMP-02`, `SMP-03`, `SMP-07`, `SMP-11`, `SMP-12`)
+- [ ] 05-13-PLAN.md — Migrate all 5 `aarch64` gates and first 3 `x86_64` smoke gates to `-smp 2` default with `R9_SMP` override (`SMP-01`, `SMP-04`, `SMP-09`)
+- [ ] 05-14-PLAN.md — Migrate remaining 7 `x86_64` gates to `-smp 2`, wire 1 `-smp 1` smoke leg/arch in CI, run `aarch64` quick pass, and **Owner Stop 2** (`SMP-01`, `SMP-04`, `SMP-09`)
+- [ ] 05-15-PLAN.md — `x86_64` CPUID-gated AVX/XSAVE (832B `FpState`) + `qemu64` FXSAVE fallback, CI TCG AVX2 leg, and **Owner Stop 3** (`MEM-18`)
+- [ ] 05-16-PLAN.md — Portable Roaring `PageAlloc` pools + ~15% High-Water Pager, 64B `SuperpageResidency`, and Flattened-TPHT `palloc.hash` `PageCache` (`MEM-07`, `MEM-08`, `MEM-16`)
+- [ ] 05-17-PLAN.md — Roaring AVX2 & NEON inline-asm kernels (`ds/src/setops_simd.rs`) behind `ds/src/setops.rs` + `fpu::with_simd()` + `lintcontract` R3 (`MEM-17`)
+- [ ] 05-18-PLAN.md — `aarch64` RO shared text via `palloc.hash`, write-protect dirty tracking, live evictor, and `UserSlice`/`UserSliceMut` RAII `PinGuard` with EL1 promotion (`MEM-07`, `MEM-10`, `MEM-15`, `MEM-16`)
+- [ ] 05-19-PLAN.md — `x86_64` full demand loading (`#PF` pager), RO shared text, race-free `PTE_D` atomic-swap evictor, and `UserSlice`/`UserSliceMut` RAII `PinGuard` (`MEM-07`, `MEM-10`, `MEM-14`, `MEM-15`, `MEM-16`)
+- [ ] 05-20-PLAN.md — Boot-switch `aeadloop=1` in-kernel `9P2000.aead` loopback server on real `FidTable` (`SMP-13`)
+- [ ] 05-21-PLAN.md — `-smp 2` stress gate (`SMP-08`) & small-memory pressure gate (`MEM-15`) on both arches, CI wiring, `aarch64` HVF+TCG runs, and **Owner Stop 4** (`SMP-08`, `SMP-09`, `MEM-10`, `MEM-15`, `MEM-16`, `MEM-17`)
 **Open questions**: Settled at the phase discussion on 2026-11-25; the decisions are D-01 to D-35 in `.planning/phases/05-guide-phase-3-early-smp-course-correction-and-memory-pools/05-CONTEXT.md`. Order: course correction and audit follow-ups, then SMP on aarch64 and x86_64, then the memory work. The phase is planned in one pass with four owner stops (after the course correction; after SMP; after the AVX/XSAVE change; at phase end); the `port/src` diff-first rule is waived for this phase with the cumulative diff reviewed at each stop. CI is the per-commit check for x86_64 and the SMP and stress gates also run under KVM on the owner's x86_64 Linux host at stops 2 to 4. Still to verify before planning: what is actually red at `900f58b`. `boot-iso` becoming a pure derivation changes the owner's byte-change rule: once it lands, green CI on the commit is the check for an x86_64 kernel byte change and no hash is committed; the old rule holds until then. An aarch64 kernel byte change gets the quick pass. For research to confirm: that the fence-paired seqlock is sound in safe Rust on all three architectures; how a dropped shared text page is unmapped from every address space; which `port/` paths sleep while holding user memory; whether CI can run an AVX2 CPU model under TCG in acceptable time. From the superseded Phase 5 research, to re-verify: `x86_64/` has 32 undocumented `unsafe` blocks in 9 files and aarch64 has 7; the x86_64 table in `UNSAFE-AUDIT.md` names files that no longer exist; `xtask/src/test9p.rs` pins the leg count; neither architecture tracks dirty pages; the page-in paths panic on allocation failure; `UserSlice` holds nothing that could release a pin. More than two CPUs, the full arm64 HVF series and the WINDOWS items are Phase 8. Deferred: the geometric chunk spine for slab shards (owner design, Phase 6 or later).
 
 #### Phase 6: Guide Phase 4 - Distributed 9P Extensions and Service Discovery
@@ -247,7 +270,7 @@ Phases execute in numeric order: 1 → 2 → 3 → … → 16 (decimal insertion
 | 2. Guide Phase 0 - Design Lock and rfork Flag Reservation | v3.0 | 6/6 | Complete | 2026-11-24 |
 | 3. Guide Phase 1 - crypto/ and ds/ Foundations | v3.0 | 13/13 | Complete | 2026-11-24 |
 | 4. Guide Phase 2 - 9P2000.aead Transport and FidTable | v3.0 | 25/25 | Complete | 2026-11-25 |
-| 5. Guide Phase 3 - Early SMP, Course Correction and Memory Pools | v3.1 | 0/TBD | Not started | - |
+| 5. Guide Phase 3 - Early SMP, Course Correction and Memory Pools | v3.1 | 0/21 | Planned | - |
 | 6. Guide Phase 4 - Distributed 9P Extensions and Service Discovery | v3.1 | 0/TBD | Not started | - |
 | 7. Guide Phase 5 - Process Lifecycle, Stack-Safe Notes and riscv64 Sync | v3.1 | 0/TBD | Not started | - |
 | 8. SMP Scale-Out and Deferred Verification | v3.2 | 0/TBD | Not started | - |
