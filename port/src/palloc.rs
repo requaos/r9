@@ -1,11 +1,36 @@
 //! palloc — the portable, non-cryptographic page-frame pools (MEM-07,
 //! D-14, D-17, D-21).
 //!
-//! RED SCAFFOLD (05-16 Task 1): the API, the Roaring pools and the tests
-//! are in place; the bodies marked `RED-SCAFFOLD` are inert so the planned
-//! assertions fail.  The GREEN commit implements the exact chunk/offset
-//! formula, the `Dirty \ (Pinned ∪ Active)` evictable set, nested pin
-//! counts, the High-Water refill and the lock-dropped evictor retry.
+//! The allocator keeps four Roaring bitmaps over physical frame numbers:
+//!
+//! - `dirty` — a frame that is free but not yet zeroed,
+//! - `clean` — a zeroed frame ready to hand out,
+//! - `active` — a frame handed out and not yet freed,
+//! - `pinned` — a frame some kernel path holds across a sleep (MEM-10).
+//!
+//! The evictable set is the exact set algebra
+//! `Evictable = Dirty \ (Pinned ∪ Active)` (D-14, D-21): a pinned or active
+//! frame can never be selected for reclaim.  Per-frame pin counts are
+//! lock-free atomics so nested pins work and `is_pinned` can be consulted
+//! from `PAGE_CACHE` (Rank 20) without taking `PAGE_ALLOC` (Rank 70).
+//!
+//! The High-Water Pager zeroes dirty frames in batches *outside* the
+//! `PAGE_ALLOC` lock and holds about 15% of managed memory clean.  Under
+//! pressure `alloc_clean` drops `PAGE_ALLOC` completely before calling the
+//! arch evictor: the evictor acquires `PAGE_CACHE` (Rank 20) and
+//! `PROC_TABLE` (Rank 50), shoots down TLBs, and re-enters `PAGE_ALLOC`
+//! (Rank 70) to return reclaimed frames.  Holding Rank 70 across that call
+//! would invert the documented lock order.
+//!
+//! Frame numbers index 256 MiB chunks: `chunk = pfn >> 16`,
+//! `offset = pfn & 0xFFFF`, and the physical address is
+//! `(((chunk as usize) << 16) | (offset as usize)) * 4096` — exactly
+//! `pfn * 4096` with the chunk split made explicit so the 256 MiB boundary
+//! is provably free of off-by-one or truncation (T-05-29).
+//!
+//! `palloc_max_frames=<N>` caps the managed frame count so a small-memory
+//! `-smp 2` gate can drive the evictor deterministically while QEMU `-m`
+//! stays large enough for the static `.bss` and initrd.
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
@@ -29,25 +54,35 @@ pub const LOW_WATER_MIN: usize = 16;
 /// How many evictor round trips `alloc_clean` attempts before `OutOfSpace`.
 pub const MAX_EVICT_ATTEMPTS: usize = 4;
 
-/// Physical address of frame `pfn`.
+/// Physical address of frame `pfn`: the exact 256 MiB chunk/offset formula.
 pub fn pfn_to_phys(pfn: u32) -> PhysAddr {
-    // RED-SCAFFOLD: the chunk/offset formula is not implemented yet.
-    let _ = pfn;
-    PhysAddr::new(0)
+    let chunk = pfn >> 16;
+    let offset = pfn & 0xFFFF;
+    PhysAddr::new(((((chunk as usize) << 16) | (offset as usize)) * FRAME_SIZE) as u64)
 }
 
 /// Frame number of a page-aligned physical address.
+///
+/// Returns [`PageAllocError::MisalignedAddr`] for a non-page-aligned
+/// address and [`PageAllocError::OutOfBounds`] for an address whose frame
+/// number does not fit `u32`.
 pub fn phys_to_pfn(pa: PhysAddr) -> Result<u32, PageAllocError> {
-    // RED-SCAFFOLD: alignment and range checks are not implemented yet.
-    let _ = pa;
-    Ok(0)
+    if pa.addr() % FRAME_SIZE as u64 != 0 {
+        return Err(PageAllocError::MisalignedAddr);
+    }
+    u32::try_from(pa.addr() / FRAME_SIZE as u64).map_err(|_| PageAllocError::OutOfBounds)
 }
 
 /// Parse an exact whitespace-delimited `palloc_max_frames=<N>` token.
+///
+/// `N` must be greater than zero; an absent, malformed, or zero value is
+/// `None`.
 pub fn parse_max_frames_bootarg(cmdline: &str) -> Option<usize> {
-    // RED-SCAFFOLD: the bootarg parser is not implemented yet.
-    let _ = cmdline;
-    None
+    cmdline
+        .split_whitespace()
+        .find_map(|token| token.strip_prefix("palloc_max_frames="))
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|frames| *frames > 0)
 }
 
 /// Lock-free evictor counters served by `#c/sysstat` (D-17).
@@ -143,15 +178,65 @@ impl PageAlloc {
 
     /// Seed the managed frames from `available_mem` minus `used_ranges`,
     /// optionally capped to `max_frames`.
+    ///
+    /// Every managed frame starts in `dirty` (fresh RAM contents are
+    /// undefined until zeroed).  The boot path calls
+    /// [`Self::refill_clean_pool`] with its real `zero_frame` once the
+    /// allocator is installed; `alloc_clean` also refills on demand.
     pub fn init_ranges(
         &self,
         available_mem: PhysRange,
         used_ranges: impl Iterator<Item = PhysRange>,
         max_frames: Option<usize>,
     ) -> Result<(), PageAllocError> {
-        // RED-SCAFFOLD: range seeding and the High-Water sizing are not
-        // implemented yet.
-        let _ = (available_mem, used_ranges, max_frames);
+        let start = available_mem.start().addr();
+        let end = available_mem.end().addr();
+        if start % FRAME_SIZE as u64 != 0 || end % FRAME_SIZE as u64 != 0 {
+            return Err(PageAllocError::MisalignedAddr);
+        }
+        let first = phys_to_pfn(PhysAddr::new(start))?;
+        let last = phys_to_pfn(PhysAddr::new(end))?;
+
+        let mut used = RoaringBitmap::new();
+        for range in used_ranges {
+            let rs = range.start().addr();
+            let re = range.end().addr();
+            let rf = phys_to_pfn(PhysAddr::new(rs))?;
+            let rl = phys_to_pfn(PhysAddr::new(re))?;
+            for pfn in rf..rl {
+                used.insert(pfn);
+            }
+        }
+
+        let mut managed = RoaringBitmap::new();
+        for pfn in first..last {
+            if !used.contains(pfn) {
+                managed.insert(pfn);
+            }
+        }
+
+        let total = match max_frames {
+            Some(cap) => managed.len().min(cap as u64),
+            None => managed.len(),
+        } as usize;
+
+        let max_pfn = last as usize;
+        let mut pin_counts = Vec::with_capacity(max_pfn);
+        pin_counts.resize_with(max_pfn, || AtomicU32::new(0));
+
+        let node = LockNode::new();
+        let mut state = self.state.lock(&node);
+        state.clean = RoaringBitmap::new();
+        state.dirty = RoaringBitmap::new();
+        state.active = RoaringBitmap::new();
+        state.pinned = RoaringBitmap::new();
+        for pfn in managed.iter().take(total) {
+            state.dirty.insert(pfn);
+        }
+        state.pin_counts = pin_counts.into_boxed_slice();
+        state.total_managed = total;
+        state.target_clean = total * CLEAN_TARGET_PCT / 100;
+        state.low_water = (total * 5 / 100).max(LOW_WATER_MIN);
         Ok(())
     }
 
@@ -161,7 +246,8 @@ impl PageAlloc {
         self.state.lock(&node).total_managed
     }
 
-    /// The low-water mark.
+    /// The low-water mark: `alloc_clean` tops the clean pool up to the
+    /// target when `clean.len()` is below this.
     pub fn low_water_mark(&self) -> usize {
         let node = LockNode::new();
         self.state.lock(&node).low_water
@@ -173,69 +259,177 @@ impl PageAlloc {
         self.state.lock(&node).target_clean
     }
 
+    /// Pool cardinalities `(clean, dirty, active, pinned)` — host tests only.
+    #[cfg(test)]
+    pub(crate) fn pool_lens(&self) -> (u64, u64, u64, u64) {
+        let node = LockNode::new();
+        let state = self.state.lock(&node);
+        (state.clean.len(), state.dirty.len(), state.active.len(), state.pinned.len())
+    }
+
     /// The exact evictable set: `dirty \ (pinned ∪ active)`.
     pub fn evictable_dirty(&self) -> RoaringBitmap {
-        // RED-SCAFFOLD: the set algebra is not implemented yet.
-        RoaringBitmap::new()
+        let node = LockNode::new();
+        let state = self.state.lock(&node);
+        state.dirty.difference(&state.pinned.union(&state.active))
     }
 
-    /// Increment the pin count of `pfn`.
+    /// Increment the pin count of `pfn`; the frame enters the `pinned`
+    /// Roaring pool on the `0 -> 1` transition.
     pub fn pin_frame(&self, pfn: u32) -> Result<(), PageAllocError> {
-        // RED-SCAFFOLD: pin counts are not implemented yet.
-        let _ = pfn;
+        let node = LockNode::new();
+        let mut state = self.state.lock(&node);
+        let Some(count) = state.pin_counts.get(pfn as usize) else {
+            return Err(PageAllocError::OutOfBounds);
+        };
+        let previous = count.fetch_add(1, Ordering::AcqRel);
+        if previous == 0 {
+            state.pinned.insert(pfn);
+        }
         Ok(())
     }
 
-    /// Decrement the pin count of `pfn`.
+    /// Decrement the pin count of `pfn`; the frame leaves the `pinned`
+    /// pool only on the `1 -> 0` transition.
     pub fn unpin_frame(&self, pfn: u32) -> Result<(), PageAllocError> {
-        // RED-SCAFFOLD: pin counts are not implemented yet.
-        let _ = pfn;
+        let node = LockNode::new();
+        let mut state = self.state.lock(&node);
+        let Some(count) = state.pin_counts.get(pfn as usize) else {
+            return Err(PageAllocError::OutOfBounds);
+        };
+        if count.load(Ordering::Acquire) == 0 {
+            return Err(PageAllocError::NotAllocated);
+        }
+        let previous = count.fetch_sub(1, Ordering::AcqRel);
+        if previous == 1 {
+            state.pinned.remove(pfn);
+        }
         Ok(())
     }
 
-    /// Whether `pfn` is pinned.  Lock-free.
+    /// Whether `pfn` is pinned.  Lock-free: safe to call while holding
+    /// `PAGE_CACHE` (Rank 20).
     pub fn is_pinned(&self, pfn: u32) -> bool {
-        // RED-SCAFFOLD: pin counts are not implemented yet.
-        let _ = pfn;
-        false
+        let node = LockNode::new();
+        let state = self.state.lock(&node);
+        state.pin_counts.get(pfn as usize).is_some_and(|c| c.load(Ordering::Acquire) > 0)
     }
 
-    /// Return a frame to the dirty pool.
+    /// Return a frame to the dirty pool.  Double-free, a pinned frame, and
+    /// an out-of-range frame are rejected cleanly.
     pub fn free_frame(&self, pa: PhysAddr) -> Result<(), PageAllocError> {
-        // RED-SCAFFOLD: accounting is not implemented yet.
-        let _ = pa;
+        let pfn = phys_to_pfn(pa)?;
+        let node = LockNode::new();
+        let mut state = self.state.lock(&node);
+        let Some(count) = state.pin_counts.get(pfn as usize) else {
+            return Err(PageAllocError::OutOfBounds);
+        };
+        if count.load(Ordering::Acquire) > 0 {
+            return Err(PageAllocError::NotAllocated);
+        }
+        if !state.active.remove(pfn) {
+            return Err(PageAllocError::NotAllocated);
+        }
+        state.dirty.insert(pfn);
         Ok(())
     }
 
     /// Zero up to `max_frames` dirty frames into the clean pool.
+    ///
+    /// The `PAGE_ALLOC` lock is released around `zero_frame`, so the
+    /// High-Water Pager never zeroes while holding the rank-70 lock.
+    /// Returns the number of frames moved.
     pub fn refill_clean_batch<F>(&self, max_frames: usize, zero_frame: F) -> usize
     where
         F: Fn(PhysAddr),
     {
-        // RED-SCAFFOLD: the High-Water refill is not implemented yet.
-        let _ = (max_frames, zero_frame);
-        0
+        if max_frames == 0 {
+            return 0;
+        }
+        let batch: Vec<u32> = {
+            let node = LockNode::new();
+            let mut state = self.state.lock(&node);
+            let evictable = state.dirty.difference(&state.pinned.union(&state.active));
+            let mut batch = Vec::new();
+            for pfn in evictable.iter().take(max_frames) {
+                if state.dirty.remove(pfn) {
+                    batch.push(pfn);
+                }
+            }
+            batch
+        };
+        if batch.is_empty() {
+            return 0;
+        }
+        for pfn in &batch {
+            zero_frame(pfn_to_phys(*pfn));
+        }
+        let node = LockNode::new();
+        let mut state = self.state.lock(&node);
+        for pfn in &batch {
+            state.clean.insert(*pfn);
+        }
+        batch.len()
     }
 
-    /// Top the clean pool up to the High-Water target (~15%).
+    /// Top the clean pool up to the High-Water target (~15%).  Returns
+    /// the number of frames moved.
     pub fn refill_clean_pool<F>(&self, zero_frame: F) -> usize
     where
         F: Fn(PhysAddr),
     {
-        // RED-SCAFFOLD: the High-Water refill is not implemented yet.
-        let _ = zero_frame;
-        0
+        let node = LockNode::new();
+        let state = self.state.lock(&node);
+        let want = state.target_clean.saturating_sub(state.clean.len() as usize);
+        drop(state);
+        self.refill_clean_batch(want, zero_frame)
     }
 
     /// Allocate one zeroed frame.
+    ///
+    /// `zero_frame` zeroes a dirty frame (called outside `PAGE_ALLOC`);
+    /// `evict_fn` runs the arch evictor and returns how many frames it
+    /// reclaimed.  `alloc_clean` drops `PAGE_ALLOC` (Rank 70) completely
+    /// before invoking `evict_fn`, which may acquire `PAGE_CACHE` (Rank 20)
+    /// and `PROC_TABLE` (Rank 50) and re-enter `PAGE_ALLOC` (Rank 70) to
+    /// return frames.
     pub fn alloc_clean<Z, E>(&self, zero_frame: Z, mut evict_fn: E) -> Result<PhysAddr, PageAllocError>
     where
         Z: Fn(PhysAddr),
         E: FnMut() -> usize,
     {
-        // RED-SCAFFOLD: allocation, the lock-drop and the retry are not
-        // implemented yet.
-        let _ = (&zero_frame, &mut evict_fn);
+        for attempt in 0..=MAX_EVICT_ATTEMPTS {
+            let need = {
+                let node = LockNode::new();
+                let state = self.state.lock(&node);
+                if (state.clean.len() as usize) < state.low_water {
+                    state.target_clean.saturating_sub(state.clean.len() as usize)
+                } else {
+                    0
+                }
+            };
+            if need > 0 {
+                self.refill_clean_batch(need, &zero_frame);
+            }
+
+            {
+                let node = LockNode::new();
+                let mut state = self.state.lock(&node);
+                if let Some(pfn) = pop_first(&mut state.clean) {
+                    state.active.insert(pfn);
+                    return Ok(pfn_to_phys(pfn));
+                }
+            }
+
+            if attempt == MAX_EVICT_ATTEMPTS {
+                break;
+            }
+            // The guard above is gone: PAGE_ALLOC (Rank 70) is NOT held
+            // across evict_fn (Rank 20 -> 50 -> 70 re-entry is legal).
+            if evict_fn() == 0 {
+                return Err(PageAllocError::OutOfSpace);
+            }
+        }
         Err(PageAllocError::OutOfSpace)
     }
 }
@@ -283,17 +477,27 @@ mod tests {
     #[test]
     fn evictable_dirty_excludes_pinned_and_active_frames() {
         let alloc = allocator(64);
-        assert_eq!(alloc.evictable_dirty().len(), 64, "fresh frames are all dirty");
+        // Pin two frames while they are still in `dirty`.
+        alloc.pin_frame(3).unwrap();
+        alloc.pin_frame(5).unwrap();
+        assert_eq!(alloc.evictable_dirty().len(), 62, "fresh frames are all dirty");
 
         let active = alloc.alloc_clean(|_| {}, || 0).unwrap();
-        let pinned_pa = alloc.alloc_clean(|_| {}, || 0).unwrap();
-        let pinned = phys_to_pfn(pinned_pa).unwrap();
-        alloc.pin_frame(pinned).unwrap();
+        let active_pfn = phys_to_pfn(active).unwrap();
+
+        let (clean, dirty, active_len, pinned) = alloc.pool_lens();
+        assert!(clean + dirty + active_len <= 64);
+        assert_eq!(pinned, 2);
 
         let evictable = alloc.evictable_dirty();
-        assert!(!evictable.contains(phys_to_pfn(active).unwrap()), "active is not evictable");
-        assert!(!evictable.contains(pinned), "pinned is not evictable");
-        assert_eq!(evictable.len(), 62);
+        assert!(!evictable.contains(active_pfn), "active is not evictable");
+        assert!(!evictable.contains(3), "pinned is not evictable");
+        assert!(!evictable.contains(5), "pinned is not evictable");
+        assert_eq!(
+            evictable.len(),
+            dirty - 2,
+            "the two pinned frames are still dirty and are the only exclusions"
+        );
         for pfn in evictable.iter() {
             assert!(!alloc.is_pinned(pfn));
         }

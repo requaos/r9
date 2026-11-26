@@ -1,9 +1,14 @@
 //! superpage — the exact 64-byte `SuperpageResidency` (MEM-08).
 //!
-//! RED SCAFFOLD (05-16 Task 1): the 64-byte layout and the tests are in
-//! place; the residency CRUD marked `RED-SCAFFOLD` is inert so the planned
-//! assertions fail.  The GREEN commit implements the word/bit addressing,
-//! the `AcqRel` transitions, `count`, `is_full` and the demotion `reset`.
+//! One 2 MiB superpage is eight 4 KiB sub-pages and each `u64` covers 64
+//! sub-pages, so `[AtomicU64; 8]` holds 512 residency bits in exactly one
+//! 64-byte cache line.  Demotion resets the whole word array atomically per
+//! word with `Release` stores; observers use `Acquire` loads, so a demoted
+//! superpage is never observed half-populated.
+//!
+//! Bit `i` lives in word `i / 64`, bit `i % 64`; indices `0`, `63`, `64`
+//! and `511` cross word boundaries without shifting overflow, and an index
+//! at or past 512 is rejected without touching memory.
 
 use core::mem::{align_of, size_of};
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -34,35 +39,42 @@ impl SuperpageResidency {
         Self { bits: [const { AtomicU64::new(0) }; WORDS] }
     }
 
-    /// Mark sub-page `idx` resident.
+    /// Mark sub-page `idx` resident.  Returns `false` for an out-of-range
+    /// index (and leaves every word untouched).
     pub fn set_bit(&self, idx: usize) -> bool {
-        // RED-SCAFFOLD: residency CRUD is not implemented yet.
-        let _ = idx;
-        false
+        let Some((word, mask)) = Self::locate(idx) else {
+            return false;
+        };
+        self.bits[word].fetch_or(mask, Ordering::AcqRel);
+        true
     }
 
-    /// Clear sub-page `idx`.
+    /// Clear sub-page `idx`.  Returns `false` for an out-of-range index.
     pub fn clear_bit(&self, idx: usize) -> bool {
-        // RED-SCAFFOLD: residency CRUD is not implemented yet.
-        let _ = idx;
-        false
+        let Some((word, mask)) = Self::locate(idx) else {
+            return false;
+        };
+        self.bits[word].fetch_and(!mask, Ordering::AcqRel);
+        true
     }
 
     /// Whether every one of the 512 sub-pages is resident.
     pub fn is_full(&self) -> bool {
-        // RED-SCAFFOLD: residency counting is not implemented yet.
-        false
+        self.count() == SUBPAGES
     }
 
     /// The number of resident sub-pages.
     pub fn count(&self) -> usize {
-        // RED-SCAFFOLD: residency counting is not implemented yet.
-        0
+        self.bits.iter().map(|word| word.load(Ordering::Acquire).count_ones() as usize).sum()
     }
 
-    /// Demotion: atomically clear every residency bit.
+    /// Demotion: atomically clear every residency bit.  Each word is stored
+    /// with `Release`, so a reader that observes the zero word also sees the
+    /// demotion ordering.
     pub fn reset(&self) {
-        // RED-SCAFFOLD: demotion reset is not implemented yet.
+        for word in &self.bits {
+            word.store(0, Ordering::Release);
+        }
     }
 
     /// `(word index, bit mask)` for `idx`, or `None` when out of range.
