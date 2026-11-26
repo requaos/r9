@@ -72,6 +72,12 @@ fn rtc_read_secs() -> Option<u64> {
     // A device register read: the mapped page is rw_device; the u32 read
     // is volatile so the compiler keeps it a real MMIO load.
     let ptr = (va as usize + RTCDR_OFFSET) as *const u32;
+    // SAFETY: ptr names RTCDR (offset 0) inside the PL031 page mapped
+    // above by map_device_register as a 4 KiB rw_device range, so the
+    // address is in-bounds of a live mapping, page-aligned plus a
+    // 4-byte-aligned register offset; an MMIO count register must be
+    // read with a volatile load so the compiler can neither cache nor
+    // elide it.
     Some(unsafe { core::ptr::read_volatile(ptr) } as u64)
 }
 
