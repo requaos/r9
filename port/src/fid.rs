@@ -159,6 +159,12 @@ impl StatefulHandle {
     pub fn from_wire(bytes: &[u8; STATEFUL_HANDLE_LEN]) -> crate::Result<StatefulHandle> {
         let slot_idx = u16::from_le_bytes([bytes[0], bytes[1]]);
         let generation = u16::from_le_bytes([bytes[2], bytes[3]]);
+        if generation == 0 {
+            return Err(
+                "fid: a StatefulHandle's generation is zero (D-10: a slot's generation is never \
+                 zero, so eight zero bytes are not a stateful handle)",
+            );
+        }
         let shard_id = bytes[4];
         let flags = bytes[5];
         let epoch = u16::from_le_bytes([bytes[6], bytes[7]]);
@@ -606,6 +612,9 @@ impl<P: SlabProbe + Clone> FidTable<P> {
     /// shard's `meta` lock is held across the free-list pop and the slot
     /// publication (D-11).
     pub fn alloc(&self, client_id: u32, mut entry: FidEntry) -> crate::Result<StatefulHandle> {
+        if client_id == 0 {
+            return Err("fid: client id 0 is reserved, so it cannot own an entry (D-08)");
+        }
         entry.client_id = client_id;
         entry.epoch = self.epoch;
         let words = entry.to_words();
@@ -639,6 +648,12 @@ impl<P: SlabProbe + Clone> FidTable<P> {
     /// read (D-08).  A clunked handle whose slot was scrubbed and bumped never
     /// resolves again.
     pub fn resolve(&self, client_id: u32, handle: &StatefulHandle) -> crate::Result<FidEntry> {
+        if client_id == 0 {
+            return Err("fid: client id 0 is reserved and never resolves an entry (D-08)");
+        }
+        if handle.epoch != self.epoch {
+            return Err("fid: the handle's epoch is not the table's current epoch");
+        }
         let Some(shard) = self.shards.get(handle.shard_id as usize) else {
             return Err("fid: the handle's shard id is outside the table");
         };
@@ -650,7 +665,9 @@ impl<P: SlabProbe + Clone> FidTable<P> {
             .resolve(handle.slot_idx, handle.r#gen)
             .ok_or("fid: the handle's slot is unoccupied or its generation is stale (D-10, D-11)")?;
         let entry = FidEntry::from_words(&words);
-        let _ = client_id;
+        if entry.client_id != client_id {
+            return Err("fid: the handle names another client's entry (D-08)");
+        }
         Ok(entry)
     }
 
@@ -669,6 +686,12 @@ impl<P: SlabProbe + Clone> FidTable<P> {
         handle: &StatefulHandle,
         mutate: impl FnOnce(&mut FidEntry),
     ) -> crate::Result<()> {
+        if client_id == 0 {
+            return Err("fid: client id 0 is reserved and never updates an entry (D-08)");
+        }
+        if handle.epoch != self.epoch {
+            return Err("fid: the handle's epoch is not the table's current epoch");
+        }
         let Some(shard) = self.shards.get(handle.shard_id as usize) else {
             return Err("fid: the handle's shard id is outside the table");
         };
@@ -679,6 +702,9 @@ impl<P: SlabProbe + Clone> FidTable<P> {
             .resolve(handle.slot_idx, handle.r#gen)
             .ok_or("fid: the handle's slot is unoccupied or its generation is stale (D-10, D-11)")?;
         let mut entry = FidEntry::from_words(&words);
+        if entry.client_id != client_id {
+            return Err("fid: the handle names another client's entry (D-08)");
+        }
         mutate(&mut entry);
         entry.client_id = client_id;
         entry.epoch = self.epoch;
@@ -696,6 +722,12 @@ impl<P: SlabProbe + Clone> FidTable<P> {
     /// `meta` lock, so a late or foreign clunk can never retire a newcomer
     /// that reused the slot (D-08, D-11).
     pub fn clunk(&self, client_id: u32, handle: &StatefulHandle) -> crate::Result<()> {
+        if client_id == 0 {
+            return Err("fid: client id 0 is reserved and never clunks an entry (D-08)");
+        }
+        if handle.epoch != self.epoch {
+            return Err("fid: the handle's epoch is not the table's current epoch");
+        }
         let Some(shard) = self.shards.get(handle.shard_id as usize) else {
             return Err("fid: the handle's shard id is outside the table");
         };
@@ -706,8 +738,9 @@ impl<P: SlabProbe + Clone> FidTable<P> {
             .resolve(handle.slot_idx, handle.r#gen)
             .ok_or("fid: the handle's slot is unoccupied or its generation is stale (D-10, D-11)")?;
         let entry = FidEntry::from_words(&words);
-        let _ = entry;
-        let _ = client_id;
+        if entry.client_id != client_id {
+            return Err("fid: the handle names another client's entry (D-08)");
+        }
         if !meta.clunk_slot(shard.slots.slots(), handle.slot_idx, handle.r#gen) {
             return Err("fid: the slot changed before the clunk could publish");
         }
@@ -762,6 +795,12 @@ impl<P: SlabProbe + Clone> FidTable<P> {
     /// together with the mark, so a stale, foreign or clunked handle marks
     /// nothing (D-08).
     pub fn mark_reclaimed(&self, client_id: u32, handle: &StatefulHandle) -> crate::Result<()> {
+        if client_id == 0 {
+            return Err("fid: client id 0 is reserved and never marks an entry reclaimed (D-08)");
+        }
+        if handle.epoch != self.epoch {
+            return Err("fid: the handle's epoch is not the table's current epoch");
+        }
         let Some(shard) = self.shards.get(handle.shard_id as usize) else {
             return Err("fid: the handle's shard id is outside the table");
         };
@@ -772,8 +811,9 @@ impl<P: SlabProbe + Clone> FidTable<P> {
             .resolve(handle.slot_idx, handle.r#gen)
             .ok_or("fid: the handle's slot is unoccupied or its generation is stale (D-10, D-11)")?;
         let entry = FidEntry::from_words(&words);
-        let _ = entry;
-        let _ = client_id;
+        if entry.client_id != client_id {
+            return Err("fid: the handle names another client's entry (D-08)");
+        }
         if !meta.mark_reclaimed(handle.slot_idx) {
             return Err(
                 "fid: the handle's slot is not live, so it marks nothing reclaimed (WIRE-09)",

@@ -424,7 +424,8 @@ fn aead_negotiate_msize_rules_hold_on_the_aead_branch() {
 use crypto::key::Key;
 use common::aead_link::{
     CLIENT_EXCHANGE, E2E_FILE_BYTES, E2E_FILE_NAME, E2eClient, E2eOpened, E2eServer, SERVER_EXCHANGE,
-    Stage, TestExchange, body_of as fixture_body, config_with_rekey, connect_aead, connect_aead_with,
+    Stage, TestExchange, body_of as fixture_body, config_with_rekey, connect_aead,
+    connect_aead_shared, connect_aead_with,
 };
 use port::chan::PAGE_LEN;
 use port::chan::msg::Msg;
@@ -432,7 +433,7 @@ use port::chan::tlv::Exts;
 use port::chan::transport::{RekeyIncoming, is_rekey_traffic};
 use port::chan::wire;
 use port::devmnt::NOFID;
-use port::fid::StatefulHandle;
+use port::fid::{FidTable, StatefulHandle};
 
 /// The fixed 32-byte session secret both ends are handed by the test seam
 /// (D-16: no real exchange exists in this phase).
@@ -788,8 +789,17 @@ fn aead_negotiate_end_to_end_survives_a_rekey() {
 
 #[test]
 fn aead_negotiate_end_to_end_handle_from_another_connection_is_refused() {
+    // One server, ONE slab FidTable, two connections (the slab sizes the table
+    // per server, D-12): connection A has client_id 1, connection B has
+    // client_id 2.
+    let mut domain = [0u8; 32];
+    for (i, byte) in domain.iter_mut().enumerate() {
+        *byte = 0xE0u8.wrapping_add(i as u8);
+    }
+    let table = Rc::new(RefCell::new(FidTable::synthetic(Key::from_bytes(domain), 1)));
+
     // Connection A: one client_id, one entry for fid 1.
-    let (mut client_a, server_a, _link_a) = connect_aead(secret(), 1);
+    let (mut client_a, server_a, _link_a) = connect_aead_shared(secret(), 1, Rc::clone(&table));
     let attach_a = request(
         &mut client_a,
         &server_a,
@@ -807,8 +817,8 @@ fn aead_negotiate_end_to_end_handle_from_another_connection_is_refused() {
     let foreign =
         StatefulHandle::from_wire(&attach_a.handle).expect("the attach reply carries a handle");
 
-    // Connection B: another client_id and a table with no entry for fid 1.
-    let (mut client_b, server_b, _link_b) = connect_aead(secret(), 2);
+    // Connection B: another client_id on the SAME table, with its own attach.
+    let (mut client_b, server_b, _link_b) = connect_aead_shared(secret(), 2, Rc::clone(&table));
     let attach_b = request(
         &mut client_b,
         &server_b,
@@ -824,8 +834,9 @@ fn aead_negotiate_end_to_end_handle_from_another_connection_is_refused() {
     );
     assert!(matches!(attach_b.msg, Msg::Rattach { .. }));
 
-    // A's handle, in a validly sealed packet on B: resolve finds no live entry
-    // for B's client_id, so the server answers Rerror.
+    // A's handle, in a validly sealed packet on B: the slot it names is owned
+    // by client_id 1, so B's resolve fails the owning-client check (D-08) and
+    // the server answers Rerror.
     let reply = request(
         &mut client_b,
         &server_b,
@@ -840,7 +851,26 @@ fn aead_negotiate_end_to_end_handle_from_another_connection_is_refused() {
     );
     assert!(
         matches!(reply.msg, Msg::Rerror { .. }),
-        "a handle issued on another connection does not resolve"
+        "a handle issued to another connection does not resolve (D-08, T-05-09)"
+    );
+
+    // B's own handle on the same table still resolves and is served.
+    let own = StatefulHandle::from_wire(&attach_b.handle).expect("the attach reply carries a handle");
+    let reply = request(
+        &mut client_b,
+        &server_b,
+        wire::TREAD,
+        own.to_wire(),
+        &Exts::default(),
+        &Msg::Tread {
+            fid: 7,
+            offset: 0,
+            count: 64,
+        },
+    );
+    assert!(
+        matches!(reply.msg, Msg::Rread { .. }),
+        "B's own handle still resolves on the shared table"
     );
 }
 
