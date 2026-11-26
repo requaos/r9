@@ -97,11 +97,67 @@ impl MCSLock {
     }
 }
 
+// ---------------------------------------------------------------------------
+// OnceStatic: the publish-once boot cell.
+//
+// The portable SMP core (`port/src/smp.rs`, SMP-02) keeps its arch hook
+// vtable in one of these: registered exactly once during single-CPU early
+// boot, read on hot paths thereafter.  The read is lock-free — one atomic
+// load — so it is safe from IRQ-masked contexts where taking even an MCS
+// lock could deadlock (the hooks are called from the lock machinery
+// itself).  The cell lives in this floor module because `smp` is
+// `#[forbid(unsafe_code)]` and the published-pointer dereference is the
+// one unsafe site the mechanism needs.
+// ---------------------------------------------------------------------------
+
+/// A publish-once cell for a `&'static T` registered once during
+/// single-CPU early boot (see the module note above).
+pub struct OnceStatic<T> {
+    ptr: AtomicPtr<T>,
+}
+
+impl<T> OnceStatic<T> {
+    pub const fn new() -> OnceStatic<T> {
+        OnceStatic { ptr: AtomicPtr::new(ptr::null_mut()) }
+    }
+
+    /// Publish `val`.  Boot discipline: called exactly once, before the
+    /// second cpu starts; a second call panics.
+    pub fn publish(&self, val: &'static T) {
+        let p = val as *const T as *mut T;
+        if self
+            .ptr
+            .compare_exchange(ptr::null_mut(), p, Ordering::AcqRel, Ordering::Relaxed)
+            .is_err()
+        {
+            panic!("OnceStatic: published twice");
+        }
+    }
+
+    /// The published value, or None before publication.
+    pub fn get(&self) -> Option<&'static T> {
+        let p = self.ptr.load(Ordering::Acquire);
+        if p.is_null() {
+            return None;
+        }
+        // SAFETY: p was published from a &'static T (publish above) and is
+        // never replaced (publish panics on a second call), so it names a
+        // live T for the rest of the program's lifetime; this load's
+        // Acquire pairs with publish's AcqRel.
+        Some(unsafe { &*p })
+    }
+}
+
+impl<T> Default for OnceStatic<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct Lock<T: ?Sized> {
     lock: UnsafeCell<MCSLock>,
     data: UnsafeCell<T>,
 }
-
 // SAFETY: the MCS protocol (lock/unlock above) serializes all access to
 // the protected data — a Lock can cross threads because the queue
 // discipline is the synchronization (the named floor module).
