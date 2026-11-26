@@ -77,6 +77,19 @@ pub fn idle_wait() {
     unsafe { core::arch::asm!("msr DAIFClr, #2", "wfi", "msr DAIFSet, #2") };
 }
 
+/// Read the calling CPU's current stack pointer (SMP-04).  main.rs's
+/// secondary_main seeds the secondary's sched_stack_top from it: the
+/// secondary's own boot-stack slot becomes its scheduler stack, with the
+/// bring-up tail's abandoned frames above the seed point (park_context,
+/// the swtch source, never resumes — the slot is free).
+pub fn current_sp() -> u64 {
+    let sp: u64;
+    // SAFETY: mov-from-sp is a pure register read at EL1 — no memory
+    // operands, no side effects, no stack touch.
+    unsafe { core::arch::asm!("mov {}, sp", out(reg) sp, options(nomem, nostack, preserves_flags)) };
+    sp
+}
+
 /// The deliberate sync exception (the dev_panic config's hook) —
 /// raises a brk #0 through the REAL trap path.
 #[cfg(dev_panic)]
@@ -395,6 +408,16 @@ fn dispatch_irq(frame: &TrapFrame) -> bool {
 
     let intid = platform::gic::ack();
     match intid {
+        // SGI 0 (smp::SGI_RESCHED, SMP-07): the reschedule IPI — a waker
+        // enqueued onto this CPU's run queue (possibly while it sat in
+        // the sched loop's idle wfi).  preempt() re-considers a Running
+        // proc (an EL0 interruption); an idle CPU's loop simply re-pops
+        // after the eret.  EOI below.
+        i if i == crate::smp::SGI_RESCHED as u32 => crate::proc::preempt(),
+        // SGI 1 (smp::SGI_SHOOTDOWN, SMP-07): the TLB shootdown IPI —
+        // service the pending request (local flush + generation ack)
+        // through the port coordinator.  EOI below.
+        i if i == crate::smp::SGI_SHOOTDOWN as u32 => port::smp::service_shootdown_ipi(),
         // ARM generic timer CNTP (PPI 14 -> INTID 16+14)
         30 => platform::timer::tick(),
         // PL011 UART RX (SPI 1 -> INTID 32+1): the devcons read-buffer

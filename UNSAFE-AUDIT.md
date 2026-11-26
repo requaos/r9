@@ -208,6 +208,30 @@ stay `SyncUnsafeCell` — write-once-at-boot/read-never-written-again is
 not IRQ-shared-mutable state.  pl011.rs 9 → 5, pci.rs 10 → 7;
 aarch64 198 → 191 blocks, SAFETY 404 → 397; the reconciliation holds.
 
+**Plan 05-22 delta (SMP-04/07/12, 2026-11-26):** the aarch64 two-CPU
+boot wiring lands.  `main.rs`: the 05-09 `secondary_main` wfi spin stub
+(1 block) is REPLACED by the real bring-up tail (`gic::init_secondary_cpu`
+→ `timer::init_secondary` → `mark_online` → `unmask_irq` →
+`enter_sched_loop_from_boot`) — all safe calls, so the block leaves with
+the stub; the new code (the `register_port_smp` call, the BSP-side SGI
+0/1 enables, `start_secondaries_and_self_check`, `wait_cpu_online`, the
+exec_bootstrap DT threading) adds zero unsafe.  `trap.rs`: gains the
+`current_sp` primitive (1 block: the mov-from-sp read — the secondary's
+sched-stack seed), placed in the trap floor per the wave-3 asm!
+consolidation; the SGI 0/1 dispatch arms call safe fns only.
+`smp.rs::start_secondaries` now returns the started count (safe code;
+counts unchanged).  `proc.rs::enter_sched_loop_from_boot` drops its
+`#[cfg(dev_churn)]` gate so the secondary entry can call it (an
+attribute change; counts unchanged).  `churngate.rs::bootstrap_and_run`
+takes the DT and calls `start_secondaries_and_self_check` after the
+prologue (safe code; the churn profile's 2 blocks are unchanged), so
+every virt config starts secondaries uniformly.  `platform/virt/timer.rs` gains
+`init_secondary`, `raw_counter`/`raw_counter_freq` and the CPU-0-only
+TICKS + per-CPU watchdog tick split — all safe (the register accesses
+ride the pinned aarch64-cpu crate's safe wrappers).  main.rs 7 → 6,
+trap.rs 8 → 9; aarch64 191 → 191 blocks, SAFETY 397 → 397; the
+reconciliation holds.
+
 ## ds/ and crypto/ (Phase 3)
 
 Both crates take `[lints] workspace = true`, so
@@ -406,7 +430,7 @@ uartpl011 (tree-wide: no driver touches io.rs directly anymore).  The
 
 | File + identifier | Kind | Justification |
 |---|---|---|
-| aarch64/trap.rs `init` (vbar_el1), `unmask_irq` (DAIFClr), `trap_unsafe` (the trap.S entry ABI), `trap`'s 2 wfi blocks; `unsafe extern trap_return` | block ×4 + extern ×1 | the trap-vector interface: asm entry/exit, vector-base install, IRQ mask, clean-halt parks.  trap.S byte-untouched (gate-diffed) |
+| aarch64/trap.rs `init` (vbar_el1), `unmask_irq` (DAIFClr), `trap_unsafe` (the trap.S entry ABI), `trap`'s 2 wfi blocks, `current_sp` (05-22's mov-from-sp) | block ×5 + extern ×1 | the trap-vector interface: asm entry/exit, vector-base install, IRQ mask, clean-halt parks, the secondary sched-stack seed read.  trap.S byte-untouched (gate-diffed); the extern is `unsafe extern trap_return` |
 | aarch64/swtch.rs `unsafe extern swtch` | extern ×1 | the context-switch ABI (swtch.S) |
 | aarch64/vm.rs `PhysPage4K::clear`; `next_mut` ×2; `init_empty_root_page_table` (fn+block); `ttbr0_el1`/`ttbr1_el1`; `switch` (fn+block); `invalidate_all_tlb_entries` (fn+block); `write_entry`; `write_recursive_entry` | fn ×3, block ×9 | page-table machinery: TTBR/TLB/barrier asm, volatile hardware-visible entry writes, recursive-mapping resolution.  The MMU floor |
 | aarch64/kmem.rs extern block + 10 link-sym fns | extern ×1, block ×10 | kernel.ld boundary symbols — only the zero-sized markers' addresses are read (never contents) |
@@ -446,7 +470,7 @@ cfg-gated code as well.
 | `fpu.rs` | 10 | 2 | 0 | FP/SIMD (q0-q31/FPCR/FPSR) save/restore, per-CPU `CpuFp` in the PerCpu slot (TPIDR_EL1, 05-10), `with_simd` (+1 test-only block) |
 | `io.rs` | 9 | 0 | 0 | the MMIO-volatility primitives every driver rides |
 | `kmem.rs` | 9 | 0 | 1 | kernel.ld boundary symbols (addresses only, never contents) |
-| `main.rs` | 7 | 0 | 1 | link-syms, DTB two-pass, the idle wfi, the boot-time TTBR0 switch + first EL0 entry, the secondary_main wfi park (05-09) |
+| `main.rs` | 6 | 0 | 1 | link-syms, DTB two-pass, the idle wfi, the boot-time TTBR0 switch + first EL0 entry (05-22: the secondary_main wfi park is gone — the real bring-up tail is safe calls only) |
 | `pagealloc.rs` | 2 | 0 | 0 | `VirtPage4KGuard` deref pair |
 | `platform/raspi3b/devcons.rs` | 1 | 0 | 0 | write-once UART cell at platform init |
 | `platform/raspi3b/mailbox.rs` | 2 | 0 | 0 | the mailbox's mapped request page |
@@ -464,7 +488,7 @@ cfg-gated code as well.
 | `smp.rs` | 10 | 0 | 1 | per-CPU PerCpu (TPIDR_EL1), PSCI CPU_ON (hvc/smc), DTB /cpus+/psci, DAIF save/restore, TLB flush, SmpArch registration (05-09) |
 | `swtch.rs` | 0 | 0 | 1 | the context-switch ABI (swtch.S); one host-test twin fn |
 | `textcopy.rs` | 8 | 2 | 0 | rfork text-copy emit/call and the I-cache selftest (RO text under KZERO aliases) (+5 test-only blocks) |
-| `trap.rs` | 8 | 0 | 1 | the trap-vector interface: VBAR install, DAIFClr, trap.S entry ABI, wfi parks |
+| `trap.rs` | 9 | 0 | 1 | the trap-vector interface: VBAR install, DAIFClr, trap.S entry ABI, wfi parks, the `current_sp` primitive (05-22's secondary sched-stack seed read) |
 | `usermem.rs` | 7 | 0 | 0 | THE single user-memory materialization point (UserSlice/UserSliceMut/UserPtr/UserString) |
 | `vm.rs` | 16 | 3 | 0 | page-table machinery: TTBR/TLB/barrier asm, entry writes, recursive-mapping resolution |
 | `vmdebug.rs` | 2 | 0 | 0 | read-only recursive-mapping walk (print path) |
@@ -512,8 +536,9 @@ riscv64's audit horizon is the Phase 7 sync.
 ## asm! consolidation note (wave 3 — landed)
 
 asm! exists ONLY in the named floor modules (aarch64): trap.rs (the vector
-interface: vbar install, DAIFClr, + the consolidated halt/idle/debug-brk
-primitives `park_forever`/`idle_wait`/`debug_sync_trap`), swtch.rs (the
+interface: vbar install, DAIFClr, + the consolidated halt/idle/debug-brk/
+sp-read primitives `park_forever`/`idle_wait`/`debug_sync_trap`/
+`current_sp`), swtch.rs (the
 context-switch global_asm!), vm.rs (MMU-register reads ttbr0/ttbr1/ctr_el0,
 the switch + TLB/barrier sequences, the D-09 cache maintenance),
 pre_mmu/vminit.rs (isb + tlbi in the MMU-enable), main.rs (the boot entry's

@@ -1689,14 +1689,14 @@ pub(crate) fn seed_kernel_context(p: &mut Proc, entry: fn() -> !) {
     enqueue_ready(p.pid);
 }
 
-/// 20-09 (dev_churn): park the boot context into the scheduler loop —
-/// the one-way handoff for the profile whose first "process" is a
-/// kernel-context orchestrator (the churn driver): the boot context
-/// never resumes (its save lands in this CPU's park_context scratch
-/// slot — nothing reads it), and sched_loop runs on the interrupt stack
-/// from here on, dispatching the already-Ready driver.  The x86_64
-/// 17-02 shape.
-#[cfg(dev_churn)]
+/// Park the boot context into the scheduler loop — the one-way handoff
+/// for a CPU whose boot context never resumes (its save lands in this
+/// CPU's park_context scratch slot — nothing reads it), entering
+/// sched_loop on this CPU's seeded scheduler stack.  Two callers:
+/// 20-09's dev_churn bootstrap (the churn driver is the first "process",
+/// a kernel-context orchestrator — the x86_64 17-02 shape) and 05-22's
+/// secondary_main (CPU 1's bring-up tail ends here; sched_stack_top
+/// names the secondary's own boot-stack slot, set just before the call).
 pub(crate) fn enter_sched_loop_from_boot() -> ! {
     // SAFETY: runs once from the boot context on this CPU (IRQ-masked,
     // driver already Ready); this CPU's PerCpu park_context is never
