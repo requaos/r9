@@ -124,14 +124,40 @@ Out-of-scope discoveries made during plan 05-08, not fixed by it:
 - **aarch64 net-smoke panics during bss page-in, at both -smp 1 and
   -smp 2.**  `nix run .#boot-r9-net-smoke` (HVF, default -smp 2) and
   `R9_SMP=1 nix run .#boot-r9-net-smoke` both fail with an identical
-  truncated panic (`panicked at` — the PL011 console buffer caps the
-  message) after the bss page-in sweep.  The panic is NOT SMP-related
-  (identical at both CPU counts) and NOT caused by 05-14's changes
-  (x86_64 gate scripts + CI YAML only).  The network stack files
-  (devip/*, netif.rs) were converted to SMP-safe locking in 05-08;
-  this may be a regression from that conversion or a pre-existing
+  truncated panic (`panicked at`) after the bss page-in sweep.  The
+  panic is NOT SMP-related (identical at both CPU counts) and NOT caused
+  by 05-14's changes (x86_64 gate scripts + CI YAML only).  The network
+  stack files (devip/*, netif.rs) were converted to SMP-safe locking in
+  05-08; this may be a regression from that conversion or a pre-existing
   issue that predates Phase 5.  All other aarch64 quick pass items
   (smoke, cpu, tier-1 HVF+TCG, xtask test, all clippy legs) pass green.
   Owner: needs a debug session to capture the full panic message (the
   truncated console output hides the source location).
-  status: open
+  status: FIXED (debug session aarch64-net-smoke-regression, c42a66f)
+
+  **Resolution (2026-11-26).**  The truncation was a harness artifact,
+  not the console: the expect driver's `expect_before` matches `panic`
+  on the first chunk and kills qemu's group, so the capture stops after
+  `panicked at `.  A raw-pty QEMU drive of the same ELF printed the full
+  message:
+
+    smp: LOCK RANK VIOLATION on cpu 0: holds "netif_ingress" (rank 90);
+    requested "heap_alloc" (rank 80)
+
+  Root cause: `netif::conv_alloc` built the FrameStore with the NetIrq-
+  ranked INGRESS lock held, `conv_close` rebuilt the free stack with a
+  freshly collected Vec under the same lock, and `FrameStore::push`
+  grew a zero-capacity VecDeque from the rx IRQ retire.  INGRESS (90)
+  sits above HeapAlloc (80) and the rank table forbids allocation
+  under it.  The violation was latent until 66a3548 added
+  `smp::register_port_smp()` to main9, which made the rank checker
+  live; every net-smoke ether bind then panicked.  (05-09/05-10 are
+  clean — a cdd4e61 probe with only kernel.ld applied passes.)
+
+  Fix c42a66f: allocate the store before taking INGRESS (NETIF, the
+  unranked lifecycle lock, is held throughout), reset the free stack in
+  place, and preallocate the queue so `push` never grows; `push` now
+  debug-asserts the no-alloc contract.  Verified: `R9_ACCEL=tcg nix run
+  .#boot-r9-net-smoke` x3 PASS, `R9_SMP=1` PASS, a genuine -smp 1 net
+  smoke PASS, `nix run .#boot-r9-smoke` (HVF) PASS, `cargo xtask check`
+  + `cargo xtask test` green.
