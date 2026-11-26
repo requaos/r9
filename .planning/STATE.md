@@ -4,12 +4,12 @@ milestone: v3.1
 milestone_name: Early SMP and Cluster Fabric
 current_phase: 05
 current_phase_name: Guide Phase 3 - Early SMP, Course Correction and Memory Pools
-status: planning
+status: executing
 stopped_at: Phase 5 context gathered
-last_updated: "2026-11-26T04:14:38.830Z"
+last_updated: "2026-11-26T04:17:55.589Z"
 last_activity: 2026-11-25
-last_activity_desc: roadmap rescoped to the v3.0 documents; old Phase 5 planning archived as superseded
-state_head: 433ec0a13ce706902646fc05c15042d3ef7e3bc3
+last_activity_desc: Phase 05 execution started
+state_head: 0d08e6cb86af0bee94f6ab67b4e126692773ecd7
 progress:
   total_phases: 3
   completed_phases: 0
@@ -25,14 +25,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-25)
 
 **Core value:** The OS boots to rio on QEMU q35 at every commit.
-**Current focus:** v3.1 Early SMP and Cluster Fabric (Phases 5-7), rescoped on 2026-11-25 by the owner's v3.0 documents in `docs/`. Phase 5 was discussed on 2026-11-25. Next: plan it with `/gsd-plan-phase 5`
+**Current focus:** Phase 05 — Guide Phase 3 - Early SMP, Course Correction and Memory Pools
 
 ## Current Position
 
-Phase: 05 (Guide Phase 3 - Early SMP, Course Correction and Memory Pools) — READY TO EXECUTE
-Plan: —
-Status: Phase 5 context gathered; ready to plan
-Last activity: 2026-11-25 — Phase 5 discussed (05-CONTEXT.md, D-01 to D-35); requirements and roadmap amended to match
+Phase: 05 (Guide Phase 3 - Early SMP, Course Correction and Memory Pools) — EXECUTING
+Plan: 1 of 27
+Status: Executing Phase 05
+Last activity: 2026-11-25 — Phase 05 execution started
 
 
 ## Performance Metrics
