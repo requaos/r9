@@ -79,6 +79,9 @@ pub struct Gicv3 {
     /// The boot CPU's affinity in GICD_IROUTER form (Aff0 at [7:0] ..
     /// Aff3 at [39:32], Interrupt_Routing_Mode clear) — the SPI target.
     routing: u64,
+    /// The GICR physical range from the DTB (stored at BSP init so
+    /// `init_secondary_cpu` can map the calling CPU's RD+SGI frames).
+    gicr_physrange: PhysRange,
 }
 
 impl Gicv3 {
@@ -211,7 +214,7 @@ impl Gicv3 {
         icc_igrpen1_el1_write(1);
         isb();
 
-        Ok(Gicv3 { gicd, sgi, routing })
+        Ok(Gicv3 { gicd, sgi, routing, gicr_physrange })
     }
 
     /// Enable interrupt intid at the given priority.  SGIs/PPIs (intid < 32)
@@ -274,6 +277,98 @@ impl Gicv3 {
     pub fn eoi(&self, intid: u32) {
         icc_eoir1_el1_write(intid);
     }
+
+    /// Send a software-generated interrupt to a target CPU (SMP-07).
+    /// ICC_SGI1R_EL1: TargetList [15:0] carries one bit per Aff0 target
+    /// within the cluster (both QEMU virt CPUs sit at Aff1=Aff2=Aff3=0),
+    /// SGIID [27:24] carries the SGI ID, IRM [40] clear = affinity routing.
+    /// The dsb ishst orders prior memory writes before the SGI fires.
+    pub fn send_sgi(&self, target_cpu: usize, sgi_id: u8) {
+        let val: u64 = (1u64 << target_cpu) | ((sgi_id as u64 & 0xF) << 24);
+        // SAFETY: dsb ishst is a pure barrier — no memory operands, safe
+        // at EL1 at any time.
+        unsafe { asm!("dsb ishst", options(nostack, preserves_flags)) };
+        icc_sgi1r_el1_write(val);
+        // SAFETY: isb serializes the SGI emission — the write takes effect
+        // before any subsequent instruction.
+        unsafe { asm!("isb", options(nostack, preserves_flags)) };
+    }
+
+    /// Initialise this (secondary) CPU's GIC interface (SMP-04).
+    /// Scans the GICR RD frames (stride 2 * 64 KiB) for the one matching
+    /// this CPU's MPIDR_EL1 affinity, wakes it (GICR_WAKER), configures
+    /// its SGI frame (IGROUPR0, ISENABLER0 for PPI 30 + SGI 0 + SGI 1),
+    /// and enables the CPU interface (ICC_SRE_EL1, ICC_PMR_EL1,
+    /// ICC_IGRPEN1_EL1).
+    pub fn init_secondary_cpu(&self) {
+        let mpidr = MPIDR_EL1.get();
+        let frames = (self.gicr_physrange.size() / GICR_REDIST_STRIDE).min(GICR_SCAN_MAX);
+        for i in 0..frames {
+            let frame_pa = self.gicr_physrange.start() + (i * GICR_REDIST_STRIDE) as u64;
+            let rd_phys = PhysRange::with_pa_len(frame_pa, GICR_RD_FRAME_SIZE);
+            let Ok(rd_vr) = map_device_register("gicr-rd", rd_phys, vm::PageSize::Page4K) else {
+                break;
+            };
+            let rd = RegBlock::new(rd_vr);
+            // GICR_TYPER is 64-bit RO; the two 32-bit halves read
+            // independently (low word: Last + Processor_Number, high word:
+            // the four affinity bytes).
+            let typer = (rd.read(GICR_TYPER) as u64) | ((rd.read(GICR_TYPER + 4) as u64) << 32);
+            let affinity_matches = (typer >> 32) & 0xff == mpidr & 0xff
+                && (typer >> 40) & 0xff == (mpidr >> 8) & 0xff
+                && (typer >> 48) & 0xff == (mpidr >> 16) & 0xff
+                && (typer >> 56) & 0xff == (mpidr >> 32) & 0xff;
+            if !affinity_matches {
+                if typer & GICR_TYPER_LAST != 0 {
+                    break;
+                }
+                continue;
+            }
+
+            // Found this CPU's RD frame.  Wake it: clear ProcessorSleep,
+            // poll ChildrenAsleep=0 (the same sequence as BSP init).
+            let waker = rd.read(GICR_WAKER);
+            rd.write(GICR_WAKER, waker & !GICR_WAKER_PROCESSOR_SLEEP);
+            let mut awake = false;
+            for _ in 0..1_000_000 {
+                if rd.read(GICR_WAKER) & GICR_WAKER_CHILDREN_ASLEEP == 0 {
+                    awake = true;
+                    break;
+                }
+                core::hint::spin_loop();
+            }
+            if !awake {
+                println!("gicr: secondary waker stuck (ChildrenAsleep never cleared)");
+                return;
+            }
+
+            // Map this CPU's SGI frame (follows the RD frame at +64 KiB).
+            let sgi_phys =
+                PhysRange::with_pa_len(frame_pa + GICR_RD_FRAME_SIZE as u64, GICR_RD_FRAME_SIZE);
+            let Ok(sgi_vr) = map_device_register("gicr-sgi", sgi_phys, vm::PageSize::Page4K)
+            else {
+                println!("gicr: can't map secondary SGI frame");
+                return;
+            };
+            let sgi = RegBlock::new(sgi_vr);
+
+            // SGIs/PPIs Group-1 via this CPU's SGI frame.
+            sgi.write(GICR_IGROUPR0, !0);
+            // Enable PPI 30 (timer) + SGI 0 (resched) + SGI 1 (shootdown).
+            let en = sgi.read(GICR_ISENABLER0);
+            sgi.write(GICR_ISENABLER0, en | (1 << 30) | (1 << 0) | (1 << 1));
+
+            // CPU interface: system-register access on, accept-all
+            // priority mask, Group-1 enable.
+            icc_sre_el1_write(icc_sre_el1_read() | 1);
+            isb();
+            icc_pmr_el1_write(0xff);
+            icc_igrpen1_el1_write(1);
+            isb();
+            return;
+        }
+        println!("gicr: no redistributor matches secondary mpidr {:#x}", mpidr);
+    }
 }
 
 /// Poll GICD_CTLR.RWP clear — the distributor applies CTLR/config writes
@@ -332,4 +427,11 @@ fn icc_eoir1_el1_write(val: u32) {
     // SAFETY: the end-of-interrupt write — exactly one per acked interrupt
     // (never for the spurious INTID), from EL1 IRQ context.
     unsafe { asm!("msr ICC_EOIR1_EL1, {val}", val = in(reg) val as u64) };
+}
+
+fn icc_sgi1r_el1_write(val: u64) {
+    // SAFETY: ICC_SGI1R_EL1 is EL1-writable once ICC_SRE_EL1.SRE is set
+    // (init's step 4); this is the SGI emission register — one Group-1
+    // SGI per write, followed by isb at the call site.
+    unsafe { asm!("msr ICC_SGI1R_EL1, {val}", val = in(reg) val) };
 }

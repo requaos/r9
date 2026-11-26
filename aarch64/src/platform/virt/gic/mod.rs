@@ -79,3 +79,29 @@ pub fn eoi(intid: u32) {
         None => {}
     }
 }
+
+/// Send a software-generated interrupt (SGI) to a target CPU (SMP-07).
+/// SGI 0 = reschedule, SGI 1 = TLB shootdown (`aarch64/src/smp.rs`'s
+/// SGI_RESCHED / SGI_SHOOTDOWN).  No-op before init.
+pub fn send_sgi(target_cpu: usize, sgi_id: u8) {
+    // SAFETY: GIC's write-once discipline — published at init before
+    // unmask; send_sgi runs lock-free thereafter (IRQ/syscall context).
+    match unsafe { &*GIC.get() }.as_ref() {
+        Some(Gic::V2(g)) => g.send_sgi(target_cpu, sgi_id),
+        Some(Gic::V3(g)) => g.send_sgi(target_cpu, sgi_id),
+        None => {}
+    }
+}
+
+/// Initialise the calling (secondary) CPU's GIC interface (SMP-04).
+/// GICv2: banked GICC + ISENABLER0/IPRIORITYR0.  GICv3: per-CPU GICR
+/// wake + SGI frame + ICC_*_EL1 system registers.
+pub fn init_secondary_cpu() {
+    // SAFETY: GIC's write-once discipline — published at BSP init;
+    // the secondary reads lock-free.
+    match unsafe { &*GIC.get() }.as_ref() {
+        Some(Gic::V2(g)) => g.init_secondary_cpu(),
+        Some(Gic::V3(g)) => g.init_secondary_cpu(),
+        None => {}
+    }
+}

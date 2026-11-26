@@ -15,6 +15,11 @@ mod pagealloc;
 mod param;
 mod platform;
 mod pre_mmu;
+// SMP bring-up (SMP-02, SMP-04, SMP-07): per-CPU state via TPIDR_EL1,
+// PSCI CPU_ON, GIC SGI IPIs.  #[allow(dead_code)] until the two-CPU boot
+// wiring (05-22) calls start_secondaries.
+#[allow(dead_code)]
+mod smp;
 // exec machinery: compiled into every build config.  The runtime call
 // path runs under dev_exec (exec_bootstrap below); the module-level
 // dead-code allowance stays because the non-exec configs compile the
@@ -132,6 +137,13 @@ fn print_stacks() {
 /// assumed to be dtb_va-KZERO.
 #[unsafe(no_mangle)]
 pub extern "C" fn main9(dtb_va: usize) {
+    // SMP-02: set TPIDR_EL1 = &PER_CPU[0] BEFORE trap::init installs
+    // VBAR_EL1 — any trap that fires after the vectors are armed reads
+    // cur_frame through TPIDR_EL1 (offset 0 of PerCpu).  Also publish
+    // the BSP's MMU state (MAIR/TCR/TTBR0/TTBR1) for secondary CPUs
+    // before any CPU_ON.
+    smp::init_bsp();
+    smp::publish_boot_state();
     trap::init();
     // CURKSTACK (the trap.S entry-stack symbol) starts at the legacy
     // interrupt stack so pre-process traps behave exactly as before; the
@@ -477,6 +489,21 @@ pub extern "C" fn main9(dtb_va: usize) {
     {
         #[allow(clippy::empty_loop)]
         loop {}
+    }
+}
+
+/// The temporary secondary-CPU entry (SMP-04, Plan 05-09): `l.S`'s
+/// `secondary_start` branches here after setting up the CPU's register
+/// state.  This stub parks the CPU; Plan 05-22 Task 1 replaces it in
+/// place in this file with the real bring-up tail (per-CPU init, timer
+/// arm, sched loop entry).
+#[unsafe(no_mangle)]
+pub extern "C" fn secondary_main(cpu_id: usize) -> ! {
+    let _ = cpu_id;
+    loop {
+        // SAFETY: wfi parks the CPU until an interrupt; IRQs are masked
+        // in secondary_start's boot state, so this is a wedge-free stop.
+        unsafe { core::arch::asm!("wfi") };
     }
 }
 

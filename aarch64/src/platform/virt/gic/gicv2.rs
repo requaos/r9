@@ -24,6 +24,7 @@ pub const GICD_ISENABLER0: usize = 0x100; // Interrupt set-enable, 32 irqs per w
 pub const GICD_IPRIORITYR0: usize = 0x400; // Interrupt priority, 4 irqs per word
 pub const GICD_ITARGETSR0: usize = 0x800; // Interrupt cpu targets, 4 irqs per word
 pub const GICD_ICFGR0: usize = 0xC00; // Interrupt trigger config, 16 irqs per word, 2 bits each
+pub const GICD_SGIR: usize = 0xF00; // Software generated interrupt register
 
 // CPU interface (GICC) register offsets
 pub const GICC_CTLR: usize = 0x000; // CPU interface control register
@@ -133,5 +134,38 @@ impl Gicv2 {
     /// the spurious INTID 1023.
     pub fn eoi(&self, intid: u32) {
         self.gicc.write(GICC_EOIR, intid);
+    }
+
+    /// Send a software-generated interrupt to a target CPU (SMP-07).
+    /// GICD_SGIR: bits [25:16] carry the CPU target filter (here: the
+    /// one-bit target list at [23:16] with TargetListFilter 0b00), bits
+    /// [3:0] carry the SGI ID.  The dsb ishst orders prior memory writes
+    /// before the SGI fires (the IPI's data-before-signal rule).
+    pub fn send_sgi(&self, target_cpu: usize, sgi_id: u8) {
+        let val = ((1u32 << target_cpu) << 16) | (sgi_id as u32 & 0xF);
+        // SAFETY: dsb ishst is a pure barrier — no memory operands, safe
+        // at EL1 at any time.
+        unsafe { core::arch::asm!("dsb ishst", options(nostack, preserves_flags)) };
+        self.gicd.write(GICD_SGIR, val);
+    }
+
+    /// Initialise this (secondary) CPU's GIC interface (SMP-04).
+    /// GICv2's banked registers give each CPU its own GICC and its own
+    /// ISENABLER0/IPRIORITYR0 bank for intids 0-31: the secondary writes
+    /// the same offsets as the BSP but sees its own copies.  PPI 30 is
+    /// the generic timer (CNTP); SGI 0 is the reschedule IPI; SGI 1 is
+    /// the TLB shootdown IPI.
+    pub fn init_secondary_cpu(&self) {
+        // Accept all priorities on this CPU.
+        self.gicc.write(GICC_PMR, 0xff);
+        // Enable this CPU's CPU interface.
+        self.gicc.write(GICC_CTLR, 1);
+        // Enable + prioritize the per-CPU interrupts: SGI 0 (resched),
+        // SGI 1 (shootdown), PPI 30 (timer).  The banked ISENABLER0 /
+        // IPRIORITYR0 / ICFGR0 writes are per-CPU on GICv2 (the enable()
+        // path skips ITARGETSR for intid < 32 — PPIs are hardwired).
+        self.enable(0, 0xA0);
+        self.enable(1, 0xA0);
+        self.enable(30, 0xA0);
     }
 }
