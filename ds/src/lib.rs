@@ -20,14 +20,17 @@ extern crate alloc;
 // ds/ needs the owner's approval.
 //
 // The reserved SIMD module cannot live under `roaring` once that module is
-// forbidden — a forbid reaches submodules — so it will be mounted at the
-// crate root with #[path], the same way port/src/lib.rs mounts
-// devip/waker.rs.
+// forbidden — a forbid reaches submodules — so it is mounted at the crate
+// root, the same way port/src/lib.rs mounts devip/waker.rs.  MEM-17 (D-19)
+// fills it with the AVX2/NEON Roaring kernels; it is the second (and only
+// other) place in ds/ that may hold unsafe, and it carries the audit entries
+// in UNSAFE-AUDIT.md.
 pub mod tpht;
+mod setops_simd;
 #[forbid(unsafe_code)]
 pub mod roaring;
 #[forbid(unsafe_code)]
-mod setops;
+pub mod setops;
 #[forbid(unsafe_code)]
 pub mod clientset;
 // The CORR-03 slab also carries `#![forbid(unsafe_code)]` as an inner

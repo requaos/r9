@@ -11,10 +11,11 @@
 //! - R2 (D-10): `crypto/src` holds no `unsafe` token (line comments
 //!   stripped first) and `crypto/src/lib.rs` carries
 //!   `#![forbid(unsafe_code)]`.
-//! - R3 (D-09): the same token rule for every `.rs` file under `ds/src`
-//!   that is not under `ds/src/tpht/`; every non-`tpht` module declared in
-//!   `ds/src/lib.rs` carries `#[forbid(unsafe_code)]`, and the `tpht` line
-//!   carries none.
+//! - R3 (D-09, D-19): the same token rule for every `.rs` file under `ds/src`
+//!   that is not under `ds/src/tpht/` and is not the one reserved Roaring
+//!   SIMD module `ds/src/setops_simd.rs`; every other module declared in
+//!   `ds/src/lib.rs` carries `#[forbid(unsafe_code)]`, and the `tpht` and
+//!   `setops_simd` lines carry none.
 //! - R4 (D-22, D-25): only `port` may depend on `crypto` or `ds`, in any
 //!   dependency table; the three arch crates (`aarch64`, `x86_64`, `riscv64`)
 //!   may not name either key and reach them through `port`.
@@ -259,13 +260,15 @@ fn check_crypto_token_rule(workspace: &Path, problems: &mut Vec<String>) {
     }
 }
 
-/// R3 (D-09): the token rule for every `.rs` file under `ds/src` outside
-/// `ds/src/tpht/`, and the per-module forbid layout in `ds/src/lib.rs`.
+/// R3 (D-09, D-19): the token rule for every `.rs` file under `ds/src` outside
+/// `ds/src/tpht/` and `ds/src/setops_simd.rs`, and the per-module forbid layout
+/// in `ds/src/lib.rs`.
 fn check_ds_token_and_forbid_rules(workspace: &Path, problems: &mut Vec<String>) {
     let src = workspace.join("ds/src");
     let tpht = src.join("tpht");
+    let simd = src.join("setops_simd.rs");
     for path in sorted_files(&src) {
-        if path.starts_with(&tpht) {
+        if path.starts_with(&tpht) || path == simd {
             continue;
         }
         if path.extension().and_then(|e| e.to_str()) != Some("rs") {
@@ -277,7 +280,7 @@ fn check_ds_token_and_forbid_rules(workspace: &Path, problems: &mut Vec<String>)
                 &display,
                 &text,
                 problems,
-                "only ds/src/tpht/ may hold unsafe in ds/ (D-09)",
+                "only ds/src/tpht/ and ds/src/setops_simd.rs may hold unsafe in ds/ (D-09, D-19)",
             );
         }
     }
@@ -290,11 +293,11 @@ fn check_ds_token_and_forbid_rules(workspace: &Path, problems: &mut Vec<String>)
             let same_line = strip_line_comment(line).contains("#[forbid(unsafe_code)]");
             let previous_line =
                 n > 0 && strip_line_comment(lines[n - 1]).contains("#[forbid(unsafe_code)]");
-            if name == "tpht" {
+            if name == "tpht" || name == "setops_simd" {
                 if same_line || previous_line {
                     problems.push(format!(
-                        "{lib}:{}: `tpht` carries `#[forbid(unsafe_code)]`; tpht is the one ds \
-                         module that may hold unsafe (D-09)",
+                        "{lib}:{}: `{name}` carries `#[forbid(unsafe_code)]`; {name} is one of \
+                         the two ds modules that may hold unsafe (D-09, D-19)",
                         n + 1
                     ));
                 }
@@ -647,6 +650,11 @@ mod tests {
         let dir = fixture("unsafe-inside-tpht");
         write(&dir, "ds/src/tpht/flattened.rs", &unsafe_block());
         check(&dir).expect("ds/src/tpht/ may hold unsafe (D-09)");
+        let _ = fs::remove_dir_all(&dir);
+
+        let dir = fixture("unsafe-setops-simd");
+        write(&dir, "ds/src/setops_simd.rs", &unsafe_block());
+        check(&dir).expect("ds/src/setops_simd.rs may hold unsafe (D-09, D-19)");
         let _ = fs::remove_dir_all(&dir);
     }
 
