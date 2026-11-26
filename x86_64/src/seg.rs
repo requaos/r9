@@ -254,6 +254,9 @@ impl Gdt {
     /// It is up to the caller to ensure that `self` has
     /// been properly initialized.
     pub unsafe fn load(&mut self) {
+        // SAFETY: the caller's contract above — self is a properly
+        // initialized Gdt — makes the table architecturally valid; lgdt
+        // is a CPL 0 instruction that reads only self's base/limit.
         unsafe { cpu::lgdt(self) }
     }
 
@@ -391,6 +394,11 @@ impl Tss {
     /// is initialized and loaded, and that this TSS has been
     /// initialized.
     pub unsafe fn load(&mut self) {
+        // SAFETY: the caller's contract above — a valid GDT is loaded
+        // and this TSS is initialized — so Gdt::tasksel() names a
+        // well-formed TSS descriptor in the live GDT; ltr is a CPL 0
+        // instruction whose architected write (marking the descriptor
+        // busy) lands inside that valid GDT.
         unsafe {
             cpu::ltr(Gdt::tasksel());
         }
@@ -419,6 +427,9 @@ impl Idt {
     /// It is up to the caller to ensure that this IDT has been
     /// properly initialized.
     pub unsafe fn load(&mut self) {
+        // SAFETY: the caller's contract above — self is a properly
+        // initialized Idt — makes the table architecturally valid; lidt
+        // is a CPL 0 instruction that reads only self's base/limit.
         unsafe {
             cpu::lidt(self);
         }

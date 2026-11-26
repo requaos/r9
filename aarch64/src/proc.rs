@@ -436,6 +436,13 @@ pub fn rfmem_brk_set(family: u64, old_end: usize, new_end: usize) -> Result<()> 
             // This page never published a refcount: unmap it from the
             // members that took it, drop their records, free the page.
             for &m in &mapped {
+                // SAFETY: m is a PROC_TABLE-resident member pointer from
+                // the `mapped` list this growth built; single CPU,
+                // IRQ-masked syscall context (an SMP-03 audit site), so
+                // the &mut deref is exclusive — no member is running.
+                // map_to edits the member's table with the per-write TLB
+                // invalidate; the mapping being removed was added by this
+                // same growth, and the VA aliases nothing else.
                 unsafe {
                     let p = &mut *m;
                     let mut physalloc = PhysPageAllocator {};
@@ -467,6 +474,11 @@ pub fn rfmem_brk_set(family: u64, old_end: usize, new_end: usize) -> Result<()> 
         // last release freeing it.
         for &(done_va, done_pa) in &done {
             for &m in &members {
+                // SAFETY: m is a PROC_TABLE-resident member pointer from
+                // `members`; single CPU, IRQ-masked syscall context (an
+                // SMP-03 audit site), so the &mut deref is exclusive.
+                // map_to's per-write TLB invalidate covers the removal of
+                // the mapping this growth added at done_va.
                 unsafe {
                     let p = &mut *m;
                     let mut physalloc = PhysPageAllocator {};
@@ -1813,13 +1825,14 @@ pub(crate) fn dump_proc_states() {
         let name = core::str::from_utf8(&p.name[..n]).unwrap_or("?");
         // The parent pid + the exec-recorded argv (the spawn topology
         // distinguishes a libthread proccreate child from a
-        // fork+exec'd command).  SAFETY: parent names a
-        // PROC_TABLE-resident Proc (recorded at rfork; slots are never
-        // freed this era) and the table lock is held — the deref cannot
-        // race (post_wait_record's precedent).
+        // fork+exec'd command).
         let parent_pid = if p.parent.is_null() {
             0
         } else {
+            // SAFETY: parent names a PROC_TABLE-resident Proc (recorded
+            // at rfork; slots are never freed this era) and the table
+            // lock is held — the deref cannot race (post_wait_record's
+            // precedent).
             unsafe { (*p.parent).pid }
         };
         let argv_str = core::str::from_utf8(&p.argv).unwrap_or("?");
@@ -2744,12 +2757,13 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &TrapFrame, flag: u64)
                     ptr::write_bytes(physaddr_as_ptr_mut_offset_from_kzero::<u8>(pa), 0, PAGE_SIZE_4K);
                 }
                 let entry = Entry::rw_user_data().with_phys_addr(pa);
-                // SAFETY (both map_to calls): parent.root_table is the
-                // parent's ACTIVE user table (map_to's per-write TLB
-                // invalidate covers the addition — the VA was unmapped, so
-                // no stale translation); child.root_table is INACTIVE and
-                // edited via the temp-recursive dance.  Single CPU,
-                // IRQ-masked syscall context throughout.
+                // SAFETY: for both map_to calls below —
+                // parent.root_table is the parent's ACTIVE user table
+                // (map_to's per-write TLB invalidate covers the addition
+                // — the VA was unmapped, so no stale translation);
+                // child.root_table is INACTIVE and edited via the
+                // temp-recursive dance.  Single CPU, IRQ-masked syscall
+                // context throughout (an SMP-03 audit site).
                 unsafe {
                     let mut physalloc = PhysPageAllocator {};
                     let mut vmt = VmTraitImpl {};

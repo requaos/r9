@@ -430,6 +430,12 @@ impl Mach {
             (trap::BREAKPOINT_TRAPNO, &mut self.bp_stack),
             (trap::DOUBLE_FAULT_TRAPNO, &mut self.df_stack),
         ]);
+        // SAFETY: self is the exclusively borrowed Mach (the &mut self
+        // receiver of this unsafe fn), so gdt/idt/tss name valid,
+        // aligned, live tables for the Mach's whole lifetime; init()
+        // above has populated all three, and lgdt/lidt/ltr are CPL 0
+        // instructions whose own contracts require exactly the
+        // architecturally valid tables they are handed here.
         unsafe {
             self.gdt.load();
             self.idt.load();

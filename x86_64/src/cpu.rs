@@ -34,6 +34,9 @@ pub const MSR_KERNEL_GS_BASE: u32 = 0xc0000102;
 /// Retrieves a copy of the `RFLAGS` registers.
 pub(crate) fn flags() -> Flags {
     const MB1: u64 = 0b10;
+    // SAFETY: pushfq/popq are unprivileged and keep the stack balanced;
+    // the out(reg) operand fully initializes raw; no memory is touched
+    // and no other register is clobbered.
     unsafe {
         let raw: u64;
         asm!("pushfq; popq {};", out(reg) raw, options(att_syntax));
@@ -76,6 +79,8 @@ pub(crate) fn fmask() -> u64 {
 /// delivery on the current CPU, by setting the "Interrupt
 /// Enable" bit (`IF`) in the `RFLAGS` register
 pub(crate) fn sti() {
+    // SAFETY: sti is a CPL 0 instruction and the kernel runs at CPL 0;
+    // it takes no operands, touches no memory, and clobbers nothing.
     unsafe {
         asm!("sti");
     }
@@ -85,6 +90,8 @@ pub(crate) fn sti() {
 /// delivery on the current CPU, by clearing the "Interrupt
 /// Enable" bit (`IF`) in the `RFLAGS` register
 pub(crate) fn cli() {
+    // SAFETY: cli is a CPL 0 instruction and the kernel runs at CPL 0;
+    // it takes no operands, touches no memory, and clobbers nothing.
     unsafe {
         asm!("cli");
     }
@@ -99,6 +106,10 @@ pub(crate) fn cli() {
 /// The given selector must identify a well-formed TSS selector
 /// in the presently loaded GDT.
 pub(crate) unsafe fn ltr(selector: u16) {
+    // SAFETY: the caller's contract above — selector names a well-formed
+    // TSS descriptor in the presently loaded GDT.  ltr is CPL 0-only
+    // and the kernel runs at CPL 0; the instruction's architected write
+    // (marking the descriptor busy) lands inside that valid GDT.
     unsafe {
         asm!("ltr {:x};", in(reg) selector);
     }
@@ -112,6 +123,12 @@ pub(crate) unsafe fn ltr(selector: u16) {
 /// The referred GDT must be architecturally valid.
 pub(crate) unsafe fn lgdt(gdt: &Gdt) {
     let ptr: *const Gdt = gdt;
+    // SAFETY: the caller's contract — gdt is an architecturally valid
+    // GDT.  The 16 bytes the sequence borrows below %rsp hold the
+    // {limit, base} pseudo-descriptor plus the far-return frame that
+    // lretq consumes, so %rsp comes back balanced; {base} is the live
+    // Gdt's address — mapped readable memory for the load's duration —
+    // and lgdt/lretq run at CPL 0.
     unsafe {
         asm!(r#"
             subq $16, %rsp;
@@ -139,6 +156,11 @@ pub(crate) unsafe fn lgdt(gdt: &Gdt) {
 /// The referred IDT must be architecturally valid.
 pub(crate) unsafe fn lidt(idt: &Idt) {
     let ptr: *const Idt = idt;
+    // SAFETY: the caller's contract — idt is an architecturally valid
+    // IDT.  The 16 bytes borrowed below %rsp hold the {limit, base}
+    // pseudo-descriptor and are restored by the matching addq; {base}
+    // is the live Idt's address — mapped readable memory for the load's
+    // duration — and lidt runs at CPL 0.
     unsafe {
         asm!(r#"
             subq $16, %rsp;
@@ -161,6 +183,9 @@ pub(crate) unsafe fn lidt(idt: &Idt) {
 pub unsafe fn _rdmsr(msr: u32) -> u64 {
     let lo: u32;
     let hi: u32;
+    // SAFETY: the caller's contract — msr is a valid MSR.  rdmsr is
+    // CPL 0-only, returns the value through the named eax/edx out
+    // operands (fully initializing lo/hi), and touches no memory.
     unsafe {
         asm!("rdmsr",
             in("ecx") msr,
@@ -185,6 +210,11 @@ pub unsafe fn _rdmsr(msr: u32) -> u64 {
 pub fn cpuid(leaf: u32, subleaf: u32) -> (u32, u32, u32, u32) {
     let (a, c, d): (u32, u32, u32);
     let (_rbx_saved, rbx_val): (u64, u64);
+    // SAFETY: CPUID faults nowhere and needs no privilege (SDM Vol 2 —
+    // an unimplemented leaf returns the maximum leaf's values); %rbx is
+    // saved and restored around the instruction because LLVM reserves
+    // it, every output returns through a named operand, and no memory
+    // is touched.
     unsafe {
         asm!(
             "movq %rbx, {saved}",
@@ -213,6 +243,10 @@ pub fn cpuid(leaf: u32, subleaf: u32) -> (u32, u32, u32, u32) {
 pub fn rdtsc() -> u64 {
     let lo: u32;
     let hi: u32;
+    // SAFETY: RDTSC is unprivileged and always available (the fn doc's
+    // contract; the kernel never sets CR4.TSD); eax/edx return through
+    // named lateout operands, fully initializing lo/hi, and no memory
+    // is touched.
     unsafe {
         asm!("rdtsc", lateout("eax") lo, lateout("edx") hi, options(att_syntax));
     }
@@ -267,6 +301,10 @@ pub fn has_rdseed(max_leaf: u32, cpuid7_ebx: u32) -> bool {
 pub fn rdrand() -> Option<u64> {
     let val: u64;
     let ok: u8;
+    // SAFETY: only the has_rdrand-gated paths call this, so the CPUID
+    // bit guarantees the instruction does not #UD; setc captures CF
+    // immediately, both results return through named operands, and no
+    // memory is touched.
     unsafe {
         asm!("rdrand {val}",
             "setc {ok}",
@@ -286,6 +324,10 @@ pub fn rdrand() -> Option<u64> {
 pub fn rdseed() -> Option<u64> {
     let val: u64;
     let ok: u8;
+    // SAFETY: only the has_rdseed-gated path calls this, so the CPUID
+    // bit (behind its max-leaf check) guarantees the instruction does
+    // not #UD; setc captures CF immediately, both results return
+    // through named operands, and no memory is touched.
     unsafe {
         asm!("rdseed {val}",
             "setc {ok}",
@@ -304,6 +346,10 @@ pub fn rdseed() -> Option<u64> {
 /// The caller must ensure that the value and MSR are
 /// valid, and that the value makes sense for the MSR.
 pub(crate) unsafe fn wrmsr(msr: u32, value: u64) {
+    // SAFETY: the caller's contract — msr is valid and value makes
+    // sense for it.  wrmsr is CPL 0-only, takes the MSR number in ecx
+    // and the value split across edx:eax through named in operands, and
+    // touches no memory.
     unsafe {
         asm!("wrmsr",
             in("ecx") msr,
@@ -325,6 +371,11 @@ pub(crate) unsafe fn wrmsr(msr: u32, value: u64) {
 /// the `WRGSBASE` instruction.
 #[allow(dead_code)]
 pub(crate) unsafe fn wrgsbase(value: u64) {
+    // SAFETY: the caller's contract above — value makes sense as a %gs
+    // segment base and WRGSBASE is assumed available; the instruction
+    // is CPL 0-only, takes its operand in a register, and touches no
+    // memory.  (Unused since the old vsvm init retired; kept for the
+    // Phase 14 user %gs swap.)
     unsafe {
         asm!("wrgsbase {}", in(reg) value, options(att_syntax));
     }

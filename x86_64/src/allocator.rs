@@ -9,6 +9,12 @@ mod global {
     #[global_allocator]
     pub(crate) static GLOBAL_ALLOCATOR: GlobalQuickAlloc = GlobalQuickAlloc(AtomicPtr::new({
         static mut HEAP: GlobalHeap = GlobalHeap::new();
+        // SAFETY: the Block spans HEAP — a static arena alive for the
+        // kernel's whole lifetime — from its base for its full size, so
+        // the pointer is valid and exclusively owned (this one-time
+        // static initializer runs before any allocation exists) and the
+        // base is aligned to GlobalHeap's own alignment by the static's
+        // type.
         static mut ALLOC: QuickFit = QuickFit::new(BumpAlloc::new(unsafe {
             Block::new_from_raw_parts((&raw mut HEAP).cast(), mem::size_of::<GlobalHeap>())
         }));

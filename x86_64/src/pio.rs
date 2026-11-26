@@ -2,6 +2,9 @@
 
 pub unsafe fn outb(port: u16, b: u8) {
     #[cfg(not(test))]
+    // SAFETY: CPL 0 port I/O: the caller (console/platform init and
+    // drivers) supplies an architecturally valid port; `outb` writes al
+    // to the port named by dx, touches no memory, and clobbers nothing.
     unsafe {
         core::arch::asm!("outb %al, %dx", in("dx") port, in("al") b, options(att_syntax));
     }
@@ -9,6 +12,9 @@ pub unsafe fn outb(port: u16, b: u8) {
 
 pub unsafe fn outw(port: u16, w: u16) {
     #[cfg(not(test))]
+    // SAFETY: CPL 0 port I/O: the caller supplies an architecturally
+    // valid port; `outw` writes ax to the port named by dx, touches no
+    // memory, and clobbers nothing.
     unsafe {
         core::arch::asm!("outw %ax, %dx", in("dx") port, in("ax") w, options(att_syntax));
     }
@@ -16,6 +22,9 @@ pub unsafe fn outw(port: u16, w: u16) {
 
 pub unsafe fn outl(port: u16, l: u32) {
     #[cfg(not(test))]
+    // SAFETY: CPL 0 port I/O: the caller supplies an architecturally
+    // valid port; `outl` writes eax to the port named by dx, touches no
+    // memory, and clobbers nothing.
     unsafe {
         core::arch::asm!("outl %eax, %dx", in("dx") port, in("ax") l, options(att_syntax));
     }
@@ -23,6 +32,9 @@ pub unsafe fn outl(port: u16, l: u32) {
 
 pub unsafe fn inb(port: u16) -> u8 {
     #[cfg(not(test))]
+    // SAFETY: CPL 0 port I/O: the caller supplies an architecturally
+    // valid port; `inb` reads the port named by dx into al, and the
+    // lateout operand fully initializes b; no memory is touched.
     unsafe {
         let b: u8;
         core::arch::asm!("inb %dx, %al", in("dx") port, lateout("al") b, options(att_syntax));
@@ -36,6 +48,9 @@ pub unsafe fn inb(port: u16) -> u8 {
 
 pub unsafe fn inw(port: u16) -> u16 {
     #[cfg(not(test))]
+    // SAFETY: CPL 0 port I/O: the caller supplies an architecturally
+    // valid port; `inw` reads the port named by dx into ax, and the
+    // lateout operand fully initializes w; no memory is touched.
     unsafe {
         let w: u16;
         core::arch::asm!("inw %dx, %ax", in("dx") port, lateout("ax") w, options(att_syntax));
@@ -49,6 +64,9 @@ pub unsafe fn inw(port: u16) -> u16 {
 
 pub unsafe fn inl(port: u16) -> u32 {
     #[cfg(not(test))]
+    // SAFETY: CPL 0 port I/O: the caller supplies an architecturally
+    // valid port; `inl` reads the port named by dx into eax, and the
+    // lateout operand fully initializes l; no memory is touched.
     unsafe {
         let l: u32;
         core::arch::asm!("inl %dx, %eax", in("dx") port, lateout("eax") l, options(att_syntax));

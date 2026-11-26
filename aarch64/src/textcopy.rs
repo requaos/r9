@@ -155,6 +155,8 @@ pub(crate) fn selftest() -> (u32, u32, u32) {
                 call(x + off);
             }
             // The parent page carries `new` at the same offset.
+            // SAFETY: ksrc is the src page's KZERO alias (mapped r/w
+            // above); off + 8 <= 4096, as for the kcode emit above.
             unsafe { emit(ksrc.add(off), new) };
             if arm == 0 {
                 // rfork's path: the shared helper, then finish.
@@ -169,6 +171,9 @@ pub(crate) fn selftest() -> (u32, u32, u32) {
                 // Control: the same copy with NO maintenance.
                 // SAFETY: as above.
                 unsafe { core::ptr::copy_nonoverlapping(ksrc, kcode, PAGE_SIZE_4K) };
+                // SAFETY: `isb` is a context-synchronization event with
+                // no memory operands and no clobbers; executing it at
+                // EL1 is always architecturally valid.
                 unsafe { core::arch::asm!("isb") };
                 if call(x + off) == old {
                     stale += 1;
