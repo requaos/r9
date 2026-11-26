@@ -202,7 +202,7 @@ const TIME_DEFAULT: &[u8] = b"1700000000\n";
 /// The per-file static metadata (name, qid, mode) — the walk table and the
 /// directory listing share it.  lengths are computed at read/stat time
 /// (hostowner's and time's vary).
-const FILES: [(&[u8], u64, u32); 9] = [
+const FILES: [(&[u8], u64, u32); 10] = [
     (b"cons", QID_CONS, 0o666),
     (b"null", QID_NULL, 0o666),
     (b"user", QID_USER, 0o444),
@@ -212,6 +212,7 @@ const FILES: [(&[u8], u64, u32); 9] = [
     (b"pid", QID_PID, 0o444),
     (b"random", QID_RANDOM, 0o444),
     (b"urandom", QID_URANDOM, 0o444),
+    (b"sysstat", QID_SYSSTAT, 0o444),
 ];
 
 /// The arch-side current-pid hook for the pid file (the devproc
@@ -327,6 +328,23 @@ fn pid_len() -> u64 {
     pid_content().map(|c| c.len() as u64).unwrap_or(0)
 }
 
+/// The `#c/sysstat` line: the lock-free evictor counters (MEM-07, D-17).
+fn sysstat_content() -> alloc::vec::Vec<u8> {
+    let stats = crate::palloc::evictor_stats();
+    alloc::format!(
+        "evictor: dropped_text={} dropped_data={} pinned_skipped={}\n",
+        stats.dropped_text,
+        stats.dropped_data,
+        stats.pinned_skipped
+    )
+    .into_bytes()
+}
+
+/// The sysstat file's current length (for stat/dir listings).
+fn sysstat_len() -> u64 {
+    sysstat_content().len() as u64
+}
+
 /// Walk a single name component from the devcons root.
 pub fn walk(c: &crate::dat::Chan, name: &[u8]) -> crate::Result<crate::dat::Chan> {
     if c.qid.typ != QTDIR || c.qid.path != QID_ROOT {
@@ -356,10 +374,11 @@ pub fn open(c: &crate::dat::Chan, mode: u32) -> crate::Result<crate::dat::Chan> 
     if (c.qid.path == QID_USER
         || c.qid.path == QID_PID
         || c.qid.path == QID_RANDOM
-        || c.qid.path == QID_URANDOM)
+        || c.qid.path == QID_URANDOM
+        || c.qid.path == QID_SYSSTAT)
         && mode != crate::dat::OREAD
     {
-        return Err("devcons: user/pid/random/urandom are read-only");
+        return Err("devcons: user/pid/random/urandom/sysstat are read-only");
     }
     let mut nc = crate::dat::Chan::new(c.dev, c.qid, mode);
     nc.path = c.path.clone();
@@ -450,6 +469,8 @@ pub fn stat(c: &crate::dat::Chan, sb: &mut [u8]) -> crate::Result<u64> {
         pid_len()
     } else if *qid == QID_USER {
         user_len()
+    } else if *qid == QID_SYSSTAT {
+        sysstat_len()
     } else {
         0
     };
@@ -485,6 +506,8 @@ pub fn read(c: &mut crate::dat::Chan, buf: &mut [u8], offset: u64) -> crate::Res
                     pid_len()
                 } else if qid == QID_USER {
                     user_len()
+                } else if qid == QID_SYSSTAT {
+                    sysstat_len()
                 } else {
                     0
                 };
@@ -555,6 +578,17 @@ pub fn read(c: &mut crate::dat::Chan, buf: &mut [u8], offset: u64) -> crate::Res
             buf[..n].copy_from_slice(&avail[..n]);
             n as u64
         }
+        QID_SYSSTAT => {
+            // The read-only evictor counter file (MEM-07, D-17): rebuilt
+            // per call from the lock-free `port::palloc::evictor_stats()`
+            // snapshot, honouring `off` so `cat #c/sysstat` reaches EOF.
+            let content = sysstat_content();
+            let start = (off as usize).min(content.len());
+            let avail = &content[start..];
+            let n = avail.len().min(buf.len());
+            buf[..n].copy_from_slice(&avail[..n]);
+            n as u64
+        }
         // /dev/random + /dev/urandom (D-17): fresh bytes from the
         // ChaCha20 DRBG on every read — streaming devices, the offset
         // ignored (the cons/devpipe streaming precedent).  Both files
@@ -584,6 +618,7 @@ pub fn write(c: &mut crate::dat::Chan, buf: &[u8]) -> crate::Result<u64> {
         QID_CONS => Ok(write_bytes(buf) as u64),
         QID_NULL => Ok(buf.len() as u64),
         QID_USER => Err("devcons: user is read-only"),
+        QID_SYSSTAT => Err("devcons: sysstat is read-only"),
         QID_RANDOM | QID_URANDOM => Err("devcons: random/urandom are read-only"),
         QID_HOSTOWNER => {
             // The donor hostownerwrite gate + bound (sysauth.c:148-165,

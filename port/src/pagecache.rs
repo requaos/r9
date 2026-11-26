@@ -183,10 +183,6 @@ impl PageCache {
 
     /// Look up a cached image page.  A cold or evicted page is `None`.
     pub fn lookup(&self, key: PageKey) -> Option<CachedPage> {
-        // RED-SCAFFOLD: lookup is not implemented yet.
-        let _ = key;
-        return None;
-        #[allow(unreachable_code)]
         let node = LockNode::new();
         let state = self.state.lock(&node);
         let packed = key.packed();
@@ -206,10 +202,6 @@ impl PageCache {
     }
 
     fn insert_entry(&self, key: PageKey, pa: PhysAddr, kind: PageKind) -> Result<(), PageCacheError> {
-        // RED-SCAFFOLD: insertion is not implemented yet.
-        let _ = (key, pa, kind);
-        return Ok(());
-        #[allow(unreachable_code)]
         if pa.addr() & (crate::palloc::FRAME_SIZE as u64 - 1) != 0 || pa.addr() > PA_MASK {
             return Err(PageCacheError::BadValue);
         }
@@ -229,10 +221,6 @@ impl PageCache {
     /// permanently and is never selected for eviction.  Returns whether a
     /// queue entry was removed.
     pub fn mark_data_dirty(&self, pa: PhysAddr) -> bool {
-        // RED-SCAFFOLD: the droppable queue is not implemented yet.
-        let _ = pa;
-        return false;
-        #[allow(unreachable_code)]
         let node = LockNode::new();
         let mut state = self.state.lock(&node);
         let before = state.droppable.len();
@@ -242,10 +230,6 @@ impl PageCache {
 
     /// Record that `proc_slot` maps `key` at `page_va`.
     pub fn add_rmap(&self, key: PageKey, entry: RmapEntry) {
-        // RED-SCAFFOLD: rmap tracking is not implemented yet.
-        let _ = (key, entry);
-        return;
-        #[allow(unreachable_code)]
         let node = LockNode::new();
         let mut state = self.state.lock(&node);
         let entries = state.rmap.entry(key.packed()).or_default();
@@ -258,10 +242,6 @@ impl PageCache {
     /// stay in the hash and stay cached for other processes.  Returns the
     /// number of removed mappings.
     pub fn remove_proc_rmaps(&self, proc_slot: u16) -> usize {
-        // RED-SCAFFOLD: rmap tracking is not implemented yet.
-        let _ = proc_slot;
-        return 0;
-        #[allow(unreachable_code)]
         let node = LockNode::new();
         let mut state = self.state.lock(&node);
         let mut removed = 0;
@@ -287,10 +267,6 @@ impl PageCache {
     /// unmaps it.  Pinned frames are skipped and counted in
     /// `palloc::record_pinned_skipped()`.
     pub fn select_eviction_victim(&self, is_pinned: impl Fn(PhysAddr) -> bool) -> Option<EvictionCandidate> {
-        // RED-SCAFFOLD: victim selection is not implemented yet.
-        let _ = is_pinned;
-        return None;
-        #[allow(unreachable_code)]
         let node = LockNode::new();
         let mut state = self.state.lock(&node);
         let scan = state.droppable.len();
@@ -319,9 +295,6 @@ impl PageCache {
     /// The number of droppable queue entries (host tests).
     #[cfg(test)]
     pub(crate) fn droppable_len(&self) -> usize {
-        // RED-SCAFFOLD: the droppable queue is not implemented yet.
-        return 0;
-        #[allow(unreachable_code)]
         let node = LockNode::new();
         self.state.lock(&node).droppable.len()
     }
