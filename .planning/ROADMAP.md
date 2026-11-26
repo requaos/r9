@@ -78,7 +78,7 @@ Milestone numbering continues from the closed Harvey-rooted milestone v2.1.
 Plans:
 - [ ] 05-01-PLAN.md — Repair CI (`drawterm-gate.expect` `global env`, unmask all 7 gate jobs), pure `boot-iso` derivation, and `cargo xtask test` wiring (`CORR-01`, `CORR-02`, `DEBT-01`)
 - [ ] 05-02-PLAN.md — `rfork` bit cleanup (`RFNOLEGACY = 1<<18`), v3.0 threat model sync, and Phase 4 validation/evidence closure (`CORR-04`, `DEBT-02`, `DEBT-03`, `DEBT-05`)
-- [ ] 05-03-PLAN.md — Document all 7 `aarch64` and first 23 `x86_64` undocumented `unsafe` sites (`CORR-05` Part A)
+- [ ] 05-03-PLAN.md — Document all 7 `aarch64` and first 24 `x86_64` undocumented `unsafe` sites (`CORR-05` Part A)
 - [ ] 05-04-PLAN.md — Complete `x86_64` workspace deny-lint opt-in, `UNSAFE-AUDIT.md` reconciliation, `lintcontract` R6, and CI clippy legs (`CORR-05` Part B)
 - [ ] 05-05-PLAN.md — Generic `#![forbid(unsafe_code)]` Boehm seqlock slab in `ds/src/slab.rs` and `DEBT-04` TPHT production bank sizing (`CORR-03`, `DEBT-04`)
 - [ ] 05-06-PLAN.md — Refactor `port/src/fid.rs` onto `ds::slab`, update `aead_link.rs`, D-13 three-place amendments, `CORR-05` policy doc sync, and **Owner Stop 1** (`CORR-03`, `CORR-05`)
