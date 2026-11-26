@@ -412,6 +412,28 @@ moves to the gated dispatch arm (timer.rs, count-neutral).  `smp.rs`'s
 (safe code).  x86_64 178 → 168 blocks, SAFETY 424 → 414; the
 reconciliation holds.
 
+**Plan 05-12 Task 2 delta (SMP-01/07/12, 2026-11-26):** the x86_64 AP
+bring-up goes live.  `main.rs`: the 05-11 `ap_main` stub's 2 blocks (the
+online store and the cli/hlt park) are replaced IN PLACE by the full
+bring-up's 4 — the Mach reborrow, the GS-base MSR writes
+(IA32_FS/GS/KERNEL_GS_BASE), the GDT/IDT/TSS Mach init, and the
+`arm_syscall_entry` call (SYSCALL MSRs: STAR/LSTAR/SFMASK/EFER.SCE) —
+plus the BSP's LAPIC identity publish (safe code).  The
+`start_aps_and_self_check` helper runs the publish-once release fence,
+`smp::start_aps`, and the boot-time `request_shootdown(None)` proof
+(safe code).  main.rs 12 → 14 blocks.  `smp.rs`: `num_online_cpus`
+reads the plain `ONLINE_CPUS` atomic (the per-slot Mach deref is gone,
+-1 block); `publish_ap_mach`/`mark_cpu_online` are safe code; the AP
+self-publishes its Mach slot before its online store (the BSP's
+`start_one_ap` no longer registers it).  smp.rs 11 → 10 blocks.
+`proc.rs`: `boot_pml4_pa` declares the `bootpml4` link-sym beside
+`kernel_half_entries`' (extern blocks 1 → 2; blocks unchanged — the
+helper reads only the symbol's address).  `timer.rs`: the per-CPU tick
+rework (CPU-0-only TICKS, per-CPU heartbeat, CPU-0 watchdog check with
+the TCG/KVM threshold split) is safe code — `cpu::cpuid` carries the
+asm.  x86_64 168 → 170 blocks, extern 3 → 4, SAFETY 414 → 417; the
+reconciliation holds.
+
 ## ds/ and crypto/ (Phase 3)
 
 Both crates take `[lints] workspace = true`, so
@@ -673,7 +695,7 @@ cfg-gated code as well.
 | `vm.rs` | 16 | 3 | 0 | page-table machinery: TTBR/TLB/barrier asm, entry writes, recursive-mapping resolution |
 | `vmdebug.rs` | 2 | 0 | 0 | read-only recursive-mapping walk (print path) |
 
-### x86_64/src — 168 blocks, 30 unsafe fns, 3 extern blocks (test-only: 8 blocks, 2 fns)
+### x86_64/src — 170 blocks, 30 unsafe fns, 4 extern blocks (test-only: 8 blocks, 2 fns)
 
 | File | Blocks | fns | ext | Surface |
 |---|---|---|---|---|
@@ -682,7 +704,7 @@ cfg-gated code as well.
 | `dat.rs` | 6 | 1 | 0 | Ureg↔saved-frame copies, the Mach's CpuFp cell write, `Mach::init`'s GDT/IDT/TSS load, `mach_ptr`'s `%gs:0` read + `this_mach`'s deref (05-11); 05-12: the Mach gains `park_context` (the per-CPU one-way boot park slot — safe field, count unchanged) |
 | `exec.rs` | 5 | 0 | 0 | KZERO-alias writes into just-mapped image pages and the seed page (+2 test-only blocks) |
 | `fpu.rs` | 10 | 2 | 0 | FXSAVE64/FXRSTOR64 save/restore asm (`save_raw`/`restore_raw`), per-CPU `CpuFp` in the Mach slot (`%gs:0`, 05-12 — the hardcoded `KMACH` deref is gone), `with_simd` (+1 test-only block) |
-| `main.rs` | 12 | 1 | 1 | boot descriptor arming, the mb2 stash slice, `arm_syscall_entry`'s MSR program, `halt`'s cli/hlt, the temporary `ap_main` stub's online store + park (05-11); extern: the l.S link-syms.  (The row read 9 at CORR-05 — measured 10 at the 05-11 base; the +1 is a stale-row correction, not new code.) |
+| `main.rs` | 14 | 1 | 1 | boot descriptor arming, the mb2 stash slice, `arm_syscall_entry`'s MSR program, `halt`'s cli/hlt, the BSP's Mach identity + LAPIC online publish (05-12); `ap_main`'s full AP bring-up (05-12, replacing the 05-11 stub in place: the Mach reborrow, the GS-base MSR writes, the GDT/IDT/TSS init, the SYSCALL MSR call); extern: the l.S link-syms.  (The row read 9 at CORR-05 — measured 10 at the 05-11 base; the +1 is a stale-row correction, not new code.) |
 | `pio.rs` | 6 | 6 | 0 | the port-I/O primitives (`inb`/`inw`/`inl`/`outb`/`outw`/`outl`, CPL 0) |
 | `platform/q35/acpi.rs` | 1 | 0 | 0 | bounds-checked volatile byte reads of firmware tables |
 | `platform/q35/churngate.rs` | 2 | 0 | 0 | the churn gate's one-shot stash cells (single writer at boot / single reader) |
@@ -693,9 +715,9 @@ cfg-gated code as well.
 | `platform/q35/netgate.rs` | 2 | 0 | 0 | the net gate driver's `hlt` park loops |
 | `platform/q35/pci.rs` | 25 | 0 | 0 | MCFG/ECAM MMIO walks, the 0xCF8/0xCFC config mechanism (05-12: serialized across CPUs under `PCI_CFG_PORTS` at `LockRank::DevTop` 10, T-05-22), publish-once discovery/bind cells, virtio-net IRQ path (05-12: `VIRTIO_NET` is an `IrqSpinLock` at `LockRank::NetIrq` 90 — the three raw cell derefs are gone; the handler runs in locked phases with the port callbacks after each guard drop) |
 | `platform/q35/timer.rs` | 6 | 0 | 0 | TSC-deadline/CPUID check, publish-once timer state cells (05-11: +1 for `state()`'s cell read — the AP LAPIC-timer arming input) |
-| `proc.rs` | 27 | 1 | 1 | the process machinery floor: `first_entry` ABI, pml4 map/unmap through the KZERO alias, brk/rfork unwind, link-syms (+3 test-only blocks, 1 fn).  05-12 (SMP-02/03): the CURFRAME accessor pair and `scheduler_stack_top`'s hardcoded `KMACH` deref are gone (the live-frame record and the stack top read the calling CPU's `Mach` via `%gs:0`); `PROC_TABLE` is an `IrqSpinLock` at `LockRank::ProcTable` (50), `SHARED_PAGES`/`RFMEM_FAMILIES`/`SEM_WAITERS` at `VmShared` (30); `Proc::wake_pending` + `wake_locked` + `sched()`'s flag-consume close Pitfall 4; `RUN_QUEUES` (`port::sched::RunQueues`) drives `pick_next`'s `pop_or_steal`; `set_tss_rsp0` writes the calling CPU's own `Mach.tss` |
+| `proc.rs` | 27 | 1 | 2 | the process machinery floor: `first_entry` ABI, pml4 map/unmap through the KZERO alias, brk/rfork unwind, link-syms (+3 test-only blocks, 1 fn).  05-12 (SMP-02/03): the CURFRAME accessor pair and `scheduler_stack_top`'s hardcoded `KMACH` deref are gone (the live-frame record and the stack top read the calling CPU's `Mach` via `%gs:0`); `PROC_TABLE` is an `IrqSpinLock` at `LockRank::ProcTable` (50), `SHARED_PAGES`/`RFMEM_FAMILIES`/`SEM_WAITERS` at `VmShared` (30); `Proc::wake_pending` + `wake_locked` + `sched()`'s flag-consume close Pitfall 4; `RUN_QUEUES` (`port::sched::RunQueues`) drives `pick_next`'s `pop_or_steal`; `set_tss_rsp0` writes the calling CPU's own `Mach.tss`; `boot_pml4_pa` declares the `bootpml4` link-sym beside `kernel_half_entries`' (the AP trampoline's CR3 input) |
 | `seg.rs` | 3 | 3 | 0 | GDT/IDT/TSS `load` (the fns) on architecturally valid tables |
-| `smp.rs` | 11 | 0 | 1 | the SIPI trampoline copy into PA 0x8000, the AP Mach `alloc_zeroed` + mailbox volatile writes, the IRQ save/restore asm pair, `invlpg`/CR3-reload flush, the Mach-registry reads (05-11); extern: the trampoline link-syms |
+| `smp.rs` | 10 | 0 | 1 | the SIPI trampoline copy into PA 0x8000, the AP Mach `alloc_zeroed` + mailbox volatile writes, the IRQ save/restore asm pair, `invlpg`/CR3-reload flush, the Mach-registry reads (05-11); 05-12: `num_online_cpus` reads the plain `ONLINE_CPUS` atomic (its per-slot Mach deref is gone), and the AP self-publishes its slot (`publish_ap_mach`, safe code); extern: the trampoline link-syms |
 | `swtch.rs` | 0 | 1 | 0 | `swtch` context-switch ABI (+1 host-test twin fn) |
 | `syscall.rs` | 1 | 0 | 0 | the `trap_return` tail call on the seeded frame (+2 test-only blocks) |
 | `trap.rs` | 6 | 9 | 0 | the trap-vector interface: `intr_stubs` emitter, `as_thunk`, `intrspecial` (canonical bit-63 GS test, 05-11)/`intrregular`/`intrcommon`, `syscallentry`/`syscallreturn`, `trap_return`; IPI dispatch for LAPIC 0xF0/0xF1 (05-11); 05-12: `dispatch_irq` threads the ring-3-origin `user_interrupted` gate into `proc::preempt` (SMP-03, the 05-22 double-run-tear gate — count-neutral) |

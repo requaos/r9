@@ -33,10 +33,11 @@ mod exec;
 mod fpu;
 #[allow(dead_code)]
 mod proc;
-// SMP bring-up (SMP-01/02/07, 05-11): the MADT-driven INIT-SIPI-SIPI AP
-// startup, per-CPU Mach allocation, LAPIC IPI senders and the SmpArch
-// registration.  Compiled and checked immediately; start_aps and
-// register_port_smp are called by 05-12's main9 wiring.
+// SMP bring-up (SMP-01/02/07, 05-11/05-12): the MADT-driven
+// INIT-SIPI-SIPI AP startup, per-CPU Mach allocation, LAPIC IPI senders
+// and the SmpArch registration.  main() registers the hooks at the top
+// (register_port_smp) and starts the APs after the publish-once boot
+// init (start_aps_and_self_check); ap_main (below) is the AP entry.
 #[allow(dead_code)]
 mod smp;
 #[allow(dead_code)]
@@ -153,6 +154,16 @@ pub extern "C" fn main(mach: &mut dat::Mach, mbdata: u64) {
         arm_syscall_entry(&mach);
     }
 
+    // SMP-02 (D-25): the BSP's Mach identity (CPU 0) and the x86_64
+    // SmpArch hooks registered with port::smp BEFORE any trap can fire
+    // with locks held — from this point the IrqSpinLock IRQ
+    // mask/restore, the lock-rank assertions and the watchdog run on
+    // the real per-CPU hooks (the safe single-CPU defaults until now).
+    // The LAPIC-derived apic_id lands after lapic::init() below; the
+    // BSP's online flag with it.
+    mach.cpu_id = 0;
+    smp::register_port_smp();
+
     // Parse the stashed mb2 info — the two-pass fdt.rs discipline.
     // The Result is held (not unwrapped) so a parse failure prints on
     // the live console once devcons is up: loud by construction, never
@@ -246,6 +257,11 @@ pub extern "C" fn main(mach: &mut dat::Mach, mbdata: u64) {
     // LAPIC first: SVR software-enable + the D-04 LINT mask policy —
     // every later arming step programs LVT entries through it.
     platform::q35::lapic::init();
+    // SMP-01/02: the BSP's LAPIC identity + online flag — readable now
+    // that the LAPIC is live (x2APIC's MSR ID read needs the unit's
+    // mode decision, made in init).
+    mach.apic_id = platform::q35::lapic::current_apic_id();
+    mach.online.store(true, Ordering::Release);
     // The timer: CPUID-gated mode, runtime-resolved frequency, LVT
     // programming and the first arm.  Its tick sweep carries the
     // console-RX echo, so serial input goes live the moment ticks do.
@@ -278,6 +294,15 @@ pub extern "C" fn main(mach: &mut dat::Mach, mbdata: u64) {
     // flag unmasks interrupts AT the ring-3 handoff (the pending tick
     // then delivers as a clean ring-3-origin IRQ on the proc's kstack,
     // never an EL1h-style window mid-bootstrap).
+    //
+    // SMP-01/SMP-07: the arming window's publish-once cells are all live
+    // (ACPI/MADT, LAPIC, IOAPIC, timer, CONS, the virtio bind's
+    // DISCOVERY/VIRTIO_VECTOR on dev_ether) — start the MADT-declared
+    // APs and prove the LAPIC 0xF0 shootdown path BEFORE the unmask, so
+    // an AP never observes a half-armed kernel (D-26's ordering); the
+    // BSP's poll is TSC-paced (no tick dependence).
+    #[cfg(all(not(test), not(dev_exec)))]
+    start_aps_and_self_check();
     #[cfg(not(dev_exec))]
     cpu::sti();
 
@@ -321,6 +346,16 @@ pub extern "C" fn main(mach: &mut dat::Mach, mbdata: u64) {
     #[cfg(all(dev_exec, any(not(dev_churn), dev_bootchain)))]
     exec_bootstrap(facts);
 
+    // SMP-01/SMP-07: the churn driver's venue starts the MADT-declared
+    // APs before the bootstrap builds the driver — the APs idle in
+    // their sched_loops (empty queues) until the driver's
+    // seed_kernel_context enqueue IPIs one (Ready ⟺ enqueued), and the
+    // LAPIC 0xF0 self-check proves the shootdown path before any churn
+    // proc runs.  The publish-once cells main() wrote are all live;
+    // the prologue's port hooks publish before the driver's first pick
+    // (the enqueue/IPI pairing orders them).
+    #[cfg(all(dev_exec, dev_churn, not(dev_bootchain)))]
+    start_aps_and_self_check();
     #[cfg(all(dev_exec, dev_churn, not(dev_bootchain)))]
     platform::q35::churngate::bootstrap_and_run(facts);
 
@@ -401,26 +436,124 @@ fn halt() -> ! {
     }
 }
 
-/// Temporary AP entry stub (05-11, SMP-01): the SIPI trampoline jumps
-/// here with this CPU's Mach VA and logical id.  Marks the AP's Mach
-/// online — the `start_aps` handshake the BSP polls — then parks.
-/// Plan 05-12 Task 2 replaces this stub IN PLACE (same file, same
-/// signature, zero duplicate-symbol risk) with the full bring-up: GS
-/// base arming, the AP's own GDT/TSS/IDT, LAPIC + SYSCALL MSRs, FPU,
-/// and the sched_loop entry.
+/// SMP-01/SMP-07/SMP-12 (D-26): the ONE AP-start point, run only after
+/// every publish-once boot cell this config writes is live (the
+/// category-3 publish-once invariant — the arming window's ACPI/MADT,
+/// LAPIC, IOAPIC, DISCOVERY, VIRTIO_VECTOR, TIMER::STATE, CONS, the
+/// mb2/modstash stashes; plus, on the dev_exec paths, the prologue's
+/// port hooks, the devroot image and the first proc's claim, whose
+/// caller has just run them).  The release fence pairs with each AP's
+/// SIPI entry so CPU 1 observes the published state.
+///
+/// Under `-smp 1` (or a MADT declaring the BSP alone) `start_aps`
+/// starts nothing and the self-check skips cleanly; a STARTED AP that
+/// never publishes online is a bring-up bug (start_one_ap names it).
+/// After a CPU comes online, the BSP proves the LAPIC 0xF0 TLB
+/// shootdown path end to end: `request_shootdown(None)` returns only
+/// once every online remote has acked the generation (a delivered-but-
+/// unserviced IPI wedges here loudly instead of passing silently).
+#[cfg(not(test))]
+fn start_aps_and_self_check() {
+    use core::sync::atomic::fence;
+
+    let madt = platform::q35::acpi_facts().and_then(|a| a.madt.as_ref());
+    let Some(madt) = madt else {
+        println!("smp: no MADT — single-CPU boot");
+        return;
+    };
+    if madt.ncpus <= 1 {
+        // The MADT declares the BSP alone (a `-smp 1` boot): no AP
+        // startup, no self-check — the clean skip the plan names.
+        return;
+    }
+    fence(Ordering::Release);
+    let started = smp::start_aps(madt, proc::boot_pml4_pa());
+    if started > 0 {
+        // The boot-time TLB shootdown self-check (SMP-07): a full-range
+        // shootdown proves CPU 1 takes vector 0xF0 and acks through the
+        // port coordinator.
+        port::smp::request_shootdown(None);
+        println!("smp: tlb shootdown ok");
+    }
+}
+
+/// The AP entry (SMP-01, SMP-02; 05-12): the SIPI trampoline jumps here
+/// with this CPU's Mach VA and logical id (the 0x8F00 mailbox).  Bring
+/// up the AP's own GDT/TSS/IDT/LAPIC/SYSCALL MSRs/FPU at BSP parity
+/// (T-05-23: an AP must never run with a weaker descriptor/MSR profile
+/// than the kernel it joins), publish online, and enter this CPU's
+/// scheduler loop (never returns).
+///
+/// IRQs arrive MASKED (the trampoline's `cli`) and STAY masked through
+/// the bring-up; the scheduler loop's `idle_wait` (sti;hlt;cli) is the
+/// one deliberate unmask window, and ring-3 proc entries unmask at the
+/// iret — the BSP's own discipline (kernel code runs IF=0).
 #[cfg(not(test))]
 #[unsafe(no_mangle)]
 pub extern "C" fn ap_main(mach_va: usize, cpu_id: usize) -> ! {
-    // SAFETY: mach_va names this CPU's live, zeroed-initialized Mach
-    // (start_aps allocated and identity-initialized it before the
-    // INIT-SIPI sequence); the online store is the bring-up handshake.
-    unsafe { (*(mach_va as *const dat::Mach)).online.store(true, Ordering::Release) };
-    let _ = cpu_id;
-    loop {
-        // SAFETY: cli;hlt parks the AP until an NMI (none is armed this
-        // era) — the parking stub 05-12 replaces.  No memory touched.
-        unsafe { core::arch::asm!("cli", "hlt", options(att_syntax, nostack)) };
+    // SAFETY: mach_va names this CPU's live, zeroed, exclusively-owned
+    // Mach (start_aps allocated it and wrote its identity before the
+    // INIT-SIPI sequence); no other CPU touches it here.
+    let mach = unsafe { &mut *(mach_va as *mut dat::Mach) };
+
+    // 1. The per-CPU GS base FIRST (SMP-02): every kernel Mach access on
+    //    this CPU from here on reads `%gs:0` (dat::this_mach()).  FS = 0
+    //    and KernelGSbase = 0 mirror the BSP's arm_syscall_entry (the
+    //    user GS/FS bases are 0 on r9 — the closed syscall list).
+    // SAFETY: runs once on this AP at CPL 0 with IRQs masked (the
+    // trampoline's cli); the MSR writes name this CPU's own Mach.
+    unsafe {
+        cpu::wrmsr(cpu::MSR_FS_BASE, 0);
+        cpu::wrmsr(cpu::MSR_GS_BASE, mach_va as u64);
+        cpu::wrmsr(cpu::MSR_KERNEL_GS_BASE, 0);
     }
+
+    // 2. This CPU's own GDT/IDT/TSS — the BSP's main() sequence
+    //    re-keyed: fill the descriptor tables, then Mach::init loads
+    //    them (lgdt/lidt/ltr) and arms the TSS rsp0 at this Mach's own
+    //    stack top.
+    // SAFETY: as the BSP's main() — one-time init on this AP, IRQs
+    // masked, `mach` the exclusively-borrowed live Mach (Mach::init's
+    // unsafe-fn contract: the &mut receiver names valid, live
+    // GDT/IDT/TSS tables).
+    unsafe {
+        mach.idt.init(trap::stubs());
+        mach.gdt.init(&mut mach.tss);
+        mach.init();
+    }
+
+    // 3. The SYSCALL/SYSRET MSR contract, identical to the BSP's
+    //    (T-05-23): FS/GS/KernelGS (idempotent re-write), EFER.SCE,
+    //    STAR, SFMASK, LSTAR.
+    // SAFETY: arm_syscall_entry's own contract — CPL 0, IRQs masked,
+    // values matching the just-loaded GDT (both sides derive from
+    // seg::GdtData).
+    unsafe { arm_syscall_entry(mach) };
+
+    // 4. This CPU's FPU bookkeeping (the register file itself needs no
+    //    init — the trampoline armed CR4.OSFXSR/OSXMMEXCPT at BSP
+    //    parity, and the first proc install FXRSTORs its seeded state).
+    fpu::init_cpu();
+
+    // 5. This CPU's LAPIC + LAPIC timer — armed from the BSP's
+    //    published calibration (never a re-run of the PIT/TSC
+    //    calibration).
+    platform::q35::lapic::init_ap();
+
+    // 6. Publish, in order: this CPU's Mach slot (the IPI senders' cpu→
+    //    APIC routing), the online flag (the BSP's start_one_ap poll
+    //    pairs on it — Release, so the slot and the identity writes are
+    //    visible first), and the online count (the run queues' and the
+    //    shootdown coordinator's cpu count).
+    smp::publish_ap_mach(cpu_id, mach_va);
+    mach.online.store(true, Ordering::Release);
+    smp::mark_cpu_online();
+
+    // 7. Enter this CPU's scheduler loop on its own Mach stack (never
+    //    returns): pick_next pops this CPU's run queue (stealing a
+    //    neighbor's when empty); the idle arm hlt's with IRQs briefly
+    //    unmasked — the LAPIC tick and the 0xF0/0xF1 IPIs deliver there.
+    proc::sched_loop();
 }
 
 /// The pid-1 entry path (the aarch64 BOOT_ENTRY selection, re-keyed to
@@ -719,6 +852,20 @@ fn exec_bootstrap(facts: &mb2::Facts) -> ! {
     // proc's kstack.  IRQs never unmasked in kernel context on the way
     // in (the whole bootstrap ran IF=0).
     proc::activate_first(&mut proc);
+    // SMP-01/SMP-07 (D-26): start the MADT-declared APs only NOW —
+    // after the bootstrap proc is built AND claimed (activate_first
+    // published it Running).  exec_into enqueued it Ready (the
+    // Ready ⟺ enqueued contract), so a secondary already in sched_loop
+    // would steal it inside the Ready→Running window and double-run
+    // pid 1 — the start must wait for the claim (the aarch64 05-22
+    // ordering).  The category-3 publish-once invariant holds (the
+    // arming window's cells plus the prologue's port hooks, the tick
+    // clock and the devroot image are all long live), and the boot-time
+    // LAPIC 0xF0 shootdown self-check still lands before userland: pid
+    // 1 has never run when it fires.  IRQs stay masked through this —
+    // start_one_ap's online poll is TSC-paced, built for the masked
+    // dev_exec tail.
+    start_aps_and_self_check();
     let frame_ptr = proc.frame;
     // SAFETY: frame_ptr names the seeded forkret frame on the proc's
     // kstack; activate_first just published current + rsp0 + CURFRAME —

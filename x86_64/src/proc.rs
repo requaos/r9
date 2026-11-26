@@ -590,6 +590,22 @@ fn kernel_half_entries() -> [u64; 2] {
     }
 }
 
+/// The boot PML4's PHYSICAL address (l.S's `bootpml4` link symbol, VA −
+/// KZERO) — the AP trampoline's CR3 (SMP-01): the boot tables
+/// identity-map the first 4 GiB, so the SIPI trampoline keeps executing
+/// at PA == VA through the mode switches.  NEVER the current CR3 at the
+/// call site (a proc's table carries no identity map).
+#[cfg(not(test))]
+pub(crate) fn boot_pml4_pa() -> u64 {
+    unsafe extern "C" {
+        static bootpml4: u8;
+    }
+    // SAFETY: kernel.ld links the symbol inside the image (KZERO-based
+    // VA); only its ADDRESS is read (the link-sym class, kmem.rs's
+    // convention), never its contents.
+    ptr::addr_of!(bootpml4) as u64 - KZERO
+}
+
 /// The active CR3 (the current table's physical root).
 #[cfg(not(test))]
 pub(crate) fn read_cr3() -> u64 {

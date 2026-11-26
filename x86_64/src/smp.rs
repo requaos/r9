@@ -89,9 +89,17 @@ pub const MAX_CPUS: usize = smp::MAX_CPUS;
 
 /// The per-CPU Mach registry: slot `cpu_id` holds that CPU's Mach VA
 /// (0 = not registered).  Slot 0 is the BSP's Mach at `dat::KMACH`,
-/// registered by [`register_port_smp`]; `start_aps` fills the rest.
-/// Read by the IPI senders (cpu id → APIC id) and the online counter.
+/// registered by [`register_port_smp`]; each AP publishes its own slot
+/// in `ap_main` ([`publish_ap_mach`]).  Read by the IPI senders (cpu id
+/// → APIC id).
 static AP_MACH_VAS: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
+
+/// The number of CPUs currently online (SMP-01): the BSP registers as
+/// CPU 0 at [`register_port_smp`]; each AP increments the count at the
+/// end of its bring-up ([`mark_cpu_online`]), after publishing its Mach
+/// slot and its online flag.  The run queues and the shootdown
+/// coordinator size their walks from this count.
+static ONLINE_CPUS: AtomicU64 = AtomicU64::new(0);
 
 // ---------------------------------------------------------------------------
 // The SIPI trampoline install + INIT-SIPI-SIPI startup (SMP-01).
@@ -212,9 +220,9 @@ fn start_one_ap(cpu_id: usize, apic_id: u32, bootpml4_pa: u64) -> Result<(), &'s
         }
         core::hint::spin_loop();
     }
-    // Register the Mach BEFORE announcing the start, so the IPI senders
-    // can name this CPU immediately.
-    AP_MACH_VAS[cpu_id].store(mach_va as u64, Ordering::Release);
+    // The AP published its own Mach slot (ap_main's publish_ap_mach,
+    // BEFORE its online store — the Acquire pairing above makes it
+    // visible here), so the IPI senders can name this CPU immediately.
     println!("smp: cpu {cpu_id} online (apic {apic_id:#x})");
     Ok(())
 }
@@ -261,23 +269,32 @@ fn current_cpu_id() -> usize {
     dat::this_mach().cpu_id as usize
 }
 
-/// The number of cpus currently online: the registered Mach slots whose
-/// online flag is set.
+/// The number of cpus currently online: the registered-online count
+/// (BSP = 1 at [`register_port_smp`]; each AP increments at its
+/// bring-up tail).  Pre-registration callers (early boot) read the
+/// single-CPU floor.
 fn num_online_cpus() -> usize {
-    let mut n = 0;
-    for slot in &AP_MACH_VAS {
-        let va = slot.load(Ordering::Acquire);
-        if va != 0 {
-            // SAFETY: a non-zero slot names a live, kernel-lifetime Mach
-            // (registered by register_port_smp / start_aps, never
-            // removed).
-            let online = unsafe { &*(va as *const Mach) }.online.load(Ordering::Acquire);
-            if online {
-                n += 1;
-            }
-        }
-    }
-    n
+    let n = ONLINE_CPUS.load(Ordering::Acquire) as usize;
+    if n == 0 { 1 } else { n.min(MAX_CPUS) }
+}
+
+/// Publish an AP's Mach into the registry (cpu id → Mach VA — the IPI
+/// senders' routing).  Called BY the AP in `ap_main` BEFORE it
+/// publishes its online flag (05-12): the BSP's `start_one_ap` observes
+/// online with Acquire, so this Release store happens-before any
+/// BSP-side read of the slot.
+#[cfg(not(test))]
+pub(crate) fn publish_ap_mach(cpu_id: usize, mach_va: usize) {
+    AP_MACH_VAS[cpu_id].store(mach_va as u64, Ordering::Release);
+}
+
+/// Count this CPU online (05-12: `ap_main`'s bring-up tail; the BSP is
+/// counted at [`register_port_smp`]).  Ordered AFTER the Mach-slot
+/// publish and the online flag, so the count's readers (the run queues,
+/// the shootdown coordinator) only ever walk registered CPUs.
+#[cfg(not(test))]
+pub(crate) fn mark_cpu_online() {
+    ONLINE_CPUS.fetch_add(1, Ordering::AcqRel);
 }
 
 /// Save RFLAGS and mask IRQs (`pushfq; pop; cli`) — IrqSpinLock's entry
@@ -405,10 +422,14 @@ fn prepare_block() {
 
 /// Register the x86_64 `SmpArch` hooks with `port::smp` (SMP-02, SMP-07,
 /// D-25).  Called once from main.rs after the BSP's Mach is initialized
-/// and before CPU 1 is started (05-12 wires the call).
+/// and before CPU 1 is started (05-12 wires the call).  Publishes the
+/// BSP's own Mach slot (the IPI routing's CPU 0) and counts the BSP
+/// online.
 pub fn register_port_smp() {
     // Slot 0 is the BSP's Mach at dat::KMACH (l.S's mapping contract).
     AP_MACH_VAS[0].store(dat::KMACH as u64, Ordering::Release);
+    // The BSP is online from the start (no handshake to poll).
+    ONLINE_CPUS.store(1, Ordering::Release);
     static ARCH: SmpArch = SmpArch {
         current_cpu_id,
         num_online_cpus,
