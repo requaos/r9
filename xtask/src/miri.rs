@@ -1,13 +1,14 @@
-//! `cargo xtask miri`: run Miri over `ds/src/tpht/` with the second
-//! toolchain derivation (Phase 3 CONTEXT D-13; RESEARCH C3, F6, F7).
+//! `cargo xtask miri`: run Miri over `ds/src/tpht/` and `ds/src/slab.rs`
+//! with the second toolchain derivation (Phase 3 CONTEXT D-13; RESEARCH C3,
+//! F6, F7; slab added in Phase 5 plan 05-05 for CORR-03).
 //!
 //! Miri is deliberately **not** part of `cargo xtask test`: the ordinary
-//! test run stays fast, and the concurrent TPHT code gets its own step with
-//! many seeds.  The toolchain comes from `R9_MIRI_TOOLCHAIN`, which the
-//! devshell exports from the `toolchainMiri` derivation in `flake.nix`.
-//! `rust-toolchain.toml` is never edited: adding `miri` there moves the
-//! pinned toolchain store path embedded in every kernel (RESEARCH C3,
-//! Pitfall 2).
+//! test run stays fast, and the concurrent TPHT and slab code gets its own
+//! step with many seeds.  The toolchain comes from `R9_MIRI_TOOLCHAIN`,
+//! which the devshell exports from the `toolchainMiri` derivation in
+//! `flake.nix`.  `rust-toolchain.toml` is never edited: adding `miri` there
+//! moves the pinned toolchain store path embedded in every kernel
+//! (RESEARCH C3, Pitfall 2).
 //!
 //! The step must never use the devshell `cargo` (`cargo()` or `$CARGO`):
 //! that toolchain has no Miri.  It runs `<toolchain>/bin/cargo` explicitly
@@ -23,12 +24,17 @@ use crate::Result;
 /// The environment variable the devshell exports.
 pub const TOOLCHAIN_VAR: &str = "R9_MIRI_TOOLCHAIN";
 
+/// The `ds/` modules Miri covers, in run order: the TPHT (D-13) and the
+/// CORR-03 slab (Phase 5 D-11; its Boehm seqlock slot is Miri-proven like
+/// the TPHT's).
+pub const MIRI_MODULES: [&str; 2] = ["tpht", "slab"];
+
 /// The exact command the step runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandSpec {
     /// `<toolchain>/bin/cargo`.
     pub program: PathBuf,
-    /// `miri test --package ds --lib tpht`.
+    /// `miri test --package ds --lib <module>`.
     pub args: Vec<String>,
     /// `<toolchain>/bin`, prepended to `PATH`.
     pub path_prefix: PathBuf,
@@ -69,13 +75,22 @@ fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Count the `#[test]` attributes under `ds/src/tpht/`.
-pub fn tpht_test_count(workspace: &Path) -> Result<usize> {
-    let mut files = Vec::new();
-    collect_rs_files(&workspace.join("ds/src/tpht"), &mut files);
-    files.sort();
+/// Count the `#[test]` attributes under `ds/src/<module>/` (or the single
+/// file `ds/src/<module>.rs`).
+pub fn module_test_count(workspace: &Path, module: &str) -> Result<usize> {
+    let root = workspace.join("ds/src");
+    let mut paths = Vec::new();
+    let dir = root.join(module);
+    if dir.is_dir() {
+        collect_rs_files(&dir, &mut paths);
+    }
+    let file = root.join(format!("{module}.rs"));
+    if file.is_file() {
+        paths.push(file);
+    }
+    paths.sort();
     let mut count = 0;
-    for path in files {
+    for path in paths {
         let text = std::fs::read_to_string(&path)
             .map_err(|e| format!("miri: read {}: {e}", path.display()))?;
         for line in text.lines() {
@@ -90,7 +105,7 @@ pub fn tpht_test_count(workspace: &Path) -> Result<usize> {
 }
 
 /// The command for one Miri run (a pure function: no environment, no spawn).
-pub fn command_spec(toolchain: &Path, seeds: u32) -> CommandSpec {
+pub fn command_spec(toolchain: &Path, seeds: u32, module: &str) -> CommandSpec {
     let bin = toolchain.join("bin");
     CommandSpec {
         program: bin.join("cargo"),
@@ -100,15 +115,15 @@ pub fn command_spec(toolchain: &Path, seeds: u32) -> CommandSpec {
             "--package".to_string(),
             "ds".to_string(),
             "--lib".to_string(),
-            "tpht".to_string(),
+            module.to_string(),
         ],
         path_prefix: bin,
         miriflags: format!("-Zmiri-many-seeds=0..{seeds}"),
     }
 }
 
-/// Run Miri over the TPHT tests, refusing when the filter would match
-/// nothing.
+/// Run Miri over the covered `ds/` modules, refusing when a filter would
+/// match nothing.
 pub fn run(workspace: &Path, seeds: u32) -> Result<()> {
     run_with_lookup(workspace, seeds, &|name| std::env::var(name).ok())
 }
@@ -119,27 +134,33 @@ fn run_with_lookup(
     lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<()> {
     let toolchain = resolve_toolchain(lookup)?;
-    let tests = tpht_test_count(workspace)?;
-    if tests == 0 {
-        return Err("miri: no tests under ds/src/tpht (the filter would match nothing)".into());
-    }
 
-    let spec = command_spec(&toolchain, seeds);
-    let mut path = std::ffi::OsString::from(spec.path_prefix.as_os_str());
+    let mut path = std::ffi::OsString::from(toolchain.join("bin").as_os_str());
     if let Some(existing) = std::env::var_os("PATH") {
         path.push(":");
         path.push(existing);
     }
 
-    let status = std::process::Command::new(&spec.program)
-        .args(&spec.args)
-        .current_dir(workspace)
-        .env("PATH", path)
-        .env("MIRIFLAGS", &spec.miriflags)
-        .status()
-        .map_err(|e| format!("miri: run {}: {e}", spec.program.display()))?;
-    if !status.success() {
-        return Err("miri: failed".into());
+    for module in MIRI_MODULES {
+        let tests = module_test_count(workspace, module)?;
+        if tests == 0 {
+            return Err(format!(
+                "miri: no tests under ds/src/{module} (the filter would match nothing)"
+            )
+            .into());
+        }
+
+        let spec = command_spec(&toolchain, seeds, module);
+        let status = std::process::Command::new(&spec.program)
+            .args(&spec.args)
+            .current_dir(workspace)
+            .env("PATH", &path)
+            .env("MIRIFLAGS", &spec.miriflags)
+            .status()
+            .map_err(|e| format!("miri: run {}: {e}", spec.program.display()))?;
+        if !status.success() {
+            return Err(format!("miri: failed ({module})").into());
+        }
     }
     Ok(())
 }
@@ -193,7 +214,7 @@ mod tests {
     #[test]
     fn miri_command_uses_the_toolchain_cargo() {
         let toolchain = std::path::Path::new("/nix/store/abc-miri-toolchain");
-        let spec = command_spec(toolchain, 64);
+        let spec = command_spec(toolchain, 64, "tpht");
         assert_eq!(
             spec.program,
             PathBuf::from("/nix/store/abc-miri-toolchain/bin/cargo"),
@@ -205,6 +226,11 @@ mod tests {
             "the filter is the tpht module"
         );
         assert_eq!(
+            command_spec(toolchain, 64, "slab").args,
+            ["miri", "test", "--package", "ds", "--lib", "slab"],
+            "the CORR-03 slab module is Miri-covered too (plan 05-05)"
+        );
+        assert_eq!(
             spec.path_prefix,
             PathBuf::from("/nix/store/abc-miri-toolchain/bin"),
             "PATH begins with the toolchain bin"
@@ -214,7 +240,7 @@ mod tests {
             "the default seed range is 0..64"
         );
         assert_eq!(
-            command_spec(toolchain, 7).miriflags,
+            command_spec(toolchain, 7, "tpht").miriflags,
             "-Zmiri-many-seeds=0..7",
             "--seeds N narrows the range to 0..N"
         );
@@ -248,9 +274,14 @@ mod tests {
             "#[cfg(test)]\nmod tests {\n    #[test]\n    fn outside() {}\n}\n",
         );
         assert_eq!(
-            tpht_test_count(&dir).expect("the scratch tree is readable"),
+            module_test_count(&dir, "tpht").expect("the scratch tree is readable"),
             1,
             "only #[test] attributes under ds/src/tpht/ count"
+        );
+        assert_eq!(
+            module_test_count(&dir, "roaring").expect("the scratch tree is readable"),
+            1,
+            "a single-file module is counted too (ds/src/slab.rs is one)"
         );
         let _ = fs::remove_dir_all(&dir);
     }

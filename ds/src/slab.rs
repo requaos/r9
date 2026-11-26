@@ -457,9 +457,11 @@ impl AllocMeta {
 
 #[cfg(test)]
 mod tests {
-    use core::sync::atomic::Ordering;
+    use core::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier, Mutex};
 
     use super::*;
+    use crate::tpht::miri_scaled;
 
     /// A slot's raw state word (the test module is the layout's verifier).
     fn state_of(slot: &AtomicSlabSlot<7>) -> u64 {
@@ -676,5 +678,280 @@ mod tests {
             .expect("a swept slot is back on the free list");
         assert_eq!(generation, 2, "the re-allocated slot carries the bumped generation");
         assert_eq!(slab.resolve(idx, generation), Some(payload(0x5E)));
+    }
+
+    /// A [`SlabProbe`] that counts `resolve` attempts, so an uncontended
+    /// resolve can be shown to perform exactly one slot read and zero
+    /// metadata touches (CORR-03's restatement of the WIRE-08 pin).  The
+    /// counter sits behind `Arc` so the slab holds a clone and the test
+    /// keeps a handle to read it.
+    #[derive(Clone, Default)]
+    struct CountingSlabProbe {
+        reads: Arc<AtomicUsize>,
+    }
+
+    impl CountingSlabProbe {
+        fn reads(&self) -> usize {
+            self.reads.load(Ordering::Relaxed)
+        }
+
+        fn reset(&self) {
+            self.reads.store(0, Ordering::Relaxed);
+        }
+    }
+
+    impl SlabProbe for CountingSlabProbe {
+        fn slot_read(&self) {
+            self.reads.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// SplitMix64: a tiny seeded PRNG so every randomized test reproduces
+    /// from its literal seed (no `rand`, no `proptest`; the clientset and
+    /// tpht test pattern).
+    struct SplitMix64 {
+        state: u64,
+    }
+
+    impl SplitMix64 {
+        fn new(seed: u64) -> Self {
+            Self { state: seed }
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+    }
+
+    /// Eight literal seeds: every randomized case reproduces from its seed.
+    const SEEDS: [u64; 8] = [
+        0x0000_0000_0000_0001,
+        0x5DEE_CE66_D1CE_4B1D,
+        0x1234_5678_9ABC_DEF0,
+        0xDEAD_BEEF_CAFE_F00D,
+        0x0F1E_2D3C_4B5A_6978,
+        0xA5A5_5A5A_1234_4321,
+        0xFFFF_FFFF_0000_0000,
+        0x9E37_79B9_7F4A_7C15,
+    ];
+
+    /// The correlated writer payload: word `i` is `k + i`, so a consistent
+    /// snapshot satisfies `words[i] == words[0] + i` and any tear violates
+    /// it (D-11's zero-torn-read property).
+    fn correlated(k: u64) -> [u64; 7] {
+        core::array::from_fn(|i| k.wrapping_add(i as u64))
+    }
+
+    #[test]
+    fn uncontended_resolve_is_one_slot_read() {
+        let probe = CountingSlabProbe::default();
+        let slab = SlabSlots::<7, CountingSlabProbe>::with_probe(8, probe.clone());
+        let mut meta = AllocMeta::new(8);
+        let words = payload(0xF00D);
+        let (idx, generation) = meta
+            .alloc_slot(slab.slots(), words)
+            .expect("a fresh slab has a free slot");
+
+        probe.reset();
+        assert_eq!(slab.resolve(idx, generation), Some(words), "the live slot resolves");
+        assert_eq!(
+            probe.reads(),
+            1,
+            "an uncontended resolve is exactly one cache-line read and zero metadata touches \
+             (D-11, WIRE-08 restated)"
+        );
+
+        // A zero generation is rejected before any read happens (D-10), and
+        // an out-of-range index makes no attempt at all.
+        probe.reset();
+        assert_eq!(slab.resolve(idx, 0), None);
+        assert_eq!(probe.reads(), 0, "generation zero is rejected without a read");
+        assert_eq!(slab.resolve(8, 1), None);
+        assert_eq!(probe.reads(), 0, "an out-of-range index performs no read");
+
+        // A clean clunk path: one resolve of the bumped generation.
+        assert!(meta.clunk_slot(slab.slots(), idx, generation));
+        probe.reset();
+        assert_eq!(slab.resolve(idx, generation), None, "the clunked generation is stale");
+        assert_eq!(slab.resolve(idx, 2), None, "a clunked slot is unoccupied at gen 2");
+        assert_eq!(probe.reads(), 2, "each resolve attempt is one slot read");
+    }
+
+    #[test]
+    fn generation_wraps_65535_to_1_never_zero() {
+        // The 65,536-cycle clunk wrap on a single slot: the generation
+        // advances 1 -> 2 -> ... -> 65535 -> 1 and never equals 0 (D-10).
+        // Under Miri the loop runs a few cycles (the full wrap arithmetic is
+        // pinned separately by the `next_generation` assertions in the clunk
+        // test); natively it runs the whole cycle space.
+        let slab = SlabSlots::new(1);
+        let mut meta = AllocMeta::new(1);
+        let cycles = miri_scaled(65_535, 8);
+        for expected in 1..=cycles {
+            let (idx, generation) = meta
+                .alloc_slot(slab.slots(), correlated(expected as u64))
+                .expect("the single slot is always re-freed");
+            assert_eq!(idx, 0, "a one-slot slab reuses slot 0");
+            assert_eq!(generation as usize, expected, "cycle {expected} allocs at gen {expected}");
+            assert!(meta.clunk_slot(slab.slots(), idx, generation));
+            let g = decode_gen(state_of(&slab.slots()[0]));
+            assert_ne!(g, 0, "the generation is never zero (D-10; after cycle {expected})");
+            let expected_next = if expected == 65_535 { 1 } else { expected + 1 };
+            assert_eq!(g as usize, expected_next, "the wrap skips zero at cycle {expected}");
+        }
+        if !cfg!(miri) {
+            // After 65,535 clunks the generation wrapped 65535 -> 1; the
+            // 65,536th alloc carries generation 1.
+            let (_, generation) = meta
+                .alloc_slot(slab.slots(), correlated(0xFFFF))
+                .expect("the wrapped slot allocates");
+            assert_eq!(generation, 1, "the 65,536th cycle allocs at generation 1 (D-10)");
+            assert_eq!(slab.resolve(0, 1), Some(correlated(0xFFFF)));
+        }
+    }
+
+    /// Writers churn alloc/update/clunk of correlated payloads under the
+    /// `AllocMeta` mutex while readers resolve live handles lock-free; every
+    /// `Some` snapshot must be internally consistent (D-11: zero torn
+    /// reads).  The `live` vector is test scaffolding — the slab's own read
+    /// path (`SlabSlots::resolve`) never takes a lock.
+    fn concurrent_stress(ops: usize, writers: usize, readers: usize) {
+        let slab = Arc::new(SlabSlots::new(64));
+        let meta = Arc::new(Mutex::new(AllocMeta::new(64)));
+        let live: Arc<Mutex<Vec<(u16, u16)>>> = Arc::new(Mutex::new(Vec::new()));
+        let barrier = Arc::new(Barrier::new(writers + readers));
+        let mut handles = Vec::new();
+
+        for writer in 0..writers {
+            let slab = Arc::clone(&slab);
+            let meta = Arc::clone(&meta);
+            let live = Arc::clone(&live);
+            let barrier = Arc::clone(&barrier);
+            handles.push(std::thread::spawn(move || {
+                let mut rng = SplitMix64::new(SEEDS[writer % SEEDS.len()] ^ 0xA000_0000_0000_0000);
+                barrier.wait();
+                for _ in 0..ops {
+                    let k = rng.next_u64();
+                    match rng.next_u64() % 100 {
+                        // Alloc: publish the correlated payload, then record
+                        // the handle for readers and other writers.
+                        0..=39 => {
+                            let allocated = {
+                                let mut guard = meta.lock().expect("the meta mutex is live");
+                                guard.alloc_slot(slab.slots(), correlated(k))
+                            };
+                            if let Some(handle) = allocated {
+                                live.lock().expect("the live mutex is live").push(handle);
+                            }
+                        }
+                        // Update: pick a live handle and replace its payload
+                        // in place (the generation is preserved, so readers
+                        // keep resolving and must never see a tear).
+                        40..=74 => {
+                            let pick = {
+                                let list = live.lock().expect("the live mutex is live");
+                                if list.is_empty() {
+                                    None
+                                } else {
+                                    Some(list[rng.next_u64() as usize % list.len()])
+                                }
+                            };
+                            if let Some((idx, generation)) = pick {
+                                let mut guard = meta.lock().expect("the meta mutex is live");
+                                // A concurrent clunk of the same handle
+                                // rejects this update; either outcome is a
+                                // valid run.
+                                let _ = guard.update_slot(
+                                    slab.slots(),
+                                    idx,
+                                    generation,
+                                    correlated(k),
+                                );
+                            }
+                        }
+                        // Clunk: pick a live handle and retire it.
+                        _ => {
+                            let pick = {
+                                let list = live.lock().expect("the live mutex is live");
+                                if list.is_empty() {
+                                    None
+                                } else {
+                                    Some(list[rng.next_u64() as usize % list.len()])
+                                }
+                            };
+                            if let Some((idx, generation)) = pick {
+                                // A concurrent clunk of the same handle
+                                // rejects this clunk; either outcome is a
+                                // valid run.
+                                let clunked = {
+                                    let mut guard = meta.lock().expect("the meta mutex is live");
+                                    guard.clunk_slot(slab.slots(), idx, generation)
+                                };
+                                if clunked {
+                                    live.lock()
+                                        .expect("the live mutex is live")
+                                        .retain(|&handle| handle != (idx, generation));
+                                }
+                            }
+                        }
+                    }
+                }
+            }));
+        }
+
+        for reader in 0..readers {
+            let slab = Arc::clone(&slab);
+            let live = Arc::clone(&live);
+            let barrier = Arc::clone(&barrier);
+            handles.push(std::thread::spawn(move || {
+                let mut rng = SplitMix64::new(SEEDS[reader % SEEDS.len()] ^ 0xB000_0000_0000_0000);
+                barrier.wait();
+                for _ in 0..ops {
+                    let pick = {
+                        let list = live.lock().expect("the live mutex is live");
+                        if list.is_empty() {
+                            None
+                        } else {
+                            Some(list[rng.next_u64() as usize % list.len()])
+                        }
+                    };
+                    if let Some((idx, generation)) = pick {
+                        if let Some(words) = slab.resolve(idx, generation) {
+                            for (i, &word) in words.iter().enumerate().skip(1) {
+                                assert_eq!(
+                                    word,
+                                    words[0].wrapping_add(i as u64),
+                                    "a snapshot must be internally consistent — zero torn reads \
+                                     (D-11): words[{i}] = {word:#x}, words[0] = {:#x}",
+                                    words[0]
+                                );
+                            }
+                        }
+                    }
+                }
+            }));
+        }
+
+        for handle in handles {
+            handle.join().expect("every stress thread completes");
+        }
+    }
+
+    /// The native high-iteration stress run (never under Miri).
+    #[cfg(all(test, not(miri)))]
+    #[test]
+    fn stress_concurrent_snapshots_are_never_torn() {
+        concurrent_stress(20_000, 4, 4);
+    }
+
+    /// The Miri-friendly concurrent run: the same protocol at small sizes,
+    /// so `cargo xtask miri` proves zero data races and zero UB (D-11).
+    #[test]
+    fn concurrent_snapshots_are_never_torn() {
+        concurrent_stress(miri_scaled(2_000, 30), miri_scaled(3, 2), miri_scaled(3, 2));
     }
 }
