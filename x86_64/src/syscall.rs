@@ -1209,9 +1209,14 @@ fn sem_word_write(word: &mut UserSliceMut, val: i32) {
 }
 
 /// The donor's canacquire: decrement a positive word, else fail.
-/// Single CPU + IRQ-masked syscall context (no preemption mid-handler)
-/// makes the load/store atomic against other procs; the RFMEM-shared
-/// page is the cross-proc synchronization point.
+/// The word lives in USER memory (the RFMEM-shared page is the
+/// cross-proc synchronization point): the load and store are each
+/// single aligned 32-bit accesses, which cannot tear on x86_64.  The
+/// check-then-decrement pair is the donor syssemacquire shape; a
+/// contended word additionally rides the kernel's register → check →
+/// block retry loop below, which re-reads the word on every iteration
+/// (SMP-03: the blocker's wake_pending/arm pairing is in
+/// sys_semacquire's loop and proc::sched()).
 fn sem_try_acquire(word: &mut UserSliceMut) -> bool {
     let val = sem_word_read(word);
     if val <= 0 {
@@ -1264,7 +1269,13 @@ fn sys_semacquire(frame: &mut Ureg, proc: &mut Proc) -> u64 {
     loop {
         // Register BEFORE every block: sem_wake CONSUMES registrations
         // when it picks its wakers, so a woken waiter that loses the
-        // unit race must RE-register before re-blocking.
+        // unit race must RE-register before re-blocking — without this
+        // the re-block is unregistered and no future release ever finds
+        // the waiter (a permanent wedge).  prepare_block → register →
+        // check → block per iteration is wakeup-loss-free (SMP-03,
+        // D-22): the releaser's wake_locked publishes wake_pending under
+        // PROC_TABLE, which sched() consumes under the same lock.
+        port::smp::prepare_block();
         proc::sem_register_waiter(pa, proc.pid);
         if sem_try_acquire(&mut word) {
             break;
@@ -1826,13 +1837,22 @@ fn sys_sleep(frame: &mut Ureg, proc: &mut Proc) -> u64 {
         // sleep(long) is SIGNED — the donor syssleep yields when
         // n <= 0.
         if (ms as i32) <= 0 {
-            proc::preempt(); // the donor's yield()
+            proc::preempt(true); // the donor's yield() — the CALLER's own Running proc (its syscall context), so the EL0-origin gate is trivially true
             return 0;
         }
         // The donor tsleep's notepending pre-check.
         if !proc.note_queue.is_empty() {
             return err(proc, "interrupted");
         }
+        // SMP-03: clear any stale wake_pending before arming — this
+        // sleep blocks ONCE (no re-check loop), so a leftover flag from
+        // an unrelated earlier wake would otherwise make sched() return
+        // immediately and misreport "interrupted".  Safe here (and only
+        // because) the waker re-evaluates the condition every tick:
+        // tick_timeouts re-reads sleep_until/note_queue under PROC_TABLE
+        // on each tick, so a wake landing after this clear is
+        // re-published at the next tick and consumed by sched() below.
+        port::smp::prepare_block();
         // MILLISECONDS → ticks through the ceiling conversion: q35's
         // slice is 10 ms, so the inherited aarch64-shaped `ticks() + ms`
         // slept ten times too long (and, symmetrically with sys_alarm,

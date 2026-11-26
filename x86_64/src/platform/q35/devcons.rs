@@ -40,9 +40,10 @@ pub fn init() {
             }
         }
         static CONS: SyncUnsafeCell<Uart16550> = SyncUnsafeCell::new(Uart16550 { port: COM1 });
-        // SAFETY: set_uart runs once at platform init (single CPU,
-        // IRQs masked); the cell is written before its address escapes
-        // and the published &'static dyn Uart only ever reads it.
+        // SAFETY: set_uart runs once at platform init (boot context on
+        // CPU 0, IRQs masked, before start_aps brings up any second CPU);
+        // the cell is written before its address escapes and the
+        // published &'static dyn Uart only ever reads it.
         Ok(unsafe { &mut *CONS.get() })
     });
 }

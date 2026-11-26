@@ -2244,9 +2244,10 @@ fn tcp_connect_wait(id: usize) -> Result<()> {
         if stack::instant_now() >= deadline {
             return Err(tcp_connect_fail(id, "connection timed out"));
         }
-        // Register, drop, block (devpipe's wakeup-loss-free shape — the
-        // waker can only fire after block() swtch'es: the IRQ-masked
-        // single-CPU syscall invariant).
+        // Register, drop, block (devpipe's wakeup-loss-free shape — SMP-03:
+        // prepare_block arms the flag before registration, and the waker's
+        // wake_locked publishes wake_pending + Ready under PROC_TABLE, which
+        // block() consumes under the same lock).
         if hooks.is_none() {
             hooks = Some(stack::hooks()?);
         }

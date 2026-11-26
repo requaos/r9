@@ -43,8 +43,9 @@
 //! the out-direction).  The directions are `BusyCell`s, not MCS
 //! locks, because their guards SPAN the blocking wire IO (the
 //! donor holds in.q across ensure()): an MCS lock held across a
-//! park would spin-deadlock an IRQ-masked contender on this
-//! single-CPU era (mcslock's BusyCell note) — a BusyCell contender
+//! park would spin-deadlock an IRQ-masked contender on ANY cpu
+//! (SMP-03: the holder parks mid-RPC while the contender spins,
+//! never to run) — a BusyCell contender
 //! parks ~1 tick and retries via devmnt's contention hook instead.
 //! The ctl path claims BOTH directions (the donor's in.ctlq+out.q),
 //! so algorithm changes are excluded while either direction runs.

@@ -822,7 +822,14 @@ extern "C" fn trap(vector: u8, trap_frame: &mut Ureg) -> u32 {
     // kstack: the frame this entry built IS the one the iretq tail
     // restores.
     if vector >= 32 {
-        dispatch_irq(vector);
+        // SMP-03 (D-22, the 05-22 proven gate): whether this IRQ
+        // interrupted RING 3 on this CPU gates preemption — an idle
+        // CPU's per-CPU `Mach.current_proc` is stale and can name a
+        // proc now Running on a SIBLING; rescheduling it here would
+        // stash this CPU's idle cur_frame over the proc's live frame
+        // (the double-run tear class).
+        let user_interrupted = trap_frame.cs & 3 == 3;
+        dispatch_irq(vector, user_interrupted);
         // The note boundary on the interrupt return to ring 3 (the
         // donor's notify() at every return to user mode): a note posted
         // while this proc computed in ring 3 — an alarm, a DEL —
@@ -832,7 +839,7 @@ extern "C" fn trap(vector: u8, trap_frame: &mut Ureg) -> u32 {
         // rcx and r11 included, comes back.  Kernel-origin interrupts
         // (the idle loop's hlt) are never a boundary.
         #[cfg(dev_exec)]
-        if trap_frame.cs & 3 == 3 {
+        if user_interrupted {
             crate::syscall::deliver_notes(trap_frame);
         }
         return 0;
@@ -899,12 +906,23 @@ extern "C" fn trap(vector: u8, trap_frame: &mut Ureg) -> u32 {
 /// EOI — an EOI-less stray would wedge the LAPIC's in-service state.
 /// The spurious vector skips the EOI per the LAPIC spec (it was never
 /// in service).
-fn dispatch_irq(vector: u8) {
+///
+/// `user_interrupted` (the trap frame's cs ring bits) gates every
+/// preempt() call (SMP-03): a tick or resched IPI that interrupted
+/// KERNEL context on this CPU (the sched loop's idle hlt) must not
+/// reschedule — this CPU's `current_proc` is stale there and can name
+/// a proc now Running on a sibling (the 05-22 double-run tear class).
+fn dispatch_irq(vector: u8, user_interrupted: bool) {
     if vector == crate::platform::q35::lapic::SPURIOUS_VECTOR {
         return;
     }
     match vector {
-        TIMER_VECTOR => crate::platform::q35::timer::tick(),
+        TIMER_VECTOR => {
+            crate::platform::q35::timer::tick();
+            // preempt() gates internally on the flag (SMP-03): the tick
+            // keeps re-arming and sweeping on both CPUs either way.
+            crate::proc::preempt(user_interrupted);
+        }
         // 0xF0 (smp::TLB_SHOOTDOWN_VECTOR, SMP-07): the TLB shootdown
         // IPI — service the pending request (the local flush + the
         // generation ack) through the port coordinator.  The shared
@@ -913,11 +931,11 @@ fn dispatch_irq(vector: u8) {
         // 0xF1 (smp::RESCHED_VECTOR, SMP-07): the reschedule IPI — a
         // waker enqueued onto this CPU's run queue (possibly while it
         // sat in the sched loop's idle hlt).  preempt() re-considers a
-        // Running proc (an IRQ-from-ring-3 interruption); an idle
-        // CPU's current is never Running, so the arm is a no-op there
-        // and its loop re-scans after the return.  The shared tail's
-        // EOI retires the line.
-        crate::smp::RESCHED_VECTOR => crate::proc::preempt(),
+        // Running proc when the IPI interrupted ring 3 on this CPU; an
+        // idle CPU's current is stale (the gate), so the arm is a no-op
+        // there and its loop re-scans after the return.  The shared
+        // tail's EOI retires the line.
+        crate::smp::RESCHED_VECTOR => crate::proc::preempt(user_interrupted),
         // The virtio-net device line (dev_ether builds): guarded on the
         // vector the bind published — zero hardcoded vectors (the
         // aarch64 virtio_irq_intid guard re-keyed; the discovery cell

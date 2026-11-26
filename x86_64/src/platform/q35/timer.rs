@@ -103,14 +103,24 @@ pub enum Rearm {
 /// exactly once.  Returns the re-arm to perform and the pre-increment
 /// count (the print-pacing input).  Split out so the host tests pin
 /// the accounting contract without a CPU — the hardware tick() runs
-/// this same core.
+/// this same core on CPU 0 (SMP-01: the global TICKS bumps on the BSP
+/// only; a secondary's tick re-arms its own LAPIC timer without
+/// touching the timebase).
 pub fn tick_plan(state: &TimerState, now: u64, ticks: &AtomicU64) -> (Rearm, u64) {
-    let rearm = match state.mode {
-        TimerMode::TscDeadline => Rearm::TscDeadline(now.wrapping_add(state.tsc_delta)),
-        TimerMode::Periodic => Rearm::Periodic(state.icr),
-    };
+    let rearm = tick_rearm(state, now);
     let prev = ticks.fetch_add(1, Ordering::Relaxed);
     (rearm, prev)
+}
+
+/// The re-arm half of the tick core (SMP-01): EVERY online CPU's LAPIC
+/// timer re-arms itself per tick, but only CPU 0 bumps TICKS (two
+/// increments per slice would double the 100 Hz timebase every
+/// sleep/timeout deadline rides on — the aarch64 05-22 discipline).
+pub fn tick_rearm(state: &TimerState, now: u64) -> Rearm {
+    match state.mode {
+        TimerMode::TscDeadline => Rearm::TscDeadline(now.wrapping_add(state.tsc_delta)),
+        TimerMode::Periodic => Rearm::Periodic(state.icr),
+    }
 }
 
 static TICKS: AtomicU64 = AtomicU64::new(0);
@@ -201,10 +211,22 @@ pub fn init() {
     unsafe { *STATE.get() = Some(state) }
 }
 
-/// The timer interrupt handler (IRQ context, from trap's dispatch).
-/// Re-arm FIRST (both modes — a one-shot fires exactly once otherwise),
-/// account exactly one tick, print at the 1 Hz pacing, then the polled
-/// console-RX sweep.
+/// The timer interrupt handler (IRQ context, from trap's dispatch —
+/// EVERY online CPU's LAPIC timer lands here, SMP-01).  Re-arm FIRST
+/// (both modes — a one-shot fires exactly once otherwise), then the
+/// per-CPU discipline:
+///
+/// - The global TICKS bumps on CPU 0 ONLY (`dat::this_mach().cpu_id` —
+///   two increments per slice would double the 100 Hz timebase every
+///   sleep/timeout deadline rides on; the aarch64 05-22 discipline).
+/// - Every CPU bumps its own watchdog heartbeat (SMP-12); CPU 0's tick
+///   additionally runs the cross-CPU watchdog check and the shared-state
+///   sweeps (tick_timeouts, the cons RX poll/wake), which stay on the
+///   timebase-owning CPU so the single-CPU cadence is preserved exactly.
+/// - preempt() is NOT here: trap's dispatch_irq calls it (gated on the
+///   tick having interrupted ring 3 on this CPU — an idle CPU's stale
+///   per-CPU current_proc can name a proc now Running on a sibling, the
+///   05-22 double-run tear class) on BOTH CPUs.
 ///
 /// Printing from IRQ context is safe only because post-boot nothing
 /// else holds the Console lock (the aarch64 timer.rs doctrine: the
@@ -219,8 +241,9 @@ pub fn tick() {
     let Some(state) = (unsafe { &*STATE.get() }).as_ref() else {
         return;
     };
-    let (rearm, prev) = tick_plan(state, cpu::rdtsc(), &TICKS);
-    match rearm {
+    // The per-CPU re-arm: each CPU's OWN LAPIC timer (TSC-deadline MSR
+    // is per-CPU; the periodic LAPIC count is per-LAPIC).
+    match tick_rearm(state, cpu::rdtsc()) {
         Rearm::TscDeadline(deadline) => {
             // SAFETY: this MSR is only ever written in TscDeadline mode,
             // selected behind the CPUID.1.ECX[24] gate at init.
@@ -228,15 +251,26 @@ pub fn tick() {
         }
         Rearm::Periodic(count) => lapic::timer_init_count(count),
     }
+    // SMP-12: the per-CPU progress heartbeat — every CPU's tick, every
+    // config (a no-op in release builds and before register_port_smp).
+    port::smp::watchdog_heartbeat();
+    let cpu0 = crate::dat::this_mach().cpu_id == 0;
+    // The global 100 Hz timebase: CPU 0 only (SMP-01).
+    let prev = if cpu0 {
+        TICKS.fetch_add(1, Ordering::Relaxed)
+    } else {
+        TICKS.load(Ordering::Relaxed)
+    };
     #[cfg(not(dev_exec))]
-    if prev % PRINT_EVERY == 0 {
+    if cpu0 && prev % PRINT_EVERY == 0 {
         println!("tick {}", prev / PRINT_EVERY);
     }
     // The exec-profile arms (the aarch64 tick's dev_exec block, re-keyed):
-    // the timeout sweep (alarm expiry + sleep wakes) then the round-robin
-    // preemption — both no-ops until the first proc exists.
+    // the timeout sweep (alarm expiry + sleep wakes) — CPU 0 only, on the
+    // timebase-owning CPU (the single-CPU cadence preserved exactly; the
+    // sweep acts on PROC_TABLE under its ranked IrqSpinLock).
     #[cfg(dev_exec)]
-    {
+    if cpu0 {
         crate::proc::tick_timeouts(prev + 1);
         // The net-deadline sweep (08-04, D-05's timer leg — D-10 wires it
         // on x86_64, the aarch64 platform/virt/timer.rs precedent
@@ -251,7 +285,6 @@ pub fn tick() {
         // latent defect).
         #[cfg(dev_ip)]
         port::devip::stack::tick_check(prev + 1);
-        crate::proc::preempt();
     }
     // The console-RX sweep, cfg-keyed (aarch64's rx_irq echo/buffer
     // split re-keyed to the tick-polled 16550): the bring-up profile
@@ -260,16 +293,51 @@ pub fn tick() {
     // feeds the RX ring (uart16550::cons_rx) and wakes cons readers —
     // the cooked echo moves to the devcons input engine (reader
     // context, the echo hook), never tick context (the Console-lock
-    // race the aarch64 P8 rule forbids).
+    // race the aarch64 P8 rule forbids).  CPU 0 only (SMP-01): the
+    // 16550's polled producer stays on the timebase-owning CPU; a reader
+    // running on CPU 1 is found through the wake's enqueue + the
+    // scheduler's work stealing.
     #[cfg(not(dev_exec))]
-    crate::uart16550::rx_echo(crate::uart16550::COM1);
+    if cpu0 {
+        crate::uart16550::rx_echo(crate::uart16550::COM1);
+    }
     #[cfg(dev_exec)]
-    {
+    if cpu0 {
         crate::uart16550::rx_ring_buffer(crate::uart16550::COM1);
         if crate::uart16550::cons_rx_pending() {
             crate::proc::cons_input_wake();
         }
     }
+    // SMP-12 (D-26): CPU 0's tick runs the cross-CPU deadlock watchdog —
+    // a waiting CPU whose heartbeat stopped past the threshold panics
+    // naming the CPU, the lock and its owner (a no-op in release builds).
+    if cpu0 {
+        port::smp::watchdog_check_all(watchdog_threshold_ticks());
+    }
+}
+
+/// The SMP-12 (D-26) cross-CPU deadlock watchdog threshold, in ticks
+/// (1 tick = 10 ms at the q35 100 Hz slice): 500 ticks (5 s) is hugely
+/// generous against the microsecond-scale critical sections on KVM;
+/// TCG stretches every guest critical section under emulation (the
+/// 05-RESEARCH §3.2 x6 scaling), so the TCG leg gets 3000 (30 s).  The
+/// venue read is the CPUID hypervisor signature ("TCGTCGTCGTCG" under
+/// QEMU's software emulation).
+fn watchdog_threshold_ticks() -> u64 {
+    if is_tcg() { 3_000 } else { 500 }
+}
+
+/// True under QEMU's TCG software emulation (vs KVM hardware
+/// virtualization): CPUID leaf 0x40000000's hypervisor signature
+/// (ebx/ecx/edx, in that order) spells "TCGTCGTCGTCG".  Bare metal (no
+/// hypervisor leaf) reads as not-TCG.
+fn is_tcg() -> bool {
+    let (_, ebx, ecx, edx) = cpu::cpuid(0x4000_0000, 0);
+    let mut sig = [0u8; 12];
+    sig[0..4].copy_from_slice(&ebx.to_le_bytes());
+    sig[4..8].copy_from_slice(&ecx.to_le_bytes());
+    sig[8..12].copy_from_slice(&edx.to_le_bytes());
+    &sig == b"TCGTCGTCGTCG"
 }
 
 /// The plausible-TSC sanity floor/ceiling for CPUID-reported

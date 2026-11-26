@@ -150,15 +150,16 @@ impl CpuFp {
     }
 }
 
-/// This CPU's bookkeeping: the field in this CPU's Mach (each CPU
-/// maps its own Mach at dat::KMACH — the TSS access's idiom).
+/// This CPU's bookkeeping: the `fpu` field in this CPU's Mach, read
+/// through `%gs:0` (`dat::this_mach()`, SMP-02) — each CPU has its own
+/// Mach at its own kernel-half VA (CPU 0's at `dat::KMACH`, each AP's
+/// heap-allocated), so the bookkeeping is per-CPU by construction.
 #[cfg(not(test))]
 fn this_cpu() -> &'static CpuFp {
-    // SAFETY: the Mach lives at the fixed per-CPU VA l.S maps
-    // (dat::KMACH) for the kernel's lifetime, and Mach::init set `fpu`
-    // before any FP hook runs; CpuFp is all atomics, so a shared
+    // SAFETY-FREE on the read path: this_mach() is a shared &Mach (its
+    // own %gs:0 contract), and CpuFp is all atomics, so a shared
     // reference is sound.
-    unsafe { &(*(crate::dat::KMACH as *const crate::dat::Mach)).fpu }
+    &crate::dat::this_mach().fpu
 }
 
 /// Host tests: every test thread is its own "CPU" (one leaked CpuFp per
@@ -339,6 +340,21 @@ pub fn kernel_begin() -> KernelSimd {
     kernel_begin_on(this_cpu())
 }
 
+/// Initialize THIS CPU's FP bookkeeping (SMP-01: the AP's `ap_main`
+/// bring-up).  The register file itself needs no init: the AP's
+/// trampoline armed CR4.OSFXSR/OSXMMEXCPT at BSP parity, and the first
+/// proc install FXRSTORs its seeded state (`FpState::DEFAULT` for a
+/// fresh image), so any reset-state leftovers in the registers are dead
+/// before they are read.  What must start clean is this CPU's `CpuFp`
+/// bookkeeping — zeroed at the AP Mach's allocation and re-affirmed
+/// here by name, so the bring-up contract is explicit (and MEM-18's
+/// XSAVE switch has its per-CPU seam).
+pub fn init_cpu() {
+    let cpu = this_cpu();
+    cpu.set_owner(ptr::null_mut());
+    cpu.set_in_section(false);
+}
+
 fn kernel_begin_on(cpu: &'static CpuFp) -> KernelSimd {
     if cpu.set_in_section(true) {
         panic!(
@@ -355,8 +371,11 @@ fn kernel_begin_on(cpu: &'static CpuFp) -> KernelSimd {
     if !owner.is_null() {
         // SAFETY: owner names a live PROC_TABLE-resident (or boot
         // self-test) fpsave slot — install recorded it and leave/discard
-        // clear it before the slot's proc stops existing; nothing else
-        // touches the slot while IF=0 on the single CPU.
+        // clear it before the slot's proc stops existing; the slot's
+        // OWNER is this CPU (CpuFp ownership is per-CPU, SMP-02), and
+        // the section runs IF=0 on this CPU, so no other context on this
+        // CPU touches the slot mid-section; a sibling CPU's CpuFp names
+        // its own register file's owner, never this slot's writer.
         unsafe { save_raw(owner) };
     }
     KernelSimd { parked: owner, cpu, _not_send: PhantomData }
@@ -488,7 +507,9 @@ pub fn selftest() -> Result<u128, &'static str> {
 
     let slot = SLOT.get();
     // SAFETY: SLOT is this self-test's private stand-in for a proc's
-    // fpsave; boot context, single CPU, no other user.
+    // fpsave; it runs once at boot on CPU 0 BEFORE any AP starts
+    // (main() runs the selftest ahead of start_aps, 05-12) — no other
+    // CPU or user exists yet.
     unsafe {
         *slot = a;
         install(&mut *slot);

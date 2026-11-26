@@ -34,6 +34,12 @@ pub fn getb(port: u16) -> Option<u8> {
     }
 }
 
+/// The raw-port sweep guard (not(dev_exec)) — see rx_echo's doc.
+/// Rank-100 leaf lock: never acquires anything while held.
+#[cfg(not(dev_exec))]
+static SERIAL: port::mcslock::IrqSpinLock<()> =
+    port::mcslock::IrqSpinLock::new("uart16550", port::smp::LockRank::Console, ());
+
 /// The polled console-RX sweep: drain every LSR-ready byte and echo it
 /// back.  This is the bring-up console's RX path — the timer's tick
 /// sweep calls it (IRQ-driven RX is NOT this phase), and qemu's socket
@@ -41,8 +47,18 @@ pub fn getb(port: u16) -> Option<u8> {
 /// reappear on the wire through this path: the echo proves the bytes
 /// entered the kernel.  The drain is bounded (a flooding peer cannot
 /// starve the tick).
+///
+/// SMP-03 (D-22): the sweep runs under the SERIAL IrqSpinLock
+/// (`LockRank::Console`, 100) — with per-CPU LAPIC timers (05-12) a
+/// tick can fire on ANY CPU, and two concurrent echo sweeps would race
+/// the LSR poll against the RBR pop (a byte read twice, or a ready byte
+/// missed).  The lock serializes the sweep; byte-level interleave with
+/// the devcons println path (CONS-serialized) stays possible and is
+/// cosmetic only — `outb` is byte-atomic.
 #[cfg(not(dev_exec))]
 pub fn rx_echo(port: u16) {
+    let node = port::mcslock::LockNode::new();
+    let _guard = SERIAL.lock(&node);
     for _ in 0..32 {
         match getb(port) {
             Some(b) => putb(port, b),
@@ -52,13 +68,18 @@ pub fn rx_echo(port: u16) {
 }
 
 // The console RX ring (dev_exec) — the x64 re-key of aarch64's PL011
-// RX ring (pl011.rs): the TICK's polled sweep is the single producer
-// (the 16550 LSR/RBR reads below, IRQ-masked tick context — x64 has no
-// UART IRQ this era, the tick's poll IS the producer where aarch64
-// splits IRQ-handler + tick-poll) and the devcons input engine's drain
-// hook is the single reader (syscall context, also IF=0).  The two
-// contexts can never interleave, so the ring needs no lock — the
-// aarch64 single-writer/single-reader discipline verbatim.
+// RX ring (pl011.rs): the TICK's polled sweep is the producer (the
+// 16550 LSR/RBR reads below — x64 has no UART IRQ this era, the tick's
+// poll IS the producer where aarch64 splits IRQ-handler + tick-poll)
+// and the devcons input engine's drain hook is the reader (syscall
+// context).
+//
+// SMP-03 (D-22): with per-CPU LAPIC timers (05-12) the producer (a
+// tick sweep) and the reader (a blocked proc's drain) can run on
+// DIFFERENT CPUs, so the ring is guarded by the CONS_RX IrqSpinLock at
+// `LockRank::Console` (100) — the aarch64 05-10 CONS_RX conversion
+// verbatim.  The single-writer/single-reader lock-free discipline is
+// retired.
 //
 // The ring exists so typed bytes survive between the tick that
 // collected them and the reader that drains them: rc's blocked #c/cons
@@ -77,7 +98,8 @@ pub fn rx_echo(port: u16) {
 // initialized", main.rs's registration note).
 #[cfg(dev_exec)]
 mod cons_rx {
-    use core::cell::SyncUnsafeCell;
+    use port::mcslock::{IrqSpinLock, LockNode};
+    use port::smp::LockRank;
 
     const CAP: usize = 256;
 
@@ -87,8 +109,14 @@ mod cons_rx {
         tail: usize,
     }
 
-    static RING: SyncUnsafeCell<ConsRx> =
-        SyncUnsafeCell::new(ConsRx { bytes: [0; CAP], head: 0, tail: 0 });
+    /// The ring, guarded by an IrqSpinLock at LockRank::Console (100) —
+    /// SMP-03: the tick-sweep producer and the syscall reader serialize
+    /// here on any CPU.
+    static RING: IrqSpinLock<ConsRx> = IrqSpinLock::new(
+        "cons_rx",
+        LockRank::Console,
+        ConsRx { bytes: [0; CAP], head: 0, tail: 0 },
+    );
 
     /// The tick's producer sweep: drain every LSR-ready byte into the
     /// ring.  Bounded (a flooding peer cannot starve the tick).  On a
@@ -97,12 +125,11 @@ mod cons_rx {
     /// and a dropped byte is loud-in-effect (missing input), never
     /// corruption (the aarch64 overrun rule).
     pub fn rx_ring_buffer(port: u16) {
+        let node = LockNode::new();
+        let mut guard = RING.lock(&node);
+        let rx = &mut *guard;
         for _ in 0..32 {
             let Some(b) = super::getb(port) else { break };
-            // SAFETY: the ring's single-writer discipline — the tick is
-            // the only writer, and the reader runs IF=0 in syscall
-            // context (it can never interleave mid-sweep).
-            let rx = unsafe { &mut *RING.get() };
             let next = (rx.head + 1) % CAP;
             if next != rx.tail {
                 rx.bytes[rx.head] = b;
@@ -112,13 +139,12 @@ mod cons_rx {
     }
 
     /// devcons's drain hook: drain up to `buf.len()` bytes from the
-    /// ring; 0 when empty.  Called only from IF=0 syscall context (the
-    /// input engine), so the tick's write can never interleave.
+    /// ring; 0 when empty.  Called from the devcons input engine's drain
+    /// hook (syscall context); the RING lock serializes against the tick
+    /// producer on any CPU.
     pub fn cons_rx_drain(buf: &mut [u8]) -> usize {
-        // SAFETY: the reader side of the ring discipline — called only
-        // from IF=0 syscall context, so the tick's write can never
-        // interleave.
-        let rx = unsafe { &mut *RING.get() };
+        let node = LockNode::new();
+        let mut rx = RING.lock(&node);
         let mut n = 0;
         while n < buf.len() && rx.tail != rx.head {
             buf[n] = rx.bytes[rx.tail];
@@ -129,13 +155,13 @@ mod cons_rx {
     }
 
     /// The tick's non-empty peek for the cons-wake hook (timer.rs →
-    /// proc::cons_input_wake) — aarch64's lock-free peek: a torn
-    /// head/tail read is benign (a missed wake retries at the next
-    /// tick; a spurious wake re-blocks after the drain finds nothing).
+    /// proc::cons_input_wake) — a LOCKED read under RING (SMP-03):
+    /// brief, IRQ-safe from tick context; a wake that misses a mid-poll
+    /// byte retries at the next tick (10 ms), and a spurious wake just
+    /// re-blocks after the reader's drain finds nothing.
     pub fn cons_rx_pending() -> bool {
-        // SAFETY: the lock-free peek (a torn read is benign — see
-        // cons_rx_drain's discipline).
-        let rx = unsafe { &*RING.get() };
+        let node = LockNode::new();
+        let rx = RING.lock(&node);
         rx.head != rx.tail
     }
 }

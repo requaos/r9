@@ -80,8 +80,9 @@ interruptstackbase:	.space INTERRUPTSTACKSZ
 // from PerCpu::cur_frame, because
 // preemption (proc::preempt from the timer tick) swaps cur_frame/cur_kstack/
 // TTBR0 mid-trap and the tail must pop the NEW current proc's frame.
-// Both symbols are Rust statics in proc.rs, written only under the
-// PROC_TABLE lock or in IRQ-masked trap context (single CPU); CURKSTACK
+// Both live in this CPU's PerCpu slot (TPIDR_EL1-indexed, 05-10's
+// SMP-02 migration), written only under the PROC_TABLE IrqSpinLock or
+// in this CPU's IRQ-masked trap context; CURKSTACK
 // initialises to the legacy interrupt stack so pre-process traps (early
 // boot, virtpanic) behave as before.  (The tail no longer LOADS
 // CURKSTACK — frame+288 reconstructs it — because the load needed a

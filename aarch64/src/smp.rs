@@ -246,9 +246,10 @@ pub fn publish_boot_state() {
         static SECONDARY_TTBR0: u64;
         static SECONDARY_TTBR1: u64;
     }
-    // SAFETY: write-once boot publication — single-CPU, IRQs masked,
-    // before any secondary CPU starts.  The globals live in .bootdata
-    // (identity-mapped pre-MMU); the secondary reads them at PA.
+    // SAFETY: write-once boot publication — boot context on CPU 0, IRQs
+    // masked, before any secondary CPU starts (start_secondaries runs
+    // after).  The globals live in .bootdata (identity-mapped pre-MMU);
+    // the secondary reads them at PA.
     unsafe {
         (&raw const SECONDARY_MAIR as *mut u64).write(mair);
         (&raw const SECONDARY_TCR as *mut u64).write(tcr);

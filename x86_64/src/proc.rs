@@ -11,18 +11,36 @@
 //! ring-3 entry paths share; re-pointed as one locked step on every
 //! switch), never through an aarch64-style CURKSTACK side channel.
 //!
-//! Locking discipline (carried from the aarch64 port verbatim):
-//! - PROC_TABLE is taken only briefly in process/boot/trap context —
-//!   NEVER across the fault/page-in paths or a pagealloc call that
-//!   could recurse, and never across a swtch (the resumed proc may lock
-//!   it).
+//! Locking discipline (SMP-02/SMP-03, D-22 — the aarch64 05-10 shape
+//! re-keyed):
+//! - PROC_TABLE is an `IrqSpinLock` at `LockRank::ProcTable` (50), taken
+//!   only briefly in process/boot/trap context — NEVER across the
+//!   fault/page-in paths or a pagealloc call that could recurse, and
+//!   never across a swtch (the resumed proc may lock it).
+//! - SHARED_PAGES / RFMEM_FAMILIES / SEM_WAITERS are `IrqSpinLock`s at
+//!   `LockRank::VmShared` (30) — IRQ-shared mutable state, never nested
+//!   inside each other.
 //! - Trap-context code reads the current proc through `current_proc()`'s
-//!   raw pointer, set at exec/switch time.  Invariant: single CPU, and
-//!   trap handlers run IRQ-masked, so the pointer is stable for the
-//!   handler's lifetime.
-//! - CURFRAME (the live-frame record) is written only under the
-//!   PROC_TABLE lock or in IRQ-masked trap context; read by the
-//!   scheduler's resume arms and the note-delivery boundary.
+//!   raw pointer — PER CPU (the CPU's own `Mach.current_proc` slot,
+//!   `%gs:0`-indexed): written only by the owning CPU's exec/switch path,
+//!   so a load on this CPU is stable for the reader's lifetime.
+//! - The live-frame record (`Mach.cur_frame`) is written only under the
+//!   PROC_TABLE lock or in the owning CPU's IRQ-masked trap context; read
+//!   by the scheduler's resume arms and the note-delivery boundary.
+//! - The lost-wakeup contract (Pitfall 4, D-22/D-25): `wake_pending` on
+//!   each Proc is published (Release) INSIDE the waker's PROC_TABLE
+//!   critical section — together with the condition mutation and the
+//!   Blocked→Ready+enqueue — and consumed (`swap(false, AcqRel)`) under
+//!   the same lock inside `sched()` BEFORE the Blocked transition (a
+//!   consumed flag returns WITHOUT sleeping).  Subsystem-owned wait
+//!   conditions clear it via `port::smp::prepare_block()` (->
+//!   `prepare_block_current`) before registration.
+//! - Ready ⟺ enqueued (SMP-11, D-23): every Ready-producing transition
+//!   routes through `enqueue_ready` exactly once (a RUN_QUEUES push +
+//!   the reschedule-IPI report), and `pick_next` pops via
+//!   `RUN_QUEUES.pop_or_steal` (per-CPU FIFO, victim steal via try_lock
+//!   — never two rank-60 queue locks held).  A stale entry (a proc no
+//!   longer Ready) is skipped, never fatal.
 //!
 //! Physical-memory access model: every "PA" the process machinery
 //! handles is reached through the kernel-half alias at `KZERO+pa` (the
@@ -36,16 +54,15 @@
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::cell::SyncUnsafeCell;
 use core::ops::{Deref, DerefMut};
 use core::ptr;
-use core::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use port::Result;
 use port::dat::Chan;
 use port::devenv::EnvGroup;
 use port::fdgrp::FdGroup;
-use port::mcslock::{Lock, LockNode};
+use port::mcslock::{IrqSpinLock, Lock, LockNode};
 use port::mem::{PAGE_SIZE_4K, VirtRange};
 #[cfg(not(test))]
 use port::mem::PhysAddr;
@@ -54,6 +71,7 @@ use port::pgrp::Pgrp;
 use port::println;
 use port::rendez::RendezGroup;
 use port::rfork::{RFCENVG, RFCFDG, RFCNAMEG, RFENVG, RFFDG, RFMEM, RFNAMEG, RFNOTEG, RFNOWAIT, RFREND};
+use port::smp::LockRank;
 
 use crate::dat::Ureg;
 #[cfg(not(test))]
@@ -477,10 +495,10 @@ fn pml4_map_user(
                         // each created page is unlinked from the entry
                         // this call wrote into its parent and freed,
                         // innermost first.  No invlpg: the VA was
-                        // unmapped before the call and single-CPU
-                        // IRQ-masked syscall context means no
-                        // translation through these just-written
-                        // entries can exist.
+                        // unmapped before the call, so no CPU's TLB can
+                        // hold a translation through these just-written
+                        // entries (a translation for an invalid entry is
+                        // never installed, on any CPU).
                         for l in (0..level).rev() {
                             let pidx = (va >> (39 - 9 * l)) & 0x1ff;
                             let parent = if l == 0 { pml4_pa } else { created[l - 1].unwrap() };
@@ -572,6 +590,22 @@ fn kernel_half_entries() -> [u64; 2] {
     }
 }
 
+/// The boot PML4's PHYSICAL address (l.S's `bootpml4` link symbol, VA −
+/// KZERO) — the AP trampoline's CR3 (SMP-01): the boot tables
+/// identity-map the first 4 GiB, so the SIPI trampoline keeps executing
+/// at PA == VA through the mode switches.  NEVER the current CR3 at the
+/// call site (a proc's table carries no identity map).
+#[cfg(not(test))]
+pub(crate) fn boot_pml4_pa() -> u64 {
+    unsafe extern "C" {
+        static bootpml4: u8;
+    }
+    // SAFETY: kernel.ld links the symbol inside the image (KZERO-based
+    // VA); only its ADDRESS is read (the link-sym class, kmem.rs's
+    // convention), never its contents.
+    ptr::addr_of!(bootpml4) as u64 - KZERO
+}
+
 /// The active CR3 (the current table's physical root).
 #[cfg(not(test))]
 pub(crate) fn read_cr3() -> u64 {
@@ -601,15 +635,17 @@ pub(crate) fn read_cr3() -> u64 {
 #[cfg(test)]
 pub(crate) fn switch_cr3(_pml4_pa: u64) {}
 
-/// Re-point the TSS rsp0 (the kstack switch mechanism) — the Mach at
-/// its fixed KCPUZERO VA.
+/// Re-point the TSS rsp0 (the kstack switch mechanism) — on the CALLING
+/// CPU's own Mach (`%gs:0`, SMP-02): each CPU's TSS names its own Mach,
+/// so a context switch on CPU 1 re-points CPU 1's rsp0, never CPU 0's.
 #[cfg(not(test))]
 pub(crate) fn set_tss_rsp0(top: u64) {
-    // SAFETY: the Mach lives at the fixed VA l.S maps (dat::KMACH);
-    // single CPU, IRQ-masked caller contexts (the scheduler's locked
-    // step discipline).
+    // SAFETY: mach_ptr() names the calling CPU's live Mach (dat.rs's
+    // %gs:0 contract); tss.rsp0 is written only by the owning CPU's
+    // scheduler/boot context (the locked-step discipline), so the &mut
+    // through the per-CPU pointer is exclusive by construction.
     unsafe {
-        (*(crate::dat::KMACH as *mut crate::dat::Mach)).tss.set_rsp0_raw(top);
+        (&mut *(crate::dat::mach_ptr() as *mut crate::dat::Mach)).tss.set_rsp0_raw(top);
     }
 }
 
@@ -629,9 +665,12 @@ pub(crate) fn set_tss_rsp0(_top: u64) {}
 /// leaves at the release that drops the count to 0.  Pages never
 /// shared are absent from the table and free unconditionally.
 ///
-/// Locking: syscall context only, briefly — never IRQ context, the
-/// same leaf discipline as PROC_TABLE.
-static SHARED_PAGES: Lock<SharedPages> = Lock::new("rfmem", SharedPages::new());
+/// Locking: `IrqSpinLock` at `LockRank::VmShared` (30) — SMP-03 (D-22):
+/// the refcount table is mutated from syscall context on ANY CPU and
+/// read at exit/exec on ANY CPU; IRQ-safe because a timer tick can
+/// preempt into PROC_TABLE work on the same CPU.
+static SHARED_PAGES: IrqSpinLock<SharedPages> =
+    IrqSpinLock::new("rfmem", LockRank::VmShared, SharedPages::new());
 
 /// The PA → sharer-count table behind SHARED_PAGES.
 struct SharedPages {
@@ -710,7 +749,10 @@ fn release_user_page(pa: u64) -> bool {
 /// establishes it, brk_ maintains it, exec/exit dissolve membership.
 /// Stack/Tos pages are NEVER family-shared (SG_STACK is always a fresh
 /// copy — note delivery writes the proc's own stack).
-static RFMEM_FAMILIES: Lock<Vec<(u64, u64)>> = Lock::new("rfmemfam", Vec::new());
+/// SMP-03 (D-22): `IrqSpinLock` at `LockRank::VmShared` (30) — the
+/// family registry is mutated/read from syscall context on any CPU.
+static RFMEM_FAMILIES: IrqSpinLock<Vec<(u64, u64)>> =
+    IrqSpinLock::new("rfmemfam", LockRank::VmShared, Vec::new());
 
 /// The family-id allocator (fresh id per first RFMEM fork in a family).
 static NEXT_RFMEM_FAMILY: AtomicU64 = AtomicU64::new(1);
@@ -770,11 +812,15 @@ pub fn rfmem_brk_set(family: u64, old_end: usize, new_end: usize) -> Result<()> 
             let limit = round_up_page(new_end);
             while va < limit {
                 let pa = alloc_phys_page().map_err(|_| "brk: out of memory")?;
-                // SAFETY: table-resident pointer (rfmem_family_members);
-                // single CPU, IRQ-masked syscall context — the member is
-                // not running while the caller's syscall executes; the
-                // kernel-half alias makes the caller's OWN active table
-                // an ordinary edit target.
+                // SAFETY: table-resident pointer (rfmem_family_members;
+                // the PROC_TABLE slots are never freed this era, so the
+                // target is always a live Proc).  The freshly-mapped VA
+                // was invalid in the member's table before the call, so
+                // no CPU's TLB can hold a stale translation for it (a
+                // translation for an invalid entry is never installed);
+                // a member running on a sibling CPU faults the grown
+                // range in on demand or reads the old break — both valid
+                // break states.
                 unsafe {
                     let p = &mut *m;
                     match pml4_map_user(p.pml4_pa, va, pa, SegKind::Bss.pte()) {
@@ -818,11 +864,13 @@ pub fn rfmem_brk_set(family: u64, old_end: usize, new_end: usize) -> Result<()> 
         let mut mapped: Vec<*mut Proc> = Vec::new();
         let mut failed = false;
         for &m in &members {
-            // SAFETY: table-resident pointer; single CPU, IRQ-masked
-            // syscall context.  pml4_map_user edits the member's table
-            // (ACTIVE for the caller, INACTIVE for its siblings — the
-            // kernel-half alias makes both identical operations); the
-            // VA was unmapped, so no stale translation exists.
+            // SAFETY: table-resident pointer (the PROC_TABLE slots are
+            // never freed this era).  pml4_map_user edits the member's
+            // table (ACTIVE for the caller, INACTIVE for its siblings —
+            // the kernel-half alias makes both identical operations);
+            // the VA was unmapped, so no CPU's TLB can hold a stale
+            // translation for it (a translation for an invalid entry is
+            // never installed, on any CPU).
             unsafe {
                 let p = &mut *m;
                 match pml4_map_user(p.pml4_pa, va, pa, SegKind::Bss.pte()) {
@@ -850,13 +898,14 @@ pub fn rfmem_brk_set(family: u64, old_end: usize, new_end: usize) -> Result<()> 
             // members that took it, drop their records, free the page.
             for &m in &mapped {
                 // SAFETY: `m` is a PROC_TABLE-resident member pointer
-                // from the `mapped` list this growth just built; single
-                // CPU, IRQ-masked syscall context (an SMP-03 audit
-                // site), so the &mut deref is exclusive — no member is
-                // running.  pml4_unmap_user removes the VA this loop's
-                // own pml4_map_user installed (with its per-write TLB
-                // invalidate), and the swap_remove drops exactly that
-                // mapping's log record.
+                // from the `mapped` list this growth just built (slots
+                // are never freed this era), and the unmap targets the
+                // VA this loop's own pml4_map_user installed (with its
+                // per-write TLB invalidate); the swap_remove drops
+                // exactly that mapping's log record.  The member is not
+                // running on this CPU (the caller's syscall holds it);
+                // a sibling-CPU member's TLB cannot hold the VA (it was
+                // unmapped at entry).
                 unsafe {
                     let p = &mut *m;
                     pml4_unmap_user(p.pml4_pa, va);
@@ -879,10 +928,9 @@ pub fn rfmem_brk_set(family: u64, old_end: usize, new_end: usize) -> Result<()> 
         for &(done_va, done_pa) in &done {
             for &m in &members {
                 // SAFETY: `m` is a PROC_TABLE-resident member pointer
-                // from `members` (rfmem_family_members); single CPU,
-                // IRQ-masked syscall context (an SMP-03 audit site), so
-                // the &mut deref is exclusive.  `done_va` was mapped
-                // into this member by this function's own pml4_map_user
+                // from `members` (rfmem_family_members; slots are never
+                // freed this era).  `done_va` was mapped into this
+                // member by this function's own pml4_map_user
                 // (per-write TLB invalidate inside the unmap), so the
                 // unmap and the swap_remove target exactly that record.
                 unsafe {
@@ -937,8 +985,12 @@ pub fn rfmem_family_members(family: u64) -> Vec<*mut Proc> {
 // on ONE queue while unrelated procs reusing the same VA never meet).
 // ---------------------------------------------------------------------------
 
-/// (word PA, waiter pid) pairs.
-static SEM_WAITERS: Lock<Vec<(u64, u64)>> = Lock::new("sem", Vec::new());
+/// (word PA, waiter pid) pairs.  SMP-03 (D-22): `IrqSpinLock` at
+/// `LockRank::VmShared` (30) — the registry is mutated/read from syscall
+/// context on any CPU (the `sem_wake` waker and the `sys_semacquire`
+/// waiter can be on different CPUs).
+static SEM_WAITERS: IrqSpinLock<Vec<(u64, u64)>> =
+    IrqSpinLock::new("sem", LockRank::VmShared, Vec::new());
 
 /// sys_semacquire's contended arm: record the caller as a waiter on the
 /// word's PA.  Idempotent — the acquire loop RE-registers before every
@@ -969,8 +1021,10 @@ pub fn sem_deregister_waiter(pa: u64, pid: u64) {
 /// sys_semrelease's wake half: ready up to `delta` waiters registered
 /// on the word's PA (registration order).  Entries are consumed as
 /// they are picked — the register→check→block ordering is
-/// wakeup-loss-free by construction (single CPU, IRQ-masked syscall
-/// context).
+/// wakeup-loss-free (the prepare_block/wake_pending contract, SMP-03:
+/// a releaser on another CPU either publishes wake_pending — consumed
+/// by the waiter's sched() under PROC_TABLE — or sees the waiter
+/// Blocked and readies + enqueues it).
 pub fn sem_wake(pa: u64, delta: u64) {
     if delta == 0 {
         return;
@@ -996,7 +1050,7 @@ pub fn sem_wake(pa: u64, delta: u64) {
     let mut table = PROC_TABLE.lock(&node);
     for p in table.procs.iter_mut().flatten() {
         if p.state == ProcState::Blocked && picked.contains(&p.pid) {
-            p.state = ProcState::Ready;
+            wake_locked(p);
         }
     }
 }
@@ -1111,6 +1165,15 @@ pub struct Proc {
     pub noteid: u64,
     /// True while the proc is parked in a cons read.
     pub cons_waiting: bool,
+    /// The lost-wakeup flag (SMP-03, D-22, Pitfall 4): a waker
+    /// publishes `true` (Release) INSIDE its PROC_TABLE critical section
+    /// (together with the condition mutation and any Blocked→Ready
+    /// transition); `sched()` consumes it (`swap(false, AcqRel)`) under
+    /// the same lock BEFORE marking Blocked, returning without sleeping
+    /// when a wake landed in the register→drop-lock→block window.
+    /// Subsystem-owned wait conditions clear it BEFORE registration via
+    /// `port::smp::prepare_block()` → `prepare_block_current()`.
+    pub wake_pending: AtomicBool,
     /// sys_sleep's wake deadline in TICKS (0 = not sleeping).
     pub sleep_until: u64,
     /// sys_alarm's expiry deadline in TICKS (0 = disarmed).
@@ -1175,6 +1238,7 @@ impl Proc {
             parent: ptr::null_mut(),
             children_live: 0,
             nowait: false,
+            wake_pending: AtomicBool::new(false),
             wait_records: VecDeque::new(),
             errstr: [0; ERRMAX],
             pgrp: Arc::new(Lock::new("pgrp", Pgrp::new())),
@@ -1493,9 +1557,13 @@ impl Proc {
     /// EXITS: free the PML4 page, the kernel-stack pages, and their
     /// intermediate tables.  Runs LAST in the exit path: the handler is
     /// still executing ON the kstack and CR3 still names the PML4 when
-    /// this runs — safe because nothing allocates until the hand-off
-    /// (single CPU, IRQ-masked syscall context) and the pages' contents
-    /// stay intact until reuse (the bitmap free marks, never zeroes).
+    /// this runs — on a single CPU this is safe because nothing
+    /// allocates until the hand-off and the pages' contents stay intact
+    /// until reuse (the bitmap free marks, never zeroes).  SMP residual
+    /// (05-14's deferred-reap follow-up, the aarch64 05-22 fix class):
+    /// a sibling CPU's allocator can hand the freed pages out in the
+    /// window between this free and sched_from_moribund's swtch — the
+    /// known gap, tracked in the phase's deferred-items.
     pub fn free_root_table_and_kstack(&mut self) {
         free_phys_page(self.pml4_pa);
         for pa in self.kstack_pas {
@@ -1556,29 +1624,92 @@ pub struct ProcTable {
     next_pid: u64,
 }
 
-pub static PROC_TABLE: Lock<ProcTable> =
-    Lock::new("proc", ProcTable { procs: [const { None }; MAX_PROCS], next_pid: 1 });
+/// SMP-03 (D-22): `IrqSpinLock` at `LockRank::ProcTable` (50) — the
+/// table is read/written from process, boot AND trap context (the tick's
+/// `reschedule`/`tick_timeouts` run in IRQ context on any CPU), so the
+/// lock is IRQ-safe and ranked.
+pub static PROC_TABLE: IrqSpinLock<ProcTable> = IrqSpinLock::new(
+    "proc",
+    LockRank::ProcTable,
+    ProcTable { procs: [const { None }; MAX_PROCS], next_pid: 1 },
+);
 
-/// The current-proc pointer — written in process/boot context, read in
-/// IRQ-masked trap context (single CPU: stable for a handler's
-/// lifetime), atomic so every access is data-race free.
-static CURRENT_PROC: AtomicPtr<Proc> = AtomicPtr::new(ptr::null_mut());
+/// The per-CPU work-stealing run queues (SMP-11, D-23, D-25):
+/// `port::sched::RunQueues` holds one IrqSpinLock<VecDeque>-per-CPU at
+/// `LockRank::RunQueue` (60 — taken only while PROC_TABLE (50) is held
+/// or no lock is held, never the reverse nest), local FIFO pop, neighbor
+/// steal via try_lock, and the idle-mask re-check that pairs with
+/// `enqueue`'s idle-CPU report (which the wake paths turn into the
+/// LAPIC 0xF1 reschedule IPI).  Ready ⟺ enqueued: every Ready-producing
+/// transition enqueues exactly once (the module header).
+static RUN_QUEUES: port::sched::RunQueues<64> = port::sched::RunQueues::new();
 
-/// The current process's raw pointer.  Returns null before the first
-/// exec.
-pub fn current_proc() -> *mut Proc {
-    CURRENT_PROC.load(Ordering::Relaxed)
+/// Enqueue `pid` onto the calling CPU's run queue (the waker's CPU —
+/// no affinity tracking this era; idle CPUs steal, D-23) and send the
+/// reschedule IPI when an idle CPU was found.  Safe with or without
+/// PROC_TABLE held (RunQueue at 60 nests above ProcTable at 50); on the
+/// single-CPU default hooks (before `smp::register_port_smp`) the IPI
+/// is a no-op and `num_online` is 1.
+pub(crate) fn enqueue_ready(pid: u64) {
+    let num = port::smp::num_online_cpus();
+    let target = port::smp::current_cpu_id();
+    if let Some(idle) = RUN_QUEUES.enqueue(target, pid, num) {
+        port::smp::send_resched_ipi(idle);
+    }
 }
 
-/// Install the current-process pointer (the exec/switch path only).
+/// The wake critical section under PROC_TABLE (SMP-03, D-22, Pitfall 4)
+/// — shared by every pid-keyed wake path (sem_wake, pipe_wake,
+/// rendez_wake, cons_input_wake, tick_timeouts, push_note,
+/// post_wait_record): publish `wake_pending` (Release) FIRST, so a
+/// sched() that already passed its registration sees the flag under
+/// this same lock; then the Blocked → Ready transition enqueues the
+/// pid (Ready ⟺ enqueued).  A wake of a not-yet-Blocked proc leaves
+/// the flag for its sched() to consume — the 2-CPU lost-wakeup fix.
+/// The wake_pending store and the state transition share one critical
+/// section with sched()'s flag-consume and Blocked-set, so no
+/// interleave can lose the wake (an unlocked store BEFORE the lock
+/// would re-open the consumed-flag/queued-record race this pairing
+/// closes — the 05-10 lock-paired placement, not the plan's shorthand).
+fn wake_locked(p: &mut Proc) {
+    p.wake_pending.store(true, Ordering::Release);
+    if p.state == ProcState::Blocked {
+        p.state = ProcState::Ready;
+        enqueue_ready(p.pid);
+    }
+}
+
+/// The arch half of `port::smp::prepare_block()` (SMP-03, D-22): clear
+/// the current proc's `wake_pending` (Release) BEFORE the caller's pid
+/// becomes wake-targetable (the port-side register-under-subsystem-lock
+/// contract).  No-op when no proc is current (early boot).  Registered
+/// on `SmpArch::prepare_block` by `x86_64/src/smp.rs`; the port-side
+/// callers already invoke it through `port::smp::prepare_block()`.
+pub(crate) fn prepare_block_current() {
+    if let Some(cur) = current() {
+        cur.wake_pending.store(false, Ordering::Release);
+    }
+}
+
+/// The current-proc pointer lives in the CPU's own `Mach.current_proc`
+/// slot (`%gs:0`-indexed, SMP-02) — written only by the owning CPU's
+/// process/boot/trap context, so a load on this CPU is stable for the
+/// reader's lifetime (the module header's invariant).  Returns null
+/// before the first exec.
+pub fn current_proc() -> *mut Proc {
+    crate::dat::this_mach().current_proc.load(Ordering::Relaxed)
+}
+
+/// Install the current-process pointer for THIS CPU (the exec/switch
+/// path only).
 pub(crate) fn set_current_proc(p: *mut Proc) {
-    CURRENT_PROC.store(p, Ordering::Relaxed)
+    crate::dat::this_mach().current_proc.store(p, Ordering::Relaxed)
 }
 
 /// The ONE guarded entry point for dereferencing the current process.
 /// None before the first exec.
 pub fn current() -> Option<ProcGuard> {
-    let p = CURRENT_PROC.load(Ordering::Relaxed);
+    let p = current_proc();
     if p.is_null() { None } else { Some(ProcGuard(p)) }
 }
 
@@ -1709,7 +1840,8 @@ pub fn new_user_proc(name: &str) -> Result<ProcGuard> {
 
 /// A guard handle to a PROC_TABLE-resident Proc.  Deref/DerefMut reach
 /// the proc; the table slots are never freed this era and handles live
-/// only in boot/syscall context (single CPU, IRQ-masked), so the target
+/// only in the OWNING CPU's boot/syscall/trap context (the per-CPU
+/// `Mach.current_proc` slot is written only by that CPU), so the target
 /// is stable for the guard's lifetime.
 pub struct ProcGuard(*mut Proc);
 
@@ -1755,17 +1887,13 @@ impl DerefMut for ProcGuard {
 // every time; CURFRAME records it (reschedule's stash).
 // ---------------------------------------------------------------------------
 
-/// The live-frame record: written by reschedule's locked step and read
-/// by the note-delivery boundary (the frame the return path actually
-/// restores).  SyncUnsafeCell, never `static mut`; written only under
-/// the PROC_TABLE lock or in IRQ-masked trap context.
-static CURFRAME: SyncUnsafeCell<u64> = SyncUnsafeCell::new(0);
-
+/// The live-frame record (PER CPU, SMP-02): the CPU's own
+/// `Mach.cur_frame` slot (`%gs:0`-indexed) — written by the owning CPU
+/// under the PROC_TABLE lock or in its IRQ-masked trap context; read by
+/// the note-delivery boundary (the frame the return path actually
+/// restores).
 fn read_curframe() -> *mut Ureg {
-    // SAFETY: single CPU; CURFRAME is written only under the
-    // PROC_TABLE lock or in IRQ-masked trap context (the module
-    // header) — no concurrent access.
-    unsafe { CURFRAME.get().read() as *mut Ureg }
+    crate::dat::this_mach().cur_frame.load(Ordering::Relaxed) as *mut Ureg
 }
 
 /// The live Ureg the resume boundary will restore (the note-delivery
@@ -1775,25 +1903,24 @@ pub(crate) fn current_frame() -> *mut Ureg {
 }
 
 fn write_curframe(frame: *mut Ureg) {
-    // SAFETY: read_curframe's discipline.
-    unsafe { CURFRAME.get().write(frame as u64) }
+    crate::dat::this_mach().cur_frame.store(frame as u64, Ordering::Relaxed)
 }
 
-/// The Mach's own scheduler stack top (the swtch-based sched loop's
-/// context runs here — free while the idle loop owns the entry).
+/// The calling CPU's Mach scheduler stack top (the swtch-based sched
+/// loop's context runs here — free while the idle loop owns the entry).
+/// Per CPU (SMP-02): each CPU's loop runs on its own Mach's stack.
 #[cfg(not(test))]
 fn scheduler_stack_top() -> usize {
-    // SAFETY: the Mach at the fixed KCPUZERO VA (l.S's mapping); a
-    // read of its embedded stack's top address.
-    unsafe { (*(crate::dat::KMACH as *const crate::dat::Mach)).stack.top().addr() }
+    crate::dat::this_mach().stack.top().addr()
 }
 
 /// First activation (exec_bootstrap's only call): publish the proc as
 /// current + Running, point the TSS rsp0 at its kstack — the mechanism
 /// every ring-3 entry (SYSCALL and IDT alike) then shares — and record
-/// the seeded frame in CURFRAME (the live-frame record the scheduler's
-/// preempt path stashes from; the aarch64 activate_first published the
-/// CURKSTACK analog).
+/// the seeded frame in this CPU's `Mach.cur_frame` (the live-frame
+/// record the scheduler's preempt path stashes from).  The proc was
+/// enqueued Ready by exec_into (Ready ⟺ enqueued); the claim here makes
+/// it Running directly, and pick_next skips the now-stale queue entry.
 pub fn activate_first(p: &mut Proc) {
     p.state = ProcState::Running;
     set_current_proc(p);
@@ -1805,17 +1932,19 @@ pub fn activate_first(p: &mut Proc) {
 }
 
 /// 17-02 (dev_churn): seed a freshly built proc's KERNEL entry — the
-/// SCHED_CONTEXT seeding shape re-keyed onto a proc.  The context
-/// resume jumps into `entry` on the proc's own kstack (rsp one qword
-/// under the 64-KiB-aligned top, SysV entry-aligned); no Ureg, no
-/// ring 3 — the churn driver's orchestrator context.  The proc is
-/// queued Ready like any fork child; pick_next installs it and the
+/// per-CPU sched_context seeding shape re-keyed onto a proc.  The
+/// context resume jumps into `entry` on the proc's own kstack (rsp one
+/// qword under the 64-KiB-aligned top, SysV entry-aligned); no Ureg, no
+/// ring 3 — the churn driver's orchestrator context.  SMP-11: the seed
+/// is the moment the proc becomes schedulable, so it enters the run
+/// queue here (Ready ⟺ enqueued); pick_next installs it and the
 /// scheduler's ONE swtch arm enters it.
 #[cfg(dev_churn)]
 pub(crate) fn seed_kernel_context(p: &mut Proc, entry: fn() -> !) {
     p.context.set_return(entry as *const () as u64);
     #[cfg(not(test))]
     p.context.set_stack_pointer(p.kstack_top as u64 - 8);
+    enqueue_ready(p.pid);
 }
 
 /// 17-02 (dev_churn): the first-resume seeding for a proc built by
@@ -1835,15 +1964,17 @@ pub(crate) fn first_resume_seed(p: &mut Proc) {
 /// 17-02 (dev_churn): park the boot context into the scheduler loop —
 /// the one-way handoff for the profile whose first "process" is a
 /// kernel-context orchestrator (the churn driver): the boot context
-/// never resumes (its save lands in a scratch Context nothing reads),
-/// and sched_loop runs on the Mach's scheduler stack from here on,
-/// dispatching the already-Ready driver.
+/// never resumes (its save lands in this CPU's `Mach.park_context`
+/// scratch slot — nothing reads it, SMP-02), and sched_loop runs on
+/// this CPU's Mach scheduler stack from here on, dispatching the
+/// already-Ready driver.
 #[cfg(dev_churn)]
 pub(crate) fn enter_sched_loop_from_boot() -> ! {
-    static BOOT_CTX: SyncUnsafeCell<swtch::Context> = SyncUnsafeCell::new(swtch::Context::new());
-    // SAFETY: single CPU; runs once from the boot context (IRQ-masked,
-    // driver already Ready); BOOT_CTX is never read again.
-    unsafe { swtch::swtch(BOOT_CTX.get(), sched_context()) }
+    // SAFETY: runs once from this CPU's boot context (IRQ-masked,
+    // driver already Ready); this CPU's park_context is never read
+    // again, and sched_context()'s per-CPU seed-once discipline covers
+    // the target.
+    unsafe { swtch::swtch(crate::dat::this_mach().park_context.get(), sched_context()) }
     unreachable!("the boot context parked into the scheduler loop")
 }
 
@@ -1851,7 +1982,23 @@ pub(crate) fn enter_sched_loop_from_boot() -> ! {
 /// is Running — i.e. the IRQ interrupted ring 3 (kernel syscall/trap
 /// context runs IRQ-masked; the sched loop's idle hlt finds current
 /// Blocked/Moribund and its own post-hlt re-scan dispatches instead).
-pub fn preempt() {
+///
+/// SMP-03 (the 05-22 proven gate): this CPU's `Mach.current_proc` is
+/// STALE while the CPU is idle — it still names the last proc this CPU
+/// ran, and under SMP that proc can have been woken and be Running on
+/// ANOTHER CPU.  A state check alone cannot tell "Running here" from
+/// "Running elsewhere": rescheduling then would stash this CPU's idle
+/// cur_frame over the proc's LIVE frame and re-enqueue it mid-run (the
+/// double-run tear).  The `interrupted_user` gate (the trap frame's cs
+/// ring bits, threaded in from trap's dispatch) closes it: preempt acts
+/// only when the IRQ interrupted a user proc on THIS CPU.  An idle
+/// CPU's tick/resched IPI (kernel-context hlt) passes false and its
+/// loop simply re-pops after the iret — the wake is delivered by the
+/// enqueue, not by this IRQ.
+pub fn preempt(interrupted_user: bool) {
+    if !interrupted_user {
+        return;
+    }
     let Some(cur) = current() else {
         return;
     };
@@ -1862,15 +2009,16 @@ pub fn preempt() {
 }
 
 /// Round-robin reschedule from the tick (IRQ-from-ring-3: the live
-/// frame sits at the current proc's kstack top, recorded in CURFRAME).
-/// When another runnable proc exists: PARK — stash the live frame,
-/// mark Ready + blocked_in_kernel, drop the lock, and swtch into the
-/// scheduler context (the Mach's own stack, which no CR3 switch can
-/// alias).  The sched loop then performs the real switch (pick_next's
-/// locked step) and resumes procs per their kind; when THIS proc is
-/// eventually picked, the swtch returns here and the ordinary
-/// interrupt-return path iretq's into the stashed frame — the whole
-/// round trip runs on this proc's OWN kstack.
+/// frame sits at the current proc's kstack top, recorded in this CPU's
+/// `Mach.cur_frame`) or from a yield (sys_sleep).  When another proc is
+/// queued: PARK — stash the live frame, mark Ready + enqueue
+/// (SMP-11: Ready ⟺ enqueued) + blocked_in_kernel, drop the lock, and
+/// swtch into this CPU's scheduler context (the Mach's own stack, which
+/// no CR3 switch can alias).  The sched loop then performs the real
+/// switch (pick_next's pop_or_steal + locked step) and resumes procs
+/// per their kind; when THIS proc is eventually picked, the swtch
+/// returns here and the ordinary interrupt-return path iretq's into the
+/// stashed frame — the whole round trip runs on this proc's OWN kstack.
 ///
 /// 14-06 root cause this shape replaces: the old reschedule performed
 /// the CR3 switch ITSELF, inside the lock scope, while executing on
@@ -1885,51 +2033,48 @@ pub fn preempt() {
 /// proven since 14-05's await path.
 pub fn reschedule() {
     let Some(mut cur) = current() else { return };
-    let cur_pid = cur.pid;
-    let node = LockNode::new();
+    // Fast path: nothing is waiting on the run queues, so there is no
+    // switch to make — keep this proc on the CPU without a scheduler
+    // round trip (the pre-SMP no-target arm, minus its scan).  A stale
+    // queue entry can make this probe say yes needlessly; the sched
+    // loop then discards it (pick_next's Ready check) and re-picks this
+    // proc.
+    if !RUN_QUEUES.any_enqueued(port::smp::num_online_cpus()) {
+        return;
+    }
     {
-        let mut table = PROC_TABLE.lock(&node);
-        let Some(cur_idx) =
-            table.procs.iter().position(|s| s.as_ref().is_some_and(|p| p.pid == cur_pid))
-        else {
-            return;
-        };
-        let mut pick = None;
-        for off in 1..MAX_PROCS {
-            let i = (cur_idx + off) % MAX_PROCS;
-            let Some(p) = table.procs[i].as_ref() else { continue };
-            if p.state == ProcState::Ready && !p.blocked_in_kernel {
-                pick = Some(i);
-                break;
-            }
-        }
-        // No other runnable proc: return through OUR OWN stack — no
-        // switch ever happens and the interrupt-return is ordinary.
-        let Some(_ni) = pick else { return };
-        let curp = table.procs[cur_idx].as_mut().unwrap();
-        curp.frame = read_curframe();
-        curp.state = ProcState::Ready;
+        let node = LockNode::new();
+        let _table = PROC_TABLE.lock(&node);
+        // Stash the live frame (this trap's frame on the proc's kstack)
+        // — pick_next hands it back through this CPU's cur_frame on the
+        // resume.
+        cur.frame = read_curframe();
+        cur.state = ProcState::Ready;
         // The parked proc resumes via the sched loop's Switch arm (the
         // swtch below lands mid-interrupt on this kstack — trap_return
         // would be wrong), so mark it like sched()'s blocked procs.
-        curp.blocked_in_kernel = true;
+        cur.blocked_in_kernel = true;
+        // Ready ⟺ enqueued: publish this proc on this CPU's run queue
+        // (the waker's CPU) and kick an idle CPU with 0xF1 if one idles.
+        enqueue_ready(cur.pid);
         // Leave: the live FPU/SSE registers are cur's user state (the
         // kernel never touches them) — park them before the sched loop
         // installs the next proc's.
-        crate::fpu::leave(&mut curp.fpsave);
+        crate::fpu::leave(&mut cur.fpsave);
     }
     // Park into the scheduler context.  The swtch saves this proc's
     // callee-saved state into its PROC_TABLE-resident context — never
     // this kstack — so nothing under this frame is invalidated by any
     // later switch; the Mach stack is mapped identically under every
     // table (the kernel half is shared).
-    // SAFETY: sched_context()'s seed-once discipline; cur.context is
-    // PROC_TABLE-resident (a stable address across the switch).
+    // SAFETY: sched_context()'s per-CPU seed-once discipline (this CPU's
+    // IRQ-masked trap context); cur.context is PROC_TABLE-resident (a
+    // stable address across the switch).
     unsafe {
         swtch::swtch(&mut cur.context, &*sched_context());
     }
     // Resumed: pick_next re-installed this proc (current + rsp0 +
-    // CURFRAME + CR3, one locked step) before swtch'ing back — our
+    // cur_frame + CR3, one locked step) before swtch'ing back — our
     // kstack pages own this VA again.  Return up through preempt and
     // the interrupt path; the iretq pops the frame at our kstack top.
 }
@@ -1961,46 +2106,67 @@ unsafe extern "C" fn first_entry() -> ! {
     unreachable!("first_entry is unavailable on the host (no kernel stacks)")
 }
 
-/// The scheduler context — a kernel-context switch target running
-/// sched_loop on the Mach's own scheduler stack.  Seeded on first use;
-/// accessed only from IRQ-masked single-CPU context.
-static SCHED_CONTEXT: SyncUnsafeCell<swtch::Context> =
-    SyncUnsafeCell::new(swtch::Context::new());
-static SCHED_SEEDED: SyncUnsafeCell<bool> = SyncUnsafeCell::new(false);
-
+/// The scheduler context — a PER-CPU kernel-context switch target
+/// running sched_loop on the CPU's own Mach scheduler stack (SMP-02).
+/// Lives in the CPU's `Mach.sched_context` slot (`%gs:0`-indexed);
+/// seeded once per CPU on first use; accessed only from the owning
+/// CPU's IRQ-masked contexts.
 fn sched_context() -> *mut swtch::Context {
-    // SAFETY: single CPU, IRQ-masked contexts only: the seed-once
-    // write and every later swtch access are serialized by the caller
-    // contexts — no concurrent access is possible.
-    unsafe {
-        if !SCHED_SEEDED.get().read() {
-            let ctx = SCHED_CONTEXT.get();
+    let cpu = crate::dat::this_mach();
+    if !cpu.sched_seeded.load(Ordering::Acquire) {
+        let ctx = cpu.sched_context.get();
+        // SAFETY: per-CPU seed-once — only this CPU writes its own
+        // sched_context, here, before sched_seeded publishes (Release);
+        // every later access is this CPU's swtch source/target
+        // (sched/sched_from_moribund/sched_loop itself), so no
+        // concurrent access is possible.
+        unsafe {
             (*ctx).set_return(sched_loop as *const () as u64);
             // SysV wants %rsp ≡ 8 (mod 16) at a function entry (as
             // after a call); the Mach stack top is 64 KiB-aligned, so
             // seed one qword down.
             #[cfg(not(test))]
             (*ctx).set_stack_pointer(scheduler_stack_top() as u64 - 8);
-            SCHED_SEEDED.get().write(true);
         }
-        SCHED_CONTEXT.get()
+        cpu.sched_seeded.store(true, Ordering::Release);
     }
+    cpu.sched_context.get()
 }
 
-/// Block the CURRENT proc mid-syscall and switch to the scheduler
-/// context (the AWAIT path).  Returns when the sched loop swtch'es back
-/// — after the proc was woken and picked.  Ring-3 entry/exit never
-/// rides this path.
+/// Block the CURRENT proc mid-syscall and switch to this CPU's
+/// scheduler context (the AWAIT path).  Returns when the sched loop
+/// swtch'es back — i.e. after the proc was woken (Blocked → Ready by a
+/// waker) and picked off this CPU's run queue (or stolen onto it).
+/// Ring-3 entry/exit never rides this path.
+///
+/// SMP-03 (D-22, Pitfall 4): the wake_pending consume and the Blocked
+/// transition run in ONE PROC_TABLE critical section, so a concurrent
+/// wake on another CPU either (a) landed before this section — its
+/// wake_pending store is consumed here and we return WITHOUT sleeping —
+/// or (b) lands after — its waker sees Blocked and readies + enqueues
+/// us.  No interleave can park the proc past its wake.
 pub fn sched() {
     let mut cur = current().expect("sched with no current process");
-    cur.state = ProcState::Blocked;
-    cur.blocked_in_kernel = true;
-    // Leave: park the user FPU/SSE state — the sched loop installs the
-    // next proc's (possibly this one again, from this save).
-    crate::fpu::leave(&mut cur.fpsave);
-    // SAFETY: sched_context()'s seed-once discipline; cur's context
-    // field is PROC_TABLE-resident (a stable address across the
-    // switch).
+    {
+        let node = LockNode::new();
+        let _table = PROC_TABLE.lock(&node);
+        if cur.wake_pending.swap(false, Ordering::AcqRel) {
+            // A wake landed between this proc's prepare_block() /
+            // registration and here — return without sleeping; the
+            // caller's loop re-checks its condition.
+            return;
+        }
+        cur.state = ProcState::Blocked;
+        cur.blocked_in_kernel = true;
+        // Leave: park the user FPU/SSE state — the sched loop installs
+        // the next proc's (possibly this one again, from this save).
+        crate::fpu::leave(&mut cur.fpsave);
+    }
+    // SAFETY: sched_context()'s per-CPU seed-once discipline (this CPU's
+    // IRQ-masked syscall context); cur's context field is
+    // PROC_TABLE-resident (a stable address across the switch).  The
+    // Blocked transition ran under PROC_TABLE above (the lock is never
+    // held across a swtch — the resumed proc may lock it).
     unsafe {
         swtch::swtch(&mut cur.context, &*sched_context());
     }
@@ -2008,12 +2174,15 @@ pub fn sched() {
     // wait records and returns up the return tail.
 }
 
-/// The scheduler loop (entered via swtch on the Mach's scheduler
-/// stack): pick the next Ready proc — pick_next applies the TSS rsp0 +
-/// CURFRAME + CR3 + current-proc swap under the PROC_TABLE lock
-/// BEFORE the resume — then resume it through THE ONE swtch arm.
-/// Nothing Ready → hlt with IRQs briefly unmasked: the tick fires,
-/// re-arms, and the loop re-scans.
+/// The scheduler loop (entered via swtch on this CPU's Mach scheduler
+/// stack — or by `ap_main`'s direct call on a secondary, SMP-01): pop
+/// the next pid off this CPU's run queue (stealing a neighbor's when
+/// empty — pick_next wraps `RUN_QUEUES.pop_or_steal`, SMP-11), apply
+/// the TSS rsp0 + cur_frame + CR3 + current-proc swap under the
+/// PROC_TABLE lock BEFORE the resume, then resume it through THE ONE
+/// swtch arm.  Nothing queued → hlt with IRQs briefly unmasked (the
+/// consolidated `idle_wait`: sti;hlt;cli — the tick fires and re-arms,
+/// a wake's enqueue IPIs the idle CPU with 0xF1, and the loop re-pops).
 ///
 /// 14-06 root cause this shape closes: the loop ONCE had a second arm
 /// — `Resume::Return` — that called trap_return(frame) directly for a
@@ -2032,16 +2201,20 @@ pub fn sched() {
 /// state; the truncated prints were the wild path landing inside the
 /// console lock's usage).  Now EVERY resume rides the swtch arm —
 /// fresh forks enter via the first_entry trampoline seeded into their
-/// context at fork time — so each resume re-saves SCHED_CONTEXT and
-/// every sched() re-entry lands on a CURRENT save.
-fn sched_loop() -> ! {
+/// context at fork time — so each resume re-saves this CPU's
+/// sched_context and every sched() re-entry lands on a CURRENT save.
+pub(crate) fn sched_loop() -> ! {
     let mut all_blocked = 0u32;
     loop {
         match pick_next() {
-            // SAFETY: sched_context() is seeded; ctx names the picked
-            // proc's PROC_TABLE-resident saved context (a mid-syscall
-            // block's sched() save, a preempt park's save, or the
-            // fork-seeded first_entry trampoline).
+            // SAFETY: sched_context() is seeded (its own per-CPU
+            // discipline); ctx names the picked proc's
+            // PROC_TABLE-resident saved context (a mid-syscall block's
+            // sched() save, a preempt park's save, or the fork-seeded
+            // first_entry trampoline) — the pointer escaped the lock
+            // under pick_next's discipline (the Ready check under
+            // PROC_TABLE filtered stale entries; slots are never freed
+            // this era).
             Some(ctx) => unsafe { swtch::swtch(&mut *sched_context(), &*ctx) }
             None => {
                 all_blocked += 1;
@@ -2050,7 +2223,9 @@ fn sched_loop() -> ! {
                     dump_proc_states();
                 }
                 // The consolidated idle-wait primitive (briefly
-                // unmasked hlt — the tick fires and re-arms).
+                // unmasked hlt — the tick fires and re-arms, and a
+                // wake's enqueue IPI (0xF1) wakes an idle CPU out of
+                // the halt without waiting for the next tick).
                 crate::trap::idle_wait();
             }
         }
@@ -2074,8 +2249,10 @@ pub(crate) fn dump_proc_states() {
         // chain wedged with one proc holding a garbage parent pointer
         // (the dump crashed before naming the blocked procs).  Print
         // the raw pointer when it is outside the table; the audit of
-        // WHO set it follows from the printed value.
-        let lo = ptr::from_ref(&PROC_TABLE) as usize;
+        // WHO set it follows from the printed value.  The range is
+        // measured from the LOCKED payload (the IrqSpinLock wrapper's
+        // header fields sit before it), never the static wrapper.
+        let lo = ptr::from_ref(&*table) as usize;
         let hi = lo + core::mem::size_of::<ProcTable>();
         let pp = p.parent as usize;
         let parent_pid = if pp == 0 {
@@ -2102,29 +2279,42 @@ pub(crate) fn dump_proc_states() {
     }
 }
 
-/// Round-robin pick of the next Ready proc after the current one,
-/// applying the full switch as one PROC_TABLE-locked step (state,
-/// current-proc pointer, TSS rsp0, CURFRAME, CR3) so the resumed
-/// proc's return path reads its OWN frame, never the previous proc's.
-/// Returns the proc's saved kernel context — every resume (mid-syscall
-/// block, preempt park, or a fresh fork's first_entry trampoline)
-/// rides sched_loop's ONE swtch arm.  None when no Ready proc exists.
+/// Pop the next pid off this CPU's run queue (stealing a neighbor's
+/// when empty — `RUN_QUEUES.pop_or_steal`, SMP-11), resolve it under
+/// PROC_TABLE, and apply the full switch as one PROC_TABLE-locked step
+/// (state, current-proc pointer, TSS rsp0, cur_frame, CR3) so the
+/// resumed proc's return path reads its OWN frame, never the previous
+/// proc's.  Returns the proc's saved kernel context — every resume
+/// (mid-syscall block, preempt park, or a fresh fork's first_entry
+/// trampoline) rides sched_loop's ONE swtch arm.  None when every queue
+/// is empty (the caller's idle arm then hlt's; a wake's enqueue IPIs an
+/// idle CPU with 0xF1).
 ///
-/// The current proc is NOT skipped — only its scan PRIORITY wraps
-/// (the round-robin start is cur+1, so cur is picked last; the
-/// cons-read deadlock the aarch64 port documented lives here too).
+/// Stale entries are skipped, never fatal: a pid whose proc is no longer
+/// Ready (already Running on a CPU — e.g. pid 1 claimed by
+/// activate_first, which leaves its exec_into queue entry behind by
+/// design; or unwound to Moribund mid-rfork) carries a stale entry that
+/// the state check filters.  The converse never happens: Ready ⟺
+/// enqueued (every Ready transition routes through enqueue_ready), so a
+/// genuinely Ready proc always has an entry to be found by.
+///
+/// The FIFO-per-CPU pop preserves the local ordering the old table scan
+/// had (a proc that blocks via sched() REMAINS this CPU's current proc
+/// while the sched loop runs, and its wake enqueues it — the pop finds
+/// it; the old skip-current scan bug of the cons read path has no
+/// analogue here).
 fn pick_next() -> Option<*mut swtch::Context> {
-    let cur_pid = current().map(|p| p.pid);
-    let node = LockNode::new();
-    let mut table = PROC_TABLE.lock(&node);
-    let cur_idx = cur_pid
-        .and_then(|pid| table.procs.iter().position(|s| s.as_ref().is_some_and(|p| p.pid == pid)));
-    let start = cur_idx.map(|i| i + 1).unwrap_or(0);
-    for off in 0..MAX_PROCS {
-        let i = (start + off) % MAX_PROCS;
-        let Some(p) = table.procs[i].as_mut() else { continue };
+    let my_cpu = port::smp::current_cpu_id();
+    let num = port::smp::num_online_cpus();
+    loop {
+        let pid = RUN_QUEUES.pop_or_steal(my_cpu, num)?;
+        let node = LockNode::new();
+        let mut table = PROC_TABLE.lock(&node);
+        let Some(p) = table.procs.iter_mut().flatten().find(|q| q.pid == pid) else {
+            continue; // stale entry: the proc unwound to Moribund mid-rfork
+        };
         if p.state != ProcState::Ready {
-            continue;
+            continue; // stale entry: already Running/picked elsewhere
         }
         p.state = ProcState::Running;
         set_current_proc(p);
@@ -2139,7 +2329,6 @@ fn pick_next() -> Option<*mut swtch::Context> {
         switch_cr3(p.pml4_pa);
         return Some(&mut p.context as *mut swtch::Context);
     }
-    None
 }
 
 /// EXITS's tail: the Moribund current proc never runs again — switch
@@ -2207,13 +2396,20 @@ pub fn pipe_block_current() {
     sched();
 }
 
-/// Wake the procs blocked on a pipe queue: Blocked -> Ready.
+/// Wake the procs blocked on a pipe queue (devpipe's write/close calls
+/// with the queue's waiter list): the wake critical section per pid —
+/// wake_pending published (Release) and Blocked → Ready + run-queue
+/// enqueue under PROC_TABLE (blocked_in_kernel stays set — the sched
+/// loop resumes them via swtch, the post_wait_record pattern).  The
+/// port-side caller ran `port::smp::prepare_block()` and registered the
+/// pid under the Pipe lock before dropping it (the devpipe SMP-03
+/// contract).  PROC_TABLE-brief.
 pub fn pipe_wake(pids: &[u64]) {
     let node = LockNode::new();
     let mut table = PROC_TABLE.lock(&node);
     for p in table.procs.iter_mut().flatten() {
-        if p.state == ProcState::Blocked && pids.contains(&p.pid) {
-            p.state = ProcState::Ready;
+        if pids.contains(&p.pid) {
+            wake_locked(p);
         }
     }
 }
@@ -2492,7 +2688,7 @@ fn push_note(p: &mut Proc, msg: &[u8]) -> Result<()> {
     p.note_queue.push_back(note);
     if p.state == ProcState::Blocked {
         p.sleep_until = 0;
-        p.state = ProcState::Ready;
+        wake_locked(p);
     }
     Ok(())
 }
@@ -2548,21 +2744,36 @@ pub fn set_current_user(user: Vec<u8>) {
 }
 
 /// devcons's block hook: park the calling proc in its cons read until
-/// the tick's cons_input_wake readies it.
+/// the tick's cons_input_wake readies it (input pending).  The
+/// register-then-block order cannot lose a wake (SMP-03): cons_waiting
+/// is set before sched(), and cons_input_wake's PROC_TABLE critical
+/// section publishes wake_pending + the Ready transition against it —
+/// sched()'s flag consume under the same lock either sees a wake that
+/// landed mid-window (returns without sleeping) or blocks first and is
+/// readied.  The flag clears on resume — the reader's post-wake drain
+/// re-checks the ring regardless (a spurious wake re-blocks).
 pub fn cons_block_current() {
     let mut cur = current().expect("cons read with no current process");
     cur.cons_waiting = true;
     sched();
+    // Resumed inside the syscall handler by the sched loop's swtch; this
+    // proc is current again (the blocked_in_kernel resume path).
     cur.cons_waiting = false;
 }
 
-/// The tick's cons wake: ready every cons-waiting Blocked proc.
+/// The tick's cons wake: ready every cons-waiting Blocked proc — the
+/// caller (timer.rs) has already seen the 16550 RX ring non-empty via
+/// the locked peek.  PROC_TABLE from tick (trap) context is the
+/// reschedule() precedent: the lock is IRQ-safe (IrqSpinLock, rank 50)
+/// and only ever held briefly.  wake_locked publishes wake_pending even
+/// for a cons-waiting proc caught mid-block-window (still Running), so
+/// its sched() returns without parking (SMP-03, Pitfall 4).
 pub fn cons_input_wake() {
     let node = LockNode::new();
     let mut table = PROC_TABLE.lock(&node);
     for p in table.procs.iter_mut().flatten() {
-        if p.state == ProcState::Blocked && p.cons_waiting {
-            p.state = ProcState::Ready;
+        if p.cons_waiting {
+            wake_locked(p);
         }
     }
 }
@@ -2580,7 +2791,14 @@ pub fn rfork_rendez_split(proc: &mut Proc) {
 }
 
 /// The rendezvous wake half: the sleeper named by `pid` is handed the
-/// waker's value and readied.
+/// waker's value and readied.  Caller MUST already have taken the
+/// sleeper entry off its group.  The PROC_TABLE idiom
+/// (post_wait_record's shape): table-resident procs, briefly locked,
+/// never from IRQ context (the syscall handler is the only caller).
+/// rendval is written in the SAME critical section as the wake_pending
+/// publish + Blocked→Ready transition, so the woken (or
+/// about-to-block, flag-consuming) sleeper reads a fully-written value
+/// after its sched()'s lock acquire pairs with this section's release.
 pub fn rendez_wake(pid: u64, value: u64) {
     let node = LockNode::new();
     let mut table = PROC_TABLE.lock(&node);
@@ -2588,9 +2806,7 @@ pub fn rendez_wake(pid: u64, value: u64) {
         return; // died between the park and the wake
     };
     p.rendval = value;
-    if p.state == ProcState::Blocked {
-        p.state = ProcState::Ready;
-    }
+    wake_locked(p);
 }
 
 /// Exit-time rendezvous sweep: a killed/exited sleeper must never
@@ -2605,6 +2821,12 @@ pub fn rendez_remove(proc: &mut Proc) {
 /// (posting the "alarm" note and disarming), THEN the sleep wake arm
 /// readies a Blocked sleeper whose deadline passed OR whose note_queue
 /// is non-empty.
+///
+/// SMP-03 (Pitfall 4): the expiry condition is evaluated REGARDLESS of
+/// the proc's state — a sleeper caught mid-block-window (still Running,
+/// its sched() not yet under this lock) gets `wake_pending` published
+/// (Release) without the Ready transition, so its sched() consumes the
+/// flag and returns without parking past its expiry.
 pub fn tick_timeouts(now: u64) {
     let node = LockNode::new();
     let mut table = PROC_TABLE.lock(&node);
@@ -2613,12 +2835,9 @@ pub fn tick_timeouts(now: u64) {
             p.alarm_at = 0;
             let _ = push_note(p, b"alarm");
         }
-        if p.state == ProcState::Blocked
-            && p.sleep_until != 0
-            && (now >= p.sleep_until || !p.note_queue.is_empty())
-        {
+        if p.sleep_until != 0 && (now >= p.sleep_until || !p.note_queue.is_empty()) {
             p.sleep_until = 0;
-            p.state = ProcState::Ready;
+            wake_locked(p);
         }
     }
 }
@@ -2640,8 +2859,17 @@ pub fn current_fd_list() -> Vec<(u64, u32)> {
 }
 
 /// EXITS: post the child's wait record to the parent and wake it if it
-/// sits Blocked in AWAIT.  The record is kernel memory in the parent's
-/// table slot (no cross-process pointers).
+/// sits Blocked in AWAIT (Blocked → Ready + run-queue enqueue;
+/// blocked_in_kernel stays set — the parent resumes through the sched
+/// loop's swtch).  The record is kernel memory in the parent's table
+/// slot (no cross-process pointers).  PROC_TABLE-brief.
+///
+/// SMP-03 (D-22, Pitfall 4): the record push, the wake_pending publish
+/// (Release) and the Blocked→Ready transition share ONE PROC_TABLE
+/// critical section, paired with the parent's sched() flag-consume +
+/// Blocked-set under the same lock — so an AWAITing parent either
+/// consumes the flag and re-checks (finding the record) or is readied
+/// here.
 pub fn post_wait_record(parent: *mut Proc, pid: u64, msg: &[u8]) {
     if parent.is_null() {
         return;
@@ -2650,15 +2878,14 @@ pub fn post_wait_record(parent: *mut Proc, pid: u64, msg: &[u8]) {
     // Held for the posting + wake (the parent pointer is
     // table-resident).
     let _guard = PROC_TABLE.lock(&node);
-    // SAFETY: parent names a PROC_TABLE-resident Proc and the table
-    // lock is held — the deref cannot race.
+    // SAFETY: parent names a PROC_TABLE-resident Proc (recorded at
+    // rfork; slots are never freed this era) and the table lock is held
+    // — the deref cannot race (IRQ-safe ranked lock, brief section).
     let parent = unsafe { &mut *parent };
     let mut rec = WaitRecord { pid, msg: [0; ERRMAX], msg_len: msg.len().min(ERRMAX) };
     rec.msg[..rec.msg_len].copy_from_slice(&msg[..rec.msg_len]);
     parent.wait_records.push_back(rec);
-    if parent.state == ProcState::Blocked {
-        parent.state = ProcState::Ready;
-    }
+    wake_locked(parent);
 }
 
 /// RFORK: clone `parent` — a fresh proc (new kernel stack + PML4 via
@@ -2713,7 +2940,13 @@ pub fn rfork_clone(parent: &mut Proc, frame: &Ureg, flag: u64) -> Result<u64> {
     if !nowait {
         parent.children_live += 1;
     }
-    Ok(child.pid)
+    // SMP-11: the copy succeeded and the child's frame is seeded — enter
+    // it into the run queues (Ready ⟺ enqueued; an idle CPU is IPI'd).
+    // Before this point the construction-Ready child has a null frame
+    // only while no other CPU can pick it (it was never enqueued).
+    let child_pid = child.pid;
+    enqueue_ready(child_pid);
+    Ok(child_pid)
 }
 
 /// The fallible body of rfork_clone after the child exists: an EAGER

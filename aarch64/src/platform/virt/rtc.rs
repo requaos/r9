@@ -37,8 +37,10 @@ const PL031_PA: u64 = 0x0901_0000;
 const RTCDR_OFFSET: usize = 0x00;
 
 /// The mapped PL031 page's VA (0 = unmapped; mapped lazily at first
-/// NSEC call — syscall context, IRQ-masked, single CPU: the init cannot
-/// race).
+/// NSEC call): the lazy init is idempotent — two CPUs racing the first
+/// call map the SAME page to the SAME VA (map_device_register's kernel
+/// map serializes through the KERNEL_VM IrqSpinLock, 05-22) and store
+/// the SAME value, so the race is benign.
 static RTC_VA: AtomicU64 = AtomicU64::new(0);
 /// The anchor: epoch_ns - mono_ns at first call (0 = unanchored).
 static ANCHOR_NS: AtomicU64 = AtomicU64::new(0);
