@@ -1,8 +1,9 @@
-//! Document checks for `docs/threat-model.md` (DSGN-01, Phase 2 plan 02-02).
+//! Document checks for `docs/threat-model.md` (DSGN-01, Phase 2 plan 02-02;
+//! rescope alignment DEBT-05, Phase 5 plan 05-02).
 //!
 //! The document is read at run time, so a missing document is a failing
 //! test with a message, not a compile error.  The scope boundary is
-//! compared against its source, section 2.2 of the architecture
+//! compared against its source, section 1 of the v3.0 architecture
 //! compendium, so the two cannot drift apart unnoticed.
 //!
 //! Run with `cargo test -p xtask threat_model`.
@@ -10,10 +11,12 @@
 use std::path::PathBuf;
 
 const DOC_REL: &str = "../docs/threat-model.md";
-const AC_REL: &str = "../.planning/r9-architecture-and-code-v4.md";
+const AC_REL: &str = "../docs/plan_r9_architecture_code_compendium_v3_0.md";
 
-const AC_HEADING: &str = "### 2.2 Architectural Threat Model Boundaries";
-const STATUS_SENTENCE: &str = "No protection described in this document is implemented in r9's code.";
+const AC_HEADING: &str = "### Impact Summary: Dropping Software Cryptographic Memory";
+const AC_MMU_PREFIX: &str = "* Uniform hardware MMU isolation";
+const STATUS_SENTENCE: &str =
+    "Except where a row says otherwise, no protection described in this document is implemented in r9's code.";
 const NEW_MARK: &str = "**[new]**";
 const SOURCE_TAGS: [&str; 4] = ["[AC ", "[RFC ", "[IG ", "[PT "];
 
@@ -148,30 +151,142 @@ fn threat_model_has_status_and_citation_rule() {
 #[test]
 fn threat_model_quotes_the_ac_boundary() {
     let doc = doc();
-    let ac = read(AC_REL, "the architecture compendium");
+    let ac = read(AC_REL, "the v3.0 architecture compendium");
 
     let ac_lines: Vec<&str> = ac.lines().collect();
     let heading = ac_lines
         .iter()
         .position(|l| l.trim_end() == AC_HEADING)
-        .unwrap_or_else(|| panic!("the compendium has no heading `{AC_HEADING}`"));
+        .unwrap_or_else(|| panic!("the v3.0 compendium has no heading `{AC_HEADING}`"));
     let after = &ac_lines[heading + 1..];
 
-    for prefix in ["* **In Scope:**", "* **Out of Scope:**"] {
-        let line = after
-            .iter()
-            .find(|l| l.starts_with(prefix))
-            .unwrap_or_else(|| panic!("the compendium has no line starting `{prefix}` after `{AC_HEADING}`"));
-        let sentence = line.strip_prefix("* ").expect("prefix checked above");
-        assert!(
-            doc.contains(sentence),
-            "docs/threat-model.md does not reproduce the compendium's section 2.2 line word for word: {sentence}"
-        );
-    }
+    // The memory boundary sentence is the first Retained bullet of the
+    // rescope summary; the threat model must reproduce it word for word.
+    let line = after
+        .iter()
+        .map(|l| l.trim_start())
+        .find(|l| l.starts_with(AC_MMU_PREFIX))
+        .unwrap_or_else(|| {
+            panic!("the v3.0 compendium has no line starting `{AC_MMU_PREFIX}` after `{AC_HEADING}`")
+        });
+    let sentence = line.strip_prefix("* ").expect("bullet prefix checked above");
+    assert!(
+        doc.contains(sentence),
+        "docs/threat-model.md does not reproduce the v3.0 compendium's memory-boundary line word for word: {sentence}"
+    );
 
     for name in ["SEV-SNP", "TDX"] {
         assert!(doc.contains(name), "docs/threat-model.md does not name the remedy `{name}`");
     }
+}
+
+/// DEBT-05: the AC tag is defined against the v3.0 compendium in docs/, not
+/// the superseded v4 compendium in .planning/.
+#[test]
+fn threat_model_defines_ac_as_the_v3_0_compendium() {
+    let doc = doc();
+    let ac_def = doc
+        .lines()
+        .find(|l| l.trim_start().starts_with("- AC:"))
+        .expect("docs/threat-model.md Sources does not define the AC tag");
+    assert!(
+        ac_def.contains("docs/plan_r9_architecture_code_compendium_v3_0.md"),
+        "the AC tag is not defined against the v3.0 compendium: {ac_def}"
+    );
+    assert!(
+        !ac_def.contains("r9-architecture-and-code-v4"),
+        "the AC tag still points at the superseded v4 compendium: {ac_def}"
+    );
+}
+
+/// DEBT-05: the memory boundary is stated exactly, in the scope section, and
+/// the dropped mechanisms are named as removed there — not as protections.
+#[test]
+fn threat_model_states_the_hardware_mmu_boundary() {
+    let doc = doc();
+    let section = between(&doc, "## 1. Scope boundary", "## 2. Assets").join("\n");
+    for token in ["hardware MMU isolation", "`CR3`", "`TTBR0`", "`satp`"] {
+        assert!(
+            section.contains(token),
+            "section 1 of docs/threat-model.md does not state {token} as part of the memory boundary"
+        );
+    }
+    assert!(
+        section.contains("2026-11-25"),
+        "section 1 of docs/threat-model.md does not date the v3.0 rescope"
+    );
+    for dropped in ["pages at rest", "shadow-frame", "ymm0", "`PKEY`/`WRPKRU`", "sibling-key"] {
+        assert!(
+            section.contains(dropped),
+            "section 1 of docs/threat-model.md does not name {dropped} among the removed-from-scope items"
+        );
+    }
+}
+
+/// DEBT-05: the exact bit-18 RFNOLEGACY wording, with no ambiguous fallback.
+#[test]
+fn threat_model_states_bit_18_rfnolegacy() {
+    let doc = doc();
+    for wording in [
+        "bits 18-20 were retired with software cryptographic memory",
+        "`RFNOLEGACY` is bit 18 (`1 << 18`)",
+        "bits 19-21 are free",
+    ] {
+        assert!(doc.contains(wording), "docs/threat-model.md does not state: {wording}");
+    }
+
+    // Stale framings of the retired bits must not survive anywhere.
+    for stale in [
+        "bits 18-20 are free",
+        "bits 18 to 20 are free",
+        "bits 18-20 are unreserved",
+        "bits 18 to 20 are unreserved",
+        "bits 18-20 are reserved",
+        "bits 18 to 20 are reserved",
+        "bits 18-21 are reserved",
+        "bits 18 to 21 are reserved",
+    ] {
+        assert!(
+            !doc.contains(stale),
+            "docs/threat-model.md carries the stale rfork framing: {stale}"
+        );
+    }
+}
+
+/// DEBT-05: no live protection may rest on a mechanism the 2026-11-25 rescope
+/// dropped (software pages-at-rest encryption, stale-frame or shadow-frame
+/// encryption, ymm sealing, PKEY/WRPKRU hooks, sibling-key isolation).
+#[test]
+fn threat_model_has_no_stale_crypto_memory_protections() {
+    let doc = doc();
+    let section = between(&doc, "## 5. Protections", "## 6. Out of scope and the remedy");
+    let rows = table_body_rows(&section);
+    let dropped = [
+        "RFCKEY",
+        "RFROBASE",
+        "RFRANDMEM",
+        "shadow frame",
+        "shadow-frame",
+        "ShadowFrame",
+        "PKEY",
+        "WRPKRU",
+        "ymm",
+        "stale-frame",
+        "stale frame",
+        "pages at rest",
+        "page ciphertext",
+    ];
+    let stale: Vec<&str> = rows
+        .iter()
+        .copied()
+        .filter(|row| dropped.iter().any(|token| row.contains(token)))
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "{} protection row(s) in section 5 rest on mechanisms dropped by the v3.0 rescope:\n{}",
+        stale.len(),
+        stale.join("\n")
+    );
 }
 
 #[test]
@@ -194,7 +309,7 @@ fn threat_model_has_required_sections() {
 #[test]
 fn threat_model_rows_and_bullets_are_cited_or_marked() {
     let doc = doc();
-    // Sections 2 to 7.  Section 1 holds the two quoted boundary lines and is exempt.
+    // Sections 2 to 7.  Section 1 holds the quoted boundary line and is exempt.
     let body = between(&doc, "## 2. Assets", "## Sources");
 
     let mut checked = 0usize;

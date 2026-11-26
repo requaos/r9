@@ -136,6 +136,17 @@ VERDICT stop2-main-push: PASS bb68d988752ccb616a980b943ea86aecca8f25be
 
 The gap fixes did move the Mac debug ELFs — `q35churnshell` went `c850fb64…748957` at `@04-14` to `2066521c…f24928` at `@04-24`. What did not move is the code: the defined text-symbol totals (`755220` aarch64, `760137` x86_64) and the FP/SIMD scan counts (`309`, `6`) are identical on both sides of the change. The whole-ELF delta is therefore debug information — DWARF, line tables, file paths — which the sandboxed kernel derivation does not carry into the image. Round 2 proves this rather than asserting it: `--rebuild` at `0dd1037` checks the derivation's outputs and exits 0.
 
+> **Correction note (2026-11-25 — DEBT-03 / v3.0 audit INT-02).** This section and the
+> key-decision row "The gap fixes moved whole-ELF hashes but not the code they compile to" stand
+> as written, and they bound what the evidence shows: the unchanged `boot-iso` hash
+> (`sha256-5A6QdJdWz7uWyUrfUAc3jAO+ZQcG/TowydbTLoF+u9I=`) confirms only that unstripped DWARF/line
+> metadata changed on the Mac ELF while the stripped linked kernel bytes the ISO carries stayed
+> identical. The stronger claim recorded in `evidence/kernel-bytes/KERNEL-BYTES-GAPS.md` — that
+> the gap fixes moved the linked kernel bytes and the `outputHash` was "expected not to match" —
+> is retracted by the dated correction notes in that file. The Phase 4 fixes are verified by the
+> host `test-9p` suite; a default boot speaks plain `9P2000` and does not select the Aead path
+> (Phase 4 D-16/D-23).
+
 ## Disclosures
 
 1. **`bdee8a8` — round-1 return logs, superseded.** Round 1's `boot-iso-first.log` ended `EXIT=0` at `HEAD=611dbb4…`, but a plain `nix build .#boot-iso` returns the fixed-output path already in the store from the first stop, so that conclusion rested on a cached path. Round 2's runner forces `--rebuild`; **round 2 supersedes round 1 for every verdict in `RESULTS.md`.**

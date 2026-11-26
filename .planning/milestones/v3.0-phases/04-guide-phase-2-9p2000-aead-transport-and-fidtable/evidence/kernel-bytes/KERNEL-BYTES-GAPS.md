@@ -51,6 +51,18 @@ The whole-ELF hashes differ from `@04-14` on both configs, as expected: the gap 
 into both kernels, so at least one byte of each image moved. `IDENTICAL` would mean the fixes
 are not in the kernel and is reported; here it is `DIFFERENT` on both.
 
+> **Correction note (2026-11-25 — DEBT-03 / v3.0 audit INT-02).** The paragraph above and the
+> "expected not to match" passage below overstate what this evidence shows, and are retracted.
+> The `DIFFERENT` whole-ELF verdicts on the Mac venue show only that the *unstripped* Mac debug
+> ELFs moved; the unchanged `boot-iso` `outputHash`
+> (`sha256-5A6QdJdWz7uWyUrfUAc3jAO+ZQcG/TowydbTLoF+u9I=`, reproduced by `nix build --rebuild` at
+> the second owner stop) confirms that the *stripped, linked* kernel bytes the ISO carries stayed
+> identical — the delta is unstripped DWARF/line metadata on the Mac ELF, which the sandboxed
+> kernel derivation does not carry. This evidence set therefore does not support the claim that
+> the Phase 4 fixes moved the linked kernel bytes. The fixes are verified by the host `test-9p`
+> suite, and a default boot speaks plain `9P2000` and never selects the Aead path (Phase 4
+> D-16/D-23), so the byte-level question does not bear on their correctness.
+
 The defined text symbol totals are unchanged from `@04-14` (`755220` aarch64, `760137` x86_64)
 while the ELF hashes differ. That is recorded as measured, not interpreted: the metric sums the
 sizes of defined `T`/`t` symbols, and the gap-closure edits do not move that sum on either
@@ -89,6 +101,15 @@ The committed `boot-iso` `outputHash` (`sha256-5A6QdJdWz7uWyUrfUAc3jAO+ZQcG/Towy
 re-derived at the first stop for the pre-gap kernel) is **expected not to match** the new x86_64
 kernel. The re-key and fid-table fixes changed the x86_64 kernel bytes, so the owner re-derives
 the value on the x86_64 Linux host in the second stop's section 5.
+
+> **Correction note (2026-11-25 — DEBT-03 / v3.0 audit INT-02).** Retracted. The second owner
+> stop's `nix build .#boot-iso --rebuild` reproduced the committed
+> `sha256-5A6QdJdWz7uWyUrfUAc3jAO+ZQcG/TowydbTLoF+u9I=` unchanged (`hash-commit: none`,
+> `new-outputHash: unchanged`): the stripped linked kernel bytes the ISO carries did not move.
+> What moved on the Mac was unstripped DWARF/line metadata in the debug ELF, which the sandboxed
+> kernel derivation does not carry into the ISO. The Phase 4 fixes are verified by the host
+> `test-9p` suite; a default boot speaks plain `9P2000` and does not select the Aead path
+> (Phase 4 D-16/D-23).
 
 ## Verdicts
 

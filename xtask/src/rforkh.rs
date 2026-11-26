@@ -32,8 +32,8 @@ pub fn render() -> String {
         " *\n",
         " * RFNAMEG to RFNOMNT mirror Harvey sys/include/libc.h:613-624 and\n",
         " * the declaration mirrors libc.h:684.  RFNOMNT is defined by Harvey\n",
-        " * and is not implemented by r9.  The flags after RFNOMNT are\n",
-        " * reserved by r9 and are in no Harvey header.\n",
+        " * and is not implemented by r9.  The flag after RFNOMNT is\n",
+        " * reserved by r9 and is in no Harvey header.\n",
         " *\n",
         " * This header declares an anonymous enum; do not include it in a\n",
         " * translation unit that also includes Harvey's libc.h.\n",
@@ -121,13 +121,11 @@ mod tests {
         ] {
             assert!(text.contains(line), "missing Harvey enumerator line {line:?}");
         }
-        for line in [
-            "\tRFCKEY\t\t= (1<<18),",
-            "\tRFROBASE\t= (1<<19),",
-            "\tRFRANDMEM\t= (1<<20),",
-            "\tRFNOLEGACY\t= (1<<21)\n",
-        ] {
+        for line in ["\tRFNOLEGACY\t= (1<<18)\n"] {
             assert!(text.contains(line), "missing reserved enumerator line {line:?}");
+        }
+        for retired in ["RFCKEY", "RFROBASE", "RFRANDMEM"] {
+            assert!(!text.contains(retired), "retired flag {retired} must not appear in the header (CORR-04)");
         }
         assert!(text.ends_with("extern\tint\trfork(int);\n"), "missing the declaration");
     }
@@ -159,7 +157,7 @@ mod tests {
         let path = dir.join(HEADER_PATH);
         fs::write(&path, "").expect("empty the header");
         assert!(check(&dir).is_err(), "an empty header must be rejected");
-        fs::write(&path, render().replace("(1<<21)", "(1<<22)")).expect("stale the header");
+        fs::write(&path, render().replace("(1<<18)", "(1<<22)")).expect("stale the header");
         assert!(check(&dir).is_err(), "a stale header must be rejected");
         write(&dir).expect("rewrite the header");
         assert!(check(&dir).is_ok(), "the rewritten header must match again");
@@ -168,7 +166,7 @@ mod tests {
 
     #[test]
     fn rforkh_mutated_render_differs() {
-        let mutated = render().replace("(1<<21)", "(1<<22)");
+        let mutated = render().replace("(1<<18)", "(1<<22)");
         assert_ne!(mutated, render(), "the mutation must apply");
     }
 
