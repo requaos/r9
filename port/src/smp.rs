@@ -245,6 +245,7 @@ pub fn prepare_block() {
 /// | 12 | `DevMid` | the documented parent->child mid layer (devip TABLES) |
 /// | 14 | `DevNetStack` | the devip STACK beneath its TABLES |
 /// | 20 | `PageCache` | the TPHT image page cache / rmap (MEM-16) |
+/// | 25 | `KernelVm` | the kernel root table's slot-511 recursive-dance serialization (05-22) |
 /// | 30 | `VmShared` | shared vm state (SHARED_PAGES, RFMEM_FAMILIES, SEM_WAITERS) |
 /// | 40 | `FidShard` | a FidTable shard's AllocMeta |
 /// | 50 | `ProcTable` | the process table and per-proc state |
@@ -266,6 +267,7 @@ pub enum LockRank {
     DevMid = 12,
     DevNetStack = 14,
     PageCache = 20,
+    KernelVm = 25,
     VmShared = 30,
     FidShard = 40,
     ProcTable = 50,

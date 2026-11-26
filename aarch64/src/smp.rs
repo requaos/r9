@@ -77,6 +77,17 @@ pub struct PerCpu {
     pub fpu: CpuFp,
     /// A TLB shootdown request is pending for this CPU (SMP-07).
     pub pending_shootdown: AtomicBool,
+    /// Deferred reap slot (05-22, SMP): an exiting proc's root-table PA +
+    /// kstack PAs sit here from exit_tail until THIS CPU's sched loop
+    /// frees them after the moribund hand-off swtch.  The exit path's old
+    /// "nothing allocates until the hand-off" invariant was single-CPU:
+    /// with a sibling allocating concurrently, a kstack page freed at
+    /// exit can be re-handed-out and written while this CPU still runs on
+    /// it up to the swtch (and the root table stays in TTBR0 until the
+    /// next pick's vm::switch).  Owned by this CPU: written in exit_tail
+    /// and drained in sched_loop, both IRQ-masked contexts on the owning
+    /// CPU.  KSTACK_PAGES is proc.rs's; 4 slots here.
+    pub moribund_reap: SyncUnsafeCell<Option<(u64, [u64; 4])>>,
 }
 
 // The trap.S ABI contract: cur_frame is at offset 0 (T-05-16's mitigation
@@ -128,6 +139,7 @@ impl PerCpu {
             sched_stack_top: AtomicU64::new(0),
             fpu: CpuFp::new(),
             pending_shootdown: AtomicBool::new(false),
+            moribund_reap: SyncUnsafeCell::new(None),
         }
     }
 }
@@ -382,21 +394,30 @@ pub fn secondary_start_pa() -> u64 {
     (va - crate::param::KZERO) as u64
 }
 
-/// Start every secondary CPU the DTB declares (SMP-04).  CPU 0 is skipped
-/// (already running).  Absent CPUs (PSCI_RET_INVALID_PARAMETERS) are
-/// tolerated: a 2-CPU static DTB under `-smp 1` yields `Ok(false)` for
-/// CPU 1, which is skipped without panicking or erroring.
-pub fn start_secondaries(dt: &DeviceTree) {
+/// Start every secondary CPU the DTB declares (SMP-04), returning the
+/// number successfully started.  CPU 0 is skipped (already running).
+/// Absent CPUs (PSCI_RET_INVALID_PARAMETERS) are tolerated: a 2-CPU
+/// static DTB under `-smp 1` yields `Ok(false)` for CPU 1, which is
+/// skipped without panicking or erroring.  The caller waits only for
+/// CPUs that actually started (dense `1..=started` on QEMU virt), so the
+/// absent-CPU case costs no wait and skips the boot-time shootdown
+/// self-check cleanly.
+pub fn start_secondaries(dt: &DeviceTree) -> usize {
     let topo = discover(dt);
     let entry_pa = secondary_start_pa();
+    let mut started = 0;
     for cpu_id in 1..topo.count {
         let Some(mpidr) = topo.mpidrs[cpu_id] else { continue };
         match psci_cpu_on(topo.method, mpidr, entry_pa, cpu_id as u64) {
-            Ok(true) => println!("smp: cpu {cpu_id} started (mpidr {mpidr:#x})"),
+            Ok(true) => {
+                started += 1;
+                println!("smp: cpu {cpu_id} started (mpidr {mpidr:#x})");
+            }
             Ok(false) => {} // absent (e.g. -smp 1 with a 2-CPU static DTB)
             Err(e) => println!("smp: cpu {cpu_id}: {e}"),
         }
     }
+    started
 }
 
 // ---------------------------------------------------------------------------

@@ -2186,7 +2186,7 @@ fn sys_sleep(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         // sleeping 4294967295 ticks (~49.7 days at 1 kHz, no wake path
         // other than expiry).
         if (ms as i32) <= 0 {
-            proc::preempt(); // the donor's yield()
+            proc::preempt(true); // the donor's yield() — the CALLER's own Running proc (its syscall context), so the EL0-origin gate is trivially true
             return 0;
         }
         // The donor tsleep's notepending pre-check —
@@ -2532,12 +2532,15 @@ pub(crate) fn exit_tail(proc: &mut Proc, msg: &[u8]) -> ! {
     if !proc.nowait {
         proc::post_wait_record(proc.parent, pid, msg);
     }
-    // Last frees: the root-table page and the kstack pages.  The handler is
-    // STILL running on the kstack and TTBR0 still names the root table —
-    // safe because nothing allocates until the hand-off below (single CPU,
-    // IRQ-masked syscall context) and the swtch save writes only the
-    // PROC_TABLE-resident context struct, never the freed stack.
-    proc.free_root_table_and_kstack();
+    // Last frees — the root-table page and the kstack pages — are
+    // DEFERRED to this CPU's sched loop (defer_root_kstack_reap): the
+    // handler is STILL running on the kstack and TTBR0 still names the
+    // root table, and under a second CPU the old single-CPU invariant
+    // ("nothing allocates until the hand-off") is gone — a sibling CPU
+    // reallocates a just-freed kstack page and writes it while this CPU
+    // still runs on it up to the hand-off swtch below (05-22's
+    // exit-mid-free corruption, HVF hvf.c ISV assert / TCG wild pc).
+    proc.defer_root_kstack_reap();
 
     if !proc::any_active_procs() {
         println!("all user processes exited");

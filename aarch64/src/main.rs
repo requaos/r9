@@ -16,9 +16,9 @@ mod param;
 mod platform;
 mod pre_mmu;
 // SMP bring-up (SMP-02, SMP-04, SMP-07): per-CPU state via TPIDR_EL1,
-// PSCI CPU_ON, GIC SGI IPIs.  #[allow(dead_code)] until the two-CPU boot
-// wiring (05-22) calls start_secondaries.
-#[allow(dead_code)]
+// PSCI CPU_ON, GIC SGI IPIs.  The two-CPU boot wiring (05-22) registers
+// the SmpArch hooks in main9 and starts the DTB-declared secondaries
+// from the virt boot tails.
 mod smp;
 // exec machinery: compiled into every build config.  The runtime call
 // path runs under dev_exec (exec_bootstrap below); the module-level
@@ -50,6 +50,7 @@ mod vmdebug;
 extern crate alloc;
 
 use alloc::boxed::Box;
+use core::sync::atomic::Ordering;
 use param::KZERO;
 use port::mem::{PhysAddr, PhysRange, VirtRange};
 use port::println;
@@ -144,6 +145,11 @@ pub extern "C" fn main9(dtb_va: usize) {
     // before any CPU_ON.
     smp::init_bsp();
     smp::publish_boot_state();
+    // SMP-02 (D-25): register the aarch64 SmpArch hooks with port::smp
+    // BEFORE any trap can fire — from this point the IrqSpinLock IRQ
+    // mask/restore, the lock-rank assertions and the watchdog run on the
+    // real per-CPU hooks (the safe single-CPU defaults until now).
+    smp::register_port_smp();
     trap::init();
     // This CPU's cur_kstack (the PerCpu trap-entry-stack slot) starts at
     // the legacy interrupt stack so pre-process traps behave exactly as
@@ -386,6 +392,13 @@ pub extern "C" fn main9(dtb_va: usize) {
         // CNTP generic timer: PPI 14 -> INTID 16+14 (SPIs need ITARGETSR,
         // PPIs don't -- enable() applies that rule itself).
         platform::gic::enable(30, 0xA0);
+        // SGI 0 (resched) + SGI 1 (TLB shootdown) on the BSP's OWN GIC
+        // bank/frame (SMP-07): secondaries enable theirs in
+        // gic::init_secondary_cpu; the BSP's land here so an IPI aimed at
+        // CPU 0 (a wake off CPU 1's run-queue enqueue, a CPU-1-initiated
+        // shootdown) is delivered rather than dropped at the interface.
+        platform::gic::enable(smp::SGI_RESCHED as u32, 0xA0);
+        platform::gic::enable(smp::SGI_SHOOTDOWN as u32, 0xA0);
         platform::timer::init(&dt);
         // PL011 RX: SPI 1 -> INTID 32+1 -- an SPI, so enable() writes its
         // ITARGETSR cpu0 target.  Arm the UART's RXIM|RTIM path first.
@@ -477,13 +490,20 @@ pub extern "C" fn main9(dtb_va: usize) {
             Err(why) => panic!("fpu: kernel-SIMD selftest FAILED: {why}"),
         }
         #[cfg(all(dev_exec, any(not(dev_churn), dev_bootchain)))]
-        exec_bootstrap(initrd_img, platform::bootconf::read_bootargs(&dt));
+        exec_bootstrap(&dt, initrd_img, platform::bootconf::read_bootargs(&dt));
         #[cfg(all(dev_exec, dev_churn, not(dev_bootchain)))]
-        platform::virt::churngate::bootstrap_and_run(initrd_img);
+        platform::virt::churngate::bootstrap_and_run(&dt, initrd_img);
         #[cfg(not(dev_exec))]
-        // The consolidated halt primitive (wfi wakes on each
-        // tick; trap()'s IRQ branch erets back here).
-        trap::park_forever()
+        {
+            // SMP-04/SMP-07: the arming window's publish-once cells are
+            // all live (GIC + SGI banks, timer, PL011 RX, virtio-net) —
+            // start the DTB-declared secondaries and prove the SGI 1
+            // shootdown path, then park.
+            start_secondaries_and_self_check(&dt);
+            // The consolidated halt primitive (wfi wakes on each
+            // tick; trap()'s IRQ branch erets back here).
+            trap::park_forever()
+        }
     }
 
     #[cfg(not(platform = "virt"))]
@@ -493,19 +513,104 @@ pub extern "C" fn main9(dtb_va: usize) {
     }
 }
 
-/// The temporary secondary-CPU entry (SMP-04, Plan 05-09): `l.S`'s
-/// `secondary_start` branches here after setting up the CPU's register
-/// state.  This stub parks the CPU; Plan 05-22 Task 1 replaces it in
-/// place in this file with the real bring-up tail (per-CPU init, timer
-/// arm, sched loop entry).
+/// SMP-04: bounded wait for a started secondary CPU's online flag (the
+/// secondary's own release-store at the end of its bring-up tail).  The
+/// bound is wall-clock (CNTPCT via timer::raw_counter) because the BSP
+/// spins here with IRQs masked on the dev_exec path, so the 1 kHz TICKS
+/// cannot advance.  5 s is orders of magnitude past the real
+/// microsecond-scale bring-up; a miss means the started CPU wedged,
+/// which the caller names loudly rather than hanging the boot on it.
+#[cfg(platform = "virt")]
+fn wait_cpu_online(cpu_id: usize) -> bool {
+    let budget = platform::timer::raw_counter_freq().saturating_mul(5);
+    let start = platform::timer::raw_counter();
+    loop {
+        if smp::PER_CPU[cpu_id].online.load(Ordering::Acquire) {
+            return true;
+        }
+        if platform::timer::raw_counter().wrapping_sub(start) > budget {
+            return false;
+        }
+        core::hint::spin_loop();
+    }
+}
+
+/// SMP-04/SMP-07 (D-26): the ONE secondary-start point, run only after
+/// every publish-once boot cell this config writes is live (the
+/// category-3 publish-once invariant: GIC + the SGI banks, UART,
+/// PL011_RANGE, PCI_DISCOVERY, DTB_VA from the arming window — plus the
+/// port hooks, the tick clock and the devroot image on the dev_exec
+/// path, whose prologue the caller has just run).  The release fence
+/// pairs with each secondary's PSCI entry so CPU 1 observes the
+/// published state.  Absent secondaries (PSCI INVALID_PARAMETERS under
+/// `-smp 1` against the 2-CPU static DTBs) start nothing and skip the
+/// self-check cleanly; a STARTED secondary that never publishes online
+/// is a bring-up bug and panics by name.
+#[cfg(platform = "virt")]
+pub(crate) fn start_secondaries_and_self_check(dt: &port::fdt::DeviceTree) {
+    core::sync::atomic::fence(Ordering::Release);
+    let started = smp::start_secondaries(dt);
+    for cpu_id in 1..=started {
+        if !wait_cpu_online(cpu_id) {
+            panic!("smp: cpu {cpu_id} started via PSCI but never came online");
+        }
+        // One clean line per CPU from the BSP — a secondary-side print
+        // could interleave torn bytes into the boot log.
+        println!("smp: cpu {cpu_id} online");
+    }
+    if started > 0 {
+        // SMP-07 boot self-check: a full-range shootdown proves the
+        // remote CPU takes SGI 1 and acks through the port coordinator
+        // (the coordinator waits for every online remote's ack, so a
+        // delivered-but-unserviced IPI wedges here loudly instead of
+        // passing silently).
+        port::smp::request_shootdown(None);
+        println!("smp: tlb shootdown ok");
+    }
+}
+
+/// The secondary-CPU bring-up tail (SMP-04, Plan 05-22): `l.S`'s
+/// `secondary_start` branches here with TPIDR_EL1 = &PER_CPU[cpu_id],
+/// the BSP's published MMU state live, VBAR_EL1 installed, and this
+/// CPU's 64 KiB boot stack in sp.  Init this CPU's GIC interface (SGI
+/// 0/1 + PPI 30 enabled per-CPU), arm its generic timer, publish online,
+/// unmask IRQs, and enter the scheduler loop on this CPU's own stack.
 #[unsafe(no_mangle)]
 pub extern "C" fn secondary_main(cpu_id: usize) -> ! {
-    let _ = cpu_id;
-    loop {
-        // SAFETY: wfi parks the CPU until an interrupt; IRQs are masked
-        // in secondary_start's boot state, so this is a wedge-free stop.
-        unsafe { core::arch::asm!("wfi") };
+    // The per-CPU GIC interface + generic timer are virt platform
+    // machinery; PSCI secondary bring-up is wired for virt this phase
+    // (raspi never starts a secondary, so this tail only ever runs on
+    // virt).
+    #[cfg(platform = "virt")]
+    {
+        // Mirror init_vm's CPACR_EL1.FPEN fix-up on this CPU: PSCI CPU_ON
+        // enters the secondary at EL1 with FPEN at its reset value (trap
+        // all FP/SIMD), and only the BSP's init_vm wrote TrapNothing —
+        // this CPU's first EL0 process (or an EL1 FP save/restore in its
+        // sched loop) would trap EC=0x07 (FloatSimd) otherwise.
+        use aarch64_cpu::registers::Writeable;
+        aarch64_cpu::registers::CPACR_EL1
+            .write(aarch64_cpu::registers::CPACR_EL1::FPEN::TrapNothing);
+        // SAFETY: isb is a pure context-synchronization barrier (no memory
+        // operands) — the FPEN write must be visible to subsequent
+        // instructions (init_vm's precedent).
+        unsafe { core::arch::asm!("isb") };
+        platform::gic::init_secondary_cpu();
+        platform::timer::init_secondary();
     }
+    // Publish online (Release inside mark_online) — the BSP's boot
+    // self-check spins on this flag before it sends the SGI 1 proof.
+    smp::mark_online(cpu_id);
+    // This CPU's scheduler stack IS its boot-stack slot: park_context
+    // (enter_sched_loop_from_boot's swtch source) never resumes, so the
+    // slot is free; the seed point is this tail's own sp (its frame
+    // stays abandoned above the scheduler's frames).  CPU 0's 0 default
+    // names the legacy interrupt stack instead.
+    smp::this_cpu().sched_stack_top.store(trap::current_sp(), Ordering::Relaxed);
+    // IRQs on: the timer PPI + SGI 0/1 were enabled per-CPU by the GIC
+    // secondary init, and secondary_start installed VBAR_EL1.
+    trap::unmask_irq();
+    proc::enter_sched_loop_from_boot()
 }
 
 mod runtime;
@@ -538,6 +643,7 @@ const BOOT_ENTRY: &[u8] = b"/init";
 /// trap_return with the seeded forkret frame.  Never returns.
 #[cfg(all(dev_exec, any(not(dev_churn), dev_bootchain)))]
 fn exec_bootstrap(
+    dt: &port::fdt::DeviceTree,
     initrd_img: Option<&'static [u8]>,
     bootargs: platform::bootconf::BootArgs,
 ) -> ! {
@@ -627,6 +733,20 @@ fn exec_bootstrap(
     // EL1h IRQ mid-tail, whose preempt() would see "Running" and stash a
     // transient boot-stack frame over proc.frame.
     proc::activate_first(&mut proc);
+    // SMP-04/SMP-07 (D-26): start the DTB-declared secondaries only NOW —
+    // after the bootstrap proc is built AND claimed (activate_first
+    // published it Running).  exec_into enqueues it Ready (the churn
+    // consumer's contract: Ready ⟺ enqueued), so a secondary already in
+    // sched_loop would steal it inside the Ready→Running window and
+    // double-run pid 1 — the start must wait for the claim.  The
+    // category-3 publish-once invariant holds (the arming window's GIC +
+    // SGI banks, UART, PL011_RANGE, PCI_DISCOVERY, DTB_VA plus the
+    // prologue's port hooks, tick clock and devroot image are all long
+    // live), and the boot-time SGI 1 shootdown self-check still lands
+    // before userland: pid 1 has never run when it fires.  IRQs stay
+    // masked through this — wait_cpu_online's spin budget is wall-clock
+    // (CNTPCT), built for the masked dev_exec tail.
+    start_secondaries_and_self_check(dt);
     // SAFETY: frame_ptr names the seeded forkret frame on the proc's
     // kstack (exec_into's construction); this CPU's cur_kstack/cur_frame
     // were just published by activate_first — the single first EL0 entry.

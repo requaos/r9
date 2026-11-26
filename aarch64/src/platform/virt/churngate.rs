@@ -240,8 +240,15 @@ fn print_census(tag: &str) {
 /// its saved context) and parks the boot context into the scheduler
 /// loop forever.
 #[cfg(dev_churn)]
-pub fn bootstrap_and_run(initrd_img: Option<&'static [u8]>) -> ! {
+pub fn bootstrap_and_run(dt: &port::fdt::DeviceTree, initrd_img: Option<&'static [u8]>) -> ! {
     let pro = crate::exec_prologue(initrd_img);
+    // SMP-04/SMP-07: the prologue published the port hooks, the tick
+    // clock and the devroot image — start the DTB-declared secondaries
+    // and run the boot-time SGI 1 shootdown self-check BEFORE the churn
+    // driver is seeded (its procs become stealable onto CPU 1 from the
+    // enqueue below).  Under the churn gates' `-smp 1` this is a clean
+    // no-op (PSCI reports the second CPU absent).
+    crate::start_secondaries_and_self_check(dt);
     let root = pro.root;
     let walk = |path: &'static [u8]| -> port::paqfs::PaqDir {
         let mut chan = pro.slash.dup();
