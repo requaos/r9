@@ -163,6 +163,10 @@ pub(crate) const QID_RANDOM: u64 = 8;
 /// (both are non-blocking reads from the same DRBG; Phase 11 hardens
 /// and splits the semantics).  Read-only (0444).
 pub(crate) const QID_URANDOM: u64 = 9;
+/// The sysstat file (Phase 5, 05-16, MEM-07, D-17) — a read-only file
+/// reporting the lock-free evictor counters as
+/// `evictor: dropped_text=<n> dropped_data=<n> pinned_skipped=<n>\n`.
+pub(crate) const QID_SYSSTAT: u64 = 10;
 
 /// attach: the devcons root chan (one console tree this era — the attach
 /// spec is empty, the devroot attach precedent).
@@ -1350,6 +1354,62 @@ pub(crate) mod tests {
             Qid { path: 0, vers: 0, typ: QTDIR },
             0,
         )
+    }
+
+    /// Parse the three counters out of `#c/sysstat`.
+    fn sysstat_counters(text: &str) -> (u64, u64, u64) {
+        let (mut text_n, mut data_n, mut pinned_n) = (0, 0, 0);
+        for word in text.split_whitespace() {
+            if let Some(v) = word.strip_prefix("dropped_text=") {
+                text_n = v.parse().expect("dropped_text is a number");
+            } else if let Some(v) = word.strip_prefix("dropped_data=") {
+                data_n = v.parse().expect("dropped_data is a number");
+            } else if let Some(v) = word.strip_prefix("pinned_skipped=") {
+                pinned_n = v.parse().expect("pinned_skipped is a number");
+            }
+        }
+        (text_n, data_n, pinned_n)
+    }
+
+    /// MEM-07/D-17: `#c/sysstat` is a read-only file formatting the
+    /// lock-free evictor counters, honouring offsets and EOF.
+    #[test]
+    fn sysstat_reports_evictor_counters_read_only() {
+        let _stats = crate::palloc::stats_test_guard();
+        let before = crate::palloc::evictor_stats();
+        crate::palloc::record_evict_text();
+        crate::palloc::record_evict_data();
+        crate::palloc::record_pinned_skipped();
+        let after = crate::palloc::evictor_stats();
+        assert_eq!(after.dropped_text, before.dropped_text + 1);
+        assert_eq!(after.dropped_data, before.dropped_data + 1);
+        assert_eq!(after.pinned_skipped, before.pinned_skipped + 1);
+
+        let root = root_chan();
+        let chan = super::walk(&root, b"sysstat").expect("#c/sysstat exists");
+        let mut open = super::open(&chan, crate::dat::OREAD).expect("OREAD on #c/sysstat");
+        let mut buf = [0u8; 160];
+        let n = super::read(&mut open, &mut buf, 0).expect("read #c/sysstat");
+        let text = core::str::from_utf8(&buf[..n as usize]).expect("ASCII sysstat");
+        assert!(text.starts_with("evictor: dropped_text="), "format: {text:?}");
+        assert!(text.ends_with('\n'), "the line ends with a newline");
+        assert_eq!(
+            sysstat_counters(text),
+            (after.dropped_text, after.dropped_data, after.pinned_skipped),
+            "the file reflects evictor_stats()"
+        );
+
+        // Offset discipline: the tail past offset 9.
+        let mut chan2 = super::open(&chan, crate::dat::OREAD).expect("second OREAD");
+        let mut tail = [0u8; 160];
+        let m = super::read(&mut chan2, &mut tail, 9).expect("offset read");
+        assert_eq!(&tail[..m as usize], &text.as_bytes()[9..]);
+
+        // Read-only: OWRITE is refused and `write` errors.
+        assert!(super::open(&chan, crate::dat::OWRITE).is_err(), "OWRITE is refused");
+        assert!(super::write(&mut open, b"x").is_err(), "write is refused");
+        let mut sb = [0u8; 160];
+        assert!(super::stat(&chan, &mut sb).is_ok(), "stat works");
     }
 
     /// The serve pin: /dev/user reads back EXACTLY the current proc's

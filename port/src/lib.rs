@@ -116,6 +116,13 @@ pub mod palloc;
 // SuperpageResidency ([AtomicU64; 8] over 512 4 KiB sub-pages).
 #[forbid(unsafe_code)]
 pub mod superpage;
+// pagecache (Phase 5, 05-16, MEM-16, D-18/D-29): the Flattened-TPHT
+// `palloc.hash` image page cache — exact (image_id, page_idx) keys on
+// FlattenedTphtShard<2> sized by DEBT-04's banks_for_occupancy, shared-text
+// rmap tracking, and the unpinned eviction selector under PAGE_CACHE
+// (Rank 20).
+#[forbid(unsafe_code)]
+pub mod pagecache;
 #[forbid(unsafe_code)]
 pub mod paqfs;
 #[forbid(unsafe_code)]
