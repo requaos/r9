@@ -423,4 +423,61 @@ mod tests {
         assert_eq!(cache.select_eviction_victim(|_| false), None, "empty queue");
         assert_eq!(cache.insert_text(PageKey::new(1, 1), PhysAddr::new(1)), Err(PageCacheError::BadValue));
     }
+
+    /// Task 3 (MEM-16 concurrency): concurrent insert/lookup/rmap beside
+    /// victim selection; every evicted key is gone from the hash, no stale
+    /// lookup survives eviction, and the rank order (PAGE_CACHE 20) holds.
+    #[test]
+    fn concurrent_lookup_insert_rmap_and_eviction() {
+        use std::sync::Arc;
+
+        let _stats = crate::palloc::stats_test_guard();
+        reset_evictor_stats();
+        let cache = Arc::new(cache());
+
+        std::thread::scope(|scope| {
+            let writer_cache = Arc::clone(&cache);
+            let writer = scope.spawn(move || {
+                for i in 0..512u32 {
+                    let key = PageKey::new(5, i);
+                    writer_cache.insert_text(key, pa(100 + i as u64)).unwrap();
+                    writer_cache.add_rmap(key, RmapEntry { proc_slot: (i % 4) as u16, page_va: i as usize * 4096 });
+                    if i % 32 == 0 {
+                        writer_cache.remove_proc_rmaps((i / 32 % 4) as u16);
+                    }
+                    let hit = writer_cache.lookup(key);
+                    if let Some(hit) = hit {
+                        assert_eq!(hit.pa, pa(100 + i as u64));
+                        assert_eq!(hit.key, key);
+                    }
+                }
+            });
+
+            let evict_cache = Arc::clone(&cache);
+            let evictor = scope.spawn(move || {
+                let mut victims = 0;
+                for _ in 0..2_000 {
+                    if let Some(candidate) = evict_cache.select_eviction_victim(|_| false) {
+                        victims += 1;
+                        assert!(
+                            evict_cache.lookup(candidate.key).is_none(),
+                            "the victim key must leave the hash before the arch unmaps"
+                        );
+                        assert_eq!(candidate.pa.addr() % crate::palloc::FRAME_SIZE as u64, 0);
+                    }
+                }
+                victims
+            });
+
+            writer.join().expect("writer thread");
+            let victims = evictor.join().expect("evictor thread");
+            // Every remaining droppable entry is still uniquely cached.
+            let mut drained = 0;
+            while let Some(candidate) = cache.select_eviction_victim(|_| false) {
+                drained += 1;
+                assert!(cache.lookup(candidate.key).is_none());
+            }
+            assert!(victims + drained > 0, "the cache produced eviction candidates");
+        });
+    }
 }

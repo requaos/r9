@@ -129,6 +129,13 @@ pub(crate) fn reset_evictor_stats() {
     EVICT_PINNED_SKIPPED.store(0, Ordering::Relaxed);
 }
 
+/// Serialise host tests that assert on the process-wide counters.
+#[cfg(test)]
+pub(crate) fn stats_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    static STATS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    STATS_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// The mutable pool state, always taken under `PAGE_ALLOC` (Rank 70).
 struct PoolState {
     clean: RoaringBitmap,
@@ -307,8 +314,10 @@ impl PageAlloc {
         Ok(())
     }
 
-    /// Whether `pfn` is pinned.  Lock-free: safe to call while holding
-    /// `PAGE_CACHE` (Rank 20).
+    /// Whether `pfn` is pinned.  Consults the atomic pin table under
+    /// `PAGE_ALLOC` (Rank 70), so it is legal from `PAGE_CACHE` (Rank 20):
+    /// the documented order is ascending and no path holds `PAGE_ALLOC`
+    /// while taking `PAGE_CACHE`.
     pub fn is_pinned(&self, pfn: u32) -> bool {
         let node = LockNode::new();
         let state = self.state.lock(&node);
@@ -614,5 +623,117 @@ mod tests {
             Err(PageAllocError::OutOfSpace),
             "empty pools ask the evictor, then fail cleanly"
         );
+    }
+
+    /// Task 3 (MEM-07 concurrency): two threads allocate/evict and churn
+    /// nested pins; zero duplicate frames, zero pinned frames handed to the
+    /// evictor, zero rank violations, and `pinned_skipped > 0`.
+    #[test]
+    fn pin_guard_and_concurrent_alloc_evict() {
+        use std::collections::HashSet;
+        use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+        use std::sync::{Arc, Mutex};
+
+        let _stats = stats_test_guard();
+        reset_evictor_stats();
+
+        static PAGE_CACHE_LOCK: crate::mcslock::Lock<()> =
+            crate::mcslock::Lock::new_ranked("test_palloc_concurrent_page_cache", LockRank::PageCache, ());
+
+        let alloc = Arc::new(allocator(256));
+        // Sixteen frames the pin thread keeps pinned for the whole run.
+        let pinned: Vec<PhysAddr> = (0..16)
+            .map(|_| {
+                let pa = alloc.alloc_clean(|_| {}, || 0).unwrap();
+                alloc.pin_frame(phys_to_pfn(pa).unwrap()).unwrap();
+                pa
+            })
+            .collect();
+        let pinned = Arc::new(pinned);
+
+        let retired = Arc::new(Mutex::new(Vec::<PhysAddr>::new()));
+        let outstanding = Arc::new(Mutex::new(HashSet::<u32>::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+
+        std::thread::scope(|scope| {
+            // Thread 1: nested pin/unpin churn; the pin count never reaches
+            // zero, so no frame in `pinned` is ever evictable.
+            let pin_alloc = Arc::clone(&alloc);
+            let pin_list = Arc::clone(&pinned);
+            let pin_stop = Arc::clone(&stop);
+            let pinner = scope.spawn(move || {
+                while !pin_stop.load(AtomicOrdering::Relaxed) {
+                    for pa in pin_list.iter() {
+                        pin_alloc.pin_frame(phys_to_pfn(*pa).unwrap()).unwrap();
+                    }
+                    for pa in pin_list.iter() {
+                        assert!(pin_alloc.is_pinned(phys_to_pfn(*pa).unwrap()));
+                        pin_alloc.unpin_frame(phys_to_pfn(*pa).unwrap()).unwrap();
+                    }
+                }
+            });
+
+            // Thread 0: allocate, break the low-water mark, and run an
+            // evictor that observes pinned frames (counted) and frees only
+            // retired frames.
+            let ev_alloc = Arc::clone(&alloc);
+            let ev_pinned = Arc::clone(&pinned);
+            let ev_retired = Arc::clone(&retired);
+            let ev_outstanding = Arc::clone(&outstanding);
+            let allocator_thread = scope.spawn(move || {
+                let mut mine: Vec<PhysAddr> = Vec::new();
+                for _ in 0..2_000 {
+                    if mine.len() >= 32 {
+                        let pa = mine.remove(0);
+                        let pfn = phys_to_pfn(pa).unwrap();
+                        assert!(ev_outstanding.lock().unwrap().remove(&pfn));
+                        ev_retired.lock().unwrap().push(pa);
+                    }
+                    let result = ev_alloc.alloc_clean(
+                        |_| {},
+                        || {
+                            let node = LockNode::new();
+                            let _page_cache = PAGE_CACHE_LOCK.lock(&node);
+                            for pa in ev_pinned.iter() {
+                                if ev_alloc.is_pinned(phys_to_pfn(*pa).unwrap()) {
+                                    record_pinned_skipped();
+                                }
+                            }
+                            let mut retired = ev_retired.lock().unwrap();
+                            if let Some(pa) = retired.pop() {
+                                drop(retired);
+                                ev_alloc.free_frame(pa).expect("retired frames are unpinned and active");
+                                1
+                            } else {
+                                0
+                            }
+                        },
+                    );
+                    match result {
+                        Ok(pa) => {
+                            let pfn = phys_to_pfn(pa).unwrap();
+                            assert!(
+                                ev_outstanding.lock().unwrap().insert(pfn),
+                                "frame {pfn} handed out twice"
+                            );
+                            mine.push(pa);
+                        }
+                        Err(PageAllocError::OutOfSpace) => break,
+                        Err(other) => panic!("unexpected alloc error: {other:?}"),
+                    }
+                }
+                mine
+            });
+
+            let mine = allocator_thread.join().expect("allocator thread");
+            stop.store(true, AtomicOrdering::Relaxed);
+            pinner.join().expect("pin thread");
+            drop(mine);
+        });
+
+        for pa in pinned.iter() {
+            assert!(alloc.is_pinned(phys_to_pfn(*pa).unwrap()), "pinned frames stay pinned");
+        }
+        assert!(evictor_stats().pinned_skipped > 0, "the evictor saw pinned frames");
     }
 }
