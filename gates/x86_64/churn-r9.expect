@@ -104,7 +104,7 @@ set R9_ACCEL [expr {[info exists env(R9_ACCEL)] ? $env(R9_ACCEL) : "kvm"}]
 exec rm -f $env(R9_CHURN_LOG)
 
 # --- spawn qemu: the composed ISO on -cdrom, NET-FREE --------------------
-spawn $QEMU -M $R9_MACHINE -cpu $R9_CPU -smp 1 -m 1024M \
+spawn $QEMU -M $R9_MACHINE -cpu $R9_CPU -smp 2 -m 1024M \
     -accel $R9_ACCEL \
     -cdrom $env(R9_ISO) \
     -nographic \
