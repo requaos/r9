@@ -114,6 +114,15 @@ pub mod pgrp;
 pub mod rendez;
 #[forbid(unsafe_code)]
 pub mod rfork;
+// sched (Phase 5, 05-08, SMP-11, D-23/D-25/D-26): the portable per-CPU
+// work-stealing scheduler run queues — cache-line-aligned
+// IrqSpinLock<VecDeque<u64>> queues at LockRank::RunQueue (60), local FIFO
+// pop, victim steal via try_lock (never two RunQueue locks held), and the
+// idle-cpu bitmask whose enqueue-time consult names the reschedule-IPI
+// target.  Host-tested multi-threaded; both arch crates consume it (plans
+// 05-09..12).
+#[forbid(unsafe_code)]
+pub mod sched;
 // smp (Phase 5, 05-07, SMP-02/SMP-07/SMP-12, D-25/D-26): the portable SMP
 // core — the SmpArch per-CPU hook boundary (registered once by the arch
 // crate before CPU 1 starts), the documented LockRank table with

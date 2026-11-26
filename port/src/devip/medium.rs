@@ -23,6 +23,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use crate::Result;
+use crate::mcslock::LockNode;
 
 use super::stack;
 
@@ -68,7 +69,8 @@ pub(crate) fn bind_medium(kind: MediumKind, conv_id: usize, path: Option<&[u8]>)
     match kind {
         MediumKind::Loopback => {
             {
-                let mut g = stack::STACK.enter().expect("devip: stack contended");
+                let node = LockNode::new();
+                let mut g = stack::STACK.lock(&node);
                 if g.core.is_some() {
                     return Err("interface already bound");
                 }
@@ -95,7 +97,8 @@ pub(crate) fn bind_medium(kind: MediumKind, conv_id: usize, path: Option<&[u8]>)
             // holds the IFC lock across this call); this is the
             // defensive twin.
             {
-                let g = stack::STACK.enter().expect("devip: stack contended");
+                let node = LockNode::new();
+                let g = stack::STACK.lock(&node);
                 if g.ether.is_some() {
                     return Err("interface already bound");
                 }
@@ -105,7 +108,8 @@ pub(crate) fn bind_medium(kind: MediumKind, conv_id: usize, path: Option<&[u8]>)
             // own locks; the seam never holds STACK across them).
             let dev = super::phyadapt::EtherDev::bind()?;
             {
-                let mut g = stack::STACK.enter().expect("devip: stack contended");
+                let node = LockNode::new();
+                let mut g = stack::STACK.lock(&node);
                 g.ether = Some(stack::StackCore::new_ether(dev));
             }
             // D-13's serial marker (the gate asserts it): the bound

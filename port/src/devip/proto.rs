@@ -144,7 +144,8 @@ pub(crate) fn ctl_write(p: Proto, id: usize, buf: &[u8]) -> Result<u64> {
                 && let Some(h) = t.table(p)[id].sock
             {
                 let sel = t.table(p)[id].sel;
-                let mut g = stack::STACK.enter().expect("devip: stack contended");
+                let node = LockNode::new();
+                let mut g = stack::STACK.lock(&node);
                 if let Some(core) = g.core_mut(sel) {
                     apply_hop_limit(core, p, h, v as u8);
                 }
@@ -511,7 +512,8 @@ fn connect_proto(p: Proto, id: usize) -> Result<()> {
                 s.set_hop_limit(Some(ttl as u8));
             }
             let h = {
-                let mut g = stack::STACK.enter().expect("devip: stack contended");
+                let node = LockNode::new();
+                let mut g = stack::STACK.lock(&node);
                 let core = g.core_mut(sel).ok_or("devip: no bound medium")?;
                 core.sockets.add(s)
             };
@@ -535,7 +537,8 @@ fn connect_proto(p: Proto, id: usize) -> Result<()> {
             let sel = demux_addr(if raddr == super::IP_NOADDR { &laddr } else { &raddr });
             let s = udp_socket(laddr, lport, ttl)?;
             let h = {
-                let mut g = stack::STACK.enter().expect("devip: stack contended");
+                let node = LockNode::new();
+                let mut g = stack::STACK.lock(&node);
                 let core = g.core_mut(sel).ok_or("devip: no bound medium")?;
                 core.sockets.add(s)
             };
@@ -564,7 +567,8 @@ fn connect_proto(p: Proto, id: usize) -> Result<()> {
             let sel = demux_addr(&raddr);
             let mut s = tcp_socket(ttl);
             {
-                let mut g = stack::STACK.enter().expect("devip: stack contended");
+                let node = LockNode::new();
+                let mut g = stack::STACK.lock(&node);
                 let core = g.core_mut(sel).ok_or("devip: no bound medium")?;
                 // IpListenEndpoint.addr = None → smoltcp's source pick
                 // (get_source_address); the conv's recorded laddr when set
@@ -609,7 +613,8 @@ fn connect_proto(p: Proto, id: usize) -> Result<()> {
 /// pick; every later conv op reads it back (a conv's socket handle is
 /// valid only in its OWN core's SocketSet).
 fn demux_addr(addr: &[u8; 16]) -> stack::CoreSel {
-    let g = stack::STACK.enter().expect("devip: stack contended");
+    let node = LockNode::new();
+    let g = stack::STACK.lock(&node);
     g.demux(addr)
 }
 
@@ -719,7 +724,8 @@ pub(crate) fn icmp_write_data(id: usize, buf: &[u8]) -> Result<u64> {
     let mut hooks: Option<stack::DevipHooks> = None;
     loop {
         let send_res = {
-            let mut g = stack::STACK.enter().expect("devip: stack contended");
+            let node = LockNode::new();
+            let mut g = stack::STACK.lock(&node);
             let Some(core) = g.core_mut(sel) else { return Err("devip: no bound medium") };
             let s = core.sockets.get_mut::<icmp::Socket>(h);
             s.send_slice(&msg, IpAddress::Ipv4(dst))
@@ -748,7 +754,8 @@ pub(crate) fn icmp_write_data(id: usize, buf: &[u8]) -> Result<u64> {
                 }
                 stack::register_net_waiter(pid);
                 {
-                    let mut g = stack::STACK.enter().expect("devip: stack contended");
+                    let node = LockNode::new();
+                    let mut g = stack::STACK.lock(&node);
                     if let Some(core) = g.core_mut(sel) {
                         super::ICMP_TX_SLOTS[id].arm(pid);
                         core.sockets
@@ -793,7 +800,8 @@ pub(crate) fn icmp_read_data(id: usize, buf: &mut [u8]) -> Result<u64> {
             let c = &mut t.table_mut(Proto::Icmp)[id];
             if let Some(h) = c.sock {
                 let sel = c.sel;
-                let mut g = stack::STACK.enter().expect("devip: stack contended");
+                let node = LockNode::new();
+                let mut g = stack::STACK.lock(&node);
                 if let Some(core) = g.core_mut(sel) {
                     let s = core.sockets.get_mut::<icmp::Socket>(h);
                     if s.can_recv() {
@@ -822,7 +830,8 @@ pub(crate) fn icmp_read_data(id: usize, buf: &mut [u8]) -> Result<u64> {
             let c = &mut t.table_mut(Proto::Icmp)[id];
             let has_data = if let Some(h) = c.sock {
                 let sel = c.sel;
-                let g = stack::STACK.enter().expect("devip: stack contended");
+                let node = LockNode::new();
+                let g = stack::STACK.lock(&node);
                 match g.core_ref(sel) {
                     Some(core) => core.sockets.get::<icmp::Socket>(h).can_recv(),
                     None => false,
@@ -850,7 +859,8 @@ pub(crate) fn icmp_read_data(id: usize, buf: &mut [u8]) -> Result<u64> {
             stack::register_net_waiter(pid);
             if let Some(h) = c.sock {
                 let sel = c.sel;
-                let mut g = stack::STACK.enter().expect("devip: stack contended");
+                let node = LockNode::new();
+                let mut g = stack::STACK.lock(&node);
                 if let Some(core) = g.core_mut(sel) {
                     super::ICMP_RX_SLOTS[id].arm(pid);
                     core.sockets
@@ -918,7 +928,8 @@ pub(crate) fn status(p: Proto, id: usize) -> Vec<u8> {
         match t.table(p)[id].sock {
             Some(h) => {
                 let sel = t.table(p)[id].sel;
-                let g = stack::STACK.enter().expect("devip: stack contended");
+                let node = LockNode::new();
+                let g = stack::STACK.lock(&node);
                 match g.core_ref(sel) {
                     Some(core) => match p {
                         Proto::Icmp | Proto::Icmp6 => {
@@ -1127,7 +1138,8 @@ fn udp_try_recv(id: usize, buf: &mut [u8]) -> Result<Option<u64>> {
     // The direct-socket leg: recv from the conv's own socket.
     if direct {
         if let Some(h) = sock {
-            let mut g = stack::STACK.enter().expect("devip: stack contended");
+            let node = LockNode::new();
+            let mut g = stack::STACK.lock(&node);
             if let Some(core) = g.core_mut(sel) {
                 let s = core.sockets.get_mut::<udp::Socket>(h);
                 if s.can_recv() {
@@ -1197,7 +1209,8 @@ pub(crate) fn udp_read_data(id: usize, buf: &mut [u8]) -> Result<u64> {
                 None => (sock, own_sel),
             };
             if let Some(h) = feed {
-                let mut g = stack::STACK.enter().expect("devip: stack contended");
+                let node = LockNode::new();
+                let mut g = stack::STACK.lock(&node);
                 if let Some(core) = g.core_mut(feed_sel) {
                     super::UDP_RX_SLOTS[id].arm(pid);
                     core.sockets
@@ -1386,7 +1399,8 @@ pub(crate) fn udp_write_data(id: usize, buf: &[u8]) -> Result<u64> {
     let mut hooks: Option<stack::DevipHooks> = None;
     loop {
         let send_res = {
-            let mut g = stack::STACK.enter().expect("devip: stack contended");
+            let node = LockNode::new();
+            let mut g = stack::STACK.lock(&node);
             let Some(core) = g.core_mut(sel) else { return Err("devip: no bound medium") };
             let s = core.sockets.get_mut::<udp::Socket>(h);
             s.send_slice(payload, meta)
@@ -1414,7 +1428,8 @@ pub(crate) fn udp_write_data(id: usize, buf: &[u8]) -> Result<u64> {
                 }
                 stack::register_net_waiter(pid);
                 {
-                    let mut g = stack::STACK.enter().expect("devip: stack contended");
+                    let node = LockNode::new();
+                    let mut g = stack::STACK.lock(&node);
                     if let Some(core) = g.core_mut(sel) {
                         super::UDP_TX_SLOTS[id].arm(pid);
                         core.sockets
@@ -1462,7 +1477,8 @@ pub(crate) fn udp_rx_drain() {
                 // Pop one staged datagram (copy it out — the socket
                 // borrow ends with the cell guard).
                 let next = {
-                    let mut g = stack::STACK.enter().expect("devip: stack contended");
+                    let node = LockNode::new();
+                    let mut g = stack::STACK.lock(&node);
                     match g.core_mut(sel) {
                         Some(core) => {
                             let s = core.sockets.get_mut::<udp::Socket>(h);
@@ -1781,7 +1797,8 @@ pub(crate) fn icmp6_write_data(id: usize, buf: &[u8]) -> Result<u64> {
     let mut hooks: Option<stack::DevipHooks> = None;
     loop {
         let send_res = {
-            let mut g = stack::STACK.enter().expect("devip: stack contended");
+            let node = LockNode::new();
+            let mut g = stack::STACK.lock(&node);
             let Some(core) = g.core_mut(sel) else { return Err("devip: no bound medium") };
             let s = core.sockets.get_mut::<icmp::Socket>(h);
             s.send_slice(&msg, IpAddress::Ipv6(smoltcp::wire::Ipv6Address::from(dst6)))
@@ -1808,7 +1825,8 @@ pub(crate) fn icmp6_write_data(id: usize, buf: &[u8]) -> Result<u64> {
                 }
                 stack::register_net_waiter(pid);
                 {
-                    let mut g = stack::STACK.enter().expect("devip: stack contended");
+                    let node = LockNode::new();
+                    let mut g = stack::STACK.lock(&node);
                     if let Some(core) = g.core_mut(sel) {
                         super::ICMP6_TX_SLOTS[id].arm(pid);
                         core.sockets
@@ -1849,7 +1867,8 @@ pub(crate) fn icmp6_read_data(id: usize, buf: &mut [u8]) -> Result<u64> {
             let c = &mut t.table_mut(Proto::Icmp6)[id];
             if let Some(h) = c.sock {
                 let sel = c.sel;
-                let mut g = stack::STACK.enter().expect("devip: stack contended");
+                let node = LockNode::new();
+                let mut g = stack::STACK.lock(&node);
                 if let Some(core) = g.core_mut(sel) {
                     let s = core.sockets.get_mut::<icmp::Socket>(h);
                     if s.can_recv() {
@@ -1876,7 +1895,8 @@ pub(crate) fn icmp6_read_data(id: usize, buf: &mut [u8]) -> Result<u64> {
             let c = &mut t.table_mut(Proto::Icmp6)[id];
             let has_data = if let Some(h) = c.sock {
                 let sel = c.sel;
-                let g = stack::STACK.enter().expect("devip: stack contended");
+                let node = LockNode::new();
+                let g = stack::STACK.lock(&node);
                 match g.core_ref(sel) {
                     Some(core) => core.sockets.get::<icmp::Socket>(h).can_recv(),
                     None => false,
@@ -1896,7 +1916,8 @@ pub(crate) fn icmp6_read_data(id: usize, buf: &mut [u8]) -> Result<u64> {
             stack::register_net_waiter(pid);
             if let Some(h) = c.sock {
                 let sel = c.sel;
-                let mut g = stack::STACK.enter().expect("devip: stack contended");
+                let node = LockNode::new();
+                let mut g = stack::STACK.lock(&node);
                 if let Some(core) = g.core_mut(sel) {
                     super::ICMP6_RX_SLOTS[id].arm(pid);
                     core.sockets
@@ -2177,7 +2198,8 @@ fn tcp_connect_wait(id: usize) -> Result<()> {
         match t.table(Proto::Tcp)[id].sock {
             Some(h) => {
                 let sel = t.table(Proto::Tcp)[id].sel;
-                let g = stack::STACK.enter().expect("devip: stack contended");
+                let node = LockNode::new();
+                let g = stack::STACK.lock(&node);
                 match g.core_ref(sel) {
                     Some(core) => match core.sockets.get::<tcp::Socket>(h).state() {
                         tcp::State::Established => Probe::Established,
@@ -2237,7 +2259,8 @@ fn tcp_connect_wait(id: usize) -> Result<()> {
             c.waiters.register(pid);
             if let Some(h) = c.sock {
                 let sel = c.sel;
-                let mut g = stack::STACK.enter().expect("devip: stack contended");
+                let node = LockNode::new();
+                let mut g = stack::STACK.lock(&node);
                 if let Some(core) = g.core_mut(sel) {
                     super::TCP_RX_SLOTS[id].arm(pid);
                     core.sockets
@@ -2275,7 +2298,8 @@ fn tcp_connect_fail(id: usize, reason: &'static str) -> &'static str {
             let t = conv::TABLES.lock(&node);
             t.table(Proto::Tcp)[id].sel
         };
-        let mut g = stack::STACK.enter().expect("devip: stack contended");
+        let node = LockNode::new();
+        let mut g = stack::STACK.lock(&node);
         if let Some(core) = g.core_mut(sel) {
             core.sockets.remove(h);
         }
@@ -2313,7 +2337,8 @@ fn tcp_ctl(id: usize, verb: &[u8], args: &[&[u8]]) -> Result<()> {
                 let t = conv::TABLES.lock(&node);
                 t.table(Proto::Tcp)[id].sel
             };
-            let mut g = stack::STACK.enter().expect("devip: stack contended");
+            let node = LockNode::new();
+            let mut g = stack::STACK.lock(&node);
             let Some(core) = g.core_mut(sel) else {
                 return Err("devip: no bound medium");
             };
@@ -2419,7 +2444,8 @@ fn tcp_close_verb(id: usize, kind: CloseKind) -> Result<()> {
                 let t = conv::TABLES.lock(&node);
                 t.table(Proto::Tcp)[id].sel
             };
-            let mut g = stack::STACK.enter().expect("devip: stack contended");
+            let node = LockNode::new();
+            let mut g = stack::STACK.lock(&node);
             if let Some(core) = g.core_mut(sel) {
                 core.sockets.remove(h);
             }
@@ -2439,7 +2465,8 @@ fn tcp_close_verb(id: usize, kind: CloseKind) -> Result<()> {
             let t = conv::TABLES.lock(&node);
             t.table(Proto::Tcp)[id].sel
         };
-        let mut g = stack::STACK.enter().expect("devip: stack contended");
+        let node = LockNode::new();
+        let mut g = stack::STACK.lock(&node);
         if let Some(core) = g.core_mut(sel) {
             let s = core.sockets.get_mut::<tcp::Socket>(h);
             match kind {
@@ -2495,7 +2522,8 @@ pub(crate) fn tcp_read_data(id: usize, buf: &mut [u8]) -> Result<u64> {
             match c.sock {
                 Some(h) => {
                     let sel = c.sel;
-                    let mut g = stack::STACK.enter().expect("devip: stack contended");
+                    let node = LockNode::new();
+                    let mut g = stack::STACK.lock(&node);
                     let Some(core) = g.core_mut(sel) else {
                         return Err("devip: no bound medium");
                     };
@@ -2548,7 +2576,8 @@ pub(crate) fn tcp_read_data(id: usize, buf: &mut [u8]) -> Result<u64> {
             }
             let can = if let Some(h) = c.sock {
                 let sel = c.sel;
-                let g = stack::STACK.enter().expect("devip: stack contended");
+                let node = LockNode::new();
+                let g = stack::STACK.lock(&node);
                 match g.core_ref(sel) {
                     Some(core) => {
                         let s = core.sockets.get::<tcp::Socket>(h);
@@ -2579,7 +2608,8 @@ pub(crate) fn tcp_read_data(id: usize, buf: &mut [u8]) -> Result<u64> {
             stack::register_net_waiter(pid);
             if let Some(h) = c.sock {
                 let sel = c.sel;
-                let mut g = stack::STACK.enter().expect("devip: stack contended");
+                let node = LockNode::new();
+                let mut g = stack::STACK.lock(&node);
                 if let Some(core) = g.core_mut(sel) {
                     super::TCP_RX_SLOTS[id].arm(pid);
                     core.sockets
@@ -2622,7 +2652,8 @@ pub(crate) fn tcp_write_data(id: usize, buf: &[u8]) -> Result<u64> {
             match c.sock {
                 Some(h) => {
                     let sel = c.sel;
-                    let mut g = stack::STACK.enter().expect("devip: stack contended");
+                    let node = LockNode::new();
+                    let mut g = stack::STACK.lock(&node);
                     let Some(core) = g.core_mut(sel) else {
                         return Err("devip: no bound medium");
                     };
@@ -2674,7 +2705,8 @@ pub(crate) fn tcp_write_data(id: usize, buf: &[u8]) -> Result<u64> {
                     match c.sock {
                         Some(h) => {
                             let sel = c.sel;
-                            let g = stack::STACK.enter().expect("devip: stack contended");
+                            let node = LockNode::new();
+                            let g = stack::STACK.lock(&node);
                             match g.core_ref(sel) {
                                 Some(core) => {
                                     let s = core.sockets.get::<tcp::Socket>(h);
@@ -2701,7 +2733,8 @@ pub(crate) fn tcp_write_data(id: usize, buf: &[u8]) -> Result<u64> {
                     c.waiters.register(pid);
                     if let Some(h) = c.sock {
                         let sel = c.sel;
-                        let mut g = stack::STACK.enter().expect("devip: stack contended");
+                        let node = LockNode::new();
+                        let mut g = stack::STACK.lock(&node);
                         if let Some(core) = g.core_mut(sel) {
                             super::TCP_TX_SLOTS[id].arm(pid);
                             core.sockets
@@ -2738,7 +2771,8 @@ pub(crate) fn tcp_status(id: usize) -> Vec<u8> {
         match c.sock {
             Some(h) => {
                 let sel = c.sel;
-                let g = stack::STACK.enter().expect("devip: stack contended");
+                let node = LockNode::new();
+                let g = stack::STACK.lock(&node);
                 match g.core_ref(sel) {
                     Some(core) => {
                         let s = core.sockets.get::<tcp::Socket>(h);
@@ -2802,7 +2836,8 @@ pub(crate) fn tcp_gc(t: &mut conv::ConvTables) -> (bool, Vec<u64>) {
     // lives in its recorded core's SocketSet.
     let mut stale: Vec<usize> = Vec::new();
     {
-        let g = stack::STACK.enter().expect("devip: stack contended");
+        let node = LockNode::new();
+        let g = stack::STACK.lock(&node);
         for (id, c) in t.table(Proto::Tcp).iter().enumerate() {
             if let Some(h) = c.sock
                 && let Some(core) = g.core_ref(c.sel)

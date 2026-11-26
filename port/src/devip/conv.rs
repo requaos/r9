@@ -28,11 +28,17 @@
 //!
 //! LOCKING: `TABLES` is an mcslock taken in SYSCALL context only, a LEAF
 //! with ONE documented nesting — TABLES → STACK (a conv op may enter the
-//! seam's cell while holding the table; the seam NEVER takes TABLES:
+//! seam's lock while holding the table; the seam NEVER takes TABLES:
 //! drive_stack/waker bridge touch only seam statics).  Neither lock is
 //! ever held across `block()`: the read path's register → drop → block
-//! shape is the devpipe invariant (wakeup-loss-free because syscalls run
-//! IRQ-masked — the waker can only run after block() swtch'es).
+//! shape is the devpipe invariant, extended for two CPUs (SMP-03, D-22):
+//! [`WaitPids::register`] runs `crate::smp::prepare_block()` BEFORE the
+//! pid becomes wake-targetable, clearing the current proc's
+//! `wake_pending`; any concurrent wake from the other CPU landing after
+//! the insertion sets the flag, and the arch `block()` (plans 05-10/05-12)
+//! consumes it and returns immediately instead of parking.  The old
+//! single-CPU arm ("the waker can only run after block() swtch'es") died
+//! with the second CPU.
 
 #![forbid(unsafe_code)]
 
@@ -123,6 +129,12 @@ impl Proto {
 /// WR-05/17-03.  pid 0 marks an empty slot; NO allocation — the wake
 /// drain moves pids through a caller's stack buffer).  The CONV — not
 /// the waker — owns the waiter set (contract §12.2, P-C).
+///
+/// SMP-03 (D-22): [`WaitPids::register`] is the devip-wide lost-wakeup
+/// seam — EVERY blocked-reader registration in devip.rs, proto.rs and
+/// netlog.rs funnels through it under its caller's table/queue lock, so
+/// the 2-CPU `prepare_block`/`wake_pending` invariant lives in exactly
+/// one place (see `register`).
 pub(crate) struct WaitPids {
     pids: [u64; MAX_WAITERS],
     /// Registrations dropped because the set was full (WR-05's loud
@@ -136,7 +148,19 @@ impl WaitPids {
         WaitPids { pids: [0; MAX_WAITERS], dropped: 0 }
     }
 
+    /// Register `pid` as blocked on this set.  Every caller holds its
+    /// table/queue lock and blocks immediately after dropping it (the
+    /// register → drop → block shape), so the SMP-03 lost-wakeup arm
+    /// lives HERE: `crate::smp::prepare_block()` clears the current
+    /// proc's `wake_pending` BEFORE the pid becomes wake-targetable —
+    /// any wake from the other CPU landing after the insertion (or after
+    /// an earlier registration this call re-affirms) sets the flag, and
+    /// the arch `block()` (plans 05-10/05-12) consumes it instead of
+    /// parking.  The clear runs even when the insert is a no-op (the
+    /// loop re-registers before EVERY block, and a wake can have landed
+    /// since the predicate re-test).
     pub(crate) fn register(&mut self, pid: u64) {
+        crate::smp::prepare_block();
         if pid == 0 || self.pids.contains(&pid) {
             return;
         }
@@ -646,7 +670,8 @@ pub(crate) fn conv_close(p: Proto, id: usize) {
         // reaches State::Closed.  udp/icmp have no close handshake —
         // their sockets remove immediately.
         if let Some(h) = sock {
-            let mut g = super::stack::STACK.enter().expect("devip: stack contended");
+            let node = LockNode::new();
+            let mut g = super::stack::STACK.lock(&node);
             if let Some(core) = g.core_mut(sel) {
                 if p == Proto::Tcp {
                     let s = core.sockets.get_mut::<smoltcp::socket::tcp::Socket>(h);

@@ -6,21 +6,27 @@
 //! LOCKING (the load-bearing invariants — netif.rs's documentation
 //! discipline):
 //!
-//! - `STACK` is a `BusyCell<StackState>` (mcslock's non-spinning
-//!   try-enter cell) owning the stack core.  `drive_stack()` enters with
-//!   `.expect("devip: stack contended")` — fail-fast turns a locking design
-//!   error into an accounted panic instead of a wedge (the devmnt/netif
-//!   INGRESS discipline).  On this kernel the cell is provably
-//!   uncontended: syscalls run IRQ-masked on a single CPU (the Phase-4
-//!   invariant), so two drive contexts can never overlap in time.
+//! - `STACK` is a `Lock<StackState>` ranked [`LockRank::DevNetStack`] (14)
+//!   owning the stack core (SMP-03, D-22, D-26): two CPUs may contend for
+//!   a drive, so the single-CPU `BusyCell` fail-fast is gone in favor of
+//!   the ranked MCS queue.  The lock is NEVER held across `block()` (the
+//!   conv block loops register their waiter, drop every lock, then park),
+//!   so a blocked holder can never wedge a spinning contender.
+//! - `NET_WAITERS` and `PENDING_WAKES` are [`IrqSpinLock`]s ranked
+//!   [`LockRank::NetIrq`] (90): both are touched from the IRQ-side legs
+//!   (the tick sweep and the RX retire), so the lock itself masks IRQs on
+//!   entry — the single-CPU "syscalls run IRQ-masked, so the cell is
+//!   uncontended" invariant is replaced by a per-lock discipline that
+//!   holds on two CPUs (D-22).
 //! - `Interface::poll` NEVER runs in IRQ context — r9's no-alloc-in-IRQ and
 //!   mcslock-LEAF rules hold (RESEARCH Pattern 1's three verified reasons).
 //!   The RX-IRQ leg WAKES a devip waiter; the woken SYSCALL context drives.
 //! - Wake ALWAYS after guard drop: the waker bridge fires mid-poll with the
-//!   STACK cell held, and the arch wake hook takes PROC_TABLE — so the
-//!   bridge only RECORDS into `PENDING_WAKES` (`note_wake`); `drive_stack`
-//!   drains the set after the cell drops (netif.rs's "IRQ-side wake call
-//!   happens AFTER the guard drops" rule, verbatim).
+//!   STACK lock held (14 < 90, so recording into PENDING_WAKES under STACK
+//!   is a legal rank nesting), and the arch wake hook takes PROC_TABLE — so
+//!   the bridge only RECORDS into `PENDING_WAKES` (`note_wake`);
+//!   `drive_stack` drains the set after the STACK guard drops (netif.rs's
+//!   "IRQ-side wake call happens AFTER the guard drops" rule, verbatim).
 //! - No allocation in IRQ context: the tick sweep's `tick_check` touches
 //!   only atomics and the fixed-capacity waiter set; socket/frame storage
 //!   is allocated at conv/bind time in syscall context.
@@ -70,7 +76,8 @@ use smoltcp::socket::tcp;
 use smoltcp::time::Instant;
 use smoltcp::wire::HardwareAddress;
 
-use crate::mcslock::{BusyCell, Lock, LockNode};
+use crate::mcslock::{IrqSpinLock, Lock, LockNode};
+use crate::smp::LockRank;
 use crate::{MAX_WAITERS, Result};
 
 use super::phyadapt::{EtherDev, LoopbackDev, StackDev};
@@ -243,25 +250,33 @@ impl WaitSet {
 
 /// Pids blocked in devip file ops — the timer leg's wake set (the tick
 /// sweep wakes them so a SYSCALL context drives the stack; poll never runs
-/// in IRQ context).
-static NET_WAITERS: BusyCell<WaitSet> = BusyCell::new(WaitSet::new());
+/// in IRQ context).  SMP-03 (D-22, D-26): an IrqSpinLock at NetIrq (90),
+/// so a 2-CPU IRQ/syscall overlap serializes through the lock instead of
+/// tripping the old single-CPU BusyCell.
+static NET_WAITERS: IrqSpinLock<WaitSet> =
+    IrqSpinLock::new("net_waiters", LockRank::NetIrq, WaitSet::new());
 
 /// Pids whose per-socket wakers fired mid-poll.  The bridge records here
 /// (never the wake hook directly); `drive_stack` drains after the STACK
-/// guard drops.
-static PENDING_WAKES: BusyCell<WaitSet> = BusyCell::new(WaitSet::new());
+/// guard drops.  SMP-03: IrqSpinLock at NetIrq (90) — recorded mid-poll
+/// with STACK (14) held, a legal 14 < 90 nesting (D-26).
+static PENDING_WAKES: IrqSpinLock<WaitSet> =
+    IrqSpinLock::new("pending_wakes", LockRank::NetIrq, WaitSet::new());
 
 /// The waker bridge's record entry (called from `devip_waker`'s vtable,
-/// mid-poll with the STACK cell held — recording only, never the hook).
+/// mid-poll with the STACK lock held — recording only, never the hook).
 pub(crate) fn note_wake(pid: u64) {
-    PENDING_WAKES.enter().expect("devip: pending wakes contended").register(pid);
+    let node = LockNode::new();
+    PENDING_WAKES.lock(&node).register(pid);
 }
 
 /// Register a blocked devip waiter (the conv's block path registers BEFORE
-/// `block()` — register → drop → block is wakeup-loss-free because syscalls
-/// run IRQ-masked: the waker can only run after block() swtch'es).
+/// `block()`; the 2-CPU lost-wakeup discipline is `prepare_block` before
+/// registration + the arch `block()`'s `wake_pending` check — see
+/// `port/src/devip/conv.rs`'s `WaitPids::register`).
 pub fn register_net_waiter(pid: u64) {
-    NET_WAITERS.enter().expect("devip: waiters contended").register(pid);
+    let node = LockNode::new();
+    NET_WAITERS.lock(&node).register(pid);
 }
 
 /// Remove a pid from the devip waiter set — the block-loop EXIT path's
@@ -271,10 +286,11 @@ pub fn register_net_waiter(pid: u64) {
 /// subsystems (spurious kicks on every RX/tick wake) and of exited
 /// procs.  The sem machinery's own register/deregister pairing —
 /// CR-03's fix precedent — brought to devip).  Syscall context only
-/// (the loops' exit paths); the BusyCell discipline of register
-/// applies unchanged.
+/// (the loops' exit paths); the lock discipline of register applies
+/// unchanged.
 pub fn deregister_net_waiter(pid: u64) {
-    NET_WAITERS.enter().expect("devip: waiters contended").remove(pid);
+    let node = LockNode::new();
+    NET_WAITERS.lock(&node).remove(pid);
 }
 
 /// A scoped NET_WAITERS membership: registers the CURRENT pid at
@@ -346,7 +362,10 @@ pub fn tick_check(now_ticks: u64) {
         return;
     }
     let mut pids = [0u64; MAX_WAITERS];
-    let n = NET_WAITERS.enter().expect("devip: waiters contended (invariant violation)").take(&mut pids);
+    let n = {
+        let node = LockNode::new();
+        NET_WAITERS.lock(&node).take(&mut pids)
+    };
     if n == 0 {
         STACK_DEBT.store(true, Ordering::Release);
         return;
@@ -366,12 +385,15 @@ pub fn tick_check(now_ticks: u64) {
 /// next devip-dispatched op drains it via drain_debt_if_set).
 ///
 /// IRQ-context discipline (the tick_check sibling shape): NET_WAITERS is
-/// the BusyCell, provably uncontended (syscalls run IRQ-masked — the IRQ
-/// can only fire while no syscall holds the cell); no port mcslock is
-/// taken; the wake hook (PROC_TABLE) runs after the guard drops.
+/// an IrqSpinLock (NetIrq 90) — the lock's own IRQ mask/restore serializes
+/// the IRQ against any syscall holder on either CPU (D-22); no other port
+/// lock is taken; the wake hook (PROC_TABLE) runs after the guard drops.
 pub fn note_rx_pending() {
     let mut pids = [0u64; MAX_WAITERS];
-    let n = NET_WAITERS.enter().expect("devip: waiters contended (IRQ invariant violation)").take(&mut pids);
+    let n = {
+        let node = LockNode::new();
+        NET_WAITERS.lock(&node).take(&mut pids)
+    };
     if n == 0 {
         STACK_DEBT.store(true, Ordering::Release);
         return;
@@ -517,10 +539,15 @@ impl StackState {
     }
 }
 
-/// THE single-ownership cell.  See the module header for the locking
-/// invariants (uncontended by the IRQ-masked-syscall construction;
-/// fail-fast on violation).
-pub(crate) static STACK: BusyCell<StackState> = BusyCell::new(StackState { core: None, ether: None });
+/// THE single-ownership stack core lock.  SMP-03 (D-22, D-26): a ranked
+/// `Lock` at DevNetStack (14) — beneath the conv TABLES (DevMid 12)'s
+/// documented TABLES → STACK nesting and below every lock that may nest
+/// under it; never held across `block()` (matching netif.rs's leaf
+/// discipline), so two-CPU contention serializes on the MCS queue instead
+/// of tripping the old single-CPU BusyCell's fail-fast.  See the module
+/// header for the locking invariants.
+pub(crate) static STACK: Lock<StackState> =
+    Lock::new_ranked("devip_stack", LockRank::DevNetStack, StackState { core: None, ether: None });
 
 /// The explicit per-drive ingress bound (P-D — never an unbounded full
 /// `poll()`; docs.rs's own DoS warning).  The adapter queues are bounded by
@@ -550,7 +577,8 @@ pub fn set_drive_print(on: bool) {
 pub fn drive_stack() {
     let now = instant_now();
     {
-        let mut guard = STACK.enter().expect("devip: stack contended");
+        let node = LockNode::new();
+        let mut guard = STACK.lock(&node);
         let mut next: Option<u64> = None; // the earliest armed deadline across the cores
         // Destructure the guard to borrow the two slots disjointly (an
         // array of &mut to both fields would double-borrow `guard`).
@@ -617,10 +645,13 @@ pub fn drive_stack() {
             None => NET_DEADLINE.store(DEADLINE_DISARMED, Ordering::Release),
         }
     }
-    // Wake AFTER the guard drops — never the wake hook while the cell is
+    // Wake AFTER the guard drops — never the wake hook while the lock is
     // held (the hook takes PROC_TABLE).
     let mut pids = [0u64; MAX_WAITERS];
-    let n = PENDING_WAKES.enter().expect("devip: pending wakes contended").take(&mut pids);
+    let n = {
+        let node = LockNode::new();
+        PENDING_WAKES.lock(&node).take(&mut pids)
+    };
     if n > 0 && let Ok(h) = hooks() {
         (h.wake)(&pids[..n]);
     }
@@ -663,15 +694,22 @@ impl StackCore {
 #[cfg(test)]
 pub(crate) fn install_test_stack(core: StackCore) {
     {
-        let mut guard = STACK.enter().expect("devip: stack contended");
+        let node = LockNode::new();
+        let mut guard = STACK.lock(&node);
         guard.core = Some(core);
         guard.ether = None;
     }
     NET_DEADLINE.store(DEADLINE_DISARMED, Ordering::Release);
     STACK_DEBT.store(false, Ordering::Release);
     let mut scratch = [0u64; MAX_WAITERS];
-    PENDING_WAKES.enter().expect("devip: pending wakes contended").take(&mut scratch);
-    NET_WAITERS.enter().expect("devip: waiters contended").take(&mut scratch);
+    {
+        let node = LockNode::new();
+        PENDING_WAKES.lock(&node).take(&mut scratch);
+    }
+    {
+        let node = LockNode::new();
+        NET_WAITERS.lock(&node).take(&mut scratch);
+    }
 }
 
 /// Install the ETHER core for a pin (08-6 — the two-core pins: the demux
@@ -679,16 +717,19 @@ pub(crate) fn install_test_stack(core: StackCore) {
 /// install_test_stack stays.
 #[cfg(test)]
 pub(crate) fn install_test_ether(core: StackCore) {
-    let mut guard = STACK.enter().expect("devip: stack contended");
+    let node = LockNode::new();
+    let mut guard = STACK.lock(&node);
     guard.ether = Some(core);
 }
 
-/// Enter the stack cell (pin surgery on the core under the real ownership
-/// discipline — the pins drive the seam's actual cell, never a side copy).
-/// The cell is a static, so the guard's lifetime is 'static.
+/// Enter the stack lock (pin surgery on the core under the real ownership
+/// discipline — the pins drive the seam's actual lock, never a side copy).
+/// The lock is a static; the guard borrows a per-call LEAKED LockNode (the
+/// pins' pre-existing `'static` guard shape survives the BusyCell → Lock
+/// conversion — the smp.rs test_hooks leak precedent).
 #[cfg(test)]
-pub(crate) fn enter_stack() -> crate::mcslock::BusyGuard<'static, StackState> {
-    STACK.enter().expect("devip: stack contended")
+pub(crate) fn enter_stack() -> crate::mcslock::LockGuard<'static, StackState> {
+    STACK.lock(alloc::boxed::Box::leak(alloc::boxed::Box::new(LockNode::new())))
 }
 
 // ---------------------------------------------------------------------------
@@ -731,7 +772,8 @@ impl AcceptPool {
     /// On a mid-allocation failure the partial pool is torn down — no
     /// half-announced conv.
     pub(crate) fn announce(depth: usize, port: u16, sel: CoreSel) -> Result<AcceptPool> {
-        let mut guard = STACK.enter().expect("devip: stack contended");
+        let node = LockNode::new();
+        let mut guard = STACK.lock(&node);
         let core = guard.core_mut(sel).ok_or("devip: no bound medium")?;
         let mut members = Vec::with_capacity(depth);
         for _ in 0..depth {
@@ -755,7 +797,8 @@ impl AcceptPool {
     /// (they can never materialize; the slot returns to the pool via the
     /// caller's refill).
     pub fn take_connected(&mut self) -> Option<SocketHandle> {
-        let mut guard = STACK.enter().expect("devip: stack contended");
+        let node = LockNode::new();
+        let mut guard = STACK.lock(&node);
         let core = guard.core_mut(self.sel)?;
         self.prune_closed(core);
         let pos = self.members.iter().position(|&h| {
@@ -769,7 +812,8 @@ impl AcceptPool {
     /// pruning dead members — a SYN RSTed mid-handshake leaves a Closed
     /// socket that must not count against the depth).
     pub fn refill(&mut self) -> Result<()> {
-        let mut guard = STACK.enter().expect("devip: stack contended");
+        let node = LockNode::new();
+        let mut guard = STACK.lock(&node);
         let core = guard.core_mut(self.sel).ok_or("devip: no bound medium")?;
         self.prune_closed(core);
         while self.members.len() < self.depth {
@@ -802,7 +846,8 @@ impl AcceptPool {
     /// convs; the abort-instead is a recorded mapping corner — an unpopped
     /// member has no conv to carry a graceful close.)
     pub fn teardown(mut self) {
-        let mut guard = STACK.enter().expect("devip: stack contended");
+        let node = LockNode::new();
+        let mut guard = STACK.lock(&node);
         if let Some(core) = guard.core_mut(self.sel) {
             for h in self.members.drain(..) {
                 core.sockets.get_mut::<tcp::Socket>(h).abort();
@@ -850,7 +895,8 @@ impl AcceptPool {
     /// Count of members still in Listen (pin assertions).
     #[cfg(test)]
     pub(crate) fn listening_count(&self) -> usize {
-        let mut guard = STACK.enter().expect("devip: stack contended");
+        let node = LockNode::new();
+        let mut guard = STACK.lock(&node);
         let Some(core) = guard.core_mut(self.sel) else { return 0 };
         self.members
             .iter()
