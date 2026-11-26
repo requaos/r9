@@ -20,7 +20,8 @@
 //!   may not name either key and reach them through `port`.
 //! - R5 (RESEARCH C3, F3): `rust-toolchain.toml` lists no `miri`
 //!   component, and `.cargo/config.toml` names neither soft-backend cfg.
-//! - R6 (D-11, D-19): both crates opt into the workspace lints; `roaring`
+//! - R6 (D-11, D-19; Phase 5 CORR-05): `crypto/`, `ds/` and both compiled
+//!   arch crates (`aarch64`, `x86_64`) opt into the workspace lints; `roaring`
 //!   lives only under `ds`'s `[dev-dependencies]` and never in `crypto`.
 //!
 //! One failure lists every problem with its file and line, prefixed
@@ -436,17 +437,23 @@ fn has_lints_opt_in(text: &str) -> bool {
     false
 }
 
-/// R6 (D-11, D-19): both crates opt into the workspace lints; `roaring`
+/// R6 (D-11, D-19; Phase 5 CORR-05): `crypto/`, `ds/` and both compiled arch
+/// crates (`aarch64`, `x86_64`) opt into the workspace lints; `roaring`
 /// lives only under `ds`'s `[dev-dependencies]` and never in `crypto`.
 fn check_lints_and_roaring(workspace: &Path, problems: &mut Vec<String>) {
-    for display in ["crypto/Cargo.toml", "ds/Cargo.toml"] {
+    for display in [
+        "crypto/Cargo.toml",
+        "ds/Cargo.toml",
+        "aarch64/Cargo.toml",
+        "x86_64/Cargo.toml",
+    ] {
         let Some(text) = read_file(&workspace.join(display), display, problems) else {
             continue;
         };
         if !has_lints_opt_in(&text) {
             problems.push(format!(
-                "{display}: missing `[lints]` with `workspace = true` (D-11): both crates opt into \
-                 the workspace lints (undocumented_unsafe_blocks = deny)"
+                "{display}: missing `[lints]` with `workspace = true` (D-11, CORR-05): the gated \
+                 crates opt into the workspace lints (undocumented_unsafe_blocks = deny)"
             ));
         }
     }
@@ -551,10 +558,19 @@ mod tests {
         );
         write(&dir, "ds/src/tpht/mod.rs", "//! tpht\n");
         for kernel in ["port", "aarch64", "x86_64", "riscv64"] {
+            // The two compiled arch crates carry the R6 opt-in (CORR-05);
+            // port and riscv64 are outside R6's scan.
+            let lints = if matches!(kernel, "aarch64" | "x86_64") {
+                "\n[lints]\nworkspace = true\n"
+            } else {
+                ""
+            };
             write(
                 &dir,
                 &format!("{kernel}/Cargo.toml"),
-                "[package]\nname = \"x\"\n\n[dependencies]\nport = { path = \"../port\" }\n",
+                &format!(
+                    "[package]\nname = \"x\"\n\n[dependencies]\nport = {{ path = \"../port\" }}\n{lints}"
+                ),
             );
         }
         write(
@@ -922,5 +938,25 @@ mod tests {
         assert!(text.contains("ds/Cargo.toml"), "names the manifest: {text}");
         assert!(text.contains("lints"), "names the missing table: {text}");
         let _ = fs::remove_dir_all(&dir);
+
+        // CORR-05: R6 covers both compiled arch crates — dropping the opt-in
+        // from either arch manifest must fail the contract.
+        for arch in ["aarch64", "x86_64"] {
+            let dir = fixture(&format!("lints-{arch}"));
+            write(
+                &dir,
+                &format!("{arch}/Cargo.toml"),
+                "[package]\nname = \"x\"\n\n[dependencies]\nport = { path = \"../port\" }\n",
+            );
+            let text = check(&dir)
+                .expect_err("an arch crate without [lints] workspace = true must be rejected")
+                .to_string();
+            assert!(
+                text.contains(&format!("{arch}/Cargo.toml")),
+                "names the arch manifest: {text}"
+            );
+            assert!(text.contains("lints"), "names the missing table: {text}");
+            let _ = fs::remove_dir_all(&dir);
+        }
     }
 }
