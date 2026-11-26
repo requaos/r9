@@ -1,51 +1,48 @@
 #[cfg(not(test))]
 mod global {
+    use core::cell::SyncUnsafeCell;
     use core::mem;
-    use core::sync::atomic::AtomicPtr;
     use port::allocator::{
         Block, BumpAlloc, QuickFit, global::GlobalHeap, global::GlobalQuickAlloc,
     };
 
-    #[global_allocator]
-    pub(crate) static GLOBAL_ALLOCATOR: GlobalQuickAlloc = GlobalQuickAlloc(AtomicPtr::new({
-        static mut HEAP: GlobalHeap = GlobalHeap::new();
+    // The heap arena and the QuickFit state live in SyncUnsafeCell
+    // statics (never `static mut`, matching aarch64).  GlobalQuickAlloc's
+    // IrqSpinLock (port::globalalloc, LockRank::HeapAlloc) is the sole
+    // synchronized access path; the cells' pointers are published into it
+    // here at static-init time, before any allocation can run (SMP-03).
+    static HEAP: SyncUnsafeCell<GlobalHeap> = SyncUnsafeCell::new(GlobalHeap::new());
+    static ALLOC: SyncUnsafeCell<QuickFit> = SyncUnsafeCell::new(QuickFit::new(
         // SAFETY: the Block spans HEAP — a static arena alive for the
         // kernel's whole lifetime — from its base for its full size, so
         // the pointer is valid and exclusively owned (this one-time
         // static initializer runs before any allocation exists) and the
         // base is aligned to GlobalHeap's own alignment by the static's
         // type.
-        static mut ALLOC: QuickFit = QuickFit::new(BumpAlloc::new(unsafe {
-            Block::new_from_raw_parts((&raw mut HEAP).cast(), mem::size_of::<GlobalHeap>())
-        }));
-        &raw mut ALLOC
-    }));
+        BumpAlloc::new(unsafe {
+            Block::new_from_raw_parts(HEAP.get().cast(), mem::size_of::<GlobalHeap>())
+        }),
+    ));
+
+    #[global_allocator]
+    pub(crate) static GLOBAL_ALLOCATOR: GlobalQuickAlloc = GlobalQuickAlloc::new(ALLOC.get());
 
     /// Read-only heap-arena stats off the live global allocator (the
     /// services-venue oom hunt's probe, 15-03): (bump-cursor bytes,
-    /// arena size).  Single CPU this era; a null swap window (an
-    /// allocation in flight on THIS context) cannot happen — this runs
-    /// between syscalls.
+    /// arena size).  Serialized under the heap's IrqSpinLock and
+    /// allocating nothing (SMP-03).
     pub(crate) fn heap_stats() -> (usize, usize) {
-        // SAFETY: read-only access for the diagnostic print path; the
-        // pointer is the same static the global allocator serves.
-        unsafe {
-            let a = GLOBAL_ALLOCATOR.0.load(core::sync::atomic::Ordering::Relaxed);
-            assert!(!a.is_null(), "global allocator is nil");
-            (*a).arena_stats()
-        }
+        GLOBAL_ALLOCATOR.arena_stats()
     }
 
     /// The live/pooled block census (17-02, the churn leak hunt): which
     /// size classes are genuinely outstanding vs parked on the free
-    /// lists — the leak-vs-fragmentation fingerprint.
+    /// lists — the leak-vs-fragmentation fingerprint.  The tally runs
+    /// under the heap lock into fixed stack arrays and the Vec copies
+    /// happen after it is released, so the census never allocates under
+    /// the lock (SMP-03).
     pub(crate) fn heap_census() -> (alloc::vec::Vec<(usize, usize)>, alloc::vec::Vec<(usize, usize)>) {
-        // SAFETY: read-only access, as heap_stats.
-        unsafe {
-            let a = GLOBAL_ALLOCATOR.0.load(core::sync::atomic::Ordering::Relaxed);
-            assert!(!a.is_null(), "global allocator is nil");
-            (*a).split_census()
-        }
+        GLOBAL_ALLOCATOR.split_census()
     }
 }
 

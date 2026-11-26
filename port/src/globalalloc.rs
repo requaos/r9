@@ -8,7 +8,7 @@
 //!   caller contract), with the byte copy homed here too.
 //! - `unsafe impl Sync for QuickFit` — the SyncUnsafeCell static's proof.
 //! - `GlobalHeap` / `GlobalQuickAlloc` / the `GlobalAlloc` impl — the
-//!   trait's unsafe fn surface + the with_allocator swap trick.
+//!   trait's unsafe fn surface + the IrqSpinLock guard discipline.
 //!
 //! `port::allocator` itself is unsafe-free and carries
 //! `#[forbid(unsafe_code)]` (lib.rs's regression lock).
@@ -36,9 +36,11 @@ impl Block {
 
 // SAFETY: QuickFit's internals are now plain data (the index/arena model —
 // no raw-pointer fields); the only sharing path is GlobalQuickAlloc's
-// AtomicPtr swap discipline (one borrower at a time, single CPU this era).
+// IrqSpinLock, which serializes every access across all cpus with IRQs
+// masked (SMP-03).
 // (The impl lives here so port::allocator stays forbid(unsafe_code)-clean;
-// the SyncUnsafeCell<QuickFit> static in aarch64/allocator.rs needs it.)
+// the SyncUnsafeCell<QuickFit> statics in the arch allocator.rs modules
+// need it.)
 unsafe impl Sync for QuickFit {}
 
 /// Copy `n` live bytes from `src` to `dst` — the realloc byte move, homed
@@ -135,9 +137,9 @@ unsafe impl alloc::alloc::Allocator for BumpAlloc {
 #[cfg(not(test))]
 mod global {
     use crate::allocator::QuickFit;
+    use crate::mcslock::{IrqSpinLock, LockNode};
+    use crate::smp::LockRank;
     use alloc::alloc::{GlobalAlloc, Layout};
-    use core::ptr;
-    use core::sync::atomic::{AtomicPtr, Ordering};
 
     // 32 MiB (15-03's services-venue raise, measured): the 4 MiB
     // era-sized for the 36 KB leg-1 image + a handful of procs; the
@@ -166,29 +168,81 @@ mod global {
         }
     }
 
-    /// GlobalQuickAlloc is a wrapper around a QuickFit over a
-    /// GlobalHeap that uses interior mutability to implement
-    /// the GlobalAlloc trait.
-    pub struct GlobalQuickAlloc(pub AtomicPtr<QuickFit>);
+    /// GlobalQuickAlloc is a wrapper around a QuickFit over a GlobalHeap
+    /// guarded by an IRQ-safe ranked spin lock (SMP-03, D-22): the
+    /// single-CPU `AtomicPtr::swap` trick it replaces panicked on a
+    /// concurrent second-CPU allocation.  The `IrqSpinLock` at
+    /// `LockRank::HeapAlloc` (80) serializes malloc/free/realloc/stats/
+    /// census across all cpus with IRQs masked; 80 sits above every lock
+    /// that may allocate while held and below only the never-allocating
+    /// NetIrq/Console ranks, and the arena is the static GlobalHeap, so
+    /// the heap never reaches back into the page allocator — no
+    /// PageAlloc <-> HeapAlloc cycle can exist (05-RESEARCH §3.2).
+    pub struct GlobalQuickAlloc {
+        inner: IrqSpinLock<*mut QuickFit>,
+    }
     impl GlobalQuickAlloc {
+        /// `ptr` names the arena-owned QuickFit for the kernel's whole
+        /// lifetime (the arch allocator's static); const-constructible so
+        /// the global-allocator static needs no runtime init.
+        pub const fn new(ptr: *mut QuickFit) -> GlobalQuickAlloc {
+            GlobalQuickAlloc { inner: IrqSpinLock::new("heap_alloc", LockRank::HeapAlloc, ptr) }
+        }
+
         fn with_allocator<F, R>(&self, thunk: F) -> R
         where
             F: FnOnce(&mut QuickFit) -> R,
         {
-            let a = self.0.swap(ptr::null_mut(), Ordering::Relaxed);
-            assert!(!a.is_null(), "global allocator is nil");
-            // SAFETY: the swap gives this context EXCLUSIVE ownership of
-            // the allocator for the thunk's duration (any concurrent
-            // caller sees nil and panics); single CPU this era.
-            let r = thunk(unsafe { &mut *a });
-            self.0.swap(a, Ordering::Relaxed);
+            let node = LockNode::new();
+            let guard = self.inner.lock(&node);
+            let ptr: *mut QuickFit = *guard;
+            // SAFETY: the IrqSpinLock guard held here gives this context
+            // exclusive, IRQ-masked access to the QuickFit across ALL
+            // cpus (SMP-03); ptr names the arena-owned QuickFit published
+            // by GlobalQuickAlloc::new, live for the kernel's lifetime.
+            // The thunk must not allocate (re-entry deadlocks; the debug
+            // rank checker panics on it first, HeapAlloc <= HeapAlloc).
+            let r = thunk(unsafe { &mut *ptr });
+            drop(guard);
             r
+        }
+
+        /// Read-only heap-arena stats — (bump-cursor bytes, arena size) —
+        /// serialized under the heap lock; allocates nothing (SMP-03).
+        pub fn arena_stats(&self) -> (usize, usize) {
+            self.with_allocator(|quick| quick.arena_stats())
+        }
+
+        /// The live/pooled block census.  The tally runs under the lock
+        /// into fixed-capacity stack arrays (no allocation, so no
+        /// re-entrant self-deadlock); the Vec copies happen here, after
+        /// the guard has dropped (SMP-03).
+        pub fn split_census(
+            &self,
+        ) -> (alloc::vec::Vec<(usize, usize)>, alloc::vec::Vec<(usize, usize)>) {
+            let snap = self.with_allocator(|quick| quick.split_census_snapshot());
+            let mut live = alloc::vec::Vec::with_capacity(
+                snap.live_len + usize::from(snap.live_overflow > 0),
+            );
+            live.extend_from_slice(&snap.live[..snap.live_len]);
+            if snap.live_overflow > 0 {
+                live.push((usize::MAX, snap.live_overflow));
+            }
+            let mut pooled = alloc::vec::Vec::with_capacity(
+                snap.pooled_len + usize::from(snap.pooled_overflow > 0),
+            );
+            pooled.extend_from_slice(&snap.pooled[..snap.pooled_len]);
+            if snap.pooled_overflow > 0 {
+                pooled.push((usize::MAX, snap.pooled_overflow));
+            }
+            (live, pooled)
         }
     }
 
-    // SAFETY: every trait method runs under with_allocator's exclusive
-    // borrow; malloc/free/realloc's own contracts are their docs.  The
-    // trait's caller contract (valid layouts, owned blocks) is the Rust
+    // SAFETY: every trait method runs under with_allocator's exclusive,
+    // IRQ-masked borrow (the IrqSpinLock discipline, SMP-03);
+    // malloc/free/realloc's own contracts are their docs.  The trait's
+    // caller contract (valid layouts, owned blocks) is the Rust
     // allocation protocol.
     unsafe impl GlobalAlloc for GlobalQuickAlloc {
         unsafe fn alloc(&self, layout: Layout) -> *mut u8 {

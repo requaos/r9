@@ -248,6 +248,8 @@ impl<T> Lock<T> {
         LockGuard {
             lock: &self.lock,
             node,
+            // SAFETY: as above — the lock is held, so the data borrow is
+            // exclusive for the guard's lifetime.
             data: unsafe { &mut *self.data.get() },
             #[cfg(debug_assertions)]
             rank: self.rank,
@@ -286,6 +288,8 @@ impl<T> Lock<T> {
         Some(LockGuard {
             lock: &self.lock,
             node,
+            // SAFETY: as above — the lock is held, so the data borrow is
+            // exclusive for the guard's lifetime.
             data: unsafe { &mut *self.data.get() },
             #[cfg(debug_assertions)]
             rank: self.rank,
@@ -413,6 +417,8 @@ impl<T: ?Sized> IrqSpinLock<T> {
         IrqLockGuard {
             lock: &self.lock,
             node,
+            // SAFETY: as above — the lock is held, so the data borrow is
+            // exclusive for the guard's lifetime.
             data: unsafe { &mut *self.data.get() },
             saved_irq,
             #[cfg(debug_assertions)]
@@ -445,6 +451,8 @@ impl<T: ?Sized> IrqSpinLock<T> {
         Some(IrqLockGuard {
             lock: &self.lock,
             node,
+            // SAFETY: as above — the lock is held, so the data borrow is
+            // exclusive for the guard's lifetime.
             data: unsafe { &mut *self.data.get() },
             saved_irq,
             #[cfg(debug_assertions)]
