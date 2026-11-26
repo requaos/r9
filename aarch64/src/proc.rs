@@ -1671,19 +1671,22 @@ pub fn activate_first(p: &mut Proc) {
 }
 
 /// 20-09 (dev_churn, the x86_64 17-02 twin): seed a freshly built
-/// proc's KERNEL entry — the SCHED_CONTEXT seeding shape re-keyed onto
-/// a proc.  The context resume `ret`s into `entry` on the proc's own
+/// proc's KERNEL entry — the per-CPU sched_context seeding shape re-keyed
+/// onto a proc.  The context resume `ret`s into `entry` on the proc's own
 /// kstack (sp 16 bytes under the top, AAPCS64-aligned); no TrapFrame,
 /// never EL0 — the churn driver's orchestrator context.  aarch64's
 /// pick_next resumes a Ready proc through swtch only when
 /// blocked_in_kernel is set (everything else trap_returns into its
 /// frame, and new_user_proc leaves that frame null), so the flag is
-/// what routes the driver's first pick to `entry`.
+/// what routes the driver's first pick to `entry`.  SMP-11: the seed is
+/// the moment the proc becomes schedulable, so it enters the run queue
+/// here (Ready ⟺ enqueued).
 #[cfg(dev_churn)]
 pub(crate) fn seed_kernel_context(p: &mut Proc, entry: fn() -> !) {
     p.context.set_return(entry as *const () as u64);
     p.context.set_stack_pointer(p.kstack_top as u64 - 16);
     p.blocked_in_kernel = true;
+    enqueue_ready(p.pid);
 }
 
 /// 20-09 (dev_churn): park the boot context into the scheduler loop —
