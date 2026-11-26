@@ -33,6 +33,12 @@ mod exec;
 mod fpu;
 #[allow(dead_code)]
 mod proc;
+// SMP bring-up (SMP-01/02/07, 05-11): the MADT-driven INIT-SIPI-SIPI AP
+// startup, per-CPU Mach allocation, LAPIC IPI senders and the SmpArch
+// registration.  Compiled and checked immediately; start_aps and
+// register_port_smp are called by 05-12's main9 wiring.
+#[allow(dead_code)]
+mod smp;
 #[allow(dead_code)]
 mod usermem;
 #[allow(dead_code)]
@@ -46,6 +52,8 @@ extern crate alloc;
 core::arch::global_asm!(include_str!("l.S"), options(att_syntax));
 
 use port::println;
+
+use core::sync::atomic::Ordering;
 
 use crate::platform::q35::mb2;
 
@@ -390,6 +398,28 @@ fn halt() -> ! {
         // is exactly halt()'s `-> !` contract.  No operands, no memory
         // touched.
         unsafe { core::arch::asm!("cli; hlt") };
+    }
+}
+
+/// Temporary AP entry stub (05-11, SMP-01): the SIPI trampoline jumps
+/// here with this CPU's Mach VA and logical id.  Marks the AP's Mach
+/// online — the `start_aps` handshake the BSP polls — then parks.
+/// Plan 05-12 Task 2 replaces this stub IN PLACE (same file, same
+/// signature, zero duplicate-symbol risk) with the full bring-up: GS
+/// base arming, the AP's own GDT/TSS/IDT, LAPIC + SYSCALL MSRs, FPU,
+/// and the sched_loop entry.
+#[cfg(not(test))]
+#[unsafe(no_mangle)]
+pub extern "C" fn ap_main(mach_va: usize, cpu_id: usize) -> ! {
+    // SAFETY: mach_va names this CPU's live, zeroed-initialized Mach
+    // (start_aps allocated and identity-initialized it before the
+    // INIT-SIPI sequence); the online store is the bring-up handshake.
+    unsafe { (*(mach_va as *const dat::Mach)).online.store(true, Ordering::Release) };
+    let _ = cpu_id;
+    loop {
+        // SAFETY: cli;hlt parks the AP until an NMI (none is armed this
+        // era) — the parking stub 05-12 replaces.  No memory touched.
+        unsafe { core::arch::asm!("cli", "hlt", options(att_syntax, nostack)) };
     }
 }
 

@@ -30,8 +30,9 @@ use crate::trap;
 /// ONLY inside the CPUID.1.ECX[24]-gated mode (init's arm and tick's
 /// re-arm); an unconditional write would fault or hang under TCG,
 /// silently making the gates KVM-only (the prohibition, RESEARCH
-/// Pitfall 2).
-const MSR_IA32_TSC_DEADLINE: u32 = 0x6E0;
+/// Pitfall 2).  pub(crate): lapic.rs's `init_ap` arms the AP's deadline
+/// from the BSP's published calibration (SMP-01).
+pub(crate) const MSR_IA32_TSC_DEADLINE: u32 = 0x6E0;
 
 /// Tick rate: 100 Hz (the 10 ms slice — generous enough that TCG's
 /// slower tick paths still reach the gate's marker counts inside the
@@ -78,6 +79,7 @@ pub fn tsc_delta(freq_hz: u64, duration_ms: u64) -> Option<u64> {
 
 /// The armed timer's facts, published once at init and read lock-free
 /// from tick context thereafter.
+#[derive(Clone, Copy)]
 pub struct TimerState {
     pub mode: TimerMode,
     /// TSC-deadline: TSC ticks per tick interval.
@@ -124,6 +126,18 @@ pub fn ticks() -> u64 {
 /// before sti), read lock-free from tick context thereafter — the gic/
 /// publish-once discipline.
 static STATE: SyncUnsafeCell<Option<TimerState>> = SyncUnsafeCell::new(None);
+
+/// The published armed state (SMP-01): the AP LAPIC-timer arming input
+/// — an AP never re-runs the PIT/TSC calibration; it reuses the BSP's
+/// measured state verbatim.  None before init (an AP then arms untimed
+/// and the BSP's init already printed the failure loudly).
+#[allow(dead_code)] // consumed by lapic::init_ap (05-12's ap_main)
+pub(crate) fn state() -> Option<TimerState> {
+    // SAFETY: STATE's write-once discipline — published at init inside
+    // the arming window (IF=0), read lock-free here; TimerState is Copy,
+    // so the read returns a value, never a torn reference.
+    (unsafe { &*STATE.get() }).as_ref().copied()
+}
 
 /// Bring the tick source up: probe CPUID once, resolve the TSC
 /// frequency at runtime, program the timer LVT per mode, arm, publish.

@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 7
+open_count: 8
 waived_count: 0
 fixed_count: 5
-total_count: 12
-last_updated: 2026-11-26T16:05:00.000Z
+total_count: 13
+last_updated: 2026-11-26T16:57:27.518Z
 ---
 
 # Broken Windows Ledger
@@ -27,6 +27,7 @@ last_updated: 2026-11-26T16:05:00.000Z
 | 10 | 03 | deviation | flake.nix |  | Plan 03-02 Task 2 appends $R9_MIRI_TOOLCHAIN/bin to PATH in the devshell shellHook (never prepends, so the pinned cargo/rustc are not shadowed) so the plan's literal MIRI-VERSION verify finds cargo-miri; recorded in 03-02-SUMMARY deviations | open |  | 2026-11-24T14:32:01.421Z |  |
 | 11 | 3 | deviation | .planning/phases/03-guide-phase-1-crypto-and-ds-foundations/evidence/closing-suite.md | 112 | Miri over the 120-second budget at phase end: MIRI-TIME closing-run-1 350 and closing-run-2 389 for 64 seeds over 29 tpht tests; no fix permitted in plan 03-10 (no source edits), reported for phase-end review | open |  | 2026-11-24T17:11:56.508Z |  |
 | 12 | 05 | unmet-truth | aarch64/src/proc.rs |  | 05-22: aarch64 -smp 2 smoke under HVF (gicv3) passes only ~50% — fork/exec-sweep corruption (wire garbage / mid-sweep stall); TCG gicv2 -smp 2 twice-consecutive green, R9_SMP=1 solid. FIXED by 339036f (the HVF kstack-handoff debug session): reschedule published a preempted proc Ready+enqueued while the CPU still ran on its kernel stack (a sibling could take traps on the same stack), and the secondary's sched loop ran IRQ-unmasked so an IRQ in the pick_next→trap_return handoff restored a scheduler-stack EL1h frame. Proc::on_cpu + the sched-loop release handoff close both; HVF -smp 2 smoke 8/8 consecutive after the fix (was 6/13), tripwire in pick_next guards the invariant | fixed |  | 2026-11-26T14:44:09.375Z | 2026-11-26T16:05:00.000Z |
+| 13 | 05 | unrun-verify | x86_64/src/platform/q35/acpi.rs |  | 05-11: MADT/lapic host pins compile-proven by error-diff on aarch64 dev host (x86_64 crate test harness is x86_64-host-only); assertion-level run lands on CI x86_64 runners | open |  | 2026-11-26T16:57:27.518Z |  |
 
 ````json
 [
@@ -184,6 +185,19 @@ last_updated: 2026-11-26T16:05:00.000Z
     "reason": "",
     "recorded_at": "2026-11-26T14:44:09.375Z",
     "resolved_at": "2026-11-26T16:05:00.000Z",
+    "milestone": "v3.1"
+  },
+  {
+    "id": 13,
+    "kind": "unrun-verify",
+    "phase": "05",
+    "file": "x86_64/src/platform/q35/acpi.rs",
+    "line": null,
+    "description": "05-11: MADT/lapic host pins compile-proven by error-diff on aarch64 dev host (x86_64 crate test harness is x86_64-host-only); assertion-level run lands on CI x86_64 runners",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-26T16:57:27.518Z",
+    "resolved_at": null,
     "milestone": "v3.1"
   }
 ]

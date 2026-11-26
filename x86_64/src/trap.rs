@@ -217,23 +217,26 @@ pub unsafe extern "C" fn intr_stubs() {
 /// To address this, when we receive one of these traps, we need
 /// to decide whether to invoke `SWAPGS` by testing something
 /// more reliable than the code segment selector on the stack.
-/// Fortunately on R9, the Mach is at a fixed virtual address
-/// for each CPU, so we can look at `%GSBASE` itself to see if
-/// it is already pointing to our `Mach` — through the
+/// On R9 every kernel `Mach` lives at a canonical kernel-half
+/// virtual address — CPU 0's at `dat::KMACH`, each AP's at its own
+/// distinct kernel-half VA (SMP-02) — so the discriminator is the
+/// ADDRESS CLASS, not one constant: bit 63 of `IA32_GS_BASE` is 1
+/// exactly when it names a kernel `Mach`, and 0 for every canonical
+/// user GS base.  We look at `%GSBASE` itself — through the
 /// IA32_GS_BASE MSR, never `RDGSBASE`: that instruction needs
 /// CR4.FSGSBASE, which the boot CPU never sets (l.S: TCG's
 /// qemu64 cannot), so it raised #UD inside this entry and every
 /// #DB, NMI, #BP and #DF ended in a kernel `trap UD` halt — a
-/// user single-step or int3 included.  Is the test safe?
-/// There are two cases: if it is not equal
-/// to our Mach, then we need to `SWAPGS`.  If it is pointing
-/// to our Mach, then one of two things has happened: either
-/// we have already executed `SWAPGS`, and whatever userspace
-/// had set `%GSBASE` to is in `MSR_KERNEL_GS_BASE`, or we have
-/// not executed `SWAPGS` and userspace had explicitly set
-/// `%GSBASE` to the address of our `Mach`.  In the latter case,
-/// `MSR_KERNEL_GS_BASE` will still hold the address of our
-/// `Mach`, and so whether or not we run `SWAPGS` is moot.
+/// user single-step or int3 included.  Is the sign test safe?
+/// Two cases: if the sign bit is clear (a user GS base), we need
+/// to `SWAPGS`.  If it is set (a kernel Mach base), then one of two
+/// things has happened: either we have already executed `SWAPGS`,
+/// and whatever userspace had set `%GSBASE` to is in
+/// `MSR_KERNEL_GS_BASE`, or we have not executed `SWAPGS` and
+/// userspace had explicitly set `%GSBASE` to a kernel-half address.
+/// In the latter case, `MSR_KERNEL_GS_BASE` will still hold the
+/// address of our `Mach`, and so whether or not we run `SWAPGS` is
+/// moot.
 ///
 /// There is also a separate, related, complication we must
 /// handle in the return path.  When returning to userspace, we
@@ -293,8 +296,13 @@ pub unsafe extern "C" fn intr_stubs() {
 pub unsafe extern "C" fn intrspecial() {
     naked_asm!(r#"
         // GS base = IA32_GS_BASE (rdmsr: EDX:EAX, upper halves
-        // zeroed); compare with this CPU's Mach.  The pops leave
-        // the flags alone for the je.
+        // zeroed); the canonical kernel-half test replaces the old
+        // hardcoded KMACH compare (SMP-02, T-05-20): EVERY kernel Mach
+        // VA is a canonical high-half address with bit 63 = 1 (CPU 1's
+        // Mach lives at a distinct VA from CPU 0's KMACH — a constant
+        // compare would never recognize it), and every user GS base is
+        // a canonical low-half address with bit 63 = 0.  testq sets SF
+        // from bit 63; the pops leave the flags alone for the js.
         pushq %rax;
         pushq %rcx;
         pushq %rdx;
@@ -302,12 +310,11 @@ pub unsafe extern "C" fn intrspecial() {
         rdmsr;
         shlq $32, %rdx;
         orq %rdx, %rax;
-        movabsq ${KMACH}, %rdx;
-        cmpq %rdx, %rax;
+        testq %rax, %rax;
         popq %rdx;
         popq %rcx;
         popq %rax;
-        je 1f;
+        js 1f;
         swapgs;
         // No witness bit: the return side re-tests the saved CS word
         // itself (the donor's CMPW discipline — a stale upper byte in
@@ -316,7 +323,6 @@ pub unsafe extern "C" fn intrspecial() {
         pushq ${intrcommon};
         retq;
         "#,
-        KMACH = const dat::KMACH,
         MSR_GS_BASE = const cpu::MSR_GS_BASE,
         intrcommon = sym intrcommon,
         options(att_syntax))
@@ -899,6 +905,19 @@ fn dispatch_irq(vector: u8) {
     }
     match vector {
         TIMER_VECTOR => crate::platform::q35::timer::tick(),
+        // 0xF0 (smp::TLB_SHOOTDOWN_VECTOR, SMP-07): the TLB shootdown
+        // IPI — service the pending request (the local flush + the
+        // generation ack) through the port coordinator.  The shared
+        // tail's EOI retires the line.
+        crate::smp::TLB_SHOOTDOWN_VECTOR => port::smp::service_shootdown_ipi(),
+        // 0xF1 (smp::RESCHED_VECTOR, SMP-07): the reschedule IPI — a
+        // waker enqueued onto this CPU's run queue (possibly while it
+        // sat in the sched loop's idle hlt).  preempt() re-considers a
+        // Running proc (an IRQ-from-ring-3 interruption); an idle
+        // CPU's current is never Running, so the arm is a no-op there
+        // and its loop re-scans after the return.  The shared tail's
+        // EOI retires the line.
+        crate::smp::RESCHED_VECTOR => crate::proc::preempt(),
         // The virtio-net device line (dev_ether builds): guarded on the
         // vector the bind published — zero hardcoded vectors (the
         // aarch64 virtio_irq_intid guard re-keyed; the discovery cell

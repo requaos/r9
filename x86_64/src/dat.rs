@@ -1,7 +1,9 @@
 pub use crate::seg::{Gdt, Idt, Tss};
 
+use core::cell::SyncUnsafeCell;
+use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64};
+
 use bitstruct::bitstruct;
-use port::dat as portdat;
 use zerocopy::FromZeros;
 
 pub const KCPUZERO: usize = 0xffff_ff00_0000_0000;
@@ -334,29 +336,68 @@ impl Label {
 
 /// The machine structure, which describes a CPU.
 ///
-/// The small stacks, for specific exceptions, come first and
-/// occupy the first 64KiB of the Mach.  These have guard pages
-/// immediately _after_ their data areas, which serve as guards
-/// for the subsequent data.  Since the Mach is mapped in a
-/// per-CPU portion of virtual address space that is offset from
-/// a 2MiB boundary, we know that the first stack is de facto
-/// guarded.
+/// The per-CPU identity block comes FIRST (SMP-02): `me` MUST sit at
+/// offset 0 — every kernel CPU's IA32_GS_BASE names its own Mach, so
+/// `%gs:0` reads the self-pointer word and mach_ptr()/this_mach()
+/// resolve the calling CPU's Mach.  The CPU identity (cpu_id/apic_id),
+/// the online flag the BSP polls during INIT-SIPI-SIPI bring-up, the
+/// shootdown flag, and the trap/scheduler slots (cur_frame/
+/// current_proc/sched_context/sched_seeded — proc.rs's single-CPU
+/// statics migrate to these in 05-12) ride beside it, before the
+/// stacks.
+///
+/// The small stacks, for specific exceptions, come next.  These have
+/// guard pages immediately _after_ their data areas, which serve as
+/// guards for the subsequent data.  Since the Mach is mapped in a
+/// per-CPU portion of virtual address space that is offset from a
+/// 2MiB boundary, we know that the first stack is de facto guarded.
 ///
 /// The main kstack for the scheduler comes next, and occupies
-/// the next 64KiB.  It is guarded by the NMI stack's guard page.
-///
-/// Thus, stacks and their guards take up the first 128KiB of
-/// virtual space in the Mach.
+/// 64KiB.  It is guarded by the NMI stack's guard page.
 ///
 /// Next, we have the smaller Mach data itself; this includes the
 /// space required for the structures used in the pseudo-recursive
 /// page table implementation.
 ///
 /// Warning: the layout of this structure is known to assembly
-/// language.
-#[derive(FromZeros)]
+/// language (l.S's stack-top arithmetic, the trap entry's gs-relative
+/// scratch/rsp0 reads) — every consumer computes offsets from the
+/// struct, never hand-pinned numbers; the const asserts below pin the
+/// two offsets the boot contract cares about.
+///
+/// No `FromZeros` derive: `SyncUnsafeCell` does not implement it, and
+/// no caller needs the bound — the BSP's Mach is l.S-zeroed memory
+/// initialized by `Mach::init`, and an AP's Mach comes from
+/// `alloc_zeroed` (every field is zero-valid by construction: atomics,
+/// raw pointers, and integer arrays) plus `init_ap_identity`.
 #[repr(C, align(65536))]
 pub struct Mach {
+    /// %gs:0 — the per-CPU self-reference word (SMP-02).  Every kernel
+    /// Mach VA is a canonical kernel-half address (bit 63 set — the
+    /// intrspecial sign test's truth); mach_ptr() reads this word
+    /// (`mov %gs:0`) to name the calling CPU's Mach.
+    me: u64,
+    /// This CPU's logical index (0..MAX_CPUS).
+    pub(crate) cpu_id: u32,
+    /// This CPU's LAPIC/x2APIC ID (the ICR destination name).
+    pub(crate) apic_id: u32,
+    /// This CPU completed bring-up (the BSP polls it in start_aps; the
+    /// AP sets it in ap_main).
+    pub(crate) online: AtomicBool,
+    /// A TLB shootdown request is pending for this CPU (SMP-07).
+    pub(crate) pending_shootdown: AtomicBool,
+    /// The live trap frame record (05-12 migrates proc.rs's CURFRAME
+    /// static here).
+    pub(crate) cur_frame: AtomicU64,
+    /// The proc currently running on this CPU, null when none (05-12
+    /// migrates proc.rs's CURRENT_PROC here).
+    pub(crate) current_proc: AtomicPtr<crate::proc::Proc>,
+    /// This CPU's scheduler context (the sched_loop swtch target; 05-12
+    /// migrates proc.rs's SCHED_CONTEXT here).
+    pub(crate) sched_context: SyncUnsafeCell<Label>,
+    /// Whether sched_context has been seeded (05-12's SCHED_SEEDED).
+    pub(crate) sched_seeded: AtomicBool,
+
     pub debug_stack: ExStack, // Stack for debug exceptions
     pub bp_stack: ExStack,    // Stack for breakpoint exceptions
     pub df_stack: ExStack,    // Stack for double faults
@@ -364,14 +405,9 @@ pub struct Mach {
     pub zero: Page,           // Mapped to (per-node) read-only zeroed page
     pub stack: KStack,        // Kernel stack for scheduler
 
-    me: *mut Mach,            // %gs:0 is a `*mut Mach` pointing to this `Mach`.
     scratch: usize,           // A scratch word used on entry to kernel
     splpc: usize,             // PC of last caller to ` k`.  Cleared by `spllo`.
-    proc: *mut portdat::Proc, // Current process on this process.
 
-    machno: u32,  // Logical ID of CPU.
-    cpuno: u32,   // Physical ID of CPU.
-    online: bool, // Is this CPU online?
     cpuhz: u64,
 
     // Various stats that the kernel keeps track of
@@ -404,6 +440,10 @@ pub struct Mach {
     pub idt: Idt, // Mapped to per-node IDT
     pub gdt: Gdt, // Mapped to per-CPU GDT; padded to 64k with zeros
 }
+// The SMP-02 self-pointer contract is compile-time-pinned: a layout
+// drift fails the build, never a silent %gs:0 read of the wrong word
+// (T-05-20's class).
+const _: () = assert!(core::mem::offset_of!(Mach, me) == 0);
 static_assertions::const_assert_eq!(core::mem::offset_of!(Mach, pml4), 65536 * 2 + 4096);
 static_assertions::const_assert_eq!(core::mem::offset_of!(Mach, stack), 65536);
 
@@ -417,7 +457,7 @@ pub(crate) const MACH_SCRATCH_OFFSET: usize = core::mem::offset_of!(Mach, scratc
 impl Mach {
     pub unsafe fn init(&mut self) {
         use crate::trap;
-        self.me = self;
+        self.me = self as *mut Mach as u64;
         // The FP bookkeeping starts empty (no owner, no section) before
         // any FP hook can run; written whole, never read first (the Mach
         // page's prior contents are not assumed).
@@ -442,6 +482,58 @@ impl Mach {
             self.tss.load();
         }
     }
+
+    /// Initialize a freshly zeroed AP Mach's identity words (SMP-01):
+    /// the %gs:0 self-pointer and the CPU identity (smp.rs's start_aps
+    /// writes them before the mailbox publish, so the AP lands with its
+    /// own Mach already named).  `online` stays clear until the AP's own
+    /// bring-up tail sets it (the handshake the BSP polls).
+    pub(crate) fn init_ap_identity(&mut self, cpu_id: u32, apic_id: u32) {
+        self.me = self as *mut Mach as u64;
+        self.cpu_id = cpu_id;
+        self.apic_id = apic_id;
+    }
+}
+
+/// The calling CPU's Mach pointer, read through %gs:0 (SMP-02): the
+/// Mach's `me` word (offset 0) is the self-pointer that every kernel
+/// CPU's IA32_GS_BASE resolves through.
+///
+/// # Safety contract
+///
+/// Every kernel CPU initializes `IA32_GS_BASE = &mach` with
+/// `mach.me = &mach` before any trap or Rust entry — l.S's `warp64`
+/// (plus main's `arm_syscall_entry`) on the BSP, the SIPI trampoline's
+/// mailbox + `ap_main` on secondaries.  The register never changes on a
+/// given CPU afterwards (trap/syscall entries swap it to the user base
+/// and back across ring transitions only).  A call before that arming
+/// is a boot-order bug.
+#[inline]
+pub fn mach_ptr() -> *const Mach {
+    let ptr: usize;
+    // SAFETY: the contract above — %gs:0 holds this CPU's live Mach
+    // self-pointer whenever kernel Rust runs.  The asm reads one word
+    // of memory (no `nomem` claim: the compiler must not cache or
+    // reorder the read across entry/exit asm boundaries); nothing is
+    // written, no flags change.
+    unsafe {
+        core::arch::asm!(
+            "movq %gs:0, {ptr}",
+            ptr = out(reg) ptr,
+            options(att_syntax, nostack, preserves_flags),
+        );
+    }
+    ptr as *const Mach
+}
+
+/// The calling CPU's Mach as a shared reference — [`mach_ptr`]'s
+/// contract, borrowed (SMP-02).  Shared reads are sound because the
+/// post-bring-up mutable fields are atomics or SyncUnsafeCell with
+/// their own disciplines.
+pub fn this_mach() -> &'static Mach {
+    // SAFETY: mach_ptr's contract — the pointer names this CPU's live,
+    // aligned Mach for the kernel's lifetime.
+    unsafe { &*mach_ptr() }
 }
 
 #[repr(u8)]

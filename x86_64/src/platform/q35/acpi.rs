@@ -44,6 +44,12 @@ pub const TABLE_CAP: usize = 512;
 /// handful; more is a loud TooManyEntries).
 pub const MAX_INTSRC_OVERRIDES: usize = 16;
 
+/// The most CPUs the MADT walk records (SMP-01): the portable SMP
+/// core's bound (D-23 — never hard-code 2).  Enabled CPUs beyond the
+/// cap are counted in `Madt::dropped_cpus` so the caller prints the
+/// drop loudly (T-05-21: a cap, never a silent truncation).
+pub const MAX_CPUS: usize = port::smp::MAX_CPUS;
+
 /// How many named walk errors the facts struct carries; further ones are
 /// dropped (the first failures are the loud ones).
 pub const MAX_WALK_ERRORS: usize = 8;
@@ -117,6 +123,21 @@ pub struct IntSrcOverride {
     pub flags: u16,
 }
 
+/// One enabled processor the MADT declares (SMP-01): a type-0
+/// Processor Local APIC entry or a type-9 Processor Local x2APIC entry
+/// whose flags mark it enabled (bit 0) or online-capable (bit 1).  The
+/// APIC ID space is unified in one field: a type-0 entry's 8-bit LAPIC
+/// ID zero-extends; a type-9 entry carries the full 32-bit x2APIC ID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MadtCpu {
+    /// The LAPIC/x2APIC ID an ICR destination field names.
+    pub apic_id: u32,
+    /// The ACPI processor UID (the type-0 byte, or the type-9 dword).
+    pub acpi_id: u32,
+    /// True for a type-9 x2APIC entry (the 32-bit ID space).
+    pub x2apic: bool,
+}
+
 /// The MADT's parsed facts (header-adjacent fields plus the walked
 /// entries).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,6 +152,14 @@ pub struct Madt {
     /// Every type-2 override, in table order.
     pub intsrc: [IntSrcOverride; MAX_INTSRC_OVERRIDES],
     pub nintsrc: usize,
+    /// Every enabled or online-capable processor (type-0 LAPIC and
+    /// type-9 x2APIC entries), in table order, capped at MAX_CPUS
+    /// (SMP-01 — the INIT-SIPI-SIPI bring-up's target list).
+    pub cpus: [MadtCpu; MAX_CPUS],
+    pub ncpus: usize,
+    /// Enabled CPUs the cap dropped (counted so the caller prints the
+    /// drop loudly — T-05-21's never-silent rule).
+    pub dropped_cpus: u32,
 }
 
 /// Provenance of the root-table walk — printed by the caller so every
@@ -270,6 +299,14 @@ pub fn parse_madt(bytes: &[u8]) -> Result<Madt, ParseError> {
     const MADT_FIRST_ENTRY: usize = MADT_FLAGS + 4;
     const IOAPIC_ENTRY_LEN: usize = 12; // {ty, len, id, rsvd, u32 addr, u32 gsib}
     const INTSRC_ENTRY_LEN: usize = 10; // {ty, len, bus, src, u32 gsi, u16 flags}
+    // SMP-01: type-0 Processor Local APIC — {ty, len, uid, apic id,
+    // u32 flags}; type-9 Processor Local x2APIC — {ty, len, u16 rsvd,
+    // u32 x2apic id, u32 flags, u32 uid}.  Longer records are tolerated
+    // (walked on their declared length — forward compatibility);
+    // shorter ones are BadEntry, never a partial read.
+    const LAPIC_ENTRY_LEN: usize = 8;
+    const X2APIC_ENTRY_LEN: usize = 16;
+    const EMPTY_CPU: MadtCpu = MadtCpu { apic_id: 0, acpi_id: 0, x2apic: false };
     let len = bytes.len();
     if len < MADT_FIRST_ENTRY {
         return Err(ParseError::BadLength);
@@ -279,6 +316,9 @@ pub fn parse_madt(bytes: &[u8]) -> Result<Madt, ParseError> {
         ioapic: None,
         intsrc: [IntSrcOverride { bus: 0, source: 0, gsi: 0, flags: 0 }; MAX_INTSRC_OVERRIDES],
         nintsrc: 0,
+        cpus: [EMPTY_CPU; MAX_CPUS],
+        ncpus: 0,
+        dropped_cpus: 0,
     };
     let mut off = MADT_FIRST_ENTRY;
     while off < len {
@@ -288,6 +328,23 @@ pub fn parse_madt(bytes: &[u8]) -> Result<Madt, ParseError> {
             return Err(ParseError::BadEntry);
         }
         match ty {
+            0 => {
+                // Processor Local APIC (SMP-01): {uid@+2, apic id@+3,
+                // u32 flags@+4}.  Recorded when enabled (bit 0) or
+                // online-capable (bit 1); flags == 0 is a skipped
+                // disabled CPU, never an error.
+                if elen < LAPIC_ENTRY_LEN {
+                    return Err(ParseError::BadEntry);
+                }
+                let flags = le_u32(bytes, off + 4).ok_or(ParseError::BadEntry)?;
+                if flags & 0b11 != 0 {
+                    record_cpu(&mut madt, MadtCpu {
+                        apic_id: u32::from(bytes[off + 3]),
+                        acpi_id: u32::from(bytes[off + 2]),
+                        x2apic: false,
+                    });
+                }
+            }
             1 => {
                 if elen < IOAPIC_ENTRY_LEN {
                     return Err(ParseError::BadEntry);
@@ -316,14 +373,43 @@ pub fn parse_madt(bytes: &[u8]) -> Result<Madt, ParseError> {
                 };
                 madt.nintsrc += 1;
             }
-            // Type 0 (LAPIC) and every other entry kind: walked past on
-            // their own declared length — validated above, so this is
-            // forward compatibility, not a silent skip.
+            9 => {
+                // Processor Local x2APIC (SMP-01): {u16 rsvd@+2, u32
+                // x2apic id@+4, u32 flags@+8, u32 uid@+12}.  The full
+                // 32-bit ID is kept — the x2APIC ICR destination is
+                // 32 bits wide (unlike the type-0 byte).
+                if elen < X2APIC_ENTRY_LEN {
+                    return Err(ParseError::BadEntry);
+                }
+                let flags = le_u32(bytes, off + 8).ok_or(ParseError::BadEntry)?;
+                if flags & 0b11 != 0 {
+                    record_cpu(&mut madt, MadtCpu {
+                        apic_id: le_u32(bytes, off + 4).ok_or(ParseError::BadEntry)?,
+                        acpi_id: le_u32(bytes, off + 12).ok_or(ParseError::BadEntry)?,
+                        x2apic: true,
+                    });
+                }
+            }
+            // Every other entry kind: walked past on its own declared
+            // length — validated above, so this is forward
+            // compatibility, not a silent skip.
             _ => {}
         }
         off += elen;
     }
     Ok(madt)
+}
+
+/// Record an enabled/online-capable processor (SMP-01), capped at
+/// MAX_CPUS; an overflow is counted in `dropped_cpus` so the caller
+/// prints the drop loudly (T-05-21: never a silent truncation).
+fn record_cpu(madt: &mut Madt, cpu: MadtCpu) {
+    if madt.ncpus < MAX_CPUS {
+        madt.cpus[madt.ncpus] = cpu;
+        madt.ncpus += 1;
+    } else {
+        madt.dropped_cpus = madt.dropped_cpus.saturating_add(1);
+    }
 }
 
 /// The HPET base (best-effort): the GAS at table offset 40 must name
@@ -707,6 +793,25 @@ mod tests {
         e
     }
 
+    /// A type-0 LAPIC entry with explicit fields (SMP-01) — {type 0,
+    /// len 8, uid, apic id, u32 flags}.
+    fn lapic_entry_with(uid: u8, apic_id: u8, flags: u32) -> Vec<u8> {
+        let mut e = vec![0u8, 8, uid, apic_id];
+        e.extend_from_slice(&flags.to_le_bytes());
+        e
+    }
+
+    /// A type-9 Processor Local x2APIC entry (SMP-01) — {type 9, len,
+    /// u16 rsvd, u32 x2apic id, u32 flags, u32 uid}, exactly the
+    /// declared 16 bytes.
+    fn x2apic_entry_with(x2apic_id: u32, uid: u32, flags: u32) -> Vec<u8> {
+        let mut e = vec![9u8, 16, 0, 0];
+        e.extend_from_slice(&x2apic_id.to_le_bytes());
+        e.extend_from_slice(&flags.to_le_bytes());
+        e.extend_from_slice(&uid.to_le_bytes());
+        e
+    }
+
     fn madt_table(local_intc: u32, entries: &[u8]) -> Vec<u8> {
         let mut body = Vec::new();
         body.extend_from_slice(&local_intc.to_le_bytes());
@@ -905,5 +1010,140 @@ mod tests {
         let acpi = discover(&img, None);
         assert_eq!(acpi.hpet, Some(0xFED0_0000));
         assert_eq!(acpi.nerrors, 0);
+    }
+
+    // Test 6 (SMP-01): the MADT records enabled type-0 LAPIC processors
+    // with their exact APIC IDs and skips a disabled (flags == 0) entry —
+    // two enabled plus one disabled yields exactly two records, and the
+    // IOAPIC walk beside them is unaffected.
+    #[test]
+    fn madt_records_enabled_lapic_cpus_and_skips_disabled() {
+        let mut entries = Vec::new();
+        entries.extend_from_slice(&lapic_entry_with(0, 0, 1)); // BSP, enabled
+        entries.extend_from_slice(&lapic_entry_with(1, 1, 1)); // CPU 1, enabled
+        entries.extend_from_slice(&lapic_entry_with(2, 2, 0)); // disabled — skipped
+        entries.extend_from_slice(&ioapic_entry(8, 0xFEC0_0000, 0));
+        let mut img = Image::new(0x100_1000);
+        img.put(MADT_PA, &madt_table(0xFEE0_0000, &entries));
+        img.put(XSDT_PA, &xsdt_table(&[MADT_PA]));
+        img.put(0xE_0000, &rsdp_v2(XSDT_PA));
+
+        let acpi = discover(&img, None);
+        assert_eq!(acpi.nerrors, 0);
+        let madt = acpi.madt.expect("MADT parses");
+        assert_eq!(madt.ncpus, 2, "exactly the two enabled CPUs are recorded");
+        assert_eq!(
+            madt.cpus[0],
+            MadtCpu { apic_id: 0, acpi_id: 0, x2apic: false },
+            "table order preserved"
+        );
+        assert_eq!(madt.cpus[1], MadtCpu { apic_id: 1, acpi_id: 1, x2apic: false });
+        assert_eq!(madt.dropped_cpus, 0);
+        assert_eq!(madt.ioapic, Some(IoApicEntry { id: 8, addr: 0xFEC0_0000, gsib: 0 }));
+    }
+
+    // Test 7 (SMP-01): an online-capable CPU (flags bit 1, the ACPI
+    // "may be enabled later" mark) is recorded even with bit 0 clear —
+    // the enabled-or-online-capable rule.
+    #[test]
+    fn madt_records_online_capable_cpus() {
+        let mut entries = Vec::new();
+        entries.extend_from_slice(&lapic_entry_with(0, 0, 1)); // enabled
+        entries.extend_from_slice(&lapic_entry_with(3, 3, 2)); // online-capable only
+        let mut img = Image::new(0x100_1000);
+        img.put(MADT_PA, &madt_table(0xFEE0_0000, &entries));
+        img.put(XSDT_PA, &xsdt_table(&[MADT_PA]));
+        img.put(0xE_0000, &rsdp_v2(XSDT_PA));
+
+        let madt = discover(&img, None).madt.expect("MADT parses");
+        assert_eq!(madt.ncpus, 2, "online-capable counts as a bring-up candidate");
+        assert_eq!(madt.cpus[1].apic_id, 3);
+    }
+
+    // Test 8 (SMP-01): type-9 x2APIC entries (elen >= 16) yield the full
+    // 32-bit x2APIC ID; an undersized or truncated record is a loud
+    // BadEntry — never a panic, never a partial Madt.
+    #[test]
+    fn madt_x2apic_entries_extract_32bit_ids_and_reject_malformed() {
+        // (a) the golden shape: two enabled type-9 entries with IDs no
+        // 8-bit space could carry.
+        let mut entries = Vec::new();
+        entries.extend_from_slice(&x2apic_entry_with(0x0000_0100, 0, 1));
+        entries.extend_from_slice(&x2apic_entry_with(0xFFFF_FF01, 1, 1));
+        let mut img = Image::new(0x100_1000);
+        img.put(MADT_PA, &madt_table(0xFEE0_0000, &entries));
+        img.put(XSDT_PA, &xsdt_table(&[MADT_PA]));
+        img.put(0xE_0000, &rsdp_v2(XSDT_PA));
+
+        let acpi = discover(&img, None);
+        assert_eq!(acpi.nerrors, 0);
+        let madt = acpi.madt.expect("type-9 MADT parses");
+        assert_eq!(madt.ncpus, 2);
+        assert_eq!(
+            madt.cpus[0],
+            MadtCpu { apic_id: 0x0000_0100, acpi_id: 0, x2apic: true },
+            "the full 32-bit x2APIC ID is extracted"
+        );
+        assert_eq!(madt.cpus[1], MadtCpu { apic_id: 0xFFFF_FF01, acpi_id: 1, x2apic: true });
+
+        // (b) an undersized type-9 (declared 12 < 16) is a loud named
+        // error with no partial Madt.
+        let mut entries = Vec::new();
+        entries.extend_from_slice(&x2apic_entry_with(0x100, 0, 1));
+        let mut short = vec![9u8, 12, 0, 0];
+        short.extend_from_slice(&0x200u32.to_le_bytes());
+        short.extend_from_slice(&1u32.to_le_bytes()); // 12 bytes total
+        entries.extend_from_slice(&short);
+        let mut img = Image::new(0x100_1000);
+        img.put(MADT_PA, &madt_table(0xFEE0_0000, &entries));
+        img.put(XSDT_PA, &xsdt_table(&[MADT_PA]));
+        img.put(0xE_0000, &rsdp_v2(XSDT_PA));
+
+        let acpi = discover(&img, None);
+        assert_eq!(acpi.madt, None, "no partial MADT from an undersized type-9");
+        assert!(
+            acpi.errors[..acpi.nerrors].contains(&("madt table", ParseError::BadEntry)),
+            "undersized type-9 is loud, got {:?}",
+            &acpi.errors[..acpi.nerrors]
+        );
+
+        // (c) a truncated type-9 (declared 16, table ends mid-record)
+        // is the same loud BadEntry — never a panic.
+        let mut entries = Vec::new();
+        entries.extend_from_slice(&x2apic_entry_with(0x100, 0, 1));
+        entries.extend_from_slice(&[9u8, 16, 0, 0, 0x77]); // 5 of 16 bytes
+        let mut img = Image::new(0x100_1000);
+        img.put(MADT_PA, &madt_table(0xFEE0_0000, &entries));
+        img.put(XSDT_PA, &xsdt_table(&[MADT_PA]));
+        img.put(0xE_0000, &rsdp_v2(XSDT_PA));
+
+        let acpi = discover(&img, None);
+        assert_eq!(acpi.madt, None, "no partial MADT from a truncated type-9");
+        assert!(
+            acpi.errors[..acpi.nerrors].contains(&("madt table", ParseError::BadEntry)),
+            "truncated type-9 is loud, got {:?}",
+            &acpi.errors[..acpi.nerrors]
+        );
+    }
+
+    // Test 9 (SMP-01, T-05-21): enabled CPUs beyond MAX_CPUS are counted
+    // as dropped, never recorded past the cap (a loud-by-count
+    // truncation, not a silent one).
+    #[test]
+    fn madt_cpu_overflow_is_capped_and_counted() {
+        let mut entries = Vec::new();
+        for i in 0..(MAX_CPUS + 1) {
+            entries.extend_from_slice(&lapic_entry_with(i as u8, i as u8, 1));
+        }
+        let mut img = Image::new(0x100_1000);
+        img.put(MADT_PA, &madt_table(0xFEE0_0000, &entries));
+        img.put(XSDT_PA, &xsdt_table(&[MADT_PA]));
+        img.put(0xE_0000, &rsdp_v2(XSDT_PA));
+
+        let madt = discover(&img, None).madt.expect("MADT parses");
+        assert_eq!(madt.ncpus, MAX_CPUS, "the cap holds");
+        assert_eq!(madt.dropped_cpus, 1, "the overflow is counted");
+        assert_eq!(madt.cpus[0].apic_id, 0);
+        assert_eq!(madt.cpus[MAX_CPUS - 1].apic_id, (MAX_CPUS - 1) as u32);
     }
 }

@@ -47,9 +47,13 @@ pub const ERROR_VECTOR: u8 = 0xFE;
 
 // xAPIC MMIO register offsets (Intel SDM Vol 3 Table 10-1; the 9k
 // apic.c register vocabulary).
+pub(crate) const ID_REG: usize = 0x020; // LAPIC ID (the top byte)
 pub(crate) const TPR: usize = 0x080; // Task Priority
 pub(crate) const EOI_REG: usize = 0x0B0; // EOI
 pub(crate) const SVR: usize = 0x0F0; // Spurious Interrupt Vector
+pub(crate) const ESR: usize = 0x280; // Error Status (write-to-clear)
+pub(crate) const ICR_LO: usize = 0x300; // Interrupt Command (low half)
+pub(crate) const ICR_HI: usize = 0x310; // Interrupt Command (high half)
 pub(crate) const LVT_TIMER: usize = 0x320; // LVT timer
 pub(crate) const LVT_LINT0: usize = 0x350; // LVT LINT0 (legacy INTR)
 pub(crate) const LVT_LINT1: usize = 0x360; // LVT LINT1 (legacy NMI)
@@ -90,6 +94,36 @@ const APIC_BASE_EXTD: u64 = 1 << 10;
 /// full 64-bit register there (destination in the upper half); this
 /// driver does not emit IPIs yet.
 const X2APIC_MSR_BASE: u32 = 0x800;
+
+/// ICR delivery word: delivery mode Fixed (000b << 8) — the resched
+/// and TLB-shootdown IPIs' mode (SMP-07).
+const ICR_DM_FIXED: u32 = 0 << 8;
+/// ICR delivery word: INIT (101b << 8) — the INIT-SIPI-SIPI startup's
+/// first beat (SDM Vol 3A §8.4.4).
+const ICR_DM_INIT: u32 = 5 << 8;
+/// ICR delivery word: Startup (SIPI, 110b << 8).
+const ICR_DM_SIPI: u32 = 6 << 8;
+/// ICR level assert (bit 14) — INIT's required level (edge-triggered,
+/// physical destination; the 82489DX-era level de-assert is obsolete
+/// on every target this kernel boots).
+const ICR_LEVEL_ASSERT: u32 = 1 << 14;
+/// ICR delivery-status bit (bit 12, read-only) — xAPIC only; in x2APIC
+/// mode the ICR write is one 64-bit MSR with no status read-back.
+const ICR_DS_PENDING: u32 = 1 << 12;
+/// The delivery-status poll bound — a hang guard, never hit in
+/// practice (the bit clears when the local APIC accepts the request,
+/// a few cycles).  On exhaustion the caller prints loudly and
+/// continues (the tolerant-degradation idiom; a wedged LAPIC is a
+/// broken machine, but a silent BSP hang is worse).
+const ICR_DS_POLL_LIMIT: usize = 1_000_000;
+
+/// Pack an x2APIC ICR value for `wrmsr(0x830)` (SMP-01): the 32-bit
+/// destination APIC ID in the upper half, the delivery word in the
+/// lower (the ICR is the one full 64-bit register in the x2APIC map —
+/// SDM Vol 3A §10.12.2/§10.12.9).  Pure arithmetic, host-pinned.
+pub fn icr_x2apic_value(apic_id: u32, delivery_word: u32) -> u64 {
+    ((apic_id as u64) << 32) | u64::from(delivery_word)
+}
 
 /// The architectural LAPIC MMIO base — a fixed-function fact of the q35
 /// machine model, like COM1 for the console.
@@ -203,6 +237,46 @@ impl Lapic {
             }
         }
     }
+
+    /// Send one IPI to `apic_id` carrying the ICR delivery word
+    /// (SMP-01, SMP-07).  xAPIC: ICR_HI (destination at bits 24..32)
+    /// then ICR_LO over MMIO, then poll delivery-status (bit 12) clear.
+    /// x2APIC: one 64-bit `wrmsr(0x830)` — preceded by `mfence; lfence`
+    /// because that WRMSR is NOT serializing (Intel SDM Vol 3A
+    /// §10.12.9): prior stores (a TLB-shootdown descriptor's) must be
+    /// globally visible before the IPI arrives — T-05-19's mitigation.
+    fn send_icr(&self, apic_id: u32, delivery: u32) {
+        match self.mode {
+            ApicMode::XApic => {
+                self.write(ICR_HI, apic_id << 24);
+                self.write(ICR_LO, delivery);
+                for _ in 0..ICR_DS_POLL_LIMIT {
+                    if self.read(ICR_LO) & ICR_DS_PENDING == 0 {
+                        return;
+                    }
+                    core::hint::spin_loop();
+                }
+                #[cfg(not(test))]
+                println!(
+                    "lapic: ICR delivery-status stuck (dest {apic_id:#x}, word {delivery:#x})"
+                );
+            }
+            ApicMode::X2Apic => {
+                let icr = icr_x2apic_value(apic_id, delivery);
+                // SAFETY: IA32_X2APIC_ICR (0x830, the x2APIC map's ICR)
+                // is architecturally valid once EXTD is set — the mode
+                // arm proves the switch ran on the calling CPU.  The
+                // mfence/lfence pair ahead of the wrmsr is the SDM
+                // §10.12.9 ordering discipline (the write is not
+                // serializing); the asm! block carries no `nomem`, so
+                // the compiler cannot hoist a store past it either.
+                unsafe {
+                    core::arch::asm!("mfence", "lfence", options(att_syntax, nostack));
+                    cpu::wrmsr(Self::x2apic_msr(ICR_LO), icr);
+                }
+            }
+        }
+    }
 }
 
 /// Interrupt-context access to the LAPIC.  Written once at init (inside
@@ -293,6 +367,137 @@ pub fn eoi() {
     with(|l| l.write(EOI_REG, 0));
 }
 
+/// Send an INIT IPI to `apic_id` (SMP-01) — the first beat of the
+/// INIT-SIPI-SIPI AP startup (SDM Vol 3A §8.4.4): delivery mode INIT,
+/// level assert, physical destination, edge-triggered.
+pub fn send_init(apic_id: u32) {
+    with(|l| l.send_icr(apic_id, ICR_DM_INIT | ICR_LEVEL_ASSERT));
+}
+
+/// Send a Startup IPI to `apic_id` (SMP-01): the AP begins executing at
+/// `vector << 12` (the SIPI page).  Delivery mode SIPI with the vector
+/// in the low byte — the shape QEMU's and KVM's APIC models deliver.
+pub fn send_sipi(apic_id: u32, vector: u8) {
+    with(|l| l.send_icr(apic_id, ICR_DM_SIPI | u32::from(vector)));
+}
+
+/// Send a fixed IPI to `apic_id` on `vector` (SMP-07) — the TLB
+/// shootdown (0xF0) and reschedule (0xF1) IPIs' delivery path.
+pub fn send_ipi(apic_id: u32, vector: u8) {
+    with(|l| l.send_icr(apic_id, ICR_DM_FIXED | u32::from(vector)));
+}
+
+/// The calling CPU's APIC ID (SMP-01): the x2APIC ID MSR when the unit
+/// is in x2APIC mode (IA32_APIC_BASE.EXTD set), else the MMIO ID
+/// register's top byte.  Hardware-derived (never the published cell),
+/// so it reads correctly on an AP before its `init_ap` and on the BSP
+/// after `init`.
+pub fn current_apic_id() -> u32 {
+    // SAFETY: IA32_APIC_BASE (0x1B) is architectural and always valid
+    // to read at CPL 0; rdmsr touches no memory.
+    let base = unsafe { cpu::_rdmsr(MSR_IA32_APIC_BASE) };
+    if base & APIC_BASE_EXTD != 0 {
+        // SAFETY: IA32_X2APIC_ID (0x802, the x2APIC map's ID register)
+        // is readable exactly when EXTD is set — the condition above;
+        // the ID is the low 32 bits.
+        unsafe { cpu::_rdmsr(Lapic::x2apic_msr(ID_REG)) as u32 }
+    } else {
+        match Lapic::new() {
+            Ok(l) => l.read(ID_REG) >> 24,
+            Err(msg) => {
+                // Unreachable with the architectural constants (the
+                // base is inside the identity window by construction);
+                // loud, never a silently wrong 0.
+                #[cfg(not(test))]
+                println!("lapic: current_apic_id: {msg}");
+                0
+            }
+        }
+    }
+}
+
+/// Enable the calling AP's LAPIC (SMP-01), running ON the AP being
+/// brought up (05-12's `ap_main`): the BSP's [`init`] sequence
+/// re-keyed for a secondary — TPR 0, the SVR software-enable with the
+/// spurious vector FIRST (emulator APICs discard LVT writes while the
+/// unit is software-disabled), the CPUID-gated x2APIC switch (the same
+/// leaf-1 bit-21 gate the BSP ran — one mode per platform), the D-04
+/// LINT mask policy, the error LVT, an ESR clear, and a drain EOI —
+/// then the AP's LAPIC timer is armed FROM the BSP's published
+/// calibrated state (never a re-run of the PIT/TSC calibration: the
+/// countdown rate is a platform property the BSP already measured).
+///
+/// The published cell keeps the BSP's record; the AP works through a
+/// local Lapic value whose mode the CPUID gate selects identically.
+#[allow(dead_code)] // consumed by 05-12's ap_main
+pub fn init_ap() {
+    let Ok(mut lapic) = Lapic::new() else {
+        // Unreachable with the architectural constants (the base is
+        // inside the identity window by construction).
+        #[cfg(not(test))]
+        println!("lapic: init_ap: base outside the identity window");
+        return;
+    };
+    let (_, _, ecx1, _) = cpu::cpuid(1, 0);
+    let want = apic_mode(ecx1);
+    lapic.write(TPR, 0);
+    lapic.write(SVR, SVR_ENABLE | u32::from(SPURIOUS_VECTOR));
+    if want == ApicMode::X2Apic {
+        // The same switch as the BSP's init: the unit enabled (bit 11)
+        // then EXTD (bit 10), in one write, after which the register
+        // file is reachable ONLY at MSRs 0x800+(offset>>4).
+        // SAFETY: IA32_APIC_BASE is always valid; every bit other than
+        // 10/11 is preserved verbatim from the read.  Runs on the AP
+        // being initialized, before its LAPIC is otherwise used.
+        unsafe {
+            let base = cpu::_rdmsr(MSR_IA32_APIC_BASE);
+            cpu::wrmsr(MSR_IA32_APIC_BASE, base | APIC_BASE_ENABLE | APIC_BASE_EXTD);
+        }
+        lapic.mode = want;
+    }
+    lapic.write(LVT_LINT0, LVT_MASKED);
+    lapic.write(LVT_LINT1, LVT_MASKED);
+    lapic.write(LVT_ERROR, u32::from(ERROR_VECTOR));
+    // Clear any latched error state, then drain in-service state (the
+    // post-enable EOI).
+    lapic.write(ESR, 0);
+    lapic.write(EOI_REG, 0);
+
+    // Arm the AP's LAPIC timer from the BSP's published calibration —
+    // the AP never re-runs the PIT/TSC measurement (05-RESEARCH Pattern
+    // 3.5).  A missing state means the BSP's timer init failed loudly
+    // already; the AP then runs untimed (preemptless) rather than
+    // inventing a rate.
+    match super::timer::state() {
+        Some(state) => match state.mode {
+            super::timer::TimerMode::TscDeadline => {
+                lapic.write(LVT_TIMER, u32::from(crate::trap::TIMER_VECTOR) | LVT_TSC_DEADLINE);
+                // SAFETY: TSC-deadline mode is CPUID-gated (leaf 1 ECX
+                // bit 24) — the BSP's init ran the gate and published
+                // this state only after arming the same mode; the MSR
+                // write is valid on every CPU of the platform.
+                unsafe {
+                    cpu::wrmsr(
+                        super::timer::MSR_IA32_TSC_DEADLINE,
+                        cpu::rdtsc().wrapping_add(state.tsc_delta),
+                    )
+                };
+            }
+            super::timer::TimerMode::Periodic => {
+                lapic.write(TIMER_DCR, TIMER_DIV1);
+                lapic.write(TIMER_ICR, state.icr);
+                lapic.write(LVT_TIMER, u32::from(crate::trap::TIMER_VECTOR) | LVT_PERIODIC);
+            }
+        },
+        None => {
+            #[cfg(not(test))]
+            println!("lapic: init_ap: no BSP timer state — AP runs untimed");
+        }
+    }
+    #[cfg(not(test))]
+    println!("lapic: ap {} online-ready (mode {:?})", current_apic_id(), lapic.mode);
+}
+
 /// Program the timer LVT: vector | mode/mask bits.  timer.rs owns the
 /// CPUID-gated mode decision and the arming discipline; this is the
 /// raw programming surface it drives.  Runs at boot (timer init) and
@@ -376,6 +581,18 @@ mod tests {
         assert_eq!(Lapic::x2apic_msr(TIMER_ICR), 0x838);
         assert_eq!(Lapic::x2apic_msr(TIMER_CCR), 0x839);
         assert_eq!(Lapic::x2apic_msr(TIMER_DCR), 0x83E);
+    }
+
+    /// The x2APIC ICR pack (SMP-01): the destination APIC ID occupies
+    /// the upper 32 bits and the delivery word the lower (the ICR's
+    /// 64-bit layout, SDM Vol 3A §10.12.2) — zero-extension both ways
+    /// pinned, so an 8-bit-era ID and a full 32-bit ID both land right.
+    #[test]
+    fn icr_x2apic_value_packs_destination_in_upper_half() {
+        assert_eq!(icr_x2apic_value(0x1234_5678, 0x0000_4500), 0x1234_5678_0000_4500);
+        assert_eq!(icr_x2apic_value(0, 0x4608), 0x4608);
+        assert_eq!(icr_x2apic_value(1, 0), 0x1_0000_0000);
+        assert_eq!(icr_x2apic_value(0xFFFF_FFFF, 0xFFFF_FFFF), 0xFFFF_FFFF_FFFF_FFFF);
     }
 }
 

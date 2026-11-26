@@ -310,6 +310,68 @@ loses its preempt call (safe code).  `port/src/sched.rs`: the new
 aarch64 194 → 196 blocks, SAFETY 400 → 402 (proc.rs 28 → 29, trap.rs
 9 → 10); the reconciliation holds.
 
+**Plan 05-11 Task 1 delta (SMP-01/07, 2026-11-26):** the x86_64 dual
+xAPIC/x2APIC IPI delivery and AP LAPIC init land.  `acpi.rs`: the MADT
+walk records enabled/online-capable processors (type-0 LAPIC and type-9
+x2APIC entries) into `Madt::cpus` (capped at `MAX_CPUS` with a counted
+`dropped_cpus`) — pure bounds-checked parsing, zero new unsafe.
+`lapic.rs`: gains `send_icr` (xAPIC ICR_HI/ICR_LO MMIO pair with the
+delivery-status poll; x2APIC `mfence; lfence; wrmsr(0x830)` per Intel
+SDM Vol 3A §10.12.9 — T-05-19's mitigation) (+1 block), the
+hardware-derived `current_apic_id` (+2 blocks: the IA32_APIC_BASE read
+and the EXTD-gated IA32_X2APIC_ID read), and `init_ap` (+2 blocks: the
+AP-side IA32_APIC_BASE read-modify-write and the CPUID-gated
+IA32_TSC_DEADLINE arm from the BSP's published calibration), plus
+`send_init`/`send_sipi`/`send_ipi` over the existing wrappers (safe
+code), so lapic.rs 8 → 13.  `timer.rs`: the new `state()` getter reads
+the publish-once STATE cell (+1 block), so timer.rs 5 → 6.  x86_64
+156 → 162 blocks, SAFETY 402 → 408; the reconciliation holds.  (The
+x86_64 per-file inventory header below was stale at 158 — the rows
+summed to 156 since 05-07's allocator change; the header now reads the
+measured 162.)
+
+**Plan 05-11 Task 2 delta (SMP-01/02/07, 2026-11-26):** the x86_64
+SIPI trampoline and SMP bring-up module land.  `ap_trampoline.S` is
+position-independent assembly (no unsafe tokens — the file is data to
+the linked kernel).  `smp.rs` (new): the trampoline link-sym read and
+the `copy_nonoverlapping` into PA 0x8000 (2 blocks), the AP Mach
+`alloc_zeroed` + zero-valid reborrow + the five volatile mailbox word
+writes (3 blocks), the registry slot reads in `num_online_cpus` and
+`apic_id_of` (2 blocks), the IRQ save/restore asm pair (2 blocks), and
+the `invlpg`/CR3-reload TLB flush arms (2 blocks) — 11 blocks plus ONE
+unsafe extern block (the trampoline link-syms).  `dat.rs`: `mach_ptr`'s
+`mov %gs:0` read and `this_mach`'s deref (2 blocks); the Mach layout
+itself gains the per-CPU SMP fields with `me: u64` pinned at offset 0
+(safe code — `SyncUnsafeCell` doesn't implement zerocopy's FromZeros,
+so Mach drops the marker derive; no caller used it, and both
+construction sites (l.S zeroing + `Mach::init`, `alloc_zeroed` +
+`init_ap_identity`) stand on their own SAFETY text).  `main.rs`: the
+`mod smp` mount and the temporary `ap_main` stub (2 blocks: the online
+handshake store and the cli/hlt park).  (Baseline correction, not new
+code: the main.rs inventory row read 9 — measured 10 at the plan's
+base; the row now reads 12.)  x86_64 162 → 178 blocks, extern 2 → 3,
+SAFETY 408 → 424 (the +1 past the +15 delta is the same main.rs
+correction); the reconciliation holds.
+
+**Plan 05-11 Task 3 delta (SMP-02/07, 2026-11-26):** count-neutral
+content change inside existing audited sites.  `trap.rs`'s
+`intrspecial` replaces the hardcoded `movabsq $KMACH; cmpq; je` GS-base
+test with the canonical kernel-half sign test (`testq %rax, %rax; js`)
+— every kernel Mach VA has bit 63 set (CPU 1's Mach lives at a distinct
+kernel-half VA the constant compare could never recognize), and every
+user GS base is 0 on r9 (the closed syscall list offers no GS-base
+write path, and CR4.FSGSBASE is never set), so bit 63 is the exact
+discriminator (T-05-20's mitigation).  The IDT already gates all 256
+vectors, so the IPI work is dispatch only: `dispatch_irq` arms
+`smp::TLB_SHOOTDOWN_VECTOR` (0xF0 → `port::smp::service_shootdown_ipi`)
+and `smp::RESCHED_VECTOR` (0xF1 → `proc::preempt`, the tick's existing
+reschedule mechanism), both retired by the shared LAPIC EOI tail.  No
+new unsafe blocks or fns: trap.rs stays 6 blocks / 9 fns; x86_64 stays
+178 blocks, SAFETY 424.  (dat.rs's Task-3-listed surface — the
+offset-0 `me` pin and `mach_ptr`/`this_mach` — landed in Task 2's
+commit: `start_aps` writes those very fields, so the seam could not
+compile split; see the plan's SUMMARY deviations.)
+
 ## ds/ and crypto/ (Phase 3)
 
 Both crates take `[lints] workspace = true`, so
@@ -571,31 +633,32 @@ cfg-gated code as well.
 | `vm.rs` | 16 | 3 | 0 | page-table machinery: TTBR/TLB/barrier asm, entry writes, recursive-mapping resolution |
 | `vmdebug.rs` | 2 | 0 | 0 | read-only recursive-mapping walk (print path) |
 
-### x86_64/src — 158 blocks, 30 unsafe fns, 2 extern blocks (test-only: 8 blocks, 2 fns)
+### x86_64/src — 178 blocks, 30 unsafe fns, 3 extern blocks (test-only: 8 blocks, 2 fns)
 
 | File | Blocks | fns | ext | Surface |
 |---|---|---|---|---|
 | `allocator.rs` | 1 | 0 | 0 | the global-allocator arena's one-time static construction (05-07: `static mut` HEAP/ALLOC became SyncUnsafeCell, and the unlocked diagnostic reads moved under the IrqSpinLock guard) |
 | `cpu.rs` | 13 | 6 | 0 | CPL-0 instruction primitives: `ltr`/`lgdt`/`lidt`, `_rdmsr`/`wrmsr`, `wrgsbase` (the fns); flags/sti/cli/cpuid/rdtsc/rdrand/rdseed blocks |
-| `dat.rs` | 4 | 1 | 0 | Ureg↔saved-frame copies, the Mach's CpuFp cell write, `Mach::init`'s GDT/IDT/TSS load |
+| `dat.rs` | 6 | 1 | 0 | Ureg↔saved-frame copies, the Mach's CpuFp cell write, `Mach::init`'s GDT/IDT/TSS load, `mach_ptr`'s `%gs:0` read + `this_mach`'s deref (05-11) |
 | `exec.rs` | 5 | 0 | 0 | KZERO-alias writes into just-mapped image pages and the seed page (+2 test-only blocks) |
 | `fpu.rs` | 11 | 2 | 0 | FXSAVE64/FXRSTOR64 save/restore asm (`save_raw`/`restore_raw`), per-CPU `CpuFp`, `with_simd` (+1 test-only block) |
-| `main.rs` | 9 | 1 | 1 | boot descriptor arming, the mb2 stash slice, `arm_syscall_entry`'s MSR program, `halt`'s cli/hlt; extern: the l.S link-syms |
+| `main.rs` | 12 | 1 | 1 | boot descriptor arming, the mb2 stash slice, `arm_syscall_entry`'s MSR program, `halt`'s cli/hlt, the temporary `ap_main` stub's online store + park (05-11); extern: the l.S link-syms.  (The row read 9 at CORR-05 — measured 10 at the 05-11 base; the +1 is a stale-row correction, not new code.) |
 | `pio.rs` | 6 | 6 | 0 | the port-I/O primitives (`inb`/`inw`/`inl`/`outb`/`outw`/`outl`, CPL 0) |
 | `platform/q35/acpi.rs` | 1 | 0 | 0 | bounds-checked volatile byte reads of firmware tables |
 | `platform/q35/churngate.rs` | 2 | 0 | 0 | the churn gate's one-shot stash cells (single writer at boot / single reader) |
 | `platform/q35/devcons.rs` | 2 | 0 | 0 | COM1 port I/O + the write-once console cell at platform init |
 | `platform/q35/ioapic.rs` | 5 | 0 | 0 | IOAPIC select/data MMIO window (bounds-checked base) |
-| `platform/q35/lapic.rs` | 8 | 0 | 0 | identity-mapped LAPIC MMIO and x2APIC register MSRs, the ICR IPI write |
+| `platform/q35/lapic.rs` | 13 | 0 | 0 | identity-mapped LAPIC MMIO and x2APIC register MSRs; the ICR IPI write (xAPIC ICR pair + delivery-status poll; x2APIC `mfence; lfence; wrmsr(0x830)`, SDM §10.12.9); `current_apic_id`'s hardware-derived ID read; `init_ap`'s AP-side enable + deadline arm |
 | `platform/q35/mod.rs` | 2 | 0 | 0 | the publish-once ACPI cell (write at print_machine_info, lock-free reads) |
 | `platform/q35/netgate.rs` | 2 | 0 | 0 | the net gate driver's `hlt` park loops |
 | `platform/q35/pci.rs` | 28 | 0 | 0 | MCFG/ECAM MMIO walks, 0xCF8/0xCFC config mechanism, publish-once discovery/bind cells, virtio-net IRQ path |
-| `platform/q35/timer.rs` | 5 | 0 | 0 | TSC-deadline/CPUID check, publish-once timer state cells |
+| `platform/q35/timer.rs` | 6 | 0 | 0 | TSC-deadline/CPUID check, publish-once timer state cells (05-11: +1 for `state()`'s cell read — the AP LAPIC-timer arming input) |
 | `proc.rs` | 30 | 1 | 1 | the process machinery floor: `first_entry` ABI, pml4 map/unmap through the KZERO alias, brk/rfork unwind (SMP-03 audit sites), link-syms (+3 test-only blocks, 1 fn) |
 | `seg.rs` | 3 | 3 | 0 | GDT/IDT/TSS `load` (the fns) on architecturally valid tables |
+| `smp.rs` | 11 | 0 | 1 | the SIPI trampoline copy into PA 0x8000, the AP Mach `alloc_zeroed` + mailbox volatile writes, the IRQ save/restore asm pair, `invlpg`/CR3-reload flush, the Mach-registry reads (05-11); extern: the trampoline link-syms |
 | `swtch.rs` | 0 | 1 | 0 | `swtch` context-switch ABI (+1 host-test twin fn) |
 | `syscall.rs` | 1 | 0 | 0 | the `trap_return` tail call on the seeded frame (+2 test-only blocks) |
-| `trap.rs` | 6 | 9 | 0 | the trap-vector interface: `intr_stubs` emitter, `as_thunk`, `intrspecial`/`intrregular`/`intrcommon`, `syscallentry`/`syscallreturn`, `trap_return` |
+| `trap.rs` | 6 | 9 | 0 | the trap-vector interface: `intr_stubs` emitter, `as_thunk`, `intrspecial` (canonical bit-63 GS test, 05-11)/`intrregular`/`intrcommon`, `syscallentry`/`syscallreturn`, `trap_return`; IPI dispatch for LAPIC 0xF0/0xF1 (05-11) |
 | `uart16550.rs` | 5 | 0 | 0 | COM1 port I/O and the cons_rx single-writer/single-reader ring cells |
 | `usermem.rs` | 7 | 0 | 0 | the single validated user-memory entry point (UserSlice/UserSliceMut) |
 
