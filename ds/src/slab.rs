@@ -57,7 +57,7 @@
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
-use core::sync::atomic::AtomicU64;
+use core::sync::atomic::{AtomicU64, Ordering, fence};
 
 use crate::roaring::RoaringBitmap;
 
@@ -133,12 +133,49 @@ impl<const WORDS: usize> AtomicSlabSlot<WORDS> {
     /// in flight or the state changed mid-read (Boehm seqlock, D-11).
     #[inline]
     pub fn resolve(&self, expected_gen: u16, on_read: impl Fn()) -> Option<[u64; WORDS]> {
-        // RED skeleton (plan 05-05 Task 1): never resolves.
-        let _ = &self.state;
-        let _ = &self.words;
-        let _ = on_read;
-        let _ = expected_gen;
-        None
+        if expected_gen == 0 {
+            return None; // D-10: a generation is never zero
+        }
+        loop {
+            on_read();
+            let s1 = self.state.load(Ordering::Acquire);
+            if (s1 & WRITING) != 0 {
+                core::hint::spin_loop();
+                continue;
+            }
+            if (s1 & OCCUPIED) == 0 || decode_gen(s1) != expected_gen {
+                return None;
+            }
+            let mut raw = [0u64; WORDS];
+            for (dst, src) in raw.iter_mut().zip(self.words.iter()) {
+                *dst = src.load(Ordering::Relaxed);
+            }
+            fence(Ordering::Acquire);
+            let s2 = self.state.load(Ordering::Relaxed);
+            if s1 == s2 {
+                return Some(raw);
+            }
+        }
+    }
+
+    /// The Boehm write sequence: raise `WRITING` (`Relaxed`), `fence`(
+    /// `Release`), store the payload (`Relaxed`), then publish the new state
+    /// (`Release`).  Writers are serialised by the caller's `AllocMeta`
+    /// lock, so the load-then-store of `state` cannot race another writer.
+    fn publish(&self, cur: u64, words: &[u64; WORDS], published: u64) {
+        debug_assert_eq!(cur & WRITING, 0, "writers are serialised by the AllocMeta lock");
+        self.state.store(cur | WRITING, Ordering::Relaxed);
+        fence(Ordering::Release);
+        for (dst, &word) in self.words.iter().zip(words.iter()) {
+            dst.store(word, Ordering::Relaxed);
+        }
+        self.state.store(published, Ordering::Release);
+    }
+
+    /// The next published state for an alloc or an in-place update: same
+    /// generation, sequence bumped, `OCCUPIED` set, `WRITING` cleared.
+    fn next_live_state(cur: u64) -> u64 {
+        (cur & GEN_MASK) | ((cur >> SEQ_SHIFT).wrapping_add(1) << SEQ_SHIFT) | OCCUPIED
     }
 
     /// Publish `words` as a fresh allocation: keeps the generation, sets
@@ -146,10 +183,10 @@ impl<const WORDS: usize> AtomicSlabSlot<WORDS> {
     ///
     /// The caller serialises writers (the shard's `AllocMeta` lock).
     pub fn publish_alloc(&self, words: [u64; WORDS]) -> u16 {
-        // RED skeleton (plan 05-05 Task 1): publishes nothing.
-        let _ = &self.state;
-        let _ = words;
-        0
+        let cur = self.state.load(Ordering::Relaxed);
+        debug_assert_eq!(cur & OCCUPIED, 0, "alloc publishes on a free slot");
+        self.publish(cur, &words, Self::next_live_state(cur));
+        decode_gen(cur)
     }
 
     /// Publish an in-place update: keeps the generation, keeps `OCCUPIED`,
@@ -159,10 +196,12 @@ impl<const WORDS: usize> AtomicSlabSlot<WORDS> {
     ///
     /// The caller serialises writers (the shard's `AllocMeta` lock).
     pub fn publish_update(&self, expected_gen: u16, words: [u64; WORDS]) -> bool {
-        // RED skeleton (plan 05-05 Task 1): publishes nothing.
-        let _ = &self.state;
-        let _ = (expected_gen, words);
-        false
+        let cur = self.state.load(Ordering::Relaxed);
+        if (cur & OCCUPIED) == 0 || decode_gen(cur) != expected_gen {
+            return false;
+        }
+        self.publish(cur, &words, Self::next_live_state(cur));
+        true
     }
 
     /// Publish a clunk: scrubs every payload word to zero, clears
@@ -174,17 +213,29 @@ impl<const WORDS: usize> AtomicSlabSlot<WORDS> {
     ///
     /// The caller serialises writers (the shard's `AllocMeta` lock).
     pub fn publish_clunk(&self, expected_gen: u16) -> bool {
-        // RED skeleton (plan 05-05 Task 1): clunks nothing.
-        let _ = &self.state;
-        let _ = expected_gen;
-        false
+        let cur = self.state.load(Ordering::Relaxed);
+        if (cur & OCCUPIED) == 0 || decode_gen(cur) != expected_gen {
+            return false;
+        }
+        self.clunk(cur);
+        true
     }
 
     /// The unconditional clunk the failover sweep uses: it collects a slot
     /// by index, with no handle and so no generation to check.
     pub(crate) fn publish_clunk_any(&self) {
-        // RED skeleton (plan 05-05 Task 1): clunks nothing.
-        let _ = &self.state;
+        let cur = self.state.load(Ordering::Relaxed);
+        debug_assert_ne!(cur & OCCUPIED, 0, "the sweep only collects live slots");
+        self.clunk(cur);
+    }
+
+    /// The shared clunk publication: zeroed payload, bumped generation,
+    /// bumped sequence, `OCCUPIED` and `WRITING` cleared.
+    fn clunk(&self, cur: u64) {
+        let generation = next_generation(decode_gen(cur));
+        let published =
+            ((generation as u64) << GEN_SHIFT) | ((cur >> SEQ_SHIFT).wrapping_add(1) << SEQ_SHIFT);
+        self.publish(cur, &[0u64; WORDS], published);
     }
 }
 
@@ -624,6 +675,6 @@ mod tests {
             .alloc_slot(slab.slots(), payload(0x5E))
             .expect("a swept slot is back on the free list");
         assert_eq!(generation, 2, "the re-allocated slot carries the bumped generation");
-        assert_eq!(slab.resolve(idx, generation), Some(payload(0x5)));
+        assert_eq!(slab.resolve(idx, generation), Some(payload(0x5E)));
     }
 }
