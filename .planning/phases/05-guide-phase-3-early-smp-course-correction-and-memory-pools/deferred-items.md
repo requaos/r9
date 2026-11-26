@@ -76,3 +76,24 @@ Out-of-scope discoveries made during plan 05-08, not fixed by it:
   AP bring-up — its reschedule already parks via swtch (14-06), but it
   publishes Ready before the swtch and has no kstack-ownership token, so
   the same class opens the moment a second CPU runs procs there.
+
+# Plan 05-12 (2026-11-26) — residuals for the x86_64 -smp 2 boot proof
+# (05-14, Owner Stop 2):
+
+- **x86_64's scheduler carries the 05-22 shape BEFORE its hardening.**
+  05-12 ported the 05-10 migration shape (the plan's designated mirror):
+  `reschedule()` marks the preempted proc Ready + enqueues it under
+  PROC_TABLE and only then swtch'es off its kernel stack, and
+  `sched_from_moribund` frees the kstack before the swtch ("nothing
+  allocates until the hand-off" — false under a sibling CPU).  The
+  05-22-proven fixes (the `on_cpu` kstack-ownership token +
+  `release_left_proc` publish-off-the-kstack + the deferred moribund
+  reap) are NOT ported: 05-12's verification is compile/clippy/test
+  only (x86_64 cannot boot on the aarch64 dev host), and the phase
+  assigns the live -smp 2 boot proof to 05-14 (CI TCG + owner KVM).
+  05-12 did port the cheap half: `proc::preempt(interrupted_user)` gates
+  on the trap frame's ring-3 origin (the stale-current double-run tear
+  is closed from the start).  Owner: Plan 05-14 (the x86_64 -smp 2 boot
+  proof) — enter with `on_cpu` + `release_left_proc` + the deferred
+  reap queued from 05-22's fix list (ceb6ecc) before the stress legs.
+  status: open

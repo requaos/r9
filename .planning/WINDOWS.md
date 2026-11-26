@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 8
+open_count: 9
 waived_count: 0
 fixed_count: 5
-total_count: 13
-last_updated: 2026-11-26T16:57:27.518Z
+total_count: 14
+last_updated: 2026-11-26T17:59:03.744Z
 ---
 
 # Broken Windows Ledger
@@ -28,6 +28,7 @@ last_updated: 2026-11-26T16:57:27.518Z
 | 11 | 3 | deviation | .planning/phases/03-guide-phase-1-crypto-and-ds-foundations/evidence/closing-suite.md | 112 | Miri over the 120-second budget at phase end: MIRI-TIME closing-run-1 350 and closing-run-2 389 for 64 seeds over 29 tpht tests; no fix permitted in plan 03-10 (no source edits), reported for phase-end review | open |  | 2026-11-24T17:11:56.508Z |  |
 | 12 | 05 | unmet-truth | aarch64/src/proc.rs |  | 05-22: aarch64 -smp 2 smoke under HVF (gicv3) passes only ~50% — fork/exec-sweep corruption (wire garbage / mid-sweep stall); TCG gicv2 -smp 2 twice-consecutive green, R9_SMP=1 solid. FIXED by 339036f (the HVF kstack-handoff debug session): reschedule published a preempted proc Ready+enqueued while the CPU still ran on its kernel stack (a sibling could take traps on the same stack), and the secondary's sched loop ran IRQ-unmasked so an IRQ in the pick_next→trap_return handoff restored a scheduler-stack EL1h frame. Proc::on_cpu + the sched-loop release handoff close both; HVF -smp 2 smoke 8/8 consecutive after the fix (was 6/13), tripwire in pick_next guards the invariant | fixed |  | 2026-11-26T14:44:09.375Z | 2026-11-26T16:05:00.000Z |
 | 13 | 05 | unrun-verify | x86_64/src/platform/q35/acpi.rs |  | 05-11: MADT/lapic host pins compile-proven by error-diff on aarch64 dev host (x86_64 crate test harness is x86_64-host-only); assertion-level run lands on CI x86_64 runners | open |  | 2026-11-26T16:57:27.518Z |  |
+| 14 | 05 | unrun-verify | x86_64/src/platform/q35/timer.rs |  | 05-12: tick_plan/tick_rearm host pin unchanged in behavior but the x86_64 crate test harness is x86_64-host-only (aarch64 dev host cannot compile it — 05-11's recorded constraint); assertion-level run lands on CI x86_64 runners | open |  | 2026-11-26T17:59:03.744Z |  |
 
 ````json
 [
@@ -197,6 +198,19 @@ last_updated: 2026-11-26T16:57:27.518Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-11-26T16:57:27.518Z",
+    "resolved_at": null,
+    "milestone": "v3.1"
+  },
+  {
+    "id": 14,
+    "kind": "unrun-verify",
+    "phase": "05",
+    "file": "x86_64/src/platform/q35/timer.rs",
+    "line": null,
+    "description": "05-12: tick_plan/tick_rearm host pin unchanged in behavior but the x86_64 crate test harness is x86_64-host-only (aarch64 dev host cannot compile it — 05-11's recorded constraint); assertion-level run lands on CI x86_64 runners",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-26T17:59:03.744Z",
     "resolved_at": null,
     "milestone": "v3.1"
   }
