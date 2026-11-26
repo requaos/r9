@@ -849,6 +849,14 @@ pub fn rfmem_brk_set(family: u64, old_end: usize, new_end: usize) -> Result<()> 
             // This page never published a refcount: unmap it from the
             // members that took it, drop their records, free the page.
             for &m in &mapped {
+                // SAFETY: `m` is a PROC_TABLE-resident member pointer
+                // from the `mapped` list this growth just built; single
+                // CPU, IRQ-masked syscall context (an SMP-03 audit
+                // site), so the &mut deref is exclusive — no member is
+                // running.  pml4_unmap_user removes the VA this loop's
+                // own pml4_map_user installed (with its per-write TLB
+                // invalidate), and the swap_remove drops exactly that
+                // mapping's log record.
                 unsafe {
                     let p = &mut *m;
                     pml4_unmap_user(p.pml4_pa, va);
@@ -870,6 +878,13 @@ pub fn rfmem_brk_set(family: u64, old_end: usize, new_end: usize) -> Result<()> 
         // release per member — the last release frees.
         for &(done_va, done_pa) in &done {
             for &m in &members {
+                // SAFETY: `m` is a PROC_TABLE-resident member pointer
+                // from `members` (rfmem_family_members); single CPU,
+                // IRQ-masked syscall context (an SMP-03 audit site), so
+                // the &mut deref is exclusive.  `done_va` was mapped
+                // into this member by this function's own pml4_map_user
+                // (per-write TLB invalidate inside the unmap), so the
+                // unmap and the swap_remove target exactly that record.
                 unsafe {
                     let p = &mut *m;
                     pml4_unmap_user(p.pml4_pa, done_va);

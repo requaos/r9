@@ -128,6 +128,13 @@ pub extern "C" fn main(mach: &mut dat::Mach, mbdata: u64) {
     // Interrupts stay masked: the mb2 i386 entry contract guarantees
     // EFLAGS.IF=0 and l.S never raises it — sti arrives with the timer
     // in 13-03, after the handlers exist (the Phase-3 ordering rule).
+    // SAFETY: runs once on the boot CPU at CPL 0 with interrupts masked
+    // (the mb2 contract above); `mach` is the exclusively borrowed,
+    // l.S-initialized Mach, so Mach::init's unsafe-fn contract (the
+    // &mut self receiver names valid, live GDT/IDT/TSS tables) is met,
+    // and arm_syscall_entry's contract (MSR values matching the
+    // just-loaded GDT — its own # Safety section) is met by loading
+    // the descriptors first.
     unsafe {
         mach.idt.init(trap::stubs());
         mach.gdt.init(&mut mach.tss);
@@ -335,6 +342,13 @@ pub extern "C" fn main(mach: &mut dat::Mach, mbdata: u64) {
 /// values must match the loaded GDT's selector order (they do — both
 /// sides derive from `seg::GdtData`).
 unsafe fn arm_syscall_entry(mach: &dat::Mach) {
+    // SAFETY: the fn's own contract — runs once at init on the boot CPU
+    // at CPL 0 with interrupts masked.  Every wrmsr writes an
+    // architectural SYSCALL/SYSRET MSR with a value consistent with the
+    // just-loaded GDT (STAR's selector arithmetic is Gdt::star's) or
+    // preserves l.S's bits (the EFER read-modify-write keeps LME/NXE);
+    // LSTAR names trap.rs's real `syscallentry` asm symbol.  cpu::wrmsr
+    // /_rdmsr carry their own operand contracts (cpu.rs).
     unsafe {
         // FSbase = 0, GSbase = the Mach pointer, KernelGSbase = 0 (the
         // user GS base is 0 — user code does not use GS).  l.S's
@@ -371,6 +385,10 @@ unsafe fn arm_syscall_entry(mach: &dat::Mach) {
 
 fn halt() -> ! {
     loop {
+        // SAFETY: CPL 0; `cli` masks interrupts and `hlt` parks the CPU
+        // until the next interrupt — with IF=0 that is forever, which
+        // is exactly halt()'s `-> !` contract.  No operands, no memory
+        // touched.
         unsafe { core::arch::asm!("cli; hlt") };
     }
 }

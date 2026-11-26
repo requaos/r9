@@ -66,6 +66,13 @@ pub struct Stub(usize);
 impl Stub {
     /// Returns a function pointer that represents a stub.
     pub unsafe fn as_thunk(&self) -> Thunk {
+        // SAFETY: `self.0` is the byte address of one of the 256 stubs
+        // inside `intr_stubs` (produced by `stubs()` from that very
+        // symbol), so the transmuted pointer names a real, executable
+        // kernel-text entry.  The `Thunk` is never called from Rust —
+        // `Idt::init` installs it into an IDT entry, and the CPU's trap
+        // dispatch is the only caller, matching the stub's naked-asm
+        // entry contract.
         unsafe { core::mem::transmute::<usize, Thunk>(self.0) }
     }
 }
@@ -133,6 +140,13 @@ macro_rules! gen_trap_stub {
 }
 
 pub fn stubs() -> &'static [Stub; 256] {
+    // SAFETY: `intr_stubs` is the 4096-aligned naked emitter of exactly
+    // 256 stubs, each `.balign 8` with a body of 5 to 7 bytes, so the
+    // symbol's address backs exactly 256 × 8 bytes of `.trap`-section
+    // contents.  `Stub` is `#[repr(transparent)]` over `usize` (8 bytes,
+    // no validity invariants beyond alignment, which the `.balign 8`
+    // chain guarantees), and the reference is `'static` because the
+    // linked `.trap` section lives for the kernel's lifetime.
     unsafe { &*(intr_stubs as *const () as usize as *const [Stub; 256]) }
 }
 

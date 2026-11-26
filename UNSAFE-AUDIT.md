@@ -16,48 +16,75 @@ io.rs 3, the rest ≤ 2).
 `unsafe fn`, `unsafe impl`, or `unsafe extern` token.  SAFETY comments sit
 one-per-site on every block/impl the lint can see; the lint
 (`clippy::undocumented_unsafe_blocks = "deny"`, workspace lints, opted into by
-the four gated crates only) enforces this mechanically — never the honor
-system.  Sites the lint cannot see are documented per-file below (test-only
-blocks, unsafe fns, extern blocks).
+the five gated crates — aarch64, x86_64, port, crypto, ds) enforces this
+mechanically — never the honor system.  Sites the lint cannot see are
+documented per-file below (test-only blocks, unsafe fns, extern blocks, and
+code behind cfgs no gate config compiles).
 
-**Scope line (explicit, not silent):** elimination covers the aarch64, port,
-crypto and ds crates — the four gated crates (boot-test is aarch64-only;
-`cargo test -p port` is port-only; `cargo test -p crypto` / `-p ds`, the
-soft-backend `crypto` leg and the two `lib/*-unknown-none-elf.json` cross legs
-cover the two new crates).  `crypto/` and `ds/` are host-tested and
+**Scope line (explicit, not silent):** elimination covers the aarch64, x86_64,
+port, crypto and ds crates — the five gated crates, each opted into the
+workspace lints via `[lints] workspace = true` in its own manifest (x86_64
+joined at Phase 5's CORR-05, 2026-11-26, once its last undocumented unsafe
+block carried a concrete SAFETY comment).  `crypto/` and `ds/` are host-tested and
 cross-checked only: no kernel crate depends on them in Phase 3, so neither is
 linked into a kernel yet (CONTEXT D-21).  **Phase 4 update (2026-11-24):** that
 Phase 3 statement is kept as history; `port` now depends on `crypto/` and
 `ds/` (CONTEXT D-22), so both crates' unsafe code is linked into the kernel
-images.  x86_64 + riscv64 are NEVER compiled
-by the gates: they are classified by per-file count only, get NO elimination
-and NO lint opt-in.  Extending the lint and this audit to `x86_64` is Phase 5's
-question, when `shadow.rs` and `cryptpage.rs` land (CONTEXT D-11); it is not
-done here.
+images.  riscv64 is NEVER compiled
+by the gates: it is classified by per-file count only, gets NO elimination
+and NO lint opt-in (the Phase 7 sync is its audit horizon).
+
+**The uniform policy (CORR-05, D-02, D-03):** `crypto/` is crate-level
+`#![forbid(unsafe_code)]` over r9's own code (the pinned crates it wraps are
+the third-party record below).  `ds/` is per-module forbidden: exactly two
+places may hold `unsafe` — `ds/src/tpht/` and one reserved Roaring SIMD
+module (no code until MEM-17); a third needs owner approval (Phase 3 D-09).
+`port/` is per-module forbidden with the three named floor modules
+`globalalloc`, `mcslock` and `devip_waker`; no fourth without owner approval
+(IG-D07 amended, D-02).  The workspace lint `clippy::undocumented_unsafe_blocks
+= deny` applies in all five opted-in crates, so every unsafe block in
+`ds/src/tpht/`, `aarch64/src` and `x86_64/src` (and everywhere else in those
+crates) must carry a concrete `// SAFETY:` comment — enforced mechanically on
+every config a clippy leg compiles, and static-scanned tree-wide below.
 
 ## Reconciliation (mechanical)
 
 | Set | Sites |
 |-----|-------|
-| aarch64 unsafe blocks+impls (lint-visible) | 129 |
-| port unsafe blocks+impls, non-test, production (lint-visible) | 23 |
+| aarch64 unsafe blocks+impls (lint-visible, non-test production) | 186 |
+| x86_64 unsafe blocks+impls (lint-visible, non-test production) | 158 |
+| port unsafe blocks+impls, non-test, production (lint-visible) | 22 |
 | crypto unsafe blocks+impls (lint-visible) | 0 |
 | ds unsafe blocks+impls, non-test, production (lint-visible) | 1 |
-| **SAFETY annotations (comment immediately preceding a site)** | **153** |
-| port test-only blocks (cfg(test) crate-root test module — the pin/stress arena scaffolding; not lint-gated, never shipped) | 10 |
-| unsafe fns (documented by `# Safety` / fn-level docs, not lint-checked) | 16 |
-| unsafe extern blocks (not lint-checked; items doc'd individually) | 6 |
+| **SAFETY annotations (comment immediately preceding a site)** | **384** |
+| aarch64 test-only blocks (cfg(test) modules — not lint-gated, never shipped) | 6 |
+| x86_64 test-only blocks (cfg(test) modules — not lint-gated, never shipped) | 8 |
+| port test-only blocks (cfg(test) crate-root test module — the pin/stress arena scaffolding; not lint-gated, never shipped) | 11 |
+| unsafe fns (documented by `# Safety` / fn-level docs, not lint-checked) — aarch64 9, x86_64 30, port 11 | 50 |
+| unsafe extern blocks (not lint-checked; items doc'd individually) — aarch64 6, x86_64 2 | 8 |
 
-129 + 23 + 1 + 0 = 153: the site count reconciles with the SAFETY-annotation
-count exactly (measured by script: each unsafe block/impl immediately preceded by
-a SAFETY comment).  The 10 test-only blocks are the moved pin/stress tests'
-arena setups + raw write/read backs (`port/src/allocator_tests.rs`).
+Re-measured 2026-11-26 (CORR-05) by a comment-stripping static scan over every
+tracked `.rs` file: production lint-visible sites 186 + 158 + 22 + 1 + 0 = 367,
+and zero of them lacks a SAFETY comment — the scan found no undocumented
+production site in any opted-in crate, and the gate configs prove the lint side
+mechanically (`cargo xtask clippy --arch aarch64 --config virtshell` and
+`--arch x86-64 --config q35cpu` both exit 0 under the workspace
+`undocumented_unsafe_blocks = deny`).  The annotation total (384) exceeds the
+production-site total because cfg(test) modules and a few doubly-commented
+sites carry SAFETY comments too.  Code behind cfgs no gate config compiles (the
+dev_ether arms of both `pci.rs` drivers, the churn/cap/net gate files) inherits
+the same deny lint the moment a config builds it.
 
-The `aarch64` figure of 129 above is kept exactly as it was measured; Phase 3
-research found 7 undocumented blocks in `aarch64/` under `cargo xtask clippy
---arch aarch64 --config virtshell` (`platform/virt/rtc.rs:75`, `proc.rs:439`,
-`470`, `1823`, `2753`, `textcopy.rs:158`, `172`), so that figure may be stale.
-It was not re-derived here because it is outside Phase 3.
+The aarch64 row replaces the stale 129, measured at Phase 3 against the
+pre-Phase-4 tree and already flagged here as suspect.  The growth is real code
+that post-dates that measurement: `platform/virt/pci.rs`,
+`platform/virt/gic/gicv3.rs`, `fpu.rs`, `textcopy.rs`, `churngate.rs` and the
+proc.rs rfork/brk machinery.  The 7 undocumented aarch64 blocks the Phase 3
+research found (`platform/virt/rtc.rs:75`, `proc.rs:439`, `470`, `1823`,
+`2753`, `textcopy.rs:158`, `172`) were documented in 05-03; virtshell clippy is
+green.  The x86_64 row is new (CORR-05): the crate was classified by count only
+until this phase, and the legacy table's entries for files deleted with the
+old x86_64 generation are gone.
 
 **Phase 3 delta (crypto/ and ds/ join, 2026-11-24):** two workspace crates join
 the contract (CONTEXT D-09, D-10, D-11, D-12).  `ds/` is per-module forbidden
@@ -90,6 +117,17 @@ kernel images, including the BLAKE3 SSE2, SSE4.1 and AVX2 routines that are
 compiled as scalar code for the soft-float target and never selected.  No new
 unsafe site of any kind was added in this phase, and the third-party record is
 unchanged.
+
+**Phase 5 delta (x86_64 joins, CORR-05, 2026-11-26):** `x86_64` opts into
+`[lints] workspace = true`, becoming the fifth gated crate.  05-03 documented
+the 7 aarch64 virtshell sites and the first 24 x86_64 sites (allocator, cpu,
+dat, pio, seg); 05-04 documented the remaining 8 (`trap.rs` ×2, `uart16550.rs`,
+`proc.rs` ×2 — SMP-03 audit sites, `main.rs` ×3) and flipped the manifest.
+Comments and one manifest line only: no unsafe site was added or removed, and
+kernel `.text` is unchanged.  The x86_64 per-file inventory below replaces the
+legacy table's deleted-file row, and the static lint
+contract's R6 now pins the opt-in on both arch manifests with both arch clippy
+legs in CI.
 
 ## ds/ and crypto/ (Phase 3)
 
@@ -280,7 +318,7 @@ uartpl011 (tree-wide: no driver touches io.rs directly anymore).  The
 | aarch64/proc.rs `read_curframe`/`write_curframe`/`write_curkstack` (3 blocks) | block ×3 | SyncUnsafeCell IO on the trap.S ABI symbols — the module-header write discipline |
 | aarch64/proc.rs `sched_context` (1 block) | block ×1 | seed-once cell discipline, IRQ-masked single CPU |
 | aarch64/platform/virt/pl011.rs `Pl011Uart::new` + `init_rx` + `rx_irq_cons_buffer` ×2 + `cons_rx_drain` + `cons_rx_pending` + `cons_rx_fifo_pending` + `cons_rx_ring_pos` + `rx_irq_echo` (9 blocks) | block ×9 | PL011_RANGE (publish-once before unmask) + CONS_RX (single-writer-IRQ / single-reader-syscall ring) cell disciplines — the research-P8 lock-free IRQ path |
-| aarch64/platform/virt/gic.rs `init`/`enable`/`ack`/`eoi` (4 blocks) | block ×4 | GIC write-once cell, lock-free IRQ reads (research P8) |
+| aarch64/platform/virt/gic/mod.rs `init`/`enable`/`ack`/`eoi` (4 blocks) + gic/gicv3.rs redistributor wake, ICC system-register access and SGI emission (7 blocks) | block ×11 | GIC write-once cell, lock-free IRQ reads (research P8); the v3 redistributor/SGI paths are the same MMIO-volatility floor |
 | aarch64/platform/{virt,raspi3b}/devcons.rs `init` (1 block each) | block ×2 | write-once UART cell at platform init |
 | port/devmnt.rs — NONE (wave 2) | — | the session core rides mcslock::BusyCell; msize/version are frozen set-once plain fields.  **05-09 overlap: preserved** (the four-string stat + one-outstanding-RPC discipline are byte-identical semantics) |
 | aarch64/main.rs `main9`'s DTB two-pass + initrd `from_raw_parts`; `exec_bootstrap`'s `&*proc.frame` (3 blocks) | block ×3 | vminit-live DTB mapping (the header_totalsize + new two-step, wave 2); the reserved+mapped initrd; the seeded frame |
@@ -310,16 +348,86 @@ uartpl011 (tree-wide: no driver touches io.rs directly anymore).  The
 | port/devip/waker.rs (mounted as `devip_waker`) — the 08-02 smoltcp waker bridge: the RawWaker vtable (clone/wake/wake_by_ref/drop fns + the shared wake path's slot deref block) + `Waker::from_raw` in `waker_for` | fn ×4, block ×2 | constructing a `core::task::Waker` is irreducibly unsafe (no safe constructor exists).  **Invariant: the wakee-pid slot is armed (written) before registration, read at wake, and never outlives the conv** (`&'static WakeSlot` makes it mechanical — slots live in conv-table/test statics).  The vtable wake records into the seam's pending-wake set only — never the wake hook directly (wake-after-drop, stack.rs's header).  Host pins (a)/(b) in `port/src/devip_tests.rs` exercise the wake path. |
 | port/fdt.rs — NONE (wave 2) | — | `from_usize` removed; `header_totalsize` + `new` are fully safe (the raw-pointer two-pass lives at the aarch64/riscv64 boot callers) |
 
+## Per-file inventories (measured 2026-11-26, CORR-05)
+
+Every tracked `.rs` file with a production `unsafe` token, counted by the
+comment-stripping static scan (blocks / unsafe fns / unsafe extern blocks;
+cfg(test) module contents are excluded and totalled separately).  Both arch
+crates are lint-opted-in, so every listed block carries a `// SAFETY:` comment
+— clippy `undocumented_unsafe_blocks = deny` is green on the virtshell and
+q35cpu gate configs, and the scan finds zero undocumented production sites in
+cfg-gated code as well.
+
+### aarch64/src — 186 blocks, 9 unsafe fns, 6 extern blocks (test-only: 6 blocks)
+
+| File | Blocks | fns | ext | Surface |
+|---|---|---|---|---|
+| `allocator.rs` | 3 | 0 | 0 | the global allocator's arena static init + diagnostic reads |
+| `exec.rs` | 6 | 0 | 0 | KZERO-alias image-page writes and seed-stack/argv construction |
+| `fault.rs` | 2 | 0 | 0 | the demand pager's user-page fills through the live TTBR0 |
+| `fpu.rs` | 11 | 2 | 0 | FP/SIMD (q0-q31/FPCR/FPSR) save/restore, per-CPU `CpuFp`, `with_simd` (+1 test-only block) |
+| `io.rs` | 9 | 0 | 0 | the MMIO-volatility primitives every driver rides |
+| `kmem.rs` | 9 | 0 | 1 | kernel.ld boundary symbols (addresses only, never contents) |
+| `main.rs` | 6 | 0 | 1 | link-syms, DTB two-pass, the idle wfi, the boot-time TTBR0 switch + first EL0 entry |
+| `pagealloc.rs` | 2 | 0 | 0 | `VirtPage4KGuard` deref pair |
+| `platform/raspi3b/devcons.rs` | 1 | 0 | 0 | write-once UART cell at platform init |
+| `platform/raspi3b/mailbox.rs` | 2 | 0 | 0 | the mailbox's mapped request page |
+| `platform/virt/churngate.rs` | 2 | 0 | 0 | gate marker cells (single-writer boot / single-reader) |
+| `platform/virt/devcons.rs` | 2 | 0 | 0 | write-once UART cell at platform init |
+| `platform/virt/gic/gicv3.rs` | 7 | 0 | 0 | redistributor wake, ICC system registers, SGI emission |
+| `platform/virt/gic/mod.rs` | 4 | 0 | 0 | GIC write-once cell, lock-free IRQ ack/eoi reads |
+| `platform/virt/pci.rs` | 10 | 0 | 0 | DTB/ECAM discovery and virtio-net bind: publish-once cells + MMIO (the dev_ether arms) |
+| `platform/virt/pl011.rs` | 9 | 0 | 0 | PL011_RANGE publish-once + CONS_RX single-writer-IRQ ring cells |
+| `platform/virt/rtc.rs` | 1 | 0 | 0 | PL031 MMIO read on the mapped rw_device page |
+| `pre_mmu/util.rs` | 7 | 2 | 0 | pre-driver early console: fixed-PA MMIO, identity-mapped pre-MMU |
+| `pre_mmu/vminit.rs` | 23 | 0 | 1 | pre-MMU boot: identity-map page-table construction, isb/tlbi, DTB parse |
+| `proc.rs` | 29 | 0 | 1 | the process machinery floor: link-syms, KZERO+PA table/page writes, switch/resume ABI, ProcGuard/curframe cells |
+| `swtch.rs` | 0 | 0 | 1 | the context-switch ABI (swtch.S); one host-test twin fn |
+| `textcopy.rs` | 8 | 2 | 0 | rfork text-copy emit/call and the I-cache selftest (RO text under KZERO aliases) (+5 test-only blocks) |
+| `trap.rs` | 8 | 0 | 1 | the trap-vector interface: VBAR install, DAIFClr, trap.S entry ABI, wfi parks |
+| `usermem.rs` | 7 | 0 | 0 | THE single user-memory materialization point (UserSlice/UserSliceMut/UserPtr/UserString) |
+| `vm.rs` | 16 | 3 | 0 | page-table machinery: TTBR/TLB/barrier asm, entry writes, recursive-mapping resolution |
+| `vmdebug.rs` | 2 | 0 | 0 | read-only recursive-mapping walk (print path) |
+
+### x86_64/src — 158 blocks, 30 unsafe fns, 2 extern blocks (test-only: 8 blocks, 2 fns)
+
+| File | Blocks | fns | ext | Surface |
+|---|---|---|---|---|
+| `allocator.rs` | 3 | 0 | 0 | the global-allocator arena's one-time static construction + read-only diagnostic snapshots |
+| `cpu.rs` | 13 | 6 | 0 | CPL-0 instruction primitives: `ltr`/`lgdt`/`lidt`, `_rdmsr`/`wrmsr`, `wrgsbase` (the fns); flags/sti/cli/cpuid/rdtsc/rdrand/rdseed blocks |
+| `dat.rs` | 4 | 1 | 0 | Ureg↔saved-frame copies, the Mach's CpuFp cell write, `Mach::init`'s GDT/IDT/TSS load |
+| `exec.rs` | 5 | 0 | 0 | KZERO-alias writes into just-mapped image pages and the seed page (+2 test-only blocks) |
+| `fpu.rs` | 11 | 2 | 0 | FXSAVE64/FXRSTOR64 save/restore asm (`save_raw`/`restore_raw`), per-CPU `CpuFp`, `with_simd` (+1 test-only block) |
+| `main.rs` | 9 | 1 | 1 | boot descriptor arming, the mb2 stash slice, `arm_syscall_entry`'s MSR program, `halt`'s cli/hlt; extern: the l.S link-syms |
+| `pio.rs` | 6 | 6 | 0 | the port-I/O primitives (`inb`/`inw`/`inl`/`outb`/`outw`/`outl`, CPL 0) |
+| `platform/q35/acpi.rs` | 1 | 0 | 0 | bounds-checked volatile byte reads of firmware tables |
+| `platform/q35/churngate.rs` | 2 | 0 | 0 | the churn gate's one-shot stash cells (single writer at boot / single reader) |
+| `platform/q35/devcons.rs` | 2 | 0 | 0 | COM1 port I/O + the write-once console cell at platform init |
+| `platform/q35/ioapic.rs` | 5 | 0 | 0 | IOAPIC select/data MMIO window (bounds-checked base) |
+| `platform/q35/lapic.rs` | 8 | 0 | 0 | identity-mapped LAPIC MMIO and x2APIC register MSRs, the ICR IPI write |
+| `platform/q35/mod.rs` | 2 | 0 | 0 | the publish-once ACPI cell (write at print_machine_info, lock-free reads) |
+| `platform/q35/netgate.rs` | 2 | 0 | 0 | the net gate driver's `hlt` park loops |
+| `platform/q35/pci.rs` | 28 | 0 | 0 | MCFG/ECAM MMIO walks, 0xCF8/0xCFC config mechanism, publish-once discovery/bind cells, virtio-net IRQ path |
+| `platform/q35/timer.rs` | 5 | 0 | 0 | TSC-deadline/CPUID check, publish-once timer state cells |
+| `proc.rs` | 30 | 1 | 1 | the process machinery floor: `first_entry` ABI, pml4 map/unmap through the KZERO alias, brk/rfork unwind (SMP-03 audit sites), link-syms (+3 test-only blocks, 1 fn) |
+| `seg.rs` | 3 | 3 | 0 | GDT/IDT/TSS `load` (the fns) on architecturally valid tables |
+| `swtch.rs` | 0 | 1 | 0 | `swtch` context-switch ABI (+1 host-test twin fn) |
+| `syscall.rs` | 1 | 0 | 0 | the `trap_return` tail call on the seeded frame (+2 test-only blocks) |
+| `trap.rs` | 6 | 9 | 0 | the trap-vector interface: `intr_stubs` emitter, `as_thunk`, `intrspecial`/`intrregular`/`intrcommon`, `syscallentry`/`syscallreturn`, `trap_return` |
+| `uart16550.rs` | 5 | 0 | 0 | COM1 port I/O and the cons_rx single-writer/single-reader ring cells |
+| `usermem.rs` | 7 | 0 | 0 | the single validated user-memory entry point (UserSlice/UserSliceMut) |
+
 ### Out of scope (never compiled by the gates — classified by count only)
 
 | Crate | File | unsafe tokens |
 |---|---|---|
-| x86_64 | allocator.rs 1, cpu.rs 15, dat.rs 2, devcons.rs 1, main.rs 4, node0.rs 29, pio.rs 6, proc.rs 1, syscall.rs 3, trap.rs 9, uart16550.rs 1, vsvm.rs 9 | **81** |
 | riscv64 | allocator.rs 1, main.rs 1, nezha/devcons.rs 1, virt/devcons.rs 1, runtime.rs 1, sbi.rs 2, uart16550.rs 4 | **11** (+ 1 `static mut` declaration in nezha/devcons.rs, an additional non-token site) |
 
-Rationale: the gates (five aarch64 boot profiles + `cargo test -p port` +
-virtshell build/clippy) never compile these crates; elimination work there
-would be unverifiable — recorded, not touched.
+Rationale: the gates never compile riscv64; elimination work there would be
+unverifiable — recorded, not touched.  x86_64 left this table at CORR-05
+(2026-11-26): it is lint-opted-in and inventoried above.  The legacy row's two
+entries named files deleted with the old x86_64 generation and are dropped.
+riscv64's audit horizon is the Phase 7 sync.
 
 ## asm! consolidation note (wave 3 — landed)
 

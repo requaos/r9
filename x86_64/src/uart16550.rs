@@ -11,6 +11,9 @@ const LSR: u16 = 5; // line status
 const LSR_DATA_READY: u8 = 0x01;
 
 pub fn putb(port: u16, b: u8) {
+    // SAFETY: CPL 0 port write to the 16550's THR at `port` (callers
+    // pass COM1, the architectural q35 console port — the const's doc);
+    // `outb` has no memory operands and cannot fault at ring 0.
     unsafe {
         crate::pio::outb(port, b);
     }
