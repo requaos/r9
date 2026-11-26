@@ -114,6 +114,15 @@ pub mod pgrp;
 pub mod rendez;
 #[forbid(unsafe_code)]
 pub mod rfork;
+// smp (Phase 5, 05-07, SMP-02/SMP-07/SMP-12, D-25/D-26): the portable SMP
+// core — the SmpArch per-CPU hook boundary (registered once by the arch
+// crate before CPU 1 starts), the documented LockRank table with
+// debug/gate rank assertions and the per-cpu progress watchdog, and the
+// lock-free TLB shootdown coordinator.  Unsafe-free: the one pointer
+// bridge (the publish-once cell behind register_arch) lives in the
+// mcslock floor module.
+#[forbid(unsafe_code)]
+pub mod smp;
 #[forbid(unsafe_code)]
 pub mod virtio;
 

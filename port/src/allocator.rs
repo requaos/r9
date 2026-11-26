@@ -580,6 +580,72 @@ pub mod global {
 // lists, and the cursor only ever grows) — the pair still localizes a
 // leak: a cursor that climbs with every proc while live allocations
 // stay flat names a permanent-burn bug's slope.
+
+/// The fixed capacity of one side of a [`CensusSnapshot`] (live or
+/// pooled): distinct (size, count) classes recorded under the heap lock
+/// without allocating (SMP-03).  Generous against the kernel's real class
+/// count (9 quick classes plus the misc block sizes actually in play);
+/// classes beyond the cap fold into the snapshot's overflow counter.
+pub const CENSUS_SNAPSHOT_CAP: usize = 256;
+
+/// A non-allocating tally of the live/pooled block census (SMP-03): the
+/// counts land in fixed arrays under the heap lock, and the Vec copies
+/// happen after the lock is released, so the census can never re-enter
+/// the allocator from inside its own lock.
+#[derive(Clone, Copy)]
+pub struct CensusSnapshot {
+    pub live: [(usize, usize); CENSUS_SNAPSHOT_CAP],
+    pub live_len: usize,
+    /// Blocks whose size classes did not fit in `live` (count of BLOCKS,
+    /// not classes — the leak fingerprint's magnitude).
+    pub live_overflow: usize,
+    pub pooled: [(usize, usize); CENSUS_SNAPSHOT_CAP],
+    pub pooled_len: usize,
+    /// Blocks whose size classes did not fit in `pooled`.
+    pub pooled_overflow: usize,
+}
+
+impl CensusSnapshot {
+    const fn new() -> CensusSnapshot {
+        CensusSnapshot {
+            live: [(0, 0); CENSUS_SNAPSHOT_CAP],
+            live_len: 0,
+            live_overflow: 0,
+            pooled: [(0, 0); CENSUS_SNAPSHOT_CAP],
+            pooled_len: 0,
+            pooled_overflow: 0,
+        }
+    }
+
+    fn add_live(&mut self, size: usize) {
+        Self::add(&mut self.live, &mut self.live_len, &mut self.live_overflow, size);
+    }
+
+    fn add_pooled(&mut self, size: usize) {
+        Self::add(&mut self.pooled, &mut self.pooled_len, &mut self.pooled_overflow, size);
+    }
+
+    fn add(table: &mut [(usize, usize)], len: &mut usize, overflow: &mut usize, size: usize) {
+        for (sz, n) in table[..*len].iter_mut() {
+            if *sz == size {
+                *n += 1;
+                return;
+            }
+        }
+        if *len < table.len() {
+            table[*len] = (size, 1);
+            *len += 1;
+        } else {
+            *overflow += 1;
+        }
+    }
+
+    fn sort(&mut self) {
+        self.live[..self.live_len].sort_unstable();
+        self.pooled[..self.pooled_len].sort_unstable();
+    }
+}
+
 impl QuickFit {
     /// The bump cursor (bytes carved from the arena front so far) and
     /// the arena size.  Read-only; single CPU this era.
@@ -601,6 +667,22 @@ impl QuickFit {
     pub fn split_census(
         &self,
     ) -> (alloc::vec::Vec<(usize, usize)>, alloc::vec::Vec<(usize, usize)>) {
+        let snap = self.split_census_snapshot();
+        let mut live = alloc::vec::Vec::with_capacity(snap.live_len);
+        live.extend_from_slice(&snap.live[..snap.live_len]);
+        let mut pooled = alloc::vec::Vec::with_capacity(snap.pooled_len);
+        pooled.extend_from_slice(&snap.pooled[..snap.pooled_len]);
+        (live, pooled)
+    }
+
+    /// The non-allocating form of the census (SMP-03): the tally runs into
+    /// a fixed-capacity stack snapshot, so the caller can hold the heap
+    /// lock across it without a re-entrant `Vec::push` self-deadlock.
+    /// Classes beyond `CENSUS_SNAPSHOT_CAP` per side fold into the
+    /// snapshot's overflow counters (the cap is generous against the
+    /// kernel's real class count — 9 quick classes plus the misc block
+    /// sizes actually in play).
+    pub fn split_census_snapshot(&self) -> CensusSnapshot {
         // Mark every slot on a free list (quick lists, the misc list)
         // or a free-slot chain as pooled/uninteresting.
         let mut pooled_bits = [0u64; (HEADER_TOTAL + 63) / 64];
@@ -618,23 +700,21 @@ impl QuickFit {
         walk(self.misc, &mut mark);
         walk(self.free_main, &mut mark);
         walk(self.free_reserve, &mut mark);
-        let mut live = alloc::vec::Vec::new();
-        let mut pooled = alloc::vec::Vec::new();
+        let mut snap = CensusSnapshot::new();
         let high = core::cmp::max(self.high_main, self.high_reserve) as usize;
         for (i, s) in self.slots[..core::cmp::min(high, self.slots.len())].iter().enumerate() {
             if !s.used {
                 continue;
             }
             let on_free_list = pooled_bits[i / 64] & (1u64 << (i % 64)) != 0;
-            let bucket = if on_free_list { &mut pooled } else { &mut live };
-            match bucket.iter_mut().find(|(sz, _)| *sz == s.size) {
-                Some((_, n)) => *n += 1,
-                None => bucket.push((s.size, 1)),
+            if on_free_list {
+                snap.add_pooled(s.size);
+            } else {
+                snap.add_live(s.size);
             }
         }
-        live.sort_unstable();
-        pooled.sort_unstable();
-        (live, pooled)
+        snap.sort();
+        snap
     }
 
 }

@@ -1,0 +1,15 @@
+{
+  "command": "nix develop -c cargo test -p port smp",
+  "exitCode": 101,
+  "targetTest": "smp::tests::lock_rank_inversion_panics_naming_both_locks",
+  "targetFile": "port/src/smp.rs",
+  "output": "TAP version 13\n1..6\nnot ok 1 - smp::tests::lock_rank_inversion_panics_naming_both_locks\nok 2 - smp::tests::lock_rank_valid_order_succeeds\nok 3 - smp::tests::register_arch_publishes_once\nok 4 - smp::tests::smp_shootdown_poll_flushes_target_va_and_acks\nok 5 - smp::tests::smp_shootdown_request_completes_when_remote_polls\nnot ok 6 - smp::tests::watchdog_reports_stuck_cpu_and_lock\n# tests 6\n# pass 4\n# fail 2\n",
+  "expected": "SMP-12/D-26 guards: rank_before_acquire panics on equal-or-lower rank (50 -> 40 and 50 -> 50) naming BOTH the held and requested locks with their ranks; watchdog_check_all panics 'WATCHDOG: cpu <id> stuck for <ticks> ticks waiting on lock \"<name>\" (held by cpu <owner>)' for a cpu past threshold with no heartbeat progress, and never trips on idle or active cpus",
+  "actual": "RED scaffolding records the rank stack and watchdog fields but omits the two panics (the planned guards): lock_rank_inversion_panics_naming_both_locks fails at port/src/smp.rs ('rank inversion 50 -> 40 was not caught') and watchdog_reports_stuck_cpu_and_lock fails at port/src/smp.rs ('the watchdog did not trip on a stuck cpu'). The other 4 tests pass in the same binary: rank stack push/remove plumbing incl. non-LIFO release, register_arch publish-once + double-publish panic, and both shootdown poll/request tests (poll flushes the target VA and acks; the initiator barrier completes against a remote polling thread) — no compile errors, no zero-test discovery, no fixture crashes",
+  "output_format_note": "cargo test does not emit TAP; the output field is a faithful TAP transcription of the cargo run (exit 101, 'test result: FAILED. 4 passed; 2 failed; 0 ignored; 168 filtered out'), names matching the log's ok/FAILED lines. Transcribed per the 05-06 precedent because gsd_run check tdd-red-evidence parses TAP/Surefire summaries only.",
+  "recorded_at": "2026-11-26T06:35Z",
+  "plan": "05-07",
+  "task": 1,
+  "phase": "05-guide-phase-3-early-smp-course-correction-and-memory-pools",
+  "notes": "Task 1 of 05-07 is tdd=true. The RED commit is test(05-07) with the port/src/smp.rs scaffolding (SmpArch boundary, LockRank table, rank stack + watchdog state, ShootdownCoordinator, test hooks) plus the OnceStatic publish-once cell in the mcslock floor module (the one pointer bridge register_arch needs; smp.rs itself is #[forbid(unsafe_code)]) and the UNSAFE-AUDIT.md delta for that site (D-03). The GREEN commit adds the rank-inversion panic in rank_watch::acquire and the named stuck-cpu panic in rank_watch::check_one."
+}

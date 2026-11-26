@@ -1,0 +1,15 @@
+{
+  "command": "nix develop -c cargo test -p port mcslock",
+  "exitCode": 101,
+  "targetTest": "mcslock::tests::irq_spinlock_nested_save_restore",
+  "targetFile": "port/src/mcslock.rs",
+  "output": "TAP version 13\n1..5\nok 1 - mcslock::tests::irq_spinlock_shootdown_poll_prevents_deadlock\nnot ok 2 - mcslock::tests::irq_spinlock_nested_save_restore\nnot ok 3 - mcslock::tests::irq_spinlock_try_lock_restores_irq_on_miss\nnot ok 4 - mcslock::tests::lock_rank_hooks_track_ranked_lock_acquisition\nok 5 - mcslock::tests::lock_try_lock_returns_none_when_held\n# tests 5\n# pass 2\n# fail 3\n",
+  "expected": "SMP-07/SMP-12 guards: IrqSpinLock::lock masks IRQs via smp::irq_save_disable (nested saves restore in order on guard Drop, outermost drop unmasks); IrqSpinLock::try_lock restores the saved IRQ state immediately on a CAS miss and leaks no rank; a Lock::new_ranked acquisition pushes/pops the per-cpu rank stack while an unranked Lock::new never touches it",
+  "actual": "RED scaffolding provides the complete MCS-backed IrqSpinLock/IrqLockGuard/try_lock shape but omits the irq_save_disable/irq_restore wiring and the rank/watchdog hooks: irq_spinlock_nested_save_restore fails at port/src/mcslock.rs on the 'lock masks IRQs' depth assertion (depth stays 0), irq_spinlock_try_lock_restores_irq_on_miss fails on the post-acquire IRQ-depth assertion, lock_rank_hooks_track_ranked_lock_acquisition fails on the 'a ranked lock holds a rank' assertion (stack stays 0). The other 2 tests pass in the same binary: Lock::try_lock Some/None plumbing and the multi-threaded shootdown-poll deadlock-prevention test (MCSLock::lock's spin poll is plumbing, present in RED) — no compile errors, no zero-test discovery, no fixture crashes",
+  "output_format_note": "cargo test does not emit TAP; the output field is a faithful TAP transcription of the cargo run (exit 101, 'test result: FAILED. 2 passed; 3 failed; 0 ignored; 174 filtered out'), names matching the log's ok/FAILED lines. Transcribed per the 05-06 precedent because gsd_run check tdd-red-evidence parses TAP/Surefire summaries only.",
+  "recorded_at": "2026-11-26T06:45Z",
+  "plan": "05-07",
+  "task": 2,
+  "phase": "05-guide-phase-3-early-smp-course-correction-and-memory-pools",
+  "notes": "Task 2 of 05-07 is tdd=true. The RED commit is test(05-07) with the IrqSpinLock/IrqLockGuard/MCSLock::try_lock/Lock::new_ranked/Lock::try_lock scaffolding in port/src/mcslock.rs (plus the spin-loop poll_shootdown_if_pending call, which is deadlock-plumbing and therefore present and green in RED) and two warning fixes in port/src/smp.rs from Task 1 (unused MAX_CPUS import in test builds, doc comment on a macro invocation). The GREEN commit wires smp::irq_save_disable/irq_restore into IrqSpinLock entry/Drop, the rank/watchdog hooks behind #[cfg(debug_assertions)], the rank pop + IRQ restore on the try_lock miss path, and the LockGuard rank-pop fields."
+}

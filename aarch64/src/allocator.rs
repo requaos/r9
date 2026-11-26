@@ -2,16 +2,15 @@
 mod global {
     use core::cell::SyncUnsafeCell;
     use core::mem;
-    use core::sync::atomic::AtomicPtr;
     use port::allocator::{
         Block, BumpAlloc, QuickFit, global::GlobalHeap, global::GlobalQuickAlloc,
     };
 
     // The heap arena and the QuickFit state live in
     // SyncUnsafeCell statics (never `static mut`).  GlobalQuickAlloc's
-    // AtomicPtr swap trick (port::allocator::global) is the sole
+    // IrqSpinLock (port::globalalloc, LockRank::HeapAlloc) is the sole
     // synchronized access path; the cells' pointers are published into it
-    // here at static-init time, before any allocation can run.
+    // here at static-init time, before any allocation can run (SMP-03).
     static HEAP: SyncUnsafeCell<GlobalHeap> = SyncUnsafeCell::new(GlobalHeap::new());
     static ALLOC: SyncUnsafeCell<QuickFit> = SyncUnsafeCell::new(QuickFit::new(
         // SAFETY: HEAP is a static 4 MiB-aligned arena owned exclusively by
@@ -23,40 +22,28 @@ mod global {
     ));
 
     #[global_allocator]
-    static GLOBAL_ALLOCATOR: GlobalQuickAlloc = GlobalQuickAlloc(AtomicPtr::new(ALLOC.get()));
+    static GLOBAL_ALLOCATOR: GlobalQuickAlloc = GlobalQuickAlloc::new(ALLOC.get());
 
     /// Read-only heap-arena stats off the live global allocator (the
     /// x86_64 15-03 probe, ported for the 20-09 churn gate): (bump-cursor
-    /// bytes, arena size).  Single CPU this era; a null swap window (an
-    /// allocation in flight on THIS context) cannot happen — this runs
-    /// between syscalls.  Only the churn driver calls it today, so the
-    /// non-churn builds allow it unused.
+    /// bytes, arena size).  Serialized under the heap's IrqSpinLock and
+    /// allocating nothing (SMP-03).  Only the churn driver calls it today,
+    /// so the non-churn builds allow it unused.
     #[cfg_attr(not(dev_churn), allow(dead_code))]
     pub(crate) fn heap_stats() -> (usize, usize) {
-        // SAFETY: read-only access for the diagnostic print path; the
-        // pointer is the same static the global allocator serves, and
-        // the single-CPU between-syscalls caller cannot race its swap.
-        unsafe {
-            let a = GLOBAL_ALLOCATOR.0.load(core::sync::atomic::Ordering::Relaxed);
-            assert!(!a.is_null(), "global allocator is nil");
-            (*a).arena_stats()
-        }
+        GLOBAL_ALLOCATOR.arena_stats()
     }
 
     /// The live/pooled block census (x86_64 17-02, the churn leak hunt;
     /// ported for 20-09): which size classes are genuinely outstanding
     /// vs parked on the free lists — the leak-vs-fragmentation
-    /// fingerprint.
+    /// fingerprint.  The tally runs under the heap lock into fixed stack
+    /// arrays and the Vec copies happen after it is released, so the
+    /// census never allocates under the lock (SMP-03).
     #[cfg_attr(not(dev_churn), allow(dead_code))]
     pub(crate) fn heap_census() -> (alloc::vec::Vec<(usize, usize)>, alloc::vec::Vec<(usize, usize)>)
     {
-        // SAFETY: read-only access, as heap_stats (the same static, the
-        // same single-CPU between-syscalls caller).
-        unsafe {
-            let a = GLOBAL_ALLOCATOR.0.load(core::sync::atomic::Ordering::Relaxed);
-            assert!(!a.is_null(), "global allocator is nil");
-            (*a).split_census()
-        }
+        GLOBAL_ALLOCATOR.split_census()
     }
 }
 
