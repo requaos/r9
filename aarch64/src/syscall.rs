@@ -2194,6 +2194,15 @@ fn sys_sleep(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         if !proc.note_queue.is_empty() {
             return err(proc, "interrupted");
         }
+        // SMP-03: clear any stale wake_pending before arming — this sleep
+        // blocks ONCE (no re-check loop), so a leftover flag from an
+        // unrelated earlier wake would otherwise make block() return
+        // immediately and misreport "interrupted".  Safe here (and only
+        // because) the waker re-evaluates the condition every tick:
+        // tick_timeouts re-reads sleep_until/note_queue under PROC_TABLE
+        // on each tick, so a wake landing after this clear is re-published
+        // at the next tick and consumed by block() below.
+        port::smp::prepare_block();
         let deadline = crate::platform::timer::ticks() + ms;
         proc.sleep_until = deadline;
         proc::block();
