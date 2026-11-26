@@ -145,9 +145,10 @@ pub extern "C" fn main9(dtb_va: usize) {
     smp::init_bsp();
     smp::publish_boot_state();
     trap::init();
-    // CURKSTACK (the trap.S entry-stack symbol) starts at the legacy
-    // interrupt stack so pre-process traps behave exactly as before; the
-    // first proc's activation repoints it.  Before any IRQ can unmask.
+    // This CPU's cur_kstack (the PerCpu trap-entry-stack slot) starts at
+    // the legacy interrupt stack so pre-process traps behave exactly as
+    // before; the first proc's activation repoints it.  Before any IRQ
+    // can unmask.
     proc::init_trap_stacks();
     // Raspi has no interrupt handlers to arm, so unmask at the point the
     // combined trap::init always unmasked.  Virt deliberately does NOT unmask
@@ -617,8 +618,9 @@ fn exec_bootstrap(
     println!("exec: ttbr0 switched, console alive");
 
     let frame_ptr = proc.frame;
-    // Publish current + Running + CURKSTACK (the trap_return tail
-    // loads SP_EL1 from CURKSTACK on the EL0t-bound return below).  IRQs
+    // Publish current + Running + this CPU's cur_kstack (the trap_return
+    // tail reconstructs SP_EL1 as frame+288 on the EL0t-bound return
+    // below).  IRQs
     // stay MASKED at EL1 through the tail: the seed frame's psr=0 unmasks
     // them at EL0 via the eret's SPSR restore, so the pending tick's first
     // delivery is a clean EL0-origin IRQ on the proc's kstack — never an
@@ -626,8 +628,8 @@ fn exec_bootstrap(
     // transient boot-stack frame over proc.frame.
     proc::activate_first(&mut proc);
     // SAFETY: frame_ptr names the seeded forkret frame on the proc's
-    // kstack (exec_into's construction); CURKSTACK/CURFRAME were just
-    // published by activate_first — the single first EL0 entry.
+    // kstack (exec_into's construction); this CPU's cur_kstack/cur_frame
+    // were just published by activate_first — the single first EL0 entry.
     unsafe { trap::trap_return(frame_ptr) }
 }
 

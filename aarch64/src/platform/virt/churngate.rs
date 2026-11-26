@@ -51,7 +51,7 @@
 // (proc::seed_kernel_context), and always IRQ-masked (kernel context on
 // aarch64 runs with DAIF.I set; the sched loop's idle_wait unmasks only
 // around its own wfi), so its prints need no unmask window.  It blocks
-// via proc::sched() — woken by the child's exit-path wait record or by
+// via proc::block() — woken by the child's exit-path wait record or by
 // tick_timeouts on its sleep_until watchdog — so a wedge fails the gate
 // loudly inside the xtask budget, never a bare hang.
 
@@ -430,7 +430,7 @@ fn spawn_and_wait(inp: &Inputs, sem_gen: bool, leaf: &[u8]) -> Result<(), &'stat
                 return Err("exec child did not exit inside the budget");
             }
             me.sleep_until = timer::ticks().wrapping_add(WATCH_TICKS);
-            crate::proc::sched();
+            crate::proc::block();
             me.sleep_until = 0;
         }
     }
@@ -453,7 +453,7 @@ fn drain_stragglers() -> Result<(), &'static str> {
             return Err("contention contenders did not drain inside the budget");
         }
         me.sleep_until = timer::ticks().wrapping_add(WATCH_TICKS);
-        crate::proc::sched();
+        crate::proc::block();
         me.sleep_until = 0;
     }
 }

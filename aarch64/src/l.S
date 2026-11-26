@@ -15,7 +15,7 @@ STACKSZ = 4096*16
 // Secondary CPUs switch to their own stack after the MMU is on.
 SECONDARY_STACKSZ = 4096*16
 // The most secondary CPUs the stack area covers (QEMU virt's GICv2
-// limit; matches aarch64/src/fpu.rs's MAXMACH).
+// limit; the per-CPU table's cap lives in aarch64/src/smp.rs's MAX_CPUS).
 MAX_SECONDARY_CPUS = 8
 
 CURRENTEL_EL			= (1<<3) | (1<<2)

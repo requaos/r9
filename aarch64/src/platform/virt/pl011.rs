@@ -8,6 +8,10 @@ use port::Result;
 use port::devcons::Uart;
 use port::fdt::DeviceTree;
 use port::mem::PhysRange;
+#[cfg(dev_exec)]
+use port::mcslock::{IrqSpinLock, LockNode};
+#[cfg(dev_exec)]
+use port::smp::LockRank;
 
 #[cfg(not(test))]
 use port::println;
@@ -105,29 +109,29 @@ pub fn rx_irq() {
 }
 
 /// The dev_exec INTID 33 handler: drain the RX FIFO into the per-console
-/// read buffer.  LOCK-FREE by construction (research P8): no println!, no
-/// Console access — the Console mcslock may be held by the interrupted
-/// context, and taking it here would self-deadlock.
+/// read buffer.  The ring is guarded by the CONS_RX IrqSpinLock
+/// (LockRank::Console = 100, the leaf-top rank — SMP-03, D-22): the IRQ
+/// handler (writer), the syscall reader (cons_rx_drain) and the tick's
+/// FIFO poll can now run on different CPUs and serialize here.  No
+/// println!, no Console access on this path (the Console mcslock may be
+/// held by the interrupted context — taking it here would self-deadlock;
+/// CONS_RX itself is a spin lock held only across a bounded FIFO drain).
 ///
-/// Buffer discipline: single writer (this IRQ handler) / single reader (the
-/// devcons read path, which runs in IRQ-masked syscall/trap context — the
-/// writer can never preempt the reader this era).  Overflow drops bytes
-/// (counted in OVERRUNS for diagnostics); nothing types fast enough to fill
-/// 256 bytes during the exec gate, and a dropped byte is loud-in-effect
-/// (missing input), never memory corruption.
+/// Overflow drops bytes (counted in OVERRUNS for diagnostics); nothing
+/// types fast enough to fill 256 bytes during the exec gate, and a dropped
+/// byte is loud-in-effect (missing input), never memory corruption.
 #[cfg(dev_exec)]
 pub fn rx_irq_cons_buffer() {
-    // SAFETY: PL011_RANGE was published before IRQ unmask (the cell is
-    // write-once); IRQ context reads it lock-free by construction.
+    // SAFETY: PL011_RANGE was published at construction (before unmask);
+    // this read runs in IRQ context — the cell is write-once.
     let range = unsafe { &*PL011_RANGE.get() };
     let Some(range) = range.as_ref() else { return };
 
+    let node = LockNode::new();
+    let mut guard = CONS_RX.lock(&node);
+    let buf = &mut *guard;
     while range.read(UART0_FR) & 0x10 == 0 {
         let b = range.read(UART0_DR) as u8;
-        // SAFETY: the ring's single-writer discipline — this IRQ handler
-        // is the only writer, and the syscall-context reader runs
-        // IRQ-masked (it can never interleave mid-drain).
-        let buf = unsafe { &mut *CONS_RX.get() };
         let next = (buf.head + 1) % CONS_RX_CAP;
         if next != buf.tail {
             buf.bytes[buf.head] = b;
@@ -140,7 +144,10 @@ pub fn rx_irq_cons_buffer() {
 }
 
 /// The console RX ring (dev_exec only).  Head = IRQ writer, tail = syscall
-/// reader; empty when head == tail.
+/// reader; empty when head == tail.  Guarded by the CONS_RX IrqSpinLock at
+/// LockRank::Console (100) — SMP-03 (D-22): the single-writer/single-reader
+/// ring discipline becomes a real lock now that the writer (PL011 RX IRQ)
+/// and the reader (devcons's drain hook) can run on different CPUs.
 #[cfg(dev_exec)]
 struct ConsRx {
     bytes: [u8; CONS_RX_CAP],
@@ -153,19 +160,20 @@ struct ConsRx {
 const CONS_RX_CAP: usize = 256;
 
 #[cfg(dev_exec)]
-static CONS_RX: SyncUnsafeCell<ConsRx> =
-    SyncUnsafeCell::new(ConsRx { bytes: [0; CONS_RX_CAP], head: 0, tail: 0, overruns: 0 });
+static CONS_RX: IrqSpinLock<ConsRx> = IrqSpinLock::new(
+    "cons_rx",
+    LockRank::Console,
+    ConsRx { bytes: [0; CONS_RX_CAP], head: 0, tail: 0, overruns: 0 },
+);
 
 /// devcons read side (dev_exec): drain up to `buf.len()` bytes from the RX
-/// ring; return the count — 0 when empty.  Called only from IRQ-masked
-/// syscall context (the devcons input engine's drain hook), so the
-/// IRQ writer cannot interleave.
+/// ring; return the count — 0 when empty.  Called from the devcons input
+/// engine's drain hook (syscall context); the CONS_RX lock serializes
+/// against the IRQ writer on any CPU.
 #[cfg(dev_exec)]
 pub fn cons_rx_drain(buf: &mut [u8]) -> usize {
-    // SAFETY: the reader side of the ring discipline — called only from
-    // IRQ-masked syscall context (the devcons drain hook), so the IRQ
-        // writer cannot interleave.
-    let rx = unsafe { &mut *CONS_RX.get() };
+    let node = LockNode::new();
+    let mut rx = CONS_RX.lock(&node);
     let mut n = 0;
     while n < buf.len() && rx.tail != rx.head {
         buf[n] = rx.bytes[rx.tail];
@@ -175,16 +183,15 @@ pub fn cons_rx_drain(buf: &mut [u8]) -> usize {
     n
 }
 
-/// Lock-free "RX ring non-empty" peek for the tick's
-/// cons-wake hook (timer.rs → proc::cons_input_wake).  A torn read of
-/// head/tail is benign: a missed wake retries at the next tick (1 ms),
-/// and a spurious wake just re-blocks after the reader's drain finds
-/// nothing.
+/// "RX ring non-empty" peek for the tick's cons-wake hook
+/// (timer.rs → proc::cons_input_wake).  A locked read under CONS_RX
+/// (SMP-03): brief, IRQ-safe from tick context; a wake that misses a
+/// mid-poll byte retries at the next tick (1 ms), and a spurious wake
+/// just re-blocks after the reader's drain finds nothing.
 #[cfg(dev_exec)]
 pub fn cons_rx_pending() -> bool {
-    // SAFETY: the lock-free peek (a torn head/tail read is benign — a
-    // missed wake retries at the next tick; a spurious wake re-blocks).
-    let rx = unsafe { &*CONS_RX.get() };
+    let node = LockNode::new();
+    let rx = CONS_RX.lock(&node);
     rx.head != rx.tail
 }
 
@@ -200,12 +207,12 @@ pub fn cons_rx_fifo_pending() -> Option<bool> {
     Some(range.read(UART0_FR) & 0x10 == 0)
 }
 
-/// gatedbg: the RX ring's head/tail (for the wedge dump).
+/// gatedbg: the RX ring's head/tail (for the wedge dump).  Locked read
+/// under CONS_RX (SMP-03).
 #[cfg(dev_exec)]
 pub fn cons_rx_ring_pos() -> (usize, usize) {
-    // SAFETY: cons_rx_pending's lock-free-peek discipline (the wedgedbg
-    // dump's diagnostic read).
-    let rx = unsafe { &*CONS_RX.get() };
+    let node = LockNode::new();
+    let rx = CONS_RX.lock(&node);
     (rx.head, rx.tail)
 }
 
@@ -218,8 +225,9 @@ pub fn cons_rx_ring_pos() -> (usize, usize) {
 /// received char, but a byte landing in the drain→clear window can miss
 /// its interrupt; polling here bounds the delivery delay at one tick
 /// (1 ms) instead of losing the byte until the next one arrives.
-/// Tick context is IRQ-masked and same-priority IRQs never nest, so the
-/// ring's single-writer discipline is preserved.
+/// Tick context is IRQ-masked; the ring's CONS_RX IrqSpinLock
+/// (LockRank::Console) serializes the poll against the IRQ handler and
+/// the syscall reader on any CPU (SMP-03).
 #[cfg(dev_exec)]
 pub fn cons_rx_poll() {
     if cons_rx_fifo_pending() == Some(true) {

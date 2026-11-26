@@ -19,8 +19,9 @@ use port::fdt::DeviceTree;
 use port::mem::PhysAddr;
 use port::mem::PhysRange;
 use port::pagealloc::PageAllocError;
+use port::smp::LockRank;
 use port::{
-    mcslock::{Lock, LockNode},
+    mcslock::{IrqSpinLock, LockNode},
     mem::PAGE_SIZE_4K,
 };
 
@@ -28,8 +29,14 @@ use port::{
 use port::println;
 
 /// Set up bitmap page allocator assuming everything is allocated.
-static PAGE_ALLOC: Lock<BitmapPageAlloc<32, PAGE_SIZE_4K>> = Lock::new(
+/// IrqSpinLock at LockRank::PageAlloc (70) (SMP-03, D-22): physical page
+/// allocation/freeing runs from syscalls AND demand-fault/trap context on
+/// any CPU, so the bitmap is IRQ-safe and rank-checked — above ProcTable
+/// (50) and RunQueue (60), below HeapAlloc (80) which may allocate while
+/// PAGE_ALLOC is held (the documented one-way order).
+static PAGE_ALLOC: IrqSpinLock<BitmapPageAlloc<32, PAGE_SIZE_4K>> = IrqSpinLock::new(
     "page_alloc",
+    LockRank::PageAlloc,
     const { BitmapPageAlloc::<32, PAGE_SIZE_4K>::new_all_allocated(PAGE_SIZE_4K) },
 );
 

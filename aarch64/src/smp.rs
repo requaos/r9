@@ -65,6 +65,14 @@ pub struct PerCpu {
     pub sched_context: SyncUnsafeCell<swtch::Context>,
     /// Whether `sched_context` has been seeded.
     pub sched_seeded: AtomicBool,
+    /// Per-CPU scratch switch target for parking a context that never
+    /// resumes (proc.rs's churn-profile boot park; 05-22's secondary
+    /// sched_loop entry) — the BOOT_CTX global's per-CPU home (SMP-02).
+    pub park_context: SyncUnsafeCell<swtch::Context>,
+    /// The stack top this CPU's seeded sched_context runs on (0 = the
+    /// legacy interrupt stack top — CPU 0's default; secondaries get
+    /// their boot-stack top from the 05-22 bring-up tail).
+    pub sched_stack_top: AtomicU64,
     /// Per-CPU FP/SIMD bookkeeping (owner + section flags; D-06).
     pub fpu: CpuFp,
     /// A TLB shootdown request is pending for this CPU (SMP-07).
@@ -101,6 +109,23 @@ impl PerCpu {
                 spsr: 0,
             }),
             sched_seeded: AtomicBool::new(false),
+            park_context: SyncUnsafeCell::new(swtch::Context {
+                x19: 0,
+                x20: 0,
+                x21: 0,
+                x22: 0,
+                x23: 0,
+                x24: 0,
+                x25: 0,
+                x26: 0,
+                x27: 0,
+                x28: 0,
+                x29: 0,
+                x30: 0,
+                sp: 0,
+                spsr: 0,
+            }),
+            sched_stack_top: AtomicU64::new(0),
             fpu: CpuFp::new(),
             pending_shootdown: AtomicBool::new(false),
         }
@@ -500,10 +525,14 @@ fn arch_ticks() -> u64 {
     }
 }
 
-/// The SMP-03 lost-wakeup seam.  The arch-side wake_pending work lands
-/// with the scheduler plans (05-10); the portable core's default is a
-/// safe no-op until then (05-08's convention).
-fn prepare_block() {}
+/// The SMP-03 lost-wakeup seam (05-10): clears the current proc's
+/// `wake_pending` so a wake that lands after the caller's registration
+/// (under the caller's subsystem lock) is seen by the arch `block()`'s
+/// flag check.  Runs on the calling CPU only; no-op when no proc is
+/// current (early boot).
+fn prepare_block() {
+    crate::proc::prepare_block_current();
+}
 
 /// Register the aarch64 `SmpArch` hooks with `port::smp` (SMP-02, D-25).
 /// Called once from main9 after [`init_bsp`], before CPU 1 is started.

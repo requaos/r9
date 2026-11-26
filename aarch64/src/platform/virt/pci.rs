@@ -24,6 +24,10 @@ use core::cell::SyncUnsafeCell;
 #[cfg(dev_ether)]
 use port::mem::{VirtRange, PAGE_SIZE_4K};
 #[cfg(dev_ether)]
+use port::mcslock::{IrqSpinLock, LockNode};
+#[cfg(dev_ether)]
+use port::smp::LockRank;
+#[cfg(dev_ether)]
 use port::virtio::{self, CommonCfg, PciCfg, Ring, RingMem};
 #[cfg(dev_ether)]
 use crate::io;
@@ -196,10 +200,12 @@ static PCI_DISCOVERY: SyncUnsafeCell<Option<(VirtioNetDiscovery, VirtRange)>> =
 static VIRTIO_NET_INTID: SyncUnsafeCell<u32> = SyncUnsafeCell::new(0);
 
 /// The published device state (rings, ISR/notify regions, buffer pages,
-/// counters).  Written once at bind; the IRQ handler is its only writer
-/// thereafter (single-CPU, non-nesting EL1 IRQ context).
+/// counters), guarded by an IrqSpinLock at LockRank::NetIrq (90) — SMP-03
+/// (D-22).  Written once at bind (under the lock); the IRQ handler and
+/// devether's syscall ops serialize through it thereafter.
 #[cfg(dev_ether)]
-static VIRTIO_NET: SyncUnsafeCell<Option<VirtioNetState>> = SyncUnsafeCell::new(None);
+static VIRTIO_NET: IrqSpinLock<Option<VirtioNetState>> =
+    IrqSpinLock::new("virtio_net", LockRank::NetIrq, None);
 
 // PCI config-space offsets beyond the discovery set.
 #[cfg(dev_ether)]
@@ -228,6 +234,15 @@ const MAX_RX_SLOTS: usize = (virtio::MAX_QSIZE / 2) as usize;
 /// entry retires — no separate allocator, no allocation mid-IRQ).
 #[cfg(dev_ether)]
 const MAX_TX_SLOTS: usize = (virtio::MAX_QSIZE / 2) as usize;
+
+/// The RX ingress stack-buffer cap (SMP-03): the IRQ handler copies each
+/// retired frame out under the VIRTIO_NET guard and ingresses the copy
+/// after the guard drops (the guard is never held across rx_ingress —
+/// the NetIrq-90 rank pairing, D-26).  2048 covers every legal frame
+/// (devether's mtu is 1514); an over-cap frame is a device fault
+/// (counted, recycled, skipped).
+#[cfg(dev_ether)]
+const RX_INGRESS_CAP: usize = 2048;
 
 /// The PciCfg seam over the mapped bus-0 ECAM window: the device's 4 KiB
 /// config space sits at base = dev<<15.
@@ -311,14 +326,17 @@ impl RingMem for VolatileMem {
     }
 }
 
-/// The bound device's live state (see VIRTIO_NET's publish-once cell).
-/// Written once at bind; thereafter TWO writers share it, mutually
-/// exclusive in TIME by the kernel's single-CPU invariant (syscalls run
-/// IRQ-masked — the Phase-4 PSTATE.I discipline — so the IRQ handler and
-/// a syscall-context driver op can never interleave): the IRQ handler
-/// (retire/replenish/counters) and devether's syscall-context ops
-/// (tx_post/ifstats, 07-07).  No lock guards it; the publish-once cell
-/// discipline plus the masking invariant is the whole proof.
+/// The bound device's live state (behind VIRTIO_NET's ranked IrqSpinLock).
+/// Written once at bind (under the lock, before gic::enable and the IRQ
+/// unmask paths); thereafter the IRQ handler (retire/replenish/counters)
+/// and devether's syscall-context ops (tx_post/ifstats, 07-07) serialize
+/// through the lock — SMP-03 (D-22): with two CPUs the IRQ handler and a
+/// syscall can genuinely run concurrently, so the publish-once-plus-
+/// masking discipline becomes a real IrqSpinLock at LockRank::NetIrq (90).
+/// The lock is NEVER held across the port-side wake/ingress callbacks
+/// (devether rx_ingress/tx_retired, devip note_rx_pending) — those take
+/// their own NetIrq-90 port locks, and equal-rank nesting is a D-26 rank
+/// violation; the IRQ handler releases the guard before every callback.
 #[cfg(dev_ether)]
 struct VirtioNetState {
     /// The ISR byte region (the isr cap's BAR4 window).  The handler's
@@ -753,12 +771,20 @@ fn bind_virtio_net_inner(dt: &DeviceTree) -> port::Result<()> {
         faults: 0,
     };
     let intid = 32 + disc.spi;
-    // SAFETY: publish-once — these writes run at bind (boot context,
-    // before gic::enable and before the IRQ unmask paths), so no IRQ
-    // reader can observe a torn write; the cells are never written again
-    // (the pl011 PL011_RANGE discipline).
+    // Publish the device state under its lock and the INTID through the
+    // write-once cell: these writes run at bind (boot context, before
+    // gic::enable and before the IRQ unmask paths), so no IRQ reader can
+    // observe a torn write; VIRTIO_NET_INTID is never written again (the
+    // pl011 PL011_RANGE discipline), and VIRTIO_NET is mutated only under
+    // its IrqSpinLock from here on.
+    {
+        let node = LockNode::new();
+        *VIRTIO_NET.lock(&node) = Some(state);
+    }
+    // SAFETY: publish-once — this write runs at bind (boot context,
+    // before gic::enable and before the IRQ unmask paths); the cell is
+    // never written again.
     unsafe {
-        *VIRTIO_NET.get() = Some(state);
         *VIRTIO_NET_INTID.get() = intid;
     }
     // Publish devether's driver seam (07-07): #l attaches resolve from
@@ -797,13 +823,13 @@ const DRAIN_CAP: u32 = virtio::MAX_QSIZE as u32;
 /// (the caller registers a TX waiter and blocks on the wake hook until
 /// the retire frees a slot — D-08's wedge-hunt: a stalled retire wedges
 /// the writer and the gate's deadline catches it).
+/// SMP-03: the op takes VIRTIO_NET's IrqSpinLock (NetIrq 90), serializing
+/// against the IRQ handler's retire on any CPU.
 #[cfg(dev_ether)]
 fn virtnet_tx_post(frame: &[u8]) -> port::Result<bool> {
-    // SAFETY: syscall context (IRQ-masked — the kernel invariant), so
-    // this write can never interleave with the IRQ handler's retire; the
-    // cell was published once at bind.
-    let state = unsafe { &mut *VIRTIO_NET.get() };
-    let Some(state) = state.as_mut() else { return Err("devether: virtio-net not bound") };
+    let node = LockNode::new();
+    let mut guard = VIRTIO_NET.lock(&node);
+    let Some(state) = guard.as_mut() else { return Err("devether: virtio-net not bound") };
     let Some(slot) = state.tx.tx_next_slot() else { return Ok(false) };
     let pa = state.tx_buf_pa[slot as usize];
     // SAFETY: the page was allocated and mapped at KZERO+PA at bind and
@@ -829,13 +855,12 @@ fn virtnet_tx_post(frame: &[u8]) -> port::Result<bool> {
 /// devether's ifstats op: the per-queue accounting snapshot (avail,
 /// used, lastused, nintr, nnote) for vq0 (RX) and vq1 (TX) —
 /// ethervirtio.c's ifstat fields, the NETDRV-04 reconciliation surface.
+/// SMP-03: the snapshot runs under VIRTIO_NET's IrqSpinLock (NetIrq 90).
 #[cfg(dev_ether)]
 fn virtnet_ifstats() -> [(u16, u16, u16, u32, u32); 2] {
-    // SAFETY: syscall context (IRQ-masked); the cell's publish-once
-    // discipline.  The used-idx reads are volatile telemetry (the ring's
-    // accessor), not content trust.
-    let state = unsafe { &*VIRTIO_NET.get() };
-    let Some(state) = state.as_ref() else { return [(0, 0, 0, 0, 0); 2] };
+    let node = LockNode::new();
+    let guard = VIRTIO_NET.lock(&node);
+    let Some(state) = guard.as_ref() else { return [(0, 0, 0, 0, 0); 2] };
     [
         (
             state.rx.avail_idx(),
@@ -868,146 +893,210 @@ fn virtnet_ifstats() -> [(u16, u16, u16, u32, u32); 2] {
 ///   (§2.7.14's re-check shape); mid-drain completions re-assert the
 ///   line after EOI, so a storm spreads across invocations instead of
 ///   pinning the handler (T-07-13).
-/// - No locks, no console on the hot path: the Console mcslock may be
-///   held by the interrupted context — taking it here would
-///   self-deadlock.  The one-time prints (first device fault, first
-///   config change) are the plan's explicit carve-out; slirp's link
-///   never changes, so neither fires on the gates.
-/// - Publish-once device state: the cell is written once at bind (boot
-///   context, before gic::enable and the unmask paths); thereafter two
-///   writers share it, mutually exclusive in TIME (syscalls run
-///   IRQ-masked — the handler and devether's syscall-context driver ops
-///   never interleave), so no lock guards it.
+/// - No locks, no console on the hot path except the driver's own ranked
+///   lock: VIRTIO_NET is an IrqSpinLock at LockRank::NetIrq (90) — SMP-03
+///   (D-22).  The guard is NEVER held across the port-side callbacks
+///   (devether rx_ingress/tx_retired, devip note_rx_pending): those take
+///   their own NetIrq-90 port locks, and equal-rank nesting is a D-26
+///   rank-violation panic in debug builds.  The handler therefore runs in
+///   locked PHASES — ISR ack + TX retire, then per-frame RX extraction —
+///   with the wake/ingress calls after each guard drop.  The one-time
+///   prints (first device fault, first config change) are the plan's
+///   explicit carve-out; slirp's link never changes, so neither fires on
+///   the gates.
 /// - A NIC IRQ arriving with no bind (or before it) prints
 ///   `unhandled IRQ <n>` — the 07-05 negative scan trips on that line,
 ///   so a bind-ordering bug reds the gate loudly rather than passing
 ///   silently (Pitfall N10).
 #[cfg(dev_ether)]
 pub fn virtio_net_irq() {
-    // SAFETY: the state was published once at bind (before gic::enable and
-    // before IRQ unmask); IRQ handlers run at EL1 with same-priority
-    // nesting masked, so this is the only writer — the pl011 publish-once
-    // discipline.
-    let state = unsafe { &mut *VIRTIO_NET.get() };
-    let Some(state) = state.as_mut() else { return };
+    let node = LockNode::new();
 
-    // FIRST device touch: the ISR byte (read-to-ack).
-    let isr = io::read_reg8(&state.isr, 0);
-
-    if isr & virtio::VIRTIO_ISR_QUEUE != 0 {
-        let mut retired = [0u32; 2];
-        for _ in 0..DRAIN_CAP {
-            match state.tx.next_used() {
-                None => break,
-                Some(Ok(_used)) => {
-                    // The slot freed itself inside next_used — its frame
-                    // page is bound to the slot and reusable from now.
-                    retired[virtio::VIRTIO_NET_QUEUE_TX as usize] += 1;
-                }
-                Some(Err(msg)) => {
-                    state.faults += 1;
-                    if state.faults == 1 {
-                        println!("virtio-net: device fault: {msg}");
+    // Phase 0 + TX retire (locked): ISR read-to-ack, then the bounded TX
+    // used-drain.  No port callbacks under the guard.
+    let (isr, tx_retired) = {
+        let mut guard = VIRTIO_NET.lock(&node);
+        let Some(state) = guard.as_mut() else { return };
+        // FIRST device touch: the ISR byte (read-to-ack).
+        let isr = io::read_reg8(&state.isr, 0);
+        let mut retired_tx = 0u32;
+        if isr & virtio::VIRTIO_ISR_QUEUE != 0 {
+            for _ in 0..DRAIN_CAP {
+                match state.tx.next_used() {
+                    None => break,
+                    Some(Ok(_used)) => {
+                        // The slot freed itself inside next_used — its frame
+                        // page is bound to the slot and reusable from now.
+                        retired_tx += 1;
                     }
-                    break;
+                    Some(Err(msg)) => {
+                        state.faults += 1;
+                        if state.faults == 1 {
+                            println!("virtio-net: device fault: {msg}");
+                        }
+                        break;
+                    }
                 }
             }
+            if retired_tx > 0 {
+                state.counters.nintr[virtio::VIRTIO_NET_QUEUE_TX as usize] += 1;
+            }
         }
-        // A TX retire freed slots — wake any write blocked on a full
-        // ring (07-07's block-on-full; D-08's wedge-hunt).  The wake
-        // rides the port-side entry (never a port lock from IRQ
-        // context; the BusyCell handoff + the proc hooks do the work).
-        if retired[virtio::VIRTIO_NET_QUEUE_TX as usize] > 0 {
-            port::devether::tx_retired();
+        (isr, retired_tx)
+    };
+    // A TX retire freed slots — wake any write blocked on a full ring
+    // (07-07's block-on-full; D-08's wedge-hunt).  The wake rides the
+    // port-side entry AFTER the VIRTIO_NET guard dropped (the NetIrq-90
+    // rank pairing, D-26): the BusyCell handoff + the proc hooks do the
+    // work.
+    if tx_retired > 0 {
+        port::devether::tx_retired();
+    }
+
+    // RX retire (per-frame locked extraction, unlocked ingress): copy each
+    // retired frame to a stack buffer and return its page to the free
+    // stack under the guard, then demux the copy AFTER the guard drops
+    // (rx_ingress takes netif's NetIrq-90 locks).
+    let mut rx_retired = 0u32;
+    if isr & virtio::VIRTIO_ISR_QUEUE != 0 {
+        /// The per-frame extraction step's result: `Copied(n)` ingresses
+        /// the stack buffer's n bytes after the guard drops; `Skip` = an
+        /// over-cap frame was faulted and recycled without an ingress;
+        /// `Stop` = the used ring is empty or a ring fault stopped the
+        /// drain (the original shape's `None => break` / fault `break`).
+        enum RxStep {
+            Copied(usize),
+            Skip,
+            Stop,
         }
+        let mut frame_buf = [0u8; RX_INGRESS_CAP];
         for _ in 0..DRAIN_CAP {
-            match state.rx.next_used() {
-                None => break,
-                Some(Ok(used)) => {
-                    retired[virtio::VIRTIO_NET_QUEUE_RX as usize] += 1;
-                    // Demux the frame (devether's etheriq, 07-07): the
-                    // 12-byte header is not "stripped" from this buffer —
-                    // it was never in it: the device wrote it into the
-                    // shared header-page descriptor (§5.1.6.3.2) and the
-                    // frame occupies the payload page from offset 0; only
-                    // used.len includes the 12 bytes.  The frame lands in
-                    // every matching conversation's queue, blocked
-                    // readers wake; then the page returns to the free
-                    // stack (the ingress copied the bytes out).
-                    let frame_len = virtio::virtio_net_frame_len(used.len) as usize;
-                    let pa = state.rx_buf_pa[used.slot as usize];
-                    // SAFETY: the page is mapped at KZERO+PA, driver-owned,
-                    // and the device finished with it (the acquire fence
-                    // inside next_used orders the read); the base is the
-                    // page's offset 0 and frame_len ≤ 4096 (next_used's
-                    // used-len validation: 12 ≤ len ≤ 12+4096), so the
-                    // slice stays within the page by construction.
-                    let frame = unsafe {
-                        core::slice::from_raw_parts(
-                            (KZERO as usize + pa as usize + virtio::virtio_net_frame_offset())
-                                as *const u8,
-                            frame_len,
-                        )
-                    };
-                    port::devether::rx_ingress(frame);
-                    if state.rx_free_len < MAX_RX_SLOTS {
-                        state.rx_free[state.rx_free_len] = pa;
-                        state.rx_free_len += 1;
+            let step = {
+                let mut guard = VIRTIO_NET.lock(&node);
+                let Some(state) = guard.as_mut() else { break };
+                match state.rx.next_used() {
+                    None => RxStep::Stop,
+                    Some(Ok(used)) => {
+                        rx_retired += 1;
+                        // Demux the frame (devether's etheriq, 07-07): the
+                        // 12-byte header is not "stripped" from this buffer —
+                        // it was never in it: the device wrote it into the
+                        // shared header-page descriptor (§5.1.6.3.2) and the
+                        // frame occupies the payload page from offset 0; only
+                        // used.len includes the 12 bytes.
+                        let frame_len = virtio::virtio_net_frame_len(used.len) as usize;
+                        let pa = state.rx_buf_pa[used.slot as usize];
+                        let over_cap = frame_len > frame_buf.len();
+                        if over_cap {
+                            // A frame beyond the MTU-sized buffer is a
+                            // device/protocol fault (T-07-12): count it,
+                            // recycle the page below, skip the ingress.
+                            state.faults += 1;
+                            if state.faults == 1 {
+                                println!("virtio-net: device fault: rx frame {frame_len} over cap");
+                            }
+                        } else {
+                            // SAFETY: the page is mapped at KZERO+PA,
+                            // driver-owned, and the device finished with it
+                            // (the acquire fence inside next_used orders the
+                            // read); the base is the page's offset 0 and
+                            // frame_len ≤ RX_INGRESS_CAP ≤ 4096 (next_used's
+                            // used-len validation), so the slice stays within
+                            // the page by construction.
+                            let frame = unsafe {
+                                core::slice::from_raw_parts(
+                                    (KZERO as usize + pa as usize + virtio::virtio_net_frame_offset())
+                                        as *const u8,
+                                    frame_len,
+                                )
+                            };
+                            frame_buf[..frame_len].copy_from_slice(frame);
+                        }
+                        // The page returns to the free stack either way
+                        // (the ingress works from the stack copy).
+                        if state.rx_free_len < MAX_RX_SLOTS {
+                            state.rx_free[state.rx_free_len] = pa;
+                            state.rx_free_len += 1;
+                        }
+                        if over_cap { RxStep::Skip } else { RxStep::Copied(frame_len) }
+                    }
+                    Some(Err(msg)) => {
+                        state.faults += 1;
+                        if state.faults == 1 {
+                            println!("virtio-net: device fault: {msg}");
+                        }
+                        RxStep::Stop
                     }
                 }
-                Some(Err(msg)) => {
-                    state.faults += 1;
-                    if state.faults == 1 {
-                        println!("virtio-net: device fault: {msg}");
-                    }
-                    break;
-                }
+            };
+            match step {
+                // The frame lands in every matching conversation's queue,
+                // blocked readers wake; the bytes come from the stack copy
+                // (the page already returned to the free stack).
+                RxStep::Copied(len) => port::devether::rx_ingress(&frame_buf[..len]),
+                RxStep::Skip => {}
+                RxStep::Stop => break,
             }
         }
         // nintr: one per queue with observed work (ethervirtio.c's shape).
-        if retired[virtio::VIRTIO_NET_QUEUE_RX as usize] > 0 {
-            state.counters.nintr[virtio::VIRTIO_NET_QUEUE_RX as usize] += 1;
+        if rx_retired > 0 {
+            {
+                let mut guard = VIRTIO_NET.lock(&node);
+                if let Some(state) = guard.as_mut() {
+                    state.counters.nintr[virtio::VIRTIO_NET_QUEUE_RX as usize] += 1;
+                }
+            }
             // D-05 leg 1 (08-06): the devip seam's RX wake — the retired
             // frames landed in the netif conv queues (rx_ingress above);
             // the devip waiters wake here and drive the stack from their
             // WOKEN SYSCALL context (poll NEVER runs in IRQ context — the
             // no-alloc-in-IRQ and mcslock-LEAF invariants).  A WAKE, never
             // a poll; the BusyCell handoff only; the wake hook runs after
-            // the seam's guard drops (stack.rs's note_rx_pending).
+            // the seam's guard drops (stack.rs's note_rx_pending).  Called
+            // with NO VIRTIO_NET guard held (the NetIrq-90 rank pairing).
             #[cfg(dev_ip)]
             port::devip::note_rx_pending();
         }
-        if retired[virtio::VIRTIO_NET_QUEUE_TX as usize] > 0 {
-            state.counters.nintr[virtio::VIRTIO_NET_QUEUE_TX as usize] += 1;
-        }
-        // Replenish RX (reposting the retired pages), then ONE notify.
-        match state.rx.rx_replenish(
-            |slot| {
-                if state.rx_free_len == 0 {
-                    return None;
-                }
-                state.rx_free_len -= 1;
-                let pa = state.rx_free[state.rx_free_len];
-                state.rx_buf_pa[slot as usize] = pa;
-                Some((pa, RX_PAYLOAD_CAP))
-            },
-            &state.notify,
-            state.rx_notify_off,
-            virtio::VIRTIO_NET_QUEUE_RX,
-        ) {
-            Ok(r) => {
-                if r.notified {
-                    state.counters.nnote[virtio::VIRTIO_NET_QUEUE_RX as usize] += 1;
+        // Replenish RX (reposting the retired pages), then ONE notify —
+        // locked (the closure pops the free stack).
+        {
+            let mut guard = VIRTIO_NET.lock(&node);
+            if let Some(state) = guard.as_mut() {
+                match state.rx.rx_replenish(
+                    |slot| {
+                        if state.rx_free_len == 0 {
+                            return None;
+                        }
+                        state.rx_free_len -= 1;
+                        let pa = state.rx_free[state.rx_free_len];
+                        state.rx_buf_pa[slot as usize] = pa;
+                        Some((pa, RX_PAYLOAD_CAP))
+                    },
+                    &state.notify,
+                    state.rx_notify_off,
+                    virtio::VIRTIO_NET_QUEUE_RX,
+                ) {
+                    Ok(r) => {
+                        if r.notified {
+                            state.counters.nnote[virtio::VIRTIO_NET_QUEUE_RX as usize] += 1;
+                        }
+                    }
+                    Err(_) => {} // the direction guard — unreachable for an RX ring
                 }
             }
-            Err(_) => {} // the direction guard — unreachable for an RX ring
         }
     }
 
-    if isr & virtio::VIRTIO_ISR_CONFIG != 0 && !state.link_reported {
-        // One-time print (the plan's IRQ-context carve-out): STATUS bit 0
-        // is LINK_UP (§5.1.4).  qemu/slirp's link never actually changes,
-        // so this line exists for the audit trail, not the hot path.
+    if isr & virtio::VIRTIO_ISR_CONFIG == 0 {
+        return;
+    }
+    let mut guard = VIRTIO_NET.lock(&node);
+    let Some(state) = guard.as_mut() else { return };
+    if !state.link_reported {
+        // One-time print (the plan's IRQ-context carve-out): STATUS
+        // bit 0 is LINK_UP (§5.1.4).  qemu/slirp's link never
+        // actually changes, so this line exists for the audit
+        // trail, not the hot path.
         state.link_reported = true;
         let status = io::read_reg16(&state.devcfg, 6);
         println!("virtio-net: link {}", if status & 1 != 0 { "up" } else { "down" });

@@ -51,12 +51,12 @@ every config a clippy leg compiles, and static-scanned tree-wide below.
 
 | Set | Sites |
 |-----|-------|
-| aarch64 unsafe blocks+impls (lint-visible, non-test production) | 202 |
+| aarch64 unsafe blocks+impls (lint-visible, non-test production) | 191 |
 | x86_64 unsafe blocks+impls (lint-visible, non-test production) | 156 |
 | port unsafe blocks+impls, non-test, production (lint-visible) | 32 |
 | crypto unsafe blocks+impls (lint-visible) | 0 |
 | ds unsafe blocks+impls, non-test, production (lint-visible) | 1 |
-| **SAFETY annotations (comment immediately preceding a site)** | **408** |
+| **SAFETY annotations (comment immediately preceding a site)** | **397** |
 | aarch64 test-only blocks (cfg(test) modules — not lint-gated, never shipped) | 6 |
 | x86_64 test-only blocks (cfg(test) modules — not lint-gated, never shipped) | 8 |
 | port test-only blocks (cfg(test) crate-root test module — the pin/stress arena scaffolding; not lint-gated, never shipped) | 11 |
@@ -167,6 +167,46 @@ and the per-CPU GICR RD wake + SGI frame secondary init (no new blocks —
 the existing ICC helpers and RegBlock reads/writes carry the unsafe).
 aarch64 184 → 202 blocks, 6 → 7 extern blocks, SAFETY 390 → 408; the
 reconciliation holds.
+
+**Plan 05-10 delta (SMP-02/03/11, 2026-11-26):** the aarch64 single-CPU
+statics migrate to per-CPU/locked form.  `aarch64/src/proc.rs`: the
+`CURKSTACK`/`CURFRAME` no_mangle statics and their three accessor blocks
+(`read_curframe`/`write_curframe`/`write_curkstack`) are GONE — trap.S
+already reads/writes `PerCpu::cur_frame` via `[tpidr_el1, #0]` (05-09),
+and the scheduler's swap now stores atomically into the owning CPU's
+`PerCpu` slots (safe code); the `SCHED_CONTEXT`/`SCHED_SEEDED` statics
+and the churn profile's `BOOT_CTX` static move into `PerCpu`
+(`sched_context`/`sched_seeded`/`park_context`/`sched_stack_top`), with
+`sched_context()`'s seed-once block now carrying a per-CPU SAFETY
+discipline; `PROC_TABLE` becomes `IrqSpinLock` at `LockRank::ProcTable`
+(50) and `SHARED_PAGES`/`RFMEM_FAMILIES`/`SEM_WAITERS` at
+`LockRank::VmShared` (30); `Proc::wake_pending: AtomicBool` plus the one
+`wake_locked` critical section (flag publish + Blocked→Ready + run-queue
+enqueue under PROC_TABLE) and `block()`'s flag-consume close Pitfall 4;
+`pick_next` pops `port::sched::RunQueues` via `pop_or_steal` and
+`enqueue_ready` wires every Ready transition.  `aarch64/src/fpu.rs`:
+`this_cpu()` drops the MPIDR_EL1-indexed `CPUS` static (its `mrs` asm
+block is gone) for `&smp::this_cpu().fpu`.  `aarch64/src/pagealloc.rs`:
+`PAGE_ALLOC` becomes `IrqSpinLock` at `LockRank::PageAlloc` (70).
+aarch64 202 → 198 blocks, SAFETY 408 → 404; the reconciliation holds.
+
+**Plan 05-10 Task 2 delta (SMP-03, 2026-11-26):** the two IRQ-shared
+mutable `SyncUnsafeCell` globals in `aarch64/src/platform/virt/` take
+ranked `IrqSpinLock`s.  `pl011.rs`: `CONS_RX` is `IrqSpinLock<ConsRx>` at
+`LockRank::Console` (100) — the RX IRQ writer, the `cons_rx_drain`
+syscall reader, the tick's FIFO poll and the gatedbg peeks all serialize
+through it (the four raw cell derefs are gone).  `pci.rs`: `VIRTIO_NET`
+is `IrqSpinLock<Option<VirtioNetState>>` at `LockRank::NetIrq` (90) — the
+bind publish, `virtnet_tx_post`, `virtnet_ifstats` and the IRQ handler's
+ISR/TX/RX/replenish phases run under it, and the handler NEVER holds the
+guard across the port-side wake/ingress callbacks (devether
+`rx_ingress`/`tx_retired`, devip `note_rx_pending` — their own NetIrq-90
+locks would equal-rank-nest, a D-26 violation): RX frames copy to a
+2 KiB stack buffer under the guard and ingress after it drops.  The
+publish-once cells (`PL011_RANGE`, `PCI_DISCOVERY`, `VIRTIO_NET_INTID`)
+stay `SyncUnsafeCell` — write-once-at-boot/read-never-written-again is
+not IRQ-shared-mutable state.  pl011.rs 9 → 5, pci.rs 10 → 7;
+aarch64 198 → 191 blocks, SAFETY 404 → 397; the reconciliation holds.
 
 ## ds/ and crypto/ (Phase 3)
 
@@ -354,9 +394,8 @@ uartpl011 (tree-wide: no driver touches io.rs directly anymore).  The
 | aarch64/vm.rs `RootTableGuard::deref/deref_mut` (2 blocks) | block ×2 | TTBR-resolved root-table handle; single CPU, boot/IRQ-masked context |
 | aarch64/pagealloc.rs `VirtPage4KGuard::deref/deref_mut` (2 blocks) | block ×2 | freshly mapped page's handle |
 | aarch64/proc.rs `ProcGuard::deref/deref_mut` (2 blocks) | block ×2 | PROC_TABLE-resident proc handle (slots never freed this era) |
-| aarch64/proc.rs `read_curframe`/`write_curframe`/`write_curkstack` (3 blocks) | block ×3 | SyncUnsafeCell IO on the trap.S ABI symbols — the module-header write discipline |
-| aarch64/proc.rs `sched_context` (1 block) | block ×1 | seed-once cell discipline, IRQ-masked single CPU |
-| aarch64/platform/virt/pl011.rs `Pl011Uart::new` + `init_rx` + `rx_irq_cons_buffer` ×2 + `cons_rx_drain` + `cons_rx_pending` + `cons_rx_fifo_pending` + `cons_rx_ring_pos` + `rx_irq_echo` (9 blocks) | block ×9 | PL011_RANGE (publish-once before unmask) + CONS_RX (single-writer-IRQ / single-reader-syscall ring) cell disciplines — the research-P8 lock-free IRQ path |
+| aarch64/proc.rs `sched_context` (1 block) | block ×1 | per-CPU seed-once cell discipline (the owning CPU's PerCpu slot, IRQ-masked) — 05-10: the CURFRAME/CURKSTACK accessor trio is GONE (PerCpu atomic stores are safe code) |
+| aarch64/platform/virt/pl011.rs `Pl011Uart::new` + `init_rx` + `rx_irq_cons_buffer`'s range read + `cons_rx_fifo_pending` + `rx_irq_echo` (5 blocks) | block ×5 | PL011_RANGE (publish-once before unmask) — the research-P8 lock-free IRQ path; 05-10: CONS_RX's four raw ring derefs are GONE (the ring is an IrqSpinLock at LockRank::Console 100 — safe code) |
 | aarch64/platform/virt/gic/mod.rs `init`/`enable`/`ack`/`eoi` (4 blocks) + gic/gicv3.rs redistributor wake, ICC system-register access and SGI emission (7 blocks) | block ×11 | GIC write-once cell, lock-free IRQ reads (research P8); the v3 redistributor/SGI paths are the same MMIO-volatility floor |
 | aarch64/platform/{virt,raspi3b}/devcons.rs `init` (1 block each) | block ×2 | write-once UART cell at platform init |
 | port/devmnt.rs — NONE (wave 2) | — | the session core rides mcslock::BusyCell; msize/version are frozen set-once plain fields.  **05-09 overlap: preserved** (the four-string stat + one-outstanding-RPC discipline are byte-identical semantics) |
@@ -397,14 +436,14 @@ crates are lint-opted-in, so every listed block carries a `// SAFETY:` comment
 q35cpu gate configs, and the scan finds zero undocumented production sites in
 cfg-gated code as well.
 
-### aarch64/src — 202 blocks, 9 unsafe fns, 7 extern blocks (test-only: 6 blocks)
+### aarch64/src — 191 blocks, 9 unsafe fns, 7 extern blocks (test-only: 6 blocks)
 
 | File | Blocks | fns | ext | Surface |
 |---|---|---|---|---|
 | `allocator.rs` | 1 | 0 | 0 | the global allocator's arena static init (05-07: the unlocked diagnostic reads are gone; heap_stats/heap_census delegate through the IrqSpinLock-guarded GlobalQuickAlloc) |
 | `exec.rs` | 6 | 0 | 0 | KZERO-alias image-page writes and seed-stack/argv construction |
 | `fault.rs` | 2 | 0 | 0 | the demand pager's user-page fills through the live TTBR0 |
-| `fpu.rs` | 11 | 2 | 0 | FP/SIMD (q0-q31/FPCR/FPSR) save/restore, per-CPU `CpuFp`, `with_simd` (+1 test-only block) |
+| `fpu.rs` | 10 | 2 | 0 | FP/SIMD (q0-q31/FPCR/FPSR) save/restore, per-CPU `CpuFp` in the PerCpu slot (TPIDR_EL1, 05-10), `with_simd` (+1 test-only block) |
 | `io.rs` | 9 | 0 | 0 | the MMIO-volatility primitives every driver rides |
 | `kmem.rs` | 9 | 0 | 1 | kernel.ld boundary symbols (addresses only, never contents) |
 | `main.rs` | 7 | 0 | 1 | link-syms, DTB two-pass, the idle wfi, the boot-time TTBR0 switch + first EL0 entry, the secondary_main wfi park (05-09) |
@@ -416,12 +455,12 @@ cfg-gated code as well.
 | `platform/virt/gic/gicv2.rs` | 1 | 0 | 0 | the GICD_SGIR SGI write's dsb ishst barrier (05-09) |
 | `platform/virt/gic/gicv3.rs` | 10 | 0 | 0 | redistributor wake, ICC system registers, SGI emission + the ICC_SGI1R_EL1 write (05-09) |
 | `platform/virt/gic/mod.rs` | 6 | 0 | 0 | GIC write-once cell, lock-free IRQ ack/eoi reads + the send_sgi and init_secondary_cpu dispatches (05-09) |
-| `platform/virt/pci.rs` | 10 | 0 | 0 | DTB/ECAM discovery and virtio-net bind: publish-once cells + MMIO (the dev_ether arms) |
-| `platform/virt/pl011.rs` | 9 | 0 | 0 | PL011_RANGE publish-once + CONS_RX single-writer-IRQ ring cells |
+| `platform/virt/pci.rs` | 7 | 0 | 0 | DTB/ECAM discovery and virtio-net bind: publish-once cells (PCI_DISCOVERY, VIRTIO_NET_INTID) + MMIO; VIRTIO_NET's cell derefs are gone (05-10: IrqSpinLock at NetIrq 90, never held across the port wake/ingress callbacks) |
+| `platform/virt/pl011.rs` | 5 | 0 | 0 | PL011_RANGE publish-once (05-10: CONS_RX is IrqSpinLock at Console 100 — the ring's four raw derefs are gone) |
 | `platform/virt/rtc.rs` | 1 | 0 | 0 | PL031 MMIO read on the mapped rw_device page |
 | `pre_mmu/util.rs` | 7 | 2 | 0 | pre-driver early console: fixed-PA MMIO, identity-mapped pre-MMU |
 | `pre_mmu/vminit.rs` | 23 | 0 | 1 | pre-MMU boot: identity-map page-table construction, isb/tlbi, DTB parse |
-| `proc.rs` | 29 | 0 | 1 | the process machinery floor: link-syms, KZERO+PA table/page writes, switch/resume ABI, ProcGuard/curframe cells |
+| `proc.rs` | 26 | 0 | 1 | the process machinery floor: link-syms, KZERO+PA table/page writes, switch/resume ABI, ProcGuard + the per-CPU sched_context seed (05-10: the CURFRAME/CURKSTACK accessor trio moved to safe PerCpu atomic stores; PROC_TABLE/SHARED_PAGES/RFMEM_FAMILIES/SEM_WAITERS are ranked IrqSpinLocks; `wake_pending` + `wake_locked`/`block()` close Pitfall 4; `RunQueues` drives `pick_next`) |
 | `smp.rs` | 10 | 0 | 1 | per-CPU PerCpu (TPIDR_EL1), PSCI CPU_ON (hvc/smc), DTB /cpus+/psci, DAIF save/restore, TLB flush, SmpArch registration (05-09) |
 | `swtch.rs` | 0 | 0 | 1 | the context-switch ABI (swtch.S); one host-test twin fn |
 | `textcopy.rs` | 8 | 2 | 0 | rfork text-copy emit/call and the I-cache selftest (RO text under KZERO aliases) (+5 test-only blocks) |
