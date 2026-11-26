@@ -224,6 +224,13 @@ const FRAME_SLOTS: usize = CONV_STORE_CAP / ETHERMAXTU; // 43
 /// sequence stamp (08-06): the devip ether adapter's arrival-order merge
 /// across its three conversations (0x800/0x806/0x86dd) compares head
 /// stamps — per-conv FIFO order alone loses cross-conv arrival order.
+///
+/// ALL of this type's heap activity happens in `new` — which the caller
+/// must run OUTSIDE the NetIrq-ranked INGRESS lock (rank 90 > the
+/// heap's 80; the IRQ path never allocates).  Every container is
+/// preallocated to the slot count, so `push`/`pop` — which run under
+/// INGRESS from the rx IRQ retire as well as syscall context — never
+/// grow or free.
 struct FrameStore {
     bytes: Vec<u8>,
     /// Free slot indices (a stack; every slot starts free).
@@ -237,7 +244,11 @@ impl FrameStore {
         FrameStore {
             bytes: alloc::vec![0u8; FRAME_SLOTS * ETHERMAXTU],
             free: (0..FRAME_SLOTS as u16).rev().collect(),
-            queue: VecDeque::new(),
+            // Preallocate the queue to the slot count: `push` runs under
+            // INGRESS (rx IRQ retire) and must never hit the heap.  A
+            // frame is only queued by taking a free slot, so the queue
+            // can never exceed the capacity reserved here.
+            queue: VecDeque::with_capacity(FRAME_SLOTS),
         }
     }
 
@@ -245,8 +256,20 @@ impl FrameStore {
     /// conversation — impossible for a demux match, counted defensively
     /// by the caller) or full (the soverflow arm).  `seq` is the global
     /// ingress stamp (the adapter's merge key).
+    ///
+    /// Runs under INGRESS from both syscall and IRQ context: it must
+    /// never allocate (the preallocated `queue`/`free` capacities make
+    /// push_back/pop allocation-free).
     fn push(&mut self, frame: &[u8], seq: u64) -> bool {
         let Some(slot) = self.free.pop() else { return false };
+        // The no-alloc contract guard: a full-capacity queue would make
+        // push_back grow the ring (heap under INGRESS = rank violation).
+        // `free` and `queue` partition the slot count, so a popped slot
+        // guarantees the reserved capacity has room.
+        debug_assert!(
+            self.queue.len() < self.queue.capacity(),
+            "FrameStore::push would allocate under INGRESS"
+        );
         let n = frame.len().min(ETHERMAXTU);
         let base = slot as usize * ETHERMAXTU;
         self.bytes[base..base + n].copy_from_slice(&frame[..n]);
@@ -453,31 +476,48 @@ pub(crate) fn hooks() -> Result<EtherHooks> {
 /// slot's store is allocated here (syscall context — the IRQ path never
 /// allocates).  Returns the conversation id; the caller rewrites the
 /// chan's qid to NETQID(id, Nctlqid).
+///
+/// The FrameStore allocation runs OUTSIDE the INGRESS lock even though
+/// the slot is chosen under NETIF: INGRESS is ranked NetIrq (90), above
+/// the heap's HeapAlloc (80), and "NetIrq never allocates" is the rank
+/// table's load-bearing rule — allocating under it trips the debug rank
+/// checker (and in IRQ context would be unsafe outright).  NETIF is a
+/// plain unranked MCSLock that serializes every conversation-lifecycle
+/// call, so the chosen slot and its store's presence cannot change
+/// between the check and the install.
 pub(crate) fn conv_alloc() -> Result<usize> {
     let node = LockNode::new();
     let mut ng = NETIF.lock(&node);
     let Some(nif) = ng.as_mut() else { return Err("devether: no ether0") };
+    // Choose the slot first; NETIF serializes conv_alloc/conv_open/
+    // conv_close, so no concurrent lifecycle call can claim it.
+    let Some(id) = (0..NFILE).find(|&id| nif.convs[id].inuse == 0) else {
+        return Err("devether: no free conversations");
+    };
+    // Read the INGRESS mirror's store presence under its lock, then
+    // RELEASE it before the (allocating) FrameStore construction.  The
+    // store is monotonic per slot while NETIF is held (only this
+    // function ever installs one, and conv_close keeps it), so the
+    // install below is unconditional when the check said absent.
+    let ig_node = LockNode::new();
+    let store_absent = INGRESS.lock(&ig_node).convs[id].store.is_none();
+    let fresh_store = if store_absent { Some(FrameStore::new()) } else { None };
     // The INGRESS mirror is taken UNDER the Netif lock (the documented
     // NETIF → INGRESS order) — the canonical record and the mirror move
-    // in one syscall critical section.
+    // in one syscall critical section.  No allocation happens here.
     let ig_node = LockNode::new();
     let mut ig = INGRESS.lock(&ig_node);
-    for id in 0..NFILE {
-        if nif.convs[id].inuse == 0 {
-            if ig.convs[id].store.is_none() {
-                ig.convs[id].store = Some(FrameStore::new());
-            }
-            nif.convs[id].inuse = 1;
-            nif.convs[id].owner_set = true;
-            nif.convs[id].typ = 0;
-            nif.convs[id].prom = false;
-            ig.convs[id].typ = 0;
-            ig.convs[id].prom = false;
-            ig.convs[id].open = true;
-            return Ok(id);
-        }
+    if let Some(store) = fresh_store {
+        ig.convs[id].store = Some(store);
     }
-    Err("devether: no free conversations")
+    nif.convs[id].inuse = 1;
+    nif.convs[id].owner_set = true;
+    nif.convs[id].typ = 0;
+    nif.convs[id].prom = false;
+    ig.convs[id].typ = 0;
+    ig.convs[id].prom = false;
+    ig.convs[id].open = true;
+    Ok(id)
 }
 
 /// Re-open conversation `id` (netif.c's `openfile(nif, id)` — the
@@ -553,8 +593,14 @@ pub(crate) fn conv_close(id: usize) {
             slot.open = false;
             if let Some(store) = slot.store.as_mut() {
                 // qclose: the queue drains; the slots return free.
+                // In-place reset — assigning a freshly collected Vec
+                // would allocate AND free under the NetIrq-ranked
+                // INGRESS lock (rank 90 > the heap's 80; the IRQ path
+                // never allocates).  The existing capacity holds every
+                // slot (FrameStore::new reserved exactly FRAME_SLOTS).
                 store.queue.clear();
-                store.free = (0..FRAME_SLOTS as u16).rev().collect();
+                store.free.clear();
+                store.free.extend((0..FRAME_SLOTS as u16).rev());
             }
             nwake = ig.rx_waiters.take(&mut pids);
         }
