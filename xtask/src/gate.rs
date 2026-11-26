@@ -882,7 +882,7 @@ mod tests {
         }
 
         let witness = root.join(
-            ".planning/phases/01-stage-p0-cross-build-harness/witness/run-witness.sh",
+            ".planning/milestones/v3.0-phases/01-stage-p0-cross-build-harness/witness/run-witness.sh",
         );
         let text =
             fs::read_to_string(&witness).unwrap_or_else(|e| panic!("{}: {e}", witness.display()));
@@ -915,7 +915,7 @@ mod tests {
             .parent()
             .expect("the workspace root above xtask");
         let witness = root.join(
-            ".planning/phases/01-stage-p0-cross-build-harness/witness/run-witness.sh",
+            ".planning/milestones/v3.0-phases/01-stage-p0-cross-build-harness/witness/run-witness.sh",
         );
         let text =
             fs::read_to_string(&witness).unwrap_or_else(|e| panic!("{}: {e}", witness.display()));

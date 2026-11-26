@@ -6,11 +6,11 @@
 # D-10 flip the legs run here, from r9's own flake supply.  Each relocated
 # leg keeps the runner class and timeout Harvey gave it.
 #
-# Venue discipline (D-13, HARN-01): the REQUIRED green witness is a local
-# x86_64 Linux run under KVM, recorded in the phase evidence.  Hosted
-# runners have no /dev/kvm, so every job below selects TCG explicitly and
-# every job is continue-on-error: a hosted result is the best-effort
-# SECOND witness and is NEVER recorded as the D-13 KVM witness.
+# Venue discipline (Phase 5 CORR-01, D-01, D-05): every hosted CI gate job
+# below FAILS VISIBLY when red — no continue-on-error masking.  The owner
+# Linux KVM runs remain the hardware witness at Stops 2-4 (D-33), but a red
+# hosted gate now turns the workflow red on the commit, which is the
+# per-commit x86_64 check once boot-iso is a pure derivation (CORR-02).
 #
 # Supply chain (T-01-80): every action is pinned by full commit sha and no
 # secrets are passed to these jobs.  The legs realise the read-only Harvey
@@ -33,7 +33,6 @@ jobs:
   boot-r9-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 90 # TCG scale; the smoke's own per-stage 600 s timeouts localize failures
-    continue-on-error: true # best effort (D-13)
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install nix (flakes enabled)
@@ -50,7 +49,6 @@ jobs:
   boot-r9-net-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 90 # TCG scale; the smoke's own per-stage 600 s timeouts localize failures
-    continue-on-error: true # best effort (D-13)
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install nix (flakes enabled)
@@ -65,7 +63,6 @@ jobs:
   boot-r9-cpu:
     runs-on: ubuntu-latest
     timeout-minutes: 90 # TCG scale; the gate's own per-stage timeouts localize failures
-    continue-on-error: true # best effort (D-13)
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install nix (flakes enabled)
@@ -81,7 +78,6 @@ jobs:
   boot-r9-tier1:
     runs-on: ubuntu-latest
     timeout-minutes: 90 # TCG scale; the driver's per-stage 600 s timeouts localize failures
-    continue-on-error: true # best effort (D-13)
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install nix (flakes enabled)
@@ -98,7 +94,6 @@ jobs:
   boot-r9-net-smoke-x64:
     runs-on: ubuntu-latest
     timeout-minutes: 90 # TCG scale; the smoke's own per-stage 600 s timeouts localize failures
-    continue-on-error: true # best effort (D-13)
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install nix (flakes enabled)
@@ -116,7 +111,6 @@ jobs:
   boot-r9-auth-x64:
     runs-on: ubuntu-latest
     timeout-minutes: 90 # TCG scale; the gate's own per-stage 600 s timeouts localize failures
-    continue-on-error: true # best effort (D-13)
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install nix (flakes enabled)
@@ -133,7 +127,6 @@ jobs:
   quick-gate-tcg:
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    continue-on-error: true # best effort (D-13)
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install nix (flakes enabled)
