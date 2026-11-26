@@ -23,10 +23,10 @@ affects: [05-07 lock ranks (FidShard meta is a named rank-40 candidate), 05-08 p
 # Actuals (#2632) — chars/4 over the realized diff, same scale as the plan's estimate (55000, confidence: low).
 actuals:
   tokens: 44560
-  tasks: 2
-  commits: 3
+  tasks: 3
+  commits: 5
   plan_head_before: c0c584b5f5009e54e0b612742600b148e5bd3ff5
-  plan_head_after: c1b02e526e8f8009cb2692e4c9ce0aa989264e13
+  plan_head_after: 3799f66a7ecdc0d47216d5564f97fb71380c1b20
 
 # Tech tracking
 tech-stack:
@@ -98,15 +98,18 @@ coverage:
   - id: D4
     description: "Owner Stop 1 (D-30, D-32): cumulative port/src diff (0d08e6c..HEAD: 4 files, +396/-489), unpushed commit list (origin/main = 900f58b) and host/clippy/Miri evidence presented for owner approval; push to origin/main only on approval so CI proves main green and pure boot-iso"
     requirement: CORR-03
-    verification: []
+    verification:
+      - kind: human
+        ref: "Owner Stop 1 review, 2026-11-26: owner reviewed the cumulative port/src diff (0d08e6c..HEAD: 4 files, +396/-489), the unpushed commit list and the host/clippy/Miri evidence; response: 'approved, push'"
+        status: pass
     human_judgment: true
-    rationale: "The stop exists so the owner reviews the cumulative port/src diff and explicitly approves any push (D-30, D-32); no automation can substitute for the owner's verdict."
+    rationale: "The stop exists so the owner reviews the cumulative port/src diff and explicitly approves any push (D-30, D-32); no automation can substitute for the owner's verdict. Verdict rendered 2026-11-26: approved; push to origin/main authorized; CI on main is the remaining external check (CORR-01, CORR-02, D-05)."
 
 # Metrics
 duration: 26min
 completed: 2026-11-26
 status: complete
-phase_status: paused-at-owner-stop-1 (tasks 1-2 complete; task 3 is the Owner Stop 1 checkpoint presented for approval)
+phase_status: complete (3 of 3 tasks executed; Owner Stop 1 approved by the owner 2026-11-26 with push to origin/main authorized)
 ---
 
 # Phase 05 Plan 06: Slab FidTable, D-13 Amendments and Owner Stop 1 Summary
@@ -117,8 +120,8 @@ phase_status: paused-at-owner-stop-1 (tasks 1-2 complete; task 3 is the Owner St
 
 - **Duration:** 26 min
 - **Started:** 2026-11-26T05:20:08Z
-- **Completed:** 2026-11-26T05:46:10Z (tasks 1-2; Owner Stop 1 checkpoint presented)
-- **Tasks:** 2 of 3 executed (Task 3 is the Owner Stop 1 `checkpoint:human-verify`, gate=blocking — paused for the owner per D-30/D-32)
+- **Completed:** 2026-11-26T05:46:10Z (tasks 1-2); 2026-11-26 (Task 3 — Owner Stop 1 approved by the owner)
+- **Tasks:** 3 of 3 executed (Task 3 was the Owner Stop 1 `checkpoint:human-verify`, gate=blocking — PASSED on owner approval per D-30/D-32)
 - **Files modified:** 12 (0 created; plus the RED evidence record JSON)
 
 ## Accomplishments
@@ -136,8 +139,13 @@ Task 1 ran TDD (RED before GREEN, IG-V01 GREEN twice); Task 2 is a docs task:
 1. **Task 1, RED: failing slab FidTable pins with scaffolding (CORR-03)** — `bcae5dc` (test) — 23 passed, 8 failed on the planned D-08/D-10 security assertions; RED evidence `05-06-RED-task1.json` classified `RED_EVIDENCE_OK` (`target_test_failed`)
 2. **Task 1, GREEN: slab-backed FidTable with D-08 owner checks and D-10 gen guards (CORR-03)** — `0de7b42` (feat) — 31/31 aead_fid pins pass; all 14 test-9p legs green twice; full `cargo test -p port` green (168 lib + all integration files)
 3. **Task 2: D-13 three-place amendments and CORR-05 policy sync (CORR-03, CORR-05)** — `c1b02e5` (docs) — full host suite green at final state (check, both arch clippy legs, test, Miri)
+4. **Task 3: Owner Stop 1 — Course Correction & Audit Follow-Up Review (D-30, D-32)** — PASSED — owner reviewed the cumulative `port/src` diff (`0d08e6c..HEAD`: 4 files, +396/-489), the unpushed commit list and the host/clippy/Miri evidence, and responded "approved, push" on 2026-11-26
 
-**Plan metadata:** the SUMMARY + REQUIREMENTS.md commit (docs: complete plan), committed atomically with this file.
+**Plan metadata:** the SUMMARY + REQUIREMENTS.md commit (docs: complete plan), committed atomically with this file; the follow-up docs commit recording the Owner Stop 1 approval.
+
+## Owner Stop 1 Outcome
+
+**Approved by the owner on 2026-11-26; push to `origin/main` authorized.** The owner reviewed the cumulative `port/src` diff (`0d08e6c..HEAD`: `chan/wire.rs`, `fid.rs`, `lib.rs`, `rfork.rs`; +396/-489), the unpushed commit list from `900f58b..HEAD`, and the host evidence (check, both arch clippy legs, full test suite, Miri, 14 `test-9p` legs green twice), and answered "approved, push". CI on `main` — green with pure `boot-iso` — is the remaining external check (CORR-01, CORR-02, D-05). The push itself is deferred to the orchestrator.
 
 ## Files Created/Modified
 
@@ -216,7 +224,7 @@ None new. The plan's register is implemented as written: T-05-09 (owner `client_
 
 ## Next Phase Readiness
 
-- **Owner Stop 1 (Task 3) is presented now:** cumulative `port/src` diff since phase base `0d08e6c` (4 files: `chan/wire.rs`, `fid.rs`, `lib.rs`, `rfork.rs`; +396/-489), unpushed commits from `900f58b..HEAD`, and the host evidence listed above. On owner approval (and push approval, if given), CI proves `main` green with pure `boot-iso` (CORR-01/CORR-02, D-05) before Part 2 (Plans 05-07+) starts.
+- **Owner Stop 1 (Task 3) PASSED:** the owner approved the cumulative `port/src` diff since phase base `0d08e6c` (4 files: `chan/wire.rs`, `fid.rs`, `lib.rs`, `rfork.rs`; +396/-489), the unpushed commits from `900f58b..HEAD`, and the host evidence on 2026-11-26, authorizing the push to `origin/main`. CI now proves `main` green with pure `boot-iso` (CORR-01/CORR-02, D-05) as the remaining external check before Part 2 (Plans 05-07+) starts.
 - **Plan 05-07:** `FidShard.meta` is the `Lock<AllocMeta>` that takes a rank (the plan notes Rank 40) once lock ranks land; the slab itself needs no change.
 - **Plan 05-08:** `current_cpu_hint()` in `port/src/fid.rs` is the single seam to rewire to `port::smp::current_cpu_id()`; the D-12 routing tests pin CPU-0 behavior until then.
 - **D-28 loopback server (05-27):** the synthetic tier (4×256) is the sizing the gate wiring constructs; `connect_aead_shared` is the test-side precedent for one table behind two ends.
@@ -234,13 +242,13 @@ Semantic assessment (recorded in the RED JSON): every failing test executed and 
 ---
 
 *Phase: 05-guide-phase-3-early-smp-course-correction-and-memory-pools*
-*Completed: 2026-11-26 (tasks 1-2; Owner Stop 1 checkpoint awaiting owner)*
+*Completed: 2026-11-26 (3 of 3 tasks; Owner Stop 1 approved by the owner, push to origin/main authorized)*
 
 ## Self-Check: PASSED
 
 - All 12 created/modified files exist on disk (verified with `[ -f ]`): `port/src/fid.rs`, `port/tests/aead_fid.rs`, `port/tests/common/aead_link.rs`, `port/tests/aead_negotiate.rs`, `port/src/lib.rs`, `port/src/chan/wire.rs`, `Cargo.toml`, `.planning/rfc-9p2000-aead.md`, `.planning/PROJECT.md`, `docs/plan_r9_architecture_code_compendium_v3_0.md`, `docs/r9_implementation_guide_for_agentic_developers_v3_0.md`, `.planning/phases/05-guide-phase-3-early-smp-course-correction-and-memory-pools/05-06-RED-task1.json` (plus `.planning/REQUIREMENTS.md` marked complete, committed beside this SUMMARY).
-- All 3 task commits are ancestors of HEAD: `bcae5dc` (RED), `0de7b42` (GREEN), `c1b02e5` (docs).
+- All 4 prior plan commits are ancestors of HEAD: `bcae5dc` (RED), `0de7b42` (GREEN), `c1b02e5` (docs), `3799f66` (plan metadata).
 - Content pins verified: `SlabSlots<FID_ENTRY_WORDS, P>` and `r#gen: u16` in `port/src/fid.rs`; `connect_aead_shared` in both test files; zero `use ds::tpht` / `insert_lock` / `FlattenedTphtShard` in `port/src/fid.rs`.
-- Measured commits from ledger (`gsd-plan-head-before-05-06` = `c0c584b5`): 3 task commits; `plan_head_after` = `c1b02e52`.
+- Measured commits from ledger (`gsd-plan-head-before-05-06` = `c0c584b5`): 5 at completion (3 task commits + 2 docs/metadata commits); `plan_head_after` = `3799f66a` (last commit before this update's own docs commit).
 - Working tree before this SUMMARY's commit: only this SUMMARY untracked and `REQUIREMENTS.md` modified (both staged in the metadata commit); zero `unsafe` tokens added anywhere; `Cargo.lock` untouched; `ds/src/tpht/` untouched.
 - Plan-level verification re-run at completion: `cargo xtask test-9p` rc 0 twice ✓, `cargo test -p port fid` green ✓, `cargo xtask check` rc 0 ✓, both arch clippy legs rc 0 ✓, `cargo xtask test` rc 0 (56 ok legs) ✓, `cargo xtask miri` rc 0 ✓.
