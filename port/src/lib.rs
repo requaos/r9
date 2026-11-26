@@ -106,6 +106,16 @@ pub mod namec;
 pub mod netif;
 #[forbid(unsafe_code)]
 pub mod pagealloc;
+// palloc (Phase 5, 05-16, MEM-07, D-14/D-17/D-21): the portable
+// non-cryptographic frame pools — Roaring clean/dirty/active/pinned sets,
+// per-frame atomic pin counts, the ~15% High-Water Pager, and the live
+// evictor hook (alloc_clean drops PAGE_ALLOC Rank 70 before evict_fn).
+#[forbid(unsafe_code)]
+pub mod palloc;
+// superpage (Phase 5, 05-16, MEM-08): the exact 64-byte, 64-byte-aligned
+// SuperpageResidency ([AtomicU64; 8] over 512 4 KiB sub-pages).
+#[forbid(unsafe_code)]
+pub mod superpage;
 #[forbid(unsafe_code)]
 pub mod paqfs;
 #[forbid(unsafe_code)]
