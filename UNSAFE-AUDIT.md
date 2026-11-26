@@ -310,6 +310,26 @@ loses its preempt call (safe code).  `port/src/sched.rs`: the new
 aarch64 194 → 196 blocks, SAFETY 400 → 402 (proc.rs 28 → 29, trap.rs
 9 → 10); the reconciliation holds.
 
+**Plan 05-11 Task 1 delta (SMP-01/07, 2026-11-26):** the x86_64 dual
+xAPIC/x2APIC IPI delivery and AP LAPIC init land.  `acpi.rs`: the MADT
+walk records enabled/online-capable processors (type-0 LAPIC and type-9
+x2APIC entries) into `Madt::cpus` (capped at `MAX_CPUS` with a counted
+`dropped_cpus`) — pure bounds-checked parsing, zero new unsafe.
+`lapic.rs`: gains `send_icr` (xAPIC ICR_HI/ICR_LO MMIO pair with the
+delivery-status poll; x2APIC `mfence; lfence; wrmsr(0x830)` per Intel
+SDM Vol 3A §10.12.9 — T-05-19's mitigation) (+1 block), the
+hardware-derived `current_apic_id` (+2 blocks: the IA32_APIC_BASE read
+and the EXTD-gated IA32_X2APIC_ID read), and `init_ap` (+2 blocks: the
+AP-side IA32_APIC_BASE read-modify-write and the CPUID-gated
+IA32_TSC_DEADLINE arm from the BSP's published calibration), plus
+`send_init`/`send_sipi`/`send_ipi` over the existing wrappers (safe
+code), so lapic.rs 8 → 13.  `timer.rs`: the new `state()` getter reads
+the publish-once STATE cell (+1 block), so timer.rs 5 → 6.  x86_64
+156 → 162 blocks, SAFETY 402 → 408; the reconciliation holds.  (The
+x86_64 per-file inventory header below was stale at 158 — the rows
+summed to 156 since 05-07's allocator change; the header now reads the
+measured 162.)
+
 ## ds/ and crypto/ (Phase 3)
 
 Both crates take `[lints] workspace = true`, so
@@ -571,7 +591,7 @@ cfg-gated code as well.
 | `vm.rs` | 16 | 3 | 0 | page-table machinery: TTBR/TLB/barrier asm, entry writes, recursive-mapping resolution |
 | `vmdebug.rs` | 2 | 0 | 0 | read-only recursive-mapping walk (print path) |
 
-### x86_64/src — 158 blocks, 30 unsafe fns, 2 extern blocks (test-only: 8 blocks, 2 fns)
+### x86_64/src — 162 blocks, 30 unsafe fns, 2 extern blocks (test-only: 8 blocks, 2 fns)
 
 | File | Blocks | fns | ext | Surface |
 |---|---|---|---|---|
@@ -586,11 +606,11 @@ cfg-gated code as well.
 | `platform/q35/churngate.rs` | 2 | 0 | 0 | the churn gate's one-shot stash cells (single writer at boot / single reader) |
 | `platform/q35/devcons.rs` | 2 | 0 | 0 | COM1 port I/O + the write-once console cell at platform init |
 | `platform/q35/ioapic.rs` | 5 | 0 | 0 | IOAPIC select/data MMIO window (bounds-checked base) |
-| `platform/q35/lapic.rs` | 8 | 0 | 0 | identity-mapped LAPIC MMIO and x2APIC register MSRs, the ICR IPI write |
+| `platform/q35/lapic.rs` | 13 | 0 | 0 | identity-mapped LAPIC MMIO and x2APIC register MSRs; the ICR IPI write (xAPIC ICR pair + delivery-status poll; x2APIC `mfence; lfence; wrmsr(0x830)`, SDM §10.12.9); `current_apic_id`'s hardware-derived ID read; `init_ap`'s AP-side enable + deadline arm |
 | `platform/q35/mod.rs` | 2 | 0 | 0 | the publish-once ACPI cell (write at print_machine_info, lock-free reads) |
 | `platform/q35/netgate.rs` | 2 | 0 | 0 | the net gate driver's `hlt` park loops |
 | `platform/q35/pci.rs` | 28 | 0 | 0 | MCFG/ECAM MMIO walks, 0xCF8/0xCFC config mechanism, publish-once discovery/bind cells, virtio-net IRQ path |
-| `platform/q35/timer.rs` | 5 | 0 | 0 | TSC-deadline/CPUID check, publish-once timer state cells |
+| `platform/q35/timer.rs` | 6 | 0 | 0 | TSC-deadline/CPUID check, publish-once timer state cells (05-11: +1 for `state()`'s cell read — the AP LAPIC-timer arming input) |
 | `proc.rs` | 30 | 1 | 1 | the process machinery floor: `first_entry` ABI, pml4 map/unmap through the KZERO alias, brk/rfork unwind (SMP-03 audit sites), link-syms (+3 test-only blocks, 1 fn) |
 | `seg.rs` | 3 | 3 | 0 | GDT/IDT/TSS `load` (the fns) on architecturally valid tables |
 | `swtch.rs` | 0 | 1 | 0 | `swtch` context-switch ABI (+1 host-test twin fn) |

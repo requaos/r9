@@ -329,12 +329,20 @@ pub fn parse_madt(bytes: &[u8]) -> Result<Madt, ParseError> {
         }
         match ty {
             0 => {
-                // Processor Local APIC (SMP-01).  RED-SCAFFOLD (05-11
-                // Task 1): the entry is bounds-checked and walked past;
-                // the GREEN half records enabled (flags bit 0) and
-                // online-capable (bit 1) entries into madt.cpus.
+                // Processor Local APIC (SMP-01): {uid@+2, apic id@+3,
+                // u32 flags@+4}.  Recorded when enabled (bit 0) or
+                // online-capable (bit 1); flags == 0 is a skipped
+                // disabled CPU, never an error.
                 if elen < LAPIC_ENTRY_LEN {
                     return Err(ParseError::BadEntry);
+                }
+                let flags = le_u32(bytes, off + 4).ok_or(ParseError::BadEntry)?;
+                if flags & 0b11 != 0 {
+                    record_cpu(&mut madt, MadtCpu {
+                        apic_id: u32::from(bytes[off + 3]),
+                        acpi_id: u32::from(bytes[off + 2]),
+                        x2apic: false,
+                    });
                 }
             }
             1 => {
@@ -366,12 +374,20 @@ pub fn parse_madt(bytes: &[u8]) -> Result<Madt, ParseError> {
                 madt.nintsrc += 1;
             }
             9 => {
-                // Processor Local x2APIC (SMP-01).  RED-SCAFFOLD (05-11
-                // Task 1): bounds-checked and walked past; the GREEN
-                // half records enabled entries with their full 32-bit
-                // x2APIC IDs.
+                // Processor Local x2APIC (SMP-01): {u16 rsvd@+2, u32
+                // x2apic id@+4, u32 flags@+8, u32 uid@+12}.  The full
+                // 32-bit ID is kept — the x2APIC ICR destination is
+                // 32 bits wide (unlike the type-0 byte).
                 if elen < X2APIC_ENTRY_LEN {
                     return Err(ParseError::BadEntry);
+                }
+                let flags = le_u32(bytes, off + 8).ok_or(ParseError::BadEntry)?;
+                if flags & 0b11 != 0 {
+                    record_cpu(&mut madt, MadtCpu {
+                        apic_id: le_u32(bytes, off + 4).ok_or(ParseError::BadEntry)?,
+                        acpi_id: le_u32(bytes, off + 12).ok_or(ParseError::BadEntry)?,
+                        x2apic: true,
+                    });
                 }
             }
             // Every other entry kind: walked past on its own declared
@@ -382,6 +398,18 @@ pub fn parse_madt(bytes: &[u8]) -> Result<Madt, ParseError> {
         off += elen;
     }
     Ok(madt)
+}
+
+/// Record an enabled/online-capable processor (SMP-01), capped at
+/// MAX_CPUS; an overflow is counted in `dropped_cpus` so the caller
+/// prints the drop loudly (T-05-21: never a silent truncation).
+fn record_cpu(madt: &mut Madt, cpu: MadtCpu) {
+    if madt.ncpus < MAX_CPUS {
+        madt.cpus[madt.ncpus] = cpu;
+        madt.ncpus += 1;
+    } else {
+        madt.dropped_cpus = madt.dropped_cpus.saturating_add(1);
+    }
 }
 
 /// The HPET base (best-effort): the GAS at table offset 40 must name
