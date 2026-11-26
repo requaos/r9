@@ -47,6 +47,18 @@
 //!   (construction seed, wake, preemption) enqueues exactly once;
 //!   `pick_next` pops via `RUN_QUEUES.pop_or_steal` and skips stale
 //!   entries (a pid whose proc is no longer Ready).
+//! - Kernel-stack ownership (the HVF `-smp 2` fork-sweep corruption's
+//!   fix): `Proc::on_cpu` marks a proc whose kstack (and, mid-syscall,
+//!   its saved context) a CPU owns.  `pick_next` never starts an `on_cpu`
+//!   proc, and the token is cleared only by the owning CPU's sched-loop
+//!   `release_left_proc` — which runs on the scheduler stack, after the
+//!   CPU has left the proc's kstack.  A preempted proc is therefore NOT
+//!   published Ready by `reschedule()` itself (which parks with swtch):
+//!   `release_left_proc` marks it Ready + enqueues it.  Two CPUs must
+//!   never run on one kstack — overlapping frames corrupt the console
+//!   MCS queue's stack-resident LockNodes (the observed deadlock);
+//!   `pick_next`'s debug tripwire panics if another CPU's `cur_kstack`
+//!   still names the candidate.
 
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
