@@ -25,14 +25,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-25)
 
 **Core value:** The OS boots to rio on QEMU q35 at every commit.
-**Current focus:** v3.1 Early SMP and Cluster Fabric (Phases 5-7), rescoped on 2026-11-25 by the owner's v3.0 documents in `docs/`. Next: discuss the new Phase 5 with `/gsd-discuss-phase 5`
+**Current focus:** v3.1 Early SMP and Cluster Fabric (Phases 5-7), rescoped on 2026-11-25 by the owner's v3.0 documents in `docs/`. Phase 5 was discussed on 2026-11-25. Next: plan it with `/gsd-plan-phase 5`
 
 ## Current Position
 
-Phase: 5 (Guide Phase 3 - Early SMP, Course Correction and Memory Pools) — not discussed, not planned
+Phase: 5 (Guide Phase 3 - Early SMP, Course Correction and Memory Pools) — discussed, not planned
 Plan: —
-Status: Roadmap rescoped; ready to discuss Phase 5
-Last activity: 2026-11-25 — roadmap rescoped to the v3.0 documents; old Phase 5 planning archived as superseded
+Status: Phase 5 context gathered; ready to plan
+Last activity: 2026-11-25 — Phase 5 discussed (05-CONTEXT.md, D-01 to D-35); requirements and roadmap amended to match
 
 
 ## Performance Metrics
@@ -192,4 +192,4 @@ Resume file: .planning/phases/05-guide-phase-3-early-smp-course-correction-and-m
 
 ## Operator Next Steps
 
-- Discuss the new Phase 5 with /gsd-discuss-phase 5
+- Plan Phase 5 with /gsd-plan-phase 5
