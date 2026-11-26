@@ -79,3 +79,16 @@ pub fn eoi(intid: u32) {
         None => {}
     }
 }
+
+/// Send a software-generated interrupt (SGI) to a target CPU (SMP-07).
+/// SGI 0 = reschedule, SGI 1 = TLB shootdown (`aarch64/src/smp.rs`'s
+/// SGI_RESCHED / SGI_SHOOTDOWN).  No-op before init.
+pub fn send_sgi(target_cpu: usize, sgi_id: u8) {
+    // SAFETY: GIC's write-once discipline — published at init before
+    // unmask; send_sgi runs lock-free thereafter (IRQ/syscall context).
+    match unsafe { &*GIC.get() }.as_ref() {
+        Some(Gic::V2(g)) => g.send_sgi(target_cpu, sgi_id),
+        Some(Gic::V3(g)) => g.send_sgi(target_cpu, sgi_id),
+        None => {}
+    }
+}

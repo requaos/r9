@@ -274,6 +274,22 @@ impl Gicv3 {
     pub fn eoi(&self, intid: u32) {
         icc_eoir1_el1_write(intid);
     }
+
+    /// Send a software-generated interrupt to a target CPU (SMP-07).
+    /// ICC_SGI1R_EL1: TargetList [15:0] carries one bit per Aff0 target
+    /// within the cluster (both QEMU virt CPUs sit at Aff1=Aff2=Aff3=0),
+    /// SGIID [27:24] carries the SGI ID, IRM [40] clear = affinity routing.
+    /// The dsb ishst orders prior memory writes before the SGI fires.
+    pub fn send_sgi(&self, target_cpu: usize, sgi_id: u8) {
+        let val: u64 = (1u64 << target_cpu) | ((sgi_id as u64 & 0xF) << 24);
+        // SAFETY: dsb ishst is a pure barrier — no memory operands, safe
+        // at EL1 at any time.
+        unsafe { asm!("dsb ishst", options(nostack, preserves_flags)) };
+        icc_sgi1r_el1_write(val);
+        // SAFETY: isb serializes the SGI emission — the write takes effect
+        // before any subsequent instruction.
+        unsafe { asm!("isb", options(nostack, preserves_flags)) };
+    }
 }
 
 /// Poll GICD_CTLR.RWP clear — the distributor applies CTLR/config writes
@@ -332,4 +348,11 @@ fn icc_eoir1_el1_write(val: u32) {
     // SAFETY: the end-of-interrupt write — exactly one per acked interrupt
     // (never for the spurious INTID), from EL1 IRQ context.
     unsafe { asm!("msr ICC_EOIR1_EL1, {val}", val = in(reg) val as u64) };
+}
+
+fn icc_sgi1r_el1_write(val: u64) {
+    // SAFETY: ICC_SGI1R_EL1 is EL1-writable once ICC_SRE_EL1.SRE is set
+    // (init's step 4); this is the SGI emission register — one Group-1
+    // SGI per write, followed by isb at the call site.
+    unsafe { asm!("msr ICC_SGI1R_EL1, {val}", val = in(reg) val) };
 }

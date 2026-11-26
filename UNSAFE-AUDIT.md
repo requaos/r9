@@ -51,17 +51,17 @@ every config a clippy leg compiles, and static-scanned tree-wide below.
 
 | Set | Sites |
 |-----|-------|
-| aarch64 unsafe blocks+impls (lint-visible, non-test production) | 184 |
+| aarch64 unsafe blocks+impls (lint-visible, non-test production) | 200 |
 | x86_64 unsafe blocks+impls (lint-visible, non-test production) | 156 |
 | port unsafe blocks+impls, non-test, production (lint-visible) | 32 |
 | crypto unsafe blocks+impls (lint-visible) | 0 |
 | ds unsafe blocks+impls, non-test, production (lint-visible) | 1 |
-| **SAFETY annotations (comment immediately preceding a site)** | **390** |
+| **SAFETY annotations (comment immediately preceding a site)** | **406** |
 | aarch64 test-only blocks (cfg(test) modules — not lint-gated, never shipped) | 6 |
 | x86_64 test-only blocks (cfg(test) modules — not lint-gated, never shipped) | 8 |
 | port test-only blocks (cfg(test) crate-root test module — the pin/stress arena scaffolding; not lint-gated, never shipped) | 11 |
 | unsafe fns (documented by `# Safety` / fn-level docs, not lint-checked) — aarch64 9, x86_64 30, port 11 | 50 |
-| unsafe extern blocks (not lint-checked; items doc'd individually) — aarch64 6, x86_64 2 | 8 |
+| unsafe extern blocks (not lint-checked; items doc'd individually) — aarch64 7, x86_64 2 | 9 |
 
 Re-measured 2026-11-26 (CORR-05) by a comment-stripping static scan over every
 tracked `.rs` file: production lint-visible sites 186 + 158 + 22 + 1 + 0 = 367,
@@ -146,6 +146,21 @@ and both arch allocators lose their unlocked diagnostic reads (aarch64
 186 → 184, x86_64 158 → 156, SAFETY 394 → 390); `riscv64/allocator.rs`
 keeps its `static mut` init (never gate-compiled; Phase 7 audit horizon)
 and only tracks the constructor.
+
+**Plan 05-09 delta (SMP-02/04/07, 2026-11-26):** `aarch64/src/smp.rs` lands
+the per-CPU `PerCpu` state (TPIDR_EL1), DTB `/cpus` + `/psci` discovery,
+PSCI `CPU_ON`, IRQ mask/restore, TLB flush and the `SmpArch` registration
+(10 blocks: the TPIDR_EL1 mrs/deref pair, the BSP TPIDR_EL1 msr, the
+write-once cpu_id store, the hvc/smc PSCI call pair, the secondary_start
+link-sym read, the DAIF save/restore pair, the two local_tlb_flush arms;
+plus 1 unsafe extern block for the `secondary_start` link-sym declaration).
+`aarch64/src/main.rs` gains the temporary `secondary_main` spin stub (1
+block: the wfi park).  The GIC SGI IPI delivery lands:
+`platform/virt/gic/mod.rs` gains the `send_sgi` dispatch (1 block: the
+write-once cell read), `gicv2.rs` the `GICD_SGIR` write (1 block: the dsb
+ishst barrier), `gicv3.rs` the `ICC_SGI1R_EL1` emission (3 blocks: the dsb
+ishst + isb barriers and the msr write helper).  aarch64 184 → 200 blocks,
+6 → 7 extern blocks, SAFETY 390 → 406; the reconciliation holds.
 
 ## ds/ and crypto/ (Phase 3)
 
@@ -376,7 +391,7 @@ crates are lint-opted-in, so every listed block carries a `// SAFETY:` comment
 q35cpu gate configs, and the scan finds zero undocumented production sites in
 cfg-gated code as well.
 
-### aarch64/src — 186 blocks, 9 unsafe fns, 6 extern blocks (test-only: 6 blocks)
+### aarch64/src — 200 blocks, 9 unsafe fns, 7 extern blocks (test-only: 6 blocks)
 
 | File | Blocks | fns | ext | Surface |
 |---|---|---|---|---|
@@ -386,20 +401,22 @@ cfg-gated code as well.
 | `fpu.rs` | 11 | 2 | 0 | FP/SIMD (q0-q31/FPCR/FPSR) save/restore, per-CPU `CpuFp`, `with_simd` (+1 test-only block) |
 | `io.rs` | 9 | 0 | 0 | the MMIO-volatility primitives every driver rides |
 | `kmem.rs` | 9 | 0 | 1 | kernel.ld boundary symbols (addresses only, never contents) |
-| `main.rs` | 6 | 0 | 1 | link-syms, DTB two-pass, the idle wfi, the boot-time TTBR0 switch + first EL0 entry |
+| `main.rs` | 7 | 0 | 1 | link-syms, DTB two-pass, the idle wfi, the boot-time TTBR0 switch + first EL0 entry, the secondary_main wfi park (05-09) |
 | `pagealloc.rs` | 2 | 0 | 0 | `VirtPage4KGuard` deref pair |
 | `platform/raspi3b/devcons.rs` | 1 | 0 | 0 | write-once UART cell at platform init |
 | `platform/raspi3b/mailbox.rs` | 2 | 0 | 0 | the mailbox's mapped request page |
 | `platform/virt/churngate.rs` | 2 | 0 | 0 | gate marker cells (single-writer boot / single-reader) |
 | `platform/virt/devcons.rs` | 2 | 0 | 0 | write-once UART cell at platform init |
-| `platform/virt/gic/gicv3.rs` | 7 | 0 | 0 | redistributor wake, ICC system registers, SGI emission |
-| `platform/virt/gic/mod.rs` | 4 | 0 | 0 | GIC write-once cell, lock-free IRQ ack/eoi reads |
+| `platform/virt/gic/gicv2.rs` | 1 | 0 | 0 | the GICD_SGIR SGI write's dsb ishst barrier (05-09) |
+| `platform/virt/gic/gicv3.rs` | 10 | 0 | 0 | redistributor wake, ICC system registers, SGI emission + the ICC_SGI1R_EL1 write (05-09) |
+| `platform/virt/gic/mod.rs` | 5 | 0 | 0 | GIC write-once cell, lock-free IRQ ack/eoi reads + the send_sgi dispatch (05-09) |
 | `platform/virt/pci.rs` | 10 | 0 | 0 | DTB/ECAM discovery and virtio-net bind: publish-once cells + MMIO (the dev_ether arms) |
 | `platform/virt/pl011.rs` | 9 | 0 | 0 | PL011_RANGE publish-once + CONS_RX single-writer-IRQ ring cells |
 | `platform/virt/rtc.rs` | 1 | 0 | 0 | PL031 MMIO read on the mapped rw_device page |
 | `pre_mmu/util.rs` | 7 | 2 | 0 | pre-driver early console: fixed-PA MMIO, identity-mapped pre-MMU |
 | `pre_mmu/vminit.rs` | 23 | 0 | 1 | pre-MMU boot: identity-map page-table construction, isb/tlbi, DTB parse |
 | `proc.rs` | 29 | 0 | 1 | the process machinery floor: link-syms, KZERO+PA table/page writes, switch/resume ABI, ProcGuard/curframe cells |
+| `smp.rs` | 10 | 0 | 1 | per-CPU PerCpu (TPIDR_EL1), PSCI CPU_ON (hvc/smc), DTB /cpus+/psci, DAIF save/restore, TLB flush, SmpArch registration (05-09) |
 | `swtch.rs` | 0 | 0 | 1 | the context-switch ABI (swtch.S); one host-test twin fn |
 | `textcopy.rs` | 8 | 2 | 0 | rfork text-copy emit/call and the I-cache selftest (RO text under KZERO aliases) (+5 test-only blocks) |
 | `trap.rs` | 8 | 0 | 1 | the trap-vector interface: VBAR install, DAIFClr, trap.S entry ABI, wfi parks |

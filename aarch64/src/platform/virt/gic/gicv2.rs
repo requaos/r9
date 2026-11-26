@@ -24,6 +24,7 @@ pub const GICD_ISENABLER0: usize = 0x100; // Interrupt set-enable, 32 irqs per w
 pub const GICD_IPRIORITYR0: usize = 0x400; // Interrupt priority, 4 irqs per word
 pub const GICD_ITARGETSR0: usize = 0x800; // Interrupt cpu targets, 4 irqs per word
 pub const GICD_ICFGR0: usize = 0xC00; // Interrupt trigger config, 16 irqs per word, 2 bits each
+pub const GICD_SGIR: usize = 0xF00; // Software generated interrupt register
 
 // CPU interface (GICC) register offsets
 pub const GICC_CTLR: usize = 0x000; // CPU interface control register
@@ -133,5 +134,18 @@ impl Gicv2 {
     /// the spurious INTID 1023.
     pub fn eoi(&self, intid: u32) {
         self.gicc.write(GICC_EOIR, intid);
+    }
+
+    /// Send a software-generated interrupt to a target CPU (SMP-07).
+    /// GICD_SGIR: bits [25:16] carry the CPU target filter (here: the
+    /// one-bit target list at [23:16] with TargetListFilter 0b00), bits
+    /// [3:0] carry the SGI ID.  The dsb ishst orders prior memory writes
+    /// before the SGI fires (the IPI's data-before-signal rule).
+    pub fn send_sgi(&self, target_cpu: usize, sgi_id: u8) {
+        let val = ((1u32 << target_cpu) << 16) | (sgi_id as u32 & 0xF);
+        // SAFETY: dsb ishst is a pure barrier — no memory operands, safe
+        // at EL1 at any time.
+        unsafe { core::arch::asm!("dsb ishst", options(nostack, preserves_flags)) };
+        self.gicd.write(GICD_SGIR, val);
     }
 }
