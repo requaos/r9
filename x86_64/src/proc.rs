@@ -41,6 +41,19 @@
 //!   `RUN_QUEUES.pop_or_steal` (per-CPU FIFO, victim steal via try_lock
 //!   — never two rank-60 queue locks held).  A stale entry (a proc no
 //!   longer Ready) is skipped, never fatal.
+//! - Kernel-stack ownership (05-24, the aarch64 339036f/665c94e port —
+//!   the HVF `-smp 2` fork-sweep corruption's fix re-keyed):
+//!   `Proc::on_cpu` marks a proc whose kstack (and, mid-syscall, its
+//!   saved context) a CPU owns.  `pick_next` never starts an `on_cpu`
+//!   proc, and the token is cleared only by the owning CPU's sched-loop
+//!   `release_left_proc` — which runs on the Mach scheduler stack, after
+//!   the CPU has left the proc's kstack.  A preempted proc is therefore
+//!   NOT published Ready by `reschedule()` itself (which parks with
+//!   swtch): `release_left_proc` marks it Ready + enqueues it.  Two CPUs
+//!   must never run on one kstack — overlapping frames corrupt every
+//!   stack-resident critical section (the console MCS queue's LockNodes
+//!   were the aarch64 deadlock's witness); `pick_next`'s debug tripwire
+//!   panics if another CPU's `cur_kstack` still names the candidate.
 //!
 //! Physical-memory access model: every "PA" the process machinery
 //! handles is reached through the kernel-half alias at `KZERO+pa` (the
@@ -147,6 +160,14 @@ pub const MAX_FDS: usize = 32;
 /// kernel-half window below, so four independently-allocated pages
 /// form one contiguous VA range (the per-process PML4's own mapping).
 const KSTACK_PAGES: usize = 4;
+/// The deferred moribund reap record (05-24, the aarch64 05-22
+/// moribund_reap port): an exiting proc's PML4 PA, kstack page PAs, and
+/// kstack intermediate-table PAs, parked on the exiting CPU's
+/// `Mach::moribund_reap` slot from `exit_tail` until that CPU's sched
+/// loop frees them after the moribund hand-off swtch (reap_moribund).
+/// The type lives beside KSTACK_PAGES so `dat.rs`'s Mach field can name
+/// it without re-stating the bound.
+pub(crate) type MoribundReap = (u64, [u64; KSTACK_PAGES], [u64; 3]);
 /// The per-process kstack's PML4 slot (index 400 of the 256..509
 /// kernel-half span the boot tables leave free — 510 is the KCPUZERO
 /// Mach window, 511 is KZERO).  Every proc's PML4 maps ITS OWN kstack
@@ -1174,6 +1195,24 @@ pub struct Proc {
     /// Subsystem-owned wait conditions clear it BEFORE registration via
     /// `port::smp::prepare_block()` → `prepare_block_current()`.
     pub wake_pending: AtomicBool,
+    /// True while a CPU owns this proc's kernel stack (and, for a proc
+    /// parked mid-syscall, its saved kernel context): set by the CPU
+    /// that starts the proc (pick_next / activate_first), cleared ONLY
+    /// by that CPU's sched-loop release step — which runs on the Mach
+    /// scheduler stack, i.e. after the CPU has left the proc's kstack.
+    ///
+    /// The invariant `pick_next` enforces (05-24, the aarch64 339036f
+    /// port): a proc is never started on a CPU while `on_cpu` is set, so
+    /// two CPUs can never share one kernel stack.  The pre-port shape
+    /// published a preempted proc Ready + enqueued while the preempting
+    /// CPU still ran on its kstack (the publish sat between the
+    /// PROC_TABLE-locked mark and the park's swtch), so a sibling CPU
+    /// could pop the pid and swtch into a context the owning CPU had not
+    /// even saved yet — overlapping kernel frames on one kstack, the
+    /// class the aarch64 HVF `-smp 2` boot corruption proved live.  The
+    /// sched() window (a wake readying a proc whose CPU has not yet
+    /// reached its swtch) is covered by the same token.
+    pub on_cpu: AtomicBool,
     /// sys_sleep's wake deadline in TICKS (0 = not sleeping).
     pub sleep_until: u64,
     /// sys_alarm's expiry deadline in TICKS (0 = disarmed).
@@ -1239,6 +1278,7 @@ impl Proc {
             children_live: 0,
             nowait: false,
             wake_pending: AtomicBool::new(false),
+            on_cpu: AtomicBool::new(false),
             wait_records: VecDeque::new(),
             errstr: [0; ERRMAX],
             pgrp: Arc::new(Lock::new("pgrp", Pgrp::new())),
@@ -1554,16 +1594,17 @@ impl Proc {
         rfmem_leave(self);
     }
 
-    /// EXITS: free the PML4 page, the kernel-stack pages, and their
-    /// intermediate tables.  Runs LAST in the exit path: the handler is
-    /// still executing ON the kstack and CR3 still names the PML4 when
-    /// this runs — on a single CPU this is safe because nothing
-    /// allocates until the hand-off and the pages' contents stay intact
-    /// until reuse (the bitmap free marks, never zeroes).  SMP residual
-    /// (05-14's deferred-reap follow-up, the aarch64 05-22 fix class):
-    /// a sibling CPU's allocator can hand the freed pages out in the
-    /// window between this free and sched_from_moribund's swtch — the
-    /// known gap, tracked in the phase's deferred-items.
+    /// Free the PML4 page, the kernel-stack pages, and their
+    /// intermediate tables IN PLACE.  Only the rfork mid-construction
+    /// unwind calls this now: a never-run child's pages are nobody's
+    /// live state, so the direct free is correct there.  The EXITS path
+    /// uses `defer_root_kstack_reap` instead (05-24): the exit handler
+    /// is still executing ON the kstack and CR3 still names the PML4
+    /// when it runs, and under a sibling CPU the old single-CPU
+    /// invariant ("nothing allocates until the hand-off") is gone — a
+    /// sibling's allocator can hand a just-freed kstack page out and
+    /// write it while this CPU still runs on it up to the hand-off
+    /// swtch (the aarch64 05-22 exit-mid-free corruption class).
     pub fn free_root_table_and_kstack(&mut self) {
         free_phys_page(self.pml4_pa);
         for pa in self.kstack_pas {
@@ -1574,6 +1615,36 @@ impl Proc {
         }
         self.kstack_pas = [0; KSTACK_PAGES];
         self.kstack_table_pas = [0; 3];
+    }
+
+    /// Record the PML4 + kstack + kstack-table PAs on this CPU's
+    /// deferred reap slot instead of freeing in place (05-24, the
+    /// aarch64 05-22 `defer_root_kstack_reap` port): the exit path's
+    /// "nothing allocates until the hand-off" invariant was single-CPU —
+    /// with a sibling CPU allocating concurrently, a kstack page freed
+    /// at exit is re-handed-out and written while THIS CPU still runs
+    /// on it up to the hand-off swtch (and CR3 still names the PML4
+    /// until the next pick's switch_cr3).  The sched loop's
+    /// `reap_moribund` runs after the hand-off, on the Mach scheduler
+    /// stack.
+    pub fn defer_root_kstack_reap(&mut self) {
+        let entry: MoribundReap = (
+            self.pml4_pa,
+            core::mem::take(&mut self.kstack_pas),
+            core::mem::take(&mut self.kstack_table_pas),
+        );
+        let slot = crate::dat::this_mach().moribund_reap.get();
+        // SAFETY: per-CPU slot — written only on the owning CPU in
+        // IRQ-masked syscall context (here) and taken in this CPU's
+        // sched loop (reap_moribund), so no concurrent access is
+        // possible.
+        unsafe {
+            debug_assert!(
+                (*slot).is_none(),
+                "proc: moribund reap slot occupied — the sched loop drains it between exits"
+            );
+            *slot = Some(entry);
+        }
     }
 
     /// Seed a forkret-shaped 184-byte Ureg at the top of this proc's
@@ -1600,6 +1671,31 @@ impl Proc {
             (*dst).seed_exec_entry(tos_va, user_sp, entry);
         }
         (self.kstack_top - core::mem::size_of::<Ureg>()) as *mut Ureg
+    }
+}
+
+/// Free this CPU's deferred moribund pages (05-24): runs from the sched
+/// loop's iteration top, after the exiting CPU's hand-off swtch — this
+/// CPU no longer runs on the dead kstack.  CR3 still names the dead
+/// PML4 until the next pick's switch_cr3; that is safe here because the
+/// loop's own stack and text are shared-half (mapped under every
+/// table), the bitmap free only MARKS the pages (contents intact, so a
+/// TLB walk still succeeds), and no page allocation runs in IRQ context
+/// or inside the loop — the pages cannot be recycled (and zeroed by
+/// alloc_phys_page) before the next pick replaces CR3.  No lock is
+/// held here; free_phys_page takes the page allocator's own lock.
+fn reap_moribund() {
+    let slot = crate::dat::this_mach().moribund_reap.get();
+    // SAFETY: per-CPU slot — taken only on the owning CPU's sched loop
+    // (IRQ-masked); exit_tail's write is the owning CPU's too.
+    let entry = unsafe { (*slot).take() };
+    let Some((pml4_pa, kstack_pas, kstack_table_pas)) = entry else { return };
+    free_phys_page(pml4_pa);
+    for pa in kstack_pas {
+        free_phys_page(pa);
+    }
+    for pa in kstack_table_pas {
+        free_phys_page(pa);
     }
 }
 
@@ -1906,6 +2002,18 @@ fn write_curframe(frame: *mut Ureg) {
     crate::dat::this_mach().cur_frame.store(frame as u64, Ordering::Relaxed)
 }
 
+/// The kstack-ownership record (05-24, the aarch64 `write_curkstack`
+/// port): the kstack top this CPU currently owns, written beside every
+/// TSS rsp0 re-point in the switch paths (activate_first/pick_next) and
+/// cleared by the sched loop's `release_left_proc` when the CPU leaves
+/// the proc's kstack.  pick_next's debug tripwire reads it cross-CPU —
+/// the TSS rsp0 itself can never serve: it is not retracted when the
+/// CPU parks into the scheduler, so it would stale-name a released
+/// proc's stack.
+fn write_curkstack(top: u64) {
+    crate::dat::this_mach().cur_kstack.store(top, Ordering::Relaxed)
+}
+
 /// The calling CPU's Mach scheduler stack top (the swtch-based sched
 /// loop's context runs here — free while the idle loop owns the entry).
 /// Per CPU (SMP-02): each CPU's loop runs on its own Mach's stack.
@@ -1921,10 +2029,14 @@ fn scheduler_stack_top() -> usize {
 /// record the scheduler's preempt path stashes from).  The proc was
 /// enqueued Ready by exec_into (Ready ⟺ enqueued); the claim here makes
 /// it Running directly, and pick_next skips the now-stale queue entry.
+/// Takes the kstack-ownership token (`Proc::on_cpu`, 05-24): this CPU
+/// owns the stack until it swtch'es off it into its scheduler context.
 pub fn activate_first(p: &mut Proc) {
     p.state = ProcState::Running;
+    p.on_cpu.store(true, Ordering::Release);
     set_current_proc(p);
     set_tss_rsp0(p.kstack_top as u64);
+    write_curkstack(p.kstack_top as u64);
     write_curframe(p.frame);
     // Install: the proc's user FPU/SSE state (exec loaded the default)
     // goes live.
@@ -2010,58 +2122,61 @@ pub fn preempt(interrupted_user: bool) {
 
 /// Round-robin reschedule from the tick (IRQ-from-ring-3: the live
 /// frame sits at the current proc's kstack top, recorded in this CPU's
-/// `Mach.cur_frame`) or from a yield (sys_sleep).  When another proc is
-/// queued: PARK — stash the live frame, mark Ready + enqueue
-/// (SMP-11: Ready ⟺ enqueued) + blocked_in_kernel, drop the lock, and
-/// swtch into this CPU's scheduler context (the Mach's own stack, which
-/// no CR3 switch can alias).  The sched loop then performs the real
-/// switch (pick_next's pop_or_steal + locked step) and resumes procs
-/// per their kind; when THIS proc is eventually picked, the swtch
-/// returns here and the ordinary interrupt-return path iretq's into the
-/// stashed frame — the whole round trip runs on this proc's OWN kstack.
+/// `Mach.cur_frame`) or from a yield (sys_sleep).
 ///
-/// 14-06 root cause this shape replaces: the old reschedule performed
-/// the CR3 switch ITSELF, inside the lock scope, while executing on
-/// the CURRENT proc's kstack at the FIXED window VA (PML4[400]) — the
+/// THE HANDOFF RULE (05-24, the aarch64 339036f port): the preempted
+/// proc must NOT be published Ready/enqueued while this CPU is still
+/// running on its kernel stack.  This function therefore only PARKS the
+/// CPU's kernel context on the current proc's kstack (`swtch` to this
+/// CPU's scheduler context) and lets the sched loop perform the actual
+/// publish: the loop's `release_left_proc` runs on the Mach scheduler
+/// stack — after this CPU has left the proc's kstack — and only there
+/// is the proc marked Ready and enqueued (see `Proc::on_cpu`).  The
+/// pre-port shape published it HERE (state + enqueue under PROC_TABLE)
+/// and only then swtch'ed off the stack: a sibling CPU could pop the
+/// pid in that window and swtch into a kernel context this CPU had not
+/// even saved yet (and later take ring-3 entries onto the shared
+/// kstack) — the overlapping-frames class the aarch64 HVF `-smp 2`
+/// fork-sweep corruption proved live.
+///
+/// The caller's kernel frames (tick / syscall) stay on the proc's
+/// kstack and are resumed by the sched loop's swtch when the proc is
+/// picked again — the same mid-kernel resume shape `sched()`'s blocked
+/// procs use, which is why `blocked_in_kernel` is set: `pick_next`
+/// resumes this context via its ONE swtch arm, never by trap-returning
+/// the user frame over it.
+///
+/// 14-06 root-cause note (kept): the pre-14-06 reschedule performed the
+/// CR3 switch ITSELF, inside the lock scope, while executing on the
+/// CURRENT proc's kstack at the FIXED window VA (PML4[400]) — the
 /// moment CR3 flipped, that VA aliased the NEXT proc's kstack pages,
 /// destroying every spilled local, the MCS LockNode, and the return
-/// chain mid-flight (the post-switch println read clobbered locals —
-/// the observed `sched: switch 0->0` — and the lock drop then walked
-/// a node of the wrong proc's bytes, the wild-write that corrupted
-/// kernel statics).  Park-and-swtch never switches CR3 in the
+/// chain mid-flight.  Park-and-swtch never switches CR3 in the
 /// preempted proc's context at all — the same discipline sched() has
 /// proven since 14-05's await path.
 pub fn reschedule() {
     let Some(mut cur) = current() else { return };
     // Fast path: nothing is waiting on the run queues, so there is no
     // switch to make — keep this proc on the CPU without a scheduler
-    // round trip (the pre-SMP no-target arm, minus its scan).  A stale
-    // queue entry can make this probe say yes needlessly; the sched
-    // loop then discards it (pick_next's Ready check) and re-picks this
-    // proc.
+    // round trip.  A stale queue entry can make this probe say yes
+    // needlessly; the sched loop then discards it (pick_next's Ready
+    // check) and re-picks this proc.
     if !RUN_QUEUES.any_enqueued(port::smp::num_online_cpus()) {
         return;
     }
-    {
-        let node = LockNode::new();
-        let _table = PROC_TABLE.lock(&node);
-        // Stash the live frame (this trap's frame on the proc's kstack)
-        // — pick_next hands it back through this CPU's cur_frame on the
-        // resume.
-        cur.frame = read_curframe();
-        cur.state = ProcState::Ready;
-        // The parked proc resumes via the sched loop's Switch arm (the
-        // swtch below lands mid-interrupt on this kstack — trap_return
-        // would be wrong), so mark it like sched()'s blocked procs.
-        cur.blocked_in_kernel = true;
-        // Ready ⟺ enqueued: publish this proc on this CPU's run queue
-        // (the waker's CPU) and kick an idle CPU with 0xF1 if one idles.
-        enqueue_ready(cur.pid);
-        // Leave: the live FPU/SSE registers are cur's user state (the
-        // kernel never touches them) — park them before the sched loop
-        // installs the next proc's.
-        crate::fpu::leave(&mut cur.fpsave);
-    }
+    // Stash the live frame (this trap's frame on the proc's kstack) —
+    // pick_next hands it back through this CPU's cur_frame on the
+    // resume.  No PROC_TABLE hold: the proc is Running and unenqueued
+    // (no picker can see it), and `on_cpu` pins its kstack to this CPU
+    // until the sched loop's release.
+    cur.frame = read_curframe();
+    // The resume form: the sched loop swtches back into this context
+    // (mid-reschedule, on this kstack) and it unwinds normally.
+    cur.blocked_in_kernel = true;
+    // Leave: the live FPU/SSE registers are cur's user state (the kernel
+    // never touches them) — park them here; the next proc's install
+    // happens in pick_next, on the sched loop.
+    crate::fpu::leave(&mut cur.fpsave);
     // Park into the scheduler context.  The swtch saves this proc's
     // callee-saved state into its PROC_TABLE-resident context — never
     // this kstack — so nothing under this frame is invalidated by any
@@ -2069,7 +2184,9 @@ pub fn reschedule() {
     // table (the kernel half is shared).
     // SAFETY: sched_context()'s per-CPU seed-once discipline (this CPU's
     // IRQ-masked trap context); cur.context is PROC_TABLE-resident (a
-    // stable address across the switch).
+    // stable address across the switch).  No lock is held; the resumed
+    // path returns to the caller (tick / sys_sleep) and continues its
+    // normal unwind.
     unsafe {
         swtch::swtch(&mut cur.context, &*sched_context());
     }
@@ -2077,6 +2194,70 @@ pub fn reschedule() {
     // cur_frame + CR3, one locked step) before swtch'ing back — our
     // kstack pages own this VA again.  Return up through preempt and
     // the interrupt path; the iretq pops the frame at our kstack top.
+}
+
+/// The sched loop's publish step (05-24, the aarch64
+/// `release_left_proc` port): this CPU has just swtched off the proc
+/// named by this CPU's `Mach.current_proc` onto its Mach scheduler
+/// stack, so the proc's kernel stack is no longer in use and it may
+/// become runnable elsewhere.  Clears `on_cpu` (the kstack-ownership
+/// token `pick_next` enforces) and, for a PREEMPTED proc (state still
+/// Running — `reschedule` deliberately left the state alone), marks it
+/// Ready and enqueues it (SMP-11: Ready ⟺ enqueued) so the loop's pick
+/// can run it again.  A Blocked proc stays Blocked (a waker owns its
+/// readiness; one that woke inside the sched() window already sits
+/// Ready+enqueued, so nothing is repeated), and a Moribund proc is left
+/// alone (the deferred reap frees its pages).
+///
+/// Runs on the owning CPU only (the Mach slots read here are this
+/// CPU's), under PROC_TABLE — so the state write, the on_cpu clear and
+/// the enqueue are one atomic step for every picker — and before
+/// `reap_moribund` (which frees an exiting proc's kstack).  Consuming
+/// `Mach.current_proc` makes it a no-op on every loop iteration that
+/// did not follow a swtch-off (an idle period, a resumed-switch
+/// return): only the CPU that just left a proc can publish it.
+fn release_left_proc() {
+    let cur = current_proc();
+    if cur.is_null() {
+        return;
+    }
+    // SAFETY: the per-CPU current pointer names a PROC_TABLE-resident
+    // Proc (slots are never freed this era) and is read on the owning
+    // CPU; the pid field is a plain u64 write-once at construction.
+    let cur_pid = unsafe { (*cur).pid };
+    let node = LockNode::new();
+    let mut table = PROC_TABLE.lock(&node);
+    // The release is strictly OWNER-scoped: consume this CPU's current
+    // pointer in the same critical section.  It is the token that says
+    // "this CPU just left that proc", and clearing it is what keeps a
+    // later loop iteration — after the CPU went idle with a stale
+    // `current_proc` naming a proc that has since migrated to another
+    // CPU — from releasing (and re-enqueueing!) a proc that CPU is
+    // actively running.
+    set_current_proc(ptr::null_mut());
+    let Some(p) = table.procs.iter_mut().flatten().find(|q| q.pid == cur_pid) else {
+        return;
+    };
+    if !p.on_cpu.swap(false, Ordering::AcqRel) {
+        return; // never started, or already released: nothing to publish
+    }
+    // This CPU no longer names the proc's kstack: retract the
+    // live-frame/kstack records pick_next's ownership tripwire reads.
+    // The next pick republishes both for the proc it runs.  (The TSS
+    // rsp0 is deliberately NOT re-pointed here: no ring-3 entry can
+    // happen while this CPU sits in its sched loop, and the next pick
+    // re-arms it before any resume.)
+    write_curkstack(0);
+    write_curframe(ptr::null_mut());
+    if p.state == ProcState::Running {
+        // Preempted (reschedule parks a Running proc).  Publish it now
+        // — the CPU is off its stack — and record the switch's source
+        // for pick_next's `sched: switch` marker (the preemption
+        // evidence the boot gates count).
+        p.state = ProcState::Ready;
+        crate::dat::this_mach().sched_from.store(p.pid, Ordering::Relaxed);
+        enqueue_ready(p.pid);
+    }
 }
 
 /// A fresh (never-entered) proc's first ring-3 entry: EVERY resume —
@@ -2184,6 +2365,14 @@ pub fn sched() {
 /// consolidated `idle_wait`: sti;hlt;cli — the tick fires and re-arms,
 /// a wake's enqueue IPIs the idle CPU with 0xF1, and the loop re-pops).
 ///
+/// 05-24 (the aarch64 339036f port): the loop runs with IRQs MASKED
+/// from entry (the `mask_irq` below), and each iteration's top
+/// publishes the proc this CPU just left (`release_left_proc` — the
+/// kstack-ownership handoff) and frees any proc this CPU exited
+/// (`reap_moribund` — the deferred moribund reap) BEFORE the next
+/// pick, so no publish or free ever runs while the CPU still stands on
+/// the proc's kstack.
+///
 /// 14-06 root cause this shape closes: the loop ONCE had a second arm
 /// — `Resume::Return` — that called trap_return(frame) directly for a
 /// fresh fork's first entry.  trap_return diverges (it never
@@ -2204,8 +2393,31 @@ pub fn sched() {
 /// context at fork time — so each resume re-saves this CPU's
 /// sched_context and every sched() re-entry lands on a CURRENT save.
 pub(crate) fn sched_loop() -> ! {
+    // The scheduler contract: this loop runs with IRQs MASKED.  Most
+    // callers are already masked (a trap entry, sched()'s swtch from
+    // IRQ-masked syscall context, the AP trampoline's cli), but the
+    // dev_churn boot context reaches `enter_sched_loop_from_boot` with
+    // IF=1 (main's sti precedes the churn bootstrap) — and an IRQ
+    // taken inside the pick_next→swtch handoff would run the tick on
+    // the Mach scheduler stack with a stale current_proc (the aarch64
+    // secondary_main class: an IRQ in the handoff window rewrote the
+    // CPU's live-frame record from the scheduler stack).  Mask
+    // defensively so the contract holds however this CPU entered; the
+    // idle arm's `idle_wait` is the one deliberate unmask window.
+    crate::trap::mask_irq();
     let mut all_blocked = 0u32;
     loop {
+        // Publish the proc this CPU just left (sched/reschedule/
+        // moribund swtch): clear its kstack-ownership token and, for a
+        // preempted proc, re-enqueue it.  Runs on the Mach scheduler
+        // stack — after the CPU has left the proc's kstack — which is
+        // the whole point of the handoff rule (see reschedule's doc).
+        release_left_proc();
+        // Free any proc this CPU exited since the last iteration (the
+        // deferred moribund reap, 05-24) — the hand-off swtch already
+        // moved this CPU off the dead kstack (the CR3-stale window's
+        // safety argument lives on reap_moribund).
+        reap_moribund();
         match pick_next() {
             // SAFETY: sched_context() is seeded (its own per-CPU
             // discipline); ctx names the picked proc's
@@ -2282,21 +2494,26 @@ pub(crate) fn dump_proc_states() {
 /// Pop the next pid off this CPU's run queue (stealing a neighbor's
 /// when empty — `RUN_QUEUES.pop_or_steal`, SMP-11), resolve it under
 /// PROC_TABLE, and apply the full switch as one PROC_TABLE-locked step
-/// (state, current-proc pointer, TSS rsp0, cur_frame, CR3) so the
-/// resumed proc's return path reads its OWN frame, never the previous
-/// proc's.  Returns the proc's saved kernel context — every resume
-/// (mid-syscall block, preempt park, or a fresh fork's first_entry
-/// trampoline) rides sched_loop's ONE swtch arm.  None when every queue
-/// is empty (the caller's idle arm then hlt's; a wake's enqueue IPIs an
-/// idle CPU with 0xF1).
+/// (state, on_cpu, current-proc pointer, TSS rsp0, cur_kstack,
+/// cur_frame, CR3) so the resumed proc's return path reads its OWN
+/// frame, never the previous proc's.  Returns the proc's saved kernel
+/// context — every resume (mid-syscall block, preempt park, or a fresh
+/// fork's first_entry trampoline) rides sched_loop's ONE swtch arm.
+/// None when every queue is empty (or every candidate is kstack-owned
+/// by a sibling — the cycle guard) — the caller's idle arm then hlt's;
+/// a wake's enqueue IPIs an idle CPU with 0xF1.
 ///
 /// Stale entries are skipped, never fatal: a pid whose proc is no longer
 /// Ready (already Running on a CPU — e.g. pid 1 claimed by
 /// activate_first, which leaves its exec_into queue entry behind by
 /// design; or unwound to Moribund mid-rfork) carries a stale entry that
-/// the state check filters.  The converse never happens: Ready ⟺
-/// enqueued (every Ready transition routes through enqueue_ready), so a
-/// genuinely Ready proc always has an entry to be found by.
+/// the state check filters.  An `on_cpu` entry (05-24: a proc whose
+/// kstack a sibling CPU has not released yet — the sched()-window wake)
+/// is requeued, never started, and the debug tripwire panics if another
+/// CPU's `cur_kstack` still names the candidate's stack.  The converse
+/// never happens: Ready ⟺ enqueued (every Ready transition routes
+/// through enqueue_ready), so a genuinely Ready proc always has an
+/// entry to be found by.
 ///
 /// The FIFO-per-CPU pop preserves the local ordering the old table scan
 /// had (a proc that blocks via sched() REMAINS this CPU's current proc
@@ -2306,6 +2523,7 @@ pub(crate) fn dump_proc_states() {
 fn pick_next() -> Option<*mut swtch::Context> {
     let my_cpu = port::smp::current_cpu_id();
     let num = port::smp::num_online_cpus();
+    let mut first_skipped: Option<u64> = None;
     loop {
         let pid = RUN_QUEUES.pop_or_steal(my_cpu, num)?;
         let node = LockNode::new();
@@ -2316,9 +2534,53 @@ fn pick_next() -> Option<*mut swtch::Context> {
         if p.state != ProcState::Ready {
             continue; // stale entry: already Running/picked elsewhere
         }
+        if p.on_cpu.load(Ordering::Acquire) {
+            // The kstack-ownership token (05-24): a CPU still owns this
+            // proc's kernel stack (it has not reached its sched-loop
+            // release yet — the sched() window's waker raced its
+            // swtch).  NEVER start it here; requeue and try another.
+            // Two racing picks of the same proc would be caught by the
+            // tripwire below failing, but the token makes it impossible
+            // by construction (the aarch64 HVF -smp 2 fork/exec-sweep
+            // fix, ported).
+            if owned_pick_give_up(&mut first_skipped, pid) {
+                // Cycled every queue; this proc's owner will release it
+                // (and its release's enqueue may IPI this cpu) — idle
+                // instead of spinning on the same entry.
+                enqueue_ready(pid);
+                return None;
+            }
+            enqueue_ready(pid);
+            continue;
+        }
+        // Tripwire: no OTHER cpu may still name this proc's kernel
+        // stack.  `on_cpu` is the authoritative token (checked above);
+        // this cross-check catches a publish path that forgot the token
+        // — the exact pre-port shape, where `reschedule` enqueued a
+        // proc while its cpu was still on the stack.  The per-CPU
+        // records are written under PROC_TABLE (activate_first/
+        // pick_next) and cleared under it (release_left_proc), so a
+        // read under the lock is a consistent snapshot.  Compiled out
+        // in release, like aarch64's.
+        #[cfg(debug_assertions)]
+        {
+            let n = num.min(crate::smp::MAX_CPUS);
+            let mut c = 0;
+            while c < n {
+                if c != my_cpu && crate::smp::cur_kstack_of(c) == Some(p.kstack_top as u64) {
+                    panic!(
+                        "sched: pid {} picked while cpu {c} still names its kernel stack {:#x} — two cpus on one kstack (a preempt/block publish raced the stack handoff)",
+                        p.pid, p.kstack_top
+                    );
+                }
+                c += 1;
+            }
+        }
         p.state = ProcState::Running;
+        p.on_cpu.store(true, Ordering::Release);
         set_current_proc(p);
         set_tss_rsp0(p.kstack_top as u64);
+        write_curkstack(p.kstack_top as u64);
         write_curframe(p.frame);
         p.blocked_in_kernel = false;
         // Install: the proc's saved user FPU/SSE state goes live (every
@@ -2327,20 +2589,49 @@ fn pick_next() -> Option<*mut swtch::Context> {
         // CR3 last (reschedule's ordering note): the frame pointer is
         // dereferenced only after the lock drops, under this table.
         switch_cr3(p.pml4_pa);
+        // The preemption evidence: release_left_proc stored the
+        // preempted proc's pid when it published this switch's source.
+        // PROC_TABLE → Console is the documented nesting order.
+        let from = crate::dat::this_mach().sched_from.swap(0, Ordering::Relaxed);
+        if from != 0 {
+            println!("sched: switch {from}->{}", p.pid);
+        }
         return Some(&mut p.context as *mut swtch::Context);
     }
 }
 
+/// pick_next's on_cpu refusal cycle guard (05-24 — factored pure for
+/// the host pin): an `on_cpu` proc is requeued, never started; the
+/// guard records the FIRST refused pid, and a SECOND refusal of that
+/// same pid (this CPU cycled every queue and the owner still has not
+/// released the kstack token) ends the pick — the caller idles (the
+/// owning CPU's release re-enqueues, and that enqueue may IPI this CPU)
+/// instead of spinning on the same entry.  Returns true when the pick
+/// must stop.
+fn owned_pick_give_up(first_skipped: &mut Option<u64>, pid: u64) -> bool {
+    if *first_skipped == Some(pid) {
+        return true;
+    }
+    *first_skipped = first_skipped.or(Some(pid));
+    false
+}
+
 /// EXITS's tail: the Moribund current proc never runs again — switch
 /// into the scheduler context with no wake path.  The swtch save
-/// writes only the PROC_TABLE-resident context struct (never the freed
-/// kstack), so EXITS can free the kstack before calling here.
-/// Diverges.
+/// writes only the PROC_TABLE-resident context struct (never the
+/// kstack).  05-24: the kstack/PML4 pages are NOT freed before this
+/// call anymore — exit_tail recorded them on this CPU's
+/// `Mach::moribund_reap` slot (`defer_root_kstack_reap`), and the sched
+/// loop's `reap_moribund` frees them after this swtch, once the CPU
+/// stands on its Mach scheduler stack (the aarch64 deferred-reap port:
+/// a sibling CPU's allocator could otherwise recycle a kstack page
+/// while this CPU still runs on it up to the swtch).  Diverges.
 pub fn sched_from_moribund() -> ! {
     let cur = current();
     // SAFETY: sched_context()'s seed-once discipline; the moribund
-    // proc's context is PROC_TABLE-resident and its kstack is already
-    // freed (the swtch save writes only the context struct).
+    // proc's context is PROC_TABLE-resident and its kstack stays mapped
+    // until the sched loop's deferred reap (the swtch save writes only
+    // the context struct regardless).
     unsafe {
         let ctx = sched_context();
         if let Some(mut cur) = cur {
@@ -3193,6 +3484,46 @@ mod tests {
     /// them (the mapping bodies get their own tests below).
     fn mock_proc() -> Proc {
         Proc::new(1, "mock", 0, [0; KSTACK_PAGES], [0; 3], 0)
+    }
+
+    /// The kstack-ownership token (05-24, the aarch64 339036f port):
+    /// construction starts unowned (pick_next may start the proc); the
+    /// claim/release round trip is owner-scoped — the owner's release
+    /// observes the claim, and a SECOND release observes nothing
+    /// (release_left_proc's `swap(false)` guard, so a stale sched-loop
+    /// iteration can never re-publish a proc another CPU now runs).
+    #[test]
+    fn on_cpu_token_round_trip_is_owner_scoped() {
+        let p = mock_proc();
+        assert!(!p.on_cpu.load(Ordering::Acquire), "construction: no CPU owns the kstack");
+        // pick_next/activate_first's claim.
+        p.on_cpu.store(true, Ordering::Release);
+        assert!(
+            p.on_cpu.swap(false, Ordering::AcqRel),
+            "the owning CPU's sched-loop release observes the claim"
+        );
+        assert!(
+            !p.on_cpu.swap(false, Ordering::AcqRel),
+            "a second release is a no-op — release_left_proc returns without publishing"
+        );
+    }
+
+    /// pick_next's on_cpu refusal cycle guard: the FIRST refusal of a
+    /// pid requeues it and records the guard; a DIFFERENT owned pid
+    /// keeps the first guard (still requeued); the SAME pid a second
+    /// time — every queue cycled, the owner still holding the kstack
+    /// token — gives up to the idle arm instead of spinning.
+    #[test]
+    fn owned_pick_give_up_cycles_once_then_idles() {
+        let mut first = None;
+        assert!(!owned_pick_give_up(&mut first, 7), "first refusal requeues and records");
+        assert_eq!(first, Some(7));
+        assert!(!owned_pick_give_up(&mut first, 9), "a different owned pid requeues too");
+        assert_eq!(first, Some(7), "the guard keeps the FIRST refused pid");
+        assert!(
+            owned_pick_give_up(&mut first, 7),
+            "the same pid again: cycled every queue — the pick stops"
+        );
     }
 
     /// Membership is per-segment and whole-range: the contained shapes
