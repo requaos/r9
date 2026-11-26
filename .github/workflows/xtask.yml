@@ -138,6 +138,11 @@ jobs:
         extra-conf: experimental-features = nix-command flakes
     - name: Build the read-only Harvey trees from the flake
       run: nix build --no-link .#harvey-tree-amd64 .#harvey-tree-arm64
+    # CORR-02 (D-05): boot-iso is a pure derivation — no fixed-output
+    # outputHash — so its buildability is enforced on every CI run as the
+    # per-commit x86_64 kernel byte-change check.
+    - name: Verify the pure boot-iso derivation builds (CORR-02)
+      run: nix build --no-link .#boot-iso
     - name: Boot-test the three q35 profiles (explicit TCG — hosted runners are KVM-less)
       run: |
         nix develop -c cargo xtask boot-test --arch x86-64 --config q35 --accel tcg --cpu qemu64 --verbose
