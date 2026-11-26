@@ -35,10 +35,18 @@ const RSDP_SIG: &[u8; 8] = b"RSD PTR ";
 /// creatorrevision 4).
 pub const SDT_HEADER_SIZE: usize = 36;
 
-/// Upper bound on any table this parser will read: MCFG/MADT/HPET/XSDT
-/// are all far below; a length beyond this is a loud BadLength, so a
-/// lying table can never steer a huge read (T-13-07).
-pub const TABLE_CAP: usize = 512;
+/// Upper bound on any table this parser will read.
+///
+/// This is NOT an arbitrary small number: a full-size MADT must fit. The
+/// worst case the parser itself can consume is `36 header + 8 MADT fixed
+/// body + MAX_CPUS x 16 (x2APIC entries) + MAX_INTSRC_OVERRIDES x 10` =
+/// 36 + 8 + 64*16 + 16*10 = 1228 bytes. A cap below that rejects a legal
+/// 64-CPU MADT outright -- which `madt_cpu_overflow_is_capped_and_counted`
+/// caught once the x86_64 bin's unit tests ran on an x86_64 host
+/// (TABLE_CAP was 512, but 64 LAPIC entries alone need 556). Keep this
+/// above the derivation; a lying table can still never steer a read past
+/// the cap (T-13-07).
+pub const TABLE_CAP: usize = 1280;
 
 /// Headroom for MADT IntSrcOverride entries (live q35 reports a
 /// handful; more is a loud TooManyEntries).
