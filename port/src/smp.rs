@@ -469,12 +469,19 @@ mod rank_watch {
     /// Record a lock acquisition on the calling cpu's rank stack.
     pub fn acquire(rank: LockRank, name: &'static str) {
         let cpu = this_cpu_debug();
-        // 05-07 RED scaffolding: the stack is recorded; the strictly-
-        // increasing-rank panic (D-26) lands in the GREEN commit.
         if let Some(top) = cpu.top_rank() {
-            let mut buf = [0u8; NAME_CAP];
-            let _held = cpu.top_name(&mut buf);
-            let _violation = (rank as u16) <= top;
+            if (rank as u16) <= top {
+                let mut buf = [0u8; NAME_CAP];
+                let held = cpu.top_name(&mut buf);
+                panic!(
+                    "smp: LOCK RANK VIOLATION on cpu {}: holds \"{}\" (rank {}); requested \"{}\" (rank {}) — locks are taken in strictly increasing rank order (D-26)",
+                    current_cpu_id(),
+                    held,
+                    top,
+                    name,
+                    rank as u16,
+                );
+            }
         }
         cpu.push(rank, name);
     }
@@ -524,12 +531,12 @@ mod rank_watch {
         if elapsed <= threshold_ticks {
             return; // a brief wait is contention, not a deadlock
         }
-        // 05-07 RED scaffolding: the traversal and the stuck/idle/active
-        // classification run; the named panic (D-26) lands in GREEN.
         let mut buf = [0u8; NAME_CAP];
-        let _name = cpu.read_waiting_name(&mut buf);
-        let _owner = cpu.waiting_owner.load(Ordering::Relaxed);
-        let _ = id;
+        let name = cpu.read_waiting_name(&mut buf);
+        let owner = cpu.waiting_owner.load(Ordering::Relaxed);
+        panic!(
+            "WATCHDOG: cpu {id} stuck for {elapsed} ticks waiting on lock \"{name}\" (held by cpu {owner})"
+        );
     }
 
     /// Check every online cpu for a stuck wait.  The kernel build walks
