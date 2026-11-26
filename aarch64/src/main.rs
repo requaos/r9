@@ -583,6 +583,18 @@ pub extern "C" fn secondary_main(cpu_id: usize) -> ! {
     // virt).
     #[cfg(platform = "virt")]
     {
+        // Mirror init_vm's CPACR_EL1.FPEN fix-up on this CPU: PSCI CPU_ON
+        // enters the secondary at EL1 with FPEN at its reset value (trap
+        // all FP/SIMD), and only the BSP's init_vm wrote TrapNothing —
+        // this CPU's first EL0 process (or an EL1 FP save/restore in its
+        // sched loop) would trap EC=0x07 (FloatSimd) otherwise.
+        use aarch64_cpu::registers::Writeable;
+        aarch64_cpu::registers::CPACR_EL1
+            .write(aarch64_cpu::registers::CPACR_EL1::FPEN::TrapNothing);
+        // SAFETY: isb is a pure context-synchronization barrier (no memory
+        // operands) — the FPEN write must be visible to subsequent
+        // instructions (init_vm's precedent).
+        unsafe { core::arch::asm!("isb") };
         platform::gic::init_secondary_cpu();
         platform::timer::init_secondary();
     }
@@ -636,13 +648,6 @@ fn exec_bootstrap(
     bootargs: platform::bootconf::BootArgs,
 ) -> ! {
     let pro = exec_prologue_with_bootargs(initrd_img, bootargs.as_bytes());
-    // SMP-04/SMP-07: ALL publish-once boot state is now live — the
-    // arming window's GIC + SGI banks, UART, PL011_RANGE, PCI_DISCOVERY
-    // and DTB_VA, plus the prologue's port hooks, tick clock and devroot
-    // image — so the secondaries start only after this point (the
-    // category-3 invariant), and the boot-time SGI 1 shootdown self-check
-    // proves the IPI path before the first process exists.
-    start_secondaries_and_self_check(dt);
     let img = pro.img;
     let root = pro.root;
     let root_env = pro.root_env;
@@ -728,6 +733,20 @@ fn exec_bootstrap(
     // EL1h IRQ mid-tail, whose preempt() would see "Running" and stash a
     // transient boot-stack frame over proc.frame.
     proc::activate_first(&mut proc);
+    // SMP-04/SMP-07 (D-26): start the DTB-declared secondaries only NOW —
+    // after the bootstrap proc is built AND claimed (activate_first
+    // published it Running).  exec_into enqueues it Ready (the churn
+    // consumer's contract: Ready ⟺ enqueued), so a secondary already in
+    // sched_loop would steal it inside the Ready→Running window and
+    // double-run pid 1 — the start must wait for the claim.  The
+    // category-3 publish-once invariant holds (the arming window's GIC +
+    // SGI banks, UART, PL011_RANGE, PCI_DISCOVERY, DTB_VA plus the
+    // prologue's port hooks, tick clock and devroot image are all long
+    // live), and the boot-time SGI 1 shootdown self-check still lands
+    // before userland: pid 1 has never run when it fires.  IRQs stay
+    // masked through this — wait_cpu_online's spin budget is wall-clock
+    // (CNTPCT), built for the masked dev_exec tail.
+    start_secondaries_and_self_check(dt);
     // SAFETY: frame_ptr names the seeded forkret frame on the proc's
     // kstack (exec_into's construction); this CPU's cur_kstack/cur_frame
     // were just published by activate_first — the single first EL0 entry.

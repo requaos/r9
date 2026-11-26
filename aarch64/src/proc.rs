@@ -1281,6 +1281,54 @@ impl Proc {
         }
         self.kstack_pas = [0; KSTACK_PAGES];
     }
+
+    /// Record the root-table + kstack PAs on this CPU's deferred reap
+    /// slot instead of freeing in place (SMP, 05-22): the exit path's
+    /// "nothing allocates until the hand-off" invariant was single-CPU —
+    /// with a sibling CPU allocating concurrently, a kstack page freed
+    /// at exit is re-handed-out and written while THIS CPU still runs on
+    /// it up to the hand-off swtch (and the root table stays in TTBR0
+    /// until the next pick's vm::switch).  The sched loop's reap runs
+    /// after the hand-off.  The rfork unwind's free_root_table_and_kstack
+    /// stays direct: a never-run child's pages are nobody's live state.
+    pub fn defer_root_kstack_reap(&mut self) {
+        let root_pa = from_ptr_to_physaddr_offset_from_kzero(self.root_table);
+        let kstack_pas = self.kstack_pas;
+        self.kstack_pas = [0; KSTACK_PAGES];
+        let slot = crate::smp::this_cpu().moribund_reap.get();
+        // SAFETY: per-CPU slot — written only on the owning CPU in
+        // IRQ-masked syscall context (here) and taken in this CPU's sched
+        // loop (reap_moribund), so no concurrent access is possible.
+        unsafe {
+            debug_assert!(
+                (*slot).is_none(),
+                "proc: moribund reap slot occupied — the sched loop drains it between exits"
+            );
+            *slot = Some((root_pa.addr(), kstack_pas));
+        }
+    }
+}
+
+/// Free this CPU's deferred moribund pages (05-22): runs from the sched
+/// loop's iteration top, after the exiting CPU's hand-off swtch — this
+/// CPU no longer runs on the dead kstack, and the dead TTBR0 table is
+/// never walked here (kernel text is TTBR1-side; the next pick's
+/// vm::switch replaces TTBR0 and flushes).  No lock is held here;
+/// deallocate_physpage takes PageAlloc (70) itself.
+fn reap_moribund() {
+    let slot = crate::smp::this_cpu().moribund_reap.get();
+    // SAFETY: per-CPU slot — taken only on the owning CPU's sched loop
+    // (IRQ-masked); exit_tail's write is the owning CPU's too.
+    let entry = unsafe { (*slot).take() };
+    let Some((root_pa, kstack_pas)) = entry else { return };
+    if let Err(err) = pagealloc::deallocate_physpage(PhysAddr::new(root_pa)) {
+        println!("proc: deallocate root table {root_pa:#x}: {err:?}");
+    }
+    for pa in kstack_pas {
+        if let Err(err) = pagealloc::deallocate_physpage(PhysAddr::new(pa)) {
+            println!("proc: deallocate kstack page {pa:#x}: {err:?}");
+        }
+    }
 }
 
 /// The process table — a small fixed array behind the IRQ-safe ranked
@@ -1710,7 +1758,21 @@ pub(crate) fn enter_sched_loop_from_boot() -> ! {
 /// proc is Running — i.e. the IRQ interrupted EL0 (kernel syscall/trap
 /// context runs IRQ-masked; the sched loop's idle wfi finds current
 /// Blocked/Moribund and its own post-wfi re-scan dispatches instead).
-pub fn preempt() {
+pub fn preempt(interrupted_user: bool) {
+    // SMP (05-22): this CPU's PerCpu `current` is STALE while idle — it
+    // still names the last proc this CPU ran.  Under SMP that proc can
+    // have been woken and be Running on ANOTHER CPU, and the state check
+    // alone cannot tell "Running here" from "Running elsewhere": a
+    // reschedule then would stash this CPU's idle cur_frame over the
+    // proc's LIVE frame and re-enqueue it mid-run (the double-run tear).
+    // The EL0-origin gate closes it: preempt acts only when the IRQ
+    // interrupted a user proc on THIS CPU.  An idle CPU's SGI 0/tick
+    // (EL1h, the sched loop's wfi window) passes false and its loop
+    // simply re-pops after the eret — the wake is delivered by the
+    // enqueue, not by this IRQ.
+    if !interrupted_user {
+        return;
+    }
     let Some(cur) = current() else {
         return;
     };
@@ -1747,16 +1809,54 @@ pub fn reschedule() {
         else {
             return;
         };
-        let mut pick = None;
-        for off in 1..MAX_PROCS {
-            let i = (cur_idx + off) % MAX_PROCS;
-            let Some(p) = table.procs[i].as_ref() else { continue };
-            if p.state == ProcState::Ready && !p.blocked_in_kernel {
-                pick = Some(i);
-                break;
+        // SMP-11 (05-22): the next proc comes from the RUN QUEUES, never a
+        // raw table scan — Ready ⟺ enqueued, and a mid-construction
+        // rfork/exec child sits Ready-in-table with a null frame (fpsave
+        // and parent unset) until its builder's enqueue publishes it; the
+        // old raw scan picked it and trap_returned a null frame (the
+        // -smp 2 wild pc=0 / user-trap death of a forked child).  The pop
+        // loop's Ready check under PROC_TABLE filters stale entries
+        // (pick_next's discipline); blocked_in_kernel Ready procs are the
+        // sched loop's swtch resumees, so they requeue (the first_skipped
+        // cycle guard terminates the re-pop).
+        let my_cpu = port::smp::current_cpu_id();
+        let num = port::smp::num_online_cpus();
+        let mut first_skipped: Option<u64> = None;
+        let ni = loop {
+            let Some(pid) = RUN_QUEUES.pop_or_steal(my_cpu, num) else { break None };
+            if first_skipped == Some(pid) {
+                // Cycled every queue without an eligible proc — put this
+                // one back; cur keeps the cpu.
+                enqueue_ready(pid);
+                break None;
             }
-        }
-        let Some(ni) = pick else { return };
+            let Some(slot) =
+                table.procs.iter().position(|s| s.as_ref().is_some_and(|p| p.pid == pid))
+            else {
+                continue; // stale entry: the proc unwound to Moribund mid-rfork
+            };
+            let p = table.procs[slot].as_ref().unwrap();
+            if p.state != ProcState::Ready {
+                continue; // stale entry: already Running/picked elsewhere
+            }
+            if p.blocked_in_kernel || p.frame.is_null() {
+                // The sched loop's swtch resumees (blocked_in_kernel)
+                // requeue for pick_next; a null frame is never runnable
+                // (defensive — the enqueue contract excludes it).
+                if first_skipped.is_none() {
+                    first_skipped = Some(pid);
+                }
+                enqueue_ready(pid);
+                continue;
+            }
+            break Some(slot);
+        };
+        let Some(ni) = ni else {
+            // No eligible switch target: cur keeps this cpu — repair the
+            // idle bit the empty pops published.
+            RUN_QUEUES.mark_busy(my_cpu);
+            return;
+        };
         let curp = table.procs[cur_idx].as_mut().unwrap();
         curp.frame = read_curframe();
         curp.state = ProcState::Ready;
@@ -1888,6 +1988,10 @@ fn sched_loop() -> ! {
     let mut cons_wedge = 0u32;
     let mut all_blocked = 0u32;
     loop {
+        // Free any proc this CPU exited since the last iteration (the
+        // deferred moribund reap, 05-22) — the hand-off swtch already
+        // moved this CPU off the dead kstack.
+        reap_moribund();
         match pick_next() {
             // SAFETY: sched_context() is seeded (its own per-CPU
             // discipline); ctx names the picked proc's PROC_TABLE-resident

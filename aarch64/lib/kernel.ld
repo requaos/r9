@@ -10,9 +10,16 @@ SECTIONS {
 	. = ${LOAD-ADDRESS};
 
 
-	/* Group boottext and text */
+	/* Group boottext and text.  .bootdata is NOT grouped here: vminit
+	   maps the boottext+text range with Entry::ro_kernel_text() (RX), so
+	   the post-MMU publish_boot_state() writes to the SECONDARY_* globals
+	   would fault against a read-only mapping (and wedge: VBAR_EL1 is not
+	   installed yet in main9).  The globals keep the PA = VA - KZERO
+	   identity wherever they link (every section's LMA tracks VMA-KZERO),
+	   so l.S's secondary_start PA arithmetic is placement-independent —
+	   .bootdata lands in .data (PrivRw) below instead. */
 	.text.boot : AT (ADDR(.text.boot) - KZERO) {
-		*(.boottext .bootdata)
+		*(.boottext)
 		. = ALIGN(4096);
 	}
 	PROVIDE(boottext_pa = LOADADDR(.text.boot));
@@ -38,8 +45,13 @@ SECTIONS {
 	PROVIDE(erodata_pa = LOADADDR(.rodata) + SIZEOF(.rodata));
 
 
-	/* Group data and bss */
+	/* Group data and bss.  .bootdata (the SECONDARY_* boot-publication
+	   globals) links here — writable under vminit's PrivRw data mapping
+	   for publish_boot_state()'s post-MMU writes; its PA (VMA-KZERO, the
+	   delta inherited from .text.boot's AT) stays inside the kernel's
+	   loaded physical range for l.S's pre-MMU secondary_start reads. */
 	.data : ALIGN(2097152) {
+		*(.bootdata)
 		*(.data*)
 		*(.got)
 		*(.got.plt)

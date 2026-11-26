@@ -12,10 +12,24 @@ use bitstruct::bitstruct;
 use core::{fmt, sync::atomic::Ordering};
 use core::{ptr::write_volatile, sync::atomic::AtomicUsize};
 use num_enum::{FromPrimitive, IntoPrimitive};
+use port::mcslock::{IrqSpinLock, LockNode};
+use port::smp::LockRank;
 use port::{
     mem::{PAGE_SIZE_1G, PAGE_SIZE_2M, PAGE_SIZE_4K, PhysAddr, PhysRange, VirtRange},
     pagealloc::PageAllocError,
 };
+
+/// Serialize Kernel-pgtype `map_to` across CPUs (SMP-03, D-22): the
+/// slot-511 recursive dance is a single shared mutable cell on the ONE
+/// kernel root table — two CPUs mapping into it concurrently (proc
+/// kstack construction runs on any CPU post-SMP; device frames map on
+/// the secondary's bring-up CPU) would interleave the
+/// save/replace-walk/restore and write PTEs into the wrong physical
+/// page.  Rank 25 < PageAlloc (70): `next_mut` allocates the walk's
+/// intermediate table pages while the guard is held; every call site
+/// holds no other lock.  User-pgtype walks stay unlocked: their dance
+/// writes the ACTIVE user table's slot (per-CPU TTBR0).
+static KERNEL_VM: IrqSpinLock<()> = IrqSpinLock::new("kernel_vm", LockRank::KernelVm, ());
 
 #[cfg(not(test))]
 use port::println;
@@ -427,6 +441,12 @@ impl RootPageTable {
         page_size: PageSize,
         pgtype: RootPageTableType,
     ) -> Result<(), PageTableError> {
+        // The Kernel-pgtype dance's cross-CPU serialization (KERNEL_VM's
+        // doc above).  The Option guard keeps the lock to end of fn; User
+        // walks skip it (per-CPU active table).
+        let node = LockNode::new();
+        let _kernel_vm_guard =
+            matches!(pgtype, RootPageTableType::Kernel).then(|| KERNEL_VM.lock(&node));
         // We change the last entry of the root page table to the address of
         // self for the duration of this method.  This allows us to work with
         // this hierarchy of pagetables even if it's not the current translation

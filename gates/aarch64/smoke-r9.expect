@@ -155,19 +155,22 @@ expect_before {
 
 # 1. the staged boot sequence: banner → paqfs server → stacksmoke → prompt
 stage banner    {r9 from the Internet}
-stage paqfs     {paqfs\.\.\.}
 
 # 1b. the SMP bring-up markers (SMP-04/SMP-07, proven through SMP-09's
 #     R9_SMP): with 2+ CPUs the kernel logs CPU 1's online marker and
-#     the boot-time SGI 1 TLB-shootdown self-check during exec_bootstrap,
-#     BEFORE userland's stacksmoke line — so the stages sit here in the
-#     order the markers arrive (presence assertions, never interleaving
-#     order).  The R9_SMP=1 leg starts no secondary and stays marker-free.
+#     the boot-time SGI 1 TLB-shootdown self-check at the END of
+#     exec_bootstrap (after the bootstrap proc is claimed Running —
+#     05-22's claim-then-start ordering) — BEFORE userland starts, so
+#     BEFORE the paqfs server's line.  The stages sit here in the order
+#     the markers arrive (presence assertions, never interleaving
+#     order).  The R9_SMP=1 leg starts no secondary and stays
+#     marker-free.
 if {$r9_smp >= 2} {
     stage smp-online    {smp: cpu 1 online}
     stage smp-shootdown {smp: tlb shootdown ok}
 }
 
+stage paqfs     {paqfs\.\.\.}
 stage stacksmoke {stacksmoke: depth 64 ok}
 stage prompt    {% }
 

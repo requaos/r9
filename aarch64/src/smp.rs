@@ -77,6 +77,17 @@ pub struct PerCpu {
     pub fpu: CpuFp,
     /// A TLB shootdown request is pending for this CPU (SMP-07).
     pub pending_shootdown: AtomicBool,
+    /// Deferred reap slot (05-22, SMP): an exiting proc's root-table PA +
+    /// kstack PAs sit here from exit_tail until THIS CPU's sched loop
+    /// frees them after the moribund hand-off swtch.  The exit path's old
+    /// "nothing allocates until the hand-off" invariant was single-CPU:
+    /// with a sibling allocating concurrently, a kstack page freed at
+    /// exit can be re-handed-out and written while this CPU still runs on
+    /// it up to the swtch (and the root table stays in TTBR0 until the
+    /// next pick's vm::switch).  Owned by this CPU: written in exit_tail
+    /// and drained in sched_loop, both IRQ-masked contexts on the owning
+    /// CPU.  KSTACK_PAGES is proc.rs's; 4 slots here.
+    pub moribund_reap: SyncUnsafeCell<Option<(u64, [u64; 4])>>,
 }
 
 // The trap.S ABI contract: cur_frame is at offset 0 (T-05-16's mitigation
@@ -128,6 +139,7 @@ impl PerCpu {
             sched_stack_top: AtomicU64::new(0),
             fpu: CpuFp::new(),
             pending_shootdown: AtomicBool::new(false),
+            moribund_reap: SyncUnsafeCell::new(None),
         }
     }
 }

@@ -406,20 +406,30 @@ fn dispatch_irq(frame: &TrapFrame) -> bool {
         return false;
     }
 
-    let intid = platform::gic::ack();
+    let raw = platform::gic::ack();
+    // GICv2's GICC_IAR carries an SGI's SOURCE CPUID at [12:10] — an SGI 0
+    // sent by CPU 1 reads raw 0x400, not 0 — so dispatch on the masked
+    // INTID field [9:0].  GICv3's ICC_IAR_EL1 has no source field (the
+    // mask is a no-op there).  The EOI below writes the RAW value: a
+    // GICv2 EOIR must echo the IAR's CPUID bits for an SGI to complete.
+    let intid = raw & 0x3ff;
+    // EL0t origin (psr M[3:0] == 0) — preempt() only acts on a user-mode
+    // interruption of THIS CPU (its stale-current guard); an EL1h entry
+    // (the sched loop's idle wfi window) re-pops after the eret instead.
+    let user_interrupted = frame.psr & 0xF == 0;
     match intid {
         // SGI 0 (smp::SGI_RESCHED, SMP-07): the reschedule IPI — a waker
         // enqueued onto this CPU's run queue (possibly while it sat in
         // the sched loop's idle wfi).  preempt() re-considers a Running
         // proc (an EL0 interruption); an idle CPU's loop simply re-pops
         // after the eret.  EOI below.
-        i if i == crate::smp::SGI_RESCHED as u32 => crate::proc::preempt(),
+        i if i == crate::smp::SGI_RESCHED as u32 => crate::proc::preempt(user_interrupted),
         // SGI 1 (smp::SGI_SHOOTDOWN, SMP-07): the TLB shootdown IPI —
         // service the pending request (local flush + generation ack)
         // through the port coordinator.  EOI below.
         i if i == crate::smp::SGI_SHOOTDOWN as u32 => port::smp::service_shootdown_ipi(),
         // ARM generic timer CNTP (PPI 14 -> INTID 16+14)
-        30 => platform::timer::tick(),
+        30 => platform::timer::tick(user_interrupted),
         // PL011 UART RX (SPI 1 -> INTID 32+1): the devcons read-buffer
         // feed under dev_exec
         33 => platform::pl011::rx_irq(),
@@ -433,10 +443,10 @@ fn dispatch_irq(frame: &TrapFrame) -> bool {
             platform::virt::pci::virtio_net_irq()
         }
         platform::gic::SPURIOUS_INTID => {} // spurious: acked, no EOI
-        _ => println!("unhandled IRQ {intid}"),
+        _ => println!("unhandled IRQ {intid} (raw {raw:#x})"),
     }
     if intid != platform::gic::SPURIOUS_INTID {
-        platform::gic::eoi(intid);
+        platform::gic::eoi(raw);
     }
     true
 }
@@ -668,15 +678,34 @@ fn trap(frame: &mut TrapFrame) {
             park_forever()
         }
     }
-    // Note-delivery boundary (synchronous return path): syscall dispatch
-    // and the demand pager run IRQ-masked and never switch procs, so
-    // `frame` IS the returning proc's live frame (== CURFRAME).  A note
-    // can be pending at a fault return when the return to EL0 before the
-    // fault skipped the boundary (the sched loop resumes a preempted or
-    // new proc with a bare trap_return) or, with more than one CPU, when
-    // another CPU posts it during the fault.
-    if route.returns() && frame.psr & 0xF == 0 {
-        deliver_notes(frame);
+    // Note-delivery boundary (synchronous return path): the demand pager
+    // never switches procs, but syscall dispatch CAN — sys_sleep's yield
+    // runs preempt(), and a switch moves this CPU's cur_frame to the NEXT
+    // proc mid-dispatch — so the frame to deliver into is THIS CPU's
+    // cur_frame (the frame the shared trap tail actually restores), not
+    // the entry frame.  Delivering into the entry frame after a switch
+    // would write the CURRENT proc's note context (handler pc/sp, the
+    // saved-ureg copy, the note bytes) over a proc that is no longer
+    // current — and through a UserSliceMut over the WRONG proc's address
+    // space besides.  (The IRQ return path above has always reloaded
+    // cur_frame for exactly this reason.)  A note can be pending at a
+    // fault return when the return to EL0 before the fault skipped the
+    // boundary (the sched loop resumes a preempted or new proc with a
+    // bare trap_return) or, with more than one CPU, when another CPU
+    // posts it during the fault.
+    if route.returns() {
+        let cf = proc::current_frame();
+        if !cf.is_null() {
+            // SAFETY: cur_frame names the live frame on the returning
+            // proc's kstack — the IRQ path's discipline: written by
+            // trap.S at entry on this CPU, or by this CPU's locked
+            // scheduler swap; read in IRQ-masked trap context on the
+            // owning CPU, so no cross-CPU access is possible.
+            let cf = unsafe { &mut *cf };
+            if cf.psr & 0xF == 0 {
+                deliver_notes(cf);
+            }
+        }
     }
 }
 

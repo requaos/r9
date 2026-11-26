@@ -144,15 +144,20 @@ fn watchdog_threshold_ticks() -> u64 {
 /// The tick itself keeps re-arming in every config.
 ///
 /// The tick is the preemption source.  proc::preempt() acts
-/// only when a process is Running (i.e. the IRQ interrupted EL0 — kernel
-/// context runs IRQ-masked), so the call is a cheap no-op in the pre-exec
-/// and no-exec configs; when it does act, the trap tail's cur_frame reload
-/// returns to the NEW current process.  preempt() never prints to the
+/// only when a process is Running at EL0 ON THIS CPU — the
+/// `user_interrupted` flag (the trap frame's psr) gates it: an
+/// idle CPU's PerCpu `current` is stale and can name a proc now
+/// Running on a SIBLING, which a flagless Running check would
+/// reschedule off the sibling mid-run (05-22's double-run tear).
+/// Kernel contexts otherwise run IRQ-masked, and the idle loop's
+/// wfi window re-pops after the eret instead of preempting.  The
+/// trap tail's cur_frame reload returns to the NEW current process
+/// when a preemption did switch.  preempt() never prints to the
 /// console from IRQ context in a config where syscalls can print... its
 /// `sched: switch` marker is the deliberate exception: syscalls run
 /// IRQ-masked, so no Console-lock holder can be interrupted by a print
 /// on the SAME CPU (and the Console IrqSpinLock serializes cross-CPU).
-pub fn tick() {
+pub fn tick(user_interrupted: bool) {
     arm();
     // SMP-12: the per-CPU progress heartbeat — every CPU's tick, every
     // config (a no-op in release builds and before register_port_smp).
@@ -195,5 +200,5 @@ pub fn tick() {
     if cpu0 {
         port::smp::watchdog_check_all(watchdog_threshold_ticks());
     }
-    crate::proc::preempt();
+    crate::proc::preempt(user_interrupted);
 }

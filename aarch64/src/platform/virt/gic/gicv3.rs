@@ -300,6 +300,18 @@ impl Gicv3 {
     /// its SGI frame (IGROUPR0, ISENABLER0 for PPI 30 + SGI 0 + SGI 1),
     /// and enables the CPU interface (ICC_SRE_EL1, ICC_PMR_EL1,
     /// ICC_IGRPEN1_EL1).
+    ///
+    /// Frame selection: a NONZERO GICR_TYPER is authoritative — match its
+    /// affinity bytes (TCG's userspace GICv3 model and real hardware both
+    /// answer TYPER).  An all-zero TYPER is the HVF in-kernel vGIC's
+    /// shape: it does not model the RD-frame TYPER/WAKER registers (reads
+    /// return 0 for every frame), so there is nothing to match — fall
+    /// back to qemu virt's redistributor numbering, which is cpu order
+    /// (the BSP init's own comment), i.e. frame index == this CPU's MPIDR
+    /// Aff0.  The vGIC still traps per-vCPU SGI/PPI config at the
+    /// frame's address, so the ISENABLER write below must land on the
+    /// right frame.  A nonzero TYPER that never matches (a real wiring
+    /// error) still fails loudly below.
     pub fn init_secondary_cpu(&self) {
         let mpidr = MPIDR_EL1.get();
         let frames = (self.gicr_physrange.size() / GICR_REDIST_STRIDE).min(GICR_SCAN_MAX);
@@ -318,7 +330,15 @@ impl Gicv3 {
                 && (typer >> 40) & 0xff == (mpidr >> 8) & 0xff
                 && (typer >> 48) & 0xff == (mpidr >> 16) & 0xff
                 && (typer >> 56) & 0xff == (mpidr >> 32) & 0xff;
-            if !affinity_matches {
+            let selected = if typer != 0 {
+                affinity_matches
+            } else {
+                // HVF vGIC: TYPER reads 0 — select by qemu's cpu-order
+                // frame numbering (Aff0 == the PSCI/DTB cpu index on
+                // qemu virt).
+                i as u64 == mpidr & 0xff
+            };
+            if !selected {
                 if typer & GICR_TYPER_LAST != 0 {
                     break;
                 }
