@@ -6,8 +6,8 @@
  *
  * RFNAMEG to RFNOMNT mirror Harvey sys/include/libc.h:613-624 and
  * the declaration mirrors libc.h:684.  RFNOMNT is defined by Harvey
- * and is not implemented by r9.  The flags after RFNOMNT are
- * reserved by r9 and are in no Harvey header.
+ * and is not implemented by r9.  The flag after RFNOMNT is
+ * reserved by r9 and is in no Harvey header.
  *
  * This header declares an anonymous enum; do not include it in a
  * translation unit that also includes Harvey's libc.h.
@@ -27,10 +27,7 @@ enum
 	RFREND		= (1<<13),
 	RFNOMNT		= (1<<14),
 	/* r9 only: reserved, rejected by rfork until implemented */
-	RFCKEY		= (1<<18),
-	RFROBASE	= (1<<19),
-	RFRANDMEM	= (1<<20),
-	RFNOLEGACY	= (1<<21)
+	RFNOLEGACY	= (1<<18)
 };
 
 extern	int	rfork(int);

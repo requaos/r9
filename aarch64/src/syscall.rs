@@ -2784,22 +2784,17 @@ mod stat_wire_tests {
     }
 }
 
-// D-20: the reserved flags stay outside the mask until Phases 6 and 7
-// make them live; those phases must change this test on purpose.
+// D-20: the reserved flags stay outside the mask until Phase 6 makes
+// RFNOLEGACY live; that phase must change this test on purpose.  The
+// three retired crypto flags (CORR-04) no longer exist to test.
 #[cfg(test)]
 mod rfork_mask_tests {
     use super::RFORK_SUPPORTED;
-    use port::rfork::{RFCKEY, RFNOLEGACY, RFNOMNT, RFRANDMEM, RFROBASE};
+    use port::rfork::{RFNOLEGACY, RFNOMNT};
 
     #[test]
     fn rfork_reserved_bits_are_unsupported() {
-        for (name, bit) in [
-            ("RFNOMNT", RFNOMNT),
-            ("RFCKEY", RFCKEY),
-            ("RFROBASE", RFROBASE),
-            ("RFRANDMEM", RFRANDMEM),
-            ("RFNOLEGACY", RFNOLEGACY),
-        ] {
+        for (name, bit) in [("RFNOMNT", RFNOMNT), ("RFNOLEGACY", RFNOLEGACY)] {
             assert_eq!(RFORK_SUPPORTED & bit, 0, "{name} must stay outside RFORK_SUPPORTED");
         }
         assert_eq!(RFORK_SUPPORTED, 0x3c7f, "the implemented set is bits 0-6 and 10-13");

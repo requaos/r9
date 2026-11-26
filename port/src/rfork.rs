@@ -1,10 +1,13 @@
 //! rfork(2) flag bits: the one definition both arch crates import.
 //!
 //! Bits 0-6 and 10-14 are Harvey's frozen values (Harvey
-//! `sys/include/libc.h:613-624`).  Bits 18-21 are reserved by r9 and
-//! exist in no Harvey header.  `RFNOMNT` is defined by Harvey but is not
-//! implemented by r9; it and the four reserved flags are in neither
-//! arch's `RFORK_SUPPORTED` mask, so rfork rejects them with
+//! `sys/include/libc.h:613-624`).  Bit 18 is reserved by r9 for
+//! `RFNOLEGACY`; bits 19-21 are free.  The cryptographic flags that
+//! held bits 18-20 (`RFCKEY`, `RFROBASE`, `RFRANDMEM`) were retired
+//! with software cryptographic memory by the 2026-11-25 v3.0 rescope
+//! (CORR-04, D-02).  `RFNOMNT` is defined by Harvey but is not
+//! implemented by r9; it and `RFNOLEGACY` are in neither arch's
+//! `RFORK_SUPPORTED` mask, so rfork rejects them with
 //! "rfork: unsupported flags".
 //!
 //! This file is also compiled into xtask (`#[path]`) to generate
@@ -33,14 +36,8 @@ rfork_flags! {
     RFREND = 1 << 13;
     /// Defined by Harvey, not implemented by r9.
     RFNOMNT = 1 << 14;
-    /// Reserved (Phase 7).
-    RFCKEY = 1 << 18;
-    /// Reserved (Phase 7).
-    RFROBASE = 1 << 19;
-    /// Reserved (Phase 7).
-    RFRANDMEM = 1 << 20;
-    /// Reserved (Phase 6).
-    RFNOLEGACY = 1 << 21;
+    /// Reserved (Phase 6).  Bits 19-21 are free.
+    RFNOLEGACY = 1 << 18;
 }
 
 /// Index into `ALL` of the first flag Harvey does not define.
