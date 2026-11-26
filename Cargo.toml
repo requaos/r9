@@ -9,6 +9,18 @@ members = ["aarch64", "x86_64", "port", "riscv64", "xtask", "crypto", "ds"]
 # in its own Cargo.toml (x86_64 joined at Phase 5's CORR-05, once every
 # unsafe block carried a concrete SAFETY comment); riscv64 is never compiled
 # by the gates and stays opted out.  (Phase 3 CONTEXT D-11, Phase 5 D-02/D-03.)
+#
+# The unsafe policy this enforces (CORR-05, owner 2026-11-25, stated
+# identically in docs/r9_implementation_guide_for_agentic_developers_v3_0.md
+# section 3, docs/plan_r9_architecture_code_compendium_v3_0.md section 2 and
+# UNSAFE-AUDIT.md): `crypto/` is crate-wide `forbid(unsafe_code)` over r9's
+# own code (not the pinned crates it wraps); `ds/` is per-module forbid with
+# exactly two places that may hold unsafe — `ds/src/tpht/` and one reserved
+# Roaring SIMD module — and a third needs owner approval; `port/` is
+# per-module forbid with the three named floor modules `globalalloc`,
+# `mcslock` and `devip_waker`, and no fourth without owner approval;
+# `undocumented_unsafe_blocks = deny` applies on `ds/src/tpht/`, `aarch64`
+# and `x86_64` (and vacuously on the forbid-held modules of port/crypto/ds).
 [workspace.lints.clippy]
 undocumented_unsafe_blocks = "deny"
 

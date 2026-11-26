@@ -22,7 +22,8 @@ Execute these five surgical tasks first to align HEAD (`900f58b`) with v3.0 and 
    * In `port/src/rfork.rs` and `xtask` (`rfork-header`), mark bits 18–20 (`RFCKEY`, `RFROBASE`, `RFRANDMEM`) as `RESERVED_UNUSED` (or remove them if no external binary depends on them yet) and reserve a single bit for `RFNOLEGACY`. Regenerate `sys/include/rfork.h`.
    * Remove any planned or stubbed `cryptpage.rs`, `segcrypt.rs`, `shadow.rs`, or `ymm` assembly tasks from `.planning/`.
 5. **Sync Unsafe Policy Docs & Lint Contracts:**
-   * Update `docs/` and `UNSAFE-AUDIT.md` to explicitly codify the per-module `#![forbid(unsafe_code)]` rule in `ds/` (matching `25af196`) and crate-wide `#![forbid(unsafe_code)]` in `crypto/` and `port/`.
+   * Update `docs/` and `UNSAFE-AUDIT.md` to explicitly codify the per-module `#![forbid(unsafe_code)]` rule in `ds/` (matching `25af196`) and crate-wide `#![forbid(unsafe_code)]` in `crypto/`.
+   * *Corrected 2026-11-25 (owner, Phase 5 D-02):* this task's original wording also named `port/` as crate-wide; `port/` is and stays per-module forbid with the three named floor modules `globalalloc`, `mcslock` and `devip_waker` (no fourth without owner approval). The identical policy sentence now lives in this guide's section 3, the compendium section 2, the workspace `Cargo.toml` header comment and `UNSAFE-AUDIT.md`.
 
 ---
 
@@ -47,7 +48,7 @@ Every PR or milestone step executed by an agentic developer **must** adhere to t
 
 1. **RED $\to$ Implement $\to$ 2$\times$ GREEN:** Commit a failing test pin first, implement the change, verify green twice consecutively, then advance the milestone pin.
 2. **Mandatory Local Verification Commands:**
-   * `cargo xtask check` — enforces workspace lint contracts (crate-wide `#![forbid(unsafe_code)]` on `port/` and `crypto/`; per-module `#![forbid(unsafe_code)]` on `ds/`; `clippy::undocumented_unsafe_blocks = "deny"` on `ds/src/tpht/` and arch crates).
+   * `cargo xtask check` — enforces workspace lint contracts: crate-wide `#![forbid(unsafe_code)]` on `crypto/` (over r9's own code, not the pinned crates it wraps); per-module `#![forbid(unsafe_code)]` on `ds/` (exactly `ds/src/tpht/` and one reserved Roaring SIMD module may hold `unsafe`; a third needs owner approval) and on `port/` (the three named floor modules `globalalloc`, `mcslock`, `devip_waker`; no fourth without owner approval); `clippy::undocumented_unsafe_blocks = "deny"` on `ds/src/tpht/`, `aarch64` and `x86_64`. *(Corrected 2026-11-25 per owner D-02: `port/` is per-module, not crate-wide.)*
    * `cargo xtask test` — host unit pins for `crypto/`, `ds/` (TPHT, Roaring, Slab), and `port/`.
    * `cargo xtask test-9p` — per-file `9P2000.aead` wire, `ExtMask`, `StatelessCap`, slab `FidShard`, and failover sweep legs.
    * `cargo xtask boot-test` & `cargo xtask ureg-check` — requires `R9_HARVEY_DIR` pointing to a valid Harvey checkout (no implicit `../harvey` fallback).
