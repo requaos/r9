@@ -15,8 +15,13 @@ complete. The shipped set (HARN, DSGN, CRYP, DS, LINT, WIRE) is archived at
 for Phases 5-16, the deferred v2 set, and the out-of-scope table.
 
 **Milestone v3.1 (started 2026-11-25, rescoped the same day):** Early SMP and Cluster Fabric covers
-Phase 5 (CORR-01 to CORR-05, DEBT-01 to DEBT-05, SMP-01 to SMP-04, SMP-07 to SMP-09, MEM-07, MEM-08,
-MEM-10), Phase 6 (DIST-01 to DIST-12) and Phase 7 (PROC-04, RV-01, RV-02): 35 requirements.
+Phase 5 (CORR-01 to CORR-05, DEBT-01 to DEBT-05, SMP-01 to SMP-04, SMP-07 to SMP-09, SMP-11 to SMP-13,
+MEM-07, MEM-08, MEM-10, MEM-14 to MEM-18), Phase 6 (DIST-01 to DIST-12) and Phase 7 (PROC-04, RV-01,
+RV-02): 43 requirements.
+
+**Phase 5 discussion of 2026-11-25.** The owner's choices at `/gsd-discuss-phase 5` reworded CORR-03,
+SMP-03, SMP-08, SMP-09, MEM-07 and MEM-10 and added SMP-11 to SMP-13 and MEM-14 to MEM-18. The decisions
+are D-07 to D-35 in `.planning/phases/05-guide-phase-3-early-smp-course-correction-and-memory-pools/05-CONTEXT.md`.
 
 **Rescope of 2026-11-25.** The owner's v3.0 documents (`docs/plan_r9_architecture_code_compendium_v3_0.md`,
 `docs/r9_implementation_guide_for_agentic_developers_v3_0.md`) dropped software cryptographic memory,
@@ -32,7 +37,7 @@ Course correction (v3.0 guide section 1):
 
 - [ ] **CORR-01**: CI on `main` is green: the workflow failing at `900f58b` is repaired before any refactor lands (v3.0 guide task 1)
 - [ ] **CORR-02**: `boot-iso` in `flake.nix` is a standard pure derivation built from workspace inputs, with no fixed-output `outputHash` to maintain (v3.0 guide task 2)
-- [ ] **CORR-03**: `FidTable` is a sharded generational slab in safe Rust: an 8-byte `StatefulHandle` (`slot_idx`, `gen`, `shard_id`, `flags`, `epoch`), up to 256 shards of 65,536 slots, lookup by one direct indexed read with generation and epoch checks, allocation that cannot fail on hash clustering, and Roaring active and reclaimed sets for the failover sweep. `FlattenedTphtShard` is no longer used by `FidTable`, the serialized-insert workaround of `6fd201c` is reverted, `ds/src/tpht/` stays intact for later consumers, and every `cargo xtask test-9p` leg stays green (v3.0 guide task 3, v3.0 compendium section 4; supersedes the TPHT-backed table of WIRE-07 to WIRE-09)
+- [ ] **CORR-03**: `FidTable` is a sharded generational slab in safe Rust, built on a generic slab in `ds/src/slab.rs` (`#![forbid(unsafe_code)]`) that `port/src/fid.rs` wraps. The 8-byte `StatefulHandle` is server-assigned, with wire order `slot_idx(2) gen(2) shard_id(1) flags(1) epoch(2)`, little endian; the generation starts at 1 and skips 0, `from_wire` rejects `gen == 0`, so a stateful handle is never all zero. Each slot is a 64-byte seqlock slot (one `AtomicU64` state word holding `WRITING`, `OCCUPIED`, the generation and a write sequence, plus seven payload words): `resolve` takes no lock, reads one cache line and returns a consistent snapshot; `alloc`, `clunk` and the sweep take a shard-local mutex over the free list and the Roaring active and reclaimed sets. `resolve`, `clunk` and `mark_reclaimed` check the owning client. Each shard is a flat power-of-two slot array sized at construction (up to 256 shards of at most 65,536 slots), a full shard falls over to the next, and allocation cannot fail on hash clustering. `FlattenedTphtShard` is no longer used by `FidTable`, the table-wide insert lock of `6fd201c` and its all-shard probe are removed, `ds/src/tpht/` stays intact for later consumers, and every `cargo xtask test-9p` leg stays green (v3.0 guide task 3, v3.0 compendium section 4; supersedes the TPHT-backed table of WIRE-07 to WIRE-09; amended 2026-11-25 by Phase 5 D-07 to D-13, which differ from the compendium listing in keeping the client check and in the lock-free slot)
 - [ ] **CORR-04**: `RFCKEY`, `RFROBASE` and `RFRANDMEM` are removed from `port::rfork`, `RFNOLEGACY` is `1 << 18`, bits 19 to 21 are free, and `sys/include/rfork.h` is regenerated; runtime behaviour is unchanged (v3.0 guide task 4; bit position by owner decision 2026-11-25)
 - [ ] **CORR-05**: The unsafe policy is stated the same way in `docs/`, the lint contract and `UNSAFE-AUDIT.md`, and matches the tree: `crypto/` crate-wide `forbid(unsafe_code)`; `ds/` per-module forbid with `ds/src/tpht/` the audited exception; `port/` per-module forbid with the three named floor modules (`globalalloc`, `mcslock`, `devip_waker`); `undocumented_unsafe_blocks = deny` on `ds/src/tpht/` and the arch crates, with `x86_64` opted in and its sites, and the 7 open aarch64 sites, documented and audited (v3.0 guide task 5 and rule 3; the guide's "crate-wide" wording for `port/` is corrected by owner decision 2026-11-25; carries the lint half of the retired MEM-11, note N2)
 
@@ -48,17 +53,25 @@ Two-CPU SMP:
 
 - [ ] **SMP-01**: r9 boots on QEMU q35 x86_64 with `-smp 2`: the second CPU is started by INIT-SIPI-SIPI from the ACPI MADT, both CPUs reach the scheduler loop, and the boot-to-rio gate stays green (v3.0 guide Phase 3, v3.0 compendium section 6; amended from the multi-CPU wording, whose scale-out part is SMP-10)
 - [ ] **SMP-02**: Per-CPU state exists on both architectures: an x86_64 per-CPU `Mach` mapping, and aarch64 per-CPU current frame, kernel stack and proc pointers; FP ownership stays per-CPU (`CpuFp`) (HANDOFF SMP prerequisites)
-- [ ] **SMP-03**: Every single-CPU spinlock invariant in the kernel is audited and replaced by SMP-safe locking, including the allocator, page tables and segment and page-cache structures (memory locking) (IG section 8, owner direction)
+- [ ] **SMP-03**: Every single-CPU invariant in the kernel is audited and replaced by fine-grained SMP-safe locking or a per-CPU copy before the second CPU schedules, with no big kernel lock; this includes the allocator, page tables, the segment and page-cache structures, the scheduler and the arch-crate global statics (IG section 8, owner direction; amended 2026-11-25 by Phase 5 D-22)
 - [ ] **SMP-04**: aarch64 virt boots with `-smp 2` under HVF and TCG: the second CPU is started by PSCI `CPU_ON` and both reach the scheduler loop (v3.0 guide Phase 3, v3.0 compendium section 6)
 - [ ] **SMP-07**: Locks taken in interrupt context use an interrupt-disabling guard (`IrqSpinLock`), and a TLB shootdown IPI (x86_64 LAPIC vector, aarch64 GIC SGI) reaches the other CPU (v3.0 compendium section 6)
-- [ ] **SMP-08**: A two-CPU stress gate runs concurrent `FidTable` and `FlattenedTphtShard` workloads with timer interrupts across both CPUs and completes with zero deadlocks, as a CI gate (v3.0 guide Phase 3 exit gate)
-- [ ] **SMP-09**: Every new kernel boot gate runs with `-smp 2` on QEMU q35 and virt (v3.0 guide rule 2)
+- [ ] **SMP-08**: A two-CPU stress gate runs a user workload on both CPUs that drives opens, reads and clunks through a `9P2000.aead` mount served by the real `FidTable`, plus exec churn through the TPHT page cache, with timer interrupts on both CPUs, and completes with zero deadlocks, as a CI gate on both architectures (v3.0 guide Phase 3 exit gate; amended 2026-11-25 by Phase 5 D-27)
+- [ ] **SMP-09**: Every new kernel boot gate runs with `-smp 2` on QEMU q35 and virt, and once both CPUs schedule every existing gate moves to `-smp 2`, which becomes the golden invariant; one smoke leg per architecture stays at `-smp 1` (v3.0 guide rule 2; amended 2026-11-25 by Phase 5 D-24)
+- [ ] **SMP-11**: Each CPU has its own run queue and an idle CPU steals runnable processes from the other; the shared scheduler logic lives in `port/` and is host-tested (owner, Phase 5 D-23, D-25; more than two CPUs is SMP-10)
+- [ ] **SMP-12**: Every kernel lock has a rank in one documented table; debug and gate builds assert that a CPU takes locks only in increasing rank and panic naming both locks, and a per-CPU progress watchdog reports the stuck CPU and the lock it waits on; release builds carry neither (owner, Phase 5 D-26)
+- [ ] **SMP-13**: A boot switch starts an in-kernel `9P2000.aead` server end backed by the real `FidTable` over a loopback link with an injected test secret, mounted by the kernel's own client engine, for the stress gate only; a default boot starts no such server and still speaks plain 9P2000 (owner, Phase 5 D-28)
 
 Memory pools (moved here by the owner on 2026-11-25, without their cryptographic parts):
 
-- [ ] **MEM-07**: The page allocator keeps clean, dirty and pinned Roaring pools over 256MB chunks with the address expression `(((chunk as usize) << 16) | (offset as usize)) * 4096`, full-container materialization in `fallback_difference`, pinned frames excluded from eviction, `Evictable = Dirty \ (Pinned | Active)`, and a High-Water Pager holding about 15% pre-cleared frames (IG-A01 items 8-9, IG-D10; v3.0 compendium section 3; moved to Phase 5 without its cryptographic parts by the owner on 2026-11-25; whether the set kernels get SIMD and what eviction means with no backing store are settled at phase discussion)
+- [ ] **MEM-07**: The page allocator keeps clean, dirty and pinned Roaring pools over 256MB chunks with the address expression `(((chunk as usize) << 16) | (offset as usize)) * 4096`, full-container materialization in `fallback_difference`, pinned frames excluded from eviction, `Evictable = Dirty \ (Pinned | Active)`, and a High-Water Pager holding about 15% pre-cleared frames. With no backing store, eviction means zeroing freed frames and, under pressure, dropping re-readable pages (MEM-15); dirty anonymous memory is never taken from a process (IG-A01 items 8-9, IG-D10; v3.0 compendium section 3; moved to Phase 5 without its cryptographic parts by the owner on 2026-11-25; amended 2026-11-25 by Phase 5 D-14)
 - [ ] **MEM-08**: `SuperpageResidency` is exactly 64 bytes and supports bit clearing and atomic counter reset on large-page demotion (IG-A01 item 10)
-- [ ] **MEM-10**: `UserSlice` / `UserSliceMut` enforce residency on demand behind `UserAddressSpace`, and kernel code that holds user memory across sleep points (for example devmnt reads) pins those frames against the evictor (IG-A01 item 17, IG-V02 risk 2)
+- [ ] **MEM-10**: `UserSlice` / `UserSliceMut` enforce residency on demand behind `UserAddressSpace` and carry a pin guard released on drop with a per-frame pin count; every `port/` path that holds user memory across a sleep point (devmnt, pipes, the network devices, console) is audited and pins its frames against the evictor (IG-A01 item 17, IG-V02 risk 2; amended 2026-11-25 by Phase 5 D-21)
+- [ ] **MEM-14**: x86_64 exec no longer maps images eagerly: text, data and bss pages are loaded at first touch by a fault-time pager, as on aarch64, and the boot-to-rio gate stays green (owner, Phase 5 D-16)
+- [ ] **MEM-15**: User text is mapped read-only on both architectures, per-page dirty tracking exists on both, and the evictor drops text pages and initialised-data pages that have not been written, which fault back in intact from their image. The evictor is live in every boot and acts below a low-water mark; a small-memory `-smp 2` gate on both architectures triggers drops deterministically and shows that a pinned frame is never chosen (owner, Phase 5 D-14, D-15, D-17)
+- [ ] **MEM-16**: Image pages are found through a Flattened-TPHT page cache (`palloc.hash`) keyed by image and page, so shared text maps one frame into every process running the image; DEBT-04 is complete before it is built (v3.0 compendium section 3; owner, Phase 5 D-18)
+- [ ] **MEM-17**: The Roaring set kernels have AVX2 (x86_64) and NEON (aarch64) implementations in the one reserved unsafe-holding module in `ds/`, behind `ds/src/setops.rs`, reached through `with_simd()`, chosen by CPU feature at boot, with a scalar path kept and scalar and vector outputs pinned identical (v3.0 compendium section 3; owner, Phase 5 D-19)
+- [ ] **MEM-18**: On x86_64, AVX is enabled where CPUID reports it and per-process FP state is saved with XSAVE there, so user `ymm` state survives a switch, `rfork`, exec reset and note delivery; on a CPU without XSAVE the FXSAVE path is unchanged; one boot line names the format in use. This is for set algebra and user programs, not page encryption (owner, Phase 5 D-20)
 
 ### Distributed 9P Extensions and Service Discovery (guide Phase 4)
 
@@ -236,9 +249,17 @@ Which phases cover which requirements. Each requirement maps to exactly one phas
 | SMP-07 | Phase 5 | Pending |
 | SMP-08 | Phase 5 | Pending |
 | SMP-09 | Phase 5 | Pending |
+| SMP-11 | Phase 5 | Pending |
+| SMP-12 | Phase 5 | Pending |
+| SMP-13 | Phase 5 | Pending |
 | MEM-07 | Phase 5 | Pending |
 | MEM-08 | Phase 5 | Pending |
 | MEM-10 | Phase 5 | Pending |
+| MEM-14 | Phase 5 | Pending |
+| MEM-15 | Phase 5 | Pending |
+| MEM-16 | Phase 5 | Pending |
+| MEM-17 | Phase 5 | Pending |
+| MEM-18 | Phase 5 | Pending |
 | DIST-01 | Phase 6 | Pending |
 | DIST-02 | Phase 6 | Pending |
 | DIST-03 | Phase 6 | Pending |

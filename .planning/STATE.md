@@ -114,7 +114,7 @@ Settle each when its phase is planned. Detail: `.planning/INGEST-CONFLICTS.md`. 
 | ID | Settle in | Question |
 |----|-----------|----------|
 | W7 | Phase 6 | `DiscoveryBeaconV2` 192 versus 202 bytes |
-| - | Phase 5 | What eviction means with no backing store; TPHT page cache now or later; SIMD for the Roaring set kernels; the non-zero rule for the slab `StatefulHandle` |
+| - | Phase 5 | Settled 2026-11-25 at the phase discussion (05-CONTEXT.md D-10, D-14, D-18, D-19): eviction drops re-readable pages; the TPHT page cache is built now; the Roaring set kernels get SIMD; the slab handle's generation is never zero |
 | W8 | Phase 13 | `/adm/users` UID 0 `adm` versus persona `glenda` |
 | W9 | Phase 13 | Test 3.2 needs `alice` absent from `/adm/users` |
 | W10 | Phase 13 | Suite 3 cross-VLAN mounts with no route |
@@ -152,6 +152,7 @@ None yet.
 - x86_64 kernel byte change, until `boot-iso` is a pure derivation (CORR-02): re-derive and commit the `boot-iso` `outputHash`, run the x64 TCG gates in an amd64 Docker container (clean up afterwards), and get the owner's linux boot-iso check.
 - x86_64 kernel byte change, once CORR-02 has landed: green CI on the commit is the check; no hash, no owner boot-iso check (owner, 2026-11-25).
 - No phase reintroduces software RAM encryption, `PKEY`/`WRPKRU` page-fault hooks, or Rust rewrites of `6c`/`6a`/`6l` without a recorded owner decision first (v3.0 guide rule 4).
+- Phase 5 only: the `port/src` diff-first rule is waived; the owner reviews the cumulative `port/src` diff at four owner stops and before any push (05-CONTEXT.md D-30, D-32).
 - aarch64 kernel byte change: quick pass now (tier-1 on HVF and TCG; smoke, net-smoke, cpu once on HVF); full HVF series at Phase 8. Kernel builds are reproducible, so compare kernel sha256 to prove a pin move changes nothing.
 - Kernels are built without FP/SIMD; kernel SIMD goes through `fpu::kernel_begin()` / `with_simd()`; user FP state is per process (save at switch, copy on fork, reset on exec); arm64 is the reference for x86_64.
 - No AI attribution in commits or PRs. Never stage the 11 pre-modified troff/postscript font files in Harvey (a darwin case-collision artifact).
