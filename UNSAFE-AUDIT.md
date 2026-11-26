@@ -353,6 +353,25 @@ base; the row now reads 12.)  x86_64 162 → 178 blocks, extern 2 → 3,
 SAFETY 408 → 424 (the +1 past the +15 delta is the same main.rs
 correction); the reconciliation holds.
 
+**Plan 05-11 Task 3 delta (SMP-02/07, 2026-11-26):** count-neutral
+content change inside existing audited sites.  `trap.rs`'s
+`intrspecial` replaces the hardcoded `movabsq $KMACH; cmpq; je` GS-base
+test with the canonical kernel-half sign test (`testq %rax, %rax; js`)
+— every kernel Mach VA has bit 63 set (CPU 1's Mach lives at a distinct
+kernel-half VA the constant compare could never recognize), and every
+user GS base is 0 on r9 (the closed syscall list offers no GS-base
+write path, and CR4.FSGSBASE is never set), so bit 63 is the exact
+discriminator (T-05-20's mitigation).  The IDT already gates all 256
+vectors, so the IPI work is dispatch only: `dispatch_irq` arms
+`smp::TLB_SHOOTDOWN_VECTOR` (0xF0 → `port::smp::service_shootdown_ipi`)
+and `smp::RESCHED_VECTOR` (0xF1 → `proc::preempt`, the tick's existing
+reschedule mechanism), both retired by the shared LAPIC EOI tail.  No
+new unsafe blocks or fns: trap.rs stays 6 blocks / 9 fns; x86_64 stays
+178 blocks, SAFETY 424.  (dat.rs's Task-3-listed surface — the
+offset-0 `me` pin and `mach_ptr`/`this_mach` — landed in Task 2's
+commit: `start_aps` writes those very fields, so the seam could not
+compile split; see the plan's SUMMARY deviations.)
+
 ## ds/ and crypto/ (Phase 3)
 
 Both crates take `[lints] workspace = true`, so
@@ -639,7 +658,7 @@ cfg-gated code as well.
 | `smp.rs` | 11 | 0 | 1 | the SIPI trampoline copy into PA 0x8000, the AP Mach `alloc_zeroed` + mailbox volatile writes, the IRQ save/restore asm pair, `invlpg`/CR3-reload flush, the Mach-registry reads (05-11); extern: the trampoline link-syms |
 | `swtch.rs` | 0 | 1 | 0 | `swtch` context-switch ABI (+1 host-test twin fn) |
 | `syscall.rs` | 1 | 0 | 0 | the `trap_return` tail call on the seeded frame (+2 test-only blocks) |
-| `trap.rs` | 6 | 9 | 0 | the trap-vector interface: `intr_stubs` emitter, `as_thunk`, `intrspecial`/`intrregular`/`intrcommon`, `syscallentry`/`syscallreturn`, `trap_return` |
+| `trap.rs` | 6 | 9 | 0 | the trap-vector interface: `intr_stubs` emitter, `as_thunk`, `intrspecial` (canonical bit-63 GS test, 05-11)/`intrregular`/`intrcommon`, `syscallentry`/`syscallreturn`, `trap_return`; IPI dispatch for LAPIC 0xF0/0xF1 (05-11) |
 | `uart16550.rs` | 5 | 0 | 0 | COM1 port I/O and the cons_rx single-writer/single-reader ring cells |
 | `usermem.rs` | 7 | 0 | 0 | the single validated user-memory entry point (UserSlice/UserSliceMut) |
 

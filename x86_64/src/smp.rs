@@ -190,7 +190,7 @@ fn start_one_ap(cpu_id: usize, apic_id: u32, bootpml4_pa: u64) -> Result<(), &'s
         mb.add(MB_STACK_TOP / 8).write_volatile(stack_top as u64);
         mb.add(MB_MACH_VA / 8).write_volatile(mach_va as u64);
         mb.add(MB_CPU_ID / 8).write_volatile(cpu_id as u64);
-        mb.add(MB_ENTRY_VA / 8).write_volatile(crate::ap_main as usize as u64);
+        mb.add(MB_ENTRY_VA / 8).write_volatile(crate::ap_main as *const () as usize as u64);
     }
     // The mailbox stores happen-before the INIT IPI (the AP's read side
     // is ordered by the INIT reset itself).
