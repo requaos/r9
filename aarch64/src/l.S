@@ -11,6 +11,13 @@
 // cost is boot-time-only.
 STACKSZ = 4096*16
 
+// Per-CPU secondary boot stack size (64 KiB, matching the BSP's).
+// Secondary CPUs switch to their own stack after the MMU is on.
+SECONDARY_STACKSZ = 4096*16
+// The most secondary CPUs the stack area covers (QEMU virt's GICv2
+// limit; matches aarch64/src/fpu.rs's MAXMACH).
+MAX_SECONDARY_CPUS = 8
+
 CURRENTEL_EL			= (1<<3) | (1<<2)
 
 SCR_EL3_NS			= (1<<0)
@@ -167,6 +174,143 @@ higher_half:
 dnr:	wfe
 	b	dnr
 
+// ---------------------------------------------------------------------------
+// Secondary CPU boot state (SMP-04) — published by the BSP's
+// publish_boot_state() before PSCI CPU_ON, read by secondary_start at
+// physical addresses (MMU off).  Four u64s, layout consumed as a block:
+// [0] MAIR_EL1, [8] TCR_EL1, [16] TTBR0_EL1, [24] TTBR1_EL1.
+// ---------------------------------------------------------------------------
+.section .bootdata, "aw"
+.balign 8
+.globl SECONDARY_MAIR
+SECONDARY_MAIR:		.space 8
+.globl SECONDARY_TCR
+SECONDARY_TCR:		.space 8
+.globl SECONDARY_TTBR0
+SECONDARY_TTBR0:	.space 8
+.globl SECONDARY_TTBR1
+SECONDARY_TTBR1:	.space 8
+
+.section .boottext, "awx"
+// ---------------------------------------------------------------------------
+// Secondary CPU entry (SMP-04) — PSCI CPU_ON target.
+//
+// x0 = cpu_id (PSCI passes the CPU_ON x3 context as the started CPU's
+// x0).  The CPU starts with MMU off, at EL2 (HVF) or EL1 (TCG).  The BSP
+// has already set up the page tables and published the MMU state in the
+// .bootdata globals below (read at physical addresses — the MMU is off).
+// ---------------------------------------------------------------------------
+.globl secondary_start
+secondary_start:
+	// Save cpu_id in a callee-saved register (x19 survives the Rust
+	// call below).
+	mov	x19, x0
+
+	// Dispatch to code to handle the current exception level
+	mrs	x0, CurrentEL
+	and	x0, x0, CURRENTEL_EL
+	lsr	x0, x0, #2
+	cmp	x0, #1
+	beq	secondary_el1
+	cmp	x0, #2
+	beq	secondary_el2
+
+	// EL3: QEMU virt PSCI starts secondaries at EL2 or EL1; an EL3
+	// arrival is a platform bug.
+	b	dnr
+
+secondary_el2:
+	// Drop EL2 -> EL1: enable AArch64 in EL1, leave the timer
+	// untrapped, zero the virtual-count offset.
+	ldr	x0, =HCR_EL2_RW
+	msr	hcr_el2, x0
+	msr	cnthctl_el2, xzr
+	msr	cntvoff_el2, xzr
+	ldr	x0, =(SPSR_EL2_M_EL1H|SPSR_EL2_F|SPSR_EL2_I|SPSR_EL2_A|SPSR_EL2_D)
+	msr	spsr_el2, x0
+
+	// Enable FPU in EL1, EL0
+	ldr	x0, =CPACR_EL1_FPEN
+	msr	cpacr_el1, x0
+
+	// Return to EL1
+	adr	x0, secondary_el1
+	msr	elr_el2, x0
+	eret
+
+secondary_el1:
+	// Load the BSP's published MMU state.  The globals live in
+	// .bootdata (identity-mapped pre-MMU); translate the link VAs
+	// to PAs by subtracting KZERO.
+	ldr	x0, =SECONDARY_MAIR
+	ldr	x1, =(KZERO)
+	sub	x0, x0, x1		// PA of SECONDARY_MAIR
+	ldr	x2, [x0]		// MAIR_EL1 value
+	ldr	x3, [x0, #8]		// TCR_EL1 value
+	ldr	x4, [x0, #16]		// TTBR0_EL1 value (boot identity table)
+	ldr	x5, [x0, #24]		// TTBR1_EL1 value (kernel root table)
+
+	msr	mair_el1, x2
+	msr	tcr_el1, x3
+	msr	ttbr0_el1, x4
+	msr	ttbr1_el1, x5
+
+	// Invalidate local TLBs (not yet inner-shareable — the MMU is
+	// off, so this CPU's TLB is the only one that matters).
+	tlbi	vmalle1
+	dsb	nsh
+	isb
+
+	// Enable MMU + I/D caches.
+	dsb	ish
+	mrs	x0, sctlr_el1
+	ldr	x1, =(SCTLR_EL1_I|SCTLR_EL1_C|SCTLR_EL1_M)
+	orr	x0, x0, x1
+	msr	sctlr_el1, x0		// Enable MMU!
+
+	// Force changes to be seen by next instruction, then jump to
+	// the high-half KZERO virtual address.
+	isb
+	ldr	x20, =(secondary_higher_half)
+	br	x20
+
+secondary_higher_half:
+	// Now running with MMU on at KZERO-mapped addresses.
+
+	// Install the exception vectors.
+	adr	x0, exception_vectors
+	msr	vbar_el1, x0
+
+	// Set TPIDR_EL1 = &PER_CPU[cpu_id].  The stride is the
+	// Rust-exported PER_CPU_STRIDE (= sizeof(PerCpu), pinned by the
+	// const assert in smp.rs).
+	ldr	x0, =PER_CPU
+	ldr	x1, =PER_CPU_STRIDE
+	ldr	x1, [x1]		// sizeof(PerCpu)
+	madd	x0, x19, x1, x0		// &PER_CPU[0] + cpu_id * stride
+	msr	tpidr_el1, x0
+
+	// Load this CPU's dedicated boot stack (top of its 64 KiB slot).
+	ldr	x0, =SECONDARY_STACKS
+	mov	x1, #SECONDARY_STACKSZ
+	madd	x0, x19, x1, x0		// SECONDARY_STACKS + cpu_id * SZ
+	add	x0, x0, #SECONDARY_STACKSZ	// top of the slot
+	mov	sp, x0
+
+	// Call secondary_main(cpu_id).
+	mov	x0, x19
+	bl	secondary_main
+
+	// secondary_main never returns; park if it somehow does.
+	b	dnr
+
 .bss
 .balign	4096
 stack:	.space STACKSZ
+
+// Per-CPU secondary boot stacks (64 KiB each).  Zeroed by the BSP's BSS
+// clear at boot; the secondary CPU switches to its slot after the MMU is
+// on (the slot VA is in the kernel's higher-half BSS mapping).
+.balign	4096
+.globl SECONDARY_STACKS
+SECONDARY_STACKS:	.space SECONDARY_STACKSZ * MAX_SECONDARY_CPUS

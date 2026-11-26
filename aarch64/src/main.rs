@@ -137,6 +137,13 @@ fn print_stacks() {
 /// assumed to be dtb_va-KZERO.
 #[unsafe(no_mangle)]
 pub extern "C" fn main9(dtb_va: usize) {
+    // SMP-02: set TPIDR_EL1 = &PER_CPU[0] BEFORE trap::init installs
+    // VBAR_EL1 — any trap that fires after the vectors are armed reads
+    // cur_frame through TPIDR_EL1 (offset 0 of PerCpu).  Also publish
+    // the BSP's MMU state (MAIR/TCR/TTBR0/TTBR1) for secondary CPUs
+    // before any CPU_ON.
+    smp::init_bsp();
+    smp::publish_boot_state();
     trap::init();
     // CURKSTACK (the trap.S entry-stack symbol) starts at the legacy
     // interrupt stack so pre-process traps behave exactly as before; the

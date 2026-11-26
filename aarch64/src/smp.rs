@@ -170,6 +170,47 @@ pub fn init_bsp() {
     mark_online(0);
 }
 
+/// The size of one PerCpu entry, exported for `l.S`'s secondary_start
+/// (the assembly's `madd` computes `&PER_CPU[cpu_id]` from it).
+#[unsafe(no_mangle)]
+pub static PER_CPU_STRIDE: u64 = core::mem::size_of::<PerCpu>() as u64;
+
+/// Publish the BSP's boot MMU state for secondary CPUs (SMP-04).
+/// Called from main9 after `init_vm` has set up the page tables and
+/// enabled the MMU, before any secondary CPU starts.  The values are
+/// read from the live registers and written to the `.bootdata` globals
+/// that `secondary_start` reads at their physical addresses (the globals'
+/// section is identity-mapped pre-MMU).
+pub fn publish_boot_state() {
+    let mair: u64;
+    let tcr: u64;
+    let ttbr0: u64;
+    let ttbr1: u64;
+    // SAFETY: reads of MAIR_EL1/TCR_EL1/TTBR0_EL1/TTBR1_EL1 — pure
+    // register reads at EL1, no memory operands, no side effects.
+    unsafe {
+        core::arch::asm!("mrs {}, mair_el1", out(reg) mair, options(nomem, nostack, preserves_flags));
+        core::arch::asm!("mrs {}, tcr_el1", out(reg) tcr, options(nomem, nostack, preserves_flags));
+        core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0, options(nomem, nostack, preserves_flags));
+        core::arch::asm!("mrs {}, ttbr1_el1", out(reg) ttbr1, options(nomem, nostack, preserves_flags));
+    }
+    unsafe extern "C" {
+        static SECONDARY_MAIR: u64;
+        static SECONDARY_TCR: u64;
+        static SECONDARY_TTBR0: u64;
+        static SECONDARY_TTBR1: u64;
+    }
+    // SAFETY: write-once boot publication — single-CPU, IRQs masked,
+    // before any secondary CPU starts.  The globals live in .bootdata
+    // (identity-mapped pre-MMU); the secondary reads them at PA.
+    unsafe {
+        (&raw const SECONDARY_MAIR as *mut u64).write(mair);
+        (&raw const SECONDARY_TCR as *mut u64).write(tcr);
+        (&raw const SECONDARY_TTBR0 as *mut u64).write(ttbr0);
+        (&raw const SECONDARY_TTBR1 as *mut u64).write(ttbr1);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // DTB discovery + PSCI CPU_ON (SMP-04).
 // ---------------------------------------------------------------------------

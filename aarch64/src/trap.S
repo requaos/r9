@@ -76,8 +76,9 @@ interruptstackbase:	.space INTERRUPTSTACKSZ
 // (the old entry-side bug): there is no GPR-free SP move, so the return-side
 // step
 // is the single enforcement point.  The entry RECORDS the frame it built
-// into CURFRAME and the tail RELOADS the frame base from CURFRAME, because
-// preemption (proc::preempt from the timer tick) swaps CURFRAME/CURKSTACK/
+// into PerCpu::cur_frame (via TPIDR_EL1) and the tail RELOADS the frame base
+// from PerCpu::cur_frame, because
+// preemption (proc::preempt from the timer tick) swaps cur_frame/cur_kstack/
 // TTBR0 mid-trap and the tail must pop the NEW current proc's frame.
 // Both symbols are Rust statics in proc.rs, written only under the
 // PROC_TABLE lock or in IRQ-masked trap context (single CPU); CURKSTACK
@@ -130,12 +131,14 @@ interruptstackbase:	.space INTERRUPTSTACKSZ
 	ldr	x30, =\type
 	str	x30, [sp, #16 * 17]
 
-	// Record the live frame for trap_return's CURFRAME reload
+	// Record the live frame for trap_return's cur_frame reload
 	// (preemption may swap it mid-trap).  x9/x10's frame slots were
-	// stored above, so they are safe scratch here.
+	// stored above, so they are safe scratch here.  The frame goes
+	// into PerCpu::cur_frame at offset 0 of this CPU's TPIDR_EL1
+	// (SMP-02) — each CPU reads its own.
 	mov	x9, sp
-	ldr	x10, =CURFRAME
-	str	x9, [x10]
+	mrs	x10, tpidr_el1
+	str	x9, [x10, #0]
 
 	// Pass pointer to TrapFrame (on stack) as the first arg
 	mov	x0, sp
@@ -152,9 +155,9 @@ interruptstackbase:	.space INTERRUPTSTACKSZ
 // this eret path is the ONLY way EL0 is ever entered (swtch never enters
 // EL0).
 //
-// The tail RELOADS the frame base from CURFRAME as its
+// The tail RELOADS the frame base from PerCpu::cur_frame (TPIDR_EL1) as its
 // first instruction — a timer tick may have preempted the interrupted
-// process mid-trap, swapping CURFRAME/CURKSTACK/TTBR0 to the next
+// process mid-trap, swapping cur_frame/cur_kstack/TTBR0 to the next
 // process, so the frame to restore is not necessarily the one the entry
 // built.
 //
@@ -188,8 +191,9 @@ interruptstackbase:	.space INTERRUPTSTACKSZ
 trap_return:
 	// Reload the current frame — preemption may have swapped it.
 	// (SP cannot be an ldr destination on aarch64 — go via x9.)
-	ldr	x9, =CURFRAME
-	ldr	x9, [x9]
+	// PerCpu::cur_frame at offset 0 of this CPU's TPIDR_EL1 (SMP-02).
+	mrs	x9, tpidr_el1
+	ldr	x9, [x9, #0]
 	mov	sp, x9
 
 	// Restore system registers from the frame.  This is the LAST point
@@ -230,12 +234,12 @@ trap_return:
 
 // exec's first EL0 entry: x0 = the seeded forkret-shaped frame on
 // the proc's kernel stack; publish it as the current frame (the
-// tail reloads from CURFRAME) and ride the shared tail above.  Bound in
-// Rust as trap_return (trap.rs).
+// tail reloads from PerCpu::cur_frame) and ride the shared tail
+// above.  Bound in Rust as trap_return (trap.rs).
 .globl	trap_return_exec
 trap_return_exec:
-	ldr	x9, =CURFRAME
-	str	x0, [x9]
+	mrs	x9, tpidr_el1
+	str	x0, [x9, #0]
 	b	trap_return
 
 
