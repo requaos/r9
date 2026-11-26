@@ -20,7 +20,7 @@
 #      dispatches its GIC driver on the DTB's compatible string, so one
 #      kernel-virt.elf serves both machine shapes):
 #        qemu-system-aarch64 -M virt,gic-version=3 -cpu $R9_CPU
-#          -smp 1 -m 1024M -accel $R9_ACCEL -kernel <r9 ELF>
+#          -smp "${R9_SMP:-2}" -m 1024M -accel $R9_ACCEL -kernel <r9 ELF>
 #          -dtb <patched copy>
 #          -device loader,file=<bootfs.paq>,addr=0x48000000
 #          -netdev user,id=n0 -device virtio-net-pci-non-transitional,netdev=n0
@@ -52,6 +52,8 @@
 #                  darwin-aarch64 when qemu supports it, tcg otherwise.
 #   R9_GICV2       =1 restores the v1.0 reference shape (gic-version=2,
 #                  cortex-a72, tcg) — a bisection escape hatch.
+#   R9_SMP         the -smp CPU count (default 2; SMP-09, D-24).  =1 keeps
+#                  the retained single-CPU smoke leg.
 #   R9_BOOTARGS    optional boot string for the kernel's ROOT env seed
 #                  (key=value pairs, e.g. "init=/arm64/init -c"); when
 #                  set and non-empty, step 2 writes it with fdtput -t s
@@ -200,7 +202,7 @@ fi
 # composed boot (the flag shape Phase 9's HNET-02 single-sources into
 # platform TOML; no filter-dump object here — capture stays a gate feature).
 set -- qemu-system-aarch64 \
-	-M "$R9_MACHINE" -cpu "$R9_CPU" -smp 1 -m 1024M -accel "$R9_ACCEL" \
+	-M "$R9_MACHINE" -cpu "$R9_CPU" -smp "${R9_SMP:-2}" -m 1024M -accel "$R9_ACCEL" \
 	-kernel "$R9_KERNEL" \
 	-dtb "$DTB" \
 	-device "loader,file=$R9_INITRD,addr=0x48000000" \
