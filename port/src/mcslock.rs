@@ -14,6 +14,8 @@ use core::ops::{Deref, DerefMut};
 use core::ptr;
 use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
+use crate::smp::LockRank;
+
 /// Represents a node in the lock structure.  Note, is cacheline
 /// aligned.
 #[repr(align(64))]
@@ -59,10 +61,27 @@ impl MCSLock {
             node.locked.store(true, Ordering::Release);
             predecessor.next.store(p, Ordering::Release);
             while node.locked.load(Ordering::Acquire) {
+                // SMP-07 (Pitfall 1): a cpu spinning here may have IRQs
+                // masked; service any pending TLB shootdown inline so a
+                // remote initiator's wait barrier can always complete.
+                crate::smp::poll_shootdown_if_pending();
                 hint::spin_loop();
             }
         }
         node
+    }
+
+    /// A non-blocking acquire: true when the queue was empty and `node`
+    /// now holds the lock, false (without linking or waiting) otherwise.
+    pub fn try_lock(&self, node: &LockNode) -> bool {
+        node.next.store(ptr::null_mut(), Ordering::Release);
+        node.locked.store(false, Ordering::Release);
+        let p = node as *const _ as *mut _;
+        // The uncontended fast path of the MCS protocol: claim a null
+        // queue tail.  A miss never linked the node, so it stays reusable.
+        self.queue
+            .compare_exchange(ptr::null_mut(), p, Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
     }
 
     pub fn unlock(&self, node: &LockNode) {
@@ -171,6 +190,18 @@ impl<T> Lock<T> {
         Lock { lock: UnsafeCell::new(MCSLock::new(name)), data: UnsafeCell::new(data) }
     }
 
+    /// A lock with a documented rank (SMP-12, D-26): debug/gate builds
+    /// assert strictly increasing acquisition order and feed the per-cpu
+    /// watchdog; `Lock::new` stays the unranked form for callers not yet
+    /// ranked by the SMP-03 migration.
+    ///
+    /// 05-07 RED scaffolding: the rank is accepted and dropped; the hooks
+    /// land in the GREEN commit.
+    pub const fn new_ranked(name: &'static str, rank: LockRank, data: T) -> Lock<T> {
+        let _ = rank;
+        Self::new(name, data)
+    }
+
     pub fn lock<'a>(&'a self, node: &'a LockNode) -> LockGuard<'a, T> {
         // SAFETY: UnsafeCell::get on the lock is the protocol entry (the
         // MCS queue is internally synchronized); the guard's &mut data is
@@ -179,6 +210,20 @@ impl<T> Lock<T> {
         // SAFETY: the lock is held (above), so the data borrow is
         // exclusive for the guard's lifetime; the guard's Drop releases.
         LockGuard { lock: &self.lock, node, data: unsafe { &mut *self.data.get() } }
+    }
+
+    /// A non-blocking acquire: Some(guard) when the lock was free, None
+    /// (without waiting) otherwise.
+    pub fn try_lock<'a>(&'a self, node: &'a LockNode) -> Option<LockGuard<'a, T>> {
+        // SAFETY: UnsafeCell::get on the lock is the protocol entry (the
+        // MCS queue is internally synchronized).
+        if !unsafe { &mut *self.lock.get() }.try_lock(node) {
+            return None;
+        }
+        // SAFETY: the lock is held (the CAS above claimed the empty
+        // queue), so the data borrow is exclusive for the guard's
+        // lifetime; the guard's Drop releases.
+        Some(LockGuard { lock: &self.lock, node, data: unsafe { &mut *self.data.get() } })
     }
 }
 
@@ -203,6 +248,102 @@ impl<T> DerefMut for LockGuard<'_, T> {
 
 impl<T: ?Sized> Drop for LockGuard<'_, T> {
     fn drop(&mut self) {
+        // SAFETY: the guard's existence proves the lock is held by this
+        // context; unlock publishes our node's release through the MCS
+        // queue.
+        unsafe { &mut *self.lock.get() }.unlock(self.node);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// IrqSpinLock: the IRQ-safe ranked spin lock (SMP-07, SMP-12; D-25, D-26).
+//
+// The lock for IRQ-context shared state: lock() masks interrupts BEFORE
+// acquiring (so an IRQ on this cpu can never re-enter a lock this cpu
+// holds), takes the MCS queue (whose spin polls TLB shootdowns — see
+// MCSLock::lock), and the guard's Drop restores the saved IRQ state after
+// releasing.  Every IrqSpinLock carries a documented LockRank; debug/gate
+// builds assert strictly increasing acquisition order and feed the
+// per-cpu progress watchdog (port/src/smp.rs, D-26).
+//
+// 05-07 RED scaffolding: the MCS-backed shape is complete below; the
+// irq_save_disable/irq_restore wiring and the rank/watchdog hooks land in
+// the GREEN commit.
+// ---------------------------------------------------------------------------
+
+/// An IRQ-safe ranked spin lock (see the module note above).
+pub struct IrqSpinLock<T: ?Sized> {
+    lock: UnsafeCell<MCSLock>,
+    data: UnsafeCell<T>,
+}
+
+// SAFETY: the MCS protocol serializes all access to the protected data,
+// and the IRQ mask/restore pairing (GREEN commit) closes the same-cpu
+// IRQ re-entry window — an IrqSpinLock can cross threads because the
+// queue discipline plus the IRQ mask is the synchronization (the named
+// floor module).
+unsafe impl<T: ?Sized> Send for IrqSpinLock<T> {}
+// SAFETY: as above — &IrqSpinLock sharing is safe because data access
+// only ever happens under the queue's mutual exclusion with IRQs masked.
+unsafe impl<T: ?Sized> Sync for IrqSpinLock<T> {}
+
+impl<T> IrqSpinLock<T> {
+    pub const fn new(name: &'static str, rank: LockRank, data: T) -> IrqSpinLock<T> {
+        let _ = rank; // 05-07 RED: GREEN stores and enforces the rank
+        IrqSpinLock { lock: UnsafeCell::new(MCSLock::new(name)), data: UnsafeCell::new(data) }
+    }
+}
+
+impl<T: ?Sized> IrqSpinLock<T> {
+    pub fn lock<'a>(&'a self, node: &'a LockNode) -> IrqLockGuard<'a, T> {
+        // SAFETY: UnsafeCell::get on the lock is the protocol entry (the
+        // MCS queue is internally synchronized); the guard's &mut data is
+        // unique because the lock was just acquired.
+        let node = unsafe { &mut *self.lock.get() }.lock(node);
+        // SAFETY: the lock is held (above), so the data borrow is
+        // exclusive for the guard's lifetime; the guard's Drop releases.
+        IrqLockGuard { lock: &self.lock, node, data: unsafe { &mut *self.data.get() }, saved_irq: 0 }
+    }
+
+    /// A non-blocking acquire: Some(guard) when the lock was free, None
+    /// (without waiting) otherwise.
+    pub fn try_lock<'a>(&'a self, node: &'a LockNode) -> Option<IrqLockGuard<'a, T>> {
+        // SAFETY: UnsafeCell::get on the lock is the protocol entry.
+        if !unsafe { &mut *self.lock.get() }.try_lock(node) {
+            return None;
+        }
+        // SAFETY: the lock is held (the CAS claimed the empty queue), so
+        // the data borrow is exclusive for the guard's lifetime.
+        Some(IrqLockGuard { lock: &self.lock, node, data: unsafe { &mut *self.data.get() }, saved_irq: 0 })
+    }
+}
+
+/// The IrqSpinLock ownership guard (the LockGuard analogue): Drop releases
+/// the MCS queue and restores the IRQ state saved at acquisition.
+pub struct IrqLockGuard<'a, T: ?Sized + 'a> {
+    lock: &'a UnsafeCell<MCSLock>,
+    node: &'a LockNode,
+    data: &'a mut T,
+    saved_irq: usize,
+}
+
+impl<T> Deref for IrqLockGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        self.data
+    }
+}
+
+impl<T> DerefMut for IrqLockGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        self.data
+    }
+}
+
+impl<T: ?Sized> Drop for IrqLockGuard<'_, T> {
+    fn drop(&mut self) {
+        let _ = self.saved_irq; // 05-07 RED: GREEN restores it via smp::irq_restore
         // SAFETY: the guard's existence proves the lock is held by this
         // context; unlock publishes our node's release through the MCS
         // queue.
@@ -292,3 +433,137 @@ impl<T> Drop for BusyGuard<'_, T> {
 // extend the discipline to the session.  (Homed with the primitive
 // because devmnt.rs is #[forbid(unsafe_code)].)
 unsafe impl Send for crate::devmnt::MntIoBox {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::smp::{self, LockRank};
+
+    // -- SMP-07/SMP-12: IrqSpinLock masks IRQs on entry and restores the
+    // -- saved state on drop, nesting cleanly (D-25) --
+
+    #[test]
+    fn irq_spinlock_nested_save_restore() {
+        smp::test_hooks::set_cpu_id(30);
+        static L_A: IrqSpinLock<u8> = IrqSpinLock::new("test_irq_a", LockRank::ProcTable, 0);
+        static L_B: IrqSpinLock<u8> = IrqSpinLock::new("test_irq_b", LockRank::RunQueue, 0);
+        let node_a = LockNode::new();
+        let node_b = LockNode::new();
+        assert_eq!(smp::test_hooks::irq_depth(), 0);
+        {
+            let mut g_a = L_A.lock(&node_a);
+            assert_eq!(smp::test_hooks::irq_depth(), 1, "lock masks IRQs");
+            *g_a = 1;
+            {
+                let mut g_b = L_B.lock(&node_b);
+                assert_eq!(
+                    smp::test_hooks::irq_depth(),
+                    2,
+                    "a nested lock saves the masked state"
+                );
+                *g_b = 2;
+            }
+            assert_eq!(smp::test_hooks::irq_depth(), 1, "drop restores the saved state");
+            assert_eq!(*g_a, 1);
+        }
+        assert_eq!(smp::test_hooks::irq_depth(), 0, "the outermost drop unmasks");
+        assert_eq!(smp::test_held_lock_count(), 0, "the rank stack is empty");
+    }
+
+    // -- SMP-07: try_lock fails fast when held, restoring the saved IRQ
+    // -- state and leaking no rank (SMP-12) --
+
+    #[test]
+    fn irq_spinlock_try_lock_restores_irq_on_miss() {
+        smp::test_hooks::set_cpu_id(31);
+        static L: IrqSpinLock<u8> = IrqSpinLock::new("test_irq_try", LockRank::HeapAlloc, 0);
+        let n1 = LockNode::new();
+        let n2 = LockNode::new();
+        let g = L.try_lock(&n1).expect("an uncontended try_lock succeeds");
+        assert_eq!(smp::test_hooks::irq_depth(), 1);
+        assert!(L.try_lock(&n2).is_none(), "a held lock fails immediately");
+        assert_eq!(
+            smp::test_hooks::irq_depth(),
+            1,
+            "a miss restores the saved IRQ state immediately"
+        );
+        assert_eq!(smp::test_held_lock_count(), 1, "a miss leaks no rank");
+        drop(g);
+        assert_eq!(smp::test_hooks::irq_depth(), 0);
+        assert_eq!(smp::test_held_lock_count(), 0);
+    }
+
+    // -- The plain Lock gains a non-blocking acquire (SMP-11 work
+    // -- stealing's victim-queue probe) --
+
+    #[test]
+    fn lock_try_lock_returns_none_when_held() {
+        smp::test_hooks::set_cpu_id(32);
+        static L: Lock<u8> = Lock::new("test_lock_try", 0);
+        let n1 = LockNode::new();
+        let n2 = LockNode::new();
+        let g = L.try_lock(&n1).expect("an uncontended try_lock succeeds");
+        assert!(L.try_lock(&n2).is_none(), "a held lock fails immediately");
+        drop(g);
+        assert!(L.try_lock(&n2).is_some(), "the queue is clean after release");
+    }
+
+    // -- SMP-12: ranked Lock acquisitions push/pop the per-cpu rank stack;
+    // -- unranked locks never touch it (D-26) --
+
+    #[test]
+    #[cfg(debug_assertions)]
+    fn lock_rank_hooks_track_ranked_lock_acquisition() {
+        smp::test_hooks::set_cpu_id(33);
+        static L: Lock<u8> = Lock::new_ranked("test_ranked", LockRank::FidShard, 0);
+        let node = LockNode::new();
+        {
+            let _g = L.lock(&node);
+            assert_eq!(smp::test_held_lock_count(), 1, "a ranked lock holds a rank");
+        }
+        assert_eq!(smp::test_held_lock_count(), 0, "guard drop pops the rank");
+        static L2: Lock<u8> = Lock::new("test_unranked", 0);
+        let node2 = LockNode::new();
+        {
+            let _g = L2.lock(&node2);
+            assert_eq!(smp::test_held_lock_count(), 0, "an unranked lock holds no rank");
+        }
+        assert_eq!(smp::test_held_lock_count(), 0);
+    }
+
+    // -- SMP-07 (Pitfall 1): a cpu spinning on an IrqSpinLock with IRQs
+    // -- masked still services a remote TLB shootdown, so the initiator's
+    // -- wait barrier always completes (no deadlock) --
+
+    #[test]
+    fn irq_spinlock_shootdown_poll_prevents_deadlock() {
+        use std::sync::{Arc, Barrier};
+        static L: IrqSpinLock<u8> = IrqSpinLock::new("test_shootdown", LockRank::HeapAlloc, 0);
+        smp::test_hooks::set_cpu_id(34);
+        smp::test_hooks::set_online_mask((1 << 34) | (1 << 35));
+        let start = Arc::new(Barrier::new(2));
+        let start_b = Arc::clone(&start);
+        let spinner = std::thread::spawn(move || {
+            smp::test_hooks::set_cpu_id(35);
+            start_b.wait();
+            let node = LockNode::new();
+            // Spins on L while the main thread holds it; the MCS spin
+            // loop's poll_shootdown_if_pending() services the shootdown
+            // the holder is waiting on — no deadlock.
+            let guard = L.lock(&node);
+            let flushes = smp::test_hooks::flush_count();
+            drop(guard);
+            flushes
+        });
+        let node = LockNode::new();
+        let guard = L.lock(&node);
+        start.wait();
+        // The spinner is (or is about to be) spinning on L; requesting a
+        // shootdown must not deadlock: its spin polls and acks.
+        smp::request_shootdown(Some(0x12000));
+        drop(guard);
+        let remote_flushes = spinner.join().expect("spinner thread");
+        assert!(remote_flushes >= 1, "the spinning cpu serviced the shootdown");
+    }
+}
+

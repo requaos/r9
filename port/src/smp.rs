@@ -282,7 +282,9 @@ pub enum LockRank {
 
 #[cfg(debug_assertions)]
 mod rank_watch {
-    use super::{LockRank, MAX_CPUS, current_cpu_id, ticks};
+    use super::{LockRank, current_cpu_id, ticks};
+    #[cfg(not(test))]
+    use super::MAX_CPUS;
     use core::sync::atomic::{AtomicU8, AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
     /// Depth of the per-cpu held-lock rank stack.  The deepest documented
@@ -453,9 +455,9 @@ mod rank_watch {
         &CPUS[id]
     }
 
-    /// Host tests: every test thread is its own "cpu" (the fpu.rs
-    /// `thread_local!` pattern), so parallel tests never share rank or
-    /// watchdog state.
+    // Host tests: every test thread is its own "cpu" (the fpu.rs
+    // `thread_local!` pattern), so parallel tests never share rank or
+    // watchdog state.
     #[cfg(test)]
     std::thread_local! {
         static CPU_DEBUG: &'static CpuDebug = alloc::boxed::Box::leak(alloc::boxed::Box::new(CpuDebug::new()));

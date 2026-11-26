@@ -53,10 +53,10 @@ every config a clippy leg compiles, and static-scanned tree-wide below.
 |-----|-------|
 | aarch64 unsafe blocks+impls (lint-visible, non-test production) | 186 |
 | x86_64 unsafe blocks+impls (lint-visible, non-test production) | 158 |
-| port unsafe blocks+impls, non-test, production (lint-visible) | 23 |
+| port unsafe blocks+impls, non-test, production (lint-visible) | 32 |
 | crypto unsafe blocks+impls (lint-visible) | 0 |
 | ds unsafe blocks+impls, non-test, production (lint-visible) | 1 |
-| **SAFETY annotations (comment immediately preceding a site)** | **385** |
+| **SAFETY annotations (comment immediately preceding a site)** | **394** |
 | aarch64 test-only blocks (cfg(test) modules — not lint-gated, never shipped) | 6 |
 | x86_64 test-only blocks (cfg(test) modules — not lint-gated, never shipped) | 8 |
 | port test-only blocks (cfg(test) crate-root test module — the pin/stress arena scaffolding; not lint-gated, never shipped) | 11 |
@@ -133,11 +133,10 @@ legs in CI.
 `#[forbid(unsafe_code)]` (the SmpArch hook boundary, LockRank table, debug
 rank stack + watchdog, ShootdownCoordinator — zero unsafe of its own); the one
 pointer bridge it needs, the publish-once `OnceStatic<SmpArch>` cell behind
-`register_arch`, lives in the `mcslock` floor (+1 block: `get`'s deref; port
-22 → 23, mcslock 12 → 13, SAFETY 384 → 385).  `mcslock` also gains
-`IrqSpinLock`/`IrqLockGuard`, `MCSLock::try_lock`, `Lock::new_ranked` and the
-rank/watchdog hooks — those are committed in the same plan's Task 2 and counted
-there.
+`register_arch`, lives in the `mcslock` floor.  `mcslock` also gains
+`IrqSpinLock`/`IrqLockGuard`, `MCSLock::try_lock`, `Lock::new_ranked`,
+`Lock::try_lock` and the rank/watchdog hooks (Task 2).  Port 22 → 32,
+mcslock 12 → 22, SAFETY 384 → 394 across the plan's commits.
 
 ## ds/ and crypto/ (Phase 3)
 
@@ -264,7 +263,7 @@ entry global_asm! only).  fault.rs/proc.rs/syscall.rs/exec.rs carry no asm!.
 |---|---|
 | `allocator` | **UNSAFE-FREE, `#[forbid(unsafe_code)]`** (the index/arena model) |
 | `globalalloc` | the named floor (the GlobalAlloc shim) — 8 blocks + 7 fns, all SAFETY/doc'd |
-| `mcslock` | the named floor (Lock + BusyCell + OnceStatic primitives + the MntCore proof) — 13 blocks |
+| `mcslock` | the named floor (Lock + BusyCell + OnceStatic + IrqSpinLock primitives + the MntCore proof) — 22 blocks |
 | `devip_waker` (`devip/waker.rs`) | the named 08-02 bridge (the smoltcp waker RawWaker vtable) — 2 blocks + 4 fns, all SAFETY/doc'd; mounted via `#[path]` so the `devip` parent's forbid cannot reach it |
 | every other port module | unsafe-free, `#[forbid(unsafe_code)]` (the devip subtree carries per-module forbids: `devip.rs` shell + `stack`/`phyadapt`; Phase 4 adds the wire modules `chan` and its submodules, and `fid`, all forbidden) |
 
@@ -354,7 +353,7 @@ uartpl011 (tree-wide: no driver touches io.rs directly anymore).  The
 | aarch64/allocator.rs the arena Block construction in the SyncUnsafeCell init | block ×1 | the global allocator's arena — one-time static construction |
 | port/allocator.rs — NONE (wave 3: `#[forbid(unsafe_code)]`) | — | the index/arena model — internals carry no raw-pointer free-list surgery; the pin tests pass with byte-verbatim bodies (pointer identity holds: base+offset materialization) |
 | port/globalalloc.rs — the GlobalAlloc shim (wave-3 split) | fn ×7, block ×8 | THE named allocator floor: the trait's unsafe fn surface, `Block::new_from_raw_parts` (the arena edge), `QuickFit::realloc` + `copy_live_bytes`, `unsafe impl Sync for QuickFit`, the `unsafe impl Allocator for BumpAlloc`, with_allocator's swap trick |
-| port/mcslock.rs — the sync-primitives floor: `lock`/`unlock`/`Lock::lock` ×2/`drop` + Send/Sync impls (7 sites), plus wave-2's BusyCell (`enter` guard's Deref/DerefMut blocks, its Send/Sync impls) + the `unsafe impl Send for devmnt::MntCore` proof (5 sites), plus 05-07's OnceStatic (`get`'s published-pointer deref — 1 site) | impl ×5, block ×8 | the MCS queue's raw node pointers + the try-enter cell are the synchronization protocol; the MntCore proof is the BusyCell discipline's other half; OnceStatic is the publish-once boot cell behind smp::register_arch (SMP-02) — one atomic load on the read path, lock-free from IRQ-masked context |
+| port/mcslock.rs — the sync-primitives floor: `lock`/`unlock`/`Lock::lock` ×2/`Lock::try_lock` ×2/`drop` + Send/Sync impls (7 sites), plus wave-2's BusyCell (`enter` guard's Deref/DerefMut blocks, its Send/Sync impls) + the `unsafe impl Send for devmnt::MntCore` proof (5 sites), plus 05-07's OnceStatic (`get`'s published-pointer deref — 1 site), plus 05-07's IrqSpinLock (`lock`/`try_lock` UnsafeCell protocol entries + guard data borrows + `IrqLockGuard::drop`'s unlock — 7 blocks) and its Send/Sync impls (2) | impl ×7, block ×15 | the MCS queue's raw node pointers + the try-enter cell are the synchronization protocol; the MntCore proof is the BusyCell discipline's other half; OnceStatic is the publish-once boot cell behind smp::register_arch (SMP-02); IrqSpinLock is the IRQ-safe ranked lock (SMP-07/SMP-12) — its UnsafeCell entries are the same protocol, with the IRQ mask/restore closing same-cpu IRQ re-entry |
 | port/devip/waker.rs (mounted as `devip_waker`) — the 08-02 smoltcp waker bridge: the RawWaker vtable (clone/wake/wake_by_ref/drop fns + the shared wake path's slot deref block) + `Waker::from_raw` in `waker_for` | fn ×4, block ×2 | constructing a `core::task::Waker` is irreducibly unsafe (no safe constructor exists).  **Invariant: the wakee-pid slot is armed (written) before registration, read at wake, and never outlives the conv** (`&'static WakeSlot` makes it mechanical — slots live in conv-table/test statics).  The vtable wake records into the seam's pending-wake set only — never the wake hook directly (wake-after-drop, stack.rs's header).  Host pins (a)/(b) in `port/src/devip_tests.rs` exercise the wake path. |
 | port/fdt.rs — NONE (wave 2) | — | `from_usize` removed; `header_totalsize` + `new` are fully safe (the raw-pointer two-pass lives at the aarch64/riscv64 boot callers) |
 
