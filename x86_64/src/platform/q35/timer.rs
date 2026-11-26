@@ -233,8 +233,12 @@ pub fn tick() {
         println!("tick {}", prev / PRINT_EVERY);
     }
     // The exec-profile arms (the aarch64 tick's dev_exec block, re-keyed):
-    // the timeout sweep (alarm expiry + sleep wakes) then the round-robin
-    // preemption — both no-ops until the first proc exists.
+    // the timeout sweep (alarm expiry + sleep wakes).  The PREEMPTION is
+    // no longer here: trap.rs's dispatch_irq calls proc::preempt() itself
+    // after this handler returns, GATED on the tick having interrupted
+    // ring 3 on this CPU (SMP-03 — an idle CPU's per-CPU current_proc is
+    // stale and can name a proc now Running on a sibling; the 05-22
+    // double-run tear class).
     #[cfg(dev_exec)]
     {
         crate::proc::tick_timeouts(prev + 1);
@@ -251,7 +255,6 @@ pub fn tick() {
         // latent defect).
         #[cfg(dev_ip)]
         port::devip::stack::tick_check(prev + 1);
-        crate::proc::preempt();
     }
     // The console-RX sweep, cfg-keyed (aarch64's rx_irq echo/buffer
     // split re-keyed to the tick-polled 16550): the bring-up profile

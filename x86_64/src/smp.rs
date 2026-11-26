@@ -394,11 +394,14 @@ fn arch_ticks() -> u64 {
     crate::platform::q35::timer::ticks()
 }
 
-/// The SMP-03 lost-wakeup seam.  A no-op until 05-12's proc.rs wires
-/// `wake_pending` onto `Mach` (the port-side `prepare_block` call sites
-/// are already armed; the arch hook joins when the proc machinery's
-/// per-CPU migration lands).
-fn prepare_block() {}
+/// The SMP-03 lost-wakeup seam (05-12): clear the calling CPU's current
+/// proc's `wake_pending` BEFORE its pid becomes wake-targetable (the
+/// port-side register-under-subsystem-lock contract); the waker's
+/// wake_locked re-publishes it under PROC_TABLE, and the blocker's
+/// sched() consumes it under the same lock.
+fn prepare_block() {
+    crate::proc::prepare_block_current();
+}
 
 /// Register the x86_64 `SmpArch` hooks with `port::smp` (SMP-02, SMP-07,
 /// D-25).  Called once from main.rs after the BSP's Mach is initialized

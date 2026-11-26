@@ -150,15 +150,16 @@ impl CpuFp {
     }
 }
 
-/// This CPU's bookkeeping: the field in this CPU's Mach (each CPU
-/// maps its own Mach at dat::KMACH — the TSS access's idiom).
+/// This CPU's bookkeeping: the `fpu` field in this CPU's Mach, read
+/// through `%gs:0` (`dat::this_mach()`, SMP-02) — each CPU has its own
+/// Mach at its own kernel-half VA (CPU 0's at `dat::KMACH`, each AP's
+/// heap-allocated), so the bookkeeping is per-CPU by construction.
 #[cfg(not(test))]
 fn this_cpu() -> &'static CpuFp {
-    // SAFETY: the Mach lives at the fixed per-CPU VA l.S maps
-    // (dat::KMACH) for the kernel's lifetime, and Mach::init set `fpu`
-    // before any FP hook runs; CpuFp is all atomics, so a shared
+    // SAFETY-FREE on the read path: this_mach() is a shared &Mach (its
+    // own %gs:0 contract), and CpuFp is all atomics, so a shared
     // reference is sound.
-    unsafe { &(*(crate::dat::KMACH as *const crate::dat::Mach)).fpu }
+    &crate::dat::this_mach().fpu
 }
 
 /// Host tests: every test thread is its own "CPU" (one leaked CpuFp per

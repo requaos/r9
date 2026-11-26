@@ -12,15 +12,22 @@
 /// ranges; a compiled-in RAM size or base address never appears).
 use port::bitmapalloc::BitmapPageAlloc;
 use port::mem::{PhysAddr, PhysRange, PAGE_SIZE_4K};
-use port::mcslock::{Lock, LockNode};
+use port::mcslock::{IrqSpinLock, LockNode};
 use port::pagealloc::PageAllocError;
+use port::smp::LockRank;
 
 use crate::platform::q35::mb2::Facts;
 
 /// Set up the bitmap page allocator assuming everything is allocated.
 /// 32 bitmaps of 4 KiB cover 4 GiB of physical memory.
-static PAGE_ALLOC: Lock<BitmapPageAlloc<32, PAGE_SIZE_4K>> = Lock::new(
+///
+/// SMP-03 (D-22): `IrqSpinLock` at `LockRank::PageAlloc` (70) — the
+/// frame allocator is called from syscall AND fault/trap context on any
+/// CPU (a sibling CPU's demand fault allocates while this CPU is mid-
+/// syscall), so the lock is IRQ-safe and ranked above PROC_TABLE (50).
+static PAGE_ALLOC: IrqSpinLock<BitmapPageAlloc<32, PAGE_SIZE_4K>> = IrqSpinLock::new(
     "page_alloc",
+    LockRank::PageAlloc,
     const { BitmapPageAlloc::<32, PAGE_SIZE_4K>::new_all_allocated(PAGE_SIZE_4K) },
 );
 

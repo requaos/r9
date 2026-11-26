@@ -397,6 +397,10 @@ pub struct Mach {
     pub(crate) sched_context: SyncUnsafeCell<Label>,
     /// Whether sched_context has been seeded (05-12's SCHED_SEEDED).
     pub(crate) sched_seeded: AtomicBool,
+    /// This CPU's one-way park slot (05-12's BOOT_CTX): the boot/AP
+    /// context swtch'es OUT of it into the seeded scheduler context and
+    /// never resumes — the save is write-once, never read.
+    pub(crate) park_context: SyncUnsafeCell<Label>,
 
     pub debug_stack: ExStack, // Stack for debug exceptions
     pub bp_stack: ExStack,    // Stack for breakpoint exceptions
