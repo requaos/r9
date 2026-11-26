@@ -946,7 +946,20 @@ mod tests {
         // Tuple 0: dev 0 INTA -> GIC SPI 3, level-high.
         assert_eq!(entries[0].child_hi, 0x0000);
         assert_eq!(entries[0].pin, 1);
-        assert_eq!(entries[0].parent_phandle, 0x8002);
+        // The GIC phandle is dump-dependent: the `-smp 2` regeneration moves
+        // it from 0x8002 to 0x8003 because the extra cpu node is allocated
+        // first (SMP-09). Resolve the parent from the intc node instead of
+        // pinning a literal, so a future DTB regeneration cannot red this
+        // assertion without a real routing change.
+        let intc = dt
+            .find_compatible("arm,cortex-a15-gic")
+            .next()
+            .expect("GIC node in committed DTB");
+        let gic_phandle = dt
+            .property(&intc, "phandle")
+            .and_then(|p| dt.property_value_as_u32(&p))
+            .expect("GIC node publishes a phandle");
+        assert_eq!(entries[0].parent_phandle, gic_phandle);
         assert_eq!(entries[0].parent_irq, [0, 3, 0x04]);
         // Tuple 4: dev 1 INTA — the standard boot's NIC — -> SPI 4.
         assert_eq!(entries[4].child_hi, 0x0800);
