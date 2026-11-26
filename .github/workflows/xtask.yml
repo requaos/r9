@@ -14,10 +14,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-    - name: Run tests
+    - name: Run check and the clippy legs
       run: |
         cargo xtask check --verbose
         cargo xtask clippy --verbose
+        # CORR-05 (D-02, D-03): both compiled arch crates opt into the
+        # workspace clippy::undocumented_unsafe_blocks = deny lint via
+        # [lints] workspace = true, pinned by R6 in lintcontract.  The
+        # two arch legs clippy the gated configs so an undocumented
+        # unsafe block cannot hide behind the default leg's cfg set.
+        # Same bare-cargo mechanism as the default leg: rustup installs
+        # the pinned nightly-2026-01-30 toolchain (with the
+        # *-unknown-none targets) from rust-toolchain.toml; clippy needs
+        # no devshell tools (fdtput/qemu serve the qemu/initrd steps).
+        cargo xtask clippy --arch aarch64 --config virtshell --verbose
+        cargo xtask clippy --arch x86-64 --config q35cpu --verbose
 
   tests:
     runs-on: ubuntu-latest
