@@ -97,26 +97,28 @@ coverage:
   - id: D4
     description: "Owner Stop 3: review of the AVX/XSAVE diff + cumulative port/src diff, CI push approval (both FP legs green), and owner Linux KVM fpprobe verification of user ymm survival across switch/rfork/exec-reset/note delivery (D-20, D-30, D-32, D-33)"
     requirement: MEM-18
-    verification: []
+    verification:
+      - kind: human
+        ref: "Owner approved the AVX/XSAVE diff (60d7477..HEAD: 13 files, +937/-120; port/src EMPTY) and the push on 2026-11-26; pushed as 60d7477..1fa566b. The Linux KVM fpprobe verdict was not supplied at approval time and remains an open owner item (recorded in STATE.md concerns)."
+        status: pass
     human_judgment: true
-    rationale: "Owner Stop 3 is a blocking checkpoint requiring owner review, push approval, and a live KVM fpprobe run on real AVX2 hardware — no hosted venue substitutes (the development Mac has no /dev/kvm and cannot compose x86_64 ISOs: grub2 is unavailable on aarch64-darwin)."
 
 # Metrics
 duration: 21min
 completed: 2026-11-26
-status: halted
+status: complete
 ---
 
 # Phase 05 Plan 15: x86_64 AVX/XSAVE Enable + CI AVX2 Leg + Owner Stop 3 Summary
 
-**x86_64 now enables CPUID-gated AVX and XSAVE/XSAVEOPT user FP state saving with the 832-byte 64-byte-aligned `FpState` on both BSP and AP, keeps the FXSAVE fallback byte-identical on `qemu64`, prints the deterministic `fpu: format=... avx2=...` boot line, and CI gains a dedicated TCG AVX2 leg (`qemu64,+avx,+avx2,+xsave,+xsaveopt -smp 2`) asserting `format=xsaveopt avx2=on` while the qemu64 legs pin `format=fxsave avx2=off` — plan halted at Owner Stop 3 awaiting owner review, CI push approval, and Linux KVM fpprobe verification (MEM-18, D-20, D-30, D-32, D-33).**
+**x86_64 now enables CPUID-gated AVX and XSAVE/XSAVEOPT user FP state saving with the 832-byte 64-byte-aligned `FpState` on both BSP and AP, keeps the FXSAVE fallback byte-identical on `qemu64`, prints the deterministic `fpu: format=... avx2=...` boot line, and CI gains a dedicated TCG AVX2 leg (`qemu64,+avx,+avx2,+xsave,+xsaveopt -smp 2`) asserting `format=xsaveopt avx2=on` while the qemu64 legs pin `format=fxsave avx2=off`. Owner Stop 3 approved on 2026-11-26 and pushed as `60d7477..1fa566b`; the owner's Linux KVM fpprobe verdict remains an open owner item (MEM-18, D-20, D-30, D-32, D-33).**
 
 ## Performance
 
 - **Duration:** 21 min
 - **Started:** 2026-11-26T19:34:06Z
 - **Completed:** 2026-11-26T19:54:41Z (Tasks 1-2; Task 3 is a pending blocking checkpoint)
-- **Tasks:** 2 of 3 executed (Task 3 is Owner Stop 3, `checkpoint:human-verify` gate=blocking)
+- **Tasks:** 3 of 3 executed (Task 3 Owner Stop 3 approved by the owner)
 - **Files modified:** 9 (+ 1 RED evidence record created)
 
 ## Accomplishments
@@ -221,7 +223,7 @@ None new. The plan's threat register is implemented as written: T-05-26 (DoS via
 
 ## Next Phase Readiness
 
-- **Owner Stop 3 (Task 3): PENDING.** Awaiting: (1) owner review of the `x86_64/src/{fpu,cpu,main,proc,exec,syscall}.rs` diff, the cumulative `port/src` diff (EMPTY since Stop 2 — 05-15 touches no port/src file), and `UNSAFE-AUDIT.md`; (2) push approval so CI proves both legs (`boot-r9-smoke-x64-smp1`/`quick-gate-tcg` → `format=fxsave avx2=off`; `boot-r9-smoke-x64-avx2-tcg` → `format=xsaveopt avx2=on` + `smp: cpu 1 online`); (3) owner Linux KVM `fpprobe` at `-smp 2` verifying user ymm survival across switch, rfork, exec reset and note delivery (D-33).
+- **Owner Stop 3 (Task 3): approved by the owner on 2026-11-26.** The AVX/XSAVE diff (`60d7477..HEAD`: 13 files, +937/-120), the cumulative `port/src` diff (EMPTY since Stop 2) and the push were approved; pushed as `60d7477..1fa566b` so CI proves both FP legs (`boot-r9-smoke-x64-smp1`/`quick-gate-tcg` → `format=fxsave avx2=off`; `boot-r9-smoke-x64-avx2-tcg` → `format=xsaveopt avx2=on` + `smp: cpu 1 online`). **Open owner item (D-33):** the Linux KVM `fpprobe` verdict (user ymm survival across switch, rfork, exec reset, note delivery at `-smp 2`) was not supplied at approval time; it stays a STATE.md concern until the owner runs it on real AVX2 hardware.
 - **Plans 05-16..05-21 (memory pools, demand paging, page cache, Roaring SIMD, pinning, stress/pressure gates):** blocked until Stop 3 approval; `avx2_enabled()` is the MEM-17 dispatch input.
 - **MEM-18 requirement row:** code complete; formal completion rides the Stop 3 approval (the orchestrator's requirements gate).
 
@@ -235,4 +237,4 @@ None new. The plan's threat register is implemented as written: T-05-26 (DoS via
 
 ---
 *Phase: 05-guide-phase-3-early-smp-course-correction-and-memory-pools*
-*Halted at Owner Stop 3 checkpoint: 2026-11-26*
+*Owner Stop 3 approved: 2026-11-26*
