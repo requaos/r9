@@ -316,7 +316,7 @@ proc xstart_rio {wid} {
 
 # --- the private Xvfb display (rio leg only) ---------------------------
 proc start_xvfb {} {
-	global run_tag gate_dir
+	global env run_tag gate_dir
 	set display_file [file join $gate_dir xvfb-display]
 	catch {file delete -force $display_file}
 	set script {R9_RUN_ID=$1 Xvfb -displayfd 3 -screen 0 1024x768x24 -nolisten tcp 3>"$2" >/dev/null 2>&1 & echo $!}
