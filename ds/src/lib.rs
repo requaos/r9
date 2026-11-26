@@ -30,3 +30,7 @@ pub mod roaring;
 mod setops;
 #[forbid(unsafe_code)]
 pub mod clientset;
+// The CORR-03 slab also carries `#![forbid(unsafe_code)]` as an inner
+// attribute at the top of slab.rs itself (Phase 5 D-09).
+#[forbid(unsafe_code)]
+pub mod slab;

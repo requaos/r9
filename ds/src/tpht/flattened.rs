@@ -59,7 +59,7 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU8, AtomicU16, AtomicU32, AtomicU64, Ordering, fence};
 
-use super::chained::ChainedTphtOverflow;
+use super::chained::{BANK_NODES, ChainedTphtOverflow};
 use super::{HOME_SLOTS, NoProbe, Probe, SPILL_THRESHOLD, TinyPtr, TphtError, feistel, index_bits};
 
 /// Where [`FlattenedTphtShard::lookup`] resolved an entry: `home` is
@@ -154,8 +154,43 @@ pub struct FlattenedTphtShard<const WORDS: usize, P: Probe = NoProbe> {
 /// nodes per 1,024 home slots (Claude's discretion).  The D-15 measurement and
 /// the hit-rate pin size their banks explicitly with `measure::banks_for`; a
 /// caller that expects more spill uses [`FlattenedTphtShard::with_banks`].
+///
+/// **Production bank sizing (DEBT-04, measured 2026-11-26).**  At
+/// `default_banks` a shard holds >90% home-hit with zero `BanksFull` across
+/// all five `Distribution::ALL` fixtures at 1,024 / 4,096 / 16,384 blocks
+/// through 95% occupancy (weakest run 0.9185); at the 90% production target
+/// the weakest run is 0.9382.  At 100% occupancy inserts still never fail,
+/// but the home-hit rate sits at the 0.90 bar's edge (weakest 0.8977 at
+/// 4,096 blocks sequential; 0.9004 at 16,384 sequential — the D-15 chosen
+/// cell), so a consumer that wants margin above the bar targets ≤95%
+/// occupancy.  The home-hit rate is bank-independent (it is a function of
+/// the block count and `SPILL_THRESHOLD` only); the bank count gates
+/// `BanksFull` onset alone.  The ignored `measure_default_banks_table` test
+/// below regenerates the full table on demand.
 fn default_banks(num_blocks: usize) -> usize {
     num_blocks.div_ceil(64).max(2)
+}
+
+/// The bank count that holds >90% home-hit and zero `BanksFull` at
+/// `max_occ_pct` occupancy of `num_blocks` home blocks, for a default-bank
+/// TPHT consumer such as `palloc.hash` (MEM-16) or the Phase 6 union dcache
+/// (DEBT-04, D-18, D-29).
+///
+/// **The rule: twice the measured worst-case spill volume.**  At occupancy
+/// `p` a shard holds `num_blocks * 16 * p / 100` entries; the spill — the
+/// entries that do not resolve at home — is under 10% of them on every
+/// measured fixture at the 90% production target (weakest home-hit 0.9382).
+/// Sizing two-choice 255-node banks at twice that spill —
+/// `entries / (BANK_NODES * 5)` — runs the banks at or below half average
+/// fill, which the 2026-11-26 measurement shows `BanksFull`-free with the
+/// documented home-hit rates on every fixture at 1,024 / 4,096 / 16,384
+/// blocks (see `default_banks`).  The fixtures are assumed representative
+/// of `palloc.hash` `(image_id, page_idx)` keys; the MEM-16 page-cache
+/// workload verifies that live in plan 05-21 (05-05 flagged assumption).
+pub fn banks_for_occupancy(num_blocks: usize, max_occ_pct: u8) -> usize {
+    assert!(max_occ_pct <= 100, "an occupancy is a percentage in 0..=100");
+    let entries = num_blocks * HOME_SLOTS * max_occ_pct as usize / 100;
+    entries.div_ceil(BANK_NODES * 5).max(2)
 }
 
 impl<const WORDS: usize> FlattenedTphtShard<WORDS, NoProbe> {
@@ -592,6 +627,167 @@ mod tests {
     /// sets this to the rule's chosen occupancy from the measurement; the bar
     /// itself is never raised.
     const HIT_RATE_OCCUPANCY: f64 = 1.00;
+
+    /// The DEBT-04 generator: home-hit and `BanksFull` onset at production
+    /// `default_banks` and at the `banks_for_occupancy` count, across all
+    /// five distributions at 1,024 / 4,096 / 16,384 blocks and occupancies
+    /// 0.50 to 1.00, two seeds.  Run on demand, never under Miri, never a
+    /// pin — its table is what the `default_banks` doc records and the
+    /// `default_banks_production_sizing` pin re-runs at one cell.
+    #[test]
+    #[ignore = "generator run on demand for the DEBT-04 evidence; not part of the pin suite"]
+    fn measure_default_banks_table() {
+        use crate::tpht::measure::{entries_at, keys};
+        let seeds = [GRID_SEEDS[0], GRID_SEEDS[1]];
+        for &blocks in &[1_024usize, 4_096, 16_384] {
+            for &distribution in Distribution::ALL.iter() {
+                for &percent in &[50usize, 70, 80, 85, 90, 95, 100] {
+                    let entries = entries_at(blocks, percent);
+                    for (label, banks) in [
+                        ("default", default_banks(blocks)),
+                        ("rule", banks_for_occupancy(blocks, percent as u8)),
+                    ] {
+                        let mut full_at: Vec<String> = Vec::new();
+                        let mut hit_runs: Vec<(usize, usize)> = Vec::new();
+                        for &seed in &seeds {
+                            let shard = FlattenedTphtShard::<2>::with_banks(blocks, banks)
+                                .expect("valid block and bank counts");
+                            let mut inserted = 0usize;
+                            let mut full = None;
+                            for (i, key) in keys(distribution, seed, 0).take(entries).enumerate() {
+                                match shard.insert(key, [key, !key], |v| v[0] == key) {
+                                    Ok(_) => inserted += 1,
+                                    Err(TphtError::BanksFull) => {
+                                        full = Some(i);
+                                        break;
+                                    }
+                                    Err(e) => panic!("unexpected insert error: {e:?}"),
+                                }
+                            }
+                            let mut hits = 0usize;
+                            for key in keys(distribution, seed, 0).take(inserted) {
+                                let found = shard
+                                    .lookup(key, |v| v[0] == key)
+                                    .expect("a present key resolves");
+                                if found.home.is_some() {
+                                    hits += 1;
+                                }
+                            }
+                            hit_runs.push((hits, inserted));
+                            if let Some(at) = full {
+                                full_at.push(format!("{at}/{entries}"));
+                            }
+                        }
+                        let weakest = hit_runs
+                            .iter()
+                            .map(|&(h, l)| h as f64 / l.max(1) as f64)
+                            .fold(f64::INFINITY, f64::min);
+                        println!(
+                            "DEBT04 blocks={blocks} banks={label}:{banks} dist={} occ={percent}% \
+                             home_hit_min={weakest:.4} banksfull={}",
+                            distribution.name(),
+                            if full_at.is_empty() { "none".to_string() } else { full_at.join(",") }
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The DEBT-04 production-sizing pin: at the 90% production target
+    /// occupancy, both `default_banks` and the `banks_for_occupancy` count
+    /// hold over 90% home-hit with zero `BanksFull` on every distribution
+    /// (the bar is native-only; under Miri the pin proves inserts succeed
+    /// and resolve at the small size).  Runs on every `cargo test -p ds`.
+    #[test]
+    fn default_banks_production_sizing() {
+        use crate::tpht::measure::{entries_at, exceeds_bar, keys};
+        let blocks = miri_scaled(4_096, 4);
+        let seed_count = miri_scaled(2, 1);
+        let dist_count = miri_scaled(Distribution::ALL.len(), 1);
+        let percent = 90usize; // the production target occupancy
+        let entries = entries_at(blocks, percent);
+
+        // The rule is a pure function of the target: at least two banks and
+        // monotone nondecreasing in occupancy.
+        assert!(banks_for_occupancy(blocks, 0) >= 2, "the rule never drops below two banks");
+        let mut previous = 0;
+        for p in [0u8, 50, 70, 80, 85, 90, 95, 100] {
+            let banks = banks_for_occupancy(blocks, p);
+            assert!(banks >= previous, "the rule is monotone nondecreasing in occupancy ({p}%)");
+            previous = banks;
+        }
+        // The default carries the 90% production target with margin, and the
+        // 100% sizing stays at or under the default at every measured
+        // production size.
+        assert!(
+            default_banks(blocks) >= banks_for_occupancy(blocks, 90),
+            "default_banks covers the 90% target at the pin's size"
+        );
+        for &n in &[1_024usize, 4_096, 16_384] {
+            assert!(
+                banks_for_occupancy(n, 100) <= default_banks(n),
+                "the 100% sizing fits inside default_banks({n})"
+            );
+        }
+
+        let mut weakest: Option<(usize, usize)> = None;
+        for (label, banks) in [
+            ("default", default_banks(blocks)),
+            ("rule", banks_for_occupancy(blocks, percent as u8)),
+        ] {
+            for &distribution in Distribution::ALL.iter().take(dist_count) {
+                for &seed in GRID_SEEDS.iter().take(seed_count) {
+                    let shard = FlattenedTphtShard::<2>::with_banks(blocks, banks)
+                        .expect("the pin's block and bank counts are valid");
+                    for (i, key) in keys(distribution, seed, 0).take(entries).enumerate() {
+                        let result = shard.insert(key, [key, !key], |v| v[0] == key);
+                        assert!(
+                            result.is_ok(),
+                            "no insert may fail with BanksFull at {percent}% occupancy \
+                             (banks={label}:{banks}, {:?}, seed {seed:#018x}, insert {i}): \
+                             {result:?}",
+                            distribution
+                        );
+                    }
+                    let mut hits = 0;
+                    let mut lookups = 0;
+                    for key in keys(distribution, seed, 0).take(entries) {
+                        let found =
+                            shard.lookup(key, |v| v[0] == key).expect("a present key must resolve");
+                        assert_eq!(found.value, [key, !key], "lookup returns the inserted value");
+                        if found.home.is_some() {
+                            hits += 1;
+                        }
+                        lookups += 1;
+                    }
+                    println!(
+                        "PIN banks={label}:{banks} dist={} seed={seed:#018x} hits={hits} \
+                         lookups={lookups} fraction={:.6}",
+                        distribution.name(),
+                        hits as f64 / lookups as f64
+                    );
+                    let weakest_run = weakest.get_or_insert((hits, lookups));
+                    if hits * weakest_run.1 < weakest_run.0 * lookups {
+                        *weakest_run = (hits, lookups);
+                    }
+                    assert!(
+                        cfg!(miri) || exceeds_bar(hits, lookups),
+                        "over 0.90 of present keys resolve at home at the {percent}% production \
+                         target (banks={label}:{banks}, {:?}, seed {seed:#018x}): \
+                         {hits}/{lookups}",
+                        distribution
+                    );
+                }
+            }
+        }
+        if let Some((hits, lookups)) = weakest {
+            println!(
+                "PIN weakest fraction={:.6} hits={hits} lookups={lookups}",
+                hits as f64 / lookups as f64
+            );
+        }
+    }
 
     /// A [`Probe`] that counts the reader's two kinds of memory access, so
     /// `deref_tiny` can be shown to make exactly one arena read and no header

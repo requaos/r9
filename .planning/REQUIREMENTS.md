@@ -46,7 +46,7 @@ v3.0 audit follow-ups:
 - [ ] **DEBT-01**: `cargo xtask test-9p` and `cargo test -p xtask` run in CI and as part of `cargo xtask test` (v3.0 audit INT-03, INT-04)
 - [ ] **DEBT-02**: `04-VALIDATION.md` is reconciled from `draft` to a completed validation record (v3.0 audit)
 - [ ] **DEBT-03**: The Phase 4 boot-iso evidence text no longer claims the fixes moved the linked kernel bytes (v3.0 audit INT-02)
-- [ ] **DEBT-04**: The TPHT home-hit property is measured at production bank sizes and the bank-sizing rule is written down before the first default-bank TPHT consumer is built (v3.0 audit INT-05; `FidTable` no longer uses TPHT after CORR-03, so the consumers are the union dcache and any page cache)
+- [x] **DEBT-04**: The TPHT home-hit property is measured at production bank sizes and the bank-sizing rule is written down before the first default-bank TPHT consumer is built (v3.0 audit INT-05; `FidTable` no longer uses TPHT after CORR-03, so the consumers are the union dcache and any page cache)
 - [ ] **DEBT-05**: `docs/threat-model.md` matches the rescope: software protection of pages at rest and the stale-frame, shadow-frame and sibling-key items are removed from scope, hardware MMU isolation is stated as the memory boundary, and the `rfork` text says bits 18 to 20 were retired and `RFNOLEGACY` is bit 18 (v3.0 review WR-04, widened by the rescope)
 
 Two-CPU SMP:
@@ -240,7 +240,7 @@ Which phases cover which requirements. Each requirement maps to exactly one phas
 | DEBT-01 | Phase 5 | Pending |
 | DEBT-02 | Phase 5 | Pending |
 | DEBT-03 | Phase 5 | Pending |
-| DEBT-04 | Phase 5 | Pending |
+| DEBT-04 | Phase 5 | Complete |
 | DEBT-05 | Phase 5 | Pending |
 | SMP-01 | Phase 5 | Pending |
 | SMP-02 | Phase 5 | Pending |
