@@ -163,6 +163,10 @@ pub(crate) const QID_RANDOM: u64 = 8;
 /// (both are non-blocking reads from the same DRBG; Phase 11 hardens
 /// and splits the semantics).  Read-only (0444).
 pub(crate) const QID_URANDOM: u64 = 9;
+/// The sysstat file (Phase 5, 05-16, MEM-07, D-17) — a read-only file
+/// reporting the lock-free evictor counters as
+/// `evictor: dropped_text=<n> dropped_data=<n> pinned_skipped=<n>\n`.
+pub(crate) const QID_SYSSTAT: u64 = 10;
 
 /// attach: the devcons root chan (one console tree this era — the attach
 /// spec is empty, the devroot attach precedent).
@@ -198,7 +202,7 @@ const TIME_DEFAULT: &[u8] = b"1700000000\n";
 /// The per-file static metadata (name, qid, mode) — the walk table and the
 /// directory listing share it.  lengths are computed at read/stat time
 /// (hostowner's and time's vary).
-const FILES: [(&[u8], u64, u32); 9] = [
+const FILES: [(&[u8], u64, u32); 10] = [
     (b"cons", QID_CONS, 0o666),
     (b"null", QID_NULL, 0o666),
     (b"user", QID_USER, 0o444),
@@ -208,6 +212,7 @@ const FILES: [(&[u8], u64, u32); 9] = [
     (b"pid", QID_PID, 0o444),
     (b"random", QID_RANDOM, 0o444),
     (b"urandom", QID_URANDOM, 0o444),
+    (b"sysstat", QID_SYSSTAT, 0o444),
 ];
 
 /// The arch-side current-pid hook for the pid file (the devproc
@@ -323,6 +328,23 @@ fn pid_len() -> u64 {
     pid_content().map(|c| c.len() as u64).unwrap_or(0)
 }
 
+/// The `#c/sysstat` line: the lock-free evictor counters (MEM-07, D-17).
+fn sysstat_content() -> alloc::vec::Vec<u8> {
+    let stats = crate::palloc::evictor_stats();
+    alloc::format!(
+        "evictor: dropped_text={} dropped_data={} pinned_skipped={}\n",
+        stats.dropped_text,
+        stats.dropped_data,
+        stats.pinned_skipped
+    )
+    .into_bytes()
+}
+
+/// The sysstat file's current length (for stat/dir listings).
+fn sysstat_len() -> u64 {
+    sysstat_content().len() as u64
+}
+
 /// Walk a single name component from the devcons root.
 pub fn walk(c: &crate::dat::Chan, name: &[u8]) -> crate::Result<crate::dat::Chan> {
     if c.qid.typ != QTDIR || c.qid.path != QID_ROOT {
@@ -352,10 +374,11 @@ pub fn open(c: &crate::dat::Chan, mode: u32) -> crate::Result<crate::dat::Chan> 
     if (c.qid.path == QID_USER
         || c.qid.path == QID_PID
         || c.qid.path == QID_RANDOM
-        || c.qid.path == QID_URANDOM)
+        || c.qid.path == QID_URANDOM
+        || c.qid.path == QID_SYSSTAT)
         && mode != crate::dat::OREAD
     {
-        return Err("devcons: user/pid/random/urandom are read-only");
+        return Err("devcons: user/pid/random/urandom/sysstat are read-only");
     }
     let mut nc = crate::dat::Chan::new(c.dev, c.qid, mode);
     nc.path = c.path.clone();
@@ -446,6 +469,8 @@ pub fn stat(c: &crate::dat::Chan, sb: &mut [u8]) -> crate::Result<u64> {
         pid_len()
     } else if *qid == QID_USER {
         user_len()
+    } else if *qid == QID_SYSSTAT {
+        sysstat_len()
     } else {
         0
     };
@@ -481,6 +506,8 @@ pub fn read(c: &mut crate::dat::Chan, buf: &mut [u8], offset: u64) -> crate::Res
                     pid_len()
                 } else if qid == QID_USER {
                     user_len()
+                } else if qid == QID_SYSSTAT {
+                    sysstat_len()
                 } else {
                     0
                 };
@@ -551,6 +578,17 @@ pub fn read(c: &mut crate::dat::Chan, buf: &mut [u8], offset: u64) -> crate::Res
             buf[..n].copy_from_slice(&avail[..n]);
             n as u64
         }
+        QID_SYSSTAT => {
+            // The read-only evictor counter file (MEM-07, D-17): rebuilt
+            // per call from the lock-free `port::palloc::evictor_stats()`
+            // snapshot, honouring `off` so `cat #c/sysstat` reaches EOF.
+            let content = sysstat_content();
+            let start = (off as usize).min(content.len());
+            let avail = &content[start..];
+            let n = avail.len().min(buf.len());
+            buf[..n].copy_from_slice(&avail[..n]);
+            n as u64
+        }
         // /dev/random + /dev/urandom (D-17): fresh bytes from the
         // ChaCha20 DRBG on every read — streaming devices, the offset
         // ignored (the cons/devpipe streaming precedent).  Both files
@@ -580,6 +618,7 @@ pub fn write(c: &mut crate::dat::Chan, buf: &[u8]) -> crate::Result<u64> {
         QID_CONS => Ok(write_bytes(buf) as u64),
         QID_NULL => Ok(buf.len() as u64),
         QID_USER => Err("devcons: user is read-only"),
+        QID_SYSSTAT => Err("devcons: sysstat is read-only"),
         QID_RANDOM | QID_URANDOM => Err("devcons: random/urandom are read-only"),
         QID_HOSTOWNER => {
             // The donor hostownerwrite gate + bound (sysauth.c:148-165,
@@ -1350,6 +1389,62 @@ pub(crate) mod tests {
             Qid { path: 0, vers: 0, typ: QTDIR },
             0,
         )
+    }
+
+    /// Parse the three counters out of `#c/sysstat`.
+    fn sysstat_counters(text: &str) -> (u64, u64, u64) {
+        let (mut text_n, mut data_n, mut pinned_n) = (0, 0, 0);
+        for word in text.split_whitespace() {
+            if let Some(v) = word.strip_prefix("dropped_text=") {
+                text_n = v.parse().expect("dropped_text is a number");
+            } else if let Some(v) = word.strip_prefix("dropped_data=") {
+                data_n = v.parse().expect("dropped_data is a number");
+            } else if let Some(v) = word.strip_prefix("pinned_skipped=") {
+                pinned_n = v.parse().expect("pinned_skipped is a number");
+            }
+        }
+        (text_n, data_n, pinned_n)
+    }
+
+    /// MEM-07/D-17: `#c/sysstat` is a read-only file formatting the
+    /// lock-free evictor counters, honouring offsets and EOF.
+    #[test]
+    fn sysstat_reports_evictor_counters_read_only() {
+        let _stats = crate::palloc::stats_test_guard();
+        let before = crate::palloc::evictor_stats();
+        crate::palloc::record_evict_text();
+        crate::palloc::record_evict_data();
+        crate::palloc::record_pinned_skipped();
+        let after = crate::palloc::evictor_stats();
+        assert_eq!(after.dropped_text, before.dropped_text + 1);
+        assert_eq!(after.dropped_data, before.dropped_data + 1);
+        assert_eq!(after.pinned_skipped, before.pinned_skipped + 1);
+
+        let root = root_chan();
+        let chan = super::walk(&root, b"sysstat").expect("#c/sysstat exists");
+        let mut open = super::open(&chan, crate::dat::OREAD).expect("OREAD on #c/sysstat");
+        let mut buf = [0u8; 160];
+        let n = super::read(&mut open, &mut buf, 0).expect("read #c/sysstat");
+        let text = core::str::from_utf8(&buf[..n as usize]).expect("ASCII sysstat");
+        assert!(text.starts_with("evictor: dropped_text="), "format: {text:?}");
+        assert!(text.ends_with('\n'), "the line ends with a newline");
+        assert_eq!(
+            sysstat_counters(text),
+            (after.dropped_text, after.dropped_data, after.pinned_skipped),
+            "the file reflects evictor_stats()"
+        );
+
+        // Offset discipline: the tail past offset 9.
+        let mut chan2 = super::open(&chan, crate::dat::OREAD).expect("second OREAD");
+        let mut tail = [0u8; 160];
+        let m = super::read(&mut chan2, &mut tail, 9).expect("offset read");
+        assert_eq!(&tail[..m as usize], &text.as_bytes()[9..]);
+
+        // Read-only: OWRITE is refused and `write` errors.
+        assert!(super::open(&chan, crate::dat::OWRITE).is_err(), "OWRITE is refused");
+        assert!(super::write(&mut open, b"x").is_err(), "write is refused");
+        let mut sb = [0u8; 160];
+        assert!(super::stat(&chan, &mut sb).is_ok(), "stat works");
     }
 
     /// The serve pin: /dev/user reads back EXACTLY the current proc's
