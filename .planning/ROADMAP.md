@@ -76,32 +76,73 @@ Milestone numbering continues from the closed Harvey-rooted milestone v2.1.
 **Plans:** 27 plans
 
 Plans:
+**Wave 1**
 - [ ] 05-01-PLAN.md — Repair CI (`drawterm-gate.expect` `global env`, unmask all 7 gate jobs), pure `boot-iso` derivation, and `cargo xtask test` wiring (`CORR-01`, `CORR-02`, `DEBT-01`)
+
+**Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 05-02-PLAN.md — `rfork` bit cleanup (`RFNOLEGACY = 1<<18`), v3.0 threat model sync, and Phase 4 validation/evidence closure (`CORR-04`, `DEBT-02`, `DEBT-03`, `DEBT-05`)
 - [ ] 05-03-PLAN.md — Document all 7 `aarch64` and first 24 `x86_64` undocumented `unsafe` sites (`CORR-05` Part A)
-- [ ] 05-04-PLAN.md — Complete `x86_64` workspace deny-lint opt-in, `UNSAFE-AUDIT.md` reconciliation, `lintcontract` R6, and CI clippy legs (`CORR-05` Part B)
 - [ ] 05-05-PLAN.md — Generic `#![forbid(unsafe_code)]` Boehm seqlock slab in `ds/src/slab.rs` and `DEBT-04` TPHT production bank sizing (`CORR-03`, `DEBT-04`)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 05-04-PLAN.md — Complete `x86_64` workspace deny-lint opt-in, `UNSAFE-AUDIT.md` reconciliation, `lintcontract` R6, and CI clippy legs (`CORR-05` Part B)
+
+**Wave 4** *(blocked on Wave 3 completion)*
 - [ ] 05-06-PLAN.md — Refactor `port/src/fid.rs` onto `ds::slab`, update `aead_link.rs`, D-13 three-place amendments, `CORR-05` policy doc sync, and **Owner Stop 1** (`CORR-03`, `CORR-05`)
+
+**Wave 5** *(blocked on Wave 4 completion)*
 - [ ] 05-07-PLAN.md — Portable SMP primitives (`port/src/{smp,mcslock,globalalloc}.rs` & arch `allocator.rs`): `IrqSpinLock`, `LockRank` table, `#[cfg(debug_assertions)]` watchdog, spin-poll `ShootdownCoordinator`, and SMP-safe `GlobalQuickAlloc` (`SMP-02`, `SMP-03`, `SMP-07`, `SMP-12`)
+
+**Wave 6** *(blocked on Wave 5 completion)*
 - [ ] 05-08-PLAN.md — Per-CPU work-stealing `RunQueues` (`port/src/sched.rs`), `FidTable` CPU-ID routing, and `port/` `BusyCell` & lost-wakeup fixes (`SMP-03`, `SMP-11`)
+
+**Wave 7** *(blocked on Wave 6 completion)*
 - [ ] 05-09-PLAN.md — `aarch64` 2-CPU hardware bring-up: `TPIDR_EL1` `PerCpu`, `mod smp`, `l.S` `secondary_start`, `trap.S` migration, PSCI `CPU_ON` (incl. `INVALID_PARAMETERS` `-smp 1` handling), and GICv2/v3 SGIs (`SMP-02`, `SMP-04`, `SMP-07`)
+
+**Wave 8** *(blocked on Wave 7 completion)*
 - [ ] 05-10-PLAN.md — `aarch64` single-CPU static & IRQ-shared audit (`proc`, `syscall`, `fpu`, `pagealloc`, `pl011` `CONS_RX`, `pci` `VIRTIO_NET`) and `RunQueues` + `wake_pending` wiring (`SMP-02`, `SMP-03`, `SMP-11`)
 - [ ] 05-23-PLAN.md — Regenerate committed `aarch64/lib/virt-gicv{2,3,2-lowecam}.{dts,dtb}` with `-smp 2` so `/cpus` declares `cpu@0` and `cpu@1` (`SMP-04`, `SMP-09`)
+
+**Wave 9** *(blocked on Wave 8 completion)*
 - [ ] 05-22-PLAN.md — `aarch64` CPU 1 PSCI bring-up, per-CPU timers, SGI 0/1 dispatch, `R9_SMP`-aware `smoke-r9.expect`, and `-smp 2` HVF+TCG boot (`SMP-04`, `SMP-07`, `SMP-09`, `SMP-12`)
+
+**Wave 10** *(blocked on Wave 9 completion)*
 - [ ] 05-11-PLAN.md — `x86_64` 2-CPU hardware bring-up: ACPI MADT type-0/9, dual xAPIC/x2APIC ICR (`mfence; lfence`), `ap_trampoline.S`, `mod smp`, `%gs:0` `Mach`, and canonical `intrspecial` (`SMP-01`, `SMP-02`, `SMP-07`)
+
+**Wave 11** *(blocked on Wave 10 completion)*
 - [ ] 05-12-PLAN.md — `x86_64` single-CPU static & IRQ-shared audit (`proc`, `syscall`, `fpu`, `pagealloc`, `pci` `0xCF8/0xCFC` + `VIRTIO_NET`, `uart16550`), `RunQueues` + `wake_pending`, `ap_main` init, per-CPU LAPIC timer, and boot shootdown self-check (`SMP-01`, `SMP-02`, `SMP-03`, `SMP-07`, `SMP-11`, `SMP-12`)
+
+**Wave 12** *(blocked on Wave 11 completion)*
 - [ ] 05-13-PLAN.md — Migrate remaining `aarch64` gates, both `nix/gates/boot-r9*.sh` launchers, and first 3 `x86_64` smoke gates to `-smp 2` default with `R9_SMP` override (`SMP-01`, `SMP-04`, `SMP-09`)
 - [ ] 05-24-PLAN.md — Migrate 7 core `x86_64/lib/config_q35*.toml` profiles (incl. CI `boot-test-x86-64` configs) to `smp = 2` (`SMP-01`, `SMP-09`)
 - [ ] 05-25-PLAN.md — Migrate remaining 2 `x86_64/lib/config_q35*.toml` and first 5 `aarch64/lib/config_virt*.toml` profiles to `smp = 2` (`SMP-01`, `SMP-04`, `SMP-09`)
 - [ ] 05-26-PLAN.md — Migrate remaining 7 `aarch64/lib/config_virt*.toml` profiles to `smp = 2` (`SMP-04`, `SMP-09`)
+
+**Wave 13** *(blocked on Wave 12 completion)*
 - [ ] 05-14-PLAN.md — Migrate remaining 7 `x86_64` gates to `-smp 2`, wire 1 `-smp 1` smoke leg/arch in CI, run `aarch64` quick pass, and **Owner Stop 2** (`SMP-01`, `SMP-04`, `SMP-09`)
+
+**Wave 14** *(blocked on Wave 13 completion)*
 - [ ] 05-15-PLAN.md — `x86_64` CPUID-gated AVX/XSAVE (832B `FpState`, wired into BSP & AP in `main.rs`) + `qemu64` FXSAVE fallback, CI TCG AVX2 leg, and **Owner Stop 3** (`MEM-18`)
+
+**Wave 15** *(blocked on Wave 14 completion)*
 - [ ] 05-16-PLAN.md — Portable Roaring `PageAlloc` pools + ~15% High-Water Pager, 64B `SuperpageResidency`, and Flattened-TPHT `palloc.hash` `PageCache` (`MEM-07`, `MEM-08`, `MEM-16`)
+
+**Wave 16** *(blocked on Wave 15 completion)*
 - [ ] 05-17-PLAN.md — Roaring AVX2 & NEON inline-asm kernels (`ds/src/setops_simd.rs`) behind `ds/src/setops.rs` + `port::setops` R4 boundary + `fpu::with_simd()` + `lintcontract` R3 (`MEM-17`)
+
+**Wave 17** *(blocked on Wave 16 completion)*
 - [ ] 05-18-PLAN.md — `aarch64` RO shared text via `palloc.hash`, `pagealloc.rs` Roaring pools, write-protect dirty tracking, live evictor, and `UserSlice`/`UserSliceMut` RAII `PinGuard` with EL1 promotion (`MEM-07`, `MEM-10`, `MEM-15`, `MEM-16`)
+
+**Wave 18** *(blocked on Wave 17 completion)*
 - [ ] 05-19-PLAN.md — `x86_64` full demand loading (`#PF` pager), `pagealloc.rs` Roaring pools, RO shared text, race-free `PTE_D` atomic-swap evictor, and `UserSlice`/`UserSliceMut` RAII `PinGuard` (`MEM-07`, `MEM-10`, `MEM-14`, `MEM-15`, `MEM-16`)
+
+**Wave 19** *(blocked on Wave 18 completion)*
 - [ ] 05-20-PLAN.md — Boot-switch `aeadloop=1` in-kernel `9P2000.aead` loopback server on real `FidTable` (`SMP-13`)
+
+**Wave 20** *(blocked on Wave 19 completion)*
 - [ ] 05-27-PLAN.md — Author `-smp 2` stress (`SMP-08`) & small-memory pressure (`MEM-15`) expect scripts + `nix/gates/*.sh` wrappers (`fdtput` `R9_BOOTARGS` on `aarch64`, `r9-iso-builder --append` on `x86_64`) (`SMP-08`, `SMP-09`, `MEM-10`, `MEM-15`, `MEM-16`, `MEM-17`)
+
+**Wave 21** *(blocked on Wave 20 completion)*
 - [ ] 05-21-PLAN.md — Wire stress & pressure Nix apps, `xtask`, and CI jobs on both arches, run `aarch64` HVF+TCG twice consecutively, and **Owner Stop 4** (`SMP-08`, `SMP-09`, `MEM-10`, `MEM-15`, `MEM-16`, `MEM-17`)
 **Open questions**: Settled at the phase discussion on 2026-11-25; the decisions are D-01 to D-35 in `.planning/phases/05-guide-phase-3-early-smp-course-correction-and-memory-pools/05-CONTEXT.md`. Order: course correction and audit follow-ups, then SMP on aarch64 and x86_64, then the memory work. The phase is planned in one pass with four owner stops (after the course correction; after SMP; after the AVX/XSAVE change; at phase end); the `port/src` diff-first rule is waived for this phase with the cumulative diff reviewed at each stop. CI is the per-commit check for x86_64 and the SMP and stress gates also run under KVM on the owner's x86_64 Linux host at stops 2 to 4. Still to verify before planning: what is actually red at `900f58b`. `boot-iso` becoming a pure derivation changes the owner's byte-change rule: once it lands, green CI on the commit is the check for an x86_64 kernel byte change and no hash is committed; the old rule holds until then. An aarch64 kernel byte change gets the quick pass. For research to confirm: that the fence-paired seqlock is sound in safe Rust on all three architectures; how a dropped shared text page is unmapped from every address space; which `port/` paths sleep while holding user memory; whether CI can run an AVX2 CPU model under TCG in acceptable time. From the superseded Phase 5 research, to re-verify: `x86_64/` has 32 undocumented `unsafe` blocks in 9 files and aarch64 has 7; the x86_64 table in `UNSAFE-AUDIT.md` names files that no longer exist; `xtask/src/test9p.rs` pins the leg count; neither architecture tracks dirty pages; the page-in paths panic on allocation failure; `UserSlice` holds nothing that could release a pin. More than two CPUs, the full arm64 HVF series and the WINDOWS items are Phase 8. Deferred: the geometric chunk spine for slab shards (owner design, Phase 6 or later).
 
