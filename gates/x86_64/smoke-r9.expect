@@ -7,7 +7,9 @@
 # as an mb2 tag-3
 # module off the same ISO, the 14-05 D-03 delivery):
 #
-#   staged boot (banner → paqfs... → version... → %  prompt) →
+#   staged boot (banner → fpu: format=... avx2=... (MEM-18's
+#   CPUID-selected save-format line, exact for known CPU shapes,
+#   well-formed-pattern otherwise) → paqfs... → version... → %  prompt) →
 #   echo r9x64shell7 round-trip (two-occurrence) →
 #   EMPTY-LINE safety (a bare newline at the prompt must return a
 #   fresh prompt without losing the marker anchor — the aarch64
@@ -220,6 +222,37 @@ proc hostfwd_stage {port} {
 #    equivalent point) → prompt
 stage banner    {r9 from the Internet}
 
+# 1a. the fpu format line (MEM-18, D-20, 05-15): init_bsp prints it ONCE
+#     right after the banner block in every config — the CPUID-selected
+#     FP save format.  The expectation derives from the caller-selected
+#     CPU shape (the same env the smp-online stage keys on): an explicit
+#     XSAVE-carrying TCG model (the CI AVX2 leg's
+#     qemu64,+avx,+avx2,+xsave,+xsaveopt) boots the xsaveopt path with
+#     avx2=on; a bare qemu64 (the TCG default — CI's qemu64 legs) keeps
+#     the fxsave fallback; -cpu host (the owner's KVM runs) asserts only
+#     a well-formed line, since the host's CPUID varies by machine.
+set fpu_expected ""
+if {[string match "*xsave*" $R9_CPU]} {
+    if {[string match "*xsaveopt*" $R9_CPU]} {
+        set fpu_expected "fpu: format=xsaveopt"
+    } else {
+        set fpu_expected "fpu: format=xsave"
+    }
+    if {[string match "*avx2*" $R9_CPU]} {
+        append fpu_expected " avx2=on"
+    } else {
+        append fpu_expected " avx2=off"
+    }
+} elseif {$R9_CPU eq "qemu64"} {
+    set fpu_expected "fpu: format=fxsave avx2=off"
+}
+if {$fpu_expected ne ""} {
+    # exact string (regex-safe: no metacharacters)
+    stage fpu-format $fpu_expected
+} else {
+    stage fpu-format {fpu: format=(fxsave|xsave|xsaveopt) avx2=(on|off)}
+}
+
 # 1b. the SMP bring-up marker (SMP-01/SMP-07, proven through SMP-09's
 #     R9_SMP): with 2+ CPUs the kernel logs CPU 1's online marker at the
 #     END of exec_bootstrap (after the bootstrap proc is claimed Running —
@@ -408,6 +441,13 @@ log_file $env(R9_CPU_LOG)
 #     seeded ROOT env group — the kernel's own print, 19-01's tracer
 #     line) → paqfs → version
 stage cpu-banner   {r9 from the Internet}
+# the fpu format line again (the cpu leg boots the same kernel shape —
+# MEM-18's assertion rides both legs; $fpu_expected was derived above)
+if {$fpu_expected ne ""} {
+    stage cpu-fpu-format $fpu_expected
+} else {
+    stage cpu-fpu-format {fpu: format=(fxsave|xsave|xsaveopt) avx2=(on|off)}
+}
 stage cpu-bootconf {devenv: bootconf init=/amd64/init -c}
 stage cpu-paqfs    {paqfs\.\.\.}
 stage cpu-version  {version\.\.\.}

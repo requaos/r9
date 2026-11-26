@@ -11,6 +11,15 @@
 # architecture (R9_SMP=1) pins the 1-CPU bring-up path on every push:
 # aarch64 as a step in boot-r9-smoke, x86_64 as boot-r9-smoke-x64-smp1.
 #
+# MEM-18 (D-20, D-33, 05-15): boot-r9-smoke-x64-avx2-tcg boots the same
+# composed smoke under an XSAVE/AVX2 CPU model (TCG), so every push
+# mechanically verifies BOTH FP save paths — the fxsave fallback on the
+# qemu64 legs (fpu: format=fxsave avx2=off) and the xsaveopt path here
+# (fpu: format=xsaveopt avx2=on).  The assertion lives in
+# gates/x86_64/smoke-r9.expect's fpu-format stage (derived from R9_CPU),
+# so every venue — hosted TCG, the owner's KVM host — checks its own
+# boot.
+#
 # Venue discipline (Phase 5 CORR-01, D-01, D-05): every hosted CI gate job
 # below FAILS VISIBLY when red — no continue-on-error masking.  The owner
 # Linux KVM runs remain the hardware witness at Stops 2-4 (D-33), but a red
@@ -133,7 +142,9 @@ jobs:
   # SMP-09/D-24: the retained single-CPU smoke leg for x86_64 — every
   # other x86_64 gate defaults to -smp 2; this job pins single-CPU boot
   # on every push so the 1-CPU bring-up path cannot regress silently.
-  # Explicit TCG because the runner is KVM-less.
+  # Explicit TCG because the runner is KVM-less.  MEM-18: under TCG's
+  # default qemu64 this leg also pins the FXSAVE fallback — the driver's
+  # fpu-format stage asserts `fpu: format=fxsave avx2=off`.
   boot-r9-smoke-x64-smp1:
     runs-on: ubuntu-latest
     timeout-minutes: 90 # TCG scale; the smoke's own per-stage 600 s timeouts localize failures
@@ -145,6 +156,23 @@ jobs:
           extra-conf: experimental-features = nix-command flakes
       - name: x64 composed smoke (single-CPU, R9_SMP=1, explicit TCG)
         run: env R9_SMP=1 R9_ACCEL=tcg nix run .#boot-r9-smoke-x64
+
+  # MEM-18 (D-20, D-33, 05-15): the TCG AVX2 leg — the same composed
+  # smoke (both legs, -smp 2) under an XSAVE/AVX2 CPU model.  The
+  # driver's fpu-format stage asserts `fpu: format=xsaveopt avx2=on`
+  # and the smp-online stage asserts `smp: cpu 1 online`; the qemu64
+  # legs pin the fxsave fallback, so every push verifies both paths.
+  boot-r9-smoke-x64-avx2-tcg:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90 # TCG scale; the smoke's own per-stage 600 s timeouts localize failures
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install nix (flakes enabled)
+        uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+        with:
+          extra-conf: experimental-features = nix-command flakes
+      - name: x64 composed smoke (TCG AVX2, -smp 2)
+        run: env R9_CPU="qemu64,+avx,+avx2,+xsave,+xsaveopt" R9_ACCEL=tcg nix run .#boot-r9-smoke-x64
 
   # D-13's best-effort second witness for the quick gate: the same
   # assembler + q35cpu kernel + rio assertion developers run locally,
