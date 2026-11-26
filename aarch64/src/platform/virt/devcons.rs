@@ -21,10 +21,11 @@ pub fn init(dt: &DeviceTree) {
             Ok(uart) => {
                 static UART: SyncUnsafeCell<MaybeUninit<Pl011Uart>> =
                     SyncUnsafeCell::new(MaybeUninit::uninit());
-                // SAFETY: set_uart runs once at platform init (single CPU,
-                // pre-IRQ-unmask); the cell is written before its address
-                // escapes, and the published &'static dyn Uart only ever
-                // reads it.
+                // SAFETY: set_uart runs once at platform init (boot
+                // context on CPU 0, IRQs masked, before start_secondaries
+                // brings up any second CPU); the cell is written before
+                // its address escapes, and the published &'static dyn
+                // Uart only ever reads it.
                 unsafe {
                     let cons = &mut *UART.get();
                     cons.write(uart);
@@ -77,7 +78,8 @@ pub fn cons_read(_buf: &mut [u8]) -> u64 {
 static DTB_VA: AtomicUsize = AtomicUsize::new(0);
 
 /// Record the DTB's virtual address for the lazy rng-seed parse.  Called
-/// once from main9 (single CPU, pre-IRQ-unmask).
+/// once from main9 (boot context on CPU 0, pre-IRQ-unmask, before any
+/// secondary CPU starts).
 pub fn set_dtb_va(va: usize) {
     DTB_VA.store(va, Ordering::Relaxed);
 }

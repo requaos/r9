@@ -434,6 +434,39 @@ the TCG/KVM threshold split) is safe code — `cpu::cpuid` carries the
 asm.  x86_64 168 → 170 blocks, extern 3 → 4, SAFETY 414 → 417; the
 reconciliation holds.
 
+**Plan 05-12 Task 3 delta (SMP-01/03, 2026-11-26):** the cross-tree
+`rg -i "single[- ]cpu"` sweep (the plan's audit step) reconciled the
+remaining stale references — comment-only, zero unsafe tokens added or
+removed anywhere.  Two classes: (a) SAFETY/doc justifications that
+rested on single-CPU execution for SHARED mutable state, re-justified
+on the real guarantee: `x86_64/syscall.rs`'s `sem_try_acquire` (the
+aligned-u32 no-tear + the register→check→block retry loop, the aarch64
+05-10 wording), `x86_64/swtch.rs`'s contract (per-CPU context pairs,
+never cross-CPU), both crates' `fpu.rs` `kernel_begin_on` (per-CPU CpuFp
+ownership + IF=0 on this CPU), `x86_64/fpu.rs`'s selftest slot (runs on
+CPU 0 before start_aps), both devcons `set_uart`s and aarch64's
+`smp.rs` `publish_boot_state` + `devcons::set_dtb_va` (boot-context
+publication BEFORE secondaries start), `aarch64/vm.rs`'s
+`root_page_table` guard (per-CPU current TTBR0 / KERNEL_VM-serialized
+TTBR1), `aarch64/exec.rs`'s `map_one_user_page` (the proc is
+unpublished, no TTBR0 names its table yet), `aarch64/trap.S`'s stale
+CURKSTACK sentence (the symbols are PerCpu slots since 05-10),
+`port/allocator.rs`'s two census diagnostics (under the heap's
+IrqSpinLock since 05-07), `port/devip/proto.rs`'s TCP connect block
+(prepare_block/wake_pending, 05-08), and aarch64's `rtc.rs` lazy PL031
+map (idempotent publish; the KERNEL_VM lock serializes the map).  (b)
+Accurate descriptive references left in place by design: the
+"single-CPU defaults" language in `port/src/smp.rs` (the
+pre-registration hooks), the migration-history notes in
+`port/src/{devip/stack,netif,globalalloc,fid}.rs` and both
+`proc.rs`/`main.rs` files, `port/src/devip_tests.rs`'s rejected-design
+note, and `raspi3b`'s set_uart (a platform that never starts a second
+CPU).  `port/src/devmnt.rs` and `port/src/devssl.rs`'s BusyCell
+rationale gained the SMP phrasing (a guard held across a park
+spin-deadlocks a contender on ANY cpu).  UNSAFE-AUDIT's own wording is
+untouched by this delta (its references are the audit's history);
+block/SAFETY counts unchanged from Task 2's.
+
 ## ds/ and crypto/ (Phase 3)
 
 Both crates take `[lints] workspace = true`, so

@@ -630,8 +630,10 @@ fn map_one_user_page(
 ) -> Result<PhysAddr> {
     let pa = pagealloc::allocate_physpage().map_err(|_| "exec: page alloc failed")?;
     // SAFETY: proc.root_table names the proc's pagealloc'd root table
-    // (construction invariant), written through its KZERO+PA kernel alias;
-    // single CPU, boot/syscall context — no concurrent access.
+    // (construction invariant), written through its KZERO+PA kernel alias.
+    // SMP-03: the proc is under construction on THIS CPU (never enqueued
+    // yet — exec_into publishes it at the tail), so no other CPU can run
+    // or edit it; the map_to writes land in a table no TTBR0 names yet.
     unsafe {
         let mut physalloc = PhysPageAllocator {};
         let mut vmt = VmTraitImpl {};

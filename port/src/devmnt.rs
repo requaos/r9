@@ -44,7 +44,8 @@
 //! shape, which is what un-deadlocks session exit.  BusyCells (not
 //! MCS locks) guard everything whose ownership spans a blocking read:
 //! an MCS lock held across a park would spin-deadlock an IRQ-masked
-//! contender on this single-CPU era.
+//! contender on ANY cpu (SMP-03: the holder parks mid-RPC while the
+//! contender spins, never to run).
 //!
 //! Transport bound (the pipe's atomic-write ceiling): devpipe writes
 //! whole messages or fail ("pipe full"), and the queue cap is 4096, so

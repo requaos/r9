@@ -49,7 +49,11 @@ const _: () = assert!(core::mem::offset_of!(Label, r15) == 56);
 ///
 /// Both pointers must name valid, aligned Context storage stable across
 /// the switch (PROC_TABLE-resident contexts — the proc.rs discipline);
-/// single CPU, IRQ-masked contexts only.
+/// IRQ-masked contexts only, and each switch pair is per-CPU (05-12,
+/// SMP-02: a CPU swtch'es only between its OWN contexts — a proc's
+/// PROC_TABLE-resident slot and the CPU's own Mach sched_context/park
+/// slot — never across CPUs, so no two CPUs ever share a live swtch
+/// frame).
 #[cfg(not(test))]
 #[unsafe(link_section = ".text")]
 #[unsafe(naked)]

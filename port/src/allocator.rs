@@ -648,7 +648,9 @@ impl CensusSnapshot {
 
 impl QuickFit {
     /// The bump cursor (bytes carved from the arena front so far) and
-    /// the arena size.  Read-only; single CPU this era.
+    /// the arena size.  The cursor read is a single atomic load
+    /// (Relaxed); the caller's diagnostic context holds the heap's
+    /// IrqSpinLock (05-07, HeapAlloc 80).
     pub fn arena_stats(&self) -> (usize, usize) {
         (self.tail.cursor.load(core::sync::atomic::Ordering::Relaxed), self.tail.arena.len())
     }
@@ -663,7 +665,9 @@ impl QuickFit {
     /// capacity.  Returns (live census, pooled census), each (size,
     /// count) ascending — a cursor that climbs while LIVE stays flat
     /// names fragmentation, not a leak; a LIVE class that climbs names
-    /// the leaking allocation.  Single CPU; read-only.
+    /// the leaking allocation.  Runs under the heap's IrqSpinLock
+    /// (05-07, HeapAlloc 80 — the globalalloc caller holds it across the
+    /// snapshot), so the header walk sees no concurrent alloc/free.
     pub fn split_census(
         &self,
     ) -> (alloc::vec::Vec<(usize, usize)>, alloc::vec::Vec<(usize, usize)>) {

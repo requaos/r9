@@ -382,8 +382,12 @@ fn kernel_begin_on(cpu: &'static CpuFp) -> KernelSimd {
     if !owner.is_null() {
         // SAFETY: owner names a live PROC_TABLE-resident (or boot
         // self-test) fpsave slot — install recorded it and leave/discard
-        // clear it before the slot's proc stops existing; nothing else
-        // touches the slot while IRQs are masked on the single CPU.
+        // clear it before the slot's proc stops existing; the slot's
+        // OWNER is this CPU (CpuFp ownership is per-CPU, SMP-02), and
+        // the section runs IRQ-masked on this CPU, so no other context
+        // on this CPU touches the slot mid-section; a sibling CPU's
+        // CpuFp names its own register file's owner, never this slot's
+        // writer.
         unsafe { save_raw(owner) };
     }
     KernelSimd { parked: owner, cpu, _not_send: PhantomData }

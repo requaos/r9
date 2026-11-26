@@ -585,8 +585,11 @@ pub fn next_free_device_va_span(len: usize) -> VaMapping {
 ///
 /// Returns a guard newtype, never a `&'static mut` — the
 /// Deref/DerefMut impls hold the raw-alias deref behind the documented
-/// invariant (single CPU; the TTBR-named table is live and KZERO-aliased;
-/// no second handle into the same table is live across a caller's use).
+/// invariant (the TTBR-named table is live and KZERO-aliased; no second
+/// handle into the same table is live across a caller's use — SMP-03:
+/// the user table read is THIS CPU's current TTBR0 (per-CPU by
+/// construction), and kernel-table (TTBR1) writes serialize through the
+/// KERNEL_VM IrqSpinLock, 05-22).
 pub fn root_page_table(pgtype: RootPageTableType) -> RootTableGuard {
     let page_table_pa = match pgtype {
         RootPageTableType::User => ttbr0_el1(),
@@ -613,9 +616,11 @@ impl core::ops::Deref for RootTableGuard {
         // SAFETY: the pointer comes from root_page_table()'s TTBR read —
         // the named root table is live (kernel: vminit's earlyvm tables;
         // user: the current proc's pagealloc'd root) and its KZERO+PA
-        // alias is mapped in the kernel table.  Single CPU; the caller
-        // context (boot / IRQ-masked trap/syscall) cannot be preempted
-        // into a conflicting access.
+        // alias is mapped in the kernel table.  The read is this CPU's
+        // own TTBR-named table (per-CPU current, or the KERNEL_VM-
+        // serialized kernel table); the caller context (boot /
+        // IRQ-masked trap/syscall) cannot be preempted into a
+        // conflicting access ON THIS CPU.
         unsafe { &*self.0 }
     }
 }

@@ -1209,9 +1209,14 @@ fn sem_word_write(word: &mut UserSliceMut, val: i32) {
 }
 
 /// The donor's canacquire: decrement a positive word, else fail.
-/// Single CPU + IRQ-masked syscall context (no preemption mid-handler)
-/// makes the load/store atomic against other procs; the RFMEM-shared
-/// page is the cross-proc synchronization point.
+/// The word lives in USER memory (the RFMEM-shared page is the
+/// cross-proc synchronization point): the load and store are each
+/// single aligned 32-bit accesses, which cannot tear on x86_64.  The
+/// check-then-decrement pair is the donor syssemacquire shape; a
+/// contended word additionally rides the kernel's register → check →
+/// block retry loop below, which re-reads the word on every iteration
+/// (SMP-03: the blocker's wake_pending/arm pairing is in
+/// sys_semacquire's loop and proc::sched()).
 fn sem_try_acquire(word: &mut UserSliceMut) -> bool {
     let val = sem_word_read(word);
     if val <= 0 {
