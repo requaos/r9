@@ -2,9 +2,14 @@
 gsd_state_version: "1.0"
 milestone: v3.1
 milestone_name: Early SMP and Cluster Fabric
+current_phase: 5
+current_phase_name: not discussed, not planned
 status: planning
-last_updated: "2026-11-25T19:44:58.192Z"
+stopped_at: Phase 5 context gathered
+last_updated: "2026-11-26T00:56:30.818Z"
 last_activity: 2026-11-25
+last_activity_desc: roadmap rescoped to the v3.0 documents; old Phase 5 planning archived as superseded
+state_head: 289d568f25e92c27e02d227f04cca92bcd634b61
 progress:
   total_phases: 3
   completed_phases: 0
@@ -181,9 +186,9 @@ The WINDOWS ledger (51 open, 4 waived, 17 fixed, 72 total) is frozen at `.planni
 
 ## Session Continuity
 
-Last session: 2026-11-25T19:39:02.087Z
-Stopped at: Roadmap rescoped to the owner's v3.0 documents; old Phase 5 planning superseded
-Resume file: docs/r9_implementation_guide_for_agentic_developers_v3_0.md
+Last session: 2026-11-26T00:56:30.804Z
+Stopped at: Phase 5 context gathered
+Resume file: .planning/phases/05-guide-phase-3-early-smp-course-correction-and-memory-pools/05-CONTEXT.md
 
 ## Operator Next Steps
 
