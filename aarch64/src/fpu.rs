@@ -177,25 +177,14 @@ impl CpuFp {
     }
 }
 
-/// The most CPUs the per-CPU table covers (qemu virt's GICv2 limit; the
-/// raspi boards have four).  r9 brings up one CPU today.
-pub const MAXMACH: usize = 8;
-
-#[cfg(not(test))]
-static CPUS: [CpuFp; MAXMACH] = [const { CpuFp::new() }; MAXMACH];
-
-/// This CPU's bookkeeping, by MPIDR_EL1.Aff0 (qemu virt and the raspi
-/// boards number their cores 0..n there).  A core beyond MAXMACH is a
-/// loud index panic, never another core's slot.
+/// This CPU's FP bookkeeping lives in its `PerCpu` slot
+/// (TPIDR_EL1-indexed, SMP-02): `crate::smp::this_cpu().fpu`.  The old
+/// MPIDR_EL1-indexed static table is gone — TPIDR_EL1 is the per-CPU
+/// register the trap path already pins, so the FP owner state rides the
+/// same per-CPU block as cur_frame/cur_kstack/current_proc.
 #[cfg(not(test))]
 fn this_cpu() -> &'static CpuFp {
-    let mpidr: u64;
-    // SAFETY: a read of this core's affinity register — no memory
-    // operands, always executable at EL1.
-    unsafe {
-        core::arch::asm!("mrs {}, mpidr_el1", out(reg) mpidr, options(nomem, nostack, preserves_flags))
-    };
-    &CPUS[(mpidr & 0xff) as usize]
+    &crate::smp::this_cpu().fpu
 }
 
 /// Host tests: every test thread is its own "CPU" (one leaked CpuFp per
@@ -519,7 +508,9 @@ pub fn selftest() -> Result<u128, &'static str> {
 
     let slot = SLOT.get();
     // SAFETY: SLOT is this self-test's private stand-in for a proc's
-    // fpsave; boot context, single CPU, no other user.
+    // fpsave; the selftest runs once at boot on the BSP (before any
+    // secondary CPU starts and before any process exists), IRQs masked —
+    // no other accessor exists.
     unsafe {
         *slot = a;
         install(&mut *slot);

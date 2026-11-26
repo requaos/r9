@@ -582,15 +582,17 @@ fn trap(frame: &mut TrapFrame) {
     if dispatch_irq(frame) {
         // Note-delivery boundary (IRQ return path): the tick may
         // have preempted mid-trap — the proc about to return to EL0 is the
-        // CURRENT one and its frame is CURFRAME's, not necessarily the
-        // frame this entry built.  Deliver ITS pending notes into the
-        // frame the tail actually restores (guarded: EL0t-bound only).
+        // CURRENT one and its frame is this CPU's PerCpu cur_frame's, not
+        // necessarily the frame this entry built.  Deliver ITS pending
+        // notes into the frame the tail actually restores (guarded:
+        // EL0t-bound only).
         let cf = proc::current_frame();
         if !cf.is_null() {
-            // SAFETY: CURFRAME names the live frame on the returning
-            // proc's kstack (written by trap.S at entry / by the locked
-            // scheduler swap); IRQ-masked trap context — no concurrent
-            // access.
+            // SAFETY: this CPU's PerCpu cur_frame names the live frame on
+            // the returning proc's kstack (written by trap.S at entry on
+            // this CPU, or by this CPU's locked scheduler swap); read in
+            // IRQ-masked trap context on the owning CPU — no cross-CPU
+            // access is possible.
             let cf = unsafe { &mut *cf };
             if cf.psr & 0xF == 0 {
                 deliver_notes(cf);

@@ -1333,9 +1333,14 @@ fn sem_word_write(word: &mut UserSliceMut, val: i32) {
 }
 
 /// The donor's canacquire: decrement a positive word, else fail.
-/// Single CPU + IRQ-masked syscall context (no preemption mid-handler)
-/// makes the load/store atomic against other procs; the RFMEM-shared
-/// page is the cross-proc synchronization point.
+/// The word lives in USER memory (the RFMEM-shared page is the cross-proc
+/// synchronization point): the load and store are each single aligned
+/// 32-bit accesses, which cannot tear on aarch64.  The check-then-
+/// decrement pair is the donor syssemacquire shape; a contended word
+/// additionally rides the kernel's register → check → block retry loop
+/// below, which re-reads the word on every iteration (SMP-03: the
+/// blocker's wake_pending/arm pairing is in sys_semacquire's loop and
+/// proc::block()).
 fn sem_try_acquire(word: &mut UserSliceMut) -> bool {
     let val = sem_word_read(word);
     if val <= 0 {
@@ -1366,12 +1371,19 @@ fn sem_word_pa(proc: &Proc, va: u64) -> Option<u64> {
 /// (sem_wake consumes registrations as it wakes, so a woken waiter that
 /// loses the unit race re-registers on its next block — the
 /// register → check → block loop is wakeup-loss-free) and block in
-/// sched(), re-checking on wake (spurious-allowed).  Returns 1 on
+/// block(), re-checking on wake (spurious-allowed).  Returns 1 on
 /// acquire, 0 when block == 0 and the word is exhausted.  Era limit:
 /// the donor's note-interruptible sleep is NOT reproduced — r9's block
 /// is uninterruptible (a note queued mid-wait delivers at the syscall's
 /// return), so libc's `while(semacquire(...) < 0)` retry shape never
 /// fires here.
+///
+/// SMP-03 (D-22): `port::smp::prepare_block()` clears this proc's
+/// wake_pending BEFORE the pid enters the SEM_WAITERS registry, so a
+/// semrelease on another CPU that lands after the registration either
+/// readies this proc (Blocked → Ready under PROC_TABLE) or leaves
+/// wake_pending for block() to consume — no interleave parks the waiter
+/// past its wake.
 fn sys_semacquire(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 2) else {
         return err(proc, "semacquire: bad argument block");
@@ -1408,14 +1420,16 @@ fn sys_semacquire(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         // when it picks its wakers, so a woken waiter that loses the unit
         // race must RE-register before re-blocking — without this the
         // re-block is unregistered and no future release ever finds the
-        // waiter (a permanent wedge).  register → check → block per
-        // iteration is wakeup-loss-free: single CPU, IRQ-masked syscall
-        // context, so no releaser can run between the check and sched().
+        // waiter (a permanent wedge).  prepare_block → register → check →
+        // block per iteration is wakeup-loss-free (SMP-03, D-22): the
+        // releaser's wake_locked publishes wake_pending under PROC_TABLE,
+        // which block() consumes under the same lock.
+        port::smp::prepare_block();
         proc::sem_register_waiter(pa, proc.pid);
         if sem_try_acquire(&mut word) {
             break;
         }
-        proc::sched();
+        proc::block();
     }
     proc::sem_deregister_waiter(pa, proc.pid);
     1
@@ -2131,10 +2145,12 @@ fn sys_errstr(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 /// the CPU if another process is waiting); ms>0 tsleeps until the tick
 /// count passes now+ms (1 tick = 1 ms this era — timer.rs
 /// TICKS_PER_SEC=1000, so ms IS the tick delta).  The block rides the
-/// sched machinery; the tick's tick_timeouts readies expired
-/// sleepers.  Register-deadline-then-block cannot lose the wake: syscall
-/// context is IRQ-masked, so the tick can only fire after sched()
-/// swtch'es (devpipe's documented invariant).  The ms arg is a `long` —
+/// block/sched_loop machinery; the tick's tick_timeouts readies expired
+/// sleepers.  Arm-then-block cannot lose the wake (SMP-03): the tick's
+/// sweep runs under PROC_TABLE, publishing wake_pending + the Ready
+/// transition there even for a sleeper caught mid-window (armed but not
+/// yet Blocked), and block() consumes the flag under the same lock —
+/// a 2-CPU-safe register-then-block (Pitfall 4).  The ms arg is a `long` —
 /// 32-bit in Plan 9 C (the width discipline).
 ///
 /// The donor's note-interruptible tsleep: a pending-note PRE-CHECK fails
@@ -2180,7 +2196,7 @@ fn sys_sleep(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         }
         let deadline = crate::platform::timer::ticks() + ms;
         proc.sleep_until = deadline;
-        proc::sched();
+        proc::block();
         // An early wake is always a posted note this era (see the doc
         // comment's waker inventory); expiry returns 0.
         if crate::platform::timer::ticks() < deadline {
@@ -2244,7 +2260,7 @@ fn quote_status(msg: &str) -> alloc::string::String {
 }
 
 /// AWAIT(47): buf, buflen.  Donor sysawait shape: block (the
-/// swtch-based sched path) until a child's exit record exists, then write
+/// swtch-based block/sched_loop path) until a child's exit record exists, then write
 /// the Plan-9-shaped wait message `{pid} 0 0 0 {status}` (utime/stime/
 /// realtime zeros this era; the status is %q-quoted — SINGLE quotes,
 /// only when needed — because libc wait()'s tokenize strips exactly
@@ -2252,6 +2268,14 @@ fn quote_status(msg: &str) -> alloc::string::String {
 /// branches invert) NUL-terminated into
 /// the validated user buffer and return the record length.  No children
 /// ever → loud -1 errstr (donor pwait's "no children").
+///
+/// SMP-03 (Pitfall 4): the wake condition (wait_records / children_live)
+/// is THIS proc's own state, mutated by post_wait_record inside its
+/// PROC_TABLE critical section together with the wake_pending publish —
+/// paired with block()'s flag-consume + Blocked-set under the same lock,
+/// so no prepare_block call is needed here (the flag IS the
+/// registration for proc-owned conditions; clearing it between the
+/// re-check and the block would instead lose the wake).
 fn sys_await(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 2) else {
         return err(proc, "await: bad argument block");
@@ -2290,11 +2314,12 @@ fn sys_await(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         if proc.children_live == 0 {
             return err(proc, "await: no children");
         }
-        // Block mid-syscall: mark Blocked + swtch to the scheduler
+        // Block mid-syscall: the wake_pending consume + Blocked
+        // transition under PROC_TABLE, then swtch to this CPU's scheduler
         // context; resumes here when a child's EXITS posts a record and
         // wakes us.  The trap frame on this proc's own kstack survives
         // other processes' traps meanwhile.
-        proc::sched();
+        proc::block();
     }
 }
 
@@ -2326,9 +2351,11 @@ fn sys_nsec(_frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
 /// libthread's procs share one) is searched for a sleeper on `tag`.
 /// Found: the sleeper is handed OUR value and readied, and we return the
 /// SLEEPER's stored value — the symmetric first-sleeps exchange.
-/// Absent: we record (tag, value, pid) and block mid-syscall (the sched()
+/// Absent: we record (tag, value, pid) and block mid-syscall (the block()
 /// shape — the group lock drops BEFORE the block, and register-then-
-/// block is atomic against wakers because syscalls serialize).  On wake
+/// block is wakeup-loss-free per SMP-03: rendez_wake's rendval write,
+/// wake_pending publish and Ready transition share one PROC_TABLE
+/// critical section, which block()'s flag consume pairs against).  On wake
 /// we return the value the waker left in proc.rendval.  Both args are
 /// full-width pointers (no masking).  Measured ×1 by hfactotum in the
 /// 06-07 tier-1 trace (libthread's start sync).
@@ -2358,7 +2385,7 @@ fn sys_rendezvous(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         }
         None => {
             // The first caller sleeps until a peer takes the entry.
-            // The proc::sched() wake is pid-keyed and FLAT
+            // The proc::block() wake is pid-keyed and FLAT
             // (Blocked→Ready), not channel-keyed like the donor's
             // Rendez — a STALE waiter-set registration (e.g. a devip
             // net-waiter entry left behind by an already-completed
@@ -2368,13 +2395,14 @@ fn sys_rendezvous(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             // libthread runthread park, and the spurious ready made
             // runthread read a nil q->head — a wild-EL0-pointer kill).
             // Every other blocking primitive re-checks its condition
-            // after sched() (semacquire/await/sleep/devpipe/devip all
+            // after block() (semacquire/await/sleep/devpipe/devip all
             // do) — rendezvous does it here: our entry still present =
             // the wake was spurious (re-block; the entry stays for the
             // real peer); entry gone = a peer's take_sleeper consumed
-            // it in the same serialized syscall window that readied us
-            // (rendval is valid).
-            proc::sched();
+            // it and its rendez_wake published rendval + wake_pending
+            // under PROC_TABLE (rendval is valid — visible after this
+            // proc's block() lock-acquire pairs that release).
+            proc::block();
             loop {
                 let paired = {
                     let node = LockNode::new();
@@ -2383,7 +2411,7 @@ fn sys_rendezvous(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
                 if paired {
                     break;
                 }
-                proc::sched();
+                proc::block();
             }
             proc.rendval
         }

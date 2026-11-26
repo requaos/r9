@@ -370,6 +370,13 @@ pub fn exec_into(
     let frame = seed_exec_frame(proc.kstack_top, aout.entry, user_sp as u64, tos_va as u64);
     proc.frame = frame;
     proc.state = ProcState::Ready;
+    // SMP-11: the frame-seeded proc is now schedulable — enter it into
+    // the run queues (Ready ⟺ enqueued; an idle CPU is IPI'd).  The
+    // bootstrap first proc's entry goes stale when activate_first makes
+    // it Running directly (pick_next skips non-Ready entries); every
+    // other consumer (rfork-free child construction — the churn driver,
+    // later exec'd children) is picked off the queue.
+    crate::proc::enqueue_ready(proc.pid);
     Ok(())
 }
 
