@@ -73,7 +73,7 @@ Milestone numbering continues from the closed Harvey-rooted milestone v2.1.
   4. A two-CPU stress gate runs a user workload on both CPUs through a `9P2000.aead` mount served by the real `FidTable` (an in-kernel loopback server started only by a boot switch) plus exec churn through the TPHT page cache, with timer interrupts across both CPUs, and finishes with no deadlock; a watchdog would name a stuck CPU and lock; a TLB shootdown reaches the other CPU; every new kernel boot gate runs with `-smp 2` on both architectures.
   5. The page allocator keeps Roaring clean, dirty and pinned pools in which a pinned frame is never an eviction candidate, `SuperpageResidency` is exactly 64 bytes, and every `port/` path that holds user memory across a sleep pins its frames through a guard; all of it safe under two CPUs and none of it cryptographic.
   6. Both architectures load image pages on demand, map user text read-only and track dirty pages; the evictor, live in every boot, drops text and unwritten initialised-data pages under pressure and they fault back intact through the TPHT page cache, shown by a small-memory `-smp 2` gate on both architectures; the Roaring set kernels run AVX2 or NEON where the CPU has it with outputs identical to the scalar path; and x86_64 saves user FP state with XSAVE where AVX is enabled and with FXSAVE elsewhere.
-**Plans:** 5/27 plans executed
+**Plans:** 6/27 plans executed
 
 Plans:
 **Wave 1**
@@ -88,7 +88,7 @@ Plans:
 - [x] 05-04-PLAN.md — Complete `x86_64` workspace deny-lint opt-in, `UNSAFE-AUDIT.md` reconciliation, `lintcontract` R6, and CI clippy legs (`CORR-05` Part B)
 
 **Wave 4** *(blocked on Wave 3 completion)*
-- [ ] 05-06-PLAN.md — Refactor `port/src/fid.rs` onto `ds::slab`, update `aead_link.rs`, D-13 three-place amendments, `CORR-05` policy doc sync, and **Owner Stop 1** (`CORR-03`, `CORR-05`)
+- [x] 05-06-PLAN.md — Refactor `port/src/fid.rs` onto `ds::slab`, update `aead_link.rs`, D-13 three-place amendments, `CORR-05` policy doc sync, and **Owner Stop 1** (`CORR-03`, `CORR-05`)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 - [ ] 05-07-PLAN.md — Portable SMP primitives (`port/src/{smp,mcslock,globalalloc}.rs` & arch `allocator.rs`): `IrqSpinLock`, `LockRank` table, `#[cfg(debug_assertions)]` watchdog, spin-poll `ShootdownCoordinator`, and SMP-safe `GlobalQuickAlloc` (`SMP-02`, `SMP-03`, `SMP-07`, `SMP-12`)
@@ -317,7 +317,7 @@ Phases execute in numeric order: 1 → 2 → 3 → … → 16 (decimal insertion
 | 2. Guide Phase 0 - Design Lock and rfork Flag Reservation | v3.0 | 6/6 | Complete | 2026-11-24 |
 | 3. Guide Phase 1 - crypto/ and ds/ Foundations | v3.0 | 13/13 | Complete | 2026-11-24 |
 | 4. Guide Phase 2 - 9P2000.aead Transport and FidTable | v3.0 | 25/25 | Complete | 2026-11-25 |
-| 5. Guide Phase 3 - Early SMP, Course Correction and Memory Pools | v3.1 | 5/27 | In Progress | - |
+| 5. Guide Phase 3 - Early SMP, Course Correction and Memory Pools | v3.1 | 6/27 | In Progress | - |
 | 6. Guide Phase 4 - Distributed 9P Extensions and Service Discovery | v3.1 | 0/TBD | Not started | - |
 | 7. Guide Phase 5 - Process Lifecycle, Stack-Safe Notes and riscv64 Sync | v3.1 | 0/TBD | Not started | - |
 | 8. SMP Scale-Out and Deferred Verification | v3.2 | 0/TBD | Not started | - |
