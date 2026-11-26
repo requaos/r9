@@ -176,10 +176,21 @@ fn default_banks(num_blocks: usize) -> usize {
 /// TPHT consumer such as `palloc.hash` (MEM-16) or the Phase 6 union dcache
 /// (DEBT-04, D-18, D-29).
 ///
-/// RED skeleton (plan 05-05 Task 3): always returns the two-bank minimum.
+/// **The rule: twice the measured worst-case spill volume.**  At occupancy
+/// `p` a shard holds `num_blocks * 16 * p / 100` entries; the spill — the
+/// entries that do not resolve at home — is under 10% of them on every
+/// measured fixture at the 90% production target (weakest home-hit 0.9382).
+/// Sizing two-choice 255-node banks at twice that spill —
+/// `entries / (BANK_NODES * 5)` — runs the banks at or below half average
+/// fill, which the 2026-11-26 measurement shows `BanksFull`-free with the
+/// documented home-hit rates on every fixture at 1,024 / 4,096 / 16,384
+/// blocks (see `default_banks`).  The fixtures are assumed representative
+/// of `palloc.hash` `(image_id, page_idx)` keys; the MEM-16 page-cache
+/// workload verifies that live in plan 05-21 (05-05 flagged assumption).
 pub fn banks_for_occupancy(num_blocks: usize, max_occ_pct: u8) -> usize {
-    let _ = (num_blocks, max_occ_pct);
-    2
+    assert!(max_occ_pct <= 100, "an occupancy is a percentage in 0..=100");
+    let entries = num_blocks * HOME_SLOTS * max_occ_pct as usize / 100;
+    entries.div_ceil(BANK_NODES * 5).max(2)
 }
 
 impl<const WORDS: usize> FlattenedTphtShard<WORDS, NoProbe> {
