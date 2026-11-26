@@ -77,6 +77,14 @@ pub struct PerCpu {
     pub fpu: CpuFp,
     /// A TLB shootdown request is pending for this CPU (SMP-07).
     pub pending_shootdown: AtomicBool,
+    /// The pid `pick_next`'s `sched: switch` marker reports as the switch
+    /// source.  `release_left_proc` (the sched loop's publish step) stores
+    /// the preempted proc's pid here when it re-enqueues it; pick_next
+    /// consumes it for the one marker line the boot gates count as
+    /// IRQ-from-EL0 preemption evidence.  Owned by this CPU (written and
+    /// swapped only from its own sched loop, IRQ-masked).  0 = no pending
+    /// preemption.
+    pub sched_from: AtomicU64,
     /// Deferred reap slot (05-22, SMP): an exiting proc's root-table PA +
     /// kstack PAs sit here from exit_tail until THIS CPU's sched loop
     /// frees them after the moribund hand-off swtch.  The exit path's old
@@ -139,6 +147,7 @@ impl PerCpu {
             sched_stack_top: AtomicU64::new(0),
             fpu: CpuFp::new(),
             pending_shootdown: AtomicBool::new(false),
+            sched_from: AtomicU64::new(0),
             moribund_reap: SyncUnsafeCell::new(None),
         }
     }

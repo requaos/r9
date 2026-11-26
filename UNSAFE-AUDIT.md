@@ -287,6 +287,29 @@ counts unchanged.  `syscall.rs`: the yield's `preempt(true)` + the
 exit_tail deferral call — safe code, counts unchanged.  aarch64
 191 → 194 blocks, SAFETY 397 → 400; the reconciliation holds.
 
+**05-23 debug-session delta (2026-11-26, the HVF `-smp 2` fork-sweep
+corruption — aarch64-smp2-hvf-corruption):** the scheduler's kernel-stack
+handoff became explicit.  `Proc` gains `on_cpu` (a safe AtomicBool: the
+kstack-ownership token) and the sched loop's new `release_left_proc`
+derefs the per-CPU `current_proc` pointer to read its pid (the ONE new
+proc.rs block — the pointer names a PROC_TABLE-resident Proc, slots are
+never freed this era, read on the owning CPU under the table lock);
+`reschedule` parks this CPU's kernel context with `swtch` (its
+`vm::switch` block becomes the `swtch` block — 1:1) instead of
+publishing the preempted proc while still on its stack, and `pick_next`
+refuses an `on_cpu` proc and carries a debug-build tripwire that panics
+when another CPU's `cur_kstack` still names the candidate's stack.
+`trap.rs` gains `mask_irq` (+1 block: DAIFSet #2, the sched loop's
+entry discipline) and `dispatch_irq` defers `preempt` until after the
+GIC EOI (safe reordering — the park makes the pre-EOI call leave the
+line active while the preempted proc is off-CPU).  `main.rs`: the
+secondary's premature `unmask_irq` before `enter_sched_loop_from_boot`
+is gone (safe code, counts unchanged); `platform/virt/timer.rs`'s `tick`
+loses its preempt call (safe code).  `port/src/sched.rs`: the new
+`RunQueues::any_enqueued` probe (safe code) and its host test.
+aarch64 194 → 196 blocks, SAFETY 400 → 402 (proc.rs 28 → 29, trap.rs
+9 → 10); the reconciliation holds.
+
 ## ds/ and crypto/ (Phase 3)
 
 Both crates take `[lints] workspace = true`, so
@@ -515,7 +538,7 @@ crates are lint-opted-in, so every listed block carries a `// SAFETY:` comment
 q35cpu gate configs, and the scan finds zero undocumented production sites in
 cfg-gated code as well.
 
-### aarch64/src — 194 blocks, 9 unsafe fns, 7 extern blocks (test-only: 6 blocks)
+### aarch64/src — 196 blocks, 9 unsafe fns, 7 extern blocks (test-only: 6 blocks)
 
 | File | Blocks | fns | ext | Surface |
 |---|---|---|---|---|
@@ -539,11 +562,11 @@ cfg-gated code as well.
 | `platform/virt/rtc.rs` | 1 | 0 | 0 | PL031 MMIO read on the mapped rw_device page |
 | `pre_mmu/util.rs` | 7 | 2 | 0 | pre-driver early console: fixed-PA MMIO, identity-mapped pre-MMU |
 | `pre_mmu/vminit.rs` | 23 | 0 | 1 | pre-MMU boot: identity-map page-table construction, isb/tlbi, DTB parse |
-| `proc.rs` | 28 | 0 | 1 | the process machinery floor: link-syms, KZERO+PA table/page writes, switch/resume ABI, ProcGuard + the per-CPU sched_context seed (05-10: the CURFRAME/CURKSTACK accessor trio moved to safe PerCpu atomic stores; PROC_TABLE/SHARED_PAGES/RFMEM_FAMILIES/SEM_WAITERS are ranked IrqSpinLocks; `wake_pending` + `wake_locked`/`block()` close Pitfall 4; `RunQueues` drives `pick_next`; 05-22 Task 2: the deferred moribund reap's two PerCpu-slot blocks) |
+| `proc.rs` | 29 | 0 | 1 | the process machinery floor: link-syms, KZERO+PA table/page writes, switch/resume ABI, ProcGuard + the per-CPU sched_context seed (05-10: the CURFRAME/CURKSTACK accessor trio moved to safe PerCpu atomic stores; PROC_TABLE/SHARED_PAGES/RFMEM_FAMILIES/SEM_WAITERS are ranked IrqSpinLocks; `wake_pending` + `wake_locked`/`block()` close Pitfall 4; `RunQueues` drives `pick_next`; 05-22 Task 2: the deferred moribund reap's two PerCpu-slot blocks; 05-23: `release_left_proc`'s current-proc pid read — the kstack-ownership release) |
 | `smp.rs` | 10 | 0 | 1 | per-CPU PerCpu (TPIDR_EL1), PSCI CPU_ON (hvc/smc), DTB /cpus+/psci, DAIF save/restore, TLB flush, SmpArch registration (05-09) |
 | `swtch.rs` | 0 | 0 | 1 | the context-switch ABI (swtch.S); one host-test twin fn |
 | `textcopy.rs` | 8 | 2 | 0 | rfork text-copy emit/call and the I-cache selftest (RO text under KZERO aliases) (+5 test-only blocks) |
-| `trap.rs` | 9 | 0 | 1 | the trap-vector interface: VBAR install, DAIFClr, trap.S entry ABI, wfi parks, the `current_sp` primitive (05-22's secondary sched-stack seed read) |
+| `trap.rs` | 10 | 0 | 1 | the trap-vector interface: VBAR install, DAIFClr/DAIFSet (05-23 adds `mask_irq`, the sched loop's entry discipline), trap.S entry ABI, wfi parks, the `current_sp` primitive (05-22's secondary sched-stack seed read) |
 | `usermem.rs` | 7 | 0 | 0 | THE single user-memory materialization point (UserSlice/UserSliceMut/UserPtr/UserString) |
 | `vm.rs` | 16 | 3 | 0 | page-table machinery: TTBR/TLB/barrier asm, entry writes, recursive-mapping resolution |
 | `vmdebug.rs` | 2 | 0 | 0 | read-only recursive-mapping walk (print path) |

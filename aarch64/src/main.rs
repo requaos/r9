@@ -607,9 +607,14 @@ pub extern "C" fn secondary_main(cpu_id: usize) -> ! {
     // stays abandoned above the scheduler's frames).  CPU 0's 0 default
     // names the legacy interrupt stack instead.
     smp::this_cpu().sched_stack_top.store(trap::current_sp(), Ordering::Relaxed);
-    // IRQs on: the timer PPI + SGI 0/1 were enabled per-CPU by the GIC
-    // secondary init, and secondary_start installed VBAR_EL1.
-    trap::unmask_irq();
+    // IRQs stay MASKED into the scheduler loop (the CPU-0 shape: its
+    // loop is entered from a trap entry).  The loop's idle arm briefly
+    // unmasks for wfi, which is where this CPU first takes its tick/SGI
+    // 0/SGI 1 — arming the timer PPI and the per-CPU GIC interface above
+    // makes that first delivery land in a valid handler.  Unmasking
+    // here instead left the pick_next→trap_return handoff interruptible,
+    // which let an IRQ rewrite PerCpu.cur_frame with an EL1h frame on the
+    // scheduler stack (see trap::mask_irq / sched_loop).
     proc::enter_sched_loop_from_boot()
 }
 

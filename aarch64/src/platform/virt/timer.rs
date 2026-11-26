@@ -143,21 +143,21 @@ fn watchdog_threshold_ticks() -> u64 {
 /// context — so the tick print is gated off there.
 /// The tick itself keeps re-arming in every config.
 ///
-/// The tick is the preemption source.  proc::preempt() acts
-/// only when a process is Running at EL0 ON THIS CPU — the
-/// `user_interrupted` flag (the trap frame's psr) gates it: an
-/// idle CPU's PerCpu `current` is stale and can name a proc now
-/// Running on a SIBLING, which a flagless Running check would
-/// reschedule off the sibling mid-run (05-22's double-run tear).
-/// Kernel contexts otherwise run IRQ-masked, and the idle loop's
-/// wfi window re-pops after the eret instead of preempting.  The
-/// trap tail's cur_frame reload returns to the NEW current process
-/// when a preemption did switch.  preempt() never prints to the
-/// console from IRQ context in a config where syscalls can print... its
-/// `sched: switch` marker is the deliberate exception: syscalls run
-/// IRQ-masked, so no Console-lock holder can be interrupted by a print
-/// on the SAME CPU (and the Console IrqSpinLock serializes cross-CPU).
-pub fn tick(user_interrupted: bool) {
+/// The tick is the preemption source: `dispatch_irq` (trap.rs) calls
+/// proc::preempt() itself, AFTER the GIC EOI, when this handler ran for
+/// INTID 30 — preempt() parks the CPU into its sched loop on a switch, so
+/// it must not run with an active interrupt line.  preempt() acts only
+/// when a process is Running at EL0 ON THIS CPU — the `user_interrupted`
+/// flag (the trap frame's psr) gates it: an idle CPU's PerCpu `current`
+/// is stale and can name a proc now Running on a SIBLING, which a
+/// flagless Running check would reschedule off the sibling mid-run
+/// (05-22's double-run tear).  Kernel contexts otherwise run IRQ-masked,
+/// and the idle loop's wfi window re-pops after the eret instead of
+/// preempting.  The `sched: switch` marker (pick_next) is the deliberate
+/// IRQ-context console print: syscalls run IRQ-masked, so no
+/// Console-lock holder can be interrupted by a print on the SAME CPU
+/// (and the Console lock serializes cross-CPU).
+pub fn tick() {
     arm();
     // SMP-12: the per-CPU progress heartbeat — every CPU's tick, every
     // config (a no-op in release builds and before register_port_smp).
@@ -200,5 +200,4 @@ pub fn tick(user_interrupted: bool) {
     if cpu0 {
         port::smp::watchdog_check_all(watchdog_threshold_ticks());
     }
-    crate::proc::preempt(user_interrupted);
 }

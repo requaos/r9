@@ -205,6 +205,22 @@ impl<const MAX_CPUS: usize> RunQueues<MAX_CPUS> {
         self.queues[cpu].q.lock(&node).len()
     }
 
+    /// Whether ANY cpu's queue holds an entry (busy=false when it may hold
+    /// only stale entries — callers treat a false positive as "go look").
+    /// The arch reschedule fast path probes with this before parking the
+    /// current proc into its sched loop (a scheduler round trip it only
+    /// owes when somebody is waiting); one queue lock at a time, never
+    /// nested.
+    pub fn any_enqueued(&self, num_cpus: usize) -> bool {
+        for cpu in 0..num_cpus.min(MAX_CPUS) {
+            let node = LockNode::new();
+            if !self.queues[cpu].q.lock(&node).is_empty() {
+                return true;
+            }
+        }
+        false
+    }
+
     /// The total number of pids queued across all cpus.
     pub fn total_len(&self) -> usize {
         let mut total = 0;
@@ -301,6 +317,24 @@ mod tests {
         rq2.mark_idle(3);
         rq2.mark_busy(3);
         assert_eq!(rq2.take_idle_cpu(4), None);
+    }
+
+    /// The arch reschedule fast path's probe: false only when every queue
+    /// is empty (a pending entry on ANY cpu means the scheduler owes a
+    /// look), true after an enqueue, false again once popped.
+    #[test]
+    fn runqueues_any_enqueued_tracks_queued_work() {
+        crate::smp::test_hooks::set_cpu_id(0);
+        let rq = RunQueues::<4>::new();
+        assert!(!rq.any_enqueued(4), "all queues start empty");
+        rq.enqueue(3, 55, 4);
+        assert!(rq.any_enqueued(4), "a remote queue's entry is seen");
+        assert_eq!(rq.pop_or_steal(0, 4), Some(55), "stolen by cpu 0");
+        assert!(!rq.any_enqueued(4), "empty again after the pop");
+        assert!(
+            !rq.any_enqueued(0),
+            "no queues in range (0 cpus) is empty, never a panic"
+        );
     }
 
     // -- SMP-11: four threads (num_cpus = 4 — never hardcoded 2, D-23)

@@ -54,6 +54,25 @@ pub fn unmask_irq() {
     }
 }
 
+/// Mask IRQs (DAIFSet #2) — the scheduler loop's entry discipline: its
+/// `pick_next`→`trap_return` handoff writes PerCpu.cur_frame and then
+/// relies on the tail's reload, so an IRQ taken inside that window would
+/// stash an EL1h frame from the scheduler stack and the tail would
+/// restore IT instead of the picked proc's frame (SP_EL1 then lands
+/// inside a kstack this CPU does not own).  Entry points are normally
+/// already masked (a trap entry, block()'s syscall context); this makes
+/// the contract hold for a secondary CPU that arrived through
+/// `secondary_main`.  The idle arm's `idle_wait` is the one deliberate
+/// unmask window.
+pub fn mask_irq() {
+    #[cfg(not(test))]
+    // SAFETY: setting DAIF.I is a PSTATE write — always executable at
+    // EL1, no memory operands.
+    unsafe {
+        core::arch::asm!("msr DAIFSet, #2");
+    }
+}
+
 /// Park the CPU forever (the clean-halt stop — the ONE wfi-halt home;
 /// fault.rs's no-current-process park, syscall.rs's all-exited halt,
 /// main.rs's pre-exec idle loop and trap()'s dump-and-halt all converge
@@ -417,19 +436,29 @@ fn dispatch_irq(frame: &TrapFrame) -> bool {
     // interruption of THIS CPU (its stale-current guard); an EL1h entry
     // (the sched loop's idle wfi window) re-pops after the eret instead.
     let user_interrupted = frame.psr & 0xF == 0;
+    // Preemption is deferred until AFTER the EOI below: reschedule() now
+    // parks this CPU into its sched loop (swtch) instead of returning to
+    // this frame, so the interrupt must already be retired — an active
+    // GIC line would gate this CPU's interrupts for as long as the
+    // preempted proc stays off-CPU.
+    let mut resched = false;
     match intid {
         // SGI 0 (smp::SGI_RESCHED, SMP-07): the reschedule IPI — a waker
         // enqueued onto this CPU's run queue (possibly while it sat in
         // the sched loop's idle wfi).  preempt() re-considers a Running
         // proc (an EL0 interruption); an idle CPU's loop simply re-pops
         // after the eret.  EOI below.
-        i if i == crate::smp::SGI_RESCHED as u32 => crate::proc::preempt(user_interrupted),
+        i if i == crate::smp::SGI_RESCHED as u32 => resched = true,
         // SGI 1 (smp::SGI_SHOOTDOWN, SMP-07): the TLB shootdown IPI —
         // service the pending request (local flush + generation ack)
         // through the port coordinator.  EOI below.
         i if i == crate::smp::SGI_SHOOTDOWN as u32 => port::smp::service_shootdown_ipi(),
-        // ARM generic timer CNTP (PPI 14 -> INTID 16+14)
-        30 => platform::timer::tick(user_interrupted),
+        // ARM generic timer CNTP (PPI 14 -> INTID 16+14): re-arm, sweep,
+        // heartbeat/watchdog — then the preemption check below.
+        30 => {
+            platform::timer::tick();
+            resched = true;
+        }
         // PL011 UART RX (SPI 1 -> INTID 32+1): the devcons read-buffer
         // feed under dev_exec
         33 => platform::pl011::rx_irq(),
@@ -447,6 +476,9 @@ fn dispatch_irq(frame: &TrapFrame) -> bool {
     }
     if intid != platform::gic::SPURIOUS_INTID {
         platform::gic::eoi(raw);
+    }
+    if resched {
+        crate::proc::preempt(user_interrupted);
     }
     true
 }

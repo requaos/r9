@@ -731,6 +731,24 @@ pub struct Proc {
     /// subsystem-lock registration.  Per proc (not per CPU): the flag
     /// travels with the proc whichever CPU it blocks on.
     pub wake_pending: AtomicBool,
+    /// True while a CPU owns this proc's kernel stack (and, for a proc
+    /// parked mid-syscall, its saved kernel context): set by the cpu
+    /// that starts the proc (pick_next / activate_first), cleared ONLY
+    /// by that cpu's sched-loop release step — which runs on the
+    /// scheduler stack, i.e. after the cpu has left the proc's kstack.
+    ///
+    /// The invariant `pick_next` enforces: a proc is never started on a
+    /// cpu while `on_cpu` is set, so two cpus can never share one
+    /// kernel stack.  This is the HVF `-smp 2` fork/exec-sweep
+    /// corruption's root-cause fix: `reschedule` used to publish a
+    /// preempted proc Ready + enqueued while the preempting cpu still
+    /// ran on its kstack (through the `sched: switch` console print, a
+    /// long window on real hardware), so a sibling cpu could steal it
+    /// and take a trap on the same stack — overlapping kernel frames,
+    /// a corrupted console MCS queue, and the observed `paqfs...s`
+    /// deadlock.  The block() window (a wake readying a proc whose cpu
+    /// has not yet reached its swtch) is covered by the same token.
+    pub on_cpu: AtomicBool,
     /// Top of this proc's 16 KiB kernel stack (pagealloc'd at construction).
     pub kstack_top: usize,
     /// Physical pages backing the kernel stack (the EXITS path frees
@@ -935,6 +953,7 @@ impl Proc {
             name: [0; KNAMELEN],
             state: ProcState::Ready,
             wake_pending: AtomicBool::new(false),
+            on_cpu: AtomicBool::new(false),
             kstack_top,
             kstack_pas,
             root_table,
@@ -1709,9 +1728,12 @@ pub fn init_trap_stacks() {
 /// First activation (exec_bootstrap's only call): publish the proc as
 /// current + Running and record its kstack as the trap-entry stack — the
 /// trap_return tail leaves SP_EL1 at frame+288 (= this kstack top) on the
-/// EL0t-bound return into the seeded frame.
+/// EL0t-bound return into the seeded frame.  Takes the kstack-ownership
+/// token (`Proc::on_cpu`): this CPU owns the stack until it swtiches off
+/// it into its scheduler context.
 pub fn activate_first(p: &mut Proc) {
     p.state = ProcState::Running;
+    p.on_cpu.store(true, Ordering::Release);
     set_current_proc(p);
     write_curkstack(p.kstack_top);
     // Install: the proc's user FP/SIMD state (exec zeroed it) goes live.
@@ -1784,105 +1806,115 @@ pub fn preempt(interrupted_user: bool) {
 
 /// Round-robin reschedule from the tick (IRQ-from-EL0: the live frame sits
 /// on the current proc's kstack, recorded in this CPU's PerCpu cur_frame
-/// by the trap entry).  On a switch: stash the live frame into the
-/// current proc, mark it Ready AND re-enqueue it on this CPU's run queue
-/// (SMP-11: Ready ⟺ enqueued), install the next (current + cur_kstack +
-/// cur_frame + TTBR0, one locked step), and print the marker
-/// `sched: switch old->new` — marker-not-order evidence.  The trap tail's
-/// cur_frame reload then returns to the NEW process.  Ready procs holding
-/// a saved kernel context (blocked_in_kernel) are skipped here — only the
-/// sched loop can swtch them back in; their queue entries are consumed by
-/// pick_next (a proc this scan switches to directly leaves its queue
-/// entry stale; pick_next skips non-Ready entries).
+/// by the trap entry) or from a yield (sys_sleep).
+///
+/// THE HANDOFF RULE (the HVF `-smp 2` corruption's fix): the preempted
+/// proc must NOT be published Ready/enqueued while this CPU is still
+/// running on its kernel stack.  This function therefore only PARKS the
+/// CPU's kernel context on the current proc's kstack (`swtch` to this
+/// CPU's scheduler context) and lets the sched loop perform the actual
+/// switch: the loop's `release_left_proc` runs on the scheduler stack —
+/// after this CPU has left the proc's kstack — and only there is the proc
+/// marked Ready and enqueued (see `Proc::on_cpu`).  The pre-fix shape
+/// published it here, then went on to print `sched: switch` and unwind
+/// the trap on that same kstack; a sibling CPU could pick the proc in
+/// that window and take a trap on the shared stack (overlapping frames,
+/// the corrupted console MCS queue, the `paqfs...s` deadlock).
+///
+/// The caller's kernel frames (tick / syscall) stay on the proc's kstack
+/// and are resumed by the sched loop's swtch when the proc is picked
+/// again — the same mid-kernel resume shape `block()` uses, which is why
+/// `blocked_in_kernel` is set: `pick_next` must resume this context via
+/// `Resume::Switch`, never by trap-returning the user frame over it.
 pub fn reschedule() {
     // The guard's None arm replaces a bare deref (a null
     // current here was previously silent UB; unreachable in practice —
     // preempt() gates on Running).
-    let Some(cur) = current() else { return };
-    let cur_pid = cur.pid;
-    let node = LockNode::new();
-    let next_pid;
-    {
-        let mut table = PROC_TABLE.lock(&node);
-        let Some(cur_idx) =
-            table.procs.iter().position(|s| s.as_ref().is_some_and(|p| p.pid == cur_pid))
-        else {
-            return;
-        };
-        // SMP-11 (05-22): the next proc comes from the RUN QUEUES, never a
-        // raw table scan — Ready ⟺ enqueued, and a mid-construction
-        // rfork/exec child sits Ready-in-table with a null frame (fpsave
-        // and parent unset) until its builder's enqueue publishes it; the
-        // old raw scan picked it and trap_returned a null frame (the
-        // -smp 2 wild pc=0 / user-trap death of a forked child).  The pop
-        // loop's Ready check under PROC_TABLE filters stale entries
-        // (pick_next's discipline); blocked_in_kernel Ready procs are the
-        // sched loop's swtch resumees, so they requeue (the first_skipped
-        // cycle guard terminates the re-pop).
-        let my_cpu = port::smp::current_cpu_id();
-        let num = port::smp::num_online_cpus();
-        let mut first_skipped: Option<u64> = None;
-        let ni = loop {
-            let Some(pid) = RUN_QUEUES.pop_or_steal(my_cpu, num) else { break None };
-            if first_skipped == Some(pid) {
-                // Cycled every queue without an eligible proc — put this
-                // one back; cur keeps the cpu.
-                enqueue_ready(pid);
-                break None;
-            }
-            let Some(slot) =
-                table.procs.iter().position(|s| s.as_ref().is_some_and(|p| p.pid == pid))
-            else {
-                continue; // stale entry: the proc unwound to Moribund mid-rfork
-            };
-            let p = table.procs[slot].as_ref().unwrap();
-            if p.state != ProcState::Ready {
-                continue; // stale entry: already Running/picked elsewhere
-            }
-            if p.blocked_in_kernel || p.frame.is_null() {
-                // The sched loop's swtch resumees (blocked_in_kernel)
-                // requeue for pick_next; a null frame is never runnable
-                // (defensive — the enqueue contract excludes it).
-                if first_skipped.is_none() {
-                    first_skipped = Some(pid);
-                }
-                enqueue_ready(pid);
-                continue;
-            }
-            break Some(slot);
-        };
-        let Some(ni) = ni else {
-            // No eligible switch target: cur keeps this cpu — repair the
-            // idle bit the empty pops published.
-            RUN_QUEUES.mark_busy(my_cpu);
-            return;
-        };
-        let curp = table.procs[cur_idx].as_mut().unwrap();
-        curp.frame = read_curframe();
-        curp.state = ProcState::Ready;
-        // SMP-11: the preempted proc re-enters a run queue (Ready ⟺
-        // enqueued); an idle CPU is IPI'd.  Under PROC_TABLE (50) →
-        // RunQueue (60): the documented nesting order.
-        enqueue_ready(curp.pid);
-        // Leave: the live FP/SIMD registers are cur's user state (the
-        // kernel never touches them) — park them before next's go live.
-        crate::fpu::leave(&mut curp.fpsave);
-        let next = table.procs[ni].as_mut().unwrap();
-        next.state = ProcState::Running;
-        next_pid = next.pid;
-        set_current_proc(next);
-        write_curkstack(next.kstack_top);
-        write_curframe(next.frame);
-        crate::fpu::install(&mut next.fpsave);
-        // SAFETY: next's root table is fully built (the construction
-        // invariant — recursive self-entry + its mappings) and named by
-        // the pointer the PROC_TABLE slot owns; the switch runs with the
-        // table lock held in IRQ-masked trap context.
-        unsafe { vm::switch(&*next.root_table, RootPageTableType::User) };
+    let Some(mut cur) = current() else { return };
+    // Fast path: nothing is waiting on the run queues, so there is no
+    // switch to make — keep this proc on the CPU without a scheduler
+    // round trip (the pre-fix no-target arm, minus its pop/requeue
+    // churn).  A stale queue entry can make this probe say yes
+    // needlessly; the sched loop then discards it (pick_next's Ready
+    // check) and re-picks this proc.
+    if !RUN_QUEUES.any_enqueued(port::smp::num_online_cpus()) {
+        return;
     }
-    // Outside the lock (PROC_TABLE → Console is the only nesting order);
-    // still IRQ-masked trap context, so the line precedes the return eret.
-    println!("sched: switch {cur_pid}->{next_pid}");
+    // Stash the live frame (this trap's frame on the proc's kstack) —
+    // pick_next hands it back through PerCpu.cur_frame on the resume.
+    cur.frame = read_curframe();
+    // The resume form: the sched loop swtches back into this context
+    // (mid-reschedule, on this kstack) and it unwinds normally.
+    cur.blocked_in_kernel = true;
+    // Leave: the live FP/SIMD registers are cur's user state (the kernel
+    // never touches them) — park them here; the next proc's install
+    // happens in pick_next, on the sched loop.
+    crate::fpu::leave(&mut cur.fpsave);
+    // SAFETY: sched_context()'s per-CPU seed-once discipline (this CPU's
+    // IRQ-masked trap context); cur's context field is PROC_TABLE-resident
+    // (a stable address across the switch, and slots are never freed this
+    // era).  No lock is held; the resumed path returns to the caller
+    // (tick / sys_sleep) and continues its normal unwind.
+    unsafe { swtch::swtch(&mut cur.context, &*sched_context()) };
+}
+
+/// The sched loop's publish step: this CPU has just swtched off the proc
+/// named by `PerCpu::current_proc` onto its scheduler stack, so the proc's
+/// kernel stack is no longer in use and it may become runnable elsewhere.
+/// Clears `on_cpu` (the kstack-ownership token `pick_next` enforces) and,
+/// for a PREEMPTED proc (state still Running — `reschedule` deliberately
+/// left the state alone), marks it Ready and enqueues it (SMP-11:
+/// Ready ⟺ enqueued) so the loop's pick can run it again.  A Blocked proc
+/// stays Blocked (a waker owns its readiness; one that woke inside the
+/// block window already sits Ready+enqueued, so nothing is repeated), and
+/// a Moribund proc is left alone (the deferred reap frees its pages).
+///
+/// Runs on the owning CPU only (PerCpu/current are this CPU's), under
+/// PROC_TABLE — so the state write, the on_cpu clear and the enqueue are
+/// one atomic step for every picker — and before `reap_moribund` (which
+/// frees an exiting proc's kstack).  Consuming `PerCpu::current_proc`
+/// makes it a no-op on every loop iteration that did not follow a
+/// swtch-off (an idle period, a resumed-switch return): only the CPU
+/// that just left a proc can publish it.
+fn release_left_proc() {
+    let cur = current_proc();
+    if cur.is_null() {
+        return;
+    }
+    // SAFETY: the per-CPU current pointer names a PROC_TABLE-resident
+    // Proc (slots are never freed this era) and is read on the owning
+    // CPU; the field is a plain u64 write-once at construction.
+    let cur_pid = unsafe { (*cur).pid };
+    let node = LockNode::new();
+    let mut table = PROC_TABLE.lock(&node);
+    // The release is strictly OWNER-scoped: consume this CPU's current
+    // pointer in the same critical section.  It is the token that says
+    // "this CPU just left that proc", and clearing it is what keeps a
+    // later loop iteration — after the CPU went idle with a stale
+    // `current_proc` naming a proc that has since migrated to another
+    // CPU — from releasing (and re-enqueueing!) a proc that CPU is
+    // actively running.
+    set_current_proc(ptr::null_mut());
+    let Some(p) = table.procs.iter_mut().flatten().find(|q| q.pid == cur_pid) else {
+        return;
+    };
+    if !p.on_cpu.swap(false, Ordering::AcqRel) {
+        return; // never started, or already released: nothing to publish
+    }
+    // This CPU no longer names the proc's kstack: retract the live-frame/
+    // kstack records the ownership tripwire in pick_next reads.  The next
+    // pick republishes both for the proc it runs.
+    write_curkstack(0);
+    write_curframe(ptr::null_mut());
+    if p.state == ProcState::Running {
+        // Preempted (reschedule parks a Running proc).  Publish it now —
+        // the CPU is off its stack — and remember the switch's source for
+        // pick_next's `sched: switch` marker (the gate's preemption
+        // evidence).
+        p.state = ProcState::Ready;
+        crate::smp::this_cpu().sched_from.store(p.pid, Ordering::Relaxed);
+        enqueue_ready(p.pid);
+    }
 }
 
 /// How the sched loop resumes the picked proc: swtch into its saved kernel
@@ -1976,6 +2008,18 @@ pub fn block() {
 /// abandoned the loop mid-iteration) is as correct as resumption after a
 /// swtch-out.
 fn sched_loop() -> ! {
+    // The scheduler contract: this loop runs with IRQs MASKED.  Every
+    // caller but one is already masked (a trap entry, block()'s swtch
+    // from IRQ-masked syscall context), but secondary_main used to unmask
+    // before parking here — and an IRQ taken inside the
+    // pick_next→trap_return handoff (or mid-tail) rewrites PerCpu
+    // cur_frame with an EL1h frame on the SCHEDULER stack, which the
+    // tail then restores instead of the picked proc's frame: SP_EL1
+    // lands inside a kstack the CPU does not own and the next traps
+    // corrupt it (the HVF-only fork-sweep tear).  Mask defensively so
+    // the contract holds however this CPU entered; the idle arm's
+    // `idle_wait` is the one deliberate unmask window.
+    crate::trap::mask_irq();
     // gatedbg: consecutive idle iterations with
     // a blocked cons reader while RX bytes pend, and with ALL live procs
     // blocked.  The idle arm runs between proc contexts (no syscall holds
@@ -1988,6 +2032,12 @@ fn sched_loop() -> ! {
     let mut cons_wedge = 0u32;
     let mut all_blocked = 0u32;
     loop {
+        // Publish the proc this CPU just left (block/reschedule/moribund
+        // swtch): clear its kstack-ownership token and, for a preempted
+        // proc, re-enqueue it.  Runs on the scheduler stack — after the
+        // CPU has left the proc's kstack — which is the whole point of
+        // the handoff rule (see reschedule's doc).
+        release_left_proc();
         // Free any proc this CPU exited since the last iteration (the
         // deferred moribund reap, 05-22) — the hand-off swtch already
         // moved this CPU off the dead kstack.
@@ -2114,6 +2164,7 @@ pub(crate) fn dump_proc_states() {
 fn pick_next() -> Option<Resume> {
     let my_cpu = port::smp::current_cpu_id();
     let num = port::smp::num_online_cpus();
+    let mut first_skipped: Option<u64> = None;
     loop {
         let pid = RUN_QUEUES.pop_or_steal(my_cpu, num)?;
         let node = LockNode::new();
@@ -2124,7 +2175,50 @@ fn pick_next() -> Option<Resume> {
         if p.state != ProcState::Ready {
             continue; // stale entry: already Running/picked elsewhere
         }
+        if p.on_cpu.load(Ordering::Acquire) {
+            // The kstack-ownership token: a cpu still owns this proc's
+            // kernel stack (it has not reached its sched-loop release
+            // yet — the block() window's waker raced its swtch).  NEVER
+            // start it here; requeue and try another.  Two racing picks
+            // of the same proc would be caught by the tripwire below
+            // failing, but the token makes it impossible by construction
+            // (the HVF -smp 2 fork/exec-sweep fix).
+            if first_skipped == Some(pid) {
+                // Cycled every queue; this proc's owner will release it
+                // (and its enqueue may IPI this cpu) — idle instead of
+                // spinning on the same entry.
+                enqueue_ready(pid);
+                return None;
+            }
+            first_skipped = first_skipped.or(Some(pid));
+            enqueue_ready(pid);
+            continue;
+        }
+        // Tripwire: no OTHER cpu may still name this proc's kernel stack.
+        // `on_cpu` is the authoritative token (checked above); this
+        // cross-check catches a publish path that forgot the token — the
+        // exact pre-fix shape, where `reschedule` enqueued a proc while
+        // its cpu was still printing on the stack.  Both records are
+        // written under PROC_TABLE, so a read under the lock is a
+        // consistent snapshot.
+        #[cfg(debug_assertions)]
+        {
+            let n = num.min(crate::smp::MAX_CPUS);
+            let mut c = 0;
+            while c < n {
+                if c != my_cpu
+                    && crate::smp::PER_CPU[c].cur_kstack.load(Ordering::Acquire) == p.kstack_top as u64
+                {
+                    panic!(
+                        "sched: pid {} picked while cpu {c} still names its kernel stack {:#x} — two cpus on one kstack (a preempt/block publish raced the stack handoff)",
+                        p.pid, p.kstack_top
+                    );
+                }
+                c += 1;
+            }
+        }
         p.state = ProcState::Running;
+        p.on_cpu.store(true, Ordering::Release);
         set_current_proc(p);
         write_curkstack(p.kstack_top);
         write_curframe(p.frame);
@@ -2135,6 +2229,13 @@ fn pick_next() -> Option<Resume> {
         // and owned by the table slot; the switch runs under the
         // PROC_TABLE lock in IRQ-masked context.
         unsafe { vm::switch(&*p.root_table, RootPageTableType::User) };
+        // The boot gates' preemption evidence: release_left_proc stored
+        // the preempted proc's pid when it published this switch's
+        // source.  PROC_TABLE → Console is the documented nesting order.
+        let from = crate::smp::this_cpu().sched_from.swap(0, Ordering::Relaxed);
+        if from != 0 {
+            println!("sched: switch {from}->{}", p.pid);
+        }
         return Some(if p.blocked_in_kernel {
             p.blocked_in_kernel = false;
             Resume::Switch(&mut p.context as *mut swtch::Context)
