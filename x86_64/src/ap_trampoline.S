@@ -160,7 +160,17 @@ ap_long64:
 	// 'T' means the AP died in the trampoline; a 'T' with no later
 	// marker localises the fault to ap_main.
 	movw	$0x3F8, %dx
+	movb	$0x0a, %al
+	outb	%al, %dx
+	movb	$0x41, %al
+	outb	%al, %dx
+	movb	$0x50, %al
+	outb	%al, %dx
+	movb	$0x3a, %al
+	outb	%al, %dx
 	movb	$0x54, %al
+	outb	%al, %dx
+	movb	$0x0a, %al
 	outb	%al, %dx
 
 	// Zero the frame-pointer chain root and jump to ap_main (it

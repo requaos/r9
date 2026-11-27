@@ -547,15 +547,17 @@ fn ap_mark(b: u8) {
     // SAFETY: CPL 0 port I/O to the architectural q35 COM1 THR; the
     // poll reads the 16550's LSR (offset 5) THRE bit (0x20).
     unsafe {
-        let mut spins = 0u32;
-        while crate::pio::inb(crate::uart16550::COM1 + 5) & 0x20 == 0 {
-            spins += 1;
-            if spins > 1_000_000 {
-                break;
+        for byte in [b'\n', b'A', b'P', b':', b, b'\n'] {
+            let mut spins = 0u32;
+            while crate::pio::inb(crate::uart16550::COM1 + 5) & 0x20 == 0 {
+                spins += 1;
+                if spins > 1_000_000 {
+                    break;
+                }
+                core::hint::spin_loop();
             }
-            core::hint::spin_loop();
+            crate::pio::outb(crate::uart16550::COM1, byte);
         }
-        crate::pio::outb(crate::uart16550::COM1, b);
     }
 }
 
