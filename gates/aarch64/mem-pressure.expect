@@ -12,10 +12,12 @@
 #     with `-smp 2` and `-m $R9_MEM` (default 256M) and `-dtb $env(R9_DTB)`.
 #   * the driver asserts `palloc: managed_frames=2048` at boot, then drives
 #     from Harvey's rc shell:
-#       - Worker 1: `{ sleep 60; echo pinnedok } | cat &` — cat blocks in a
-#         pipe read with a UserSliceMut PinGuard held across the sleep on
+#       - Worker 1: `{ hsleep 60; echo pinnedok } | cat &` — cat blocks in
+#         a pipe read with a UserSliceMut PinGuard held across the sleep on
 #         one CPU; when the sleep finishes the pipe delivers `pinnedok`
-#         into the pinned buffer (the intact-bytes proof).
+#         into the pinned buffer (the intact-bytes proof).  (05-21: the
+#         arm64 image stages sleep(1) as /arm64/bin/hsleep, never
+#         /bin/sleep — the 05-27 driver's bare `sleep` never resolved.)
 #       - Worker 2 (foreground, the other CPU): repeated exec/read churn
 #         (/bin/ls /bin, /bin/cat /lib/namespace, /bin/echo) to push the
 #         8 MiB pool below the evictor low-water mark and force clean text
@@ -138,14 +140,17 @@ proc whole_capture_clean {} {
 }
 
 # --- 1. the staged boot (markers in emission order) -------------------
+# The managed-frame cap is read by palloc at memory init, BEFORE the
+# secondary CPU comes online (05-21: fixed the 05-27 ordering bug — the
+# palloc marker prints at ~line 49, smp-online at ~line 1855).
 stage banner    {r9 from the Internet}
-stage smp-online {smp: cpu 1 online}
 stage palloc    "palloc: managed_frames=$maxf"
+stage smp-online {smp: cpu 1 online}
 stage paqfs     {paqfs\.\.\.}
 stage prompt    {% }
 
 # --- 2. Worker 1: the pinned-blocked pipe reader (one CPU) ------------
-send "{ sleep 60; echo pinnedok } | cat &\r"
+send "{ hsleep 60; echo pinnedok } | cat &\r"
 stage reader-prompt {% }
 
 # --- 3. Worker 2 (the other CPU): exec/read churn to force eviction ---

@@ -41,7 +41,7 @@ use crate::chan::transport::{
     Handshake, Role, Session, TransportConfig,
 };
 use crate::chan::{self, wire, PAGE_LEN};
-use crate::dat::{Chan, Qid, QTDIR};
+use crate::dat::{Chan, Qid, QTDIR, QTFILE};
 use crate::devmnt::{Dialect, Mnt, MntIo, Negotiated};
 use crate::fid::{FidEntry, FidTable, StatefulHandle};
 use crate::mcslock::{Lock, LockNode};
@@ -108,6 +108,55 @@ fn file_bytes(path: u64, offset: u64, count: u32) -> Vec<u8> {
 
 fn file_index(name: &[u8]) -> Option<usize> {
     FILE_NAMES.iter().position(|candidate| *candidate == name)
+}
+
+/// One stat(5) wire record for the synthetic root directory or a data file
+/// (the shared `StatWriter` shape: the 41-byte fixed part plus FOUR
+/// length-prefixed strings — name/uid/gid/muid, which libc's `statcheck`
+/// walks).  The reply to Tstat and each record in the root's directory read
+/// share this shape.
+fn stat_record(path: u64, name: &[u8]) -> Vec<u8> {
+    let (mode, length) = if path == ROOT_PATH {
+        (0x8000_0000 | 0o555, 0)
+    } else {
+        (0o644, FILE_LEN as u64)
+    };
+    let need = 41 + (2 + name.len()) + 3 * (2 + 6); // uid/gid/muid = "glenda"
+    let mut buf = alloc::vec![0u8; need];
+    let n = {
+        let mut w = crate::dat::StatWriter::new(&mut buf);
+        w.u16(0); // type: unused this era
+        w.u32(0); // dev: the synthetic server owns no device number
+        w.u8(if path == ROOT_PATH { QTDIR } else { QTFILE });
+        w.u32(0); // vers
+        w.u64(path);
+        w.u32(mode);
+        w.u32(0); // atime
+        w.u32(0); // mtime
+        w.u64(length);
+        w.string(name);
+        w.string(b"glenda");
+        w.string(b"glenda");
+        w.string(b"glenda"); // muid — the fourth string statcheck walks
+        w.finish() as usize
+    };
+    buf.truncate(n);
+    buf
+}
+
+/// The root directory's byte listing: one stat(5) record per data file, in
+/// name order, honoring the standard 9P offset/count window (a directory is
+/// read in pieces; `ls` walks it sequentially).  This is what `ls '#M'`
+/// enumerates — the loopback root is a real read-only directory, not just
+/// an attach target.
+fn directory_bytes(offset: u64, count: u32) -> Vec<u8> {
+    let mut listing = Vec::new();
+    for (idx, name) in FILE_NAMES.iter().enumerate() {
+        listing.extend_from_slice(&stat_record(ROOT_PATH + 1 + idx as u64, name));
+    }
+    let start = (offset as usize).min(listing.len());
+    let end = (start + count as usize).min(listing.len());
+    listing[start..end].to_vec()
 }
 
 fn qid_for(path: u64) -> Qid {
@@ -493,8 +542,31 @@ impl LoopServer {
             },
             Msg::Tread { offset, count, .. } => match self.resolve(&opened.handle) {
                 Ok(source) => {
-                    let data = file_bytes(source.qid_path, offset, count);
+                    let data = if source.qid_path == ROOT_PATH {
+                        directory_bytes(offset, count)
+                    } else {
+                        file_bytes(source.qid_path, offset, count)
+                    };
                     self.reply(opened.tag, opened.handle, &Msg::Rread { data })
+                }
+                Err(_) => self.rerror(opened.tag),
+            },
+            Msg::Tstat { .. } => match self.resolve(&opened.handle) {
+                Ok(source) => {
+                    let record = if source.qid_path == ROOT_PATH {
+                        Some(stat_record(ROOT_PATH, b"#M"))
+                    } else {
+                        source
+                            .qid_path
+                            .checked_sub(ROOT_PATH + 1)
+                            .map(|idx| idx as usize)
+                            .filter(|idx| *idx < DATA_FILES)
+                            .map(|idx| stat_record(source.qid_path, FILE_NAMES[idx]))
+                    };
+                    match record {
+                        Some(stat) => self.reply(opened.tag, opened.handle, &Msg::Rstat { stat }),
+                        None => self.rerror(opened.tag),
+                    }
                 }
                 Err(_) => self.rerror(opened.tag),
             },
@@ -988,6 +1060,46 @@ mod tests {
             assert_eq!(got, expected_file(idx), "file {idx} reads back its exact pattern");
         }
         drop(root);
+        reset_global();
+    }
+
+    #[test]
+    fn aead_loop_root_enumerates_and_stats() {
+        let _g = global_guard();
+        reset_global();
+        assert!(maybe_start_from_cmdline("aeadloop=1"), "the switch activates the loopback");
+        let root = attach_root(b"").expect("the active #M attach returns the root chan");
+
+        // Tstat of the root: a stat(5) record carrying its four strings.
+        let mut sb = [0u8; 512];
+        let n = crate::devmnt::stat(&root, &mut sb).expect("stat the loopback root") as usize;
+        assert!(n > 41, "the root stat is a stat(5) record with four strings");
+
+        // A directory read enumerates data0..data7 (what `ls '#M'` prints).
+        let mut opened = crate::namec::open_chan(&root, OREAD).expect("open the root directory");
+        let mut buf = [0u8; 1024];
+        let mut listing = Vec::new();
+        loop {
+            let offset = listing.len() as u64;
+            let got =
+                crate::devmnt::read(&mut opened, &mut buf, offset).expect("read the root directory")
+                    as usize;
+            if got == 0 {
+                break;
+            }
+            listing.extend_from_slice(&buf[..got]);
+        }
+        for idx in 0..DATA_FILES {
+            let name = alloc::format!("data{idx}");
+            assert!(
+                listing.windows(name.len()).any(|window| window == name.as_bytes()),
+                "the root listing names {name}"
+            );
+        }
+
+        drop(root);
+        crate::namec::close_chan(&opened);
+        drop(opened);
         reset_global();
     }
 

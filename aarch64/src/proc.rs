@@ -120,9 +120,30 @@ pub const MAX_PROCS: usize = 2048;
 /// 3..29 — the table must hold fds through 29 without making that fatal;
 /// pipe+dup flows hold several at once).
 pub const MAX_FDS: usize = 32;
-/// Per-process kernel stack: 16 KiB (4 pages) — the INTERRUPTSTACKSZ
-/// discipline (a dedicated fixed-size kernel stack per trap-taking context).
-const KSTACK_PAGES: usize = 4;
+/// Per-process kernel stack: 32 KiB (8 pages) — the INTERRUPTSTACKSZ
+/// discipline (a dedicated fixed-size kernel stack per trap-taking context)
+/// widened from the donor's 16 KiB by the `smp-stress` gate (05-21).
+///
+/// Why the 4-page walk no longer fits: the in-kernel `9P2000.aead` loopback
+/// (#M, `port::aead_loop`) is a *coroutine* server — the CLIENT's syscall
+/// frames stay live while the server's dispatch runs on the same stack
+/// (`sys_pread`/`exit_tail` → `devmnt::read`/`clunk` → `SealedWriteIo`
+/// → `LoopMntIo` → `LoopServer::handle_one` → `recv_sealed` → `serve` →
+/// `Session::receive/seal`).  Every other mount (paqfs, a pipe server) RPCs
+/// to another proc and unwinds instead of nesting.  Measured on the gate:
+/// 4 pages (16 KiB) overflows on the 80-open `cat '#M/dataN' | wc -c` loop
+/// — the overflow walks into the neighbouring device-VA mapping (the
+/// symptom was a corrupted `UserSliceMut` local: `len` holding sealed-packet
+/// bytes) — while 8 pages passes the full stress driver on HVF.  Plan 9's
+/// INTERRUPTSTACKSZ assumed no whole 9P server on the trap stack; this
+/// kernel has one, so the budget follows the deepest synchronous path.
+///
+/// The LOWEST page is left UNMAPPED as a guard (see `create_proc`): an
+/// overflow now takes a named EL1 translation fault in the guard page
+/// instead of silently writing into a sibling proc's stack.
+pub(crate) const KSTACK_PAGES: usize = 8;
+/// The usable kernel-stack pages (the guard page below them is VA-only).
+pub(crate) const KSTACK_MAPPED_PAGES: usize = KSTACK_PAGES - 1;
 /// Queued-notes capacity (the note delivery path fills it).
 pub const NOTE_QUEUE_CAP: usize = 8;
 /// The exec-recorded argv's byte bound (the /proc/N/args
@@ -1687,6 +1708,12 @@ pub fn new_user_proc(name: &str) -> Result<ProcGuard> {
     // context; a gap would silently break the stack, so assert contiguity.
     // The PAs are recorded (kstack_pas) — the bump-allocator VAs say nothing
     // about backing pages, and the EXITS path frees by PA.
+    // The LOWEST VA (page 0) is deliberately left UNMAPPED: the overflow
+    // guard (KSTACK_PAGES's doc).  Its backing page is allocated and
+    // recorded with the rest (the PA bookkeeping stays one-for-one and the
+    // reap frees it), but no leaf maps it — an over-deep stack takes a
+    // named EL1 fault in the guard instead of silently writing into the
+    // neighbouring device-VA mapping.
     // Every mid-construction failure funnels through unwind_new_proc
     // (root-table page + the kstack pages allocated so far) — no kernel
     // pages leak per failed rfork/exec attempt.
@@ -1710,6 +1737,9 @@ pub fn new_user_proc(name: &str) -> Result<ProcGuard> {
         };
         // Record BEFORE the map so the map-failure unwind covers this page.
         kstack_pas[i] = pa.addr();
+        if i < KSTACK_PAGES - KSTACK_MAPPED_PAGES {
+            continue; // the guard page: VA + PA owned, never mapped
+        }
         let mut physalloc = PhysPageAllocator {};
         let mut vmt = VmTraitImpl {};
         if vm::kernel_pagetable()

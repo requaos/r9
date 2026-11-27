@@ -94,8 +94,9 @@ pub struct PerCpu {
     /// it up to the swtch (and the root table stays in TTBR0 until the
     /// next pick's vm::switch).  Owned by this CPU: written in exit_tail
     /// and drained in sched_loop, both IRQ-masked contexts on the owning
-    /// CPU.  KSTACK_PAGES is proc.rs's; 4 slots here.
-    pub moribund_reap: SyncUnsafeCell<Option<(u64, [u64; 4])>>,
+    /// CPU.  Sized from proc.rs's KSTACK_PAGES (05-21: the guard-page
+    /// widening — a literal here silently truncated the reap list).
+    pub moribund_reap: SyncUnsafeCell<Option<(u64, [u64; crate::proc::KSTACK_PAGES])>>,
 }
 
 // The trap.S ABI contract: cur_frame is at offset 0 (T-05-16's mitigation

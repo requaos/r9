@@ -174,6 +174,63 @@ jobs:
       - name: x64 composed smoke (TCG AVX2, -smp 2)
         run: env R9_CPU="qemu64,+avx,+avx2,+xsave,+xsaveopt" R9_ACCEL=tcg nix run .#boot-r9-smoke-x64
 
+  # SMP-08/MEM-15/D-24/D-27 (05-21): the two-CPU stress and small-memory
+  # pressure gates, on BOTH architectures.  Each runs at -smp 2 (the
+  # wrapper drivers hard-code it) with the target's real bootargs delivery
+  # — aarch64 via `fdtput` on /chosen/bootargs, x86_64 via
+  # `r9-iso-builder --append` on the GRUB multiboot2 cmdline.  Explicit
+  # TCG: the aarch64 guest is emulated on the x86_64 runner and the x86_64
+  # runner is KVM-less (no silent downgrade).  No continue-on-error: a red
+  # stress or eviction regression turns the workflow red on the commit
+  # (CORR-01/D-05, T-05-37).
+  boot-r9-smp-stress:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120 # TCG scale; the driver's per-stage timeouts localize failures
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install nix (flakes enabled)
+        uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+        with:
+          extra-conf: experimental-features = nix-command flakes
+      - name: aarch64 -smp 2 stress gate (explicit TCG)
+        run: env R9_ACCEL=tcg nix run .#boot-r9-smp-stress
+
+  boot-r9-mem-pressure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120 # TCG scale; the driver's per-stage timeouts localize failures
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install nix (flakes enabled)
+        uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+        with:
+          extra-conf: experimental-features = nix-command flakes
+      - name: aarch64 -smp 2 small-memory pressure gate (explicit TCG)
+        run: env R9_ACCEL=tcg nix run .#boot-r9-mem-pressure
+
+  boot-r9-smp-stress-x64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120 # TCG scale; the driver's per-stage timeouts localize failures
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install nix (flakes enabled)
+        uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+        with:
+          extra-conf: experimental-features = nix-command flakes
+      - name: x64 -smp 2 stress gate (explicit TCG)
+        run: env R9_ACCEL=tcg nix run .#boot-r9-smp-stress-x64
+
+  boot-r9-mem-pressure-x64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120 # TCG scale; the driver's per-stage timeouts localize failures
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install nix (flakes enabled)
+        uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+        with:
+          extra-conf: experimental-features = nix-command flakes
+      - name: x64 -smp 2 small-memory pressure gate (explicit TCG)
+        run: env R9_ACCEL=tcg nix run .#boot-r9-mem-pressure-x64
+
   # D-13's best-effort second witness for the quick gate: the same
   # assembler + q35cpu kernel + rio assertion developers run locally,
   # under explicit TCG because the runner is KVM-less.  120 min bounds the
