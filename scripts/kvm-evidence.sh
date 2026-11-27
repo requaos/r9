@@ -32,7 +32,7 @@ diag_wrapper="$repo_root/$out/qemu-diag.sh"
 rm -f "$diag_log"
 cat >"$diag_wrapper" <<'WRAP'
 #!/bin/sh
-exec qemu-system-x86_64 -no-reboot -d int,cpu_reset -D "${R9_QEMU_LOG:-/tmp/qemu-diag.log}" "$@"
+exec qemu-system-x86_64 -no-reboot -d int,guest_errors,cpu_reset -D "${R9_QEMU_LOG:-/tmp/qemu-diag.log}" "$@"
 WRAP
 chmod +x "$diag_wrapper"
 export R9_QEMU="$diag_wrapper"
