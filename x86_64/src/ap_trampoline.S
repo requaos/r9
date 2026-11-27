@@ -164,6 +164,7 @@ ap_long64:
 	movw	%ax, %ss
 	movw	%ax, %fs
 	movw	%ax, %gs
+	ap_mark	0x54			// T: 64-bit long mode
 
 	// The handoff — stack, args, entry — all from the mailbox
 	// (identity VA == PA under bootpml4, absolute 64-bit reads).
@@ -176,7 +177,6 @@ ap_long64:
 	ap_mark	0x4a
 	movabsq	$MB_ENTRY_VA, %rax
 	movq	(%rax), %rax
-	ap_mark	0x54			// T: 64-bit long mode
 
 	// Zero the frame-pointer chain root and jump to ap_main (it
 	// never returns).
