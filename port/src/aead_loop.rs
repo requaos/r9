@@ -1006,6 +1006,13 @@ mod tests {
                 // shared table's baseline is the same on both sides.
                 sync.wait();
                 let baseline = active_fids(&shared);
+                // The baseline capture itself must be quiet too: without this
+                // barrier a fast thread starts its read traffic (allocating a
+                // scratch fid) while the slower thread is still reading the
+                // baseline, so the baseline counts a transient fid and the
+                // final compare fails 3 != 2. Three waits, one reusable
+                // barrier: both built, both baselined, both finished.
+                sync.wait();
                 for round in 0..25 {
                     for idx in 0..DATA_FILES {
                         let got = read_file(&loopback.root, idx);
