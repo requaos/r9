@@ -1,0 +1,899 @@
+host: Linux teeniebox 7.4.0-rc3 #1-NixOS SMP PREEMPT_DYNAMIC @315532800 x86_64 GNU/Linux
+head: fac0aec3b0146b24c072bf87b6e2b92f2b65e180
+at:   Fri Nov 27 01:11:31 AM UTC 2026
+
+=== 1/4 gate: x86-64 golden invariant (rio) at -smp 2, KVM ===
+r9 devshell: rustc 1.95.0-nightly (842bd5be2 2026-01-29)
+QEMU emulator version 11.1.2
+apps: nix run .#build | nix run .#boot-virt | nix run .#default
+harvey supply: R9_HARVEY_DIR_ARM64=/nix/store/b2i0hcbxxmyjlh7drl94s0lp3iq7n04a-harvey-tree-arm64-0 (lazy; realised on first use)
+harvey supply: R9_HARVEY_DIR_AMD64=/nix/store/002vay29nmgw2d81nvmi2i6adgz7h1md-harvey-tree-amd64-0 (lazy; realised on first use)
+harvey supply: R9_HARVEY_REFERENCE_AMD64=/nix/store/ydavfxqx6vhlcar7mmcxi1llhjg0n69x-harvey-reference-amd64-0 (lazy; realised on first use)
+harvey supply: R9_HARVEY_REFERENCE_ARM64=/nix/store/zps34qpcmsd0s2mkf251hhc9sjsnqvq5-harvey-reference-arm64-0 (lazy; realised on first use)
+harvey supply: R9_AUTHDOMAIN_GEN=/nix/store/gysm8xfgmlwkj6kcf6zdzkc9pzmi20ah-harvey-authdomain-gen-0/bin/authdomain-gen
+warning: field `frame_len` is never read
+   --> xtask/src/pcap.rs:228:9
+    |
+219 | pub struct Icmpv4Frame {
+    |            ----------- field in this struct
+...
+228 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Icmpv4Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `frame_len` is never read
+   --> xtask/src/pcap.rs:375:9
+    |
+359 | pub struct BootpFrame {
+    |            ---------- field in this struct
+...
+375 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `BootpFrame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `dst_mac` and `frame_len` are never read
+   --> xtask/src/pcap.rs:569:9
+    |
+566 | pub struct Icmpv6Frame {
+    |            ----------- fields in this struct
+...
+569 |     pub dst_mac: [u8; 6],
+    |         ^^^^^^^
+...
+579 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Icmpv6Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `src_mac`, `dst_mac`, and `frame_len` are never read
+   --> xtask/src/pcap.rs:723:9
+    |
+721 | pub struct Tcpv4Frame {
+    |            ---------- fields in this struct
+722 |     /// Ethernet source/destination MAC.
+723 |     pub src_mac: [u8; 6],
+    |         ^^^^^^^
+724 |     pub dst_mac: [u8; 6],
+    |         ^^^^^^^
+...
+737 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Tcpv4Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: `xtask` (bin "xtask") generated 4 warnings
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `target/debug/xtask gate --arch x86-64 --accel kvm`
+gate: venue accel=kvm cpu=host run=72188-1795741893
+gate: tree /nix/store/002vay29nmgw2d81nvmi2i6adgz7h1md-harvey-tree-amd64-0 (store path — nix store verify after the run)
+authdomain-gen: generated /home/req/code/r9/target/images/x86_64/cpu.authdom: label=DEMO authdom=DEMO-harvey authid=bootes users=3
+authdomain-gen: DEMO material is throwaway — never reuse outside a gate image
+authdomain-gen: no authdomain.local — generating ephemeral DEMO material
+image: authdomain generated a fresh p9sk1 domain for "cpu" at /home/req/code/r9/target/images/x86_64/cpu.authdom (authdom DEMO-harvey)
+image: authdomain pairing verified over the staged copies for "cpu"
+image: creds /home/req/code/r9/target/images/x86_64/cpu.creds (mode 0600)
+gate: image cpu /home/req/code/r9/target/images/x86_64/cpu.paq sha256 7419de4ad32ca340b324e1e249fc65e61323a5a0f347aeceaf45d9c12f3eb352 members 4442
+   Compiling compiler_builtins v0.1.160 (/nix/store/ypvsp48ial67d5frhk4y86crjsy764mp-rust-default-1.95.0-nightly-2026-01-30/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins)
+   Compiling core v0.0.0 (/nix/store/ypvsp48ial67d5frhk4y86crjsy764mp-rust-default-1.95.0-nightly-2026-01-30/lib/rustlib/src/rust/library/core)
+   Compiling heapless v0.9.3
+   Compiling blake3 v1.8.7
+   Compiling smoltcp v0.14.0
+   Compiling x86 v0.52.0
+   Compiling zerocopy v0.8.27
+   Compiling alloc v0.0.0 (/nix/store/ypvsp48ial67d5frhk4y86crjsy764mp-rust-default-1.95.0-nightly-2026-01-30/lib/rustlib/src/rust/library/alloc)
+   Compiling typenum v1.20.1
+   Compiling cmov v0.5.4
+   Compiling cfg-if v1.0.5
+   Compiling cpufeatures v0.3.1
+   Compiling bitflags v1.3.2
+   Compiling byteorder v1.5.0
+   Compiling constant_time_eq v0.4.2
+   Compiling stable_deref_trait v1.2.1
+   Compiling arrayvec v0.7.8
+   Compiling zeroize v1.9.2
+   Compiling adler2 v2.0.1
+   Compiling managed v0.8.0
+   Compiling bit_field v0.10.3
+   Compiling ds v0.1.0 (/home/req/code/r9/ds)
+   Compiling bitflags v2.9.4
+   Compiling raw-cpuid v10.7.0
+   Compiling static_assertions v1.1.0
+   Compiling bitstruct v0.1.1
+   Compiling miniz_oxide v0.9.1
+   Compiling hash32 v0.3.1
+   Compiling ctutils v0.4.8
+warning: constant `SEQ_INC` is never used
+  --> ds/src/slab.rs:76:7
+   |
+76 | const SEQ_INC: u64 = 1 << SEQ_SHIFT;
+   |       ^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling hybrid-array v0.4.15
+warning: `ds` (lib) generated 1 warning
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling inout v0.2.6
+   Compiling digest v0.11.3
+   Compiling cipher v0.5.2
+   Compiling hmac v0.13.0
+   Compiling sha2 v0.11.1
+   Compiling hkdf v0.13.0
+   Compiling chacha20 v0.10.2
+   Compiling crypto v0.1.0 (/home/req/code/r9/crypto)
+   Compiling port v0.1.0 (/home/req/code/r9/port)
+warning: unused import: `alloc::string::String`
+  --> port/src/devip.rs:57:5
+   |
+57 | use alloc::string::String;
+   |     ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> port/src/allocator.rs:694:13
+    |
+694 |         let mut walk = |head: Option<Idx>, mark: &mut dyn FnMut(Idx)| {
+    |             ----^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `flags` is never used
+   --> port/src/devip/netlog.rs:103:15
+    |
+103 | pub(crate) fn flags() -> u32 {
+    |               ^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `TCPSTAT_MAX_CONN` is never used
+    --> port/src/devip/proto.rs:2031:18
+     |
+2031 | pub(crate) const TCPSTAT_MAX_CONN: usize = 0;
+     |                  ^^^^^^^^^^^^^^^^
+
+warning: constant `TCPSTAT_MAX_SEGMENT` is never used
+    --> port/src/devip/proto.rs:2032:18
+     |
+2032 | pub(crate) const TCPSTAT_MAX_SEGMENT: usize = 1;
+     |                  ^^^^^^^^^^^^^^^^^^^
+
+warning: `port` (lib) generated 5 warnings (run `cargo fix --lib -p port` to apply 2 suggestions)
+   Compiling x86_64 v0.1.0 (/home/req/code/r9/x86_64)
+warning: unused import: `heap_census`
+  --> x86_64/src/allocator.rs:54:25
+   |
+54 | pub(crate) use global::{heap_census, heap_stats};
+   |                         ^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `port::println`
+  --> x86_64/src/platform/q35/netgate.rs:38:5
+   |
+38 | use port::println;
+   |     ^^^^^^^^^^^^^
+
+warning: unnecessary `unsafe` block
+   --> x86_64/src/smp.rs:125:24
+    |
+125 |     let (start, end) = unsafe {
+    |                        ^^^^^^ unnecessary `unsafe` block
+    |
+    = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `heap_census` is never used
+  --> x86_64/src/allocator.rs:44:19
+   |
+44 |     pub(crate) fn heap_census() -> (alloc::vec::Vec<(usize, usize)>, alloc::vec::Vec<(usize, usize)>) {
+   |                   ^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `flags` is never used
+  --> x86_64/src/cpu.rs:35:15
+   |
+35 | pub(crate) fn flags() -> Flags {
+   |               ^^^^^
+
+warning: function `sti` is never used
+  --> x86_64/src/cpu.rs:81:15
+   |
+81 | pub(crate) fn sti() {
+   |               ^^^
+
+warning: associated function `new` is never used
+   --> x86_64/src/dat.rs:657:12
+    |
+648 | impl Flags {
+    | ---------- associated function in this implementation
+...
+657 |     pub fn new(raw: u64) -> Self {
+    |            ^^^
+
+warning: method `array_mut` is never used
+   --> x86_64/src/dat.rs:672:12
+    |
+671 | impl PTable {
+    | ----------- method in this implementation
+672 |     pub fn array_mut(&mut self) -> &mut [u64; 512] {
+    |            ^^^^^^^^^
+
+warning: constant `PINGPONG_N` is never used
+  --> x86_64/src/platform/q35/netgate.rs:44:11
+   |
+44 | pub const PINGPONG_N: u32 = 256;
+   |           ^^^^^^^^^^
+
+warning: constant `TXBULK_N` is never used
+  --> x86_64/src/platform/q35/netgate.rs:48:11
+   |
+48 | pub const TXBULK_N: u32 = 4096;
+   |           ^^^^^^^^
+
+warning: constant `WAIT_TICKS` is never used
+  --> x86_64/src/platform/q35/netgate.rs:51:7
+   |
+51 | const WAIT_TICKS: u64 = 300;
+   |       ^^^^^^^^^^
+
+warning: constant `ARP_REQUEST` is never used
+  --> x86_64/src/platform/q35/netgate.rs:76:7
+   |
+76 | const ARP_REQUEST: [u8; 60] = [
+   |       ^^^^^^^^^^^
+
+warning: type alias `Stats` is never used
+  --> x86_64/src/platform/q35/netgate.rs:94:6
+   |
+94 | type Stats = [(u16, u16, u16, u32, u32); 2];
+   |      ^^^^^
+
+warning: function `progress` is never used
+   --> x86_64/src/platform/q35/netgate.rs:100:4
+    |
+100 | fn progress(now: u16, base: u16) -> u32 {
+    |    ^^^^^^^^
+
+warning: function `reconcile_pingpong` is never used
+   --> x86_64/src/platform/q35/netgate.rs:110:4
+    |
+110 | fn reconcile_pingpong(base: &Stats, now: &Stats, n: u32) -> Result<(), &'static str> {
+    |    ^^^^^^^^^^^^^^^^^^
+
+warning: function `reconcile_txbulk` is never used
+   --> x86_64/src/platform/q35/netgate.rs:139:4
+    |
+139 | fn reconcile_txbulk(base: &Stats, now: &Stats, n: u32) -> Result<u32, &'static str> {
+    |    ^^^^^^^^^^^^^^^^
+
+warning: function `run` is never used
+   --> x86_64/src/platform/q35/netgate.rs:161:8
+    |
+161 | pub fn run() {
+    |        ^^^
+
+warning: function `wait_rx_retired` is never used
+   --> x86_64/src/platform/q35/netgate.rs:270:4
+    |
+270 | fn wait_rx_retired(ops: &port::devether::EtherDriverOps, base: u16, n: u32) -> bool {
+    |    ^^^^^^^^^^^^^^^
+
+warning: function `wait_tx_retired` is never used
+   --> x86_64/src/platform/q35/netgate.rs:290:4
+    |
+290 | fn wait_tx_retired(ops: &port::devether::EtherDriverOps, base: u16, n: u32) -> bool {
+    |    ^^^^^^^^^^^^^^^
+
+warning: function `print_ifstats` is never used
+   --> x86_64/src/platform/q35/netgate.rs:308:4
+    |
+308 | fn print_ifstats(s: &Stats) {
+    |    ^^^^^^^^^^^^^
+
+warning: constant `PRINT_EVERY` is never used
+  --> x86_64/src/platform/q35/timer.rs:48:7
+   |
+48 | const PRINT_EVERY: u64 = TICKS_PER_SEC;
+   |       ^^^^^^^^^^^
+
+warning: function `tick_plan` is never used
+   --> x86_64/src/platform/q35/timer.rs:109:8
+    |
+109 | pub fn tick_plan(state: &TimerState, now: u64, ticks: &AtomicU64) -> (Rearm, u64) {
+    |        ^^^^^^^^^
+
+warning: enum `IntrStatus` is never used
+   --> x86_64/src/trap.rs:700:10
+    |
+700 | pub enum IntrStatus {
+    |          ^^^^^^^^^^
+
+warning: function `intrstatus` is never used
+   --> x86_64/src/trap.rs:808:4
+    |
+808 | fn intrstatus() -> IntrStatus {
+    |    ^^^^^^^^^^
+
+warning: function `spllo` is never used
+   --> x86_64/src/trap.rs:813:8
+    |
+813 | pub fn spllo() -> IntrStatus {
+    |        ^^^^^
+
+warning: function `splhi` is never used
+   --> x86_64/src/trap.rs:819:8
+    |
+819 | pub fn splhi() -> IntrStatus {
+    |        ^^^^^
+
+warning: function `splx` is never used
+   --> x86_64/src/trap.rs:825:8
+    |
+825 | pub fn splx(x: IntrStatus) -> IntrStatus {
+    |        ^^^^
+
+warning: `x86_64` (bin "x86_64") generated 27 warnings (run `cargo fix --bin "x86_64" -p x86_64` to apply 2 suggestions)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 15.40s
+mb2: header at file offset 0x1008 validated on the stripped ISO kernel (magic/arch/length/checksum/end tag)
+iso: module /home/req/code/r9/target/images/x86_64/cpu.paq staged at /boot/bootfs.paq
+iso: kernel cmdline append "init=/amd64/init -c" (mb2 tag 1, the bootconf carrier)
+xorriso 1.5.8.pl02 : RockRidge filesystem manipulator, libburnia project.
+
+xorriso : NOTE : Environment variable SOURCE_DATE_EPOCH encountered with value 315532800
+Drive current: -outdev 'stdio:target/boot-q35cpu.iso'
+Media current: stdio file, overwriteable
+Media status : is blank
+Media summary: 0 sessions, 0 data blocks, 0 data,  357g free
+Added to ISO image: directory '/'='/tmp/nix-shell.uJ2ZPy/grub.0Umbkw'
+xorriso : UPDATE :     356 files added in 1 seconds
+Added to ISO image: directory '/'='/home/req/code/r9/target/iso-q35cpu'
+xorriso : UPDATE :     361 files added in 1 seconds
+xorriso : NOTE : Copying to System Area: 512 bytes from file '/nix/store/jniwmlg4zv2r4baccllbizddnh1scfjr-grub-2.14/lib/grub/i386-pc/boot_hybrid.img'
+ISO image produced: 19925 sectors
+Written to medium : 19925 sectors at LBA 0
+Writing to 'stdio:target/boot-q35cpu.iso' completed successfully.
+
+gate: iso /home/req/code/r9/target/boot-q35cpu.iso 
+gate: leg rio (capture /home/req/code/r9/target/gate/72188-1795741893/rio.log)
+spawn qemu-system-x86_64 -M q35 -cpu host -smp 2 -m 1024M -accel kvm -cdrom /home/req/code/r9/target/boot-q35cpu.iso -netdev user,id=n0,hostfwd=tcp:127.0.0.1:17010-:17010,hostfwd=tcp:127.0.0.1:5670-:567 -device virtio-net-pci-non-transitional,netdev=n0 -nographic -name r9x64dtgate-72188-1795741893
+c[?7l[2J[0mSeaBIOS (version rel-1.17.0-0-gb52ca86e094d-prebuilt.qemu.org)
+
+
+iPXE (http://ipxe.org) 00:02.0 CA00 PCI2.10 PnP PMM+3EFD1B50+3EF31B50 CA00
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from Hard Disk...
+Boot failed: could not read the boot disk
+
+Booting from DVD/CD...
+[0;30;47mWelcome to GRUB[H[J[1;1H  Booting `r9'
+
+!
+
+
+r9 from the Internet
+q35: page allocator init failed: MisalignedAddr
+drawterm-gate: stage ok — banner
+drawterm-gate: TIMEOUT at stage: bootconf
+GATE-FAIL rio-leg-failed (leg rio; capture /home/req/code/r9/target/gate/72188-1795741893/rio.log)
+GATE_EXIT=1
+
+=== 2/4 smoke: retained -smp 1 leg ===
+these 3 derivations will be built:
+  /nix/store/a0fxvvwcms2vb5nadj3bia2lr6gfyc4p-r9-netdev-args-fac0aec.drv
+  /nix/store/k7vrlkzyrbkiv1xbhxxq7bh672cv7zg3-r9-kernel-x64-fac0aec.drv
+  /nix/store/p8mll8l3bi2kv0j7lvgyp3rbnpnv0q3b-boot-r9-smoke-x64.drv
+building '/nix/store/k7vrlkzyrbkiv1xbhxxq7bh672cv7zg3-r9-kernel-x64-fac0aec.drv'...
+building '/nix/store/a0fxvvwcms2vb5nadj3bia2lr6gfyc4p-r9-netdev-args-fac0aec.drv'...
+building '/nix/store/p8mll8l3bi2kv0j7lvgyp3rbnpnv0q3b-boot-r9-smoke-x64.drv'...
+== r9 tree:      /nix/store/002vay29nmgw2d81nvmi2i6adgz7h1md-harvey-tree-amd64-0
+== r9 root:      /home/req/code/r9
+== gate output:  /home/req/code/r9/target/gates/smoke-r9-x64
+== r9 kernel package: /nix/store/m0gkc0yd6lb2fj3ahaqfl61z2mnmiksn-r9-kernel-x64-fac0aec
+   kernel:        /nix/store/m0gkc0yd6lb2fj3ahaqfl61z2mnmiksn-r9-kernel-x64-fac0aec/kernel-x64.elf
+   iso-builder:   /nix/store/4wmj3a1gwklqiqbnlvkgdqznvrmnqlad-r9-iso-builder/bin/r9-iso-builder
+   netdev emitter: /nix/store/i4p9fw49d6givqgz16k9b29qp6jw9znn-r9-netdev-args-fac0aec/bin/r9-netdev-args
+   netdev argv (slirp): -netdev user,id=n0,hostfwd=tcp:127.0.0.1:17010-:17010,hostfwd=tcp:127.0.0.1:5670-:567 -device virtio-net-pci-non-transitional,netdev=n0
+   shape:         q35 accel=kvm cpu=host
+== step 1/4: assembling images chain and cpu (cargo xtask image --arch x86-64 --image chain; --image cpu)
+warning: field `frame_len` is never read
+   --> xtask/src/pcap.rs:228:9
+    |
+219 | pub struct Icmpv4Frame {
+    |            ----------- field in this struct
+...
+228 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Icmpv4Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `frame_len` is never read
+   --> xtask/src/pcap.rs:375:9
+    |
+359 | pub struct BootpFrame {
+    |            ---------- field in this struct
+...
+375 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `BootpFrame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `dst_mac` and `frame_len` are never read
+   --> xtask/src/pcap.rs:569:9
+    |
+566 | pub struct Icmpv6Frame {
+    |            ----------- fields in this struct
+...
+569 |     pub dst_mac: [u8; 6],
+    |         ^^^^^^^
+...
+579 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Icmpv6Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `src_mac`, `dst_mac`, and `frame_len` are never read
+   --> xtask/src/pcap.rs:723:9
+    |
+721 | pub struct Tcpv4Frame {
+    |            ---------- fields in this struct
+722 |     /// Ethernet source/destination MAC.
+723 |     pub src_mac: [u8; 6],
+    |         ^^^^^^^
+724 |     pub dst_mac: [u8; 6],
+    |         ^^^^^^^
+...
+737 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Tcpv4Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: `xtask` (bin "xtask") generated 4 warnings
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.03s
+     Running `target/debug/xtask image --arch x86-64 --image chain`
+image: x86_64/chain /home/req/code/r9/target/images/x86_64/chain.paq sha256 c9f525ec45662e451123615aa6fbd6e4c1dd1944413db604a074b5eb83d624f8 members 49
+warning: field `frame_len` is never read
+   --> xtask/src/pcap.rs:228:9
+    |
+219 | pub struct Icmpv4Frame {
+    |            ----------- field in this struct
+...
+228 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Icmpv4Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `frame_len` is never read
+   --> xtask/src/pcap.rs:375:9
+    |
+359 | pub struct BootpFrame {
+    |            ---------- field in this struct
+...
+375 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `BootpFrame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `dst_mac` and `frame_len` are never read
+   --> xtask/src/pcap.rs:569:9
+    |
+566 | pub struct Icmpv6Frame {
+    |            ----------- fields in this struct
+...
+569 |     pub dst_mac: [u8; 6],
+    |         ^^^^^^^
+...
+579 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Icmpv6Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `src_mac`, `dst_mac`, and `frame_len` are never read
+   --> xtask/src/pcap.rs:723:9
+    |
+721 | pub struct Tcpv4Frame {
+    |            ---------- fields in this struct
+722 |     /// Ethernet source/destination MAC.
+723 |     pub src_mac: [u8; 6],
+    |         ^^^^^^^
+724 |     pub dst_mac: [u8; 6],
+    |         ^^^^^^^
+...
+737 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Tcpv4Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: `xtask` (bin "xtask") generated 4 warnings
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.02s
+     Running `target/debug/xtask image --arch x86-64 --image cpu`
+authdomain-gen: generated /home/req/code/r9/target/images/x86_64/cpu.authdom: label=DEMO authdom=DEMO-harvey authid=bootes users=3
+authdomain-gen: DEMO material is throwaway — never reuse outside a gate image
+authdomain-gen: no authdomain.local — generating ephemeral DEMO material
+image: authdomain generated a fresh p9sk1 domain for "cpu" at /home/req/code/r9/target/images/x86_64/cpu.authdom (authdom DEMO-harvey)
+image: authdomain pairing verified over the staged copies for "cpu"
+image: creds /home/req/code/r9/target/images/x86_64/cpu.creds (mode 0600)
+image: x86_64/cpu /home/req/code/r9/target/images/x86_64/cpu.paq sha256 ac19de9e75461631dae4b759d4ed8dc8d83cf86cb39715a136927f166b60738e members 4442
+== images ok: /home/req/code/r9/target/images/x86_64/chain.paq + /home/req/code/r9/target/images/x86_64/cpu.paq
+== step 2/4: composing the CHAIN ISO (r9's iso-builder: kernel + chain.paq as /boot/bootfs.paq)
+xorriso 1.5.8.pl02 : RockRidge filesystem manipulator, libburnia project.
+
+xorriso : NOTE : Environment variable SOURCE_DATE_EPOCH encountered with value 1735689600
+Drive current: -outdev 'stdio:/tmp/r9-iso-builder.MKSUEu/boot.iso'
+Media current: stdio file, overwriteable
+Media status : is blank
+Media summary: 0 sessions, 0 data blocks, 0 data,  357g free
+Added to ISO image: directory '/'='/tmp/grub.ncu0DK'
+xorriso : UPDATE :     356 files added in 1 seconds
+Added to ISO image: directory '/'='/tmp/r9-iso-builder.MKSUEu/stage'
+xorriso : UPDATE :     361 files added in 1 seconds
+xorriso : NOTE : Copying to System Area: 512 bytes from file '/tmp/r9-iso-builder.MKSUEu/grub-i386-pc/boot_hybrid.img'
+ISO image produced: 11476 sectors
+Written to medium : 11476 sectors at LBA 0
+Writing to 'stdio:/tmp/r9-iso-builder.MKSUEu/boot.iso' completed successfully.
+
+r9-iso-builder: /home/req/code/r9/target/gates/smoke-r9-x64/run.zWHT4i/boot.iso 6ae1786be83ccdbf92b877d54e2c7ebf6fde9da7783004878abbb1816ba70909 (modules: bootfs.paq)
+== step 3/4: composing the CPU ISO (r9's iso-builder: kernel + cpu.paq as /boot/bootfs.paq + the bootconf append init=/amd64/init -c — 19-01's seam)
+xorriso 1.5.8.pl02 : RockRidge filesystem manipulator, libburnia project.
+
+xorriso : NOTE : Environment variable SOURCE_DATE_EPOCH encountered with value 1735689600
+Drive current: -outdev 'stdio:/tmp/r9-iso-builder.yYBApS/boot.iso'
+Media current: stdio file, overwriteable
+Media status : is blank
+Media summary: 0 sessions, 0 data blocks, 0 data,  357g free
+Added to ISO image: directory '/'='/tmp/grub.sQt2m8'
+xorriso : UPDATE :     356 files added in 1 seconds
+Added to ISO image: directory '/'='/tmp/r9-iso-builder.yYBApS/stage'
+xorriso : UPDATE :     361 files added in 1 seconds
+xorriso : NOTE : Copying to System Area: 512 bytes from file '/tmp/r9-iso-builder.yYBApS/grub-i386-pc/boot_hybrid.img'
+ISO image produced: 22030 sectors
+Written to medium : 22030 sectors at LBA 0
+Writing to 'stdio:/tmp/r9-iso-builder.yYBApS/boot.iso' completed successfully.
+
+r9-iso-builder: /home/req/code/r9/target/gates/smoke-r9-x64/run-cpu.LS1BsS/boot.iso c59ac115e3dfcea90e6af0b8db01d836a79876c3034d539403cb127fcd5a4859 (modules: bootfs.paq append=init=/amd64/init -c)
+== step 4/4: the composed smoke (/home/req/code/r9/gates/x86_64/smoke-r9.expect — the chain leg + the cpu-chain leg)
+== captures: /home/req/code/r9/target/gates/smoke-r9-x64/smoke-r9.log + /home/req/code/r9/target/gates/smoke-r9-x64/smoke-r9-cpu.log
+spawn qemu-system-x86_64 -M q35 -cpu host -smp 1 -m 1024M -accel kvm -cdrom /home/req/code/r9/target/gates/smoke-r9-x64/run.zWHT4i/boot.iso -netdev user,id=n0 -device virtio-net-pci-non-transitional,netdev=n0 -nographic -name r9x64smoke-82353-1795742586
+c[?7l[2J[0mSeaBIOS (version rel-1.17.0-0-gb52ca86e094d-prebuilt.qemu.org)
+
+
+iPXE (http://ipxe.org) 00:02.0 CA00 PCI2.10 PnP PMM+3EFD1B50+3EF31B50 CA00
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from Hard Disk...
+Boot failed: could not read the boot disk
+
+Booting from DVD/CD...
+[0;30;47mWelcome to GRUB[H[J[1;1H  Booting `r9'
+
+!
+
+
+r9 from the Internet
+q35: page allocator init fsmoke-r9-x64: stage ok — banner
+ailed: MisalignedAddr
+smoke-r9-x64: TIMEOUT at stage: fpu-format
+error: smoke FAILED (the driver named the stage on stderr; captures: /home/req/code/r9/target/gates/smoke-r9-x64/smoke-r9.log + /home/req/code/r9/target/gates/smoke-r9-x64/smoke-r9-cpu.log)
+SMP1_EXIT=1
+
+=== 3/4 tier-1 at -smp 2 under KVM (-cpu host => real AVX2; runs fpprobe) ===
+this derivation will be built:
+  /nix/store/x628ksfa8nlhpkxiqa5fdnqn0mzczgbn-boot-r9-tier1-x64.drv
+building '/nix/store/x628ksfa8nlhpkxiqa5fdnqn0mzczgbn-boot-r9-tier1-x64.drv'...
+== r9 tree:      /nix/store/002vay29nmgw2d81nvmi2i6adgz7h1md-harvey-tree-amd64-0
+== r9 root:      /home/req/code/r9
+== gate output:  /home/req/code/r9/target/gates/tier1-r9-x64
+== r9 kernel package: /nix/store/m0gkc0yd6lb2fj3ahaqfl61z2mnmiksn-r9-kernel-x64-fac0aec
+   kernel:      /nix/store/m0gkc0yd6lb2fj3ahaqfl61z2mnmiksn-r9-kernel-x64-fac0aec/kernel-x64.elf
+   iso-builder: /nix/store/4wmj3a1gwklqiqbnlvkgdqznvrmnqlad-r9-iso-builder/bin/r9-iso-builder
+   shape:       q35 accel=kvm cpu=host
+== step 1/4: assembling image tier (cargo xtask image --arch x86-64 --image tier)
+warning: field `frame_len` is never read
+   --> xtask/src/pcap.rs:228:9
+    |
+219 | pub struct Icmpv4Frame {
+    |            ----------- field in this struct
+...
+228 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Icmpv4Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `frame_len` is never read
+   --> xtask/src/pcap.rs:375:9
+    |
+359 | pub struct BootpFrame {
+    |            ---------- field in this struct
+...
+375 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `BootpFrame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `dst_mac` and `frame_len` are never read
+   --> xtask/src/pcap.rs:569:9
+    |
+566 | pub struct Icmpv6Frame {
+    |            ----------- fields in this struct
+...
+569 |     pub dst_mac: [u8; 6],
+    |         ^^^^^^^
+...
+579 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Icmpv6Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `src_mac`, `dst_mac`, and `frame_len` are never read
+   --> xtask/src/pcap.rs:723:9
+    |
+721 | pub struct Tcpv4Frame {
+    |            ---------- fields in this struct
+722 |     /// Ethernet source/destination MAC.
+723 |     pub src_mac: [u8; 6],
+    |         ^^^^^^^
+724 |     pub dst_mac: [u8; 6],
+    |         ^^^^^^^
+...
+737 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Tcpv4Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: `xtask` (bin "xtask") generated 4 warnings
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.03s
+     Running `target/debug/xtask image --arch x86-64 --image tier`
+image: x86_64/tier /home/req/code/r9/target/images/x86_64/tier.paq sha256 ba8388f39fac7ab1b1140c3b6b6388bff4df4d9a7840e7efe0b5be624fd84374 members 91
+== image ok: /home/req/code/r9/target/images/x86_64/tier.paq
+== step 2/4: expected on r9: 39 T1-OK markers + 0 T1-SKIP markers (computed)
+== step 3/4: composing the ISO (r9's iso-builder: kernel + tier.paq as /boot/bootfs.paq)
+xorriso 1.5.8.pl02 : RockRidge filesystem manipulator, libburnia project.
+
+xorriso : NOTE : Environment variable SOURCE_DATE_EPOCH encountered with value 1735689600
+Drive current: -outdev 'stdio:/tmp/r9-iso-builder.4wYKoC/boot.iso'
+Media current: stdio file, overwriteable
+Media status : is blank
+Media summary: 0 sessions, 0 data blocks, 0 data,  357g free
+Added to ISO image: directory '/'='/tmp/grub.0GAqur'
+xorriso : UPDATE :     356 files added in 1 seconds
+Added to ISO image: directory '/'='/tmp/r9-iso-builder.4wYKoC/stage'
+xorriso : UPDATE :     361 files added in 1 seconds
+xorriso : NOTE : Copying to System Area: 512 bytes from file '/tmp/r9-iso-builder.4wYKoC/grub-i386-pc/boot_hybrid.img'
+ISO image produced: 12215 sectors
+Written to medium : 12215 sectors at LBA 0
+Writing to 'stdio:/tmp/r9-iso-builder.4wYKoC/boot.iso' completed successfully.
+
+r9-iso-builder: /home/req/code/r9/target/gates/tier1-r9-x64/run.cUcfYO/boot.iso 1aedc9c4132336c06cda9bce6b26f50e6ffa28eb5a9b68f079d2bb6aa6c03f2d (modules: bootfs.paq)
+== step 4/4: the tier-1 gate on r9 (/home/req/code/r9/gates/x86_64/tier1-r9.expect)
+== capture: /home/req/code/r9/target/gates/tier1-r9-x64/tier1-r9.log
+spawn qemu-system-x86_64 -M q35 -cpu host -smp 2 -m 1024M -accel kvm -cdrom /home/req/code/r9/target/gates/tier1-r9-x64/run.cUcfYO/boot.iso -netdev user,id=n0 -device virtio-net-pci-non-transitional,netdev=n0 -nographic -name r9x64tier1-95479-1795743193
+c[?7l[2J[0mSeaBIOS (version rel-1.17.0-0-gb52ca86e094d-prebuilt.qemu.org)
+
+
+iPXE (http://ipxe.org) 00:02.0 CA00 PCI2.10 PnP PMM+3EFD1B50+3EF31B50 CA00
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from Hard Disk...
+Boot failed: could not read the boot disk
+
+Booting from DVD/CD...
+[0;30;47mWelcome to GRUB[H[J[1;1H  Booting `r9'
+
+!
+
+
+r9 from the Internet
+q35: ptier1-r9-x64: stage ok — banner
+age allocator init failed: MisalignedAddr
+tier1-r9-x64: TIMEOUT at stage: paqfs
+error: tier-1 r9-x64 gate FAILED (the driver named the stage on stderr; capture: /home/req/code/r9/target/gates/tier1-r9-x64/tier1-r9.log)
+TIER1_EXIT=1
+
+=== 4/4 smoke at -smp 2 (prints the derived fpu format line) ===
+== r9 tree:      /nix/store/002vay29nmgw2d81nvmi2i6adgz7h1md-harvey-tree-amd64-0
+== r9 root:      /home/req/code/r9
+== gate output:  /home/req/code/r9/target/gates/smoke-r9-x64
+== r9 kernel package: /nix/store/m0gkc0yd6lb2fj3ahaqfl61z2mnmiksn-r9-kernel-x64-fac0aec
+   kernel:        /nix/store/m0gkc0yd6lb2fj3ahaqfl61z2mnmiksn-r9-kernel-x64-fac0aec/kernel-x64.elf
+   iso-builder:   /nix/store/4wmj3a1gwklqiqbnlvkgdqznvrmnqlad-r9-iso-builder/bin/r9-iso-builder
+   netdev emitter: /nix/store/i4p9fw49d6givqgz16k9b29qp6jw9znn-r9-netdev-args-fac0aec/bin/r9-netdev-args
+   netdev argv (slirp): -netdev user,id=n0,hostfwd=tcp:127.0.0.1:17010-:17010,hostfwd=tcp:127.0.0.1:5670-:567 -device virtio-net-pci-non-transitional,netdev=n0
+   shape:         q35 accel=kvm cpu=host
+== step 1/4: assembling images chain and cpu (cargo xtask image --arch x86-64 --image chain; --image cpu)
+warning: field `frame_len` is never read
+   --> xtask/src/pcap.rs:228:9
+    |
+219 | pub struct Icmpv4Frame {
+    |            ----------- field in this struct
+...
+228 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Icmpv4Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `frame_len` is never read
+   --> xtask/src/pcap.rs:375:9
+    |
+359 | pub struct BootpFrame {
+    |            ---------- field in this struct
+...
+375 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `BootpFrame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `dst_mac` and `frame_len` are never read
+   --> xtask/src/pcap.rs:569:9
+    |
+566 | pub struct Icmpv6Frame {
+    |            ----------- fields in this struct
+...
+569 |     pub dst_mac: [u8; 6],
+    |         ^^^^^^^
+...
+579 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Icmpv6Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `src_mac`, `dst_mac`, and `frame_len` are never read
+   --> xtask/src/pcap.rs:723:9
+    |
+721 | pub struct Tcpv4Frame {
+    |            ---------- fields in this struct
+722 |     /// Ethernet source/destination MAC.
+723 |     pub src_mac: [u8; 6],
+    |         ^^^^^^^
+724 |     pub dst_mac: [u8; 6],
+    |         ^^^^^^^
+...
+737 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Tcpv4Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: `xtask` (bin "xtask") generated 4 warnings
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.09s
+     Running `target/debug/xtask image --arch x86-64 --image chain`
+image: x86_64/chain /home/req/code/r9/target/images/x86_64/chain.paq sha256 5c717b6d5d0d27885a07bd2304740425822c26bc2b84059607bf2c468ae03ad8 members 49
+warning: field `frame_len` is never read
+   --> xtask/src/pcap.rs:228:9
+    |
+219 | pub struct Icmpv4Frame {
+    |            ----------- field in this struct
+...
+228 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Icmpv4Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `frame_len` is never read
+   --> xtask/src/pcap.rs:375:9
+    |
+359 | pub struct BootpFrame {
+    |            ---------- field in this struct
+...
+375 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `BootpFrame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `dst_mac` and `frame_len` are never read
+   --> xtask/src/pcap.rs:569:9
+    |
+566 | pub struct Icmpv6Frame {
+    |            ----------- fields in this struct
+...
+569 |     pub dst_mac: [u8; 6],
+    |         ^^^^^^^
+...
+579 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Icmpv6Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `src_mac`, `dst_mac`, and `frame_len` are never read
+   --> xtask/src/pcap.rs:723:9
+    |
+721 | pub struct Tcpv4Frame {
+    |            ---------- fields in this struct
+722 |     /// Ethernet source/destination MAC.
+723 |     pub src_mac: [u8; 6],
+    |         ^^^^^^^
+724 |     pub dst_mac: [u8; 6],
+    |         ^^^^^^^
+...
+737 |     pub frame_len: usize,
+    |         ^^^^^^^^^
+    |
+    = note: `Tcpv4Frame` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: `xtask` (bin "xtask") generated 4 warnings
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.02s
+     Running `target/debug/xtask image --arch x86-64 --image cpu`
+authdomain-gen: generated /home/req/code/r9/target/images/x86_64/cpu.authdom: label=DEMO authdom=DEMO-harvey authid=bootes users=3
+authdomain-gen: DEMO material is throwaway — never reuse outside a gate image
+authdomain-gen: no authdomain.local — generating ephemeral DEMO material
+image: authdomain generated a fresh p9sk1 domain for "cpu" at /home/req/code/r9/target/images/x86_64/cpu.authdom (authdom DEMO-harvey)
+image: authdomain pairing verified over the staged copies for "cpu"
+image: creds /home/req/code/r9/target/images/x86_64/cpu.creds (mode 0600)
+image: x86_64/cpu /home/req/code/r9/target/images/x86_64/cpu.paq sha256 8c626692311b16d5e297f9e29440874fce51a6b28a07f99fd975bf1719676889 members 4442
+== images ok: /home/req/code/r9/target/images/x86_64/chain.paq + /home/req/code/r9/target/images/x86_64/cpu.paq
+== step 2/4: composing the CHAIN ISO (r9's iso-builder: kernel + chain.paq as /boot/bootfs.paq)
+xorriso 1.5.8.pl02 : RockRidge filesystem manipulator, libburnia project.
+
+xorriso : NOTE : Environment variable SOURCE_DATE_EPOCH encountered with value 1735689600
+Drive current: -outdev 'stdio:/tmp/r9-iso-builder.xE3LyQ/boot.iso'
+Media current: stdio file, overwriteable
+Media status : is blank
+Media summary: 0 sessions, 0 data blocks, 0 data,  357g free
+Added to ISO image: directory '/'='/tmp/grub.3qDpml'
+xorriso : UPDATE :     356 files added in 1 seconds
+Added to ISO image: directory '/'='/tmp/r9-iso-builder.xE3LyQ/stage'
+xorriso : UPDATE :     361 files added in 1 seconds
+xorriso : NOTE : Copying to System Area: 512 bytes from file '/tmp/r9-iso-builder.xE3LyQ/grub-i386-pc/boot_hybrid.img'
+ISO image produced: 11476 sectors
+Written to medium : 11476 sectors at LBA 0
+Writing to 'stdio:/tmp/r9-iso-builder.xE3LyQ/boot.iso' completed successfully.
+
+r9-iso-builder: /home/req/code/r9/target/gates/smoke-r9-x64/run.a4ljKV/boot.iso 41d9b55f8aceda9ca42038d5eba9d11ff2ee2891a89d8d7c3c602b2186856bf9 (modules: bootfs.paq)
+== step 3/4: composing the CPU ISO (r9's iso-builder: kernel + cpu.paq as /boot/bootfs.paq + the bootconf append init=/amd64/init -c — 19-01's seam)
+xorriso 1.5.8.pl02 : RockRidge filesystem manipulator, libburnia project.
+
+xorriso : NOTE : Environment variable SOURCE_DATE_EPOCH encountered with value 1735689600
+Drive current: -outdev 'stdio:/tmp/r9-iso-builder.GaVgB0/boot.iso'
+Media current: stdio file, overwriteable
+Media status : is blank
+Media summary: 0 sessions, 0 data blocks, 0 data,  357g free
+Added to ISO image: directory '/'='/tmp/grub.D8rg9a'
+xorriso : UPDATE :     356 files added in 1 seconds
+Added to ISO image: directory '/'='/tmp/r9-iso-builder.GaVgB0/stage'
+xorriso : UPDATE :     361 files added in 1 seconds
+xorriso : NOTE : Copying to System Area: 512 bytes from file '/tmp/r9-iso-builder.GaVgB0/grub-i386-pc/boot_hybrid.img'
+ISO image produced: 22030 sectors
+Written to medium : 22030 sectors at LBA 0
+Writing to 'stdio:/tmp/r9-iso-builder.GaVgB0/boot.iso' completed successfully.
+
+r9-iso-builder: /home/req/code/r9/target/gates/smoke-r9-x64/run-cpu.VohNgm/boot.iso 79940b559fcf966f130008ee2c6727f430a3de296133878ede7a56763189ad8f (modules: bootfs.paq append=init=/amd64/init -c)
+== step 4/4: the composed smoke (/home/req/code/r9/gates/x86_64/smoke-r9.expect — the chain leg + the cpu-chain leg)
+== captures: /home/req/code/r9/target/gates/smoke-r9-x64/smoke-r9.log + /home/req/code/r9/target/gates/smoke-r9-x64/smoke-r9-cpu.log
+spawn qemu-system-x86_64 -M q35 -cpu host -smp 2 -m 1024M -accel kvm -cdrom /home/req/code/r9/target/gates/smoke-r9-x64/run.a4ljKV/boot.iso -netdev user,id=n0 -device virtio-net-pci-non-transitional,netdev=n0 -nographic -name r9x64smoke-95823-1795743814
+c[?7l[2J[0mSeaBIOS (version rel-1.17.0-0-gb52ca86e094d-prebuilt.qemu.org)
+
+
+iPXE (http://ipxe.org) 00:02.0 CA00 PCI2.10 PnP PMM+3EFD1B50+3EF31B50 CA00
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from Hard Disk...
+Boot failed: could not read the boot disk
+
+Booting from DVD/CD...
+[0;30;47mWelcome to GRUB[H[J[1;1H  Booting `r9'
+
+!
+
+
+r9 from the Internet
+q35: page allocator init failed: Mismoke-r9-x64: stage ok — banner
+salignedAddr
+smoke-r9-x64: TIMEOUT at stage: fpu-format
+error: smoke FAILED (the driver named the stage on stderr; captures: /home/req/code/r9/target/gates/smoke-r9-x64/smoke-r9.log + /home/req/code/r9/target/gates/smoke-r9-x64/smoke-r9-cpu.log)
+SMOKE_EXIT=1
+
+=== derived fpu format lines from the captures ===
