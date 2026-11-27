@@ -79,6 +79,16 @@ pub fn page_cache() -> Option<&'static PageCache> {
 ///
 /// Returns Err(OutOfBounds) when the map declares no type-1 range at all —
 /// the caller prints that loudly (there is nothing to boot on).
+/// Round a physical address down to a frame boundary.
+fn floor_frame(addr: u64) -> u64 {
+    addr & !(FRAME_SIZE as u64 - 1)
+}
+
+/// Round a physical address up to a frame boundary (saturating).
+fn ceil_frame(addr: u64) -> u64 {
+    floor_frame(addr.saturating_add(FRAME_SIZE as u64 - 1))
+}
+
 pub fn init_page_allocator(facts: &Facts, kernel_phys_end: u64) -> Result<(), PageAllocError> {
     // Collect and sort the type-1 ranges: GRUB passes the BIOS e820 order
     // through, which is NOT address-sorted.
@@ -104,13 +114,26 @@ pub fn init_page_allocator(facts: &Facts, kernel_phys_end: u64) -> Result<(), Pa
             span_end = r.1;
         }
     }
+    // The palloc contract is PAGE-GRANULAR ranges: every span and used
+    // range must be FRAME_SIZE-aligned (init_ranges returns
+    // MisalignedAddr otherwise).  The firmware map is byte-accurate — the
+    // first type-1 range ends at 0x9FC00 (the EBDA boundary), which is not
+    // a page multiple — so align at the boundary: floor the available
+    // span's ends (never claim a partial page is fully free) and grow
+    // every used range outward (never leave a used byte in a free page).
+    // Conservative in both directions, exact in page terms.
+    let span_start = floor_frame(span_start);
+    let span_end = floor_frame(span_end);
+    if span_end <= span_start {
+        return Err(PageAllocError::OutOfBounds);
+    }
     let span = PhysRange::with_end(span_start, span_end);
 
     // The used set, sorted: [0, kernel_phys_end) first, then the gaps
     // between the type-1 ranges (every non-type-1 entry and undeclared hole
     // inside the span lands in a gap — that keeps them out of the pool).
     let mut used: [PhysRange; MAX_AVAIL + 1] = core::array::from_fn(|_| PhysRange::with_len(0, 0));
-    used[0] = PhysRange::with_end(0, kernel_phys_end);
+    used[0] = PhysRange::with_end(0, ceil_frame(kernel_phys_end));
     let mut nused = 1;
     let mut prev_end = span_start;
     for r in &avail[..navail] {
@@ -119,7 +142,7 @@ pub fn init_page_allocator(facts: &Facts, kernel_phys_end: u64) -> Result<(), Pa
             if nused == MAX_AVAIL + 1 {
                 return Err(PageAllocError::OutOfBounds);
             }
-            used[nused] = PhysRange::with_end(prev_end, start);
+            used[nused] = PhysRange::with_end(floor_frame(prev_end), ceil_frame(start));
             nused += 1;
         }
         if end > prev_end {
