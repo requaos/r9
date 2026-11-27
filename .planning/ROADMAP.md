@@ -73,7 +73,7 @@ Milestone numbering continues from the closed Harvey-rooted milestone v2.1.
   4. A two-CPU stress gate runs a user workload on both CPUs through a `9P2000.aead` mount served by the real `FidTable` (an in-kernel loopback server started only by a boot switch) plus exec churn through the TPHT page cache, with timer interrupts across both CPUs, and finishes with no deadlock; a watchdog would name a stuck CPU and lock; a TLB shootdown reaches the other CPU; every new kernel boot gate runs with `-smp 2` on both architectures.
   5. The page allocator keeps Roaring clean, dirty and pinned pools in which a pinned frame is never an eviction candidate, `SuperpageResidency` is exactly 64 bytes, and every `port/` path that holds user memory across a sleep pins its frames through a guard; all of it safe under two CPUs and none of it cryptographic.
   6. Both architectures load image pages on demand, map user text read-only and track dirty pages; the evictor, live in every boot, drops text and unwritten initialised-data pages under pressure and they fault back intact through the TPHT page cache, shown by a small-memory `-smp 2` gate on both architectures; the Roaring set kernels run AVX2 or NEON where the CPU has it with outputs identical to the scalar path; and x86_64 saves user FP state with XSAVE where AVX is enabled and with FXSAVE elsewhere.
-**Plans:** 24/27 plans executed
+**Plans:** 25/27 plans executed
 
 Plans:
 **Wave 1**
@@ -137,7 +137,7 @@ Plans:
 - [x] 05-19-PLAN.md — `x86_64` full demand loading (`#PF` pager), `pagealloc.rs` Roaring pools, RO shared text, race-free `PTE_D` atomic-swap evictor, and `UserSlice`/`UserSliceMut` RAII `PinGuard` (`MEM-07`, `MEM-10`, `MEM-14`, `MEM-15`, `MEM-16`)
 
 **Wave 19** *(blocked on Wave 18 completion)*
-- [ ] 05-20-PLAN.md — Boot-switch `aeadloop=1` in-kernel `9P2000.aead` loopback server on real `FidTable` (`SMP-13`)
+- [x] 05-20-PLAN.md — Boot-switch `aeadloop=1` in-kernel `9P2000.aead` loopback server on real `FidTable` (`SMP-13`)
 
 **Wave 20** *(blocked on Wave 19 completion)*
 - [ ] 05-27-PLAN.md — Author `-smp 2` stress (`SMP-08`) & small-memory pressure (`MEM-15`) expect scripts + `nix/gates/*.sh` wrappers (`fdtput` `R9_BOOTARGS` on `aarch64`, `r9-iso-builder --append` on `x86_64`) (`SMP-08`, `SMP-09`, `MEM-10`, `MEM-15`, `MEM-16`, `MEM-17`)
@@ -317,7 +317,7 @@ Phases execute in numeric order: 1 → 2 → 3 → … → 16 (decimal insertion
 | 2. Guide Phase 0 - Design Lock and rfork Flag Reservation | v3.0 | 6/6 | Complete | 2026-11-24 |
 | 3. Guide Phase 1 - crypto/ and ds/ Foundations | v3.0 | 13/13 | Complete | 2026-11-24 |
 | 4. Guide Phase 2 - 9P2000.aead Transport and FidTable | v3.0 | 25/25 | Complete | 2026-11-25 |
-| 5. Guide Phase 3 - Early SMP, Course Correction and Memory Pools | v3.1 | 24/27 | In Progress | - |
+| 5. Guide Phase 3 - Early SMP, Course Correction and Memory Pools | v3.1 | 25/27 | In Progress | - |
 | 6. Guide Phase 4 - Distributed 9P Extensions and Service Discovery | v3.1 | 0/TBD | Not started | - |
 | 7. Guide Phase 5 - Process Lifecycle, Stack-Safe Notes and riscv64 Sync | v3.1 | 0/TBD | Not started | - |
 | 8. SMP Scale-Out and Deferred Verification | v3.2 | 0/TBD | Not started | - |
