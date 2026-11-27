@@ -17,6 +17,13 @@ extern crate alloc;
 // construction — irreducibly unsafe; see its entry below).  The forbid is
 // a compile-time regression lock, not a promise: no new unsafe can enter
 // any other port module without deleting its forbid attribute first.
+// aead_loop (Phase 5, 05-20, SMP-13, D-28): the boot-switch-gated in-kernel
+// `9P2000.aead` loopback server — a real `FidTable` + `Session` server over an
+// `Arc`+`Lock` duplex link, mounted by the kernel's own client only when the
+// exact `aeadloop=1` boot token is present.  Safe code only; a default boot
+// starts nothing.
+#[forbid(unsafe_code)]
+pub mod aead_loop;
 #[forbid(unsafe_code)]
 pub mod allocator;
 #[forbid(unsafe_code)]
