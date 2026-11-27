@@ -52,7 +52,38 @@ impl Console {
     }
 }
 
+/// The console's byte sink once the CONS lock is held.  `Console`'s
+/// `write_fmt` writes every piece of a formatted line through this, so
+/// one lock covers the WHOLE line.
+struct Locked<'a> {
+    uart: Option<&'a dyn Uart>,
+}
+
+impl fmt::Write for Locked<'_> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        if let Some(uart) = self.uart {
+            for b in s.bytes() {
+                putb(uart, b);
+            }
+        }
+        Ok(())
+    }
+}
+
 impl fmt::Write for Console {
+    /// One console lock across the whole formatted output.  The default
+    /// `write_fmt` calls `write_str` once per piece (each literal and
+    /// each formatted argument); with the lock taken per piece, two
+    /// CPUs' lines interleave mid-line.  First seen when the x86_64
+    /// `-smp 2` boot began running processes on both CPUs
+    /// (`process 2 exited: "fault: text page-in va=` — two lines in
+    /// one), and every gate marker is a line.
+    fn write_fmt(&mut self, args: fmt::Arguments<'_>) -> fmt::Result {
+        let node = LockNode::new();
+        let uart_guard = CONS.lock(&node);
+        fmt::write(&mut Locked { uart: uart_guard.as_deref() }, args)
+    }
+
     fn write_str(&mut self, s: &str) -> fmt::Result {
         self.putstr(s);
         Ok(())
