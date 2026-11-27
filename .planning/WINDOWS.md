@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 15
+open_count: 14
 waived_count: 0
-fixed_count: 5
-total_count: 20
-last_updated: 2026-11-27T01:42:46.198Z
+fixed_count: 7
+total_count: 21
+last_updated: 2026-11-27T04:54:17.547Z
 ---
 
 # Broken Windows Ledger
@@ -31,10 +31,11 @@ last_updated: 2026-11-27T01:42:46.198Z
 | 14 | 05 | unrun-verify | x86_64/src/platform/q35/timer.rs |  | 05-12: tick_plan/tick_rearm host pin unchanged in behavior but the x86_64 crate test harness is x86_64-host-only (aarch64 dev host cannot compile it — 05-11's recorded constraint); assertion-level run lands on CI x86_64 runners | open |  | 2026-11-26T17:59:03.744Z |  |
 | 15 | 05 | unrun-verify | x86_64/src/proc.rs |  | 05-24 follow-up (c9d43c8): the on_cpu owner-scoped release + owned_pick_give_up cycle-guard host pins are compile-pinned on the aarch64 dev host and their logic passed a standalone extraction run, but the x86_64 crate test harness is x86_64-host-only (05-11's recorded constraint); assertion-level run lands on CI x86_64 runners | open |  | 2026-11-26T18:30:37.477Z |  |
 | 16 | 5 | deviation | aarch64/src/proc.rs |  | 05-18 known limiter: written initialised-data pages stay in palloc.hash and are not freed at exec/exit (no cache-removal API); frames reclaimed only by a future explicit drop path. Keys salted per pid+exec gen so entries are unreachable; 05-21 pressure workload to decide. | open |  | 2026-11-27T00:04:51.163Z |  |
-| 17 | 05 | deviation | gates/aarch64/smp-stress.expect | 189 | smp-stress kernel halts deterministically under 2-CPU #M readers + exec churn (InstructionAbortSameEl pc=far=0x9b7728f0); gate RED | open |  | 2026-11-27T01:42:43.603Z |  |
+| 17 | 05 | deviation | gates/aarch64/smp-stress.expect | 189 | smp-stress kernel halts deterministically under 2-CPU #M readers + exec churn (InstructionAbortSameEl pc=far=0x9b7728f0); gate RED | fixed |  | 2026-11-27T01:42:43.603Z | 2026-11-27T04:54:13.913Z |
 | 18 | 05 | deviation | gates/aarch64/mem-pressure.expect |  | mem-pressure passes boot/pin/re-fault but reports dropped_text=0 dropped_data=0 pinned_skipped=0 at the 8 MiB cap; cap 512 hits DataAbortSameEl far=0x20118 | open |  | 2026-11-27T01:42:45.572Z |  |
 | 19 | 05 | deviation | gates/x86_64/mem-pressure.expect |  | x86_64 mem-pressure pinned reader uses 'sleep', which the minimal chain image does not stage (needs an hsleep/manifest fix) | open |  | 2026-11-27T01:42:45.875Z |  |
-| 20 | 05 | unrun-verify | .planning/phases/05-guide-phase-3-early-smp-course-correction-and-memory-pools/05-21-PLAN.md |  | 05-21 clippy legs + Miri not run and x86_64 stress/pressure gates deferred to CI TCG/owner KVM (aarch64 macOS host cannot run x86_64 grub-mkrescue/authdomain venue) | open |  | 2026-11-27T01:42:46.198Z |  |
+| 20 | 05 | unrun-verify | .planning/phases/05-guide-phase-3-early-smp-course-correction-and-memory-pools/05-21-PLAN.md |  | 05-21 clippy legs + Miri not run and x86_64 stress/pressure gates deferred to CI TCG/owner KVM (aarch64 macOS host cannot run x86_64 grub-mkrescue/authdomain venue) | fixed |  | 2026-11-27T01:42:46.198Z | 2026-11-27T04:54:17.218Z |
+| 21 | 05 | unrun-verify | .github/workflows/gates.yml |  | 05-21: the x86_64 live stress/pressure legs (boot-r9-smp-stress-x64, boot-r9-mem-pressure-x64) are wired into CI TCG and the full xtask tier but cannot run on this aarch64 macOS host (Linux-only grub-mkrescue/authdomain venue); first live run lands on CI and the owner's 2-core KVM host at Owner Stop 4 (D-33) | open |  | 2026-11-27T04:54:17.547Z |  |
 
 ````json
 [
@@ -253,10 +254,10 @@ last_updated: 2026-11-27T01:42:46.198Z
     "file": "gates/aarch64/smp-stress.expect",
     "line": 189,
     "description": "smp-stress kernel halts deterministically under 2-CPU #M readers + exec churn (InstructionAbortSameEl pc=far=0x9b7728f0); gate RED",
-    "status": "open",
+    "status": "fixed",
     "reason": "",
     "recorded_at": "2026-11-27T01:42:43.603Z",
-    "resolved_at": null,
+    "resolved_at": "2026-11-27T04:54:13.913Z",
     "milestone": "v3.1"
   },
   {
@@ -292,9 +293,22 @@ last_updated: 2026-11-27T01:42:46.198Z
     "file": ".planning/phases/05-guide-phase-3-early-smp-course-correction-and-memory-pools/05-21-PLAN.md",
     "line": null,
     "description": "05-21 clippy legs + Miri not run and x86_64 stress/pressure gates deferred to CI TCG/owner KVM (aarch64 macOS host cannot run x86_64 grub-mkrescue/authdomain venue)",
-    "status": "open",
+    "status": "fixed",
     "reason": "",
     "recorded_at": "2026-11-27T01:42:46.198Z",
+    "resolved_at": "2026-11-27T04:54:17.218Z",
+    "milestone": "v3.1"
+  },
+  {
+    "id": 21,
+    "kind": "unrun-verify",
+    "phase": "05",
+    "file": ".github/workflows/gates.yml",
+    "line": null,
+    "description": "05-21: the x86_64 live stress/pressure legs (boot-r9-smp-stress-x64, boot-r9-mem-pressure-x64) are wired into CI TCG and the full xtask tier but cannot run on this aarch64 macOS host (Linux-only grub-mkrescue/authdomain venue); first live run lands on CI and the owner's 2-core KVM host at Owner Stop 4 (D-33)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-27T04:54:17.547Z",
     "resolved_at": null,
     "milestone": "v3.1"
   }
