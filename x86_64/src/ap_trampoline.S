@@ -41,10 +41,25 @@
 .set SelCODE32,		(2<<3)
 .set SelDATA32,		(3<<3)
 
-// Segment descriptor bits (l.S's vocabulary, re-keyed).
-.set SegREAD,		(1<<41)
-.set SegWRITE,		(1<<42)
+// Segment descriptor bits (l.S's vocabulary, re-keyed).  The type field
+// (descriptor bits 43:40) is read by POSITION:
+//
+//	bit 43	code (data when clear)
+//	bit 42	code: conforming		data: expand-down
+//	bit 41	code: readable		data: write-enable
+//	bit 40	accessed (the CPU sets it)
+//
+// l.S's SegREAD (41) / SegWRITE (42) are the CODE meanings.  For a DATA
+// descriptor bit 42 is not writable — it is expand-down — so a data
+// segment spelled `SegREAD|SegWRITE` (as l.S's legacy b1978 GDT still
+// spells it) is expand-down: with limit 0xFFFFFFFF its valid offset
+// range is empty, and every ds/es/ss access in 32-bit protected mode is
+// a limit violation.  TCG does not enforce the limit; KVM and real
+// silicon do — measured live as the AP's triple fault on its first data
+// access, the mailbox load (KVM, Alder Lake, 27-11).
+.set SegREAD,		(1<<41)		// code: readable
 .set SegCODE,		(1<<43)
+.set SegDATA_W,		(1<<41)		// data: writable, expand-up (type 2)
 .set SegMB1,		(1<<44)
 .set SegPRESENT,	(1<<47)
 .set SegLONG,		(1<<53)
@@ -197,7 +212,7 @@ ap_gdt:
 	.quad	0						// SelNULL
 	.quad	(SegREAD|SegCODE|SegMB1|SegPRESENT|SegLONG)	// SelCODE64
 	.quad	(SegREAD|SegCODE|SegMB1|SegPRESENT|Seg32DEF)	// SelCODE32
-	.quad	(SegREAD|SegWRITE|SegMB1|SegPRESENT|Seg32DEF)	// SelDATA32
+	.quad	(SegDATA_W|SegMB1|SegPRESENT|Seg32DEF)	// SelDATA32
 ap_gdt_end:
 
 .balign 16
