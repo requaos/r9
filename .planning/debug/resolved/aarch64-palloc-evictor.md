@@ -1,8 +1,8 @@
 ---
-status: awaiting_human_verify
+status: resolved
 trigger: "MEM-15/MEM-16 unproven: under real aarch64 memory pressure the palloc allocator kills the allocating process ('fault: phys page alloc failed' -> unresolvable pid) instead of reclaiming; evictor counters stay 0/0/0 at 2048/1536/1200 frames; cap 512 dies in boot, cap 1024 wedges."
 created: 2026-11-27T02:30:00.000Z
-updated: 2026-11-27T05:40:00.000Z
+updated: 2026-11-27T06:10:00.000Z
 ---
 
 ## Current Focus
@@ -11,7 +11,7 @@ updated: 2026-11-27T05:40:00.000Z
 hypothesis: "CONFIRMED (three contributing defects): (1) `alloc_clean` reclaimed ONE frame per evictor attempt; the frame returns to the shared dirty pool and the sibling CPU took it before the caller's retry, so a starving allocator burned its 4 attempts and returned OutOfSpace while the cache was still reclaimable; (2) the droppable FIFO had no mappedness preference, so once cold pages were gone it evicted hot text pages of running processes and they re-faulted immediately (377,377 refaults of va=0x18000), a livelock that made the pressure run wedge; (3) the authored gate load either never exhausted the pool (exec-churn loop) or demanded ~100x it (hseq 1 400000), and its `pinned_skipped > 0` criterion was structurally unreachable from this image's userland."
 test: "Done: batch reclaim (EVICT_BATCH_FRAMES=16), unmapped-first victim selection, a bounded 44,000-line `hseq|hsort` burst sized to exceed dirty+clean but stay inside the cold cache, and the criterion change to dropped_text/dropped_data/evict_calls/reclaimed/free_failures with pinning proven by a host test"
 expecting: "Gate passes with real reclamation and no killed process; verified 3x HVF + 1x TCG identically (20/28/3/48/0)"
-next_action: "Awaiting owner confirmation that the original workflow is resolved; on confirmation, archive the debug file to .planning/debug/resolved/ and append the knowledge-base entry"
+next_action: "Archived: resolved on owner confirmation (gate + both smoke legs green on the committed tree)"
 bug_class: bohrbug
 reasoning_checkpoint: "hypothesis: single-frame reclaim + unmapped-blind FIFO cause starvation/thrash under two-CPU exhaustion; evidence: instrumented pool dumps (clean=0 dirty=0 active=2048) with freed pa showing dirty=1/active=2047 then the next call seeing dirty=0/active=2048 again, plus 377,377 refaults of one text page; falsification: a batch reclaim that still fails, or prefer-unmapped that still refaults hot text, would disprove; fix rationale: batch leaves the caller a margin of reclaimed frames and prefer-unmapped drains cold pages so no live proc re-faults; blind spots: x86_64 live leg not runnable on this host; candidate_causes: code (single-frame reclaim, FIFO policy), data (gate workload size), config (n/a); and_gate: yes — starvation AND hot-page selection both had to be fixed for the bounded burst to complete"
 tdd_checkpoint: null
