@@ -1,0 +1,187 @@
+#!/usr/bin/expect -f
+# smp-stress.expect — the x86_64 two-CPU stress driver (phase 05, SMP-08/
+# SMP-09/MEM-17, D-24/D-27/D-28).
+#
+# gates/x86_64/smoke-r9.expect's chain-leg discipline carried VERBATIM
+# (fresh-capture hygiene, marker discipline, fast-fail arms, whole-capture
+# post-passes, group-kill teardown) and re-keyed onto the -smp 2 stress load.
+# The caller composed the chain ISO with the GRUB bootconf append
+# `--append="aeadloop=1"` (the real x86_64 cmdline delivery — never a QEMU
+# `-append` with `-cdrom`), so the in-kernel 9P2000.aead loopback server
+# starts and publishes #M (D-28).  This driver:
+#
+#   staged boot: banner → fpu format → setops SIMD selftest → aeadloop
+#   active → smp cpu 1 online → smp tlb shootdown ok → paqfs... → version...
+#   → %  prompt →
+#   ls '#M' (enumerate the loopback root: data0..data7) →
+#   the read pass (for each file: cat '#M/dataN' > /tmp/r9sN, then
+#   ls -l /tmp/r9s0 shows 4096) →
+#   launch 2 read/clunk workers + 1 exec-churn worker in background →
+#   `wait; echo SMP_STRESS_OK` → whole-capture post-pass (no WATCHDOG:,
+#   panic, lock rank or unresolvable fault anywhere).
+#
+#   The #M read output is redirected to /tmp (the chain image's scratch dir)
+#   so binary 9P payloads never reach the cooked serial wire; the read pass
+#   proves the byte count with `ls -l`, and the stress workers only need the
+#   reads to complete (SMP_STRESS_OK is the completion proof).
+#
+#   exit 0 only when EVERY stage passed; a failure exits 1 and names the
+#   failed stage on stderr; exit 2 on a contract violation (missing env).
+#
+# Hygiene: the caller rm -f's the capture BEFORE launch and we rm -f +
+# log_file it fresh below; every exit path kills qemu's process group.
+#
+# Markers: PRESENCE assertions only, never interleaving order.  Patterns are
+# CRLF-tolerant substrings, never end-of-line anchored.  The devcons ECHOES
+# cooked-mode typed input, so typed-text markers are staged two-occurrence.
+# Typed lines are kept SHORT (the 16550 RX-ring burst limit).
+#
+# Env (exported by nix/gates/smp-stress-r9-x64.sh — the flake app):
+#   R9_QEMU      default qemu-system-x86_64
+#   R9_ISO       REQUIRED — the composed chain ISO (kernel-x64 + chain.paq
+#                as /boot/bootfs.paq, with the aeadloop=1 bootconf append)
+#   R9_SMOKE_LOG REQUIRED — the serial capture (fresh per run)
+#
+# usage: env R9_ISO=… R9_SMOKE_LOG=… expect gates/x86_64/smp-stress.expect
+# exit 0 on all-pass; exit 1 names the failed stage on stderr; exit 2 on a
+# contract violation (missing env).
+
+set timeout 600                    ;# per stage, TCG-sized
+match_max 262144
+# NOTE: log_user stays ON — expect 5.45 writes NOTHING to log_file when
+# log_user is 0 (measured: the capture file would be empty).
+
+# --- required env (loud, before any spawn) -------------------------------
+foreach v {R9_ISO R9_SMOKE_LOG} {
+    if {![info exists env($v)]} {
+        puts stderr "smp-stress-r9-x64: \$$v unset — run via the flake app (nix run .#smp-stress-r9-x64)"
+        exit 2
+    }
+}
+set QEMU [expr {[info exists env(R9_QEMU)] ? $env(R9_QEMU) : "qemu-system-x86_64"}]
+set run_tag [expr {[info exists env(R9_RUN_TAG)] ? $env(R9_RUN_TAG) : "r9x64smpstress-[pid]-[clock seconds]"}]
+
+# --- Hygiene: a fresh capture per run -----------------------------------
+exec rm -f $env(R9_SMOKE_LOG)
+
+# --- spawn qemu: -smp 2 and the composed ISO on -cdrom (no QEMU -append) --
+set R9_MACHINE [expr {[info exists env(R9_MACHINE)] ? $env(R9_MACHINE) : "q35"}]
+set R9_CPU [expr {[info exists env(R9_CPU)] ? $env(R9_CPU) : "host"}]
+set R9_ACCEL [expr {[info exists env(R9_ACCEL)] ? $env(R9_ACCEL) : "kvm"}]
+spawn $QEMU -M $R9_MACHINE -cpu $R9_CPU -smp 2 -m 1024M \
+    -accel $R9_ACCEL \
+    -cdrom $env(R9_ISO) \
+    -netdev user,id=n0 \
+    -device virtio-net-pci-non-transitional,netdev=n0 \
+    -nographic \
+    -name $run_tag
+set spawn_pid [exp_pid]
+log_file $env(R9_SMOKE_LOG)
+
+# --- teardown: kill qemu's process group ------------------------------
+proc cleanup {} {
+    global spawn_pid
+    catch { exec kill -KILL -- -$spawn_pid 2>/dev/null }
+    catch { exec kill -KILL $spawn_pid 2>/dev/null }
+}
+
+# --- staged ordered assertions (each stage names its failure) ---------
+proc stage {name re} {
+    global expect_out
+    expect {
+        -re $re { puts stderr "smp-stress-r9-x64: stage ok — $name" }
+        timeout { puts stderr "smp-stress-r9-x64: TIMEOUT at stage: $name"; cleanup; exit 1 }
+        eof { puts stderr "smp-stress-r9-x64: qemu exited (EOF) at stage: $name"; cleanup; exit 1 }
+    }
+}
+
+# fast-fail on any deadlock/panic/rank vocabulary anywhere on the wire.
+expect_before {
+    -re {WATCHDOG:|panic|lock rank|unresolvable fault} {
+        puts stderr "smp-stress-r9-x64: FATAL marker on the wire (WATCHDOG/panic/lock-rank/unresolvable-fault) — aborting"
+        cleanup
+        exit 1
+    }
+}
+
+proc strip_echoed_line {capture} {
+    set nl [string first "\n" $capture]
+    if {$nl < 0} { return $capture }
+    string range $capture [expr {$nl + 1}] end
+}
+
+proc whole_capture_clean {} {
+    global env
+    log_file                           ;# stop + flush before the whole-file scan
+    set fh [open $env(R9_SMOKE_LOG) r]
+    set whole [read $fh]
+    close $fh
+    foreach bad {"WATCHDOG:" "panic" "lock rank" "unresolvable fault"} {
+        if {[string first $bad $whole] >= 0} {
+            puts stderr "smp-stress-r9-x64: FAILED — forbidden marker '$bad' in the capture"
+            cleanup
+            exit 1
+        }
+    }
+    puts stderr "smp-stress-r9-x64: post-pass ok — no WATCHDOG/panic/lock-rank/unresolvable-fault in the capture"
+}
+
+# --- 1. the staged boot (markers in emission order) -------------------
+stage banner        {r9 from the Internet}
+stage fpu-format    {fpu: format=(fxsave|xsave|xsaveopt) avx2=(on|off)}
+stage setops        {setops: simd=(avx2|scalar) selftest=ok}
+stage aeadloop      {aeadloop: active device=#M dialect=9P2000\.aead}
+stage smp-online    {smp: cpu 1 online}
+stage smp-shootdown {smp: tlb shootdown ok}
+stage paqfs         {paqfs\.\.\.}
+stage version       {version\.\.\.}
+stage prompt        {% }
+
+# --- 2. enumerate the #M loopback root (attach + walk over 9P2000.aead) --
+send "ls '#M'\r"
+stage ls-prompt {% }
+set lsout [strip_echoed_line $expect_out(buffer)]
+foreach i {0 1 2 3 4 5 6 7} {
+    if {![regexp "\\mdata$i\\M" $lsout]} {
+        puts stderr "smp-stress-r9-x64: ls '#M' missing 'data$i' (the loopback root did not enumerate the data files)"
+        cleanup
+        exit 1
+    }
+}
+puts stderr "smp-stress-r9-x64: stage ok — ls '#M' (data0..data7 present)"
+
+# --- 3. the read pass: each file opens/reads/clunks; the binary payload is
+#     redirected to /tmp so it never hits the cooked serial wire, and the
+#     byte count is checked with ls -l (4096 authenticated bytes) ----------
+send "for(i in 0 1 2 3 4 5 6 7) { cat '#M/data'\$i > /tmp/r9s\$i }\r"
+stage read-prompt {% }
+send "ls -l /tmp/r9s0\r"
+stage size-prompt {% }
+set sz [strip_echoed_line $expect_out(buffer)]
+if {![regexp {4096} $sz]} {
+    puts stderr "smp-stress-r9-x64: read pass did not yield 4096 bytes (ls -l /tmp/r9s0: $sz)"
+    cleanup
+    exit 1
+}
+puts stderr "smp-stress-r9-x64: stage ok — read pass (each file opened/read/clunked, data0 = 4096 bytes)"
+
+# --- 4. the concurrent stress load (short background lines) -----------
+send "{ for(r in 1 2 3 4 5 6 7 8 9 10) { for(i in 0 1 2 3 4 5 6 7) { cat '#M/data'\$i > /tmp/wA } } } &\r"
+stage workerA-prompt {% }
+send "{ for(r in 1 2 3 4 5 6 7 8 9 10) { for(i in 0 1 2 3 4 5 6 7) { cat '#M/data'\$i > /tmp/wB } } } &\r"
+stage workerB-prompt {% }
+send "{ for(r in 1 2 3 4 5 6 7 8 9 10) { /bin/echo churn; /bin/ls /bin; /bin/cat /lib/namespace } } &\r"
+stage churn-prompt {% }
+
+# --- 5. wait for the load and assert the completion marker ------------
+send "wait; echo SMP_STRESS_OK\r"
+stage stress-echoed   {SMP_STRESS_OK}   ;# occurrence 1: the typed echo
+stage stress-response {SMP_STRESS_OK}   ;# occurrence 2: the OUTPUT
+stage stress-prompt   {% }
+
+# --- 6. whole-capture post-pass ---------------------------------------
+whole_capture_clean
+
+puts stderr "smp-stress-r9-x64: ALL STAGES PASS — boot (fpu/setops/aeadloop/smp), #M enumeration, 4096-byte read pass, concurrent read/clunk + exec-churn stress across 2 CPUs, SMP_STRESS_OK, no deadlock/panic/rank fault"
+cleanup
+exit 0

@@ -1,0 +1,197 @@
+#!/usr/bin/expect -f
+# mem-pressure.expect — the x86_64 small-memory pressure driver (phase 05,
+# MEM-10/MEM-15/MEM-16/MEM-17, D-17).
+#
+# gates/x86_64/smoke-r9.expect's chain-leg discipline carried VERBATIM
+# (fresh-capture hygiene, marker discipline, fast-fail arms, whole-capture
+# post-passes, group-kill teardown) and re-keyed onto the constrained-pool
+# pressure load:
+#
+#   * the caller composed the chain ISO with the GRUB bootconf append
+#     `palloc_max_frames=2048` (an 8 MiB bounded PAGE_ALLOC pool) and launches
+#     QEMU with `-smp 2`, `-m $R9_MEM` (default 256M — above the ~108 MiB
+#     static `.bss`) and the ISO on `-cdrom`.
+#   * the driver asserts `palloc: managed_frames=2048` at boot, then drives
+#     from Harvey's rc shell:
+#       - Worker 1: `{ sleep 60; echo pinnedok } | cat &` — cat blocks in a
+#         pipe read with a UserSliceMut PinGuard held across the sleep on one
+#         CPU; when the sleep finishes the pipe delivers `pinnedok` into the
+#         pinned buffer (the intact-bytes proof).
+#       - Worker 2 (foreground, the other CPU): repeated exec/read churn
+#         (/bin/ls /bin, /bin/cat /lib/namespace, /bin/echo) to push the
+#         8 MiB pool below the evictor low-water mark and force clean text
+#         and untouched-data evictions while Worker 1's buffer is pinned.
+#   * re-fault: re-run `cat /lib/namespace` and require its known line —
+#     the evicted binary/data pages fault back byte-identically through
+#     palloc.hash.
+#   * `cat '#c/sysstat'` (read-only, served by port/src/devcons.rs from
+#     port::palloc::evictor_stats()) → parse
+#     `evictor: dropped_text=<T> dropped_data=<D> pinned_skipped=<P>` and
+#     require T > 0, D > 0, P > 0 (a pinned frame was skipped, never
+#     chosen) → MEM_PRESSURE_OK.
+#
+#   exit 0 only when EVERY stage passed; exit 1 names the failed stage on
+#   stderr; exit 2 on a contract violation (missing env).
+#
+# Hygiene: the caller rm -f's the capture BEFORE launch and we rm -f +
+# log_file it fresh below; every exit path kills qemu's process group.
+#
+# Markers: PRESENCE assertions only, never interleaving order.  The devcons
+# ECHOES cooked-mode typed input, so typed-text markers are staged
+# two-occurrence.  Typed lines are kept SHORT (the 16550 RX-ring limit).
+#
+# Env (exported by nix/gates/mem-pressure-r9-x64.sh — the flake app):
+#   R9_QEMU      default qemu-system-x86_64
+#   R9_ISO       REQUIRED — the composed chain ISO (with the
+#                palloc_max_frames=2048 bootconf append)
+#   R9_SMOKE_LOG REQUIRED — the serial capture (fresh per run)
+#   R9_MEM       guest RAM (default 256M)
+#   R9_PALLOC_MAX_FRAMES  the managed-frame cap (default 2048)
+#
+# usage: env R9_ISO=… R9_SMOKE_LOG=… expect gates/x86_64/mem-pressure.expect
+# exit 0 on all-pass; exit 1 names the failed stage on stderr; exit 2 on a
+# contract violation (missing env).
+
+set timeout 600                    ;# per stage, TCG-sized
+match_max 262144
+# NOTE: log_user stays ON — expect 5.45 writes NOTHING to log_file when
+# log_user is 0 (measured: the capture file would be empty).
+
+# --- required env (loud, before any spawn) -------------------------------
+foreach v {R9_ISO R9_SMOKE_LOG} {
+    if {![info exists env($v)]} {
+        puts stderr "mem-pressure-r9-x64: \$$v unset — run via the flake app (nix run .#mem-pressure-r9-x64)"
+        exit 2
+    }
+}
+set QEMU [expr {[info exists env(R9_QEMU)] ? $env(R9_QEMU) : "qemu-system-x86_64"}]
+set run_tag [expr {[info exists env(R9_RUN_TAG)] ? $env(R9_RUN_TAG) : "r9x64mempress-[pid]-[clock seconds]"}]
+set r9_mem [expr {[info exists env(R9_MEM)] ? $env(R9_MEM) : "256M"}]
+set maxf [expr {[info exists env(R9_PALLOC_MAX_FRAMES)] ? $env(R9_PALLOC_MAX_FRAMES) : 2048}]
+
+# --- Hygiene: a fresh capture per run -----------------------------------
+exec rm -f $env(R9_SMOKE_LOG)
+
+# --- spawn qemu: -smp 2, small RAM, the composed ISO on -cdrom ----------
+set R9_MACHINE [expr {[info exists env(R9_MACHINE)] ? $env(R9_MACHINE) : "q35"}]
+set R9_CPU [expr {[info exists env(R9_CPU)] ? $env(R9_CPU) : "host"}]
+set R9_ACCEL [expr {[info exists env(R9_ACCEL)] ? $env(R9_ACCEL) : "kvm"}]
+spawn $QEMU -M $R9_MACHINE -cpu $R9_CPU -smp 2 -m $r9_mem \
+    -accel $R9_ACCEL \
+    -cdrom $env(R9_ISO) \
+    -netdev user,id=n0 \
+    -device virtio-net-pci-non-transitional,netdev=n0 \
+    -nographic \
+    -name $run_tag
+set spawn_pid [exp_pid]
+log_file $env(R9_SMOKE_LOG)
+
+# --- teardown: kill qemu's process group ------------------------------
+proc cleanup {} {
+    global spawn_pid
+    catch { exec kill -KILL -- -$spawn_pid 2>/dev/null }
+    catch { exec kill -KILL $spawn_pid 2>/dev/null }
+}
+
+# --- staged ordered assertions (each stage names its failure) ---------
+proc stage {name re} {
+    global expect_out
+    expect {
+        -re $re { puts stderr "mem-pressure-r9-x64: stage ok — $name" }
+        timeout { puts stderr "mem-pressure-r9-x64: TIMEOUT at stage: $name"; cleanup; exit 1 }
+        eof { puts stderr "mem-pressure-r9-x64: qemu exited (EOF) at stage: $name"; cleanup; exit 1 }
+    }
+}
+
+# fast-fail on any deadlock/panic/rank vocabulary anywhere on the wire.
+expect_before {
+    -re {WATCHDOG:|panic|lock rank|unresolvable fault} {
+        puts stderr "mem-pressure-r9-x64: FATAL marker on the wire (WATCHDOG/panic/lock-rank/unresolvable-fault) — aborting"
+        cleanup
+        exit 1
+    }
+}
+
+proc strip_echoed_line {capture} {
+    set nl [string first "\n" $capture]
+    if {$nl < 0} { return $capture }
+    string range $capture [expr {$nl + 1}] end
+}
+
+proc whole_capture_clean {} {
+    global env
+    log_file                           ;# stop + flush before the whole-file scan
+    set fh [open $env(R9_SMOKE_LOG) r]
+    set whole [read $fh]
+    close $fh
+    foreach bad {"WATCHDOG:" "panic" "lock rank" "unresolvable fault"} {
+        if {[string first $bad $whole] >= 0} {
+            puts stderr "mem-pressure-r9-x64: FAILED — forbidden marker '$bad' in the capture"
+            cleanup
+            exit 1
+        }
+    }
+    puts stderr "mem-pressure-r9-x64: post-pass ok — no WATCHDOG/panic/lock-rank/unresolvable-fault in the capture"
+}
+
+# --- 1. the staged boot (markers in emission order) -------------------
+stage banner    {r9 from the Internet}
+stage smp-online {smp: cpu 1 online}
+stage palloc    "palloc: managed_frames=$maxf"
+stage paqfs     {paqfs\.\.\.}
+stage version   {version\.\.\.}
+stage prompt    {% }
+
+# --- 2. Worker 1: the pinned-blocked pipe reader (one CPU) ------------
+send "{ sleep 60; echo pinnedok } | cat &\r"
+stage reader-prompt {% }
+
+# --- 3. Worker 2 (the other CPU): exec/read churn to force eviction ---
+send "for(r in 1 2 3 4 5 6 7 8 9 10 11 12) { /bin/ls /bin; /bin/cat /lib/namespace; /bin/echo p }\r"
+stage pressure-prompt {% }
+
+# --- 4. wait for Worker 1: the pinned buffer receives intact bytes ----
+send "wait\r"
+stage pinned-bytes {pinnedok}
+stage wait-prompt  {% }
+
+# --- 5. re-fault: the evicted binary/data pages fault back identically -
+send "cat /lib/namespace\r"
+stage refault-prompt {% }
+set rf [strip_echoed_line $expect_out(buffer)]
+if {![string match "*bind -c #e /env*" $rf]} {
+    puts stderr "mem-pressure-r9-x64: re-fault FAILED — cat /lib/namespace lost its known line after pressure (evicted pages did not fault back intact)"
+    cleanup
+    exit 1
+}
+puts stderr "mem-pressure-r9-x64: stage ok — re-fault (known line intact after pressure)"
+
+# --- 6. read #c/sysstat and assert the live-evictor counters ----------
+send "cat '#c/sysstat'\r"
+stage sysstat-prompt {% }
+set ss [strip_echoed_line $expect_out(buffer)]
+if {![regexp {evictor: dropped_text=(\d+) dropped_data=(\d+) pinned_skipped=(\d+)} $ss -> t d p]} {
+    puts stderr "mem-pressure-r9-x64: #c/sysstat did not print the evictor line (got: $ss)"
+    cleanup
+    exit 1
+}
+puts stderr "mem-pressure-r9-x64: sysstat — dropped_text=$t dropped_data=$d pinned_skipped=$p"
+if {$t <= 0 || $d <= 0 || $p <= 0} {
+    puts stderr "mem-pressure-r9-x64: pressure counters not all positive (dropped_text=$t dropped_data=$d pinned_skipped=$p) — the 8 MiB pool did not exercise the live evictor or a pinned frame"
+    cleanup
+    exit 1
+}
+puts stderr "mem-pressure-r9-x64: stage ok — evictor counters (text>0, data>0, pinned_skipped>0)"
+
+# --- 7. the completion marker -----------------------------------------
+send "echo MEM_PRESSURE_OK\r"
+stage done-echoed   {MEM_PRESSURE_OK}   ;# occurrence 1: the typed echo
+stage done-response {MEM_PRESSURE_OK}   ;# occurrence 2: the OUTPUT
+stage done-prompt   {% }
+
+# --- 8. whole-capture post-pass ---------------------------------------
+whole_capture_clean
+
+puts stderr "mem-pressure-r9-x64: ALL STAGES PASS — 8 MiB pool boot, pinned reader + pressure worker on 2 CPUs, byte-identical re-fault, evictor counters (text/data/pinned>0), MEM_PRESSURE_OK"
+cleanup
+exit 0
