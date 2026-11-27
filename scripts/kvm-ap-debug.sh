@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 # One x86_64 AP-bring-up debug cycle, for an x86_64 Linux host with KVM.
 #
-#   bash scripts/kvm-ap-debug.sh                 # build + one KVM boot, print the AP marker chain
+#   bash scripts/kvm-ap-debug.sh                 # build + one KVM boot, print the bring-up lines
 #   bash scripts/kvm-ap-debug.sh --push          # ...and push the capture on an ap-debug-<ts> branch
 #   bash scripts/kvm-ap-debug.sh --gate boot-r9-tier1-x64
 #   bash scripts/kvm-ap-debug.sh --config q35cpu
 #
-# The debug brief is .planning/debug/x86_64-ap-bringup.md — read it first; it
-# carries the marker legend, the eliminated hypotheses and the experiment plan.
+# The record of the KVM AP bring-up fault is
+# .planning/debug/x86_64-ap-bringup.md (root cause: the trampoline's data
+# segment was expand-down).  The next x86_64 -smp 2 blocker is
+# .planning/debug/x86_64-smp2-mcs-kstack.md.  If the capture ends without
+# the two bring-up lines and the gate says `qemu exited (EOF)`, that is a
+# triple fault: stop the VM at it (-no-reboot -no-shutdown) and read the AP
+# through the QEMU monitor before changing anything.
 #
 # NOTE: `nix run .#<gate>` builds the kernel through the flake, so a code change
 # must be COMMITTED before you run this (the script refuses a dirty tree unless
@@ -53,13 +58,11 @@ echo "== boot under KVM =="
 nix run ".#$gate" 2>&1 | tee "$log" | tail -25
 
 echo
-echo "== AP marker chain =="
-markers=$(grep -ao 'AP:.' "$log" 2>/dev/null | tr '\n' ' ')
-echo "${markers:-<none>}"
 echo "== bring-up lines =="
-grep -aE 'smp:|online|tlb shootdown' "$log" | head -10 || true
+grep -aE 'lapic: ap [0-9]+ online-ready|smp: ' "$log" | head -10 || true
 echo
-echo "Legend: AP:R G P 4 5 6 C T J 2 3 4 5 6 ; last one seen is the last stage that completed."
+echo "A clean -smp 2 bring-up prints 'lapic: ap 1 online-ready', then 'smp: cpu 1 online (apic 0x1)',"
+echo "then 'smp: tlb shootdown ok'."
 
 if [ "$push" -eq 1 ]; then
     br="ap-debug-$ts"

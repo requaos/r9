@@ -146,6 +146,24 @@ None yet.
   banks (INT-05); `04-VALIDATION.md` is `draft` (run `/gsd-validate-phase 4`);
   `docs/threat-model.md:181` still frames rfork bits 18-20 as unreserved (WR-04).
 - **Phase 5 open defects (2026-11-27, owner chose fix-now):** (1) aarch64 live evictor reclaims nothing under pressure — `fault: phys page alloc failed` kills the caller and the mem-pressure counters stay 0/0/0 (debug session `aarch64-palloc-evictor` active; locally reproducible); (2) the mem-pressure gate's `pinned_skipped > 0` criterion is structurally unreachable from this image and is being replaced; (3) x86_64 `-smp 2` under real KVM resets right after ring-3 entry with no `smp: cpu 1 online` (pre-dates 05-19; SIPI-retry fix did not cure it — needs the QEMU exception-vector log); (4) x86_64 `-smp 1` cpu-chain hangs at `cpu-keyfs-ok` (new since 5a3d5e4). Evidence: `kvm-evidence-20261127T015715Z`. Phase 5 stays at 26/27 until these are green or the owner waives them. **Dedicated debug task prepared (not yet run):** `.planning/debug/x86_64-ap-bringup.md` carries the marker legend, eliminated hypotheses and the experiment plan; `scripts/kvm-ap-debug.sh` runs one AP cycle on an x86_64 Linux KVM host (`--push` sends the capture on an `ap-debug-<ts>` branch). Run it on that host; Owner Stop 4 waits on the result.
+- **x86_64 AP bring-up debug task — run 2026-11-27, awaiting the owner's verify.** Defect (3) is
+  root-caused and fixed on branch `debug/x86_64-ap-bringup` (seven local commits `b4ec82f..4342436`,
+  the last two repairing the `x86_64` crate's host-test leg; `main` untouched at `0e783a0`; nothing pushed): the SIPI trampoline's 32-bit data segment was
+  expand-down (`SegWRITE` is the expand-down bit for a DATA descriptor), which TCG does not enforce
+  and KVM does; behind it, `91187e8` started the APs twice on the dev_exec path, the bring-up
+  delays collapsed on the periodic timer venue (TCG: `tsc_delta` was 0 there), and `pick_next`'s
+  kstack tripwire compared kstack VAs that are the same window VA for every proc. On KVM the
+  composed smoke gate now passes `smp-online`, `paqfs` and `version` with `smp: cpu 1 online` and
+  `smp: tlb shootdown ok`; on TCG the two lines print at +12 ms/+13 ms from ring 3. CI's single-CPU
+  TCG leg (`R9_SMP=1`) passes 31 stages on the branch and then stops at `cpu-keyfs-ok` — defect (4)
+  below — identical on `main` (0e783a0, its own kernel build, R9_SMP=1 R9_ACCEL=tcg): the same 31 stages pass and the run ends in the same `TIMEOUT at stage: cpu-keyfs-ok` — the branch does not change the single-CPU leg. `cargo xtask test` exits 0 on the branch (it did not compile at `main`). **The gate is
+  still red at `-smp 2` on both accels** on a separate defect, prepared as
+  `.planning/debug/x86_64-smp2-mcs-kstack.md`: MCS lock nodes sit on the calling CPU's kernel stack
+  and every proc's kstack is at one VA under its own PML4, so a cross-CPU hand-off writes into the
+  wrong stack and wedges both CPUs (CPU 1 waiting on the heap lock, CPU 0 unable to unlock it). It
+  needs an owner design decision (shared kstack window, stack-independent nodes, or another lock).
+  Note: "TCG passes" never held for two CPUs — CI's x86_64 smoke job pins `R9_SMP=1`
+  (`gates.yml:148-158`). Record: `.planning/debug/x86_64-ap-bringup.md`.
 - **Pre-existing and carried:** `cargo xtask clippy --arch aarch64 --config virtshell` fails on
   7 undocumented `unsafe` blocks in `aarch64/`; repo-wide `cargo fmt --all -- --check` is red;
   the docs still pin r9 at `c787ce9` while `crypto/`, `ds/` and the wire foundation now exist —

@@ -589,6 +589,22 @@ spin-deadlocks a contender on ANY cpu).  UNSAFE-AUDIT's own wording is
 untouched by this delta (its references are the audit's history);
 block/SAFETY counts unchanged from Task 2's.
 
+**AP bring-up debug-session delta (x86_64-ap-bringup, 2026-11-27):** the
+COM1 `ap_mark` helper the KVM AP bring-up diagnosis added to
+`x86_64/src/main.rs` (8be2d10 — one `unsafe {…}` port-I/O block with its
+SAFETY comment, never entered here) is gone again with the markers
+(5c22f03, branch `debug/x86_64-ap-bringup`).  Against `main` at
+`0e783a0` the branch's whole unsafe-surface change is that one site:
+`main.rs` 15 → 14 blocks and 15 → 14 SAFETY comments, every other file
+identical (`git grep -c` over both commits: `unsafe` token lines 265 →
+264, `// SAFETY:` lines 200 → 199, lint-visible sites 239 → 238 — all
+three differences in `main.rs`).  The per-file inventory row below
+stands at 14 blocks and its 184-block total is unchanged.  No other
+commit on the branch moves an `unsafe` token: the trampoline descriptor
+and the AP-start call site are not Rust `unsafe` sites, the timer,
+kstack-identity and host-test repairs add none, and the `lapic.rs` edit
+only removes two marker calls from inside an existing block.
+
 ## ds/ and crypto/ (Phase 3)
 
 Both crates take `[lints] workspace = true`, so
