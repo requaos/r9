@@ -164,6 +164,16 @@ None yet.
   needs an owner design decision (shared kstack window, stack-independent nodes, or another lock).
   Note: "TCG passes" never held for two CPUs — CI's x86_64 smoke job pins `R9_SMP=1`
   (`gates.yml:148-158`). Record: `.planning/debug/x86_64-ap-bringup.md`.
+- **Scale targets (owner, 2026-11-27) — audited, decisions pending.** Future systems: more than
+  100 GiB of RAM, hundreds of terabytes of storage, file paths exceeding 2048 characters. None of
+  the three is stated anywhere in the plans, and the verification plan's VMs are 2 GiB. Audit with
+  sources in `.planning/SCALE-AUDIT.md`. Headline findings: the x86_64 kernel reaches RAM only
+  through one 1 GiB page, and measured on this host 2 GiB and 4 GiB boot to the prompt while 8 GiB
+  hangs before its first line of output (a panic before the console exists); the frame allocator
+  keeps one 4-byte pin count per frame of the machine's address span in a fixed 32 MiB kernel heap;
+  device memory at or above 4 GiB panics; every path argument is capped at 128 bytes; no storage
+  stack exists yet and the page cache's page index is 32-bit. Seven planning items are proposed in
+  the audit's section 5; none is started.
 - **Pre-existing and carried:** `cargo xtask clippy --arch aarch64 --config virtshell` fails on
   7 undocumented `unsafe` blocks in `aarch64/`; repo-wide `cargo fmt --all -- --check` is red;
   the docs still pin r9 at `c787ce9` while `crypto/`, `ds/` and the wire foundation now exist —
