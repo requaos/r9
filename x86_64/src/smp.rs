@@ -155,8 +155,8 @@ fn busy_wait_tsc(tsc_ticks: u64) {
 
 /// Start one AP (SMP-01): allocate its Mach (zeroed, 64 KiB-aligned,
 /// shared kernel half), publish the mailbox, and run INIT → 10 ms →
-/// SIPI(0x08) → 200 µs → optional second SIPI → poll `mach.online`
-/// with a ~100 ms timeout.  The 10 ms/200 µs delays derive from the
+/// SIPI(0x08) → poll `mach.started` for 1 ms → second SIPI ONLY if the
+/// AP never began → poll `mach.online` with a ~100 ms timeout.  The 10 ms/200 µs delays derive from the
 /// BSP's published timer calibration (TICK_MS = 10 ms, so tsc_delta is
 /// exactly 10 ms of TSC ticks) — the AP bring-up never re-calibrates.
 #[cfg(not(test))]
@@ -165,7 +165,6 @@ fn start_one_ap(cpu_id: usize, apic_id: u32, bootpml4_pa: u64) -> Result<(), &'s
         return Err("no BSP timer calibration (the delays need the TSC rate)");
     };
     let ten_ms = timer.tsc_delta.max(1);
-    let two_hundred_us = (timer.tsc_delta / 50).max(1);
     let online_timeout = timer.tsc_delta.saturating_mul(10).max(1_000_000);
 
     // The AP's Mach — a zeroed heap block in the shared kernel half.
@@ -207,10 +206,24 @@ fn start_one_ap(cpu_id: usize, apic_id: u32, bootpml4_pa: u64) -> Result<(), &'s
     lapic::send_init(apic_id);
     busy_wait_tsc(ten_ms);
     lapic::send_sipi(apic_id, SIPI_VECTOR);
-    busy_wait_tsc(two_hundred_us);
-    if !mach.online.load(Ordering::Acquire) {
-        // The SDM's second SIPI (a AP that missed the first while still
-        // in the INIT shadow).
+    // The SDM's second SIPI is a retry for an AP that MISSED the first
+    // while still in the INIT shadow -- it is only safe while the AP has
+    // not started executing.  A SIPI delivered to an AP already in long
+    // mode restarts it at the real-mode vector with paging still on and
+    // triple-faults the machine (the KVM -smp 2 reset: KVM reaches
+    // ap_main well inside the SDM's 200 us window, TCG is slow enough to
+    // land the retry in the INIT shadow).  Poll the AP's `started`
+    // publish for one TICK_MS (1 ms) instead of firing blind at 200 us;
+    // retry only if the AP never began.
+    let retry_window = (timer.tsc_delta / 10).max(1);
+    let retry_start = cpu::rdtsc();
+    while !mach.started.load(Ordering::Acquire) && !mach.online.load(Ordering::Acquire) {
+        if cpu::rdtsc().wrapping_sub(retry_start) > retry_window {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+    if !mach.started.load(Ordering::Acquire) && !mach.online.load(Ordering::Acquire) {
         lapic::send_sipi(apic_id, SIPI_VECTOR);
     }
     let start = cpu::rdtsc();

@@ -535,6 +535,13 @@ pub extern "C" fn ap_main(mach_va: usize, cpu_id: usize) -> ! {
     // INIT-SIPI sequence); no other CPU touches it here.
     let mach = unsafe { &mut *(mach_va as *mut dat::Mach) };
 
+    // 0. Tell the BSP this AP is executing. This MUST be the first
+    //    publish: start_one_ap only re-sends the SIPI while this is
+    //    still false, because a SIPI delivered after this point
+    //    restarts us at the real-mode vector with paging already on and
+    //    triple-faults the machine (the KVM bring-up bug).
+    mach.started.store(true, Ordering::Release);
+
     // 1. The per-CPU GS base FIRST (SMP-02): every kernel Mach access on
     //    this CPU from here on reads `%gs:0` (dat::this_mach()).  FS = 0
     //    and KernelGSbase = 0 mirror the BSP's arm_syscall_entry (the

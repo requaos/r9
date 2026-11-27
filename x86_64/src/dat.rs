@@ -385,6 +385,13 @@ pub struct Mach {
     /// This CPU completed bring-up (the BSP polls it in start_aps; the
     /// AP sets it in ap_main).
     pub(crate) online: AtomicBool,
+    /// The AP has reached `ap_main` (set first thing there).  The BSP's
+    /// INIT-SIPI-SIPI retry keys on this: a second SIPI is only safe
+    /// BEFORE the AP starts executing -- delivered to an AP already in
+    /// long mode it restarts it at the real-mode vector with paging on
+    /// and triple-faults the machine (observed under KVM, where the AP
+    /// reaches ap_main well inside the SDM's 200 us retry window).
+    pub(crate) started: AtomicBool,
     /// A TLB shootdown request is pending for this CPU (SMP-07).
     pub(crate) pending_shootdown: AtomicBool,
     /// The live trap frame record (05-12 migrates proc.rs's CURFRAME
