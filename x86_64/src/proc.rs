@@ -661,11 +661,157 @@ fn pml4_unmap_user(pml4_pa: u64, va: usize) -> bool {
     true
 }
 
-/// Live evictor (MEM-15): drop up to `target` unpinned re-readable pages.
-/// The Task-2 body installs the atomic `PTE_D` swap; the allocator hook
-/// exists from Task 1 so the `port::palloc` wiring compiles.
-pub(crate) fn evict_re_readable_pages(_target: usize) -> usize {
-    0
+/// The live evictor's result for one candidate frame.
+pub(crate) enum EvictOutcome {
+    /// Every mapping was cleared; the caller shoots the TLB down and frees.
+    Dropped(Option<usize>),
+    /// A concurrent write set `PTE_D`; the PTE was restored, the frame
+    /// stays mapped and is marked dirty (no shootdown, never freed).
+    DirtyRestored,
+    /// The frame could not be evicted safely (multiple owners / no leaf).
+    Skipped,
+}
+
+/// The 8-byte leaf PTE slot for `va`, or `None` when a level is absent.
+fn pml4_leaf_slot(pml4_pa: u64, va: usize) -> Option<*mut u64> {
+    let mut table_pa = pml4_pa;
+    for level in 0..3 {
+        let shift = 39 - 9 * level;
+        let idx = (va >> shift) & 0x1ff;
+        let e = table_entry(table_pa, idx);
+        if e & PTE_P == 0 {
+            return None;
+        }
+        table_pa = e & 0x000f_ffff_ffff_f000;
+    }
+    let idx = (va >> 12) & 0x1ff;
+    // SAFETY: `table_pa` names a page-allocated page table (the pml4 walk
+    // allocated every level) and `idx < 512`; the returned slot is the
+    // 8-byte-aligned leaf entry inside that page.
+    Some(unsafe { phys_ptr_mut(table_pa).cast::<u64>().add(idx) })
+}
+
+/// Clear the leaf PTE at `slot` atomically (`swap(0, AcqRel)`) and return
+/// the old entry (MEM-15, T-05-34).  The caller inspects `PTE_D` before
+/// releasing `PROC_TABLE`.
+fn pte_swap_zero(slot: *mut u64) -> u64 {
+    // SAFETY: `slot` is an 8-byte-aligned leaf entry in a live page table;
+    // AtomicU64's representation is the PTE word and the table is only
+    // edited under PROC_TABLE (this path) or by the owning CPU.
+    unsafe { (&*(slot as *const AtomicU64)).swap(0, Ordering::AcqRel) }
+}
+
+/// Restore a previously swapped leaf entry (the dirty-race abort).
+fn pte_restore(slot: *mut u64, old: u64) {
+    // SAFETY: pte_swap_zero's contract; the restore publishes the exact
+    // entry the hardware had before the swap.
+    unsafe { (&*(slot as *const AtomicU64)).store(old, Ordering::Release) };
+}
+
+/// Unmap every mapping of `pa` from every proc's user table (MEM-15/D-14).
+///
+/// For `PageKind::UntouchedData` the leaf is cleared with
+/// `AtomicU64::swap(0, AcqRel)` and the old entry inspected for `PTE_D`
+/// while `PROC_TABLE` (Rank 50) is held: a concurrent store that the CPU
+/// recorded as dirty is RESTORED immediately and the frame is never freed
+/// (Pitfall 3 / T-05-34).  `PageKind::SharedText` pages are read-only, so
+/// they can never be dirty.  The caller shoots the TLB down before the
+/// frame returns to `PAGE_ALLOC`.
+///
+/// The page-cache key was already removed under `PAGE_CACHE` (Rank 20) by
+/// `select_eviction_victim` before this call, so no concurrent fault can
+/// re-map this cache entry while the leaf is cleared.
+pub(crate) fn evict_user_frame(pa: PhysAddr, kind: port::pagecache::PageKind) -> EvictOutcome {
+    let page = pa.addr();
+    let node = LockNode::new();
+    let mut table = PROC_TABLE.lock(&node);
+
+    // A private untouched-data frame must have exactly one owner; a shared
+    // RFMEM page must have been marked dirty and is never a candidate.
+    if kind == port::pagecache::PageKind::UntouchedData {
+        let owners: usize = table
+            .procs
+            .iter()
+            .flatten()
+            .map(|p| p.mapping_log.iter().filter(|r| r.phys as u64 == page).count())
+            .sum();
+        if owners != 1 {
+            return EvictOutcome::Skipped;
+        }
+    }
+
+    // Phase 1: atomically clear every matching leaf, collecting the old
+    // entries so a dirty abort can restore them all.
+    let mut cleared: Vec<(*mut u64, u64, usize)> = Vec::new();
+    for proc in table.procs.iter().flatten() {
+        for rec in proc.mapping_log.iter().filter(|r| r.phys as u64 == page) {
+            if let Some(slot) = pml4_leaf_slot(proc.pml4_pa, rec.va) {
+                let old = pte_swap_zero(slot);
+                cleared.push((slot, old, rec.va));
+            }
+        }
+    }
+    if cleared.is_empty() {
+        return EvictOutcome::Skipped;
+    }
+    if cleared.iter().any(|&(_, old, _)| old & PTE_D != 0) {
+        for &(slot, old, _) in &cleared {
+            pte_restore(slot, old);
+        }
+        return EvictOutcome::DirtyRestored;
+    }
+
+    // Phase 2: no CPU could have dirtied the frame — drop the mapping
+    // records and invalidate this CPU's TLB for each cleared VA.
+    for proc in table.procs.iter_mut().flatten() {
+        proc.mapping_log.retain(|rec| rec.phys as u64 != page);
+    }
+    for &(_, _, va) in &cleared {
+        invlpg(va);
+    }
+    EvictOutcome::Dropped(cleared.first().map(|&(_, _, va)| va))
+}
+
+/// Live evictor: drop up to `target` unpinned re-readable pages (MEM-15,
+/// MEM-14, D-14/D-17/D-21).  Runs with `PAGE_ALLOC` released (the caller is
+/// `PageAlloc::alloc_clean`), so the lock order is
+/// `PAGE_CACHE (20) -> PROC_TABLE (50)` -> release -> `request_shootdown`
+/// (LAPIC 0xF0) -> `PAGE_ALLOC (70)`.  Pinned frames are skipped and counted
+/// by `PageCache::select_eviction_victim` (`pinned_skipped`).
+pub(crate) fn evict_re_readable_pages(target: usize) -> usize {
+    let Some(cache) = crate::pagealloc::page_cache() else { return 0 };
+    let mut freed = 0;
+    while freed < target {
+        let Some(candidate) = cache.select_eviction_victim(crate::pagealloc::is_pinned) else {
+            break;
+        };
+        // Re-check after the candidate's key left the hash: a fault on the
+        // other CPU may have pinned it in the window.
+        if crate::pagealloc::is_pinned(candidate.pa) {
+            port::palloc::record_pinned_skipped();
+            continue;
+        }
+        match evict_user_frame(candidate.pa, candidate.kind) {
+            EvictOutcome::Dropped(va) => {
+                // Text is RO and never dirty; data passes the cleared VA so
+                // the remote flush targets it.  Text flushes everything.
+                let target_va = match candidate.kind {
+                    port::pagecache::PageKind::SharedText => None,
+                    port::pagecache::PageKind::UntouchedData => va,
+                };
+                port::smp::request_shootdown(target_va);
+                let _ = crate::pagealloc::deallocate_physpage(candidate.pa);
+                freed += 1;
+            }
+            EvictOutcome::DirtyRestored => {
+                // The page was written concurrently: keep it mapped and
+                // mark it permanently non-droppable (no shootdown).
+                let _ = cache.mark_data_dirty(candidate.pa);
+            }
+            EvictOutcome::Skipped => {}
+        }
+    }
+    freed
 }
 
 /// The boot PML4's kernel-half entries (510: the KCPUZERO Mach window
@@ -1769,10 +1915,20 @@ impl crate::usermem::UserAddressSpace for Proc {
         Proc::validate_user_range(self, va, len, writable)
     }
 
-    fn ensure_user_resident(&mut self, start: usize, end: usize) {
-        // Task 2 widens this trait with the writable flag + PinGuard; the
-        // Task-1 pager forces read-only residency.
-        let _ = fault::ensure_user_resident(self, start, end, false);
+    fn ensure_user_resident(
+        &mut self,
+        start: usize,
+        end: usize,
+        writable: bool,
+    ) -> core::result::Result<(), &'static str> {
+        fault::ensure_user_resident(self, start, end, writable)
+    }
+
+    fn resident_phys(&self, page_va: usize) -> Option<u64> {
+        self.mapping_log
+            .iter()
+            .find(|m| m.va == page_va)
+            .map(|m| m.phys as u64)
     }
 }
 

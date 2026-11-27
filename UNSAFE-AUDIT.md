@@ -421,6 +421,17 @@ mod fault` and adds the image identity/`exec_gen` keys, the cache-aware
 `free_user_mappings` and the RFMEM dirty-marking arm (no new unsafe).  Net
 x86_64 non-test delta: **0 blocks, 0 fns**; the reconciliation holds.
 
+**Plan 05-19 Task 2 delta (MEM-07/10/15, D-14/D-15/D-17/D-21, 2026-11-26):**
+the x86_64 live evictor and RAII `PinGuard` land.  `x86_64/src/proc.rs`
+adds `pml4_leaf_slot` (one `phys_ptr_mut` pointer derivation, SAFETY-
+documented), `pte_swap_zero` (one `AtomicU64::swap` on a live leaf, the
+Pitfall-3/T-05-34 atom) and `pte_restore` (one atomic store) — **+3 unsafe
+blocks**.  `x86_64/src/usermem.rs` adds the RAII `PinGuard` (no unsafe: it
+calls the safe `PageAlloc` pin API; the host-test build pins nothing) and
+adds the `resident_phys`/writable-ensure trait surface.  `x86_64/src/syscall.rs`
+gains the eight-sleeping-path audit note (no unsafe).  Net x86_64 non-test
+delta for the plan: **+3 blocks, 0 fns**; the reconciliation holds.
+
 **Plan 05-11 Task 1 delta (SMP-01/07, 2026-11-26):** the x86_64 dual
 xAPIC/x2APIC IPI delivery and AP LAPIC init land.  `acpi.rs`: the MADT
 walk records enabled/online-capable processors (type-0 LAPIC and type-9

@@ -278,7 +278,7 @@ fn sargs(frame: &mut Ureg, proc: &mut Proc, arity: usize) -> Option<[u64; 5]> {
 
 /// Copy a NUL-terminated user string into a kernel Vec (the usermem
 /// loop's call-site wrapper).
-fn copy_user_str(proc: &Proc, va: u64, max: usize) -> Result<Vec<u8>, &'static str> {
+fn copy_user_str(proc: &mut Proc, va: u64, max: usize) -> Result<Vec<u8>, &'static str> {
     UserString::copy_from(proc, va, max)
 }
 
@@ -304,7 +304,7 @@ fn err_dyn(proc: &mut Proc, msg: &str) -> u64 {
 /// which is where the arguments lived).  Order-stable by construction
 /// (the walk ascends the argv array; each string copies in turn).
 pub(crate) fn copy_exec_args(
-    proc: &Proc,
+    proc: &mut Proc,
     path_va: u64,
     argv_va: u64,
 ) -> Result<(Vec<u8>, Vec<Vec<u8>>), &'static str> {
@@ -746,27 +746,30 @@ fn sys_unmount(frame: &mut Ureg, proc: &mut Proc) -> u64 {
     };
     let (name_va, old_va) = (args[0], args[1]);
 
-    let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
-        return err(proc, "unmount: no namespace (pre-exec)");
-    };
+    // Copy both user strings BEFORE borrowing the namespace chans: the
+    // copy may demand-page a cold text/data literal (MEM-14), which needs
+    // `&mut proc`.
     let old = match copy_user_str(proc, old_va, ERRMAX) {
         Ok(s) => s,
         Err(msg) => return err(proc, msg),
+    };
+    let name = if name_va == 0 {
+        None
+    } else {
+        match copy_user_str(proc, name_va, ERRMAX) {
+            Ok(s) => Some(s),
+            Err(msg) => return err(proc, msg),
+        }
+    };
+
+    let (Some(slash), Some(dot)) = (proc.slash.as_ref(), proc.dot.as_ref()) else {
+        return err(proc, "unmount: no namespace (pre-exec)");
     };
     let tgt = match namec::namec(&old, slash, dot, &proc.pgrp, NamecMode::MountTarget) {
         Ok(c) => c,
         Err(msg) => return err(proc, msg),
     };
-    let from = if name_va == 0 {
-        None
-    } else {
-        let name = match copy_user_str(proc, name_va, ERRMAX) {
-            Ok(s) => s,
-            Err(msg) => {
-                port::namec::close_chan(&tgt);
-                return err(proc, msg);
-            }
-        };
+    let from = if let Some(name) = name {
         // Aopen: walk with the final redirect, then open OREAD — the
         // opened chan is the chan identity cunmount matches against.
         let walked = match namec::namec(&name, slash, dot, &proc.pgrp, NamecMode::Open) {
@@ -787,6 +790,8 @@ fn sys_unmount(frame: &mut Ureg, proc: &mut Proc) -> u64 {
                 return err(proc, msg);
             }
         }
+    } else {
+        None
     };
     let pg = proc.pgrp.clone();
     let node = LockNode::new();
@@ -1167,14 +1172,9 @@ fn sys_brk_(frame: &mut Ureg, proc: &mut Proc) -> u64 {
     }
     match proc.rfmem_family {
         // The ordinary private shape: move the caller's break and map
-        // the growth pages NOW — the 14-06 x86_64 deviation from
-        // aarch64's lazy fault-in (ensure_user_resident pages them
-        // from syscall context there): this era has no trap-context
-        // pager, so a lazily-grown page's first touch fault-kills the
-        // proc (boot(8)'s first malloc died exactly there — the chain
-        // gate surfaced it).  Same policy as map_text_eager/
-        // map_data_bss_eager: the mapping is eager, the demand pager
-        // is the follow-up.
+        // the growth pages NOW.  Cold bss pages fault in on demand
+        // (MEM-14), but a grown-and-immediately-touched page is mapped
+        // here so the first store never needs a trap-context page-in.
         None => {
             let page = port::mem::PAGE_SIZE_4K;
             let grown_start = exec::round_up_pow2(old_end, page);
@@ -1254,6 +1254,13 @@ fn sys_semacquire(frame: &mut Ureg, proc: &mut Proc) -> u64 {
         Ok(w) => w,
         Err(_) => return err(proc, "bad arg in system call"),
     };
+    // MEM-10/D-21 audit (the eight sleeping paths): devmnt, devpipe,
+    // devip, devether, devcons, devssl, sys_semacquire (this loop) and
+    // sys_await all hold their `UserSlice`/`UserSliceMut` ACROSS the
+    // sleep point.  The RAII `PinGuard` embedded in those types keeps
+    // every backing frame pinned, so the live evictor can never take a
+    // buffer out from under a blocked syscall.  `word` stays live across
+    // the `sched()` below by construction.
     if sem_word_read(&word) < 0 {
         return err(proc, "bad arg in system call");
     }
