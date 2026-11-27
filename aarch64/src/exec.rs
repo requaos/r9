@@ -286,6 +286,9 @@ fn install_image(
     // records; the record replaces the prior image's.
     proc.record_argv(args);
 
+    // MEM-16: a new exec generation, mixed into untouched-data cache keys.
+    proc.exec_gen = proc.exec_gen.wrapping_add(1);
+
     // Map the
     // data+bss pages EAGERLY.  7c places string literals and statics in
     // data, and a real binary (boot(8)) passes them to syscalls without any
@@ -321,7 +324,11 @@ fn map_data_bss_eager(proc: &mut Proc, source: &ByteSource, aout: &AoutHeader) -
     let mut page_va = aout.data_va;
     let data_pages_end = data_end.next_multiple_of(PAGE_SIZE_4K);
     while page_va < data_pages_end {
-        let pa = map_one_user_page(proc, page_va, Entry::rw_user_data(), SegKind::Data)?;
+        // MEM-15: initialised data starts READ-ONLY (EL0 and EL1); the first
+        // write fault promotes it to AllRw and marks it dirty.  The bytes are
+        // written through the kernel KZERO+PA alias, never a writable user
+        // mapping.
+        let pa = map_one_user_page(proc, page_va, Entry::ro_user_data(), SegKind::Data)?;
         let clamp = data_end.saturating_sub(page_va).min(PAGE_SIZE_4K);
         if clamp > 0 {
             let file_off = data_file_base + (page_va - aout.data_va) as u64;
@@ -332,6 +339,17 @@ fn map_data_bss_eager(proc: &mut Proc, source: &ByteSource, aout: &AoutHeader) -
                 core::slice::from_raw_parts_mut(physaddr_as_ptr_mut_offset_from_kzero::<u8>(pa), clamp)
             };
             source.read_at(file_off, dst).map_err(|_| "exec: data page-in read failed")?;
+        }
+        // MEM-16: register the untouched page as droppable (evictable under
+        // pressure until the first write).
+        if let Some(cache) = crate::pagealloc::page_cache() {
+            let key = crate::proc::data_page_key(source.image_id, proc.pid, proc.exec_gen, page_va);
+            if cache.register_untouched_data(key, pa).is_ok() {
+                cache.add_rmap(
+                    key,
+                    port::pagecache::RmapEntry { proc_slot: proc.rmap_slot(), page_va },
+                );
+            }
         }
         page_va += PAGE_SIZE_4K;
     }
@@ -360,7 +378,7 @@ pub fn exec_into(
 ) -> Result<()> {
     let backing = ByteBacking::Paq { dir: bin.clone(), image };
     let aout = read_aout(&backing)?;
-    let source = ByteSource { backing, data_file_base: HDR_SIZE as u64 + aout.text };
+    let source = ByteSource::new(backing, HDR_SIZE as u64 + aout.text);
     let (user_sp, tos_va) = install_image(proc, source, name, args, &aout)?;
 
     // The forkret-shaped frame at kstack_top - 288 (the published TrapFrame
@@ -523,7 +541,7 @@ pub fn exec_replace(
     // -1 would eret into a trap frame whose pc/sp name freed text pages,
     // so the process dies loudly via the exit tail (the fault-kill
     // shape — the parent reaps the wait record like any other death).
-    let source = ByteSource { backing, data_file_base: HDR_SIZE as u64 + aout.text };
+    let source = ByteSource::new(backing, HDR_SIZE as u64 + aout.text);
     let (user_sp, tos_va) = match install_image(proc, source, name, args, &aout) {
         Ok(v) => v,
         Err(msg) => {

@@ -389,6 +389,24 @@ dispatches), the x86_64 kernels issue `vzeroupper` on exit, and `qemu64`
 production 1 → 5 and unsafe fns 0 → 3 on a compiled config; SAFETY 431 → 435
 plus the test-only sites; the reconciliation holds.
 
+**Plan 05-18 delta (MEM-07/10/15/16, D-14/D-15/D-17/D-21, 2026-11-26):** the
+aarch64 arch side of the memory architecture lands.  `aarch64/src/vm.rs` adds
+`Entry::ro_user_text()` / `Entry::ro_user_data()` and the leaf helpers
+(`RootPageTable::leaf_entry_mut`, `retarget_kernel_leaf`, `set_user_leaf`,
+`clear_leaf_pte`, `tlbi_vae1is`): each `write_volatile`/recursive walk carries
+a concrete `// SAFETY:` contract, and `tlbi_vae1is` is one asm block (pure TLB
+maintenance).  `aarch64/src/pagealloc.rs` swaps the bitmap allocator for the
+portable `PageAlloc`: two `AtomicPtr` published-at-boot handles (`Box::into_raw`
++ `&*`, SAFETY-documented), one reusable zero-alias retarget, and the one asm
+free path (`zero_frame` writes through the alias).  `aarch64/src/fault.rs`
+fills RO frames through the `KZERO + pa` alias (one `from_raw_parts_mut` per
+page) and adds the live evictor.  `aarch64/src/proc.rs` adds
+`evict_user_frame` (PROC_TABLE-held `map_to` clears, SAFETY-documented) and the
+shared-text / untouched-data map arms in rfork.  `aarch64/src/usermem.rs` adds
+the RAII `PinGuard` (no unsafe: it calls the safe `PageAlloc` pin API).
+Net aarch64 non-test delta: **+14 unsafe blocks, +0 unsafe fns** (all
+`undocumented_unsafe_blocks`-clean); the reconciliation holds.
+
 **Plan 05-11 Task 1 delta (SMP-01/07, 2026-11-26):** the x86_64 dual
 xAPIC/x2APIC IPI delivery and AP LAPIC init land.  `acpi.rs`: the MADT
 walk records enabled/online-capable processors (type-0 LAPIC and type-9
