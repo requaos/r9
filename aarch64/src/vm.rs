@@ -202,6 +202,37 @@ impl Entry {
             .with_valid(true)
     }
 
+    /// Read-only user text (MEM-15, D-15): executable at EL0, read-only at
+    /// BOTH EL0 and EL1.  Frames are filled through the kernel `KZERO + pa`
+    /// alias before this PTE is installed, so no writable user mapping ever
+    /// exists.  Any EL0 write faults as a permission violation.
+    pub fn ro_user_text() -> Self {
+        Entry(0)
+            .with_access_permission(AccessPermission::AllRo)
+            .with_shareable(Shareable::Inner)
+            .with_accessed(true)
+            .with_uxn(false)
+            .with_pxn(true)
+            .with_mair_index(Mair::Normal)
+            .with_valid(true)
+    }
+
+    /// Read-only initialised user data (MEM-15, D-15): no execute permission
+    /// and read-only at BOTH EL0 and EL1 until the first write fault promotes
+    /// the page through [`Self::rw_user_data`].  Untouched data pages are
+    /// therefore evictable (D-14); written pages are marked dirty and never
+    /// taken.
+    pub fn ro_user_data() -> Self {
+        Entry(0)
+            .with_access_permission(AccessPermission::AllRo)
+            .with_shareable(Shareable::Inner)
+            .with_accessed(true)
+            .with_uxn(true)
+            .with_pxn(true)
+            .with_mair_index(Mair::Normal)
+            .with_valid(true)
+    }
+
     pub const fn with_phys_addr(self, pa: PhysAddr) -> Self {
         Entry(self.0).with_addr(pa.addr() >> 12)
     }
@@ -555,6 +586,115 @@ impl RootPageTable {
         let mapped_virtrange = startva.map(|startva| VirtRange(startva..endva));
         mapped_virtrange.ok_or(PageTableError::PhysRangeIsZero)
     }
+
+    /// Return the level-3 leaf entry for `va`, or `None` when any level of
+    /// the walk is missing or is not a table.  Allocation-free: the caller
+    /// must have established the walk (a prior `map_to`).
+    ///
+    /// Used by the RO-text/write-protect machinery (MEM-15): promote a mapped
+    /// data page in the ACTIVE user table, and retarget the reusable kernel
+    /// zeroing alias without a full `map_to` dance.
+    pub fn leaf_entry_mut(
+        &mut self,
+        pgtype: RootPageTableType,
+        va: usize,
+    ) -> Option<&mut Entry> {
+        let mut table: *mut Table = self;
+        for level in [Level::Level0, Level::Level1, Level::Level2] {
+            // SAFETY: `table` starts at `self` and is replaced only by a
+            // pointer derived from a VALID table entry (checked immediately
+            // below) via the recursive-address resolver, which names the child
+            // table of the same live hierarchy.  The reference lives only
+            // until the next loop iteration; no other handle is live.
+            let entry = unsafe { &mut (*table).entries[va_index(va, level)] };
+            if !entry.valid() || !entry.is_table(level) {
+                return None;
+            }
+            let next = level.next()?;
+            let vmt = VmTraitImpl {};
+            // SAFETY: `entry` is a valid table descriptor in a live hierarchy;
+            // resolve_entry_mut's recursive-address math names its child table.
+            table = unsafe { &mut *vmt.resolve_entry_mut::<Table>(*entry, pgtype, va, next) };
+        }
+        // SAFETY: `table` names the level-2 table reached above; its level-3
+        // slot is the leaf PTE for `va`.
+        Some(unsafe { &mut (*table).entries[va_index(va, Level::Level3)] })
+    }
+}
+
+/// Retarget an EXISTING kernel leaf mapping at `va` to `pa` (no table
+/// allocation), then invalidate that VA across the Inner Shareable domain.
+/// The reusable palloc zeroing alias uses this so zeroing a batch of frames
+/// does not run the full `map_to` recursive dance (and its whole-TLB flush)
+/// per frame.
+pub fn retarget_kernel_leaf(va: usize, pa: PhysAddr) -> Result<(), PageTableError> {
+    let mut root = kernel_pagetable();
+    let Some(entry) = root.leaf_entry_mut(RootPageTableType::Kernel, va) else {
+        return Err(PageTableError::EntryIsNotTable);
+    };
+    let new = Entry::rw_kernel_data().with_phys_addr(pa).with_page_or_table(true);
+    // SAFETY: `entry` is the live level-3 descriptor in the kernel root
+    // hierarchy for `va`; a volatile store makes the hardware-visible PTE
+    // write explicit, and the TLB invalidation below makes the new mapping
+    // effective on every CPU.
+    unsafe { write_volatile(entry, new) };
+    tlbi_vae1is(va);
+    Ok(())
+}
+
+/// Replace the ACTIVE user table's leaf for `va` with `entry`, then
+/// invalidate the VA.  Returns false when the walk is absent.
+pub fn set_user_leaf(va: usize, entry: Entry) -> bool {
+    let mut root = root_page_table(RootPageTableType::User);
+    let Some(slot) = root.leaf_entry_mut(RootPageTableType::User, va) else {
+        return false;
+    };
+    // SAFETY: `slot` is the live level-3 descriptor for `va` in THIS CPU's
+    // active user table (the caller is inside the proc's own syscall/fault
+    // context); the volatile store is the hardware-visible PTE write.
+    unsafe { write_volatile(slot, entry.with_page_or_table(true)) };
+    tlbi_vae1is(va);
+    true
+}
+
+/// Clear a leaf PTE in `root` and return the physical page it named.  The
+/// `tlbi vae1is` at the caller's VA removes every cached translation.
+pub fn clear_leaf_pte(
+    root: &mut RootPageTable,
+    pgtype: RootPageTableType,
+    va: usize,
+) -> Option<PhysAddr> {
+    let slot = root.leaf_entry_mut(pgtype, va)?;
+    let entry = *slot;
+    if !entry.valid() {
+        return None;
+    }
+    let pa = entry.phys_addr();
+    // SAFETY: `slot` is a live leaf descriptor in `root`; clearing it is the
+    // unmap.  The caller runs the TLB shootdown before the frame is reused.
+    unsafe { write_volatile(slot, Entry::empty()) };
+    Some(pa)
+}
+
+/// `TLBI VAE1IS`: invalidate the EL1&0 stage-1 translation for one VA across
+/// the Inner Shareable domain, ordered after the caller's PTE store.
+pub fn tlbi_vae1is(va: usize) {
+    let page = (va >> 12) & 0x0000_ffff_ffff_ffff;
+    #[cfg(not(test))]
+    // SAFETY: a pure TLB maintenance sequence (no memory operands): the
+    // caller's PTE store is ordered by `dsb ishst`, and `dsb ish; isb`
+    // completes the invalidation before the next translation.
+    unsafe {
+        core::arch::asm!(
+            "dsb ishst",
+            "tlbi vae1is, {page}",
+            "dsb ish",
+            "isb",
+            page = in(reg) page,
+        );
+    }
+    #[cfg(test)]
+    let _ = page;
 }
 
 // TODO this needs to be a real virtual address allocator...

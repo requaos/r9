@@ -18,6 +18,15 @@
 //! syscall/trap context ONLY (the PL011 RX IRQ handler pushes its
 //! lock-free ring; the ring→queue drain runs in the reader's own syscall
 //! context via timer.rs → proc::cons_input_wake).
+//!
+//! MEM-10 (D-21) sleeping-buffer audit: every path below constructs
+//! `UserSlice`/`UserSliceMut` and holds it (and therefore its RAII
+//! `PinGuard`) across the blocking call — devmnt (`read`/`write`/
+//! `fversion`/`stat`), devpipe (`read`/`write`), devip (`read`/`write`),
+//! devether (`read`/`write`), devcons (`read`), devssl (`read`/`write`),
+//! `sys_semacquire` and `sys_await`.  The two `validated_only` sites (the
+//! SP+8 argument block and NOTED's saved-ureg window) never sleep and pin
+//! nothing.
 
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;

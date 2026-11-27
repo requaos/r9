@@ -20,11 +20,11 @@
 //! - pagealloc's MCS lock is taken only briefly (single page allocations)
 //!   and never while holding another lock.
 
-use port::mem::PAGE_SIZE_4K;
+use port::mem::{PAGE_SIZE_4K, PhysAddr, PhysRange};
 use port::println;
 
 use crate::param::KZERO;
-use crate::proc::{self, MappingRecord, Proc, SegKind};
+use crate::proc::{self, MappingRecord, Proc, SegKind, data_page_key, text_page_key};
 use crate::registers::{EsrEl1, EsrEl1IssDataAbort, EsrEl1IssInstructionAbort, ExceptionClass};
 use crate::trap::TrapFrame;
 use crate::vm::{self, Entry, PageSize, PhysPageAllocator, RootPageTableType, VmTraitImpl};
@@ -88,107 +88,216 @@ pub fn user_fault(frame: &mut TrapFrame, esr: EsrEl1, far: u64) {
         unresolvable(frame, class, far, access);
     };
 
-    // A fault on an already-mapped page is a genuine protection/access
-    // violation (e.g. fetching from a data page) — not demand paging; remap
-    // would silently lose live page contents.  Kill loudly instead.
+    // A fault on an already-mapped page is a protection/access violation —
+    // except the ONE sanctioned case: MEM-15's write-protect dirty
+    // promotion for an untouched initialised-data page.  A write to text
+    // (or a fetch from data) kills the offending process.
     let already_mapped = proc.mapping_log.iter().any(|m| m.va == page_va);
 
-    match segments.classify(va) {
-        Some(SegKind::Text) if !already_mapped => {
-            page_in_from_image(&mut proc, page_va, SegKind::Text)
+    if already_mapped {
+        if access == "write" && segments.classify(va) == Some(SegKind::Data) {
+            if let Err(reason) = promote_data_page(&mut proc, page_va) {
+                println!("user fault: {reason}");
+                unresolvable(frame, class, far, access);
+            }
+            return;
         }
-        Some(SegKind::Data) if !already_mapped => {
-            page_in_from_image(&mut proc, page_va, SegKind::Data)
-        }
-        Some(SegKind::Bss) if !already_mapped => {
-            page_in_zeroed(&mut proc, page_va, SegKind::Bss)
-        }
-        Some(SegKind::Tos) if !already_mapped => {
-            page_in_zeroed(&mut proc, page_va, SegKind::Tos)
-        }
+        unresolvable(frame, class, far, access);
+    }
+
+    let resolved = match segments.classify(va) {
+        Some(SegKind::Text) => page_in_from_image(&mut proc, page_va, SegKind::Text),
+        Some(SegKind::Data) => page_in_from_image(&mut proc, page_va, SegKind::Data),
+        Some(SegKind::Bss) => page_in_zeroed(&mut proc, page_va, SegKind::Bss),
+        Some(SegKind::Tos) => page_in_zeroed(&mut proc, page_va, SegKind::Tos),
         // The stack segment range IS the 16 MiB growth bound — a Stack
         // classification is always in-bounds; faults below the bound
         // classify None and fall through to unresolvable.
-        Some(SegKind::Stack) if !already_mapped => {
-            page_in_zeroed(&mut proc, page_va, SegKind::Stack)
-        }
-        _ => unresolvable(frame, class, far, access),
+        Some(SegKind::Stack) => page_in_zeroed(&mut proc, page_va, SegKind::Stack),
+        None => unresolvable(frame, class, far, access),
+    };
+    if let Err(reason) = resolved {
+        println!("user fault: {reason}");
+        unresolvable(frame, class, far, access);
     }
 }
 
-/// Demand-page text/data from the proc's paqfs byte source into the ACTIVE
-/// user table, writing the bytes THROUGH THE USER VA (the faulting process's
-/// TTBR0 is live — no aliasing, no PAN on cortex-a72).
-/// Text pages get the icache sequence after the write.
-fn page_in_from_image(proc: &mut Proc, page_va: usize, kind: SegKind) {
-    let pa = pagealloc::allocate_physpage()
-        .unwrap_or_else(|_| panic!("fault: phys page alloc failed"));
-    // Text is UXN-clear/PXN-set (user-executable); data is both-set.
-    let entry = match kind {
-        SegKind::Text => Entry::rw_user_text(),
-        _ => Entry::rw_user_data(),
-    }
-    .with_phys_addr(pa);
-    map_active_user(page_va, entry);
+/// Demand-page text/data from the proc's image byte source (MEM-15/MEM-16).
+///
+/// Text is SHARED through `palloc.hash` and mapped read-only at EL0 and EL1;
+/// the frame is filled through the kernel `KZERO + pa` alias before the RO
+/// PTE is installed.  Untouched initialised data is mapped read-only and
+/// registered in the cache as droppable until its first write.
+/// Returns an error when the allocator cannot satisfy the fault (the caller
+/// kills the process rather than panicking the kernel).
+fn page_in_from_image(proc: &mut Proc, page_va: usize, kind: SegKind) -> Result<(), &'static str> {
+    let image_id = proc
+        .text_source
+        .as_ref()
+        .ok_or("fault: page-in with no byte source")?
+        .image_id;
+    let key = page_image_key(image_id, proc, page_va, kind);
 
-    // Zero first (fresh phys pages are garbage and the file window may be
-    // short at a segment tail), then read the file window in at byte
-    // granularity (data file offsets are not page-aligned).
-    //
-    // CLAMP the read to the segment's exact content end:
-    // the paqfs entry's length covers the
-    // WHOLE file (syms included), so an unclamped full-page read bleeds
-    // trailing file bytes (the syms section) into the page tail — bytes that
-    // must stay ZERO (the bss window sharing the last data page; the
-    // padding past text end).  Poisoned bss globals are read as
-    // file-string garbage (observed: exits()'s onex[i].f became "tas.s" and
-    // the loop made an indirect call into ASCII).
-    // SAFETY: page_va was just mapped r/w in the ACTIVE user table by
-    // map_active_user above (the faulting proc's TTBR0 is live in its
-    // trap context); the whole page is the fill target.
-    let full = unsafe { core::slice::from_raw_parts_mut(page_va as *mut u8, PAGE_SIZE_4K) };
-    full.fill(0);
-    let Some(source) = proc.text_source.as_ref() else {
-        panic!("fault: {kind:?} page-in with no byte source");
-    };
-    let file_off = match kind {
-        // The 40-byte header is part of the text mapping: a text page's file
-        // offset is its VA offset from 0x10000.
-        SegKind::Text => (page_va - exec::TEXT_MAP_BASE) as u64,
-        // data file offset = (pageVA - data_va) + (40 + textsize)
-        _ => {
-            (page_va - proc.segments.as_ref().unwrap().data.start()) as u64 + source.data_file_base
+    // Cache hit: map the shared/cached frame read-only and join the rmap.
+    if let Some(cache) = pagealloc::page_cache() {
+        if let Some(page) = cache.lookup(key) {
+            map_active_user(page_va, page_entry(kind).with_phys_addr(page.pa))?;
+            cache.add_rmap(
+                key,
+                port::pagecache::RmapEntry { proc_slot: proc.rmap_slot(), page_va },
+            );
+            record_mapping(proc, page_va, page.pa, kind);
+            return Ok(());
         }
-    };
-    // Exact content end (VA): text content ends where the data FILE base
-    // begins (data_file_base = 40 + textsize, i.e. TEXT_MAP_BASE + that is
-    // the text-content end VA); data ends at the exact data_end.
-    let content_end = match kind {
-        SegKind::Text => exec::TEXT_MAP_BASE + source.data_file_base as usize,
-        _ => proc.segments.as_ref().unwrap().data.end(),
-    };
-    let clamp = content_end.saturating_sub(page_va).min(PAGE_SIZE_4K);
-    let dst = &mut full[..clamp];
-    // The byte source abstracts the backing (devroot's paqfs image
-    // window, or a devmnt binary's staged whole-file buffer — the pager
-    // NEVER RPCs; trap context can't block on the server).
-    if let Err(err) = source.read_at(file_off, dst) {
-        panic!("fault: byte-source read_at failed: {err}");
     }
+
+    // Miss: allocate + fill OUTSIDE `PAGE_CACHE` (a miss must never hold the
+    // Rank-20 lock across allocation, whose evictor re-acquires it).
+    let mut pa = pagealloc::allocate_physpage().map_err(|_| "fault: phys page alloc failed")?;
+    if let Err(reason) = fill_page_from_source(proc, page_va, kind, pa) {
+        let _ = pagealloc::deallocate_physpage(pa);
+        return Err(reason);
+    }
+
+    // Re-check + deduplicate a concurrent insert on the other CPU.
+    if let Some(cache) = pagealloc::page_cache() {
+        if let Some(page) = cache.lookup(key) {
+            let _ = pagealloc::deallocate_physpage(pa);
+            pa = page.pa;
+        } else {
+            let inserted = match kind {
+                SegKind::Text => cache.insert_text(key, pa),
+                _ => cache.register_untouched_data(key, pa),
+            };
+            if inserted.is_ok() {
+                cache.add_rmap(
+                    key,
+                    port::pagecache::RmapEntry { proc_slot: proc.rmap_slot(), page_va },
+                );
+            }
+        }
+    }
+
+    map_active_user(page_va, page_entry(kind).with_phys_addr(pa))?;
     if kind == SegKind::Text {
         flush_icache_user_range(page_va, page_va + PAGE_SIZE_4K);
     }
     // Evidence markers (exec-profile proof of demand paging).
     match kind {
         SegKind::Text => println!("fault: text page-in va={page_va:#x}"),
-        _ => println!("fault: data page-in va={page_va:#x}"),
+        SegKind::Data => println!("fault: data page-in va={page_va:#x}"),
+        _ => {}
     }
+    record_mapping(proc, page_va, pa, kind);
+    Ok(())
+}
+
+/// The RO/write-protect PTE for a demand image page.
+fn page_entry(kind: SegKind) -> Entry {
+    match kind {
+        SegKind::Text => Entry::ro_user_text(),
+        _ => Entry::ro_user_data(),
+    }
+}
+
+/// The `palloc.hash` key for an image page.
+fn page_image_key(image_id: u32, proc: &Proc, page_va: usize, kind: SegKind) -> port::pagecache::PageKey {
+    match kind {
+        SegKind::Text => text_page_key(image_id, page_va),
+        _ => data_page_key(image_id, proc.pid, proc.exec_gen, page_va),
+    }
+}
+
+/// Zero + fill one page through the kernel `KZERO + pa` alias.
+///
+/// CLAMP the read to the segment's exact content end: the paqfs entry's
+/// length covers the WHOLE file (syms included), so an unclamped full-page
+/// read would bleed trailing file bytes into a page tail that must stay zero
+/// (the bss window sharing the last data page; the padding past text end).
+fn fill_page_from_source(
+    proc: &mut Proc,
+    page_va: usize,
+    kind: SegKind,
+    pa: PhysAddr,
+) -> Result<(), &'static str> {
+    let segments = proc.segments.as_ref().ok_or("fault: page-in with no segments")?;
+    let source = proc.text_source.as_ref().ok_or("fault: page-in with no byte source")?;
+    let file_off = match kind {
+        // The 40-byte header is part of the text mapping: a text page's file
+        // offset is its VA offset from 0x10000.
+        SegKind::Text => (page_va - exec::TEXT_MAP_BASE) as u64,
+        // data file offset = (pageVA - data_va) + (40 + textsize)
+        _ => (page_va - segments.data.start()) as u64 + source.data_file_base,
+    };
+    let content_end = match kind {
+        SegKind::Text => exec::TEXT_MAP_BASE + source.data_file_base as usize,
+        _ => segments.data.end(),
+    };
+    let clamp = content_end.saturating_sub(page_va).min(PAGE_SIZE_4K);
+    let alias = map_kernel_alias(pa)?;
+    // SAFETY: the KZERO+PA alias was just mapped r/w in the kernel table; the
+    // slice is exactly one page and is the fill target.
+    let full = unsafe { core::slice::from_raw_parts_mut(alias, PAGE_SIZE_4K) };
+    full.fill(0);
+    if clamp > 0 {
+        // The byte source abstracts the backing (devroot's paqfs image
+        // window, or a devmnt binary's staged whole-file buffer — the pager
+        // NEVER RPCs; trap context can't block on the server).
+        source
+            .read_at(file_off, &mut full[..clamp])
+            .map_err(|_| "fault: byte-source read_at failed")?;
+    }
+    Ok(())
+}
+
+/// Map `pa` at the kernel's `KZERO + pa` alias and return the writable
+/// pointer.  `map_to` REPLACES, so re-mapping an existing alias is safe.
+fn map_kernel_alias(pa: PhysAddr) -> Result<*mut u8, &'static str> {
+    let mut physalloc = PhysPageAllocator {};
+    let mut vmt = VmTraitImpl {};
+    vm::kernel_pagetable()
+        .map_phys_range(
+            &mut physalloc,
+            &mut vmt,
+            "faultpage",
+            &PhysRange::with_pa_len(pa, PAGE_SIZE_4K),
+            vm::VaMapping::Offset(KZERO),
+            Entry::rw_kernel_data(),
+            PageSize::Page4K,
+            RootPageTableType::Kernel,
+        )
+        .map_err(|_| "fault: kernel alias map failed")?;
+    Ok((KZERO + pa.addr() as usize) as *mut u8)
+}
+
+/// Append the mapping-log record (rfork copy + exit-free walk it by kind).
+fn record_mapping(proc: &mut Proc, page_va: usize, pa: PhysAddr, kind: SegKind) {
     proc.mapping_log.push(MappingRecord {
         va: page_va,
         phys: pa.addr() as usize,
         size: PAGE_SIZE_4K,
         kind,
     });
+}
+
+/// Promote an already-mapped clean `SegKind::Data` page to `AllRw`, mark it
+/// dirty, and invalidate its VA (MEM-15, Pitfall 2).  Used by the EL0 write
+/// fault and by `ensure_user_resident(..., writable: true)` before a kernel
+/// write through `UserSliceMut`.
+fn promote_data_page(proc: &mut Proc, page_va: usize) -> Result<(), &'static str> {
+    let record = proc
+        .mapping_log
+        .iter()
+        .find(|rec| rec.va == page_va && rec.kind == SegKind::Data)
+        .ok_or("usermem: data page is not resident")?;
+    let pa = PhysAddr::new(record.phys as u64);
+    if !vm::set_user_leaf(page_va, Entry::rw_user_data().with_phys_addr(pa)) {
+        return Err("usermem: data page has no leaf PTE");
+    }
+    if let Some(cache) = pagealloc::page_cache() {
+        cache.mark_data_dirty(pa);
+    }
+    Ok(())
 }
 
 /// Page-in any unmapped pages of
@@ -202,7 +311,10 @@ pub(crate) fn ensure_stack_resident(proc: &mut Proc, start: usize, end: usize) {
     let mut page = start & !(PAGE_SIZE_4K - 1);
     while page < end {
         if !proc.mapping_log.iter().any(|m| m.va == page) {
-            page_in_zeroed(proc, page, SegKind::Stack);
+            if page_in_zeroed(proc, page, SegKind::Stack).is_err() {
+                println!("fault: stack page-in failed during note delivery");
+                kill_current_process();
+            }
         }
         page += PAGE_SIZE_4K;
     }
@@ -210,42 +322,67 @@ pub(crate) fn ensure_stack_resident(proc: &mut Proc, start: usize, end: usize) {
 
 /// The cold-syscall-buffer class (a
 /// paqfs server emalloc's a heap buffer and lets the KERNEL's pread make
-/// its first touch): generalize ensure_stack_resident to ANY writable
-/// user range — an unmapped page is classified (Bss for brk_-grown heap,
-/// Stack for growth pages) and paged in zeroed.  The syscall layer calls
-/// this after validate_user_range and BEFORE any deref of a user buffer
-/// (pread's read target, pwrite's read source, errstr/await/fd2path's
-/// outputs, pipe's fd array): membership proves the segment, but a
-/// demand-paged page that no EL0 code has touched yet aborts at EL1h on
-/// a kernel access (closed at exec for data+bss, and closed for
-/// post-exec growth pages here).  This is EXPLICIT page-in at a
-/// controlled point with no locks held — never a nested fault from
-/// syscall context.
-pub(crate) fn ensure_user_resident(proc: &mut Proc, start: usize, end: usize) {
+/// its first touch): generalize ensure_stack_resident to ANY user range —
+/// an unmapped page is classified and paged in, and `writable == true` also
+/// promotes every clean `SegKind::Data` page to `AllRw` + dirty BEFORE the
+/// caller writes it (Pitfall 2: AllRo denies EL1 writes).  The syscall layer
+/// calls this after validate_user_range and BEFORE any deref of a user
+/// buffer; explicit page-in at a controlled point with no locks held.
+/// Returns an error for a write targeting read-only text, or on allocation
+/// failure (the syscall reports a bad buffer rather than panicking).
+pub(crate) fn ensure_user_resident(
+    proc: &mut Proc,
+    start: usize,
+    end: usize,
+    writable: bool,
+) -> Result<(), &'static str> {
     if start >= end {
-        return;
+        return Ok(());
     }
     let mut page = start & !(PAGE_SIZE_4K - 1);
     while page < end {
-        if !proc.mapping_log.iter().any(|m| m.va == page) {
-            // An unmapped in-segment page is bss-growth or stack-growth
-            // by construction (text/data/tos are exec-mapped); classify
-            // for the mapping log's record (rfork-copy/exit-free walk it).
-            let kind = match proc.segments.as_ref().and_then(|s| s.classify(page)) {
-                Some(SegKind::Stack) => SegKind::Stack,
-                _ => SegKind::Bss,
-            };
-            page_in_zeroed(proc, page, kind);
+        let mapped = proc.mapping_log.iter().any(|m| m.va == page);
+        let kind = proc.segments.as_ref().and_then(|segments| segments.classify(page));
+        match kind {
+            Some(SegKind::Text) => {
+                if writable {
+                    return Err("usermem: write to read-only text");
+                }
+                if !mapped {
+                    page_in_from_image(proc, page, SegKind::Text)?;
+                }
+            }
+            Some(SegKind::Data) => {
+                if !mapped {
+                    page_in_from_image(proc, page, SegKind::Data)?;
+                }
+                if writable {
+                    promote_data_page(proc, page)?;
+                }
+            }
+            Some(growth @ (SegKind::Bss | SegKind::Stack | SegKind::Tos)) => {
+                if !mapped {
+                    page_in_zeroed(proc, page, growth)?;
+                }
+            }
+            None => {
+                if !mapped {
+                    // An unmapped in-segment page is bss-growth or
+                    // stack-growth by construction; record it as Bss.
+                    page_in_zeroed(proc, page, SegKind::Bss)?;
+                }
+            }
         }
         page += PAGE_SIZE_4K;
     }
+    Ok(())
 }
 
 /// Map a zeroed page (bss/stack/tos).  Stack faults arrive only inside the
 /// 16 MiB growth bound — the segment classifier bounds them.
-fn page_in_zeroed(proc: &mut Proc, page_va: usize, kind: SegKind) {    let pa = pagealloc::allocate_physpage()
-        .unwrap_or_else(|_| panic!("fault: phys page alloc failed"));
-    map_active_user(page_va, Entry::rw_user_data().with_phys_addr(pa));
+fn page_in_zeroed(proc: &mut Proc, page_va: usize, kind: SegKind) -> Result<(), &'static str> {
+    let pa = pagealloc::allocate_physpage().map_err(|_| "fault: phys page alloc failed")?;
+    map_active_user(page_va, Entry::rw_user_data().with_phys_addr(pa))?;
     // SAFETY: page_va was just mapped r/w in the ACTIVE user table above
     // (the faulting proc's TTBR0 is live); the whole page is zeroed.
     let dst = unsafe { core::slice::from_raw_parts_mut(page_va as *mut u8, PAGE_SIZE_4K) };
@@ -261,18 +398,19 @@ fn page_in_zeroed(proc: &mut Proc, page_va: usize, kind: SegKind) {    let pa = 
         size: PAGE_SIZE_4K,
         kind,
     });
+    Ok(())
 }
 
 /// Map `entry` at `va` in the ACTIVE user root table — the faulting
 /// process's TTBR0 is live, and map_to's temp-recursive dance edits it
 /// directly (its per-write full TLB invalidate is heavy but correct;
 /// optimization is future work).
-fn map_active_user(va: usize, entry: Entry) {
+fn map_active_user(va: usize, entry: Entry) -> Result<(), &'static str> {
     let mut physalloc = PhysPageAllocator {};
     let mut vmt = VmTraitImpl {};
     vm::root_page_table(RootPageTableType::User)
         .map_to(&mut physalloc, &mut vmt, entry, va, PageSize::Page4K, RootPageTableType::User)
-        .unwrap_or_else(|err| panic!("fault: user map failed at {va:#x}: {err:?}"));
+        .map_err(|_| "fault: user map failed")
 }
 
 /// Icache/dcache maintenance after a text page-in, on the USER VA:
@@ -286,6 +424,37 @@ fn map_active_user(va: usize, entry: Entry) {
 /// TLB/barrier/cache floor) — this wrapper keeps the fault.rs call sites.
 fn flush_icache_user_range(start: usize, end: usize) {
     vm::flush_icache_user_range(start, end);
+}
+
+/// Live evictor: drop up to `target` unpinned re-readable pages (MEM-15,
+/// MEM-14, D-14/D-17/D-21).  Runs with `PAGE_ALLOC` released (the caller is
+/// `PageAlloc::alloc_clean`), so the lock order is
+/// `PAGE_CACHE (20) -> PROC_TABLE (50)` -> release -> `request_shootdown`
+/// (SGI 1) -> `PAGE_ALLOC (70)`.  Pinned frames are skipped and counted by
+/// `PageCache::select_eviction_victim` (`pinned_skipped`).
+pub(crate) fn evict_re_readable_pages(target: usize) -> usize {
+    let Some(cache) = pagealloc::page_cache() else { return 0 };
+    let mut freed = 0;
+    while freed < target {
+        let Some(candidate) = cache.select_eviction_victim(pagealloc::is_pinned) else {
+            break;
+        };
+        // Re-check after the candidate's key left the hash: a fault on the
+        // other CPU may have pinned it in the window.  Abort that victim
+        // (the frame stays mapped and uncached; nothing is freed).
+        if pagealloc::is_pinned(candidate.pa) {
+            continue;
+        }
+        let _unmapped = proc::evict_user_frame(candidate.pa);
+        // The VAs are cleared on every CPU's tables; invalidate the TLB
+        // before returning the frame to the allocator.
+        port::smp::request_shootdown(Some(candidate.pa.addr() as usize));
+        // A failed free cannot be retried usefully (the cache key is gone);
+        // count the attempt so the loop terminates.
+        let _ = pagealloc::deallocate_physpage(candidate.pa);
+        freed += 1;
+    }
+    freed
 }
 
 /// Unresolvable fault: print the marker and kill the process loudly.

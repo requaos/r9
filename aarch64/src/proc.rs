@@ -74,6 +74,7 @@ use port::fdgrp::FdGroup;
 use port::mcslock::{IrqSpinLock, Lock, LockNode};
 use port::mem::{PAGE_SIZE_4K, PhysAddr, PhysRange, VirtRange};
 use port::paqfs::PaqDir;
+use port::pagecache::PageKey;
 use port::pgrp::Pgrp;
 use port::println;
 use port::rendez::RendezGroup;
@@ -199,6 +200,36 @@ impl Segments {
         } else {
             None
         }
+    }
+}
+
+/// The `palloc.hash` key for a shared user-text page (MEM-16).  Every process
+/// maps a binary at the same `TEXT_MAP_BASE`, so the VA-derived index is
+/// stable across them and the image id makes the frame shared.
+pub(crate) fn text_page_key(image_id: u32, va: usize) -> PageKey {
+    PageKey::new(image_id, (va >> 12) as u32)
+}
+
+/// The `palloc.hash` key for a proc-private untouched initialised-data page.
+/// Salted with the pid and exec generation: two processes, or two execs of
+/// one process, never alias each other's cached frames.
+pub(crate) fn data_page_key(image_id: u32, pid: u64, exec_gen: u32, va: usize) -> PageKey {
+    let salt = (pid as u32).rotate_left(7) ^ exec_gen.wrapping_mul(0x9E37_79B1);
+    PageKey::new(image_id ^ salt, (va >> 12) as u32)
+}
+
+/// The cache key for a mapping-log record, or `None` for anonymous kinds
+/// (bss/stack/tos are never cached or evicted).
+pub(crate) fn mapping_page_key(
+    image_id: u32,
+    pid: u64,
+    exec_gen: u32,
+    rec: &MappingRecord,
+) -> Option<PageKey> {
+    match rec.kind {
+        SegKind::Text => Some(text_page_key(image_id, rec.va)),
+        SegKind::Data => Some(data_page_key(image_id, pid, exec_gen, rec.va)),
+        SegKind::Bss | SegKind::Stack | SegKind::Tos => None,
     }
 }
 
@@ -342,6 +373,51 @@ fn share_new_user_page(pa: u64, count: usize) {
 fn release_user_page(pa: u64) -> bool {
     let node = LockNode::new();
     SHARED_PAGES.lock(&node).release(pa)
+}
+
+/// Unmap every mapping of `pa` from every proc's user table and drop the
+/// mapping-log records, returning how many leaves were cleared (MEM-15/D-14
+/// live evictor).  The caller must follow with a TLB shootdown before the
+/// frame is returned to `PAGE_ALLOC`.
+///
+/// Runs under `PROC_TABLE` (Rank 50); `map_to`'s User walk takes no higher
+/// lock unless a level table is missing (they are not: the page is mapped).
+pub(crate) fn evict_user_frame(pa: PhysAddr) -> usize {
+    let node = LockNode::new();
+    let mut table = PROC_TABLE.lock(&node);
+    let mut cleared = 0;
+    for proc in table.procs.iter_mut().flatten() {
+        if !proc.mapping_log.iter().any(|rec| rec.phys as u64 == pa.addr()) {
+            continue;
+        }
+        let records = core::mem::take(&mut proc.mapping_log);
+        for rec in records {
+            if rec.phys as u64 != pa.addr() {
+                proc.mapping_log.push(rec);
+                continue;
+            }
+            // SAFETY: `proc.root_table` names this proc's pagealloc'd root
+            // table (the construction invariant).  PROC_TABLE (50) is held,
+            // so the proc cannot be started or swapped on another CPU; if it
+            // is the current proc on this CPU, its TTBR0 is the table map_to
+            // edits.  Clearing a leaf is the unmap; the evictor shoots the
+            // TLB down before freeing the frame.
+            unsafe {
+                let mut physalloc = PhysPageAllocator {};
+                let mut vmt = VmTraitImpl {};
+                let _ = (*proc.root_table).map_to(
+                    &mut physalloc,
+                    &mut vmt,
+                    Entry::empty(),
+                    rec.va,
+                    PageSize::Page4K,
+                    RootPageTableType::User,
+                );
+            }
+            cleared += 1;
+        }
+    }
+    cleared
 }
 
 /// An RFMEM family — the donor's shared-segment GROUP.  rfork under
@@ -694,13 +770,45 @@ pub fn sem_wake(pa: u64, delta: u64) {
 pub struct ByteSource {
     pub backing: ByteBacking,
     pub data_file_base: u64,
+    /// A stable identity for the executable image (MEM-16): the paqfs qid
+    /// mixed with the image base on devroot, a content hash on devmnt.  Two
+    /// processes running the same binary share text frames under it.
+    pub image_id: u32,
 }
 
 impl ByteSource {
+    /// Build a byte source and derive its image identity.
+    pub fn new(backing: ByteBacking, data_file_base: u64) -> Self {
+        let image_id = derive_image_id(&backing);
+        Self { backing, data_file_base, image_id }
+    }
+
     /// The pager's read path (fault.rs) — delegates to the backing.
     pub fn read_at(&self, file_off: u64, dst: &mut [u8]) -> Result<usize> {
         self.backing.read_at(file_off, dst)
     }
+}
+
+/// FNV-1a over the whole file (devmnt binaries: their staged buffer is the
+/// only stable identity available).
+fn content_image_id(bytes: &[u8]) -> u32 {
+    let mut hash: u32 = 0x811c_9dc5;
+    for &byte in bytes {
+        hash ^= byte as u32;
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hash
+}
+
+/// A non-zero image identity for a backing.
+fn derive_image_id(backing: &ByteBacking) -> u32 {
+    let id = match backing {
+        ByteBacking::Paq { dir, image } => {
+            dir.qid ^ (image.as_ptr() as usize as u32).rotate_left(16)
+        }
+        ByteBacking::Mnt { file } => content_image_id(file),
+    };
+    if id == 0 { 1 } else { id }
 }
 
 /// A queued note message (delivered at the return-to-EL0 boundary).
@@ -798,6 +906,10 @@ pub struct Proc {
     pub segments: Option<Segments>,
     /// paqfs byte source for demand page-in; None until exec.
     pub text_source: Option<ByteSource>,
+    /// Monotonic per-proc exec generation.  Mixed into the untouched-data
+    /// page-cache key so a re-exec of the same binary never aliases a dead
+    /// image's cached frame (MEM-15/MEM-16).
+    pub exec_gen: u32,
     /// The stashed trap frame on this proc's kernel stack (the forkret seed
     /// at exec; trap save/restore rides it from then on).  Read by the
     /// CURFRAME reload at trap return — written by the scheduler's locked
@@ -973,6 +1085,7 @@ impl Proc {
             mapping_log: Vec::new(),
             segments: None,
             text_source: None,
+            exec_gen: 0,
             frame: ptr::null_mut(),
             context: swtch::Context {
                 x19: 0,
@@ -1236,6 +1349,12 @@ impl Proc {
         if contained { Ok(()) } else { Err("bad user address") }
     }
 
+    /// The page-cache reverse-map slot for this proc (the low 16 bits of the
+    /// pid — pids are monotonic and the proc table caps at `MAX_PROCS`).
+    pub fn rmap_slot(&self) -> u16 {
+        self.pid as u16
+    }
+
     /// EXEC/EXITS: unmap and free every user mapping (the
     /// mapping_log walk), then drop the segment map and the demand-page
     /// byte source.  Each leaf entry is cleared BEFORE its phys page goes
@@ -1244,9 +1363,23 @@ impl Proc {
     /// covers the removal.  The caller's TTBR0 is this table (EXEC/EXITS
     /// run in the proc's syscall context), and map_to's dance edits active
     /// and inactive tables alike.
+    ///
+    /// MEM-16: a frame still owned by `palloc.hash` (shared text or a cached
+    /// untouched data page) is NOT returned to the allocator — the cache may
+    /// hand the same frame to another process, and the live evictor is the
+    /// only path that frees it.  The proc's reverse-map entries are removed.
     pub fn free_user_mappings(&mut self) {
         let records = core::mem::take(&mut self.mapping_log);
+        let slot = self.rmap_slot();
+        let cache = crate::pagealloc::page_cache();
+        let image_id = self.text_source.as_ref().map(|source| source.image_id);
         for rec in records {
+            let cached = match (cache, image_id) {
+                (Some(cache), Some(image_id)) => mapping_page_key(image_id, self.pid, self.exec_gen, &rec)
+                    .and_then(|key| cache.lookup(key))
+                    .is_some_and(|page| page.pa.addr() == rec.phys as u64),
+                _ => false,
+            };
             // SAFETY: self.root_table names this proc's pagealloc'd root
             // table (the construction invariant) — written through its
             // KZERO+PA alias.  The table is the CURRENT proc's, active on
@@ -1273,13 +1406,16 @@ impl Proc {
             // PHYS page goes back to the allocator only when this release
             // is the last sharer's (the donor's Segment `ref` hitting 0);
             // siblings keep mapping it until their own exit/exec.
-            if release_user_page(rec.phys as u64) {
+            if !cached && release_user_page(rec.phys as u64) {
                 if let Err(err) =
                     pagealloc::deallocate_physpage(PhysAddr::new(rec.phys as u64))
                 {
                     println!("proc: deallocate user page {:#x}: {err:?}", rec.phys);
                 }
             }
+        }
+        if let Some(cache) = cache {
+            cache.remove_proc_rmaps(slot);
         }
         self.segments = None;
         self.text_source = None;
@@ -3018,7 +3154,59 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &TrapFrame, flag: u64)
     // residual — the boot-time selftest guards it on real hardware).
     let mut text_copy = crate::textcopy::TextCopy::new();
     for rec in &records {
+        // MEM-16: user text is SHARED through `palloc.hash`, not copied.
+        // The child maps the parent's cached frame read-only and joins the
+        // reverse map; a later fault by either process hits the same frame.
+        if rec.kind == SegKind::Text {
+            if let (Some(cache), Some(source)) =
+                (crate::pagealloc::page_cache(), parent.text_source.as_ref())
+            {
+                let key = text_page_key(source.image_id, rec.va);
+                if let Some(page) = cache.lookup(key) {
+                    let entry = Entry::ro_user_text().with_phys_addr(page.pa);
+                    // SAFETY: child.root_table names the child's pagealloc'd
+                    // root table (the construction invariant); the child is
+                    // mid-construction and not enqueued, and map_to's temp-
+                    // recursive dance edits inactive tables.
+                    unsafe {
+                        let mut physalloc = PhysPageAllocator {};
+                        let mut vmt = VmTraitImpl {};
+                        (*child.root_table)
+                            .map_to(
+                                &mut physalloc,
+                                &mut vmt,
+                                entry,
+                                rec.va,
+                                PageSize::Page4K,
+                                RootPageTableType::User,
+                            )
+                            .map_err(|_| "rfork: child shared text map failed")?;
+                    }
+                    cache.add_rmap(
+                        key,
+                        port::pagecache::RmapEntry {
+                            proc_slot: child.rmap_slot(),
+                            page_va: rec.va,
+                        },
+                    );
+                    child.mapping_log.push(MappingRecord {
+                        va: rec.va,
+                        phys: page.pa.addr() as usize,
+                        size: rec.size,
+                        kind: rec.kind,
+                    });
+                    continue;
+                }
+            }
+        }
         if rfmem && matches!(rec.kind, SegKind::Data | SegKind::Bss) {
+            // A shared RFMEM data page is logically writable by both procs:
+            // it must never be selected by the evictor (MEM-15/D-14).
+            if rec.kind == SegKind::Data {
+                if let Some(cache) = crate::pagealloc::page_cache() {
+                    cache.mark_data_dirty(PhysAddr::new(rec.phys as u64));
+                }
+            }
             // The RFMEM share arm: no copy, no kernel alias — the
             // parent's PA maps straight into the child's INACTIVE root
             // table at the same VA (map_to's temp-recursive dance edits
@@ -3066,6 +3254,21 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &TrapFrame, flag: u64)
         // the parent is the CURRENT proc on this CPU, and its mapping_log
         // is written only by its own contexts (syscall/fault) — which run
         // on the CPU it is current on, serialized by IRQ-masking.
+        // Whether the parent's data page is still an untouched (cacheable,
+        // droppable) page: a written page takes a private RW copy, an
+        // untouched one keeps the RO/write-protect state and joins the cache.
+        let parent_untouched_data = rec.kind == SegKind::Data
+            && match (crate::pagealloc::page_cache(), parent.text_source.as_ref()) {
+                (Some(cache), Some(source)) => cache
+                    .lookup(data_page_key(
+                        source.image_id,
+                        parent.pid,
+                        parent.exec_gen,
+                        rec.va,
+                    ))
+                    .is_some_and(|page| page.pa.addr() == rec.phys as u64),
+                _ => false,
+            };
         let pa = pagealloc::allocate_physpage().map_err(|_| "rfork: page alloc failed")?;
         map_kernel_alias(rec.phys as u64)?;
         map_kernel_alias(pa.addr())?;
@@ -3079,10 +3282,12 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &TrapFrame, flag: u64)
             let dst = physaddr_as_ptr_mut_offset_from_kzero::<u8>(pa);
             text_copy.copy_page(src, dst, rec.kind == SegKind::Text);
         }
-        // Text is UXN-clear/PXN-set; everything else rw_user_data — the
-        // same kind→entry mapping fault.rs's page-in uses.
+        // Text is UXN-clear/PXN-set and READ-ONLY (shared through
+        // `palloc.hash`); untouched data stays RO until its first write
+        // fault; every other kind is read-write.
         let entry = match rec.kind {
-            SegKind::Text => Entry::rw_user_text(),
+            SegKind::Text => Entry::ro_user_text(),
+            SegKind::Data if parent_untouched_data => Entry::ro_user_data(),
             _ => Entry::rw_user_data(),
         }
         .with_phys_addr(pa);
@@ -3111,6 +3316,34 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &TrapFrame, flag: u64)
             size: rec.size,
             kind: rec.kind,
         });
+        // Register the child's fresh copy when it is re-readable: shared text
+        // joins `palloc.hash` for future sharers; an untouched data copy is
+        // droppable under pressure.
+        if let (Some(cache), Some(source)) =
+            (crate::pagealloc::page_cache(), parent.text_source.as_ref())
+        {
+            let inserted = match rec.kind {
+                SegKind::Text => cache.insert_text(text_page_key(source.image_id, rec.va), pa),
+                SegKind::Data if parent_untouched_data => cache.register_untouched_data(
+                    data_page_key(source.image_id, child.pid, child.exec_gen, rec.va),
+                    pa,
+                ),
+                _ => Err(port::pagecache::PageCacheError::Exists),
+            };
+            if inserted.is_ok() {
+                let key = match rec.kind {
+                    SegKind::Text => text_page_key(source.image_id, rec.va),
+                    _ => data_page_key(source.image_id, child.pid, child.exec_gen, rec.va),
+                };
+                cache.add_rmap(
+                    key,
+                    port::pagecache::RmapEntry {
+                        proc_slot: child.rmap_slot(),
+                        page_va: rec.va,
+                    },
+                );
+            }
+        }
     }
     // Discharge the I-cache sync before the child can run any copied
     // text (textcopy.rs carries the why: a recycled page keeps the old
