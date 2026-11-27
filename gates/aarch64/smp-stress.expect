@@ -1,0 +1,199 @@
+#!/usr/bin/expect -f
+# smp-stress.expect — the aarch64 two-CPU stress driver (phase 05, SMP-08/
+# SMP-09/MEM-17, D-24/D-27/D-28).
+#
+# smoke-r9.expect's discipline carried VERBATIM (fresh-capture hygiene,
+# marker discipline, fast-fail arms, whole-capture post-passes, group-kill
+# teardown) and re-keyed onto the -smp 2 stress load: the boot runs with
+# `-smp 2` and the throwaway DTB the caller patched with `aeadloop=1` on
+# /chosen/bootargs (the switch that starts the in-kernel 9P2000.aead
+# loopback server and publishes #M — D-28).  The driver then drives, from
+# Harvey's rc shell, TWO concurrent read/clunk workers over
+# '#M/data0'..'#M/data7' (exercising the real FidTable seqlock resolve +
+# sharded alloc/clunk + the 9P2000.aead ChaCha20/BLAKE3 path end to end on
+# both CPUs) PLUS an exec-churn worker (/bin/echo, /bin/ls, /bin/cat) that
+# exercises palloc.hash shared text mapping, TLB shootdowns and
+# work-stealing preemption under the 1 kHz timer tick on both CPUs (D-27).
+#
+#   staged boot: banner → setops SIMD selftest → aeadloop active →
+#   smp cpu 1 online → smp tlb shootdown ok → paqfs... → %  prompt →
+#   ls '#M' (enumerate the loopback root: data0..data7) →
+#   the read pass (for each file: cat '#M/dataN' | wc -c must be 4096) →
+#   launch 2 read/clunk workers + 1 exec-churn worker in background →
+#   `wait; echo SMP_STRESS_OK` → whole-capture post-pass (no WATCHDOG:,
+#   panic, lock rank or unresolvable fault anywhere).
+#
+#   exit 0 only when EVERY stage passed; a failure exits 1 and names the
+#   failed stage on stderr; exit 2 on a contract violation (missing env).
+#
+# Hygiene: the caller (nix/gates/smp-stress-r9.sh) rm -f's the capture
+# BEFORE launch and we rm -f + log_file it fresh below — the file starts
+# empty and only THIS run's boot writes it.  Every exit path kills qemu's
+# process group.
+#
+# Markers: PRESENCE assertions only, never interleaving order (preemption
+# and TCG make arrival order meaningless).  Patterns are CRLF-tolerant
+# substrings, never end-of-line anchored.  r9's devcons ECHOES cooked-mode
+# typed input, so a typed command appears on the wire BEFORE its output —
+# markers carrying the typed text are staged two-occurrence.
+#
+# TYPED-INPUT DISCIPLINE (measured on the 16550 class): each typed line is
+# kept SHORT (well under the ~120-char RX-ring burst limit) — the stress
+# load is launched as several short background lines, never one long line.
+#
+# Env (exported by nix/gates/smp-stress-r9.sh — the flake app):
+#   R9_QEMU      default qemu-system-aarch64
+#   R9_KERNEL    REQUIRED — the r9 kernel-virt.elf
+#   R9_DTB       REQUIRED — the fdtput-patched virt DTB copy (carrying
+#                /chosen/bootargs aeadloop=1 and the initrd cells)
+#   R9_INITRD    REQUIRED — target/images/aarch64/bootfs.paq
+#   R9_SMOKE_LOG REQUIRED — the serial capture (fresh per run)
+#
+# usage: env R9_KERNEL=… R9_DTB=… R9_INITRD=… R9_SMOKE_LOG=… \
+#          expect gates/aarch64/smp-stress.expect
+# exit 0 on all-pass; exit 1 names the failed stage on stderr; exit 2 on a
+# contract violation (missing env).
+
+set timeout 600                    ;# TCG-sized, PER STAGE
+match_max 262144
+# NOTE: log_user stays ON — expect 5.45 writes NOTHING to log_file when
+# log_user is 0 (measured: the capture file was created empty).
+
+# --- required env (loud, before any spawn) -------------------------------
+foreach v {R9_KERNEL R9_DTB R9_INITRD R9_SMOKE_LOG} {
+    if {![info exists env($v)]} {
+        puts stderr "smp-stress-r9: \$$v unset — run via the flake app (nix run .#smp-stress-r9)"
+        exit 2
+    }
+}
+set QEMU [expr {[info exists env(R9_QEMU)] ? $env(R9_QEMU) : "qemu-system-aarch64"}]
+set run_tag [expr {[info exists env(R9_RUN_TAG)] ? $env(R9_RUN_TAG) : "r9smpstress-[pid]-[clock seconds]"}]
+
+# --- Hygiene: a fresh capture per run -----------------------------------
+exec rm -f $env(R9_SMOKE_LOG)
+
+# --- spawn qemu: -smp 2 and the caller-patched DTB (never QEMU -append) --
+set R9_MACHINE [expr {[info exists env(R9_MACHINE)] ? $env(R9_MACHINE) : "virt,gic-version=3"}]
+set R9_CPU [expr {[info exists env(R9_CPU)] ? $env(R9_CPU) : "cortex-a72"}]
+set R9_ACCEL [expr {[info exists env(R9_ACCEL)] ? $env(R9_ACCEL) : "tcg"}]
+spawn $QEMU -M $R9_MACHINE -cpu $R9_CPU -smp 2 -m 1024M \
+    -accel $R9_ACCEL \
+    -kernel $env(R9_KERNEL) \
+    -dtb $env(R9_DTB) \
+    -device loader,file=$env(R9_INITRD),addr=0x48000000 \
+    -netdev user,id=n0 \
+    -device virtio-net-pci-non-transitional,netdev=n0 \
+    -nographic \
+    -name $run_tag
+set spawn_pid [exp_pid]
+log_file $env(R9_SMOKE_LOG)
+
+# --- teardown: kill qemu's process group ------------------------------
+proc cleanup {} {
+    global spawn_pid
+    catch { exec kill -KILL -- -$spawn_pid 2>/dev/null }
+    catch { exec kill -KILL $spawn_pid 2>/dev/null }
+}
+
+# --- staged ordered assertions (each stage names its failure) ---------
+proc stage {name re} {
+    global expect_out
+    expect {
+        -re $re { puts stderr "smp-stress-r9: stage ok — $name" }
+        timeout { puts stderr "smp-stress-r9: TIMEOUT at stage: $name"; cleanup; exit 1 }
+        eof { puts stderr "smp-stress-r9: qemu exited (EOF) at stage: $name"; cleanup; exit 1 }
+    }
+}
+
+# fast-fail on any deadlock/panic/rank vocabulary anywhere on the wire
+# (SMP-08/D-27: the stress gate must fail LOUD on the first such line, never
+# ride a stage timeout).
+expect_before {
+    -re {WATCHDOG:|panic|lock rank|unresolvable fault} {
+        puts stderr "smp-stress-r9: FATAL marker on the wire (WATCHDOG/panic/lock-rank/unresolvable-fault) — aborting"
+        cleanup
+        exit 1
+    }
+}
+
+# strip everything through the first newline (the echoed command line)
+proc strip_echoed_line {capture} {
+    set nl [string first "\n" $capture]
+    if {$nl < 0} { return $capture }
+    string range $capture [expr {$nl + 1}] end
+}
+
+# the whole-capture post-pass: forbid the deadlock/panic vocabulary anywhere
+# in the retained log (fast-fail covers the stream; this proves the file).
+proc whole_capture_clean {} {
+    global env
+    log_file                           ;# stop + flush before the whole-file scan
+    set fh [open $env(R9_SMOKE_LOG) r]
+    set whole [read $fh]
+    close $fh
+    foreach bad {"WATCHDOG:" "panic" "lock rank" "unresolvable fault"} {
+        if {[string first $bad $whole] >= 0} {
+            puts stderr "smp-stress-r9: FAILED — forbidden marker '$bad' in the capture"
+            cleanup
+            exit 1
+        }
+    }
+    puts stderr "smp-stress-r9: post-pass ok — no WATCHDOG/panic/lock-rank/unresolvable-fault in the capture"
+}
+
+# --- 1. the staged boot (markers in emission order) -------------------
+stage banner       {r9 from the Internet}
+stage setops       {setops: simd=neon selftest=ok}
+stage aeadloop     {aeadloop: active device=#M dialect=9P2000\.aead}
+stage smp-online   {smp: cpu 1 online}
+stage smp-shootdown {smp: tlb shootdown ok}
+stage paqfs        {paqfs\.\.\.}
+stage prompt       {% }
+
+# --- 2. enumerate the #M loopback root (attach + walk over 9P2000.aead) --
+send "ls '#M'\r"
+stage ls-prompt {% }
+set lsout [strip_echoed_line $expect_out(buffer)]
+foreach i {0 1 2 3 4 5 6 7} {
+    if {![regexp "\\mdata$i\\M" $lsout]} {
+        puts stderr "smp-stress-r9: ls '#M' missing 'data$i' (the loopback root did not enumerate the data files)"
+        cleanup
+        exit 1
+    }
+}
+puts stderr "smp-stress-r9: stage ok — ls '#M' (data0..data7 present)"
+
+# --- 3. the read pass: each file opens/reads/clunks and returns exactly
+#     4096 authenticated bytes (wc -c is serial-clean text) --------------
+send "for(i in 0 1 2 3 4 5 6 7) { cat '#M/data'\$i | wc -c }\r"
+stage read-prompt {% }
+set rb [strip_echoed_line $expect_out(buffer)]
+set hits [regexp -all {4096} $rb]
+if {$hits < 8} {
+    puts stderr "smp-stress-r9: read pass returned $hits/8 files of 4096 bytes (the aead read path is broken)"
+    cleanup
+    exit 1
+}
+puts stderr "smp-stress-r9: stage ok — read pass (8 files x 4096 authenticated bytes)"
+
+# --- 4. the concurrent stress load (short background lines) -----------
+# two read/clunk workers over the same 8 files, plus one exec-churn worker.
+send "{ for(r in 1 2 3 4 5 6 7 8 9 10) { for(i in 0 1 2 3 4 5 6 7) { cat '#M/data'\$i | wc -c } } } &\r"
+stage workerA-prompt {% }
+send "{ for(r in 1 2 3 4 5 6 7 8 9 10) { for(i in 0 1 2 3 4 5 6 7) { cat '#M/data'\$i | wc -c } } } &\r"
+stage workerB-prompt {% }
+send "{ for(r in 1 2 3 4 5 6 7 8 9 10) { /bin/echo churn; /bin/ls /bin; /bin/cat /lib/namespace } } &\r"
+stage churn-prompt {% }
+
+# --- 5. wait for the load and assert the completion marker ------------
+send "wait; echo SMP_STRESS_OK\r"
+stage stress-echoed   {SMP_STRESS_OK}   ;# occurrence 1: the typed echo
+stage stress-response {SMP_STRESS_OK}   ;# occurrence 2: the OUTPUT
+stage stress-prompt   {% }
+
+# --- 6. whole-capture post-pass ---------------------------------------
+whole_capture_clean
+
+puts stderr "smp-stress-r9: ALL STAGES PASS — boot (setops/aeadloop/smp), #M enumeration, 8x4096 read pass, concurrent read/clunk + exec-churn stress across 2 CPUs, SMP_STRESS_OK, no deadlock/panic/rank fault"
+cleanup
+exit 0
