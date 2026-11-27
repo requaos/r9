@@ -407,6 +407,20 @@ the RAII `PinGuard` (no unsafe: it calls the safe `PageAlloc` pin API).
 Net aarch64 non-test delta: **+14 unsafe blocks, +0 unsafe fns** (all
 `undocumented_unsafe_blocks`-clean); the reconciliation holds.
 
+**Plan 05-19 Task 1 delta (MEM-14/15/16, D-15/D-16/D-18, 2026-11-26):** the
+x86_64 side of the demand pager lands.  `x86_64/src/fault.rs` is new: one
+`from_raw_parts_mut` page fill through the boot tables' shared `KZERO` alias
+(+1 block, SAFETY-documented) and the ring-3 `#PF` decoder/mapper — the
+`pml4_map_user` call itself is safe at this boundary.  `x86_64/src/pagealloc.rs`
+swaps the bitmap allocator for the portable `PageAlloc`: two `AtomicPtr`
+published-at-boot handles (`Box::into_raw` + `&*`, SAFETY-documented) and one
+`write_bytes` zero frame through `KZERO` (+1 block).  `x86_64/src/exec.rs`
+DELETES the eager `map_text_eager`/`map_data_bss_eager` bodies and their two
+`from_raw_parts_mut` blocks (−2).  `proc.rs` mounts `#[path = "fault.rs"] pub
+mod fault` and adds the image identity/`exec_gen` keys, the cache-aware
+`free_user_mappings` and the RFMEM dirty-marking arm (no new unsafe).  Net
+x86_64 non-test delta: **0 blocks, 0 fns**; the reconciliation holds.
+
 **Plan 05-11 Task 1 delta (SMP-01/07, 2026-11-26):** the x86_64 dual
 xAPIC/x2APIC IPI delivery and AP LAPIC init land.  `acpi.rs`: the MADT
 walk records enabled/online-capable processors (type-0 LAPIC and type-9

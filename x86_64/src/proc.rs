@@ -80,6 +80,7 @@ use port::mem::{PAGE_SIZE_4K, VirtRange};
 #[cfg(not(test))]
 use port::mem::PhysAddr;
 use port::paqfs::PaqDir;
+use port::pagecache::PageKey;
 use port::pgrp::Pgrp;
 use port::println;
 use port::rendez::RendezGroup;
@@ -90,6 +91,12 @@ use crate::dat::Ureg;
 #[cfg(not(test))]
 use crate::dat::Stack;
 use crate::swtch;
+
+/// The ring-3 `#PF` demand pager (MEM-14/MEM-15/MEM-16).  Mounted here so
+/// `crate::proc::fault::*` is reachable by `trap.rs`, `exec.rs` and
+/// `usermem.rs`; it lives beside the process machinery it pages for.
+#[path = "fault.rs"]
+pub mod fault;
 
 /// The higher-half base (kernel.ld) — the same value main.rs links by.
 /// Every physical page the process machinery touches is aliased at
@@ -195,11 +202,14 @@ pub const ARGV_CAP: usize = 256;
 const PTE_P: u64 = 1 << 0;
 const PTE_RW: u64 = 1 << 1;
 const PTE_US: u64 = 1 << 2;
+/// Hardware dirty bit: the CPU sets it on the first store to a present,
+/// writable user page (MEM-15, D-15).
+pub(crate) const PTE_D: u64 = 1 << 6;
 const PTE_NX: u64 = 1 << 63;
-/// A user leaf entry: present, r/w, user-accessible, EXECUTABLE (the
-/// aarch64 `rw_user_text`: UXN-clear — user code fetches through it;
-/// the kernel-half is unaffected).
-pub(crate) const PTE_USER_TEXT: u64 = PTE_P | PTE_RW | PTE_US;
+/// A user leaf entry: present, user-accessible, READ-ONLY, EXECUTABLE
+/// (MEM-15/D-15's W^X text: no `PTE_RW`, so a ring-3 store faults and the
+/// pager kills the process).
+pub(crate) const PTE_USER_TEXT: u64 = PTE_P | PTE_US;
 /// A user leaf entry: present, r/w, user-accessible, NO-EXECUTE (the
 /// aarch64 `rw_user_data` — data/bss/stack/tos).
 pub(crate) const PTE_USER_DATA: u64 = PTE_P | PTE_RW | PTE_US | PTE_NX;
@@ -284,6 +294,36 @@ impl Segments {
     }
 }
 
+/// The `palloc.hash` key for a shared user-text page (MEM-16).  Every
+/// process maps a binary at the same `TEXT_MAP_BASE`, so the VA-derived
+/// index is stable across them and the image id makes the frame shared.
+pub(crate) fn text_page_key(image_id: u32, va: usize) -> PageKey {
+    PageKey::new(image_id, (va >> 12) as u32)
+}
+
+/// The `palloc.hash` key for a proc-private untouched initialised-data
+/// page.  Salted with the pid and exec generation so two processes (or two
+/// execs of one process) never alias each other's cached frames.
+pub(crate) fn data_page_key(image_id: u32, pid: u64, exec_gen: u32, va: usize) -> PageKey {
+    let salt = (pid as u32).rotate_left(7) ^ exec_gen.wrapping_mul(0x9E37_79B1);
+    PageKey::new(image_id ^ salt, (va >> 12) as u32)
+}
+
+/// The cache key for a mapping-log record, or `None` for anonymous kinds
+/// (bss/stack/tos are never cached or evicted).
+pub(crate) fn mapping_page_key(
+    image_id: u32,
+    pid: u64,
+    exec_gen: u32,
+    rec: &MappingRecord,
+) -> Option<PageKey> {
+    match rec.kind {
+        SegKind::Text => Some(text_page_key(image_id, rec.va)),
+        SegKind::Data => Some(data_page_key(image_id, pid, exec_gen, rec.va)),
+        SegKind::Bss | SegKind::Stack | SegKind::Tos => None,
+    }
+}
+
 /// The demand-page byte source's backing.
 #[derive(Clone)]
 pub enum ByteBacking {
@@ -336,13 +376,43 @@ impl ByteBacking {
 pub struct ByteSource {
     pub backing: ByteBacking,
     pub data_file_base: u64,
+    /// A stable identity for the executable image (MEM-16): the paqfs qid
+    /// mixed with the image base on devroot, a content hash on devmnt.  Two
+    /// processes running the same binary share text frames under it.
+    pub image_id: u32,
 }
 
 impl ByteSource {
+    /// Build a byte source and derive its image identity.
+    pub fn new(backing: ByteBacking, data_file_base: u64) -> Self {
+        let image_id = derive_image_id(&backing);
+        Self { backing, data_file_base, image_id }
+    }
+
     /// The pager's read path — delegates to the backing.
     pub fn read_at(&self, file_off: u64, dst: &mut [u8]) -> Result<usize> {
         self.backing.read_at(file_off, dst)
     }
+}
+
+/// FNV-1a over the whole file (devmnt binaries: their staged buffer is the
+/// only stable identity available).
+fn content_image_id(bytes: &[u8]) -> u32 {
+    let mut hash: u32 = 0x811c_9dc5;
+    for &byte in bytes {
+        hash ^= byte as u32;
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hash
+}
+
+/// A non-zero image identity for a backing.
+fn derive_image_id(backing: &ByteBacking) -> u32 {
+    let id = match backing {
+        ByteBacking::Paq { dir, image } => dir.qid ^ (image.as_ptr() as usize as u32).rotate_left(16),
+        ByteBacking::Mnt { file } => content_image_id(file),
+    };
+    if id == 0 { 1 } else { id }
 }
 
 /// A queued note message (delivered at the return-to-ring-3 boundary).
@@ -589,6 +659,13 @@ fn pml4_unmap_user(pml4_pa: u64, va: usize) -> bool {
     set_table_entry(table_pa, idx, 0);
     invlpg(va);
     true
+}
+
+/// Live evictor (MEM-15): drop up to `target` unpinned re-readable pages.
+/// The Task-2 body installs the atomic `PTE_D` swap; the allocator hook
+/// exists from Task 1 so the `port::palloc` wiring compiles.
+pub(crate) fn evict_re_readable_pages(_target: usize) -> usize {
+    0
 }
 
 /// The boot PML4's kernel-half entries (510: the KCPUZERO Mach window
@@ -1116,6 +1193,10 @@ pub struct Proc {
     pub segments: Option<Segments>,
     /// paqfs byte source for demand page-in; None until exec.
     pub text_source: Option<ByteSource>,
+    /// Exec generation (MEM-16): bumped on every exec, mixed into the
+    /// proc-private untouched-data cache key so a new image never aliases
+    /// its predecessor's cached frames.
+    pub exec_gen: u32,
     /// The stashed Ureg on this proc's kernel stack (the forkret seed
     /// at exec; trap save/restore rides it from then on).  Read by the
     /// CURFRAME record at the resume boundary.
@@ -1265,6 +1346,7 @@ impl Proc {
             mapping_log: Vec::new(),
             segments: None,
             text_source: None,
+            exec_gen: 0,
             frame: ptr::null_mut(),
             context: swtch::Context::new(),
             note_queue: VecDeque::with_capacity(NOTE_QUEUE_CAP),
@@ -1482,60 +1564,16 @@ impl Proc {
         if contained { Ok(()) } else { Err("bad user address") }
     }
 
-    /// The 14-03 usermem predicate plugs in here: Proc implements
-    /// `UserAddressSpace` (validate_user_range + ensure_user_resident)
-    /// — the module compiled ahead of this port against the trait, so
-    /// the choke point's surface is unchanged.
-    fn ensure_user_resident_inherent(&mut self, start: usize, end: usize) {
-        if start >= end {
-            return;
-        }
-        let mut page = start & !(PAGE_SIZE_4K - 1);
-        while page < end {
-            if !self.mapping_log.iter().any(|m| m.va == page) {
-                // An unmapped in-segment page is bss-growth or
-                // stack-growth by construction (text/data/tos are
-                // exec-mapped); classify for the log's record.
-                let kind = match self.segments.as_ref().and_then(|s| s.classify(page)) {
-                    Some(SegKind::Stack) => SegKind::Stack,
-                    _ => SegKind::Bss,
-                };
-                self.page_in_zeroed(page, kind);
-            }
-            page += PAGE_SIZE_4K;
-        }
+    /// The page-cache reverse-map slot for this proc (the low 16 bits of
+    /// the pid — pids are monotonic and the proc table is bounded).
+    pub fn rmap_slot(&self) -> u16 {
+        self.pid as u16
     }
 
-    /// The note-delivery path's stack window residency (kind is always
-    /// Stack — the aarch64 fault::ensure_stack_resident shape).
+    /// The note-delivery path's stack window must be RESIDENT before the
+    /// kernel writes it (the aarch64 `fault::ensure_stack_resident` shape).
     pub(crate) fn ensure_stack_resident(&mut self, start: usize, end: usize) {
-        let mut page = start & !(PAGE_SIZE_4K - 1);
-        while page < end {
-            if !self.mapping_log.iter().any(|m| m.va == page) {
-                self.page_in_zeroed(page, SegKind::Stack);
-            }
-            page += PAGE_SIZE_4K;
-        }
-    }
-
-    /// Map a zeroed page (bss/stack/tos growth) into this proc's table
-    /// and record it.  The zero fill rides the kernel alias (works for
-    /// the active table and any other alike).
-    fn page_in_zeroed(&mut self, page_va: usize, kind: SegKind) {
-        let pa = alloc_phys_page().unwrap_or_else(|_| panic!("proc: phys page alloc failed"));
-        // (Pre-zeroed by the seam; only a PRESENT-leaf replacement
-        // would need the invalidation, and the VA was unmapped.)
-        let created = pml4_map_user(self.pml4_pa, page_va, pa, kind.pte())
-            .unwrap_or_else(|_| panic!("proc: user page map failed at {page_va:#x}"));
-        for c in created.into_iter().flatten() {
-            self.mapping_tables.push(c);
-        }
-        self.mapping_log.push(MappingRecord {
-            va: page_va,
-            phys: pa as usize,
-            size: PAGE_SIZE_4K,
-            kind,
-        });
+        fault::ensure_stack_resident(self, start, end);
     }
 
     /// Map one 4 KiB user page (fresh, pre-zeroed) at `va` in this
@@ -1565,17 +1603,37 @@ impl Proc {
     /// source.  Each leaf is cleared BEFORE its phys page goes back to
     /// the allocator — a stale translation pointing at a recycled page
     /// would be silent corruption (pml4_unmap_user invalidates).
+    ///
+    /// MEM-16: a frame still owned by `palloc.hash` (shared text or a
+    /// cached untouched data page) is NOT returned to the allocator — the
+    /// cache may hand the same frame to another process, and the live
+    /// evictor is the only path that frees it.  The proc's reverse-map
+    /// entries are removed.
     pub fn free_user_mappings(&mut self) {
         let records = core::mem::take(&mut self.mapping_log);
+        let slot = self.rmap_slot();
+        let cache = crate::pagealloc::page_cache();
+        let image_id = self.text_source.as_ref().map(|source| source.image_id);
         for rec in records {
             pml4_unmap_user(self.pml4_pa, rec.va);
+            let cached = match (cache, image_id) {
+                (Some(cache), Some(image_id)) => {
+                    mapping_page_key(image_id, self.pid, self.exec_gen, &rec)
+                        .and_then(|key| cache.lookup(key))
+                        .is_some_and(|page| page.pa.addr() == rec.phys as u64)
+                }
+                _ => false,
+            };
             // RFMEM: an RFMEM-shared page's leaf is cleared above, but
             // the PHYS page goes back only when this release is the
             // last sharer's; siblings keep mapping it until their own
             // exit/exec.
-            if release_user_page(rec.phys as u64) {
+            if !cached && release_user_page(rec.phys as u64) {
                 free_phys_page(rec.phys as u64);
             }
+        }
+        if let Some(cache) = cache {
+            cache.remove_proc_rmaps(slot);
         }
         // The user-half intermediate tables die with the address space,
         // but the PML4 does not: EXEC maps the new image into this same
@@ -1712,7 +1770,9 @@ impl crate::usermem::UserAddressSpace for Proc {
     }
 
     fn ensure_user_resident(&mut self, start: usize, end: usize) {
-        Proc::ensure_user_resident_inherent(self, start, end)
+        // Task 2 widens this trait with the writable flag + PinGuard; the
+        // Task-1 pager forces read-only residency.
+        let _ = fault::ensure_user_resident(self, start, end, false);
     }
 }
 
@@ -3267,6 +3327,12 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &Ureg, flag: u64) -> R
                 child.mapping_tables.push(c);
             }
             share_user_page(rec.phys as u64);
+            // MEM-15/D-14: an RFMEM-shared Data/Bss page is writable by
+            // two procs and must never be dropped by the evictor — mark
+            // any cached copy dirty (aarch64's RFMEM dirty-marking rule).
+            if let Some(cache) = crate::pagealloc::page_cache() {
+                cache.mark_data_dirty(PhysAddr::new(rec.phys as u64));
+            }
             child.mapping_log.push(MappingRecord {
                 va: rec.va,
                 phys: rec.phys,
@@ -3370,6 +3436,10 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &Ureg, flag: u64) -> R
     // future faults resolve in the child.
     child.segments = parent.segments.clone();
     child.text_source = parent.text_source.clone();
+    // The child shares the parent's exec generation: its copied data
+    // pages are private PAs, and cache keys must not alias a later
+    // exec's fresh image.
+    child.exec_gen = parent.exec_gen;
 
     // The fd GROUP semantics per fork(2): RFCFDG = fresh EMPTY;
     // RFFDG = fresh COPIED slot-by-slot; NEITHER = SHARE the parent's

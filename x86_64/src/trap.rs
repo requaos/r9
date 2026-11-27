@@ -868,6 +868,21 @@ extern "C" fn trap(vector: u8, trap_frame: &mut Ureg) -> u32 {
     #[cfg(dev_exec)]
     {
         if trap_frame.cs & 3 == 3 {
+            // MEM-14/D-16: a ring-3 `#PF` (vector 14) is the demand
+            // pager's entry.  CR2 names the faulting VA; `fault::user_fault`
+            // decodes the error code, pages the page in or kills the
+            // offending process, and returns so the iretq tail retries the
+            // faulting instruction.
+            if vector == 14 {
+                let cr2 = {
+                    let v: u64;
+                    // SAFETY: a register read with no memory effect.
+                    unsafe { core::arch::asm!("mov %cr2, %rax", out("rax") v, options(att_syntax, nomem, nostack, preserves_flags)) };
+                    v
+                };
+                crate::proc::fault::user_fault(trap_frame, cr2);
+                return 0;
+            }
             // CR2 in the print (the donor faultnote's addr field): a
             // #PF's faulting address is the first fact a post-mortem
             // needs — `pc` alone cannot distinguish a NULL deref from

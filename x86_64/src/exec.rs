@@ -3,19 +3,13 @@
 //! constants), and seed the forkret-shaped 184-byte Ureg on the proc's
 //! kernel stack for the touser/SYSRETQ handoff.
 //!
-//! Eager-vs-demand mapping policy (the aarch64 module-doc terms,
-//! re-keyed — with the x86_64 deviation): text, data and bss pages are
-//! ALL mapped EAGERLY at install.  The data+bss half is the aarch64
-//! rule verbatim (6c places string literals and statics in data, and a
-//! real binary passes them to syscalls without any prior ring-3 touch;
-//! `validate_user_range` is a membership check and nested
-//! demand-paging from syscall context is forbidden).  TEXT is eager as
-//! the x86_64 deviation: no trap-context pager exists on x86_64 this
-//! era (the aarch64 fault.rs demand path has no sibling here), so the
-//! first instruction fetch must find its page mapped — text demand
-//! paging arrives with a pager (the recorded follow-up).  Beyond the
-//! two seeded top pages, deeper stack/tos growth likewise waits on the
-//! pager.
+//! Eager-vs-demand mapping policy (MEM-14/D-16): text, data and bss are
+//! DEMAND-loaded at first touch by the ring-3 `#PF` pager (`fault.rs`).
+//! Only the top-of-stack seed page, the deeper eager stack and the Tos
+//! slot are mapped at install — the first instruction needs its initial
+//! [argc][argv] block resident.  A cold text/data/bss page faults into the
+//! kernel, which fills it from the proc's byte source (or zeroes it) and
+//! retries the faulting instruction.
 //!
 //! exec_into is the first-exec path (the exec bootstrap, 14-05);
 //! exec_replace is the EXEC syscall's replace-the-running-image path
@@ -266,12 +260,14 @@ fn install_image(
     // shared by both exec paths, so EVERY exec records.
     proc.record_argv(args);
 
-    // Map text EAGERLY (the x86_64 deviation from the aarch64 policy,
-    // documented in the module header: no trap-context pager exists on
-    // x86_64 this era, so the first instruction fetch must find its
-    // page mapped), then data+bss (the cold-syscall-argument fix).
-    map_text_eager(proc, &source, aout)?;
-    map_data_bss_eager(proc, &source, aout)?;
+    // MEM-16: a new exec generation, mixed into untouched-data cache
+    // keys so a new image never aliases its predecessor's cached frames.
+    proc.exec_gen = proc.exec_gen.wrapping_add(1);
+
+    // MEM-14/D-16: text, data and bss are DEMAND-loaded at first touch by
+    // the ring-3 `#PF` pager in `fault.rs`.  Only the byte source is
+    // recorded here; the two seed stack pages below stay eager (they hold
+    // the initial [argc][argv] block the first instruction needs).
     proc.text_source = Some(source);
 
     // SEED: the eager stack-side pages — the top-of-stack seed page
@@ -290,64 +286,6 @@ fn install_image(
         crate::fpu::replace(&mut proc.fpsave, &crate::fpu::FpState::DEFAULT);
     }
     seeded
-}
-
-/// Eager text mapping (the x86_64 policy deviation): every text page
-/// maps in at install with its file bytes (the header rides the
-/// mapping — the file offset is pageVA - TEXT_MAP_BASE; the tail page
-/// clamps at the byte-exact text end so the data bytes never bleed
-/// into the text mapping).
-fn map_text_eager(proc: &mut Proc, source: &ByteSource, aout: &AoutHeader) -> Result<()> {
-    let text_end = aout.text_va + aout.text as usize;
-    let mut page_va = TEXT_MAP_BASE;
-    while page_va < text_end {
-        let pa = proc.map_user_page(page_va, SegKind::Text)?;
-        let clamp = (text_end - page_va).min(PAGE_SIZE_4K);
-        let file_off = (page_va - TEXT_MAP_BASE) as u64;
-        // SAFETY: pa names the just-mapped owned page; clamp bytes lie
-        // inside it.
-        let dst = unsafe {
-            core::slice::from_raw_parts_mut(proc::phys_ptr_mut(pa), clamp)
-        };
-        source.read_at(file_off, dst).map_err(|_| "exec: text page-in read failed")?;
-        page_va += PAGE_SIZE_4K;
-    }
-    Ok(())
-}
-
-/// Eager data+bss mapping: each page maps in zeroed (the seam), then
-/// the data segment's file content clamp-writes through the kernel
-/// alias (byte-exact end — the file's trailing syms bytes must never
-/// bleed into the bss-sharing tail).  The pages are logged
-/// (SegKind::Data/Bss) so rfork's copy and exit's free cover them like
-/// any other mapping.
-fn map_data_bss_eager(proc: &mut Proc, source: &ByteSource, aout: &AoutHeader) -> Result<()> {
-    let data_end = aout.data_va + aout.data as usize;
-    let bss_end = data_end + aout.bss as usize;
-    let data_file_base = HDR_SIZE as u64 + aout.text;
-    let mut page_va = aout.data_va;
-    let data_pages_end = round_up_pow2(data_end, PAGE_SIZE_4K);
-    while page_va < data_pages_end {
-        let pa = proc.map_user_page(page_va, SegKind::Data)?;
-        let clamp = data_end.saturating_sub(page_va).min(PAGE_SIZE_4K);
-        if clamp > 0 {
-            let file_off = data_file_base + (page_va - aout.data_va) as u64;
-            // SAFETY: pa names the just-mapped owned page; clamp bytes
-            // lie inside it.
-            let dst = unsafe {
-                core::slice::from_raw_parts_mut(proc::phys_ptr_mut(pa), clamp)
-            };
-            source.read_at(file_off, dst).map_err(|_| "exec: data page-in read failed")?;
-        }
-        page_va += PAGE_SIZE_4K;
-    }
-    let bss_pages_end = round_up_pow2(bss_end, PAGE_SIZE_4K);
-    let mut page_va = data_pages_end;
-    while page_va < bss_pages_end {
-        proc.map_user_page(page_va, SegKind::Bss)?;
-        page_va += PAGE_SIZE_4K;
-    }
-    Ok(())
 }
 
 /// The Tos struct's 16-aligned base at the very top of the seed page
@@ -475,7 +413,7 @@ pub fn exec_into(
 ) -> Result<()> {
     let backing = ByteBacking::Paq { dir: bin.clone(), image };
     let aout = read_aout(&backing)?;
-    let source = ByteSource { backing, data_file_base: HDR_SIZE as u64 + aout.text };
+    let source = ByteSource::new(backing, HDR_SIZE as u64 + aout.text);
     let (user_sp, tos_va) = install_image(proc, source, name, args, &aout)?;
 
     // The forkret-shaped 184-byte Ureg at kstack_top-184 (through the
@@ -578,7 +516,7 @@ pub fn exec_replace(
     // SEED third.  A failure HERE is post-free: the process dies
     // loudly via the exit tail (the parent reaps the wait record like
     // any other death).
-    let source = ByteSource { backing, data_file_base: HDR_SIZE as u64 + aout.text };
+    let source = ByteSource::new(backing, HDR_SIZE as u64 + aout.text);
     let (user_sp, tos_va) = match install_image(proc, source, name, args, &aout) {
         Ok(v) => v,
         Err(msg) => {
