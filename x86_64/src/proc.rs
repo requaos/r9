@@ -77,7 +77,7 @@ use port::devenv::EnvGroup;
 use port::fdgrp::FdGroup;
 use port::mcslock::{IrqSpinLock, Lock, LockNode};
 use port::mem::{PAGE_SIZE_4K, VirtRange};
-#[cfg(not(test))]
+// Not cfg(test)-gated: evict_user_frame names it in every build.
 use port::mem::PhysAddr;
 use port::paqfs::PaqDir;
 use port::pagecache::PageKey;
