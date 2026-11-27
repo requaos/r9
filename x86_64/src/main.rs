@@ -696,6 +696,7 @@ pub(crate) fn exec_prologue(facts: &mb2::Facts) -> ExecPrologue {
         set_private: proc::proc_set_private,
     });
     port::devcons::set_pid_hook(proc::current_pid);
+    port::devcons::set_pool_stats_hook(pagealloc::pool_snapshot);
     // devcons's current-user hooks (18-02, AUTH-03): #c/user serves the
     // per-proc field (seeded glenda, fork-copied), devcap's eve gate
     // and capuse mutation ride the same pair.  NOT dev-gated — every

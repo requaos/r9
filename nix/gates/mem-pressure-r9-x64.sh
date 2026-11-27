@@ -19,7 +19,11 @@
 # drives the pinned-buffer reader + pressure worker + byte-identical re-fault
 # from Harvey's rc shell, reads `cat '#c/sysstat'` (served read-only by
 # port/src/devcons.rs from port::palloc::evictor_stats()), and requires
-# dropped_text > 0, dropped_data > 0, pinned_skipped > 0 and MEM_PRESSURE_OK.
+# dropped_text > 0, dropped_data > 0 and MEM_PRESSURE_OK.  pinned_skipped is
+# reported but not asserted: no userland path in this image can pin a CACHED
+# page (the 05-21 structural finding); the host integration test
+# port/src/pagecache.rs::pinned_cached_page_is_skipped_until_unpinned proves
+# the pin path instead.
 #
 # Env contract:
 #   R9_HARVEY_DIR_AMD64 REQUIRED — the read-only amd64 tree (harvey-tree-amd64).

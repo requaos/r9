@@ -178,10 +178,17 @@ fn max_frames_from_facts(facts: &Facts) -> Option<usize> {
         .and_then(palloc::parse_max_frames_bootarg)
 }
 
+/// The live pool cardinalities for `#c/sysstat` (diagnostics only).  Takes
+/// `PAGE_ALLOC` briefly, so callers must not hold it.
+pub fn pool_snapshot() -> port::devcons::PoolSnapshot {
+    let (clean, dirty, active, pinned) = page_alloc().pool_lens();
+    port::devcons::PoolSnapshot { clean, dirty, active, pinned }
+}
+
 /// Allocate one zeroed physical page.  Reclaims re-readable pages and retries
 /// (bounded inside `alloc_clean`) instead of panicking under pressure.
 pub fn allocate_physpage() -> Result<PhysAddr, PageAllocError> {
-    let pa = page_alloc().alloc_clean(zero_frame, || crate::proc::evict_re_readable_pages(1))?;
+    let pa = page_alloc().alloc_clean(zero_frame, crate::proc::evict_re_readable_pages)?;
     ALLOCATED_FRAMES.fetch_add(1, Ordering::Relaxed);
     Ok(pa)
 }

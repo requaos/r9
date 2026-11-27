@@ -143,7 +143,7 @@ fn max_frames_from_dtb(_dt: &DeviceTree) -> Option<usize> {
 /// retries (bounded inside `alloc_clean`) instead of panicking under
 /// pressure.
 pub fn allocate_physpage() -> Result<PhysAddr, PageAllocError> {
-    let pa = page_alloc().alloc_clean(zero_frame, || crate::fault::evict_re_readable_pages(1))?;
+    let pa = page_alloc().alloc_clean(zero_frame, crate::fault::evict_re_readable_pages)?;
     ALLOCATED_FRAMES.fetch_add(1, Ordering::Relaxed);
     Ok(pa)
 }
@@ -172,6 +172,13 @@ pub fn is_pinned(pa: PhysAddr) -> bool {
         Ok(pfn) => page_alloc().is_pinned(pfn),
         Err(_) => false,
     }
+}
+
+/// The live pool cardinalities for `#c/sysstat` (diagnostics only).  Takes
+/// `PAGE_ALLOC` briefly, so callers must not hold it.
+pub fn pool_snapshot() -> port::devcons::PoolSnapshot {
+    let (clean, dirty, active, pinned) = page_alloc().pool_lens();
+    port::devcons::PoolSnapshot { clean, dirty, active, pinned }
 }
 
 /// Zero one dirty frame through the reusable kernel alias.  Best-effort:
@@ -295,7 +302,16 @@ pub fn usage_bytes() -> (usize, usize) {
     if !PALLOC_INFO_LOGGED.swap(true, Ordering::AcqRel) {
         // No allocator lock is held here: total_managed/low_water each take
         // and release PAGE_ALLOC (Rank 70) inside their accessor.
-        println!("palloc: managed_frames={total_frames} low_water={low_water}");
+        let cache_state = match page_cache() {
+            Some(_) => {
+                let stats = palloc::cache_stats();
+                alloc::format!("present entries={} droppable={}", stats.entries, stats.droppable)
+            }
+            None => alloc::string::String::from("absent"),
+        };
+        println!(
+            "palloc: managed_frames={total_frames} low_water={low_water} page_cache={cache_state}"
+        );
     }
     (used_frames.saturating_mul(FRAME_SIZE), total_frames.saturating_mul(FRAME_SIZE))
 }

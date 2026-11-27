@@ -12,24 +12,43 @@
 #     with `-smp 2` and `-m $R9_MEM` (default 256M) and `-dtb $env(R9_DTB)`.
 #   * the driver asserts `palloc: managed_frames=2048` at boot, then drives
 #     from Harvey's rc shell:
-#       - Worker 1: `{ hsleep 60; echo pinnedok } | cat &` — cat blocks in
-#         a pipe read with a UserSliceMut PinGuard held across the sleep on
-#         one CPU; when the sleep finishes the pipe delivers `pinnedok`
-#         into the pinned buffer (the intact-bytes proof).  (05-21: the
-#         arm64 image stages sleep(1) as /arm64/bin/hsleep, never
-#         /bin/sleep — the 05-27 driver's bare `sleep` never resolved.)
-#       - Worker 2 (foreground, the other CPU): repeated exec/read churn
-#         (/bin/ls /bin, /bin/cat /lib/namespace, /bin/echo) to push the
-#         8 MiB pool below the evictor low-water mark and force clean text
-#         and untouched-data evictions while Worker 1's buffer is pinned.
+#       `hseq 1 44000 | hsort > /dev/null` (R9_PRESSURE_LINES).  This
+#       BOUNDED burst is sized so hsort's line table + sort recursion needs
+#       more frames than the pool has dirty+clean (the live evictor runs:
+#       measured evict_calls=4), while the total demand stays inside the
+#       reclaimable (cold, unmapped) part of `palloc.hash` (measured
+#       reclaimed=64 of ~111), so every allocation succeeds and no process
+#       is killed.  The earlier unbounded `hseq 1 400000` burst demanded
+#       ~100x the pool and could only thrash (the 05-21 measurement); the
+#       exec-churn loop it replaced never exhausted the pool at all.
 #   * re-fault: re-run `cat /lib/namespace` and require its known line —
 #     the evicted binary/data pages fault back byte-identically through
 #     palloc.hash.
 #   * `cat '#c/sysstat'` (read-only, served by port/src/devcons.rs from
 #     port::palloc::evictor_stats()) → parse
-#     `evictor: dropped_text=<T> dropped_data=<D> pinned_skipped=<P>` and
-#     require T > 0, D > 0, P > 0 (a pinned frame was skipped, never
-#     chosen) → MEM_PRESSURE_OK.
+#     `evictor: dropped_text=<T> dropped_data=<D> pinned_skipped=<P>
+#      evict_calls=<C> reclaimed=<R> free_failures=<F>` and require
+#     T > 0, D > 0, C > 0, R > 0 and F == 0 — the live evictor ran,
+#     reclaimed BOTH text and untouched-data pages, and every victim's
+#     frame reached PAGE_ALLOC.
+#
+#     `pinned_skipped` is REPORTED but NOT asserted.  The 05-21 finding
+#     (05-21-SUMMARY BLOCKER 3) is structural: writable user buffers are
+#     promoted off the droppable queue and the only read-only user slice
+#     is a stack/.bss page that never enters palloc.hash, so no userland
+#     path in this image can present a pinned CACHED page to the evictor.
+#     Asserting P > 0 asserted something the architecture cannot produce.
+#     Pinning is proven instead by the host integration test
+#     `port/src/pagecache.rs::pinned_cached_page_is_skipped_until_unpinned`,
+#     which pins a real cached frame through `PageAlloc::pin_frame` (the
+#     exact call `UserSlice`'s PinGuard makes) and requires the evictor to
+#     skip it, count `pinned_skipped`, and take it once unpinned.  The old
+#     background pinned-reader pipeline is gone with that criterion: it
+#     could never pin a cached page, it changed the pressure baseline by
+#     starting extra shells, and every stage it added was another
+#     exec-after-pressure surface the gate does not need.
+#   * the whole capture must be free of `phys page alloc failed` — that
+#     allocation failure is the 05-21 defect this gate exists to catch.
 #
 #   exit 0 only when EVERY stage passed; exit 1 names the failed stage on
 #   stderr; exit 2 on a contract violation (missing env).
@@ -49,6 +68,9 @@
 #   R9_SMOKE_LOG REQUIRED — the serial capture (fresh per run)
 #   R9_MEM       guest RAM (default 256M)
 #   R9_PALLOC_MAX_FRAMES  the managed-frame cap (default 2048)
+#   R9_PRESSURE_LINES     the bounded burst's line count (default 40000;
+#                         measured on HVF and TCG: evict_calls=4,
+#                         reclaimed=64, dropped_text=29, dropped_data=35)
 #
 # usage: env R9_KERNEL=… R9_DTB=… R9_INITRD=… R9_SMOKE_LOG=… \
 #          expect gates/aarch64/mem-pressure.expect
@@ -71,6 +93,7 @@ set QEMU [expr {[info exists env(R9_QEMU)] ? $env(R9_QEMU) : "qemu-system-aarch6
 set run_tag [expr {[info exists env(R9_RUN_TAG)] ? $env(R9_RUN_TAG) : "r9mempress-[pid]-[clock seconds]"}]
 set r9_mem [expr {[info exists env(R9_MEM)] ? $env(R9_MEM) : "256M"}]
 set maxf [expr {[info exists env(R9_PALLOC_MAX_FRAMES)] ? $env(R9_PALLOC_MAX_FRAMES) : 2048}]
+set pressure_lines [expr {[info exists env(R9_PRESSURE_LINES)] ? $env(R9_PRESSURE_LINES) : 40000}]
 
 # --- Hygiene: a fresh capture per run -----------------------------------
 exec rm -f $env(R9_SMOKE_LOG)
@@ -129,14 +152,14 @@ proc whole_capture_clean {} {
     set fh [open $env(R9_SMOKE_LOG) r]
     set whole [read $fh]
     close $fh
-    foreach bad {"WATCHDOG:" "panic" "lock rank" "unresolvable fault"} {
+    foreach bad {"WATCHDOG:" "panic" "lock rank" "unresolvable fault" "phys page alloc failed"} {
         if {[string first $bad $whole] >= 0} {
             puts stderr "mem-pressure-r9: FAILED — forbidden marker '$bad' in the capture"
             cleanup
             exit 1
         }
     }
-    puts stderr "mem-pressure-r9: post-pass ok — no WATCHDOG/panic/lock-rank/unresolvable-fault in the capture"
+    puts stderr "mem-pressure-r9: post-pass ok — no WATCHDOG/panic/lock-rank/unresolvable-fault/alloc-failure in the capture"
 }
 
 # --- 1. the staged boot (markers in emission order) -------------------
@@ -149,20 +172,15 @@ stage smp-online {smp: cpu 1 online}
 stage paqfs     {paqfs\.\.\.}
 stage prompt    {% }
 
-# --- 2. Worker 1: the pinned-blocked pipe reader (one CPU) ------------
-send "{ hsleep 60; echo pinnedok } | cat &\r"
-stage reader-prompt {% }
-
-# --- 3. Worker 2 (the other CPU): exec/read churn to force eviction ---
-send "for(r in 1 2 3 4 5 6 7 8 9 10 11 12) { /bin/ls /bin; /bin/cat /lib/namespace; /bin/echo p }\r"
+# --- 2. the BOUNDED pressure burst (2 CPUs: hseq | hsort) -------------
+# hseq's stream + hsort's line table and sort recursion need more frames
+# than the pool's dirty+clean headroom, so alloc_clean reaches the live
+# evictor; the total stays inside the cold (unmapped) part of palloc.hash,
+# so reclaim keeps every allocation satisfied and no process is killed.
+send "hseq 1 $pressure_lines | hsort > /dev/null\r"
 stage pressure-prompt {% }
 
-# --- 4. wait for Worker 1: the pinned buffer receives intact bytes ----
-send "wait\r"
-stage pinned-bytes {pinnedok}
-stage wait-prompt  {% }
-
-# --- 5. re-fault: the evicted binary/data pages fault back identically -
+# --- 3. re-fault: the evicted binary/data pages fault back identically -
 send "cat /lib/namespace\r"
 stage refault-prompt {% }
 set rf [strip_echoed_line $expect_out(buffer)]
@@ -173,32 +191,38 @@ if {![string match "*bind -c #e /env*" $rf]} {
 }
 puts stderr "mem-pressure-r9: stage ok — re-fault (known line intact after pressure)"
 
-# --- 6. read #c/sysstat and assert the live-evictor counters ----------
+# --- 4. read #c/sysstat and assert the live-evictor result ------------
 send "cat '#c/sysstat'\r"
 stage sysstat-prompt {% }
 set ss [strip_echoed_line $expect_out(buffer)]
-if {![regexp {evictor: dropped_text=(\d+) dropped_data=(\d+) pinned_skipped=(\d+)} $ss -> t d p]} {
+if {![regexp {evictor: dropped_text=(\d+) dropped_data=(\d+) pinned_skipped=(\d+) evict_calls=(\d+) reclaimed=(\d+) free_failures=(\d+)} $ss -> t d p c r f]} {
     puts stderr "mem-pressure-r9: #c/sysstat did not print the evictor line (got: $ss)"
     cleanup
     exit 1
 }
-puts stderr "mem-pressure-r9: sysstat — dropped_text=$t dropped_data=$d pinned_skipped=$p"
-if {$t <= 0 || $d <= 0 || $p <= 0} {
-    puts stderr "mem-pressure-r9: pressure counters not all positive (dropped_text=$t dropped_data=$d pinned_skipped=$p) — the 8 MiB pool did not exercise the live evictor or a pinned frame"
+puts stderr "mem-pressure-r9: sysstat — dropped_text=$t dropped_data=$d pinned_skipped=$p evict_calls=$c reclaimed=$r free_failures=$f"
+# The pool was genuinely exhausted (evict_calls > 0), the live evictor
+# reclaimed re-readable text AND untouched data, and every reclaimed frame
+# reached PAGE_ALLOC (free_failures == 0).  pinned_skipped is reported but
+# not asserted: no userland path in this image can pin a cached page (the
+# 05-21 structural finding); pinning is proven by the host integration test
+# port/src/pagecache.rs::pinned_cached_page_is_skipped_until_unpinned.
+if {$t <= 0 || $d <= 0 || $c <= 0 || $r <= 0 || $f != 0} {
+    puts stderr "mem-pressure-r9: evictor result wrong (dropped_text=$t dropped_data=$d evict_calls=$c reclaimed=$r free_failures=$f) — want text>0, data>0, calls>0, reclaimed>0, free_failures==0"
     cleanup
     exit 1
 }
-puts stderr "mem-pressure-r9: stage ok — evictor counters (text>0, data>0, pinned_skipped>0)"
+puts stderr "mem-pressure-r9: stage ok — live evictor reclaimed text+data under real exhaustion"
 
-# --- 7. the completion marker -----------------------------------------
+# --- 5. the completion marker -----------------------------------------
 send "echo MEM_PRESSURE_OK\r"
 stage done-echoed   {MEM_PRESSURE_OK}   ;# occurrence 1: the typed echo
 stage done-response {MEM_PRESSURE_OK}   ;# occurrence 2: the OUTPUT
 stage done-prompt   {% }
 
-# --- 8. whole-capture post-pass ---------------------------------------
+# --- 6. whole-capture post-pass ---------------------------------------
 whole_capture_clean
 
-puts stderr "mem-pressure-r9: ALL STAGES PASS — 8 MiB pool boot, pinned reader + pressure worker on 2 CPUs, byte-identical re-fault, evictor counters (text/data/pinned>0), MEM_PRESSURE_OK"
+puts stderr "mem-pressure-r9: ALL STAGES PASS — 8 MiB pool boot, bounded burst reclaims text+data, byte-identical re-fault, MEM_PRESSURE_OK"
 cleanup
 exit 0

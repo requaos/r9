@@ -35,7 +35,11 @@ use ds::tpht::flattened::{FlattenedTphtShard, banks_for_occupancy};
 
 use crate::mcslock::{Lock, LockNode};
 use crate::mem::PhysAddr;
-use crate::palloc::{record_evict_data, record_evict_text, record_pinned_skipped};
+use crate::palloc::{
+    record_cache_droppable, record_cache_hit, record_cache_insert, record_cache_insert_failure,
+    record_cache_miss, record_cache_remove, record_evict_data, record_evict_text,
+    record_pinned_skipped,
+};
 use crate::smp::LockRank;
 
 /// Physical addresses are packed below bit 52; the top 12 bits of the value
@@ -186,7 +190,12 @@ impl PageCache {
         let node = LockNode::new();
         let state = self.state.lock(&node);
         let packed = key.packed();
-        let found = state.shard.lookup(packed, |value| value[1] == packed)?;
+        let found = state.shard.lookup(packed, |value| value[1] == packed);
+        let Some(found) = found else {
+            record_cache_miss();
+            return None;
+        };
+        record_cache_hit();
         let (pa, kind) = decode(&found.value)?;
         Some(CachedPage { key, pa, kind })
     }
@@ -226,8 +235,14 @@ impl PageCache {
         state.generation = (generation + 1) & ((1 << GENERATION_BITS) - 1);
         let meta = (generation << 1) | kind.bit();
         let value = [pa.addr() | (meta << PA_BITS), packed];
-        state.shard.insert(packed, value, |candidate| candidate[1] == packed)?;
+        let inserted = state.shard.insert(packed, value, |candidate| candidate[1] == packed);
+        if let Err(err) = inserted {
+            record_cache_insert_failure();
+            return Err(PageCacheError::from(err));
+        }
         state.droppable.push_back((key, pa, kind));
+        record_cache_insert();
+        record_cache_droppable(state.droppable.len());
         Ok(())
     }
 
@@ -239,6 +254,7 @@ impl PageCache {
         let mut state = self.state.lock(&node);
         let before = state.droppable.len();
         state.droppable.retain(|entry| entry.1 != pa);
+        record_cache_droppable(state.droppable.len());
         state.droppable.len() != before
     }
 
@@ -280,29 +296,58 @@ impl PageCache {
     /// so a concurrent fault cannot map the frame while the arch layer
     /// unmaps it.  Pinned frames are skipped and counted in
     /// `palloc::record_pinned_skipped()`.
+    ///
+    /// **Victim order: unmapped first.**  A cached page no live proc maps
+    /// (its rmap entry was dropped by exec/exit) costs nothing to reclaim —
+    /// no PTE walk, no TLB shootdown, and no immediate re-fault.  A page a
+    /// running proc maps is cheaper to keep: evicting it forces that proc to
+    /// fault the same page straight back in, and under sustained pressure
+    /// the FIFO alone selects the hot page every round (the measured
+    /// `text page-in va=0x18000` thrash: >370k refaults of one page).  When
+    /// every droppable page is mapped, the oldest one is the fallback.
     pub fn select_eviction_victim(&self, is_pinned: impl Fn(PhysAddr) -> bool) -> Option<EvictionCandidate> {
         let node = LockNode::new();
         let mut state = self.state.lock(&node);
         let scan = state.droppable.len();
+        let mut mapped_fallback: Option<Droppable> = None;
         for _ in 0..scan {
-            let (key, pa, kind) = state.droppable.pop_front()?;
+            let entry = state.droppable.pop_front()?;
+            let (key, pa, _) = entry;
             if is_pinned(pa) {
                 record_pinned_skipped();
-                state.droppable.push_back((key, pa, kind));
+                state.droppable.push_back(entry);
                 continue;
             }
             let packed = key.packed();
-            if !state.shard.remove(packed, |value| value[1] == packed) {
-                // A stale queue entry (already removed): drop it and move on.
+            if state.rmap.get(&packed).is_some_and(|entries| !entries.is_empty()) {
+                // Mapped by a live proc: keep scanning for an unmapped page.
+                // Hold only the first such entry out of the queue; the rest
+                // stay in FIFO order.
+                if mapped_fallback.is_none() {
+                    mapped_fallback = Some(entry);
+                } else {
+                    state.droppable.push_back(entry);
+                }
                 continue;
             }
-            let rmaps = state.rmap.remove(&packed).unwrap_or_default();
-            match kind {
-                PageKind::SharedText => record_evict_text(),
-                PageKind::UntouchedData => record_evict_data(),
+            if let Some(candidate) = take_droppable(&mut state, entry) {
+                // A mapped entry held aside earlier is still droppable:
+                // return it to the FRONT so it keeps its age and stays the
+                // next fallback (dropping it here would silently remove a
+                // live cached page from the queue).
+                if let Some(fallback) = mapped_fallback.take() {
+                    state.droppable.push_front(fallback);
+                }
+                return Some(candidate);
             }
-            return Some(EvictionCandidate { key, pa, kind, rmaps });
+            // Stale queue entry (already removed from the hash): move on.
         }
+        if let Some(entry) = mapped_fallback
+            && let Some(candidate) = take_droppable(&mut state, entry)
+        {
+            return Some(candidate);
+        }
+        record_cache_droppable(state.droppable.len());
         None
     }
 
@@ -319,6 +364,23 @@ fn decode(value: &[u64; 2]) -> Option<(PhysAddr, PageKind)> {
     let meta = value[0] >> PA_BITS;
     let kind = PageKind::from_bit(meta >> 1);
     Some((PhysAddr::new(value[0] & PA_MASK), kind))
+}
+
+/// Remove a selected queue entry from the hash + rmap and build the
+/// candidate.  Returns `None` for a stale entry (its key was already gone).
+fn take_droppable(state: &mut CacheState, (key, pa, kind): Droppable) -> Option<EvictionCandidate> {
+    let packed = key.packed();
+    if !state.shard.remove(packed, |value| value[1] == packed) {
+        return None;
+    }
+    record_cache_remove();
+    record_cache_droppable(state.droppable.len());
+    let rmaps = state.rmap.remove(&packed).unwrap_or_default();
+    match kind {
+        PageKind::SharedText => record_evict_text(),
+        PageKind::UntouchedData => record_evict_data(),
+    }
+    Some(EvictionCandidate { key, pa, kind, rmaps })
 }
 
 #[cfg(test)]
@@ -400,6 +462,74 @@ mod tests {
         assert!(evictor_stats().pinned_skipped >= 1);
         assert!(cache.lookup(pinned).is_some(), "pinned frame is still cached");
         assert_eq!(cache.lookup(free), None);
+    }
+
+    /// Test 3b (MEM-10 pin seam): a REAL pinned cached frame — pinned
+    /// through `PageAlloc::pin_frame`, the exact call `UserSlice`'s PinGuard
+    /// makes — is skipped by the evictor and counted in `pinned_skipped`,
+    /// then becomes the victim once unpinned.
+    ///
+    /// This is the honest replacement for the mem-pressure gate's old
+    /// `pinned_skipped > 0` assertion: no userland path in the current image
+    /// can pin a CACHED page (writable buffers are promoted off the
+    /// droppable queue; the only read-only user slice is an uncached
+    /// stack/.bss page), so the pin contract is proven here at the
+    /// cache/allocator seam instead of asserted on an unreachable live path.
+    #[test]
+    fn pinned_cached_page_is_skipped_until_unpinned() {
+        use crate::mem::PhysRange;
+        use crate::palloc::PageAlloc;
+
+        let _stats = crate::palloc::stats_test_guard();
+        reset_evictor_stats();
+        let alloc = PageAlloc::new();
+        alloc
+            .init_ranges(PhysRange::with_end(0, 16 * crate::palloc::FRAME_SIZE as u64), core::iter::empty(), None)
+            .unwrap();
+        let pa = alloc.alloc_clean(|_| {}, |_| 0).unwrap();
+        let pfn = crate::palloc::phys_to_pfn(pa).unwrap();
+        alloc.pin_frame(pfn).unwrap();
+
+        let cache = cache();
+        let key = PageKey::new(9, 9);
+        cache.insert_text(key, pa).unwrap();
+        let pinned = |frame: PhysAddr| {
+            crate::palloc::phys_to_pfn(frame).is_ok_and(|pfn| alloc.is_pinned(pfn))
+        };
+        assert_eq!(cache.select_eviction_victim(pinned), None, "the only candidate is pinned");
+        assert!(evictor_stats().pinned_skipped >= 1, "the skip is counted");
+        assert!(cache.lookup(key).is_some(), "a pinned page stays cached");
+
+        alloc.unpin_frame(pfn).unwrap();
+        let victim = cache.select_eviction_victim(pinned).expect("unpinned page is evictable");
+        assert_eq!(victim.pa, pa);
+        assert_eq!(victim.kind, PageKind::SharedText);
+        assert_eq!(cache.lookup(key), None, "the victim left the hash");
+    }
+
+    /// Test 3c (MEM-16 victim order): an unmapped cached page (its rmap was
+    /// dropped by exec/exit) is chosen before a mapped one, so reclamation
+    /// drains cold pages instead of forcing a live proc to re-fault a hot
+    /// page straight back in.
+    #[test]
+    fn unmapped_pages_are_evicted_before_mapped_ones() {
+        let _stats = crate::palloc::stats_test_guard();
+        reset_evictor_stats();
+        let cache = cache();
+        let mapped = PageKey::new(4, 1);
+        let cold = PageKey::new(4, 2);
+        cache.insert_text(mapped, pa(50)).unwrap();
+        cache.insert_text(cold, pa(51)).unwrap();
+        cache.add_rmap(mapped, RmapEntry { proc_slot: 7, page_va: 0x1000 });
+
+        let victim = cache.select_eviction_victim(|_| false).expect("victim");
+        assert_eq!(victim.key, cold, "the unmapped page goes first");
+        assert!(victim.rmaps.is_empty());
+        assert!(cache.lookup(mapped).is_some(), "the mapped page stays cached");
+
+        let victim = cache.select_eviction_victim(|_| false).expect("mapped fallback");
+        assert_eq!(victim.key, mapped, "with only mapped pages left, the oldest is taken");
+        assert_eq!(victim.rmaps, vec![RmapEntry { proc_slot: 7, page_va: 0x1000 }]);
     }
 
     /// Test 4 (MEM-16): process exit drops its mappings but keeps the frames

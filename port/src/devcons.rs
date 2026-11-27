@@ -231,6 +231,35 @@ pub fn set_pid_hook(hook: fn() -> u64) {
     *guard = Some(hook);
 }
 
+/// The arch frame pools' cardinalities, for `#c/sysstat` (MEM-15
+/// diagnostics: a pressure run can show the pool was genuinely exhausted and
+/// how much reclaim returned to it).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PoolSnapshot {
+    pub clean: u64,
+    pub dirty: u64,
+    pub active: u64,
+    pub pinned: u64,
+}
+
+/// The arch-side frame-pool hook (port cannot see the PageAlloc instance).
+static POOL_HOOK: Lock<Option<fn() -> PoolSnapshot>> = Lock::new("conspool", None);
+
+/// Register the arch-side frame-pool snapshot hook.  A second registration
+/// is a boot bug.
+pub fn set_pool_stats_hook(hook: fn() -> PoolSnapshot) {
+    let node = LockNode::new();
+    let mut guard = POOL_HOOK.lock(&node);
+    assert!(guard.is_none(), "devcons: pool stats hook registered twice");
+    *guard = Some(hook);
+}
+
+fn pool_snapshot() -> Option<PoolSnapshot> {
+    let node = LockNode::new();
+    let hook = *POOL_HOOK.lock(&node);
+    hook.map(|hook| hook())
+}
+
 // ---------------------------------------------------------------------------
 // The per-proc user (18-02, AUTH-03): the /dev/user serve + devcap's
 // eve gate + capuse's user mutation all consult the CURRENT process's
@@ -328,16 +357,46 @@ fn pid_len() -> u64 {
     pid_content().map(|c| c.len() as u64).unwrap_or(0)
 }
 
-/// The `#c/sysstat` line: the lock-free evictor counters (MEM-07, D-17).
+/// The `#c/sysstat` line: the lock-free evictor counters (MEM-07, D-17) and
+/// the `palloc.hash` contents (MEM-16 diagnostics).
 fn sysstat_content() -> alloc::vec::Vec<u8> {
     let stats = crate::palloc::evictor_stats();
-    alloc::format!(
-        "evictor: dropped_text={} dropped_data={} pinned_skipped={}\n",
+    let mut out = alloc::format!(
+        "evictor: dropped_text={} dropped_data={} pinned_skipped={} evict_calls={} reclaimed={} free_failures={}\n",
         stats.dropped_text,
         stats.dropped_data,
-        stats.pinned_skipped
+        stats.pinned_skipped,
+        stats.evict_calls,
+        stats.reclaimed,
+        stats.free_failures
     )
-    .into_bytes()
+    .into_bytes();
+    let cache = crate::palloc::cache_stats();
+    out.extend_from_slice(
+        alloc::format!(
+            "palloc.hash: entries={} droppable={} inserts={} hits={} misses={} insert_failures={}\n",
+            cache.entries,
+            cache.droppable,
+            cache.inserts,
+            cache.hits,
+            cache.misses,
+            cache.insert_failures
+        )
+        .as_bytes(),
+    );
+    if let Some(pool) = pool_snapshot() {
+        out.extend_from_slice(
+            alloc::format!(
+                "palloc.pool: clean={} dirty={} active={} pinned={}\n",
+                pool.clean,
+                pool.dirty,
+                pool.active,
+                pool.pinned
+            )
+            .as_bytes(),
+        );
+    }
+    out
 }
 
 /// The sysstat file's current length (for stat/dir listings).
@@ -1423,7 +1482,7 @@ pub(crate) mod tests {
         let root = root_chan();
         let chan = super::walk(&root, b"sysstat").expect("#c/sysstat exists");
         let mut open = super::open(&chan, crate::dat::OREAD).expect("OREAD on #c/sysstat");
-        let mut buf = [0u8; 160];
+        let mut buf = [0u8; 512];
         let n = super::read(&mut open, &mut buf, 0).expect("read #c/sysstat");
         let text = core::str::from_utf8(&buf[..n as usize]).expect("ASCII sysstat");
         assert!(text.starts_with("evictor: dropped_text="), "format: {text:?}");
@@ -1436,14 +1495,14 @@ pub(crate) mod tests {
 
         // Offset discipline: the tail past offset 9.
         let mut chan2 = super::open(&chan, crate::dat::OREAD).expect("second OREAD");
-        let mut tail = [0u8; 160];
+        let mut tail = [0u8; 512];
         let m = super::read(&mut chan2, &mut tail, 9).expect("offset read");
         assert_eq!(&tail[..m as usize], &text.as_bytes()[9..]);
 
         // Read-only: OWRITE is refused and `write` errors.
         assert!(super::open(&chan, crate::dat::OWRITE).is_err(), "OWRITE is refused");
         assert!(super::write(&mut open, b"x").is_err(), "write is refused");
-        let mut sb = [0u8; 160];
+        let mut sb = [0u8; 512];
         assert!(super::stat(&chan, &mut sb).is_ok(), "stat works");
     }
 

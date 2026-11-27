@@ -433,7 +433,44 @@ fn flush_icache_user_range(start: usize, end: usize) {
 /// (SGI 1) -> `PAGE_ALLOC (70)`.  Pinned frames are skipped and counted by
 /// `PageCache::select_eviction_victim` (`pinned_skipped`).
 pub(crate) fn evict_re_readable_pages(target: usize) -> usize {
-    let Some(cache) = pagealloc::page_cache() else { return 0 };
+    port::palloc::record_evict_call();
+    let Some(cache) = pagealloc::page_cache() else {
+        #[cfg(not(test))]
+        {
+            use core::sync::atomic::{AtomicU64, Ordering};
+            static ABSENT_LOGGED: AtomicU64 = AtomicU64::new(0);
+            if ABSENT_LOGGED.fetch_add(1, Ordering::Relaxed) < 4 {
+                println!("evict: call target={target} page_cache=absent");
+            }
+        }
+        return 0;
+    };
+    #[cfg(not(test))]
+    {
+        use core::sync::atomic::{AtomicU64, Ordering};
+        // One line per boot at the exhaustion boundary: the cache state and
+        // pool cardinalities the live evictor first saw.  This is the
+        // pressure gate's evidence anchor (counters alone say how much was
+        // reclaimed, not that the pool had truly reached zero free frames).
+        static CALLS: AtomicU64 = AtomicU64::new(0);
+        if CALLS.fetch_add(1, Ordering::Relaxed) == 0 {
+            let s = port::palloc::cache_stats();
+            let pool = pagealloc::pool_snapshot();
+            println!(
+                "evict: first reclaim target={target} entries={} droppable={} inserts={} hits={} misses={} fails={} pool=(clean={} dirty={} active={} pinned={})",
+                s.entries,
+                s.droppable,
+                s.inserts,
+                s.hits,
+                s.misses,
+                s.insert_failures,
+                pool.clean,
+                pool.dirty,
+                pool.active,
+                pool.pinned
+            );
+        }
+    }
     let mut freed = 0;
     while freed < target {
         let Some(candidate) = cache.select_eviction_victim(pagealloc::is_pinned) else {
@@ -451,7 +488,14 @@ pub(crate) fn evict_re_readable_pages(target: usize) -> usize {
         port::smp::request_shootdown(Some(candidate.pa.addr() as usize));
         // A failed free cannot be retried usefully (the cache key is gone);
         // count the attempt so the loop terminates.
-        let _ = pagealloc::deallocate_physpage(candidate.pa);
+        match pagealloc::deallocate_physpage(candidate.pa) {
+            Ok(()) => port::palloc::record_evict_reclaimed(),
+            Err(err) => {
+                port::palloc::record_evict_free_failure();
+                #[cfg(not(test))]
+                println!("evict: free {:#x} failed: {err:?}", candidate.pa.addr());
+            }
+        }
         freed += 1;
     }
     freed

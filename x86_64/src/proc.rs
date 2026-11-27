@@ -780,6 +780,7 @@ pub(crate) fn evict_user_frame(pa: PhysAddr, kind: port::pagecache::PageKind) ->
 /// (LAPIC 0xF0) -> `PAGE_ALLOC (70)`.  Pinned frames are skipped and counted
 /// by `PageCache::select_eviction_victim` (`pinned_skipped`).
 pub(crate) fn evict_re_readable_pages(target: usize) -> usize {
+    port::palloc::record_evict_call();
     let Some(cache) = crate::pagealloc::page_cache() else { return 0 };
     let mut freed = 0;
     while freed < target {
@@ -801,7 +802,10 @@ pub(crate) fn evict_re_readable_pages(target: usize) -> usize {
                     port::pagecache::PageKind::UntouchedData => va,
                 };
                 port::smp::request_shootdown(target_va);
-                let _ = crate::pagealloc::deallocate_physpage(candidate.pa);
+                match crate::pagealloc::deallocate_physpage(candidate.pa) {
+                    Ok(()) => port::palloc::record_evict_reclaimed(),
+                    Err(_) => port::palloc::record_evict_free_failure(),
+                }
                 freed += 1;
             }
             EvictOutcome::DirtyRestored => {

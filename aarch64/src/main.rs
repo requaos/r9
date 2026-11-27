@@ -845,6 +845,7 @@ pub(crate) fn exec_prologue_with_bootargs(
         set_private: proc::proc_set_private,
     });
     port::devcons::set_pid_hook(proc::current_pid);
+    port::devcons::set_pool_stats_hook(pagealloc::pool_snapshot);
     // devcons's current-user hooks (20-01, the x86_64 18-02 AUTH-03
     // twin): #c/user serves the per-proc field (seeded glenda,
     // fork-copied); boot's #c/hostowner write and devcap's eve gate and

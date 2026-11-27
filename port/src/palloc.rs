@@ -53,6 +53,16 @@ pub const CLEAN_TARGET_PCT: usize = 15;
 pub const LOW_WATER_MIN: usize = 16;
 /// How many evictor round trips `alloc_clean` attempts before `OutOfSpace`.
 pub const MAX_EVICT_ATTEMPTS: usize = 4;
+/// Frames requested from the arch evictor per reclaim attempt.
+///
+/// One frame per attempt is not enough: the reclaimed frame returns to the
+/// shared `dirty` pool, and a concurrent allocator on the other CPU can take
+/// it before this caller's retry reaches `refill_clean_batch`, so a caller
+/// can lose every attempt to a peer and report `OutOfSpace` while the pool
+/// is still reclaimable (the small-pool pressure gate's live failure).  A
+/// batch leaves the caller its own margin: peers can steal a few frames, not
+/// the whole reclaim.
+pub const EVICT_BATCH_FRAMES: usize = 16;
 
 /// Physical address of frame `pfn`: the exact 256 MiB chunk/offset formula.
 pub fn pfn_to_phys(pfn: u32) -> PhysAddr {
@@ -91,11 +101,46 @@ pub struct EvictorStats {
     pub dropped_text: u64,
     pub dropped_data: u64,
     pub pinned_skipped: u64,
+    /// Calls into the arch evictor (one per reclaim attempt).
+    pub evict_calls: u64,
+    /// Victims whose frame was returned to `PAGE_ALLOC`.
+    pub reclaimed: u64,
+    /// Victims whose frame could not be returned to `PAGE_ALLOC`.
+    pub free_failures: u64,
+}
+
+/// Lock-free `palloc.hash` accounting served by `#c/sysstat` beside the
+/// evictor counters (MEM-16 diagnostics): the page cache records every
+/// insert, lookup and eviction here so a live run can distinguish an empty
+/// cache from a non-droppable one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CacheStats {
+    /// Keys currently resident in `palloc.hash`.
+    pub entries: u64,
+    /// Entries currently on the droppable FIFO.
+    pub droppable: u64,
+    /// Successful inserts.
+    pub inserts: u64,
+    /// Inserts the TPHT rejected (full / duplicate key).
+    pub insert_failures: u64,
+    /// Successful lookups.
+    pub hits: u64,
+    /// Failed lookups.
+    pub misses: u64,
 }
 
 static EVICT_DROPPED_TEXT: AtomicU64 = AtomicU64::new(0);
 static EVICT_DROPPED_DATA: AtomicU64 = AtomicU64::new(0);
 static EVICT_PINNED_SKIPPED: AtomicU64 = AtomicU64::new(0);
+static EVICT_CALLS: AtomicU64 = AtomicU64::new(0);
+static EVICT_RECLAIMED: AtomicU64 = AtomicU64::new(0);
+static EVICT_FREE_FAILURES: AtomicU64 = AtomicU64::new(0);
+static CACHE_ENTRIES: AtomicU64 = AtomicU64::new(0);
+static CACHE_DROPPABLE: AtomicU64 = AtomicU64::new(0);
+static CACHE_INSERTS: AtomicU64 = AtomicU64::new(0);
+static CACHE_INSERT_FAILURES: AtomicU64 = AtomicU64::new(0);
+static CACHE_HITS: AtomicU64 = AtomicU64::new(0);
+static CACHE_MISSES: AtomicU64 = AtomicU64::new(0);
 
 /// Count one dropped re-readable text page.
 pub fn record_evict_text() {
@@ -112,12 +157,75 @@ pub fn record_pinned_skipped() {
     EVICT_PINNED_SKIPPED.fetch_add(1, Ordering::Relaxed);
 }
 
+/// Count one call into the arch evictor (one reclaim attempt).
+pub fn record_evict_call() {
+    EVICT_CALLS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Count one victim whose frame was actually returned to `PAGE_ALLOC`.
+pub fn record_evict_reclaimed() {
+    EVICT_RECLAIMED.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Count one victim whose frame could not be returned to `PAGE_ALLOC`.
+pub fn record_evict_free_failure() {
+    EVICT_FREE_FAILURES.fetch_add(1, Ordering::Relaxed);
+}
+
 /// A lock-free snapshot of the evictor counters.
 pub fn evictor_stats() -> EvictorStats {
     EvictorStats {
         dropped_text: EVICT_DROPPED_TEXT.load(Ordering::Relaxed),
         dropped_data: EVICT_DROPPED_DATA.load(Ordering::Relaxed),
         pinned_skipped: EVICT_PINNED_SKIPPED.load(Ordering::Relaxed),
+        evict_calls: EVICT_CALLS.load(Ordering::Relaxed),
+        reclaimed: EVICT_RECLAIMED.load(Ordering::Relaxed),
+        free_failures: EVICT_FREE_FAILURES.load(Ordering::Relaxed),
+    }
+}
+
+/// Count one successful `palloc.hash` insert (and one resident key).
+pub fn record_cache_insert() {
+    CACHE_ENTRIES.fetch_add(1, Ordering::Relaxed);
+    CACHE_INSERTS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Count one rejected `palloc.hash` insert.
+pub fn record_cache_insert_failure() {
+    CACHE_INSERT_FAILURES.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Count one key removed from `palloc.hash` (eviction).
+pub fn record_cache_remove() {
+    let _ = CACHE_ENTRIES.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+        Some(n.saturating_sub(1))
+    });
+}
+
+/// Publish the droppable FIFO's current length.
+pub fn record_cache_droppable(len: usize) {
+    CACHE_DROPPABLE.store(len as u64, Ordering::Relaxed);
+}
+
+/// Count one successful `palloc.hash` lookup.
+pub fn record_cache_hit() {
+    CACHE_HITS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Count one failed `palloc.hash` lookup.
+pub fn record_cache_miss() {
+    CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
+}
+
+/// A lock-free snapshot of the `palloc.hash` accounting.
+pub fn cache_stats() -> CacheStats {
+    CacheStats {
+        entries: CACHE_ENTRIES.load(Ordering::Relaxed),
+        droppable: CACHE_DROPPABLE.load(Ordering::Relaxed),
+        inserts: CACHE_INSERTS.load(Ordering::Relaxed),
+        insert_failures: CACHE_INSERT_FAILURES.load(Ordering::Relaxed),
+        hits: CACHE_HITS.load(Ordering::Relaxed),
+        misses: CACHE_MISSES.load(Ordering::Relaxed),
     }
 }
 
@@ -127,6 +235,15 @@ pub(crate) fn reset_evictor_stats() {
     EVICT_DROPPED_TEXT.store(0, Ordering::Relaxed);
     EVICT_DROPPED_DATA.store(0, Ordering::Relaxed);
     EVICT_PINNED_SKIPPED.store(0, Ordering::Relaxed);
+    EVICT_CALLS.store(0, Ordering::Relaxed);
+    EVICT_RECLAIMED.store(0, Ordering::Relaxed);
+    EVICT_FREE_FAILURES.store(0, Ordering::Relaxed);
+    CACHE_ENTRIES.store(0, Ordering::Relaxed);
+    CACHE_DROPPABLE.store(0, Ordering::Relaxed);
+    CACHE_INSERTS.store(0, Ordering::Relaxed);
+    CACHE_INSERT_FAILURES.store(0, Ordering::Relaxed);
+    CACHE_HITS.store(0, Ordering::Relaxed);
+    CACHE_MISSES.store(0, Ordering::Relaxed);
 }
 
 /// Serialise host tests that assert on the process-wide counters.
@@ -266,9 +383,9 @@ impl PageAlloc {
         self.state.lock(&node).target_clean
     }
 
-    /// Pool cardinalities `(clean, dirty, active, pinned)` — host tests only.
-    #[cfg(test)]
-    pub(crate) fn pool_lens(&self) -> (u64, u64, u64, u64) {
+    /// Pool cardinalities `(clean, dirty, active, pinned)` — host tests and
+    /// live diagnostics.
+    pub fn pool_lens(&self) -> (u64, u64, u64, u64) {
         let node = LockNode::new();
         let state = self.state.lock(&node);
         (state.clean.len(), state.dirty.len(), state.active.len(), state.pinned.len())
@@ -397,15 +514,15 @@ impl PageAlloc {
     /// Allocate one zeroed frame.
     ///
     /// `zero_frame` zeroes a dirty frame (called outside `PAGE_ALLOC`);
-    /// `evict_fn` runs the arch evictor and returns how many frames it
-    /// reclaimed.  `alloc_clean` drops `PAGE_ALLOC` (Rank 70) completely
+    /// `evict_fn(target)` runs the arch evictor and returns how many frames
+    /// it reclaimed.  `alloc_clean` drops `PAGE_ALLOC` (Rank 70) completely
     /// before invoking `evict_fn`, which may acquire `PAGE_CACHE` (Rank 20)
     /// and `PROC_TABLE` (Rank 50) and re-enter `PAGE_ALLOC` (Rank 70) to
     /// return frames.
     pub fn alloc_clean<Z, E>(&self, zero_frame: Z, mut evict_fn: E) -> Result<PhysAddr, PageAllocError>
     where
         Z: Fn(PhysAddr),
-        E: FnMut() -> usize,
+        E: FnMut(usize) -> usize,
     {
         for attempt in 0..=MAX_EVICT_ATTEMPTS {
             let need = {
@@ -435,7 +552,7 @@ impl PageAlloc {
             }
             // The guard above is gone: PAGE_ALLOC (Rank 70) is NOT held
             // across evict_fn (Rank 20 -> 50 -> 70 re-entry is legal).
-            if evict_fn() == 0 {
+            if evict_fn(EVICT_BATCH_FRAMES) == 0 {
                 return Err(PageAllocError::OutOfSpace);
             }
         }
@@ -491,7 +608,7 @@ mod tests {
         alloc.pin_frame(5).unwrap();
         assert_eq!(alloc.evictable_dirty().len(), 62, "fresh frames are all dirty");
 
-        let active = alloc.alloc_clean(|_| {}, || 0).unwrap();
+        let active = alloc.alloc_clean(|_| {}, |_| 0).unwrap();
         let active_pfn = phys_to_pfn(active).unwrap();
 
         let (clean, dirty, active_len, pinned) = alloc.pool_lens();
@@ -559,7 +676,7 @@ mod tests {
         // Exhaust every managed frame.
         let mut first = None;
         loop {
-            match alloc.alloc_clean(|_| {}, || 0) {
+            match alloc.alloc_clean(|_| {}, |_| 0) {
                 Ok(pa) => {
                     first.get_or_insert(pa);
                 }
@@ -574,7 +691,7 @@ mod tests {
         let pa = alloc
             .alloc_clean(
                 |_| {},
-                || {
+                |_batch| {
                     let node = LockNode::new();
                     let _page_cache = PAGE_CACHE_LOCK.lock(&node);
                     alloc.free_frame(first).expect("reclaim one active frame");
@@ -583,6 +700,40 @@ mod tests {
             )
             .expect("reclaim and retry");
         assert_eq!(pa, first);
+    }
+
+    /// Test 5c (MEM-15 starvation guard): `alloc_clean` asks the arch evictor
+    /// for [`EVICT_BATCH_FRAMES`] per attempt, not one frame.  A single
+    /// reclaimed frame returns to the shared dirty pool and a peer CPU can
+    /// take it before this caller retries — the measured live failure where
+    /// two pressure workers starved each other to `OutOfSpace` while the
+    /// cache was still reclaimable.
+    #[test]
+    fn alloc_clean_requests_the_reclaim_batch() {
+        let alloc = allocator(8);
+        let mut last = None;
+        loop {
+            match alloc.alloc_clean(|_| {}, |_| 0) {
+                Ok(pa) => last = Some(pa),
+                Err(PageAllocError::OutOfSpace) => break,
+                Err(other) => panic!("unexpected alloc error: {other:?}"),
+            }
+        }
+        let victim = last.expect("at least one frame");
+
+        let mut requested = 0;
+        let pa = alloc
+            .alloc_clean(
+                |_| {},
+                |batch| {
+                    requested = batch;
+                    alloc.free_frame(victim).expect("reclaim one active frame");
+                    1
+                },
+            )
+            .expect("the reclaimed frame satisfies the retry");
+        assert_eq!(requested, EVICT_BATCH_FRAMES);
+        assert_eq!(pa, victim);
     }
 
     /// Test 5 (MEM-07 cap): the bootarg parser and the managed-frame cap.
@@ -608,18 +759,18 @@ mod tests {
     #[test]
     fn free_into_empty_pools_and_double_free_are_clean() {
         let alloc = allocator(8);
-        let pa = alloc.alloc_clean(|_| {}, || 0).unwrap();
+        let pa = alloc.alloc_clean(|_| {}, |_| 0).unwrap();
         alloc.free_frame(pa).unwrap();
         assert!(alloc.evictable_dirty().contains(phys_to_pfn(pa).unwrap()));
         assert_eq!(alloc.free_frame(pa), Err(PageAllocError::NotAllocated));
 
-        let pinned = alloc.alloc_clean(|_| {}, || 0).unwrap();
+        let pinned = alloc.alloc_clean(|_| {}, |_| 0).unwrap();
         alloc.pin_frame(phys_to_pfn(pinned).unwrap()).unwrap();
         assert_eq!(alloc.free_frame(pinned), Err(PageAllocError::NotAllocated));
 
         let empty = PageAlloc::new();
         assert_eq!(
-            empty.alloc_clean(|_| {}, || 0),
+            empty.alloc_clean(|_| {}, |_| 0),
             Err(PageAllocError::OutOfSpace),
             "empty pools ask the evictor, then fail cleanly"
         );
@@ -644,7 +795,7 @@ mod tests {
         // Sixteen frames the pin thread keeps pinned for the whole run.
         let pinned: Vec<PhysAddr> = (0..16)
             .map(|_| {
-                let pa = alloc.alloc_clean(|_| {}, || 0).unwrap();
+                let pa = alloc.alloc_clean(|_| {}, |_| 0).unwrap();
                 alloc.pin_frame(phys_to_pfn(pa).unwrap()).unwrap();
                 pa
             })
@@ -691,7 +842,7 @@ mod tests {
                     }
                     let result = ev_alloc.alloc_clean(
                         |_| {},
-                        || {
+                        |_batch| {
                             let node = LockNode::new();
                             let _page_cache = PAGE_CACHE_LOCK.lock(&node);
                             for pa in ev_pinned.iter() {

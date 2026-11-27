@@ -12,14 +12,20 @@
 #   * the throwaway DTB's /memory@40000000 reg is patched to 256 MiB
 #     (R9_MEM, default 256M) so the initrd loaded at 0x48000000 (a 128 MiB
 #     offset) always lies squarely inside guest RAM [0x40000000, 0x50000000);
-#   * the guest runs with `-smp 2` so a pinned-blocked reader on one CPU and
-#     a memory-pressure worker on the other contend for the small pool.
+#   * the guest runs with `-smp 2` so the burst's hseq reader and hsort
+#     allocator contend for the small pool on separate CPUs.
 #
 # gates/aarch64/mem-pressure.expect asserts `palloc: managed_frames=2048`,
-# drives the pinned-buffer reader + pressure worker + byte-identical re-fault
-# from Harvey's rc shell, reads `cat '#c/sysstat'` (served read-only by
-# port/src/devcons.rs from port::palloc::evictor_stats()), and requires
-# dropped_text > 0, dropped_data > 0, pinned_skipped > 0 and MEM_PRESSURE_OK.
+# drives a BOUNDED `hseq 1 44000 | hsort` burst (R9_PRESSURE_LINES) and a
+# byte-identical re-fault from Harvey's rc shell,
+# reads `cat '#c/sysstat'` (served read-only by port/src/devcons.rs from
+# port::palloc::evictor_stats()), and requires dropped_text > 0,
+# dropped_data > 0, evict_calls > 0, reclaimed > 0, free_failures == 0 and
+# MEM_PRESSURE_OK.  pinned_skipped is reported but not asserted: no
+# userland path in this image can pin a cached page (the 05-21 structural
+# finding); the host integration test
+# port/src/pagecache.rs::pinned_cached_page_is_skipped_until_unpinned proves
+# the pin path instead.
 #
 # Env contract:
 #   R9_HARVEY_DIR_ARM64 REQUIRED — the read-only arm64 tree (harvey-tree-arm64).
@@ -35,6 +41,9 @@
 #   R9_MEM         guest RAM (default 256M — above the aarch64 static
 #                  footprint and covering the 0x48000000 initrd).
 #   R9_PALLOC_MAX_FRAMES  the managed-frame cap (default 2048 = 8 MiB).
+#   R9_PRESSURE_LINES     the bounded pressure burst's line count (default
+#                         44000; measured on HVF and TCG: evict_calls=4,
+#                         reclaimed=64, dropped_text=29, dropped_data=35).
 #   R9_BOOTARGS    the /chosen bootargs (default palloc_max_frames=…).
 #   R9_BOOTARGS_PROP  the /chosen property name (default bootargs).
 #
@@ -110,7 +119,8 @@ fi
 
 R9_MEM="${R9_MEM:-256M}"
 R9_PALLOC_MAX_FRAMES="${R9_PALLOC_MAX_FRAMES:-2048}"
-export R9_MEM R9_PALLOC_MAX_FRAMES
+R9_PRESSURE_LINES="${R9_PRESSURE_LINES:-44000}"
+export R9_MEM R9_PALLOC_MAX_FRAMES R9_PRESSURE_LINES
 
 echo "== r9 tree:     $HARVEY"
 echo "== r9 root:     $R9_ROOT"
