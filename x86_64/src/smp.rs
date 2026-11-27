@@ -13,8 +13,8 @@
 //! so the trampoline executes at PA == VA through the mode switches), the
 //! AP's 64 KiB boot stack top (its own Mach's `KStack`), the AP's Mach
 //! VA, its cpu id, and `ap_main`'s high-half VA.  Per AP: `INIT` IPI →
-//! 10 ms → `SIPI(0x08)` → 200 µs → one retry `SIPI` → poll `mach.online`
-//! (SDM Vol 3A §8.4.4's MP initialization sequence).
+//! 10 ms → `SIPI(0x08)` → poll `mach.online` (SDM Vol 3A §8.4.4's MP
+//! initialization sequence, a single SIPI).
 //!
 //! # Per-CPU Mach allocation (SMP-02)
 //!
@@ -155,12 +155,11 @@ fn busy_wait_tsc(tsc_ticks: u64) {
 
 /// Start one AP (SMP-01): allocate its Mach (zeroed, 64 KiB-aligned,
 /// shared kernel half), publish the mailbox, and run INIT → 10 ms →
-/// SIPI(0x08) → poll `mach.online` with a ~100 ms timeout.  There is
-/// deliberately NO second SIPI: a retry delivered to an AP already in
-/// protected mode triple-faults the machine (see the comment at the
-/// send site).  The 10 ms/200 µs delays derive from the
-/// BSP's published timer calibration (TICK_MS = 10 ms, so tsc_delta is
-/// exactly 10 ms of TSC ticks) — the AP bring-up never re-calibrates.
+/// SIPI(0x08) → poll `mach.online` with a ~100 ms timeout — a single
+/// SIPI, no retry (see the comment at the send site).  The 10 ms delay
+/// derives from the BSP's published timer calibration (TICK_MS = 10 ms,
+/// so tsc_delta is exactly 10 ms of TSC ticks) — the AP bring-up never
+/// re-calibrates.
 #[cfg(not(test))]
 fn start_one_ap(cpu_id: usize, apic_id: u32, bootpml4_pa: u64) -> Result<(), &'static str> {
     let Some(timer) = crate::platform::q35::timer::state() else {
@@ -208,16 +207,12 @@ fn start_one_ap(cpu_id: usize, apic_id: u32, bootpml4_pa: u64) -> Result<(), &'s
     lapic::send_init(apic_id);
     busy_wait_tsc(ten_ms);
     lapic::send_sipi(apic_id, SIPI_VECTOR);
-    // NO second SIPI.  The SDM's retry exists for an AP that missed the
-    // first SIPI while still in the INIT shadow, but a SIPI delivered to
-    // an AP that has ALREADY started is fatal: it sets CS:IP back to the
-    // real-mode vector without resetting CR0/CR4, so the trampoline's
-    // first `mov ds, ax` (selector 0) faults in protected mode and
-    // triple-faults the machine.  Measured on KVM: the AP reaches
-    // protected mode in well under the old 1 ms retry window (every
-    // bring-up marker byte is a VM exit), so the retry reliably killed
-    // it.  A genuinely missed SIPI now surfaces as the clean
-    // "AP did not come online" timeout below instead of a machine reset.
+    // One SIPI, no retry.  The SDM's second SIPI exists for an AP that
+    // missed the first while still in the INIT shadow.  It is not sent
+    // here: a blind retry could reach an AP that has already started
+    // (a restart of its bring-up on a running CPU — not a no-op on every
+    // implementation), and a missed SIPI already surfaces as the "AP did
+    // not come online" timeout below.
     let start = cpu::rdtsc();
     while !mach.online.load(Ordering::Acquire) {
         if cpu::rdtsc().wrapping_sub(start) > online_timeout {
