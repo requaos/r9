@@ -2226,15 +2226,29 @@ fn write_curframe(frame: *mut Ureg) {
 }
 
 /// The kstack-ownership record (05-24, the aarch64 `write_curkstack`
-/// port): the kstack top this CPU currently owns, written beside every
-/// TSS rsp0 re-point in the switch paths (activate_first/pick_next) and
-/// cleared by the sched loop's `release_left_proc` when the CPU leaves
-/// the proc's kstack.  pick_next's debug tripwire reads it cross-CPU —
-/// the TSS rsp0 itself can never serve: it is not retracted when the
-/// CPU parks into the scheduler, so it would stale-name a released
-/// proc's stack.
-fn write_curkstack(top: u64) {
-    crate::dat::this_mach().cur_kstack.store(top, Ordering::Relaxed)
+/// port): the identity of the proc kstack this CPU currently owns,
+/// written beside every TSS rsp0 re-point in the switch paths
+/// (activate_first/pick_next) and cleared by the sched loop's
+/// `release_left_proc` when the CPU leaves the proc's kstack.
+/// pick_next's debug tripwire reads it cross-CPU — the TSS rsp0 itself
+/// can never serve: it is not retracted when the CPU parks into the
+/// scheduler, so it would stale-name a released proc's stack.
+///
+/// The identity is the kstack top page's PHYSICAL address ([`kstack_id`]),
+/// not its VA: on x86_64 every proc's kstack is mapped at the one
+/// KSTACK_VA window, each under its own PML4, so the VA cannot tell two
+/// stacks apart.  Ported as a VA compare, the tripwire fired for every
+/// proc a second CPU picked while the first ran any process (observed
+/// live under KVM and TCG: "pid 2 picked while cpu 0 still names its
+/// kernel stack 0xffffc80000004000" — pid 1's stack VA as well).
+fn write_curkstack(top_page_pa: u64) {
+    crate::dat::this_mach().cur_kstack.store(top_page_pa, Ordering::Relaxed)
+}
+
+/// The kstack identity `write_curkstack` records for `p`: its top page
+/// PA — unique among live kstacks, and read-only for the proc's life.
+fn kstack_id(p: &Proc) -> u64 {
+    p.kstack_pas[KSTACK_PAGES - 1]
 }
 
 /// The calling CPU's Mach scheduler stack top (the swtch-based sched
@@ -2259,7 +2273,7 @@ pub fn activate_first(p: &mut Proc) {
     p.on_cpu.store(true, Ordering::Release);
     set_current_proc(p);
     set_tss_rsp0(p.kstack_top as u64);
-    write_curkstack(p.kstack_top as u64);
+    write_curkstack(kstack_id(p));
     write_curframe(p.frame);
     // Install: the proc's user FPU/SSE state (exec loaded the default)
     // goes live.
@@ -2790,10 +2804,11 @@ fn pick_next() -> Option<*mut swtch::Context> {
             let n = num.min(crate::smp::MAX_CPUS);
             let mut c = 0;
             while c < n {
-                if c != my_cpu && crate::smp::cur_kstack_of(c) == Some(p.kstack_top as u64) {
+                if c != my_cpu && crate::smp::cur_kstack_of(c) == Some(kstack_id(p)) {
                     panic!(
-                        "sched: pid {} picked while cpu {c} still names its kernel stack {:#x} — two cpus on one kstack (a preempt/block publish raced the stack handoff)",
-                        p.pid, p.kstack_top
+                        "sched: pid {} picked while cpu {c} still names its kernel stack (top page {:#x}) — two cpus on one kstack (a preempt/block publish raced the stack handoff)",
+                        p.pid,
+                        kstack_id(p)
                     );
                 }
                 c += 1;
@@ -2803,7 +2818,7 @@ fn pick_next() -> Option<*mut swtch::Context> {
         p.on_cpu.store(true, Ordering::Release);
         set_current_proc(p);
         set_tss_rsp0(p.kstack_top as u64);
-        write_curkstack(p.kstack_top as u64);
+        write_curkstack(kstack_id(p));
         write_curframe(p.frame);
         p.blocked_in_kernel = false;
         // Install: the proc's saved user FPU/SSE state goes live (every
