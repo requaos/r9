@@ -718,6 +718,29 @@ impl Mnt {
         self.msize
     }
 
+    /// Build a session over already-negotiated `9P2000.aead` io halves (the
+    /// in-kernel loopback's client, plan 05-20 / SMP-13 / D-28).  The dialect
+    /// negotiation and the plain handshake have already run on the raw halves;
+    /// this wraps the finished client session and hands `Mnt` the plaintext
+    /// `9P2000` view.  The caller's `MntIo` adapter seals each frame with the
+    /// negotiated `Session`, so the kernel's client engine drives the sealed
+    /// loopback exactly as it drives any plain mount.
+    ///
+    /// This is the minimal dialect hook the loopback needs; it is not a plain
+    /// default-boot path (nothing else in the kernel calls it).
+    pub(crate) fn sealed_session(
+        io_r: alloc::boxed::Box<dyn MntIo>,
+        io_w: alloc::boxed::Box<dyn MntIo>,
+        msize: u32,
+    ) -> Mnt {
+        Self::plain_session(
+            MntIoBox(io_r),
+            MntIoBox(io_w),
+            msize,
+            crate::chan::VERSION_AEAD.to_vec(),
+        )
+    }
+
     /// The dialect selection point (WIRE-12, D-23).
     ///
     /// This is where a booted kernel would choose the dialect, and nothing in
