@@ -105,6 +105,14 @@ fn registry_attach(rune: char, spec: &[u8]) -> Result<Chan> {
         // no separate boot profile joins (host pins are the substrate
         // evidence; the live encrypted proof is 19-08's -G gate).
         'D' => Ok(crate::devssl::attach()),
+        // '#M' — the boot-switch-gated in-kernel 9P2000.aead loopback mount
+        // (SMP-13, D-28).  Dormant on every default boot: attach_root returns
+        // the donor Enodev shape ("namec: unknown # device") when the exact
+        // `aeadloop=1` boot token was absent.  When active it returns a fresh
+        // fid-cloned DEV_MNT root chan, so userland reaches '#M/data0'..'#M/data7'
+        // directly through the kernel device attach, surviving init's
+        // rfork(RFCNAMEG)/newns with no writable /n in the read-only bootfs.paq.
+        'M' => crate::aead_loop::attach_root(spec),
         _ => Err("namec: unknown # device"),
     }
 }

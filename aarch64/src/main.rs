@@ -502,8 +502,21 @@ pub extern "C" fn main9(dtb_va: usize) {
             }
             println!("setops: simd=neon selftest=ok");
         }
+        // SMP-13/D-28: start the in-kernel 9P2000.aead loopback server only
+        // when the DTB /chosen/bootargs carry the exact `aeadloop=1` token.
+        // The read sits inside this dev_exec block on purpose: platform::bootconf
+        // is cfg(any(test, dev_exec)), so non-dev_exec virt configs never
+        // reference it.  A default boot allocates nothing and exposes no #M.
         #[cfg(all(dev_exec, any(not(dev_churn), dev_bootchain)))]
-        exec_bootstrap(&dt, initrd_img, platform::bootconf::read_bootargs(&dt));
+        {
+            let bootargs = platform::bootconf::read_bootargs(&dt);
+            if port::aead_loop::maybe_start_from_cmdline(
+                core::str::from_utf8(bootargs.as_bytes()).unwrap_or(""),
+            ) {
+                println!("aeadloop: active device=#M dialect=9P2000.aead");
+            }
+            exec_bootstrap(&dt, initrd_img, bootargs);
+        }
         #[cfg(all(dev_exec, dev_churn, not(dev_bootchain)))]
         platform::virt::churngate::bootstrap_and_run(&dt, initrd_img);
         #[cfg(not(dev_exec))]

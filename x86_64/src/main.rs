@@ -371,8 +371,19 @@ pub extern "C" fn main(mach: &mut dat::Mach, mbdata: u64) {
         }
     }
 
+    // SMP-13/D-28: start the in-kernel 9P2000.aead loopback server only when
+    // the Multiboot2 command line (GRUB `-append` lineage, the x86_64 analog
+    // of the DTB /chosen/bootargs) carries the exact `aeadloop=1` token.  A
+    // default boot allocates nothing and exposes no #M.
     #[cfg(all(dev_exec, any(not(dev_churn), dev_bootchain)))]
-    exec_bootstrap(facts);
+    {
+        if port::aead_loop::maybe_start_from_cmdline(
+            core::str::from_utf8(facts.cmdline()).unwrap_or(""),
+        ) {
+            println!("aeadloop: active device=#M dialect=9P2000.aead");
+        }
+        exec_bootstrap(facts);
+    }
 
     // SMP-01/SMP-07: the churn driver's venue starts the MADT-declared
     // APs before the bootstrap builds the driver — the APs idle in
