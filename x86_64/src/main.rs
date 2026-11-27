@@ -543,7 +543,7 @@ fn start_aps_and_self_check() {
 /// this is a bring-up marker, not console output, and it is the only
 /// signal that survives a triple fault in the AP.
 #[cfg(not(test))]
-fn ap_mark(b: u8) {
+pub(crate) fn ap_mark(b: u8) {
     // SAFETY: CPL 0 port I/O to the architectural q35 COM1 THR; the
     // poll reads the 16550's LSR (offset 5) THRE bit (0x20).
     unsafe {

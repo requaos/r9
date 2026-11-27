@@ -270,10 +270,12 @@ impl Lapic {
                 // §10.12.9 ordering discipline (the write is not
                 // serializing); the asm! block carries no `nomem`, so
                 // the compiler cannot hoist a store past it either.
+                crate::ap_mark(b'a');
                 unsafe {
                     core::arch::asm!("mfence", "lfence", options(att_syntax, nostack));
                     cpu::wrmsr(Self::x2apic_msr(ICR_LO), icr);
                 }
+                crate::ap_mark(b'b');
             }
         }
     }
