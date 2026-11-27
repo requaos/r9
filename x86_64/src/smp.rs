@@ -205,10 +205,8 @@ fn start_one_ap(cpu_id: usize, apic_id: u32, bootpml4_pa: u64) -> Result<(), &'s
     // is ordered by the INIT reset itself).
     fence(Ordering::Release);
 
-    println!("smp: cpu {cpu_id} (apic {apic_id:#x}): sending INIT");
     lapic::send_init(apic_id);
     busy_wait_tsc(ten_ms);
-    println!("smp: cpu {cpu_id} (apic {apic_id:#x}): INIT sent, sending SIPI");
     lapic::send_sipi(apic_id, SIPI_VECTOR);
     // NO second SIPI.  The SDM's retry exists for an AP that missed the
     // first SIPI while still in the INIT shadow, but a SIPI delivered to
@@ -220,7 +218,6 @@ fn start_one_ap(cpu_id: usize, apic_id: u32, bootpml4_pa: u64) -> Result<(), &'s
     // bring-up marker byte is a VM exit), so the retry reliably killed
     // it.  A genuinely missed SIPI now surfaces as the clean
     // "AP did not come online" timeout below instead of a machine reset.
-    println!("smp: cpu {cpu_id} (apic {apic_id:#x}): SIPI sent, polling online");
     let start = cpu::rdtsc();
     while !mach.online.load(Ordering::Acquire) {
         if cpu::rdtsc().wrapping_sub(start) > online_timeout {
@@ -251,8 +248,7 @@ pub fn start_aps(madt: &acpi::Madt, bootpml4_pa: u64) -> usize {
         if cpu.apic_id == bsp_apic {
             continue; // the BSP itself
         }
-        println!("smp: starting APs (madt ncpus={}, bsp apic={bsp_apic:#x})", madt.ncpus);
-    if started >= MAX_CPUS - 1 {
+        if started >= MAX_CPUS - 1 {
             println!("smp: more enabled CPUs than MAX_CPUS ({MAX_CPUS}); skipping the rest");
             break;
         }
