@@ -710,6 +710,11 @@ fn pte_restore(slot: *mut u64, old: u64) {
 
 /// Unmap every mapping of `pa` from every proc's user table (MEM-15/D-14).
 ///
+/// The caller holds `PAGE_CACHE` (Rank 20) through `with_lock`, so a
+/// concurrent page-in on the other CPU serializes behind this swap; the
+/// candidate's key was already removed from the hash by
+/// `select_eviction_victim`.
+///
 /// For `PageKind::UntouchedData` the leaf is cleared with
 /// `AtomicU64::swap(0, AcqRel)` and the old entry inspected for `PTE_D`
 /// while `PROC_TABLE` (Rank 50) is held: a concurrent store that the CPU
@@ -717,10 +722,6 @@ fn pte_restore(slot: *mut u64, old: u64) {
 /// (Pitfall 3 / T-05-34).  `PageKind::SharedText` pages are read-only, so
 /// they can never be dirty.  The caller shoots the TLB down before the
 /// frame returns to `PAGE_ALLOC`.
-///
-/// The page-cache key was already removed under `PAGE_CACHE` (Rank 20) by
-/// `select_eviction_victim` before this call, so no concurrent fault can
-/// re-map this cache entry while the leaf is cleared.
 pub(crate) fn evict_user_frame(pa: PhysAddr, kind: port::pagecache::PageKind) -> EvictOutcome {
     let page = pa.addr();
     let node = LockNode::new();
@@ -791,7 +792,7 @@ pub(crate) fn evict_re_readable_pages(target: usize) -> usize {
             port::palloc::record_pinned_skipped();
             continue;
         }
-        match evict_user_frame(candidate.pa, candidate.kind) {
+        match cache.with_lock(|| evict_user_frame(candidate.pa, candidate.kind)) {
             EvictOutcome::Dropped(va) => {
                 // Text is RO and never dirty; data passes the cleared VA so
                 // the remote flush targets it.  Text flushes everything.

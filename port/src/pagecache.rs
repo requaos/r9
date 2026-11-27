@@ -191,6 +191,20 @@ impl PageCache {
         Some(CachedPage { key, pa, kind })
     }
 
+    /// Run `f` while holding the cache lock (`LockRank::PageCache`, 20).
+    ///
+    /// The arch evictor uses this to keep the race-free `PTE_D` inspection
+    /// atomic with respect to a concurrent page-in (T-05-34): a fault that
+    /// observes the cleared leaf must first take this lock, so it cannot
+    /// install a fresh frame over a page that is being restored dirty.
+    /// `f` MUST NOT call back into `PageCache` (the lock is not reentrant);
+    /// taking `PROC_TABLE` (Rank 50) inside is the intended ascending use.
+    pub fn with_lock<R>(&self, f: impl FnOnce() -> R) -> R {
+        let node = LockNode::new();
+        let _guard = self.state.lock(&node);
+        f()
+    }
+
     /// Cache a shared text frame (mapped read-only by every process).
     pub fn insert_text(&self, key: PageKey, pa: PhysAddr) -> Result<(), PageCacheError> {
         self.insert_entry(key, pa, PageKind::SharedText)
