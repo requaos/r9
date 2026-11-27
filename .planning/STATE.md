@@ -145,6 +145,7 @@ None yet.
   >90% home-hit property is measured with fixture-sized banks and the Phase 4 FidShard uses 0
   banks (INT-05); `04-VALIDATION.md` is `draft` (run `/gsd-validate-phase 4`);
   `docs/threat-model.md:181` still frames rfork bits 18-20 as unreserved (WR-04).
+- **Phase 5 open defects (2026-11-27, owner chose fix-now):** (1) aarch64 live evictor reclaims nothing under pressure — `fault: phys page alloc failed` kills the caller and the mem-pressure counters stay 0/0/0 (debug session `aarch64-palloc-evictor` active; locally reproducible); (2) the mem-pressure gate's `pinned_skipped > 0` criterion is structurally unreachable from this image and is being replaced; (3) x86_64 `-smp 2` under real KVM resets right after ring-3 entry with no `smp: cpu 1 online` (pre-dates 05-19; SIPI-retry fix did not cure it — needs the QEMU exception-vector log); (4) x86_64 `-smp 1` cpu-chain hangs at `cpu-keyfs-ok` (new since 5a3d5e4). Evidence: `kvm-evidence-20261127T015715Z`. Phase 5 stays at 26/27 until these are green or the owner waives them.
 - **Pre-existing and carried:** `cargo xtask clippy --arch aarch64 --config virtshell` fails on
   7 undocumented `unsafe` blocks in `aarch64/`; repo-wide `cargo fmt --all -- --check` is red;
   the docs still pin r9 at `c787ce9` while `crypto/`, `ds/` and the wire foundation now exist —
