@@ -1095,3 +1095,43 @@ fn aead_fid_stateless_tag_is_keyed_blake3_of_label_and_wire_body() {
         "the 8-byte tag is the truncation of keyed BLAKE3 over the label and the wire body (P8)"
     );
 }
+
+// ---------------------------------------------------------------------------
+// SMP-13 / D-28: the boot-switch-gated in-kernel 9P2000.aead loopback
+// server, driven through the public API exactly as userland reaches '#M'.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn aead_loop_boot_switch_is_exact_and_starts_nothing_by_default() {
+    assert!(!port::aead_loop::parse_boot_switch("console=ttyS0 root=/dev/vda"));
+    assert!(!port::aead_loop::parse_boot_switch("aeadloop=0"));
+    assert!(!port::aead_loop::parse_boot_switch("aeadloop=11"));
+    assert!(port::aead_loop::parse_boot_switch("aeadloop=1"));
+    assert!(
+        port::aead_loop::start("console=ttyS0 root=/dev/vda").is_none(),
+        "a default boot starts no loopback server (D-28)"
+    );
+}
+
+#[test]
+fn aead_loop_public_api_reads_a_deterministic_file() {
+    let Some(loopback) = port::aead_loop::start("aeadloop=1") else {
+        panic!("the exact aeadloop=1 token must start the loopback");
+    };
+    let root = loopback.attach_root(b"").expect("the active #M attach returns a root chan");
+    let walked = port::namec::walk_one(&root, b"data3").expect("walk data3");
+    assert_eq!(walked.qid.path, 0x1000 + 1 + 3, "data3 carries its deterministic qid path");
+    let mut opened = port::namec::open_chan(&walked, port::dat::OREAD).expect("open data3");
+    let mut buf = vec![0u8; 4096];
+    let n = port::devmnt::read(&mut opened, &mut buf, 0).expect("read data3") as usize;
+    assert_eq!(n, 4096, "the whole 4 KiB file is returned");
+    for (off, byte) in buf[..n].iter().enumerate() {
+        let expected = 3u8
+            .wrapping_mul(37)
+            .wrapping_add((off as u8).wrapping_mul(3))
+            .wrapping_add(1);
+        assert_eq!(*byte, expected, "data3 byte {off} matches the deterministic pattern");
+    }
+    drop(walked);
+    port::namec::close_chan(&opened);
+}
