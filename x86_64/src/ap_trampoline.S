@@ -155,6 +155,14 @@ ap_long64:
 	movq	(%rax), %rsi
 	movabsq	$MB_ENTRY_VA, %rax
 	movq	(%rax), %rax
+	// Bring-up marker 'T' on COM1 (raw, lock-free): the AP reached
+	// 64-bit mode with the BSP's page tables.  A capture that shows no
+	// 'T' means the AP died in the trampoline; a 'T' with no later
+	// marker localises the fault to ap_main.
+	movw	$0x3F8, %dx
+	movb	$0x54, %al
+	outb	%al, %dx
+
 	// Zero the frame-pointer chain root and jump to ap_main (it
 	// never returns).
 	xorl	%ebp, %ebp

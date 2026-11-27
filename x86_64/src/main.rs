@@ -538,6 +538,27 @@ fn start_aps_and_self_check() {
 /// iret — the BSP's own discipline (kernel code runs IF=0).
 #[cfg(not(test))]
 #[unsafe(no_mangle)]
+/// Raw, lock-free COM1 byte from the AP bring-up path.  The console
+/// driver may be mid-write on the BSP, so a stray byte is possible —
+/// this is a bring-up marker, not console output, and it is the only
+/// signal that survives a triple fault in the AP.
+#[cfg(not(test))]
+fn ap_mark(b: u8) {
+    // SAFETY: CPL 0 port I/O to the architectural q35 COM1 THR; the
+    // poll reads the 16550's LSR (offset 5) THRE bit (0x20).
+    unsafe {
+        let mut spins = 0u32;
+        while crate::pio::inb(crate::uart16550::COM1 + 5) & 0x20 == 0 {
+            spins += 1;
+            if spins > 1_000_000 {
+                break;
+            }
+            core::hint::spin_loop();
+        }
+        crate::pio::outb(crate::uart16550::COM1, b);
+    }
+}
+
 pub extern "C" fn ap_main(mach_va: usize, cpu_id: usize) -> ! {
     // SAFETY: mach_va names this CPU's live, zeroed, exclusively-owned
     // Mach (start_aps allocated it and wrote its identity before the
@@ -550,6 +571,7 @@ pub extern "C" fn ap_main(mach_va: usize, cpu_id: usize) -> ! {
     //    restarts us at the real-mode vector with paging already on and
     //    triple-faults the machine (the KVM bring-up bug).
     mach.started.store(true, Ordering::Release);
+    ap_mark(b'2');
 
     // 1. The per-CPU GS base FIRST (SMP-02): every kernel Mach access on
     //    this CPU from here on reads `%gs:0` (dat::this_mach()).  FS = 0
@@ -584,6 +606,7 @@ pub extern "C" fn ap_main(mach_va: usize, cpu_id: usize) -> ! {
     // values matching the just-loaded GDT (both sides derive from
     // seg::GdtData).
     unsafe { arm_syscall_entry(mach) };
+    ap_mark(b'3');
 
     // 4. This CPU's FPU bring-up (MEM-18, D-20): apply the BSP's
     //    published format — CR4.OSXSAVE + XCR0 = 0x7 identically to the
@@ -593,11 +616,13 @@ pub extern "C" fn ap_main(mach_va: usize, cpu_id: usize) -> ! {
     //    clean (05-12's init_cpu; the first proc install restores its
     //    seeded state).
     fpu::init_ap();
+    ap_mark(b'4');
 
     // 5. This CPU's LAPIC + LAPIC timer — armed from the BSP's
     //    published calibration (never a re-run of the PIT/TSC
     //    calibration).
     platform::q35::lapic::init_ap();
+    ap_mark(b'5');
 
     // 6. Publish, in order: this CPU's Mach slot (the IPI senders' cpu→
     //    APIC routing), the online flag (the BSP's start_one_ap poll
@@ -607,6 +632,7 @@ pub extern "C" fn ap_main(mach_va: usize, cpu_id: usize) -> ! {
     smp::publish_ap_mach(cpu_id, mach_va);
     mach.online.store(true, Ordering::Release);
     smp::mark_cpu_online();
+    ap_mark(b'6');
 
     // 7. Enter this CPU's scheduler loop on its own Mach stack (never
     //    returns): pick_next pops this CPU's run queue (stealing a
