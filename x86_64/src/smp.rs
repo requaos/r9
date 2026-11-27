@@ -203,8 +203,10 @@ fn start_one_ap(cpu_id: usize, apic_id: u32, bootpml4_pa: u64) -> Result<(), &'s
     // is ordered by the INIT reset itself).
     fence(Ordering::Release);
 
+    println!("smp: cpu {cpu_id} (apic {apic_id:#x}): sending INIT");
     lapic::send_init(apic_id);
     busy_wait_tsc(ten_ms);
+    println!("smp: cpu {cpu_id} (apic {apic_id:#x}): INIT sent, sending SIPI");
     lapic::send_sipi(apic_id, SIPI_VECTOR);
     // The SDM's second SIPI is a retry for an AP that MISSED the first
     // while still in the INIT shadow -- it is only safe while the AP has
@@ -226,6 +228,7 @@ fn start_one_ap(cpu_id: usize, apic_id: u32, bootpml4_pa: u64) -> Result<(), &'s
     if !mach.started.load(Ordering::Acquire) && !mach.online.load(Ordering::Acquire) {
         lapic::send_sipi(apic_id, SIPI_VECTOR);
     }
+    println!("smp: cpu {cpu_id} (apic {apic_id:#x}): SIPI sent, polling online");
     let start = cpu::rdtsc();
     while !mach.online.load(Ordering::Acquire) {
         if cpu::rdtsc().wrapping_sub(start) > online_timeout {
@@ -256,7 +259,8 @@ pub fn start_aps(madt: &acpi::Madt, bootpml4_pa: u64) -> usize {
         if cpu.apic_id == bsp_apic {
             continue; // the BSP itself
         }
-        if started >= MAX_CPUS - 1 {
+        println!("smp: starting APs (madt ncpus={}, bsp apic={bsp_apic:#x})", madt.ncpus);
+    if started >= MAX_CPUS - 1 {
             println!("smp: more enabled CPUs than MAX_CPUS ({MAX_CPUS}); skipping the rest");
             break;
         }
