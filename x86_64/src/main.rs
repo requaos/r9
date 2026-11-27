@@ -310,16 +310,17 @@ pub extern "C" fn main(mach: &mut dat::Mach, mbdata: u64) {
     // APs and prove the LAPIC 0xF0 shootdown path BEFORE the unmask, so
     // an AP never observes a half-armed kernel (D-26's ordering); the
     // BSP's poll is TSC-paced (no tick dependence).
-    // SMP-01/SMP-09: this MUST also run on the dev_exec boot path.  The
-    // composed gates (smoke/net/rio/tier-1) all boot dev_exec kernels, and
-    // the -smp 2 gates assert `smp: cpu 1 online`; leaving AP startup
-    // cfg'd out here meant x86_64 never actually ran two CPUs on the
-    // composed path, and every -smp 2 gate waited for a marker the kernel
-    // could not print.  The arming-window ordering above is identical on
-    // both paths, so the APs still never observe a half-armed kernel.
-    // IF stays 0 (dev_exec unmasks at the ring-3 iret); start_aps polls
-    // online with TSC-paced busy waits, no tick dependence.
-    #[cfg(not(test))]
+    // NOT under dev_exec: the exec bootstrap starts the APs at its own
+    // tail (exec_bootstrap, after pid 1 is claimed — the 05-22
+    // claim-then-start ordering).  A secondary already in sched_loop here
+    // would take the 0xF1 that exec_into's Ready enqueue sends to an
+    // idle cpu, pick pid 1 inside its Ready→Running window and run it on
+    // the same kstack the BSP is about to activate itself (observed live
+    // under KVM as the AP double-faulting right after that IPI), and the
+    // bootstrap tail's start would then INIT-reset an online AP and
+    // count it twice.  The composed gates get their `smp: cpu 1 online`
+    // from that tail call, before any userland runs.
+    #[cfg(all(not(test), not(dev_exec)))]
     start_aps_and_self_check();
     #[cfg(not(dev_exec))]
     cpu::sti();
