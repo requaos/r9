@@ -131,14 +131,23 @@ ap_prot32:
 	// CR4 than the kernel it joins; FSGSBASE stays off, as on the
 	// BSP — TCG's qemu64 lacks it).
 	movl	%cr4, %eax
+	movl	%eax, %ebx
+	ap_mark	0x34			// 4: CR4 read
+	movl	%ebx, %eax
 	orl	$(Cr4PAE|Cr4PGE|Cr4OSFXSR|Cr4OSXMMEXCPT), %eax
 	movl	%eax, %cr4
+	movl	%eax, %ebx
+	ap_mark	0x35			// 5: CR4 written
+	movl	%ebx, %eax
 
 	// CR3: the BSP's bootpml4 PA from the mailbox (identity-maps the
 	// first 4 GiB, so this page stays executing at PA == VA).
 	movl	(MB_PML4_PA), %eax
+	movl	%eax, %ebx
+	ap_mark	0x36			// 6: PML4 PA read
+	movl	%ebx, %eax
 	movl	%eax, %cr3
-	ap_mark	0x43
+	ap_mark	0x43			// C: CR3 loaded
 
 	// EFER: LME + NXE (matching l.S's BSP write).
 	movl	$IA32_EFER, %ecx
