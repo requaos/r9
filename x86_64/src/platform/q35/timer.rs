@@ -82,7 +82,9 @@ pub fn tsc_delta(freq_hz: u64, duration_ms: u64) -> Option<u64> {
 #[derive(Clone, Copy)]
 pub struct TimerState {
     pub mode: TimerMode,
-    /// TSC-deadline: TSC ticks per tick interval.
+    /// TSC ticks per tick interval — recorded in both modes (smp's
+    /// start_one_ap paces the AP bring-up with it); `tick_rearm` reads
+    /// it in TscDeadline mode only.
     pub tsc_delta: u64,
     /// Periodic: LAPIC ICR count per tick interval.
     pub icr: u32,
@@ -200,7 +202,15 @@ pub fn init() {
             lapic::timer_init_count(icr);
             // Unmask LAST: the LVT carried the mask through calibration.
             lapic::timer_lvt(trap::TIMER_VECTOR, lapic::LVT_PERIODIC);
-            TimerState { mode, tsc_delta: 0, icr }
+            // tsc_delta is recorded in BOTH modes: start_one_ap paces the
+            // AP bring-up (the INIT→SIPI 10 ms, the online timeout) with
+            // it, and the TSC rate is resolved above regardless of how
+            // the tick is armed.  Published as 0 here it collapsed both
+            // delays on the periodic venue (TCG's qemu64 has no
+            // TSC-deadline timer): the SIPI went out one cycle after
+            // INIT and the online poll gave up ~0.4 ms later, before
+            // the AP had run ap_main (measured live, TCG, 27-11).
+            TimerState { mode, tsc_delta: tsc_delta(tsc_hz, TICK_MS).unwrap_or(0), icr }
         }
     };
 
