@@ -2,7 +2,7 @@
 status: investigating
 trigger: "x86_64 -smp 2 on BOTH accels, after the AP bring-up fixes (debug/x86_64-ap-bringup): the two CPUs wedge the first time one queues on an MCS lock whose holder runs in process context, because the hand-off writes the predecessor's node at a kernel-stack VA that is private to the holder's process. No panic and nothing on the wire — the boot stops after `paqfs...`. Blocks every x86_64 -smp 2 gate."
 created: 2026-11-27T20:45:31.000Z
-updated: 2026-11-27T20:45:31.000Z
+updated: 2026-11-27T21:51:44.000Z
 ---
 
 ## Current Focus
@@ -67,6 +67,11 @@ started: "Latent since the 05-24 MCS port. First reached on 2026-11-27 when the 
   checked: "Why single-CPU gates never saw it"
   found: "CI's main x86_64 smoke job pins R9_SMP=1 (.github/workflows/gates.yml:148-158); the avx2 TCG leg keeps the -smp 2 default. On TCG the AP bring-up collapsed until 3f1b76a (timer deltas of zero in periodic mode), so no composed gate has ever had an AP past bring-up on TCG, and KVM had none before b4ec82f. 05-12-SUMMARY.md:257 records that x86_64 boots could not run on the dev host."
   implication: "The two-CPU x86_64 path has not had a green run on any venue so far; CI history for the -smp 2 legs was not checked"
+
+- timestamp: 2026-11-27T21:51:44.000Z
+  checked: "The owner's own gate run at the tip (kernel 481a330, KVM, -smp 2), then that run's ISO booted under the gdb stub (target/ap-debug/wedge.py)"
+  found: "In the owner's run the serial capture did not change for 7+ minutes while both vCPU threads took 3000 ms of CPU per 3 s window and QEMU's main thread took none. In the instrumented boot of the same ISO the wire stayed silent for 60 s with: CPU 0 at mcslock.rs:95 — MCSLock::unlock's compare_exchange_weak loop, holding the heap lock through IrqLockGuard<QuickFit>::drop from a buffer re-allocation in sys_open → namec_walk → paqfs read_block; CPU 1 at mcslock.rs:65 — MCSLock::lock's `while node.locked.load()`, waiting for that heap lock from a Vec dealloc in sys_dup, its node at kstack-window address 0xffffc80000003b40. IF=0 on both."
+  implication: "The wedge is the one above, seen in the owner's artifact: the holder waits for a successor link that was written to the wrong stack, the waiter for a release that cannot come, both with interrupts masked. The contended lock varies with timing (heap lock here, the page-frame pool's lock in another run of the same ISO); the mechanism does not."
 
 ## Constraints
 
