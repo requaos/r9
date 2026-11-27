@@ -24,8 +24,88 @@
 
 use alloc::vec::Vec;
 
+use port::mem::{PAGE_SIZE_4K, PhysAddr};
+use port::palloc::phys_to_pfn;
+
 use crate::fault;
 use crate::proc::Proc;
+
+/// RAII pin of every physical frame backing a user buffer (MEM-10, D-21).
+///
+/// The common syscall buffer (<= 16 KiB, four 4 KiB pages) pins in the
+/// inline `[u32; 4]` array with zero heap allocation; larger buffers spill
+/// to an owned `Vec`.  `Drop` unpins each frame, so a path that sleeps while
+/// holding a `UserSlice`/`UserSliceMut` keeps the concurrent evictor away
+/// from its pages, and nested/overlapping slices work through the per-frame
+/// atomic pin counts.
+pub struct PinGuard {
+    inline: [u32; 4],
+    len: u8,
+    overflow: Option<Vec<u32>>,
+}
+
+impl PinGuard {
+    /// No pages pinned (the `validated_only` non-sleeping constructors).
+    pub const fn empty() -> Self {
+        Self { inline: [0; 4], len: 0, overflow: None }
+    }
+
+    fn push(&mut self, pfn: u32) {
+        if (self.len as usize) < self.inline.len() {
+            self.inline[self.len as usize] = pfn;
+            self.len += 1;
+        } else {
+            self.overflow.get_or_insert_with(Vec::new).push(pfn);
+        }
+    }
+
+    /// Unpin every recorded frame (also the rollback path on a mid-span
+    /// error).
+    fn unpin_all(&mut self) {
+        for index in 0..self.len as usize {
+            let _ = crate::pagealloc::unpin_frame(self.inline[index]);
+        }
+        self.len = 0;
+        if let Some(frames) = self.overflow.take() {
+            for pfn in frames {
+                let _ = crate::pagealloc::unpin_frame(pfn);
+            }
+        }
+    }
+}
+
+impl Drop for PinGuard {
+    fn drop(&mut self) {
+        self.unpin_all();
+    }
+}
+
+/// Pin every resident page of `[va, va + len)`, rolling back on any error.
+fn pin_user_span(proc: &Proc, va: u64, len: u64) -> Result<PinGuard, &'static str> {
+    let mut guard = PinGuard::empty();
+    if len == 0 {
+        return Ok(guard);
+    }
+    let start = (va as usize) & !(PAGE_SIZE_4K - 1);
+    let end = (va as usize).wrapping_add(len as usize);
+    let mut page = start;
+    while page < end {
+        let record = proc
+            .mapping_log
+            .iter()
+            .find(|mapping| mapping.va == page)
+            .ok_or("usermem: page not resident")?;
+        let pfn = phys_to_pfn(PhysAddr::new(record.phys as u64))
+            .map_err(|_| "usermem: bad page address")?;
+        if crate::pagealloc::pin_frame(pfn).is_err() {
+            guard.unpin_all();
+            return Err("usermem: pin failed");
+        }
+        guard.push(pfn);
+        page += PAGE_SIZE_4K;
+    }
+    Ok(guard)
+}
 
 /// A validated, resident, read-only view of a byte range in the calling
 /// proc's user space.  Holds the raw VA + length; `as_slice` materializes
@@ -33,16 +113,18 @@ use crate::proc::Proc;
 pub struct UserSlice {
     ptr: *const u8,
     len: usize,
+    _pin: PinGuard,
 }
 
 impl UserSlice {
     /// The fused constructor: validate the range against the
-    /// proc's segment map, then force its pages resident, before anything
-    /// dereferenceable exists.
+    /// proc's segment map, force its pages resident, then pin every frame
+    /// across the syscall (including any sleep it takes).
     pub fn new(proc: &mut Proc, va: u64, len: u64) -> Result<UserSlice, &'static str> {
         proc.validate_user_range(va, len, false)?;
-        fault::ensure_user_resident(proc, va as usize, va.wrapping_add(len) as usize);
-        Ok(UserSlice { ptr: va as *const u8, len: len as usize })
+        fault::ensure_user_resident(proc, va as usize, va.wrapping_add(len) as usize, false)?;
+        let pin = pin_user_span(proc, va, len)?;
+        Ok(UserSlice { ptr: va as *const u8, len: len as usize, _pin: pin })
     }
 
     /// Validate-only variant (documented; zero-behavior-change): for ranges
@@ -51,7 +133,7 @@ impl UserSlice {
     /// window (forced resident at delivery).  Never use for a cold buffer.
     pub fn validated_only(proc: &Proc, va: u64, len: u64) -> Result<UserSlice, &'static str> {
         proc.validate_user_range(va, len, false)?;
-        Ok(UserSlice { ptr: va as *const u8, len: len as usize })
+        Ok(UserSlice { ptr: va as *const u8, len: len as usize, _pin: PinGuard::empty() })
     }
 
     /// The materialized read-only slice.  Valid only for the duration of
@@ -87,15 +169,19 @@ impl UserSlice {
 pub struct UserSliceMut {
     ptr: *mut u8,
     len: usize,
+    _pin: PinGuard,
 }
 
 impl UserSliceMut {
     /// The fused constructor (writable variant): validate with the
-    /// writable flag, then force resident.
+    /// writable flag, force resident (promoting clean `SegKind::Data` pages
+    /// to `AllRw` + dirty so EL1 writes never fault — Pitfall 2), then pin
+    /// every frame across the syscall.
     pub fn new(proc: &mut Proc, va: u64, len: u64) -> Result<UserSliceMut, &'static str> {
         proc.validate_user_range(va, len, true)?;
-        fault::ensure_user_resident(proc, va as usize, va.wrapping_add(len) as usize);
-        Ok(UserSliceMut { ptr: va as *mut u8, len: len as usize })
+        fault::ensure_user_resident(proc, va as usize, va.wrapping_add(len) as usize, true)?;
+        let pin = pin_user_span(proc, va, len)?;
+        Ok(UserSliceMut { ptr: va as *mut u8, len: len as usize, _pin: pin })
     }
 
     /// The materialized writable slice (valid for the syscall's duration —
