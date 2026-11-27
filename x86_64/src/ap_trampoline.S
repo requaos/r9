@@ -66,6 +66,22 @@
 .set EferLME,		(1<<8)		// Long Mode Enable
 .set EferNXE,		(1<<11)		// No-Execute Enable
 
+.macro ap_mark ch
+	movw	$0x3F8, %dx
+	movb	$0x0a, %al
+	outb	%al, %dx
+	movb	$0x41, %al
+	outb	%al, %dx
+	movb	$0x50, %al
+	outb	%al, %dx
+	movb	$0x3a, %al
+	outb	%al, %dx
+	movb	$\ch, %al
+	outb	%al, %dx
+	movb	$0x0a, %al
+	outb	%al, %dx
+.endm
+
 .section .rodata
 .balign 4096
 .globl ap_trampoline_start
@@ -80,11 +96,13 @@ ap_trampoline_start:
 	movw	%ax, %ds
 	movw	%ax, %es
 	movw	%ax, %ss
+	ap_mark	0x52
 
 	// Load the embedded GDT (16-bit lgdt reads a 6-byte
 	// pseudo-descriptor: u16 limit then u32 base; the base field below
 	// carries the GDT's run-time physical address inside this page).
 	lgdtl	(AP_BASE + ap_gdt_desc - ap_trampoline_start)
+	ap_mark	0x47
 
 	// Protected mode enable.
 	movl	%cr0, %eax
@@ -105,6 +123,7 @@ ap_prot32:
 	movw	%ax, %ss
 	movw	%ax, %fs
 	movw	%ax, %gs
+	ap_mark	0x50
 
 	// CR4: PAE is the long-mode requirement; PGE + the user-SSE pair
 	// mirror the BSP's l.S CR4 (CPU 0 sets
@@ -119,6 +138,7 @@ ap_prot32:
 	// first 4 GiB, so this page stays executing at PA == VA).
 	movl	(MB_PML4_PA), %eax
 	movl	%eax, %cr3
+	ap_mark	0x43
 
 	// EFER: LME + NXE (matching l.S's BSP write).
 	movl	$IA32_EFER, %ecx
@@ -153,25 +173,10 @@ ap_long64:
 	movq	(%rax), %rdi
 	movabsq	$MB_CPU_ID, %rax
 	movq	(%rax), %rsi
+	ap_mark	0x4a
 	movabsq	$MB_ENTRY_VA, %rax
 	movq	(%rax), %rax
-	// Bring-up marker 'T' on COM1 (raw, lock-free): the AP reached
-	// 64-bit mode with the BSP's page tables.  A capture that shows no
-	// 'T' means the AP died in the trampoline; a 'T' with no later
-	// marker localises the fault to ap_main.
-	movw	$0x3F8, %dx
-	movb	$0x0a, %al
-	outb	%al, %dx
-	movb	$0x41, %al
-	outb	%al, %dx
-	movb	$0x50, %al
-	outb	%al, %dx
-	movb	$0x3a, %al
-	outb	%al, %dx
-	movb	$0x54, %al
-	outb	%al, %dx
-	movb	$0x0a, %al
-	outb	%al, %dx
+	ap_mark	0x54			// T: 64-bit long mode
 
 	// Zero the frame-pointer chain root and jump to ap_main (it
 	// never returns).
