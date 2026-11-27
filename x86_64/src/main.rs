@@ -10,6 +10,7 @@ mod allocator;
 mod cpu;
 mod dat;
 mod entropy;
+mod kstack;
 mod pagealloc;
 mod pio;
 mod platform;

@@ -89,6 +89,21 @@ fn ceil_frame(addr: u64) -> u64 {
     floor_frame(addr.saturating_add(FRAME_SIZE as u64 - 1))
 }
 
+/// Where the kernel-stack arena goes: the lowest `bytes`-long span that
+/// is aligned to a stack slot, lies inside ONE available range, starts
+/// at or above the kernel image, and stays below the alias ceiling the
+/// stacks are reached through.  None when no range has room — the boot
+/// then fails loudly rather than starting without process stacks.
+fn kstack_arena_base(avail: &[(u64, u64)], kernel_phys_end: u64, bytes: u64) -> Option<u64> {
+    let slot = crate::kstack::SLOT_BYTES;
+    let lowest = kernel_phys_end.div_ceil(slot) * slot;
+    avail.iter().find_map(|&(start, end)| {
+        let start = start.max(lowest).div_ceil(slot) * slot;
+        let end = end.min(crate::proc::KZERO_MAP_LIMIT);
+        start.checked_add(bytes).filter(|&top| top <= end).map(|_| start)
+    })
+}
+
 pub fn init_page_allocator(facts: &Facts, kernel_phys_end: u64) -> Result<(), PageAllocError> {
     // Collect and sort the type-1 ranges: GRUB passes the BIOS e820 order
     // through, which is NOT address-sorted.
@@ -131,15 +146,17 @@ pub fn init_page_allocator(facts: &Facts, kernel_phys_end: u64) -> Result<(), Pa
 
     // The used set, sorted: [0, kernel_phys_end) first, then the gaps
     // between the type-1 ranges (every non-type-1 entry and undeclared hole
-    // inside the span lands in a gap — that keeps them out of the pool).
-    let mut used: [PhysRange; MAX_AVAIL + 1] = core::array::from_fn(|_| PhysRange::with_len(0, 0));
+    // inside the span lands in a gap — that keeps them out of the pool),
+    // then the kernel-stack arena.
+    let mut used: [PhysRange; MAX_AVAIL + 2] = core::array::from_fn(|_| PhysRange::with_len(0, 0));
     used[0] = PhysRange::with_end(0, ceil_frame(kernel_phys_end));
     let mut nused = 1;
     let mut prev_end = span_start;
     for r in &avail[..navail] {
         let (start, end) = *r;
         if start > prev_end {
-            if nused == MAX_AVAIL + 1 {
+            if nused == used.len() - 1 {
+                // One entry stays free for the kernel-stack arena.
                 return Err(PageAllocError::OutOfBounds);
             }
             used[nused] = PhysRange::with_end(floor_frame(prev_end), ceil_frame(start));
@@ -150,10 +167,25 @@ pub fn init_page_allocator(facts: &Facts, kernel_phys_end: u64) -> Result<(), Pa
         }
     }
 
+    // The kernel-stack arena (kstack.rs): MAX_PROCS contiguous 16 KiB
+    // slots withheld from the pools like the kernel image.  Chosen
+    // BEFORE the seeding so the range lands in the used set.
+    let arena_bytes = crate::kstack::arena_bytes();
+    let Some(arena_base) = kstack_arena_base(&avail[..navail], kernel_phys_end, arena_bytes) else {
+        return Err(PageAllocError::OutOfBounds);
+    };
+    if nused == used.len() {
+        return Err(PageAllocError::OutOfBounds);
+    }
+    used[nused] = PhysRange::with_end(arena_base, arena_base + arena_bytes);
+    nused += 1;
+
     let max_frames = max_frames_from_facts(facts);
     let alloc = alloc::boxed::Box::new(PageAlloc::new());
     alloc.init_ranges(span, used[..nused].iter().cloned(), max_frames)?;
     PAGE_ALLOC.store(alloc::boxed::Box::into_raw(alloc), Ordering::Release);
+    #[cfg(not(test))]
+    crate::kstack::init(arena_base);
 
     // The High-Water Pager: seed ~15% clean before the first allocation.
     let _ = page_alloc().refill_clean_pool(zero_frame);
@@ -245,4 +277,56 @@ pub fn usage_bytes() -> (usize, usize) {
         port::println!("palloc: managed_frames={total_frames} low_water={low_water}");
     }
     (used_frames.saturating_mul(FRAME_SIZE), total_frames.saturating_mul(FRAME_SIZE))
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec::Vec;
+
+    use super::kstack_arena_base;
+    use crate::kstack::SLOT_BYTES;
+
+    const SLOT: u64 = SLOT_BYTES;
+
+    /// The gate guest's map: the 640 KiB low range, then everything
+    /// from 1 MiB to just under 1 GiB.
+    fn qavail() -> Vec<(u64, u64)> {
+        vec![(0, 0x9fc00), (0x100000, 0x3ffdf000)]
+    }
+
+    #[test]
+    fn arena_goes_above_the_kernel_image_slot_aligned() {
+        let base = kstack_arena_base(&qavail(), 0xcb61001, 8 << 20).unwrap();
+        assert_eq!(base % SLOT, 0, "slot-aligned");
+        assert!(base >= 0xcb61001, "never over the kernel image");
+        assert_eq!(base, 0xcb64000, "the lowest slot-aligned address past the image");
+        // The low 640 KiB range has no room above a 200 MiB image.
+    }
+
+    #[test]
+    fn arena_skips_a_range_that_cannot_hold_it() {
+        let avail = [(0x100000, 0x200000), (0x4000000, 0x8000000)];
+        let base = kstack_arena_base(&avail, 0x180000, 8 << 20).unwrap();
+        assert_eq!(base, 0x4000000, "the first range has 512 KiB; the second holds it");
+    }
+
+    #[test]
+    fn arena_stays_below_the_alias_ceiling() {
+        // A range running past the 1 GiB (0x4000_0000) the alias covers:
+        // the arena must fit in the covered part, or fail.
+        let avail = [(0x3e000000u64, 0x140000000u64)];
+        assert_eq!(kstack_arena_base(&avail, 0x100000, 16 << 20), Some(0x3e000000));
+        // 4 MiB short of the ceiling: it would fit without the ceiling.
+        let avail = [(0x3fc00000u64, 0x140000000u64)];
+        assert!(
+            kstack_arena_base(&avail, 0x100000, 8 << 20).is_none(),
+            "only 8 MiB is covered and the slot alignment leaves less"
+        );
+    }
+
+    #[test]
+    fn arena_fails_loudly_when_nothing_fits() {
+        assert!(kstack_arena_base(&[], 0x100000, 8 << 20).is_none());
+        assert!(kstack_arena_base(&[(0x100000, 0x200000)], 0x100000, 8 << 20).is_none());
+    }
 }

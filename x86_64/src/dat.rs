@@ -410,8 +410,8 @@ pub struct Mach {
     /// never resumes — the save is write-once, never read.
     pub(crate) park_context: SyncUnsafeCell<Label>,
     /// The kstack-ownership record (05-24, the aarch64
-    /// `PerCpu.cur_kstack` port): the identity (top page PA — the VA is
-    /// the same window for every proc on x86_64) of the proc kstack
+    /// `PerCpu.cur_kstack` port): the identity (top page PA — chosen so
+    /// it never depends on how stacks are mapped) of the proc kstack
     /// this CPU currently owns — written beside every TSS rsp0 re-point
     /// in the switch paths (activate_first/pick_next), cleared by this
     /// CPU's sched-loop `release_left_proc` when the CPU leaves the

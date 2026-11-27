@@ -90,6 +90,7 @@ use port::smp::LockRank;
 use crate::dat::Ureg;
 #[cfg(not(test))]
 use crate::dat::Stack;
+use crate::kstack;
 use crate::swtch;
 
 /// The ring-3 `#PF` demand pager (MEM-14/MEM-15/MEM-16).  Mounted here so
@@ -133,7 +134,7 @@ pub(crate) fn kaddr(pa: u64) -> usize {
 /// leaf), and the q35 gate guest is 1024 MiB — an exact fit.  A page
 /// allocated beyond it would be invisible at the alias; the guard
 /// below makes that loud instead of a wild write.
-const KZERO_MAP_LIMIT: u64 = 1 << 30;
+pub(crate) const KZERO_MAP_LIMIT: u64 = 1 << 30;
 
 /// Plan 9 KNAMELEN (27 + NUL).
 pub const KNAMELEN: usize = 28;
@@ -163,35 +164,17 @@ pub const MAX_PROCS: usize = 2048;
 pub const MAX_FDS: usize = 32;
 /// Per-process kernel stack: 16 KiB (4 pages) — the 9k donor's KSTACK
 /// (mem.h: `#define KSTACK (16*1024)`) and the aarch64 port's value.
-/// The stack is NOT physically contiguous: it maps at the fixed
-/// kernel-half window below, so four independently-allocated pages
-/// form one contiguous VA range (the per-process PML4's own mapping).
-const KSTACK_PAGES: usize = 4;
+/// One contiguous slot of the boot-reserved arena (kstack.rs), reached
+/// at the KZERO alias that every page table carries — so every CPU can
+/// write every other CPU's stack, which the MCS locks' stack-resident
+/// nodes require.
+pub(crate) const KSTACK_PAGES: usize = 4;
 /// The deferred moribund reap record (05-24, the aarch64 05-22
-/// moribund_reap port): an exiting proc's PML4 PA, kstack page PAs, and
-/// kstack intermediate-table PAs, parked on the exiting CPU's
+/// moribund_reap port): an exiting proc's PML4 PA and the base PA of
+/// its kernel-stack slot, parked on the exiting CPU's
 /// `Mach::moribund_reap` slot from `exit_tail` until that CPU's sched
 /// loop frees them after the moribund hand-off swtch (reap_moribund).
-/// The type lives beside KSTACK_PAGES so `dat.rs`'s Mach field can name
-/// it without re-stating the bound.
-pub(crate) type MoribundReap = (u64, [u64; KSTACK_PAGES], [u64; 3]);
-/// The per-process kstack's PML4 slot (index 400 of the 256..509
-/// kernel-half span the boot tables leave free — 510 is the KCPUZERO
-/// Mach window, 511 is KZERO).  Every proc's PML4 maps ITS OWN kstack
-/// at this SAME VA, kernel-only (no PTE_US): the TSS rsp0 and the
-/// SYSCALL/IDT entries find it under whichever per-process table is
-/// active, and ring 3 can never reach it.
-const KSTACK_PML4_INDEX: usize = 400;
-/// The kstack window's base VA (KSTACK_PML4_INDEX sign-extended:
-/// 400 << 39 = 0x0000_c800_0000_0000, bit 47 set, so the canonical
-/// form carries 0xffff in the top half).  The bring-up value
-/// 0xffff_3200_0000_0000 was NON-canonical (0x3200_0000_0000 is index
-/// 100's low-half offset — bits 63:47 disagreed), and any access
-/// through it raised #GP(0): invisible while nothing dereferenced the
-/// window (host tests check PTEs and write via the PA alias), loud the
-/// moment 14-05's bootstrap read the seeded frame through it (PF/#GP
-/// at the exec print, live).
-const KSTACK_VA: usize = 0xffff_c800_0000_0000;
+pub(crate) type MoribundReap = (u64, u64);
 /// Queued-notes capacity (the note delivery path fills it).
 pub const NOTE_QUEUE_CAP: usize = 8;
 /// The exec-recorded argv's byte bound (the /proc/N/args content —
@@ -619,9 +602,8 @@ fn pml4_map_user(
 /// 0x0000_8000_0000_0000).  Every table under them was created by
 /// pml4_map_user and recorded in the owning proc's mapping_tables.
 const USER_PML4_SLOTS: usize = 256;
-const _: () = assert!(KSTACK_PML4_INDEX >= USER_PML4_SLOTS);
 
-/// Clear every user-half entry of the root at `pml4_pa` (the kstack and
+/// Clear every user-half entry of the root at `pml4_pa` (the
 /// kernel-half slots stay: the exit tail still runs on them), then
 /// flush what may still name the tables below.  The per-leaf invlpg's
 /// came first, and a walk after them can re-cache an upper-level entry
@@ -1311,18 +1293,15 @@ pub struct Proc {
     pub pid: u64,
     pub name: [u8; KNAMELEN],
     pub state: ProcState,
-    /// Top of this proc's 16 KiB kernel stack — the fixed kernel-half
-    /// window VA (KSTACK_VA + 16 KiB) inside this proc's OWN PML4; the
-    /// TSS rsp0 names it while this proc is current (the one
+    /// Top of this proc's 16 KiB kernel stack — the KZERO alias of its
+    /// arena slot's end (kstack.rs), the same address under every page
+    /// table; the TSS rsp0 names it while this proc is current (the one
     /// kernel-stack mechanism both ring-3 entry paths share).
     pub kstack_top: usize,
-    /// Physical pages backing the kernel stack (the EXITS path frees
-    /// them — the mapping is per-proc, so construction records the
-    /// backing pages here).
+    /// The stack's four pages, lowest first: one contiguous slot of the
+    /// kernel-stack arena (kstack.rs).  The slot returns to the arena
+    /// at the deferred reap; `kstack_pas[0]` names it.
     pub kstack_pas: [u64; KSTACK_PAGES],
-    /// The kstack's three intermediate table pages (PML4[400] → PDPT →
-    /// PD → PT): per-proc, freed with the kstack.
-    pub kstack_table_pas: [u64; 3],
     /// The per-process PML4's physical address — the CR3 value (the
     /// aarch64 `root_table` re-key: per-process user half, kernel
     /// higher half shared).  NEVER the boot PML4.
@@ -1476,21 +1455,13 @@ pub struct Proc {
 }
 
 impl Proc {
-    fn new(
-        pid: u64,
-        name: &str,
-        kstack_top: usize,
-        kstack_pas: [u64; KSTACK_PAGES],
-        kstack_table_pas: [u64; 3],
-        pml4_pa: u64,
-    ) -> Proc {
+    fn new(pid: u64, name: &str, kstack_top: usize, kstack_pas: [u64; KSTACK_PAGES], pml4_pa: u64) -> Proc {
         let mut proc = Proc {
             pid,
             name: [0; KNAMELEN],
             state: ProcState::Ready,
             kstack_top,
             kstack_pas,
-            kstack_table_pas,
             pml4_pa,
             mapping_tables: Vec::new(),
             fd_group: Arc::new(Lock::new("fdgrp", FdGroup::new())),
@@ -1805,45 +1776,40 @@ impl Proc {
         rfmem_leave(self);
     }
 
-    /// Free the PML4 page, the kernel-stack pages, and their
-    /// intermediate tables IN PLACE.  Only the rfork mid-construction
-    /// unwind calls this now: a never-run child's pages are nobody's
-    /// live state, so the direct free is correct there.  The EXITS path
-    /// uses `defer_root_kstack_reap` instead (05-24): the exit handler
-    /// is still executing ON the kstack and CR3 still names the PML4
-    /// when it runs, and under a sibling CPU the old single-CPU
-    /// invariant ("nothing allocates until the hand-off") is gone — a
-    /// sibling's allocator can hand a just-freed kstack page out and
-    /// write it while this CPU still runs on it up to the hand-off
-    /// swtch (the aarch64 05-22 exit-mid-free corruption class).
+    /// Free the PML4 page and return the kernel-stack slot IN PLACE.
+    /// Only the rfork mid-construction unwind calls this now: a
+    /// never-run child's pages are nobody's live state, so the direct
+    /// free is correct there.  The EXITS path uses
+    /// `defer_root_kstack_reap` instead (05-24): the exit handler is
+    /// still executing ON the kstack and CR3 still names the PML4 when
+    /// it runs, and under a sibling CPU the old single-CPU invariant
+    /// ("nothing allocates until the hand-off") is gone — a sibling's
+    /// new proc could take the returned slot and run on it while this
+    /// CPU still does (the aarch64 05-22 exit-mid-free corruption class).
     pub fn free_root_table_and_kstack(&mut self) {
         free_phys_page(self.pml4_pa);
-        for pa in self.kstack_pas {
-            free_phys_page(pa);
-        }
-        for pa in self.kstack_table_pas {
-            free_phys_page(pa);
-        }
+        let slot = core::mem::take(&mut self.kstack_pas[0]);
         self.kstack_pas = [0; KSTACK_PAGES];
-        self.kstack_table_pas = [0; 3];
+        // A zero PA is the host-test mock's "no stack" (nothing to return).
+        if slot != 0 {
+            kstack::free(slot);
+        }
     }
 
-    /// Record the PML4 + kstack + kstack-table PAs on this CPU's
+    /// Record the PML4 PA and the kernel-stack slot on this CPU's
     /// deferred reap slot instead of freeing in place (05-24, the
     /// aarch64 05-22 `defer_root_kstack_reap` port): the exit path's
     /// "nothing allocates until the hand-off" invariant was single-CPU —
-    /// with a sibling CPU allocating concurrently, a kstack page freed
-    /// at exit is re-handed-out and written while THIS CPU still runs
-    /// on it up to the hand-off swtch (and CR3 still names the PML4
-    /// until the next pick's switch_cr3).  The sched loop's
-    /// `reap_moribund` runs after the hand-off, on the Mach scheduler
-    /// stack.
+    /// with a sibling CPU allocating concurrently, a kstack slot
+    /// returned at exit is handed to a new proc and written while THIS
+    /// CPU still runs on it up to the hand-off swtch (and CR3 still
+    /// names the PML4 until the next pick's switch_cr3).  The sched
+    /// loop's `reap_moribund` runs after the hand-off, on the Mach
+    /// scheduler stack.
     pub fn defer_root_kstack_reap(&mut self) {
-        let entry: MoribundReap = (
-            self.pml4_pa,
-            core::mem::take(&mut self.kstack_pas),
-            core::mem::take(&mut self.kstack_table_pas),
-        );
+        let slot = self.kstack_pas[0];
+        self.kstack_pas = [0; KSTACK_PAGES];
+        let entry: MoribundReap = (self.pml4_pa, slot);
         let slot = crate::dat::this_mach().moribund_reap.get();
         // SAFETY: per-CPU slot — written only on the owning CPU in
         // IRQ-masked syscall context (here) and taken in this CPU's
@@ -1859,10 +1825,9 @@ impl Proc {
     }
 
     /// Seed a forkret-shaped 184-byte Ureg at the top of this proc's
-    /// kstack, through the top page's kernel alias (the frame's VA is
-    /// inside THIS proc's PML4 — an alias write is the correct edit
-    /// path from any context, exec's install_image consumer).  Returns
-    /// the frame's VA under this proc's table.
+    /// kstack, through the top page's kernel alias — which, for an arena
+    /// slot, IS the frame's VA under every table (kstack.rs).  exec's
+    /// install_image consumer reads it back at the returned VA.
     pub(crate) fn seed_frame(
         &mut self,
         entry: u64,
@@ -1890,23 +1855,23 @@ impl Proc {
 /// CPU no longer runs on the dead kstack.  CR3 still names the dead
 /// PML4 until the next pick's switch_cr3; that is safe here because the
 /// loop's own stack and text are shared-half (mapped under every
-/// table), the bitmap free only MARKS the pages (contents intact, so a
+/// table), the bitmap free only MARKS the page (contents intact, so a
 /// TLB walk still succeeds), and no page allocation runs in IRQ context
-/// or inside the loop — the pages cannot be recycled (and zeroed by
-/// alloc_phys_page) before the next pick replaces CR3.  No lock is
+/// or inside the loop — the page cannot be recycled (and zeroed by
+/// alloc_phys_page) before the next pick replaces CR3.  The stack slot
+/// returns to the arena here and only here, for the same reason: a
+/// sibling's new proc may take it the moment it is free.  No lock is
 /// held here; free_phys_page takes the page allocator's own lock.
 fn reap_moribund() {
     let slot = crate::dat::this_mach().moribund_reap.get();
     // SAFETY: per-CPU slot — taken only on the owning CPU's sched loop
     // (IRQ-masked); exit_tail's write is the owning CPU's too.
     let entry = unsafe { (*slot).take() };
-    let Some((pml4_pa, kstack_pas, kstack_table_pas)) = entry else { return };
+    let Some((pml4_pa, kstack_pa)) = entry else { return };
     free_phys_page(pml4_pa);
-    for pa in kstack_pas {
-        free_phys_page(pa);
-    }
-    for pa in kstack_table_pas {
-        free_phys_page(pa);
+    // A zero PA is the host-test mock's "no stack" (nothing to return).
+    if kstack_pa != 0 {
+        kstack::free(kstack_pa);
     }
 }
 
@@ -2056,31 +2021,22 @@ pub fn any_other_active_procs(my_pid: u64) -> bool {
         .any(|p| p.pid != my_pid && p.state != ProcState::Moribund)
 }
 
-/// The shared mid-construction unwind for new_user_proc — free the
-/// PML4 page, the kstack pages, and the kstack's intermediate tables
-/// (the caller passes exactly the live prefixes).  Never called with a
-/// lock held.
-fn unwind_new_proc(
-    pml4_pa: u64,
-    kstack_pas: &[u64],
-    kstack_table_pas: &[u64],
-    context: &'static str,
-) {
+/// The mid-construction unwind for new_user_proc: free the PML4 page
+/// and return the kernel-stack slot, for whichever is already held
+/// (`slot` is 0 when none was taken).  Never called with a lock held.
+fn unwind_new_proc(pml4_pa: u64, slot: u64) {
     free_phys_page(pml4_pa);
-    for &pa in kstack_table_pas {
-        free_phys_page(pa);
+    if slot != 0 {
+        kstack::free(slot);
     }
-    for &pa in kstack_pas {
-        free_phys_page(pa);
-    }
-    let _ = context;
 }
 
-/// Allocate and register a fresh user process: pid, 16 KiB kernel
-/// stack at the fixed kernel-half window, and a per-process PML4 with
-/// the kernel higher half shared (the OQ-2 resolution).  The proc
-/// starts with no segments, no byte source, and an empty mapping log;
-/// fd 0/1/2 are the devcons preopen.
+/// Allocate and register a fresh user process: pid, a 16 KiB kernel
+/// stack from the boot-reserved arena (kstack.rs — reachable from every
+/// CPU through the KZERO alias), and a per-process PML4 with the kernel
+/// higher half shared (the OQ-2 resolution).  The proc starts with no
+/// segments, no byte source, and an empty mapping log; fd 0/1/2 are the
+/// devcons preopen.
 ///
 /// Returns a ProcGuard, never a `&'static mut Proc`.
 pub fn new_user_proc(name: &str) -> Result<ProcGuard> {
@@ -2095,61 +2051,37 @@ pub fn new_user_proc(name: &str) -> Result<ProcGuard> {
         set_table_entry(pml4_pa, 510, e510);
         set_table_entry(pml4_pa, 511, e511);
     }
-    // The kstack window: PML4[400] -> PDPT -> PD -> PT, kernel-only
-    // (no PTE_US — ring 3 can never reach the window even though its
-    // VA is fixed and known).  Explicit (not lazily walked) so the
-    // mid-construction unwind knows exactly what to free.
-    let mut tables = [0u64; 3];
-    for slot in tables.iter_mut() {
-        match alloc_phys_page() {
-            Ok(pa) => *slot = pa,
-            Err(_) => {
-                // Partial-prefix hygiene (the kstack pages' own idiom
-                // below): free the table pages that DID allocate before
-                // the unwind — the tuple form leaked them (17-01, the
-                // WR-03 OOM-release family).
-                for &t in tables.iter() {
-                    if t != 0 {
-                        free_phys_page(t);
-                    }
-                }
-                unwind_new_proc(pml4_pa, &[], &[], "kstack-tables");
-                return Err("proc: kstack table alloc failed");
-            }
+    // The kernel stack: one contiguous arena slot, no page-table work.
+    // It is taken before the table lock, like the PML4 page, so the
+    // lock is never held across it; a failure frees the page taken so
+    // far (17-01, the WR-03 OOM-release family).
+    let slot = match kstack::alloc() {
+        Some(slot) => slot,
+        None => {
+            unwind_new_proc(pml4_pa, 0);
+            return Err("proc: kernel stack alloc failed (arena full)");
         }
-    }
-    let [pdpt_pa, pd_pa, pt_pa] = tables;
-    set_table_entry(pml4_pa, KSTACK_PML4_INDEX, pdpt_pa | PTE_P | PTE_RW);
-    set_table_entry(pdpt_pa, 0, pd_pa | PTE_P | PTE_RW);
-    set_table_entry(pd_pa, 0, pt_pa | PTE_P | PTE_RW);
-    let kstack_table_pas = tables;
+    };
+    let kstack_top = kstack::top_va(slot);
     let mut kstack_pas = [0u64; KSTACK_PAGES];
-    for i in 0..KSTACK_PAGES {
-        let pa = match alloc_phys_page() {
-            Ok(pa) => pa,
-            Err(_) => {
-                unwind_new_proc(pml4_pa, &kstack_pas[..i], &kstack_table_pas, "kstack-pages");
-                return Err("proc: kernel stack page alloc failed");
-            }
-        };
-        kstack_pas[i] = pa;
-        set_table_entry(pt_pa, i, pa | PTE_P | PTE_RW);
+    for (i, pa) in kstack_pas.iter_mut().enumerate() {
+        *pa = slot + (i * PAGE_SIZE_4K) as u64;
     }
-    let kstack_top = KSTACK_VA + KSTACK_PAGES * PAGE_SIZE_4K;
 
     let node = LockNode::new();
     let mut table = PROC_TABLE.lock(&node);
     let pid = table.next_pid;
     table.next_pid += 1;
     let Some(slot) = table.procs.iter_mut().find(|s| s.is_none()) else {
-        // The table-full path must free the already-allocated pages.
-        // Drop the PROC_TABLE guard BEFORE the frees (the module
-        // locking discipline); the burned pid is harmless.
+        // The table-full path must free the already-allocated page and
+        // return the stack slot.  Drop the PROC_TABLE guard BEFORE the
+        // frees (the module locking discipline); the burned pid is
+        // harmless.
         drop(table);
-        unwind_new_proc(pml4_pa, &kstack_pas, &kstack_table_pas, "table-full");
+        unwind_new_proc(pml4_pa, kstack_pas[0]);
         return Err("proc: table full");
     };
-    let mut proc = Proc::new(pid, name, kstack_top, kstack_pas, kstack_table_pas, pml4_pa);
+    let mut proc = Proc::new(pid, name, kstack_top, kstack_pas, pml4_pa);
     proc.preopen_cons_fds();
     *slot = Some(proc);
     // The table is a fixed static and slots are never freed this era,
@@ -2234,13 +2166,16 @@ fn write_curframe(frame: *mut Ureg) {
 /// can never serve: it is not retracted when the CPU parks into the
 /// scheduler, so it would stale-name a released proc's stack.
 ///
-/// The identity is the kstack top page's PHYSICAL address ([`kstack_id`]),
-/// not its VA: on x86_64 every proc's kstack is mapped at the one
-/// KSTACK_VA window, each under its own PML4, so the VA cannot tell two
-/// stacks apart.  Ported as a VA compare, the tripwire fired for every
-/// proc a second CPU picked while the first ran any process (observed
-/// live under KVM and TCG: "pid 2 picked while cpu 0 still names its
-/// kernel stack 0xffffc80000004000" — pid 1's stack VA as well).
+/// The identity is the kstack top page's PHYSICAL address ([`kstack_id`])
+/// — unique among live stacks, and independent of how stacks are
+/// mapped.  It was ported as a VA compare against a per-process window
+/// in which every proc's kstack sat at the same VA; the tripwire then
+/// fired for every proc a second CPU picked while the first ran any
+/// process (observed live under KVM and TCG: "pid 2 picked while cpu 0
+/// still names its kernel stack 0xffffc80000004000" — pid 1's stack VA
+/// as well).  The arena (kstack.rs) gives each stack its own VA too;
+/// the PA stays as the identity so that cannot regress by a mapping
+/// change.
 fn write_curkstack(top_page_pa: u64) {
     crate::dat::this_mach().cur_kstack.store(top_page_pa, Ordering::Relaxed)
 }
@@ -3731,7 +3666,7 @@ mod tests {
     /// validate_user_range and the bookkeeping methods never touch
     /// them (the mapping bodies get their own tests below).
     fn mock_proc() -> Proc {
-        Proc::new(1, "mock", 0, [0; KSTACK_PAGES], [0; 3], 0)
+        Proc::new(1, "mock", 0, [0; KSTACK_PAGES], 0)
     }
 
     /// The kstack-ownership token (05-24, the aarch64 339036f port):
@@ -4032,14 +3967,19 @@ mod tests {
         };
         let guard = new_user_proc("hosttest").expect("construction succeeds");
         assert!(guard.pid >= before_pid);
-        assert_eq!(guard.kstack_top, KSTACK_VA + KSTACK_PAGES * PAGE_SIZE_4K);
         assert!(guard.pml4_pa != 0);
+        // The kstack is one contiguous arena slot: four pages lowest
+        // first, 16 KiB-aligned, and no private PML4 window any more
+        // (the old slot 400 must stay EMPTY — the stack lives in the
+        // kernel half every table shares).
         assert!(guard.kstack_pas.iter().all(|&pa| pa != 0));
-        // The kstack window PML4 walk: PML4[400] present, and the leaf
-        // for the TOP kstack page present (kernel-only).
-        let idx400 = table_entry(guard.pml4_pa, KSTACK_PML4_INDEX);
-        assert_eq!(idx400 & PTE_P, PTE_P);
-        assert_eq!(idx400 & PTE_US, 0, "the kstack window is kernel-only");
+        let base = guard.kstack_pas[0];
+        assert!(base.is_multiple_of(crate::kstack::SLOT_BYTES as u64), "the slot is 16 KiB-aligned");
+        for (i, &pa) in guard.kstack_pas.iter().enumerate() {
+            assert_eq!(pa, base + (i * PAGE_SIZE_4K) as u64, "the slot's pages are contiguous");
+        }
+        assert_eq!(table_entry(guard.pml4_pa, 400), 0, "no private kstack window");
+        assert_eq!(guard.kstack_top, crate::kstack::top_va(base));
         // fd 0/1/2 preopened as devcons chans.
         let node = LockNode::new();
         let g = guard.fd_group.lock(&node);
@@ -4173,7 +4113,7 @@ mod tests {
         guard.map_user_page(stack_va, SegKind::Stack).expect("stack map succeeds");
         assert_eq!(table_entry(guard.pml4_pa, 0) & PTE_P, PTE_P);
         assert_eq!(table_entry(guard.pml4_pa, 255) & PTE_P, PTE_P);
-        let kstack_entry = table_entry(guard.pml4_pa, KSTACK_PML4_INDEX);
+        let kstack_top = guard.kstack_top;
 
         guard.free_user_mappings();
 
@@ -4190,8 +4130,9 @@ mod tests {
         }
         assert!(guard.mapping_tables.is_empty());
         // The kernel side survives: the exit tail still runs on the
-        // kstack mapped through PML4[400].
-        assert_eq!(table_entry(guard.pml4_pa, KSTACK_PML4_INDEX), kstack_entry);
+        // kstack — an arena slot, untouched by the user-half teardown.
+        assert_eq!(guard.kstack_top, kstack_top);
+        assert!(guard.kstack_pas.iter().all(|&pa| pa != 0));
 
         // The exec re-map builds fresh tables, and every table page the
         // root reaches is one this proc owns (recorded for its next
