@@ -22,6 +22,22 @@ out="target/kvm-evidence"
 log="$out/gates.log"
 mkdir -p "$out"
 
+# QEMU exception logging: every boot the gates spawn goes through this
+# wrapper, so a triple fault is recorded with its vectors instead of
+# being lost in a silent reset loop.  -no-reboot stops the guest at the
+# fault (a reset loop tells us nothing); the gate still sees the boot
+# fail, exactly as before.
+diag_log="$repo_root/$out/qemu-diag.log"
+diag_wrapper="$repo_root/$out/qemu-diag.sh"
+rm -f "$diag_log"
+cat >"$diag_wrapper" <<'WRAP'
+#!/bin/sh
+exec qemu-system-x86_64 -no-reboot -d int,cpu_reset -D "${R9_QEMU_LOG:-/tmp/qemu-diag.log}" "$@"
+WRAP
+chmod +x "$diag_wrapper"
+export R9_QEMU="$diag_wrapper"
+export R9_QEMU_LOG="$diag_log"
+
 {
     echo "host: $(uname -a)"
     echo "head: $(git rev-parse HEAD)"
@@ -45,6 +61,13 @@ mkdir -p "$out"
     echo
     echo "=== derived fpu format lines from the captures ==="
     grep -Rh 'fpu: format=' target/gates 2>/dev/null | tail -10
+    echo
+    echo "=== last QEMU exception records (triple fault vectors, if any) ==="
+    if [ -f "$diag_log" ]; then
+        grep -nE 'check_exception|Triple fault|v=[0-9a-f]{2}|CPU Reset' "$diag_log" | tail -40
+    else
+        echo "(no qemu-diag.log)"
+    fi
 } >"$log" 2>&1
 
 tar czf "$out/captures.tgz" target/gates 2>/dev/null || true
