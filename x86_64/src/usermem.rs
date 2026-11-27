@@ -31,20 +31,132 @@
 
 use alloc::vec::Vec;
 
+use port::mem::PAGE_SIZE_4K;
+#[cfg(not(test))]
+use port::mem::PhysAddr;
+#[cfg(not(test))]
+use port::palloc::phys_to_pfn;
+
 /// The fused-constructor predicate: the calling proc's user-address-space
 /// checks.  Mirrors the aarch64 pair `Proc::validate_user_range` /
 /// `fault::ensure_user_resident(proc, ...)` signature-for-signature; the
-/// 14-04 proc port implements this for the real `Proc` (segments from
-/// exec, mapping log for residency).
+/// x86_64 proc implements this for the real `Proc` (segments from exec,
+/// mapping log for residency/pinning).
 pub trait UserAddressSpace {
     /// Prove `[va, va+len)` lies inside one of the proc's segments (the
     /// segment-membership proof).  `writable` selects the write-intent
     /// flag.  Errors are loud named `&'static str`s.
     fn validate_user_range(&self, va: u64, len: u64, writable: bool) -> Result<(), &'static str>;
 
-    /// Force every page in `[start, end)` resident (explicit zero-page-in
-    /// of never-touched demand pages) before anything is dereferenceable.
-    fn ensure_user_resident(&mut self, start: usize, end: usize);
+    /// Force every page in `[start, end)` resident (explicit demand-page-in
+    /// of never-touched pages) before anything is dereferenceable.  A
+    /// writable range rejects text and marks touched Data pages dirty.
+    fn ensure_user_resident(
+        &mut self,
+        start: usize,
+        end: usize,
+        writable: bool,
+    ) -> Result<(), &'static str>;
+
+    /// The physical address backing a resident user page (the PinGuard's
+    /// per-frame lookup).
+    fn resident_phys(&self, page_va: usize) -> Option<u64>;
+}
+
+/// RAII pin of every physical frame backing a user buffer (MEM-10, D-21).
+///
+/// The common syscall buffer (<= 16 KiB, four 4 KiB pages) pins in the
+/// inline `[u32; 4]` array with zero heap allocation; larger buffers spill
+/// to an owned `Vec`.  `Drop` unpins each frame, so a path that sleeps while
+/// holding a `UserSlice`/`UserSliceMut` keeps the concurrent evictor away
+/// from its pages, and nested/overlapping slices work through the per-frame
+/// atomic pin counts.
+pub struct PinGuard {
+    inline: [u32; 4],
+    len: u8,
+    overflow: Option<Vec<u32>>,
+}
+
+impl PinGuard {
+    /// No pages pinned (the `validated_only` non-sleeping constructors).
+    pub const fn empty() -> Self {
+        Self { inline: [0; 4], len: 0, overflow: None }
+    }
+
+    fn push(&mut self, pfn: u32) {
+        if (self.len as usize) < self.inline.len() {
+            self.inline[self.len as usize] = pfn;
+            self.len += 1;
+        } else {
+            self.overflow.get_or_insert_with(Vec::new).push(pfn);
+        }
+    }
+
+    /// Unpin every recorded frame (also the rollback path on a mid-span
+    /// error).
+    #[cfg(not(test))]
+    fn unpin_all(&mut self) {
+        for index in 0..self.len as usize {
+            let _ = crate::pagealloc::unpin_frame(self.inline[index]);
+        }
+        self.len = 0;
+        if let Some(frames) = self.overflow.take() {
+            for pfn in frames {
+                let _ = crate::pagealloc::unpin_frame(pfn);
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn unpin_all(&mut self) {
+        self.len = 0;
+        self.overflow = None;
+    }
+}
+
+impl Drop for PinGuard {
+    fn drop(&mut self) {
+        self.unpin_all();
+    }
+}
+
+/// Pin every resident page of `[va, va + len)`, rolling back on any error.
+#[cfg(not(test))]
+fn pin_user_span(
+    proc: &impl UserAddressSpace,
+    va: u64,
+    len: u64,
+) -> Result<PinGuard, &'static str> {
+    let mut guard = PinGuard::empty();
+    if len == 0 {
+        return Ok(guard);
+    }
+    let start = (va as usize) & !(PAGE_SIZE_4K - 1);
+    let end = (va as usize).wrapping_add(len as usize);
+    let mut page = start;
+    while page < end {
+        let phys = proc.resident_phys(page).ok_or("usermem: page not resident")?;
+        let pfn = phys_to_pfn(PhysAddr::new(phys)).map_err(|_| "usermem: bad page address")?;
+        if crate::pagealloc::pin_frame(pfn).is_err() {
+            guard.unpin_all();
+            return Err("usermem: pin failed");
+        }
+        guard.push(pfn);
+        page += PAGE_SIZE_4K;
+    }
+    Ok(guard)
+}
+
+/// The host-test build has no live `PageAlloc`; the pin contract is pinned
+/// by the `port::palloc` host tests instead, so the constructor tests stay
+/// pure (no kernel alloctor, no Mach).
+#[cfg(test)]
+fn pin_user_span(
+    _proc: &impl UserAddressSpace,
+    _va: u64,
+    _len: u64,
+) -> Result<PinGuard, &'static str> {
+    Ok(PinGuard::empty())
 }
 
 /// A validated, resident, read-only view of a byte range in the calling
@@ -53,20 +165,22 @@ pub trait UserAddressSpace {
 pub struct UserSlice {
     ptr: *const u8,
     len: usize,
+    _pin: PinGuard,
 }
 
 impl UserSlice {
     /// The fused constructor: validate the range against the
-    /// proc's segment map, then force its pages resident, before anything
-    /// dereferenceable exists.
+    /// proc's segment map, force its pages resident, then pin every frame
+    /// across the syscall (including any sleep it takes).
     pub fn new(
         proc: &mut impl UserAddressSpace,
         va: u64,
         len: u64,
     ) -> Result<UserSlice, &'static str> {
         proc.validate_user_range(va, len, false)?;
-        proc.ensure_user_resident(va as usize, va.wrapping_add(len) as usize);
-        Ok(UserSlice { ptr: va as *const u8, len: len as usize })
+        proc.ensure_user_resident(va as usize, va.wrapping_add(len) as usize, false)?;
+        let pin = pin_user_span(proc, va, len)?;
+        Ok(UserSlice { ptr: va as *const u8, len: len as usize, _pin: pin })
     }
 
     /// Validate-only variant (documented; zero-behavior-change): for ranges
@@ -79,7 +193,7 @@ impl UserSlice {
         len: u64,
     ) -> Result<UserSlice, &'static str> {
         proc.validate_user_range(va, len, false)?;
-        Ok(UserSlice { ptr: va as *const u8, len: len as usize })
+        Ok(UserSlice { ptr: va as *const u8, len: len as usize, _pin: PinGuard::empty() })
     }
 
     /// The materialized read-only slice.  Valid only for the duration of
@@ -116,19 +230,23 @@ impl UserSlice {
 pub struct UserSliceMut {
     ptr: *mut u8,
     len: usize,
+    _pin: PinGuard,
 }
 
 impl UserSliceMut {
     /// The fused constructor (writable variant): validate with the
-    /// writable flag, then force resident.
+    /// writable flag, force resident (marking touched Data pages dirty so a
+    /// kernel write into an untouched buffer is never dropped), then pin
+    /// every frame across the syscall.
     pub fn new(
         proc: &mut impl UserAddressSpace,
         va: u64,
         len: u64,
     ) -> Result<UserSliceMut, &'static str> {
         proc.validate_user_range(va, len, true)?;
-        proc.ensure_user_resident(va as usize, va.wrapping_add(len) as usize);
-        Ok(UserSliceMut { ptr: va as *mut u8, len: len as usize })
+        proc.ensure_user_resident(va as usize, va.wrapping_add(len) as usize, true)?;
+        let pin = pin_user_span(proc, va, len)?;
+        Ok(UserSliceMut { ptr: va as *mut u8, len: len as usize, _pin: pin })
     }
 
     /// The materialized writable slice (valid for the syscall's duration —
@@ -195,9 +313,11 @@ pub struct UserString;
 impl UserString {
     /// Copy the NUL-terminated string at `va` into an owned Vec, excluding
     /// the terminator.  Errors: null pointer, string longer than `max`, or
-    /// a byte outside the proc's segments.
+    /// a byte outside the proc's segments.  Each page is forced resident
+    /// (text/data literals are demand-loaded; a cold literal page passed to
+    /// a syscall must page in here, never fault the kernel mid-copy).
     pub fn copy_from(
-        proc: &impl UserAddressSpace,
+        proc: &mut impl UserAddressSpace,
         va: u64,
         max: usize,
     ) -> Result<Vec<u8>, &'static str> {
@@ -205,16 +325,23 @@ impl UserString {
         if va == 0 {
             return Err("null string pointer");
         }
+        let mut ensured: Option<usize> = None;
         loop {
             if out.len() >= max {
                 return Err("string too long");
             }
-            proc.validate_user_range(va + out.len() as u64, 1, false)?;
-            // SAFETY: this byte's page membership was just validated; the
-            // byte is resident by construction (the process wrote the
-            // string); the proc's CR3 is live in its syscall context —
-            // the user half of its PML4 is visible in kernel context.
-            let b = unsafe { ((va + out.len() as u64) as *const u8).read() };
+            let addr = va + out.len() as u64;
+            proc.validate_user_range(addr, 1, false)?;
+            let page = addr as usize & !(PAGE_SIZE_4K - 1);
+            if ensured != Some(page) {
+                proc.ensure_user_resident(page, page + PAGE_SIZE_4K, false)?;
+                ensured = Some(page);
+            }
+            // SAFETY: this byte's page membership was just validated and
+            // the page forced resident; the proc's CR3 is live in its
+            // syscall context — the user half of its PML4 is visible in
+            // kernel context.
+            let b = unsafe { (addr as *const u8).read() };
             if b == 0 {
                 return Ok(out);
             }
@@ -267,8 +394,24 @@ mod tests {
             }
         }
 
-        fn ensure_user_resident(&mut self, start: usize, end: usize) {
+        fn ensure_user_resident(
+            &mut self,
+            start: usize,
+            end: usize,
+            _writable: bool,
+        ) -> Result<(), &'static str> {
             self.resident_calls.push((start, end));
+            Ok(())
+        }
+
+        fn resident_phys(&self, page_va: usize) -> Option<u64> {
+            // The mock's "PAs" are host addresses (the identity seam); the
+            // page must lie inside the buffer.
+            if page_va >= self.base && page_va < self.base + self.buf.len() {
+                Some(page_va as u64)
+            } else {
+                None
+            }
         }
     }
 
@@ -361,7 +504,8 @@ mod tests {
         let s = b"/bin/rc\0trailing";
         mock.buf[..s.len()].copy_from_slice(s);
         mock.base = mock.buf.as_ptr() as usize;
-        let out = UserString::copy_from(&mock, mock.va(0), 64).expect("string copies");
+        let va0 = mock.va(0);
+        let out = UserString::copy_from(&mut mock, va0, 64).expect("string copies");
         assert_eq!(out, b"/bin/rc");
     }
 
@@ -370,10 +514,11 @@ mod tests {
         let mut mock = MockUserSpace::new();
         mock.base = mock.buf.as_ptr() as usize;
         // Null pointer: loud named error before any validation.
-        assert_eq!(UserString::copy_from(&mock, 0, 64), Err("null string pointer"));
+        assert_eq!(UserString::copy_from(&mut mock, 0, 64), Err("null string pointer"));
         // No NUL within `max`: the bound fires.
         mock.buf[..32].fill(b'x');
-        assert_eq!(UserString::copy_from(&mock, mock.va(0), 32), Err("string too long"));
+        let va0 = mock.va(0);
+        assert_eq!(UserString::copy_from(&mut mock, va0, 32), Err("string too long"));
     }
 
     #[test]
@@ -387,18 +532,21 @@ mod tests {
         mock.base = mock.buf.as_ptr() as usize;
         // max=100 sits above the segment so the LENGTH bound cannot fire
         // first — the boundary byte's validation is what must reject.
+        let va0 = mock.va(0);
         assert_eq!(
-            UserString::copy_from(&mock, mock.va(0), 100),
+            UserString::copy_from(&mut mock, va0, 100),
             Err("bad user address")
         );
         // Same shape one byte before the end: 63 z's then the boundary.
+        let va1 = mock.va(1);
         assert_eq!(
-            UserString::copy_from(&mock, mock.va(1), 100),
+            UserString::copy_from(&mut mock, va1, 100),
             Err("bad user address")
         );
         // A NUL at the last byte succeeds at the boundary.
         mock.buf[63] = 0;
-        let out = UserString::copy_from(&mock, mock.va(0), 64).expect("terminator at the edge");
+        let va0 = mock.va(0);
+        let out = UserString::copy_from(&mut mock, va0, 64).expect("terminator at the edge");
         assert_eq!(out, &mock.buf[0..63]);
     }
 }
