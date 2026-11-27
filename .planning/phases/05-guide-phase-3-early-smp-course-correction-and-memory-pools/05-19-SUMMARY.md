@@ -23,11 +23,11 @@ affects: [05-21 (pressure workload), 05-22 (pin-guard follow-ups)]
 
 # Actuals (#2632) — chars/4 over the realized diff, same scale as the plan estimate (55000, confidence: low).
 actuals:
-  tokens: 19860
+  tokens: 20163
   tasks: 3
-  commits: 3
+  commits: 4
   plan_head_before: b61d9bff563613c594010dbd8fd6077e70e99cf7
-  plan_head_after: fb25c9b52ec16e603c268b1b6446195763481e5e
+  plan_head_after: d799ca3ab9fb0a3cb23d91313c2233d28e159998
 
 tech-stack:
   added: []
@@ -48,6 +48,7 @@ key-files:
     - x86_64/src/pagealloc.rs
     - x86_64/src/usermem.rs
     - x86_64/src/syscall.rs
+    - port/src/pagecache.rs
     - UNSAFE-AUDIT.md
 
 key-decisions:
@@ -109,7 +110,7 @@ status: complete
 - **Started:** 2026-11-26 (worktree execution)
 - **Completed:** 2026-11-26T00:15Z
 - **Tasks:** 3
-- **Files modified:** 8 (1 created)
+- **Files modified:** 9 (1 created)
 
 ## Accomplishments
 
@@ -127,6 +128,7 @@ Each task was committed atomically:
 1. **Task 1: demand pager, RO shared text, PTE_D data, palloc wiring** — `ae4ae8a` (feat)
 2. **Task 2: PTE_D atomic-swap evictor and RAII PinGuard** — `1f69086` (feat)
 3. **Task 3: #PF/PTE_D host tests + full verify** — `fb25c9b` (test)
+4. **Follow-up: hold PAGE_CACHE across the evictor PTE swap** — `d799ca3` (fix)
 
 ## Files Created/Modified
 
@@ -137,13 +139,14 @@ Each task was committed atomically:
 - `x86_64/src/proc.rs` — cache keys, cache-aware teardown, PTE_D evictor.
 - `x86_64/src/usermem.rs` — PinGuard, writable residency, demand-paging UserString.
 - `x86_64/src/syscall.rs` — eight-sleeping-path audit note; brk comment.
+- `port/src/pagecache.rs` — `with_lock` for the evictor's atomic PTE swap.
 - `UNSAFE-AUDIT.md` — Task 1 (net 0) and Task 2 (+3 blocks) deltas.
 
 ## Decisions Made
 
 - **Full demand loading over aarch64's eager-data compromise.** The plan requires no eager text/data/bss mapping, so `UserString::copy_from` now demands residency per page (taking `&mut`), keeping the cold-literal guarantee without eager data.
 - **Text remains shared through `palloc.hash`; rfork copies text privately but read-only.** Forked text is W^X-safe; cross-process sharing applies to demand-faulted text.
-- **Cache-key removal precedes the leaf swap.** `select_eviction_victim` removes the key under `PAGE_CACHE` (Rank 20) before returning, so the evictor holds only `PROC_TABLE` (50) across the swap and PTE_D check.
+- **Cache and proc table are both held across the leaf swap.** `PageCache::with_lock` keeps `PAGE_CACHE` (Rank 20) held while `evict_user_frame` takes `PROC_TABLE` (50), swaps the leaf and inspects `PTE_D`; the candidate's key was already removed by `select_eviction_victim`.  This closes the concurrent-page-in race the plan calls out (T-05-34).
 - **KZERO identity alias for zeroing.** Every q35 profile is 1 GiB, inside the boot KZERO window, so no per-frame alias map is needed.
 
 ## Deviations from Plan
@@ -173,13 +176,12 @@ Each task was committed atomically:
 
 ### Plan-Wording Deviations (documented, not auto-fixable)
 
-- **Evictor holds `PROC_TABLE` but not `PAGE_CACHE` across the PTE swap.** The port `PageCache` API does not expose its lock, and re-taking it would nest `mark_data_dirty`; the key is already removed under Rank 20 by `select_eviction_victim`, which closes the cache-side race.
 - **rfork text is a private RO copy, not a `palloc.hash` frame.** Correct and W^X-safe; a future plan can share forked text.
 - **`sys_brk` growth pages stay eagerly mapped.** The plan scoped eager removal to exec.
 
 ---
 
-**Total deviations:** 3 auto-fixed (3 blocking), 3 plan-wording deviations documented.
+**Total deviations:** 3 auto-fixed (3 blocking), 2 plan-wording deviations documented.
 **Impact on plan:** All changes are required for correctness under full demand loading; no scope creep beyond the plan's memory architecture.
 
 ## Issues Encountered
@@ -198,7 +200,7 @@ None - no external service configuration required.
 ## Self-Check: PASSED
 
 - Created file `x86_64/src/fault.rs` exists.
-- Commits `ae4ae8a`, `1f69086`, `fb25c9b` are ancestors of HEAD.
+- Commits `ae4ae8a`, `1f69086`, `fb25c9b`, `d799ca3` are ancestors of HEAD.
 - Build, clippy (x86 q35cpu + aarch64 virtshell) and `cargo xtask test` exited 0.
 
 ---
