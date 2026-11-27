@@ -427,7 +427,7 @@ mod tests {
         let e = PfError::decode(PF_INSTRUCTION);
         assert!(!e.present && !e.write && !e.user && e.instruction);
         // Unrelated high bits never leak into the decode.
-        let e = PfError::decode(0xffff_ffff_ffff_fff0);
+        let e = PfError::decode(0xffff_ffff_ffff_ffe0);
         assert!(!e.present && !e.write && !e.user && !e.instruction);
     }
 
