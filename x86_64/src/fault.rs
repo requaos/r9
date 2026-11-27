@@ -406,3 +406,55 @@ fn unresolvable(frame: &Ureg, cr2: u64, access: &str) -> ! {
 pub(crate) fn leaf_masks_pa(entry: u64) -> u64 {
     entry & PTE_PA_MASK
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// MEM-14 encoding: every `#PF` error-code bit decodes independently.
+    #[test]
+    fn pf_error_code_bits_decode() {
+        assert_eq!(
+            PfError::decode(0),
+            PfError { present: false, write: false, user: false, instruction: false }
+        );
+        assert_eq!(
+            PfError::decode(PF_P | PF_WRITE | PF_USER | PF_INSTRUCTION),
+            PfError { present: true, write: true, user: true, instruction: true }
+        );
+        let e = PfError::decode(PF_WRITE | PF_USER);
+        assert!(!e.present && e.write && e.user && !e.instruction);
+        let e = PfError::decode(PF_INSTRUCTION);
+        assert!(!e.present && !e.write && !e.user && e.instruction);
+        // Unrelated high bits never leak into the decode.
+        let e = PfError::decode(0xffff_ffff_ffff_fff0);
+        assert!(!e.present && !e.write && !e.user && !e.instruction);
+    }
+
+    /// MEM-14 encoding: `cr2 >= KZERO` is a kernel address and must be
+    /// rejected (T-05-35); every user-half address passes.
+    #[test]
+    fn kernel_address_rejection() {
+        assert!(is_kernel_address(KZERO));
+        assert!(is_kernel_address(KZERO + PAGE_SIZE_4K as u64));
+        assert!(is_kernel_address(u64::MAX));
+        assert!(!is_kernel_address(0));
+        assert!(!is_kernel_address(0x2000));
+        assert!(!is_kernel_address(0x0000_7fff_ffff_f000));
+        assert!(!is_kernel_address(KZERO - PAGE_SIZE_4K as u64));
+    }
+
+    /// MEM-15 encoding: `PTE_D` is bit 6, RO text carries neither `PTE_RW`
+    /// nor `PTE_NX`, data is writable+NX, and the leaf masks its PA.
+    #[test]
+    fn pte_d_and_leaf_kinds() {
+        assert_eq!(PTE_D, 1 << 6);
+        assert_eq!(USER_TEXT_RO & (PTE_RW | PTE_NX), 0);
+        assert_eq!(USER_TEXT_RO & (PTE_P | PTE_US), PTE_P | PTE_US);
+        assert_ne!(USER_DATA_RW & PTE_RW, 0);
+        assert_ne!(USER_DATA_RW & PTE_NX, 0);
+        assert_eq!(USER_DATA_RW & PTE_D, 0, "data leaf starts dirty-clear");
+        assert_eq!(leaf_masks_pa(0x1234_5000 | PTE_P | PTE_RW), 0x1234_5000);
+        assert_eq!(leaf_masks_pa(0x000f_ffff_ffff_f000 | PTE_NX), 0x000f_ffff_ffff_f000);
+    }
+}
