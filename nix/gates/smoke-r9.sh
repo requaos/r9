@@ -247,5 +247,20 @@ set -e
 if [ "$RC" -ne 0 ]; then
 	err "smoke FAILED (the driver named the stage on stderr; capture: $R9_SMOKE_LOG)"
 fi
+
+# SMP-13 (05-21): the default smoke leg carries no aeadloop=1 token, so the
+# in-kernel 9P2000.aead loopback server must stay dormant — the positive
+# marker may appear only when the caller explicitly opted in through
+# R9_BOOTARGS.  Assert the negative on the capture (the positive arm lives
+# in the smp-stress gate).
+case "${R9_BOOTARGS:-}" in
+	*aeadloop=1*) : ;; # caller opted in — the marker is expected, not asserted here
+	*)
+		if grep -q 'aeadloop: active' "$R9_SMOKE_LOG"; then
+			err "smoke: 'aeadloop: active' appeared on a default boot without aeadloop=1 — SMP-13 regression (capture: $R9_SMOKE_LOG)"
+		fi
+		;;
+esac
+
 echo "== smoke PASS — capture retained at $R9_SMOKE_LOG"
 exit 0

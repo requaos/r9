@@ -136,8 +136,8 @@ proc whole_capture_clean {} {
 
 # --- 1. the staged boot (markers in emission order) -------------------
 stage banner    {r9 from the Internet}
-stage smp-online {smp: cpu 1 online}
 stage palloc    "palloc: managed_frames=$maxf"
+stage smp-online {smp: cpu 1 online}
 stage paqfs     {paqfs\.\.\.}
 stage version   {version\.\.\.}
 stage prompt    {% }

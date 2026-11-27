@@ -148,12 +148,15 @@ PROBE_FLIP_SHA=064747f42c7f3eff6cd677a8820e6b4b1fff95e3
 PROBE_FLIPBACK_SHA=af7df344b9c3702100d4408e85044a722e861a67
 PROFILE_LIST=(q35 q35lowmcfg q35net q35exec q35churn q35shell q35churnshell q35cpu q35auth)
 # The D-14 full tier's x86_64 apps (xtask/src/gate.rs FULL_APPS_X86_64).
-# soak and stress are NOT in it: they need the owner's tap venue and run
-# as their own steps.
+# The tap-venue net soak/stress apps (boot-r9-net-soak-x64,
+# boot-r9-stress-x64) are NOT in it: they need the owner's tap venue and
+# run as their own steps.  boot-r9-smp-stress-x64 is a different gate
+# (the -smp 2 CPU stress, 05-21) and stays in the full tier.
 FULL_APPS=(drawterm-gate-x64 boot-r9-x64 boot-r9-smoke-x64 boot-r9-tier1-x64
-	boot-r9-net-smoke-x64 boot-r9-services-x64 boot-r9-churn-x64 boot-r9-auth-x64)
+	boot-r9-net-smoke-x64 boot-r9-services-x64 boot-r9-churn-x64 boot-r9-auth-x64
+	boot-r9-smp-stress-x64 boot-r9-mem-pressure-x64)
 # The moved apps' ACTUAL R9_GATE_OUT directories (app:dir).  The flake
-# app attr name and the output directory differ for six of the eight
+# app attr name and the output directory differ for eight of the ten
 # full apps (boot-r9-smoke-x64 writes smoke-r9-x64, ...); stop C copied
 # the attr name and produced six empty captures and six -1 equivalence
 # rows (01-34).  xtask's FULL_APP_OUT_DIRS_X86_64 mirrors this list, and
@@ -167,6 +170,8 @@ FULL_APP_OUT_DIRS=(
 	boot-r9-services-x64:services-r9-x64
 	boot-r9-churn-x64:churn-r9-x64
 	boot-r9-auth-x64:smoke-r9-auth-x64
+	boot-r9-smp-stress-x64:smp-stress-r9-x64
+	boot-r9-mem-pressure-x64:mem-pressure-r9-x64
 	boot-r9-net-soak-x64:soak-r9-net-x64
 	boot-r9-stress-x64:stress-r9-net-x64
 )

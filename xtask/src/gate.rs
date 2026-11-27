@@ -59,10 +59,24 @@ pub const FULL_APPS_X86_64: &[&str] = &[
     "boot-r9-services-x64",
     "boot-r9-churn-x64",
     "boot-r9-auth-x64",
+    // 05-21 (SMP-08/SMP-09/MEM-15): the two-CPU stress and small-memory
+    // pressure gates, wired into the full tier so `cargo xtask gate --full`
+    // and CI invoke them uniformly on x86_64.
+    "boot-r9-smp-stress-x64",
+    "boot-r9-mem-pressure-x64",
 ];
 
-pub const FULL_APPS_AARCH64: &[&str] =
-    &["boot-r9-smoke", "boot-r9-net-smoke", "boot-r9-tier1", "boot-r9-cpu"];
+pub const FULL_APPS_AARCH64: &[&str] = &[
+    "boot-r9-smoke",
+    "boot-r9-net-smoke",
+    "boot-r9-tier1",
+    "boot-r9-cpu",
+    // 05-21 (SMP-08/SMP-09/MEM-15): the two-CPU stress and small-memory
+    // pressure gates, wired into the full tier so `cargo xtask gate --full`
+    // and CI invoke them uniformly on aarch64.
+    "boot-r9-smp-stress",
+    "boot-r9-mem-pressure",
+];
 
 /// Each moved gate app's ACTUAL `R9_GATE_OUT` directory (the default its
 /// `nix/gates/<dir>.sh` names), per architecture.  The flake app attr
@@ -83,6 +97,8 @@ pub const FULL_APP_OUT_DIRS_X86_64: &[(&str, &str)] = &[
     ("boot-r9-services-x64", "services-r9-x64"),
     ("boot-r9-churn-x64", "churn-r9-x64"),
     ("boot-r9-auth-x64", "smoke-r9-auth-x64"),
+    ("boot-r9-smp-stress-x64", "smp-stress-r9-x64"),
+    ("boot-r9-mem-pressure-x64", "mem-pressure-r9-x64"),
 ];
 
 /// The two tap-venue apps are NOT in the full tier (they need the owner's
@@ -98,6 +114,8 @@ pub const FULL_APP_OUT_DIRS_AARCH64: &[(&str, &str)] = &[
     ("boot-r9-net-smoke", "smoke-r9-net"),
     ("boot-r9-tier1", "tier1-r9"),
     ("boot-r9-cpu", "cpu-r9"),
+    ("boot-r9-smp-stress", "smp-stress-r9"),
+    ("boot-r9-mem-pressure", "mem-pressure-r9"),
 ];
 
 /// The app's actual `R9_GATE_OUT` directory name for `arch` (`app`
@@ -803,16 +821,25 @@ mod tests {
             "boot-r9-services-x64",
             "boot-r9-churn-x64",
             "boot-r9-auth-x64",
+            "boot-r9-smp-stress-x64",
+            "boot-r9-mem-pressure-x64",
         ] {
             assert!(x86_64.contains(&app), "x86-64 full tier lacks {app}: {x86_64:?}");
         }
-        assert_eq!(x86_64.len(), 8);
+        assert_eq!(x86_64.len(), 10);
 
         let aarch64 = full_apps(Arch::Aarch64);
-        for app in ["boot-r9-smoke", "boot-r9-net-smoke", "boot-r9-tier1", "boot-r9-cpu"] {
+        for app in [
+            "boot-r9-smoke",
+            "boot-r9-net-smoke",
+            "boot-r9-tier1",
+            "boot-r9-cpu",
+            "boot-r9-smp-stress",
+            "boot-r9-mem-pressure",
+        ] {
             assert!(aarch64.contains(&app), "aarch64 full tier lacks {app}: {aarch64:?}");
         }
-        assert_eq!(aarch64.len(), 4);
+        assert_eq!(aarch64.len(), 6);
 
         assert!(full_apps(Arch::Riscv64).is_empty());
     }

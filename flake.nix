@@ -941,6 +941,29 @@ WRAP
               export R9_MKPAQFS="${self.packages.${system}.harvey-mkpaqfs}/bin/mkpaqfs"
             '' bootR9RuntimeInputs}/bin/boot-r9-cpu";
           };
+          # 05-21 (SMP-08/SMP-09/MEM-15/D-24/D-27): the packaged aarch64
+          # two-CPU stress and small-memory pressure gates (drivers and
+          # wrappers authored by Plan 05-27).  Same supply contract as the
+          # smoke/tier1 apps (kernel-virt, the read-only arm64 tree, the
+          # host mkpaqfs); the wrappers patch `aeadloop=1` (stress) and
+          # `palloc_max_frames` + a shrunken /memory (pressure) onto the
+          # throwaway DTB and both spawn QEMU with `-smp 2`.
+          boot-r9-smp-stress = {
+            type = "app";
+            program = "${mkScriptApp pkgs "boot-r9-smp-stress" ./nix/gates/smp-stress-r9.sh ''
+              export R9_KERNEL_PKG="${self.packages.${system}.kernel-virt}"
+              export R9_HARVEY_DIR_ARM64="${harveyTreeArm64}"
+              export R9_MKPAQFS="${self.packages.${system}.harvey-mkpaqfs}/bin/mkpaqfs"
+            '' bootR9RuntimeInputs}/bin/boot-r9-smp-stress";
+          };
+          boot-r9-mem-pressure = {
+            type = "app";
+            program = "${mkScriptApp pkgs "boot-r9-mem-pressure" ./nix/gates/mem-pressure-r9.sh ''
+              export R9_KERNEL_PKG="${self.packages.${system}.kernel-virt}"
+              export R9_HARVEY_DIR_ARM64="${harveyTreeArm64}"
+              export R9_MKPAQFS="${self.packages.${system}.harvey-mkpaqfs}/bin/mkpaqfs"
+            '' bootR9RuntimeInputs}/bin/boot-r9-mem-pressure";
+          };
         }
         # 01-18 (D-07/D-09/HARN-08): the moved drawterm gate app.  The
         # header is Harvey's drawtermGateX64Pkg env contract re-keyed
@@ -1027,6 +1050,31 @@ WRAP
               export R9_MKPAQFS="${self.packages.${system}.harvey-mkpaqfs}/bin/mkpaqfs"
               export R9_AUTHDOMAIN_GEN="${self.packages.${system}.harvey-authdomain-gen}/bin/authdomain-gen"
             '' bootR9X64RuntimeInputs}/bin/boot-r9-services-x64";
+          };
+          # 05-21 (SMP-08/SMP-09/MEM-15/D-24/D-27): the packaged x86_64
+          # two-CPU stress and small-memory pressure gates (Plan 05-27).
+          # Same supply contract as boot-r9-smoke-x64 minus the netdev
+          # emitter/authdomain generator (these gates do not touch the
+          # network or the auth bake); the wrappers compose the chain ISO
+          # with `--append="aeadloop=1"` (stress) or `palloc_max_frames`
+          # (pressure) and both spawn QEMU with `-smp 2` on `-cdrom`.
+          boot-r9-smp-stress-x64 = {
+            type = "app";
+            program = "${mkScriptApp pkgs "boot-r9-smp-stress-x64" ./nix/gates/smp-stress-r9-x64.sh ''
+              export R9_KERNEL_X64_PKG="${self.packages.${system}.kernel-x64}"
+              export R9_ISO_BUILDER="${self.packages.${system}.iso-builder}/bin/r9-iso-builder"
+              export R9_HARVEY_DIR_AMD64="${self.packages.${system}.harvey-tree-amd64}"
+              export R9_MKPAQFS="${self.packages.${system}.harvey-mkpaqfs}/bin/mkpaqfs"
+            '' bootR9X64RuntimeInputs}/bin/boot-r9-smp-stress-x64";
+          };
+          boot-r9-mem-pressure-x64 = {
+            type = "app";
+            program = "${mkScriptApp pkgs "boot-r9-mem-pressure-x64" ./nix/gates/mem-pressure-r9-x64.sh ''
+              export R9_KERNEL_X64_PKG="${self.packages.${system}.kernel-x64}"
+              export R9_ISO_BUILDER="${self.packages.${system}.iso-builder}/bin/r9-iso-builder"
+              export R9_HARVEY_DIR_AMD64="${self.packages.${system}.harvey-tree-amd64}"
+              export R9_MKPAQFS="${self.packages.${system}.harvey-mkpaqfs}/bin/mkpaqfs"
+            '' bootR9X64RuntimeInputs}/bin/boot-r9-mem-pressure-x64";
           };
         }
         # 01-24 (D-07/D-09/HARN-08): the net-doctor preflight app —
