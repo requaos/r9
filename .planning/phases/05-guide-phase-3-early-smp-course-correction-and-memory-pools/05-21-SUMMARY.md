@@ -266,3 +266,51 @@ None — no external service configuration required.
 - All 11 modified files exist on disk.
 - Commits `0da8b07`, `80d1711`, `e5ae868` are ancestors of HEAD.
 - Plan status is `halted` by design: the pressure leg is RED on the blockers above, so Owner Stop 4 was not self-approved.
+
+## Post-script: mem-pressure resolution (owner-approved debug session, 2026-11-27)
+
+The owner approved fixing BLOCKER items (a)/(b) in place.  Debug session
+`.planning/debug/resolved/aarch64-palloc-evictor.md` (slug
+`aarch64-palloc-evictor`) carries the full evidence; the outcome:
+
+- **Root causes (all three had to be fixed).** (1) `alloc_clean` reclaimed
+  ONE frame per evictor attempt; the frame returns to the shared dirty pool
+  and the sibling CPU took it before the caller's retry, so a starving
+  caller burned `MAX_EVICT_ATTEMPTS` and returned `OutOfSpace` while the
+  cache was still reclaimable (measured: `freed … pool_after=(dirty=1
+  active=2047)`, next attempt `dirty=0 active=2048`).  (2) The droppable
+  FIFO had no mappedness preference and, once cold pages were gone, evicted
+  hot text pages of running processes — 377,377 refaults of `va=0x18000`
+  (evict→refault livelock).  (3) The authored load never exhausted the pool
+  (exec churn) or demanded ~100x it (`hseq 1 400000`), and
+  `pinned_skipped > 0` is structurally unreachable from this image's
+  userland (05-21 BLOCKER 3).
+- **Fix.** `EVICT_BATCH_FRAMES=16` so a reclaiming caller keeps a margin of
+  its own frames; `select_eviction_victim` prefers unmapped (cold, rmap
+  empty) pages and falls back to the oldest mapped one; `#c/sysstat` gained
+  `palloc.hash:`/`palloc.pool:` diagnostics plus `evict_calls`, `reclaimed`
+  and `free_failures`; the aarch64 driver now drives one bounded
+  `hseq 1 44000 | hsort > /dev/null` burst (`R9_PRESSURE_LINES`) and asserts
+  `dropped_text > 0`, `dropped_data > 0`, `evict_calls > 0`,
+  `reclaimed > 0`, `free_failures == 0`, forbidding `phys page alloc
+  failed` in the capture.
+- **Criterion change.** `pinned_skipped > 0` is removed from both
+  mem-pressure drivers (reported, not asserted).  Pinning is proven by the
+  host integration test
+  `port/src/pagecache.rs::pinned_cached_page_is_skipped_until_unpinned`,
+  which pins a real cached frame through `PageAlloc::pin_frame` (the exact
+  `UserSlice` PinGuard call) and requires the evictor to skip and count it,
+  then take it once unpinned.  The background pinned-reader stage was
+  removed: it could not pin a cached page, changed the pressure baseline by
+  starting extra shells, and added exec-after-pressure surfaces.
+- **Evidence (real numbers).** 4 consecutive passes, 3x HVF + 1x TCG,
+  identical counters each run:
+  `palloc: managed_frames=2048` /
+  `evictor: dropped_text=20 dropped_data=28 pinned_skipped=0 evict_calls=3
+  reclaimed=48 free_failures=0`, re-fault line intact, `MEM_PRESSURE_OK`,
+  no `phys page alloc failed` / `unresolvable` marker.  Host suite:
+  `cargo xtask check` rc=0, `cargo xtask test` rc=0 (port 208 tests).
+- **Still open.** The x86_64 mem-pressure live leg remains unvalidated on
+  this aarch64 host (Linux-only venue, WINDOWS #21); its driver drops the
+  same unreachable `pinned_skipped > 0` assertion but keeps its original
+  exec-churn workload, so it is not yet known green.

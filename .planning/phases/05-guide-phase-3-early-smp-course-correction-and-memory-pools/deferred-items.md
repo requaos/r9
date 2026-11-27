@@ -161,3 +161,18 @@ Out-of-scope discoveries made during plan 05-08, not fixed by it:
   .#boot-r9-net-smoke` x3 PASS, `R9_SMP=1` PASS, a genuine -smp 1 net
   smoke PASS, `nix run .#boot-r9-smoke` (HVF) PASS, `cargo xtask check`
   + `cargo xtask test` green.
+
+# Debug session aarch64-palloc-evictor (2026-11-27) — residual:
+
+- **x86_64 mem-pressure live leg is unvalidated after the criterion
+  change.**  Both drivers now report `pinned_skipped` without asserting it
+  (the 05-21 structural finding; pinning is proven host-side by
+  `pagecache::pinned_cached_page_is_skipped_until_unpinned`).  The aarch64
+  gate is green 3x HVF + 1x TCG with a bounded `hseq 1 44000 | hsort`
+  burst, but the x86_64 driver still uses the original exec-churn workload,
+  which never exhausted the 8 MiB pool on aarch64 — so its
+  `dropped_text > 0` / `dropped_data > 0` stages may still be red until it
+  gets the same bounded-burst treatment and a Linux TCG/KVM run (WINDOWS
+  #21).  Owner: the x86_64 live-leg slice.
+  status: acknowledged
+
