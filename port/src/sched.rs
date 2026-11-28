@@ -344,12 +344,15 @@ mod tests {
     #[test]
     fn runqueues_four_cpu_steal_conserves_10k_pids() {
         use std::sync::Arc;
+        use std::time::{Duration, Instant};
         const N: u64 = 10_000;
+        const CONSUMERS: usize = 3;
         let rq = Arc::new(RunQueues::<4>::new());
         let counts: Arc<Vec<AtomicUsize>> =
             Arc::new((0..N as usize).map(|_| AtomicUsize::new(0)).collect());
         let produced = Arc::new(AtomicU64::new(0));
         let popped_total = Arc::new(AtomicU64::new(0));
+        let took_first = Arc::new(AtomicUsize::new(0));
         let start = Arc::new(std::sync::Barrier::new(4));
         // The producer (cpu 0) lands every pid on queue 0 — consumers on
         // cpus 1..4 see empty local queues and must STEAL every pid.
@@ -367,45 +370,74 @@ mod tests {
             })
         };
         let mut consumers = Vec::new();
-        for cpu in 1..4usize {
+        for cpu in 1..=CONSUMERS {
             let rq = Arc::clone(&rq);
             let counts = Arc::clone(&counts);
             let produced = Arc::clone(&produced);
             let popped_total = Arc::clone(&popped_total);
+            let took_first = Arc::clone(&took_first);
             let start = Arc::clone(&start);
             consumers.push(std::thread::spawn(move || {
                 crate::smp::test_hooks::set_cpu_id(cpu);
                 start.wait();
+                // The host's scheduler is not what this test pins.  On a
+                // four-CPU host (CI) other tests' threads can keep a consumer
+                // off its CPU until its siblings have drained the queue, so
+                // "each stole at least one" holds by construction instead:
+                // no consumer takes a second pid before every one has its
+                // first.  The waits are bounded by time, not by a count of
+                // empty polls — a count of yields is spent in a fraction of a
+                // second of host-side preemption.
+                let give_up_at = Instant::now() + Duration::from_secs(60);
                 let mut mine = 0u64;
-                let mut empty_spins = 0u32;
+                let mut gave_up = false;
                 loop {
+                    if mine > 0 && took_first.load(Ordering::Acquire) < CONSUMERS {
+                        if Instant::now() > give_up_at {
+                            gave_up = true;
+                            break;
+                        }
+                        std::thread::yield_now();
+                        continue;
+                    }
                     match rq.pop_or_steal(cpu, 4) {
                         Some(pid) => {
                             counts[pid as usize].fetch_add(1, Ordering::Relaxed);
                             popped_total.fetch_add(1, Ordering::Relaxed);
                             mine += 1;
-                            empty_spins = 0;
+                            if mine == 1 {
+                                took_first.fetch_add(1, Ordering::Release);
+                            }
                         }
                         None => {
-                            if produced.load(Ordering::Acquire) == N
+                            if mine > 0
+                                && produced.load(Ordering::Acquire) == N
                                 && popped_total.load(Ordering::Acquire) == N
                             {
                                 break;
                             }
-                            empty_spins += 1;
-                            if empty_spins > 200_000 {
-                                break; // give up rather than wedge the host test
+                            if Instant::now() > give_up_at {
+                                // give up rather than wedge the host test
+                                gave_up = true;
+                                break;
                             }
                             std::thread::yield_now();
                         }
                     }
                 }
-                mine
+                (mine, gave_up)
             }));
         }
         producer.join().expect("producer thread");
-        let per_cpu: Vec<u64> =
+        let per_cpu: Vec<(u64, bool)> =
             consumers.into_iter().map(|h| h.join().expect("consumer thread")).collect();
+        for (i, &(_, gave_up)) in per_cpu.iter().enumerate() {
+            assert!(
+                !gave_up,
+                "cpu {} gave up after 60 s: the producer or a sibling consumer never ran",
+                i + 1
+            );
+        }
         assert_eq!(
             popped_total.load(Ordering::Relaxed),
             N,
@@ -414,7 +446,7 @@ mod tests {
         for (i, c) in counts.iter().enumerate() {
             assert_eq!(c.load(Ordering::Relaxed), 1, "pid {i} popped exactly once");
         }
-        for (i, &m) in per_cpu.iter().enumerate() {
+        for (i, &(m, _)) in per_cpu.iter().enumerate() {
             assert!(m > 0, "cpu {} stole at least one pid from cpu 0", i + 1);
         }
     }
