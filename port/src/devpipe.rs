@@ -35,9 +35,10 @@
 //! Chan::dup of an open pipe chan bumps (dat.rs documents the rule),
 //! namec::close_chan decrements.
 //!
-//! Overflow: writes that would exceed the 4 KiB queue bound error with a
-//! named errstr (never silent loss, never partial — 9P messages must stay
-//! whole).  Blocking-write is a later-era concern (no measured caller).
+//! Overflow: a write the 4 KiB queue has no room for BLOCKS until a
+//! reader drains (19-08) and then lands whole; a write larger than the
+//! queue itself lands in pieces as room appears (`write`, 2026-11-28).
+//! Nothing is ever dropped or refused for its size.
 //!
 //! The dat.rs `Dev` trait is NOT implemented here (its skeleton is
 //! non-constructible — see devroot.rs's header); attach/walk/open/read/
@@ -401,13 +402,21 @@ pub fn read(c: &mut Chan, buf: &mut [u8], offset: u64) -> Result<u64> {
 }
 
 /// Write to a pipe end (donor pipewrite: end i writes q[1-i]).
-/// BLOCKS while the queue lacks room for the whole message (the
-/// donor's qwrite — whole-message atomic, never partial, never
-/// silent; 19-08: the old error-on-full killed the root paqfs under
-/// the tag-mux's concurrent rpcs).  Errors when the read side is
-/// fully closed ("write on closed pipe").  Wakes blocked readers
-/// after the bytes land; the read path wakes parked writers as it
-/// drains.
+/// BLOCKS while the queue lacks room (the donor's qwrite; 19-08: the
+/// old error-on-full killed the root paqfs under the tag-mux's
+/// concurrent rpcs).  A write no larger than the queue lands whole: it
+/// either fits at once or parks until a reader has drained room for
+/// all of it.  A write LARGER than the queue lands in pieces, each as
+/// big as the room a reader leaves, and the call returns once the last
+/// piece is in — until 2026-11-28 such a write parked for good: the
+/// whole-fit test could never pass for it, the reader waited for bytes
+/// that never landed, and the pair was dead (`hsort` flushes 8 KiB
+/// stdio blocks into a 4 KiB pipe, so `hseq | hsort | cat` stopped for
+/// good past 4 KiB of output; measured on x86_64).  Errors when the
+/// read side is fully closed; a write cut short after pieces landed
+/// reports what landed, never an error that hides it.  Wakes blocked
+/// readers after the bytes land; the read path wakes parked writers as
+/// it drains.
 pub fn write(c: &mut Chan, buf: &[u8], _offset: u64) -> Result<u64> {
     if c.qid.typ == QTDIR {
         return Err("devpipe: write of a directory");
@@ -419,21 +428,32 @@ pub fn write(c: &mut Chan, buf: &[u8], _offset: u64) -> Result<u64> {
         return Err("devpipe: write of unattached pipe chan");
     };
     let n = buf.len();
+    let mut done = 0usize;
     let mut h: Option<PipeHooks> = None;
     loop {
+        if done == n {
+            return Ok(done as u64);
+        }
         let node = LockNode::new();
         let mut readers: Vec<u64> = Vec::new();
-        let mut written = false;
+        let mut landed = false;
         {
             let mut g = pipe.lock(&node);
             let q = &mut g.q[1 - side];
             if q.closed {
-                return Err("devpipe: write on closed pipe");
+                return if done > 0 {
+                    Ok(done as u64)
+                } else {
+                    Err("devpipe: write on closed pipe")
+                };
             }
-            if n <= PIPE_Q_CAP - q.buf.len() {
-                q.buf.extend(buf.iter().copied());
+            let room = PIPE_Q_CAP - q.buf.len();
+            if room > 0 {
+                let piece = room.min(n - done);
+                q.buf.extend(buf[done..done + piece].iter().copied());
+                done += piece;
                 readers = core::mem::take(&mut q.waiters);
-                written = true;
+                landed = true;
             } else {
                 // Full: register as a write-waiter and park (the
                 // donor's blocking qwrite; a draining read or the
@@ -444,7 +464,11 @@ pub fn write(c: &mut Chan, buf: &[u8], _offset: u64) -> Result<u64> {
                 // A pending note interrupts the parked write (the
                 // note-interruptible blocking-IO contract).
                 if (h.as_ref().unwrap().note_pending)() {
-                    return Err("interrupted");
+                    return if done > 0 {
+                        Ok(done as u64)
+                    } else {
+                        Err("interrupted")
+                    };
                 }
                 let pid = (h.as_ref().unwrap().current)();
                 // SMP-03 (D-22): prepare_block before the pid enters
@@ -456,12 +480,12 @@ pub fn write(c: &mut Chan, buf: &[u8], _offset: u64) -> Result<u64> {
                 }
             }
         }
-        if written {
+        if landed {
             if !readers.is_empty() {
                 let hh = h.unwrap_or_else(|| hooks().expect("devpipe: hooks"));
                 (hh.wake)(&readers);
             }
-            return Ok(n as u64);
+            continue;
         }
         // Park until a reader drains (prepare_block + register-under-lock
         // + drop + block — the 2-CPU wakeup-loss-free discipline, SMP-03).

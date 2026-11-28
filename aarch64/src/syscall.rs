@@ -323,9 +323,10 @@ fn sys_pwrite(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
             port::devenv::write(&mut chan, src.as_slice(), off)
         }
         DEV_PIPE => {
-            // devpipe: end i writes q[1-i]; a full queue is a
-            // named error (never partial, never silent); blocked readers
-            // wake after the bytes land.
+            // devpipe: end i writes q[1-i]; a full queue blocks the
+            // writer until a reader drains (a write larger than the
+            // queue lands in pieces); blocked readers wake after the
+            // bytes land.
             port::devpipe::write(&mut chan, src.as_slice(), off)
         }
         DEV_DUP => Err("devdup: not writable (open #d/N to reach the fd)"),

@@ -90,6 +90,70 @@ fn pipe_full_write_blocks_until_a_reader_drains() {
     assert_eq!(&buf[..n as usize], b"x", "the parked write landed WHOLE after the drain — nothing partial, nothing lost");
 }
 
+/// A write larger than the queue itself (2026-11-28): the whole-fit test
+/// could never pass for it, so the writer parked for good and the reader
+/// waited for bytes that never landed (`hsort` flushes 8 KiB stdio blocks
+/// into a 4 KiB pipe).  Such a write now lands in pieces, each as big as
+/// the room the reader leaves: one park per full piece, one wake per
+/// drain, and every byte crosses in order exactly once.
+#[test]
+fn a_write_larger_than_the_queue_lands_in_pieces_as_the_reader_drains() {
+    let _script = script_guard();
+    ensure_hooks();
+    let (mut e0, e1) = pipe_pair();
+    *PEER_END.lock().unwrap() = Some(e1);
+    let payload: Vec<u8> = (0..2 * PIPE_Q_CAP + 100).map(|i| (i % 251) as u8).collect();
+    // Piece 1 fills the queue and the writer parks; the peer drains it;
+    // piece 2 fills it again; the peer drains; the tail lands at once.
+    let mut script = SCRIPT.lock().unwrap();
+    script.push_back(Step::Collect(PIPE_Q_CAP));
+    script.push_back(Step::Collect(PIPE_Q_CAP));
+    drop(script);
+    let n = devpipe::write(&mut e0, &payload, u64::MAX).expect("the oversized write completes");
+    assert_eq!(n as usize, payload.len(), "the call reports the whole write");
+    assert_eq!(*BLOCKS.lock().unwrap(), 2, "parked once per full piece, not for the tail");
+    assert_eq!(WAKES.lock().unwrap().as_slice(), &[vec![TEST_PID], vec![TEST_PID]], "each drain woke the writer");
+
+    let mut e1 = PEER_END.lock().unwrap().take().expect("the scripted peer end");
+    let mut tail = vec![0u8; payload.len()];
+    let got = devpipe::read(&mut e1, &mut tail, u64::MAX).expect("read the tail");
+    let mut crossed = DRAINED.lock().unwrap().clone();
+    crossed.extend_from_slice(&tail[..got as usize]);
+    assert_eq!(crossed, payload, "every byte crossed, in order, exactly once");
+}
+
+/// The oversized write cut short: the read end closes while the writer is
+/// parked behind a landed piece.  The call reports the piece that landed
+/// — a count, not an error that would hide it — and never parks again.
+#[test]
+fn an_oversized_write_cut_by_the_readers_close_reports_what_landed() {
+    let _script = script_guard();
+    ensure_hooks();
+    let (mut e0, e1) = pipe_pair();
+    *PEER_END.lock().unwrap() = Some(e1);
+    let payload = vec![0x5Au8; PIPE_Q_CAP + 500];
+    SCRIPT.lock().unwrap().push_back(Step::Close);
+    let n = devpipe::write(&mut e0, &payload, u64::MAX).expect("a short write is not an error");
+    assert_eq!(n as usize, PIPE_Q_CAP, "the piece that landed, and no more");
+    assert_eq!(*BLOCKS.lock().unwrap(), 1, "parked behind the first piece only");
+    assert_eq!(WAKES.lock().unwrap().as_slice(), &[vec![TEST_PID]], "the close woke the parked writer");
+    // What follows is an error: the queue is closed now.
+    PEER_END.lock().unwrap().take();
+    assert_eq!(devpipe::write(&mut e0, b"x", u64::MAX), Err("devpipe: write on closed pipe"));
+}
+
+/// A zero-length write is whole by definition: it lands nothing, parks
+/// for nothing and reports zero.
+#[test]
+fn a_zero_length_write_reports_zero_without_parking() {
+    let (mut e0, mut e1) = pipe_pair();
+    assert_eq!(devpipe::write(&mut e0, b"", u64::MAX), Ok(0));
+    let mut buf = [0u8; 16];
+    devpipe::write(&mut e0, b"after", u64::MAX).expect("write");
+    let n = devpipe::read(&mut e1, &mut buf, u64::MAX).expect("read");
+    assert_eq!(&buf[..n as usize], b"after", "the empty write left no trace");
+}
+
 /// Behavior bullet 3 (drain arm): closing the write end makes the reader
 /// drain the remaining bytes and then see EOF (a 0 read) — never a hang.
 #[test]
@@ -208,9 +272,13 @@ enum Step {
     /// reader for 19-08's blocking write: a parked writer completes
     /// only after the drain makes room).
     Read(usize),
+    /// As `Read`, keeping what was drained (the scripted reader for an
+    /// oversized write: every piece must cross, in order).
+    Collect(usize),
 }
 
 static SCRIPT: Mutex<VecDeque<Step>> = Mutex::new(VecDeque::new());
+static DRAINED: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 static PEER_END: Mutex<Option<Chan>> = Mutex::new(None);
 static BLOCKS: Mutex<u32> = Mutex::new(0);
 static WAKES: Mutex<Vec<Vec<u64>>> = Mutex::new(Vec::new());
@@ -237,6 +305,12 @@ fn test_block() {
             let mut scratch = vec![0u8; n];
             let got = devpipe::read(peer, &mut scratch, u64::MAX).expect("scripted peer read");
             assert!(got as usize <= n, "the scripted drain stays in bounds");
+        }
+        Step::Collect(n) => {
+            let mut scratch = vec![0u8; n];
+            let got = devpipe::read(peer, &mut scratch, u64::MAX).expect("scripted peer read");
+            assert!(got as usize <= n, "the scripted drain stays in bounds");
+            DRAINED.lock().unwrap().extend_from_slice(&scratch[..got as usize]);
         }
     }
 }
@@ -270,6 +344,7 @@ fn script_guard() -> std::sync::MutexGuard<'static, ()> {
     *BLOCKS.lock().unwrap() = 0;
     WAKES.lock().unwrap().clear();
     SCRIPT.lock().unwrap().clear();
+    DRAINED.lock().unwrap().clear();
     *PEER_END.lock().unwrap() = None;
     g
 }
