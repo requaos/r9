@@ -55,7 +55,6 @@
 # contract violation (missing env).
 
 set timeout 600                    ;# TCG-sized, PER STAGE
-match_max 262144
 # NOTE: log_user stays ON — expect 5.45 writes NOTHING to log_file when
 # log_user is 0 (measured: the capture file was created empty).
 
@@ -86,6 +85,11 @@ spawn $QEMU -M $R9_MACHINE -cpu $R9_CPU -smp 2 -m 1024M \
     -nographic \
     -name $run_tag
 set spawn_pid [exp_pid]
+# match_max is set AFTER the spawn: set before it, the value does not
+# reach the spawned process (expect 5.45: every spawn starts at the 2000
+# default — measured 2026-11-28; the read pass's 4.5 KB then lost its front
+# and the size count found 7 of 8).
+match_max 262144
 log_file $env(R9_SMOKE_LOG)
 
 # --- teardown: kill qemu's process group ------------------------------
