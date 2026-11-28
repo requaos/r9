@@ -273,6 +273,87 @@ fn pd_for<T: Tables>(
     Ok(page)
 }
 
+/// The kernel alias's place in the boot tables (l.S): PML4 slot 511 names
+/// a PDPT whose entry 510 is ONE 1 GiB page — the first GiB of RAM at
+/// KZERO.
+const KZERO_SLOT: usize = 511;
+const KZERO_PDPT_ENTRY: usize = 510;
+
+/// What [`split_with_guards`] produced.
+#[derive(Debug, Default, PartialEq)]
+pub struct Split {
+    /// Page-table pages taken: one PD for the gibibyte and one PT per
+    /// 2 MiB of the guarded range.
+    pub table_pages: usize,
+    /// Guard pages left unmapped: one per `slot_bytes` of the range.
+    pub guards: usize,
+}
+
+/// The table pages [`split_with_guards`] takes for `len` bytes of guarded
+/// range: one PD for the gibibyte and one PT per 2 MiB of the range.
+pub fn guard_table_pages(len: u64) -> usize {
+    1 + (len / MIB2) as usize
+}
+
+/// Split the kernel alias's 1 GiB page so that every `slot_bytes`-spaced
+/// stack in `[base, base + len)` has an unmapped page below it.  The
+/// gibibyte becomes 512 entries of 2 MiB, and each 2 MiB that holds part
+/// of the range becomes 512 entries of 4 KiB with the first page of each
+/// slot absent.  Every other address maps exactly as before, with the
+/// flags the 1 GiB page carried.
+fn split_with_guards<T: Tables>(
+    pml4_pa: u64,
+    base: u64,
+    len: u64,
+    slot_bytes: u64,
+    tables: &mut T,
+    mut new_page: impl FnMut() -> Option<u64>,
+) -> Result<Split, &'static str> {
+    if !base.is_multiple_of(MIB2) || !len.is_multiple_of(MIB2) || !slot_bytes.is_multiple_of(PAGE_SIZE_4K as u64) {
+        return Err("directmap: the guarded range is not 2 MiB pages of 4 KiB-multiple slots");
+    }
+    let pdpt = tables.get(pml4_pa, KZERO_SLOT);
+    if pdpt & PTE_P == 0 || pdpt & PTE_PS != 0 {
+        return Err("directmap: PML4 slot 511 does not name the kernel alias's PDPT");
+    }
+    let leaf = tables.get(pdpt & PA_MASK, KZERO_PDPT_ENTRY);
+    if leaf & PTE_P == 0 || leaf & PTE_PS == 0 {
+        return Err("directmap: the kernel alias is not one 1 GiB page");
+    }
+    // A large page carries its PAT bit at bit 12 and a 4 KiB page at bit
+    // 7: the split cannot carry one across.
+    if leaf & (1 << 12) != 0 {
+        return Err("directmap: the kernel alias sets PAT; the split does not carry it");
+    }
+    // Everything but the page-size bit: present, writable, the cache
+    // bits, the accessed and dirty bits, and no-execute.
+    let flags = leaf & 0x8000_0000_0000_0fff & !PTE_PS;
+    let mut split = Split::default();
+    let pd = new_page().ok_or("directmap: out of page-table pages")?;
+    split.table_pages += 1;
+    for i in 0..512 {
+        let pa2 = i as u64 * MIB2;
+        if pa2 + MIB2 <= base || pa2 >= base + len {
+            tables.set(pd, i, pa2 | flags | PTE_PS);
+            continue;
+        }
+        let pt = new_page().ok_or("directmap: out of page-table pages")?;
+        split.table_pages += 1;
+        for j in 0..512u64 {
+            let pa = pa2 + j * PAGE_SIZE_4K as u64;
+            if pa >= base && pa < base + len && (pa - base).is_multiple_of(slot_bytes) {
+                split.guards += 1; // left absent: the guard page
+            } else {
+                tables.set(pt, j as usize, pa | flags);
+            }
+        }
+        tables.set(pd, i, pt | INTER);
+    }
+    // One store publishes the whole gibibyte's new shape.
+    tables.set(pdpt & PA_MASK, KZERO_PDPT_ENTRY, pd | INTER);
+    Ok(split)
+}
+
 #[cfg(not(test))]
 mod live {
     use core::ptr;
@@ -335,10 +416,51 @@ mod live {
         }
         Ok((built.unmapped, built.table_pages))
     }
+
+    /// Split the kernel alias around the kernel-stack arena
+    /// `[base, base + len)`, leaving a guard page below every
+    /// `slot_bytes` stack ([`super::split_with_guards`]), with the table
+    /// pages taken from `pages` `[start, end)` — a run in the first GiB,
+    /// at least [`super::guard_table_pages`] pages long.
+    pub fn arm_guards(
+        base: u64,
+        len: u64,
+        slot_bytes: u64,
+        pages: (u64, u64),
+    ) -> Result<Split, &'static str> {
+        let (mut next, limit) = pages;
+        let mut tables = AliasTables;
+        let split = split_with_guards(crate::proc::boot_pml4_pa(), base, len, slot_bytes, &mut tables, || {
+            if next >= limit {
+                return None;
+            }
+            let pa = next;
+            next += PAGE_SIZE_4K as u64;
+            // SAFETY: `pa` lies in the caller's table-page reservation,
+            // inside the first GiB; a whole page is written.
+            unsafe { ptr::write_bytes(phys_ptr_mut(pa), 0, PAGE_SIZE_4K) };
+            Some(pa)
+        })?;
+        // The boot CPU may still translate through the gibibyte page.  A
+        // CR3 reload drops every translation (this alias sets no global
+        // bit), and each guard is then invalidated by name.
+        crate::proc::switch_cr3(crate::proc::read_cr3());
+        for i in 0..split.guards as u64 {
+            // SAFETY: invlpg reads no memory and names no register.
+            unsafe {
+                core::arch::asm!(
+                    "invlpg ({})",
+                    in(reg) (crate::proc::KZERO + base + i * slot_bytes) as usize,
+                    options(att_syntax, nostack, preserves_flags)
+                );
+            }
+        }
+        Ok(split)
+    }
 }
 
 #[cfg(not(test))]
-pub(crate) use live::init;
+pub(crate) use live::{arm_guards, init};
 
 #[cfg(test)]
 mod tests {
@@ -414,6 +536,88 @@ mod tests {
         let e = f.entry(PML4, 256);
         assert_eq!(e & INTER, INTER, "slot 256 names a PDPT");
         e & PA_MASK
+    }
+
+    /// l.S's kernel alias in the fake tables: PML4 slot 511 names a
+    /// PDPT whose entry 510 is one 1 GiB page for PA 0.
+    fn kzero_alias(f: &mut Fake, src: &mut Source) -> u64 {
+        let pdpt = src.page().expect("the alias's PDPT");
+        f.set(PML4, 511, pdpt | INTER);
+        f.set(pdpt, 510, PTE_PS | PTE_RW | PTE_P);
+        pdpt
+    }
+
+    const K: u64 = 1 << 12;
+    /// One kernel stack slot: eight pages (kstack.rs's SLOT_BYTES).
+    const SLOT32K: u64 = 8 * K;
+
+    #[test]
+    fn the_split_leaves_a_guard_below_every_slot_and_maps_the_rest_as_before() {
+        let (mut f, mut src) = Fake::with(1 << 20);
+        let pdpt = kzero_alias(&mut f, &mut src);
+        // a 16 MiB arena at 128 MiB
+        let (base, len) = (128 * M, 16 * M);
+        let split = split_with_guards(PML4, base, len, SLOT32K, &mut f, || src.page()).expect("split");
+        assert_eq!(split, Split { table_pages: 1 + 8, guards: 512 });
+        assert!(guard_table_pages(len) >= split.table_pages, "the bound covers the split");
+        // slot 511 still names the same PDPT; its entry is a PD now
+        let e = f.entry(pdpt, 510);
+        assert_eq!(e & INTER, INTER, "the gibibyte leaf became a PD");
+        assert_eq!(e & PTE_PS, 0);
+        let pd = e & PA_MASK;
+        for i in 0..512u64 {
+            let e = f.entry(pd, i as usize);
+            let pa2 = i * M * 2;
+            if pa2 + 2 * M <= base || pa2 >= base + len {
+                // outside the arena: a 2 MiB page with the leaf's flags
+                assert_eq!(e, pa2 | PTE_PS | PTE_RW | PTE_P, "PD[{i}]");
+            } else {
+                assert_eq!(e & INTER, INTER, "PD[{i}] names a PT");
+                assert_eq!(e & PTE_PS, 0);
+                let pt = e & PA_MASK;
+                for j in 0..512u64 {
+                    let pa = pa2 + j * K;
+                    let e = f.entry(pt, j as usize);
+                    if pa >= base && pa < base + len && (pa - base) % SLOT32K == 0 {
+                        assert_eq!(e, 0, "the guard page at PA {pa:#x} is absent");
+                    } else {
+                        assert_eq!(e, pa | PTE_RW | PTE_P, "PT[{i}][{j}]");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_split_refuses_what_it_cannot_carry() {
+        // misaligned range
+        let (mut f, mut src) = Fake::with(64);
+        kzero_alias(&mut f, &mut src);
+        assert!(split_with_guards(PML4, 128 * M + M, 16 * M, SLOT32K, &mut f, || src.page()).is_err());
+        // a slot that is not a page multiple
+        let (mut f, mut src) = Fake::with(64);
+        kzero_alias(&mut f, &mut src);
+        assert!(split_with_guards(PML4, 128 * M, 16 * M, SLOT32K - 1, &mut f, || src.page()).is_err());
+        // slot 511 not a PDPT
+        let (mut f, mut src) = Fake::with(64);
+        f.set(PML4, 511, PTE_PS | PTE_RW | PTE_P);
+        assert!(split_with_guards(PML4, 128 * M, 16 * M, SLOT32K, &mut f, || src.page()).is_err());
+        // the alias is not one 1 GiB page
+        let (mut f, mut src) = Fake::with(64);
+        let pdpt = src.page().unwrap();
+        f.set(PML4, 511, pdpt | INTER);
+        assert!(split_with_guards(PML4, 128 * M, 16 * M, SLOT32K, &mut f, || src.page()).is_err());
+        // out of table pages: nothing is published
+        let (mut f, mut src) = Fake::with(1);
+        let pdpt = kzero_alias(&mut f, &mut src);
+        assert!(split_with_guards(PML4, 128 * M, 16 * M, SLOT32K, &mut f, || src.page()).is_err());
+        assert_eq!(f.entry(pdpt, 510), PTE_PS | PTE_RW | PTE_P, "the gibibyte leaf still stands");
+    }
+
+    #[test]
+    fn the_bound_is_one_pd_and_one_pt_per_2mib() {
+        assert_eq!(guard_table_pages(16 * M), 9);
+        assert_eq!(guard_table_pages(64 * M), 33);
     }
 
     #[test]

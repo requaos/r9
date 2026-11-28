@@ -170,13 +170,20 @@ pub const MAX_PROCS: usize = 2048;
 /// must hold fds through 29 without making that fatal; pipe+dup flows
 /// hold several at once).
 pub const MAX_FDS: usize = 32;
-/// Per-process kernel stack: 16 KiB (4 pages) — the 9k donor's KSTACK
-/// (mem.h: `#define KSTACK (16*1024)`) and the aarch64 port's value.
-/// One contiguous slot of the boot-reserved arena (kstack.rs), reached
-/// at the KZERO alias that every page table carries — so every CPU can
-/// write every other CPU's stack, which the MCS locks' stack-resident
-/// nodes require.
-pub(crate) const KSTACK_PAGES: usize = 4;
+/// Per-process kernel stack: 32 KiB (8 pages), the lowest of them the
+/// unmapped guard page below the stack (kstack.rs).  The 9k donor's
+/// KSTACK is 16 KiB (mem.h: `#define KSTACK (16*1024)`) and so was this,
+/// but the in-kernel 9P2000.aead loopback (`#M`) is a coroutine server:
+/// a proc's syscall frames stay live while the server end runs on the
+/// same stack, and that path runs deeper than 16 KiB.  With 16 KiB
+/// slots `ls '#M'` ran off the bottom of its slot into the neighbouring
+/// one, and the root file server resumed onto the overflow (measured
+/// 2026-11-28 at two CPUs); the aarch64 port took the same path to the
+/// same answer (e5ae868).  One contiguous slot of the boot-reserved
+/// arena (kstack.rs), reached at the KZERO alias that every page table
+/// carries — so every CPU can write every other CPU's stack, which the
+/// MCS locks' stack-resident nodes require.
+pub(crate) const KSTACK_PAGES: usize = 8;
 /// The deferred moribund reap record (05-24, the aarch64 05-22
 /// moribund_reap port): an exiting proc's PML4 PA and the base PA of
 /// its kernel-stack slot, parked on the exiting CPU's
@@ -1339,7 +1346,7 @@ pub struct Proc {
     pub pid: u64,
     pub name: Vec<u8>,
     pub state: ProcState,
-    /// Top of this proc's 16 KiB kernel stack — the KZERO alias of its
+    /// Top of this proc's kernel stack — the KZERO alias of its
     /// arena slot's end (kstack.rs), the same address under every page
     /// table; the TSS rsp0 names it while this proc is current (the one
     /// kernel-stack mechanism both ring-3 entry paths share).
@@ -2089,8 +2096,8 @@ fn unwind_new_proc(pml4_pa: u64, slot: u64) {
     }
 }
 
-/// Allocate and register a fresh user process: pid, a 16 KiB kernel
-/// stack from the boot-reserved arena (kstack.rs — reachable from every
+/// Allocate and register a fresh user process: pid, a kernel stack from
+/// the boot-reserved arena (kstack.rs — reachable from every
 /// CPU through the KZERO alias), and a per-process PML4 with the kernel
 /// higher half shared (the OQ-2 resolution).  The proc starts with no
 /// segments, no byte source, and an empty mapping log; fd 0/1/2 are the
@@ -4073,16 +4080,19 @@ mod tests {
         let guard = new_user_proc("hosttest").expect("construction succeeds");
         assert!(guard.pid >= before_pid);
         assert!(guard.pml4_pa != 0);
-        // The kstack is one contiguous arena slot: four pages lowest
-        // first, 16 KiB-aligned, and no private PML4 window any more
-        // (the old slot 400 must stay EMPTY — the stack lives in the
-        // kernel half every table shares).
+        // The kstack is one contiguous arena slot: KSTACK_PAGES pages
+        // lowest first, slot-aligned, and no private PML4 window any
+        // more (the old slot 400 must stay EMPTY — the stack lives in
+        // the kernel half every table shares).  Its first page is the
+        // guard on metal (kstack.rs); the records name every page.
         assert!(guard.kstack_pas.iter().all(|&pa| pa != 0));
         let base = guard.kstack_pas[0];
-        assert!(base.is_multiple_of(crate::kstack::SLOT_BYTES as u64), "the slot is 16 KiB-aligned");
+        assert_eq!(guard.kstack_pas.len(), 8, "32 KiB of stack above the guard");
+        assert!(base.is_multiple_of(crate::kstack::SLOT_BYTES as u64), "the slot is slot-aligned");
         for (i, &pa) in guard.kstack_pas.iter().enumerate() {
             assert_eq!(pa, base + (i * PAGE_SIZE_4K) as u64, "the slot's pages are contiguous");
         }
+        assert_eq!(guard.kstack_top as u64, crate::kstack::top_va(base) as u64, "the top is the slot's end");
         assert_eq!(table_entry(guard.pml4_pa, 400), 0, "no private kstack window");
         assert_eq!(guard.kstack_top, crate::kstack::top_va(base));
         // fd 0/1/2 preopened as devcons chans.

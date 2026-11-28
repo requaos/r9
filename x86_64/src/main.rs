@@ -132,6 +132,14 @@ fn print_directmap_info() {
     }
 }
 
+/// The kernel stacks as boot built them (kstack.rs): the slots, a slot's
+/// size, and the guard pages below them.
+#[cfg(not(test))]
+fn print_kstack_info() {
+    let (slots, slot_bytes, guards) = kstack::info();
+    println!("kstack: slots={slots} slot={slot_bytes:#x} guards={guards}");
+}
+
 /// The physical end of the kernel image (the `end` link symbol's VA
 /// minus KZERO — the .bss end, which kernel.ld 2 MiB-aligns).
 fn kernel_phys_end() -> u64 {
@@ -238,6 +246,8 @@ pub extern "C" fn main(mach: &mut dat::Mach, mbdata: u64) {
     platform::print_machine_info(facts);
     print_memory_info();
     print_directmap_info();
+    #[cfg(not(test))]
+    print_kstack_info();
     // The demand pager's per-fault trace, only when asked for.
     proc::fault::set_trace(boot_token(facts.cmdline(), b"faulttrace"));
 

@@ -193,15 +193,22 @@ pub fn init_page_allocator(facts: &Facts, kernel_phys_end: u64) -> Result<(), In
     let span = PhysRange::with_end(span_start, span_end);
 
     // The kernel's own reservations in low RAM, in order: the
-    // kernel-stack arena (kstack.rs: MAX_PROCS contiguous 16 KiB slots,
-    // withheld from the pools like the kernel image), then the direct
-    // map's table pages — bounded before the map is built, so exactly
-    // what the map takes is withheld below and the rest returns to the
-    // pools.
+    // kernel-stack arena (kstack.rs: MAX_PROCS contiguous slots,
+    // withheld from the pools like the kernel image; 2 MiB-aligned so
+    // the kernel alias can be split around it and a guard page left
+    // below every stack), the page-table pages that split takes, then
+    // the direct map's table pages — bounded before anything is built,
+    // so exactly what each takes is withheld below and the rest returns
+    // to the pools.
     let mut low = LowRam::new(&avail[..navail], kernel_phys_end);
     let arena_bytes = crate::kstack::arena_bytes();
     let arena_base = low
-        .reserve(arena_bytes, crate::kstack::SLOT_BYTES)
+        .reserve(arena_bytes, 2 << 20)
+        .ok_or(PageAllocError::OutOfBounds)
+        .map_err(InitError::alloc)?;
+    let guard_bytes = crate::directmap::guard_table_pages(arena_bytes) as u64 * FRAME_SIZE as u64;
+    let guard_lo = low
+        .reserve(guard_bytes, FRAME_SIZE as u64)
         .ok_or(PageAllocError::OutOfBounds)
         .map_err(InitError::alloc)?;
     let table_bytes = crate::directmap::table_pages_bound(navail, span_end) as u64 * FRAME_SIZE as u64;
@@ -243,6 +250,7 @@ pub fn init_page_allocator(facts: &Facts, kernel_phys_end: u64) -> Result<(), In
         }
     }
     used.push(PhysRange::with_end(arena_base, arena_base + arena_bytes));
+    used.push(PhysRange::with_end(guard_lo, guard_lo + guard_bytes));
     used.push(PhysRange::with_end(table_lo, table_lo + table_pages as u64 * FRAME_SIZE as u64));
     for r in &beyond_map {
         used.push(PhysRange::with_end(floor_frame(r.start().addr()), ceil_frame(r.end().addr())));
@@ -252,6 +260,12 @@ pub fn init_page_allocator(facts: &Facts, kernel_phys_end: u64) -> Result<(), In
     let alloc = alloc::boxed::Box::new(PageAlloc::new());
     alloc.init_ranges(span, used.iter().cloned(), max_frames).map_err(InitError::alloc)?;
     PAGE_ALLOC.store(alloc::boxed::Box::into_raw(alloc), Ordering::Release);
+    // The guard page below every kernel stack, then the arena itself
+    // (its zeroing runs through the split alias: the proof every page
+    // but the guards is still reachable).
+    #[cfg(not(test))]
+    crate::kstack::arm(arena_base, (guard_lo, guard_lo + guard_bytes))
+        .map_err(|detail| InitError { kind: PageAllocError::OutOfBounds, detail: Some(detail) })?;
     #[cfg(not(test))]
     crate::kstack::init(arena_base);
 
@@ -374,10 +388,12 @@ mod tests {
     use alloc::vec::Vec;
 
     use super::{LowRam, MAX_AVAIL};
-    use crate::directmap::table_pages_bound;
+    use crate::directmap::{guard_table_pages, table_pages_bound};
     use crate::kstack::SLOT_BYTES;
 
-    const SLOT: u64 = SLOT_BYTES;
+    /// The arena's reservation alignment: 2 MiB, so the kernel alias can
+    /// be split around it.
+    const SLOT: u64 = 2 << 20;
     const K: u64 = 4096;
 
     /// The gate guest's map: the 640 KiB low range, then everything
@@ -387,13 +403,13 @@ mod tests {
     }
 
     #[test]
-    fn the_stack_arena_goes_above_the_kernel_image_slot_aligned() {
+    fn the_stack_arena_goes_above_the_kernel_image_in_2mib_pages() {
         let avail = qavail();
         let mut low = LowRam::new(&avail, 0xcb61001);
         let base = low.reserve(8 << 20, SLOT).unwrap();
-        assert_eq!(base % SLOT, 0, "slot-aligned");
+        assert_eq!(base % SLOT, 0, "2 MiB-aligned, so the kernel alias can be split around it");
         assert!(base >= 0xcb61001, "never over the kernel image");
-        assert_eq!(base, 0xcb64000, "the lowest slot-aligned address past the image");
+        assert_eq!(base, 0x0cc0_0000, "the lowest 2 MiB boundary past the image");
         // The low 640 KiB range has no room above a 200 MiB image.
     }
 
@@ -411,11 +427,12 @@ mod tests {
         // covered part, or fail.
         let avail = [(0x3e000000u64, 0x140000000u64)];
         assert_eq!(LowRam::new(&avail, 0x100000).reserve(16 << 20, SLOT), Some(0x3e000000));
-        // 4 MiB short of the ceiling: it would fit without the ceiling.
+        // A range with only 4 MiB below the ceiling: it would fit
+        // without the ceiling.
         let avail = [(0x3fc00000u64, 0x140000000u64)];
         assert!(
             LowRam::new(&avail, 0x100000).reserve(8 << 20, SLOT).is_none(),
-            "only 8 MiB is covered and the slot alignment leaves less"
+            "only 4 MiB is covered"
         );
     }
 
@@ -427,20 +444,28 @@ mod tests {
 
     #[test]
     fn reservations_never_overlap_and_follow_the_alignment_asked() {
-        // The arena, then page-aligned table pages, then another arena-sized
-        // span: each starts where the last ended, rounded up.
+        // The arena, then page-aligned table pages, then another
+        // arena-aligned span: each starts where the last ended, rounded
+        // up.
         let avail = [(0x100000u64, 0x4000_0000u64)];
         let mut low = LowRam::new(&avail, 0xcb61001);
         let arena = low.reserve(8 << 20, SLOT).unwrap();
-        assert_eq!(arena, 0xcb64000);
+        assert_eq!(arena, 0x0cc0_0000);
         let tables = low.reserve(5 * K, K).unwrap();
-        assert_eq!(tables, 0xd364000, "the page after the arena's last");
+        assert_eq!(tables, 0x0d40_0000, "the page after the arena's last");
         let next = low.reserve(SLOT, SLOT).unwrap();
-        assert_eq!(next, 0xd36c000, "after the five pages, rounded up to a slot");
+        assert_eq!(next, 0x0d60_0000, "after the five pages, rounded up to 2 MiB");
         // The kernel image itself is never handed out.
         let mut low = LowRam::new(&avail, 0x4000_0000 - K);
         assert!(low.reserve(2 * K, K).is_none(), "one page is left above a kernel ending a page short of the gibibyte");
         assert_eq!(low.reserve(K, K), Some(0x3fff_f000));
+    }
+
+    #[test]
+    fn the_guard_table_pages_are_one_pd_and_one_pt_per_2mib_of_arena() {
+        let bytes = crate::kstack::arena_bytes();
+        assert!(bytes.is_multiple_of(2 << 20), "the arena is whole 2 MiB pages");
+        assert_eq!(guard_table_pages(bytes), 1 + (bytes >> 21) as usize);
     }
 
     #[test]

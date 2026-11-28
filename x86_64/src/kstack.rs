@@ -1,25 +1,34 @@
 //! x86_64/src/kstack.rs — the per-process kernel stacks.
 //!
-//! Every process's 16 KiB kernel stack is one slot of an arena reserved
-//! from RAM at boot and reached at `KZERO + pa`.  The boot tables map
-//! that alias in every page table, so every CPU can write every other
-//! CPU's stack — which is what the portable MCS locks need: their queue
-//! nodes live on the calling CPU's kernel stack, and an acquire writes
-//! the PREDECESSOR's node (`predecessor.next.store`,
-//! port/src/mcslock.rs).  Until 2026-11-27 each proc mapped its own
-//! stack at one private VA window under its own PML4; a cross-CPU
-//! hand-off then wrote the waiter's stack instead of the holder's node,
-//! and both CPUs spun forever
-//! (.planning/debug/x86_64-smp2-mcs-kstack.md).
+//! Every process's kernel stack is one slot of an arena reserved from
+//! RAM at boot and reached at `KZERO + pa`.  The boot tables map that
+//! alias in every page table, so every CPU can write every other CPU's
+//! stack — which is what the portable MCS locks need: their queue nodes
+//! live on the calling CPU's kernel stack, and an acquire writes the
+//! PREDECESSOR's node (`predecessor.next.store`, port/src/mcslock.rs).
+//! Until 2026-11-27 each proc mapped its own stack at one private VA
+//! window under its own PML4; a cross-CPU hand-off then wrote the
+//! waiter's stack instead of the holder's node, and both CPUs spun
+//! forever (.planning/debug/x86_64-smp2-mcs-kstack.md).
+//!
+//! The lowest page of every slot is a GUARD: the kernel alias is split
+//! around the arena at boot (directmap.rs's `arm_guards`) and that page
+//! is left unmapped, so a kernel path that runs off the bottom of its
+//! stack takes a page fault at a named address instead of writing into
+//! the neighbouring slot.  Contiguous slots alone made that silent:
+//! with 16 KiB slots `ls '#M'` ran the in-kernel loopback's crypto off
+//! the bottom of its own slot and overwrote the root file server's
+//! saved context in the next one (2026-11-28).  The stacks are 32 KiB
+//! now (proc.rs's KSTACK_PAGES), and the guard is what keeps the next
+//! over-deep path loud.
 //!
 //! Reserving the arena at boot is what keeps this simple: the slots are
-//! contiguous and 16 KiB-aligned with no page-table work at all — no
-//! per-proc table pages (three per proc before), nothing to unmap at
-//! exit, no TLB shootdown, and a returned slot can be handed out again
-//! at once.  A slot is only returned by the sched loop's deferred reap,
-//! after the exiting CPU has left the stack (proc.rs's
-//! `reap_moribund`), so a sibling's new proc can never be started on a
-//! stack another CPU still runs on.
+//! contiguous and SLOT_BYTES-aligned with no page-table work per proc —
+//! nothing to unmap at exit, no TLB shootdown, and a returned slot can
+//! be handed out again at once.  A slot is only returned by the sched
+//! loop's deferred reap, after the exiting CPU has left the stack
+//! (proc.rs's `reap_moribund`), so a sibling's new proc can never be
+//! started on a stack another CPU still runs on.
 //!
 //! The arena sits below the 1 GiB alias ceiling today.  [`top_va`] is
 //! the ONE place a stack's VA is derived: rebuilding the kernel's map of
@@ -27,7 +36,7 @@
 //! moves that function and nothing here.
 //!
 //! Host tests reach the same seam with real host memory — a test "PA"
-//! is a 16 KiB-aligned host pointer and the alias is the identity
+//! is a SLOT_BYTES-aligned host pointer and the alias is the identity
 //! (proc.rs's mock-proc doctrine) — so new_user_proc is exercised on
 //! the host exactly as on metal.
 
@@ -37,8 +46,18 @@ use port::mem::PAGE_SIZE_4K;
 
 use crate::proc::{KSTACK_PAGES, MAX_PROCS};
 
-/// One kernel stack: four pages, contiguous.
+/// One kernel stack slot: its pages, contiguous; the lowest is the
+/// unmapped guard page below the stack (the module header).
 pub const SLOT_BYTES: u64 = (KSTACK_PAGES * PAGE_SIZE_4K) as u64;
+
+/// Whether `va` lies on a stack's guard page: the first page of a slot
+/// of the arena whose first byte is at `base_va`.  A fault names one
+/// byte of the page, so the page is what is classified.
+fn is_guard_page(base_va: u64, va: u64) -> bool {
+    let page = va & !(PAGE_SIZE_4K as u64 - 1);
+    let off = page.wrapping_sub(base_va);
+    page >= base_va && off < arena_bytes() && off.is_multiple_of(SLOT_BYTES)
+}
 
 /// The arena holds one slot per process-table entry: a proc can never
 /// fail for want of a stack while the table has room.
@@ -92,26 +111,67 @@ pub fn arena_bytes() -> u64 {
 mod live {
     use core::sync::atomic::{AtomicU64, Ordering};
 
-    use super::{Bitmap, SLOT_BYTES};
+    use port::mem::PAGE_SIZE_4K;
+
+    use super::{Bitmap, MAX_PROCS, SLOT_BYTES};
     use crate::proc::{KZERO, phys_ptr_mut};
 
     /// The arena's base PA — 0 until `init`.
     static BASE: AtomicU64 = AtomicU64::new(0);
     static FREE: Bitmap = Bitmap::new();
+    static GUARDS: AtomicU64 = AtomicU64::new(0);
 
-    /// Publish the arena at `base` (16 KiB-aligned, already withheld
-    /// from the frame allocator) and zero it, so every stack starts from
-    /// the same state the page allocator's zeroed pages used to give.
+    /// Split the kernel alias around the arena at `base` and leave a
+    /// guard page below every slot; the table pages come from `pages`
+    /// `[start, end)`, a run in the first GiB.  Runs once at boot, before
+    /// any AP starts and any proc exists, so every page table shares the
+    /// result (each copies the boot PML4's kernel half).
+    pub fn arm(base: u64, pages: (u64, u64)) -> Result<(), &'static str> {
+        assert!(base.is_multiple_of(2 << 20), "kstack: arena base {base:#x} is not 2 MiB-aligned");
+        let bytes = super::arena_bytes();
+        let split = crate::directmap::arm_guards(base, bytes, SLOT_BYTES, pages)?;
+        GUARDS.store(split.guards as u64, Ordering::Release);
+        Ok(())
+    }
+
+    /// Publish the arena at `base` (SLOT_BYTES-aligned, already withheld
+    /// from the frame allocator and armed) and zero its mapped pages, so
+    /// every stack starts from the same state the page allocator's
+    /// zeroed pages used to give.  The guard pages are not touched: they
+    /// are unmapped, and zeroing them is what proves the split kept
+    /// every other page reachable.
     pub fn init(base: u64) {
         assert!(base != 0, "kstack: arena base is zero");
         assert!(base.is_multiple_of(SLOT_BYTES), "kstack: arena base {base:#x} is not {SLOT_BYTES:#x}-aligned");
-        let bytes = super::arena_bytes() as usize;
-        // SAFETY: the boot reservation names `bytes` bytes of RAM at
-        // `base`, inside the alias window (the page allocator's seeding
-        // chose it there and holds it out of its pools); nothing else
-        // references the span until the first alloc below.
-        unsafe { core::ptr::write_bytes(phys_ptr_mut(base), 0, bytes) };
+        for slot in 0..MAX_PROCS as u64 {
+            let start = base + slot * SLOT_BYTES + PAGE_SIZE_4K as u64;
+            // SAFETY: the boot reservation names the arena at `base`,
+            // inside the alias window (the page allocator's seeding chose
+            // it there and holds it out of its pools); `start` is the
+            // first mapped page of one slot and the length is the rest
+            // of it.  Nothing else references the span until the first
+            // alloc below.
+            unsafe {
+                core::ptr::write_bytes(
+                    phys_ptr_mut(start),
+                    0,
+                    (SLOT_BYTES - PAGE_SIZE_4K as u64) as usize,
+                );
+            }
+        }
         BASE.store(base, Ordering::Release);
+    }
+
+    /// Whether `va` is one of the guard pages below a stack — the
+    /// signature of a kernel path that ran off the bottom of its stack.
+    pub fn is_guard(va: usize) -> bool {
+        let base = BASE.load(Ordering::Acquire);
+        base != 0 && super::is_guard_page(KZERO + base, va as u64)
+    }
+
+    /// `(slots, slot bytes, guard pages)` for the boot line.
+    pub fn info() -> (usize, u64, usize) {
+        (MAX_PROCS, SLOT_BYTES, GUARDS.load(Ordering::Acquire) as usize)
     }
 
     /// Take a slot; its base PA.  None once every slot is taken.
@@ -139,10 +199,11 @@ mod live {
 }
 
 #[cfg(not(test))]
-pub use live::{alloc, free, init, top_va};
+pub use live::{alloc, arm, free, info, init, is_guard, top_va};
 
-/// The host-test seam: a 16 KiB-aligned, zeroed host block stands in
+/// The host-test seam: a SLOT_BYTES-aligned, zeroed host block stands in
 /// for the slot, its address for the PA, and the alias is the identity.
+/// No page tables exist on the host, so nothing is ever a guard there.
 #[cfg(test)]
 mod host {
     use alloc::alloc::{Layout, alloc_zeroed, dealloc};
@@ -174,14 +235,39 @@ mod host {
 pub use host::{alloc, free, top_va};
 
 #[cfg(test)]
+pub fn is_guard(_va: usize) -> bool {
+    false
+}
+
+#[cfg(test)]
 mod tests {
     use alloc::vec::Vec;
 
-    use super::{Bitmap, MAX_PROCS, SLOT_BYTES, arena_bytes};
+    use super::{Bitmap, MAX_PROCS, PAGE_SIZE_4K, SLOT_BYTES, arena_bytes, is_guard_page};
 
     #[test]
     fn arena_is_one_slot_per_process_table_entry() {
         assert_eq!(arena_bytes(), MAX_PROCS as u64 * SLOT_BYTES);
+    }
+
+    /// A slot is eight pages, and its first is the guard: 32 KiB stacks
+    /// with 28 KiB to run on.
+    #[test]
+    fn a_slot_is_eight_pages_and_its_first_page_is_the_guard() {
+        assert_eq!(SLOT_BYTES, 32 * 1024);
+        let base = 0xffff_ff00_0000_0000u64;
+        let top = base + arena_bytes();
+        assert!(is_guard_page(base, base), "the first slot's guard");
+        assert!(is_guard_page(base, base + 8), "the pushed frame's second qword");
+        assert!(is_guard_page(base, base + PAGE_SIZE_4K as u64 - 8), "the page's last qword");
+        assert!(is_guard_page(base, base + SLOT_BYTES), "the second slot's guard");
+        assert!(is_guard_page(base, top - SLOT_BYTES + 0x1f0), "the last slot's guard");
+        // the stack's own pages, the page above the arena and everything below it
+        assert!(!is_guard_page(base, base + 4096));
+        assert!(!is_guard_page(base, base + SLOT_BYTES - 4096));
+        assert!(!is_guard_page(base, top));
+        assert!(!is_guard_page(base, base - 4096));
+        assert!(!is_guard_page(base, base + 4096 * 9), "the second page of the second slot");
     }
 
     #[test]

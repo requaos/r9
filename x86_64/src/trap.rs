@@ -922,6 +922,28 @@ extern "C" fn trap(vector: u8, trap_frame: &mut Ureg) -> u32 {
     // wrong root page in CR3.
     let pid = crate::proc::current().map(|p| p.pid).unwrap_or(0);
     crate::println!("cpu {} cr3={:#x} pid {}", port::smp::current_cpu_id(), crate::proc::read_cr3(), pid);
+    // A fault on the guard page below a kernel stack names its cause
+    // (kstack.rs): the current proc ran off the bottom of its stack.
+    // The first fault's own frame push lands in the guard page too, so
+    // what arrives is usually the double fault (on its IST stack), and
+    // CR2 still names the page the first fault went for.
+    if vector == 14 || vector == 8 {
+        let cr2 = {
+            let v: u64;
+            // SAFETY: a register read with no memory effect.
+            unsafe { core::arch::asm!("mov %cr2, %rax", out("rax") v, options(att_syntax, nomem, nostack, preserves_flags)) };
+            v
+        };
+        match crate::proc::current() {
+            Some(p) if crate::kstack::is_guard(cr2 as usize) => crate::println!(
+                "kernel stack overflow: pid {} ({}) ran off the bottom of its kernel stack (guard page {cr2:#x})",
+                p.pid,
+                p.name_str()
+            ),
+            _ if vector == 14 => crate::println!("faulting address {cr2:#x}"),
+            _ => {}
+        }
+    }
     crate::println!("kernel halted");
     loop {
         // SAFETY: hlt faults nowhere and parks until an interrupt; the
