@@ -181,6 +181,62 @@ proc stage {name re} {
     }
 }
 
+# tokens — PRESENCE assertions for a set of markers, in any order.  The
+# secstore round-trip's markers come from two processes on two CPUs:
+# secstored's syslog lines (the logger's, on the other CPU) and the
+# client's own console line, so their arrival order is the scheduler's,
+# not the protocol's (the header's rule; measured 2026-11-28 under KVM:
+# `secstore: saved' landed before the PUT syslog line, and the ordered
+# stages timed out waiting for a line that had already passed).  Each
+# pattern must appear; each is named as it lands; a timeout names the
+# ones still missing.  The argument is a list of {name pattern} pairs,
+# each pair braced on its own:
+#     tokens {
+#         {saved  {secstore: saved}}
+#         {put    {\[norbert\] PUT}}
+#     }
+proc tokens {pairs} {
+    global expect_out
+    # A malformed pair would read as an empty pattern, which matches
+    # anything: a contract violation, loud (exit 2), never a false pass.
+    foreach pair $pairs {
+        if {[llength $pair] != 2} {
+            puts stderr "smoke-r9-auth-x64: tokens was given a malformed pair ($pair) — each is {name pattern}"
+            cleanup
+            exit 2
+        }
+    }
+    set pending $pairs
+    while {[llength $pending] > 0} {
+        set patterns {}
+        foreach pair $pending { lappend patterns [lindex $pair 1] }
+        expect {
+            -re "([join $patterns {)|(}])" {
+                set hit $expect_out(0,string)
+                set rest {}
+                set landed ""
+                foreach pair $pending {
+                    if {$landed eq "" && [regexp [lindex $pair 1] $hit]} {
+                        set landed [lindex $pair 0]
+                    } else {
+                        lappend rest $pair
+                    }
+                }
+                puts stderr "smoke-r9-auth-x64: stage ok — $landed"
+                set pending $rest
+            }
+            timeout {
+                set missing {}
+                foreach pair $pending { lappend missing [lindex $pair 0] }
+                puts stderr "smoke-r9-auth-x64: TIMEOUT at stages (any order): $missing"
+                cleanup
+                exit 1
+            }
+            eof { puts stderr "smoke-r9-auth-x64: qemu exited (EOF) in a token set"; cleanup; exit 1 }
+        }
+    }
+}
+
 # feedstage — a console-feed stage (the 18-05 secstore leg's ONLY
 # typed-input surface): match the program's own prompt text on serial,
 # then send the answer.  The two getpassm password prompts run RAW
@@ -370,21 +426,26 @@ stage secuser-written {change written}
 stage secuser-verdict {AUTH-OK secuser}
 
 # 5e. (18-08) the RESTORED secstore round-trip stages (AUTH-08's
-#     client half, D-14 test-delivery-not-counters) — in the sweep's
-#     emission order: secstored's PAK login syslog token, the PUT
-#     syslog token, the client PUT's own `secstore: saved' line, the
-#     GET connection's syslog token, the sweep's bytes-back
-#     observation (the -G GET's delivered payload line grepped back),
-#     and the verdict (printable ONLY on that bytes-back match).
-#     Message tokens only, never the syslog date prefix.  The
-#     brackets in the syslog tokens are regex-escaped (the stage
-#     patterns are -re).
-stage secstored-auth  {AUTH norbert}
-stage secstored-put   {\[norbert\] PUT}
-stage secstore-saved  {secstore: saved}
-stage secstored-get   {\[norbert\] GET}
-stage secstore-bytesback {AUTH-SECOBS}
-stage roundtrip-verdict {AUTH-OK secstore-roundtrip}
+#     client half, D-14 test-delivery-not-counters): secstored's PAK
+#     login syslog token, the PUT syslog token and the client PUT's own
+#     `secstore: saved' line; then the GET connection's syslog token,
+#     the sweep's bytes-back observation (the -G GET's delivered
+#     payload line grepped back) and the verdict (printable ONLY on
+#     that bytes-back match).  Each set is demanded as a set, in any
+#     order (tokens, above): the syslog lines are the logger's, off on
+#     the other CPU.  Message tokens only, never the syslog date
+#     prefix.  The brackets in the syslog tokens are regex-escaped
+#     (the patterns are -re).
+tokens {
+    {secstored-auth      {AUTH norbert}}
+    {secstored-put       {\[norbert\] PUT}}
+    {secstore-saved      {secstore: saved}}
+}
+tokens {
+    {secstored-get       {\[norbert\] GET}}
+    {secstore-bytesback  {AUTH-SECOBS}}
+    {roundtrip-verdict   {AUTH-OK secstore-roundtrip}}
+}
 
 # 6. the terminal sweep marker
 stage sweep-done {AUTH-DONE}
