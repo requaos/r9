@@ -29,7 +29,8 @@ use port::mem::{PAGE_SIZE_4K, VirtRange};
 use port::Result;
 
 use crate::dat::Ureg;
-use crate::proc::{self, ByteBacking, ByteSource, Proc, ProcState, SegKind, Segments};
+use crate::proc::{phys_ptr_mut, ByteBacking, ByteSource, Proc, ProcState, SegKind, Segments};
+use crate::usermem::UserAddressSpace;
 
 /// Harvey sizeof(Tos) on amd64 (sys/include/tos.h: the same 88 bytes —
 /// identical pointer/long sizes) — the Tos page is mapped zeroed; r9
@@ -46,11 +47,20 @@ const TOS_SIZE: usize = 88;
 /// 14, the sweep's only stack-class T1-FAIL); 64 pages gives the
 /// deepest current consumer 2x headroom.
 const STACK_EAGER_PAGES: usize = 64;
-/// Cap on exec args — the initial stack frame must fit the seed page
-/// (the byte-fit check in check_seed_fit is the REAL constraint; this
-/// pre-cap just keeps the slots array honest).  32 matches sys_exec's
-/// entry cap (MAX_EXEC_ARGS).
-const MAX_ARGS: usize = 32;
+/// The bytes an exec's arguments may take: each string with its NUL and
+/// its 8-byte slot in the [argc][argv…]…[nil] array.  The arguments are
+/// seeded at the top of the eager stack, under the Tos struct, so the
+/// bound is that stack.  Until 2026-11-28 an exec took at most 32
+/// arguments of 128 bytes and the seed had to fit one page; the owner's
+/// systems expect paths beyond 2048 characters (.planning/SCALE-AUDIT.md),
+/// so the bound is on bytes.
+pub(crate) const EXEC_ARGS_BYTES: usize = STACK_EAGER_PAGES * PAGE_SIZE_4K - TOS_SIZE;
+
+/// The lowest address the eager stack reaches: the floor of the initial
+/// frame.
+const fn stack_floor() -> usize {
+    USTACKTOP - STACK_EAGER_PAGES * PAGE_SIZE_4K
+}
 
 /// The #! (hash-bang) line bound — the donor's MIN(sizeof(Exec), hdrsz)
 /// (sysproc.c:293): sizeof(Exec) is 32 on the 8-u32 Exec shape, so the
@@ -142,14 +152,10 @@ pub(crate) fn shebang_pass(
     for a in caller_args.iter().skip(1) {
         argv.push(a.to_vec());
     }
-    // The donor's tokenize silently drops tokens past nelem(progarg)=17
-    // and the seed's own bound is MAX_ARGS; the 19-03 plan pins the
-    // LOUD shape instead (T-19-05's token cap) — never a silent
-    // truncation.  The message matches check_seed_fit's, the same
-    // bound in both halves of the exec path.
-    if argv.len() > MAX_ARGS {
-        return Err("exec: too many args");
-    }
+    // The donor's tokenize silently drops tokens past nelem(progarg)=17;
+    // the 19-03 plan pins the LOUD shape instead (T-19-05's token cap) —
+    // never a silent truncation.  The bound is on bytes now and lives in
+    // check_seed_fit, the same one for both halves of the exec path.
     Ok(Some(ShebangExec { interpreter: tokens[0].to_vec(), argv }))
 }
 
@@ -302,35 +308,28 @@ const fn seed_tos_va() -> usize {
 /// image is freed (post-free ALLOCATION failures kill via the exit
 /// tail).
 fn check_seed_fit(args: &[&[u8]]) -> Result<()> {
-    if args.len() > MAX_ARGS {
-        return Err("exec: too many args");
-    }
     let strings: usize = args.iter().map(|a| a.len() + 1).sum();
     // The seed's EXACT arithmetic (14-REVIEW CR-01): the strings grow
-    // down from seed_tos_va (96 bytes below the page top), then the
-    // [argc][argv…]…[nil] array loses up to 15 bytes to the !0xf
-    // alignment before its 8*(argc+2) bytes must fit below them — not
-    // the old strings+8n+16<=4096 approximation, whose ~80-byte
-    // optimism passed arg shapes the seeder rejected post-free.
-    let usable = seed_tos_va() - (USTACKTOP - PAGE_SIZE_4K);
+    // down from seed_tos_va (96 bytes below the page top) through the
+    // eager stack pages, then the [argc][argv…]…[nil] array loses up to
+    // 15 bytes to the !0xf alignment before its 8*(argc+2) bytes must fit
+    // below them.  Nothing is left to a count.
+    let usable = seed_tos_va() - stack_floor();
     match usable.checked_sub(strings).map(|room| room & !0xf) {
         Some(aligned) if 8 * (args.len() + 2) <= aligned => Ok(()),
-        _ => Err("exec: arg strings overflow the seed page"),
+        _ => Err("exec: args overflow the initial stack"),
     }
 }
 
 /// Map the two eager exec pages and write the initial stack frame
-/// ([argc][argv0]…[nil] + arg strings) through the seed page's kernel
+/// ([argc][argv0]…[nil] + arg strings) through the eager stack pages' kernel
 /// alias (direct physical writes — the correct edit path for any table
 /// state).  Returns (user_sp, tos_va).  The argv block is
 /// ORDER-STABLE: the pointer array walks the args in argument order
 /// and the strings copy byte-verbatim (the plan's ordering edge).
 fn seed_user_pages(proc: &mut Proc, args: &[&[u8]]) -> Result<(usize, usize)> {
-    if args.len() > MAX_ARGS {
-        return Err("exec: too many args");
-    }
     let stack_va = USTACKTOP - PAGE_SIZE_4K;
-    let stack_pa = proc.map_user_page(stack_va, SegKind::Stack)?;
+    proc.map_user_page(stack_va, SegKind::Stack)?;
     // 14-06: the deeper stack, EAGERLY — the chain's boot(8) ran ~8.6 KiB
     // deep and faulted one page past the old two seed pages (the
     // no-pager limit the chain gate surfaced).  Same eager policy as
@@ -352,51 +351,71 @@ fn seed_user_pages(proc: &mut Proc, args: &[&[u8]]) -> Result<(usize, usize)> {
     // tolerates zero/garbage; getpid reads #c/pid).
     let tos_va = seed_tos_va();
 
-    // Write [argc][argv0]…[nil] + strings into the seed page via its
-    // kernel alias.  Layout ascending from user_sp (the execregs
-    // contract — libc main9.s/_callmain consumes exactly this):
-    //   user_sp+0: argc; then the argv pointers; then nil; strings
-    //   packed top-down above, in argument order — all BELOW the Tos
-    //   struct at the page's top.
-    let kbase = proc::phys_ptr_mut(stack_pa) as usize;
+    // Write [argc][argv0]…[nil] + strings through the pages' kernel
+    // aliases.  Layout ascending from user_sp (the execregs contract —
+    // libc main9.s/_callmain consumes exactly this): user_sp+0: argc;
+    // then the argv pointers; then nil; strings packed top-down above,
+    // in argument order, from under the Tos struct down through as many
+    // eager stack pages as they take.  The stack grows on below the
+    // pointer array, so the arguments cost the image nothing but the
+    // eager pages.
+    let floor = stack_floor();
     let mut cursor = tos_va; // the Tos struct's aligned base caps the args
-    let mut arg_ptrs = [0usize; MAX_ARGS];
-    for (i, arg) in args.iter().enumerate() {
-        let room = cursor - stack_va;
-        if arg.len() + 1 > room {
-            return Err("exec: arg strings overflow the seed page");
+    let mut arg_ptrs = Vec::with_capacity(args.len());
+    for arg in args {
+        if cursor - arg.len() - 1 < floor {
+            return Err("exec: args overflow the initial stack");
         }
         cursor -= arg.len() + 1;
-        let off = cursor - stack_va;
-        // SAFETY: kbase+off..+arg.len()+1 lies inside the seed page
-        // (the room check above); kbase is the page's kernel alias;
-        // the arg source is an owned kernel slice.
-        unsafe {
-            core::ptr::copy_nonoverlapping(arg.as_ptr(), (kbase + off) as *mut u8, arg.len());
-            *((kbase + off + arg.len()) as *mut u8) = 0;
-        }
-        arg_ptrs[i] = cursor;
+        write_stack_bytes(proc, cursor, arg)?;
+        write_stack_bytes(proc, cursor + arg.len(), &[0])?;
+        arg_ptrs.push(cursor);
     }
     cursor &= !0xf; // align the pointer array
     let argc = args.len();
     let slots = argc + 2; // argc slot + argv pointers + nil terminator
-    if 8 * slots > cursor - stack_va {
-        return Err("exec: stack seed overflow");
+    if 8 * slots > cursor - floor {
+        return Err("exec: args overflow the initial stack");
     }
     cursor -= 8 * slots;
-    let off = cursor - stack_va;
-    // SAFETY: the slots check above proves 8*(argc+2) bytes fit below
-    // the arg strings inside the seed page; base walks exactly that
-    // window.
-    unsafe {
-        let base = (kbase + off) as *mut u64;
-        *base = argc as u64;
-        for (i, p) in arg_ptrs.iter().take(argc).enumerate() {
-            *base.add(1 + i) = *p as u64;
-        }
-        *base.add(1 + argc) = 0;
+    let mut block = Vec::with_capacity(8 * slots);
+    block.extend_from_slice(&(argc as u64).to_le_bytes());
+    for p in &arg_ptrs {
+        block.extend_from_slice(&(*p as u64).to_le_bytes());
     }
+    block.extend_from_slice(&0u64.to_le_bytes());
+    write_stack_bytes(proc, cursor, &block)?;
     Ok((cursor, tos_va))
+}
+
+/// Write `bytes` to the proc's stack at `va`, across page boundaries.
+/// Every page of the span must already be mapped (the seed writes only
+/// into the eager stack); the write goes through each page's kernel
+/// alias, which is right for a table that is not the active one.
+fn write_stack_bytes(proc: &Proc, va: usize, bytes: &[u8]) -> Result<()> {
+    let mut done = 0usize;
+    while done < bytes.len() {
+        let at = va + done;
+        let page = at & !(PAGE_SIZE_4K - 1);
+        let Some(pa) = proc.resident_phys(page) else {
+            return Err("exec: stack seed page missing");
+        };
+        let n = (PAGE_SIZE_4K - (at - page)).min(bytes.len() - done);
+        // SAFETY: phys_ptr_mut(pa) is the page's kernel alias and
+        // (at - page) + n <= PAGE_SIZE_4K, so the n bytes written lie
+        // inside that one mapped stack page; the source is an owned
+        // kernel slice and the two never overlap (the page is the
+        // proc's, the slice the caller's).
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                bytes.as_ptr().add(done),
+                phys_ptr_mut(pa).add(at - page),
+                n,
+            );
+        }
+        done += n;
+    }
+    Ok(())
 }
 
 /// First exec (the 14-05 exec_bootstrap path): parse the binary's
@@ -935,37 +954,54 @@ mod tests {
         assert_eq!(r, Err("exec: short read of a.out header"));
     }
 
-    /// Test 5 (the MAX_ARGS bound): #! tokens plus the caller's argv
-    /// past 32 args fail loudly — never a silent truncation (the
-    /// donor's nelem(progarg)=17 silent-drop made loud per the plan).
-    /// The #! line itself is bounded by the donor's 32-byte memccpy
-    /// rule, so the growth past MAX_ARGS rides the CALLER's argv
-    /// (copy_exec_args stages up to 32 caller entries).
+    /// Test 5 (the argument bound is on bytes): #! tokens plus the
+    /// caller's argv grow past 32 entries without a word — the donor's
+    /// nelem(progarg)=17 silent drop and the old 32-entry cap are gone —
+    /// and what does not fit fails loudly (never a silent truncation).
     #[test]
-    fn shebang_argv_growth_respects_max_args() {
+    fn shebang_argv_growth_is_bounded_by_bytes() {
         // A two-token line: [elem, -x, file] = 3 from the sniff; the
-        // caller's argv[1..] supplies the rest.  29 surviving caller
-        // args -> 32, exactly at the bound.
+        // caller's argv[1..] supplies the rest.
         let head = shebang_head(b"#!/bin/rc -x\n");
-        let mut caller: alloc::vec::Vec<alloc::vec::Vec<u8>> =
-            alloc::vec![SCRIPT.to_vec()];
-        for i in 0..29u32 {
+        let mut caller: alloc::vec::Vec<alloc::vec::Vec<u8>> = alloc::vec![SCRIPT.to_vec()];
+        for i in 0..200u32 {
             caller.push(alloc::vec![b'a'; 2 + (i as usize % 3)]);
         }
         let slices: alloc::vec::Vec<&[u8]> = caller.iter().map(|a| a.as_slice()).collect();
-        assert_eq!(slices.len(), 30, "caller argv + argv[0]");
         let pass = shebang_pass(&head, 40, SCRIPT, ELEM, &slices)
-            .expect("32 args is at the bound")
+            .expect("a script")
             .expect("script");
-        assert_eq!(pass.argv.len(), MAX_ARGS);
-        // One more caller arg: 33 — the loud reject.
-        let mut over = caller.clone();
-        over.push(b"one-too-many".to_vec());
-        let over_slices: alloc::vec::Vec<&[u8]> = over.iter().map(|a| a.as_slice()).collect();
-        assert_eq!(
-            shebang_pass(&head, 40, SCRIPT, ELEM, &over_slices),
-            Err("exec: too many args")
-        );
+        assert_eq!(pass.argv.len(), 203, "elem, the #! token, the script path, the caller's argv[1..]");
+        let grown: alloc::vec::Vec<&[u8]> = pass.argv.iter().map(|a| a.as_slice()).collect();
+        check_seed_fit(&grown).expect("203 small arguments fit the initial stack");
+        // One argument as long as the whole eager stack cannot.
+        let long = alloc::vec![alloc::vec![b'x'; EXEC_ARGS_BYTES]];
+        let slices: alloc::vec::Vec<&[u8]> = long.iter().map(|a| a.as_slice()).collect();
+        assert_eq!(check_seed_fit(&slices), Err("exec: args overflow the initial stack"));
+    }
+
+    /// The initial stack's fit is exact.  With one argument there are 96
+    /// bytes between the Tos alignment and EXEC_ARGS_BYTES (88 for the
+    /// Tos and 8 of alignment); under the string and its NUL the room
+    /// must round down to 16 bytes at least the argc, argv and nil slots
+    /// (24).  So the longest argument that fits is the stack less 41
+    /// bytes, and one byte more fails.
+    #[test]
+    fn the_initial_stack_fit_is_exact() {
+        let usable = seed_tos_va() - stack_floor();
+        assert_eq!(EXEC_ARGS_BYTES - usable, 8);
+        assert_eq!((usable - (EXEC_ARGS_BYTES - 41) - 1) & !0xf, 32, "the fitting argument leaves 32 rounded bytes");
+        assert_eq!((usable - (EXEC_ARGS_BYTES - 40) - 1) & !0xf, 16, "one more byte leaves only 16");
+        let fits = alloc::vec![alloc::vec![b'x'; EXEC_ARGS_BYTES - 41]];
+        let slices: alloc::vec::Vec<&[u8]> = fits.iter().map(|a| a.as_slice()).collect();
+        check_seed_fit(&slices).expect("the longest argument that fits");
+        let over = alloc::vec![alloc::vec![b'x'; EXEC_ARGS_BYTES - 40]];
+        let slices: alloc::vec::Vec<&[u8]> = over.iter().map(|a| a.as_slice()).collect();
+        assert_eq!(check_seed_fit(&slices), Err("exec: args overflow the initial stack"));
+        // A thousand small arguments are a thousand: no count is left.
+        let many = alloc::vec![alloc::vec![b'a'; 3]; 1000];
+        let slices: alloc::vec::Vec<&[u8]> = many.iter().map(|a| a.as_slice()).collect();
+        check_seed_fit(&slices).expect("1000 arguments fit");
     }
 
     /// A synthetic 6l-shaped a.out for the interpreter-re-exec pins.
@@ -1014,8 +1050,7 @@ mod tests {
         assert_eq!(frame.pc as usize, INITTEXT);
         // The proc NAME is the script's leaf (donor: up->text = elem,
         // taken once before the #! branch): "tcp17010", NUL-padded.
-        let name_end = guard.name.iter().position(|&b| b == 0).unwrap_or(guard.name.len());
-        assert_eq!(&guard.name[..name_end], b"tcp17010");
+        assert_eq!(&*guard.name, b"tcp17010");
     }
 
     /// The recursion cap: a #! interpreter that is itself a #! script

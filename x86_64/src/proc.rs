@@ -140,8 +140,12 @@ pub(crate) fn kaddr(pa: u64) -> usize {
 /// are told apart.
 pub(crate) const KZERO_MAP_LIMIT: u64 = 1 << 30;
 
-/// Plan 9 KNAMELEN (27 + NUL).
-pub const KNAMELEN: usize = 28;
+/// The longest process name kept: the last element of the executed
+/// file, which is a path element, so it is bounded like one
+/// (`port::namec::PATHMAX`).  Until 2026-11-28 the name was Plan 9's
+/// fixed KNAMELEN field, 27 characters, and `ps`, `#p/N/status` and the
+/// kernel's own reports cut a longer file name short.
+pub const KNAMELEN: usize = port::namec::PATHMAX;
 /// Plan 9 ERRMAX (sys/include/libc.h) — errstr and note-message buffers.
 pub const ERRMAX: usize = 128;
 /// Proc table size.  Slots are never REAPED this era (a Moribund husk
@@ -1333,7 +1337,7 @@ pub fn sem_wake(pa: u64, delta: u64) {
 /// with the kernel higher half shared by construction.
 pub struct Proc {
     pub pid: u64,
-    pub name: [u8; KNAMELEN],
+    pub name: Vec<u8>,
     pub state: ProcState,
     /// Top of this proc's 16 KiB kernel stack — the KZERO alias of its
     /// arena slot's end (kstack.rs), the same address under every page
@@ -1500,7 +1504,7 @@ impl Proc {
     fn new(pid: u64, name: &str, kstack_top: usize, kstack_pas: [u64; KSTACK_PAGES], pml4_pa: u64) -> Proc {
         let mut proc = Proc {
             pid,
-            name: [0; KNAMELEN],
+            name: Vec::new(),
             state: ProcState::Ready,
             kstack_top,
             kstack_pas,
@@ -1559,9 +1563,14 @@ impl Proc {
 
     pub fn set_name(&mut self, name: &str) {
         let bytes = name.as_bytes();
-        let n = bytes.len().min(KNAMELEN - 1);
-        self.name[..n].copy_from_slice(&bytes[..n]);
-        self.name[n] = 0;
+        let n = bytes.len().min(KNAMELEN);
+        self.name.clear();
+        self.name.extend_from_slice(&bytes[..n]);
+    }
+
+    /// The process's name as a string (a non-UTF-8 byte reads as "?").
+    pub fn name_str(&self) -> &str {
+        core::str::from_utf8(&self.name).unwrap_or("?")
     }
 
     /// Record the exec argv (NUL-joined, the donor's `p->args` shape)
@@ -2677,8 +2686,7 @@ pub(crate) fn dump_proc_states() {
         if p.state == ProcState::Moribund {
             continue;
         }
-        let n = p.name.iter().position(|&b| b == 0).unwrap_or(KNAMELEN);
-        let name = core::str::from_utf8(&p.name[..n]).unwrap_or("?");
+        let name = p.name_str();
         // 14-06 cycle 3: the dump must SURVIVE a corrupt parent —
         // it exists to diagnose wedges, and the first live run of the
         // chain wedged with one proc holding a garbage parent pointer
@@ -3145,9 +3153,8 @@ pub fn proc_info(pid: u64) -> Option<port::devproc::ProcInfo> {
     if p.state == ProcState::Moribund {
         return None;
     }
-    let name_len = p.name.iter().position(|&b| b == 0).unwrap_or(KNAMELEN);
     Some(port::devproc::ProcInfo {
-        name: p.name[..name_len].to_vec(),
+        name: p.name.clone(),
         state: state_name(p.state),
         args: p.argv.clone(),
         pri: p.pri,
@@ -3419,8 +3426,7 @@ pub fn post_wait_record(parent: *mut Proc, pid: u64, msg: &[u8]) {
 pub fn rfork_clone(parent: &mut Proc, frame: &Ureg, flag: u64) -> Result<u64> {
     let nowait = flag & RFNOWAIT != 0;
     let name = {
-        let n = parent.name.iter().position(|&b| b == 0).unwrap_or(KNAMELEN);
-        core::str::from_utf8(&parent.name[..n]).unwrap_or("fork")
+        core::str::from_utf8(&parent.name).unwrap_or("fork")
     };
     let mut child = new_user_proc(name)?;
 

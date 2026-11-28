@@ -415,6 +415,53 @@ mod tests {
         }
     }
 
+    /// A path is copied whole up to PATHMAX (the owner's systems expect
+    /// paths beyond 2048 characters): 3000 bytes round-trip, and only a
+    /// string past the bound is "too long".
+    #[test]
+    fn a_long_path_is_copied_whole() {
+        use port::namec::PATHMAX;
+        struct Big {
+            buf: [u8; PATHMAX + 16],
+            base: usize,
+        }
+        impl UserAddressSpace for Big {
+            fn validate_user_range(&self, va: u64, len: u64, _writable: bool) -> Result<(), &'static str> {
+                let end = va.checked_add(len).ok_or("user range overflows")?;
+                if va >= self.base as u64 && end <= (self.base + self.buf.len()) as u64 {
+                    Ok(())
+                } else {
+                    Err("bad user address")
+                }
+            }
+            fn ensure_user_resident(&mut self, _start: usize, _end: usize, _writable: bool) -> Result<(), &'static str> {
+                Ok(())
+            }
+            fn resident_phys(&self, _page_va: usize) -> Option<u64> {
+                None
+            }
+        }
+        let mut big = alloc::boxed::Box::new(Big { buf: [0; PATHMAX + 16], base: 0 });
+        big.base = big.buf.as_ptr() as usize;
+        for (i, b) in big.buf.iter_mut().enumerate() {
+            *b = if i % 64 == 63 { b'/' } else { b'a' + (i % 26) as u8 };
+        }
+        big.buf[3000] = 0;
+        let at = big.base as u64;
+        let got = UserString::copy_from(&mut *big, at, PATHMAX).expect("copied");
+        assert_eq!(got.len(), 3000, "the string ends at its NUL");
+        assert_eq!(&got[..], &big.buf[..3000]);
+        // The bound is inclusive of the string, exclusive of its NUL:
+        // the longest string copies, one byte more is refused.
+        big.buf[3000] = b'z';
+        big.buf[PATHMAX - 1] = 0;
+        let got = UserString::copy_from(&mut *big, at, PATHMAX).expect("the longest string");
+        assert_eq!(got.len(), PATHMAX - 1);
+        big.buf[PATHMAX - 1] = b'z';
+        big.buf[PATHMAX] = 0;
+        assert_eq!(UserString::copy_from(&mut *big, at, PATHMAX), Err("string too long"));
+    }
+
     #[test]
     fn fused_constructor_validates_and_forces_residency() {
         let mut mock = MockUserSpace::new();

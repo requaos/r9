@@ -419,8 +419,7 @@ pub(crate) fn kill_current_process() -> ! {
 fn unresolvable(frame: &Ureg, cr2: u64, access: &str) -> ! {
     let who = proc::current()
         .map(|p| {
-            let n = p.name.iter().position(|&b| b == 0).unwrap_or(p.name.len());
-            let name = core::str::from_utf8(&p.name[..n]).unwrap_or("?");
+            let name = p.name_str();
             alloc::format!("pid={} name={}", p.pid, name)
         })
         .unwrap_or_else(|| alloc::format!("pid=? name=?"));

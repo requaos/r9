@@ -37,7 +37,7 @@ use port::dat::{
 };
 use port::fdgrp::FdGroup;
 use port::mcslock::LockNode;
-use port::namec::{self, NamecMode};
+use port::namec::{self, NamecMode, PATHMAX};
 use port::pgrp::{MAFTER, MBEFORE, MMASK, MORDER};
 use port::println;
 use port::rfork::{RFCENVG, RFCFDG, RFCNAMEG, RFENVG, RFFDG, RFMEM, RFNAMEG, RFNOTEG, RFNOWAIT, RFPROC, RFREND};
@@ -690,7 +690,7 @@ fn sys_open(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         return err(proc, "open: bad argument block");
     };
     let (path_va, mode) = (args[0], (args[1] & 0xffff_ffff) as u32); // mode is an int (width discipline)
-    let path = match copy_user_str(proc, path_va, ERRMAX) {
+    let path = match copy_user_str(proc, path_va, PATHMAX) {
         Ok(path) => path,
         Err(msg) => return err(proc, msg),
     };
@@ -741,11 +741,11 @@ fn sys_bind(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     if flag & !MMASK != 0 || (flag & MORDER) == (MBEFORE | MAFTER) {
         return err(proc, "bind: bad flags");
     }
-    let name = match copy_user_str(proc, name_va, ERRMAX) {
+    let name = match copy_user_str(proc, name_va, PATHMAX) {
         Ok(s) => s,
         Err(msg) => return err(proc, msg),
     };
-    let old = match copy_user_str(proc, old_va, ERRMAX) {
+    let old = match copy_user_str(proc, old_va, PATHMAX) {
         Ok(s) => s,
         Err(msg) => return err(proc, msg),
     };
@@ -790,7 +790,7 @@ fn sys_chdir(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 1) else {
         return err(proc, "chdir: bad argument block");
     };
-    let path = match copy_user_str(proc, args[0], ERRMAX) {
+    let path = match copy_user_str(proc, args[0], PATHMAX) {
         Ok(s) => s,
         Err(msg) => return err(proc, msg),
     };
@@ -839,7 +839,7 @@ fn sys_unmount(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     // Both resolves run WITHOUT the pgrp lock held (namec's
     // per-consult snapshots); the lock covers the mount-table REMOVAL
     // only.
-    let old = match copy_user_str(proc, old_va, ERRMAX) {
+    let old = match copy_user_str(proc, old_va, PATHMAX) {
         Ok(s) => s,
         Err(msg) => return err(proc, msg),
     };
@@ -850,7 +850,7 @@ fn sys_unmount(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let from = if name_va == 0 {
         None
     } else {
-        let name = match copy_user_str(proc, name_va, ERRMAX) {
+        let name = match copy_user_str(proc, name_va, PATHMAX) {
             Ok(s) => s,
             Err(msg) => {
                 port::namec::close_chan(&tgt);
@@ -978,11 +978,11 @@ fn sys_mount(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     if afd != -1 {
         return err(proc, "mount: auth fd unsupported this era (D-02)");
     }
-    let old = match copy_user_str(proc, old_va, ERRMAX) {
+    let old = match copy_user_str(proc, old_va, PATHMAX) {
         Ok(s) => s,
         Err(msg) => return err(proc, msg),
     };
-    let aname = match copy_user_str(proc, aname_va, ERRMAX) {
+    let aname = match copy_user_str(proc, aname_va, PATHMAX) {
         Ok(s) => s,
         Err(msg) => return err(proc, msg),
     };
@@ -1063,7 +1063,7 @@ fn sys_stat(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         return err(proc, "stat: bad argument block");
     };
     let (path_va, buf_va, n) = (args[0], args[1], args[2] & 0xffff_ffff); // n is an int (width discipline)
-    let path = match copy_user_str(proc, path_va, ERRMAX) {
+    let path = match copy_user_str(proc, path_va, PATHMAX) {
         Ok(s) => s,
         Err(msg) => return err(proc, msg),
     };
@@ -1180,7 +1180,7 @@ fn sys_remove(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 1) else {
         return err(proc, "remove: bad argument block");
     };
-    let path = match copy_user_str(proc, args[0], ERRMAX) {
+    let path = match copy_user_str(proc, args[0], PATHMAX) {
         Ok(s) => s,
         Err(msg) => return err(proc, msg),
     };
@@ -1271,7 +1271,7 @@ fn wstat_stage_args(
     let name = if name_va == 0 {
         Vec::new()
     } else {
-        UserString::copy_from(proc, name_va, ERRMAX)?
+        UserString::copy_from(proc, name_va, PATHMAX)?
     };
     let stat = match UserSlice::new(proc, edir_va, n) {
         Ok(s) => s.as_slice().to_vec(),
@@ -1491,7 +1491,7 @@ pub(crate) fn copy_exec_args(
 ) -> Result<(Vec<u8>, Vec<Vec<u8>>), &'static str> {
     const MAX_EXEC_ARGS: usize = 32;
     const MAX_EXEC_ARG_LEN: usize = 128;
-    let path = copy_user_str(proc, path_va, ERRMAX)?;
+    let path = copy_user_str(proc, path_va, PATHMAX)?;
     let mut argv: Vec<Vec<u8>> = Vec::new();
     if argv_va != 0 {
         loop {
@@ -1759,7 +1759,7 @@ fn sys_create(frame: &mut TrapFrame, proc: &mut Proc) -> u64 {
         return err(proc, "create: bad argument block");
     };
     let (path_va, mode, perm) = (args[0], (args[1] & 0xffff_ffff) as u32, (args[2] & 0xffff_ffff) as u32); // mode/perm are ints
-    let path = match copy_user_str(proc, path_va, ERRMAX) {
+    let path = match copy_user_str(proc, path_va, PATHMAX) {
         Ok(path) => path,
         Err(msg) => return err(proc, msg),
     };

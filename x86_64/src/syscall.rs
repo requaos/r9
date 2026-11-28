@@ -29,7 +29,7 @@ use port::dat::{
     DEV_ROOT, DEV_SRV, DEV_SSL, OEXEC, OTRUNC,
 };
 use port::mcslock::LockNode;
-use port::namec::{self, NamecMode};
+use port::namec::{self, NamecMode, PATHMAX};
 use port::pgrp::{MAFTER, MBEFORE, MMASK, MORDER};
 use port::println;
 
@@ -224,8 +224,7 @@ pub(crate) fn dispatch_proc(n: u64, frame: &mut Ureg, proc: &mut Proc) -> bool {
             // but without a process tag the line cannot be attributed
             // from the serial capture.  Cheap and stable — the negative
             // scan still keys on the `syscall <n> unimplemented` prefix.
-            let nlen = proc.name.iter().position(|&b| b == 0).unwrap_or(proc::KNAMELEN);
-            let pname = core::str::from_utf8(&proc.name[..nlen]).unwrap_or("?");
+            let pname = proc.name_str();
             println!("syscall {n} unimplemented (pid {} {pname})", proc.pid);
             proc.set_errstr("syscall not implemented");
             -1i64 as u64
@@ -308,15 +307,16 @@ pub(crate) fn copy_exec_args(
     path_va: u64,
     argv_va: u64,
 ) -> Result<(Vec<u8>, Vec<Vec<u8>>), &'static str> {
-    const MAX_EXEC_ARGS: usize = 32;
-    const MAX_EXEC_ARG_LEN: usize = 128;
-    let path = UserString::copy_from(proc, path_va, ERRMAX)?;
+    let path = UserString::copy_from(proc, path_va, PATHMAX)?;
     let mut argv: Vec<Vec<u8>> = Vec::new();
+    // The arguments are staged here whole, so the staging is bounded by
+    // the bytes the initial stack will hold: each string with its NUL and
+    // its slot (exec.rs's EXEC_ARGS_BYTES; its fit check is the
+    // authority, with this same message).  Until 2026-11-28 an exec took
+    // at most 32 arguments of 128 bytes.
+    let mut staged = 0usize;
     if argv_va != 0 {
         loop {
-            if argv.len() >= MAX_EXEC_ARGS {
-                return Err("exec: too many args");
-            }
             let slot_va = argv_va + 8 * argv.len() as u64;
             // The argv slot block rides usermem's validated-only
             // pointer — the slots are user stack/data the process
@@ -327,7 +327,12 @@ pub(crate) fn copy_exec_args(
             if ptr == 0 {
                 break;
             }
-            argv.push(UserString::copy_from(proc, ptr, MAX_EXEC_ARG_LEN)?);
+            let arg = UserString::copy_from(proc, ptr, exec::EXEC_ARGS_BYTES)?;
+            staged += arg.len() + 1 + 8;
+            if staged > exec::EXEC_ARGS_BYTES {
+                return Err("exec: args overflow the initial stack");
+            }
+            argv.push(arg);
         }
     }
     Ok((path, argv))
@@ -630,7 +635,7 @@ fn sys_open(frame: &mut Ureg, proc: &mut Proc) -> u64 {
         return err(proc, "open: bad argument block");
     };
     let (path_va, mode) = (args[0], (args[1] & 0xffff_ffff) as u32); // mode is an int
-    let path = match copy_user_str(proc, path_va, ERRMAX) {
+    let path = match copy_user_str(proc, path_va, PATHMAX) {
         Ok(path) => path,
         Err(msg) => return err(proc, msg),
     };
@@ -672,11 +677,11 @@ fn sys_bind(frame: &mut Ureg, proc: &mut Proc) -> u64 {
     if flag & !MMASK != 0 || (flag & MORDER) == (MBEFORE | MAFTER) {
         return err(proc, "bind: bad flags");
     }
-    let name = match copy_user_str(proc, name_va, ERRMAX) {
+    let name = match copy_user_str(proc, name_va, PATHMAX) {
         Ok(s) => s,
         Err(msg) => return err(proc, msg),
     };
-    let old = match copy_user_str(proc, old_va, ERRMAX) {
+    let old = match copy_user_str(proc, old_va, PATHMAX) {
         Ok(s) => s,
         Err(msg) => return err(proc, msg),
     };
@@ -711,7 +716,7 @@ fn sys_chdir(frame: &mut Ureg, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 1) else {
         return err(proc, "chdir: bad argument block");
     };
-    let path = match copy_user_str(proc, args[0], ERRMAX) {
+    let path = match copy_user_str(proc, args[0], PATHMAX) {
         Ok(s) => s,
         Err(msg) => return err(proc, msg),
     };
@@ -749,14 +754,14 @@ fn sys_unmount(frame: &mut Ureg, proc: &mut Proc) -> u64 {
     // Copy both user strings BEFORE borrowing the namespace chans: the
     // copy may demand-page a cold text/data literal (MEM-14), which needs
     // `&mut proc`.
-    let old = match copy_user_str(proc, old_va, ERRMAX) {
+    let old = match copy_user_str(proc, old_va, PATHMAX) {
         Ok(s) => s,
         Err(msg) => return err(proc, msg),
     };
     let name = if name_va == 0 {
         None
     } else {
-        match copy_user_str(proc, name_va, ERRMAX) {
+        match copy_user_str(proc, name_va, PATHMAX) {
             Ok(s) => Some(s),
             Err(msg) => return err(proc, msg),
         }
@@ -866,11 +871,11 @@ fn sys_mount(frame: &mut Ureg, proc: &mut Proc) -> u64 {
     if afd != -1 {
         return err(proc, "mount: auth fd unsupported this era (D-02)");
     }
-    let old = match copy_user_str(proc, old_va, ERRMAX) {
+    let old = match copy_user_str(proc, old_va, PATHMAX) {
         Ok(s) => s,
         Err(msg) => return err(proc, msg),
     };
-    let aname = match copy_user_str(proc, aname_va, ERRMAX) {
+    let aname = match copy_user_str(proc, aname_va, PATHMAX) {
         Ok(s) => s,
         Err(msg) => return err(proc, msg),
     };
@@ -934,7 +939,7 @@ fn sys_stat(frame: &mut Ureg, proc: &mut Proc) -> u64 {
         return err(proc, "stat: bad argument block");
     };
     let (path_va, buf_va, n) = (args[0], args[1], args[2] & 0xffff_ffff); // n is an int
-    let path = match copy_user_str(proc, path_va, ERRMAX) {
+    let path = match copy_user_str(proc, path_va, PATHMAX) {
         Ok(s) => s,
         Err(msg) => return err(proc, msg),
     };
@@ -1043,7 +1048,7 @@ fn sys_remove(frame: &mut Ureg, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 1) else {
         return err(proc, "remove: bad argument block");
     };
-    let path = match copy_user_str(proc, args[0], ERRMAX) {
+    let path = match copy_user_str(proc, args[0], PATHMAX) {
         Ok(s) => s,
         Err(msg) => return err(proc, msg),
     };
@@ -1134,7 +1139,7 @@ fn wstat_stage_args(
     let name = if name_va == 0 {
         Vec::new()
     } else {
-        UserString::copy_from(proc, name_va, ERRMAX)?
+        UserString::copy_from(proc, name_va, PATHMAX)?
     };
     let stat = match UserSlice::new(proc, edir_va, n) {
         Ok(s) => s.as_slice().to_vec(),
@@ -1540,7 +1545,7 @@ fn sys_create(frame: &mut Ureg, proc: &mut Proc) -> u64 {
         (args[2] & 0xffff_ffff) as u32,
     ); // mode/perm are ints
 
-    let path = match copy_user_str(proc, path_va, ERRMAX) {
+    let path = match copy_user_str(proc, path_va, PATHMAX) {
         Ok(path) => path,
         Err(msg) => return err(proc, msg),
     };
@@ -2961,6 +2966,101 @@ mod tests {
         // _tos).  bp (the 6c first-arg register) stays whatever the
         // caller had — argc arrives on the seeded stack.
         assert_eq!(frame.ax, tos_va);
+    }
+
+    /// Read `n` bytes of a mock proc's user memory through its page
+    /// records (a record's "physical" address is the host page itself).
+    fn read_user(proc: &crate::proc::Proc, va: usize, n: usize) -> Vec<u8> {
+        let mut out = Vec::with_capacity(n);
+        while out.len() < n {
+            let at = va + out.len();
+            let page = at & !(PAGE_SIZE_4K - 1);
+            let rec = proc.mapping_log.get(page).expect("a mapped page");
+            let pa = crate::proc::phys_ptr_mut(rec.phys as u64) as *const u8;
+            let take = (PAGE_SIZE_4K - (at - page)).min(n - out.len());
+            // SAFETY: the record names a seam page this test's exec
+            // mapped, and (at - page) + take <= PAGE_SIZE_4K, so the
+            // bytes read lie inside that page.
+            unsafe { out.extend_from_slice(core::slice::from_raw_parts(pa.add(at - page), take)) };
+        }
+        out
+    }
+
+    /// A synthetic image for the seeding tests, and a mock proc.
+    fn seed_fixture(name: &'static str) -> (MockStack, crate::proc::ByteBacking) {
+        use crate::exec::{HDR_SIZE, INITTEXT, S_MAGIC_AMD64};
+        use crate::proc::ByteBacking;
+        let mock = MockStack::new(name);
+        let mut bin = alloc::vec![0u8; HDR_SIZE + 0x1000 + 0x100];
+        bin[0..4].copy_from_slice(&S_MAGIC_AMD64.to_be_bytes());
+        bin[4..8].copy_from_slice(&0x1000u32.to_be_bytes());
+        bin[8..12].copy_from_slice(&0x100u32.to_be_bytes());
+        bin[12..16].copy_from_slice(&0x80u32.to_be_bytes());
+        bin[32..40].copy_from_slice(&(INITTEXT as u64).to_be_bytes());
+        (mock, ByteBacking::Mnt { file: alloc::sync::Arc::new(bin) })
+    }
+
+    /// An exec's arguments are bounded by bytes, not by a count or by one
+    /// page: a 5000-byte argument, which straddles the top page's edge,
+    /// and five hundred more after it are seeded whole, down through
+    /// four eager stack pages, in order, and the pointer array names
+    /// them.
+    #[test]
+    fn exec_seeds_arguments_across_pages() {
+        use crate::exec::USTACKTOP;
+
+        let (mut mock, backing) = seed_fixture("t-args-across-pages");
+        let mut owned: Vec<Vec<u8>> = alloc::vec![alloc::vec![b'p'; 5000], b"/amd64/init".to_vec()];
+        for i in 0..500u32 {
+            owned.push(alloc::format!("arg-{i:03}").into_bytes());
+        }
+        let args: Vec<&[u8]> = owned.iter().map(|a| a.as_slice()).collect();
+        let mut frame = Ureg::zeroed();
+        crate::exec::exec_replace(mock.proc(), backing, "init", &args, &mut frame)
+            .expect("exec_replace succeeds");
+
+        let user_sp = frame.sp as usize;
+        let top = USTACKTOP - PAGE_SIZE_4K;
+        assert!(user_sp < top, "the pointer array sits below the top page: the strings took more than one");
+        let words = read_user(mock.proc(), user_sp, 8 * (owned.len() + 2));
+        let word = |i: usize| -> u64 {
+            u64::from_le_bytes(words[8 * i..8 * i + 8].try_into().expect("a word"))
+        };
+        assert_eq!(word(0), owned.len() as u64, "argc");
+        assert_eq!(word(owned.len() + 1), 0, "the nil terminator");
+        let mut previous = usize::MAX;
+        for (i, want) in owned.iter().enumerate() {
+            let at = word(1 + i) as usize;
+            assert!(at < previous, "the strings pack top-down in argument order");
+            previous = at;
+            let mut expected = want.clone();
+            expected.push(0);
+            assert_eq!(read_user(mock.proc(), at, want.len() + 1), expected, "argument {i}");
+        }
+        // The long argument straddles the top page's lower edge: it
+        // starts in the page below and ends under the Tos in the top
+        // page.  The pointer array lies three pages further down.
+        let long_at = word(1) as usize;
+        assert!(long_at < USTACKTOP - PAGE_SIZE_4K, "argument 0 starts below the top page");
+        assert!(long_at + 5000 > USTACKTOP - PAGE_SIZE_4K, "and ends inside it");
+        assert!(user_sp < USTACKTOP - 3 * PAGE_SIZE_4K, "the pointer array is in the fourth page");
+        assert_eq!(frame.pc as usize, crate::exec::INITTEXT);
+    }
+
+    /// An exec whose arguments the initial stack cannot hold fails before
+    /// the old image is touched, and says so.
+    #[test]
+    fn exec_refuses_arguments_the_stack_cannot_hold() {
+        use crate::exec::EXEC_ARGS_BYTES;
+
+        let (mut mock, backing) = seed_fixture("t-args-too-big");
+        let big = alloc::vec![b'x'; EXEC_ARGS_BYTES];
+        let args: Vec<&[u8]> = alloc::vec![big.as_slice()];
+        let mut frame = Ureg::zeroed();
+        assert_eq!(
+            crate::exec::exec_replace(mock.proc(), backing, "init", &args, &mut frame),
+            Err("exec: args overflow the initial stack")
+        );
     }
 
     // --- create(.., OCEXEC): the new-file arm records the mark ---
