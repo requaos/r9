@@ -837,6 +837,35 @@ pub(crate) fn boot_pml4_pa() -> u64 {
     ptr::addr_of!(bootpml4) as u64 - KZERO
 }
 
+/// Leave the current proc's page table before the swtch into the
+/// scheduler context: the scheduler (the Mach stack, the proc table, the
+/// run queues, the reaper, the idle loop) runs on the boot table and on
+/// nothing else.  A proc's table is in CR3 only while that proc is
+/// current — from pick_next's install to this call.
+///
+/// Until 2026-11-27 a CPU that had nothing to pick kept the last proc's
+/// table in CR3, and the sched loop ran each iteration on the table of
+/// the proc it had just left.  On one CPU that held by luck: nothing
+/// zeroed a freed page before the next pick, and the TLB carried what
+/// the loop touched.  With two it is a triple fault.  The page goes back
+/// to the allocator when the proc exits — through this CPU's reap, or
+/// through a sibling that stole the preempted proc — and is zeroed for
+/// reuse at once; a CPU still translating through it then faults on the
+/// first address its TLB does not hold, and with the kernel half gone
+/// the fault handler faults too (measured: the -smp 2 churn gate reset
+/// the machine 600 cats in, in 14 runs of 25).
+#[cfg(not(test))]
+fn leave_proc_table() {
+    let boot = boot_pml4_pa();
+    if read_cr3() != boot {
+        switch_cr3(boot);
+    }
+}
+
+/// The host-test stand-in: no page tables on the host.
+#[cfg(test)]
+fn leave_proc_table() {}
+
 /// The active CR3 (the current table's physical root).
 #[cfg(not(test))]
 pub(crate) fn read_cr3() -> u64 {
@@ -1852,13 +1881,12 @@ impl Proc {
 
 /// Free this CPU's deferred moribund pages (05-24): runs from the sched
 /// loop's iteration top, after the exiting CPU's hand-off swtch — this
-/// CPU no longer runs on the dead kstack.  CR3 still names the dead
-/// PML4 until the next pick's switch_cr3; that is safe here because the
-/// loop's own stack and text are shared-half (mapped under every
-/// table), the bitmap free only MARKS the page (contents intact, so a
-/// TLB walk still succeeds), and no page allocation runs in IRQ context
-/// or inside the loop — the page cannot be recycled (and zeroed by
-/// alloc_phys_page) before the next pick replaces CR3.  The stack slot
+/// CPU no longer runs on the dead kstack, and CR3 is the boot table
+/// (`leave_proc_table` put it there before the swtch), so the root page
+/// can go back at once.  (Until 2026-11-27 the loop ran on the dead PML4
+/// until the next pick replaced CR3, on the single-CPU assumption that
+/// nothing would recycle and zero the page first; see leave_proc_table.)
+/// The stack slot
 /// returns to the arena here and only here, for the same reason: a
 /// sibling's new proc may take it the moment it is free.  No lock is
 /// held here; free_phys_page takes the page allocator's own lock.
@@ -2349,11 +2377,14 @@ pub fn reschedule() {
     // never touches them) — park them here; the next proc's install
     // happens in pick_next, on the sched loop.
     crate::fpu::leave(&mut cur.fpsave);
+    // The boot table goes into CR3 before the switch: everything from
+    // here on is scheduler context, which never runs on a proc's table.
+    leave_proc_table();
     // Park into the scheduler context.  The swtch saves this proc's
     // callee-saved state into its PROC_TABLE-resident context — never
     // this kstack — so nothing under this frame is invalidated by any
-    // later switch; the Mach stack is mapped identically under every
-    // table (the kernel half is shared).
+    // later switch; and the scheduler context it lands on runs on the
+    // boot table (leave_proc_table, just above).
     // SAFETY: sched_context()'s per-CPU seed-once discipline (this CPU's
     // IRQ-masked trap context); cur.context is PROC_TABLE-resident (a
     // stable address across the switch).  No lock is held; the resumed
@@ -2515,6 +2546,9 @@ pub fn sched() {
         // the next proc's (possibly this one again, from this save).
         crate::fpu::leave(&mut cur.fpsave);
     }
+    // The boot table goes into CR3 before the switch: everything from
+    // here on is scheduler context, which never runs on a proc's table.
+    leave_proc_table();
     // SAFETY: sched_context()'s per-CPU seed-once discipline (this CPU's
     // IRQ-masked syscall context); cur's context field is
     // PROC_TABLE-resident (a stable address across the switch).  The
@@ -2587,8 +2621,8 @@ pub(crate) fn sched_loop() -> ! {
         release_left_proc();
         // Free any proc this CPU exited since the last iteration (the
         // deferred moribund reap, 05-24) — the hand-off swtch already
-        // moved this CPU off the dead kstack (the CR3-stale window's
-        // safety argument lives on reap_moribund).
+        // moved this CPU off the dead kstack onto the boot table
+        // (leave_proc_table).
         reap_moribund();
         match pick_next() {
             // SAFETY: sched_context() is seeded (its own per-CPU
@@ -2810,6 +2844,9 @@ pub fn sched_from_moribund() -> ! {
         if let Some(mut cur) = cur {
             // The dead proc's live FPU/SSE state is dropped, unsaved.
             crate::fpu::discard(&mut cur.fpsave);
+            // The dead proc's table leaves CR3 first: its root page is
+            // freed by the reap this swtch hands over to.
+            leave_proc_table();
             swtch::swtch(&mut cur.context, &*ctx);
         }
     }

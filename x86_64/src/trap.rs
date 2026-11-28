@@ -917,6 +917,11 @@ extern "C" fn trap(vector: u8, trap_frame: &mut Ureg) -> u32 {
         8 => {}
         _ => crate::println!("frame: {trap_frame:#x?}"),
     }
+    // The table this CPU was translating through, and whose proc it was
+    // running: a kernel fault on a mapped address is nearly always the
+    // wrong root page in CR3.
+    let pid = crate::proc::current().map(|p| p.pid).unwrap_or(0);
+    crate::println!("cpu {} cr3={:#x} pid {}", port::smp::current_cpu_id(), crate::proc::read_cr3(), pid);
     crate::println!("kernel halted");
     loop {
         // SAFETY: hlt faults nowhere and parks until an interrupt; the
