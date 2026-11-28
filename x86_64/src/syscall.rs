@@ -1829,11 +1829,37 @@ fn sys_errstr(frame: &mut Ureg, proc: &mut Proc) -> u64 {
     0
 }
 
+/// Why a timed sleeper woke, judged once `sched()` returned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SleepWake {
+    /// The deadline has passed: the sleep succeeded.
+    Expired,
+    /// A note is queued before the deadline: the sleep is interrupted
+    /// (the note is delivered at the syscall's return).
+    Noted,
+    /// Neither: a wake for another reason — the sleeper sleeps on.
+    TooEarly,
+}
+
+/// Judge a timed sleeper's wake from the tick count `now`, its
+/// `deadline` and whether a note is queued.  A note at or after the
+/// deadline does not fail the sleep: expiry returns 0, and the note is
+/// still delivered at the syscall's return.
+fn sleep_wake(now: u64, deadline: u64, note_pending: bool) -> SleepWake {
+    if now >= deadline {
+        SleepWake::Expired
+    } else if note_pending {
+        SleepWake::Noted
+    } else {
+        SleepWake::TooEarly
+    }
+}
+
 /// SLEEP(17): millisecs (an int — the width discipline).  ms<=0
 /// yields; ms>0 blocks until the tick count passes now+ms.  The
 /// note-interruptible shape: a pending-note PRE-CHECK fails the sleep
-/// immediately, an early wake returns -1 "interrupted", expiry returns
-/// 0.
+/// immediately, a note that arrives while it sleeps returns -1
+/// "interrupted", expiry returns 0.
 fn sys_sleep(frame: &mut Ureg, proc: &mut Proc) -> u64 {
     let Some(args) = sargs(frame, proc, 1) else {
         return err(proc, "sleep: bad argument block");
@@ -1851,28 +1877,40 @@ fn sys_sleep(frame: &mut Ureg, proc: &mut Proc) -> u64 {
         if !proc.note_queue.is_empty() {
             return err(proc, "interrupted");
         }
-        // SMP-03: clear any stale wake_pending before arming — this
-        // sleep blocks ONCE (no re-check loop), so a leftover flag from
-        // an unrelated earlier wake would otherwise make sched() return
-        // immediately and misreport "interrupted".  Safe here (and only
-        // because) the waker re-evaluates the condition every tick:
-        // tick_timeouts re-reads sleep_until/note_queue under PROC_TABLE
-        // on each tick, so a wake landing after this clear is
-        // re-published at the next tick and consumed by sched() below.
-        port::smp::prepare_block();
         // MILLISECONDS → ticks through the ceiling conversion: q35's
         // slice is 10 ms, so the inherited aarch64-shaped `ticks() + ms`
         // slept ten times too long (and, symmetrically with sys_alarm,
         // made a "50 ms" alarm a 500 ms one — 01-34's fpprobe finding).
         let deadline = crate::platform::q35::timer::ticks() + ms_to_ticks(ms);
-        proc.sleep_until = deadline;
-        proc::sched();
-        // An early wake is always a posted note this era; expiry
-        // returns 0.
-        if crate::platform::q35::timer::ticks() < deadline {
-            return err(proc, "interrupted");
+        // Block until the deadline passes or a note arrives.  Like
+        // every other blocking syscall here (the note-interruptible
+        // contract: a woken caller re-checks and sleeps on again), a
+        // wake is not by itself a reason to return: the kernel wakes a
+        // blocked proc for reasons that are not notes — a child's
+        // exit posts its wait record and wakes the parent whatever the
+        // parent is blocked on (proc.rs's post_wait_record).  Until
+        // 2026-11-27 this blocked ONCE and reported the first wake as
+        // "interrupted": fpprobe's flags-nt sub-leg (two spinner
+        // children, a sleep(1) across their exit) failed on that, at
+        // one CPU and at two.
+        loop {
+            // SMP-03: clear any stale wake_pending before arming — a
+            // leftover flag from an unrelated earlier wake would
+            // otherwise make sched() return at once; here that costs
+            // one more turn of the loop and nothing else.  A wake
+            // landing after this clear is not lost: tick_timeouts
+            // re-reads sleep_until/note_queue under PROC_TABLE on each
+            // tick and re-publishes it at the next tick.
+            port::smp::prepare_block();
+            proc.sleep_until = deadline;
+            proc::sched();
+            match sleep_wake(crate::platform::q35::timer::ticks(), deadline, !proc.note_queue.is_empty()) {
+                SleepWake::Expired => return 0,
+                SleepWake::Noted => return err(proc, "interrupted"),
+                // Woken for another reason: sleep on to the deadline.
+                SleepWake::TooEarly => {}
+            }
         }
-        0
     }
     #[cfg(not(dev_exec))]
     {
@@ -2549,6 +2587,20 @@ mod tests {
             core::str::from_utf8(&e[..n]).unwrap(),
             "errstr: bad argument block"
         );
+    }
+
+    /// A timed sleep ends only at its deadline or on a note: a wake
+    /// with no note (a child's exit) is not an interruption (fpprobe's
+    /// flags-nt).
+    #[test]
+    fn a_timed_sleep_ends_only_at_its_deadline_or_on_a_note() {
+        use super::{SleepWake, sleep_wake};
+        assert_eq!(sleep_wake(100, 100, false), SleepWake::Expired, "the deadline tick itself expires");
+        assert_eq!(sleep_wake(150, 100, false), SleepWake::Expired);
+        assert_eq!(sleep_wake(150, 100, true), SleepWake::Expired, "a note at or after the deadline does not fail the sleep");
+        assert_eq!(sleep_wake(99, 100, false), SleepWake::TooEarly, "a wake with no note sleeps on");
+        assert_eq!(sleep_wake(0, 100, false), SleepWake::TooEarly);
+        assert_eq!(sleep_wake(99, 100, true), SleepWake::Noted, "a note before the deadline interrupts");
     }
 
     /// An unimplemented number (9 = _FSESSION, in-table None) is LOUD:
