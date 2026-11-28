@@ -19,8 +19,21 @@
 //!   the records in address order.
 //!
 //! A proc that maps 3 GiB of contiguous VA costs about 6 MiB of index
-//! pages — two per mille — and every index page goes back as soon as it
-//! holds no record.
+//! pages — two per mille.
+//!
+//! Who touches a log: the proc's own CPU, in its fault and brk paths,
+//! with no lock; the evictor on any CPU, under PROC_TABLE, removing
+//! records; and whoever walks one, under PROC_TABLE.  So two CPUs may
+//! change one log at once.  The index is shaped so that nothing is
+//! freed where that can be seen: a removal only clears its slot (an
+//! index page left empty stays until the log is taken or cleared — one
+//! page per 2 MiB of address ever mapped, at most), and every index page
+//! is freed only by a walk that owns the log outright: exit, exec and
+//! the rfork unwind TAKE the log off the proc first, as the old `Vec`
+//! was taken, so a walker on another CPU finds it empty.  What is left
+//! is what the `Vec` had too: the record count can be off by one while
+//! two CPUs change the same log, and the evictor's "drop the records"
+//! can drop a record the owner has just re-created for the same page.
 //!
 //! The nodes are reached through `table_entry`/`set_table_entry`
 //! (proc.rs's audited page-table accessors), so nothing here is unsafe.
@@ -86,11 +99,6 @@ fn kind_of(code: u64) -> SegKind {
 
 fn record(entry: u64, va: usize) -> MappingRecord {
     MappingRecord { va, phys: (entry & PA_MASK) as usize, size: PAGE_SIZE_4K, kind: kind_of((entry >> KIND_SHIFT) & 7) }
-}
-
-/// Whether every entry of the node is zero.
-fn node_is_empty(node: u64) -> bool {
-    (0..ENTRIES).all(|i| table_entry(node, i) == 0)
 }
 
 /// Free a node and everything under it (at most `LEVELS` frames deep).
@@ -182,35 +190,18 @@ impl MappingLog {
         Ok(())
     }
 
-    /// Forget the record for `va`'s page; the record is returned.  An
-    /// index page left with no records goes back to the allocator, up
-    /// to the root.
+    /// Forget the record for `va`'s page; the record is returned.  Only
+    /// the slot is cleared: an index page left with no records stays
+    /// until the log is taken or cleared (the module doc says why).
     pub fn remove(&mut self, va: usize) -> Option<MappingRecord> {
         let page = va & !(PAGE_SIZE_4K - 1);
-        let path = self.path(page)?;
-        let (leaf, at) = path[LEVELS - 1];
+        let (leaf, at) = self.path(page)?[LEVELS - 1];
         let entry = table_entry(leaf, at);
         if entry & PRESENT == 0 {
             return None;
         }
         set_table_entry(leaf, at, 0);
         self.len -= 1;
-        let mut level = LEVELS - 1;
-        let mut node = leaf;
-        while node_is_empty(node) {
-            if level == 0 {
-                self.root = 0;
-            } else {
-                let (parent, from) = path[level - 1];
-                set_table_entry(parent, from, 0);
-            }
-            free_phys_page(node);
-            if level == 0 {
-                break;
-            }
-            level -= 1;
-            node = path[level].0;
-        }
         Some(record(entry, page))
     }
 
@@ -287,6 +278,44 @@ impl<'a> IntoIterator for &'a MappingLog {
 
     fn into_iter(self) -> Iter<'a> {
         self.iter()
+    }
+}
+
+/// A walk of a log the walker owns: the log (and so every index page)
+/// lives until the walk ends, and the records are freed with it.
+pub struct IntoIter {
+    log: MappingLog,
+    iter: Iter<'static>,
+}
+
+impl IntoIterator for MappingLog {
+    type Item = MappingRecord;
+    type IntoIter = IntoIter;
+
+    fn into_iter(self) -> IntoIter {
+        // The walk reads the nodes by page address and never the log
+        // itself, so it borrows nothing of `self`.
+        let iter = Iter {
+            log: PhantomData,
+            nodes: [(self.root, 0), (0, 0), (0, 0), (0, 0)],
+            taken: [0; LEVELS],
+        };
+        IntoIter { log: self, iter }
+    }
+}
+
+impl Iterator for IntoIter {
+    type Item = MappingRecord;
+
+    fn next(&mut self) -> Option<MappingRecord> {
+        self.iter.next()
+    }
+}
+
+impl Drop for IntoIter {
+    fn drop(&mut self) {
+        // The walk's whole point: the index pages go back only now.
+        self.log.clear();
     }
 }
 
@@ -415,7 +444,7 @@ mod tests {
     }
 
     #[test]
-    fn an_emptied_index_page_goes_back_while_its_siblings_stay() {
+    fn an_emptied_index_page_stays_until_the_log_is_taken() {
         let mut log = MappingLog::new();
         let a = 0x20_0000;
         let b = 0x20_0000 + 600 * K;
@@ -425,14 +454,34 @@ mod tests {
         }
         // The root, the 512 GiB node, two gibibyte nodes, three leaves.
         assert_eq!(log.node_pages(), 7);
-        assert_eq!(log.remove(b).map(|r| r.va), Some(b));
-        assert_eq!(log.node_pages(), 6, "b's leaf is empty and goes back");
-        assert!(log.get(b).is_none());
-        assert_eq!(log.remove(c).map(|r| r.va), Some(c));
-        assert_eq!(log.node_pages(), 4, "c's leaf and its gibibyte node go back");
-        assert_eq!(log.remove(a).map(|r| r.va), Some(a));
-        assert_eq!(log.node_pages(), 0, "nothing is left, not even the root");
+        for va in [b, c, a] {
+            assert_eq!(log.remove(va).map(|r| r.va), Some(va));
+        }
         assert!(log.is_empty());
+        assert_eq!(log.node_pages(), 7, "nothing is freed where another CPU may be walking");
+        // The vacated pages are taken again by a new record.
+        log.insert(b, frame(9), SegKind::Data).expect("insert");
+        assert_eq!(log.node_pages(), 7);
+        assert_eq!(log.get(b).map(|r| r.phys), Some(frame(9)));
+        // An owning walk sees the record and frees every index page when
+        // it ends.
+        let seen: Vec<MappingRecord> = log.into_iter().collect();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].phys, frame(9));
+    }
+
+    #[test]
+    fn an_owning_walk_holds_the_pages_until_it_ends() {
+        let mut log = MappingLog::new();
+        log.insert(0x20_0000, frame(1), SegKind::Bss).expect("insert");
+        log.insert(TOP, frame(2), SegKind::Stack).expect("insert");
+        let mut walk = log.into_iter();
+        // The first record is read while the log is still alive inside
+        // the walk; the second comes from the far node.
+        assert_eq!(walk.next().map(|r| r.phys), Some(frame(1)));
+        assert_eq!(walk.next().map(|r| r.phys), Some(frame(2)));
+        assert_eq!(walk.next(), None);
+        drop(walk);
     }
 
     #[test]

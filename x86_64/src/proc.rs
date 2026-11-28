@@ -1780,10 +1780,16 @@ impl Proc {
     /// evictor is the only path that frees it.  The proc's reverse-map
     /// entries are removed.
     pub fn free_user_mappings(&mut self) {
+        // The log leaves the proc first (the old Vec was taken the same
+        // way): the evictor on another CPU walks procs' logs under
+        // PROC_TABLE, and it must find this one empty while its index
+        // pages go back.  The taken log drops, and frees them, at the
+        // end of the walk.
+        let records = core::mem::take(&mut self.mapping_log);
         let slot = self.rmap_slot();
         let cache = crate::pagealloc::page_cache();
         let image_id = self.text_source.as_ref().map(|source| source.image_id);
-        for rec in self.mapping_log.iter() {
+        for rec in records {
             pml4_unmap_user(self.pml4_pa, rec.va);
             let cached = match (cache, image_id) {
                 (Some(cache), Some(image_id)) => {
@@ -1801,7 +1807,6 @@ impl Proc {
                 free_phys_page(rec.phys as u64);
             }
         }
-        self.mapping_log.clear();
         if let Some(cache) = cache {
             cache.remove_proc_rmaps(slot);
         }
@@ -3426,12 +3431,11 @@ pub fn rfork_clone(parent: &mut Proc, frame: &Ureg, flag: u64) -> Result<u64> {
     // PML4 and kstack by their recorded PAs.
     if let Err(msg) = rfork_copy(parent, &mut child, frame, flag) {
         child.state = ProcState::Moribund;
-        for rec in child.mapping_log.iter() {
+        for rec in core::mem::take(&mut child.mapping_log) {
             if release_user_page(rec.phys as u64) {
                 free_phys_page(rec.phys as u64);
             }
         }
-        child.mapping_log.clear();
         for pa in core::mem::take(&mut child.mapping_tables) {
             free_phys_page(pa);
         }
