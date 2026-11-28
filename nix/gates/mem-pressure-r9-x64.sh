@@ -9,24 +9,26 @@
 #     `palloc_max_frames=2048` (R9_PALLOC_MAX_FRAMES) — an 8 MiB bounded
 #     PAGE_ALLOC pool read from the Multiboot2 cmdline;
 #   * the guest runs with `-m $R9_MEM` (default 256M) and `-smp 2`, safely
-#     above the ~108 MiB static footprint (MOD_STASH_SIZE 64 MiB +
+#     above the static footprint (MOD_STASH_SIZE 64 MiB +
 #     GLOBAL_HEAP_SIZE 32 MiB `.bss`) so the .bss/initrd still fit while the
 #     managed pool stays tiny;
-#   * a pinned-blocked reader on one CPU and a memory-pressure worker on the
-#     other contend for the small pool;
 #   * the image is `mempressure` (xtask/manifests/amd64/mempressure.toml):
-#     the chain image plus sleep(1).  The reader's writer is
-#     `{ hsleep 60; echo pinnedok } | cat &`, and composed from chain.paq
-#     (which carries no sleep) it printed `pinnedok' at once — the gate's
-#     `wait' stage then waited for a line that had already passed.
+#     the chain image plus seq(1) and sort(1), and the load is the
+#     aarch64 gate's bounded burst, `hseq 1 N | hsort > /dev/null`
+#     (R9_PRESSURE_LINES): hsort's line table needs more frames than the
+#     pool has free, so the live evictor runs, and the total stays inside
+#     what it can reclaim.  The exec-churn loop and background
+#     pinned-reader pipeline this gate used before never exhausted the pool
+#     (measured 2026-11-28: evict_calls=0).
 #
 # gates/x86_64/mem-pressure.expect asserts `palloc: managed_frames=2048`,
-# drives the pinned-buffer reader + pressure worker + byte-identical re-fault
-# from Harvey's rc shell, reads `cat '#c/sysstat'` (served read-only by
+# drives the bounded burst and a byte-identical re-fault from Harvey's rc
+# shell, reads `cat '#c/sysstat'` (served read-only by
 # port/src/devcons.rs from port::palloc::evictor_stats()), and requires
-# dropped_text > 0, dropped_data > 0 and MEM_PRESSURE_OK.  pinned_skipped is
-# reported but not asserted: no userland path in this image can pin a CACHED
-# page (the 05-21 structural finding); the host integration test
+# dropped_text > 0, dropped_data > 0, evict_calls > 0, reclaimed > 0,
+# free_failures == 0 and MEM_PRESSURE_OK.  pinned_skipped is reported but
+# not asserted: no userland path in this image can pin a CACHED page (the
+# 05-21 structural finding); the host integration test
 # port/src/pagecache.rs::pinned_cached_page_is_skipped_until_unpinned proves
 # the pin path instead.
 #
@@ -42,8 +44,9 @@
 #   R9_QEMU             default qemu-system-x86_64.
 #   R9_ACCEL            kvm (default) | tcg — no silent downgrade.
 #   R9_CPU              override the cpu model (default host/kvm, qemu64/tcg).
-#   R9_MEM              guest RAM (default 256M — above the ~108 MiB `.bss`).
+#   R9_MEM              guest RAM (default 256M — above the static `.bss`).
 #   R9_PALLOC_MAX_FRAMES  the managed-frame cap (default 2048 = 8 MiB).
+#   R9_PRESSURE_LINES     the bounded burst's line count (default 32000).
 #   KERNDATE            bake-time timestamp override.
 #
 # Hygiene: capture rm -f'd BEFORE launch; group-kill on every exit path; the
@@ -94,7 +97,8 @@ fi
 
 R9_MEM="${R9_MEM:-256M}"
 R9_PALLOC_MAX_FRAMES="${R9_PALLOC_MAX_FRAMES:-2048}"
-export R9_MEM R9_PALLOC_MAX_FRAMES
+R9_PRESSURE_LINES="${R9_PRESSURE_LINES:-32000}"
+export R9_MEM R9_PALLOC_MAX_FRAMES R9_PRESSURE_LINES
 
 # --- step 0b: accel selection (no silent downgrade) --------------------
 
@@ -119,6 +123,7 @@ echo "== kernel:       $R9_KERNEL"
 echo "== iso-builder:  $R9_ISO_BUILDER"
 echo "== shape:        q35 accel=$R9_ACCEL cpu=$R9_CPU mem=$R9_MEM"
 echo "== palloc cap:   palloc_max_frames=$R9_PALLOC_MAX_FRAMES (8 MiB managed pool)"
+echo "== burst:        hseq 1 $R9_PRESSURE_LINES | hsort > /dev/null"
 
 # --- step 1: the mem-pressure image (the chain image + sleep) ---------
 

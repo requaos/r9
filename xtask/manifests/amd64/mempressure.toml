@@ -1,13 +1,15 @@
-# The amd64 MEM-PRESSURE image: the chain image plus sleep(1), for the
-# x86_64 mem-pressure gate (gates/x86_64/mem-pressure.expect).
+# The amd64 MEM-PRESSURE image: the chain image plus seq(1) and sort(1),
+# for the x86_64 mem-pressure gate (gates/x86_64/mem-pressure.expect).
 #
-# The gate's first worker is `{ hsleep 60; echo pinnedok } | cat &` — a
-# pipe reader blocked until a writer speaks a minute later — and the
-# chain image carries no sleep.  Composed from chain.paq the worker
-# printed `pinnedok' at once (sleep's exec failed) and the gate's `wait'
-# stage could never see it.  chain.toml stays the D-29 reference bake's
-# image; this manifest is that file with one entry added (/amd64/bin/
-# hsleep, staged from the tree's amd64/bin/sleep as tier.toml stages it).
+# The gate's load is the aarch64 gate's bounded burst, `hseq 1 N | hsort
+# > /dev/null`: hsort's line table and sort recursion need more frames
+# than the pool has free, so the live evictor runs, and the total stays
+# inside what it can reclaim.  The chain image carries neither program,
+# and the exec-churn loop the x86_64 gate used instead never exhausted
+# the pool at all (measured 2026-11-28: evict_calls=0).  chain.toml stays
+# the D-29 reference bake's image; this manifest is that file with two
+# entries added (staged from the tree's amd64/bin/seq and amd64/bin/sort
+# as tier.toml stages them).
 
 schema = 1
 arch = "amd64"
@@ -50,9 +52,15 @@ from = "amd64/bin/echo"
 mode = "0755"
 
 [[file]]
-path = "/amd64/bin/hsleep"
+path = "/amd64/bin/hseq"
 source = "harvey"
-from = "amd64/bin/sleep"
+from = "amd64/bin/seq"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hsort"
+source = "harvey"
+from = "amd64/bin/sort"
 mode = "0755"
 
 [[file]]
