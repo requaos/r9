@@ -92,6 +92,7 @@ use port::smp::LockRank;
 use crate::dat::Ureg;
 #[cfg(not(test))]
 use crate::dat::Stack;
+use crate::maplog::MappingLog;
 use crate::{directmap, kstack};
 use crate::swtch;
 
@@ -229,7 +230,7 @@ impl SegKind {
 
 /// One user mapping — appended by exec (seed pages) and the
 /// residency paths (demand zero-page-in).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MappingRecord {
     pub va: usize,
     pub phys: usize,
@@ -1111,12 +1112,13 @@ pub fn rfmem_brk_set(family: u64, old_end: usize, new_end: usize) -> Result<()> 
                             return Err("brk: growth page map failed");
                         }
                     }
-                    p.mapping_log.push(MappingRecord {
-                        va,
-                        phys: pa as usize,
-                        size: PAGE_SIZE_4K,
-                        kind: SegKind::Bss,
-                    });
+                    if let Err(msg) = p.mapping_log.insert(va, pa as usize, SegKind::Bss) {
+                        // Mapped but unrecorded: undo the map and free
+                        // the page (the record-or-unwind hygiene).
+                        pml4_unmap_user(p.pml4_pa, va);
+                        free_phys_page(pa);
+                        return Err(msg);
+                    }
                 }
                 va += page;
             }
@@ -1158,12 +1160,13 @@ pub fn rfmem_brk_set(family: u64, old_end: usize, new_end: usize) -> Result<()> 
                         break;
                     }
                 }
-                p.mapping_log.push(MappingRecord {
-                    va,
-                    phys: pa as usize,
-                    size: PAGE_SIZE_4K,
-                    kind: SegKind::Bss,
-                });
+                if p.mapping_log.insert(va, pa as usize, SegKind::Bss).is_err() {
+                    // Mapped but unrecorded: undo this member's map;
+                    // the unwind below handles the members before it.
+                    pml4_unmap_user(p.pml4_pa, va);
+                    failed = true;
+                    break;
+                }
                 mapped.push(m);
             }
         }
@@ -1183,9 +1186,7 @@ pub fn rfmem_brk_set(family: u64, old_end: usize, new_end: usize) -> Result<()> 
                 unsafe {
                     let p = &mut *m;
                     pml4_unmap_user(p.pml4_pa, va);
-                    if let Some(pos) = p.mapping_log.iter().position(|r| r.va == va) {
-                        p.mapping_log.swap_remove(pos);
-                    }
+                    p.mapping_log.remove(va);
                 }
             }
             free_phys_page(pa);
@@ -1210,9 +1211,7 @@ pub fn rfmem_brk_set(family: u64, old_end: usize, new_end: usize) -> Result<()> 
                 unsafe {
                     let p = &mut *m;
                     pml4_unmap_user(p.pml4_pa, done_va);
-                    if let Some(pos) = p.mapping_log.iter().position(|r| r.va == done_va) {
-                        p.mapping_log.swap_remove(pos);
-                    }
+                    p.mapping_log.remove(done_va);
                 }
                 if release_user_page(done_pa) {
                     free_phys_page(done_pa);
@@ -1361,7 +1360,7 @@ pub struct Proc {
     pub fd_group: Arc<Lock<FdGroup<MAX_FDS>>>,
     /// User mappings, exec/residency-appended — rfork-copy/exit-free
     /// walk this.
-    pub mapping_log: Vec<MappingRecord>,
+    pub mapping_log: MappingLog,
     /// The a.out-derived VA map; None until exec.
     pub segments: Option<Segments>,
     /// paqfs byte source for demand page-in; None until exec.
@@ -1508,7 +1507,7 @@ impl Proc {
             pml4_pa,
             mapping_tables: Vec::new(),
             fd_group: Arc::new(Lock::new("fdgrp", FdGroup::new())),
-            mapping_log: Vec::new(),
+            mapping_log: MappingLog::new(),
             segments: None,
             text_source: None,
             exec_gen: 0,
@@ -1759,7 +1758,13 @@ impl Proc {
         for c in created.into_iter().flatten() {
             self.mapping_tables.push(c);
         }
-        self.mapping_log.push(MappingRecord { va, phys: pa as usize, size: PAGE_SIZE_4K, kind });
+        if let Err(msg) = self.mapping_log.insert(va, pa as usize, kind) {
+            // The page is mapped but unrecorded — undo both, or it leaks
+            // (17-01, the WR-03 OOM-release family).
+            pml4_unmap_user(self.pml4_pa, va);
+            free_phys_page(pa);
+            return Err(msg);
+        }
         Ok(pa)
     }
 
@@ -1775,11 +1780,10 @@ impl Proc {
     /// evictor is the only path that frees it.  The proc's reverse-map
     /// entries are removed.
     pub fn free_user_mappings(&mut self) {
-        let records = core::mem::take(&mut self.mapping_log);
         let slot = self.rmap_slot();
         let cache = crate::pagealloc::page_cache();
         let image_id = self.text_source.as_ref().map(|source| source.image_id);
-        for rec in records {
+        for rec in self.mapping_log.iter() {
             pml4_unmap_user(self.pml4_pa, rec.va);
             let cached = match (cache, image_id) {
                 (Some(cache), Some(image_id)) => {
@@ -1797,6 +1801,7 @@ impl Proc {
                 free_phys_page(rec.phys as u64);
             }
         }
+        self.mapping_log.clear();
         if let Some(cache) = cache {
             cache.remove_proc_rmaps(slot);
         }
@@ -1937,10 +1942,7 @@ impl crate::usermem::UserAddressSpace for Proc {
     }
 
     fn resident_phys(&self, page_va: usize) -> Option<u64> {
-        self.mapping_log
-            .iter()
-            .find(|m| m.va == page_va)
-            .map(|m| m.phys as u64)
+        self.mapping_log.get(page_va).map(|m| m.phys as u64)
     }
 }
 
@@ -3424,11 +3426,12 @@ pub fn rfork_clone(parent: &mut Proc, frame: &Ureg, flag: u64) -> Result<u64> {
     // PML4 and kstack by their recorded PAs.
     if let Err(msg) = rfork_copy(parent, &mut child, frame, flag) {
         child.state = ProcState::Moribund;
-        for rec in core::mem::take(&mut child.mapping_log) {
+        for rec in child.mapping_log.iter() {
             if release_user_page(rec.phys as u64) {
                 free_phys_page(rec.phys as u64);
             }
         }
+        child.mapping_log.clear();
         for pa in core::mem::take(&mut child.mapping_tables) {
             free_phys_page(pa);
         }
@@ -3472,8 +3475,7 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &Ureg, flag: u64) -> R
     // machinery write the proc's OWN stack pages); SG_BSS/SG_DATA
     // SHARE under RFMEM — the same PA mapped in both procs' tables,
     // refcounted in SHARED_PAGES against the exit/exec frees.
-    let records: Vec<MappingRecord> = parent.mapping_log.clone();
-    for rec in &records {
+    for rec in parent.mapping_log.iter() {
         if rfmem && matches!(rec.kind, SegKind::Data | SegKind::Bss) {
             // The RFMEM share arm: no copy — the parent's PA maps
             // straight into the child's table at the same VA, then the
@@ -3491,12 +3493,10 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &Ureg, flag: u64) -> R
             if let Some(cache) = crate::pagealloc::page_cache() {
                 cache.mark_data_dirty(PhysAddr::new(rec.phys as u64));
             }
-            child.mapping_log.push(MappingRecord {
-                va: rec.va,
-                phys: rec.phys,
-                size: rec.size,
-                kind: rec.kind,
-            });
+            child
+                .mapping_log
+                .insert(rec.va, rec.phys, rec.kind)
+                .map_err(|_| "rfork: child mapping record failed")?;
             continue;
         }
         // The copy arm (always for Text/Stack/Tos; for Data/Bss without
@@ -3526,12 +3526,10 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &Ureg, flag: u64) -> R
         for c in created.into_iter().flatten() {
             child.mapping_tables.push(c);
         }
-        child.mapping_log.push(MappingRecord {
-            va: rec.va,
-            phys: pa as usize,
-            size: rec.size,
-            kind: rec.kind,
-        });
+        child
+            .mapping_log
+            .insert(rec.va, pa as usize, rec.kind)
+            .map_err(|_| "rfork: child mapping record failed")?;
     }
     // No icache maintenance on the copy: x86_64 has coherent
     // instruction caches — the aarch64 port's per-page CTR_EL0 flush
@@ -3549,7 +3547,7 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &Ureg, flag: u64) -> R
         if let Some((start, end)) = sweep {
             let mut va = start;
             while va < end {
-                if parent.mapping_log.iter().any(|m| m.va == va) {
+                if parent.mapping_log.get(va).is_some() {
                     va += PAGE_SIZE_4K;
                     continue;
                 }
@@ -3582,8 +3580,18 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &Ureg, flag: u64) -> R
                     child.mapping_tables.push(c);
                 }
                 let rec = MappingRecord { va, phys: pa as usize, size: PAGE_SIZE_4K, kind: SegKind::Bss };
-                parent.mapping_log.push(rec);
-                child.mapping_log.push(rec);
+                let recorded = parent.mapping_log.insert(va, rec.phys, SegKind::Bss)
+                    .and_then(|()| child.mapping_log.insert(va, rec.phys, SegKind::Bss));
+                if let Err(msg) = recorded {
+                    // Drop whichever half was recorded, unmap both, free
+                    // the page (the sweep's failure hygiene), and report.
+                    parent.mapping_log.remove(va);
+                    child.mapping_log.remove(va);
+                    pml4_unmap_user(parent.pml4_pa, va);
+                    pml4_unmap_user(child.pml4_pa, va);
+                    free_phys_page(pa);
+                    return Err(msg);
+                }
                 share_new_user_page(pa, 2);
                 va += PAGE_SIZE_4K;
             }

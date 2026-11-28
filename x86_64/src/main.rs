@@ -12,6 +12,7 @@ mod dat;
 mod directmap;
 mod entropy;
 mod kstack;
+mod maplog;
 mod pagealloc;
 mod pio;
 mod platform;

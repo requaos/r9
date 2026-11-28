@@ -30,14 +30,12 @@
 //! (MEM-15).  bss/stack/tos map zeroed pages (D-14: dirty anonymous memory
 //! is never evicted).
 
-
 use port::mem::{PhysAddr, PAGE_SIZE_4K};
 use port::println;
 
 use crate::dat::Ureg;
 use crate::proc::{
-    self, alloc_phys_page, data_page_key, free_phys_page, phys_ptr_mut, text_page_key, MappingRecord,
-    Proc, SegKind,
+    self, alloc_phys_page, data_page_key, free_phys_page, phys_ptr_mut, text_page_key, Proc, SegKind,
 };
 
 // Test-only: kernel_address_rejection pins the bound against KZERO.
@@ -120,7 +118,7 @@ pub fn user_fault(frame: &mut Ureg, cr2: u64) {
     // the one sanctioned case: a kernel write to an untouched Data page
     // through `UserSliceMut` promotes it to dirty (MEM-15).  A write to
     // text (or a fetch from data) kills the offending process (T-05-35).
-    let already_mapped = proc.mapping_log.iter().any(|m| m.va == page_va);
+    let already_mapped = proc.mapping_log.get(page_va).is_some();
     if already_mapped {
         if err.write && segments.classify(va) == Some(SegKind::Data) {
             if let Err(reason) = promote_data_page(&mut proc, page_va) {
@@ -189,12 +187,13 @@ fn page_in_from_image(proc: &mut Proc, page_va: usize, kind: SegKind) -> Result<
     if let Some(cache) = crate::pagealloc::page_cache()
         && let Some(page) = cache.lookup(key)
     {
+        // Record before mapping: a failure here leaves nothing mapped.
+        record_mapping(proc, page_va, page.pa.addr(), kind)?;
         map_user_leaf(proc, page_va, page.pa.addr(), leaf_for(kind))?;
         cache.add_rmap(
             key,
             port::pagecache::RmapEntry { proc_slot: proc.rmap_slot(), page_va },
         );
-        record_mapping(proc, page_va, page.pa.addr(), kind);
         return Ok(());
     }
 
@@ -227,13 +226,16 @@ fn page_in_from_image(proc: &mut Proc, page_va: usize, kind: SegKind) -> Result<
         }
     }
 
-    map_user_leaf(proc, page_va, pa, leaf_for(kind))?;
+    record_mapping(proc, page_va, pa, kind)?;
+    if let Err(reason) = map_user_leaf(proc, page_va, pa, leaf_for(kind)) {
+        proc.mapping_log.remove(page_va);
+        return Err(reason);
+    }
     match kind {
         SegKind::Text => println!("fault: text page-in va={page_va:#x}"),
         SegKind::Data => println!("fault: data page-in va={page_va:#x}"),
         _ => {}
     }
-    record_mapping(proc, page_va, pa, kind);
     Ok(())
 }
 
@@ -280,26 +282,26 @@ fn fill_page_from_source(
 }
 
 /// Record a user mapping (rfork's copy and exit's free walk this log).
-fn record_mapping(proc: &mut Proc, page_va: usize, pa: u64, kind: SegKind) {
-    proc.mapping_log.push(MappingRecord {
-        va: page_va,
-        phys: pa as usize,
-        size: PAGE_SIZE_4K,
-        kind,
-    });
+/// Fails only when the log cannot get an index page; the caller then
+/// unmaps and frees the page it just mapped.
+fn record_mapping(proc: &mut Proc, page_va: usize, pa: u64, kind: SegKind) -> Result<(), &'static str> {
+    proc.mapping_log.insert(page_va, pa as usize, kind)
 }
 
 /// Page-in a zeroed bss/stack/tos page.  `alloc_phys_page` already zeroes
 /// the frame through the seam; the mapping is writable, no-execute.
 fn page_in_zeroed(proc: &mut Proc, page_va: usize, kind: SegKind) -> Result<(), &'static str> {
     let pa = alloc_phys_page().map_err(|_| "fault: phys page alloc failed")?;
-    map_user_leaf(proc, page_va, pa, USER_DATA_RW)?;
+    record_mapping(proc, page_va, pa, kind)?;
+    if let Err(reason) = map_user_leaf(proc, page_va, pa, USER_DATA_RW) {
+        proc.mapping_log.remove(page_va);
+        return Err(reason);
+    }
     match kind {
         SegKind::Stack => println!("fault: stack growth va={page_va:#x}"),
         SegKind::Bss => println!("fault: bss page-in va={page_va:#x}"),
         _ => println!("fault: zero page-in va={page_va:#x}"),
     }
-    record_mapping(proc, page_va, pa, kind);
     Ok(())
 }
 
@@ -310,8 +312,8 @@ fn page_in_zeroed(proc: &mut Proc, page_va: usize, kind: SegKind) -> Result<(), 
 fn promote_data_page(proc: &mut Proc, page_va: usize) -> Result<(), &'static str> {
     let record = proc
         .mapping_log
-        .iter()
-        .find(|rec| rec.va == page_va && rec.kind == SegKind::Data)
+        .get(page_va)
+        .filter(|rec| rec.kind == SegKind::Data)
         .ok_or("fault: data page is not resident")?;
     if let Some(cache) = crate::pagealloc::page_cache() {
         cache.mark_data_dirty(PhysAddr::new(record.phys as u64));
@@ -324,7 +326,7 @@ fn promote_data_page(proc: &mut Proc, page_va: usize) -> Result<(), &'static str
 pub(crate) fn ensure_stack_resident(proc: &mut Proc, start: usize, end: usize) {
     let mut page = start & !(PAGE_SIZE_4K - 1);
     while page < end {
-        if !proc.mapping_log.iter().any(|m| m.va == page)
+        if proc.mapping_log.get(page).is_none()
             && page_in_zeroed(proc, page, SegKind::Stack).is_err()
         {
             println!("fault: stack page-in failed during note delivery");
@@ -348,7 +350,7 @@ pub(crate) fn ensure_user_resident(
     }
     let mut page = start & !(PAGE_SIZE_4K - 1);
     while page < end {
-        let mapped = proc.mapping_log.iter().any(|m| m.va == page);
+        let mapped = proc.mapping_log.get(page).is_some();
         let kind = proc.segments.as_ref().and_then(|segments| segments.classify(page));
         match kind {
             Some(SegKind::Text) => {

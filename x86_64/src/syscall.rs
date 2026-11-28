@@ -1229,11 +1229,8 @@ fn sem_try_acquire(word: &mut UserSliceMut) -> bool {
 /// Translate a resident user VA to its physical address via the proc's
 /// mapping_log — the wait-queue key is the word's PHYSICAL address.
 fn sem_word_pa(proc: &Proc, va: u64) -> Option<u64> {
-    let va = va as usize;
-    proc.mapping_log
-        .iter()
-        .find(|m| m.va <= va && va < m.va + m.size)
-        .map(|m| m.phys as u64 + (va - m.va) as u64)
+    let page = va as usize & !(port::mem::PAGE_SIZE_4K - 1);
+    proc.mapping_log.get(page).map(|m| m.phys as u64 + (va - m.va as u64))
 }
 
 /// SEMACQUIRE(37): addr, block.  Fast path: decrement a positive word
@@ -2397,12 +2394,7 @@ mod tests {
         });
         let mut page = base & !(PAGE_SIZE_4K - 1);
         while page < base + len {
-            guard.mapping_log.push(MappingRecord {
-                va: page,
-                phys: page,
-                size: PAGE_SIZE_4K,
-                kind: SegKind::Stack,
-            });
+            guard.mapping_log.insert(page, page, SegKind::Stack).expect("a mock stack record");
             page += PAGE_SIZE_4K;
         }
         fn bytes(m: &mut [u64; 256]) -> &mut [u8] {
@@ -2485,12 +2477,10 @@ mod tests {
                 stack: VirtRange::with_end(base, base + buf.len()),
                 tos: empty(),
             });
-            guard.mapping_log.push(MappingRecord {
-                va: base & !(PAGE_SIZE_4K - 1),
-                phys: base,
-                size: PAGE_SIZE_4K,
-                kind: SegKind::Stack,
-            });
+            guard
+                .mapping_log
+                .insert(base & !(PAGE_SIZE_4K - 1), base, SegKind::Stack)
+                .expect("a mock stack record");
             MockStack { guard, buf }
         }
 
@@ -2929,16 +2919,11 @@ mod tests {
         let tos_va = crate::exec::exec_replace(mock.proc(), backing, "init", &args, &mut frame)
             .expect("exec_replace succeeds");
         assert_ne!(tos_va, 0);
-        // The seeded user stack: the Stack mapping's page, read through
-        // the seam (the seed page is host memory in tests).
-        let rec = mock
-            .proc()
-            .mapping_log
-            .iter()
-            .find(|m| m.kind == SegKind::Stack)
-            .expect("a stack seed page")
-            .clone();
+        // The seeded user stack: the top page's record, read through the
+        // seam (the seed page is host memory in tests).
         let base = USTACKTOP - PAGE_SIZE_4K;
+        let rec = mock.proc().mapping_log.get(base).expect("the stack seed page");
+        assert_eq!(rec.kind, SegKind::Stack);
         let page = crate::proc::phys_ptr_mut(rec.phys as u64) as *const u8;
         let user_sp = frame.sp as usize;
         assert!(user_sp > base && user_sp < base + PAGE_SIZE_4K);
