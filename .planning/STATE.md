@@ -180,7 +180,7 @@ None yet.
   flags-nt sub-leg on `main` at `-smp 1` as well: `sys_sleep` blocked once and reported the first wake as "interrupted", and a
   child's exit wakes its parent whatever it is blocked on. Fixed on the stacked branch `fix/x86_64-sleep-wake` (its one commit
   sits on the branch above): the sleep ends only at its deadline or on a note; tier-1 then passes at `-smp 1` and at `-smp 2`.
-- **Scale targets (owner, 2026-11-27) — audited, decisions pending.** Future systems: more than
+- **Scale targets (owner, 2026-11-27) — audited; the memory model is built, paths next.** Future systems: more than
   100 GiB of RAM, hundreds of terabytes of storage, file paths exceeding 2048 characters. None of
   the three is stated anywhere in the plans, and the verification plan's VMs are 2 GiB. Audit with
   sources in `.planning/SCALE-AUDIT.md`. Headline findings: the x86_64 kernel reaches RAM only
@@ -189,7 +189,33 @@ None yet.
   keeps one 4-byte pin count per frame of the machine's address span in a fixed 32 MiB kernel heap;
   device memory at or above 4 GiB panics; every path argument is capped at 128 bytes; no storage
   stack exists yet and the page cache's page index is 32-bit. Seven planning items are proposed in
-  the audit's section 5; none is started.
+  the audit's section 5.
+- **Scale targets, memory model — built 2026-11-28, awaiting the owner's review.** Branch
+  `feat/x86_64-memory-model` (stacked on the two branches above; local, nothing pushed), four
+  commits. `0098eed` (`port/src`, its own commit so the diff can be read by the rule above) keeps
+  a pin count only for pinned frames and caps the clean target and the low-water mark at 64 MiB
+  and 16 MiB. `1e4ebe7` maps the RAM above the first gibibyte into the PML4 slots the boot tables
+  leave free (a direct map built at boot from the firmware map; `phys_ptr_mut` reaches every
+  frame; every process PML4 copies the whole kernel half) and raises the firmware-map cap to 128
+  entries and the boot-information stash to 32 KiB. `4a395e1` replaces the demand pager's per-page
+  `Vec` on the kernel heap (found on the way: a process mapping 1 GiB exhausted the heap, after a
+  quarter of a million linear scans) with a radix tree keyed by address, paged from the frame
+  allocator. `ae04cd9` makes the per-fault console line opt-in (`faulttrace`) and prints a failed
+  break's reason. Measured on the KVM host: guests of 8, 32, 100 and 128 GiB boot to the prompt
+  with the whole RAM managed (first output in 0.6 to 2.2 s; before, 8 GiB panicked in the
+  seeding), and a process writes and reads back 1 GiB through frames above 4 GiB with the kernel
+  heap under 3 MiB (100 GiB and 128 GiB need a sparse file-backed guest; a 1 TiB guest does not
+  start on this host). At 1 GiB on the same tree at the default `-smp 2` under KVM: tier-1 (at
+  `-smp 1` too), churn and net-smoke pass; smoke passes the chain leg and the CPU ladder to
+  `cpu-ether-ok` and stops at `cpu-keyfs-ok`, as `main` does at one CPU (the single-CPU TCG leg
+  ends the same way, 31 stages); services and auth end as before.
+  `cargo xtask test` exits 0 (1281); clippy exits 0 on q35churnshell and q35cpu. Still open from
+  the audit: the kernel heap (one fixed 32 MiB arena; nothing in it now grows with RAM), the rest
+  of the caps, device memory at or above 4 GiB on firmware that places BARs high, and two limits
+  outside the kernel, recorded in the audit's section 7 (the user library's malloc caps a process
+  near 3.8 GiB; exec takes 32 arguments of 128 bytes). The three targets are recorded as SCALE-01
+  to SCALE-03 in `.planning/REQUIREMENTS.md`; SCALE-01 is ticked. Record: `.planning/SCALE-AUDIT.md`
+  section 7.
 - **Pre-existing and carried:** `cargo xtask clippy --arch aarch64 --config virtshell` fails on
   7 undocumented `unsafe` blocks in `aarch64/`; repo-wide `cargo fmt --all -- --check` is red;
   the docs still pin r9 at `c787ce9` while `crypto/`, `ds/` and the wire foundation now exist —

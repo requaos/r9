@@ -128,3 +128,77 @@ memory-model work, but it should be built so that work does not undo it:
 
 Recommendation unchanged in kind: the arena, as the smaller change; and item
 2 opened as planning work in its own right.
+
+## 7. Status (2026-11-28)
+
+Done on branch `feat/x86_64-memory-model` (stacked on the two-CPU fix and the
+sleep fix; local, nothing pushed):
+
+- **Item 2, the direct map (M1, M2, M3, M4).** `x86_64/src/directmap.rs` maps
+  the RAM above the first gibibyte at `0xffff_8000_0000_0000 + pa`, into the
+  PML4 slots 256..=509 the boot tables leave free (127 TiB of virtual space,
+  physical addresses to 128 TiB), at boot from the firmware map before the
+  frame allocator is seeded: 1 GiB pages for aligned gibibytes, 2 MiB pages at
+  range edges, and the sub-2 MiB edges withheld from the pools. Its table
+  pages (two on every shape measured) come from a low-RAM reservation beside
+  the kernel-stack arena. `phys_ptr_mut` reaches the first gibibyte through
+  KZERO as before and the rest through the map; every process PML4 copies the
+  kernel half from the boot table (slots 256..=511). The kernel image and the
+  stacks keep their addresses, so a 1 GiB guest builds no map and runs as
+  before.
+- **Item 3, frame metadata and pool bounds (M5, M7).** `port/src/palloc.rs`
+  keeps the managed set and a pin count only for frames that have one (a map,
+  not a table sized by the machine). The clean target and the low-water mark
+  are capped at 64 MiB and 16 MiB; the percentages hold below that.
+- **Item 4, two caps raised.** The firmware memory map keeps 128 entries (was
+  32) and the boot-information stash is 32 KiB (was 4 KiB).
+- **Found on the way, M14: the demand pager's mapping log.** Every mapped page
+  had a 32-byte record in a `Vec` on the 32 MiB kernel heap, and every page
+  fault asked "is this page mapped?" by scanning it. A process mapping 1 GiB
+  needed an 8 MiB heap vector, then a 16 MiB one, where the heap ran out
+  (`oom: Layout { size: 16777216 }`), after a quarter of a million linear
+  scans. It is now a radix tree keyed by address (`x86_64/src/maplog.rs`):
+  four levels of 512-entry nodes, each one page from the frame allocator;
+  insert, lookup and removal take a few table reads; about one page per 512
+  mapped pages; no `unsafe` of its own.
+- **Found on the way, M15: a console line per fault.** Every demand page-in
+  printed a line (a console lock and thirty-odd UART bytes a page). The lines
+  are now behind the `faulttrace` boot token.
+- **M8 on this venue.** QEMU keeps the whole PCI hole below 4 GiB at every RAM
+  size measured from 8 GiB to 128 GiB (2 GiB of RAM below the boundary, the
+  rest above), and the NIC driver already moves a firmware BAR assigned above
+  4 GiB into the low window. Device memory at or above 4 GiB stays unsupported
+  on a host whose firmware places BARs high: recorded, not built, since it
+  cannot be exercised here.
+
+Measured on the KVM host (a 100 GiB anonymous guest is refused by the host's
+overcommit heuristic; a sparse file-backed one is not):
+
+| Guest | Frames managed | Map: spans, bytes, table pages | First output | Leg |
+|---|---|---|---|---|
+| 8 GiB | 2,060,286 | 2, 0x1bfe00000, 2 | 0.63 s | pass, 15.6 s |
+| 32 GiB | 8,351,742 | 2, 0x7bfe00000, 2 | 1.14 s | pass, 15.6 s |
+| 100 GiB | 26,177,534 | 2, 0x18bfe00000, 2 | 1.62 s | pass, 19.1 s |
+| 128 GiB | 33,517,566 | 2, 0x1fbfe00000, 2 | 2.15 s | pass, 19.1 s |
+
+The leg: a tier image whose sweep is replaced by one process that doubles a
+string to 1 GiB and compares its halves. About 2 GiB of heap is mapped, frames
+above 1 GiB and above 4 GiB are handed out (the kernel prints the first of
+each), and the bytes read back intact (`MEM-OK 1073741824`). The kernel heap
+stays under 3 MiB of its 32. Before this work an 8 GiB guest panicked before
+its first line of output.
+
+Limits that are not the kernel's, recorded for the owner:
+
+- The user library's malloc caps one process's heap at (3840 − 1) MiB and one
+  allocation below 2 GiB (`sys/src/libc/port/malloc.c`, `pool.c`).
+- exec takes at most 32 arguments of 128 bytes, and the kernel caps each
+  path-like argument at 128 bytes (`ERRMAX`). The leg's first workload, an awk
+  program as one argument, failed on that. Item 5.
+- `brk` maps every grown page eagerly rather than on fault.
+- The frame number is `u32` (16 TiB, M11); the direct map covers 128 TiB.
+
+Still open from section 5: the rest of item 3 (the kernel heap is still one
+fixed 32 MiB arena: nothing in it now grows with RAM, but it does not grow
+either, and the QuickFit side table holds 4096 headers); the rest of item 4;
+item 5 (paths), next; items 6 and 7.
