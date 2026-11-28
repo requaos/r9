@@ -201,4 +201,100 @@ Limits that are not the kernel's, recorded for the owner:
 Still open from section 5: the rest of item 3 (the kernel heap is still one
 fixed 32 MiB arena: nothing in it now grows with RAM, but it does not grow
 either, and the QuickFit side table holds 4096 headers); the rest of item 4;
-item 5 (paths), next; items 6 and 7.
+item 6; item 7's large-file cases.
+
+## 8. Paths (2026-11-28)
+
+Done on branch `feat/x86_64-paths` (stacked on the memory branch; local,
+nothing pushed):
+
+- **P1, the path bound.** `port::namec::PATHMAX` (16 KiB) replaces
+  `ERRMAX` at every path or name argument the syscall layer copies from
+  user memory: 13 call sites on x86_64 (exec's path, open, create, chdir,
+  remove, stat, wstat's name form, bind's two, unmount's two, mount's two)
+  and the same 13 on aarch64. `ERRMAX` stays what it is for error strings
+  and note messages.
+- **P2, exec's arguments.** Bounded by bytes, not by count: each string
+  with its NUL and slot must fit the eager stack under the Tos
+  (`EXEC_ARGS_BYTES`, 256 KiB less the Tos). The seed writes down through
+  the eager stack pages instead of one page (was 32 arguments of 128
+  bytes, all in the top page).
+- **P3, the process name.** A variable-length field; it was cut at 27
+  characters.
+- **P4, device servers.** The environment device bounded element names at
+  127 bytes (the donor's genbuf); it now uses `PATHMAX`. The others were
+  checked: `devsrv` and `devip` bound numeric strings, `devssl` bounds a
+  control line (128 bytes, a verb and its arguments, not a name), `devmnt`
+  passes names through, and the 9P message layer counts walk names (16 per
+  message) but bounds each only by the wire's 16-bit length.
+- **P5** is left to the storage design: an element name is at most 64 KiB
+  on the wire and the kernel accepts `PATHMAX`.
+
+Measured, in the guest (a tier image whose sweep passes a 3000-character
+path, as one element and as 1500 elements, and a 3000-character argument,
+through `echo`, `ls`, `cd` and `bind`): before, each call failed with
+`string too long`; after, each path resolves and answers `namec: does not
+exist` (the boot filesystem is read-only, so nothing long exists to find)
+and the argument comes back whole (`LONGARG 3000`). Host tests pin the copy
+to `PATHMAX`, the exact fit of the initial stack, a seed that runs through
+four pages with a 5000-byte first argument, and the name.
+
+Limits that are not the kernel's, recorded for the owner:
+
+- The userland shell builds a command name in a 1024-byte buffer and
+  reports no reason when a name does not fit; a script cannot exec a
+  longer path by name.
+- aarch64's exec still takes 32 arguments of 128 bytes and seeds one page:
+  its stack layout differs (one seed page, the Tos in the page below), so
+  the multi-page seed was not mirrored. Its host tests and a cross build
+  pass with the path bound.
+
+## 9. Storage: what the target requires of Phase 13 (planning; nothing built)
+
+The third target is hundreds of terabytes of storage.  There is no block
+device driver and no storage engine yet (S1; ROADMAP Phase 13), so this is
+what that phase has to carry, not a change made now.
+
+Holds today, and must keep holding end to end:
+
+- 64-bit block numbers, offsets and sizes wherever a file's bytes are
+  named.  The wire carries offsets and cursors as `u64` and Qid paths as
+  `u64` (S2), and `Chan.offset` is `u64`.
+- `iounit` is `u32` (S2): a bound per message, not per file.
+
+Does not hold, and belongs to the engine:
+
+- **The page cache's key is `(image_id: u32, page_idx: u32)`**
+  (`port/src/pagecache.rs`): 16 TiB of 4 KiB pages per image (S3).  The
+  page index wants `u64`, in the key and in the TPHT's packed word; a
+  contained change, and the first to make.
+- **The page cache is sized for the boot image, not the machine**: 1024
+  TPHT home blocks (`PAGE_CACHE_BLOCKS`, `x86_64/src/pagealloc.rs`), for
+  the image's text pages.  It wants a size set at boot from the machine's
+  RAM, an absolute one as the frame pools' targets now are.
+- **Element names on disk**: 9P strings and directory entries carry a
+  `u16` length, and the kernel takes paths to `PATHMAX` (16 KiB, section
+  8); the on-disk format must store a name at least that long (P5).
+- The boot RAM-disk filesystem's `u32` fields (S4) are boot-only; a
+  disk-backed root does not go through them.
+
+What a large machine adds (from section 1):
+
+- **Device memory above 4 GiB (M8).**  On this QEMU venue the whole PCI
+  hole stays below 4 GiB at every RAM size measured, so nothing exercised
+  it and `kaddr` still panics there.  A real server's firmware may place
+  NVMe BARs high, and the storage phase then needs a mapping facility for
+  device memory; the direct map's table helpers (`x86_64/src/directmap.rs`)
+  are the place to build it.
+- **64-bit DMA (M12)**: there is no IOMMU, and whether every DMA path is
+  64-bit was not checked.
+- **Booting from disk (M13)**: today's boot is BIOS + GRUB from an ISO;
+  large machines boot via UEFI, untested.
+- The frame number is `u32` (M11): 16 TiB of RAM; not a storage bound, but
+  the page cache's backing on a machine that large.
+
+Verification to plan with the engine: a file past 4 GiB read and written
+back whole; a path and an element name beyond 2048 characters created,
+found and removed on a writable filesystem (none exists today: the boot
+filesystem is read-only, which is why the paths leg of section 8 stops at
+a lookup); a directory with more entries than fit one block.

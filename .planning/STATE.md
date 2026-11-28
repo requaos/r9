@@ -213,9 +213,35 @@ None yet.
   the audit: the kernel heap (one fixed 32 MiB arena; nothing in it now grows with RAM), the rest
   of the caps, device memory at or above 4 GiB on firmware that places BARs high, and two limits
   outside the kernel, recorded in the audit's section 7 (the user library's malloc caps a process
-  near 3.8 GiB; exec takes 32 arguments of 128 bytes). The three targets are recorded as SCALE-01
+  near 3.8 GiB; exec took 32 arguments of 128 bytes until the paths branch below). The three targets are recorded as SCALE-01
   to SCALE-03 in `.planning/REQUIREMENTS.md`; SCALE-01 is ticked. Record: `.planning/SCALE-AUDIT.md`
-  section 7.
+  section 7. A commit at the memory branch's tip, `bbfbe45`, repairs two places where the
+  mapping index was weaker than the `Vec` it replaced: exit, exec and the rfork unwind take the
+  log off the process before freeing (as the `Vec` was taken, so the evictor on another CPU finds
+  it empty), and a removal no longer frees an index page while another CPU may be walking.  What
+  remains is what the `Vec` had: the record count can be off by one under a concurrent change,
+  and the evictor's record drop can remove a record the owner has just re-created — an owner
+  decision on locking if that ever matters.
+- **Scale targets, paths — built 2026-11-28, awaiting the owner's review.** Branch
+  `feat/x86_64-paths` (stacked on the memory branch; local, nothing pushed), two commits.
+  `fa1b3b4` (`port/src`, its own commit) names the bound, `port::namec::PATHMAX` (16 KiB), and
+  raises the environment device's element-name bound to it; `5f0b9c5` uses it at the 13 path and
+  name arguments on x86_64 and the same 13 on aarch64 (they were bounded by `ERRMAX`, 128
+  bytes), bounds exec's arguments by bytes instead of 32 of 128 (the seed runs down through the
+  eager stack pages), and makes the process name variable-length (it was cut at 27 characters).
+  Measured in the guest: a 3000-character path, as one element and as 1500, and a
+  3000-character argument through `echo`, `ls`, `cd` and `bind`. Each failed with `string too
+  long` before; each resolves to `namec: does not exist` now (the boot filesystem is
+  read-only), and the argument comes back whole (`LONGARG 3000`), on 1 GiB and on 128 GiB.
+  On the same tree at the default `-smp 2` under KVM: tier-1 (at `-smp 1` too), churn and
+  net-smoke pass; smoke passes the chain leg and the CPU ladder to `cpu-ether-ok` and stops at
+  `cpu-keyfs-ok`, and the single-CPU TCG leg ends the same way (31 stages), as on `main` at one
+  CPU; services and auth end as before; no capture holds a second boot. `cargo xtask test` exits
+  0 (1286); clippy exits 0 on q35churnshell and q35cpu; aarch64 cross-builds. Not done, for the
+  owner: aarch64's exec still takes 32 arguments of 128 bytes (its stack layout differs; the
+  multi-page seed was not mirrored), and the userland shell builds a command name in a
+  1024-byte buffer and reports no reason when it does not fit. SCALE-02 is ticked; SCALE-03
+  (storage) is open. Record: `.planning/SCALE-AUDIT.md` section 8.
 - **Pre-existing and carried:** `cargo xtask clippy --arch aarch64 --config virtshell` fails on
   7 undocumented `unsafe` blocks in `aarch64/`; repo-wide `cargo fmt --all -- --check` is red;
   the docs still pin r9 at `c787ce9` while `crypto/`, `ds/` and the wire foundation now exist —

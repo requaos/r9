@@ -626,6 +626,14 @@ the map (their blocks are unchanged); `pagealloc.rs`, `maplog.rs` (the mapping i
 node pages through those two accessors), `fault.rs`, `main.rs` and `l.S` add none.  `port/src`
 adds none: `palloc.rs`'s sparse pin counts and bounded targets carry no `unsafe`.
 
+**Paths delta (feat/x86_64-paths, 2026-11-28):** `x86_64/src/exec.rs` goes from 5 blocks to 4
+(187 → 186 lint-visible): the seed's two blocks, the argument strings and the pointer array
+written through the one seed page's alias, become one, `write_stack_bytes`, which writes a byte
+span through each eager stack page's alias with its SAFETY comment; the arguments may now run
+down through those pages.  One test-only block is added in `syscall.rs` (10 → 11 test-only: the
+seeding test's page-by-page read of a mock proc's stack).  The path bound, the process name,
+`namec.rs`, `devenv.rs` and aarch64's syscall layer add none.
+
 ## ds/ and crypto/ (Phase 3)
 
 Both crates take `[lints] workspace = true`, so
@@ -887,7 +895,7 @@ cfg-gated code as well.
 | `vm.rs` | 16 | 3 | 0 | page-table machinery: TTBR/TLB/barrier asm, entry writes, recursive-mapping resolution |
 | `vmdebug.rs` | 2 | 0 | 0 | read-only recursive-mapping walk (print path) |
 
-### x86_64/src — 187 blocks, 32 unsafe fns, 4 extern blocks (test-only: 10 blocks, 2 fns)
+### x86_64/src — 186 blocks, 32 unsafe fns, 4 extern blocks (test-only: 11 blocks, 2 fns)
 
 | File | Blocks | fns | ext | Surface |
 |---|---|---|---|---|
@@ -895,7 +903,7 @@ cfg-gated code as well.
 | `cpu.rs` | 16 | 8 | 0 | CPL-0 instruction primitives: `ltr`/`lgdt`/`lidt`, `_rdmsr`/`wrmsr`, `wrgsbase`, `write_cr4`/`xsetbv` (the fns); flags/sti/cli/cpuid/rdtsc/rdrand/rdseed/cr4 blocks (05-15: `cr4`/`write_cr4`/`xsetbv` + `CR4_OSXSAVE` — the MEM-18 OSXSAVE/XCR0 arm's primitives) |
 | `dat.rs` | 7 | 1 | 0 | Ureg↔saved-frame copies, the Mach's CpuFp cell write, `Mach::init`'s GDT/IDT/TSS load, `mach_ptr`'s `%gs:0` read + `this_mach`'s deref (05-11); 05-12: the Mach gains `park_context` (the per-CPU one-way boot park slot — safe field, count unchanged); 05-24: the Mach gains the kstack-ownership triple (`cur_kstack`/`sched_from`/`moribund_reap` — safe fields) and `Mach::init` writes the Option explicitly (+1, the `fpu` pattern) |
 | `directmap.rs` | 2 | 0 | 0 | the direct map's boot-time build (`init`, cfg(not(test))): zeroing a fresh table page through the alias, and the proof that writes and reads back the first and last frame of every mapped span through the map itself |
-| `exec.rs` | 5 | 0 | 0 | KZERO-alias writes into just-mapped image pages and the seed page (+2 test-only blocks) |
+| `exec.rs` | 4 | 0 | 0 | KZERO-alias writes into just-mapped image pages, and the seed's writes into the eager stack pages (`write_stack_bytes`, one block for every page span) (+2 test-only blocks) |
 | `fpu.rs` | 16 | 2 | 0 | format-dispatched FXSAVE64/XSAVE64/XSAVEOPT64 + FXRSTOR64/XRSTOR64 save/restore asm (`save_raw`/`restore_raw`, 05-15 MEM-18: the CPUID-gated AVX/XSAVE switch — 832-byte align-64 `FpState`, `arm_xsave`'s CR4.OSXSAVE + XCR0 = 0x7 arm, `init_bsp`'s back-out arm, `KernelSimd::drop`'s gated `vzeroupper`), per-CPU `CpuFp` in the Mach slot (`%gs:0`, 05-12 — the hardcoded `KMACH` deref is gone), `with_simd` (+1 test-only block) |
 | `kstack.rs` | 1 | 0 | 0 | the kernel-stack arena's boot-time zeroing (one `write_bytes` through the KZERO alias) (+2 test-only blocks: the host seam's 16 KiB alloc/dealloc stand-in) |
 | `main.rs` | 14 | 1 | 1 | boot descriptor arming, the mb2 stash slice, `arm_syscall_entry`'s MSR program, `halt`'s cli/hlt, the BSP's Mach identity + LAPIC online publish (05-12); `ap_main`'s full AP bring-up (05-12, replacing the 05-11 stub in place: the Mach reborrow, the GS-base MSR writes, the GDT/IDT/TSS init, the SYSCALL MSR call); extern: the l.S link-syms.  (The row read 9 at CORR-05 — measured 10 at the 05-11 base; the +1 is a stale-row correction, not new code.) |
@@ -913,7 +921,7 @@ cfg-gated code as well.
 | `seg.rs` | 3 | 3 | 0 | GDT/IDT/TSS `load` (the fns) on architecturally valid tables |
 | `smp.rs` | 11 | 0 | 1 | the SIPI trampoline copy into PA 0x8000, the AP Mach `alloc_zeroed` + mailbox volatile writes, the IRQ save/restore asm pair, `invlpg`/CR3-reload flush, the Mach-registry reads (05-11); 05-12: `num_online_cpus` reads the plain `ONLINE_CPUS` atomic (its per-slot Mach deref is gone), and the AP self-publishes its slot (`publish_ap_mach`, safe code); 05-24: `cur_kstack_of`'s cross-CPU Mach deref (debug-only — the pick_next tripwire's witness read); extern: the trampoline link-syms |
 | `swtch.rs` | 0 | 1 | 0 | `swtch` context-switch ABI (+1 host-test twin fn) |
-| `syscall.rs` | 1 | 0 | 0 | the `trap_return` tail call on the seeded frame (+2 test-only blocks) |
+| `syscall.rs` | 1 | 0 | 0 | the `trap_return` tail call on the seeded frame (+3 test-only blocks) |
 | `trap.rs` | 6 | 9 | 0 | the trap-vector interface: `intr_stubs` emitter, `as_thunk`, `intrspecial` (canonical bit-63 GS test, 05-11)/`intrregular`/`intrcommon`, `syscallentry`/`syscallreturn`, `trap_return`; IPI dispatch for LAPIC 0xF0/0xF1 (05-11); 05-12: `dispatch_irq` threads the ring-3-origin `user_interrupted` gate into `proc::preempt` (SMP-03, the 05-22 double-run-tear gate — count-neutral); 05-24: `mask_irq` (a safe `cpu::cli()` wrapper — the sched loop's entry discipline) and `dispatch_irq` defers `preempt` until after the LAPIC EOI (safe reordering — count-neutral) |
 | `uart16550.rs` | 2 | 0 | 0 | COM1 port I/O (putb/getb).  05-12 (SMP-03): the dev_exec `cons_rx` ring is an `IrqSpinLock` at `LockRank::Console` (100) — its three raw `SyncUnsafeCell` derefs are gone — and the not(dev_exec) `rx_echo` sweep serializes under `SERIAL` (same rank) against per-CPU ticks |
 | `usermem.rs` | 7 | 0 | 0 | the single validated user-memory entry point (UserSlice/UserSliceMut) |
