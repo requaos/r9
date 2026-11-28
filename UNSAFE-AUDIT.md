@@ -634,6 +634,19 @@ down through those pages.  One test-only block is added in `syscall.rs` (10 → 
 seeding test's page-by-page read of a mock proc's stack).  The path bound, the process name,
 `namec.rs`, `devenv.rs` and aarch64's syscall layer add none.
 
+**CI-gates delta (2026-11-28):** `x86_64/src/directmap.rs` adds two lint-visible blocks
+(186 → 188) in `arm_guards`: the zeroing of each page-table page taken from the boot
+reservation, and the `invlpg` of each guard page, each with its SAFETY comment.
+`x86_64/src/trap.rs` adds one (188 → 189): the CR2 read in the kernel halt report, which
+names the faulting address and, on a guard page, the proc that ran off its kernel stack.
+`x86_64/src/kstack.rs` keeps its three: `init`'s one `write_bytes` now runs once per slot
+over the slot's mapped pages (one block in a loop; the guard page is never touched), and
+`arm` adds none — it calls `directmap::arm_guards` and the existing `read_cr3`/`switch_cr3`.
+One test-only block is added in `x86_64/src/proc.rs` (11 → 12: the RFMEM sweep test's read of
+the mock parent's data page).  `port/src/devpipe.rs` (the piecewise oversized write) and
+`port/src/sched.rs` (the steal pin) add none, and aarch64's sweep mirror adds none (216
+blocks, as at `9daa0d5`).  `x86_64/src` SAFETY comments 204 → 208, one per new block.
+
 ## ds/ and crypto/ (Phase 3)
 
 Both crates take `[lints] workspace = true`, so

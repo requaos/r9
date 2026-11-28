@@ -173,10 +173,12 @@ None yet.
   (`SVC-SKIP-WHY no-rc-lib-rcmain-the-srv-child-rc-dies`; not investigated); auth fails on `hmntgen` (defect (4)); `main` at `-smp 1` fails
   each of those the same way (controls run). The tier-1, services, churn and auth drivers hard-code `-smp 2`; only smoke reads
   `R9_SMP`. `cargo xtask test` exits 0 (1254), clippy exits 0. Record: `.planning/debug/x86_64-smp2-mcs-kstack.md`.
-- **Two findings of that run, for the owner.** (a) Defect (4) is not a hang: the keyfs rung's helper `hmntgen` calls `fauth`
-  (syscall 10), which the dispatch table leaves unimplemented by record (`x86_64/src/syscall.rs`: "OSEEK/FAUTH stay
-  loud-None"), and then faults at pc=0; `cpurc: FAIL keyfs` cascades down the ladder and the gate's 600 s wait for
-  `cpurc: KEYFS-OK` is what looks like a hang. `boot`, `init` and `hfactotum` call it too. (b) tier-1's `fpprobe` fails its
+- **Two findings of that run, for the owner.** (a) Defect (4) is not a hang: the keyfs rung's helper `hmntgen` faults at pc=0;
+  `cpurc: FAIL keyfs` cascades down the ladder and the gate's 600 s wait for `cpurc: KEYFS-OK` is what looks like a hang.
+  **The cause recorded here first was wrong** — not `hmntgen`'s `fauth` call (syscall 10 is unimplemented by record, and its
+  -1 is what lets the mount proceed; `boot`, `init` and `hfactotum` log the same line and run on). The fault is the
+  shared-memory fork's sweep zero-filling the page the data segment ends in; see the "Defect (4) and CI" bullet below and
+  `.planning/debug/x86_64-rfork-sweep-data-tail.md`. (b) tier-1's `fpprobe` fails its
   flags-nt sub-leg on `main` at `-smp 1` as well: `sys_sleep` blocked once and reported the first wake as "interrupted", and a
   child's exit wakes its parent whatever it is blocked on. Fixed on the stacked branch `fix/x86_64-sleep-wake` (its one commit
   sits on the branch above): the sleep ends only at its deadline or on a note; tier-1 then passes at `-smp 1` and at `-smp 2`.
@@ -242,10 +244,51 @@ None yet.
   multi-page seed was not mirrored), and the userland shell builds a command name in a
   1024-byte buffer and reports no reason when it does not fit. SCALE-02 is ticked; SCALE-03
   (storage) is open. Record: `.planning/SCALE-AUDIT.md` section 8.
-- **Pre-existing and carried:** `cargo xtask clippy --arch aarch64 --config virtshell` fails on
-  7 undocumented `unsafe` blocks in `aarch64/`; repo-wide `cargo fmt --all -- --check` is red;
-  the docs still pin r9 at `c787ce9` while `crypto/`, `ds/` and the wire foundation now exist —
-  re-verify every landing-site path when its phase is planned.
+- **Defect (4) and CI on `main` — fixed 2026-11-28, awaiting the owner's review.** The five branches above are on
+  `main` and `origin` (`9daa0d5`); CI on that commit has the xtask tests job red and 7 of 13 gate jobs red. The fixes are
+  ten commits on a stack over `main` (branches `fix/rfork-bss-sweep-data-tail`, `fix/x86_64-kstack-32k-guard`,
+  `fix/x86_64-tsc-rate-pit-crosscheck`, `test/port-steal-pin-host-scheduling`, the records on
+  `docs/ci-gates-2026-11-28` at the tip; local, nothing pushed),
+  each its own cause: `d63c2a4` defect (4) itself — the shared-memory fork's sweep zero-filled the page the data
+  segment ends in whenever the parent had not touched it, so a program's statically initialised data was destroyed at
+  its first such fork (the C library's heap pool lost its lock hook; every 9P server the boot chain forks that way
+  died at pc=0; a server that posts a service name writes the page first and survived). An absent Data page is now
+  read from the image and shared, an absent Bss page is born one zero page in both tables, and any other page stays
+  absent; aarch64 carries the same rule. `b13744a` the first `ls '#M'` ran the in-kernel loopback's crypto off the
+  bottom of its 16 KiB kernel stack into the neighbouring arena slot — the root file server's — and the next command
+  resumed that server onto the overwritten word (caught with a watchpoint on the slot boundary). Kernel stacks are
+  32 KiB with an unmapped guard page below each (the kernel alias's 1 GiB page is split around the arena at boot);
+  an over-deep stack is now a named fault, as aarch64's has been since `e5ae868`. `87c9efd` (`port/src`) a pipe
+  write larger than the 4 KiB queue could never be accepted — the writer parked for good and the reader waited
+  (`hsort` flushes 8 KiB stdio blocks); such a write now lands in pieces as the reader drains. `355204f` the TSC
+  rate from CPUID leaf 0x16 is used only within one per cent of a PIT measurement (under the AVX2 CPU model on TCG
+  the leaf says 7 MHz, and the second CPU was given up on a line before it answered). `6808f2e`, `7b622ea`,
+  `12d6a97`+`0d3aaac`, `0d2eb10`: the auth gate demanded two processes' lines in one order; `match_max` set before
+  the spawn never reaches the spawned process (expect 5.45), which cost the aarch64 smp-stress gate 7 of 8 sizes;
+  the x86_64 mem-pressure gate's image lacked `sleep`, and with it its load never exhausted the pool — it now runs
+  the aarch64 gate's bounded burst (`hseq 1 32000 | hsort`, sized for this port's pool); the x86_64 smp-stress gate
+  wrote into a read-only `/tmp` — it now counts bytes through a pipe like aarch64's. `d9130ba` (`port/src`, a test)
+  the xtask tests job was red because the four-CPU steal pin asserted a fairness the host does not guarantee (9
+  failures in 30 runs at four CPUs; 60 of 60 after).
+  Measured on the stacked tip: the xtask workflow's commands all exit 0 (check, four clippy legs, 1300 host tests,
+  five builds). All thirteen CI gate jobs pass exactly as the workflow runs them (TCG): x86_64 net-smoke 47 stages,
+  auth 33, smoke at one CPU 37, smoke with the AVX2 model 38, smp-stress 19, mem-pressure 14, the quick gate with
+  its drawterm legs; aarch64 smoke 26 and 24, net-smoke 41, cpu 18, tier-1 12, smp-stress 17, mem-pressure 13.
+  Under KVM the x86_64 gates pass: auth three of three, smoke 38 at `-smp 2` and 37 at `-smp 1`, services 15,
+  tier-1 at both CPU counts, churn, net-smoke 47, smp-stress 19, mem-pressure 14 (its evictor now runs:
+  `dropped_text=64 dropped_data=16 evict_calls=2 reclaimed=32 free_failures=0`). The x86_64 smp-stress and
+  mem-pressure gates had never been green before. aarch64 guests have no KVM on this host (its
+  `qemu-system-aarch64` has no such accelerator): they run under TCG only, which is what CI does too.
+  **Open, not fixed:** the aarch64 net-smoke gate under TCG fails about 3 times in 100 runs on `main`
+  (`netip: FAIL udpwrite`; `0e783a0`: 0 in 14). Caught twice with tracing: the kernel's connect handler received
+  `connect 127.0.0.1!0 127.0.0.1!244` — the fixture's `cat /net/udp/N/local` printed the file twice in one open,
+  before and after the server's announce picked its port. Why, is not found (sixty further runs with every network
+  read's offset traced did not reproduce it). Records: `.planning/debug/x86_64-rfork-sweep-data-tail.md`,
+  `.planning/debug/x86_64-ci-gates-2026-11-28.md`.
+- **Pre-existing and carried:** repo-wide `cargo fmt --all -- --check` is red; the docs still pin r9 at `c787ce9`
+  while `crypto/`, `ds/` and the wire foundation now exist — re-verify every landing-site path when its phase is
+  planned. (`cargo xtask clippy --arch aarch64 --config virtshell` passes at `9daa0d5` and on the stack: exit 0,
+  56 warnings, none of them an undocumented `unsafe` block; the seven it used to fail on are gone.)
 
 ### Standing Owner Rules
 

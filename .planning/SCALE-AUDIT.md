@@ -203,6 +203,15 @@ fixed 32 MiB arena: nothing in it now grows with RAM, but it does not grow
 either, and the QuickFit side table holds 4096 headers); the rest of item 4;
 item 6; item 7's large-file cases.
 
+A fixed cost recorded on 2026-11-28, after the CI work: a process's kernel
+stack is 32 KiB with a 4 KiB guard page below it (the in-kernel 9P loopback's
+crypto path runs deeper than 16 KiB; aarch64 took the same step in
+`e5ae868`). The arena is one slot per process-table entry, withheld from the
+pools like the kernel image: 16 MiB at the default 512 entries, 64 MiB in the
+churn profile (2048). It does not grow with RAM, so the target machines do
+not feel it; a small guest does (the mem-pressure gate's 256 MiB guest boots
+with it).
+
 ## 8. Paths (2026-11-28)
 
 Done on branch `feat/x86_64-paths` (stacked on the memory branch; local,
