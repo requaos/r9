@@ -174,8 +174,8 @@ fn two_groups_hold_same_key_independently() {
 }
 
 /// The donor's bounds: writes beyond Maxenvsize error Etoobig; names are
-/// a single component under the genbuf ceiling (empty/'/'/too-long all
-/// error loudly).
+/// a single component (empty and '/' error loudly) bounded like a path
+/// (`namec::PATHMAX`), where the donor's ceiling was its 128-byte genbuf.
 #[test]
 fn env_bounds_and_name_validation() {
     let mut g = EnvGroup::new();
@@ -185,8 +185,10 @@ fn env_bounds_and_name_validation() {
     assert!(g.write(q, b"vv", devenv::MAXENVSIZE - 1).is_err(), "extent crossing errors");
     assert!(g.create(b"").is_err(), "empty name errors");
     assert!(g.create(b"a/b").is_err(), "a '/' in a name errors (single-component tree)");
-    let long = [b'x'; 128];
-    assert!(g.create(&long).is_err(), "names at/over the genbuf ceiling error");
+    let mut name = vec![b'x'; port::namec::PATHMAX];
+    assert!(g.create(&name).is_ok(), "the longest name is a name (128 bytes stopped being the ceiling)");
+    name.push(b'x');
+    assert!(g.create(&name).is_err(), "a name past the bound errors");
     assert!(g.write(9999, b"v", 0).is_err(), "write to an unknown qid errors");
     assert!(g.trunc(9999).is_err(), "trunc of an unknown qid errors");
     assert_eq!(g.write(q, b"", 0).expect("empty write is a 0 no-op"), 0);

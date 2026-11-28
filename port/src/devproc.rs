@@ -97,7 +97,7 @@ pub fn set_post_hook(hook: PostHook) {
 }
 
 /// The per-pid status/args data the arch side serves: the proc
-/// name (KNAMELEN-bounded bytes), the donor-statename state string, the
+/// name (the whole name the arch side keeps), the donor-statename state string, the
 /// exec-recorded argv (NUL-joined; empty for a never-exec'd proc), and
 /// the recorded ctl priority.
 pub struct ProcInfo {

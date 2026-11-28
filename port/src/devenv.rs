@@ -64,9 +64,11 @@ const QTFILE: u8 = 0x00;
 /// crosses this bound (Etoobig).
 pub const MAXENVSIZE: u64 = 16300;
 
-/// The donor's name ceiling (9k envcreate's `sizeof up->genbuf` = 128):
-/// names are shorter than 128 bytes.
-const MAX_ENV_NAME: usize = 127;
+/// An environment variable's name is bounded like every other element
+/// name a system call takes from user memory (`namec::PATHMAX`).  The
+/// donor's ceiling was its 128-byte genbuf: the one element-name bound a
+/// kernel device server imposed below the path bound.
+const MAX_ENV_NAME: usize = crate::namec::PATHMAX;
 
 /// One env variable (the donor's Evalue): name, value bytes, the
 /// per-group qid path, and the entry version (bumped per write/trunc).

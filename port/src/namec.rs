@@ -41,6 +41,17 @@ use crate::Result;
 /// Plan 9 Qid type byte (sys/include/libc.h).
 const QTDIR: u8 = 0x80;
 
+/// The longest path or name one system call takes from user memory, in
+/// bytes without the NUL.  Plan 9 has no path limit: a path is resolved an
+/// element at a time and never held whole, so this bounds only the one
+/// string a call copies in.  Until 2026-11-28 every such argument was
+/// bounded by `ERRMAX` (128, the error-string size), so a path longer than
+/// 127 characters failed with "string too long".  The owner's systems
+/// expect paths beyond 2048 characters (.planning/SCALE-AUDIT.md); 16 KiB
+/// is eight times that, and it is the kernel heap's largest quick-fit size
+/// class, so a copied path costs no header there.
+pub const PATHMAX: usize = 16 * 1024;
+
 /// What the caller intends — the donor namec's amode decides whether the
 /// FINAL component crosses a mount point (chan.c: Aopen/Abind domount,
 /// Amount/Atodir do not).
