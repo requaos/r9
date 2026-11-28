@@ -13,7 +13,12 @@
 #     GLOBAL_HEAP_SIZE 32 MiB `.bss`) so the .bss/initrd still fit while the
 #     managed pool stays tiny;
 #   * a pinned-blocked reader on one CPU and a memory-pressure worker on the
-#     other contend for the small pool.
+#     other contend for the small pool;
+#   * the image is `mempressure` (xtask/manifests/amd64/mempressure.toml):
+#     the chain image plus sleep(1).  The reader's writer is
+#     `{ hsleep 60; echo pinnedok } | cat &`, and composed from chain.paq
+#     (which carries no sleep) it printed `pinnedok' at once — the gate's
+#     `wait' stage then waited for a line that had already passed.
 #
 # gates/x86_64/mem-pressure.expect asserts `palloc: managed_frames=2048`,
 # drives the pinned-buffer reader + pressure worker + byte-identical re-fault
@@ -63,8 +68,8 @@ err() { echo "error: $*" >&2; exit 1; }
 
 [ -f "$R9_ROOT/Cargo.toml" ] \
 	|| err "R9_ROOT=$R9_ROOT is not an r9 checkout (missing Cargo.toml) — run the app from the r9 repo root"
-[ -f "$R9_ROOT/xtask/manifests/amd64/chain.toml" ] \
-	|| err "$R9_ROOT/xtask/manifests/amd64/chain.toml is missing — the chain image manifest is part of this checkout"
+[ -f "$R9_ROOT/xtask/manifests/amd64/mempressure.toml" ] \
+	|| err "$R9_ROOT/xtask/manifests/amd64/mempressure.toml is missing — the mem-pressure image manifest is part of this checkout"
 R9_SMOKE_DRIVER="${R9_SMOKE_DRIVER:-$R9_ROOT/gates/x86_64/mem-pressure.expect}"
 [ -f "$R9_SMOKE_DRIVER" ] || err "R9_SMOKE_DRIVER=$R9_SMOKE_DRIVER: the pressure driver is missing"
 
@@ -115,15 +120,15 @@ echo "== iso-builder:  $R9_ISO_BUILDER"
 echo "== shape:        q35 accel=$R9_ACCEL cpu=$R9_CPU mem=$R9_MEM"
 echo "== palloc cap:   palloc_max_frames=$R9_PALLOC_MAX_FRAMES (8 MiB managed pool)"
 
-# --- step 1: the chain image ------------------------------------------
+# --- step 1: the mem-pressure image (the chain image + sleep) ---------
 
 mkdir -p "$R9_GATE_OUT"
-echo "== step 1/3: assembling image chain (cargo xtask image --arch x86-64 --image chain)"
-( cd "$R9_ROOT" && cargo xtask image --arch x86-64 --image chain ) \
-	|| err "chain image assembly failed (the engine's diagnostics are above; tree: $HARVEY)"
-CHAIN_PAQ="$R9_ROOT/target/images/x86_64/chain.paq"
-[ -s "$CHAIN_PAQ" ] || err "$CHAIN_PAQ missing/empty after assembly (the chain manifest bakes it)"
-echo "== image ok: $CHAIN_PAQ"
+echo "== step 1/3: assembling image mempressure (cargo xtask image --arch x86-64 --image mempressure)"
+( cd "$R9_ROOT" && cargo xtask image --arch x86-64 --image mempressure ) \
+	|| err "mempressure image assembly failed (the engine's diagnostics are above; tree: $HARVEY)"
+IMAGE_PAQ="$R9_ROOT/target/images/x86_64/mempressure.paq"
+[ -s "$IMAGE_PAQ" ] || err "$IMAGE_PAQ missing/empty after assembly (the mempressure manifest bakes it)"
+echo "== image ok: $IMAGE_PAQ"
 
 # --- step 2: compose the ISO with the palloc_max_frames append --------
 
@@ -139,8 +144,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "== step 2/3: composing the ISO (r9's iso-builder: kernel + chain.paq as /boot/bootfs.paq + --append=\"palloc_max_frames=${R9_PALLOC_MAX_FRAMES}\")"
-"$R9_ISO_BUILDER" "$R9_KERNEL" "$TMPD" --append="palloc_max_frames=${R9_PALLOC_MAX_FRAMES}" "$CHAIN_PAQ" bootfs.paq \
+echo "== step 2/3: composing the ISO (r9's iso-builder: kernel + mempressure.paq as /boot/bootfs.paq + --append=\"palloc_max_frames=${R9_PALLOC_MAX_FRAMES}\")"
+"$R9_ISO_BUILDER" "$R9_KERNEL" "$TMPD" --append="palloc_max_frames=${R9_PALLOC_MAX_FRAMES}" "$IMAGE_PAQ" bootfs.paq \
 	|| err "iso-builder failed (the kernel/builder contract is r9's; R9_KERNEL_X64_PKG/R9_ISO_BUILDER name this run's inputs)"
 R9_ISO="$TMPD/boot.iso"
 [ -s "$R9_ISO" ] || err "$R9_ISO missing/empty after the iso-builder"

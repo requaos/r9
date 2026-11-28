@@ -7,16 +7,21 @@
 # post-passes, group-kill teardown) and re-keyed onto the constrained-pool
 # pressure load:
 #
-#   * the caller composed the chain ISO with the GRUB bootconf append
+#   * the caller composed the mem-pressure ISO (the chain image plus
+#     sleep(1), xtask/manifests/amd64/mempressure.toml) with the GRUB bootconf
+#     append
 #     `palloc_max_frames=2048` (an 8 MiB bounded PAGE_ALLOC pool) and launches
 #     QEMU with `-smp 2`, `-m $R9_MEM` (default 256M — above the ~108 MiB
 #     static `.bss`) and the ISO on `-cdrom`.
 #   * the driver asserts `palloc: managed_frames=2048` at boot, then drives
 #     from Harvey's rc shell:
-#       - Worker 1: `{ sleep 60; echo pinnedok } | cat &` — cat blocks in a
+#       - Worker 1: `{ hsleep 60; echo pinnedok } | cat &` — cat blocks in a
 #         pipe read with a UserSliceMut PinGuard held across the sleep on one
 #         CPU; when the sleep finishes the pipe delivers `pinnedok` into the
-#         pinned buffer (the intact-bytes proof).
+#         pinned buffer (the intact-bytes proof).  The sleep is the image's
+#         hsleep: with no sleep in the image the subshell's exec failed,
+#         `pinnedok' was printed at once, and the `wait' stage below could
+#         never see it (measured 2026-11-28).
 #       - Worker 2 (foreground, the other CPU): repeated exec/read churn
 #         (/bin/ls /bin, /bin/cat /lib/namespace, /bin/echo) to push the
 #         8 MiB pool below the evictor low-water mark and force clean text
@@ -55,7 +60,6 @@
 # contract violation (missing env).
 
 set timeout 600                    ;# per stage, TCG-sized
-match_max 262144
 # NOTE: log_user stays ON — expect 5.45 writes NOTHING to log_file when
 # log_user is 0 (measured: the capture file would be empty).
 
@@ -86,6 +90,11 @@ spawn $QEMU -M $R9_MACHINE -cpu $R9_CPU -smp 2 -m $r9_mem \
     -nographic \
     -name $run_tag
 set spawn_pid [exp_pid]
+# match_max is set AFTER the spawn: set before it, the value does not
+# reach the spawned process (expect 5.45: every spawn starts at the 2000
+# default — measured 2026-11-28; the read pass's 4.5 KB then lost its front
+# and the size count found 7 of 8).
+match_max 262144
 log_file $env(R9_SMOKE_LOG)
 
 # --- teardown: kill qemu's process group ------------------------------
@@ -145,7 +154,7 @@ stage version   {version\.\.\.}
 stage prompt    {% }
 
 # --- 2. Worker 1: the pinned-blocked pipe reader (one CPU) ------------
-send "{ sleep 60; echo pinnedok } | cat &\r"
+send "{ hsleep 60; echo pinnedok } | cat &\r"
 stage reader-prompt {% }
 
 # --- 3. Worker 2 (the other CPU): exec/read churn to force eviction ---
