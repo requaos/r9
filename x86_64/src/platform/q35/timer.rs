@@ -4,9 +4,10 @@
 // TSC-deadline — a one-shot armed by wrmsr(0x6E0) = rdtsc() + delta and
 // re-armed inside tick(); clear (TCG never exposes the bit — RESEARCH
 // Pitfall 2) selects LAPIC periodic — DCR divide + ICR initial count.
-// The frequency is resolved at RUNTIME (CPUID 0x15/0x16 when present,
-// else PIT-calibrated over a fixed one-shot window) and printed with
-// its source — never a compiled-in constant.
+// The frequency is resolved at RUNTIME and printed with its source —
+// never a compiled-in constant: the rate CPUID 0x15/0x16 reports stands
+// only while a PIT measurement over a fixed one-shot window agrees with
+// it.
 
 use core::cell::SyncUnsafeCell;
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -359,29 +360,99 @@ fn is_tcg() -> bool {
 const TSC_HZ_MIN: u64 = 1_000_000;
 const TSC_HZ_MAX: u64 = 1_000_000_000_000;
 
-/// Resolve the TSC frequency at runtime: CPUID 0x15 (the core crystal
-/// clock ratio) when the leaf is real, else CPUID 0x16 (the nominal
-/// base in MHz), else a PIT one-shot calibration.  The source is
-/// returned so init prints the provenance, loud.
-fn resolve_tsc_hz() -> Result<(u64, &'static str), &'static str> {
-    let (eax15, ebx15, ecx15, _) = cpu::cpuid(0x15, 0);
+/// How far a CPUID-reported rate may sit from the PIT's measurement and
+/// still be the one used: one per cent, in parts per million.  The
+/// measurement itself repeats to a few hundredths of a per cent (the
+/// KVM and TCG legs' 2,496,10x,xxx..2,496,74x,xxx), so a real report
+/// passes and a made-up one does not.
+const TSC_REPORT_TOLERANCE_PPM: u64 = 10_000;
+
+/// The CPUID-reported TSC rate: leaf 0x15 (the core crystal clock
+/// ratio) when the leaf is real, else leaf 0x16 (the nominal base in
+/// MHz) — None when neither reports a rate inside the band.
+fn reported_tsc_hz(eax15: u32, ebx15: u32, ecx15: u32, eax16: u32) -> Option<(u64, &'static str)> {
     if ecx15 != 0 && eax15 != 0 {
         // TSC = crystal (ECX) * numerator (EBX) / denominator (EAX).
         if let Some(hz) = u64::from(ecx15).checked_mul(u64::from(ebx15)) {
             let hz = hz / u64::from(eax15);
             if (TSC_HZ_MIN..=TSC_HZ_MAX).contains(&hz) {
-                return Ok((hz, "cpuid 0x15"));
+                return Some((hz, "cpuid 0x15"));
             }
         }
     }
-    let (eax16, _, _, _) = cpu::cpuid(0x16, 0);
-    if eax16 != 0 {
-        let hz = u64::from(eax16) * 1_000_000;
-        if (TSC_HZ_MIN..=TSC_HZ_MAX).contains(&hz) {
-            return Ok((hz, "cpuid 0x16"));
+    let hz = u64::from(eax16) * 1_000_000;
+    (eax16 != 0 && (TSC_HZ_MIN..=TSC_HZ_MAX).contains(&hz)).then_some((hz, "cpuid 0x16"))
+}
+
+/// The rate to run on, where it came from, and the report it overruled
+/// (None when nothing was overruled).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TscRate {
+    hz: u64,
+    source: &'static str,
+    overruled: Option<u64>,
+}
+
+/// Pick the TSC rate: a CPUID report stands only while the PIT's
+/// measurement agrees with it, and otherwise the measurement is used.
+/// The band above cannot tell a made-up rate from a real one.
+/// qemu64,+avx,+avx2,+xsave,+xsaveopt under TCG reports a 7 MHz base in
+/// leaf 0x16 while its TSC counts the host's 2.5 GHz, and every
+/// TSC-paced delay then collapsed: the AP bring-up's 10 ms wait after
+/// INIT and 100 ms poll for the new CPU came to tens and hundreds of
+/// microseconds, and the boot processor gave up on it a line before it
+/// answered (measured 2026-11-28, the smoke-x64-avx2 CI leg).  A
+/// measurement that fails outright leaves a report as the only source
+/// there is.
+fn choose_tsc_hz(
+    reported: Option<(u64, &'static str)>,
+    measured: Result<(u64, &'static str), &'static str>,
+) -> Result<TscRate, &'static str> {
+    let (measured_hz, measured_from) = match measured {
+        Ok(measured) => measured,
+        Err(msg) => {
+            return match reported {
+                Some((hz, source)) => Ok(TscRate { hz, source, overruled: None }),
+                None => Err(msg),
+            };
         }
+    };
+    match reported {
+        Some((hz, source)) if within_ppm(hz, measured_hz, TSC_REPORT_TOLERANCE_PPM) => {
+            Ok(TscRate { hz, source, overruled: None })
+        }
+        Some((hz, _)) => Ok(TscRate {
+            hz: measured_hz,
+            source: measured_from,
+            overruled: Some(hz),
+        }),
+        None => Ok(TscRate { hz: measured_hz, source: measured_from, overruled: None }),
     }
-    pit_calibrate_tsc()
+}
+
+/// True when `measured` lies within `tolerance_ppm` parts per million of
+/// `reported`.
+fn within_ppm(reported: u64, measured: u64, tolerance_ppm: u64) -> bool {
+    let gap = reported.abs_diff(measured);
+    // Neither side can overflow: both rates are below the ceiling.
+    gap.checked_mul(1_000_000).is_some_and(|gap| gap <= reported.saturating_mul(tolerance_ppm))
+}
+
+/// Resolve the TSC frequency at runtime: the CPUID report (leaf 0x15,
+/// else 0x16) checked against a PIT one-shot window — the choice is
+/// choose_tsc_hz's.  The source is returned so init prints the
+/// provenance, loud; an overruled report is named on its own line.
+fn resolve_tsc_hz() -> Result<(u64, &'static str), &'static str> {
+    let (eax15, ebx15, ecx15, _) = cpu::cpuid(0x15, 0);
+    let (eax16, _, _, _) = cpu::cpuid(0x16, 0);
+    let rate = choose_tsc_hz(reported_tsc_hz(eax15, ebx15, ecx15, eax16), pit_calibrate_tsc())?;
+    if let Some(reported_hz) = rate.overruled {
+        println!(
+            "timer: cpuid reports {reported_hz} Hz, the PIT measures {} Hz — using the measurement",
+            rate.hz
+        );
+    }
+    Ok((rate.hz, rate.source))
 }
 
 /// The PIT ports (the 8254's fixed I/O block — an architectural fact
@@ -435,10 +506,13 @@ fn pit_calibrate_tsc() -> Result<(u64, &'static str), &'static str> {
             return Err("pit calibration measured zero");
         }
         // delta ticks per 1/20 s -> Hz = delta * 20.
-        match delta.checked_mul(20) {
-            Some(hz) => Ok((hz, "pit 1193182 Hz reference")),
-            None => Err("pit calibration overflow"),
+        let hz = delta.checked_mul(20).ok_or("pit calibration overflow")?;
+        // The report's band, for the measurement: a wedged or absent PIT
+        // must not publish a rate no TSC runs at.
+        if !(TSC_HZ_MIN..=TSC_HZ_MAX).contains(&hz) {
+            return Err("pit calibration measured a rate outside the band");
         }
+        Ok((hz, "pit 1193182 Hz reference"))
     }
 }
 
@@ -518,6 +592,72 @@ mod tests {
         assert_eq!(tsc_delta(1_000_000_000, 1), Some(1_000_000));
         // a hostile pair is a loud None, never a wrapped delta
         assert_eq!(tsc_delta(u64::MAX, u64::MAX), None);
+    }
+
+    /// Test 2b (the rate's provenance — the smoke-x64-avx2 leg's shape,
+    /// measured 2026-11-28): qemu64,+avx,+avx2,+xsave,+xsaveopt under
+    /// TCG reports a 7 MHz base in leaf 0x16 while its TSC counts the
+    /// host's 2.496 GHz.  The report is inside the band, so only the
+    /// PIT's cross-check rejects it; at the wrong rate the AP bring-up's
+    /// 100 ms poll was 700,000 ticks.
+    #[test]
+    fn a_cpuid_rate_the_pit_contradicts_is_overruled() {
+        let reported = reported_tsc_hz(0, 0, 0, 7);
+        assert_eq!(reported, Some((7_000_000, "cpuid 0x16")));
+        let rate = choose_tsc_hz(reported, Ok((2_496_741_520, "pit 1193182 Hz reference"))).unwrap();
+        assert_eq!(
+            rate,
+            TscRate {
+                hz: 2_496_741_520,
+                source: "pit 1193182 Hz reference",
+                overruled: Some(7_000_000),
+            }
+        );
+        assert_eq!(tsc_delta(7_000_000, 100), Some(700_000));
+        assert_eq!(tsc_delta(rate.hz, 100), Some(249_674_152));
+    }
+
+    /// Test 2c: a report the PIT confirms is used as reported, to the
+    /// tolerance's edge — the shape of a real leaf 0x15 (a 2.4 GHz TSC
+    /// off a 24 MHz crystal) on bare metal.
+    #[test]
+    fn a_cpuid_rate_the_pit_confirms_stands() {
+        let reported = reported_tsc_hz(1, 100, 24_000_000, 2400);
+        assert_eq!(reported, Some((2_400_000_000, "cpuid 0x15")));
+        for measured_hz in [2_397_600_000u64, 2_400_000_000, 2_402_400_000] {
+            let rate = choose_tsc_hz(reported, Ok((measured_hz, "pit 1193182 Hz reference"))).unwrap();
+            assert_eq!((rate.hz, rate.source, rate.overruled), (2_400_000_000, "cpuid 0x15", None));
+        }
+        assert!(within_ppm(1_000_000_000, 990_000_000, 10_000));
+        assert!(within_ppm(1_000_000_000, 1_010_000_000, 10_000));
+        assert!(!within_ppm(1_000_000_000, 989_999_999, 10_000));
+        assert!(!within_ppm(1_000_000_000, 1_010_000_001, 10_000));
+        // the ceiling against the floor: no overflow, no agreement
+        assert!(!within_ppm(1_000_000_000_000, 1_000_000, 10_000));
+    }
+
+    /// Test 2d: the default qemu64 TCG shape and this host's KVM shape —
+    /// both leaves read zero — and an out-of-band crystal ratio that
+    /// falls through to leaf 0x16.
+    #[test]
+    fn without_a_usable_report_the_pit_measurement_stands() {
+        assert_eq!(reported_tsc_hz(0, 0, 0, 0), None);
+        let rate = choose_tsc_hz(None, Ok((2_496_741_520, "pit 1193182 Hz reference"))).unwrap();
+        assert_eq!((rate.hz, rate.source, rate.overruled), (2_496_741_520, "pit 1193182 Hz reference", None));
+        // a ~68 kHz "crystal" at a 1:1 ratio is no rate; leaf 0x16 is
+        assert_eq!(reported_tsc_hz(1, 1, 68_000, 2400), Some((2_400_000_000, "cpuid 0x16")));
+        // and one past the ceiling is neither
+        assert_eq!(reported_tsc_hz(0, 0, 0, 2_000_000), None);
+    }
+
+    /// Test 2e: a PIT that fails leaves a report as the only source
+    /// there is, and fails the boot only when there is no report.
+    #[test]
+    fn a_failed_measurement_leaves_the_report_or_fails() {
+        let rate = choose_tsc_hz(Some((2_400_000_000, "cpuid 0x16")), Err("pit calibration window timed out"))
+            .unwrap();
+        assert_eq!((rate.hz, rate.source, rate.overruled), (2_400_000_000, "cpuid 0x16", None));
+        assert_eq!(choose_tsc_hz(None, Err("pit calibration window timed out")), Err("pit calibration window timed out"));
     }
 
     /// Test 3 (tick accounting): a tick handler invocation increments
