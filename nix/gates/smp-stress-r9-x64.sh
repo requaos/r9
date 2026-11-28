@@ -13,11 +13,11 @@
 #
 # The pipeline, each step loud on failure:
 #
-#   1. the image — `cargo xtask image --arch x86-64 --image chain` writes
-#      target/images/x86_64/chain.paq (nothing is written into the Harvey
-#      tree, HARN-02).
+#   1. the image — `cargo xtask image --arch x86-64 --image smpstress`
+#      writes target/images/x86_64/smpstress.paq (the chain image plus
+#      wc(1); nothing is written into the Harvey tree, HARN-02).
 #   2. compose the ISO — r9's exported iso-builder (R9_ISO_BUILDER) builds
-#      the ISO from the pinned kernel-x64 + the chain bake as
+#      the ISO from the pinned kernel-x64 + the smp-stress bake as
 #      /boot/bootfs.paq, with `--append="aeadloop=1"` on the GRUB bootconf.
 #   3. smp-stress — gates/x86_64/smp-stress.expect spawns qemu with `-M q35`,
 #      `-smp 2` and the composed ISO on `-cdrom` (no QEMU `-append`) and
@@ -62,8 +62,8 @@ err() { echo "error: $*" >&2; exit 1; }
 
 [ -f "$R9_ROOT/Cargo.toml" ] \
 	|| err "R9_ROOT=$R9_ROOT is not an r9 checkout (missing Cargo.toml) — run the app from the r9 repo root"
-[ -f "$R9_ROOT/xtask/manifests/amd64/chain.toml" ] \
-	|| err "$R9_ROOT/xtask/manifests/amd64/chain.toml is missing — the chain image manifest is part of this checkout"
+[ -f "$R9_ROOT/xtask/manifests/amd64/smpstress.toml" ] \
+	|| err "$R9_ROOT/xtask/manifests/amd64/smpstress.toml is missing — the smp-stress image manifest is part of this checkout"
 R9_SMOKE_DRIVER="${R9_SMOKE_DRIVER:-$R9_ROOT/gates/x86_64/smp-stress.expect}"
 [ -f "$R9_SMOKE_DRIVER" ] || err "R9_SMOKE_DRIVER=$R9_SMOKE_DRIVER: the stress driver is missing"
 
@@ -109,15 +109,15 @@ echo "== kernel:       $R9_KERNEL"
 echo "== iso-builder:  $R9_ISO_BUILDER"
 echo "== shape:        q35 accel=$R9_ACCEL cpu=$R9_CPU"
 
-# --- step 1: the chain image (r9's assembler) -------------------------
+# --- step 1: the smp-stress image (r9's assembler) -------------------
 
 mkdir -p "$R9_GATE_OUT"
-echo "== step 1/3: assembling image chain (cargo xtask image --arch x86-64 --image chain)"
-( cd "$R9_ROOT" && cargo xtask image --arch x86-64 --image chain ) \
-	|| err "chain image assembly failed (the engine's diagnostics are above; tree: $HARVEY)"
-CHAIN_PAQ="$R9_ROOT/target/images/x86_64/chain.paq"
-[ -s "$CHAIN_PAQ" ] || err "$CHAIN_PAQ missing/empty after assembly (the chain manifest bakes it)"
-echo "== image ok: $CHAIN_PAQ"
+echo "== step 1/3: assembling image smpstress (cargo xtask image --arch x86-64 --image smpstress)"
+( cd "$R9_ROOT" && cargo xtask image --arch x86-64 --image smpstress ) \
+	|| err "smpstress image assembly failed (the engine's diagnostics are above; tree: $HARVEY)"
+IMAGE_PAQ="$R9_ROOT/target/images/x86_64/smpstress.paq"
+[ -s "$IMAGE_PAQ" ] || err "$IMAGE_PAQ missing/empty after assembly (the smpstress manifest bakes it)"
+echo "== image ok: $IMAGE_PAQ"
 
 # --- step 2: compose the ISO with the aeadloop bootconf append --------
 
@@ -133,8 +133,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "== step 2/3: composing the ISO (r9's iso-builder: kernel + chain.paq as /boot/bootfs.paq + --append=\"aeadloop=1\")"
-"$R9_ISO_BUILDER" "$R9_KERNEL" "$TMPD" --append="aeadloop=1" "$CHAIN_PAQ" bootfs.paq \
+echo "== step 2/3: composing the ISO (r9's iso-builder: kernel + smpstress.paq as /boot/bootfs.paq + --append=\"aeadloop=1\")"
+"$R9_ISO_BUILDER" "$R9_KERNEL" "$TMPD" --append="aeadloop=1" "$IMAGE_PAQ" bootfs.paq \
 	|| err "iso-builder failed (the kernel/builder contract is r9's; R9_KERNEL_X64_PKG/R9_ISO_BUILDER name this run's inputs)"
 R9_ISO="$TMPD/boot.iso"
 [ -s "$R9_ISO" ] || err "$R9_ISO missing/empty after the iso-builder"

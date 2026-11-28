@@ -5,25 +5,27 @@
 # gates/x86_64/smoke-r9.expect's chain-leg discipline carried VERBATIM
 # (fresh-capture hygiene, marker discipline, fast-fail arms, whole-capture
 # post-passes, group-kill teardown) and re-keyed onto the -smp 2 stress load.
-# The caller composed the chain ISO with the GRUB bootconf append
-# `--append="aeadloop=1"` (the real x86_64 cmdline delivery — never a QEMU
-# `-append` with `-cdrom`), so the in-kernel 9P2000.aead loopback server
-# starts and publishes #M (D-28).  This driver:
+# The caller composed the smp-stress ISO (the chain image plus wc(1)) with
+# the GRUB bootconf append `--append="aeadloop=1"` (the real x86_64 cmdline
+# delivery — never a QEMU `-append` with `-cdrom`), so the in-kernel
+# 9P2000.aead loopback server starts and publishes #M (D-28).  This driver:
 #
 #   staged boot: banner → fpu format → setops SIMD selftest → aeadloop
 #   active → smp cpu 1 online → smp tlb shootdown ok → paqfs... → version...
 #   → %  prompt →
 #   ls '#M' (enumerate the loopback root: data0..data7) →
-#   the read pass (for each file: cat '#M/dataN' > /tmp/r9sN, then
-#   ls -l /tmp/r9s0 shows 4096) →
+#   the read pass (for each file: cat '#M/dataN' | wc -c must print
+#   4096) →
 #   launch 2 read/clunk workers + 1 exec-churn worker in background →
 #   `wait; echo SMP_STRESS_OK` → whole-capture post-pass (no WATCHDOG:,
 #   panic, lock rank or unresolvable fault anywhere).
 #
-#   The #M read output is redirected to /tmp (the chain image's scratch dir)
-#   so binary 9P payloads never reach the cooked serial wire; the read pass
-#   proves the byte count with `ls -l`, and the stress workers only need the
-#   reads to complete (SMP_STRESS_OK is the completion proof).
+#   The read pass counts the bytes through a pipe (the aarch64 gate's
+#   shape): only the counts reach the cooked serial wire, never the binary
+#   9P payloads.  It used to redirect them into /tmp and size one file with
+#   `ls -l`, but /tmp of the chain image is a read-only directory of the
+#   boot filesystem (`rc: can't open: namec: device has no create`), so the
+#   file was never written (measured 2026-11-28).
 #
 #   exit 0 only when EVERY stage passed; a failure exits 1 and names the
 #   failed stage on stderr; exit 2 on a contract violation (missing env).
@@ -38,8 +40,9 @@
 #
 # Env (exported by nix/gates/smp-stress-r9-x64.sh — the flake app):
 #   R9_QEMU      default qemu-system-x86_64
-#   R9_ISO       REQUIRED — the composed chain ISO (kernel-x64 + chain.paq
-#                as /boot/bootfs.paq, with the aeadloop=1 bootconf append)
+#   R9_ISO       REQUIRED — the composed smp-stress ISO (kernel-x64 +
+#                smpstress.paq as /boot/bootfs.paq, with the aeadloop=1
+#                bootconf append)
 #   R9_SMOKE_LOG REQUIRED — the serial capture (fresh per run)
 #
 # usage: env R9_ISO=… R9_SMOKE_LOG=… expect gates/x86_64/smp-stress.expect
@@ -154,25 +157,23 @@ foreach i {0 1 2 3 4 5 6 7} {
 }
 puts stderr "smp-stress-r9-x64: stage ok — ls '#M' (data0..data7 present)"
 
-# --- 3. the read pass: each file opens/reads/clunks; the binary payload is
-#     redirected to /tmp so it never hits the cooked serial wire, and the
-#     byte count is checked with ls -l (4096 authenticated bytes) ----------
-send "for(i in 0 1 2 3 4 5 6 7) { cat '#M/data'\$i > /tmp/r9s\$i }\r"
+# --- 3. the read pass: each file opens/reads/clunks and returns exactly
+#     4096 authenticated bytes (wc -c is serial-clean text) --------------
+send "for(i in 0 1 2 3 4 5 6 7) { cat '#M/data'\$i | wc -c }\r"
 stage read-prompt {% }
-send "ls -l /tmp/r9s0\r"
-stage size-prompt {% }
-set sz [strip_echoed_line $expect_out(buffer)]
-if {![regexp {4096} $sz]} {
-    puts stderr "smp-stress-r9-x64: read pass did not yield 4096 bytes (ls -l /tmp/r9s0: $sz)"
+set rb [strip_echoed_line $expect_out(buffer)]
+set hits [regexp -all {4096} $rb]
+if {$hits < 8} {
+    puts stderr "smp-stress-r9-x64: read pass returned $hits/8 files of 4096 bytes (the aead read path is broken)"
     cleanup
     exit 1
 }
-puts stderr "smp-stress-r9-x64: stage ok — read pass (each file opened/read/clunked, data0 = 4096 bytes)"
+puts stderr "smp-stress-r9-x64: stage ok — read pass (8 files x 4096 authenticated bytes)"
 
 # --- 4. the concurrent stress load (short background lines) -----------
-send "{ for(r in 1 2 3 4 5 6 7 8 9 10) { for(i in 0 1 2 3 4 5 6 7) { cat '#M/data'\$i > /tmp/wA } } } &\r"
+send "{ for(r in 1 2 3 4 5 6 7 8 9 10) { for(i in 0 1 2 3 4 5 6 7) { cat '#M/data'\$i | wc -c } } } &\r"
 stage workerA-prompt {% }
-send "{ for(r in 1 2 3 4 5 6 7 8 9 10) { for(i in 0 1 2 3 4 5 6 7) { cat '#M/data'\$i > /tmp/wB } } } &\r"
+send "{ for(r in 1 2 3 4 5 6 7 8 9 10) { for(i in 0 1 2 3 4 5 6 7) { cat '#M/data'\$i | wc -c } } } &\r"
 stage workerB-prompt {% }
 send "{ for(r in 1 2 3 4 5 6 7 8 9 10) { /bin/echo churn; /bin/ls /bin; /bin/cat /lib/namespace } } &\r"
 stage churn-prompt {% }
@@ -186,6 +187,6 @@ stage stress-prompt   {% }
 # --- 6. whole-capture post-pass ---------------------------------------
 whole_capture_clean
 
-puts stderr "smp-stress-r9-x64: ALL STAGES PASS — boot (fpu/setops/aeadloop/smp), #M enumeration, 4096-byte read pass, concurrent read/clunk + exec-churn stress across 2 CPUs, SMP_STRESS_OK, no deadlock/panic/rank fault"
+puts stderr "smp-stress-r9-x64: ALL STAGES PASS — boot (fpu/setops/aeadloop/smp), #M enumeration, 8x4096 read pass, concurrent read/clunk + exec-churn stress across 2 CPUs, SMP_STRESS_OK, no deadlock/panic/rank fault"
 cleanup
 exit 0
