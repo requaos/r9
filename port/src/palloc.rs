@@ -10,17 +10,26 @@
 //!
 //! The evictable set is the exact set algebra
 //! `Evictable = Dirty \ (Pinned ∪ Active)` (D-14, D-21): a pinned or active
-//! frame can never be selected for reclaim.  Per-frame pin counts are
-//! lock-free atomics so nested pins work and `is_pinned` can be consulted
-//! from `PAGE_CACHE` (Rank 20) without taking `PAGE_ALLOC` (Rank 70).
+//! frame can never be selected for reclaim.  Nested pins work through a
+//! count per pinned frame; `is_pinned` takes `PAGE_ALLOC` (Rank 70), so it
+//! is legal from `PAGE_CACHE` (Rank 20) — the documented order is
+//! ascending — and no path holds `PAGE_ALLOC` while taking `PAGE_CACHE`.
+//! The counts live in a map that holds an entry per pinned frame and
+//! nothing for the rest: until 2026-11-27 there was a `u32` for every
+//! frame of the machine's whole address span, allocated at boot from the
+//! fixed kernel heap — 100 MiB of it on a 100 GiB machine, all of it at
+//! 32 GiB (.planning/SCALE-AUDIT.md, M5).
 //!
 //! The High-Water Pager zeroes dirty frames in batches *outside* the
-//! `PAGE_ALLOC` lock and holds about 15% of managed memory clean.  Under
-//! pressure `alloc_clean` drops `PAGE_ALLOC` completely before calling the
-//! arch evictor: the evictor acquires `PAGE_CACHE` (Rank 20) and
-//! `PROC_TABLE` (Rank 50), shoots down TLBs, and re-enters `PAGE_ALLOC`
-//! (Rank 70) to return reclaimed frames.  Holding Rank 70 across that call
-//! would invert the documented lock order.
+//! `PAGE_ALLOC` lock and holds about 15% of managed memory clean — up to
+//! an absolute ceiling: on a large machine the targets are sizes, not
+//! shares of RAM (15% of 100 GiB would be 15 GiB zeroed before the first
+//! allocation).  Under pressure `alloc_clean` drops `PAGE_ALLOC`
+//! completely before calling the arch evictor: the evictor acquires
+//! `PAGE_CACHE` (Rank 20) and `PROC_TABLE` (Rank 50), shoots down TLBs,
+//! and re-enters `PAGE_ALLOC` (Rank 70) to return reclaimed frames.
+//! Holding Rank 70 across that call would invert the documented lock
+//! order.
 //!
 //! Frame numbers index 256 MiB chunks: `chunk = pfn >> 16`,
 //! `offset = pfn & 0xFFFF`, and the physical address is
@@ -32,9 +41,10 @@
 //! `-smp 2` gate can drive the evictor deterministically while QEMU `-m`
 //! stays large enough for the static `.bss` and initrd.
 
-use alloc::boxed::Box;
+use alloc::collections::btree_map::Entry;
+use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use ds::roaring::RoaringBitmap;
 
@@ -49,8 +59,13 @@ pub const FRAMES_PER_CHUNK: u32 = 1 << 16;
 pub const FRAME_SIZE: usize = 4096;
 /// Clean-frame target as a percentage of managed frames (D-14/D-17).
 pub const CLEAN_TARGET_PCT: usize = 15;
+/// The clean target's ceiling, in frames (64 MiB): the pool is a size,
+/// not a share of the machine.
+pub const CLEAN_TARGET_MAX: usize = 1 << 14;
 /// Low-water floor, in frames (D-17, Claude's discretion).
 pub const LOW_WATER_MIN: usize = 16;
+/// The low-water mark's ceiling, in frames (16 MiB).
+pub const LOW_WATER_MAX: usize = 1 << 12;
 /// How many evictor round trips `alloc_clean` attempts before `OutOfSpace`.
 pub const MAX_EVICT_ATTEMPTS: usize = 4;
 /// Frames requested from the arch evictor per reclaim attempt.
@@ -259,8 +274,13 @@ struct PoolState {
     dirty: RoaringBitmap,
     active: RoaringBitmap,
     pinned: RoaringBitmap,
-    /// One atomic count per managed frame; empty before `init_ranges`.
-    pin_counts: Box<[AtomicU32]>,
+    /// Every frame the allocator manages — the bound each frame number
+    /// is checked against; empty before `init_ranges`.
+    managed: RoaringBitmap,
+    /// The pin count of each frame that has one: an entry per pinned
+    /// frame and none for the rest, so nothing here scales with the
+    /// machine's size.  A frame with an entry is in `pinned` too.
+    pin_counts: BTreeMap<u32, u32>,
     total_managed: usize,
     low_water: usize,
     target_clean: usize,
@@ -273,12 +293,26 @@ impl PoolState {
             dirty: RoaringBitmap::new(),
             active: RoaringBitmap::new(),
             pinned: RoaringBitmap::new(),
-            pin_counts: Vec::new().into_boxed_slice(),
+            managed: RoaringBitmap::new(),
+            pin_counts: BTreeMap::new(),
             total_managed: 0,
             low_water: LOW_WATER_MIN,
             target_clean: 0,
         }
     }
+}
+
+/// The High-Water Pager's clean target for `total` managed frames
+/// (D-14/D-17): about [`CLEAN_TARGET_PCT`] percent, never more than
+/// [`CLEAN_TARGET_MAX`] frames.
+fn clean_target(total: usize) -> usize {
+    (total * CLEAN_TARGET_PCT / 100).min(CLEAN_TARGET_MAX)
+}
+
+/// The low-water mark for `total` managed frames (D-17): about 5 percent,
+/// between [`LOW_WATER_MIN`] and [`LOW_WATER_MAX`] frames.
+fn low_water(total: usize) -> usize {
+    (total * 5 / 100).clamp(LOW_WATER_MIN, LOW_WATER_MAX)
 }
 
 /// The portable frame allocator.
@@ -344,23 +378,32 @@ impl PageAlloc {
             None => managed.len(),
         } as usize;
 
-        let max_pfn = last as usize;
-        let mut pin_counts = Vec::with_capacity(max_pfn);
-        pin_counts.resize_with(max_pfn, || AtomicU32::new(0));
+        // Every managed frame starts dirty, and the managed set IS the
+        // dirty pool's.  Uncapped, that is the whole set (one clone,
+        // whatever the machine's size); capped, the first `total` frames,
+        // lowest first — the frames past a cap are not managed at all,
+        // on any path.
+        let (managed, dirty) = if total as u64 == managed.len() {
+            (managed.clone(), managed)
+        } else {
+            let mut kept = RoaringBitmap::new();
+            for pfn in managed.iter().take(total) {
+                kept.insert(pfn);
+            }
+            (kept.clone(), kept)
+        };
 
         let node = LockNode::new();
         let mut state = self.state.lock(&node);
         state.clean = RoaringBitmap::new();
-        state.dirty = RoaringBitmap::new();
+        state.dirty = dirty;
         state.active = RoaringBitmap::new();
         state.pinned = RoaringBitmap::new();
-        for pfn in managed.iter().take(total) {
-            state.dirty.insert(pfn);
-        }
-        state.pin_counts = pin_counts.into_boxed_slice();
+        state.managed = managed;
+        state.pin_counts.clear();
         state.total_managed = total;
-        state.target_clean = total * CLEAN_TARGET_PCT / 100;
-        state.low_water = (total * 5 / 100).max(LOW_WATER_MIN);
+        state.target_clean = clean_target(total);
+        state.low_water = low_water(total);
         Ok(())
     }
 
@@ -402,13 +445,17 @@ impl PageAlloc {
     /// Roaring pool on the `0 -> 1` transition.
     pub fn pin_frame(&self, pfn: u32) -> Result<(), PageAllocError> {
         let node = LockNode::new();
-        let mut state = self.state.lock(&node);
-        let Some(count) = state.pin_counts.get(pfn as usize) else {
+        let mut guard = self.state.lock(&node);
+        let state = &mut *guard;
+        if !state.managed.contains(pfn) {
             return Err(PageAllocError::OutOfBounds);
-        };
-        let previous = count.fetch_add(1, Ordering::AcqRel);
-        if previous == 0 {
-            state.pinned.insert(pfn);
+        }
+        match state.pin_counts.entry(pfn) {
+            Entry::Occupied(mut count) => *count.get_mut() += 1,
+            Entry::Vacant(slot) => {
+                slot.insert(1);
+                state.pinned.insert(pfn);
+            }
         }
         Ok(())
     }
@@ -417,28 +464,30 @@ impl PageAlloc {
     /// pool only on the `1 -> 0` transition.
     pub fn unpin_frame(&self, pfn: u32) -> Result<(), PageAllocError> {
         let node = LockNode::new();
-        let mut state = self.state.lock(&node);
-        let Some(count) = state.pin_counts.get(pfn as usize) else {
+        let mut guard = self.state.lock(&node);
+        let state = &mut *guard;
+        if !state.managed.contains(pfn) {
             return Err(PageAllocError::OutOfBounds);
-        };
-        if count.load(Ordering::Acquire) == 0 {
-            return Err(PageAllocError::NotAllocated);
         }
-        let previous = count.fetch_sub(1, Ordering::AcqRel);
-        if previous == 1 {
+        let Some(count) = state.pin_counts.get_mut(&pfn) else {
+            return Err(PageAllocError::NotAllocated);
+        };
+        *count -= 1;
+        if *count == 0 {
+            state.pin_counts.remove(&pfn);
             state.pinned.remove(pfn);
         }
         Ok(())
     }
 
-    /// Whether `pfn` is pinned.  Consults the atomic pin table under
+    /// Whether `pfn` is pinned.  Consults the pin counts under
     /// `PAGE_ALLOC` (Rank 70), so it is legal from `PAGE_CACHE` (Rank 20):
     /// the documented order is ascending and no path holds `PAGE_ALLOC`
     /// while taking `PAGE_CACHE`.
     pub fn is_pinned(&self, pfn: u32) -> bool {
         let node = LockNode::new();
         let state = self.state.lock(&node);
-        state.pin_counts.get(pfn as usize).is_some_and(|c| c.load(Ordering::Acquire) > 0)
+        state.pin_counts.contains_key(&pfn)
     }
 
     /// Return a frame to the dirty pool.  Double-free, a pinned frame, and
@@ -447,10 +496,10 @@ impl PageAlloc {
         let pfn = phys_to_pfn(pa)?;
         let node = LockNode::new();
         let mut state = self.state.lock(&node);
-        let Some(count) = state.pin_counts.get(pfn as usize) else {
+        if !state.managed.contains(pfn) {
             return Err(PageAllocError::OutOfBounds);
-        };
-        if count.load(Ordering::Acquire) > 0 {
+        }
+        if state.pin_counts.contains_key(&pfn) {
             return Err(PageAllocError::NotAllocated);
         }
         if !state.active.remove(pfn) {
@@ -651,6 +700,36 @@ mod tests {
         assert_eq!(alloc.pin_frame(99), Err(PageAllocError::OutOfBounds));
     }
 
+    /// The pin counts are sparse (SCALE-AUDIT M5): the managed set is the
+    /// bound.  A frame the allocator does not manage — inside a used hole
+    /// of the memory map, past a cap, or past the span — is refused by
+    /// name on every path; a pin leaves no entry behind once it is gone.
+    #[test]
+    fn only_managed_frames_can_be_pinned_or_freed() {
+        let hole = PhysRange::with_end(16 * FRAME_SIZE as u64, 24 * FRAME_SIZE as u64);
+        let alloc = PageAlloc::new();
+        alloc.init_ranges(frames_phys(64), core::iter::once(hole.clone()), None).unwrap();
+        assert_eq!(alloc.pin_frame(20), Err(PageAllocError::OutOfBounds), "inside the hole");
+        assert!(!alloc.is_pinned(20));
+        assert_eq!(alloc.free_frame(pfn_to_phys(20)), Err(PageAllocError::OutOfBounds));
+        assert_eq!(alloc.pin_frame(64), Err(PageAllocError::OutOfBounds), "past the span");
+        assert_eq!(alloc.unpin_frame(1_000), Err(PageAllocError::OutOfBounds));
+        assert_eq!(alloc.free_frame(pfn_to_phys(64)), Err(PageAllocError::OutOfBounds));
+        alloc.pin_frame(30).unwrap();
+        assert!(alloc.is_pinned(30));
+
+        // Capped: the frames past the cap are not managed either.
+        let capped = PageAlloc::new();
+        capped.init_ranges(frames_phys(64), core::iter::empty(), Some(20)).unwrap();
+        assert_eq!(capped.pin_frame(19), Ok(()));
+        assert_eq!(capped.pin_frame(20), Err(PageAllocError::OutOfBounds));
+
+        // Re-seeding drops every pin.
+        alloc.init_ranges(frames_phys(64), core::iter::once(hole), None).unwrap();
+        assert!(!alloc.is_pinned(30));
+        assert_eq!(alloc.unpin_frame(30), Err(PageAllocError::NotAllocated));
+    }
+
     /// Test 4 (MEM-07 ordering): the High-Water Pager zeroes outside
     /// `PAGE_ALLOC`, and `alloc_clean` drops Rank 70 before `evict_fn`,
     /// which legally acquires `PAGE_CACHE` (Rank 20) and re-enters
@@ -774,6 +853,36 @@ mod tests {
             Err(PageAllocError::OutOfSpace),
             "empty pools ask the evictor, then fail cleanly"
         );
+    }
+
+    /// The pool targets are sizes, not shares of the machine (SCALE-AUDIT
+    /// M7): past a point the clean target and the low-water mark stop
+    /// growing with RAM.
+    #[test]
+    fn the_pool_targets_stop_growing_with_the_machine() {
+        // A 4 GiB machine: a million frames, well past both ceilings.
+        let big = PageAlloc::new();
+        big.init_ranges(frames_phys(1 << 20), core::iter::empty(), None).unwrap();
+        assert_eq!(big.total_managed(), 1 << 20);
+        assert_eq!(big.evictable_dirty().len(), 1 << 20, "every managed frame starts dirty");
+        assert_eq!(big.target_clean(), CLEAN_TARGET_MAX, "64 MiB, not 15% of 4 GiB");
+        assert_eq!(big.low_water_mark(), LOW_WATER_MAX, "16 MiB, not 5% of 4 GiB");
+
+        // Small machines keep the percentages.
+        let small = allocator(64);
+        assert_eq!(small.target_clean(), 64 * CLEAN_TARGET_PCT / 100);
+        assert_eq!(small.low_water_mark(), LOW_WATER_MIN);
+
+        // The ceilings are reached where the percentage passes them.
+        let n = CLEAN_TARGET_MAX * 100 / CLEAN_TARGET_PCT;
+        assert_eq!(clean_target(n), CLEAN_TARGET_MAX - 1, "15% of one frame below");
+        assert_eq!(clean_target(n + 1), CLEAN_TARGET_MAX);
+        assert_eq!(clean_target(n * 100), CLEAN_TARGET_MAX);
+        let n = LOW_WATER_MAX * 100 / 5;
+        assert_eq!(low_water(n), LOW_WATER_MAX);
+        assert_eq!(low_water(n - 1), (n - 1) * 5 / 100, "5% of one frame below");
+        assert_eq!(low_water(n * 100), LOW_WATER_MAX);
+        assert_eq!(low_water(1), LOW_WATER_MIN);
     }
 
     /// Task 3 (MEM-07 concurrency): two threads allocate/evict and churn
