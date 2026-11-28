@@ -9,17 +9,21 @@
 ///
 /// 1. seeds the pools from the mb2 type-1 map (honouring an optional
 ///    `palloc_max_frames=<N>` bootarg for the small-memory pressure gate),
-/// 2. supplies the frame-zeroing callback (the boot tables' shared KZERO
-///    alias already maps every guest frame, so no per-frame map is needed),
-/// 3. wires the live evictor callback (`crate::proc::evict_re_readable_pages`),
+/// 2. builds the kernel's direct map of the RAM above the first gibibyte
+///    (directmap.rs) from a low-RAM reservation, before the seeding, and
+///    withholds the RAM the map cannot reach,
+/// 3. supplies the frame-zeroing callback (every guest frame is reachable
+///    once the map exists, so no per-frame mapping is needed),
+/// 4. wires the live evictor callback (`crate::proc::evict_re_readable_pages`),
 ///    and
-/// 4. creates the live `palloc.hash` image page cache (`port::pagecache`),
+/// 5. creates the live `palloc.hash` image page cache (`port::pagecache`),
 ///    published through a `'static` handle the fault and proc paths share.
 ///
 /// The prohibition the construction honors: the allocator is seeded ONLY
 /// from the map's type-1 (available) entries.  Type-3 ACPI-reclaimable
 /// ranges, type-2/4 reserved/NVS ranges, and undeclared holes all stay OUT
 /// of the free pool (13-04 walks ACPI tables inside type-3 ranges).
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 
 use port::mem::{PhysAddr, PhysRange};
@@ -27,15 +31,16 @@ use port::pagealloc::PageAllocError;
 use port::palloc::{self as palloc, FRAME_SIZE, PageAlloc};
 use port::pagecache::PageCache;
 
-use crate::platform::q35::mb2::Facts;
+use crate::platform::q35::mb2::{self, Facts};
 
 /// TPHT home blocks backing `palloc.hash` (DEBT-04 bank sizing is applied
 /// by `PageCache::new`).  Enough for the boot image's text/untouched-data
 /// pages with headroom; the structure lives on the 32 MiB kernel heap.
 const PAGE_CACHE_BLOCKS: usize = 1024;
 
-/// The most type-1 ranges the seeding considers (mb2::MAX_RANGES).
-const MAX_AVAIL: usize = 32;
+/// The most type-1 ranges the seeding considers: the firmware map's own
+/// cap (mb2::MAX_RANGES).
+const MAX_AVAIL: usize = mb2::MAX_RANGES;
 
 /// The portable Roaring frame allocator (MEM-07).  Its internal pool state
 /// runs under an `IrqSpinLock` at `LockRank::PageAlloc` (70).  Constructed
@@ -72,13 +77,31 @@ pub fn page_cache() -> Option<&'static PageCache> {
     Some(unsafe { &*ptr })
 }
 
-/// Seed the Roaring pools from the mb2 type-1 map and create the image page
-/// cache.  `kernel_phys_end` is the physical end of the kernel image (the
-/// `end` link symbol's VA minus KZERO).  Everything from physical 0 up to
-/// that end is marked used in one range.
-///
-/// Returns Err(OutOfBounds) when the map declares no type-1 range at all —
-/// the caller prints that loudly (there is nothing to boot on).
+/// Why the seeding failed: the frame allocator's error, and — when the
+/// direct map is what failed — its own words.  The caller prints it once
+/// the console is up (the seeding runs before anything can print).
+#[derive(Debug)]
+pub struct InitError {
+    kind: PageAllocError,
+    detail: Option<&'static str>,
+}
+
+impl InitError {
+    fn alloc(kind: PageAllocError) -> InitError {
+        InitError { kind, detail: None }
+    }
+}
+
+impl core::fmt::Display for InitError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:?}", self.kind)?;
+        if let Some(detail) = self.detail {
+            write!(f, ": {detail}")?;
+        }
+        Ok(())
+    }
+}
+
 /// Round a physical address down to a frame boundary.
 fn floor_frame(addr: u64) -> u64 {
     addr & !(FRAME_SIZE as u64 - 1)
@@ -89,35 +112,60 @@ fn ceil_frame(addr: u64) -> u64 {
     floor_frame(addr.saturating_add(FRAME_SIZE as u64 - 1))
 }
 
-/// Where the kernel-stack arena goes: the lowest `bytes`-long span that
-/// is aligned to a stack slot, lies inside ONE available range, starts
-/// at or above the kernel image, and stays below the alias ceiling the
-/// stacks are reached through.  None when no range has room — the boot
-/// then fails loudly rather than starting without process stacks.
-fn kstack_arena_base(avail: &[(u64, u64)], kernel_phys_end: u64, bytes: u64) -> Option<u64> {
-    let slot = crate::kstack::SLOT_BYTES;
-    let lowest = kernel_phys_end.div_ceil(slot) * slot;
-    avail.iter().find_map(|&(start, end)| {
-        let start = start.max(lowest).div_ceil(slot) * slot;
-        let end = end.min(crate::proc::KZERO_MAP_LIMIT);
-        start.checked_add(bytes).filter(|&top| top <= end).map(|_| start)
-    })
+/// A cursor over low RAM for the kernel's own boot reservations.  Each
+/// one takes the lowest span that is aligned as asked, lies inside ONE
+/// available range, starts at or above the kernel image and every
+/// earlier reservation, and stays below the first gibibyte — the RAM
+/// the boot tables already reach at KZERO, so a reservation needs no
+/// page table of its own.  None when no range has room: the boot then
+/// fails loudly rather than starting without it.
+struct LowRam<'a> {
+    avail: &'a [(u64, u64)],
+    next: u64,
 }
 
-pub fn init_page_allocator(facts: &Facts, kernel_phys_end: u64) -> Result<(), PageAllocError> {
+impl<'a> LowRam<'a> {
+    fn new(avail: &'a [(u64, u64)], kernel_phys_end: u64) -> LowRam<'a> {
+        LowRam { avail, next: ceil_frame(kernel_phys_end) }
+    }
+
+    /// Reserve `bytes` at an address that is a multiple of `align`;
+    /// the span's start.
+    fn reserve(&mut self, bytes: u64, align: u64) -> Option<u64> {
+        let start = self.avail.iter().find_map(|&(lo, end)| {
+            let start = lo.max(self.next).div_ceil(align) * align;
+            let end = end.min(crate::proc::KZERO_MAP_LIMIT);
+            start.checked_add(bytes).filter(|&top| top <= end).map(|_| start)
+        })?;
+        self.next = start + bytes;
+        Some(start)
+    }
+}
+
+/// Seed the Roaring pools from the mb2 type-1 map, build the direct map
+/// of the RAM above the first gibibyte, and create the image page cache.
+/// `kernel_phys_end` is the physical end of the kernel image (the `end`
+/// link symbol's VA minus KZERO).  Everything from physical 0 up to that
+/// end is marked used in one range.
+///
+/// Returns Err when the map declares no type-1 range at all, or when a
+/// kernel reservation or the direct map cannot be made — the caller
+/// prints that loudly once the console is up (there is nothing to boot
+/// on).
+pub fn init_page_allocator(facts: &Facts, kernel_phys_end: u64) -> Result<(), InitError> {
     // Collect and sort the type-1 ranges: GRUB passes the BIOS e820 order
     // through, which is NOT address-sorted.
     let mut avail = [(0u64, 0u64); MAX_AVAIL];
     let mut navail = 0;
     for r in facts.available_ranges() {
         if navail == MAX_AVAIL {
-            return Err(PageAllocError::OutOfBounds);
+            return Err(InitError::alloc(PageAllocError::OutOfBounds));
         }
         avail[navail] = (r.base, r.base + r.len);
         navail += 1;
     }
     if navail == 0 {
-        return Err(PageAllocError::OutOfBounds);
+        return Err(InitError::alloc(PageAllocError::OutOfBounds));
     }
     avail[..navail].sort_unstable_by_key(|r| r.0);
 
@@ -140,54 +188,75 @@ pub fn init_page_allocator(facts: &Facts, kernel_phys_end: u64) -> Result<(), Pa
     let span_start = floor_frame(span_start);
     let span_end = floor_frame(span_end);
     if span_end <= span_start {
-        return Err(PageAllocError::OutOfBounds);
+        return Err(InitError::alloc(PageAllocError::OutOfBounds));
     }
     let span = PhysRange::with_end(span_start, span_end);
 
-    // The used set, sorted: [0, kernel_phys_end) first, then the gaps
-    // between the type-1 ranges (every non-type-1 entry and undeclared hole
-    // inside the span lands in a gap — that keeps them out of the pool),
-    // then the kernel-stack arena.
-    let mut used: [PhysRange; MAX_AVAIL + 2] = core::array::from_fn(|_| PhysRange::with_len(0, 0));
-    used[0] = PhysRange::with_end(0, ceil_frame(kernel_phys_end));
-    let mut nused = 1;
+    // The kernel's own reservations in low RAM, in order: the
+    // kernel-stack arena (kstack.rs: MAX_PROCS contiguous 16 KiB slots,
+    // withheld from the pools like the kernel image), then the direct
+    // map's table pages — bounded before the map is built, so exactly
+    // what the map takes is withheld below and the rest returns to the
+    // pools.
+    let mut low = LowRam::new(&avail[..navail], kernel_phys_end);
+    let arena_bytes = crate::kstack::arena_bytes();
+    let arena_base = low
+        .reserve(arena_bytes, crate::kstack::SLOT_BYTES)
+        .ok_or(PageAllocError::OutOfBounds)
+        .map_err(InitError::alloc)?;
+    let table_bytes = crate::directmap::table_pages_bound(navail, span_end) as u64 * FRAME_SIZE as u64;
+    let table_lo = low
+        .reserve(table_bytes, FRAME_SIZE as u64)
+        .ok_or(PageAllocError::OutOfBounds)
+        .map_err(InitError::alloc)?;
+
+    // The direct map of the RAM above the first gibibyte (directmap.rs),
+    // built BEFORE the seeding: its table pages come from the
+    // reservation above, and the RAM it cannot reach is withheld below
+    // like the kernel image — a frame is never handed out that the
+    // kernel has no address for.
+    #[cfg(not(test))]
+    let (beyond_map, table_pages) = crate::directmap::init(
+        crate::proc::boot_pml4_pa(),
+        &avail[..navail],
+        (table_lo, table_lo + table_bytes),
+    )
+    .map_err(|detail| InitError { kind: PageAllocError::OutOfBounds, detail: Some(detail) })?;
+    #[cfg(test)]
+    let (beyond_map, table_pages): (alloc::vec::Vec<PhysRange>, usize) = (alloc::vec::Vec::new(), 0);
+
+    // The used set: [0, kernel_phys_end) first, then the gaps between the
+    // type-1 ranges (every non-type-1 entry and undeclared hole inside the
+    // span lands in a gap — that keeps them out of the pool), then the
+    // kernel-stack arena, the table pages the map took, and the RAM the
+    // map cannot reach.
+    let mut used: Vec<PhysRange> = Vec::new();
+    used.push(PhysRange::with_end(0, ceil_frame(kernel_phys_end)));
     let mut prev_end = span_start;
     for r in &avail[..navail] {
         let (start, end) = *r;
         if start > prev_end {
-            if nused == used.len() - 1 {
-                // One entry stays free for the kernel-stack arena.
-                return Err(PageAllocError::OutOfBounds);
-            }
-            used[nused] = PhysRange::with_end(floor_frame(prev_end), ceil_frame(start));
-            nused += 1;
+            used.push(PhysRange::with_end(floor_frame(prev_end), ceil_frame(start)));
         }
         if end > prev_end {
             prev_end = end;
         }
     }
-
-    // The kernel-stack arena (kstack.rs): MAX_PROCS contiguous 16 KiB
-    // slots withheld from the pools like the kernel image.  Chosen
-    // BEFORE the seeding so the range lands in the used set.
-    let arena_bytes = crate::kstack::arena_bytes();
-    let Some(arena_base) = kstack_arena_base(&avail[..navail], kernel_phys_end, arena_bytes) else {
-        return Err(PageAllocError::OutOfBounds);
-    };
-    if nused == used.len() {
-        return Err(PageAllocError::OutOfBounds);
+    used.push(PhysRange::with_end(arena_base, arena_base + arena_bytes));
+    used.push(PhysRange::with_end(table_lo, table_lo + table_pages as u64 * FRAME_SIZE as u64));
+    for r in &beyond_map {
+        used.push(PhysRange::with_end(floor_frame(r.start().addr()), ceil_frame(r.end().addr())));
     }
-    used[nused] = PhysRange::with_end(arena_base, arena_base + arena_bytes);
-    nused += 1;
 
     let max_frames = max_frames_from_facts(facts);
     let alloc = alloc::boxed::Box::new(PageAlloc::new());
-    alloc.init_ranges(span, used[..nused].iter().cloned(), max_frames)?;
+    alloc.init_ranges(span, used.iter().cloned(), max_frames).map_err(InitError::alloc)?;
     PAGE_ALLOC.store(alloc::boxed::Box::into_raw(alloc), Ordering::Release);
     #[cfg(not(test))]
     crate::kstack::init(arena_base);
 
-    // The High-Water Pager: seed ~15% clean before the first allocation.
+    // The High-Water Pager: seed the clean pool to its target before the
+    // first allocation.
     let _ = page_alloc().refill_clean_pool(zero_frame);
 
     // The Flattened-TPHT image page cache (MEM-16).  A failure leaves the
@@ -217,11 +286,31 @@ pub fn pool_snapshot() -> port::devcons::PoolSnapshot {
     port::devcons::PoolSnapshot { clean, dirty, active, pinned }
 }
 
+/// One-shot markers for a large-memory leg's log: the first frame the
+/// kernel hands out above 1 GiB (the direct map's first use) and the
+/// first above 4 GiB.
+static FIRST_ABOVE_1G: AtomicBool = AtomicBool::new(false);
+static FIRST_ABOVE_4G: AtomicBool = AtomicBool::new(false);
+
 /// Allocate one zeroed physical page.  Reclaims re-readable pages and retries
 /// (bounded inside `alloc_clean`) instead of panicking under pressure.
 pub fn allocate_physpage() -> Result<PhysAddr, PageAllocError> {
     let pa = page_alloc().alloc_clean(zero_frame, crate::proc::evict_re_readable_pages)?;
     ALLOCATED_FRAMES.fetch_add(1, Ordering::Relaxed);
+    // Printed with no lock held: the pool's went back inside alloc_clean.
+    let addr = pa.addr();
+    let marker = if addr >= 1u64 << 32 {
+        (!FIRST_ABOVE_4G.swap(true, Ordering::Relaxed))
+            .then_some("palloc: first frame above 4 GiB handed out")
+    } else if addr >= crate::proc::KZERO_MAP_LIMIT {
+        (!FIRST_ABOVE_1G.swap(true, Ordering::Relaxed))
+            .then_some("palloc: first frame above 1 GiB handed out")
+    } else {
+        None
+    };
+    if let Some(line) = marker {
+        port::println!("{line}: {addr:#x}");
+    }
     Ok(pa)
 }
 
@@ -255,12 +344,13 @@ pub fn is_pinned(pa: PhysAddr) -> bool {
     }
 }
 
-/// Zero one dirty frame through the boot tables' shared KZERO alias.  The
-/// identity map covers every guest frame (the 1 GiB profile window), so this
-/// needs no page-table edit; `phys_ptr_mut` asserts the window bound loudly.
+/// Zero one dirty frame through the kernel's map of RAM (the KZERO alias
+/// below the first gibibyte, the direct map above it), so this needs no
+/// page-table edit; `phys_ptr_mut` refuses a frame that is in neither.
 fn zero_frame(pa: PhysAddr) {
-    // SAFETY: `pa` is a managed frame below the KZERO window (the 1 GiB q35
-    // guest); writing PAGE_SIZE_4K zero bytes is the zero operation.
+    // SAFETY: `pa` is a managed frame, and the seeding withheld every
+    // frame the kernel cannot reach; writing FRAME_SIZE zero bytes is the
+    // zero operation.
     unsafe { core::ptr::write_bytes(crate::proc::phys_ptr_mut(pa.addr()), 0, FRAME_SIZE) };
 }
 
@@ -283,10 +373,12 @@ pub fn usage_bytes() -> (usize, usize) {
 mod tests {
     use alloc::vec::Vec;
 
-    use super::kstack_arena_base;
+    use super::{LowRam, MAX_AVAIL};
+    use crate::directmap::table_pages_bound;
     use crate::kstack::SLOT_BYTES;
 
     const SLOT: u64 = SLOT_BYTES;
+    const K: u64 = 4096;
 
     /// The gate guest's map: the 640 KiB low range, then everything
     /// from 1 MiB to just under 1 GiB.
@@ -295,8 +387,10 @@ mod tests {
     }
 
     #[test]
-    fn arena_goes_above_the_kernel_image_slot_aligned() {
-        let base = kstack_arena_base(&qavail(), 0xcb61001, 8 << 20).unwrap();
+    fn the_stack_arena_goes_above_the_kernel_image_slot_aligned() {
+        let avail = qavail();
+        let mut low = LowRam::new(&avail, 0xcb61001);
+        let base = low.reserve(8 << 20, SLOT).unwrap();
         assert_eq!(base % SLOT, 0, "slot-aligned");
         assert!(base >= 0xcb61001, "never over the kernel image");
         assert_eq!(base, 0xcb64000, "the lowest slot-aligned address past the image");
@@ -304,29 +398,56 @@ mod tests {
     }
 
     #[test]
-    fn arena_skips_a_range_that_cannot_hold_it() {
+    fn a_reservation_skips_a_range_that_cannot_hold_it() {
         let avail = [(0x100000, 0x200000), (0x4000000, 0x8000000)];
-        let base = kstack_arena_base(&avail, 0x180000, 8 << 20).unwrap();
+        let base = LowRam::new(&avail, 0x180000).reserve(8 << 20, SLOT).unwrap();
         assert_eq!(base, 0x4000000, "the first range has 512 KiB; the second holds it");
     }
 
     #[test]
-    fn arena_stays_below_the_alias_ceiling() {
-        // A range running past the 1 GiB (0x4000_0000) the alias covers:
-        // the arena must fit in the covered part, or fail.
+    fn a_reservation_stays_below_the_alias_ceiling() {
+        // A range running past the first gibibyte (0x4000_0000) that the
+        // boot tables reach at KZERO: the reservation must fit in the
+        // covered part, or fail.
         let avail = [(0x3e000000u64, 0x140000000u64)];
-        assert_eq!(kstack_arena_base(&avail, 0x100000, 16 << 20), Some(0x3e000000));
+        assert_eq!(LowRam::new(&avail, 0x100000).reserve(16 << 20, SLOT), Some(0x3e000000));
         // 4 MiB short of the ceiling: it would fit without the ceiling.
         let avail = [(0x3fc00000u64, 0x140000000u64)];
         assert!(
-            kstack_arena_base(&avail, 0x100000, 8 << 20).is_none(),
+            LowRam::new(&avail, 0x100000).reserve(8 << 20, SLOT).is_none(),
             "only 8 MiB is covered and the slot alignment leaves less"
         );
     }
 
     #[test]
-    fn arena_fails_loudly_when_nothing_fits() {
-        assert!(kstack_arena_base(&[], 0x100000, 8 << 20).is_none());
-        assert!(kstack_arena_base(&[(0x100000, 0x200000)], 0x100000, 8 << 20).is_none());
+    fn a_reservation_fails_loudly_when_nothing_fits() {
+        assert!(LowRam::new(&[], 0x100000).reserve(8 << 20, SLOT).is_none());
+        assert!(LowRam::new(&[(0x100000, 0x200000)], 0x100000).reserve(8 << 20, SLOT).is_none());
+    }
+
+    #[test]
+    fn reservations_never_overlap_and_follow_the_alignment_asked() {
+        // The arena, then page-aligned table pages, then another arena-sized
+        // span: each starts where the last ended, rounded up.
+        let avail = [(0x100000u64, 0x4000_0000u64)];
+        let mut low = LowRam::new(&avail, 0xcb61001);
+        let arena = low.reserve(8 << 20, SLOT).unwrap();
+        assert_eq!(arena, 0xcb64000);
+        let tables = low.reserve(5 * K, K).unwrap();
+        assert_eq!(tables, 0xd364000, "the page after the arena's last");
+        let next = low.reserve(SLOT, SLOT).unwrap();
+        assert_eq!(next, 0xd36c000, "after the five pages, rounded up to a slot");
+        // The kernel image itself is never handed out.
+        let mut low = LowRam::new(&avail, 0x4000_0000 - K);
+        assert!(low.reserve(2 * K, K).is_none(), "one page is left above a kernel ending a page short of the gibibyte");
+        assert_eq!(low.reserve(K, K), Some(0x3fff_f000));
+    }
+
+    #[test]
+    fn the_table_page_bound_is_two_per_range_plus_one_per_512g() {
+        // It only ever bounds a build (directmap.rs pins it against real
+        // builds); here: two ranges, RAM under 512 GiB.
+        assert_eq!(table_pages_bound(2, 0x19_8000_0000), 5);
+        assert_eq!(table_pages_bound(MAX_AVAIL, 512 << 30), 2 * MAX_AVAIL + 2);
     }
 }

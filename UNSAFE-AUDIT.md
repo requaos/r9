@@ -617,6 +617,15 @@ and `dealloc` (test-only: 8 → 10).  `port/src/devcons.rs`'s whole-line
 console lock adds none (0 → 0), and neither does `3ff89ab`'s scheduler change (it calls the
 existing `read_cr3`/`switch_cr3`; the halt report's new line is a `println!`).
 
+**Direct-map delta (feat/x86_64-memory-model, 2026-11-28):** `x86_64/src/directmap.rs` adds
+two lint-visible blocks (185 → 187), each with its SAFETY comment: `init`'s `write_bytes` over a
+new table page, and the first-and-last-frame write/read-back that proves each mapped span.  The
+rest of the memory work adds none.  `proc.rs` swaps `kernel_half_entries` for `copy_kernel_half`
+(30 → 30: one block for one block) and widens `table_entry`/`set_table_entry` to `pub(crate)` for
+the map (their blocks are unchanged); `pagealloc.rs`, `maplog.rs` (the mapping index reaches its
+node pages through those two accessors), `fault.rs`, `main.rs` and `l.S` add none.  `port/src`
+adds none: `palloc.rs`'s sparse pin counts and bounded targets carry no `unsafe`.
+
 ## ds/ and crypto/ (Phase 3)
 
 Both crates take `[lints] workspace = true`, so
@@ -878,13 +887,14 @@ cfg-gated code as well.
 | `vm.rs` | 16 | 3 | 0 | page-table machinery: TTBR/TLB/barrier asm, entry writes, recursive-mapping resolution |
 | `vmdebug.rs` | 2 | 0 | 0 | read-only recursive-mapping walk (print path) |
 
-### x86_64/src — 185 blocks, 32 unsafe fns, 4 extern blocks (test-only: 10 blocks, 2 fns)
+### x86_64/src — 187 blocks, 32 unsafe fns, 4 extern blocks (test-only: 10 blocks, 2 fns)
 
 | File | Blocks | fns | ext | Surface |
 |---|---|---|---|---|
 | `allocator.rs` | 1 | 0 | 0 | the global-allocator arena's one-time static construction (05-07: `static mut` HEAP/ALLOC became SyncUnsafeCell, and the unlocked diagnostic reads moved under the IrqSpinLock guard) |
 | `cpu.rs` | 16 | 8 | 0 | CPL-0 instruction primitives: `ltr`/`lgdt`/`lidt`, `_rdmsr`/`wrmsr`, `wrgsbase`, `write_cr4`/`xsetbv` (the fns); flags/sti/cli/cpuid/rdtsc/rdrand/rdseed/cr4 blocks (05-15: `cr4`/`write_cr4`/`xsetbv` + `CR4_OSXSAVE` — the MEM-18 OSXSAVE/XCR0 arm's primitives) |
 | `dat.rs` | 7 | 1 | 0 | Ureg↔saved-frame copies, the Mach's CpuFp cell write, `Mach::init`'s GDT/IDT/TSS load, `mach_ptr`'s `%gs:0` read + `this_mach`'s deref (05-11); 05-12: the Mach gains `park_context` (the per-CPU one-way boot park slot — safe field, count unchanged); 05-24: the Mach gains the kstack-ownership triple (`cur_kstack`/`sched_from`/`moribund_reap` — safe fields) and `Mach::init` writes the Option explicitly (+1, the `fpu` pattern) |
+| `directmap.rs` | 2 | 0 | 0 | the direct map's boot-time build (`init`, cfg(not(test))): zeroing a fresh table page through the alias, and the proof that writes and reads back the first and last frame of every mapped span through the map itself |
 | `exec.rs` | 5 | 0 | 0 | KZERO-alias writes into just-mapped image pages and the seed page (+2 test-only blocks) |
 | `fpu.rs` | 16 | 2 | 0 | format-dispatched FXSAVE64/XSAVE64/XSAVEOPT64 + FXRSTOR64/XRSTOR64 save/restore asm (`save_raw`/`restore_raw`, 05-15 MEM-18: the CPUID-gated AVX/XSAVE switch — 832-byte align-64 `FpState`, `arm_xsave`'s CR4.OSXSAVE + XCR0 = 0x7 arm, `init_bsp`'s back-out arm, `KernelSimd::drop`'s gated `vzeroupper`), per-CPU `CpuFp` in the Mach slot (`%gs:0`, 05-12 — the hardcoded `KMACH` deref is gone), `with_simd` (+1 test-only block) |
 | `kstack.rs` | 1 | 0 | 0 | the kernel-stack arena's boot-time zeroing (one `write_bytes` through the KZERO alias) (+2 test-only blocks: the host seam's 16 KiB alloc/dealloc stand-in) |

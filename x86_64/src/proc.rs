@@ -56,10 +56,12 @@
 //!   panics if another CPU's `cur_kstack` still names the candidate.
 //!
 //! Physical-memory access model: every "PA" the process machinery
-//! handles is reached through the kernel-half alias at `KZERO+pa` (the
-//! boot tables map ALL of the q35 guest's RAM there — the 1 GiB
-//! KZERO_MAP_LIMIT guard below documents the window).  There is no
-//! Linux-style copy layer anywhere: user VAs are directly
+//! handles is reached through `phys_ptr_mut` — the first gibibyte
+//! through the kernel-half alias at `KZERO+pa` (the boot tables map it
+//! there, and the kernel image lives in it), the RAM above through the
+//! direct map at `DIRECT_BASE+pa` (directmap.rs, built at boot into
+//! the same shared kernel half).  Both are in every page table.  There
+//! is no Linux-style copy layer anywhere: user VAs are directly
 //! dereferenceable in a proc's syscall context because its CR3 is
 //! live, and its pages are writable by the kernel through the same
 //! alias when its table is NOT the active one.
@@ -90,7 +92,7 @@ use port::smp::LockRank;
 use crate::dat::Ureg;
 #[cfg(not(test))]
 use crate::dat::Stack;
-use crate::kstack;
+use crate::{directmap, kstack};
 use crate::swtch;
 
 /// The ring-3 `#PF` demand pager (MEM-14/MEM-15/MEM-16).  Mounted here so
@@ -100,10 +102,10 @@ use crate::swtch;
 pub mod fault;
 
 /// The higher-half base (kernel.ld) — the same value main.rs links by.
-/// Every physical page the process machinery touches is aliased at
-/// `KZERO+pa` in the SHARED kernel half (PML4[511] → the boot KZERO
-/// table), so kernel-side content writes work identically under the
-/// boot PML4 and under any per-process PML4.
+/// The first gibibyte of RAM is aliased at `KZERO+pa` in the SHARED
+/// kernel half (PML4[511] → the boot KZERO table), so kernel-side
+/// content writes work identically under the boot PML4 and under any
+/// per-process PML4.
 pub(crate) const KZERO: u64 = 0xffff_ffff_8000_0000;
 
 /// The device-MMIO alias window's base (l.S's bootmachpt3 entries 2..5,
@@ -131,9 +133,10 @@ pub(crate) fn kaddr(pa: u64) -> usize {
 
 /// The KZERO window's ceiling: the boot tables map exactly the first
 /// 1 GiB of physical memory at KZERO (l.S's bootkernpt3 single 1 GiB
-/// leaf), and the q35 gate guest is 1024 MiB — an exact fit.  A page
-/// allocated beyond it would be invisible at the alias; the guard
-/// below makes that loud instead of a wild write.
+/// leaf).  The kernel image, the page tables and the kernel stacks are
+/// all placed inside it; the RAM above is reached through the direct
+/// map (directmap.rs).  `phys_ptr_mut` below is the one place the two
+/// are told apart.
 pub(crate) const KZERO_MAP_LIMIT: u64 = 1 << 30;
 
 /// Plan 9 KNAMELEN (27 + NUL).
@@ -423,20 +426,26 @@ pub enum ProcState {
 
 // ---------------------------------------------------------------------------
 // The physical-memory seam: the "PA" plumbing every mapping body uses.
-// Kernel side: pagealloc + the KZERO alias.  Host-test side: real host
-// pages whose ADDRESSES play the PA role, with phys_ptr_mut the
-// identity — the 14-03 mock-proc doctrine (the mock's memory IS the
+// Kernel side: pagealloc + the kernel's map of RAM (the KZERO alias
+// below the first gibibyte, the direct map above it).  Host-test side:
+// real host pages whose ADDRESSES play the PA role, with phys_ptr_mut
+// the identity — the 14-03 mock-proc doctrine (the mock's memory IS the
 // address range), extended to the mapping machinery so the exec/rfork
 // bodies are genuinely host-exercised, not deferred to metal.
 // ---------------------------------------------------------------------------
 
-/// The kernel alias of a physical page (the boot tables' shared KZERO
-/// window).  Panics loudly on a PA outside the window — the 1 GiB
-/// guest is an exact fit, and silence here would be a wild write.
+/// The kernel alias of a physical page: the boot tables' shared KZERO
+/// window below the first gibibyte, the direct map above it
+/// (directmap.rs).  Panics loudly on a PA neither maps — silence here
+/// would be a wild write.
 #[cfg(not(test))]
+#[track_caller]
 pub(crate) fn phys_ptr_mut(pa: u64) -> *mut u8 {
-    assert!(pa < KZERO_MAP_LIMIT, "PA {pa:#x} outside the KZERO window");
-    (KZERO + pa) as *mut u8
+    if pa < KZERO_MAP_LIMIT {
+        return (KZERO + pa) as *mut u8;
+    }
+    assert!(directmap::covers(pa), "PA {pa:#x} is in neither the KZERO window nor the direct map");
+    directmap::va(pa) as *mut u8
 }
 
 /// The host-test identity alias: test "PAs" ARE host pointers.
@@ -499,11 +508,9 @@ pub(crate) fn free_phys_page(pa: u64) {
 // ---------------------------------------------------------------------------
 // The per-process PML4 walk (the aarch64 vm::map_to re-key): map/unmap
 // 4 KiB leaves in a proc's OWN table, allocating intermediate pages on
-// the way down.  The kernel half (510/511) is never walked — those
-// entries are shared at construction.
+// the way down.  The kernel half (slots 256..=511) is never walked —
+// those entries are shared at construction.
 // ---------------------------------------------------------------------------
-
-/// One entry of the table at `table_pa`.
 
 /// Power-of-two page round-up — `usize::next_multiple_of` lowers
 /// through u128 arithmetic (`__multi3`, soft-float here); the page
@@ -512,14 +519,15 @@ fn round_up_page(x: usize) -> usize {
     (x + PAGE_SIZE_4K - 1) & !(PAGE_SIZE_4K - 1)
 }
 
-fn table_entry(table_pa: u64, idx: usize) -> u64 {
+/// Read one entry of the page table at `table_pa`.
+pub(crate) fn table_entry(table_pa: u64, idx: usize) -> u64 {
     // SAFETY: table_pa names a page this module allocated (the seam)
     // and 0-initialized; idx < 512 by the callers' masks.
     unsafe { phys_ptr_mut(table_pa).cast::<u64>().add(idx).read() }
 }
 
-/// Write one entry of the table at `table_pa`.
-fn set_table_entry(table_pa: u64, idx: usize, val: u64) {
+/// Write one entry of the page table at `table_pa`.
+pub(crate) fn set_table_entry(table_pa: u64, idx: usize, val: u64) {
     // SAFETY: table_entry's contract; the write lands inside the page.
     unsafe { phys_ptr_mut(table_pa).cast::<u64>().add(idx).write(val) };
 }
@@ -801,23 +809,29 @@ pub(crate) fn evict_re_readable_pages(target: usize) -> usize {
     freed
 }
 
-/// The boot PML4's kernel-half entries (510: the KCPUZERO Mach window
-/// the gs-relative entry asm needs under EVERY table; 511: KZERO, all
-/// RAM) — copied into every per-process PML4 at construction.  Read
-/// from the linked boot table itself (l.S's bootpml4), never restated.
+/// Copy the boot PML4's kernel half — every entry from slot
+/// [`USER_PML4_SLOTS`] up: the direct map of RAM (slots 256..=509,
+/// directmap.rs), 510 the KCPUZERO Mach window the gs-relative entry
+/// asm needs under EVERY table, 511 KZERO — into a new per-process
+/// PML4 at `pml4_pa`.  Read from the linked boot table itself (l.S's
+/// bootpml4), never restated: whatever the kernel maps at boot is live
+/// under every CR3.
 #[cfg(not(test))]
-fn kernel_half_entries() -> [u64; 2] {
+fn copy_kernel_half(pml4_pa: u64) {
     unsafe extern "C" {
         static bootpml4: u8;
     }
-    let base = ptr::addr_of!(bootpml4) as usize;
+    let base = ptr::addr_of!(bootpml4) as *const u64;
     // SAFETY: the boot PML4 is linked, mapped (its own entry 511 maps
-    // it — KZERO covers the whole image) and read-only to us; exactly
-    // two qwords are read, at slots 510/511 of the 512-entry page.
+    // it — KZERO covers the whole image) and read-only to us; the
+    // kernel half is 256 qwords inside the 512-entry page.
     unsafe {
-        let e510 = (base as *const u64).add(510).read();
-        let e511 = (base as *const u64).add(511).read();
-        [e510, e511]
+        for slot in USER_PML4_SLOTS..512 {
+            let entry = base.add(slot).read();
+            if entry != 0 {
+                set_table_entry(pml4_pa, slot, entry);
+            }
+        }
     }
 }
 
@@ -2070,15 +2084,11 @@ fn unwind_new_proc(pml4_pa: u64, slot: u64) {
 pub fn new_user_proc(name: &str) -> Result<ProcGuard> {
     // The per-process PML4 first (BEFORE taking the table lock — the
     // lock is never held across an allocation): one fresh zeroed page;
-    // the kernel half (510/511) is copied from the boot PML4 so the
-    // Mach window and KZERO alias are live under EVERY table.
+    // the kernel half is copied from the boot PML4 so the direct map,
+    // the Mach window and the KZERO alias are live under EVERY table.
     let pml4_pa = alloc_phys_page().map_err(|_| "proc: PML4 page alloc failed")?;
     #[cfg(not(test))]
-    {
-        let [e510, e511] = kernel_half_entries();
-        set_table_entry(pml4_pa, 510, e510);
-        set_table_entry(pml4_pa, 511, e511);
-    }
+    copy_kernel_half(pml4_pa);
     // The kernel stack: one contiguous arena slot, no page-table work.
     // It is taken before the table lock, like the PML4 page, so the
     // lock is never held across it; a failure frees the page taken so

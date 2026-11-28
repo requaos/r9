@@ -177,8 +177,12 @@ pub struct MemRange {
     pub kind: MemKind,
 }
 
-/// Headroom over the 9 entries live GRUB/q35 reports.
-pub const MAX_RANGES: usize = 32;
+/// The memory-map entries the parser keeps.  Headroom over the 9 entries
+/// live GRUB/q35 reports, up to the e820 table's architectural maximum:
+/// a large server reports its RAM in dozens of ranges (the kernel's
+/// direct map and the page allocator's seeding are sized from this —
+/// x86_64/src/directmap.rs, x86_64/src/pagealloc.rs).
+pub const MAX_RANGES: usize = 128;
 
 /// The ACPI root-table fact the mb2 ACPI tags carry: GRUB embeds the
 /// RSDP structure ITSELF in the tag (spec 3.9.6/3.9.7 — "a copy of the

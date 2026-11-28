@@ -30,14 +30,19 @@
 //! (MEM-15).  bss/stack/tos map zeroed pages (D-14: dirty anonymous memory
 //! is never evicted).
 
+
 use port::mem::{PhysAddr, PAGE_SIZE_4K};
 use port::println;
 
 use crate::dat::Ureg;
 use crate::proc::{
     self, alloc_phys_page, data_page_key, free_phys_page, phys_ptr_mut, text_page_key, MappingRecord,
-    Proc, SegKind, KZERO,
+    Proc, SegKind,
 };
+
+// Test-only: kernel_address_rejection pins the bound against KZERO.
+#[cfg(test)]
+use crate::proc::KZERO;
 
 /// `#PF` error-code bits (SDM Vol. 3A §4.7).
 pub(crate) const PF_P: u64 = 1 << 0;
@@ -81,9 +86,13 @@ impl PfError {
 }
 
 /// True when `cr2` names a kernel (top-half) address — the demand pager
-/// must never satisfy such a fault from a ring-3 trap (T-05-35).
+/// must never satisfy such a fault from a ring-3 trap (T-05-35).  The
+/// kernel half begins where the user's 128 TiB end: at the direct map's
+/// base, which is below KZERO — the Mach window and the device alias
+/// live there too (until 2026-11-27 the bound was KZERO, and a ring-3
+/// fault at those addresses reached the segment classifier instead).
 pub(crate) fn is_kernel_address(cr2: u64) -> bool {
-    cr2 >= KZERO
+    cr2 >= crate::directmap::DIRECT_BASE
 }
 
 /// The ring-3 `#PF` entry from `trap()`'s vector-14 split.  Returns with
@@ -431,17 +440,24 @@ mod tests {
         assert!(!e.present && !e.write && !e.user && !e.instruction);
     }
 
-    /// MEM-14 encoding: `cr2 >= KZERO` is a kernel address and must be
-    /// rejected (T-05-35); every user-half address passes.
+    /// MEM-14 encoding: a top-half address (from the direct map's base
+    /// up) is a kernel address and must be rejected (T-05-35); every
+    /// user-half address passes.
     #[test]
     fn kernel_address_rejection() {
         assert!(is_kernel_address(KZERO));
         assert!(is_kernel_address(KZERO + PAGE_SIZE_4K as u64));
         assert!(is_kernel_address(u64::MAX));
+        // The kernel half begins below KZERO: the direct map, the Mach
+        // window and the device alias are kernel addresses as well.
+        assert!(is_kernel_address(KZERO - PAGE_SIZE_4K as u64));
+        assert!(is_kernel_address(crate::directmap::DIRECT_BASE + 0x1_2345_6000));
+        assert!(is_kernel_address(crate::proc::MMIO_ALIAS as u64));
+        assert!(is_kernel_address(crate::directmap::DIRECT_BASE), "the first kernel address");
+        assert!(!is_kernel_address(crate::directmap::DIRECT_BASE - 1), "the last user address");
         assert!(!is_kernel_address(0));
         assert!(!is_kernel_address(0x2000));
         assert!(!is_kernel_address(0x0000_7fff_ffff_f000));
-        assert!(!is_kernel_address(KZERO - PAGE_SIZE_4K as u64));
     }
 
     /// MEM-15 encoding: `PTE_D` is bit 6, RO text carries neither `PTE_RW`

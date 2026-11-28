@@ -9,6 +9,7 @@
 mod allocator;
 mod cpu;
 mod dat;
+mod directmap;
 mod entropy;
 mod kstack;
 mod pagealloc;
@@ -66,7 +67,7 @@ use crate::platform::q35::mb2;
 use proc::KZERO;
 
 /// The mb2 info stash's size — l.S's MB2INFOMAX must match this.
-const MB2_STASH_SIZE: usize = 4096;
+const MB2_STASH_SIZE: usize = 32768;
 
 /// The mb2 info stash: l.S copies the GRUB-handed structure here in
 /// 32-bit early boot, BEFORE it zeroes the second mebibyte of RAM for
@@ -78,7 +79,7 @@ const MB2_STASH_SIZE: usize = 4096;
 pub struct Mb2InfoStash([u8; MB2_STASH_SIZE]);
 
 #[unsafe(no_mangle)]
-pub static mut mb2info: Mb2InfoStash = Mb2InfoStash([0; 4096]);
+pub static mut mb2info: Mb2InfoStash = Mb2InfoStash([0; MB2_STASH_SIZE]);
 
 /// The boot-module stash's size — l.S's MODSTASHMAX must match this.
 /// Headroom over the composed bootfs images this era (the 14-05 leg-1
@@ -114,6 +115,15 @@ fn print_memory_info() {
     let (used, total) = pagealloc::usage_bytes();
     println!("  Used:\t\t{used:#016x}");
     println!("  Total:\t{total:#016x}");
+}
+
+/// The direct map of the RAM above the first gibibyte (directmap.rs), as
+/// boot built it — one line, and only on a machine that has any.
+fn print_directmap_info() {
+    let (spans, mapped, table_pages, beyond) = directmap::info();
+    if spans != 0 {
+        println!("directmap: spans={spans} mapped={mapped:#x} table_pages={table_pages} withheld={beyond:#x}");
+    }
 }
 
 /// The physical end of the kernel image (the `end` link symbol's VA
@@ -213,7 +223,7 @@ pub extern "C" fn main(mach: &mut dat::Mach, mbdata: u64) {
             halt();
         }
         (Ok(_), Some(err)) => {
-            println!("q35: page allocator init failed: {err:?}");
+            println!("q35: page allocator init failed: {err}");
             halt();
         }
     };
@@ -221,6 +231,7 @@ pub extern "C" fn main(mach: &mut dat::Mach, mbdata: u64) {
     // The "what machine am I on" slot: one q35: line per mb2 fact.
     platform::print_machine_info(facts);
     print_memory_info();
+    print_directmap_info();
 
     // MEM-18 (D-20): the BSP's FP save-format selection — CPUID-gated
     // CR4.OSXSAVE + XCR0 = 0x7 (x87|SSE|AVX; AVX-512 off) where XSAVE+AVX

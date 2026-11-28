@@ -71,8 +71,10 @@
 .set I8259A1,			0xA0
 
 // The mb2 info stash's size cap (mb2info in Rust .bss): matches the
-// array bound; the early copy clamps total_size to this.
-.set MB2INFOMAX,		4096
+// array bound; the early copy clamps total_size to this.  32 KiB holds
+// the whole memory map at mb2::MAX_RANGES entries (128 x 24 bytes)
+// beside the command line, the modules and the ELF-symbols tag.
+.set MB2INFOMAX,		32768
 
 // The boot-module stash's size cap (modstash in Rust .bss): headroom
 // over the composed bootfs images this era (the 14-05 leg-1 bake was
