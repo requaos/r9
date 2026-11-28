@@ -3155,6 +3155,52 @@ pub fn rfork_clone(parent: &mut Proc, frame: &TrapFrame, flag: u64) -> Result<u6
     Ok(child_pid)
 }
 
+/// RFMEM's share arm, for one parent mapping: no copy, no kernel alias —
+/// the parent's PA maps straight into the child's INACTIVE root table at
+/// the same VA (map_to's temp-recursive dance edits inactive tables), then
+/// the refcount records the second sharer.  The parent's mapping stays
+/// exactly as it was.  (The sweep in rfork_copy shares the pages it pages
+/// in through here too.)
+fn rfork_share_mapping(child: &mut Proc, rec: &MappingRecord) -> Result<()> {
+    // A shared RFMEM data page is logically writable by both procs: it
+    // must never be selected by the evictor (MEM-15/D-14).
+    if rec.kind == SegKind::Data {
+        if let Some(cache) = crate::pagealloc::page_cache() {
+            cache.mark_data_dirty(PhysAddr::new(rec.phys as u64));
+        }
+    }
+    let entry = Entry::rw_user_data().with_phys_addr(PhysAddr::new(rec.phys as u64));
+    // SAFETY: child.root_table names the child's pagealloc'd root table
+    // (the construction invariant) — an INACTIVE table edited through its
+    // KZERO+PA alias via map_to's temp-recursive dance.  The child is
+    // mid-construction: not enqueued on any run queue (rfork_clone
+    // enqueues it only after the copy returns), so no CPU's TLB can hold
+    // its entries.  The shared page's PA is the parent's live page —
+    // refcounted below before any free path can see the child's record.
+    unsafe {
+        let mut physalloc = PhysPageAllocator {};
+        let mut vmt = VmTraitImpl {};
+        (*child.root_table)
+            .map_to(
+                &mut physalloc,
+                &mut vmt,
+                entry,
+                rec.va,
+                PageSize::Page4K,
+                RootPageTableType::User,
+            )
+            .map_err(|_| "rfork: child shared map failed")?;
+    }
+    share_user_page(rec.phys as u64);
+    child.mapping_log.push(MappingRecord {
+        va: rec.va,
+        phys: rec.phys,
+        size: rec.size,
+        kind: rec.kind,
+    });
+    Ok(())
+}
+
 /// The fallible body of rfork_clone after the child exists
 /// (rfork_clone unwinds the half-built child on any Err): an EAGER
 /// page-for-page copy of every user mapping, a dup'd fd table, mirrored
@@ -3230,49 +3276,7 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &TrapFrame, flag: u64)
             }
         }
         if rfmem && matches!(rec.kind, SegKind::Data | SegKind::Bss) {
-            // A shared RFMEM data page is logically writable by both procs:
-            // it must never be selected by the evictor (MEM-15/D-14).
-            if rec.kind == SegKind::Data {
-                if let Some(cache) = crate::pagealloc::page_cache() {
-                    cache.mark_data_dirty(PhysAddr::new(rec.phys as u64));
-                }
-            }
-            // The RFMEM share arm: no copy, no kernel alias — the
-            // parent's PA maps straight into the child's INACTIVE root
-            // table at the same VA (map_to's temp-recursive dance edits
-            // inactive tables), then the refcount records the second
-            // sharer.  The parent's mapping stays exactly as it was.
-            let entry =
-                Entry::rw_user_data().with_phys_addr(PhysAddr::new(rec.phys as u64));
-            // SAFETY: child.root_table names the child's pagealloc'd root
-            // table (the construction invariant) — an INACTIVE table edited
-            // through its KZERO+PA alias via map_to's temp-recursive dance.
-            // The child is mid-construction: not enqueued on any run queue
-            // (rfork_clone enqueues it only after this copy returns), so no
-            // CPU's TLB can hold its entries.  The shared page's PA
-            // is the parent's live page — refcounted below before any free
-            // path can see the child's record.
-            unsafe {
-                let mut physalloc = PhysPageAllocator {};
-                let mut vmt = VmTraitImpl {};
-                (*child.root_table)
-                    .map_to(
-                        &mut physalloc,
-                        &mut vmt,
-                        entry,
-                        rec.va,
-                        PageSize::Page4K,
-                        RootPageTableType::User,
-                    )
-                    .map_err(|_| "rfork: child shared map failed")?;
-            }
-            share_user_page(rec.phys as u64);
-            child.mapping_log.push(MappingRecord {
-                va: rec.va,
-                phys: rec.phys,
-                size: rec.size,
-                kind: rec.kind,
-            });
+            rfork_share_mapping(child, rec)?;
             continue;
         }
         // The copy arm (always for Text/Stack/Tos; for Data/Bss without
@@ -3381,102 +3385,147 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &TrapFrame, flag: u64)
     // return above discharges it at drop.
     text_copy.finish();
 
-    // The bss sweep (RFMEM only): the log walk above shares only PRESENT
-    // pages, but the parent's bss range can cover pages brk_-grown and
-    // never touched (exec maps data+bss eagerly; brk_ extends lazily).
-    // Left alone, each proc would fault such a page in PRIVATELY —
-    // silent divergence where the donor's shared segment shows both
-    // procs the same page.  Materialize each absent in-range page now as
-    // ONE zeroed page mapped into BOTH tables (the parent's ACTIVE table
-    // and the child's INACTIVE one — map_to handles both), closing the
-    // hole by construction; from here on the family's bss grows only
-    // through sys_brk_'s family arm.
+    // The RFMEM sweep: the log walk above shares only PRESENT pages, but
+    // under RFMEM the whole data segment and bss must end up shared — a
+    // page the parent lacks at fork time included.  (exec maps data+bss
+    // eagerly, so what is absent here is a page brk_-grown and never
+    // touched, or an untouched data page the evictor dropped.)  Left
+    // alone, each proc would fault such a page in PRIVATELY — silent
+    // divergence where the donor's shared segment shows both procs the
+    // same page.  Every page from the data segment's start to the end of
+    // bss that the parent lacks is materialized now, by kind:
+    //
+    // - a Data page (the classifier's word for the whole data segment and
+    //   for the page the segment ends in, which carries the tail of the
+    //   initialised data beside the head of bss) is paged in from the
+    //   image for the parent, and the child shares it as the log walk
+    //   shares a present Data page;
+    // - a Bss page is born ONE zero page mapped into BOTH tables (the
+    //   parent's ACTIVE table and the child's INACTIVE one — map_to
+    //   handles both), closing the hole by construction; from here on the
+    //   family's bss grows only through sys_brk_'s family arm.
+    //
+    // Never zero-fill a page blindly: until 2026-11-28 this sweep ran
+    // from the page the data segment ends in and zero-filled every page
+    // it found absent, that one too, in the parent as in the child — a
+    // program's statically initialised data read back as zeros after its
+    // first shared-memory fork (x86_64, where exec leaves data
+    // demand-paged, measured it as the owner's defect (4): the C library's
+    // heap pool lost its lock hook and every 9P server the boot chain
+    // forks that way died at pc=0).  The x86_64 sweep carries the rule
+    // and its tests; this is the same rule.
     if rfmem {
-        let sweep = parent.segments.as_ref().map(|segs| {
-            (segs.bss.0.start & !(PAGE_SIZE_4K - 1), segs.bss.0.end.next_multiple_of(PAGE_SIZE_4K))
-        });
+        let sweep = parent
+            .segments
+            .as_ref()
+            .map(|segs| (segs.data.0.start, segs.bss.0.end.next_multiple_of(PAGE_SIZE_4K)));
         if let Some((start, end)) = sweep {
             let mut va = start;
             while va < end {
                 if parent.mapping_log.iter().any(|m| m.va == va) {
+                    // Shared by the log walk above.
                     va += PAGE_SIZE_4K;
                     continue;
                 }
-                let pa =
-                    pagealloc::allocate_physpage().map_err(|_| "rfork: sweep page alloc failed")?;
-                map_kernel_alias(pa.addr())?;
-                // SAFETY: the page's KZERO+PA alias was just (re)mapped r/w
-                // in the kernel table above; one full fresh page, owned.
-                unsafe {
-                    ptr::write_bytes(physaddr_as_ptr_mut_offset_from_kzero::<u8>(pa), 0, PAGE_SIZE_4K);
-                }
-                let entry = Entry::rw_user_data().with_phys_addr(pa);
-                // SAFETY: for both map_to calls below —
-                // parent.root_table is the parent's ACTIVE user table on
-                // this CPU (the parent is the current proc; a proc runs
-                // on exactly one CPU at a time), and the VA was unmapped,
-                // so the per-write TLB invalidate covers the addition —
-                // no stale translation can exist for a previously-invalid
-                // VA; child.root_table is INACTIVE (mid-construction,
-                // never enqueued) and edited via the temp-recursive
-                // dance, so no CPU's TLB can hold its entries.
-                unsafe {
-                    let mut physalloc = PhysPageAllocator {};
-                    let mut vmt = VmTraitImpl {};
-                    if (*parent.root_table)
-                        .map_to(
-                            &mut physalloc,
-                            &mut vmt,
-                            entry,
-                            va,
-                            PageSize::Page4K,
-                            RootPageTableType::User,
-                        )
-                        .is_err()
-                    {
-                        // The page never published a refcount nor a
-                        // mapping record — free it (the brk arm's failure
-                        // hygiene), or every failed growth leaks it.
-                        let _ = pagealloc::deallocate_physpage(pa);
-                        return Err("rfork: sweep parent map failed");
+                let kind = parent.segments.as_ref().and_then(|segs| segs.classify(va));
+                match kind {
+                    Some(SegKind::Data) if parent.text_source.is_some() => {
+                        crate::fault::ensure_user_resident(parent, va, va + PAGE_SIZE_4K, false)?;
+                        let rec = parent
+                            .mapping_log
+                            .iter()
+                            .find(|m| m.va == va)
+                            .copied()
+                            .expect("the data page is now mapped");
+                        rfork_share_mapping(child, &rec)?;
                     }
-                    let mut physalloc = PhysPageAllocator {};
-                    let mut vmt = VmTraitImpl {};
-                    if (*child.root_table)
-                        .map_to(
-                            &mut physalloc,
-                            &mut vmt,
-                            entry,
+                    Some(SegKind::Bss) => {
+                        let pa =
+                            pagealloc::allocate_physpage().map_err(|_| "rfork: sweep page alloc failed")?;
+                        map_kernel_alias(pa.addr())?;
+                        // SAFETY: the page's KZERO+PA alias was just (re)mapped r/w
+                        // in the kernel table above; one full fresh page, owned.
+                        unsafe {
+                            ptr::write_bytes(physaddr_as_ptr_mut_offset_from_kzero::<u8>(pa), 0, PAGE_SIZE_4K);
+                        }
+                        let entry = Entry::rw_user_data().with_phys_addr(pa);
+                        // SAFETY: for both map_to calls below —
+                        // parent.root_table is the parent's ACTIVE user table on
+                        // this CPU (the parent is the current proc; a proc runs
+                        // on exactly one CPU at a time), and the VA was unmapped,
+                        // so the per-write TLB invalidate covers the addition —
+                        // no stale translation can exist for a previously-invalid
+                        // VA; child.root_table is INACTIVE (mid-construction,
+                        // never enqueued) and edited via the temp-recursive
+                        // dance, so no CPU's TLB can hold its entries.
+                        unsafe {
+                            let mut physalloc = PhysPageAllocator {};
+                            let mut vmt = VmTraitImpl {};
+                            if (*parent.root_table)
+                                .map_to(
+                                    &mut physalloc,
+                                    &mut vmt,
+                                    entry,
+                                    va,
+                                    PageSize::Page4K,
+                                    RootPageTableType::User,
+                                )
+                                .is_err()
+                            {
+                                // The page never published a refcount nor a
+                                // mapping record — free it (the brk arm's failure
+                                // hygiene), or every failed growth leaks it.
+                                let _ = pagealloc::deallocate_physpage(pa);
+                                return Err("rfork: sweep parent map failed");
+                            }
+                            let mut physalloc = PhysPageAllocator {};
+                            let mut vmt = VmTraitImpl {};
+                            if (*child.root_table)
+                                .map_to(
+                                    &mut physalloc,
+                                    &mut vmt,
+                                    entry,
+                                    va,
+                                    PageSize::Page4K,
+                                    RootPageTableType::User,
+                                )
+                                .is_err()
+                            {
+                                // The parent's mapping is UNTRACKED (the record
+                                // push below never ran for this page) — unmap it
+                                // and free the page, or the page leaks and the
+                                // parent's exit walk (free_user_mappings) can't
+                                // see it to free it (WR-03).  Mirrors the brk
+                                // arm's per-member failure unwind.
+                                let mut physalloc = PhysPageAllocator {};
+                                let mut vmt = VmTraitImpl {};
+                                let _ = (*parent.root_table).map_to(
+                                    &mut physalloc,
+                                    &mut vmt,
+                                    Entry::empty(),
+                                    va,
+                                    PageSize::Page4K,
+                                    RootPageTableType::User,
+                                );
+                                let _ = pagealloc::deallocate_physpage(pa);
+                                return Err("rfork: sweep child map failed");
+                            }
+                        }
+                        let rec = MappingRecord {
                             va,
-                            PageSize::Page4K,
-                            RootPageTableType::User,
-                        )
-                        .is_err()
-                    {
-                        // The parent's mapping is UNTRACKED (the record
-                        // push below never ran for this page) — unmap it
-                        // and free the page, or the page leaks and the
-                        // parent's exit walk (free_user_mappings) can't
-                        // see it to free it (WR-03).  Mirrors the brk
-                        // arm's per-member failure unwind.
-                        let mut physalloc = PhysPageAllocator {};
-                        let mut vmt = VmTraitImpl {};
-                        let _ = (*parent.root_table).map_to(
-                            &mut physalloc,
-                            &mut vmt,
-                            Entry::empty(),
-                            va,
-                            PageSize::Page4K,
-                            RootPageTableType::User,
-                        );
-                        let _ = pagealloc::deallocate_physpage(pa);
-                        return Err("rfork: sweep child map failed");
+                            phys: pa.addr() as usize,
+                            size: PAGE_SIZE_4K,
+                            kind: SegKind::Bss,
+                        };
+                        parent.mapping_log.push(rec);
+                        child.mapping_log.push(rec);
+                        share_new_user_page(pa.addr(), 2);
                     }
+                    // Nothing the sweep can hold: no segment covers the
+                    // page, or data with no byte source to read.  The page
+                    // stays absent, as before the sweep existed.
+                    _ => {}
                 }
-                let rec = MappingRecord { va, phys: pa.addr() as usize, size: PAGE_SIZE_4K, kind: SegKind::Bss };
-                parent.mapping_log.push(rec);
-                child.mapping_log.push(rec);
-                share_new_user_page(pa.addr(), 2);
                 va += PAGE_SIZE_4K;
             }
         }

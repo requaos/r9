@@ -3473,6 +3473,28 @@ pub fn rfork_clone(parent: &mut Proc, frame: &Ureg, flag: u64) -> Result<u64> {
     Ok(child_pid)
 }
 
+/// RFMEM's share arm, for one parent mapping: no copy — the parent's PA
+/// maps straight into the child's table at the same VA, the sharer count
+/// records the second user, and the child's log gets the record.
+fn rfork_share_mapping(child: &mut Proc, rec: &MappingRecord) -> Result<()> {
+    let created = pml4_map_user(child.pml4_pa, rec.va, rec.phys as u64, rec.kind.pte())
+        .map_err(|_| "rfork: child shared map failed")?;
+    for c in created.into_iter().flatten() {
+        child.mapping_tables.push(c);
+    }
+    share_user_page(rec.phys as u64);
+    // MEM-15/D-14: an RFMEM-shared Data/Bss page is writable by two
+    // procs and must never be dropped by the evictor — mark any cached
+    // copy dirty (aarch64's RFMEM dirty-marking rule).
+    if let Some(cache) = crate::pagealloc::page_cache() {
+        cache.mark_data_dirty(PhysAddr::new(rec.phys as u64));
+    }
+    child
+        .mapping_log
+        .insert(rec.va, rec.phys, rec.kind)
+        .map_err(|_| "rfork: child mapping record failed")
+}
+
 /// The fallible body of rfork_clone after the child exists: an EAGER
 /// page-for-page copy of every user mapping, a dup'd fd table, mirrored
 /// segment records + byte source, and a copy of the parent's live Ureg
@@ -3487,26 +3509,7 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &Ureg, flag: u64) -> R
     // refcounted in SHARED_PAGES against the exit/exec frees.
     for rec in parent.mapping_log.iter() {
         if rfmem && matches!(rec.kind, SegKind::Data | SegKind::Bss) {
-            // The RFMEM share arm: no copy — the parent's PA maps
-            // straight into the child's table at the same VA, then the
-            // refcount records the second sharer.
-            let created =
-                pml4_map_user(child.pml4_pa, rec.va, rec.phys as u64, rec.kind.pte())
-                    .map_err(|_| "rfork: child shared map failed")?;
-            for c in created.into_iter().flatten() {
-                child.mapping_tables.push(c);
-            }
-            share_user_page(rec.phys as u64);
-            // MEM-15/D-14: an RFMEM-shared Data/Bss page is writable by
-            // two procs and must never be dropped by the evictor — mark
-            // any cached copy dirty (aarch64's RFMEM dirty-marking rule).
-            if let Some(cache) = crate::pagealloc::page_cache() {
-                cache.mark_data_dirty(PhysAddr::new(rec.phys as u64));
-            }
-            child
-                .mapping_log
-                .insert(rec.va, rec.phys, rec.kind)
-                .map_err(|_| "rfork: child mapping record failed")?;
+            rfork_share_mapping(child, &rec)?;
             continue;
         }
         // The copy arm (always for Text/Stack/Tos; for Data/Bss without
@@ -3545,64 +3548,101 @@ fn rfork_copy(parent: &mut Proc, child: &mut Proc, frame: &Ureg, flag: u64) -> R
     // instruction caches — the aarch64 port's per-page CTR_EL0 flush
     // step is deliberately absent here (the re-key the plan records).
 
-    // The bss sweep (RFMEM only): the log walk above shares only
-    // PRESENT pages, but the parent's bss range can cover pages
-    // brk_-grown and never touched.  Materialize each absent in-range
-    // page now as ONE zeroed page mapped into BOTH tables, closing the
-    // hole by construction.
+    // The RFMEM sweep: the log walk above shares only PRESENT pages, but
+    // under RFMEM the whole data segment and bss must end up shared —
+    // a page the parent has not touched yet included, since the bss range
+    // covers pages brk_-grown and never touched, and the parent may still
+    // write a data page it has never read.  Every page from the data
+    // segment's start to the end of bss that the parent lacks is
+    // materialized now, by kind:
+    //
+    // - a Data page (the classifier's word for the whole data segment and
+    //   for the page the segment ends in, which carries the tail of the
+    //   initialised data beside the head of bss) is read from the image for
+    //   the parent, and the child shares it as the log walk shares a
+    //   present Data page;
+    // - a Bss page is born ONE zero page mapped into BOTH tables.
+    //
+    // Until 2026-11-28 the sweep ran from the page the data segment ends in
+    // and zero-filled every page it found absent, that one too, in the
+    // parent as in the child: a program's statically initialised data read
+    // back as zeros after its first shared-memory fork.  Measured: the C
+    // library's heap pool lost its lock hook, so every 9P server the boot
+    // chain forks that way died at pc=0 — what the keyfs, auth and services
+    // gates were stopping on (the owner's defect (4)).  Its trigger was
+    // narrow and easy to miss: a server that posts a service name writes
+    // that page first (its printf mallocs) and survives; one that does not
+    // dies.
     if rfmem {
-        let sweep = parent.segments.as_ref().map(|segs| {
-            (segs.bss.0.start & !(PAGE_SIZE_4K - 1), round_up_page(segs.bss.0.end))
-        });
+        let sweep = parent
+            .segments
+            .as_ref()
+            .map(|segs| (segs.data.0.start, round_up_page(segs.bss.0.end)));
         if let Some((start, end)) = sweep {
             let mut va = start;
             while va < end {
                 if parent.mapping_log.get(va).is_some() {
+                    // Shared by the log walk above.
                     va += PAGE_SIZE_4K;
                     continue;
                 }
-                let pa = alloc_phys_page().map_err(|_| "rfork: sweep page alloc failed")?;
-                // (Pre-zeroed by the seam.)
-                let created = match pml4_map_user(parent.pml4_pa, va, pa, SegKind::Bss.pte()) {
-                    Ok(c) => c,
-                    Err(_) => {
-                        // The page never published a refcount nor a
-                        // record — free it or it leaks.
-                        free_phys_page(pa);
-                        return Err("rfork: sweep parent map failed");
+                let kind = parent.segments.as_ref().and_then(|segs| segs.classify(va));
+                match kind {
+                    Some(SegKind::Data) if parent.text_source.is_some() => {
+                        fault::ensure_user_resident(parent, va, va + PAGE_SIZE_4K, false)?;
+                        let rec = parent.mapping_log.get(va).expect("the data page is now mapped");
+                        rfork_share_mapping(child, &rec)?;
                     }
-                };
-                for c in created.into_iter().flatten() {
-                    parent.mapping_tables.push(c);
-                }
-                let created = match pml4_map_user(child.pml4_pa, va, pa, SegKind::Bss.pte()) {
-                    Ok(c) => c,
-                    Err(_) => {
-                        // The parent's mapping is UNTRACKED (the record
-                        // push below never ran) — unmap it and free the
-                        // page, mirroring the brk arm's failure hygiene.
-                        pml4_unmap_user(parent.pml4_pa, va);
-                        free_phys_page(pa);
-                        return Err("rfork: sweep child map failed");
+                    Some(SegKind::Bss) => {
+                        let pa = alloc_phys_page().map_err(|_| "rfork: sweep page alloc failed")?;
+                        // (Pre-zeroed by the seam.)
+                        let created = match pml4_map_user(parent.pml4_pa, va, pa, SegKind::Bss.pte()) {
+                            Ok(c) => c,
+                            Err(_) => {
+                                // The page never published a refcount nor a
+                                // record — free it or it leaks.
+                                free_phys_page(pa);
+                                return Err("rfork: sweep parent map failed");
+                            }
+                        };
+                        for c in created.into_iter().flatten() {
+                            parent.mapping_tables.push(c);
+                        }
+                        let created = match pml4_map_user(child.pml4_pa, va, pa, SegKind::Bss.pte()) {
+                            Ok(c) => c,
+                            Err(_) => {
+                                // The parent's mapping is UNTRACKED (the record
+                                // push below never ran) — unmap it and free the
+                                // page, mirroring the brk arm's failure hygiene.
+                                pml4_unmap_user(parent.pml4_pa, va);
+                                free_phys_page(pa);
+                                return Err("rfork: sweep child map failed");
+                            }
+                        };
+                        for c in created.into_iter().flatten() {
+                            child.mapping_tables.push(c);
+                        }
+                        let recorded = parent.mapping_log.insert(va, pa as usize, SegKind::Bss).and_then(
+                            |()| child.mapping_log.insert(va, pa as usize, SegKind::Bss),
+                        );
+                        if let Err(msg) = recorded {
+                            // Drop whichever half was recorded, unmap both,
+                            // free the page (the sweep's failure hygiene), and
+                            // report.
+                            parent.mapping_log.remove(va);
+                            child.mapping_log.remove(va);
+                            pml4_unmap_user(parent.pml4_pa, va);
+                            pml4_unmap_user(child.pml4_pa, va);
+                            free_phys_page(pa);
+                            return Err(msg);
+                        }
+                        share_new_user_page(pa, 2);
                     }
-                };
-                for c in created.into_iter().flatten() {
-                    child.mapping_tables.push(c);
+                    // Nothing the sweep can hold: no segment covers the page,
+                    // or data with no byte source to read.  The page stays
+                    // absent, as before the sweep existed.
+                    _ => {}
                 }
-                let rec = MappingRecord { va, phys: pa as usize, size: PAGE_SIZE_4K, kind: SegKind::Bss };
-                let recorded = parent.mapping_log.insert(va, rec.phys, SegKind::Bss)
-                    .and_then(|()| child.mapping_log.insert(va, rec.phys, SegKind::Bss));
-                if let Err(msg) = recorded {
-                    // Drop whichever half was recorded, unmap both, free
-                    // the page (the sweep's failure hygiene), and report.
-                    parent.mapping_log.remove(va);
-                    child.mapping_log.remove(va);
-                    pml4_unmap_user(parent.pml4_pa, va);
-                    pml4_unmap_user(child.pml4_pa, va);
-                    free_phys_page(pa);
-                    return Err(msg);
-                }
-                share_new_user_page(pa, 2);
                 va += PAGE_SIZE_4K;
             }
         }
@@ -4082,6 +4122,101 @@ mod tests {
         assert_eq!(parent.user, b"norbert".to_vec());
         // Retire the test child so it never counts as a live proc for
         // any later pin in this binary.
+        child.state = ProcState::Moribund;
+    }
+
+    /// An image for the RFMEM sweep tests: mock_segments' data segment
+    /// (0x100 bytes, ending mid-page) as a pattern at the data file base,
+    /// zeros elsewhere.
+    fn sweep_image() -> ByteSource {
+        let data_file_base = 0x40u64;
+        let mut file = alloc::vec![0u8; 0x400];
+        for i in 0..0x100usize {
+            file[data_file_base as usize + i] = (0xA0 ^ i) as u8;
+        }
+        ByteSource::new(ByteBacking::Mnt { file: Arc::new(file) }, data_file_base)
+    }
+
+    /// RFMEM leaves the whole data segment and bss shared after the fork:
+    /// a data page the parent never touched is read from the image and
+    /// shared, its bytes intact; a bss page is born a shared zero page; a
+    /// page the parent has is shared as it is.  Until 2026-11-28 the sweep
+    /// zero-filled the first of those (the page the data segment ends in):
+    /// a program's statically initialised data came back as zeros after
+    /// its first shared-memory fork.
+    #[test]
+    fn rfork_mem_shares_the_data_and_bss_pages_the_parent_never_touched() {
+        let base = 0x1000_0000usize;
+        let mut parent = new_user_proc("sweeptest").expect("construction succeeds");
+        parent.segments = Some(mock_segments());
+        parent.text_source = Some(sweep_image());
+        // One bss page present before the fork, as a program that had used
+        // its bss would have it.
+        let had = parent.map_user_page(base + 0x3000, SegKind::Bss).expect("a bss page");
+        let frame = crate::dat::Ureg::zeroed();
+        let child_pid =
+            rfork_clone(&mut parent, &frame, RFPROC | RFMEM | RFNOWAIT).expect("rfork_clone");
+        let node = LockNode::new();
+        let mut table = PROC_TABLE.lock(&node);
+        let child = table
+            .procs
+            .iter_mut()
+            .flatten()
+            .find(|p| p.pid == child_pid)
+            .expect("the child is table-resident");
+        // One frame in both tables for every page of the data segment and
+        // bss: the data page (its end mid-page), the bss page the parent
+        // had, and the bss page it lacked.
+        for (va, kind) in
+            [(base + 0x2000, SegKind::Data), (base + 0x3000, SegKind::Bss), (base + 0x4000, SegKind::Bss)]
+        {
+            let prec = parent.mapping_log.get(va).unwrap_or_else(|| panic!("the parent has {va:#x}"));
+            let crec = child.mapping_log.get(va).unwrap_or_else(|| panic!("the child has {va:#x}"));
+            assert_eq!(prec.kind, kind, "{va:#x}");
+            assert_eq!((crec.phys, crec.kind), (prec.phys, kind), "one frame, two tables: {va:#x}");
+        }
+        assert_eq!(parent.mapping_log.get(base + 0x3000).map(|r| r.phys), Some(had as usize));
+        assert!(parent.mapping_log.get(base + 0x5000).is_none(), "past bss, nothing");
+        // SAFETY: the record names the seam page the sweep mapped for this
+        // test's parent; exactly one page is read.
+        let bytes = unsafe {
+            core::slice::from_raw_parts(
+                phys_ptr_mut(parent.mapping_log.get(base + 0x2000).expect("the data page").phys as u64),
+                PAGE_SIZE_4K,
+            )
+        };
+        for i in 0..0x100usize {
+            assert_eq!(bytes[i], (0xA0 ^ i) as u8, "data byte {i} survived the fork");
+        }
+        assert!(bytes[0x100..].iter().all(|&b| b == 0), "the bss head of that page is zero");
+        // Retire the test child so it never counts as a live proc.
+        child.state = ProcState::Moribund;
+    }
+
+    /// Without RFMEM nothing is materialised: the fork copies what the
+    /// parent has, and a page the parent never touched stays absent in
+    /// both.
+    #[test]
+    fn a_plain_fork_materialises_nothing() {
+        let base = 0x1000_0000usize;
+        let mut parent = new_user_proc("plainfork").expect("construction succeeds");
+        parent.segments = Some(mock_segments());
+        parent.text_source = Some(sweep_image());
+        parent.map_user_page(base + 0x3000, SegKind::Bss).expect("a bss page");
+        let frame = crate::dat::Ureg::zeroed();
+        let child_pid = rfork_clone(&mut parent, &frame, RFPROC | RFNOWAIT).expect("rfork_clone");
+        assert!(parent.mapping_log.get(base + 0x2000).is_none());
+        assert!(parent.mapping_log.get(base + 0x4000).is_none());
+        let node = LockNode::new();
+        let mut table = PROC_TABLE.lock(&node);
+        let child = table
+            .procs
+            .iter_mut()
+            .flatten()
+            .find(|p| p.pid == child_pid)
+            .expect("the child is table-resident");
+        assert_eq!(child.mapping_log.len(), 1, "the one page the parent had, copied");
+        assert!(child.mapping_log.get(base + 0x2000).is_none());
         child.state = ProcState::Moribund;
     }
 

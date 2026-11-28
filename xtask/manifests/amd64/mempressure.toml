@@ -1,0 +1,242 @@
+# The amd64 MEM-PRESSURE image: the chain image plus sleep(1), for the
+# x86_64 mem-pressure gate (gates/x86_64/mem-pressure.expect).
+#
+# The gate's first worker is `{ hsleep 60; echo pinnedok } | cat &` — a
+# pipe reader blocked until a writer speaks a minute later — and the
+# chain image carries no sleep.  Composed from chain.paq the worker
+# printed `pinnedok' at once (sleep's exec failed) and the gate's `wait'
+# stage could never see it.  chain.toml stays the D-29 reference bake's
+# image; this manifest is that file with one entry added (/amd64/bin/
+# hsleep, staged from the tree's amd64/bin/sleep as tier.toml stages it).
+
+schema = 1
+arch = "amd64"
+image = "mempressure"
+
+[[file]]
+path = "/README.md"
+source = "harvey"
+from = "build/x86_64/root-tree/README.md"
+mode = "0644"
+
+[[dir]]
+path = "/adm"
+
+[[dir]]
+path = "/adm/timezone"
+
+[[file]]
+path = "/adm/timezone/local"
+source = "harvey"
+from = "adm/timezone/local"
+mode = "0644"
+
+[[dir]]
+path = "/amd64"
+
+[[dir]]
+path = "/amd64/bin"
+
+[[file]]
+path = "/amd64/bin/cat"
+source = "harvey"
+from = "amd64/bin/cat"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/echo"
+source = "harvey"
+from = "amd64/bin/echo"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/hsleep"
+source = "harvey"
+from = "amd64/bin/sleep"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/ls"
+source = "harvey"
+from = "amd64/bin/ls"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/ps"
+source = "harvey"
+from = "amd64/bin/ps"
+mode = "0755"
+
+[[file]]
+path = "/amd64/bin/rc"
+source = "harvey"
+from = "amd64/bin/rc"
+mode = "0755"
+
+[[file]]
+path = "/amd64/init"
+source = "harvey"
+from = "amd64/init"
+mode = "0755"
+
+[[dir]]
+path = "/bin"
+
+[[dir]]
+path = "/bin/service"
+
+[[file]]
+path = "/bin/service/tcp17010"
+source = "harvey"
+from = "build/x86_64/root-tree/bin/service/tcp17010"
+mode = "0755"
+
+[[dir]]
+path = "/boot"
+
+[[file]]
+path = "/boot/boot"
+source = "harvey"
+from = "build/x86_64/out/boot"
+mode = "0755"
+
+[[file]]
+path = "/boot/paqfs"
+source = "harvey"
+from = "amd64/bin/paqfs"
+mode = "0755"
+
+[[dir]]
+path = "/dev"
+
+[[dir]]
+path = "/env"
+
+[[dir]]
+path = "/fd"
+
+[[dir]]
+path = "/lib"
+
+[[file]]
+path = "/lib/churn-cats.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/churn-cats.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/namespace"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/namespace"
+mode = "0644"
+
+[[dir]]
+path = "/lib/ndb"
+
+[[file]]
+path = "/lib/ndb/local.template"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/ndb/local.template"
+mode = "0644"
+
+[[file]]
+path = "/lib/netaddr.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netaddr.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-dhcp.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netip-dhcp.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-loopback.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netip-loopback.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-static.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netip-static.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-tap.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netip-tap.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netip-tcp.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netip-tcp.rc"
+mode = "0644"
+
+[[file]]
+path = "/lib/netstress.rc"
+source = "harvey"
+from = "build/x86_64/root-tree/lib/netstress.rc"
+mode = "0644"
+
+[[dir]]
+path = "/mnt"
+
+[[dir]]
+path = "/net"
+
+[[dir]]
+path = "/proc"
+
+[[dir]]
+path = "/rc"
+
+[[dir]]
+path = "/rc/bin"
+
+[[file]]
+path = "/rc/bin/cpurc"
+source = "harvey"
+from = "build/x86_64/root-tree/rc/bin/cpurc"
+mode = "0755"
+
+[[file]]
+path = "/rc/bin/termrc"
+source = "harvey"
+from = "build/x86_64/root-tree/rc/bin/termrc"
+mode = "0644"
+
+[[dir]]
+path = "/rc/lib"
+
+[[file]]
+path = "/rc/lib/rcmain"
+source = "harvey"
+from = "rc/lib/rcmain"
+mode = "0644"
+
+[[dir]]
+path = "/root"
+
+[[dir]]
+path = "/srv"
+
+[[dir]]
+path = "/tmp"
+
+[[dir]]
+path = "/usr"
+
+[[dir]]
+path = "/usr/glenda"
+
+[[dir]]
+path = "/usr/glenda/lib"
+
+[[file]]
+path = "/usr/glenda/lib/profile"
+source = "harvey"
+from = "build/x86_64/root-tree/usr/glenda/lib/profile"
+mode = "0644"
