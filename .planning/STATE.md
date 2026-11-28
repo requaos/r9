@@ -156,14 +156,30 @@ None yet.
   composed smoke gate now passes `smp-online`, `paqfs` and `version` with `smp: cpu 1 online` and
   `smp: tlb shootdown ok`; on TCG the two lines print at +12 ms/+13 ms from ring 3. CI's single-CPU
   TCG leg (`R9_SMP=1`) passes 31 stages on the branch and then stops at `cpu-keyfs-ok` — defect (4)
-  below — identical on `main` (0e783a0, its own kernel build, R9_SMP=1 R9_ACCEL=tcg): the same 31 stages pass and the run ends in the same `TIMEOUT at stage: cpu-keyfs-ok` — the branch does not change the single-CPU leg. `cargo xtask test` exits 0 on the branch (it did not compile at `main`). **The gate is
-  still red at `-smp 2` on both accels** on a separate defect, prepared as
-  `.planning/debug/x86_64-smp2-mcs-kstack.md`: MCS lock nodes sit on the calling CPU's kernel stack
-  and every proc's kstack is at one VA under its own PML4, so a cross-CPU hand-off writes into the
-  wrong stack and wedges both CPUs (CPU 1 waiting on the heap lock, CPU 0 unable to unlock it). It
-  needs an owner design decision (shared kstack window, stack-independent nodes, or another lock).
-  Note: "TCG passes" never held for two CPUs — CI's x86_64 smoke job pins `R9_SMP=1`
+  below — identical on `main` (0e783a0, its own kernel build, R9_SMP=1 R9_ACCEL=tcg): the same 31 stages pass and the run ends in the same `TIMEOUT at stage: cpu-keyfs-ok` — the branch does not change the single-CPU leg. `cargo xtask test` exits 0 on the branch (it did not compile at `main`). The
+  `-smp 2` wedge behind it (MCS lock nodes on the calling CPU's kernel stack, every proc's kstack at
+  one VA under its own PML4) is fixed on the next branch, below. Note: "TCG passes" never held for two CPUs — CI's x86_64 smoke job pins `R9_SMP=1`
   (`gates.yml:148-158`). Record: `.planning/debug/x86_64-ap-bringup.md`.
+- **x86_64 two-CPU fix — run 2026-11-27, awaiting the owner's verify.** Branch
+  `fix/x86_64-smp2-kstack` (stacked on `debug/x86_64-ap-bringup`; local, nothing pushed): `667b545` reserves one arena of
+  contiguous 16 KiB kernel-stack slots at boot, reached at the KZERO alias every page table carries, so a lock hand-off between
+  two CPUs writes a node both can see; `9a2b5a3` holds the console lock across a whole line; `3ff89ab` makes the scheduler
+  context run on the boot page table — a CPU used to idle, and the scheduler used to run, on the page-table root of the process
+  it had left, and once that process exited the root went back to the allocator and was zeroed under it (a triple fault the churn
+  gate reached 600 cats in, at two CPUs only; 14 stops in 25 workload runs before, 64 of 64 complete after). On the KVM host at
+  the default `-smp 2`, on `3ff89ab`: churn and net-smoke pass; smoke passes the chain leg and the CPU ladder to `cpu-ether-ok`
+  and stops at `cpu-keyfs-ok` (defect (4)); tier-1 and services end where `main`
+  ends at `-smp 1` (controls run), on `fpprobe` (see the next bullet) and services' `srv` and `exportfs`
+  (`SVC-SKIP-WHY no-rc-lib-rcmain-the-srv-child-rc-dies`; not investigated); auth fails on `hmntgen` (defect (4)); `main` at `-smp 1` fails
+  each of those the same way (controls run). The tier-1, services, churn and auth drivers hard-code `-smp 2`; only smoke reads
+  `R9_SMP`. `cargo xtask test` exits 0 (1254), clippy exits 0. Record: `.planning/debug/x86_64-smp2-mcs-kstack.md`.
+- **Two findings of that run, for the owner.** (a) Defect (4) is not a hang: the keyfs rung's helper `hmntgen` calls `fauth`
+  (syscall 10), which the dispatch table leaves unimplemented by record (`x86_64/src/syscall.rs`: "OSEEK/FAUTH stay
+  loud-None"), and then faults at pc=0; `cpurc: FAIL keyfs` cascades down the ladder and the gate's 600 s wait for
+  `cpurc: KEYFS-OK` is what looks like a hang. `boot`, `init` and `hfactotum` call it too. (b) tier-1's `fpprobe` fails its
+  flags-nt sub-leg on `main` at `-smp 1` as well: `sys_sleep` blocked once and reported the first wake as "interrupted", and a
+  child's exit wakes its parent whatever it is blocked on. Fixed on the stacked branch `fix/x86_64-sleep-wake` (its one commit
+  sits on the branch above): the sleep ends only at its deadline or on a note; tier-1 then passes at `-smp 1` and at `-smp 2`.
 - **Scale targets (owner, 2026-11-27) — audited, decisions pending.** Future systems: more than
   100 GiB of RAM, hundreds of terabytes of storage, file paths exceeding 2048 characters. None of
   the three is stated anywhere in the plans, and the verification plan's VMs are 2 GiB. Audit with
