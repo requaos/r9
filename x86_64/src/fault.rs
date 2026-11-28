@@ -30,6 +30,8 @@
 //! (MEM-15).  bss/stack/tos map zeroed pages (D-14: dirty anonymous memory
 //! is never evicted).
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use port::mem::{PhysAddr, PAGE_SIZE_4K};
 use port::println;
 
@@ -41,6 +43,24 @@ use crate::proc::{
 // Test-only: kernel_address_rejection pins the bound against KZERO.
 #[cfg(test)]
 use crate::proc::KZERO;
+
+/// Whether a demand page-in prints its line.  Off unless the boot line
+/// carries `faulttrace`: a line per fault is a debugging aid that costs
+/// a console lock and thirty-odd UART bytes a page, and a process that
+/// touches gibibytes takes millions of faults.
+static TRACE: AtomicBool = AtomicBool::new(false);
+
+/// Arm the page-in trace (main.rs reads the boot line).
+pub(crate) fn set_trace(on: bool) {
+    TRACE.store(on, Ordering::Relaxed);
+}
+
+/// A page-in trace line (see [`set_trace`]).
+fn trace(args: core::fmt::Arguments<'_>) {
+    if TRACE.load(Ordering::Relaxed) {
+        println!("{args}");
+    }
+}
 
 /// `#PF` error-code bits (SDM Vol. 3A §4.7).
 pub(crate) const PF_P: u64 = 1 << 0;
@@ -232,8 +252,8 @@ fn page_in_from_image(proc: &mut Proc, page_va: usize, kind: SegKind) -> Result<
         return Err(reason);
     }
     match kind {
-        SegKind::Text => println!("fault: text page-in va={page_va:#x}"),
-        SegKind::Data => println!("fault: data page-in va={page_va:#x}"),
+        SegKind::Text => trace(format_args!("fault: text page-in va={page_va:#x}")),
+        SegKind::Data => trace(format_args!("fault: data page-in va={page_va:#x}")),
         _ => {}
     }
     Ok(())
@@ -298,9 +318,9 @@ fn page_in_zeroed(proc: &mut Proc, page_va: usize, kind: SegKind) -> Result<(), 
         return Err(reason);
     }
     match kind {
-        SegKind::Stack => println!("fault: stack growth va={page_va:#x}"),
-        SegKind::Bss => println!("fault: bss page-in va={page_va:#x}"),
-        _ => println!("fault: zero page-in va={page_va:#x}"),
+        SegKind::Stack => trace(format_args!("fault: stack growth va={page_va:#x}")),
+        SegKind::Bss => trace(format_args!("fault: bss page-in va={page_va:#x}")),
+        _ => trace(format_args!("fault: zero page-in va={page_va:#x}")),
     }
     Ok(())
 }

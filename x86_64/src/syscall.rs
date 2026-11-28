@@ -1164,11 +1164,18 @@ fn sys_brk_(frame: &mut Ureg, proc: &mut Proc) -> u64 {
         let segs = proc.segments.as_ref().unwrap();
         (segs.bss.0.start, segs.bss.0.end)
     };
+    // A failed break is said on the console too: libc's malloc turns it
+    // into a bare "out of space", and the reason would otherwise never
+    // be seen.
+    fn brk_failed(proc: &mut Proc, addr: usize, reason: &'static str) -> u64 {
+        println!("brk: {reason} (pid {} addr {addr:#x})", proc.pid);
+        err(proc, reason)
+    }
     if addr < bss_start {
-        return err(proc, "brk: address below the heap base");
+        return brk_failed(proc, addr, "brk: address below the heap base");
     }
     if addr > exec::USTOP {
-        return err(proc, "brk: out of memory");
+        return brk_failed(proc, addr, "brk: out of memory");
     }
     match proc.rfmem_family {
         // The ordinary private shape: move the caller's break and map
@@ -1181,8 +1188,8 @@ fn sys_brk_(frame: &mut Ureg, proc: &mut Proc) -> u64 {
             let grown_end = exec::round_up_pow2(addr, page);
             let mut va = grown_start;
             while va < grown_end {
-                if proc.map_user_page(va, SegKind::Bss).is_err() {
-                    return err(proc, "brk: growth page map failed");
+                if let Err(reason) = proc.map_user_page(va, SegKind::Bss) {
+                    return brk_failed(proc, addr, reason);
                 }
                 va += page;
             }

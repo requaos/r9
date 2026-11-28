@@ -118,6 +118,11 @@ fn print_memory_info() {
     println!("  Total:\t{total:#016x}");
 }
 
+/// Whether the boot line carries the whitespace-delimited `token`.
+fn boot_token(cmdline: &[u8], token: &[u8]) -> bool {
+    cmdline.split(|&b| b == b' ' || b == b'\t').any(|word| word == token)
+}
+
 /// The direct map of the RAM above the first gibibyte (directmap.rs), as
 /// boot built it — one line, and only on a machine that has any.
 fn print_directmap_info() {
@@ -233,6 +238,8 @@ pub extern "C" fn main(mach: &mut dat::Mach, mbdata: u64) {
     platform::print_machine_info(facts);
     print_memory_info();
     print_directmap_info();
+    // The demand pager's per-fault trace, only when asked for.
+    proc::fault::set_trace(boot_token(facts.cmdline(), b"faulttrace"));
 
     // MEM-18 (D-20): the BSP's FP save-format selection — CPUID-gated
     // CR4.OSXSAVE + XCR0 = 0x7 (x87|SSE|AVX; AVX-512 off) where XSAVE+AVX
